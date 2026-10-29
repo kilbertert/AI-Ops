@@ -146,6 +146,7 @@ class ChatBinding:
     agent_id: str = ""
     app_id: str = ""
     route_revision: int = 0
+    trial_app_id: str = ""
     manifest_text: str = ""
     content_file: str = ""
     content_snapshot: dict | None = None
@@ -158,6 +159,8 @@ class ChatBinding:
     @property
     def key(self) -> str:
         """写进 run 记录的那把钥匙。回读与回调都按它找回**签发时那一条**绑定。"""
+        if self.trial_app_id:
+            return "operator-trial:" + self.trial_app_id
         return f"{self.scenario}:{self.environment}:{self.tenant_id}"
 
 
@@ -541,6 +544,8 @@ def binding_for_key(settings: GatewayServerSettings, key: str | None) -> ChatBin
     """
     if not key:
         return None
+    if key.startswith("operator-trial:"):
+        return trial_binding(settings, key.removeprefix("operator-trial:"))
     try:
         bindings = _bindings(settings)
     except ChatBindingError as exc:
@@ -549,6 +554,31 @@ def binding_for_key(settings: GatewayServerSettings, key: str | None) -> ChatBin
         if binding.key == key:
             return binding
     return None
+
+
+def trial_binding(settings, app_id):
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+    if not getattr(settings, "operator_profiles_file", ""):
+        return None
+    row = SelfServiceStore(settings.database_file).app(app_id)
+    if not row:
+        return None
+    from aiops_diagnostics.dify.self_service_config import profiles
+
+    profile = profiles(settings)[row["profile_id"]]
+    target = profile["target"]
+    return ChatBinding(
+        environment=target["environment"],
+        tenant_id=row["tenant_id"],
+        entry="operator",
+        scenario="operator_order_diagnosis",
+        config_file=target["config_file"],
+        manifest_file=target["manifest_file"],
+        app_id=app_id,
+        route_revision=row["revision"],
+        trial_app_id=app_id,
+    )
 
 
 def callback_config(store: Any, run_id: str, settings: GatewayServerSettings) -> AgentRunConfig | None:

@@ -78,6 +78,7 @@ class GatewayServerSettings:
     #: 这样"发布"不需要从任何地方读到密钥，也就不会把它写进表里。
     chat_dify_key_dir: str = ""
     chat_node_targets_file: str = ""
+    operator_profiles_file: str = ""
     operator_trial_login_url: str = ""
     operator_trial_key: str = field(repr=False, default="")
     consumer_chatflow_enabled: bool = False
@@ -335,6 +336,8 @@ class GatewayServerSettings:
                 or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED")
             ).lower()
             in {"1", "true", "yes", "on"},
+            operator_profiles_file=_env("AIOPS_GATEWAY_OPERATOR_PROFILES_FILE")
+            or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_PROFILES_FILE"),
             chat_node_targets_file=_env("AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE"),
             operator_trial_login_url=_env("AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL")

@@ -269,6 +269,12 @@
   }
 
   function aiopsMount() {
+    if (document.querySelector('[data-aiops-managed="true"]')) {
+      [AIOPS_BTN_ID, AIOPS_TRIAL_BTN_ID, AIOPS_RETRACT_BTN_ID, AIOPS_RESTORE_BTN_ID].forEach(function (id) {
+        var node = document.getElementById(id); if (node) node.remove();
+      });
+      return;
+    }
     if (!currentAppId()) { return; }          // 只在编排页
     // 两颗按钮各自去重：只查发布那颗会让试运行那颗在重试中被挂第二遍。
     if (

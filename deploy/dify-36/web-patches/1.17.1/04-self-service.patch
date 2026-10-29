@@ -1,0 +1,176 @@
+--- a/web/app/components/apps/index.tsx
++++ b/web/app/components/apps/index.tsx
+@@ -5,6 +5,7 @@
+ import type { TrackCreateAppParams } from '@/utils/create-app-tracking'
+ import { useAtomValue } from 'jotai'
+ import { useCallback, useRef, useState } from 'react'
++import TenantSetup from '@/app/components/aiops-management'
+ import { EducationExpireNotice } from '@/app/education/expire-notice'
+ import AppListContext from '@/context/app-list-context'
+ import { workspacePermissionKeysAtom } from '@/context/permission-state'
+@@ -26,6 +27,7 @@
+   () => import('./import-from-marketplace-template-modal'),
+   { ssr: false },
+ )
++
+ const AppListProvider = AppListContext.Provider
+ 
+ const AppsContent = () => {
+@@ -172,6 +174,7 @@
+   return (
+     <>
+       <EducationExpireNotice />
++      <TenantSetup />
+       <AppListProvider
+         value={{
+           openTryAppPanel,
+--- a/web/app/components/app/configuration/configuration-view/index.tsx
++++ b/web/app/components/app/configuration/configuration-view/index.tsx
+@@ -25,6 +25,7 @@
+ import { produce } from 'immer'
+ import * as React from 'react'
+ import { useTranslation } from 'react-i18next'
++import { ManagedPublish } from '@/app/components/aiops-management'
+ import AppPublisher from '@/app/components/app/app-publisher/features-wrapper'
+ import Config from '@/app/components/app/configuration/config'
+ import EditHistoryModal from '@/app/components/app/configuration/config-prompt/conversation-history/edit-modal'
+@@ -39,6 +40,7 @@
+ import PluginDependency from '@/app/components/workflow/plugin-dependency'
+ import ConfigContext from '@/context/debug-configuration'
+ import { isAgentV2Enabled } from '@/features/agent-v2/feature-flag'
++import { useManagedApp } from '@/service/aiops-management'
+ import { AppModeEnum, ModelModeType } from '@/types/app'
+ import { LegacyAgentBadge } from './legacy-agent-badge'
+ 
+@@ -78,6 +80,21 @@
+   setShowUseGPT4Confirm,
+ }) => {
+   const { t } = useTranslation()
++  const managed = useManagedApp(contextValue.appId)
++  const isOperator = (modelConfig.agentConfig?.tools || []).some(
++    (tool) => 'provider_name' in tool && tool.provider_name === 'cpms-node',
++  )
++  const dirty =
++    !!managed.status &&
++    (managed.status.published_prompt !== modelConfig.configs.prompt_template ||
++      JSON.stringify([...managed.status.published_tools].sort()) !==
++        JSON.stringify(
++          (modelConfig.agentConfig?.tools || [])
++            .filter((tool) => 'tool_name' in tool)
++            .filter((tool) => tool.enabled !== false)
++            .map((tool) => tool.tool_name)
++            .sort(),
++        ))
+   const debugWithMultipleModel = appPublisherProps.debugWithMultipleModel
+   const showLegacyAgentBadge = isAgentV2Enabled() && contextValue.mode === AppModeEnum.AGENT_CHAT
+   const handlePluginInstallComplete: InstallBundleCompleteCallback = (plugins, installStatus) => {
+@@ -135,7 +152,7 @@
+                         onAgentSettingChange={onAgentSettingChange}
+                       />
+                     )}
+-                    {!debugWithMultipleModel && (
++                    {!debugWithMultipleModel && !isOperator && !managed.status?.managed && (
+                       <>
+                         <ModelParameterModal
+                           isAdvancedMode={isAdvancedMode}
+@@ -161,7 +178,29 @@
+                         <CodeBracketIcon className="size-4 text-text-tertiary" />
+                       </Button>
+                     )}
+-                    <AppPublisher {...appPublisherProps} />
++                    {managed.status?.managed ? (
++                      <>
++                        <ManagedPublish
++                          status={managed.status}
++                          save={async () => {
++                            const result = await appPublisherProps.onPublish?.(
++                              undefined,
++                              featuresData,
++                            )
++                            if (!result) throw new Error('请先补全草稿配置')
++                            return result
++                          }}
++                        />
++                        <span role="status" className="ml-2 text-sm text-amber-700">
++                          {managed.readiness}
++                          {dirty ? ' · 有未发布修改' : ''}
++                        </span>
++                      </>
++                    ) : isOperator ? (
++                      <span role="status">{managed.error || '正在核对管家配置…'}</span>
++                    ) : (
++                      <AppPublisher {...appPublisherProps} />
++                    )}
+                   </div>
+                 </div>
+               </div>
+--- a/web/app/components/app/configuration/hooks/configuration-lifecycle/publish.ts
++++ b/web/app/components/app/configuration/hooks/configuration-lifecycle/publish.ts
+@@ -10,6 +10,7 @@
+ import { toast } from '@/app/components/app/configuration/toast'
+ import { DEFAULT_CHAT_PROMPT_CONFIG, DEFAULT_COMPLETION_PROMPT_CONFIG } from '@/config'
+ import { PromptMode } from '@/models/debug'
++import { publishManaged } from '@/service/aiops-management'
+ import { AgentStrategy, AppModeEnum, ModelModeType } from '@/types/app'
+ import { promptVariablesToUserInputsForm } from '@/utils/model-config'
+ import { getStringSelectorTranslate } from '../../utils'
+@@ -202,6 +203,9 @@
+     })
+ 
+     await updateAppModelConfig({ url: `/apps/${appId}/model-config`, body })
++    const managed = document.querySelector<HTMLElement>('[data-aiops-managed="true"]')
++    if (managed?.dataset.aiopsApp === appId)
++      await publishManaged(appId, body, Number(managed.dataset.aiopsRevision))
+     const nextModelConfig = produce(modelConfig, (draft: ModelConfig) => {
+       draft.provider = body.model.provider
+       draft.model_id = body.model.name
+--- a/web/service/base.ts
++++ b/web/service/base.ts
+@@ -354,6 +354,7 @@
+ }
+ 
+ function formatURL(url: string, isPublicAPI: boolean) {
++  if (url.startsWith('/__aiops/')) return url
+   let urlPrefix = API_PREFIX
+   if (isPublicAPI) urlPrefix = PUBLIC_API_PREFIX
+   if (url.startsWith('http://') || url.startsWith('https://')) return url
+--- a/web/app/components/app/configuration/debug/debug-with-single-model/index.tsx
++++ b/web/app/components/app/configuration/debug/debug-with-single-model/index.tsx
+@@ -118,7 +118,25 @@
+ 
+       if ((config.file_upload as any)?.enabled && files?.length) data.files = files
+ 
+-      handleSend(`apps/${appId}/chat-messages`, data, {
++      const managed = !!document.querySelector('[data-aiops-managed="true"]')
++      const target = managed ? '/__aiops/operator-preview' : `apps/${appId}/chat-messages`
++      const payload = managed
++        ? {
++            app_id: appId,
++            query: message,
++            pre_prompt: configData.pre_prompt,
++            tools:
++              configData.agent_mode?.tools
++                .filter((t) => 'tool_name' in t)
++                .map((t) => ({
++                  provider_id: t.provider_id,
++                  provider_type: t.provider_type,
++                  tool_name: t.tool_name,
++                  enabled: t.enabled !== false,
++                })) || [],
++          }
++        : data
++      handleSend(target, payload, {
+         onNotifyError: (message) => toast.error(message),
+         onGetConversationMessages: (conversationId, getAbortController) =>
+           fetchConversationMessages(appId, conversationId, getAbortController),
+--- a/web/service/debug.ts
++++ b/web/service/debug.ts
+@@ -19,6 +19,8 @@
+ }
+ 
+ export const stopChatMessageResponding = async (appId: string, taskId: string) => {
++  if (taskId.startsWith('aiops_'))
++    return post('/__aiops/operator-preview/cancel', { body: { task_id: taskId } })
+   return post(`apps/${appId}/chat-messages/${taskId}/stop`)
+ }
+ 

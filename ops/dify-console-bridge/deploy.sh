@@ -67,7 +67,7 @@ systemctl start "$service"
 "$nginx" -s reload
 systemctl is-active --quiet "$service"
 # 没有会话的请求必须由桥拒绝；若仍落进 Dify 的 HTML/404，部署不算成功。
-for route in retract restore versions operator-preview operator-preview/cancel; do
+for route in retract restore versions operator-preview operator-preview/cancel manage; do
   ready=false
   # reload 只发送信号：旧 worker 退出前仍可能返回旧路由的 HTML/404。
   for _attempt in {1..15}; do

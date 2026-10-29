@@ -1329,10 +1329,14 @@ def create_gateway_app(
 ) -> FastAPI:
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
-    if selected_settings.chat_node_targets_file:
-        from aiops_diagnostics.execution.node_publication import targets
+    if selected_settings.operator_profiles_file:
+        from aiops_diagnostics.dify.self_service_config import profiles
 
-        targets(selected_settings.chat_node_targets_file)
+        profiles(selected_settings)
+    if selected_settings.chat_node_targets_file:
+        from aiops_diagnostics.execution.node_publication import all_targets
+
+        all_targets(selected_settings)
         if (
             not selected_settings.chat_route_bindings_file
             or Path(selected_settings.chat_route_bindings_file).resolve()
@@ -1449,6 +1453,10 @@ def create_gateway_app(
     from aiops_diagnostics.operator_cpms import OperatorCpms, OperatorRefused
 
     context.operator_cpms = OperatorCpms(context)
+    from aiops_diagnostics.dify.self_service_api import register as register_self_service
+
+    context.self_service_operator_identity = lambda session: authenticated_operator_console(context, session)
+    register_self_service(app, context)
 
     @app.exception_handler(OperatorRefused)
     async def operator_refused_handler(request: Request, exc: OperatorRefused):
@@ -1458,7 +1466,17 @@ def create_gateway_app(
             logging.getLogger("aiops.operator").warning("operator_completion_refused code=%s", safe_code)
         return JSONResponse(
             status_code=410 if code == "OPERATOR_RESULT_RETRACTED" else 403,
-            content={"error": {"code": code, "message": "operator request unavailable", "retryable": False}},
+            content={
+                "error": {
+                    "code": code,
+                    "message": (
+                        "当前账号未分配可诊断场站，请联系公司管理员分配或切换账号"
+                        if code == "OPERATOR_SITE_SCOPE_REQUIRED"
+                        else "operator request unavailable"
+                    ),
+                    "retryable": False,
+                }
+            },
             headers={"Cache-Control": "no-store"},
         )
 
@@ -2250,11 +2268,11 @@ def create_gateway_app(
         （缺 ``X-AIOps-Initiator`` 或 ``-Tenant``）⇒ 退回 #781 的固定调试租户行为。
         """
         if payload.app_id:
+            from aiops_diagnostics.dify.self_service_config import app_binding
+            from aiops_diagnostics.dify.self_service_store import SelfServiceStore
             from aiops_diagnostics.execution.node_publication import target_for
 
-            bound = next(
-                (b for b in context.runtime.dify_app_registry.all() if b.app_id == payload.app_id), None
-            )
+            bound = app_binding(context.settings, payload.app_id)
             target = target_for(context.settings, bound) if bound is not None else None
             if target is not None and target.entry == "operator":
                 from aiops_diagnostics import operator_cpms
@@ -2267,9 +2285,19 @@ def create_gateway_app(
                     return authenticated_operator_console(context, session)
 
                 caller, bearer = console_operator_identity()
-                binding = chat_execution.select_binding(
-                    context.settings, caller, scenario=operator_cpms.SCENARIO, entry="operator"
+                managed = (
+                    SelfServiceStore(context.settings.database_file).app(payload.app_id)
+                    if context.settings.operator_profiles_file
+                    else None
                 )
+                if managed:
+                    if not _tenant_in_scope(managed["tenant_id"], caller.effective_tenant_id):
+                        raise OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
+                    binding = chat_execution.trial_binding(context.settings, payload.app_id)
+                else:
+                    binding = chat_execution.select_binding(
+                        context.settings, caller, scenario=operator_cpms.SCENARIO, entry="operator"
+                    )
                 if binding is None or binding.app_id != payload.app_id:
                     raise OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
                 workspace = _workspace_for_tenant(context, caller.effective_tenant_id)
@@ -2656,7 +2684,7 @@ def create_gateway_app(
 
         if str(decision.platform) == "operator" and payload.shortcut_code != OPERATIONS_REVIEW_CODE:
             from aiops_diagnostics import operator_cpms
-            from aiops_diagnostics.execution.node_publication import targets
+            from aiops_diagnostics.execution.node_publication import all_targets
 
             try:
                 binding = chat_execution.select_binding(
@@ -2679,7 +2707,7 @@ def create_gateway_app(
                 target = next(
                     (
                         r
-                        for r in targets(context.settings.chat_node_targets_file)
+                        for r in all_targets(context.settings)
                         if r.entry == "operator"
                         and r.app_id == binding.app_id
                         and _tenant_in_scope(r.tenant_id, caller.effective_tenant_id)

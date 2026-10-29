@@ -28,7 +28,17 @@
 | **撤回** | `/v1/dify/retract` | POST | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`，与发布同一把） | 运营撤回这一版：停止对**新请求**与**尚未放行结果**的交付。请求体同样只有一个 `app_id`。三件事必须同时成立：管理行改成 `retracted`（**不删行** —— 删行会让请求掉回直读，那是冒充停用）、在飞运行被收敛（本地终态 + 撤销取数凭据 + 请求 Dify stop）、历史与在飞正文不再交付（回读守卫发现当前绑定不再指向签发时那一版）。**不自动恢复任何旧版**：恢复是另一次显式发布。已发出的数据不承诺追回 |
 | **工作区查询（内部，非 Dify）** | `/v1/dify/workspace` | GET | **网关自己的内部令牌**（`X-Internal-Token` + `X-Request-Timestamp`，HMAC，`AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET`） | 回答"这个租户在本环境里的 workspace 是哪一个"（#879 / ADR-0059）。**调用方是我们自己的另外两个进程**（登录代理、发布桥），不是 Dify —— 它登记在这里，是因为 CI 的判据按 `/v1/dify/` 前缀取集合，不登记等于在这条判据里开一个洞。Dify 拿不到这把令牌，所以它**不**扩大 Dify 的可达面；输出也只有一个 UUID，拿到它还得有 `ADMIN_API_KEY` |
 
-**当前十行。** PRD #577 说集合"至少包含知识检索适配路由，以及智能体运行所需的只读工具
+| 平台客户与来源目录 | `/v1/dify/management/catalogue` | GET | 发布服务key＋正常Dify公司会话 | 平台权限与公司绑定客户目录交集，只返回可管理客户及来源 |
+| 管家管理状态 | `/v1/dify/management/status` | POST | 同上，校验app租户归属 | 返回实际模型和正式版本；非受管应用不启用 |
+| 当前账号可用性 | `/v1/dify/management/readiness` | POST | 同上，当前公司身份 | 返回自身站点范围是否可用，不读取订单 |
+| 创建开通任务 | `/v1/dify/management/operations` | POST | 同上，仅平台管理且目标在公司目录 | 创建可恢复开通任务，模型/工具/工作区由后台准备，不写公司业务数据 |
+| 查询开通进度 | `/v1/dify/management/operations/{job_id}` | GET | 同上，操作发起人一致 | 回读自己的任务，不返回凭据 |
+| 重试开通任务 | `/v1/dify/management/operations/{job_id}/retry` | POST | 同上，重新校验目标授权 | 同一幂等任务续跑，不重复创建应用 |
+| 发布当前管家 | `/v1/dify/management/publish` | POST | 同上，app归属与草稿摘要/revision | 冻结当前保存草稿；原子推进路由与来源登记 |
+| 管家历史版本 | `/v1/dify/management/versions` | POST | 同上，app归属 | 只列当前应用的版本 |
+| 撤回或恢复管家 | `/v1/dify/management/version` | POST | 同上，版本归属与revision | 显式变更当前正式指针，保留历史与审计 |
+
+**以上为现役适配面和新增受控管理面。** PRD #577 说集合"至少包含知识检索适配路由，以及智能体运行所需的只读工具
 端点"。第二类**今天一个都还没有**：智能体的运行在我们侧（那是 PRD 的核心边界），Dify 侧
 只负责编排与调试预览；预览要打公司数据需要一条**专门的调试身份**（#586），而那条身份还不
 存在。所以给 Dify 的只有这几跳。

@@ -56,6 +56,16 @@ check_sha web/models/datasets.ts 7da7895349e90cc963c725b12826be71c4f45827d829b23
 check_sha web/service/datasets.ts e5277febabf43ffc3d54b8fa6ff52305e9fd5ef18052c1ee404e78f958425a01
 check_sha web/app/components/workflow/nodes/tool/panel.tsx 76b230b92e8aa95f75ed63d89578ea90d25817466aedbed97753c79a55e45f76
 
+check_sha web/app/components/apps/index.tsx f64172a2ce46876cc3e8769fe1dd06480ba97dd9aae270aafeac19dd4d6c204f
+check_sha web/app/components/app/configuration/configuration-view/index.tsx 2596b65ca35888c96c59f100b35a260e82af248459247ea13392deb713a63317
+check_sha web/app/components/app/configuration/hooks/configuration-lifecycle/publish.ts cd670e51bea2a49799835e7c218e97dd1955d27bfcb50a27904371c683608c92
+
+check_sha web/service/base.ts 25dd121901ade01cc075640b635157b463733a587e4ea75ae1343b925ded388e
+
+check_sha web/app/components/app/configuration/debug/debug-with-single-model/index.tsx 3eb5d650e640d09c43f8600581bbd6ddf488844e1239c03a420e2003961890e4
+
+check_sha web/service/debug.ts 784cb898a48d0ed4aae6b875b1d844d1095363e1a9997627a3fef05a51255a8c
+
 echo "== 2. 打补丁（--fuzz=0：上下文对不上就失败）"
 # **先把工作树恢复干净。** 上一次构建留下的补丁产物会让 `patch` 停下来问
 # "文件已存在，要覆盖吗" —— 非交互环境里它默认答"不"，于是那一条补丁被**静默跳过**
@@ -95,6 +105,9 @@ for marker in "knowledge-sync" "ExternalKnowledgeIdPicker" "useKnowledgeSync"; d
   fi
 done
 echo "ok: 补丁已落进源（两个标记都在）"
+
+cp "$VERSION_DIR/aiops-management.tsx" "$WORK/web/app/components/aiops-management.tsx"
+cp "$VERSION_DIR/aiops-management.ts" "$WORK/web/service/aiops-management.ts"
 
 echo "== 3. 把构建命令换成 webpack"
 # 关键：**用 webpack 而不是 Turbopack**。实测 Turbopack（上游默认）在本机会在

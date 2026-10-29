@@ -35,6 +35,7 @@
     if (!stop && body.files && body.files.length) {
       return Promise.resolve(new Response(JSON.stringify({code: 'OPERATOR_PREVIEW_FILES_UNSUPPORTED', message: '管家预览仅支持明确订单，暂不接受附件'}), {status: 400, headers: {'Content-Type': 'application/json'}}));
     }
+    if (typeof document !== 'undefined' && document.querySelector && document.querySelector('[data-aiops-managed="true"]')) return originalFetch(input, options);
     var payload = stop ? {task_id: stop[2]} : {
       app_id: match[1], query: body.query, pre_prompt: config.pre_prompt,
       tools: tools.map(function (t) {

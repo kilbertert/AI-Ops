@@ -69,25 +69,58 @@ def targets(path: str) -> tuple[NodeTarget, ...]:
     ):
         raise ValueError("node target fields must be nonempty strings")
     for row in result:
-        if row.entry not in {"consumer", "operator"}:
-            raise ValueError("invalid node entry")
-        if row.entry == "operator":
-            from aiops_diagnostics.gateway_config import canonical_gateway_url
-
-            canonical_gateway_url(row.cpms_base_url)
-            canonical_gateway_url(row.proxy_base_url)
-        if AgentRunConfig.load(Path(row.config_file)).environment != row.environment:
-            raise ValueError("node target environment mismatch")
-        if execution_manifest.load(row.manifest_file) is None:
-            raise ValueError("node target manifest missing")
+        validate_target(row)
     return result
+
+
+def validate_target(row):
+    if row.entry not in {"consumer", "operator"}:
+        raise ValueError("invalid node entry")
+    if row.entry == "operator":
+        from aiops_diagnostics.gateway_config import canonical_gateway_url
+
+        canonical_gateway_url(row.cpms_base_url)
+        canonical_gateway_url(row.proxy_base_url)
+    if AgentRunConfig.load(Path(row.config_file)).environment != row.environment:
+        raise ValueError("node target environment mismatch")
+    if execution_manifest.load(row.manifest_file) is None:
+        raise ValueError("node target manifest missing")
+
+
+def managed_target(settings, profile_id, app_id, tenant_id):
+    from aiops_diagnostics.dify.self_service_config import profiles
+
+    row = NodeTarget(app_id=app_id, tenant_id=tenant_id, **profiles(settings)[profile_id]["target"])
+    validate_target(row)
+    return row
+
+
+def all_targets(settings):
+    legacy = targets(settings.chat_node_targets_file)
+    if not getattr(settings, "operator_profiles_file", ""):
+        return legacy
+    from aiops_diagnostics.dify.self_service_config import profiles
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+    configured = profiles(settings)
+    for profile in configured.values():
+        validate_target(NodeTarget(app_id="profile", tenant_id="profile", **profile["target"]))
+    by_id = {t.app_id: t for t in legacy}
+    for row in SelfServiceStore(settings.database_file).apps():
+        t = NodeTarget(
+            app_id=row["app_id"], tenant_id=row["tenant_id"], **configured[row["profile_id"]]["target"]
+        )
+        if t.app_id in by_id and by_id[t.app_id] != t:
+            raise ValueError("managed target conflicts with file")
+        by_id[t.app_id] = t
+    return tuple(by_id.values())
 
 
 def target_for(settings: Any, binding: Any) -> NodeTarget | None:
     return next(
         (
             r
-            for r in targets(settings.chat_node_targets_file)
+            for r in all_targets(settings)
             if r.app_id == binding.app_id
             and visible_orders(
                 [{"tenant_id": r.tenant_id}],
@@ -197,12 +230,32 @@ OPERATOR_OUTPUT = (
 )
 
 
-def publish(manager: Any, admin: Any, binding: Any, source: Any, target: NodeTarget) -> SyncOutcome:
+def publish(
+    manager: Any, admin: Any, binding: Any, source: Any, target: NodeTarget, *, operator_preview=None
+) -> SyncOutcome:
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig
+
+    text = candidate(source, target, operator_preview=operator_preview)
     agent = next((a for a in manager.list(admin) if a.name == binding.agent_name), None)
-    if agent is None or agent.status != "published" or agent.published_version is None:
-        raise ValueError("node publication requires an existing published agent")
-    previous = manager.store.version(agent.agent_id, binding.tenant_id, agent.published_version).snapshot
-    text = candidate(source, target)
+    if agent is None:
+        document = yaml.safe_load(DifyDslClient(source).export_dsl())
+        model = document["model_config"]["model"]["name"]
+        config = AgentConfig(
+            agent_type="operations" if target.entry == "operator" else "customer",
+            prompt=(operator_preview or document["model_config"])["pre_prompt"],
+            knowledge_base_ids=(),
+            model=model,
+            output_contract="diagnosis-v1" if target.entry == "operator" else "blocks-v1",
+        )
+        manager._validate_config(config, enforce_model=True)
+        agent = manager.create(admin, name=binding.agent_name, description="", config=config)
+    if agent.status not in {"published", "draft"}:
+        raise ValueError("node agent is not publishable")
+    previous = (
+        manager.store.version(agent.agent_id, binding.tenant_id, agent.published_version).snapshot
+        if agent.published_version
+        else {"name": agent.name, "description": agent.description, **agent.config.to_dict()}
+    )
     if (
         previous.get("node_manifest") == text
         and previous.get("app_id") == binding.app_id
@@ -226,7 +279,11 @@ def publish(manager: Any, admin: Any, binding: Any, source: Any, target: NodeTar
     }
     # 既有 AgentConfig 继续服务其他入口；节点 SOP 独立保存在同一不可变版本中。
     config_from_snapshot(snapshot)
-    draft = manager.fork_draft(admin, agent.agent_id, expected_revision=agent.revision)
+    draft = (
+        manager.fork_draft(admin, agent.agent_id, expected_revision=agent.revision)
+        if agent.status == "published"
+        else agent
+    )
     version = manager.store.publish(
         agent.agent_id, binding.tenant_id, draft.revision, snapshot, published_by="node-sop-publisher"
     )
@@ -241,7 +298,9 @@ def publish(manager: Any, admin: Any, binding: Any, source: Any, target: NodeTar
     )
 
 
-def advance(context: Any, outcome: Any, binding: Any, target: NodeTarget, revision: int) -> None:
+def advance(
+    context: Any, outcome: Any, binding: Any, target: NodeTarget, revision: int, *, register_source=False
+) -> None:
     if type(revision) is not int or revision < 0:
         raise NodeRouteConflict("node route revision missing")
     if AgentRunConfig.load(Path(target.config_file)).environment != target.environment:
@@ -273,6 +332,7 @@ def advance(context: Any, outcome: Any, binding: Any, target: NodeTarget, revisi
             app_id=binding.app_id,
             node_config_file=target.config_file,
             expected_revision=revision,
+            source_agent_name=binding.agent_name if register_source else "",
         )
     except RouteBindingError as exc:
         raise NodeRouteConflict(str(exc)) from exc

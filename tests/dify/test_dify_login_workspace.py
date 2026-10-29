@@ -218,7 +218,7 @@ def test_login_refuses_with_an_actionable_reason_when_there_is_no_workspace(
         service.login(username="zhang", password="pw", random_str="r", code="c")
 
     assert caught.value.code == "DIFY_WORKSPACE_UNRESOLVED"
-    assert f"aiops-admin ensure-workspace --tenant {TENANT}" in str(caught.value)
+    assert "平台运营在Dify中开通" in str(caught.value)
     assert inner.joins == [], "解析失败时不该 join 任何 workspace"
     assert _row(tmp_path) == {}, "拒绝发生在 upsert 之前：不留下半条映射"
 
@@ -238,15 +238,16 @@ def test_creating_is_reported_as_retry_later(tmp_path: Path, monkeypatch) -> Non
     assert "一两分钟后" in str(caught.value)
 
 
-def test_a_failed_join_does_not_block_login(tmp_path: Path, monkeypatch) -> None:
-    """workspace 已经在，join 失败只意味着他看到空列表 —— 那比登录失败轻。"""
+def test_a_failed_join_refuses_empty_workspace_and_keeps_retry_mapping(tmp_path: Path, monkeypatch) -> None:
+    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+
+    """不签发空工作区会话；重试仍复用已建账号。"""
     _patch_company(monkeypatch)
     service = _service(tmp_path, _Directory(WORKSPACE), _Inner(fail=True))
 
-    session, summary = service.login(username="zhang", password="pw", random_str="r", code="c")
-
-    assert session.access_token
-    assert summary["company_user_id"] == "u-1"
+    with pytest.raises(PermissionDenied) as caught:
+        service.login(username="zhang", password="pw", random_str="r", code="c")
+    assert caught.value.code == "DIFY_WORKSPACE_JOIN_FAILED"
     row = _row(tmp_path)
     assert row["workspace_joined"] == 0, "join 没成功就不能记成成功（下一次登录要再试）"
 
@@ -344,7 +345,6 @@ def test_a_platform_account_without_its_workspace_gets_an_actionable_refusal(
     执行 `ensure-workspace`。
     """
     from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
-    from aiops_diagnostics.dify.dify_workspaces import PLATFORM_TENANT_ID
 
     _patch_company(monkeypatch, user_type="-1")
     service = _service(
@@ -356,7 +356,7 @@ def test_a_platform_account_without_its_workspace_gets_an_actionable_refusal(
     with pytest.raises(PermissionDenied) as caught:
         service.login(username="ops", password="pw", random_str="r", code="c")
 
-    assert f"--tenant {PLATFORM_TENANT_ID}" in str(caught.value)
+    assert "平台运营在Dify中开通" in str(caught.value)
 
 
 # --------------------------------------------------------------------------- #
@@ -402,7 +402,7 @@ def test_a_tenant_account_without_its_workspace_is_still_refused(tmp_path: Path,
         service.login(username="boss", password="pw", random_str="r", code="c")
 
     assert caught.value.code == "DIFY_WORKSPACE_UNRESOLVED"
-    assert f"aiops-admin ensure-workspace --tenant {TENANT}" in str(caught.value)
+    assert "平台运营在Dify中开通" in str(caught.value)
 
 
 def test_the_platform_workspace_still_requires_the_global_code(tmp_path: Path, monkeypatch) -> None:

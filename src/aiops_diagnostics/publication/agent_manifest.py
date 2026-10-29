@@ -361,6 +361,14 @@ def reconcile_dify_registry(
     (:func:`load_manifest`), so both halves fail together and before any write.
     """
     _require_no_source_switch(registry, manifest)
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+    managed = {(a["tenant_id"], "operator") for a in SelfServiceStore(registry.path).apps()}
+    current = {(b.tenant_id, b.business_entry): b for b in registry.all()}
+    for wanted in manifest.dify_apps:
+        key = (wanted.tenant_id, wanted.business_entry)
+        if key in managed and current.get(key) != wanted:
+            raise ManifestError("页面管理的管家不能由环境清单覆盖")
     desired = {(binding.tenant_id, binding.business_entry): binding for binding in manifest.dify_apps}
     existing = {(binding.tenant_id, binding.business_entry): binding for binding in registry.all()}
     reports: list[DifyRegistryReport] = []
@@ -385,7 +393,7 @@ def reconcile_dify_registry(
     if not prune:
         return reports
     for key, binding in existing.items():
-        if key in desired:
+        if key in desired or key in managed:
             continue
         if not dry_run:
             registry.delete(*key)
