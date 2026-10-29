@@ -10,3 +10,15 @@
 
 恢复交付：整合`363c82d8`自助开通及输出修复，保留最新业务实现；两个新增自助调用及测试导入同步新路径。
 当前12模块业务AST与新主线一致，真实Java/Gateway 12场景通过，自助测试24项通过；重建镜像及临时Gateway通过。
+
+## 接到最新主线后复验（2026-10-29，基线 `8acc9045`）
+
+rebase 到 `8acc9045`（含 #1153 退役残留清理、#1155–#1157 自助开通与受管试用修复）。两处冲突按「保留主线业务、采用本片路径」解决：
+README 模块表用新路径并补 `operator_conversation.py`；`images.lock.json` 保留主线构建身份后按新源码摘要重建。
+
+- 全量：**3406 passed，0 failed，9 skipped**（junit 计数）。
+- 目标修复：`tests/test_operator_conversation.py` 两处旧导入（`test_operator_cpms` → `operations.test_operator_cpms`；
+  `aiops_diagnostics.operator_cpms` → `aiops_diagnostics.operator.operator_cpms`）；README 补 `operator_conversation`。
+- 镜像 `aiops-m2-live-03-gateway:domain-rebased2`：12 个新模块可导入，11 个旧包根模块全部 ModuleNotFound，内容锁 `0f0adbf3`。
+- `uv build`、临时 Gateway（健康/鉴权/退役路由 404）、ruff/format、policy、ADR 均通过。
+- 仍未完成：远端 CI、CD 部署、原双端 H5 业务回归。
