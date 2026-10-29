@@ -374,6 +374,10 @@ class LoginService:
         workspace_directory: Any = None,
         inner_api: Any = None,
         retain_operator_token: bool = False,
+        #: 缓存下来供试运行/发布复用的公司令牌能活多久（秒）。``None`` ⇒ 跟随控制台会话的
+        #: 寿命（``dify.access_expire_minutes``）—— 见 :func:`operator_token_seconds` 的
+        #: 理由：令牌不该比它所属的会话活得更久，也不该更短。
+        operator_token_seconds: int | None = None,
     ) -> None:
         self.company = company
         self.dify = dify
@@ -385,8 +389,25 @@ class LoginService:
         self.workspace_directory = workspace_directory
         self.inner_api = inner_api
         self.retain_operator_token = retain_operator_token
+        self._operator_token_override = operator_token_seconds
         self._operator_tokens = {}
         self._operator_token_lock = threading.RLock()
+
+    def operator_token_seconds(self) -> float:
+        """缓存的公司令牌活多久。
+
+        这里曾经硬编码 900 秒（15 分钟），而**控制台会话是 60 分钟**：15 到 60 分钟之间
+        页面能开、试运行和发布却全 403，且缓存一旦过期没有任何续期路径 —— 只能重新登录。
+        那 15 分钟没有任何文档论证，也不是撤权窗口：撤权靠的是每次请求实时重拉权限码
+        （60 秒缓存）与 ``status != active`` 检查，不是令牌寿命；公司侧本身既不验签也不判
+        ``exp``。所以令牌寿命应当跟随会话：会话没了，令牌也不该还在。
+
+        要缩短就显式配 ``AIOPS_LOGIN_PROXY_OPERATOR_TOKEN_SECONDS``，但配得比会话短会
+        重新引入"页面能开、试运行 403"的错配。
+        """
+        if self._operator_token_override is not None:
+            return float(self._operator_token_override)
+        return float(self.dify.access_expire_minutes * 60)
 
     def owner_session(self) -> ConsoleSession:
         return mint_console_session(
@@ -631,7 +652,7 @@ class LoginService:
                 self._operator_tokens = {k: v for k, v in self._operator_tokens.items() if v[0] > now}
                 if len(self._operator_tokens) < 128:
                     self._operator_tokens[hashlib.sha256(session.access_token.encode()).hexdigest()] = (
-                        now + 900,
+                        now + self.operator_token_seconds(),
                         identity.token,
                         identity.user_id,
                         identity.tenant_id,

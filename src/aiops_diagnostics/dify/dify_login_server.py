@@ -139,6 +139,9 @@ class LoginProxySettings:
     inner_api_base_url: str = ""
     inner_api_key: str = field(repr=False, default="")
     operator_trial_key: str = field(repr=False, default="")
+    #: 发布桥/Try-run 复用的公司令牌缓存寿命。``None`` ⇒ 跟随控制台会话。
+    #: 配得比会话短会重新引入"页面还能开、试运行却 403"的错配，所以只允许显式配。
+    operator_token_seconds: int | None = None
 
     def __post_init__(self) -> None:
         assert_public_origin_is_https(self.public_origin)
@@ -162,6 +165,15 @@ class LoginProxySettings:
             value = (os.environ.get(name) or "").strip()
             if not value:
                 raise ValueError(f"{name} is required")
+            return value
+
+        def _optional_int(raw: str | None) -> int | None:
+            """空 ⇒ ``None``（跟随会话）；非法值必须启动失败，不能悄悄退回默认。"""
+            if raw is None or not raw.strip():
+                return None
+            value = int(raw)
+            if value <= 0:
+                raise ValueError("AIOPS_LOGIN_PROXY_OPERATOR_TOKEN_SECONDS must be positive")
             return value
 
         return cls(
@@ -195,6 +207,7 @@ class LoginProxySettings:
             inner_api_base_url=os.environ.get("AIOPS_LOGIN_PROXY_INNER_API_BASE_URL", "").strip().rstrip("/"),
             inner_api_key=os.environ.get("AIOPS_LOGIN_PROXY_INNER_API_KEY", "").strip(),
             operator_trial_key=os.environ.get("AIOPS_LOGIN_PROXY_OPERATOR_TRIAL_KEY", "").strip(),
+            operator_token_seconds=_optional_int(os.environ.get("AIOPS_LOGIN_PROXY_OPERATOR_TOKEN_SECONDS")),
         )
 
 
@@ -613,6 +626,7 @@ def build_service(settings: LoginProxySettings) -> LoginService:
         workspace_directory=directory,
         inner_api=inner,
         retain_operator_token=bool(settings.operator_trial_key),
+        operator_token_seconds=settings.operator_token_seconds,
     )
 
 
