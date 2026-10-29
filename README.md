@@ -19,7 +19,8 @@
 
 详细边界见[退役说明](docs/runtime-retirement.md)，阶段与线上最后证据见
 [交付状态](docs/agents/current-delivery-state.md)和[测试交接](docs/testing-handoff.md)。
-目录迁移已完成Java节点、模型代理和C端Python包三片；C端新包已部署并通过原H5回归。
+目录迁移已完成Java节点、模型代理、C端与知识Python包四片；两组Python新包均已部署并通过原H5回归。
+最新见[知识迁移回执](docs/validation/2026-10-29-z04b-knowledge-layout-live.md)。
 模型代理生产容器仍使用旧发布包，后续升级必须成对交付Compose和镜像；详见[迁移回执](docs/validation/2026-10-29-z03-directory-migration-live.md)。
 
 ## 一、系统与入口
