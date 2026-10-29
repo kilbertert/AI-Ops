@@ -50,7 +50,7 @@ class VisibilityProfile(StrEnum):
     device supplies its authorized set and is enforced against it.
 
     ``CALLER`` is the profile resolved from a
-    :class:`~aiops_diagnostics.query_scope.QueryScope`: the tenant is always
+    :class:`~aiops_diagnostics.identity.query_scope.QueryScope`: the tenant is always
     known up front, so ``allowed=None`` is a programming error rather than a
     mode. An empty set is meaningful here — it means nothing is visible.
     """

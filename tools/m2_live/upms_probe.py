@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 
 from aiops_diagnostics.config import Settings, UpmsSettings
-from aiops_diagnostics.scope_context import ScopeError
-from aiops_diagnostics.third_session_auth import UpmsBSubjectDirectory
+from aiops_diagnostics.identity.scope_context import ScopeError
+from aiops_diagnostics.identity.third_session_auth import UpmsBSubjectDirectory
 
 
 def check(settings: UpmsSettings) -> bool:

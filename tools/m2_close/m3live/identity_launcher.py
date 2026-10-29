@@ -36,12 +36,12 @@ from typing import Any
 
 import uvicorn
 
-from aiops_diagnostics.caller_auth import CallerAuthError
 from aiops_diagnostics.deployment_environment import require_deployment_identity
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.caller_auth import CallerAuthError
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 TOKEN = os.environ["AIOPS_M2_LOCAL_TOKEN"]
 TENANT = os.environ["AIOPS_M2_TENANT"]

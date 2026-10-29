@@ -52,10 +52,10 @@ from operator_support import (
     OPERATOR_HEADERS as _OPERATOR_HEADERS,
 )
 
-from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
-from aiops_diagnostics.query_scope import resolve_operator_site_scope
+from aiops_diagnostics.identity.caller_auth import ScopedOrderAuthorizer
+from aiops_diagnostics.identity.query_scope import resolve_operator_site_scope
 from aiops_diagnostics.sources import MySQLSource
 
 

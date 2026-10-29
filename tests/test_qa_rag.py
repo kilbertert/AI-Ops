@@ -16,7 +16,7 @@ def _publish_ok() -> _PublishOkResolver:
 
 
 def _admin_context():
-    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
     subject = SubjectRecord(b_user_id="B-1", tenant_id="tenant-a")
     return ScopeContext.build(

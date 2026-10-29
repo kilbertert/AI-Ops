@@ -407,7 +407,7 @@ where条件」），落地在 `ShopIdInterceptor.java:189-221`。
 | 调用 | 头部 | 出处 |
 |---|---|---|
 | `/diag/*`（诊断数据面） | `X-Internal-Token` + `X-Request-Timestamp`（`http_auth.py:8-9`）+ `Accept` | `src/aiops_diagnostics/sources.py:722`、`:672-677` |
-| UPMS `/user/info`、`/user/ds`、`/user/inside/*` | `Authorization: Bearer …` + `Accept`，**没有内部令牌** | `src/aiops_diagnostics/scope_context.py:552-557` |
+| UPMS `/user/info`、`/user/ds`、`/user/inside/*` | `Authorization: Bearer …` + `Accept`，**没有内部令牌** | `src/aiops_diagnostics/identity/scope_context.py:552-557` |
 | TDengine `/rest/sql/*` | `Authorization: Basic …` + `Content-Type` | `src/aiops_diagnostics/sources.py:581-587` |
 
 **三类的共同点只有一个**：都**不带 `client-type`**，也**都不转发任何入站头**。

@@ -58,7 +58,7 @@ Content-Type: application/json
 | `X-Business-Entry: operator` | **前端自己显式发**（当前归属定案：前端自报；**目标态**是 D 批之后由公司网关按路由注入并覆盖同名头）。41 的 Nginx 在**缺失时补 `consumer`**；漏发的实际后果**取决于还带没带会话** —— 见 §3.1（两种情形，别只记一半） |
 
 > ⚠️ **这个头决定「内容域」，不是「你是谁」**（2026-09-30 写进契约，可回归形式见
-> `tests/test_company_token_auth.py` 的 §8-bis）。它由调用方自报，换来的只有「按哪套目录
+> `tests/identity/test_company_token_auth.py` 的 §8-bis）。它由调用方自报，换来的只有「按哪套目录
 > 作答」与「范围取哪一种口径」；**身份始终来自 `Authorization` 里的令牌**。因此
 > **「带上 `operator` 头」本身不是一条能用的路径** —— 令牌无效时结果仍是 401。
 > 前端不必、也不应该把入口头当成权限声明。

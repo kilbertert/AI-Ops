@@ -26,7 +26,7 @@ def test_token_is_the_only_way_in(monkeypatch):
     """错令牌直接拒绝，且用的是既有的错误码。"""
     module = _load(monkeypatch)
     resolver = module.ConstructedIdentity()
-    from aiops_diagnostics.caller_auth import CallerAuthError
+    from aiops_diagnostics.identity.caller_auth import CallerAuthError
 
     with pytest.raises(CallerAuthError):
         resolver.resolve("wrong", required_scope="aiops:orders:read")
@@ -57,7 +57,7 @@ def test_management_scopes_are_refused(monkeypatch, scope):
     而且是拒绝**整个身份**，不是少给一个权限（那会变成 403 而不是 401，语义不同）。
     """
     module = _load(monkeypatch)
-    from aiops_diagnostics.caller_auth import CallerAuthError
+    from aiops_diagnostics.identity.caller_auth import CallerAuthError
 
     with pytest.raises(CallerAuthError):
         module.ConstructedIdentity().resolve("t0ken", required_scope=scope)

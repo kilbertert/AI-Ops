@@ -14,7 +14,7 @@ import pymysql
 
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
-from aiops_diagnostics.scope_context import ScopeContext
+from aiops_diagnostics.identity.scope_context import ScopeContext
 
 PLATFORM_CONSUMER = "consumer"
 PLATFORM_OPERATOR = "operator"

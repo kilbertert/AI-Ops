@@ -19,8 +19,8 @@ import os
 import pytest
 
 from aiops_diagnostics.dify_trial import TrialInitiator, build_trial_scope
-from aiops_diagnostics.query_scope import QueryScope
-from aiops_diagnostics.scope_context import SCOPE_TYPE_ALL, SCOPE_TYPE_ORGAN
+from aiops_diagnostics.identity.query_scope import QueryScope
+from aiops_diagnostics.identity.scope_context import SCOPE_TYPE_ALL, SCOPE_TYPE_ORGAN
 
 
 class _OperatorScope:

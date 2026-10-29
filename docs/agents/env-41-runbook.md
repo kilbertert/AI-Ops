@@ -1014,7 +1014,7 @@ PY
 ```python
 # install -m 644 到 /tmp，cd /opt/aiops-41，runuser -u aiops41 -- …/python /tmp/seed.py
 from pathlib import Path
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.shortcut_lifecycle import (
     PLATFORM_SCOPE,
     PLATFORM_TENANT_ID,
@@ -1119,7 +1119,7 @@ manager.disable(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLAT
 
 ```python
 from pathlib import Path
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.shortcut_lifecycle import (
     PLATFORM_TENANT_ID,
     ShortcutManager,
@@ -1285,7 +1285,7 @@ __platform__        / operator / case_exploration   published  target=NULL   ←
 ```python
 # install -m 644 到 /tmp，cd /opt/aiops-41，runuser -u aiops41 -- …/python /tmp/restore-promo.py
 from pathlib import Path
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
 
 ENTRY, CODE = "operator", "case_exploration"
@@ -1500,7 +1500,7 @@ cd /opt/aiops-41 && runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python /tmp/pu
 
 ```python
 from pathlib import Path
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.shortcut_lifecycle import (
     PLATFORM_SCOPE, PLATFORM_TENANT_ID, ShortcutManager, ShortcutStore,
 )
@@ -1546,7 +1546,7 @@ if cur.status == "draft":
 # runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python 执行
 from pathlib import Path
 from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))  # 必须 Path，不是 str
 manager = ShortcutManager(store)

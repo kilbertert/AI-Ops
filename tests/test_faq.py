@@ -15,7 +15,7 @@ from aiops_diagnostics.faq import (
     PlatformIdentityResolver,
     PlatformRoleRecord,
 )
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 _GENERATOR_SPEC = importlib.util.spec_from_file_location(
     "faq_generator", Path(__file__).parents[1] / "tools/generate_faq_catalog.py"

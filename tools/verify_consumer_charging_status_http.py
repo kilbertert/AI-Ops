@@ -344,11 +344,11 @@ def phase_c(report: dict[str, Any], port: int) -> None:
 
     import uvicorn
 
-    from aiops_diagnostics.caller_auth import IntrospectionCallerResolver, IntrospectionSettings
     from aiops_diagnostics.gateway_api import create_gateway_app
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.gateway_store import GatewayStore
-    from aiops_diagnostics.scope_context import ScopeContext
+    from aiops_diagnostics.identity.caller_auth import IntrospectionCallerResolver, IntrospectionSettings
+    from aiops_diagnostics.identity.scope_context import ScopeContext
 
     class Orders:
         def can_access(self, context: ScopeContext, order_no: str) -> bool:

@@ -3,7 +3,7 @@ title: l1-domain
 desc: 纯函数领域规则——无状态、无依赖、无 IO
 hue: 160
 code:
-  - src/aiops_diagnostics/order_visibility.py
+  - src/aiops_diagnostics/identity/order_visibility.py
 related:
   - src/aiops_diagnostics/order_status.py
   - src/aiops_diagnostics/rules.py

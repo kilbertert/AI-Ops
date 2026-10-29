@@ -23,7 +23,7 @@ import pytest
 from aiops_diagnostics import chat_data_grant, chat_execution
 from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
 def _scope(tenant: str = "TENANT-A") -> ScopeContext:

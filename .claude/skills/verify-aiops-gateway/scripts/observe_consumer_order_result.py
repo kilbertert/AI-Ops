@@ -227,7 +227,7 @@ _api.scoped_mysql_source = _scoped_mysql_source
 
 # The authorizer asks the same synthetic source, so "belongs to the caller" and
 # "the latest order" cannot disagree.
-import aiops_diagnostics.caller_auth as _auth
+import aiops_diagnostics.identity.caller_auth as _auth
 
 
 class _Authorizer:

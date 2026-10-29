@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from aiops_diagnostics.config import DisSettings
-from aiops_diagnostics.query_scope import (
+from aiops_diagnostics.identity.query_scope import (
     DIS_POINT_BY_USER_PATH,
     SCOPE_ERROR_DIS_AUTH_FAILED,
     SCOPE_ERROR_DIS_CONFIG_MISSING,
@@ -21,7 +21,7 @@ from aiops_diagnostics.query_scope import (
     resolve_query_scope,
     static_site_mapper,
 )
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,

@@ -22,14 +22,14 @@ from aiops_diagnostics.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.query_scope import (
+from aiops_diagnostics.identity.query_scope import (
     QueryScope,
     ShopDirectory,
     SiteScopeMapper,
     operator_site_scope_from_shops,
     resolve_query_scope,
 )
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_TYPE_ORGAN,
     DataScope,
     ScopeContext,

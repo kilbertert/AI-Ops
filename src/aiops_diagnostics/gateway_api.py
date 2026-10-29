@@ -47,21 +47,6 @@ from aiops_diagnostics.agent_runs import (
     scope_from_json,
 )
 from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS, QUESTION
-from aiops_diagnostics.caller_auth import (
-    CALLER_AUTH_CONFIG_MISSING,
-    CALLER_AUTH_FORBIDDEN,
-    SOURCE_KEY_HEADER,
-    CallerAuthError,
-    CallerContextResolver,
-    DisabledCallerResolver,
-    DisabledOrderAuthorizer,
-    IntrospectionCallerResolver,
-    IntrospectionSettings,
-    OrderAuthorizer,
-    ScopedOrderAuthorizer,
-    SourceKeyCallerResolver,
-    UpmsCallerResolver,
-)
 from aiops_diagnostics.charging_status import ChargingStatusError, read_charging_status
 from aiops_diagnostics.clarification import (
     CLARIFY_LANGUAGE_UNROUTABLE,
@@ -69,11 +54,6 @@ from aiops_diagnostics.clarification import (
     CLARIFY_WRONG_ENTRY,
     MESSAGE_KEY_BY_CODE,
     missing_fields_for,
-)
-from aiops_diagnostics.company_token_auth import (
-    CompanyTokenCallerResolver,
-    CompanyTokenSettings,
-    PermissionSource,
 )
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.consumer import consumer_knowledge_selection
@@ -137,25 +117,53 @@ from aiops_diagnostics.i18n import (
     free_text_unavailable_message,
     resolve_language,
 )
+from aiops_diagnostics.identity.caller_auth import (
+    CALLER_AUTH_CONFIG_MISSING,
+    CALLER_AUTH_FORBIDDEN,
+    SOURCE_KEY_HEADER,
+    CallerAuthError,
+    CallerContextResolver,
+    DisabledCallerResolver,
+    DisabledOrderAuthorizer,
+    IntrospectionCallerResolver,
+    IntrospectionSettings,
+    OrderAuthorizer,
+    ScopedOrderAuthorizer,
+    SourceKeyCallerResolver,
+    UpmsCallerResolver,
+)
+from aiops_diagnostics.identity.company_token_auth import (
+    CompanyTokenCallerResolver,
+    CompanyTokenSettings,
+    PermissionSource,
+)
+from aiops_diagnostics.identity.order_visibility import tenant_matches
+from aiops_diagnostics.identity.query_scope import (
+    ShopDirectory,
+    UpmsShopDirectory,
+    resolve_query_scope,
+)
+from aiops_diagnostics.identity.scope_context import (
+    SCOPE_TYPE_SELF,
+    ScopeContext,
+    ScopeError,
+    is_operator_entry,
+)
+from aiops_diagnostics.identity.third_session_auth import (
+    BSubjectDirectory,
+    OperatorSiteScope,
+    RedisThirdSessionResolver,
+    ThirdSessionSettings,
+    UpmsBSubjectDirectory,
+    UpmsOperatorSiteScope,
+)
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
     normalize_search_response,
 )
 from aiops_diagnostics.knowledge.knowledge_sources import KnowledgeSourceResolver
 from aiops_diagnostics.metrics_store import MetricsValidationError
-from aiops_diagnostics.order_visibility import tenant_matches
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file, write_private_text
-from aiops_diagnostics.query_scope import (
-    ShopDirectory,
-    UpmsShopDirectory,
-    resolve_query_scope,
-)
-from aiops_diagnostics.scope_context import (
-    SCOPE_TYPE_SELF,
-    ScopeContext,
-    ScopeError,
-    is_operator_entry,
-)
 from aiops_diagnostics.shortcut_lifecycle import (
     BANNER_KIND,
     BUTTON_KIND,
@@ -170,14 +178,6 @@ from aiops_diagnostics.shortcut_lifecycle import (
     ShortcutStore,
 )
 from aiops_diagnostics.sources import SourceError, scoped_mysql_source
-from aiops_diagnostics.third_session_auth import (
-    BSubjectDirectory,
-    OperatorSiteScope,
-    RedisThirdSessionResolver,
-    ThirdSessionSettings,
-    UpmsBSubjectDirectory,
-    UpmsOperatorSiteScope,
-)
 
 _LOGGER = logging.getLogger("aiops.gateway")
 
@@ -1155,7 +1155,7 @@ def _managed_app_route(context: Any, app_id: str):
 
 def _tenant_in_scope(record_tenant: object, allowed_tenant: object) -> bool:
     """这一行的租户是否落在给定范围内 —— 用共享规则判，不就地写比较。"""
-    from aiops_diagnostics.order_visibility import (
+    from aiops_diagnostics.identity.order_visibility import (
         TenantVisibility,
         VisibilityProfile,
         normalize_tenant,
@@ -5349,7 +5349,7 @@ def _permission_source(runtime: Settings) -> PermissionSource | None:
     """
     if not (runtime.upms.base_url or "").strip():
         return None
-    from aiops_diagnostics.company_permissions import CompanyPermissionSource
+    from aiops_diagnostics.identity.company_permissions import CompanyPermissionSource
 
     return CompanyPermissionSource(runtime.upms)
 
@@ -6228,7 +6228,7 @@ def _same_tenant_as_grant(record_tenant: object, grant_tenant: object) -> bool:
     写成 `record_tenant == grant_tenant` 也能得到同一个答案，但那是第二条租户规则 ——
     那条架构判据挡的正是"多一条规则"，不是这一次的写法对不对。
     """
-    from aiops_diagnostics.order_visibility import (
+    from aiops_diagnostics.identity.order_visibility import (
         TenantVisibility,
         VisibilityProfile,
         normalize_tenant,

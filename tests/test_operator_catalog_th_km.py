@@ -90,7 +90,7 @@ def test_the_boundary_is_the_read_only_languages_and_nothing_else() -> None:
 
 class _Caller:
     def resolve(self, token, **kwargs):
-        from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+        from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
         del kwargs
         subject = SubjectRecord(b_user_id="B-1", c_user_id="C-1", tenant_id="T-1")

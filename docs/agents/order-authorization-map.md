@@ -513,13 +513,13 @@ sequenceDiagram
 
 | 环节 | 文件:行 |
 |---|---|
-| 授权判定（全部代码 3 行） | `src/aiops_diagnostics/caller_auth.py:348` |
-| 范围解析 | `src/aiops_diagnostics/query_scope.py:256` |
+| 授权判定（全部代码 3 行） | `src/aiops_diagnostics/identity/caller_auth.py:348` |
+| 范围解析 | `src/aiops_diagnostics/identity/query_scope.py:256` |
 | SQL 谓词渲染 | `src/aiops_diagnostics/sources.py:235` |
 | 工单哨兵常量 | `src/aiops_diagnostics/sources.py:172` |
-| 入口判据 | `src/aiops_diagnostics/scope_context.py:600` |
-| 顶层账号判据 | `src/aiops_diagnostics/scope_context.py:75` |
-| 会话身份 | `src/aiops_diagnostics/third_session_auth.py:217` |
-| 令牌身份 | `src/aiops_diagnostics/company_token_auth.py:281` |
-| 行级渲染（只比租户） | `src/aiops_diagnostics/order_visibility.py:208` |
+| 入口判据 | `src/aiops_diagnostics/identity/scope_context.py:600` |
+| 顶层账号判据 | `src/aiops_diagnostics/identity/scope_context.py:75` |
+| 会话身份 | `src/aiops_diagnostics/identity/third_session_auth.py:217` |
+| 令牌身份 | `src/aiops_diagnostics/identity/company_token_auth.py:281` |
+| 行级渲染（只比租户） | `src/aiops_diagnostics/identity/order_visibility.py:208` |
 | 拒绝文案与码 | `src/aiops_diagnostics/clarification.py` |

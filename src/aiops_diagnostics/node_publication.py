@@ -14,7 +14,7 @@ from aiops_diagnostics.agent_lifecycle import config_from_snapshot
 from aiops_diagnostics.agent_runs import AgentRunConfig
 from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore, RouteBindingError
 from aiops_diagnostics.dify_dsl_pull import DifyDslClient, SyncOutcome
-from aiops_diagnostics.order_visibility import (
+from aiops_diagnostics.identity.order_visibility import (
     TenantVisibility,
     VisibilityProfile,
     normalize_tenant,

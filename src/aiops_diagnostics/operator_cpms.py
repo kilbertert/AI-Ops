@@ -15,8 +15,8 @@ from aiops_diagnostics import chat_execution, execution_manifest
 from aiops_diagnostics.agent_runs import AgentRunConfig, SnailDispatcher
 from aiops_diagnostics.async_job_lifecycle import QUESTION
 from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, request_json
-from aiops_diagnostics.query_scope import resolve_query_scope
-from aiops_diagnostics.scope_context import is_tenant_level_account
+from aiops_diagnostics.identity.query_scope import resolve_query_scope
+from aiops_diagnostics.identity.scope_context import is_tenant_level_account
 
 SCENARIO = "operator_order_diagnosis"
 PREFIX = "operator-cpms-node:"
@@ -108,7 +108,7 @@ class OperatorCpms:
     def refresh_scope(self, caller):
         from dataclasses import replace
 
-        from aiops_diagnostics.scope_context import DataScope
+        from aiops_diagnostics.identity.scope_context import DataScope
 
         if operator_scope(caller).site_ids is None:
             return caller

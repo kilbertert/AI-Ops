@@ -319,7 +319,7 @@ def _pick_session(settings) -> tuple[str | None, str]:
     import redis
 
     from aiops_diagnostics.config import Settings
-    from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
+    from aiops_diagnostics.identity.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
 
     runtime = Settings.from_config(pathlib.Path("/etc/aiops-41/production.env"))
     resolver = RedisThirdSessionResolver(
@@ -361,7 +361,7 @@ def _pick_order(settings, session: str) -> str | None:
     import pymysql
 
     from aiops_diagnostics.config import Settings
-    from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
+    from aiops_diagnostics.identity.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
 
     runtime = Settings.from_config(pathlib.Path("/etc/aiops-41/production.env"))
     resolver = RedisThirdSessionResolver(

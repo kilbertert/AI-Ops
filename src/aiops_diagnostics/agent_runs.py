@@ -30,7 +30,7 @@ from typing import Any
 
 from aiops_diagnostics.bounded_http import ErrorMapping, HttpFailure, RequestSpec, request_json
 from aiops_diagnostics.gateway_config import canonical_gateway_url
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 #: 授权记录的有效期（契约 §4：固定 180 秒，不续期；到期须从已认证入口重新授权）。
 RUN_TTL_SECONDS = 180

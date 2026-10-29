@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aiops_diagnostics.caller_auth import (
+from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_FORBIDDEN,
     CALLER_AUTH_INVALID,
     CALLER_AUTH_UNAVAILABLE,

@@ -37,7 +37,7 @@ from aiops_diagnostics.dify_app_registry import (
     DifyAppRegistryError,
 )
 from aiops_diagnostics.faq import PlatformRoleRecord
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 TENANT = "T-1"
 #: Routes to the generic QA branch: no FAQ hit, no order id, no dispute wording.
