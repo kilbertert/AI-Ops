@@ -4,8 +4,8 @@ from types import SimpleNamespace
 from uuid import UUID, uuid5
 
 import pytest
-from test_operator_cpms import APP
-from test_operator_cpms import operator as operator
+from operations.test_operator_cpms import APP
+from operations.test_operator_cpms import operator as operator
 
 from aiops_diagnostics.dify import self_service_identity as auth
 from aiops_diagnostics.dify import self_service_prepare as prepare
