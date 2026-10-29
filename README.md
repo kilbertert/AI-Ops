@@ -73,7 +73,7 @@ flowchart LR
 | 目录 | 现在的用途 |
 |---|---|
 | `src/aiops_diagnostics/` | Python Gateway、业务与集成；本轮不搬迁 |
-| `tools/m2_close/node/` | 现役 Java 节点源码与 Maven 测试，不能按实验废弃 |
+| `services/execution-node/` | 现役 Java 节点源码、资源与 Maven 构建入口 |
 | `tools/m2_live/` | 包含现役模型代理与验证工具，后续按职责归位 |
 | `tools/` | 内容生成、迁移和隔离验证 |
 | `plugins/` | Dify 知识插件及其原生打包布局 |
