@@ -151,3 +151,7 @@ ragflow_tenants.model_checked_at非空。知识入口303并进入RAGFlow后，�
 表现为`SETUP_KNOWLEDGE_FAILED`。工具写完会用上游同一判据回放一次，不通过即报错。
 先记录待恢复凭据，恢复后用`/kb/tenants/verify-password`确认，再重试原开通任务完成模型验证。
 不要调用会重新创建租户的绕行脚本，不输出密码、散列或会话。失败保留备份和任务状态供恢复。
+
+知识空间与知识连接是两项完成条件：RAGFlow租户建立后，Dify每个工作区还要有自己的外部知识API。
+连接由平台配置的public_base_url＋/v1/dify、knowledge key创建，原全局UUID仅用于识别旧工作区连接，
+不得跨工作区复制。`knowledge_connection.ensure`由开户和同步共用，并在同步闸内串行创建/回读。

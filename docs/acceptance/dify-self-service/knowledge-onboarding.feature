@@ -26,3 +26,9 @@ Feature: 客户开通同时具备Dify与RAGFlow空间
       When 在页面选择客户并进入工作区或知识库
       Then 当前账号可进入该客户空间
       And 普通租户篡改客户或工作区参数不能进入其他客户空间
+    Scenario: 新工作区同步知识库
+      Given 当前客户RAGFlow文档已解析并可检索
+      When 回到Dify知识库列表
+      Then 系统自动创建或复用当前工作区的外部知识API连接
+      And Dify显示本客户知识库并可检索
+      And 不复用另一工作区的连接UUID

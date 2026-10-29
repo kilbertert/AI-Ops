@@ -178,3 +178,18 @@ def knowledge(context, tenant_id):
             raise SetupRefused("SETUP_KNOWLEDGE_FAILED")
     except OnboardError as exc:
         raise SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc
+
+
+def knowledge_connection(context, workspace_id, console):
+    from .knowledge_connection import ensure
+
+    result = []
+
+    def work():
+        result.append(ensure(console, workspace_id, context.settings))
+
+    guard = context.runtime.knowledge_dataset_sync_guard
+    guard.run(work=work)
+    if not result:
+        raise SetupRefused("SETUP_KNOWLEDGE_CONNECTION_FAILED")
+    return result[0]

@@ -185,7 +185,7 @@ class GatewayServerSettings:
     #:
     #: 建一条 external dataset 时必须指名它 —— 它决定了 Dify 拿哪套端点与凭据去检索。
     #: **不猜、不按名字找**：模板由开户流程建、每个 workspace 一份，猜错等于把凭据绑到
-    #: 别处（ADR-0096 决策一）。留空 ⇒ 自动同步整体不启用（清单照常返回）。
+    #: 别处（ADR-0096 决策一）。仅作旧工作区连接的识别值；新工作区通过平台端点/知识key自动创建自己的连接。
     dify_external_knowledge_api_id: str = ""
     #: **运营自助发布**的共享凭据（`POST /v1/dify/publish`）。留空 ⇒ 该路由整体 404，
     #: 与 ``dify_knowledge_api_key`` 同一条「未配置即不启用」的机制。

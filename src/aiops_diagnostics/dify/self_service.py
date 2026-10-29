@@ -226,6 +226,9 @@ class SelfService:
                 )
             save("knowledge")
             prepare.knowledge(self.context, request["tenant_id"])
+            resources["knowledge_api_id"] = prepare.knowledge_connection(
+                self.context, resources["workspace_id"], self.console
+            )
             resources["knowledge_ready"] = True
             save("dependencies")
             provider = prepare.dependencies(
