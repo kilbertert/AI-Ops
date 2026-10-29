@@ -47,3 +47,12 @@ Feature: 平台在Dify开通管家，租户在自己工作区管理
       When Dify成员加入暂时失败
       Then 页面提示稍后重新登录而不是进入空工作区
       And 重试复用已有账号
+    Scenario: 原生聊天组件带空上下文
+      Given 当前租户有权预览明确订单
+      When Dify自动附带streaming和空会话、文件、变量
+      Then 管家预览接受请求并返回报告
+      And 非空上下文仍被拒绝
+    Scenario: Java清单未声明输出上限
+      Given 当前Java执行清单没有max_tokens
+      When 打开编排页面
+      Then 页面显示输出上限为模型默认而不冒充Dify凭据预算

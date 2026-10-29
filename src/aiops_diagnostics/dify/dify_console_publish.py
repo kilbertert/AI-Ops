@@ -1887,7 +1887,20 @@ def _native_order(query):
 
 def _native_preview(handler):
     session, app_id = _native_session(handler)
-    payload = handler._read_bounded_json(65536, frozenset({"app_id", "query", "pre_prompt", "tools"}))
+    payload = handler._read_bounded_json(
+        65536,
+        frozenset(
+            {"app_id", "query", "pre_prompt", "tools", "response_mode", "conversation_id", "files", "inputs"}
+        ),
+    )
+    # Dify原生useChat附带这些字段；当前单订单预览不接受文件、变量或外部会话上下文。
+    if (
+        payload.pop("response_mode", "streaming") != "streaming"
+        or payload.pop("files", []) != []
+        or payload.pop("inputs", {}) != {}
+        or payload.pop("conversation_id", "") not in ("", None)
+    ):
+        raise _Rejected(400, "管家预览仅支持当前明确订单，请清空会话、文件和变量后重试")
     if payload.get("app_id") != app_id:
         raise _Rejected(403, "应用与当前页面不一致")
     query = payload.get("query")

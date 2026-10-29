@@ -210,6 +210,49 @@ def test_original_preview_delivers_sse_without_credentials(bridge, upstream):
     assert call["headers"]["x-aiops-console-session"] == SESSION
 
 
+def test_dify_use_chat_envelope_is_accepted_without_forwarding_context(bridge, upstream):
+    http_status, _, body = send(
+        bridge,
+        {
+            "app_id": APP_ID,
+            "query": "检查订单 2115330675982561281",
+            "pre_prompt": "CURRENT_DRAFT",
+            "tools": [],
+            "response_mode": "streaming",
+            "conversation_id": "",
+            "files": [],
+            "inputs": {},
+        },
+    )
+    assert http_status == 200 and "本次订单事实" in body
+    call = next(x for x in upstream.calls if x["path"] == "/v1/dify/trial")
+    assert not {"files", "inputs", "conversation_id", "response_mode"} & call["body"].keys()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("files", [{}]),
+        ("inputs", {"tenant_id": "OTHER"}),
+        ("conversation_id", "other-chat"),
+        ("response_mode", "blocking"),
+    ],
+)
+def test_native_preview_rejects_nonempty_unimplemented_context(bridge, upstream, field, value):
+    http_status, _, _ = send(
+        bridge,
+        {
+            "app_id": APP_ID,
+            "query": "检查订单 2115330675982561281",
+            "pre_prompt": "CURRENT_DRAFT",
+            "tools": [],
+            field: value,
+        },
+    )
+    assert http_status == 400
+    assert not any(x["path"] == "/v1/dify/trial" for x in upstream.calls)
+
+
 @pytest.mark.parametrize("fault", ["csrf", "origin", "session", "app", "order", "multiple", "tenant"])
 def test_rejects_untrusted_input_before_gateway(bridge, upstream, fault):
     headers = dict(_browser_headers())
