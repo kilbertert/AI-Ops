@@ -178,19 +178,18 @@ business_entry = "operator"
 app_id = "137cc417-f068-43c2-9d4a-43ebd254ea01"
 agent_name = "ops-methodology-700"
 
-# 第二租户的独立管家副本；正文与工具由该租户的 Dify 应用管理。
-# 节点目标和正式路由按 operator-cpms/multitenant.md 在部署时单独登记。
-[[agents]]
-tenant_id = "1941847786056323072"
-name = "ops-youlian-order-diagnosis"
-description = "优链充管家订单诊断"
-agent_type = "operations"
-knowledge_base_ids = []
-model = "deepseek-v4-1-flash-261017"
-output_contract = "diagnosis-v1"
-
-[[dify_apps]]
-tenant_id = "1941847786056323072"
-business_entry = "operator"
-app_id = "349a637c-8f86-41b9-b932-e9818fb39a97"
-agent_name = "ops-youlian-order-diagnosis"
+# ⚠️ **租户 `1941847786056323072`（优链充）的 operator 入口由业务页面管理，本清单不再声明。**
+#
+# 2026-10-29 经 Dify 控制台“复制并开通”后，该租户的 `(租户, operator)` 已登记为**页面管理的
+# 受管应用**（`operator_apps`）。页面发布的正式入口是它自己选的那份 app，不是这份文件能决定的。
+#
+# 这里曾声明 `[[agents]] ops-youlian-order-diagnosis` + `[[dify_apps]] app_id = 349a637c-…`。
+# 页面把该入口切到 `a57602c1-…` 之后两者不一致，`reconcile_dify_registry` 的守卫
+# “页面管理的管家不能由环境清单覆盖”会**在写入前中止**——不是只跳过这个租户，是**整份清单**
+# 都收敛不了。删掉这两块是对齐，不是绕过：清单表达的是“这一对由清单点名”，而这一对已经不是。
+#
+# - 库里的 agent 与 `agent_versions` 原样保留（`prune=False` 不动未声明租户；`--prune` 的删除
+#   循环也跳过页面管理的行），所以这不是撤回，只是交还管理权。
+# - 之后该租户的发布、切版、撤回一律走 Dify 页面与 `POST /v1/dify/publish`，不回写本文件。
+# - 新租户**在开通之前**声明、按 `operator-cpms/multitenant.md` 登记；一旦经页面开通，
+#   同样要删掉它的 `[[dify_apps]]`，否则下一次收敛会被它拦住。
