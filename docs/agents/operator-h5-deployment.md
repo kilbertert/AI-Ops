@@ -15,7 +15,7 @@
 ## 安装与验收
 
 安装前记录站点真实访问流量、现有静态根、Nginx配置与回滚位置；不用监听状态推断使用情况。
-主机路径由运维清单确定，不从临时目录猜测。保留原vhost的TLS、已有安全规则与非助手入口。
+主机路径由运维清单确定，不从临时目录猜测。读取vhost和其include/rewrite片段，确认没有优先的`location ^~ /v1/`；安装后逐条验证7种方法/路径。保留原vhost的TLS、已有安全规则与非助手入口。
 执行形式（制品目录同时包含 `deploy/` 与 `ops/nginx/`）：
 
 ```bash
@@ -27,7 +27,7 @@ python3 deploy/operator-h5.py \
 ```
 
 脚本先核制品集合和每个摘要，保存原配置，再切换静态根。`nginx -t` 后 reload，
-失败恢复原配置。旧静态根不删除；旧static哈希资源复制到新根的缺失位置，支持已打开页面，新制品同名文件优先。配置里的 company gateway 保持既有本地入口；
+失败恢复原配置。旧静态根不删除；仅旧static/js、static/css下带8位十六进制哈希的JS/CSS分块复制到新根的缺失位置，支持已打开页面，新制品同名文件优先。配置里的 company gateway 保持既有本地入口；
 个人 Bearer 原样传递，入口固定 operator，外部来源密钥/两种第三会话头清空。
 仅7种方法/路径组合可转发，管理端点不开放；失败不重试，响应不缓存。
 此映射依据 [Nginx 官方代理规范](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)：

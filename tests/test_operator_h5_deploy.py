@@ -153,8 +153,9 @@ def test_failed_nginx_validation_restores_previous_site(tmp_path, monkeypatch):
     old = tmp_path / "old"
     old.mkdir()
     (old / "index.html").write_text("old")
-    (old / "static").mkdir()
-    (old / "static/old-hash.js").write_text("cached asset")
+    (old / "static/js").mkdir(parents=True)
+    (old / "static/js/old.12345678.js").write_text("cached asset")
+    (old / "static/private.json").write_text("not a published chunk")
     vhost = tmp_path / "site.conf"
     vhost.write_text(f"root {old};\n")
     extension = tmp_path / "extension.conf"
@@ -185,5 +186,6 @@ def test_failed_nginx_validation_restores_previous_site(tmp_path, monkeypatch):
     assert extension.read_text() == "previous extension"
     assert not proxy.exists()
     assert (old / "index.html").read_text() == "old"
-    assert (args.release / "static/old-hash.js").read_text() == "cached asset"
+    assert (args.release / "static/js/old.12345678.js").read_text() == "cached asset"
+    assert not (args.release / "static/private.json").exists()
     assert calls == [["nginx", "-t"], ["nginx", "-t"], ["nginx", "-s", "reload"]]

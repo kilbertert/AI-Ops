@@ -54,10 +54,14 @@ def install(args):
         json.dumps({"paths": [str(p) for p in paths], "existed": existed})
     )
     shutil.copytree(args.build, args.release)
-    # 保留已打开页面仍会请求的旧哈希资源；新制品同名文件始终优先。
+    # 只保留旧JS/CSS哈希分块；不把旧目录中的任意文件重新发布。
     for path in old_static.rglob("*"):
         target = args.release / "static" / path.relative_to(old_static)
-        if path.is_file() and not target.exists():
+        if (
+            path.is_file()
+            and re.fullmatch(r"(?:js|css)/[^/]+\.[0-9a-f]{8}\.(?:js|css)", str(path.relative_to(old_static)))
+            and not target.exists()
+        ):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
     # Nginx worker 需读静态文件；备份、清单及运行凭据不进入静态根。
