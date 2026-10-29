@@ -4,7 +4,7 @@ import json
 import uuid
 
 import pytest
-from test_app_runtime_dify_entry import dify_chat
+from execution.test_app_runtime_dify_entry import dify_chat
 
 from aiops_diagnostics.dify_chatflow import ChatflowReply
 from consumer.test_consumer_chat_service import Client, done
@@ -80,10 +80,10 @@ def test_legacy_binding_keeps_its_fingerprint_and_old_callback(tmp_path, monkeyp
     import hashlib
     from dataclasses import asdict
 
-    from test_app_runtime_node_entry import _Resolver
+    from execution.test_app_runtime_node_entry import _Resolver
 
-    from aiops_diagnostics.chat_execution import select_binding
     from aiops_diagnostics.consumer.consumer_knowledge import _binding_identity, digest
+    from aiops_diagnostics.execution.chat_execution import select_binding
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb = wire(env, monkeypatch, tmp_path)

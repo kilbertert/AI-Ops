@@ -284,7 +284,7 @@ def main():
             trial_run = f["ctx"].agent_run_store.by_qa(trial)
             assert "NATIVE_UNSAVED" in trial_run.execution_manifest
             assert trial_run.execution_manifest != current.manifest_text
-            from aiops_diagnostics import chat_execution
+            from aiops_diagnostics.execution import chat_execution
 
             assert chat_execution.binding_for_key(f["settings"], current.key) == current
             cases.append({"case": "java-native-draft-trial", "status": "completed-without-publishing"})

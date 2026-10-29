@@ -4,7 +4,7 @@ import json
 import time
 import uuid
 
-from test_app_runtime_dify_entry import HEADERS, dify_chat
+from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
 from aiops_diagnostics.dify_chatflow import ChatflowReply
 

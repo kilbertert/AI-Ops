@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 import pytest
-from test_app_runtime_dify_entry import dify_chat
+from execution.test_app_runtime_dify_entry import dify_chat
 
 from aiops_diagnostics.consumer.consumer_knowledge import load_content
 from consumer.test_consumer_chat_service import done
@@ -115,7 +115,7 @@ def test_foreign_library_media_is_not_signed(tmp_path, monkeypatch):
 
 
 def test_media_language_and_deleted_run_fail_closed(tmp_path, monkeypatch):
-    from test_app_runtime_dify_entry import HEADERS
+    from execution.test_app_runtime_dify_entry import HEADERS
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         _, kb, path = prepare(env, monkeypatch, tmp_path)

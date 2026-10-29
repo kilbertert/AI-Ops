@@ -27,8 +27,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics import agent_runs
-from aiops_diagnostics.agent_runs import (
+from aiops_diagnostics.execution import agent_runs
+from aiops_diagnostics.execution.agent_runs import (
     EXPIRED,
     FAILED,
     ISSUED,
@@ -950,7 +950,7 @@ def test_receipt_reports_the_version_gap_instead_of_pretending(tmp_path, monkeyp
     # number. Pinning it made every release turn this red for a reason that has
     # nothing to do with the receipt — measured 2026-10-23, when bumping
     # `0.1.0` → `0.2.0` failed here.
-    expected_version = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+    expected_version = (Path(__file__).resolve().parents[2] / "VERSION").read_text(encoding="utf-8").strip()
     assert receipt["gateway_version"] == expected_version
     assert receipt["expected_environment"] == "env-a"
     assert receipt["expected_app_id"] == "aiops-alpha"

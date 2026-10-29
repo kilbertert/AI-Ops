@@ -1667,7 +1667,7 @@ def main() -> int:
         # 之后删文件只会让整张表读失败（`EXEC_CONFIG_UNAVAILABLE`）。
         import sqlite3 as _sqlite3
 
-        from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+        from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
         # 每个 app 的 Service API 凭据：`<key_dir>/<app_id>.key`。真实部署里由运维
         # 预置；发布只推路径、不读密钥，所以这一文件必须**在发布之前**就位。

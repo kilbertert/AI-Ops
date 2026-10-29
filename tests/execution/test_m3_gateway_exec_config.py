@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics import agent_runs, execution_manifest
-from aiops_diagnostics.agent_runs import AgentRun, AgentRunStore
+from aiops_diagnostics.execution import agent_runs, execution_manifest
+from aiops_diagnostics.execution.agent_runs import AgentRun, AgentRunStore
 
 NODE_TOKEN = "node-token-alpha-0123456789"
 DELEGATED = "/v1/orders/{order}/charging-status/delegated"
@@ -313,8 +313,8 @@ def _fixture(tmp_path, monkeypatch, *, manifest: Path | None):
     重建应用或走派发期领取都会得到另一套状态 —— 见 `_succeed_run` 的注释：
     时序要完全可控，所以派发只记录不领取，节点那一跳由测试显式发出。
     """
-    from test_m2_close_contract import _app as _upstream_app
-    from test_m2_close_contract import cpms_stub
+    from execution.test_m2_close_contract import _app as _upstream_app
+    from execution.test_m2_close_contract import cpms_stub
 
     ctx = cpms_stub()
     upstream = ctx.__enter__()
@@ -820,7 +820,7 @@ def test_every_manifest_sample_declares_an_independent_expectation():
     """
     import json
 
-    root = Path(__file__).resolve().parents[1] / "tools/m2_close/m3node"
+    root = Path(__file__).resolve().parents[2] / "tools/m2_close/m3node"
     samples = {path.name for path in (root / "manifest-samples").glob("*.json")}
     declared = json.loads((root / "manifest_samples_expected.json").read_text())
     expectations = {name: spec for name, spec in declared.items() if not name.startswith("_")}
@@ -831,7 +831,7 @@ def test_every_manifest_sample_declares_an_independent_expectation():
 
 def test_normal_sample_is_accepted_and_identity_is_the_raw_bytes_digest(tmp_path):
     """正例必须真的被接受；身份是原始字节 sha256。"""
-    root = Path(__file__).resolve().parents[1] / "tools/m2_close/m3node"
+    root = Path(__file__).resolve().parents[2] / "tools/m2_close/m3node"
     source = root / "manifest-samples/accept-normal.json"
     sample = tmp_path / "accept-normal.json"
     sample.write_bytes(source.read_bytes())
@@ -852,7 +852,7 @@ def test_group_or_other_access_is_rejected_regardless_of_checkout_mode(tmp_path,
     这同时解释了为什么对照脚本要把样本复制到一次性目录再显式设权限：
     Git 不保存 0600，检出通常就是 0644，直接读工作树会让「全部拒绝」变成常态。
     """
-    root = Path(__file__).resolve().parents[1] / "tools/m2_close/m3node"
+    root = Path(__file__).resolve().parents[2] / "tools/m2_close/m3node"
     sample = tmp_path / "sample.json"
     sample.write_bytes((root / "manifest-samples/accept-normal.json").read_bytes())
     sample.chmod(mode)

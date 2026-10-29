@@ -28,17 +28,17 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from test_m2_close_contract import NODE_A_TOKEN, Orders, _write_config
-from test_m3_gateway_exec_config import _identity, _write_manifest
 
-from aiops_diagnostics import chat_execution
-from aiops_diagnostics.agent_runs import SUCCEEDED, AgentRunStore
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.execution import chat_execution
+from aiops_diagnostics.execution.agent_runs import SUCCEEDED, AgentRunStore
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime
 from aiops_diagnostics.gateway_store import GatewayStore
+from execution.test_m2_close_contract import NODE_A_TOKEN, Orders, _write_config
+from execution.test_m3_gateway_exec_config import _identity, _write_manifest
 
 NODE_A2_TOKEN = "node-token-beta-0123456789"
 
@@ -224,7 +224,7 @@ def node_chat(
 
         # 派发发生在 `chat_execution`（共享操作）里，所以打的是**那里**的名字。
         monkeypatch.setattr(
-            "aiops_diagnostics.chat_execution.SnailDispatcher",
+            "aiops_diagnostics.execution.chat_execution.SnailDispatcher",
             lambda: type("D", (), {"dispatch": staticmethod(dispatch)})(),
         )
 
@@ -483,7 +483,7 @@ def test_execution_config_drift_fails_and_sends_the_bad_identity(tmp_path, monke
             seen.append({"status": claimed.status_code, "body": claimed.json()})
 
         monkeypatch.setattr(
-            "aiops_diagnostics.chat_execution.SnailDispatcher",
+            "aiops_diagnostics.execution.chat_execution.SnailDispatcher",
             lambda: type("D", (), {"dispatch": staticmethod(bad_dispatch)})(),
         )
         response = ask(f["client"])
@@ -528,7 +528,7 @@ def test_claim_without_completion_can_never_succeed(tmp_path, monkeypatch):
             completion_calls.append(claimed.status_code)
 
         monkeypatch.setattr(
-            "aiops_diagnostics.chat_execution.SnailDispatcher",
+            "aiops_diagnostics.execution.chat_execution.SnailDispatcher",
             lambda: type("D", (), {"dispatch": staticmethod(claim_only)})(),
         )
         response = ask(f["client"])
@@ -872,7 +872,7 @@ def test_cancel_revokes_the_linked_run_and_late_result_cannot_overwrite(tmp_path
             finished.set()
 
         monkeypatch.setattr(
-            "aiops_diagnostics.chat_execution.SnailDispatcher",
+            "aiops_diagnostics.execution.chat_execution.SnailDispatcher",
             lambda: type("D", (), {"dispatch": staticmethod(slow_dispatch)})(),
         )
         qa_id = ask(f["client"]).json()["qa_id"]
@@ -1034,7 +1034,9 @@ def test_revocation_during_config_read_never_delivers_the_body(tmp_path, monkeyp
                 AgentRunStore(f["settings"].database_file).revoke(run_id_, "revoked_during_config")
             return config
 
-        monkeypatch.setattr("aiops_diagnostics.chat_execution.callback_config", callback_config_then_revoke)
+        monkeypatch.setattr(
+            "aiops_diagnostics.execution.chat_execution.callback_config", callback_config_then_revoke
+        )
         refused = f["client"].get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
         assert refused.status_code in {403, 404}, refused.text
         assert "blocks" not in refused.text
@@ -1066,7 +1068,9 @@ def test_expiry_during_config_read_never_delivers_the_body(tmp_path, monkeypatch
                     conn.execute("UPDATE agent_runs SET expires_at = ? WHERE run_id = ?", (past, run_id_))
             return config
 
-        monkeypatch.setattr("aiops_diagnostics.chat_execution.callback_config", callback_config_then_expire)
+        monkeypatch.setattr(
+            "aiops_diagnostics.execution.chat_execution.callback_config", callback_config_then_expire
+        )
         refused = f["client"].get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
         assert refused.status_code in {403, 404}, refused.text
         assert "blocks" not in refused.text
@@ -1155,7 +1159,7 @@ def test_worker_treats_authorization_outage_as_a_failure(tmp_path, monkeypatch):
 
 
 def test_retracted_managed_node_result_reports_gone_without_body(tmp_path, monkeypatch):
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     with node_chat(tmp_path, monkeypatch) as f:
         qa_id = ask(f["client"]).json()["qa_id"]

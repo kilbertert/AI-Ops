@@ -5,13 +5,13 @@ import json
 
 import pytest
 import yaml
-from test_app_runtime_dify_entry import dify_chat
-from test_node_publication import publication as publication
-from test_node_publication import publish as publish_node
+from execution.test_app_runtime_dify_entry import dify_chat
+from execution.test_node_publication import publication as publication
+from execution.test_node_publication import publish as publish_node
 
-from aiops_diagnostics.chat_execution import SCENARIO_CONSUMER_SERVICE
-from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.dify_app_registry import DifyAppBinding
+from aiops_diagnostics.execution.chat_execution import SCENARIO_CONSUMER_SERVICE
+from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig
 from aiops_diagnostics.publication.agent_manifest import admin_context
 from consumer.test_consumer_chat_service import done
@@ -159,7 +159,7 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
     import time
     from pathlib import Path
 
-    from test_app_runtime_node_entry import ORDER_A, _Resolver
+    from execution.test_app_runtime_node_entry import ORDER_A, _Resolver
 
     from consumer.test_consumer_knowledge_flow import Workflow
 

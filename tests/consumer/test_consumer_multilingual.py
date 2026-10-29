@@ -1,7 +1,7 @@
 """复现同一中文问题仅因H5语言切换被拒，以及下游语言丢失。"""
 
 import pytest
-from test_app_runtime_dify_entry import HEADERS, dify_chat
+from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 from consumer.test_consumer_chat_service import Client, done
@@ -177,7 +177,7 @@ def test_support_route_survives_missing_translation_without_foreign_label(config
 
 @pytest.mark.parametrize("language", SUPPORTED_LANGUAGES)
 def test_order_shortcut_uses_business_workflow_language(tmp_path, monkeypatch, language):
-    from test_app_runtime_dify_entry import ORDER_A
+    from execution.test_app_runtime_dify_entry import ORDER_A
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, _ = wire(env, monkeypatch, tmp_path)

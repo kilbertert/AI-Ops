@@ -148,11 +148,11 @@ def test_package_import_graph_has_no_new_cycles() -> None:
 
     cyclic = {(a, b) for a, targets in edges.items() for b in targets if a in reachable(b)}
     existing = {
-        ("agent_runs", "gateway_config"),
-        ("gateway_config", "chat_execution"),
-        ("chat_execution", "agent_runs"),
-        ("chat_execution", "dify_chat_workflow"),
-        ("chat_execution", "gateway_config"),
+        ("execution.agent_runs", "gateway_config"),
+        ("gateway_config", "execution.chat_execution"),
+        ("execution.chat_execution", "execution.agent_runs"),
+        ("execution.chat_execution", "dify_chat_workflow"),
+        ("execution.chat_execution", "gateway_config"),
         ("dify_chat_workflow", "gateway_config"),
     }
     assert not cyclic - existing, "新增包内循环边: " + repr(sorted(cyclic - existing))

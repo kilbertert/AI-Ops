@@ -5,8 +5,8 @@ import sqlite3
 import uuid
 
 import pytest
-from test_app_runtime_dify_entry import HEADERS, dify_chat
-from test_app_runtime_node_entry import ORDER_A, ORDER_B
+from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
+from execution.test_app_runtime_node_entry import ORDER_A, ORDER_B
 
 from aiops_diagnostics.dify_chatflow import ChatflowReply
 from consumer.test_consumer_chat_service import Client, done
@@ -88,7 +88,7 @@ def test_live_order_has_one_snapshot_and_never_carries_it_to_next_model_turn(tmp
         final = done(env, explicit["qa_id"]).json()
         assert final["status"] == "completed" and ORDER_B in final["result"]["blocks"][0]["text"]
         assert env["upstream"].calls == 2
-        from test_app_runtime_node_entry import TOKENS
+        from execution.test_app_runtime_node_entry import TOKENS
 
         monkeypatch.setitem(TOKENS, "token-b", ("USER-B", "TENANT-A"))
         other = {**HEADERS, "Authorization": "Bearer token-b"}

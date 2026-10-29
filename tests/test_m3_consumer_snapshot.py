@@ -5,10 +5,10 @@ import json
 from contextlib import contextmanager
 
 import pytest
-from test_m2_close_contract import _app, _delegate, cpms_stub
-from test_m3_gateway_exec_config import _identity, _write_manifest
+from execution.test_m2_close_contract import _app, _delegate, cpms_stub
+from execution.test_m3_gateway_exec_config import _identity, _write_manifest
 
-from aiops_diagnostics import agent_runs
+from aiops_diagnostics.execution import agent_runs
 
 
 @contextmanager
@@ -183,7 +183,7 @@ def test_unknown_status_stays_unknown(tmp_path, monkeypatch):
 
 
 def test_two_consumers_interleave_without_sharing_snapshots(tmp_path, monkeypatch):
-    from test_m2_close_contract import _scope
+    from execution.test_m2_close_contract import _scope
 
     nested = []
 

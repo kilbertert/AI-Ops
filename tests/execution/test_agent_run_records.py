@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics import agent_runs
-from aiops_diagnostics.agent_runs import (
+from aiops_diagnostics.execution import agent_runs
+from aiops_diagnostics.execution.agent_runs import (
     EXPIRED,
     ISSUED,
     REVOKED,

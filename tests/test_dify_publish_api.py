@@ -713,7 +713,7 @@ RETRACT_HEADERS = {"Authorization": f"Bearer {PUBLISH_KEY}"}
 
 
 def _seed_route(db: Path, *, tenant: str = "T-1", version: int = 3, workflow: str = "wf-v3"):
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     key = db.parent / f"{APP_ID}.key"
     key.write_text("service-key\n")
@@ -851,7 +851,7 @@ def test_a_chat_app_publish_does_not_require_a_workflow_pointer(tmp_path, monkey
     assert response.status_code == 200, response.text
     assert response.json()["version_no"] == 2
     # 路由指针**没有**被推进：chat 应用不参与 workflow 路由。
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     assert ChatRouteBindingStore(tmp_path / "gateway.db").all() == ()
 
@@ -863,8 +863,8 @@ def test_a_slow_publish_cannot_undo_a_retraction_that_happened_meanwhile(tmp_pat
     revision，于是这次发布仍会 CAS 通过，把一次已成功的撤回重新置为 active
     （Codex 复核实测：V1 → 撤回 → 延迟发布推进，最终 active / revision 3 / V2）。
     """
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
     from aiops_diagnostics.dify_dsl_pull import SyncOutcome
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     runtime = _Runtime()
     monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))

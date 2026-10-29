@@ -9,10 +9,10 @@ from typing import Any
 
 import yaml
 
-from aiops_diagnostics import execution_manifest
-from aiops_diagnostics.agent_runs import AgentRunConfig
-from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore, RouteBindingError
 from aiops_diagnostics.dify_dsl_pull import DifyDslClient, SyncOutcome
+from aiops_diagnostics.execution import execution_manifest
+from aiops_diagnostics.execution.agent_runs import AgentRunConfig
+from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore, RouteBindingError
 from aiops_diagnostics.identity.order_visibility import (
     TenantVisibility,
     VisibilityProfile,
@@ -140,7 +140,7 @@ def candidate(source: Any, target: NodeTarget, *, operator_preview: dict | None 
         {key: tool[key] for key in ("name", "description", "input_schema")} for tool in raw["tools"]
     ]
     if target.entry == "operator":
-        from aiops_diagnostics.chat_execution import OPERATOR_TOOL_NAMES
+        from aiops_diagnostics.execution.chat_execution import OPERATOR_TOOL_NAMES
 
         entries = document.get("model_config", {}).get("agent_mode", {}).get("tools", [])
         if not isinstance(entries, list) or len(entries) > 32:
@@ -290,8 +290,8 @@ class NodeTrial:
     def execute(self, runtime: Any, trial_id: str, scope: Any, order: str, language: str):
         from dataclasses import replace
 
-        from aiops_diagnostics import chat_execution
         from aiops_diagnostics.dify_trial import TrialResult
+        from aiops_diagnostics.execution import chat_execution
 
         binding = chat_execution.binding_for_key(runtime.gateway_settings, self.route.key)
         if binding is None or binding.route_revision != self.route.revision:

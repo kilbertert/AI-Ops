@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from test_app_runtime_dify_entry import HEADERS, dify_chat
+from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
 from consumer.test_consumer_chat_service import done
 from consumer.test_consumer_live_documents import document_fixture
@@ -80,8 +80,8 @@ def test_translated_answer_keeps_original_chinese_reference_name(language, text)
 
 
 def test_only_cited_resource_name_is_exempt_inside_translated_prose():
-    from aiops_diagnostics.chat_execution import ChatRunUnavailable
     from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
     context = {
         "mode": "documents",

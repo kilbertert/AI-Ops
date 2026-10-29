@@ -3,12 +3,12 @@
 import json
 
 import pytest
-from test_app_runtime_dify_entry import HEADERS, dify_chat
+from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
-from aiops_diagnostics.chat_data_grant import DataGrantStore
-from aiops_diagnostics.chat_execution import ChatRunUnavailable
 from aiops_diagnostics.consumer import consumer_knowledge
 from aiops_diagnostics.dify_chatflow import ChatflowReply
+from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
+from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable, MediaResourceSigner
 from consumer.test_consumer_chat_service import Client, configure, done
 
@@ -158,11 +158,11 @@ def test_read_cancelled_inside_search_is_not_released(tmp_path, monkeypatch):
         wire(env, monkeypatch)
 
         def cancel():
+            from execution.test_app_runtime_node_entry import _Resolver
+
             grant = DataGrantStore(runtime.store.path).by_token(Workflow.token)
             runtime.cancel_assistant_qa(
-                __import__("test_app_runtime_node_entry")
-                ._Resolver()
-                .resolve("token-a", required_scope="aiops:diagnoses:write"),
+                _Resolver().resolve("token-a", required_scope="aiops:diagnoses:write"),
                 grant.qa_id,
             )
 

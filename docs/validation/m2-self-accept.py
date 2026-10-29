@@ -2,7 +2,7 @@
 """独立验收：不 import 候选树的测试文件，自己起 app、自己造替身、自己判。
 
 这是 Codex 在本仓的验收思路：读候选的实现，用**另一份**驱动代码去证同样的判据。
-它不复用 `tests/test_m2_close_contract.py` 的任何 helper —— 复用会把「测试和实现
+它不复用 `tests/execution/test_m2_close_contract.py` 的任何 helper —— 复用会把「测试和实现
 一起错」的可能性原样带进验收。
 
 用法（从候选树根，用该树的解释器）：
@@ -34,7 +34,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from aiops_diagnostics.agent_runs import AgentRunStore  # noqa: E402
+from aiops_diagnostics.execution.agent_runs import AgentRunStore  # noqa: E402
 from aiops_diagnostics.gateway_api import create_gateway_app  # noqa: E402
 from aiops_diagnostics.gateway_config import GatewayServerSettings  # noqa: E402
 from aiops_diagnostics.gateway_store import GatewayStore  # noqa: E402
@@ -403,7 +403,7 @@ def main() -> int:
             f: hashlib.sha256((REPO / f).read_bytes()).hexdigest()
             for f in (
                 "src/aiops_diagnostics/gateway_api.py",
-                "src/aiops_diagnostics/agent_runs.py",
+                "src/aiops_diagnostics/execution/agent_runs.py",
                 "src/aiops_diagnostics/gateway_config.py",
             )
         },

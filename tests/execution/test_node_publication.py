@@ -5,15 +5,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from test_app_runtime_dify_entry import _Resolver, dify_chat
-from test_app_runtime_node_entry import ORDER_A
-from test_m2_close_contract import _write_config
-from test_m3_gateway_exec_config import _write_manifest
 
-from aiops_diagnostics import chat_execution, node_publication
 from aiops_diagnostics.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.dify_dsl_pull import DifyDslSource
+from aiops_diagnostics.execution import chat_execution, node_publication
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+from execution.test_app_runtime_dify_entry import _Resolver, dify_chat
+from execution.test_app_runtime_node_entry import ORDER_A
+from execution.test_m2_close_contract import _write_config
+from execution.test_m3_gateway_exec_config import _write_manifest
 
 APP = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
@@ -111,7 +111,7 @@ def test_published_run_can_fetch_only_its_own_config(publication):
         gateway_version="test",
     )
     store.bind_qa(run.run_id, "qa-synthetic")
-    from test_m2_close_contract import NODE_A_TOKEN
+    from execution.test_m2_close_contract import NODE_A_TOKEN
 
     path = "/v1/internal/charging-status/execution-config/" + run.run_id
     assert f["client"].post(path, json={}).status_code == 403
@@ -132,7 +132,7 @@ def test_published_run_can_fetch_only_its_own_config(publication):
     "fault", ["wrong_node", "owner_changed", "expired", "revoked", "node_revoked_during_auth"]
 )
 def test_execution_config_is_refused_before_model_or_business(publication, fault, monkeypatch):
-    from test_m2_close_contract import NODE_A2_TOKEN, NODE_A_TOKEN
+    from execution.test_m2_close_contract import NODE_A2_TOKEN, NODE_A_TOKEN
 
     f = publication
     binding = publish(f, 0)
@@ -181,7 +181,7 @@ def test_execution_config_is_refused_before_model_or_business(publication, fault
 
 
 def test_late_publication_cannot_overwrite_retraction(publication):
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     f = publication
     first = publish(f, 0)

@@ -93,10 +93,10 @@ def test_old_graph_is_preserved_but_cannot_downgrade_new_publication():
 
 
 def test_publish_checks_before_native_publish_and_freezes_graph_flags(tmp_path, monkeypatch):
-    from test_app_runtime_dify_entry import dify_chat
-    from test_app_runtime_node_entry import _Resolver
+    from execution.test_app_runtime_dify_entry import dify_chat
+    from execution.test_app_runtime_node_entry import _Resolver
 
-    from aiops_diagnostics.chat_execution import select_binding
+    from aiops_diagnostics.execution.chat_execution import select_binding
     from consumer.test_consumer_publication import Console, prepare, publish
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:

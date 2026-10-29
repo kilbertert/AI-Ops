@@ -15,7 +15,7 @@ parser.add_argument("--out", type=Path, default=Path("/tmp/aiops-b2-release-revi
 args = parser.parse_args()
 repo = args.repo.resolve()
 sys.path.insert(0, str(repo / "src"))
-t = runpy.run_path(str(repo / "tests/test_m2_close_contract.py"))
+t = runpy.run_path(str(repo / "tests/execution/test_m2_close_contract.py"))
 results = []
 for case in [
     "expected_node_rebind_final_authorization",

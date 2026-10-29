@@ -1086,7 +1086,7 @@ def main() -> int:
         report["notes"] = {
             "ttl_convergence": (
                 "进程中断后的 running→expired 由 Gateway 侧既有 TTL 语义覆盖"
-                "（tests/test_m3_node_link_state.py::test_complete_loop_refuses_after_expiry "
+                "（tests/execution/test_m3_node_link_state.py::test_complete_loop_refuses_after_expiry "
                 "与 completion 的到期边界用例）。端到端这边的判据是：节点进程被真的杀掉"
                 "（Runtime.halt），此后**没有**任何完成通知，记录停在 running 而不是 succeeded。"
             ),

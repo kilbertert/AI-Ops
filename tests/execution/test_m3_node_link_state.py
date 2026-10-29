@@ -15,8 +15,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from aiops_diagnostics import agent_runs
-from aiops_diagnostics.agent_runs import AgentRunStore
+from aiops_diagnostics.execution import agent_runs
+from aiops_diagnostics.execution.agent_runs import AgentRunStore
 
 NODE_TOKEN = "node-token-alpha-0123456789"
 
@@ -26,13 +26,13 @@ def _store(tmp_path: Path) -> AgentRunStore:
 
 
 def _config(tmp_path: Path):
-    from test_agent_run_records import _config as write_config
+    from execution.test_agent_run_records import _config as write_config
 
     return agent_runs.AgentRunConfig.load(write_config(tmp_path))
 
 
 def _issued(store: AgentRunStore, config, identity: str | None):
-    from test_agent_run_records import _scope
+    from execution.test_agent_run_records import _scope
 
     return store.issue(
         scope=_scope(),

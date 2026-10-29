@@ -20,9 +20,9 @@ from typing import Any
 
 import pytest
 
-from aiops_diagnostics import chat_data_grant, chat_execution
-from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
+from aiops_diagnostics.execution import chat_data_grant, chat_execution
+from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
@@ -297,7 +297,7 @@ def test_the_trial_callback_refuses_a_changed_source_route(tmp_path, monkeypatch
     """源路由被重新发布过 ⇒ 试用回调拒绝（revision 变了）。"""
     from types import SimpleNamespace
 
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
     from aiops_diagnostics.gateway_api import StandardAPIError, _require_trial_source_route
 
     with _trial_env(tmp_path, monkeypatch) as (_runtime, route, _admin, _engine):

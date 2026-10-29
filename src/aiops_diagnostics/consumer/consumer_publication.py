@@ -6,9 +6,9 @@ import json
 import re
 from pathlib import Path
 
-from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.consumer.consumer_knowledge import load_content
 from aiops_diagnostics.dify_chat_workflow import WORKFLOW_ID_PATTERN
+from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.identity.order_visibility import tenant_matches
 from aiops_diagnostics.private_files import validate_private_file
 
@@ -99,7 +99,7 @@ def frozen_settings(target, *, documents=False):
 
 def route_scenario(settings, binding):
     if binding.business_entry == "operator":
-        from aiops_diagnostics.node_publication import target_for as node_target
+        from aiops_diagnostics.execution.node_publication import target_for as node_target
 
         target = node_target(settings, binding)
         if target is not None:

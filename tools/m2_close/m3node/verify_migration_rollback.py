@@ -106,7 +106,7 @@ def main() -> int:
     args = parser.parse_args()
 
     sys.path.insert(0, str(REPO / "src"))
-    from aiops_diagnostics.agent_runs import AgentRunStore  # noqa: PLC0415 - 需要在 sys.path 之后
+    from aiops_diagnostics.execution.agent_runs import AgentRunStore  # noqa: PLC0415 - 需要在 sys.path 之后
 
     report: dict[str, Any] = {"checks": [], "legacy_rev": LEGACY_REV}
 
@@ -160,7 +160,7 @@ def main() -> int:
         legacy_source = work / "legacy_agent_runs.py"
         try:
             extracted = subprocess.run(
-                ["git", "show", f"{LEGACY_REV}:src/aiops_diagnostics/agent_runs.py"],
+                ["git", "show", f"{LEGACY_REV}:src/aiops_diagnostics/execution/agent_runs.py"],
                 cwd=REPO,
                 capture_output=True,
                 text=True,

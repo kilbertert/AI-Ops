@@ -4,15 +4,15 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from test_app_runtime_dify_entry import ORDER_A, WORKFLOW_ID, _DifyStub, _Resolver, dify_chat
 
-from aiops_diagnostics import chat_execution
-from aiops_diagnostics.agent_runs import scope_to_json
-from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.dify_dsl_pull import DifyDslSource
 from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
+from aiops_diagnostics.execution import chat_execution
+from aiops_diagnostics.execution.agent_runs import scope_to_json
+from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.gateway_runtime import JobRegistration
+from execution.test_app_runtime_dify_entry import ORDER_A, WORKFLOW_ID, _DifyStub, _Resolver, dify_chat
 
 APP = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 FORMAL = "22222222-2222-3333-4444-555555555555"

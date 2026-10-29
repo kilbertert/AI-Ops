@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from datetime import UTC
 from typing import Any
 
-from aiops_diagnostics.agent_runs import AgentRunStore, scope_from_json, scope_to_json
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.conversation_store import BUSY_LOCK_SECONDS
+from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_from_json, scope_to_json
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
 from aiops_diagnostics.health_curves import build_curves
@@ -890,8 +890,8 @@ class GatewayRuntime:
         try:
             result = draft.execute(self, trial_id, run_context, order_no, language)
         except Exception as exc:  # noqa: BLE001 - 逃出去就等于没有终态行
-            from aiops_diagnostics.chat_execution import ChatRunUnavailable
             from aiops_diagnostics.consumer.consumer_intent import TRIAL_MESSAGES
+            from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
             code = (
                 exc.code
@@ -1137,7 +1137,7 @@ class GatewayRuntime:
         取消复用既有守卫：`cancel_assistant_qa` 把 QA 写成 `cancelled` 后，worker 的
         终态写会被 claim-guard 拒掉；这里额外在写之前确认自己没被取消。
         """
-        from aiops_diagnostics import chat_execution
+        from aiops_diagnostics.execution import chat_execution
 
         qa = self.store.create_assistant_question(
             context.scope_fingerprint,
@@ -1207,8 +1207,9 @@ class GatewayRuntime:
         2. 这一次有**同一轮**的取数记录（没有取数却自称成功 ⇒ 失败）；
         3. 输出能适配成 blocks，且订单号与本次冻结的订单一致。
         """
-        from aiops_diagnostics import chat_data_grant, chat_execution, dify_chat_workflow
+        from aiops_diagnostics import dify_chat_workflow
         from aiops_diagnostics.dify_run_store import DifyRunStore
+        from aiops_diagnostics.execution import chat_data_grant, chat_execution
 
         dify_store = DifyRunStore(self.store.path)
         grant_store = chat_data_grant.DataGrantStore(self.store.path)
@@ -1349,8 +1350,9 @@ class GatewayRuntime:
 
     def settle_retracted_runs(self, *, route: Any) -> dict[str, Any]:
         """收敛撤回时冻结的路由代次；之后发布或恢复的任务不属于本次操作。"""
-        from aiops_diagnostics import chat_data_grant, dify_chat_workflow
+        from aiops_diagnostics import dify_chat_workflow
         from aiops_diagnostics.dify_run_store import DifyRunStore
+        from aiops_diagnostics.execution import chat_data_grant
 
         store = DifyRunStore(self.store.path)
         grants = chat_data_grant.DataGrantStore(self.store.path)
@@ -1425,8 +1427,8 @@ class GatewayRuntime:
         事实必须来自本轮取数写入的快照 —— Dify 的文本只用来渲染，不用来声称状态。
         模型写了什么状态码，这里都不采信。
         """
-        from aiops_diagnostics import chat_data_grant
         from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+        from aiops_diagnostics.execution import chat_data_grant
 
         grant = chat_data_grant.usable(chat_data_grant.DataGrantStore(self.store.path).by_id(grant_id))
         if grant.order_no != order_no:
@@ -1460,7 +1462,7 @@ class GatewayRuntime:
         if snapshot.get("order_no") != order_no:
             raise self._chat_unavailable("DIFY_ORDER_MISMATCH", "dify read a different order")
         # 快照必须**恰好**是那五个字段：多一个就说明有人往里塞了别的来源。
-        from aiops_diagnostics import chat_execution as _chat
+        from aiops_diagnostics.execution import chat_execution as _chat
 
         if set(snapshot) != _chat.SNAPSHOT_FIELDS:
             raise self._chat_unavailable("DIFY_NO_DATA", "dify data is not a status snapshot")
@@ -1478,7 +1480,7 @@ class GatewayRuntime:
         "现在还能走它"。所以要按 `binding_key` 从**当前**绑定表里重新找回一条，
         并逐字比 workflow。找不到、引擎变了、workflow 换了，一律按不可交付处理。
         """
-        from aiops_diagnostics import chat_execution
+        from aiops_diagnostics.execution import chat_execution
 
         try:
             current = chat_execution.binding_for_key(self.gateway_settings, getattr(binding, "key", None))
@@ -1503,7 +1505,7 @@ class GatewayRuntime:
 
     @staticmethod
     def _chat_unavailable(code: str, message: str):
-        from aiops_diagnostics import chat_execution
+        from aiops_diagnostics.execution import chat_execution
 
         return chat_execution.ChatRunUnavailable(code, message)
 
@@ -1517,7 +1519,7 @@ class GatewayRuntime:
           不能把"故障"当成"默认可见"；
         * 授权器没注入 ⇒ `AUTHORIZATION_UNAVAILABLE`：fail closed，不猜。
         """
-        from aiops_diagnostics import chat_execution
+        from aiops_diagnostics.execution import chat_execution
 
         authorizer = self._order_authorizer
         if authorizer is None:
@@ -1553,7 +1555,7 @@ class GatewayRuntime:
         判据。少了它，「节点交回了快照」就等于「可以交付」，而那两者之间还差着
         撤销、过期、停用、执行配置是否真的核对过。
         """
-        from aiops_diagnostics import chat_execution
+        from aiops_diagnostics.execution import chat_execution
 
         store = self.agent_run_store
         if store is None:
@@ -1682,7 +1684,7 @@ class GatewayRuntime:
             # 是**这次 QA 的**，取消之后它必须立刻失效；执行记录也要落 cancelled，
             # 否则 worker 会在 Dify 回来之后把一条已经取消的回答放出去。
             if accepted and self.dify_run_store is not None:
-                from aiops_diagnostics import chat_data_grant
+                from aiops_diagnostics.execution import chat_data_grant
 
                 linked_dify = self.dify_run_store.by_qa(qa_id)
                 if linked_dify is not None:

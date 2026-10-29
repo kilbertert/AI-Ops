@@ -12,7 +12,7 @@ related:
   - src/aiops_diagnostics/gateway_logging.py
   - src/aiops_diagnostics/admin_cli.py
   - src/aiops_diagnostics/tdengine_proxy.py
-  - src/aiops_diagnostics/execution_manifest.py
+  - src/aiops_diagnostics/execution/execution_manifest.py
 ---
 # l6-boundary
 

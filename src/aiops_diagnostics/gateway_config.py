@@ -494,7 +494,7 @@ class GatewayServerSettings:
         if self.dify_chat_base_url:
             canonical_gateway_url(self.dify_chat_base_url)
         if self.chat_execution_bindings_file:
-            from aiops_diagnostics import chat_execution  # noqa: PLC0415 - 避免循环导入
+            from aiops_diagnostics.execution import chat_execution
 
             if not (self.charging_status_base_url and self.execution_environment):
                 raise ValueError("chat execution requires charging status settings")
@@ -514,8 +514,8 @@ class GatewayServerSettings:
         #   2. **同一 key 不许同时被文件与表声明** —— 那是"这次到底谁在跑"没有
         #      唯一答案，与文件内部重复登记同一条纪律。
         if self.chat_route_bindings_file:
-            from aiops_diagnostics import chat_execution  # noqa: PLC0415 - 避免循环导入
-            from aiops_diagnostics.chat_route_bindings import (  # noqa: PLC0415
+            from aiops_diagnostics.execution import chat_execution
+            from aiops_diagnostics.execution.chat_route_bindings import (  # noqa: PLC0415
                 ChatRouteBindingStore,
                 RouteBindingError,
             )
@@ -540,10 +540,10 @@ class GatewayServerSettings:
         if self.execution_manifest_file:
             # 启动时就完整校验一次：坏清单必须在起监听之前失败，而不是等第一次签发
             # 才变成运行期不可用（那就是「配一半就开门」）。
-            from aiops_diagnostics.execution_manifest import (  # noqa: PLC0415 - 避免循环导入
+            from aiops_diagnostics.execution.execution_manifest import (  # noqa: PLC0415 - 避免循环导入
                 ExecutionManifestError,
             )
-            from aiops_diagnostics.execution_manifest import (
+            from aiops_diagnostics.execution.execution_manifest import (
                 load as load_execution_manifest,
             )
 
