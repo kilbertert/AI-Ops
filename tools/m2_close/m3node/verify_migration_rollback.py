@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import sqlite3
 import subprocess
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -157,25 +159,25 @@ def main() -> int:
         check("迁移前的原始摘要已不再相等（证明确实写过）", _digest(database) != before_digest, "")
 
         # 3) 旧版本读升级后的库
-        legacy_source = work / "legacy_agent_runs.py"
+        legacy_root = work / "legacy"
+        legacy_root.mkdir()
         try:
-            extracted = subprocess.run(
-                ["git", "show", f"{LEGACY_REV}:src/aiops_diagnostics/execution/agent_runs.py"],
+            archived = subprocess.run(
+                ["git", "archive", LEGACY_REV, "src/aiops_diagnostics"],
                 cwd=REPO,
                 capture_output=True,
-                text=True,
                 check=True,
             ).stdout
-        except subprocess.CalledProcessError as exc:
-            check("取出升级前的 agent_runs.py", False, exc.stderr[:200])
+            with tarfile.open(fileobj=io.BytesIO(archived)) as archive:
+                archive.extractall(legacy_root, filter="data")
+        except (subprocess.CalledProcessError, tarfile.TarError) as exc:
+            check("取出升级前的完整源码", False, type(exc).__name__)
         else:
-            legacy_source.write_text(extracted)
             probe = work / "legacy_probe.py"
             probe.write_text(
                 "import sys, pathlib\n"
-                f"sys.path.insert(0, {str(work)!r})\n"
-                f"sys.path.insert(0, {str(REPO / 'src')!r})\n"
-                "import legacy_agent_runs as mod\n"
+                f"sys.path.insert(0, {str(legacy_root / 'src')!r})\n"
+                "from aiops_diagnostics import agent_runs as mod\n"
                 f"store = mod.AgentRunStore(pathlib.Path({str(database)!r}))\n"
                 "runs = [store.get(r) for r in ('run_legacy_alpha', 'run_legacy_beta')]\n"
                 "print('LEGACY_READ', [(r.state, r.reason) for r in runs])\n"
