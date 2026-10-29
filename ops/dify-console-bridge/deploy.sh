@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 在服务宿主安装已校验、已解压的合并制品；BACKUP 必须是新目录。
-# 不改 env、systemd unit、登录代理、TLS 入口或 Dify 本身。
+# 不改 env、登录代理、TLS入口或Dify本身；只更新发布桥ExecStart模块路径。
 set -euo pipefail
 umask 077
 [ "$#" -eq 2 ] || { echo 'usage: deploy.sh BUNDLE BACKUP' >&2; exit 2; }
@@ -11,16 +11,18 @@ js=/srv/aiops-console-assets/dify-publish-button.js
 snippet=/www/server/panel/vhost/nginx/snippets/dify-console-publish.conf
 service=aiops-dify-console-bridge.service
 nginx=/www/server/nginx/sbin/nginx
+unit=/etc/systemd/system/aiops-dify-console-bridge.service
 test ! -e "$backup"
 (cd "$bundle" && sha256sum --strict -c SHA256SUMS)
 # 只带标准库依赖；隔离宿主 site-packages，证明不会偶然借用旧模块。
-(cd "$bundle" && PYTHONDONTWRITEBYTECODE=1 python3 -S -c 'import aiops_diagnostics.dify_console_publish')
+(cd "$bundle" && PYTHONDONTWRITEBYTECODE=1 python3 -S -c 'import aiops_diagnostics.dify.dify_console_publish')
 "$nginx" -t
 systemctl is-active --quiet "$service"
 mkdir -m 700 "$backup"
 cp -a "$code" "$backup/aiops_diagnostics"
 cp -a "$js" "$backup/dify-publish-button.js"
 cp -a "$snippet" "$backup/dify-console-publish.conf"
+cp -a "$unit" "$backup/bridge.service"
 cp "$bundle/REVISION" "$backup/NEW_REVISION"
 restore() {
   systemctl stop "$service"
@@ -28,6 +30,8 @@ restore() {
   cp -a "$backup/aiops_diagnostics" "$code"
   cp -a "$backup/dify-publish-button.js" "$js"
   cp -a "$backup/dify-console-publish.conf" "$snippet"
+  cp -a "$backup/bridge.service" "$unit"
+  systemctl daemon-reload
   "$nginx" -t && "$nginx" -s reload
   systemctl start "$service"
 }
@@ -39,6 +43,17 @@ on_exit() {
 }
 trap on_exit EXIT
 systemctl stop "$service"
+python3 - "$unit" <<'PY_UNIT'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1]); text = p.read_text()
+old = "-m aiops_diagnostics.dify_console_publish"
+new = "-m aiops_diagnostics.dify.dify_console_publish"
+if text.count(old) + text.count(new) != 1:
+    raise SystemExit("bridge ExecStart module missing or ambiguous")
+p.write_text(text.replace(old, new))
+PY_UNIT
+systemctl daemon-reload
 rm -rf -- "$code"
 cp -a "$bundle/aiops_diagnostics" "$code"
 # Python 忽略旧字节码的时间戳碰撞；仅清理本服务的缓存。

@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/m2_close/m3node"))
 import verify_dify_chat_entry as stack  # noqa: E402
 
-from aiops_diagnostics.dify_chatflow import DifyChatflowClient  # noqa: E402
+from aiops_diagnostics.dify.dify_chatflow import DifyChatflowClient  # noqa: E402
 
 
 class Model(BaseHTTPRequestHandler):
@@ -1019,7 +1019,7 @@ def main():
             file.write(
                 "FORCE_VERIFYING_SIGNATURE=true\nTHIRD_PARTY_SIGNATURE_VERIFICATION_ENABLED=true\nTHIRD_PARTY_SIGNATURE_VERIFICATION_PUBLIC_KEYS=/app/storage/catalogue-public.pem\n"
             )
-    import aiops_diagnostics.dify_chatflow as transport
+    import aiops_diagnostics.dify.dify_chatflow as transport
 
     event_reader = transport._events
     observed_events = []
@@ -1095,7 +1095,7 @@ def main():
                 **{**args_run, "user": "consumer-b"}, query="继续", conversation_id=replies[0].conversation_id
             )
         except Exception as exc:
-            from aiops_diagnostics.dify_chat_workflow import DifyWorkflowError
+            from aiops_diagnostics.dify.dify_chat_workflow import DifyWorkflowError
 
             check("foreign user cannot reuse upstream conversation", isinstance(exc, DifyWorkflowError))
         else:

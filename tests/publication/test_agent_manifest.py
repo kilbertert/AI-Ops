@@ -406,7 +406,7 @@ def test_switching_back_to_the_manifest_while_a_binding_lives_is_refused(tmp_pat
     装载期只能看见**文件里**的绑定：一份"改了正文、没带绑定"的清单看起来完全合法，
     而注册表里那条旧行仍在（`prune=False` 不会清）⇒ 线上双来源继续存在。
     """
-    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
     from aiops_diagnostics.publication.agent_manifest import reconcile_dify_registry
 
     registry = DifyAppRegistry(tmp_path / "gateway.db")
@@ -419,7 +419,7 @@ def test_switching_back_to_the_manifest_while_a_binding_lives_is_refused(tmp_pat
 
 def test_the_switch_back_is_allowed_once_the_binding_is_gone(tmp_path: Path) -> None:
     """对照：库里**没有**那条绑定时，同样的清单合法 —— 守卫不是"一律拒绝"。"""
-    from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
     from aiops_diagnostics.publication.agent_manifest import reconcile_dify_registry
 
     manifest = _manifest(_manifest_agent(prompt="改回清单提供的正文"))

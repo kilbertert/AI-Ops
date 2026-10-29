@@ -452,7 +452,7 @@ def test_a_stale_retraction_cannot_retract_a_newer_publish(tmp_path):
 
 def test_settling_is_scoped_to_the_retracted_route(tmp_path):
     """撤回 operator 不能取消 consumer 的在飞运行（同租户、同环境）。"""
-    from aiops_diagnostics.dify_run_store import DifyRunStore
+    from aiops_diagnostics.dify.dify_run_store import DifyRunStore
 
     db = tmp_path / "gateway.db"
     runs = DifyRunStore(db)
@@ -523,7 +523,7 @@ def test_a_workflow_snapshot_keeps_the_existing_agent_config(tmp_path):
     `agent_type` / `prompt` 并先按类型筛选。用只含 workflow 的快照覆盖，
     那些入口会当场选不到这个 agent。
     """
-    from aiops_diagnostics.dify_dsl_pull import _merge_workflow_snapshot
+    from aiops_diagnostics.dify.dify_dsl_pull import _merge_workflow_snapshot
 
     previous = {
         "name": "小趋-客服",
@@ -574,7 +574,7 @@ def test_a_workflow_publish_first_publishes_the_dify_draft(tmp_path):
         def published_workflow_id(self, app_id):
             return dify.published_id
 
-    from aiops_diagnostics import dify_dsl_pull as pull
+    from aiops_diagnostics.dify import dify_dsl_pull as pull
 
     original = pull.DifyDslClient
     pull.DifyDslClient = _Client
@@ -651,7 +651,7 @@ def test_the_frozen_snapshot_id_and_content_come_from_the_same_version(tmp_path)
         def published_workflow_id(self, app_id):
             return published_id
 
-    from aiops_diagnostics import dify_dsl_pull as pull
+    from aiops_diagnostics.dify import dify_dsl_pull as pull
 
     monkeypatch_target = pull
     original = monkeypatch_target.DifyDslClient
@@ -693,7 +693,7 @@ def test_republishing_identical_content_creates_no_new_version(tmp_path):
         def published_workflow_id(self, app_id):
             return dify.published_id
 
-    from aiops_diagnostics import dify_dsl_pull as pull
+    from aiops_diagnostics.dify import dify_dsl_pull as pull
 
     original = pull.DifyDslClient
     pull.DifyDslClient = _Client
@@ -718,7 +718,7 @@ def _run_workflow_sync(tmp_path, app_id=APP):
     """
     from types import SimpleNamespace
 
-    from aiops_diagnostics import dify_dsl_pull as pull
+    from aiops_diagnostics.dify import dify_dsl_pull as pull
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     class _Ctx:
@@ -783,7 +783,7 @@ def test_a_rebound_new_app_publishes_instead_of_reusing_the_old_workflow(tmp_pat
         def published_workflow_id(self, app_id):
             return own_workflow[app_id]
 
-    from aiops_diagnostics import dify_dsl_pull as pull
+    from aiops_diagnostics.dify import dify_dsl_pull as pull
 
     original = pull.DifyDslClient
     pull.DifyDslClient = _Client

@@ -3,7 +3,7 @@
 **这是什么**：在 Dify 控制台的编排页注入一颗按钮，运营点它就把**当前改好的内容**
 冻结成一个已发布的线上版本。**不用 SSH、不用敲命令。**
 
-决定的论证在 **ADR-0021**；后端桥在 `src/aiops_diagnostics/dify_console_publish.py`。
+决定的论证在 **ADR-0021**；后端桥在 `src/aiops_diagnostics/dify/dify_console_publish.py`。
 本目录只是**部署资产**。
 
 管家原生预览由同包的 `operator-native-preview.js` 接线，打包时拼入原注入脚本，无需改 Dify
@@ -163,3 +163,10 @@ Referer 只是请求上下文，用户能自行构造，不能代替授权。机
 
 **注入不上 = 没有那颗按钮，控制台照常。** 挂靠靠 DOM 选择器，Dify 改版可能失效 ——
 那时按钮消失，但 Dify 本身不受影响，发布仍可用 `/v1/dify/publish` 或 CLI。
+
+## 包路径迁移
+
+桥构建制品包含`aiops_diagnostics/dify/`初始化与桥模块。包内deploy.sh将现役ExecStart的模块段
+从`aiops_diagnostics.dify_console_publish`改为`aiops_diagnostics.dify.dify_console_publish`，
+不覆盖User/Group和环境设置；代码与单元一起备份，失败一起恢复并daemon-reload。
+未升级的旧桥包与旧单元继续配套运行，Gateway CD不替它切换。

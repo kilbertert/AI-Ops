@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from aiops_diagnostics.consumer.consumer_knowledge import load_content
-from aiops_diagnostics.dify_chat_workflow import WORKFLOW_ID_PATTERN
+from aiops_diagnostics.dify.dify_chat_workflow import WORKFLOW_ID_PATTERN
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.identity.order_visibility import tenant_matches
 from aiops_diagnostics.private_files import validate_private_file

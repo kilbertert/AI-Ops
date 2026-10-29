@@ -308,7 +308,7 @@ weaviate 空闲 52.7 MiB。
 `patches/apply.sh` 的用法与判据写在脚本头注释里；产物是
 `volumes/app/patched-api/`（0444），compose 把**每一个文件**单独 `:ro` 挂进 api/worker
 （挂目录会把整个 `/app/api` 遮住）。`check.sh` 断言"挂载集合 == 补丁集"，
-`tests/test_dify36_deploy_assets.py` 在 CI 里再断言一次。
+`tests/dify/test_dify36_deploy_assets.py` 在 CI 里再断言一次。
 
 ## 文件
 

@@ -112,7 +112,7 @@ def _selection_name(selection, names: dict[str, str]) -> str:
 
 
 def _measure(database: Path, declared: dict[tuple[str, str], str], *, apply: bool) -> list[tuple]:
-    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
     from aiops_diagnostics.publication.agent_lifecycle import AgentStore
     from aiops_diagnostics.publication.qa_rag import select_customer_agent
 

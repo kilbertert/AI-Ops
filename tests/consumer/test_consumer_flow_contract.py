@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
-from aiops_diagnostics.dify_dsl_pull import workflow_content
+from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
 
 BASE = "https://gateway.example.test"
 CEILING = {"live_order_status": True, "live_billing_record": True}

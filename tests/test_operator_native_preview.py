@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from test_dify_console_publish import (
+from dify.test_dify_console_publish import (
     APP_ID,
     ORIGIN,
     SESSION,
@@ -18,8 +18,8 @@ from test_dify_console_publish import (
     _Upstream,
 )
 
-from aiops_diagnostics import dify_console_publish as preview
-from aiops_diagnostics.dify_console_publish import BridgeSettings, make_server
+from aiops_diagnostics.dify import dify_console_publish as preview
+from aiops_diagnostics.dify.dify_console_publish import BridgeSettings, make_server
 
 
 def test_native_fetch_and_stop_match_dify_request_shapes():
@@ -35,7 +35,7 @@ def test_native_fetch_and_stop_match_dify_request_shapes():
 
 
 def test_browser_disconnect_requests_cancellation(bridge, upstream, monkeypatch):
-    from aiops_diagnostics.dify_console_publish import ConsolePublishBridgeHandler
+    from aiops_diagnostics.dify.dify_console_publish import ConsolePublishBridgeHandler
 
     calls = []
     original = preview._native_gateway
@@ -73,7 +73,7 @@ def test_stop_uses_same_company_session(bridge, monkeypatch):
 def test_configuration_and_app_access_fail_closed(bridge, upstream, monkeypatch, fault):
     body = {"app_id": APP_ID, "query": "订单 2115330675982561281", "pre_prompt": "prompt", "tools": []}
     if fault == "disabled":
-        from aiops_diagnostics.dify_console_publish import ConsolePublishBridgeHandler
+        from aiops_diagnostics.dify.dify_console_publish import ConsolePublishBridgeHandler
 
         monkeypatch.setattr(
             ConsolePublishBridgeHandler,

@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from aiops_diagnostics.dify_app_registry import DifyAppBinding
-from aiops_diagnostics.dify_dsl_pull import DifyDslSource
-from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
+from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
+from aiops_diagnostics.dify.dify_dsl_pull import DifyDslSource
+from aiops_diagnostics.dify.dify_workflow_trial import WorkflowTrial
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.agent_runs import scope_to_json
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
@@ -60,8 +60,10 @@ def live_trial(tmp_path, monkeypatch):
                 published_workflow_id=lambda: WORKFLOW_ID,
                 export_dsl=lambda **kw: DSL,
             )
-            monkeypatch.setattr("aiops_diagnostics.dify_workflow_trial.DifyConsoleAdmin", lambda _: admin)
-            monkeypatch.setattr("aiops_diagnostics.dify_workflow_trial.DifyDslClient", lambda _: console)
+            monkeypatch.setattr(
+                "aiops_diagnostics.dify.dify_workflow_trial.DifyConsoleAdmin", lambda _: admin
+            )
+            monkeypatch.setattr("aiops_diagnostics.dify.dify_workflow_trial.DifyDslClient", lambda _: console)
             trial = WorkflowTrial(DSL, DifyDslSource(base, APP, "synthetic", "workspace"), route)
             row = runtime.start_trial("operator", ORDER_A, trial, "zh")
             trial_id = row["diagnosis_id"]

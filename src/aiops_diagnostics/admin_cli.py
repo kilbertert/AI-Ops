@@ -95,7 +95,7 @@ def reconcile(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="只输出计划，零写入")] = False,
 ) -> None:
     """按环境清单收敛 gateway agent（幂等；走 AgentManager 生产代码路径）。"""
-    from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
     from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
     from aiops_diagnostics.publication.agent_lifecycle import (
         AgentManager,
@@ -216,7 +216,7 @@ def pull_dify(
       哪个租户/入口"是运行时注册表的事（`[[dify_apps]]` + `admin reconcile`，见 #584）。
       两件事混在一起会让一次拉取顺手改掉线上路由。
     """
-    from aiops_diagnostics.dify_dsl_pull import (
+    from aiops_diagnostics.dify.dify_dsl_pull import (
         DifyDslError,
         DifyDslSource,
         pull_agent_draft,
@@ -249,7 +249,7 @@ def pull_dify(
         allowed_models=allowed_models_from_settings(settings),
     )
     context = admin_context(tenant)
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     workspaces = DifyWorkspaces(database)
     resolved_workspace = _workspace_for(workspaces, tenant, console.environment)
@@ -267,7 +267,7 @@ def pull_dify(
             # ⚠️ 走的是**真跑那条同一个函数**。这里曾经自己映射一遍，于是真跑会
             # 保留库中知识库绑定、干跑却报空的 —— 同一份输入两个答案。凡是
             # "干跑与真跑各算一次"的地方都会这样漂，所以只有一处算。
-            from aiops_diagnostics.dify_dsl_pull import resolve_pulled_config
+            from aiops_diagnostics.dify.dify_dsl_pull import resolve_pulled_config
 
             config = resolve_pulled_config(
                 manager,
@@ -472,13 +472,13 @@ def sync_from_dify(
     **为什么不是自动定时跑**：正因为 Dify 没有草稿区，定时跑会**把运营打字打到一半的
     正文推上线**。所以这是一条**显式动作**，由知道"我改完了"的人触发。
     """
-    from aiops_diagnostics.dify_app_registry import DifyAppRegistry
-    from aiops_diagnostics.dify_dsl_pull import (
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
+    from aiops_diagnostics.dify.dify_dsl_pull import (
         DifyDslError,
         DifyDslSource,
         sync_binding_from_dify,
     )
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
     from aiops_diagnostics.publication.agent_lifecycle import (
         AgentManager,
         AgentStore,
@@ -606,7 +606,7 @@ def _workspace_for(workspaces: Any, tenant_id: str, environment: str) -> str:
     解析函数的四个码（``UNRESOLVED`` / ``CREATING`` / ``FAILED`` / ``UNKNOWN``）在这里
     全部原样上抛：它们各自对应不同的下一步，合成一句话就把那个区别丢了。
     """
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
 
     try:
         return workspaces.resolve(tenant_id, environment)
@@ -629,7 +629,7 @@ def _workspace_for(workspaces: Any, tenant_id: str, environment: str) -> str:
     解析函数的四个码（``UNRESOLVED`` / ``CREATING`` / ``FAILED`` / ``UNKNOWN``）在这里
     全部原样上抛：它们各自对应不同的下一步，合成一句话就把那个区别丢了。
     """
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
 
     try:
         return workspaces.resolve(tenant_id, environment)
@@ -770,7 +770,7 @@ def plan_knowledge_migration_command(
     """
     import json as _json
 
-    from aiops_diagnostics.dify_knowledge_migration import plan
+    from aiops_diagnostics.dify.dify_knowledge_migration import plan
 
     try:
         dataset_rows = _json.loads(datasets)
@@ -803,15 +803,15 @@ def onboard_tenant_command(
 
     它**不建**任何知识库、不改任何智能体、不动 Dify 的 app。
     """
-    from aiops_diagnostics.dify_ensure_workspace import (
+    from aiops_diagnostics.dify.dify_ensure_workspace import (
         PLATFORM_OWNER_EMAIL,
         EnsureError,
     )
-    from aiops_diagnostics.dify_ensure_workspace import (
+    from aiops_diagnostics.dify.dify_ensure_workspace import (
         ensure_workspace as _ensure_workspace,
     )
-    from aiops_diagnostics.dify_inner_api import DifyInnerApi, InnerApiSettings
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiSettings
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
     from aiops_diagnostics.gateway_store import GatewayStore
     from aiops_diagnostics.knowledge.kb_onboarding import KbAdminClient, OnboardError, onboard_tenant
 
@@ -952,7 +952,7 @@ def rotate_ragflow_credential_command(
 
     独立命令而不是开户的一个开关：开户必须保持"再跑一次什么都不变"，轮换不能是它的副作用。
     """
-    from aiops_diagnostics.dify_inner_api import InnerApiError  # noqa: F401 - 保持帮助一致的导入形状
+    from aiops_diagnostics.dify.dify_inner_api import InnerApiError  # noqa: F401 - 保持帮助一致的导入形状
     from aiops_diagnostics.gateway_store import GatewayStore
     from aiops_diagnostics.knowledge.kb_onboarding import KbAdminClient, OnboardError, rotate_credential
 
@@ -998,14 +998,14 @@ def ensure_workspace_command(
     `failed` 重走一次；`unknown` 或租约过期的 `creating` **先按名字对账**，命中 1 个就补
     UUID（不重建）、命中 0 个才重建、命中 >1 个拒绝并要人工。
     """
-    from aiops_diagnostics.dify_ensure_workspace import (
+    from aiops_diagnostics.dify.dify_ensure_workspace import (
         PLATFORM_OWNER_EMAIL,
         EnsureError,
         ensure_workspace,
         render,
     )
-    from aiops_diagnostics.dify_inner_api import DifyInnerApi, InnerApiSettings
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiSettings
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     settings = _settings_with_config_file(ctx)
 
@@ -1084,9 +1084,9 @@ def grant_tenant_access_command(
     **按需跑，不要批量**：25 个 `ROLE_ADMIN` 里 18 个半年以上没登录过，全量 join 等于
     给休眠账号开每一个租户的 workspace 访问权。
     """
-    from aiops_diagnostics.dify_inner_api import DifyInnerApi, InnerApiSettings
-    from aiops_diagnostics.dify_tenant_access import GrantError, grant_tenant_access
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiSettings
+    from aiops_diagnostics.dify.dify_tenant_access import GrantError, grant_tenant_access
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     settings = _settings_with_config_file(ctx)
     if not settings.environment:
@@ -1146,15 +1146,15 @@ def ensure_ready_command(
     模型凭据来自 ``AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY`` —— **代码里没有默认值**，
     缺了就退非零并说去哪填。Dify 会拿它做真校验，假 key 回 ``DIFY_CREDENTIAL_INVALID``。
     """
-    from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
-    from aiops_diagnostics.dify_ensure_workspace import EnsureError
-    from aiops_diagnostics.dify_workspace_ready import (
+    from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+    from aiops_diagnostics.dify.dify_ensure_workspace import EnsureError
+    from aiops_diagnostics.dify.dify_workspace_ready import (
         DEFAULT_APP_NAME,
         ReadySettings,
         bundled_template,
         ensure_ready,
     )
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     settings = _settings_with_config_file(ctx)
     if not settings.environment:
@@ -1223,9 +1223,9 @@ def ensure_node_provider_command(
     db: Annotated[Path, typer.Option("--db", exists=True, dir_okay=False)],
 ) -> None:
     """为已登记管家节点应用安装真实CPMS工具定义；不写业务凭据。"""
-    from aiops_diagnostics.dify_app_registry import DifyAppRegistry
-    from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
+    from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
     from aiops_diagnostics.execution.node_publication import target_for
     from aiops_diagnostics.ops_provider import ensure_node_provider
 
@@ -1289,15 +1289,19 @@ def sync_knowledge_datasets_command(
 
     退出码：0 成功（含全无变化）/ 1 有拒绝或失败 / 2 缺配置。
     """
-    from aiops_diagnostics.dify_console_admin import ConsoleApiError, ConsoleApiSettings, DifyConsoleAdmin
-    from aiops_diagnostics.dify_knowledge_datasets import (
+    from aiops_diagnostics.dify.dify_console_admin import (
+        ConsoleApiError,
+        ConsoleApiSettings,
+        DifyConsoleAdmin,
+    )
+    from aiops_diagnostics.dify.dify_knowledge_datasets import (
         SyncError,
         libraries_for,
     )
-    from aiops_diagnostics.dify_knowledge_datasets import (
+    from aiops_diagnostics.dify.dify_knowledge_datasets import (
         run as sync_run,
     )
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
     from aiops_diagnostics.gateway_store import GatewayStore
     from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient, KnowledgeSearchUnavailable
 

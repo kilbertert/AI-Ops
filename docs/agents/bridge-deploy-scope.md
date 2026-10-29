@@ -13,7 +13,7 @@
 
 | 改了什么 | 要去哪里装 |
 |---|---|
-| `src/aiops_diagnostics/dify_console_publish.py` | 36 `/opt/aiops-console-bridge/` |
+| `src/aiops_diagnostics/dify/dify_console_publish.py` | 36 `/opt/aiops-console-bridge/` |
 | `ops/dify-console-bridge/*.js`（注入脚本） | 36 `/srv/aiops-console-assets/` |
 | `ops/dify-console-bridge/dify-console-publish.conf` | 36 `snippets/dify-console-publish.conf`（`nginx -T` 里看到的是这个路径，不是 vhost 主文件） |
 | `deploy/dify-36/web-patches/` | 重建 web 镜像（见下） |
@@ -24,8 +24,8 @@
 
 ```bash
 # 桥代码：比对 md5，不看时间戳
-md5sum /opt/aiops-console-bridge/aiops_diagnostics/dify_console_publish.py
-md5sum ~/Projects/AI-Ops/src/aiops_diagnostics/dify_console_publish.py
+md5sum /opt/aiops-console-bridge/aiops_diagnostics/dify/dify_console_publish.py
+md5sum ~/Projects/AI-Ops/src/aiops_diagnostics/dify/dify_console_publish.py
 
 # nginx：改完必须 nginx -T 里能看到，而且 reload 过
 sudo nginx -T | grep -c "你的新路由"

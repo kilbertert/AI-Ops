@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.dify_workspaces import (
+from aiops_diagnostics.dify.dify_workspaces import (
     DIFY_WORKSPACE_AMBIGUOUS,
     DIFY_WORKSPACE_UNRESOLVED,
     DifyWorkspaces,

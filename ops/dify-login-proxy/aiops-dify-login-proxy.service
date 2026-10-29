@@ -19,7 +19,7 @@ EnvironmentFile=/etc/aiops-login-proxy/login-proxy.env
 # 依赖，且是延迟 import），所以不需要 venv —— 多一个 venv 就多一处要跟着 36 的系统升级走。
 # ⚠️ 这一行曾写成 `/opt/aiops-login-proxy/.venv/bin/python`，而 36 上**从来没有那个 venv**：
 #    照着旧配置装会起不来。以本行为准。
-ExecStart=/usr/bin/python3 -m aiops_diagnostics.dify_login_server
+ExecStart=/usr/bin/python3 -m aiops_diagnostics.dify.dify_login_server
 # `-m` 要靠 sys.path 找到包；WorkingDirectory 是它，但显式给 PYTHONPATH 更稳
 # （systemd 的 WorkingDirectory 不参与 import 解析的假设，不值得依赖）。
 Environment=PYTHONPATH=/opt/aiops-login-proxy

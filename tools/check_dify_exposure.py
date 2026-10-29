@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dify 暴露面的段 2 / 段 3 探测（#583 / PRD #577）。
 
-段 1（`tests/test_dify_exposure_registry.py`）在 CI 里证明"我们声明暴露的 == 路由表里
+段 1（`tests/dify/test_dify_exposure_registry.py`）在 CI 里证明"我们声明暴露的 == 路由表里
 面向 Dify 的那些"。它证明不了两件事，这正是本脚本要补的两半：
 
 * **段 2 — 运行时探测**：登记表声明的那几个端点，在**真的跑起来的**网关进程上，

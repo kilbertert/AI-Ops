@@ -20,11 +20,13 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
     package.mkdir()
     for name in (
         "__init__",
-        "dify_console_publish",
+        "dify/__init__",
+        "dify/dify_console_publish",
         "async_job_lifecycle",
         "bounded_http",
         "http_auth",
     ):
+        (package / f"{name}.py").parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "src/aiops_diagnostics" / f"{name}.py", package / f"{name}.py")
     for name in ("dify-publish-button.js", "dify-console-publish.conf"):
         shutil.copyfile(ROOT / "ops/dify-console-bridge" / name, bundle / name)
@@ -36,6 +38,8 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
             if p.is_file()
         )
     )
+    unit = tmp_path / "bridge.service"
+    unit.write_text("ExecStart=python -m aiops_diagnostics.dify_console_publish\n")
     code = tmp_path / "installed"
     code.mkdir()
     (code / "old.py").write_text("old package\n")
@@ -71,6 +75,7 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
         "/srv/aiops-console-assets/dify-publish-button.js": js,
         "/www/server/panel/vhost/nginx/snippets/dify-console-publish.conf": snippet,
         "/www/server/nginx/sbin/nginx": nginx,
+        "/etc/systemd/system/aiops-dify-console-bridge.service": unit,
     }.items():
         script = script.replace(before, str(after))
     result = subprocess.run(
@@ -87,12 +92,14 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
     )
     assert (result.returncode != 0) == fail_reload, result.stdout + result.stderr
     if fail_reload:
+        assert unit.read_text() == "ExecStart=python -m aiops_diagnostics.dify_console_publish\n"
         assert list(code.iterdir()) == [code / "old.py"]
         assert js.read_text() == "old js\n"
         assert snippet.read_text() == "old snippet\n"
     else:
-        assert (code / "dify_console_publish.py").read_bytes() == (
-            package / "dify_console_publish.py"
+        assert "aiops_diagnostics.dify.dify_console_publish" in unit.read_text()
+        assert (code / "dify/dify_console_publish.py").read_bytes() == (
+            package / "dify/dify_console_publish.py"
         ).read_bytes()
         assert js.read_bytes() == (bundle / "dify-publish-button.js").read_bytes()
         assert snippet.read_bytes() == (bundle / "dify-console-publish.conf").read_bytes()

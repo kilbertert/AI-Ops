@@ -231,7 +231,7 @@ def main():
                 assert f["ctx"].agent_run_store.by_qa(failed_qa).state == "failed"
                 cases.append({"case": label, "status": "failed-without-answer"})
             Model.fail = Model.truncate = False
-            from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+            from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
             f["settings"].environment = "env-a"
             f["settings"].dify_trial_api_key = "trial-only"

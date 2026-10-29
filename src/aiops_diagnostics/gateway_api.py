@@ -41,22 +41,22 @@ from aiops_diagnostics.conversation_store import (
     ConversationError,
     ConversationStore,
 )
-from aiops_diagnostics.dify_debug_identity import (
+from aiops_diagnostics.dify.dify_debug_identity import (
     PRODUCTION_IDENTITY,
     DifyIdentity,
     debug_dify_identity,
 )
-from aiops_diagnostics.dify_knowledge_api import (
+from aiops_diagnostics.dify.dify_knowledge_api import (
     DIFY_KNOWLEDGE_LIST_PATH,
     DIFY_RETRIEVAL_PATH,
     DifyRequestError,
     dify_records,
     parse_dify_retrieval_request,
 )
-from aiops_diagnostics.dify_run_store import DifyRunStore
-from aiops_diagnostics.dify_run_store import still_valid as dify_run_still_valid
-from aiops_diagnostics.dify_trial import TrialInitiator, TrialRefused
-from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
+from aiops_diagnostics.dify.dify_run_store import DifyRunStore
+from aiops_diagnostics.dify.dify_run_store import still_valid as dify_run_still_valid
+from aiops_diagnostics.dify.dify_trial import TrialInitiator, TrialRefused
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import (
     EXPIRED,
@@ -680,7 +680,7 @@ def _key_ref_for(key_dir: str, app_id: str) -> str:
 
     发布只推路径、不读密钥；但一条指向不存在文件的路径等于"发布了也跑不起来"。
     """
-    from aiops_diagnostics.dify_chat_workflow import load_workflow_key
+    from aiops_diagnostics.dify.dify_chat_workflow import load_workflow_key
     from aiops_diagnostics.execution import chat_execution
 
     if not key_dir:
@@ -708,8 +708,8 @@ def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
     所以这里先按 chat 走；只有它明确报"没有 model_config"时才改走 workflow ——
     **用结果判种类，不用猜测**。
     """
-    from aiops_diagnostics import dify_dsl_pull as pull
     from aiops_diagnostics.consumer import consumer_documents, consumer_publication
+    from aiops_diagnostics.dify import dify_dsl_pull as pull
 
     target = consumer_publication.target_for(context.settings, binding)
     if not target and consumer_publication.route_scenario(context.settings, binding) == "consumer_service":
@@ -757,7 +757,7 @@ def _workspace_for_tenant(
 
     审计账本也记一笔：被拒的发布尝试要能回答"谁试图把哪一版发进哪个租户"。
     """
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
 
     try:
         return context.dify_workspaces.resolve(tenant_id, context.settings.environment)
@@ -825,7 +825,7 @@ def _publish_bound_app(
             status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
         )
     from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
-    from aiops_diagnostics.dify_dsl_pull import DifyDslError, DifyDslSource
+    from aiops_diagnostics.dify.dify_dsl_pull import DifyDslError, DifyDslSource
     from aiops_diagnostics.publication.agent_manifest import admin_context
 
     console = context.settings
@@ -1173,8 +1173,8 @@ def _tenant_in_scope(record_tenant: object, allowed_tenant: object) -> bool:
 def _workflow_trial_draft(
     context: Any, app_id: str, run_context: ScopeContext, question="check order status", selected_order=""
 ):
-    from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource
-    from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
+    from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource
+    from aiops_diagnostics.dify.dify_workflow_trial import WorkflowTrial
 
     binding, row, workspace = _managed_app_route(context, app_id)
     # 试用的范围必须落在**绑定所属租户**上。租户那一维走共享规则
@@ -1206,7 +1206,7 @@ def _workflow_trial_draft(
         if target is None:
             raise StandardAPIError(409, "CONSUMER_TARGET_MISSING", "consumer trial target missing")
         from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
-        from aiops_diagnostics.dify_dsl_pull import workflow_content
+        from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
 
         candidates = {
             token for match in _ORDER_TOKEN.finditer(question) if (token := _extract_order_no(match.group(0)))
@@ -1234,7 +1234,12 @@ def _workflow_trial_draft(
 
 
 def _restore_bound_app(context: Any, app_id: str, version_no: int, initiator: tuple[str, str, str]):
-    from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource, SyncOutcome, workflow_content
+    from aiops_diagnostics.dify.dify_dsl_pull import (
+        DifyDslClient,
+        DifyDslSource,
+        SyncOutcome,
+        workflow_content,
+    )
 
     binding, row, workspace = _managed_app_route(context, app_id)
     version = context.agent_manager.store.version(row.agent_id, binding.tenant_id, version_no)
@@ -2253,7 +2258,7 @@ def create_gateway_app(
             target = target_for(context.settings, bound) if bound is not None else None
             if target is not None and target.entry == "operator":
                 from aiops_diagnostics import operator_cpms
-                from aiops_diagnostics.dify_dsl_pull import DifyDslSource
+                from aiops_diagnostics.dify.dify_dsl_pull import DifyDslSource
                 from aiops_diagnostics.execution.node_publication import candidate
 
                 session = request.headers.get("X-AIOps-Console-Session", "")
@@ -3715,7 +3720,7 @@ def create_gateway_app(
         response: Response, authorization: Annotated[str | None, Header()] = None
     ):
         from aiops_diagnostics.consumer.consumer_knowledge_selection import catalogue_workspace
-        from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+        from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
 
         response.headers["Cache-Control"] = "no-store"
         try:
@@ -3805,7 +3810,7 @@ def create_gateway_app(
         业务事实来自网关这一侧的读取，Dify 拿到的就是这份裁剪后的快照；重复回调只会
         拿回同一轮已存的快照，撤权之后连缓存也拒绝。
         """
-        from aiops_diagnostics import dify_run_store
+        from aiops_diagnostics.dify import dify_run_store
         from aiops_diagnostics.execution import chat_data_grant
 
         response.headers["Cache-Control"] = "no-store"
@@ -4548,9 +4553,9 @@ def create_gateway_app(
                 status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SYNC_DISABLED", "knowledge sync is not available"
             )
 
-        from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
-        from aiops_diagnostics.dify_knowledge_datasets import libraries_for, run
-        from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+        from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+        from aiops_diagnostics.dify.dify_knowledge_datasets import libraries_for, run
+        from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
 
         try:
             tenant_id = workspaces.tenant_for_workspace(workspace.strip(), settings.environment)

@@ -111,8 +111,8 @@ import os
 import tempfile
 from dataclasses import asdict, replace
 from pathlib import Path
-from aiops_diagnostics.dify_dsl_pull import DifyDslSource
-from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+from aiops_diagnostics.dify.dify_dsl_pull import DifyDslSource
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.gateway_server import GatewayServerSettings
 from aiops_diagnostics.execution.node_publication import candidate, targets
 
@@ -174,9 +174,9 @@ from aiops_diagnostics.publication.agent_lifecycle import (
 )
 from aiops_diagnostics.publication.agent_manifest import admin_context, load_manifest, reconcile_dify_registry
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.dify_app_registry import DifyAppRegistry
-from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource, _declared_dataset_ids
-from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
+from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource, _declared_dataset_ids
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.gateway_server import GatewayServerSettings
 
 apply = False

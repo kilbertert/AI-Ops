@@ -12,7 +12,7 @@ from aiops_diagnostics.consumer.consumer_knowledge_selection import (
     catalogue_token,
     catalogue_workspace,
 )
-from aiops_diagnostics.dify_chatflow import ChatflowReply
+from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
 from consumer.test_consumer_chat_service import Client, done
 from consumer.test_consumer_flow_contract import BASE, CEILING, graph
 from consumer.test_consumer_knowledge_flow import ask, setup
@@ -205,7 +205,7 @@ def test_picker_calls_only_selected_library_and_rejects_mismatch_before_cache(tm
 
 
 def test_catalogue_endpoint_only_lists_its_credential_tenant(tmp_path, monkeypatch):
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb, _ = setup(env, monkeypatch, tmp_path)

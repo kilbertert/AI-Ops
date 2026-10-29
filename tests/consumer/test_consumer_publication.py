@@ -9,7 +9,7 @@ from execution.test_app_runtime_dify_entry import dify_chat
 from execution.test_node_publication import publication as publication
 from execution.test_node_publication import publish as publish_node
 
-from aiops_diagnostics.dify_app_registry import DifyAppBinding
+from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.execution.chat_execution import SCENARIO_CONSUMER_SERVICE
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig
@@ -93,7 +93,7 @@ def prepare(env, monkeypatch, tmp_path):
     context.agent_manager.publish(admin_context("TENANT-A"), agent.agent_id, expected_revision=agent.revision)
     runtime.dify_app_registry.put(DifyAppBinding("TENANT-A", "consumer", APP, "WF01"))
     Console.versions, Console.publishes = {}, 0
-    monkeypatch.setattr("aiops_diagnostics.dify_dsl_pull.DifyDslClient", Console)
+    monkeypatch.setattr("aiops_diagnostics.dify.dify_dsl_pull.DifyDslClient", Console)
     return runtime, kb, content, ChatRouteBindingStore(env["db"])
 
 

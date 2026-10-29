@@ -6,7 +6,7 @@ import pytest
 from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
 from aiops_diagnostics.consumer import consumer_knowledge
-from aiops_diagnostics.dify_chatflow import ChatflowReply
+from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
 from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable, MediaResourceSigner

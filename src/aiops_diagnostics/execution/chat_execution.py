@@ -234,7 +234,7 @@ def _parse_binding(row: object) -> ChatBinding:
             raise ChatBindingError("consumer service requires a Dify Chatflow")
         agent_id, version = row.get("agent_id", ""), row.get("agent_version_no", 0)
         app_id = row.get("app_id", "")
-        from aiops_diagnostics.dify_chat_workflow import WORKFLOW_ID_PATTERN
+        from aiops_diagnostics.dify.dify_chat_workflow import WORKFLOW_ID_PATTERN
 
         if not isinstance(app_id, str) or not WORKFLOW_ID_PATTERN.fullmatch(app_id):
             raise ChatBindingError("consumer service requires an app UUID")
@@ -299,7 +299,7 @@ def _validate_dify_binding(binding: ChatBinding) -> None:
     会让一个 Dify 抖动变成网关起不来。真正"是不是那个已发布 workflow"由执行记录在
     调用前后各核对一次（见 `dify_chat_workflow`）。
     """
-    from aiops_diagnostics.dify_chat_workflow import WORKFLOW_ID_PATTERN, load_workflow_key
+    from aiops_diagnostics.dify.dify_chat_workflow import WORKFLOW_ID_PATTERN, load_workflow_key
 
     if WORKFLOW_ID_PATTERN.fullmatch(binding.workflow_id) is None:
         raise ChatBindingError("chat execution binding workflow id is malformed")

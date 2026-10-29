@@ -6,7 +6,7 @@ import urllib.request
 from urllib.parse import urlencode
 
 from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, catalogue_token
-from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
 
 def verify_picker(root, base, env, setup, app, gateway, database, content, knowledge, check):
