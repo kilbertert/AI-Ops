@@ -202,9 +202,9 @@ class GatewayRuntime:
         store: GatewayStore,
         gateway_settings: GatewayServerSettings,
     ) -> GatewayRuntime:
-        from aiops_diagnostics.agent_lifecycle import AgentStore
         from aiops_diagnostics.dify_workspaces import DifyWorkspaces
         from aiops_diagnostics.knowledge.knowledge_dataset_sync_guard import KnowledgeDatasetSyncGuard
+        from aiops_diagnostics.publication.agent_lifecycle import AgentStore
 
         diagnostic_settings = Settings.from_config(gateway_settings.server_config_file)
         diagnostic_settings.agent.validate()
@@ -983,7 +983,7 @@ class GatewayRuntime:
     ) -> dict[str, Any]:
         """Tenant-scoped aggregate for the monitoring API (VIEW_ROLES gate
         happens at the API layer; the tenant is taken from the scope)."""
-        from aiops_diagnostics.agent_lifecycle import VIEW_ROLES
+        from aiops_diagnostics.publication.agent_lifecycle import VIEW_ROLES
 
         effective_roles = frozenset(getattr(context, "roles", ()))
         if not effective_roles.intersection(VIEW_ROLES):
@@ -1032,7 +1032,7 @@ class GatewayRuntime:
         route_type: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        from aiops_diagnostics.agent_lifecycle import VIEW_ROLES
+        from aiops_diagnostics.publication.agent_lifecycle import VIEW_ROLES
 
         effective_roles = frozenset(getattr(context, "roles", ()))
         if not effective_roles.intersection(VIEW_ROLES):

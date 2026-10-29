@@ -29,7 +29,7 @@ from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
 
 CONSUMER_HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "consumer"}
 OPERATOR_HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "operator"}

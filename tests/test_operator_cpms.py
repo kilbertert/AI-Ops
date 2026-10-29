@@ -14,10 +14,10 @@ from test_m2_close_contract import NODE_A_TOKEN, _write_config
 from test_m3_gateway_exec_config import _write_manifest
 
 from aiops_diagnostics import chat_execution, node_publication, operator_cpms
-from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from aiops_diagnostics.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.faq import PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
 HEADERS = {"Authorization": "Bearer operator-private", "X-Business-Entry": "operator"}
 APP = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

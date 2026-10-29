@@ -9,11 +9,11 @@ from test_app_runtime_dify_entry import dify_chat
 from test_node_publication import publication as publication
 from test_node_publication import publish as publish_node
 
-from aiops_diagnostics.agent_lifecycle import AgentConfig
-from aiops_diagnostics.agent_manifest import admin_context
 from aiops_diagnostics.chat_execution import SCENARIO_CONSUMER_SERVICE
 from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.dify_app_registry import DifyAppBinding
+from aiops_diagnostics.publication.agent_lifecycle import AgentConfig
+from aiops_diagnostics.publication.agent_manifest import admin_context
 from consumer.test_consumer_chat_service import done
 from consumer.test_consumer_knowledge_flow import ask, setup, wire
 

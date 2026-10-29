@@ -405,7 +405,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：管理员创建、读取、编辑、列出；普通角色和 tenant-b 读取同一 ID。
 - 预期结果：管理员成功且 revision 增加；其他调用者得到统一拒绝，不泄露资源存在性。
 - 清理：删除临时 SQLite。
-- 结果：PASS（2026-09-09，本地 pytest `tests/test_agent_lifecycle.py`）。
+- 结果：PASS（2026-09-09，本地 pytest `tests/publication/test_agent_lifecycle.py`）。
 
 ### AGENT-LIFE-02 发布依赖校验与不可变快照
 
@@ -417,7 +417,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 补充动作：从 version_no=1 派生新草稿、修改配置并发布。
 - 补充预期：旧版本字段保持不变，新发布版本为 version_no=2。
 - 清理：删除临时 SQLite。
-- 结果：PASS（2026-09-09，本地 pytest `tests/test_agent_lifecycle.py`）。
+- 结果：PASS（2026-09-09，本地 pytest `tests/publication/test_agent_lifecycle.py`）。
 
 ### AGENT-LIFE-03 停用与删除边界
 
@@ -426,7 +426,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：删除未发布草稿；停用已发布智能体；查询状态和版本；尝试删除已发布智能体。
 - 预期结果：未发布草稿删除后统一未找到；停用后状态为 disabled，历史快照仍可读，已发布智能体不能删除。
 - 清理：删除临时 SQLite。
-- 结果：PASS（2026-09-09，本地 pytest `tests/test_agent_lifecycle.py`）。
+- 结果：PASS（2026-09-09，本地 pytest `tests/publication/test_agent_lifecycle.py`）。
 
 证据边界：AGENT-LIFE-01..03 验证 AI-Ops 生命周期协议和权限边界；后台 Java BFF、真实 UPMS 角色、知识库生产状态与浏览器页面由 #171/#170/#173 接入，未完成业务验收。
 ## 受限知识检索与媒体协议 QA 计划
@@ -484,7 +484,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：发起业务问题；模型请求 `knowledge_search`；harness 注入检索结果；模型返回引用媒体的回答。
 - 预期结果：`blocks[]` 含 text/image/video/reference 块；image 块带本轮签发的媒体描述（`media_/…` URL、MIME），不含 RAGFlow 标识或对象路径；伪造媒体/引用块被丢弃且文本保留。
 - 清理：释放内存 fake 与临时 run 目录。
-- 结果：PASS（2026-09-10，pytest `tests/test_qa_rag.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/publication/test_qa_rag.py`）。
 
 ### QA-RAG-02 检索状态三态与降级
 
@@ -494,7 +494,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：执行三组独立运行并读取 `retrieval_status`。
 - 预期结果：空命中 → `not_found`；kb 不可用 → `unavailable`（文本仍交付）；零检索声称 found → 被修正为 `not_found`。
 - 清理：释放 fake。
-- 结果：PASS（2026-09-10，pytest `tests/test_qa_rag.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/publication/test_qa_rag.py`）。
 
 ### QA-RAG-03 补检索与调用上限
 
@@ -504,7 +504,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：业务问题观察 harness 是否拒绝首轮无检索回答并要求补检索；连续三次请求观察第三次行为；寒暄观察是否免检索。
 - 预期结果：业务问题触发一次补检索后完成（总检索 ≤ 2）；第三次检索被 guard 拒绝且状态为 limited；寒暄直接完成且检索次数为 0。
 - 清理：释放 fake。
-- 结果：PASS（2026-09-10，pytest `tests/test_qa_rag.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/publication/test_qa_rag.py`）。
 
 ### QA-RAG-04 智能体选择边界
 
@@ -513,7 +513,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：依次调用选择器并交叉用其他租户调用。
 - 预期结果：只有已发布客服智能体被选中；草稿/运维/停用不服务；跨租户统一不选中（无存在性泄露）。
 - 清理：删除临时数据库。
-- 结果：PASS（2026-09-10，pytest `tests/test_qa_rag.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/publication/test_qa_rag.py`）。
 
 ### QA-RAG-05 统一入口回归
 
@@ -905,7 +905,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：分别对四组状态执行发布校验。
 - 预期结果：DONE 组通过；RUNNING/UNSTART/SCHEDULE 组拒绝并含"解析中"原因；FAIL 组拒绝并含"解析失败"原因；502 组拒绝并含"不存在"原因；不可达组拒绝并含"不可用"原因（fail closed）。
 - 清理：释放 fake。
-- 结果：PASS（2026-09-10，pytest `tests/test_agent_debug.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/publication/test_agent_debug.py`）。
 
 ### ADMIN-02 草稿隔离调试运行
 
@@ -914,7 +914,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：调用 `run_agent_debug_answer` 提问"怎么拔枪"；读取返回。
 - 预期结果：返回 `blocks[]`（text+image）、`retrieval_status`、`debug=true`、`agent_version=agt_…#draft-r3`；不创建任何会话轮次（conversation_store 无写入）；媒体块带本轮签发的 `/v1/media/` URL。
 - 清理：释放 fake 与临时 run 目录。
-- 结果：PASS（2026-09-10，pytest `tests/test_agent_debug.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/publication/test_agent_debug.py`）。
 
 ### ADMIN-03 debug-run API 角色与隔离
 
@@ -923,7 +923,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：admin 创建草稿并 debug-run；viewer 对同草稿 debug-run；跨租户 caller debug-run；对已发布智能体 debug-run。
 - 预期结果：admin 200（含 debug 标记与草稿版本）；viewer 403；跨租户 404（无存在性泄露）；非草稿/非客服 409 AGENT_DEBUG_STATE_INVALID。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-10，pytest `tests/test_agent_debug.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/publication/test_agent_debug.py`）。
 
 ### ADMIN-04 生命周期回归
 
@@ -1086,7 +1086,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 
 | ID | 环境 | 前置 | 操作 | 预期结果 | 清理 |
 |---|---|---|---|---|---|
-| ADM-01 | 本地 dev | tmp gateway.db + 假 KB resolver | `uv run pytest tests/test_agent_manifest.py -q` | 10 项全过（create+publish/幂等/漂移 v2/draft/白名单前置失败/manual-action/prune 作用域/disabled/dry-run） | tmp_path 自动清理 |
+| ADM-01 | 本地 dev | tmp gateway.db + 假 KB resolver | `uv run pytest tests/publication/test_agent_manifest.py -q` | 10 项全过（create+publish/幂等/漂移 v2/draft/白名单前置失败/manual-action/prune 作用域/disabled/dry-run） | tmp_path 自动清理 |
 | ADM-02 | 本地 dev | AIOPS_HOME 覆盖 + tmp 清单 + --db | `aiops --config <tmp> admin reconcile <manifest> --db <tmp>` 连续两次 | 首次 `created`，二次全 `unchanged`；JSON 报告可解析 | tmp_path 自动清理 |
 | ADM-03 | 本地 dev | 清单模型不在白名单 | 同上（模型写 gpt-4o） | exit 2 + “不在白名单”，gateway.db 零写入 | 同上 |
 | ADM-04 | 41 实机 | /etc/aiops-41/production.env + ops/environments/env-41.toml | `aiops --config /etc/aiops-41/production.env admin reconcile ops/environments/env-41.toml --kb-url http://127.0.0.1:29380`（先 `--dry-run` 再实跑；跑前 `cp gateway.db gateway.db.bak-<date>`） | 首跑全 `unchanged`（转写回环验证；出现 `updated` = 清单转写有误，停手修清单）；KB 活性校验真实触达 36 kb-service | 保留服务与备份 |
@@ -1109,7 +1109,7 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 |---|---|---|---|---|---|
 | PROMPT-01 | 41 实机 | PR 合并、`admin reconcile` 待执行 | `aiops --config /etc/aiops-41/production.env admin reconcile ops/environments/env-41.toml --db /var/lib/aiops-41/gateway/gateway.db --kb-url http://127.0.0.1:29380 --dry-run` 后实跑 | 2×`updated`（1783 租户产 v4、1942 租户产 v2）；再跑 2×`unchanged`；下一条 QA 即用新提示词 | 无（清单收敛幂等） |
 | PROMPT-02 | 41 公网 | PROMPT-01 完成、有效 thirdSession | 三类问题各一发：①知识库命中题（新加坡无人电动巴士）②通用常识题（充电桩 AC/DC 区别）③超边界题（帮我看看订单扣费对不对） | ①基于知识库作答 ②先声明通用常识非官方政策 ③固定拒答话术或引导诊断/人工，不猜测订单 | 无（只产生问答记录） |
-| PROMPT-03 | 本地 dev | 清单已更新 | `uv run pytest tests/test_agent_manifest.py -q` + `tomllib` 解析 | 10 项通过、TOML 可解析、两个 agent prompt 均为 759 字符定稿 | tmp 自动清理 |
+| PROMPT-03 | 本地 dev | 清单已更新 | `uv run pytest tests/publication/test_agent_manifest.py -q` + `tomllib` 解析 | 10 项通过、TOML 可解析、两个 agent prompt 均为 759 字符定稿 | tmp 自动清理 |
 
 ## 统一助手意图路由 QA（INTENT）
 
@@ -1237,15 +1237,15 @@ payload——非 OpenAI provider 从未遵守该 schema），故不是新增风�
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| AL-COV-01 | 本地 dev | 假模型返回含中文正文 | 以 en 走客户问答 | 正文被替换为英文不可用文案；retrieval_status=unavailable；language_fallback=true | `tests/test_qa_rag.py::test_english_answer_that_leaked_chinese_is_replaced_with_localized_fallback` |
+| AL-COV-01 | 本地 dev | 假模型返回含中文正文 | 以 en 走客户问答 | 正文被替换为英文不可用文案；retrieval_status=unavailable；language_fallback=true | `tests/publication/test_qa_rag.py::test_english_answer_that_leaked_chinese_is_replaced_with_localized_fallback` |
 | AL-COV-02 | 本地 dev | 假模型返回纯英文 | 以 en 走客户问答 | 原样交付，不触发兜底 | `...::test_a_clean_english_answer_is_delivered_untouched` |
 | AL-COV-03 | 本地 dev | 假模型返回中文 | 以 zh 走客户问答 | 不触发兜底 | `...::test_chinese_answer_is_never_treated_as_a_leak` |
 | AL-COV-04 | 本地 dev | 同上 | 分别以 en/de/fr/es/pt 走 | 五语各自触发、兜底文案为对应语言 | `...::test_every_supported_non_chinese_language_is_guarded` |
 | AL-COV-05 | 本地 dev | 回答含中文文件名 | 校验该回答 | 不判为泄漏 | `tests/test_answer_language.py::test_resource_filename_in_a_media_title_is_exempt` |
 | AL-COV-06 | 本地 dev | 中文散文 + 中文文件名并存 | 校验该回答 | 判为泄漏 | `...::test_chinese_prose_beside_an_exempt_filename_is_still_a_leak` |
-| AL-COV-07 | 本地 dev | 存量行缺 fr 文案 | 读列表并捕获告警 | 返回中文回退；逐字段告警；告警不含文案正文 | `tests/test_shortcut_api.py::test_live_rows_report_missing_translations_instead_of_falling_back_silently` |
+| AL-COV-07 | 本地 dev | 存量行缺 fr 文案 | 读列表并捕获告警 | 返回中文回退；逐字段告警；告警不含文案正文 | `tests/publication/test_shortcut_api.py::test_live_rows_report_missing_translations_instead_of_falling_back_silently` |
 | AL-COV-08 | 本地 dev | 缺语言的快捷动作 | 运行覆盖度检查 | 失败并列出字段×语言；zh 不算缺口 | `...::test_copy_gap_gate_names_every_missing_field_and_language` |
-| AL-COV-09 | 本地 dev | 英文请求草稿预览 | 调预览接口 | 以已解析语言运行 | `tests/test_agent_debug.py::test_debug_run_endpoint_runs_draft_and_returns_preview` |
+| AL-COV-09 | 本地 dev | 英文请求草稿预览 | 调预览接口 | 以已解析语言运行 | `tests/publication/test_agent_debug.py::test_debug_run_endpoint_runs_draft_and_returns_preview` |
 | AL-COV-10 | 41 实机 | 修复已部署 | 公网英文请求客户案例与问答 | 正文无中文字符；标识符逐字保留；媒体标题原样 | **待部署后执行**，本 PR 不标记通过 |
 
 **边界声明（重要）**：AL-COV-01~09 证明的是**没漏中文**，**不是译得对**。译文
@@ -1262,7 +1262,7 @@ payload——非 OpenAI provider 从未遵守该 schema），故不是新增风�
 | ANSWER-PAYLOAD-01 | 本地 dev | 四个回答面的生产源码 | 解析 `src/aiops_diagnostics/*.py`，按 import 绑定（含别名）枚举 `answer_chinese_leak` 的每个调用点，断言首个实参是契约构造结果或已被证明的字符串 | 四个调用点全部合规；出现裸 list / 裸 dict / 未证明的读值即报出文件与行号 | `tests/test_answer_caller_shapes.py::test_every_finalisation_point_hands_the_guard_the_contract_payload` |
 | ANSWER-PAYLOAD-02 | 本地 dev | 同上 | 把 `qa_rag.py` / `agent_validator.py` 迁移前的实参按 AST 源码区间放回原文件 | 守护各自转红并指出该文件该行 | `...::test_the_guard_reports_the_payload_that_module_carried_before` |
 | ANSWER-PAYLOAD-03 | 本地 dev | 合成模块（形状同生产调用方） | 分别以裸 list、根因形状（`model_dump` 列表推导）、序列化 dict、整份 answer、单 block、类型本身作实参 | 逐一被守护拒绝；契约构造、`str()`、字面量、已证明字符串则不误报 | `...::test_a_caller_that_picks_its_own_shape_fails_the_guard`、`...::test_the_two_declared_inputs_are_accepted` |
-| ANSWER-PAYLOAD-04 | 本地 dev | 已挂载 `media_by_id` 的 payload（直驱 `qa_rag._finalize`） | 对同一取值分别只放 block `title`、只放 `media.title` | 两处结论一致；名称形态交付整卡，句子形态整卡被扣下 | `tests/test_qa_rag.py::test_the_mounted_descriptor_is_judged_by_the_blocks_own_predicate` |
+| ANSWER-PAYLOAD-04 | 本地 dev | 已挂载 `media_by_id` 的 payload（直驱 `qa_rag._finalize`） | 对同一取值分别只放 block `title`、只放 `media.title` | 两处结论一致；名称形态交付整卡，句子形态整卡被扣下 | `tests/publication/test_qa_rag.py::test_the_mounted_descriptor_is_judged_by_the_blocks_own_predicate` |
 | ANSWER-PAYLOAD-05 | 本地 dev | 同上，payload 正文为中文 | 名称形态的 `media.title` 旁放中文正文 | 正文仍判泄漏并触发本地化兜底；`retrieval_status` 为 `not_found`（本 fixture 未取到任何分块，与同样输入下被送达时会报的状态一致，见 #372 整改轮） | `...::test_a_chinese_text_beside_the_descriptor_is_still_a_leak` |
 | ANSWER-PAYLOAD-06 | 本地 dev | 41 真实资源名（`新加坡无人电动巴士.mp4`、`宣传.docx`） | 以 `en` 走真实 `run_customer_qa_answer`（客户问答 / 宣传共同定稿点） | 卡片整份交付，两处资源名逐字保留，`retrieval_status=found`，无兜底替换 | `...::test_the_41_english_card_keeps_its_chinese_resource_names`、`...::test_the_41_english_card_keeps_its_chinese_reference_document` |
 | ANSWER-PAYLOAD-07 | 本地 dev | 同上，关掉 `looks_like_asset_name` 豁免 | 复跑同一张卡片 | 卡片被扣下并替换为本地化兜底——证明上一条是由豁免承载的，不是恒真 | `...::test_the_recorded_cards_are_carried_by_the_exemption_alone` |
@@ -1372,7 +1372,7 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 
 | 证据 | 结果 |
 |---|---|
-| 消费者侧用例文件在 `18f569b`（本 PRD 起点）与 `50cab4f` 之间是否被改动 | 13 个文件里 12 个逐字节相同；唯一改动是 `tests/test_shortcut_api.py` 的种子幂等断言改为按 (入口, code)——code 现在出现在两个入口，断言对象随之收窄，未放宽任何承诺 |
+| 消费者侧用例文件在 `18f569b`（本 PRD 起点）与 `50cab4f` 之间是否被改动 | 13 个文件里 12 个逐字节相同；唯一改动是 `tests/publication/test_shortcut_api.py` 的种子幂等断言改为按 (入口, code)——code 现在出现在两个入口，断言对象随之收窄，未放宽任何承诺 |
 | 同一批文件在**基线** `18f569b` 上的运行 | `test_assistant_api.py`、`test_conversation_api.py`、`test_shortcut_api.py`、`test_caller_auth.py`、`test_order_visibility.py`、`test_query_scope.py`、`test_scope_context*.py`、`test_cross_entry_visibility.py`、`test_faq.py`、`test_routing.py`、`test_mysql_scope.py` 合计 **324 passed** |
 | 同一批文件在 **`50cab4f` + 本片** 上的运行 | 合计 **324 passed**，无一项由绿转红 |
 | 消费者侧行为断言本身 | `self` 范围、显式/内嵌/活跃订单契约、FAQ 短路、入口隔离的既有断言一条未改，全部原样通过 |
@@ -1381,7 +1381,7 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 
 ```text
 uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
-  tests/test_shortcut_api.py tests/identity/test_caller_auth.py \
+  tests/publication/test_shortcut_api.py tests/identity/test_caller_auth.py \
   tests/identity/test_order_visibility.py tests/identity/test_query_scope.py tests/identity/test_scope_context.py \
   tests/identity/test_scope_context_http.py tests/identity/test_scope_context_ds_fallback.py \
   tests/test_cross_entry_visibility.py tests/test_faq.py tests/test_routing.py \
@@ -1661,7 +1661,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 
 ## Dify DSL 拉取与草稿映射 QA 计划（#580 / PRD #577）
 
-接缝：**模块边界**（先例 `tests/test_agent_manifest.py`：真 `AgentManager` + 真
+接缝：**模块边界**（先例 `tests/publication/test_agent_manifest.py`：真 `AgentManager` + 真
 `AgentStore` + 桩知识绑定校验器；传输边界先例 `tests/test_gateway_client.py`：桩
 `urllib.request.urlopen`）。不新增只在测试里存在的抽象。
 

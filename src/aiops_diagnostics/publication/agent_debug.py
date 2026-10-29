@@ -6,10 +6,6 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
-from aiops_diagnostics.agent_lifecycle import (
-    AgentPublishError,
-    KnowledgeBindingResolver,
-)
 from aiops_diagnostics.bounded_http import (
     ErrorMapping,
     HttpFailure,
@@ -21,6 +17,10 @@ from aiops_diagnostics.bounded_http import (
 )
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
+)
+from aiops_diagnostics.publication.agent_lifecycle import (
+    AgentPublishError,
+    KnowledgeBindingResolver,
 )
 
 # RAGFlow TaskStatus names surfaced by kb-service document lists

@@ -3,15 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.agent_debug import (
+from aiops_diagnostics.publication.agent_debug import (
     KbBindingResolver,
     KbDocumentState,
 )
-from aiops_diagnostics.agent_lifecycle import (
+from aiops_diagnostics.publication.agent_lifecycle import (
     AgentPublishError,
 )
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _FakeKbClient:

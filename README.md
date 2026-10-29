@@ -60,13 +60,13 @@ flowchart LR
 | 身份与范围 | `identity.caller_auth.py`、`identity.company_token_auth.py`、`identity.company_permissions.py`、`identity.third_session_auth.py`、`identity.scope_context.py`、`identity.query_scope.py`、`identity.order_visibility.py`、`http_auth.py` |
 | C端业务 | `consumer.consumer_billing.py`、`consumer.consumer_chat_service.py`、`consumer.consumer_documents.py`、`consumer.consumer_flow_contract.py`、`consumer.consumer_intent.py`、`consumer.consumer_knowledge.py`、`consumer.consumer_knowledge_selection.py`、`consumer.consumer_language.py`、`consumer.consumer_order_chat.py`、`consumer.consumer_photo.py`、`consumer.consumer_publication.py`、`consumer.consumer_trial.py`、`charging_status.py` |
 | 节点与试用 | `agent_runs.py`、`execution_manifest.py`、`chat_execution.py`、`chat_data_grant.py`、`chat_route_bindings.py`、`node_publication.py`、`operator_cpms.py`、`dify_trial.py`、`dify_workflow_trial.py` |
-| 管理与发布 | `admin_cli.py`、`agent_content.py`、`agent_lifecycle.py`、`agent_manifest.py`、`agent_debug.py`、`shortcut_lifecycle.py`、`shortcut_migration.py`、`ops_provider.py` |
-| 知识与会话 | `conversation_store.py`、`faq.py`、`qa_rag.py`、`clarification.py`、`knowledge.knowledge_retrieval.py`、`knowledge.knowledge_sources.py`、`knowledge.knowledge_triple.py`、`knowledge.knowledge_dataset_sync_guard.py`、`knowledge.kb_onboarding.py`、`knowledge.ragflow_console.py` |
+| 管理与发布 | `admin_cli.py`、`publication.agent_content.py`、`publication.agent_lifecycle.py`、`publication.agent_manifest.py`、`publication.agent_debug.py`、`publication.shortcut_lifecycle.py`、`publication.shortcut_migration.py`、`ops_provider.py` |
+| 知识与会话 | `conversation_store.py`、`faq.py`、`publication.qa_rag.py`、`clarification.py`、`knowledge.knowledge_retrieval.py`、`knowledge.knowledge_sources.py`、`knowledge.knowledge_triple.py`、`knowledge.knowledge_dataset_sync_guard.py`、`knowledge.kb_onboarding.py`、`knowledge.ragflow_console.py` |
 | 健康与分析 | `health_curves.py`、`health_metrics.py`、`health_report.py`、`health_report_copy.py`、`ops_analysis.py`、`ops_analysis_narrative.py`、`order_status.py`、`rules.py`、`sources.py`、`tdengine_proxy.py` |
 | 通用能力 | `config.py`、`model_request.py`、`bounded_http.py`、`private_files.py`、`redaction.py`、`i18n.py`、`answer_language.py`、`platform_paths.py`、`console_encoding.py`、`async_job_lifecycle.py`、`metrics_store.py` |
 | Dify集成 | `dify_app_registry.py`、`dify_chat_workflow.py`、`dify_chatflow.py`、`dify_console_admin.py`、`dify_console_publish.py`、`dify_debug_identity.py`、`dify_dsl_pull.py`、`dify_ensure_workspace.py`、`dify_inner_api.py`、`dify_knowledge_api.py`、`dify_knowledge_datasets.py`、`dify_knowledge_migration.py`、`dify_login_company.py`、`dify_login_provision.py`、`dify_login_proxy.py`、`dify_login_server.py`、`dify_login_service.py`、`dify_run_store.py`、`dify_tenant_access.py`、`dify_tools_catalog.py`、`dify_workspace_directory.py`、`dify_workspace_ready.py`、`dify_workspaces.py` |
 
-`agent_debug.py` 仅保留发布前的知识绑定校验；`qa_rag.py` 仅保留已发布客服元数据选择。
+`publication.agent_debug.py` 仅保留发布前的知识绑定校验；`publication.qa_rag.py` 仅保留已发布客服元数据选择。
 `model_request.py` 是一次性有界 HTTP 请求，供 C端语义分类和聚合说明使用，不含会话/工具循环。
 `ops_provider.py` 只登记现役 `cpms-node`，旧 Python/共享租户 provider 已退出。
 
@@ -81,6 +81,7 @@ flowchart LR
 | `tools/m2_live/` | 隔离栈探针与回环中继 |
 | `src/aiops_diagnostics/knowledge/`、`tests/knowledge/` | 知识检索、开户、绑定、同步守卫与对应测试 |
 | `src/aiops_diagnostics/identity/`、`tests/identity/` | 调用者身份、公司权限、订单范围和共享安全规则 |
+| `src/aiops_diagnostics/publication/`、`tests/publication/` | 发布内容、生命周期、快捷动作与校验 |
 | `tools/` | 内容生成、迁移和隔离验证 |
 | `plugins/` | Dify 知识插件及其原生打包布局 |
 | `deploy/`、`ops/` | 部署制品、环境声明、代理配置与操作手册 |

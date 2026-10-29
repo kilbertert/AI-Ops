@@ -10,7 +10,7 @@ from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.shortcut_lifecycle import ShortcutStore
+from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutStore
 
 
 class _Caller:
@@ -515,7 +515,7 @@ def test_platform_rollback_publishes_an_immutable_previous_snapshot(tmp_path: Pa
 
 def test_effective_shortcut_resolution_prefers_published_tenant_row(tmp_path: Path) -> None:
     store = ShortcutStore(tmp_path / "gateway.db")
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager
+    from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager
 
     manager = ShortcutManager(store)
     store.create(
@@ -634,7 +634,7 @@ def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
         effective_tenant_id = "T-1"
         caller = type("C", (), {"b_user_id": "seed-user"})()
 
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager
+    from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager
 
     manager = ShortcutManager(store)
     first = store.seed_bundled(_Ctx(), manager)  # type: ignore[arg-type]
@@ -812,7 +812,7 @@ def test_jump_path_is_frozen_into_version_and_change_needs_new_version(tmp_path:
 
 def test_jump_path_validation_rejects_non_string(tmp_path: Path) -> None:
     store = ShortcutStore(tmp_path / "gateway.db")
-    from aiops_diagnostics.shortcut_lifecycle import (
+    from aiops_diagnostics.publication.shortcut_lifecycle import (
         ShortcutManager,
         ShortcutValidationError,
     )
@@ -850,7 +850,7 @@ def test_jump_path_validation_rejects_non_string(tmp_path: Path) -> None:
 
 def test_bundled_seed_carries_the_product_fault_report_path(tmp_path: Path) -> None:
     """The product default path is a repo asset, not an ad-hoc migration string."""
-    from aiops_diagnostics.shortcut_lifecycle import REPORT_FAULT_JUMP_PATH
+    from aiops_diagnostics.publication.shortcut_lifecycle import REPORT_FAULT_JUMP_PATH
 
     store = ShortcutStore(tmp_path / "gateway.db")
 
@@ -858,7 +858,7 @@ def test_bundled_seed_carries_the_product_fault_report_path(tmp_path: Path) -> N
         effective_tenant_id = "T-1"
         caller = type("C", (), {"b_user_id": "seed-user"})()
 
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager
+    from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager
 
     seeded = store.seed_bundled(_Ctx(), ShortcutManager(store))  # type: ignore[arg-type]
     by_code = {s.code: s for s in seeded}
@@ -967,7 +967,7 @@ def test_update_jump_path_semantics_preserve_vs_clear(tmp_path: Path) -> None:
     a real path = set. Absent is the one the HTTP model can send by accident,
     so it is the one that must not destroy state."""
     store = ShortcutStore(tmp_path / "gateway.db")
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager
+    from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager
 
     manager = ShortcutManager(store)
 
@@ -1071,7 +1071,7 @@ def test_jump_path_rejects_network_path_reference(tmp_path: Path) -> None:
 def test_lifecycle_validator_also_rejects_network_path_reference(tmp_path: Path) -> None:
     """The operator runbook calls the lifecycle layer directly, bypassing HTTP,
     so the same guard must live there too."""
-    from aiops_diagnostics.shortcut_lifecycle import (
+    from aiops_diagnostics.publication.shortcut_lifecycle import (
         ShortcutManager,
         ShortcutValidationError,
     )
@@ -1107,7 +1107,7 @@ def test_bundled_seed_copy_covers_every_supported_language() -> None:
     omission is asserted directly below rather than left implicit.
     """
     from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
-    from aiops_diagnostics.shortcut_lifecycle import _BUNDLED_SHORTCUTS
+    from aiops_diagnostics.publication.shortcut_lifecycle import _BUNDLED_SHORTCUTS
 
     checked = 0
     for entry, specs in _BUNDLED_SHORTCUTS:
@@ -1138,7 +1138,7 @@ def test_live_rows_report_missing_translations_instead_of_falling_back_silently(
     """
     import logging
 
-    from aiops_diagnostics.shortcut_lifecycle import Shortcut
+    from aiops_diagnostics.publication.shortcut_lifecycle import Shortcut
 
     shortcut = Shortcut(
         shortcut_id="sct_test",
@@ -1164,7 +1164,7 @@ def test_live_rows_report_missing_translations_instead_of_falling_back_silently(
         updated_at="2026-09-20T00:00:00+00:00",
     )
 
-    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.shortcut_lifecycle"):
+    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.publication.shortcut_lifecycle"):
         listed = shortcut.public("fr")
 
     # The user still gets usable copy rather than a blank button.
@@ -1182,7 +1182,7 @@ def test_live_rows_report_missing_translations_instead_of_falling_back_silently(
 def test_a_fully_translated_row_warns_about_nothing(caplog) -> None:
     import logging
 
-    from aiops_diagnostics.shortcut_lifecycle import Shortcut
+    from aiops_diagnostics.publication.shortcut_lifecycle import Shortcut
 
     shortcut = Shortcut(
         shortcut_id="sct_ok",
@@ -1207,7 +1207,7 @@ def test_a_fully_translated_row_warns_about_nothing(caplog) -> None:
         updated_at="2026-09-20T00:00:00+00:00",
     )
 
-    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.shortcut_lifecycle"):
+    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.publication.shortcut_lifecycle"):
         shortcut.public("en")
 
     assert not [r for r in caplog.records if getattr(r, "event", "") == "shortcut_translation_missing"]
@@ -1217,7 +1217,7 @@ def test_the_default_language_is_never_reported_as_a_gap(caplog) -> None:
     """zh is the authority: reading it is not a fallback."""
     import logging
 
-    from aiops_diagnostics.shortcut_lifecycle import Shortcut
+    from aiops_diagnostics.publication.shortcut_lifecycle import Shortcut
 
     shortcut = Shortcut(
         shortcut_id="sct_zh",
@@ -1242,7 +1242,7 @@ def test_the_default_language_is_never_reported_as_a_gap(caplog) -> None:
         updated_at="2026-09-20T00:00:00+00:00",
     )
 
-    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.shortcut_lifecycle"):
+    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.publication.shortcut_lifecycle"):
         shortcut.public("zh")
 
     assert not [r for r in caplog.records if getattr(r, "event", "") == "shortcut_translation_missing"]
@@ -1255,7 +1255,7 @@ def test_copy_gap_gate_names_every_missing_field_and_language() -> None:
     It reports WHAT is missing rather than a bare boolean, so the fix is
     actionable without re-deriving the gap by hand.
     """
-    from aiops_diagnostics.shortcut_lifecycle import Shortcut, shortcut_copy_gaps
+    from aiops_diagnostics.publication.shortcut_lifecycle import Shortcut, shortcut_copy_gaps
 
     row = Shortcut(
         shortcut_id="sct_gap",
@@ -1305,7 +1305,7 @@ def test_copy_gap_gate_names_every_missing_field_and_language() -> None:
 
 def test_copy_gap_gate_is_empty_for_a_complete_row() -> None:
     from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
-    from aiops_diagnostics.shortcut_lifecycle import Shortcut, shortcut_copy_gaps
+    from aiops_diagnostics.publication.shortcut_lifecycle import Shortcut, shortcut_copy_gaps
 
     row = Shortcut(
         shortcut_id="sct_ok2",
@@ -1381,7 +1381,7 @@ def test_starters_come_from_our_artifact_in_the_requested_language(tmp_path: Pat
     一个值），所以这两类文案的权威只能在我们的版本化制品里。这一条钉住的是"取到了
     哪一门语言"，而不是"有没有返回字符串"。
     """
-    from aiops_diagnostics.agent_content import AGENT_STARTERS
+    from aiops_diagnostics.publication.agent_content import AGENT_STARTERS
 
     client = _client(tmp_path)
 
@@ -1430,7 +1430,7 @@ def test_the_artifact_covers_every_supported_language() -> None:
     `resolve_language` 接受所有已声明语言，而取不到就回退 zh —— 所以一份两门语言的
     制品会静默地给其余九门语言发中文。这条把"缺"变成一个会红的结论。
     """
-    from aiops_diagnostics.agent_content import starter_gaps
+    from aiops_diagnostics.publication.agent_content import starter_gaps
 
     assert starter_gaps() == (), f"内容制品缺这些语言的文案：{starter_gaps()}"
 
@@ -1447,7 +1447,7 @@ def test_the_pull_path_reads_the_opening_but_still_not_the_suggested_questions()
 
     from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
 
-    dsl = (_Path(__file__).parent / "fixtures" / "dify-app-chat.dsl.yml").read_text(encoding="utf-8")
+    dsl = (_Path(__file__).parents[1] / "fixtures" / "dify-app-chat.dsl.yml").read_text(encoding="utf-8")
     assert "opening_statement" in dsl and "suggested_questions" in dsl, "固件里应该有这两个字段"
     del json
 
@@ -1462,8 +1462,8 @@ def test_the_opening_comes_from_the_published_agent_when_dify_provided_one(tmp_p
     这里用**真** store + 真 registry（不是替身）：替身对"读的是不是已发布快照"
     是盲的，而那条正是本改动的纪律（草稿里的开场白不能给用户看）。
     """
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     db = tmp_path / "gateway.db"
     store = AgentStore(db)
@@ -1543,7 +1543,7 @@ def test_the_opening_comes_from_the_published_agent_when_dify_provided_one(tmp_p
     assert en["opening"] != "运营写的开场白"
     assert en["opening_source"] == "artifact"
     # 非中文一律走制品 —— 预设问题也守这条（所以 en 与 zh 不同，且来源标记不同）
-    from aiops_diagnostics.agent_content import AGENT_STARTERS
+    from aiops_diagnostics.publication.agent_content import AGENT_STARTERS
 
     assert en["suggested_questions"] == list(AGENT_STARTERS.suggested["en"])
     assert en["suggested_source"] == "artifact"
@@ -1551,7 +1551,7 @@ def test_the_opening_comes_from_the_published_agent_when_dify_provided_one(tmp_p
 
 def test_the_artifact_answers_when_nobody_published_an_opening(tmp_path: Path) -> None:
     """没有 Dify 覆盖时逐字回退制品，且**说出来**它是制品（来源标记）。"""
-    from aiops_diagnostics.agent_content import AGENT_STARTERS
+    from aiops_diagnostics.publication.agent_content import AGENT_STARTERS
 
     body = _client(tmp_path).get("/v1/assistant/starters", headers=_HEADERS).json()
     assert body["opening"] == AGENT_STARTERS.opening["zh"]

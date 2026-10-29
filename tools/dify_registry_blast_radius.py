@@ -76,7 +76,7 @@ def _declared_bindings(manifest_path: Path) -> dict[tuple[str, str], str]:
     the runtime about what a binding is — a manifest that fails to load is a
     failure to measure, not an empty declaration.
     """
-    from aiops_diagnostics.agent_manifest import ManifestError, load_manifest
+    from aiops_diagnostics.publication.agent_manifest import ManifestError, load_manifest
 
     try:
         manifest = load_manifest(manifest_path)
@@ -112,9 +112,9 @@ def _selection_name(selection, names: dict[str, str]) -> str:
 
 
 def _measure(database: Path, declared: dict[tuple[str, str], str], *, apply: bool) -> list[tuple]:
-    from aiops_diagnostics.agent_lifecycle import AgentStore
     from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
-    from aiops_diagnostics.qa_rag import select_customer_agent
+    from aiops_diagnostics.publication.agent_lifecycle import AgentStore
+    from aiops_diagnostics.publication.qa_rag import select_customer_agent
 
     store = AgentStore(database)
     registry = DifyAppRegistry(database)

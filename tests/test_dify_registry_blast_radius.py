@@ -27,9 +27,9 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.metrics_store import MetricsStore
+from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
 ROOT = Path(__file__).parents[1]
 

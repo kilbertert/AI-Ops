@@ -9,18 +9,18 @@ related:
   - src/aiops_diagnostics/ops_analysis_narrative.py
   - src/aiops_diagnostics/dify_trial.py
   - src/aiops_diagnostics/answer_language.py
-  - src/aiops_diagnostics/qa_rag.py
-  - src/aiops_diagnostics/agent_debug.py
+  - src/aiops_diagnostics/publication/qa_rag.py
+  - src/aiops_diagnostics/publication/agent_debug.py
   - src/aiops_diagnostics/dify_dsl_pull.py
   - src/aiops_diagnostics/faq.py
-  - src/aiops_diagnostics/agent_manifest.py
+  - src/aiops_diagnostics/publication/agent_manifest.py
   - src/aiops_diagnostics/clarification.py
   - src/aiops_diagnostics/dify_tools_catalog.py
   - src/aiops_diagnostics/dify_console_publish.py
   - src/aiops_diagnostics/dify_knowledge_api.py
-  - src/aiops_diagnostics/agent_content.py
+  - src/aiops_diagnostics/publication/agent_content.py
   - src/aiops_diagnostics/dify_debug_identity.py
-  - src/aiops_diagnostics/shortcut_migration.py
+  - src/aiops_diagnostics/publication/shortcut_migration.py
 ---
 # l4-inference
 

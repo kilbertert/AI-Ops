@@ -1114,7 +1114,7 @@ def _seed_agent(database: Path, tenant_id: str, *, name: str = "小趋-客服") 
     没有已发布版本时它按 `refused` 返回（"先让它成为一个已发布版本"）。这里种出那个
     基线版本，让发布走的是真实的 converge→publish 路径。
     """
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     try:
         manager = AgentManager(AgentStore(database))

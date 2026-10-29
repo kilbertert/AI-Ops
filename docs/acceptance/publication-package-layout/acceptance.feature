@@ -1,0 +1,14 @@
+Feature: 发布与内容生命周期归包
+  Rule: 迁移不改变发布状态和权限
+    Scenario: 原生命周期操作
+      Given 一次性数据根包含草稿与已发布版本
+      When 执行现有发布撤回恢复和快捷动作检查
+      Then 版本和权限行为保持一致
+    Scenario: 当前用户入口
+      Given 正常登录并使用已发布应用
+      When 请求快捷动作和订单检测
+      Then 返回可见动作且本次结果完成
+    Scenario: 新包加载
+      Given 已安装wheel或已部署源码
+      When Gateway加载发布与内容模块
+      Then publication包可用且旧根模块不再存在

@@ -31,15 +31,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from aiops_diagnostics.agent_lifecycle import (
-    AgentConfig,
-    AgentManager,
-)
 from aiops_diagnostics.dify_app_registry import (
     DifyAppBinding,
     DifyAppRegistry,
     DifyAppRegistryError,
     validate_bindings,
+)
+from aiops_diagnostics.publication.agent_lifecycle import (
+    AgentConfig,
+    AgentManager,
 )
 
 # Only the fields AgentManager.create/publish need; output_contract defaults
@@ -582,7 +582,7 @@ def admin_context(tenant_id: str) -> Any:
 
 def _admin_context_factory() -> Any:
     """Synthetic admin ScopeContext per tenant (mirrors the test _context
-    pattern in tests/test_agent_lifecycle.py; b_user_id flows into
+    pattern in tests/publication/test_agent_lifecycle.py; b_user_id flows into
     created_by/published_by so reconcile writes stay auditable)."""
     from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 

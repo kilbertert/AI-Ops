@@ -1814,6 +1814,6 @@ def test_the_inlined_platform_constants_match_their_sources() -> None:
     )
     # 同名的另一个常量属于不同命名空间，值本就不同；钉住这一点，
     # 免得有人"统一"它们（ADR-0008 的「同名不同物」）。
-    from aiops_diagnostics import shortcut_lifecycle
+    from aiops_diagnostics.publication import shortcut_lifecycle
 
     assert shortcut_lifecycle.PLATFORM_TENANT_ID != BRIDGE_TENANT

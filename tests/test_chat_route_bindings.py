@@ -719,7 +719,7 @@ def _run_workflow_sync(tmp_path, app_id=APP):
     from types import SimpleNamespace
 
     from aiops_diagnostics import dify_dsl_pull as pull
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     class _Ctx:
         effective_tenant_id = TENANT
