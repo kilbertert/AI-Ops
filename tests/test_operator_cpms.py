@@ -803,3 +803,21 @@ def test_non_owner_cannot_use_empty_or_all_scope(operator, data_scope):
     submitted = request(f["client"])
     assert submitted.status_code == 403, submitted.text
     assert not f["state"]["calls"] and not f["ctx"].operator_cpms.tasks
+
+
+def test_answer_rejection_logs_only_fixed_reason(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="aiops.operator")
+    answer = {
+        "summary": "PRIVATE-ORDER-123 已退款",
+        "probable_cause": "PRIVATE-TOKEN-456",
+        "next_steps": [],
+        "limitations": [],
+        "evidence_tools": [operator_cpms.TOOL_NAMES[0]],
+    }
+    with pytest.raises(operator_cpms.OperatorRefused, match="OPERATOR_INVALID_ANSWER"):
+        operator_cpms.validate_answer(answer, {operator_cpms.TOOL_NAMES[0]: {}})
+    assert "operator_answer_rejected reason=mutation_claim" in caplog.text
+    assert "PRIVATE-ORDER" not in caplog.text
+    assert "PRIVATE-TOKEN" not in caplog.text
