@@ -17,7 +17,7 @@ SKELETON = "bounded_http.py"
 
 
 def _python_sources() -> list[Path]:
-    return sorted(path for path in SOURCE_ROOT.glob("*.py") if path.name != SKELETON)
+    return sorted(path for path in SOURCE_ROOT.rglob("*.py") if path.name != SKELETON)
 
 
 def test_only_the_skeleton_constructs_a_urllib_request() -> None:

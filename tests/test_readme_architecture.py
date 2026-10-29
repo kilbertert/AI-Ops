@@ -29,26 +29,34 @@ def _readme() -> str:
     return README.read_text(encoding="utf-8")
 
 
+def _module_name(path: Path) -> str:
+    relative = path.relative_to(PACKAGE).with_suffix("")
+    return ".".join(relative.parts[:-1] if relative.name == "__init__" else relative.parts)
+
+
 def _package_modules() -> set[str]:
-    return {path.stem for path in PACKAGE.glob("*.py")}
+    return {_module_name(path) for path in PACKAGE.rglob("*.py")} - {""}
 
 
 def _import_edges() -> dict[str, set[str]]:
-    """Every in-package import edge, including deferred (in-function) imports."""
+    """包括函数内延迟导入和from包import模块，不遗漏子包。"""
     modules = _package_modules()
     edges: dict[str, set[str]] = {module: set() for module in modules}
-    for path in PACKAGE.glob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
+    prefix = PACKAGE_NAME + "."
+    for path in PACKAGE.rglob("*.py"):
+        source = _module_name(path)
+        if source not in edges:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            candidates = []
             if isinstance(node, ast.ImportFrom) and node.module:
-                parts = node.module.split(".")
-                if len(parts) > 1 and parts[0] == PACKAGE_NAME and parts[1] in modules:
-                    edges[path.stem].add(parts[1])
+                candidates.append(node.module)
+                candidates.extend(node.module + "." + alias.name for alias in node.names)
             elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    parts = alias.name.split(".")
-                    if len(parts) > 1 and parts[0] == PACKAGE_NAME and parts[1] in modules:
-                        edges[path.stem].add(parts[1])
+                candidates.extend(alias.name for alias in node.names)
+            for target in candidates:
+                if target.startswith(prefix) and target[len(prefix) :] in modules:
+                    edges[source].add(target[len(prefix) :])
     return edges
 
 
@@ -58,7 +66,9 @@ def test_every_package_module_is_named_in_the_readme() -> None:
     undocumented = sorted(
         module
         for module in _package_modules()
-        if module != "__init__" and f"{module}.py" not in readme and f"`{module}`" not in readme
+        if not (PACKAGE / module.replace(".", "/") / "__init__.py").exists()
+        and f"{module}.py" not in readme
+        and f"`{module}`" not in readme
     )
     assert undocumented == [], "README.md 未说明这些模块（请补进第三节的分层表）: " + ", ".join(undocumented)
 
@@ -122,27 +132,43 @@ def test_readme_toc_anchors_resolve() -> None:
     )
 
 
-def test_package_import_graph_stays_acyclic() -> None:
-    """The README tells the reader to trust the layer diagram; a cycle would invalidate it."""
+def test_package_import_graph_has_no_new_cycles() -> None:
+    """已知装配循环按具体边冻结，不能用新增循环扩大旧边界。"""
     edges = _import_edges()
-    WHITE, GRAY, BLACK = 0, 1, 2
-    color = dict.fromkeys(edges, WHITE)
 
-    def visit(node: str, stack: list[str]) -> list[str] | None:
-        color[node] = GRAY
-        stack.append(node)
-        for neighbor in sorted(edges.get(node, ())):
-            if color.get(neighbor) == GRAY:
-                return [*stack[stack.index(neighbor) :], neighbor]
-            if color.get(neighbor) == WHITE:
-                found = visit(neighbor, stack)
-                if found is not None:
-                    return found
-        stack.pop()
-        color[node] = BLACK
-        return None
+    def reachable(start):
+        found = set()
+        pending = list(edges[start])
+        while pending:
+            item = pending.pop()
+            if item not in found:
+                found.add(item)
+                pending.extend(edges.get(item, ()))
+        return found
 
-    for module in sorted(edges):
-        if color[module] == WHITE:
-            cycle = visit(module, [])
-            assert cycle is None, "包内出现导入环，README 的分层说明已失效: " + " -> ".join(cycle or [])
+    cyclic = {(a, b) for a, targets in edges.items() for b in targets if a in reachable(b)}
+    existing = {
+        ("agent_runs", "gateway_config"),
+        ("gateway_config", "chat_execution"),
+        ("chat_execution", "agent_runs"),
+        ("chat_execution", "dify_chat_workflow"),
+        ("chat_execution", "gateway_config"),
+        ("dify_chat_workflow", "gateway_config"),
+    }
+    assert not cyclic - existing, "新增包内循环边: " + repr(sorted(cyclic - existing))
+
+
+def test_import_scan_includes_nested_modules_and_package_imports(tmp_path, monkeypatch):
+    package = tmp_path / "sample"
+    (package / "area").mkdir(parents=True)
+    (package / "area/__init__.py").write_text("")
+    (package / "area/one.py").write_text("from aiops_diagnostics.area import two\n")
+    (package / "area/two.py").write_text("import aiops_diagnostics.area.one\n")
+    monkeypatch.setitem(globals(), "PACKAGE", package)
+    edges = _import_edges()
+    assert "area.two" in edges["area.one"]
+    assert "area.one" in edges["area.two"]
+    import pytest
+
+    with pytest.raises(AssertionError, match="新增包内循环边"):
+        test_package_import_graph_has_no_new_cycles()

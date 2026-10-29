@@ -7,7 +7,7 @@
 另外两个脚本是纯只读。
 
 > 本目录的第一版有四个**误报**（判据比事实宽，证据不足时仍退出 0）。
-> `tests/test_consumer_status_tools.py` 逐条钉住它们，并做过变异复验
+> `tests/consumer/test_consumer_status_tools.py` 逐条钉住它们，并做过变异复验
 > （把判据改回旧形状 ⇒ 对应反例转红）。这组测试是**工具自检**，
 > 不是真实业务验收，也不是真实越权验收。
 
@@ -282,8 +282,8 @@ python3 tools/consumer-status/replay_drive.py    # 0 = 三场景都符合预期
 
 | 步骤 | 命令 | 退出码 | 结果 |
 |---|---|---|---|
-| 默认适配路径 | `PYTHONPATH=$PWD/src uv run pytest tests/test_consumer_status_default_path.py -q` | 0 | 4 passed |
-| 全部自检 | `PYTHONPATH=$PWD/src uv run pytest tests/test_consumer_status_tools.py tests/test_consumer_status_default_path.py` | 0 | **37 passed** |
+| 默认适配路径 | `PYTHONPATH=$PWD/src uv run pytest tests/consumer/test_consumer_status_default_path.py -q` | 0 | 4 passed |
+| 全部自检 | `PYTHONPATH=$PWD/src uv run pytest tests/consumer/test_consumer_status_tools.py tests/consumer/test_consumer_status_default_path.py` | 0 | **37 passed** |
 | 浏览器驱动回放 | `python3 tools/consumer-status/replay_drive.py` | **0** | `verdict=pass`，`production_business_requests=0`，三场景：normal/progressive `all_checks=true`、failed `all_checks=false`（预期不过） |
 | 选择器回放 | `python3 tools/consumer-status/replay_selector.py` | 0 | `.ai-msg` 命中 1、旧猜测命中 0、用户气泡不含订单号 |
 
@@ -302,5 +302,5 @@ python3 tools/consumer-status/replay_drive.py    # 0 = 三场景都符合预期
 | 端口归属 | 假定 `ss` 的 PID == `Popen.pid` | 判"属于本次**进程树**"（dev-host 是 shell 包装） |
 | 私有报告 | `mkdir → write_text → chmod`，跟随符号链接、无库外限制 | 落盘前判符号链接 + 库外 + 目录权限 |
 
-对应测试：`tests/test_consumer_status_boundaries.py`（15 条；三个文件合计 52 条）。
+对应测试：`tests/consumer/test_consumer_status_boundaries.py`（15 条；三个文件合计 52 条）。
 变异复验：把写入改回 `mkdir+write_text+chmod` ⇒ 5 条转红；把隧道改回裸 `ssh` ⇒ 2 条转红。

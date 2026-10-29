@@ -207,7 +207,7 @@ def _binding_before(name: str, scope: ast.AST | None, call: ast.Call) -> ast.exp
 
 
 def _sources() -> list[Path]:
-    return sorted(path for path in SOURCE_ROOT.glob("*.py"))
+    return sorted(path for path in SOURCE_ROOT.rglob("*.py"))
 
 
 def _trees() -> list[tuple[Path, ast.Module]]:

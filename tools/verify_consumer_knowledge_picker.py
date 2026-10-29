@@ -5,7 +5,7 @@ import time
 import urllib.request
 from urllib.parse import urlencode
 
-from aiops_diagnostics.consumer_knowledge_selection import PROVIDER, catalogue_token
+from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, catalogue_token
 from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
 

@@ -179,7 +179,7 @@ def test_the_numbers_are_written_down_only_in_this_module() -> None:
         re.compile(r"timedelta\(minutes=5\)"),
     ]
     offenders: list[str] = []
-    for path in sorted(package.glob("*.py")):
+    for path in sorted(package.rglob("*.py")):
         if path.name == "async_job_lifecycle.py":
             continue
         text = path.read_text(encoding="utf-8")
@@ -221,7 +221,7 @@ def test_the_status_sets_are_written_down_only_in_this_module() -> None:
     #: `_TERMINAL_RUN_STATUSES` there and commented as a boundary.
     owners = {"async_job_lifecycle.py", "metrics_store.py"}
     offenders: list[str] = []
-    for path in sorted(package.glob("*.py")):
+    for path in sorted(package.rglob("*.py")):
         if path.name in owners:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -407,7 +407,7 @@ def test_the_sweep_sql_is_written_down_only_in_this_module() -> None:
 
     package = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
     offenders: list[str] = []
-    for path in sorted(package.glob("*.py")):
+    for path in sorted(package.rglob("*.py")):
         if path.name == "async_job_lifecycle.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

@@ -172,7 +172,7 @@ class GatewayRuntime:
         #: 不在这里 import（会形成 gateway_api → gateway_runtime → gateway_api 的环）。
         #: 未注入 ⇒ worker 判不出归属 ⇒ 落 failed（fail closed），不写正文。
         self._order_authorizer: Any = None
-        from aiops_diagnostics.consumer_photo import PhotoStore
+        from aiops_diagnostics.consumer.consumer_photo import PhotoStore
 
         self.consumer_photos = PhotoStore()
 
@@ -891,7 +891,7 @@ class GatewayRuntime:
             result = draft.execute(self, trial_id, run_context, order_no, language)
         except Exception as exc:  # noqa: BLE001 - 逃出去就等于没有终态行
             from aiops_diagnostics.chat_execution import ChatRunUnavailable
-            from aiops_diagnostics.consumer_intent import TRIAL_MESSAGES
+            from aiops_diagnostics.consumer.consumer_intent import TRIAL_MESSAGES
 
             code = (
                 exc.code
@@ -1059,7 +1059,7 @@ class GatewayRuntime:
         uses_context=True,
         expected_previous_qa_id=None,
     ):
-        from aiops_diagnostics.consumer_chat_service import start
+        from aiops_diagnostics.consumer.consumer_chat_service import start
 
         return start(
             self,
@@ -1426,7 +1426,7 @@ class GatewayRuntime:
         模型写了什么状态码，这里都不采信。
         """
         from aiops_diagnostics import chat_data_grant
-        from aiops_diagnostics.consumer_order_chat import status_answer
+        from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
         grant = chat_data_grant.usable(chat_data_grant.DataGrantStore(self.store.path).by_id(grant_id))
         if grant.order_no != order_no:
@@ -1616,7 +1616,7 @@ class GatewayRuntime:
     def classify_consumer(
         self, question, *, language, previous_question="", previous_order=False, selected_order=False
     ):
-        from aiops_diagnostics.consumer_intent import classify
+        from aiops_diagnostics.consumer.consumer_intent import classify
         from aiops_diagnostics.model_request import resolve_provider_api_key
 
         settings = Settings.from_config(self.gateway_settings.server_config_file)
@@ -2085,7 +2085,7 @@ class GatewayRuntime:
                 run = self.dify_run_store.by_qa(grant.session_id or "")
                 if run is None or run.kind != "service":
                     return False
-                from aiops_diagnostics.consumer_chat_service import require_result
+                from aiops_diagnostics.consumer.consumer_chat_service import require_result
 
                 try:
                     caller = scope_from_json(run.scope_json)

@@ -799,7 +799,7 @@ def answer_from_run(run: AgentRun, *, language: str) -> dict[str, Any]:
     快照的字段集合与确定性直读那条路一致，所以渲染复用同一个 `status_answer` ——
     App 看到的 blocks 形状不会因为「谁来读」而变。
     """
-    from aiops_diagnostics.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
     if run.snapshot is None:
         raise ChatRunUnavailable("AGENT_RUN_NO_RESULT", "agent run produced no result")
@@ -813,7 +813,7 @@ def answer_matches_snapshot(result: Any, snapshot: dict[str, Any]) -> bool:
     同一条 run 的结果交出去。语言按受支持的那几种都试一遍 —— 缓存正文的渲染语言
     与本次请求头无关，用请求头去比对会把一次正常的换语言回读判成篡改。
     """
-    from aiops_diagnostics.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
     return any(result == status_answer(snapshot, language) for language in ANSWER_LANGUAGES)
 

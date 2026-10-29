@@ -76,8 +76,8 @@ QA 作业按原范围指纹隔离。私有 `<data_home>/consumer-order-chat/<qa_
 复跑：
 
 ```bash
-PYTHONPATH=$PWD/src uv run pytest tests/test_consumer_order_chat.py -ra
-PYTHONPATH=$PWD/src uv run pytest tests/test_consumer_order_chat.py -k real_http -ra
+PYTHONPATH=$PWD/src uv run pytest tests/consumer/test_consumer_order_chat.py -ra
+PYTHONPATH=$PWD/src uv run pytest tests/consumer/test_consumer_order_chat.py -k real_http -ra
 uv run python .claude/skills/verify-aiops-gateway/scripts/observe.py
 ```
 
