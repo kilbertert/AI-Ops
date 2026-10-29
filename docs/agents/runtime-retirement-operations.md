@@ -6,9 +6,10 @@
 ## 依赖漂移拦住CD时
 
 1. 保持旧服务运行，备份源码、完整虚拟环境、依赖清单和两份环境配置。业务数据库单独保留，不以恢复源码为由倒回业务数据。
-2. 在开发机按合并修订`uv.lock`及目标Python/平台下载wheel，打包摘要制品，经`dev-host cp --artifact-sha256`送到声明的备份区域。
-3. 现场核摘要。用服务虚拟环境的`uv pip install --python <服务Python> --no-index --find-links <wheelhouse>`安装合并锁依赖，
-   第一阶段不移除旧进程仍需的包。合并清单同包交付，再重跑原CD；不要跳过依赖漂移门。
+2. 在干净合并checkout运行`uv export --frozen --no-dev --no-emit-project --format requirements-txt -o runtime-requirements.txt`，
+   按目标Python/平台下载其中锁定的wheel；把清单、wheelhouse、合并`pyproject.toml`/`uv.lock`打包为摘要制品，经`dev-host cp --artifact-sha256`送到声明的备份区域。
+3. 现场核摘要。用服务虚拟环境的`uv pip install --python <服务Python> --no-index --find-links <wheelhouse> --require-hashes -r <runtime-requirements.txt>`安装合并锁依赖，
+   第一阶段不移除旧进程仍需的包。确认安装成功后把合并`pyproject.toml`和`uv.lock`两份清单同步到服务应用根，再重跑原CD；不要跳过依赖漂移门。
 4. CD源码成功后，在原服务目录重新安装editable入口；离线构建同时准备hatchling和editables。
    确认import仍指向部署源码，`aiops-admin`存在，最后移除已退役的SDK/打包依赖，`uv pip check`通过。
 5. 私有配置读取必须以服务身份运行。`gateway.env`用于进程配置，`production.env`由项目配置读取器解释；

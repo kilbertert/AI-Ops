@@ -5,9 +5,10 @@
 
 ## 当前交付与退役范围
 
-本分支完成 Python Thin Harness 的代码退役：删除诊断/交互式/设备 CLI、Codex 子进程、
+已完成 Python Thin Harness 的代码退役：删除诊断/交互式/设备 CLI、Codex 子进程、
 工具循环、恢复工作区、旧诊断 HTTP 面和专属便携打包。运维入口保留为 `aiops-admin`。
-这表示候选代码已改变，不表示生产已部署或业务准确率已经验收。
+退役版本`1.0.0+fbab0f739322`已部署，C端/管家原H5及Dify原生预览链路已验收；
+详见[真实验收回执](docs/validation/2026-10-29-runtime-retirement-live.md)。历史故障准确率和长期稳定性仍未验收。
 
 - C端聊天及订单检测快捷动作进入其 WF01 路线；订单检测使用本人订单状态分支，
   不再承诺旧 Python 的多源根因报告。独立状态查询和已有节点绑定保留。
@@ -18,7 +19,7 @@
 
 详细边界见[退役说明](docs/runtime-retirement.md)，阶段与线上最后证据见
 [交付状态](docs/agents/current-delivery-state.md)和[测试交接](docs/testing-handoff.md)。
-目录迁移在本次清理验收后另做，本分支未移动现有目录。
+目录迁移已在退役切换验收后进入第一片，逐片同步构建、测试和部署引用。
 
 ## 一、系统与入口
 

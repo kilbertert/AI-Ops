@@ -912,7 +912,7 @@ ssh aiops-41 'rsync -an --delete --itemize-changes \
 # 在 41 上，把仓库那份（如 scp 到 /tmp/env-41.toml）装成一个明确的工作副本
 install -o aiops41 -g aiops41 -m 0640 /tmp/env-41.toml /opt/aiops-41/ops/environments/env-41.toml.new
 cd /opt/aiops-41
-runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admin reconcile \
+runuser -u aiops41 -- .venv/bin/aiops-admin --config /etc/aiops-41/production.env reconcile \
   ops/environments/env-41.toml.new \
   --db /var/lib/aiops-41/gateway/gateway.db \
   --kb-url http://127.0.0.1:29380 --dry-run
@@ -960,11 +960,11 @@ scp <worktree>/ops/environments/env-41.toml aiops-41:/tmp/env-41-repo.toml
 sha256sum ops/environments/env-41.toml
 ```
 
-**整份 `admin reconcile` 也同理**：它读的就是同一个路径，用旧清单等于按旧声明收敛。
+**整份 `reconcile` 也同理**：它读的就是同一个路径，用旧清单等于按旧声明收敛。
 
 ### 3.1-bis 只收敛 `[[dify_apps]]`（2026-10-20 新增）
 
-**什么时候用它而不是整份 `admin reconcile`**：要改的只是「哪个 app 服务哪个
+**什么时候用它而不是整份 `reconcile`**：要改的只是「哪个 app 服务哪个
 `(租户, 入口)`」，而 `[[agents]]` 那一半**本来就有已知漂移**。实测（2026-10-20）：
 拿仓库那份跑整份 `reconcile --dry-run`，`1942…/canary-客服` 报 `updated` —— 差异来自
 清单里写了 `opening_questions` / `quick_commands` 而库中现值是空。**整份收敛会 fork 并
@@ -1198,8 +1198,8 @@ list / all-workspaces / summary / switch / custom-config / info / permission —
 
 ```bash
 runuser -u aiops41 -- env AIOPS_GATEWAY_ENVIRONMENT=41 \
-  /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/production.env \
-  admin grant-tenant-access \
+  /opt/aiops-41/.venv/bin/aiops-admin --config /etc/aiops-41/production.env \
+  grant-tenant-access \
     --tenant <租户 id> \
     --account-id <该人在 Dify 里的账号 id> \
     --email <该账号在 Dify 里的 email，必须逐字一致>
@@ -1590,14 +1590,14 @@ manager.publish(admin, updated.shortcut_id, expected_revision=updated.revision)
 - 改前先做精确 SQLite 备份（见 §5 的备份纪律）。
 
 
-### 3.1-quater 拉回：`admin pull-dify`（2026-10-13 新增，PR-2）
+### 3.1-quater 拉回：`pull-dify`（2026-10-13 新增，PR-2）
 
 **用途**：运营在 Dify 控制台改好一个 app 的正文之后，把它**拉回并经我方发布门冻结**。
 这是阶段 1 链的第二跳；第一跳在 Dify，第三跳是运行时服务提问。
 
 ```bash
 cd /opt/aiops-41
-runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admin pull-dify \
+runuser -u aiops41 -- .venv/bin/aiops-admin --config /etc/aiops-41/production.env pull-dify \
   --app-id <dify app id> --tenant <租户 id> --name <我方 agent 名> \
   --agent-type customer \
   --knowledge-base-id <我们的知识库 id> \
@@ -1623,7 +1623,7 @@ runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admi
 `model_config`、只改要改的字段 —— **不要发一个不完整的 body**，那会把别的字段重置。
 落笔前先在**一次性 app** 上排练一遍（create → model-config → export → delete），
 并在写后 `GET …/export` **逐字回读**核对。
-### 3.1-quinquies 运营改完 Dify 之后：`admin sync-from-dify`（2026-10-13 新增）
+### 3.1-quinquies 运营改完 Dify 之后：`sync-from-dify`（2026-10-13 新增）
 
 **用途**：运营在 Dify 控制台改了某个智能体的正文，**把这一改动变成线上生效的版本**。
 这是「运营自助改口径」这条链**唯一还缺的那一步**（第一跳在 Dify，第三跳是运行时服务提问）。
@@ -1631,7 +1631,7 @@ runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admi
 ```bash
 cd /opt/aiops-41
 # 先看会做什么（零写入）
-runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admin sync-from-dify \
+runuser -u aiops41 -- .venv/bin/aiops-admin --config /etc/aiops-41/production.env sync-from-dify \
   --db /var/lib/aiops-41/gateway/gateway.db --kb-url http://127.0.0.1:29380 --dry-run
 # 确认为 1 条 synced / 其余 unchanged 之后，去掉 --dry-run 实跑
 ```
@@ -1682,14 +1682,14 @@ Dify **没有草稿区** —— 41 上实测：保存 config 之后，`GET …/e
 | 模型 | ⚠️ 改成白名单外（非 `deepseek-v4-flash`）会让**拉取失败** |
 | 开场白 / 预设问题 / 知识库 / 工具 / 编排 | ❌ 运行时**不读**（权威在我们侧，#585；Dify 的 dataset id 也不是我们的知识库 id） |
 
-### 3.1-sexies 开户：`admin ensure-workspace`（#880，2026-10-21 新增）
+### 3.1-sexies 开户：`ensure-workspace`（#880，2026-10-21 新增）
 
 **用途**：给一个公司租户在 Dify 里建出它**自己的** workspace（`aiops-{env}-{tenant}`）。
 
 ```bash
 # 在**该环境自己的机器**上跑（库在本机，36 写不到 41 的库）
-runuser -u aiops41 -- /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/production.env \
-  admin ensure-workspace --tenant <租户 id> --db /var/lib/aiops-41/gateway/gateway.db
+runuser -u aiops41 -- /opt/aiops-41/.venv/bin/aiops-admin --config /etc/aiops-41/production.env \
+  ensure-workspace --tenant <租户 id> --db /var/lib/aiops-41/gateway/gateway.db
 ```
 
 **三条会踩到的**：
@@ -1711,7 +1711,7 @@ runuser -u aiops41 -- /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/produ
 | `failed`（非零退出） | Dify **明确**没建（4xx/5xx 或连接被拒） | 直接重跑即可 |
 | `unknown`（非零退出） | 超时/读中断，**可能已经建了** | 重跑会先按名字对账，不要手工建第二个 |
 
-### 3.1-septies 让它能用：`admin ensure-ready`（#881，2026-10-21 新增）
+### 3.1-septies 让它能用：`ensure-ready`（#881，2026-10-21 新增）
 
 **用途**：`ensure-workspace` 建出来的是**空壳**（没有模型插件、没有 provider 凭据、没有
 app）。这一步把它推到 `ready`：装插件 → 写这个 workspace 自己的 provider 凭据 → 导模板 DSL。
@@ -1722,8 +1722,8 @@ app）。这一步把它推到 `ready`：装插件 → 写这个 workspace 自�
 # 2026-10-22 在 41 上实测过。两个文件都要进环境变量（后者里的键由 --config 读）。
 runuser -u aiops41 -- bash -c '
   set -a; . /etc/aiops-41/gateway.env; set +a
-  exec /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/production.env \
-    admin ensure-ready --tenant <租户 id> --db /var/lib/aiops-41/gateway/gateway.db'
+  exec /opt/aiops-41/.venv/bin/aiops-admin --config /etc/aiops-41/production.env \
+    ensure-ready --tenant <租户 id> --db /var/lib/aiops-41/gateway/gateway.db'
 # 平台账号用 --tenant platform
 ```
 
