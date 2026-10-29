@@ -515,8 +515,8 @@ sequenceDiagram
 |---|---|
 | 授权判定（全部代码 3 行） | `src/aiops_diagnostics/identity/caller_auth.py:348` |
 | 范围解析 | `src/aiops_diagnostics/identity/query_scope.py:256` |
-| SQL 谓词渲染 | `src/aiops_diagnostics/sources.py:235` |
-| 工单哨兵常量 | `src/aiops_diagnostics/sources.py:172` |
+| SQL 谓词渲染 | `src/aiops_diagnostics/data/sources.py:235` |
+| 工单哨兵常量 | `src/aiops_diagnostics/data/sources.py:172` |
 | 入口判据 | `src/aiops_diagnostics/identity/scope_context.py:600` |
 | 顶层账号判据 | `src/aiops_diagnostics/identity/scope_context.py:75` |
 | 会话身份 | `src/aiops_diagnostics/identity/third_session_auth.py:217` |

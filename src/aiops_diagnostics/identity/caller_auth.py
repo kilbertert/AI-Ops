@@ -22,6 +22,7 @@ from aiops_diagnostics.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.data.sources import mysql_site_mapper, scoped_live_sources
 from aiops_diagnostics.identity.query_scope import (
     QueryScope,
     ShopDirectory,
@@ -39,7 +40,6 @@ from aiops_diagnostics.identity.scope_context import (
     SubjectRecord,
     UpmsDirectory,
 )
-from aiops_diagnostics.sources import mysql_site_mapper, scoped_live_sources
 
 _LOGGER = logging.getLogger(__name__)
 

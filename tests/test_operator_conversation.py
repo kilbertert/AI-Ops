@@ -5,11 +5,11 @@ from dataclasses import replace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from test_operator_cpms import APP, HEADERS, NODE_A_TOKEN, environment, terminal
+from operations.test_operator_cpms import APP, HEADERS, NODE_A_TOKEN, environment, terminal
 
 from aiops_diagnostics import operator_conversation as conversation
-from aiops_diagnostics import operator_cpms
 from aiops_diagnostics.identity.scope_context import DataScope
+from aiops_diagnostics.operator import operator_cpms
 
 
 @pytest.fixture

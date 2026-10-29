@@ -4,10 +4,10 @@ import json
 from pathlib import Path
 
 from aiops_diagnostics.config import SafetySettings
-from aiops_diagnostics.health_curves import build_curves
-from aiops_diagnostics.health_metrics import enrich_report
-from aiops_diagnostics.health_report import build_minimal_health_report
-from aiops_diagnostics.sources import FixtureSources
+from aiops_diagnostics.data.sources import FixtureSources
+from aiops_diagnostics.health.health_curves import build_curves
+from aiops_diagnostics.health.health_metrics import enrich_report
+from aiops_diagnostics.health.health_report import build_minimal_health_report
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "examples" / "synthetic-acceptance" / "synthetic_acceptance.json"

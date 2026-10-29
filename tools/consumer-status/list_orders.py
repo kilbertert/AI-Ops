@@ -20,13 +20,13 @@ def main() -> int:
         return 2
 
     from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.data.sources import scoped_mysql_source
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.identity.query_scope import resolve_query_scope
     from aiops_diagnostics.identity.third_session_auth import (
         RedisThirdSessionResolver,
         ThirdSessionSettings,
     )
-    from aiops_diagnostics.sources import scoped_mysql_source
 
     settings = GatewayServerSettings.from_env()
     runtime = Settings.from_config(pathlib.Path("/etc/aiops-41/production.env"))

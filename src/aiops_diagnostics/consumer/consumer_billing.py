@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 
 from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, parse_code_data_envelope, request_json
-from aiops_diagnostics.charging_status import ChargingStatusError
+from aiops_diagnostics.data.charging_status import ChargingStatusError
 from aiops_diagnostics.gateway_config import canonical_gateway_url
 
 BILLING = re.compile(r"退款|支付|付款|账单|账务|refund|payment|billing", re.I)

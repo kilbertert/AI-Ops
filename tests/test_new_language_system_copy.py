@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from aiops_diagnostics.health_report_copy import (
+from aiops_diagnostics.health.health_report_copy import (
     HEALTH_CURVE_NAMES,
     HEALTH_STOP_FALLBACK_MESSAGES,
     HEALTH_SUMMARY_MESSAGES,

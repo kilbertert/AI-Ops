@@ -213,7 +213,7 @@ def _install_default_deps(monkeypatch: pytest.MonkeyPatch, table: list[dict[str,
     只替换三样：MySQL 驱动（换成合成表）、身份解析、端点与 CPMS。
     `default_deps` 里"用 `get_orders` 补 `id`"的那段代码**原样执行** —— 那正是被测对象。
     """
-    from aiops_diagnostics import sources as sources_module
+    from aiops_diagnostics.data import sources as sources_module
 
     conn = FakeConnection(table)
     monkeypatch.setattr(sources_module.pymysql, "connect", lambda **_: conn, raising=True)
@@ -238,7 +238,7 @@ def _install_default_deps(monkeypatch: pytest.MonkeyPatch, table: list[dict[str,
 
         monkeypatch.setattr(sources_module, "scoped_mysql_source", scoped)
 
-        from aiops_diagnostics import charging_status
+        from aiops_diagnostics.data import charging_status
 
         monkeypatch.setattr(
             charging_status,

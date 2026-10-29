@@ -160,7 +160,7 @@ def test_the_device_entry_guard_is_implemented_once() -> None:
 #: caller/subject/requested tenant. None of them decides which orders a run may
 #: see, so routing them through this rule would be wrong, not thorough.
 VISIBILITY_MODULES = (
-    "sources.py",
+    "data/sources.py",
     "gateway_api.py",
     "gateway_runtime.py",
 )
@@ -280,7 +280,7 @@ def test_blocked_tenants_are_sorted_and_deduplicated() -> None:
 #
 # The row-level rendering above and the SQL rendering below are two views of one
 # definition. The equivalence is pinned twice: here against the rendering itself,
-# and in ``tests/test_mysql_scope.py`` against the real ``MySQLSource._scope_where``
+# and in ``tests/data/test_mysql_scope.py`` against the real ``MySQLSource._scope_where``
 # output, which is the only production consumer of the SQL rendering.
 
 
@@ -368,7 +368,7 @@ def test_the_placeholder_is_the_driver_marker_not_part_of_the_rule() -> None:
 
 
 def test_fixture_source_uses_the_shared_rule(tmp_path: Path) -> None:
-    from aiops_diagnostics.sources import FixtureSources
+    from aiops_diagnostics.data.sources import FixtureSources
 
     payload = {
         "orders": [
@@ -414,7 +414,7 @@ def test_the_fixture_source_filters_every_lookup_through_the_shared_rule(tmp_pat
     matched on one lookup and missed on the others — the drift this PRD removes,
     inside one source. They now all go through the same row-level rendering.
     """
-    from aiops_diagnostics.sources import FixtureSources
+    from aiops_diagnostics.data.sources import FixtureSources
 
     source = FixtureSources(_order_fixture(tmp_path))
 
@@ -441,7 +441,7 @@ def test_a_blank_tenant_sees_nothing_rather_than_everything(tmp_path: Path) -> N
     ``normalize_tenant(tenant_id) is None`` and pinned that behavior here, while
     the same commit's stated intent was "blank renders as nothing visible".
     """
-    from aiops_diagnostics.sources import FixtureSources
+    from aiops_diagnostics.data.sources import FixtureSources
 
     source = FixtureSources(_order_fixture(tmp_path))
 

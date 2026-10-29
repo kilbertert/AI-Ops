@@ -495,7 +495,7 @@ def test_a_token_without_shop_binding_denies_every_order_without_issuing_sql(
     """``shop_ids`` 为空 ⇒ 站点集合 Ø ⇒ 订单查询被拒**且不发起 SQL**（不是「不限制」）。"""
     context = _resolve(monkeypatch, payload={**CLAIMS, "shop_ids": []})
     connection = Connection()
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
 
     authorizer = ScopedOrderAuthorizer(mysql_settings())
 
@@ -510,7 +510,7 @@ def test_an_order_outside_the_operators_sites_is_refused(
     """站点集合内的单放行、集合外的拒：证明拒绝不是「全部拒掉」。"""
     context = _resolve(monkeypatch, mapper=_Mapper({"SHOP-1": (SITE_IN,)}))
     connection = Connection()
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
 
     authorizer = ScopedOrderAuthorizer(mysql_settings())
 
@@ -650,7 +650,7 @@ def test_a_short_source_key_is_a_startup_error(tmp_path: Path) -> None:
 
 def _company_token_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mapper: _Mapper):
     connection = Connection()
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
     monkeypatch.setattr(
         "aiops_diagnostics.bounded_http.urllib.request.urlopen",
         lambda *_a, **_k: _Response(CLAIMS),
@@ -725,7 +725,7 @@ def _parity_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     入口头打不开东西」会得到假绿。生产形状下 `_jwt` 造的令牌才是唯一能进门的形态。
     """
     connection = Connection()
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
     resolver = CompanyTokenCallerResolver(
         _parity_settings(),
         mysql_settings(),
@@ -914,7 +914,7 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
     「无论怎样都是同一个替身」蒙过去；服务令牌与 Redis 会话都配好，于是两条链各自成立。
     """
     connection = Connection()
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
     monkeypatch.setattr(
         "aiops_diagnostics.bounded_http.urllib.request.urlopen", lambda *_a, **_k: _Response(CLAIMS)
     )

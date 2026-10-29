@@ -997,7 +997,7 @@ def submit_trial(
         timeout=timeout,
     )
     # 名字用 ``http_status`` 与本文件其余部分一致（``publish_current_app`` 也是这么叫的）：
-    # 裸名 ``status`` 会让 ``tests/test_order_status.py`` 的结构判据把它当成**订单状态**
+    # 裸名 ``status`` 会让 ``tests/data/test_order_status.py`` 的结构判据把它当成**订单状态**
     # 的内联数字判据 —— 那条判据是 PRD #732 用来拦住"订单状态又多一份拼写"的，不该为了
     # 一个 HTTP 状态码去放宽它。
     #

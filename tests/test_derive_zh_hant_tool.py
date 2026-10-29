@@ -134,7 +134,7 @@ def test_the_walker_reaches_the_real_tables(tool, cc) -> None:
     assert len(stale) >= 50, f"遍历没有覆盖到真实文案表，只报了 {len(stale)} 条"
     for marker in (
         "aiops_diagnostics.i18n.QA_FALLBACK_MESSAGES",
-        "aiops_diagnostics.health_report_copy.HEALTH_SUMMARY_MESSAGES",
+        "aiops_diagnostics.health.health_report_copy.HEALTH_SUMMARY_MESSAGES",
         "shortcut_lifecycle._BUNDLED_SHORTCUTS",
         "shortcut_lifecycle._SHARED_ACTION_FIELDS",
     ):

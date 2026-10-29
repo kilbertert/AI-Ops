@@ -29,7 +29,7 @@ IDENTITY_FILES = (
     "src/aiops_diagnostics/gateway_api.py",
     "src/aiops_diagnostics/execution/agent_runs.py",
     "src/aiops_diagnostics/gateway_config.py",
-    "src/aiops_diagnostics/charging_status.py",
+    "src/aiops_diagnostics/data/charging_status.py",
     "tools/m2_close/harness_guard.py",
     "tools/m2_close/run_ic.py",
     "tools/m2_close/synthetic_upstream.py",

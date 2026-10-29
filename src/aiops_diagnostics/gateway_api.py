@@ -21,7 +21,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from aiops_diagnostics import __version__, request_observation
 from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS, QUESTION
-from aiops_diagnostics.charging_status import ChargingStatusError, read_charging_status
 from aiops_diagnostics.clarification import (
     CLARIFY_LANGUAGE_UNROUTABLE,
     CLARIFY_ORDER_REQUIRED,
@@ -41,6 +40,8 @@ from aiops_diagnostics.conversation_store import (
     ConversationError,
     ConversationStore,
 )
+from aiops_diagnostics.data.charging_status import ChargingStatusError, read_charging_status
+from aiops_diagnostics.data.sources import SourceError, scoped_mysql_source
 from aiops_diagnostics.dify.dify_debug_identity import (
     PRODUCTION_IDENTITY,
     DifyIdentity,
@@ -178,7 +179,6 @@ from aiops_diagnostics.publication.shortcut_lifecycle import (
     ShortcutNotFound,
     ShortcutStore,
 )
-from aiops_diagnostics.sources import SourceError, scoped_mysql_source
 
 _LOGGER = logging.getLogger("aiops.gateway")
 
@@ -1450,7 +1450,7 @@ def create_gateway_app(
         lifespan=lifespan,
     )
     app.state.gateway = context
-    from aiops_diagnostics.operator_cpms import OperatorCpms, OperatorRefused
+    from aiops_diagnostics.operator.operator_cpms import OperatorCpms, OperatorRefused
 
     context.operator_cpms = OperatorCpms(context)
     from aiops_diagnostics.dify.self_service_api import register as register_self_service
@@ -2275,9 +2275,9 @@ def create_gateway_app(
             bound = app_binding(context.settings, payload.app_id)
             target = target_for(context.settings, bound) if bound is not None else None
             if target is not None and target.entry == "operator":
-                from aiops_diagnostics import operator_cpms
                 from aiops_diagnostics.dify.dify_dsl_pull import DifyDslSource
                 from aiops_diagnostics.execution.node_publication import candidate
+                from aiops_diagnostics.operator import operator_cpms
 
                 session = request.headers.get("X-AIOps-Console-Session", "")
 
@@ -2422,7 +2422,7 @@ def create_gateway_app(
         两个路由走同一个 ``_trial_run_context``，这条不可能漂。
         """
         if trial_id.startswith("qa_"):
-            from aiops_diagnostics import operator_cpms
+            from aiops_diagnostics.operator import operator_cpms
 
             caller, bearer = authenticated_operator_console(
                 context, request.headers.get("X-AIOps-Console-Session", "")
@@ -2685,8 +2685,8 @@ def create_gateway_app(
                     )
 
         if str(decision.platform) == "operator" and payload.shortcut_code != OPERATIONS_REVIEW_CODE:
-            from aiops_diagnostics import operator_cpms
             from aiops_diagnostics.execution.node_publication import all_targets
+            from aiops_diagnostics.operator import operator_cpms
 
             try:
                 binding = chat_execution.select_binding(
@@ -3069,7 +3069,7 @@ def create_gateway_app(
             questions = context.runtime.list_assistant_qa(caller, limit=limit)
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
-        from aiops_diagnostics.operator_cpms import PREFIX, OperatorRefused
+        from aiops_diagnostics.operator.operator_cpms import PREFIX, OperatorRefused
 
         for qa in questions:
             if str(qa.get("internal_run_id") or "").startswith(PREFIX):
@@ -5996,7 +5996,7 @@ def _consumer_order_chat(context, caller, decision, payload, conversation, langu
 
 
 def authenticated_operator_console(context, session):
-    from aiops_diagnostics.operator_cpms import OperatorRefused
+    from aiops_diagnostics.operator.operator_cpms import OperatorRefused
 
     identity = context.operator_cpms.console_identity(session)
     caller = _authenticate_caller(
@@ -6022,7 +6022,7 @@ def _require_operator_company_token(request):
 
 
 async def _operator_json(request):
-    from aiops_diagnostics.operator_cpms import OperatorRefused
+    from aiops_diagnostics.operator.operator_cpms import OperatorRefused
 
     raw = bytearray()
     try:
@@ -6057,7 +6057,7 @@ def authenticated_chat_order_reader(context, caller, request):
 
 
 def _require_current_chat_order(context, caller, qa, request):
-    from aiops_diagnostics import operator_cpms
+    from aiops_diagnostics.operator import operator_cpms
 
     if str(qa.get("internal_run_id") or "").startswith(operator_cpms.PREFIX):
         if qa["status"] == "completed":

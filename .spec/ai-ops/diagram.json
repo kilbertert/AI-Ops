@@ -98,7 +98,7 @@
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/sources.py",
+          "path": "src/aiops_diagnostics/data/sources.py",
           "label": "code"
         }
       ],

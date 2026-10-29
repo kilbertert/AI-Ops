@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PY_SOURCES = PROJECT_ROOT / "src" / "aiops_diagnostics" / "sources.py"
+PY_SOURCES = PROJECT_ROOT / "src" / "aiops_diagnostics" / "data" / "sources.py"
 JAVA_ROOT = (
     PROJECT_ROOT
     / "java"

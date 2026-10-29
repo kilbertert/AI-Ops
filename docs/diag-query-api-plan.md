@@ -42,7 +42,7 @@ AI-Ops(充电订单只读诊断运行时)目前持有生产库凭据,直连 MySQ
 
 ## 2. 现状盘点
 
-### 2.1 AI-Ops 直查库实现(全部在 `src/aiops_diagnostics/sources.py`)
+### 2.1 AI-Ops 直查库实现(全部在 `src/aiops_diagnostics/data/sources.py`)
 
 | 查询函数 | 数据源 | 目标表/键 | 关键行为 |
 |---|---|---|---|
@@ -412,7 +412,7 @@ Feature: 诊断查询接口
 
 | 事实 | 位置 |
 |---|---|
-| AI-Ops 直查实现(6 函数 + doctor) | `AI-Ops/src/aiops_diagnostics/sources.py` |
+| AI-Ops 直查实现(6 函数 + doctor) | `AI-Ops/src/aiops_diagnostics/data/sources.py` |
 | 诊断工具与契约枚举 | `AI-Ops/src/aiops_diagnostics/diagnostic_tools.py`、`agent_contracts.py` |
 | 直连凭据(仓库外) | `/home/claude/.config/aiops-diagnostics/production.env` |
 | 内部令牌算法 | `backend-v2-domestic/cloud-common/cloud-common-auth/.../component/InternalTokenManager.java` |

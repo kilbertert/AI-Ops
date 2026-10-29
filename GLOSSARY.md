@@ -133,7 +133,7 @@ _Avoid_: 「支付失败率」、把未支付直接叫失败、按桶算出一�
 _Avoid_: 「任何异常」（那是三种状态的并集）、按停止码现算、把未支付也算进去
 
 > **角色判定在代码里只有一个落点**：`order_status.role_of` / `is_abnormal_end` /
-> `is_normal_end` / `is_charging`（`src/aiops_diagnostics/order_status.py`）。
+> `is_normal_end` / `is_charging`（`src/aiops_diagnostics/data/order_status.py`）。
 > `rules.ORDER_STATUS` 是**标签**权威（它叫什么），角色权威是它下面的语义（它是什么），
 > 两张表覆盖同一组 code。`failure_rate` 的分子、`engine` 的分类、SQL 谓词与
 > `definition.abnormal` 都由角色派生 —— 它们此前各写一份（PRD #732）。

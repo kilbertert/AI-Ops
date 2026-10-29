@@ -170,7 +170,7 @@ def register(app, context):
         row = service.authorize_app(caller, payload.app_id)
         if caller.tenant_id != row["tenant_id"]:
             return {"can_diagnose": False, "reason": "请使用该客户的公司账号预览订单"}
-        from aiops_diagnostics.operator_cpms import OperatorRefused
+        from aiops_diagnostics.operator.operator_cpms import OperatorRefused
 
         try:
             context.self_service_operator_identity(session)

@@ -5,11 +5,11 @@ hue: 160
 code:
   - src/aiops_diagnostics/identity/order_visibility.py
 related:
-  - src/aiops_diagnostics/order_status.py
-  - src/aiops_diagnostics/rules.py
-  - src/aiops_diagnostics/health_metrics.py
-  - src/aiops_diagnostics/health_curves.py
-  - src/aiops_diagnostics/health_report_copy.py
+  - src/aiops_diagnostics/data/order_status.py
+  - src/aiops_diagnostics/health/rules.py
+  - src/aiops_diagnostics/health/health_metrics.py
+  - src/aiops_diagnostics/health/health_curves.py
+  - src/aiops_diagnostics/health/health_report_copy.py
 ---
 # l1-domain
 

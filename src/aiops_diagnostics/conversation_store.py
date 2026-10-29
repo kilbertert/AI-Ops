@@ -92,7 +92,7 @@ class ConversationStore:
                 -- 于是：绑定失效（Route 1c 每轮重校验）与窗口排除是**两件事**，
                 -- 前者立刻生效，后者今天做不到。危险方向是把它读成「既然绑定了就一定有授权」。
                 -- 补这条边要改会话表结构，而 PRD #410 明示不改；本风险已由
-                -- tests/test_operator_negative_acceptance.py 的
+                -- tests/operations/test_operator_negative_acceptance.py 的
                 -- test_history_window_keeps_a_turn_whose_order_left_the_scope 钉住。
                 -- 边界：跨主体/跨范围的整个会话 404，那是另一道门，不在本注释范围内。
                 CREATE TABLE IF NOT EXISTS conversation_turns (

@@ -110,6 +110,7 @@ from aiops_diagnostics.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.data.sources import SourceError, mysql_site_mapper
 from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_INVALID,
     CALLER_AUTH_UNAVAILABLE,
@@ -131,7 +132,6 @@ from aiops_diagnostics.identity.scope_context import (
     is_operator_entry,
     is_tenant_level_account,
 )
-from aiops_diagnostics.sources import SourceError, mysql_site_mapper
 
 _LOGGER = logging.getLogger(__name__)
 

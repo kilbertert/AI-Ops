@@ -2,10 +2,10 @@
 title: l3-evidence
 desc: 现役有界数据与知识读取
 code:
-  - src/aiops_diagnostics/sources.py
+  - src/aiops_diagnostics/data/sources.py
 related:
-  - src/aiops_diagnostics/health_report.py
-  - src/aiops_diagnostics/charging_status.py
+  - src/aiops_diagnostics/health/health_report.py
+  - src/aiops_diagnostics/data/charging_status.py
   - src/aiops_diagnostics/knowledge/knowledge_retrieval.py
 ---
 # l3-evidence

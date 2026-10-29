@@ -6,7 +6,7 @@ import pytest
 
 from aiops_diagnostics import model_request
 from aiops_diagnostics.config import AgentSettings, ProviderConfig
-from aiops_diagnostics.ops_analysis_narrative import run_narrative_turn
+from aiops_diagnostics.operator.ops_analysis_narrative import run_narrative_turn
 
 
 @pytest.mark.parametrize("wire", ["responses", "chat"])
@@ -97,7 +97,7 @@ def test_provider_key_keeps_private_file_checks(tmp_path):
 def test_narrative_must_be_complete(monkeypatch, payload):
     monkeypatch.setenv("AIOPS_CODEX_API_KEY", "test-key")
     monkeypatch.setattr(
-        "aiops_diagnostics.ops_analysis_narrative.structured_request", lambda **kwargs: payload
+        "aiops_diagnostics.operator.ops_analysis_narrative.structured_request", lambda **kwargs: payload
     )
     with pytest.raises(RuntimeError):
         run_narrative_turn({"total": 1}, AgentSettings())

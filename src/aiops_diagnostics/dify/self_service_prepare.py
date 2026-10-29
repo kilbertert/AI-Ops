@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 
 import yaml
 
-from aiops_diagnostics.ops_provider import ensure_node_provider
+from aiops_diagnostics.operator.ops_provider import ensure_node_provider
 from aiops_diagnostics.private_files import validate_private_file
 
 from .dify_ensure_workspace import ensure_workspace
