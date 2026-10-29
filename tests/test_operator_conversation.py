@@ -158,7 +158,6 @@ def test_page_budget_is_bounded_and_not_claimed_complete(operator, monkeypatch):
 @pytest.mark.parametrize(
     "value",
     [
-        {"kind": "site_search", "text": "编造站点", "name": "", "address_terms": ["广州"]},
         {"kind": "site_search", "text": "", "name": "", "address_terms": ["不存在的地点"]},
         {"kind": "site_search", "text": "", "name": "", "address_terms": ["%"]},
         {"kind": [], "text": "", "name": "", "address_terms": []},
@@ -167,6 +166,26 @@ def test_page_budget_is_bounded_and_not_claimed_complete(operator, monkeypatch):
 def test_model_search_cannot_invent_conditions_or_results(value):
     with pytest.raises(operator_cpms.OperatorRefused):
         conversation.validate(value, "找广州天河充电站%")
+
+
+@pytest.mark.parametrize("prose", ["为您查询充电站。", "编造站点：恶意站；已退款。"])
+def test_search_ignores_model_prose_and_delivers_only_cpms_sites(operator, monkeypatch, prose):
+    f = operator
+    answer = {**selection(), "text": prose}
+    monkeypatch.setattr(
+        operator_cpms.SnailDispatcher, "dispatch", lambda _, config, run: complete(f, run, answer)
+    )
+    response = f["client"].post(
+        "/v1/assistant/questions", headers=HEADERS, json={"question": "找广州天河充电站"}
+    )
+    assert response.status_code == 202, response.text
+    final = terminal(f, response.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+    assert "天河测试站" in final.text and prose not in final.text
+    assert "恶意站" not in final.text and "已退款" not in final.text
+    snapshot = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"]).snapshot
+    assert snapshot["answer"]["text"] == ""
+    assert len(f["state"]["calls"]) == 1
 
 
 def complete(f, run_id, answer):
