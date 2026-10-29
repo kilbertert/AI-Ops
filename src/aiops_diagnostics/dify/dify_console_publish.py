@@ -556,6 +556,52 @@ _REFUSED_ROLE = "只有工作空间的所有者或管理员可以发布到线上
 _REFUSED_WORKSPACE = "当前不在可发布的工作空间，请切换到正确的工作空间后再试"
 _UNCONFIRMED = "发布结果无法确认，请到 AI-Ops 核对线上版本后再试"
 
+#: 网关拒绝时**能照着做**的那几种。其余一律仍回 ``_UNCONFIRMED``：说不清原因比说错
+#: 原因好 —— 一个猜出来的下一步会把人引到错误的地方（这条教训已经付过两次学费：
+#: 404 的两种含义、以及"发布未通过发布门"统一吞掉``CONSUMER_FLOW_INVALID``）。
+#:
+#: **只翻网关自己的 ``error.message``，不复述它的内部码**：``CONSUMER_FLOW_INVALID``
+#: 这类标识对运营没有信息量，真正有用的是它后面那句人话（"所选知识库已删除……"）。
+_GATEWAY_REFUSALS = {
+    # 受管试用：公司身份缓存只保留 15 分钟（``dify_login_service`` 的 ``now + 900``），
+    # 而 Dify 会话本身活得久得多 —— 于是"页面还能开、试运行 403"是常态而不是故障。
+    # 原来它被压成"发布结果无法确认"，运营只会反复点。
+    "OPERATOR_TRIAL_LOGIN_REQUIRED": "公司登录已过期（控制台约 15 分钟需重新登录一次），请重新登录后再试",
+    "OPERATOR_TRIAL_LOGIN_CHANGED": "登录身份已变化，请重新登录后再试",
+    # 编排契约拒绝：网关已经写好了人话（例如"所选知识库已删除或不属于当前租户"）。
+    "CONSUMER_FLOW_INVALID": "",
+    # 受管应用的绑定/路由在服务端对不上 —— 这件事运营改不了。
+    "NODE_TARGET_MISSING": "这个智能体还没配置可用的执行节点，请联系工程",
+    "CHAT_ROUTE_BINDING_MISMATCH": "这条路由指向了另一个智能体，请联系工程核对后再发布",
+}
+
+#: ``error.message`` 只有在像"给人看的一句话"时才转出去：上限截断，且不含内部前缀。
+_MAX_REASON_CHARS = 200
+
+
+def _gateway_reason(error: Any, fallback: str) -> str:
+    """把网关的 ``error`` 翻成一句运营能照着做的话，翻不出来就用 ``fallback``。
+
+    **词表优先，网关原文只填空。** 我们自己写的那句是为了告诉运营下一步做什么
+    （"重新登录"），网关的 ``message`` 只说明它拒了什么（``operator request unavailable``）；
+    反过来用就会把一句能照做的话换成一句看得懂但没用的话。词表里留空的那几项才是
+    "原文比我们写得好"的情形 —— 那时才转 ``message``。
+
+    ``message`` 里出现 ``UPPER_SNAKE`` 标识说明它自己也是内部话术，那时**不转**。
+    """
+    if not isinstance(error, Mapping):
+        return fallback
+    code = (_str_field(error, "code") or "").strip()
+    if code not in _GATEWAY_REFUSALS:
+        return fallback
+    written = _GATEWAY_REFUSALS[code]
+    if written:
+        return written
+    detail = (_str_field(error, "message") or "").strip()
+    if detail and not re.search(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b", detail):
+        return detail[:_MAX_REASON_CHARS]
+    return fallback
+
 
 def publish_current_app(
     *,
@@ -689,9 +735,16 @@ def publish_current_app(
         timeout=timeout,
     )
     if not 200 <= http_status < 300:
-        # 发布门的错误码不透出去：对点按钮的人，它们是同一件事。
-        _LOGGER.info("console publish refused by gateway: HTTP %s", http_status)
-        return ConsolePublishResult(False, "发布未通过我们的发布门，请联系工程查看原因")
+        # 网关知道原因，运营需要那个原因。此前一律说"未通过发布门，请联系工程"，
+        # 于是"所选知识库已删除，请重新选择"（``CONSUMER_FLOW_INVALID``，实测 2026-10-29）
+        # 被压成一句让人只能来问工程的话 —— 明明模型已经把下一步写好了。
+        error = outcome.get("error") if isinstance(outcome, Mapping) else None
+        code = (_str_field(error, "code") or "").strip()
+        _LOGGER.info("console publish refused by gateway: HTTP %s code=%s", http_status, code or "-")
+        return ConsolePublishResult(
+            False,
+            _gateway_reason(error, "发布未通过我们的发布门，请联系工程查看原因"),
+        )
     if operation == "retract":
         ok = (
             isinstance(outcome, dict)
@@ -1019,6 +1072,12 @@ def submit_trial(
                 status=404,
             )
         return ConsolePublishResult(False, _UNCONFIRMED, status=502)
+    if http_status in {401, 403}:
+        # 公司身份那一跳（``OPERATOR_TRIAL_LOGIN_REQUIRED``）与编排拒绝（``CONSUMER_FLOW_INVALID``）
+        # 都在 403 上。前者是**每天的常态**：登录代理只把公司令牌缓存 15 分钟，
+        # Dify 会话却活得久得多，于是"页面能开、试运行 403"。原来它被压成
+        # "发布结果无法确认"，运营只会反复点同一个按钮。
+        return ConsolePublishResult(False, _gateway_reason(error, _UNCONFIRMED), status=502)
     if http_status == 429:
         return ConsolePublishResult(False, "已经有一次试运行在跑，请等它结束再试", status=429)
     if not 200 <= http_status < 300 or not isinstance(answer, dict):
@@ -1085,6 +1144,10 @@ def read_trial(
     )
     if http_status == 404:
         return TrialReport(False, "读不到这次试运行（可能已过期，或不属于你的可见范围）", status=404)
+    if http_status in {401, 403}:
+        # 与提交同一组码：登录过期时轮询也会 403，面板不该改口说"结果无法确认"。
+        error = answer.get("error") if isinstance(answer, Mapping) else None
+        return TrialReport(False, _gateway_reason(error, _UNCONFIRMED), status=502)
     if not 200 <= http_status < 300 or not isinstance(answer, dict):
         _LOGGER.warning("console trial result: gateway answered status=%s", http_status)
         return TrialReport(False, _UNCONFIRMED, status=502)

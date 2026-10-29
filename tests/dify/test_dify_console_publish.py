@@ -519,6 +519,69 @@ def test_a_200_that_says_refused_is_not_success(upstream: _Upstream, action: str
     assert result.action == ""
 
 
+def test_a_flow_refusal_carries_the_actionable_reason(upstream: _Upstream) -> None:
+    """``CONSUMER_FLOW_INVALID`` 的原因要**原样给运营**，不能压成"请联系工程"。
+
+    实测 2026-10-29：编排里勾着一个已被删除的知识库，网关回了
+    "所选知识库已删除或不属于当前租户，请重新选择"，桥却只说"未通过发布门"，
+    运营只能来问工程 —— 而正确的下一步就写在网关那句里。
+    """
+    upstream.publish_status = 409
+    upstream.publish_body = {
+        "error": {
+            "code": "CONSUMER_FLOW_INVALID",
+            "message": "所选知识库已删除或不属于当前租户，请重新选择",
+            "retryable": False,
+        }
+    }
+    result = _publish(upstream)
+    assert result.published is False
+    assert result.reason == "所选知识库已删除或不属于当前租户，请重新选择"
+
+
+def test_an_unknown_refusal_still_falls_back(upstream: _Upstream) -> None:
+    """认不出的拒绝码仍回兜底话术 —— 猜出来的下一步比说不出更糟。"""
+    upstream.publish_status = 500
+    upstream.publish_body = {"error": {"code": "SOMETHING_NEW", "message": "boom"}}
+    result = _publish(upstream)
+    assert result.reason == "发布未通过我们的发布门，请联系工程查看原因"
+
+
+def test_an_internal_coded_message_is_not_forwarded(upstream: _Upstream) -> None:
+    """``message`` 自己就是内部话术（大写标识）时**不转**，改用词表里那句人话。"""
+    upstream.publish_status = 409
+    upstream.publish_body = {"error": {"code": "CONSUMER_FLOW_INVALID", "message": "CONSUMER_FLOW_INVALID"}}
+    result = _publish(upstream)
+    assert result.reason == "发布未通过我们的发布门，请联系工程查看原因"
+
+
+def test_an_expired_company_login_does_not_read_as_unconfirmed(
+    trial_bridge: Any, upstream: _Upstream
+) -> None:
+    """试运行 403 ``OPERATOR_TRIAL_LOGIN_REQUIRED`` ⇒ 说"登录过期"，不说"结果无法确认"。
+
+    登录代理只把公司令牌缓存 15 分钟，Dify 会话活得久得多，所以这是每天的常态。
+    原来它被压成"发布结果无法确认"，运营只会反复点同一个按钮。
+    """
+    upstream.trial_status = 403
+    upstream.trial_body = {
+        "error": {"code": "OPERATOR_TRIAL_LOGIN_REQUIRED", "message": "operator request unavailable"}
+    }
+    status, body = _trial_post(trial_bridge)
+    assert body["submitted"] is False
+    assert "登录已过期" in body["reason"]
+    assert "无法确认" not in body["reason"]
+
+
+def test_the_trial_result_read_uses_the_same_refusal_words(trial_bridge: Any, upstream: _Upstream) -> None:
+    """轮询那一跳撞上同一个 403 时，面板不能改口说"结果无法确认"。"""
+    upstream.trial_result_status = 403
+    upstream.trial_result_body = {"error": {"code": "OPERATOR_TRIAL_LOGIN_REQUIRED", "message": "x"}}
+    status, body = _trial_result_post(trial_bridge)
+    assert "登录已过期" in body["reason"]
+    assert "无法确认" not in body["reason"]
+
+
 def _malformed(base: dict[str, Any]) -> list[Any]:
     def without(key: str) -> dict[str, Any]:
         return {k: v for k, v in base.items() if k != key}
