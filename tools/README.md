@@ -1,7 +1,7 @@
 # tools/ — 数据生成器与校验器
 
 本目录混合了数据生成器、校验器、隔离实验和现役执行组件。
-`m2_close/node/` 是正式 Java 节点的源码，`m2_live/model_proxy.py` 被正式节点栈启动；
+正式 Java 节点源码已迁到 `services/execution-node/`；`m2_live/model_proxy.py` 被正式节点栈启动；
 不能按“工具/旧里程碑”整体删除。归位方案见[目录迁移清单](../docs/architecture/repository-layout.md)。
 
 ## 目录内容
@@ -39,20 +39,20 @@ ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- bash -c "set -a; . /etc/
 受试身份是真实用户凭据，因此**不打印**车牌、VIN、订单号、用户名与完整 id，
 只引用尾号；`--self-check` 是无网络的纯逻辑自检，改坏分桶或判定必转红。
 
-## `m2_close/`：隔离实验驱动与现役节点源码
+## `m2_close/`：隔离实验驱动
 
-下述实验驱动不用于正式运行；其中 `node/` 同时是正式节点 jar 的构建来源。
+下述实验驱动不用于正式运行；节点 jar 从 `services/execution-node/` 构建。
 正式部署见[节点运行手册](../deploy/node-runtime/README.md)，两者的生命周期须分别判断。
 
 `run_ic.py` 起一套本机 Docker 网络：MySQL + 编排平台服务端 + 执行节点 + Gateway 代码 +
 桩模型 + 桩业务上游，然后跑 IC-01…IC-10。它要两个预置产物（脚本不构建、不下载）：
-`SNAIL_SRC`（平台源码 checkout）与 `tools/m2_close/node` 的构建产物。
+`SNAIL_SRC`（平台源码 checkout）与 `services/execution-node` 的构建产物。
 
 从**仓库根**执行：
 
 ```bash
 docker run --rm -v "$PWD":/work -v "$HOME/.m2":/root/.m2 -w /work \
-  maven:3.9-eclipse-temurin-21 mvn -f tools/m2_close/node/pom.xml -DskipTests=false package
+  maven:3.9-eclipse-temurin-21 mvn -f services/execution-node/pom.xml -DskipTests=false package
 SNAIL_SRC=/tmp/snail-ai uv run python tools/m2_close/run_ic.py --out /tmp/m2-close.json
 uv run python tools/m2_close/verify_real_gateway.py --out /tmp/m2-close-http.json
 ```

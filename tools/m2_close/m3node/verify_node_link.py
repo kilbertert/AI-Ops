@@ -8,7 +8,7 @@
 |---|---|
 | 委派入口 `/v1/.../delegated`、领取入口、完成入口 | **真的 Gateway 进程**（`create_gateway_app`） |
 | `AgentRunStore` 生命周期、清单加载、身份核对 | **本仓真实代码** |
-| 节点装配、工具、整轮守卫与通知 | **真的 Java 节点**（编译自 `tools/m2_close/node/src`） |
+| 节点装配、工具、整轮守卫与通知 | **真的 Java 节点**（编译自 `services/execution-node/src`） |
 | 模型上游 | 本机合成 OpenAI-compatible 服务（允许） |
 | CPMS | 本机合成（允许） |
 | 编排平台 | 本机替身，只负责「发起一次 HTTP 派发」并同步等待；领取与完成由**节点自己**发出 |
@@ -397,7 +397,7 @@ def _compile(classes: Path, deps: Path, jdk: str) -> tuple[int, str]:
     # 容器里仓库挂在 /repo，所以源文件路径必须是**容器内**路径。
     sources = " ".join(
         str(Path("/repo") / p.relative_to(REPO))
-        for p in (REPO / "tools/m2_close/node/src/main/java").rglob("*.java")
+        for p in (REPO / "services/execution-node/src/main/java").rglob("*.java")
     )
     command = (
         f'javac -nowarn -proc:none -cp "/deps/lib/*" -d /out {sources} '

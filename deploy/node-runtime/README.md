@@ -1,5 +1,8 @@
 # 正式节点运行配置
 
+现役Java源码与构建入口位于[services/execution-node](../../services/execution-node/README.md)。
+仓内源码迁移不改变宿主jar安装目录、systemd和容器挂载。
+
 当前产品路径与交付状态见[当前说明](../../docs/agents/current-delivery-state.md)。本文件是部署/维护方法，配置默认关闭不代表现役全部关闭；
 新旧执行器和场景分别验收，不按一个服务进程推断全系统已迁移。
 

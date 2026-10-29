@@ -202,7 +202,7 @@ def test_node_build_is_reproducible():
     import re
     from datetime import UTC, datetime
 
-    pom = (DEPLOY.parents[1] / "tools/m2_close/node/pom.xml").read_text(encoding="utf-8")
+    pom = (DEPLOY.parents[1] / "services/execution-node/pom.xml").read_text(encoding="utf-8")
     match = re.search(r"<project.build.outputTimestamp>([^<]+)</project.build.outputTimestamp>", pom)
     assert match is not None, "缺可复现构建时间戳，节点 jar 无法按摘要复现"
     stamp = match.group(1).strip()

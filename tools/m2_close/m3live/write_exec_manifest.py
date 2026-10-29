@@ -37,7 +37,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 TOOL_SOURCE = (
-    REPO / "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java"
+    REPO / "services/execution-node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java"
 )
 
 #: 平台建模型配置时写的两个 key（`bootstrap_platform.py`）。

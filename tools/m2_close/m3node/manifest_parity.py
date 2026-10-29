@@ -35,7 +35,7 @@ REPO = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 SAMPLES = HERE / "manifest-samples"
 EXPECTED_FILE = HERE / "manifest_samples_expected.json"
-NODE_SRC = REPO / "tools/m2_close/node/src/main/java"
+NODE_SRC = REPO / "services/execution-node/src/main/java"
 # 只编清单加载器与它的异常类型：这两个类不依赖框架类，容器里没网也能编。
 COMPILE_UNITS = (
     "com/trendpower/aiops/node/exec/ExecManifest.java",

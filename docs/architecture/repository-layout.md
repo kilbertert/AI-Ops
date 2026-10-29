@@ -1,4 +1,24 @@
-> 本方案后置：本轮先按[完整退役决定](../runtime-retirement.md)清理旧链，下面为上一轮调查快照，不代表本轮保留决定。
+# 仓库目录迁移
+
+## 2026-10-29：退役验收后开始
+
+Python Thin Harness和诊断/设备CLI已完整删除；独立aiops-admin保留。
+C端与管家原H5、Dify原生预览及独立CPMS/跨主体拒绝已通过，证据见
+[退役真实验收](../validation/2026-10-29-runtime-retirement-live.md)。历史故障准确率不在此结论内。
+
+第一片将现役Java节点16个文件从`tools/m2_close/node/`整体迁至`services/execution-node/`，
+同步所有现役源码/构建/实验引用；原Java文件逐字不变，宿主安装目录不变。
+隔离驱动继续在tools，Gateway镜像不再包含节点源码。验证见
+[第一片回执](../validation/2026-10-29-execution-node-layout.md)。
+
+后续目标：Python按consumer/knowledge/identity/publication/gateway职责形成包，测试随职责归类；
+运行服务与一次性工具分开，部署面按服务聚合。每片更新调用者、资源加载、打包、CI与现役文档，
+保留错误处理与权限校验，不新建转发空壳或永久legacy目录。
+
+## 2026-10-28调查归档（不再作为保留或执行决定）
+
+以下是退役范围扩大前的原调查，数量与保留建议只属于当时。旧诊断消费者迁移步骤已被完整退役取代，
+不得再按其恢复旧能力；以下旧路径用于解释历史问题。
 
 # 仓库目录梳理与 Thin Harness 退役清单
 

@@ -8,9 +8,7 @@
 问题在于它是**行内命令**：只有构建时才算得出来。于是锁文件里那个摘要无法在 CI 里核对，
 reviewer 想复核只能自己重写一遍管道 —— 而管道有两处容易走样：
 
-1. `--exclude` 的作用域。`src` 用 `--exclude '__pycache__' --exclude '*.pyc'`；
-   `tools/...` 用 `--exclude '__pycache__' --exclude 'node/target'`。**两者不同**，
-   写成一组通用 exclude 会得到另一个摘要。
+1. 源码与工具均排除 `__pycache__`、`*.pyc`；Java节点已迁到services，不属于Gateway镜像上下文。
 2. 工作树里的未跟踪文件（例如验收产物 `tools/m2_close/m3node/build/`）会被 `tar` 带上。
 
 这个脚本不复刻那两行 `tar`，而是**按同一组排除规则逐文件挑选**，因此与工作树是否干净
@@ -37,7 +35,7 @@ REPO = HERE.parents[1]
 CONTEXT_SPEC = (
     ("src", ("__pycache__", "*.pyc")),
     ("tools/m2_live", ("__pycache__", "*.pyc")),
-    ("tools/m2_close", ("__pycache__", "node/target")),
+    ("tools/m2_close", ("__pycache__", "*.pyc")),
 )
 #: 直接放在上下文根的两个文件（`build-image.sh` 用 `cp` 放进去，日志里的路径是 `./名字`）。
 ROOT_FILES = ("deploy/m2-live-03/gateway.Dockerfile", "deploy/m2-live-03/gateway-requirements.txt")
@@ -52,10 +50,6 @@ def _excluded(relative: Path, patterns: tuple[str, ...]) -> bool:
                 return True
         elif pattern == "*.pyc":
             if relative.suffix == ".pyc":
-                return True
-        elif pattern == "node/target":
-            # 相对 `tools/m2_close` 的路径：只有以 `node/target` 开头的才排除。
-            if relative.as_posix().startswith("node/target"):
                 return True
         else:  # pragma: no cover - 新增规则时应该显式处理
             raise SystemExit(f"unhandled exclude pattern: {pattern}")
