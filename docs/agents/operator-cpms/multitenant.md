@@ -261,9 +261,57 @@ with urlopen(request, timeout=60) as response:
 Dify 登录页当前是公司账号、密码、图形验证码；手机号短信码不能替代该登录方式。
 管家 App 的“验证码登录”调用公司 `/upms/token/loginByPhone`（41附 `grant_type=sms_login`），
 使用 App 现有 client-type 和租户配置。用户提供有效验证码时不额外发送短信。
-浏览器无公网可达性时按退役操作手册经 `dev-host exec 41` 建动态回环443隧道，
-Chromium只对已声明域名做host-resolver映射，仍保留HTTPS主机名与证书校验。
-只关闭本次隧道进程；正常terminate超时后kill本次进程组，不按进程名称清理。
+浏览器无公网可达性时，隧道的现役实现见
+[用户端浏览器驱动](../../../tools/consumer-status/status_probe.py)中的 `tunnel_argv`、
+`_wait_port` 和 `_terminate_tree`；通过 `dev-host exec 41` 建443转发并按端口和进程精确清理。
+管家复用该方法，只将浏览器目标换成管家域名：
+
+```python
+import importlib.util
+import os
+import socket
+import subprocess
+import sys
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+
+path = Path("tools/consumer-status/status_probe.py")
+spec = importlib.util.spec_from_file_location("consumer_browser", path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+assert not module._wait_port(port, timeout=0.2)
+tunnel = subprocess.Popen(
+    module.tunnel_argv(target="41", port=port),
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.PIPE,
+    start_new_session=True,
+)
+pgid = os.getpgid(tunnel.pid)
+try:
+    assert module._wait_port(port, timeout=15)
+    assert module._listening_pids(port) & module._descendants(tunnel.pid)
+    with sync_playwright() as playwright:
+        rule = (
+            f"MAP ulinkmanage.h5.mall.qushiyun.com:443 127.0.0.1:{port},"
+            f"MAP api.mall.qushiyun.com:443 127.0.0.1:{port}"
+        )
+        browser = playwright.chromium.launch(headless=True, args=[f"--host-resolver-rules={rule}"])
+        try:
+            page = browser.new_page()
+            page.goto("https://ulinkmanage.h5.mall.qushiyun.com/", wait_until="domcontentloaded")
+            # 在这里按下述步骤使用正常公司登录和原页面。
+        finally:
+            browser.close()
+finally:
+    module._terminate_tree(tunnel, pgid=pgid, port=port)
+    assert not module._listening_pids(port)
+```
+
+只映射现役域名，保留HTTPS主机名与证书验证，不设置ignore_https_errors。
 
 1. 正常登录后读取公司 `/upms/user/info`，核 tenantId；用 Gateway 的现役
    `_caller_resolver(settings).resolve(..., platform_entry='operator')` 核主体及站点范围。
