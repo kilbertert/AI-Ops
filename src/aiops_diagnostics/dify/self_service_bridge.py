@@ -55,6 +55,7 @@ def handle(handler, bridge):
                 "revision",
                 "draft",
                 "version_no",
+                "workspace_id",
             }
         ),
     )
@@ -67,6 +68,7 @@ def handle(handler, bridge):
         "publish": ("POST", "/publish"),
         "versions": ("POST", "/versions"),
         "version": ("POST", "/version"),
+        "workspace": ("POST", "/workspace"),
     }
     if action in {"operation", "retry"}:
         job = payload.pop("id", "")
@@ -113,4 +115,67 @@ def handle(handler, bridge):
     ):
         handler._json(200, {"managed": False})
         return
+    if action == "workspace" and code == 200 and isinstance(result, dict):
+        workspace_id = result.get("workspace_id", "")
+        http_status, profile = _request(
+            handler.settings.dify_base_url + "/console/api/account/profile",
+            headers=session.dify_headers(),
+            timeout=15,
+        )
+        if (
+            http_status != 200
+            or not isinstance(profile, dict)
+            or not profile.get("id")
+            or not profile.get("email")
+        ):
+            raise _Rejected(403, "无法核对当前Dify账号")
+        http_status, response = _request(
+            handler.settings.dify_base_url + "/console/api/workspaces",
+            headers=session.dify_headers(),
+            timeout=15,
+        )
+        workspaces = response.get("workspaces", []) if isinstance(response, dict) else []
+        if http_status != 200:
+            raise _Rejected(502, "无法读取工作区")
+        if not any(w.get("id") == workspace_id for w in workspaces):
+            if not result.get("platform"):
+                raise _Rejected(403, "当前账号没有此工作区访问权")
+            http_status, response = _request(
+                handler.settings.gateway_base_url + "/v1/dify/management/workspace/member",
+                method="POST",
+                headers={
+                    "Authorization": "Bearer " + handler.settings.publish_key,
+                    "X-AIOps-Console-Session": session.access_token,
+                    "Content-Type": "application/json",
+                },
+                body={"workspace_id": workspace_id, "account_id": profile["id"], "email": profile["email"]},
+                timeout=30,
+            )
+            if http_status != 200:
+                raise _Rejected(502, "暂时无法进入客户工作区，请重试")
+        http_status, response = _request(
+            handler.settings.dify_base_url + "/console/api/workspaces/switch",
+            method="POST",
+            headers={**session.dify_headers(), "Content-Type": "application/json"},
+            body={"tenant_id": workspace_id},
+            timeout=15,
+        )
+        if http_status != 200 or not isinstance(response, dict) or response.get("result") != "success":
+            raise _Rejected(502, "工作区切换失败，请重试")
     handler._json(code, result if isinstance(result, dict) else {"error": {"code": "SETUP_UNAVAILABLE"}})
+
+
+def authorize_workspace(handler, bridge, session, workspace_id):
+    code, result = bridge._request(
+        handler.settings.gateway_base_url + "/v1/dify/management/workspace",
+        method="POST",
+        headers={
+            "Authorization": "Bearer " + handler.settings.publish_key,
+            "X-AIOps-Console-Session": session.access_token,
+            "Content-Type": "application/json",
+        },
+        body={"workspace_id": workspace_id},
+        timeout=15,
+    )
+    if code != 200 or not isinstance(result, dict) or result.get("workspace_id") != workspace_id:
+        raise bridge._Rejected(403, "当前账号无权访问此客户知识库，请重新登录或联系平台管理员")

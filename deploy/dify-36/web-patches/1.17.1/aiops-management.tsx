@@ -114,13 +114,28 @@ export default function TenantSetup() {
     tenants: Item[]
     sources: Source[]
     operations: Operation[]
+    workspaces?: { workspace_id: string; tenant_id: string; name: string }[]
   } | null>(null)
   const [open, setOpen] = useState(false)
+  const [selectedWorkspace, setSelectedWorkspace] = useState('')
   const [tenant, setTenant] = useState('')
   const [source, setSource] = useState('')
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const enter = async (knowledge = false) => {
+    setBusy(true)
+    try {
+      await manage('workspace', { workspace_id: selectedWorkspace })
+      window.location.assign(
+        knowledge ? `/__aiops/knowledge-open?workspace=${selectedWorkspace}` : '/apps',
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '进入工作区失败')
+    } finally {
+      setBusy(false)
+    }
+  }
   const load = () =>
     manage('catalogue')
       .then(setCatalogue)
@@ -161,6 +176,27 @@ export default function TenantSetup() {
       >
         {open ? '收起客户开通' : '复制并开通客户管家'}
       </button>
+      <div className="mt-3 flex items-center gap-2">
+        <select
+          aria-label="已开通客户"
+          value={selectedWorkspace}
+          onChange={(e) => setSelectedWorkspace(e.target.value)}
+        >
+          <option value="">选择已开通客户</option>
+          {(catalogue.workspaces || []).map((w) => (
+            <option key={w.workspace_id} value={w.workspace_id}>
+              {w.name}
+            </option>
+          ))}
+        </select>
+        <button type="button" disabled={busy || !selectedWorkspace} onClick={() => enter()}>
+          进入工作区
+        </button>
+        <button type="button" disabled={busy || !selectedWorkspace} onClick={() => enter(true)}>
+          进入知识库
+        </button>
+      </div>
+      {!open && error && <p role="alert">{error}</p>}
       {open && (
         <section aria-label="开通客户管家" className="mt-3 rounded-xl border p-4">
           <div className="flex flex-wrap gap-3">

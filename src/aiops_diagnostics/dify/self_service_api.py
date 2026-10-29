@@ -26,6 +26,16 @@ class AppRequest(BaseModel):
     app_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
 
 
+class WorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workspace_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
+
+
+class MemberRequest(WorkspaceRequest):
+    account_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
+    email: str = Field(min_length=3, max_length=254)
+
+
 class PublishRequest(AppRequest):
     revision: int = Field(ge=0)
     draft: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -92,8 +102,60 @@ def register(app, context):
             "platform": caller.platform,
             "tenants": choices,
             "sources": sources,
+            "workspaces": [
+                {
+                    "workspace_id": r["workspace_id"],
+                    "tenant_id": r["tenant_id"],
+                    "name": next((t["name"] for t in choices if t["id"] == r["tenant_id"]), r["tenant_id"]),
+                }
+                for r in context.dify_workspaces.list_for_environment(context.settings.environment)
+                if r["tenant_id"] in allowed and r["setup_state"] in {"ready", "created"}
+            ],
             "operations": [public_job(r) for r in service.store.recent(caller.user_id)],
         }
+
+    @app.post("/v1/dify/management/workspace")
+    def workspace(payload: WorkspaceRequest, session=Depends(session)):  # noqa: B008
+        caller = auth.identity(context, session)
+        tenant = service.workspace(caller, payload.workspace_id)
+        return {"tenant_id": tenant, "workspace_id": payload.workspace_id, "platform": caller.platform}
+
+    @app.post("/v1/dify/management/workspace/member")
+    def member(payload: MemberRequest, session=Depends(session)):  # noqa: B008
+        caller = auth.identity(context, session)
+        tenant = service.workspace(caller, payload.workspace_id)
+        auth.require_target(context, caller, tenant)
+        from .dify_console_publish import _request
+        from .dify_inner_api import DifyInnerApi, InnerApiSettings
+        from .dify_tenant_access import grant_tenant_access
+
+        code, identity = _request(
+            context.settings.operator_trial_login_url.rstrip("/") + "/__aiops/publish/check",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            body={"session": session},
+            timeout=5,
+        )
+        if (
+            code != 200
+            or not isinstance(identity, dict)
+            or identity.get("dify_account_id") != payload.account_id
+            or identity.get("company_user_id") != caller.user_id
+        ):
+            raise auth.SetupRefused("SETUP_IDENTITY_MISMATCH")
+        grant_tenant_access(
+            tenant_id=tenant,
+            environment=context.settings.environment,
+            workspaces=context.dify_workspaces,
+            inner=DifyInnerApi(
+                InnerApiSettings(
+                    context.settings.dify_inner_api_base_url, context.settings.dify_inner_api_key
+                )
+            ),
+            account_id=payload.account_id,
+            email=payload.email,
+        )
+        return {"workspace_id": payload.workspace_id}
 
     @app.post("/v1/dify/management/status")
     def status(payload: AppRequest, session=Depends(session)):  # noqa: B008 - FastAPI dependency

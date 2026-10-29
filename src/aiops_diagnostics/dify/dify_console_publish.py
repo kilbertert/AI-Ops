@@ -1425,6 +1425,11 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             self._json(200, {"changed": 0, "created": 0})
             return
         try:
+            import sys
+
+            from .self_service_bridge import authorize_workspace
+
+            authorize_workspace(self, sys.modules[__name__], session, workspace_id)
             changed = _knowledge_sync_payload(
                 self.settings.gateway_base_url,
                 self.settings.gateway_internal_token,
@@ -1578,6 +1583,11 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         workspace_id = (query.get("workspace") or [""])[0].strip() if query else ""
         if not workspace_id:
             raise _Rejected(400, "缺少当前工作区，请刷新 Dify 页面后重试")
+        import sys
+
+        from .self_service_bridge import authorize_workspace
+
+        authorize_workspace(self, sys.modules[__name__], session, workspace_id)
         opened = _knowledge_open_payload(
             self.settings.gateway_base_url,
             self.settings.gateway_internal_token,

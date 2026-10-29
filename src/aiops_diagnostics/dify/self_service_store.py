@@ -48,6 +48,11 @@ class SelfServiceStore:
     def recover(self):
         with self.connection() as db:
             db.execute(
+                "UPDATE operator_setup_jobs SET state='failed',step='knowledge',"
+                "error_code='SETUP_KNOWLEDGE_REQUIRED' "
+                "WHERE state='completed' AND json_extract(resources_json,'$.knowledge_ready') IS NOT 1"
+            )
+            db.execute(
                 "UPDATE operator_setup_jobs SET state='failed',error_code='SETUP_INTERRUPTED',"
                 "lease_until=0,lease_owner='' WHERE state IN ('pending','running')"
             )
