@@ -237,7 +237,7 @@ class GatewayServerSettings:
     #: 密码写进 `ragflow_tenants` 时用它加密，登录代理（#926）读出来时用它解密。
     #:
     #: 16/24/32 字节。**留空 ⇒ 开户与轮换拒绝运行**，而不是"存个明文凑合" —— 一个
-    #: 没有密钥的凭据保管就是明文保管。它不是网关运行时读的东西：只有那两条 CLI 路径读它。
+    #: 没有密钥的凭据保管就是明文保管。开户/轮换CLI和Dify自助开通、知识库登录都使用它。
     ragflow_credential_key: str = field(repr=False, default="")
     #: RAGFlow 账号的邮箱域（派生 `sha1(tenant_id)[:16]@domain`）。与 kb-service 懒注册
     #: 用的是同一个形状，所以一个在此命令之前懒注册过的租户不会因为域名不同被当成两个人。

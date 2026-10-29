@@ -415,46 +415,30 @@ def onboard_tenant(
             model_verified=True,
             note=workspace_note,
         )
-    password = generate_password()
-    # **先加密，再注册**（评审 P2）。反过来的话，密钥长度写错会在上游已经建好账号之后
-    # 才抛错：那个账号的密码只在这一帧里存在过，丢了就找不回来 —— 留下一个谁都进不去的
-    # 租户。加密先失败则上游一个字节都没写。
-    ciphertext = encrypt_credential(password, credential_key)
-    # **这条租户在上游已经有账号**时不能走"注册"：kb-service 的
-    # `tenancy.create_tenant` 见到已有行就 `return dict(row)`，**不改密码**。于是
-    # 「注册成功」是假的 —— 我们记下了一把上游根本不认的密码，要等到第一次登录才炸
-    # （41 真机第三轮：`Email and password do not match!`）。
-    #
-    # 已有账号的正确动作是**改密码**：带上旧密码走 rotate，回到"我们记的那把 = 上游那把"。
-    # 旧密码从我们自己的行里取；取不到就无法安全接管，明确拒绝并让人处理，而不是猜。
-    if existing is not None:
-        if str(existing.get("ragflow_email") or "") not in ("", email):
+    if existing:
+        if str(existing.get("ragflow_email") or "") != email:
             raise OnboardError(
-                "RAGFLOW_TENANT_EMAIL_CONFLICT",
-                f"tenant {tenant_id} already has a RAGFlow account under a different login",
-                step="ragflow-tenant",
+                "RAGFLOW_EMAIL_MISMATCH", "existing tenant login differs", step="ragflow-tenant"
             )
         try:
-            old_password = decrypt_credential(str(existing["credential_ciphertext"]), credential_key)
-        except Exception as exc:  # noqa: BLE001 - 解不开就接管不了，别猜
+            password = decrypt_credential(str(existing.get("credential_ciphertext") or ""), credential_key)
+        except Exception as exc:
             raise OnboardError(
                 "RAGFLOW_CREDENTIAL_UNREADABLE",
-                "this tenant already has a RAGFlow account, but the stored password cannot be "
-                "decrypted with the current key; restore the key (or rotate manually) first",
+                "stored credential cannot be decrypted",
                 step="ragflow-tenant",
             ) from exc
-        kb.rotate_credential(tenant_id=tenant_id, old_password=old_password, new_password=password)
-        say(f"ragflow tenant: password re-established for existing account {email}")
+        ciphertext = str(existing["credential_ciphertext"])
     else:
-        kb.register_tenant(tenant_id=tenant_id, email=email, password=password)
-        say(f"ragflow tenant: registered {email}")
-    store.record_ragflow_tenant(
-        tenant_id,
-        environment,
-        ragflow_email=email,
-        credential_ciphertext=ciphertext,
-        model_checked=False,
-    )
+        password = generate_password()
+        ciphertext = encrypt_credential(password, credential_key)
+        # 先保管同一凭据，再调用可重试注册；响应丢失后不能生成另一把密码。
+        store.record_ragflow_tenant(
+            tenant_id, environment, ragflow_email=email, credential_ciphertext=ciphertext, model_checked=False
+        )
+    kb.register_tenant(tenant_id=tenant_id, email=email, password=password)
+    kb.verify_login(tenant_id=tenant_id, password=password)
+    say(f"ragflow tenant: registration confirmed {email}")
 
     # 3) 模型实例 + 一次真实校验
     kb.repair_models(tenant_id)

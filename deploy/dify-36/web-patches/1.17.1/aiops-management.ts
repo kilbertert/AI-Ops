@@ -16,6 +16,9 @@ export type Status = {
   published: boolean
 }
 export const messages: Record<string, string> = {
+  SETUP_KNOWLEDGE_FAILED: '知识库准备或模型校验失败，请重试；持续失败请联系平台管理员',
+  SETUP_KNOWLEDGE_REQUIRED: '请重试以补齐默认知识库空间',
+  SETUP_KNOWLEDGE_CONFIG_REQUIRED: '平台知识库连接未就绪，请联系平台管理员',
   SETUP_PLATFORM_PERMISSION_REQUIRED: '当前账号没有平台开通权限',
   SETUP_TENANT_FORBIDDEN: '当前账号无权管理这个客户',
   SETUP_TENANT_BUSY: '这个客户已有开通任务，请查看下方进度',
@@ -30,6 +33,7 @@ export const messages: Record<string, string> = {
 }
 export const steps: Record<string, string> = {
   workspace: '准备工作区',
+  knowledge: '准备知识库空间',
   dependencies: '配置模型和工具',
   application: '创建智能体',
   register: '登记应用',

@@ -134,3 +134,6 @@
 - 它不证明网络可达性方向上的封锁 —— 段 3 才碰网络，且只在**有真实 Dify 宿主可达**时才
   算取证；否则如实记 2。
 
+
+| 管理工作区授权 | `/v1/dify/management/workspace` | POST | 发布服务key＋正常公司Dify会话 | 本租户或平台授权客户范围 |
+| 平台当前账号加入工作区 | `/v1/dify/management/workspace/member` | POST | 同上，另回查登录映射与平台目录 | 仅当前验证账号，原生editor成员关系 |

@@ -84,6 +84,13 @@ class _Upstream:
                         "body": json.loads(raw) if raw else None,
                     }
                 )
+                if self.path == "/v1/dify/management/workspace":
+                    body = json.loads(raw)
+                    self._reply(
+                        200 if body.get("workspace_id") == src.workspace_id else 403,
+                        {"workspace_id": src.workspace_id, "platform": False},
+                    )
+                    return
                 if self.path != "/__aiops/publish/check":
                     self._reply(404, {})
                     return
@@ -431,3 +438,14 @@ def test_an_expired_ticket_is_explained(upstream: _Upstream) -> None:
 
     assert status == 410
     assert "过期" in body
+
+
+def test_knowledge_workspace_tampering_is_refused_before_cookie_exchange(upstream):
+    server = _bridge(upstream)
+    try:
+        code, _, _ = _get(server, "/__aiops/knowledge-open?workspace=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        assert code == 403
+        assert not any(c["path"].startswith("/v1/internal/knowledge/open") for c in upstream.calls)
+    finally:
+        server.shutdown()
+        server.server_close()

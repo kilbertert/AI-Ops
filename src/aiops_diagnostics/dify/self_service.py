@@ -90,6 +90,14 @@ class SelfService:
             auth.require_target(self.context, caller, row["tenant_id"])
         return row
 
+    def workspace(self, caller, workspace_id):
+        tenant = DifyWorkspaces(self.settings.database_file).tenant_for_workspace(
+            workspace_id, self.settings.environment
+        )
+        if tenant != caller.tenant_id:
+            auth.require_target(self.context, caller, tenant)
+        return tenant
+
     def adopt_draft(self, caller, app_id):
         """本租户原生副本沿用已开通的连接；应用内容仍经发布器校验。"""
         workspace_id = DifyWorkspaces(self.settings.database_file).resolve(
@@ -216,6 +224,9 @@ class SelfService:
                 resources["workspace_id"] = prepare.workspace(
                     self.settings, request["tenant_id"], request["tenant_name"], self.console
                 )
+            save("knowledge")
+            prepare.knowledge(self.context, request["tenant_id"])
+            resources["knowledge_ready"] = True
             save("dependencies")
             provider = prepare.dependencies(
                 self.console, resources["workspace_id"], profile, self.settings.public_base_url
