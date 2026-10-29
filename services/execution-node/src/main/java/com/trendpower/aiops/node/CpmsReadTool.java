@@ -151,9 +151,15 @@ public final class CpmsReadTool implements ToolCallback {
                 || !row.path("siteId").asText().equals(body.path("siteId").asText())) {
             throw refused("cpms_scope_mismatch");
         }
+        // 字段表与 Gateway 的 `operator_cpms.DETAIL_FIELDS` **必须逐项相同**：
+        // `record` 要求节点上报的证据与 Gateway 自己投影的那份相等，多一个少一个都会
+        // 让整轮失败。这里补的是金额/额定功率/SOC —— 没有它们，问电费与问电压只能得到
+        // 同一份「缺证」报告（41 实测，订单 2113549588485718017）。
         return select(row, "orderNo", "siteId", "deviceId", "childDeviceId", "deviceCode",
                 "childDeviceCode", "deviceProtocol", "status", "createdTime", "stopTime",
-                "stoppedReasonCode", "stoppedReasonContent", "electricity");
+                "stoppedReasonCode", "stoppedReasonContent", "electricity", "time", "voltage",
+                "electricityFee", "serviceFee", "totalAmount", "payAmount", "marketAmount",
+                "refundStatus", "refundAmount", "startSoc", "endSoc", "gunPower", "interfaceType");
     }
 
     private static ObjectNode samples(JsonNode body, Grant grant) {
@@ -174,7 +180,10 @@ public final class CpmsReadTool implements ToolCallback {
         }
         result.put("total", body.path("total").asLong()).put("sample_limit", 50)
                 .put("truncated", body.path("total").asLong() > rows.size())
-                .put("ordering_guaranteed", false).put("complete_timeline", false);
+                .put("ordering_guaranteed", false).put("complete_timeline", false)
+                // 「没上报过样本」与「这批被截断」是两件事，证据里各占一个字段。
+                .put("samples_returned", rows.size())
+                .put("absence", rows.isEmpty() ? "no_samples" : null);
         return result;
     }
 

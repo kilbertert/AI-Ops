@@ -76,10 +76,17 @@ def environment(tmp_path, monkeypatch):
                 "siteId": state["site"],
                 "status": 2,
                 "stoppedReasonContent": "Communication interrupted",
+                "electricity": 4.5598,
+                "time": 3,
+                "electricityFee": "13.68",
+                "serviceFee": "13.68",
+                "totalAmount": "27.36",
+                "payAmount": "0.00",
+                "gunPower": 23,
                 "phone": "PRIVATE-PHONE",
             }
             if "/getChargingMonitor/" in self.path:
-                data = {"records": [row], "total": 100, "size": 50, "current": 1}
+                data = {"records": [], "total": 0, "size": 50, "current": 1}
             elif self.path.startswith("/chSite/page?"):
                 from urllib.parse import parse_qs, urlsplit
 
@@ -243,7 +250,7 @@ def request(client):
     )
 
 
-def node(f, run_id, *, tools=operator_cpms.TOOL_NAMES, before_complete=None):
+def node(f, run_id, *, tools=operator_cpms.TOOL_NAMES, before_complete=None, answer=None):
     client = f["client"]
     head = {"Authorization": "Bearer " + NODE_A_TOKEN}
     publication = client.post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
@@ -270,13 +277,15 @@ def node(f, run_id, *, tools=operator_cpms.TOOL_NAMES, before_complete=None):
         assert response.status_code == 200, response.text
     if before_complete:
         before_complete()
-    answer = {
-        "summary": "订单异常结束。",
-        "probable_cause": "通信中断，仍需核查现场。",
-        "next_steps": ["核对现场网络。"],
-        "limitations": ["监测仅有限样本。"],
-        "evidence_tools": list(tools),
-    }
+    if answer is None:
+        answer = {
+            "direct_answer": "订单异常结束，原因为通信中断；现场网络待核查。",
+            "summary": "订单异常结束。",
+            "probable_cause": "通信中断，仍需核查现场。",
+            "next_steps": ["核对现场网络。"],
+            "limitations": ["监测仅有限样本。"],
+            "evidence_tools": list(tools),
+        }
     return client.post(
         f"/v1/internal/operator-runs/{run_id}/completions",
         headers=head,
@@ -558,7 +567,13 @@ def test_operator_trial_uses_draft_without_changing_publication(operator, monkey
 
     panel = _trial_report_text(result.json(), "completed")
     answer = f["ctx"].agent_run_store.by_qa(trial).snapshot["answer"]
-    for text in (answer["summary"], answer["probable_cause"], *answer["next_steps"], *answer["limitations"]):
+    for text in (
+        answer["direct_answer"],
+        answer["summary"],
+        answer["probable_cause"],
+        *answer["next_steps"],
+        *answer["limitations"],
+    ):
         assert text in panel
     assert "cpms.orderDetail" in panel and "cpms.chargingMonitor" in panel
     assert ("UNSAVED_NATIVE_DRAFT" if native else "TRIAL_ONLY") in seen[0]
@@ -822,11 +837,59 @@ def test_non_owner_cannot_use_empty_or_all_scope(operator, data_scope):
     assert not f["state"]["calls"] and not f["ctx"].operator_cpms.tasks
 
 
+def test_different_questions_must_produce_different_answers(operator, monkeypatch):
+    """回归 2026-10-29：同一张单问电费与问电压，两轮报告几乎逐句相同。
+
+    根因不是模型——协议里没有任何位置属于「用户问了什么」，且工具把金额字段全丢了。
+    这条测试同时钉住两件事：报告的第一个 block 是**直接回答**，且取回的订单证据里
+    真的有金额字段。少了任一半，问题都会退回「两个问题同一个答案」。
+    """
+    f = operator
+    answers = {}
+    for question, direct in (
+        ("帮我分析这笔订单的电费", "电费合计 27.36 元。"),
+        ("帮我分析这个订单的充电电压", "订单未记录电压值。"),
+    ):
+        monkeypatch.setattr(
+            operator_cpms.SnailDispatcher,
+            "dispatch",
+            lambda _, cfg, run, direct=direct: node(
+                f,
+                run,
+                answer={
+                    "direct_answer": direct,
+                    "summary": "订单已结束。",
+                    "probable_cause": "原因待核实。",
+                    "next_steps": [],
+                    "limitations": ["上游未提供该数据。"],
+                    "evidence_tools": list(operator_cpms.TOOL_NAMES),
+                },
+            ),
+        )
+        submitted = f["client"].post(
+            "/v1/assistant/questions",
+            headers=HEADERS,
+            json={"question": question, "order_no": ORDER},
+        )
+        assert submitted.status_code == 202, submitted.text
+        final = terminal(f, submitted.json()["qa_id"])
+        assert final.status_code == 200 and final.json()["status"] == "completed", final.text
+        answers[question] = final.json()["result"]["blocks"][0]["text"]
+        # 直接回答必须在最前：读的人第一眼看到的要是他问的那一点。
+        assert answers[question].startswith(direct), answers[question]
+    assert answers["帮我分析这笔订单的电费"] != answers["帮我分析这个订单的充电电压"]
+    # 金额字段必须真的进证据，否则模型的直接回答只能是无据的猜测。
+    run = f["ctx"].agent_run_store.by_qa(submitted.json()["qa_id"])
+    detail = run.snapshot["evidence"][operator_cpms.TOOL_NAMES[0]]["data"]
+    assert detail["electricityFee"] == "13.68" and detail["totalAmount"] == "27.36"
+
+
 def test_answer_rejection_logs_only_fixed_reason(caplog):
     import logging
 
     caplog.set_level(logging.WARNING, logger="aiops.operator")
     answer = {
+        "direct_answer": "PRIVATE-ORDER-123 已退款",
         "summary": "PRIVATE-ORDER-123 已退款",
         "probable_cause": "PRIVATE-TOKEN-456",
         "next_steps": [],

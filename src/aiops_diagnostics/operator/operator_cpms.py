@@ -661,6 +661,8 @@ class OperatorCpms:
         ]
         text = "\n\n".join(
             [
+                # 直接回答在**最前**：它是用户问的那一点，读的人第一眼要看到的不是概述。
+                answer["direct_answer"],
                 answer["summary"],
                 answer["probable_cause"],
                 *answer["next_steps"],
@@ -679,6 +681,16 @@ class OperatorCpms:
                 self.context.runtime.cancel_assistant_qa(task.caller, run.qa_id)
 
 
+#: 订单详情的取证字段。**这张表就是模型能回答什么**：少一个金额，问电费的答案就只剩
+#: 「接口未提供」。41 实测（2026-10-29，订单 2113549588485718017）`getOrderInfoDetail`
+#: 返回 `electricityFee=13.68`、`serviceFee=13.68`、`totalAmount=27.36`、`payAmount=0.00`，
+#: 而当时这里一个都没有 —— 于是两笔不同的问题得到同一份「缺证」报告。
+#:
+#: `time` 与 `gunPower` 一起才构成可核对的一对：只有「4.5598 kWh / 229 秒 ≈ 71.7 kW」而没有
+#: 额定 23 kW，模型无法判断这算不算异常；把两者都给出来，异常才成为可陈述的事实。
+#:
+#: 纯电价（tip/peak/flat/valley*Fee）在 41 全为 NULL，故不在这里重复列出；计费模板的
+#: 分时段明细（`periodFeeDetail`）在外层响应里，本层不取 —— 本次只补平铺金额。
 DETAIL_FIELDS = [
     "orderNo",
     "siteId",
@@ -693,6 +705,19 @@ DETAIL_FIELDS = [
     "stoppedReasonCode",
     "stoppedReasonContent",
     "electricity",
+    "time",
+    "voltage",
+    "electricityFee",
+    "serviceFee",
+    "totalAmount",
+    "payAmount",
+    "marketAmount",
+    "refundStatus",
+    "refundAmount",
+    "startSoc",
+    "endSoc",
+    "gunPower",
+    "interfaceType",
 ]
 SAMPLE_FIELDS = [
     "orderNo",
@@ -723,6 +748,9 @@ def minimized_response(body, tool):
     else:
         selected = {k: data[k] for k in ("total", "current", "size")}
         selected["records"] = [{k: v for k, v in row.items() if k in fields} for row in data["records"]]
+        # 与 `project_evidence` 同口径：响应被裁剪后仍要能分辨「一条都没有」。
+        selected["samples_returned"] = len(data["records"])
+        selected["absence"] = "no_samples" if not data["records"] else None
     return {"code": 0, "data": selected}
 
 
@@ -784,6 +812,13 @@ def project_evidence(body, order, tool):
             "truncated": data["total"] > len(data["records"]),
             "ordering_guaranteed": False,
             "complete_timeline": False,
+            # `samples_returned` 与 `truncated` 是**两件事**，以前只有后者：`total=0`
+            # 让 truncated=False，于是一个从没上报过样本的枪和一个取全了的订单在
+            # 证据里长得一样。41 实测（订单 2113549588485718017）该枪样本 0 条，
+            # 而报告只能说「样本不是完整时间线」—— 读的人分不清是缺证还是没数据。
+            # 现在这条事实直接摆进证据，模型不必也不该自行推断。
+            "samples_returned": len(data["records"]),
+            "absence": "no_samples" if not data["records"] else None,
         }
     )
     return {
@@ -826,16 +861,18 @@ def _answer_refused(reason):
     raise OperatorRefused("OPERATOR_INVALID_ANSWER")
 
 
+ANSWER_FIELDS = frozenset(
+    {"direct_answer", "summary", "probable_cause", "next_steps", "limitations", "evidence_tools"}
+)
+
+
 def validate_answer(answer, evidence):
-    if not isinstance(answer, dict) or set(answer) != {
-        "summary",
-        "probable_cause",
-        "next_steps",
-        "limitations",
-        "evidence_tools",
-    }:
+    if not isinstance(answer, dict) or set(answer) != ANSWER_FIELDS:
         _answer_refused("shape")
-    for key in ("summary", "probable_cause"):
+    # `direct_answer` 与 summary/probable_cause 同一条文字判据：**空串即拒绝**。
+    # 它是「这次回答的是用户问的那一点」的唯一落点；允许它为空，就等于允许模型交回一份
+    # 与提问无关的通用报告 —— 那正是 2026-10-29 反馈里「两个问题同一个答案」的形状。
+    for key in ("direct_answer", "summary", "probable_cause"):
         if not isinstance(answer[key], str) or not 1 <= len(answer[key]) <= 2000:
             _answer_refused("text_field")
     for key in ("next_steps", "limitations", "evidence_tools"):
