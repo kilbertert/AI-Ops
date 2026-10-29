@@ -114,6 +114,7 @@ HTTP 200 的 HTML 也不算通过；空用户结果只证明接口可读，不�
 
 ## 数据与凭据边界
 
+模型代理源码与入口见[services/model-proxy](../../services/model-proxy/README.md)。
 模型出口使用独立的 `model-proxy/` 配置目录，只挂载自己的供应商 key 与代理令牌。
 它不挂 `gateway/`，因此看不到业务库、会话库及订单绑定配置；Gateway 也不挂出口的
 供应商 key。`M2LIVE_MODEL_API_KEY_FILE` 只供 `prepare-secrets.sh` 读取供应商凭据；

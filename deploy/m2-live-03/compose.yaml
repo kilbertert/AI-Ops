@@ -66,7 +66,7 @@ services:
     container_name: m2live03-model-proxy
     networks: [modellink, egress]
     user: "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}"
-    entrypoint: ["python", "/opt/aiops-src/tools/m2_live/model_proxy.py"]
+    entrypoint: ["python", "/opt/aiops-src/services/model-proxy/model_proxy.py"]
     environment:
       M2LIVE_MODEL_UPSTREAM: ${M2LIVE_MODEL_UPSTREAM:-}
       # 供应商基路径（通常是 /v1）是**部署配置**：适配器只追加 /chat/completions，

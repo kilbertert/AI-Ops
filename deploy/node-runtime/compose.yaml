@@ -23,7 +23,7 @@ services:
     user: ${AIOPS_NODE_UID:?}:${AIOPS_NODE_GID:?}
     entrypoint:
     - python
-    - /opt/aiops-src/tools/m2_live/model_proxy.py
+    - /opt/aiops-src/services/model-proxy/model_proxy.py
     environment:
       M2LIVE_MODEL_UPSTREAM: ${AIOPS_MODEL_UPSTREAM:?}
       M2LIVE_MODEL_UPSTREAM_BASE_PATH: ${AIOPS_MODEL_BASE_PATH:-/v1}

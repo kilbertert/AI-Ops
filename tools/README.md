@@ -1,7 +1,7 @@
 # tools/ — 数据生成器与校验器
 
 本目录混合了数据生成器、校验器、隔离实验和现役执行组件。
-正式 Java 节点源码已迁到 `services/execution-node/`；`m2_live/model_proxy.py` 被正式节点栈启动；
+正式 Java 节点源码位于 `services/execution-node/`，模型代理位于 `services/model-proxy/`；
 不能按“工具/旧里程碑”整体删除。归位方案见[目录迁移清单](../docs/architecture/repository-layout.md)。
 
 ## 目录内容

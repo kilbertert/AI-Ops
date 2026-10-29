@@ -74,7 +74,8 @@ flowchart LR
 |---|---|
 | `src/aiops_diagnostics/` | Python Gateway、业务与集成；本轮不搬迁 |
 | `services/execution-node/` | 现役 Java 节点源码、资源与 Maven 构建入口 |
-| `tools/m2_live/` | 包含现役模型代理与验证工具，后续按职责归位 |
+| `services/model-proxy/` | 现役固定目标模型代理 |
+| `tools/m2_live/` | 隔离栈探针与回环中继 |
 | `tools/` | 内容生成、迁移和隔离验证 |
 | `plugins/` | Dify 知识插件及其原生打包布局 |
 | `deploy/`、`ops/` | 部署制品、环境声明、代理配置与操作手册 |
