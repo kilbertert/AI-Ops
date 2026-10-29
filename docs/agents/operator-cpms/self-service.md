@@ -105,3 +105,8 @@ max_tokens_to_sample、function_calling_type=tool_call、stream_function_calling
 41的`/etc/aiops-41/gateway.env.bak-self-service-b86be95f`。
 若需要恢复，先确认有没有新受管客户使用新版解析；保留数据库和新资源记录，再恢复相应服务旧制品。
 旧web镜像是`aiops/dify-web-patched:knowledge-picker-20261027`，不是无业务补丁的上游镜像。
+
+原生聊天组件会自动补response_mode、conversation_id、files和inputs。桥只接收streaming及空值，
+剥离后按明确订单试用；非空上下文拒绝。若Java清单max_tokens缺省，界面显示“输出上限：模型默认”，
+Dify凭据里的输出预算不能当成Java显式上限。租户账号可验证自己工作区的复制/预览/发布；
+平台跨客户开通必须使用公司type=-1且具有平台管理权限的账号，优链充可以作为目标客户。
