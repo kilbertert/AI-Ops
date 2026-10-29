@@ -125,8 +125,9 @@ def test_running_then_failed_does_not_deliver_report(bridge, upstream, monkeypat
         ("诊断订单 123456789012", "123456789012"),
         ("1234", "1234"),
         ("order ID: A-12", "A-12"),
-        ("我上一个订单是什么情况", None),
-        ("hello", None),
+        ("我上一个订单是什么情况", ""),
+        ("hello", ""),
+        ("帮我找一下广州天河附近的充电站", ""),
         ("订单 123456789012.12", None),
         ("订单 123456789012:12", None),
         ("订单号: 1234.56，订单号: 9876", None),
@@ -253,7 +254,7 @@ def test_native_preview_rejects_nonempty_unimplemented_context(bridge, upstream,
     assert not any(x["path"] == "/v1/dify/trial" for x in upstream.calls)
 
 
-@pytest.mark.parametrize("fault", ["csrf", "origin", "session", "app", "order", "multiple", "tenant"])
+@pytest.mark.parametrize("fault", ["csrf", "origin", "session", "app", "multiple", "tenant"])
 def test_rejects_untrusted_input_before_gateway(bridge, upstream, fault):
     headers = dict(_browser_headers())
     body = {"app_id": APP_ID, "query": "订单 2115330675982561281", "pre_prompt": "p", "tools": []}
@@ -265,8 +266,6 @@ def test_rejects_untrusted_input_before_gateway(bridge, upstream, fault):
         headers.pop("Cookie")
     if fault == "app":
         body["app_id"] = "another"
-    if fault == "order":
-        body["query"] = "我上一个订单是什么情况"
     if fault == "multiple":
         body["query"] += " 2115330675982561282"
     if fault == "tenant":
@@ -274,6 +273,22 @@ def test_rejects_untrusted_input_before_gateway(bridge, upstream, fault):
     status, _, response = send(bridge, body, list(headers.items()))
     assert 400 <= status < 500 and json.loads(response)["message"]
     assert not any(x["path"].startswith("/v1/") for x in upstream.calls)
+
+
+def test_non_order_preview_reaches_gateway_without_fake_order(bridge, upstream):
+    status, _, body = send(
+        bridge,
+        {
+            "app_id": APP_ID,
+            "query": "帮我找一下广州天河附近的充电站",
+            "pre_prompt": "CURRENT_DRAFT",
+            "tools": [],
+        },
+    )
+    assert status == 200 and "message_end" in body
+    call = next(x for x in upstream.calls if x["path"] == "/v1/dify/trial")
+    assert call["body"]["order_no"] == ""
+    assert call["body"]["question"] == "帮我找一下广州天河附近的充电站"
 
 
 def test_missing_company_session_is_clear_and_not_retried(bridge, upstream):

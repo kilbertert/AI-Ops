@@ -350,7 +350,7 @@ class DifyTrialRequest(BaseModel):
     """试用已登记应用的草稿，执行路线由服务端绑定决定。"""
 
     model_config = ConfigDict(extra="forbid")
-    order_no: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+    order_no: str = Field(default="", max_length=64, pattern=r"^([A-Za-z0-9][A-Za-z0-9_.:-]{0,63})?$")
     app_id: str = Field(min_length=1, max_length=64, pattern=r"^[0-9a-fA-F-]{8,64}$")
     question: str = Field(default="check order status", min_length=1, max_length=4000)
     operator_preview: OperatorPreviewDraft | None = None
@@ -2343,6 +2343,8 @@ def create_gateway_app(
                 return {"trial_id": qa["qa_id"], "status": qa["status"]}
         if payload.operator_preview is not None:
             raise StandardAPIError(403, "OPERATOR_PREVIEW_UNBOUND", "operator preview target not registered")
+        if not payload.order_no:
+            raise StandardAPIError(400, "TRIAL_ORDER_REQUIRED", "this trial requires an order")
         trial_initiator = TrialInitiator.from_headers(
             initiator, initiator_tenant, initiator_type, initiator_name
         )
@@ -2694,16 +2696,7 @@ def create_gateway_app(
                 raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
             if binding is not None:
                 _require_operator_company_token(request)
-                order = payload.order_no or _extract_order_no(payload.question)
-                if not order:
-                    return _clarification(
-                        context,
-                        caller,
-                        decision,
-                        code=CLARIFY_ORDER_REQUIRED,
-                        question=payload.question,
-                        language=language,
-                    )
+                order = payload.order_no or _extract_order_no(payload.question) or ""
                 target = next(
                     (
                         r
@@ -2729,7 +2722,7 @@ def create_gateway_app(
                         platform_entry="operator",
                         source_key=source,
                     )
-                    return context.operator_cpms.refresh_scope(authenticated)
+                    return context.operator_cpms.refresh_scope(authenticated, allow_empty=not order)
 
                 turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
                 try:
@@ -3412,7 +3405,10 @@ def create_gateway_app(
         del payload  # 同上：请求体不参与任何决策
         response.headers["Cache-Control"] = "no-store"
         existing = context.agent_run_store.peek(run_id)
-        if existing is not None and existing.operation == "operator_order_diagnosis":
+        if existing is not None and existing.operation in {
+            "operator_order_diagnosis",
+            "operator_conversation",
+        }:
             raise StandardAPIError(403, "AGENT_RUN_OPERATION_MISMATCH", "agent run refused")
         # APP-RUNTIME-01：回调该用哪份配置，由**这条 run 自己**决定（聊天入口签发的用聊天
         # 绑定，委派入口签发的用委派绑定）。原来只看委派那个键，于是「只开聊天绑定」时
@@ -3654,7 +3650,7 @@ def create_gateway_app(
         """已认证目标节点取得本次冻结清单；不交订单数据或供应商凭据。"""
         response.headers["Cache-Control"] = "no-store"
         run = context.agent_run_store.get(run_id)
-        if run is not None and run.operation == "operator_order_diagnosis":
+        if run is not None and run.operation in {"operator_order_diagnosis", "operator_conversation"}:
             return context.operator_cpms.publication(run_id, (authorization or "").removeprefix("Bearer "))
         if run is None or not run.execution_manifest:
             raise StandardAPIError(404, "NODE_PUBLICATION_NOT_FOUND", "node publication unavailable")
@@ -3926,7 +3922,10 @@ def create_gateway_app(
         response.headers["Cache-Control"] = "no-store"
         # 与领取端点同一条判据：用**这条 run 自己**的绑定，而不是委派那个键。
         existing = context.agent_run_store.peek(run_id)
-        if existing is not None and existing.operation == "operator_order_diagnosis":
+        if existing is not None and existing.operation in {
+            "operator_order_diagnosis",
+            "operator_conversation",
+        }:
             if payload.status == "completed":
                 raise StandardAPIError(403, "AGENT_RUN_OPERATION_MISMATCH", "agent run refused")
             return context.operator_cpms.complete(
@@ -6007,7 +6006,7 @@ def authenticated_operator_console(context, session):
         identity["tenant_id"], caller.effective_tenant_id
     ):
         raise OperatorRefused("OPERATOR_TRIAL_IDENTITY_MISMATCH")
-    return context.operator_cpms.refresh_scope(caller), identity["token"]
+    return context.operator_cpms.refresh_scope(caller, allow_empty=True), identity["token"]
 
 
 def _require_operator_company_token(request):

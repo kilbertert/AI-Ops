@@ -202,7 +202,8 @@ public final class ExecManifest {
 
     private static ExecManifest parse(JsonNode root, String id, Path real) {
         String schema = text(root, "schema");
-        if (!SUPPORTED_SCHEMA.equals(schema) && !"operator-exec-config/1".equals(schema)) {
+        boolean conversation = "operator-conversation/1".equals(schema);
+        if (!SUPPORTED_SCHEMA.equals(schema) && !"operator-exec-config/1".equals(schema) && !conversation) {
             throw new ExecConfigViolation("MANIFEST",
                     "不支持的 schema（" + schema + "），只接受 " + SUPPORTED_SCHEMA);
         }
@@ -223,7 +224,7 @@ public final class ExecManifest {
         }
         List<ToolDef> tools = new ArrayList<>();
         JsonNode toolsNode = root.get("tools");
-        if ("operator-exec-config/1".equals(schema) && (toolsNode == null || !toolsNode.isArray())) {
+        if (("operator-exec-config/1".equals(schema) || conversation) && (toolsNode == null || !toolsNode.isArray())) {
             throw new ExecConfigViolation("MANIFEST", "管家工具清单必须显式声明数组");
         }
         if (toolsNode != null && !toolsNode.isNull()) {
@@ -234,13 +235,16 @@ public final class ExecManifest {
                 tools.add(ToolDef.of(text(t, "name"), text(t, "description"), text(t, "input_schema")));
             }
         }
-        if (tools.isEmpty() && !"operator-exec-config/1".equals(schema)) {
+        if (conversation && !tools.isEmpty()) {
+            throw new ExecConfigViolation("TOOLS", "非订单回合不允许订单工具");
+        }
+        if (tools.isEmpty() && !"operator-exec-config/1".equals(schema) && !conversation) {
             // 本片固定「唯一受控工具」。空工具集合**不是**拒绝手段，也不是合法期望值。
             throw new ExecConfigViolation("MANIFEST", "tools 不得为空：本片要求显式声明受控工具");
         }
         return new ExecManifest(id, text(root, "name"), text(model, "provider_key"),
                 text(model, "adapter_key"), text(model, "model_key"), text(model, "endpoint"),
-                ChatTuning.of(options), system, tools, history, "operator-exec-config/1".equals(schema));
+                ChatTuning.of(options), system, tools, history, "operator-exec-config/1".equals(schema) || conversation);
     }
 
     private static JsonNode required(JsonNode parent, String field) {

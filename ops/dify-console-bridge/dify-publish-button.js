@@ -86,18 +86,18 @@
    * 没有服务端草稿层：编辑页里没点过「发布更新」的改动只活在浏览器内存里，任何 API 都
    * 读不到（#773 实测）。所以按钮文案必须说清这件事，否则运营会以为它跑的是眼前这份。
    *
-   * 订单号**只能由人来给**：编排页里没有订单上下文，而试运行必须落到一张具体订单上。
+   * 输入业务问题或明确订单号；需要订单时由执行结果澄清。
    */
   function aiopsTrial(btn) {
     if (!currentAppId()) { aiopsToast('请从某个智能体的编排页点这个按钮', false); return; }
     var orderNo = window.prompt(
       '在 AI-Ops 上用真实数据试运行这份草稿。\n\n' +
         '注意：以**最近一次保存**的配置为准（未点「发布更新」的改动 Dify 不保存）。\n' +
-        '输入要试运行的订单号：'
+        '输入要试运行的问题（也可直接填写订单号）：'
     );
     if (orderNo === null) { return; }
     orderNo = (orderNo || '').trim();
-    if (!orderNo) { aiopsToast('请填写订单号', false); return; }
+    if (!orderNo) { aiopsToast('请填写问题或订单号', false); return; }
     btn.disabled = true;
     var original = btn.textContent;
     btn.textContent = '提交中…';
@@ -109,7 +109,7 @@
         // 与发布同一枚 CSRF（桥用同一套浏览器三门）。
         'X-CSRF-Token': aiopsReadCsrfCookie(),
       },
-      body: JSON.stringify({ order_no: orderNo }),
+      body: JSON.stringify({ question: orderNo }),
     })
       .then(function (r) { return r.json().catch(function () { return {}; }); })
       .then(function (d) {
@@ -174,7 +174,7 @@
   function aiopsWatchTrial(trialId, orderNo) {
     aiopsTrialStop();
     var polls = 0;
-    aiopsTrialRender(['订单 ' + orderNo, '已提交，等待结果…', '', '作业 ' + trialId]);
+    aiopsTrialRender(['问题 ' + orderNo, '已提交，等待结果…', '', '作业 ' + trialId]);
 
     function once() {
       fetch('/__aiops/trial/result', {
@@ -189,7 +189,7 @@
         .then(function (r) { return r.json().catch(function () { return {}; }); })
         .then(function (d) {
           polls += 1;
-          var head = ['订单 ' + orderNo, '', d.reason || '（无结果）'];
+          var head = ['问题 ' + orderNo, '', d.reason || '（无结果）'];
           if (!d.read) {
             // 读失败不是终态：可能是作业还没落库/网关瞬时不可用。继续轮，但有上限。
             head.push('', '（第 ' + polls + ' 次读取未成功）');

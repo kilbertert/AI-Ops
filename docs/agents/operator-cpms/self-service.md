@@ -140,3 +140,11 @@ ragflow_tenants.model_checked_at非空。知识入口303并进入RAGFlow后，�
 私钥与收件人位置沿用该目录既有配置，不复制到仓库。该资产指向41公司的平台管理账号，
 实际可管客户仍须每次从正常会话查询权威目录，不把文档陈述当成永久授权。
 新增资产时锁定更新、保留旧密文、加密后解密比对，再原子替换；本次未改其他项目条目。
+
+旧懒注册已创建RAGFlow账号但Gateway没有密码时，先按公司租户推导邮箱，确认kb-service映射
+与RAGFlow唯一非平台用户一致，保留原租户、API token和知识库。恢复工具为
+`deploy/kb-service/recover_tenant_login.py`，必须从合并修订提取，在RAGFlow容器`/ragflow`运行。
+无`--apply`只读核对；正式恢复从stdin传入预先加密保存的随机密码并指定容器内新0600备份。
+工具调用RAGFlow现有`UserService.update_user_password`，只恢复这个账号的密码，不改API token或数据。
+先记录待恢复凭据，恢复后用`/kb/tenants/verify-password`确认，再重试原开通任务完成模型验证。
+不要调用会重新创建租户的绕行脚本，不输出密码、散列或会话。失败保留备份和任务状态供恢复。
