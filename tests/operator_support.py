@@ -30,18 +30,18 @@ from urllib.parse import urlsplit
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.query_scope import (
+from aiops_diagnostics.identity.caller_auth import ScopedOrderAuthorizer
+from aiops_diagnostics.identity.query_scope import (
     QueryScope,
     resolve_operator_site_scope,
     static_site_mapper,
 )
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,
     DataScope,
@@ -108,11 +108,13 @@ def java_session(payload: dict[str, Any]) -> bytes:
 
 def _redis_session(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any] | None = None) -> None:
     value = java_session(payload or {"userId": C_USER_ID, "tenantId": TENANT})
-    monkeypatch.setattr("aiops_diagnostics.third_session_auth.redis.Redis", lambda **_: _Redis(value))
+    monkeypatch.setattr(
+        "aiops_diagnostics.identity.third_session_auth.redis.Redis", lambda **_: _Redis(value)
+    )
 
 
 def session_settings():
-    from aiops_diagnostics.third_session_auth import ThirdSessionSettings
+    from aiops_diagnostics.identity.third_session_auth import ThirdSessionSettings
 
     return ThirdSessionSettings(
         "127.0.0.1", 6379, 0, password="secret", service_token="svc", key_prefix="app:3rd_session:"
@@ -211,7 +213,7 @@ def resolve_session(
     站点集合**，其余一律保持 ``self``。默认取 ``operator``，因为本模块的替身服务于
     管家端用例；消费者侧用例显式传 ``"consumer"``。
     """
-    from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver
+    from aiops_diagnostics.identity.third_session_auth import RedisThirdSessionResolver
 
     _redis_session(monkeypatch)
     resolver = RedisThirdSessionResolver(

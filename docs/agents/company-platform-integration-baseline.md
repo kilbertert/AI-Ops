@@ -129,7 +129,7 @@ OAuth2 令牌」翻译成 `user-id` + `tenant-id` —— AI-Ops 现在做的那�
   ⚠️ **「无凭据时返回 `Full authentication is required`」曾被读成「端点可达、只差凭据」—— 这是错的**，
   见 §4 第 1 条：带凭据时返回**逐字相同**的那句话。
   **两种响应的形状不同**（2026-09-29 读源码更正，实现依据见
-  [``company_token_auth.py``](../../src/aiops_diagnostics/company_token_auth.py) 的模块文档）：
+  [``company_token_auth.py``](../../src/aiops_diagnostics/identity/company_token_auth.py) 的模块文档）：
   - **成功**：令牌的 `additionalInformation` 被**合并进顶层**（不是包在 `data` 里），
     且**没有** `code`/`data` 信封。公司那两个 `ResponseBodyAdvice`
     （`I18nResponseAdvice`/`TenantNameResponseAdvice`）的 `supports()` 都要求**控制器方法声明的

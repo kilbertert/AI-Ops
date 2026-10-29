@@ -8,18 +8,18 @@ from typing import Any, Protocol
 
 import redis
 
-from aiops_diagnostics.caller_auth import (
+from aiops_diagnostics.config import Settings, UpmsSettings
+from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_INVALID,
     CALLER_AUTH_UNAVAILABLE,
     CallerAuthError,
 )
-from aiops_diagnostics.config import Settings, UpmsSettings
-from aiops_diagnostics.query_scope import (
+from aiops_diagnostics.identity.query_scope import (
     QueryScope,
     UpmsShopDirectory,
     resolve_operator_site_scope,
 )
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.scope_context import (
     C_MAPPING_AMBIGUOUS,
     C_MAPPING_C_USER_MISMATCH,
     C_MAPPING_FAILED,

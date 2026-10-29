@@ -16,8 +16,8 @@ from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, Platform
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.ops_analysis import RULE_VERSION
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 TENANT = "T-1"
 WINDOW = {"window_start": "2026-10-01T00:00:00Z", "window_end": "2026-10-02T00:00:00Z"}
@@ -36,7 +36,7 @@ class _Resolver:
         platform_entry: str | None = None,
         source_key: str | None = None,
     ) -> ScopeContext:
-        from aiops_diagnostics.caller_auth import CallerAuthError
+        from aiops_diagnostics.identity.caller_auth import CallerAuthError
 
         if token != "token":
             raise CallerAuthError("bad token", code="caller_auth.invalid_token")

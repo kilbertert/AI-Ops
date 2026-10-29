@@ -29,7 +29,7 @@ def configure_admin(
 
 
 def _platform_migration_context() -> Any:
-    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
     subject = SubjectRecord(b_user_id="platform-shortcut-migration", tenant_id="platform")
     return ScopeContext.build(

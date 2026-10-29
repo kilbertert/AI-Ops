@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_ERROR_AMBIGUOUS_SUBJECT,
     SCOPE_ERROR_AUTH_FAILED,
     SCOPE_ERROR_DELEGATION_DENIED,

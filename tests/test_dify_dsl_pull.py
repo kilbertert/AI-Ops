@@ -20,7 +20,7 @@ from aiops_diagnostics.dify_dsl_pull import (
     map_dsl_to_config,
     pull_agent_draft,
 )
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 FIXTURES = Path(__file__).parent / "fixtures"
 #: A real export pulled from the Dify instance on host 36 (#579) through the

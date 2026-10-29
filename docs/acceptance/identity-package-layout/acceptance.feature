@@ -1,0 +1,18 @@
+Feature: 身份与范围归入共享Python包
+  Rule: 目录变化不改变授权边界
+    Scenario: C端本人范围
+      Given 用户正常登录且订单属于本人
+      When 从原入口检测订单
+      Then 本次QA完成并可回读
+    Scenario: 另一合法主体
+      Given 同租户另一用户不能看到该订单
+      When 该用户请求订单或读取原QA
+      Then 拒绝并且不交付业务正文
+    Scenario: 管家身份
+      Given 公司用户具有该订单当前可见范围
+      When 通过管家入口检测订单
+      Then 沿用公司身份与Java授权工具，不使用C端会话代替
+    Scenario: 匿名入口与安装
+      Given 部署了新identity包
+      When 匿名请求业务API或加载已安装模块
+      Then 匿名请求仍被拒绝且新包可导入，旧模块不存在

@@ -48,7 +48,7 @@ from aiops_diagnostics.deployment_environment import require_deployment_identity
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 TOKEN = os.environ["AIOPS_M2_LOCAL_TOKEN"]
 TENANT = os.environ.get("AIOPS_M2_TENANT", "TENANT-A")
@@ -120,7 +120,7 @@ class LocalResolver:
     """
 
     def resolve(self, token: str, *, required_scope: str, **kwargs: Any) -> ScopeContext:
-        from aiops_diagnostics.caller_auth import CallerAuthError
+        from aiops_diagnostics.identity.caller_auth import CallerAuthError
 
         if token == TOKEN:
             c_user, tenant = C_USER, TENANT
@@ -153,7 +153,7 @@ class SyntheticOrderAuthorizer:
     unavailable = False
 
     def can_access(self, context: ScopeContext, order_no: str) -> bool:
-        from aiops_diagnostics.caller_auth import CallerAuthError
+        from aiops_diagnostics.identity.caller_auth import CallerAuthError
 
         if self.unavailable:
             raise CallerAuthError("unavailable", code="caller_auth.unavailable")

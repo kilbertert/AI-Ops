@@ -109,18 +109,18 @@ from aiops_diagnostics.bounded_http import (
     parse_raw_envelope,
     request_json,
 )
-from aiops_diagnostics.caller_auth import (
+from aiops_diagnostics.config import Settings
+from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_INVALID,
     CALLER_AUTH_UNAVAILABLE,
     CallerAuthError,
 )
-from aiops_diagnostics.config import Settings
-from aiops_diagnostics.query_scope import (
+from aiops_diagnostics.identity.query_scope import (
     ShopDirectory,
     SiteScopeMapper,
     operator_site_scope_from_shops,
 )
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,

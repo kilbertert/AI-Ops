@@ -25,12 +25,12 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.caller_auth import CALLER_AUTH_UNAVAILABLE, CallerAuthError
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import NOT_OWNED, OWNED, UNAVAILABLE, create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_UNAVAILABLE, CallerAuthError
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
 API_FILE = "gateway_api.py"

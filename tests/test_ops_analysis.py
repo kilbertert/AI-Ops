@@ -17,6 +17,7 @@ import pytest
 
 from aiops_diagnostics.answer_language import answer_chinese_leak
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.identity.query_scope import QueryScope
 from aiops_diagnostics.ops_analysis import (
     ABNORMAL_STATUS,
     NORMAL_STATUS,
@@ -29,7 +30,6 @@ from aiops_diagnostics.ops_analysis import (
     build_failure_rate_contract,
     risk_level,
 )
-from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.sources import MySQLSource
 
 WINDOW_START = datetime(2026, 10, 1, tzinfo=UTC)

@@ -323,7 +323,7 @@ def main():
         from aiops_diagnostics import chat_execution
         from aiops_diagnostics.agent_runs import AgentRunStore
         from aiops_diagnostics.gateway_config import GatewayServerSettings
-        from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+        from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
         run_store = AgentRunStore(database)
         local_settings = GatewayServerSettings(

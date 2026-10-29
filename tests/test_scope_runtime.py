@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.query_scope import QueryScope, resolve_query_scope, static_site_mapper
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.query_scope import QueryScope, resolve_query_scope, static_site_mapper
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_TYPE_ORGAN,
     DataScope,
     ScopeRequest,

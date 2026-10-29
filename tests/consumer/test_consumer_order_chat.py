@@ -15,12 +15,12 @@ import uvicorn
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics import gateway_api
-from aiops_diagnostics.caller_auth import CallerAuthError
 from aiops_diagnostics.consumer.consumer_order_chat import is_order_status_question
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.caller_auth import CallerAuthError
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.sources import MySQLSource
 
 ORDER = "2096164064667852801"
@@ -407,7 +407,7 @@ def test_new_turn_column_migrates_without_losing_existing_history(provision):
 
 def test_latest_sql_filters_regular_and_work_order_owners_before_sort(monkeypatch):
     from aiops_diagnostics.config import Settings
-    from aiops_diagnostics.query_scope import QueryScope
+    from aiops_diagnostics.identity.query_scope import QueryScope
 
     calls = []
 
@@ -451,7 +451,7 @@ def test_latest_selects_only_owned_regular_or_claimed_orders_in_sql(monkeypatch)
     import sqlite3
 
     from aiops_diagnostics.config import Settings
-    from aiops_diagnostics.query_scope import QueryScope
+    from aiops_diagnostics.identity.query_scope import QueryScope
 
     db = sqlite3.connect(":memory:", check_same_thread=False)
     db.row_factory = sqlite3.Row

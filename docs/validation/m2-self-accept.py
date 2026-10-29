@@ -35,11 +35,11 @@ sys.path.insert(0, str(REPO / "src"))
 from fastapi.testclient import TestClient  # noqa: E402
 
 from aiops_diagnostics.agent_runs import AgentRunStore  # noqa: E402
-from aiops_diagnostics.caller_auth import CallerAuthError  # noqa: E402
 from aiops_diagnostics.gateway_api import create_gateway_app  # noqa: E402
 from aiops_diagnostics.gateway_config import GatewayServerSettings  # noqa: E402
 from aiops_diagnostics.gateway_store import GatewayStore  # noqa: E402
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord  # noqa: E402
+from aiops_diagnostics.identity.caller_auth import CallerAuthError  # noqa: E402
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord  # noqa: E402
 
 NODE_1 = "accept-node-1"
 NODE_2 = "accept-node-2"

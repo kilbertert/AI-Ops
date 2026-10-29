@@ -26,9 +26,9 @@ from aiops_diagnostics.config import Settings
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime
 from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.identity.query_scope import QueryScope
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.ops_analysis_narrative import build_narrative_prompt
-from aiops_diagnostics.query_scope import QueryScope
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 TENANT = "T-1"
 WINDOW = ("2026-10-01T00:00:00+00:00", "2026-10-02T00:00:00+00:00")
@@ -119,7 +119,7 @@ def _tenant_wide_scope() -> ScopeContext:
 
 def _scope_error(site_ids: tuple[str, ...]):
     """The real ``ScopeError`` the resolver raises for an oversized data scope."""
-    from aiops_diagnostics.query_scope import MAX_SCOPE_IDS, SCOPE_ERROR_SCOPE_TOO_LARGE, ScopeError
+    from aiops_diagnostics.identity.query_scope import MAX_SCOPE_IDS, SCOPE_ERROR_SCOPE_TOO_LARGE, ScopeError
 
     assert len(site_ids) > MAX_SCOPE_IDS
     return ScopeError(f"数据范围 ID 数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
@@ -486,7 +486,7 @@ def test_a_scope_resolution_failure_ends_the_job_instead_of_leaving_it_running(
     而不是断言元组内容 —— 元组可以再漂。
     """
     runtime, store = _runtime(tmp_path, monkeypatch)
-    from aiops_diagnostics.query_scope import MAX_SCOPE_IDS
+    from aiops_diagnostics.identity.query_scope import MAX_SCOPE_IDS
 
     over_limit = tuple(f"S-{i}" for i in range(MAX_SCOPE_IDS + 1))
     try:

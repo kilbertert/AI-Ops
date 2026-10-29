@@ -40,11 +40,11 @@ from aiops_diagnostics.agent_runs import (
     scope_from_json,
     scope_to_json,
 )
-from aiops_diagnostics.caller_auth import CallerAuthError
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.caller_auth import CallerAuthError
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 NODE_A_TOKEN = "node-token-alpha-0123456789"
 NODE_A2_TOKEN = "node-token-alpha-2-0123456789"

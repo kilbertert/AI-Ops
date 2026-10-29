@@ -17,7 +17,7 @@ from aiops_diagnostics import chat_execution, node_publication, operator_cpms
 from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from aiops_diagnostics.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.faq import PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 HEADERS = {"Authorization": "Bearer operator-private", "X-Business-Entry": "operator"}
 APP = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -43,7 +43,7 @@ class Resolver:
 
     def resolve(self, token, **kwargs):
         if token != "operator-private":
-            from aiops_diagnostics.caller_auth import CallerAuthError
+            from aiops_diagnostics.identity.caller_auth import CallerAuthError
 
             raise CallerAuthError("invalid", code="caller_auth.invalid")
         if self.hook:
@@ -133,7 +133,7 @@ def environment(tmp_path, monkeypatch):
             resolver = Resolver()
             resolver.current = scope()
             ctx.caller_resolver = resolver
-            from aiops_diagnostics.query_scope import resolve_query_scope
+            from aiops_diagnostics.identity.query_scope import resolve_query_scope
 
             ctx.runtime._trial_operator_scope = SimpleNamespace(
                 site_scope_by_b_user_id=lambda *_: resolve_query_scope(resolver.current)
@@ -680,7 +680,7 @@ def test_operator_session_mode_is_refused_before_cpms_or_run(operator, header):
 
 
 def test_readback_reauthenticates_diagnosis_scope(operator, monkeypatch):
-    from aiops_diagnostics.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
+    from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
 
     f = operator
     monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))

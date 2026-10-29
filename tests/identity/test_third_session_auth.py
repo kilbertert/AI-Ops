@@ -18,10 +18,10 @@ from operator_support import (
     session_settings,
 )
 
-from aiops_diagnostics.caller_auth import CALLER_AUTH_INVALID, CallerAuthError
 from aiops_diagnostics.config import UpmsSettings
-from aiops_diagnostics.query_scope import QueryScope, resolve_query_scope
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_INVALID, CallerAuthError
+from aiops_diagnostics.identity.query_scope import QueryScope, resolve_query_scope
+from aiops_diagnostics.identity.scope_context import (
     C_MAPPING_AMBIGUOUS,
     C_MAPPING_C_USER_MISMATCH,
     C_MAPPING_FAILED,
@@ -33,7 +33,7 @@ from aiops_diagnostics.scope_context import (
     ScopeError,
     SubjectRecord,
 )
-from aiops_diagnostics.third_session_auth import (
+from aiops_diagnostics.identity.third_session_auth import (
     RedisThirdSessionResolver,
     UpmsBSubjectDirectory,
 )
@@ -54,7 +54,9 @@ class _Redis:
 
 
 def _redis_session(monkeypatch: pytest.MonkeyPatch, payload: str | bytes | None) -> None:
-    monkeypatch.setattr("aiops_diagnostics.third_session_auth.redis.Redis", lambda **_: _Redis(payload))
+    monkeypatch.setattr(
+        "aiops_diagnostics.identity.third_session_auth.redis.Redis", lambda **_: _Redis(payload)
+    )
 
 
 def test_resolves_existing_third_session(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,7 +87,7 @@ def test_resolves_login_pointer_to_session_object(monkeypatch: pytest.MonkeyPatc
         def get(self, key: str):
             return pointer if key.endswith("login-1") else session
 
-    monkeypatch.setattr("aiops_diagnostics.third_session_auth.redis.Redis", lambda **_: Redis())
+    monkeypatch.setattr("aiops_diagnostics.identity.third_session_auth.redis.Redis", lambda **_: Redis())
     context = RedisThirdSessionResolver(session_settings()).resolve(
         "svc", required_scope="aiops:orders:read", third_session="login-1"
     )
@@ -125,7 +127,7 @@ def test_session_identity_carries_b_side_subject_from_the_c_to_b_mapping(
     assert directory.calls == ["C-1"]
     # 未注入运营商站点范围（消费者端部署/缺配置）时可见性判定不变：仍是 self 范围、
     # 同一租户、同一 C 端用户过滤。注入了范围之后的判定见 #426 的
-    # tests/test_operator_order_authorization.py。
+    # tests/identity/test_operator_order_authorization.py。
     assert context.data_scope == DataScope(type="self")
     assert context.effective_tenant_id == "T-1"
     assert resolve_query_scope(context) == QueryScope(tenant_id="T-1", site_ids=None, user_id="C-1")
@@ -220,7 +222,7 @@ def test_data_level_c_mapping_problems_are_logged_without_identifiers(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """歧义/悬空类原因必须留痕，但日志不带 C 端 id、租户或凭据。"""
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.third_session_auth"):
+    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.identity.third_session_auth"):
         _resolve(monkeypatch, BSubjectDirectory({"C-1": (b_subject(), b_subject(b_user_id="B-10"))}))
 
     assert C_MAPPING_AMBIGUOUS in caplog.text
@@ -354,7 +356,7 @@ def test_third_session_resolver_without_the_inside_token_resolves_nob_subject(
 
 def test_third_session_resolver_is_wired_with_the_operator_site_scope(tmp_path: Path) -> None:
     from aiops_diagnostics.gateway_api import _caller_resolver
-    from aiops_diagnostics.third_session_auth import UpmsOperatorSiteScope
+    from aiops_diagnostics.identity.third_session_auth import UpmsOperatorSiteScope
 
     settings = _gateway_settings(
         tmp_path,

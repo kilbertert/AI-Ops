@@ -23,6 +23,9 @@ C端与管家原H5、Dify原生预览及独立CPMS/跨主体拒绝已通过，�
 Dify专用适配、C端知识编排和静态页面入口保留原归属。见
 [第四片记录](../validation/2026-10-29-z04-knowledge-package-layout.md)。
 
+第五片将7个身份/范围模块及11个测试归入`identity/`；通用http_auth继续服务独立桥制品。
+同一授权逻辑不按端复制，详见[第五片验证](../validation/2026-10-29-z05-identity-package-layout.md)。
+
 后续目标：Python按consumer/knowledge/identity/publication/gateway职责形成包，测试随职责归类；
 运行服务与一次性工具分开，部署面按服务聚合。每片更新调用者、资源加载、打包、CI与现役文档，
 保留错误处理与权限校验，不新建转发空壳或永久legacy目录。

@@ -19,8 +19,8 @@ from aiops_diagnostics.async_job_lifecycle import (
     expire_statements,
 )
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
+from aiops_diagnostics.identity.query_scope import MAX_SCOPE_IDS
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
-from aiops_diagnostics.query_scope import MAX_SCOPE_IDS
 from aiops_diagnostics.redaction import redact_text
 
 _LOGGER = logging.getLogger("aiops.gateway_store")

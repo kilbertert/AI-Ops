@@ -584,7 +584,7 @@ def _admin_context_factory() -> Any:
     """Synthetic admin ScopeContext per tenant (mirrors the test _context
     pattern in tests/test_agent_lifecycle.py; b_user_id flows into
     created_by/published_by so reconcile writes stay auditable)."""
-    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
     def _context(tenant_id: str):
         subject = SubjectRecord(b_user_id="aiops-admin", tenant_id=tenant_id)

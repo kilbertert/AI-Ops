@@ -65,8 +65,8 @@ class _Resolver:
     """三个固定令牌映射到三个主体；每个主体落在**自己**的租户里。"""
 
     def resolve(self, token: str, *, required_scope: str, **kwargs):
-        from aiops_diagnostics.caller_auth import CallerAuthError
-        from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+        from aiops_diagnostics.identity.caller_auth import CallerAuthError
+        from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
         if token not in TOKENS:
             raise CallerAuthError("invalid", code="caller_auth.invalid")
@@ -549,7 +549,7 @@ def test_issue_refuses_a_run_without_a_manifest_even_if_a_binding_says_so(tmp_pa
     `AgentRunStore.complete` 对**没有期望身份**的记录会按旧协议直接转 succeeded。
     只要有一条路径能签发出这种 run，"只领取没跑完"就又能变成成功。
     """
-    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
     with node_chat(tmp_path, monkeypatch) as f:
         subject = SubjectRecord(b_user_id="", c_user_id="USER-A", tenant_id="TENANT-A")

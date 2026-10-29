@@ -26,20 +26,20 @@ from aiops_diagnostics.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.ops_analysis import ABNORMAL_STATUS, NORMAL_STATUS
-from aiops_diagnostics.order_visibility import (
+from aiops_diagnostics.identity.order_visibility import (
     TenantVisibility,
     caller_visibility,
     normalize_tenant,
     scope_where_sql,
     visible_orders,
 )
-from aiops_diagnostics.query_scope import (
+from aiops_diagnostics.identity.query_scope import (
     SCOPE_ERROR_SCOPE_TOO_LARGE,
     QueryScope,
     SiteScopeMapper,
 )
-from aiops_diagnostics.scope_context import ScopeError
+from aiops_diagnostics.identity.scope_context import ScopeError
+from aiops_diagnostics.ops_analysis import ABNORMAL_STATUS, NORMAL_STATUS
 
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")

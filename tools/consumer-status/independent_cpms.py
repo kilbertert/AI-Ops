@@ -51,7 +51,7 @@ def _private_output():
 
 
 def _resolve_caller(settings, runtime, session: str):
-    from aiops_diagnostics.third_session_auth import (
+    from aiops_diagnostics.identity.third_session_auth import (
         RedisThirdSessionResolver,
         ThirdSessionSettings,
     )
@@ -166,7 +166,7 @@ def default_deps(*, config_file: str, session: str) -> Deps:
     from aiops_diagnostics.charging_status import read_charging_status
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_config import GatewayServerSettings, charging_endpoint
-    from aiops_diagnostics.query_scope import resolve_query_scope
+    from aiops_diagnostics.identity.query_scope import resolve_query_scope
     from aiops_diagnostics.sources import scoped_mysql_source
 
     settings = GatewayServerSettings.from_env()

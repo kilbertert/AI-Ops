@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.metrics_store import MetricsStore, MetricsValidationError
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
 def _context(

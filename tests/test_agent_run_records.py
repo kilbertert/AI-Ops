@@ -28,7 +28,7 @@ from aiops_diagnostics.agent_runs import (
     scope_from_json,
     scope_to_json,
 )
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 NODE_TOKEN = "node-token-alpha-0123456789"
 

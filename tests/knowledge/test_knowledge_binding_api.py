@@ -54,7 +54,7 @@ class _Caller:
 
     def resolve(self, authorization, **_kwargs):
         del authorization
-        from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+        from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
         subject = SubjectRecord(b_user_id="B-1", tenant_id=self.tenant)
         return ScopeContext.build(
