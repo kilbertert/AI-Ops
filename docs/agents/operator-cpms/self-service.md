@@ -155,3 +155,35 @@ ragflow_tenants.model_checked_at非空。知识入口303并进入RAGFlow后，�
 知识空间与知识连接是两项完成条件：RAGFlow租户建立后，Dify每个工作区还要有自己的外部知识API。
 连接由平台配置的public_base_url＋/v1/dify、knowledge key创建，原全局UUID仅用于识别旧工作区连接，
 不得跨工作区复制。`knowledge_connection.ensure`由开户和同步共用，并在同步闸内串行创建/回读。
+
+## 2026-10-29全链路复测与清理方法
+
+平台在“已开通客户”中选择优链充，点击“进入知识库”，应经Dify的303与公司域名hop进入该租户RAGFlow。
+测试资料使用独立命名的小TXT，页面建库后选择已初始化的embedding、General分块，上传并点击解析；
+以documents的DONE/progress=1、切片和实际检索命中作为证明，不以上传成功代替解析成功。
+回Dify知识列表触发自动同步，原生Retrieval Test应命中同一标记。切Ulink再访问优链充dataset应403。
+
+开发机直连公司域名超时时，复用`multitenant.md`的受控41隧道，将kb.mall.qushiyun.com:443
+映射至本机动态端口并保留HTTPS域名；这是验收访问路径，不修改生产DNS或入口。
+若部署CD被已合并PR的Agent Update Branch占用，先以`gh pr view`核merged、`gh run view`核
+具体旧任务，再取消该过期更新；不取消CI和进行中的部署。此次记录在最终验收回执。
+
+清理只针对本次创建、名称和ID双重确认的测试dataset：使用该租户原生RAGFlow DELETE /api/v1/datasets，
+body传该测试ID，确认success_count=1；Dify随后同步应移除对应external dataset。
+保留租户账号、知识连接和开通任务。最终回读Gateway路由与发布审计，按现场版本写回执。
+
+## 开通客户后必须对齐环境清单，否则整份收敛会被拦住
+
+页面开通会把`(租户, operator)`登记成页面管理的受管应用。`reconcile_dify_registry`的守卫
+“页面管理的管家不能由环境清单覆盖”此时**在写入前中止**：只要`ops/environments/env-41.toml`
+里该租户的`[[dify_apps]]`与页面登记的app_id/agent_name不一致，对该清单跑
+`aiops admin reconcile`就会整份失败，不只是一个租户不收敛。
+
+因此开通新客户后，二选一并同时复核：把该租户的`[[dify_apps]]`行从清单移除（改由页面管理），
+或让清单的app_id与agent_name与页面登记逐字一致。核对方法是只读复算守卫判据——读
+`operator_apps`的`(tenant_id)`与`dify_app_registry`的`(tenant_id, business_entry, app_id)`，
+对每条`[[dify_apps]]`判断`key ∈ operator_apps 且 app_id 不一致`；为真即会中止。
+2026-10-29实测：优链充一条为真，其余两条为假。
+
+清单声明与实际正式入口是两份事实：页面发布只改`chat_route_bindings`/`dify_app_registry`，
+不会回写仓库清单。发布后要回读路由，才能知道"这个租户此刻由哪个app回答"。
