@@ -186,7 +186,7 @@ name = "ops-youlian-order-diagnosis"
 description = "优链充管家订单诊断"
 agent_type = "operations"
 knowledge_base_ids = []
-model = "deepseek-v4-flash"
+model = "deepseek-v4-1-flash-261017"
 output_contract = "diagnosis-v1"
 
 [[dify_apps]]

@@ -82,9 +82,9 @@ settings.dify_console_api_key))`，下称 `console`。
    验证候选后向目标 JSON 只追加一行，原行逐字保留；已存在同一 app/tenant 时必须相等才跳过。
    写私有同目录临时文件、校验 `targets(temp_file)`，比对旧文件摘要未变化后原子替换。
 2. 用已有 `AgentManager`、`AgentStore`、`admin_context(new_tenant)` 创建目标 agent。
-   初始 `AgentConfig` 的 prompt 取本次 Dify 导出、model 取受控节点模板，
+   初始 `AgentConfig` 的 prompt/model 取本次 Dify 导出并通过当前模型白名单，
    `agent_type=operations/output_contract=diagnosis-v1/knowledge_base_ids=()/allowed_tools=()`。
-   初始版本只是让已有节点发布器获得 agent 身份，不开放旧工具；按
+   初始版本只是让已有节点发布器获得 agent 身份，不开放旧工具；实际节点模型仍由模板决定。按
    `allowed_models_from_settings(Settings.from_config(...))` 保留模型发布门。
    同名已存在则核归属与状态，不覆盖。之后节点发布将 prompt/两工具冻结为 node-sop。
 3. 从本次合并的完整清单调用 `reconcile_dify_registry(registry, manifest, dry_run=True)`，
