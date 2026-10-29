@@ -47,11 +47,6 @@ sys.path.insert(0, str(ROOT / "src"))
 
 CATALOG = ROOT / "src" / "aiops_diagnostics" / "faq_catalog.json"
 RECOMMENDATIONS = ROOT / "src" / "aiops_diagnostics" / "faq_recommendations.json"
-COPY_MODULES = (
-    ROOT / "src" / "aiops_diagnostics" / "i18n.py",
-    ROOT / "src" / "aiops_diagnostics" / "health_report_copy.py",
-    ROOT / "src" / "aiops_diagnostics" / "shortcut_lifecycle.py",
-)
 
 #: `s2twp`: Simplified -> Traditional with Taiwan phrase conventions. The plain
 #: `s2t` profile would produce 软件/信息-style mainland vocabulary in Traditional
