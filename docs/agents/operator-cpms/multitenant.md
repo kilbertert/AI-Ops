@@ -120,17 +120,28 @@ apply = False
 settings = GatewayServerSettings.from_env()
 path = Path(settings.chat_node_targets_file)
 original = path.read_bytes()
-source_target = next(t for t in targets(str(path))
-    if t.app_id == "137cc417-f068-43c2-9d4a-43ebd254ea01" and t.entry == "operator")
-target = replace(source_target, tenant_id="1941847786056323072",
-                 app_id="349a637c-8f86-41b9-b932-e9818fb39a97")
+source_target = next(
+    t
+    for t in targets(str(path))
+    if t.app_id == "137cc417-f068-43c2-9d4a-43ebd254ea01" and t.entry == "operator"
+)
+target = replace(
+    source_target, tenant_id="1941847786056323072", app_id="349a637c-8f86-41b9-b932-e9818fb39a97"
+)
 workspace = DifyWorkspaces(Path("/var/lib/aiops-41/gateway/gateway.db")).resolve(
-    target.tenant_id, settings.environment)
-candidate(DifyDslSource(settings.dify_console_base_url, target.app_id,
-    settings.dify_console_api_key, workspace), target)
+    target.tenant_id, settings.environment
+)
+candidate(
+    DifyDslSource(settings.dify_console_base_url, target.app_id, settings.dify_console_api_key, workspace),
+    target,
+)
 body = json.loads(original)
-existing = [r for r in body["targets"] if r["app_id"] == target.app_id or
-    (r["tenant_id"] == target.tenant_id and r.get("entry", "consumer") == "operator")]
+existing = [
+    r
+    for r in body["targets"]
+    if r["app_id"] == target.app_id
+    or (r["tenant_id"] == target.tenant_id and r.get("entry", "consumer") == "operator")
+]
 assert not existing or existing == [asdict(target)]
 if not existing:
     body["targets"].append(asdict(target))
@@ -173,35 +184,42 @@ manifest = load_manifest(manifest_path)
 declared = next(a for a in manifest.agents if a.tenant_id == tenant)
 binding = next(b for b in manifest.dify_apps if b.tenant_id == tenant and b.business_entry == "operator")
 workspace = DifyWorkspaces(database).resolve(tenant, settings.environment)
-source = DifyDslSource(settings.dify_console_base_url, binding.app_id,
-                       settings.dify_console_api_key, workspace)
+source = DifyDslSource(
+    settings.dify_console_base_url, binding.app_id, settings.dify_console_api_key, workspace
+)
 doc = yaml.safe_load(DifyDslClient(source).export_dsl())
 assert not doc["model_config"]["dataset_configs"]["datasets"]["datasets"]
 assert doc["model_config"]["model"]["name"] == declared.config.model
 config = replace(declared.config, prompt=doc["model_config"]["pre_prompt"], allowed_tools=())
-manager = AgentManager(AgentStore(database), allowed_models=allowed_models_from_settings(
-    Settings.from_config(Path("/etc/aiops-41/production.env"))))
+manager = AgentManager(
+    AgentStore(database),
+    allowed_models=allowed_models_from_settings(Settings.from_config(Path("/etc/aiops-41/production.env"))),
+)
 assert config.model in manager.allowed_models
 context = admin_context(tenant)
 matches = [a for a in manager.list(context) if a.name == binding.agent_name]
 assert len(matches) <= 1
 registry = DifyAppRegistry(database)
 reports = reconcile_dify_registry(registry, manifest, dry_run=True)
-assert all(r.action == "unchanged" or
-           (r.tenant_id == tenant and r.business_entry == "operator" and r.action == "registered")
-           for r in reports)
+assert all(
+    r.action == "unchanged"
+    or (r.tenant_id == tenant and r.business_entry == "operator" and r.action == "registered")
+    for r in reports
+)
 print([(r.tenant_id, r.business_entry, r.action) for r in reports])
 if apply:
-    agent = matches[0] if matches else manager.create(context, name=binding.agent_name,
-        description=declared.description, config=config)
+    agent = (
+        matches[0]
+        if matches
+        else manager.create(context, name=binding.agent_name, description=declared.description, config=config)
+    )
     if agent.status == "draft":
         assert agent.config == config
         manager.publish(context, agent.agent_id, expected_revision=agent.revision)
     agent = manager.get(context, agent.agent_id)
     assert agent.status == "published" and agent.published_version is not None
     reconcile_dify_registry(registry, manifest, dry_run=False)
-    assert all(r.action == "unchanged" for r in
-               reconcile_dify_registry(registry, manifest, dry_run=True))
+    assert all(r.action == "unchanged" for r in reconcile_dify_registry(registry, manifest, dry_run=True))
     print("初始版本与登记完成", agent.agent_id, agent.published_version)
 ```
 
@@ -213,10 +231,11 @@ from urllib.request import Request, urlopen
 from aiops_diagnostics.gateway_server import GatewayServerSettings
 
 settings = GatewayServerSettings.from_env()
-request = Request("http://172.18.0.1:8788/v1/dify/publish",
+request = Request(
+    "http://172.18.0.1:8788/v1/dify/publish",
     data=json.dumps({"app_id": "349a637c-8f86-41b9-b932-e9818fb39a97"}).encode(),
-    headers={"Authorization": "Bearer " + settings.dify_publish_api_key,
-             "Content-Type": "application/json"})
+    headers={"Authorization": "Bearer " + settings.dify_publish_api_key, "Content-Type": "application/json"},
+)
 with urlopen(request, timeout=60) as response:
     print(response.status, response.read().decode())
 ```
