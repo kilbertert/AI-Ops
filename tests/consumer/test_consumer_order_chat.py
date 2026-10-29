@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from aiops_diagnostics import gateway_api
 from aiops_diagnostics.caller_auth import CallerAuthError
-from aiops_diagnostics.consumer_order_chat import is_order_status_question
+from aiops_diagnostics.consumer.consumer_order_chat import is_order_status_question
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore

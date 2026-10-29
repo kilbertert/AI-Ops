@@ -33,8 +33,8 @@ class Client:
 
 def configure(env, monkeypatch):
     # 既有生命周期测试使用确定性分类替身；语义质量由独立真实模型语料验收。
-    from aiops_diagnostics.consumer_billing import is_billing_question
-    from aiops_diagnostics.consumer_order_chat import asks_latest_order, is_order_status_question
+    from aiops_diagnostics.consumer.consumer_billing import is_billing_question
+    from aiops_diagnostics.consumer.consumer_order_chat import asks_latest_order, is_order_status_question
 
     def classify(_runtime, question, **kwargs):
         intent = (
@@ -54,7 +54,7 @@ def configure(env, monkeypatch):
     Client.calls = []
     Client.stops = []
     Client.before = None
-    monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Client)
+    monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", Client)
     env["settings"].consumer_chatflow_enabled = True
     document = json.loads(env["bindings"].read_text())
     row = document["bindings"][0]

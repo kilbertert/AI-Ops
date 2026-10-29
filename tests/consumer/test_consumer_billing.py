@@ -7,16 +7,16 @@ from threading import Thread
 import pytest
 from test_app_runtime_dify_entry import HEADERS, dify_chat
 from test_app_runtime_node_entry import ORDER_A
-from test_consumer_chat_service import Client, done
-from test_consumer_live_context import ask, wire
 
 from aiops_diagnostics.charging_status import ChargingStatusError
-from aiops_diagnostics.consumer_billing import (
+from aiops_diagnostics.consumer.consumer_billing import (
     _amount,
     billing_answer,
     is_billing_question,
     read_billing_record,
 )
+from consumer.test_consumer_chat_service import Client, done
+from consumer.test_consumer_live_context import ask, wire
 
 
 @pytest.fixture

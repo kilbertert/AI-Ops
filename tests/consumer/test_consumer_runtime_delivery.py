@@ -42,7 +42,7 @@ def test_callback_preserves_the_grant_and_rejects_other_methods(tmp_path, path):
     for item in sockets:
         item.bind(("127.0.0.1", 0))
     front, upstream = [item.getsockname()[1] for item in sockets]
-    snippet = (Path(__file__).parents[1] / "ops/nginx/dify-consumer-callback.conf").read_text()
+    snippet = (Path(__file__).parents[2] / "ops/nginx/dify-consumer-callback.conf").read_text()
     snippet = snippet.replace("http://172.18.0.1:8788", f"http://127.0.0.1:{upstream}")
     config = tmp_path / "nginx.conf"
     config.write_text(

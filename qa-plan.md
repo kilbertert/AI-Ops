@@ -1909,7 +1909,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 | CS-READ-04 | 上游坏信封与重定向 | 502，不转发上游正文或跟随重定向 | HTTP C 段通过 |
 
 追溯：`acceptance.feature` 的本人充电状态 Feature → 上述用例 →
-`tests/test_consumer_charging_status.py`（17 项）与合成 HTTP 报告（22 项）。
+`tests/consumer/test_consumer_charging_status.py`（17 项）与合成 HTTP 报告（22 项）。
 CLI 段证明拒绝方向；成功段注入合成订单授权源。未完成业务验收，真实客户端、真实公司身份/数据与 TLS 待验证。
 
 风险验证：`charging_status.py` 的分支覆盖率 100%（21 语句、4 分支）；Radon 6.0.1

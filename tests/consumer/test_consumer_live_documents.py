@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 from test_app_runtime_dify_entry import dify_chat
-from test_consumer_chat_service import Client, done
-from test_consumer_knowledge_flow import ask, setup
 
 from aiops_diagnostics.chat_execution import ChatRunUnavailable
-from aiops_diagnostics.consumer_documents import SCHEMA
-from aiops_diagnostics.consumer_knowledge import final_answer
+from aiops_diagnostics.consumer.consumer_documents import SCHEMA
+from aiops_diagnostics.consumer.consumer_knowledge import final_answer
 from aiops_diagnostics.dify_chatflow import ChatflowReply
+from consumer.test_consumer_chat_service import Client, done
+from consumer.test_consumer_knowledge_flow import ask, setup
 
 
 def document_fixture(env, monkeypatch, tmp_path):
@@ -55,7 +55,7 @@ def document_fixture(env, monkeypatch, tmp_path):
                 {},
             )
 
-    monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Flow)
+    monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", Flow)
     return runtime, kb, rows, content, received
 
 
@@ -153,14 +153,13 @@ def test_answer_requires_current_source_and_cannot_generate_media(mutation):
 
 
 def test_live_publication_ignores_missing_reviewed_file_and_snapshot_contains_no_faq(tmp_path):
-    from test_consumer_flow_contract import BASE, CEILING
-    from test_consumer_knowledge_picker import picker_graph
-
-    from aiops_diagnostics.consumer_flow_contract import publication_settings
-    from aiops_diagnostics.consumer_publication import frozen_settings
+    from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
+    from aiops_diagnostics.consumer.consumer_publication import frozen_settings
+    from consumer.test_consumer_flow_contract import BASE, CEILING
+    from consumer.test_consumer_knowledge_picker import picker_graph
 
     spec = importlib.util.spec_from_file_location(
-        "upgrade", Path(__file__).parents[1] / "tools/upgrade_consumer_flow.py"
+        "upgrade", Path(__file__).parents[2] / "tools/upgrade_consumer_flow.py"
     )
     upgrade = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(upgrade)
@@ -181,7 +180,7 @@ def test_live_publication_ignores_missing_reviewed_file_and_snapshot_contains_no
 
 @pytest.mark.parametrize("kind", ["status", "billing"])
 def test_document_mode_cannot_replace_cpms_snapshot_with_model_prose(kind):
-    from aiops_diagnostics.consumer_knowledge import live_answer
+    from aiops_diagnostics.consumer.consumer_knowledge import live_answer
 
     snapshot = {
         "order_no": "order-a",
@@ -244,7 +243,7 @@ def test_invalid_model_document_output_is_refused(value):
 
 
 def test_only_cited_document_media_and_original_reference_are_delivered():
-    from aiops_diagnostics.consumer_documents import answer_selection
+    from aiops_diagnostics.consumer.consumer_documents import answer_selection
 
     media = {"kind": "video", "url": "https://youtu.be/t57PMqSw7iE", "resource_id": "media-real"}
     context = {
@@ -274,7 +273,7 @@ def test_only_cited_document_media_and_original_reference_are_delivered():
 
 
 def test_answer_may_repeat_only_links_from_its_cited_document():
-    from aiops_diagnostics.consumer_documents import answer_selection
+    from aiops_diagnostics.consumer.consumer_documents import answer_selection
 
     video = "https://www.youtube.com/shorts/t57PMqSw7iE"
     context = {

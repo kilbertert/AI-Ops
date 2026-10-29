@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 spec = importlib.util.spec_from_file_location("content_builder", ROOT / "tools/build_consumer_knowledge.py")
 builder = importlib.util.module_from_spec(spec)

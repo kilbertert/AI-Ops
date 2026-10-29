@@ -5,10 +5,10 @@ import uuid
 
 import pytest
 from test_app_runtime_dify_entry import dify_chat
-from test_consumer_chat_service import Client, done
-from test_consumer_live_context import ask, wire
 
 from aiops_diagnostics.dify_chatflow import ChatflowReply
+from consumer.test_consumer_chat_service import Client, done
+from consumer.test_consumer_live_context import ask, wire
 
 
 def split(env):
@@ -67,7 +67,7 @@ def test_real_callback_is_selected_by_frozen_capability(tmp_path, monkeypatch, q
                     {},
                 )
 
-        monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Flow)
+        monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", Flow)
         response = ask(env, question)
         assert response.status_code == 202, response.text
         result = done(env, response.json()["qa_id"]).json()
@@ -83,7 +83,7 @@ def test_legacy_binding_keeps_its_fingerprint_and_old_callback(tmp_path, monkeyp
     from test_app_runtime_node_entry import _Resolver
 
     from aiops_diagnostics.chat_execution import select_binding
-    from aiops_diagnostics.consumer_knowledge import _binding_identity, digest
+    from aiops_diagnostics.consumer.consumer_knowledge import _binding_identity, digest
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb = wire(env, monkeypatch, tmp_path)

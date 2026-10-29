@@ -5,13 +5,17 @@ import uuid
 
 import pytest
 from test_app_runtime_dify_entry import dify_chat
-from test_consumer_chat_service import Client, done
-from test_consumer_flow_contract import BASE, CEILING, graph
-from test_consumer_knowledge_flow import ask, setup
 
-from aiops_diagnostics.consumer_flow_contract import ConsumerFlowError, publication_settings
-from aiops_diagnostics.consumer_knowledge_selection import PROVIDER, catalogue_token, catalogue_workspace
+from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError, publication_settings
+from aiops_diagnostics.consumer.consumer_knowledge_selection import (
+    PROVIDER,
+    catalogue_token,
+    catalogue_workspace,
+)
 from aiops_diagnostics.dify_chatflow import ChatflowReply
+from consumer.test_consumer_chat_service import Client, done
+from consumer.test_consumer_flow_contract import BASE, CEILING, graph
+from consumer.test_consumer_knowledge_flow import ask, setup
 
 
 def picker_graph(ids):
@@ -72,7 +76,7 @@ def test_catalogue_credential_is_workspace_and_environment_bound():
 def test_catalogue_outage_and_malformed_node_fail_closed():
     from types import SimpleNamespace
 
-    from aiops_diagnostics.consumer_knowledge_selection import owned_libraries, selected_libraries
+    from aiops_diagnostics.consumer.consumer_knowledge_selection import owned_libraries, selected_libraries
 
     with pytest.raises(ValueError, match="目录暂不可用"):
         owned_libraries(SimpleNamespace(kb_search_client=None), "tenant")
@@ -115,7 +119,7 @@ def test_removing_library_refuses_delivery_at_each_boundary(tmp_path, monkeypatc
                     libraries.clear()
                 return ChatflowReply(*ids, json.dumps({"kind": "knowledge", "faq_id": "KB-C-007"}), {})
 
-        monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Flow)
+        monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", Flow)
         qa = ask(env).json()
         result = done(env, qa["qa_id"]).json()
         assert responses[0].status_code == (503 if phase == "search" else 200)
@@ -192,7 +196,7 @@ def test_picker_calls_only_selected_library_and_rejects_mismatch_before_cache(tm
                 raise
 
         monkeypatch.setattr(Flow, "run", invoke)
-        monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Flow)
+        monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", Flow)
         qa = ask(env).json()
         result = done(env, qa["qa_id"]).json()
         assert not errors, errors
@@ -243,13 +247,13 @@ def test_picker_upgrade_preserves_other_nodes_and_library_selection():
     import yaml
 
     spec = importlib.util.spec_from_file_location(
-        "upgrade_picker", Path(__file__).parents[1] / "tools/upgrade_consumer_flow.py"
+        "upgrade_picker", Path(__file__).parents[2] / "tools/upgrade_consumer_flow.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
     source = yaml.safe_load(
-        (Path(__file__).parents[1] / "deploy/dify-chat/consumer-service.dsl.yml").read_text()
+        (Path(__file__).parents[2] / "deploy/dify-chat/consumer-service.dsl.yml").read_text()
     )
     before = copy.deepcopy(source)
     changed = module.select_knowledge(source, ["kb-b"], "trendpower/consumer_knowledge:0.0.1@abc")
@@ -274,7 +278,7 @@ def test_plugin_never_redirects_credentials_and_uses_grant_for_content(monkeypat
     from pathlib import Path
 
     spec = importlib.util.spec_from_file_location(
-        "knowledge_plugin_client", Path(__file__).parents[1] / "plugins/consumer_knowledge/client.py"
+        "knowledge_plugin_client", Path(__file__).parents[2] / "plugins/consumer_knowledge/client.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -310,8 +314,9 @@ def test_plugin_never_redirects_credentials_and_uses_grant_for_content(monkeypat
 
 def test_unavailable_previous_knowledge_does_not_block_new_order(tmp_path, monkeypatch):
     from test_app_runtime_dify_entry import HEADERS
-    from test_consumer_live_context import ask as question
-    from test_consumer_live_context import wire
+
+    from consumer.test_consumer_live_context import ask as question
+    from consumer.test_consumer_live_context import wire
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb = wire(env, monkeypatch, tmp_path)
@@ -345,7 +350,7 @@ def test_unavailable_previous_knowledge_does_not_block_new_order(tmp_path, monke
                     {},
                 )
 
-        monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Flow)
+        monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", Flow)
         intro = question(env, "怎么开始充电？").json()
         assert done(env, intro["qa_id"]).json()["status"] == "completed"
         libraries.clear()

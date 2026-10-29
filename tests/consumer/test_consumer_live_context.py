@@ -7,10 +7,10 @@ import uuid
 import pytest
 from test_app_runtime_dify_entry import HEADERS, dify_chat
 from test_app_runtime_node_entry import ORDER_A, ORDER_B
-from test_consumer_chat_service import Client, done
-from test_consumer_knowledge_flow import setup
 
 from aiops_diagnostics.dify_chatflow import ChatflowReply
+from consumer.test_consumer_chat_service import Client, done
+from consumer.test_consumer_knowledge_flow import setup
 
 
 class Flow(Client):
@@ -54,7 +54,7 @@ def wire(env, monkeypatch, tmp_path):
     doc["bindings"][0]["callback_version"] = 2
     env["bindings"].write_text(json.dumps(doc))
     Flow.env, Flow.after, Flow.skip = env, None, False
-    monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Flow)
+    monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", Flow)
     return runtime, kb
 
 

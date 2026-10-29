@@ -8,14 +8,14 @@ from pathlib import Path
 
 import yaml
 
-from aiops_diagnostics.consumer_flow_contract import TYPES, publication_settings
+from aiops_diagnostics.consumer.consumer_flow_contract import TYPES, publication_settings
 from aiops_diagnostics.dify_dsl_pull import workflow_content
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def select_knowledge(source, libraries, plugin_identifier):
-    from aiops_diagnostics.consumer_knowledge_selection import PROVIDER, TOOL, selected_libraries
+    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, TOOL, selected_libraries
 
     if not plugin_identifier.startswith("trendpower/consumer_knowledge:"):
         raise ValueError("必须提供已验签知识检索插件的完整标识")
@@ -61,7 +61,7 @@ def select_knowledge(source, libraries, plugin_identifier):
 
 
 def live_documents(source):
-    from aiops_diagnostics.consumer_documents import MODE_VARIABLE, PROMPT
+    from aiops_diagnostics.consumer.consumer_documents import MODE_VARIABLE, PROMPT
 
     candidate = copy.deepcopy(source)
     nodes = {n["id"]: n["data"] for n in candidate["workflow"]["graph"]["nodes"]}

@@ -4,8 +4,9 @@ import sqlite3
 
 import pytest
 from test_app_runtime_dify_entry import HEADERS, dify_chat
-from test_consumer_chat_service import Client, done
-from test_consumer_knowledge_flow import setup, wire
+
+from consumer.test_consumer_chat_service import Client, done
+from consumer.test_consumer_knowledge_flow import setup, wire
 
 
 def ask(env, question, conversation=None, headers=HEADERS):

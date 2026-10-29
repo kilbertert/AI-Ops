@@ -5,10 +5,10 @@ import sqlite3
 
 import pytest
 from test_app_runtime_dify_entry import dify_chat
-from test_consumer_chat_service import done
-from test_consumer_knowledge_flow import ask, setup, wire
 
-from aiops_diagnostics.consumer_knowledge import load_content
+from aiops_diagnostics.consumer.consumer_knowledge import load_content
+from consumer.test_consumer_chat_service import done
+from consumer.test_consumer_knowledge_flow import ask, setup, wire
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"test-image"
 VIDEO = b"0000ftypisom" + b"test-video"

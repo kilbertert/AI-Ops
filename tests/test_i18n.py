@@ -331,7 +331,7 @@ def test_no_implicit_string_join_glues_two_words_together() -> None:
     root = Path(__file__).parents[1]
     offenders = [
         (str(path.relative_to(root)), line, left, right)
-        for path in sorted((root / "src" / "aiops_diagnostics").glob("*.py"))
+        for path in sorted((root / "src" / "aiops_diagnostics").rglob("*.py"))
         for line, left, right in _implicit_joins(path)
     ]
     assert not offenders, offenders

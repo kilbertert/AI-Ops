@@ -4,8 +4,9 @@ import sqlite3
 
 import pytest
 from test_app_runtime_dify_entry import dify_chat
-from test_consumer_chat_service import Client, done
-from test_consumer_live_context import ask, wire
+
+from consumer.test_consumer_chat_service import Client, done
+from consumer.test_consumer_live_context import ask, wire
 
 
 def semantic(runtime, monkeypatch, intent="order_status", reference="latest", dependent=False):

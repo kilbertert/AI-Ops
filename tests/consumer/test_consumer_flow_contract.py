@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from aiops_diagnostics.consumer_flow_contract import publication_settings
+from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
 from aiops_diagnostics.dify_dsl_pull import workflow_content
 
 BASE = "https://gateway.example.test"
@@ -15,7 +15,7 @@ CEILING = {"live_order_status": True, "live_billing_record": True}
 
 def graph():
     text = (
-        (Path(__file__).parents[1] / "deploy/dify-chat/consumer-service.dsl.yml")
+        (Path(__file__).parents[2] / "deploy/dify-chat/consumer-service.dsl.yml")
         .read_text()
         .replace("http://gateway.invalid", BASE)
     )
@@ -95,9 +95,9 @@ def test_old_graph_is_preserved_but_cannot_downgrade_new_publication():
 def test_publish_checks_before_native_publish_and_freezes_graph_flags(tmp_path, monkeypatch):
     from test_app_runtime_dify_entry import dify_chat
     from test_app_runtime_node_entry import _Resolver
-    from test_consumer_publication import Console, prepare, publish
 
     from aiops_diagnostics.chat_execution import select_binding
+    from consumer.test_consumer_publication import Console, prepare, publish
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb, content, routes = prepare(env, monkeypatch, tmp_path)
@@ -136,12 +136,12 @@ def test_upgrade_keeps_real_model_prompt_and_disabled_photo_features(tmp_path):
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "upgrade_flow", Path(__file__).parents[1] / "tools/upgrade_consumer_flow.py"
+        "upgrade_flow", Path(__file__).parents[2] / "tools/upgrade_consumer_flow.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     source = yaml.safe_load(
-        (Path(__file__).parents[1] / "deploy/dify-chat/consumer-service.dsl.yml").read_text()
+        (Path(__file__).parents[2] / "deploy/dify-chat/consumer-service.dsl.yml").read_text()
     )
     nodes = {n["id"]: n["data"] for n in source["workflow"]["graph"]["nodes"]}
     nodes["answer"]["model"]["name"] = "existing-model"

@@ -7,8 +7,9 @@ from pathlib import Path
 import pytest
 import yaml
 from test_app_runtime_dify_entry import HEADERS, dify_chat
-from test_consumer_chat_service import done
-from test_consumer_live_documents import document_fixture
+
+from consumer.test_consumer_chat_service import done
+from consumer.test_consumer_live_documents import document_fixture
 
 
 def test_chinese_model_answer_is_not_delivered_as_mongolian(tmp_path, monkeypatch):
@@ -54,7 +55,7 @@ def test_live_prompt_names_languages_and_repeats_preference_after_context():
     ],
 )
 def test_translated_answer_keeps_original_chinese_reference_name(language, text):
-    from aiops_diagnostics.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
 
     context = {
         "mode": "documents",
@@ -80,7 +81,7 @@ def test_translated_answer_keeps_original_chinese_reference_name(language, text)
 
 def test_only_cited_resource_name_is_exempt_inside_translated_prose():
     from aiops_diagnostics.chat_execution import ChatRunUnavailable
-    from aiops_diagnostics.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
 
     context = {
         "mode": "documents",

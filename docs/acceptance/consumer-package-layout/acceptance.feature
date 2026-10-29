@@ -1,0 +1,16 @@
+Feature: C端模块归入独立Python包
+  Rule: 目录迁移保持既有业务行为
+    Scenario: 部署及分发导入新包
+      Given 已合并的新源码或安装后的wheel
+      When Gateway启动并加载C端语言资源
+      Then 新consumer包可导入且语言JSON可读
+      And 旧包根不再提供consumer模块副本
+    Scenario: 现役C端问答
+      Given 正常登录且已发布C端工作流
+      When 从原H5请求本人订单状态
+      Then 返回完成的QA并显示原有状态与来源
+    Scenario: 子包仍受静态守卫检查
+      Given 业务模块已移到子包
+      When 运行架构与共享规则检查
+      Then 递归识别子包导入、权限相关调用与重复规则
+      And 不允许在已记录循环边之外增加循环依赖

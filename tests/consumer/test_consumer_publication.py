@@ -6,8 +6,6 @@ import json
 import pytest
 import yaml
 from test_app_runtime_dify_entry import dify_chat
-from test_consumer_chat_service import done
-from test_consumer_knowledge_flow import ask, setup, wire
 from test_node_publication import publication as publication
 from test_node_publication import publish as publish_node
 
@@ -16,6 +14,8 @@ from aiops_diagnostics.agent_manifest import admin_context
 from aiops_diagnostics.chat_execution import SCENARIO_CONSUMER_SERVICE
 from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.dify_app_registry import DifyAppBinding
+from consumer.test_consumer_chat_service import done
+from consumer.test_consumer_knowledge_flow import ask, setup, wire
 
 APP = "11111111-2222-3333-4444-555555555555"
 PUBLISH = {"Authorization": "Bearer publication-key"}
@@ -160,7 +160,8 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
     from pathlib import Path
 
     from test_app_runtime_node_entry import ORDER_A, _Resolver
-    from test_consumer_knowledge_flow import Workflow
+
+    from consumer.test_consumer_knowledge_flow import Workflow
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb, content, routes = prepare(env, monkeypatch, tmp_path)
@@ -202,11 +203,11 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
             def delete_app(self, *args):
                 deleted.append(args[-1])
 
-        monkeypatch.setattr("aiops_diagnostics.consumer_trial.DifyConsoleAdmin", Admin)
-        monkeypatch.setattr("aiops_diagnostics.consumer_trial.DifyDslClient", Console)
-        monkeypatch.setattr("aiops_diagnostics.consumer_trial.DifyChatflowClient", Workflow)
+        monkeypatch.setattr("aiops_diagnostics.consumer.consumer_trial.DifyConsoleAdmin", Admin)
+        monkeypatch.setattr("aiops_diagnostics.consumer.consumer_trial.DifyDslClient", Console)
+        monkeypatch.setattr("aiops_diagnostics.consumer.consumer_trial.DifyChatflowClient", Workflow)
         if disabled == "delete-library":
-            from aiops_diagnostics.consumer_knowledge_selection import require_available
+            from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
             libraries = [{"knowledge_base_id": "kb-own"}]
             checked = []
@@ -221,7 +222,7 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
                 return require_available(runtime, scope, replace(binding, callback_version=3))
 
             monkeypatch.setattr(
-                "aiops_diagnostics.consumer_knowledge_selection.require_available", check_selected
+                "aiops_diagnostics.consumer.consumer_knowledge_selection.require_available", check_selected
             )
         if retract_during_trial:
             Workflow.after = lambda: env["client"].post(

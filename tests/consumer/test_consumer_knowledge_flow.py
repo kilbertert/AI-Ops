@@ -4,13 +4,13 @@ import json
 
 import pytest
 from test_app_runtime_dify_entry import HEADERS, dify_chat
-from test_consumer_chat_service import Client, configure, done
 
-from aiops_diagnostics import consumer_knowledge
 from aiops_diagnostics.chat_data_grant import DataGrantStore
 from aiops_diagnostics.chat_execution import ChatRunUnavailable
+from aiops_diagnostics.consumer import consumer_knowledge
 from aiops_diagnostics.dify_chatflow import ChatflowReply
 from aiops_diagnostics.knowledge_retrieval import KnowledgeSearchUnavailable, MediaResourceSigner
+from consumer.test_consumer_chat_service import Client, configure, done
 
 
 class Knowledge:
@@ -119,7 +119,7 @@ def wire(env, monkeypatch):
     Workflow.after = None
     Workflow.extra = {}
     Workflow.token = ""
-    monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Workflow)
+    monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", Workflow)
 
 
 def test_workflow_retrieves_once_and_returns_only_the_approved_answer(tmp_path, monkeypatch):

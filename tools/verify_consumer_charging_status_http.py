@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """充电状态直读端点的 HTTP 面证据：真 `aiops-gateway serve` + 一次性数据根（本机，合成依赖）。
 
-与 `tests/test_consumer_charging_status.py` 的分工：用例走 TestClient（另有一个
+与 `tests/consumer/test_consumer_charging_status.py` 的分工：用例走 TestClient（另有一个
 TestClient 级的真 HTTP 用例）；本脚本补的是**实际 CLI 装配** ——
 `python -m aiops_diagnostics.gateway_server serve` 在自己的进程里起监听，
 再用真 HTTP 打它。默认关闭、鉴权、拒绝、no-store 都在这一段取证。

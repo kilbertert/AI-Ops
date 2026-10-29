@@ -2,11 +2,11 @@
 
 import pytest
 from test_app_runtime_dify_entry import HEADERS, dify_chat
-from test_consumer_chat_service import Client, done
-from test_consumer_live_context import ask, wire
-from test_consumer_semantic_routing import semantic
 
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+from consumer.test_consumer_chat_service import Client, done
+from consumer.test_consumer_live_context import ask, wire
+from consumer.test_consumer_semantic_routing import semantic
 
 
 @pytest.mark.parametrize("language", SUPPORTED_LANGUAGES)
@@ -28,9 +28,9 @@ def test_wf01_accepts_every_declared_language(tmp_path, monkeypatch, language):
 def test_fixed_copy_preserves_placeholders_and_covers_all_other_languages():
     from string import Formatter
 
-    from aiops_diagnostics.consumer_intent import message
-    from aiops_diagnostics.consumer_knowledge import MESSAGES, text_for
-    from aiops_diagnostics.consumer_language import COPY
+    from aiops_diagnostics.consumer.consumer_intent import message
+    from aiops_diagnostics.consumer.consumer_knowledge import MESSAGES, text_for
+    from aiops_diagnostics.consumer.consumer_language import COPY
 
     assert set(COPY) == set(SUPPORTED_LANGUAGES) - {"zh", "en"}
     expected = {
@@ -68,9 +68,9 @@ def test_fixed_copy_preserves_placeholders_and_covers_all_other_languages():
 
 @pytest.mark.parametrize("language", SUPPORTED_LANGUAGES)
 def test_fact_rendering_keeps_zero_amounts_unknown_status_and_identifiers(language):
-    from aiops_diagnostics.consumer_billing import billing_answer
-    from aiops_diagnostics.consumer_language import COPY
-    from aiops_diagnostics.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.consumer_billing import billing_answer
+    from aiops_diagnostics.consumer.consumer_language import COPY
+    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
     snapshot = {
         "order_no": "2096164064667852801",
@@ -120,7 +120,7 @@ def test_older_context_keeps_original_rendering_on_readback(tmp_path, monkeypatc
     import json
     import sqlite3
 
-    from aiops_diagnostics.consumer_knowledge import live_answer
+    from aiops_diagnostics.consumer.consumer_knowledge import live_answer
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, _ = wire(env, monkeypatch, tmp_path)
@@ -161,7 +161,7 @@ def test_legacy_reviewed_answer_reports_its_actual_copy_language(tmp_path, monke
 
 @pytest.mark.parametrize("configured", ["zh", "en", "fr"])
 def test_support_route_survives_missing_translation_without_foreign_label(configured):
-    from aiops_diagnostics.consumer_knowledge import fallback
+    from aiops_diagnostics.consumer.consumer_knowledge import fallback
 
     support = {
         configured: {

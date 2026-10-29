@@ -49,14 +49,14 @@ flowchart LR
 
 ## 三、系统模块与依赖关系
 
-以下是现有文件职责，不是已完成目录迁移的声明。模块间导入保持无环，`test_readme_architecture.py`
-核对模块索引与引用；业务执行不得依赖已删除的 Python 运行器。
+以下是现有文件职责，不是已完成目录迁移的声明。导入检查覆盖子包、延迟导入与包级导入；既有节点装配四模块循环按具体边冻结，`test_readme_architecture.py`
+核对模块索引与引用并拒绝新增循环；业务执行不得依赖已删除的 Python 运行器。
 
 | 职责 | 当前模块 |
 |---|---|
 | 网关与服务 | `gateway_api.py`、`gateway_runtime.py`、`gateway_server.py`、`gateway_store.py`、`gateway_config.py`、`gateway_logging.py`、`public_openapi.py`、`request_observation.py`、`isolation_guard.py`、`deployment_environment.py` |
 | 身份与范围 | `caller_auth.py`、`company_token_auth.py`、`company_permissions.py`、`third_session_auth.py`、`scope_context.py`、`query_scope.py`、`order_visibility.py`、`http_auth.py` |
-| C端业务 | `consumer_billing.py`、`consumer_chat_service.py`、`consumer_documents.py`、`consumer_flow_contract.py`、`consumer_intent.py`、`consumer_knowledge.py`、`consumer_knowledge_selection.py`、`consumer_language.py`、`consumer_order_chat.py`、`consumer_photo.py`、`consumer_publication.py`、`consumer_trial.py`、`charging_status.py` |
+| C端业务 | `consumer.consumer_billing.py`、`consumer.consumer_chat_service.py`、`consumer.consumer_documents.py`、`consumer.consumer_flow_contract.py`、`consumer.consumer_intent.py`、`consumer.consumer_knowledge.py`、`consumer.consumer_knowledge_selection.py`、`consumer.consumer_language.py`、`consumer.consumer_order_chat.py`、`consumer.consumer_photo.py`、`consumer.consumer_publication.py`、`consumer.consumer_trial.py`、`charging_status.py` |
 | 节点与试用 | `agent_runs.py`、`execution_manifest.py`、`chat_execution.py`、`chat_data_grant.py`、`chat_route_bindings.py`、`node_publication.py`、`operator_cpms.py`、`dify_trial.py`、`dify_workflow_trial.py` |
 | 管理与发布 | `admin_cli.py`、`agent_content.py`、`agent_lifecycle.py`、`agent_manifest.py`、`agent_debug.py`、`shortcut_lifecycle.py`、`shortcut_migration.py`、`ops_provider.py` |
 | 知识与会话 | `conversation_store.py`、`faq.py`、`qa_rag.py`、`clarification.py`、`knowledge_retrieval.py`、`knowledge_sources.py`、`knowledge_triple.py`、`knowledge_dataset_sync_guard.py`、`kb_onboarding.py`、`ragflow_console.py` |
@@ -72,7 +72,8 @@ flowchart LR
 
 | 目录 | 现在的用途 |
 |---|---|
-| `src/aiops_diagnostics/` | Python Gateway、业务与集成；本轮不搬迁 |
+| `src/aiops_diagnostics/` | Python Gateway、共享能力与集成 |
+| `src/aiops_diagnostics/consumer/`、`tests/consumer/` | C端工作流、知识与本人订单业务及对应测试 |
 | `services/execution-node/` | 现役 Java 节点源码、资源与 Maven 构建入口 |
 | `services/model-proxy/` | 现役固定目标模型代理 |
 | `tools/m2_live/` | 隔离栈探针与回环中继 |

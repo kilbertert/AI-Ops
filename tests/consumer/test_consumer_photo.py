@@ -9,11 +9,11 @@ import pytest
 from PIL import Image
 from test_app_runtime_dify_entry import HEADERS, dify_chat
 from test_app_runtime_node_entry import TOKENS
-from test_consumer_chat_service import Client, done
-from test_consumer_knowledge_flow import setup
 
-from aiops_diagnostics.consumer_photo import PhotoStore, normalize_photo
+from aiops_diagnostics.consumer.consumer_photo import PhotoStore, normalize_photo
 from aiops_diagnostics.dify_chatflow import ChatflowReply
+from consumer.test_consumer_chat_service import Client, done
+from consumer.test_consumer_knowledge_flow import setup
 
 
 def photo():
@@ -68,7 +68,7 @@ def prepare(env, monkeypatch, tmp_path):
     PhotoFlow.uploads = []
     PhotoFlow.readable = True
     PhotoFlow.recognized_text = "Startup failed."
-    monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", PhotoFlow)
+    monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", PhotoFlow)
     return runtime, kb
 
 
@@ -229,7 +229,7 @@ def test_dify_template_sends_visual_text_in_the_actual_body_field():
     import yaml
 
     doc = yaml.safe_load(
-        (Path(__file__).parents[1] / "deploy/dify-chat/consumer-service.dsl.yml").read_text()
+        (Path(__file__).parents[2] / "deploy/dify-chat/consumer-service.dsl.yml").read_text()
     )
     node = next(n for n in doc["workflow"]["graph"]["nodes"] if n["id"] == "knowledge")
     body = node["data"]["body"]

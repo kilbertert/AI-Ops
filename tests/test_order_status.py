@@ -212,7 +212,7 @@ def _inline_status_comparisons() -> list[str]:
     `role_of(...)` / `is_abnormal_end(...)` / 常量名都不算内联。
     """
     offenders: list[str] = []
-    for path in sorted(SOURCE_ROOT.glob("*.py")):
+    for path in sorted(SOURCE_ROOT.rglob("*.py")):
         if path.stem == "order_status.py":  # the authority itself spells the numbers
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))

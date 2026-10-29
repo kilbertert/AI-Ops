@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[2]
 TOOLS = ROOT / "tools" / "consumer-status"
 
 TENANT = "T-1"

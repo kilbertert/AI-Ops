@@ -4,8 +4,8 @@ desc: 业务路线与一次性模型请求
 code:
   - src/aiops_diagnostics/model_request.py
 related:
-  - src/aiops_diagnostics/consumer_intent.py
-  - src/aiops_diagnostics/consumer_chat_service.py
+  - src/aiops_diagnostics/consumer/consumer_intent.py
+  - src/aiops_diagnostics/consumer/consumer_chat_service.py
   - src/aiops_diagnostics/ops_analysis_narrative.py
   - src/aiops_diagnostics/dify_trial.py
   - src/aiops_diagnostics/answer_language.py
