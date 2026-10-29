@@ -4574,9 +4574,11 @@ def create_gateway_app(
                 status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SYNC_DISABLED", "console access is not enabled"
             )
         api_id = settings.dify_external_knowledge_api_id
-        if not api_id:
+        if not api_id and not settings.dify_knowledge_api_key:
             raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SYNC_DISABLED", "external knowledge api id is not set"
+                status.HTTP_404_NOT_FOUND,
+                "KNOWLEDGE_SYNC_DISABLED",
+                "external knowledge connection is not configured",
             )
         workspaces = getattr(context.runtime, "dify_workspaces", None)
         client = getattr(context.runtime, "kb_search_client", None)
@@ -4608,11 +4610,14 @@ def create_gateway_app(
         )
 
         def converge() -> Any:
+            from aiops_diagnostics.dify.knowledge_connection import ensure
+
+            workspace_api_id = ensure(console, workspace.strip(), settings)
             return run(
                 workspace_id=workspace.strip(),
                 libraries=libraries,
                 console=console,
-                external_knowledge_api_id=api_id,
+                external_knowledge_api_id=workspace_api_id,
                 dry_run=False,
                 # 运营在 RAGFlow 删了库之后期待 Dify 的卡片消失（2026-10-24 用户反馈）。
                 # **这里开它是安全的**：`libraries` 就是刚刚从 kb-service 读到的行，

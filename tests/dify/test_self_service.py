@@ -77,6 +77,7 @@ def managed(operator, monkeypatch, tmp_path):
         return "workspace-b"
 
     monkeypatch.setattr(prepare, "knowledge", lambda *_: None)
+    monkeypatch.setattr(prepare, "knowledge_connection", lambda *_: "workspace-api")
     monkeypatch.setattr(prepare, "workspace", workspace)
     monkeypatch.setattr(prepare, "dependencies", lambda *_: "provider-id")
     mc = {
