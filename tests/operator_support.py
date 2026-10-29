@@ -48,7 +48,7 @@ from aiops_diagnostics.identity.scope_context import (
     ScopeContext,
     SubjectRecord,
 )
-from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
 
 TENANT = "T-1"
 C_USER_ID = "C-1"

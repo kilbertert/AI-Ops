@@ -49,8 +49,8 @@ def migrate_shortcuts(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="只输出计划，零写入")] = False,
 ) -> None:
     """将租户复制的快捷动作幂等收敛为平台默认 + 租户覆盖。"""
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
-    from aiops_diagnostics.shortcut_migration import migrate_shortcuts as run_migration
+    from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
+    from aiops_diagnostics.publication.shortcut_migration import migrate_shortcuts as run_migration
 
     reports = run_migration(
         ShortcutManager(ShortcutStore(db)), _platform_migration_context(), dry_run=dry_run
@@ -95,11 +95,19 @@ def reconcile(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="只输出计划，零写入")] = False,
 ) -> None:
     """按环境清单收敛 gateway agent（幂等；走 AgentManager 生产代码路径）。"""
-    from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
-    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore, allowed_models_from_settings
-    from aiops_diagnostics.agent_manifest import ManifestError, load_manifest, reconcile_dify_registry
-    from aiops_diagnostics.agent_manifest import reconcile as reconcile_manifest
     from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+    from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
+    from aiops_diagnostics.publication.agent_lifecycle import (
+        AgentManager,
+        AgentStore,
+        allowed_models_from_settings,
+    )
+    from aiops_diagnostics.publication.agent_manifest import (
+        ManifestError,
+        load_manifest,
+        reconcile_dify_registry,
+    )
+    from aiops_diagnostics.publication.agent_manifest import reconcile as reconcile_manifest
 
     try:
         environment = load_manifest(manifest)
@@ -208,14 +216,18 @@ def pull_dify(
       哪个租户/入口"是运行时注册表的事（`[[dify_apps]]` + `admin reconcile`，见 #584）。
       两件事混在一起会让一次拉取顺手改掉线上路由。
     """
-    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore, allowed_models_from_settings
-    from aiops_diagnostics.agent_manifest import admin_context
     from aiops_diagnostics.dify_dsl_pull import (
         DifyDslError,
         DifyDslSource,
         pull_agent_draft,
         resolve_pulled_config,
     )
+    from aiops_diagnostics.publication.agent_lifecycle import (
+        AgentManager,
+        AgentStore,
+        allowed_models_from_settings,
+    )
+    from aiops_diagnostics.publication.agent_manifest import admin_context
 
     settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
     # 控制台三键与 `admin reconcile` 读**同一个文件**；守卫与 `sync-from-dify` 共用一份，
@@ -226,7 +238,7 @@ def pull_dify(
 
     knowledge_resolver = None
     if kb_url:
-        from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
+        from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
 
         knowledge_resolver = KbBindingResolver(
             KbServiceKnowledgeClient(kb_url, tenant_id="aiops", timeout=10)
@@ -460,8 +472,6 @@ def sync_from_dify(
     **为什么不是自动定时跑**：正因为 Dify 没有草稿区，定时跑会**把运营打字打到一半的
     正文推上线**。所以这是一条**显式动作**，由知道"我改完了"的人触发。
     """
-    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore, allowed_models_from_settings
-    from aiops_diagnostics.agent_manifest import admin_context
     from aiops_diagnostics.dify_app_registry import DifyAppRegistry
     from aiops_diagnostics.dify_dsl_pull import (
         DifyDslError,
@@ -469,13 +479,19 @@ def sync_from_dify(
         sync_binding_from_dify,
     )
     from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
+    from aiops_diagnostics.publication.agent_lifecycle import (
+        AgentManager,
+        AgentStore,
+        allowed_models_from_settings,
+    )
+    from aiops_diagnostics.publication.agent_manifest import admin_context
 
     console, database = _dify_console_and_db(ctx, db)
     settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
     knowledge_registry = _dify_knowledge_registry(console)
     knowledge_resolver = None
     if kb_url:
-        from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
+        from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
 
         knowledge_resolver = KbBindingResolver(
             KbServiceKnowledgeClient(kb_url, tenant_id="aiops", timeout=10)

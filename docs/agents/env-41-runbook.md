@@ -977,7 +977,7 @@ sha256sum ops/environments/env-41.toml
 cd /opt/aiops-41
 runuser -u aiops41 -- env HOME=/var/lib/aiops-41 .venv/bin/python - <<'PY'
 from pathlib import Path
-from aiops_diagnostics.agent_manifest import load_manifest, reconcile_dify_registry
+from aiops_diagnostics.publication.agent_manifest import load_manifest, reconcile_dify_registry
 from aiops_diagnostics.dify_app_registry import DifyAppRegistry
 env = load_manifest(Path("/opt/aiops-41/ops/env-41.toml.new"))
 reg = DifyAppRegistry(Path("/var/lib/aiops-41/gateway/gateway.db"))
@@ -1015,7 +1015,7 @@ PY
 # install -m 644 到 /tmp，cd /opt/aiops-41，runuser -u aiops41 -- …/python /tmp/seed.py
 from pathlib import Path
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.shortcut_lifecycle import (
+from aiops_diagnostics.publication.shortcut_lifecycle import (
     PLATFORM_SCOPE,
     PLATFORM_TENANT_ID,
     ShortcutManager,
@@ -1041,7 +1041,7 @@ ctx = ScopeContext.build(
 # **两个入口的全部**种子，会顺手把 41 上所有缺失的行都造出来（2026-10-12 实测：
 # 它还会创建 3 条 `battery_report` consumer 行，且都是**草稿**——入口看不到，
 # 却在管理列表里多出三行无人认领的东西）。要上线一个动作就只建那一个。
-from aiops_diagnostics.shortcut_lifecycle import _BUNDLED_SHORTCUTS  # noqa: PLC2701 - 文案的单一来源
+from aiops_diagnostics.publication.shortcut_lifecycle import _BUNDLED_SHORTCUTS  # noqa: PLC2701 - 文案的单一来源
 
 ENTRY, CODE = "operator", "operations_review"
 spec = next(fields[CODE] for entry, fields in _BUNDLED_SHORTCUTS if entry == ENTRY)
@@ -1120,7 +1120,7 @@ manager.disable(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLAT
 ```python
 from pathlib import Path
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.shortcut_lifecycle import (
+from aiops_diagnostics.publication.shortcut_lifecycle import (
     PLATFORM_TENANT_ID,
     ShortcutManager,
     ShortcutStore,
@@ -1286,7 +1286,7 @@ __platform__        / operator / case_exploration   published  target=NULL   ←
 # install -m 644 到 /tmp，cd /opt/aiops-41，runuser -u aiops41 -- …/python /tmp/restore-promo.py
 from pathlib import Path
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
 
 ENTRY, CODE = "operator", "case_exploration"
 TENANT = "<该运营商的租户 id>"  # 绑定必须落在这个租户上
@@ -1310,7 +1310,7 @@ platform_row = store.find_by_code("__platform__", ENTRY, CODE)
 assert platform_row is not None and platform_row.status == "published", "平台行缺失/未发布"
 
 # ② 文案从代码里的种子规格取，**不手抄** —— 与代码不可能漂移。
-from aiops_diagnostics.shortcut_lifecycle import _BUNDLED_SHORTCUTS  # noqa: PLC2701
+from aiops_diagnostics.publication.shortcut_lifecycle import _BUNDLED_SHORTCUTS  # noqa: PLC2701
 
 # 🔴 **这一步依赖"41 上跑的源码已经含恢复后的种子"** —— 也就是**本改动已合并并 CD 部署**。
 # 在部署之前（含刚合并、CD 还没跑完的窗口）执行，这里会 StopIteration：
@@ -1501,7 +1501,7 @@ cd /opt/aiops-41 && runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python /tmp/pu
 ```python
 from pathlib import Path
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.shortcut_lifecycle import (
+from aiops_diagnostics.publication.shortcut_lifecycle import (
     PLATFORM_SCOPE, PLATFORM_TENANT_ID, ShortcutManager, ShortcutStore,
 )
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
@@ -1545,7 +1545,7 @@ if cur.status == "draft":
 ```text
 # runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python 执行
 from pathlib import Path
-from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))  # 必须 Path，不是 str
@@ -1867,7 +1867,7 @@ ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiop
   /opt/aiops-41/.venv/bin/python - <<PY
 from pathlib import Path
 import sqlite3
-from aiops_diagnostics.shortcut_lifecycle import ShortcutStore
+from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES as L
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
 # 请求返回的是【按租户合并】后的列表，所以要按**真实租户**逐个复核，不能只看平台行：
@@ -1922,7 +1922,7 @@ PY'
 ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiops-41/src \
   /opt/aiops-41/.venv/bin/python - <<PY
 from pathlib import Path
-from aiops_diagnostics.shortcut_lifecycle import PLATFORM_SCOPE, ShortcutManager, ShortcutStore
+from aiops_diagnostics.publication.shortcut_lifecycle import PLATFORM_SCOPE, ShortcutManager, ShortcutStore
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db")); mgr = ShortcutManager(store)
 ctx = type("Ctx", (), {"effective_tenant_id": "__platform__", "roles": frozenset({"ROLE_PLATFORM_ADMIN"}),
                        "caller": type("U", (), {"b_user_id": "rollback"})()})()

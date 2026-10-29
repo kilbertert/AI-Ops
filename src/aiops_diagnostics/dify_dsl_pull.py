@@ -54,7 +54,6 @@ from urllib.parse import urlencode, urlsplit
 
 import yaml
 
-from aiops_diagnostics.agent_lifecycle import Agent, AgentConfig, AgentManager, config_from_snapshot
 from aiops_diagnostics.bounded_http import (
     ErrorMapping,
     HttpFailure,
@@ -64,6 +63,12 @@ from aiops_diagnostics.bounded_http import (
     join_url,
     parse_data_key_envelope,
     request_json,
+)
+from aiops_diagnostics.publication.agent_lifecycle import (
+    Agent,
+    AgentConfig,
+    AgentManager,
+    config_from_snapshot,
 )
 
 #: Retrying the export is safe because it is a read (``RetryPolicy`` limits
@@ -876,7 +881,7 @@ def _declared_tools(model_config: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _default_output_contract(agent_type: str) -> str:
-    from aiops_diagnostics.agent_manifest import DEFAULT_OUTPUT_CONTRACTS
+    from aiops_diagnostics.publication.agent_manifest import DEFAULT_OUTPUT_CONTRACTS
 
     try:
         return DEFAULT_OUTPUT_CONTRACTS[agent_type]
@@ -1133,7 +1138,7 @@ def sync_binding_from_dify(
     published agent's config is immutable until it is forked. A guard on either
     would be dead code that reads like a check.
     """
-    from aiops_diagnostics.agent_lifecycle import AgentNotFound
+    from aiops_diagnostics.publication.agent_lifecycle import AgentNotFound
 
     existing = _find_by_name(manager, context, binding.agent_name)
     if existing is None:

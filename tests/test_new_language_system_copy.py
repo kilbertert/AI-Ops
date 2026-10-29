@@ -26,7 +26,7 @@ from aiops_diagnostics.i18n import (
     diagnosis_failure_message,
     zero_order_reminder,
 )
-from aiops_diagnostics.shortcut_lifecycle import _BUNDLED_SHORTCUTS, _SHARED_ACTION_FIELDS
+from aiops_diagnostics.publication.shortcut_lifecycle import _BUNDLED_SHORTCUTS, _SHARED_ACTION_FIELDS
 
 _ADDED = ("vi", "mn", "th", "km")
 
@@ -194,7 +194,7 @@ def test_a_shortcut_row_reports_the_language_its_copy_is_in() -> None:
     deployment with already-published shortcuts serves the OLD copy whatever the
     seed now contains. Reporting the requested tag for that row is the defect.
     """
-    from aiops_diagnostics.shortcut_lifecycle import Shortcut
+    from aiops_diagnostics.publication.shortcut_lifecycle import Shortcut
 
     row = Shortcut(
         shortcut_id="sc_1",

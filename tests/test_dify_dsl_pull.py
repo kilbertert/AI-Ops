@@ -8,7 +8,6 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
-from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentNotFound, AgentStore
 from aiops_diagnostics.dify_dsl_pull import (
     DifyDslAuthRejected,
     DifyDslClient,
@@ -21,6 +20,7 @@ from aiops_diagnostics.dify_dsl_pull import (
     pull_agent_draft,
 )
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentNotFound, AgentStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
 #: A real export pulled from the Dify instance on host 36 (#579) through the

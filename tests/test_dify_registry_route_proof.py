@@ -50,8 +50,8 @@ def _database(tmp_path: Path, *, published: tuple[str, ...] = (("cand-A", True),
     bases cannot serve the RAG path, so it must be skipped by the selector the
     same way it is at runtime.
     """
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
-    from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+    from aiops_diagnostics.publication.agent_manifest import admin_context
 
     path = tmp_path / "gateway.db"
 
@@ -80,8 +80,8 @@ def _database(tmp_path: Path, *, published: tuple[str, ...] = (("cand-A", True),
 
 def test_the_selector_picks_the_newest_published_agent_with_knowledge(tmp_path: Path) -> None:
     """先钉住"旧规则"这一侧：它是脚本用来制造可区分性的对照。"""
-    from aiops_diagnostics.agent_lifecycle import AgentStore
-    from aiops_diagnostics.qa_rag import select_customer_agent
+    from aiops_diagnostics.publication.agent_lifecycle import AgentStore
+    from aiops_diagnostics.publication.qa_rag import select_customer_agent
 
     path = _database(tmp_path, published=(("older", True), ("newer", True)))
     selection = select_customer_agent(AgentStore(path), TENANT)
@@ -94,8 +94,8 @@ def test_the_selector_picks_the_newest_published_agent_with_knowledge(tmp_path: 
 
 def test_an_agent_without_knowledge_is_not_a_candidate(tmp_path: Path) -> None:
     """没有知识库的客服 agent 到不了 RAG 路径，因此不是可用的对照。"""
-    from aiops_diagnostics.agent_lifecycle import AgentStore
-    from aiops_diagnostics.qa_rag import select_customer_agent
+    from aiops_diagnostics.publication.agent_lifecycle import AgentStore
+    from aiops_diagnostics.publication.qa_rag import select_customer_agent
 
     path = _database(tmp_path, published=(("with-kb", True), ("no-kb", False)))
     selection = select_customer_agent(AgentStore(path), TENANT)

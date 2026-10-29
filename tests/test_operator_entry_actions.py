@@ -41,7 +41,7 @@ from operator_support import (
     OPERATOR_HEADERS as _OPERATOR_HEADERS,
 )
 
-from aiops_diagnostics.shortcut_lifecycle import (
+from aiops_diagnostics.publication.shortcut_lifecycle import (
     _BUNDLED_SHORTCUTS,
 )
 

@@ -23,14 +23,6 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
-from aiops_diagnostics.agent_manifest import (
-    EnvironmentManifest,
-    ManifestAgent,
-    ManifestError,
-    load_manifest,
-    reconcile_dify_registry,
-)
 from aiops_diagnostics.dify_app_registry import (
     DifyAppBinding,
     DifyAppRegistry,
@@ -38,6 +30,14 @@ from aiops_diagnostics.dify_app_registry import (
 )
 from aiops_diagnostics.faq import PlatformRoleRecord
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+from aiops_diagnostics.publication.agent_manifest import (
+    EnvironmentManifest,
+    ManifestAgent,
+    ManifestError,
+    load_manifest,
+    reconcile_dify_registry,
+)
 
 TENANT = "T-1"
 #: Routes to the generic QA branch: no FAQ hit, no order id, no dispute wording.

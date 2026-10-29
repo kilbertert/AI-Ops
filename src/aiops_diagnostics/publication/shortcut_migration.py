@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from aiops_diagnostics.shortcut_lifecycle import (
+from aiops_diagnostics.publication.shortcut_lifecycle import (
     PLATFORM_SCOPE,
     PLATFORM_TENANT_ID,
     Shortcut,

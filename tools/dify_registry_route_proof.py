@@ -106,8 +106,8 @@ def _promo_pinned_ids(database: Path, tenant_id: str) -> frozenset[str]:
 
     私有名在此处是刻意复用：这个脚本与本仓同一个进程里跑，而抄一份的代价是漂移。
     """
-    from aiops_diagnostics.agent_lifecycle import AgentStore
-    from aiops_diagnostics.qa_rag import _pinned_promo_agents
+    from aiops_diagnostics.publication.agent_lifecycle import AgentStore
+    from aiops_diagnostics.publication.qa_rag import _pinned_promo_agents
 
     return _pinned_promo_agents(AgentStore(database), tenant_id)
 
@@ -133,14 +133,14 @@ def main(argv: list[str] | None = None) -> int:
     database = _copy_database(source)
     print(f"副本：{database}")
 
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
-    from aiops_diagnostics.agent_manifest import admin_context
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.gateway_store import GatewayStore
-    from aiops_diagnostics.qa_rag import select_customer_agent
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+    from aiops_diagnostics.publication.agent_manifest import admin_context
+    from aiops_diagnostics.publication.qa_rag import select_customer_agent
 
     class _PublishOk:
         def validate(self, tenant_id: str, knowledge_base_ids: tuple[str, ...]) -> None:

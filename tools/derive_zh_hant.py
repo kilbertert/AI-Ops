@@ -173,7 +173,7 @@ def check_python_tables(cc) -> list[str]:
     """
     import importlib
 
-    from aiops_diagnostics import shortcut_lifecycle
+    from aiops_diagnostics.publication import shortcut_lifecycle
 
     stale: list[str] = []
     for module_name, table_name in FLAT_TABLES:

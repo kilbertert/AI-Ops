@@ -106,7 +106,7 @@ def test_the_nested_shortcut_seed_is_walked(tool, cc, monkeypatch) -> None:
     button that reads Simplified the day it is created. A flat-only walker would
     never look at them.
     """
-    from aiops_diagnostics import shortcut_lifecycle
+    from aiops_diagnostics.publication import shortcut_lifecycle
 
     field = {"zh": "简体按钮", "zh-Hant": "陈旧按钮"}  # deliberately stale
     monkeypatch.setattr(shortcut_lifecycle, "_BUNDLED_SHORTCUTS", (("consumer", {"c": {"labels": field}}),))

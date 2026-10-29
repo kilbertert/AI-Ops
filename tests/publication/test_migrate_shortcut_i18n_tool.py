@@ -19,9 +19,9 @@ from types import SimpleNamespace
 import pytest
 
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
-from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[2]
 SIX = ("zh", "en", "de", "fr", "es", "pt")
 
 

@@ -20,18 +20,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from aiops_diagnostics import __version__, chat_execution, execution_manifest, request_observation
-from aiops_diagnostics.agent_content import AGENT_STARTERS
-from aiops_diagnostics.agent_lifecycle import (
-    AGENT_MANAGE_SCOPE,
-    AgentConfig,
-    AgentConflict,
-    AgentError,
-    AgentForbidden,
-    AgentManager,
-    AgentNotFound,
-    AgentStore,
-    allowed_models_from_settings,
-)
 from aiops_diagnostics.agent_runs import (
     EXPIRED,
     FAILED,
@@ -164,7 +152,19 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import (
 from aiops_diagnostics.knowledge.knowledge_sources import KnowledgeSourceResolver
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file, write_private_text
-from aiops_diagnostics.shortcut_lifecycle import (
+from aiops_diagnostics.publication.agent_content import AGENT_STARTERS
+from aiops_diagnostics.publication.agent_lifecycle import (
+    AGENT_MANAGE_SCOPE,
+    AgentConfig,
+    AgentConflict,
+    AgentError,
+    AgentForbidden,
+    AgentManager,
+    AgentNotFound,
+    AgentStore,
+    allowed_models_from_settings,
+)
+from aiops_diagnostics.publication.shortcut_lifecycle import (
     BANNER_KIND,
     BUTTON_KIND,
     OPERATIONS_REVIEW_CODE,
@@ -823,9 +823,9 @@ def _publish_bound_app(
         raise StandardAPIError(
             status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
         )
-    from aiops_diagnostics.agent_manifest import admin_context
     from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
     from aiops_diagnostics.dify_dsl_pull import DifyDslError, DifyDslSource
+    from aiops_diagnostics.publication.agent_manifest import admin_context
 
     console = context.settings
     if not console.dify_console_base_url or not console.dify_console_api_key:
@@ -1398,7 +1398,7 @@ def create_gateway_app(
             # Real publish validation (T5/#171): bindings must resolve against
             # live kb-service. Without a kb URL the manager keeps the
             # fail-closed default (bindings never publish).
-            from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
+            from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
 
             knowledge_resolver = KbBindingResolver(
                 KbServiceKnowledgeClient(
@@ -4251,7 +4251,7 @@ def create_gateway_app(
             registry = getattr(runtime, "dify_app_registry", None)
             if store is None or registry is None or not registry.is_configured():
                 return None, None
-            from aiops_diagnostics.qa_rag import select_customer_agent
+            from aiops_diagnostics.publication.qa_rag import select_customer_agent
 
             registered_name, configured = runtime._registered_agent(tenant_id, entry)
             if not configured or registered_name is None:
@@ -5197,7 +5197,7 @@ def create_gateway_app(
         optionally narrows to one agent. Cross-tenant data is unreachable by
         construction, and rows never carry question/answer/prompt text.
         """
-        from aiops_diagnostics.agent_lifecycle import VIEW_ROLES
+        from aiops_diagnostics.publication.agent_lifecycle import VIEW_ROLES
 
         if not frozenset(getattr(caller, "roles", ())).intersection(VIEW_ROLES):
             raise StandardAPIError(
@@ -5222,7 +5222,7 @@ def create_gateway_app(
         caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
     ) -> dict[str, Any]:
         """Recent redacted run rows (T7/#174) for the caller's tenant only."""
-        from aiops_diagnostics.agent_lifecycle import VIEW_ROLES
+        from aiops_diagnostics.publication.agent_lifecycle import VIEW_ROLES
 
         if not frozenset(getattr(caller, "roles", ())).intersection(VIEW_ROLES):
             raise StandardAPIError(

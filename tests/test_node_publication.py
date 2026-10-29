@@ -11,9 +11,9 @@ from test_m2_close_contract import _write_config
 from test_m3_gateway_exec_config import _write_manifest
 
 from aiops_diagnostics import chat_execution, node_publication
-from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from aiops_diagnostics.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.dify_dsl_pull import DifyDslSource
+from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
 APP = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 

@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
-from aiops_diagnostics.shortcut_migration import migrate_shortcuts
+from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
+from aiops_diagnostics.publication.shortcut_migration import migrate_shortcuts
 
 
 def _context() -> ScopeContext:

@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.shortcut_lifecycle import (
+from aiops_diagnostics.publication.shortcut_lifecycle import (
     BANNER_KIND,
     BUTTON_KIND,
     ShortcutManager,

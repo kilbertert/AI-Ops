@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aiops_diagnostics.agent_lifecycle import AgentStore
+from aiops_diagnostics.publication.agent_lifecycle import AgentStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +39,7 @@ def select_customer_agent(
     nobody has declared otherwise. ``None`` keeps the pre-registry rule, for the
     environments that have not adopted the registry yet.
     """
-    from aiops_diagnostics.agent_lifecycle import AgentNotFound
+    from aiops_diagnostics.publication.agent_lifecycle import AgentNotFound
 
     promo_targets = _pinned_promo_agents(store, tenant_id)
     try:
@@ -79,7 +79,7 @@ def _pinned_promo_agents(store: AgentStore, tenant_id: str) -> frozenset[str]:
     customer-service agent by its shortcut pin, so no extra agent field is
     needed. Store failures degrade to the empty set (old selection behavior).
     """
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutStore
+    from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutStore
 
     try:
         rows = ShortcutStore(store.path).list_published(tenant_id, "consumer")

@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
-from aiops_diagnostics.qa_rag import select_customer_agent
+from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+from aiops_diagnostics.publication.qa_rag import select_customer_agent
 
 
 class _PublishOkResolver:
@@ -52,7 +52,7 @@ def test_select_customer_agent_skips_promo_pinned_agent(tmp_path: Path) -> None:
     plain customer QA path (41 live regression, 2026-09-15): creating a newer
     promotional agent made `select_customer_agent` hand the customer-service
     questions to the promo agent because list() orders by created_at DESC."""
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+    from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
 
     store = AgentStore(tmp_path / "gateway.db")
     manager = AgentManager(store, knowledge_resolver=_publish_ok())

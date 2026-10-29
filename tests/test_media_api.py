@@ -473,10 +473,10 @@ def test_runtime_serve_media_rechecks_published_agent_liveness(tmp_path: Path) -
     CURRENT published version. That condition used to be here and it 403'd every
     promotional image and video on 41 from 2026-09-20 (see
     `test_serving_survives_the_agent_being_republished`)."""
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -580,10 +580,10 @@ def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> Non
     {"code":102,"document not found"} for documents owned by real tenants —
     deterministic 404 on every signed video URL while the same doc_id
     downloaded fine under the owning tenant's header."""
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     class _TenantRecordingClient:
         bound_tenant = "aiops"
@@ -680,10 +680,10 @@ def test_promo_media_grant_validates_against_its_own_agent(tmp_path: Path) -> No
     deliberately SKIPS promo-pinned agents (#231) — so the comparison could
     never hold for a promotional grant. The check must validate the agent the
     grant actually names."""
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -738,7 +738,7 @@ def test_promo_media_grant_validates_against_its_own_agent(tmp_path: Path) -> No
     # published shortcuts, and select_customer_agent skips whatever they pin.
     # Without this the test would exercise a plain customer agent and pass
     # against the very bug it is meant to catch.
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+    from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
 
     shortcut_store = ShortcutStore(settings.database_file)
     shortcut_manager = ShortcutManager(shortcut_store)
@@ -760,7 +760,7 @@ def test_promo_media_grant_validates_against_its_own_agent(tmp_path: Path) -> No
 
     # Precondition: the selector must now SKIP the promo agent, otherwise the
     # old check would have matched and the test would prove nothing.
-    from aiops_diagnostics.qa_rag import select_customer_agent
+    from aiops_diagnostics.publication.qa_rag import select_customer_agent
 
     assert select_customer_agent(agent_store, "tenant-a") is None, (
         "precondition failed: the promo agent is not being skipped"
@@ -823,10 +823,10 @@ def test_serving_survives_the_agent_being_republished(tmp_path: Path) -> None:
     change, and the URL expires on its own within the TTL. Disabling the agent
     remains the revocation that takes effect immediately.
     """
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -925,10 +925,10 @@ def test_republish_that_removes_the_knowledge_base_revokes_media(tmp_path: Path)
     base, because the historical snapshot still lists it. The operator took the
     library away; the bytes must stop being served.
     """
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -1022,9 +1022,9 @@ def test_dify_signed_media_serves_despite_having_no_agent(tmp_path: Path) -> Non
     agent liveness to check; an agent's own media must still be checked, which
     is what the tests above pin.
     """
-    from aiops_diagnostics.agent_lifecycle import AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.publication.agent_lifecycle import AgentStore
 
     settings = GatewayServerSettings(
         data_home=tmp_path,

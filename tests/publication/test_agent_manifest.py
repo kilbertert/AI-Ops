@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
-from aiops_diagnostics.agent_manifest import (
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.publication.agent_lifecycle import AgentManager, AgentStore
+from aiops_diagnostics.publication.agent_manifest import (
     _PROMPT_FROM_DIFY,
     EnvironmentManifest,
     ManifestAgent,
@@ -17,7 +18,6 @@ from aiops_diagnostics.agent_manifest import (
     reconcile,
     tools_from_dify,
 )
-from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
 class _Knowledge:
@@ -50,7 +50,7 @@ def _manifest_agent(
     state: str = "published",
     knowledge_base_ids: tuple[str, ...] = ("kb-a",),
 ) -> ManifestAgent:
-    from aiops_diagnostics.agent_lifecycle import AgentConfig
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig
 
     return ManifestAgent(
         tenant_id=tenant_id,
@@ -230,7 +230,7 @@ def test_allowed_models_from_settings_single_derivation() -> None:
     agent.model 兜底、最终 aiops-api——防止两处推导漂移（评审发现 #4）。"""
     from types import SimpleNamespace
 
-    from aiops_diagnostics.agent_lifecycle import allowed_models_from_settings
+    from aiops_diagnostics.publication.agent_lifecycle import allowed_models_from_settings
 
     providers = SimpleNamespace(providers=[SimpleNamespace(model="qwen3.8-max"), SimpleNamespace(model="")])
     assert allowed_models_from_settings(SimpleNamespace(agent=providers)) == ("qwen3.8-max",)
@@ -336,7 +336,7 @@ def test_converge_does_not_blank_the_prompt_of_a_dify_bound_agent(tmp_path: Path
     判据是**行为面**的：一个已发布、prompt 是"真正的提示词"的 agent，用一份
     "只绑定、不写 prompt"的清单去收敛 ⇒ 发布出来的那一版 prompt **仍是原文**。
     """
-    from aiops_diagnostics.agent_manifest import EnvironmentManifest, reconcile
+    from aiops_diagnostics.publication.agent_manifest import EnvironmentManifest, reconcile
 
     manager = _manager(tmp_path)
     published = manager.create(_context(), name="客服", description="d", config=_manifest_agent().config)
@@ -367,7 +367,7 @@ def test_the_shipped_environment_manifest_loads() -> None:
     "下一次收敛直接拒绝执行"，而不是某个测试红了。仓里没有任何测试或部署脚本
     读它（实测），所以需要这一条把它钉住。
     """
-    repo_root = Path(__file__).parents[1]
+    repo_root = Path(__file__).parents[2]
     manifest = load_manifest(repo_root / "ops" / "environments" / "env-41.toml")
     assert manifest.agents and manifest.dify_apps, "清单不该是空的"
     for agent in manifest.agents:
@@ -382,7 +382,7 @@ def test_a_brand_new_dify_bound_agent_is_not_created_with_the_placeholder(tmp_pa
     评审在 #739 上逮到：`_validate_config` 只查长度（实测 `1 <= len(prompt) <= 8000`），
     所以哨兵能通过校验并被发布 —— 那个入口从此用一段 grep 出来的字面量回答用户。
     """
-    from aiops_diagnostics.agent_manifest import EnvironmentManifest, reconcile
+    from aiops_diagnostics.publication.agent_manifest import EnvironmentManifest, reconcile
 
     manager = _manager(tmp_path)
     manifest = EnvironmentManifest(
@@ -406,8 +406,8 @@ def test_switching_back_to_the_manifest_while_a_binding_lives_is_refused(tmp_pat
     装载期只能看见**文件里**的绑定：一份"改了正文、没带绑定"的清单看起来完全合法，
     而注册表里那条旧行仍在（`prune=False` 不会清）⇒ 线上双来源继续存在。
     """
-    from aiops_diagnostics.agent_manifest import reconcile_dify_registry
     from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.publication.agent_manifest import reconcile_dify_registry
 
     registry = DifyAppRegistry(tmp_path / "gateway.db")
     registry.put(DifyAppBinding("tenant-a", "consumer", "app-1", "客服助手"))
@@ -419,8 +419,8 @@ def test_switching_back_to_the_manifest_while_a_binding_lives_is_refused(tmp_pat
 
 def test_the_switch_back_is_allowed_once_the_binding_is_gone(tmp_path: Path) -> None:
     """对照：库里**没有**那条绑定时，同样的清单合法 —— 守卫不是"一律拒绝"。"""
-    from aiops_diagnostics.agent_manifest import reconcile_dify_registry
     from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+    from aiops_diagnostics.publication.agent_manifest import reconcile_dify_registry
 
     manifest = _manifest(_manifest_agent(prompt="改回清单提供的正文"))
     reports = reconcile_dify_registry(DifyAppRegistry(tmp_path / "gateway.db"), manifest)

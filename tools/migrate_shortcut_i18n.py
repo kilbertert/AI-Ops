@@ -59,7 +59,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES  # noqa: E402
-from aiops_diagnostics.shortcut_lifecycle import (  # noqa: E402
+from aiops_diagnostics.publication.shortcut_lifecycle import (  # noqa: E402
     _BUNDLED_SHORTCUTS,  # noqa: PLC2701 — the seed IS the source for missing languages
     PLATFORM_SCOPE,
     PLATFORM_TENANT_ID,

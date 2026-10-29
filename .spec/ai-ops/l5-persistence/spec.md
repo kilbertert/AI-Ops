@@ -8,8 +8,8 @@ related:
   - src/aiops_diagnostics/async_job_lifecycle.py
   - src/aiops_diagnostics/conversation_store.py
   - src/aiops_diagnostics/metrics_store.py
-  - src/aiops_diagnostics/agent_lifecycle.py
-  - src/aiops_diagnostics/shortcut_lifecycle.py
+  - src/aiops_diagnostics/publication/agent_lifecycle.py
+  - src/aiops_diagnostics/publication/shortcut_lifecycle.py
   - src/aiops_diagnostics/dify_app_registry.py
   - src/aiops_diagnostics/agent_runs.py
 ---

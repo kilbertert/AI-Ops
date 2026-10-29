@@ -378,7 +378,7 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
         if binding.scenario == SCENARIO_CONSUMER_SERVICE:
             from dataclasses import replace
 
-            from aiops_diagnostics.agent_lifecycle import AgentError, AgentStore
+            from aiops_diagnostics.publication.agent_lifecycle import AgentError, AgentStore
 
             try:
                 snapshot = (
@@ -418,7 +418,7 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
         if binding.engine == ENGINE_NODE:
             from dataclasses import replace
 
-            from aiops_diagnostics.agent_lifecycle import AgentError, AgentStore
+            from aiops_diagnostics.publication.agent_lifecycle import AgentError, AgentStore
 
             try:
                 snapshot = (

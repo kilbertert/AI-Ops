@@ -62,7 +62,7 @@ def test_independent_admin_entry_uses_selected_private_config(tmp_path, monkeypa
         return ("aiops-api",)
 
     monkeypatch.delenv("AIOPS_AGENT_MODEL", raising=False)
-    monkeypatch.setattr("aiops_diagnostics.agent_lifecycle.allowed_models_from_settings", models)
+    monkeypatch.setattr("aiops_diagnostics.publication.agent_lifecycle.allowed_models_from_settings", models)
     result = CliRunner().invoke(
         admin_app,
         [
