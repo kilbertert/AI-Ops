@@ -309,7 +309,9 @@ def test_operator_runs_two_cpms_tools_and_original_readback(operator, monkeypatc
     assert response.status_code == 202, response.text
     final = terminal(f, response.json()["qa_id"])
     assert final.status_code == 200 and final.json()["status"] == "completed", final.text
-    assert "cpms.orderDetail" in final.text and "cpms.chargingMonitor" in final.text
+    # 报告末尾给读的人看的是**来源名**与可核对时刻，不是内部接口标识。
+    assert "订单详情" in final.text and "充电监测样本" in final.text
+    assert "cpms.orderDetail" not in final.text, "内部接口标识不该摆在用户可见正文里"
     assert [p for p, _ in f["state"]["calls"]].count("/chOrderInfo/getOrderInfoDetail/" + ORDER) == 4
     assert len(f["state"]["calls"]) == 5  # 节点取证2次，签发/完成/回读授权各1次。
     assert all(token == "Bearer operator-private" for _, token in f["state"]["calls"])
@@ -575,7 +577,7 @@ def test_operator_trial_uses_draft_without_changing_publication(operator, monkey
         *answer["limitations"],
     ):
         assert text in panel
-    assert "cpms.orderDetail" in panel and "cpms.chargingMonitor" in panel
+    assert "订单详情" in panel and "充电监测样本" in panel
     assert ("UNSAVED_NATIVE_DRAFT" if native else "TRIAL_ONLY") in seen[0]
     current = chat_execution.select_binding(
         f["settings"], scope(), entry="operator", scenario=operator_cpms.SCENARIO

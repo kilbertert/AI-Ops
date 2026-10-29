@@ -7,8 +7,14 @@ COPY = json.loads(Path(__file__).with_suffix(".json").read_text(encoding="utf-8"
 
 
 def live_answer(snapshot, language, kind):
+    from aiops_diagnostics.consumer.consumer_time import readable_time
+
     pack = COPY[language]
     values = dict(snapshot)
+    # 时间在**两条渲染路**上必须是同一种写法：`localized=True` 走这里的模板，
+    # 未本地化走 `consumer_order_chat`／`consumer_billing` 的函数。只改一边会让同一份
+    # 事实按语言不同显示出不同精度 —— 用户对比两种语言时会以为数据不一样。
+    values["observed_at"] = readable_time(snapshot["observed_at"])
     if kind == "status":
         values["status"] = pack.get(snapshot["status_role"], pack["unknown"])
     else:
