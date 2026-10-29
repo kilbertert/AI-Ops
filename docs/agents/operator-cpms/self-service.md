@@ -146,5 +146,8 @@ ragflow_tenants.model_checked_at非空。知识入口303并进入RAGFlow后，�
 `deploy/kb-service/recover_tenant_login.py`，必须从合并修订提取，在RAGFlow容器`/ragflow`运行。
 无`--apply`只读核对；正式恢复从stdin传入预先加密保存的随机密码并指定容器内新0600备份。
 工具调用RAGFlow现有`UserService.update_user_password`，只恢复这个账号的密码，不改API token或数据。
+**写入的必须是`base64(明文)`的散列**：RAGFlow登录把`decrypt(crypt(明文))`交给`check_password_hash`，
+而`api/utils/crypt.py`写明该值等于`base64(明文)`。存明文散列时写入会“成功”，但之后任何登录都401，
+表现为`SETUP_KNOWLEDGE_FAILED`。工具写完会用上游同一判据回放一次，不通过即报错。
 先记录待恢复凭据，恢复后用`/kb/tenants/verify-password`确认，再重试原开通任务完成模型验证。
 不要调用会重新创建租户的绕行脚本，不输出密码、散列或会话。失败保留备份和任务状态供恢复。
