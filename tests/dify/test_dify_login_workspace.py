@@ -460,6 +460,55 @@ def test_operator_trial_token_is_opt_in_session_bound_and_expires(tmp_path, monk
     assert key not in service._operator_tokens
 
 
+@pytest.mark.parametrize(
+    ("access_minutes", "override", "expected"),
+    [
+        # 默认跟随会话：这里曾经硬编码 900 秒，而会话是 60 分钟 —— 15 到 60 分钟之间
+        # 页面能开、试运行和发布却全 403，且没有任何续期路径。
+        (60, None, 3600),
+        (30, None, 1800),
+        (60, 120, 120),
+    ],
+)
+def test_operator_token_lifetime_follows_the_session(
+    tmp_path, access_minutes: int, override: int | None, expected: int
+) -> None:
+    service = LoginService(
+        company=CompanyAuthSettings(base_url="http://company.invalid", encode_key="0123456789abcdef"),
+        dify=DifyConsoleSettings(
+            base_url="http://dify.invalid",
+            secret_key="k" * 16,
+            environment=ENVIRONMENT,
+            access_expire_minutes=access_minutes,
+        ),
+        store=MappingStore(tmp_path / "mappings.db"),
+        policy=LoginPolicy(edit_permission="aiops:agent:edit"),
+        owner_user_id=ACCOUNT,
+        operator_token_seconds=override,
+    )
+    assert service.operator_token_seconds() == expected
+
+
+def test_a_cached_token_outlives_the_old_fifteen_minute_window(tmp_path, monkeypatch) -> None:
+    """到 16 分钟仍可用 —— 这正是用户报的"老是过期"。
+
+    不是把窗口关掉：会话 60 分钟一到，``verify_console_jwt`` 仍会拒（读回那条另测）。
+    """
+    import hashlib
+    import time
+
+    _patch_company(monkeypatch, user_type="5")
+    service = _service(tmp_path, _Directory(WORKSPACE), _Inner())
+    service.retain_operator_token = True
+    session, _ = service.login(username="zhang", password="pw", random_str="r", code="c")
+    key = hashlib.sha256(session.access_token.encode()).hexdigest()
+    with service._operator_token_lock:
+        expiry, *rest = service._operator_tokens[key]
+        service._operator_tokens[key] = (time.time() + 16 * 60, *rest)
+    assert expiry > time.time() + 15 * 60
+    assert service.operator_token(session.access_token) is not None
+
+
 def test_logout_then_same_second_login_does_not_reauthorize_old_session(tmp_path, monkeypatch):
     monkeypatch.setattr("aiops_diagnostics.dify.dify_login_proxy.time.time", lambda: 1800000000)
     _patch_company(monkeypatch, user_type="5")
