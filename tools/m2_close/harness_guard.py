@@ -35,11 +35,11 @@ IDENTITY_FILES = (
     "tools/m2_close/synthetic_upstream.py",
     "tools/m2_close/gateway_launcher.py",
     "tools/m2_close/verify_real_gateway.py",
-    "tools/m2_close/node/pom.xml",
-    "tools/m2_close/node/src/main/resources/application.yml",
-    "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java",
-    "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java",
-    "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ExecutionNodeApplication.java",
+    "services/execution-node/pom.xml",
+    "services/execution-node/src/main/resources/application.yml",
+    "services/execution-node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java",
+    "services/execution-node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java",
+    "services/execution-node/src/main/java/com/trendpower/aiops/node/ExecutionNodeApplication.java",
 )
 
 

@@ -13,7 +13,7 @@ Snail 服务端、执行节点、Gateway 的授权与生命周期全部是真代
 
 预置产物（脚本不构建、不下载）：
   SNAIL_SRC   平台源码 checkout（需含 snail-ai-starter/target/snail-ai-server-exec.jar）
-  NODE_JAR    执行节点 jar（tools/m2_close/node 构建产物）
+  NODE_JAR    执行节点 jar（services/execution-node 构建产物）
 
 退出码 0=PASS，1=有判据失败，2=环境不足，3=另一个实验正在运行（未做任何清理）。
 
@@ -1007,7 +1007,7 @@ def _run(args: argparse.Namespace, lock: Any) -> int:
     del lock  # 只在 main() 里持有；这里只是把生命周期写清楚。
     repo = Path(__file__).resolve().parents[2]
     snail_src = Path(os.environ.get("SNAIL_SRC", "/tmp/snail-ai")).resolve()
-    node_jar = Path(os.environ.get("NODE_JAR", "tools/m2_close/node/target/aiops-execution-node.jar"))
+    node_jar = Path(os.environ.get("NODE_JAR", "services/execution-node/target/aiops-execution-node.jar"))
     if not node_jar.is_absolute():
         node_jar = (repo / node_jar).resolve()
     missing = [str(path) for path in (snail_src, node_jar) if not path.exists()]

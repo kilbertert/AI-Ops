@@ -106,7 +106,7 @@ def main():
         f"{classes}:/out",
     ]
     compile_cmd = (
-        'find /repo/tools/m2_close/node/src/main/java -name "*.java" > /tmp/sources; '
+        'find /repo/services/execution-node/src/main/java -name "*.java" > /tmp/sources; '
         'javac -nowarn -proc:none -cp "/deps/lib/*" -d /out @/tmp/sources '
         "/repo/tools/m2_close/m3node/NodeLinkAcceptance.java "
         "/repo/tools/m2_close/m3node/CpmsToolAcceptance.java"

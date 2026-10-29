@@ -67,7 +67,7 @@ def _node_jar_sha256() -> str:
     import hashlib
 
     repo = Path(__file__).resolve().parents[2]
-    jar = repo / "tools/m2_close/node/target/aiops-execution-node.jar"
+    jar = repo / "services/execution-node/target/aiops-execution-node.jar"
     return hashlib.sha256(jar.read_bytes()).hexdigest() if jar.is_file() else ""
 
 

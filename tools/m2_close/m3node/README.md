@@ -33,7 +33,7 @@ M3NODE_DEPS=… M3NODE_JDK_IMAGE=… \
 ```
 
 真 Gateway 进程（`create_gateway_app`，一次性数据根）+ **真 Java 节点**（编译自
-`tools/m2_close/node/src`）+ 合成模型/CPMS。平台派发入口是替身，但**领取与完成通知
+`services/execution-node/src`）+ 合成模型/CPMS。平台派发入口是替身，但**领取与完成通知
 都由节点自己的类发出**；平台替身按**同步**语义起节点（真实平台也是同步接口），
 否则「派发返回时记录已 succeeded」这条既有语义会被替身自己的异步性破坏。
 

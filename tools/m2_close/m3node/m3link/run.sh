@@ -38,7 +38,7 @@ docker run --rm --pull=never --network=none --cap-drop=ALL \
   --user "$(id -u):$(id -g)" \
   -v "$REPO:/repo:ro" -v "$DEPS:/deps:ro" -v "$OUT:/out" "$JDK_IMAGE" bash -c '
     set -euo pipefail
-    find /repo/tools/m2_close/node/src/main/java -name "*.java" > /tmp/srcs.txt
+    find /repo/services/execution-node/src/main/java -name "*.java" > /tmp/srcs.txt
     javac -nowarn -proc:none -cp "/deps/lib/*" -d /out/classes \
       @/tmp/srcs.txt /repo/tools/m2_close/m3node/m3link/ConcurrentRunAcceptance.java
   '

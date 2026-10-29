@@ -15,7 +15,7 @@
 | 聊天入口、QA 生命周期、读取守卫、取消 | **真 Gateway 进程**（本仓 `create_gateway_app`） |
 | 绑定选择、选单、授权、签发、`final_release` | **本仓真实代码** |
 | 领取 / 整轮完成通知 | **真 Java 节点自己发出**（不是 Python 派发器代劳） |
-| 节点装配、工具、整轮守卫 | **真 Java 节点**（编译自 `tools/m2_close/node/src`） |
+| 节点装配、工具、整轮守卫 | **真 Java 节点**（编译自 `services/execution-node/src`） |
 | 模型上游 | 本机合成 OpenAI-compatible 服务（允许） |
 | CPMS | 本机合成（允许） |
 | 编排平台 | 本机替身：收到派发**只起一个真节点进程**，同步等它结束 |
@@ -332,7 +332,7 @@ def _rows(database: Path) -> list[dict[str, Any]]:
 def _compile(classes: Path, deps: Path, jdk: str) -> tuple[int, str]:
     sources = " ".join(
         str(Path("/repo") / p.relative_to(REPO))
-        for p in (REPO / "tools/m2_close/node/src/main/java").rglob("*.java")
+        for p in (REPO / "services/execution-node/src/main/java").rglob("*.java")
     )
     command = (
         f'javac -nowarn -proc:none -cp "/deps/lib/*" -d /out {sources} '

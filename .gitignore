@@ -107,13 +107,14 @@ docs/*.csv
 docs/*.docx
 *.netcatty-*.part
 
-# 隔离实验的执行节点构建产物（约 102MB fat jar）：由 `mvn -f tools/m2_close/node/pom.xml package`
+# 正式执行节点构建产物（约 102MB fat jar）：由 `mvn -f services/execution-node/pom.xml package`
 # 生成，不是仓库内容。见 tools/README.md 的 `m2_close/` 一节。
-tools/m2_close/node/target/
 *.gateway-output.log
 
 # M3-NODE-GUARD-01 合成验收的构建产物
 tools/m2_close/m3node/build/
+services/execution-node/target/
+# 升级旧工作树时仍忽略既有构建残留，不保留旧源码。
 tools/m2_close/node/target/
 
 # 上游源码树：build-web-image.sh 拉下来的 Dify 全量源码（~200M），构建产物不是源。
