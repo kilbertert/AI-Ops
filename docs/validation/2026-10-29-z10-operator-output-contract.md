@@ -59,3 +59,7 @@ canonical checkout内的独立任务分支；未删除/修改其他任务worktre
 交付准备：用户已授权PR、合并后部署节点和ulink验收。提交钩子要求独立worktree，已迁移至
 `fix/operator-output-contract`（base `db6bda192d7f213538b160a803feb576d7ea1480`），
 完整保留两份状态索引记录；Java源码与已验收候选相同。
+
+PR #1149首轮CI为3343 passed / 10 skipped / 1 failed：验收驱动属于部署上下文，
+源码摘要锁尚旧。已通过`build-image.sh --update-lock`真实重建并更新锁；部署专项18 passed。
+Devin与Codex自动审查因额度不足未完成，无待处理线程，不标作审查通过。

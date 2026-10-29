@@ -43,3 +43,6 @@ Gateway继续检查JSON、五字段、证据是否真实取得并交付、当前
 [QA计划](../agents/operator-cpms/output-contract-qa.md)。修复在Java节点，需要重建并部署
 节点制品才会影响已有管家版本；既有清单无需重发。仅部署Gateway不能带来此修复。
 真实供应商兼容性、ulink现场恢复、故障准确率分别验收，本地合成通过不替代它们。
+
+交付内容锁包含`tools/m2_close`验收驱动；更新驱动后必须通过既有`build-image.sh --update-lock`
+重建并记录上下文，不能只改摘要绕过校验。本次不部署这份隔离Gateway镜像。
