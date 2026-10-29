@@ -14,12 +14,13 @@ from typing import Any
 
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.conversation_store import BUSY_LOCK_SECONDS
+from aiops_diagnostics.data.sources import SourceError, scoped_live_sources
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_from_json, scope_to_json
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
-from aiops_diagnostics.health_curves import build_curves
-from aiops_diagnostics.health_metrics import enrich_report
-from aiops_diagnostics.health_report import (
+from aiops_diagnostics.health.health_curves import build_curves
+from aiops_diagnostics.health.health_metrics import enrich_report
+from aiops_diagnostics.health.health_report import (
     HEALTH_RULE_VERSION,
     HealthReportError,
     build_minimal_health_report,
@@ -40,7 +41,7 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import (
     MediaResourceSigner,
     MediaResponse,
 )
-from aiops_diagnostics.ops_analysis import (
+from aiops_diagnostics.operator.ops_analysis import (
     OPERATIONS_CARD_FAILURE_RATE,
     OPERATIONS_CARD_OFFLINE,
     OPERATIONS_CARD_PAYMENT,
@@ -58,11 +59,10 @@ from aiops_diagnostics.ops_analysis import (
     build_offline_contract,
     build_payment_contract,
 )
-from aiops_diagnostics.ops_analysis import (
+from aiops_diagnostics.operator.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
 from aiops_diagnostics.redaction import redact_text
-from aiops_diagnostics.sources import SourceError, scoped_live_sources
 
 _LOGGER = logging.getLogger("aiops.gateway_runtime")
 
@@ -592,7 +592,7 @@ class GatewayRuntime:
         numbers with an empty explanation reads as "the aggregate had nothing to say",
         which is a different and false claim.
         """
-        from aiops_diagnostics.ops_analysis_narrative import run_narrative_turn
+        from aiops_diagnostics.operator.ops_analysis_narrative import run_narrative_turn
 
         if card == OPERATIONS_CARD_OFFLINE:
             facts = build_offline_contract(aggregate, None, **window)
@@ -730,7 +730,7 @@ class GatewayRuntime:
         language: str,
     ) -> dict[str, Any]:
         """The narrative turn, then assembly. Split out so the job-end writes above stay readable."""
-        from aiops_diagnostics.ops_analysis_narrative import run_narrative_turn
+        from aiops_diagnostics.operator.ops_analysis_narrative import run_narrative_turn
 
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         settings = Settings.from_config(self.gateway_settings.server_config_file)

@@ -340,7 +340,7 @@ def build_authorizer(monkeypatch: pytest.MonkeyPatch, connection: Connection) ->
     settings.mysql.user = "readonly"
     settings.mysql.password = "secret"
     settings.ssh.enabled = False
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
     return ScopedOrderAuthorizer(settings)
 
 

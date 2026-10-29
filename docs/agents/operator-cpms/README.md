@@ -67,7 +67,7 @@ HTTPS server 可包含 [operator-token.conf.template](../../../ops/dify-login-pr
 ```bash
 M3NODE_DEPS=<锁定依赖目录> M3NODE_JDK_IMAGE=<锁定JDK镜像digest> \
   uv run python tools/m2_close/m3node/verify_operator_cpms.py --out <私有报告目录>
-uv run pytest tests/test_operator_cpms.py tests/test_node_runtime_deploy.py
+uv run pytest tests/operations/test_operator_cpms.py tests/test_node_runtime_deploy.py
 ```
 
 报告中真 Gateway/Java 节点，CPMS/模型/目录/Dify 草稿为合成；节点真实获取授权、消费HTTP结果、上报完成。覆盖正常、供应商失败、末轮截断、草稿试用及发布全关。单工具 HTTP 验收还覆盖参数注入、错归属、畸形/超大响应、重定向与到期。

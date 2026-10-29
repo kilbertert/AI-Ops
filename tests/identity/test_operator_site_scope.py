@@ -28,6 +28,7 @@ from operator_support import (
 )
 
 from aiops_diagnostics.config import UpmsSettings
+from aiops_diagnostics.data.sources import SITE_SCOPE_MAX_ROWS, MySQLSource
 from aiops_diagnostics.identity.query_scope import (
     MAX_SCOPE_IDS,
     OPERATOR_SCOPE_NO_SHOP_BINDING,
@@ -42,7 +43,6 @@ from aiops_diagnostics.identity.scope_context import (
     SCOPE_ERROR_UPMS_UNAVAILABLE,
     SHOP_USER_PATH,
 )
-from aiops_diagnostics.sources import SITE_SCOPE_MAX_ROWS, MySQLSource
 
 B_USER_ID = "B-OPERATOR-9"
 INSIDE_CREDENTIAL = "upms-internal-token"
@@ -241,7 +241,7 @@ def _upms_shops(payload) -> tuple[UpmsShopDirectory, FakeUpmsTransport]:
 
 def _site_mapper(monkeypatch: pytest.MonkeyPatch, connection: Connection) -> MySQLSource:
     """站点归属查询走真实 ``MySQLSource``，只替换连接这一处 I/O。"""
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
     return MySQLSource(mysql_settings(), scope=None)
 
 

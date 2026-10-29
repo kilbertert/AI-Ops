@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from aiops_diagnostics.rules import status_label
+from aiops_diagnostics.health.rules import status_label
 
 _ORDER = re.compile(r"订单|訂單|一单|一單|\border\b", re.I)
 _LATEST = re.compile(r"最新|最近|最后|最後|\b(?:latest|most recent|last)\b", re.I)

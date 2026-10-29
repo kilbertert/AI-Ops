@@ -48,7 +48,7 @@ Gateway QA/run；界面 SSE 的空 thought 只是兼容旧 Agent 面板的显示
 ## 验证
 
 - [场景](native-preview.feature)、[步骤](native-preview-qa.md)。
-- `uv run pytest tests/test_operator_native_preview.py tests/test_operator_cpms.py tests/execution/test_node_publication.py`。
+- `uv run pytest tests/operations/test_operator_native_preview.py tests/operations/test_operator_cpms.py tests/execution/test_node_publication.py`。
 - 原始前端请求/停止形状：`node tests/operator_native_preview.mjs ops/dify-console-bridge/operator-native-preview.js`。
 - 真 Java 隔离验证沿用 `tools/m2_close/m3node/verify_operator_cpms.py` 的锁定 JDK/依赖；
   模型、CPMS 和身份是合成时必须注明；不能冒充真人授权整链。

@@ -614,7 +614,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
   ② 两条都进入 `failed` + 各自的 `*_INTERRUPTED_BY_RESTART` 错误码，
   **既不是 `expired`（超时）也不是 `cancelled`（用户停止）**。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-10-01，`tests/test_health_report_jobs.py`、`tests/test_standard_diagnosis_runtime.py`；
+- 结果：PASS（2026-10-01，`tests/health/test_health_report_jobs.py`、`tests/test_standard_diagnosis_runtime.py`；
   以「把启动收敛放回 __init__」与「收敛用 expired」两条变异核对，各自转红）。
 
 ### BOOT-02 设备路径的 runs 不在收敛范围内（已记录的显式决定）
@@ -1329,8 +1329,8 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| OP-ACCEPT-01 | 本地 dev | 租户内已发布 operator 入口的两个动作；一个运营商会话身份（店铺 → 站点集合） | 带 `X-Business-Entry: operator` 调 `GET /v1/shortcuts` | PASS：恰好列出 `smart_diagnosis` 与 `case_exploration`；按钮文案按请求语言给出「订单检测」「客户案例」；两者都不带 `target_agent_version` | `tests/test_operator_entry_actions.py::test_operator_entry_lists_both_actions_after_the_publish`（#427） |
-| OP-ACCEPT-02 | 本地 dev | 同上 | 点击「订单检测」且不带订单号，分别以 zh/en/de/fr/es/pt 提交 | PASS：`type=clarification`、`missing_fields=["order_no"]`、零作业；六种语言提示文案互不相同（静默回落会让两种语言拿到同一串） | `tests/test_operator_negative_acceptance.py::test_the_order_picker_prompt_is_localized_on_the_operator_entry` |
+| OP-ACCEPT-01 | 本地 dev | 租户内已发布 operator 入口的两个动作；一个运营商会话身份（店铺 → 站点集合） | 带 `X-Business-Entry: operator` 调 `GET /v1/shortcuts` | PASS：恰好列出 `smart_diagnosis` 与 `case_exploration`；按钮文案按请求语言给出「订单检测」「客户案例」；两者都不带 `target_agent_version` | `tests/operations/test_operator_entry_actions.py::test_operator_entry_lists_both_actions_after_the_publish`（#427） |
+| OP-ACCEPT-02 | 本地 dev | 同上 | 点击「订单检测」且不带订单号，分别以 zh/en/de/fr/es/pt 提交 | PASS：`type=clarification`、`missing_fields=["order_no"]`、零作业；六种语言提示文案互不相同（静默回落会让两种语言拿到同一串） | `tests/operations/test_operator_negative_acceptance.py::test_the_order_picker_prompt_is_localized_on_the_operator_entry` |
 | OP-ACCEPT-03 | 本地 dev | 运营商会话 + 假 MySQL 行级镜像：集合内一单（挂在**别人**名下）、集合外一单；再取一个不存在的订单号 | 经入口显式指名集合外订单；再指名不存在的订单号 | PASS：两次都 404 `ORDER_NOT_FOUND` 且响应同形；无诊断、无问答作业；响应体不含订单字段，也不说明是无权 | `...::test_clicked_order_diagnosis_of_another_operators_order_is_refused` |
 | OP-ACCEPT-04 | 本地 dev | 同上，集合外那单只挂在**本人**名下 | 经入口显式指名该订单 | PASS：404。证明新维度是**替换** `self` 而非取并集（取并集则本人订单可查，PRD 要修掉的错位会复活） | `...::test_a_site_outside_the_scope_is_refused_even_when_the_order_is_the_callers_own` |
 | OP-ACCEPT-05 | 本地 dev | 代理商账号在用户-店铺关系表中没有任何绑定（310 个 `type='5'` 账号中 179 个如此） | 该身份经入口查询任意订单 | PASS：404 `ORDER_NOT_FOUND`；空范围短路，不发起订单查询；日志记 `reason=no_shop_binding`，与「已登记店铺无站点」可区分 | `...::test_an_operator_account_without_shop_binding_is_refused_at_the_entry` |
@@ -1338,7 +1338,7 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 | OP-ACCEPT-07 | 本地 dev | 会话在某个运营商站点集合下创建并绑定活跃订单 | 下一轮解析出**更大的**站点集合后再访问该会话（operator 与 consumer 入口各一次） | PASS：两次都 404 `CONVERSATION_NOT_FOUND`；范围指纹覆盖运营商维度，旧会话不能被用来追问已失效订单，且不泄露存在性 | `...::test_a_changed_operator_scope_makes_the_conversation_invisible` |
 | OP-ACCEPT-08 | 本地 dev | 三个站点：租户自有（无 `partner_b_id`）、悬空引用（`partner_b_id` 指向不存在的账号）、账号类型不符；后两者的 `partner_b_id` **命名调用者本人**。站点映射走真实 `MySQLSource` | 解析该运营商的站点集合，再查三处的订单 | PASS：集合只含租户自有站点；另两处的订单被拒（即使只挂在本人名下）。`ch_site.partner_b_id` 不构成授权依据，判据只由「调用者持有该店铺」决定 | `...::test_a_sites_partner_b_id_never_widens_the_operators_visibility` |
 | OP-ACCEPT-09 | 本地 dev | 消费者会话（无 B 端账号）；同时发布 consumer 与 operator 两个入口 | 读 consumer 动作列表；经 consumer 入口查本人订单与他人订单 | PASS：列表仍是消费者自己的三个动作；本人订单 202 `diagnosis`，他人订单 404 `ORDER_NOT_FOUND`——运营商维度没有把消费者入口放宽 | `...::test_the_consumer_entry_keeps_its_own_actions`、`...::test_the_consumer_entry_keeps_its_own_order_visibility` |
-| OP-ACCEPT-10 | 本地 dev | 对照组：集合内、挂在别人名下的订单 | 点击「订单检测」并带入该订单号 | PASS：202 `diagnosis`（`type=diagnosis`、`status=queued`）。证明拒绝不是「全部拒掉」，范围判据真的在放行该放行的那一单 | `tests/test_operator_entry_actions.py::test_clicked_order_diagnosis_with_a_visible_order_starts_the_diagnosis`（#427） |
+| OP-ACCEPT-10 | 本地 dev | 对照组：集合内、挂在别人名下的订单 | 点击「订单检测」并带入该订单号 | PASS：202 `diagnosis`（`type=diagnosis`、`status=queued`）。证明拒绝不是「全部拒掉」，范围判据真的在放行该放行的那一单 | `tests/operations/test_operator_entry_actions.py::test_clicked_order_diagnosis_with_a_visible_order_starts_the_diagnosis`（#427） |
 | OP-ACCEPT-11 | 本地 dev | 参数化的解析失败：上游不可达、响应形状不可识别、店铺/站点数量超界、充电库不可用、范围 ID 不可用 | 构造会话身份 | PASS：一律空集合 + `can_access=False` + 一行 `operator_scope_unavailable code=…`；不把授权故障变成 500，也不放行；日志不含 C/B 端 id、租户与凭据 | `tests/identity/test_operator_order_authorization.py::test_every_operator_scope_failure_denies_instead_of_raising`（#426） |
 | OP-ACCEPT-12 | 本地 dev | 参数化的实现退化（变异验证）：把运营商范围回落成 `self`；把店铺 id 直接当站点 id | 重跑上述用例集 | PASS：分别有 6 项与 12 项转红——证明负向断言不是恒真，退化会自己暴露 | 见 `docs/validation.md`「PRD #423 子票 #428」 |
 
@@ -1385,7 +1385,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   tests/identity/test_order_visibility.py tests/identity/test_query_scope.py tests/identity/test_scope_context.py \
   tests/identity/test_scope_context_http.py tests/identity/test_scope_context_ds_fallback.py \
   tests/test_cross_entry_visibility.py tests/test_faq.py tests/test_routing.py \
-  tests/test_mysql_scope.py
+  tests/data/test_mysql_scope.py
 ```
 
 **边界声明（不得写成本项已过的部分）**：
@@ -1506,7 +1506,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| CTX-RISK-01 | 本地 dev | 运营商会话；`SHOP-1` 站点集合含 `SITE_IN`；一单 `ORDER_INSIDE` 已绑定并完成一轮诊断 | 把 `ORDER_INSIDE` 改挂到 `SITE_OUT`（调用者站点集合**不变**）→ 发同一条追问 | PASS：回落 `type=qa`（绑定确已失效），**且** `context_turns()` 仍返回那一轮、`render_history()` 仍渲染出它的正文 | `tests/test_operator_negative_acceptance.py::test_history_window_keeps_a_turn_whose_order_left_the_scope`；突变：`context_turns()` 改为排除 → 红；`render_history()` 返回空 → 红 |
+| CTX-RISK-01 | 本地 dev | 运营商会话；`SHOP-1` 站点集合含 `SITE_IN`；一单 `ORDER_INSIDE` 已绑定并完成一轮诊断 | 把 `ORDER_INSIDE` 改挂到 `SITE_OUT`（调用者站点集合**不变**）→ 发同一条追问 | PASS：回落 `type=qa`（绑定确已失效），**且** `context_turns()` 仍返回那一轮、`render_history()` 仍渲染出它的正文 | `tests/operations/test_operator_negative_acceptance.py::test_history_window_keeps_a_turn_whose_order_left_the_scope`；突变：`context_turns()` 改为排除 → 红；`render_history()` 返回空 → 红 |
 | CTX-RISK-02 | 本地 dev | 同上会话 | 改变调用者站点集合（范围指纹随之改变）→ 用同一 `conversation_id` 读取 | PASS：统一 `404`，不区分会话是否存在 | `test_a_changed_operator_scope_makes_the_conversation_invisible`（**既有用例，非本票新增**） |
 | CTX-RISK-03 | 本地 dev | 同上会话 | **C 端用户不变**，只把 C→B 映射指向另一个 B 端主体（站点集合逐字相同）→ 用同一 `conversation_id` 读取 | PASS：统一 `404`。**四条前提断言**（映射解析成功、范围类型仍 `organ`、站点集合不变、指纹已变）必须同时成立，否则用例转红 —— 防止用「范围退化造成的 404」冒充本项 | `test_a_changed_subject_makes_the_conversation_invisible`（本票新增；**返工两次**，成因见 `validation.md`）。突变：从指纹 payload 删掉 subject id → 红 |
 
@@ -1575,7 +1575,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   因此在产线上没有可观测的新面。
 - **前置**：一次性数据根（`ShortcutStore(tmp_path / "gateway.db")`），种子草稿全部发布。
 - **测试数据**：`_BUNDLED_SHORTCUTS` 的 consumer 入口 —— 三条按钮 + 一条横幅。
-- **动作**：`uv run pytest tests/test_banner_row.py tests/test_operator_negative_acceptance.py -q`
+- **动作**：`uv run pytest tests/test_banner_row.py tests/operations/test_operator_negative_acceptance.py -q`
 - **预期**：按钮面仍是 `case_exploration / smart_diagnosis / report_fault` 三条；
   横幅面只有 `battery_report`；两面并集等于全部有效行且交集为空。
 - **结果：PASS** —— 25 条新增用例 + 既有护栏全绿；全量 `pytest` 通过。
@@ -1779,8 +1779,8 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 | OPS-AGENT-04 | 本地 dev | 登记表已采用（另有租户的一行） | 三种点名服务不了的形状各跑一次：名字不存在 / 点名 customer 版本 / 点名只有草稿的名字 | PASS：三次都 `status=failed` + `error_code=DIAGNOSIS_AGENT_UNREGISTERED`，且**模型从未被触到** | `...::test_the_operator_entry_fails_closed_without_a_serviceable_operations_agent`；突变：回退烤死提示词 → 红 |
 | OPS-AGENT-05 | 本地 dev | 一个 coordinator，分别以空 / 空白 / 有值的方法论构造 | 取 `_initial_prompt()` 逐字比较 | PASS：空与空白时与基线**字符串相等**；有值时该段排在语言规则、标识符规则与收尾 schema 句**之前** | `tests/test_agent_scenarios.py::test_an_empty_methodology_leaves_the_diagnosis_prompt_byte_identical`、`::test_the_methodology_does_not_outrank_the_harness_rules` |
 | OPS-AGENT-06 | 本地 dev | —— | 读 `agent_workspace._runtime_instructions` / `codex_runtime._developer_instructions` / `agent_workspace._qa_runtime_instructions` 的签名 | PASS：护栏文本的生产者不接受入口或租户参数（只能接受输出语言） | `tests/test_agent_scenarios.py::test_the_guardrail_text_is_not_parameterised_by_entry_or_tenant` |
-| OPS-AGENT-07 | 本地 dev | 助手入口应用（真实授权判定 + 真实范围下推 + 注入式会话替身） | 带 `X-Business-Entry: operator` 且带可见订单，点击「订单检测」 | PASS：运行时收到的 `business_entry` 是 `"operator"` | `tests/test_operator_entry_actions.py::test_the_entry_header_reaches_the_diagnosis_runtime`；突变：删掉 forward 那行 → 红（而 OPS-AGENT-08 的形态断言仍绿，这正是它单独存在的理由） |
-| OPS-AGENT-08 | 本地 dev | 同上 | 同一 code 在 operator 与 consumer 各点一次（不带订单） | PASS：两侧同为 `clarification` / `missing_fields=["order_no"]` / 同一 `message` | `tests/test_operator_entry_actions.py::test_the_clicked_order_diagnosis_shares_the_clarification_shape_across_entries` |
+| OPS-AGENT-07 | 本地 dev | 助手入口应用（真实授权判定 + 真实范围下推 + 注入式会话替身） | 带 `X-Business-Entry: operator` 且带可见订单，点击「订单检测」 | PASS：运行时收到的 `business_entry` 是 `"operator"` | `tests/operations/test_operator_entry_actions.py::test_the_entry_header_reaches_the_diagnosis_runtime`；突变：删掉 forward 那行 → 红（而 OPS-AGENT-08 的形态断言仍绿，这正是它单独存在的理由） |
+| OPS-AGENT-08 | 本地 dev | 同上 | 同一 code 在 operator 与 consumer 各点一次（不带订单） | PASS：两侧同为 `clarification` / `missing_fields=["order_no"]` / 同一 `message` | `tests/operations/test_operator_entry_actions.py::test_the_clicked_order_diagnosis_shares_the_clarification_shape_across_entries` |
 
 - **OPS-AGENT-07 与 -08 是成对的。** 形态断言（-08）在澄清处就返回，选版那一段根本没跑到，
   因此它对「入口有没有被传进运行时」是盲的；只留 -08 会让删掉 forward 的实现全绿。
@@ -1792,19 +1792,19 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| OPS-ANALYSIS-01 | 本地 dev（真实装配函数 + 真实 store；聚合走真实方法、连接替身） | 一次聚合（50 单 / 9 异常）+ 一段叙述 | 同参数装配两次 | PASS：`failure_rate` / `risk` / `counts` / `rule_version` 逐字相同 | `tests/test_ops_analysis.py::test_the_same_input_produces_the_same_every_number`；突变：把门限或四舍五入放到别处 → 红 |
+| OPS-ANALYSIS-01 | 本地 dev（真实装配函数 + 真实 store；聚合走真实方法、连接替身） | 一次聚合（50 单 / 9 异常）+ 一段叙述 | 同参数装配两次 | PASS：`failure_rate` / `risk` / `counts` / `rule_version` 逐字相同 | `tests/operations/test_ops_analysis.py::test_the_same_input_produces_the_same_every_number`；突变：把门限或四舍五入放到别处 → 红 |
 | OPS-ANALYSIS-02 | 本地 dev | 同上，换一段叙述 | 装配 | PASS：所有数字字段不变，只有叙述变 | `...::test_a_different_narrative_cannot_move_a_single_number` |
 | OPS-ANALYSIS-03 | 本地 dev | 模型回包里塞 `failure_rate=0.99` / `risk` / 伪造 `counts` | 装配 | PASS：契约里的数字仍来自聚合（0.18 / 50 / 9 / 40） | `...::test_a_number_written_by_the_model_is_discarded`；突变：装配改成从 payload 读数字 → 红 |
 | OPS-ANALYSIS-04 | 本地 dev | 调用者可见站点为 `()` | 调 `aggregate_order_statuses` | PASS：返回 `None` 且**一条 SQL 都没发** | `...::test_an_empty_site_scope_issues_no_sql_at_all`；突变：去掉 `_scope_blocked` 短路 → 红 |
 | OPS-ANALYSIS-05 | 本地 dev | 可见站点 `(S-1,S-2,S-3)`，请求 `(S-1,S-OUT)` | 调聚合 | PASS：SQL 参数里只有 `S-1`（越界站点在拼 SQL 之前就被剔除），租户谓词仍在 | `...::test_the_job_site_set_narrows_the_scope_instead_of_replacing_it`；突变：把请求集合直接下推 → 红 |
 | OPS-ANALYSIS-06 | 本地 dev | 窗口 `[10-01, 10-02)` | 检查 SQL | PASS：`created_time >= %s AND created_time < %s`（半开） | `...::test_the_window_is_half_open_in_the_sql` |
 | OPS-ANALYSIS-07 | 本地 dev | 零行聚合（`SUM` 回 NULL） | 调聚合 | PASS：NULL 计为 0，与「说不清」区分开 | `...::test_the_aggregate_reads_status_nulls_as_zero` |
-| OPS-ANALYSIS-08 | 本地 dev（真实 HTTP 面 + 真实 store） | operator 入口会话 | `POST /v1/standard/analyses` 后 `GET` | PASS：202 → `an_` id / `kind=analysis` / `rule_version`；轮询拿到结果；体内**没有** `order_no`/`question`/`indicator_code` | `tests/test_ops_analysis_api.py::test_the_operator_entry_creates_and_polls_an_analysis` |
+| OPS-ANALYSIS-08 | 本地 dev（真实 HTTP 面 + 真实 store） | operator 入口会话 | `POST /v1/standard/analyses` 后 `GET` | PASS：202 → `an_` id / `kind=analysis` / `rule_version`；轮询拿到结果；体内**没有** `order_no`/`question`/`indicator_code` | `tests/operations/test_ops_analysis_api.py::test_the_operator_entry_creates_and_polls_an_analysis` |
 | OPS-ANALYSIS-09 | 本地 dev | consumer 入口会话 | `POST` 与 `GET` 该面 | PASS：两次都 403 `OPERATOR_ENTRY_REQUIRED` | `...::test_the_consumer_entry_cannot_reach_the_analysis_surface`；突变：去掉入口门 → 红 |
 | OPS-ANALYSIS-10 | 本地 dev | 不带 `site_ids` | `POST` | PASS：202，运行时收到 `None`（= 不收窄），不是空集合 | `...::test_no_site_list_means_the_callers_whole_visible_set` |
 | OPS-ANALYSIS-11 | 本地 dev | 倒置窗口 / 显式空站点集合 | `POST` | PASS：503 且**库里 0 行**（作业根本不存在） | `...::test_an_inverted_window_is_refused_before_a_job_exists`、`...::test_an_explicit_empty_site_list_is_refused` |
 | OPS-ANALYSIS-12 | 本地 dev | 先建一条分析作业 | `GET /v1/standard/diagnoses` | PASS：诊断列表为空（两个面不互相污染），且 `qa_` id 轮询分析面得 404 | `...::test_an_analysis_is_not_listed_as_an_order_diagnosis`、`...::test_a_qa_id_is_not_an_analysis_id` |
-| OPS-ANALYSIS-13 | 本地 dev | 目标语言 en，模型回中文叙述 | 装配 | PASS：`reason_code=PROSE_LEAKED`、叙述换成已本地化兜底、**数字与 risk 原样**（0.18 / abnormal） | `tests/test_ops_analysis.py::test_a_chinese_narrative_under_english_is_replaced_but_the_numbers_survive`；突变：命中后把 `failure_rate` 也撤掉 → 红 |
+| OPS-ANALYSIS-13 | 本地 dev | 目标语言 en，模型回中文叙述 | 装配 | PASS：`reason_code=PROSE_LEAKED`、叙述换成已本地化兜底、**数字与 risk 原样**（0.18 / abnormal） | `tests/operations/test_ops_analysis.py::test_a_chinese_narrative_under_english_is_replaced_but_the_numbers_survive`；突变：命中后把 `failure_rate` 也撤掉 → 红 |
 | OPS-ANALYSIS-14 | 本地 dev | 目标语言 zh，模型回中文叙述 | 装配 | PASS：原样保留（守卫只对非中文目标判定） | `...::test_a_chinese_narrative_under_chinese_is_kept` |
 | OPS-ANALYSIS-15 | 本地 dev | provider 回了 dict 而不是字符串 | 装配 | PASS：`reason_code=PROSE_INVALID`，非文本**不被序列化**成正文 | `...::test_a_non_text_narrative_is_refused_not_serialised` |
 
@@ -1818,7 +1818,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| OPS-CARD-01 | 本地 dev（真实装配函数） | 一次离线聚合（12 条 / 9 台 / 4 条未恢复 / 480 分钟 / 分母 100） | 同参数装配两次（换叙述） | PASS：台数、时长、未恢复数、占比、等级逐字相同 | `tests/test_ops_cards.py::test_the_offline_card_is_deterministic_and_names_its_own_card`；突变：等级改看历史累计台数 → 红 |
+| OPS-CARD-01 | 本地 dev（真实装配函数） | 一次离线聚合（12 条 / 9 台 / 4 条未恢复 / 480 分钟 / 分母 100） | 同参数装配两次（换叙述） | PASS：台数、时长、未恢复数、占比、等级逐字相同 | `tests/operations/test_ops_cards.py::test_the_offline_card_is_deterministic_and_names_its_own_card`；突变：等级改看历史累计台数 → 红 |
 | OPS-CARD-02 | 本地 dev | 分母取不到（`devices_total=None`） | 装配两张卡 | PASS：占比 `null`、等级 `unavailable` —— **不是** `0.0` 与 `normal` | `...::test_a_missing_denominator_is_not_a_zero_ratio`；突变：`None` 当 0 处理 → 红 |
 | OPS-CARD-03 | 本地 dev | 一次离线聚合：历史 500 条 / 当前仅 1 条未恢复 | 装配 | PASS：等级是 `normal`（按**当前仍在离线中**的占比定级） | `...::test_offline_risk_is_decided_by_open_incidents_not_by_history` |
 | OPS-CARD-04 | 本地 dev | 一次故障码聚合（30 次 / 7 台 / E001×15、E002×9） | 装配 | PASS：排行与总数来自聚合；换叙述不动数字 | `...::test_the_fault_code_card_ranks_and_is_deterministic` |
@@ -1831,7 +1831,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 | OPS-CARD-11 | 本地 dev | 故障码排行 | 检查 SQL | PASS：`error_code IS NOT NULL` + `LIMIT 7` + 窗口两句都在 | `...::test_the_fault_rank_is_bounded_and_requires_a_code` |
 | OPS-CARD-12 | 本地 dev | 分母查询，`site_ids=None` | 调 `count_devices` | PASS：仍按**调用者自己的站点集合**收窄——「不加条件」与「用我的范围」是两回事 | `...::test_the_device_total_uses_the_callers_scope_when_no_sites_are_named`；突变：`None` 原样返回、不拼 `IN` → 红 |
 | OPS-CARD-13 | 本地 dev | 分母查询，请求集合与范围无交集 | 调 `count_devices` | PASS：返回 `None` 且**不发 SQL** | `...::test_the_device_total_is_none_when_the_narrowed_set_is_empty` |
-| OPS-CARD-14 | 本地 dev（真实 HTTP 面 + 真实 store） | operator 会话 | `POST` 三个 card 值 | PASS：都 202，`card` 各自对应；不带 `card` 仍是 `failure_rate` | `tests/test_ops_analysis_api.py::test_the_other_two_cards_run_on_the_same_surface` |
+| OPS-CARD-14 | 本地 dev（真实 HTTP 面 + 真实 store） | operator 会话 | `POST` 三个 card 值 | PASS：都 202，`card` 各自对应；不带 `card` 仍是 `failure_rate` | `tests/operations/test_ops_analysis_api.py::test_the_other_two_cards_run_on_the_same_surface` |
 | OPS-CARD-15 | 本地 dev | consumer 会话 | `POST` offline / fault_code | PASS：都 403 `OPERATOR_ENTRY_REQUIRED`——入口门是**面**的性质，新卡不新开门 | `...::test_the_consumer_entry_cannot_reach_the_other_cards_either` |
 | OPS-CARD-16 | 本地 dev | 一个不认识的 card 值 | `POST` | PASS：422，且库里 0 行 | `...::test_an_unknown_card_is_refused_by_the_schema` |
 
@@ -1849,7 +1849,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| OPS-PAY-01 | 本地 dev（真实装配函数） | 一个窗内的四分桶（总 100 / 已支付 80 / 已退款 20 / 未退款 60 / 未支付 20） | 装配支付卡 | PASS：`failure_rate=null`、`risk=unavailable`、`reason_code=NO_PAYMENT_FAILURE_SOURCE` | `tests/test_ops_payment_card.py::test_the_card_refuses_to_invent_a_failure_rate`；突变：把「未支付」当失败率 → 红 |
+| OPS-PAY-01 | 本地 dev（真实装配函数） | 一个窗内的四分桶（总 100 / 已支付 80 / 已退款 20 / 未退款 60 / 未支付 20） | 装配支付卡 | PASS：`failure_rate=null`、`risk=unavailable`、`reason_code=NO_PAYMENT_FAILURE_SOURCE` | `tests/operations/test_ops_payment_card.py::test_the_card_refuses_to_invent_a_failure_rate`；突变：把「未支付」当失败率 → 红 |
 | OPS-PAY-02 | 本地 dev | 模型回包里塞 `failure_rate=0.31` / `risk=abnormal` | 装配 | PASS：契约里的 `failure_rate` 仍是 `null` | `...::test_a_model_written_failure_rate_has_no_way_into_the_contract`；突变：装配改成从 payload 读 → 红 |
 | OPS-PAY-03 | 本地 dev | 同上 | 读 `definition` | PASS：桶恒等式与「`is_pay IS NOT TRUE` 含 NULL」都写在契约里，缺口不是留空 | `...::test_the_gap_is_named_in_the_contract_not_left_blank`、`...::test_the_buckets_still_add_up_when_the_rate_cannot_be_computed` |
 | OPS-PAY-04 | 本地 dev | 100 单 / 已支付 80 / 已退款 20 | 读 `refund_share` | PASS：`0.25`（20/80）——**不是** `0.20`（20/100） | `...::test_the_refund_share_uses_paid_as_its_denominator`；突变：分母换成总数 → 红 |
@@ -1860,7 +1860,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 | OPS-PAY-09 | 本地 dev | 空可见范围 | 调聚合 | PASS：返回 `None` 且**一条 SQL 都没发** | `...::test_an_empty_scope_short_circuits` |
 | OPS-PAY-10 | 本地 dev | 聚合的 `SUM` 全为 NULL | 调聚合 | PASS：NULL 计为 0 | `...::test_the_sql_nulls_read_as_zero` |
 | OPS-PAY-11 | 本地 dev | 目标语言 en，模型回中文叙述 | 装配 | PASS：叙述换兜底、四个桶原样 | `...::test_a_chinese_narrative_keeps_the_buckets` |
-| OPS-PAY-12 | 本地 dev（真实 HTTP 面） | operator 会话 / consumer 会话 | `POST card=payment` | PASS：operator 202（`card=payment`）；consumer 403 `OPERATOR_ENTRY_REQUIRED` | `tests/test_ops_analysis_api.py::test_the_payment_card_joins_the_same_surface` |
+| OPS-PAY-12 | 本地 dev（真实 HTTP 面） | operator 会话 / consumer 会话 | `POST card=payment` | PASS：operator 202（`card=payment`）；consumer 403 `OPERATOR_ENTRY_REQUIRED` | `tests/operations/test_ops_analysis_api.py::test_the_payment_card_joins_the_same_surface` |
 
 - **本票的验收形状与另外三张不同**：不是「把数字算对」，而是「**算不出来时把缺口指回数据源**」。
   OPS-PAY-01 与 -02 是这条的一体两面——前者证明卡上不给失败率，后者证明模型想给也给不了。

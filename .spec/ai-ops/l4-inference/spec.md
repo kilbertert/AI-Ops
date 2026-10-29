@@ -6,7 +6,7 @@ code:
 related:
   - src/aiops_diagnostics/consumer/consumer_intent.py
   - src/aiops_diagnostics/consumer/consumer_chat_service.py
-  - src/aiops_diagnostics/ops_analysis_narrative.py
+  - src/aiops_diagnostics/operator/ops_analysis_narrative.py
   - src/aiops_diagnostics/dify/dify_trial.py
   - src/aiops_diagnostics/answer_language.py
   - src/aiops_diagnostics/publication/qa_rag.py

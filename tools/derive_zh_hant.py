@@ -148,10 +148,10 @@ FLAT_TABLES = (
     ("aiops_diagnostics.i18n", "DIAGNOSIS_FAILURE_MESSAGES"),
     ("aiops_diagnostics.i18n", "DIAGNOSIS_ERROR_MESSAGES"),
     ("aiops_diagnostics.i18n", "FREE_TEXT_UNAVAILABLE_MESSAGES"),
-    ("aiops_diagnostics.health_report_copy", "HEALTH_SUMMARY_MESSAGES"),
-    ("aiops_diagnostics.health_report_copy", "HEALTH_CURVE_NAMES"),
-    ("aiops_diagnostics.health_report_copy", "HEALTH_STOP_FALLBACK_MESSAGES"),
-    ("aiops_diagnostics.health_report_copy", "YKC_STOP_REASON_MESSAGES"),
+    ("aiops_diagnostics.health.health_report_copy", "HEALTH_SUMMARY_MESSAGES"),
+    ("aiops_diagnostics.health.health_report_copy", "HEALTH_CURVE_NAMES"),
+    ("aiops_diagnostics.health.health_report_copy", "HEALTH_STOP_FALLBACK_MESSAGES"),
+    ("aiops_diagnostics.health.health_report_copy", "YKC_STOP_REASON_MESSAGES"),
 )
 
 

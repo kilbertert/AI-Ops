@@ -16,11 +16,11 @@
 
 ## Acceptance criteria
 
-- [ ] `src/aiops_diagnostics/sources.py` 新增/改造:`HybridSources` 类,实现现有 `DiagnosticSources` Protocol
+- [ ] `src/aiops_diagnostics/data/sources.py` 新增/改造:`HybridSources` 类,实现现有 `DiagnosticSources` Protocol
 - [ ] 4 个 HTTP 方法实打实调到 `/diag/order` `/diag/device` `/diag/redis-stream`,携带 `X-Internal-Token` + `X-Request-Timestamp`(HMAC-SHA256,300s 窗口)
 - [ ] 2 个 TDengine 方法(`get_comm_messages` `get_gun_samples`)内部走 `TDengineSource`(直连,沿现状 `LiveSources` 的实现)
 - [ ] `HttpSources` 的 6 个方法签名保持不变(Protocol 一致);`HybridSources` 替换 `HttpSources` 作为新默认
-- [ ] `tests/test_sources.py` + 新增 `tests/test_hybrid_sources.py`:
+- [ ] `tests/data/test_sources.py` + 新增 `tests/test_hybrid_sources.py`:
   - 三份 fixture(ykc_amount_mismatch / ocpp_consistent / missing_tx_data)下 `HybridSources` 与 `FixtureSources` 输出**逐字段一致**(mock HTTP 传输层)
   - TDengine 透传路径用现有 `LiveSources` 的同款单测覆盖(参数一致、SQL 字面量与现状一致)
   - 注入防护(`_safe_identifier` / `_safe_literal`)沿用,新增 `_safe_http_param` 等同类白名单
@@ -35,7 +35,7 @@
 
 ## 模块改动点(不指文件路径,只指模块边界)
 
-- `aiops_diagnostics.sources`:新增 `HybridSources`;`HttpSources` 保留(可作为"全 HTTP 模式"被显式选择,future)
+- `aiops_diagnostics.data.sources`:新增 `HybridSources`;`HttpSources` 保留(可作为"全 HTTP 模式"被显式选择,future)
 - `aiops_diagnostics.http_auth` (新):封装 HMAC-SHA256 令牌生成与请求头组装(便于单元测试)
 - `aiops_diagnostics.config.Settings`:新增 `http.base_url` `http.internal_token.secret` `http.internal_token.expire_seconds` 三个配置项(均带 `None` 缺省 + 启动时校验"若任一 HTTP 方法被调用则这三项必填")
 - `tests.test_hybrid_sources`(新):mock HTTP + fixture 比对

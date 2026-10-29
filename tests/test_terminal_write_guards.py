@@ -198,7 +198,7 @@ def test_a_refused_health_write_is_logged(tmp_path, monkeypatch, caplog) -> None
     """
     import logging
 
-    from test_ops_analysis_runtime import _runtime
+    from operations.test_ops_analysis_runtime import _runtime
 
     runtime, store = _runtime(tmp_path, monkeypatch)
     monkeypatch.setattr(runtime.store, "update_health_job", lambda *a, **k: False)

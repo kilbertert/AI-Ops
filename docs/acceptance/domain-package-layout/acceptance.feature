@@ -1,0 +1,9 @@
+Feature: 管家健康与数据职责归包
+  Scenario: 原业务规则保持
+    Given 新模块路径已安装
+    When 运行管家分析健康报告与只读数据检查
+    Then 权限范围状态判定和报告结果保持一致
+  Scenario: 原入口仍可交付
+    Given 正常登录与本人订单
+    When 原H5请求订单检测
+    Then QA完成且正文可见

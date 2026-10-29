@@ -8,6 +8,15 @@ from typing import Any
 import pytest
 
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.data.sources import (
+    DeviceGate,
+    FixtureSources,
+    MySQLSource,
+    ScopedSources,
+    SourceError,
+    TDengineSource,
+    scoped_live_sources,
+)
 from aiops_diagnostics.identity.query_scope import QueryScope, resolve_query_scope, static_site_mapper
 from aiops_diagnostics.identity.scope_context import (
     SCOPE_TYPE_ORGAN,
@@ -16,15 +25,6 @@ from aiops_diagnostics.identity.scope_context import (
     ScopeResolver,
     SubjectRecord,
     UserContext,
-)
-from aiops_diagnostics.sources import (
-    DeviceGate,
-    FixtureSources,
-    MySQLSource,
-    ScopedSources,
-    SourceError,
-    TDengineSource,
-    scoped_live_sources,
 )
 
 TENANT = "TENANT-A"
@@ -127,7 +127,7 @@ def test_scoped_sources_pushes_scope_to_mysql_tdengine_redis(
             return None
 
     conn = _FakeConn()
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: conn)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **kwargs: conn)
 
     class _FakeRedis:
         def __init__(self) -> None:
@@ -201,7 +201,7 @@ def test_scoped_live_sources_constructs_scoped_sources(monkeypatch: pytest.Monke
     scope = _query_scope()
 
     monkeypatch.setattr(
-        "aiops_diagnostics.sources._ssh_tunnel",
+        "aiops_diagnostics.data.sources._ssh_tunnel",
         lambda s, forwards=("mysql", "tdengine", "redis"): contextlib.nullcontext(s),
     )
 

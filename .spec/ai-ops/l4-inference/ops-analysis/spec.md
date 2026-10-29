@@ -3,9 +3,9 @@ title: ops-analysis
 desc: 运维分析面——数字由确定性计算得出，模型只写两段散文
 hue: 60
 code:
-  - src/aiops_diagnostics/ops_analysis.py
+  - src/aiops_diagnostics/operator/ops_analysis.py
 related:
-  - src/aiops_diagnostics/ops_analysis_narrative.py
+  - src/aiops_diagnostics/operator/ops_analysis_narrative.py
 ---
 # ops-analysis
 

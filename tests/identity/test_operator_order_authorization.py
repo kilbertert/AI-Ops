@@ -56,6 +56,7 @@ from operator_support import (
 )
 
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.data.sources import SourceError
 from aiops_diagnostics.identity.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.identity.query_scope import QueryScope, resolve_query_scope
 from aiops_diagnostics.identity.scope_context import (
@@ -67,7 +68,6 @@ from aiops_diagnostics.identity.scope_context import (
     ScopeError,
 )
 from aiops_diagnostics.identity.third_session_auth import UpmsOperatorSiteScope
-from aiops_diagnostics.sources import SourceError
 
 _OPERATOR_HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "operator"}
 
@@ -374,7 +374,7 @@ def _authorizer_with_refresh(
     settings.mysql.user = "readonly"
     settings.mysql.password = "secret"
     settings.ssh.enabled = False
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
     directory = _RefreshingDirectory(shop_ids)
     return ScopedOrderAuthorizer(settings, shop_directory=directory), directory
 
@@ -445,7 +445,7 @@ def test_a_broken_refresh_never_escapes_as_an_exception(
     settings.mysql.user = "readonly"
     settings.mysql.password = "secret"
     settings.ssh.enabled = False
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: Connection())
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: Connection())
     authorizer = ScopedOrderAuthorizer(settings, shop_directory=_WrongType())  # type: ignore[arg-type]
 
     assert authorizer.can_access(operator_context((SITE_OUT,)), ORDER_OWN_IN) is False
@@ -465,7 +465,7 @@ def test_a_refresh_failure_keeps_the_original_refusal(
     settings.mysql.user = "readonly"
     settings.mysql.password = "secret"
     settings.ssh.enabled = False
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: Connection())
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: Connection())
     directory = _BrokenDirectory()
     authorizer = ScopedOrderAuthorizer(settings, shop_directory=directory)
 
@@ -483,7 +483,7 @@ def test_upms_operator_site_scope_uses_the_backend_authorization_endpoint(
     transport = FakeUpmsTransport(["SHOP-1"])
     patch_transport(monkeypatch, transport)
     connection = Connection(sites=({"id": SITE_IN, "tenant_id": TENANT, "shop_id": "SHOP-1"},))
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
 
     scope = UpmsOperatorSiteScope(upms_settings(), INSIDE_CREDENTIAL).site_scope_by_b_user_id(
         B_USER_ID, TENANT
@@ -519,9 +519,9 @@ def test_upms_operator_site_scope_asks_the_tunnel_for_the_one_forward_it_uses(
 
     transport = FakeUpmsTransport(["SHOP-1"])
     patch_transport(monkeypatch, transport)
-    monkeypatch.setattr("aiops_diagnostics.sources._ssh_tunnel", _Tunnel)
+    monkeypatch.setattr("aiops_diagnostics.data.sources._ssh_tunnel", _Tunnel)
     monkeypatch.setattr(
-        "aiops_diagnostics.sources.pymysql.connect",
+        "aiops_diagnostics.data.sources.pymysql.connect",
         lambda **_: Connection(sites=({"id": SITE_IN, "tenant_id": TENANT, "shop_id": "SHOP-1"},)),
     )
 

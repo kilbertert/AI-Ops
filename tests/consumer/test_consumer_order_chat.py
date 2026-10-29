@@ -16,12 +16,12 @@ from fastapi.testclient import TestClient
 
 from aiops_diagnostics import gateway_api
 from aiops_diagnostics.consumer.consumer_order_chat import is_order_status_question
+from aiops_diagnostics.data.sources import MySQLSource
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.sources import MySQLSource
 
 ORDER = "2096164064667852801"
 OTHER = "2096164064667852802"
@@ -544,7 +544,7 @@ def test_failed_result_write_releases_conversation_without_answer(provision, mon
 
 @pytest.mark.parametrize("failure", ["identity", "source", "record"])
 def test_independent_identity_and_persistence_failures(provision, monkeypatch, failure):
-    from aiops_diagnostics.sources import SourceError
+    from aiops_diagnostics.data.sources import SourceError
 
     p = provision
     if failure == "identity":

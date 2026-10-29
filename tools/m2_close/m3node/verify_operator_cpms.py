@@ -16,10 +16,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests"))
+from operations.test_operator_cpms import HEADERS, environment, request, tenant_owner  # noqa: E402
 from pytest import MonkeyPatch  # noqa: E402
-from test_operator_cpms import HEADERS, environment, request, tenant_owner  # noqa: E402
 
-from aiops_diagnostics import operator_cpms  # noqa: E402
+from aiops_diagnostics.operator import operator_cpms  # noqa: E402
 
 
 class Model(BaseHTTPRequestHandler):

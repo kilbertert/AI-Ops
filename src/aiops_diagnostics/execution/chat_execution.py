@@ -41,6 +41,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from aiops_diagnostics.data.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
 from aiops_diagnostics.execution.agent_runs import (
     SUCCEEDED,
     AgentRun,
@@ -51,7 +52,6 @@ from aiops_diagnostics.execution.agent_runs import (
 )
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.identity.scope_context import ScopeContext
-from aiops_diagnostics.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 
 #: QA 的 ``internal_run_id`` 前缀。它**只是**给人看的标签；

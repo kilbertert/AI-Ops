@@ -285,7 +285,7 @@ SOH = E_actual / E_rated × 100 %
 
 ### 落地这条线时要顺着看的地方
 
-- `src/aiops_diagnostics/health_report.py` —— 现行报告构造（`HEALTH_RULE_VERSION`、单指标）
-- `src/aiops_diagnostics/rules.py` —— `classify_stop_reason`，第 3 节停止原因的实现
-- `src/aiops_diagnostics/health_report_copy.py` —— `YKC_STOP_REASON_MESSAGES` 代码表
+- `src/aiops_diagnostics/health/health_report.py` —— 现行报告构造（`HEALTH_RULE_VERSION`、单指标）
+- `src/aiops_diagnostics/health/rules.py` —— `classify_stop_reason`，第 3 节停止原因的实现
+- `src/aiops_diagnostics/health/health_report_copy.py` —— `YKC_STOP_REASON_MESSAGES` 代码表
 - `docs/agents/frontend-api-brief.md` —— `/v1/health-report-jobs` 的对外契约

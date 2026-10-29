@@ -281,7 +281,7 @@ def test_the_documents_agree_on_how_many_evidence_tests_there_are() -> None:
         "test_company_entity_map.py",  # #477
         "test_company_auth_scope.py",  # #478
         "test_l4_order_authorization.py",  # #479
-        "test_operator_questions_triage.py",  # #480
+        "operations/test_operator_questions_triage.py",  # #480
     )
     for name in named:
         assert (PROJECT_ROOT / "tests" / name).exists(), f"{name} 不见了"

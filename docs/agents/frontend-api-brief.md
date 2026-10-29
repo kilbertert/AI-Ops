@@ -1064,7 +1064,7 @@ DELETE /v1/conversations/{id}                    → 删除
   >
   > **为什么不修**：根因是缺一条边 —— `conversation_turns` 里没有 `order_no`，
   > 不知道该轮属于哪一单；补它要改会话表结构，而 PRD #410 明示不改。
-  > 行为由 `tests/test_operator_negative_acceptance.py` 的
+  > 行为由 `tests/operations/test_operator_negative_acceptance.py` 的
   > `test_history_window_keeps_a_turn_whose_order_left_the_scope` 钉住。
 - 同会话并发提问 → **409 `CONVERSATION_BUSY`**，提示"上一条还在生成"。
 - 每轮重新鉴权：权限/订单归属撤销后绑定自动失效，follow-up 回落通用问答。

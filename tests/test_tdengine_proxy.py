@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.sources import TDengineSource
+from aiops_diagnostics.data.sources import TDengineSource
 from aiops_diagnostics.tdengine_proxy import (
     ProxyConfigError,
     ProxySettings,
