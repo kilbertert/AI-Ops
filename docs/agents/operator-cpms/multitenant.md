@@ -171,7 +171,7 @@ from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore, allowed_
 from aiops_diagnostics.agent_manifest import admin_context, load_manifest, reconcile_dify_registry
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.dify_app_registry import DifyAppRegistry
-from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource
+from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource, _declared_dataset_ids
 from aiops_diagnostics.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.gateway_server import GatewayServerSettings
 
@@ -188,7 +188,7 @@ source = DifyDslSource(
     settings.dify_console_base_url, binding.app_id, settings.dify_console_api_key, workspace
 )
 doc = yaml.safe_load(DifyDslClient(source).export_dsl())
-assert not doc["model_config"]["dataset_configs"]["datasets"]["datasets"]
+assert not _declared_dataset_ids(doc["model_config"])
 assert doc["model_config"]["model"]["name"] == declared.config.model
 config = replace(declared.config, prompt=doc["model_config"]["pre_prompt"], allowed_tools=())
 manager = AgentManager(
