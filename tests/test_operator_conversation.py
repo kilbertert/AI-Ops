@@ -186,7 +186,7 @@ def complete(f, run_id, answer):
     assert response.status_code == 200, response.text
 
 
-@pytest.mark.parametrize("entry", ["formal", "trial", "native"])
+@pytest.mark.parametrize("entry", ["formal", "trial", "native", "managed"])
 def test_site_search_uses_same_scope_on_all_entries(operator, monkeypatch, entry):
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
@@ -208,6 +208,19 @@ def test_site_search_uses_same_scope_on_all_entries(operator, monkeypatch, entry
             ("TENANT-A", "env-a", "workspace", "2026-10-29", "2026-10-29"),
         )
     body = {"question": "帮我找一下广州天河附近的充电站"}
+    if entry == "managed":
+        from aiops_diagnostics.execution import chat_execution
+
+        original = chat_execution.binding_for_key
+
+        def empty_trial_binding(settings, key):
+            binding = original(settings, key)
+            return replace(binding, manifest_text="") if binding else None
+
+        monkeypatch.setattr(chat_execution, "binding_for_key", empty_trial_binding)
+        monkeypatch.setattr(
+            chat_execution, "select_binding", lambda *args, **kwargs: replace(f["route"], manifest_text="")
+        )
     if entry == "formal":
         response = f["client"].post("/v1/assistant/questions", headers=HEADERS, json=body)
         assert response.status_code == 202, response.text
