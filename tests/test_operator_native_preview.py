@@ -128,6 +128,7 @@ def test_running_then_failed_does_not_deliver_report(bridge, upstream, monkeypat
         ("我上一个订单是什么情况", ""),
         ("hello", ""),
         ("帮我找一下广州天河附近的充电站", ""),
+        ("帮我查询充电站 TEST2026-10-29 03:00:09", ""),
         ("订单 123456789012.12", None),
         ("订单 123456789012:12", None),
         ("订单号: 1234.56，订单号: 9876", None),

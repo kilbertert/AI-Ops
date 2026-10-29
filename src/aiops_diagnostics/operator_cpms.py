@@ -347,13 +347,16 @@ class OperatorCpms:
         ):
             raise OperatorRefused("OPERATOR_NODE_CHANGED")
         expected = execution_manifest.from_text(run.execution_manifest)
-        bound_manifest = (
-            binding.manifest_text if run.order_no else operator_conversation.manifest(binding.manifest_text)
-        )
-        if expected.identity != run.expected_agent_version or (
-            not task.trial and bound_manifest != run.execution_manifest
-        ):
+        if expected.identity != run.expected_agent_version:
             raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
+        if not task.trial:
+            bound_manifest = (
+                binding.manifest_text
+                if run.order_no
+                else operator_conversation.manifest(binding.manifest_text)
+            )
+            if bound_manifest != run.execution_manifest:
+                raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         if manifest is not None and manifest != expected.identity:
             raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         if tool is not None and (tool not in TOOL_NAMES or tool not in expected.tool_names):
@@ -610,14 +613,14 @@ class OperatorCpms:
         ):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         config = AgentRunConfig.load(Path(binding.config_file))
-        bound_manifest = (
-            binding.manifest_text if run.order_no else operator_conversation.manifest(binding.manifest_text)
-        )
-        if (
-            not (run.snapshot or {}).get("trial")
-            and execution_manifest.from_text(bound_manifest).identity != run.expected_agent_version
-        ):
-            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
+        if not (run.snapshot or {}).get("trial"):
+            bound_manifest = (
+                binding.manifest_text
+                if run.order_no
+                else operator_conversation.manifest(binding.manifest_text)
+            )
+            if execution_manifest.from_text(bound_manifest).identity != run.expected_agent_version:
+                raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         run = self.context.agent_run_store.get(run.run_id)
         if (
             run is None
