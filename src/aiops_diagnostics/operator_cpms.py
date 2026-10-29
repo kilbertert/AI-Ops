@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
 import threading
@@ -487,12 +488,13 @@ class OperatorCpms:
                     raise ValueError("invalid answer")
                 answer = json.loads(raw)
             except ValueError as exc:
+                logging.getLogger("aiops.operator").warning("operator_answer_rejected reason=json_parse")
                 raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
             validate_answer(answer, task.evidence)
             from aiops_diagnostics.redaction import contains_secret
 
             if contains_secret(raw, (task.bearer, task.grant)):
-                raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+                _answer_refused("credential")
             if not set(answer["evidence_tools"]).issubset(task.delivered):
                 raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
             self._current(run_id, node_token=token, manifest=manifest)
@@ -741,6 +743,11 @@ EXECUTED_MUTATION = re.compile(
 )
 
 
+def _answer_refused(reason):
+    logging.getLogger("aiops.operator").warning("operator_answer_rejected reason=%s", reason)
+    raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+
+
 def validate_answer(answer, evidence):
     if not isinstance(answer, dict) or set(answer) != {
         "summary",
@@ -749,17 +756,17 @@ def validate_answer(answer, evidence):
         "limitations",
         "evidence_tools",
     }:
-        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+        _answer_refused("shape")
     for key in ("summary", "probable_cause"):
         if not isinstance(answer[key], str) or not 1 <= len(answer[key]) <= 2000:
-            raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+            _answer_refused("text_field")
     for key in ("next_steps", "limitations", "evidence_tools"):
         if (
             not isinstance(answer[key], list)
             or len(answer[key]) > 12
             or any(not isinstance(v, str) or not 1 <= len(v) <= 1000 for v in answer[key])
         ):
-            raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+            _answer_refused("list_field")
     if (
         TOOL_NAMES[0] not in evidence
         or TOOL_NAMES[0] not in answer["evidence_tools"]
@@ -768,7 +775,7 @@ def validate_answer(answer, evidence):
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     text = json.dumps(answer, ensure_ascii=False)
     if EXECUTED_MUTATION.search(text):
-        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+        _answer_refused("mutation_claim")
 
 
 def cpms_get(url, bearer, tenant):

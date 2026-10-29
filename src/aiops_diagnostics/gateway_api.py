@@ -1448,6 +1448,9 @@ def create_gateway_app(
     @app.exception_handler(OperatorRefused)
     async def operator_refused_handler(request: Request, exc: OperatorRefused):
         code = str(exc)
+        if request.url.path.endswith("/completions"):
+            safe_code = code if re.fullmatch(r"[A-Z][A-Z0-9_]{1,80}", code) else "OPERATOR_REFUSED"
+            logging.getLogger("aiops.operator").warning("operator_completion_refused code=%s", safe_code)
         return JSONResponse(
             status_code=410 if code == "OPERATOR_RESULT_RETRACTED" else 403,
             content={"error": {"code": code, "message": "operator request unavailable", "retryable": False}},
