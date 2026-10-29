@@ -1,5 +1,6 @@
 """旧运行时不可达，当前业务与试用不回退 Python。"""
 
+import ast
 import importlib.util
 import sqlite3
 import tomllib
@@ -12,30 +13,62 @@ from consumer.test_consumer_semantic_routing import semantic
 from dify.test_dify_trial import ORDER, TRIAL_KEY, _client, _post
 from execution.test_app_runtime_dify_entry import HEADERS, ORDER_A, dify_chat
 
-
-@pytest.mark.parametrize(
-    "module",
+RETIRED_MODULES = frozenset(
     [
+        "__main__",
+        "agent_contracts",
         "agent_engine",
         "agent_runner",
-        "agent_workspace",
         "agent_validator",
-        "agent_contracts",
-        "diagnostic_tools",
-        "journal",
-        "engine",
-        "codex_runtime",
-        "codex_launcher",
-        "responses_adapter",
+        "agent_workspace",
         "cli",
+        "codex_launcher",
+        "codex_runtime",
+        "conversation_context",
+        "diagnostic_tools",
+        "engine",
         "gateway_cli",
         "gateway_client",
         "gateway_tokens",
-        "conversation_context",
-    ],
+        "jev_decisions",
+        "journal",
+        "models",
+        "ops_agents",
+        "ops_bindings",
+        "ops_tools",
+        "parsing",
+        "promo_agents",
+        "render",
+        "responses_adapter",
+        "routing",
+        "turn_recovery",
+    ]
 )
+
+
+@pytest.mark.parametrize("module", sorted(RETIRED_MODULES))
 def test_retired_modules_are_not_installed(module):
     assert importlib.util.find_spec("aiops_diagnostics." + module) is None
+
+
+def test_current_code_does_not_import_retired_modules():
+    root = Path(__file__).resolve().parents[1]
+    offenders = []
+    for folder in ("src", "tools", "tests"):
+        for path in (root / folder).rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Import):
+                    names = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    names = [node.module or ""]
+                    if node.module == "aiops_diagnostics":
+                        names = [f"aiops_diagnostics.{alias.name}" for alias in node.names]
+                else:
+                    continue
+                for name in names:
+                    if name.startswith("aiops_diagnostics.") and name.split(".")[1] in RETIRED_MODULES:
+                        offenders.append(f"{path.relative_to(root)}:{node.lineno}: {name}")
+    assert not offenders, "\n".join(offenders)
 
 
 def test_distribution_exposes_only_current_operations_and_services():

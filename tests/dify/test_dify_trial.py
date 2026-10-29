@@ -1,17 +1,7 @@
-"""试运行（#772 F / #781）：草稿走真实 harness，范围来自身份，不产生版本。
+"""登记应用试运行的配置、回读与失败文案。
 
-这一层的主张有三条，每条一个反例：
-
-1. **草稿只能收窄工具集合。** 枚举外的工具名 → 400；`allowed_tools` 里的名字原样进
-   ``DiagnosticToolExecutor``，由它 fail-closed 拦住 —— 试运行不自己实现白名单。
-2. **范围不来自请求。** 请求体里多一个 ``tenant_id`` / ``site_ids`` 是 400（模型
-   ``extra="forbid"``），而不是安静忽略；订单越权与不存在同为 404。
-3. **不产生版本、不改路由。** 试运行只写一行 ``kind='trial'`` 的作业与运行目录证据。
-
-这里不跑真实模型：``run_trial`` 执行会打到远端 provider，那种用例在 CI 里是噪声，
-而**本地能证明的部分是接缝**——草稿的解析与拒绝、路由的鉴权与 429、作业行的
-形状与审计字段、以及"跑完落终态"。真实执行的护栏一致性由
-``tests/test_diagnostic_tools.py`` 覆盖（同一条执行路径）。
+本地检查使用运行时替身；真实执行由对应Consumer/Workflow/Java路线负责。
+旧Python草稿字段和工具集合已退役，拒绝契约见test_runtime_retirement。
 """
 
 from __future__ import annotations
