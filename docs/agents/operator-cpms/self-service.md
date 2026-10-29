@@ -69,3 +69,39 @@ max_tokens_to_sample、function_calling_type=tool_call、stream_function_calling
 租户内原生副本会先验证CPMS工具身份，再登记为新草稿。显示“尚未发布”时仅预览它自身，
 不覆盖当前正式应用。并发发布或来源正式版本变化会要求刷新后确认；重试开通沿用冻结来源。
 模型凭据先创建、切换至生效项，再回读能力与预算，不能把“已写入”当作“已可用”。
+
+## 同版升级步骤（2026-10-29实测）
+
+使用`dev-host show 41`、`dev-host show 36`核主机身份。命令经
+`dev-host exec <target> --allow-service-exec -- '<已引用命令>'`；拷贝用
+`dev-host cp <target> <本地制品> --dest <远端路径> --artifact-sha256 <摘要>`。
+源自合并提交的制品才能安装；不要在服务宿主编译或编辑业务代码。
+
+1. Gateway由CD部署，回读`http://172.18.0.1:8788/health`版本；按节点路由表导出部署前快照。
+2. 在开发机运行`bash ops/dify-console-bridge/build-bundle.sh <合并SHA> <新归档>`。
+   36解压到独立目录后执行`bash <目录>/deploy.sh <目录> <新备份目录>`，脚本校验、安装并验证匿名403。
+3. 从同一合并SHA的`src/aiops_diagnostics`打完整包，按[登录代理手册](../dify-login-proxy-36-runbook.md)
+   备份代码/单元、停止服务、替换整个Python包、归属`aiopslogin`并保持目录750/文件640。
+   服务身份下导入模块成功后daemon-reload/start；失败恢复代码和原单元，不回滚映射数据库。
+4. 将合并`deploy/dify-36/`制品解压到独立目录，`bash patches/apply.sh`生成挂载候选。
+   对6个既有补丁文件逐个`cmp`现役文件，确认本轮只新增`app_import.py`。
+   备份compose/挂载树/私有.env，安装新文件（0444）和同版compose，
+   `docker compose up -d --no-deps --force-recreate api worker`；回读导入能力。
+5. 前端固定上游、同版补丁构建成功后，在开发机组装镜像。现役基础镜像已可本地使用，
+   删除新镜像中的旧`/app/targets/next`再复制`standalone`、`static`、`public`，
+   路径同[Dify部署手册](../../../deploy/dify-36/README.md)。记录合并SHA为镜像label，
+   `docker save`后核sha256传输，36只`docker load`；更新原.env的`DIFY_WEB_IMAGE`，
+   `docker compose up -d --no-deps --force-recreate web`。不回退未打补丁的上游镜像。
+6. 平台profile从现役`node-targets.json`中剔除app_id/tenant_id后构造，模型从源app回读，
+   插件取精确已安装标识。Dify返回的api_key是遮罩，**不能复制遮罩当凭据**；从已有受控
+   上游密钥文件运行时读取，写服务身份0600的model.json。凭据内容与账号会话不得出现在回执。
+   先用`profiles`/`all_targets`校验，再备份gateway.env并写入profile路径，重启Gateway，
+   失败恢复原env。不要额外创建一个使用生产数据的Gateway应用对象来做验证。
+7. 回读`operator_apps`、Dify导入能力和4条正式路由，逐字段对照原快照；公网Chromium打开
+   `/signin`核页面错误。最后通知平台正常重登，以真实UI创建任务；用任务ID核Gateway记录。
+
+本次备份位置：36的`/opt/aiops-self-service-b86be95f-bridge-backup`、
+`/opt/aiops-self-service-b86be95f-login-backup`、`/opt/aiops-self-service-b86be95f-dify-backup`；
+41的`/etc/aiops-41/gateway.env.bak-self-service-b86be95f`。
+若需要恢复，先确认有没有新受管客户使用新版解析；保留数据库和新资源记录，再恢复相应服务旧制品。
+旧web镜像是`aiops/dify-web-patched:knowledge-picker-20261027`，不是无业务补丁的上游镜像。
