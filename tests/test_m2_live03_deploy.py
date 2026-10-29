@@ -247,3 +247,37 @@ def test_gateway_context_digest_is_reproducible_and_matches_the_lock():
     assert value == lock["gateway_image"]["source_sha256"], (
         f"上下文摘要与锁文件不一致：实际 {value[:16]}… 锁 {lock['gateway_image']['source_sha256'][:16]}…"
     )
+
+
+def test_legacy_node_artifact_does_not_change_gateway_context(tmp_path, monkeypatch):
+    import importlib.util
+    import shutil
+    import subprocess
+
+    spec = importlib.util.spec_from_file_location("context_with_legacy", DEPLOY / "context_digest.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    expected, _ = module.digest()
+    for context_name, source in module.files():
+        target = tmp_path / context_name.removeprefix("./")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    for name in module.ROOT_FILES:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(module.REPO / name, target)
+    monkeypatch.setattr(module, "REPO", tmp_path)
+    legacy = tmp_path / "tools/m2_close/node/target/aiops-execution-node.jar"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_bytes(b"old ignored build output")
+    assert module.digest()[0] == expected
+    # 执行真实打包命令，确保shell侧也不收旧产物。
+    script = (DEPLOY / "build-image.sh").read_text()
+    command = next(line for line in script.splitlines() if "tar -cf -" in line and "tools/m2_live" in line)
+    command = command.split("&& ", 1)[1].split(")", 1)[0]
+    packed = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True, check=True)
+    import io
+    import tarfile
+
+    with tarfile.open(fileobj=io.BytesIO(packed.stdout)) as archive:
+        assert not any("node/target" in item.name for item in archive)
