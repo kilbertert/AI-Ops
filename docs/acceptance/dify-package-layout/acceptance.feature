@@ -1,0 +1,14 @@
+Feature: Dify集成归包
+  Rule: 模块与独立部署入口成套迁移
+    Scenario: Gateway工作流与模板
+      Given 新wheel或源码已安装
+      When 加载Dify集成和工作空间模板
+      Then 新包可用，模板内容一致，旧模块不存在
+    Scenario: 独立发布桥
+      Given 完整新桥制品与现役服务单元
+      When 安装成功或中途失败
+      Then 代码和ExecStart模块路径一致，失败恢复两者
+    Scenario: 原H5工作流
+      Given 已发布工作流和正常登录
+      When 提交本人订单检测
+      Then 原路线返回完成的QA和可读正文

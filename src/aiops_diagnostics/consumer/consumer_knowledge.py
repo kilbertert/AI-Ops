@@ -409,7 +409,7 @@ def final_answer(raw, context, language, content):
 def callback_context(
     runtime, token, *, require_result, read_snapshot, image_text="", capability=None, knowledge_base_ids=None
 ):
-    from aiops_diagnostics.dify_run_store import still_valid
+    from aiops_diagnostics.dify.dify_run_store import still_valid
     from aiops_diagnostics.execution import chat_data_grant, chat_execution
     from aiops_diagnostics.execution.agent_runs import scope_from_json
 

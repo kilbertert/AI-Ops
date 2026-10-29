@@ -6,7 +6,7 @@ import uuid
 
 from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
-from aiops_diagnostics.dify_chatflow import ChatflowReply
+from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
 
 
 class Client:

@@ -22,8 +22,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.dify_console_admin import ConsoleApiError
-from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore

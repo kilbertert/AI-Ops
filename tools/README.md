@@ -92,7 +92,7 @@ CI 能保证每个 `zh-Hant` 条目**存在**；保证不了它等于其 `zh` �
 
 ## `check_dify_exposure.py`：段 2 在本机，段 3 **在 Dify 的容器里**
 
-段 1（`tests/test_dify_exposure_registry.py`）进 CI，证明"声明的 == 路由表里的"。本脚本补另两半：
+段 1（`tests/dify/test_dify_exposure_registry.py`）进 CI，证明"声明的 == 路由表里的"。本脚本补另两半：
 
 ```bash
 PYTHONPATH=src python tools/check_dify_exposure.py --runtime                        # 段 2：本机真网关

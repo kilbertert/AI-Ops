@@ -1445,7 +1445,7 @@ def test_the_pull_path_reads_the_opening_but_still_not_the_suggested_questions()
     import json
     from pathlib import Path as _Path
 
-    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+    from aiops_diagnostics.dify.dify_dsl_pull import map_dsl_to_config
 
     dsl = (_Path(__file__).parents[1] / "fixtures" / "dify-app-chat.dsl.yml").read_text(encoding="utf-8")
     assert "opening_statement" in dsl and "suggested_questions" in dsl, "固件里应该有这两个字段"
@@ -1462,7 +1462,7 @@ def test_the_opening_comes_from_the_published_agent_when_dify_provided_one(tmp_p
     这里用**真** store + 真 registry（不是替身）：替身对"读的是不是已发布快照"
     是盲的，而那条正是本改动的纪律（草稿里的开场白不能给用户看）。
     """
-    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
     db = tmp_path / "gateway.db"

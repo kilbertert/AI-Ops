@@ -14,7 +14,7 @@ TDengine Community Edition 3.4 允许非超级用户写入已有数据库，并�
 # Dify 可达的公司系统面（`ops/dify-exposure-registry.md`）
 
 面向 Dify 暴露的**每一个端点**、它们的鉴权与只读语义，都登记在那份文件里；集合**之外**
-（数据库、Redis、kb-service / RAGFlow 内部控制面）一律不可达。`tests/test_dify_exposure_registry.py`
+（数据库、Redis、kb-service / RAGFlow 内部控制面）一律不可达。`tests/dify/test_dify_exposure_registry.py`
 在 CI 里断言"声明的集合 == 路由表里面向 Dify 的那些"，**新增端点却漏登记即失败**（#583 / PRD #577）。
 运行时与网络面探测是 `tools/check_dify_exposure.py`（段 2/段 3，不进 CI）。
 

@@ -1086,7 +1086,7 @@ def _seed_workspace(database: Path, tenant_id: str, workspace_id: str, environme
     **走它自己的 API，不手写 INSERT**：那张表有 `workspace_name` / 租约列，
     手写的列数一旦对不上就是静默失败（本轮实测过：函数返回 True，行却没进去）。
     """
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     try:
         workspaces = DifyWorkspaces(database)
@@ -1155,7 +1155,7 @@ def _export_workflow_content(
     """
     import yaml
 
-    from aiops_diagnostics.dify_dsl_pull import workflow_content
+    from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
 
     status, text = http(
         f"{dify_base}/console/api/apps/{app_id}/export?workflow_id={workflow_id}",

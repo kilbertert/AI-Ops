@@ -38,11 +38,11 @@ AI-Ops研究基线`9cc3fd58`；Dify现役1.17.1源码基线`8387590ace4a094de812
 
 定位依据（方法名用于后续目录调整后检索）：
 
-- [LoginService.login](../../src/aiops_diagnostics/dify_login_service.py)：resolve失败进入_refuse_workspace。
-- [ensure_workspace](../../src/aiops_diagnostics/dify_ensure_workspace.py)：已有租约、先占位、超时对账，可复用。
-- [ensure_ready](../../src/aiops_diagnostics/dify_workspace_ready.py)：固定TEMPLATE_PROVIDER与按名称跳过模板。
+- [LoginService.login](../../src/aiops_diagnostics/dify/dify_login_service.py)：resolve失败进入_refuse_workspace。
+- [ensure_workspace](../../src/aiops_diagnostics/dify/dify_ensure_workspace.py)：已有租约、先占位、超时对账，可复用。
+- [ensure_ready](../../src/aiops_diagnostics/dify/dify_workspace_ready.py)：固定TEMPLATE_PROVIDER与按名称跳过模板。
 - [node_publication](../../src/aiops_diagnostics/execution/node_publication.py)：targets、candidate、publish、advance。
-- [应用登记](../../src/aiops_diagnostics/dify_app_registry.py)：主键为tenant/entry；
+- [应用登记](../../src/aiops_diagnostics/dify/dify_app_registry.py)：主键为tenant/entry；
   [manifest收敛](../../src/aiops_diagnostics/publication/agent_manifest.py)可覆写同键业务登记。
 - [原生试用](../../src/aiops_diagnostics/gateway_api.py)：dify_trial先选正式binding，要求app_id匹配。
 - [按钮脚本](../../ops/dify-console-bridge/dify-publish-button.js)：扫描按钮文案挂载，独立发送空body发布。

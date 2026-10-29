@@ -8,11 +8,11 @@ import secrets
 from dataclasses import dataclass, replace
 
 from aiops_diagnostics.consumer.consumer_knowledge import _binding_identity, final_answer
-from aiops_diagnostics.dify_chatflow import DifyChatflowClient
-from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
-from aiops_diagnostics.dify_dsl_pull import DifyDslClient, workflow_content
-from aiops_diagnostics.dify_run_store import still_valid
-from aiops_diagnostics.dify_trial import TrialResult
+from aiops_diagnostics.dify.dify_chatflow import DifyChatflowClient
+from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, workflow_content
+from aiops_diagnostics.dify.dify_run_store import still_valid
+from aiops_diagnostics.dify.dify_trial import TrialResult
 from aiops_diagnostics.execution.agent_runs import scope_to_json
 from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
 from aiops_diagnostics.execution.chat_execution import ChatBinding

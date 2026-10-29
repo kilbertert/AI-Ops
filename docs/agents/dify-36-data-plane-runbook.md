@@ -124,7 +124,7 @@ ssh yidong-36 'cd /opt/dify/deploy && ./check.sh | tail -5 && \
 ```
 
 `check.sh` 是零网络的形状自检（发布端口、服务集、向量库变量、补丁挂载集合），
-在开发机上也能跑，且 CI 里的 `tests/test_dify36_deploy_assets.py` 覆盖同一组断言 ——
+在开发机上也能跑，且 CI 里的 `tests/dify/test_dify36_deploy_assets.py` 覆盖同一组断言 ——
 **两层都要有**：check.sh 是宿主上的最后一道，CI 是合并前的第一道。
 
 ## 7. 跑迁移（先 dry-run）

@@ -121,5 +121,5 @@
 
 因此 Dify 侧的快照是**文本**：网关收到后严格解析成对象，并要求字段恰好是
 `SNAPSHOT_FIELDS`；解析失败或多一个字段都按 `DIFY_NO_DATA` 拒绝。
-`tests/test_dify_chat_dsl.py` 把其中可静态判定的几条固化成可运行断言
+`tests/dify/test_dify_chat_dsl.py` 把其中可静态判定的几条固化成可运行断言
 （缺 `target`、链路形状、端节点变量、节点 id 字符集、凭据绑定位置），不依赖人记得。

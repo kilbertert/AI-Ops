@@ -3,12 +3,12 @@ title: dify-login
 desc: 用公司账号换 Dify 会话——身份结论只来自公司登录交换
 hue: 60
 code:
-  - src/aiops_diagnostics/dify_login_proxy.py
+  - src/aiops_diagnostics/dify/dify_login_proxy.py
 related:
-  - src/aiops_diagnostics/dify_login_server.py
-  - src/aiops_diagnostics/dify_login_service.py
-  - src/aiops_diagnostics/dify_login_company.py
-  - src/aiops_diagnostics/dify_login_provision.py
+  - src/aiops_diagnostics/dify/dify_login_server.py
+  - src/aiops_diagnostics/dify/dify_login_service.py
+  - src/aiops_diagnostics/dify/dify_login_company.py
+  - src/aiops_diagnostics/dify/dify_login_provision.py
 ---
 # dify-login
 

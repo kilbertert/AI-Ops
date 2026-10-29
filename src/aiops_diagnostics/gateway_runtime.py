@@ -136,7 +136,7 @@ class GatewayRuntime:
         # APP-RUNTIME-02：Dify 路线的执行记录与取数凭据。同一个库、独立的表 ——
         # 不复用 `agent_runs`，因为那张表的 `node_id`/`matched` 语义不适用于 Dify。
         # 取消要能同时收掉执行记录与凭据，所以这里必须是一个真实的存储而不是就地新建。
-        from aiops_diagnostics.dify_run_store import DifyRunStore
+        from aiops_diagnostics.dify.dify_run_store import DifyRunStore
 
         self.dify_run_store = DifyRunStore(store.path)
         # Routing decisions from typed answers (#392). Absent configuration
@@ -155,7 +155,7 @@ class GatewayRuntime:
         # tests included — reads the real table. An empty table means the
         # environment has not adopted the registry, and the selection rule is
         # then exactly what it was before this existed.
-        from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+        from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
 
         # 试运行（#772 F / #781）：并发闸与"作业 → 上下文"登记。刻意不是线程池的一部分 ——
         # 试运行用**独立的闸门**，这样"不许超过 N 条试运行"与"诊断池还有没有位置"互不牵连，
@@ -202,7 +202,7 @@ class GatewayRuntime:
         store: GatewayStore,
         gateway_settings: GatewayServerSettings,
     ) -> GatewayRuntime:
-        from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+        from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
         from aiops_diagnostics.knowledge.knowledge_dataset_sync_guard import KnowledgeDatasetSyncGuard
         from aiops_diagnostics.publication.agent_lifecycle import AgentStore
 
@@ -840,7 +840,7 @@ class GatewayRuntime:
         这条**同一个** ``ScopeContext`` 既用于订单授权（路由问它），也用于执行
         （worker 拿它跑），所以"问的"与"跑的"不可能漂。
         """
-        from aiops_diagnostics.dify_trial import build_trial_scope
+        from aiops_diagnostics.dify.dify_trial import build_trial_scope
 
         return build_trial_scope(initiator, operator_scope=self._trial_operator_scope)
 
@@ -1207,8 +1207,8 @@ class GatewayRuntime:
         2. 这一次有**同一轮**的取数记录（没有取数却自称成功 ⇒ 失败）；
         3. 输出能适配成 blocks，且订单号与本次冻结的订单一致。
         """
-        from aiops_diagnostics import dify_chat_workflow
-        from aiops_diagnostics.dify_run_store import DifyRunStore
+        from aiops_diagnostics.dify import dify_chat_workflow
+        from aiops_diagnostics.dify.dify_run_store import DifyRunStore
         from aiops_diagnostics.execution import chat_data_grant, chat_execution
 
         dify_store = DifyRunStore(self.store.path)
@@ -1350,8 +1350,8 @@ class GatewayRuntime:
 
     def settle_retracted_runs(self, *, route: Any) -> dict[str, Any]:
         """收敛撤回时冻结的路由代次；之后发布或恢复的任务不属于本次操作。"""
-        from aiops_diagnostics import dify_chat_workflow
-        from aiops_diagnostics.dify_run_store import DifyRunStore
+        from aiops_diagnostics.dify import dify_chat_workflow
+        from aiops_diagnostics.dify.dify_run_store import DifyRunStore
         from aiops_diagnostics.execution import chat_data_grant
 
         store = DifyRunStore(self.store.path)
@@ -1436,7 +1436,7 @@ class GatewayRuntime:
         # 必须真的有**同一轮**的取数记录：图没调取数端点、或者把同订单的旧快照
         # 当成本轮输出，在形状上都可能合法。没有这一条，`succeed()` 会把一次没取过数的
         # 运行写成 completed，而 GET 要等到回读时才 503 —— 那已经不叫"失败落库"了。
-        from aiops_diagnostics.dify_run_store import DifyRunStore
+        from aiops_diagnostics.dify.dify_run_store import DifyRunStore
 
         stored = DifyRunStore(self.store.path).snapshot(run_id)
         if stored is None:

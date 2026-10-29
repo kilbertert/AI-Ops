@@ -87,7 +87,7 @@ def check(
     reporting every tenant as broken because we did not look would be worse than
     saying nothing about it.
     """
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     ragflow = {str(row["tenant_id"]): row for row in store.list_ragflow_tenants(environment)}
     # `dify_workspaces` lives in its own store class (ADR-0059) over the same

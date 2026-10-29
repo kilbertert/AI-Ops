@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from aiops_diagnostics.dify_app_registry import DifyAppBinding
-from aiops_diagnostics.dify_dsl_pull import DifyDslSource
+from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
+from aiops_diagnostics.dify.dify_dsl_pull import DifyDslSource
 from aiops_diagnostics.execution import chat_execution, node_publication
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from execution.test_app_runtime_dify_entry import _Resolver, dify_chat

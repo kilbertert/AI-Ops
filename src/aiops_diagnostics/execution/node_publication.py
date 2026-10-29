@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from aiops_diagnostics.dify_dsl_pull import DifyDslClient, SyncOutcome
+from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, SyncOutcome
 from aiops_diagnostics.execution import execution_manifest
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore, RouteBindingError
@@ -290,7 +290,7 @@ class NodeTrial:
     def execute(self, runtime: Any, trial_id: str, scope: Any, order: str, language: str):
         from dataclasses import replace
 
-        from aiops_diagnostics.dify_trial import TrialResult
+        from aiops_diagnostics.dify.dify_trial import TrialResult
         from aiops_diagnostics.execution import chat_execution
 
         binding = chat_execution.binding_for_key(runtime.gateway_settings, self.route.key)

@@ -6,7 +6,7 @@ import uuid
 import pytest
 from execution.test_app_runtime_dify_entry import dify_chat
 
-from aiops_diagnostics.dify_chatflow import ChatflowReply
+from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
 from consumer.test_consumer_chat_service import Client, done
 from consumer.test_consumer_live_context import ask, wire
 

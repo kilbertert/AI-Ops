@@ -8,10 +8,30 @@
 
 1. **代码是手工拷贝**，不是 CD。`/opt/aiops-login-proxy/` 不在仓库部署管线里。
 2. **解包后必须核对属主** —— `tar -xzf` 会把归档里的属主/权限一起带过去，而服务身份是
-   `aiopslogin`。这一步漏掉的表现是 `No module named aiops_diagnostics.dify_login_server`
+   `aiopslogin`。这一步漏掉的表现是 `No module named aiops_diagnostics.dify.dify_login_server`
    （**报错说模块不存在，实际是读不到文件**）。
 3. **判断入口是否生效看端口与 `nginx -T`，不看 `systemctl is-active nginx`** ——
    那个单元从 2026-09-11 起就是 failed（既有债，报 "already running"）。
+
+## 0.1 模块归位后的代码/服务单元配套
+
+新合并源码使用`aiops_diagnostics.dify.dify_login_server`。更新前备份整个代码目录与现役服务单元，
+停止登录代理，以完整制品替换`aiops_diagnostics/`（不要覆盖解压而残留旧模块），再仅修改ExecStart里的模块路径：
+
+```python
+from pathlib import Path
+
+unit = Path("/etc/systemd/system/aiops-dify-login-proxy.service")
+text = unit.read_text()
+old = "-m aiops_diagnostics.dify_login_server"
+new = "-m aiops_diagnostics.dify.dify_login_server"
+assert text.count(old) + text.count(new) == 1
+unit.write_text(text.replace(old, new))
+```
+
+执行`systemctl daemon-reload`后按后文启动和验证。失败恢复代码及原单元、daemon-reload再启动，
+不倒回映射数据库。原服务User/Group和环境项保持不变。重启会清空近期公司令牌缓存，须正常重登。
+以下取制品命令里的完整包已经包含新dify子目录；不使用旧模块名探测新包。
 
 ## 1. 取制品
 
@@ -92,7 +112,7 @@ ssh yidong-36 'sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-pro
 ssh yidong-36 "sudo -n -u aiopslogin /usr/bin/python3 - <<'PY'
 import os, sys
 sys.path.insert(0, '/opt/aiops-login-proxy')
-from aiops_diagnostics.dify_login_server import LoginProxySettings
+from aiops_diagnostics.dify.dify_login_server import LoginProxySettings
 
 env = {}
 for line in open('/etc/aiops-login-proxy/login-proxy.env', encoding='utf-8'):
@@ -129,7 +149,7 @@ PY"
 ssh yidong-36 'sudo -n -u aiopslogin /usr/bin/python3 - <<PY
 import sys
 sys.path.insert(0, "/opt/aiops-login-proxy")
-from aiops_diagnostics.dify_login_provision import DifyConsoleSettings
+from aiops_diagnostics.dify.dify_login_provision import DifyConsoleSettings
 for v in ("", "prod.41"):
     try:
         DifyConsoleSettings(base_url="http://x", secret_key="x", environment=v)
@@ -271,8 +291,8 @@ curl -sS -o /dev/null -w "%{http_code}\n" \
 ```bash
 ssh yidong-36 'systemctl restart aiops-dify-login-proxy && sleep 3
   systemctl is-active aiops-dify-login-proxy'
-ssh yidong-36 'sha256sum /opt/aiops-login-proxy/aiops_diagnostics/dify_login_server.py'
-git show origin/main:src/aiops_diagnostics/dify_login_server.py | sha256sum   # 两个必须相等
+ssh yidong-36 'sha256sum /opt/aiops-login-proxy/aiops_diagnostics/dify/dify_login_server.py'
+git show origin/main:src/aiops_diagnostics/dify/dify_login_server.py | sha256sum   # 两个必须相等
 ```
 
 ## 6. 验收（五条，都是真入口）
@@ -359,7 +379,7 @@ nginx 两处要**一起**回滚（snippet 引用了 10008 那一层定义的变�
 
 | 现象 | 真因 |
 |---|---|
-| `No module named aiops_diagnostics.dify_login_server` | 属主/权限不对（见 §3），不是文件缺失 |
+| `No module named aiops_diagnostics.dify.dify_login_server` | 属主/权限不对（见 §3），不是文件缺失 |
 | `systemctl is-active nginx` = failed | 既有失效单元，端口才是判据 |
 | 所有登录都 400「明文 HTTP」 | 10008 那一层的 realip/map 没装或没 reload |
 | 登录后立刻弹回 `/signin` | 走了明文入口；会话 cookie 是 `Secure` + `__Host-`，http 源上被丢弃 |

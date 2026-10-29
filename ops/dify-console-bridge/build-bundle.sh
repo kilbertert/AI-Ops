@@ -10,8 +10,9 @@ out=$(realpath -m -- "$2")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git -C "$repo" archive "$revision" \
-  src/aiops_diagnostics/{__init__,dify_console_publish,async_job_lifecycle,bounded_http,http_auth}.py \
-  ops/dify-console-bridge/{dify-publish-button.js,operator-native-preview.js,dify-console-publish.conf,deploy.sh} \
+  src/aiops_diagnostics/{__init__,async_job_lifecycle,bounded_http,http_auth}.py \
+  src/aiops_diagnostics/dify/{__init__,dify_console_publish}.py \
+  ops/dify-console-bridge/{dify-publish-button.js,operator-native-preview.js,dify-console-publish.conf,deploy.sh,aiops-dify-console-bridge.service} \
   | tar -xf - -C "$work"
 mkdir "$work/bundle"
 mv "$work/src/aiops_diagnostics" "$work/bundle/"

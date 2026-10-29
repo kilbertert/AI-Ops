@@ -1629,7 +1629,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   `metadata` 非 null（Dify 侧只有 metadata 非 null 才读 score/title）；只含 KB-A 分段；
   桩收到的知识库集合等于登记集合（不是请求里带来的）；空命中 → 200 空 `records`。
 - 清理：释放桩与临时 SQLite。
-- 结果：PASS（2026-10-08，pytest `tests/test_dify_knowledge_api.py`）。
+- 结果：PASS（2026-10-08，pytest `tests/dify/test_dify_knowledge_api.py`）。
 
 ### DIFY-KB-02 授权、凭据与配置边界
 
@@ -1676,7 +1676,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   `AgentNotFound`；草稿 `config.prompt` 含 `小趋`，`config.model == deepseek-v4-flash`；
   请求带 `Authorization: Bearer …` 与 `X-WORKSPACE-ID`，路径为该控制台导出端点。
 - 清理：临时 SQLite 随 tmp_path 丢弃。
-- 结果：PASS（2026-10-08，pytest `tests/test_dify_dsl_pull.py`）。
+- 结果：PASS（2026-10-08，pytest `tests/dify/test_dify_dsl_pull.py`）。
 
 ### DIFY-DSL-02 开场白与预设问题不从 DSL 取
 

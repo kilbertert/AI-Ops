@@ -19,7 +19,7 @@ import pytest
 # blocks until it does. Every test in this suite that starts a local HTTP stand-in
 # pays that wait in teardown, and there are ~30 such fixtures.
 #
-# Measured on this repository, 2026-10-18, `tests/test_dify_console_publish.py`:
+# Measured on this repository, 2026-10-18, `tests/dify/test_dify_console_publish.py`:
 #
 #     default (0.5s)          96.73 s
 #     poll_interval=0.01       2.97 s

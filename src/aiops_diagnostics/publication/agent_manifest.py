@@ -31,7 +31,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from aiops_diagnostics.dify_app_registry import (
+from aiops_diagnostics.dify.dify_app_registry import (
     DifyAppBinding,
     DifyAppRegistry,
     DifyAppRegistryError,

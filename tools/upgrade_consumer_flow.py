@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 from aiops_diagnostics.consumer.consumer_flow_contract import TYPES, publication_settings
-from aiops_diagnostics.dify_dsl_pull import workflow_content
+from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
 
 ROOT = Path(__file__).resolve().parents[1]
 

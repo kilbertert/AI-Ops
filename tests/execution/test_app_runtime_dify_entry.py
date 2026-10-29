@@ -25,7 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.dify_run_store import DifyRunStore
+from aiops_diagnostics.dify.dify_run_store import DifyRunStore
 from aiops_diagnostics.execution import chat_data_grant, chat_execution
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_to_json
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver

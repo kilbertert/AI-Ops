@@ -6,9 +6,9 @@ import hashlib
 import uuid
 from typing import Any
 
-from aiops_diagnostics.dify_chat_workflow import DifyWorkflowError, load_workflow_key
-from aiops_diagnostics.dify_chatflow import DifyChatflowClient
-from aiops_diagnostics.dify_run_store import still_valid
+from aiops_diagnostics.dify.dify_chat_workflow import DifyWorkflowError, load_workflow_key
+from aiops_diagnostics.dify.dify_chatflow import DifyChatflowClient
+from aiops_diagnostics.dify.dify_run_store import still_valid
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.agent_runs import scope_to_json
 

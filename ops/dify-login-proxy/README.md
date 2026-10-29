@@ -3,7 +3,7 @@
 **这是什么**：运营用**公司账号**进 Dify 控制台的那条路。用户输公司账号、密码与真实验证码，
 代理完成公司登录交换、读权限码，然后交给浏览器一枚 **Dify 控制台会话**。
 
-决定的论证在 **ADR-0023**；代码在 `src/aiops_diagnostics/dify_login_*.py`。
+决定的论证在 **ADR-0023**；代码在 `src/aiops_diagnostics/dify/dify_login_*.py`。
 本目录只是**部署资产**。
 
 ## 拓扑
@@ -25,7 +25,7 @@
 | `login-proxy.env.example` | `/etc/aiops-login-proxy/login-proxy.env`（0600） | 全部配置，含两把密钥 |
 | `dify-login-proxy.conf` | 控制台 server 块 / snippets | 四跳同源反代（登录/验证码/登出/发布检查） |
 | `dify-login-page.html` | `/srv/aiops-console-assets/` | **登录页**（单文件自包含），由 10008 的 `location = /signin` 提供 |
-| 代码 | `/opt/aiops-login-proxy/`（venv） | `python -m aiops_diagnostics.dify_login_server` |
+| 代码 | `/opt/aiops-login-proxy/`（venv） | `python -m aiops_diagnostics.dify.dify_login_server` |
 
 **登录页为什么在 `ops/dify-console-bridge/` 的 conf 里接线、而不是本目录**：
 `location = /signin` 必须挂在**被两个入口共用**的那一层（10008），否则明文入口
@@ -100,3 +100,12 @@ Dify 侧存储凭据失守。** 因此：
 `/var/lib/aiops-login-proxy/mappings.db`，键是**公司用户 id**，附 Dify 账号 id、邮箱
 （`<id>@aiops-login.invalid`，不可投递、确定性生成）、权限码快照、状态、时间。
 **表里没有密码** —— 自签模型下不存在要保管的密码。
+
+## Dify包归位后的升级
+
+新源码的入口是`aiops_diagnostics.dify.dify_login_server`，需与同修订服务单元一起安装。
+遵循[36操作手册](../../docs/agents/dify-login-proxy-36-runbook.md)：备份代码、单元和环境，
+停止登录代理后以完整合并制品替换代码目录，更新现有ExecStart模块段并daemon-reload，再启动验证。
+只替换模块段，保留现役User/Group、环境文件与加固项；不能用旧单元启动新包。
+重启清除代理内存中的近期公司令牌映射，运营须正常重新登录；不得伪造会话恢复。
+未执行升级时旧部署包及旧单元继续配套运行，不因Gateway CD而变化。

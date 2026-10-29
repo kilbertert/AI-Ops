@@ -978,7 +978,7 @@ cd /opt/aiops-41
 runuser -u aiops41 -- env HOME=/var/lib/aiops-41 .venv/bin/python - <<'PY'
 from pathlib import Path
 from aiops_diagnostics.publication.agent_manifest import load_manifest, reconcile_dify_registry
-from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
 env = load_manifest(Path("/opt/aiops-41/ops/env-41.toml.new"))
 reg = DifyAppRegistry(Path("/var/lib/aiops-41/gateway/gateway.db"))
 for r in reconcile_dify_registry(reg, env, dry_run=False):
@@ -2115,7 +2115,7 @@ ssh yidong-36 'docker logs --since 10m deploy-api-1 2>&1 | grep -c "NoneType.*ha
 ```bash
 cat > /tmp/fix_legacy.py <<'PY'
 from aiops_diagnostics import gateway_config as gc
-from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
 s = gc.GatewayServerSettings.from_env()
 c = DifyConsoleAdmin(ConsoleApiSettings(s.dify_console_base_url, s.dify_console_api_key))

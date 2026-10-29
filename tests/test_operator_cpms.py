@@ -14,7 +14,7 @@ from execution.test_m2_close_contract import NODE_A_TOKEN, _write_config
 from execution.test_m3_gateway_exec_config import _write_manifest
 
 from aiops_diagnostics import operator_cpms
-from aiops_diagnostics.dify_app_registry import DifyAppBinding
+from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.execution import chat_execution, node_publication
 from aiops_diagnostics.faq import PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
@@ -433,7 +433,7 @@ def test_runtime_tools_are_not_used_for_operator_trial(operator):
     from aiops_diagnostics.gateway_api import StandardAPIError, _workflow_trial_draft
 
     f = operator
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     f["settings"].environment = "env-a"
     with DifyWorkspaces(f["db"])._connection(write=True) as c:
@@ -450,7 +450,7 @@ def test_runtime_tools_are_not_used_for_operator_trial(operator):
 
 
 def test_publish_retract_restore_use_operator_route_via_http(operator, monkeypatch):
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     f = operator
     f["settings"].environment = "env-a"
@@ -488,7 +488,7 @@ def test_publish_retract_restore_use_operator_route_via_http(operator, monkeypat
 
 @pytest.mark.parametrize("native", [False, True])
 def test_operator_trial_uses_draft_without_changing_publication(operator, monkeypatch, native):
-    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     f = operator
     f["settings"].environment = "env-a"
@@ -537,7 +537,7 @@ def test_operator_trial_uses_draft_without_changing_publication(operator, monkey
             break
         time.sleep(0.01)
     assert result.json()["status"] == "completed", result.text
-    from aiops_diagnostics.dify_console_publish import _trial_report_text
+    from aiops_diagnostics.dify.dify_console_publish import _trial_report_text
 
     panel = _trial_report_text(result.json(), "completed")
     answer = f["ctx"].agent_run_store.by_qa(trial).snapshot["answer"]

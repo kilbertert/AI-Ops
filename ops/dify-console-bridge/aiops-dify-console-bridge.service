@@ -12,7 +12,7 @@ Group=aiopsbridge
 WorkingDirectory=/opt/aiops-console-bridge
 # 密钥只从这里读，**不进命令行**（命令行会进进程表）。
 EnvironmentFile=/etc/aiops-console-bridge/bridge.env
-ExecStart=/opt/aiops-console-bridge/.venv/bin/python -m aiops_diagnostics.dify_console_publish
+ExecStart=/opt/aiops-console-bridge/.venv/bin/python -m aiops_diagnostics.dify.dify_console_publish
 Restart=always
 RestartSec=5
 
