@@ -9,7 +9,7 @@
 
 1. **角色表直测** —— 每个取值 + `None` / 非数字 / 未知 code；
 2. **标签表与角色表取值域一致** —— 往一张表加了 code、忘了另一张 ⇒ 红；
-3. **跨面等价** —— `engine` 的分类与 `failure_rate` 的分子对同一 status 给同一答案；
+3. **聚合分子一致** —— `failure_rate` 的分子由同一角色表派生；
 4. **契约字符串由权威生成** —— 改错角色表会让它红（此前的写法改不动）。
 """
 
@@ -133,22 +133,7 @@ def test_every_role_is_reachable_from_some_known_code() -> None:
     assert used == set(StatusRole) - {StatusRole.UNKNOWN}
 
 
-# --- 3. 跨面等价：engine 的分类 vs failure_rate 的分子 ------------------------
-
-
-def _engine_role_for(status: object) -> str:
-    """`engine._analyze_status` 对同一个 status 给出的分类名。
-
-    直接驱动那个方法（而不是复制它的分支）：测的是**它现在怎么判**，不是它曾经怎么写。
-    """
-    from aiops_diagnostics.engine import DiagnosticEngine
-    from aiops_diagnostics.models import DiagnosticReport
-    from aiops_diagnostics.parsing import parse_request
-
-    report = DiagnosticReport(request=parse_request("订单 ORDER-1 状态异常", order_no="ORDER-1"), summary="")
-    engine = object.__new__(DiagnosticEngine)
-    engine._analyze_status({"status": status}, report)
-    return next((name for name in report.classifications if name in set(StatusRole)), "unknown_order_status")
+# --- 3. 聚合分子由角色表派生 ------------------------------------------------
 
 
 def test_the_kpi_numerator_comes_from_the_role_authority() -> None:

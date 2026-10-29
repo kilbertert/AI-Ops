@@ -1749,7 +1749,9 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   该状态能被用户走到，其上游成因是公司端点 #619（实测已确认），本票不处理。
 - **清理**：无写入；未触碰 41。
 
-### ROUTING-617-01 凭据被拒 vs 上游不可用（#617，未在 41 实跑）
+### ROUTING-617-01 凭据被拒 vs 上游不可用（历史已退役，#617）
+
+本段只保留当时验证记录。Jev与旧路由已退役，以下命令不再作为现役验收步骤。
 
 - **环境**：本机工作树 `fix/routing-auth-vs-outage`，base `origin/main` @ `203a781`。**未部署。**
 - **前置**：不需要真实上游 —— 两条路径都用替身注入（401 与 `URLError`）。
