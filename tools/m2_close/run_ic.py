@@ -331,7 +331,7 @@ INSERT INTO sai_user_agent (user_id, agent_id) VALUES (1, {AGENT_ID});
                 "pip install -q --no-cache-dir --target /data/site-packages fastapi "
                 "'python-dotenv<2' 'pymysql[rsa]' 'redis<7' 'uvicorn<1' 'cryptography<47' "
                 "'pyyaml<7' 'typer<1' 'rich<15' 'keyring<26' 'httpx<1' "
-                "'openai-codex>=0.144.4,<0.145' ; "
+                "; "
                 "M2CLOSE_ORDERS_FILE=/data/nodes.json "
                 "M2CLOSE_FORWARD=m2close-snail:8900 "
                 "python /repo/tools/m2_close/synthetic_upstream.py & "

@@ -11,12 +11,13 @@
 | 产品、测试：交付什么、怎样反馈缺陷 | [测试交接](testing-handoff.md) |
 | 系统方向、M1–M4剩余范围 | [系统策略复核](system-strategy-audit.md) |
 | 工程：真实调用链与职责 | [系统架构](system-architecture.md)、[README模块索引](../README.md#三系统模块与依赖关系) |
+| 仓库目录、旧执行器清理与迁移顺序 | [目录梳理与 Thin Harness 退役清单](architecture/repository-layout.md)；区分已删除与迁移建议 |
 | 运行版本、启用状态和证据 | [当前交付状态](agents/current-delivery-state.md)；该页后半为历史记录 |
 | C端：知识上传、选库、多语言、实时查询 | [WF01手册](agents/consumer-wf01/README.md) |
 | 管家：公司身份、两项CPMS工具与节点 | [管家手册](agents/operator-cpms/README.md) |
 | 前端：C端和管家接线 | [C端交接](agents/consumer-wf01/app-handoff.md)、[管家交接](agents/frontend-operator-handoff.md) |
 | 部署、升级、回退 | [Gateway](gateway.md)、[节点](../deploy/node-runtime/README.md)、[Dify](../deploy/dify-36/README.md)、[WF01迁移](agents/consumer-wf01/live-knowledge-deploy.md) |
-| 本地开发与离线诊断 | [快速上手](快速上手.md)、[旧诊断内核](thin-harness.md) |
+| 本地服务与退役边界 | [快速上手](快速上手.md)、[旧执行器退役](runtime-retirement.md) |
 | 设计理由、术语、自动开发流程 | [ADR](adr/)、[词汇表](../GLOSSARY.md)、[AFK](afk-workflow.md) |
 | 某次执行究竟验了什么 | [验收记录](validation/)、[开发进度](开发进度/)；按日期、文件名找对应记录 |
 
@@ -39,4 +40,4 @@
 | 旧任务工作树内system-strategy-audit.md | 未集成的2026-10-22草稿且有他人修改，保持原样；当前文档位于本目录 |
 
 本轮对当前入口和相关手册做内容同步，对其他文档按上述用途保留；没有声称逐条复验全部历史事实。
-本轮不修改运行时参考architecture.md和根SOP，因此不命中自动CD；不进行知识库导入、工具删除或新业务开发。测试结果须注明运行修订、环境和时间。
+本轮不修改运行时参考architecture.md和根SOP，因此不命中自动CD；不进行知识库导入、新业务开发。测试结果须注明运行修订、环境和时间。

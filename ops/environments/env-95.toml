@@ -6,7 +6,7 @@
 # **把一个智能体从零部署到一个新环境，需要哪几步，每步的判据是什么。**
 #
 # 收敛命令（95 on-box）：
-#   aiops --config /etc/aiops-95/server.env admin reconcile \
+#   aiops-admin --config /etc/aiops-95/server.env reconcile \
 #     /opt/aiops-95/env-95.toml --db /var/lib/aiops-95/gateway/gateway.db
 #
 # ⚠️ **没有 `[[dify_apps]]` 段**：95 还没有自己的登录代理与 workspace，绑定无处可指。

@@ -21,24 +21,6 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from operator_support import (
-    AGENT_VERSION_KEY,
-    DIAGNOSIS_QUESTION,
-    FOLLOWUP_QUESTION,
-    ORDER_INSIDE,
-    SITE_IN,
-    Caller,
-    Connection,
-    Directory,
-    PlatformIdentityResolver,
-    Runtime,
-    assistant_app,
-    build_authorizer,
-    create_gateway_app,
-    gateway_settings,
-    operator_session,
-    publish,
-)
 
 # 与 #426 共用同一套替身（行级镜像的假 MySQL、真实授权判定、运营商会话身份、发布
 # 后的入口应用）：替身各写一份会各自漂移，因此这里不重写。
@@ -46,15 +28,21 @@ from operator_support import (
     CONSUMER_HEADERS as _CONSUMER_HEADERS,
 )
 from operator_support import (
+    DIAGNOSIS_QUESTION,
+    ORDER_INSIDE,
+    SITE_IN,
+    Caller,
+    Connection,
+    Runtime,
+    assistant_app,
+    operator_session,
+)
+from operator_support import (
     OPERATOR_HEADERS as _OPERATOR_HEADERS,
 )
 
-from aiops_diagnostics.faq import FAQCatalog
-from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.shortcut_lifecycle import (
     _BUNDLED_SHORTCUTS,
-    ShortcutManager,
-    ShortcutStore,
 )
 
 #: 「客户案例」的点击问句：故意不含任何宣传意图线索（「案例库」「标杆」等都没出现），
@@ -227,40 +215,6 @@ def test_clicked_order_diagnosis_without_an_order_asks_for_the_picker(
     assert runtime.questions == []
 
 
-def test_clicked_order_diagnosis_with_a_visible_order_starts_the_diagnosis(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """带订单号、且该订单在可见范围内 → 启动诊断并返回既有诊断响应形态。
-
-    可见范围由会话身份里的运营商站点集合决定（#426），用的订单挂在**别人**名下、
-    站点在集合内：这正是管家端替同事和站点处理问题要看的那一单，也是「仅本人」范围
-    下看不到的那一单。
-    """
-    connection = Connection()
-    client, runtime = _app(tmp_path, monkeypatch, connection=connection)
-
-    response = client.post(
-        "/v1/assistant/questions",
-        json={
-            "question": DIAGNOSIS_QUESTION,
-            "shortcut_code": "smart_diagnosis",
-            "order_no": ORDER_INSIDE,
-        },
-        headers=_OPERATOR_HEADERS,
-    )
-
-    assert response.status_code == 202, response.text
-    body = response.json()
-    assert body["type"] == "diagnosis"
-    assert body["order_no"] == ORDER_INSIDE
-    assert body["status"] == "queued"
-    assert body["retry_after_ms"] == 1000
-    assert body["language"] == "zh"
-    assert body["error"] is None
-    assert runtime.diagnoses == [(ORDER_INSIDE, DIAGNOSIS_QUESTION)]
-    assert runtime.questions == []
-
-
 def test_the_clicked_order_diagnosis_shares_the_clarification_shape_across_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -295,204 +249,7 @@ def test_the_clicked_order_diagnosis_shares_the_clarification_shape_across_entri
     assert runtime.diagnoses == []
 
 
-def test_the_entry_header_reaches_the_diagnosis_runtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """入口头必须真的传进运行时——这是 #695 的接线那半边。
-
-    注入式替身对「header 有没有被传到门」是**盲的**：它照旧返回一个固定上下文，
-    于是把 forward 那行删掉，上面那条形态断言照样全绿。所以这条断言的是**收到的
-    参数**，而不是结果。
-    """
-    connection = Connection()
-    client, runtime = _app(tmp_path, monkeypatch, connection=connection)
-
-    client.post(
-        "/v1/assistant/questions",
-        json={
-            "question": DIAGNOSIS_QUESTION,
-            "shortcut_code": "smart_diagnosis",
-            "order_no": ORDER_INSIDE,
-        },
-        headers=_OPERATOR_HEADERS,
-    )
-
-    assert runtime.entries == ["operator"], runtime.entries
-
-
-def test_the_entry_header_reaches_the_runtime_on_the_active_order_path_too(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """**第三个**诊断调用点也要传入口：会话活跃订单的随访（route 1c）。
-
-    #695 把入口接到了诊断面上，而诊断面有**四个**调用点（标准诊断路由 + 助手的三条
-    订单分支）。上面那条用例只覆盖显式带订单号的那一条；对抗性突变（把 route 1c 的
-    `business_entry=` 删掉）证明**没有任何用例会因此转红**——四个调用点里三个有回归、
-    第四个没有。
-
-    这条走的是真实链路里最容易漏的那一条：追问只带会话 id、订单号来自会话的
-    `active_order_no`。它必须与其它三条一样，把入口传进运行时。
-    """
-    connection = Connection()
-    client, runtime = _app(tmp_path, monkeypatch, connection=connection)
-
-    created = client.post(
-        "/v1/conversations", json={"agent_version_key": AGENT_VERSION_KEY}, headers=_OPERATOR_HEADERS
-    )
-    assert created.status_code == 201, created.text
-    cid = created.json()["conversation_id"]
-    bound = client.post(
-        f"/v1/conversations/{cid}/active-order",
-        json={"order_no": ORDER_INSIDE},
-        headers=_OPERATOR_HEADERS,
-    )
-    assert bound.status_code == 200, bound.text
-
-    response = client.post(
-        "/v1/assistant/questions",
-        json={"question": FOLLOWUP_QUESTION, "conversation_id": cid},
-        headers=_OPERATOR_HEADERS,
-    )
-
-    assert response.status_code == 202, response.text
-    assert response.json()["type"] == "diagnosis"
-    assert response.json()["order_no_from_context"] == ORDER_INSIDE
-    assert runtime.entries == ["operator"], runtime.entries
-
-
 # --- 3. 「客户案例」在知识库未就绪时返回明确的不可用 --------------------------
-
-
-def test_clicked_customer_cases_report_the_missing_library_not_an_empty_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """案例库未就绪 → 明确的不可用卡片，而不是空的「未检索到」。
-
-    「未检索到」是对一个从没读过的库下的结论。这条用例跑真实运行时（那张卡片是
-    在它里面生成的），问题文案也不含宣传线索，因此意图只能来自入口侧的动作行。
-    """
-    from aiops_diagnostics.config import Settings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-
-    settings = gateway_settings(tmp_path)
-    diagnostic_settings = Settings()
-    diagnostic_settings.agent.run_root = str(tmp_path / "runs")
-    store = GatewayStore(settings.database_file)
-    shortcuts = ShortcutManager(ShortcutStore(settings.database_file))
-    publish(shortcuts, ("operator",))
-    runtime = GatewayRuntime(store, settings, diagnostic_settings)
-    try:
-        app = create_gateway_app(
-            settings=settings,
-            store=store,
-            runtime=runtime,
-            caller_resolver=Caller(operator_session(monkeypatch, sites={"SHOP-1": (SITE_IN,)})[0]),
-            order_authorizer=build_authorizer(monkeypatch, Connection()),
-            platform_resolver=PlatformIdentityResolver(Directory()),
-            faq_catalog=FAQCatalog.bundled(),
-            shortcut_manager=shortcuts,
-        )
-        with TestClient(app) as client:
-            accepted = client.post(
-                "/v1/assistant/questions",
-                json={"question": CASE_QUESTION, "shortcut_code": "case_exploration"},
-                headers=_OPERATOR_HEADERS,
-            )
-            assert accepted.status_code == 202, accepted.text
-            body = accepted.json()
-            assert body["type"] == "qa"
-            job = _wait_terminal(client, body["qa_id"])
-    finally:
-        runtime.shutdown()
-
-    assert job["status"] == "completed", job
-    result = job["result"]
-    assert result["retrieval_status"] == "unavailable"
-    text = result["blocks"][0]["text"]
-    assert "未检索到匹配的宣传资料" not in text
-    assert "不可用" in text
-
-
-def test_the_operator_button_resolves_a_target_from_the_tenant_row(tmp_path: Path) -> None:
-    """管家端的按钮能出卡：**平台行给可见性 + 租户行给绑定**（2026-10-19 恢复）。
-
-    这条是 #803 与本次恢复之间那个真正的判据。#803 的机制观察是对的 ——
-    **平台行**不允许携带 `target_agent_version`（`_validated_fields` 对
-    `PLATFORM_SCOPE` 抛 `platform shortcuts cannot bind a tenant agent version`），
-    所以只挂平台行时 `_promo_route` 恒得 `(None, "case_exploration")`。
-    但它把「平台行绑不了」读成了「这个入口不该有这张卡」；正确形状一直是两层：
-    `list_effective` 里**已发布的租户行覆盖同 code 的平台行**。
-
-    断的是路由判定本身而不是 HTTP 响应：`_promo_route` 是「这一次请求要不要走宣传面、
-    钉到哪个版本」的唯一一处。走完整 HTTP 还要过分类器与模型，而本仓测试环境没有模型，
-    那时失败的原因与这条判据无关。
-
-    **反向**（这条用例的价值所在）：删掉下面的租户覆盖行，断言转红 —— 这正是
-    「只恢复种子、不建租户行」的实际后果，也是 41 上必须补那一步数据的原因。
-    """
-    from types import SimpleNamespace
-
-    from aiops_diagnostics.gateway_api import _promo_route
-    from aiops_diagnostics.shortcut_lifecycle import PLATFORM_SCOPE, PLATFORM_TENANT_ID
-
-    settings = gateway_settings(tmp_path)
-    store = ShortcutStore(settings.database_file)
-    shortcuts = ShortcutManager(store)
-
-    # 平台行：按钮可见，但**绑不了** target（`create` 对 PLATFORM_SCOPE 会抛）。
-    platform_context = type(
-        "Ctx",
-        (),
-        {"effective_tenant_id": PLATFORM_TENANT_ID, "roles": {"ROLE_PLATFORM_ADMIN"}, "caller": None},
-    )()
-    platform = store.create(
-        PLATFORM_TENANT_ID,
-        "operator",
-        "case_exploration",
-        intent="case_exploration",
-        requires_order=False,
-        sort_order=10,
-        labels={"zh": "客户案例"},
-        descriptions={},
-        question_templates={},
-        target_agent_version=None,
-        created_by="platform-admin",
-    )
-    shortcuts.publish(
-        platform_context, platform.shortcut_id, expected_revision=platform.revision, scope=PLATFORM_SCOPE
-    )
-
-    context = SimpleNamespace(shortcut_manager=shortcuts)
-    caller = SimpleNamespace(effective_tenant_id="T-1")
-    decision = SimpleNamespace(platform="operator")
-    payload = SimpleNamespace(question=CASE_QUESTION, shortcut_code="case_exploration")
-
-    # 只有平台行时：意图解析得出（按钮在），但**没有**可钉的版本 ⇒ 空卡。
-    assert _promo_route(context, caller, decision, payload) == (None, "case_exploration")
-
-    # 租户覆盖行：把目标钉在该租户自己的已发布宣传智能体上（运营动作）。
-    tenant_context = type(
-        "Ctx", (), {"effective_tenant_id": "T-1", "roles": {"ROLE_AGENT_ADMIN"}, "caller": None}
-    )()
-    override = store.create(
-        "T-1",
-        "operator",
-        "case_exploration",
-        intent="case_exploration",
-        requires_order=False,
-        sort_order=10,
-        labels={"zh": "客户案例"},
-        descriptions={},
-        question_templates={},
-        target_agent_version=AGENT_VERSION_KEY,
-        created_by="operator-admin",
-    )
-    shortcuts.publish(tenant_context, override.shortcut_id, expected_revision=override.revision)
-
-    target, intent = _promo_route(context, caller, decision, payload)
-
-    assert intent == "case_exploration"
-    assert target == AGENT_VERSION_KEY, "租户行给绑定——只恢复种子不建这行，管家端仍是空卡"
 
 
 # --- 3. 「运维巡检」：点击 → 一张跨订单的运维卡（#721） -------------------------
@@ -578,20 +335,3 @@ def test_a_clicked_operations_review_is_not_hijacked_by_an_order_in_the_sentence
     assert response.status_code == 202, response.text
     assert response.json()["type"] == "analysis", response.json()
     assert runtime.diagnoses == [], "订单号不得把运维巡检变成订单诊断"
-
-
-def test_operations_review_requires_a_published_action(tmp_path: Path, monkeypatch) -> None:
-    """草稿行的 `shortcut_code` 不生效 —— 种子是草稿，发布才是运营动作。
-
-    同一条规矩适用于入口其余动作：未发布时点击**不能**起作业。
-    """
-    client, runtime = _app(tmp_path, monkeypatch, published_entries=())
-    response = client.post(
-        "/v1/assistant/questions",
-        headers=_OPERATOR_HEADERS,
-        json={"question": "帮我看一下最近的运维巡检", "shortcut_code": "operations_review"},
-    )
-
-    assert response.status_code == 202
-    assert response.json()["type"] != "analysis", response.json()
-    assert getattr(runtime, "analyses", []) == [], "未发布的动作不得起分析作业"

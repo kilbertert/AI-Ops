@@ -21,11 +21,9 @@ from aiops_diagnostics.sources import (
     DeviceGate,
     FixtureSources,
     MySQLSource,
-    RedisSource,
     ScopedSources,
     SourceError,
     TDengineSource,
-    live_sources,
     scoped_live_sources,
 )
 
@@ -146,7 +144,6 @@ def test_scoped_sources_pushes_scope_to_mysql_tdengine_redis(
         settings,
         mysql=MySQLSource(settings, scope=scope),
         tdengine=TDengineSource(settings, allowed_devices=frozenset()),
-        redis=RedisSource(settings, order_in_scope=lambda f: True),
         device_gate=gate,
     )
 
@@ -174,24 +171,16 @@ def test_scoped_sources_tdengine_rejects_unknown_device() -> None:
         settings,
         mysql=MySQLSource(settings, scope=scope),
         tdengine=TDengineSource(settings, allowed_devices=gate.allowed_devices()),
-        redis=RedisSource(settings),
         device_gate=gate,
     )
 
     with pytest.raises(SourceError, match="设备不在当前权限范围"):
-        sources.get_comm_messages(
+        sources.get_gun_samples(
             "PILE-EVIL",
             datetime.fromisoformat("2026-07-31 10:00:00"),
             datetime.fromisoformat("2026-07-31 10:30:00"),
+            None,
         )
-
-
-def test_live_sources_defaults_unscoped_still_work() -> None:
-    # 不提供 scope 时 live_sources 行为不变（走 HybridSources）
-    settings = Settings.from_env()
-    settings.ssh.enabled = False
-    with live_sources(settings) as sources:
-        assert hasattr(sources, "get_orders")
 
 
 def test_scoped_live_sources_requires_valid_query_scope() -> None:
@@ -219,6 +208,5 @@ def test_scoped_live_sources_constructs_scoped_sources(monkeypatch: pytest.Monke
     with scoped_live_sources(settings, scope=scope) as sources:
         assert isinstance(sources.mysql, MySQLSource)
         assert isinstance(sources.tdengine, TDengineSource)
-        assert isinstance(sources.redis, RedisSource)
         # TDengine 初始 fail closed（空设备集合）
         assert sources.tdengine.allowed_devices == frozenset()

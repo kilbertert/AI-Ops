@@ -2058,7 +2058,7 @@ ssh aiops-41 'python3 /dev/stdin /www/wwwlogs/<vhost>.log --since <DD/Mon/YYYY> 
 
 ### 为什么同步命令修不动它
 
-`aiops admin sync-knowledge-datasets` 只管理 `tenant-<租户>:<库>` 形状的 dataset。
+`aiops-admin sync-knowledge-datasets` 只管理 `tenant-<租户>:<库>` 形状的 dataset。
 这三条不归它管，重跑同步**不会**修：
 
 | dataset | `external_knowledge_id` | 谁在用 |

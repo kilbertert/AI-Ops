@@ -2,7 +2,7 @@
 
 宿主回环上的一个转发器：`127.0.0.1:15001` → Dify `api` 容器的 `5001`。
 它存在的唯一理由是让 **41（以及将来的 95）能在自己的机器上**跑
-`aiops admin ensure-workspace`，并写**自己的** `gateway.db`
+`aiops-admin ensure-workspace`，并写**自己的** `gateway.db`
 （见 `docs/adr/0068-claim-before-create-and-two-kinds-of-failure.md`）。
 
 ## 为什么需要它

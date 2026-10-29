@@ -4,4 +4,4 @@
 # （见 deploy/deploy-41.sh 的「注入 commit 标识」）。`/health` 的 version 字段取自
 # 这里，所以部署后能直接回答「现在跑的是哪个 commit」—— 回滚也因此可验证。
 # 工作树里的这一行始终保持裸 semver，不被改写。
-__version__ = "0.2.0"
+__version__ = "1.0.0"

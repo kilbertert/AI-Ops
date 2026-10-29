@@ -1,24 +1,9 @@
-"""Draft debug-run and real knowledge-binding validation (T5/#171).
-
-Two pieces share this module:
-
-- ``KbBindingResolver`` — the real ``KnowledgeBindingResolver`` for publish
-  validation. It asks kb-service per knowledge base: tenant mismatches and
-  missing bases surface as "不存在", documents still parsing or failed
-  surface as their own reasons (#171 acceptance: publish errors must name
-  the cause). An unreachable kb-service fails closed.
-- ``run_agent_debug_answer`` — an isolated preview of a draft agent config
-  through the exact production customer-QA harness (``run_customer_qa_answer``)
-  with a draft-scoped selection. It never creates a conversation turn and
-  never touches order data; media grants are tagged with a ``debug-`` session
-  id so debug previews stay distinguishable from production sessions.
-"""
+"""发布前核对知识库归属、文档解析状态与可用性。"""
 
 from __future__ import annotations
 
 import urllib.parse
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.agent_lifecycle import (
@@ -34,14 +19,9 @@ from aiops_diagnostics.bounded_http import (
     request_json,
     tenant_id_header,
 )
-from aiops_diagnostics.config import AgentSettings, ProviderConfig
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.knowledge_retrieval import (
-    KnowledgeSearchClient,
     KnowledgeSearchUnavailable,
-    MediaResourceSigner,
 )
-from aiops_diagnostics.qa_rag import CustomerAgentSelection, run_customer_qa_answer
 
 # RAGFlow TaskStatus names surfaced by kb-service document lists
 # (common/constants.py: UNSTART/RUNNING/CANCEL/DONE/FAIL/SCHEDULE).
@@ -186,59 +166,3 @@ class KbBindingResolver(KnowledgeBindingResolver):
             failed=bool(runs & _FAILED_RUNS),
             documents=len(docs) if isinstance(docs, list) else 0,
         )
-
-
-def run_agent_debug_answer(
-    question: str,
-    *,
-    agent_id: str,
-    revision: int,
-    prompt: str,
-    knowledge_base_ids: tuple[str, ...],
-    agent_settings: AgentSettings,
-    search_client: KnowledgeSearchClient,
-    media_signer: MediaResourceSigner,
-    tenant_id: str,
-    provider: ProviderConfig | None = None,
-    key_slot: str | None = None,
-    project_root: Path | None = None,
-    session_factory: Any | None = None,
-    language: str = DEFAULT_LANGUAGE,
-    max_results: int | None = None,
-) -> dict[str, Any]:
-    """Run one isolated preview turn of a draft customer agent config.
-
-    Same harness, same guard, same blocks-v1 contract as production
-    ``run_customer_qa_answer``; only the selection is draft-scoped: the
-    result and media grants carry ``#draft-r<revision>`` so a debug preview
-    never claims a published version. No conversation turn is created and no
-    order path is touched.
-
-    ``language`` is threaded through rather than left to default: a preview
-    that ran every draft under a Chinese output instruction reported a
-    language the published agent would never use, so the operator judged the
-    draft by a run that did not represent it.
-    """
-    selection = CustomerAgentSelection(
-        agent_id=agent_id,
-        version_no=revision,
-        prompt=prompt,
-        knowledge_base_ids=tuple(dict.fromkeys(knowledge_base_ids)),
-    )
-    result = run_customer_qa_answer(
-        question,
-        selection,
-        agent_settings,
-        search_client=search_client,
-        media_signer=media_signer,
-        tenant_id=tenant_id,
-        provider=provider,
-        key_slot=key_slot,
-        project_root=project_root,
-        session_factory=session_factory,
-        language=language,
-        max_results=max_results,
-    )
-    result["agent_version"] = f"{agent_id}#draft-r{revision}"
-    result["debug"] = True
-    return result

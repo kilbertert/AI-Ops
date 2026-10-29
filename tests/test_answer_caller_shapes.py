@@ -301,13 +301,10 @@ def test_the_enumeration_covers_every_finalisation_point() -> None:
     sites = [(path.name, call.lineno) for path, tree in _trees() for call in _entry_calls(tree)]
 
     assert {name for name, _ in sites} == {
-        "agent_validator.py",
         "consumer_knowledge.py",
-        "gateway_runtime.py",
         "ops_analysis.py",
-        "qa_rag.py",
     }
-    assert len(sites) == 5, sites
+    assert len(sites) == 2, sites
 
 
 # --------------------------------------------------------------------------
@@ -407,32 +404,3 @@ def test_a_value_the_caller_never_proved_is_refused() -> None:
     source = f'{_SYNTHETIC_HEADER}    text = payload.get("text")\n    return {ENTRY}(text, language)\n'
 
     assert _violations(source, "synthetic.py")
-
-
-@pytest.mark.parametrize(
-    ("module", "reverted_payload", "what_it_was"),
-    [
-        ("qa_rag.py", '[block.model_dump(mode="json") for block in blocks]', "a bare list of block dicts"),
-        ("agent_validator.py", 'result.model_dump(mode="json")', "the whole serialised diagnosis document"),
-    ],
-    ids=["qa_rag", "agent_validator"],
-)
-def test_the_guard_reports_the_payload_that_module_carried_before(
-    module: str, reverted_payload: str, what_it_was: str
-) -> None:
-    """Take the fix back out of a real file and this guard must go red.
-
-    Not a synthetic stand-in: the argument the module actually carried is put
-    back, by source span taken from the AST so it survives re-wrapping the call,
-    and the guard is run over the rewritten file. What is proven is that the guard
-    covers the regression and not a shape invented for the test.
-    """
-    source = (SOURCE_ROOT / module).read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=module)
-    call = _entry_calls(tree)[0]
-    segment = ast.get_source_segment(source, call.args[0])
-    assert segment is not None, f"no payload to revert in {module}"
-
-    violations = _violations(source.replace(segment, reverted_payload), module)
-
-    assert violations, f"{module} passing {what_it_was} was enumerated as clean"

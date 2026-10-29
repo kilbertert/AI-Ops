@@ -10,22 +10,13 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC
-from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.agent_contracts import IncidentManifest
-from aiops_diagnostics.agent_runner import classify_lightweight, run_agent_diagnosis, run_zero_order_answer
 from aiops_diagnostics.agent_runs import AgentRunStore, scope_from_json, scope_to_json
-from aiops_diagnostics.agent_workspace import AgentWorkspace
-from aiops_diagnostics.answer_language import (
-    answer_chinese_leak,
-    record_answer_language_fallback,
-)
-from aiops_diagnostics.codex_runtime import AgentContractError, AgentRuntimeError
-from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
+from aiops_diagnostics.config import Settings
 from aiops_diagnostics.conversation_store import BUSY_LOCK_SECONDS
 from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayDevice, GatewayStore
+from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
 from aiops_diagnostics.health_curves import build_curves
 from aiops_diagnostics.health_metrics import enrich_report
 from aiops_diagnostics.health_report import (
@@ -35,11 +26,7 @@ from aiops_diagnostics.health_report import (
 )
 from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
-    QA_FALLBACK_MESSAGES,
-    effective_language,
 )
-from aiops_diagnostics.jev_decisions import JevDecisionClient, JevSettings
-from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchClient,
@@ -71,16 +58,11 @@ from aiops_diagnostics.ops_analysis import (
 from aiops_diagnostics.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
-from aiops_diagnostics.order_visibility import TENANT_SCOPE_SOURCE, resolve_device_tenant, tenant_matches
-from aiops_diagnostics.parsing import parse_request
-from aiops_diagnostics.platform_paths import reference_root
+from aiops_diagnostics.order_visibility import tenant_matches
 from aiops_diagnostics.query_scope import resolve_query_scope
 from aiops_diagnostics.redaction import redact_text
-from aiops_diagnostics.routing import RoutingThresholds, classify_with_jev
 from aiops_diagnostics.scope_context import SCOPE_TYPE_ALL, DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.sources import SourceError, scoped_live_sources
-
-FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "missing_tx_data.json"})
 
 _LOGGER = logging.getLogger("aiops.gateway_runtime")
 
@@ -92,92 +74,9 @@ def package_version() -> str:
     return __version__
 
 
-#: A blocked run whose order turned out to be outside the caller's tenant. It is
-#: NOT ``DIAGNOSIS_BLOCKED``: that code means the supplier did not honor
-#: ``output_schema``, and an operator must be able to tell the two apart. On the
-#: standard API face this is defense in depth rather than an expected terminal
-#: state — see ``_blocked_diagnosis_error`` for why, and both contract docs for
-#: what a frontend may therefore rely on.
-DIAGNOSIS_ORDER_OUT_OF_SCOPE = "DIAGNOSIS_ORDER_OUT_OF_SCOPE"
-
-#: The operator entry named no serviceable operations agent (#695): the runtime
-#: registry is unconfigured, has no ``(tenant, operator)`` row, names an agent
-#: nobody published, or names one whose type is not ``operations``. All four are
-#: one answer — this entry is not served — and it is deliberately NOT a fallback
-#: to the hard-coded diagnostic prompt: that prompt is what the operations slot
-#: exists to replace.
-DIAGNOSIS_AGENT_UNREGISTERED = "DIAGNOSIS_AGENT_UNREGISTERED"
-
-#: Sentinel returned by ``_diagnosis_methodology`` when it already ended the job:
-#: the terminal write and the conversation turn are settled, so the worker must
-#: return without touching either a second time.
-_REFUSED = object()
-
-#: What ``_try_customer_rag`` hands back when the claim-guard refused the job's
-#: terminal write: another path (expiry today; cancellation once #357 lands)
-#: already put the row in a terminal state, so this worker's result was NOT
-#: persisted. The caller stops right there — no metric, and the in-flight turn
-#: is dropped rather than filled — because each of those follow-ups asserts
-#: "the write landed".
-#:
-#: A value rather than an exception on purpose: losing the race is a legal
-#: outcome, not a failure, and the worker must exit quietly rather than raise.
-TERMINAL_WRITE_REFUSED = {"status": "refused"}
-
-#: The retrieval_status the zero-order turn records when the reason it is on
-#: the zero-order path is that the knowledge search FAILED. `_try_customer_rag`
-#: returns this instead of a bare `None` for that one cause, so the two ways of
-#: reaching the fall-through stay distinguishable: refusing to pick a customer
-#: agent means nothing was searched (`not_found`), while a kb-service outage
-#: means the library was never read (`unavailable`). Collapsing them would let
-#: an outage read as "no matching knowledge" — the exact claim
-#: `promo_empty_result` refuses to make for the other card sites.
-KB_RETRIEVAL_UNAVAILABLE = "unavailable"
-
-#: Default for a zero-order turn that reached the fall-through for any reason
-#: other than an outage: no customer agent was selected, so no search ran.
-ZERO_ORDER_RETRIEVAL_STATUS = "not_found"
-
-
-class _KbOutageFallback:
-    """Marker returned by `_try_customer_rag` when the search itself failed.
-
-    An object rather than a string or a dict: every other return from that
-    method is a result payload or `None`, and the caller's next check is
-    `isinstance(rag_result, dict)`. A distinguishable sentinel is what keeps
-    "we could not search" from being read as "we searched and found nothing".
-    """
-
-
-#: The one instance. Identity comparison is the contract.
-KB_OUTAGE = _KbOutageFallback()
-
-
 @dataclass
 class JobRegistration:
-    """What a stop request needs in order to interrupt one running job.
-
-    Covers both interruptible lines — an assistant question (#357) and an
-    order diagnosis (#499). The diagnosis line used to have no registration at
-    all, which is why its stop button could only free the conversation slot and
-    never reach the model call; the fields were already line-agnostic, so the
-    fix is the plumbing, not a second class.
-
-    A ``Future`` is deliberately NOT what this holds: ``Future.cancel()``
-    cannot stop a thread that is already running the model turn, which is
-    exactly the case a stop request arrives in. What does stop it is the turn's
-    own ``interrupt()`` RPC (the one the turn timeout already uses), filled in
-    by the worker the moment its turn starts.
-
-    ``conversation_turn`` is the generation slot this job owns. Cancelling is
-    the one path that must free it without waiting for the worker to notice,
-    so the stop request carries the slot's identity with it.
-
-    ``route_type`` is the route this job was submitted with (a promotional
-    shortcut run, a plain question, or an order diagnosis), which is what the
-    stop records: the worker uses the same value for its own metric rows, so a
-    stopped promotional click is not counted as a stopped customer question.
-    """
+    """保存当前 Dify/节点任务的取消回调与会话轮次。"""
 
     conversation_turn: tuple[str, str, int] | None = None
     interrupt: Callable[[], None] | None = None
@@ -191,21 +90,6 @@ class JobRegistration:
     #: spinning up its workspace, which is the ordinary case.
     cancelled: bool = False
 
-    def register_interrupt(self, handle: Any) -> None:
-        """Adopt the live turn handle's interrupt as this job's interrupt.
-
-        A new turn replaces the previous one (the RAG path runs several), so the
-        registration always points at the turn that is running NOW.
-
-        If the job was already stopped, interrupt the handle immediately rather
-        than adopting it: the stop request has already returned and nobody will
-        come back to look at ``self.interrupt``.
-        """
-        if self.cancelled:
-            handle.interrupt()
-            return
-        self.interrupt = handle.interrupt
-
 
 def _as_datetime(value):
     from datetime import UTC, datetime
@@ -217,7 +101,7 @@ def _as_datetime(value):
 
 
 class GatewayRuntime:
-    """Server-side owner of database credentials, Codex sessions, and run execution."""
+    """现役业务任务、凭据与异步交付的服务端装配。"""
 
     def __init__(
         self,
@@ -231,15 +115,10 @@ class GatewayRuntime:
         agent_run_store: Any = None,
         dify_workspaces: Any = None,
         knowledge_dataset_sync_guard: Any = None,
-        jev_client: JevDecisionClient | None = None,
-        routing_thresholds: RoutingThresholds | None = None,
     ) -> None:
         self.store = store
         self.gateway_settings = gateway_settings
         self.diagnostic_settings = diagnostic_settings
-        self.diagnostic_settings.agent.run_root = str(gateway_settings.data_home / "runs")
-        allowed = gateway_settings.allowed_key_slots or (diagnostic_settings.agent.key_slot,)
-        self.allowed_key_slots = frozenset(allowed)
         # Customer QA RAG path (T3/#170): bounded kb-service search + signed
         # media. Both stay None unless configured, in which case the QA branch
         # keeps the plain zero-order answer (no knowledge, no media).
@@ -263,8 +142,6 @@ class GatewayRuntime:
         # Routing decisions from typed answers (#392). Absent configuration
         # leaves this None, and every question simply routes as it did before —
         # the dependency is optional by design, not by accident.
-        self.jev_client = jev_client
-        self.routing_thresholds = routing_thresholds or RoutingThresholds()
         # Lazy media proxy (T3/#170 follow-up): built on first /v1/media hit;
         # without the kb-service + media-signing configuration it stays None
         # and the route answers a uniform 404.
@@ -318,7 +195,6 @@ class GatewayRuntime:
         # diagnosis_id. Kept separate rather than merged into one dict because
         # the two id spaces are distinct (`qa_...` vs `dx_...`) and a shared
         # dict would only make a lookup bug harder to see.
-        self._diagnosis_registrations: dict[str, JobRegistration] = {}
 
     @classmethod
     def from_settings(
@@ -346,18 +222,6 @@ class GatewayRuntime:
                 gateway_settings.media_signing_secret,
                 ttl_seconds=gateway_settings.media_ttl_seconds,
             )
-        # Routing from typed answers (#392): built only when configured, so an
-        # unconfigured deployment keeps the previous behaviour exactly.
-        jev_client = None
-        if gateway_settings.jev_base_url and gateway_settings.jev_api_key:
-            jev_client = JevDecisionClient(
-                JevSettings(
-                    base_url=gateway_settings.jev_base_url,
-                    api_key=gateway_settings.jev_api_key,
-                    model=gateway_settings.jev_model,
-                    timeout=gateway_settings.jev_timeout_seconds,
-                )
-            )
         return cls(
             store,
             gateway_settings,
@@ -372,75 +236,7 @@ class GatewayRuntime:
             knowledge_dataset_sync_guard=(
                 KnowledgeDatasetSyncGuard() if gateway_settings.dify_external_knowledge_api_id else None
             ),
-            jev_client=jev_client,
-            routing_thresholds=RoutingThresholds(
-                risk_at_least=gateway_settings.routing_risk_at_least,
-                confidence_at_least=gateway_settings.routing_confidence_at_least,
-                risk_always_asks=gateway_settings.routing_risk_always_asks,
-            ),
         )
-
-    def start_run(
-        self,
-        device: GatewayDevice,
-        *,
-        problem: str,
-        order_no: str | None,
-        tenant_id: str | None,
-        key_slot: str | None,
-        provider: str | None,
-        fixture_name: str | None,
-    ) -> dict[str, Any]:
-        # The entry rule is the shared definition (#331): it refuses a request
-        # that names a tenant outside the enrolled device scope and returns the
-        # effective tenant already normalized, so the allowed set below and the
-        # run's own tenant (stripped by parse_request) cannot disagree.
-        effective_tenant = resolve_device_tenant(device.tenant_id, tenant_id)
-        allowed_tenants = {effective_tenant} if effective_tenant else None
-        selected_provider = self.diagnostic_settings.agent.select_provider(provider)
-        selected_key_slot = validate_key_slot_name(key_slot or selected_provider.resolved_key_slot())
-        if selected_key_slot not in self.allowed_key_slots:
-            raise ValueError("requested key slot is not allowed by the gateway")
-        request = parse_request(problem, order_no=order_no, tenant_id=effective_tenant)
-        fixture = self._fixture_path(fixture_name)
-        manifest = IncidentManifest.from_request(request)
-        workspace = AgentWorkspace.create(
-            reference_root(),
-            Path(self.diagnostic_settings.agent.run_root),
-            manifest,
-            fixture_path=fixture,
-            provider_base_url=canonical_provider_base_url(selected_provider.base_url),
-            provider=selected_provider.name,
-            key_slot=selected_key_slot,
-            language=DEFAULT_LANGUAGE,
-        )
-        run = self.store.create_run(
-            run_id=workspace.run_id,
-            workspace_id=device.workspace_id,
-            incident_id=manifest.incident_id,
-            problem=redact_text(request.problem, preserve=(request.order_no,)),
-            order_no=request.order_no,
-            tenant_id=request.tenant_id,
-            key_slot=selected_key_slot,
-            provider=selected_provider.name,
-            fixture_name=fixture_name,
-            created_by_device=device.device_id,
-        )
-        self.store.append_event(
-            workspace.run_id,
-            {"type": "gateway_run_queued", "run_id": workspace.run_id},
-        )
-        future = self._executor.submit(
-            self._execute_run,
-            workspace,
-            request,
-            fixture,
-            allowed_tenants,
-            selected_provider.name,
-        )
-        self._futures[workspace.run_id] = future
-        future.add_done_callback(lambda _: self._futures.pop(workspace.run_id, None))
-        return run
 
     def shutdown(self) -> None:
         self.consumer_photos.close()
@@ -805,7 +601,6 @@ class GatewayRuntime:
         else:
             facts = build_fault_code_contract(aggregate, None, **window)
         settings = Settings.from_config(self.gateway_settings.server_config_file)
-        settings.agent.run_root = self.diagnostic_settings.agent.run_root
         selected = self.diagnostic_settings.agent.select_provider(None)
         return run_narrative_turn(
             facts,
@@ -813,7 +608,6 @@ class GatewayRuntime:
             provider=selected,
             key_slot=selected.resolved_key_slot(),
             language=str(window["language"]),
-            project_root=reference_root(),
         )
 
     def _execute_operations_analysis(
@@ -940,7 +734,6 @@ class GatewayRuntime:
 
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         settings = Settings.from_config(self.gateway_settings.server_config_file)
-        settings.agent.run_root = self.diagnostic_settings.agent.run_root
         facts = build_failure_rate_contract(
             aggregate,
             None,
@@ -955,7 +748,6 @@ class GatewayRuntime:
             provider=selected_provider,
             key_slot=selected_provider.resolved_key_slot(),
             language=language,
-            project_root=reference_root(),
         )
         return build_failure_rate_contract(
             aggregate,
@@ -969,162 +761,7 @@ class GatewayRuntime:
     def get_health_report(self, context: ScopeContext, job_id: str) -> dict[str, Any] | None:
         return self.store.get_health_job(job_id, context.scope_fingerprint)
 
-    def start_standard_diagnosis(
-        self,
-        context: ScopeContext,
-        order_no: str,
-        question: str,
-        indicator_code: str | None,
-        language: str = DEFAULT_LANGUAGE,
-        *,
-        conversation_turn: tuple[str, str, int] | None = None,
-        business_entry: str | None = None,
-    ) -> dict[str, Any]:
-        """Start an order diagnosis job.
-
-        ``language`` is normalised to one this pipeline can actually answer in:
-        a tag that cannot be PROMPTED (Thai, Khmer — no word boundaries, so the
-        matchers and rule layer cannot back a claim to answer in it) falls back
-        to the default here, at the point the job is created. Doing it here
-        rather than at render time matters: this value is what gets STORED, and
-        the stored language is what the response reports for the result's prose
-        (#549). Storing `th` while generating Chinese would make the row — and
-        every later poll of it — describe text it does not contain.
-
-        With ``conversation_turn`` (T4/#172) the finished diagnosis is written
-        back into the conversation's turn row and the generation slot is held
-        until the job reaches a terminal state — the same shape the qa line
-        (``start_assistant_qa``) already has. Without it nothing about the
-        conversation changes.
-
-        ``business_entry`` (#695) is which content domain the caller is in —
-        the same header the assistant line already threads through for the QA
-        branch. It is consumed in the worker, not here: the workspace and the
-        job row are created before the registry is read, so an operator run
-        whose ``(tenant, operator)`` row is missing still gets a row that
-        reports *why* it is not being served, rather than a 202 that never
-        terminates. ``None`` keeps the pre-#695 behavior byte-for-byte.
-        """
-        language = effective_language(language)
-        selected_provider = self.diagnostic_settings.agent.select_provider(None)
-        selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
-        if selected_key_slot not in self.allowed_key_slots:
-            raise ValueError("default key slot is not allowed by the gateway")
-        problem = f"指标 {indicator_code}：{question}" if indicator_code else question
-        request = parse_request(
-            problem,
-            order_no=order_no,
-            tenant_id=context.effective_tenant_id,
-        )
-        manifest = IncidentManifest.from_request(request)
-        workspace = AgentWorkspace.create(
-            reference_root(),
-            Path(self.diagnostic_settings.agent.run_root),
-            manifest,
-            provider_base_url=canonical_provider_base_url(selected_provider.base_url),
-            provider=selected_provider.name,
-            key_slot=selected_key_slot,
-            language=language,
-        )
-        diagnosis = self.store.create_standard_diagnosis(
-            context.scope_fingerprint,
-            order_no,
-            question,
-            indicator_code,
-            language=language,
-            internal_run_id=workspace.run_id,
-            tenant_id=context.effective_tenant_id,
-        )
-        # #499: registered before the worker exists, exactly like the qa line —
-        # a stop arriving a millisecond after this return must already find the
-        # job interruptible and must know which conversation slot to free.
-        registration = JobRegistration(conversation_turn=conversation_turn, route_type="diagnosis")
-        self._diagnosis_registrations[diagnosis["diagnosis_id"]] = registration
-        future = self._executor.submit(
-            self._execute_standard_diagnosis,
-            diagnosis["diagnosis_id"],
-            workspace,
-            request,
-            context,
-            selected_provider.name,
-            selected_key_slot,
-            language,
-            conversation_turn,
-            registration.register_interrupt,
-            business_entry,
-        )
-        self._futures[diagnosis["diagnosis_id"]] = future
-        future.add_done_callback(lambda _: self._futures.pop(diagnosis["diagnosis_id"], None))
-        future.add_done_callback(lambda _: self._diagnosis_registrations.pop(diagnosis["diagnosis_id"], None))
-        return diagnosis
-
-    def cancel_standard_diagnosis(
-        self,
-        context: ScopeContext,
-        diagnosis_id: str,
-    ) -> dict[str, Any] | None:
-        """Stop one in-flight order diagnosis (#499).
-
-        The same shape as ``cancel_assistant_qa``, for the same reasons — see
-        that method for why the terminal row is written before the interrupt,
-        and why a repeated stop answers the job's own current state instead of
-        an error. What differs is only the job being stopped.
-
-        Idempotent and non-probing: an already-terminal diagnosis is returned
-        as it stands, and one outside this caller's scope is indistinguishable
-        from a missing one (``None`` ⇒ 404 at the API layer).
-        """
-        diagnosis = self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
-        if diagnosis is None:
-            return None
-        if diagnosis["status"] in ACTIVE_DIAGNOSIS_STATUSES:
-            accepted = self.store.update_standard_diagnosis(diagnosis_id, status="cancelled")
-            registration = self._diagnosis_registrations.pop(diagnosis_id, None)
-            if registration is not None:
-                # Same as the qa line: mark before acting, because a worker that
-                # has not reached its turn yet still holds this object.
-                registration.cancelled = True
-                # **The interrupt is unconditional; freeing the slot is
-                # conditional on having won the terminal write** (#499 review).
-                # A cancel that lost the race (the worker completed between our
-                # read and our write) must NOT free the slot: by then the worker
-                # has filled this very turn with its answer, and releasing a
-                # filled turn DELETES it — the next follow-up would silently
-                # lose its context. The interrupt is still right to attempt: the
-                # turn is over, so the call is a no-op, never a wrong outcome.
-                #
-                # The qa line has the same shape and once had this same bug; see
-                # the matching comment in cancel_assistant_qa.
-                self._interrupt_registered_turn(registration)
-                if accepted:
-                    self._release_conversation_turn(registration.conversation_turn)
-            if accepted:
-                self._record_cancelled_job_metric(context, registration)
-            return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
-        # Already terminal: the caller sees the job's own final state, not a
-        # cancellation that lost a race.
-        return diagnosis
-
-    def get_standard_diagnosis(
-        self,
-        context: ScopeContext,
-        diagnosis_id: str,
-    ) -> dict[str, Any] | None:
-        return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
-
-    def list_standard_diagnoses(
-        self,
-        context: ScopeContext,
-        *,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
-
-    # ── 试运行（#772 F / #781）──────────────────────────────────────────────
-    #
-    # 它**不是**第二条诊断路径：作业体调用 ``dify_trial.run_trial``，后者走
-    # ``run_agent_diagnosis``（CLI 那一个入口），只把 methodology 与 allowed_tools
-    # 换成草稿值。这里负责的是**作业**那一层：并发闸、审计行、结果落库。
+    # 试用按应用绑定执行 Dify/Java 草稿，复用作业终态与并发保护。
 
     def start_trial(
         self,
@@ -1251,26 +888,7 @@ class GatewayRuntime:
             return
         started_ms = time.monotonic()
         try:
-            # **不 import `dify_workflow_trial`**：它会反过来 import 本模块（取
-            # `JobRegistration`），形成包内导入环 —— README 的分层图随之失效。
-            # 判据改成"这份草稿会不会自己执行"：只有真 Dify 试用有 `execute`。
-            if callable(getattr(draft, "execute", None)):
-                result = draft.execute(self, trial_id, run_context, order_no, language)
-            else:
-                # 与诊断 worker 同一条规则：``Settings.from_config`` 在 try **里面**，
-                # 因为它会因配置文件缺失/非法抛 ValueError，那是受支持的失败而不是不可能的事。
-                settings = Settings.from_config(self.gateway_settings.server_config_file)
-                settings.agent.run_root = self.diagnostic_settings.agent.run_root
-                from aiops_diagnostics.dify_trial import run_trial
-
-                result = run_trial(
-                    settings,
-                    scope_context=run_context,
-                    order_no=order_no,
-                    question="",
-                    draft=draft,
-                    language=language,
-                )
+            result = draft.execute(self, trial_id, run_context, order_no, language)
         except Exception as exc:  # noqa: BLE001 - 逃出去就等于没有终态行
             from aiops_diagnostics.chat_execution import ChatRunUnavailable
             from aiops_diagnostics.consumer_intent import TRIAL_MESSAGES
@@ -1369,7 +987,7 @@ class GatewayRuntime:
 
         effective_roles = frozenset(getattr(context, "roles", ()))
         if not effective_roles.intersection(VIEW_ROLES):
-            raise AgentRuntimeError("agent access is not permitted")
+            raise RuntimeError("agent access is not permitted")
         tenant_id = getattr(context, "effective_tenant_id", "") or ""
         summary = self.metrics_store.summary(
             tenant_id,
@@ -1418,108 +1036,13 @@ class GatewayRuntime:
 
         effective_roles = frozenset(getattr(context, "roles", ()))
         if not effective_roles.intersection(VIEW_ROLES):
-            raise AgentRuntimeError("agent access is not permitted")
+            raise RuntimeError("agent access is not permitted")
         return self.metrics_store.list_runs(
             getattr(context, "effective_tenant_id", "") or "",
             agent_id=agent_id,
             route_type=route_type,
             limit=limit,
         )
-
-    def start_assistant_qa(
-        self,
-        context: ScopeContext,
-        question: str,
-        *,
-        conversation: dict[str, Any] | None = None,
-        conversation_turn_no: int | None = None,
-        language: str = DEFAULT_LANGUAGE,
-        promo_target: str | None = None,
-        promo_intent: str | None = None,
-        skip_retrieval: bool = False,
-        business_entry: str = "",
-    ) -> dict[str, Any]:
-        """Start a zero-order general-question job (T3/#153).
-
-        ``language`` is normalised to one this pipeline can prompt in, for the
-        same reason the diagnosis runtime does it: Thai and Khmer can be RENDERED
-        but not reliably ROUTED, so a claim to answer in them is one the rest of
-        the pipeline cannot back. The declaration alone would not have stopped
-        this route — the diagnosis face was its first consumer, and this is its
-        second (#541 review).
-
-        With ``conversation`` + ``conversation_turn_no`` (T4/#172) the finished
-        answer is written back into the conversation's turn row; failures drop
-        the turn so an interrupted generation never survives as a reply.
-        ``promo_target`` + ``promo_intent`` (#231) pin a published promotional
-        agent version (``agt_xxx#vN``) and the card kind (case/solution) its
-        knowledge bases serve instead of the customer-service agent.
-
-        ``skip_retrieval`` (#391) marks a question already judged as chit-chat:
-        it is answered from the staged references without a knowledge search. A
-        greeting must not trigger a library lookup just because the run happens
-        to have search capability wired.
-
-        ``business_entry`` (#584) is half the runtime registry's key, alongside
-        the caller's tenant. It is the platform the request was resolved into,
-        not a client-supplied header — the API layer passes ``decision.platform``
-        — so a caller cannot name an entry the platform rule did not grant it.
-        """
-        language = effective_language(language)
-        selected_provider = self.diagnostic_settings.agent.select_provider(None)
-        selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
-        if selected_key_slot not in self.allowed_key_slots:
-            raise ValueError("default key slot is not allowed by the gateway")
-        workspace = AgentWorkspace.create_qa(
-            reference_root(),
-            Path(self.diagnostic_settings.agent.run_root),
-            provider_base_url=canonical_provider_base_url(selected_provider.base_url),
-            provider=selected_provider.name,
-            key_slot=selected_key_slot,
-            language=language,
-        )
-        qa = self.store.create_assistant_question(
-            context.scope_fingerprint,
-            question,
-            internal_run_id=workspace.run_id,
-            tenant_id=context.effective_tenant_id,
-        )
-        # Registered before the worker exists: a stop request that arrives a
-        # millisecond after this return must already find the job interruptible
-        # (and must know which conversation slot to free).
-        registration = JobRegistration(
-            conversation_turn=(
-                conversation["conversation_id"],
-                conversation["scope_fingerprint"],
-                conversation_turn_no,
-            )
-            if conversation is not None and conversation_turn_no is not None
-            else None,
-            route_type="promo" if promo_intent else "qa",
-        )
-        self._qa_registrations[qa["qa_id"]] = registration
-        future = self._executor.submit(
-            self._execute_assistant_qa,
-            qa["qa_id"],
-            workspace,
-            question,
-            selected_provider.name,
-            selected_key_slot,
-            context.effective_tenant_id or None,
-            registration.conversation_turn,
-            language,
-            promo_target,
-            promo_intent,
-            registration.register_interrupt,
-            skip_retrieval,
-            business_entry,
-        )
-        self._futures[qa["qa_id"]] = future
-        # Once the future is done the job is terminal (or its worker is gone),
-        # so both registries forget it: nothing is left to interrupt.
-        future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
-        future.add_done_callback(lambda _: self._qa_registrations.pop(qa["qa_id"], None))
-        return qa
 
     def start_consumer_chatflow(
         self,
@@ -2093,8 +1616,8 @@ class GatewayRuntime:
     def classify_consumer(
         self, question, *, language, previous_question="", previous_order=False, selected_order=False
     ):
-        from aiops_diagnostics.codex_runtime import resolve_provider_api_key
         from aiops_diagnostics.consumer_intent import classify
+        from aiops_diagnostics.model_request import resolve_provider_api_key
 
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         provider = settings.agent.select_provider(None)
@@ -2107,58 +1630,6 @@ class GatewayRuntime:
             previous_order=previous_order,
             selected_order=selected_order,
         )
-
-    def classify_lightweight(
-        self,
-        question: str,
-        *,
-        language: str = DEFAULT_LANGUAGE,
-        tenant_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        """The routing decision, from Jev's typed answers (#392).
-
-        ``None`` means no decision was obtained, and the caller answers without
-        one — the same path it takes today when the model classifier is
-        unreachable. A routing hint is an optimisation; it must never be the
-        reason a user gets nothing.
-
-        The model-based classifier remains as ``classify_lightweight_model`` and
-        is what runs when Jev is not configured, so the cutover is a change of
-        source rather than a removal of the capability.
-        """
-        if self.jev_client is not None:
-            return classify_with_jev(
-                question,
-                self.jev_client,
-                thresholds=self.routing_thresholds,
-                metrics=self.metrics_store,
-                tenant_id=tenant_id,
-            )
-        # No Jev configured: the decision still has to be made, so the previous
-        # source keeps making it. Falling through to "no decision" would have
-        # silently disabled casual handling, the promotional intents and the
-        # high-risk clarification rule on every deployment that has not been
-        # given Jev credentials — a regression dressed as a default.
-        return self.classify_lightweight_model(question, language=language)
-
-    def classify_lightweight_model(
-        self,
-        question: str,
-        *,
-        language: str = DEFAULT_LANGUAGE,
-    ) -> dict[str, Any]:
-        """The previous classifier: a model generating JSON.
-
-        Kept deliberately (expand/contract): the cutover adds the new source
-        beside the old one so neither has to be right on the first day. Delete
-        once Jev has run on real traffic for an agreed window.
-        """
-        language = effective_language(language)
-
-        settings = Settings.from_config(self.gateway_settings.server_config_file)
-        settings.agent.run_root = self.diagnostic_settings.agent.run_root
-        provider = settings.agent.select_provider(None)
-        return classify_lightweight(question, settings, provider=provider.name, language=language)
 
     def get_assistant_qa(
         self,
@@ -2317,86 +1788,6 @@ class GatewayRuntime:
         with contextlib.suppress(ConversationError):
             self.conversation_store.release_turn(conversation_id, scope_fingerprint, turn_no)
 
-    def _conversation_history(
-        self,
-        conversation_turn: tuple[str, str, int] | None,
-        language: str,
-    ) -> str:
-        """The conversation's completed turns, as prompt text (#482).
-
-        Failures are not failures of the question: a window that cannot be read
-        yields no history, with one warning carrying the error code so the
-        split between "no history" and "history unavailable" is visible in
-        logs. Blanking the block on any exception is the same discipline the
-        Jev fallback uses — the dependency may be down without the surface
-        going down with it.
-
-        The turn being generated is answer-less, so ``context_turns()`` filters
-        it out on its own: no caller has to remember to exclude it.
-        """
-        if conversation_turn is None:
-            return ""
-        from aiops_diagnostics.conversation_context import build_history
-
-        conversation_id, scope_fingerprint, _ = conversation_turn
-        try:
-            return build_history(
-                self.conversation_store,
-                conversation_id,
-                scope_fingerprint,
-                language,
-                max_turns=self.gateway_settings.context_max_turns,
-                max_tokens=self.gateway_settings.context_max_tokens,
-            )
-        except Exception as exc:  # the question must survive a bad window
-            _LOGGER.warning("conversation history unavailable: %s: %s", type(exc).__name__, exc)
-            return ""
-
-    def _turn_claim_renewer(
-        self, diagnosis_id: str, conversation_turn: tuple[str, str, int] | None
-    ) -> threading.Event:
-        """A stop signal for this diagnosis's claim renewal, and the thread using it.
-
-        A turn claim is deliberately short-lived: ``BUSY_LOCK_SECONDS`` without
-        a sign of life means the worker died, and the conversation must not stay
-        wedged. A diagnosis outlives that window, so it has to say it is still
-        here -- otherwise its own conversation stops being busy mid-generation
-        and a second turn starts over the one still running.
-
-        The renewer yields on two conditions, and both matter:
-
-        * the turn is no longer this job's (``renew_turn_claim`` says so) --
-          job completed, job stopped, claim already lapsed;
-        * **the job row is finished** (``expired``/``cancelled``/terminal) --
-          even while this worker is still catching up. Renewing past that point
-          would keep holding a conversation for a job the user already polls as
-          over, which is the gate outliving the thing it gates.
-
-        It is a stop signal rather than a bare thread so that a worker which is
-        done stops renewing *now*: waiting out the sleep interval means a
-        finished diagnosis holds the slot for one renewal period longer than it
-        lives, and under sustained traffic those sleeping threads pile up.
-        """
-        stop = threading.Event()
-        if conversation_turn is None:
-            return stop
-        conversation_id, scope_fingerprint, turn_no = conversation_turn
-
-        def renew() -> None:
-            from aiops_diagnostics.conversation_store import ConversationError
-
-            while not stop.wait(RENEW_TURN_CLAIM_SECONDS):
-                with contextlib.suppress(ConversationError):
-                    if self.store.diagnosis_is_finished(diagnosis_id):
-                        return
-                    if not self.conversation_store.renew_turn_claim(
-                        conversation_id, scope_fingerprint, turn_no
-                    ):
-                        return
-
-        threading.Thread(target=renew, name=f"turn-claim-{turn_no}", daemon=True).start()
-        return stop
-
     def _complete_conversation_turn(
         self,
         conversation_turn: tuple[str, str, int] | None,
@@ -2449,28 +1840,6 @@ class GatewayRuntime:
                 cancelled=cancelled or answer is None,
                 status_qa_id=status_qa_id,
             )
-
-    def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
-        """Return redacted evidence metadata for a run (no business payloads)."""
-        run_root = Path(self.diagnostic_settings.agent.run_root).expanduser().resolve()
-        try:
-            workspace = AgentWorkspace.open(run_root, run_id)
-            manifest = workspace.load_manifest()
-        except (FileNotFoundError, ValueError, OSError):
-            return []
-        journal = EvidenceJournal(workspace, manifest)
-        return [
-            {
-                "evidence_id": entry.evidence_id,
-                "tool": entry.tool,
-                "source": entry.source,
-                "status": entry.status,
-                "request": entry.request,
-                "row_count": entry.row_count,
-                "error": entry.error,
-            }
-            for entry in journal.entries()
-        ]
 
     def _finish_health_job(self, job_id: str, **fields: Any) -> bool:
         """Write a health job's terminal state, and say whether it landed.
@@ -2600,573 +1969,6 @@ class GatewayRuntime:
                 ),
             )
 
-    def _execute_standard_diagnosis(
-        self,
-        diagnosis_id: str,
-        workspace: AgentWorkspace,
-        request,
-        context: ScopeContext,
-        provider: str,
-        key_slot: str,
-        language: str = DEFAULT_LANGUAGE,
-        conversation_turn: tuple[str, str, int] | None = None,
-        turn_registrar: Callable[[Any], None] | None = None,
-        business_entry: str | None = None,
-    ) -> None:
-        if not self.store.update_standard_diagnosis(diagnosis_id, status="running"):
-            # Refused claim: the row was already terminalised by another path,
-            # or it expired while queued. Nothing was generated, so the turn
-            # must not survive -- an answer-less row would hold the
-            # conversation's slot until the claim lapsed and then sit in the
-            # history with no answer.
-            # No renewer exists yet: the job never started.
-            self._complete_conversation_turn(conversation_turn, request.problem, None, cancelled=True)
-            return
-        started_ms = time.monotonic()
-        # The conversation claim is the frontend's concurrency gate while this
-        # runs, but a claim only counts as live for BUSY_LOCK_SECONDS (120s) and
-        # a diagnosis outlives that. The renewer stops at the terminal writes
-        # below, on a stop, on expiry, or when the claim stops being ours.
-        claim_stop = self._turn_claim_renewer(diagnosis_id, conversation_turn)
-        history = self._conversation_history(conversation_turn, language)
-        try:
-            # INSIDE the try, not before it (#730 review). `Settings.from_config`
-            # raises `ValueError` when the configured file is missing or invalid and
-            # that is a SUPPORTED failure, not an impossible one: a config file
-            # removed after startup reached this line and, because the catchable
-            # block started one statement later, the job stayed `running` until its
-            # deadline while the conversation claim held the slot. The rule is the
-            # whole reason this `try` exists — everything after the `running` claim
-            # must be inside it.
-            settings = Settings.from_config(self.gateway_settings.server_config_file)
-            settings.agent.run_root = self.diagnostic_settings.agent.run_root
-            query_scope = resolve_query_scope(context)
-            methodology = self._diagnosis_methodology(
-                context.effective_tenant_id,
-                business_entry,
-                diagnosis_id,
-                conversation_turn,
-                claim_stop,
-                started_ms,
-            )
-            if methodology is _REFUSED:
-                return
-            methodology, allowed_tools = methodology
-            # One range object: the tenant is carried once, as the frozen
-            # ``QueryScope`` the SQL push-down and the tool layer both read. It
-            # used to also arrive as ``allowed_tenants={context.effective_tenant_id}``
-            # — the same tenant a second time, as a Python post-filter over rows
-            # the push-down had already returned.
-            result = run_agent_diagnosis(
-                workspace,
-                request,
-                settings,
-                None,
-                provider=provider,
-                key_slot=key_slot,
-                scope=query_scope,
-                language=language,
-                history=history,
-                turn_registrar=turn_registrar,
-                methodology=methodology,
-                allowed_tools=allowed_tools,
-            )
-        # `except Exception`: see `_execute_operations_card` for the full reason
-        # (#700 → #721 → #725). `resolve_query_scope` runs inside this `try` and
-        # raises `ScopeError` — a `RuntimeError` that was in none of the
-        # enumerated lists, so an oversized data scope or a missing Dis
-        # directory left the diagnosis on `running` until its deadline.
-        # `error_message` is the redacted record; the response carries the coded
-        # copy (`diagnosis_error_message`), so nothing new reaches the wire.
-        except Exception as exc:  # noqa: BLE001 - see above: escaping here means no terminal row
-            ok = self.store.update_standard_diagnosis(
-                diagnosis_id,
-                status="failed",
-                error_code="DIAGNOSIS_FAILED",
-                error_message=_internal_error_message(exc, request.order_no),
-            )
-            # Only a write that landed has a terminal row to match: when the
-            # row was expired or cancelled underneath us, the turn is dropped
-            # by the cancellation path (or by the refused-claim path), and it
-            # must not claim an answer this job never produced.
-            self._complete_conversation_turn(
-                conversation_turn,
-                request.problem,
-                None,
-                cancelled=True,
-                guarded=not ok,
-                stop_renewer=claim_stop,
-            )
-            # **Only a failure that landed is counted** (#499 review). When a
-            # cancel won the race, the interrupt makes this worker raise — and
-            # counting that as ``failed`` would record the same job twice, once
-            # as cancelled and once as failed, inflating the failure rate with
-            # jobs the user deliberately stopped. Mirrors the qa line's early
-            # return on a refused terminal write.
-            if not ok:
-                return
-            self._record_metric(
-                tenant_id=context.effective_tenant_id,
-                route_type="diagnosis",
-                outcome="failed",
-                error_code="DIAGNOSIS_FAILED",
-                duration_ms=int((time.monotonic() - started_ms) * 1000),
-            )
-            return
-        # A blocked run means the model could not produce the structured
-        # diagnostic output (e.g. the provider does not honor strict
-        # output_schema), or the run was blocked for a hard reason — that is a
-        # failure of the diagnosis task, not "insufficient evidence". Surface
-        # it as failed with an explicit error code so the frontend can
-        # distinguish provider/task failure from a genuine inconclusive result.
-        if result.status.value == "blocked":
-            error_code, error_message = _blocked_diagnosis_error(workspace)
-            ok = self.store.update_standard_diagnosis(
-                diagnosis_id,
-                status="failed",
-                error_code=error_code,
-                error_message=error_message,
-            )
-            self._complete_conversation_turn(
-                conversation_turn,
-                request.problem,
-                None,
-                cancelled=True,
-                guarded=not ok,
-                stop_renewer=claim_stop,
-            )
-            self._record_metric(
-                tenant_id=context.effective_tenant_id,
-                route_type="diagnosis",
-                outcome="failed",
-                error_code=error_code,
-                duration_ms=int((time.monotonic() - started_ms) * 1000),
-            )
-            return
-        public_status = "completed" if result.status.value == "diagnosed" else "inconclusive"
-        stored = self.store.update_standard_diagnosis(
-            diagnosis_id,
-            status=public_status,
-            result=result.model_dump(mode="json"),
-        )
-        dumped = result.model_dump(mode="json")
-        # AgentDiagnosis carries summary/root_cause/hypotheses, not blocks[] —
-        # estimate tokens from the narrative fields it actually has.
-        diagnosis_tokens = (
-            sum(len(str(dumped.get(field) or "")) for field in ("summary", "root_cause")) * 2 // 3 + 1
-        )
-        # A refused write means the row already ended (expired, or cancelled
-        # through the stop path): the job's answer is real, but it is not the
-        # answer the conversation's turn is waiting for. Either the stop path
-        # already dropped the row -- in which case this write only finds an
-        # absent turn and does nothing -- or it is about to, and ``guarded``
-        # makes that outcome depend on which write gets there first, never on
-        # whether the answer gets stored. What must NOT happen is the
-        # reverse: an ``expired`` job whose summary is readable in the history.
-        self._complete_conversation_turn(
-            conversation_turn,
-            request.problem,
-            {"summary": dumped.get("summary"), "root_cause": dumped.get("root_cause")},
-            guarded=not stored,
-            stop_renewer=claim_stop,
-        )
-        if not stored:
-            # The row was already terminal, so this run produced nothing anyone
-            # will read. Recording a success here is what makes the metric and
-            # the row disagree — the metric says a diagnosis completed, the row
-            # says `expired`, and the caller polls the row.
-            return
-        self._record_metric(
-            tenant_id=context.effective_tenant_id,
-            route_type="diagnosis",
-            outcome="completed" if public_status == "completed" else "failed",
-            error_code=None if public_status == "completed" else "DIAGNOSIS_INCONCLUSIVE",
-            duration_ms=int((time.monotonic() - started_ms) * 1000),
-            token_count=diagnosis_tokens,
-        )
-
-    def _execute_assistant_qa(
-        self,
-        qa_id: str,
-        workspace: AgentWorkspace,
-        question: str,
-        provider: str,
-        key_slot: str,
-        tenant_id: str | None = None,
-        conversation_turn: tuple[str, str, int] | None = None,
-        language: str = DEFAULT_LANGUAGE,
-        promo_target: str | None = None,
-        promo_intent: str | None = None,
-        turn_registrar: Callable[[Any], None] | None = None,
-        skip_retrieval: bool = False,
-        business_entry: str = "",
-    ) -> None:
-        def _finish_turn(answer: dict[str, Any] | None, *, cancelled: bool = False) -> None:
-            self._complete_conversation_turn(conversation_turn, question, answer, cancelled=cancelled)
-
-        if not self.store.update_assistant_question(qa_id, status="running"):
-            _finish_turn(None, cancelled=True)
-            return
-        started_ms = time.monotonic()
-        history = self._conversation_history(conversation_turn, language)
-        # #232 route metric: promotional card runs get their own bucket.
-        route_tag = "promo" if promo_intent else "qa"
-        try:
-            settings = Settings.from_config(self.gateway_settings.server_config_file)
-            settings.agent.run_root = self.diagnostic_settings.agent.run_root
-            rag_result = None
-            # Why this turn is on the zero-order path, when the reason is not
-            # "no search was attempted". Only `KB_OUTAGE` sets it (below) —
-            # every other route into `run_zero_order_answer` genuinely did not
-            # search, and `not_found` is then the honest status.
-            retrieval_status = ZERO_ORDER_RETRIEVAL_STATUS
-            if promo_intent and (not tenant_id or self.kb_search_client is None or self.media_signer is None):
-                from aiops_diagnostics.promo_agents import promo_empty_result
-
-                # No search capability is wired here, so nothing was searched. Same
-                # rule as the other card sites: do not claim the library is empty.
-                rag_result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-                if not self.store.update_assistant_question(qa_id, status="completed", result=rag_result):
-                    _finish_turn(None, cancelled=True)
-                    return
-            elif (
-                not skip_retrieval
-                and tenant_id
-                and self.kb_search_client is not None
-                and self.media_signer is not None
-            ):
-                rag_result = self._try_customer_rag(
-                    qa_id,
-                    question,
-                    tenant_id,
-                    settings,
-                    provider,
-                    key_slot,
-                    language,
-                    promo_target=promo_target,
-                    promo_intent=promo_intent,
-                    turn_registrar=turn_registrar,
-                    history=history,
-                    business_entry=business_entry,
-                )
-            if rag_result is not None:
-                if rag_result is TERMINAL_WRITE_REFUSED:
-                    _finish_turn(None, cancelled=True)
-                    return
-                if rag_result is KB_OUTAGE:
-                    # The search failed, so this turn falls through to the
-                    # zero-order answer — which is still an answer. Keep the
-                    # cause so the completed row does not report an outage as
-                    # "no matching knowledge". No `return`: the fall-through
-                    # below is the whole point of this branch.
-                    retrieval_status = KB_RETRIEVAL_UNAVAILABLE
-                else:
-                    if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
-                        self._record_metric(
-                            tenant_id=tenant_id,
-                            route_type=route_tag,
-                            outcome="failed",
-                            error_code="QA_FAILED",
-                            duration_ms=int((time.monotonic() - started_ms) * 1000),
-                        )
-                        _finish_turn(None, cancelled=True)
-                    else:
-                        self._record_qa_metric(
-                            rag_result, tenant_id, started_ms, conversation_turn, route_type=route_tag
-                        )
-                        # The metrics-only tag must not persist into the conversation
-                        # turn (it would surface through GET /v1/conversations/{id}).
-                        _finish_turn(
-                            {key: value for key, value in rag_result.items() if key != "agent_version"}
-                        )
-                    return
-            answer = run_zero_order_answer(
-                question,
-                settings,
-                provider=provider,
-                key_slot=key_slot,
-                language=language,
-                turn_registrar=turn_registrar,
-                history=history,
-            )
-        # `except Exception`: same shape as the two workers above (#725). This one
-        # never calls `resolve_query_scope`, but `KeyError`/`TypeError`/anything
-        # else unlisted escaped just as silently — and a QA job stuck on
-        # `running` is indistinguishable from one still being answered.
-        except Exception as exc:  # noqa: BLE001 - see above: escaping here means no terminal row
-            if not self.store.update_assistant_question(
-                qa_id,
-                status="failed",
-                error_code="QA_FAILED",
-                error_message=_internal_error_message(exc, ""),
-            ):
-                _finish_turn(None, cancelled=True)
-                return
-            if tenant_id:
-                self._record_metric(
-                    tenant_id=tenant_id,
-                    route_type=route_tag,
-                    outcome="failed",
-                    error_code="QA_FAILED",
-                    duration_ms=int((time.monotonic() - started_ms) * 1000),
-                )
-            _finish_turn(None, cancelled=True)
-            return
-        answer = as_blocks_result(
-            _guard_zero_order_language(answer, language), retrieval_status=retrieval_status
-        )
-        if not self.store.update_assistant_question(
-            qa_id,
-            status="completed",
-            result=answer,
-        ):
-            _finish_turn(None, cancelled=True)
-            return
-        if tenant_id:
-            self._record_metric(
-                tenant_id=tenant_id,
-                route_type=route_tag,
-                outcome="completed",
-                # The metric must report the status the result carries: the
-                # dashboard's question is "was retrieval broken", and a
-                # zero-order answer that exists because the search FAILED is
-                # exactly that. Omitting it (the pre-#708 behavior for every
-                # zero-order turn) counted an outage as the empty value, which
-                # reads as "not recorded" rather than "the library was down".
-                retrieval_status=retrieval_status,
-                duration_ms=int((time.monotonic() - started_ms) * 1000),
-                token_count=_estimate_turn_tokens(question, answer),
-            )
-        _finish_turn(answer)
-
-    def _record_qa_metric(
-        self,
-        result: dict[str, Any] | None,
-        tenant_id: str | None,
-        started_ms: float,
-        conversation_turn: tuple[str, str, int] | None,
-        *,
-        route_type: str = "qa",
-    ) -> None:
-        """Record a completed RAG QA run from its result payload.
-
-        Only redacted aggregates are read from the result: retrieval status,
-        block-kind counts, and the runtime-tagged agent_version. The agent
-        id/version/conversation come from the run's own identifiers, never
-        from model text.
-        """
-        if not tenant_id:
-            return
-        blocks = (result or {}).get("blocks") or []
-        media_count = sum(1 for block in blocks if block.get("kind") in ("image", "video"))
-        conversation_id = conversation_turn[0] if conversation_turn is not None else None
-        agent_version_key = str((result or {}).get("agent_version") or "") or None
-        agent_id = agent_version_key.split("#", 1)[0] if agent_version_key else None
-        searches = (result or {}).get("searches") or 0
-        self._record_metric(
-            tenant_id=tenant_id,
-            route_type=route_type,
-            outcome="completed",
-            agent_id=agent_id,
-            agent_version_key=agent_version_key,
-            conversation_id=conversation_id,
-            retrieval_status=str((result or {}).get("retrieval_status") or ""),
-            searches=int(searches),
-            media_count=media_count,
-            duration_ms=int((time.monotonic() - started_ms) * 1000),
-            token_count=_estimate_turn_tokens("", result),
-        )
-
-    def run_agent_debug(
-        self,
-        context: Any,
-        agent_id: str,
-        question: str,
-        *,
-        language: str = DEFAULT_LANGUAGE,
-    ) -> dict[str, Any]:
-        """Isolated draft preview turn (T5/#171).
-
-        Runs the draft config through the production customer-QA harness with
-        the per-tenant kb client; never creates an assistant job, a
-        conversation turn, or touches order data. Raises ``AgentRuntimeError``
-        subclass failures for the API layer to map.
-        """
-        from aiops_diagnostics.agent_debug import run_agent_debug_answer
-        from aiops_diagnostics.agent_lifecycle import AgentNotFound
-
-        assert isinstance(self.kb_search_client, KbServiceClient)
-        assert self.media_signer is not None
-        agent = self.agent_store.get(agent_id, context.effective_tenant_id)  # type: ignore[union-attr]
-        if agent.status != "draft":
-            raise ValueError("only a draft agent can be debug-run")
-        tenant_id = context.effective_tenant_id
-        settings = Settings.from_config(self.gateway_settings.server_config_file)
-        settings.agent.run_root = self.diagnostic_settings.agent.run_root
-        selected_provider = settings.agent.select_provider(None)
-        key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
-        started_ms = time.monotonic()
-        try:
-            result = run_agent_debug_answer(
-                question,
-                agent_id=agent.agent_id,
-                revision=agent.revision,
-                prompt=agent.config.prompt,
-                knowledge_base_ids=agent.config.knowledge_base_ids,
-                agent_settings=settings.agent,
-                search_client=self.kb_search_client.for_tenant(tenant_id),
-                media_signer=self.media_signer,
-                tenant_id=tenant_id,
-                provider=selected_provider,
-                key_slot=key_slot,
-                project_root=reference_root(),
-                language=language,
-                max_results=self.gateway_settings.kb_search_max_results,
-            )
-        except KnowledgeSearchUnavailable as exc:
-            self._record_metric(
-                tenant_id=tenant_id,
-                route_type="debug",
-                outcome="failed",
-                agent_id=agent.agent_id,
-                error_code="KB_UNAVAILABLE",
-                duration_ms=int((time.monotonic() - started_ms) * 1000),
-            )
-            raise AgentRuntimeError("kb-service is unavailable for the debug run") from exc
-        except AgentNotFound as exc:
-            raise AgentRuntimeError("draft agent binding is invalid") from exc
-        except AgentRuntimeError:
-            self._record_metric(
-                tenant_id=tenant_id,
-                route_type="debug",
-                outcome="failed",
-                agent_id=agent.agent_id,
-                error_code="AGENT_DEBUG_FAILED",
-                duration_ms=int((time.monotonic() - started_ms) * 1000),
-            )
-            raise
-        blocks = result.get("blocks") or []
-        self._record_metric(
-            tenant_id=tenant_id,
-            route_type="debug",
-            outcome="completed",
-            agent_id=agent.agent_id,
-            agent_version_key=str(result.get("agent_version") or ""),
-            retrieval_status=str(result.get("retrieval_status") or ""),
-            media_count=sum(1 for block in blocks if block.get("kind") in ("image", "video")),
-            duration_ms=int((time.monotonic() - started_ms) * 1000),
-            token_count=_estimate_turn_tokens("", result),
-        )
-        return result
-
-    def _diagnosis_methodology(
-        self,
-        tenant_id: str,
-        business_entry: str | None,
-        diagnosis_id: str,
-        conversation_turn: tuple[str, str, int] | None,
-        claim_stop: threading.Event | None,
-        started_ms: float,
-    ) -> Any:
-        """``(methodology, allowed_tools)`` for this diagnosis, or ``_REFUSED``.
-
-        ``allowed_tools`` is the published operations agent's own tool
-        allow-list (``None`` = the entry did not consult the registry, or the
-        snapshot predates the field — both mean "no narrowing", which is what
-        every run meant before the field existed).
-
-        Only the **operator** entry consults the registry (#695). Everything
-        else — the consumer entry, the CLI, and any caller that states no entry
-        — returns ``""``, which keeps the run's prompt byte-identical to the
-        one it had before the registry was read here at all. ``""`` rather than
-        ``None`` on purpose: the empty string is what the coordinator and
-        ``run_agent_diagnosis`` already mean by "no methodology", and returning
-        ``None`` here would make the one path that must not change the one path
-        that crashes on ``.strip()``.
-
-        For the operator entry the registry is authoritative and **fail-closed**,
-        the same direction the QA line already takes: an unregistered pair, or a
-        name the store does not publish, or a version whose type is not
-        ``operations``, all end the job with ``DIAGNOSIS_AGENT_UNREGISTERED``
-        rather than falling back to the hard-coded prompt. Falling back would
-        silently serve the operator a methodology nobody published — which is
-        precisely the coupling this ticket removes.
-
-        The one case that is **not** fail-closed is an *unadopted* deployment:
-        while the registry holds no row at all, the entry keeps the pre-#695
-        behavior — no injection — rather than refusing to serve. Refusing there
-        would migrate an environment that never opted into the registry, by
-        deployment accident instead of by decision; the QA line draws the same
-        line for the same reason (it keeps "newest published" until the first
-        row exists). The whole point of "any row makes the registry
-        authoritative" is that this gate ships inert and then closes on the
-        first declared binding.
-
-        A distinct case is deliberately **not** special-cased: when the registry
-        is adopted and configured for ``operator`` but no agent store is wired,
-        the entry fails closed like every other unserviceable pair. That is a
-        wiring defect, and reporting it as "not configured" is the useful
-        answer; treating it as "unadopted" would make a missing dependency look
-        like a deployment choice.
-
-        Returns ``_REFUSED`` when the terminal write landed and the caller must
-        stop (the conversation turn is already settled here, so the caller must
-        not settle it a second time).
-        """
-        from aiops_diagnostics.scope_context import is_operator_entry
-
-        if not is_operator_entry(business_entry):
-            return "", None
-        registered_name, registry_configured = self._registered_agent(tenant_id, "operator")
-        if not registry_configured:
-            # Unadopted: no row exists for ANY pair, so this environment has not
-            # taken up the registry at all. It keeps the pre-#695 behavior —
-            # the hard-coded prompt, no injection — for the same reason the QA
-            # line keeps its pre-registry rule there: an environment that never
-            # opted in must not be migrated by deployment accident. Once any
-            # row exists the registry is authoritative for everyone, which is
-            # what makes the fail-closed half below safe to ship inert.
-            return "", None
-        selection = None
-        if registered_name is not None and self.agent_store is not None:
-            from aiops_diagnostics.ops_agents import select_operations_agent
-
-            with contextlib.suppress(Exception):
-                selection = select_operations_agent(self.agent_store, tenant_id, registered_name)
-        if selection is None:
-            # Nothing was generated and nothing will be: the entry is not
-            # served. Reported as a terminal failure with its own code so the
-            # operator (and the next debugger) can tell "this pair has no
-            # operations agent" from "the model failed".
-            ok = self.store.update_standard_diagnosis(
-                diagnosis_id,
-                status="failed",
-                error_code=DIAGNOSIS_AGENT_UNREGISTERED,
-                error_message="operator entry has no published operations agent",
-            )
-            self._complete_conversation_turn(
-                conversation_turn,
-                "",
-                None,
-                cancelled=True,
-                guarded=not ok,
-                stop_renewer=claim_stop,
-            )
-            # #700 在生产上逮到这段 `_record_metric` 落在**分支之外**：它按方法的
-            # 缩进执行，于是每一次**被服务**的管家端诊断都记一条
-            # `failed / DIAGNOSIS_AGENT_UNREGISTERED`（而行里是 completed），
-            # 而真正 fail-closed 的那条路径在上面就 `return _REFUSED` 了 ——
-            # 一条也不记。注释说的「指标与行不会各说各话」恰好被它自己破掉。
-            self._record_metric(
-                tenant_id=tenant_id,
-                route_type="diagnosis",
-                outcome="failed",
-                error_code=DIAGNOSIS_AGENT_UNREGISTERED,
-                duration_ms=int((time.monotonic() - started_ms) * 1000),
-            )
-            return _REFUSED
-        return selection.prompt, selection.allowed_tools
-
     def _registered_agent(self, tenant_id: str, business_entry: str) -> tuple[str | None, bool]:
         """The runtime registry's answer for this pair: ``(agent_name, configured)``.
 
@@ -3184,219 +1986,6 @@ class GatewayRuntime:
         except Exception:  # noqa: BLE001 - unreadable registry keeps the old rule
             return None, False
         return (binding.agent_name if binding is not None else None), True
-
-    def _unmapped_tenant_result(self, qa_id: str, language: str) -> dict[str, Any] | None:
-        """Terminal result for a pair the registry does not map.
-
-        ``retrieval_status="unavailable"`` rather than "not_found", for the same
-        reason the promotional empty card uses it: nothing was searched, so
-        claiming the library holds no match would be a claim nobody made.
-
-        The copy is the existing ``unavailable`` string rather than a new one:
-        it already says the KB-backed answer could not be produced and carries
-        no claim about the library's contents, and adding an eleventh-language
-        table for a state the user cannot act on differently would buy nothing.
-        """
-        pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
-        result: dict[str, Any] = {
-            "blocks": [{"kind": "text", "text": pack["unavailable"]}],
-            "retrieval_status": "unavailable",
-        }
-        if not self.store.update_assistant_question(qa_id, status="completed", result=result):
-            return TERMINAL_WRITE_REFUSED
-        return result
-
-    def _try_customer_rag(
-        self,
-        qa_id: str,
-        question: str,
-        tenant_id: str,
-        settings: Settings,
-        provider: str,
-        key_slot: str,
-        language: str = DEFAULT_LANGUAGE,
-        *,
-        promo_target: str | None = None,
-        promo_intent: str | None = None,
-        turn_registrar: Callable[[Any], None] | None = None,
-        history: str = "",
-        business_entry: str = "",
-    ) -> dict[str, Any] | None:
-        """Run the published customer agent path (T3/#170) or fall back.
-
-        Returns the completed job record when the RAG path produced a result;
-        None when there is no published customer agent for this tenant or the
-        kb dependency is unavailable, letting the caller keep the existing
-        zero-order behavior; ``TERMINAL_WRITE_REFUSED`` when the claim-guard
-        turned the job's terminal write away, which means nothing was
-        persisted and the caller must stop without recording a metric or a
-        turn. With ``promo_intent`` (#231) the pinned promotional agent serves
-        instead of the customer-service agent; an unresolvable target or empty
-        library returns the honest empty card and never falls through to
-        FAQ/customer QA.
-
-        ``business_entry`` + the tenant are the key into the runtime registry
-        (#584), and it governs the customer-service app only: with a binding
-        registered for the pair, the agent it names serves and nothing else
-        does. An unregistered pair in a configured registry selects nothing —
-        it does not fall back to the newest published agent, and it does not
-        fall through to the zero-order answer either, because "no agent is
-        configured for you" is an answer about configuration, not a reason to
-        answer from a different agent's library. A binding that names an agent
-        nobody publishes is the same case: the registry said which app serves
-        this pair, and that app is not there.
-
-        The promotional route is deliberately outside this gate. It is not a
-        default mapping — it runs on an explicit pin — and it already has its
-        own honest-card rule for a target that does not resolve.
-        """
-        from aiops_diagnostics.qa_rag import run_customer_qa_answer, select_customer_agent
-
-        registered_name, registry_configured = self._registered_agent(tenant_id, business_entry)
-
-        selection = None
-        promo_prompt_text: str | None = None
-        if promo_intent:
-            from aiops_diagnostics.promo_agents import promo_empty_result, promo_prompt, select_promo_agent
-
-            promo = (
-                select_promo_agent(self.agent_store, tenant_id, promo_target)
-                if self.agent_store is not None
-                else None
-            )
-            if promo is None:
-                # No pin, or the pin does not resolve. Nothing was searched, so
-                # the card must not claim the library holds no match: on 41 this
-                # is exactly what produced "未检索到匹配的宣传资料" for
-                # solution_discovery, which has no target at all and therefore
-                # never ran a query. "not_found" is reserved for a search that
-                # actually returned nothing.
-                result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-                if not self.store.update_assistant_question(qa_id, status="completed", result=result):
-                    return TERMINAL_WRITE_REFUSED
-                return result
-            selection = promo
-            promo_prompt_text = promo_prompt(
-                promo, question, language=language, intent=promo_intent, history=history
-            )
-        if selection is None:
-            if registry_configured and registered_name is None:
-                # Adopted, and this pair is not in it. Nothing was searched.
-                return self._unmapped_tenant_result(qa_id, language)
-            if self.agent_store is None:
-                return None
-            try:
-                selection = select_customer_agent(
-                    self.agent_store,
-                    tenant_id,
-                    agent_name=registered_name if registry_configured else None,
-                )
-            except Exception:
-                selection = None
-            if registry_configured and selection is None:
-                # The binding named an agent the store does not publish. Same
-                # answer as an unregistered pair: the registry decided, and
-                # what it decided is not available.
-                return self._unmapped_tenant_result(qa_id, language)
-        if selection is None:
-            return None
-        assert isinstance(self.kb_search_client, KbServiceClient)
-        try:
-            result = run_customer_qa_answer(
-                question,
-                selection,
-                settings.agent,
-                search_client=self.kb_search_client.for_tenant(tenant_id),
-                media_signer=self.media_signer,
-                tenant_id=tenant_id,
-                provider=None,
-                key_slot=key_slot,
-                project_root=reference_root(),
-                language=language,
-                initial_prompt=promo_prompt_text,
-                turn_registrar=turn_registrar,
-                history=history,
-                max_results=self.gateway_settings.kb_search_max_results,
-            )
-        except KnowledgeSearchUnavailable:
-            if promo_intent:
-                from aiops_diagnostics.promo_agents import promo_empty_result
-
-                # The search failed, so nothing is known about the library's
-                # contents. Reporting not_found here would tell the user (and
-                # the next debugger) that the library holds no match — a claim
-                # nobody made. Verified on 41: kb-service returns 502
-                # code=102 while the provider account is in arrears, and the
-                # old code turned that outage into "未检索到匹配的宣传资料".
-                result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-                if not self.store.update_assistant_question(qa_id, status="completed", result=result):
-                    return TERMINAL_WRITE_REFUSED
-                return result
-            # Retrieval dependency is down: per the T1/T3 contract the model
-            # can still answer from its own knowledge with
-            # retrieval_status=unavailable — but the runtime cannot reach the
-            # model without the search guard either, so degrade to the plain
-            # zero-order answer instead of failing the job.
-            #
-            # The marker carries WHY: the answer that follows is honest only if
-            # the job records that no search could run. Returning a bare `None`
-            # made this cause indistinguishable from "no customer agent was
-            # selected", and the caller then stamped `not_found` — an outage
-            # reported to the client as "the library holds no match".
-            return KB_OUTAGE
-        except AgentContractError as exc:
-            # The model answered but violated the blocks contract. That is a
-            # defect, not an outage: report it as a failure so it stays visible
-            # in the job record, and do NOT let the promo degrade hide it.
-            # (2026-09-17: treating this like a provider outage made a real
-            # reference-block bug look like "service temporarily unavailable".)
-            if not self.store.update_assistant_question(
-                qa_id,
-                status="failed",
-                error_code="QA_FAILED",
-                error_message=_internal_error_message(exc, ""),
-            ):
-                return TERMINAL_WRITE_REFUSED
-            return {"status": "failed"}
-        except (AgentRuntimeError, ValueError) as exc:
-            if promo_intent:
-                # A promotional click is a product surface, not a diagnostic
-                # run. When the model is genuinely unreachable (41 live: the
-                # provider account in arrears made every case_exploration click
-                # a hard QA_FAILED), the promotion contract promises an honest
-                # card, so report the outage as a card instead of an error the
-                # user cannot act on.
-                from aiops_diagnostics.promo_agents import promo_empty_result
-
-                if not self.store.update_assistant_question(
-                    qa_id,
-                    status="completed",
-                    result=promo_empty_result(language, promo_intent, retrieval_status="unavailable"),
-                ):
-                    return TERMINAL_WRITE_REFUSED
-                return {"status": "completed"}
-            if not self.store.update_assistant_question(
-                qa_id,
-                status="failed",
-                error_code="QA_FAILED",
-                error_message=_internal_error_message(exc, ""),
-            ):
-                return TERMINAL_WRITE_REFUSED
-            return {"status": "failed"}
-        # Metrics-only attribution tag: the job result and the conversation
-        # turn payload stay on the unchanged blocks contract (no agent_version
-        # key — it must not leak into stored/public payloads).
-        result = {
-            **result,
-            "agent_version": f"{selection.agent_id}#v{selection.version_no}",
-        }
-        if not self.store.update_assistant_question(
-            qa_id,
-            status="completed",
-            result={key: value for key, value in result.items() if key != "agent_version"},
-        ):
-            return TERMINAL_WRITE_REFUSED
-        return result
 
     def serve_media(
         self,
@@ -3538,160 +2127,6 @@ class GatewayRuntime:
         except KnowledgeSearchUnavailable:
             return MediaResponse(503, {"Cache-Control": "no-store"}, b"")
 
-    def _execute_run(
-        self,
-        workspace: AgentWorkspace,
-        request,
-        fixture: Path | None,
-        allowed_tenants: set[str] | None = None,
-        provider: str | None = None,
-    ) -> None:
-        run_id = workspace.run_id
-        self.store.update_run(run_id, status="running")
-        self.store.append_event(run_id, {"type": "gateway_worker_started", "run_id": run_id})
-        try:
-            # Everything after the `running` claim is inside the catchable block
-            # (#730 review). `Settings.from_config` raises `ValueError` for a
-            # missing or invalid file, and `workspace.load_state()` reads from
-            # disk; both used to sit above this `try`, so either one leaving the
-            # run stranded on `running` with no terminal write.
-            settings = Settings.from_config(self.gateway_settings.server_config_file)
-            settings.agent.run_root = self.diagnostic_settings.agent.run_root
-            state_key_slot = workspace.load_state().key_slot
-            settings.agent.key_slot = state_key_slot
-            result = run_agent_diagnosis(
-                workspace,
-                request,
-                settings,
-                fixture,
-                progress_callback=lambda event: self.store.append_event(run_id, _public_event(event)),
-                allowed_tenants=allowed_tenants,
-                provider=provider,
-                key_slot=state_key_slot,
-            )
-        except (AgentRuntimeError, SourceError) as exc:
-            error_message = _internal_error_message(exc, request.order_no)
-            self.store.update_run(
-                run_id,
-                status="interrupted",
-                error_type=exc.__class__.__name__,
-                error_message=error_message,
-            )
-            self.store.append_event(
-                run_id,
-                {
-                    "type": "gateway_run_interrupted",
-                    "error_type": exc.__class__.__name__,
-                    "error_message": error_message,
-                },
-            )
-            return
-        except Exception as exc:
-            error_message = _internal_error_message(exc, request.order_no)
-            self.store.update_run(
-                run_id,
-                status="failed",
-                error_type=exc.__class__.__name__,
-                error_message=error_message,
-            )
-            self.store.append_event(
-                run_id,
-                {
-                    "type": "gateway_run_failed",
-                    "error_type": exc.__class__.__name__,
-                    "error_message": error_message,
-                },
-            )
-            return
-        self.store.update_run(
-            run_id,
-            status=result.status.value,
-            confidence=result.confidence.value,
-            summary=result.summary,
-            result=result.model_dump(mode="json"),
-        )
-        self.store.append_event(
-            run_id,
-            {"type": "gateway_run_completed", "status": result.status.value},
-        )
-
-    def _fixture_path(self, fixture_name: str | None) -> Path | None:
-        if fixture_name is None:
-            return None
-        if not self.gateway_settings.allow_fixtures:
-            raise ValueError("gateway fixture execution is disabled")
-        if fixture_name not in FIXTURE_NAMES:
-            raise ValueError("unsupported fixture name")
-        path = reference_root() / "examples" / "fixtures" / fixture_name
-        if not path.is_file():
-            raise ValueError("gateway fixture is missing")
-        return path
-
-
-def as_blocks_result(answer: dict[str, Any], *, retrieval_status: str = "not_found") -> dict[str, Any]:
-    """Normalize a zero-order answer into the blocks-v1 shape the job stores.
-
-    Every ``completed`` assistant-question payload is one shape on the wire:
-    ``{"blocks": [...], "retrieval_status": ...}``. The RAG and promotional
-    paths already write it; the plain zero-order turn returned
-    ``{"text", "reminder"}`` and was stored verbatim, so a client that renders
-    ``blocks[]`` — which is what ``docs/agents/frontend-api-brief.md`` §10.8
-    scenario B tells it to do, and what the shipped UlinkEV build does — showed
-    its fallback copy ("未找到") for an answer that had arrived intact. Verified
-    on 41: 42 of 386 stored rows carried the text-only shape (every zero-order
-    turn ever written), and the shipping APK renders none of them.
-
-    The model's prose is data, not a schema: it is moved into a ``text`` block
-    and nothing else is added. ``reminder`` is dropped rather than promoted to
-    a block kind, because no client in the contract reads it (#708 established
-    that the reminder is already folded into the model's own prose).
-
-    ``retrieval_status`` defaults to ``not_found`` — the same value
-    ``qa_rag._finalize`` normalizes a model self-reporting ``not_needed`` to,
-    and the honest one for a zero-order turn, which ran no knowledge search.
-    The caller passes ``unavailable`` when the reason this answer is on the
-    zero-order path at all is that the knowledge search FAILED: claiming "no
-    match" there is a statement about a library nobody read, which is the rule
-    ``_try_customer_rag`` and ``promo_empty_result`` already state. An answer
-    that already carries ``blocks`` is returned unchanged: this is a
-    normalizer, not a second contract.
-    """
-    if not isinstance(answer, dict) or answer.get("blocks"):
-        return answer
-    text = answer.get("text")
-    if not isinstance(text, str) or not text.strip():
-        return answer
-    return {
-        "blocks": [{"kind": "text", "text": text}],
-        "retrieval_status": retrieval_status,
-    }
-
-
-def _guard_zero_order_language(answer: dict[str, Any], language: str) -> dict[str, Any]:
-    """Withhold a zero-order answer that leaked Chinese (#293).
-
-    This surface is reachable, not theoretical: when the customer-RAG path
-    degrades on an unavailable knowledge base it deliberately falls through to
-    the zero-order answer, so the same user who asked for English gets this
-    text instead. Its prompt is also authored in Chinese, so the model is
-    copying from Chinese instructions — the same shape as the card headings.
-
-    Returns a localized fallback in place of the leaking text. The payload
-    shape is unchanged: the caller stores and returns exactly the keys the
-    contract defines.
-    """
-    if not isinstance(answer, dict):
-        return answer
-    text = answer.get("text")
-    if not isinstance(text, str):
-        return answer
-    leak = answer_chinese_leak(text, language)
-    if not leak:
-        return answer
-    record_answer_language_fallback(language=language, leaked=leak, surface="zero_order")
-    pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
-    return {**answer, "text": pack["unavailable"]}
-
 
 #: How often a running diagnosis says its conversation claim is still alive.
 #: Comfortably below ``BUSY_LOCK_SECONDS`` so one missed tick cannot lose the
@@ -3715,35 +2150,6 @@ def _estimate_turn_tokens(question: str, answer: dict[str, Any] | None) -> int:
         for field in ("summary", "root_cause"):
             text += str(answer.get(field) or "")
     return max(1, len(text) * 2 // 3)
-
-
-def _public_event(event: dict[str, Any]) -> dict[str, Any]:
-    allowed = {
-        "at",
-        "type",
-        "run_id",
-        "incident_id",
-        "resumed",
-        "thread_id",
-        "turn_id",
-        "turn_number",
-        "max_turns",
-        "elapsed_seconds",
-        "tools",
-        "attempt",
-        "status",
-        "error_type",
-        "error_message",
-    }
-    result = {key: value for key, value in event.items() if key in allowed}
-    outcomes = event.get("outcomes")
-    if isinstance(outcomes, list):
-        result["outcomes"] = [
-            {key: item.get(key) for key in ("tool", "status", "evidence_id", "source", "reused")}
-            for item in outcomes
-            if isinstance(item, dict)
-        ]
-    return result
 
 
 def _intersect_sites(
@@ -3804,43 +2210,6 @@ def _internal_error_message(error: Exception, order_no: str | None) -> str:
     """
     message = redact_text(str(error), preserve=(order_no or "",))
     return message[:1000] if message else error.__class__.__name__
-
-
-def _blocked_diagnosis_error(workspace: AgentWorkspace) -> tuple[str, str]:
-    """Decide how one blocked run is reported on the standard API surface.
-
-    ``DIAGNOSIS_BLOCKED`` is the provider/task failure code: the model could not
-    produce the structured output. "This order is not in the caller's tenant"
-    used to be absorbed into the same code, which left an operator unable to tell
-    an authorization failure from a supplier failure — the two have opposite
-    remedies.
-
-    The shared rule records that condition exactly once, as a coded blocked
-    entry, so this surface reads the record instead of re-deciding the condition
-    (re-deciding is how one request used to collect two status codes). The
-    message states the reason without naming the foreign tenant: the caller is a
-    delegated end user, and which tenant owns an order they cannot see is not
-    theirs to learn.
-
-    Reachability on this face is deliberately one-directional. The worker runs
-    with a frozen ``QueryScope`` and the scoped source set, so the tenant is
-    pushed into SQL and the row-level rule only ever sees rows the predicate
-    already admitted; an out-of-scope order is refused earlier still, at create
-    time, by the same scope. ``DIAGNOSIS_ORDER_OUT_OF_SCOPE`` is therefore
-    defense in depth, not a terminal state the frontend should wait for: it
-    appears only when a row survives the push-down and *still* fails the
-    row-level rule — a source that cannot push the rule down, or a scope
-    re-resolved differently between create and worker. Both contract docs say
-    so, so nobody promises a signal production does not emit.
-    """
-    try:
-        entries = EvidenceJournal(workspace, workspace.load_manifest()).entries()
-    except (FileNotFoundError, ValueError, OSError):
-        entries = []
-    for entry in entries:
-        if entry.status == "blocked" and entry.source == TENANT_SCOPE_SOURCE:
-            return DIAGNOSIS_ORDER_OUT_OF_SCOPE, "order is outside the authorized tenant scope"
-    return "DIAGNOSIS_BLOCKED", "diagnosis could not complete"
 
 
 def close_gateway_runtime(runtime: GatewayRuntime) -> None:

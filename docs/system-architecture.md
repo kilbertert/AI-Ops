@@ -14,15 +14,12 @@ flowchart TD
   V --> G
   G -->|C端普通客服 WF01| D[Dify Chatflow]
   G -->|已登记的管家/客户场景| N[Java执行节点]
-  G -->|C端订单检测及旧诊断入口| L[Python Thin Harness]
   D --> K[知识节点：RAGFlow当前检索]
   D -->|单轮凭据| Q[Gateway受控CPMS回调]
   N -->|本轮授权工具| Q
   Q --> API[CPMS只读API]
-  L --> S[旧诊断有界证据源：SQL / HTTP / TDengine / Redis]
   K --> R[来源引用与资料媒体]
   API --> R
-  S --> R
   R --> G
 ```
 
@@ -53,13 +50,11 @@ Java节点当前业务取证经Gateway受限转发，不代表已证明客户内
 Dify工具选择须发布后进入节点清单；全关不恢复默认工具。实际执行与完成均核对清单和节点身份。
 详见[管家手册](agents/operator-cpms/README.md)、[节点发布](agents/m3-node-publication.md)。
 
-## 仍在运行的旧诊断内核
+## Python 旧执行器退役
 
-C端订单检测仍可进入Python持久模型线程；它按受限工具清单选择证据并给因果解释，
-harness管理身份、有界访问、脱敏、不可变证据、结果验证与恢复。此路径的七工具不等于Dify工具授权。
-确定性`diagnose --mode deterministic`是离线规则与回归入口，不能替代实时数据验证。
-旧设备`/v1/runs`经HTTP源，标准诊断按冻结QueryScope读取受限源；SQL和行级可见性共享规则。
-详见[Thin Harness](thin-harness.md)。
+本分支按用户决定删除 Thin Harness 与诊断/设备 CLI，C端检测进入 C端工作流状态分支，
+管家及其试用使用 Java 节点，Dify 草稿按应用绑定执行。没有绑定时拒绝，不启动 Python 回退。
+共享授权、发布、知识与存储保留；不等同于生产已经部署。见[退役说明](runtime-retirement.md)。
 
 ## 基于后端的业务规则
 
@@ -80,7 +75,7 @@ harness管理身份、有界访问、脱敏、不可变证据、结果验证与�
 
 Gateway、Dify、RAGFlow、节点是不同制品与生命周期，部署成功不能证明场景已启用。
 现有服务宿主通过合并制品交付；访问、端口和凭据位置见受控运维记录及[环境手册](agents/env-41-runbook.md)。
-不在本页复制主机地址或秘密。旧诊断依赖仍需最小权限账号、TDengine严格只读代理与指定SSH转发。
+不在本页复制主机地址或秘密。现役健康/聚合与授权源仍需最小权限账号及有界数据读取。
 
 开发机只运行隔离验证；生产变更、流量切换和旧服务退役各自保留授权、制品身份、验收及恢复路径。
 AFK是独立开发治理面，不是用户业务引擎，见[AFK](afk-workflow.md)。
@@ -88,5 +83,5 @@ AFK是独立开发治理面，不是用户业务引擎，见[AFK](afk-workflow.m
 本页Mermaid是当前职责图；`docs/architecture/ai-ops-architecture.*`保留为早期诊断内核图快照，
 不再用来判断当前C端/Dify/节点的交付程度。
 
-旧[architecture.md](architecture.md)和根SOP同时进入诊断运行时制品，内容变化会触发CD；本轮保持原字节。
+旧[architecture.md](architecture.md)和根SOP作为历史资料保留，不再进入模型工作区或 Python 包。
 本页面向工程/测试的系统全景，不替换模型运行时业务参考。

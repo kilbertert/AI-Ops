@@ -28,7 +28,6 @@ from aiops_diagnostics.async_job_lifecycle import (
     LIVE,
     PROFILES,
     QUESTION,
-    RUN,
     claim_guard,
     converged,
     expires_at,
@@ -65,7 +64,6 @@ def test_the_profiles_differ_where_the_tables_differ() -> None:
     assert "cancelled" not in HEALTH_JOB.terminal
     assert "cancelled" in DIAGNOSIS.terminal
     assert "cancelled" in QUESTION.terminal
-    assert "diagnosed" in RUN.completed
     assert "diagnosed" not in DIAGNOSIS.terminal
     assert len({id(profile.active) for profile in PROFILES.values()}) == len(PROFILES)
 
@@ -221,7 +219,7 @@ def test_the_status_sets_are_written_down_only_in_this_module() -> None:
     #: vocabulary (same words, different meaning). `gateway_client` polls a REMOTE
     #: gateway and cannot import the definition — its copy is named
     #: `_TERMINAL_RUN_STATUSES` there and commented as a boundary.
-    owners = {"async_job_lifecycle.py", "metrics_store.py", "gateway_client.py"}
+    owners = {"async_job_lifecycle.py", "metrics_store.py"}
     offenders: list[str] = []
     for path in sorted(package.glob("*.py")):
         if path.name in owners:
@@ -236,9 +234,6 @@ def test_the_status_sets_are_written_down_only_in_this_module() -> None:
                 }
                 if words and words <= job_words:
                     offenders.append(f"{path.name}:{literal.lineno} {sorted(words)}")
-    # The named copies must still say why they exist, or they are just copies.
-    client = (package / "gateway_client.py").read_text(encoding="utf-8")
-    assert "cross-process copy is unavoidable" in client
     assert offenders == [], "; ".join(offenders)
 
 
@@ -251,26 +246,6 @@ def _set_literals(node: ast.AST) -> list[ast.Set]:
         elif isinstance(inner, ast.Call):
             found.extend(argument for argument in inner.args if isinstance(argument, ast.Set))
     return found
-
-
-def test_a_table_without_an_expiry_is_not_given_one() -> None:
-    """`runs` has no expiry, and inferring one would widen a terminal guard.
-
-    `TERMINAL_RUN_STATUSES` is what `update_run` uses to decide `completed_at`.
-    Adding `expired` to it — which the first version of this profile did, by
-    giving every table the same expiry word — would treat a status this table
-    never produces as "finished". The profile says `None` instead, and this
-    asserts the store's exported set is unchanged.
-    """
-    from aiops_diagnostics.gateway_store import TERMINAL_RUN_STATUSES
-
-    assert RUN.expired is None
-    assert (
-        frozenset({"diagnosed", "inconclusive", "blocked", "interrupted", "failed"}) == TERMINAL_RUN_STATUSES
-    )
-    assert "expired" not in TERMINAL_RUN_STATUSES
-    with pytest.raises(ValueError):
-        converged(RUN, status="running", deadline_passed=True, cause="deadline")
 
 
 def test_the_question_restart_code_is_the_one_the_contract_documents() -> None:
@@ -304,7 +279,6 @@ def test_a_user_stop_is_not_a_retryable_failure() -> None:
     # The health table has no user stop, and still names its one failure.
     assert HEALTH_JOB.failed == "failed"
     # `runs` spells three causes instead of one, so it names none of them here.
-    assert RUN.failed is None
 
 
 def test_one_rendering_covers_every_table() -> None:
@@ -417,14 +391,7 @@ def test_a_table_the_module_does_not_own_is_refused() -> None:
     with pytest.raises(ValueError):
         expire_statements("runs; DROP TABLE runs", DIAGNOSIS, "NOW")
     with pytest.raises(ValueError):
-        expire_statements("runs", RUN, "NOW")  # a real table, but not swept here
-
-
-def test_a_profile_without_an_expiry_cannot_be_swept() -> None:
-    from aiops_diagnostics.async_job_lifecycle import expire_statements
-
-    with pytest.raises(ValueError):
-        expire_statements("health_report_jobs", RUN, "NOW")
+        expire_statements("runs", DIAGNOSIS, "NOW")  # a real table, but not swept here
 
 
 def test_the_sweep_sql_is_written_down_only_in_this_module() -> None:
@@ -569,7 +536,9 @@ def test_the_boot_hook_releases_the_conversation_slots_it_ends(tmp_path) -> None
         scope_fingerprint=scope, business_entry="operator", agent_version_key="agt_abcdef1234567890#v1"
     )["conversation_id"]
     turn_no = conversations.begin_turn(cid, scope, kind="diagnosis", question="为什么跳枪")
-    diagnosis = store.create_standard_diagnosis(scope, "O-1", "为什么跳枪", None)
+    diagnosis = store.create_trial_job(
+        scope, order_no="O-1", draft_fingerprint="draft", initiator="user", workflow_trial=True
+    )
     store.update_standard_diagnosis(diagnosis["diagnosis_id"], status="running")
     with conversations._connection(write=True) as connection:  # noqa: SLF001 - link the two
         connection.execute(

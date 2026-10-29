@@ -666,17 +666,14 @@ def test_a_company_token_reaches_the_operator_actions_and_order_diagnosis(
     """令牌 → ``operator`` 动作列表 → 订单检测：站点内 ``202``、站点外 ``404``。"""
     client, runtime = _company_token_client(tmp_path, monkeypatch, _Mapper({"SHOP-1": (SITE_IN,)}))
     headers = {"Authorization": "Bearer company-token", "X-Business-Entry": "operator"}
-    question = "帮我检测这个订单的充电异常"
 
     listed = client.get("/v1/shortcuts", headers=headers)
-    inside = client.post(
-        "/v1/assistant/questions",
-        json={"question": question, "order_no": ORDER_INSIDE},
+    inside = client.get(
+        f"/v1/orders/{ORDER_INSIDE}/access",
         headers=headers,
     )
-    outside = client.post(
-        "/v1/assistant/questions",
-        json={"question": question, "order_no": ORDER_OUTSIDE},
+    outside = client.get(
+        f"/v1/orders/{ORDER_OUTSIDE}/access",
         headers=headers,
     )
 
@@ -686,8 +683,8 @@ def test_a_company_token_reaches_the_operator_actions_and_order_diagnosis(
         "smart_diagnosis",
         "operations_review",
     ]
-    assert inside.status_code == 202
-    assert runtime.diagnoses == [(ORDER_INSIDE, question)]
+    assert inside.status_code == 200
+    assert runtime.diagnoses == []
     assert outside.status_code == 404
     assert outside.json()["error"]["code"] == "ORDER_NOT_FOUND"
 
@@ -700,9 +697,8 @@ def test_the_consumer_entry_keeps_the_self_scope_for_a_company_token(
     headers = {"Authorization": "Bearer company-token", "X-Business-Entry": "consumer"}
 
     # 集合内、但挂在**别人**名下的那单：consumer 入口必须看不到（否则就是 #436 的回归）。
-    other = client.post(
-        "/v1/assistant/questions",
-        json={"question": "帮我检测这个订单的充电异常", "order_no": ORDER_INSIDE},
+    other = client.get(
+        f"/v1/orders/{ORDER_INSIDE}/access",
         headers=headers,
     )
 
@@ -785,20 +781,17 @@ def test_the_operator_entry_header_selects_the_scope_reading_not_the_identity(
     `operator` 那一侧会变成 `404`。
     """
     client, _ = _parity_client(tmp_path, monkeypatch)
-    body = {"question": "帮我检测这个订单的充电异常", "order_no": ORDER_INSIDE}
 
-    allowed = client.post(
-        "/v1/assistant/questions",
-        json=body,
+    allowed = client.get(
+        f"/v1/orders/{ORDER_INSIDE}/access",
         headers={"Authorization": "Bearer " + _jwt(_valid_claims()), "X-Business-Entry": "operator"},
     )
-    refused = client.post(
-        "/v1/assistant/questions",
-        json=body,
+    refused = client.get(
+        f"/v1/orders/{ORDER_INSIDE}/access",
         headers={"Authorization": "Bearer " + _jwt(_valid_claims()), "X-Business-Entry": "consumer"},
     )
 
-    assert allowed.status_code == 202, allowed.text
+    assert allowed.status_code == 200, allowed.text
     assert refused.status_code == 404, refused.text
     assert refused.json()["error"]["code"] == "ORDER_NOT_FOUND", refused.text
 
@@ -945,12 +938,10 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
         **COMPANY_KEYS,
     )
     client, runtime = assistant_app(tmp_path, monkeypatch, None, connection, settings=settings)
-    question = "帮我检测这个订单的充电异常"
 
     # 带密钥 ⇒ 公司链：B 端主体名下站点集合 ⇒ 站点内的单可查。
-    with_key = client.post(
-        "/v1/assistant/questions",
-        json={"question": question, "order_no": ORDER_INSIDE},
+    with_key = client.get(
+        f"/v1/orders/{ORDER_INSIDE}/access",
         headers={
             "Authorization": "Bearer company-token",
             "X-Business-Entry": "operator",
@@ -961,9 +952,8 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
     # 若门接错（比如门把 header 丢了、或门排在会话之后），这一条会变成别的东西：
     # 前者会拿到 202（公司链被误用），后者会拿到「公司令牌被当成会话值」的 401 —— 后者与本例
     # 结果同为 401，所以**另用一条**断言把两条 401 区分开（见下）。
-    without_key = client.post(
-        "/v1/assistant/questions",
-        json={"question": question, "order_no": ORDER_INSIDE},
+    without_key = client.get(
+        f"/v1/orders/{ORDER_INSIDE}/access",
         headers={"Authorization": "Bearer company-token", "X-Business-Entry": "operator"},
     )
     # 既有链真正被走到：服务令牌 + 会话值 ⇒ 200 的动作列表（没有 202/404 的订单分支）。
@@ -998,8 +988,8 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
     keyed = {name: _call(path, with_key=True) for name, path in other_entries.items()}
     unkeyed = {name: _call(path, with_key=False) for name, path in other_entries.items()}
 
-    assert with_key.status_code == 202
-    assert runtime.diagnoses == [(ORDER_INSIDE, question)]
+    assert with_key.status_code == 200
+    assert runtime.diagnoses == []
     assert without_key.status_code == 401
     assert without_key.json()["error"]["code"] == "INVALID_ACCESS_TOKEN"
     assert session_chain.status_code == 200

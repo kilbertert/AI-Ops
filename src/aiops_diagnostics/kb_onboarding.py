@@ -1,4 +1,4 @@
-"""``aiops admin onboard-tenant``：一次把 1:1:1 的三个对象建齐（#924 / PRD #923）。
+"""``aiops-admin onboard-tenant``：一次把 1:1:1 的三个对象建齐（#924 / PRD #923）。
 
 ## 三个对象，一个入口
 

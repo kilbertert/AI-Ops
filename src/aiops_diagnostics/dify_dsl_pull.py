@@ -13,7 +13,7 @@ What this module is, and is not:
 * It **is** the pull client and the DSL→``AgentConfig`` mapping. It lands the
   result as a **draft** through :class:`AgentManager` — the same role-checked,
   validated, optimistic-concurrency-respecting path the HTTP API and
-  ``aiops admin reconcile`` use. It **never** publishes: the publish gate is
+  ``aiops-admin reconcile`` use. It **never** publishes: the publish gate is
   ours, not Dify's (PRD #577).
 * It is **not** the tenant↔app registry, the Dify instance, or the publish
   action.
@@ -54,7 +54,6 @@ from urllib.parse import urlencode, urlsplit
 
 import yaml
 
-from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES, OPS_TOOL_NAMES
 from aiops_diagnostics.agent_lifecycle import Agent, AgentConfig, AgentManager, config_from_snapshot
 from aiops_diagnostics.bounded_http import (
     ErrorMapping,
@@ -66,7 +65,6 @@ from aiops_diagnostics.bounded_http import (
     parse_data_key_envelope,
     request_json,
 )
-from aiops_diagnostics.dify_tools_catalog import AI_OPS_PROVIDER_NAME
 
 #: Retrying the export is safe because it is a read (``RetryPolicy`` limits
 #: retries to GET by default). A transient blip should not fail the operator's
@@ -152,7 +150,6 @@ class DifyDslSource:
     api_key: str = field(repr=False, default="")
     workspace_id: str = ""
     timeout: float = 10.0
-    ops_tools_enabled: bool = False
 
 
 class DifyDslClient:
@@ -425,8 +422,6 @@ def map_dsl_to_config(
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
     dataset_resolver: Callable[[tuple[str, ...]], tuple[str, ...]] | None = None,
-    tool_resolver: Callable[[tuple[Any, ...]], tuple[str, ...]] | None = None,
-    ops_tools_enabled: bool = False,
 ) -> AgentConfig:
     """Map exported DSL text onto the ``AgentConfig`` fields we run on.
 
@@ -479,33 +474,10 @@ def map_dsl_to_config(
         else:
             knowledge_base_ids = ()
 
-    # 工具白名单：Dify 声明了就必须**翻译得出**，翻译不出就拒（与知识库同一条纪律）。
-    # 什么都没声明 ⇒ ``None`` 交给调用方保留库中现值 —— 与知识库的「没说 ⇒ 保留」
-    # 逐字同向，理由也一样：把"没声明"当成"要清空"会让一次无关的保存摘掉运营设好的白名单。
+    # 旧 Python 工具不再执行；原生工作流/节点清单单独发布。
     declared_tools = _declared_tools(model_config)
-    #: 「有效声明」= 至少有一条**开着**。全被关掉的声明与「什么都没声明」同义
-    #: （#772 E：「暂时关掉」与「删除」效果一致），所以它必须走 ``None`` 那条路
-    #: —— 否则 resolver 会（正确地）返回空元组，而那读作「一个工具都不许跑」，
-    #: 线上的诊断会突然全被白名单挡掉，报告却只说这次拉取成功。
-    effective = tuple(entry for entry in declared_tools if entry.enabled)
-    if ops_tools_enabled:
-        if tool_resolver is None:
-            raise DifyDslMalformed("ops tools require a provider resolver")
-        allowed_tools = tool_resolver(declared_tools)
-    elif effective and tool_resolver is not None:
-        allowed_tools: tuple[str, ...] | None = tool_resolver(effective)
-    elif effective:
-        raise DifyDslMalformed(
-            "DSL 声明了智能体工具（"
-            + ", ".join(entry.identity for entry in effective)
-            + "），但这次拉取没有工具映射可用。"
-            "请在 Dify 里把工具挂在 aiops 提供方下（那七个工具直接对应我们的 ToolName），"
-            "或为这个 Dify 身份在 AIOPS_GATEWAY_DIFY_TOOL_BINDINGS 里登记映射，不要按字面搬运。"
-        )
-    else:
-        # 没声明工具，或声明里每一条都被关掉了 —— 沿用 ADR-0019 的默认（全部七个），
-        # 于是已发布的老版本行为不变。
-        allowed_tools = None
+    if any(entry.enabled for entry in declared_tools):
+        raise DifyDslMalformed("Python 内置工具已退役，请发布 Dify 工作流或 Java 节点清单")
 
     return AgentConfig(
         agent_type=agent_type,
@@ -518,54 +490,8 @@ def map_dsl_to_config(
         # 服务端回退制品，与新增该字段前的行为逐字相同。
         opening_statement=_optional_opening_statement(model_config),
         suggested_questions=_optional_suggested_questions(model_config),
-        **(  # 没声明就沿用 dataclass 的默认（全部工具），与"不加约束"同义
-            {"allowed_tools": allowed_tools} if allowed_tools is not None else {}
-        ),
+        allowed_tools=(),
     )
-
-
-def _resolve_tools(
-    declared: tuple[Any, ...],
-    *,
-    aiops_provider_id: str,
-    registry: Mapping[str, str],
-    ops_provider_id: str = "",
-) -> tuple[str, ...]:
-    """把 Dify 声明的工具翻译成我们的 ``ToolName``，翻不出就**拒**（#774 / #772 E）。
-
-    两条判断落在 :func:`aiops_diagnostics.dify_tools_catalog.partition_aiops_tools`
-    里，这里只负责把「翻不出的条目」变成一次**拒绝**。拒绝而不是部分接受，理由与知识库
-    那条桥相同：接受四个里的三个会看起来像一次成功的拉取，而运营的一处编辑悄悄消失。
-
-    ``aiops_provider_id`` 由调用方**当场**从控制台解析（模块 docstring：它是
-    ``ApiToolProvider`` 行 UUID，绝不落库、不落配置）。解析不到时不是"没有 aiops
-    提供方所以什么都不认"，而是所有 api 提供方的条目都会掉进下面那条错误里 ——
-    运营会看到"请在 Dify 里挂到 aiops 提供方"，正是要做的那件事。
-    """
-    from aiops_diagnostics.dify_tools_catalog import partition_aiops_tools
-
-    allowed, unmapped = partition_aiops_tools(
-        declared, aiops_provider_id=aiops_provider_id, bindings=registry, ops_provider_id=ops_provider_id
-    )
-    if unmapped:
-        hint = (
-            "aiops 提供方下的七个工具直接对应我们的 ToolName（"
-            + " / ".join(sorted(ALL_TOOL_NAMES))
-            + "）；其他提供方必须在 AIOPS_GATEWAY_DIFY_TOOL_BINDINGS 里显式登记"
-            "（`provider_id/tool_name:our_tool`）。"
-        )
-        if not aiops_provider_id:
-            hint += (
-                " 本次拉取在 Dify 工作区里**没有找到名为 aiops 的 API 工具提供方** —— "
-                "先在控制台注册它（#775），或为这些身份逐个登记映射。"
-            )
-        raise DifyDslMalformed(
-            "DSL 声明了这些工具，但没有它们对应哪个 AI-Ops 工具的依据："
-            + ", ".join(entry.identity for entry in unmapped)
-            + "。"
-            + hint
-        )
-    return allowed
 
 
 def _resolve_declared_datasets(
@@ -631,7 +557,6 @@ def resolve_pulled_config(
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
     knowledge_registry: Mapping[str, Any] | None = None,
-    tool_registry: Mapping[str, str] | None = None,
     tenant_id: str = "",
 ) -> AgentConfig:
     """Fetch, map and settle the config a pull would land — **no writes at all**.
@@ -673,32 +598,8 @@ def resolve_pulled_config(
     #: never from config (module docstring). Looked up lazily on first use so a
     #: DSL with no declared tools costs no extra console call; the console read
     #: happens only when the file actually names one.
-    aiops_ids: dict[str, str] = {}
     exported = client.export_dsl()
     existing = _find_by_name(manager, context, name)
-
-    def tool_resolver(names: tuple[Any, ...]) -> tuple[str, ...]:
-        if not aiops_ids:
-            aiops_ids.update(client.tool_provider_ids())
-        allowed = _resolve_tools(
-            names,
-            aiops_provider_id=aiops_ids.get(AI_OPS_PROVIDER_NAME, ""),
-            registry=tool_registry or {},
-            ops_provider_id=aiops_ids.get("aiops-ops", "") if source.ops_tools_enabled else "",
-        )
-        if source.ops_tools_enabled and existing is not None:
-            # 新 provider 不声明旧能力不等于主动撤销存量诊断权限。
-            legacy_declared = any(n.provider_id == aiops_ids.get(AI_OPS_PROVIDER_NAME) for n in names)
-            if not legacy_declared:
-                old = existing.config.allowed_tools
-                if existing.published_version is not None:
-                    old = config_from_snapshot(
-                        manager.store.version(
-                            existing.agent_id, existing.tenant_id, existing.published_version
-                        ).snapshot
-                    ).allowed_tools
-                allowed = tuple(dict.fromkeys((*[n for n in old if n not in OPS_TOOL_NAMES], *allowed)))
-        return allowed
 
     config = map_dsl_to_config(
         exported,
@@ -706,8 +607,6 @@ def resolve_pulled_config(
         output_contract=output_contract,
         knowledge_base_ids=knowledge_base_ids,
         dataset_resolver=resolver if knowledge_registry else None,
-        tool_resolver=tool_resolver if tool_registry is not None else None,
-        ops_tools_enabled=source.ops_tools_enabled,
     )
     if knowledge_base_ids is None and not declared and existing is not None:
         # Only "Dify said nothing" keeps the live binding. When Dify *does*
@@ -743,7 +642,6 @@ def pull_agent_draft(
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
     knowledge_registry: Mapping[str, Any] | None = None,
-    tool_registry: Mapping[str, str] | None = None,
 ) -> Agent:
     """Pull ``source`` and land the result as a draft. Never publishes.
 
@@ -761,7 +659,6 @@ def pull_agent_draft(
         output_contract=output_contract,
         knowledge_base_ids=knowledge_base_ids,
         knowledge_registry=knowledge_registry,
-        tool_registry=tool_registry,
         tenant_id=str(getattr(context, "effective_tenant_id", "") or ""),
     )
     return converge_agent_draft(manager, context, config, name=name, description=description)
@@ -1197,7 +1094,6 @@ def sync_binding_from_dify(
     *,
     dry_run: bool = False,
     knowledge_registry: Mapping[str, Any] | None = None,
-    tool_registry: Mapping[str, str] | None = None,
 ) -> SyncOutcome:
     """Bring one registry binding's agent up to what **Dify currently holds**.
 
@@ -1288,7 +1184,6 @@ def sync_binding_from_dify(
         output_contract=live.output_contract,
         knowledge_base_ids=None,
         knowledge_registry=knowledge_registry,
-        tool_registry=tool_registry,
         tenant_id=binding.tenant_id,
     )
 

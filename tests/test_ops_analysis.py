@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -433,32 +432,6 @@ def test_the_analysis_window_must_be_a_real_bounded_interval(tmp_path: Path) -> 
             site_ids=(),
             rule_version=RULE_VERSION,
         )
-
-
-def test_an_analysis_row_is_not_an_order_diagnosis(tmp_path: Path) -> None:
-    """同一张表上的两种作业：列表接口只列诊断，id 前缀各自认得。"""
-    from aiops_diagnostics.gateway_store import GatewayStore
-
-    store = GatewayStore(tmp_path / "gateway.db")
-    diagnosis = store.create_standard_diagnosis("scope-1", "O-1", "why", None)
-    analysis = store.create_analysis_job(
-        "scope-1",
-        site_ids=("S-1",),
-        window_start="2026-10-01T00:00:00Z",
-        window_end="2026-10-02T00:00:00Z",
-        rule_version=RULE_VERSION,
-    )
-
-    listed = [row["diagnosis_id"] for row in store.list_standard_diagnoses("scope-1")]
-
-    assert listed == [diagnosis["diagnosis_id"]]
-    assert analysis["diagnosis_id"].startswith("an_")
-    assert analysis["kind"] == "analysis"
-    assert json.loads(analysis["site_ids_json"]) == ["S-1"]
-    # Both id kinds are fetchable; a qa_ id still is not.
-    assert store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1") is not None
-    assert store.get_standard_diagnosis(analysis["diagnosis_id"], "scope-1") is not None
-    assert store.get_standard_diagnosis("qa_" + "0" * 32, "scope-1") is None
 
 
 def _placeholder_values(sql: str, params: list[Any]) -> list[Any]:

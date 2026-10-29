@@ -331,19 +331,10 @@ def test_cd_paths_does_not_trigger_on_read_only_scripts() -> None:
         assert f"deploy/{name}" not in paths, f"{name} 与部署无关，不该触发生产重启"
 
 
-def test_cd_paths_still_covers_reference_files() -> None:
-    """`paths` 必须覆盖 deploy-41.sh 的 REFERENCE_FILES（CD-41-14 的机器化）。
-
-    改了 SOP 却不部署时，生产会**静默**继续用旧规则 —— 没有报错。所以这条不是
-    「顺手加的」，是原本就存在、只是从未被机器验证过的约束（qa-plan.md 的 CD-41-14
-    写的是「已脚本化比对」，实际没有脚本；本 PR 把它补上）。
-    """
+def test_cd_excludes_retired_runtime_references() -> None:
     deploy = (DEPLOY_DIR / "deploy-41.sh").read_text(encoding="utf-8")
-    match = re.search(r'^REFERENCE_FILES="([^"]+)"', deploy, re.MULTILINE)
-    assert match, "deploy-41.sh 里找不到 REFERENCE_FILES"
-    paths = _cd_push_paths()
-    for ref in match.group(1).split():
-        assert ref in paths, f"参考资料 {ref} 改了不触发部署，生产会静默用旧规则"
+    assert "REFERENCE_FILES" not in deploy
+    assert not set(_cd_push_paths()).intersection({"SOP.md", "充电桩问题排查SOP.md", "docs/architecture.md"})
 
 
 def test_cd_paths_guard_reads_the_real_block(tmp_path: Path) -> None:

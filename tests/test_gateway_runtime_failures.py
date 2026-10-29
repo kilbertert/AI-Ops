@@ -181,11 +181,7 @@ def test_a_runtime_failure_still_answers_the_documented_503(tmp_path: Path) -> N
     client = _client(tmp_path)
     headers = {"Authorization": "Bearer token", "X-Business-Entry": "consumer"}
     observed: dict[str, tuple[int, str, str, bool]] = {}
-    for path, payload in (
-        ("/v1/assistant/questions", {"question": "q"}),
-        ("/v1/health-report-jobs", {"order_no": "O-1"}),
-        ("/v1/standard/diagnoses", {"order_no": "O-1", "question": "q"}),
-    ):
+    for path, payload in (("/v1/health-report-jobs", {"order_no": "O-1"}),):
         response = client.post(path, headers=headers, json=payload)
         body = response.json()["error"]
         observed[path] = (
@@ -195,12 +191,8 @@ def test_a_runtime_failure_still_answers_the_documented_503(tmp_path: Path) -> N
             body["retryable"],
         )
     assert observed == {
-        # A plain question on the consumer entry takes the qa branch; the other
-        # two are the report and diagnosis starts.
-        "/v1/assistant/questions": (503, "QA_UNAVAILABLE", "general answer unavailable", True),
         "/v1/health-report-jobs": (503, "REPORT_JOB_UNAVAILABLE", "health report job unavailable", True),
-        "/v1/standard/diagnoses": (503, "DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", True),
-    }, observed
+    }
 
 
 def test_the_failure_reaches_the_log_not_only_the_response(tmp_path: Path, caplog) -> None:
@@ -263,10 +255,8 @@ NON_503_GUARDS = {
     # The classifier's outermost handler treats any escape as "no decision" and
     # returns None (it logs, and deliberately records no metric); it answers no
     # caller and has no 503 to render.
-    "_classify_for_routing",
     # Agent debug-run answers 502 with its own public message: the shape is the
     # contract for this surface (`_debug_public_error`).
-    "debug_run_agent",
     # Metrics input validation: a 422 for a caller-supplied argument, not a
     # dependency failure.
     "agent_metrics_summary",

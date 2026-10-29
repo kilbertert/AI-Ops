@@ -29,7 +29,7 @@
 W=$(mktemp -d); cp /var/lib/aiops-41/gateway/gateway.db* "$W/"
 A=a975c8e5-ad9e-425c-84c9-77581a0a2bed          # Dify 控制台里的 app（36:10008）
 # ① 从**真控制台**拉（凭据在 production.env，0600）
-aiops --config /etc/aiops-41/production.env admin pull-dify \
+aiops-admin --config /etc/aiops-41/production.env pull-dify \
   --app-id $A --tenant 1783022023241633792 --name canary-dify-pull-route-proof \
   --kb-url http://127.0.0.1:29380 --db "$W/gateway.db"
 # ② 给它绑知识库（走同一个发布门 fork→update→publish；Dify 的 DSL 不带启用的数据集）

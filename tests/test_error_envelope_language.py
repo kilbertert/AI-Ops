@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from aiops_diagnostics.faq import PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
@@ -33,13 +34,13 @@ def test_client_branchable_codes_come_out_of_real_responses(tmp_path: Path) -> N
     with client:
         # 404: a diagnosis that does not exist
         not_found = client.get(
-            "/v1/standard/diagnoses/dx_missing",
-            headers={"Authorization": "Bearer token"},
+            "/v1/assistant/questions/qa_missing",
+            headers={"Authorization": "Bearer token", "X-Business-Entry": "consumer"},
         ).json()
         # 401: no token at all
-        unauthenticated = client.get("/v1/standard/diagnoses/dx_missing").json()
+        unauthenticated = client.get("/v1/assistant/questions/qa_missing").json()
 
-    codes = {"DIAGNOSIS_NOT_FOUND": not_found, "ACCESS_TOKEN_REQUIRED": unauthenticated}
+    codes = {"QA_NOT_FOUND": not_found, "ACCESS_TOKEN_REQUIRED": unauthenticated}
     for expected, body in codes.items():
         actual = body["error"]["code"]
         assert actual == expected, f"客户端分支用的 code 变了：期望 {expected}，实得 {actual}"
@@ -89,8 +90,12 @@ def test_request_level_envelopes_echo_the_message_verbatim(tmp_path: Path) -> No
     client = _client(tmp_path)
     with client:
         for path, headers, expected in (
-            ("/v1/standard/diagnoses/dx_missing", {"Authorization": "Bearer token"}, "diagnosis not found"),
-            ("/v1/standard/diagnoses/dx_missing", {}, "access token required"),
+            (
+                "/v1/assistant/questions/qa_missing",
+                {"Authorization": "Bearer token", "X-Business-Entry": "consumer"},
+                "assistant question not found",
+            ),
+            ("/v1/assistant/questions/qa_missing", {}, "access token required"),
         ):
             bodies = [
                 client.get(path, headers={**headers, "Accept-Language": lang}).json()
@@ -134,6 +139,14 @@ class _Resolver:
         )
 
 
+class _Directory:
+    def roles_for_c_user(self, user, tenant):
+        return (PlatformRoleRecord("B-1", "C-1", "T-1", "admin"),)
+
+    def roles_for_b_user(self, user, tenant):
+        return ()
+
+
 class _Orders:
     def can_access(self, context: ScopeContext, order_no: str) -> bool:
         return order_no == "O-1"
@@ -142,7 +155,7 @@ class _Orders:
 class _Runtime:
     """Just enough to reach the 404 path: the row is absent."""
 
-    def get_standard_diagnosis(self, context: ScopeContext, diagnosis_id: str) -> None:
+    def get_assistant_qa(self, context: ScopeContext, qa_id: str) -> None:
         return None
 
     def list_standard_diagnoses(self, context: ScopeContext, *, limit: int) -> list[dict]:
@@ -163,6 +176,7 @@ def _client(tmp_path: Path) -> TestClient:
         runtime=_Runtime(),  # type: ignore[arg-type]
         caller_resolver=_Resolver(),
         order_authorizer=_Orders(),
+        platform_resolver=PlatformIdentityResolver(_Directory()),
     )
     return TestClient(app)
 
@@ -175,7 +189,7 @@ def test_job_failure_branch_codes_come_out_of_real_responses(tmp_path: Path) -> 
     so they belong here for the same reason: a hardcoded list stays green when
     the server starts returning something else.
     """
-    from aiops_diagnostics.gateway_api import _assistant_question_response, _standard_diagnosis_response
+    from aiops_diagnostics.gateway_api import _assistant_question_response
 
     qa = {
         "qa_id": "qa_1",
@@ -185,21 +199,6 @@ def test_job_failure_branch_codes_come_out_of_real_responses(tmp_path: Path) -> 
         "result": None,
     }
     assert _assistant_question_response(dict(qa), "en")["error"]["code"] == "QA_FAILED"
-
-    diagnosis = {
-        "diagnosis_id": "dx_1",
-        "order_no": "O-1",
-        "question": "q",
-        "indicator_code": None,
-        "language": "en",
-        "status": "failed",
-        "error_code": None,
-        "result": None,
-        "created_at": "t",
-        "updated_at": "t",
-        "completed_at": None,
-    }
-    assert _standard_diagnosis_response(dict(diagnosis), "en")["error"]["code"] == "DIAGNOSIS_FAILED"
 
 
 def test_health_report_job_envelope_is_the_unlocalized_one() -> None:

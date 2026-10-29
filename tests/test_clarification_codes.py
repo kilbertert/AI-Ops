@@ -21,12 +21,10 @@ from pathlib import Path
 import pytest
 from operator_support import (
     ORDER_OUTSIDE,
-    SITE_IN,
     Caller,
     Connection,
     Runtime,
     assistant_app,
-    operator_context,
 )
 
 from aiops_diagnostics.clarification import (
@@ -37,7 +35,7 @@ from aiops_diagnostics.clarification import (
     MISSING_FIELDS_BY_CODE,
     missing_fields_for,
 )
-from aiops_diagnostics.i18n import CLARIFICATION_MESSAGES, SUPPORTED_LANGUAGES, clarification_message
+from aiops_diagnostics.i18n import CLARIFICATION_MESSAGES, SUPPORTED_LANGUAGES
 
 _HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "operator"}
 _OUTSIDE_QUESTION = f"订单 {ORDER_OUTSIDE} 怎么还没退款"
@@ -51,37 +49,6 @@ def _ask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, context, question: str
 
 
 # ── #637: the account statement, not the order statement ─────────────────────
-
-
-def test_an_account_with_no_visible_sites_is_told_about_the_account(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """An empty operator site set means NO order is visible to this account.
-
-    Measured cause of the ticket: the caller read "this order is not yours" as an
-    order problem and re-checked the order twice, while the fix — add the shop
-    binding — was unreachable from the sentence.
-    """
-    resp, runtime = _ask(tmp_path, monkeypatch, operator_context(()))
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["type"] == "clarification"
-    assert runtime.diagnoses == [], "没有可见站点的账号不得被当成一次诊断"
-    assert body["code"] == CLARIFY_ACCOUNT_HAS_NO_SITES
-    assert body["message"] == clarification_message("zh", "account_no_sites")
-    assert "这个订单不属于当前账号" not in body["message"]
-
-
-def test_an_account_with_sites_keeps_the_order_statement(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The reverse direction: an account that CAN see sites, naming an order
-    outside them, still gets the order statement. Without this, the split would
-    have swapped one wrong message for another."""
-    resp, _ = _ask(tmp_path, monkeypatch, operator_context((SITE_IN,)))
-    body = resp.json()
-    assert body["code"] == CLARIFY_ORDER_NOT_YOURS
-    assert body["message"] == clarification_message("zh", "not_yours")
 
 
 def test_the_two_account_states_have_different_copy_in_every_language() -> None:
@@ -142,24 +109,3 @@ class _RecordingRuntime(Runtime):
     ) -> None:
         del context, kwargs
         self.route_metrics.append({"route_type": route_type, "outcome": outcome, "error_code": error_code})
-
-
-def test_the_reply_carries_the_code_the_metric_row_carries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The same string must be in the body AND the metric row: an operator greps
-    one token and finds both, which is the whole point of the ticket."""
-    runtime = _RecordingRuntime()
-    app, runtime = assistant_app(
-        tmp_path=tmp_path,
-        monkeypatch=monkeypatch,
-        caller=Caller(operator_context(())),
-        connection=Connection(),
-        runtime=runtime,
-    )
-    body = app.post("/v1/assistant/questions", json={"question": _OUTSIDE_QUESTION}, headers=_HEADERS).json()
-
-    assert body["code"] == CLARIFY_ACCOUNT_HAS_NO_SITES
-    assert {"route_type": "clarification", "outcome": "completed", "error_code": body["code"]} in (
-        runtime.route_metrics
-    ), runtime.route_metrics

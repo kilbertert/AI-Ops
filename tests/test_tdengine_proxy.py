@@ -54,11 +54,6 @@ def test_runtime_queries_match_proxy_allowlist() -> None:
         datetime.fromisoformat("2026-07-31 10:30:00"),
         "TX-01",
     )
-    source.get_comm_messages(
-        "GUN-01",
-        datetime.fromisoformat("2026-07-31 10:00:00"),
-        datetime.fromisoformat("2026-07-31 10:30:00"),
-    )
 
     proxy = _settings()
     assert is_allowed_sql("SHOW STABLES", proxy)

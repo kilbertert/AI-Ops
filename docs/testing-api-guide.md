@@ -1,3 +1,5 @@
+> 本退役分支已移除旧标准诊断接口；C端检测走业务工作流，管家走节点，统一使用 QA 回读。详见[退役说明](runtime-retirement.md)。
+
 # AI-Ops 功能测试接口文档
 
 版本：2026-10-28｜适用对象：产品、测试、前端联调｜接口前缀：`/v1`
@@ -120,10 +122,6 @@ curl -i --max-time 30 "$BASE_URL/v1/assistant/questions/$QA_ID" \
 | U03 | `GET /v1/banner` | 入口横幅配置 | 200，type=banner、banners；空数组可合法 |
 | M01 | `GET /v1/media/{signed_id}` | 读取本轮返回的签名媒体 | 200媒体字节；Range可206，失效403/404；非法Range为416 |
 | O01 | `GET /v1/orders/{order_no}/access` | 订单授权探针，不读正文 | 200，accessible=true；不可见/不存在404 |
-| D01 | `POST /v1/standard/diagnoses` | 旧单订单诊断，不是管家Java入口 | 202，diagnosis_id |
-| D02 | `GET /v1/standard/diagnoses/{diagnosis_id}` | 旧诊断轮询 | 200，status/result/error |
-| D03 | `POST /v1/standard/diagnoses/{diagnosis_id}/cancel` | 取消旧诊断 | 200，当前诊断对象；无请求体 |
-| D04 | `GET /v1/standard/diagnoses?limit=50` | 旧诊断历史索引 | 200，diagnoses；不包含所有qa资源 |
 | H01 | `POST /v1/health-report-jobs` | 充电健康报告 | 202，job_id；不等于故障根因诊断 |
 | H02 | `GET /v1/health-report-jobs/{job_id}` | 健康报告轮询 | 200，report在完成后可用 |
 | R01 | `POST /v1/standard/analyses` | 管家站点时间窗聚合；独立能力 | 202，analysis_id |
@@ -288,28 +286,13 @@ curl -i --max-time 30 "$BASE_URL/v1/faq/answer" \
 {"question":"请检测选定订单的充电异常","order_no":"ORDER-EXAMPLE-001","shortcut_code":"smart_diagnosis"}
 ```
 
-当前C端可能返回type=diagnosis；管家节点仍返回type=qa。不能把所有“订单检测”都发到旧diagnoses接口。
+本分支的 C端/管家订单检测均返回 type=qa；原生结果按所属业务路线交付。
 `case_exploration`等宣传动作是其他路径，不以其检索失败证明WF01动态知识失效。
 
-### 6.3 旧诊断接口 D01–D04
+### 6.3 退役后的结果回读
 
-D01请求：order_no（必填，1–128字符）、question（必填，1–4000）、indicator_code（可选，最多64字符，小写字母开头）。
-响应含diagnosis_id/order_no/question/indicator_code/language/status/retry_after_ms/result/error及创建/更新时间。
-完成或inconclusive时result包含summary/root_cause/hypotheses/evidence_ids/limitations/failed_sources/next_steps等。
-将诊断结论与独立业务证据核对；报告的缺证、推断或未核实币种不是高置信度事实。
-
-```bash
-curl -i --max-time 90 "$BASE_URL/v1/standard/diagnoses" \
-  -H "third-session: $C_SESSION" -H 'X-Business-Entry: consumer' \
-  -H "Accept-Language: $LANGUAGE" -H 'Content-Type: application/json' \
-  --data-raw "{\"order_no\":\"$ORDER_A\",\"question\":\"检查这笔订单的充电异常\"}"
-
-curl -i --max-time 30 "$BASE_URL/v1/standard/diagnoses/$DIAGNOSIS_ID" \
-  -H "third-session: $C_SESSION" -H 'X-Business-Entry: consumer'
-
-curl -i --max-time 30 -X POST "$BASE_URL/v1/standard/diagnoses/$DIAGNOSIS_ID/cancel" \
-  -H "third-session: $C_SESSION" -H 'X-Business-Entry: consumer'
-```
+C端与管家订单检测均经统一助手返回 QA 资源，按 `qa_id` 读取/取消。
+旧标准诊断的创建、查询、列表和取消端点已删除；不再使用 `diagnosis_id`。
 
 ## 7. 管家节点诊断
 

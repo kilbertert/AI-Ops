@@ -29,7 +29,6 @@ from aiops_diagnostics.bounded_http import (
 from aiops_diagnostics.sources import GUN_COLUMNS_SQL
 
 GUN_COLUMNS = GUN_COLUMNS_SQL
-COMM_COLUMNS = "_ts, direction, code, decoded"
 SAFE_VALUE = r"[A-Za-z0-9_.:-]{1,128}"
 TIME_VALUE = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}"
 
@@ -38,11 +37,6 @@ GUN_QUERY = re.compile(
     rf"WHERE device='(?P<device>{SAFE_VALUE})' AND _ts>='(?P<start>{TIME_VALUE})' "
     rf"AND _ts<='(?P<end>{TIME_VALUE})'"
     rf"(?: AND `txSerialNo`='(?P<tx>{SAFE_VALUE})')? ORDER BY _ts ASC LIMIT (?P<limit>\d+)$"
-)
-COMM_QUERY = re.compile(
-    rf"^SELECT {re.escape(COMM_COLUMNS)} FROM `charging-pile_comm` "
-    rf"WHERE device='(?P<device>{SAFE_VALUE})' AND _ts>='(?P<start>{TIME_VALUE})' "
-    rf"AND _ts<='(?P<end>{TIME_VALUE})' ORDER BY _ts ASC LIMIT (?P<limit>\d+)$"
 )
 SAFE_DATABASE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -139,7 +133,7 @@ def is_allowed_sql(sql: str, settings: ProxySettings) -> bool:
     normalized = " ".join(sql.strip().split())
     if normalized == "SHOW STABLES":
         return True
-    match = GUN_QUERY.fullmatch(normalized) or COMM_QUERY.fullmatch(normalized)
+    match = GUN_QUERY.fullmatch(normalized)
     if not match or int(match.group("limit")) > settings.max_rows:
         return False
     try:

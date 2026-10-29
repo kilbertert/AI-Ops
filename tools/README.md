@@ -1,7 +1,8 @@
 # tools/ — 数据生成器与校验器
 
-这些脚本**不进服务运行时**：它们在开发机上产出或校验仓库内的数据制品，
-跑完即可丢弃依赖。服务只读结果。
+本目录混合了数据生成器、校验器、隔离实验和现役执行组件。
+`m2_close/node/` 是正式 Java 节点的源码，`m2_live/model_proxy.py` 被正式节点栈启动；
+不能按“工具/旧里程碑”整体删除。归位方案见[目录迁移清单](../docs/architecture/repository-layout.md)。
 
 ## 目录内容
 
@@ -16,27 +17,8 @@
 | `verify_consumer_charging_status_http.py` | A 片自己的 HTTP 面证据：真 `aiops-gateway serve` 在一次性数据根上验证默认关闭、鉴权、拒绝与 no-store；成功读取用同一 app 工厂 + 回环合成授权源 | 改过直读路由的鉴权/缓存/读取行为，或要复跑 A 的 HTTP 证据时 |
 | `verify_banner_car_lookup.py` | 活口检查：横幅个性化依赖的三条**公司端点**是否真成立（#590） | 改过车图/个性化链路，或要复跑那次验收时 |
 | `check_dify_exposure.py` | Dify 暴露面的段 2/段 3 探测（#583）：真网关上的鉴权/只读语义，以及从 **Dify 自己的容器里**探「登记集合之外一律不可达」 | 改动面向 Dify 的暴露面，或要复跑 #583 的验收时 |
-| `dify_vertical_slice.py` | 端到端竖切：#582 的那条链（Dify 导出 → 拉取 → 发布 → 一条提问被服务），跑在**一次性数据根**的真网关上 | 改动 Dify 拉取/发布/QA 运行时链路，或要复跑 #582 的验收时 |
 | `dify_registry_blast_radius.py` | 打开运行时注册表之前先量后果（#587）：在**库副本**上用真选择代码对每个 `(租户, 入口)` 各算"开关前/后" | 要给某台主机的清单加 `[[dify_apps]]` 行之前 |
 
-## `dify_vertical_slice.py` 是 #582 的**可复现调用**，也是 #587 的骨架
-
-它起一个**真的** uvicorn 网关（loopback、临时端口、一次性数据根），经
-`POST /v1/assistant/questions` 发一条真实提问，断言回答**确实出自刚发布的那个版本**
-（靠指标里的 `agent_version_key`，不是"某条路回了话"）。唯一被替换的是**模型会话**
-（`qa_rag.SDKCodexSession`）、改成一个脚本化两轮回答；入口判定、选 agent、有界检索闸、
-blocks-v1 校验、作业持久化、指标落库、HTTP 路由**全部是真的**。
-
-```bash
-PYTHONPATH=src python tools/dify_vertical_slice.py          # 退出码 0/1/2
-PYTHONPATH=src python tools/dify_vertical_slice.py --live-dify \
-  --base-url http://36.156.159.175:10008 --app-id <app> --api-key-env AIOPS_DIFY_CONSOLE_API_KEY
-```
-
-退出码 `2` 是**未取证**（例如 `--live-dify` 没给凭据环境变量）—— 它**不是**通过。
-边界写在证据文件的 `not_proven` 里：**不能**证明模型质量、真实 Dify 可达、生产入口与
-语言派生；那些属 #587 阶段 1 验收。证据默认落 `var/dify-tracer/`，该目录**不在
-`.gitignore`**：提交前删掉，或把制品贴进 PR 正文而不是树里。
 
 ## `verify_banner_car_lookup.py` 跑在**网关主机**上，不跑这里
 
@@ -57,7 +39,10 @@ ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- bash -c "set -a; . /etc/
 受试身份是真实用户凭据，因此**不打印**车牌、VIN、订单号、用户名与完整 id，
 只引用尾号；`--self-check` 是无网络的纯逻辑自检，改坏分桶或判定必转红。
 
-## `m2_close/` 是委托执行的**隔离实验**，不是部署件
+## `m2_close/`：隔离实验驱动与现役节点源码
+
+下述实验驱动不用于正式运行；其中 `node/` 同时是正式节点 jar 的构建来源。
+正式部署见[节点运行手册](../deploy/node-runtime/README.md)，两者的生命周期须分别判断。
 
 `run_ic.py` 起一套本机 Docker 网络：MySQL + 编排平台服务端 + 执行节点 + Gateway 代码 +
 桩模型 + 桩业务上游，然后跑 IC-01…IC-10。它要两个预置产物（脚本不构建、不下载）：

@@ -4,14 +4,7 @@ from __future__ import annotations
 
 import json
 
-from aiops_diagnostics.bounded_http import (
-    ErrorMapping,
-    RequestSpec,
-    bearer_auth_header,
-    join_url,
-    json_body,
-    request_json,
-)
+from aiops_diagnostics.model_request import structured_request
 
 INTENTS = (
     "order_status",
@@ -78,72 +71,21 @@ def validate(value):
     return value
 
 
-def _unavailable(_):
-    return RuntimeError("consumer intent upstream unavailable")
-
-
 def classify(question, *, provider, api_key, language, **context):
     """一次无工具的结构化请求；复用部署的模型入口，不自动重试。"""
     messages = [
         {"role": "system", "content": INSTRUCTIONS},
         {"role": "user", "content": prompt(question, language=language, **context)},
     ]
-    schema = {"name": "consumer_intent", "schema": SCHEMA, "strict": True}
-    if provider.wire_api == "responses":
-        path = "/responses"
-        payload = {
-            "model": provider.model,
-            "input": messages,
-            "max_output_tokens": 1024,
-            "text": {"format": {"type": "json_schema", **schema}},
-            "stream": False,
-            "store": False,
-        }
-    elif provider.wire_api == "chat":
-        path = "/chat/completions"
-        payload = {
-            "model": provider.model,
-            "messages": messages,
-            "max_tokens": 1024,
-            "response_format": {"type": "json_schema", "json_schema": schema},
-            "stream": False,
-        }
-    else:
-        raise ValueError("unsupported consumer intent transport")
-    body = request_json(
-        RequestSpec(
-            url=join_url(provider.base_url, path),
-            method="POST",
-            headers={"Authorization": bearer_auth_header(api_key), "Content-Type": "application/json"},
-            body=json_body(payload),
-            timeout=20,
-            max_read_bytes=65536,
-            follow_redirects=False,
-        ),
-        mapping=ErrorMapping(_unavailable, _unavailable, _unavailable, _unavailable, _unavailable),
+    return validate(
+        structured_request(
+            provider=provider,
+            api_key=api_key,
+            messages=messages,
+            name="consumer_intent",
+            schema=SCHEMA,
+        )
     )
-    try:
-        if path == "/responses":
-            if body.get("status") != "completed":
-                raise ValueError("incomplete consumer intent")
-            if any(item["type"] not in {"reasoning", "message"} for item in body["output"]):
-                raise ValueError("unexpected consumer intent output")
-            parts = [part for item in body["output"] if item["type"] == "message" for part in item["content"]]
-            if len(parts) != 1 or parts[0]["type"] != "output_text":
-                raise ValueError("invalid consumer intent text")
-            raw = parts[0]["text"]
-        else:
-            (choice,) = body["choices"]
-            if (
-                choice["finish_reason"] != "stop"
-                or choice["message"].get("tool_calls")
-                or choice["message"].get("refusal")
-            ):
-                raise ValueError("incomplete consumer intent")
-            raw = choice["message"]["content"]
-        return validate(json.loads(raw))
-    except (KeyError, TypeError, AttributeError) as exc:
-        raise ValueError("invalid consumer intent response") from exc
 
 
 def message(code, language):

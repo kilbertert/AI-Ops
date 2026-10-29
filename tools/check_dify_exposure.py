@@ -168,9 +168,11 @@ def run_runtime_segment(out_dir: Path) -> int:
     base = f"http://127.0.0.1:{port}"
 
     try:
-        subprocess.run(  # noqa: S603 - fixed argv, no shell
-            ["uv", "run", "aiops", "init"], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120
-        )
+        config = root / "config" / "production.env"
+        config.parent.mkdir(mode=0o700)
+        config.write_text("# isolated verification\n", encoding="utf-8")
+        config.chmod(0o600)
+        env["AIOPS_GATEWAY_ENVIRONMENT"] = "verify"
         process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
             ["uv", "run", "aiops-gateway", "serve", "--host", "127.0.0.1", "--port", str(port)],
             cwd=ROOT,

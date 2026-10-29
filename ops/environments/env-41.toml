@@ -1,6 +1,6 @@
 # 41 环境（api.mall.qushiyun.com，47.97.160.153）已发布客服 agent 清单。
 # 收敛命令（41 on-box）：
-#   aiops --config /etc/aiops-41/production.env admin reconcile \
+#   aiops-admin --config /etc/aiops-41/production.env reconcile \
 #     ops/environments/env-41.toml \
 #     --db /var/lib/aiops-41/gateway/gateway.db \
 #     --kb-url http://127.0.0.1:29380
@@ -145,7 +145,7 @@ description = ""
 agent_type = "operations"
 
 # 提示词**不在这里**：这个 agent 绑定了 Dify app（见下方 [[dify_apps]]），
-# 正文由 Dify 编辑、经 `aiops admin pull-dify` 过发布门拉回（#577）。
+# 正文由 Dify 编辑、经 `aiops-admin pull-dify` 过发布门拉回（#577）。
 # 清单里再写一份就是两个权威 —— load_manifest 会直接拒（#739）。
 knowledge_base_ids = []
 model = "deepseek-v4-flash"

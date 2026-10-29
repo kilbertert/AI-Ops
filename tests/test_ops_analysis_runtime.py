@@ -2,7 +2,7 @@
 
 本文件与 ``test_ops_analysis.py`` 的分工：那一份测装配与聚合（纯函数、无作业），
 这一份测**作业**——它必须要么给出契约，要么给出一个终态行。第一版交付时它能两者都不给：
-叙述轮回了散文 ⇒ ``AgentRuntimeError`` ⇒ 作业停在 ``running`` 直到过期。
+叙述轮回了散文 ⇒ ``RuntimeError`` ⇒ 作业停在 ``running`` 直到过期。
 
 两条判据：
 
@@ -22,7 +22,6 @@ from typing import Any
 
 import pytest
 
-from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexTurnOutput
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime
@@ -134,7 +133,6 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[GatewayRuntime, GatewayStore]
     )
     gateway_settings.server_config_file.write_text("# test\n", encoding="utf-8")
     settings = Settings()
-    settings.agent.run_root = str(tmp_path / "runs")
     store = GatewayStore(gateway_settings.database_file)
     monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
     monkeypatch.setattr(
@@ -179,13 +177,13 @@ def test_a_prose_answer_ends_the_analysis_job_instead_of_leaving_it_running(
     """模型回了散文 ⇒ 作业终结为 failed，而不是永远 ``running``。
 
     这是 41 上第一版交付的真实形状：叙述轮返回了 ``main_cause：…`` 这样的散文，解析
-    拿不到 JSON 就 ``raise AgentRuntimeError``，而那条 ``except`` 只接了
+    拿不到 JSON 就 ``raise RuntimeError``，而那条 ``except`` 只接了
     ``SourceError`` / ``ValueError`` —— 于是**没有任何终态写入**，轮询方看到的是一个
     永远 ``running`` 的作业，直到它过期。
     """
 
     def prose(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        raise AgentRuntimeError("operations-analysis narrative returned invalid JSON")
+        raise RuntimeError("operations-analysis narrative returned invalid JSON")
 
     runtime, store = _runtime(tmp_path, monkeypatch)
     monkeypatch.setattr("aiops_diagnostics.ops_analysis_narrative.run_narrative_turn", prose)
@@ -196,95 +194,6 @@ def test_a_prose_answer_ends_the_analysis_job_instead_of_leaving_it_running(
 
     assert job["status"] == "failed", job
     assert job["error_code"] == "ANALYSIS_FAILED", job
-
-
-def test_the_narrative_turn_is_given_the_declared_output_schema() -> None:
-    """叙述轮的 ``output_schema`` 是那个"只有两段文字"的结构，不是 ``None``。
-
-    这条是上一条的上游：schema 没传，模型自然按散文回答；只靠"出错也要终结"兜底，
-    得到的是一个**每次都失败**的卡。两处一起才构成"要么答对，要么终结"。
-    """
-    from aiops_diagnostics.ops_analysis_narrative import OPS_NARRATIVE_SCHEMA, run_narrative_turn
-
-    seen: dict[str, Any] = {}
-
-    class _Session:
-        def run(self, prompt: str, *, output_schema: dict[str, Any] | None = None) -> CodexTurnOutput:
-            seen["schema"] = output_schema
-            return CodexTurnOutput(
-                turn_id="t-1",
-                final_response='{"main_cause": "设备断连", "recommendation": "核对上报"}',
-                usage={},
-            )
-
-        def close(self) -> None:
-            pass
-
-    payload = run_narrative_turn(
-        {"failure_rate": 0.2, "risk": "abnormal"},
-        Settings().agent,
-        session=_Session(),  # type: ignore[arg-type]
-    )
-
-    assert seen["schema"] == OPS_NARRATIVE_SCHEMA, seen["schema"]
-    assert seen["schema"]["required"] == ["main_cause", "recommendation"]
-    assert payload == {"main_cause": "设备断连", "recommendation": "核对上报"}
-
-
-def test_the_narrative_workspace_asks_for_the_narrative_shape_not_the_qa_one(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """护栏文本要与这一轮的提示词说同一个答案形状。
-
-    这是 41 上第二处失败的直接成因：零阶工作区的 AGENTS.md 写着「回答问题、末尾附提醒语、
-    返回 ``text``」，而叙述轮的提示词要 ``{main_cause, recommendation}`` —— 模型照护栏做，
-    回了一个 ``{"text": …}`` 信封，叙述轮随即拒绝它。**同一轮里两条互相矛盾的指令**，
-    正是这个模块的文档字符串已经记过一次的失败形态。
-    """
-    from aiops_diagnostics.agent_workspace import NARRATIVE_ANSWER_CONTRACT, AgentWorkspace
-    from aiops_diagnostics.ops_analysis_narrative import run_narrative_turn
-
-    settings = Settings()
-    settings.agent.run_root = str(tmp_path / "runs")
-    captured: dict[str, Any] = {}
-
-    class _Session:
-        def __init__(self, workspace: Any, *_args: Any, **_kwargs: Any) -> None:
-            captured["contract"] = (workspace.path / "AGENTS.md").read_text(encoding="utf-8")
-
-        def run(self, prompt: str, *, output_schema: dict[str, Any] | None = None) -> CodexTurnOutput:
-            del prompt, output_schema
-            return CodexTurnOutput(
-                turn_id="t-1",
-                final_response='{"main_cause": "设备断连", "recommendation": "核对上报"}',
-                usage={},
-            )
-
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr("aiops_diagnostics.ops_analysis_narrative.SDKCodexSession", _Session)
-    run_narrative_turn(
-        {"failure_rate": 0.2},
-        settings.agent,
-        project_root=tmp_path,
-        session=None,  # type: ignore[arg-type]
-    )
-
-    contract = captured["contract"]
-    assert "`main_cause` and `recommendation`" in contract
-    assert "`text` answer" not in contract, "护栏仍在要求零阶那份 text 信封"
-    # ``create_qa`` 的默认契约仍是零阶那份 —— 这一轮只是显式换了形状。
-    default = (
-        AgentWorkspace.create_qa(
-            tmp_path,
-            tmp_path / "runs2",
-            language="zh",
-        ).path
-        / "AGENTS.md"
-    ).read_text(encoding="utf-8")
-    assert "`text` answer" in default
-    assert NARRATIVE_ANSWER_CONTRACT == "narrative"
 
 
 def test_the_analysis_route_type_is_a_recordable_metric(tmp_path: Path) -> None:
@@ -495,110 +404,6 @@ def test_a_locked_database_ends_the_job_instead_of_leaving_it_running(tmp_path: 
     assert seen[0]["error_code"] is None, "第一次收尾写是「成功」那一条，锁是在它内部抛的"
 
 
-def test_a_tool_request_turn_is_not_a_narrative(tmp_path: Path, monkeypatch) -> None:
-    """工具请求回合**不是**叙述 —— 作业必须落 ``failed``，不是静默的 ``completed``。
-
-    #700 在 41 上逮到：支付卡的叙述轮回了 ``{"kind": "tool_requests", …}``
-    （那一轮的工具调用全部因沙箱不可用失败，模型转而请求订单快照）。``_parse_narrative``
-    当时**只要解析得出一个 dict 就收下**，于是 ``_narrative`` 按名字取两个键都取不到
-    ⇒ 两个散文字段都是 ``None``，而作业以 **``completed``** 落库、**没有原因码**。
-
-    一张说 ``completed`` 却没有 ``main_cause`` 的卡，读起来像「聚合本身没话说」——
-    那句假陈述正是 ``_narrative_for`` 的文档字符串里已经写过的、必须要失败的那种情形。
-    判据落在**作业终态**上，不是落在某个函数返回什么。
-    """
-    runtime, store = _runtime(tmp_path, monkeypatch)
-
-    # The seam is the **parser**, not the turn: stub the session so the real
-    # ``run_narrative_turn`` reads a real model answer through the real parser.
-    class _Session:
-        def run(self, prompt: str, *, output_schema: Any = None) -> CodexTurnOutput:
-            del prompt, output_schema
-            return CodexTurnOutput(
-                turn_id="t-1",
-                final_response='{"kind": "tool_requests", "tool_requests": [{"tool": "order_snapshot"}]}',
-                usage={},
-            )
-
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr(
-        "aiops_diagnostics.ops_analysis_narrative.SDKCodexSession",
-        lambda *a, **k: _Session(),
-    )
-    try:
-        created = runtime.start_operations_card(
-            _scope(),
-            card="payment",
-            site_ids=(SITE,),
-            window_start=WINDOW[0],
-            window_end=WINDOW[1],
-            language="zh",
-        )
-        aid = created["diagnosis_id"]
-        deadline = time.monotonic() + 5
-        current = created
-        while current["status"] not in {"completed", "failed", "inconclusive"}:
-            assert time.monotonic() < deadline, current
-            time.sleep(0.01)
-            current = store.get_standard_diagnosis(aid, _scope().scope_fingerprint)
-    finally:
-        runtime.shutdown()
-
-    assert current["status"] == "failed", current
-    assert current["error_code"] == "ANALYSIS_FAILED", current
-
-
-def test_a_half_narrative_is_not_a_narrative_either(tmp_path: Path, monkeypatch) -> None:
-    """只带回**一个**散文字段的回包同样不算叙述（评审在 #718 上逮到的）。
-
-    ``any(...)`` 的写法会让「只有 recommendation」过门，装配器把 ``main_cause`` 留成
-    ``None``，作业照样 ``completed`` —— 与整份工具请求被当成叙述是同一类假陈述，
-    只是少一个键而不是少两个。``OPS_NARRATIVE_SCHEMA`` 里两个字段都是 required，
-    所以这条要求的正是声明过的东西。
-    """
-    runtime, store = _runtime(tmp_path, monkeypatch)
-
-    class _Session:
-        def run(self, prompt: str, *, output_schema: Any = None) -> CodexTurnOutput:
-            del prompt, output_schema
-            return CodexTurnOutput(
-                turn_id="t-1",
-                final_response='{"recommendation": "先看站点 S-1"}',
-                usage={},
-            )
-
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr(
-        "aiops_diagnostics.ops_analysis_narrative.SDKCodexSession",
-        lambda *a, **k: _Session(),
-    )
-    try:
-        created = runtime.start_operations_card(
-            _scope(),
-            card="payment",
-            site_ids=(SITE,),
-            window_start=WINDOW[0],
-            window_end=WINDOW[1],
-            language="zh",
-        )
-        aid = created["diagnosis_id"]
-        deadline = time.monotonic() + 5
-        current = created
-        while current["status"] not in {"completed", "failed", "inconclusive"}:
-            assert time.monotonic() < deadline, current
-            time.sleep(0.01)
-            current = store.get_standard_diagnosis(aid, _scope().scope_fingerprint)
-    finally:
-        runtime.shutdown()
-
-    assert current["status"] == "failed", current
-    assert current["error_code"] == "ANALYSIS_FAILED", current
-
-
 def test_the_whole_tenant_scope_is_no_narrowing_not_an_empty_one() -> None:
     """范围收敛的三值真值表（评审在 #721 上逮到的整条错路）。
 
@@ -671,7 +476,7 @@ def test_a_scope_resolution_failure_ends_the_job_instead_of_leaving_it_running(
     """范围解析抛 ``ScopeError`` ⇒ 作业终结，**不是**停在 ``running``。
 
     ``ScopeError`` 继承 ``RuntimeError``，而两个 worker 的 ``except`` 收的是
-    ``AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.OperationalError``
+    ``RuntimeError, SourceError, ValueError, TypeError, sqlite3.OperationalError``
     —— 也就是说它**不在**那个元组里。而 ``resolve_query_scope`` 正是在 worker 的
     ``try`` 内被调用，它会抛 ``ScopeError``（数据范围超限、``self`` 范围但主体没绑
     C 端用户、代查缺 Dis 配置…），每一种都是普通的运行时状况，不是编程错误。

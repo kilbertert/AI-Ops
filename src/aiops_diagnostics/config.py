@@ -11,12 +11,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import dotenv_values
 
-from aiops_diagnostics.http_auth import DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS
 from aiops_diagnostics.platform_paths import (
-    default_codex_home,
     default_config_file,
     default_key_dir,
-    default_run_root,
 )
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 
@@ -76,16 +73,6 @@ def _parse_providers(env: Callable[[str, str], str]) -> tuple[ProviderConfig, ..
     return tuple(providers)
 
 
-def _default_codex_bin() -> str:
-    """Prefer the SDK-pinned native runtime over a shell wrapper on PATH."""
-    try:
-        from codex_cli_bin import bundled_codex_path
-
-        return str(bundled_codex_path())
-    except (ImportError, AttributeError):
-        return shutil.which("codex") or ("codex.exe" if os.name == "nt" else "codex")
-
-
 def canonical_provider_base_url(value: str) -> str:
     """Validate and normalize the non-secret model provider endpoint."""
     candidate = value.strip()
@@ -93,37 +80,21 @@ def canonical_provider_base_url(value: str) -> str:
         parsed = urlsplit(candidate)
         _ = parsed.port
     except ValueError as exc:
-        raise ValueError("Codex API base_url 无效") from exc
+        raise ValueError("模型 API base_url 无效") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("Codex API base_url 必须是完整的 http 或 https 地址")
+        raise ValueError("模型 API base_url 必须是完整的 http 或 https 地址")
     if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-        raise ValueError("远程 Codex API base_url 必须使用 https")
+        raise ValueError("远程 模型 API base_url 必须使用 https")
     if parsed.username is not None or parsed.password is not None:
-        raise ValueError("Codex API base_url 不得包含认证信息")
+        raise ValueError("模型 API base_url 不得包含认证信息")
     if parsed.query or parsed.fragment:
-        raise ValueError("Codex API base_url 不得包含 query 或 fragment")
+        raise ValueError("模型 API base_url 不得包含 query 或 fragment")
     return candidate.rstrip("/") + "/"
-
-
-def require_same_provider_base_url(configured: str, persisted: str) -> str:
-    """Resume may rotate credentials, but it must not redirect them to another provider."""
-    configured_url = canonical_provider_base_url(configured)
-    persisted_url = canonical_provider_base_url(persisted)
-    if configured_url != persisted_url:
-        raise ValueError("恢复运行的 Codex API base_url 与当前配置不一致；只允许切换同一端点的 key slot")
-    return configured_url
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:
-    """A registered, selectable Responses API model provider.
-
-    The Codex-side ``env_key`` is always ``AIOPS_CODEX_PROVIDER_KEY``: every
-    provider resolves its own credential and the harness injects it into that
-    single env var for the Codex subprocess. ``api_key_env`` is the optional
-    environment-variable *source* for the key override; when empty the key is
-    read from the private ``keys/<key_slot>.key`` file.
-    """
+    """单次模型请求的提供方；凭据只从环境变量或私有 key 文件读取。"""
 
     name: str
     base_url: str
@@ -165,21 +136,6 @@ class RedisSettings:
     database: int = 0
     user: str = ""
     password: str = ""
-
-
-def _validate_token_expire_seconds(value: int) -> None:
-    if not 60 <= value <= 600:
-        raise ValueError("Diag API 令牌有效期必须在 60-600 秒之间")
-
-
-@dataclass(slots=True)
-class InternalTokenSettings:
-    secret: str | None = None
-    expire_seconds: int | None = DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS
-
-    def __post_init__(self) -> None:
-        if self.expire_seconds is not None:
-            _validate_token_expire_seconds(self.expire_seconds)
 
 
 @dataclass(slots=True)
@@ -234,47 +190,6 @@ class DisSettings:
 
 
 @dataclass(slots=True)
-class HttpSettings:
-    base_url: str | None = None
-    internal_token: InternalTokenSettings = field(default_factory=InternalTokenSettings)
-    timeout_seconds: int = 8
-
-    def __post_init__(self) -> None:
-        if self.base_url is not None:
-            parsed = urlsplit(self.base_url)
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-                raise ValueError("Diag API base_url 必须是完整的 http 或 https 地址")
-            if parsed.username is not None or parsed.password is not None:
-                raise ValueError("Diag API base_url 不得包含认证信息")
-            if parsed.query or parsed.fragment:
-                raise ValueError("Diag API base_url 不得包含 query 或 fragment")
-        if not 1 <= self.timeout_seconds <= 60:
-            raise ValueError("Diag API 超时必须在 1-60 秒之间")
-
-    @property
-    def token_secret(self) -> str | None:
-        return self.internal_token.secret
-
-    @token_secret.setter
-    def token_secret(self, value: str | None) -> None:
-        self.internal_token.secret = value
-
-    @property
-    def token_expire_seconds(self) -> int | None:
-        return self.internal_token.expire_seconds
-
-    @token_expire_seconds.setter
-    def token_expire_seconds(self, value: int | None) -> None:
-        if value is not None:
-            _validate_token_expire_seconds(value)
-        self.internal_token.expire_seconds = value
-
-
-# Deprecated flat name kept as an alias so existing callers/tests keep working.
-DiagApiSettings = HttpSettings
-
-
-@dataclass(slots=True)
 class SSHSettings:
     enabled: bool = False
     ssh_bin: str = field(default_factory=lambda: shutil.which("ssh") or "ssh")
@@ -316,7 +231,6 @@ class SafetySettings:
     query_timeout_seconds: int = 8
     mysql_max_execution_ms: int = 3000
     tdengine_max_rows: int = 2000
-    redis_max_messages: int = 200
     max_order_window_hours: int = 72
 
     def __post_init__(self) -> None:
@@ -324,7 +238,6 @@ class SafetySettings:
             "query_timeout_seconds": (self.query_timeout_seconds, 1, 60),
             "mysql_max_execution_ms": (self.mysql_max_execution_ms, 100, 30_000),
             "tdengine_max_rows": (self.tdengine_max_rows, 1, 2_000),
-            "redis_max_messages": (self.redis_max_messages, 1, 1_000),
             "max_order_window_hours": (self.max_order_window_hours, 1, 168),
         }
         for name, (value, minimum, maximum) in limits.items():
@@ -334,21 +247,12 @@ class SafetySettings:
 
 @dataclass(slots=True)
 class AgentSettings:
-    codex_bin: str = field(default_factory=_default_codex_bin)
-    codex_runtime_home: str = field(default_factory=lambda: str(default_codex_home()))
     api_base_url: str = "https://api.psydo.top/"
     api_key_env: str = "AIOPS_CODEX_API_KEY"
     api_key_file: str = ""
     key_dir: str = field(default_factory=lambda: str(default_key_dir()))
     key_slot: str = "default"
-    run_root: str = field(default_factory=lambda: str(default_run_root()))
     model: str = ""
-    max_turns: int = 8
-    max_tool_calls: int = 16
-    max_validation_retries: int = 2
-    turn_timeout_seconds: int = 600
-    heartbeat_interval_seconds: int = 10
-    windows_sandbox: str = "unelevated"
     providers: tuple[ProviderConfig, ...] = ()
     default_provider: str = "aiops-api"
 
@@ -378,40 +282,7 @@ class AgentSettings:
         available = ", ".join(provider.name for provider in self.providers)
         raise ValueError(f"未知的 model provider: {target}; 可用: {available}")
 
-    def provider_names(self) -> tuple[str, ...]:
-        return tuple(provider.name for provider in self.providers)
-
-    def provider_chain(self, name: str | None) -> tuple[ProviderConfig, ...]:
-        """The selected provider, then the standbys that may serve in its place.
-
-        **Registry order is the priority order.** The chosen provider comes
-        first and every provider declared AFTER it is a standby, in declaration
-        order. Deliberately not a second configuration key: a list of standby
-        names that must agree with ``AIOPS_PROVIDERS`` is a list that drifts
-        from it, and the failure mode of drift here is silent — a standby that
-        nothing selects looks exactly like one that was never configured. That
-        is how a paid provider running dry (41 live, 2026-10-19: upstream `403`
-        "预扣费额度失败, 用户剩余额度: ¥0.007") became a total product outage while
-        a funded key slot sat unused beside it.
-
-        Providers declared BEFORE the selected one are never standbys: setting
-        ``AIOPS_DEFAULT_PROVIDER`` to the second entry means the first is
-        superseded, not that it takes priority back on the next failure.
-
-        A legacy single-provider configuration yields a one-element chain, so
-        callers need no special case for it.
-        """
-        primary = self.select_provider(name)
-        if not self.providers:
-            return (primary,)
-        ordered = list(self.providers)
-        return tuple(ordered[ordered.index(primary) :])
-
     def validate(self) -> None:
-        codex_bin = Path(self.codex_bin).expanduser()
-        if not codex_bin.is_file() or not os.access(codex_bin, os.X_OK):
-            raise ValueError(f"Codex CLI 不可执行: {codex_bin}")
-        runtime_home = Path(self.codex_runtime_home).expanduser().resolve()
         if self.providers:
             names = [provider.name for provider in self.providers]
             if len(names) != len(set(names)):
@@ -428,22 +299,8 @@ class AgentSettings:
         else:
             canonical_provider_base_url(self.api_base_url)
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.api_key_env):
-                raise ValueError("Codex API key 环境变量名无效")
+                raise ValueError("模型 API key 环境变量名无效")
         validate_key_slot_name(self.key_slot)
-        if runtime_home == Path(self.key_dir).expanduser().resolve():
-            raise ValueError("Codex runtime home 与 key_dir 必须隔离")
-        if self.windows_sandbox not in {"elevated", "unelevated"}:
-            raise ValueError("Windows Codex sandbox 必须是 elevated 或 unelevated")
-        limits = {
-            "max_turns": (self.max_turns, 2, 20),
-            "max_tool_calls": (self.max_tool_calls, 1, 50),
-            "max_validation_retries": (self.max_validation_retries, 0, 5),
-            "turn_timeout_seconds": (self.turn_timeout_seconds, 30, 1800),
-            "heartbeat_interval_seconds": (self.heartbeat_interval_seconds, 1, 120),
-        }
-        for name, (value, minimum, maximum) in limits.items():
-            if not minimum <= value <= maximum:
-                raise ValueError(f"{name} 必须在 {minimum}-{maximum} 之间")
 
 
 @dataclass(slots=True)
@@ -451,17 +308,11 @@ class Settings:
     mysql: MySQLSettings = field(default_factory=MySQLSettings)
     tdengine: TDengineSettings = field(default_factory=TDengineSettings)
     redis: RedisSettings = field(default_factory=RedisSettings)
-    http: HttpSettings = field(default_factory=HttpSettings)
     upms: UpmsSettings = field(default_factory=UpmsSettings)
     dis: DisSettings = field(default_factory=DisSettings)
     ssh: SSHSettings = field(default_factory=SSHSettings)
     safety: SafetySettings = field(default_factory=SafetySettings)
     agent: AgentSettings = field(default_factory=AgentSettings)
-
-    @property
-    def diag_api(self) -> HttpSettings:
-        """Deprecated flat alias for ``http``; kept for existing callers and tests."""
-        return self.http
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -497,26 +348,10 @@ class Settings:
 
         portable_home = env("AIOPS_HOME")
         config_home = env("AIOPS_CONFIG_HOME") or portable_home
-        data_home = env("AIOPS_DATA_HOME") or portable_home
         key_dir_default = Path(config_home) / "keys" if config_home else default_key_dir()
-        codex_home_default = Path(data_home) / "codex-home" if data_home else default_codex_home()
-        run_root_default = Path(data_home) / "runs" if data_home else default_run_root()
 
         providers = _parse_providers(env)
         default_provider = env("AIOPS_DEFAULT_PROVIDER") or (providers[0].name if providers else "aiops-api")
-
-        http_base_url = env("AIOPS_HTTP_BASE_URL") or env("AIOPS_DIAG_API_BASE_URL") or None
-        http_secret = env("AIOPS_HTTP_INTERNAL_TOKEN_SECRET") or env("AIOPS_DIAG_API_TOKEN_SECRET") or None
-        http_expire_seconds = env_int_optional("AIOPS_HTTP_INTERNAL_TOKEN_EXPIRE_SECONDS")
-        if http_expire_seconds is None:
-            http_expire_seconds = env_int_optional("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS")
-        if http_expire_seconds is None:
-            http_expire_seconds = DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS
-        http_timeout_seconds = env_int_optional("AIOPS_HTTP_TIMEOUT_SECONDS")
-        if http_timeout_seconds is None:
-            http_timeout_seconds = env_int_optional("AIOPS_DIAG_API_TIMEOUT_SECONDS")
-        if http_timeout_seconds is None:
-            http_timeout_seconds = 8
 
         return cls(
             mysql=MySQLSettings(
@@ -538,14 +373,6 @@ class Settings:
                 database=env_int("AIOPS_REDIS_DATABASE", 0),
                 user=env("AIOPS_REDIS_USER"),
                 password=env("AIOPS_REDIS_PASSWORD"),
-            ),
-            http=HttpSettings(
-                base_url=http_base_url,
-                internal_token=InternalTokenSettings(
-                    secret=http_secret,
-                    expire_seconds=http_expire_seconds,
-                ),
-                timeout_seconds=http_timeout_seconds,
             ),
             upms=UpmsSettings(
                 base_url=env("AIOPS_UPMS_BASE_URL") or None,
@@ -575,25 +402,15 @@ class Settings:
                 query_timeout_seconds=env_int("AIOPS_QUERY_TIMEOUT_SECONDS", 8),
                 mysql_max_execution_ms=env_int("AIOPS_MYSQL_MAX_EXECUTION_MS", 3000),
                 tdengine_max_rows=env_int("AIOPS_TDENGINE_MAX_ROWS", 2000),
-                redis_max_messages=env_int("AIOPS_REDIS_MAX_MESSAGES", 200),
                 max_order_window_hours=env_int("AIOPS_MAX_ORDER_WINDOW_HOURS", 72),
             ),
             agent=AgentSettings(
-                codex_bin=env("AIOPS_CODEX_BIN") or _default_codex_bin(),
-                codex_runtime_home=env("AIOPS_CODEX_RUNTIME_HOME") or str(codex_home_default),
                 api_base_url=env("AIOPS_CODEX_BASE_URL", "https://api.psydo.top/"),
                 api_key_env=env("AIOPS_CODEX_API_KEY_ENV", "AIOPS_CODEX_API_KEY"),
                 api_key_file=env("AIOPS_CODEX_API_KEY_FILE"),
                 key_dir=env("AIOPS_CODEX_KEY_DIR") or str(key_dir_default),
                 key_slot=env("AIOPS_CODEX_KEY_SLOT", "default"),
-                run_root=env("AIOPS_AGENT_RUN_ROOT") or str(run_root_default),
                 model=env("AIOPS_AGENT_MODEL"),
-                max_turns=env_int("AIOPS_AGENT_MAX_TURNS", 8),
-                max_tool_calls=env_int("AIOPS_AGENT_MAX_TOOL_CALLS", 16),
-                max_validation_retries=env_int("AIOPS_AGENT_MAX_VALIDATION_RETRIES", 2),
-                turn_timeout_seconds=env_int("AIOPS_AGENT_TURN_TIMEOUT_SECONDS", 600),
-                heartbeat_interval_seconds=env_int("AIOPS_AGENT_HEARTBEAT_INTERVAL_SECONDS", 10),
-                windows_sandbox=env("AIOPS_WINDOWS_SANDBOX", "unelevated"),
                 providers=providers,
                 default_provider=default_provider,
             ),
@@ -605,15 +422,8 @@ class Settings:
         data["tdengine"]["url"] = _redact_url_credentials(self.tdengine.url)
         data["tdengine"]["password"] = "REDACTED" if self.tdengine.password else ""
         data["redis"]["password"] = "REDACTED" if self.redis.password else ""
-        data["http"]["internal_token"]["secret"] = "REDACTED" if self.http.internal_token.secret else ""
         data["upms"]["inside_token"] = "REDACTED" if self.upms.inside_token else ""
         data["dis"]["token"] = "REDACTED" if self.dis.token else ""
-        data["diag_api"] = {
-            "base_url": self.http.base_url,
-            "token_secret": "REDACTED" if self.http.token_secret else "",
-            "token_expire_seconds": self.http.token_expire_seconds,
-            "timeout_seconds": self.http.timeout_seconds,
-        }
         return data
 
 

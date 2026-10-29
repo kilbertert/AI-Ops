@@ -39,8 +39,6 @@ RELEASING = "_release_conversation_turn"
 #: The runtime entry points that accept a claimed turn. A branch that claims a
 #: turn must pass it to exactly one of these, or release it.
 HANDOFFS = {
-    "start_assistant_qa": "conversation_turn_no",
-    "start_standard_diagnosis": "conversation_turn",
     # APP-RUNTIME-01：聊天入口的节点路线也领取会话轮次，必须同样**交给 worker** ——
     # 它是异步的（POST 立即返回），所以答案只能由后台写在终态。
     "start_chat_order_qa": "conversation_turn_no",
@@ -181,21 +179,6 @@ def test_every_claim_site_hands_its_turn_to_a_worker_or_completes_status() -> No
                 f" hands it nowhere (block is {len(block)} statements)"
             )
     assert offenders == [], "; ".join(offenders)
-
-
-def test_the_handoff_parameter_is_wired_through_the_runtime() -> None:
-    """The claimed turn must reach the code that writes the answer back.
-
-    A branch can hand a turn to the runtime while the runtime drops it on the
-    floor; the endpoint still answers 202 and the row still never gets an
-    answer. Both hops are pinned here, in the runtime that owns the writes.
-    """
-    tree = ast.parse((SOURCE_ROOT / "gateway_runtime.py").read_text(encoding="utf-8"))
-    for entry, parameter in HANDOFFS.items():
-        signature = _function(tree, entry)
-        names = {arg.arg for arg in signature.args.args + signature.args.kwonlyargs}
-        assert parameter in names, f"{entry}() no longer accepts {parameter}: the turn cannot reach it"
-    _function(tree, "_complete_conversation_turn")  # raises if the one shared write is gone
 
 
 def test_a_release_path_survives_on_every_claiming_branch() -> None:

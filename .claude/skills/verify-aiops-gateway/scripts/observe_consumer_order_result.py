@@ -363,12 +363,10 @@ def main() -> int:
             [str(stubs), str(repo / "src"), os.environ.get("PYTHONPATH", "")]
         ).rstrip(os.pathsep),
     }
-    init = subprocess.run(["uv", "run", "aiops", "init"], cwd=repo, env=env, capture_output=True, text=True)
-    if init.returncode != 0:
-        print("aiops init failed:\n" + (init.stdout + init.stderr)[-1500:])
-        shutil.rmtree(root, ignore_errors=True)
-        return 2
-
+    config = root / "config" / "production.env"
+    config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    config.write_text("# isolated verification\n", encoding="utf-8")
+    config.chmod(0o600)
     out_dir = (repo / args.out).parent.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / "consumer-order-observation.gateway.log"

@@ -1,9 +1,4 @@
-"""``aiops admin`` — declarative gateway management commands.
-
-Currently one command: ``admin reconcile`` converges the gateway agent store
-toward an ``ops/environments/<env>.toml`` manifest through AgentManager (the
-production code path). See :mod:`aiops_diagnostics.agent_manifest`.
-"""
+"""独立运维入口：环境收敛、开户、知识同步和发布管理。"""
 
 from __future__ import annotations
 
@@ -19,6 +14,18 @@ from aiops_diagnostics.config import Settings, selected_config_file
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 
 admin_app = typer.Typer(name="admin", help="AI-Ops 网关管理操作（环境清单收敛）", no_args_is_help=True)
+
+
+@admin_app.callback()
+def configure_admin(
+    context: typer.Context,
+    config_file: Annotated[
+        Path | None, typer.Option("--config", help="使用指定的私有 production.env 配置文件")
+    ] = None,
+) -> None:
+    context.ensure_object(dict)
+    if config_file is not None:
+        context.obj["config_file"] = config_file
 
 
 def _platform_migration_context() -> Any:
@@ -216,7 +223,6 @@ def pull_dify(
     console, database = _dify_console_and_db(ctx, db)
     # 声明的 dataset 靠这张表翻译成我们的知识库（与检索路由用的是同一张、同一个解析器）。
     knowledge_registry = _dify_knowledge_registry(console)
-    tool_registry = _dify_tool_registry(console)
 
     knowledge_resolver = None
     if kb_url:
@@ -240,7 +246,6 @@ def pull_dify(
         app_id=app_id,
         api_key=console.dify_console_api_key,
         workspace_id=resolved_workspace,
-        ops_tools_enabled=_ops_app_registered(console, tenant, app_id),
     )
     try:
         if dry_run:
@@ -261,7 +266,6 @@ def pull_dify(
                 output_contract=output_contract,
                 knowledge_base_ids=None if knowledge_base_id is None else tuple(knowledge_base_id),
                 knowledge_registry=knowledge_registry,
-                tool_registry=tool_registry,
             )
             typer.echo(
                 json.dumps(
@@ -326,21 +330,6 @@ def _dify_knowledge_registry(console: Any) -> Any:
     from aiops_diagnostics.gateway_config import parse_dify_knowledge_bindings
 
     return parse_dify_knowledge_bindings(getattr(console, "dify_knowledge_bindings", "") or "")
-
-
-def _ops_app_registered(console: Any, tenant_id: str, app_id: str) -> bool:
-    from aiops_diagnostics.ops_bindings import ops_app_registered
-
-    return ops_app_registered(
-        getattr(console, "ops_bindings_file", ""), console.environment, tenant_id, app_id
-    )
-
-
-def _dify_tool_registry(console: Any) -> Any:
-    """Dify 工具身份 → ``ToolName`` 的登记表，与知识库那张同一条解析纪律。"""
-    from aiops_diagnostics.gateway_config import parse_dify_tool_bindings
-
-    return parse_dify_tool_bindings(getattr(console, "dify_tool_bindings", "") or "")
 
 
 def _console_settings_from(path: Path) -> dict[str, str]:
@@ -484,7 +473,6 @@ def sync_from_dify(
     console, database = _dify_console_and_db(ctx, db)
     settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
     knowledge_registry = _dify_knowledge_registry(console)
-    tool_registry = _dify_tool_registry(console)
     knowledge_resolver = None
     if kb_url:
         from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
@@ -548,7 +536,6 @@ def sync_from_dify(
             app_id=binding.app_id,
             api_key=console.dify_console_api_key,
             workspace_id=resolved[binding.tenant_id],
-            ops_tools_enabled=_ops_app_registered(console, binding.tenant_id, binding.app_id),
         )
         try:
             outcome = sync_binding_from_dify(
@@ -558,7 +545,6 @@ def sync_from_dify(
                 source,
                 dry_run=dry_run,
                 knowledge_registry=knowledge_registry,
-                tool_registry=tool_registry,
             )
             outcomes.append(dataclasses.asdict(outcome))
             if outcome.action == "failed":
@@ -894,7 +880,7 @@ def adopt_ragflow_tenant_command(
 
     口令**从 stdin 读一行**，不接受命令行参数 —— ``ps``、shell 历史与作业日志都会留下 argv。
 
-        printf '%s' "$PASSWORD" | aiops admin adopt-ragflow-tenant --tenant 1942... --db ...
+        printf '%s' "$PASSWORD" | aiops-admin adopt-ragflow-tenant --tenant 1942... --db ...
 
     这条命令**不改上游**：它验证「这一把现在能不能登录」，能才登记。改密码那一步在带外
     完成（历史账号由 kb-service 懒注册生成随机密码且不留，只能这样接管）。
@@ -1248,59 +1234,6 @@ def ensure_node_provider_command(
     typer.echo(json.dumps(result, ensure_ascii=False))
 
 
-@admin_app.command("ensure-ops-provider")
-def ensure_ops_provider_command(
-    ctx: typer.Context,
-    tenant: Annotated[str, typer.Option("--tenant", help="本环境已登记租户")],
-    token_file: Annotated[
-        Path, typer.Option("--token-file", exists=True, dir_okay=False, help="仅当前用户可读的工具密钥文件")
-    ],
-    gateway_url: Annotated[str, typer.Option("--gateway-url", help="工具回呼的 Gateway HTTPS 基地址")],
-    db: Annotated[Path, typer.Option("--db", exists=True, dir_okay=False)],
-) -> None:
-    """在精确绑定的 workspace 幂等登记 aiops-ops，不打印密钥。"""
-    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
-    from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
-    from aiops_diagnostics.ops_bindings import load_ops_bindings, token_digest
-    from aiops_diagnostics.ops_provider import ensure_ops_provider
-    from aiops_diagnostics.ops_tools import OpsToolService
-    from aiops_diagnostics.private_files import validate_private_file
-
-    console, database = _dify_console_and_db(ctx, db)
-    try:
-        validate_private_file(token_file)
-        if token_file.stat().st_size > 4096:
-            raise ValueError("工具凭据文件过大")
-        token = token_file.read_text().strip()
-        binding = next(
-            (
-                row
-                for row in load_ops_bindings(console.ops_bindings_file)
-                if row.tenant_id == tenant
-                and row.environment == console.environment
-                and row.active
-                and row.key_sha256 == token_digest(token)
-            ),
-            None,
-        )
-        if binding is None:
-            raise ValueError("没有与密钥一致的启用绑定")
-        # 注册前核对 workspace/app/agent，但尚未发布工具是合法的首次配置。
-        manager = AgentManager(AgentStore(database))
-        service = OpsToolService(dataclasses.replace(console, database_file=database), manager)
-        service.resolve_binding(token, tenant)
-        result = ensure_ops_provider(
-            DifyConsoleAdmin(ConsoleApiSettings(console.dify_console_base_url, console.dify_console_api_key)),
-            binding,
-            token,
-            gateway_url,
-        )
-    except (ValueError, OSError, RuntimeError) as exc:
-        typer.secho("运维工具登记失败，请核对私有绑定与控制台配置", err=True)
-        raise typer.Exit(1) from exc
-    typer.echo(json.dumps(result, ensure_ascii=False))
-
-
 @admin_app.command("sync-knowledge-datasets")
 def sync_knowledge_datasets_command(
     ctx: typer.Context,
@@ -1386,7 +1319,7 @@ def sync_knowledge_datasets_command(
     if store.get_ragflow_tenant(tenant, settings.environment) is None:
         typer.secho(
             f"租户 {tenant} 在 {settings.environment} 没有开户（ragflow_tenants 无行）。"
-            "先跑 `aiops admin onboard-tenant`",
+            "先跑 `aiops-admin onboard-tenant`",
             fg=typer.colors.RED,
             err=True,
         )

@@ -403,33 +403,6 @@ def test_an_empty_surface_leaks_nothing() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_zero_order_answer_that_leaked_chinese_is_replaced() -> None:
-    from aiops_diagnostics.gateway_runtime import _guard_zero_order_language
-    from aiops_diagnostics.i18n import QA_FALLBACK_MESSAGES
-
-    guarded = _guard_zero_order_language({"text": "先按卡扣再拔枪。", "reminder": True}, "en")
-
-    assert guarded["text"] == QA_FALLBACK_MESSAGES["en"]["unavailable"]
-    # The payload keeps exactly the keys the contract defines.
-    assert set(guarded) == {"text", "reminder"}
-
-
-def test_zero_order_clean_answer_is_untouched() -> None:
-    from aiops_diagnostics.gateway_runtime import _guard_zero_order_language
-
-    original = {"text": "Press the latch, then pull the connector.", "reminder": True}
-
-    assert _guard_zero_order_language(original, "en") == original
-
-
-def test_zero_order_chinese_answer_is_untouched() -> None:
-    from aiops_diagnostics.gateway_runtime import _guard_zero_order_language
-
-    original = {"text": "先按卡扣再拔枪。", "reminder": True}
-
-    assert _guard_zero_order_language(original, "zh") == original
-
-
 def test_fullwidth_chinese_punctuation_counts_as_a_leak() -> None:
     """A model writing through a Chinese input method emits fullwidth marks."""
     surface = AnswerSurface.from_public_blocks(

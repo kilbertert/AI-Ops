@@ -57,7 +57,6 @@ from operator_support import (
 
 from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.i18n import clarification_message
 from aiops_diagnostics.query_scope import QueryScope, resolve_query_scope
 from aiops_diagnostics.scope_context import (
     SCOPE_ERROR_UPMS_UNAVAILABLE,
@@ -539,64 +538,6 @@ def test_upms_operator_site_scope_asks_the_tunnel_for_the_one_forward_it_uses(
 
 def _assistant_app(tmp_path, monkeypatch, connection: Connection):
     return assistant_app(tmp_path, monkeypatch, Caller(operator_context((SITE_IN,))), connection)
-
-
-def test_assistant_explicit_order_inside_the_operator_scope_starts_a_diagnosis(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """显式指名集合内订单 → 202 诊断（管家端替同事/站点处理问题的正路径）。"""
-    client, runtime = _assistant_app(tmp_path, monkeypatch, Connection())
-
-    resp = client.post(
-        "/v1/assistant/questions",
-        json={"question": "你好", "order_no": ORDER_INSIDE},
-        headers=_OPERATOR_HEADERS,
-    )
-
-    assert resp.status_code == 202
-    assert resp.json()["type"] == "diagnosis"
-    assert runtime.diagnoses == [(ORDER_INSIDE, "你好")]
-
-
-def test_assistant_explicit_order_outside_the_operator_scope_is_refused(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """显式指名集合外订单 → 明确 404，不改写为普通问答、不泄漏订单是否存在。"""
-    client, runtime = _assistant_app(tmp_path, monkeypatch, Connection())
-
-    resp = client.post(
-        "/v1/assistant/questions",
-        json={"question": "你好", "order_no": ORDER_OUTSIDE},
-        headers=_OPERATOR_HEADERS,
-    )
-
-    assert resp.status_code == 404
-    assert resp.json()["error"]["code"] == "ORDER_NOT_FOUND"
-    assert runtime.diagnoses == []
-
-
-def test_assistant_embedded_order_outside_the_operator_scope_falls_through(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """问句内嵌集合外订单号 → 回落，但**不再无声**（#620），也不是 404。
-
-    集合外的订单与「不是本人的订单」在这里是同一件事：调用者无权查它。
-    回落本身没变（不 404、不建诊断），变的是答复**说出了真实原因**。
-    """
-    client, runtime = _assistant_app(tmp_path, monkeypatch, Connection())
-
-    resp = client.post(
-        "/v1/assistant/questions",
-        json={"question": f"订单 {ORDER_OUTSIDE} 怎么还没退款"},
-        headers=_OPERATOR_HEADERS,
-    )
-
-    assert resp.status_code != 404
-    assert runtime.diagnoses == []
-    body = resp.json()
-    assert body["type"] == "clarification"
-    assert body["missing_fields"] == []
-    assert body["message"] == clarification_message("zh", "not_yours")
 
 
 # --- #423 回归：运营商站点范围只在管家端入口生效 ---------------------------

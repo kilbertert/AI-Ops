@@ -17,7 +17,7 @@
 ## Fail-closed
 
 查不到容器 IP（容器停了、改名了、docker 不可用）时**直接关闭这条连接**，不转发到别处、
-也不挂起。调用方（``aiops admin ensure-workspace``）因此拿到一个明确的连接失败，而不是
+也不挂起。调用方（``aiops-admin ensure-workspace``）因此拿到一个明确的连接失败，而不是
 一个超时到天荒地老的等待。
 
 ## 这一层不是授权

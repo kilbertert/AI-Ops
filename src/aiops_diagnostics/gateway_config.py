@@ -10,8 +10,7 @@ from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
-from aiops_diagnostics.config import selected_config_file, validate_key_slot_name
-from aiops_diagnostics.conversation_store import CONTEXT_MAX_TOKENS, CONTEXT_MAX_TURNS
+from aiops_diagnostics.config import selected_config_file
 from aiops_diagnostics.deployment_environment import canonical_environment
 from aiops_diagnostics.gateway_logging import DEFAULT_LOG_LEVEL, parse_log_level
 from aiops_diagnostics.platform_paths import config_root, data_root
@@ -38,8 +37,6 @@ class GatewayServerSettings:
     server_config_file: Path | None = None
     allow_fixtures: bool = False
     max_workers: int = 2
-    allowed_key_slots: tuple[str, ...] = ()
-    event_poll_interval_seconds: float = 0.5
     introspection_url: str = ""
     introspection_client_id: str = ""
     introspection_client_secret: str = ""
@@ -49,8 +46,6 @@ class GatewayServerSettings:
     third_session_key_prefix: str = "app:3rd_session:"
     charging_status_base_url: str = ""
     consumer_order_chat_enabled: bool = False
-    ops_bindings_file: str = ""
-    ops_charging_status_base_url: str = ""
     execution_environment: str = ""
     #: M2-CLOSE-01：执行环境 → 编排平台应用/智能体/节点的**可信绑定**（契约 §3.1）。
     #: 缺省为空 ⇒ 委派入口整体不启用（fail closed，与 ``third_session_service_token``
@@ -108,10 +103,6 @@ class GatewayServerSettings:
     kb_service_base_url: str = ""
     #: Routing decision source (#392). Empty base URL or key leaves routing on
     #: the previous behaviour; the dependency is optional by configuration.
-    jev_base_url: str = ""
-    jev_api_key: str = ""
-    jev_model: str = "typesafe/jev"
-    jev_timeout_seconds: float = 20.0
     routing_risk_at_least: float = 0.5
     routing_confidence_at_least: float = 0.8
     #: High risk asks for context regardless of confidence (#401). False restores
@@ -157,7 +148,6 @@ class GatewayServerSettings:
     #: （实测：``provider_id=time`` / ``tool_name=timezone_conversion``），所以只能靠
     #: 一张**显式登记表**翻译 —— 与知识库那条桥同形。空表 = 不认任何 Dify 工具声明
     #: （声明了就拒，绝不按字面搬运）。
-    dify_tool_bindings: str = ""
     #: 调试身份的**专用凭据**（#586）。与生产那把**分离**：运营在 Dify 的调试预览里用它，
     #: 因此它不该是生产凭据（那把能到全部已登记的知识库）。留空 ⇒ 该身份整体不存在，
     #: 配置里的调试子集也随之无效 —— 「没有调试身份」是一个合法状态，不是半配置。
@@ -183,7 +173,7 @@ class GatewayServerSettings:
     #: "按请求给的租户跑"，那正是 #782 要接管的按人范围，不是本票的语义。
     dify_trial_debug_tenant: str = ""
     #: Dify 控制台导出端点的**只读凭据**（#625）。它服务的是「我方发布动作」这一跳：
-    #: `aiops admin pull-dify` 用它把运营在 Dify 里改好的配置拉回来。**与服务运行时的
+    #: `aiops-admin pull-dify` 用它把运营在 Dify 里改好的配置拉回来。**与服务运行时的
     #: 任何凭据都不同** —— 上面那几把是 Dify 调我们时用的，这把是我们调 Dify 时用的。
     #: 留空 ⇒ 这个动作整体不可用（不半配置：地址有值而凭据为空时是启动错误）。
     dify_console_base_url: str = ""
@@ -205,17 +195,6 @@ class GatewayServerSettings:
     #: 另一半是它必须与 ``dify_console_api_key`` 分开：那把在**服务端**，这把要给到
     #: **触发方**，一把钥匙两处持有就不再是"服务端凭据"了。
     dify_publish_api_key: str = field(repr=False, default="")
-    #: **3A 工具说明端点**（`POST /v1/dify/tools/<tool>`）的共享凭据。留空 ⇒ 整组路由 404，
-    #: 与 `dify_knowledge_api_key` 同一条「未配置即不启用」的机制。
-    #:
-    #: 五把钥匙各自的理由，为什么这一把必须**再新开一把**（#772 E）：它是 Dify 侧
-    #: **每一个**能编辑该 API 工具提供方的人都看得见的那把（Dify 的提供方凭据是工作区
-    #: 共享的），所以它必须是**只能读到一段固定说明文本**的钥匙 —— 不能查知识库
-    #: （`dify_knowledge_api_key`），不能查调试面（`dify_debug_api_key`），不能发布
-    #: （`dify_publish_api_key`），也不是我们调 Dify 用的那把（`dify_console_api_key`）。
-    #: 用法相同（登记表里的每一对都各有理由）而**权限最小**，这正是 3A 端点除了说明
-    #: 文本什么都不返回的原因：泄露这把钥匙拿不到任何业务数据。
-    dify_tools_api_key: str = field(repr=False, default="")
     #: **本部署的环境标识**（ADR-0059 / #879）。每台机器一个值，落进
     #: ``dify_workspaces.environment``，并决定"这个租户的工作区是哪一个"。
     #:
@@ -241,7 +220,7 @@ class GatewayServerSettings:
     #: 今天是 api 容器的内网 ``IP:5001``（36 本机可用），转发器上线后换成
     #: ``http://127.0.0.1:15001`` —— 代码一行不改，只改这一行值。
     #:
-    #: 留空 ⇒ ``aiops admin ensure-workspace`` 拒绝运行（它没有别的建法）。它**不是**
+    #: 留空 ⇒ ``aiops-admin ensure-workspace`` 拒绝运行（它没有别的建法）。它**不是**
     #: 网关运行时要用的东西：只有开户那一条 CLI 路径读它。
     dify_inner_api_base_url: str = ""
     dify_inner_api_key: str = field(repr=False, default="")
@@ -249,7 +228,7 @@ class GatewayServerSettings:
     #: workspace 里 provider 的 API key，Dify 会拿它做**真实校验**（假 key 回 400）。
     #:
     #: **代码里没有默认值、也不该有**：这不是"示例值"，是一把真钱买的钥匙。缺它 ⇒
-    #: `aiops admin ensure-ready` 拒绝运行并说出缺的是哪一行，而不是猜一个。
+    #: `aiops-admin ensure-ready` 拒绝运行并说出缺的是哪一行，而不是猜一个。
     dify_workspace_model_api_key: str = field(repr=False, default="")
     #: 上面那把钥匙的 endpoint。deepseek 官方端点是默认值；换供应商时改这一行。
     dify_workspace_model_endpoint: str = "https://api.deepseek.com/v1"
@@ -291,13 +270,6 @@ class GatewayServerSettings:
     #: 一次性跳转票的有效秒数（#985）。票只在"两次导航之间"有用，60 秒足够一个
     #: 正常的点击-跳转，又不至于让一张被记下来的票活很久。
     knowledge_hop_ttl_seconds: float = 60.0
-    #: Conversation context window (#482). The defaults ARE the contract's
-    #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
-    #: they are configurable because a RAG or promotional turn also spends the
-    #: model's budget on retrieved chunks, and the only honest way to tune that
-    #: trade-off is a knob rather than a second hardcoded copy.
-    context_max_turns: int = CONTEXT_MAX_TURNS
-    context_max_tokens: int = CONTEXT_MAX_TOKENS
     #: 网关自身日志的最低级别（#636）。**默认是代码一直假定的那一级**：`INFO`。
     #: 在这一项存在之前，网关根本没配过 logging —— uvicorn 只给 `uvicorn*` 挂 handler，
     #: root 停在 WARNING 且无 handler，于是 `aiops.*` 的 INFO 行**一行都没出去过**
@@ -316,11 +288,6 @@ class GatewayServerSettings:
             else selected_config_file()
         )
         file_values = _private_config_values(server_config_file)
-        slots = tuple(
-            validate_key_slot_name(item.strip())
-            for item in _env("AIOPS_GATEWAY_ALLOWED_KEY_SLOTS").split(",")
-            if item.strip()
-        )
         return cls(
             data_home=data_home.resolve(),
             database_file=database_file.resolve(),
@@ -333,8 +300,6 @@ class GatewayServerSettings:
             ),
             allow_fixtures=_env_bool("AIOPS_GATEWAY_ALLOW_FIXTURES"),
             max_workers=_env_int("AIOPS_GATEWAY_MAX_WORKERS", 2),
-            allowed_key_slots=slots,
-            event_poll_interval_seconds=_env_float("AIOPS_GATEWAY_EVENT_POLL_SECONDS", 0.5),
             introspection_url=_env("AIOPS_GATEWAY_INTROSPECTION_URL"),
             introspection_client_id=_env("AIOPS_GATEWAY_INTROSPECTION_CLIENT_ID"),
             introspection_client_secret=_env("AIOPS_GATEWAY_INTROSPECTION_CLIENT_SECRET"),
@@ -351,10 +316,6 @@ class GatewayServerSettings:
                 or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED")
             ).lower()
             in {"1", "true", "yes", "on"},
-            ops_bindings_file=_env("AIOPS_GATEWAY_OPS_BINDINGS_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_OPS_BINDINGS_FILE"),
-            ops_charging_status_base_url=_env("AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL"),
             execution_environment=_env("AIOPS_GATEWAY_EXECUTION_ENVIRONMENT")
             or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT"),
             agent_run_config_file=_env("AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE")
@@ -403,8 +364,6 @@ class GatewayServerSettings:
             .strip()
             .lower()
             not in _FALSY_SETTINGS,
-            context_max_turns=_env_int("AIOPS_GATEWAY_CONVERSATION_MAX_TURNS", CONTEXT_MAX_TURNS),
-            context_max_tokens=_env_int("AIOPS_GATEWAY_CONVERSATION_MAX_TOKENS", CONTEXT_MAX_TOKENS),
             kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
             kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
@@ -424,8 +383,6 @@ class GatewayServerSettings:
             dify_knowledge_bindings=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"),
             dify_knowledge_autoregister=_env_bool("AIOPS_GATEWAY_DIFY_KNOWLEDGE_AUTOREGISTER", True),
-            dify_tool_bindings=_env("AIOPS_GATEWAY_DIFY_TOOL_BINDINGS")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TOOL_BINDINGS"),
             dify_debug_api_key=_env("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_API_KEY"),
             dify_debug_tenant=_env("AIOPS_GATEWAY_DIFY_DEBUG_TENANT")
@@ -446,8 +403,6 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_EXTERNAL_KNOWLEDGE_API_ID"),
             dify_publish_api_key=_env("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
-            dify_tools_api_key=_env("AIOPS_GATEWAY_DIFY_TOOLS_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TOOLS_API_KEY"),
             environment=_env("AIOPS_GATEWAY_ENVIRONMENT")
             or _file_value(file_values, "AIOPS_GATEWAY_ENVIRONMENT"),
             internal_token_secret=_env("AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET")
@@ -491,12 +446,6 @@ class GatewayServerSettings:
             ragflow_console_cookie_domain=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_COOKIE_DOMAIN")
             or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_COOKIE_DOMAIN"),
             knowledge_hop_ttl_seconds=_env_float("AIOPS_GATEWAY_KNOWLEDGE_HOP_TTL_SECONDS", 60.0),
-            jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
-            jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_JEV_API_KEY"),
-            jev_model=_env("AIOPS_GATEWAY_JEV_MODEL", "typesafe/jev"),
-            jev_timeout_seconds=_env_float("AIOPS_GATEWAY_JEV_TIMEOUT_SECONDS", 20.0),
             routing_risk_at_least=_env_float("AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", 0.5),
             routing_confidence_at_least=_env_float("AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", 0.8),
             routing_risk_always_asks=_env_bool("AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS", True),
@@ -527,12 +476,7 @@ class GatewayServerSettings:
                 raise ValueError("charging status requires a logical execution environment")
         if self.consumer_order_chat_enabled and not self.charging_status_base_url:
             raise ValueError("consumer order chat requires its charging status endpoint")
-        if self.ops_charging_status_base_url:
-            parse_charging_endpoints(self.ops_charging_status_base_url)
-        if self.ops_bindings_file:
-            from aiops_diagnostics.ops_bindings import load_ops_bindings
 
-            load_ops_bindings(self.ops_bindings_file)
             if not self.environment:
                 raise ValueError("ops tools require a deployment environment")
         # 委派入口要求业务接口与逻辑环境都已配置：这两项是领取时「再用记录里的身份
@@ -622,8 +566,6 @@ class GatewayServerSettings:
         ):
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be between 0 and 1")
-        if self.jev_base_url and not self.jev_api_key:
-            raise ValueError("AIOPS_GATEWAY_JEV_API_KEY is required when a Jev base URL is set")
         # 半配置是启动错误而不是静默禁用：URL 有值说明运维确实想启用这条路径，而此时凭据缺失
         # 若只落回「不构造」，结果是一个看起来正常、实际一直 401 的部署。交给启动失败。
         if self.company_check_token_url and not (
@@ -683,20 +625,6 @@ class GatewayServerSettings:
                 "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL/API_KEY are required when the Dify publish "
                 "route is enabled (the route pulls from that console)"
             )
-        # #772 E：3A 工具说明端点只用一把钥匙，没有第二个半（它不调任何上游）。这里要判的
-        # 是它**不能**与任何既有钥匙同值 —— 同值等于把五件不同的事绑成一个权限，而那把
-        # 钥匙是暴露给 Dify 侧的。
-        for other_name, other in (
-            ("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY", self.dify_knowledge_api_key),
-            ("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY", self.dify_debug_api_key),
-            ("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY", self.dify_publish_api_key),
-            ("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY", self.dify_console_api_key),
-        ):
-            if self.dify_tools_api_key and other and secrets.compare_digest(self.dify_tools_api_key, other):
-                raise ValueError(
-                    f"AIOPS_GATEWAY_DIFY_TOOLS_API_KEY must differ from {other_name} "
-                    "(one key must not authorise both reading the tool catalog and another surface)"
-                )
         # 三把钥匙必须互不相同。同值等于把两件事绑成一个权限 —— #586 对调试凭据已经立过
         # 这条，这里的每一对都有各自的理由（见字段注释）。
         for other_name, other in (
@@ -749,7 +677,6 @@ class GatewayServerSettings:
             ("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY", self.dify_knowledge_api_key),
             ("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY", self.dify_debug_api_key),
             ("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY", self.dify_publish_api_key),
-            ("AIOPS_GATEWAY_DIFY_TOOLS_API_KEY", self.dify_tools_api_key),
             ("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY", self.dify_console_api_key),
         ):
             if self.dify_trial_api_key and other and secrets.compare_digest(self.dify_trial_api_key, other):
@@ -760,11 +687,6 @@ class GatewayServerSettings:
         # 登记表在这里解析一次：解析失败是**启动错误**，而不是第一个请求到达时才发现 ——
         # 后者会把一个配置错误伪装成一次运行时故障。
         parse_dify_knowledge_bindings(self.dify_knowledge_bindings)
-        parse_dify_tool_bindings(self.dify_tool_bindings)
-        if not 0.1 <= self.jev_timeout_seconds <= 120:
-            raise ValueError("AIOPS_GATEWAY_JEV_TIMEOUT_SECONDS must be between 0.1 and 120")
-        if not 0.1 <= self.event_poll_interval_seconds <= 10:
-            raise ValueError("AIOPS_GATEWAY_EVENT_POLL_SECONDS must be between 0.1 and 10")
         if not 1 <= self.introspection_timeout_seconds <= 30:
             raise ValueError("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS must be between 1 and 30")
         if self.server_config_file is None or not self.server_config_file.is_file():
@@ -810,36 +732,6 @@ def parse_dify_knowledge_bindings(value: str) -> dict[str, DifyKnowledgeBinding]
         bindings[knowledge_id] = DifyKnowledgeBinding(
             knowledge_id=knowledge_id, tenant_id=tenant_id, knowledge_base_ids=kbs
         )
-    return bindings
-
-
-def parse_dify_tool_bindings(value: str) -> dict[str, str]:
-    """解析 ``dify_provider/tool:our_tool`` 的多行/分号登记表。
-
-    与知识库那张表**同一条纪律**：非法行抛错而不是跳过。键是 Dify 的工具身份
-    （``provider_id/tool_name``，实测形状见 ADR-0019），值必须是合法的 ``ToolName``
-    —— 后半句在发布门里兜底，这里只做结构校验（``gateway_config`` 不 import
-    ``agent_contracts``，那条依赖方向要保住）。
-    """
-    from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
-
-    bindings: dict[str, str] = {}
-    for row in value.replace(";", "\n").splitlines():
-        row = row.strip()
-        if not row or row.startswith("#"):
-            continue
-        dify_id, sep, our_tool = row.partition(":")
-        dify_id, our_tool = dify_id.strip(), our_tool.strip()
-        if not sep or not dify_id or not our_tool:
-            raise ValueError(f"dify tool binding is malformed: {row!r}")
-        if our_tool not in ALL_TOOL_NAMES:
-            raise ValueError(
-                f"dify tool binding maps to an unknown tool: {our_tool!r} "
-                f"(known: {', '.join(ALL_TOOL_NAMES)})"
-            )
-        if dify_id in bindings:
-            raise ValueError(f"dify tool binding is duplicated: {dify_id!r}")
-        bindings[dify_id] = our_tool
     return bindings
 
 

@@ -440,7 +440,7 @@ def test_explicit_order_refused_before_the_branch_is_still_attributed(provision,
     assert response.status_code == 404
     record = only(lines)
     assert record["code"] == "ORDER_NOT_FOUND"
-    assert record["stage"] == ro.STAGE_PRE_ROUTE_ORDER_AUTH
+    assert record["stage"] == ro.STAGE_ORDER_CHAT_AUTH
 
 
 # ---------------------------------------------------------------- exclusions
@@ -469,7 +469,7 @@ def test_feature_disabled_never_claims_the_branch(provision, lines):
     provision.rebuild(enabled=False)
     with TestClient(provision.app) as client:
         response = post(client)
-    assert response.status_code in {200, 202}
+    assert response.status_code == 409
     assert lines == []
 
 

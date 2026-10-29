@@ -67,7 +67,7 @@
 
 - **没有 `ops/environments/env-95.toml`，而且从来没有过** ——
   `git log --all -- ops/environments/env-95.toml` 为空。41 那份之所以存在，是因为它要走
-  `aiops admin reconcile`；95 上没有这条流程。
+  `aiops-admin reconcile`；95 上没有这条流程。
 - **95 上连 `ops/environments/` 目录都没有**，且 `/home/aiops/AI-Ops` 不是 git 仓库 ——
   95 的 agent 清单**没有声明态**，只有库里的运行态。
 - **库是空的**：`agents` / `agent_versions` / `conversations` / `conversation_turns` /

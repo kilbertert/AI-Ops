@@ -25,7 +25,7 @@ TDengine Community Edition 3.4 允许非超级用户写入已有数据库，并�
 分开写而不是混为一谈：
 
 - **`[[agents]]`（发布权威）** 声明一个环境应有的已发布客服/运维 agent。
-  `aiops admin reconcile` 通过 AgentManager（与 /v1/agents HTTP API 完全相同的
+  `aiops-admin reconcile` 通过 AgentManager（与 /v1/agents HTTP API 完全相同的
   角色校验、模型白名单、发布前 KB 活性校验代码路径）把 gateway 库幂等收敛到清单
   ——取代环境 UPMS 未建 ROLE_AGENT_ADMIN 角色族时的 on-box sqlite 手工插库。
 - **`[[dify_apps]]`（运行时注册表，不是发布权威）** 声明 `(租户, 业务入口)` 由
@@ -194,7 +194,7 @@ Content-Type: application/json
 `unchanged` 表示 Dify 与已发布版本逐字相同，什么都没写。失败分别是 401（无凭据）、
 403（凭据不对）、404（未配置 / app 没绑定）、409（发布门拒了）、502（Dify 或控制台不可用）。
 
-**运维侧的等价命令**仍是 `aiops admin sync-from-dify`（零参数，跑**全部**绑定）。
+**运维侧的等价命令**仍是 `aiops-admin sync-from-dify`（零参数，跑**全部**绑定）。
 两者调用**同一个函数**，所以不会漂。
 
 # WF01知识回调部署

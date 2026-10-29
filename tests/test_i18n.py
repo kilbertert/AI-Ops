@@ -242,28 +242,6 @@ def test_the_default_language_is_not_in_the_guarded_set() -> None:
     # `test_non_chinese_set_follows_the_declared_property_not_the_default`.
 
 
-def test_prompt_only_tables_are_covered_too() -> None:
-    """The prompt-only tables are inside the gate now, not beside it.
-
-    `conversation_context`'s label and header tables are user-*invisible* (the
-    model reads them), so they never appeared in `_USER_FACING_MESSAGE_TABLES`
-    and no check required them to cover a new language: adding one would leave
-    those tables short with nothing to say so (#527). Their values are not
-    user-facing; their COVERAGE is still a property worth holding.
-    """
-    from aiops_diagnostics import conversation_context as cc
-    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
-
-    for table_name, table in (("_LABELS", cc._LABELS), ("_HEADERS", cc._HEADERS)):
-        # Every key must be a language the inventory knows. A typo'd or
-        # unsupported tag ("eng", "zh-Hant" before it is declared) is DEAD DATA:
-        # the entry is never selected and that language silently falls back.
-        ghosts = sorted(set(table) - set(SUPPORTED_LANGUAGES))
-        assert not ghosts, f"{table_name} 有清单里不存在的语言键：{ghosts}"
-        assert all(value for value in table.values()), f"{table_name} 有空值"
-        assert cc._LABEL_FALLBACK_LANGUAGE in table, f"{table_name} 缺回退语言"
-
-
 def test_non_chinese_set_follows_the_declared_property_not_the_default() -> None:
     """The rule, proven on an inventory that can tell the two readings apart.
 

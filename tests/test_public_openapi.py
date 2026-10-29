@@ -26,7 +26,7 @@ def test_public_operations_match_testing_guide_and_exclude_management(tmp_path):
         for m, p in re.findall(r"\| [A-Z]\d{2} \| `(GET|POST|DELETE) ([^`]+)`", guide)
     }
     actual = {(method, path) for path, item in spec["paths"].items() for method in item}
-    assert len(actual) == 23 and actual == documented
+    assert len(actual) == 19 and actual == documented
     serialized = json.dumps(spec)
     for private in (
         "/internal/",
@@ -99,10 +99,10 @@ def test_request_constraints_examples_and_async_ids_follow_implementation(tmp_pa
     for example in operation["requestBody"]["content"]["application/json"]["examples"].values():
         AssistantQuestionRequest.model_validate(example["value"])
     variants = operation["responses"]["202"]["content"]["application/json"]["schema"]["anyOf"]
-    assert {v["$ref"].split("/")[-1] for v in variants} == {"QA", "Diagnosis", "Analysis"}
-    for name, identifier in [("QA", "qa_id"), ("Diagnosis", "diagnosis_id"), ("Analysis", "analysis_id")]:
+    assert {v["$ref"].split("/")[-1] for v in variants} == {"QA", "Analysis"}
+    for name, identifier in [("QA", "qa_id"), ("Analysis", "analysis_id")]:
         assert identifier in schema[name]["required"]
-    for path in ("/v1/assistant/questions/{qa_id}/cancel", "/v1/standard/diagnoses/{diagnosis_id}/cancel"):
+    for path in ("/v1/assistant/questions/{qa_id}/cancel",):
         assert "requestBody" not in spec["paths"][path]["post"]
         assert "200" in spec["paths"][path]["post"]["responses"]
 

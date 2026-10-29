@@ -151,29 +151,6 @@ def _engine_role_for(status: object) -> str:
     return next((name for name in report.classifications if name in set(StatusRole)), "unknown_order_status")
 
 
-@pytest.mark.parametrize("status", [0, 1, 2, 3, 5, 4, 99, None])
-def test_engine_classification_and_the_failure_rate_numerator_agree(status: object) -> None:
-    """**这条判据此前不存在**，而它正是"看板与下钻给出相反答案"的直接检出器。
-
-    同一个 status，经 `engine` 的分类与经 `role_of` 的角色，必须给出同一结论：
-    是不是异常结束 / 是不是正常结束。今天两边恰好一致，靠的是**人记得改两处**
-    （`ops_analysis.py:56-61` 那段注释就是那次"记得"的产物）。
-    """
-    from aiops_diagnostics.ops_analysis import ABNORMAL_STATUS, NORMAL_STATUS
-
-    engine_says = _engine_role_for(status)
-    if status == ABNORMAL_STATUS:
-        assert engine_says == StatusRole.CONTROLLED_ABNORMAL_END, engine_says
-        assert is_abnormal_end(status)
-    elif status == NORMAL_STATUS:
-        assert engine_says == StatusRole.FINISHED, engine_says
-        assert is_normal_end(status)
-    else:
-        assert not is_abnormal_end(status)
-        assert not is_normal_end(status)
-        assert engine_says not in {StatusRole.CONTROLLED_ABNORMAL_END, StatusRole.FINISHED}, engine_says
-
-
 def test_the_kpi_numerator_comes_from_the_role_authority() -> None:
     """`ops_analysis.ABNORMAL_STATUS` **由角色派生**，不再是独立的数字常量。
 

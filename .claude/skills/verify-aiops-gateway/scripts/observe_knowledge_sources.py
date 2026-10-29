@@ -206,11 +206,10 @@ def main() -> int:
     stub = ThreadingHTTPServer(("127.0.0.1", KB_PORT), _KbStub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
     print(f"kb stub  : http://127.0.0.1:{KB_PORT}  libraries={KB_LIBRARIES}")
-    init = subprocess.run(["uv", "run", "aiops", "init"], cwd=repo, env=env, capture_output=True, text=True)
-    if init.returncode != 0:
-        print("aiops init failed:\n" + (init.stdout + init.stderr)[-1500:])
-        shutil.rmtree(root, ignore_errors=True)
-        return 2
+    config = root / "config" / "production.env"
+    config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    config.write_text("# isolated verification\n", encoding="utf-8")
+    config.chmod(0o600)
     seed(root)
 
     process = subprocess.Popen(

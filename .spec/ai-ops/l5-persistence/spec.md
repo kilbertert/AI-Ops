@@ -7,7 +7,6 @@ code:
 related:
   - src/aiops_diagnostics/async_job_lifecycle.py
   - src/aiops_diagnostics/conversation_store.py
-  - src/aiops_diagnostics/conversation_context.py
   - src/aiops_diagnostics/metrics_store.py
   - src/aiops_diagnostics/agent_lifecycle.py
   - src/aiops_diagnostics/shortcut_lifecycle.py

@@ -688,7 +688,7 @@ def _workspace_refusal(tenant_id: str, exc: Any) -> str:
     * ``FAILED`` / ``UNKNOWN`` —— 在 41 上重跑一次 ``ensure-workspace``（它会先对账）；
     * ``UNRESOLVED`` —— 从来没有建过，同样那条命令，但这是第一次。
     """
-    command = f"aiops admin ensure-workspace --tenant {tenant_id}"
+    command = f"aiops-admin ensure-workspace --tenant {tenant_id}"
     if getattr(exc, "code", "") == "DIFY_WORKSPACE_CREATING":
         return "你的工作区正在创建，请一两分钟后重新登录。"
     return (

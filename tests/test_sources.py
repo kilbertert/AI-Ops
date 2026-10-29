@@ -9,7 +9,6 @@ from aiops_diagnostics.order_visibility import caller_visibility, scope_where_sq
 from aiops_diagnostics.sources import (
     FixtureSources,
     MySQLSource,
-    RedisSource,
     TDengineSource,
     _caller_visible,
     _safe_identifier,
@@ -76,14 +75,10 @@ def test_fixture_source_fails_closed_on_a_blank_tenant(tmp_path: Path) -> None:
     sources = FixtureSources(fixture)
 
     assert sources.get_orders("O-1", None) == [{"order_no": "O-1", "tenant_id": "tenant-a"}]
-    assert sources.get_fee_template_record("O-1", None)["tenant_id"] == "tenant-a"
-    assert sources.get_occupy_orders(order_id="X-1", tenant_id=None)[0]["tenant_id"] == "tenant-a"
     assert sources.get_device("D-1", None, None)["tenant_id"] == "tenant-a"
 
     for unusable in ("", "   "):
         assert sources.get_orders("O-1", unusable) == []
-        assert sources.get_fee_template_record("O-1", unusable) is None
-        assert sources.get_occupy_orders(order_id="X-1", tenant_id=unusable) == []
         assert sources.get_device("D-1", None, unusable) is None
 
 
@@ -243,79 +238,6 @@ def test_tdengine_query_is_bounded_by_device_time_and_limit() -> None:
     assert "LIMIT 2000" in sql
 
 
-def test_mysql_doctor_detects_write_privileges(monkeypatch) -> None:
-    settings = Settings.from_env()
-    settings.mysql.user = "diagnostic"
-    settings.mysql.password = "secret"
-    connection = _FakeConnection("GRANT SELECT, UPDATE ON *.* TO diagnostic")
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
-
-    details = MySQLSource(settings).doctor()
-
-    assert "CURRENT_USER() AS `current_user`" in connection.fake_cursor.calls[2][0]
-    assert details["read_only"] is False
-    assert details["unsafe_privileges"] == ["UPDATE"]
-
-
-def test_mysql_doctor_rejects_all_privileges(monkeypatch) -> None:
-    settings = Settings.from_env()
-    settings.mysql.user = "diagnostic"
-    settings.mysql.password = "secret"
-    connection = _FakeConnection("GRANT ALL PRIVILEGES ON *.* TO diagnostic WITH GRANT OPTION")
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
-
-    details = MySQLSource(settings).doctor()
-
-    assert details["read_only"] is False
-    assert details["unsafe_privileges"] == ["ALL PRIVILEGES", "GRANT OPTION"]
-
-
-def test_mysql_doctor_expands_assigned_roles(monkeypatch) -> None:
-    settings = Settings.from_env()
-    settings.mysql.user = "diagnostic"
-    settings.mysql.password = "secret"
-    connection = _FakeConnection(
-        "GRANT `app_readwrite`@`%` TO `diagnostic`@`%`",
-        "GRANT SELECT, UPDATE ON cloud_charging_pile.* TO `app_readwrite`@`%`",
-    )
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
-
-    details = MySQLSource(settings).doctor()
-
-    assert details["assigned_roles"] == ["`app_readwrite`@`%`"]
-    assert details["read_only"] is False
-    assert details["unsafe_privileges"] == ["UPDATE"]
-
-
-def test_mysql_doctor_treats_unresolved_roles_as_unsafe(monkeypatch) -> None:
-    settings = Settings.from_env()
-    settings.mysql.user = "diagnostic"
-    settings.mysql.password = "secret"
-    connection = _FakeConnection(
-        "GRANT `app_readonly`@`%` TO `diagnostic`@`%`",
-        role_error=True,
-    )
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
-
-    details = MySQLSource(settings).doctor()
-
-    assert details["read_only"] is False
-    assert details["unsafe_privileges"] == ["UNRESOLVED ROLE `app_readonly`@`%`"]
-
-
-def test_mysql_doctor_treats_unparsed_role_assignments_as_unsafe(monkeypatch) -> None:
-    settings = Settings.from_env()
-    settings.mysql.user = "diagnostic"
-    settings.mysql.password = "secret"
-    connection = _FakeConnection("GRANT `read only`@`%` TO `diagnostic`@`%`")
-    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
-
-    details = MySQLSource(settings).doctor()
-
-    assert details["read_only"] is False
-    assert details["unsafe_privileges"] == ["UNRESOLVED ROLE ASSIGNMENT"]
-
-
 class _BinaryRedisClient:
     def type(self, stream):
         return b"stream" if stream == b"third.order.sync.queue" else b"none"
@@ -331,16 +253,3 @@ class _BinaryRedisClient:
 
     def close(self):
         return None
-
-
-def test_redis_stream_inspection_handles_binary_values(monkeypatch) -> None:
-    settings = Settings.from_env()
-    settings.redis.password = "secret"
-    source = RedisSource(settings)
-    monkeypatch.setattr(source, "_client", lambda: _BinaryRedisClient())
-
-    result = source.inspect_streams("TEST-ORDER-1234")
-
-    assert result[0]["matches"] == 1
-    assert result[0]["groups"][0]["name"] == "mall"
-    assert result[1]["type"] == "none"

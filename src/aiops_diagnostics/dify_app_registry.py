@@ -16,7 +16,7 @@ here, explicitly, as data. This module is that registry and nothing else:
   existed, so an environment that has not adopted it behaves byte-for-byte as
   it did. That is what makes the gate safe to ship inert.
 
-Rows are written by ``aiops admin reconcile`` from the environment manifest
+Rows are written by ``aiops-admin reconcile`` from the environment manifest
 (``[[dify_apps]]``) — the same convergence path that publishes the agents — so
 the binding and the agent it names are declared, reviewed and converged
 together. The section is the manifest's **complete** desired state for the

@@ -161,8 +161,6 @@ def test_the_device_entry_guard_is_implemented_once() -> None:
 #: see, so routing them through this rule would be wrong, not thorough.
 VISIBILITY_MODULES = (
     "sources.py",
-    "diagnostic_tools.py",
-    "agent_runner.py",
     "gateway_api.py",
     "gateway_runtime.py",
 )
@@ -421,10 +419,6 @@ def test_the_fixture_source_filters_every_lookup_through_the_shared_rule(tmp_pat
     source = FixtureSources(_order_fixture(tmp_path))
 
     assert [r["order_no"] for r in source.get_orders("o1", " TENANT-DEMO ")] == ["o1"]
-    assert source.get_fee_template_record("o1", " TENANT-DEMO ") is not None
-    assert source.get_fee_template_record("o1", "other") is None
-    assert [r["orderId"] for r in source.get_occupy_orders(order_id="1", tenant_id=" TENANT-DEMO ")] == ["1"]
-    assert source.get_occupy_orders(order_id="1", tenant_id="other") == []
     assert source.get_device("D-1", None, " TENANT-DEMO ")["id"] == "D-1"
     assert source.get_device("D-1", None, "other") is None
 
@@ -453,13 +447,9 @@ def test_a_blank_tenant_sees_nothing_rather_than_everything(tmp_path: Path) -> N
 
     # No tenant named: the discovery mode an unbound registration uses.
     assert [r["order_no"] for r in source.get_orders("o1", None)] == ["o1"]
-    assert source.get_fee_template_record("o1", None) is not None
-    assert len(source.get_occupy_orders(order_id="1", tenant_id=None)) == 1
     assert source.get_device("D-1", None, None)["id"] == "D-1"
 
     # Named but unusable: nothing is visible, on every lookup.
     for blank in ("", "   "):
         assert source.get_orders("o1", blank) == []
-        assert source.get_fee_template_record("o1", blank) is None
-        assert source.get_occupy_orders(order_id="1", tenant_id=blank) == []
         assert source.get_device("D-1", None, blank) is None
