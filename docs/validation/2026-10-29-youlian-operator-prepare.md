@@ -29,7 +29,17 @@ MT-04部分：目标仅一个 app；重复 ensure_node_provider 返回 unchanged
   没有据这些错误重建工作区或修改业务数据。
 - 业务库账号读取另一个UPMS库被拒，本轮未提升数据库权限。租户ID来自用户，真实登录身份待验。
 - 无新增生产逻辑或安全规则，不新增重复实现的测试；复杂度/突变分析不适用于本次声明与手册变更。
-  CI结果待验证，不以本地专项代替必需CI。
+  `971685bf`的CI为3318 passed / 10 skipped；后续文档补充的最终CI以PR为准。
+- 按 `verify-aiops-gateway` 在一次性根启动真实服务，8项启动/HTTP检查通过；命令为
+  `uv run python .claude/skills/verify-aiops-gateway/scripts/observe.py --out dist/verification/youlian-gateway`。
+  首次使用库外输出路径触发技能日志relative_to异常，HTTP均通过但进程退出1；改用技能支持的
+  库内dist路径复跑退出0，未修改技能实现。
+- 注册专项另起真实Gateway、临时数据库和合成Dify HTTP服务：无管理key401、未登记app404且
+  不访问上游；新app请求实际带目标workspace，合成无效DSL返回502后停止，不执行真实节点。
+  这证明运行中的租户登记解析，不能替代远端Java/公司身份整链。
+- 目标工作区真实模型冒烟：4096预算、无业务工具、message_end；保存配置未变。
+  工作区重跑返回ready且零写入；无节点任务授权直接调两工具均403。
+- PR审查补齐了初始版本显式publish和可执行登记/目标追加片段；目标追加片段已现场dry-run。
 
 ## 尚未完成
 

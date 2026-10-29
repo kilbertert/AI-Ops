@@ -86,7 +86,9 @@ settings.dify_console_api_key))`，下称 `console`。
    `agent_type=operations/output_contract=diagnosis-v1/knowledge_base_ids=()/allowed_tools=()`。
    初始版本只是让已有节点发布器获得 agent 身份，不开放旧工具；实际节点模型仍由模板决定。按
    `allowed_models_from_settings(Settings.from_config(...))` 保留模型发布门。
-   同名已存在则核归属与状态，不覆盖。之后节点发布将 prompt/两工具冻结为 node-sop。
+   创建后调用 `manager.publish(admin_context(new_tenant), agent.agent_id,
+   expected_revision=agent.revision)`，回读 published 状态和版本号；已有 published agent 直接复用。
+   同名草稿仅在配置完全符合本次初始配置时继续发布，否则停止。之后节点发布将 prompt/两工具冻结为 node-sop。
 3. 从本次合并的完整清单调用 `reconcile_dify_registry(registry, manifest, dry_run=True)`，
    预期只有目标 operator 行新增。确认后 `dry_run=False`，再跑必须全 unchanged。
 4. 通过既有 `POST /v1/dify/publish` 发布 `{"app_id": new_app}`，
@@ -97,6 +99,127 @@ settings.dify_console_api_key))`，下称 `console`。
 新路由准备好后才通知测试人。正常公司登录会按租户加入工作区；平台运维确需编辑时按
 [成员开通](../env-41-runbook.md)定点授权，不能用成员关系扩大业务数据权限。
 若公司登录没有 aiops:agent:edit，应按公司授权流程处理，不能伪造账号或给全部管理员开通。
+
+### 初始版本与登记的可执行片段
+
+节点目标追加可直接使用以下片段（在前述服务身份入口中）。目标文件必须属本项目服务身份，
+先 `apply=False` 看候选；确认源目标和新 app/tenant 后才改 True。只追加新行，不替换原行。
+
+```python
+import json
+import os
+import tempfile
+from dataclasses import asdict, replace
+from pathlib import Path
+from aiops_diagnostics.dify_dsl_pull import DifyDslSource
+from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+from aiops_diagnostics.gateway_server import GatewayServerSettings
+from aiops_diagnostics.node_publication import candidate, targets
+
+apply = False
+settings = GatewayServerSettings.from_env()
+path = Path(settings.chat_node_targets_file)
+original = path.read_bytes()
+source_target = next(t for t in targets(str(path))
+    if t.app_id == "137cc417-f068-43c2-9d4a-43ebd254ea01" and t.entry == "operator")
+target = replace(source_target, tenant_id="1941847786056323072",
+                 app_id="349a637c-8f86-41b9-b932-e9818fb39a97")
+workspace = DifyWorkspaces(Path("/var/lib/aiops-41/gateway/gateway.db")).resolve(
+    target.tenant_id, settings.environment)
+candidate(DifyDslSource(settings.dify_console_base_url, target.app_id,
+    settings.dify_console_api_key, workspace), target)
+body = json.loads(original)
+existing = [r for r in body["targets"] if r["app_id"] == target.app_id or
+    (r["tenant_id"] == target.tenant_id and r.get("entry", "consumer") == "operator")]
+assert not existing or existing == [asdict(target)]
+if not existing:
+    body["targets"].append(asdict(target))
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".node-targets-")
+    try:
+        with os.fdopen(descriptor, "w") as output:
+            json.dump(body, output, ensure_ascii=False)
+        targets(temporary)
+        if apply:
+            assert path.read_bytes() == original, "目标已被其他操作修改，请重新核对"
+            os.replace(temporary, path)
+        print("目标校验通过", "已追加" if apply else "仅预演")
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+else:
+    print("目标未变化")
+```
+
+下面放入前述服务身份 Python 入口。`manifest_path` 必须指向摘要已核对的合并清单；
+只填写新应用对应的租户。先 `apply=False` 核输出，再改为 True；不跑全量 agent reconcile。
+
+```python
+from dataclasses import replace
+from pathlib import Path
+import yaml
+from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore, allowed_models_from_settings
+from aiops_diagnostics.agent_manifest import admin_context, load_manifest, reconcile_dify_registry
+from aiops_diagnostics.config import Settings
+from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource
+from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+from aiops_diagnostics.gateway_server import GatewayServerSettings
+
+apply = False
+tenant = "1941847786056323072"
+manifest_path = Path("/opt/aiops-41/ops/environments/env-41.toml")
+database = Path("/var/lib/aiops-41/gateway/gateway.db")
+settings = GatewayServerSettings.from_env()
+manifest = load_manifest(manifest_path)
+declared = next(a for a in manifest.agents if a.tenant_id == tenant)
+binding = next(b for b in manifest.dify_apps if b.tenant_id == tenant and b.business_entry == "operator")
+workspace = DifyWorkspaces(database).resolve(tenant, settings.environment)
+source = DifyDslSource(settings.dify_console_base_url, binding.app_id,
+                       settings.dify_console_api_key, workspace)
+doc = yaml.safe_load(DifyDslClient(source).export_dsl())
+assert not doc["model_config"]["dataset_configs"]["datasets"]["datasets"]
+assert doc["model_config"]["model"]["name"] == declared.config.model
+config = replace(declared.config, prompt=doc["model_config"]["pre_prompt"], allowed_tools=())
+manager = AgentManager(AgentStore(database), allowed_models=allowed_models_from_settings(
+    Settings.from_config(Path("/etc/aiops-41/production.env"))))
+assert config.model in manager.allowed_models
+context = admin_context(tenant)
+matches = [a for a in manager.list(context) if a.name == binding.agent_name]
+assert len(matches) <= 1
+registry = DifyAppRegistry(database)
+reports = reconcile_dify_registry(registry, manifest, dry_run=True)
+assert all(r.action == "unchanged" or
+           (r.tenant_id == tenant and r.business_entry == "operator" and r.action == "registered")
+           for r in reports)
+print([(r.tenant_id, r.business_entry, r.action) for r in reports])
+if apply:
+    agent = matches[0] if matches else manager.create(context, name=binding.agent_name,
+        description=declared.description, config=config)
+    if agent.status == "draft":
+        assert agent.config == config
+        manager.publish(context, agent.agent_id, expected_revision=agent.revision)
+    agent = manager.get(context, agent.agent_id)
+    assert agent.status == "published" and agent.published_version is not None
+    reconcile_dify_registry(registry, manifest, dry_run=False)
+    assert all(r.action == "unchanged" for r in
+               reconcile_dify_registry(registry, manifest, dry_run=True))
+    print("初始版本与登记完成", agent.agent_id, agent.published_version)
+```
+
+最终发布使用同一服务身份、同一配置读取器，可直接执行：
+
+```python
+import json
+from urllib.request import Request, urlopen
+from aiops_diagnostics.gateway_server import GatewayServerSettings
+
+settings = GatewayServerSettings.from_env()
+request = Request("http://172.18.0.1:8788/v1/dify/publish",
+    data=json.dumps({"app_id": "349a637c-8f86-41b9-b932-e9818fb39a97"}).encode(),
+    headers={"Authorization": "Bearer " + settings.dify_publish_api_key,
+             "Content-Type": "application/json"})
+with urlopen(request, timeout=60) as response:
+    print(response.status, response.read().decode())
+```
 
 ## 验证与恢复
 
