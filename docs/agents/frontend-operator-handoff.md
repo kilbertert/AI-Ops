@@ -4,6 +4,8 @@
 合并回执明确未部署；本页不声称正式H5已发版。真实节点API回放见[证据](../validation/2026-10-26-operator-real-history-replay.md)，
 当前范围见[测试交接](../testing-handoff.md)与[管家CPMS手册](operator-cpms/README.md)。
 
+部署方法见[管家 H5 部署与恢复](operator-h5-deployment.md)。
+
 ## 身份与请求
 
 公司App正常密码登录取得个人Bearer，请求带`X-Business-Entry: operator`；不要携带consumer的third-session、
