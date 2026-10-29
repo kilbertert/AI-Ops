@@ -22,6 +22,12 @@ C端检测现为本人订单状态QA；管家走Java/CPMS，Dify使用登记应�
 见[发布包回执](../validation/2026-10-29-z06b-publication-layout-live.md)。此前身份证据详见[身份迁移回执](../validation/2026-10-29-z05b-identity-layout-live.md)。此前知识证据见[知识迁移回执](../validation/2026-10-29-z04b-knowledge-layout-live.md)。模型代理运行中的旧发布包未切换；Java产物等字节未重启。详见[目录迁移回执](../validation/2026-10-29-z03-directory-migration-live.md)。故障准确率与长期稳定性未验收。详见[本轮验收](../validation/2026-10-29-runtime-retirement-live.md)。
 下方10月28日表格是退役前快照，不能据此恢复旧执行器。
 
+## 执行包与当前诊断版本（2026-10-29）
+
+execution包已部署，生产当前为`1.0.0+22bed508016a`。C端原H5通过；管家两次完成阶段失败后，
+新增固定原因日志，随后原H5与同输入两次成功，旧间歇失败根因未关闭，不宣称稳定性通过。
+见[执行上线后续](../validation/2026-10-29-z08b-execution-live-followup.md)。
+
 ## 当前快照：2026-10-28（北京时间）
 
 本节是截至该日的交付摘要；下方保留历史记录原文。代码存在、已合并、已部署、原入口验证和业务签字分别判断。
