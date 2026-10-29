@@ -86,7 +86,7 @@ def read_billing_record(base_url, order_no, *, tenant_id, user_id):
 
 
 def billing_answer(snapshot, language):
-    from aiops_diagnostics.consumer_language import COPY, live_answer
+    from aiops_diagnostics.consumer.consumer_language import COPY, live_answer
 
     if language in COPY:
         return live_answer(snapshot, language, "billing")

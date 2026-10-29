@@ -48,7 +48,7 @@ def publication_settings(
     workflow, ceiling, public_base, *, require_split=False, require_picker=False, owned_libraries=None
 ):
     graph = workflow.get("graph", {})
-    from aiops_diagnostics import consumer_documents
+    from aiops_diagnostics.consumer import consumer_documents
 
     documents = consumer_documents.enabled(workflow)
     if "content" in ceiling and (ceiling["content"].get("schema") == consumer_documents.SCHEMA) != documents:
@@ -198,7 +198,7 @@ def publication_settings(
         )
         flags[setting] = ceiling[setting] and entry["value"] == "true"
     if picker:
-        from aiops_diagnostics.consumer_knowledge_selection import (
+        from aiops_diagnostics.consumer.consumer_knowledge_selection import (
             PROVIDER,
             TOOL,
             require_owned,

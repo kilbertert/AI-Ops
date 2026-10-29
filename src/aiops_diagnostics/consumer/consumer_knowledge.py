@@ -97,7 +97,7 @@ MESSAGES = {
 
 
 def text_for(code, language):
-    from aiops_diagnostics.consumer_language import COPY
+    from aiops_diagnostics.consumer.consumer_language import COPY
 
     if language in COPY:
         return COPY[language]["knowledge_" + code]
@@ -123,7 +123,7 @@ def binding_content(binding, caller):
 
 
 def validate_content(body, *, tenant, environment):
-    from aiops_diagnostics.consumer_documents import SCHEMA
+    from aiops_diagnostics.consumer.consumer_documents import SCHEMA
 
     if not isinstance(body, dict):
         raise ValueError("invalid consumer content")
@@ -278,7 +278,7 @@ def select_context(runtime, caller, binding, query, language, qa_id):
     )
     result = guard.search(query)
     if binding.callback_version == 4:
-        from aiops_diagnostics.consumer_documents import context_from_chunks
+        from aiops_diagnostics.consumer.consumer_documents import context_from_chunks
 
         return context_from_chunks(result)
     candidates = {}
@@ -326,10 +326,10 @@ def live_answer(snapshot, language, *, localized=True):
             else (language if language in {"zh", "zh-Hant"} else "en")
         )
     if snapshot.get("source") == "cpms.orderDetail":
-        from aiops_diagnostics.consumer_billing import billing_answer
+        from aiops_diagnostics.consumer.consumer_billing import billing_answer
 
         return billing_answer(snapshot, language)
-    from aiops_diagnostics.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
     return status_answer(snapshot, language, localized=localized)
 
@@ -342,7 +342,7 @@ def final_answer(raw, context, language, content):
     if (context or {}).get("followup", {}).get("unresolved_count") == 1:
         return fallback("followup", language, content)
     if (context or {}).get("mode") == "documents":
-        from aiops_diagnostics.consumer_documents import answer_selection
+        from aiops_diagnostics.consumer.consumer_documents import answer_selection
 
         kind, answer = answer_selection(raw, context)
         if answer is not None:
@@ -475,7 +475,7 @@ def callback_context(
 
     def valid():
         if not run.order_no:
-            from aiops_diagnostics.consumer_knowledge_selection import require_available
+            from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
             require_available(runtime, caller, binding)
         if run.order_no:

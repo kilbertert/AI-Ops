@@ -11,7 +11,7 @@ from aiops_diagnostics.agent_runs import scope_to_json
 from aiops_diagnostics.chat_data_grant import DataGrantStore
 from aiops_diagnostics.chat_execution import ChatBinding
 from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
-from aiops_diagnostics.consumer_knowledge import _binding_identity, final_answer
+from aiops_diagnostics.consumer.consumer_knowledge import _binding_identity, final_answer
 from aiops_diagnostics.dify_chatflow import DifyChatflowClient
 from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 from aiops_diagnostics.dify_dsl_pull import DifyDslClient, workflow_content
@@ -85,7 +85,7 @@ class ConsumerTrial:
             )
             # 试用订单只用于既有试用身份授权；知识问题不向模型交出该单数据。
             from aiops_diagnostics.chat_execution import ChatRunUnavailable
-            from aiops_diagnostics.consumer_intent import message, validate
+            from aiops_diagnostics.consumer.consumer_intent import message, validate
 
             decision = validate(
                 runtime.classify_consumer(self.question, language=language, selected_order=True)
@@ -105,7 +105,7 @@ class ConsumerTrial:
                 raise ChatRunUnavailable("CHATFLOW_LIVE_DISABLED", message("disabled", language))
             runtime._require_chat_order_visible(scope, order)
             if not live:
-                from aiops_diagnostics.consumer_knowledge_selection import require_available
+                from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
                 require_available(runtime, scope, self.binding)
             self.require_current(runtime.gateway_settings)

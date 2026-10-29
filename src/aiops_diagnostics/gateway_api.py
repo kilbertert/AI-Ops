@@ -19,13 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from aiops_diagnostics import (
-    __version__,
-    chat_execution,
-    consumer_knowledge_selection,
-    execution_manifest,
-    request_observation,
-)
+from aiops_diagnostics import __version__, chat_execution, execution_manifest, request_observation
 from aiops_diagnostics.agent_content import AGENT_STARTERS
 from aiops_diagnostics.agent_lifecycle import (
     AGENT_MANAGE_SCOPE,
@@ -82,7 +76,12 @@ from aiops_diagnostics.company_token_auth import (
     PermissionSource,
 )
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.consumer_order_chat import asks_latest_order, is_order_status_question, status_answer
+from aiops_diagnostics.consumer import consumer_knowledge_selection
+from aiops_diagnostics.consumer.consumer_order_chat import (
+    asks_latest_order,
+    is_order_status_question,
+    status_answer,
+)
 from aiops_diagnostics.conversation_store import (
     ConversationBusy,
     ConversationError,
@@ -708,8 +707,8 @@ def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
     所以这里先按 chat 走；只有它明确报"没有 model_config"时才改走 workflow ——
     **用结果判种类，不用猜测**。
     """
-    from aiops_diagnostics import consumer_documents, consumer_publication
     from aiops_diagnostics import dify_dsl_pull as pull
+    from aiops_diagnostics.consumer import consumer_documents, consumer_publication
 
     target = consumer_publication.target_for(context.settings, binding)
     if not target and consumer_publication.route_scenario(context.settings, binding) == "consumer_service":
@@ -825,7 +824,7 @@ def _publish_bound_app(
             status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
         )
     from aiops_diagnostics.agent_manifest import admin_context
-    from aiops_diagnostics.consumer_flow_contract import ConsumerFlowError
+    from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
     from aiops_diagnostics.dify_dsl_pull import DifyDslError, DifyDslSource
 
     console = context.settings
@@ -855,7 +854,7 @@ def _publish_bound_app(
     # 等同步回来再读，读到的是**对方之后的** revision，于是这次发布仍会 CAS 通过，
     # 把一次已经成功的撤回重新置为 active —— 实测复现过（V1 → 撤回 → 延迟发布
     # 推进，最终 active / revision 3 / V2）。用快照值推进，期间有变动就冲突。
-    from aiops_diagnostics import consumer_publication
+    from aiops_diagnostics.consumer import consumer_publication
 
     consumer_target = consumer_publication.target_for(context.settings, binding)
     if consumer_target and console.chat_route_bindings_file:
@@ -881,7 +880,7 @@ def _publish_bound_app(
         raise StandardAPIError(409, "CONSUMER_TARGET_CONFLICT", "app has two execution targets")
     if console.chat_route_bindings_file and not node_target and not consumer_target:
         from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
-        from aiops_diagnostics.consumer_publication import route_scenario
+        from aiops_diagnostics.consumer.consumer_publication import route_scenario
 
         managed = ChatRouteBindingStore(Path(console.chat_route_bindings_file)).get(
             console.execution_environment,
@@ -1002,7 +1001,7 @@ def _current_route_revision(context: Any, binding: Any, environment: str) -> int
     try:
         store = ChatRouteBindingStore(Path(database).expanduser().absolute())
         entry = str(getattr(binding, "business_entry", "") or "consumer")
-        from aiops_diagnostics.consumer_publication import route_scenario
+        from aiops_diagnostics.consumer.consumer_publication import route_scenario
 
         row = store.get(environment, binding.tenant_id, entry, route_scenario(context.settings, binding))
     except Exception as exc:  # noqa: BLE001 - 没有初始 CAS 证据，发布必须拒绝。
@@ -1059,7 +1058,7 @@ def _advance_route_binding(
 
     key_dir = str(getattr(context.settings, "chat_dify_key_dir", "") or "")
     entry = str(getattr(binding, "business_entry", "") or "consumer")
-    from aiops_diagnostics.consumer_publication import route_scenario
+    from aiops_diagnostics.consumer.consumer_publication import route_scenario
 
     scenario = getattr(outcome, "route_scenario", "") or route_scenario(context.settings, binding)
     # **两个前置必须在写指针之前拒绝**，理由相同：写进去之后才发现，故障会扩散到
@@ -1134,7 +1133,7 @@ def _managed_app_route(context: Any, app_id: str):
     from pathlib import Path
 
     from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
-    from aiops_diagnostics.consumer_publication import route_scenario
+    from aiops_diagnostics.consumer.consumer_publication import route_scenario
 
     binding = next((item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id), None)
     if binding is None:
@@ -1198,14 +1197,14 @@ def _workflow_trial_draft(
         return NodeTrial(candidate(source, target), row)
     dsl = DifyDslClient(source).export_dsl()
     if row.scenario == chat_execution.SCENARIO_CONSUMER_SERVICE:
-        from aiops_diagnostics import consumer_documents
-        from aiops_diagnostics.consumer_publication import frozen_settings, target_for
-        from aiops_diagnostics.consumer_trial import ConsumerTrial
+        from aiops_diagnostics.consumer import consumer_documents
+        from aiops_diagnostics.consumer.consumer_publication import frozen_settings, target_for
+        from aiops_diagnostics.consumer.consumer_trial import ConsumerTrial
 
         target = target_for(context.settings, binding)
         if target is None:
             raise StandardAPIError(409, "CONSUMER_TARGET_MISSING", "consumer trial target missing")
-        from aiops_diagnostics.consumer_flow_contract import publication_settings
+        from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
         from aiops_diagnostics.dify_dsl_pull import workflow_content
 
         candidates = {
@@ -1995,7 +1994,7 @@ def create_gateway_app(
 
         store = ChatRouteBindingStore(Path(database).expanduser().absolute())
         entry = str(getattr(binding, "business_entry", "") or "consumer")
-        from aiops_diagnostics.consumer_publication import route_scenario
+        from aiops_diagnostics.consumer.consumer_publication import route_scenario
 
         scenario = route_scenario(context.settings, binding)
         current = store.get(environment, binding.tenant_id, entry, scenario)
@@ -2426,7 +2425,7 @@ def create_gateway_app(
             #
             # 这里是**按请求语言渲染**的那一类文案（与诊断面同一条规则：请求语言只渲染
             # 服务端此刻写的话，不改结果本身的 `language`）。
-            from aiops_diagnostics.consumer_intent import TRIAL_MESSAGES, message
+            from aiops_diagnostics.consumer.consumer_intent import TRIAL_MESSAGES, message
 
             key = TRIAL_MESSAGES.get(trial["error_code"])
             body["error_message"] = (
@@ -2502,8 +2501,8 @@ def create_gateway_app(
 
     @app.post("/v1/assistant/photos", status_code=201)
     async def upload_consumer_photo(request: Request, identity=Depends(assistant_identity)):  # noqa: B008
-        from aiops_diagnostics.consumer_chat_service import fingerprint
-        from aiops_diagnostics.consumer_photo import MAX_UPLOAD, normalize_photo
+        from aiops_diagnostics.consumer.consumer_chat_service import fingerprint
+        from aiops_diagnostics.consumer.consumer_photo import MAX_UPLOAD, normalize_photo
 
         caller, decision = identity
         if not context.settings.consumer_chatflow_enabled or str(decision.platform) != "consumer":
@@ -2530,7 +2529,7 @@ def create_gateway_app(
             image = await run_in_threadpool(
                 normalize_photo, bytes(body), request.headers.get("Content-Type", "").split(";")[0]
             )
-            from aiops_diagnostics.consumer_chat_service import current
+            from aiops_diagnostics.consumer.consumer_chat_service import current
 
             current(context.runtime, caller, binding)
             context.runtime.consumer_photos.complete_upload(photo, image)
@@ -2729,14 +2728,14 @@ def create_gateway_app(
                 )
 
         if selected_settings.consumer_chatflow_enabled and str(decision.platform) == "consumer":
-            from aiops_diagnostics import consumer_chat_service
+            from aiops_diagnostics.consumer import consumer_chat_service
 
             try:
                 service_binding = chat_execution.select_binding(
                     context.settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
                 )
                 if service_binding is not None:
-                    from aiops_diagnostics import consumer_knowledge
+                    from aiops_diagnostics.consumer import consumer_knowledge
 
                     if payload.photo_id and (not service_binding.photo_enabled or payload.order_no):
                         raise StandardAPIError(
@@ -2744,7 +2743,7 @@ def create_gateway_app(
                         )
                     _require_consumer_self_order(caller, "consumer", "pending")
                     if service_binding.content_file or service_binding.content_snapshot is not None:
-                        from aiops_diagnostics import consumer_knowledge
+                        from aiops_diagnostics.consumer import consumer_knowledge
 
                         local_kind = (
                             "safety"
@@ -2770,7 +2769,7 @@ def create_gateway_app(
                                 local_kind = "human"
                         if local_kind:
                             if payload.photo_id:
-                                from aiops_diagnostics.consumer_chat_service import fingerprint
+                                from aiops_diagnostics.consumer.consumer_chat_service import fingerprint
 
                                 context.runtime.consumer_photos.take(
                                     payload.photo_id, caller.scope_fingerprint, fingerprint(service_binding)
@@ -2791,7 +2790,7 @@ def create_gateway_app(
                                     "language": served_language,
                                 },
                             )
-                    from aiops_diagnostics import consumer_chat_service, consumer_intent
+                    from aiops_diagnostics.consumer import consumer_chat_service, consumer_intent
 
                     if payload.order_no:
                         _require_visible_order(context, caller, payload.order_no)
@@ -3711,7 +3710,7 @@ def create_gateway_app(
     def consumer_knowledge_catalogue(
         response: Response, authorization: Annotated[str | None, Header()] = None
     ):
-        from aiops_diagnostics.consumer_knowledge_selection import catalogue_workspace
+        from aiops_diagnostics.consumer.consumer_knowledge_selection import catalogue_workspace
         from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
 
         response.headers["Cache-Control"] = "no-store"
@@ -3739,7 +3738,8 @@ def create_gateway_app(
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
     ):
-        from aiops_diagnostics import chat_data_grant, consumer_chat_service, consumer_knowledge
+        from aiops_diagnostics import chat_data_grant
+        from aiops_diagnostics.consumer import consumer_chat_service, consumer_knowledge
 
         response.headers["Cache-Control"] = "no-store"
         capability = request.path_params.get("capability")
@@ -5810,7 +5810,7 @@ def _consumer_order_chat_via_node(
 
 
 def _consumer_intent_clarification(code, language):
-    from aiops_diagnostics.consumer_intent import message
+    from aiops_diagnostics.consumer.consumer_intent import message
 
     return JSONResponse(
         status_code=200,
@@ -6026,7 +6026,7 @@ def _require_current_chat_order(context, caller, qa, request):
             if expected != qa.get("result"):
                 raise operator_cpms.OperatorRefused("OPERATOR_RESULT_MISMATCH")
         return
-    from aiops_diagnostics import consumer_chat_service
+    from aiops_diagnostics.consumer import consumer_chat_service
 
     if str(qa.get("internal_run_id") or "").startswith(consumer_chat_service.PREFIX):
         run = context.dify_run_store.by_qa(qa["qa_id"])
@@ -6304,7 +6304,7 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
     snapshot = context.dify_run_store.snapshot(latest.run_id)
     if not snapshot or snapshot.get("order_no") != latest.order_no:
         raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial snapshot unavailable")
-    from aiops_diagnostics.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
     expected = status_answer(snapshot, result.get("language", "zh"))["blocks"][0]["text"]
     if report.get("summary") != expected or any(
@@ -6475,7 +6475,7 @@ def _require_visible_order(context: Any, caller: ScopeContext, order_no: str) ->
 def _authorized_consumer_snapshot(settings, caller, order_no, data_kind):
     if data_kind == "status":
         return _authorized_charging_snapshot(settings, caller, order_no)
-    from aiops_diagnostics.consumer_billing import read_billing_record
+    from aiops_diagnostics.consumer.consumer_billing import read_billing_record
     from aiops_diagnostics.gateway_config import charging_endpoint
 
     if data_kind != "billing":

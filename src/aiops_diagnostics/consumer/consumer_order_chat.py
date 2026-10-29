@@ -33,7 +33,7 @@ def asks_latest_order(question: str) -> bool:
 
 
 def status_answer(snapshot: dict[str, Any], language: str, *, localized=False) -> dict[str, Any]:
-    from aiops_diagnostics.consumer_language import COPY, live_answer
+    from aiops_diagnostics.consumer.consumer_language import COPY, live_answer
 
     if localized and language in COPY:
         return live_answer(snapshot, language, "status")

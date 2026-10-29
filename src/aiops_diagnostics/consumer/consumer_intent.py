@@ -89,7 +89,7 @@ def classify(question, *, provider, api_key, language, **context):
 
 
 def message(code, language):
-    from aiops_diagnostics.consumer_language import COPY
+    from aiops_diagnostics.consumer.consumer_language import COPY
 
     if language in COPY:
         return COPY[language]["intent_" + code]

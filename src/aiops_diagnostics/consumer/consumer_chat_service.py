@@ -20,7 +20,7 @@ def version_key(binding: Any) -> str:
 
 
 def fingerprint(binding):
-    from aiops_diagnostics.consumer_knowledge import _binding_identity
+    from aiops_diagnostics.consumer.consumer_knowledge import _binding_identity
 
     return _binding_identity(binding)
 
@@ -53,7 +53,7 @@ def start(
     uses_context=True,
     expected_previous_qa_id=None,
 ):
-    from aiops_diagnostics import consumer_knowledge
+    from aiops_diagnostics.consumer import consumer_knowledge
 
     current(runtime, caller, binding)
     if binding.content_file or binding.content_snapshot is not None:
@@ -67,7 +67,7 @@ def start(
         and expected_previous_qa_id is not None
         and (previous.qa_id if previous else "") != expected_previous_qa_id
     ):
-        from aiops_diagnostics.consumer_intent import message
+        from aiops_diagnostics.consumer.consumer_intent import message
 
         raise chat_execution.ChatRunUnavailable(
             "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("context", language), http_status=409
@@ -83,7 +83,7 @@ def start(
             or previous.route_revision != binding.route_revision
             or previous.agent_version_no != binding.agent_version_no
         ):
-            from aiops_diagnostics.consumer_intent import message
+            from aiops_diagnostics.consumer.consumer_intent import message
 
             raise chat_execution.ChatRunUnavailable(
                 "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("conversation", language), http_status=409
@@ -96,7 +96,7 @@ def start(
                     "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
                 )
         elif uses_context:
-            from aiops_diagnostics.consumer_intent import message
+            from aiops_diagnostics.consumer.consumer_intent import message
 
             raise chat_execution.ChatRunUnavailable(
                 "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("context", language), http_status=409
@@ -241,7 +241,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             on_started=started,
         )
         if not latest.order_no:
-            from aiops_diagnostics.consumer_knowledge_selection import require_available
+            from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
             require_available(runtime, caller, binding)
         current(runtime, caller, binding)
@@ -272,7 +272,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             ):
                 raise ValueError("live snapshot missing or belongs to another order")
         if binding.content_file or binding.content_snapshot is not None:
-            from aiops_diagnostics.consumer_knowledge import binding_content, final_answer
+            from aiops_diagnostics.consumer.consumer_knowledge import binding_content, final_answer
 
             content = binding_content(binding, caller)
             answer = final_answer(reply.answer, store.context(run_id), language, content)
@@ -327,7 +327,7 @@ def require_result(runtime, caller, qa):
     if run.order_no:
         runtime._require_chat_order_visible(caller, run.order_no)
     else:
-        from aiops_diagnostics.consumer_knowledge_selection import require_available
+        from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
         require_available(runtime, caller, binding)
     latest = runtime.dify_run_store.get(run.run_id)
@@ -337,7 +337,7 @@ def require_result(runtime, caller, qa):
         )
     current(runtime, caller, binding)
     if run.order_no:
-        from aiops_diagnostics.consumer_knowledge import live_answer
+        from aiops_diagnostics.consumer.consumer_knowledge import live_answer
 
         context = runtime.dify_run_store.context(run.run_id) or {}
         live = context.get("live_snapshot", {})

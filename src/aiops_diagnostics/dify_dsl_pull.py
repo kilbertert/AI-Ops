@@ -985,7 +985,7 @@ def sync_workflow_from_dify(
     ).snapshot
     candidate = workflow_content(client.export_dsl())
     if consumer_settings is not None:
-        from aiops_diagnostics.consumer_flow_contract import publication_settings
+        from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
 
         consumer_settings = publication_settings(
             candidate,
