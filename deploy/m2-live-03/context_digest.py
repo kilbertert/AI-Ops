@@ -2,7 +2,7 @@
 """算出 Gateway 镜像的**构造上下文摘要**，并与 `images.lock.json` 里锁的值比对。
 
 `build-image.sh` 的 `m2live.source` 标签是这么来的：把 `src/`、`tools/m2_live`、
-`tools/m2_close`、Dockerfile 与 requirements 装进一个目录，然后对「路径 + 内容」的
+`tools/m2_close`、`services/model-proxy`、Dockerfile 与 requirements 装进一个目录，然后对「路径 + 内容」的
 排序列表再取一次 sha256。preflight 用这个值核对宿主上的镜像。
 
 问题在于它是**行内命令**：只有构建时才算得出来。于是锁文件里那个摘要无法在 CI 里核对，
@@ -35,6 +35,7 @@ REPO = HERE.parents[1]
 #: 参与构造上下文的路径与各自的排除规则 —— 必须与 `build-image.sh` 里的两行 `tar` 一致。
 CONTEXT_SPEC = (
     ("src", ("__pycache__", "*.pyc")),
+    ("services/model-proxy", ("__pycache__", "*.pyc")),
     ("tools/m2_live", ("__pycache__", "*.pyc")),
     ("tools/m2_close", ("__pycache__", "*.pyc", "node/target")),
 )

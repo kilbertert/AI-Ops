@@ -6,7 +6,7 @@ PR #1125已合并，生产Gateway为`1.0.0+fbab0f739322`，标签`v1.0.0`。
 Python Thin Harness、诊断/设备CLI已退役；独立`aiops-admin`保留。
 C端检测现为本人订单状态QA；管家走Java/CPMS，Dify使用登记应用的草稿试用。
 真实C端H5、跨用户拒绝、管家原H5及Dify原生预览已验证，独立CPMS一致；PR #1126的H5补齐已部署。
-**退役切换链路验收通过，开始目录迁移第一片**。故障准确率与长期稳定性未验收。详见[本轮验收](../validation/2026-10-29-runtime-retirement-live.md)。
+**退役切换链路验收通过**；目录迁移第一片Java节点已合并为`1c1b7316`，源码位于`services/execution-node/`；第二片为模型代理归位。故障准确率与长期稳定性未验收。详见[本轮验收](../validation/2026-10-29-runtime-retirement-live.md)。
 下方10月28日表格是退役前快照，不能据此恢复旧执行器。
 
 ## 当前快照：2026-10-28（北京时间）

@@ -11,6 +11,9 @@ C端与管家原H5、Dify原生预览及独立CPMS/跨主体拒绝已通过，�
 隔离驱动继续在tools，Gateway镜像不再包含节点源码。验证见
 [第一片回执](../validation/2026-10-29-execution-node-layout.md)。
 
+第二片将固定模型出口由`tools/m2_live/model_proxy.py`迁至`services/model-proxy/`，
+同步两套Compose、镜像上下文和原测试导入，源码逐字不变；新Compose必须与新路径镜像成对交付。
+
 后续目标：Python按consumer/knowledge/identity/publication/gateway职责形成包，测试随职责归类；
 运行服务与一次性工具分开，部署面按服务聚合。每片更新调用者、资源加载、打包、CI与现役文档，
 保留错误处理与权限校验，不新建转发空壳或永久legacy目录。

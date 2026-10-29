@@ -21,6 +21,10 @@ DEPLOY = Path(__file__).resolve().parents[1] / "deploy/node-runtime"
 def test_runtime_is_internal_and_keeps_credentials_separate():
     config = yaml.safe_load((DEPLOY / "compose.yaml").read_text())
     services = config["services"]
+    assert services["model-proxy"]["entrypoint"] == [
+        "python",
+        "/opt/aiops-src/services/model-proxy/model_proxy.py",
+    ]
     assert set(services) == {"store", "platform", "node", "model-proxy"}
     for name in ("node", "platform", "store"):
         assert all(config["networks"][n]["internal"] for n in services[name]["networks"])

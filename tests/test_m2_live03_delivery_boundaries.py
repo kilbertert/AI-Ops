@@ -117,8 +117,8 @@ def test_bootstrap_never_passes_the_supplier_key_to_the_node(prepared, tmp_path)
 
 
 def test_live_proxy_rejects_http_before_listening(monkeypatch):
-    sys.path.insert(0, str(DEPLOY.parents[1] / "tools"))
-    from m2_live import model_proxy
+    sys.path.insert(0, str(DEPLOY.parents[1] / "services/model-proxy"))
+    import model_proxy
 
     def unexpected_listener(*args, **kwargs):
         pytest.fail("正式模式接受 HTTP 后开始监听")

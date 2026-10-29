@@ -2,6 +2,7 @@
 
 现役Java源码与构建入口位于[services/execution-node](../../services/execution-node/README.md)。
 仓内源码迁移不改变宿主jar安装目录、systemd和容器挂载。
+模型出口源码位于[services/model-proxy](../../services/model-proxy/README.md)，新Compose与包含新路径的镜像必须成对发布。
 
 当前产品路径与交付状态见[当前说明](../../docs/agents/current-delivery-state.md)。本文件是部署/维护方法，配置默认关闭不代表现役全部关闭；
 新旧执行器和场景分别验收，不按一个服务进程推断全系统已迁移。
@@ -138,3 +139,18 @@ timeout 45 docker exec aiops-runtime-node java -Xmx32m -cp /tmp TlsProbe \
 
 边界遵循 Docker Compose 的 internal 网络、restart/depends_on 与 systemd 的 After/PartOf 语义；
 回调沿用 nginx 的精确路径白名单及既有 Gateway 身份校验，不新增权限协议。
+
+## 模型代理源码归位后的发布
+
+合并修订通过`deploy/m2-live-03/build-image.sh --save <镜像tar>`在开发机/runner构建，
+发布内容锁在任务分支构建验证时更新并随PR合并，合并后的构建不得改写清单，
+制品包含`services/model-proxy/model_proxy.py`。本片只移动源码，原文件与迁移前逐字相同。
+发布前核对新镜像内Compose入口的`--help`可执行，并在临时证书/合成上游下验证实际TLS请求。
+
+服务宿主保留旧发布包、旧镜像和`runtime.env`；通过dev-host传递有摘要的镜像及同修订Compose。
+先`docker load`并核镜像ID，渲染新Compose确认模型出口唯一入口为新路径，
+再将`AIOPS_NODE_PROXY_IMAGE`与同修订Compose一起切换，仅对`model-proxy`执行
+`docker compose ... up -d --no-deps --pull never model-proxy`。
+在无在飞模型任务的窗口切换，验证节点到代理的TLS、令牌拒绝与真实单次模型请求；
+失败恢复旧Compose和旧镜像ID后重建同一服务，不停止平台、节点或数据库。
+只移动仓库源码不会改写运行中的旧发布包；未执行上述切换时，生产仍使用旧包中的等字节代理。

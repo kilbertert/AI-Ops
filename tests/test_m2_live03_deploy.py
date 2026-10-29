@@ -76,6 +76,7 @@ def test_node_reaches_only_internal_networks(compose):
     assert "node" not in egress_members
     # 出口本身是可出网的，且只转发到一个固定目标。
     proxy = compose["services"]["model-proxy"]
+    assert proxy["entrypoint"] == ["python", "/opt/aiops-src/services/model-proxy/model_proxy.py"]
     assert "egress" in proxy["networks"]
     command = " ".join(proxy.get("command", []))
     assert "${M2LIVE_MODEL_UPSTREAM" in command, "出口的上游目标没有在部署件里钉住"

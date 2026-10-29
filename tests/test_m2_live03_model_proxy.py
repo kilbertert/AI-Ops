@@ -25,9 +25,9 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "tools"))
+sys.path.insert(0, str(REPO / "services/model-proxy"))
 
-from m2_live import model_proxy  # noqa: E402
+import model_proxy  # noqa: E402
 
 PAYLOAD = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
 

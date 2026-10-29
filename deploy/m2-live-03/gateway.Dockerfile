@@ -23,6 +23,7 @@ RUN python -m pip install --no-cache-dir --no-compile \
 
 COPY src/ /opt/aiops-src/src/
 COPY tools/ /opt/aiops-src/tools/
+COPY services/model-proxy/ /opt/aiops-src/services/model-proxy/
 # 仓库里的文件默认是 0640/0750（开发机 umask 027）。镜像里的服务用户不是构建用户，
 # 不放开读权限就会以「模块不存在」的形式失败 —— 那是权限问题，不是缺文件。
 RUN chmod -R a+rX /opt/aiops-src
