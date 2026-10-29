@@ -114,7 +114,7 @@ from pathlib import Path
 from aiops_diagnostics.dify_dsl_pull import DifyDslSource
 from aiops_diagnostics.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.gateway_server import GatewayServerSettings
-from aiops_diagnostics.execution.node_publication import candidate, targets
+from aiops_diagnostics.node_publication import candidate, targets
 
 apply = False
 settings = GatewayServerSettings.from_env()

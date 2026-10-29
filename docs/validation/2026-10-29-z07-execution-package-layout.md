@@ -10,3 +10,6 @@
 - 真Gateway→Java→完成→原GET隔离整链18项PASS、失败0；wheel/镜像新包导入与旧路径缺失通过。
 - 临时Gateway、镜像163文件内容锁、ruff/policy通过，spex 0错误/49现有警告。本地全量3319 passed / 9 skipped；远端CI和CD待验证。当前未完成业务验收；
 历史故障根因和长期稳定性不因目录迁移宣称通过。
+
+并行多租户手册有另一任务未提交修改，重叠保护拒绝推送；本片不覆盖该文件。
+该手册中的node_publication导入需随其任务改为`aiops_diagnostics.execution.node_publication`；新源码不提供旧路径兼容。
