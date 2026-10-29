@@ -154,26 +154,7 @@ QUESTION = JobProfile(
     interrupted_retention=timedelta(minutes=5),
 )
 
-#: The device path's runs. A different vocabulary (`diagnosed`, `blocked`,
-#: `interrupted`) and **no expiry at all**: this table has never had a
-#: convergence rule, which is a decision PRD #410 left open rather than an
-#: oversight to be fixed here. `expired=None` says that, and keeps this table's
-#: terminal set byte-identical to the one the store exported before.
-RUN = JobProfile(
-    name="run",
-    active=frozenset({"queued", "running"}),
-    completed=frozenset({"diagnosed", "inconclusive"}),
-    interrupted=frozenset({"blocked", "interrupted", "failed"}),
-    expired=None,
-    deadline=timedelta(minutes=15),
-    completed_retention=timedelta(minutes=15),
-    interrupted_retention=timedelta(minutes=5),
-    expired_retention_is_immediate=True,
-)
-
-PROFILES: dict[str, JobProfile] = {
-    profile.name: profile for profile in (HEALTH_JOB, DIAGNOSIS, QUESTION, RUN)
-}
+PROFILES: dict[str, JobProfile] = {profile.name: profile for profile in (HEALTH_JOB, DIAGNOSIS, QUESTION)}
 
 
 def claim_guard(profile: JobProfile) -> tuple[str, tuple[str, ...]]:

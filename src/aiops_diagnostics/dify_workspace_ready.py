@@ -1,4 +1,4 @@
-"""`aiops admin ensure-ready`：让建出来的 workspace **不再是空壳**（#881）。
+"""`aiops-admin ensure-ready`：让建出来的 workspace **不再是空壳**（#881）。
 
 `ensure-workspace`（#880）把 workspace 建出来，状态停在 ``created``。这一步把它推到
 ``ready`` —— 三步，全部成功才算：

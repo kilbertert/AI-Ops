@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
 from aiops_diagnostics.agent_manifest import (
     _PROMPT_FROM_DIFY,
@@ -476,60 +475,5 @@ def test_an_unbound_agent_without_allowed_tools_gets_every_tool(tmp_path: Path) 
             """,
         )
     )
-    assert manifest.agents[0].config.allowed_tools == ALL_TOOL_NAMES
+    assert manifest.agents[0].config.allowed_tools == ()
     assert not tools_from_dify(manifest.agents[0])
-
-
-def test_reconcile_preserves_the_operators_tool_allowlist(tmp_path: Path) -> None:
-    """R3 的另一半：reconcile 不得把运营在 Dify 里设的白名单改回默认。
-
-    只拦住"清单里写死"是不够的 —— 真正的失效形态是：运营在 Dify 里把工具收窄成
-    一个，下一次 `reconcile` 因为清单没有这个字段而用默认值（全部）覆盖掉它，报告
-    还说 `unchanged`。这里把库中现值设成收窄后的，再收敛一次清单，断言它**没被动**。
-    """
-    manager = _manager(tmp_path)
-    context = _context()
-    narrow = _manifest_agent()
-    narrow = replace(narrow, config=replace(narrow.config, allowed_tools=("order_snapshot",)))
-    reconcile(manager, _manifest(narrow))
-    assert manager.list(context)[0].config.allowed_tools == ("order_snapshot",)
-
-    # 清单这一轮把 allowed_tools 留空（= 由 Dify 拥有）⇒ 现值必须保住
-    from aiops_diagnostics.agent_manifest import _TOOLS_FROM_DIFY
-
-    manifest = _manifest(replace(narrow, config=replace(narrow.config, allowed_tools=_TOOLS_FROM_DIFY)))
-    reports = reconcile(manager, manifest)
-    assert _actions(reports) == ["unchanged"], "没有漂移就不该发布新版本"
-    assert manager.list(context)[0].config.allowed_tools == ("order_snapshot",), "运营设的白名单被改回去了"
-
-
-@pytest.mark.parametrize("tools", [(), ("order_snapshot",)])
-def test_loaded_dify_manifest_preserves_live_tools_and_version(tmp_path: Path, tools) -> None:
-    manager = _manager(tmp_path)
-    existing = _manifest_agent()
-    existing = replace(existing, config=replace(existing.config, allowed_tools=tools))
-    reconcile(manager, _manifest(existing))
-    before = manager.list(_context())[0]
-    manifest = load_manifest(
-        _write(
-            tmp_path,
-            """
-        [[agents]]
-        tenant_id = "tenant-a"
-        name = "客服助手"
-        description = "d"
-        agent_type = "customer"
-        knowledge_base_ids = ["kb-a"]
-        model = "aiops-api"
-        [[dify_apps]]
-        tenant_id = "tenant-a"
-        business_entry = "consumer"
-        app_id = "app-1"
-        agent_name = "客服助手"
-    """,
-        )
-    )
-    assert _actions(reconcile(manager, manifest)) == ["unchanged"]
-    after = manager.list(_context())[0]
-    assert after.config.allowed_tools == tools
-    assert after.published_version == before.published_version

@@ -14,10 +14,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi import Depends, FastAPI, Header, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from aiops_diagnostics import (
     __version__,
@@ -70,16 +70,12 @@ from aiops_diagnostics.caller_auth import (
 )
 from aiops_diagnostics.charging_status import ChargingStatusError, read_charging_status
 from aiops_diagnostics.clarification import (
-    CLARIFY_ACCOUNT_HAS_NO_SITES,
-    CLARIFY_CONTEXT_REQUIRED,
     CLARIFY_LANGUAGE_UNROUTABLE,
-    CLARIFY_ORDER_NOT_YOURS,
     CLARIFY_ORDER_REQUIRED,
     CLARIFY_WRONG_ENTRY,
     MESSAGE_KEY_BY_CODE,
     missing_fields_for,
 )
-from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.company_token_auth import (
     CompanyTokenCallerResolver,
     CompanyTokenSettings,
@@ -106,8 +102,7 @@ from aiops_diagnostics.dify_knowledge_api import (
 )
 from aiops_diagnostics.dify_run_store import DifyRunStore
 from aiops_diagnostics.dify_run_store import still_valid as dify_run_still_valid
-from aiops_diagnostics.dify_tools_catalog import AI_OPS_TOOL_NAMES, CATALOG_NOTE
-from aiops_diagnostics.dify_trial import TrialDraft, TrialInitiator, TrialRefused
+from aiops_diagnostics.dify_trial import TrialInitiator, TrialRefused
 from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
 from aiops_diagnostics.faq import (
     FAQ_NOT_FOUND,
@@ -125,25 +120,18 @@ from aiops_diagnostics.faq import (
 from aiops_diagnostics.gateway_config import (
     GatewayServerSettings,
     parse_dify_knowledge_bindings,
-    parse_dify_tool_bindings,
 )
 from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway_store import (
     ACTIVE_DIAGNOSIS_STATUSES,
     ACTIVE_HEALTH_JOB_STATUSES,
     TERMINAL_DIAGNOSIS_STATUSES,
-    TERMINAL_RUN_STATUSES,
-    AuthenticationError,
-    EnrollmentError,
-    GatewayDevice,
     GatewayStore,
-    RunNotFoundError,
 )
 from aiops_diagnostics.http_auth import INTERNAL_TOKEN_HEADER, TIMESTAMP_HEADER, validate_internal_token
 from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
     QA_FALLBACK_MESSAGES,
-    can_prompt_in,
     clarification_message,
     diagnosis_error_message,
     effective_language,
@@ -156,18 +144,14 @@ from aiops_diagnostics.knowledge_retrieval import (
 )
 from aiops_diagnostics.knowledge_sources import KnowledgeSourceResolver
 from aiops_diagnostics.metrics_store import MetricsValidationError
-from aiops_diagnostics.ops_bindings import ops_app_registered
-from aiops_diagnostics.ops_tools import ChargingInfoInput, OpsToolError, OpsToolService, OrderListInput
-from aiops_diagnostics.order_visibility import DeviceTenantError, tenant_matches
+from aiops_diagnostics.order_visibility import tenant_matches
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.query_scope import (
     ShopDirectory,
     UpmsShopDirectory,
     resolve_query_scope,
 )
-from aiops_diagnostics.routing import MISSING_ORDER_NO, money_question_context
 from aiops_diagnostics.scope_context import (
-    SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,
     ScopeContext,
     ScopeError,
@@ -202,33 +186,6 @@ STANDARD_ORDER_READ_SCOPE = "aiops:orders:read"
 STANDARD_DIAGNOSIS_SCOPE = "aiops:diagnoses:write"
 STANDARD_FAQ_SCOPE = "aiops:faq:read"
 SAFE_ORDER_NO = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-
-
-class EnrollRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    code: str = Field(min_length=20, max_length=256)
-    device_name: str = Field(min_length=1, max_length=128)
-    platform: str = Field(min_length=1, max_length=128)
-
-
-class RunCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    problem: str = Field(min_length=1, max_length=4000)
-    order_no: str | None = Field(default=None, max_length=128)
-    # Deliberately no character pattern: the tenant a request names is judged by
-    # the shared entry rule (``resolve_device_tenant``), which normalizes both
-    # sides, treats a blank one as absent, and refuses a genuinely different one.
-    # A pattern here would be a second tenant decision at the transport layer —
-    # the duplication this boundary exists to remove — and would turn a padded
-    # identifier that normalizes onto the enrolled tenant into a 422 instead of
-    # the run it is entitled to. Only the length bound stays, as for every other
-    # bounded identifier on this surface (#331).
-    tenant_id: str | None = Field(default=None, max_length=128)
-    key_slot: str | None = Field(default=None, max_length=64)
-    provider: str | None = Field(default=None, max_length=64)
-    fixture_name: str | None = Field(default=None, max_length=128)
 
 
 class ChargingStatusDelegationRequest(BaseModel):
@@ -299,18 +256,6 @@ class AssistantQuestionRequest(BaseModel):
         min_length=1,
         max_length=64,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
-    )
-
-
-class StandardDiagnosisRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    order_no: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
-    question: str = Field(min_length=1, max_length=4000)
-    indicator_code: str | None = Field(
-        default=None,
-        max_length=64,
-        pattern=r"^[a-z][a-z0-9_]{0,63}$",
     )
 
 
@@ -402,56 +347,13 @@ class OperatorTrialCancelRequest(BaseModel):
 
 
 class DifyTrialRequest(BaseModel):
-    """一次试运行：订单号 + **草稿**。范围与发起人**都不在这里**（#772 F / #781）。
-
-    ``extra="forbid"`` 是这条路由安全主张的一半：请求体里加一个 ``tenant_id`` 或
-    ``site_ids`` 会让人以为它起了作用，而实际从不参与判定。所以多一个字段就是 400，
-    而不是安静忽略 —— 试运行的订单范围只由**服务端配置的调试租户**决定（#782 上线后
-    改为发起人的公司身份）。
-
-    草稿来源有**两条**，且必须恰好给一条：
-
-    * ``prompt`` —— 调用方直接给方法论正文（原 #781 的形状，测试与 CLI 用）；
-    * ``app_id`` —— **服务端自己去 Dify 拉**这个 app 最近一次保存的配置。
-
-    第二条是给控制台按钮用的（#775 部署层）：Dify 1.17.1 的 chat 应用**没有服务端草稿
-    层**（#773 结论），编辑页里"还没点发布更新"的内容只在浏览器内存里 —— 任何 API 都
-    读不到。所以"试运行当前草稿"实际能拿到的就是**最近一次保存**的配置，而读它的正确
-    地点是**网关**（它已有 console 凭据，且 `resolve_pulled_config` 是"这份草稿发布出去
-    会变成什么"的唯一定义处）。让浏览器或那个薄桥去解析 DSL，会造出第二份映射规则 ——
-    正是 `resolve_pulled_config` 的 docstring 记下的那类漂移。
-
-    ``allowed_tools`` 缺省为**空**（仅在 ``prompt`` 那条路上有约束意义）：本票的语义是
-    "草稿可以收窄"，所以勾了什么就是什么；空表示这份草稿不要任何工具（与 ADR-0019 的
-    "不声明 = 全部"不同，那是**发布**侧的默认，试运行不该继承它 —— 试运行试的就是你
-    眼前这份勾选）。
-    """
+    """试用已登记应用的草稿，执行路线由服务端绑定决定。"""
 
     model_config = ConfigDict(extra="forbid")
-
     order_no: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
-    prompt: str | None = Field(default=None, min_length=1, max_length=20000)
-    app_id: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[0-9a-fA-F-]{8,64}$")
-    allowed_tools: list[str] = Field(default_factory=list, max_length=7)
+    app_id: str = Field(min_length=1, max_length=64, pattern=r"^[0-9a-fA-F-]{8,64}$")
     question: str = Field(default="check order status", min_length=1, max_length=4000)
     operator_preview: OperatorPreviewDraft | None = None
-
-    @model_validator(mode="after")
-    def _exactly_one_draft_source(self) -> DifyTrialRequest:
-        """草稿要么显式给，要么给个 app_id 让服务端去拉 —— **不能两个都无、也不能都填**。
-
-        两个都填是歧义（谁赢？），两个都无是"跑一次没有方法论的诊断"。两者都拒，而不是
-        挑一个 —— 挑一个会让调用方以为自己那半边生效了。
-        """
-        has_prompt = bool(self.prompt)
-        has_app = bool(self.app_id)
-        if self.operator_preview is not None and not has_app:
-            raise ValueError("operator preview requires app_id")
-        if has_prompt and has_app:
-            raise ValueError("给 prompt 与 app_id 二者只能有一个（草稿来源必须唯一）")
-        if not has_prompt and not has_app:
-            raise ValueError("必须给 prompt（显式草稿）或 app_id（服务端拉最近一次保存的配置）")
-        return self
 
 
 class FAQAnswerRequest(BaseModel):
@@ -496,14 +398,6 @@ class AgentActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_revision: int = Field(ge=1)
-
-
-class AgentDebugRunRequest(BaseModel):
-    """One draft debug turn (T5/#171): question in, blocks preview out."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    question: str = Field(min_length=1, max_length=4000)
 
 
 class KnowledgeSourceRequest(BaseModel):
@@ -845,7 +739,6 @@ def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
             binding,
             source,
             knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
-            tool_registry=parse_dify_tool_bindings(context.settings.dify_tool_bindings),
         )
     except pull.DifyDslMalformed as exc:
         if "model_config" not in str(exc):
@@ -957,9 +850,6 @@ def _publish_bound_app(
         app_id=binding.app_id,
         api_key=console.dify_console_api_key,
         workspace_id=workspace_id,
-        ops_tools_enabled=ops_app_registered(
-            console.ops_bindings_file, console.environment, binding.tenant_id, app_id
-        ),
     )
     # **revision 必须在外部同步之前快照。** 同步期间可能有人撤回或另发一版；
     # 等同步回来再读，读到的是**对方之后的** revision，于是这次发布仍会 CAS 通过，
@@ -1280,35 +1170,6 @@ def _tenant_in_scope(record_tenant: object, allowed_tenant: object) -> bool:
     return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)
 
 
-def _is_managed_workflow_app(context: Any, app_id: str) -> bool:
-    """这个 app 是不是**已接管管理指针的 workflow 应用**。
-
-    判据落在应用自己身上（注册表 + 管理行），不是"这个网关有没有配管理表"：
-    配了管理表不等于每个 app 都被接管了。
-    """
-    from pathlib import Path
-
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
-    from aiops_diagnostics.consumer_publication import route_scenario
-
-    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
-    if not database:
-        return False
-    binding = next((item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id), None)
-    if binding is None:
-        return False
-    try:
-        row = ChatRouteBindingStore(Path(database).expanduser().absolute()).get(
-            str(getattr(context.settings, "execution_environment", "") or ""),
-            binding.tenant_id,
-            binding.business_entry,
-            route_scenario(context.settings, binding),
-        )
-    except Exception as exc:  # noqa: BLE001 - 不能将管理读取故障转成旧执行路线。
-        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable") from exc
-    return row is not None and row.app_id == app_id
-
-
 def _workflow_trial_draft(
     context: Any, app_id: str, run_context: ScopeContext, question="check order status", selected_order=""
 ):
@@ -1447,100 +1308,6 @@ def _restore_bound_app(context: Any, app_id: str, version_no: int, initiator: tu
         version_no=version_no,
     )
     return {"app_id": app_id, "action": "synced", "version_no": version_no}
-
-
-def _trial_draft_from_console(context: Any, app_id: str) -> tuple[str, tuple[str, ...]]:
-    """读出这个 app **最近一次保存**的配置，作为试运行的草稿（#775 部署层）。
-
-    返回 ``(prompt, allowed_tools)``。
-
-    **为什么读出来的是"最近一次保存"而不是"编辑框里现在的内容"**：Dify 1.17.1 的 chat
-    应用没有服务端草稿层 —— ``app_model_config_id`` 是单指针，"发布更新"与"保存"打的是
-    同一个 ``POST /console/api/apps/<id>/model-config``（#773 实测）。编辑页里尚未保存的
-    内容只在浏览器内存里，**任何 API 都读不到**。所以这是能力的边界，不是选择；界面上
-    必须写明"以最近一次保存的配置为准"。
-
-    **为什么在网关读而不在那个薄桥里读**：导出的 DSL 里工具条目**只有 provider 的 UUID，
-    没有提供方名字**，所以读草稿必须当场从控制台解析 ``aiops`` 提供方的 UUID 再做映射。
-    那套映射（``map_dsl_to_config`` + ``partition_aiops_tools``）在网关这里**已经有了**，
-    而且正是发布路径用的同一份；让桥或浏览器再实现一遍，就是
-    ``resolve_pulled_config`` 的 docstring 记下的那种漂移（"干跑报空、真拉却保留了绑定"）。
-
-    拉不到一律**显式失败**，不退回空草稿：空草稿会跑出一次"没有方法论的诊断"，而运营会
-    以为那就是他草稿的效果。
-    """
-    from aiops_diagnostics.dify_dsl_pull import (
-        DifyDslError,
-        DifyDslSource,
-        resolve_pulled_config,
-    )
-
-    binding = next(
-        (item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id),
-        None,
-    )
-    if binding is None:
-        # 与发布路径同形：未登记就是"不在这里"，不透露有哪些绑定。
-        raise StandardAPIError(
-            status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
-        )
-    console = context.settings
-    if not console.dify_console_base_url or not console.dify_console_api_key:
-        raise StandardAPIError(
-            status.HTTP_502_BAD_GATEWAY,
-            "DIFY_CONSOLE_UNAVAILABLE",
-            "the Dify console credential is not configured on this server",
-        )
-    from aiops_diagnostics.agent_manifest import admin_context
-    from aiops_diagnostics.dify_dsl_pull import _find_by_name
-
-    # **按绑定的租户解析草稿来源**（#885 / ADR-0059 §5.3）。与发布同一类越权口，但判据
-    # 相反：那边是"写进哪个 workspace"，这里是"从哪个 workspace 读草稿"。
-    #
-    # 它放在**查 agent 之前**：workspace 是**绑定**的属性，不是 agent 的属性。放后面的话，
-    # 一个没开户的租户会先在"这个 agent 没登记"上被拒，而真正的原因是他的租户还没有工作区。
-    #
-    # 租户没有 workspace ⇒ **明确拒绝，不回落平台工作区**：设计对这条是明确的 ——
-    # 宁可拒绝，也不给一个看起来能用的空壳（运营会把别人的方法论当自己的跑一遍）。
-    workspace_id = _workspace_for_tenant(context, binding.tenant_id)
-    agent_context = admin_context(binding.tenant_id)
-    # ``agent_type`` 与 ``output_contract`` 取自**库里那个 agent**，不取自绑定行、也不取自
-    # DSL —— 与发布路径（``sync_binding_from_dify``）同一处来源。绑定行的
-    # ``business_entry``（如 ``operator``）是**入口**，不是 agent 类型；把它当 agent_type
-    # 会得到 ``has no default output contract``（实测踩到）。DSL 里也没有这两样：它们是
-    # 「这个 app 在我们这边是一个什么样的智能体」，只有库里知道。
-    live = _find_by_name(context.agent_manager, agent_context, binding.agent_name)
-    if live is None:
-        raise StandardAPIError(
-            status.HTTP_404_NOT_FOUND,
-            "AGENT_NOT_REGISTERED",
-            "the bound agent is not registered in this environment",
-        )
-    source = DifyDslSource(
-        base_url=console.dify_console_base_url,
-        app_id=binding.app_id,
-        api_key=console.dify_console_api_key,
-        workspace_id=workspace_id,
-        ops_tools_enabled=ops_app_registered(
-            console.ops_bindings_file, console.environment, binding.tenant_id, app_id
-        ),
-    )
-    try:
-        config = resolve_pulled_config(
-            context.agent_manager,
-            agent_context,
-            source,
-            name=binding.agent_name,
-            agent_type=live.config.agent_type,
-            output_contract=live.config.output_contract,
-            knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
-            tool_registry=parse_dify_tool_bindings(context.settings.dify_tool_bindings),
-            tenant_id=binding.tenant_id,
-        )
-    except DifyDslError as exc:
-        # Dify 自己拒绝或不可达：带它自己的码转达（调用方要能区分「凭据被拒」与「服务挂了」）。
-        raise StandardAPIError(status.HTTP_502_BAD_GATEWAY, exc.code, "dify pull failed") from exc
-    return config.prompt, tuple(config.allowed_tools or ())
 
 
 def create_gateway_app(
@@ -1725,17 +1492,6 @@ def create_gateway_app(
             },
             headers=_no_store_headers(request),
         )
-
-    def authenticated_device(
-        authorization: Annotated[str | None, Header()] = None,
-    ) -> GatewayDevice:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="device token required")
-        token = authorization.removeprefix("Bearer ").strip()
-        try:
-            return context.store.authenticate_device(token)
-        except AuthenticationError as exc:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     def authenticated_caller(
         authorization: Annotated[str | None, Header()] = None,
@@ -2160,7 +1916,7 @@ def create_gateway_app(
 
         **This is the operator's own step**, so it no longer needs an engineer
         on the box: they edit the prompt in Dify, then call this with the app
-        id. It is the same action ``aiops admin sync-from-dify`` performs — one
+        id. It is the same action ``aiops-admin sync-from-dify`` performs — one
         implementation, so the two cannot drift.
 
         The blast radius is the design. The request names **one already-bound
@@ -2374,97 +2130,6 @@ def create_gateway_app(
             initiator=(str(getattr(caller, "subject", None) and caller.subject.b_user_id or ""), "", ""),
         )
 
-    ops_service = (
-        OpsToolService(selected_settings, selected_agent_manager)
-        if selected_settings.ops_bindings_file
-        else None
-    )
-
-    def run_ops_tool(
-        tenant_id: str, tool: str, payload: ChargingInfoInput | OrderListInput, authorization: str | None
-    ) -> dict[str, Any]:
-        if ops_service is None:
-            raise StandardAPIError(404, "OPS_TOOLS_DISABLED", "ops tools are not configured")
-        prefix, _, token = (authorization or "").partition(" ")
-        try:
-            return ops_service.execute(token if prefix.lower() == "bearer" else "", tenant_id, tool, payload)
-        except OpsToolError as exc:
-            raise StandardAPIError(exc.status, exc.code, "ops tool request refused") from exc
-
-    @app.post("/v1/dify/ops/{tenant_id}/charging_info")
-    def ops_charging_info(
-        tenant_id: str,
-        payload: ChargingInfoInput,
-        response: Response,
-        authorization: Annotated[str | None, Header()] = None,
-    ) -> dict[str, Any]:
-        response.headers["Cache-Control"] = "no-store"
-        return run_ops_tool(tenant_id, "charging_info", payload, authorization)
-
-    @app.post("/v1/dify/ops/{tenant_id}/order_list")
-    def ops_order_list(
-        tenant_id: str,
-        payload: OrderListInput,
-        response: Response,
-        authorization: Annotated[str | None, Header()] = None,
-    ) -> dict[str, Any]:
-        response.headers["Cache-Control"] = "no-store"
-        return run_ops_tool(tenant_id, "order_list", payload, authorization)
-
-    def dify_tools_credential(authorization: Annotated[str | None, Header()] = None) -> None:
-        """The 3A catalog credential — a key that can do exactly one thing (#772 E).
-
-        Configured-or-absent is the same mechanism the other two Dify routes use:
-        an unconfigured key means the whole route group is **404**, never "no key
-        needed". Half-configuration cannot happen here (there is no second half —
-        the endpoint calls no upstream), so the only rule left is that it must
-        differ from every other Dify key, which ``GatewayServerSettings.validate``
-        enforces at startup.
-
-        **Why this endpoint is safe to expose at all.** Dify's custom-API-tool
-        credential is workspace-shared and visible to every admin who can edit
-        the provider, so it is the least protected secret in this picture. The
-        answer is not to protect it better but to make it worth nothing: this
-        route reads no data source, creates no run, and returns one fixed
-        string. A leaked key tells an attacker what our seven tools are called —
-        which is in an OpenAPI document an operator pastes into a console, not a
-        secret. Keeping it a **separate** key from the retrieval and publish
-        credentials is what stops "can list the catalog" from equalling either.
-        """
-        configured = context.settings.dify_tools_api_key
-        if not configured:
-            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_TOOLS_UNAVAILABLE", "route not found")
-        if not authorization or not authorization.startswith("Bearer "):
-            raise StandardAPIError(
-                status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
-            )
-        presented = authorization.removeprefix("Bearer ").strip()
-        if not secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8")):
-            raise StandardAPIError(
-                status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected"
-            )
-
-    @app.post("/v1/dify/tools/{tool}")
-    def dify_tool_note(tool: str, _: None = Depends(dify_tools_credential)) -> dict[str, Any]:  # noqa: B008
-        """One fixed note per tool — the catalog Dify's preview calls land on (#772 E).
-
-        It returns ``CATALOG_NOTE`` whatever the tool is, and **reads nothing**:
-        no order, no device, no run, no model. That is the point of 3A — the
-        operator gets our seven tools *selectable in Dify*, while the natively
-        driven Dify loop stays unable to touch production data. Dify's own
-        "调试与预览" cannot reach our executor, so a preview answer would never
-        reflect production behaviour anyway; saying so in the response is more
-        honest than returning something that looks like a diagnosis.
-
-        A ``tool`` outside the seven is a **404**, not a 200 for every path:
-        with a fixed reply this is the only observable difference the path can
-        carry, and answering "ok" to ``/v1/dify/tools/drop_table`` is how a
-        catalog starts looking like an arbitrary endpoint.
-        """
-        if tool not in AI_OPS_TOOL_NAMES:
-            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_TOOL_UNKNOWN", "tool not found")
-        return {"tool": tool, "note": CATALOG_NOTE}
-
     def dify_workspace_credential(
         token: Annotated[str | None, Header(alias=INTERNAL_TOKEN_HEADER)] = None,
         timestamp: Annotated[str | None, Header(alias=TIMESTAMP_HEADER)] = None,
@@ -2648,25 +2313,9 @@ def create_gateway_app(
         run_context = _trial_run_context(context, trial_initiator)
         _require_visible_order(context, run_context, payload.order_no)
         try:
-            # **按应用的实际类型分流**，不看"管理表是否启用"：同一个网关可以同时挂着
-            # 已接管管理指针的 workflow 应用与既有 chat/completion 应用。后者没有
-            # 管理行（发布都不推进指针），送进 `_workflow_trial_draft` 会得到
-            # `CHAT_ROUTE_BINDING_MISMATCH` —— 把它们原本可用的试用弄坏。
-            if (
-                payload.app_id
-                and context.settings.chat_route_bindings_file
-                and _is_managed_workflow_app(context, payload.app_id)
-            ):
-                draft = _workflow_trial_draft(
-                    context, payload.app_id, run_context, payload.question, payload.order_no
-                )
-            else:
-                if payload.prompt is not None:
-                    draft_payload = {"prompt": payload.prompt, "allowed_tools": payload.allowed_tools}
-                else:
-                    prompt_text, tools = _trial_draft_from_console(context, str(payload.app_id))
-                    draft_payload = {"prompt": prompt_text, "allowed_tools": list(tools)}
-                draft = TrialDraft.from_payload(draft_payload)
+            draft = _workflow_trial_draft(
+                context, payload.app_id, run_context, payload.question, payload.order_no
+            )
         except TrialRefused as exc:
             raise StandardAPIError(400, "TRIAL_DRAFT_REJECTED", str(exc)) from exc
         try:
@@ -2946,7 +2595,58 @@ def create_gateway_app(
         if payload.conversation_id:
             conversation = _resolve_conversation(context, caller, decision, payload.conversation_id)
 
-        if str(decision.platform) == "operator" and payload.shortcut_code in {None, "", "smart_diagnosis"}:
+        shortcut = None
+        # Two server-side guards over the clicked shortcut. The listing
+        # metadata is a UI hint; these guards are the boundary that keeps a
+        # clicked action on its own path instead of leaking into generic QA.
+        if payload.shortcut_code:
+            try:
+                shortcut = context.shortcut_manager.store.find_effective_by_code(
+                    caller.effective_tenant_id, str(decision.platform), payload.shortcut_code
+                )
+            except ShortcutError:
+                shortcut = None
+            if shortcut is not None and shortcut.status == "published":
+                # (a) A jump action is not the assistant entry's business: the
+                # client was supposed to navigate. If it arrives here anyway,
+                # answer plainly and create NO job. Checked before the order
+                # guard and regardless of order context, because a jump action
+                # must never produce an answer or a diagnosis.
+                if shortcut.jump_path:
+                    return _clarification(
+                        context,
+                        caller,
+                        decision,
+                        code=CLARIFY_WRONG_ENTRY,
+                        question=payload.question,
+                        language=language,
+                    )
+
+                # (b) A clicked order-bound shortcut must not silently fall
+                # through to generic QA when the frontend omitted the order
+                # context.
+                #
+                # The order may arrive either as the explicit ``order_no``
+                # field OR embedded in the question text (the frontend sends
+                # the order picker result inside the sentence, e.g. "帮我检测
+                # （2099…）这个订单的充电异常"). Only when NEITHER carries a
+                # candidate do we ask for one — otherwise this guard would
+                # shadow Route 1b and reject a perfectly diagnosable request.
+                if (
+                    shortcut.requires_order
+                    and not payload.order_no
+                    and _extract_order_no(payload.question) is None
+                ):
+                    return _clarification(
+                        context,
+                        caller,
+                        decision,
+                        code=CLARIFY_ORDER_REQUIRED,
+                        question=payload.question,
+                        language=language,
+                    )
+
+        if str(decision.platform) == "operator" and payload.shortcut_code != OPERATIONS_REVIEW_CODE:
             from aiops_diagnostics import operator_cpms
             from aiops_diagnostics.node_publication import targets
 
@@ -3028,11 +2728,7 @@ def create_gateway_app(
                     },
                 )
 
-        if (
-            selected_settings.consumer_chatflow_enabled
-            and str(decision.platform) == "consumer"
-            and not payload.shortcut_code
-        ):
+        if selected_settings.consumer_chatflow_enabled and str(decision.platform) == "consumer":
             from aiops_diagnostics import consumer_chat_service
 
             try:
@@ -3103,7 +2799,7 @@ def create_gateway_app(
                         context.runtime, caller, service_binding, conversation
                     )
                     selection = {"intent": "knowledge", "order_reference": "none", "uses_context": False}
-                    if not payload.photo_id:
+                    if not payload.photo_id and payload.shortcut_code != "smart_diagnosis":
                         try:
                             selection = consumer_intent.validate(
                                 context.runtime.classify_consumer(
@@ -3120,6 +2816,12 @@ def create_gateway_app(
                                 consumer_intent.message("unavailable", language),
                                 exc,
                             ) from exc
+                    if payload.shortcut_code == "smart_diagnosis":
+                        selection = {
+                            "intent": "order_status",
+                            "order_reference": "explicit",
+                            "uses_context": False,
+                        }
                     intent, reference = selection["intent"], selection["order_reference"]
                     uses_context = selection["uses_context"] or reference == "previous"
                     if previous and uses_context:
@@ -3243,541 +2945,20 @@ def create_gateway_app(
             except (ValueError, OSError, sqlite3.Error, SourceError, ScopeError) as exc:
                 raise _runtime_unavailable("CHATFLOW_UNAVAILABLE", "chatflow unavailable", exc) from exc
 
-        if payload.photo_id:
-            raise StandardAPIError(404, "PHOTO_UNAVAILABLE", "photo input unavailable")
-
-        # Two server-side guards over the clicked shortcut. The listing
-        # metadata is a UI hint; these guards are the boundary that keeps a
-        # clicked action on its own path instead of leaking into generic QA.
-        if payload.shortcut_code:
-            try:
-                shortcut = context.shortcut_manager.store.find_effective_by_code(
-                    caller.effective_tenant_id, str(decision.platform), payload.shortcut_code
-                )
-            except ShortcutError:
-                shortcut = None
-            if shortcut is not None and shortcut.status == "published":
-                # (a) A jump action is not the assistant entry's business: the
-                # client was supposed to navigate. If it arrives here anyway,
-                # answer plainly and create NO job. Checked before the order
-                # guard and regardless of order context, because a jump action
-                # must never produce an answer or a diagnosis.
-                if shortcut.jump_path:
-                    return _clarification(
-                        context,
-                        caller,
-                        decision,
-                        code=CLARIFY_WRONG_ENTRY,
-                        question=payload.question,
-                        language=language,
-                    )
-
-                # (b) A clicked order-bound shortcut must not silently fall
-                # through to generic QA when the frontend omitted the order
-                # context.
-                #
-                # The order may arrive either as the explicit ``order_no``
-                # field OR embedded in the question text (the frontend sends
-                # the order picker result inside the sentence, e.g. "帮我检测
-                # （2099…）这个订单的充电异常"). Only when NEITHER carries a
-                # candidate do we ask for one — otherwise this guard would
-                # shadow Route 1b and reject a perfectly diagnosable request.
-                if (
-                    shortcut.requires_order
-                    and not payload.order_no
-                    and _extract_order_no(payload.question) is None
-                ):
-                    return _clarification(
-                        context,
-                        caller,
-                        decision,
-                        code=CLARIFY_ORDER_REQUIRED,
-                        question=payload.question,
-                        language=language,
-                    )
-
-        # 旧FAQ关键词分词仍不支持泰/高棉语；显式订单与WF01语义路线不依赖该分词。
-        # 先授权，不能借语言限制泄露订单是否存在。
-        order_verdict_before_boundary = (
-            _order_authorization(context, caller, payload.order_no) if payload.order_no else ""
-        )
-        if order_verdict_before_boundary in {UNAVAILABLE, NOT_OWNED}:
-            # A candidate request refused HERE never reaches `_consumer_order_chat`,
-            # so the branch's own instrumentation cannot see it. The stage says
-            # which guard refused it, so a 404 on this line is distinguishable
-            # from the same 404 raised inside the branch.
-            request_observation.mark_stage(request, request_observation.STAGE_PRE_ROUTE_ORDER_AUTH)
-            if order_verdict_before_boundary == UNAVAILABLE:
-                raise StandardAPIError(
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    "ORDER_AUTHORIZATION_UNAVAILABLE",
-                    "order authorization unavailable",
-                    retryable=True,
-                )
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND,
-                "ORDER_NOT_FOUND",
-                "order not found",
-            )
-
-        if not can_prompt_in(language) or (
-            language in {"th", "km"} and not (payload.order_no or _extract_order_no(payload.question))
-        ):
-            # This branch recorded no metric of its own before #636 — one of the
-            # reasons the metric dimension could not tell the branches apart.
-            return _clarification(
-                context,
-                caller,
-                decision,
-                code=CLARIFY_LANGUAGE_UNROUTABLE,
-                question=payload.question,
-                language=language,
-            )
-
-        # Route 0: the operations-review shortcut → an aggregation job.
-        #
-        # It sits AHEAD of Route 1 on purpose. A clicked action is the most
-        # explicit signal a request carries, and this branch is the only thing
-        # the action means; letting an order in the sentence or the
-        # conversation's active order claim it first would answer a *different
-        # question* than the button asked.
-        #
-        # The window is the SERVER's, not the client's (see
-        # ``OPERATIONS_REVIEW_WINDOW_HOURS``): a window is a 口径, and a 口径
-        # each client invents is one per client. Callers who need to choose one
-        # keep using ``POST /v1/standard/analyses``, which takes it explicitly.
-        if payload.shortcut_code == OPERATIONS_REVIEW_CODE and shortcut is not None:
-            return _start_operations_review(
-                context,
-                caller,
-                decision,
-                payload,
-                language=language,
-            )
-
-        # Route 1: explicit order → diagnosis semantics.
         if (
             selected_settings.consumer_order_chat_enabled
             and str(decision.platform) == "consumer"
-            and language in {"zh", "zh-Hant", "en"}
-            and not payload.shortcut_code
+            and payload.shortcut_code in {None, "", "smart_diagnosis"}
             and is_order_status_question(payload.question)
         ):
             return _consumer_order_chat(context, caller, decision, payload, conversation, language, request)
 
-        if payload.order_no:
-            # The conversation is resolved before routing so EVERY branch can
-            # consult it; this one used to read none of its fields. Without the
-            # claim the diagnosis is invisible to the conversation: no turn row
-            # (so a follow-up cannot see it) and nothing for the frontend to
-            # cancel with, because only a 202 that carries conversation_id +
-            # turn_no can be cancelled.
-            turn_no = _begin_conversation_turn(context, caller, conversation, "diagnosis", payload.question)
-            try:
-                diagnosis = context.runtime.start_standard_diagnosis(
-                    caller,
-                    payload.order_no,
-                    payload.question,
-                    None,
-                    language=language,
-                    conversation_turn=(
-                        (conversation["conversation_id"], conversation["scope_fingerprint"], turn_no)
-                        if conversation is not None and turn_no is not None
-                        else None
-                    ),
-                    business_entry=str(decision.platform),
-                )
-            except (ValueError, RuntimeError) as exc:
-                _release_conversation_turn(context, conversation, turn_no)
-                raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
-            base = _standard_diagnosis_response(diagnosis, language)
-            return JSONResponse(
-                status_code=status.HTTP_202_ACCEPTED,
-                content={
-                    **base,
-                    "type": "diagnosis",
-                    **(
-                        {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
-                        if conversation is not None and turn_no is not None
-                        else {}
-                    ),
-                },
-            )
+        if payload.photo_id:
+            raise StandardAPIError(404, "PHOTO_UNAVAILABLE", "photo input unavailable")
 
-        # One verdict per order per request. Routes 1b and 1c can check the same
-        # number (the embedded order IS the conversation's active order), and a
-        # failed check records a warning and a metric row each time — so without
-        # this, one question could leave two identical failure rows. Permissions
-        # are resolved once per request, so an answer cannot change mid-request.
-        checked: dict[str, str] = {}
-
-        def order_verdict(order_no: str) -> str:
-            if order_no not in checked:
-                checked[order_no] = _order_authorization(context, caller, order_no)
-            return checked[order_no]
-
-        # Route 1b: text-embedded order number → diagnosis if authorizable.
-        # The caller did not pass order_no explicitly, but the question text
-        # contains a plausible order id. Verify ownership first; only then
-        # route to order diagnosis.
-        #
-        # When ownership FAILS the request still must not become a hard 404 and
-        # must not become an existence oracle (T4/#154) — but it must not become
-        # a silent zero-order answer either. It fell through to one until #620,
-        # and the cost was measured: the app sent "check anomalies for order
-        # (X)", X belonged to someone else, and the user got a knowledgeable
-        # paragraph about how the assistant cannot verify orders. Nothing in
-        # that reply said the order was not theirs, and the backend had made no
-        # diagnosis attempt at all — the two states below were indistinguishable,
-        # which is the failure mode this repository keeps having to remove.
-        #
-        # So the fall-through stays (no 404, no leak) and gains a NAMED state:
-        # the same `clarification` envelope every other "the request needs
-        # something it did not provide" branch uses, with a message that says
-        # the true thing. `missing_fields: []` keeps its established meaning
-        # from the jump-action guard — nothing is missing; the request is in the
-        # wrong place — as distinct from `["order_no"]`, which means "no order at
-        # all was recognisable". Neither one confirms the order exists: both
-        # answers are about the REQUEST, never about the order.
-        if not payload.order_no:
-            embedded = _extract_order_no(payload.question)
-            if embedded and order_verdict(embedded) == NOT_OWNED:
-                return _clarification(
-                    context,
-                    caller,
-                    decision,
-                    code=_unowned_order_code(caller),
-                    question=payload.question,
-                    language=language,
-                )
-
-        if not payload.order_no:
-            embedded = _extract_order_no(payload.question)
-            if embedded:
-                owns = order_verdict(embedded) == OWNED
-                if owns:
-                    turn_no = _begin_conversation_turn(
-                        context, caller, conversation, "diagnosis", payload.question
-                    )
-                    # The slot is held until the job reaches a terminal
-                    # state (the worker frees it): this branch used to free it
-                    # right here, so `is_generating` reported false for the
-                    # whole generation and the frontend never locked its input.
-                    own_turn = (
-                        conversation is not None
-                        and turn_no is not None
-                        and embedded == conversation.get("active_order_no")
-                    )
-                    try:
-                        diagnosis = context.runtime.start_standard_diagnosis(
-                            caller,
-                            embedded,
-                            payload.question,
-                            None,
-                            language=language,
-                            conversation_turn=(
-                                (conversation["conversation_id"], conversation["scope_fingerprint"], turn_no)
-                                if own_turn
-                                else None
-                            ),
-                            business_entry=str(decision.platform),
-                        )
-                    except (ValueError, RuntimeError) as exc:
-                        _release_conversation_turn(context, conversation, turn_no)
-                        raise _runtime_unavailable(
-                            "DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc
-                        ) from exc
-                    if not own_turn:
-                        _release_conversation_turn(context, conversation, turn_no)
-                    # Only report a turn the conversation actually keeps: in
-                    # the non-own case the row was just dropped, and echoing a
-                    # turn_no for it would point the frontend at nothing.
-                    turn_field = {"turn_no": turn_no} if own_turn else {}
-                    base = _standard_diagnosis_response(diagnosis, language)
-                    return JSONResponse(
-                        status_code=status.HTTP_202_ACCEPTED,
-                        content={
-                            **base,
-                            "type": "diagnosis",
-                            "order_no_extracted": embedded,
-                            **({"conversation_id": conversation["conversation_id"]} if conversation else {}),
-                            **turn_field,
-                        },
-                    )
-
-        # Route 1c (T4/#172): order question against the conversation's
-        # CONFIRMED active order — the follow-up that may omit the order
-        # number. Only fires when the question clearly involves that order
-        # (the same explicitness bar as Route 1b); ownership is re-verified
-        # EVERY turn because permissions change between requests. On any
-        # failure the question falls through to qa+RAG — never a hard 404,
-        # since the caller did not name an order this turn.
-        if not payload.order_no and conversation is not None:
-            active_order = conversation.get("active_order_no")
-            if active_order and _question_involves_active_order(payload.question):
-                still_owned = order_verdict(active_order) == OWNED
-                if still_owned:
-                    turn_no = _begin_conversation_turn(
-                        context, caller, conversation, "diagnosis", payload.question
-                    )
-                    try:
-                        diagnosis = context.runtime.start_standard_diagnosis(
-                            caller,
-                            active_order,
-                            payload.question,
-                            None,
-                            language=language,
-                            conversation_turn=(
-                                (conversation["conversation_id"], conversation["scope_fingerprint"], turn_no)
-                                if turn_no is not None
-                                else None
-                            ),
-                            business_entry=str(decision.platform),
-                        )
-                    except (ValueError, RuntimeError) as exc:
-                        _release_conversation_turn(context, conversation, turn_no)
-                        raise _runtime_unavailable(
-                            "DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc
-                        ) from exc
-                    base = _standard_diagnosis_response(diagnosis, language)
-                    return JSONResponse(
-                        status_code=status.HTTP_202_ACCEPTED,
-                        content={
-                            **base,
-                            "type": "diagnosis",
-                            "order_no_from_context": active_order,
-                            "conversation_id": conversation["conversation_id"],
-                            **({"turn_no": turn_no} if turn_no is not None else {}),
-                        },
-                    )
-                # Ownership lost since confirmation: clear the stale binding
-                # and answer as a plain knowledge question (qa+RAG).
-                with contextlib.suppress(ConversationError):
-                    context.conversation_store.set_active_order(
-                        conversation["conversation_id"], caller.scope_fingerprint, None
-                    )
-                conversation = {**conversation, "active_order_no": None}
-
-        # Route 2: promotional routing (#231) — BEFORE the FAQ short-circuit.
-        # PRD #227 orders FAQ above a passive shortcut context, but a user who
-        # CLICKED a product-entry button or explicitly asks for cases/solutions
-        # must never land in the customer-service FAQ (#231 acceptance:
-        # 案例不进入 FAQ). Only explicit promotional signals take this branch.
-        promo_target, promo_intent = _promo_route(context, caller, decision, payload)
-        if promo_intent is not None:
-            return _start_promo_qa(
-                context,
-                caller,
-                conversation,
-                payload,
-                language,
-                promo_target,
-                promo_intent,
-                str(decision.platform),
-            )
-
-        # The routing decision, resolved at most once per request and reused by
-        # whichever branch needs it (#408). ``routing_resolved`` records that it
-        # was already resolved on the FAQ path, so the routing block below does
-        # not pay for a second identical call.
-        classified: dict[str, Any] | None = None
-        routing_resolved = False
-
-        # Route 2b: FAQ short-circuit (deterministic, zero-order, zero-model).
-        #
-        # A keyword match that only OVERLAPS a title is not yet an answer (#408).
-        # The scoring below can only see token overlap, and a short question has
-        # few tokens, so one or two generic words reach full containment against
-        # some title — "今天天气怎么样" scored 1.0 against the summer-heat entry and
-        # answered a charging question to someone who asked about the weather.
-        # Overlap cannot separate that from a real hit: "充电桩" (a genuine
-        # question) and "拔不出枪" (a genuine question) and "天气" (not one) all
-        # reach 1.0.
-        #
-        # So the decision the score cannot make is made by the thing that can —
-        # the routing intent, which comes from Jev. A question that REPRODUCES a
-        # catalog title does not ask: it answers from the catalog with no model
-        # call, which is what keeps every typed entry on the instant path. What
-        # separates "reproduces" from "overlaps", and why it is not a length bar,
-        # is argued at the note above `_classify_for_routing`.
-        #
-        # It costs nothing extra. This branch runs BEFORE the routing block
-        # further down, and either the FAQ branch answers this request or that
-        # block resolves the identical decision for it — so a short question is
-        # not an additional model call, it is the same one moved earlier.
-        #
-        # The decision is resolved ONCE for the whole request and carried. The
-        # routing block below must not resolve it again: a second call would be
-        # paid by every short question the FAQ branch does NOT suppress, i.e.
-        # exactly the safe path, and this upstream is metered per day.
-        faq_id, faq_self_evident = _faq_match(decision.platform, context.faq_catalog, payload.question)
-        if faq_id is not None and not faq_self_evident:
-            classified = _classify_for_routing(
-                context, payload.question, language=language, tenant_id=caller.effective_tenant_id
-            )
-            routing_resolved = True
-            if classified is not None and classified.get("intent") in _FAQ_SUPPRESSING_INTENTS:
-                # Not this entry's question, or not an FAQ-shaped question at
-                # all. Fall through to the routing below, which serves it on the
-                # path its intent names — a general answer for chit-chat and
-                # knowledge, the promotional card for case exploration.
-                faq_id = None
-            # When there is no second opinion, the keyword answer stands —
-            # deliberately, and NOT because it is more likely to be right.
-            #
-            # Suppressing on "no decision" would make an unavailable routing
-            # hint change what a user is told, and it would do so on exactly the
-            # deployments that have no classifier configured — the FAQ path
-            # would vanish from them wholesale. This release already paid for
-            # that mistake once: the #392 cutover let an unconfigured Jev return
-            # "no decision" and silently disabled casual handling, the
-            # promotional intents and the high-risk rule everywhere it was not
-            # configured (#398). "No decision" must not be a behaviour change.
-            #
-            # The cost is bounded and stated rather than hidden: while the
-            # routing decision is unavailable, the misroute this ticket fixes
-            # can still happen. That is the pre-existing behaviour, not a new
-            # defect, and it is the recoverable direction of the two.
-        if faq_id is not None:
-            answer = context.faq_catalog.answer(decision.platform, faq_id, language)
-            _record_route_metric(context, caller, route_type="faq", outcome="completed")
-            return {
-                **decision.public(),
-                "type": "faq",
-                "language": context.faq_catalog.entry_served_language(decision.platform, faq_id, language),
-                "faq_version": context.faq_catalog.version,
-                "question_id": answer["question_id"],
-                "question": answer["question"],
-                "answer": answer["answer"],
-                "format": answer["format"],
-            }
-
-        # A money question needs a business identifier before it can be
-        # answered — but which identifier, and whether the question is one at
-        # all, is decided in ONE place below, after the classifier has run.
-        #
-        # It used to be decided here, synchronously, by a keyword table: that
-        # answered faster and it could ask for `order_no`, which is the more
-        # actionable of the two. It also meant the same question could be asked
-        # twice in two shapes (this table first, then the model), and that which
-        # shape a user met depended on a hand-maintained regex. `money_question_context`
-        # keeps the table as the fast path and makes the model its fallback.
-        #
-        # The two halves of the merged rule do NOT have the same applicability,
-        # and treating them as one condition silently dropped the model's half:
-        #
-        # * the keyword table is a SYNCHRONOUS fast path. It runs before the
-        #   classifier and before the conversation branches, so it must not
-        #   pre-empt them — that was its original scope, and it stays.
-        # * the model's risk label is a judgement about the QUESTION, applied
-        #   after every other branch has declined it. It used to fire on any
-        #   high-risk question, conversation or not.
-        #
-        # Gating both on "no conversation" re-introduced the defect in the other
-        # direction: a `refund` asked inside a conversation, or one naming an
-        # order the caller does not own, went to a plain answer with no prompt at
-        # all — where the model's half used to ask.
-        keyword_guard_applies = conversation is None and _extract_order_no(payload.question) is None
-
-        casual_job = False
-        if not routing_resolved:
-            classified = _classify_for_routing(
-                context, payload.question, language=language, tenant_id=caller.effective_tenant_id
-            )
-        # One decision, one shape. The table is consulted first (no model call),
-        # the model covers what it misses (86-question corpus: table 3, model
-        # adds 3 more), and whichever fired decides the identifier — so a user
-        # never meets two different prompts for one question.
-        missing = money_question_context(
-            payload.question,
-            classified,
-            keyword_guard=lambda q: keyword_guard_applies and _missing_order_context_key(q) is not None,
-            thresholds=getattr(context.runtime, "routing_thresholds", None),
-        )
-        if missing is not None:
-            # The table's two identifiers ARE the two codes' only difference.
-            code = CLARIFY_ORDER_REQUIRED if missing == MISSING_ORDER_NO else CLARIFY_CONTEXT_REQUIRED
-            return _clarification(
-                context,
-                caller,
-                decision,
-                code=code,
-                question=payload.question,
-                language=language,
-            )
-
-        if classified is not None:
-            if classified.get("intent") == "casual":
-                # Chit-chat is answered by the same zero-order QA job every other
-                # general question uses, rather than by the classifier writing a
-                # sentence inline (#391). Two reasons, and the second is why this
-                # is required rather than tidy:
-                #
-                # 1. The answer travels one path, so the language guard, the
-                #    localized failure copy and the conversation turn all apply
-                #    to it exactly as they do everywhere else.
-                # 2. Typed-decision routing (PRD #383) cannot produce an answer at
-                #    all — it returns labels and probabilities, never text. With
-                #    the answer here, moving routing off generated text would have
-                #    removed chit-chat replies entirely.
-                #
-                # Effect on the waiting-state contract: `casual` used to be a
-                # synchronous 200 and did NOT lock the input box; it is now a 202
-                # like any other `qa` and does. The handoff docs were updated with
-                # this change.
-                casual_job = True
-            # Classifier-returned promotional intent (#229 protocol): same
-            # promotional route as the explicit cues, resolved against the
-            # caller's own published shortcut rows.
-            if classified and classified.get("intent") in {"case_exploration", "solution_discovery"}:
-                promo_target, promo_intent = _promo_route(
-                    context,
-                    caller,
-                    decision,
-                    payload,
-                    forced_intent=str(classified.get("intent")),
-                )
-                return _start_promo_qa(
-                    context,
-                    caller,
-                    conversation,
-                    payload,
-                    language,
-                    promo_target,
-                    promo_intent,
-                    str(decision.platform),
-                )
-
-        # Route 3: generic zero-order answer — start a real QA job (T3/#153).
-        # With a conversation: claim its generation slot first (409 busy),
-        # and record the turn so follow-ups see it in context.
-        turn_no: int | None = None
-        if conversation is not None:
-            turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
-        try:
-            qa = context.runtime.start_assistant_qa(
-                caller,
-                payload.question,
-                conversation=conversation if turn_no is not None else None,
-                conversation_turn_no=turn_no,
-                language=language,
-                skip_retrieval=casual_job,
-                business_entry=str(decision.platform),
-            )
-        except (ValueError, RuntimeError) as exc:
-            _release_conversation_turn(context, conversation, turn_no)
-            raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
-        return JSONResponse(
-            status_code=status.HTTP_202_ACCEPTED,
-            content={
-                **_assistant_question_response(qa, language),
-                **(
-                    {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
-                    if conversation
-                    else {}
-                ),
-            },
-        )
+        if payload.shortcut_code == OPERATIONS_REVIEW_CODE and shortcut is not None:
+            return _start_operations_review(context, caller, decision, payload, language=language)
+        raise StandardAPIError(409, "CHAT_ROUTE_UNAVAILABLE", "business execution route is not configured")
 
     @app.get("/v1/assistant/questions/{qa_id}")
     def get_assistant_question(
@@ -4822,50 +4003,6 @@ def create_gateway_app(
             )
         return _health_job_response(job)
 
-    @app.post("/v1/standard/diagnoses", status_code=status.HTTP_202_ACCEPTED)
-    def create_standard_diagnosis(
-        payload: StandardDiagnosisRequest,
-        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
-        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
-        language: str = Depends(request_language),  # noqa: B008
-    ) -> dict[str, Any]:
-        # #695: this route used to read `X-Business-Entry`, use it for scope,
-        # and drop it — so the diagnosis could not know which content domain
-        # it was answering in. It is forwarded now, and deliberately **as the
-        # raw header** rather than via `assistant_identity`: the entry decides
-        # which published operations agent's methodology is injected, and that
-        # is the same question `third_session_auth` already answers from this
-        # same header with the same predicate. Resolving the platform identity
-        # here instead would buy no authorization — the data range still comes
-        # from the session — while adding a platform-directory lookup to a
-        # route that does not otherwise need one.
-        verdict = _order_authorization(context, caller, payload.order_no)
-        if verdict == UNAVAILABLE:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "ORDER_AUTHORIZATION_UNAVAILABLE",
-                "order authorization unavailable",
-                retryable=True,
-            )
-        if verdict == NOT_OWNED:
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND,
-                "ORDER_NOT_FOUND",
-                "order not found",
-            )
-        try:
-            diagnosis = context.runtime.start_standard_diagnosis(
-                caller,
-                payload.order_no,
-                payload.question,
-                payload.indicator_code,
-                language=language,
-                business_entry=business_entry,
-            )
-        except (ValueError, RuntimeError) as exc:
-            raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
-        return _standard_diagnosis_response(diagnosis, language)
-
     @app.post("/v1/standard/analyses", status_code=status.HTTP_202_ACCEPTED)
     def create_operations_analysis(
         payload: OperationsAnalysisRequest,
@@ -4933,74 +4070,6 @@ def create_gateway_app(
                 "analysis not found",
             )
         return _analysis_job_response(job, language)
-
-    @app.get("/v1/standard/diagnoses/{diagnosis_id}")
-    def get_standard_diagnosis(
-        diagnosis_id: str,
-        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
-    ) -> dict[str, Any]:
-        try:
-            diagnosis = context.runtime.get_standard_diagnosis(caller, diagnosis_id)
-        except (ValueError, RuntimeError) as exc:
-            raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
-        if diagnosis is None:
-            # A qa_ id here means the caller created a general-question job
-            # (POST /v1/assistant/questions returned type=qa) but is polling
-            # the order-diagnosis endpoint. Point them at the right poll path
-            # instead of a bare "not found", so the wrong-endpoint mistake is
-            # self-explanatory (observed in real frontend integration).
-            if diagnosis_id.startswith("qa_"):
-                raise StandardAPIError(
-                    status.HTTP_404_NOT_FOUND,
-                    "DIAGNOSIS_NOT_FOUND",
-                    "this is a general-question job (type=qa); poll GET /v1/assistant/questions/"
-                    + diagnosis_id
-                    + " instead",
-                )
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND,
-                "DIAGNOSIS_NOT_FOUND",
-                "diagnosis not found",
-            )
-        return _standard_diagnosis_response(diagnosis, language)
-
-    @app.get("/v1/standard/diagnoses")
-    def list_standard_diagnoses(
-        limit: Annotated[int, Query(ge=1, le=200)] = 50,
-        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
-    ) -> dict[str, Any]:
-        diagnoses = context.runtime.list_standard_diagnoses(caller, limit=limit)
-        return {"diagnoses": diagnoses}
-
-    @app.post("/v1/standard/diagnoses/{diagnosis_id}/cancel")
-    def cancel_standard_diagnosis(
-        diagnosis_id: str,
-        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
-    ) -> dict[str, Any]:
-        """Stop one in-flight order diagnosis (#499).
-
-        The same contract as the general-question cancel, for the same reasons:
-        POST rather than DELETE because the row survives as ``cancelled``, the
-        response carries the job's terminal state so the caller need not poll
-        again, and a repeat click or a cancel that lost a race answers the
-        job's own current state rather than an error.
-
-        Missing and out-of-scope are one answer (404), so cancelling cannot be
-        used to probe which diagnosis ids exist.
-        """
-        try:
-            diagnosis = context.runtime.cancel_standard_diagnosis(caller, diagnosis_id)
-        except (ValueError, RuntimeError) as exc:
-            raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
-        if diagnosis is None:
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND,
-                "DIAGNOSIS_NOT_FOUND",
-                "diagnosis not found",
-            )
-        return _standard_diagnosis_response(diagnosis, language)
 
     def _agent_error(exc: AgentError) -> StandardAPIError:
         if isinstance(exc, AgentNotFound):
@@ -5136,50 +4205,6 @@ def create_gateway_app(
         except AgentError as exc:
             raise _agent_error(exc) from exc
         return version.to_dict()
-
-    @app.post("/v1/agents/{agent_id}/debug-run")
-    def debug_run_agent(
-        agent_id: str,
-        payload: AgentDebugRunRequest,
-        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
-    ) -> dict[str, Any]:
-        """Isolated draft preview (T5/#171): runs the draft config through the
-        production customer-QA harness without touching conversations or
-        orders. Only draft-config customer agents are debuggable."""
-        from aiops_diagnostics.agent_lifecycle import EDIT_ROLES
-
-        if not frozenset(getattr(caller, "roles", ())).intersection(EDIT_ROLES):
-            raise StandardAPIError(
-                status.HTTP_403_FORBIDDEN, "AGENT_FORBIDDEN", "agent access is not permitted"
-            )
-        try:
-            agent = context.agent_manager.get(caller, agent_id)
-        except AgentError as exc:
-            raise _agent_error(exc) from exc
-        if agent.status != "draft" or agent.config.agent_type != "customer":
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT,
-                "AGENT_DEBUG_STATE_INVALID",
-                "only a draft customer agent can be debug-run",
-            )
-        runner = getattr(context.runtime, "run_agent_debug", None)
-        if runner is None:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "AGENT_DEBUG_UNAVAILABLE",
-                "agent debug-run is not configured",
-                retryable=True,
-            )
-        try:
-            return runner(caller, agent_id, payload.question, language=language)
-        except AgentRuntimeError as exc:
-            raise StandardAPIError(
-                status.HTTP_502_BAD_GATEWAY,
-                "AGENT_DEBUG_FAILED",
-                _debug_public_error(exc),
-                retryable=True,
-            ) from exc
 
     # ------------------------------------------------------------------
     # Product-entry shortcuts (#230)
@@ -6182,7 +5207,7 @@ def create_gateway_app(
             return context.runtime.get_agent_metrics_summary(
                 caller, agent_id=agent_id, window_hours=window_hours
             )
-        except AgentRuntimeError as exc:
+        except RuntimeError as exc:
             raise StandardAPIError(
                 status.HTTP_403_FORBIDDEN, "AGENT_FORBIDDEN", "agent access is not permitted"
             ) from exc
@@ -6207,151 +5232,18 @@ def create_gateway_app(
             runs = context.runtime.list_agent_metrics_runs(
                 caller, agent_id=agent_id, route_type=route_type, limit=limit
             )
-        except AgentRuntimeError as exc:
+        except (ValueError, MetricsValidationError) as exc:
+            raise StandardAPIError(status.HTTP_422_UNPROCESSABLE_ENTITY, "METRICS_INVALID", str(exc)) from exc
+        except RuntimeError as exc:
             raise StandardAPIError(
                 status.HTTP_403_FORBIDDEN, "AGENT_FORBIDDEN", "agent access is not permitted"
             ) from exc
-        except (ValueError, MetricsValidationError) as exc:
-            raise StandardAPIError(status.HTTP_422_UNPROCESSABLE_ENTITY, "METRICS_INVALID", str(exc)) from exc
         return {"runs": runs}
-
-    @app.post("/v1/enroll", status_code=status.HTTP_201_CREATED)
-    def enroll(payload: EnrollRequest) -> dict[str, Any]:
-        try:
-            result = context.store.redeem_enrollment(
-                payload.code,
-                device_name=payload.device_name,
-                platform=payload.platform,
-            )
-        except (EnrollmentError, ValueError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        return {
-            "device_id": result.device.device_id,
-            "workspace_id": result.device.workspace_id,
-            "tenant_id": result.device.tenant_id,
-            "token": result.token,
-        }
-
-    @app.post("/v1/runs", status_code=status.HTTP_202_ACCEPTED)
-    def create_run(
-        payload: RunCreateRequest,
-        device: GatewayDevice = Depends(authenticated_device),  # noqa: B008
-    ) -> dict[str, Any]:
-        try:
-            return context.runtime.start_run(
-                device,
-                problem=payload.problem,
-                order_no=payload.order_no,
-                tenant_id=payload.tenant_id,
-                key_slot=payload.key_slot,
-                provider=payload.provider,
-                fixture_name=payload.fixture_name,
-            )
-        except DeviceTenantError as exc:
-            # The entry guard is one definition inside the runtime (#331); this
-            # layer only maps it. A request naming a tenant outside the enrolled
-            # device scope is therefore refused exactly once, with one status
-            # code and one error, instead of 403 here and 400 from the runtime.
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    @app.get("/v1/runs")
-    def list_runs(
-        device: GatewayDevice = Depends(authenticated_device),  # noqa: B008
-        limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    ) -> dict[str, Any]:
-        return {"runs": context.store.list_runs(device.workspace_id, limit=limit)}
-
-    @app.get("/v1/runs/{run_id}")
-    def get_run(
-        run_id: str,
-        device: GatewayDevice = Depends(authenticated_device),  # noqa: B008
-    ) -> dict[str, Any]:
-        try:
-            return context.store.get_run(run_id, device.workspace_id)
-        except RunNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found") from exc
-
-    @app.get("/v1/runs/{run_id}/events")
-    def list_events(
-        run_id: str,
-        device: GatewayDevice = Depends(authenticated_device),  # noqa: B008
-        after: Annotated[int, Query(ge=0)] = 0,
-        limit: Annotated[int, Query(ge=1, le=500)] = 200,
-    ) -> dict[str, Any]:
-        try:
-            events = context.store.list_events(
-                run_id,
-                device.workspace_id,
-                after=after,
-                limit=limit,
-            )
-        except RunNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found") from exc
-        return {
-            "events": events,
-            "next_after": events[-1]["sequence"] if events else after,
-        }
-
-    @app.get("/v1/runs/{run_id}/evidence")
-    def list_run_evidence(
-        run_id: str,
-        device: GatewayDevice = Depends(authenticated_device),  # noqa: B008
-    ) -> dict[str, Any]:
-        try:
-            context.store.get_run(run_id, device.workspace_id)
-        except RunNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found") from exc
-        return {"evidence": context.runtime.list_evidence(run_id)}
-
-    @app.get("/v1/runs/{run_id}/events/stream")
-    async def stream_events(
-        request: Request,
-        run_id: str,
-        device: GatewayDevice = Depends(authenticated_device),  # noqa: B008
-        after: Annotated[int, Query(ge=0)] = 0,
-    ) -> StreamingResponse:
-        try:
-            context.store.get_run(run_id, device.workspace_id)
-        except RunNotFoundError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found") from exc
-
-        async def event_stream():
-            sequence = after
-            while not await request.is_disconnected():
-                events = context.store.list_events(
-                    run_id,
-                    device.workspace_id,
-                    after=sequence,
-                    limit=200,
-                )
-                for event in events:
-                    sequence = int(event["sequence"])
-                    yield _sse(event)
-                run = context.store.get_run(run_id, device.workspace_id)
-                if run["status"] in TERMINAL_RUN_STATUSES and not events:
-                    yield _sse({"sequence": sequence, "type": "stream_end", "status": run["status"]})
-                    return
-                await asyncio.sleep(context.settings.event_poll_interval_seconds)
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
-        )
 
     from aiops_diagnostics.public_openapi import install_public_docs
 
     install_public_docs(app)
     return app
-
-
-def _sse(event: dict[str, Any]) -> str:
-    sequence = int(event.get("sequence", 0))
-    event_type = str(event.get("type", "message"))
-    data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-    return f"id: {sequence}\nevent: {event_type}\ndata: {data}\n\n"
 
 
 def _inside_credential(runtime: Settings) -> str:
@@ -6501,14 +5393,6 @@ def _fallback_caller_resolver(settings: GatewayServerSettings) -> CallerContextR
     )
 
 
-def _debug_public_error(error: Exception) -> str:
-    """Bounded, redacted reason for a failed debug-run (server stays opaque)."""
-    from aiops_diagnostics.redaction import redact_text
-
-    message = redact_text(str(error))
-    return message[:500] if message else error.__class__.__name__
-
-
 #: The platform decision's failure modes and the answer each one gets. One
 #: definition: the three copies this replaces had already drifted apart once,
 #: and an error taxonomy with two answers is an error taxonomy with none.
@@ -6625,232 +5509,6 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_FAQ_GENERIC_CHARS = frozenset(
-    {
-        # Sentence-final / filler CJK that carries almost no discriminative
-        # signal in this catalog. Without dropping these, "怎么办" (which ends
-        # nearly every consumer title) swamps the matcher and every question
-        # collapses onto the first title.
-        "的",
-        "了",
-        "吗",
-        "呢",
-        "呀",
-        "啊",
-        "在",
-        "有",
-        "可",
-        "以",
-        "能",
-        "会",
-        "是",
-        "怎",
-        "么",
-        "办",
-        "如",
-        "何",
-        "为",
-        "什",
-        "一",
-        "下",
-        "不",
-        "没",
-        "很",
-        "请",
-    }
-)
-# Fraction of the question's significant chars that must appear in the title.
-# Containment (not raw overlap) prevents a generic question ("续航里程...")
-# from matching a title merely by sharing common chars (充/电/程) across many
-# entries. A query that shares only a single char (e.g. just "枪") must not
-# be enough; require at least MIN_OVERLAP distinct chars too.
-_FAQ_MIN_CONTAINMENT = 0.5
-_FAQ_MIN_OVERLAP = 2
-
-# What makes a keyword match self-evident is not a score: it is whether the
-# question's significant tokens ARE one of the entry's title variants — token-set
-# equality, with no threshold to tune.
-#
-# Arriving at this took two measured corrections, both from real runs:
-#
-# 1. A question-LENGTH bar was tried first and failed, because the compressed
-#    en/de/fr/es/pt titles are short too, so length cannot tell a short title
-#    from a short question. It sent `Connector Stuck? Emergency Cable Release
-#    Guide` — q010's own title — to the routing intent, where Jev read the word
-#    "Guide" as solution_discovery and dropped the entry (5 of 185 variants).
-# 2. A variant-containment bar (question covers most of the variant AND the
-#    variant covers most of the question, at 0.8) fixed that but kept letting
-#    ONE-TOKEN REVERSALS through, because a reversal changes a single token and
-#    lands just above the bar: `Why Did Charging Stop Normally?` scores 0.80
-#    against "…Unexpectedly?", and `Why Is Charging Power Faster Than
-#    Advertised?` scores 0.86 against the "Slower" title. Both were answered
-#    from the FAQ, and the token that differed was the whole question — a user
-#    asking why charging was FAST was told about slow charging.
-#
-# Equality has no such gap, and the measurements say it costs nothing: all 185
-# catalog variants (in all six languages) are exactly their own token set, while
-# every near-miss fails — the two reversals, a prefixed title (0.6 on the old
-# bar), and the false positives. So the catalog is answered instantly, and
-# anything that is merely CLOSE to an entry is checked by the routing intent.
-
-
-#: Intents that say "the catalog is not where this question belongs", so a
-#: question that merely OVERLAPS a title must not be answered from it.
-#:
-#: One intent, and the narrowness is the point. `casual` is the defect this
-#: ticket was opened for: "今天天气怎么样" reached the summer-heat entry on the
-#: single shared word 天气, and every non-charging question of that shape —
-#: 今天吃什么, 股票怎么样 — reaches some entry the same way. Jev says `casual`
-#: for all of them, and there is no legitimate short question it mislabels.
-#:
-#: CASE AND SOLUTION INTENTS ARE DELIBERATELY ABSENT, and the first version of
-#: this fix had them. They bought exactly one thing — "重卡充电案例" reaching the
-#: RFID-card entry, the sole marginal match among 86 real questions — and cost a
-#: class of false suppressions, because the model reads the wording of the
-#: catalog's OWN titles as promotional: "Guide" in q010's `Connector Stuck?
-#: Emergency Cable Release Guide`, "SOP" in q023's `Vehicle Scratch or Equipment
-#: Damage Incident SOP`. A user prefacing q010's title with "Please show me the"
-#: scored 0.6, Jev said solution_discovery, and the entry was dropped in favour
-#: of a promotional card.
-#:
-#: Suppressing them was never necessary for promo routing: a genuine request
-#: NAMES it ("客户案例" / "行业解决方案" / "Please show me a customer case"), which the
-#: cue matcher upstream already catches, and anything that does reach here with a
-#: case/solution intent is sent to the promotional path by the routing block
-#: below — which runs after this one and needs no help from the suppression set.
-#: The residual is "重卡充电案例" continuing to answer from q009; the fix for that
-#: is a promotional cue, not a FAQ suppressor, and it is tracked separately.
-#:
-_FAQ_SUPPRESSING_INTENTS = frozenset({"casual"})
-
-
-def _normalize_keywords(text: str) -> set[str]:
-    """Deterministic CJK char set for FAQ short-circuiting.
-
-    Keeps significant single CJK chars (generic filler/sentence-tail dropped)
-    plus whole Latin runs. Used for char-set containment against a candidate
-    title: the question's distinctive chars must mostly be present in the
-    title, which isolates genuinely related titles without a real tokenizer
-    while resisting the "怎么办" tail and shared single-char noise.
-    """
-    lowered = text.lower()
-    significant: set[str] = set()
-    latin = ""
-    for ch in lowered:
-        if "一" <= ch <= "鿿":
-            if latin:
-                significant.add(latin)
-                latin = ""
-            if ch not in _FAQ_GENERIC_CHARS:
-                significant.add(ch)
-        elif ch.isalnum():
-            latin += ch
-        else:
-            if latin:
-                significant.add(latin)
-                latin = ""
-    if latin:
-        significant.add(latin)
-    return significant
-
-
-def _classify_for_routing(
-    context: Any,
-    question: str,
-    *,
-    language: str,
-    tenant_id: str | None,
-) -> dict[str, Any] | None:
-    """The routing decision, or None when none could be obtained.
-
-    Lifted out of the handler because two branches now need the same answer and
-    one request must not pay for it twice: the FAQ short-circuit consults it for
-    a marginal match, and the routing below consults it for everything the FAQ
-    branch did not take. Resolving it on both paths is what keeps the FAQ
-    disambiguation free rather than an added model call.
-
-    ``None`` is a first-class outcome. A routing hint is an optimisation and
-    must never be the reason a user gets nothing (#392), so both a missing
-    runtime hook and a raise from one are "no decision" rather than an error.
-    """
-    classifier = getattr(context.runtime, "classify_lightweight", None)
-    if classifier is None:
-        return None
-    try:
-        return classifier(question, language=language, tenant_id=tenant_id)
-    except (ValueError, RuntimeError) as exc:
-        # Treated as "no decision", exactly as a None return is.
-        #
-        # But it must not be swallowed in silence either: this is the outermost
-        # handler, so a defect that escapes the routing module's own vocabulary
-        # would otherwise disable routing with no trace anywhere — which is
-        # precisely how this component stayed broken unnoticed before. Logged,
-        # no metric (the routing module counts the failures it recognises), and
-        # never the user's text.
-        _LOGGER.warning("classifier raised outside its own fallback: %s", type(exc).__name__)
-        return None
-
-
-def _faq_match(
-    platform: str,
-    faq_catalog: FAQCatalog,
-    question: str,
-) -> tuple[str | None, bool]:
-    """Best matching entry, and whether it may be answered only on those words.
-
-    Returns ``(question_id, confident)``. ``confident`` is True when the question's
-    tokens ARE one of the entry's own titles, so it is answered without a second
-    opinion; False means the question merely OVERLAPS a title and the routing
-    intent should confirm it before the catalog answers (see the note above).
-
-    Set-containment over the union of a title's language variants: score =
-    |question_sig ∩ title_union|, with a containment bar on the same union, so
-    the question's significant tokens must sit mostly inside ONE entry across
-    its languages. The scoring stays deterministic and zero-model; what this
-    returns is whether those words can be trusted on their own.
-    """
-    qsigs = _normalize_keywords(question)
-    if not qsigs:
-        return None, False
-    # Signature each title variant once. The union below is the union of THESE
-    # signatures, not a second tokenization pass over the same strings — this
-    # runs on every assistant request, and `_normalize_keywords` walks the text
-    # character by character.
-    variants = {
-        entry["question_id"]: tuple(
-            sig
-            for sig in (
-                _normalize_keywords(variant)
-                for variant in faq_catalog.title_variants(platform, entry["question_id"])
-            )
-            if sig
-        )
-        for entry in faq_catalog.catalog(platform)
-    }
-    unions = {
-        question_id: frozenset().union(*sigs) if sigs else frozenset()
-        for question_id, sigs in variants.items()
-    }
-    best_qid: str | None = None
-    best_overlap = 0
-    for question_id, title_sigs in unions.items():
-        overlap = len(qsigs & title_sigs)
-        if overlap > best_overlap:
-            best_overlap = overlap
-            best_qid = question_id
-    # Require at least MIN_OVERLAP distinct tokens AND a strong containment,
-    # so single-token ties ("枪") or generic overlap ("充/电/程") never fire.
-    if best_overlap < _FAQ_MIN_OVERLAP or best_qid is None:
-        return None, False
-    containment = len(qsigs & unions[best_qid]) / len(qsigs)
-    if containment < _FAQ_MIN_CONTAINMENT:
-        return None, False
-    return best_qid, any(qsigs == variant for variant in variants[best_qid])
-
-
-# A candidate order token: starts AND ends on an alphanumeric, so a trailing
-# sentence period or a label colon is not swallowed into the id, and carries
-# 6-64 safe characters total.
 _ORDER_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_.:-]{4,62}[A-Za-z0-9](?![A-Za-z0-9])")
 
 
@@ -8005,37 +6663,6 @@ def _clarification(
     }
 
 
-def _unowned_order_code(caller: ScopeContext | None) -> str:
-    """Which of the two "you cannot see this order" states this is (#637).
-
-    The two states were one message, and the message named the ORDER — so an
-    account whose operator site set resolves to EMPTY (`no_shop_binding`, or a
-    registered shop with no sites in the charging database) was told "this order
-    is not yours". That sends the reader to look at the order and the order list,
-    both of which are fine, while the thing to fix — the missing binding — is
-    unreachable from the sentence. It happened for real: the product owner read
-    it as an order problem and re-checked the order twice.
-
-    The distinction is `caller.data_scope`, which the identity layer already
-    decided: `DataScope.site_ids == ()` on an `organ` scope means "no site is
-    visible to this account", and `scope_where_sql` renders exactly that set as
-    `1=0`. An account that can see no site can see no order, whoever's it is.
-
-    Deliberately narrow: `None` site_ids is `all`-in-tenant (unrestricted) and
-    never takes this branch, and a tenant-level account never gets an `organ`
-    scope at all (#628) — for those, "no site" is normal and the order statement
-    remains the true one.
-    """
-    scope = getattr(caller, "data_scope", None)
-    if scope is None:
-        return CLARIFY_ORDER_NOT_YOURS
-    if getattr(scope, "type", "") != SCOPE_TYPE_ORGAN:
-        return CLARIFY_ORDER_NOT_YOURS
-    if getattr(scope, "site_ids", None):
-        return CLARIFY_ORDER_NOT_YOURS
-    return CLARIFY_ACCOUNT_HAS_NO_SITES
-
-
 def _hash_identifier(value: str) -> str:
     """Short, non-reversible marker for a log line — never the identifier itself."""
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
@@ -8166,170 +6793,6 @@ def _release_conversation_turn(
         )
 
 
-_ACTIVE_ORDER_CUES = re.compile(r"订单|充值|充电|退款|押金|金额|费用|订单号|为什么.*停|怎么还没")
-# Cues that mark a BILLING DISPUTE — a user ASSERTING their money is wrong.
-#
-# Covers every supported language. The Chinese-only list let every
-# non-Chinese user past the guard into generic customer service: an English
-# "was I overcharged" produced a plain QA answer with no order prompt at all
-# (41 live, 2026-09-20). Chinese got away with bare nouns because 扣费 /
-# 账单 / 金额不对 ARE claims about a specific charge.
-#
-# The other languages use PHRASES, not bare topic nouns, for the same reason
-# the guard exists: `refund` / `remboursement` / `reembolso` alone names a
-# subject, and the FAQ carries entries on exactly those subjects (q020/q021).
-# Treating a topic word as a dispute would swallow the questions the FAQ
-# short-circuit exists to serve — and it is not hypothetical: the first draft
-# of this list included bare `refund` and broke
-# test_assistant_faq_shortcircuit_ignores_generic_single_tokens.
-_HIGH_RISK_ORDER_CUES = re.compile(
-    # zh
-    r"扣费|扣款|扣错|费用异常|金额不对|退款|退费|订单异常|订单问题|账单"
-    # en
-    r"|overcharg\w*|double[-\s]?charg\w*"
-    r"|(?:bill|amount|charge)\w*\b[^.]{0,24}?\bwrong\b|\bwrong\b[^.]{0,24}?\b(?:bill|amount|charge)\w*"
-    r"|charged\s+(?:but|however|twice|two)"
-    r"|refund\s+(?:not|never|has\s+not|hasn't|still)"
-    # de
-    r"|überladen|überteuert|zu\s+viel\s+berechnet|doppelt\s+berechnet"
-    r"|(?:rechnung|betrag|abrechnung)\w*\b[^.]{0,24}?\bfalsch\b|\bfalsch\b[^.]{0,24}?\b(?:rechnung|abrechnung)\w*"
-    # fr
-    r"|surfactur\w+|factur\w+\s+(?:en\s+trop|deux\s+fois)"
-    r"|(?:facture|montant|facturation)\w*\b[^.]{0,24}?\b(?:incorrect|erroné|faux)\w*"
-    # es
-    r"|cobrad\w+\s+de\s+m[áa]s|cobrad\w+\s+dos\s+veces"
-    r"|(?:factura|importe|cobro)\w*\b[^.]{0,24}?\b(?:incorrect|erróne|equivocad)\w*"
-    # pt
-    r"|cobrad\w+\s+a\s+mais|cobrad\w+\s+duas\s+vezes"
-    r"|(?:fatura|valor|cobrança)\w*\b[^.]{0,24}?\b(?:incorret|errad|equivocad)\w*",
-    re.IGNORECASE,
-)
-
-
-def _question_involves_active_order(question: str) -> bool:
-    """Heuristic: does this follow-up clearly involve the active order?
-
-    Deliberately conservative — only order-business words trigger the
-    active_order shortcut. Plain knowledge questions ("怎么申请会员") fall
-    through to qa+RAG even with an active order bound (#172 acceptance).
-    """
-    return bool(_ACTIVE_ORDER_CUES.search(question or ""))
-
-
-def _missing_order_context_key(question: str) -> str | None:
-    """The clarification key for a high-risk question, or None.
-
-    Returns the key rather than the rendered text so the reply is localized
-    by the shared ``clarification_message`` catalog. The previous form
-    returned a Chinese literal regardless of Accept-Language — the same
-    hardcoded-copy defect fixed on the other two clarification branches
-    (#262, #282).
-    """
-    if _HIGH_RISK_ORDER_CUES.search(question or ""):
-        return "order_no"
-    return None
-
-
-def _promo_route(
-    context: Any,
-    caller: ScopeContext,
-    decision: Any,
-    payload: AssistantQuestionRequest,
-    *,
-    forced_intent: str | None = None,
-) -> tuple[str | None, str | None]:
-    """Resolve the promotional route for this request, or (None, None).
-
-    Two entry signals (#231): an explicit ``shortcut_code`` from a clicked
-    product-entry button, or free text that deterministically NAMES case
-    exploration / solution discovery. ``forced_intent`` is the classifier's
-    promotional intent when the cue matcher stayed silent. The promotional
-    target always comes from the caller's own published shortcut row — the
-    frontend can never self-report an agent. A missing target still routes
-    to the promotional intent so the runtime can serve the honest empty card.
-    """
-    from aiops_diagnostics.promo_agents import PROMO_INTENTS, promo_intent_from_text
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutError
-
-    intent: str | None = None
-    shortcut = None
-    try:
-        if payload.shortcut_code:
-            shortcut = context.shortcut_manager.store.find_effective_by_code(
-                caller.effective_tenant_id, str(decision.platform), payload.shortcut_code
-            )
-            if shortcut is not None and shortcut.status == "published":
-                intent = shortcut.intent if shortcut.intent in PROMO_INTENTS else None
-        if intent is None:
-            intent = (
-                forced_intent if forced_intent in PROMO_INTENTS else promo_intent_from_text(payload.question)
-            )
-    except ShortcutError:
-        return None, None
-    if intent is None:
-        return None, None
-    target = getattr(shortcut, "target_agent_version", None) if shortcut is not None else None
-    if not target:
-        target = _published_promo_target(context, caller, str(decision.platform), intent)
-    return target, intent
-
-
-def _published_promo_target(context: Any, caller: ScopeContext, platform: str, intent: str) -> str | None:
-    """Pin the first published shortcut of this promotional intent, if any."""
-    from aiops_diagnostics.shortcut_lifecycle import ShortcutError
-
-    try:
-        rows = context.shortcut_manager.list_effective(caller, business_entry=platform)
-    except ShortcutError:
-        return None
-    for row in rows:
-        if row.intent == intent and row.target_agent_version:
-            return row.target_agent_version
-    return None
-
-
-def _start_promo_qa(
-    context: Any,
-    caller: ScopeContext,
-    conversation: dict[str, Any] | None,
-    payload: AssistantQuestionRequest,
-    language: str,
-    promo_target: str | None,
-    promo_intent: str,
-    platform: str,
-) -> JSONResponse:
-    """Start a promotional card QA job (#231): the public `qa` contract
-    unchanged (202 + poll), served by the pinned promotional agent."""
-    turn_no: int | None = None
-    if conversation is not None:
-        turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
-    try:
-        qa = context.runtime.start_assistant_qa(
-            caller,
-            payload.question,
-            conversation=conversation if turn_no is not None else None,
-            conversation_turn_no=turn_no,
-            language=language,
-            promo_target=promo_target,
-            promo_intent=promo_intent,
-            business_entry=platform,
-        )
-    except (ValueError, RuntimeError) as exc:
-        _release_conversation_turn(context, conversation, turn_no)
-        raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
-    return JSONResponse(
-        status_code=status.HTTP_202_ACCEPTED,
-        content={
-            **_assistant_question_response(qa, language),
-            **(
-                {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
-                if conversation
-                else {}
-            ),
-        },
-    )
-
-
 def _shortcut_list_language(shortcuts: Any, requested: str) -> str:
     """The language a shortcut listing is uniformly in, else the authority one.
 
@@ -8442,59 +6905,4 @@ def _analysis_job_response(job: dict[str, Any], language: str) -> dict[str, Any]
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
         "completed_at": job.get("completed_at"),
-    }
-
-
-def _standard_diagnosis_response(diagnosis: dict[str, Any], language: str) -> dict[str, Any]:
-    """One diagnosis row as the public body.
-
-    ``language`` is the language of THIS REQUEST, and it renders only the copy
-    the server writes now: `error.message`.
-
-    It deliberately does NOT drive the `language` field or `result`. A
-    diagnosis's prose is generated once, in the language it was STARTED in, and
-    is stored. Reporting the poller's language there would claim an English
-    diagnosis is French — a false statement about the payload, and the same
-    class of error this project has already refused elsewhere ("do not rewrite
-    a successful retrieval into `unavailable`"). The field therefore describes
-    the RESULT's language, not the request's; that had never been written down,
-    and two surfaces had drifted apart because of it (#549).
-
-    So the two are split by what they describe, not by which is newer:
-    per-request copy is rendered per request, stored prose is reported as
-    stored. The unified-assistant QA surface merges them into one field; this
-    one does not, and this comment is the contract.
-    """
-    status_value = str(diagnosis["status"])
-    error_code = diagnosis.get("error_code") or "DIAGNOSIS_FAILED"
-    # The shared status set decides what is terminal, exactly as it decides what
-    # the store accepts: a literal copy here is how a status the store now takes
-    # (a stopped diagnosis) would render `retry_after_ms=1000` and keep a client
-    # polling a row the claim-guard can never let change again.
-    is_terminal = status_value in TERMINAL_DIAGNOSIS_STATUSES
-    return {
-        "diagnosis_id": diagnosis["diagnosis_id"],
-        "order_no": diagnosis["order_no"],
-        "question": diagnosis.get("question"),
-        "indicator_code": diagnosis.get("indicator_code"),
-        "language": diagnosis.get("language", "zh"),
-        "status": status_value,
-        "retry_after_ms": None if is_terminal else 1000,
-        "result": diagnosis.get("result") if status_value in DIAGNOSIS.completed else None,
-        "error": (
-            {
-                "code": error_code,
-                # Bounded and localized, chosen by the code — NOT the stored
-                # `error_message`. That field is the engineer's note (an
-                # upstream exception string, a restart notice); the contract
-                # promises this surface carries no internal run information.
-                "message": diagnosis_error_message(language, error_code),
-                "retryable": status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired},
-            }
-            if status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired}
-            else None
-        ),
-        "created_at": diagnosis.get("created_at"),
-        "updated_at": diagnosis.get("updated_at"),
-        "completed_at": diagnosis.get("completed_at"),
     }

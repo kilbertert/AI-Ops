@@ -7,24 +7,20 @@ import re
 import socket
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 import pymysql
-import redis
 from pymysql.cursors import DictCursor
 
 from aiops_diagnostics.bounded_http import (
-    JSON_CONTENT_TYPE,
     TEXT_PLAIN_CONTENT_TYPE,
     ErrorMapping,
-    HttpFailure,
     RequestSpec,
     basic_auth_header,
-    internal_token_headers,
     join_url,
     parse_raw_envelope,
     request_json,
@@ -48,16 +44,6 @@ from aiops_diagnostics.scope_context import ScopeError
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
-_HTTP_ERROR_CONFIG_MISSING = "http.config_missing"
-_HTTP_ERROR_AUTH_FAILED = "http.auth_failed"
-_HTTP_ERROR_UNREACHABLE = "http.http_unreachable"
-
-_HTTP_ERROR_MESSAGES = {
-    _HTTP_ERROR_CONFIG_MISSING: "Diag HTTP 配置不完整",
-    _HTTP_ERROR_AUTH_FAILED: "Diag HTTP 鉴权失败",
-    _HTTP_ERROR_UNREACHABLE: "Diag HTTP 服务不可达或响应异常",
-}
-
 
 class SourceError(RuntimeError):
     """A bounded read-only data-source operation failed."""
@@ -65,47 +51,6 @@ class SourceError(RuntimeError):
     def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
         self.code = code
-
-
-class DiagnosticSources(Protocol):
-    def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]: ...
-
-    def get_fee_template_record(
-        self, order_no: str, tenant_id: str | None = None
-    ) -> dict[str, Any] | None: ...
-
-    def get_occupy_orders(
-        self,
-        order_id: str | None = None,
-        order_no: str | None = None,
-        tenant_id: str | None = None,
-    ) -> list[dict[str, Any]]: ...
-
-    def get_device(
-        self,
-        device_id: str | None,
-        device_code: str | None,
-        tenant_id: str | None = None,
-    ) -> dict[str, Any] | None: ...
-
-    def get_gun_samples(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-        tx_serial_no: str | None,
-    ) -> list[dict[str, Any]]: ...
-
-    def get_comm_messages(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[dict[str, Any]]: ...
-
-    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]: ...
-
-    def doctor(self) -> dict[str, Any]: ...
 
 
 ORDER_COLUMNS = """
@@ -127,37 +72,6 @@ last_report_amount, transaction_id, meter_start, meter_end,
 white_flag, balance_insufficient_stop, start_soc, end_soc, device_protocol,
 created_time, stop_time, draw_gun_time, tx_data
 """.replace("\n", " ").strip()
-
-_OCCUPY_COLUMN_CANDIDATES: dict[str, tuple[str, ...]] = {
-    "id": ("id",),
-    "orderId": ("orderId", "order_id"),
-    "order_no": ("order_no",),
-    "device_id": ("device_id",),
-    "device_code": ("device_code",),
-    "child_device_id": ("child_device_id",),
-    "child_device_code": ("child_device_code",),
-    "site_id": ("site_id",),
-    "userId": ("userId", "user_id"),
-    "free_time": ("free_time",),
-    "timeout": ("timeout",),
-    "occupy_amount": ("occupy_amount",),
-    "pay_amount": ("pay_amount",),
-    "status": ("status",),
-    "out_trade_no": ("out_trade_no",),
-    "is_pay": ("is_pay",),
-    "is_sync_mall_order": ("is_sync_mall_order",),
-    "pay_time": ("pay_time",),
-    "tenant_id": ("tenant_id",),
-    "startTime": ("startTime", "start_time"),
-    "endTime": ("endTime", "end_time"),
-    "operator_id": ("operator_id",),
-    "refund_status": ("refund_status",),
-    "refund_amount": ("refund_amount",),
-    "refund_time": ("refund_time",),
-    "refundRemark": ("refundRemark", "refund_remark"),
-}
-
-OCCUPY_ORDER_LIMIT = 20
 
 #: 站点归属解析（ch_site）单次返回行数上限。
 SITE_SCOPE_MAX_ROWS = 1000
@@ -688,108 +602,6 @@ class MySQLSource:
             requested = tuple(site for site in requested if site in allowed)
         return requested
 
-    def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
-        if self._scope_blocked():
-            return None
-        # 模板表自己没有认领者列：这里的谓词是拿去查 ``ch_order_info`` 的存在性，
-        # 因此必须与 ``get_orders`` 用同一个开关，否则「订单查得到、模板查不到」，
-        # 而计费快照正是诊断要用的一半证据。
-        scope_where, scope_params = self._scope_where(claim_column=ORDER_CLAIM_COLUMN)
-        sql = (
-            f"SELECT order_no, tenant_id, fee_template, occupy_fee_template, period_fee_detail "
-            f"FROM `{self.database}`.`ch_fee_template_record` WHERE order_no=%s "
-        )
-        params: list[Any] = [order_no]
-        if scope_where:
-            # 计费模板表没有站点/用户列；先用与订单完全相同的范围谓词做订单
-            # 存在性检查，再用同一处渲染的租户谓词读模板，保证单独查询不会
-            # 扩大可见范围。
-            assert self.scope is not None
-            exists_sql = (
-                f"SELECT 1 FROM `{self.database}`.`ch_order_info` WHERE order_no=%s AND {scope_where} LIMIT 1"
-            )
-            tenant_where, tenant_params = scope_where_sql(
-                "tenant_id", self._tenant_visibility(), placeholder=_SQL_PARAM
-            )
-            fee_sql = sql + f"AND {tenant_where} ORDER BY created_time DESC LIMIT 1"
-            fee_params: list[Any] = [order_no, *tenant_params]
-            with self._cursor() as cursor:
-                cursor.execute(exists_sql, [order_no, *scope_params])
-                if cursor.fetchone() is None:
-                    return None
-                cursor.execute(fee_sql, fee_params)
-                row = cursor.fetchone()
-                return _normalize_row(row) if row else None
-        if tenant_id:
-            sql += "AND tenant_id=%s "
-            params.append(tenant_id)
-        sql += "ORDER BY created_time DESC LIMIT 1"
-        with self._cursor() as cursor:
-            cursor.execute(sql, params)
-            row = cursor.fetchone()
-            return _normalize_row(row) if row else None
-
-    def get_occupy_orders(
-        self,
-        order_id: str | None = None,
-        order_no: str | None = None,
-        tenant_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """占位费订单：``order_id``（充电订单主键关联）与 ``order_no`` 二选一。
-
-        关联键与业务侧一致：``orderId`` 存充电订单 ``ch_order_info.id``，
-        ``order_no`` 为业务编号（源码 ``OccupyOrderTxDataHandler``）。
-        """
-        has_order_id = bool(order_id and order_id.strip())
-        has_order_no = bool(order_no and order_no.strip())
-        if has_order_id == has_order_no:
-            raise ValueError("占位费订单查询必须且只能提供 order_id 或 order_no 之一")
-        if self._scope_blocked():
-            return []
-        with self._cursor() as cursor:
-            columns = self._occupy_columns(cursor)
-            lookup_column = columns["orderId"] if has_order_id else columns["order_no"]
-            tenant_column = columns["tenant_id"]
-            start_column = columns["startTime"]
-            where = f"{lookup_column}=%s"
-            params: list[Any] = [order_id if has_order_id else order_no]
-            scope_where, scope_params = self._scope_where(user_column=columns["userId"])
-            if scope_where:
-                where += f" AND {scope_where}"
-                params.extend(scope_params)
-            elif tenant_id:
-                where += f" AND {tenant_column}=%s"
-                params.append(tenant_id)
-            select_columns = ", ".join(
-                f"`{actual}` AS `{contract}`" if actual != contract else f"`{actual}`"
-                for contract, actual in columns.items()
-            )
-            sql = (
-                f"SELECT {select_columns} FROM `{self.database}`.`ch_occupy_order_info` "
-                f"WHERE {where} ORDER BY `{start_column}` DESC LIMIT {OCCUPY_ORDER_LIMIT}"
-            )
-            cursor.execute(sql, params)
-            return [_normalize_row(row) for row in cursor.fetchall()]
-
-    def _occupy_columns(self, cursor: DictCursor) -> dict[str, str]:
-        cursor.execute(
-            "SELECT COLUMN_NAME AS column_name FROM information_schema.columns "
-            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
-            [self.database, "ch_occupy_order_info"],
-        )
-        available = {
-            str(row.get("column_name") or row.get("COLUMN_NAME"))
-            for row in cursor.fetchall()
-            if row.get("column_name") or row.get("COLUMN_NAME")
-        }
-        columns: dict[str, str] = {}
-        for contract, candidates in _OCCUPY_COLUMN_CANDIDATES.items():
-            actual = next((candidate for candidate in candidates if candidate in available), None)
-            if actual is None:
-                raise SourceError(f"占位费订单表缺少字段: {contract}")
-            columns[contract] = actual
-        return columns
-
     def get_device(
         self,
         device_id: str | None,
@@ -856,40 +668,9 @@ class MySQLSource:
             raise ScopeError(f"站点归属数量超过上限 {SITE_SCOPE_MAX_ROWS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
         return ids
 
-    def doctor(self) -> dict[str, Any]:
-        with self._cursor() as cursor:
-            cursor.execute(
-                "SELECT VERSION() AS version, CURRENT_USER() AS `current_user`, @@time_zone AS time_zone"
-            )
-            details = _normalize_row(cursor.fetchone())
-            cursor.execute("SHOW GRANTS FOR CURRENT_USER()")
-            grant_rows = [str(value) for row in cursor.fetchall() for value in row.values()]
-            assigned_roles, has_unparsed_role_assignment = _assigned_roles(grant_rows)
-            unresolved_roles: list[str] = ["ASSIGNMENT"] if has_unparsed_role_assignment else []
-            if assigned_roles:
-                try:
-                    cursor.execute(f"SHOW GRANTS FOR CURRENT_USER() USING {', '.join(assigned_roles)}")
-                    grant_rows.extend(str(value) for row in cursor.fetchall() for value in row.values())
-                except Exception:
-                    unresolved_roles.extend(assigned_roles)
-            granted_privileges: set[str] = set()
-            for grant in grant_rows:
-                grant_upper = grant.upper()
-                match = re.search(r"\bGRANT\s+(.+?)\s+ON\s+", grant_upper)
-                if match:
-                    granted_privileges.update(item.strip() for item in match.group(1).split(","))
-                if "WITH GRANT OPTION" in grant_upper:
-                    granted_privileges.add("GRANT OPTION")
-            granted_privileges.update(f"UNRESOLVED ROLE {role}" for role in unresolved_roles)
-            unsafe_privileges = granted_privileges.difference({"SELECT", "SHOW VIEW", "USAGE"})
-            details["read_only"] = not unsafe_privileges
-            details["unsafe_privileges"] = sorted(unsafe_privileges)
-            details["assigned_roles"] = assigned_roles
-            return details
-
 
 # charging-gun_property 查询列的唯一权威清单：
-# TDengineSource.get_gun_samples 的 SELECT、doctor 逐列探测、
+# TDengineSource.get_gun_samples 的 SELECT、
 # tdengine_proxy 只读白名单全部从这里派生，防止三处各自维护漂移。
 GUN_COLUMN_NAMES: tuple[str, ...] = (
     "txSerialNo",
@@ -936,7 +717,7 @@ class TDengineSource:
     """
 
     # get_gun_samples 的完整 SELECT 列表（41 环境曾缺 batteryMinTemperature，
-    # doctor 按此逐列探测，环境 schema 漂移在预检阶段即可见）。
+    # 与只读代理的列白名单保持一致）。
     # 清单唯一来源是模块级 GUN_COLUMN_NAMES；tdengine_proxy 白名单也从它派生。
     GUN_COLUMNS: tuple[str, ...] = GUN_COLUMN_NAMES
 
@@ -1008,481 +789,6 @@ class TDengineSource:
         )
         return self._query(sql)
 
-    def get_comm_messages(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[dict[str, Any]]:
-        self._check_device_allowed(device)
-        limit = int(self.settings.safety.tdengine_max_rows)
-        sql = (
-            "SELECT _ts, direction, code, decoded FROM `charging-pile_comm` "
-            f"WHERE device='{_safe_literal(device)}' AND _ts>='{_format_time(start_time)}' "
-            f"AND _ts<='{_format_time(end_time)}' ORDER BY _ts ASC LIMIT {limit}"
-        )
-        return self._query(sql)
-
-    def doctor(self) -> dict[str, Any]:
-        rows = self._query("SHOW STABLES")
-        names = {str(value) for row in rows for value in row.values()}
-        gun_present = "charging-gun_property" in names
-        gun_columns: dict[str, bool] = {column: False for column in self.GUN_COLUMNS}
-        gun_columns_checked = False
-        if gun_present:
-            try:
-                described = self._query("DESCRIBE `charging-gun_property`")
-                # REST 返回行按 column_meta zip 成 dict，`field` 值即列名
-                present = {str(row.get("field")) for row in described}
-                gun_columns = {column: column in present for column in self.GUN_COLUMNS}
-                gun_columns_checked = True
-            except SourceError:
-                # doctor 不得因 SHOW 找到的 stable 而抛错；列未核实即视为不可用
-                pass
-        return {
-            "database": self.database,
-            "charging_gun_property": gun_present,
-            "charging_pile_comm": "charging-pile_comm" in names,
-            "gun_columns": gun_columns,
-            "gun_columns_checked": gun_columns_checked,
-            "stable_count": len(rows),
-        }
-
-
-class HttpSources:
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-        self.api = settings.http
-        if not self.api.internal_token.secret:
-            raise SourceError("Diag API 内部令牌密钥未配置")
-
-    def _headers(self) -> dict[str, str]:
-        return internal_token_headers(
-            self.api.internal_token.secret,
-            self.api.internal_token.expire_seconds,
-            int(time.time()),
-        )
-
-    def _get(self, endpoint: str, params: dict[str, str]) -> Any:
-        if not self.api.base_url:
-            raise SourceError("Diag API 地址未配置", code=_HTTP_ERROR_CONFIG_MISSING)
-        if not self.api.internal_token.secret:
-            raise SourceError("Diag API 内部令牌密钥未配置", code=_HTTP_ERROR_CONFIG_MISSING)
-        if not self.api.internal_token.expire_seconds:
-            raise SourceError("Diag API 内部令牌有效期未配置", code=_HTTP_ERROR_CONFIG_MISSING)
-
-        # The transport skeleton owns request assembly, the failure capture set
-        # and the status-code table. This client only declares how its own domain
-        # errors are built; its error-code vocabulary and message wording stay
-        # local. Two seams stay explicit because the skeleton's defaults are
-        # wider than this client's contract: ``detail_keys=("msg",)`` keeps the
-        # HTTP-layer detail sourced from ``msg`` alone (the default would also
-        # read ``detail``/``message``), and the envelope is read here because the
-        # shared ``parse_code_data_envelope`` is lenient about a non-Mapping
-        # payload while this client rejects it -- and an envelope rejection must
-        # keep this client's own message rather than the skeleton's.
-        def _auth_failed(failure: HttpFailure) -> Exception:
-            return SourceError(
-                failure.detail or "Diag API 令牌无效或过期",
-                code=_HTTP_ERROR_AUTH_FAILED,
-            )
-
-        def _unreachable(failure: HttpFailure) -> Exception:
-            if failure.status is None:
-                return SourceError(
-                    f"Diag API 请求失败: {failure.detail}",
-                    code=_HTTP_ERROR_UNREACHABLE,
-                )
-            return SourceError(
-                f"Diag API 请求失败: {failure.detail or f'HTTP {failure.status}'}",
-                code=_HTTP_ERROR_UNREACHABLE,
-            )
-
-        def _rejected_envelope(_failure: HttpFailure) -> Exception:
-            # 非 Mapping/数组的载荷：与下方本地信封分支对同一类载荷的产出逐字一致。
-            return SourceError("Diag API 拒绝查询: invalid response", code=_HTTP_ERROR_UNREACHABLE)
-
-        payload = request_json(
-            RequestSpec(
-                url=join_url(self.api.base_url, endpoint, query=params or None),
-                method="GET",
-                headers={**self._headers(), "Accept": JSON_CONTENT_TYPE},
-                timeout=self.api.timeout_seconds,
-            ),
-            mapping=ErrorMapping(
-                auth_rejected=_auth_failed,
-                http_error=_unreachable,
-                unavailable=_unreachable,
-                invalid_body=_unreachable,
-                invalid_envelope=_rejected_envelope,
-                detail_keys=("msg",),
-            ),
-            envelope=parse_raw_envelope,
-        )
-        if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
-            detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
-            is_auth_failure = isinstance(payload, dict) and payload.get("code") in (401, 403)
-            code = _HTTP_ERROR_AUTH_FAILED if is_auth_failure else _HTTP_ERROR_UNREACHABLE
-            raise SourceError(f"Diag API 拒绝查询: {detail}", code=code)
-        return payload.get("data")
-
-    def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
-        params = {"order_no": _safe_http_param(order_no), "include_fee_template": "false"}
-        if tenant_id:
-            params["tenant_id"] = _safe_http_param(tenant_id)
-        data = self._get("/diag/order", params)
-        return copy.deepcopy(data.get("orders") or []) if isinstance(data, dict) else []
-
-    def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
-        params = {"order_no": _safe_http_param(order_no), "include_fee_template": "true"}
-        if tenant_id:
-            params["tenant_id"] = _safe_http_param(tenant_id)
-        data = self._get("/diag/order", params)
-        if not isinstance(data, dict):
-            return None
-        return copy.deepcopy(data.get("fee_template"))
-
-    def get_device(
-        self,
-        device_id: str | None,
-        device_code: str | None,
-        tenant_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        params: dict[str, str] = {}
-        if device_id:
-            params["device_id"] = _safe_http_param(device_id)
-        elif device_code:
-            params["device_code"] = _safe_http_param(device_code)
-        else:
-            return None
-        if tenant_id:
-            params["tenant_id"] = _safe_http_param(tenant_id)
-        data = self._get("/diag/device", params)
-        return copy.deepcopy(data) if isinstance(data, dict) else None
-
-    def get_gun_samples(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-        tx_serial_no: str | None,
-    ) -> list[dict[str, Any]]:
-        params = {
-            "device": _safe_http_param(device),
-            "start_time": _format_http_time(start_time),
-            "end_time": _format_http_time(end_time),
-        }
-        if tx_serial_no:
-            params["tx_serial_no"] = _safe_http_param(tx_serial_no)
-        data = self._get("/diag/gun-property", params)
-        return copy.deepcopy(data) if isinstance(data, list) else []
-
-    def get_comm_messages(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[dict[str, Any]]:
-        params = {
-            "device": _safe_http_param(device),
-            "start_time": _format_http_time(start_time),
-            "end_time": _format_http_time(end_time),
-        }
-        data = self._get("/diag/comm-message", params)
-        return copy.deepcopy(data) if isinstance(data, list) else []
-
-    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
-        data = self._get("/diag/redis-stream", {"order_no": _safe_http_param(order_no)})
-        return copy.deepcopy(data) if isinstance(data, list) else []
-
-    def doctor(self) -> dict[str, Any]:
-        missing = [
-            name
-            for name, configured in (
-                ("base_url", bool(self.api.base_url)),
-                ("internal_token_secret", bool(self.api.internal_token.secret)),
-                ("internal_token_expire_seconds", bool(self.api.internal_token.expire_seconds)),
-            )
-            if not configured
-        ]
-        if missing:
-            return {
-                "ok": False,
-                "status": "error",
-                "error": _HTTP_ERROR_CONFIG_MISSING,
-                "details": {"message": "Diag HTTP 配置不完整", "missing": missing},
-            }
-        try:
-            self._get("/diag/redis-stream", {})
-        except SourceError as exc:
-            code = exc.code or _HTTP_ERROR_UNREACHABLE
-            return {
-                "ok": False,
-                "status": "error",
-                "error": code,
-                "details": {"message": _HTTP_ERROR_MESSAGES.get(code, "Diag HTTP 检查失败")},
-            }
-        return {
-            "ok": True,
-            "status": "ok",
-            "details": {
-                "token_configured": bool(self.api.internal_token.secret),
-                "token_expire_seconds": self.api.internal_token.expire_seconds,
-                "cutover": "partial",
-            },
-        }
-
-
-class HybridSources:
-    def __init__(
-        self,
-        settings: Settings,
-        *,
-        allowed_devices: frozenset[str] | None = None,
-    ) -> None:
-        self.settings = settings
-        self.tdengine = TDengineSource(settings, allowed_devices=allowed_devices)
-
-    @property
-    def http(self) -> HttpSources:
-        try:
-            return self._http
-        except AttributeError:
-            self._http = HttpSources(self.settings)
-            return self._http
-
-    def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
-        return self.http.get_orders(order_no, tenant_id)
-
-    def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
-        return self.http.get_fee_template_record(order_no, tenant_id)
-
-    def get_device(
-        self,
-        device_id: str | None,
-        device_code: str | None,
-        tenant_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        return self.http.get_device(device_id, device_code, tenant_id)
-
-    def get_gun_samples(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-        tx_serial_no: str | None,
-    ) -> list[dict[str, Any]]:
-        return self.tdengine.get_gun_samples(device, start_time, end_time, tx_serial_no)
-
-    def get_comm_messages(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[dict[str, Any]]:
-        return self.tdengine.get_comm_messages(device, start_time, end_time)
-
-    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
-        return self.http.inspect_streams(order_no)
-
-    def _http_doctor(self) -> dict[str, Any]:
-        api = self.settings.http
-        missing = [
-            name
-            for name, configured in (
-                ("base_url", bool(api.base_url)),
-                ("internal_token_secret", bool(api.internal_token.secret)),
-                ("internal_token_expire_seconds", bool(api.internal_token.expire_seconds)),
-            )
-            if not configured
-        ]
-        if missing:
-            return {
-                "ok": False,
-                "status": "error",
-                "error": _HTTP_ERROR_CONFIG_MISSING,
-                "details": {"message": "Diag HTTP 配置不完整", "missing": missing},
-            }
-        return self.http.doctor()
-
-    def doctor(self) -> dict[str, Any]:
-        result: dict[str, Any] = {"http": self._http_doctor()}
-        try:
-            details = self.tdengine.doctor()
-        except SourceError as exc:
-            result["tdengine"] = {"ok": False, "status": "error", "error": str(exc)}
-        else:
-            details["cutover"] = "partial"
-            result["tdengine"] = {"ok": True, "status": "ok", "details": details}
-        result["mysql"] = _deprecated_doctor()
-        result["redis"] = _deprecated_doctor()
-        return result
-
-
-def _deprecated_doctor() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "status": "deprecated",
-        "details": {"message": "已收口：证据改由 /diag/* HTTP 接口返回，生产配置不应保留直连凭据"},
-    }
-
-
-class RedisSource:
-    STREAMS = ("third.order.sync.queue", "third.order.sync.notify.queue")
-
-    def __init__(
-        self,
-        settings: Settings,
-        *,
-        order_in_scope: Callable[[Mapping[Any, Any]], bool] | None = None,
-    ) -> None:
-        """白名单 Stream 只读检查。
-
-        ``order_in_scope`` 为可选的归属验证谓词：只有谓词判定为 True 的消息
-        才被计为该订单的匹配。无法验证租户/站点/订单归属时保持返回元数据而不
-        返回原始消息正文；越权消息不计入匹配。
-        """
-        self.settings = settings
-        self.order_in_scope = order_in_scope
-
-    def _client(self) -> redis.Redis:
-        cfg = self.settings.redis
-        if not cfg.password:
-            raise SourceError("Redis 只读账号未配置")
-        return redis.Redis(
-            host=cfg.host,
-            port=cfg.port,
-            db=cfg.database,
-            username=cfg.user or None,
-            password=cfg.password,
-            socket_connect_timeout=self.settings.safety.query_timeout_seconds,
-            socket_timeout=self.settings.safety.query_timeout_seconds,
-            decode_responses=False,
-        )
-
-    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
-        client = self._client()
-        results: list[dict[str, Any]] = []
-        try:
-            for stream in self.STREAMS:
-                stream_key = stream.encode("utf-8")
-                stream_type = _decode_reply(client.type(stream_key))
-                if stream_type != "stream":
-                    results.append(
-                        {"stream": stream, "type": stream_type, "length": 0, "groups": [], "matches": 0}
-                    )
-                    continue
-                groups = client.xinfo_groups(stream_key)
-                messages = client.xrevrange(stream_key, count=self.settings.safety.redis_max_messages)
-                matches = sum(
-                    _stream_fields_contain(fields, order_no) and _order_in_scope(self.order_in_scope, fields)
-                    for _, fields in messages
-                )
-                results.append(
-                    {
-                        "stream": stream,
-                        "type": stream_type,
-                        "length": client.xlen(stream_key),
-                        "groups": [
-                            {
-                                "name": _decode_reply(_mapping_get(group, "name")),
-                                "consumers": _mapping_get(group, "consumers"),
-                                "pending": _mapping_get(group, "pending"),
-                                "lag": _mapping_get(group, "lag"),
-                            }
-                            for group in groups
-                        ],
-                        "inspected_messages": len(messages),
-                        "matches": matches,
-                    }
-                )
-        except Exception as exc:
-            raise SourceError(f"Redis 只读查询失败: {exc.__class__.__name__}") from exc
-        finally:
-            client.close()
-        return results
-
-    def doctor(self) -> dict[str, Any]:
-        client = self._client()
-        try:
-            info = client.info("server")
-            return {
-                "ping": client.ping(),
-                "version": _decode_reply(_mapping_get(info, "redis_version")),
-                "mode": _decode_reply(_mapping_get(info, "redis_mode")),
-                "database": self.settings.redis.database,
-            }
-        except Exception as exc:
-            raise SourceError(f"Redis 连接失败: {exc.__class__.__name__}") from exc
-        finally:
-            client.close()
-
-
-@dataclass(slots=True)
-class LiveSources:
-    mysql: MySQLSource
-    tdengine: TDengineSource
-    redis: RedisSource
-
-    def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
-        return self.mysql.get_orders(order_no, tenant_id)
-
-    def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
-        return self.mysql.get_fee_template_record(order_no, tenant_id)
-
-    def get_occupy_orders(
-        self,
-        order_id: str | None = None,
-        order_no: str | None = None,
-        tenant_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        return self.mysql.get_occupy_orders(order_id, order_no, tenant_id)
-
-    def get_device(
-        self,
-        device_id: str | None,
-        device_code: str | None,
-        tenant_id: str | None = None,
-    ) -> dict[str, Any] | None:
-        return self.mysql.get_device(device_id, device_code, tenant_id)
-
-    def get_gun_samples(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-        tx_serial_no: str | None,
-    ) -> list[dict[str, Any]]:
-        return self.tdengine.get_gun_samples(device, start_time, end_time, tx_serial_no)
-
-    def get_comm_messages(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[dict[str, Any]]:
-        return self.tdengine.get_comm_messages(device, start_time, end_time)
-
-    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
-        return self.redis.inspect_streams(order_no)
-
-    def doctor(self) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for name, source in (("mysql", self.mysql), ("tdengine", self.tdengine), ("redis", self.redis)):
-            try:
-                details = source.doctor()
-                if name == "mysql" and details.get("read_only") is False:
-                    result[name] = {
-                        "ok": False,
-                        "error": "MySQL 账号包含写权限，拒绝作为诊断运行时账号",
-                        "details": details,
-                    }
-                else:
-                    result[name] = {"ok": True, "details": details}
-            except SourceError as exc:
-                result[name] = {"ok": False, "error": str(exc)}
-        return result
-
 
 class DeviceGate:
     """收集订单设备集合，供 TDengine 查询按权限范围校验。
@@ -1508,11 +814,10 @@ class DeviceGate:
 
 
 class ScopedSources:
-    """受限直连诊断源：MySQL/TDengine/Redis 全部受同一 ``QueryScope`` 约束。
+    """受限直连诊断源：MySQL/TDengine 受同一 ``QueryScope`` 约束。
 
     ``device_gate`` 由订单元数据 seed，TDengine 只允许该设备集合内的设备；
-    ``order_in_scope`` 由 ``make_redis_order_in_scope`` 构造，Redis 只统计租户
-    归属可验证的消息。任一步骤缺失时 fail closed，不退回无范围直连。
+    未授权设备拒绝读取，不退回无范围直连。
     """
 
     def __init__(
@@ -1521,13 +826,11 @@ class ScopedSources:
         *,
         mysql: MySQLSource,
         tdengine: TDengineSource,
-        redis: RedisSource,
         device_gate: DeviceGate | None = None,
     ) -> None:
         self.settings = settings
         self.mysql = mysql
         self.tdengine = tdengine
-        self.redis = redis
         self.device_gate = device_gate
 
     def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
@@ -1536,17 +839,6 @@ class ScopedSources:
             self.device_gate.seed_from_orders(orders)
             self.tdengine.allowed_devices = self.device_gate.allowed_devices()
         return orders
-
-    def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
-        return self.mysql.get_fee_template_record(order_no, tenant_id)
-
-    def get_occupy_orders(
-        self,
-        order_id: str | None = None,
-        order_no: str | None = None,
-        tenant_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        return self.mysql.get_occupy_orders(order_id, order_no, tenant_id)
 
     def get_device(
         self,
@@ -1565,34 +857,6 @@ class ScopedSources:
     ) -> list[dict[str, Any]]:
         return self.tdengine.get_gun_samples(device, start_time, end_time, tx_serial_no)
 
-    def get_comm_messages(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[dict[str, Any]]:
-        return self.tdengine.get_comm_messages(device, start_time, end_time)
-
-    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
-        return self.redis.inspect_streams(order_no)
-
-    def doctor(self) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for name, source in (("mysql", self.mysql), ("tdengine", self.tdengine), ("redis", self.redis)):
-            try:
-                details = source.doctor()
-                if name == "mysql" and details.get("read_only") is False:
-                    result[name] = {
-                        "ok": False,
-                        "error": "MySQL 账号包含写权限，拒绝作为诊断运行时账号",
-                        "details": details,
-                    }
-                else:
-                    result[name] = {"ok": True, "details": details}
-            except SourceError as exc:
-                result[name] = {"ok": False, "error": str(exc)}
-        return result
-
 
 class FixtureSources:
     def __init__(self, path: Path) -> None:
@@ -1603,32 +867,6 @@ class FixtureSources:
         # Tenant visibility is one shared rule (#325); this source no longer
         # carries its own comparison.
         return copy.deepcopy(_caller_visible(orders, tenant_id))
-
-    def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
-        record = self.payload.get("fee_template_records", {}).get(order_no)
-        if record is None:
-            return None
-        if not _caller_visible([record], tenant_id):
-            return None
-        return copy.deepcopy(record)
-
-    def get_occupy_orders(
-        self,
-        order_id: str | None = None,
-        order_no: str | None = None,
-        tenant_id: str | None = None,
-    ) -> list[dict[str, Any]]:
-        has_order_id = bool(order_id and order_id.strip())
-        has_order_no = bool(order_no and order_no.strip())
-        if has_order_id == has_order_no:
-            raise ValueError("占位费订单查询必须且只能提供 order_id 或 order_no 之一")
-        records = [
-            row
-            for row in self.payload.get("occupy_orders", [])
-            if (has_order_id and row.get("orderId") == order_id)
-            or (has_order_no and row.get("order_no") == order_no)
-        ]
-        return copy.deepcopy(_caller_visible(records, tenant_id)[:OCCUPY_ORDER_LIMIT])
 
     def get_device(
         self,
@@ -1660,45 +898,6 @@ class FixtureSources:
     ) -> list[dict[str, Any]]:
         return copy.deepcopy(self.payload.get("gun_samples", []))
 
-    def get_comm_messages(
-        self,
-        device: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[dict[str, Any]]:
-        return copy.deepcopy(self.payload.get("comm_messages", []))
-
-    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
-        return copy.deepcopy(self.payload.get("streams", []))
-
-    def doctor(self) -> dict[str, Any]:
-        return {"fixture": {"ok": True, "details": {"synthetic": True}}}
-
-
-@contextlib.contextmanager
-def direct_sources(settings: Settings) -> Iterator[LiveSources]:
-    """Keep the all-direct source set available for explicit rollback/fallback."""
-    with _ssh_tunnel(settings) as effective:
-        yield LiveSources(
-            mysql=MySQLSource(effective),
-            tdengine=TDengineSource(effective),
-            redis=RedisSource(effective),
-        )
-
-
-@contextlib.contextmanager
-def live_sources(
-    settings: Settings,
-    *,
-    allowed_devices: frozenset[str] | None = None,
-) -> Iterator[HybridSources]:
-    """Return the current partial-cutover default source set.
-
-    ``allowed_devices`` 非空时，TDengine 查询只允许该设备集合内的设备。
-    """
-    with _ssh_tunnel(settings, forwards=("tdengine",)) as effective:
-        yield HybridSources(effective, allowed_devices=allowed_devices)
-
 
 @contextlib.contextmanager
 def scoped_live_sources(
@@ -1713,15 +912,11 @@ def scoped_live_sources(
     消息。SSH 隧道按直连回退路径建立三条转发（与 ``direct_sources`` 一致）。
     """
     device_gate = DeviceGate()
-    with _ssh_tunnel(settings) as effective:
+    with _ssh_tunnel(settings, forwards=("mysql", "tdengine")) as effective:
         yield ScopedSources(
             effective,
             mysql=MySQLSource(effective, scope=scope),
             tdengine=TDengineSource(effective, allowed_devices=frozenset()),
-            redis=RedisSource(
-                effective,
-                order_in_scope=make_redis_order_in_scope(scope),
-            ),
             device_gate=device_gate,
         )
 
@@ -1855,39 +1050,11 @@ def _safe_literal(value: str | None) -> str:
 SAFE_HTTP_PARAM = re.compile(r"^[A-Za-z0-9_.:+-]{1,128}$")
 
 
-def _safe_http_param(value: str | None) -> str:
-    """Whitelist query values before they are interpolated into ``/diag/*`` URLs."""
-    if value is None or not SAFE_HTTP_PARAM.fullmatch(value) or "--" in value:
-        raise ValueError("HTTP 查询值包含不允许的字符")
-    return value
-
-
 _ROLE_ACCOUNT = re.compile(r"`(?P<name>[A-Za-z0-9_.:-]{1,128})`@`(?P<host>[A-Za-z0-9_.:%*-]{1,255})`")
-
-
-def _assigned_roles(grants: list[str]) -> tuple[list[str], bool]:
-    roles: list[str] = []
-    has_unparsed_assignment = False
-    for grant in grants:
-        match = re.match(r"\s*GRANT\s+(.+?)\s+TO\s+", grant, re.IGNORECASE)
-        if not match or re.search(r"\bON\b", match.group(1), re.IGNORECASE):
-            continue
-        role_text = match.group(1)
-        tokens = list(_ROLE_ACCOUNT.finditer(role_text))
-        compact_roles = ",".join(token.group(0) for token in tokens)
-        if not tokens or compact_roles != re.sub(r"\s+", "", role_text):
-            has_unparsed_assignment = True
-            continue
-        roles.extend(token.group(0) for token in tokens)
-    return list(dict.fromkeys(roles)), has_unparsed_assignment
 
 
 def _format_time(value: datetime) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
-
-def _format_http_time(value: datetime) -> str:
-    return value.isoformat(timespec="milliseconds")
 
 
 def _count_or_zero(value: Any) -> int:
@@ -1915,73 +1082,3 @@ def _normalize_row(row: dict[str, Any] | None) -> dict[str, Any]:
                 value = json.loads(value)
         normalized[str(key)] = value
     return normalized
-
-
-def _mapping_get(mapping: dict[Any, Any], key: str) -> Any:
-    return mapping.get(key, mapping.get(key.encode("utf-8")))
-
-
-def _decode_reply(value: Any) -> Any:
-    """解出 Redis 原始回复里的 bytes，供类型判断与元数据上报使用。
-
-    只解 bytes、不 strip：这是**传输层**解码，不是租户标识归一化。租户归属一律
-    经 ``order_visibility.normalize_tenant`` 判定（PRD #325 T3）——把这里的输出
-    直接拿去比租户，就是本 PRD 要消掉的第四套归一化。
-    """
-    if isinstance(value, (bytes, bytearray)):
-        return bytes(value).decode("utf-8", errors="replace")
-    return value
-
-
-def _stream_fields_contain(fields: dict[Any, Any], token: str) -> bool:
-    token_bytes = token.encode("utf-8")
-    for key, value in fields.items():
-        for candidate in (key, value):
-            if isinstance(candidate, (bytes, bytearray)):
-                if token_bytes in bytes(candidate):
-                    return True
-            elif token in str(candidate):
-                return True
-    return False
-
-
-def _order_in_scope(
-    predicate: Callable[[Mapping[Any, Any]], bool] | None,
-    fields: Mapping[Any, Any],
-) -> bool:
-    """归属验证：无谓词时视为在范围内；有谓词时必须返回 True 才匹配。"""
-    return predicate is None or predicate(fields)
-
-
-#: Redis 同步消息里携带租户的字段名（``decode_responses=False``，键可能是 bytes，
-#: 也可能是调用方自行构造的 str）。这里只认字段名；取值一律交给共享规则归一化。
-_REDIS_TENANT_FIELDS = frozenset({"tenantId", "tenant_id"})
-
-
-def make_redis_order_in_scope(
-    scope: QueryScope,
-) -> Callable[[Mapping[Any, Any]], bool]:
-    """从 ``QueryScope`` 构造 Redis 归属验证谓词。
-
-    租户判定用共享的行级定义（``order_visibility.visible_orders``，caller
-    profile）：把消息里的租户字段投影成候选行交给同一处规则，Redis 自己不再持有
-    一套归一化——此前这里比的是 `_decode_reply` 的原始输出，只解 bytes、不
-    strip，与行级规则不是同一套归一化。无法从消息验证租户归属时不返回原始正文、
-    不计数。
-
-    站点/用户范围不直接用于 Redis 过滤——订单若已通过 MySQL scope 约束，则其
-    同步消息即可被安全关联（PRD #325 Implementation Decisions）。
-    """
-    visibility = caller_visibility(scope.tenant_id)
-
-    def predicate(fields: Mapping[Any, Any]) -> bool:
-        tenant_rows = [
-            {"tenant_id": value}
-            for key, value in fields.items()
-            if _decode_reply(key) in _REDIS_TENANT_FIELDS
-        ]
-        # 任一租户字段命中即范围内（与迁移前一致）；消息里没有任何租户字段时候选
-        # 为空，共享规则判为不可见，fail closed。
-        return bool(visible_orders(tenant_rows, visibility).rows)
-
-    return predicate

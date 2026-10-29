@@ -1,34 +1,27 @@
 ---
 title: l6-boundary
-desc: 进程边界与入口——四条独立的进程、66 条路由
+desc: 进程边界与入口——服务入口与业务路由
 hue: 0
 code:
   - src/aiops_diagnostics/gateway_api.py
 related:
   - src/aiops_diagnostics/gateway_runtime.py
-  - src/aiops_diagnostics/cli.py
   - src/aiops_diagnostics/gateway_server.py
   - src/aiops_diagnostics/isolation_guard.py
-  - src/aiops_diagnostics/gateway_cli.py
-  - src/aiops_diagnostics/gateway_client.py
   - src/aiops_diagnostics/gateway_config.py
-  - src/aiops_diagnostics/gateway_tokens.py
   - src/aiops_diagnostics/gateway_logging.py
   - src/aiops_diagnostics/admin_cli.py
   - src/aiops_diagnostics/tdengine_proxy.py
-  - src/aiops_diagnostics/responses_adapter.py
-  - src/aiops_diagnostics/codex_launcher.py
   - src/aiops_diagnostics/execution_manifest.py
 ---
 # l6-boundary
 
-四个 console script 对应四条独立的进程边界：`aiops`（工程师本地）、`aiops-gateway`（多端服务）、
-`aiops-tdengine-proxy`（只读 SQL 代理）、`aiops-responses-adapter`（兼容反向代理）。
+服务入口为 `aiops-gateway serve`，运维入口为 `aiops-admin`，只读 TDengine 代理独立运行。
 
 ## raw source
 
-**凭据不能到达客户端，所以有 Gateway**。密钥留在服务端，客户端只持有一个可吊销的注册码。
-把密钥下发到客户端换取的任何便利，都要用"一次泄露即全量泄露"来计价。
+公司 App/H5 的凭据经 Gateway 解析，设备注册与旧诊断接口已退役。
+旧执行器与 CLI 不再是可选回退；Dify 试用要求已登记 app_id。
 
 ## 不变量
 

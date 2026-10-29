@@ -38,46 +38,6 @@ def default_key_dir() -> Path:
     return config_root() / "keys"
 
 
-def default_codex_home() -> Path:
-    return data_root() / "codex-home"
-
-
-def default_run_root() -> Path:
-    if _path_env("AIOPS_DATA_HOME") or _path_env("AIOPS_HOME"):
-        return data_root() / "runs"
-    development_root = development_project_root()
-    if development_root is not None:
-        return development_root / ".aiops" / "runs"
-    return data_root() / "runs"
-
-
-def development_project_root() -> Path | None:
-    candidates = [Path.cwd().resolve(), *Path.cwd().resolve().parents]
-    source_root = Path(__file__).resolve().parents[2]
-    candidates.extend([source_root, *source_root.parents])
-    for candidate in dict.fromkeys(candidates):
-        if (candidate / "pyproject.toml").is_file() and (candidate / "src" / "aiops_diagnostics").is_dir():
-            return candidate
-    return None
-
-
-def reference_root() -> Path:
-    frozen_root = getattr(sys, "_MEIPASS", None)
-    if frozen_root:
-        candidate = Path(frozen_root) / "aiops_diagnostics" / "_bundle"
-        if candidate.is_dir():
-            return candidate
-
-    development_root = development_project_root()
-    if development_root is not None:
-        return development_root
-
-    candidate = Path(__file__).resolve().parent / "_bundle"
-    if candidate.is_dir():
-        return candidate
-    raise FileNotFoundError("AI-Ops 诊断参考资料未包含在当前安装包中")
-
-
 def _windows_local_app_data() -> Path:
     value = os.getenv("LOCALAPPDATA", "").strip()
     if value:

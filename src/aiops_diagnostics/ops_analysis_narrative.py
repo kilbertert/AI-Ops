@@ -1,31 +1,12 @@
-"""运维分析的模型轮：只写两段散文（#697，PRD #693 的 ③ 号路径）。
-
-这一轮的输入是**已经算好的数字**，输出只有 ``main_cause`` 与 ``recommendation``。
-把它单独成模块（而不是塞进 ``ops_analysis``）是为了让那一侧的依赖保持窄：
-``ops_analysis`` 只依赖语言守卫与 i18n，因此它的装配逻辑可以在没有模型、没有 provider、
-没有会话的测试里被完整驱动；这里才需要 Codex 会话。
-
-为什么用**零阶工作区**（``AgentWorkspace.create_qa``）：它的 AGENTS.md 已经写明
-「这里没有订单元数据、也没有任何订单数据可读」，正是一个只能解释数字、不能去查证据的
-回合所需要的护栏。为这一轮另写一份护栏文本会是第二份需要维护的契约。
-
-**但答案形状不同**（#700 在生产上逮到）：零阶那份护栏还写着「回答问题、末尾附提醒语、
-返回 ``text``」——这一轮照做了，于是回的是 ``{"text": …}``，而这里要的是
-``{"main_cause", "recommendation"}``。护栏与轮次自己的提示词各说各话，正是本模块
-第一段记录的同一个失败形态。``answer_contract`` 参数把形状差异交给调用方，护栏其余部分
-逐字共用。
-"""
+"""用一次无工具模型请求解释已算定的聚合；失败不伪装成完整分析。"""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.agent_workspace import NARRATIVE_ANSWER_CONTRACT, AgentWorkspace
-from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexSession, SDKCodexSession
 from aiops_diagnostics.config import AgentSettings, ProviderConfig
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
-from aiops_diagnostics.turn_recovery import parse_turn
+from aiops_diagnostics.model_request import resolve_provider_api_key, structured_request
 
 #: 结构化输出：**两个字符串，没有数字字段**。这是「模型写不出数字」的第一道墙——
 #: 不是提示词里的请求，而是它连一个能填数字的位置都没有。第二道墙在装配处
@@ -129,100 +110,19 @@ def run_narrative_turn(
     provider: ProviderConfig | None = None,
     key_slot: str | None = None,
     language: str = DEFAULT_LANGUAGE,
-    project_root: Path | None = None,
-    session: CodexSession | None = None,
 ) -> dict[str, Any]:
-    """跑一次解释轮，返回解析后的 ``{main_cause, recommendation}``。
-
-    ``session`` 供测试注入；生产路径按零阶工作区建一个真实会话。会话之外的失败
-    （provider 不可达、回包不是 JSON）抛 ``AgentRuntimeError``，由调用方把作业
-    判成失败——**不会**退化成「没有叙述但有数字」的静默成功，因为那种行的
-    ``main_cause`` 为空会让读的人以为聚合本身出了问题。
-    """
-    root = project_root or Path(__file__).resolve().parents[1]
-    selected_provider = agent_settings.select_provider(provider.name if provider else None)
-    workspace: AgentWorkspace | None = None
-    owned = session is None
-    if session is None:
-        workspace = AgentWorkspace.create_qa(
-            root,
-            Path(agent_settings.run_root).expanduser().resolve(),
-            provider_base_url=selected_provider.base_url,
-            provider=selected_provider.name,
-            key_slot=key_slot or selected_provider.resolved_key_slot(),
-            language=language,
-            # The workspace's default contract says "answer the charging question
-            # and end with the reminder line" — which this turn did, returning
-            # ``{"text": …}`` that the narrative parser then refused (#700).
-            answer_contract=NARRATIVE_ANSWER_CONTRACT,
-        )
-        session = SDKCodexSession(workspace, agent_settings, provider=selected_provider)
-    try:
-        # #700: the schema goes to the turn, like every other JSON turn in this
-        # runtime (``qa_rag``, the diagnosis coordinator). It was declared in this
-        # module and never passed, so the model was free to answer in prose —
-        # which is exactly what the first end-to-end run on 41 did, and the job
-        # then **hung on `running` forever**: the turn succeeded, the parse
-        # raised `AgentRuntimeError`, and the worker's `except (SourceError,
-        # ValueError)` did not catch it, so no terminal write ever happened.
-        output = session.run(
-            build_narrative_prompt(facts, language=language),
-            output_schema=ops_narrative_schema(),
-        )
-        payload = _parse_narrative(output.final_response)
-        if payload is None:
-            raise AgentRuntimeError("operations-analysis narrative returned invalid JSON")
-        return payload
-    finally:
-        if owned:
-            import contextlib
-
-            with contextlib.suppress(Exception):
-                session.close()
-
-
-def _parse_narrative(raw: str) -> dict[str, Any] | None:
-    """Take the turn's JSON body, tolerating the transport's known mangling.
-
-    The same ``parse_turn`` the QA and diagnosis lines use: providers wrap JSON
-    in fences and occasionally drop the opening characters (measured 5/6 on one
-    upstream). None of that tolerance decides what the narrative *says* — it
-    only decides whether the text is readable at all — so a shape that cannot be
-    recovered is a failure rather than a half-parsed answer.
-
-    **But "a dict" is not the contract.** #700 caught this on 41: ``parse_turn``
-    returned the first dict it could parse, so a ``{"kind": "tool_requests", …}``
-    turn — the diagnosis/QA turn protocol, which this workspace's prompt never
-    asks for — was accepted as a narrative, ``_narrative`` read its two keys and
-    found neither, and the job **completed with an empty explanation and no
-    reason code**. A card that says ``completed`` with no ``main_cause`` reads
-    as "the aggregate had nothing to say", which is a different and false claim;
-    the same reasoning ``_narrative_for`` already uses to fail rather than ship
-    numbers without prose.
-
-    ``_looks_like_narrative`` was written for this and was only reachable from
-    ``parse_turn``'s truncated-head repair path — a predicate that only guards
-    a fallback is not a contract. It is checked here, on the main path, so a
-    turn without the fields the assembler reads is a failure.
-    """
-    parsed = parse_turn(raw, openings=_NARRATIVE_OPENINGS, is_valid=_looks_like_narrative)
-    if not isinstance(parsed, dict) or not _looks_like_narrative(parsed):
-        return None
-    return parsed
-
-
-def _looks_like_narrative(payload: Any) -> bool:
-    """**两个**散文字段都在、都是非空字符串 —— 就是 schema 声明的那两个。
-
-    ``any(...)`` 是不够的（评审在 #718 上逮到）：只带回 ``recommendation`` 的回包
-    同样能过，装配器把 ``main_cause`` 留成 ``None``，作业仍然 ``completed`` ——
-    与「一份工具请求被当成叙述」是**同一类假陈述**，只是少一个键而不是少两个。
-
-    ``OPS_NARRATIVE_SCHEMA`` 这个结构里两个字段都是 ``required``，所以这里要求的
-    正是声明过的东西，不是新加的门槛。
-    """
-    if not isinstance(payload, dict):
-        return False
-    return all(
-        isinstance(payload.get(key), str) and payload[key].strip() for key in ("main_cause", "recommendation")
+    selected = provider or agent_settings.select_provider(None)
+    payload = structured_request(
+        provider=selected,
+        api_key=resolve_provider_api_key(agent_settings, provider=selected, key_slot=key_slot),
+        messages=[{"role": "user", "content": build_narrative_prompt(facts, language=language)}],
+        name="operations_narrative",
+        schema=OPS_NARRATIVE_SCHEMA,
     )
+    if not isinstance(payload, dict) or set(payload) != {"main_cause", "recommendation"}:
+        raise RuntimeError("invalid operations narrative")
+    if any(
+        not isinstance(value, str) or not value.strip() or len(value) > 4000 for value in payload.values()
+    ):
+        raise RuntimeError("invalid operations narrative")
+    return payload

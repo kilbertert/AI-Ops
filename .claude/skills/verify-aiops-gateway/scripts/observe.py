@@ -8,10 +8,8 @@ is removed on the way out.
 
     uv run python .claude/skills/verify-aiops-gateway/scripts/observe.py
 
-Proves, locally: boot, /health contract, unauthenticated 401, enrollment
-(code -> device token), and which authenticated routes that token unlocks.
-Does NOT prove: /diag/*, model-backed runs, KB liveness — those need remote
-services. See the skill's "Known limits".
+Proves locally: boot, health, current authentication, public schema and retired routes.
+Does not prove remote Dify/Java execution, model quality or knowledge availability.
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -29,7 +28,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_PORT = 8787
+DEFAULT_PORT = 0
 
 
 def repo_root() -> Path:
@@ -44,7 +43,7 @@ def http(
 ) -> tuple[int, str]:
     """Return (status, body). Status 0 means the request never completed."""
     data = json.dumps(payload).encode() if payload is not None else None
-    request = urllib.request.Request(url, data=data, method="POST" if data else "GET")
+    request = urllib.request.Request(url, data=data, method="POST" if payload is not None else "GET")
     if data:
         request.add_header("Content-Type", "application/json")
     if token:
@@ -76,7 +75,7 @@ def main() -> int:
     repo = repo_root()
     root = Path(tempfile.mkdtemp(prefix="aiops-verify-"))
     env = {
-        **os.environ,
+        **{key: value for key, value in os.environ.items() if not key.startswith("AIOPS_")},
         "AIOPS_HOME": str(root),
         "AIOPS_CONFIG_HOME": str(root / "config"),
         "AIOPS_DATA_HOME": str(root / "data"),
@@ -87,6 +86,15 @@ def main() -> int:
         "AIOPS_GATEWAY_ENVIRONMENT": "verify",
         "PYTHONPATH": f"{repo / 'src'}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(os.pathsep),
     }
+    if args.port == 0:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            args.port = probe.getsockname()[1]
+    env["AIOPS_GATEWAY_PORT"] = str(args.port)
+    config = root / "config" / "production.env"
+    config.parent.mkdir(mode=0o700)
+    config.write_text("# isolated gateway verification\n")
+    config.chmod(0o600)
     base = f"http://127.0.0.1:{args.port}"
     out_dir = (repo / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -95,11 +103,6 @@ def main() -> int:
 
     print(f"temp root: {root}")
     print(f"gateway  : {base}")
-
-    # `aiops init` is REQUIRED first: without it `serve` dies with
-    # "gateway server production.env does not exist", which reads like a broken
-    # checkout rather than a missing setup step.
-    run_uv(["aiops", "init"], env, repo)
 
     process = subprocess.Popen(
         ["uv", "run", "aiops-gateway", "serve"],
@@ -136,50 +139,21 @@ def main() -> int:
         if health.get("ok") is not True:
             failures.append("/health did not report ok=true")
 
-        # An unauthenticated 401 is the CORRECT answer; a 200 would mean the auth
-        # gate is not wired.
-        status, _ = http(f"{base}/v1/runs")
-        print(f"  unauthenticated /v1/runs -> {status} (401 expected)")
-        evidence["unauthenticated_runs_status"] = status
-        if status != 401:
-            failures.append(f"unauthenticated /v1/runs returned {status}, expected 401")
-
-        # A code is SINGLE-USE, so mint one per enrollment.
-        minted = run_uv(["aiops-gateway", "issue-enrollment", "--workspace", "ops"], env, repo)
-        code = ""
-        for line in minted.splitlines():
-            if "enr_" in line:
-                code = "enr_" + line.split("enr_", 1)[1].split('"', 1)[0]
-                break
-        print(f"  issued enrollment code: {'yes' if code else 'NO'}")
-
-        if code:
-            # All three fields are required and the model forbids extras.
-            status, body = http(
-                f"{base}/v1/enroll",
-                payload={"code": code, "device_name": "verify-probe", "platform": "linux"},
-            )
-            print(f"  POST /v1/enroll -> {status}")
-            try:
-                enrolled = json.loads(body)
-            except ValueError:
-                enrolled = {}
-            token = enrolled.get("token", "")
-            evidence["enroll_status"] = status
-            # Never persist the token itself.
-            evidence["enroll_device_id"] = enrolled.get("device_id", "")
-            if status != 201 or not token:
-                failures.append(f"enrollment failed: {status} {body[:160]}")
-
-            if token:
-                for path in ("/v1/runs", "/v1/agents"):
-                    status, body = http(f"{base}{path}", token=token)
-                    evidence[f"authenticated{path}"] = status
-                    print(f"  authenticated {path} -> {status}")
-                # /v1/agents legitimately 401s for a device token: agent routes
-                # need a UPMS role. Recorded, not treated as a failure.
-        else:
-            failures.append("could not parse an enrollment code from issue-enrollment output")
+        checks = (
+            ("/v1/assistant/questions", None, 401),
+            ("/v1/agents", None, 401),
+            ("/v1/openapi.json", None, 200),
+            ("/v1/runs", None, 404),
+            ("/v1/enroll", {"code": "retired"}, 404),
+            ("/v1/standard/diagnoses", {"order_no": "retired", "question": "test"}, 404),
+            ("/v1/dify/tools/order_snapshot", {}, 404),
+        )
+        for path, payload, expected in checks:
+            status, body = http(f"{base}{path}", payload=payload)
+            evidence[path] = {"status": status, "body": body if len(body) < 1000 else "omitted"}
+            print(f"  {path} -> {status} (expected {expected})")
+            if status != expected:
+                failures.append(f"{path}: expected {expected}, got {status}")
 
         (out_dir / "aiops-gateway.json").write_text(
             json.dumps(evidence, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"

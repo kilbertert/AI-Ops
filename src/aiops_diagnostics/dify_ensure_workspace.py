@@ -1,4 +1,4 @@
-"""``aiops admin ensure-workspace``：把一个租户的 Dify workspace **真的建出来**（#880）。
+"""``aiops-admin ensure-workspace``：把一个租户的 Dify workspace **真的建出来**（#880）。
 
 ## 顺序是设计的核心，不能调换
 

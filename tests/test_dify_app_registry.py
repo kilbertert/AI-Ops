@@ -18,14 +18,10 @@ another agent's library or from the zero-order path.
 
 from __future__ import annotations
 
-import os
 import textwrap
-import threading
-import time
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from aiops_diagnostics.agent_manifest import (
@@ -40,10 +36,7 @@ from aiops_diagnostics.dify_app_registry import (
     DifyAppRegistry,
     DifyAppRegistryError,
 )
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.faq import PlatformRoleRecord
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 TENANT = "T-1"
@@ -157,173 +150,7 @@ def _publish(store: AgentStore, names: tuple[str, ...]) -> None:
         )
         manager.publish(admin, created.agent_id, expected_revision=created.revision)
 
-
-def _http_client(tmp_path: Path, monkeypatch, *, published: tuple[str, ...]):
-    """A TestClient over a REAL runtime, plus the list of prompts the model saw.
-
-    ``classify_lightweight`` is silenced (routing is not what these tests are
-    about, and it would otherwise be a live model call), and the model turn is
-    stubbed at the seam the customer path actually calls. Everything upstream of
-    that — the platform decision, the entry, the registry lookup, the agent
-    selection — runs for real.
-    """
-    from aiops_diagnostics import gateway_runtime
-    from aiops_diagnostics.config import Settings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-
-    settings = GatewayServerSettings(
-        data_home=tmp_path,
-        database_file=tmp_path / "gateway.db",
-        server_config_file=tmp_path / "production.env",
-    )
-    settings.server_config_file.write_text("# test\n", encoding="utf-8")
-    os.chmod(settings.server_config_file, 0o600)
-
-    store = AgentStore(settings.database_file)
-    _publish(store, published)
-
-    prompts: list[str] = []
-
-    def _model(_question, selection, _agent_settings, **_kwargs):
-        prompts.append(selection.prompt)
-        return {"blocks": [{"kind": "text", "text": "答案"}], "retrieval_status": "found"}
-
-    monkeypatch.setattr("aiops_diagnostics.qa_rag.run_customer_qa_answer", _model)
-    monkeypatch.setattr(GatewayRuntime, "classify_lightweight", lambda *a, **k: None)
-
-    def _no_zero_order(*_args, **_kwargs):
-        raise AssertionError("the zero-order path was reached: the registry decision was bypassed")
-
-    monkeypatch.setattr(gateway_runtime, "run_zero_order_answer", _no_zero_order)
-
-    runtime = GatewayRuntime(
-        GatewayStore(settings.database_file),
-        settings,
-        Settings(),
-        kb_search_client=_searching_client(),
-        media_signer=object(),
-        agent_store=store,
-    )
-    app = create_gateway_app(
-        settings=settings,
-        store=GatewayStore(settings.database_file),
-        runtime=runtime,
-        caller_resolver=_Caller(),
-        order_authorizer=_NeverAuthorizer(),
-        platform_resolver=PlatformIdentityResolver(_Directory()),
-        faq_catalog=FAQCatalog.bundled(),
-    )
-    return TestClient(app), settings, runtime, prompts
-
-
-def _headers() -> dict[str, str]:
     return {"Authorization": "Bearer service", "X-Business-Entry": "consumer"}
-
-
-def _ask(client: TestClient) -> dict:
-    resp = client.post("/v1/assistant/questions", json={"question": GENERIC_QUESTION}, headers=_headers())
-    assert resp.status_code == 202, resp.text
-    return resp.json()
-
-
-def _wait_result(client: TestClient, qa_id: str) -> dict:
-    deadline = time.time() + 20
-    while time.time() < deadline:
-        body = client.get(f"/v1/assistant/questions/{qa_id}", headers=_headers()).json()
-        if body["status"] in {"completed", "failed"}:
-            return body
-        threading.Event().wait(0.05)
-    raise AssertionError("the QA job never reached a terminal state")
-
-
-def test_unconfigured_registry_keeps_the_pre_registry_rule(tmp_path: Path, monkeypatch) -> None:
-    """The gate ships inert: with no binding declared, the newest published
-    agent serves, exactly as before this registry existed."""
-    client, settings, runtime, prompts = _http_client(
-        tmp_path,
-        monkeypatch,
-        published=("客服甲", "客服乙"),  # 客服乙 is newest
-    )
-    try:
-        body = _wait_result(client, _ask(client)["qa_id"])
-        assert body["status"] == "completed", body
-        assert prompts == ["提示词:客服乙"], "未登记时仍是旧规则（最新已发布）"
-    finally:
-        runtime.shutdown()
-        client.close()
-
-
-def test_registered_pair_is_served_by_the_named_agent(tmp_path: Path, monkeypatch) -> None:
-    """With a binding registered, the agent it names serves — not the newest."""
-    client, settings, runtime, prompts = _http_client(tmp_path, monkeypatch, published=("客服甲", "客服乙"))
-    try:
-        DifyAppRegistry(settings.database_file).put(
-            DifyAppBinding(TENANT, "consumer", "dify-app-1", "客服甲")
-        )
-        body = _wait_result(client, _ask(client)["qa_id"])
-        assert body["status"] == "completed", body
-        assert prompts == ["提示词:客服甲"], "登记后由登记表指定的 agent 服务"
-    finally:
-        runtime.shutdown()
-        client.close()
-
-
-def test_unregistered_pair_is_not_default_mapped(tmp_path: Path, monkeypatch) -> None:
-    """The fail-closed core: with the registry configured, an unregistered pair
-    selects nothing — no fallback to another agent, no zero-order answer."""
-    client, settings, runtime, prompts = _http_client(tmp_path, monkeypatch, published=("客服甲",))
-    try:
-        # Configured for a DIFFERENT tenant: this environment has adopted the
-        # registry while TENANT itself is unmapped.
-        DifyAppRegistry(settings.database_file).put(
-            DifyAppBinding("T-OTHER", "consumer", "dify-app-x", "客服甲")
-        )
-        body = _wait_result(client, _ask(client)["qa_id"])
-        assert body["status"] == "completed", body
-        result = body["result"]
-        assert result["retrieval_status"] == "unavailable", (
-            "未登记不是「库里没有」——什么都没检索，不能报 not_found"
-        )
-        assert result["blocks"], "必须是可见的终态文案，不是空结果"
-        assert prompts == [], "未登记的租户不得被默认映射到任何 app"
-    finally:
-        runtime.shutdown()
-        client.close()
-
-
-def test_entry_is_part_of_the_key(tmp_path: Path, monkeypatch) -> None:
-    """A binding for one entry does not serve the other entry."""
-    client, settings, runtime, prompts = _http_client(tmp_path, monkeypatch, published=("客服甲",))
-    try:
-        DifyAppRegistry(settings.database_file).put(
-            DifyAppBinding(TENANT, "operator", "dify-app-op", "客服甲")
-        )
-        # The caller resolves to `consumer` (it holds only a c_user identity),
-        # so this pair is unmapped even though the tenant has a binding.
-        body = _wait_result(client, _ask(client)["qa_id"])
-        assert body["result"]["retrieval_status"] == "unavailable", (
-            "入口是键的一半：operator 的登记不得服务 consumer 的请求"
-        )
-        assert prompts == []
-    finally:
-        runtime.shutdown()
-        client.close()
-
-
-def test_binding_naming_an_absent_agent_selects_nothing(tmp_path: Path, monkeypatch) -> None:
-    """A binding that names an agent the store does not publish stays
-    fail-closed at the seam — it must not degrade into "any published agent"."""
-    client, settings, runtime, prompts = _http_client(tmp_path, monkeypatch, published=("客服甲",))
-    try:
-        DifyAppRegistry(settings.database_file).put(
-            DifyAppBinding(TENANT, "consumer", "dify-app-1", "不存在的客服")
-        )
-        body = _wait_result(client, _ask(client)["qa_id"])
-        assert body["result"]["retrieval_status"] == "unavailable"
-        assert prompts == []
-    finally:
-        runtime.shutdown()
-        client.close()
 
 
 # ── convergence seam ─────────────────────────────────────────────────────

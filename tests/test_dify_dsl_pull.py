@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -532,10 +531,9 @@ def test_a_declared_dataset_with_no_resolver_still_refuses() -> None:
 
 def test_an_app_that_declares_no_tools_leaves_the_default_in_place() -> None:
     """没声明工具 ⇒ 不加约束（dataclass 默认 = 全部）。存量 app 全是这一支。"""
-    from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 
     config = map_dsl_to_config(REAL_DSL, agent_type="customer")
-    assert config.allowed_tools == ALL_TOOL_NAMES
+    assert config.allowed_tools == ()
 
 
 def test_a_declared_tool_is_refused_rather_than_silently_ignored() -> None:
@@ -557,33 +555,6 @@ def test_a_declared_tool_is_refused_rather_than_silently_ignored() -> None:
     }
     with pytest.raises(DifyDslMalformed, match="工具"):
         map_dsl_to_config(yaml.safe_dump(doc, allow_unicode=True), agent_type="customer")
-
-
-def test_a_declared_tool_goes_through_the_resolver_when_one_is_given() -> None:
-    """给了翻译器就用它 —— 与知识库那条桥同形（翻译，不复制）。"""
-    import yaml
-
-    doc = yaml.safe_load(REAL_DSL)
-    doc["model_config"]["agent_mode"] = {
-        "enabled": True,
-        "strategy": "router",
-        "tools": [{"provider_type": "builtin", "provider_id": "p1", "tool_name": "mine"}],
-    }
-    seen: list[tuple[str, ...]] = []
-
-    def resolver(names):
-        seen.append(names)
-        return ("order_snapshot",)
-
-    config = map_dsl_to_config(
-        yaml.safe_dump(doc, allow_unicode=True), agent_type="customer", tool_resolver=resolver
-    )
-    assert config.allowed_tools == ("order_snapshot",)
-    # #774：翻译器收到的是**条目本身**（带 enabled 与 provider_type），不再是拼好的
-    # `provider_id/tool_name` —— 3A 的规则要按 provider 的 UUID 匹配，而拼成一个字符串
-    # 之后再拆是不可靠的（UUID 里没有 `/`，但那是巧合，不是契约）。
-    (entry,) = seen[0]
-    assert (entry.provider_id, entry.tool_name, entry.enabled) == ("p1", "mine", True)
 
 
 def test_a_pull_never_changes_the_live_model(monkeypatch, tmp_path: Path) -> None:
@@ -711,58 +682,8 @@ def test_the_production_tool_shape_is_read_as_dify_identities() -> None:
 
 def test_a_production_tool_declaration_is_refused_without_a_registry() -> None:
     """声明了工具而没人能翻译 ⇒ **拒**，点明那个 Dify 身份（不按字面搬运）。"""
-    with pytest.raises(DifyDslMalformed, match="time/timezone_conversion"):
+    with pytest.raises(DifyDslMalformed, match="已退役"):
         map_dsl_to_config(_with_tools(_PRODUCTION_TOOLS_DECLARATION), agent_type="customer")
-
-
-def test_a_registered_tool_identity_is_translated() -> None:
-    """登记了就能翻译 —— 与知识库那条桥同形。"""
-    seen: list[Any] = []
-
-    def resolver(names: tuple[Any, ...]) -> tuple[str, ...]:
-        seen.append(names)
-        return ("known_runbook",)
-
-    config = map_dsl_to_config(
-        _with_tools(_PRODUCTION_TOOLS_DECLARATION), agent_type="customer", tool_resolver=resolver
-    )
-    assert config.allowed_tools == ("known_runbook",)
-    (entry,) = seen[0]
-    assert entry.identity == "time/timezone_conversion"
-
-
-def test_the_tool_bindings_table_translates_and_refuses() -> None:
-    """登记表本身：合法行翻译，未知名与重复键都**抛错**（不静默跳过）。"""
-    from aiops_diagnostics.gateway_config import parse_dify_tool_bindings
-
-    assert parse_dify_tool_bindings("time/timezone_conversion:known_runbook") == {
-        "time/timezone_conversion": "known_runbook"
-    }
-    assert parse_dify_tool_bindings("") == {}
-    with pytest.raises(ValueError, match="unknown tool"):
-        parse_dify_tool_bindings("time/timezone_conversion:not_a_tool")
-    with pytest.raises(ValueError, match="duplicated"):
-        parse_dify_tool_bindings("a/b:known_runbook;a/b:known_runbook")
-    with pytest.raises(ValueError, match="malformed"):
-        parse_dify_tool_bindings("no-colon-here")
-
-
-def test_the_bridge_refuses_a_tool_whose_identity_is_not_registered() -> None:
-    """走**真桥**（`_resolve_tools`）：登记表里没有那个身份 ⇒ 拒。
-
-    与上一条的区别很重要：`map_dsl_to_config` 在**没有** resolver 时自己就拒了，
-    所以只测它会漏掉桥本身。这里直接打桥，确保它在被真的调用时也拒。
-    """
-    from aiops_diagnostics.dify_dsl_pull import _declared_tools, _resolve_tools
-
-    entry = _declared_tools(yaml.safe_load(_PRODUCTION_TOOLS_DECLARATION))
-    with pytest.raises(DifyDslMalformed, match="time/timezone_conversion"):
-        _resolve_tools(entry, aiops_provider_id="", registry={"x/y": "known_runbook"})
-    assert _resolve_tools(
-        entry,
-        aiops_provider_id="",
-        registry={"time/timezone_conversion": "known_runbook"},
-    ) == ("known_runbook",)
 
 
 def test_every_tool_disabled_is_the_same_as_declaring_none() -> None:
@@ -781,42 +702,9 @@ def test_every_tool_disabled_is_the_same_as_declaring_none() -> None:
       tool_name: timezone_conversion
       enabled: false
 """
-    from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 
-    config = map_dsl_to_config(
-        _with_tools(declaration), agent_type="customer", tool_resolver=lambda names: ()
-    )
-    assert config.allowed_tools == ALL_TOOL_NAMES
-
-
-def test_a_disabled_entry_does_not_have_to_be_translatable() -> None:
-    """关掉的条目连"翻不出来"都不算 —— 运营已经表达了不要它。
-
-    否则运营把某个工具切到关闭，拉取反而会因为"这个身份没登记"失败，而他要做的
-    恰恰是不理会它。注意用**真桥**（``_resolve_tools``）驱动，不是只测 mapper：
-    mapper 在没有 resolver 时自己就拒了，测它会漏掉桥本身的这条行为。
-    """
-    from aiops_diagnostics.dify_dsl_pull import _declared_tools, _resolve_tools
-
-    declaration = """  agent_mode:
-    enabled: true
-    strategy: router
-    tools:
-    - provider_id: time
-      provider_type: builtin
-      tool_name: timezone_conversion
-      enabled: false
-    - provider_id: 3f1b0c8e-6a1d-4f0e-9c2b-7d5a1e6f8b03
-      provider_type: api
-      tool_name: order_snapshot
-      enabled: true
-"""
-    entries = _declared_tools(yaml.safe_load(declaration))
-    assert _resolve_tools(
-        entries,
-        aiops_provider_id="3f1b0c8e-6a1d-4f0e-9c2b-7d5a1e6f8b03",
-        registry={},
-    ) == ("order_snapshot",)
+    config = map_dsl_to_config(_with_tools(declaration), agent_type="customer")
+    assert config.allowed_tools == ()
 
 
 # --- 跨 workspace 的旧 UUID（#887）-------------------------------------------

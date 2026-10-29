@@ -27,6 +27,7 @@ the final state here is `only_me` and the check fails.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -41,8 +42,6 @@ from typing import Any
 TENANT = "T-SYNC"
 WORKSPACE = "ws-0000-0000-0000-000000000001"
 API_ID = "api-0000-0000-0000-000000000001"
-CONSOLE_PORT = 8793
-KB_PORT = 8794
 
 #: What RAGFlow says this tenant owns. One name is deliberately fine, one is 60 bytes
 #: so the "too long for the update route" leg has something to refuse.
@@ -194,19 +193,24 @@ def seed(root: Path) -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--out", default="dist/verification/knowledge-sync")
+    args = parser.parse_args()
+    console = ThreadingHTTPServer(("127.0.0.1", 0), _ConsoleStub)
+    kb = ThreadingHTTPServer(("127.0.0.1", 0), _KbStub)
     repo = repo_root()
     root = Path(tempfile.mkdtemp(prefix="aiops-verify-1001-"))
     env = {
-        **os.environ,
+        **{key: value for key, value in os.environ.items() if not key.startswith("AIOPS_")},
         "AIOPS_HOME": str(root),
         "AIOPS_CONFIG_HOME": str(root / "config"),
         "AIOPS_DATA_HOME": str(root / "data"),
         "AIOPS_GATEWAY_DATA_HOME": str(root / "data"),
         "AIOPS_GATEWAY_ENVIRONMENT": "verify",
         "AIOPS_GATEWAY_DATABASE_FILE": str(root / "data" / "gateway.db"),
-        "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL": f"http://127.0.0.1:{CONSOLE_PORT}",
+        "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL": f"http://127.0.0.1:{console.server_port}",
         "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY": "verify-console-key",
-        "AIOPS_GATEWAY_KB_SERVICE_BASE_URL": f"http://127.0.0.1:{KB_PORT}",
+        "AIOPS_GATEWAY_KB_SERVICE_BASE_URL": f"http://127.0.0.1:{kb.server_port}",
         "PYTHONPATH": f"{repo / 'src'}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(os.pathsep),
     }
     evidence: dict[str, Any] = {"temp_root": str(root), "checks": []}
@@ -218,14 +222,12 @@ def main() -> int:
         if not ok:
             failures.append(name)
 
-    console = ThreadingHTTPServer(("127.0.0.1", CONSOLE_PORT), _ConsoleStub)
-    kb = ThreadingHTTPServer(("127.0.0.1", KB_PORT), _KbStub)
     for server in (console, kb):
         threading.Thread(target=server.serve_forever, daemon=True).start()
 
     def cli(*args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            ["uv", "run", "aiops", "admin", "sync-knowledge-datasets", *args],
+            ["uv", "run", "aiops-admin", "sync-knowledge-datasets", *args],
             cwd=repo,
             env=env,
             capture_output=True,
@@ -245,12 +247,10 @@ def main() -> int:
     )
 
     try:
-        init = subprocess.run(
-            ["uv", "run", "aiops", "init"], cwd=repo, env=env, capture_output=True, text=True
-        )
-        if init.returncode != 0:
-            print("aiops init failed:\n" + (init.stdout + init.stderr)[-1500:])
-            return 2
+        config = root / "config" / "production.env"
+        config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        config.write_text("# isolated verification\n", encoding="utf-8")
+        config.chmod(0o600)
         seed(root)
 
         # ── 1. dry-run ────────────────────────────────────────────────
@@ -370,7 +370,8 @@ def main() -> int:
     finally:
         for server in (console, kb):
             server.shutdown()
-        out_dir = (repo / "var/verify-evidence").resolve()
+            server.server_close()
+        out_dir = (repo / args.out).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
         evidence["failures"] = failures
         evidence["final_state"] = STATE.datasets

@@ -115,5 +115,4 @@ def test_standard_contract_uses_same_error_shape_and_independent_resources(tmp_p
     assert invalid.json()["error"]["code"] == "INVALID_REQUEST"
     assert health.status_code == 202
     assert set(health.json()) >= {"job_id", "status", "retry_after_ms", "error"}
-    assert diagnosis.status_code == 202
-    assert set(diagnosis.json()) >= {"diagnosis_id", "status", "retry_after_ms", "error"}
+    assert diagnosis.status_code == 404

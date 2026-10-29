@@ -44,7 +44,8 @@ URL、凭据引用与能力分支是发布契约，删除必需节点或改错�
 HTTP节点凭data_grant回调精确的`/v1/internal/consumer-data/{knowledge,status,billing}`；
 旧回调`/v1/internal/consumer-knowledge`继续兼容。模型不持公司凭据，也不选择回调地址/租户。
 回调读前读后、worker写前及历史回读核对授权、绑定、取消和TTL。失败不换引擎或直读。
-C端“订单检测”快捷按钮仍走旧诊断，不能把它误当WF01状态分支。
+本退役分支将 C端“订单检测”快捷按钮接入 WF01 本人状态分支，不再启动 Python 根因诊断；
+生产启用以本分支部署证据为准。
 
 ## 语言与会话
 

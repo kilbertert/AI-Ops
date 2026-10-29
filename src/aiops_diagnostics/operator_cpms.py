@@ -729,6 +729,18 @@ def project_evidence(body, order, tool):
     }
 
 
+EXECUTED_MUTATION = re.compile(
+    r"(?:"
+    r"(?:已|已经|成功|自动|完成|执行了?|进行了?)\s*"
+    r"(?:订单)?(?:重算|退款|补发|重放|重试下发|重启|修改|更新|删除|写入)"
+    r"|(?:重算|退款|补发|重放|重试下发|重启|修改订单|更新订单|删除订单|写入数据库)"
+    r"\s*(?:已完成|成功|完成|完毕)"
+    r"|\b(?:refunded|recalculated|replayed|resent|restarted|modified|updated|deleted)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def validate_answer(answer, evidence):
     if not isinstance(answer, dict) or set(answer) != {
         "summary",
@@ -754,8 +766,6 @@ def validate_answer(answer, evidence):
         or not set(answer["evidence_tools"]).issubset(evidence)
     ):
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
-    from aiops_diagnostics.agent_validator import EXECUTED_MUTATION
-
     text = json.dumps(answer, ensure_ascii=False)
     if EXECUTED_MUTATION.search(text):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")

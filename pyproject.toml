@@ -4,18 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aiops-diagnostics"
-version = "0.2.0"
+version = "1.0.0"
 description = "Read-only charging order diagnostic runtime"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "openai-codex>=0.144.4,<0.145",
   "cryptography>=46,<47",
   "fastapi>=0.115,<1",
-  "keyring>=25,<26",
   "python-dotenv>=1.0,<2",
   "pymysql[rsa]>=1.1.1,<2",
-  "pywin32>=308; sys_platform == 'win32'",
   "redis>=5.2,<7",
   "rich>=13.9,<15",
   "typer>=0.15,<1",
@@ -25,14 +22,12 @@ dependencies = [
 ]
 
 [project.scripts]
-aiops = "aiops_diagnostics.cli:app"
+aiops-admin = "aiops_diagnostics.admin_cli:admin_app"
 aiops-tdengine-proxy = "aiops_diagnostics.tdengine_proxy:main"
 aiops-gateway = "aiops_diagnostics.gateway_server:main"
-aiops-responses-adapter = "aiops_diagnostics.responses_adapter:main"
 
 [project.optional-dependencies]
 dev = [
-  "pyinstaller>=6.15,<7",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
   "ruff>=0.12,<1",
@@ -41,7 +36,6 @@ dev = [
 
 [dependency-groups]
 dev = [
-  "pyinstaller>=6.15,<7",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
   # The parallel scheduler. Declared HERE rather than installed ad hoc, because
@@ -59,14 +53,6 @@ dev = [
 packages = ["src/aiops_diagnostics"]
 
 [tool.hatch.build.targets.wheel.force-include]
-".env.example" = "aiops_diagnostics/_bundle/.env.example"
-"SOP.md" = "aiops_diagnostics/_bundle/SOP.md"
-"充电桩问题排查SOP.md" = "aiops_diagnostics/_bundle/充电桩问题排查SOP.md"
-"docs/architecture.md" = "aiops_diagnostics/_bundle/docs/architecture.md"
-"docs/gateway.md" = "aiops_diagnostics/_bundle/docs/gateway.md"
-"src/aiops_diagnostics/engine.py" = "aiops_diagnostics/_bundle/src/aiops_diagnostics/engine.py"
-"src/aiops_diagnostics/rules.py" = "aiops_diagnostics/_bundle/src/aiops_diagnostics/rules.py"
-"examples/fixtures" = "aiops_diagnostics/_bundle/examples/fixtures"
 "src/aiops_diagnostics/consumer_language.json" = "aiops_diagnostics/consumer_language.json"
 "src/aiops_diagnostics/faq_catalog.json" = "aiops_diagnostics/faq_catalog.json"
 "src/aiops_diagnostics/faq_recommendations.json" = "aiops_diagnostics/faq_recommendations.json"

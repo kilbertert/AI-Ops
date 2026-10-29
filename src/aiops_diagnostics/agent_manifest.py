@@ -1,7 +1,7 @@
 """Declarative environment manifest + gateway agent reconciliation.
 
 `ops/environments/<env>.toml` expresses the desired published agents for one
-environment. ``aiops admin reconcile`` converges the gateway store toward the
+environment. ``aiops-admin reconcile`` converges the gateway store toward the
 manifest **through :class:`AgentManager`** — the same role-checked, validated,
 KB-liveness-checked code path the HTTP API uses — with a synthetic admin
 scope context. This replaces on-box sqlite surgery for environments whose
@@ -31,7 +31,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 from aiops_diagnostics.agent_lifecycle import (
     AgentConfig,
     AgentManager,
@@ -228,7 +227,7 @@ def _require_bound_agents_declared(
     # 那个不可能匹配任何 ``ToolName`` 的字符串进发布门，被当成"未知工具名"拒掉 ——
     # 一个只是没写这个字段的合法清单会因此装载失败。
     return tuple(
-        replace(agent, config=replace(agent.config, allowed_tools=ALL_TOOL_NAMES))
+        replace(agent, config=replace(agent.config, allowed_tools=()))
         if tools_from_dify(agent) and (agent.tenant_id, agent.name) not in bound
         else agent
         for agent in agents

@@ -18,7 +18,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES, REGISTERED_TOOL_NAMES
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
 
 AGENT_MANAGE_SCOPE = "aiops:agents:manage"
@@ -90,13 +89,8 @@ class AgentConfig:
     #: Dify 的 ``suggested_questions``（中文母版），与 ``opening_statement`` 同一纪律：
     #: 只覆盖 zh，其余语言用手写制品。空元组 = 不覆盖。
     suggested_questions: tuple[str, ...] = ()
-    #: Which diagnostic tools this agent may run. ``ALL_TOOL_NAMES`` (the
-    #: default) means "no narrowing" and keeps every pre-existing config
-    #: byte-identical, so adding the field republishes nothing. A narrower
-    #: tuple is enforced by the **executor**, never by the prompt alone
-    #: (ADR-0015 §五): advertising fewer tools only tells the model what it
-    #: may ask for, it does not stop it asking for the rest.
-    allowed_tools: tuple[str, ...] = ALL_TOOL_NAMES
+    #: 现役工具授权来自执行清单；旧 Python 内置工具不再接受发布。
+    allowed_tools: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -143,7 +137,7 @@ def config_from_snapshot(snapshot: dict[str, Any]) -> AgentConfig:
         quick_commands=tuple(snapshot.get("quick_commands", ())),
         opening_statement=str(snapshot.get("opening_statement", "")),
         suggested_questions=tuple(str(item) for item in snapshot.get("suggested_questions", ())),
-        allowed_tools=tuple(snapshot.get("allowed_tools", ALL_TOOL_NAMES)),
+        allowed_tools=tuple(snapshot.get("allowed_tools", ())),
     )
 
 
@@ -431,7 +425,7 @@ class AgentStore:
 
 def allowed_models_from_settings(settings: Any) -> tuple[str, ...]:
     """Derive the AgentManager model whitelist from Settings — the single
-    derivation shared by the gateway HTTP app and ``aiops admin reconcile``
+    derivation shared by the gateway HTTP app and ``aiops-admin reconcile``
     (providers' models, else the agent default, else ``aiops-api``)."""
     agent_settings = getattr(settings, "agent", None)
     configured = tuple(
@@ -573,7 +567,7 @@ class AgentManager:
                 not isinstance(item, str) or not item.strip() or len(item) > 500 for item in collection
             ):
                 raise AgentValidationError(f"{label} is invalid")
-        unknown_tools = sorted(set(config.allowed_tools) - set(REGISTERED_TOOL_NAMES))
+        unknown_tools = sorted(set(config.allowed_tools))
         if unknown_tools:
             raise AgentValidationError(f"allowed_tools contains unknown tool(s): {', '.join(unknown_tools)}")
 
@@ -597,7 +591,7 @@ def _agent_from_row(row: sqlite3.Row) -> Agent:
             quick_commands=tuple(config.get("quick_commands", ())),
             opening_statement=str(config.get("opening_statement", "")),
             suggested_questions=tuple(str(item) for item in config.get("suggested_questions", ())),
-            allowed_tools=tuple(config.get("allowed_tools", ALL_TOOL_NAMES)),
+            allowed_tools=tuple(config.get("allowed_tools", ())),
         ),
         published_version=int(row["published_version"]) if row["published_version"] is not None else None,
         created_at=str(row["created_at"]),

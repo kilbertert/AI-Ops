@@ -342,11 +342,13 @@ def test_missing_order_without_latest_requests_clarification(provision):
         assert response.json()["type"] == "clarification" and provision.calls == []
 
 
-def test_disabled_path_preserves_existing_explicit_order_diagnosis(provision):
+def test_disabled_path_refuses_without_python_fallback(provision):
     p = provision
     p.settings.consumer_order_chat_enabled = False
-    with TestClient(p.app) as client, pytest.raises(AssertionError, match="must not diagnose"):
-        query(client, order_no=ORDER)
+    with TestClient(p.app) as client:
+        response = query(client, order_no=ORDER)
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "CHAT_ROUTE_UNAVAILABLE"
     assert not p.calls and not p.scopes
 
 

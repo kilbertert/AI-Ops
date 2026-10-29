@@ -17,11 +17,8 @@
 
 | 面 | 路径 | 方法 | 鉴权 | 为什么它在集合里 |
 |---|---|---|---|---|
-| 运维充电状态 | `/v1/dify/ops/{tenant_id}/charging_info` | POST | 独立租户服务 key，私有绑定摘要及当前发布权限 | #934：核对本环境租户订单范围后读取状态，返回前复核绑定/权限；不接受个人会话或任意业务地址 |
-| 运维订单列表 | `/v1/dify/ops/{tenant_id}/order_list` | POST | 独立租户服务 key，私有绑定摘要及当前发布权限 | #934：租户范围在 SQL 下推，有界分页及字段裁剪；默认未配置即拒绝，证据成功才返回正文 |
 | 知识检索适配 | `/v1/dify/retrieval` | POST | 共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY`） | Dify 的 External Knowledge API 目标。Dify 控制台里挂"外接知识库"时，运营填的 endpoint 加 `/retrieval` 就打到这里（#581）。租户与知识库集合由**我们的** `AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS` 决定，请求体里两者都没有 |
 | **知识源清单（只读）** | `/v1/dify/knowledge` | GET | 共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY`，与检索同一把） | 让 Dify 控制台的「连接外部知识库」对话框能把 `knowledge_id` 渲染成**下拉选择**而不是空白输入框（PRD「前端点击完成知识库配置」）。返回的正是**检索会接受的那组** `knowledge_id`：同一凭据、同一登记表，所以选项里出现的每一个都检索得到；不读取任何数据源、不执行检索、不写任何状态。调试身份只看到它自己的子集 —— 预览界面不得展示预览用不了的选项 |
-| **工具目录（仅说明）** | `/v1/dify/tools/{tool}` | POST | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_TOOLS_API_KEY`） | 让运营在 Dify 的工具列表里**选得到** AI-Ops 的七个真实诊断工具（#772 E / 3A）。它是 Dify 里 `aiops` 这个 API 工具提供方的目标端点，返回**一段固定说明文本**（「本工具只在 AI-Ops 运行时执行，请使用试运行」）——**不读取任何数据源、不创建运行**。这把钥匙是 Dify 侧**工作区共享**的（任何能编辑该提供方的管理员都看得见），所以它的设计前提就是"泄露了也拿不到东西"：端点除了说明文本什么都不返回。`{tool}` 不在七个之内 → 404 |
 | **试运行（提交）** | `/v1/dify/trial` | POST | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`） | 拿一份**草稿**（方法论提示词 + 工具白名单）在一张订单上跑一次真实 harness（#772 F / #781）。范围**不来自请求**：订单可见性由服务端配置的 `dify_trial_debug_tenant` 决定，与 `/v1/standard/diagnoses` 同一条判据。**不产生智能体版本、不写注册表、不改任何生产路由**；超出预算时结果标为未完成。它触发一次真实模型执行，所以钥匙必须与其余每一把都不同 |
 | **试运行（读结果）** | `/v1/dify/trial/{trial_id}` | GET | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`） | 读一次试运行的状态与结果：诊断报告、证据编号、被白名单挡掉的工具、数据源失败。只读；`trial_id` 不认识即 404 |
 | **管家试用（取消）** | `/v1/dify/trial/{trial_id}/cancel` | POST | 独立 trial 凭据 + 原公司登录会话 | 核对当前主体、范围、应用与 trial 标记后取消该任务；不可取消正式任务；不接受浏览器自报身份 |
@@ -45,7 +42,7 @@
 - **它改的不是生产业务数据，是我们自己的智能体配置。** 它不碰充电库、不碰任何订单/
   用户/TDengine 数据，也不执行任何公司侧写操作。它写的是 `gateway.db` 里一个 agent
   的**新版本行**（`agent_versions`）——与 `/v1/agents/{id}/publish`、`aiops admin
-  reconcile`、`aiops admin sync-from-dify` **同一条**生产发布路径、同一道发布门。
+  reconcile`、`aiops-admin sync-from-dify` **同一条**生产发布路径、同一道发布门。
 - **它的爆炸半径恰好等于已声明的绑定集合。** 请求体只有一个 `app_id`（模型是
   `extra="forbid"`，多一个字段就是 400）；租户、agent 名、类型、输出契约、知识库绑定
   全部从 `dify_app_registry` 读 —— 那是 `[[dify_apps]]` 收敛出来的。所以拿到这把钥匙的人

@@ -28,7 +28,8 @@ old one.
 
 from __future__ import annotations
 
-from aiops_diagnostics.routing import MISSING_CONTEXT, MISSING_ORDER_NO
+MISSING_CONTEXT = "context"
+MISSING_ORDER_NO = "order_no"
 
 #: The context name that means "this request cannot be answered in this
 #: language" — a member of `missing_fields`, not a `CLARIFY_*` code, because the

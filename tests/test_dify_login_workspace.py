@@ -218,7 +218,7 @@ def test_login_refuses_with_an_actionable_reason_when_there_is_no_workspace(
         service.login(username="zhang", password="pw", random_str="r", code="c")
 
     assert caught.value.code == "DIFY_WORKSPACE_UNRESOLVED"
-    assert f"aiops admin ensure-workspace --tenant {TENANT}" in str(caught.value)
+    assert f"aiops-admin ensure-workspace --tenant {TENANT}" in str(caught.value)
     assert inner.joins == [], "解析失败时不该 join 任何 workspace"
     assert _row(tmp_path) == {}, "拒绝发生在 upsert 之前：不留下半条映射"
 
@@ -402,7 +402,7 @@ def test_a_tenant_account_without_its_workspace_is_still_refused(tmp_path: Path,
         service.login(username="boss", password="pw", random_str="r", code="c")
 
     assert caught.value.code == "DIFY_WORKSPACE_UNRESOLVED"
-    assert f"aiops admin ensure-workspace --tenant {TENANT}" in str(caught.value)
+    assert f"aiops-admin ensure-workspace --tenant {TENANT}" in str(caught.value)
 
 
 def test_the_platform_workspace_still_requires_the_global_code(tmp_path: Path, monkeypatch) -> None:

@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 from aiops_diagnostics.agent_lifecycle import (
     AgentConfig,
     AgentConflict,
@@ -69,9 +68,7 @@ def _context(
     )
 
 
-def _config(
-    *, agent_type: str = "customer", model: str = "aiops-api", allowed_tools=ALL_TOOL_NAMES
-) -> AgentConfig:
+def _config(*, agent_type: str = "customer", model: str = "aiops-api", allowed_tools=()) -> AgentConfig:
     return AgentConfig(
         agent_type=agent_type,
         prompt="回答必须引用已授权的业务资料。",

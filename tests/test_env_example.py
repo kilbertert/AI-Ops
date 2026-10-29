@@ -35,15 +35,17 @@ def test_env_example_documents_scoped_direct_datasources() -> None:
     assert any(line.startswith("AIOPS_SSH_TDENGINE_HOST=") for line in _active_lines(text))
 
 
-def test_env_example_marks_diag_http_as_deprecated() -> None:
-    """旧 /diag/* HTTP 方案不再是基线，模板只保留注释化回退参考。"""
-    text = _template()
-
-    assert "DEPRECATED（PRD #23 2026-08-31 起 /diag/* HTTP 方案不再是基线" in text
-    assert "默认诊断路径已改为受限直连（ScopedSources）" in text
-    active = _active_lines(text)
-    assert not [line for line in active if line.startswith("AIOPS_HTTP_")]
-    assert not [line for line in active if line.startswith("AIOPS_DIAG_API_")]
+def test_env_example_has_no_retired_runtime_configuration() -> None:
+    active = _active_lines(_template())
+    retired = (
+        "AIOPS_HTTP_",
+        "AIOPS_DIAG_API_",
+        "AIOPS_CODEX_BIN=",
+        "AIOPS_CODEX_RUNTIME_HOME=",
+        "AIOPS_AGENT_MAX_",
+        "AIOPS_RESPONSES_ADAPTER_",
+    )
+    assert not [line for line in active if line.startswith(retired)]
 
 
 def test_env_example_documents_upms_permission_context_boundary() -> None:

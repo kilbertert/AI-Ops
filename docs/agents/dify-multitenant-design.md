@@ -299,7 +299,7 @@ POST /inner/api/enterprise/workspace/member
 **（a）`dify_app_registry` 的 `app_id` 必须跟着换，而且清单文件也要改。**
 import 产生**新 app UUID**；`DifyDslClient` 是按 `binding.app_id` 向指定 workspace 导出的。
 更麻烦的是 `app_id` 也写在 `ops/environments/env-41.toml` 的 `[[dify_apps]]` 里，
-而 `aiops admin reconcile` 会用它**覆盖**库里的值 —— 只改库不改清单，下次 reconcile 就把旧
+而 `aiops-admin reconcile` 会用它**覆盖**库里的值 —— 只改库不改清单，下次 reconcile 就把旧
 `app_id` 写回去了。⇒ **第 5 步必须是"清单 + 库"一起改**，且顺序是"先改清单、再 reconcile"。
 
 **（b）dataset 也要在新 workspace 里重建，不能只复制 app。**
@@ -531,7 +531,7 @@ api 容器只 publish 了 `5001/tcp`（未映射到宿主），宿主只能经 d
 
 ```
 在 41（或 95）上：
-  aiops admin ensure-workspace --tenant <id>        # 环境取**本机部署身份**，不是参数
+  aiops-admin ensure-workspace --tenant <id>        # 环境取**本机部署身份**，不是参数
     1. 查本机 gateway.db 的 dify_workspaces，**按 setup_state 分支**（不是"有行就退"）：
          ready   → 退出（幂等）
          failed  → 重建（清 lease，重走 3-5）

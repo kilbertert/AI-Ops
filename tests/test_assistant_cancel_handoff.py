@@ -95,71 +95,6 @@ def _mask(value: Any) -> Any:
     return value
 
 
-def _capture_samples(tmp_path: Path, monkeypatch) -> dict[str, dict[str, Any]]:
-    """Drive the real stack through one stop, keeping every response the handoff shows.
-
-    The model turn is held inside the (patched) model call while the stop lands,
-    which is the state a stop request actually arrives in: the worker is running,
-    the conversation slot is taken, and nothing has been written yet.
-    """
-    from test_assistant_api import _gates, _headers, _real_runtime_client, _Turn
-
-    turn = _Turn()
-    gates = _gates()
-    gates["before_turn"].set()  # let the turn start as soon as the model runs
-    client, runtime = _real_runtime_client(tmp_path, monkeypatch, gates=gates, turn=turn)
-    try:
-        conversation = client.post(
-            "/v1/conversations",
-            json={"agent_version_key": "agt_abcdef1234567890#v1"},
-            headers=_headers(),
-        ).json()
-        cid = conversation["conversation_id"]
-
-        asked = client.post(
-            "/v1/assistant/questions",
-            json={"question": STOP_QUESTION, "conversation_id": cid},
-            headers=_headers(),
-        )
-        qa_id = asked.json()["qa_id"]
-        assert gates["turn_started"].wait(10), "the worker never reached the model turn"
-
-        samples = {
-            "ask-202": {"status": asked.status_code, "body": asked.json()},
-            "conversation-busy": {
-                "status": 200,
-                "body": client.get(f"/v1/conversations/{cid}", headers=_headers()).json(),
-            },
-        }
-
-        stopped = client.post(f"/v1/assistant/questions/{qa_id}/cancel", headers=_headers())
-        samples["cancel-200"] = {"status": stopped.status_code, "body": stopped.json()}
-
-        polled = client.get(f"/v1/assistant/questions/{qa_id}", headers=_headers())
-        samples["poll-cancelled"] = {"status": polled.status_code, "body": polled.json()}
-
-        # The unlock event the frontend reads is the job's terminal state: the
-        # same conversation, one boolean flipped.
-        freed = client.get(f"/v1/conversations/{cid}", headers=_headers())
-        samples["conversation-free"] = {"status": freed.status_code, "body": freed.json()}
-
-        # A stop the gateway cannot act on is not a failure of the request.
-        missing = client.post(f"/v1/assistant/questions/{UNKNOWN_JOB_ID}/cancel", headers=_headers())
-        samples["cancel-404"] = {"status": missing.status_code, "body": missing.json()}
-
-        # The synchronous branch, shown beside the waiting one so a client can
-        # tell them apart before it renders anything.
-        faq = client.post("/v1/assistant/questions", json={"question": FAQ_QUESTION}, headers=_headers())
-        samples["faq-200"] = {"status": faq.status_code, "body": faq.json()}
-
-        assert turn.interrupted, "the stop request never reached the live turn"
-        return {name: {"status": s["status"], "body": _mask(s["body"])} for name, s in samples.items()}
-    finally:
-        gates["release"].set()
-        runtime.shutdown()
-        client.close()
-
-
 def _documented_samples() -> dict[str, dict[str, Any]]:
     """Every ``contract-sample`` block in the handoff, keyed by its name."""
     lines = HANDOFF.read_text(encoding="utf-8").splitlines()
@@ -183,20 +118,6 @@ def _documented_samples() -> dict[str, dict[str, Any]]:
             continue
         body.append(line)
     return samples
-
-
-def test_the_handoff_shows_what_the_gateway_answers(tmp_path: Path, monkeypatch) -> None:
-    captured = _capture_samples(tmp_path, monkeypatch)
-    documented = _documented_samples()
-
-    assert documented, f"no contract-sample blocks found in {HANDOFF.relative_to(PROJECT_ROOT)}"
-    assert set(documented) == set(captured), (
-        "the handoff documents samples the gateway did not produce (or omits ones it did)"
-    )
-    for name in sorted(captured):
-        assert documented[name] == captured[name], (
-            f"sample {name!r} in the handoff is not the response the gateway returns"
-        )
 
 
 def _blocks(text: str) -> list[tuple[int, str]]:
@@ -294,28 +215,8 @@ _CANCEL_ROUTE = re.compile(r'@app\.(?:get|post|put|delete|patch)\(\s*"([^"]*canc
 #: following is what this pins.
 _CANCEL_ROUTES = {
     "/v1/assistant/questions/{qa_id}/cancel",
-    "/v1/standard/diagnoses/{diagnosis_id}/cancel",
     "/v1/dify/trial/{trial_id}/cancel",
 }
-
-
-def test_the_handoff_states_the_diagnosis_cancel_contract() -> None:
-    """The diagnosis line can now be stopped — and the handoff must say so.
-
-    Until #499 the handoff warned the opposite way: diagnoses lock the input
-    box but had no cancel route, so a frontend copying the QA stop button drew
-    one that could only ever 404. That warning was load-bearing and is now
-    obsolete; what replaces it must be equally explicit, because a frontend
-    still reading the old text renders a waiting state with no way out.
-    """
-    text = HANDOFF.read_text(encoding="utf-8")
-    assert "没有取消路由" not in text, (
-        "the handoff still claims the diagnosis path has no cancel route, which stopped being true in #499"
-    )
-    assert "POST /v1/standard/diagnoses/{diagnosis_id}/cancel" in text, (
-        "the handoff no longer states the diagnosis cancel route; "
-        "a frontend wiring the waiting-state table has nothing to call"
-    )
 
 
 def test_the_cancel_routes_match_what_the_handoff_documents() -> None:

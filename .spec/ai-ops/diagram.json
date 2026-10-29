@@ -67,14 +67,14 @@
       "id": "l4-inference",
       "type": "cloud",
       "label": "L4 推理与产品能力",
-      "sublabel": "模型 harness · 各回答面",
+      "sublabel": "业务执行 · 各回答面",
       "sources": [
         {
           "path": ".spec/ai-ops/l4-inference/spec.md",
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/agent_engine.py",
+          "path": "src/aiops_diagnostics/model_request.py",
           "label": "code"
         }
       ],
@@ -98,7 +98,7 @@
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/diagnostic_tools.py",
+          "path": "src/aiops_diagnostics/sources.py",
           "label": "code"
         }
       ],
@@ -170,7 +170,7 @@
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/agent_contracts.py",
+          "path": "src/aiops_diagnostics/config.py",
           "label": "code"
         }
       ],

@@ -221,8 +221,7 @@ def test_an_analysis_is_not_listed_as_an_order_diagnosis(tmp_path: Path) -> None
         client.post("/v1/standard/analyses", headers=_headers(), json=WINDOW)
         listed = client.get("/v1/standard/diagnoses", headers=_headers())
 
-    assert listed.status_code == 200
-    assert listed.json()["diagnoses"] == []
+    assert listed.status_code == 404
 
 
 def test_an_inverted_window_is_refused_before_a_job_exists(tmp_path: Path) -> None:

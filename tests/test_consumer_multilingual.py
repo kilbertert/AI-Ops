@@ -25,55 +25,6 @@ def test_wf01_accepts_every_declared_language(tmp_path, monkeypatch, language):
         assert env["upstream"].calls == 1 and not kb.calls
 
 
-@pytest.mark.parametrize("language", SUPPORTED_LANGUAGES)
-def test_order_shortcut_keeps_diagnosis_and_selected_language(tmp_path, language):
-    from test_assistant_api import _client, _headers
-
-    client, runtime = _client(tmp_path)
-    headers = {**_headers(), "Accept-Language": language}
-    created = client.post(
-        "/v1/shortcuts",
-        headers=headers,
-        json={
-            "business_entry": "consumer",
-            "code": "smart_diagnosis",
-            "intent": "order_issue",
-            "requires_order": True,
-            "labels": {"zh": "智能检测"},
-        },
-    )
-    assert created.status_code == 201
-    shortcut = created.json()
-    assert (
-        client.post(
-            f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
-            headers=headers,
-            json={"expected_revision": shortcut["revision"]},
-        ).status_code
-        == 200
-    )
-    payload = {
-        "question": "帮我检测（2096164064667852801）这个订单的充电异常",
-        "shortcut_code": "smart_diagnosis",
-    }
-    response = client.post("/v1/assistant/questions", headers=headers, json=payload)
-    assert response.status_code == 202, response.text
-    assert response.json()["type"] == "diagnosis"
-    assert response.json()["language"] == runtime.stored_language == language
-    assert len(runtime.calls) == 1 and not runtime.qa_calls
-    denied = client.post(
-        "/v1/assistant/questions",
-        headers=headers,
-        json={
-            **payload,
-            "question": "检测另一笔订单",
-            "order_no": "2096164064667852999",
-        },
-    )
-    assert denied.status_code == 404
-    assert len(runtime.calls) == 1
-
-
 def test_fixed_copy_preserves_placeholders_and_covers_all_other_languages():
     from string import Formatter
 
@@ -222,3 +173,27 @@ def test_support_route_survives_missing_translation_without_foreign_label(config
     text = answer["blocks"][0]["text"]
     assert "https://support.example.test/" in text
     assert "foreign label" not in text
+
+
+@pytest.mark.parametrize("language", SUPPORTED_LANGUAGES)
+def test_order_shortcut_uses_business_workflow_language(tmp_path, monkeypatch, language):
+    from test_app_runtime_dify_entry import ORDER_A
+
+    with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
+        runtime, _ = wire(env, monkeypatch, tmp_path)
+        semantic(runtime, monkeypatch, "order_status", "explicit")
+        response = env["client"].post(
+            "/v1/assistant/questions",
+            headers={**HEADERS, "Accept-Language": language},
+            json={
+                "question": "帮我检测这次充电",
+                "order_no": ORDER_A,
+                "shortcut_code": "smart_diagnosis",
+            },
+        )
+        assert response.status_code == 202, response.text
+        final = done(env, response.json()["qa_id"]).json()
+        assert final["status"] == "completed", final
+        assert final["language"] == language
+        assert Client.calls[-1]["inputs"]["language"] == language
+        assert env["upstream"].calls == 1

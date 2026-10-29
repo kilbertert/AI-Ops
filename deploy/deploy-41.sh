@@ -228,38 +228,6 @@ WORK="$STAGE/src"
 git archive "$FULL_SHA" src/aiops_diagnostics | tar -x -C "$STAGE"
 [ -d "$WORK/aiops_diagnostics" ] || die "该 commit 没有 src/aiops_diagnostics"
 
-# 诊断运行时会从 reference_root()（解析到 /opt/aiops-41）读取这几份文件并拷进每个
-# workspace。它们不是 src/ 下的代码，若不同步，`/health` 会报新 commit 而诊断实际用的是
-# 旧 SOP/架构文档 —— 「部署了什么」与「跑了什么」不一致。
-# 只纳入 git 跟踪、且解包后仍保留仓库相对路径的那几份。
-REFERENCE_FILES="SOP.md 充电桩问题排查SOP.md docs/architecture.md"
-for ref in $REFERENCE_FILES; do
-  if ! git cat-file -e "$FULL_SHA:$ref" 2>/dev/null; then
-    # **不跳过，停止部署。** 跳过意味着「不同步也不删除」：41 上的旧副本会留下，
-    # 而诊断每次仍从 /opt/aiops-41 读它 —— 于是 main 删掉某份参考资料后，生产继续
-    # 使用已删除的内容，且没有任何信号。
-    #
-    # 有意**不**自动删除 41 上的旧副本：那是诊断的运行输入，由 CI 单方面删掉比留下
-    # 更难恢复。把决定交回给人：要么恢复该文件，要么明确把 REFERENCE_FILES 改掉
-    # （那是一次单独的、被评审核过的改动）。
-    cat >&2 <<EOF
-目标 commit ($SHORT_SHA) 缺少受管的运行时参考资料：$ref
-
-诊断会从 /opt/aiops-41 读这份文件并拷进每个 workspace。若在此跳过，41 上的旧副本
-会继续被使用 —— main 已删除的内容仍在生产生效，且不会报错。
-
-已停止，未上传、未写入、未重启。请二选一：
-  1. 恢复 $REFERENCE_FILES 中列出的这份文件；或
-  2. 明确把 $ref 从 deploy/deploy-41.sh 的 REFERENCE_FILES 移除
-     （同时处理 41 上的旧副本），走一次单独评审的改动。
-EOF
-    exit 1
-  fi
-  mkdir -p "$WORK/$(dirname "$ref")"
-  git show "$FULL_SHA:$ref" > "$WORK/$ref"
-done
-info "参考资料已纳入产物：$(printf '%s' "$REFERENCE_FILES" | tr ' ' ',')"
-
 # ---- 1a. 过期审批门禁（只对 --commit；--rollback-to 是有意的回退）--------------
 # 场景：commit A 与 B 依次合并，两个 CD run 都停在审批门。审核者先批 B（生产变成 B），
 # 之后误批队列里仍在的 A —— A 的 job 拿到并发锁，按**自己的** GITHUB_SHA 部署，
@@ -320,45 +288,6 @@ EOF
   fi
 fi
 
-# ---- 1b. 参考资料前置检查（**保守**：不存在就拒绝部署，不猜回滚）--------------
-# 每份受管的参考资料在 41 上都必须**已经存在**。理由：
-#
-#   1. 它们本来就是生产上既有的运行输入（`reference_root()` 读 /opt/aiops-41）。
-#      部署只负责把它们更新到目标 commit 的版本，不负责从无到有地引入。
-#   2. 「部署前不存在」意味着回滚要**删除**它 —— 那是比更新更重的动作，且必须知道
-#      它原本不该在。评审指出：旧实现只按「有没有备份」判断，会把新建的文件留在
-#      盘上却报「完整回滚」（假声明）。
-#   3. 我们试过实现「按部署前存在状态决定回滚动作」，但在真机上无法可靠复现 ——
-#      主机侧探针显示检查时文件已存在、而部署前我们刚确认它不在（根因未定位）。
-#      与其交付一个自己都不信的回滚分支，不如把这种情况挡在部署之前。
-#
-# 代价：首次引入一份新参考资料时需要人工在 41 上先放置它（一次性动作），
-# 以及显式更新 REFERENCE_FILES。这是有意的取舍 —— 宁可要人做一次，
-# 不要脚本去猜一个删文件的回滚。
-step "参考资料前置检查"
-for ref in $REFERENCE_FILES; do
-  present=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
-    "[ -f /opt/aiops-41/$ref ] && echo yes || echo no" | tail -1 | tr -d '[:space:]')
-  if [ "$present" != "yes" ]; then
-    cat >&2 <<EOF
-受管的运行时参考资料在 41 上不存在：$ref
-
-部署只把它更新到目标 commit 的版本，不负责从无到有地引入。若在此继续，回滚就得
-**删除**它 —— 那需要知道它原本不该在，而按「有没有备份」判断会把新建的文件留在
-盘上却报「完整回滚」（假声明，评审指出过）。
-
-已停止，未上传、未写入、未重启。请二选一：
-  1. 在 41 上放置该文件（人工一次性动作）：
-       install -o aiops41 -g aiops41 -m 0640 <file> /opt/aiops-41/$ref
-     再重跑本部署；或
-  2. 若它确实不该再是受管参考资料，把它从 deploy/deploy-41.sh 的 REFERENCE_FILES
-     移除（走一次单独评审的改动）。
-EOF
-    exit 1
-  fi
-  info "$ref 在 41 上存在 ✓"
-done
-
 # ---- 2. 注入 commit 标识 ---------------------------------------------------
 # /health 的 version 来自 src/aiops_diagnostics/__init__.py 的 __version__，是个
 # 静态 semver —— 部署后无法回答「现在跑的是哪个 commit」。在**暂存副本**上把它
@@ -399,14 +328,7 @@ info "文件数（预期）= $EXPECTED_FILES"
 # ---- 3. 打包 + 首层断言 ----------------------------------------------------
 step "打包"
 TARBALL="$STAGE/aiops-sync.tar.gz"
-# 包内首层仍是 aiops_diagnostics/（下面的断言依赖这一点）；参考资料作为同层的额外条目。
-# 显式构造条目列表：REFERENCE_FILES 是有意按空白拆分的路径清单，用数组承载，
-# 避免把「未加引号的命令替换」当成约定（那样既难读，也容易在改动时出错）。
-TAR_ENTRIES=(aiops_diagnostics)
-for ref in $REFERENCE_FILES; do
-  [ -e "$WORK/$ref" ] && TAR_ENTRIES+=("$ref")
-done
-tar -czf "$TARBALL" -C "$WORK" "${TAR_ENTRIES[@]}"
+tar -czf "$TARBALL" -C "$WORK" aiops_diagnostics
 # 先把清单读进变量，再取首行。**不要**写 `tar tzf ... | head -1`：head 读一行即退出，
 # 关掉管道，tar 收到 SIGPIPE 而死；在 `set -o pipefail` 下 141 会被当成脚本失败
 # （实测）。断言本身没错，是取首行的手法会自杀。
@@ -544,7 +466,6 @@ esac
 # 关键：解包前 `rm -rf /tmp/sync-check`。rsync --delete 只删目标侧多出的文件，
 # 不管源侧 —— 残留目录会被当成本次内容同步到生产。这是真实踩过的坑（#386）。
 read -r -d '' REMOTE_CMD <<EOF || true
-REFERENCE_FILES="${REFERENCE_FILES}"
 set -eu
 TS=\$(date +%Y%m%d-%H%M%S)
 B=/var/backups/aiops-41/backup-\$TS
@@ -595,22 +516,7 @@ step_failed() { echo "mutate-failed=\$1"; mutate_rc=1; }
 rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check || step_failed "prepare-sync-dir"
 tar xzf $REMOTE_TARBALL -C /tmp/sync-check || step_failed "extract"
 rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnostics/ || step_failed "rsync-src"
-# 参考资料：与源码分开搬，因为它们的落点是 /opt/aiops-41 而不是 src/。
-# reference_root() 解析到 /opt/aiops-41（该目录有 pyproject.toml + src/），
-# 诊断每次运行都从这里读这几份文件 —— 不同步就会「报新 commit、用旧 SOP」。
-for ref in $REFERENCE_FILES; do
-  if [ -f "/tmp/sync-check/$ref" ]; then
-    mkdir -p "/opt/aiops-41/$(dirname "$ref")" "\$B/refs/$(dirname "$ref")" \
-      || { step_failed "refs-mkdir:$ref"; continue; }
-    # 备份后覆盖。参考资料的**存在性**已由本脚本的前置检查（step "参考资料前置检查"）
-    # 保证 —— 因此这里不需要再判断 present/absent，回滚也不必删文件、只需还原。
-    # 之前那版按存在状态决定回滚动作，在真机上无法可靠复现（见该前置检查处的说明），
-    # 已按保守做法改为「不存在就拒绝部署」。
-    cp "/opt/aiops-41/$ref" "\$B/refs/$ref" || { step_failed "refs-backup:$ref"; continue; }
-    cp "/tmp/sync-check/$ref" "/opt/aiops-41/$ref" || { step_failed "refs-copy:$ref"; continue; }
-    echo "reference-synced=$ref"
-  fi
-done
+
 chown -R aiops41:aiops41 $REMOTE_SRC || step_failed "chown"
 
 # restart 也累积：systemctl restart 非零时必须继续走自检/回滚，而不是退出。
@@ -627,7 +533,7 @@ echo "backup=\$B"
 EXPECT_VERSION="${STAMPED}"
 check_ok() {
   # mutate_rc 必须为 0：变更阶段有任何一步失败，即使服务恰好起来了，也不算成功 ——
-  # 那意味着源码与参考资料可能只同步了一部分。
+  # 那意味着源码可能只同步了一部分。
   [ "\$mutate_rc" = "0" ] || return 1
   [ "\$(systemctl is-active $SERVICE)" = "active" ] || return 1
   [ "\$(health_version)" = "\$EXPECT_VERSION" ] || return 1
@@ -653,23 +559,12 @@ if check_ok; then
 else
   echo "selfcheck=failed" >&2
   echo "rolling back to \$B ..." >&2
-  # 回滚两样东西：源码 + 参考资料。两者都在本次部署里被改过，只回源码会留下
-  # 「旧代码 + 被拒 commit 的 SOP」—— 服务能起来，但诊断读的是被拒版本的内容。
+  # 恢复源码，并用部署前版本核实回滚成功。
   # 恢复动作累积状态、不做提前退出：这些命令若失败而 set -e 直接终止，标记就发不出去，
   # 分类器把它当「状态未知」—— 而它其实是「回滚失败」，要人做的事完全不同。
   restore_rc=0
   rsync -a --delete "\$B/src/" $REMOTE_SRC/ || restore_rc=1
-  for ref in $REFERENCE_FILES; do
-    # 参考资料一定原本存在（前置检查保证），所以回滚就是「从备份还原」。
-    # 唯一的不确定是备份本身是否完好 —— 那由 cp 的退出码如实反映，不猜。
-    if [ -f "\$B/refs/$ref" ]; then
-      mkdir -p "/opt/aiops-41/$(dirname "$ref")" || restore_rc=1
-      cp "\$B/refs/$ref" "/opt/aiops-41/$ref" || restore_rc=1
-    else
-      echo "refs-backup-missing=$ref" >&2
-      restore_rc=1
-    fi
-  done
+
   chown -R aiops41:aiops41 $REMOTE_SRC || restore_rc=1
   [ "\$restore_rc" = "0" ] || echo "rollback-restore-rc=nonzero"
 
@@ -682,8 +577,7 @@ else
   if systemctl restart $SERVICE; then :; else echo "rollback-restart-rc=nonzero"; fi
   sleep 5
   # 三个条件缺一不可：恢复动作全部成功 **且** 服务 active **且** /health 版本等于部署前。
-  # 少了 restore_rc 这条，就会把「参考资料只回了一半、但版本恰好还是旧的」报成
-  # 完整回滚 —— 服务看起来正常，而诊断读的是半新半旧的输入。
+  # 恢复动作失败时不能仅凭旧版本号宣告回滚成功。
   if [ "\$restore_rc" = "0" ] \
      && [ "\$(systemctl is-active $SERVICE)" = "active" ] \
      && [ "\$(health_version)" = "\$PRE_VERSION" ]; then
@@ -787,15 +681,7 @@ else
   die "逐文件 sha 不一致 —— 远端内容与产物不同"
 fi
 
-# 参考资料同样核对：它们不在 src/ 下，文件数与 sha 树都覆盖不到。
-for ref in $REFERENCE_FILES; do
-  want=$(sha256sum "$WORK/$ref" 2>/dev/null | cut -d' ' -f1 || true)
-  [ -n "$want" ] || continue
-  got=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
-    "sha256sum /opt/aiops-41/$ref 2>/dev/null | cut -d' ' -f1" | tail -1 | tr -d '[:space:]')
-  [ "$want" = "$got" ] || die "参考资料 $ref 未同步到 41（本地 $want / 41 $got）"
-  info "参考资料 $ref 一致 ✓"
-done
+
 
 step "完成"
 cat <<EOF

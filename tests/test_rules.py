@@ -158,27 +158,3 @@ def test_order_window_converts_aware_columns_to_one_zone() -> None:
     start, end, clamped = window
     assert clamped is False
     assert end - start == timedelta(minutes=30 + ORDER_WINDOW_PADDING_MINUTES * 2)
-
-
-def test_both_diagnosis_paths_agree_on_what_the_shared_window_delegates_to() -> None:
-    """The two callers of the window rule must agree, and now they are provably the same call.
-
-    The deterministic engine and the agent tool layer query the same TDengine
-    tables for the same order, so a different window on either path would report a
-    different slice of the same evidence. Before this rule was shared, that
-    agreement rested on both modules importing one private helper -- a coupling
-    with no contract and no test. The tool layer now calls `rules.order_window`
-    directly, and this guard pins the remaining adapter in `engine` to it, so a
-    divergence shows up here rather than as two different reports for one order.
-
-    A *clamping* order is used deliberately: it is the only input that exercises
-    the `max_hours` the adapter passes through, so an adapter that forwarded a
-    different cap would pass on a short order and fail here.
-    """
-    from aiops_diagnostics.engine import _order_window
-
-    order = {"created_time": "2026-07-31T10:00:00+08:00", "stop_time": "2026-08-04T14:00:00+08:00"}
-    expected = order_window(order["created_time"], order["stop_time"], 72)
-
-    assert expected is not None and expected[2] is True  # the clamp is what makes this meaningful
-    assert _order_window(order, 72) == expected

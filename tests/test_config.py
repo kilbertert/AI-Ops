@@ -36,22 +36,6 @@ def test_tdengine_defaults_use_read_only_proxy() -> None:
     assert settings.ssh.tdengine_port == 16041
 
 
-def test_agent_default_uses_sdk_pinned_codex_runtime(monkeypatch) -> None:
-    from codex_cli_bin import bundled_codex_path
-
-    monkeypatch.delenv("AIOPS_CODEX_BIN", raising=False)
-
-    assert Settings.from_env().agent.codex_bin == str(bundled_codex_path())
-
-
-def test_heartbeat_interval_is_bounded(monkeypatch) -> None:
-    monkeypatch.setenv("AIOPS_AGENT_HEARTBEAT_INTERVAL_SECONDS", "0")
-
-    settings = Settings.from_env()
-    with pytest.raises(ValueError, match="heartbeat_interval_seconds"):
-        settings.agent.validate()
-
-
 def test_ssh_rejects_option_like_usernames() -> None:
     settings = SSHSettings(enabled=True, host="example.test", user="-oProxyCommand", key_file="missing")
 
@@ -72,7 +56,6 @@ def test_private_config_file_loads_values_but_environment_wins(tmp_path: Path, m
     assert settings.mysql.host == "from-environment"
     assert settings.mysql.port == 3307
     assert settings.mysql.password == "abc#def"
-    assert settings.agent.codex_bin
 
 
 def test_gateway_reads_third_session_token_from_private_server_config(tmp_path: Path, monkeypatch) -> None:
@@ -100,9 +83,6 @@ def test_windows_style_home_override_is_platform_independent(tmp_path: Path, mon
     settings = Settings.from_env()
 
     assert Path(settings.agent.key_dir) == tmp_path / "portable-home" / "keys"
-    assert Path(settings.agent.codex_runtime_home) == tmp_path / "portable-home" / "codex-home"
-    assert Path(settings.agent.run_root) == tmp_path / "portable-home" / "runs"
-    assert settings.agent.windows_sandbox == "unelevated"
     if os.name != "nt":
         assert settings.ssh.ssh_bin
 
@@ -120,8 +100,7 @@ def _provider_env(monkeypatch) -> None:
 def test_provider_registry_parses_from_env(monkeypatch) -> None:
     _provider_env(monkeypatch)
     settings = Settings.from_env()
-    names = settings.agent.provider_names()
-    assert names == ("glm-ark", "gpt-psydo")
+    assert tuple(provider.name for provider in settings.agent.providers) == ("glm-ark", "gpt-psydo")
 
     glm = settings.agent.select_provider("glm-ark")
     assert glm.base_url == "https://ark.cn-beijing.volces.com/api/coding/v3/"
@@ -173,7 +152,7 @@ def test_registry_rejects_duplicate_and_missing_base_url(monkeypatch) -> None:
 def test_legacy_single_provider_synthesized_without_registry() -> None:
     from aiops_diagnostics.config import AgentSettings
 
-    settings = AgentSettings(codex_bin="codex", api_base_url="https://proxy.example/", model="gpt-5")
+    settings = AgentSettings(api_base_url="https://proxy.example/", model="gpt-5")
     provider = settings.select_provider(None)
     assert provider.name == "aiops-api"
     assert provider.base_url == "https://proxy.example/"
@@ -196,75 +175,6 @@ def test_provider_config_resolved_key_slot_falls_back_to_name() -> None:
     assert provider.resolved_key_slot() == "glm-ark"
     explicit = ProviderConfig(name="glm-ark", base_url="https://ark.example/", default_key_slot="primary")
     assert explicit.resolved_key_slot() == "primary"
-
-
-def test_http_settings_defaults_and_env_names(monkeypatch) -> None:
-    settings = Settings.from_env()
-    assert settings.http.base_url is None
-    assert settings.http.internal_token.secret is None
-    assert settings.http.internal_token.expire_seconds == 300
-    assert settings.diag_api is settings.http
-
-    monkeypatch.setenv("AIOPS_HTTP_BASE_URL", "https://diag.example.test")
-    monkeypatch.setenv("AIOPS_HTTP_INTERNAL_TOKEN_SECRET", "http-secret")
-    monkeypatch.setenv("AIOPS_HTTP_INTERNAL_TOKEN_EXPIRE_SECONDS", "120")
-    settings = Settings.from_env()
-    assert settings.http.base_url == "https://diag.example.test"
-    assert settings.http.internal_token.secret == "http-secret"
-    assert settings.http.internal_token.expire_seconds == 120
-
-
-def test_http_settings_internal_token_is_redacted() -> None:
-    settings = Settings.from_env()
-    settings.http.internal_token.secret = "http-secret"
-    redacted = settings.redacted()
-    assert redacted["http"]["internal_token"]["secret"] == "REDACTED"
-    assert redacted["diag_api"]["token_secret"] == "REDACTED"
-    assert "http-secret" not in str(redacted)
-
-
-def test_http_settings_new_env_names_override_legacy_names(monkeypatch) -> None:
-    monkeypatch.setenv("AIOPS_HTTP_BASE_URL", "https://http.example.test")
-    monkeypatch.setenv("AIOPS_DIAG_API_BASE_URL", "https://legacy.example.test")
-    monkeypatch.setenv("AIOPS_HTTP_INTERNAL_TOKEN_SECRET", "http-secret")
-    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_SECRET", "legacy-secret")
-    monkeypatch.setenv("AIOPS_HTTP_INTERNAL_TOKEN_EXPIRE_SECONDS", "120")
-    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS", "300")
-    monkeypatch.setenv("AIOPS_HTTP_TIMEOUT_SECONDS", "12")
-    monkeypatch.setenv("AIOPS_DIAG_API_TIMEOUT_SECONDS", "24")
-
-    settings = Settings.from_env()
-
-    assert settings.http.base_url == "https://http.example.test"
-    assert settings.http.internal_token.secret == "http-secret"
-    assert settings.http.internal_token.expire_seconds == 120
-    assert settings.http.timeout_seconds == 12
-
-
-def test_http_settings_legacy_env_names_still_work(monkeypatch) -> None:
-    monkeypatch.setenv("AIOPS_DIAG_API_BASE_URL", "https://legacy.example.test")
-    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_SECRET", "legacy-secret")
-    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS", "180")
-    monkeypatch.setenv("AIOPS_DIAG_API_TIMEOUT_SECONDS", "12")
-
-    settings = Settings.from_env()
-
-    assert settings.http.base_url == "https://legacy.example.test"
-    assert settings.http.internal_token.secret == "legacy-secret"
-    assert settings.http.internal_token.expire_seconds == 180
-    assert settings.http.timeout_seconds == 12
-
-
-def test_http_settings_token_expire_setter_still_validates() -> None:
-    settings = Settings.from_env()
-
-    settings.http.token_expire_seconds = 600
-    assert settings.http.token_expire_seconds == 600
-    settings.http.token_expire_seconds = 300
-    assert settings.http.token_expire_seconds == 300
-
-    with pytest.raises(ValueError, match="令牌有效期"):
-        settings.http.token_expire_seconds = 601
 
 
 def test_upms_settings_defaults_and_env_names(monkeypatch) -> None:

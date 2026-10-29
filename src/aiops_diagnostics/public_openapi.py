@@ -31,10 +31,6 @@ OPERATIONS = {
     ("get", "/v1/banner"): ("FAQ与入口", "读取入口横幅", "Banners"),
     ("get", "/v1/media/{signed_id}"): ("媒体", "读取签名图片或视频", "Media"),
     ("get", "/v1/orders/{order_no}/access"): ("订单", "检查当前主体的订单权限", "OrderAccess"),
-    ("post", "/v1/standard/diagnoses"): ("旧诊断", "创建旧单订单诊断（非管家Java入口）", "Diagnosis"),
-    ("get", "/v1/standard/diagnoses/{diagnosis_id}"): ("旧诊断", "查询诊断结果", "Diagnosis"),
-    ("post", "/v1/standard/diagnoses/{diagnosis_id}/cancel"): ("旧诊断", "取消诊断（无请求体）", "Diagnosis"),
-    ("get", "/v1/standard/diagnoses"): ("旧诊断", "查询本人诊断历史", "DiagnosisList"),
     ("post", "/v1/health-report-jobs"): ("健康报告", "创建充电健康报告", "Health"),
     ("get", "/v1/health-report-jobs/{job_id}"): ("健康报告", "查询健康报告", "Health"),
     ("post", "/v1/standard/analyses"): ("管家分析", "创建站点时间窗分析", "Analysis"),
@@ -85,8 +81,6 @@ def _schemas() -> dict[str, Any]:
     )
     qa["required"] = ["type", "qa_id", "question", "status", "language", "retry_after_ms", "result", "error"]
     qa["properties"]["result"] = {"anyOf": [_ref("Answer"), {"type": "null"}]}
-    diagnosis = _object(**job, diagnosis_id=string, order_no=string, question={"type": ["string", "null"]})
-    diagnosis["required"] = ["diagnosis_id", "order_no", "status"]
     analysis = _object(
         **job,
         analysis_id=string,
@@ -134,7 +128,6 @@ def _schemas() -> dict[str, Any]:
             title={"type": ["string", "null"]},
             reference_id=string,
         ),
-        "Diagnosis": diagnosis,
         "Analysis": analysis,
         "Health": _object(
             **{k: v for k, v in job.items() if k != "result"},
@@ -150,7 +143,6 @@ def _schemas() -> dict[str, Any]:
         ),
         "FAQ": _object(question_id=string, question=string, answer=string, format=string, language=string),
         "QAList": _object(count={"type": "integer"}, questions=objects),
-        "DiagnosisList": _object(count={"type": "integer"}, diagnoses=objects),
         "Conversation": conversation,
         "ConversationList": _object(
             count={"type": "integer"}, conversations={"type": "array", "items": _ref("Conversation")}
@@ -269,11 +261,7 @@ def public_schema(app: FastAPI) -> dict[str, Any]:
             }
             responses["202"] = {
                 "description": "已受理；按type和对应ID轮询；不等于完成",
-                "content": {
-                    "application/json": {
-                        "schema": {"anyOf": [_ref("QA"), _ref("Diagnosis"), _ref("Analysis")]}
-                    }
-                },
+                "content": {"application/json": {"schema": {"anyOf": [_ref("QA"), _ref("Analysis")]}}},
             }
             operation["description"] = (
                 "普通WF01不带shortcut_code。管家Java提交question+order_no，返回type=qa/qa_id；旧诊断为type=diagnosis/diagnosis_id；分析为type=analysis/analysis_id。缺订单可200澄清。图片输入当前未开放。"
@@ -289,15 +277,13 @@ def public_schema(app: FastAPI) -> dict[str, Any]:
         else:
             code = (
                 "202"
-                if method == "post"
-                and name in {"Health", "Diagnosis", "Analysis"}
-                and not path.endswith("/cancel")
+                if method == "post" and name in {"Health", "Analysis"} and not path.endswith("/cancel")
                 else "200"
             )
             responses[code] = _response(
                 name,
                 "读取status判断是否终态；completed/inconclusive后核正文"
-                if name in {"QA", "Health", "Diagnosis", "Analysis"}
+                if name in {"QA", "Health", "Analysis"}
                 else "成功响应",
             )
         operation["responses"] = responses

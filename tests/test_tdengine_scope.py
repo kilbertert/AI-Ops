@@ -43,24 +43,6 @@ def test_tdengine_rejects_device_outside_scope_without_request() -> None:
     assert not source.captured  # type: ignore[attr-defined]  # 不发 TDengine 请求
 
 
-def test_tdengine_rejects_comm_device_outside_scope() -> None:
-    source = _source(ALLOWED)
-
-    with pytest.raises(SourceError, match="设备不在当前权限范围"):
-        source.get_comm_messages("PILE-EVIL", START, END)
-
-    assert not source.captured  # type: ignore[attr-defined]
-
-
-def test_tdengine_no_allowed_set_permits_any_safe_device() -> None:
-    source = _source(None)
-
-    rows = source.get_comm_messages("PILE-ANY", START, END)
-
-    assert rows == []
-    assert "device='PILE-ANY'" in source.captured[0]  # type: ignore[attr-defined]
-
-
 def test_tdengine_query_is_bounded_by_time_and_fixed_super_table() -> None:
     source = _source(ALLOWED)
 
@@ -71,17 +53,6 @@ def test_tdengine_query_is_bounded_by_time_and_fixed_super_table() -> None:
     assert "_ts>='2026-07-31 10:00:00.000'" in sql
     assert "_ts<='2026-07-31 10:30:00.000'" in sql
     assert "`txSerialNo`='TX-01'" in sql
-    assert "LIMIT 2000" in sql
-
-
-def test_tdengine_comm_uses_fixed_super_table_and_fields() -> None:
-    source = _source(ALLOWED)
-
-    source.get_comm_messages("PILE-01", START, END)
-
-    sql = source.captured[0]  # type: ignore[attr-defined]
-    assert "FROM `charging-pile_comm`" in sql
-    assert "SELECT _ts, direction, code, decoded" in sql
     assert "LIMIT 2000" in sql
 
 

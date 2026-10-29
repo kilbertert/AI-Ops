@@ -10,7 +10,6 @@ related:
   - src/aiops_diagnostics/health_metrics.py
   - src/aiops_diagnostics/health_curves.py
   - src/aiops_diagnostics/health_report_copy.py
-  - src/aiops_diagnostics/parsing.py
 ---
 # l1-domain
 
@@ -26,5 +25,3 @@ related:
 - **租户可见性只有一处定义**（见 [[order-visibility]]），三种渲染共用它。
 - `order_status.role_of` 回答「是什么角色」（判定用），`rules.ORDER_STATUS` 回答「叫什么」
   （给人读）。同一份角色不再各处拼写。
-- `parsing.parse_request` 只提取订单号与意图：**不接受 SQL、不选表**。它是自然语言的入口，
-  不是查询构造器；让它决定查什么，等于把范围判定交给用户输入。

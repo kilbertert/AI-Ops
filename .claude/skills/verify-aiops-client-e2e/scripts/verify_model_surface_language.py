@@ -7,7 +7,6 @@ tables) already have end-to-end evidence: the same string goes in and out, and
 This script covers the surfaces where **a model writes the prose**:
 
     POST /v1/assistant/questions          → poll → result.blocks[].text
-    POST /v1/standard/diagnoses           → poll → summary / root_cause / next_steps
     POST /v1/health-report-jobs           → poll → summary / indicator values
 
 For those, "the language is right" is a property of generated text, so the only
@@ -75,7 +74,7 @@ QUESTION = {
 }
 
 DEFAULT_LANGUAGES = ("zh", "en")
-ALL_SURFACES = ("qa", "diagnosis", "health_report")
+ALL_SURFACES = ("qa", "health_report")
 
 #: Terminal states of the async job families. `expired` is terminal and is NOT a
 #: pass: the job produced no prose to judge.
@@ -94,7 +93,7 @@ def _leak_judge():
 #: probed with a chain of `or`: `body.get("result") or body.get("report")` would
 #: silently read the wrong envelope the day one surface adds an empty `result`,
 #: and the empty-dict falsiness would hide it.
-_RESULT_KEY = {"qa": "result", "diagnosis": "result", "health_report": "report"}
+_RESULT_KEY = {"qa": "result", "health_report": "report"}
 
 
 def _collect_text(surface: str, body: dict) -> list[str]:
@@ -121,16 +120,6 @@ def _collect_text(surface: str, body: dict) -> list[str]:
         for block in result.get("blocks") or []:
             if isinstance(block, dict) and isinstance(block.get("text"), str):
                 texts.append(block["text"])
-    elif surface == "diagnosis":
-        for key in ("summary", "root_cause", "conclusion"):
-            if isinstance(result.get(key), str):
-                texts.append(result[key])
-        for step in result.get("next_steps") or []:
-            if isinstance(step, str):
-                texts.append(step)
-        for hyp in result.get("hypotheses") or []:
-            if isinstance(hyp, dict) and isinstance(hyp.get("explanation"), str):
-                texts.append(hyp["explanation"])
     elif surface == "health_report" and isinstance(result.get("summary"), str):
         texts.append(result["summary"])
     return texts
@@ -256,9 +245,9 @@ def run(args, languages: list[str], surfaces: list[str]) -> int:
         return 1
     print(f"会话已选定（值不打印）  租户={tenant}")
 
-    order_no = _pick_order(settings, session) if {"diagnosis", "health_report"} & set(surfaces) else None
-    if order_no is None and {"diagnosis", "health_report"} & set(surfaces):
-        print("⚠️  该会话名下没有可用订单：诊断面与健康报告面记 未验")
+    order_no = _pick_order(settings, session) if "health_report" in surfaces else None
+    if order_no is None and "health_report" in surfaces:
+        print("⚠️  该会话名下没有可用订单：健康报告面记 未验")
     else:
         print("订单已选定（值不打印）")
 
@@ -307,22 +296,6 @@ def _drive(client, surface: str, headers: dict, language: str, order_no: str | N
 
     if order_no is None:
         return "UNVERIFIED", "该会话名下没有可用订单，无法发起"
-
-    if surface == "diagnosis":
-        response = client.post(
-            "/v1/standard/diagnoses",
-            headers=headers,
-            json={"order_no": order_no, "question": QUESTION.get(language, QUESTION["en"])},
-        )
-        if response.status_code != 202:
-            return "UNVERIFIED", f"创建返回 {response.status_code}"
-        diagnosis_id = str(response.json().get("diagnosis_id") or "")
-        if not diagnosis_id:
-            return "UNVERIFIED", "创建返回 202 但没有 diagnosis_id"
-        status, body = _poll(
-            client, f"/v1/standard/diagnoses/{diagnosis_id}", headers, deadline_s=args.deadline
-        )
-        return _verdict("diagnosis", status, body, language)
 
     if surface == "health_report":
         response = client.post("/v1/health-report-jobs", headers=headers, json={"order_no": order_no})

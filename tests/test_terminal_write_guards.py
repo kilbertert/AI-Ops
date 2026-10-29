@@ -25,8 +25,6 @@ Two kinds of assertion, because the defect has two shapes:
 from __future__ import annotations
 
 import ast
-import threading
-import time
 from pathlib import Path
 
 from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, TERMINAL_DIAGNOSIS_STATUSES
@@ -99,7 +97,7 @@ def test_the_enumeration_finds_the_job_updates() -> None:
         if isinstance(node, ast.FunctionDef)
         and node.name in {"_execute_health_report", "_execute_standard_diagnosis"}
     )
-    assert found == 5, f"the two workers make {found} direct job updates, expected 5"
+    assert found == 1, f"the health worker makes {found} direct job updates, expected 1"
 
 
 def test_a_health_job_terminal_write_goes_through_the_one_helper() -> None:
@@ -191,85 +189,6 @@ def _answered_writes(tree: ast.Module, worker: ast.FunctionDef) -> set[ast.Call]
     return answered
 
 
-def test_the_diagnosis_success_metric_is_gated_on_the_write() -> None:
-    """A refused write must not be counted as a completed diagnosis.
-
-    The diagnostic write returns `False` when the row is already terminal, and
-    the metric used to be recorded unconditionally afterwards: a metric row
-    saying "completed" beside a row saying `expired`. The gate is what keeps the
-    two surfaces telling the same story.
-    """
-    tree = _runtime_tree()
-    worker = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_execute_standard_diagnosis"
-    )
-    source = ast.unparse(worker)
-    assert "if not stored:" in source, "the success metric is no longer gated on the write"
-
-
-def test_a_refused_terminal_write_records_no_metric(tmp_path, monkeypatch) -> None:
-    """The behaviour, not just the shape: a refused write leaves no metric row.
-
-    The stub refuses ONLY the terminal write, and lets the `running` claim
-    through — otherwise the worker returns at the claim and never reaches the
-    line under test, which is a green test that proves nothing. (Getting that
-    wrong is how the first version of this test passed on the ungated code.)
-    """
-    from test_standard_diagnosis_runtime import _runtime, _scope
-
-    from aiops_diagnostics.agent_contracts import (
-        AgentDiagnosis,
-        Confidence,
-        DiagnosisStatus,
-    )
-
-    runtime, store, settings = _runtime(tmp_path)
-    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
-    monkeypatch.setattr(
-        "aiops_diagnostics.gateway_runtime.run_agent_diagnosis",
-        lambda workspace, request, selected_settings, fixture, **kwargs: AgentDiagnosis(
-            incident_id=workspace.load_manifest().incident_id,
-            order_no=request.order_no,
-            tenant_id=request.tenant_id,
-            status=DiagnosisStatus.DIAGNOSED,
-            summary="阈值内完成",
-            root_cause="测试根因",
-            confidence=Confidence.HIGH,
-            evidence_ids=[],
-            hypotheses=[],
-            limitations=[],
-            failed_sources=[],
-            next_steps=[],
-        ),
-    )
-    recorded: list[dict] = []
-    monkeypatch.setattr(runtime, "_record_metric", lambda **fields: recorded.append(fields))
-
-    real_update = runtime.store.update_standard_diagnosis
-    finished = threading.Event()
-
-    def refuse_the_terminal_write(diagnosis_id: str, *, status: str, **kwargs: object) -> bool:
-        if status == "running":
-            return real_update(diagnosis_id, status=status, **kwargs)
-        finished.set()
-        return False
-
-    monkeypatch.setattr(runtime.store, "update_standard_diagnosis", refuse_the_terminal_write)
-
-    created = runtime.start_standard_diagnosis(_scope(), "ORDER-1", "为什么跳枪", None)
-    assert created["diagnosis_id"]
-    # Wait for the WORKER to finish, not for a flag it set on its way in: the
-    # metric is recorded after the write returns, so an assertion that fires
-    # the moment the write is called reads a state the worker has not reached.
-    assert finished.wait(10), "the worker never attempted its terminal write"
-    # The metric (if the gate were missing) is recorded right after that write,
-    # so give the worker the moment it needs to get there.
-    runtime.shutdown()
-    assert recorded == [], f"a refused write was counted as a completed run: {recorded}"
-
-
 def test_a_refused_health_write_is_logged(tmp_path, monkeypatch, caplog) -> None:
     """The health path has no metric, so the log is its observable.
 
@@ -279,9 +198,9 @@ def test_a_refused_health_write_is_logged(tmp_path, monkeypatch, caplog) -> None
     """
     import logging
 
-    from test_standard_diagnosis_runtime import _runtime
+    from test_ops_analysis_runtime import _runtime
 
-    runtime, store, settings = _runtime(tmp_path)
+    runtime, store = _runtime(tmp_path, monkeypatch)
     monkeypatch.setattr(runtime.store, "update_health_job", lambda *a, **k: False)
     with caplog.at_level(logging.WARNING, logger="aiops.gateway_runtime"):
         assert runtime._finish_health_job("job1", status="completed") is False
@@ -365,101 +284,3 @@ def test_every_async_worker_converges_on_any_exception() -> None:
         "an escaping exception means no terminal row, and a list of classes always "
         f"leaves the next one outside; workers without `except Exception`: {offenders}"
     )
-
-
-def _runtime_with_settings(tmp_path: Path, monkeypatch):
-    """A runtime whose `Settings.from_config` the test can make fail.
-
-    The config file itself is not what matters — what the worker does when loading
-    it raises is.
-    """
-    from aiops_diagnostics.config import Settings
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.gateway_store import GatewayStore
-
-    gateway_settings = GatewayServerSettings(
-        data_home=tmp_path,
-        database_file=tmp_path / "gateway.db",
-        server_config_file=tmp_path / "production.env",
-    )
-    gateway_settings.server_config_file.write_text("# test\n", encoding="utf-8")
-    runtime_settings = Settings()
-    runtime_settings.agent.run_root = str(tmp_path / "runs")
-    return GatewayRuntime(GatewayStore(gateway_settings.database_file), gateway_settings, runtime_settings)
-
-
-def test_an_unreadable_config_still_ends_the_job(tmp_path, monkeypatch) -> None:
-    """A **supported** failure of `Settings.from_config` must not strand a job (#730).
-
-    Three workers load settings after claiming the row `running`, and
-    `Settings.from_config` raises `ValueError` when the configured file is missing
-    or invalid — a config file removed after startup is an ordinary operational
-    event, not a programming error. Two of the three loaded it **before** the block
-    that catches anything, so the row stayed `running` until its deadline: the same
-    "caller cannot tell it apart from work still in progress" shape as #700/#721,
-    reached through a gap between the claim and the `try` rather than a class the
-    tuple omitted.
-
-    The rule the #730 review states: **everything after the `running` claim belongs
-    inside the catchable block.** This drives the diagnosis worker, which had the
-    widest gap, and asserts the row terminates.
-    """
-    from test_standard_diagnosis_runtime import _scope
-
-    runtime = _runtime_with_settings(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        "aiops_diagnostics.gateway_runtime.Settings.from_config",
-        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("server config does not exist")),
-    )
-    try:
-        created = runtime.start_standard_diagnosis(_scope(), "ORDER-1", "为什么跳枪", None)
-        deadline = time.monotonic() + 5
-        current = created
-        while current["status"] not in TERMINAL_DIAGNOSIS_STATUSES:
-            assert time.monotonic() < deadline, current
-            time.sleep(0.01)
-            current = runtime.store.get_standard_diagnosis(
-                created["diagnosis_id"], _scope().scope_fingerprint
-            )
-    finally:
-        runtime.shutdown()
-
-    assert current["status"] == "failed", current
-    assert current["error_code"] == "DIAGNOSIS_FAILED", current
-
-
-def test_a_newly_caught_exception_keeps_its_text_off_the_wire(tmp_path, monkeypatch) -> None:
-    """The health surface RETURNS `error_message` verbatim — so it must carry no internals.
-
-    `_health_job_response` hands the stored `error_message` to the caller as
-    `error.message`. `_internal_error_message` **redacts**: it strips PII and leaves
-    internal diagnostics in place — right for a record an engineer reads, wrong for a
-    response body. So a newly-caught class contributes its **class name only**, while
-    the two classes that were already caught keep the shape they already had.
-
-    Security finding in the #730 review.
-    """
-    from test_standard_diagnosis_runtime import _scope
-
-    from aiops_diagnostics.gateway_api import _health_job_response
-
-    runtime = _runtime_with_settings(tmp_path, monkeypatch)
-    secret = "connect to 10.1.2.3:3306 as readonly failed: upstream SDK detail"
-    context = _scope()
-    monkeypatch.setattr(
-        "aiops_diagnostics.gateway_runtime.resolve_query_scope",
-        lambda *_a, **_k: (_ for _ in ()).throw(KeyError(secret)),
-    )
-    try:
-        job, _ = runtime.store.create_or_reuse_health_job(context.scope_fingerprint, "ORDER-1", "health-v1")
-        runtime._execute_health_report(job["job_id"], context, "ORDER-1")
-        stored = runtime.store.get_health_job(job["job_id"], context.scope_fingerprint)
-    finally:
-        runtime.shutdown()
-
-    assert stored is not None, "the job row vanished"
-    assert stored["error_code"] == "SOURCE_UNAVAILABLE", stored
-    assert secret not in str(stored["error_message"]), stored["error_message"]
-    # And the wire is what actually matters on this surface.
-    assert secret not in _health_job_response(stored)["error"]["message"]

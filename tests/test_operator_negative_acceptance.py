@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +27,6 @@ from operator_support import (
     B_USER_ID,
     C_USER_ID,
     DIAGNOSIS_QUESTION,
-    FOLLOWUP_AFTER_LOSS,
-    FOLLOWUP_QUESTION,
     ORDER_INSIDE,
     ORDER_MISSING,
     ORDER_OUTSIDE,
@@ -39,7 +36,6 @@ from operator_support import (
     TENANT,
     Caller,
     Connection,
-    Directory,
     FakeShops,
     OperatorScope,
     assistant_app,
@@ -58,12 +54,8 @@ from operator_support import (
 
 from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.conversation_store import ConversationStore
-from aiops_diagnostics.gateway_runtime import GatewayRuntime
-from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.query_scope import resolve_operator_site_scope
-from aiops_diagnostics.scope_context import SCOPE_TYPE_SELF
 from aiops_diagnostics.sources import MySQLSource
 
 
@@ -79,70 +71,6 @@ def _click_order_diagnosis(
 
 
 # --- 1. 越权必被拒，且不区分「不存在」与「无权」-----------------------------
-
-
-def test_clicked_order_diagnosis_of_another_operators_order_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """显式指名集合外订单 → 404 ORDER_NOT_FOUND，零作业，且与「订单不存在」同形。
-
-    管家端用户故事 5/6/7：查不到别的运营商的订单、拒绝要明确、且拒绝不能
-    用来试探订单是否存在。走的是前端真实路径（`shortcut_code`），不是裸
-    `order_no` 字段。
-    """
-    client, runtime = assistant_app(
-        tmp_path,
-        monkeypatch,
-        operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}),
-        Connection(),
-    )
-
-    refused = _click_order_diagnosis(client, ORDER_OUTSIDE)
-    missing = _click_order_diagnosis(client, ORDER_MISSING)
-
-    assert refused.status_code == missing.status_code == 404, (refused.text, missing.text)
-    assert refused.json()["error"]["code"] == missing.json()["error"]["code"] == "ORDER_NOT_FOUND"
-    # 拒绝不是存在性预言：响应体里既没有订单、也不说「无权」。
-    assert "order_no" not in refused.json()
-    assert "forbidden" not in refused.text and "unauthorized" not in refused.text.lower()
-    # 不改写成普通问答，也不启动诊断。
-    assert refused.json().get("type") is None
-    assert runtime.diagnoses == []
-    assert runtime.questions == []
-
-
-def test_a_site_outside_the_scope_is_refused_even_when_the_order_is_the_callers_own(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """只挂在本人名下、站点在集合外的订单同样被拒——替换 self，不是与 self 取并集。"""
-    client, runtime = assistant_app(
-        tmp_path,
-        monkeypatch,
-        operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}),
-        Connection(),
-    )
-
-    assert _click_order_diagnosis(client, ORDER_OUTSIDE).status_code == 404
-    assert runtime.diagnoses == []
-
-
-def test_an_operator_account_without_shop_binding_is_refused_at_the_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """未绑定店铺 → 空集合 → 拒绝，不回落为租户级放行，且不发起订单查询。"""
-    connection = Connection()
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.query_scope"):
-        caller = operator_caller(monkeypatch, sites={}, shop_ids=())
-    client, runtime = assistant_app(tmp_path, monkeypatch, caller, connection)
-
-    refused = _click_order_diagnosis(client, ORDER_INSIDE)
-
-    assert refused.status_code == 404
-    assert refused.json()["error"]["code"] == "ORDER_NOT_FOUND"
-    assert runtime.diagnoses == []
-    assert [item for item in connection.executed if "ch_order_info" in item[0]] == []
-    # 空集合的成因（账号漏登记）与「站点不在集合内」不是一回事，日志必须可区分。
-    assert "reason=no_shop_binding" in caplog.text
 
 
 # --- 2. 拒绝语言：订单选择器的提示跟随请求语言 -------------------------------
@@ -180,68 +108,6 @@ def test_the_order_picker_prompt_is_localized_on_the_operator_entry(
 
 
 # --- 3. 活跃订单：每一轮都重新校验权限 --------------------------------------
-
-
-def test_active_order_follow_up_drops_an_order_that_left_the_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """追问已确认的活跃订单不带订单号，但每一轮都重新校验（用户故事 12）。
-
-    订单仍在范围内 → 202 diagnosis；订单被改挂到集合外站点（数据侧变动，
-    范围指纹不变）→ 同一个追问静默回落为普通问答并清掉失效绑定，而不是
-    拿着上一轮的确认继续诊断一个已经看不到的订单。
-    """
-    connection = Connection()
-    caller = operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
-    client, runtime = assistant_app(tmp_path, monkeypatch, caller, connection)
-
-    conversation = client.post(
-        "/v1/conversations", json={"agent_version_key": AGENT_VERSION_KEY}, headers=_OPERATOR_HEADERS
-    )
-    assert conversation.status_code == 201, conversation.text
-    cid = conversation.json()["conversation_id"]
-
-    bound = client.post(
-        f"/v1/conversations/{cid}/active-order",
-        json={"order_no": ORDER_INSIDE},
-        headers=_OPERATOR_HEADERS,
-    )
-    assert bound.status_code == 200, bound.text
-    assert bound.json()["active_order_no"] == ORDER_INSIDE
-
-    first = client.post(
-        "/v1/assistant/questions",
-        json={"question": FOLLOWUP_QUESTION, "conversation_id": cid},
-        headers=_OPERATOR_HEADERS,
-    )
-    assert first.status_code == 202, first.text
-    assert first.json()["type"] == "diagnosis"
-    assert first.json()["order_no_from_context"] == ORDER_INSIDE
-    # 诊断生成期间会话的并发闸门是**锁着的**：槽位持有到作业终态，不再在提交时释放
-    # （否则这里会读到一个正在生成、却说 ``is_generating=false`` 的会话）。替身运行时
-    # 不跑工人，所以由用例自己把作业推到终态——正是真实工人在终态做的事。
-    turn_no = first.json()["turn_no"]
-    store = ConversationStore(Path(client.app.state.gateway.settings.database_file))
-    scope = caller.context.scope_fingerprint
-    assert store.get(cid, scope)["is_generating"] is True
-    store.complete_turn(cid, scope, turn_no, answer={"text": "诊断结论"})
-    assert store.get(cid, scope)["is_generating"] is False
-
-    # 订单改挂到集合外站点：调用者站点集合不变（指纹不变），但订单已不可见。
-    connection.orders = [
-        {**row, "site_id": SITE_OUT} if row["order_no"] == ORDER_INSIDE else row for row in connection.orders
-    ]
-    second = client.post(
-        "/v1/assistant/questions",
-        json={"question": FOLLOWUP_AFTER_LOSS, "conversation_id": cid},
-        headers=_OPERATOR_HEADERS,
-    )
-
-    assert second.status_code == 202, second.text
-    assert second.json()["type"] == "qa"
-    assert runtime.diagnoses == [(ORDER_INSIDE, FOLLOWUP_QUESTION)]
-    detail = client.get(f"/v1/conversations/{cid}", headers=_OPERATOR_HEADERS)
-    assert detail.json()["active_order_no"] is None
 
 
 def test_a_changed_operator_scope_makes_the_conversation_invisible(
@@ -448,82 +314,6 @@ def test_the_consumer_entry_keeps_its_own_actions(tmp_path: Path, monkeypatch: p
     ]
 
 
-def test_the_consumer_entry_keeps_its_own_order_visibility(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """普通消费者会话（无 B 端账号）的可见性仍只按 C 端本人过滤。
-
-    #426 记录的边界：入口维度不进身份，所以运营商维度对「消费者入口中恰好也有
-    B 端账号」的会话同样生效。这一条是它的反向守护——运营商维度**没有**把消费者
-    入口放宽到「同租户任意订单」，本人的订单照样能查、别人的照样被拒。
-    """
-    connection = Connection()
-    consumer = Caller(resolve_session(monkeypatch, records=()))  # 无 B 端账号：消费者端正常状态
-    client, _ = assistant_app(
-        tmp_path, monkeypatch, consumer, connection, published_entries=("consumer", "operator")
-    )
-    own_orders = [row for row in connection.orders if row["user_id"] == C_USER_ID]
-
-    for row in own_orders:
-        own = client.post(
-            "/v1/assistant/questions",
-            json={"question": DIAGNOSIS_QUESTION, "order_no": row["order_no"]},
-            headers=_CONSUMER_HEADERS,
-        )
-        assert own.status_code == 202, own.text
-        assert own.json()["type"] == "diagnosis"
-
-    # 同一租户内挂在别人名下、且站点在某个运营商的站点集合里的订单：消费者看不到。
-    foreign = client.post(
-        "/v1/assistant/questions",
-        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_INSIDE},
-        headers=_CONSUMER_HEADERS,
-    )
-
-    assert foreign.status_code == 404
-    assert foreign.json()["error"]["code"] == "ORDER_NOT_FOUND"
-
-
-def test_a_consumer_entry_session_with_a_b_account_sees_only_its_own_orders(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """消费者入口 + 会话恰好有 B 端账号：可见范围仍是**本人**，不是运营商站点集合。
-
-    **这条曾经断言相反的结论**：它原先钉住「运营商维度对消费者会话同样生效」——
-    集合内连别人的订单都看得见、集合外连本人的订单都看不见。41 实测证明那是
-    **越权**：``consumer`` 入口能读到**他人**名下、位于该运营商站点的订单。
-
-    现在的判据：#423 定调「消费者端行为保持不变」，运营商站点范围**只在管家端入口
-    生效**。因此消费者会话回到 ``self`` —— 本人的订单可见、他人的订单不可见。
-    """
-    connection = Connection()
-    session = resolve_session(
-        monkeypatch,
-        records=(b_subject(),),
-        operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
-        platform_entry="consumer",
-    )
-    assert session.data_scope.type == SCOPE_TYPE_SELF  # 前置：未被换成运营商维度
-    client, runtime = assistant_app(
-        tmp_path, monkeypatch, Caller(session), connection, published_entries=("consumer", "operator")
-    )
-
-    own = client.post(
-        "/v1/assistant/questions",
-        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OWN_IN},
-        headers=_CONSUMER_HEADERS,
-    )
-    foreign = client.post(
-        "/v1/assistant/questions",
-        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_INSIDE},
-        headers=_CONSUMER_HEADERS,
-    )
-
-    assert own.status_code == 202, own.text
-    assert foreign.status_code == 404, foreign.text
-    assert runtime.diagnoses == [(ORDER_OWN_IN, DIAGNOSIS_QUESTION)]
-
-
 def test_the_entry_header_reaches_the_session_resolver(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -563,140 +353,3 @@ def test_the_entry_header_reaches_the_session_resolver(
             # 所以"无头 + 自愿 self 范围"这个组合**不可达**（不是靠本层兜住的）。
             assert resp.status_code == 409, resp.text
             assert resp.json()["error"]["code"] == "PLATFORM_AMBIGUOUS", resp.text
-
-
-def test_the_no_header_ambiguity_holds_only_for_two_platform_identities(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """把上面那条的结论限定到它成立的形状：双平台身份。
-
-    上面那个用例的目录替身固定返回管家端角色，因此它只证明了「双平台 -> 409」。
-    另一半更重要：**无管家端角色**的会话只有 consumer 可选 —— 平台决策会自动选中它，
-    并在同样省略入口头的情况下放行。那不是漏洞（consumer + 本人范围正是正确行为），
-    但它说明「省略入口头必然 409」是错的，结论必须写成「双平台身份时」。
-    """
-    session = resolve_session(
-        monkeypatch,
-        records=(b_subject(),),
-        operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
-        platform_entry=None,
-    )
-    client, _ = assistant_app(
-        tmp_path,
-        monkeypatch,
-        Caller(session),
-        Connection(),
-        published_entries=("consumer", "operator"),
-        directory=Directory(client_type=None),
-    )
-    resp = client.post(
-        "/v1/assistant/questions",
-        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OWN_IN},
-        headers={"Authorization": "Bearer service"},
-    )
-    # 单平台身份被自动选中，请求照常走 —— 不是 409。
-    # 这条与上面那条一起表明：409 来自"双平台歧义"，不是"缺入口头"本身。
-    #
-    # **必须断言精确的状态码，不能写 `in (202, 404)`**：那样"本人订单被错误拒绝"
-    # 也会通过，等于这条用例验不了它声称验的事（正常放行）。
-    assert resp.status_code == 202, resp.text
-
-
-def test_history_window_keeps_a_turn_whose_order_left_the_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """#497 的风险声明：窗口是**事实**，不是授权 —— 这条用例钉住它并说明边界。
-
-    订单离开调用者站点集合后，Route 1c 下一轮就把它丢掉了（上一条用例：
-    回落成普通问答、清掉绑定）。但**那一轮已经存进 ``conversation_turns``**，
-    而窗口按「最近 N 轮」取，不按「现在还能不能看见」取 —— 于是那一轮的
-    诊断结论仍会以历史的名义进入后续提示词。
-
-    这是**有意接受的风险**（#497 选了「维持现状 + 写风险声明」那条路），不是缺陷：
-    根因是缺一条边（``conversation_turns`` 没有 ``order_no``），补它要改会话表结构，
-    而 PRD #410 明示不改。
-
-    覆盖范围**只到这里为止**：
-    * 同一主体、同一租户、**范围指纹不变**（订单改挂站点不改变指纹）。
-      ⇒ **不是跨租户/跨主体泄漏**。这一条的依据是**指纹的构成**，不是本用例：
-      ``_scope_fingerprint`` 的 payload 含 ``caller_b_user_id`` / ``subject_b_user_id`` /
-      ``subject_c_user_id`` / ``delegated`` / ``effective_tenant_id``
-      （``scope_context.py:640-648``），换主体必然换指纹。
-      **本用例只覆盖「站点集合变 → 指纹变 → 404」这一条**，它没有换主体。
-      评审指出我把一个由构造保证的性质说成了由这条用例保证 —— 那样写会让人以为
-      跨主体也被测过。
-    * 跨范围时整个会话 **404** —— 那条边界由
-      ``test_a_changed_operator_scope_makes_the_conversation_invisible`` 覆盖，
-      本用例不重复证它，也不声称本用例覆盖了它。
-      跨主体那一半现在由 ``test_a_changed_subject_makes_the_conversation_invisible``
-      覆盖（C 端用户不变、只换 C→B 映射指向的 B 端主体）。
-
-    顺序是刻意的：**先证明订单真的离开了可见集合**（同一条追问回落成普通问答），
-    **再**断言窗口里仍留着那一轮。反过来写的话，「订单已不可见」就只是一个假设。
-    """
-    connection = Connection()
-    caller = operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
-    client, _ = assistant_app(tmp_path, monkeypatch, caller, connection)
-
-    conversation = client.post(
-        "/v1/conversations", json={"agent_version_key": AGENT_VERSION_KEY}, headers=_OPERATOR_HEADERS
-    )
-    assert conversation.status_code == 201, conversation.text
-    cid = conversation.json()["conversation_id"]
-
-    bound = client.post(
-        f"/v1/conversations/{cid}/active-order",
-        json={"order_no": ORDER_INSIDE},
-        headers=_OPERATOR_HEADERS,
-    )
-    assert bound.status_code == 200, bound.text
-
-    first = client.post(
-        "/v1/assistant/questions",
-        json={"question": FOLLOWUP_QUESTION, "conversation_id": cid},
-        headers=_OPERATOR_HEADERS,
-    )
-    assert first.status_code == 202, first.text
-    assert first.json()["order_no_from_context"] == ORDER_INSIDE
-    turn_no = first.json()["turn_no"]
-
-    store = ConversationStore(Path(client.app.state.gateway.settings.database_file))
-    scope = caller.context.scope_fingerprint
-    store.complete_turn(cid, scope, turn_no, answer={"text": "诊断结论：充电桩通信中断"})
-
-    # 订单改挂到集合外站点：调用者站点集合不变 ⇒ 范围指纹不变（这正是本票的边界所在）。
-    connection.orders = [
-        {**row, "site_id": SITE_OUT} if row["order_no"] == ORDER_INSIDE else row for row in connection.orders
-    ]
-
-    # **前提先证**：同一条追问不再走诊断，说明那一单确实已不在可见集合里。
-    # （这一条与上一条用例重叠是有意的：本用例的全部意义建立在「订单真的不可见了」之上，
-    # 引用一个别处的断言会让它在本文件里变成一个假设。）
-    second = client.post(
-        "/v1/assistant/questions",
-        json={"question": FOLLOWUP_AFTER_LOSS, "conversation_id": cid},
-        headers=_OPERATOR_HEADERS,
-    )
-    assert second.status_code == 202, second.text
-    assert second.json()["type"] == "qa", "前提不成立：订单仍可见，本用例的场景没有构造出来"
-
-    # **结论**：已不可见的那一轮仍在窗口里 —— 这就是被接受的风险本身。
-    # 未完成的轮次（上面那条 qa 还停在 queued）不进窗口，所以这里只应看到第一轮。
-    window = store.context_turns(cid, scope)
-    assert [t["turn_no"] for t in window] == [turn_no], "被接受的现状：离开可见集合的轮次仍在窗口里"
-
-    # **并且它真的会进提示词** —— 这一步走的是**生产那条接线**
-    # （``GatewayRuntime._conversation_history``），不是直接调渲染函数。
-    # 评审指出：只调 ``render_history`` 时，即使生产提示词哪天不再接历史，这条用例
-    # 照样是绿的 —— 那正是 #482 修过的「窗口接上了但没人用」那个形状，本票不该把它
-    # 偷偷放回来。经由生产接线断言，这条用例才真的在守它声称守的东西。
-    #
-    # 用**真** ``GatewayRuntime``（本文件用的替代品没有这条接线，它只记录启没启动作业）；
-    # 它与应用读同一个库文件，所以看到的是同一个会话。
-    real_runtime = GatewayRuntime(
-        GatewayStore(client.app.state.gateway.settings.database_file),
-        client.app.state.gateway.settings,
-        Settings(),
-    )
-    history = real_runtime._conversation_history((cid, scope, turn_no), "zh")
-    assert "诊断结论" in history, "该轮不止在窗口里，而且真的经生产接线进了提示词"
