@@ -177,3 +177,20 @@ tenant_id = "1942105476598861824"
 business_entry = "operator"
 app_id = "137cc417-f068-43c2-9d4a-43ebd254ea01"
 agent_name = "ops-methodology-700"
+
+# 第二租户的独立管家副本；正文与工具由该租户的 Dify 应用管理。
+# 节点目标和正式路由按 operator-cpms/multitenant.md 在部署时单独登记。
+[[agents]]
+tenant_id = "1941847786056323072"
+name = "ops-youlian-order-diagnosis"
+description = "优链充管家订单诊断"
+agent_type = "operations"
+knowledge_base_ids = []
+model = "deepseek-v4-1-flash-261017"
+output_contract = "diagnosis-v1"
+
+[[dify_apps]]
+tenant_id = "1941847786056323072"
+business_entry = "operator"
+app_id = "349a637c-8f86-41b9-b932-e9818fb39a97"
+agent_name = "ops-youlian-order-diagnosis"
