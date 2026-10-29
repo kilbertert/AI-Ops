@@ -838,3 +838,33 @@ def test_answer_rejection_logs_only_fixed_reason(caplog):
     assert "operator_answer_rejected reason=mutation_claim" in caplog.text
     assert "PRIVATE-ORDER" not in caplog.text
     assert "PRIVATE-TOKEN" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"summary":"s"}',
+        '```json\n{"summary":"s"}\n```',
+        '```\n{"summary":"s"}\n```',
+        '  ```json\r\n{"summary":"s","a":[1,2]}\r\n```  ',
+    ],
+)
+def test_answer_accepts_a_single_fenced_json_object(text):
+    """供应商在 JSON 模式下仍会间歇加围栏（41 实测 3 次中 1 次）；剥一层即可，不得放宽成散文。"""
+    expected = {"summary": "s", "a": [1, 2]} if "[1,2]" in text else {"summary": "s"}
+    assert operator_cpms.parse_answer(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "本次订单没有明显异常。",
+        '好的：\n```json\n{"summary":"s"}\n```',
+        '```json\n{"summary":"s"}\n```\n```json\n{"summary":"t"}\n```',
+        '```json\n{"summary":"s",}\n```',
+        '{"summary":"s"}\n{"summary":"t"}',
+    ],
+)
+def test_answer_still_rejects_prose_and_multiple_objects(text):
+    with pytest.raises(ValueError):
+        operator_cpms.parse_answer(text)

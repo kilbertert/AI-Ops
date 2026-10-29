@@ -509,7 +509,7 @@ class OperatorCpms:
                 raw = payload.get("answer", "")
                 if not isinstance(raw, str) or len(raw) > 24000:
                     raise ValueError("invalid answer")
-                answer = json.loads(raw)
+                answer = parse_answer(raw)
             except ValueError as exc:
                 logging.getLogger("aiops.operator").warning("operator_answer_rejected reason=json_parse")
                 raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
@@ -793,6 +793,32 @@ def project_evidence(body, order, tool):
         "observed_at": datetime.now(UTC).isoformat(),
         "data": selected,
     }
+
+
+_FENCED_ANSWER = re.compile(r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*?)\r?\n```\Z", re.DOTALL)
+
+
+def parse_answer(raw):
+    """把节点回传的正文解析成诊断报告。
+
+    实测（41，deepseek-v4-flash，流式 + 工具历史）：即使 `response_format=json_object`，
+    供应商仍会**间歇**用 ```json 围栏包住那份唯一的 JSON —— 同一提示词、同一请求，
+    三次里两次裸 JSON、一次带围栏。只做 `json.loads` 于是把一次合规回答判成
+    `json_parse` 失败，这正是 `OPERATOR_DIAGNOSIS_FAILED` 的确定性成因。
+
+    这里只剥**一层**围栏且围栏内必须恰好一个 JSON 对象；散文、多份 JSON、残缺块
+    仍然拒绝 —— 放宽的是供应商的装饰，不是输出的契约。
+    """
+    try:
+        return json.loads(raw)
+    except ValueError as bare:
+        fenced = _FENCED_ANSWER.match(raw.strip())
+        if fenced is None:
+            raise
+        try:
+            return json.loads(fenced.group("body"))
+        except ValueError:
+            raise bare from None
 
 
 def _answer_refused(reason):
