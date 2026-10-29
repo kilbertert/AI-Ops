@@ -13,6 +13,8 @@
 - C端聊天及订单检测快捷动作进入其 WF01 路线；订单检测使用本人订单状态分支，
   不再承诺旧 Python 的多源根因报告。独立状态查询和已有节点绑定保留。
 - 管家单订单请求与原生 Dify 试用走公司身份和 Java 节点的两项 CPMS 工具。
+- 管家没有指定订单时可咨询操作、解释状态或搜索当前账号可见站点；需要查具体订单时才请求单号。
+  站点名称/地址来自CPMS，未定位时不按距离排序；见[无订单对话](docs/agents/operator-cpms/conversation-qa.md)。
 - Dify 试用只接受已登记 `app_id`，按绑定运行 Dify/Java 草稿；不接受裸 prompt/旧工具白名单。
 - 未配置业务路线时返回 `CHAT_ROUTE_UNAVAILABLE`，不回落 Python、通用问答或旧 FAQ 匹配。
 - 固定 FAQ API、健康报告、确定性聚合、知识库与发布管理继续保留。
@@ -62,7 +64,7 @@ flowchart LR
 | 网关与服务 | `gateway_api.py`、`gateway_runtime.py`、`gateway_server.py`、`gateway_store.py`、`gateway_config.py`、`gateway_logging.py`、`public_openapi.py`、`request_observation.py`、`isolation_guard.py`、`deployment_environment.py` |
 | 身份与范围 | `identity.caller_auth.py`、`identity.company_token_auth.py`、`identity.company_permissions.py`、`identity.third_session_auth.py`、`identity.scope_context.py`、`identity.query_scope.py`、`identity.order_visibility.py`、`http_auth.py` |
 | C端业务 | `consumer.consumer_billing.py`、`consumer.consumer_chat_service.py`、`consumer.consumer_documents.py`、`consumer.consumer_flow_contract.py`、`consumer.consumer_intent.py`、`consumer.consumer_knowledge.py`、`consumer.consumer_knowledge_selection.py`、`consumer.consumer_language.py`、`consumer.consumer_order_chat.py`、`consumer.consumer_photo.py`、`consumer.consumer_publication.py`、`consumer.consumer_trial.py`、`charging_status.py` |
-| 节点与试用 | `execution.agent_runs.py`、`execution.execution_manifest.py`、`execution.chat_execution.py`、`execution.chat_data_grant.py`、`execution.chat_route_bindings.py`、`execution.node_publication.py`、`operator_cpms.py`、`dify.dify_trial.py`、`dify.dify_workflow_trial.py` |
+| 节点与试用 | `execution.agent_runs.py`、`execution.execution_manifest.py`、`execution.chat_execution.py`、`execution.chat_data_grant.py`、`execution.chat_route_bindings.py`、`execution.node_publication.py`、`operator_cpms.py`、`operator_conversation.py`、`dify.dify_trial.py`、`dify.dify_workflow_trial.py` |
 | 管理与发布 | `admin_cli.py`、`publication.agent_content.py`、`publication.agent_lifecycle.py`、`publication.agent_manifest.py`、`publication.agent_debug.py`、`publication.shortcut_lifecycle.py`、`publication.shortcut_migration.py`、`ops_provider.py` |
 | 知识与会话 | `conversation_store.py`、`faq.py`、`publication.qa_rag.py`、`clarification.py`、`knowledge.knowledge_retrieval.py`、`knowledge.knowledge_sources.py`、`knowledge.knowledge_triple.py`、`knowledge.knowledge_dataset_sync_guard.py`、`knowledge.kb_onboarding.py`、`knowledge.ragflow_console.py` |
 | 健康与分析 | `health_curves.py`、`health_metrics.py`、`health_report.py`、`health_report_copy.py`、`ops_analysis.py`、`ops_analysis_narrative.py`、`order_status.py`、`rules.py`、`sources.py`、`tdengine_proxy.py` |
