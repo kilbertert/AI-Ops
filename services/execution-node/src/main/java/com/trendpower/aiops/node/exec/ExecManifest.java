@@ -36,6 +36,8 @@ public final class ExecManifest {
     public static final String PATH_ENV = "AIOPS_EXEC_MANIFEST";
 
     private static final String SUPPORTED_SCHEMA = "m3-exec-config/1";
+    public static final List<String> SUPPORTED_SCHEMAS = List.of(
+            SUPPORTED_SCHEMA, "operator-exec-config/1", "operator-conversation/1");
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final String id;
@@ -210,7 +212,7 @@ public final class ExecManifest {
     private static ExecManifest parse(JsonNode root, String id, Path real) {
         String schema = text(root, "schema");
         boolean conversation = "operator-conversation/1".equals(schema);
-        if (!SUPPORTED_SCHEMA.equals(schema) && !"operator-exec-config/1".equals(schema) && !conversation) {
+        if (!SUPPORTED_SCHEMAS.contains(schema)) {
             throw new ExecConfigViolation("MANIFEST",
                     "不支持的 schema（" + schema + "），只接受 " + SUPPORTED_SCHEMA);
         }

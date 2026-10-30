@@ -127,6 +127,10 @@ def managed(operator, monkeypatch, tmp_path):
             tool_provider_ids=lambda: {"cpms-node": "provider-id"},
         ),
     )
+    from execution.test_node_capabilities import record_ready
+
+    record_ready(settings.database_file, f["target"].config_file)
+
     return f, service, caller, mc, calls
 
 

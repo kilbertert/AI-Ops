@@ -220,3 +220,21 @@ timeout 45 docker exec aiops-runtime-node java -Xmx32m -cp /tmp TlsProbe \
 
 挂载语义依据[Compose服务规范](https://docs.docker.com/reference/compose-file/services/#long-syntax-6)：
 长语法bind的`create_host_path: false`禁止源文件缺失时自动建目录；`read_only: true`保证节点不可修改声明。
+
+## 受管发布前的实际节点兼容性
+
+Java每30秒使用自身节点凭据报告支持的清单schema、工具授权契约和**启动时实际加载**的工具声明
+摘要到`POST /v1/internal/execution-node/capabilities`。该精确回调须随nginx模板部署；不新增公网入口。
+Gateway从凭据确定节点与环境，报告120秒过期。管家开通、发布和恢复只在目标节点支持候选协议且
+工具声明摘要一致时推进正式指针；缺心跳或不兼容分别返回SETUP_EXECUTOR_UNAVAILABLE/
+SETUP_EXECUTOR_INCOMPATIBLE。现役路由不被后台自动撤回，旧节点升级前新发布会被明确阻止。
+
+升级顺序：合并Gateway制品与回调模板 → 合并Java制品 → 等待实际心跳 → 正常页面发布。
+先备份当前release/runtime.env/回调配置，节点重建前确保无在途任务，失败恢复旧制品与回调；
+不以插入数据库假心跳代替实际节点报告。后台只读查询execution_node_capabilities中的
+environment/node_id/observed_at及协议摘要即可检查；不输出节点令牌。
+
+本地Java构建：使用既有`maven:3.9-eclipse-temurin-21`，挂载项目与`~/.m2`，以claude UID运行
+`mvn -s /var/maven/settings-docker.xml -Dmaven.repo.local=/var/maven/repository -DskipTests=false package`。
+验证实际Java报告：`python tools/verification/verify_node_capabilities.py dist/verification/node-capabilities`。
+使用合成Gateway、随机回环端口及无效Snail目标，约4秒收到报告；关闭自己的容器，不接生产。
