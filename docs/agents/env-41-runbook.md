@@ -28,7 +28,31 @@
 
 ## 1. 访问 41
 
-### 1.1 首选：密钥登录（2026-09-16 起已配置）
+### 1.0 统一入口：`dev-host`（跑命令与读文件的首选形式）
+
+服务器共识要求“到达主机是一个固定操作”：用仓库内的声明 `.dev-host.toml` 与库外清单
+`~/.config/dev-host/hosts.toml` 共同解析主机身份，而不是每次手写参数。41 侧的名字是
+`41`（`aiops-41` 是清单里的 host 字段，命令里写 `41`）。
+
+```bash
+# 只读命令：健康、进程状态、日志尾巴。服务类主机要显式 --allow-service-exec。
+dev-host exec 41 --allow-service-exec -- curl -sS http://172.18.0.1:8788/health
+dev-host exec 41 --allow-service-exec -- systemctl is-active aiops-gateway-41.service
+
+# 读文件 / 列目录 / 按模式找文件：不需要写入身份。
+dev-host read 41 /opt/aiops-41/src/aiops_diagnostics/__init__.py
+dev-host ls 41 /opt/aiops-41
+dev-host find 41 '*.log' --path /var/log/aiops-41 --newer 2
+```
+
+写入 41 需要**产物身份**（`write`/`cp` 传 `--artifact-sha256`）；这是共识里“变更只以
+从合并修订构建的产物到达服务主机”的落地形式，不是绕过口。`dev-host hosts` 列出本机
+声明的所有主机及其角色，`dev-host show 41` 打印本项目对 41 的声明。
+
+反射式检查（本轮实际用的那条）：健康接口返回的 `version` 形如 `1.0.0+<12 位提交>`，
+它才是线上真正在跑的修订；合并进 main 但 `version` 没变的，**不算已部署**。
+
+### 1.1 密钥登录（底层通道：`dev-host` 在后端复用的就是它）
 
 ```bash
 ssh aiops-41 '<命令>'          # 别名：47.97.160.153, user root, key id_ed25519_41_aiops
