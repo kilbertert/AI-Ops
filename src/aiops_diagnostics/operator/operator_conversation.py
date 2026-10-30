@@ -31,7 +31,8 @@ MAX_SITE_NOTE_CHARS = 400
 #: 说明里不得出现的断言。**封闭词表**：数字，以及价格/距离/可用性的固定说法（中英各一组）。
 SITE_FORBIDDEN = re.compile(
     r"\d"
-    r"|元|价格|费用|收费|多少钱|免费|距离|公里|千米|米内|附近|最近|空闲|可用|充电中|有枪|排队"
+    r"|元|价格|费用|收费|多少钱|免费|不收钱|不要钱|不收费|距离|公里|千米|米内|附近|最近"
+    r"|空闲|可用|可以充|能充|可充|有位置|排队"
     r"|\bfree\b|\bavailable\b|\bunavailable\b|\bprice\b|\bcost\b|\bcheap\b|\bdistance\b"
     r"|\bkm\b|\bnearby\b|\bnearest\b|\bvacant\b|\bin stock\b|\bbusy\b",
     re.IGNORECASE,

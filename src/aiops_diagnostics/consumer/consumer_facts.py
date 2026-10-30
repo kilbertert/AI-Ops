@@ -41,8 +41,10 @@ from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 #: 事实片段的形状。名字是**受控词汇**：只能取自 :func:`facts_for` 的键。
 SLOT = re.compile(r"\{\{fact:([a-z_]{1,32})\}\}")
 
-#: 客户端本轮能填的事实。键是协议的一部分，改它要同时改协议块与迁移。
-CLIENT_FACTS = ("order_no", "total_amount", "paid_amount", "refund_amount", "status", "observed_at")
+#: 客户端本轮能填的事实。**每个片段是一整句带含义的话**（标签+值+单位+来源），
+#: 不是裸值 —— 裸值可以被摆到任何位置上表达任何意思（复核反例：`每小时{{fact:paid_amount}}元`、
+#: `合计{{fact:total_amount}}美元`）。片段由系统整句产出，模型只决定它出现在哪一段。
+CLIENT_FACTS = ("order_line", "billing_line", "status_line", "observed_line")
 
 #: 支付结果的**封闭词表**。系统只有业务记录，没有支付渠道回执，所以这些断言一律不成立。
 #: 否定形式（`没有退款记录`、`not refunded`）放行 —— 那正是我们要说的话。
@@ -80,12 +82,10 @@ def _amount(raw: object) -> str | None:
 
 
 def _status_label(snapshot: dict, language: str) -> str:
-    from aiops_diagnostics.health.rules import status_label
+    """状态名走**现成的多语言资源**，不是"非中文一律英文"。"""
+    from aiops_diagnostics.consumer.consumer_plain import _status_name
 
-    role = str(snapshot.get("status_role") or "")
-    if not language.startswith("zh"):
-        return role.replace("_", " ") or "unknown"
-    return status_label(snapshot.get("status_code"))
+    return _status_name(language, snapshot)
 
 
 def _readable_time(raw: object) -> str:
@@ -95,27 +95,58 @@ def _readable_time(raw: object) -> str:
 
 
 def facts_for(snapshot: dict, language: str) -> dict[str, str]:
-    """本轮**可以**填进正文的事实。不在这个字典里的名字一律拒收。
+    """本轮**可以**填进正文的**整句**事实。不在这个字典里的名字一律拒收。
 
-    只给出快照里真的有的值：没有的键不出现在字典里，于是"编一个退款金额"连片段都写不出来。
+    每一段都自带标签、值与来源，所以"把这个值说成那个意思"没有位置可写：模型拿到的是
+    `账单合计 27.36 元，系统记录的支付金额 20 元，退款 0 元`，不是一个 `27.36`。
     """
     facts: dict[str, str] = {}
     order_no = str(snapshot.get("order_no") or "")
     if order_no:
-        facts["order_no"] = order_no
-    for name, field in (
-        ("total_amount", "order_amount"),
-        ("paid_amount", "recorded_payment_amount"),
-        ("refund_amount", "recorded_refund_amount"),
-    ):
-        value = _amount(snapshot.get(field))
-        if value is not None:
-            facts[name] = value
+        facts["order_line"] = ("订单号：" if language.startswith("zh") else "Order: ") + order_no
+    amounts = {
+        name: _amount(snapshot.get(field))
+        for name, field in (
+            ("total", "order_amount"),
+            ("paid", "recorded_payment_amount"),
+            ("refund", "recorded_refund_amount"),
+        )
+    }
+    if any(value is not None for value in amounts.values()):
+        facts["billing_line"] = _billing_line(amounts, language)
     if snapshot.get("status_role"):
+        # `status` 只用于自检/文档（多语言状态名），**不是**可以写进正文的片段：
+        # 裸状态名能被摆到"并非…"这种位置（复核反例），所以正文只允许 `status_line`。
         facts["status"] = _status_label(snapshot, language)
+        facts["status_line"] = _status_line(snapshot, language)
     if snapshot.get("observed_at"):
-        facts["observed_at"] = _readable_time(snapshot["observed_at"])
+        facts["observed_line"] = (
+            "查询时间：" if language.startswith("zh") else "Checked at: "
+        ) + _readable_time(snapshot["observed_at"])
     return facts
+
+
+def _unit(language: str) -> str:
+    return "元" if language.startswith("zh") else "CNY"
+
+
+def _billing_line(amounts: dict, language: str) -> str:
+    """一句完整的话：三笔金额各自带标签与单位，顺序由系统定。"""
+    unit = _unit(language)
+    zh = language.startswith("zh")
+    parts = []
+    if amounts["total"] is not None:
+        parts.append(("账单合计 " if zh else "Total ") + f"{amounts['total']} {unit}")
+    if amounts["paid"] is not None:
+        parts.append(("系统记录的支付金额 " if zh else "Recorded payment ") + f"{amounts['paid']} {unit}")
+    if amounts["refund"] is not None:
+        parts.append(("退款 " if zh else "Refund ") + f"{amounts['refund']} {unit}")
+    return ("，".join(parts) if zh else "; ".join(parts)) + ("。" if zh else ".")
+
+
+def _status_line(snapshot: dict, language: str) -> str:
+    label = _status_label(snapshot, language)
+    return ("当前状态：" if language.startswith("zh") else "Status: ") + label
 
 
 def status_words() -> tuple[str, ...]:
@@ -153,7 +184,8 @@ def _negated(text: str, start: int) -> bool:
 
 def fill(text: str, facts: dict[str, str]) -> str:
     """把片段填成值。未知片段是协议错误，不是措辞问题。"""
-    unknown = sorted({name for name in SLOT.findall(text) if name not in facts})
+    allowed = {name for name in CLIENT_FACTS if name in facts}
+    unknown = sorted({name for name in SLOT.findall(text) if name not in allowed})
     if unknown:
         raise ChatRunUnavailable(
             "CHATFLOW_FACT_UNKNOWN", f"reply uses facts this turn does not carry: {', '.join(unknown)}"
@@ -177,7 +209,9 @@ def _label_groups() -> dict[str, tuple[str, ...]]:
 #: 金额为 0 时，**"没有这一项"就是它的说法**：`没有退款记录` 已经说完了
 #: `recorded_refund_amount=0` 这个事实，再要求写出 `0` 只会逼模型说一句不自然的话。
 ZERO_SAID = {
-    "refund_amount": re.compile(r"(?:没有|没|无|未|no|not?)\s*(?:任何)?\s*(?:退款|退回|refund)", re.I),
+    "recorded_refund_amount": re.compile(
+        r"(?:没有|没|无|未|no|not?)\s*(?:任何)?\s*(?:退款|退回|refund)", re.I
+    ),
 }
 
 #: 标签后面紧跟这些词时，它说的是状态码而不是金额（`退款状态 1`）。
@@ -232,19 +266,33 @@ def check_bound_reply(text: str, snapshot: dict, language: str) -> str:
     另外支付结果（到账/退款成功/扣款）仍是封闭词表，否定形式放行。
     """
     facts = facts_for(snapshot, language)
-    unknown = sorted({name for name in SLOT.findall(text) if name not in facts})
+    allowed = {name for name in CLIENT_FACTS if name in facts}
+    unknown = sorted({name for name in SLOT.findall(text) if name not in allowed})
     if unknown:
         raise ChatRunUnavailable(
             "CHATFLOW_FACT_UNKNOWN", f"reply uses facts this turn does not carry: {', '.join(unknown)}"
         )
+    uses_fragments = bool(SLOT.search(text))
     filled = fill(text, facts)
+    # 用了片段就必须**全部**用片段：混写直接数字等于让模型自己给值安排含义
+    # （复核反例 `每小时{{fact:paid_amount}}元`）。片段之外一个数字都不许有。
+    if uses_fragments and _NUMBER_TOKEN.search(SLOT.sub(" ", filled)):
+        raise ChatRunUnavailable(
+            "CHATFLOW_FACT_UNWRAPPED_NUMBER",
+            "reply mixes fact fragments with hand-written numbers",
+        )
     order_no = str(snapshot.get("order_no") or "")
     if order_no and order_no not in filled:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply omits the order number")
     for token in ("cpms.", "status_code=", "status_role="):
         if token in filled:
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply exposes internal identifiers")
-    amounts = {name: Decimal(value) for name, value in facts.items() if name.endswith("_amount")}
+    # 金额**直接从快照取**（facts 里是整句片段，不是数字）。
+    amounts = {
+        field: Decimal(value)
+        for field in ("order_amount", "recorded_payment_amount", "recorded_refund_amount")
+        if (value := _amount(snapshot.get(field))) is not None
+    }
     numbers = _token_numbers(filled, order_no)
     present = {value for value, _, _ in numbers}
     # (2) 每个数字都要有出处；小计数（0–10 整数）不构成对钱数的断言。
@@ -263,11 +311,11 @@ def check_bound_reply(text: str, snapshot: dict, language: str) -> str:
             )
     # (3) 金额标签绑定（两侧）。
     fields = {
-        "total_amount": "order_amount",
-        "paid_amount": "recorded_payment_amount",
-        "refund_amount": "recorded_refund_amount",
+        "order_amount": "order_amount",
+        "recorded_payment_amount": "recorded_payment_amount",
+        "recorded_refund_amount": "recorded_refund_amount",
     }
-    values = {field: amounts.get(name) for name, field in fields.items()}
+    values = {field: amounts.get(field) for field in fields}
     for field, labels in _label_groups().items():
         expected = values.get(field)
         for label in labels:
@@ -284,10 +332,10 @@ def check_bound_reply(text: str, snapshot: dict, language: str) -> str:
                         f"reply binds {label} to a value that is not the recorded {field}",
                     )
     # 金额不许漏写：快照里有的金额必须出现在正文里（片段或原文）。
-    for name, field in fields.items():
+    for field in fields:
         value = values.get(field)
         if value is not None and value not in present:
-            if value == 0 and (pattern := ZERO_SAID.get(name)) and pattern.search(filled):
+            if value == 0 and (pattern := ZERO_SAID.get(field)) and pattern.search(filled):
                 continue
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", f"reply does not carry the recorded {field}")
     # (4) 状态名取自封闭表，且必须与本轮一致。
@@ -322,6 +370,19 @@ def check_legacy(text: str, snapshot: dict, language: str) -> None:
     order_no = str(snapshot.get("order_no") or "")
     if order_no and order_no not in text:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply omits the order number")
+    # 旧契约原有的一条：快照里每个非空金额都必须在正文里（漏写会让读者以为那项不存在）。
+    for field in ("order_amount", "recorded_payment_amount", "recorded_refund_amount"):
+        raw = snapshot.get(field)
+        if raw is None or str(raw).strip() == "":
+            continue
+        try:
+            expected = Decimal(str(raw))
+        except InvalidOperation:
+            continue
+        if expected == 0 and ZERO_SAID["recorded_refund_amount"].search(text):
+            continue
+        if expected not in {Decimal(t) for t in re.findall(r"\d+(?:\.\d+)?", text)}:
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", f"reply does not carry the recorded {field}")
     present = {Decimal(token) for token in re.findall(r"\d+(?:\.\d+)?", text)}
     known = {Decimal(token) for token in re.findall(r"\d+(?:\.\d+)?", _evidence(snapshot, language))}
     if present - known - {Decimal(n) for n in range(0, 11)}:

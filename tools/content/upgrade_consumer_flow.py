@@ -108,10 +108,13 @@ def live_documents(source, *, replace_system=False):
     if replace_system or not operator_text.strip():
         operator_text = PROMPT
     prompts[:] = [p for p in prompts if p.get("role") != "system"]
-    if operator_text.strip():
-        prompts.insert(0, {"role": "system", "text": operator_text.strip()})
-    prompts.insert(1 if operator_text.strip() else 0, {"role": "system", "text": PROTOCOL_BLOCK})
+    if operator_text:
+        # **不 strip**：运营文字逐字保留（首尾空白也算他们写的）。
+        prompts.insert(0, {"role": "system", "text": operator_text})
+    prompts.insert(1 if operator_text else 0, {"role": "system", "text": PROTOCOL_BLOCK})
 
+    # 按名字去重：第二次迁移不能再追加一个同名环境变量（发布门会判"环境变量重复"）。
+    variables[:] = [v for v in variables if v.get("name") != "answer_fact_contract"]
     variables.append(
         {
             "id": "answer_fact_contract",

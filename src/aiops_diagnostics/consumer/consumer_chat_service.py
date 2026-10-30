@@ -191,7 +191,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
         runtime._release_conversation_turn(registration.conversation_turn)
         return
     try:
-        current(runtime, caller, binding)
+        require_pinned(runtime, caller, binding)
         key = load_workflow_key(binding.workflow_key_file)
         client = DifyChatflowClient(runtime.gateway_settings.dify_chat_base_url, timeout_seconds=90)
         # 同用户不同App/发布版本也不共用Dify用户上下文；上游只收到不可逆标识。
@@ -211,7 +211,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
 
         uploaded = client.upload_photo(key=key, user=user, image=image) if image else ""
         image = b""
-        current(runtime, caller, binding)
+        require_pinned(runtime, caller, binding)
         latest = store.get(run_id)
         if (
             registration.cancelled
@@ -244,7 +244,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
             require_available(runtime, caller, binding)
-        current(runtime, caller, binding)
+        require_pinned(runtime, caller, binding)
         run = store.get(run_id)
         if (
             registration.cancelled
@@ -256,7 +256,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             raise ValueError("run is no longer active")
         if run.order_no:
             runtime._require_chat_order_visible(caller, run.order_no)
-            current(runtime, caller, binding)
+            require_pinned(runtime, caller, binding)
             run = store.get(run_id)
             if (
                 run is None
@@ -287,7 +287,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             answer = {"blocks": [{"kind": "text", "text": reply.answer}], "retrieval_status": "unavailable"}
         if not store.store_snapshot(run_id, answer) or not store.succeed(run_id):
             raise ValueError("result could not be committed")
-        current(runtime, caller, binding)
+        require_pinned(runtime, caller, binding)
         stored = runtime.store.update_assistant_question(qa["qa_id"], status="completed", result=answer)
         runtime._complete_conversation_turn(
             registration.conversation_turn, question, answer, guarded=not stored, status_qa_id=qa["qa_id"]
@@ -308,12 +308,8 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
 
 
-def _pinned_route_active(runtime, run) -> bool:
-    """签发时那条路由现在是否仍然 active（撤回 = 不再交付）。
-
-    普通发布只推进版本；撤回会把 `state` 改成 `retracted`。这两件事在数据上本来就可区分，
-    旧回读却把它们当成同一件事（版本不等就 410），于是**一次正常发布就让历史答案失效**。
-    """
+def _route_active(runtime, environment, app_id) -> bool:
+    """这条 app 的路由现在是否仍然 active（撤回 = 不再交付）。"""
     path = str(getattr(runtime.gateway_settings, "chat_route_bindings_file", "") or "")
     if not path:
         return True
@@ -324,17 +320,56 @@ def _pinned_route_active(runtime, run) -> bool:
     rows = [
         row
         for row in ChatRouteBindingStore(Path(path)).all()
-        if row.environment == run.environment and row.app_id == run.app_id
+        if row.environment == environment and row.app_id == app_id
     ]
     return bool(rows) and all(row.active for row in rows)
 
 
-def deliverable_binding(runtime, caller, run):
-    """已签发答复回读时的绑定判据：**按签发时那一版交付**，撤回/换 app 才拒。
+def require_pinned(runtime, caller, binding):
+    """**在途**判据：路由仍 active、调用者仍有权限 —— 但版本可以已经推进。
 
-    与 :func:`current` 的区别是刻意的：新会话必须用当前版本；历史与在途答案用的是它**签发
-    时**冻结的版本与摘要（`run.binding_digest` / `run.agent_version_no`）。把两者混成一个
-    判据，代价就是复核实测到的那条 —— 运营正常发布一版措辞，旧 QA 从 200 变 410。
+    与 :func:`current` 的分工：新会话必须用当前版本；一条已经在跑的 run 用它**签发时**的绑定
+    继续跑完（`execute` 里 6 处 `current()` 曾经让"生成中发布新版本"直接失败，复核实测
+    `qa_status=failed / CHATFLOW_BINDING_CHANGED`）。
+    """
+    selected = chat_execution.select_binding(
+        runtime.gateway_settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
+    )
+    # 允许的差别只有"路由推进了一版"（运营正常发布）：在途 run 用它签发时的绑定跑完。
+    # 换凭据、换 app、撤回、以及**没有推进却变了**（内容/凭据被换）都必须拒。
+    if (
+        selected is None
+        or not _route_active(runtime, binding.environment, binding.app_id)
+        or selected.key != binding.key
+        or (selected != binding and selected.route_revision <= binding.route_revision)
+    ):
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_BINDING_CHANGED", "chatflow binding was retracted", http_status=410
+        )
+    return binding
+
+
+def _pinned_route_active(runtime, run) -> bool:
+    """签发时那条路由现在是否仍然 active（撤回 = 不再交付）。
+
+    普通发布只推进版本；撤回会把 `state` 改成 `retracted`。这两件事在数据上本来就可区分，
+    旧回读却把它们当成同一件事（版本不等就 410），于是**一次正常发布就让历史答案失效**。
+    """
+    return _route_active(runtime, run.environment, run.app_id)
+
+
+def deliverable_binding(runtime, caller, run):
+    """已签发答复回读：**按签发时那一版交付**，并核对现行权限。
+
+    三步，缺一不可：
+
+    1. 调用者此刻仍有这条路由的权限（`select_binding` 为 None ⇒ 撤权/撤回 ⇒ 拒）；
+    2. 路由仍 active（撤回 ⇒ 拒）；
+    3. 用**不可变版本快照**重建签发时的绑定，指纹必须与 run 记录的一致
+       —— 换凭据、内容被换、版本缺失都会让指纹对不上，于是拒。
+
+    第 3 步是复核指出的关键：返回当前 `selected` 等于用新版冒充旧绑定；旧 run 必须拿到
+    它签发时那份冻结配置（含当时的 `workflow_id` 与文案版本）。
     """
     selected = chat_execution.select_binding(
         runtime.gateway_settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
@@ -345,23 +380,37 @@ def deliverable_binding(runtime, caller, run):
         )
     if fingerprint(selected) == run.binding_digest:
         return selected
-    # 允许的**唯一**差别是"路由推进了一版"（运营正常发布）。四件事必须同时成立：
-    #   1. 路由 revision 比签发时新 —— 说明差异来自一次发布，而不是内容被换掉；
-    #   2. 凭据引用、app、workflow 都没变 —— 换凭据/换应用是不同事件，必须拒；
-    #   3. 这条路由仍然 active —— 撤回就不交付；
-    #   4. 旧版本仍在版本表里 —— 冻结内容可读。
-    if (
-        selected.route_revision <= run.route_revision
-        or selected.key != run.binding_key
-        or selected.app_id != run.app_id
-        or selected.workflow_id != run.workflow_id
-        or not _pinned_route_active(runtime, run)
-    ):
+    path = str(getattr(runtime.gateway_settings, "chat_route_bindings_file", "") or "")
+    if not path or not _route_active(runtime, run.environment, run.app_id):
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_BINDING_CHANGED", "chatflow binding was retracted", http_status=410
+        )
+    from pathlib import Path
+
+    row = chat_execution.route_row(Path(path), run.environment, run.app_id)
+    if row is None:
         raise chat_execution.ChatRunUnavailable(
             "CHATFLOW_BINDING_CHANGED", "chatflow binding changed", http_status=410
         )
-    # 同一 app、路由仍 active、只是版本推进：旧答案按签发时的版本继续交付。
-    return selected
+    try:
+        pinned = chat_execution.binding_for_version(
+            Path(path),
+            row,
+            run.agent_version_no,
+            str(getattr(runtime.gateway_settings, "dify_workflow_key_dir", "") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - 版本不可用就是不能交付
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_BINDING_CHANGED", "pinned publication version is unavailable", http_status=410
+        ) from exc
+    from dataclasses import replace
+
+    pinned = replace(pinned, route_revision=run.route_revision)
+    if fingerprint(pinned) != run.binding_digest:
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_BINDING_CHANGED", "pinned binding no longer reproduces this answer", http_status=410
+        )
+    return pinned
 
 
 def require_result(runtime, caller, qa):
