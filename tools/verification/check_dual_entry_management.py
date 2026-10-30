@@ -180,9 +180,7 @@ def main() -> int:
             ("publish-anonymous", "POST", f"{MANAGEMENT}/publish", None, {"app_id": "x"}, (401, 403)),
         )
         for name, method, path, token, body_in, expected in checks:
-            status, body = http(
-                f"{base}{path}", token=token, payload=body_in if method == "POST" else None
-            )
+            status, body = http(f"{base}{path}", token=token, payload=body_in if method == "POST" else None)
             evidence["checks"][name] = {
                 "status": status,
                 "body": body if len(body) < 500 else body[:500],
