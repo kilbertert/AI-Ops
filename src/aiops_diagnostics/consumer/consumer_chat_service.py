@@ -179,6 +179,15 @@ def start(
     return qa
 
 
+def _revoke_grant(runtime, qa, token):
+    """撤销这次问答的取数凭据。幂等：完成/失败/取消三条路都会走到它。"""
+    if not token:
+        return
+    from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
+
+    DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
+
+
 def execute(runtime, caller, qa, question, binding, upstream, registration, language, token="", image=b""):
     run_id = qa["internal_run_id"].removeprefix(PREFIX)
     store = runtime.dify_run_store
@@ -288,6 +297,13 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
         if not store.store_snapshot(run_id, answer) or not store.succeed(run_id):
             raise ValueError("result could not be committed")
         current(runtime, caller, binding)
+        # **先撤销取数能力，再公布终态。** 反过来会留下一个窗口：`status=completed` 已经
+        # 可读，而这次请求的数据凭据还没失效 —— 读到的观察者（回读接口、验收脚本、
+        # 任何按状态轮询的客户端）会看到"结果已交付但凭据仍然可用"。
+        # 2026-10-30 的 CI 实测过这个窗口：`test_workflow_retrieves_once_and_returns_only_the_approved_answer`
+        # 在同一份代码上时而看到 `revoked`、时而看到 `consumed`。
+        # `revoke_for_qa` 是幂等的，所以 finally 里那一份保留为兜底。
+        _revoke_grant(runtime, qa, token)
         stored = runtime.store.update_assistant_question(qa["qa_id"], status="completed", result=answer)
         runtime._complete_conversation_turn(
             registration.conversation_turn, question, answer, guarded=not stored, status_qa_id=qa["qa_id"]
@@ -302,10 +318,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
         runtime.store.update_assistant_question(qa["qa_id"], status="failed", error_code=code)
         runtime._release_conversation_turn(registration.conversation_turn)
     finally:
-        if token:
-            from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
-
-            DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
+        _revoke_grant(runtime, qa, token)
 
 
 def require_result(runtime, caller, qa):
