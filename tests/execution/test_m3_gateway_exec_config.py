@@ -3,7 +3,7 @@
 这些用例证明的是 **Gateway 这一侧**的判据：期望值只来自受控清单、身份是清单原始字节的
 sha256、领取时对照并把实际值落库、以及旧库迁移不破坏历史记录。
 
-它们**不**证明节点侧守卫 —— 那是 `tools/m2_close/m3node/` 的事，两套证据分开记。
+它们**不**证明节点侧守卫 —— 那是 `tools/experiments/m2_close/m3node/` 的事，两套证据分开记。
 本文件也不证明真实供应商或真实订单：上游与订单都是替身。
 """
 
@@ -442,7 +442,7 @@ def test_without_manifest_behaviour_is_unchanged(tmp_path, monkeypatch):
 
 def test_startup_refuses_an_invalid_manifest(tmp_path, monkeypatch):
     """GW-05：清单不合格 ⇒ **启动即拒**，不是运行期降级。"""
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     manifest = _write_manifest(tmp_path, _manifest_payload(schema="m3-exec-config/999"))
     config_file = tmp_path / "agent-runs.json"
@@ -463,7 +463,7 @@ def test_startup_refuses_an_invalid_manifest(tmp_path, monkeypatch):
 
 def test_manifest_without_delegation_is_a_startup_error(tmp_path):
     """GW-05b：只配清单不配委派 ⇒ 启动错误（没有 run 可固定身份）。"""
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -820,7 +820,7 @@ def test_every_manifest_sample_declares_an_independent_expectation():
     """
     import json
 
-    root = Path(__file__).resolve().parents[2] / "tools/m2_close/m3node"
+    root = Path(__file__).resolve().parents[2] / "tools/experiments/m2_close/m3node"
     samples = {path.name for path in (root / "manifest-samples").glob("*.json")}
     declared = json.loads((root / "manifest_samples_expected.json").read_text())
     expectations = {name: spec for name, spec in declared.items() if not name.startswith("_")}
@@ -831,7 +831,7 @@ def test_every_manifest_sample_declares_an_independent_expectation():
 
 def test_normal_sample_is_accepted_and_identity_is_the_raw_bytes_digest(tmp_path):
     """正例必须真的被接受；身份是原始字节 sha256。"""
-    root = Path(__file__).resolve().parents[2] / "tools/m2_close/m3node"
+    root = Path(__file__).resolve().parents[2] / "tools/experiments/m2_close/m3node"
     source = root / "manifest-samples/accept-normal.json"
     sample = tmp_path / "accept-normal.json"
     sample.write_bytes(source.read_bytes())
@@ -852,7 +852,7 @@ def test_group_or_other_access_is_rejected_regardless_of_checkout_mode(tmp_path,
     这同时解释了为什么对照脚本要把样本复制到一次性目录再显式设权限：
     Git 不保存 0600，检出通常就是 0644，直接读工作树会让「全部拒绝」变成常态。
     """
-    root = Path(__file__).resolve().parents[2] / "tools/m2_close/m3node"
+    root = Path(__file__).resolve().parents[2] / "tools/experiments/m2_close/m3node"
     sample = tmp_path / "sample.json"
     sample.write_bytes((root / "manifest-samples/accept-normal.json").read_bytes())
     sample.chmod(mode)

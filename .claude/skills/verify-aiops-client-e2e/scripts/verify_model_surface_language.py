@@ -84,7 +84,7 @@ TERMINAL_FAIL = {"failed", "cancelled", "expired"}
 
 def _leak_judge():
     """The shared Chinese-leak rule, from the PRODUCTION tree this host serves."""
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     return chinese_leak
 
@@ -234,8 +234,8 @@ def run(args, languages: list[str], surfaces: list[str]) -> int:
     """The live path: resolve a session, resolve an owned order, drive the surfaces."""
     from fastapi.testclient import TestClient
 
-    from aiops_diagnostics.gateway_api import create_gateway_app
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     settings = GatewayServerSettings.from_env()
 
@@ -318,7 +318,7 @@ def _pick_session(settings) -> tuple[str | None, str]:
     """
     import redis
 
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.identity.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
 
     runtime = Settings.from_config(pathlib.Path("/etc/aiops-41/production.env"))
@@ -360,7 +360,7 @@ def _pick_order(settings, session: str) -> str | None:
     """An order the SESSION's own user owns — the authorizer will check again."""
     import pymysql
 
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.identity.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
 
     runtime = Settings.from_config(pathlib.Path("/etc/aiops-41/production.env"))

@@ -27,9 +27,9 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
 ROOT = Path(__file__).parents[1]
 SNIPPET = ROOT / "ops" / "nginx" / "ulink-h5-assistant.conf"

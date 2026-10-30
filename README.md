@@ -23,12 +23,12 @@
 
 详细边界见[退役说明](docs/runtime-retirement.md)，阶段与线上最后证据见
 [交付状态](docs/agents/current-delivery-state.md)和[测试交接](docs/testing-handoff.md)。
-目录迁移已完成Java节点、模型代理及consumer、knowledge、identity、publication、execution、dify八片，Gateway端已部署。
-管家输出格式缺口已在隔离Java/Gateway链路复现并修复：节点强制JSON模式、只提交最后模型轮。
-PR #1149的Java节点已部署，ulink原H5、Dify原生预览与AI-Ops试运行通过；
-见[真实验收](docs/validation/2026-10-29-z10b-operator-output-live.md)与[输出契约](docs/adr/0163-operator-output-is-a-runtime-contract.md)。
-最新见[Dify上线回执](docs/validation/2026-10-29-z09b-dify-layout-live.md)，独立桥/登录服务仍运行原发布包。
-模型代理生产容器仍使用旧发布包，后续升级必须成对交付Compose和镜像；详见[迁移回执](docs/validation/2026-10-29-z03-directory-migration-live.md)。
+目录迁移已完成Java节点、模型代理源码及consumer、knowledge、identity、publication、execution、dify、operator、health、data业务包。
+#1153退役残留和#1159领域迁移已合并，#1161补齐供应商单层围栏JSON解析；双端历史回归见
+[领域上线](docs/validation/2026-10-29-z15-domain-layout-live.md)与[围栏修复回归](docs/validation/2026-10-29-z16-operator-fenced-answer-live.md)。
+独立Dify桥与登录代理已随#1147更新包和模块入口；模型代理生产仍为旧发布包中的等字节实现。
+2026-10-30独立验收发现后续#1168两端未配套，补齐Java节点后原管家H5已独立复验通过；保留首次失败证据。
+后续Gateway、通用/会话模块和工具部署目录仍待完成，详见[本轮验收](docs/validation/2026-10-30-retirement-layout-acceptance.md)。
 
 ## 一、系统与入口
 
@@ -63,18 +63,18 @@ flowchart LR
 
 | 职责 | 当前模块 |
 |---|---|
-| 网关与服务 | `gateway_api.py`、`gateway_runtime.py`、`gateway_server.py`、`gateway_store.py`、`gateway_config.py`、`gateway_logging.py`、`public_openapi.py`、`request_observation.py`、`isolation_guard.py`、`deployment_environment.py` |
-| 身份与范围 | `identity.caller_auth.py`、`identity.company_token_auth.py`、`identity.company_permissions.py`、`identity.third_session_auth.py`、`identity.scope_context.py`、`identity.query_scope.py`、`identity.order_visibility.py`、`http_auth.py` |
+| 网关与服务 | `gateway.gateway_api.py`、`gateway.gateway_runtime.py`、`gateway_server.py`、`gateway.gateway_store.py`、`gateway.gateway_config.py`、`gateway.gateway_logging.py`、`gateway.public_openapi.py`、`gateway.request_observation.py`、`gateway.isolation_guard.py`、`gateway.deployment_environment.py` |
+| 身份与范围 | `identity.caller_auth.py`、`identity.company_token_auth.py`、`identity.company_permissions.py`、`identity.third_session_auth.py`、`identity.scope_context.py`、`identity.query_scope.py`、`identity.order_visibility.py`、`common.http_auth.py` |
 | C端业务 | `consumer.consumer_billing.py`、`consumer.consumer_chat_service.py`、`consumer.consumer_documents.py`、`consumer.consumer_flow_contract.py`、`consumer.consumer_intent.py`、`consumer.consumer_knowledge.py`、`consumer.consumer_knowledge_selection.py`、`consumer.consumer_language.py`、`consumer.consumer_order_chat.py`、`consumer.consumer_photo.py`、`consumer.consumer_publication.py`、`consumer.consumer_time.py`、`consumer.consumer_trial.py`、`data.charging_status.py` |
-| 节点与试用 | `execution.agent_runs.py`、`execution.execution_manifest.py`、`execution.chat_execution.py`、`execution.chat_data_grant.py`、`execution.chat_route_bindings.py`、`execution.node_publication.py`、`operator.operator_cpms.py`、`operator_conversation.py`、`dify.dify_trial.py`、`dify.dify_workflow_trial.py` |
+| 节点与试用 | `execution.agent_runs.py`、`execution.execution_manifest.py`、`execution.chat_execution.py`、`execution.chat_data_grant.py`、`execution.chat_route_bindings.py`、`execution.node_publication.py`、`operator.operator_cpms.py`、`operator.operator_conversation.py`、`dify.dify_trial.py`、`dify.dify_workflow_trial.py` |
 | 管理与发布 | `admin_cli.py`、`publication.agent_content.py`、`publication.agent_lifecycle.py`、`publication.agent_manifest.py`、`publication.agent_debug.py`、`publication.shortcut_lifecycle.py`、`publication.shortcut_migration.py`、`operator.ops_provider.py` |
-| 知识与会话 | `conversation_store.py`、`faq.py`、`publication.qa_rag.py`、`clarification.py`、`knowledge.knowledge_retrieval.py`、`knowledge.knowledge_sources.py`、`knowledge.knowledge_triple.py`、`knowledge.knowledge_dataset_sync_guard.py`、`knowledge.kb_onboarding.py`、`knowledge.ragflow_console.py` |
+| 知识与会话 | `conversation.conversation_store.py`、`conversation.faq.py`、`publication.qa_rag.py`、`conversation.clarification.py`、`knowledge.knowledge_retrieval.py`、`knowledge.knowledge_sources.py`、`knowledge.knowledge_triple.py`、`knowledge.knowledge_dataset_sync_guard.py`、`knowledge.kb_onboarding.py`、`knowledge.ragflow_console.py` |
 | 健康与分析 | `health.health_curves.py`、`health.health_metrics.py`、`health.health_report.py`、`health.health_report_copy.py`、`operator.ops_analysis.py`、`operator.ops_analysis_narrative.py`、`data.order_status.py`、`health.rules.py`、`data.sources.py`、`tdengine_proxy.py` |
-| 通用能力 | `config.py`、`model_request.py`、`bounded_http.py`、`private_files.py`、`redaction.py`、`i18n.py`、`answer_language.py`、`platform_paths.py`、`console_encoding.py`、`async_job_lifecycle.py`、`metrics_store.py` |
+| 通用能力 | `common.config.py`、`common.model_request.py`、`common.bounded_http.py`、`common.private_files.py`、`common.redaction.py`、`common.i18n.py`、`common.answer_language.py`、`common.platform_paths.py`、`common.console_encoding.py`、`common.async_job_lifecycle.py`、`gateway.metrics_store.py` |
 | Dify集成 | `dify.dify_app_registry.py`、`dify.dify_chat_workflow.py`、`dify.dify_chatflow.py`、`dify.dify_console_admin.py`、`dify.dify_console_publish.py`、`dify.dify_debug_identity.py`、`dify.dify_dsl_pull.py`、`dify.dify_ensure_workspace.py`、`dify.dify_inner_api.py`、`dify.dify_knowledge_api.py`、`dify.dify_knowledge_datasets.py`、`dify.dify_knowledge_migration.py`、`dify.dify_login_company.py`、`dify.dify_login_provision.py`、`dify.dify_login_proxy.py`、`dify.dify_login_server.py`、`dify.dify_login_service.py`、`dify.dify_run_store.py`、`dify.dify_tenant_access.py`、`dify.dify_tools_catalog.py`、`dify.dify_workspace_directory.py`、`dify.dify_workspace_ready.py`、`dify.dify_workspaces.py` |
 
 `publication.agent_debug.py` 仅保留发布前的知识绑定校验；`publication.qa_rag.py` 仅保留已发布客服元数据选择。
-`model_request.py` 是一次性有界 HTTP 请求，供 C端语义分类和聚合说明使用，不含会话/工具循环。
+`common.model_request.py` 是一次性有界 HTTP 请求，供 C端语义分类和聚合说明使用，不含会话/工具循环。
 `operator.ops_provider.py` 只登记现役 `cpms-node`，旧 Python/共享租户 provider 已退出。
 
 ## 四、仓库目录
@@ -85,14 +85,17 @@ flowchart LR
 | `src/aiops_diagnostics/consumer/`、`tests/consumer/` | C端工作流、知识与本人订单业务及对应测试 |
 | `services/execution-node/` | 现役 Java 节点源码、资源与 Maven 构建入口 |
 | `services/model-proxy/` | 现役固定目标模型代理 |
-| `tools/m2_live/` | 隔离栈探针与回环中继 |
+| `tools/verification/m2_live/` | 隔离栈探针与回环中继 |
 | `src/aiops_diagnostics/knowledge/`、`tests/knowledge/` | 知识检索、开户、绑定、同步守卫与对应测试 |
 | `src/aiops_diagnostics/identity/`、`tests/identity/` | 调用者身份、公司权限、订单范围和共享安全规则 |
 | `src/aiops_diagnostics/publication/`、`tests/publication/` | 发布内容、生命周期、快捷动作与校验 |
 | `src/aiops_diagnostics/execution/`、`tests/execution/` | 路线、节点委派、执行清单与数据授权 |
 | `src/aiops_diagnostics/dify/`、`tests/dify/` | Dify协议、工作空间、登录、发布和知识适配 |
 | `src/aiops_diagnostics/{operator,health,data}/` | 管家分析、健康报告、共享只读数据 |
-| `tools/` | 内容生成、迁移和隔离验证 |
+| `src/aiops_diagnostics/{common,conversation}/` | 通用原语、会话存储、澄清与固定FAQ资源 |
+| `src/aiops_diagnostics/gateway/`、`tests/gateway/` | HTTP装配、网关配置、存储、调度与观测 |
+| `tools/{content,verification,experiments,inventory}/` | 内容工具、业务验证、隔离实验与公司源码索引 |
+| `integrations/cpms-java/` | 公司Java受控接口补丁，独立于执行节点 |
 | `plugins/` | Dify 知识插件及其原生打包布局 |
 | `deploy/`、`ops/` | 部署制品、环境声明、代理配置与操作手册 |
 | `java/` | 公司侧 Java 集成补丁，不是执行节点源码 |

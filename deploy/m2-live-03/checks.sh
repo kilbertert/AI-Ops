@@ -74,7 +74,7 @@ guard() {
     -e "M2LIVE_ISOLATION_ROOT=/data" \
     -e "M2LIVE_EXPECTED_UID=$uid" \
     -e "M2LIVE_READONLY_PATHS=/etc/m2live/runtime.env:/etc/m2live:/etc/m2live-tls" \
-    "$image" python -m aiops_diagnostics.isolation_guard
+    "$image" python -m aiops_diagnostics.gateway.isolation_guard
 }
 
 preflight() {
@@ -464,20 +464,20 @@ deps() {
   say "== 会话依赖（宿主回环 → 仅 Gateway 可见的网络） =="
   local rc=0
   # 用**实际的只读配置**认证后 PING：生产会话库启用密码时，未认证 PING 会被拒，
-  # 那是探针的错误，不是通路的错误。实现只有一份（tools/m2_live/redis_probe.py），
+  # 那是探针的错误，不是通路的错误。实现只有一份（tools/verification/m2_live/redis_probe.py），
   # 镜像里与宿主上跑的是同一段代码。
   if [ "${M2LIVE_SYNTH_MODE:-0}" = "1" ]; then
-    docker exec -i m2live03-gateway python /opt/aiops-src/tools/m2_live/redis_probe.py || rc=1
+    docker exec -i m2live03-gateway python /opt/aiops-src/tools/verification/m2_live/redis_probe.py || rc=1
   else
     # 正式模式：目标固定为仅 Gateway 可见的中继（宿主回环 Redis）。
     docker exec -i -e AIOPS_REDIS_HOST=gateway-host-relay \
-      m2live03-gateway python /opt/aiops-src/tools/m2_live/redis_probe.py || rc=1
+      m2live03-gateway python /opt/aiops-src/tools/verification/m2_live/redis_probe.py || rc=1
   fi
   say "== 证书与运行中的容器是否同步 =="
   # 重新生成证书后，运行中的 Gateway 仍握着旧信任库、平台仍加载着旧证书：
   # 那一刻文件全都对，握手却全失败。这里比的是**运行中**的两侧。
   docker exec -i -e "M2LIVE_PLATFORM_URL=${M2LIVE_PLATFORM_URL:-https://platform:8900}" \
-    m2live03-gateway python /opt/aiops-src/tools/m2_live/cert_probe.py \
+    m2live03-gateway python /opt/aiops-src/tools/verification/m2_live/cert_probe.py \
       --platform-url "${M2LIVE_PLATFORM_URL:-https://platform:8900}" || rc=1
   say "== 平台（真 HTTPS，校验本栈 CA） =="
   docker exec -i -e "M2LIVE_PLATFORM_URL=${M2LIVE_PLATFORM_URL:-https://platform:8900}" \
@@ -498,7 +498,7 @@ PY
     say "  SYNTHETIC 公司身份接口未验证"
   else
     say "== 公司身份接口（从隔离 Gateway 发起，不以宿主连通代替） =="
-    docker exec -i m2live03-gateway python /opt/aiops-src/tools/m2_live/upms_probe.py || rc=1
+    docker exec -i m2live03-gateway python /opt/aiops-src/tools/verification/m2_live/upms_probe.py || rc=1
   fi
   return $rc
 }

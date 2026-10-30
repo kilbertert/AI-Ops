@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.health.health_report_copy import curve_name
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 
 MAX_CURVE_POINTS = 300
 

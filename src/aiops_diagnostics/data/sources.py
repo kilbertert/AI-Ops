@@ -16,7 +16,7 @@ from typing import Any
 import pymysql
 from pymysql.cursors import DictCursor
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     TEXT_PLAIN_CONTENT_TYPE,
     ErrorMapping,
     RequestSpec,
@@ -25,7 +25,7 @@ from aiops_diagnostics.bounded_http import (
     parse_raw_envelope,
     request_json,
 )
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.identity.order_visibility import (
     TenantVisibility,
     caller_visibility,

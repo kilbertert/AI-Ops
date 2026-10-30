@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.knowledge.kb_onboarding import derive_email, encrypt_credential
 from aiops_diagnostics.knowledge.ragflow_console import (
     LOGIN_REFUSED,
@@ -274,9 +274,9 @@ def test_the_ledger_records_refusals_too(tmp_path: Path) -> None:
 def _gateway(tmp_path: Path, ragflow: Any, **overrides: Any):
     from fastapi.testclient import TestClient
 
-    from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
-    from aiops_diagnostics.gateway_api import create_gateway_app
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver
+    from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -450,7 +450,7 @@ def test_from_env_actually_reads_the_console_settings(monkeypatch, tmp_path) -> 
     这个缺口被所有单测漏掉，因为**它们都直接构造 settings**，绕过了唯一会读环境变量的
     那条路径。回归因此必须走 `from_env()`，而不能自己拼一个 `GatewayServerSettings`。
     """
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     monkeypatch.setenv("AIOPS_GATEWAY_RAGFLOW_CONSOLE_BASE_URL", "http://rag:10081")
     monkeypatch.setenv("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL", "http://rag:10081")
@@ -469,7 +469,7 @@ def test_every_ragflow_setting_is_wired_from_the_environment(monkeypatch, tmp_pa
     "Declared but never read" is invisible to any test that builds the settings
     object itself, so it gets one test that builds it the way a deployment does.
     """
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     expected = {
         "AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY": "ragflow_credential_key",

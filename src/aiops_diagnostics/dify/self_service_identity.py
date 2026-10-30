@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass, field
 
-from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, request_json
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, request_json
+from aiops_diagnostics.common.config import Settings
 
 
 class SetupRefused(ValueError):

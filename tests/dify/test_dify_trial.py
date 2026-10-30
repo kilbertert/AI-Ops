@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 TRIAL_KEY = "dify-trial-key-0123456789"
@@ -179,7 +179,7 @@ def test_a_failed_trial_reads_back_with_a_human_reason(tmp_path: Path) -> None:
     反证：去掉那一行映射，``error_message`` 会落到 ``generic``（"稍后重试"）—— 欠费这种
     需要人去充值的失败会被说成"过一会儿再试"，而它与代码缺陷长得一模一样。
     """
-    from aiops_diagnostics.i18n import diagnosis_error_message
+    from aiops_diagnostics.common.i18n import diagnosis_error_message
 
     client, runtime = _client(tmp_path)
     # 直接建一条**失败**的作业行：真 worker 的失败路径由 `gateway_runtime` 覆盖，

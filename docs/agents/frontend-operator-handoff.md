@@ -202,7 +202,7 @@ POST /v1/assistant/questions
   **不要**把它当成网络错误重试。
 - **问句文本里只是顺带提到订单号**：无权限时**静默回落**成普通问答（`200`/`202` `qa`），
   **不是** 404 —— 这是既有契约，保持不变
-  （用例 `tests/test_assistant_api.py::test_assistant_text_embedded_unowned_order_falls_through`）。
+  （用例 `tests/gateway/test_assistant_api.py::test_assistant_text_embedded_unowned_order_falls_through`）。
 - **会话里已确认的活跃订单**、追问时无权限：同样静默回落，并清掉该绑定。
 
 ### 3.2 客户案例（`case_exploration`，`requires_order: false`）—— 2026-10-19 恢复
@@ -255,7 +255,7 @@ POST /v1/assistant/questions
 - **会话（`conversation_id`）按入口隔离**：同一用户从 `operator` 与 `consumer`
   进来的会话是**两个**，`GET/DELETE /v1/conversations/{id}` 跨入口会得到 `404`。
   这是有意的，前端不要复用同一个 `conversation_id`。
-  （`business_entry` 是会话绑定的组成部分；用例见 `tests/test_conversation_api.py`
+  （`business_entry` 是会话绑定的组成部分；用例见 `tests/conversation/test_conversation_api.py`
   的"same user, different entry → 404"。）
 - **可见订单范围不同**：管家端按"该账号所属运营商的站点集合"，客户端按"本人"。
   同一条订单，两个入口可能一个能查一个不能 —— 这是**预期**，不是数据不一致。

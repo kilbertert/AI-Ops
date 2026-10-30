@@ -247,7 +247,7 @@ def test_picker_upgrade_preserves_other_nodes_and_library_selection():
     import yaml
 
     spec = importlib.util.spec_from_file_location(
-        "upgrade_picker", Path(__file__).parents[2] / "tools/upgrade_consumer_flow.py"
+        "upgrade_picker", Path(__file__).parents[2] / "tools/content/upgrade_consumer_flow.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

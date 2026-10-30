@@ -22,9 +22,10 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
         "__init__",
         "dify/__init__",
         "dify/dify_console_publish",
-        "async_job_lifecycle",
-        "bounded_http",
-        "http_auth",
+        "common/__init__",
+        "common/async_job_lifecycle",
+        "common/bounded_http",
+        "common/http_auth",
     ):
         (package / f"{name}.py").parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "src/aiops_diagnostics" / f"{name}.py", package / f"{name}.py")

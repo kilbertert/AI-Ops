@@ -90,7 +90,7 @@ for k, v in dotenv_values("/tmp/candidate.env", interpolate=False).items():
     if k and v is not None:
         os.environ[k] = v
 
-from aiops_diagnostics.gateway_config import GatewayServerSettings, charging_endpoint
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings, charging_endpoint
 
 s = GatewayServerSettings.from_env()
 s.validate()

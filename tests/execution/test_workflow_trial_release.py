@@ -11,7 +11,7 @@ from aiops_diagnostics.dify.dify_workflow_trial import WorkflowTrial
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.agent_runs import scope_to_json
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-from aiops_diagnostics.gateway_runtime import JobRegistration
+from aiops_diagnostics.gateway.gateway_runtime import JobRegistration
 from execution.test_app_runtime_dify_entry import ORDER_A, WORKFLOW_ID, _DifyStub, _Resolver, dify_chat
 
 APP = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

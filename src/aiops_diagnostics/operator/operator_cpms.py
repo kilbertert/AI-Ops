@@ -13,13 +13,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode
 
-from aiops_diagnostics.async_job_lifecycle import QUESTION
-from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, request_json
+from aiops_diagnostics.common.async_job_lifecycle import QUESTION
+from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, request_json
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig, SnailDispatcher
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
-from aiops_diagnostics.operator_conversation import EXECUTED_MUTATION, OperatorRefused
+from aiops_diagnostics.operator.operator_conversation import EXECUTED_MUTATION, OperatorRefused
 
 SCENARIO = "operator_order_diagnosis"
 PREFIX = "operator-cpms-node:"
@@ -74,7 +74,7 @@ class OperatorCpms:
         def unavailable(_):
             return OperatorRefused("OPERATOR_TRIAL_LOGIN_REQUIRED")
 
-        from aiops_diagnostics.gateway_config import canonical_gateway_url
+        from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
         result = request_json(
             RequestSpec(
@@ -187,12 +187,12 @@ class OperatorCpms:
         current = authorize()
         if current.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-        from aiops_diagnostics.gateway_config import canonical_gateway_url
+        from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
         base, proxy = canonical_gateway_url(base), canonical_gateway_url(proxy)
         manifest_text = trial_manifest if trial_manifest is not None else binding.manifest_text
         if not order:
-            from aiops_diagnostics import operator_conversation
+            from aiops_diagnostics.operator import operator_conversation
 
             manifest_text = operator_conversation.manifest(manifest_text)
         manifest = execution_manifest.from_text(manifest_text)
@@ -279,7 +279,7 @@ class OperatorCpms:
     def _current(self, run_id, *, node_token=None, manifest=None, tool=None):
         task = self.tasks.get(run_id)
         run = self.context.agent_run_store.get(run_id)
-        from aiops_diagnostics import operator_conversation
+        from aiops_diagnostics.operator import operator_conversation
 
         if (
             task is None
@@ -513,7 +513,7 @@ class OperatorCpms:
             except ValueError as exc:
                 logging.getLogger("aiops.operator").warning("operator_answer_rejected reason=json_parse")
                 raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
-            from aiops_diagnostics.redaction import contains_secret
+            from aiops_diagnostics.common.redaction import contains_secret
 
             if contains_secret(raw, (task.bearer, task.grant)):
                 _answer_refused("credential")
@@ -523,7 +523,7 @@ class OperatorCpms:
                 if not set(answer["evidence_tools"]).issubset(task.delivered):
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
             else:
-                from aiops_diagnostics import operator_conversation
+                from aiops_diagnostics.operator import operator_conversation
 
                 operator_conversation.validate(answer, task.question)
                 if answer["kind"] == "site_search":
@@ -596,7 +596,7 @@ class OperatorCpms:
                 self.tasks.pop(run_id, None)
 
     def result(self, caller, qa_id):
-        from aiops_diagnostics import operator_conversation
+        from aiops_diagnostics.operator import operator_conversation
 
         run = self.context.agent_run_store.by_qa(qa_id)
         if (

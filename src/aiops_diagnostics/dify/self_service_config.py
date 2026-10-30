@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from aiops_diagnostics.private_files import validate_private_file
+from aiops_diagnostics.common.private_files import validate_private_file
 
 from .self_service_store import SelfServiceStore
 

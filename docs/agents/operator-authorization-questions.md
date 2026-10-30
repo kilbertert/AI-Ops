@@ -118,7 +118,7 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
 | # | 问题 | 为什么读源码答不出来 | 谁来答 |
 |---|---|---|---|
 | **R-4** | 「统一案例库」**具体是哪一个知识库**（ID）？**允许所有租户的会话读它吗**？ | 这是**要什么**，不是**怎么实现**。源码里能查到「智能体绑定强校验租户」（C10）与两个现成素材的租户/KB（见 §P1-6），但**没有任何地方写着「产品要的是哪一个」** —— 它是产品决定，读一万遍源码也读不出来 | **产品**（跨租户读的授权也要产品点头，那是比订单授权更大的边界） |
-| **R-5** | 管家端登录的**账号类型** → 落在哪个 `sys_role.client_type`？ | **取值全集在源码里，映射关系不在。** L3 给了隔离门认的三个值、前端产物实测管家端发 `admin`/`tenant-app`；AI-Ops 侧的 `operator_client_types`（`src/aiops_diagnostics/faq.py:150`）读的是 UPMS **角色表**的 `sys_role.client_type`。**「哪种账号持有哪个角色」是数据/配置**，不在代码里 | **业务 + 后端**（业务说账号类型，后端说它绑的角色） |
+| **R-5** | 管家端登录的**账号类型** → 落在哪个 `sys_role.client_type`？ | **取值全集在源码里，映射关系不在。** L3 给了隔离门认的三个值、前端产物实测管家端发 `admin`/`tenant-app`；AI-Ops 侧的 `operator_client_types`（`src/aiops_diagnostics/conversation/faq.py:150`）读的是 UPMS **角色表**的 `sys_role.client_type`。**「哪种账号持有哪个角色」是数据/配置**，不在代码里 | **业务 + 后端**（业务说账号类型，后端说它绑的角色） |
 | **R-6** | `partner_b_id` 未覆盖部分（尤其 C/D 两类）的**业务规则**该怎么定 | 数量与成因可以从库里数出来（见下），**但「该不该放行」是业务口径** —— 源码里只有机制，没有意图 | **业务**（定规则）+ **数据侧**（决定是否修数据） |
 
 从存档的 P1/P2 里**还有三条仍在问业务规则**，一并归到这一类（存档不等于已解决）：
@@ -209,7 +209,7 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
 |---|---|---|
 | C1 | 现有订单授权**只到租户层，没有运营商/平台层**。注意这不是「只按租户」——前端会话还叠加 `user_id`（见 C6），设备入口则只有租户。**缺的是运营商/平台这一维度，不是「完全没有过滤」** | `caller_auth.py:227-230` `can_access`；谓词由 `order_visibility.py:232-240` 渲染为 `tenant_id=?` / `IN (…)` / `1=0`；`user_id` 叠加见 C6 |
 | C2 | 显式传 `order_no` 时，无权限返回 **404 `ORDER_NOT_FOUND`**，授权服务故障返回 **503** | `gateway_api.py:819-834` |
-| C3 | 问句**文本里内嵌**订单号时，无权限**静默回落**零阶问答（已发布契约，有测试固化） | `gateway_api.py:862-903`；`tests/test_assistant_api.py:595-606`；`docs/validation.md:1420` |
+| C3 | 问句**文本里内嵌**订单号时，无权限**静默回落**零阶问答（已发布契约，有测试固化） | `gateway_api.py:862-903`；`tests/gateway/test_assistant_api.py:595-606`；`docs/validation.md:1420` |
 | C4 | 会话内**活跃订单**的追问，无权限时静默回落并清掉绑定 | `gateway_api.py:912-957` |
 | C5 | 前端会话（`third-session`）的 `data_scope` **硬编码为 `self`**，从不调 UPMS `/user/ds`。~~**已被 #423（#424/#425/#426）取代**：解析出唯一 B 端主体后 `data_scope` 替换为该主体的运营商站点集合（`DataScope(organ, site_ids=…)`）；仍**解析不出**唯一主体时才回落 `self`。本行结论只对「没有 B 端账号的会话」成立 | ~~`third_session_auth.py:82`~~ → `third_session_auth.py:198-218`（`_data_scope`）、`query_scope.py:310`（`resolve_operator_site_scope`）；见 PRD #423 与 `docs/开发进度.md` #424~#426 条目 |
 | C6 | 但 `self` **确实生效**：下推为 `user_id` 谓词 → 前端会话查订单**已按「本人」过滤**。C5 失效后这条只覆盖回落分支（拿不到唯一 B 端主体时） | `query_scope.py:256` → `sources.py:217,233-235` → `sources.py:286`，SQL `… AND user_id=?` |

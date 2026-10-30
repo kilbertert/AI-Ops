@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from aiops_diagnostics.bounded_http import RequestSpec, join_url, request_json
+from aiops_diagnostics.common.bounded_http import RequestSpec, join_url, request_json
 from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiError
 from aiops_diagnostics.dify.dify_workspaces import (
     DIFY_WORKSPACE_CREATING,
@@ -64,8 +64,8 @@ class GatewayWorkspaceClient:
     def resolve(self, tenant_id: str) -> str:
         import time
 
-        from aiops_diagnostics.bounded_http import ErrorMapping, HttpFailure
-        from aiops_diagnostics.http_auth import build_internal_token_headers
+        from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure
+        from aiops_diagnostics.common.http_auth import build_internal_token_headers
 
         def classified(failure: HttpFailure) -> Exception:
             payload: dict[str, Any] = {}

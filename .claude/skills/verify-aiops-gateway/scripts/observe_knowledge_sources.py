@@ -135,7 +135,7 @@ def seed(root: Path) -> None:
     fail to resolve, kept apart so the checks below can tell them from a bug.
     """
     sys.path.insert(0, str(repo_root() / "src"))
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     store = GatewayStore(root / "data" / "gateway.db")
     for tenant_id in ("T-AUTO", "T-LIB", "T-DOWN"):

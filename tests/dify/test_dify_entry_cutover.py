@@ -31,7 +31,7 @@ ROOT = Path(__file__).parents[2]
 
 
 def _load():
-    """按路径导入 —— `deploy/` 不是包（先例：`tests/test_derive_zh_hant_tool.py`）。"""
+    """按路径导入 —— `deploy/` 不是包（先例：`tests/tooling/test_derive_zh_hant_tool.py`）。"""
     spec = importlib.util.spec_from_file_location("d4_cutover", ROOT / "deploy" / "d4-cutover.py")
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

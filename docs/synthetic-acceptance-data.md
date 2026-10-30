@@ -5,8 +5,8 @@
 生成并执行：
 
 ```bash
-uv run python tools/generate_synthetic_acceptance_data.py
-uv run python tools/run_synthetic_acceptance.py
+uv run python tools/experiments/generate_synthetic_acceptance_data.py
+uv run python tools/experiments/run_synthetic_acceptance.py
 ```
 
 覆盖三种场景：

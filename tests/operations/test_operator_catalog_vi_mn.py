@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from aiops_diagnostics.faq import FAQCatalog
-from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES, chinese_leak
+from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES, chinese_leak
+from aiops_diagnostics.conversation.faq import FAQCatalog
 
 _ADDED = ("vi", "mn")
 #: Languages the operator catalog still does NOT carry. Kept explicit so adding

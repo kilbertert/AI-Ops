@@ -1,0 +1,9 @@
+Feature: 工具与公司集成按用途归类
+  Scenario: 新工具路径仍可执行
+    Given 工具被放入内容、验证和实验目录
+    When 从仓库根运行生成器及隔离验证
+    Then 输出和失败判据保持一致
+  Scenario: 公司集成独立存放
+    Given Java补丁位于integrations
+    When 执行受控查询契约检查
+    Then 字段、鉴权和查询限制保持一致

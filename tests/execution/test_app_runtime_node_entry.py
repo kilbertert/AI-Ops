@@ -13,7 +13,7 @@
 
 因此这里证明的是：聊天入口能按租户把一次请求交给**那一个**节点、把结果以原 blocks
 形状交回、并且在失败/越权/取消/停用/清单缺失时**不**伪造成功。
-真实 Java 节点整链在 `tools/m2_close/m3node/verify_chat_node_entry.py`，不在本文件。
+真实 Java 节点整链在 `tools/experiments/m2_close/m3node/verify_chat_node_entry.py`，不在本文件。
 """
 
 from __future__ import annotations
@@ -29,14 +29,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.agent_runs import SUCCEEDED, AgentRunStore
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_runtime import GatewayRuntime
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from execution.test_m2_close_contract import NODE_A_TOKEN, Orders, _write_config
 from execution.test_m3_gateway_exec_config import _identity, _write_manifest
 
@@ -124,7 +124,7 @@ def node_chat(
     import hashlib
 
     with _cpms({ORDER_A, ORDER_B, ORDER_C}) as upstream:
-        monkeypatch.setattr("aiops_diagnostics.gateway_api.scoped_mysql_source", _orders_source)
+        monkeypatch.setattr("aiops_diagnostics.gateway.gateway_api.scoped_mysql_source", _orders_source)
         production = tmp_path / "production.env"
         production.write_text("# synthetic\n")
         production.chmod(0o600)
@@ -970,7 +970,7 @@ def test_real_tcp_post_then_poll_reaches_the_node(tmp_path, monkeypatch):
 
 
 def test_conversation_turn_keeps_the_status_qa_link(tmp_path, monkeypatch):
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
     with node_chat(tmp_path, monkeypatch) as f:
         conversations = ConversationStore(f["settings"].database_file)

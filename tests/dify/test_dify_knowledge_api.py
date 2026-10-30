@@ -2,7 +2,7 @@
 
 Driven at the gateway HTTP face — the seam the ticket names — with a real
 ``create_gateway_app`` and a stub kb-service client, in the style of
-``tests/test_media_api.py``. What is pinned here is the Dify External
+``tests/gateway/test_media_api.py``. What is pinned here is the Dify External
 Knowledge API contract (``records``, and the tenant/allow-list coming from our
 registry rather than the request) and the failure answers: unavailable is a
 502, never an empty 200.
@@ -16,10 +16,10 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
     MediaResourceSigner,
@@ -550,7 +550,7 @@ def test_a_debug_identity_requires_the_production_route_to_exist(tmp_path: Path)
     调试身份是**收窄那条路由**的，不是创建它的。允许这种组合会让运维看到一个
     "配了调试身份"的部署，而实际上那条路由根本不存在（404）—— 与"没配"不可区分。
     """
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -566,7 +566,7 @@ def test_a_debug_identity_requires_the_production_route_to_exist(tmp_path: Path)
 
 def test_the_debug_key_must_differ_from_the_production_key(tmp_path: Path) -> None:
     """同值等于没有分离 —— 而"分离"正是这个身份存在的全部理由。"""
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -588,7 +588,7 @@ def test_config_round_trips_the_debug_keys_from_the_config_file(tmp_path: Path) 
     与 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_*` 同一条：`from_env` 用 `_file_value` 读它。
     这里直接驱动那个路径，避免"写进了文件却没生效"这种静默形态。
     """
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     config = tmp_path / "production.env"
     config.write_text(

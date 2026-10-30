@@ -50,7 +50,9 @@ def configure(env, monkeypatch):
             "uses_context": bool(kwargs.get("previous_question")),
         }
 
-    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.GatewayRuntime.classify_consumer", classify)
+    monkeypatch.setattr(
+        "aiops_diagnostics.gateway.gateway_runtime.GatewayRuntime.classify_consumer", classify
+    )
     Client.calls = []
     Client.stops = []
     Client.before = None

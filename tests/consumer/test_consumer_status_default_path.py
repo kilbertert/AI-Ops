@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).parents[2]
-TOOLS = ROOT / "tools" / "consumer-status"
+TOOLS = ROOT / "tools" / "verification" / "consumer-status"
 
 TENANT = "T-1"
 C_USER = "c-1"
@@ -225,11 +225,11 @@ def _install_default_deps(monkeypatch: pytest.MonkeyPatch, table: list[dict[str,
         # 先拿到真实的 deps（它会 import Settings/GatewayServerSettings）；
         # 用最小替身顶掉那两处读取，其余（补 id 那段）不动。
         monkeypatch.setattr(
-            "aiops_diagnostics.config.Settings.from_config",
+            "aiops_diagnostics.common.config.Settings.from_config",
             classmethod(lambda _cls, _path: _Settings()),
         )
         monkeypatch.setattr(
-            "aiops_diagnostics.gateway_config.GatewayServerSettings.from_env",
+            "aiops_diagnostics.gateway.gateway_config.GatewayServerSettings.from_env",
             classmethod(lambda _cls: _GatewaySettings()),
         )
 

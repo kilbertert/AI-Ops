@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     JSON_CONTENT_TYPE,
     EnvelopeParser,
     ErrorMapping,
@@ -37,7 +37,7 @@ from aiops_diagnostics.bounded_http import (
     parse_code_data_envelope,
     request_json,
 )
-from aiops_diagnostics.config import UpmsSettings
+from aiops_diagnostics.common.config import UpmsSettings
 
 SCOPE_ERROR_AUTH_FAILED = "scope.auth_failed"
 SCOPE_ERROR_CONFIG_MISSING = "scope.config_missing"

@@ -79,7 +79,7 @@ M3 已证明构造身份下的真实模型工具循环；本片补正常登录�
 工具不连接 Redis 自选会话、不生成 JWT、不替换 Gateway 解析器。
 
 ```bash
-python3 tools/m2_close/m3live/user_entry.py preflight \
+python3 tools/experiments/m2_close/m3live/user_entry.py preflight \
   --session-file <0600会话文件> --order-file <0600订单文件> \
   --stack-config <隔离配置根> --out <新私有证据目录>
 ```
@@ -106,21 +106,21 @@ unset M2LIVE_COMPOSE_EXTRA
 M3_EVID='<新私有证据目录>'
 M3_SESSION_FILE='<0600会话文件>'
 M3_ORDER_FILE='<0600本人订单文件>'
-python3 tools/m2_close/m3live/user_entry.py preflight \
+python3 tools/experiments/m2_close/m3live/user_entry.py preflight \
   --session-file "$M3_SESSION_FILE" --order-file "$M3_ORDER_FILE" \
   --stack-config "$M2LIVE_CONFIG" --out "$M3_EVID"
-python3 tools/m2_close/m3live/live_replay.py baseline --out "$M3_EVID/prod-before.json"
+python3 tools/experiments/m2_close/m3live/live_replay.py baseline --out "$M3_EVID/prod-before.json"
 finish() {
   rc=$?
   trap - EXIT
   bash deploy/m2-live-03/checks.sh down || rc=1
-  python3 tools/m2_close/m3live/live_replay.py cleanup --out "$M3_EVID" \
+  python3 tools/experiments/m2_close/m3live/live_replay.py cleanup --out "$M3_EVID" \
     --prod-baseline "$M3_EVID/prod-before.json" || rc=1
   exit "$rc"
 }
 trap finish EXIT
 bash deploy/m2-live-03/checks.sh up
-python3 tools/m2_close/m3live/user_entry.py run \
+python3 tools/experiments/m2_close/m3live/user_entry.py run \
   --session-file "$M3_SESSION_FILE" --order-file "$M3_ORDER_FILE" \
   --stack-config "$M2LIVE_CONFIG" --state "$M2LIVE_STATE" --out "$M3_EVID"
 )

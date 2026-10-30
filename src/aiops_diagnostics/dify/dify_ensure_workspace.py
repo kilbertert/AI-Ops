@@ -39,10 +39,10 @@ import socket
 from dataclasses import dataclass
 from typing import Any
 
-from aiops_diagnostics.bounded_http import RequestSpec, join_url, request_json
-from aiops_diagnostics.deployment_environment import canonical_environment
+from aiops_diagnostics.common.bounded_http import RequestSpec, join_url, request_json
 from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiError
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces, workspace_name
+from aiops_diagnostics.gateway.deployment_environment import canonical_environment
 
 #: 租约长度。够一次创建往返（15s 超时 + 写回），又短到崩掉的创建不会把一个租户锁一小时。
 DEFAULT_LEASE_SECONDS = 300.0
@@ -93,7 +93,7 @@ def reconcile_by_name(
     这是抢占之前的唯一依据。命中 >1 时**不**替调用方选：``tenants.name`` 在 Dify 里没有
     唯一约束，两个同名 workspace 意味着有人手工建过，选错就是串租户。
     """
-    from aiops_diagnostics.bounded_http import ErrorMapping, HttpFailure
+    from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure
 
     def unavailable(failure: HttpFailure) -> Exception:
         return EnsureError(

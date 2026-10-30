@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     FORM_CONTENT_TYPE,
     JSON_CONTENT_TYPE,
     ErrorMapping,
@@ -21,7 +21,7 @@ from aiops_diagnostics.bounded_http import (
     parse_raw_envelope,
     request_json,
 )
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.data.sources import mysql_site_mapper, scoped_live_sources
 from aiops_diagnostics.identity.query_scope import (
     QueryScope,

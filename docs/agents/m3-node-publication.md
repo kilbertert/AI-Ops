@@ -24,7 +24,7 @@
 
 ```bash
 M3NODE_DEPS=<锁定jar目录> M3NODE_JDK_IMAGE=<JDK镜像digest> \
-  uv run python tools/m2_close/m3node/verify_node_publication.py --out <私有报告路径>
+  uv run python tools/experiments/m2_close/m3node/verify_node_publication.py --out <私有报告路径>
 ```
 
 真实 Gateway + Java Spring 节点，编辑器/平台/模型/业务和身份均为合成。另运行原
@@ -36,7 +36,7 @@ M3NODE_DEPS=<锁定jar目录> M3NODE_JDK_IMAGE=<JDK镜像digest> \
 以下验收使用部署锁中的 Snail 平台与节点 JAR，不由 Python 替身派发节点方法：
 
 ```bash
-uv run python tools/m2_close/m3node/verify_platform_publication.py \
+uv run python tools/experiments/m2_close/m3node/verify_platform_publication.py \
   --platform <平台jar> --node <节点jar> --image <已有Gateway镜像> --out <私有报告.json>
 ```
 

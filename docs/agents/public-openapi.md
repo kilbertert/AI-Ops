@@ -1,6 +1,6 @@
 # 用户 OpenAPI 部署与核验
 
-规范由 `src/aiops_diagnostics/public_openapi.py` 从允许公开的路由和请求模型生成。
+规范由 `src/aiops_diagnostics/gateway/public_openapi.py` 从允许公开的路由和请求模型生成。
 `GET /v1/openapi.json` 是 OpenAPI 3.1 JSON，`GET /v1/docs` 是不加载外部脚本的中文查阅页。
 导入测试工具后按规范选择个人身份。媒体签名URL不附个人令牌；管理和回调不在公开清单中。
 
@@ -13,7 +13,7 @@
 
 ## 可重复核验
 
-本地运行 `uv run pytest tests/test_public_openapi.py`，并按
+本地运行 `uv run pytest tests/gateway/test_public_openapi.py`，并按
 `verify-aiops-gateway` 技能启动一次性数据根的真实Gateway。
 通过回环HTTP读取下列两个新地址，另验无凭据业务请求仍401；结束后关闭该临时进程。
 

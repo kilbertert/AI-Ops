@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from aiops_diagnostics.config import SafetySettings
+from aiops_diagnostics.common.config import SafetySettings
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.data.order_status import is_charging
 from aiops_diagnostics.health.health_metrics import RULE_VERSION as HEALTH_RULE_VERSION
 from aiops_diagnostics.health.health_report_copy import health_summary
 from aiops_diagnostics.health.rules import classify_stop_reason
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 
 #: Re-exported from `health_metrics` so there is exactly ONE rule version.
 #: It used to be a second constant here with a different value

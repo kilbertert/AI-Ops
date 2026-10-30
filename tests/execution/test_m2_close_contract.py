@@ -40,9 +40,9 @@ from aiops_diagnostics.execution.agent_runs import (
     scope_from_json,
     scope_to_json,
 )
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -252,7 +252,7 @@ def _app(tmp_path, *, monkeypatch, node_token: str = NODE_A_TOKEN, upstream_base
             raise agent_runs.AgentRunDispatchError("claim failed")
 
     dispatcher.claim = claim
-    monkeypatch.setattr("aiops_diagnostics.gateway_api.SnailDispatcher", lambda: dispatcher)
+    monkeypatch.setattr("aiops_diagnostics.gateway.gateway_api.SnailDispatcher", lambda: dispatcher)
     return {
         "app": app,
         "client": claim_client,
@@ -630,7 +630,7 @@ def test_r1_1_revoked_between_complete_and_release_never_releases(tmp_path, monk
 
 def test_r1_1_node_deactivated_during_read_never_releases(tmp_path, monkeypatch):
     """交错 3：业务读取进行中把节点置为 inactive —— 结果必须拒绝且记录作废。"""
-    from aiops_diagnostics import gateway_api as gateway_api_module
+    from aiops_diagnostics.gateway import gateway_api as gateway_api_module
 
     upstream_ctx = cpms_stub()
     upstream = upstream_ctx.__enter__()
@@ -664,7 +664,7 @@ def test_r1_1_node_deactivated_during_read_never_releases(tmp_path, monkeypatch)
 
 def test_r1_1_expiry_reached_during_read_never_releases(tmp_path, monkeypatch):
     """期限在读取期间到达：``complete()`` 拒绝，结果不落库也不返回。"""
-    from aiops_diagnostics import gateway_api as gateway_api_module
+    from aiops_diagnostics.gateway import gateway_api as gateway_api_module
 
     upstream_ctx = cpms_stub()
     upstream = upstream_ctx.__enter__()
@@ -693,7 +693,7 @@ def test_r1_1_expiry_reached_during_read_never_releases(tmp_path, monkeypatch):
 
 def test_r1_1_order_authorization_change_during_read_never_releases(tmp_path, monkeypatch):
     """订单授权在**读取期间**变化：快照已算出，但订单已不归本人 —— 不放行。"""
-    from aiops_diagnostics import gateway_api as gateway_api_module
+    from aiops_diagnostics.gateway import gateway_api as gateway_api_module
 
     upstream_ctx = cpms_stub()
     upstream = upstream_ctx.__enter__()

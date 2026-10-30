@@ -6,11 +6,11 @@ import typer
 import uvicorn
 from rich.console import Console
 
-from aiops_diagnostics.console_encoding import configure_windows_stdio
-from aiops_diagnostics.deployment_environment import require_deployment_identity
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_logging import configure_gateway_logging
+from aiops_diagnostics.common.console_encoding import configure_windows_stdio
+from aiops_diagnostics.gateway.deployment_environment import require_deployment_identity
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_logging import configure_gateway_logging
 
 configure_windows_stdio()
 
@@ -35,7 +35,7 @@ def serve(
     # 隔离门禁先于一切：设置 `M2LIVE_ISOLATION_ROOT` 的运行必须证明自己的可写状态、
     # 只读依赖与属主都在隔离根里，否则在打开任何库之前退出。未设置时为空操作 ——
     # 生产 Gateway 的启动路径逐字不变。
-    from aiops_diagnostics.isolation_guard import IsolationError, enforce_from_env
+    from aiops_diagnostics.gateway.isolation_guard import IsolationError, enforce_from_env
 
     try:
         enforce_from_env()

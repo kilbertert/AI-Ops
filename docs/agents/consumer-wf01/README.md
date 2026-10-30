@@ -94,12 +94,12 @@ photo_id一次性绑定主体与发布内容，不能与显式订单同时使用
 
 ## 验证与旧版兼容
 
-复跑入口：`uv run python tools/verify_consumer_chatflow.py --out <私有报告>`；
+复跑入口：`uv run python tools/verification/verify_consumer_chatflow.py --out <私有报告>`；
 选库/当前图需配套签名插件、公钥和DIFY_TEST_WEB_IMAGE，见[迁移手册](live-knowledge-deploy.md)。
 详细用例见[QA计划](qa-plan.md)与[测试交接](../../testing-handoff.md)。隔离成功不能替代真实供应商/业务/H5证据。
 
 旧callback_version 1–3读取aiops-consumer-reviewed/1审核包，kind/faq_id只选标准答案，
-entries.answers.zh/en及media_ids属于旧协议。`tools/build_consumer_knowledge.py`保留编译历史材料，
-历史包可用`uv run python tools/build_consumer_knowledge.py <私有原包> --output <新私有目录>`重建，输出仍为草稿。
+entries.answers.zh/en及media_ids属于旧协议。`tools/content/build_consumer_knowledge.py`保留编译历史材料，
+历史包可用`uv run python tools/content/build_consumer_knowledge.py <私有原包> --output <新私有目录>`重建，输出仍为草稿。
 新版callback_version=4/documents不使用这些准入规则，不要求产品维护两个副本。
 旧正文按实际中英文标记、旧实时快照按原模板核验，不改写已有QA。回滚可恢复旧版本，不能自动故障回落。

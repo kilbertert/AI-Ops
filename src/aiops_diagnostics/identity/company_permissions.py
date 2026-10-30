@@ -33,7 +33,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     JSON_CONTENT_TYPE,
     ErrorMapping,
     HttpFailure,
@@ -43,7 +43,7 @@ from aiops_diagnostics.bounded_http import (
     parse_code_data_envelope,
     request_json,
 )
-from aiops_diagnostics.config import UpmsSettings
+from aiops_diagnostics.common.config import UpmsSettings
 
 _LOGGER = logging.getLogger("aiops.company_permissions")
 

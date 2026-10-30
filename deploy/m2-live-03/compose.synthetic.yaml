@@ -51,7 +51,7 @@ services:
         cat /etc/ssl/certs/ca-certificates.crt /etc/m2live-tls/ca.crt > /data/ca-bundle.crt
         # 合成订单表放在**测试夹具**里，由部署件只读挂载；不给真实业务留位置。
         M2CLOSE_ORDERS_FILE=/etc/m2live/nodes.json \
-          python /opt/aiops-src/tools/m2_close/synthetic_upstream.py &
+          python /opt/aiops-src/tools/experiments/m2_close/synthetic_upstream.py &
         # 平台这一跳是**真 HTTPS**（正式 compose 也一样），合成模式不再起回环中继。
         python - <<'PY'
         import json, sqlite3
@@ -65,7 +65,7 @@ services:
                          (order_no, record["user"]))
         conn.commit(); conn.close()
         PY
-        exec python /opt/aiops-src/tools/m2_close/gateway_launcher.py
+        exec python /opt/aiops-src/tools/experiments/m2_close/gateway_launcher.py
 
   modelstub:
     # 桩模型要跑仓库里的合成上游，因此用**同一个 Gateway 镜像**（依赖已在镜像里，
@@ -84,7 +84,7 @@ services:
     # 合成 CPMS 的订单表也由这个桩提供，路径与 Gateway 侧一致。
     volumes:
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway:/etc/m2live:ro
-    entrypoint: ["python", "/opt/aiops-src/tools/m2_close/synthetic_upstream.py"]
+    entrypoint: ["python", "/opt/aiops-src/tools/experiments/m2_close/synthetic_upstream.py"]
     mem_limit: 200m
     cpus: 0.25
     restart: unless-stopped

@@ -45,7 +45,7 @@ Gateway目录为`GET /v1/internal/consumer-knowledge/catalogue`。随合并制�
 API返回选项还不够，必须在浏览器点击节点查看真实多选框；隔离复现命令：
 
 ```bash
-DIFY_TEST_WEB_IMAGE=<候选web镜像> uv run python tools/verify_consumer_chatflow.py --out <私有报告.json> \
+DIFY_TEST_WEB_IMAGE=<候选web镜像> uv run python tools/verification/verify_consumer_chatflow.py --out <私有报告.json> \
   --knowledge-plugin <已签名包> --plugin-public-key <验收公钥>
 ```
 
@@ -58,7 +58,7 @@ DIFY_TEST_WEB_IMAGE=<候选web镜像> uv run python tools/verify_consumer_chatfl
 离线生成候选，不新建替代正式应用、不改变其他节点/模型/提示词：
 
 ```bash
-uv run python tools/upgrade_consumer_flow.py <原草稿.yml> --gateway <可信根地址> \
+uv run python tools/content/upgrade_consumer_flow.py <原草稿.yml> --gateway <可信根地址> \
   --knowledge-base <当前库ID> --knowledge-plugin <已安装完整插件标识> --out <候选.yml>
 ```
 

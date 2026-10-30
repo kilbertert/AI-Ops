@@ -60,7 +60,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 
-from aiops_diagnostics.gateway_config import DifyKnowledgeBinding, parse_dify_knowledge_bindings
+from aiops_diagnostics.gateway.gateway_config import DifyKnowledgeBinding, parse_dify_knowledge_bindings
 
 #: 自动登记的 `knowledge_id` 前缀。改它等于让所有已配置的 app 404 —— 这是约定，不是旋钮。
 AUTO_PREFIX = "tenant-"

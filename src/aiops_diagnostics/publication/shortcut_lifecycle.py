@@ -23,8 +23,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
-from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
+from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.publication.agent_lifecycle import SAFE_ID
 
 logger = logging.getLogger(__name__)
@@ -343,7 +343,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
             # to the zh authority and its zh-Hant derivation alike — the
             # Traditional copy is the DERIVATION of this string, never a second
             # hand-written one, which is what keeps the two scripts from
-            # drifting apart. See tools/derive_zh_hant.py.
+            # drifting apart. See tools/content/derive_zh_hant.py.
             "battery_report": {
                 "intent": "knowledge",  # inert for a jump action; see the brief
                 "requires_order": False,

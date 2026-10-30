@@ -7,7 +7,7 @@ from threading import Thread
 
 import pytest
 
-from aiops_diagnostics.config import ProviderConfig
+from aiops_diagnostics.common.config import ProviderConfig
 from aiops_diagnostics.consumer.consumer_intent import classify
 
 DECISION = {"intent": "order_status", "order_reference": "latest", "uses_context": False}
@@ -124,7 +124,7 @@ def test_evaluation_runner_scores_fixed_expectations_and_retains_no_key(tmp_path
     import sys
     from pathlib import Path
 
-    path = Path(__file__).resolve().parents[2] / "tools/verify_consumer_intent.py"
+    path = Path(__file__).resolve().parents[2] / "tools/verification/verify_consumer_intent.py"
     spec = importlib.util.spec_from_file_location("verify_intent", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
