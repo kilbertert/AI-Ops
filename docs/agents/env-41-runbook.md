@@ -826,6 +826,36 @@ EOF
 > ⚠️ **仍然不要因为等待就手工部署**：现在根本没有"等待"这个状态了。若 CD 没跑，
 > 那是路径没命中或 workflow 出错，查 `gh run list --workflow=cd.yml`，不要绕过去手敲。
 > 卡住/连续失败会由 `CD Watch` 开 `cd:needs-attention` 票（#407）。
+
+### 2.1 CD 显示 pending/卡住时怎么判（2026-10-30 实测）
+
+只有一个自托管 runner 打 `AI-Ops` 标签，**它一次只跑一个 job**。所以 CD 停在
+`pending` 的常见原因不是死锁，也不是路径没命中，而是**队列前面有别的 job 在用**，
+其中包括与本仓部署无关的 AFK/Agent 工作流（实测有占住 runner 超过一小时的
+`Agent Update Branch`，它自己还要跑模型）。三步分开看：
+
+```bash
+gh run list --workflow cd.yml --limit 3 --json databaseId,status,conclusion,headSha
+gh api repos/<owner>/<repo>/actions/runners --jq '.runners[]|{name,busy,status}'
+gh run list --status in_progress --limit 3 --json name,headBranch,createdAt   # 谁在占
+```
+
+- `busy:true` 且上面第三条列出一个**别的** workflow：CD 就是在排队，等它跑完。
+  `pending → in_progress` 才是“拿到 runner”的信号；只看到 `pending` 不要当成
+  “部署失败”，也不要手工改产。
+- `busy:false` 而 CD 仍 `pending`：那是没有匹配的 runner 或 workflow 出错（看
+  run 的报错），这时才按本节应急路径处理。
+- 想让某个具体 job 先跑，**没有**优先级开关；可以做的只有等，或者（经该 job 的
+  归属会话同意后）取消它的 run。取消别人会话的自动化 run 不是部署手段，不得当成快捷键。
+
+🔴 **`conclusion: cancelled` 不等于「那个 commit 没部署」。** job 级 concurrency 组
+是 `cd-41-deploy`、`cancel-in-progress: false`，但当**同一组里更新的 pending job
+建立时，旧的 pending job 会被取消**（实测：`041a1eb0` 的 CD 被后来那次合并的 CD
+取消，而 `041a1eb0` 的内容已在后来的工件里上线）。每次 CD 部署的是**它自己的
+`GITHUB_SHA`**（见 `cd.yml` 的 `Resolve the commit to deploy`），所以：
+
+- 判断生产到底跑什么，只看 `/health` 的 `version`（`1.0.0+<12 位提交>`），不看 run 的结论；
+- 内容被后来的提交覆盖时，`cancelled` 是正常收敛，不需要补跑。
 >
 > 🔴 **反向：若你把 D-2 的暴露回滚了（服务绑回 `127.0.0.1`），必须同时把
 > `deploy-41.sh` 的健康检查改回回环**（`AIOPS_HEALTH_HOST=127.0.0.1` 或直接改默认值）——
