@@ -56,14 +56,108 @@ def _declared(tool: str):
         raise OperatorRefused("OPERATOR_TOOL_DISABLED") from exc
 
 
-def tool_request(tool: str, order_no: str) -> dict[str, str]:
-    """按工具名把这一次的请求目标物化出来。**这里是路径物化的唯一位置。**"""
-    return _declared(tool).request({"order_no": order_no})
+def tool_request(tool: str, values: dict[str, str]) -> dict[str, str]:
+    """按工具名把这一次的请求目标物化出来。**这里是路径与查询串物化的唯一位置。**"""
+    return _declared(tool).request(values)
 
 
-def tool_inputs(tool: str, order_no: str) -> dict[str, str]:
+def tool_inputs(tool: str, values: dict[str, str]) -> dict[str, str]:
     """这一次运行的输入。订单号是**输入**，不再是授权载荷的中心。"""
-    return _declared(tool).declared_inputs({"order_no": order_no})
+    return _declared(tool).declared_inputs(values)
+
+
+def run_values(tool: str, order_no: str, arguments: dict[str, str] | None = None) -> dict[str, str]:
+    """把「运行绑定的输入」与「模型提议的参数」合成一次取值。
+
+    订单诊断的输入来自运行本身（订单号），站点查询的输入来自模型 —— 两者在这里汇合，
+    于是下游（物化、证据比对、代理白名单）只有一种形状可处理。
+    """
+    values = dict(arguments or {})
+    if "order_no" in _declared(tool).inputs:
+        values["order_no"] = order_no
+    return values
+
+
+def allowed_in(tool: str, run) -> bool:
+    """这个工具能不能出现在这一类运行里。
+
+    无订单回合可以带工具，但**不是任何工具**：订单诊断工具没有订单就没有取证对象。
+    """
+    context = "order" if diagnoses_an_order(run) else "conversation"
+    return context in _declared(tool).applies_to
+
+
+#: 工具参数的字符纪律（ADR-0176）。与对话协议的搜索词同源：
+#: 长度 1–80、不含 `%_\` 与换行。**另一半**——「必须是提问原文的子串」——只对模型提议的
+#: 参数成立，因此在 :func:`validate_tool_arguments` 里单独判。
+_ARGUMENT_FORBIDDEN = ("%", "_", "\\", "\r", "\n")
+
+
+def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, str]:
+    """放行模型提议的工具参数。**模型可以提议，能不能用由这里决定。**
+
+    两条判据缺一不可：
+
+    1. 键必须是声明里列过的那几个 —— 模型不能给工具加参数。
+    2. 每个值必须能在用户提问原文里找到（casefold 后是子串）——
+       编一个地址，或把上一个用户的地址搬过来，都在这里被判掉。
+    """
+    declared = _declared(tool)
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict) or set(arguments) - set(declared.inputs):
+        raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+    cleaned: dict[str, str] = {}
+    for key, value in arguments.items():
+        if not isinstance(value, str):
+            raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+        if len(value) > 80 or any(char in value for char in _ARGUMENT_FORBIDDEN):
+            raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+        stripped = value.strip()
+        if not stripped:
+            continue
+        if stripped.casefold() not in question.casefold():
+            raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+        cleaned[key] = stripped
+    return cleaned
+
+
+#: 站点查询工具的名字。这里是**唯一**按名字认它的地方：判断「这一轮是否已经用工具
+#: 取过站点」是运行级的事实，不是工具自身的属性。
+SITE_TOOL = "cpms_site_search"
+
+
+def _sites_from_evidence(caller, task, answer):
+    """这一轮已经用工具取过站点时，**复用那份证据**，不再查第二次。
+
+    两件事同时成立才算复用：证据在、且回答里的关键词与工具参数一致。不一致说明模型
+    在两次输出里说了不同的地方，那不是同一次查询 —— 拒绝比挑一个更安全。
+
+    这就是「两个入口同一份事实」的真正含义：不是两次查询碰巧相同，而是一次查询被两个
+    入口共用。
+    """
+    if SITE_TOOL not in task.delivered:
+        return None
+    evidence = task.evidence.get(SITE_TOOL)
+    if evidence is None:
+        raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+    arguments = task.arguments.get(SITE_TOOL, {})
+    terms = [term for term in answer["address_terms"] if term]
+    if answer["name"] != arguments.get("name", "") or (
+        (max(terms, key=len) if terms else "") != arguments.get("address", "")
+    ):
+        raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
+    data = evidence["data"]
+    scope = operator_scope(caller, allow_empty=True)
+    return {
+        "source": evidence["source"],
+        "observed_at": evidence["observed_at"],
+        "sites": data["records"],
+        "limited": bool(data["truncated"]),
+        "empty_scope": scope.site_ids == (),
+        "total": int(data["total"]),
+        "scope_limited": True,
+    }
 
 
 def diagnoses_an_order(run) -> bool:
@@ -102,6 +196,8 @@ class ActiveTask:
     grant: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     evidence: dict = field(default_factory=dict)
     delivered: set = field(default_factory=set)
+    #: 每个工具这一次的取值（订单号或模型提议的关键词）。放行一次就固定，后续步骤只读它。
+    arguments: dict = field(default_factory=dict)
     conversation_turn: tuple | None = None
     question: str = ""
     language: str = "zh"
@@ -199,7 +295,8 @@ class OperatorCpms:
         if not diagnoses_an_order(run):
             return self.result(caller, qa_id)
         body = cpms_get(
-            target.cpms_base_url + tool_request(TOOL_NAMES[0], run.order_no)["path"],
+            target.cpms_base_url
+            + tool_request(TOOL_NAMES[0], run_values(TOOL_NAMES[0], run.order_no))["path"],
             bearer,
             caller.effective_tenant_id,
         )
@@ -253,7 +350,9 @@ class OperatorCpms:
         order_site_id = ""
         if order:
             body = cpms_get(
-                base + tool_request(TOOL_NAMES[0], order)["path"], bearer, caller.effective_tenant_id
+                base + tool_request(TOOL_NAMES[0], run_values(TOOL_NAMES[0], order))["path"],
+                bearer,
+                caller.effective_tenant_id,
             )
             validate_body(body, current, order, TOOL_NAMES[0])
             order_site_id = body["data"]["siteId"]
@@ -408,7 +507,10 @@ class OperatorCpms:
                 raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         if manifest is not None and manifest != expected.identity:
             raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
-        if tool is not None and (tool not in TOOL_NAMES or tool not in expected.tool_names):
+        if tool is not None and (
+            tool not in TOOL_NAMES or tool not in expected.tool_names or not allowed_in(tool, run)
+        ):
+            # 未声明的工具、没被勾选的工具、以及「这一类运行不该用的工具」都在这里挡住。
             raise OperatorRefused("OPERATOR_TOOL_DISABLED")
         latest = self.context.agent_run_store.get(run_id)
         if (
@@ -434,28 +536,47 @@ class OperatorCpms:
             "operation": run.operation,
         }
 
-    def grant(self, run_id, token, manifest, tool, contract=""):
+    def grant(self, run_id, token, manifest, tool, contract="", arguments=None):
         if contract != TOOL_CONTRACT:
             # 旧节点不声明契约版本。挡在**领授权**这一步，而不是等它在完成回调里因为
             # 证据缺字段而失败——那既不是稳定错误码，也发生在公司令牌已经用过之后。
             raise OperatorRefused("OPERATOR_TOOL_CONTRACT_OUTDATED")
         task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
+        # 参数放行发生在**取到公司令牌之前**：模型编的地址不会换来一次真实的对外请求。
+        arguments = validate_tool_arguments(tool, arguments, task.question)
+        task.arguments.setdefault(tool, arguments)
+        if task.arguments[tool] != arguments:
+            raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_CHANGED")
         if run.state == "issued" and not self.context.agent_run_store.claim(run_id):
             raise OperatorRefused("OPERATOR_CLAIM_CONFLICT")
+        values = run_values(tool, run.order_no, arguments)
         return {
             "run_id": run_id,
             "tool": tool,
             "manifest_id": run.expected_agent_version,
             "authorization_id": hashlib.sha256(task.grant.encode()).hexdigest(),
             "tenant_id": task.caller.effective_tenant_id,
-            "site_ids": [task.order_site_id],
-            "inputs": tool_inputs(tool, run.order_no),
-            "request": tool_request(tool, run.order_no),
+            # 站点工具的范围是**账号可见的站点集合**，不是订单站点：它没有订单。
+            "site_ids": self._grant_sites(task, run, tool),
+            "inputs": tool_inputs(tool, values),
+            "request": tool_request(tool, values),
             "contract": TOOL_CONTRACT,
             "base_url": task.proxy_url + "/v1/internal/operator-runs/" + run_id + "/cpms",
             "bearer": task.grant,
             "expires_at": run.expires_at.isoformat(),
         }
+
+    def _grant_sites(self, task, run, tool) -> list[str]:
+        """这一次授权允许碰的站点。
+
+        订单诊断：订单所在的那**一个**站点（保持既有收窄）。
+        无订单（站点工具）：账号可见的站点集合；空集合是合法的（「你确实没有站点」），
+        不放大成租户。
+        """
+        if diagnoses_an_order(run):
+            return [task.order_site_id]
+        scope = operator_scope(task.caller, allow_empty=True)
+        return list(scope.site_ids or ())
 
     def proxy(self, run_id, grant, path, query, method="GET"):
         task = self.tasks.get(run_id)
@@ -470,7 +591,8 @@ class OperatorCpms:
             (
                 name
                 for name in TOOL_NAMES
-                if tool_request(name, run.order_no) == {"method": method, "path": path, "query": query}
+                if tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
+                == {"method": method, "path": path, "query": query}
             ),
             None,
         )
@@ -510,7 +632,7 @@ class OperatorCpms:
         run = self.context.agent_run_store.get(run_id)
         if run is None:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
-        request = tool_request(tool, run.order_no)
+        request = tool_request(tool, run_values(tool, run.order_no))
         return self.proxy(run_id, grant, request["path"], request["query"], request["method"])
 
     def record(self, run_id, token, manifest, tool, payload):
@@ -531,7 +653,8 @@ class OperatorCpms:
                 or evidence.get("tool") != tool
                 or evidence.get("data") != expected["data"]
                 or evidence.get("source") != expected["source"]
-                or evidence.get("inputs") != tool_inputs(tool, run.order_no)
+                or evidence.get("inputs")
+                != tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool)))
             ):
                 raise OperatorRefused("OPERATOR_EVIDENCE_MISMATCH")
             try:
@@ -592,17 +715,19 @@ class OperatorCpms:
             else:
                 operator_conversation.validate(answer, task.question)
                 if answer["kind"] == "site_search":
+                    sites = _sites_from_evidence(task.caller, task, answer)
+                    if sites is None:
 
-                    def current_search_scope():
-                        current_task, _, _ = self._current(run_id, node_token=token, manifest=manifest)
-                        return current_task.caller.scope_fingerprint
+                        def current_search_scope():
+                            current_task, _, _ = self._current(run_id, node_token=token, manifest=manifest)
+                            return current_task.caller.scope_fingerprint
 
-                    sites = query_sites(
-                        site_scope(task.caller),
-                        site_keywords(answer),
-                        cpms_site_reader(task.base_url, task.bearer),
-                        current_search_scope,
-                    )
+                        sites = query_sites(
+                            site_scope(task.caller),
+                            site_keywords(answer),
+                            cpms_site_reader(task.base_url, task.bearer),
+                            current_search_scope,
+                        )
             self._current(run_id, node_token=token, manifest=manifest)
             snapshot = {
                 "answer": answer,

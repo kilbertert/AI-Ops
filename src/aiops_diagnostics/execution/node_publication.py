@@ -201,14 +201,15 @@ def candidate(source: Any, target: NodeTarget, *, operator_preview: dict | None 
         if not set(allowed).issubset(template):
             raise ValueError("CPMS tool missing from node template")
         body["tools"] = [template[name] for name in allowed]
+        from aiops_diagnostics.operator import operator_tools
+
         for tool in body["tools"]:
-            if json.loads(tool["input_schema"]) != {
-                "type": "object",
-                "properties": {},
-                "required": [],
-                "additionalProperties": False,
-            }:
-                raise ValueError("CPMS tools must have no model-controlled parameters")
+            # 参数集合必须**恰好等于**声明登记的那几个。校验对象从「必须为空」换成了
+            # 「必须是声明的那一份」—— 强度不降，判据从常量变成了数据。
+            if json.loads(tool["input_schema"]) != json.loads(
+                operator_tools.tool(tool["name"]).input_schema()
+            ):
+                raise ValueError("CPMS tool parameters must match the declaration")
     body["model"] = {
         key: raw["model"][key] for key in ("provider_key", "adapter_key", "model_key", "endpoint")
     }

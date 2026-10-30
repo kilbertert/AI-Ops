@@ -4,18 +4,22 @@
     "一个 CPMS 只读工具是什么 —— 仓内唯一声明。",
     "网关侧的路径物化、输入、证据字段、来源标记、发布白名单与 provider 的 OpenAPI 生成，",
     "以及节点侧的装配，都从这里读或由它校验。新增一个工具只加一条，不改节点源码。",
-    "边界（有意为之）：request 只能是 GET + 相对路径 + 声明里的查询串；response.kind 只有",
-    "single 与 page 两种形状。需要新形状时改的是引擎，不是每个工具。"
+    "边界（有意为之）：request 只能是 GET + 相对路径 + 声明里的查询参数表；",
+    "response.kind 只有 single 与 page 两种形状。需要新形状时改的是引擎，不是每个工具。",
+    "applies_to 说明这个工具能出现在哪一类运行里：order（有订单的诊断）与 conversation（无订单回合）。",
+    "model_inputs 是模型可以提议的那部分输入 —— 它决定发布清单里的 input_schema。运行绑定的输入（例如订单号）不出现在 schema 里：模型不能选它。"
   ],
   "tools": [
     {
       "name": "cpms_order_detail",
       "description": "Read diagnostic fields for the authorized order from CPMS. Takes no arguments.",
-      "inputs": ["order_no"],
+      "inputs": [
+        "order_no"
+      ],
       "request": {
         "method": "GET",
         "path_template": "/chOrderInfo/getOrderInfoDetail/{order_no}",
-        "query": ""
+        "query": []
       },
       "source": "cpms.orderDetail",
       "response": {
@@ -50,16 +54,31 @@
         "endSoc",
         "gunPower",
         "interfaceType"
-      ]
+      ],
+      "applies_to": [
+        "order"
+      ],
+      "model_inputs": []
     },
     {
       "name": "cpms_charging_samples",
       "description": "Read up to 50 CPMS charging samples for the authorized order. Ordering and completeness are not guaranteed. Takes no arguments.",
-      "inputs": ["order_no"],
+      "inputs": [
+        "order_no"
+      ],
       "request": {
         "method": "GET",
         "path_template": "/iotChargingDevice/getChargingMonitor/{order_no}",
-        "query": "current=1&size=50"
+        "query": [
+          {
+            "name": "current",
+            "value": "1"
+          },
+          {
+            "name": "size",
+            "value": "50"
+          }
+        ]
       },
       "source": "cpms.chargingMonitor",
       "response": {
@@ -87,6 +106,68 @@
         "temperature",
         "batteryMaxTemperature",
         "batteryMinTemperature"
+      ],
+      "applies_to": [
+        "order"
+      ],
+      "model_inputs": []
+    },
+    {
+      "name": "cpms_site_search",
+      "description": "Search charging sites visible to this account by name or address keyword. Both arguments are optional and must be words the user actually said.",
+      "inputs": [
+        "name",
+        "address"
+      ],
+      "applies_to": [
+        "conversation"
+      ],
+      "request": {
+        "method": "GET",
+        "path_template": "/chSite/page",
+        "query": [
+          {
+            "name": "current",
+            "value": "1"
+          },
+          {
+            "name": "size",
+            "value": "50"
+          },
+          {
+            "name": "type",
+            "value": "0"
+          },
+          {
+            "name": "name",
+            "from": "name"
+          },
+          {
+            "name": "address",
+            "from": "address"
+          }
+        ]
+      },
+      "source": "cpms.sitePage",
+      "response": {
+        "kind": "page",
+        "row_path": "records",
+        "page_size": 50,
+        "flags": {
+          "sample_limit": 50,
+          "ordering_guaranteed": false,
+          "complete_timeline": false,
+          "absence_when_empty": "no_samples"
+        }
+      },
+      "evidence_fields": [
+        "id",
+        "name",
+        "address"
+      ],
+      "model_inputs": [
+        "name",
+        "address"
       ]
     }
   ]

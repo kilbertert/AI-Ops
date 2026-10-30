@@ -9,7 +9,7 @@ import pytest
 
 from aiops_diagnostics.identity.scope_context import DataScope
 from aiops_diagnostics.operator import operator_conversation as conversation
-from aiops_diagnostics.operator import operator_cpms
+from aiops_diagnostics.operator import operator_cpms, operator_tools
 from operations.test_operator_cpms import (
     APP,
     HEADERS,
@@ -58,7 +58,9 @@ def test_no_order_question_reaches_node_without_business_reads(operator, monkeyp
         )
         assert publication.status_code == 200, publication.text
         manifest = json.loads(publication.json()["manifest"])
-        assert manifest["tools"] == []
+        # 无订单回合可以带工具，但只能是**声明里允许这类运行用的**那些（ADR-0182）。
+        assert [tool["name"] for tool in manifest["tools"]] == ["cpms_site_search"]
+        assert manifest["tools"][0]["input_schema"] == operator_tools.tool("cpms_site_search").input_schema()
         headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
         response = f["client"].post(
             f"/v1/internal/operator-runs/{run_id}/completions",

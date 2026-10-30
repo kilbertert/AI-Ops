@@ -97,6 +97,14 @@ def managed(operator, monkeypatch, tmp_path):
                     "tool_name": "cpms_charging_samples",
                     "enabled": True,
                 },
+                # 源应用声明了它就发布它：清单里的工具集来自源应用的勾选，
+                # 不是代码里的默认值。
+                {
+                    "provider_id": "provider-id",
+                    "provider_type": "api",
+                    "tool_name": "cpms_site_search",
+                    "enabled": True,
+                },
             ]
         },
     }

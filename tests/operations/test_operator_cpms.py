@@ -17,7 +17,7 @@ from aiops_diagnostics.conversation.faq import PlatformIdentityResolver, Platfor
 from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.execution import chat_execution, node_publication
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.operator import operator_cpms
+from aiops_diagnostics.operator import operator_cpms, operator_tools
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
 HEADERS = {"Authorization": "Bearer operator-private", "X-Business-Entry": "operator"}
@@ -127,13 +127,12 @@ def environment(tmp_path, monkeypatch):
             manifest = _write_manifest(tmp_path)
             raw = json.loads(manifest.read_text())
             raw["schema"] = "operator-exec-config/1"
+            # 每个工具的 schema 来自声明：参数集合**恰好等于**声明登记的那几个。
             raw["tools"] = [
                 {
                     "name": name,
                     "description": "d",
-                    "input_schema": json.dumps(
-                        {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
-                    ),
+                    "input_schema": operator_tools.tool(name).input_schema(),
                 }
                 for name in operator_cpms.TOOL_NAMES
             ]
@@ -182,7 +181,7 @@ def environment(tmp_path, monkeypatch):
             ctx.agent_manager = manager
             binding = DifyAppBinding("TENANT-A", "operator", APP, "operator-node")
             ctx.runtime.dify_app_registry.put(binding)
-            candidate = {"prompt": "SOP_ONE", "enabled": list(operator_cpms.TOOL_NAMES)}
+            candidate = {"prompt": "SOP_ONE", "enabled": list(operator_cpms.TOOL_NAMES)}  # 运营可以勾全部
             monkeypatch.setattr(
                 node_publication,
                 "DifyDslClient",
@@ -252,9 +251,11 @@ def request(client):
 
 #: 合成节点声明的工具契约版本。真实节点从 `CpmsReadTool` 侧的常量发出同一个值。
 CONTRACT = {"X-AI-Ops-Tool-Contract": operator_cpms.TOOL_CONTRACT}
+#: 订单诊断用的两个工具。`TOOL_NAMES` 现在是全量声明，站点工具属于无订单回合。
+ORDER_TOOLS = ("cpms_order_detail", "cpms_charging_samples")
 
 
-def node(f, run_id, *, tools=operator_cpms.TOOL_NAMES, before_complete=None, answer=None, contract=True):
+def node(f, run_id, *, tools=ORDER_TOOLS, before_complete=None, answer=None, contract=True):
     client = f["client"]
     head = {"Authorization": "Bearer " + NODE_A_TOKEN}
     publication = client.post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
@@ -274,9 +275,9 @@ def node(f, run_id, *, tools=operator_cpms.TOOL_NAMES, before_complete=None, ans
         grant = response.json()
         assert grant["site_ids"] == ["SITE-1"]
         assert grant["contract"] == operator_cpms.TOOL_CONTRACT
-        assert grant["inputs"] == operator_cpms.tool_inputs(tool, ORDER)
+        assert grant["inputs"] == operator_cpms.tool_inputs(tool, operator_cpms.run_values(tool, ORDER))
         request = grant["request"]
-        assert request == operator_cpms.tool_request(tool, ORDER)
+        assert request == operator_cpms.tool_request(tool, operator_cpms.run_values(tool, ORDER))
         url = grant["base_url"] + request["path"]
         if request["query"]:
             url += "?" + request["query"]
@@ -482,7 +483,7 @@ def test_a_node_that_does_not_declare_the_contract_is_refused_before_any_read(op
 def test_draft_toggle_does_not_publish_and_disabled_tool_cannot_be_called(operator, monkeypatch):
     f = operator
     f["candidate"]["enabled"] = [operator_cpms.TOOL_NAMES[0]]
-    assert len(json.loads(f["route"].manifest_text)["tools"]) == 2
+    assert len(json.loads(f["route"].manifest_text)["tools"]) == len(operator_cpms.TOOL_NAMES)
     current = f["publish"](f["route"].route_revision)
     assert [v["name"] for v in json.loads(current.manifest_text)["tools"]] == [operator_cpms.TOOL_NAMES[0]]
     monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
@@ -714,7 +715,7 @@ def test_node_provider_has_real_paths_and_no_shared_credentials():
             return [] if kwargs.get("method", "GET") == "GET" else {"result": "success"}
 
     tools = [
-        {"name": name, "description": name, "input_schema": '{"type":"object","properties":{}}'}
+        {"name": name, "description": name, "input_schema": operator_tools.tool(name).input_schema()}
         for name in operator_cpms.TOOL_NAMES
     ]
     result = ensure_node_provider(Console(), "workspace", "https://gateway.example", {"tools": tools})
@@ -982,7 +983,7 @@ def test_different_questions_must_produce_different_answers(operator, monkeypatc
                     "probable_cause": "原因待核实。",
                     "next_steps": [],
                     "limitations": ["上游未提供该数据。"],
-                    "evidence_tools": list(operator_cpms.TOOL_NAMES),
+                    "evidence_tools": list(ORDER_TOOLS),
                 },
             ),
         )

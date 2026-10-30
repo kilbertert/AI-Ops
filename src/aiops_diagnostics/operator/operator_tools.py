@@ -30,6 +30,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 DECLARATION_NAME = "operator_tools.json"
 SUPPORTED_SCHEMA = "aiops-operator-tools/1"
@@ -41,6 +42,9 @@ _INPUT = re.compile(r"[a-z][a-z0-9_]{1,63}")
 _PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]{1,63})\}")
 #: 响应形状。新增一种要同时改两侧引擎，因此是显式枚举而不是自由字符串。
 KINDS = ("single", "page")
+#: 运行类型。工具必须声明它能出现在哪一类运行里 —— 「无订单回合也能带工具」不等于
+#: 「任何工具都能在无订单回合里跑」：订单诊断工具没有订单就没有可取证的对象。
+CONTEXTS = ("order", "conversation")
 
 
 class ToolDeclarationError(ValueError):
@@ -52,9 +56,11 @@ class OperatorTool:
     name: str
     description: str
     inputs: tuple[str, ...]
+    model_inputs: tuple[str, ...]
+    applies_to: tuple[str, ...]
     method: str
     path_template: str
-    query: str
+    query: tuple[tuple[str, str, str], ...]
     source: str
     kind: str
     row_path: str
@@ -63,14 +69,38 @@ class OperatorTool:
     evidence_fields: tuple[str, ...]
 
     def request(self, values: dict[str, str]) -> dict[str, str]:
-        """这一次要发的请求。路径在这里物化 —— 节点只执行它。"""
+        """这一次要发的请求。**路径与查询串都在这里物化** —— 节点只执行它。
+
+        查询参数表里每一项要么是常量（``value``），要么来自输入（``from``）；输入为空
+        时那一项整条省略。于是「参数只能影响过滤器、分页上限写死在声明里」是结构事实，
+        而不是拼字符串时小心出来的结果。
+        """
         path = self.path_template
         for placeholder in _PLACEHOLDER.findall(self.path_template):
             value = values.get(placeholder, "")
             if not value:
                 raise ToolDeclarationError(f"tool {self.name} is missing input {placeholder}")
             path = path.replace("{" + placeholder + "}", value)
-        return {"method": self.method, "path": path, "query": self.query}
+        parts: list[str] = []
+        for name, kind, raw in self.query:
+            if kind == "value":
+                parts.append(f"{name}={raw}")
+                continue
+            provided = values.get(raw, "")
+            if provided:
+                parts.append(f"{name}={quote(provided, safe='')}")
+        return {"method": self.method, "path": path, "query": "&".join(parts)}
+
+    def input_schema(self) -> str:
+        """发布清单里的参数 schema。**只有模型可以提议的那部分**出现在这里。
+
+        运行绑定的输入（订单号）不在 schema 里：模型不能选它，写进去等于给它一个入口。
+        排序固定，因为清单身份是原始字节的 sha256。
+        """
+        properties = ",".join(f'"{name}":{{"type":"string","maxLength":80}}' for name in self.model_inputs)
+        return (
+            '{"type":"object","properties":{' + properties + '},"required":[],"additionalProperties":false}'
+        )
 
     def declared_inputs(self, values: dict[str, str]) -> dict[str, str]:
         """这一次运行的输入。只保留声明里列过的那些，不多带。"""
@@ -100,6 +130,32 @@ def _list(value: object, field: str) -> list:
     return value
 
 
+def _parse_query(name: str, raw: object, inputs: set[str]) -> tuple[tuple[str, str, str], ...]:
+    """查询参数表。每项要么是常量（``value``），要么来自输入（``from``），二选一。
+
+    分页上限写在这里而不是由调用方给：调用方能给的东西就不是上限。
+    """
+    if raw is None:
+        return ()
+    items = _list(raw, f"{name}: request.query")
+    parsed: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for item in items:
+        item = _object(item, f"{name}: request.query item")
+        param = _text(item.get("name"), f"{name}: request.query name")
+        _require(bool(_INPUT.fullmatch(param)), f"{name}: bad query parameter name {param!r}")
+        _require(param not in seen, f"{name}: duplicate query parameter {param}")
+        seen.add(param)
+        if "value" in item:
+            _require("from" not in item, f"{name}: query parameter {param} cannot be both value and from")
+            parsed.append((param, "value", _text(item.get("value"), f"{name}: query value")))
+            continue
+        source = _text(item.get("from"), f"{name}: query source")
+        _require(source in inputs, f"{name}: query parameter {param} reads an undeclared input {source!r}")
+        parsed.append((param, "from", source))
+    return tuple(parsed)
+
+
 def _tool(raw: object, seen: set[str]) -> OperatorTool:
     raw = _object(raw, "every tool")
     name = _text(raw.get("name"), "tool name")
@@ -121,16 +177,12 @@ def _tool(raw: object, seen: set[str]) -> OperatorTool:
         f"{name}: path_template must be an absolute path without query",
     )
     placeholders = set(_PLACEHOLDER.findall(template))
+    # 路径占位符只能来自声明过的输入；反过来不必相等 —— 站点查询的输入只进查询串。
     _require(
-        placeholders == set(inputs),
-        f"{name}: path placeholders {sorted(placeholders)} must equal inputs {sorted(inputs)}",
+        placeholders.issubset(set(inputs)),
+        f"{name}: path placeholders {sorted(placeholders)} must come from inputs {sorted(inputs)}",
     )
-    query = request.get("query", "")
-    if not isinstance(query, str):
-        raise ToolDeclarationError(f"{name}: request.query must be a string")
-    _require(
-        "\n" not in query and "#" not in query, f"{name}: request.query must be single-line and unquoted"
-    )
+    query = _parse_query(name, request.get("query", []), set(inputs))
 
     response = _object(raw.get("response"), f"{name}: response")
     kind = _text(response.get("kind"), f"{name}: response.kind")
@@ -157,10 +209,22 @@ def _tool(raw: object, seen: set[str]) -> OperatorTool:
 
     flags = _object(response.get("flags", {}), f"{name}: response.flags")
 
+    model_inputs = _list(raw.get("model_inputs", []), f"{name}: model_inputs")
+    _require(
+        set(model_inputs).issubset(set(inputs)),
+        f"{name}: model_inputs must be a subset of inputs",
+    )
+    applies_to = _list(raw.get("applies_to"), f"{name}: applies_to")
+    _require(bool(applies_to), f"{name}: applies_to must list the runs this tool may serve")
+    for item in applies_to:
+        _require(item in CONTEXTS, f"{name}: unknown run type {item!r}")
+
     return OperatorTool(
         name=name,
         description=_text(raw.get("description"), f"{name}: description"),
         inputs=tuple(inputs),
+        model_inputs=tuple(model_inputs),
+        applies_to=tuple(applies_to),
         method=method,
         path_template=template,
         query=query,

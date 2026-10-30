@@ -26,8 +26,11 @@ public final class CpmsToolAcceptance {
     static CpmsReadTool.Grant grant;
     static String contractEcho = CpmsReadTool.CONTRACT;
     static final CpmsReadTool.Authorization AUTH = new CpmsReadTool.Authorization() {
-        @Override public CpmsReadTool.Grant require(String run, String manifest, String tool) {
+        @Override public CpmsReadTool.Grant require(String run, String manifest, String tool,
+                                                    JsonNode arguments) {
             check(run.equals(RUN) && manifest.equals(MANIFEST), "authorization identities");
+            check(arguments != null && arguments.isObject(), "model arguments reach the gateway");
+            lastArguments = arguments;
             if (revoked) throw CpmsReadTool.refused("revoked");
             return grant;
         }
@@ -85,7 +88,7 @@ public final class CpmsToolAcceptance {
             staleMode = true;
             refuse(() -> {
                 try {
-                    authorization.require(RUN, MANIFEST, CpmsReadTool.DETAIL);
+                    authorization.require(RUN, MANIFEST, "cpms_order_detail", null);
                 } catch (RuntimeException failure) {
                     throw failure;
                 }
@@ -93,7 +96,7 @@ public final class CpmsToolAcceptance {
             check(seen.get() == 1, "stale gateway still received the request");
             check(CpmsReadTool.CONTRACT.equals(declared.get(0)), "node declares its contract");
             staleMode = false;
-            var grant = authorization.require(RUN, MANIFEST, CpmsReadTool.DETAIL);
+            var grant = authorization.require(RUN, MANIFEST, "cpms_order_detail", null);
             check(grant.orderNo().equals("ORDER-1"), "inputs carry the order number");
             check(grant.request().target().equals("/chOrderInfo/getOrderInfoDetail/ORDER-1"),
                     "request target comes from the gateway");
@@ -103,6 +106,8 @@ public final class CpmsToolAcceptance {
     }
 
     static volatile boolean staleMode;
+    /** 最近一次到达「网关」的模型参数，用来断言节点没有把它丢掉。 */
+    static JsonNode lastArguments;
 
     public static void main(String[] args) throws Exception {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -140,8 +145,8 @@ public final class CpmsToolAcceptance {
         try {
             String base = "http://127.0.0.1:" + server.getAddress().getPort();
             grant = detailGrant(base);
-            var detail = new CpmsReadTool(CpmsReadTool.DETAIL, AUTH);
-            var samples = new CpmsReadTool(CpmsReadTool.SAMPLES, AUTH);
+            var detail = new CpmsReadTool("cpms_order_detail", AUTH);
+            var samples = new CpmsReadTool("cpms_charging_samples", AUTH);
             JsonNode result = JSON.readTree(detail.call("{}", CONTEXT));
             check(result.path("data").path("status").asInt() == 2 && !result.toString().contains("PRIVATE"), "detail result");
             check(recorded == 1 && calls.get() == 1, "one request and receipt");
@@ -149,11 +154,19 @@ public final class CpmsToolAcceptance {
             result = JSON.readTree(samples.call("{}", CONTEXT));
             check(result.path("data").path("truncated").asBoolean()
                     && !result.path("data").path("complete_timeline").asBoolean(), "honest samples");
-            for (String input : new String[]{"{\"orderNo\":\"OTHER\"}", "[]", "null", "", "{\"url\":\"https://example.com\"}"}) {
+            // 参数现在**可以**非空（模型提议，网关放行），所以判据从「必须为空」换成
+            // 「形状不成立就在发请求之前拒」。语义（能不能用）由网关判，节点不知道原话。
+            for (String input : new String[]{"[]", "null", "", "{\"name\":123}", "{\"name\":\"" + "x".repeat(81) + "\"}"}) {
                 int before = calls.get();
-                refuse(() -> detail.call(input, CONTEXT), "invalid arguments");
-                check(calls.get() == before, "arguments refused before HTTP");
+                refuse(() -> detail.call(input, CONTEXT), "invalid argument shape");
+                check(calls.get() == before, "malformed arguments refused before HTTP");
             }
+            // 形状成立的参数会被原样转给网关 —— 节点不替网关做语义判断。
+            lastArguments = null;
+            mode = "detail";
+            detail.call("{\"name\":\"天河\"}", CONTEXT);
+            check(lastArguments != null && "天河".equals(lastArguments.path("name").asText()),
+                    "model arguments forwarded to the gateway");
             refuse(() -> detail.call("{}"), "no context");
             for (String test : new String[]{"wrong-order", "wrong-tenant", "wrong-site", "missing-identity",
                     "envelope-error", "oversized", "invalid-json", "http-error", "redirect", "revoked"}) {
