@@ -53,6 +53,7 @@ from aiops_diagnostics.execution.agent_runs import (
 )
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.identity.scope_context import ScopeContext
+from aiops_diagnostics.operator import operator_tools
 
 #: QA 的 ``internal_run_id`` 前缀。它**只是**给人看的标签；
 #: 「哪条 run 承载哪个 QA」由 `agent_runs.qa_id` 这一列决定，不从字符串反推。
@@ -70,7 +71,9 @@ BINDINGS_SCHEMA = "aiops-chat-execution/1"
 SCENARIO_OWN_ORDER_STATUS = "consumer_own_order_status"
 SCENARIO_CONSUMER_SERVICE = "consumer_service"
 SCENARIO_OPERATOR_DIAGNOSIS = "operator_order_diagnosis"
-OPERATOR_TOOL_NAMES = ("cpms_order_detail", "cpms_charging_samples")
+#: 管家受控工具名。**唯一来源是 `operator_tools.json`** —— 这里只是把它取出来，
+#: 不再是一份平行的常量表（那曾是「加一个工具要改五处」里的其中两处）。
+OPERATOR_TOOL_NAMES = operator_tools.names()
 
 #: 唯一允许的入口。operator/代查不走这条路线（它们的授权判据完全不同）。
 ENTRY_CONSUMER = "consumer"

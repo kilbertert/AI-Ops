@@ -19,16 +19,13 @@ from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig, SnailDispatcher
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
-from aiops_diagnostics.operator import operator_conversation
+from aiops_diagnostics.operator import operator_conversation, operator_tools
 from aiops_diagnostics.operator.operator_conversation import EXECUTED_MUTATION, OperatorRefused
 
 SCENARIO = "operator_order_diagnosis"
 PREFIX = "operator-cpms-node:"
-TOOL_NAMES = chat_execution.OPERATOR_TOOL_NAMES
-PATHS = {
-    TOOL_NAMES[0]: "/chOrderInfo/getOrderInfoDetail/",
-    TOOL_NAMES[1]: "/iotChargingDevice/getChargingMonitor/",
-}
+#: 工具名、路径、输入与证据字段全部来自 `operator_tools.json` —— 仓内唯一声明。
+TOOL_NAMES = operator_tools.names()
 
 #: 站点查询的三个上限：一页条数、最多页数、最多展示条数。
 #:
@@ -51,20 +48,22 @@ TOOL_CONTRACT_HEADER = "X-AI-Ops-Tool-Contract"
 
 #: 每个工具这一次要发的请求。**路径在这里物化**，节点只执行拿到的那个请求 ——
 #: 这正是「新增一条只读路径不必改 Java」的那一步。
+def _declared(tool: str):
+    """取声明；未声明的工具名仍然被拒绝，只是判据从常量变成了数据。"""
+    try:
+        return operator_tools.tool(tool)
+    except operator_tools.ToolDeclarationError as exc:
+        raise OperatorRefused("OPERATOR_TOOL_DISABLED") from exc
+
+
 def tool_request(tool: str, order_no: str) -> dict[str, str]:
-    """按工具名把这一次的请求目标算出来。`order_no` 目前是两个工具的路径参数。"""
-    if tool not in PATHS:
-        raise OperatorRefused("OPERATOR_TOOL_DISABLED")
-    if tool == TOOL_NAMES[1]:
-        return {"method": "GET", "path": PATHS[tool] + order_no, "query": "current=1&size=50"}
-    return {"method": "GET", "path": PATHS[tool] + order_no, "query": ""}
+    """按工具名把这一次的请求目标物化出来。**这里是路径物化的唯一位置。**"""
+    return _declared(tool).request({"order_no": order_no})
 
 
 def tool_inputs(tool: str, order_no: str) -> dict[str, str]:
     """这一次运行的输入。订单号是**输入**，不再是授权载荷的中心。"""
-    if tool not in PATHS:
-        raise OperatorRefused("OPERATOR_TOOL_DISABLED")
-    return {"order_no": order_no}
+    return _declared(tool).declared_inputs({"order_no": order_no})
 
 
 def diagnoses_an_order(run) -> bool:
@@ -200,7 +199,9 @@ class OperatorCpms:
         if not diagnoses_an_order(run):
             return self.result(caller, qa_id)
         body = cpms_get(
-            target.cpms_base_url + PATHS[TOOL_NAMES[0]] + run.order_no, bearer, caller.effective_tenant_id
+            target.cpms_base_url + tool_request(TOOL_NAMES[0], run.order_no)["path"],
+            bearer,
+            caller.effective_tenant_id,
         )
         validate_body(
             body,
@@ -251,7 +252,9 @@ class OperatorCpms:
         # 查询只用于确认当前订单归属，不把它冒充节点本轮取得的诊断证据。
         order_site_id = ""
         if order:
-            body = cpms_get(base + PATHS[TOOL_NAMES[0]] + order, bearer, caller.effective_tenant_id)
+            body = cpms_get(
+                base + tool_request(TOOL_NAMES[0], order)["path"], bearer, caller.effective_tenant_id
+            )
             validate_body(body, current, order, TOOL_NAMES[0])
             order_site_id = body["data"]["siteId"]
         current = authorize()
@@ -466,7 +469,7 @@ class OperatorCpms:
         tool = next(
             (
                 name
-                for name in PATHS
+                for name in TOOL_NAMES
                 if tool_request(name, run.order_no) == {"method": method, "path": path, "query": query}
             ),
             None,
@@ -755,49 +758,8 @@ class OperatorCpms:
 #:
 #: 纯电价（tip/peak/flat/valley*Fee）在 41 全为 NULL，故不在这里重复列出；计费模板的
 #: 分时段明细（`periodFeeDetail`）在外层响应里，本层不取 —— 本次只补平铺金额。
-DETAIL_FIELDS = [
-    "orderNo",
-    "siteId",
-    "deviceId",
-    "childDeviceId",
-    "deviceCode",
-    "childDeviceCode",
-    "deviceProtocol",
-    "status",
-    "createdTime",
-    "stopTime",
-    "stoppedReasonCode",
-    "stoppedReasonContent",
-    "electricity",
-    "time",
-    "voltage",
-    "electricityFee",
-    "serviceFee",
-    "totalAmount",
-    "payAmount",
-    "marketAmount",
-    "refundStatus",
-    "refundAmount",
-    "startSoc",
-    "endSoc",
-    "gunPower",
-    "interfaceType",
-]
-SAMPLE_FIELDS = [
-    "orderNo",
-    "siteId",
-    "deviceId",
-    "childDeviceId",
-    "createdTime",
-    "power",
-    "voltage",
-    "current",
-    "chargingElectricityQuantity",
-    "soc",
-    "temperature",
-    "batteryMaxTemperature",
-    "batteryMinTemperature",
-]
+DETAIL_FIELDS = list(operator_tools.tool("cpms_order_detail").evidence_fields)
+SAMPLE_FIELDS = list(operator_tools.tool("cpms_charging_samples").evidence_fields)
 
 
 def minimized_response(body, tool):

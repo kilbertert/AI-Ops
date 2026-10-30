@@ -1221,8 +1221,15 @@ def ensure_node_provider_command(
     app_id: Annotated[str, typer.Option("--app-id")],
     gateway_url: Annotated[str, typer.Option("--gateway-url")],
     db: Annotated[Path, typer.Option("--db", exists=True, dir_okay=False)],
+    migrate: Annotated[
+        bool, typer.Option("--migrate", help="已有定义与当前声明不同时就地覆盖，而不是报错")
+    ] = False,
 ) -> None:
-    """为已登记管家节点应用安装真实CPMS工具定义；不写业务凭据。"""
+    """为已登记管家节点应用安装真实CPMS工具定义；不写业务凭据。
+
+    工具集变了（新增或改名）时，provider 的 schema 一定会变。``--migrate`` 是这条变更的
+    显式出路：不加它就是一次明确报错，加了它就是一次可审计的运营动作。
+    """
     from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
     from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
@@ -1243,6 +1250,7 @@ def ensure_node_provider_command(
             workspace,
             gateway_url,
             json.loads(Path(target.manifest_file).read_text()),
+            migrate=migrate,
         )
     except (ValueError, RuntimeError, OSError, StopIteration) as exc:
         typer.secho("CPMS节点工具登记未完成，请核对目标、工作区和已有定义", err=True)

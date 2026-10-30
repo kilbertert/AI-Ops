@@ -14,13 +14,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 
 /** CPMS 正式只读接口；任务身份和授权由装配层提供，不接受模型参数。 */
 public final class CpmsReadTool implements ToolCallback {
-    public static final String DETAIL = "cpms_order_detail";
-    public static final String SAMPLES = "cpms_charging_samples";
-    public static final Set<String> NAMES = Set.of(DETAIL, SAMPLES);
     /** 工具授权契约版本。必须与 Gateway 侧 `operator_cpms.TOOL_CONTRACT` 逐字相同。 */
     public static final String CONTRACT = "request-target/1";
     private static final ObjectMapper JSON = new ObjectMapper()
@@ -90,12 +88,10 @@ public final class CpmsReadTool implements ToolCallback {
     }
 
     public CpmsReadTool(String name, Authorization authorization) {
-        if (!NAMES.contains(name) || authorization == null) throw refused("unknown_tool");
+        if (!OperatorTools.declares(name) || authorization == null) throw refused("unknown_tool");
         this.authorization = authorization;
         this.definition = DefaultToolDefinition.builder().name(name)
-                .description(DETAIL.equals(name)
-                        ? "Read diagnostic fields for the authorized order from CPMS. Takes no arguments."
-                        : "Read up to 50 CPMS charging samples for the authorized order. Ordering and completeness are not guaranteed. Takes no arguments.")
+                .description(OperatorTools.description(name))
                 .inputSchema(ControlledChargingStatusTool.SCHEMA).build();
     }
 
@@ -120,11 +116,13 @@ public final class CpmsReadTool implements ToolCallback {
             requireLive(grant);
             // 请求目标来自授权，不来自工具名 —— 这正是「新增一条只读路径不必改本文件」。
             JsonNode body = get(grant, grant.request().target());
-            ObjectNode data = DETAIL.equals(tool) ? detail(body, grant) : samples(body, grant);
+            // 响应形状由**声明**决定，不由工具名决定：新增一个复用已有形状的工具，本文件不用改。
+            String kind = OperatorTools.kind(tool);
+            ObjectNode data = "page".equals(kind) ? samples(body, grant, tool) : detail(body, grant, tool);
             ObjectNode evidence = JSON.createObjectNode();
             evidence.put("tool", tool);
             evidence.set("inputs", grant.inputs());
-            evidence.put("source", DETAIL.equals(tool) ? "cpms.orderDetail" : "cpms.chargingMonitor");
+            evidence.put("source", OperatorTools.source(tool));
             evidence.put("observed_at", Instant.now().toString());
             evidence.set("data", data);
             requireLive(grant);
@@ -170,7 +168,7 @@ public final class CpmsReadTool implements ToolCallback {
         return envelope.get("data");
     }
 
-    private static ObjectNode detail(JsonNode body, Grant grant) {
+    private static ObjectNode detail(JsonNode body, Grant grant, String tool) {
         JsonNode row = body.path("chOrderInfoModel");
         identity(row, grant);
         if (!body.path("orderNo").isTextual() || !body.path("siteId").isTextual()
@@ -182,14 +180,11 @@ public final class CpmsReadTool implements ToolCallback {
         // `record` 要求节点上报的证据与 Gateway 自己投影的那份相等，多一个少一个都会
         // 让整轮失败。这里补的是金额/额定功率/SOC —— 没有它们，问电费与问电压只能得到
         // 同一份「缺证」报告（41 实测，订单 2113549588485718017）。
-        return select(row, "orderNo", "siteId", "deviceId", "childDeviceId", "deviceCode",
-                "childDeviceCode", "deviceProtocol", "status", "createdTime", "stopTime",
-                "stoppedReasonCode", "stoppedReasonContent", "electricity", "time", "voltage",
-                "electricityFee", "serviceFee", "totalAmount", "payAmount", "marketAmount",
-                "refundStatus", "refundAmount", "startSoc", "endSoc", "gunPower", "interfaceType");
+        // 取证字段来自**声明**：这张表就是模型能回答什么，过去两侧各写一份，靠人记住同步。
+        return select(row, OperatorTools.evidenceFields(tool));
     }
 
-    private static ObjectNode samples(JsonNode body, Grant grant) {
+    private static ObjectNode samples(JsonNode body, Grant grant, String tool) {
         JsonNode rows = body.path("records");
         if (!rows.isArray() || rows.size() > 50 || !body.path("total").canConvertToLong()
                 || !body.path("total").isIntegralNumber() || body.path("total").asLong() < rows.size()
@@ -199,18 +194,20 @@ public final class CpmsReadTool implements ToolCallback {
         }
         ObjectNode result = JSON.createObjectNode();
         var selected = result.putArray("records");
+        List<String> fields = OperatorTools.evidenceFields(tool);
         for (JsonNode row : rows) {
             identity(row, grant);
-            selected.add(select(row, "orderNo", "siteId", "deviceId", "childDeviceId",
-                    "createdTime", "power", "voltage", "current", "chargingElectricityQuantity",
-                    "soc", "temperature", "batteryMaxTemperature", "batteryMinTemperature"));
+            selected.add(select(row, fields));
         }
-        result.put("total", body.path("total").asLong()).put("sample_limit", 50)
+        // 分页标记与「缺样本」的措辞也来自声明：它们是这个工具的证据语义，不是引擎的常识。
+        result.put("total", body.path("total").asLong())
+                .put("sample_limit", OperatorTools.flagInt(tool, "sample_limit"))
                 .put("truncated", body.path("total").asLong() > rows.size())
-                .put("ordering_guaranteed", false).put("complete_timeline", false)
+                .put("ordering_guaranteed", OperatorTools.flagBool(tool, "ordering_guaranteed"))
+                .put("complete_timeline", OperatorTools.flagBool(tool, "complete_timeline"))
                 // 「没上报过样本」与「这批被截断」是两件事，证据里各占一个字段。
                 .put("samples_returned", rows.size())
-                .put("absence", rows.isEmpty() ? "no_samples" : null);
+                .put("absence", rows.isEmpty() ? OperatorTools.flagText(tool, "absence_when_empty") : null);
         return result;
     }
 
@@ -223,7 +220,7 @@ public final class CpmsReadTool implements ToolCallback {
         }
     }
 
-    private static ObjectNode select(JsonNode row, String... fields) {
+    private static ObjectNode select(JsonNode row, List<String> fields) {
         ObjectNode result = JSON.createObjectNode();
         for (String field : fields) {
             JsonNode value = row.get(field);
