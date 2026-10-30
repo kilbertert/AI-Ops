@@ -42,6 +42,24 @@ max_tokens_to_sample、function_calling_type=tool_call、stream_function_calling
 所有路径位于 `/v1/dify/management/`，发布服务key与公司Dify登录会话缺一不可。
 浏览器只调用固定动作的同源manage端点，拿不到内部token和平台密钥。
 
+## 来源版本下拉的标签语义
+
+下拉每一项读的是 `management/catalogue` 的 `sources[]`：只列 `operator` 入口、`active`、
+且已登记进 `operator_apps` 的正式路由。所以「4 条正式路由只出现 2 项」是正常的——
+另外两条是 `consumer` 入口（客户端），首片只开通管家端，客户端不出现在这里。
+
+标签形如 `客户名 / Dify应用名 · V智能体正式版本`：
+
+- 客户名来自公司 `/upms/tenant/list/my`，与可开通客户目录同源；
+- 应用名按该应用所属 workspace 读 Dify `/console/api/apps/<id>`，按 app_id 缓存 120 秒；
+  读不到时退回 Gateway 智能体名（`ops-methodology-700`、`operator-<app_id>` 这类），
+  读名失败不影响开通；
+- 末尾 `V` 是**智能体正式版本号**（`chat_route_bindings.agent_version_no`），
+  不是 Dify 应用的发布版本号；
+- 来源应用全都住在**客户工作区**（`aiops-41-Ulink-…`、`aiops-41-优链充-…`），
+  平台账号在大厅里看不到它们，只有「进入工作区」才会被加进去。
+  在工作室里找不到同名应用时，先想这一条，而不是怀疑开通入口没装上。
+
 ## 恢复
 
 失败任务保留资源ID与步骤，正常登录后点击重试；重启不会丢失进度。若Dify创建响应丢失，
