@@ -66,6 +66,26 @@ uv run ruff check src tests          # All checks passed
 uv run ruff format --check src tests # 364 files already formatted
 ```
 
+## 真实进程的关闭态验证
+
+```bash
+uv run python tools/verification/check_dual_entry_management.py --out var/verify-evidence
+```
+
+一次性数据根、动态回环端口、真实 `aiops-gateway serve`：
+
+| 请求 | 结果 |
+| --- | --- |
+| `/health` | 200，`business_mutations=disabled` |
+| `GET /v1/dify/management/catalogue`（匿名） | 403 |
+| `GET .../catalogue`（错密钥） | 403 |
+| `GET .../catalogue`（正确密钥，但平台未启用） | 403 |
+| `POST .../operations`（匿名 / 正确密钥但平台未启用） | 403 / 403 |
+| `POST .../status`、`.../publish`（匿名） | 403 / 403 |
+| 请求之后 `operator_setup_jobs` 行数 | **0** |
+
+最后一行是这条检查的重点：被拒的请求不许留下任何开通任务，否则"拒绝"只是回了一个状态码。
+
 ## 制品与锁
 
 `deploy/m2-live-03/images.lock.json` 由仓库自己的流程重建并写回：

@@ -15,7 +15,12 @@ uv run pytest -n 0 tests/dify/test_self_service.py tests/consumer/test_consumer_
 uv run pytest -n 4 tests/dify tests/consumer tests/execution tests/publication tests/knowledge
 uv run pytest -n 4            # 全量
 uv run ruff check src tests && uv run ruff format --check src tests
+uv run python tools/verification/check_dual_entry_management.py --out var/verify-evidence
 ```
+
+`check_dual_entry_management.py` 在一次性数据根起**真实 Gateway**，断言管理面在
+"匿名 / 错密钥 / 平台未启用"三种情况下都被拒绝，且被拒的请求不产生任何开通任务行。
+它不证明真实 Dify 上的复制与凭据申请，也不证明真实用户可用。
 
 | 编号 | 契约用例（自动化） | 真实环境用例（41） | 状态 |
 | --- | --- | --- | --- |
