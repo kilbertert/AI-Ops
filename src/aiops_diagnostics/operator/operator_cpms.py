@@ -758,6 +758,7 @@ class OperatorCpms:
             if not store.update_assistant_question(qa_id, status="running"):
                 raise OperatorRefused("OPERATOR_RUN_INACTIVE")
             dispatcher = SnailDispatcher()
+            dispatcher.deadline_at = self.context.agent_run_store.get(run_id).expires_at
             task = self.tasks[run_id]
             dispatcher.question = (
                 (

@@ -989,8 +989,16 @@ class SnailDispatcher:
     """
 
     question = "请查询本次已授权订单的当前充电状态，并用一句话回答。"
+    deadline_at: datetime | None = None
 
     def dispatch(self, config: AgentRunConfig, run_id: str) -> str:
+        transport_timeout = 75
+        if self.deadline_at is not None:
+            remaining = (self.deadline_at - datetime.now(UTC)).total_seconds()
+            if remaining < 1:
+                raise AgentRunDispatchError("agent run expired before dispatch")
+            # 管家多轮工具调用可以超过旧75秒；始终受已签发run的期限约束。
+            transport_timeout = remaining
         data = request_json(
             RequestSpec(
                 url=f"{config.snail_base_url}/snail-ai/openapi/v1/agent/chat/sync",
@@ -1011,7 +1019,7 @@ class SnailDispatcher:
                         "timeout": 60,
                     }
                 ).encode("utf-8"),
-                timeout=75,
+                timeout=transport_timeout,
                 max_read_bytes=65536,
                 follow_redirects=False,
             ),
