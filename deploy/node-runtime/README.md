@@ -218,5 +218,5 @@ timeout 45 docker exec aiops-runtime-node java -Xmx32m -cp /tmp TlsProbe \
 核对容器内声明摘要、JVM加载参数、原jar摘要、其余容器ID与正式路由不变；正常登录原H5完成订单请求。
 失败恢复原env/current/声明，定点重建原节点；只恢复发布资产，不恢复业务数据库。
 
-挂载语义依据[Compose服务规范](https://github.com/compose-spec/compose-spec/blob/main/05-services.md#long-syntax-5)：
+挂载语义依据[Compose服务规范](https://docs.docker.com/reference/compose-file/services/#long-syntax-6)：
 长语法bind的`create_host_path: false`禁止源文件缺失时自动建目录；`read_only: true`保证节点不可修改声明。
