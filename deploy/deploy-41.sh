@@ -325,6 +325,41 @@ info "__version__ → $STAMPED"
 EXPECTED_FILES=$(find "$WORK/aiops_diagnostics" -type f -not -path '*__pycache__*' | wc -l | tr -d ' ')
 info "文件数（预期）= $EXPECTED_FILES"
 
+# ---- 3a. 节点制品闸门 ------------------------------------------------------
+# 网关不能跑在比它更旧的节点上。
+#
+# 为什么必须有这道门：ADR-0175 写明工具契约变更**没有灰度窗口** —— 新旧混跑会被两端
+# 各自显式拒绝。而 CD 只部署网关（`deploy-41.sh` 里没有一处碰节点），节点是纯手工的。
+# 2026-10-30 就是这样坏的：网关 16:20 自动升到 #1210，节点还停在 #1189 之前，
+# 管家侧所有工具领授权一律 `403 OPERATOR_TOOL_CONTRACT_OUTDATED`。
+#
+# 判据**不是**「本次 commit 有没有改节点」—— 那会漏掉跨 commit 的情形：A 改节点、
+# B 只改 src，B 的网关照样依赖 A 的节点。这里问的是「目标 commit 的祖先里，**最近一次**
+# 改节点的那个 commit 是谁」，然后要求 41 上实际在跑的节点等于它或其后代。
+#
+# 判据也不靠人申报：读 41 上节点自己的 `AIOPS_NODE_BUILD`（形如 `<commit12>-<jar12>`）。
+step "节点制品闸门"
+LAST_NODE_COMMIT=$(git log -1 --format=%H "$FULL_SHA" -- services/execution-node 2>/dev/null || true)
+if [ -z "$LAST_NODE_COMMIT" ]; then
+  info "目标 commit 的祖先里没有改过 services/execution-node 的提交 —— 网关可以单独部署"
+else
+  NODE_BUILD=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
+    "grep -oE '^AIOPS_NODE_BUILD=.*' /etc/aiops-node-runtime/runtime.env 2>/dev/null | cut -d= -f2" \
+    | tail -1 | tr -d '[:space:]')
+  [ -n "$NODE_BUILD" ] || die "最后一次改节点源码的是 ${LAST_NODE_COMMIT:0:12}，但读不到 41 上的 AIOPS_NODE_BUILD —— 无法判断节点是否已跟上。先部署节点，再重跑 CD。"
+  NODE_SHA_PREFIX=${NODE_BUILD%%-*}
+  NODE_SHA=$(git rev-parse --verify --quiet "$NODE_SHA_PREFIX^{commit}" || true)
+  [ -n "$NODE_SHA" ] || die "41 上的节点构建标识是 $NODE_BUILD，它的 commit 前缀 $NODE_SHA_PREFIX 在本仓里找不到 —— 无法判断先后。先部署由合并修订构建的节点，再重跑 CD。"
+  if git merge-base --is-ancestor "$LAST_NODE_COMMIT" "$NODE_SHA"; then
+    info "最后一次改节点源码的是 ${LAST_NODE_COMMIT:0:12}，41 上的节点 $NODE_BUILD 已等于或晚于它 —— 放行"
+  else
+    die "网关不能先于节点上线。
+最后一次改节点源码的是 ${LAST_NODE_COMMIT:0:12}，而 41 上的节点是 $NODE_BUILD，早于它。
+两者不同版时工具契约会互相拒绝（ADR-0175：没有灰度窗口），管家侧工具会全部 403。
+先按 deploy/node-runtime/README.md 从合并修订构建并部署节点，再重跑 CD —— 不要把网关单独送上去。"
+  fi
+fi
+
 # ---- 3. 打包 + 首层断言 ----------------------------------------------------
 step "打包"
 TARBALL="$STAGE/aiops-sync.tar.gz"
