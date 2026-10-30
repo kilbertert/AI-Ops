@@ -38,6 +38,25 @@ _NEGATION = re.compile(
 )
 _CLAUSE = "。；;！!？?，,\n\r"
 _NUMBER = re.compile(r"\d")
+_STATUS_PROSE = re.compile(
+    r"充[电電]中|正在充[电電]|[还還]在充[电電]|[结結]束|[已未]完成|"
+    r"\b(?:charging|finished|ended|completed|stopped|pending|cancelled)\b",
+    re.IGNORECASE,
+)
+
+
+def check_status_prose(text: str) -> None:
+    """状态只由事实段给出，连否定状态名也不能进入自由旁白。"""
+    from aiops_diagnostics.consumer.consumer_language import COPY
+
+    labels = {
+        words[key].casefold()
+        for words in COPY.values()
+        for key in ("charging", "finished", "waiting", "starting", "stopping", "abnormal")
+        if words.get(key)
+    }
+    if _STATUS_PROSE.search(text) or any(label in text.casefold() for label in labels):
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")
 
 
 def _amount(raw: object) -> str | None:
@@ -89,6 +108,7 @@ def render_segments(text: str, snapshot: dict, language: str) -> str:
                 raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "fact segment must be a separate line")
         elif line.strip():
             check_notice(line)
+            check_status_prose(line)
     own = SLOT.sub("", text)
     if "{{" in own or "}}" in own:
         raise ChatRunUnavailable("CHATFLOW_FACT_UNKNOWN", "unknown fact segment")

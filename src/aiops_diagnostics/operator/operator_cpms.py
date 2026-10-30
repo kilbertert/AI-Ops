@@ -20,7 +20,7 @@ from aiops_diagnostics.execution.agent_runs import AgentRunConfig, SnailDispatch
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
 from aiops_diagnostics.operator import operator_conversation, operator_tools
-from aiops_diagnostics.operator.operator_conversation import EXECUTED_MUTATION, OperatorRefused
+from aiops_diagnostics.operator.operator_conversation import OperatorRefused, claims_mutation
 
 SCENARIO = "operator_order_diagnosis"
 PREFIX = "operator-cpms-node:"
@@ -734,6 +734,8 @@ class OperatorCpms:
                 _answer_refused("credential")
             sites = None
             if diagnoses_an_order(run):
+                if "{{fact:order_facts}}" in run.execution_manifest and "reply" not in answer:
+                    _answer_refused("reply_required")
                 validate_answer(answer, task.evidence)
                 if not set(answer["evidence_tools"]).issubset(task.delivered):
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
@@ -869,6 +871,8 @@ class OperatorCpms:
         if scope.site_ids is not None and detail["siteId"] not in scope.site_ids:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         answer = run.snapshot["answer"]
+        if "{{fact:order_facts}}" in run.execution_manifest and "reply" not in answer:
+            _answer_refused("reply_required")
         validate_answer(answer, run.snapshot["evidence"])
         text = render_report(answer, run.snapshot["evidence"])
         return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
@@ -1050,9 +1054,61 @@ def validate_answer(answer, evidence):
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     if "reply" in answer and (not isinstance(answer["reply"], str) or not 1 <= len(answer["reply"]) <= 6000):
         _answer_refused("reply")
+    if "reply" in answer:
+        _validate_reply_facts(answer["reply"])
     text = json.dumps(answer, ensure_ascii=False)
-    if EXECUTED_MUTATION.search(text):
+    if claims_mutation(text):
         _answer_refused("mutation_claim")
+
+
+def _validate_reply_facts(text):
+    from aiops_diagnostics.consumer.consumer_facts import check_notice, check_status_prose
+
+    slot = "{{fact:order_facts}}"
+    if text.splitlines().count(slot) != 1:
+        _answer_refused("order_facts_required")
+    for line in text.splitlines():
+        if line == slot:
+            continue
+        if "{{" in line or "}}" in line:
+            _answer_refused("fact_segment")
+        try:
+            check_notice(line)
+            check_status_prose(line)
+        except chat_execution.ChatRunUnavailable:
+            _answer_refused("unsupported_fact")
+
+
+def _order_fact_text(evidence):
+    from aiops_diagnostics.health.rules import status_label
+
+    item = evidence[TOOL_NAMES[0]]
+    detail = item["data"]
+    lines = ["订单号：" + str(item.get("order_no") or detail.get("orderNo") or "未提供")]
+    fields = (
+        ("status", "订单状态"),
+        ("electricityFee", "电费"),
+        ("serviceFee", "服务费"),
+        ("totalAmount", "合计"),
+        ("payAmount", "系统记录的支付金额"),
+        ("refundAmount", "系统记录的退款金额"),
+        ("electricity", "电量（kWh）"),
+        ("time", "充电时长"),
+        ("voltage", "电压"),
+        ("gunPower", "额定功率"),
+        ("stoppedReasonContent", "系统记录的停止原因"),
+    )
+    for key, label in fields:
+        value = detail.get(key)
+        if value is not None:
+            lines.append(label + "：" + (status_label(value) if key == "status" else str(value)))
+    samples = evidence.get("cpms_charging_samples", {}).get("data")
+    if samples is not None:
+        lines.append(
+            "本次取得监测样本：" + str(samples.get("samples_returned", len(samples.get("records", []))))
+        )
+    lines.append("币种和时长单位需与原订单核对；账务记录不证明银行到账，当前状态不证明历史故障原因。")
+    return "\n".join(lines)
 
 
 def _readable_time(iso: object) -> str:
@@ -1095,7 +1151,8 @@ def render_report(answer, evidence) -> str:
             f"（{_readable_time(item.get('observed_at'))}）"
             for item in evidence.values()
         )
-        return answer["reply"] + ("\n\n【数据来源】\n" + sources if sources else "")
+        text = answer["reply"].replace("{{fact:order_facts}}", _order_fact_text(evidence))
+        return text + ("\n\n【数据来源】\n" + sources if sources else "")
     sections = [answer["direct_answer"]]
     if answer["summary"]:
         sections.append("【订单事实】\n" + answer["summary"])

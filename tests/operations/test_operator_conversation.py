@@ -89,6 +89,25 @@ def selection():
     return {"kind": "site_search", "text": "", "name": "", "address_terms": ["广州", "天河"]}
 
 
+@pytest.mark.parametrize("text", ["不能直接执行退款、重启设备或修改配置。", "我没有执行退款。"])
+def test_explaining_read_only_capability_is_not_an_action_claim(text):
+    conversation.validate({"kind": "answer", "text": text, "name": "", "address_terms": []}, "你能做什么？")
+
+
+@pytest.mark.parametrize("text", ["已执行退款。", "不能重启，但已执行退款。"])
+def test_a_real_action_claim_is_still_rejected(text):
+    with pytest.raises(conversation.OperatorRefused):
+        conversation.validate(
+            {"kind": "answer", "text": text, "name": "", "address_terms": []}, "你能做什么？"
+        )
+
+
+def test_generic_site_reference_is_not_a_fabricated_name():
+    conversation.validate_site_note("查到的站点结果已列出，您可以核对是否为目标站点。")
+    with pytest.raises(conversation.OperatorRefused):
+        conversation.validate_site_note("已找到虚构乙站。")
+
+
 def site_query(caller, value, *, auth=None):
     """站点查询的调用壳：可见范围、关键词、读取函数、逐页复核各一处。"""
     return operator_cpms.query_sites(

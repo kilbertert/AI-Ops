@@ -73,6 +73,7 @@ class Model(BaseHTTPRequestHandler):
                 "next_steps": ["检查网络。"],
                 "limitations": ["有限样本不是完整时间线。"],
                 "evidence_tools": list(operator_cpms.TOOL_NAMES),
+                "reply": "本轮记录如下。\n{{fact:order_facts}}\n请结合现场情况核对网络。",
             }
             delta = {"role": "assistant", "content": json.dumps(answer, ensure_ascii=False)}
             if body.get("response_format") != {"type": "json_object"}:

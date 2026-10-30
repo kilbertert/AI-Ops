@@ -282,9 +282,7 @@ class SelfService:
                 route.agent_id, row["tenant_id"], route.agent_version_no
             ).snapshot
             manifest = json.loads(snapshot["node_manifest"])
-            published_prompt = manifest["system_messages"][0].removesuffix(
-                "\n" + node_publication.OPERATOR_OUTPUT
-            )
+            published_prompt = node_publication.business_prompt(manifest["system_messages"][0])
             published_tools = [t["name"] for t in manifest["tools"]]
         return {
             "published_prompt": published_prompt,
@@ -400,10 +398,7 @@ class SelfService:
         ).snapshot
         if entry == "operator":
             manifest = json.loads(snapshot["node_manifest"])
-            prompt = manifest["system_messages"][0]
-            suffix = "\n" + node_publication.OPERATOR_OUTPUT
-            if prompt.endswith(suffix):
-                prompt = prompt[: -len(suffix)]
+            prompt = node_publication.business_prompt(manifest["system_messages"][0])
             return {
                 "app_id": source["app_id"],
                 "version_no": route.agent_version_no,

@@ -22,6 +22,13 @@ EXECUTED_MUTATION = re.compile(
 )
 
 
+def claims_mutation(text):
+    return any(
+        not re.search(r"(?:不能|没有|不会|未)(?:直接)?$", text[max(0, match.start() - 8) : match.start()])
+        for match in EXECUTED_MUTATION.finditer(text)
+    )
+
+
 SCENARIO = "operator_conversation"
 SCHEMA = "operator-conversation/1"
 
@@ -56,9 +63,14 @@ INSTRUCTIONS = """你是只读充电运营管家。本轮没有选定订单，�
 先理解用户的问题，不要把“订单”一词等同于查询某笔订单：状态含义、操作方法、闲聊和能力咨询
 正常回答；只有需要查看某次订单事实时才用order_required，说明需要提供或选择单号。
 找站、查站点位置时**先调用 cpms_site_search** 取得当前账号可见的真实结果，再据此写一两句说明。
+工具已经返回时最终kind必须为site_search；不能改成answer绕开系统站点清单与事实校验。
 name和address_terms只从用户原话提取站名或地点关键词，
 例如“广州天河附近的充电站”对应name="",address_terms=["广州","天河"]。
 说明写在该工具的**结果之后**，只负责开场与归纳语气：
+text不重复任何地名、站名或服务细节，只说明“查到的结果在下方”，可加自然的核对建议和追问。
+text里不用“站/桩”字，统一以“结果”“地点”“列表”指代，具体名称只在系统清单中显示。
+即使只是复述用户问题，text也不重复地名和“附近/最近”；亲切风格可以回应“我帮你查了一下”，再问是否需要调整查询条件。
+address_terms必须保持本轮工具所用的地址关键词，例如["广州","天河"]，不能取完结果又改为空。
 不得写数字、价格、距离、空闲枪口或具体站名地址——名单、数量、截断范围、无定位限制和来源
 全部由系统按本轮 CPMS 结果列出。没有调用工具就没有结果，此时text必须为空。
 无法确定地点时正常追问地点，不猜坐标、位置、站名、距离、价格或实时枪口状态。
@@ -73,7 +85,7 @@ answer/order_required的name必须为空且address_terms必须为空；text以�
 
 
 def manifest(text):
-    from aiops_diagnostics.execution.node_publication import OPERATOR_OUTPUT
+    from aiops_diagnostics.execution.node_publication import business_prompt
 
     body = json.loads(text)
     body["schema"] = SCHEMA
@@ -88,7 +100,7 @@ def manifest(text):
         # 参数形状的唯一定义在声明里。
         kept.append({**tool, "input_schema": declared.input_schema()})
     body["tools"] = kept
-    sop = "\n".join(body["system_messages"]).removesuffix("\n" + OPERATOR_OUTPUT)
+    sop = business_prompt("\n".join(body["system_messages"]))
     body["system_messages"] = ["应用业务背景：\n" + sop + "\n\n" + INSTRUCTIONS]
     return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -127,7 +139,7 @@ def validate(answer, question):
         # 交给 `validate_site_note` 判。没有取数依据的说明由 `operator_cpms` 拒绝
         # （见 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE`），不在这里默认放行。
         validate_site_note(answer["text"])
-    elif terms or not answer["text"].strip() or EXECUTED_MUTATION.search(answer["text"]):
+    elif terms or not answer["text"].strip() or claims_mutation(answer["text"]):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
 
 
@@ -150,9 +162,10 @@ def validate_site_note(text):
     own = SITE_SLOT.sub(" ", text)
     if {name for name in SITE_SLOT.findall(text)} - set(SITE_FACTS):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
-    if SITE_FORBIDDEN.search(own) or SITE_NAME_SHAPE.search(own):
+    generic = re.sub(r"(?:目标|具体|某|该|这些|匹配的)站(?:点)?", "结果", own)
+    if SITE_FORBIDDEN.search(own) or SITE_NAME_SHAPE.search(generic):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
-    if EXECUTED_MUTATION.search(own):
+    if claims_mutation(own):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
 
 

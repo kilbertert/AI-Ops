@@ -52,6 +52,22 @@ def test_style_surrounds_a_fact_segment_without_rewriting_it():
     assert "27.36" in answer["blocks"][0]["text"]
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "这笔订单没有结束，还在充电。",
+        "这单未结束。",
+        "The order has not finished and is still charging.",
+        "Der Ladevorgang ist nicht abgeschlossen.",
+        "La recharge n'est pas terminée.",
+        "ยังไม่เสร็จสิ้น",
+    ],
+)
+def test_free_prose_cannot_reverse_the_status_segment(text):
+    with pytest.raises(ChatRunUnavailable):
+        validate_reply(text + "\n{{fact:billing_line}}", SNAPSHOT, language="zh", contract="slots")
+
+
 def test_live_segments_survive_readback_and_reject_changed_cached_text(tmp_path, monkeypatch):
     import json
     import sqlite3

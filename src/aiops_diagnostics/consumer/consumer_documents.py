@@ -76,11 +76,13 @@ es=Spanish；pt=Portuguese；vi=Vietnamese；mn=Mongolian（Монгол хэл�
 reply 里的事实只能用**整句事实片段**，由系统填值（列表与校验器同源，见 consumer_facts.CLIENT_FACTS）：
 {_FACT_SLOTS}
 片段之外不要写数字、不要写状态名、不要写支付结果（到账/退款成功/扣款）。
+即使和快照一致，也不要在片段外复述“充电中/已完成/已结束”等状态；
+可以写“帮你查到了”“以下是本次记录”，状态结论只由事实段给出。
 每个片段单独占一行，不得添加前后缀。账单必须引用billing_line，状态必须引用status_line。
 这两个段已包含单号、来源、时间与限制，不重复引用order_line和observed_line。
 实时快照已经查询完毕，不写“稍等/马上为你查询”等进度说明。请直接回应已查到结果。
-实时示例：{"kind":"realtime","answer":"","reference_ids":[],"reply":"我帮你查到了。\\n{{fact:status_line}}"}
-账单示例：{"kind":"realtime","answer":"","reference_ids":[],"reply":"这是本次查询的账单。\\n{{fact:billing_line}}"}
+JSON示例仅说明形状，不能照抄示例的语气或篇幅；正文必须执行前一条SYSTEM的业务风格。
+简洁风格可以只写事实段；亲切解释风格在事实段前回应疑问，段后解释核对方法并自然追问。
 """
 )
 

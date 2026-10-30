@@ -304,6 +304,7 @@ def node(f, run_id, *, tools=ORDER_TOOLS, before_complete=None, answer=None, con
             "next_steps": ["核对现场网络。"],
             "limitations": ["监测仅有限样本。"],
             "evidence_tools": list(tools),
+            "reply": "本轮记录如下。\n{{fact:order_facts}}\n请结合现场情况核对网络。",
         }
     return client.post(
         f"/v1/internal/operator-runs/{run_id}/completions",
@@ -721,15 +722,9 @@ def test_operator_trial_uses_draft_without_changing_publication(operator, monkey
     from aiops_diagnostics.dify.dify_console_publish import _trial_report_text
 
     panel = _trial_report_text(result.json(), "completed")
-    answer = f["ctx"].agent_run_store.by_qa(trial).snapshot["answer"]
-    for text in (
-        answer["direct_answer"],
-        answer["summary"],
-        answer["probable_cause"],
-        *answer["next_steps"],
-        *answer["limitations"],
-    ):
-        assert text in panel
+    snapshot = f["ctx"].agent_run_store.by_qa(trial).snapshot
+    assert panel == operator_cpms.render_report(snapshot["answer"], snapshot["evidence"])
+    assert "13.68" in panel and "27.36" in panel
     assert "订单详情" in panel and "充电监测样本" in panel
     assert ("UNSAVED_NATIVE_DRAFT" if native else "TRIAL_ONLY") in seen[0]
     current = chat_execution.select_binding(
@@ -1002,8 +997,8 @@ def test_different_questions_must_produce_different_answers(operator, monkeypatc
     f = operator
     answers = {}
     for question, direct in (
-        ("帮我分析这笔订单的电费", "电费合计 27.36 元。"),
-        ("帮我分析这个订单的充电电压", "订单未记录电压值。"),
+        ("帮我分析这笔订单的电费", "先看这次查询的电费记录。"),
+        ("帮我分析这个订单的充电电压", "先核对电压监测，再判断现场供电。"),
     ):
         monkeypatch.setattr(
             operator_cpms.SnailDispatcher,
@@ -1018,6 +1013,7 @@ def test_different_questions_must_produce_different_answers(operator, monkeypatc
                     "next_steps": [],
                     "limitations": ["上游未提供该数据。"],
                     "evidence_tools": list(ORDER_TOOLS),
+                    "reply": direct + "\n{{fact:order_facts}}",
                 },
             ),
         )
