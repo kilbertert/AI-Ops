@@ -6,7 +6,7 @@
 25个工具测试归`tests/tooling`、9个公司契约测试归`tests/integrations`。
 `tools/`根层只留`README.md`与`test.sh`；不新建转发空壳，也不保留旧路径副本。
 
-被移动的文件内容逐字不变，改动面是引用：`src/`、`deploy/m2-live-03/`、`ops/`、
+工具的业务判据不变，路径计算、导入与说明随移动更新；138个重命名文件中69个逐字不变。改动涉及：`src/`、`deploy/m2-live-03/`、`ops/`、
 `services/`的README、`.claude/skills/`脚本、`docs/agents/`运维手册与现役说明。
 包内导入按新目录解析：4个探针测试的`sys.path`指向`tools/verification`，
 内容编译器测试指向`tools/content`（`build_consumer_knowledge`与`merge_faq_i18n`同目录）；
