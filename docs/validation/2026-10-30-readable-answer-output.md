@@ -5,7 +5,7 @@
 远端 CI、合并与部署结果不在本记录内，另按交付流程记录。
 
 本切片只解卡既有实现（`ab4c9503`），不新增文案语义。设计取舍见
-[ADR-0179](../adr/0179-answers-are-plain-text-laid-out.md)，
+[ADR-0180](../adr/0180-answers-are-plain-text-laid-out.md)，
 目标与缺口见[开发进度记录](../开发进度/2026-10-30-readable-answer-output.md)。
 
 ## 环境与范围

@@ -2,7 +2,7 @@
 
 分支`fix/readable-answer-output`（PR #1175），基线`bf6085eb`。
 本切片只做**一句话**：把已经写好、但合不进去的那一版可读排版推到能合并的状态。
-排版本体的设计与取舍见 [ADR-0179](../adr/0179-answers-are-plain-text-laid-out.md)。
+排版本体的设计与取舍见 [ADR-0180](../adr/0180-answers-are-plain-text-laid-out.md)。
 
 ## 起点：反馈与既有工作
 
@@ -49,7 +49,7 @@
   产品这次的原话是「要下结论，然后给通俗易懂的注释，最起码商务能看得懂」——
   **这一条本切片没有解决**，需要下一个切片在 `consumer_billing.py` / `consumer_order_chat.py` /
   `consumer_language.json` 上做。
-- 知识库与零阶自由问答的正文由模型生成、走 Dify 链路，本切片同样未覆盖（ADR-0179 已如实写明）。
+- 知识库与零阶自由问答的正文由模型生成、走 Dify 链路，本切片同样未覆盖（ADR-0180 已如实写明）。
 - 未部署、未做真实环境验收；真实账号与原 H5 回读仍待验。
 - 文案即回读一致性键：`chat_execution.answer_matches_snapshot` 用**当前代码重算**正文与
   库里存的那一份比对。改措辞会让部署瞬间正在回读的会话落到
