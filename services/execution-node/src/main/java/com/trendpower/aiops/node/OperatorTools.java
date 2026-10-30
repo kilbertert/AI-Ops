@@ -23,16 +23,17 @@ import java.util.Map;
  * classpath 上的同名资源。**读不到就是启动失败**：一份读不到的声明如果被当成「没有工具」，
  * 故障会以「清单里没有那个工具」的形状出现在运营页面上，而不是出现在日志里。
  */
-final class OperatorTools {
+public final class OperatorTools {
 
-    static final String PATH_PROPERTY = "aiops.node.tools-file";
-    static final String DECLARATION = "operator_tools.json";
-    static final String SCHEMA = "aiops-operator-tools/1";
-    static final List<String> KINDS = List.of("single", "page");
+    public static final String PATH_PROPERTY = "aiops.node.tools-file";
+    public static final String DECLARATION = "operator_tools.json";
+    public static final String SCHEMA = "aiops-operator-tools/1";
+    public static final List<String> KINDS = List.of("single", "page");
 
     /** 一个工具的声明视图。Java 只关心装配需要的部分。 */
     record Entry(String name, String kind, String description, String source,
-                 List<String> evidenceFields, Map<String, com.fasterxml.jackson.databind.JsonNode> flags) {
+                 List<String> evidenceFields, List<String> appliesTo,
+                 Map<String, com.fasterxml.jackson.databind.JsonNode> flags) {
     }
 
     private static volatile Map<String, Entry> loaded;
@@ -40,7 +41,7 @@ final class OperatorTools {
     private OperatorTools() {
     }
 
-    static Map<String, Entry> entries() {
+    public static Map<String, Entry> entries() {
         Map<String, Entry> current = loaded;
         if (current == null) {
             synchronized (OperatorTools.class) {
@@ -54,27 +55,33 @@ final class OperatorTools {
         return current;
     }
 
-    static List<String> names() {
+    public static List<String> names() {
         return List.copyOf(entries().keySet());
     }
 
-    static boolean declares(String name) {
+    public static boolean declares(String name) {
         return entries().containsKey(name);
     }
 
-    static String description(String name) {
+    public static String description(String name) {
         Entry entry = entries().get(name);
         if (entry == null) throw new ExecToolViolation("声明里没有这个工具: " + name);
         return entry.description();
     }
 
-    static String source(String name) {
+    public static String source(String name) {
         Entry entry = entries().get(name);
         if (entry == null) throw new ExecToolViolation("声明里没有这个工具: " + name);
         return entry.source();
     }
 
-    static List<String> evidenceFields(String name) {
+    public static List<String> appliesTo(String name) {
+        Entry entry = entries().get(name);
+        if (entry == null) throw new ExecToolViolation("声明里没有这个工具: " + name);
+        return entry.appliesTo();
+    }
+
+    public static List<String> evidenceFields(String name) {
         Entry entry = entries().get(name);
         if (entry == null) throw new ExecToolViolation("声明里没有这个工具: " + name);
         return entry.evidenceFields();
@@ -88,19 +95,19 @@ final class OperatorTools {
         return value;
     }
 
-    static long flagInt(String name, String key) {
+    public static long flagInt(String name, String key) {
         return flag(name, key).asLong();
     }
 
-    static boolean flagBool(String name, String key) {
+    public static boolean flagBool(String name, String key) {
         return flag(name, key).asBoolean();
     }
 
-    static String flagText(String name, String key) {
+    public static String flagText(String name, String key) {
         return flag(name, key).asText();
     }
 
-    static String kind(String name) {
+    public static String kind(String name) {
         Entry entry = entries().get(name);
         if (entry == null) throw new ExecToolViolation("声明里没有这个工具: " + name);
         return entry.kind();
@@ -164,11 +171,20 @@ final class OperatorTools {
                 }
                 fields.add(field.asText());
             }
+            JsonNode declaredContexts = tool.path("applies_to");
+            if (!declaredContexts.isArray() || declaredContexts.isEmpty()) {
+                throw new ExecToolViolation("工具声明缺 applies_to: " + name);
+            }
+            List<String> contexts = new java.util.ArrayList<>();
+            for (JsonNode context : declaredContexts) {
+                if (!context.isTextual()) throw new ExecToolViolation("applies_to 不合法: " + name);
+                contexts.add(context.asText());
+            }
             Map<String, com.fasterxml.jackson.databind.JsonNode> flags = new LinkedHashMap<>();
             tool.path("response").path("flags").fields()
                     .forEachRemaining(f -> flags.put(f.getKey(), f.getValue()));
             if (result.put(name, new Entry(name, kind, description, source,
-                    List.copyOf(fields), Map.copyOf(flags))) != null) {
+                    List.copyOf(fields), List.copyOf(contexts), Map.copyOf(flags))) != null) {
                 throw new ExecToolViolation("重复的工具: " + name);
             }
         }

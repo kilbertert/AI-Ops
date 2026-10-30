@@ -39,6 +39,7 @@ public final class ExecManifest {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final String id;
+    private final String schema;
     private final String name;
     private final String providerKey;
     private final String adapterKey;
@@ -50,10 +51,11 @@ public final class ExecManifest {
     private final String historyPolicy;
     private final boolean operatorOutput;
 
-    private ExecManifest(String id, String name, String providerKey, String adapterKey, String modelKey,
-                         String endpoint, ChatTuning tuning, List<String> systemMessages,
+    private ExecManifest(String id, String schema, String name, String providerKey, String adapterKey,
+                         String modelKey, String endpoint, ChatTuning tuning, List<String> systemMessages,
                          List<ToolDef> tools, String historyPolicy, boolean operatorOutput) {
         this.id = id;
+        this.schema = schema;
         this.name = name;
         this.providerKey = providerKey;
         this.adapterKey = adapterKey;
@@ -69,6 +71,11 @@ public final class ExecManifest {
     /** 版本身份：清单**原始字节**的 sha256（十六进制，小写）。 */
     public String id() {
         return id;
+    }
+
+    /** 运行类型就是清单的 schema。工具面按它判，不按工具名猜。 */
+    public String schema() {
+        return schema;
     }
 
     public String name() {
@@ -235,14 +242,18 @@ public final class ExecManifest {
                 tools.add(ToolDef.of(text(t, "name"), text(t, "description"), text(t, "input_schema")));
             }
         }
-        if (conversation && !tools.isEmpty()) {
-            throw new ExecConfigViolation("TOOLS", "非订单回合不允许订单工具");
+        // 无订单回合**可以**带工具（ADR-0183），但只能是声明允许这类运行用的那些。
+        // 这里与 `GovernedToolRuntime.resolvedTools` 用同一条规则，判据只有一份。
+        for (ToolDef tool : tools) {
+            if (!ToolSurface.allows(schema, tool.name())) {
+                throw new ExecConfigViolation("TOOLS", "该运行类型不允许这个工具：" + tool.name());
+            }
         }
         if (tools.isEmpty() && !"operator-exec-config/1".equals(schema) && !conversation) {
             // 本片固定「唯一受控工具」。空工具集合**不是**拒绝手段，也不是合法期望值。
             throw new ExecConfigViolation("MANIFEST", "tools 不得为空：本片要求显式声明受控工具");
         }
-        return new ExecManifest(id, text(root, "name"), text(model, "provider_key"),
+        return new ExecManifest(id, schema, text(root, "name"), text(model, "provider_key"),
                 text(model, "adapter_key"), text(model, "model_key"), text(model, "endpoint"),
                 ChatTuning.of(options), system, tools, history, "operator-exec-config/1".equals(schema) || conversation);
     }

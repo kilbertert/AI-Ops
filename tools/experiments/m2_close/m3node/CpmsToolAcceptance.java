@@ -7,6 +7,7 @@ import org.springframework.ai.chat.model.ToolContext;
 
 import java.net.InetSocketAddress;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -199,6 +200,7 @@ public final class CpmsToolAcceptance {
                 refuse(() -> new CpmsReadTool.Request(bad[0], bad[1], bad[2]), "request target: " + bad[1]);
             }
             mixedVersionIsRefusedInBothDirections();
+            toolSurfaceFollowsTheRunType();
             System.out.println("CPMS_TOOL_ACCEPTANCE PASS assertions=" + passed + " http_calls=" + calls.get());
         } finally { server.stop(0); }
     }
@@ -212,6 +214,62 @@ public final class CpmsToolAcceptance {
                 JSON.readTree("{\"order_no\":\"ORDER-1\"}"),
                 new CpmsReadTool.Request("GET", "/chOrderInfo/getOrderInfoDetail/ORDER-1", ""),
                 base, "PRIVATE-TOKEN", expiresAt);
+    }
+
+    /** 运行类型决定工具面：判据是清单的 schema，不是工具名之间的特例。 */
+    static void toolSurfaceFollowsTheRunType() throws Exception {
+        var consumer = com.trendpower.aiops.node.exec.ToolSurface.allowed("m3-exec-config/1");
+        // AC1 的装配面：C 端同清单里既有订单状态、又有站点查询。
+        check(consumer.contains(ControlledChargingStatusTool.TOOL_NAME), "consumer keeps the status tool");
+        check(consumer.contains("cpms_site_search"), "consumer gains the site tool");
+        check(!consumer.contains("cpms_order_detail"), "consumer has no order-diagnosis tool");
+        // AC2：状态工具与订单诊断工具仍然不能混用 —— 但那是允许集合的结果。
+        var order = com.trendpower.aiops.node.exec.ToolSurface.allowed("operator-exec-config/1");
+        check(order.contains("cpms_order_detail") && order.contains("cpms_charging_samples"),
+                "order run keeps both CPMS tools");
+        check(!order.contains(ControlledChargingStatusTool.TOOL_NAME), "order run refuses the status tool");
+        check(!order.contains("cpms_site_search"), "order run refuses the conversation-only tool");
+        var conversation = com.trendpower.aiops.node.exec.ToolSurface.allowed("operator-conversation/1");
+        check(conversation.equals(List.of("cpms_site_search")), "conversation run carries only the site tool");
+        // AC3：未声明的工具名在**任何**运行类型下都不成立，拒绝码稳定。
+        for (String schema : new String[]{"m3-exec-config/1", "operator-exec-config/1", "operator-conversation/1"}) {
+            check(!com.trendpower.aiops.node.exec.ToolSurface.allows(schema, "shell"), "undeclared tool refused: " + schema);
+        }
+        refuseExec(() -> com.trendpower.aiops.node.exec.ToolSurface.allowed("m3-exec-config/9"),
+                "unknown run type");
+
+        // 清单解析与装配用同一条规则：对话回合带站点工具合法，带订单工具不合法。
+        String base = "{\"schema\":\"operator-conversation/1\",\"name\":\"n\",\"history_policy\":\"none\","
+                + "\"model\":{\"provider_key\":\"p\",\"adapter_key\":\"a\",\"model_key\":\"m\","
+                + "\"endpoint\":\"https://e\"},\"model_options\":{},\"system_messages\":[\"S\"],\"tools\":[%s]}";
+        String site = "{\"name\":\"cpms_site_search\",\"description\":\"d\",\"input_schema\":\"{\\\"type\\\":\\\"object\\\"}\"}";
+        String orderTool = "{\"name\":\"cpms_order_detail\",\"description\":\"d\",\"input_schema\":\"{\\\"type\\\":\\\"object\\\"}\"}";
+        String withSite = String.format(base, site);
+        var manifest = com.trendpower.aiops.node.exec.ExecManifest.fromText(withSite, sha256(withSite));
+        check(manifest.schema().equals("operator-conversation/1") && manifest.tools().size() == 1,
+                "conversation manifest accepts the site tool");
+        String withOrderTool = String.format(base, orderTool);
+        String orderToolDigest = sha256(withOrderTool);
+        refuseExec(() -> com.trendpower.aiops.node.exec.ExecManifest.fromText(withOrderTool, orderToolDigest),
+                "conversation manifest refuses an order tool");
+    }
+
+    /** 清单身份就是原始字节的 sha256 —— `fromText` 的第二个参数是它，不是任意 id。 */
+    static String sha256(String text) throws Exception {
+        var digest = java.security.MessageDigest.getInstance("SHA-256");
+        byte[] bytes = digest.digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var hex = new StringBuilder();
+        for (byte value : bytes) hex.append(String.format("%02x", value));
+        return hex.toString();
+    }
+
+    static void refuseExec(Runnable action, String label) {
+        try {
+            action.run();
+            throw new AssertionError("accepted: " + label);
+        } catch (com.trendpower.aiops.node.exec.ExecConfigViolation expected) {
+            check(!expected.getMessage().isBlank(), label);
+        }
     }
 
     static void refuse(Runnable action, String label) {
