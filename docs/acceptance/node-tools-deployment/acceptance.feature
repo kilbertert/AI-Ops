@@ -1,0 +1,9 @@
+Feature: 正式节点加载工具声明
+  Scenario: 启动时装载同版声明
+    Given Gateway与节点使用同修订的工具声明
+    When 正常登录管家原H5并查询授权订单
+    Then 作业完成且报告在原页面可见
+  Scenario: 缺失声明直接拒绝部署
+    Given 声明文件未安装
+    When Compose创建节点
+    Then 不创建同名空目录且节点不能以缺失工具的配置上线

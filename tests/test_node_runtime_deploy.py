@@ -41,6 +41,24 @@ def test_runtime_is_internal_and_keeps_credentials_separate():
     ]
 
 
+def test_node_tool_declaration_mount_matches_the_jvm_path():
+    node = yaml.safe_load((DEPLOY / "compose.yaml").read_text())["services"]["node"]
+    options = [part for part in node["command"] if part.startswith("-Daiops.node.tools-file=")]
+    assert len(options) == 1, "节点命令必须显式加载工具声明"
+    assert node["command"].index(options[0]) < node["command"].index("-jar")
+    target = options[0].split("=", 1)[1]
+    mount = next(
+        volume for volume in node["volumes"] if isinstance(volume, dict) and volume["target"] == target
+    )
+    assert mount == {
+        "type": "bind",
+        "source": "${AIOPS_NODE_CONFIG:?}/node/operator-tools.json",
+        "target": target,
+        "read_only": True,
+        "bind": {"create_host_path": False},
+    }
+
+
 def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     nginx = shutil.which("nginx")
     if not nginx:

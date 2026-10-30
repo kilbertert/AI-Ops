@@ -37,8 +37,10 @@
 
 **`node/operator-tools.json` 是工具定义本身**（ADR-0181）：从仓库的
 `src/aiops_diagnostics/operator/operator_tools.json` 原样复制，节点用
-`-Daiops.node.tools-file=<配置根>/node/operator-tools.json` 读它。加工具只换这一个文件，
-**不需要重建 JAR**。它读不到就是启动失败——不会被当成「没有工具」。
+Compose将它只读挂载到`/etc/m2live/operator-tools.json`，并在`-jar`之前传入
+`-Daiops.node.tools-file=/etc/m2live/operator-tools.json`。文件不存在时Compose拒绝创建容器，
+不会自动生成一个同名空目录。声明由节点首次读取后缓存，更新文件后须定点重建节点使新声明生效，
+**不需要重建 JAR**；声明缺失或非法时不会被当成「没有工具」。
 仅复制所需配置与停稳后的平台数据库；不复制试验 Gateway、身份 fixture 或旧备份密钥。
 平台/节点无业务库凭据，模型出口只挂自己的凭据目录。
 
@@ -203,3 +205,18 @@ timeout 45 docker exec aiops-runtime-node java -Xmx32m -cp /tmp TlsProbe \
 在无在飞模型任务的窗口切换，验证节点到代理的TLS、令牌拒绝与真实单次模型请求；
 失败恢复旧Compose和旧镜像ID后重建同一服务，不停止平台、节点或数据库。
 只移动仓库源码不会改写运行中的旧发布包；未执行上述切换时，生产仍使用旧包中的等字节代理。
+
+## 工具声明挂载补齐与更新
+
+从同一已合并修订归档`deploy/node-runtime/compose.yaml`和
+`src/aiops_diagnostics/operator/operator_tools.json`，通过`dev-host cp --artifact-sha256`传入。
+先核现役Gateway声明与制品摘要相同、没有issued/running作业，备份当前发布目录指针、runtime.env和旧声明（包括“不存在”）。
+复制现役发布目录为新目录，只替换其Compose；将声明安装到配置根`node/operator-tools.json`（0644、项目服务身份所有）。
+用`docker compose config --format json`对比新旧配置：只允许节点command/volumes增加工具声明，
+其他服务和节点环境、TLS、身份、网络保持原值。然后原子更新runtime.env的AIOPS_NODE_DIST和current指针，
+按上节定点`up -d --no-deps --pull never --force-recreate node`并等待就绪。
+核对容器内声明摘要、JVM加载参数、原jar摘要、其余容器ID与正式路由不变；正常登录原H5完成订单请求。
+失败恢复原env/current/声明，定点重建原节点；只恢复发布资产，不恢复业务数据库。
+
+挂载语义依据[Compose服务规范](https://github.com/compose-spec/compose-spec/blob/main/05-services.md#long-syntax-5)：
+长语法bind的`create_host_path: false`禁止源文件缺失时自动建目录；`read_only: true`保证节点不可修改声明。
