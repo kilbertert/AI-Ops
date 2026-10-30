@@ -14,17 +14,27 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
     CpmsGatewayAuthorization(GatewayClient gateway) { this.gateway = gateway; }
 
     @Override public CpmsReadTool.Grant require(String run, String manifest, String tool) {
-        JsonNode data = gateway.post(path(run, tool) + "/authorization", "{}", manifest);
+        // 声明契约版本：旧 Gateway 不认识这个头，会回一份没有 `request` 的载荷，那样在
+        // 下面被拒 —— 两个方向都落在可预期的位置，而不是等完成回调里缺字段。
+        JsonNode data = gateway.post(
+                path(run, tool) + "/authorization", "{}", manifest, CpmsReadTool.CONTRACT);
         if (!run.equals(data.path("run_id").asText()) || !tool.equals(data.path("tool").asText())
                 || !manifest.equals(data.path("manifest_id").asText()) || !data.path("site_ids").isArray()) {
             throw CpmsReadTool.refused("authorization_identity_mismatch");
+        }
+        if (!CpmsReadTool.CONTRACT.equals(data.path("contract").asText())) {
+            throw CpmsReadTool.refused("authorization_contract_mismatch");
         }
         var sites = new HashSet<String>();
         for (JsonNode site : data.path("site_ids")) {
             if (!site.isTextual() || !sites.add(site.asText())) throw CpmsReadTool.refused("invalid_authorization");
         }
+        JsonNode request = data.path("request");
         return new CpmsReadTool.Grant(data.path("authorization_id").asText(), data.path("tenant_id").asText(),
-                sites, data.path("order_no").asText(), data.path("base_url").asText(),
+                sites, data.path("inputs"),
+                new CpmsReadTool.Request(request.path("method").asText(), request.path("path").asText(),
+                        request.path("query").asText()),
+                data.path("base_url").asText(),
                 data.path("bearer").asText(), Instant.parse(data.path("expires_at").asText()));
     }
 
@@ -32,7 +42,8 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
                                  CpmsReadTool.Grant grant, JsonNode evidence) {
         var body = new ObjectMapper().createObjectNode();
         body.put("authorization_id", grant.authorizationId()).set("evidence", evidence);
-        JsonNode ack = gateway.post(path(run, tool) + "/evidence", body.toString(), manifest);
+        JsonNode ack = gateway.post(
+                path(run, tool) + "/evidence", body.toString(), manifest, CpmsReadTool.CONTRACT);
         if (!run.equals(ack.path("run_id").asText()) || !tool.equals(ack.path("tool").asText())
                 || !grant.authorizationId().equals(ack.path("authorization_id").asText())
                 || !ack.path("accepted").isBoolean() || !ack.path("accepted").booleanValue()) {

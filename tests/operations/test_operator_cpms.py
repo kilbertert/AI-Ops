@@ -250,25 +250,43 @@ def request(client):
     )
 
 
-def node(f, run_id, *, tools=operator_cpms.TOOL_NAMES, before_complete=None, answer=None):
+#: 合成节点声明的工具契约版本。真实节点从 `CpmsReadTool` 侧的常量发出同一个值。
+CONTRACT = {"X-AI-Ops-Tool-Contract": operator_cpms.TOOL_CONTRACT}
+
+
+def node(f, run_id, *, tools=operator_cpms.TOOL_NAMES, before_complete=None, answer=None, contract=True):
     client = f["client"]
     head = {"Authorization": "Bearer " + NODE_A_TOKEN}
     publication = client.post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
     assert publication.status_code == 200, publication.text
     head["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+    if contract:
+        head.update(CONTRACT)
     for tool in tools:
         path = f"/v1/internal/operator-runs/{run_id}/tools/{tool}"
         response = client.post(path + "/authorization", headers=head, json={})
+        if not contract:
+            # 旧节点不声明契约：挡在领授权这一步，而不是等完成回调里缺字段。
+            assert response.status_code == 403, response.text
+            assert response.json()["error"]["code"] == "OPERATOR_TOOL_CONTRACT_OUTDATED"
+            return response
         assert response.status_code == 200, response.text
         grant = response.json()
         assert grant["site_ids"] == ["SITE-1"]
-        url = grant["base_url"] + operator_cpms.PATHS[tool] + ORDER
-        if tool == operator_cpms.TOOL_NAMES[1]:
-            url += "?current=1&size=50"
+        assert grant["contract"] == operator_cpms.TOOL_CONTRACT
+        assert grant["inputs"] == operator_cpms.tool_inputs(tool, ORDER)
+        request = grant["request"]
+        assert request == operator_cpms.tool_request(tool, ORDER)
+        url = grant["base_url"] + request["path"]
+        if request["query"]:
+            url += "?" + request["query"]
         response = client.get(url, headers={"Authorization": "Bearer " + grant["bearer"]})
         assert response.status_code == 200, response.text
         assert "PRIVATE-PHONE" not in response.text
         evidence = operator_cpms.project_evidence(response.json(), ORDER, tool)
+        assert set(evidence) == {"tool", "order_no", "source", "observed_at", "data"}
+        evidence.pop("order_no")
+        evidence["inputs"] = grant["inputs"]
         response = client.post(
             path + "/evidence",
             headers=head,
@@ -359,6 +377,106 @@ def test_refused_data_or_completion_cannot_succeed(operator, monkeypatch, fault)
     final = terminal(f, response.json()["qa_id"])
     assert final.status_code != 200 or final.json()["status"] != "completed", final.text
     assert not final.json().get("result")
+
+
+def _authorized(f, run_id):
+    """替身节点领一次授权，返回 (headers, grant)。"""
+    head = {"Authorization": "Bearer " + NODE_A_TOKEN, **CONTRACT}
+    publication = f["client"].post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
+    head["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+    tool = operator_cpms.TOOL_NAMES[0]
+    response = f["client"].post(
+        f"/v1/internal/operator-runs/{run_id}/tools/{tool}/authorization", headers=head, json={}
+    )
+    assert response.status_code == 200, response.text
+    return head, response.json()
+
+
+def _refusal(response):
+    assert response.status_code == 403, response.text
+    return response.json()["error"]["code"]
+
+
+def test_proxy_matches_the_whole_request_target(operator, monkeypatch):
+    """路径对、查询串不同也必须拒绝——白名单是完整请求目标，不是路径前缀。"""
+    f = operator
+    observed = {}
+
+    def dispatch(_, cfg, run_id):
+        head, grant = _authorized(f, run_id)
+        request = grant["request"]
+        auth = {"Authorization": "Bearer " + grant["bearer"]}
+        base = grant["base_url"] + request["path"]
+        observed["query"] = _refusal(f["client"].get(base + "?current=2", headers=auth))
+        observed["path"] = _refusal(f["client"].get(grant["base_url"] + "/chSite/page", headers=auth))
+        observed["ok"] = f["client"].get(base, headers=auth).status_code
+        return node(f, run_id)
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    # 派发在 worker 线程里跑：必须等终态，否则断言会跟它赛跑。
+    terminal(f, submitted.json()["qa_id"])
+    assert observed == {"query": "OPERATOR_PATH_REJECTED", "path": "OPERATOR_PATH_REJECTED", "ok": 200}
+
+
+@pytest.mark.parametrize("fault", ["missing-inputs", "extra-order-no", "wrong-inputs", "wrong-source"])
+def test_evidence_field_set_is_exact(operator, monkeypatch, fault):
+    """证据字段集合精确相等：少一个、多一个、输入不一致，分别拒绝。"""
+    f = operator
+
+    def dispatch(_, cfg, run_id):
+        head, grant = _authorized(f, run_id)
+        tool = operator_cpms.TOOL_NAMES[0]
+        request = grant["request"]
+        url = grant["base_url"] + request["path"]
+        body = f["client"].get(url, headers={"Authorization": "Bearer " + grant["bearer"]}).json()
+        evidence = operator_cpms.project_evidence(body, ORDER, tool)
+        evidence.pop("order_no")
+        evidence["inputs"] = grant["inputs"]
+        if fault == "missing-inputs":
+            evidence.pop("inputs")
+        elif fault == "extra-order-no":
+            evidence["order_no"] = ORDER
+        elif fault == "wrong-inputs":
+            evidence["inputs"] = {"order_no": "ORDER-OTHER"}
+        elif fault == "wrong-source":
+            evidence["source"] = "cpms.other"
+        path = f"/v1/internal/operator-runs/{run_id}/tools/{tool}/evidence"
+        response = f["client"].post(
+            path, headers=head, json={"authorization_id": grant["authorization_id"], "evidence": evidence}
+        )
+        assert response.status_code == 403, response.text
+        return f["client"].post(
+            f"/v1/internal/operator-runs/{run_id}/completions",
+            headers=head,
+            json={"status": "completed", "answer": json.dumps({"direct_answer": "x"})},
+        )
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.json()["status"] != "completed", final.text
+
+
+def test_a_node_that_does_not_declare_the_contract_is_refused_before_any_read(operator, monkeypatch):
+    """旧节点 + 新网关：拒绝必须发生在领授权，而不是完成回调里缺字段。"""
+    f = operator
+    dispatched = {}
+
+    def dispatch(_, cfg, run_id):
+        before = len(f["state"]["calls"])
+        response = node(f, run_id, contract=False)
+        dispatched["refused"] = response.status_code
+        dispatched["reads"] = len(f["state"]["calls"]) - before
+        return response
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    terminal(f, submitted.json()["qa_id"])
+    assert dispatched == {"refused": 403, "reads": 0}
 
 
 def test_draft_toggle_does_not_publish_and_disabled_tool_cannot_be_called(operator, monkeypatch):

@@ -3749,6 +3749,7 @@ def create_gateway_app(
             request.headers.get("Authorization", "").removeprefix("Bearer "),
             request.headers.get("X-AI-Ops-Exec-Config", ""),
             tool,
+            request.headers.get("X-AI-Ops-Tool-Contract", ""),
         )
 
     @app.post("/v1/internal/operator-runs/{run_id}/tools/{tool}/evidence")
