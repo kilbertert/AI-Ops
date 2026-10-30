@@ -45,8 +45,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-CATALOG = ROOT / "src" / "aiops_diagnostics" / "faq_catalog.json"
-RECOMMENDATIONS = ROOT / "src" / "aiops_diagnostics" / "faq_recommendations.json"
+CATALOG = ROOT / "src" / "aiops_diagnostics" / "conversation" / "faq_catalog.json"
+RECOMMENDATIONS = ROOT / "src" / "aiops_diagnostics" / "conversation" / "faq_recommendations.json"
 
 #: `s2twp`: Simplified -> Traditional with Taiwan phrase conventions. The plain
 #: `s2t` profile would produce 软件/信息-style mainland vocabulary in Traditional
@@ -140,14 +140,14 @@ def _check_language_map(mapping: dict, where: str, cc, stale: list[str]) -> None
 
 #: Flat `{tag: str | {field: str}}` tables — the message catalogs.
 FLAT_TABLES = (
-    ("aiops_diagnostics.i18n", "QA_FALLBACK_MESSAGES"),
-    ("aiops_diagnostics.i18n", "PROMO_EMPTY_MESSAGES"),
-    ("aiops_diagnostics.i18n", "PROMO_UNAVAILABLE_MESSAGES"),
-    ("aiops_diagnostics.i18n", "CLARIFICATION_MESSAGES"),
-    ("aiops_diagnostics.i18n", "ZERO_ORDER_REMINDER_MESSAGES"),
-    ("aiops_diagnostics.i18n", "DIAGNOSIS_FAILURE_MESSAGES"),
-    ("aiops_diagnostics.i18n", "DIAGNOSIS_ERROR_MESSAGES"),
-    ("aiops_diagnostics.i18n", "FREE_TEXT_UNAVAILABLE_MESSAGES"),
+    ("aiops_diagnostics.common.i18n", "QA_FALLBACK_MESSAGES"),
+    ("aiops_diagnostics.common.i18n", "PROMO_EMPTY_MESSAGES"),
+    ("aiops_diagnostics.common.i18n", "PROMO_UNAVAILABLE_MESSAGES"),
+    ("aiops_diagnostics.common.i18n", "CLARIFICATION_MESSAGES"),
+    ("aiops_diagnostics.common.i18n", "ZERO_ORDER_REMINDER_MESSAGES"),
+    ("aiops_diagnostics.common.i18n", "DIAGNOSIS_FAILURE_MESSAGES"),
+    ("aiops_diagnostics.common.i18n", "DIAGNOSIS_ERROR_MESSAGES"),
+    ("aiops_diagnostics.common.i18n", "FREE_TEXT_UNAVAILABLE_MESSAGES"),
     ("aiops_diagnostics.health.health_report_copy", "HEALTH_SUMMARY_MESSAGES"),
     ("aiops_diagnostics.health.health_report_copy", "HEALTH_CURVE_NAMES"),
     ("aiops_diagnostics.health.health_report_copy", "HEALTH_STOP_FALLBACK_MESSAGES"),

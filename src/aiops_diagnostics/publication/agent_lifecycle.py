@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 
 AGENT_MANAGE_SCOPE = "aiops:agents:manage"
 AGENT_TYPES = frozenset({"customer", "operations"})

@@ -23,12 +23,12 @@ from pathlib import Path
 
 import pytest
 
+from aiops_diagnostics.conversation.faq import PlatformRoleRecord
 from aiops_diagnostics.dify.dify_app_registry import (
     DifyAppBinding,
     DifyAppRegistry,
     DifyAppRegistryError,
 )
-from aiops_diagnostics.faq import PlatformRoleRecord
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from aiops_diagnostics.publication.agent_manifest import (

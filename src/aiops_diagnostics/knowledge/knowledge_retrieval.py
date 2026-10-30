@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     JSON_CONTENT_TYPE,
     TRANSPORT_FAILURES,
     ErrorMapping,
@@ -42,7 +42,7 @@ from aiops_diagnostics.bounded_http import (
     retry_delay,
     tenant_id_header,
 )
-from aiops_diagnostics.redaction import redact_text
+from aiops_diagnostics.common.redaction import redact_text
 
 KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
 ALLOWED_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})

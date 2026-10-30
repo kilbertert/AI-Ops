@@ -69,8 +69,8 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
 
-from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS as DIAGNOSIS_PROFILE
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.async_job_lifecycle import DIAGNOSIS as DIAGNOSIS_PROFILE
+from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
     HttpFailure,
     RequestSpec,
@@ -239,8 +239,8 @@ def _workspace_for(
     """
     import time
 
-    from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
-    from aiops_diagnostics.http_auth import build_internal_token_headers
+    from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
+    from aiops_diagnostics.common.http_auth import build_internal_token_headers
 
     def refused(failure: HttpFailure) -> Exception:
         return _WorkspaceLookupFailed(f"{failure.status or failure.detail}")
@@ -793,13 +793,13 @@ def _knowledge_sync_payload(
     ``/v1/internal/knowledge/open`` 同一条判据。返回值只用于"要不要刷新列表"，
     调用方不该从它推断业务状态。
     """
-    from aiops_diagnostics.bounded_http import (
+    from aiops_diagnostics.common.bounded_http import (
         ErrorMapping,
         RequestSpec,
         join_url,
         request_json,
     )
-    from aiops_diagnostics.http_auth import build_internal_token_headers
+    from aiops_diagnostics.common.http_auth import build_internal_token_headers
 
     def failed(failure: HttpFailure) -> Exception:
         return ConsolePublishError(f"knowledge sync: {failure.status or failure.detail}")
@@ -853,8 +853,8 @@ def _knowledge_open_payload(
     失败一律抛 :class:`ConsolePublishError` 交给调用点译成可读的一句话 —— 桥不猜
     "为什么没成"，那是网关的四个可区分码的职责。
     """
-    from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
-    from aiops_diagnostics.http_auth import build_internal_token_headers
+    from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
+    from aiops_diagnostics.common.http_auth import build_internal_token_headers
 
     # 网关的 409 是"这个租户还没开 RAGFlow"—— 那是运营**能行动**的信息（去找管理员
     # 开户），不该被压成"暂时不可用"。其余状态码保持"这一步没做成"。
@@ -1694,7 +1694,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         """
         from urllib.parse import urlsplit
 
-        from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
+        from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
 
         origin = urlsplit(self.settings.dify_base_url)
         if not origin.scheme or not origin.netloc:

@@ -79,7 +79,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--consumer-docx", type=Path, required=True)
     parser.add_argument("--operator-docx", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, default=Path("src/aiops_diagnostics"))
+    parser.add_argument("--output-dir", type=Path, default=Path("src/aiops_diagnostics/conversation"))
     parser.add_argument("--version", default="2026.09.04")
     args = parser.parse_args()
     catalog_path = args.output_dir / "faq_catalog.json"

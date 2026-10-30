@@ -27,7 +27,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import (
+from aiops_diagnostics.conversation.faq import (
     FAQCatalog,
     PlatformIdentityResolver,
     PlatformRoleRecord,

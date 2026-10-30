@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from aiops_diagnostics import model_request
-from aiops_diagnostics.config import AgentSettings, ProviderConfig
+from aiops_diagnostics.common import model_request
+from aiops_diagnostics.common.config import AgentSettings, ProviderConfig
 from aiops_diagnostics.operator.ops_analysis_narrative import run_narrative_turn
 
 

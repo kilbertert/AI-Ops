@@ -41,8 +41,8 @@ ROOT = Path(__file__).parents[1]
 _TREE = (
     "tools/merge_faq_i18n.py",
     "tools/faq_i18n",
-    "src/aiops_diagnostics/faq_catalog.json",
-    "src/aiops_diagnostics/faq_recommendations.json",
+    "src/aiops_diagnostics/conversation/faq_catalog.json",
+    "src/aiops_diagnostics/conversation/faq_recommendations.json",
     "docs/EV_Charging_FAQ_Multilingual_Wide_Table.xlsx",
     "docs/管家端问答国际化宽表.xlsx",
 )
@@ -132,8 +132,10 @@ class _Tree:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.tool = path / "tools" / "merge_faq_i18n.py"
-        self.catalog = path / "src" / "aiops_diagnostics" / "faq_catalog.json"
-        self.recommendations = path / "src" / "aiops_diagnostics" / "faq_recommendations.json"
+        self.catalog = path / "src" / "aiops_diagnostics" / "conversation" / "faq_catalog.json"
+        self.recommendations = (
+            path / "src" / "aiops_diagnostics" / "conversation" / "faq_recommendations.json"
+        )
         self.answers = path / "tools" / "faq_i18n"
 
     def run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:

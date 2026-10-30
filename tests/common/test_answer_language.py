@@ -13,7 +13,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from aiops_diagnostics.answer_language import (
+from aiops_diagnostics.common.answer_language import (
     AnswerSurface,
     answer_chinese_leak,
     looks_like_asset_name,
@@ -431,7 +431,7 @@ def test_fullwidth_chinese_punctuation_counts_as_a_leak() -> None:
     ],
 )
 def test_a_name_gloss_beside_its_latin_form_is_not_a_leak(text: str) -> None:
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     assert chinese_leak(text) == ""
 
@@ -452,7 +452,7 @@ def test_the_narrow_gloss_rule_does_not_reopen_the_hole(text: str) -> None:
     Told apart from a cited proper noun needs semantics a pattern lacks, so the
     rule stays narrow rather than guessing — see the `_NAME_GLOSS` comment.
     """
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     assert chinese_leak(text) != ""
 
@@ -460,7 +460,7 @@ def test_the_narrow_gloss_rule_does_not_reopen_the_hole(text: str) -> None:
 def test_a_bare_chinese_proper_noun_is_still_judged() -> None:
     """Known tradeoff, recorded: a bare name would be flagged. Narrow beats
     broad here, because the broad rule is how a customer reads Chinese."""
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     assert chinese_leak("See the case from 特来电.") != ""
 
@@ -581,7 +581,7 @@ def test_diagnosis_error_message_never_returns_stored_internal_text() -> None:
     The stored `error_message` is an engineer's note (an upstream exception
     string). Returning it verbatim is what the contract forbids.
     """
-    from aiops_diagnostics.i18n import diagnosis_error_message
+    from aiops_diagnostics.common.i18n import diagnosis_error_message
 
     internal = "RuntimeError: provider returned 429 <html>stack</html>"
     for code in ("DIAGNOSIS_FAILED", "DIAGNOSIS_ORDER_OUT_OF_SCOPE", "DIAGNOSIS_DEADLINE", None):

@@ -13,7 +13,7 @@ break it, both of which this repository has already shipped:
 
 Neither is visible from one endpoint's behaviour: the defect is the *absence*
 of a hand-off in a branch that otherwise answers correctly. So this guard reads
-the source, following ``tests/test_answer_caller_shapes.py``: what is being
+the source, following ``tests/common/test_answer_caller_shapes.py``: what is being
 prevented is a future edit, not a current behaviour. Every assertion here has
 been watched turn red when the thing it pins is taken away — a guard nobody has
 seen fail is not evidence.
@@ -24,7 +24,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
+SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 #: The module that owns every claim site.
 API_FILE = "gateway_api.py"
 #: The claim. Every branch that wants the conversation's slot goes through it.

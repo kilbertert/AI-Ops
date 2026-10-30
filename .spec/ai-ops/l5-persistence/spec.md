@@ -5,8 +5,8 @@ hue: 30
 code:
   - src/aiops_diagnostics/gateway_store.py
 related:
-  - src/aiops_diagnostics/async_job_lifecycle.py
-  - src/aiops_diagnostics/conversation_store.py
+  - src/aiops_diagnostics/common/async_job_lifecycle.py
+  - src/aiops_diagnostics/conversation/conversation_store.py
   - src/aiops_diagnostics/metrics_store.py
   - src/aiops_diagnostics/publication/agent_lifecycle.py
   - src/aiops_diagnostics/publication/shortcut_lifecycle.py

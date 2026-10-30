@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 
-from aiops_diagnostics.http_auth import (
+from aiops_diagnostics.common.http_auth import (
     DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS,
     build_internal_token,
     build_internal_token_headers,

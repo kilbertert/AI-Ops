@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 
-from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, parse_code_data_envelope, request_json
+from aiops_diagnostics.common.bounded_http import (
+    ErrorMapping,
+    RequestSpec,
+    parse_code_data_envelope,
+    request_json,
+)
 from aiops_diagnostics.data.charging_status import ChargingStatusError
 from aiops_diagnostics.gateway_config import canonical_gateway_url
 

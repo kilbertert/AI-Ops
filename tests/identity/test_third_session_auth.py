@@ -18,7 +18,7 @@ from operator_support import (
     session_settings,
 )
 
-from aiops_diagnostics.config import UpmsSettings
+from aiops_diagnostics.common.config import UpmsSettings
 from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_INVALID, CallerAuthError
 from aiops_diagnostics.identity.query_scope import QueryScope, resolve_query_scope
 from aiops_diagnostics.identity.scope_context import (
@@ -278,7 +278,7 @@ def test_upms_b_subject_directory_reuses_the_existing_mapping_endpoint(
 ) -> None:
     """B 端 id 取自既有 C→B 映射端点，不新增服务端接口。"""
     transport = _FakeUpmsTransport([{"id": "B-9", "userId": "C-1", "username": "agent.9", "tenantId": "T-1"}])
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", transport)
 
     records = _upms_directory().users_by_c_user_id("C-1")
 
@@ -293,7 +293,7 @@ def test_session_identity_matches_what_upms_answers_for_the_same_user(
 ) -> None:
     """端到端：会话解析出的身份与直接向 UPMS 查同一用户的结果一致。"""
     transport = _FakeUpmsTransport([{"id": "B-9", "userId": "C-1", "username": "agent.9", "tenantId": "T-1"}])
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", transport)
 
     context = _resolve(monkeypatch, _upms_directory())
 

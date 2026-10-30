@@ -7,9 +7,9 @@
   tools/faq_i18n/answers_{lang}.json                 —— 以中文权威答案为源起草的答案翻译。
 
 输出（原位重写）：
-  src/aiops_diagnostics/faq_catalog.json            —— 每条 consumer entry 注入
+  src/aiops_diagnostics/conversation/faq_catalog.json            —— 每条 consumer entry 注入
       "i18n": {"en": {"question": ..., "answer": ...}, ...}，并升级 faq_version。
-  src/aiops_diagnostics/faq_recommendations.json    —— 同步补充各语言 title。
+  src/aiops_diagnostics/conversation/faq_recommendations.json    —— 同步补充各语言 title。
 
 仅用标准库解析 xlsx（zipfile + ElementTree），与 tools/generate_faq_catalog.py 的
 无依赖风格一致。校验失败（行序漂移、缺答案、空文案、中文原文不一致）直接报错退出，
@@ -27,8 +27,8 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-CATALOG = ROOT / "src" / "aiops_diagnostics" / "faq_catalog.json"
-RECOMMENDATIONS = ROOT / "src" / "aiops_diagnostics" / "faq_recommendations.json"
+CATALOG = ROOT / "src" / "aiops_diagnostics" / "conversation" / "faq_catalog.json"
+RECOMMENDATIONS = ROOT / "src" / "aiops_diagnostics" / "conversation" / "faq_recommendations.json"
 WIDE_TABLE = ROOT / "docs" / "EV_Charging_FAQ_Multilingual_Wide_Table.xlsx"
 ANSWER_DIR = ROOT / "tools" / "faq_i18n"
 

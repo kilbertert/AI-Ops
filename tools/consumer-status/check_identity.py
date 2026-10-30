@@ -109,7 +109,7 @@ class Deps:
 
 def default_deps(*, config_file: str, session: str) -> Deps:
     """生产实现：真 `RedisThirdSessionResolver` + 真 `scoped_mysql_source`。"""
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.data.sources import scoped_mysql_source
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.identity.query_scope import resolve_query_scope

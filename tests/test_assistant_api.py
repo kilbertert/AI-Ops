@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import (
     STANDARD_DIAGNOSIS_SCOPE,
     _extract_order_no,
@@ -93,7 +93,7 @@ class _Runtime:
         # which normalises it before storing. A stub that dropped it made every
         # creation response report the request language whatever the row held,
         # so the surface could not see the two disagree (#541 review).
-        from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, can_prompt_in
+        from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, can_prompt_in
 
         stored_language = language if can_prompt_in(language) else DEFAULT_LANGUAGE
         self.stored_language = stored_language

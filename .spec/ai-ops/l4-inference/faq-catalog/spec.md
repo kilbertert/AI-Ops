@@ -3,9 +3,9 @@ title: faq-catalog
 desc: 固定问答目录——中文权威 + 五种翻译
 hue: 60
 related:
-  - src/aiops_diagnostics/faq_catalog.json
-  - src/aiops_diagnostics/faq_recommendations.json
-  - src/aiops_diagnostics/faq.py
+  - src/aiops_diagnostics/conversation/faq_catalog.json
+  - src/aiops_diagnostics/conversation/faq_recommendations.json
+  - src/aiops_diagnostics/conversation/faq.py
 ---
 # faq-catalog
 

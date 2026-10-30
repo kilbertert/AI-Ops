@@ -41,7 +41,7 @@ from operator_support import (
     order_queries,
 )
 
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_INVALID,
@@ -165,7 +165,7 @@ def _resolver(
     def respond(_request: Any, **_kwargs: Any) -> _Response:
         return _Response(body)
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport or respond)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", transport or respond)
     return CompanyTokenCallerResolver(
         _settings(),
         mysql_settings(),
@@ -652,7 +652,7 @@ def _company_token_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mappe
     connection = Connection()
     monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen",
         lambda *_a, **_k: _Response(CLAIMS),
     )
     resolver = CompanyTokenCallerResolver(_settings(), mysql_settings(), scope_mapper_factory=mapper)
@@ -916,7 +916,7 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
     connection = Connection()
     monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **_: connection)
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.urllib.request.urlopen", lambda *_a, **_k: _Response(CLAIMS)
+        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen", lambda *_a, **_k: _Response(CLAIMS)
     )
     # 唯一被替身顶掉的**内部**依赖：站点归属映射要连充电库。这条用例的对象是「header → 门 →
     # 哪条链」，不是映射本身（映射规则由 1–6 节覆盖）。顶在模块级而不是构造参数上，是因为
@@ -1461,7 +1461,7 @@ class _PermissionSource:
 def _resolve_with_roles(monkeypatch: pytest.MonkeyPatch, roles: frozenset[str]):
     # 令牌本身仍要走 check_token 的替身 —— 本组关心的是**角色来源**，不是校验通道。
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen",
         lambda _request, **_kwargs: _Response(CLAIMS),
     )
     resolver = CompanyTokenCallerResolver(
@@ -1502,7 +1502,7 @@ def test_publish_is_not_implied_by_edit(monkeypatch) -> None:
 
 def test_an_upstream_failure_yields_no_roles_rather_than_an_exception() -> None:
     """公司端点不可达 ⇒ 空角色集（fail closed），不是 500，也不是放行。"""
-    from aiops_diagnostics.config import UpmsSettings
+    from aiops_diagnostics.common.config import UpmsSettings
     from aiops_diagnostics.identity.company_permissions import CompanyPermissionSource
 
     def boom(_settings, _token):
@@ -1514,7 +1514,7 @@ def test_an_upstream_failure_yields_no_roles_rather_than_an_exception() -> None:
 
 def test_the_permission_lookup_is_memoised_per_token() -> None:
     """按**令牌**缓存：撤权最多拖到该令牌过期，而不是拖到用户缓存过期。"""
-    from aiops_diagnostics.config import UpmsSettings
+    from aiops_diagnostics.common.config import UpmsSettings
     from aiops_diagnostics.identity.company_permissions import CompanyPermissionSource
 
     calls: list[str] = []
@@ -1532,7 +1532,7 @@ def test_the_permission_lookup_is_memoised_per_token() -> None:
 
 
 def test_an_unconfigured_upms_never_calls_the_upstream() -> None:
-    from aiops_diagnostics.config import UpmsSettings
+    from aiops_diagnostics.common.config import UpmsSettings
     from aiops_diagnostics.identity.company_permissions import CompanyPermissionSource
 
     def fetcher(_settings, _token):  # pragma: no cover - 不应被调用

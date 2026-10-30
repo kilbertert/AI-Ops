@@ -12,16 +12,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.async_job_lifecycle import (
+from aiops_diagnostics.common.async_job_lifecycle import (
     DIAGNOSIS,
     HEALTH_JOB,
     QUESTION,
     expire_statements,
 )
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
+from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.redaction import redact_text
 from aiops_diagnostics.identity.query_scope import MAX_SCOPE_IDS
-from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
-from aiops_diagnostics.redaction import redact_text
 
 _LOGGER = logging.getLogger("aiops.gateway_store")
 
@@ -1025,7 +1025,7 @@ class GatewayStore:
         # that owned them died with the process. Freeing them here is the
         # difference between "retry now" and "retry in two minutes" for the
         # caller whose generation the deploy killed (#492).
-        from aiops_diagnostics.conversation_store import ConversationStore
+        from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
         ConversationStore(self.path).recover_interrupted_turns()
 

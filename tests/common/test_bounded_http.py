@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     AUTH_REJECTED,
     AUTH_REJECTED_STATUSES,
     DECODE_EXCEPTIONS,
@@ -59,7 +59,7 @@ from aiops_diagnostics.bounded_http import (
     should_retry,
     tenant_id_header,
 )
-from aiops_diagnostics.http_auth import build_internal_token
+from aiops_diagnostics.common.http_auth import build_internal_token
 
 TOKEN_TIMESTAMP = 1700000000
 
@@ -521,7 +521,7 @@ def test_domain_error_dispatches_on_the_classified_kind() -> None:
 
 def test_http_errors_are_never_retried_even_with_a_retry_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     upstream = _install(monkeypatch, _FakeUpstream().queue(_http_error(503)))
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.time.sleep", lambda _seconds: None)
 
     with pytest.raises(_DomainError):
         request_json(_spec(), mapping=_mapping(), retry=RetryPolicy(max_retries=4))
@@ -637,7 +637,7 @@ def test_raw_envelope_rejects_scalar_payloads(monkeypatch: pytest.MonkeyPatch, p
 
 
 def test_retry_delay_is_the_single_jittered_exponential_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.random.uniform", lambda _low, _high: 0.0)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.random.uniform", lambda _low, _high: 0.0)
     policy = RetryPolicy()
 
     assert [retry_delay(attempt, policy=policy) for attempt in range(6)] == [1.0, 2.0, 4.0, 8.0, 8.0, 8.0]
@@ -654,7 +654,7 @@ def test_retry_delay_adds_jitter_within_its_bounds() -> None:
 
 def test_the_single_backoff_also_covers_a_smaller_base_and_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     """第二份退避（媒体 404 重试的 0.25*2^n）由同一实现以参数表达。"""
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.random.uniform", lambda _low, _high: 0.0)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.random.uniform", lambda _low, _high: 0.0)
     policy = RetryPolicy(base_delay_seconds=0.25, max_delay_seconds=2.0)
 
     assert [retry_delay(attempt, policy=policy) for attempt in range(6)] == [0.25, 0.5, 1.0, 2.0, 2.0, 2.0]
@@ -681,7 +681,7 @@ def test_request_json_retries_transient_get_failures_with_jittered_backoff(
     outcomes = [urllib.error.URLError("blip"), TimeoutError("slow"), _json_response({"ok": True})]
     upstream = _install(monkeypatch, _FakeUpstream().queue(*outcomes))
     slept: list[float] = []
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.time.sleep", slept.append)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.time.sleep", slept.append)
 
     assert request_json(_spec(), mapping=_mapping(), retry=RetryPolicy(max_retries=3)) == {"ok": True}
 
@@ -693,7 +693,7 @@ def test_request_json_retries_transient_get_failures_with_jittered_backoff(
 
 def test_request_json_never_retries_non_idempotent_methods(monkeypatch: pytest.MonkeyPatch) -> None:
     upstream = _install(monkeypatch, _FakeUpstream().queue(urllib.error.URLError("blip")))
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.time.sleep", lambda _seconds: None)
 
     with pytest.raises(_DomainError) as excinfo:
         request_json(_spec(method="POST"), mapping=_mapping(), retry=RetryPolicy(max_retries=4))
@@ -706,9 +706,9 @@ def test_request_json_stops_retrying_past_the_deadline(monkeypatch: pytest.Monke
     """轮询类调用方把自己的超时传下来，慢连接不会重试到远超超时。"""
     upstream = _install(monkeypatch, _FakeUpstream().queue(*[urllib.error.URLError("down")] * 6))
     clock = {"now": 0.0}
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.time.monotonic", lambda: clock["now"])
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.time.monotonic", lambda: clock["now"])
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.time.sleep",
+        "aiops_diagnostics.common.bounded_http.time.sleep",
         lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
     )
 
@@ -726,7 +726,7 @@ def test_request_json_reports_the_last_failure_after_the_budget(monkeypatch: pyt
         ConnectionResetError("reset"),
     ]
     upstream = _install(monkeypatch, _FakeUpstream().queue(*outcomes))
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.time.sleep", lambda _seconds: None)
 
     with pytest.raises(_DomainError) as excinfo:
         request_json(_spec(), mapping=_mapping(), retry=RetryPolicy(max_retries=2))

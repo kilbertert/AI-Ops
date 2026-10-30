@@ -28,7 +28,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.bounded_http import ErrorMapping, HttpFailure, RequestSpec, request_json
+from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure, RequestSpec, request_json
 from aiops_diagnostics.gateway_config import canonical_gateway_url
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 

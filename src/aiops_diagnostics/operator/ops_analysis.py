@@ -31,9 +31,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from aiops_diagnostics.answer_language import answer_chinese_leak, record_answer_language_fallback
+from aiops_diagnostics.common.answer_language import answer_chinese_leak, record_answer_language_fallback
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES
 from aiops_diagnostics.data.order_status import abnormal_definition, abnormal_end_codes, normal_end_codes
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES
 
 #: 这一族规则的版本。与 ``health_metrics.RULE_VERSION`` 分开：健康报告的规则版本一变，
 #: 不该连带让运维分析的复用失效，反之亦然。契约与作业行都盖这一个值。

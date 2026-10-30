@@ -13,8 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode
 
-from aiops_diagnostics.async_job_lifecycle import QUESTION
-from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, request_json
+from aiops_diagnostics.common.async_job_lifecycle import QUESTION
+from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, request_json
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig, SnailDispatcher
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
@@ -513,7 +513,7 @@ class OperatorCpms:
             except ValueError as exc:
                 logging.getLogger("aiops.operator").warning("operator_answer_rejected reason=json_parse")
                 raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
-            from aiops_diagnostics.redaction import contains_secret
+            from aiops_diagnostics.common.redaction import contains_secret
 
             if contains_secret(raw, (task.bearer, task.grant)):
                 _answer_refused("credential")

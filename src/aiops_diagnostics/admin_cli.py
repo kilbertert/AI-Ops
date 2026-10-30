@@ -10,7 +10,7 @@ from typing import Annotated, Any
 
 import typer
 
-from aiops_diagnostics.config import Settings, selected_config_file
+from aiops_diagnostics.common.config import Settings, selected_config_file
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 
 admin_app = typer.Typer(name="admin", help="AI-Ops 网关管理操作（环境清单收敛）", no_args_is_help=True)

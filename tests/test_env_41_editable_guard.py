@@ -39,7 +39,7 @@ _HEALTHY = {
     "HAS_INIT": "no",
     "HAS_PTH": "yes",
     "PTH_TARGET": _SRC,
-    "FAQ_DATA": f"{_SRC}/aiops_diagnostics/faq_catalog.json",
+    "FAQ_DATA": f"{_SRC}/aiops_diagnostics/conversation/faq_catalog.json",
 }
 
 
@@ -164,7 +164,7 @@ def test_the_guard_passes_on_the_healthy_observations(tmp_path: Path) -> None:
         ("API_FILE", f"{_SP}/aiops_diagnostics/gateway_api.py"),
         ("HAS_INIT", "yes"),
         ("HAS_PTH", "no"),
-        ("FAQ_DATA", f"{_SP}/aiops_diagnostics/faq_catalog.json"),
+        ("FAQ_DATA", f"{_SP}/aiops_diagnostics/conversation/faq_catalog.json"),
     ],
 )
 def test_each_broken_observation_fails_the_guard(tmp_path: Path, field: str, broken: str) -> None:

@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     TRANSPORT_FAILURES,
     ErrorMapping,
     HttpFailure,
@@ -53,8 +53,8 @@ from aiops_diagnostics.bounded_http import (
     quote_segment,
     request_json,
 )
+from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
 from aiops_diagnostics.gateway_config import canonical_gateway_url
-from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 
 #: Dify workflow id 的形状（1.17.x 的 UUID）。不匹配就拒绝，不做兼容读取。
 WORKFLOW_ID_PATTERN = re.compile(

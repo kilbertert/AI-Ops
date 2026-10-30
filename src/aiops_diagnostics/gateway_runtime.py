@@ -12,8 +12,12 @@ from dataclasses import dataclass
 from datetime import UTC
 from typing import Any
 
-from aiops_diagnostics.config import Settings
-from aiops_diagnostics.conversation_store import BUSY_LOCK_SECONDS
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.common.i18n import (
+    DEFAULT_LANGUAGE,
+)
+from aiops_diagnostics.common.redaction import redact_text
+from aiops_diagnostics.conversation.conversation_store import BUSY_LOCK_SECONDS
 from aiops_diagnostics.data.sources import SourceError, scoped_live_sources
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_from_json, scope_to_json
 from aiops_diagnostics.gateway_config import GatewayServerSettings
@@ -24,9 +28,6 @@ from aiops_diagnostics.health.health_report import (
     HEALTH_RULE_VERSION,
     HealthReportError,
     build_minimal_health_report,
-)
-from aiops_diagnostics.i18n import (
-    DEFAULT_LANGUAGE,
 )
 from aiops_diagnostics.identity.order_visibility import tenant_matches
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
@@ -62,7 +63,6 @@ from aiops_diagnostics.operator.ops_analysis import (
 from aiops_diagnostics.operator.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
-from aiops_diagnostics.redaction import redact_text
 
 _LOGGER = logging.getLogger("aiops.gateway_runtime")
 
@@ -147,7 +147,7 @@ class GatewayRuntime:
         # and the route answers a uniform 404.
         self._media_proxy: MediaProxy | None = None
         # Conversation turn backfill (T4/#172): same DB file, lazy-built.
-        from aiops_diagnostics.conversation_store import ConversationStore
+        from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
         self.conversation_store = ConversationStore(store.path)
         # Runtime registry (#584): which Dify app serves a (tenant, entry). Same
@@ -1618,8 +1618,8 @@ class GatewayRuntime:
     def classify_consumer(
         self, question, *, language, previous_question="", previous_order=False, selected_order=False
     ):
+        from aiops_diagnostics.common.model_request import resolve_provider_api_key
         from aiops_diagnostics.consumer.consumer_intent import classify
-        from aiops_diagnostics.model_request import resolve_provider_api_key
 
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         provider = settings.agent.select_provider(None)
@@ -1784,7 +1784,7 @@ class GatewayRuntime:
         """
         if conversation_turn is None:
             return
-        from aiops_diagnostics.conversation_store import ConversationError
+        from aiops_diagnostics.conversation.conversation_store import ConversationError
 
         conversation_id, scope_fingerprint, turn_no = conversation_turn
         with contextlib.suppress(ConversationError):
@@ -1829,7 +1829,7 @@ class GatewayRuntime:
             stop_renewer.set()
         if conversation_turn is None:
             return
-        from aiops_diagnostics.conversation_store import ConversationError
+        from aiops_diagnostics.conversation.conversation_store import ConversationError
 
         conversation_id, scope_fingerprint, turn_no = conversation_turn
         with contextlib.suppress(ConversationError):

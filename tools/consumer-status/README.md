@@ -122,7 +122,7 @@ python tools/consumer-status/independent_cpms.py \
 | 目标不在**任何**仓库/工作树内 | `--out .` 能把完整订单号写进会被提交的地方 |
 | 目录属于当前用户、权限 0700，文件创建即 0600 | 先用 umask 创建再 chmod 有一段窗口 |
 
-底层复用 `aiops_diagnostics.private_files.write_private_text`（tempfile + `replace`，
+底层复用 `aiops_diagnostics.common.private_files.write_private_text`（tempfile + `replace`，
 **不跟随**目标链接）；工具侧只补"库外"这一条，不改业务模块。
 
 拒绝与失败都是非零退出；stdout/stderr 保持脱敏。

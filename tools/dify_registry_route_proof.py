@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     database = _copy_database(source)
     print(f"副本：{database}")
 
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime

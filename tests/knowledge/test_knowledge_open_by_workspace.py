@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.dify.dify_workspaces import (
     DIFY_WORKSPACE_AMBIGUOUS,
     DIFY_WORKSPACE_UNRESOLVED,
@@ -30,7 +31,6 @@ from aiops_diagnostics.dify.dify_workspaces import (
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.http_auth import build_internal_token_headers
 from aiops_diagnostics.knowledge.kb_onboarding import encrypt_credential
 
 INTERNAL_SECRET = "internal-token-secret-0123456789"

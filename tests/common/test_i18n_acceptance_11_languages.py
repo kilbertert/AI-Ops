@@ -54,11 +54,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
@@ -153,7 +153,7 @@ OPERATOR_CATALOG_GAP = ()
 
 def _catalog_languages(platform: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(served, missing) for one platform's fixed-QA catalog."""
-    from aiops_diagnostics.faq import FAQCatalog
+    from aiops_diagnostics.conversation.faq import FAQCatalog
 
     catalog = FAQCatalog.bundled()
     served = tuple(tag for tag in LANGUAGES if catalog.served_language(platform, tag) == tag)
@@ -260,7 +260,7 @@ def test_clarification_and_fallback_copy_cover_every_language(language: str) -> 
     a clarification or an error arrives in a language the reader cannot use, and
     nothing else in the system reports it.
     """
-    from aiops_diagnostics import i18n
+    from aiops_diagnostics.common import i18n
 
     tables = {
         "QA_FALLBACK_MESSAGES": i18n.QA_FALLBACK_MESSAGES,
@@ -284,7 +284,7 @@ def test_clarification_and_fallback_copy_cover_every_language(language: str) -> 
 
 def test_thai_and_khmer_keep_the_requested_prompt_language() -> None:
     """旧分词限制不再决定已登记语言能否进入模型。"""
-    from aiops_diagnostics.i18n import can_prompt_in, effective_language
+    from aiops_diagnostics.common.i18n import can_prompt_in, effective_language
 
     for language in ("th", "km"):
         assert can_prompt_in(language) is True, f"{language} 应可提示"
@@ -297,7 +297,7 @@ def test_thai_and_khmer_keep_the_requested_prompt_language() -> None:
 
 def test_traditional_is_its_own_key_not_a_fold_onto_simplified() -> None:
     """`zh-Hant` 是独立语言键；请求繁体不得被答成简体 (#531 的回归门)."""
-    from aiops_diagnostics.i18n import resolve_language
+    from aiops_diagnostics.common.i18n import resolve_language
 
     assert resolve_language("zh-Hant") == "zh-Hant"
     assert resolve_language("zh-Hant-TW") == "zh-Hant"

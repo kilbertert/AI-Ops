@@ -255,7 +255,7 @@ POST /v1/assistant/questions
 - **会话（`conversation_id`）按入口隔离**：同一用户从 `operator` 与 `consumer`
   进来的会话是**两个**，`GET/DELETE /v1/conversations/{id}` 跨入口会得到 `404`。
   这是有意的，前端不要复用同一个 `conversation_id`。
-  （`business_entry` 是会话绑定的组成部分；用例见 `tests/test_conversation_api.py`
+  （`business_entry` 是会话绑定的组成部分；用例见 `tests/conversation/test_conversation_api.py`
   的"same user, different entry → 404"。）
 - **可见订单范围不同**：管家端按"该账号所属运营商的站点集合"，客户端按"本人"。
   同一条订单，两个入口可能一个能查一个不能 —— 这是**预期**，不是数据不一致。

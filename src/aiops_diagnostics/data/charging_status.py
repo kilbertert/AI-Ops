@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
     HttpFailure,
     RequestSpec,

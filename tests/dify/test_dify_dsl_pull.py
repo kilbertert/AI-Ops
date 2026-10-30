@@ -94,9 +94,9 @@ def _serve(monkeypatch, *, payload=None, body: str | None = None, error: Excepti
             raise error
         return _fake_response(payload, body=body)
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.time.sleep", lambda seconds: None)
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.random.uniform", lambda a, b: 0.0)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.time.sleep", lambda seconds: None)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.random.uniform", lambda a, b: 0.0)
     return seen
 
 
@@ -738,7 +738,7 @@ def test_a_dataset_from_another_workspace_is_refused_not_read_as_no_knowledge(mo
             request.full_url, 404, "Not Found", {}, io.BytesIO(b'{"message":"Dataset not found."}')
         )
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", fake_urlopen)
 
     client = DifyDslClient(_source(workspace_id="new-workspace"))
 
@@ -761,7 +761,7 @@ def test_the_workspace_header_is_sent_on_the_dataset_read(monkeypatch) -> None:
         seen["workspace"] = request.headers.get("X-workspace-id") or ""
         return _fake_response({"external_knowledge_info": {"external_knowledge_id": "kb-canary-2"}})
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", fake_urlopen)
 
     client = DifyDslClient(_source(workspace_id="tenant-workspace"))
 

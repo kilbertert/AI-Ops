@@ -6,7 +6,7 @@ import typer
 import uvicorn
 from rich.console import Console
 
-from aiops_diagnostics.console_encoding import configure_windows_stdio
+from aiops_diagnostics.common.console_encoding import configure_windows_stdio
 from aiops_diagnostics.deployment_environment import require_deployment_identity
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings

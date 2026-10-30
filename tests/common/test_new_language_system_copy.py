@@ -10,13 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from aiops_diagnostics.health.health_report_copy import (
-    HEALTH_CURVE_NAMES,
-    HEALTH_STOP_FALLBACK_MESSAGES,
-    HEALTH_SUMMARY_MESSAGES,
-    YKC_STOP_REASON_MESSAGES,
-)
-from aiops_diagnostics.i18n import (
+from aiops_diagnostics.common.i18n import (
     NON_CHINESE_LANGUAGES,
     SUPPORTED_LANGUAGES,
     ZERO_ORDER_REMINDER_MESSAGES,
@@ -25,6 +19,12 @@ from aiops_diagnostics.i18n import (
     diagnosis_error_message,
     diagnosis_failure_message,
     zero_order_reminder,
+)
+from aiops_diagnostics.health.health_report_copy import (
+    HEALTH_CURVE_NAMES,
+    HEALTH_STOP_FALLBACK_MESSAGES,
+    HEALTH_SUMMARY_MESSAGES,
+    YKC_STOP_REASON_MESSAGES,
 )
 from aiops_diagnostics.publication.shortcut_lifecycle import _BUNDLED_SHORTCUTS, _SHARED_ACTION_FIELDS
 
@@ -58,7 +58,7 @@ def test_no_system_copy_is_chinese_for_the_added_languages(language: str) -> Non
     Chinese back into a *different* key (`incomplete`) therefore left the suite
     green. A gate that checks one key per table guards one key per table.
     """
-    from aiops_diagnostics.i18n import (
+    from aiops_diagnostics.common.i18n import (
         CLARIFICATION_MESSAGES,
         DIAGNOSIS_ERROR_MESSAGES,
         DIAGNOSIS_FAILURE_MESSAGES,
@@ -153,7 +153,7 @@ def test_faq_reports_the_served_language_not_the_requested_one() -> None:
     statement about the payload — the same shape this workstream removes
     everywhere else.
     """
-    from aiops_diagnostics.faq import FAQCatalog
+    from aiops_diagnostics.conversation.faq import FAQCatalog
 
     catalog = FAQCatalog.bundled()
     # A language the catalog DOES carry is reported as itself — asserted on both
@@ -181,7 +181,7 @@ def test_faq_reports_the_served_language_not_the_requested_one() -> None:
 
 def test_the_public_catalog_entry_shape_is_unchanged() -> None:
     """The four-key entry contract survives: the honesty fix is not a shape change."""
-    from aiops_diagnostics.faq import FAQCatalog
+    from aiops_diagnostics.conversation.faq import FAQCatalog
 
     entry = FAQCatalog.bundled().catalog("consumer")[0]
     assert set(entry) == {"question_id", "question", "answer", "format"}
@@ -227,7 +227,7 @@ def test_a_shortcut_row_reports_the_language_its_copy_is_in() -> None:
 
 def _catalog_with(consumer_i18n: dict[str, dict[str, dict[str, str]]]):
     """A minimal two-entry catalog, so list-level coverage is observable."""
-    from aiops_diagnostics.faq import FAQCatalog
+    from aiops_diagnostics.conversation.faq import FAQCatalog
 
     def entry(qid: str, en: bool):
         e = {
@@ -261,7 +261,7 @@ def test_a_partially_translated_catalog_is_not_claimed_to_be_translated() -> Non
     assert catalog.served_language("consumer", "en") == "zh"
     assert catalog.served_language("consumer", "zh") == "zh"
     # Every consumer entry translated -> the list really is English.
-    from aiops_diagnostics.faq import FAQCatalog
+    from aiops_diagnostics.conversation.faq import FAQCatalog
 
     full = FAQCatalog(
         {

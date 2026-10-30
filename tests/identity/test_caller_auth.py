@@ -62,7 +62,7 @@ def test_introspection_builds_immutable_scope(monkeypatch: pytest.MonkeyPatch) -
         return _Response(_active())
 
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen",
         respond,
     )
 
@@ -86,7 +86,7 @@ def test_introspection_form_encodes_basic_credentials(monkeypatch: pytest.Monkey
         requests.append(request)
         return _Response(_active())
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", respond)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", respond)
     settings = IntrospectionSettings(
         url="https://auth.example.test/oauth2/introspect",
         client_id="client id",
@@ -121,7 +121,7 @@ def test_introspection_fails_closed(
     expected_code: str,
 ) -> None:
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen",
         lambda *_args, **_kwargs: _Response(payload),
     )
 
@@ -140,7 +140,7 @@ def test_introspection_transport_failure_is_retryable(monkeypatch: pytest.Monkey
     def unavailable(*_args, **_kwargs):
         raise urllib.error.URLError("offline")
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", unavailable)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", unavailable)
 
     with pytest.raises(CallerAuthError) as excinfo:
         IntrospectionCallerResolver(_settings()).resolve(
@@ -172,7 +172,7 @@ def test_introspection_non_utf8_body_is_a_coded_domain_error(monkeypatch: pytest
             return b"\xff\xfe\x00 invalid utf-8"
 
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen",
         lambda *_a, **_k: _BadEncoding(),
     )
 
@@ -199,7 +199,7 @@ def test_introspection_mid_connection_failure_is_a_coded_domain_error(
     def _dropped(*_args, **_kwargs):
         raise ConnectionResetError("connection reset by peer")
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", _dropped)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", _dropped)
 
     with pytest.raises(CallerAuthError) as excinfo:
         IntrospectionCallerResolver(_settings()).resolve(
@@ -226,7 +226,7 @@ def test_introspection_truncated_body_is_a_coded_domain_error(monkeypatch: pytes
             raise http.client.IncompleteRead(b'{"active": tr')
 
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen",
         lambda *_a, **_k: _Truncated(),
     )
 

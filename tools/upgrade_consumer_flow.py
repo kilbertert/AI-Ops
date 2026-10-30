@@ -72,7 +72,7 @@ def live_documents(source):
     variables.append(
         {"id": MODE_VARIABLE, "name": MODE_VARIABLE, "value_type": "string", "value": "documents"}
     )
-    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+    from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES
 
     language = next(v for v in nodes["start"]["variables"] if v["variable"] == "language")
     language["options"] = list(SUPPORTED_LANGUAGES)

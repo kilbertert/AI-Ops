@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
@@ -225,7 +225,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
         seen.append((request.full_url, {k: v for k, v in request.header_items()}))
         return _Response()
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", fake_urlopen)
     client = KbServiceClient("http://kb.local", tenant_id="tenant-a", service_token="svc-token")
 
     image_grant = MediaGrant(
@@ -292,7 +292,7 @@ def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None
     def not_found(request, timeout=None):
         raise urllib.error.HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", not_found)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", not_found)
     try:
         client.fetch_media(grant)
     except MediaNotFound:
@@ -303,7 +303,7 @@ def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None
     def unreachable(request, timeout=None):
         raise OSError("connection refused")
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", unreachable)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", unreachable)
     try:
         client.fetch_media(grant)
     except Exception as exc:  # KnowledgeSearchUnavailable — route maps to 503
@@ -344,7 +344,7 @@ def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -
             return False
 
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen",
         lambda request, timeout=None: _Response(),
     )
     # The retry BACKOFF is not what this test is about — the mapping is. Left real,
@@ -416,7 +416,7 @@ def test_kb_client_retries_transient_video_not_found(monkeypatch) -> None:
             return _Response(b'{"code":102,"message":"document not found"}')
         return _Response(b"\x00\x00\x00\x18ftypisom")
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", fake_urlopen)
     assert client.fetch_media(grant).startswith(b"\x00\x00\x00\x18ftyp")
     assert calls == 2
 
@@ -452,7 +452,7 @@ def test_kb_client_maps_http_200_unknown_business_error_to_unavailable(monkeypat
             return False
 
     monkeypatch.setattr(
-        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen",
         lambda request, timeout=None: _Response(),
     )
     try:
@@ -473,7 +473,7 @@ def test_runtime_serve_media_rechecks_published_agent_liveness(tmp_path: Path) -
     CURRENT published version. That condition used to be here and it 403'd every
     promotional image and video on 41 from 2026-09-20 (see
     `test_serving_survives_the_agent_being_republished`)."""
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
@@ -580,7 +580,7 @@ def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> Non
     {"code":102,"document not found"} for documents owned by real tenants —
     deterministic 404 on every signed video URL while the same doc_id
     downloaded fine under the owning tenant's header."""
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
@@ -680,7 +680,7 @@ def test_promo_media_grant_validates_against_its_own_agent(tmp_path: Path) -> No
     deliberately SKIPS promo-pinned agents (#231) — so the comparison could
     never hold for a promotional grant. The check must validate the agent the
     grant actually names."""
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
@@ -823,7 +823,7 @@ def test_serving_survives_the_agent_being_republished(tmp_path: Path) -> None:
     change, and the URL expires on its own within the TTL. Disabling the agent
     remains the revocation that takes effect immediately.
     """
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
@@ -925,7 +925,7 @@ def test_republish_that_removes_the_knowledge_base_revokes_media(tmp_path: Path)
     base, because the historical snapshot still lists it. The operator took the
     library away; the bytes must stop being served.
     """
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
@@ -1022,7 +1022,7 @@ def test_dify_signed_media_serves_despite_having_no_agent(tmp_path: Path) -> Non
     agent liveness to check; an agent's own media must still be checked, which
     is what the tests above pin.
     """
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.publication.agent_lifecycle import AgentStore
 
