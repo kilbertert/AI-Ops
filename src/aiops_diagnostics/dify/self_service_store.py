@@ -233,7 +233,11 @@ class SelfServiceStore:
         scenario = scenario or dual_entry.scenario(entry)
         if scenario != dual_entry.scenario(entry):
             raise SetupConflict("SETUP_APP_CONFLICT")
-        values = (app_id, tenant_id, workspace_id, agent_name, profile_id, actor, entry, scenario)
+        #: 判"同一条登记"的字段。**`created_by` 不在里面**：它是"谁先登记的"，
+        #: 不是这条登记的身份。启动时的纳管（`managed-adoption`）会对已经在册的应用再
+        #: 调一次 `register`，把 actor 算进比较就会让**每次启动都失败** —— 2026-10-30
+        #: 41 的 CD 自检就是这么红的（`SetupConflict: SETUP_APP_CONFLICT`，主机自动回滚）。
+        identity = (app_id, tenant_id, workspace_id, agent_name, profile_id, entry, scenario)
         encoded = json.dumps(targets or {}, ensure_ascii=False, sort_keys=True)
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -248,12 +252,11 @@ class SelfServiceStore:
                             "workspace_id",
                             "agent_name",
                             "profile_id",
-                            "created_by",
                             "entry",
                             "scenario",
                         )
                     )
-                    != values
+                    != identity
                 ):
                     raise SetupConflict("SETUP_APP_CONFLICT")
                 if targets is not None and old["targets_json"] != encoded:
@@ -263,7 +266,7 @@ class SelfServiceStore:
                 "INSERT INTO operator_apps"
                 "(app_id,tenant_id,workspace_id,agent_name,profile_id,created_by,entry,scenario,"
                 "environment,targets_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (*values, environment, encoded),
+                (*identity[:5], actor, *identity[5:], environment, encoded),
             )
 
 
