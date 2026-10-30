@@ -368,18 +368,32 @@ def final_answer(raw, context, language, content, *, copy_pack=None):
         selected = json.loads(raw)
     except (ValueError, TypeError) as exc:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid structured answer") from exc
-    if not isinstance(selected, dict) or set(selected) != {"kind", "faq_id"}:
+    # `reply` 是可选字段：编排页的提示词可以自己写正文（见 consumer_reply）。
+    # 没带它的应用行为与之前完全一致 —— 老版本不会被这次改动影响。
+    if not isinstance(selected, dict) or not {"kind", "faq_id"} <= set(selected) <= {
+        "kind",
+        "faq_id",
+        "reply",
+    }:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid answer fields")
     kind = selected["kind"]
     if (context or {}).get("live_snapshot"):
         if kind != "realtime" or selected["faq_id"]:
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "live answer kind differs")
+        if selected.get("reply"):
+            from aiops_diagnostics.consumer.consumer_reply import model_reply
+
+            return model_reply(selected["reply"], context["live_snapshot"], language=language)
         return live_answer(
             context["live_snapshot"],
             language,
             localized=context.get("answer_language_version") == 2,
             pack=copy_pack,
         )
+    if selected.get("reply"):
+        # 没有实时快照时正文只能来自知识库或固定文案；模型不该在这里写正文，
+        # 否则一段没有取数依据的话会被当成"知识库回答"交付出去。
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply without live data")
     if kind == "knowledge":
         row = next(
             (r for r in (context or {}).get("candidates", []) if r["faq_id"] == selected["faq_id"]), None
