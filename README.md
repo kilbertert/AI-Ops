@@ -80,6 +80,8 @@ flowchart LR
 
 ## 四、仓库目录
 
+新增或移动文件遵循[现行目录规则](docs/architecture/repository-layout.md#现行目录规则)，CI对根层文件与一级目录进行检查。
+
 | 目录 | 现在的用途 |
 |---|---|
 | `src/aiops_diagnostics/` | Python Gateway、共享能力与集成 |
