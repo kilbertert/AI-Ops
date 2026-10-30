@@ -79,6 +79,10 @@ class GatewayServerSettings:
     chat_dify_key_dir: str = ""
     chat_node_targets_file: str = ""
     operator_profiles_file: str = ""
+    #: 环境清单（`ops/environments/<env>.toml`）路径。运行时只用它的 `[[channels]]` 段：
+    #: 哪一端的**使用渠道**已经接入。缺省空 ⇒ 每一端都按"渠道待接入"显示（fail closed）。
+    #: 不从"有没有应用/有没有正式版"推导渠道状态 —— 那会把刚开通的客户显示成可用。
+    environment_manifest_file: str = ""
     operator_trial_login_url: str = ""
     operator_trial_key: str = field(repr=False, default="")
     consumer_chatflow_enabled: bool = False
@@ -338,6 +342,8 @@ class GatewayServerSettings:
             in {"1", "true", "yes", "on"},
             operator_profiles_file=_env("AIOPS_GATEWAY_OPERATOR_PROFILES_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_PROFILES_FILE"),
+            environment_manifest_file=_env("AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE")
+            or _file_value(file_values, "AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE"),
             chat_node_targets_file=_env("AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE"),
             operator_trial_login_url=_env("AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL")
