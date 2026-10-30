@@ -33,7 +33,8 @@ public final class CpmsReadTool implements ToolCallback {
 
     /** 每次调用重新验证授权；交付前记录证据并再次核验，任何失败均不交付正文。 */
     public interface Authorization {
-        Grant require(String runId, String manifestId, String tool);
+        /** ``arguments`` 是模型提议的参数；节点只检查形状，语义（能不能用）由网关判。 */
+        Grant require(String runId, String manifestId, String tool, JsonNode arguments);
         void record(String runId, String manifestId, String tool, Grant grant, JsonNode evidence);
     }
 
@@ -101,8 +102,12 @@ public final class CpmsReadTool implements ToolCallback {
     @Override public String call(String input, ToolContext context) {
         try {
             JsonNode parameters = JSON.readTree(input == null ? "" : input);
-            if (parameters == null || !parameters.isObject() || !parameters.isEmpty()) {
-                throw refused("arguments_forbidden");
+            if (parameters == null || !parameters.isObject()) throw refused("invalid_arguments");
+            // 只检查形状：**能不能用**由网关判，因为只有它知道用户原话。
+            for (var parameter : parameters.properties()) {
+                if (!parameter.getValue().isTextual() || parameter.getValue().asText().length() > 80) {
+                    throw refused("invalid_arguments");
+                }
             }
             if (context == null) throw refused("run_context_required");
             Object id = context.getContext().get(GovernedToolRuntime.RUN_ID_KEY);
@@ -112,7 +117,7 @@ public final class CpmsReadTool implements ToolCallback {
                 throw refused("run_context_required");
             }
             String tool = definition.name();
-            Grant grant = authorization.require(runId, manifestId, tool);
+            Grant grant = authorization.require(runId, manifestId, tool, parameters);
             requireLive(grant);
             // 请求目标来自授权，不来自工具名 —— 这正是「新增一条只读路径不必改本文件」。
             JsonNode body = get(grant, grant.request().target());
@@ -126,7 +131,7 @@ public final class CpmsReadTool implements ToolCallback {
             evidence.put("observed_at", Instant.now().toString());
             evidence.set("data", data);
             requireLive(grant);
-            Grant current = authorization.require(runId, manifestId, tool);
+            Grant current = authorization.require(runId, manifestId, tool, parameters);
             requireLive(current);
             if (!grant.equals(current)) throw refused("authorization_changed");
             authorization.record(runId, manifestId, tool, grant, evidence);

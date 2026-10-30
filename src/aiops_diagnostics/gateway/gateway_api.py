@@ -159,6 +159,7 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import (
     normalize_search_response,
 )
 from aiops_diagnostics.knowledge.knowledge_sources import KnowledgeSourceResolver
+from aiops_diagnostics.operator import operator_tools
 from aiops_diagnostics.publication.agent_content import AGENT_STARTERS
 from aiops_diagnostics.publication.agent_lifecycle import (
     AGENT_MANAGE_SCOPE,
@@ -334,15 +335,26 @@ class OperatorPreviewTool(BaseModel):
 
     provider_id: str = Field(min_length=1, max_length=64)
     provider_type: Literal["api"]
-    tool_name: Literal["cpms_order_detail", "cpms_charging_samples"]
+    #: 名字对着**声明**校验，不再是写死的字面量联合。未声明的工具名仍然被拒 ——
+    #: 判据从常量变成了数据，强度没变。
+    tool_name: str = Field(min_length=1, max_length=64)
     enabled: bool = Field(default=True, strict=True)
+
+    @field_validator("tool_name")
+    @classmethod
+    def _declared_tool(cls, value: str) -> str:
+        if value not in operator_tools.names():
+            raise ValueError("undeclared operator tool")
+        return value
 
 
 class OperatorPreviewDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     pre_prompt: str = Field(min_length=1, max_length=8000)
-    tools: list[OperatorPreviewTool] = Field(max_length=2)
+    # 上限来自**声明**，不是写死的 2。加一个工具却忘了改这里，草稿试用会以 422 的形状
+    # 报「请求不合法」——那不是工具不合法，是这个常量过期了。
+    tools: list[OperatorPreviewTool] = Field(max_length=len(operator_tools.names()))
 
 
 class OperatorTrialCancelRequest(BaseModel):

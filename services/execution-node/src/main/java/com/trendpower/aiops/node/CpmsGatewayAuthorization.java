@@ -13,11 +13,13 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
     private final GatewayClient gateway;
     CpmsGatewayAuthorization(GatewayClient gateway) { this.gateway = gateway; }
 
-    @Override public CpmsReadTool.Grant require(String run, String manifest, String tool) {
+    @Override public CpmsReadTool.Grant require(String run, String manifest, String tool,
+                                                com.fasterxml.jackson.databind.JsonNode arguments) {
         // 声明契约版本：旧 Gateway 不认识这个头，会回一份没有 `request` 的载荷，那样在
         // 下面被拒 —— 两个方向都落在可预期的位置，而不是等完成回调里缺字段。
         JsonNode data = gateway.post(
-                path(run, tool) + "/authorization", "{}", manifest, CpmsReadTool.CONTRACT);
+                path(run, tool) + "/authorization",
+                arguments == null ? "{}" : arguments.toString(), manifest, CpmsReadTool.CONTRACT);
         if (!run.equals(data.path("run_id").asText()) || !tool.equals(data.path("tool").asText())
                 || !manifest.equals(data.path("manifest_id").asText()) || !data.path("site_ids").isArray()) {
             throw CpmsReadTool.refused("authorization_identity_mismatch");

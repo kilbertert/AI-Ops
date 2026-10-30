@@ -3,6 +3,8 @@
 import json
 import re
 
+from aiops_diagnostics.operator import operator_tools
+
 
 class OperatorRefused(RuntimeError):
     pass
@@ -44,7 +46,17 @@ def manifest(text):
 
     body = json.loads(text)
     body["schema"] = SCHEMA
-    body["tools"] = []
+    # 无订单回合保留**能在这类运行里用的**工具（目前只有站点查询）。订单诊断工具没有
+    # 订单就没有取证对象，删掉它们不是裁剪，是正确性。
+    kept = []
+    for tool in body["tools"]:
+        declared = operator_tools.tool(tool["name"])
+        if "conversation" not in declared.applies_to:
+            continue
+        # 参数 schema 来自**声明**，不来自模板：模板只有运营勾选的名单，
+        # 参数形状的唯一定义在声明里。
+        kept.append({**tool, "input_schema": declared.input_schema()})
+    body["tools"] = kept
     sop = "\n".join(body["system_messages"]).removesuffix("\n" + OPERATOR_OUTPUT)
     body["system_messages"] = ["应用业务背景：\n" + sop + "\n\n" + INSTRUCTIONS]
     return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

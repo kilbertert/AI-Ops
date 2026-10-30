@@ -112,13 +112,14 @@ def _parse(payload: object, identity: str) -> ExecutionManifest:
     if not all(isinstance(item, str) and item for item in system_messages):
         raise ExecutionManifestError("execution manifest system messages are invalid")
     tools = payload.get("tools")
-    if (
-        not isinstance(tools, list)
-        or (not tools and payload.get("schema") not in {OPERATOR_SCHEMA, "operator-conversation/1"})
-        or (payload.get("schema") == "operator-conversation/1" and tools)
+    if not isinstance(tools, list) or (
+        not tools and payload.get("schema") not in {OPERATOR_SCHEMA, "operator-conversation/1"}
     ):
         # 空工具集合不是合法期望，也不是拒绝手段（节点侧同一结论）。
         raise ExecutionManifestError("execution manifest declares no controlled tools")
+    # 对话回合**可以**带工具（ADR-0182）：无订单不等于无能力。哪些工具能出现在哪一类
+    # 运行里，由声明（`operator_tools.json` 的 `applies_to`）判，不在这里按协议名判 ——
+    # 协议名说「这次怎么回答」，说不清「这次能查什么」。
     names: list[str] = []
     for item in tools:
         if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip():
