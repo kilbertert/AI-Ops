@@ -78,3 +78,16 @@
 `test_resolve_follows_the_pinned_version_not_the_latest` 与端到端回读那条变红。
 
 未覆盖：真实租户发布与真机观感；本片**未完成业务验收**。
+
+## 审查后补的两条约束（2026-10-30，Codex 评审）
+
+初版把这两点做漏了，两处都会造成真实故障，记在这里因为它们不是实现细节：
+
+- **非组合式语种必须返回"无覆盖"而不是一份词表。** `bundled()` 对未收录语种退回英文，
+  所以若 `resolve` 对 de/fr/zh-Hant/th 也返回一个 pack，一个**只发布了中文文案**的租户
+  会让德语答复的来源标签与整段模板变成英文。`resolve` 因此对
+  `language not in COMPOSED_LANGUAGES` 返回 `None`，含义是"按既有本地化路渲染，一行都不改"。
+- **格式写法要在发布时验，不能留到渲染时。** `Formatter().parse` 只返回字段名，
+  `{status:{missing}}`、`{status!z}`、`{status:invalid}` 都能通过占位符比对，
+  却在渲染时抛 `KeyError`/`ValueError` —— 那是把"发布时能发现"变成"用户提问时 500"。
+  发布校验因此用假值真跑一遍 `format()`，异常即拒。

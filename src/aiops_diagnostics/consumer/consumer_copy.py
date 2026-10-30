@@ -81,6 +81,13 @@ def validate(bundle: Any) -> dict[str, dict[str, str]]:
                 raise CopyBundleInvalid(f"{language}.{key} 不能为空")
             if len(text) > MAX_COPY_CHARS:
                 raise CopyBundleInvalid(f"{language}.{key} 超过 {MAX_COPY_CHARS} 字（实际 {len(text)}）")
+            # `Formatter().parse` 只看字段名，`{status:{missing}}`、`{status!z}`、
+            # `{status:invalid}` 都能过那一关，却会在渲染时抛 KeyError/ValueError ——
+            # 那等于把"发布时能发现"变成"用户提问时 500"。这里用假值真跑一遍。
+            try:
+                text.format(**{name: "x" for name in _fields(text)})
+            except (KeyError, IndexError, ValueError, AttributeError, TypeError) as exc:
+                raise CopyBundleInvalid(f"{language}.{key} 的格式写法无法渲染：{type(exc).__name__}") from exc
             missing = _fields(default[key]) - _fields(text)
             extra = _fields(text) - _fields(default[key])
             if missing or extra:
@@ -107,7 +114,7 @@ def resolve(
     *,
     version: int | None,
     language: str,
-) -> dict[str, str]:
+) -> dict[str, str] | None:
     """按**钉住的版本**取词表。`version` 为 0/None 表示"没发布过/历史答复"→ 内置文案。
 
     为什么按版本而不是按"当前最新"：答复在生成时把版本写进了 run context，
@@ -117,6 +124,12 @@ def resolve(
     版本行查不到时退回内置文案而不是抛错：那一行是只增不改的台账，理论上不会缺；
     真缺了，给用户一份能读的内置文案比让这条答复失败更有用。
     """
+    if language not in COMPOSED_LANGUAGES:
+        # 这一句是回归防线：`bundled()` 对未收录语种退回**英文**词表，而 de/fr/es/pt/vi/mn/th/km
+        # 的正文在 `consumer_language.json` 里。若在这里返回一个 pack，就会把它们的
+        # 来源标签、退款标签、模板结构整体换成英文 —— 一个只发布了中文文案的租户，
+        # 德语答复会突然变成英文。返回 None 表示"按既有本地化路渲染，一行都不改"。
+        return None
     if not version:
         return bundled(language)
     _, bundle = store.consumer_copy(tenant_id, int(version))

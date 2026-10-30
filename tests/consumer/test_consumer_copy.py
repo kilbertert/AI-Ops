@@ -65,6 +65,10 @@ def test_overriding_wording_is_accepted():
         ({"languages": {"zh": {"status_lede": "这单「充电结束」。"}}}, "占位符"),
         ({"languages": {"zh": {"status_lede": "{status}{nope}"}}}, "占位符"),
         ({"languages": {"zh": {"status_ledee": "{status}"}}}, "文案键"),
+        # 格式说明符/嵌套字段：`Formatter().parse` 只看字段名，必须真跑一遍才拦得住。
+        ({"languages": {"en": {"status_lede": "{status:{missing}}"}}}, "无法渲染"),
+        ({"languages": {"en": {"status_lede": "{status!z}"}}}, "无法渲染"),
+        ({"languages": {"en": {"status_lede": "{status:invalid}"}}}, "无法渲染"),
         ({"languages": {"zh": {"status_lede": "   "}}}, "不能为空"),
         ({"languages": {"xx": {"status_lede": "{status}"}}}, "不能改文案"),
         # zh-Hant 也是整段模板：明确拒绝，而不是"发布了但悄悄不生效"。
@@ -89,6 +93,31 @@ def test_placeholder_check_covers_every_language():
     """德语模板的占位符与中文不同（`{order_no}` 位置不同），校验必须逐语种比。"""
     with pytest.raises(CopyBundleInvalid):
         validate({"languages": {"de": {"billing_lede": "Abrechnung: {order_amount}"}}})
+
+
+# ── 回归：非组合式语种不许被英文兜底顶掉（Codex P1）──────────────────────────
+
+
+@pytest.mark.parametrize("language", ["de", "fr", "zh-Hant", "th"])
+def test_localized_languages_are_never_rendered_from_the_english_fallback(store, language):
+    """只发布了中文文案时，德语/法语/繁中的答复必须与未引入文案包时逐字相同。
+
+    `bundled()` 对未收录语种退回英文词表；若 `resolve` 在这里返回一个 pack，
+    这些语种的来源标签与整段模板就会被换成英文 —— 一个只改中文的发布动作
+    会让德语用户看到英文。返回 `None` 才是"一行都不改"。
+    """
+    from aiops_diagnostics.consumer.consumer_copy import COMPOSED_LANGUAGES
+
+    assert language not in COMPOSED_LANGUAGES
+    store.publish_consumer_copy(
+        TENANT, {"languages": {"zh": {"status_lede": "这单「{status}」。"}}}, published_by="ops"
+    )
+    assert resolve(store, TENANT, version=1, language=language) is None
+    assert resolve(store, TENANT, version=None, language=language) is None
+    # 未传 pack 与传 None 必须产出同一段正文（既有本地化模板路）。
+    baseline = status_answer(STATUS, language, localized=True)
+    assert status_answer(STATUS, language, localized=True, pack=None) == baseline
+    assert "charging status record" not in _text(baseline)
 
 
 # ── 合并：只影响被覆盖的语种 ────────────────────────────────────────────────

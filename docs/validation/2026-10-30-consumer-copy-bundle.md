@@ -54,6 +54,21 @@ $ aiops-admin consumer-copy publish --tenant T1 --db $T/g.db --file $T/bad2.json
   （按钉住的 `copy_version` 复现，不是 503）。
 - 把库里正文改成"改过的正文" → 回读被拒绝，改动后的正文不会被交出去。
 
+## 审查发现的两条缺陷与修复（Codex P1/P2）
+
+**P1（回归，严重）：非组合式语种会被英文兜底顶掉。**
+`resolve` 对任何语种都返回一个 pack，而 `bundled()` 对未收录语种退回**英文**词表。
+于是一个**只发布了中文文案**的租户，德语/法语/繁中的来源标签与整段模板会被换成英文。
+修复：`resolve` 对不在 `COMPOSED_LANGUAGES` 的语种返回 `None`（按既有本地化路渲染，
+一行都不改）。回归用例 `test_localized_languages_are_never_rendered_from_the_english_fallback`
+（de/fr/zh-Hant/th 四语种参数化）；**变异验证**：把这条防线短路，4 条全红。
+
+**P2：格式说明符/嵌套字段能过发布校验，却在渲染时炸。**
+`Formatter().parse` 只看字段名，`{status:{missing}}`、`{status!z}`、`{status:invalid}`
+都能通过占位符比对，渲染时抛 `KeyError`/`ValueError` —— 等于把"发布时能发现"变成
+"用户提问时 500"。修复：发布校验里用假值真跑一遍 `format()`，捕获异常即拒。
+三条参数化用例覆盖；变异（去掉这一遍）时三条全红。
+
 ## 未完成项（不得读作通过）
 
 - **未完成业务验收**：没有在 41 上发布真实租户文案，也没有真机/原 H5 观感。
