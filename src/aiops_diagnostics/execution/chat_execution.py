@@ -270,7 +270,7 @@ def _parse_binding(row: object) -> ChatBinding:
         if type(photo) is not bool or (photo and not content):
             raise ChatBindingError("photos require reviewed content")
         callback_version = row.get("callback_version", 1)
-        if type(callback_version) is not int or callback_version not in {1, 2, 3, 4}:
+        if type(callback_version) is not int or callback_version not in {1, 2, 3, 4, 5}:
             raise ChatBindingError("unsupported consumer callback version")
         return ChatBinding(
             callback_version=callback_version,
@@ -409,7 +409,7 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
                 or type(frozen.get("live_order_status")) is not bool
                 or type(frozen.get("live_billing_record")) is not bool
                 or type(frozen.get("callback_version", 1)) is not int
-                or frozen.get("callback_version", 1) not in {1, 2, 3, 4}
+                or frozen.get("callback_version", 1) not in {1, 2, 3, 4, 5}
             ):
                 raise ChatBindingError("consumer publication has no frozen content")
             binding = replace(
@@ -439,6 +439,68 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
         _validate_binding(binding)
         bindings.append(binding)
     return tuple(bindings)
+
+
+def route_row(path: str | Path, environment: str, app_id: str):
+    """这条 app 在路由表里的那一行（含 retracted）。没有就是 None。"""
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
+
+    for row in ChatRouteBindingStore(Path(str(path)).expanduser().absolute()).all():
+        if row.environment == environment and row.app_id == app_id:
+            return row
+    return None
+
+
+def binding_for_version(path: str | Path, row, version_no: int, key_dir: str = "") -> ChatBinding:
+    """按**签发时那一版**重建绑定：内容、workflow_id、知识库都来自不可变快照。
+
+    为什么不能用当前行重建：Dify 每次发布都会生成新的 `workflow_id`，而旧 run 的绑定里存的是
+    它签发时那个。用当前行重建会得到一个"看起来正确、其实是新版"的绑定 —— 那正是复核说的
+    "返回 selected 冒充旧绑定"。凭据引用（`workflow_key_file`）仍取当前行：换凭据是一次不同
+    的事件，它必须让指纹对不上，从而拒绝交付。
+    """
+
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.publication.agent_lifecycle import AgentStore
+
+    store_path = Path(str(path)).expanduser().absolute()
+    snapshot = (
+        AgentStore(ChatRouteBindingStore(store_path).path)
+        .version(row.agent_id, row.tenant_id, version_no)
+        .snapshot
+    )
+    frozen = snapshot.get("consumer_service")
+    if (
+        snapshot.get("app_id") != row.app_id
+        or not isinstance(snapshot.get("workflow_id"), str)
+        or not isinstance(frozen, dict)
+        or not isinstance(frozen.get("content"), dict)
+        or not isinstance(frozen.get("knowledge_base_ids"), list)
+    ):
+        raise ChatBindingError("pinned publication version is unavailable")
+    binding = ChatBinding(
+        environment=row.environment,
+        tenant_id=row.tenant_id,
+        entry=row.entry,
+        scenario=row.scenario,
+        config_file="",
+        manifest_file="",
+        engine=row.engine,
+        workflow_id=snapshot["workflow_id"],
+        workflow_key_file=row.workflow_key_ref or (key_file_for_app(key_dir, row.app_id) if key_dir else ""),
+        agent_version_no=version_no,
+        agent_id=row.agent_id,
+        app_id=snapshot["app_id"],
+        route_revision=row.revision,
+        callback_version=frozen.get("callback_version", 1),
+        photo_enabled=frozen.get("photo_enabled", False),
+        content_snapshot=frozen["content"],
+        knowledge_base_ids=tuple(frozen["knowledge_base_ids"]),
+        live_order_status=frozen["live_order_status"],
+        live_billing_record=frozen["live_billing_record"],
+    )
+    _validate_binding(binding)
+    return binding
 
 
 def _bindings(settings: GatewayServerSettings) -> tuple[ChatBinding, ...]:

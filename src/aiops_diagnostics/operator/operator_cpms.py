@@ -127,6 +127,45 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
 SITE_TOOL = "cpms_site_search"
 
 
+def still_authorized(binding, run) -> bool:
+    """已签发的运行现在是否仍然**可以交付**。
+
+    判据不是 `route_revision` 相等：普通发布（只改提示词）会让 revision 前进，而 run 用的是它
+    冻结的清单，不该因此失败。真正必须拒的是**能力缩小**与**撤回**：
+
+    * 撤回：`binding_for_key` 找不到 active 行 ⇒ binding 为 None；
+    * 换应用：`app_id` 不同；
+    * 能力缩小：冻结清单里的工具在当前发布里已经不在 ⇒ 继续执行等于用旧授权做现在不许做的事。
+    """
+    # `binding` 是按 **run 自己的路由 key** 解析出来的，所以"是不是同一个 app"已经由解析保证；
+    # 这里只判撤回（解析不到）、revision 倒退与能力缩小。
+    if binding is None:
+        return False
+    if binding.route_revision < run.route_revision:
+        return False
+    frozen = _manifest_tools(run.snapshot.get("node_manifest") if run.snapshot else None)
+    if not frozen:
+        # 运行上没有冻结清单（当前只有订单诊断/无订单回合会存 answer/evidence）⇒ 退回旧判据：
+        # revision 必须相等。**这是如实记录的缺口**：管家端的"仅改提示词发布后旧 run 继续交付"
+        # 需要把冻结清单存到 run 上，本轮未做，因此这里保持严格，不假装已支持。
+        return binding.route_revision == run.route_revision
+    return frozen <= _manifest_tools(getattr(binding, "manifest_text", ""))
+
+
+def _manifest_tools(text) -> set:
+    """清单里的工具名集合。读不出来就当作"未知"，按最严处理（空集合 ⇒ 冻结工具不被覆盖）。"""
+    if not isinstance(text, str) or not text.strip():
+        return set()
+    try:
+        body = json.loads(text)
+    except (ValueError, TypeError):
+        return set()
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return set()
+    return {tool.get("name") for tool in tools if isinstance(tool, dict) and tool.get("name")}
+
+
 def _sites_from_evidence(caller, task, answer):
     """这一轮已经用工具取过站点时，**复用那份证据**，不再查第二次。
 
@@ -277,7 +316,7 @@ class OperatorCpms:
         from aiops_diagnostics.execution.node_publication import all_targets
 
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if binding is None or binding.route_revision != run.route_revision:
+        if not still_authorized(binding, run):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         target = next(
             (
@@ -440,7 +479,7 @@ class OperatorCpms:
         if not qa or qa["status"] not in QUESTION.active:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if binding is None or binding.entry != "operator" or binding.route_revision != run.route_revision:
+        if not still_authorized(binding, run) or binding.entry != "operator":
             raise OperatorRefused("OPERATOR_PUBLICATION_CHANGED")
         from aiops_diagnostics.execution.node_publication import all_targets
 
@@ -475,8 +514,8 @@ class OperatorCpms:
         if caller.scope_fingerprint != run.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if binding is None or binding.route_revision != run.route_revision:
-            raise OperatorRefused("OPERATOR_PUBLICATION_CHANGED")
+        if not still_authorized(binding, run):
+            raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         config = AgentRunConfig.load(Path(binding.config_file))
         if not any(
             n.active and n.node_id == run.expected_node_id and n.environment == run.environment
@@ -717,6 +756,10 @@ class OperatorCpms:
                 if answer["kind"] == "site_search":
                     sites = _sites_from_evidence(task.caller, task, answer)
                     if sites is None:
+                        # 节点没调工具：说明是在**看到结果之前**写的，不能当查询结果交付。
+                        # 这里拒而不是静默丢掉：静默丢掉会让提示词作者以为它在生效。
+                        if answer["text"].strip():
+                            raise OperatorRefused("OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE")
 
                         def current_search_scope():
                             current_task, _, _ = self._current(run_id, node_token=token, manifest=manifest)
@@ -799,11 +842,7 @@ class OperatorCpms:
         ):
             raise OperatorRefused("QA_NOT_FOUND")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if (
-            binding is None
-            or binding.route_revision != run.route_revision
-            or run.expires_at <= datetime.now(UTC)
-        ):
+        if not still_authorized(binding, run) or run.expires_at <= datetime.now(UTC):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         config = AgentRunConfig.load(Path(binding.config_file))
         if not (run.snapshot or {}).get("trial"):
