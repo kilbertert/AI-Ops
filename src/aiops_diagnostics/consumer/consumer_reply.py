@@ -60,7 +60,18 @@ def validate_reply(reply: object, snapshot: dict, *, language: str) -> str:
     if order_no and order_no not in text:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply omits the order number")
     # 金额：快照里给了的，正文里必须出现且数值相等。这是"不许漏写"的判据。
-    present = _numbers(text)
+    from aiops_diagnostics.consumer.consumer_time import readable_time
+
+    numeric_text = text
+    # 只允许完整引用身份/取证时间，不能拿日期、秒数或订单号片段解释金额。
+    for literal in (
+        order_no,
+        str(snapshot.get("observed_at") or ""),
+        readable_time(snapshot.get("observed_at")),
+    ):
+        if literal and literal != "None":
+            numeric_text = numeric_text.replace(literal, " ")
+    present = _numbers(numeric_text)
     for field in AMOUNT_FIELDS:
         value = snapshot.get(field)
         if value is None or str(value).strip() == "":
@@ -83,18 +94,12 @@ def validate_reply(reply: object, snapshot: dict, *, language: str) -> str:
 
 
 def _evidence_numbers(snapshot: dict, language: str) -> set[float]:
-    """证据里出现过的所有数字：快照各字段（含订单号）＋可核对的时间。
-
-    另外放行 0–10 的整数：它们是"第 2 条""3 步"这类计数，不构成对金额的断言，
-    卡住它们只会让模型不敢组织语言。金额与订单号不在此列 —— 它们必须逐字来自快照。
-    """
+    """业务数值不能借取证时间、状态码或身份标识获得授权。"""
     import json
 
-    from aiops_diagnostics.consumer.consumer_time import readable_time
-
-    corpus = json.dumps(snapshot, ensure_ascii=False, default=str) + " "
-    corpus += readable_time(snapshot.get("observed_at"))
-    allowed = _numbers(corpus)
+    excluded = {"order_no", "observed_at", "source", "status_code", "status_role"}
+    business = {key: value for key, value in snapshot.items() if key not in excluded}
+    allowed = _numbers(json.dumps(business, ensure_ascii=False, default=str))
     allowed.update(float(n) for n in range(0, 11))
     return allowed
 
