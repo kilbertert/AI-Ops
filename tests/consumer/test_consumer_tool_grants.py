@@ -131,7 +131,7 @@ def test_only_the_granted_request_target_is_accepted(grants):
     body = grant(grants)
     request = body["request"]
     token = body["bearer"]
-    page = grants.proxy(RUN, token, request["path"], request["query"])
+    page = grants.proxy(RUN, token, request["path"], request["query"])["data"]
     # 租户里有两个站点，本人只有一个：范围外的行被丢掉，不是整份拒绝。
     assert [row["id"] for row in page["records"]] == ["SITE-A"]
     with pytest.raises(consumer_tool_grants.ConsumerToolRefused) as refused:
@@ -174,10 +174,64 @@ def test_a_tool_missing_from_the_manifest_is_refused(grants):
     assert refused.value.code == "CONSUMER_TOOL_DISABLED"
 
 
+def test_authorization_is_stable_across_the_two_calls_the_node_makes(grants):
+    """节点取数前后各领一次，并要求两次**完全相等**（`authorization_changed`）。
+
+    第一次实现每次生成新 token，于是第二次领取必然不等 —— 真节点上每一次取数都会失败。
+    """
+    first = grant(grants, {"address": "站点"})
+    second = grant(grants, {"address": "站点"})
+    assert first["bearer"] == second["bearer"]
+    assert first["authorization_id"] == second["authorization_id"]
+    assert first["request"] == second["request"]
+
+
+def test_the_proxy_answers_in_the_envelope_the_node_parses(grants):
+    """节点按 CPMS 的信封解析（`code` + `data`）；代理回裸对象会被判 `cpms_invalid_response`。"""
+    body = grant(grants)
+    request = body["request"]
+    response = grants.proxy(RUN, body["bearer"], request["path"], request["query"])
+    assert response["code"] == 0
+    assert [row["id"] for row in response["data"]["records"]] == ["SITE-A"]
+
+
+def test_evidence_is_submitted_with_the_node_credential(grants):
+    """上报证据带的是节点令牌，不是 grant token —— 两者不能互相顶替。"""
+    body = grant(grants)
+    request = body["request"]
+    page = grants.proxy(RUN, body["bearer"], request["path"], request["query"])["data"]
+    evidence = {
+        "tool": TOOL,
+        "inputs": body["inputs"],
+        "source": "cpms.sitePage",
+        "observed_at": datetime.now(UTC).isoformat(),
+        "data": page,
+    }
+    with pytest.raises(consumer_tool_grants.ConsumerToolRefused) as refused:
+        grants.record(
+            RUN,
+            body["bearer"],
+            MANIFEST,
+            TOOL,
+            {"authorization_id": body["authorization_id"], "evidence": evidence},
+        )
+    assert refused.value.code == "CONSUMER_NODE_REJECTED"
+    assert (
+        grants.record(
+            RUN,
+            "node-token",
+            MANIFEST,
+            TOOL,
+            {"authorization_id": body["authorization_id"], "evidence": evidence},
+        )["accepted"]
+        is True
+    )
+
+
 def test_evidence_must_equal_what_the_gateway_projected(grants):
     body = grant(grants)
     request = body["request"]
-    page = grants.proxy(RUN, body["bearer"], request["path"], request["query"])
+    page = grants.proxy(RUN, body["bearer"], request["path"], request["query"])["data"]
     evidence = {
         "tool": TOOL,
         "inputs": body["inputs"],
@@ -187,7 +241,7 @@ def test_evidence_must_equal_what_the_gateway_projected(grants):
     }
     accepted = grants.record(
         RUN,
-        body["bearer"],
+        "node-token",
         MANIFEST,
         TOOL,
         {"authorization_id": body["authorization_id"], "evidence": evidence},
@@ -201,7 +255,7 @@ def test_evidence_must_equal_what_the_gateway_projected(grants):
         with pytest.raises(consumer_tool_grants.ConsumerToolRefused):
             grants.record(
                 RUN,
-                body["bearer"],
+                "node-token",
                 MANIFEST,
                 TOOL,
                 {"authorization_id": body["authorization_id"], "evidence": broken},
@@ -212,3 +266,34 @@ def test_a_wrong_node_token_is_refused_before_anything_else(grants):
     with pytest.raises(consumer_tool_grants.ConsumerToolRefused) as refused:
         grants.grant(RUN, "wrong-token", MANIFEST, TOOL, operator_cpms.TOOL_CONTRACT, None)
     assert refused.value.code == "CONSUMER_NODE_REJECTED"
+
+
+# ── 路由面：参数解析与运行类型分派（#1191 那个 bug 就在这里） ──────────────
+def test_the_authorization_body_carries_only_arguments():
+    """#1191 的 bug：请求模型是空模型，带参数就 422，参数从来没被读出来。
+
+    现在只允许 `arguments` 一个字段，空体仍然合法（订单诊断工具）。
+    """
+    from pydantic import ValidationError
+
+    from aiops_diagnostics.gateway.gateway_api import OperatorToolAuthorizationRequest
+
+    assert OperatorToolAuthorizationRequest().arguments == {}
+    assert OperatorToolAuthorizationRequest(arguments={"address": "站点"}).arguments == {"address": "站点"}
+    for forbidden in ({"tenant_id": "T-2"}, {"site_ids": ["S"]}, {"arguments": {"a": 1}}):
+        with pytest.raises(ValidationError):
+            OperatorToolAuthorizationRequest(**forbidden)
+
+
+def test_the_same_endpoint_dispatches_by_the_runs_own_operation():
+    """同一个端点服务两类运行，判据是 run 自己的 operation，不是调用方自报。"""
+    from aiops_diagnostics.gateway.gateway_api import _is_consumer_run
+
+    def context(operation):
+        return SimpleNamespace(
+            agent_run_store=SimpleNamespace(peek=lambda _id: SimpleNamespace(operation=operation))
+        )
+
+    assert _is_consumer_run(context("charging_status"), RUN) is True
+    assert _is_consumer_run(context("operator_order_diagnosis"), RUN) is False
+    assert _is_consumer_run(context("operator_conversation"), RUN) is False

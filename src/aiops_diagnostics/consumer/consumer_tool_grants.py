@@ -168,11 +168,17 @@ class ConsumerToolGrants:
             c_user_id,
             consumer_sites.order_reader(base, caller.effective_tenant_id, c_user_id),
         )
-        token = secrets.token_urlsafe(32)
         values = operator_cpms.run_values(tool, "", cleaned)
         with self.lock:
             self._prune()
-            if len(self.grants) >= 20:
+            existing = self.grants.get(run_id)
+            # 节点在取数前后各领一次并要求两次相等。同一 run、同一工具、同一参数
+            # 必须拿到同一份 —— 否则第二次领取会被判成「授权变了」。
+            if existing is not None and existing.tool == tool and existing.arguments == cleaned:
+                token = existing.token
+            else:
+                token = secrets.token_urlsafe(32)
+            if existing is None and len(self.grants) >= 20:
                 raise ConsumerToolRefused("CONSUMER_BUSY", "too many consumer tool grants")
             self.grants[run_id] = _Grant(
                 token=token,
@@ -245,10 +251,18 @@ class ConsumerToolGrants:
                 "data": data,
             }
             grant.evidence["response"] = data
-            return data
+            # 节点按 CPMS 的信封解析（`code` + `data`），代理必须原样回这个形状，
+            # 否则每一次取数都会被判成 `cpms_invalid_response`。
+            return {"code": 0, "data": data}
 
     def record(self, run_id: str, node_token: str, manifest_id: str, tool: str, payload):
-        grant = self._current(run_id, node_token)
+        # 上报证据走的是节点自己的凭据（`GatewayClient.post` 只发节点令牌），
+        # 不是取数用的 grant token —— 两者是不同东西，不能互相顶替。
+        self._run(run_id, node_token)
+        with self.lock:
+            grant = self.grants.get(run_id)
+        if grant is None or grant.tool != tool:
+            raise ConsumerToolRefused("CONSUMER_GRANT_REJECTED", "grant rejected")
         if set(payload) != {"authorization_id", "evidence"}:
             raise ConsumerToolRefused("CONSUMER_INVALID_BODY", "invalid body")
         if payload["authorization_id"] != _digest(grant.token):
