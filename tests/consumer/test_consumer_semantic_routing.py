@@ -170,7 +170,7 @@ def test_ambiguous_or_inconsistent_order_reference_never_reads(tmp_path, monkeyp
 
 
 def test_previous_reference_is_rechecked_at_submission_even_if_model_says_independent(tmp_path, monkeypatch):
-    import aiops_diagnostics.gateway_api as api
+    import aiops_diagnostics.gateway.gateway_api as api
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb = wire(env, monkeypatch, tmp_path)

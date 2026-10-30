@@ -279,7 +279,7 @@ def test_the_trial_callback_accepts_its_temporary_workflow(tmp_path, monkeypatch
     """
     from types import SimpleNamespace
 
-    from aiops_diagnostics.gateway_api import _require_trial_source_route
+    from aiops_diagnostics.gateway.gateway_api import _require_trial_source_route
 
     with _trial_env(tmp_path, monkeypatch) as (_runtime, route, _admin, _engine):
         settings = SimpleNamespace(chat_route_bindings_file=str(tmp_path / "gateway.db"))
@@ -298,7 +298,7 @@ def test_the_trial_callback_refuses_a_changed_source_route(tmp_path, monkeypatch
     from types import SimpleNamespace
 
     from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-    from aiops_diagnostics.gateway_api import StandardAPIError, _require_trial_source_route
+    from aiops_diagnostics.gateway.gateway_api import StandardAPIError, _require_trial_source_route
 
     with _trial_env(tmp_path, monkeypatch) as (_runtime, route, _admin, _engine):
         ChatRouteBindingStore(tmp_path / "gateway.db").publish(

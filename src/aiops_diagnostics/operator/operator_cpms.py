@@ -13,13 +13,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlencode
 
-from aiops_diagnostics.async_job_lifecycle import QUESTION
-from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, request_json
+from aiops_diagnostics.common.async_job_lifecycle import QUESTION
+from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, request_json
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig, SnailDispatcher
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
-from aiops_diagnostics.operator_conversation import EXECUTED_MUTATION, OperatorRefused
+from aiops_diagnostics.operator import operator_conversation
+from aiops_diagnostics.operator.operator_conversation import EXECUTED_MUTATION, OperatorRefused
 
 SCENARIO = "operator_order_diagnosis"
 PREFIX = "operator-cpms-node:"
@@ -28,6 +29,29 @@ PATHS = {
     TOOL_NAMES[0]: "/chOrderInfo/getOrderInfoDetail/",
     TOOL_NAMES[1]: "/iotChargingDevice/getChargingMonitor/",
 }
+
+#: 站点查询的三个上限：一页条数、最多页数、最多展示条数。
+#:
+#: 合起来是**「列举不能变成导出」**这条边界。改任何一个都要重新论证，不能当调参。
+SITE_PAGE_SIZE = 50
+SITE_MAX_PAGES = 4
+SITE_MAX_SHOWN = 10
+
+#: 站点列表的 CPMS 路径。查询参数由 :class:`SiteKeywords` 组装，不由调用方拼接。
+SITE_PATH = "/chSite/page"
+
+
+def diagnoses_an_order(run) -> bool:
+    """这次运行是不是**订单诊断**。
+
+    判据是运行类型 ``run.operation``，**不是订单号是否为空**。两者今天恰好一致——
+    签发时就是按有没有订单二选一的——但一致是结果，不是判据。一旦有不需要订单的能力
+    要进工具面，这个区别就是全部差别：拿订单号当判据，那种能力在类型上就写不出来。
+
+    订单号仍承担它真正的工作（拼路径、冻结站点、比证据），只是不再兼职表达
+    "这次跑的是什么"。
+    """
+    return run.operation == SCENARIO
 
 
 def operator_scope(caller, *, allow_empty=False):
@@ -74,7 +98,7 @@ class OperatorCpms:
         def unavailable(_):
             return OperatorRefused("OPERATOR_TRIAL_LOGIN_REQUIRED")
 
-        from aiops_diagnostics.gateway_config import canonical_gateway_url
+        from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
         result = request_json(
             RequestSpec(
@@ -126,7 +150,7 @@ class OperatorCpms:
 
     def authorize_readback(self, caller, qa_id, bearer):
         run = self.context.agent_run_store.by_qa(qa_id)
-        caller = self.refresh_scope(caller, allow_empty=bool(run and not run.order_no))
+        caller = self.refresh_scope(caller, allow_empty=bool(run and not diagnoses_an_order(run)))
         if run is None or run.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("QA_NOT_FOUND")
         from aiops_diagnostics.execution.node_publication import all_targets
@@ -147,7 +171,7 @@ class OperatorCpms:
         )
         if target is None:
             raise OperatorRefused("OPERATOR_TARGET_MISSING")
-        if not run.order_no:
+        if not diagnoses_an_order(run):
             return self.result(caller, qa_id)
         body = cpms_get(
             target.cpms_base_url + PATHS[TOOL_NAMES[0]] + run.order_no, bearer, caller.effective_tenant_id
@@ -187,13 +211,11 @@ class OperatorCpms:
         current = authorize()
         if current.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-        from aiops_diagnostics.gateway_config import canonical_gateway_url
+        from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
         base, proxy = canonical_gateway_url(base), canonical_gateway_url(proxy)
         manifest_text = trial_manifest if trial_manifest is not None else binding.manifest_text
         if not order:
-            from aiops_diagnostics import operator_conversation
-
             manifest_text = operator_conversation.manifest(manifest_text)
         manifest = execution_manifest.from_text(manifest_text)
         if order and (
@@ -279,8 +301,6 @@ class OperatorCpms:
     def _current(self, run_id, *, node_token=None, manifest=None, tool=None):
         task = self.tasks.get(run_id)
         run = self.context.agent_run_store.get(run_id)
-        from aiops_diagnostics import operator_conversation
-
         if (
             task is None
             or run is None
@@ -352,7 +372,7 @@ class OperatorCpms:
         if not task.trial:
             bound_manifest = (
                 binding.manifest_text
-                if run.order_no
+                if diagnoses_an_order(run)
                 else operator_conversation.manifest(binding.manifest_text)
             )
             if bound_manifest != run.execution_manifest:
@@ -372,7 +392,11 @@ class OperatorCpms:
 
     def publication(self, run_id, token):
         _, run, _ = self._current(run_id, node_token=token)
-        if not run.order_no and run.state == "issued" and not self.context.agent_run_store.claim(run_id):
+        if (
+            not diagnoses_an_order(run)
+            and run.state == "issued"
+            and not self.context.agent_run_store.claim(run_id)
+        ):
             raise OperatorRefused("OPERATOR_CLAIM_CONFLICT")
         return {
             "run_id": run_id,
@@ -513,27 +537,28 @@ class OperatorCpms:
             except ValueError as exc:
                 logging.getLogger("aiops.operator").warning("operator_answer_rejected reason=json_parse")
                 raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
-            from aiops_diagnostics.redaction import contains_secret
+            from aiops_diagnostics.common.redaction import contains_secret
 
             if contains_secret(raw, (task.bearer, task.grant)):
                 _answer_refused("credential")
             sites = None
-            if run.order_no:
+            if diagnoses_an_order(run):
                 validate_answer(answer, task.evidence)
                 if not set(answer["evidence_tools"]).issubset(task.delivered):
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
             else:
-                from aiops_diagnostics import operator_conversation
-
                 operator_conversation.validate(answer, task.question)
                 if answer["kind"] == "site_search":
 
                     def current_search_scope():
                         current_task, _, _ = self._current(run_id, node_token=token, manifest=manifest)
-                        return current_task.caller
+                        return current_task.caller.scope_fingerprint
 
-                    sites = search_sites(
-                        answer, task.caller, task.base_url, task.bearer, current_search_scope
+                    sites = query_sites(
+                        site_scope(task.caller),
+                        site_keywords(answer),
+                        cpms_site_reader(task.base_url, task.bearer),
+                        current_search_scope,
                     )
             self._current(run_id, node_token=token, manifest=manifest)
             snapshot = {
@@ -545,7 +570,7 @@ class OperatorCpms:
                     if name in task.delivered
                 },
             }
-            if not run.order_no:
+            if not diagnoses_an_order(run):
                 snapshot["sites"] = sites
                 snapshot["language"] = task.language
             if not store.complete(
@@ -569,7 +594,7 @@ class OperatorCpms:
             dispatcher.question = (
                 (
                     "诊断本次授权订单，按已发布SOP读取证据并输出规定JSON。用户描述仅供理解问题："
-                    if self.context.agent_run_store.get(run_id).order_no
+                    if diagnoses_an_order(self.context.agent_run_store.get(run_id))
                     else "本轮未指定订单，按管家对话协议回答或提出站点搜索条件。用户问题："
                 )
                 + json.dumps(task.question, ensure_ascii=False)
@@ -596,7 +621,6 @@ class OperatorCpms:
                 self.tasks.pop(run_id, None)
 
     def result(self, caller, qa_id):
-        from aiops_diagnostics import operator_conversation
 
         run = self.context.agent_run_store.by_qa(qa_id)
         if (
@@ -616,7 +640,7 @@ class OperatorCpms:
         if not (run.snapshot or {}).get("trial"):
             bound_manifest = (
                 binding.manifest_text
-                if run.order_no
+                if diagnoses_an_order(run)
                 else operator_conversation.manifest(binding.manifest_text)
             )
             if execution_manifest.from_text(bound_manifest).identity != run.expected_agent_version:
@@ -640,7 +664,7 @@ class OperatorCpms:
             )
         ):
             raise OperatorRefused("OPERATOR_NODE_CHANGED")
-        if not run.order_no:
+        if not diagnoses_an_order(run):
             sites = run.snapshot.get("sites")
             scope = operator_scope(caller, allow_empty=True)
             if (
@@ -960,24 +984,102 @@ def cpms_get(url, bearer, tenant, *, timeout=10):
     )
 
 
-def search_sites(answer, caller, base, bearer, authorize):
-    scope = operator_scope(caller, allow_empty=True)
-    rows, seen = [], set()
+@dataclass(frozen=True, slots=True)
+class SiteScope:
+    """一次站点查询的可见范围。
+
+    ``site_ids`` 有三种含义，**不能互相顶替**：
+
+    * ``()`` —— 空范围。不查 CPMS，直接报"尚未分配"。
+    * ``None`` —— 未按站点集合收窄（顶层账号的租户口径）。
+    * 非空元组 —— 员工账号能看到的那些站点。
+
+    ``fingerprint`` 不参与过滤，只用于逐页复核范围在这期间没变过。
+    """
+
+    tenant_id: str
+    site_ids: tuple[str, ...] | None
+    fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class SiteKeywords:
+    """一次站点查询的关键词。四个字段全空表示**列举**，不是搜索（ADR-0172）。
+
+    ``address_terms`` 可以有多条（对话协议允许至多 4 条），而 CPMS 的 ``address``
+    只有一个：取最长的那个，与放开列举之前的行为逐字一致。
+    """
+
+    name: str = ""
+    address_terms: tuple[str, ...] = ()
+
+    @property
+    def listing(self) -> bool:
+        return not self.name and not self.address_terms
+
+    def params(self, page: int) -> dict[str, object]:
+        params: dict[str, object] = {"current": page, "size": SITE_PAGE_SIZE, "type": 0}
+        if self.name:
+            params["name"] = self.name
+        if self.address_terms:
+            params["address"] = max(self.address_terms, key=len)
+        return params
+
+    def matches(self, site: dict[str, str]) -> bool:
+        haystack = (site["name"] + " " + site["address"]).casefold()
+        return self.name.casefold() in site["name"].casefold() and all(
+            term.casefold() in haystack for term in self.address_terms
+        )
+
+
+def site_scope(caller, *, allow_empty: bool = True) -> SiteScope:
+    """把调用者的数据范围翻译成站点查询的可见范围。
+
+    账号层面的判据（要有 B 端主体、不接受代查、范围类型必须是 all/organ）仍在
+    :func:`operator_scope` 里，本函数不复制它 —— 换一个入口要换的是那套判据，
+    不是「站点怎么查」。
+    """
+    scope = operator_scope(caller, allow_empty=allow_empty)
+    return SiteScope(caller.effective_tenant_id, scope.site_ids, caller.scope_fingerprint)
+
+
+def site_keywords(answer) -> SiteKeywords:
+    """对话协议的四个字段 → 关键词。空关键词是列举，不是错误。"""
+    return SiteKeywords(answer["name"], tuple(answer["address_terms"]))
+
+
+def cpms_site_reader(base: str, bearer: str):
+    """直连 CPMS 的读取函数。
+
+    :func:`query_sites` 只要求「给路径和租户、回 JSON 信封」这一个形状，所以节点代理
+    那条路（节点持令牌、网关只放行）可以换一个读取函数，而不用改查询本身。
+    """
+
+    def read(path: str, tenant: str):
+        return cpms_get(base + path, bearer, tenant, timeout=3)
+
+    return read
+
+
+def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize):
+    """按显式范围与关键词读一次站点。
+
+    三段逻辑在这里合流：范围判定（含逐页复核）、CPMS 读取、结果对齐与计数口径。
+    对话回合、受控工具与只读接口都调这一处 —— 站点事实只能有一个来源，否则
+    「换个入口换一套事实」就只是时间问题。
+
+    ``read(path, tenant)`` 是传输，``reauthorize() -> fingerprint`` 是「读取期间撤权
+    就停止后续交付」那条判据；两者都由调用方提供。空范围不发任何 CPMS 请求。
+    """
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
     limited = False
     total = 0
     if scope.site_ids != ():
-        for page in range(1, 5):
-            current = authorize()
-            if current.scope_fingerprint != caller.scope_fingerprint:
+        for page in range(1, SITE_MAX_PAGES + 1):
+            if reauthorize() != scope.fingerprint:
                 raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-            params = {"current": page, "size": 50, "type": 0}
-            if answer["name"]:
-                params["name"] = answer["name"]
-            if answer["address_terms"]:
-                params["address"] = max(answer["address_terms"], key=len)
-            body = cpms_get(
-                base + "/chSite/page?" + urlencode(params), bearer, caller.effective_tenant_id, timeout=3
-            )
+            body = read(SITE_PATH + "?" + urlencode(keywords.params(page)), scope.tenant_id)
             data = body.get("data") if isinstance(body, dict) else None
             if (
                 not isinstance(body, dict)
@@ -985,12 +1087,12 @@ def search_sites(answer, caller, base, bearer, authorize):
                 or body["code"] != 0
                 or not isinstance(data, dict)
                 or not isinstance(data.get("records"), list)
-                or len(data["records"]) > 50
+                or len(data["records"]) > SITE_PAGE_SIZE
                 or type(data.get("total")) is not int
                 or data["total"] < 0
                 or data.get("current") != page
                 or type(data.get("current")) is not int
-                or data.get("size") != 50
+                or data.get("size") != SITE_PAGE_SIZE
             ):
                 raise OperatorRefused("CPMS_INVALID_RESPONSE")
             for item in data["records"]:
@@ -998,7 +1100,7 @@ def search_sites(answer, caller, base, bearer, authorize):
                     not isinstance(item, dict)
                     or not isinstance(item.get("id"), str)
                     or not item["id"]
-                    or str(item.get("tenantId") or "") != caller.effective_tenant_id
+                    or str(item.get("tenantId") or "") != scope.tenant_id
                     or (scope.site_ids is not None and str(item["id"]) not in scope.site_ids)
                 ):
                     raise OperatorRefused("CPMS_SCOPE_MISMATCH")
@@ -1010,26 +1112,21 @@ def search_sites(answer, caller, base, bearer, authorize):
                     or any(len(v) > 1000 for v in selected.values())
                 ):
                     raise OperatorRefused("CPMS_INVALID_RESPONSE")
-                haystack = (selected["name"] + " " + selected["address"]).casefold()
-                if (
-                    selected["id"] not in seen
-                    and answer["name"].casefold() in selected["name"].casefold()
-                    and all(t.casefold() in haystack for t in answer["address_terms"])
-                ):
+                if selected["id"] not in seen and keywords.matches(selected):
                     seen.add(selected["id"])
                     rows.append(selected)
-            more = page * 50 < data["total"]
+            more = page * SITE_PAGE_SIZE < data["total"]
             total = max(total, data["total"])
-            if len(rows) >= 10 or not more or not data["records"]:
-                limited = more or len(rows) > 10
+            if len(rows) >= SITE_MAX_SHOWN or not more or not data["records"]:
+                limited = more or len(rows) > SITE_MAX_SHOWN
                 break
             limited = more
-    if authorize().scope_fingerprint != caller.scope_fingerprint:
+    if reauthorize() != scope.fingerprint:
         raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
     return {
         "source": "cpms.sitePage",
         "observed_at": datetime.now(UTC).isoformat(),
-        "sites": rows[:10],
+        "sites": rows[:SITE_MAX_SHOWN],
         "limited": limited,
         "empty_scope": scope.site_ids == (),
         # 列举问法要回答"我有多少个"，只给前 10 条等于没回答。``total`` 是 CPMS 对

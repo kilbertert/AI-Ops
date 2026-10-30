@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
     HttpFailure,
     RequestSpec,
@@ -14,7 +14,7 @@ from aiops_diagnostics.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.data.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
-from aiops_diagnostics.gateway_config import canonical_gateway_url
+from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
 
 class ChargingStatusError(RuntimeError):

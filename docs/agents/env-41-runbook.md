@@ -28,7 +28,31 @@
 
 ## 1. 访问 41
 
-### 1.1 首选：密钥登录（2026-09-16 起已配置）
+### 1.0 统一入口：`dev-host`（跑命令与读文件的首选形式）
+
+服务器共识要求“到达主机是一个固定操作”：用仓库内的声明 `.dev-host.toml` 与库外清单
+`~/.config/dev-host/hosts.toml` 共同解析主机身份，而不是每次手写参数。41 侧的名字是
+`41`（`aiops-41` 是清单里的 host 字段，命令里写 `41`）。
+
+```bash
+# 只读命令：健康、进程状态、日志尾巴。服务类主机要显式 --allow-service-exec。
+dev-host exec 41 --allow-service-exec -- curl -sS http://172.18.0.1:8788/health
+dev-host exec 41 --allow-service-exec -- systemctl is-active aiops-gateway-41.service
+
+# 读文件 / 列目录 / 按模式找文件：不需要写入身份。
+dev-host read 41 /opt/aiops-41/src/aiops_diagnostics/__init__.py
+dev-host ls 41 /opt/aiops-41
+dev-host find 41 '*.log' --path /var/log/aiops-41 --newer 2
+```
+
+写入 41 需要**产物身份**（`write`/`cp` 传 `--artifact-sha256`）；这是共识里“变更只以
+从合并修订构建的产物到达服务主机”的落地形式，不是绕过口。`dev-host hosts` 列出本机
+声明的所有主机及其角色，`dev-host show 41` 打印本项目对 41 的声明。
+
+反射式检查（本轮实际用的那条）：健康接口返回的 `version` 形如 `1.0.0+<12 位提交>`，
+它才是线上真正在跑的修订；合并进 main 但 `version` 没变的，**不算已部署**。
+
+### 1.1 密钥登录（底层通道：`dev-host` 在后端复用的就是它）
 
 ```bash
 ssh aiops-41 '<命令>'          # 别名：47.97.160.153, user root, key id_ed25519_41_aiops
@@ -218,7 +242,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, "/opt/aiops-41/src")          # 线上代码；不是本仓 checkout
 import pymysql
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 s = Settings.from_config(Path("/etc/aiops-41/production.env"))
 c = pymysql.connect(host=s.mysql.host, port=s.mysql.port, user=s.mysql.user,
                     password=s.mysql.password, database="qumall_upms")
@@ -731,8 +755,8 @@ cd /opt/aiops-41 && MP=$(systemctl show -p MainPID --value aiops-gateway-41)
 runuser -u aiops41 -- env $(tr '\0' '\n' < /proc/$MP/environ | grep -E '^AIOPS_' | xargs -d'\n') \
   .venv/bin/python - <<'EOF'
 import pathlib
-from aiops_diagnostics.config import Settings
-from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 s = Settings.from_config(GatewayServerSettings.from_env().server_config_file)
 print([p.name for p in s.agent.provider_chain(None)])
 EOF
@@ -802,6 +826,36 @@ EOF
 > ⚠️ **仍然不要因为等待就手工部署**：现在根本没有"等待"这个状态了。若 CD 没跑，
 > 那是路径没命中或 workflow 出错，查 `gh run list --workflow=cd.yml`，不要绕过去手敲。
 > 卡住/连续失败会由 `CD Watch` 开 `cd:needs-attention` 票（#407）。
+
+### 2.1 CD 显示 pending/卡住时怎么判（2026-10-30 实测）
+
+只有一个自托管 runner 打 `AI-Ops` 标签，**它一次只跑一个 job**。所以 CD 停在
+`pending` 的常见原因不是死锁，也不是路径没命中，而是**队列前面有别的 job 在用**，
+其中包括与本仓部署无关的 AFK/Agent 工作流（实测有占住 runner 超过一小时的
+`Agent Update Branch`，它自己还要跑模型）。三步分开看：
+
+```bash
+gh run list --workflow cd.yml --limit 3 --json databaseId,status,conclusion,headSha
+gh api repos/<owner>/<repo>/actions/runners --jq '.runners[]|{name,busy,status}'
+gh run list --status in_progress --limit 3 --json name,headBranch,createdAt   # 谁在占
+```
+
+- `busy:true` 且上面第三条列出一个**别的** workflow：CD 就是在排队，等它跑完。
+  `pending → in_progress` 才是“拿到 runner”的信号；只看到 `pending` 不要当成
+  “部署失败”，也不要手工改产。
+- `busy:false` 而 CD 仍 `pending`：那是没有匹配的 runner 或 workflow 出错（看
+  run 的报错），这时才按本节应急路径处理。
+- 想让某个具体 job 先跑，**没有**优先级开关；可以做的只有等，或者（经该 job 的
+  归属会话同意后）取消它的 run。取消别人会话的自动化 run 不是部署手段，不得当成快捷键。
+
+🔴 **`conclusion: cancelled` 不等于「那个 commit 没部署」。** job 级 concurrency 组
+是 `cd-41-deploy`、`cancel-in-progress: false`，但当**同一组里更新的 pending job
+建立时，旧的 pending job 会被取消**（实测：`041a1eb0` 的 CD 被后来那次合并的 CD
+取消，而 `041a1eb0` 的内容已在后来的工件里上线）。每次 CD 部署的是**它自己的
+`GITHUB_SHA`**（见 `cd.yml` 的 `Resolve the commit to deploy`），所以：
+
+- 判断生产到底跑什么，只看 `/health` 的 `version`（`1.0.0+<12 位提交>`），不看 run 的结论；
+- 内容被后来的提交覆盖时，`cancelled` 是正常收敛，不需要补跑。
 >
 > 🔴 **反向：若你把 D-2 的暴露回滚了（服务绑回 `127.0.0.1`），必须同时把
 > `deploy-41.sh` 的健康检查改回回环**（`AIOPS_HEALTH_HOST=127.0.0.1` 或直接改默认值）——
@@ -924,7 +978,7 @@ runuser -u aiops41 -- .venv/bin/aiops-admin --config /etc/aiops-41/production.en
 - `--db` 必须显式给（不 source env 时 `from_env()` 回退 XDG 会**静默建空库**）。
 - **`[[dify_apps]]` 是 fail-closed 的**：表里出现**任何一行**之后，未登记的
   `(租户, 入口)` 就什么都不选（`unavailable`）。所以"加一行"是整台主机的一次开关 ——
-  会把**谁**的答案改成什么，先跑 `tools/dify_registry_blast_radius.py` 量出来再动。
+  会把**谁**的答案改成什么，先跑 `tools/verification/dify_registry_blast_radius.py` 量出来再动。
 - 发布前 KB 活性校验会真实调用 kb-service；供应商欠费时（embedding 502）会误报
   "知识库不存在"，**这是误报**，充值后重试即恢复，不要据此删绑定。
 
@@ -1003,7 +1057,7 @@ PY
 **先看清事实**（三条，缺一条就会做出错误预期）：
 
 1. **`seed_bundled` 没有启动路径的调用方。** 全仓搜 `seed_bundled` 只会命中它自身的
-   docstring 与 `tools/migrate_shortcut_i18n.py` —— 网关启动**不会**播种。
+   docstring 与 `tools/content/migrate_shortcut_i18n.py` —— 网关启动**不会**播种。
 2. **播种出来的行是草稿**（`status=draft`，设计如此：发布是运营动作），入口看不到。
 3. **走 HTTP 发布在 41 上不可达**：管理面要求 `ROLE_AGENT_PUBLISHER/ADMIN` 或
    `ROLE_PLATFORM_ADMIN`，而 41 的公司令牌路径 `roles=frozenset()`（见 §3.1-bis 的
@@ -1832,7 +1886,7 @@ curl -s -H "third-session: <会话>" -H "tenant-id: <会话租户>" \
 所以在新语言之前发布的快捷动作永远拿不到新语言文案（请求新语言时 `served_language` 如实报 `zh`、
 文案回退简体）。`docs/validation.md` 有 #542 的完整实测记录。
 
-**工具**：`tools/migrate_shortcut_i18n.py`（随仓库走，**不要在 41 上手写 SQL**）。
+**工具**：`tools/content/migrate_shortcut_i18n.py`（随仓库走，**不要在 41 上手写 SQL**）。
 
 ### 步骤
 
@@ -1849,17 +1903,17 @@ PY
 # ② 把工具送上机（**只送工具**，不动 /opt/aiops-41 的源码 —— 那是部署产物）
 #    scp 不会创建中间目录，首次执行必须先建好，否则上传就在这一步停住。
 ssh aiops-41 'mkdir -p /tmp/mig542/tools'
-scp tools/migrate_shortcut_i18n.py aiops-41:/tmp/mig542/tools/
+scp tools/content/migrate_shortcut_i18n.py aiops-41:/tmp/mig542/tools/
 ssh aiops-41 'chmod -R a+rX /tmp/mig542'
 
 # ③ 预演（只读；打印每行将补哪些语言，不写任何东西）
 ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiops-41/src \
-  /opt/aiops-41/.venv/bin/python /tmp/mig542/tools/migrate_shortcut_i18n.py \
+  /opt/aiops-41/.venv/bin/python /tmp/mig542/tools/content/migrate_shortcut_i18n.py \
   --db /var/lib/aiops-41/gateway/gateway.db'
 
 # ④ 应用（**必须 runuser -u aiops41**：私有目录守卫会拒绝 root；工作目录须为 /opt/aiops-41）
 ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiops-41/src \
-  /opt/aiops-41/.venv/bin/python /tmp/mig542/tools/migrate_shortcut_i18n.py \
+  /opt/aiops-41/.venv/bin/python /tmp/mig542/tools/content/migrate_shortcut_i18n.py \
   --db /var/lib/aiops-41/gateway/gateway.db --apply'
 
 # ⑤ 复核（读；应 0 次回退）
@@ -1868,7 +1922,7 @@ ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiop
 from pathlib import Path
 import sqlite3
 from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutStore
-from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES as L
+from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES as L
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
 # 请求返回的是【按租户合并】后的列表，所以要按**真实租户**逐个复核，不能只看平台行：
 # 租户发布了同名覆盖动作时，其译文缺口不会出现在平台行的统计里。
@@ -2114,7 +2168,7 @@ ssh yidong-36 'docker logs --since 10m deploy-api-1 2>&1 | grep -c "NoneType.*ha
 
 ```bash
 cat > /tmp/fix_legacy.py <<'PY'
-from aiops_diagnostics import gateway_config as gc
+from aiops_diagnostics.gateway import gateway_config as gc
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
 s = gc.GatewayServerSettings.from_env()

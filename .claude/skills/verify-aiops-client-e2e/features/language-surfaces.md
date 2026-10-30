@@ -40,6 +40,6 @@ Accept-Language  →  i18n.resolve_language  →  一个声明的标签  →  �
 
 ## 覆盖不等于正确
 
-覆盖（每张表是否都有这门语言）由 `tests/test_i18n_acceptance_11_languages.py` 守着。
+覆盖（每张表是否都有这门语言）由 `tests/common/test_i18n_acceptance_11_languages.py` 守着。
 **译文质量一次都没抽查过** —— 代码只守结构，不守读起来是否通顺。
 不要把一套全绿的测试报成「译文没问题」。

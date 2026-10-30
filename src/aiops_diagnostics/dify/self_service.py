@@ -2,6 +2,7 @@
 
 import json
 import threading
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -18,6 +19,11 @@ from .dify_dsl_pull import DifyDslSource, _declared_dataset_ids
 from .dify_workspaces import DifyWorkspaces
 from .self_service_store import SelfServiceStore, SetupConflict
 
+#: 来源应用在 Dify 里的名字几乎不变，而「工作室」每打开一次就会拉一次目录。缓存的是
+#: **已经决定要显示的**标签（含兜底）：Dify 慢或不可用时，失败本身也被缓存，避免每次
+#: 打开工作室都撞一轮超时。
+_APP_NAME_TTL_SECONDS = 120.0
+
 
 class SelfService:
     def __init__(self, context):
@@ -30,6 +36,7 @@ class SelfService:
         self.routes = ChatRouteBindingStore(self.settings.database_file)
         self.lock = threading.RLock()
         self.enqueued = set()
+        self._app_names: dict[str, tuple[float, str]] = {}
 
     def enqueue(self, job_id, session):
         with self.lock:
@@ -131,6 +138,34 @@ class SelfService:
         return self.routes.get(
             self.settings.execution_environment, tenant, "operator", "operator_order_diagnosis"
         )
+
+    def source_app_name(self, tenant_id, app_id, fallback):
+        """来源应用在 **Dify** 里叫什么 —— 运营认得的是这个名字。
+
+        目录里的 ``name`` 曾经取 Gateway 的智能体名（``ops-methodology-700``、
+        ``operator-<app_id>``）。那是执行侧标识：它既不是 Dify 应用名，也不出现在任何
+        工作室列表里，于是「来源版本」下拉里出现了两个运营「从来没见过、也不知道属于谁」
+        的条目。这里改读 Dify 控制台自己的应用名，读不到就退回智能体名 —— 读名失败只降级
+        标签，不挡住开通入口。
+        """
+        now = time.monotonic()
+        cached = self._app_names.get(app_id)
+        if cached and cached[0] > now:
+            return cached[1]
+        name = ""
+        try:
+            workspace_id = DifyWorkspaces(self.settings.database_file).resolve(
+                tenant_id, self.settings.environment
+            )
+            if workspace_id:
+                payload = self.console._call(workspace_id, "/console/api/apps/" + app_id)
+                if isinstance(payload, dict):
+                    name = str(payload.get("name") or "").strip()
+        except Exception:  # noqa: BLE001 - 读名失败只降级标签
+            name = ""
+        label = name[:128] or fallback
+        self._app_names[app_id] = (now + _APP_NAME_TTL_SECONDS, label)
+        return label
 
     def status(self, caller, app_id):
         row = self.authorize_app(caller, app_id)

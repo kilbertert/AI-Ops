@@ -124,7 +124,7 @@ HTTP 200 的 HTML 也不算通过；空用户结果只证明接口可读，不�
 
 - 宿主目录：`/opt/aiops-m2-live/`（制品）与 `/var/lib/aiops-m2-live/`（状态）。
 - 隔离 Gateway 的状态库、运行目录、key 目录都在 `/var/lib/aiops-m2-live/gateway/`，
-  与生产 `/var/lib/aiops-41` **不交叉**。`aiops_diagnostics.isolation_guard` 在
+  与生产 `/var/lib/aiops-41` **不交叉**。`aiops_diagnostics.gateway.isolation_guard` 在
   `create_gateway_app()` 打开任何库**之前**判定；它就是 `gateway_server serve` 的启动路径，
   不是另写一份检查。
 - 隔离 Gateway 读 `build-runtime-config.sh` 生成的**白名单子集**
@@ -161,7 +161,7 @@ Gateway 的节点目标表和路由库设置见 [节点发布手册](../../docs/
 
 ```bash
 # 1) 写清单（在开发机/runner 上跑；身份 = 原始字节 sha256）
-uv run python tools/m2_close/m3live/write_exec_manifest.py \
+uv run python tools/experiments/m2_close/m3live/write_exec_manifest.py \
   --out /tmp/exec-manifest.json \
   --model-id "$M2LIVE_MODEL_ID" \
   --endpoint "$M2LIVE_MODEL_ENDPOINT" \
@@ -229,7 +229,7 @@ printf '%s\n' "$M3_ORDER" > "$HOME/m3-order"
 unset M3_ORDER
 
 # 1) 生产面基线（只读）。没有它就只能写「看起来没变」，所以缺它不往下走。
-python3 tools/m2_close/m3live/live_replay.py baseline --out "$EVID/prod-before.json"
+python3 tools/experiments/m2_close/m3live/live_replay.py baseline --out "$EVID/prod-before.json"
 
 # 2) 起栈：覆盖层只把 Gateway 的入口进程换成构造身份启动器
 trap 'bash deploy/m2-live-03/checks.sh down' EXIT
@@ -238,16 +238,16 @@ bash deploy/m2-live-03/checks.sh up
 # 3) 一次派发。失败**不重试**；标记 `.send.claim` 在**发送之前**原子创建，
 #    一旦存在就再也不放行 —— 超时/被杀之后这次到底发没发是**不确定**的，只能换目录。
 send_rc=0
-python3 tools/m2_close/m3live/live_replay.py send --order-file "$HOME/m3-order" --out "$EVID" || send_rc=$?
+python3 tools/experiments/m2_close/m3live/live_replay.py send --order-file "$HOME/m3-order" --out "$EVID" || send_rc=$?
 # send_rc 保留到最终报告；非零绝不重发，仍继续采证和停栈。
 
 # 4) 按 run 收集证据（记录摘要 + 日志计数 + 身份替换声明；不含业务正文）
-python3 tools/m2_close/m3live/live_replay.py collect --run-id <run_id> --out "$EVID"
+python3 tools/experiments/m2_close/m3live/live_replay.py collect --run-id <run_id> --out "$EVID"
 
 # 5) 停栈（**同一组变量**：down 也走同一个 COMPOSE 数组，覆盖层因此不会被漏掉），
 #    再核对容器/端口归零、生产面与基线逐项相同。
 bash deploy/m2-live-03/checks.sh down
-python3 tools/m2_close/m3live/live_replay.py cleanup --out "$EVID" \
+python3 tools/experiments/m2_close/m3live/live_replay.py cleanup --out "$EVID" \
   --prod-baseline "$EVID/prod-before.json"
 trap - EXIT
 exit "$send_rc"

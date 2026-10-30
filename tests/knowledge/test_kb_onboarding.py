@@ -25,7 +25,7 @@ import pytest
 from typer.testing import CliRunner
 
 from aiops_diagnostics.admin_cli import admin_app
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.knowledge.kb_onboarding import (
     KbAdminClient,
     OnboardError,
@@ -290,7 +290,7 @@ def test_verify_embedding_rejects_a_blocked_key(monkeypatch: pytest.MonkeyPatch)
             __import__("io").BytesIO(b'{"error":{"code":"InvalidApiKey"}}'),
         )
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.open_response", _rejected)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.open_response", _rejected)
 
     with pytest.raises(OnboardError) as caught:
         verify_embedding(base_url="https://embed.example/v1", api_key="sk-secret-1234")

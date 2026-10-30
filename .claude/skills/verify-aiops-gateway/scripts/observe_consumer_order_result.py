@@ -221,7 +221,7 @@ def _scoped_mysql_source(_settings, _scope):
     yield _Orders()
 
 
-import aiops_diagnostics.gateway_api as _api
+import aiops_diagnostics.gateway.gateway_api as _api
 _api.scoped_mysql_source = _scoped_mysql_source
 
 
@@ -242,7 +242,7 @@ _api.ScopedOrderAuthorizer = lambda *_a, **_k: _Authorizer()
 
 # UPMS is a MySQL database; on this host it is a stub with the one answer these
 # scenarios need (a consumer identity that may use the consumer platform).
-import aiops_diagnostics.faq as _faq
+import aiops_diagnostics.conversation.faq as _faq
 
 
 class _Directory:

@@ -13,7 +13,7 @@
 两条路各测各的：导入规则用真解释器跑，**真机分支**（读 ssh 回来的四条观察再判）
 用一个桩 `ssh` 驱动 —— 判据活在脚本里，不该为了可测而被抽成第二个实现。
 
-先例：`tests/test_derive_zh_hant_tool.py` 用替身 converter 证 walker 的逻辑，
+先例：`tests/tooling/test_derive_zh_hant_tool.py` 用替身 converter 证 walker 的逻辑，
 真机部分明确留给开发期检查。这里同一形状。
 """
 
@@ -39,7 +39,7 @@ _HEALTHY = {
     "HAS_INIT": "no",
     "HAS_PTH": "yes",
     "PTH_TARGET": _SRC,
-    "FAQ_DATA": f"{_SRC}/aiops_diagnostics/faq_catalog.json",
+    "FAQ_DATA": f"{_SRC}/aiops_diagnostics/conversation/faq_catalog.json",
 }
 
 
@@ -164,7 +164,7 @@ def test_the_guard_passes_on_the_healthy_observations(tmp_path: Path) -> None:
         ("API_FILE", f"{_SP}/aiops_diagnostics/gateway_api.py"),
         ("HAS_INIT", "yes"),
         ("HAS_PTH", "no"),
-        ("FAQ_DATA", f"{_SP}/aiops_diagnostics/faq_catalog.json"),
+        ("FAQ_DATA", f"{_SP}/aiops_diagnostics/conversation/faq_catalog.json"),
     ],
 )
 def test_each_broken_observation_fails_the_guard(tmp_path: Path, field: str, broken: str) -> None:

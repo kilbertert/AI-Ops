@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).parents[2]
-TOOLS = ROOT / "tools" / "consumer-status"
+TOOLS = ROOT / "tools" / "verification" / "consumer-status"
 
 
 def _load(name: str):
@@ -153,7 +153,7 @@ def test_symlinked_parent_directory_is_refused(tmp_path: Path) -> None:
 def test_repository_roots_detects_the_worktree(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
-    nested = root / "tools" / "consumer-status"
+    nested = root / "tools" / "verification" / "consumer-status"
     nested.mkdir(parents=True)
     assert root in private_output.repository_roots(nested)
 

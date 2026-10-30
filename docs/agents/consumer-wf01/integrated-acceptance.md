@@ -1,6 +1,6 @@
 # WF01真实依赖整合验收方法
 
-隔离栈由已合并版本的`tools/verify_consumer_chatflow.py`与既有Dify验收启动器起，
+隔离栈由已合并版本的`tools/verification/verify_consumer_chatflow.py`与既有Dify验收启动器起，
 仅本次Docker网络命名空间内监听，生产Gateway/节点路线保持原行为。
 真实依赖验收与合成回归分别记录，不能用浏览器响应回放声称线上真人端到端。
 

@@ -494,19 +494,34 @@ def test_a_cached_token_outlives_the_old_fifteen_minute_window(tmp_path, monkeyp
 
     不是把窗口关掉：会话 60 分钟一到，``verify_console_jwt`` 仍会拒（读回那条另测）。
     """
-    import hashlib
     import time
 
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
     _patch_company(monkeypatch, user_type="5")
     service = _service(tmp_path, _Directory(WORKSPACE), _Inner())
     service.retain_operator_token = True
     session, _ = service.login(username="zhang", password="pw", random_str="r", code="c")
-    key = hashlib.sha256(session.access_token.encode()).hexdigest()
-    with service._operator_token_lock:
-        expiry, *rest = service._operator_tokens[key]
-        service._operator_tokens[key] = (time.time() + 16 * 60, *rest)
-    assert expiry > time.time() + 15 * 60
+    clock[0] += 16 * 60
     assert service.operator_token(session.access_token) is not None
+    clock[0] += 45 * 60
+    assert service.operator_token(session.access_token) is None
+
+
+def test_successful_logins_above_128_keep_their_operator_grants(tmp_path, monkeypatch) -> None:
+    from dataclasses import replace
+
+    _patch_company(monkeypatch, user_type="5")
+    service = _service(tmp_path, _Directory(WORKSPACE), _Inner())
+    service.dify = replace(service.dify, access_expire_minutes=43200)
+    service.retain_operator_token = True
+    sessions = [
+        service.login(username="zhang", password="pw", random_str="r", code="c")[0] for _ in range(129)
+    ]
+    assert all(service.operator_token(s.access_token) is not None for s in sessions)
+    service.forget_operator_token(sessions[-1].access_token)
+    assert service.operator_token(sessions[-1].access_token) is None
+    assert service.operator_token(sessions[0].access_token) is not None
 
 
 def test_logout_then_same_second_login_does_not_reauthorize_old_session(tmp_path, monkeypatch):

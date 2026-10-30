@@ -14,12 +14,12 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics import gateway_api
 from aiops_diagnostics.consumer.consumer_order_chat import is_order_status_question
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.data.sources import MySQLSource
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway import gateway_api
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -283,7 +283,7 @@ def test_unknown_status_and_history_recheck(provision):
 
 
 def test_conversation_keeps_bound_answer_but_excludes_it_from_model_context(provision):
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
     p = provision
     with TestClient(p.app) as client:
@@ -388,7 +388,7 @@ def test_evidence_write_cannot_bypass_final_authorization(provision, monkeypatch
 def test_new_turn_column_migrates_without_losing_existing_history(provision):
     import sqlite3
 
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
     p = provision
     with sqlite3.connect(p.settings.database_file) as db:
@@ -406,7 +406,7 @@ def test_new_turn_column_migrates_without_losing_existing_history(provision):
 
 
 def test_latest_sql_filters_regular_and_work_order_owners_before_sort(monkeypatch):
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.identity.query_scope import QueryScope
 
     calls = []
@@ -450,7 +450,7 @@ def test_status_route_does_not_claim_diagnosis_or_generic_questions(question):
 def test_latest_selects_only_owned_regular_or_claimed_orders_in_sql(monkeypatch):
     import sqlite3
 
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.identity.query_scope import QueryScope
 
     db = sqlite3.connect(":memory:", check_same_thread=False)

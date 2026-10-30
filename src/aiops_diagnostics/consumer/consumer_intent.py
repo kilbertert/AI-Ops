@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from aiops_diagnostics.model_request import structured_request
+from aiops_diagnostics.common.model_request import structured_request
 
 INTENTS = (
     "order_status",

@@ -349,7 +349,7 @@ def test_publishing_requires_the_app_service_key_to_exist(tmp_path):
         class settings:  # noqa: N801 - 只用到这两个属性
             chat_dify_key_dir = str(key_dir)
 
-    from aiops_diagnostics.gateway_api import _key_ref_for
+    from aiops_diagnostics.gateway.gateway_api import _key_ref_for
 
     with pytest.raises(Exception) as raised:
         _key_ref_for(str(key_dir), APP)
@@ -364,7 +364,7 @@ def test_publishing_requires_the_app_service_key_to_exist(tmp_path):
 
 def test_a_missing_key_dir_is_not_silently_accepted(tmp_path):
     """没配凭据目录时发布推空引用 —— 那是配置缺失，不是"已就位"。"""
-    from aiops_diagnostics.gateway_api import _key_ref_for
+    from aiops_diagnostics.gateway.gateway_api import _key_ref_for
 
     assert _key_ref_for("", APP) == ""
 
@@ -500,7 +500,7 @@ def test_a_version_move_invalidates_the_frozen_run(tmp_path):
     Dify 的保存不换 workflow id，所以"导出的图变了、身份没变"是真实存在的组合；
     只比 workflow_id 会让旧版本的缓存正文继续被交付。
     """
-    from aiops_diagnostics.gateway_api import _version_moved
+    from aiops_diagnostics.gateway.gateway_api import _version_moved
 
     class _Run:
         agent_version_no = 1
@@ -807,10 +807,10 @@ def test_retracting_settles_a_live_trial_with_the_trials_own_credentials(tmp_pat
     """
     import os
 
-    from aiops_diagnostics.config import Settings
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime, JobRegistration
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.common.config import Settings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime, JobRegistration
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     os.chmod(tmp_path, 0o750)
     config = tmp_path / "production.env"

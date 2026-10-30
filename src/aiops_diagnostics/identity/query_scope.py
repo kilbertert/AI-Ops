@@ -34,7 +34,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     JSON_CONTENT_TYPE,
     ErrorMapping,
     RequestSpec,
@@ -42,7 +42,7 @@ from aiops_diagnostics.bounded_http import (
     parse_raw_envelope,
     request_json,
 )
-from aiops_diagnostics.config import DisSettings, UpmsSettings
+from aiops_diagnostics.common.config import DisSettings, UpmsSettings
 from aiops_diagnostics.identity.scope_context import (
     SCOPE_ERROR_EMPTY_SCOPE,
     SCOPE_TYPE_ALL,

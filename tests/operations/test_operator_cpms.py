@@ -13,9 +13,9 @@ from execution.test_app_runtime_dify_entry import dify_chat
 from execution.test_m2_close_contract import NODE_A_TOKEN, _write_config
 from execution.test_m3_gateway_exec_config import _write_manifest
 
+from aiops_diagnostics.conversation.faq import PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.execution import chat_execution, node_publication
-from aiops_diagnostics.faq import PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.operator import operator_cpms
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
@@ -458,7 +458,7 @@ def test_scope_revoke_during_node_read_is_not_only_checked_at_start(operator, mo
 
 
 def test_runtime_tools_are_not_used_for_operator_trial(operator):
-    from aiops_diagnostics.gateway_api import StandardAPIError, _workflow_trial_draft
+    from aiops_diagnostics.gateway.gateway_api import StandardAPIError, _workflow_trial_draft
 
     f = operator
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
@@ -649,7 +649,7 @@ def test_native_cancel_only_owns_trial_and_revokes_grants(operator, monkeypatch)
 
     monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
     monkeypatch.setattr(
-        "aiops_diagnostics.gateway_api.authenticated_operator_console",
+        "aiops_diagnostics.gateway.gateway_api.authenticated_operator_console",
         lambda ctx, session: (f["resolver"].current, "operator-private"),
     )
     try:

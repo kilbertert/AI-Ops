@@ -41,7 +41,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
     HttpFailure,
     RequestSpec,
@@ -50,7 +50,7 @@ from aiops_diagnostics.bounded_http import (
     request_json,
     tenant_id_header,
 )
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
 #: kb-service 的租户头（与检索、媒体同一条）。
 CREDENTIAL_PREFIX = "enc:v1:"

@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from aiops_diagnostics.config import UpmsSettings
+from aiops_diagnostics.common.config import UpmsSettings
 from aiops_diagnostics.identity.scope_context import (
     SCOPE_ERROR_AUTH_FAILED,
     SCOPE_ERROR_UPMS_UNAVAILABLE,
@@ -104,7 +104,7 @@ class _FakeResponse:
 
 
 def _directory(transport: _FakeTransport, monkeypatch: pytest.MonkeyPatch) -> UpmsDirectory:
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", transport)
     return UpmsDirectory(UpmsSettings(base_url=UPMS_BASE_URL, timeout_seconds=5))
 
 
@@ -225,7 +225,7 @@ def test_ds_fallback_unreachable_upms_stays_fail_closed(monkeypatch: pytest.Monk
     def unavailable(request: Any, timeout: int | None = None) -> _FakeResponse:
         raise urllib.error.URLError("connection refused")
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", unavailable)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", unavailable)
     directory = UpmsDirectory(UpmsSettings(base_url=UPMS_BASE_URL, timeout_seconds=5))
 
     with pytest.raises(ScopeError) as excinfo:

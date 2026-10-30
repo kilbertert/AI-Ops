@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.deployment_environment import canonical_environment
+from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.dify.dify_login_provision import (
     DifyConsoleSettings,
     DifyProvisionError,
@@ -33,10 +33,10 @@ from aiops_diagnostics.dify.dify_workspaces import (
     DifyWorkspaceError,
     DifyWorkspaces,
 )
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.http_auth import build_internal_token_headers
+from aiops_diagnostics.gateway.deployment_environment import canonical_environment
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
 INTERNAL_SECRET = "internal-token-secret-0123456789"
 ENVIRONMENT = "41"
@@ -277,8 +277,8 @@ def test_the_m2_launchers_also_require_the_deployment_identity() -> None:
     """
     root = Path(__file__).resolve().parents[2]
     for launcher in (
-        root / "tools/m2_close/gateway_launcher.py",
-        root / "tools/m2_close/m3live/identity_launcher.py",
+        root / "tools/experiments/m2_close/gateway_launcher.py",
+        root / "tools/experiments/m2_close/m3live/identity_launcher.py",
     ):
         text = launcher.read_text(encoding="utf-8")
         assert "require_deployment_identity(" in text, f"{launcher.name} 没有过部署身份这道门"
@@ -289,7 +289,7 @@ def test_the_m2_launchers_also_require_the_deployment_identity() -> None:
 
 
 def test_require_deployment_identity_refuses_an_empty_value() -> None:
-    from aiops_diagnostics.deployment_environment import require_deployment_identity
+    from aiops_diagnostics.gateway.deployment_environment import require_deployment_identity
 
     with pytest.raises(ValueError, match="AIOPS_GATEWAY_ENVIRONMENT is required"):
         require_deployment_identity("")
@@ -311,7 +311,7 @@ def test_the_token_expiry_is_read_from_the_private_config_beside_its_secret(
     只看进程 env 时，运维改了 `production.env` 里紧挨着密钥的那一行会**静默不生效** ——
     而读者有充分理由认为两者同源。
     """
-    from aiops_diagnostics.private_files import write_private_text
+    from aiops_diagnostics.common.private_files import write_private_text
 
     config = tmp_path / "gateway.env"
     write_private_text(

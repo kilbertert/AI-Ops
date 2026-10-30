@@ -46,12 +46,12 @@ POST photos→questions photo_id→GET，核对识图线索实际进入KB。组�
 真实baoyun只验证无个人信息的错误截图，不替代原App完整业务验收；Dify保留策略单列未完成。
 
 SEMANTIC（对应semantic-routing.feature）：一次性Gateway/真Dify/合成分类器、CPMS和知识服务。
-运行`uv run python tools/verify_consumer_chatflow.py --out <仓库外新报告>`：口语最新单应读取CPMS，
+运行`uv run python tools/verification/verify_consumer_chatflow.py --out <仓库外新报告>`：口语最新单应读取CPMS，
 随后令前轮过期并在原conversation_id问明确新问题，应再次取数、旧GET410；退出自动清理本次栈。
 组件反例覆盖分类故障、非法结构、他人订单、多单、分类/提交期间过期，必须无业务或FAQ回落。
 
 SEMANTIC-MODEL：经授权、具有现用provider配置的受控环境；
-`uv run python tools/verify_consumer_intent.py --config <受控配置> --out <仓库外新报告>`。
+`uv run python tools/verification/verify_consumer_intent.py --config <受控配置> --out <仓库外新报告>`。
 执行semantic-cases.jsonl固定17句，每句一次，记录模型/源码摘要/耗时与判断。
 非取数意图不以order_reference评分，因为它不会参与选单；此判据不放松intent要求。
 不得用合成模型的接线结果代替本项；报告不包含密钥，原件保留在私有目录。

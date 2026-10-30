@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
 
 @pytest.mark.parametrize("managed", [False, True])

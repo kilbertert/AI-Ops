@@ -23,7 +23,7 @@ What is NOT here, deliberately:
 
 from __future__ import annotations
 
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
 
 #: The three summary sentences. Keys mirror the branches in
 #: ``health_report.build_minimal_health_report``.

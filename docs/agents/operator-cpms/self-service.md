@@ -42,6 +42,24 @@ max_tokens_to_sample、function_calling_type=tool_call、stream_function_calling
 所有路径位于 `/v1/dify/management/`，发布服务key与公司Dify登录会话缺一不可。
 浏览器只调用固定动作的同源manage端点，拿不到内部token和平台密钥。
 
+## 来源版本下拉的标签语义
+
+下拉每一项读的是 `management/catalogue` 的 `sources[]`：只列 `operator` 入口、`active`、
+且已登记进 `operator_apps` 的正式路由。所以「4 条正式路由只出现 2 项」是正常的——
+另外两条是 `consumer` 入口（客户端），首片只开通管家端，客户端不出现在这里。
+
+标签形如 `客户名 / Dify应用名 · V智能体正式版本`：
+
+- 客户名来自公司 `/upms/tenant/list/my`，与可开通客户目录同源；
+- 应用名按该应用所属 workspace 读 Dify `/console/api/apps/<id>`，按 app_id 缓存 120 秒；
+  读不到时退回 Gateway 智能体名（`ops-methodology-700`、`operator-<app_id>` 这类），
+  读名失败不影响开通；
+- 末尾 `V` 是**智能体正式版本号**（`chat_route_bindings.agent_version_no`），
+  不是 Dify 应用的发布版本号；
+- 来源应用全都住在**客户工作区**（`aiops-41-Ulink-…`、`aiops-41-优链充-…`），
+  平台账号在大厅里看不到它们，只有「进入工作区」才会被加进去。
+  在工作室里找不到同名应用时，先想这一条，而不是怀疑开通入口没装上。
+
 ## 恢复
 
 失败任务保留资源ID与步骤，正常登录后点击重试；重启不会丢失进度。若Dify创建响应丢失，
@@ -172,18 +190,33 @@ ragflow_tenants.model_checked_at非空。知识入口303并进入RAGFlow后，�
 body传该测试ID，确认success_count=1；Dify随后同步应移除对应external dataset。
 保留租户账号、知识连接和开通任务。最终回读Gateway路由与发布审计，按现场版本写回执。
 
-## 开通客户后必须对齐环境清单，否则整份收敛会被拦住
+## 旧清单客户迁移到页面管理
 
 页面开通会把`(租户, operator)`登记成页面管理的受管应用。`reconcile_dify_registry`的守卫
 “页面管理的管家不能由环境清单覆盖”此时**在写入前中止**：只要`ops/environments/env-41.toml`
 里该租户的`[[dify_apps]]`与页面登记的app_id/agent_name不一致，对该清单跑
 `aiops admin reconcile`就会整份失败，不只是一个租户不收敛。
 
-因此开通新客户后，二选一并同时复核：把该租户的`[[dify_apps]]`行从清单移除（改由页面管理），
-或让清单的app_id与agent_name与页面登记逐字一致。核对方法是只读复算守卫判据——读
+新客户直接在页面开通，不需要先写环境清单。仅从旧清单管理迁移的客户需要一次清理：
+把该租户的`[[dify_apps]]`及对应`[[agents]]`从清单移除，之后由页面管理。核对方法是只读复算守卫判据——读
 `operator_apps`的`(tenant_id)`与`dify_app_registry`的`(tenant_id, business_entry, app_id)`，
 对每条`[[dify_apps]]`判断`key ∈ operator_apps 且 app_id 不一致`；为真即会中止。
-2026-10-29实测：优链充一条为真，其余两条为假。
+2026-10-29实测：优链充一条为真，其余两条为假；#1173移除了优链充声明，2026-10-30补发41。
+这只消除登记守卫冲突；整份reconcile仍需先通过模型白名单等独立前置条件。
 
 清单声明与实际正式入口是两份事实：页面发布只改`chat_route_bindings`/`dify_app_registry`，
 不会回写仓库清单。发布后要回读路由，才能知道"这个租户此刻由哪个app回答"。
+
+## 登录与跨组件部署复核
+
+公司授权随控制台会话保存，生产会话为30天；退出、到期或代理重启会清理缓存。
+成功登录不得因固定128条缓存上限而失去管家授权。缓存仅驻内存，数量随有效会话增长，
+未完成压力和30天稳定性验收；公司停用账号传播边界见ADR-0136/0173。
+
+如果Gateway变更`DETAIL_FIELDS`或样本证据形状，Java `CpmsReadTool`必须同次更新。
+先运行`verify_operator_cpms.py`，再从同一合并修订打包节点，按节点运行手册定点切换；
+只看到Gateway CD成功不能证明Java已上线。逐个核节点jar摘要、容器AIOPS_NODE_BUILD与两项工具run。
+
+41的ops清单不随Gateway CD更新：用`git show <合并修订>:ops/environments/env-41.toml`生成制品，
+比较线上旧摘要与新制品，`dev-host cp 41 ... --artifact-sha256 ...`传入临时路径，
+备份原文件后以原服务属主/权限原子替换；不要为验配置直接运行整份写入reconcile。

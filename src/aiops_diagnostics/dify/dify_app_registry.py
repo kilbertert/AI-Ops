@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 
 #: The two business entries the platform rule already defines (``faq.PLATFORMS``).
 #: Restated rather than imported so this module stays a leaf: importing ``faq``

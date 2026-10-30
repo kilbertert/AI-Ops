@@ -1,6 +1,6 @@
 # 公司仓库索引（L1）
 
-> 由 `tools/company_repo_index.py` 生成，**不要手改**。取数日 **2026-10-01**（UTC）。
+> 由 `tools/inventory/company_repo_index.py` 生成，**不要手改**。取数日 **2026-10-01**（UTC）。
 >
 > 三列来自公司 GitLab 自己的元数据（`id` / `default_branch` / `last_activity_at`）；
 > 末列「域」是本脚本按**路径**机械分类的结果，不认识的一律 `未定`。

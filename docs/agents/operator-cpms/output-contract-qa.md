@@ -13,7 +13,7 @@
 | OC-05 | 原C端清单及各种清单漂移 | 运行节点守卫验收与反向控制 | C端协议不变；模型/提示词/工具漂移仍拒绝 |
 
 执行沿用[现有运行方法](README.md)，命令为
-`uv run python tools/m2_close/m3node/verify_operator_cpms.py --out dist/verification/operator-output`。
+`uv run python tools/experiments/m2_close/m3node/verify_operator_cpms.py --out dist/verification/operator-output`。
 检查脚本创建的`report.json`及编译/节点日志，保留源码摘要、基线提交、时间与锁定依赖标识。
 脚本结束关闭本次HTTP服务与容器，临时数据库自动清理；报告目录保留。
 
@@ -30,7 +30,7 @@ docker run --rm --pull=never --network=none --cap-drop=ALL \
 ```
 
 Maven显示`No tests to run`是此模块没有JUnit目录，不能计作测试通过；行为证据来自上述
-Java整链及`tools/m2_close/m3node/run.sh`的守卫验收。比较构建jar的SHA-256与部署回执。
+Java整链及`tools/experiments/m2_close/m3node/run.sh`的守卫验收。比较构建jar的SHA-256与部署回执。
 
 本地通过仅证明上述契约，不证明真实供应商服从参数、ulink线上恢复或故障准确率。
 上线后按[41运维手册](../env-41-runbook.md)在已授权账号与订单上分别驱动原生预览、

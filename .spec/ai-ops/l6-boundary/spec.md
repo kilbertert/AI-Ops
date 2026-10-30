@@ -3,13 +3,13 @@ title: l6-boundary
 desc: 进程边界与入口——服务入口与业务路由
 hue: 0
 code:
-  - src/aiops_diagnostics/gateway_api.py
+  - src/aiops_diagnostics/gateway/gateway_api.py
 related:
-  - src/aiops_diagnostics/gateway_runtime.py
+  - src/aiops_diagnostics/gateway/gateway_runtime.py
   - src/aiops_diagnostics/gateway_server.py
-  - src/aiops_diagnostics/isolation_guard.py
-  - src/aiops_diagnostics/gateway_config.py
-  - src/aiops_diagnostics/gateway_logging.py
+  - src/aiops_diagnostics/gateway/isolation_guard.py
+  - src/aiops_diagnostics/gateway/gateway_config.py
+  - src/aiops_diagnostics/gateway/gateway_logging.py
   - src/aiops_diagnostics/admin_cli.py
   - src/aiops_diagnostics/tdengine_proxy.py
   - src/aiops_diagnostics/execution/execution_manifest.py

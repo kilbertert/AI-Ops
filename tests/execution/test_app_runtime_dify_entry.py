@@ -8,7 +8,7 @@
   * 真实的 Dify 路线 worker 与回调端点。
 
 替身只有两类：**Dify 服务本身**（一个本地 HTTP 桩，因为本文件不是整链验收 ——
-真 Dify 的整链在 `tools/m2_close/m3node/verify_dify_chat_entry.py`）与 CPMS（合成上游）。
+真 Dify 的整链在 `tools/experiments/m2_close/m3node/verify_dify_chat_entry.py`）与 CPMS（合成上游）。
 
 这一组的强判据是**计数**：授权不满足时业务请求必须是 0；正常对照必须证明不是"全拒假绿"。
 """
@@ -24,15 +24,15 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver
 from aiops_diagnostics.dify.dify_run_store import DifyRunStore
 from aiops_diagnostics.execution import chat_data_grant, chat_execution
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_to_json
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_runtime import GatewayRuntime
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from execution.test_app_runtime_node_entry import (
     ORDER_A,
     ORDER_B,
@@ -247,7 +247,7 @@ def dify_stub():
 @contextmanager
 def dify_chat(tmp_path, monkeypatch, *, stub_base: str, engine: str = "dify"):
     with _cpms({ORDER_A, ORDER_B}) as upstream:
-        monkeypatch.setattr("aiops_diagnostics.gateway_api.scoped_mysql_source", _orders_source)
+        monkeypatch.setattr("aiops_diagnostics.gateway.gateway_api.scoped_mysql_source", _orders_source)
         production = tmp_path / "production.env"
         production.write_text("# synthetic\n")
         production.chmod(0o600)

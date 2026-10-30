@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
 
 def test_health_job_reuses_active_and_completed_work(tmp_path: Path) -> None:
@@ -72,7 +72,7 @@ def test_the_boot_hook_converges_with_a_restart_verdict(tmp_path: Path) -> None:
     outran its deadline) and not `cancelled` (which means the user stopped it).
     `docs/validation.md` records why the three are kept apart.
     """
-    from aiops_diagnostics.gateway_store import HEALTH_JOB_RESTART_ERROR_CODE
+    from aiops_diagnostics.gateway.gateway_store import HEALTH_JOB_RESTART_ERROR_CODE
 
     database = tmp_path / "gateway.db"
     store = GatewayStore(database)
@@ -135,8 +135,8 @@ def test_a_restarted_report_tells_the_caller_to_retry(tmp_path: Path) -> None:
     produces an error with no button, which is the outcome this ticket exists to
     avoid.
     """
-    from aiops_diagnostics.gateway_api import _health_job_response
-    from aiops_diagnostics.gateway_store import HEALTH_JOB_RESTART_ERROR_CODE
+    from aiops_diagnostics.gateway.gateway_api import _health_job_response
+    from aiops_diagnostics.gateway.gateway_store import HEALTH_JOB_RESTART_ERROR_CODE
 
     body = _health_job_response(
         {

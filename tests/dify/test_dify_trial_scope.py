@@ -153,10 +153,10 @@ def test_create_gateway_app_injects_the_operator_scope_into_a_real_runtime(tmp_p
     纯函数测试证明规则对；这一条证明那条规则在真实装配路径上被接到了运行时上 ——
     否则"规则写好了但没人调用"会让范围静默落到空集合，而那看起来像"账号没权限"。
     """
-    from aiops_diagnostics.gateway_api import create_gateway_app
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -167,7 +167,7 @@ def test_create_gateway_app_injects_the_operator_scope_into_a_real_runtime(tmp_p
     os.chmod(settings.server_config_file, 0o600)  # 私有配置文件：不得有组/其他位
     store = GatewayStore(settings.database_file)
     runtime = GatewayRuntime(
-        store, settings, __import__("aiops_diagnostics.config", fromlist=["Settings"]).Settings()
+        store, settings, __import__("aiops_diagnostics.common.config", fromlist=["Settings"]).Settings()
     )
     create_gateway_app(settings=settings, store=store, runtime=runtime, caller_resolver=None)  # type: ignore[arg-type]
     # 未配置 UPMS ⇒ 解析器可能是 None；关键是**属性被设过**（注入路径走通），
@@ -180,9 +180,9 @@ def test_the_trial_scope_is_empty_when_no_operator_scope_was_injected() -> None:
     import tempfile
     from pathlib import Path
 
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     tmp = Path(tempfile.mkdtemp())
     settings = GatewayServerSettings(
@@ -195,7 +195,7 @@ def test_the_trial_scope_is_empty_when_no_operator_scope_was_injected() -> None:
     runtime = GatewayRuntime(
         GatewayStore(settings.database_file),
         settings,
-        __import__("aiops_diagnostics.config", fromlist=["Settings"]).Settings(),
+        __import__("aiops_diagnostics.common.config", fromlist=["Settings"]).Settings(),
     )
     assert runtime._trial_operator_scope is None
     context = build_trial_scope(_initiator(), operator_scope=runtime._trial_operator_scope)

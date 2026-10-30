@@ -73,7 +73,7 @@ HTTPS server 可包含 [operator-token.conf.template](../../../ops/dify-login-pr
 
 ```bash
 M3NODE_DEPS=<锁定依赖目录> M3NODE_JDK_IMAGE=<锁定JDK镜像digest> \
-  uv run python tools/m2_close/m3node/verify_operator_cpms.py --out <私有报告目录>
+  uv run python tools/experiments/m2_close/m3node/verify_operator_cpms.py --out <私有报告目录>
 uv run pytest tests/operations/test_operator_cpms.py tests/test_node_runtime_deploy.py
 ```
 

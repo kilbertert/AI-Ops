@@ -119,8 +119,8 @@
 | 段 | 在哪跑 | 做什么 | 状态 |
 |---|---|---|---|
 | **1** | **CI**（`tests/dify/test_dify_exposure_registry.py`） | 静态回归：路由表里"面向 Dify 暴露的端点集合" == 本表声明的集合；挂接跳数只能是我们网关的适配路由，且**只读** | ✅ 已落地（11 例） |
-| 2 | 验收制品（不进 CI） | 运行时探测：每个已暴露端点验证未授权被拒、授权按只读语义返回 | ✅ `tools/check_dify_exposure.py --runtime`；结果随验收留档 |
-| 3 | 验收制品（不进 CI） | 网络面探测：从 Dify 所在宿主的视角验证除登记集合外的公司系统面不可达 | ✅ `tools/check_dify_exposure.py --network`；同上 |
+| 2 | 验收制品（不进 CI） | 运行时探测：每个已暴露端点验证未授权被拒、授权按只读语义返回 | ✅ `tools/verification/check_dify_exposure.py --runtime`；结果随验收留档 |
+| 3 | 验收制品（不进 CI） | 网络面探测：从 Dify 所在宿主的视角验证除登记集合外的公司系统面不可达 | ✅ `tools/verification/check_dify_exposure.py --network`；同上 |
 
 段 2/段 3 要连真实端点与真实 Dify 宿主，**不进 CI**（CI 是 GitHub-hosted，没有那些东西）；
 它们的脚本与结果随验收制品留档、可复跑。脚本的退出码与 `verify_banner_car_lookup.py`

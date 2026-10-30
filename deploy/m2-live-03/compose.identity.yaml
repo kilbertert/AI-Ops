@@ -1,7 +1,7 @@
 # 复跑用的**构造身份**覆盖层（与 compose.yaml 一起用，不单独起栈）。
 #
 # 它只改一件事：Gateway 的入口进程从镜像里的 `gateway_server serve` 换成
-# `tools/m2_close/m3live/identity_launcher.py`。订单授权、CPMS、平台、节点、
+# `tools/experiments/m2_close/m3live/identity_launcher.py`。订单授权、CPMS、平台、节点、
 # 模型出口、完成通知全部仍是真实代码（ADR-0058）。
 #
 # 这是模板，不含任何凭据。身份三件套放在宿主上的 0600 文件
@@ -33,4 +33,4 @@ services:
         set -e
         # 与正式 compose 逐字相同：系统 bundle + 本栈 CA（SSL_CERT_FILE 是替换）。
         cat /etc/ssl/certs/ca-certificates.crt /etc/m2live-tls/ca.crt > /data/ca-bundle.crt
-        exec python /opt/aiops-src/tools/m2_close/m3live/identity_launcher.py
+        exec python /opt/aiops-src/tools/experiments/m2_close/m3live/identity_launcher.py

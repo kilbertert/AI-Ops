@@ -126,7 +126,7 @@ def test_the_device_entry_guard_is_implemented_once() -> None:
     either of these two modules is how the duplicate status code came back.
     """
     offenders: list[str] = []
-    for name in ("gateway_api.py", "gateway_runtime.py"):
+    for name in ("gateway/gateway_api.py", "gateway/gateway_runtime.py"):
         tree = ast.parse((SOURCE_ROOT / name).read_text(encoding="utf-8"), filename=name)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Compare):
@@ -161,8 +161,8 @@ def test_the_device_entry_guard_is_implemented_once() -> None:
 #: see, so routing them through this rule would be wrong, not thorough.
 VISIBILITY_MODULES = (
     "data/sources.py",
-    "gateway_api.py",
-    "gateway_runtime.py",
+    "gateway/gateway_api.py",
+    "gateway/gateway_runtime.py",
 )
 
 

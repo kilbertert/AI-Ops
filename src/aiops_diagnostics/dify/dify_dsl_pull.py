@@ -54,7 +54,7 @@ from urllib.parse import urlencode, urlsplit
 
 import yaml
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
     HttpFailure,
     RequestSpec,

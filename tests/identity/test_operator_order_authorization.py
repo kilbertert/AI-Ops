@@ -55,7 +55,7 @@ from operator_support import (
     upms_settings,
 )
 
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.data.sources import SourceError
 from aiops_diagnostics.identity.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.identity.query_scope import QueryScope, resolve_query_scope

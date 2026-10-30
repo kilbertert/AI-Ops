@@ -20,20 +20,20 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
     HttpFailure,
     RequestSpec,
     json_body,
     request_json,
 )
-from aiops_diagnostics.deployment_environment import canonical_environment
 from aiops_diagnostics.dify.dify_login_proxy import (
     _MAX_NAME_CHARS,
     ACCOUNT_EMAIL_DOMAIN,
     ConsoleSession,
     DifyLoginError,
 )
+from aiops_diagnostics.gateway.deployment_environment import canonical_environment
 
 _LOGGER = logging.getLogger("aiops.dify_login_proxy.provision")
 

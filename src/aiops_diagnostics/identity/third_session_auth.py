@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 import redis
 
-from aiops_diagnostics.config import Settings, UpmsSettings
+from aiops_diagnostics.common.config import Settings, UpmsSettings
 from aiops_diagnostics.data.sources import SourceError, mysql_site_mapper
 from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_INVALID,

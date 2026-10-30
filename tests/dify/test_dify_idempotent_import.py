@@ -55,7 +55,7 @@ def test_idempotent_import_with_upstream_role_guards(tmp_path):
             IMAGE,
             "-",
         ],
-        input=(ROOT / "tools/verify_dify_idempotent_import.py").read_text(),
+        input=(ROOT / "tools/verification/verify_dify_idempotent_import.py").read_text(),
         capture_output=True,
         text=True,
         timeout=45,

@@ -26,7 +26,7 @@
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/gateway_api.py",
+          "path": "src/aiops_diagnostics/gateway/gateway_api.py",
           "label": "code"
         }
       ],
@@ -50,7 +50,7 @@
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/gateway_store.py",
+          "path": "src/aiops_diagnostics/gateway/gateway_store.py",
           "label": "code"
         }
       ],
@@ -74,7 +74,7 @@
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/model_request.py",
+          "path": "src/aiops_diagnostics/common/model_request.py",
           "label": "code"
         }
       ],
@@ -170,7 +170,7 @@
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/config.py",
+          "path": "src/aiops_diagnostics/common/config.py",
           "label": "code"
         }
       ],

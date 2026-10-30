@@ -21,10 +21,10 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
 PUBLISH_KEY = "dify-publish-key-0123456789"
 KNOWLEDGE_KEY = "dify-knowledge-key-0123456789"
@@ -231,7 +231,7 @@ def test_enabling_publish_without_a_console_credential_is_a_startup_error(tmp_pa
     """
     import pytest
 
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     (tmp_path / "production.env").write_text("# test\n", encoding="utf-8")
     settings = GatewayServerSettings(
@@ -250,7 +250,7 @@ def test_the_publish_key_must_differ_from_the_other_dify_keys(tmp_path) -> None:
     """三把钥匙同值 ⇒ 启动错误。同值等于把两件事绑成一个权限。"""
     import pytest
 
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     (tmp_path / "production.env").write_text("# test\n", encoding="utf-8")
     base: dict[str, object] = dict(
@@ -286,7 +286,7 @@ class _OperatorDecisions:
 
     def resolve(self, caller, *, platform_entry=None):
         self.seen.append(platform_entry)
-        from aiops_diagnostics.faq import PlatformDecision
+        from aiops_diagnostics.conversation.faq import PlatformDecision
 
         return PlatformDecision(
             platform=str(platform_entry or "consumer"), available_platforms=(), b_subject_ids=(), reason="ok"
@@ -481,7 +481,7 @@ def test_an_operator_cannot_publish_another_tenants_app(tmp_path, monkeypatch) -
 
 
 def _ledger(tmp_path: Path):
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     return GatewayStore(tmp_path / "gateway.db")
 
@@ -917,7 +917,7 @@ def test_a_slow_publish_cannot_undo_a_retraction_that_happened_meanwhile(tmp_pat
 
     # 发布走的是 `_sync_bound_app` → 它会先试 chat 的映射，失败再走 workflow 的。
     # 这里直接替换**网关里的分派函数**，确保"慢同步"真的发生在这个窗口里。
-    import aiops_diagnostics.gateway_api as gateway_api
+    import aiops_diagnostics.gateway.gateway_api as gateway_api
 
     monkeypatch.setattr(gateway_api, "_sync_bound_app", slow_sync)
     response = client.post("/v1/dify/publish", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)

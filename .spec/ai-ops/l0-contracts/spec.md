@@ -2,15 +2,15 @@
 title: l0-contracts
 desc: 通用配置、有界传输、私有文件与脱敏
 code:
-  - src/aiops_diagnostics/config.py
+  - src/aiops_diagnostics/common/config.py
 related:
-  - src/aiops_diagnostics/bounded_http.py
-  - src/aiops_diagnostics/redaction.py
-  - src/aiops_diagnostics/private_files.py
-  - src/aiops_diagnostics/i18n.py
-  - src/aiops_diagnostics/platform_paths.py
-  - src/aiops_diagnostics/http_auth.py
-  - src/aiops_diagnostics/console_encoding.py
+  - src/aiops_diagnostics/common/bounded_http.py
+  - src/aiops_diagnostics/common/redaction.py
+  - src/aiops_diagnostics/common/private_files.py
+  - src/aiops_diagnostics/common/i18n.py
+  - src/aiops_diagnostics/common/platform_paths.py
+  - src/aiops_diagnostics/common/http_auth.py
+  - src/aiops_diagnostics/common/console_encoding.py
 ---
 # l0-contracts
 

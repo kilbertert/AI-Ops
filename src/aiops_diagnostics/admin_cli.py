@@ -10,8 +10,8 @@ from typing import Annotated, Any
 
 import typer
 
-from aiops_diagnostics.config import Settings, selected_config_file
-from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.common.config import Settings, selected_config_file
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
 admin_app = typer.Typer(name="admin", help="AI-Ops 网关管理操作（环境清单收敛）", no_args_is_help=True)
 
@@ -339,7 +339,7 @@ def _dify_knowledge_registry(console: Any) -> Any:
     direction. Sharing the parser is the point — two parsers for one table is
     the "one rule, two implementations" defect this repo keeps re-learning.
     """
-    from aiops_diagnostics.gateway_config import parse_dify_knowledge_bindings
+    from aiops_diagnostics.gateway.gateway_config import parse_dify_knowledge_bindings
 
     return parse_dify_knowledge_bindings(getattr(console, "dify_knowledge_bindings", "") or "")
 
@@ -359,7 +359,7 @@ def _console_settings_from(path: Path) -> dict[str, str]:
     That is #625's defect shape — a fix that reaches one consumer and not the
     other.
     """
-    from aiops_diagnostics.gateway_config import _private_config_values
+    from aiops_diagnostics.gateway.gateway_config import _private_config_values
 
     values = _private_config_values(path)
     keys = (
@@ -669,7 +669,7 @@ def _settings_with_config_file(ctx: typer.Context) -> GatewayServerSettings:
     config_file = ctx.obj.get("config_file") if ctx.obj else None
     if config_file is None:
         return settings
-    from aiops_diagnostics.gateway_config import _private_config_values
+    from aiops_diagnostics.gateway.gateway_config import _private_config_values
 
     values = _private_config_values(Path(config_file).expanduser().resolve())
     for name, attribute in _SETTING_FOR.items():
@@ -724,7 +724,7 @@ def check_knowledge_triple_command(
 
     退出码：0 全部完整 / 1 有不完整的租户 / 2 缺配置。
     """
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
     from aiops_diagnostics.knowledge.knowledge_triple import check, render
 
     settings = GatewayServerSettings.from_env()
@@ -812,7 +812,7 @@ def onboard_tenant_command(
     )
     from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiSettings
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
     from aiops_diagnostics.knowledge.kb_onboarding import KbAdminClient, OnboardError, onboard_tenant
 
     settings = _onboarding_settings_or_exit(ctx, needs_embedding=True)
@@ -903,7 +903,7 @@ def adopt_ragflow_tenant_command(
     """
     import sys
 
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
     from aiops_diagnostics.knowledge.kb_onboarding import (
         KbAdminClient,
         OnboardError,
@@ -953,7 +953,7 @@ def rotate_ragflow_credential_command(
     独立命令而不是开户的一个开关：开户必须保持"再跑一次什么都不变"，轮换不能是它的副作用。
     """
     from aiops_diagnostics.dify.dify_inner_api import InnerApiError  # noqa: F401 - 保持帮助一致的导入形状
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
     from aiops_diagnostics.knowledge.kb_onboarding import KbAdminClient, OnboardError, rotate_credential
 
     settings = _onboarding_settings_or_exit(ctx, needs_embedding=False)
@@ -1302,7 +1302,7 @@ def sync_knowledge_datasets_command(
         run as sync_run,
     )
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
     from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient, KnowledgeSearchUnavailable
 
     settings = _settings_with_config_file(ctx)

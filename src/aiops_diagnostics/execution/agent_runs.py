@@ -28,8 +28,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.bounded_http import ErrorMapping, HttpFailure, RequestSpec, request_json
-from aiops_diagnostics.gateway_config import canonical_gateway_url
+from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure, RequestSpec, request_json
+from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 #: 授权记录的有效期（契约 §4：固定 180 秒，不续期；到期须从已认证入口重新授权）。
@@ -408,6 +408,11 @@ class AgentRunStore:
                     run_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
                     scope_json TEXT NOT NULL,
+                    -- 订单号**不**改成可空：SQLite 放松 NOT NULL 要重建整张表，而这是现役
+                    -- 运行的记录，重建的风险换来的只是"看起来更对"。无订单的运行由
+                    -- ``operation`` 表达，订单号留空串。同一个判断在标准诊断表上已经做过
+                    -- 一次（那边用 ``kind`` 区分分析作业，订单号同样绑空串，见
+                    -- ``gateway_store.start_analysis_job`` 的说明）。
                     order_no TEXT NOT NULL,
                     operation TEXT NOT NULL,
                     environment TEXT NOT NULL,
