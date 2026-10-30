@@ -63,8 +63,11 @@ CI 不构建 Java（`ci.yml` 只有 ruff / pytest / compileall），所以「用
 
 ## 后果与验证
 
-- **闸门读的是主机，不是人**：`AIOPS_NODE_BUILD` 由节点自己上报，形如 `<commit12>-<jar12>`。
-  前缀在仓库里解析成 commit，用 `git merge-base --is-ancestor` 判先后。
+- **闸门读的是运行中的容器，不是 `runtime.env`**：规程先改 env 再重建容器，中间那一段
+  env 已指向新节点而旧节点还在跑；读 env 会在这段窗口里误放行，中断在两步之间时那个
+  不一致还会一直留着。所以读 `docker inspect aiops-runtime-node` 的 `AIOPS_NODE_BUILD`
+  （形如 `<commit12>-<jar12>`），前缀在仓库里解析成 commit，用
+  `git merge-base --is-ancestor` 判先后。
 - **源码摘要按字节算**：只改注释也要更新记录。这是有意的 —— 制品记录必须指向真实源码，
   而不是「大概那一版」。
 - `source_digest.py` 的排除规则只排除 `target/`、`__pycache__`、`.idea`；`pom.xml` 在内。

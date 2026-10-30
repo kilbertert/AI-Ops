@@ -343,8 +343,11 @@ LAST_NODE_COMMIT=$(git log -1 --format=%H "$FULL_SHA" -- services/execution-node
 if [ -z "$LAST_NODE_COMMIT" ]; then
   info "目标 commit 的祖先里没有改过 services/execution-node 的提交 —— 网关可以单独部署"
 else
+  # 读**运行中的容器**，不是 `runtime.env`：规程先改 env 再重建容器，中间那一段
+  # env 已经指向新节点而旧节点还在跑 —— 读 env 会在这段窗口里误放行。中断在两步之间
+  # 时也一样：env 说新、实际在跑的是旧，而这个不一致会一直留着。
   NODE_BUILD=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
-    "grep -oE '^AIOPS_NODE_BUILD=.*' /etc/aiops-node-runtime/runtime.env 2>/dev/null | cut -d= -f2" \
+    "docker inspect aiops-runtime-node --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -oE '^AIOPS_NODE_BUILD=.*' | cut -d= -f2" \
     | tail -1 | tr -d '[:space:]')
   [ -n "$NODE_BUILD" ] || die "最后一次改节点源码的是 ${LAST_NODE_COMMIT:0:12}，但读不到 41 上的 AIOPS_NODE_BUILD —— 无法判断节点是否已跟上。先部署节点，再重跑 CD。"
   NODE_SHA_PREFIX=${NODE_BUILD%%-*}

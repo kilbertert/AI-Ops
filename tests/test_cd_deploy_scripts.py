@@ -598,8 +598,11 @@ def test_the_gate_keys_on_the_last_node_change_not_this_commit() -> None:
     """
     source = (DEPLOY_DIR / "deploy-41.sh").read_text(encoding="utf-8")
     assert 'git log -1 --format=%H "$FULL_SHA" -- services/execution-node' in source
-    # 判据不靠人申报，读主机上节点自己的构建标识。
+    # 判据不靠人申报，读**运行中容器**的构建标识 —— 不是 runtime.env：
+    # 规程先改 env 再重建容器，读 env 会在那个窗口里误放行（review 指出）。
     assert "AIOPS_NODE_BUILD" in source
+    assert "docker inspect aiops-runtime-node" in source
+    assert "/etc/aiops-node-runtime/runtime.env 2>/dev/null | cut -d= -f2" not in source
     assert "git merge-base --is-ancestor" in source
     # 闸门必须在打包/远端执行之前 —— 先停下，不把网关送上去。
     gate = source.index("节点制品闸门")
