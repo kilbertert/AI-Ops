@@ -64,3 +64,28 @@
 都在改同一个 `images.lock.json`：pre-push 守卫两次因兄弟工作树**未提交**的同名改动拒绝推送，
 rebase 一次在锁文件上冲突。每次都按同一条规则处理 —— 取主干侧那份、继续 rebase、
 `build-image.sh --update-lock` 重新构建出当前树的值。没有一次手写摘要或人工合并冲突文本。
+
+## 上线与线上核对（2026-10-30）
+
+| 事项 | 证据 |
+|---|---|
+| PR | [#1194](https://github.com/kilbertert/AI-Ops/pull/1194) → squash `bf6085eb`，03:48:08Z |
+| CI | `verify` 首次 5m34s **失败**，重跑 4m6s 通过（见下）；`Workflow policy`、`spec-tree lint` 通过 |
+| CD | run `40999387411`，12m8s success（排在 #1197 的 CD 之后） |
+| Gateway 版本 | `curl http://172.18.0.1:8788/health` → `1.0.0+bf6085eb139a` |
+| 部署内容 | `/opt/aiops-41/src/aiops_diagnostics/dify/self_service_api.py` 含 `source_app_name`/`tenant_name`/`app_name`，mtime `2026-10-30 11:48:08 +0800` |
+| 真实读应用名 | 在 36 用同一调用路径（`GET /console/api/apps/<id>` + `X-WORKSPACE-ID`）读客户工作区 `9d2ccbac…` 的 `a57602c1…`，返回 `name=优链充－平台全链路验收` |
+
+### CI 首跑失败是测试自身的偶发，不是本改动
+
+首次 `verify` 在 `tests/test_h5_assistant_routes.py::test_every_declared_path_is_forwarded`
+失败，断言把**全部**声明路径报成「没转发到网关」——那是一个用真 nginx + 桩起转发面的
+集成测试，全部路径同时不转发意味着探测期上游根本没应答，而不是某一条正则写错。
+本机连跑 3 次（`-n 0`）全部通过，改动也没碰 `ops/nginx/`；重跑同一 job 通过。
+结论：**CI 环境侧偶发**，本片无回归；但这条测试的失败信息会伪装成"路由全丢"，
+值得单独治理（未在本片处理）。
+
+### 仍然没验的
+
+- 真实平台账号打开「复制并开通」看下拉文案 —— 需要一次正常登录，本轮没有做。
+- 读名失败时的降级在线上没有出现过，只有合成用例。
