@@ -44,7 +44,7 @@ AI-Ops研究基线`9cc3fd58`；Dify现役1.17.1源码基线`8387590ace4a094de812
 - [node_publication](../../src/aiops_diagnostics/execution/node_publication.py)：targets、candidate、publish、advance。
 - [应用登记](../../src/aiops_diagnostics/dify/dify_app_registry.py)：主键为tenant/entry；
   [manifest收敛](../../src/aiops_diagnostics/publication/agent_manifest.py)可覆写同键业务登记。
-- [原生试用](../../src/aiops_diagnostics/gateway_api.py)：dify_trial先选正式binding，要求app_id匹配。
+- [原生试用](../../src/aiops_diagnostics/gateway/gateway_api.py)：dify_trial先选正式binding，要求app_id匹配。
 - [按钮脚本](../../ops/dify-console-bridge/dify-publish-button.js)：扫描按钮文案挂载，独立发送空body发布。
 - [Java执行](../../services/execution-node/src/main/java/com/trendpower/aiops/node/ReportingChatSessionRuntime.java)：
   managedPublication每轮从Gateway读取冻结manifest，覆盖systemPrompt；无需为每个SOP重新部署JAR。

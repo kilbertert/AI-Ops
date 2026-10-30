@@ -26,9 +26,9 @@ LOCK_PATH = Path("/tmp/aiops-m2close-experiment.lock")
 
 #: 参与身份计算的**源文件**（相对仓库根）。节点 jar 单独用摘要，因为它由构建产生。
 IDENTITY_FILES = (
-    "src/aiops_diagnostics/gateway_api.py",
+    "src/aiops_diagnostics/gateway/gateway_api.py",
     "src/aiops_diagnostics/execution/agent_runs.py",
-    "src/aiops_diagnostics/gateway_config.py",
+    "src/aiops_diagnostics/gateway/gateway_config.py",
     "src/aiops_diagnostics/data/charging_status.py",
     "tools/m2_close/harness_guard.py",
     "tools/m2_close/run_ic.py",

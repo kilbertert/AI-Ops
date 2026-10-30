@@ -17,7 +17,7 @@ deploy/m2-live-03/build-image.sh --update-lock
 python deploy/m2-live-03/context_digest.py --check
 docker run --rm --network none --read-only --entrypoint python \
   aiops-m2-live-03-gateway:task-verification \
-  -c 'from aiops_diagnostics.gateway_api import create_gateway_app; print("Gateway import: passed")'
+  -c 'from aiops_diagnostics.gateway.gateway_api import create_gateway_app; print("Gateway import: passed")'
 uv run pytest tests/test_m2_live03_deploy.py -n 0
 ```
 

@@ -36,10 +36,10 @@ from typing import Any
 
 import uvicorn
 
-from aiops_diagnostics.deployment_environment import require_deployment_identity
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.deployment_environment import require_deployment_identity
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -85,7 +85,7 @@ def main() -> int:
     # **隔离门禁先于一切**：`create_gateway_app()` 打开库之前就会写状态，而本启动器
     # 绕过了 `gateway_server serve`（那里面才有这道门）。自己补上，判据与那里同一份实现 ——
     # 少了它，「隔离栈」就只是名字。
-    from aiops_diagnostics.isolation_guard import IsolationError, enforce_from_env
+    from aiops_diagnostics.gateway.isolation_guard import IsolationError, enforce_from_env
 
     try:
         enforce_from_env()

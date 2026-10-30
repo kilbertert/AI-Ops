@@ -33,7 +33,7 @@ class WorkflowTrial:
             raise RuntimeError("trial source route changed")
 
     def execute(self, runtime: Any, trial_id: str, scope: Any, order: str, language: str) -> TrialResult:
-        from aiops_diagnostics.gateway_runtime import JobRegistration
+        from aiops_diagnostics.gateway.gateway_runtime import JobRegistration
 
         settings = runtime.gateway_settings
         self.require_current(settings)

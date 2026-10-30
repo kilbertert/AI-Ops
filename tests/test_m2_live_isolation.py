@@ -1,6 +1,6 @@
 """隔离门禁的回归：任何一条不成立都必须在**打开库之前**拒绝。
 
-判据现在只有一份（`aiops_diagnostics.isolation_guard`），真实启动路径与 preflight
+判据现在只有一份（`aiops_diagnostics.gateway.isolation_guard`），真实启动路径与 preflight
 共用它。这些用例从「其它前提全部成立」的基线逐项破坏，并断言对照文件原样不动。
 临时目录扮演生产根（通过 `M2LIVE_FORBIDDEN` 追加），不需要真的读写 41。
 """
@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from aiops_diagnostics.isolation_guard import (  # noqa: E402
+from aiops_diagnostics.gateway.isolation_guard import (  # noqa: E402
     GuardSpec,
     IsolationError,
     assert_isolated,
@@ -235,7 +235,7 @@ def test_the_cli_reports_refusal_on_stdout_and_exits_nonzero(layout):
         "M2LIVE_FORBIDDEN": str(prod),
     }
     result = subprocess.run(
-        [sys.executable, "-m", "aiops_diagnostics.isolation_guard"],
+        [sys.executable, "-m", "aiops_diagnostics.gateway.isolation_guard"],
         env={**env, "PYTHONPATH": str(REPO / "src")},
         capture_output=True,
         text=True,
@@ -247,6 +247,6 @@ def test_the_cli_reports_refusal_on_stdout_and_exits_nonzero(layout):
 
 def test_without_the_root_variable_the_guard_is_a_no_op():
     """生产 Gateway 不设这个变量：启动路径必须逐字不变。"""
-    from aiops_diagnostics.isolation_guard import enforce_from_env
+    from aiops_diagnostics.gateway.isolation_guard import enforce_from_env
 
     assert enforce_from_env() is None

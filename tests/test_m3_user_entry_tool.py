@@ -512,9 +512,9 @@ def _live_gateway(tmp_path, redis_port: int, cpms_base: str):
     """不传 caller_resolver；正式工厂构造真实 RedisThirdSessionResolver。"""
     from execution.test_m3_gateway_exec_config import _write_manifest
 
-    from aiops_diagnostics.gateway_api import create_gateway_app
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     config = tmp_path / "runtime.env"
     config.write_text(
@@ -613,7 +613,7 @@ def redis_stub():
 def clean_stubs(monkeypatch):
     _Orders.calls = []
     _Dispatcher.calls = []
-    monkeypatch.setattr("aiops_diagnostics.gateway_api.SnailDispatcher", lambda: _Dispatcher())
+    monkeypatch.setattr("aiops_diagnostics.gateway.gateway_api.SnailDispatcher", lambda: _Dispatcher())
     return _Dispatcher
 
 

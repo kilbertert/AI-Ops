@@ -135,9 +135,9 @@ def main(argv: list[str] | None = None) -> int:
 
     from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.publication.agent_manifest import admin_context
     from aiops_diagnostics.publication.qa_rag import select_customer_agent

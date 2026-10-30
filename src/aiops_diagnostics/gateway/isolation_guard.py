@@ -14,7 +14,7 @@ SQLite。「业务库只读」推不出「没有副作用」。
 4. **属主**：以某个 UID 运行时，根与既有可写目录的属主必须是那个 UID。
 
 这个模块同时是**真实启动路径**（`gateway_server serve` 读到 `M2LIVE_ISOLATION_ROOT`
-时调用）与**检查脚本**（`python -m aiops_diagnostics.isolation_guard`）的实现，
+时调用）与**检查脚本**（`python -m aiops_diagnostics.gateway.isolation_guard`）的实现，
 避免两处判据漂移。
 """
 

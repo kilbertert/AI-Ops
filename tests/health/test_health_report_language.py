@@ -157,7 +157,7 @@ def test_reuse_is_per_language_not_across_languages(tmp_path) -> None:
     wrong language, which is the exact defect shape this workstream exists to
     remove. Caught in review.
     """
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     store = GatewayStore(tmp_path / "gateway.db")
     zh_job, zh_created = store.create_or_reuse_health_job("scope-1", "O-1", "health-v2", language="zh")
@@ -190,7 +190,7 @@ def test_the_declared_script_survives_storage(tmp_path) -> None:
     returns the right tag while the row keeps the truncated one would pass the
     weaker form.
     """
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     store = GatewayStore(tmp_path / "gateway.db")
     job, created = store.create_or_reuse_health_job("scope-1", "O-1", "health-v2", language="zh-Hant")
@@ -246,7 +246,7 @@ def test_a_predating_database_migrates_and_can_be_opened(tmp_path) -> None:
     """
     import sqlite3
 
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     database = tmp_path / "predating.db"
     connection = sqlite3.connect(database)

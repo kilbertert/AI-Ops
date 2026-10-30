@@ -19,7 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from aiops_diagnostics import __version__, request_observation
+from aiops_diagnostics import __version__
 from aiops_diagnostics.common.async_job_lifecycle import DIAGNOSIS, QUESTION
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.http_auth import (
@@ -101,17 +101,19 @@ from aiops_diagnostics.execution.agent_runs import (
     SnailDispatcher,
     scope_from_json,
 )
-from aiops_diagnostics.gateway_config import (
+from aiops_diagnostics.gateway import request_observation
+from aiops_diagnostics.gateway.gateway_config import (
     GatewayServerSettings,
     parse_dify_knowledge_bindings,
 )
-from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
-from aiops_diagnostics.gateway_store import (
+from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime, close_gateway_runtime
+from aiops_diagnostics.gateway.gateway_store import (
     ACTIVE_DIAGNOSIS_STATUSES,
     ACTIVE_HEALTH_JOB_STATUSES,
     TERMINAL_DIAGNOSIS_STATUSES,
     GatewayStore,
 )
+from aiops_diagnostics.gateway.metrics_store import MetricsValidationError
 from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
     CALLER_AUTH_FORBIDDEN,
@@ -157,7 +159,6 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import (
     normalize_search_response,
 )
 from aiops_diagnostics.knowledge.knowledge_sources import KnowledgeSourceResolver
-from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.publication.agent_content import AGENT_STARTERS
 from aiops_diagnostics.publication.agent_lifecycle import (
     AGENT_MANAGE_SCOPE,
@@ -4880,7 +4881,9 @@ def create_gateway_app(
     def knowledge_page() -> HTMLResponse:
         from importlib.resources import files
 
-        html = files("aiops_diagnostics").joinpath("static/knowledge.html").read_text(encoding="utf-8")
+        html = (
+            files("aiops_diagnostics.knowledge").joinpath("static/knowledge.html").read_text(encoding="utf-8")
+        )
         return HTMLResponse(content=html)
 
     @app.get("/v1/knowledge/available")
@@ -5291,7 +5294,7 @@ def create_gateway_app(
             ) from exc
         return {"runs": runs}
 
-    from aiops_diagnostics.public_openapi import install_public_docs
+    from aiops_diagnostics.gateway.public_openapi import install_public_docs
 
     install_public_docs(app)
     return app
@@ -6527,7 +6530,7 @@ def _authorized_consumer_snapshot(settings, caller, order_no, data_kind):
     if data_kind == "status":
         return _authorized_charging_snapshot(settings, caller, order_no)
     from aiops_diagnostics.consumer.consumer_billing import read_billing_record
-    from aiops_diagnostics.gateway_config import charging_endpoint
+    from aiops_diagnostics.gateway.gateway_config import charging_endpoint
 
     if data_kind != "billing":
         raise ValueError("unsupported consumer data kind")
@@ -6547,7 +6550,7 @@ def _authorized_charging_snapshot(
     直读入口与节点回呼入口都走这里 —— 契约 §3.6 要求两个入口共用同一份授权读取规则，
     不能在内部端点上另造一条更宽松的。身份取自已验证的 ScopeContext，不取请求头。
     """
-    from aiops_diagnostics.gateway_config import charging_endpoint
+    from aiops_diagnostics.gateway.gateway_config import charging_endpoint
 
     try:
         endpoint = charging_endpoint(settings.charging_status_base_url, caller.effective_tenant_id)

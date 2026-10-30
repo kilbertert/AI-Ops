@@ -17,9 +17,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.conversation.faq import PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
@@ -60,7 +60,7 @@ def test_the_qa_failure_message_exception_is_still_localized() -> None:
     a test that calls the helper directly cannot see it. (That mistake was made
     twice already on this workstream — #535 and #536.)
     """
-    from aiops_diagnostics.gateway_api import _assistant_question_response
+    from aiops_diagnostics.gateway.gateway_api import _assistant_question_response
 
     row = {
         "qa_id": "qa_1",
@@ -189,7 +189,7 @@ def test_job_failure_branch_codes_come_out_of_real_responses(tmp_path: Path) -> 
     so they belong here for the same reason: a hardcoded list stays green when
     the server starts returning something else.
     """
-    from aiops_diagnostics.gateway_api import _assistant_question_response
+    from aiops_diagnostics.gateway.gateway_api import _assistant_question_response
 
     qa = {
         "qa_id": "qa_1",
@@ -212,7 +212,7 @@ def test_health_report_job_envelope_is_the_unlocalized_one() -> None:
     """
     import inspect
 
-    from aiops_diagnostics.gateway_api import _health_job_response
+    from aiops_diagnostics.gateway.gateway_api import _health_job_response
 
     # The signature is the proof: it cannot localize, because it is never given
     # a language.

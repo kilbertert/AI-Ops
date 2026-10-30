@@ -30,7 +30,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
 #: 一个租户的核对结果。三个字段各自独立，见模块 docstring 的表。
 OK = "ok"

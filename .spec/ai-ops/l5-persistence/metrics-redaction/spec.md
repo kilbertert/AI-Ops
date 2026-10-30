@@ -3,7 +3,7 @@ title: metrics-redaction
 desc: 运行指标按构造脱敏——不存问题与答案正文
 hue: 30
 code:
-  - src/aiops_diagnostics/metrics_store.py
+  - src/aiops_diagnostics/gateway/metrics_store.py
 ---
 # metrics-redaction
 

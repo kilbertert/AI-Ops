@@ -234,8 +234,8 @@ def run(args, languages: list[str], surfaces: list[str]) -> int:
     """The live path: resolve a session, resolve an owned order, drive the surfaces."""
     from fastapi.testclient import TestClient
 
-    from aiops_diagnostics.gateway_api import create_gateway_app
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     settings = GatewayServerSettings.from_env()
 

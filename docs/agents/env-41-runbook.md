@@ -732,7 +732,7 @@ runuser -u aiops41 -- env $(tr '\0' '\n' < /proc/$MP/environ | grep -E '^AIOPS_'
   .venv/bin/python - <<'EOF'
 import pathlib
 from aiops_diagnostics.common.config import Settings
-from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 s = Settings.from_config(GatewayServerSettings.from_env().server_config_file)
 print([p.name for p in s.agent.provider_chain(None)])
 EOF
@@ -2114,7 +2114,7 @@ ssh yidong-36 'docker logs --since 10m deploy-api-1 2>&1 | grep -c "NoneType.*ha
 
 ```bash
 cat > /tmp/fix_legacy.py <<'PY'
-from aiops_diagnostics import gateway_config as gc
+from aiops_diagnostics.gateway import gateway_config as gc
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
 s = gc.GatewayServerSettings.from_env()

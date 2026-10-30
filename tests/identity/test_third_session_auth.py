@@ -306,7 +306,7 @@ def test_session_identity_matches_what_upms_answers_for_the_same_user(
 
 
 def _gateway_settings(tmp_path: Path, config_text: str) -> Any:
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     config_file = tmp_path / "production.env"
     config_file.write_text(config_text, encoding="utf-8")
@@ -320,7 +320,7 @@ def _gateway_settings(tmp_path: Path, config_text: str) -> Any:
 
 
 def test_third_session_resolver_is_wired_with_the_c_to_b_directory(tmp_path: Path) -> None:
-    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.gateway.gateway_api import _caller_resolver
 
     settings = _gateway_settings(
         tmp_path,
@@ -339,7 +339,7 @@ def test_third_session_resolver_without_the_inside_token_resolves_nob_subject(
     tmp_path: Path,
 ) -> None:
     """未配置服务侧内部凭据时不发起 C→B 调用：管家端按 fail closed 拒绝，消费者端不变。"""
-    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.gateway.gateway_api import _caller_resolver
 
     settings = _gateway_settings(
         tmp_path, "AIOPS_REDIS_PASSWORD=redis-secret\nAIOPS_UPMS_BASE_URL=https://upms.example.test\n"
@@ -355,7 +355,7 @@ def test_third_session_resolver_without_the_inside_token_resolves_nob_subject(
 
 
 def test_third_session_resolver_is_wired_with_the_operator_site_scope(tmp_path: Path) -> None:
-    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.gateway.gateway_api import _caller_resolver
     from aiops_diagnostics.identity.third_session_auth import UpmsOperatorSiteScope
 
     settings = _gateway_settings(
@@ -375,7 +375,7 @@ def test_third_session_resolver_without_the_inside_token_has_no_operator_scope(
     tmp_path: Path,
 ) -> None:
     """缺同一套配置时不注入范围：会话数据范围保持 self，管家端因此 fail closed。"""
-    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.gateway.gateway_api import _caller_resolver
 
     settings = _gateway_settings(
         tmp_path, "AIOPS_REDIS_PASSWORD=redis-secret\nAIOPS_UPMS_BASE_URL=https://upms.example.test\n"

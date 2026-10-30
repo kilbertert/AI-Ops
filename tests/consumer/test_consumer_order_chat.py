@@ -14,12 +14,12 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics import gateway_api
 from aiops_diagnostics.consumer.consumer_order_chat import is_order_status_question
 from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.data.sources import MySQLSource
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway import gateway_api
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 

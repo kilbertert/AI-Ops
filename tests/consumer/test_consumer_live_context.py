@@ -102,7 +102,7 @@ def test_live_order_has_one_snapshot_and_never_carries_it_to_next_model_turn(tmp
 def test_no_live_data_escapes_changes_during_business_read(tmp_path, monkeypatch, mode):
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb = wire(env, monkeypatch, tmp_path)
-        import aiops_diagnostics.gateway_api as api
+        import aiops_diagnostics.gateway.gateway_api as api
 
         original = api._authorized_charging_snapshot
 

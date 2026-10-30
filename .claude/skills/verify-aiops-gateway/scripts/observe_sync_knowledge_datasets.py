@@ -181,7 +181,7 @@ def repo_root() -> Path:
 def seed(root: Path) -> None:
     """A throwaway store with one onboarded tenant. A fixture, not the thing under test."""
     sys.path.insert(0, str(repo_root() / "src"))
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     GatewayStore(root / "data" / "gateway.db").record_ragflow_tenant(
         TENANT,

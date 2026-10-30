@@ -209,7 +209,7 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
 |---|---|---|
 | C1 | 现有订单授权**只到租户层，没有运营商/平台层**。注意这不是「只按租户」——前端会话还叠加 `user_id`（见 C6），设备入口则只有租户。**缺的是运营商/平台这一维度，不是「完全没有过滤」** | `caller_auth.py:227-230` `can_access`；谓词由 `order_visibility.py:232-240` 渲染为 `tenant_id=?` / `IN (…)` / `1=0`；`user_id` 叠加见 C6 |
 | C2 | 显式传 `order_no` 时，无权限返回 **404 `ORDER_NOT_FOUND`**，授权服务故障返回 **503** | `gateway_api.py:819-834` |
-| C3 | 问句**文本里内嵌**订单号时，无权限**静默回落**零阶问答（已发布契约，有测试固化） | `gateway_api.py:862-903`；`tests/test_assistant_api.py:595-606`；`docs/validation.md:1420` |
+| C3 | 问句**文本里内嵌**订单号时，无权限**静默回落**零阶问答（已发布契约，有测试固化） | `gateway_api.py:862-903`；`tests/gateway/test_assistant_api.py:595-606`；`docs/validation.md:1420` |
 | C4 | 会话内**活跃订单**的追问，无权限时静默回落并清掉绑定 | `gateway_api.py:912-957` |
 | C5 | 前端会话（`third-session`）的 `data_scope` **硬编码为 `self`**，从不调 UPMS `/user/ds`。~~**已被 #423（#424/#425/#426）取代**：解析出唯一 B 端主体后 `data_scope` 替换为该主体的运营商站点集合（`DataScope(organ, site_ids=…)`）；仍**解析不出**唯一主体时才回落 `self`。本行结论只对「没有 B 端账号的会话」成立 | ~~`third_session_auth.py:82`~~ → `third_session_auth.py:198-218`（`_data_scope`）、`query_scope.py:310`（`resolve_operator_site_scope`）；见 PRD #423 与 `docs/开发进度.md` #424~#426 条目 |
 | C6 | 但 `self` **确实生效**：下推为 `user_id` 谓词 → 前端会话查订单**已按「本人」过滤**。C5 失效后这条只覆盖回落分支（拿不到唯一 B 端主体时） | `query_scope.py:256` → `sources.py:217,233-235` → `sources.py:286`，SQL `… AND user_id=?` |

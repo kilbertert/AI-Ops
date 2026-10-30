@@ -31,7 +31,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 HANDOFF = PROJECT_ROOT / "docs" / "agents" / "assistant-cancel-handoff.md"
 
 #: Minted per run, so a sample cannot show the real one and stay reproducible.
@@ -226,7 +226,9 @@ def test_the_cancel_routes_match_what_the_handoff_documents() -> None:
     catches — it is what caught #499's new route against the handoff's old
     "diagnoses cannot be stopped" text.
     """
-    source = (PROJECT_ROOT / "src" / "aiops_diagnostics" / "gateway_api.py").read_text(encoding="utf-8")
+    source = (PROJECT_ROOT / "src" / "aiops_diagnostics" / "gateway" / "gateway_api.py").read_text(
+        encoding="utf-8"
+    )
     routes = set(_CANCEL_ROUTE.findall(source))
     assert routes == _CANCEL_ROUTES, (
         f"cancel routes changed to {sorted(routes)}; update {HANDOFF.name}, "

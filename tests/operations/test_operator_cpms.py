@@ -456,7 +456,7 @@ def test_scope_revoke_during_node_read_is_not_only_checked_at_start(operator, mo
 
 
 def test_runtime_tools_are_not_used_for_operator_trial(operator):
-    from aiops_diagnostics.gateway_api import StandardAPIError, _workflow_trial_draft
+    from aiops_diagnostics.gateway.gateway_api import StandardAPIError, _workflow_trial_draft
 
     f = operator
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
@@ -647,7 +647,7 @@ def test_native_cancel_only_owns_trial_and_revokes_grants(operator, monkeypatch)
 
     monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
     monkeypatch.setattr(
-        "aiops_diagnostics.gateway_api.authenticated_operator_console",
+        "aiops_diagnostics.gateway.gateway_api.authenticated_operator_console",
         lambda ctx, session: (f["resolver"].current, "operator-private"),
     )
     try:

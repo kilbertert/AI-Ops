@@ -7,11 +7,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.metrics_store import MetricsStore, MetricsValidationError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
-from aiops_diagnostics.metrics_store import MetricsStore, MetricsValidationError
 
 
 def _context(
@@ -158,7 +158,7 @@ def test_summary_and_list_never_expose_text(tmp_path: Path) -> None:
 def test_retention_prunes_rows_after_30_days(tmp_path: Path, monkeypatch) -> None:
     import sqlite3
 
-    import aiops_diagnostics.metrics_store as metrics_store_module
+    import aiops_diagnostics.gateway.metrics_store as metrics_store_module
 
     # Backdated timestamps must not trip the process-wide expiry throttle in
     # either direction: every record() here must run its own sweep decision.
@@ -387,7 +387,7 @@ def test_busy_diagnosis_records_diagnosis_route_not_qa(tmp_path: Path) -> None:
             "order_authorizer": None,
         },
     )()
-    from aiops_diagnostics.gateway_api import _begin_conversation_turn
+    from aiops_diagnostics.gateway.gateway_api import _begin_conversation_turn
 
     try:
         _begin_conversation_turn(context_obj, _context(), conversation, "diagnosis", "订单问题")
@@ -433,8 +433,8 @@ def test_the_summary_endpoint_reports_this_tenants_expired_jobs(tmp_path: Path) 
     """
     from datetime import UTC, datetime
 
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     metrics = MetricsStore(tmp_path / "gateway.db")
     store = GatewayStore(tmp_path / "gateway.db")

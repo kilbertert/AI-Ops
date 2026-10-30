@@ -14,9 +14,9 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
@@ -474,7 +474,7 @@ def test_runtime_serve_media_rechecks_published_agent_liveness(tmp_path: Path) -
     promotional image and video on 41 from 2026-09-20 (see
     `test_serving_survives_the_agent_being_republished`)."""
     from aiops_diagnostics.common.config import Settings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
@@ -581,7 +581,7 @@ def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> Non
     deterministic 404 on every signed video URL while the same doc_id
     downloaded fine under the owning tenant's header."""
     from aiops_diagnostics.common.config import Settings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
@@ -681,7 +681,7 @@ def test_promo_media_grant_validates_against_its_own_agent(tmp_path: Path) -> No
     never hold for a promotional grant. The check must validate the agent the
     grant actually names."""
     from aiops_diagnostics.common.config import Settings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
@@ -824,7 +824,7 @@ def test_serving_survives_the_agent_being_republished(tmp_path: Path) -> None:
     remains the revocation that takes effect immediately.
     """
     from aiops_diagnostics.common.config import Settings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
@@ -926,7 +926,7 @@ def test_republish_that_removes_the_knowledge_base_revokes_media(tmp_path: Path)
     library away; the bytes must stop being served.
     """
     from aiops_diagnostics.common.config import Settings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
@@ -1023,7 +1023,7 @@ def test_dify_signed_media_serves_despite_having_no_agent(tmp_path: Path) -> Non
     is what the tests above pin.
     """
     from aiops_diagnostics.common.config import Settings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.publication.agent_lifecycle import AgentStore
 
     settings = GatewayServerSettings(

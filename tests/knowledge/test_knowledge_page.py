@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
-PAGE = ROOT / "src" / "aiops_diagnostics" / "static" / "knowledge.html"
+PAGE = ROOT / "src" / "aiops_diagnostics" / "knowledge" / "static" / "knowledge.html"
 
 
 def _page() -> str:

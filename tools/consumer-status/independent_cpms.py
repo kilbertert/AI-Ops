@@ -166,7 +166,7 @@ def default_deps(*, config_file: str, session: str) -> Deps:
     from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.data.charging_status import read_charging_status
     from aiops_diagnostics.data.sources import scoped_mysql_source
-    from aiops_diagnostics.gateway_config import GatewayServerSettings, charging_endpoint
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings, charging_endpoint
     from aiops_diagnostics.identity.query_scope import resolve_query_scope
 
     settings = GatewayServerSettings.from_env()

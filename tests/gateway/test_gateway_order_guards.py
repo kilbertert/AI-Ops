@@ -26,14 +26,14 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import NOT_OWNED, OWNED, UNAVAILABLE, create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import NOT_OWNED, OWNED, UNAVAILABLE, create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_UNAVAILABLE, CallerAuthError
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
-SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
-API_FILE = "gateway_api.py"
+SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
+API_FILE = "gateway/gateway_api.py"
 #: The one guard. No call site may reach `can_access` directly any more.
 GUARD = "_order_authorization"
 LOGGER_NAME = "aiops.gateway"

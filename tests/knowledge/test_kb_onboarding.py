@@ -25,7 +25,7 @@ import pytest
 from typer.testing import CliRunner
 
 from aiops_diagnostics.admin_cli import admin_app
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.knowledge.kb_onboarding import (
     KbAdminClient,
     OnboardError,

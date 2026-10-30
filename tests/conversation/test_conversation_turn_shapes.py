@@ -26,7 +26,7 @@ from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 #: The module that owns every claim site.
-API_FILE = "gateway_api.py"
+API_FILE = "gateway/gateway_api.py"
 #: The claim. Every branch that wants the conversation's slot goes through it.
 CLAIM = "_begin_conversation_turn"
 #: The file that may define the claim rather than call it.

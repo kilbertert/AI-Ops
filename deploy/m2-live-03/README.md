@@ -124,7 +124,7 @@ HTTP 200 的 HTML 也不算通过；空用户结果只证明接口可读，不�
 
 - 宿主目录：`/opt/aiops-m2-live/`（制品）与 `/var/lib/aiops-m2-live/`（状态）。
 - 隔离 Gateway 的状态库、运行目录、key 目录都在 `/var/lib/aiops-m2-live/gateway/`，
-  与生产 `/var/lib/aiops-41` **不交叉**。`aiops_diagnostics.isolation_guard` 在
+  与生产 `/var/lib/aiops-41` **不交叉**。`aiops_diagnostics.gateway.isolation_guard` 在
   `create_gateway_app()` 打开任何库**之前**判定；它就是 `gateway_server serve` 的启动路径，
   不是另写一份检查。
 - 隔离 Gateway 读 `build-runtime-config.sh` 生成的**白名单子集**

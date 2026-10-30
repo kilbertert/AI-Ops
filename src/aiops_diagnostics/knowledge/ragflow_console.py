@@ -40,7 +40,7 @@ from aiops_diagnostics.common.bounded_http import (
     json_body,
     request_json_with_headers,
 )
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.knowledge.kb_onboarding import decrypt_credential
 
 #: 四类拒绝，各自可区分。运营看到的不是"跳转失败"。

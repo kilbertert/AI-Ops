@@ -23,9 +23,9 @@ from typing import Any
 import pytest
 
 from aiops_diagnostics.common.config import Settings
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_runtime import GatewayRuntime
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.query_scope import QueryScope
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.operator.ops_analysis_narrative import build_narrative_prompt
@@ -134,9 +134,9 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[GatewayRuntime, GatewayStore]
     gateway_settings.server_config_file.write_text("# test\n", encoding="utf-8")
     settings = Settings()
     store = GatewayStore(gateway_settings.database_file)
-    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
+    monkeypatch.setattr("aiops_diagnostics.gateway.gateway_runtime.Settings.from_config", lambda *_: settings)
     monkeypatch.setattr(
-        "aiops_diagnostics.gateway_runtime.scoped_live_sources",
+        "aiops_diagnostics.gateway.gateway_runtime.scoped_live_sources",
         lambda settings, *, scope: _sources(settings, scope),
     )
     _SEEN_SITES.clear()
@@ -205,7 +205,7 @@ def test_the_analysis_route_type_is_a_recordable_metric(tmp_path: Path) -> None:
     **分析线一条指标都记不下来，且静默**。抑制本身是对的（度量不该让运行失败），
     所以这个缺陷不会有任何症状 —— 只有把这一条判据钉住才能发现它。
     """
-    from aiops_diagnostics.metrics_store import ROUTE_TYPES, MetricsStore
+    from aiops_diagnostics.gateway.metrics_store import ROUTE_TYPES, MetricsStore
 
     assert "operations_analysis" in ROUTE_TYPES
     metrics = MetricsStore(tmp_path / "gateway.db")
@@ -421,7 +421,7 @@ def test_the_whole_tenant_scope_is_no_narrowing_not_an_empty_one() -> None:
     两侧都非 ``None`` —— 那条路径一直是好的。加一条"整租户"的用例不是补充覆盖，
     是唯一能照到这个账号的位置。
     """
-    from aiops_diagnostics.gateway_runtime import _intersect_sites
+    from aiops_diagnostics.gateway.gateway_runtime import _intersect_sites
 
     assert _intersect_sites(None, None) is None, "整租户 = 不收窄，不是空集合"
     assert _intersect_sites(None, ("S-1", "S-2")) == ("S-1", "S-2")
@@ -502,7 +502,7 @@ def test_a_scope_resolution_failure_ends_the_job_instead_of_leaving_it_running(
         # inside the worker raises ScopeError. `_scope()` itself is well-formed;
         # this is the shape a real oversized data scope takes.
         monkeypatch.setattr(
-            "aiops_diagnostics.gateway_runtime.resolve_query_scope",
+            "aiops_diagnostics.gateway.gateway_runtime.resolve_query_scope",
             lambda *_a, **_k: (_ for _ in ()).throw(_scope_error(over_limit)),
         )
         deadline = time.monotonic() + 5
@@ -532,10 +532,10 @@ def test_a_job_that_ran_out_its_deadline_is_visible_per_tenant(tmp_path: Path) -
     import json
     from datetime import UTC, datetime
 
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.gateway_store import GatewayStore
-    from aiops_diagnostics.metrics_store import MetricsStore
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.metrics_store import MetricsStore
 
     gateway_settings = GatewayServerSettings(
         data_home=tmp_path,

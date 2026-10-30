@@ -28,9 +28,9 @@ from aiops_diagnostics.dify.dify_workspaces import (
     DIFY_WORKSPACE_UNRESOLVED,
     DifyWorkspaces,
 )
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.knowledge.kb_onboarding import encrypt_credential
 
 INTERNAL_SECRET = "internal-token-secret-0123456789"

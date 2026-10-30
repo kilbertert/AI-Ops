@@ -54,7 +54,7 @@ from aiops_diagnostics.common.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
-from aiops_diagnostics.gateway_config import canonical_gateway_url
+from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
 #: Dify workflow id 的形状（1.17.x 的 UUID）。不匹配就拒绝，不做兼容读取。
 WORKFLOW_ID_PATTERN = re.compile(
