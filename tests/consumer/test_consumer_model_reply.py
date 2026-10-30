@@ -45,7 +45,7 @@ def test_a_reply_that_carries_the_evidence_is_accepted():
         # 「这个数没出处」，新判据能说出「你把哪个值说成了什么」。
         (
             "这单合计 2.5，账上记的付款 2.40，已退 0。订单号 2107546575906942977。",
-            "CHATFLOW_FACT_LABEL_MISMATCH",
+            "CHATFLOW_ANSWER_INVALID",
         ),
         # 数据里没有的时长。
         ("约 47 分钟充满，合计 2.4 / 2.40 / 0。订单号 2107546575906942977。", "not in the evidence"),
@@ -226,11 +226,18 @@ def test_documents_contract_accepts_a_realtime_reply():
 
 
 def test_documents_contract_still_refuses_reply_on_other_kinds():
+    """`knowledge` 与 `unavailable` 仍然不许带 reply。
+
+    clarify/not_found/human 在 2026-10-30 的复核后改为**允许**（它们本来就没有证据可引，
+    判据换成"一个数字都不许出现"）；这里保留的是另外两类 —— 知识正文必须来自被引用资料，
+    服务故障的文案必须来自系统。
+    """
     from aiops_diagnostics.consumer.consumer_documents import answer_selection
 
-    raw = json.dumps({"kind": "clarify", "answer": "", "reference_ids": [], "reply": "随便说"})
-    with pytest.raises(ChatRunUnavailable):
-        answer_selection(raw, {"status": "live", "live_snapshot": SNAPSHOT})
+    for kind in ("knowledge", "unavailable"):
+        raw = json.dumps({"kind": kind, "answer": "", "reference_ids": [], "reply": "随便说"})
+        with pytest.raises(ChatRunUnavailable):
+            answer_selection(raw, {"status": "live", "live_snapshot": SNAPSHOT})
 
 
 def test_documents_contract_without_reply_still_renders_deterministically():

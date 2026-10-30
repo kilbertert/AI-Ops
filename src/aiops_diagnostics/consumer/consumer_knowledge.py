@@ -312,7 +312,7 @@ def select_context(runtime, caller, binding, query, language, qa_id):
         max_calls=1,
     )
     result = guard.search(query)
-    if binding.callback_version == 4:
+    if binding.callback_version >= 4:
         from aiops_diagnostics.consumer.consumer_documents import context_from_chunks
 
         return context_from_chunks(result)
@@ -369,6 +369,14 @@ def live_answer(snapshot, language, *, localized=True, pack=None):
     return status_answer(snapshot, language, localized=localized, pack=pack)
 
 
+def _has_reply(raw):
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(body, dict) and bool(body.get("reply"))
+
+
 def final_answer(raw, context, language, content, *, copy_pack=None):
     if (context or {}).get("status") == "safety":
         return fallback("safety", language, content)
@@ -379,7 +387,9 @@ def final_answer(raw, context, language, content, *, copy_pack=None):
     if (context or {}).get("mode") == "documents":
         from aiops_diagnostics.consumer.consumer_documents import answer_selection
 
-        kind, answer = answer_selection(raw, context)
+        kind, answer = answer_selection(
+            raw, context, language=language, contract=(context or {}).get("fact_contract", "legacy")
+        )
         if answer is not None:
             from aiops_diagnostics.common.answer_language import (
                 AnswerSurface,
@@ -398,7 +408,15 @@ def final_answer(raw, context, language, content, *, copy_pack=None):
             if not any(char.isalpha() for char in prose) or answer_chinese_leak(surface, language):
                 raise ChatRunUnavailable("CHATFLOW_ANSWER_LANGUAGE_INVALID", "answer language differs")
             return answer
-        raw = json.dumps({"kind": kind, "faq_id": ""})
+        # 归一化时**不能丢 reply**：documents 契约的 clarify/not_found/human 正是靠它交付正文，
+        # 而这里一旦丢掉，正文就会退回固定文案（复核实测到的第二个缺口）。
+        raw = json.dumps(
+            {
+                "kind": kind,
+                "faq_id": "",
+                **({"reply": json.loads(raw).get("reply")} if _has_reply(raw) else {}),
+            }
+        )
     try:
         selected = json.loads(raw)
     except (ValueError, TypeError) as exc:
@@ -418,7 +436,12 @@ def final_answer(raw, context, language, content, *, copy_pack=None):
         if selected.get("reply"):
             from aiops_diagnostics.consumer.consumer_reply import model_reply
 
-            return model_reply(selected["reply"], context["live_snapshot"], language=language)
+            return model_reply(
+                selected["reply"],
+                context["live_snapshot"],
+                language=language,
+                contract=(context or {}).get("fact_contract", "legacy"),
+            )
         return live_answer(
             context["live_snapshot"],
             language,
@@ -613,11 +636,13 @@ def callback_context(
         else select_context(runtime, caller, binding, query, run.language, run.qa_id)
     )
     result["followup"] = followup
+    # 事实片段契约是**发布版本**的属性，不是提示词内容：旧版本继续走弱判据。
+    result["fact_contract"] = "slots" if binding.callback_version >= 5 else "legacy"
     result["answer_language_version"] = 2
     # 钉住本轮所用的**文案版本**：答复生成后运营可能又发布一版措辞，
     # 回读必须按生成时那一版复现（见 consumer_copy.resolve）。
     result["copy_version"] = runtime.store.consumer_copy(caller.effective_tenant_id)[0]
-    if binding.callback_version == 4:
+    if binding.callback_version >= 4:
         result["mode"] = "documents"
     valid()
     # 本轮检索期间前轮也可能到期，不能继续向模型披露失效的前文。

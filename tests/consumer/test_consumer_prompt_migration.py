@@ -13,8 +13,6 @@ import copy
 import importlib.util
 from pathlib import Path
 
-import pytest
-
 from aiops_diagnostics.consumer.consumer_documents import PROMPT
 from consumer.test_consumer_knowledge_picker import picker_graph
 
@@ -31,56 +29,65 @@ def _module():
     return module
 
 
-def _source(system_text):
+def _source(system_texts):
     flow = {"workflow": picker_graph(["kb-own"])}
     node = next(n for n in flow["workflow"]["graph"]["nodes"] if n["id"] == "answer")
-    node["data"]["prompt_template"] = (
-        [{"role": "system", "text": system_text}] if system_text is not None else []
-    ) + [{"role": "user", "text": "{{#sys.query#}}"}]
+    node["data"]["prompt_template"] = [{"role": "system", "text": text} for text in system_texts] + [
+        {"role": "user", "text": "{{#sys.query#}}"}
+    ]
     return flow
 
 
-def _system(candidate):
+def _systems(candidate):
     node = next(n for n in candidate["workflow"]["graph"]["nodes"] if n["id"] == "answer")
-    return next(p for p in node["data"]["prompt_template"] if p["role"] == "system")["text"]
+    return [p["text"] for p in node["data"]["prompt_template"] if p["role"] == "system"]
 
 
 def test_a_missing_system_prompt_is_initialised():
-    """老应用没有 SYSTEM：写入模板，这是初始化，不需要任何人确认。"""
-    result = _module().live_documents(_source(None))
-    assert _system(result) == PROMPT
+    """老应用没有 SYSTEM：写入业务起点 + 协议块。"""
+    texts = _systems(_module().live_documents(_source([])))
+    assert len(texts) == 2
+    assert "aiops-protocol" in texts[1]
+    assert "充电客服" in texts[0]
 
 
-def test_an_identical_system_prompt_is_left_alone():
-    """内容与模板一致时重复迁移是 no-op —— 幂等，不会因为跑两次就漂。"""
-    source = _source(PROMPT)
+def test_an_identical_prompt_is_left_alone():
+    """重复迁移是幂等的：协议块只有一份，业务文字不变。"""
+    once = _systems(_module().live_documents(_source([PROMPT])))
+    twice = _systems(_module().live_documents(_source(once)))
+    assert once == twice
+
+
+def test_an_operator_edit_is_preserved_not_refused():
+    """**运营的文字一个字都不动**，协议块由系统替换。
+
+    这是复核要求的关键改动：第一版的做法是"拒绝覆盖，让运营手补协议，或用 --replace-system
+    丢弃内容"。两者都不算完成保留式迁移 —— 保留式的意思是**迁移后运营的文字仍在**。
+    """
+    edited = "你是 C 端客服。回答要短、要像人说话。"
+    texts = _systems(_module().live_documents(_source([edited])))
+    assert texts[0] == edited
+    assert "aiops-protocol" in texts[1]
+
+
+def test_a_stale_protocol_block_is_refreshed_and_kept_single():
+    """旧协议块被替换成当前版本，不会叠成两块。"""
+    stale = "<!-- aiops-protocol:1 -->\n旧协议：只输出 kind/answer/reference_ids。"
+    texts = _systems(_module().live_documents(_source(["运营的文字", stale])))
+    assert texts[0] == "运营的文字"
+    assert len(texts) == 2
+    assert "aiops-protocol:2" in texts[1] and "旧协议" not in texts[1]
+
+
+def test_the_fact_contract_flag_is_written():
+    """片段契约是**发布版本**的属性：迁移写入开关，旧版本因此停在 4。"""
+    candidate = _module().live_documents(_source(["运营的文字"]))
+    variables = {v["name"]: v["value"] for v in candidate["workflow"]["environment_variables"]}
+    assert variables["answer_fact_contract"] == "slots"
+
+
+def test_the_input_is_not_mutated_in_place():
+    source = _source(["运营的文字"])
     before = copy.deepcopy(source)
-    result = _module().live_documents(source)
-    assert _system(result) == PROMPT
-    assert source == before, "迁移不能就地改输入"
-
-
-def test_an_operator_edit_is_refused_with_the_way_out():
-    """运营改过就拒绝，并说清两条路：确认丢弃加开关，要保留就把契约补进去。"""
-    edited = "你是 C 端客服。回答要短、要像人说话。\n" + PROMPT
-    with pytest.raises(ValueError) as excinfo:
-        _module().live_documents(_source(edited))
-    message = str(excinfo.value)
-    assert "--replace-system" in message
-    assert "拒绝覆盖" in message
-
-
-def test_replacing_is_possible_but_explicit():
-    """显式要求替换时才写模板 —— 这是唯一会丢运营内容的入口，必须有人按下它。"""
-    result = _module().live_documents(_source("运营自己写的一段"), replace_system=True)
-    assert _system(result) == PROMPT
-
-
-def test_the_refusal_happens_before_any_other_rewrite():
-    """拒绝时整份草稿都不动：不能出现"环境变量改了、提示词没改"的半迁移。"""
-    edited = "运营自己写的一段"
-    source = _source(edited)
-    before = copy.deepcopy(source)
-    with pytest.raises(ValueError):
-        _module().live_documents(source)
+    _module().live_documents(source)
     assert source == before

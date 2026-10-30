@@ -93,16 +93,33 @@ def live_documents(source, *, replace_system=False):
     language = next(v for v in nodes["start"]["variables"] if v["variable"] == "language")
     language["options"] = list(SUPPORTED_LANGUAGES)
     prompts = nodes["answer"]["prompt_template"]
-    current = next((p for p in prompts if p.get("role") == "system"), None)
-    edited = (current or {}).get("text", "")
-    if not replace_system and edited.strip() and edited != PROMPT:
-        raise ValueError(
-            "answer 节点的 SYSTEM 与仓库模板不同：这是运营已编辑的提示词，拒绝覆盖。"
-            "确认要丢弃请加 --replace-system；要保留请把模板里的契约要求补进现有提示词。"
-        )
-    if replace_system or not edited.strip():
-        prompts[:] = [p for p in prompts if p.get("role") != "system"]
-        prompts.insert(0, {"role": "system", "text": PROMPT})
+    from aiops_diagnostics.consumer.consumer_documents import PROTOCOL_BLOCK
+
+    # **协议与表达分开存**：运营的文字在前，系统维护的协议块在后（带标记）。
+    # 迁移只替换带标记的那一块，运营写的内容一个字都不动 —— 不需要 `--replace-system`
+    # 丢弃内容，也不需要运营"手补协议"。
+    systems = [p for p in prompts if p.get("role") == "system"]
+    # 任何一代协议块都认（`<!-- aiops-protocol:` 前缀），否则旧块会被当成运营文字留下。
+    operator_text = "\n".join(
+        p.get("text", "")
+        for p in systems
+        if not p.get("text", "").lstrip().startswith("<!-- aiops-protocol:")
+    )
+    if replace_system or not operator_text.strip():
+        operator_text = PROMPT
+    prompts[:] = [p for p in prompts if p.get("role") != "system"]
+    if operator_text.strip():
+        prompts.insert(0, {"role": "system", "text": operator_text.strip()})
+    prompts.insert(1 if operator_text.strip() else 0, {"role": "system", "text": PROTOCOL_BLOCK})
+
+    variables.append(
+        {
+            "id": "answer_fact_contract",
+            "name": "answer_fact_contract",
+            "value_type": "string",
+            "value": "slots",
+        }
+    )
     nodes["answer"].setdefault("memory", {})["query_prompt_template"] = (
         "{{#sys.query#}}\n回答语言必须使用 {{#start.language#}}；按系统说明的语言名称翻译资料后回答。"
     )

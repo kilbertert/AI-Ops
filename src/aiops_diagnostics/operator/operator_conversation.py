@@ -28,12 +28,28 @@ SCHEMA = "operator-conversation/1"
 #: 找站说明的上限。它是**一两句开场**，不是答复正文：名单、数量、来源由系统写。
 MAX_SITE_NOTE_CHARS = 400
 
-#: 说明里不得出现的断言。它们全都是**事实**，而事实只能由系统按本轮证据写出：
-#: 数字（数量／距离／价格）、价格与距离的说法、以及实时可用性。
+#: 说明里不得出现的断言。**封闭词表**：数字，以及价格/距离/可用性的固定说法（中英各一组）。
 SITE_FORBIDDEN = re.compile(
-    r"\d|元|价格|费用|收费|多少钱|免费|距离|公里|km|千米|米内|附近|空闲|可用|充电中|有枪|排队",
+    r"\d"
+    r"|元|价格|费用|收费|多少钱|免费|距离|公里|千米|米内|附近|最近|空闲|可用|充电中|有枪|排队"
+    r"|\bfree\b|\bavailable\b|\bunavailable\b|\bprice\b|\bcost\b|\bcheap\b|\bdistance\b"
+    r"|\bkm\b|\bnearby\b|\bnearest\b|\bvacant\b|\bin stock\b|\bbusy\b",
     re.IGNORECASE,
 )
+
+#: 站名形状：以「站/桩」结尾的中文片段，或「… station」的英文片段。
+#: 站名只能出现在系统列出的清单里，所以说明里出现**任何**站名形状都拒 —— 只比对已知站名会
+#: 放行编造的名字（复核反例：`我帮你找到了虚构乙站`）。
+SITE_NAME_SHAPE = re.compile(
+    # 「查到的站点」「可见的站」是**说法**不是名字：`的` 紧贴站名后缀时不算站名形状。
+    r"[\u4e00-\u9fff]{2,8}(?<!的)(?:充电站|站点|站|充电桩|桩)"
+    r"|\b(?!(?:the|a|an|this|that|these|those|each|every|your|our|matching|nearest)\s)"
+    r"[A-Z][A-Za-z0-9\-]{1,20}\s+(?:station|site)s?\b",
+)
+
+#: 找站说明可以填的事实片段。键是协议的一部分，与 :func:`site_facts` 同源。
+SITE_FACTS = ("site_count", "site_roster", "source", "observed_at", "limits")
+SITE_SLOT = re.compile(r"\{\{fact:([a-z_]{1,32})\}\}")
 
 INSTRUCTIONS = """你是只读充电运营管家。本轮没有选定订单，不提供订单工具或历史订单上下文。
 先理解用户的问题，不要把“订单”一词等同于查询某笔订单：状态含义、操作方法、闲聊和能力咨询
@@ -117,18 +133,53 @@ def validate(answer, question):
 def validate_site_note(text):
     """找站说明只负责语气：任何**事实**都不许它写。
 
-    判据是穷举的，不是启发式：数字、价格、距离、可用性一律不得出现。名单、数量、截断范围、
-    无定位限制和来源由 :func:`render` 按本轮 CPMS 证据写出 —— 所以"站名地址数量保真"不是
-    靠模型自觉，而是靠它**没有位置**去写这些。
+    判据由两组**封闭集合**构成，不是对自然语言的理解：
+
+    * 数字，以及价格/距离/可用性的固定说法（中英各一组）；
+    * **站名形状**：说明里不许出现任何"以站/桩结尾"或"… station"的片段。名单由系统列出，
+      所以说明连已知站名也不必重抄；这样"编一个不存在的站"与"重抄一个真的站"都被挡住 ——
+      只比对已知站名会放行前者（复核反例 `我帮你找到了虚构乙站`）。
+
+    数量、名单、截断范围、无定位限制与来源由 :func:`render` 按本轮证据写出。
     """
     if not isinstance(text, str) or len(text) > MAX_SITE_NOTE_CHARS:
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
     if not text.strip():
         return
-    if SITE_FORBIDDEN.search(text):
+    own = SITE_SLOT.sub(" ", text)
+    if {name for name in SITE_SLOT.findall(text)} - set(SITE_FACTS):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
-    if EXECUTED_MUTATION.search(text):
+    if SITE_FORBIDDEN.search(own) or SITE_NAME_SHAPE.search(own):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+    if EXECUTED_MUTATION.search(own):
+        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+
+
+def site_facts(sites, language) -> dict[str, str]:
+    """这一轮**可以**填进说明的事实。与 :func:`render` 写的那份清单同源，不另算一遍。"""
+    zh = language.startswith("zh")
+    return {
+        "site_count": str(len(sites["sites"])),
+        "site_roster": "\n".join(
+            f"{i}. {row['name']} — {row['address'] or ('地址未提供' if zh else 'Address unavailable')}"
+            for i, row in enumerate(sites["sites"], 1)
+        ),
+        "source": sites["source"],
+        "observed_at": sites["observed_at"],
+        "limits": (
+            "未提供定位，未按距离排序；本次结果不表示实时空闲枪口或价格。"
+            if zh
+            else "No location supplied: not sorted by distance. Live availability and prices not queried."
+        ),
+    }
+
+
+def fill_site_note(text, sites, language) -> str:
+    """把说明里的片段填成系统给出的事实。未知片段是协议错误，不是措辞问题。"""
+    facts = site_facts(sites, language)
+    if {name for name in SITE_SLOT.findall(text)} - set(facts):
+        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+    return SITE_SLOT.sub(lambda match: facts[match.group(1)], text)
 
 
 def render(answer, sites, language):
@@ -182,14 +233,11 @@ def render(answer, sites, language):
         if not sites["empty_scope"]:
             text += "\n" + sites["source"] + " · " + sites["observed_at"]
         # 模型写的说明只能**在前**：它负责语气，事实全部在它下面由系统写出。
-        # 说明里出现结果中的站名/地址就拒 —— 名单只能有一份，重拄一份就会漂。
+        # 片段（{{fact:site_roster}} 等）由系统填值，说明里不会出现它自己编的名单。
         note = (answer.get("text") or "").strip()
         if note:
-            for row in sites["sites"]:
-                for fact in (row.get("name") or "", row.get("address") or ""):
-                    if fact and fact in note:
-                        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
-            text = note + "\n\n" + text
+            validate_site_note(note)
+            text = fill_site_note(note, sites, language) + "\n\n" + text
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
 
 

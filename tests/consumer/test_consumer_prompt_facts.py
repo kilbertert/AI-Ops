@@ -75,7 +75,7 @@ def test_a_currency_amount_must_be_in_the_snapshot():
 
 @pytest.mark.parametrize(
     "claim",
-    ["已到账", "已经退款成功", "款项将原路退回", "已扣款", "预计今天到账"],
+    ["已到账", "已经退款成功", "款项将原路退回", "已扣款", "预计今天到账", "今天会到账"],
 )
 def test_payment_promises_are_refused(claim):
     """系统只有业务记录，没有支付渠道回执 —— "已到账"是一句我们证明不了的话。"""
@@ -102,16 +102,22 @@ def test_negated_payment_statements_are_allowed(sentence):
 
 
 def test_status_cannot_be_inverted():
-    """快照说结束，正文不能说"未结束"；快照说充电中，不能说"已结束"。"""
+    """状态名取自**公司状态表**（封闭集合），且必须与本轮快照一致。
+
+    判据的边界是刻意的：只有**完整状态名**（`充电中`/`充电结束`/…）算状态断言。
+    `结束后可查看账单`、`我已完成本次查询` 不含完整状态名，是措辞而不是状态断言 ——
+    第一版把它们当成"说反了"，复核反例正是这两句。
+    """
+    assert _reason("这单仍在充电中。订单号 2107546575906942977。", STATUS) == "CHATFLOW_FACT_STATUS_INVERTED"
     assert (
-        _reason("这单还没结束，仍在充电。订单号 2107546575906942977。", STATUS)
+        _reason("这单的状态是充电结束。订单号 2107546575906942977。", CHARGING)
         == "CHATFLOW_FACT_STATUS_INVERTED"
     )
-    assert (
-        _reason("这单已经结束了。订单号 2107546575906942977。", CHARGING) == "CHATFLOW_FACT_STATUS_INVERTED"
-    )
-    validate_reply("这单已经结束。订单号 2107546575906942977。", STATUS, language="zh")
-    validate_reply("这单还在充电中，没有结束。订单号 2107546575906942977。", CHARGING, language="zh")
+    validate_reply("这单已经充电结束。订单号 2107546575906942977。", STATUS, language="zh")
+    validate_reply("这单还在充电中。订单号 2107546575906942977。", CHARGING, language="zh")
+    # 措辞不是状态断言：这两句都通过（复核反例里被误拒的两句）。
+    validate_reply("这单还在充电中，结束后可查看账单。订单号 2107546575906942977。", CHARGING, language="zh")
+    validate_reply("这单还在充电中，我已完成本次查询。订单号 2107546575906942977。", CHARGING, language="zh")
 
 
 def test_unknown_status_role_is_not_judged():

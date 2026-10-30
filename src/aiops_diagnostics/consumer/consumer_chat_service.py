@@ -103,7 +103,7 @@ def start(
             )
     # 单据轮次及其下一轮均不继承上游记忆，旧订单数据不会进入后续模型输入。
     if (
-        binding.callback_version == 4
+        binding.callback_version >= 4
         or order_no
         or photo_id
         or (previous and (previous.order_no or previous.has_photo))
@@ -308,6 +308,62 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
 
 
+def _pinned_route_active(runtime, run) -> bool:
+    """签发时那条路由现在是否仍然 active（撤回 = 不再交付）。
+
+    普通发布只推进版本；撤回会把 `state` 改成 `retracted`。这两件事在数据上本来就可区分，
+    旧回读却把它们当成同一件事（版本不等就 410），于是**一次正常发布就让历史答案失效**。
+    """
+    path = str(getattr(runtime.gateway_settings, "chat_route_bindings_file", "") or "")
+    if not path:
+        return True
+    from pathlib import Path
+
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
+
+    rows = [
+        row
+        for row in ChatRouteBindingStore(Path(path)).all()
+        if row.environment == run.environment and row.app_id == run.app_id
+    ]
+    return bool(rows) and all(row.active for row in rows)
+
+
+def deliverable_binding(runtime, caller, run):
+    """已签发答复回读时的绑定判据：**按签发时那一版交付**，撤回/换 app 才拒。
+
+    与 :func:`current` 的区别是刻意的：新会话必须用当前版本；历史与在途答案用的是它**签发
+    时**冻结的版本与摘要（`run.binding_digest` / `run.agent_version_no`）。把两者混成一个
+    判据，代价就是复核实测到的那条 —— 运营正常发布一版措辞，旧 QA 从 200 变 410。
+    """
+    selected = chat_execution.select_binding(
+        runtime.gateway_settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
+    )
+    if selected is None:
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_BINDING_CHANGED", "chatflow binding changed", http_status=410
+        )
+    if fingerprint(selected) == run.binding_digest:
+        return selected
+    # 允许的**唯一**差别是"路由推进了一版"（运营正常发布）。四件事必须同时成立：
+    #   1. 路由 revision 比签发时新 —— 说明差异来自一次发布，而不是内容被换掉；
+    #   2. 凭据引用、app、workflow 都没变 —— 换凭据/换应用是不同事件，必须拒；
+    #   3. 这条路由仍然 active —— 撤回就不交付；
+    #   4. 旧版本仍在版本表里 —— 冻结内容可读。
+    if (
+        selected.route_revision <= run.route_revision
+        or selected.key != run.binding_key
+        or selected.app_id != run.app_id
+        or selected.workflow_id != run.workflow_id
+        or not _pinned_route_active(runtime, run)
+    ):
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_BINDING_CHANGED", "chatflow binding changed", http_status=410
+        )
+    # 同一 app、路由仍 active、只是版本推进：旧答案按签发时的版本继续交付。
+    return selected
+
+
 def require_result(runtime, caller, qa):
     if qa["status"] != "completed":
         return
@@ -316,16 +372,10 @@ def require_result(runtime, caller, qa):
     run = runtime.dify_run_store.by_qa(qa["qa_id"])
     if run is None or run.kind != "service" or run.scope_fingerprint != caller.scope_fingerprint:
         raise chat_execution.ChatRunUnavailable("QA_NOT_FOUND", "answer not found", http_status=404)
-    binding = chat_execution.select_binding(
-        runtime.gateway_settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
-    )
+    binding = deliverable_binding(runtime, caller, run)
     if (
-        binding is None
-        or fingerprint(binding) != run.binding_digest
-        or binding.app_id != run.app_id
+        binding.app_id != run.app_id
         or binding.workflow_id != run.workflow_id
-        or binding.route_revision != run.route_revision
-        or binding.agent_version_no != run.agent_version_no
         or binding.key != run.binding_key
     ):
         raise chat_execution.ChatRunUnavailable(
@@ -342,7 +392,8 @@ def require_result(runtime, caller, qa):
         raise chat_execution.ChatRunUnavailable(
             "CHATFLOW_RESULT_EXPIRED", "chatflow result expired", http_status=410
         )
-    current(runtime, caller, binding)
+    # 这里**不再**要求"当前绑定 == 签发绑定"：那条判据属于新会话（见 `current`）。
+    # 撤回已经由 `deliverable_binding` 的 `_pinned_route_active` 挡住。
     if run.order_no:
         context = runtime.dify_run_store.context(run.run_id) or {}
         live = context.get("live_snapshot", {})

@@ -175,7 +175,8 @@ def test_live_publication_ignores_missing_reviewed_file_and_snapshot_contains_no
     }
     frozen = frozen_settings(target, documents=True)
     result = publication_settings(flow, frozen, BASE, owned_libraries=[{"knowledge_base_id": "kb-own"}])
-    assert result["callback_version"] == 4 and result["knowledge_base_ids"] == ["kb-own"]
+    # 5 = documents 契约 + 事实片段契约（迁移写入 answer_fact_contract=slots）。
+    assert result["callback_version"] == 5 and result["knowledge_base_ids"] == ["kb-own"]
     assert set(result["content"]) == {"schema", "state", "tenant_id", "environment"}
     assert result["content"]["schema"] == SCHEMA
 

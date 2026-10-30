@@ -394,11 +394,16 @@ def test_a_site_note_cannot_state_facts(note):
 
 
 def test_a_site_note_cannot_retype_a_site_name():
-    """站名地址只能出现在系统列出的清单里：重抄一份就会与证据漂开。"""
+    """站名只能出现在系统列出的清单里：**任何**站名形状都拒，不只是已知的那些。
+
+    只比对已知站名会放行编造的名字（复核反例 `我帮你找到了虚构乙站`）。
+    """
     value = {**selection(), "text": "为您查询天河测试站。"}
-    conversation.validate(value, "找广州天河充电站")
     with pytest.raises(operator_cpms.OperatorRefused):
-        conversation.render(value, site_query_for(value), "zh")
+        conversation.validate(value, "找广州天河充电站")
+    invented = {**selection(), "text": "我帮你找到了虚构乙站。"}
+    with pytest.raises(operator_cpms.OperatorRefused):
+        conversation.validate(invented, "找广州天河充电站")
 
 
 def complete(f, run_id, answer):

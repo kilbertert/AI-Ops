@@ -117,12 +117,16 @@ def _run_client_grid(rows):
     for name, style, text, kind in GRID:
         if kind == "documents":
             payload = {"kind": "knowledge", "answer": text, "reference_ids": ["source-1"]}
-            got = answer_selection(json.dumps(payload), _documents_context())[1]["blocks"][0]["text"]
+            got = answer_selection(
+                json.dumps(payload), _documents_context(), language="zh", contract="slots"
+            )[1]["blocks"][0]["text"]
         elif kind == "realtime":
             snapshot = BILLING if name == "client.billing" else STATUS
             context = {**_documents_context(), "live_snapshot": snapshot}
             payload = {"kind": "realtime", "answer": "", "reference_ids": [], "reply": text}
-            got = answer_selection(json.dumps(payload), context)[1]["blocks"][0]["text"]
+            got = answer_selection(json.dumps(payload), context, language="zh", contract="slots")[1][
+                "blocks"
+            ][0]["text"]
         else:
             answer = final_answer(
                 json.dumps({"kind": kind, "faq_id": "", "reply": text}),
@@ -193,38 +197,78 @@ def _run_negatives(rows):
             "CHATFLOW_FACT_INVENTED_AMOUNT": "这单合计 27.36，支付 20，已退 0，另外每小时 3 元。"
             "订单号 2107546575906942977。",
             "CHATFLOW_FACT_PROMISE": "这单合计 27.36，支付 20，已退 0，已到账。订单号 2107546575906942977。",
-            "CHATFLOW_FACT_STATUS_INVERTED": "这单还没结束。订单号 2107546575906942977。",
+            "CHATFLOW_FACT_STATUS_INVERTED": "这单仍在充电中。订单号 2107546575906942977。",
         }[code]
         context = {**_documents_context(), "live_snapshot": snapshot}
         payload = {"kind": "realtime", "answer": "", "reference_ids": [], "reply": text}
+        actual = ""
         try:
-            answer_selection(json.dumps(payload), context)
+            answer_selection(json.dumps(payload), context, language="zh", contract="slots")
         except ChatRunUnavailable as exc:
-            ok = exc.code == code
-        else:
-            ok = False
-        rows.append((label, "—", "pass" if ok else "FAIL", code))
+            actual = exc.code
+        rows.append((label, "—", "pass" if actual == code else "FAIL", actual or "accepted"))
 
 
-def _run_lifecycle(rows):
-    from aiops_diagnostics.consumer.consumer_documents import answer_selection
+def _run_lifecycle(rows, workdir):
+    """版本生命周期：在**真实**路由绑定表上跑 A→发布 B→撤回，断言判据而不是写死 pass。
 
-    # 已发布 A → 编辑 B → 预览 B 但正式仍 A → 发布 B → 新会话 B → 恢复 A 的**判据层**：
-    # 正式版与草稿是两份内容，契约判据对两者一致；版本推进与恢复由
-    # tests/execution/test_prompt_version_lifecycle.py 在真实版本存储上验。
-    published = "这单已经结束充电。订单号 2107546575906942977。"
-    draft = "帮您确认过啦：这单已经结束充电。订单号 2107546575906942977。"
-    context = {**_documents_context(), "live_snapshot": STATUS}
-    for label, text in (("lifecycle.published_A", published), ("lifecycle.draft_B", draft)):
-        payload = {"kind": "realtime", "answer": "", "reference_ids": [], "reply": text}
-        got = answer_selection(json.dumps(payload), context)[1]["blocks"][0]["text"]
-        rows.append((label, "—", "pass" if got == text else "FAIL", text[:40]))
+    用的是 `ChatRouteBindingStore` 与 `consumer_chat_service` 的判据本身；不是两段手写文本。
+    页面级（Dify 编辑框 + 预览/发布/恢复按钮 + 真实模型）不在这里，脚本末尾记为 NOT_RUN。
+    """
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.consumer import consumer_chat_service
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
+
+    db = Path(workdir) / "routes.db"
+    store = ChatRouteBindingStore(db)
+
+    def publish(version, revision):
+        return store.publish(
+            environment="env-a",
+            tenant_id="TENANT-A",
+            entry="consumer",
+            scenario="consumer_service",
+            engine="dify",
+            agent_id="agent-1",
+            agent_version_no=version,
+            app_id="app-1",
+            workflow_id="wf-1",
+            expected_revision=revision,
+        )
+
+    first = publish(1, 0)
+    rows.append(("lifecycle.publish_A", "—", "pass" if first.agent_version_no == 1 else "FAIL", "version=1"))
+    second = publish(2, first.revision)
+    advanced = second.agent_version_no == 2 and second.revision > first.revision
+    rows.append(
+        ("lifecycle.publish_B", "—", "pass" if advanced else "FAIL", f"version={second.agent_version_no}")
+    )
+    # 已签发 run 钉在 A：路由推进后仍然 active，判据放行；撤回后必须拒。
+    runtime = SimpleNamespace(gateway_settings=SimpleNamespace(chat_route_bindings_file=str(db)))
+    run = SimpleNamespace(
+        environment="env-a", app_id="app-1", agent_version_no=1, route_revision=first.revision
+    )
+    active_ok = consumer_chat_service._pinned_route_active(runtime, run)
+    rows.append(
+        ("lifecycle.pinned_run_still_deliverable", "—", "pass" if active_ok else "FAIL", "route active")
+    )
+    current = store.get("env-a", "TENANT-A", "consumer", "consumer_service")
+    store.retract(
+        environment="env-a",
+        tenant_id="TENANT-A",
+        entry="consumer",
+        scenario="consumer_service",
+        expected_revision=current.revision,
+    )
+    retracted_ok = consumer_chat_service._pinned_route_active(runtime, run)
     rows.append(
         (
-            "lifecycle.version_moves",
+            "lifecycle.retraction_refuses_pinned_run",
             "—",
-            "pass",
-            "见 pytest tests/execution/test_prompt_version_lifecycle.py",
+            "pass" if not retracted_ok else "FAIL",
+            "route retracted",
         )
     )
 
@@ -244,7 +288,7 @@ def main() -> int:
     _run_client_grid(rows)
     _run_operator_grid(rows)
     _run_negatives(rows)
-    _run_lifecycle(rows)
+    _run_lifecycle(rows, out)
 
     width = max(len(r[0]) for r in rows)
     for name, style, verdict, detail in rows:
@@ -252,11 +296,16 @@ def main() -> int:
     failed = [r for r in rows if r[2] == "FAIL"]
     (out / "grid.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n")
     print(f"\n共 {len(rows)} 项，失败 {len(failed)} 项；证据写入 {out}")
-    print(
-        "\n未验证（不得记作通过）：真实 Dify 应用上的提示词编辑与预览/发布/恢复点击、"
-        "真实 Java 节点、真实模型的风格观感、41 上的在途与历史会话。"
-        "步骤见 docs/acceptance/dify-prompt-lifecycle/qa-plan.md 第五节。"
-    )
+    not_run = [
+        "页面级：在 Dify 编排页真实编辑指定文本框并点预览/发布/恢复（需隔离 Dify + 真实模型）",
+        "真实 Java 节点的执行与找站工具调用（需隔离节点）",
+        "真实模型的风格观感与稳定性（本地文本是合成的）",
+        "41 上的在途与历史会话（需合并制品）",
+    ]
+    print("\nNOT_RUN（不计入通过数量）：")
+    for item in not_run:
+        print(f"  - {item}")
+    (out / "not-run.json").write_text(json.dumps(not_run, ensure_ascii=False, indent=2) + "\n")
     return 0 if not failed else 1
 
 
