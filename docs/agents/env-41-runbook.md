@@ -1916,6 +1916,43 @@ curl -s -H "third-session: <会话>" -H "tenant-id: <会话租户>" \
 **经验**：`match_text` 日志是排查"检索质量"问题的最快路径——本轮即由此发现
 模型把整段 `reason` 当检索词导致 0 命中。
 
+### 5.4 CD 一直 queued：先看 self-hosted runner 被谁占着（2026-10-30 新增）
+
+**症状**：合并后 CD 长时间 `queued`，`/health` 的 `version` 不动，看起来像"CD 坏了"。
+
+**先查这三条，别先怀疑 CD**：
+
+```bash
+# ① 谁在跑？CD 的 job 有没有拿到 runner
+gh api repos/kilbertert/AI-Ops/actions/runs/<cd_run_id>/jobs \
+  -q '.jobs[] | "\(.name) \(.status) runner=\(.runner_name // "未分配")"'
+
+# ② runner 是不是 online 但 busy
+gh api repos/kilbertert/AI-Ops/actions/runners \
+  -q '.runners[] | "\(.name) status=\(.status) busy=\(.busy)"'
+
+# ③ busy 的时候，是哪个 run 占着
+gh run list --status in_progress --limit 10 \
+  --json databaseId,workflowName,headBranch,createdAt \
+  -q '.[] | "\(.databaseId) \(.workflowName) \(.headBranch) \(.createdAt)"'
+```
+
+**实测（2026-10-30）**：CD `41028624018` 排队 12 分钟，runner `online busy=true`，占着它的是
+`Agent Update Branch` 的 job（`41025764974`），已跑 39 分钟——那个 PR 早就合并了，job 无事可做。
+`agent-update-branch.yml` 的 `timeout-minutes` 是 **60**，所以它最长能占一小时。
+
+**处置**：确认那个 run 对应的 PR 已合并/已无意义后取消它，runner 立刻释放，CD 在几十秒内启动。
+
+```bash
+gh run cancel <stuck_run_id>
+```
+
+**不要**因此改 `agent-update-branch.yml` 的超时：它属于 `policy-check.mjs` 的
+`pullRequestWorkflows`（策略管理的 workflow），改它是策略变更，要走评审，不是运维处置。
+
+**判断口诀**：CD 排队先看 runner 的 `busy`，再看谁占着；`queued` 说明 job 还没拿到机器，
+跟部署脚本本身无关。
+
 ## 5.5 存量快捷动作的语言迁移（#542，2026-10-07 实做）
 
 **何时需要**：新增受支持语言后。改种子**不等于**改线上 —— `seed_bundled` 跳过已存在的行，

@@ -1,5 +1,41 @@
 # 当前交付状态索引
 
+## C 端答复措辞可以按租户发布（2026-10-30）
+
+#1211 合并 `ae290a0d`，CD run `41028624018` success，41 回读
+`1.0.0+ae290a0d6bf1`，`/opt/aiops-41/src/aiops_diagnostics/consumer/consumer_copy.py` 在位。
+
+**为什么做这一层**：C 端订单状态/账单的正文**不由模型写**（chatflow 的 `answer` 节点只输出
+`{kind, faq_id}` 决策，正文由 `final_answer` 用快照/FAQ/固定文案渲染），所以改 Dify 提示词
+改不到措辞；FAQ 文案也打包在代码里。于是把**措辞**搬出来做成按租户发布、按版本钉住的内容，
+数字仍由代码给（ADR-0186）。
+
+**怎么改措辞**（不需要改代码、不需要发版）：
+
+```bash
+# 1) 写一份文案包（只能覆盖内置已有的键，占位符必须与内置一致）
+cat > copy.json <<'JSON'
+{"languages": {"zh": {"billing_lede": "这单账单{parts}。", "status_lede": "这单现在「{status}」。"}}}
+JSON
+
+# 2) 发布（版本号自动 +1；内容与当前版本相同则不变号）
+aiops-admin consumer-copy --tenant <租户id> --db /var/lib/aiops-41/gateway/gateway.db \
+  publish --file copy.json --by <操作者>
+
+# 3) 查看当前版本与内容
+aiops-admin consumer-copy --tenant <租户id> --db ... show
+```
+
+**边界**：只能改 `zh`／`en`（其余九种仍是整段模板，`validate` 明确拒绝）；占位符少一个就被拒
+（少了 `{order_no}` 等于把订单号删掉）；发布新版本不会让在途答复变 503（答复按生成时钉住的
+`copy_version` 复现）。
+
+**未验**：还没有在 41 上给真实租户发布过文案，也没有真机观感；文案错别字不会被 CI 拦住。
+
+**运维教训（这一轮踩到的）**：CD 排队 12 分钟不是 CD 坏了，是**唯一的 self-hosted runner 被一个
+卡住的 `Agent Update Branch` job 占了 39 分钟**（该 workflow 的 `timeout-minutes: 60`）。
+排查顺序见 [41 手册](env-41-runbook.md) §5.6。
+
 ## C 端答复先说结论并写人话（2026-10-30）
 
 两片已合并且已上线。#1175（`5de086c3`，CD run `41005913688` success）先把排版改成【分节、
