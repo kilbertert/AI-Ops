@@ -5,9 +5,10 @@
 两片已合并且已上线。#1175（`5de086c3`，CD run `41005913688` success）先把排版改成【分节、
 逐行、去微秒】；#1202（`0b58d502`，CD run `41010446836` success）再把**内容**改成
 「先一句结论，再逐项用人话解释」。
-41 上回读 `1.0.0+0b58d502adc5`（`business_mutations=disabled`），
-`/opt/aiops-41/src/aiops_diagnostics/consumer/consumer_plain.py` 已在位
-（mtime 2026-10-30 13:48:12 +0800）。
+核对时 41 回读 `1.0.0+0b58d502adc5`（`business_mutations=disabled`）；
+此后 CD 又推进到 **`1.0.0+be78e7c21e10`**（#1205，含本片），本片代码仍在线上：
+`/opt/aiops-41/src/aiops_diagnostics/consumer/consumer_plain.py` 在位
+（mtime 2026-10-30 13:48:12 +0800），并在新修订上复跑一次状态问法仍返回新格式。
 现在账单答复第一段是「这单的账单合计 27.36，系统记录的支付金额是 0.00，没有退款记录。」，
 其后逐项解释「不等于银行已经扣款」「有这条记录也不代表银行已经到账」；
 状态答复第一段是「这单当前的状态是「充电结束」。」。
