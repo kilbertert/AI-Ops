@@ -6,8 +6,44 @@
 >
 > **凭据纪律**：本文件只写方法与位置，**不写任何口令/令牌/thirdSession 明文**。
 > 凭据读取一律从 41 主机的 root 权限环境变量现场取，不落库、不入仓库、不贴聊天。
+> 可复用的**验收登录账号**存在库外加密清单里，见 §0b。
 
 > 2026-10-29退役升级后的依赖、正常登录与验收方法见[退役操作手册](runtime-retirement-operations.md)。旧`aiops ... admin`命令已被独立`aiops-admin`替代。
+
+## 0b. 可复用的验收登录账号（库外加密清单）
+
+业务验收要真人登录，而登录账号是凭据。它们按策略存放在**库外的一份加密清单**里，
+不在本仓库、不在会话记录、不在任何公开服务：
+
+```
+~/.config/dev-host/secrets-age/secrets.age     # 密文；私钥在同目录 key.txt，仅操作者持有
+```
+
+**怎么读**（只读，不解密到磁盘）：
+
+```bash
+age -d -i ~/.config/dev-host/secrets-age/key.txt \
+  ~/.config/dev-host/secrets-age/secrets.age | grep '"asset_id"'
+```
+
+每条资产是一行 JSON，字段固定：
+
+| 字段 | 含义 |
+| --- | --- |
+| `asset_id` | 稳定标识（`aiops-<租户>-<登录方式>-<日期>`），引用资产时用它 |
+| `project` / `environment` | 所属项目与逻辑环境 |
+| `kind` | `phone+fixed-code`（手机号 + 固定验证码）或 `account+password` |
+| `username` / `password` | 登录标识与口令（`phone+fixed-code` 时 `password` 就是那个固定验证码） |
+| `verification` | 非空时说明验证码是测试环境约定，不是真实验证码 |
+| `purpose` / `source` / `recorded_at` | 用途、谁在什么时候提供 |
+
+**新增一条资产的做法**：解密到 `0600` 临时文件 → 追加一行 JSON（`asset_id` 不重复）→
+用 `age -r <recipient>` 重新加密 → **先备份旧密文**（同目录 `.bak-<用途>-<时间戳>`）再
+替换 → `shred -u` 临时文件 → 解密回读确认条目数 +1。不要只改密文不备份，也不要让明文
+落到仓库目录或 `/tmp` 之外的地方。
+
+**引用这些资产的文档只写 `asset_id`**，不写手机号、账号或口令；验收记录里写
+「用 `aiops-ulink-phone-20261030` 登录」而不是把值抄一遍。
 
 ## 0. 环境事实（一次核对）
 
