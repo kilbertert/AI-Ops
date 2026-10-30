@@ -28,7 +28,8 @@
 [领域上线](docs/validation/2026-10-29-z15-domain-layout-live.md)与[围栏修复回归](docs/validation/2026-10-29-z16-operator-fenced-answer-live.md)。
 独立Dify桥与登录代理已随#1147更新包和模块入口；模型代理生产仍为旧发布包中的等字节实现。
 2026-10-30独立验收发现后续#1168两端未配套，补齐Java节点后原管家H5已独立复验通过；保留首次失败证据。
-后续Gateway、通用/会话模块和工具部署目录仍待完成，详见[本轮验收](docs/validation/2026-10-30-retirement-layout-acceptance.md)。
+Gateway、通用/会话、工具与公司集成目录已分别通过#1181/#1182/#1184归位并上线；
+最终范围与独立复验见[目录收尾](docs/validation/2026-10-30-z20-layout-final-acceptance.md)。
 
 ## 一、系统与入口
 
@@ -58,7 +59,7 @@ flowchart LR
 
 ## 三、系统模块与依赖关系
 
-以下是现有文件职责，不是已完成目录迁移的声明。导入检查覆盖子包、延迟导入与包级导入；既有节点装配四模块循环按具体边冻结，`test_readme_architecture.py`
+以下是迁移后的现有文件职责。导入检查覆盖子包、延迟导入与包级导入；既有节点装配四模块循环按具体边冻结，`test_readme_architecture.py`
 核对模块索引与引用并拒绝新增循环；业务执行不得依赖已删除的 Python 运行器。
 
 | 职责 | 当前模块 |
@@ -98,7 +99,6 @@ flowchart LR
 | `integrations/cpms-java/` | 公司Java受控接口补丁，独立于执行节点 |
 | `plugins/` | Dify 知识插件及其原生打包布局 |
 | `deploy/`、`ops/` | 部署制品、环境声明、代理配置与操作手册 |
-| `java/` | 公司侧 Java 集成补丁，不是执行节点源码 |
 | `tests/` | 现役功能回归及退役检查 |
 | `docs/` | 当前说明、ADR、操作手册和按日期留档的证据 |
 | `.spec/` | 受维护行为与规格映射 |

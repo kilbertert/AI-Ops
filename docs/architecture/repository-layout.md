@@ -48,10 +48,12 @@ Gateway追加：10个网关模块归gateway，管家会话归operator，知识HT
 公司Java补丁移入integrations/cpms-java，25测试归tests/tooling、9测试归tests/integrations。
 见[本片验证](../validation/2026-10-30-tooling-layout.md)。
 
-后续目标：Python按consumer/knowledge/identity/publication/gateway职责形成包，测试随职责归类；
-运行服务与一次性工具分开，部署面按服务聚合。每片更新调用者、资源加载、打包、CI与现役文档，
-保留错误处理与权限校验，不新建转发空壳或永久legacy目录。
-2026-10-30：上述各片已全部落地，目录目标不再处于进行中状态。
+2026-10-30：上述各片均已合并并部署，源码、测试、工具和公司集成已按职责归类。
+包根4文件是版本和3个实际命令实现；tests根保留跨服务部署/退役/仓库规则检查及共享夹具。
+部署面保持deploy下的node-runtime、dify-36、dify-chat、kb-service与m2-live-03成套资产；
+Gateway交付脚本留在deploy根作为唯一CD入口，ops保留环境清单、反向代理/独立服务资产和运行手册。
+这些位置有真实启动/交付调用者，不新增一层转发；移动仓库源码不等于重写现役宿主目录。
+最终独立验证与剩余业务边界见[收尾记录](../validation/2026-10-30-z20-layout-final-acceptance.md)。
 
 ## 2026-10-28调查归档（不再作为保留或执行决定）
 
