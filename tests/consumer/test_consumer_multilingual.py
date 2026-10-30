@@ -34,7 +34,9 @@ def test_fixed_copy_preserves_placeholders_and_covers_all_other_languages():
 
     assert set(COPY) == set(SUPPORTED_LANGUAGES) - {"zh", "en"}
     expected = {
-        "status": {"order_no", "status", "status_code", "source", "observed_at"},
+        # `status_code` 已从所有语种一起下线：正文不再把原始状态码摆给用户
+        # （ADR-0181）。这条断言逐语种比对占位符集合，所以下线必须整齐。
+        "status": {"order_no", "status", "source", "observed_at"},
         "billing": {
             "order_no",
             "order_amount",
@@ -85,9 +87,20 @@ def test_fact_rendering_keeps_zero_amounts_unknown_status_and_identifiers(langua
     }
     for answer in (status_answer(snapshot, language, localized=True), billing_answer(snapshot, language)):
         text = answer["blocks"][0]["text"]
-        # 订单号与来源必须原样保留；时间改成人读格式（2026-10-28 00:00:00 UTC），
-        # 所以比较的是**可核对的时刻**而不是原始 ISO 串 —— 断言不能因为排版变宽松。
-        assert all(snapshot[k] in text for k in ("order_no", "source"))
+        # 订单号原样保留；来源**换成人话**（ADR-0181）——所以这里断言的是
+        # 「读者还能认出这段数据来自哪条记录」，而不是内部标识字面值。
+        # 时间改成人读格式（2026-10-28 00:00:00 UTC），比较的是可核对的时刻而不是原始 ISO 串。
+        from aiops_diagnostics.consumer.consumer_plain import source_label
+
+        # 走 JSON 模板的语种，标签在**该语种的语言包**里；zh/zh-Hant/en 走代码词表。
+        expected_label = (
+            COPY[language]["source_billing"]
+            if language in COPY
+            else source_label(language, snapshot["source"])
+        )
+        assert snapshot["order_no"] in text
+        assert expected_label in text
+        assert snapshot["source"] not in text, "内部接口标识不应出现在用户正文里"
         assert "2026-10-28 00:00:00" in text and "UTC" in text
         assert snapshot["observed_at"] not in text, "微秒 ISO 串不应直接摆给用户"
     bill = billing_answer(snapshot, language)["blocks"][0]["text"]

@@ -65,14 +65,22 @@ def test_billing_record_is_not_a_payment_confirmation_and_null_is_not_zero(backe
     assert snapshot["recorded_refund_amount"] == "0"
     assert snapshot["order_amount"] == "2.26"
     text = billing_answer(snapshot, "zh")["blocks"][0]["text"]
-    assert "不证明已经扣款" in text and "不证明银行到账" in text and "未提供币种" in text
-    assert "未退款" in text and "已退金额：0" in text
+    # 断言**语义**：支付那一行必须否认"已扣款"，退款那一行必须否认"已到账"。
+    # 不抄整句 —— 抄了测试就变成文案的副本，改措辞要改两处，而真正要拦的是
+    # 「免责被简化成听起来钱已经到账」这一种改法。
+    # 只看**逐项解释行**（`·` 开头）：结论句里也会出现「支付金额」四个字，抓错了会空断言。
+    payment_line = next(line for line in text.splitlines() if line.startswith("·") and "支付金额" in line)
+    refund_line = next(line for line in text.splitlines() if line.startswith("·") and "退款" in line)
+    assert "扣款" in payment_line and any(w in payment_line for w in ("不等", "不代表", "不证明"))
+    assert "到账" in refund_line and any(w in refund_line for w in ("不等", "不代表", "不证明"))
+    assert "币种" in text and "原订单页面" in text
+    assert "没有退款记录" in text and "已退金额 0" in text
     backend["row"].update(refundStatus=2, refundAmount="1.10", payAmount=None)
     snapshot = read()
     assert snapshot["recorded_payment_amount"] is None
-    assert "partial refund recorded" in billing_answer(snapshot, "en")["blocks"][0]["text"]
+    assert "partial refund is recorded" in billing_answer(snapshot, "en")["blocks"][0]["text"]
     backend["row"]["refundStatus"] = 987
-    assert "状态待核实" in billing_answer(read(), "zh")["blocks"][0]["text"]
+    assert "待核实" in billing_answer(read(), "zh")["blocks"][0]["text"]
     backend["row"]["orderNo"] = "WRONG"
     with pytest.raises(ChargingStatusError):
         read()
@@ -107,7 +115,8 @@ def test_original_api_delivers_billing_and_reauthorizes_history(tmp_path, monkey
         assert first.status_code == 202, first.text
         final = done(env, first.json()["qa_id"]).json()
         assert final["status"] == "completed", final
-        assert "支付金额字段" in final["result"]["blocks"][0]["text"]
+        # 措辞改成「支付金额」（ADR-0181）；这条断言要的是「账单事实确实讲到了支付那一项」。
+        assert "支付金额" in final["result"]["blocks"][0]["text"]
         assert len(backend["calls"]) == 1 and not kb.calls
         run = runtime.dify_run_store.by_qa(first.json()["qa_id"])
         assert run.data_kind == "billing" and run.order_no == ORDER_A

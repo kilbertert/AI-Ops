@@ -360,7 +360,9 @@ def test_latest_order_is_answered_by_the_node_and_keeps_the_blocks_shape(tmp_pat
         final = wait_terminal(f["client"], qa_id)
         assert final["status"] == "completed", final
         text = final["result"]["blocks"][0]["text"]
-        assert ORDER_A in text and "cpms.chargingInfo" in text
+        # 来源写人话（ADR-0182）：这条断言守的是「回答确实来自那条状态记录」。
+        assert ORDER_A in text and "充电状态记录" in text
+        assert "cpms.chargingInfo" not in text
 
         # ③ QA 与 run 是**存储关联**，且绑定被冻结在记录上
         run = AgentRunStore(f["settings"].database_file).by_qa(qa_id)
