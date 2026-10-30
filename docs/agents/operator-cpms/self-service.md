@@ -300,3 +300,7 @@ uv run python tools/verification/check_dual_entry_management.py --out var/verify
 `AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE`、`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL`。
 平台 profile 只输出模型/provider/插件标识及目标路径，不输出 credential_file 的内容。
 这次现场原值缺前两项，业务连接只含原租户；它们须同版部署时补齐，不代表代码测试失败。
+
+现役两端模型不同：profile 可加 `consumer_models` 数组，每项与 `model` 同形，
+明确列出来源客户端的 provider/模型名/包标识/受控凭据文件与预算；只给本数组中的模型自动配置。
+不得修改管家 `model.name` 让客户端勉强通过，也不得因 provider 相同就开放任意模型名。

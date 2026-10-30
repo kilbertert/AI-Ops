@@ -445,9 +445,12 @@ def consumer_models(console, workspace_id: str, document: dict, profile) -> list
             wanted.append((provider, name))
     if not wanted:
         raise SetupRefused("SETUP_MODEL_CONNECTION_REQUIRED")
-    approved = profile.get("model") or {}
+    approved_models = [profile.get("model") or {}, *profile.get("consumer_models", [])]
     ready = []
     for provider, name in wanted:
+        approved = next(
+            (m for m in approved_models if (m.get("provider"), m.get("name")) == (provider, name)), {}
+        )
         if (provider, name) == (approved.get("provider"), approved.get("name")):
             model_credentials(console, workspace_id, approved)
             ready.append(f"{provider}/{name}")

@@ -221,6 +221,9 @@ def test_new_workspace_installs_and_activates_the_approved_model(tmp_path):
                 "credentials": {**values, "api_key": "***"} if self.active else {},
             }
 
+    # 管家与客户端可用同一 provider 的不同获批模型；不覆盖管家选择。
+    model = profile["model"]
+    profile = {"model": {**model, "name": "operator-model"}, "consumer_models": [model]}
     console = ModelConsole()
     assert prepare.consumer_models(console, "new-workspace", document(), profile)
     assert console.active == "managed-model"
