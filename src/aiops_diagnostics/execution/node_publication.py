@@ -106,7 +106,12 @@ def all_targets(settings):
     for profile in configured.values():
         validate_target(NodeTarget(app_id="profile", tenant_id="profile", **profile["target"]))
     by_id = {t.app_id: t for t in legacy}
-    for row in SelfServiceStore(settings.database_file).apps():
+    # 受管目录里现在也有**客户端**行（`entry='consumer'`，没有 node profile）。
+    # 它们不是节点目标：拿空 profile_id 去查 profile 会 KeyError，而那会让**整个**目标
+    # 列表加载失败 —— 一个客户端应用顺手把管家端全部停掉。
+    for row in SelfServiceStore(settings.database_file).apps(entry="operator"):
+        if not row["profile_id"]:
+            continue
         t = NodeTarget(
             app_id=row["app_id"], tenant_id=row["tenant_id"], **configured[row["profile_id"]]["target"]
         )

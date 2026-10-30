@@ -1,4 +1,13 @@
-"""开通操作与受管草稿身份；正式指针仍由 chat_route_bindings 管理。"""
+"""开通操作与受管应用目录；正式指针仍由 chat_route_bindings 管理。
+
+目录这一层从「每租户每端一个管家」扩到「受管应用可属于任一端」：`operator_apps` 加
+`entry`/`scenario`/`environment`/`targets_json` 四列，表名与主键都不动。改名的收益是零
+（既有部署的库文件里已经有这张表），代价是每次部署都要迁移两次。
+
+`targets_json` 是**客户端的可发布能力**（知识库选择与只读开关）。放在目录行上而不是
+另一张表，是因为它和「这个应用属于哪个客户哪一端」是同一个事实：分开存就会出现
+「目录里有行、目标没有」这种半张纸的状态。
+"""
 
 from __future__ import annotations
 
@@ -10,6 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.dify import dual_entry
 
 
 class SetupConflict(ValueError):
@@ -37,6 +47,16 @@ class SelfServiceStore:
                     UNIQUE(actor, request_key)
                 );
             """)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(operator_apps)")}
+            for name, spec in (
+                ("entry", "TEXT NOT NULL DEFAULT 'operator'"),
+                ("scenario", "TEXT NOT NULL DEFAULT 'operator_order_diagnosis'"),
+                ("environment", "TEXT NOT NULL DEFAULT ''"),
+                ("targets_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ):
+                # 存量行按默认值补齐：它们全部是管家，与现状逐字一致，不需要数据回填。
+                if name not in columns:
+                    db.execute(f"ALTER TABLE operator_apps ADD COLUMN {name} {spec}")
         protect_private_file(self.path)
 
     @contextmanager
@@ -85,7 +105,10 @@ class SelfServiceStore:
                 "VALUES(?,?,?,?,'pending','workspace',?)",
                 (job_id, actor, request_key, encoded, time.time()),
             )
-        return self.get(job_id)
+        created = self.get(job_id)
+        if created is None:  # pragma: no cover - 刚提交就读不到只可能是文件被换掉
+            raise SetupConflict("SETUP_JOB_MISSING")
+        return created
 
     def request(self, actor: str, request_key: str) -> dict | None:
         with self.connection() as db:
@@ -162,31 +185,117 @@ class SelfServiceStore:
             row = db.execute("SELECT * FROM operator_apps WHERE app_id=?", (app_id,)).fetchone()
         return dict(row) if row else None
 
-    def apps(self) -> list[dict]:
+    def apps(self, entry: str | None = None) -> list[dict]:
         with self.connection() as db:
-            return [dict(r) for r in db.execute("SELECT * FROM operator_apps ORDER BY app_id")]
+            if entry is None:
+                rows = db.execute("SELECT * FROM operator_apps ORDER BY app_id")
+            else:
+                rows = db.execute("SELECT * FROM operator_apps WHERE entry=? ORDER BY app_id", (entry,))
+            return [dict(r) for r in rows]
 
-    def register(self, *, app_id, tenant_id, workspace_id, agent_name, profile_id, actor):
-        values = (app_id, tenant_id, workspace_id, agent_name, profile_id, actor)
+    def consumer_target(self, tenant_id: str, environment: str) -> dict | None:
+        """这个客户在**这个环境**的受管客户端运行目标。
+
+        返回目录行本身；调用方从 ``targets_json`` 取可发布能力。``tenant_id`` 的比较留给
+        调用方（`consumer_publication` 用与路由同一套 `tenant_matches`，避免这里再造一个
+        租户相等判据）。
+        """
+        with self.connection() as db:
+            row = db.execute(
+                "SELECT * FROM operator_apps WHERE entry='consumer' AND environment=? AND tenant_id=?",
+                (environment, tenant_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_targets(self, app_id: str, targets: dict) -> None:
+        with self.connection() as db:
+            count = db.execute(
+                "UPDATE operator_apps SET targets_json=? WHERE app_id=?",
+                (json.dumps(targets, ensure_ascii=False, sort_keys=True), app_id),
+            ).rowcount
+        if count != 1:
+            raise SetupConflict("SETUP_APP_CONFLICT")
+
+    def register(
+        self,
+        *,
+        app_id,
+        tenant_id,
+        workspace_id,
+        agent_name,
+        profile_id,
+        actor,
+        entry="operator",
+        scenario="",
+        environment="",
+        targets=None,
+    ):
+        scenario = scenario or dual_entry.scenario(entry)
+        if scenario != dual_entry.scenario(entry):
+            raise SetupConflict("SETUP_APP_CONFLICT")
+        values = (app_id, tenant_id, workspace_id, agent_name, profile_id, actor, entry, scenario)
+        encoded = json.dumps(targets or {}, ensure_ascii=False, sort_keys=True)
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT * FROM operator_apps WHERE app_id=?", (app_id,)).fetchone()
             if old:
                 if (
-                    tuple(old[k] for k in ("app_id", "tenant_id", "workspace_id", "agent_name", "profile_id"))
-                    != values[:5]
+                    tuple(
+                        old[k]
+                        for k in (
+                            "app_id",
+                            "tenant_id",
+                            "workspace_id",
+                            "agent_name",
+                            "profile_id",
+                            "created_by",
+                            "entry",
+                            "scenario",
+                        )
+                    )
+                    != values
                 ):
                     raise SetupConflict("SETUP_APP_CONFLICT")
+                if targets is not None and old["targets_json"] != encoded:
+                    db.execute("UPDATE operator_apps SET targets_json=? WHERE app_id=?", (encoded, app_id))
                 return
             db.execute(
-                "INSERT INTO operator_apps(app_id,tenant_id,workspace_id,agent_name,profile_id,created_by) "
-                "VALUES(?,?,?,?,?,?)",
-                values,
+                "INSERT INTO operator_apps"
+                "(app_id,tenant_id,workspace_id,agent_name,profile_id,created_by,entry,scenario,"
+                "environment,targets_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (*values, environment, encoded),
             )
+
+
+#: 逐端公开状态的字段白名单。多给字段就是把内部资源 ID 顺手交给页面；
+#: 少给字段页面就只能猜。这里逐字列出，不做 `dict(row)` 透传。
+_ENTRY_FIELDS = (
+    "app_id",
+    "version_no",
+    "published",
+    "draft_only",
+    "knowledge",
+    "channel",
+    "channel_note",
+    "state",
+    "error_code",
+)
+
+
+def public_entry(row: dict | None) -> dict:
+    body = {key: (row or {}).get(key) for key in _ENTRY_FIELDS}
+    body["published"] = bool(body["published"])
+    body["draft_only"] = bool(body["draft_only"])
+    body["version_no"] = body["version_no"] or None
+    return body
 
 
 def public_job(row: dict) -> dict:
     request, resources = json.loads(row["request_json"]), json.loads(row["resources_json"])
+    entries = {
+        entry: public_entry((resources.get("entries") or {}).get(entry))
+        for entry in request.get("entries") or ["operator"]
+    }
     return {
         "id": row["id"],
         "state": (
@@ -195,6 +304,10 @@ def public_job(row: dict) -> dict:
         "step": row["step"],
         "tenant_name": request["tenant_name"],
         "name": request["name"],
+        "scope": request.get("scope", "operator"),
+        "entries": entries,
+        # 顶层三个字段继续镜像管家端（没有管家端时镜像第一个已选端），既有页面与既有
+        # 契约不改也能跑；读取方一律优先读 `entries`。
         "app_id": resources.get("app_id"),
         "workspace_id": resources.get("workspace_id"),
         "version_no": resources.get("version_no"),

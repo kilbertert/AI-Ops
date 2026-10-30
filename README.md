@@ -106,10 +106,11 @@ flowchart LR
 | `.spec/` | 受维护行为与规格映射 |
 | `.github/`、`.sandcastle/` | 开发交付治理 |
 
-Dify自助开通：`dify.self_service`组织业务流程，`dify.self_service_api`提供固定管理端点，
+Dify自助开通：`dify.self_service`组织双端业务流程，`dify.self_service_api`提供固定管理端点，
 `dify.self_service_bridge`校验同源会话，`dify.self_service_identity`读取公司管理权限，
 `dify.self_service_config`解析平台连接，`dify.self_service_prepare`准备依赖与应用，
-`dify.self_service_store`保存幂等任务和受管草稿；`dify.knowledge_connection`管理各工作区的知识连接。
+`dify.self_service_store`保存幂等任务与受管应用目录，`dify.dual_entry`定义端/场景与渠道口径，
+`dify.service_keys`申请、对账并落盘每应用的 Service 凭据；`dify.knowledge_connection`管理各工作区的知识连接。
 
 ## 五、本地运行与验证
 
