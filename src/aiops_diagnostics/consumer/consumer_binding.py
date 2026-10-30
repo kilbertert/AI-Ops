@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from aiops_diagnostics.execution import chat_execution
+from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
 
 def digest(path: str) -> str:
@@ -71,9 +72,7 @@ def require_pinned(runtime, caller, binding):
             "CHATFLOW_BINDING_CHANGED", "chatflow binding was retracted", http_status=410
         )
     if selected.key != binding.key:
-        raise ChatRunUnavailable(
-            "CHATFLOW_BINDING_CHANGED", "chatflow credential changed", http_status=410
-        )
+        raise ChatRunUnavailable("CHATFLOW_BINDING_CHANGED", "chatflow credential changed", http_status=410)
     # 版本推进是允许的；没有推进却变了（内容被换）仍然拒。
     if identity(selected) != identity(binding) and selected.route_revision <= binding.route_revision:
         raise chat_execution.ChatRunUnavailable(
@@ -144,5 +143,3 @@ def deliverable_binding(runtime, caller, run):
             "CHATFLOW_BINDING_CHANGED", "pinned binding no longer reproduces this answer", http_status=410
         )
     return pinned
-
-

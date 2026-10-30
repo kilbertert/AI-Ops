@@ -91,6 +91,8 @@ reply 里的事实只能用**整句事实片段**，由系统填值（列表与�
 片段是**不可改写的展示单元**：不要把它拆开、不要给它换标签或换单位。
 """
 )
+
+
 def _fill_fact_slots(text: str) -> str:
     """片段列表与校验器**同源**：从 `consumer_facts.CLIENT_FACTS` 生成，不手写第二份。
 
