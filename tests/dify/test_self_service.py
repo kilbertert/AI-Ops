@@ -266,6 +266,51 @@ def test_publish_conflict_does_not_change_pointer(managed):
     assert service.route("TENANT-A") == before
 
 
+def test_catalogue_labels_source_by_customer_and_dify_app_name(managed):
+    """来源下拉要回答「这是谁的哪个应用」：客户名 + **Dify 应用名**。
+
+    智能体名（`operator-node`、`operator-<app_id>`）只在 Gateway 里存在，运营在工作室
+    从来没看到过；只写它等于给出一个无法对照的字符串。
+    """
+    f, _, _, _, _ = managed
+    calls = []
+
+    def call(workspace_id, path):
+        calls.append((workspace_id, path))
+        return {"name": "优链充－平台全链路验收"}
+
+    f["ctx"].self_service.console = SimpleNamespace(_call=call)
+    f["settings"].dify_publish_api_key = "management-key"
+    headers = {"Authorization": "Bearer management-key", "X-AIOps-Console-Session": "session"}
+    source = next(
+        s
+        for s in f["client"].get("/v1/dify/management/catalogue", headers=headers).json()["sources"]
+        if s["app_id"] == APP
+    )
+    assert source["tenant_id"] == "TENANT-A" and source["tenant_name"] == "客户A"
+    assert source["app_name"] == "优链充－平台全链路验收"
+    assert source["name"] == "客户A / 优链充－平台全链路验收"
+    # 应用名几乎不变，而工作室每打开一次就拉一次目录：第二次不再问 Dify。
+    f["client"].get("/v1/dify/management/catalogue", headers=headers)
+    assert len(calls) == 1
+
+
+def test_catalogue_falls_back_to_agent_name_when_dify_is_unreadable(managed):
+    """读不到应用名只降级标签，不让「复制并开通」入口整个消失。"""
+    f, _, _, _, _ = managed
+
+    def explode(*_):
+        raise RuntimeError("dify unreachable")
+
+    f["ctx"].self_service.console = SimpleNamespace(_call=explode)
+    f["settings"].dify_publish_api_key = "management-key"
+    headers = {"Authorization": "Bearer management-key", "X-AIOps-Console-Session": "session"}
+    response = f["client"].get("/v1/dify/management/catalogue", headers=headers)
+    assert response.status_code == 200
+    source = next(s for s in response.json()["sources"] if s["app_id"] == APP)
+    assert source["name"] == "客户A / operator-node"
+
+
 def test_http_management_rejects_injected_fields_and_missing_key(managed):
     f, _, _, _, _ = managed
     client = f["client"]

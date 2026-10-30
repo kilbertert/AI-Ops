@@ -90,6 +90,7 @@ def register(app, context):
         caller = auth.identity(context, session)
         choices = auth.tenants(context, caller) if caller.platform else []
         allowed = {x["id"] for x in choices} | {caller.tenant_id}
+        tenant_names = {row["id"]: row["name"] for row in choices}
         sources = []
         for route in service.routes.all():
             if route.entry != "operator" or not route.active or route.tenant_id not in allowed:
@@ -97,7 +98,20 @@ def register(app, context):
             if not service.managed(route.app_id):
                 continue
             agent = context.agent_manager.store.get(route.agent_id, route.tenant_id)
-            sources.append({"app_id": route.app_id, "name": agent.name, "version_no": route.agent_version_no})
+            app_name = service.source_app_name(route.tenant_id, route.app_id, agent.name)
+            tenant_name = tenant_names.get(route.tenant_id, "")
+            # 标签回答的是「这是谁的哪个应用」：来源应用全部住在**客户工作区**里，
+            # 平台账号平时看不到它们，只写智能体名等于给出一个运营无从对照的字符串。
+            sources.append(
+                {
+                    "app_id": route.app_id,
+                    "tenant_id": route.tenant_id,
+                    "tenant_name": tenant_name,
+                    "app_name": app_name,
+                    "name": f"{tenant_name} / {app_name}" if tenant_name else app_name,
+                    "version_no": route.agent_version_no,
+                }
+            )
         return {
             "platform": caller.platform,
             "tenants": choices,
