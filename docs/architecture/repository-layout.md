@@ -44,9 +44,14 @@ Dify专用适配、C端知识编排和静态页面入口保留原归属。见
 Gateway追加：10个网关模块归gateway，管家会话归operator，知识HTML跟随knowledge；
 22测试归类，三个服务/运维命令保留实际实现。见[验证](../validation/2026-10-30-gateway-package-layout.md)。
 
+工具追加：`tools/`根层按用途分入content、verification、experiments/m2_close、inventory；
+公司Java补丁移入integrations/cpms-java，25测试归tests/tooling、9测试归tests/integrations。
+见[本片验证](../validation/2026-10-30-tooling-layout.md)。
+
 后续目标：Python按consumer/knowledge/identity/publication/gateway职责形成包，测试随职责归类；
 运行服务与一次性工具分开，部署面按服务聚合。每片更新调用者、资源加载、打包、CI与现役文档，
 保留错误处理与权限校验，不新建转发空壳或永久legacy目录。
+2026-10-30：上述各片已全部落地，目录目标不再处于进行中状态。
 
 ## 2026-10-28调查归档（不再作为保留或执行决定）
 
