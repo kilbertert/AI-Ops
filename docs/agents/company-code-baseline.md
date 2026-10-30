@@ -21,7 +21,7 @@
 
 > **本节由 #476 填充。** 粒度只到「域 → 主仓 + 真分支」。
 > **全仓逐条索引不在本页**，在 [`company-repo-index.md`](company-repo-index.md)（519 行，
-> 由 `tools/company_repo_index.py` 生成）。本页只写「域 → 主仓 → 真分支 → 活跃度」。
+> 由 `tools/inventory/company_repo_index.py` 生成）。本页只写「域 → 主仓 → 真分支 → 活跃度」。
 
 **按 `company-code-recon-procedure.md` 执行。** 取数日 **2026-10-01**（UTC）。
 
@@ -127,10 +127,10 @@ deploy/company-gitlab-api.sh tree --project 363 --ref master  --count-java
 deploy/company-gitlab-api.sh tree --project 363 --ref release --count-java
 
 # 全仓索引（本页 §0/§4 的数字都出自它）
-python3 tools/company_repo_index.py --out docs/agents/company-repo-index.md
+python3 tools/inventory/company_repo_index.py --out docs/agents/company-repo-index.md
 ```
 
-第二人独立执行可得到相同结论：`tools/company_repo_index.py` 与索引都带**取数日**，
+第二人独立执行可得到相同结论：`tools/inventory/company_repo_index.py` 与索引都带**取数日**，
 比对时看那一列；分支读数会随新提交变动，比对的是**数量级关系**
 （脚手架 vs 真码、默认分支 vs 真分支），不是具体数字。
 

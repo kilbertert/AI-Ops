@@ -5,7 +5,7 @@
 
 **结果：27/27 PASS**（`status: PASS`，`failures: 0`）
 **时间**：2026-10-24T01:11:35Z 起，一次性数据根，模型与 CPMS 为合成上游
-**跑法**：`uv run python tools/m2_close/m3node/verify_dify_chat_entry.py --out <file> --keep`
+**跑法**：`uv run python tools/experiments/m2_close/m3node/verify_dify_chat_entry.py --out <file> --keep`
 
 ## 这一轮里什么是真的、什么是替的
 

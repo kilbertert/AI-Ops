@@ -31,10 +31,10 @@
   把两侧的容器内路径解析成宿主路径，再要求指向同一个真实普通文件；文件缺失、符号链接、
   目录、组/他人可读都各自拒绝，0400 与 0600 都在契约之内。此前「节点开关缺失」与
   「节点路径没有挂载」两种坏态都会印 PASS（实测反例见
-  `tests/test_m2_live03_manifest_preflight.py` 的两条回归）。
+  `tests/tooling/test_m2_live03_manifest_preflight.py` 的两条回归）。
 - 隔离栈的**复跑材料**入仓：`deploy/m2-live-03/compose.identity.yaml`（只换 Gateway 入口
   进程的覆盖层）、`identity.env.template`（身份三件套键名）、
-  `tools/m2_close/m3live/live_replay.py`（一次派发 / 按 run 采证 / down 后清理与生产面对照）。
+  `tools/experiments/m2_close/m3live/live_replay.py`（一次派发 / 按 run 采证 / down 后清理与生产面对照）。
   握手令牌只从宿主的 0600 文件读，不接受命令行参数；失败不重试，同一输出目录只允许发一次。
 - 95 环境（`api.qumall.qushiyun.com`，主机侧键 `qy-gw-120`）有了事实页 `docs/agents/env-95-facts.md`，并在 `.dev-host.toml` 声明为可只读访问的目标。
   记录内容包含：代号与 41/36 的判别、它的数据面为空这一观测、以及**没有** `env-95.toml`
@@ -55,7 +55,7 @@
   未启用清单时该端点不改任何列。路由总数 65 → 66。
 - 执行节点回传本 run 实际验证过的 `X-AI-Ops-Exec-Config`，并在整轮结束时按
   「末轮 `finishReason=STOP` + Gateway 回执校验」确认成功；同 JVM 内相同 run 的重入在本地拒绝。
-- 节点侧合成验收工具 `tools/m2_close/m3node/`（`run.sh` 单命令复跑；缺锁定依赖即非零退出），
+- 节点侧合成验收工具 `tools/experiments/m2_close/m3node/`（`run.sh` 单命令复跑；缺锁定依赖即非零退出），
   用真实适配器 + 真实工具管理器 + 本机合成上游驱动真实装配的**流式**工具循环。
 
 ### Notes

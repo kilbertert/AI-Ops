@@ -69,7 +69,7 @@ Dify运行ID对应模型节点usage可计量已观察调用；凭据验证调用
 
 1. 从已合并修订部署Gateway；旧发布版callback_version缺省1，仍走原回调。只读核对health、模块摘要、配置摘要。
 2. 导出当前草稿与确切已发布workflow_id的DSL，记录路由revision/version。两份都保存为0600私有原件。
-   使用`tools/upgrade_consumer_flow.py`从源草稿生成候选，保留模型/提示词/图片特性。并发编辑后不覆盖：
+   使用`tools/content/upgrade_consumer_flow.py`从源草稿生成候选，保留模型/提示词/图片特性。并发编辑后不覆盖：
    写入前重新导出与原草稿比对，使用GET `/console/api/apps/{app_id}/workflows/draft`取得的hash提交。
 3. API域名同步已合并`ops/nginx/dify-consumer-callback.conf`制品；原文件先备份，检查nginx再reload。
    新三个路径只允许POST、保留data_grant、清空业务身份头。失败恢复原文件再检查/reload。

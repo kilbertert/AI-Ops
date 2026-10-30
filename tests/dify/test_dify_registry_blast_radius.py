@@ -1,4 +1,4 @@
-"""`tools/dify_registry_blast_radius.py` must measure a SWITCH, not a change (#587).
+"""`tools/verification/dify_registry_blast_radius.py` must measure a SWITCH, not a change (#587).
 
 The registry is fail-closed (#584), so declaring one `[[dify_apps]]` row turns the
 whole host's selection rule over: every unregistered `(tenant, entry)` stops being
@@ -41,7 +41,7 @@ TENANT_WITHOUT_AGENT = "T-B"
 def _load():
     """Import the tool by path — `tools/` is not a package."""
     spec = importlib.util.spec_from_file_location(
-        "dify_registry_blast_radius", ROOT / "tools" / "dify_registry_blast_radius.py"
+        "dify_registry_blast_radius", ROOT / "tools" / "verification" / "dify_registry_blast_radius.py"
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

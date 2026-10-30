@@ -277,8 +277,8 @@ def test_the_m2_launchers_also_require_the_deployment_identity() -> None:
     """
     root = Path(__file__).resolve().parents[2]
     for launcher in (
-        root / "tools/m2_close/gateway_launcher.py",
-        root / "tools/m2_close/m3live/identity_launcher.py",
+        root / "tools/experiments/m2_close/gateway_launcher.py",
+        root / "tools/experiments/m2_close/m3live/identity_launcher.py",
     ):
         text = launcher.read_text(encoding="utf-8")
         assert "require_deployment_identity(" in text, f"{launcher.name} 没有过部署身份这道门"

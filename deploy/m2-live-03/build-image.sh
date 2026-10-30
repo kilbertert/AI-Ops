@@ -46,7 +46,7 @@ cp "$HERE/gateway-requirements.txt" "$work/gateway-requirements.txt"
 # 只带运行需要的工具：节点源码不进 Gateway 镜像。
 # 归档里的路径已经带 `tools/`，因此**解到构建上下文根**，不是解到 tools/ 里
 # （曾经的写法产生 tools/tools/…，容器启动时才以「文件不存在」暴露）。
-(cd "$REPO" && tar -cf - --exclude '__pycache__' --exclude '*.pyc' --exclude 'node/target' tools/m2_live tools/m2_close services/model-proxy) \
+(cd "$REPO" && tar -cf - --exclude '__pycache__' --exclude '*.pyc' --exclude 'node/target' tools/verification/m2_live tools/experiments/m2_close services/model-proxy) \
   | (cd "$work" && tar -xf -)
 
 # `LC_ALL=C` 不是风格问题：`sort` 默认按**本机 locale** 排序，同 141 个文件在

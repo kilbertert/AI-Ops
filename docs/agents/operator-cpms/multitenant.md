@@ -269,7 +269,7 @@ Dify 登录页当前是公司账号、密码、图形验证码；手机号短信
 管家 App 的“验证码登录”调用公司 `/upms/token/loginByPhone`（41附 `grant_type=sms_login`），
 使用 App 现有 client-type 和租户配置。用户提供有效验证码时不额外发送短信。
 浏览器无公网可达性时，隧道的现役实现见
-[用户端浏览器驱动](../../../tools/consumer-status/status_probe.py)中的 `tunnel_argv`、
+[用户端浏览器驱动](../../../tools/verification/consumer-status/status_probe.py)中的 `tunnel_argv`、
 `_wait_port` 和 `_terminate_tree`；通过 `dev-host exec 41` 建443转发并按端口和进程精确清理。
 管家复用该方法，只将浏览器目标换成管家域名：
 
@@ -282,7 +282,7 @@ import sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-path = Path("tools/consumer-status/status_probe.py")
+path = Path("tools/verification/consumer-status/status_probe.py")
 spec = importlib.util.spec_from_file_location("consumer_browser", path)
 module = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = module

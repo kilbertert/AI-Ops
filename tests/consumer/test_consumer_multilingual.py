@@ -103,7 +103,7 @@ def test_live_flow_upgrade_carries_all_languages_and_explicit_answer_language():
 
     import yaml
 
-    module = runpy.run_path("tools/upgrade_consumer_flow.py")
+    module = runpy.run_path("tools/content/upgrade_consumer_flow.py")
     live_documents, select_knowledge = module["live_documents"], module["select_knowledge"]
 
     source = yaml.safe_load(Path("deploy/dify-chat/consumer-service.dsl.yml").read_text())

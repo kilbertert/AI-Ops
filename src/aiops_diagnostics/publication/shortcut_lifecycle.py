@@ -343,7 +343,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
             # to the zh authority and its zh-Hant derivation alike — the
             # Traditional copy is the DERIVATION of this string, never a second
             # hand-written one, which is what keeps the two scripts from
-            # drifting apart. See tools/derive_zh_hant.py.
+            # drifting apart. See tools/content/derive_zh_hant.py.
             "battery_report": {
                 "intent": "knowledge",  # inert for a jump action; see the brief
                 "requires_order": False,

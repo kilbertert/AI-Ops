@@ -271,7 +271,7 @@ $ deploy/company-gitlab-api.sh projects --search cloud-charging-pile | wc -l
 ### 本节的claim有守卫，不是靠自觉
 
 上面那句「每行都可逐字复制」和「全部/前 N 行」的标注，由
-`tests/test_recon_procedure_evidence.py` 核对：
+`tests/integrations/test_recon_procedure_evidence.py` 核对：
 
 - **结构半边**（CI 里就跑）：行末不许出现会被 shell 当参数的标注；
   覆盖表与代码块里的命令必须**逐字一致**（缺一条、多一条都红）。

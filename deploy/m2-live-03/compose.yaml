@@ -48,7 +48,7 @@ services:
     # 只接 hostloop：本栈里只有 gateway 在这张网络上，平台与节点看不到它。
     networks: [hostloop]
     user: "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}"
-    entrypoint: ["python", "/opt/aiops-src/tools/m2_live/loopback_relay.py"]
+    entrypoint: ["python", "/opt/aiops-src/tools/verification/m2_live/loopback_relay.py"]
     # 监听在所有接口上：hostloop 里只有 gateway 能看到它。目标固定为宿主回环，
     # 不通过环境变量泄露地址（后者会把「依赖在哪」变成可配置项）。
     command: ["--listen", "6379", "--listen-host", "0.0.0.0", "--target", "host-gateway:6379"]

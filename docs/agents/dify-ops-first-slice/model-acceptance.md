@@ -18,7 +18,7 @@ consumer/M3 配置仍关闭。下面是**新的临时验收窗口**的方法，�
 ## 既有证据的离线复核
 
 ```bash
-PYTHONPATH=$PWD/src uv run python tools/verify_dify_ops_model_evidence.py \
+PYTHONPATH=$PWD/src uv run python tools/verification/verify_dify_ops_model_evidence.py \
   --events <私有preview-events.json> --audit <仅该预览两条审计的JSON数组> \
   --tenant <租户> --app <operator app> --workspace <workspace> \
   --version <该轮发布权限版本> --out <脱敏报告.json>

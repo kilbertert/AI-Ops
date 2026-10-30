@@ -106,7 +106,7 @@ output_contract = "blocks-v1"
 # ⚠️ **这一节是 fail-closed 的**：表里只要有**任何一行**，未登记的 `(租户, 入口)`
 # 就什么都不选（`retrieval_status="unavailable"`），既不会回退到"最新已发布"，
 # 也不会落到零阶回答。所以"加一行"是**整台主机的一次开关**，不是局部改动。
-# 会把谁的答案改成什么，见 `tools/dify_registry_blast_radius.py` 与 `docs/validation.md`
+# 会把谁的答案改成什么，见 `tools/verification/dify_registry_blast_radius.py` 与 `docs/validation.md`
 # 的 #587 两节（爆炸半径 / 开表取证）。
 #
 # 为什么两行必须**一起**写：线上租户 `1942105476598861824` 也在未登记那一侧。

@@ -136,7 +136,7 @@ def test_upgrade_keeps_real_model_prompt_and_disabled_photo_features(tmp_path):
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "upgrade_flow", Path(__file__).parents[2] / "tools/upgrade_consumer_flow.py"
+        "upgrade_flow", Path(__file__).parents[2] / "tools/content/upgrade_consumer_flow.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

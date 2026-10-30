@@ -18,7 +18,7 @@
 2. 用合并工具离线生成候选：
 
 ```bash
-uv run python tools/upgrade_consumer_flow.py <原草稿.yml> --gateway <可信根地址> \
+uv run python tools/content/upgrade_consumer_flow.py <原草稿.yml> --gateway <可信根地址> \
   --live-documents --out <候选.yml>
 ```
 
@@ -36,7 +36,7 @@ uv run python tools/upgrade_consumer_flow.py <原草稿.yml> --gateway <可信�
 
 ## 回归与恢复
 
-复用`tools/verify_consumer_chatflow.py --knowledge-plugin ... --plugin-public-key ... --out ...`及
+复用`tools/verification/verify_consumer_chatflow.py --knowledge-plugin ... --plugin-public-key ... --out ...`及
 已部署同版DIFY_TEST_WEB_IMAGE。隔离栈发布后删本地审核文件，新增/更新/删除合成资料，再验知识和CPMS，
 整段不修改工作流版本或服务器目标。真实供应商验证使用当前baoyun、已存在的本租户资料，凭据不离开受控进程。
 

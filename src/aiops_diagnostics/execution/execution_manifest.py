@@ -102,7 +102,7 @@ def _parse(payload: object, identity: str) -> ExecutionManifest:
     # 存在（选项可比量只从它取），并要求每个工具同时声明 description 与 input_schema。
     # 少要求一项的后果是可测的：一份缺 `model_options` 的清单 Gateway 收下、节点拒绝装配，
     # 两端对「合格清单」的定义不一致 —— 身份算得再准，那份配置也跑不起来。
-    # 这条一致性由 `tools/m2_close/m3node/manifest_parity.py` 用同一组样本逐条比对。
+    # 这条一致性由 `tools/experiments/m2_close/m3node/manifest_parity.py` 用同一组样本逐条比对。
     options = payload.get("model_options")
     if not isinstance(options, dict):
         raise ExecutionManifestError("execution manifest model options are missing")

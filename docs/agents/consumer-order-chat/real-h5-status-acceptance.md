@@ -144,7 +144,7 @@ python status_probe.py <another_owned_order_no> specified
 ## 十一、工具修复（本片）
 
 上面引用的三个脚本在第一版里有**四个误报**，已在
-[`tools/consumer-status/`](../../../tools/consumer-status/README.md) 修掉，
+[`tools/verification/consumer-status/`](../../../tools/verification/consumer-status/README.md) 修掉，
 并由 `tests/test_consumer_status_tools.py` 逐条钉住（做过变异复验）：
 
 1. `check_identity.py` 只看 `scope_type == "self"`，`delegated=true`、`orders:read` 被拒、

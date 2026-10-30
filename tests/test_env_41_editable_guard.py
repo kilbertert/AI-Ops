@@ -13,7 +13,7 @@
 两条路各测各的：导入规则用真解释器跑，**真机分支**（读 ssh 回来的四条观察再判）
 用一个桩 `ssh` 驱动 —— 判据活在脚本里，不该为了可测而被抽成第二个实现。
 
-先例：`tests/test_derive_zh_hant_tool.py` 用替身 converter 证 walker 的逻辑，
+先例：`tests/tooling/test_derive_zh_hant_tool.py` 用替身 converter 证 walker 的逻辑，
 真机部分明确留给开发期检查。这里同一形状。
 """
 

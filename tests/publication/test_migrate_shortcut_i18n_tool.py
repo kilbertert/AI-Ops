@@ -29,7 +29,7 @@ def _load():
     import sys
 
     spec = importlib.util.spec_from_file_location(
-        "migrate_shortcut_i18n", ROOT / "tools" / "migrate_shortcut_i18n.py"
+        "migrate_shortcut_i18n", ROOT / "tools" / "content" / "migrate_shortcut_i18n.py"
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

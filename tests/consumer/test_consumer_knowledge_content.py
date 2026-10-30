@@ -12,7 +12,9 @@ import pytest
 
 ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-spec = importlib.util.spec_from_file_location("content_builder", ROOT / "tools/build_consumer_knowledge.py")
+spec = importlib.util.spec_from_file_location(
+    "content_builder", ROOT / "tools/content/build_consumer_knowledge.py"
+)
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 

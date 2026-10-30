@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 spec = importlib.util.spec_from_file_location(
-    "dify_ops_model_evidence", Path(__file__).parents[2] / "tools/verify_dify_ops_model_evidence.py"
+    "dify_ops_model_evidence",
+    Path(__file__).parents[2] / "tools/verification/verify_dify_ops_model_evidence.py",
 )
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None

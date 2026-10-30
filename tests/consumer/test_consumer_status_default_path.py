@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).parents[2]
-TOOLS = ROOT / "tools" / "consumer-status"
+TOOLS = ROOT / "tools" / "verification" / "consumer-status"
 
 TENANT = "T-1"
 C_USER = "c-1"
