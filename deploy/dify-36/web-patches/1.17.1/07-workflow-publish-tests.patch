@@ -1,0 +1,74 @@
+diff --git a/web/app/components/workflow-app/components/workflow-header/__tests__/features-trigger.spec.tsx b/web/app/components/workflow-app/components/workflow-header/__tests__/features-trigger.spec.tsx
+--- a/web/app/components/workflow-app/components/workflow-header/__tests__/features-trigger.spec.tsx
++++ b/web/app/components/workflow-app/components/workflow-header/__tests__/features-trigger.spec.tsx
+@@ -11,6 +11,15 @@
+ import { createConsoleQueryWrapper, seedFeatures } from '@/test/console/query-data'
+ import FeaturesTrigger from '../features-trigger'
+
++const managed = vi.hoisted(() => ({
++  status: null as Record<string, unknown> | null,
++  publish: vi.fn(),
++}))
++vi.mock('@/service/aiops-management', async (original) => ({
++  ...(await original()),
++  useManagedApp: () => ({ status: managed.status || { managed: false }, error: '' }),
++  publishManagedWorkflow: (...args: unknown[]) => managed.publish(...args),
++}))
+ const mockUseIsChatMode = vi.fn()
+ const mockUseTheme = vi.fn()
+ const mockUseNodesReadOnly = vi.fn()
+@@ -254,6 +263,7 @@
+ describe('FeaturesTrigger', () => {
+   beforeEach(() => {
+     vi.clearAllMocks()
++    managed.status = null
+     workflowStoreState = {
+       showFeaturesPanel: false,
+       isRestoring: false,
+@@ -795,4 +805,46 @@
+       consoleErrorSpy.mockRestore()
+     })
+   })
++  it('saves the current graph before publishing the managed consumer app', async () => {
++    managed.status = {
++      managed: true,
++      entry: 'consumer',
++      app_id: 'app-id',
++      route_revision: 2,
++      model_options: {},
++      published: false,
++    }
++    const order: string[] = []
++    mockHandleSyncWorkflowDraft.mockImplementation(async () => {
++      order.push('saved')
++      return { hash: 'new-hash' }
++    })
++    managed.publish.mockImplementation(async () => {
++      order.push('published')
++    })
++    renderWithToast(<FeaturesTrigger />)
++    await userEvent.click(screen.getByRole('button', { name: '发布到客户端客服' }))
++    await waitFor(() => expect(managed.publish).toHaveBeenCalledWith('app-id', 2, 'new-hash'))
++    expect(order).toEqual(['saved', 'published'])
++    expect(mockPublishWorkflow).not.toHaveBeenCalled()
++  })
++
++  it('refuses managed publication when saving fails', async () => {
++    managed.status = {
++      managed: true,
++      entry: 'consumer',
++      app_id: 'app-id',
++      route_revision: 2,
++      model_options: {},
++      published: false,
++    }
++    mockHandleSyncWorkflowDraft.mockResolvedValue(null)
++    renderWithToast(<FeaturesTrigger />)
++    await userEvent.click(screen.getByRole('button', { name: '发布到客户端客服' }))
++    await waitFor(() =>
++      expect(screen.getAllByRole('status')[0]).toHaveTextContent('Workflow draft sync failed'),
++    )
++    expect(managed.publish).not.toHaveBeenCalled()
++    expect(mockPublishWorkflow).not.toHaveBeenCalled()
++  })
+ })

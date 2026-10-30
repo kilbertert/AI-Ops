@@ -23,6 +23,7 @@ export type Status = {
   channel?: string
   channel_note?: string
   readiness?: string
+  draft_sha256?: string
 }
 
 export type Source = { app_id: string; name: string; version_no: number }
@@ -172,11 +173,12 @@ export function useManagedApp(appId: string) {
   const [readiness, setReadiness] = useState('')
   useEffect(() => {
     let active = true
+    if (!appId) return
     const load = () =>
       manage('status', { app_id: appId })
         .then((r) => {
           if (active) {
-            setStatus(r)
+            setStatus({ ...r, app_id: appId })
             setError('')
             if (r.managed)
               manage('readiness', { app_id: appId })
@@ -199,4 +201,17 @@ export function useManagedApp(appId: string) {
     }
   }, [appId])
   return { status: status?.app_id === appId ? status : null, error, readiness }
+}
+
+export async function publishManagedWorkflow(appId: string, revision: number, savedHash: string) {
+  // 调用方先等待原生保存成功；重新读摘要，避免拿页面载入时的旧摘要发布。
+  const current: Status = await manage('status', { app_id: appId })
+  if (!current.managed || current.entry !== 'consumer' || !current.draft_sha256)
+    throw new Error('无法核对当前草稿，请刷新后重试')
+  const { fetchWorkflowDraft } = await import('@/service/workflow')
+  const draft = await fetchWorkflowDraft(`/apps/${appId}/workflows/draft`)
+  if (draft.hash !== savedHash) throw new Error('草稿已被其他操作修改，请确认后重新发布')
+  const result = await manage('publish', { app_id: appId, revision, draft: current.draft_sha256 })
+  window.dispatchEvent(new CustomEvent('aiops-published', { detail: appId }))
+  return result
 }

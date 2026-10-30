@@ -218,3 +218,12 @@ Feature: 平台一次开通客户双端 AI 服务，客户自主管理
       When 平台开通或客户发布恢复管家
       Then 不推进正式指针并提示执行组件不兼容
       And 正确协议的新心跳到达后可再次发布
+  Rule: E6 真实 Chatflow 页只发布已保存且已确认的内容
+    Scenario: E6 保存失败时不能切正式版本
+      Given 客户正在实际工作流页编辑受管客户端
+      When 点击发布而 Dify 保存失败
+      Then 页面显示失败且不请求正式发布
+    Scenario: E7 保存后其他标签页修改草稿
+      Given 当前页面已保存草稿并取得 Dify hash
+      When 发布前回读 hash 已变化
+      Then 拒绝本次发布并要求确认最新内容
