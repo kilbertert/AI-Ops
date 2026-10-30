@@ -38,7 +38,13 @@ public final class ToolSurface {
     public static List<String> allowed(String schema) {
         Set<String> names = new LinkedHashSet<>();
         String context = context(schema);
-        for (String name : OperatorTools.names()) {
+        // C 端**不要求**声明在场：它的清单本来只有状态工具，CPMS 工具是挂了声明才有的增量。
+        // 现有 C 端部署没有挂声明，让它们在启动时因为一个用不上的文件而失败是错的。
+        // 订单诊断与无订单回合必须拿到声明 —— 它们的清单里就有 CPMS 工具。
+        List<String> declared = CONSUMER.equals(schema)
+                ? OperatorTools.namesIfAvailable()
+                : OperatorTools.names();
+        for (String name : declared) {
             if (OperatorTools.appliesTo(name).contains(context)) names.add(name);
         }
         // C 端还要状态工具：它是这一端唯一的订单事实入口。

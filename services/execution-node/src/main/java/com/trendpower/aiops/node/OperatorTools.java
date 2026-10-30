@@ -55,6 +55,21 @@ public final class OperatorTools {
         return current;
     }
 
+    /**
+     * 声明**不可用**时返回空表，而不是抛错。
+     *
+     * <p>只有 C 端运行可以这样退化：它的清单里本来就只有状态工具，CPMS 工具是「挂了声明
+     * 才有」的增量。订单诊断与无订单回合必须拿到声明——它们的清单里就有 CPMS 工具，
+     * 读不到声明是配置错误，不能当成「没有工具」。
+     */
+    public static List<String> namesIfAvailable() {
+        try {
+            return names();
+        } catch (ExecToolViolation unavailable) {
+            return List.of();
+        }
+    }
+
     public static List<String> names() {
         return List.copyOf(entries().keySet());
     }
@@ -121,7 +136,8 @@ public final class OperatorTools {
             }
             try (InputStream stream = OperatorTools.class.getResourceAsStream("/" + DECLARATION)) {
                 if (stream == null) {
-                    throw new ExecToolViolation("找不到工具声明: " + DECLARATION);
+                    throw new ExecToolViolation("找不到工具声明: " + DECLARATION
+                            + "（用 -D" + PATH_PROPERTY + " 指定文件，或把它放进 classpath）");
                 }
                 return new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
             }

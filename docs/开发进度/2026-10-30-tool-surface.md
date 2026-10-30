@@ -26,10 +26,18 @@ ADR-0183 放开无订单回合带工具时只改了 Python 侧，这一处没改
 **不解析对话清单**，所以没抓到。本片把它并进 `ToolSurface`，并补了解析层的断言：
 对话清单接受站点工具、拒绝订单工具。
 
+## code review 抓到的一处回归
+
+第一版无条件读工具声明，而声明没打进 JAR、也没挂进 compose。现有 C 端节点（清单里只有
+状态工具）会因此起不来。已改成「声明只在对它有用的运行类型上必需」：C 端没有声明时退化
+成只有状态工具，operator 两类运行没有声明时必须失败并指出怎么修。
+
 ## 验证
 
 - Python 全量 **3508 passed / 9 skipped**；ruff、format 通过。
-- **Java 真编译 + 节点验收**：`CPMS_TOOL_ACCEPTANCE PASS assertions=166`（上一片 153）。
+- **Java 真编译 + 节点验收**：`CPMS_TOOL_ACCEPTANCE PASS assertions=166`（上一片 153）；
+  另加 `CONSUMER_SURFACE_ACCEPTANCE PASS assertions=4`，在**不带声明**的进程里证明现有
+  C 端部署照旧可用（code review 抓到的回归，见下）。
   新增覆盖：三种运行类型的允许集合、未声明工具在三类运行下都被拒、未知运行类型被拒、
   对话清单接受站点工具而拒绝订单工具。
 
