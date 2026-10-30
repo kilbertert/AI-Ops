@@ -19,10 +19,10 @@
 
 | 阶段 | 状态 |
 |---|---|
-| 0. 基线 | ✅ `56 passed`（`uv run pytest -n 0 tests/test_consumer_order_chat.py tests/test_agent_metrics.py`） |
+| 0. 基线 | ✅ `56 passed`（`uv run pytest -n 0 tests/test_consumer_order_chat.py tests/gateway/test_agent_metrics.py`） |
 | 1. 契约 + QA | ✅ |
 | 2. 观察实现 | ✅ `request_observation.py` + `gateway_api` 接线 |
-| 3. 组件测试 | ✅ 18 条（`tests/test_request_observation.py`） |
+| 3. 组件测试 | ✅ 18 条（`tests/gateway/test_request_observation.py`） |
 | 4. 真实 HTTP | ✅ `observe_consumer_order_result.py`，**20/20** 检查通过（10 条结果行：5 成功 / 3 拒绝 / 2 失败） |
 | 5. 反向验证 | ✅ 删失败记录 → 7 红；计时移到 QA 之后 → 1 红；还原全绿 |
 | 6. 变更单口径 | ✅ |

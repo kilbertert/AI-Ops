@@ -344,9 +344,9 @@ def phase_c(report: dict[str, Any], port: int) -> None:
 
     import uvicorn
 
-    from aiops_diagnostics.gateway_api import create_gateway_app
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
     from aiops_diagnostics.identity.caller_auth import IntrospectionCallerResolver, IntrospectionSettings
     from aiops_diagnostics.identity.scope_context import ScopeContext
 

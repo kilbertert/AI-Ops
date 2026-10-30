@@ -21,7 +21,7 @@ import logging
 
 import pytest
 
-from aiops_diagnostics.gateway_logging import (
+from aiops_diagnostics.gateway.gateway_logging import (
     GATEWAY_LOGGER_NAMESPACES,
     configure_gateway_logging,
     parse_log_level,

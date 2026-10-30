@@ -44,10 +44,10 @@ from typing import Any
 
 import uvicorn
 
-from aiops_diagnostics.deployment_environment import require_deployment_identity
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.deployment_environment import require_deployment_identity
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 TOKEN = os.environ["AIOPS_M2_LOCAL_TOKEN"]
@@ -209,7 +209,7 @@ def main() -> int:
     # 无关面（FAQ/会话）不参与本切片：内存实现足够，避免去连真实 Redis。
     app.state.gateway.conversation_store = SQLiteConversationStore(settings.database_file)
     # 选单数据源（APP-RUNTIME-01）：只替换**数据**，不替换选单逻辑。见模块文档第 4 条。
-    import aiops_diagnostics.gateway_api as _gateway_api
+    import aiops_diagnostics.gateway.gateway_api as _gateway_api
 
     _gateway_api.scoped_mysql_source = _synthetic_order_source
     print(

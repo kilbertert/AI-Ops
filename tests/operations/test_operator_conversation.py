@@ -5,11 +5,11 @@ from dataclasses import replace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from operations.test_operator_cpms import APP, HEADERS, NODE_A_TOKEN, environment, terminal
 
-from aiops_diagnostics import operator_conversation as conversation
 from aiops_diagnostics.identity.scope_context import DataScope
+from aiops_diagnostics.operator import operator_conversation as conversation
 from aiops_diagnostics.operator import operator_cpms
+from operations.test_operator_cpms import APP, HEADERS, NODE_A_TOKEN, environment, terminal
 
 
 @pytest.fixture
@@ -291,7 +291,7 @@ def test_site_search_uses_same_scope_on_all_entries(operator, monkeypatch, entry
     f["settings"].dify_trial_api_key = "trial-only"
     f["settings"].environment = "env-a"
     monkeypatch.setattr(
-        "aiops_diagnostics.gateway_api.authenticated_operator_console",
+        "aiops_diagnostics.gateway.gateway_api.authenticated_operator_console",
         lambda *_: (f["resolver"].current, "operator-private"),
     )
     with DifyWorkspaces(f["db"])._connection(write=True) as db:

@@ -33,13 +33,13 @@ from aiops_diagnostics.conversation.faq import (
     PlatformIdentityResolver,
     PlatformRoleRecord,
 )
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
-SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
-API_FILE = "gateway_api.py"
+SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
+API_FILE = "gateway/gateway_api.py"
 #: The one factory that builds the identity dependency.
 FACTORY = "platform_identity"
 #: The names the factory is bound to, and the scope each must carry.

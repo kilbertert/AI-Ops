@@ -33,10 +33,10 @@ from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.agent_runs import SUCCEEDED, AgentRunStore
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_runtime import GatewayRuntime
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from execution.test_m2_close_contract import NODE_A_TOKEN, Orders, _write_config
 from execution.test_m3_gateway_exec_config import _identity, _write_manifest
 
@@ -124,7 +124,7 @@ def node_chat(
     import hashlib
 
     with _cpms({ORDER_A, ORDER_B, ORDER_C}) as upstream:
-        monkeypatch.setattr("aiops_diagnostics.gateway_api.scoped_mysql_source", _orders_source)
+        monkeypatch.setattr("aiops_diagnostics.gateway.gateway_api.scoped_mysql_source", _orders_source)
         production = tmp_path / "production.env"
         production.write_text("# synthetic\n")
         production.chmod(0o600)

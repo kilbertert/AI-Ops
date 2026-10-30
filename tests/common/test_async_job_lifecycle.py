@@ -256,7 +256,7 @@ def test_the_question_restart_code_is_the_one_the_contract_documents() -> None:
     (`QUESTION_INTERRUPTED_BY_RESTART`) would be a second contract for the same
     event.
     """
-    from aiops_diagnostics.gateway_store import ASSISTANT_QUESTION_RESTART_ERROR_CODE
+    from aiops_diagnostics.gateway.gateway_store import ASSISTANT_QUESTION_RESTART_ERROR_CODE
 
     _, code, _ = converged(QUESTION, status="running", deadline_passed=False, cause="restart")
     assert code == ASSISTANT_QUESTION_RESTART_ERROR_CODE
@@ -430,7 +430,7 @@ def _method_pairs() -> dict[str, str]:
     import ast
     from pathlib import Path
 
-    store = Path(__file__).parents[2] / "src" / "aiops_diagnostics" / "gateway_store.py"
+    store = Path(__file__).parents[2] / "src" / "aiops_diagnostics" / "gateway" / "gateway_store.py"
     tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
     pairs: dict[str, str] = {}
     for node in ast.walk(tree):
@@ -458,7 +458,7 @@ def _boot_hook_pairs() -> dict[str, str]:
     import ast
     from pathlib import Path
 
-    store = Path(__file__).parents[2] / "src" / "aiops_diagnostics" / "gateway_store.py"
+    store = Path(__file__).parents[2] / "src" / "aiops_diagnostics" / "gateway" / "gateway_store.py"
     tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
     hook = next(
         node
@@ -523,7 +523,7 @@ def test_the_boot_hook_releases_the_conversation_slots_it_ends(tmp_path) -> None
     ask again in that conversation for up to two minutes after a deploy.
     """
     from aiops_diagnostics.conversation.conversation_store import ConversationStore
-    from aiops_diagnostics.gateway_store import (
+    from aiops_diagnostics.gateway.gateway_store import (
         DIAGNOSIS_RESTART_ERROR_CODE,
         GatewayStore,
     )

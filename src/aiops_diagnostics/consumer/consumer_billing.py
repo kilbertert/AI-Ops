@@ -14,7 +14,7 @@ from aiops_diagnostics.common.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.data.charging_status import ChargingStatusError
-from aiops_diagnostics.gateway_config import canonical_gateway_url
+from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
 BILLING = re.compile(r"退款|支付|付款|账单|账务|refund|payment|billing", re.I)
 QUERY = re.compile(r"查|状态|进度|记录|退了|到账|扣款|付了|status|progress|record|check|paid", re.I)

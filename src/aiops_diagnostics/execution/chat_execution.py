@@ -51,7 +51,7 @@ from aiops_diagnostics.execution.agent_runs import (
     AgentRunDispatchError,
     SnailDispatcher,
 )
-from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.identity.scope_context import ScopeContext
 
 #: QA 的 ``internal_run_id`` 前缀。它**只是**给人看的标签；

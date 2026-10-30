@@ -95,7 +95,7 @@ set -u
 SP="$SP"
 PY="$PY"
 printf 'PKG_FILE=%s\n' "\$("\$PY" -c 'import aiops_diagnostics as a; print(a.__file__)')"
-printf 'API_FILE=%s\n' "\$("\$PY" -c 'import aiops_diagnostics.gateway_api as m; print(m.__file__)')"
+printf 'API_FILE=%s\n' "\$("\$PY" -c 'import aiops_diagnostics.gateway.gateway_api as m; print(m.__file__)')"
 printf 'HAS_INIT=%s\n' "\$([ -f "\$SP/aiops_diagnostics/__init__.py" ] && echo yes || echo no)"
 printf 'HAS_PTH=%s\n' "\$([ -f "\$SP/_editable_impl_aiops_diagnostics.pth" ] && echo yes || echo no)"
 printf 'PTH_TARGET=%s\n' "\$(cat "\$SP/_editable_impl_aiops_diagnostics.pth" 2>/dev/null | tr -d '\n')"

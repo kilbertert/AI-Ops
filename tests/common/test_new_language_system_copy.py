@@ -298,7 +298,7 @@ def test_an_empty_shortcut_list_reports_the_requested_language() -> None:
     one-liner that passes the rows it just read, and the non-empty cases are
     covered end-to-end through the listing endpoint above.
     """
-    from aiops_diagnostics.gateway_api import _shortcut_list_language
+    from aiops_diagnostics.gateway.gateway_api import _shortcut_list_language
 
     assert _shortcut_list_language([], "de") == "de"
 

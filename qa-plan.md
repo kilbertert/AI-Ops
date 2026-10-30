@@ -521,7 +521,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：跑既有 assistant API 测试套件（FAQ 短路同步答案、显式订单 202 诊断、qa 202+轮询、422/401/409 行为）。
 - 预期结果：全部既有行为不变；新增 RAG 路径不改变 FAQ 与 diagnosis 分流。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-10，pytest `tests/test_assistant_api.py` 全量 568 项含回归通过）。
+- 结果：PASS（2026-09-10，pytest `tests/gateway/test_assistant_api.py` 全量 568 项含回归通过）。
 
 证据边界：QA-RAG-01..05 为 mock-first 协议级验证。真实 kb-service/RAGFlow canary、
 Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范围（见 P0-E2E-REAL），
@@ -591,7 +591,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 有序动作：启动诊断；等待到工人结束；读指标记录。
 - 预期结果：**没有**任何成功指标；行上的终态保持调用方能看到的那个。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-10-01，`tests/test_terminal_write_guards.py`）。
+- 结果：PASS（2026-10-01，`tests/gateway/test_terminal_write_guards.py`）。
 
 ### TERMWRITE-02 两个工人里的作业写入都被应答（源码级）
 
@@ -672,7 +672,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
   ② 硬失败面 503 `ORDER_AUTHORIZATION_UNAVAILABLE`，回落面**不变成 503**；
   两者都产生一条 `outcome=failed`、`error_code=ORDER_AUTHORIZATION_UNAVAILABLE` 的指标与一条告警。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-30，`tests/test_gateway_order_guards.py`；
+- 结果：PASS（2026-09-30，`tests/gateway/test_gateway_order_guards.py`；
   以「把失败并进不拥有」与「某处又直接调 can_access」两条变异核对，各自转红）。
 
 ## 响应形状与状态词汇收敛 QA 计划（#488）
@@ -686,7 +686,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 预期结果：两个响应体字段集合与取值形状**完全一致**；**`"type": "qa"` 在源码里只出现一次**；
   活动状态集合**不再手写**，`_health_job_response` 直接问存储层的常量。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-30，`tests/test_gateway_response_shapes.py`；
+- 结果：PASS（2026-09-30，`tests/gateway/test_gateway_response_shapes.py`；
   以「恢复一处内联 202 体」与「健康报告回到内联状态集」两条变异核对，各自转红）。
 
 ## 运行时失败落日志 QA 计划（#487）
@@ -700,7 +700,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 预期结果：**三个接口都仍是 503、既有错误码、既有文案且 `retryable: true`**（对外逐项不变）；
   日志中出现 `runtime failure` + 错误码 + **异常类型**（不记异常消息）。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-30，`tests/test_gateway_runtime_failures.py`）。
+- 结果：PASS（2026-09-30，`tests/gateway/test_gateway_runtime_failures.py`）。
 
 ### RUNTIME-02 日志不含调用方内容（源码级 + 行为）
 
@@ -721,7 +721,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 有序动作：同法调用三个入口，比较状态码与错误码。
 - 预期结果：三者**完全一致**（409 `PLATFORM_AMBIGUOUS`）；三者的身份类型都是平台判定对象。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-30，`tests/test_platform_identity_shapes.py`）。
+- 结果：PASS（2026-09-30，`tests/gateway/test_platform_identity_shapes.py`）。
 
 ### PLATFORM-02 一处定义与槽位绑定（源码级）
 
@@ -889,7 +889,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：调用视频媒体回源一次。
 - 预期结果：在重试预算内返回 MP4；永久 404 最终映射为 `MediaNotFound`；图片回源不重试。
 - 清理：释放 fake。
-- 结果：PASS（本分支，pytest `tests/test_media_api.py`）。
+- 结果：PASS（本分支，pytest `tests/gateway/test_media_api.py`）。
 
 ## 后台智能体管理与草稿调试 QA 计划（T5/#171，接口级验收）
 
@@ -951,7 +951,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：写入六类行后分别查询本租户汇总、另一租户汇总、按 agent 过滤汇总。
 - 预期结果：totals 各计数正确（runs=5、completed=3、failed=1、busy=1、tokens、media）；by_route/by_retrieval/by_error 分桶正确；租户 B 只见自己的 1 条；agent 过滤后 1 条。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-10，pytest `tests/test_agent_metrics.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/gateway/test_agent_metrics.py`）。
 
 ### METRICS-02 枚举与字段校验
 
@@ -1380,7 +1380,7 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 复现命令（两个提交上分别执行，结果应当逐项相同）：
 
 ```text
-uv run pytest tests/test_assistant_api.py tests/conversation/test_conversation_api.py \
+uv run pytest tests/gateway/test_assistant_api.py tests/conversation/test_conversation_api.py \
   tests/publication/test_shortcut_api.py tests/identity/test_caller_auth.py \
   tests/identity/test_order_visibility.py tests/identity/test_query_scope.py tests/identity/test_scope_context.py \
   tests/identity/test_scope_context_http.py tests/identity/test_scope_context_ds_fallback.py \
@@ -1523,7 +1523,7 @@ uv run pytest tests/test_assistant_api.py tests/conversation/test_conversation_a
 | DX-CANCEL-01 | 本地 dev（真实 GatewayRuntime + 真实 GatewayStore + 真实 HTTP 路由） | 会话已绑定订单；诊断 worker 被停在模型调用内（= 停请求真实到达的那一刻） | `POST /v1/standard/diagnoses/{id}/cancel` | PASS：200 且 `status=cancelled`；响应即终态（`result=null`，无需再轮询）；再轮询仍 `cancelled`；会话 `is_generating=false`；**模型轮次收到 interrupt** | `tests/test_diagnosis_cancel.py::test_stopping_a_diagnosis_frees_the_slot_and_interrupts_the_turn`；突变：去掉 interrupt 调用 → 红；去掉释放槽位 → 红 |
 | DX-CANCEL-02 | 本地 dev | 一个不存在的诊断 id | 取消它 | PASS：404 `DIAGNOSIS_NOT_FOUND`；与「存在但不属于本调用者」同形（不泄漏存在性） | `...::test_cancelling_a_diagnosis_the_caller_cannot_see_is_not_found` |
 | DX-CANCEL-03 | 本地 dev | 库里已存在一条 `completed` 的诊断（不经 worker，直接建行） | 取消它 | PASS：200 且 `status` **仍为 completed**、`result` 原样返回；终态行未被改写 | `...::test_cancelling_a_finished_diagnosis_returns_its_own_terminal_state` |
-| DX-CANCEL-04 | 本地 dev | 同上 | 阅读 `assistant-cancel-handoff.md` §1.1 与 §1 表 | PASS：文档不再声称诊断不可取消，且登记的两条取消路由都出现在文档里 | `tests/test_assistant_cancel_handoff.py::test_the_handoff_states_the_diagnosis_cancel_contract`、`::test_the_cancel_routes_match_what_the_handoff_documents` |
+| DX-CANCEL-04 | 本地 dev | 同上 | 阅读 `assistant-cancel-handoff.md` §1.1 与 §1 表 | PASS：文档不再声称诊断不可取消，且登记的两条取消路由都出现在文档里 | `tests/gateway/test_assistant_cancel_handoff.py::test_the_handoff_states_the_diagnosis_cancel_contract`、`::test_the_cancel_routes_match_what_the_handoff_documents` |
 | DX-CANCEL-05 | 本地 dev | 诊断在模型调用中被取消 | 读该会话的上下文窗口与 `turns` | PASS：窗口为空、`turns` 为空 —— 被取消的轮次**不进入上下文**（用户否掉的回答不能当依据）。机制是 claim guard：worker 的迟到写入 `cancelled=True, guarded=True` 发现行已终态就丢弃该轮 | `...::test_a_cancelled_diagnosis_turn_stays_out_of_the_context_window`；突变：取消时不释放槽位 → 红 |
 
 - **DX-CANCEL-03 的「不被改写」是两层守住的**，突变验证说明了这一点：**单独**去掉 runtime
@@ -1575,7 +1575,7 @@ uv run pytest tests/test_assistant_api.py tests/conversation/test_conversation_a
   因此在产线上没有可观测的新面。
 - **前置**：一次性数据根（`ShortcutStore(tmp_path / "gateway.db")`），种子草稿全部发布。
 - **测试数据**：`_BUNDLED_SHORTCUTS` 的 consumer 入口 —— 三条按钮 + 一条横幅。
-- **动作**：`uv run pytest tests/test_banner_row.py tests/operations/test_operator_negative_acceptance.py -q`
+- **动作**：`uv run pytest tests/gateway/test_banner_row.py tests/operations/test_operator_negative_acceptance.py -q`
 - **预期**：按钮面仍是 `case_exploration / smart_diagnosis / report_fault` 三条；
   横幅面只有 `battery_report`；两面并集等于全部有效行且交集为空。
 - **结果：PASS** —— 25 条新增用例 + 既有护栏全绿；全量 `pytest` 通过。
@@ -1597,7 +1597,7 @@ uv run pytest tests/test_assistant_api.py tests/conversation/test_conversation_a
   **未上 41** —— 端点尚未部署；产线上的验收属于该分支合并后的部署窗口。
 - **前置**：一次性数据根 + `TestClient(create_gateway_app(...))`；种子行全部发布。
 - **测试数据**：`_BUNDLED_SHORTCUTS` 的 consumer 入口（三条按钮 + 一条横幅）。
-- **动作**：`uv run pytest tests/test_banner_api.py tests/test_platform_identity_shapes.py -q`
+- **动作**：`uv run pytest tests/gateway/test_banner_api.py tests/gateway/test_platform_identity_shapes.py -q`
 - **预期**：空态 200 + `banners: []`；有横幅时 `count=1` 且只有 `battery_report`；
   `/v1/shortcuts` 仍是三条；11 语言各自回显且无中文兜底；跳转路径跨语言同一串；
   设备令牌（零角色）可读；未认证 401；入口歧义 409 `PLATFORM_AMBIGUOUS`。
@@ -1613,7 +1613,7 @@ uv run pytest tests/test_assistant_api.py tests/conversation/test_conversation_a
 - **清理**：一次性数据根随 tmp_path 丢弃；**未触碰 41 的任何生产数据**。
 ## Dify 知识检索适配路由 QA 计划（#581 / PRD #577）
 
-接缝：**网关 HTTP 面**（先例 `tests/test_media_api.py`：真 `create_gateway_app` +
+接缝：**网关 HTTP 面**（先例 `tests/gateway/test_media_api.py`：真 `create_gateway_app` +
 `TestClient` + 桩 caller 解析器 + 桩 kb-service client）。不新增只在测试里存在的抽象。
 
 ### DIFY-KB-01 契约形状与检索范围
@@ -1736,7 +1736,7 @@ uv run pytest tests/test_assistant_api.py tests/conversation/test_conversation_a
   **未上 41** —— 该分支只改网关的回答面，可在部署窗口按本 SOP 复跑。
 - **前置**：`TestClient(create_gateway_app(...))`，授权器为测试替身（只有 `allowed_orders` 内的订单算拥有）。
 - **测试数据**：一个不在 `allowed_orders` 里的真实格式订单号 + 一个不存在的同格式订单号。
-- **动作**：`uv run pytest tests/test_assistant_api.py tests/identity/test_operator_order_authorization.py -q`
+- **动作**：`uv run pytest tests/gateway/test_assistant_api.py tests/identity/test_operator_order_authorization.py -q`
 - **预期**：两次提问都返回 `200 type=clarification`、`missing_fields: []`、
   `message` 为该语言的 `not_yours`；除 `question` 外两响应逐字相同；不创建诊断作业。
 - **结果：PASS** —— 全量 `pytest` 通过。

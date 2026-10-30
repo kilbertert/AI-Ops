@@ -33,7 +33,7 @@ run reports every line as unpinned simply because the test that pins it lives in
 another file — the audit would produce a list of deletions, each one wrong.
 
 Run:
-    tools/mutation-audit.py --file src/aiops_diagnostics/gateway_config.py --limit 20
+    tools/mutation-audit.py --file src/aiops_diagnostics/gateway/gateway_config.py --limit 20
     tools/mutation-audit.py --file ... --tests "tests/test_gateway_api.py"
 """
 

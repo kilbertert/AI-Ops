@@ -229,7 +229,7 @@ def _install_default_deps(monkeypatch: pytest.MonkeyPatch, table: list[dict[str,
             classmethod(lambda _cls, _path: _Settings()),
         )
         monkeypatch.setattr(
-            "aiops_diagnostics.gateway_config.GatewayServerSettings.from_env",
+            "aiops_diagnostics.gateway.gateway_config.GatewayServerSettings.from_env",
             classmethod(lambda _cls: _GatewaySettings()),
         )
 

@@ -47,7 +47,7 @@ class ConsumerTrial:
             raise ValueError("trial source route changed")
 
     def execute(self, runtime, trial_id, scope, order, language):
-        from aiops_diagnostics.gateway_runtime import JobRegistration
+        from aiops_diagnostics.gateway.gateway_runtime import JobRegistration
 
         self.require_current(runtime.gateway_settings)
         admin = DifyConsoleAdmin(ConsoleApiSettings(self.source.base_url, self.source.api_key))

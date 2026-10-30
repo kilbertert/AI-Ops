@@ -41,6 +41,9 @@ Dify专用适配、C端知识编排和静态页面入口保留原归属。见
 2026-10-30追加：14个通用/会话模块与FAQ资源归common/conversation，17测试同迁；
 见[本片验证](../validation/2026-10-30-common-conversation-layout.md)。
 
+Gateway追加：10个网关模块归gateway，管家会话归operator，知识HTML跟随knowledge；
+22测试归类，三个服务/运维命令保留实际实现。见[验证](../validation/2026-10-30-gateway-package-layout.md)。
+
 后续目标：Python按consumer/knowledge/identity/publication/gateway职责形成包，测试随职责归类；
 运行服务与一次性工具分开，部署面按服务聚合。每片更新调用者、资源加载、打包、CI与现役文档，
 保留错误处理与权限校验，不新建转发空壳或永久legacy目录。

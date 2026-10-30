@@ -1,4 +1,4 @@
-from aiops_diagnostics.gateway_runtime import _internal_error_message
+from aiops_diagnostics.gateway.gateway_runtime import _internal_error_message
 
 
 def test_internal_error_message_is_redacted_and_bounded() -> None:

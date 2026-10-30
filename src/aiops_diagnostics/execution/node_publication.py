@@ -77,7 +77,7 @@ def validate_target(row):
     if row.entry not in {"consumer", "operator"}:
         raise ValueError("invalid node entry")
     if row.entry == "operator":
-        from aiops_diagnostics.gateway_config import canonical_gateway_url
+        from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
         canonical_gateway_url(row.cpms_base_url)
         canonical_gateway_url(row.proxy_base_url)

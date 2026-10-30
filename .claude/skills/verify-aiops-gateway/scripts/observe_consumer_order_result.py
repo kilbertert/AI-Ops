@@ -221,7 +221,7 @@ def _scoped_mysql_source(_settings, _scope):
     yield _Orders()
 
 
-import aiops_diagnostics.gateway_api as _api
+import aiops_diagnostics.gateway.gateway_api as _api
 _api.scoped_mysql_source = _scoped_mysql_source
 
 

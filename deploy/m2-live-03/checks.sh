@@ -74,7 +74,7 @@ guard() {
     -e "M2LIVE_ISOLATION_ROOT=/data" \
     -e "M2LIVE_EXPECTED_UID=$uid" \
     -e "M2LIVE_READONLY_PATHS=/etc/m2live/runtime.env:/etc/m2live:/etc/m2live-tls" \
-    "$image" python -m aiops_diagnostics.isolation_guard
+    "$image" python -m aiops_diagnostics.gateway.isolation_guard
 }
 
 preflight() {

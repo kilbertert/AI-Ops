@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.knowledge.knowledge_triple import (
     MISSING_RAGFLOW,
     MISSING_WORKSPACE,

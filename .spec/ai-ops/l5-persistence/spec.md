@@ -3,11 +3,11 @@ title: l5-persistence
 desc: 同一个 SQLite 文件，各 store 各自建表
 hue: 30
 code:
-  - src/aiops_diagnostics/gateway_store.py
+  - src/aiops_diagnostics/gateway/gateway_store.py
 related:
   - src/aiops_diagnostics/common/async_job_lifecycle.py
   - src/aiops_diagnostics/conversation/conversation_store.py
-  - src/aiops_diagnostics/metrics_store.py
+  - src/aiops_diagnostics/gateway/metrics_store.py
   - src/aiops_diagnostics/publication/agent_lifecycle.py
   - src/aiops_diagnostics/publication/shortcut_lifecycle.py
   - src/aiops_diagnostics/dify/dify_app_registry.py

@@ -153,10 +153,10 @@ def test_create_gateway_app_injects_the_operator_scope_into_a_real_runtime(tmp_p
     纯函数测试证明规则对；这一条证明那条规则在真实装配路径上被接到了运行时上 ——
     否则"规则写好了但没人调用"会让范围静默落到空集合，而那看起来像"账号没权限"。
     """
-    from aiops_diagnostics.gateway_api import create_gateway_app
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -180,9 +180,9 @@ def test_the_trial_scope_is_empty_when_no_operator_scope_was_injected() -> None:
     import tempfile
     from pathlib import Path
 
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     tmp = Path(tempfile.mkdtemp())
     settings = GatewayServerSettings(

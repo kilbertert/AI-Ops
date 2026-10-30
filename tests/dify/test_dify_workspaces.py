@@ -20,7 +20,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
-from aiops_diagnostics.deployment_environment import canonical_environment
 from aiops_diagnostics.dify.dify_login_provision import (
     DifyConsoleSettings,
     DifyProvisionError,
@@ -34,9 +33,10 @@ from aiops_diagnostics.dify.dify_workspaces import (
     DifyWorkspaceError,
     DifyWorkspaces,
 )
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.deployment_environment import canonical_environment
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
 INTERNAL_SECRET = "internal-token-secret-0123456789"
 ENVIRONMENT = "41"
@@ -289,7 +289,7 @@ def test_the_m2_launchers_also_require_the_deployment_identity() -> None:
 
 
 def test_require_deployment_identity_refuses_an_empty_value() -> None:
-    from aiops_diagnostics.deployment_environment import require_deployment_identity
+    from aiops_diagnostics.gateway.deployment_environment import require_deployment_identity
 
     with pytest.raises(ValueError, match="AIOPS_GATEWAY_ENVIRONMENT is required"):
         require_deployment_identity("")

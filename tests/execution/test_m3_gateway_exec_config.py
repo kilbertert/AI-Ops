@@ -442,7 +442,7 @@ def test_without_manifest_behaviour_is_unchanged(tmp_path, monkeypatch):
 
 def test_startup_refuses_an_invalid_manifest(tmp_path, monkeypatch):
     """GW-05：清单不合格 ⇒ **启动即拒**，不是运行期降级。"""
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     manifest = _write_manifest(tmp_path, _manifest_payload(schema="m3-exec-config/999"))
     config_file = tmp_path / "agent-runs.json"
@@ -463,7 +463,7 @@ def test_startup_refuses_an_invalid_manifest(tmp_path, monkeypatch):
 
 def test_manifest_without_delegation_is_a_startup_error(tmp_path):
     """GW-05b：只配清单不配委派 ⇒ 启动错误（没有 run 可固定身份）。"""
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     settings = GatewayServerSettings(
         data_home=tmp_path,

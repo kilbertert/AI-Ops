@@ -411,7 +411,7 @@ def test_the_aggregate_reads_status_nulls_as_zero() -> None:
 
 
 def test_the_analysis_window_must_be_a_real_bounded_interval(tmp_path: Path) -> None:
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     store = GatewayStore(tmp_path / "gateway.db")
     base = dict(site_ids=("S-1",), rule_version=RULE_VERSION)

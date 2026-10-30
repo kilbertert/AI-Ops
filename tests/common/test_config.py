@@ -5,7 +5,7 @@ import pytest
 
 from aiops_diagnostics.common.config import DisSettings, ProviderConfig, Settings, SSHSettings, UpmsSettings
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
 
 def test_redacted_config_never_returns_password(monkeypatch) -> None:

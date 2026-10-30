@@ -166,9 +166,9 @@ def _client(tmp_path, *, allowed_orders: set[str] | None = None):
     from fastapi.testclient import TestClient
 
     from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver
-    from aiops_diagnostics.gateway_api import create_gateway_app
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     settings = GatewayServerSettings(
         data_home=tmp_path,

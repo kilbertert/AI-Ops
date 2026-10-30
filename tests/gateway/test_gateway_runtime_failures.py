@@ -32,13 +32,13 @@ from aiops_diagnostics.conversation.faq import (
     PlatformIdentityResolver,
     PlatformRoleRecord,
 )
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
-SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
-API_FILE = "gateway_api.py"
+SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
+API_FILE = "gateway/gateway_api.py"
 #: The one renderer. A runtime guard that does not call it is a silent failure.
 RENDERER = "_runtime_unavailable"
 #: The logger the renderer writes through — the module's own, not the package's.

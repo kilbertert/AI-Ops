@@ -20,8 +20,8 @@ from aiops_diagnostics.common.redaction import redact_text
 from aiops_diagnostics.conversation.conversation_store import BUSY_LOCK_SECONDS
 from aiops_diagnostics.data.sources import SourceError, scoped_live_sources
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_from_json, scope_to_json
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
 from aiops_diagnostics.health.health_curves import build_curves
 from aiops_diagnostics.health.health_metrics import enrich_report
 from aiops_diagnostics.health.health_report import (
@@ -179,7 +179,7 @@ class GatewayRuntime:
         self.dify_app_registry = DifyAppRegistry(store.path)
         # Redacted run metrics (T7/#174): same DB file, lazy-built. Writes are
         # best-effort — a metrics failure must never fail the run itself.
-        from aiops_diagnostics.metrics_store import MetricsStore
+        from aiops_diagnostics.gateway.metrics_store import MetricsStore
 
         self.metrics_store = MetricsStore(store.path)
         self._executor = ThreadPoolExecutor(

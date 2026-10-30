@@ -22,8 +22,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
-API_FILE = "gateway_api.py"
+SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
+API_FILE = "gateway/gateway_api.py"
 #: The module that owns the assistant-question body.
 SHAPE_HELPER = "_assistant_question_response"
 #: A 202 body that is written out by hand instead of through the helper.

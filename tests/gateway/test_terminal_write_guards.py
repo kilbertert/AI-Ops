@@ -27,10 +27,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, TERMINAL_DIAGNOSIS_STATUSES
+from aiops_diagnostics.gateway.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, TERMINAL_DIAGNOSIS_STATUSES
 
-SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
-RUNTIME = "gateway_runtime.py"
+SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
+RUNTIME = "gateway/gateway_runtime.py"
 #: The two update paths that end a job, and the claim their guards enforce.
 TERMINAL_UPDATES = ("update_health_job", "update_standard_diagnosis")
 #: Statuses that end a job: a write with one of these closes the row.

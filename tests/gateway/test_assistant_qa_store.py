@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from aiops_diagnostics.gateway_store import (
+from aiops_diagnostics.gateway.gateway_store import (
     ASSISTANT_QUESTION_RESTART_ERROR_CODE,
     DIAGNOSIS_COMPLETED_RETENTION,
     DIAGNOSIS_FAILED_RETENTION,

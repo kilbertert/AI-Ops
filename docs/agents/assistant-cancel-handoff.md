@@ -146,7 +146,7 @@ POST /v1/assistant/questions/{qa_id}/cancel
 
 ## 5. 真实响应样例
 
-下列响应体由 `tests/test_assistant_cancel_handoff.py` 在**真实网关栈**上抓取（真实
+下列响应体由 `tests/gateway/test_assistant_cancel_handoff.py` 在**真实网关栈**上抓取（真实
 `GatewayRuntime` + 真实 `GatewayStore` + 走 HTTP 路由的 `TestClient`，只把模型调用停在半路以复现
 「用户正在等待时按下停止」这个时刻）。只有逐次生成的 `qa_id` / `conv_` 前缀 id 与 ISO 8601
 时间戳被换成占位值——**其余逐字段等于真实响应，测试会比对，不一致即失败**。
@@ -334,11 +334,11 @@ POST /v1/assistant/questions/{qa_id}/cancel
 
 | 守护 | 文件 | 守护的行为 |
 |---|---|---|
-| `test_the_handoff_shows_what_the_gateway_answers` | `tests/test_assistant_cancel_handoff.py` | §5 全部样例逐字段等于真实响应——文档漂移即测试失败 |
-| `test_stopping_a_question_returns_its_terminal_state_and_unlocks_the_conversation` | `tests/test_assistant_api.py` | 取消返回终态、会话槽位立即释放、后续提问不再撞 409、中断到达活的模型轮次 |
-| `test_stopping_a_question_twice_and_after_it_finished_is_not_an_error` | `tests/test_assistant_api.py` | 连点两次 / 取消已完成作业一律 200，且不改写已完成的结果 |
-| `test_stopping_an_unknown_or_foreign_question_is_404` | `tests/test_assistant_api.py` | 未知与跨作用域同为 404，且作业状态不变 |
-| `test_a_failed_interrupt_still_cancels_the_job` | `tests/test_assistant_qa_cancel.py` | 中断抛错时作业仍然是 `cancelled`（正确性不依赖中断成功） |
+| `test_the_handoff_shows_what_the_gateway_answers` | `tests/gateway/test_assistant_cancel_handoff.py` | §5 全部样例逐字段等于真实响应——文档漂移即测试失败 |
+| `test_stopping_a_question_returns_its_terminal_state_and_unlocks_the_conversation` | `tests/gateway/test_assistant_api.py` | 取消返回终态、会话槽位立即释放、后续提问不再撞 409、中断到达活的模型轮次 |
+| `test_stopping_a_question_twice_and_after_it_finished_is_not_an_error` | `tests/gateway/test_assistant_api.py` | 连点两次 / 取消已完成作业一律 200，且不改写已完成的结果 |
+| `test_stopping_an_unknown_or_foreign_question_is_404` | `tests/gateway/test_assistant_api.py` | 未知与跨作用域同为 404，且作业状态不变 |
+| `test_a_failed_interrupt_still_cancels_the_job` | `tests/gateway/test_assistant_qa_cancel.py` | 中断抛错时作业仍然是 `cancelled`（正确性不依赖中断成功） |
 
 「停止生成」的可验证据就是上表加 §5 样例。此前三份文档把它归给已关闭的 #173，而 #173 的验收条目
 在范围决定时被降级为范围外、2026-09-14 的 PASS 证据引的是 CONV-01（一个不含任何停止接口的会话

@@ -292,7 +292,7 @@ def test_clicking_operations_review_starts_an_analysis_job_not_a_diagnosis(
     """
     from datetime import datetime
 
-    from aiops_diagnostics.gateway_api import OPERATIONS_REVIEW_WINDOW_HOURS
+    from aiops_diagnostics.gateway.gateway_api import OPERATIONS_REVIEW_WINDOW_HOURS
 
     client, runtime = _app(tmp_path, monkeypatch)
     response = client.post(

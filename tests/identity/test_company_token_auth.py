@@ -42,7 +42,7 @@ from operator_support import (
 )
 
 from aiops_diagnostics.common.config import Settings
-from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_INVALID,
     CALLER_AUTH_UNAVAILABLE,
@@ -547,7 +547,7 @@ SOURCE_KEY = "source-key-0123456789abcdef"
 
 def test_the_company_path_is_not_built_while_all_keys_are_empty(tmp_path: Path) -> None:
     """全空 ⇒ 与启用前同型（UPMS 兜底），这是「先合不启用」的机制保证（#443/#444 同一条）。"""
-    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.gateway.gateway_api import _caller_resolver
     from aiops_diagnostics.identity.caller_auth import UpmsCallerResolver
 
     settings = _gateway_settings(tmp_path, "AIOPS_UPMS_BASE_URL=https://upms.example.test\n")
@@ -562,7 +562,7 @@ def test_the_company_path_is_not_built_without_the_source_key(tmp_path: Path) ->
     **没有**配置（41 之外的环境），而一旦它配置上，落在下面的会话那一级就会直接 return ——
     把这条断言与下一条放在一起读，才是本票真正的形状。
     """
-    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.gateway.gateway_api import _caller_resolver
     from aiops_diagnostics.identity.caller_auth import DisabledCallerResolver
 
     resolver = _caller_resolver(_gateway_settings(tmp_path, **COMPANY_KEYS))
@@ -573,7 +573,7 @@ def test_the_company_path_is_not_built_without_the_source_key(tmp_path: Path) ->
 
 
 def test_the_source_key_gate_is_built_once_key_and_company_path_are_configured(tmp_path: Path) -> None:
-    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.gateway.gateway_api import _caller_resolver
     from aiops_diagnostics.identity.caller_auth import SourceKeyCallerResolver
 
     resolver = _caller_resolver(_gateway_settings(tmp_path, company_source_key=SOURCE_KEY, **COMPANY_KEYS))
@@ -588,7 +588,7 @@ def test_the_gate_sits_in_front_of_the_session_level(tmp_path: Path) -> None:
     的请求会在第一级就被 401 —— 密钥配了也白配。因此断言两层：
     ``_fallback`` 仍是会话解析器（既有链没被动过），而**外层**是门。
     """
-    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.gateway.gateway_api import _caller_resolver
     from aiops_diagnostics.identity.caller_auth import SourceKeyCallerResolver
     from aiops_diagnostics.identity.third_session_auth import RedisThirdSessionResolver
 
@@ -609,7 +609,7 @@ def test_the_gate_sits_in_front_of_the_session_level(tmp_path: Path) -> None:
 
 def test_the_gate_wraps_the_existing_chain_without_changing_its_choice(tmp_path: Path) -> None:
     """既有链的选择结果零变化：门只是**包在外面**，未命中密钥时原样委派。"""
-    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.gateway.gateway_api import _caller_resolver
     from aiops_diagnostics.identity.caller_auth import SourceKeyCallerResolver, UpmsCallerResolver
 
     settings = _gateway_settings(
@@ -1365,7 +1365,7 @@ def test_the_strict_mode_is_reachable_from_configuration(monkeypatch: pytest.Mon
 
     判据走真实环境变量路径，而不是直接构造 dataclass —— 后者绕开了读者真正会用的那条路。
     """
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     monkeypatch.setenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", "0")
     assert GatewayServerSettings.from_env().trust_company_payload is False
@@ -1383,7 +1383,7 @@ def test_every_documented_off_value_disables_the_company_parity_mode(
 
     这是本仓反复出现的「配了但静默不生效」形态，所以逐个取值都钉一条。
     """
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     monkeypatch.setenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", value)
     assert GatewayServerSettings.from_env().trust_company_payload is False, value

@@ -40,7 +40,7 @@ DEFAULT_LANGUAGES = ("zh", "en", "zh-Hant", "vi", "mn", "th", "km")
 
 
 def _settings(config_file: pathlib.Path):
-    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
     return GatewayServerSettings.from_env()
 
@@ -161,7 +161,7 @@ def main() -> int:
 
     from fastapi.testclient import TestClient
 
-    from aiops_diagnostics.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 
     # 🔴 Do NOT build the whole app against the LIVE database.
     #

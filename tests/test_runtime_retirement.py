@@ -195,7 +195,7 @@ def test_trial_authentication_and_binding_are_required(tmp_path):
 
 
 def test_opening_old_database_preserves_retired_data(tmp_path):
-    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     path = tmp_path / "old.db"
     with sqlite3.connect(path) as connection:

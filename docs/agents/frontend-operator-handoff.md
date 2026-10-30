@@ -202,7 +202,7 @@ POST /v1/assistant/questions
   **不要**把它当成网络错误重试。
 - **问句文本里只是顺带提到订单号**：无权限时**静默回落**成普通问答（`200`/`202` `qa`），
   **不是** 404 —— 这是既有契约，保持不变
-  （用例 `tests/test_assistant_api.py::test_assistant_text_embedded_unowned_order_falls_through`）。
+  （用例 `tests/gateway/test_assistant_api.py::test_assistant_text_embedded_unowned_order_falls_through`）。
 - **会话里已确认的活跃订单**、追问时无权限：同样静默回落，并清掉该绑定。
 
 ### 3.2 客户案例（`case_exploration`，`requires_order: false`）—— 2026-10-19 恢复

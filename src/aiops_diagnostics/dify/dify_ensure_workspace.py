@@ -40,9 +40,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from aiops_diagnostics.common.bounded_http import RequestSpec, join_url, request_json
-from aiops_diagnostics.deployment_environment import canonical_environment
 from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiError
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces, workspace_name
+from aiops_diagnostics.gateway.deployment_environment import canonical_environment
 
 #: 租约长度。够一次创建往返（15s 超时 + 写回），又短到崩掉的创建不会把一个租户锁一小时。
 DEFAULT_LEASE_SECONDS = 300.0

@@ -25,9 +25,9 @@ from fastapi.testclient import TestClient
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
 INTERNAL_SECRET = "internal-token-secret-0123456789"
 ENVIRONMENT = "41"

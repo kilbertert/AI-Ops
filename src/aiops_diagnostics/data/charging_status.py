@@ -14,7 +14,7 @@ from aiops_diagnostics.common.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.data.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
-from aiops_diagnostics.gateway_config import canonical_gateway_url
+from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
 
 class ChargingStatusError(RuntimeError):
