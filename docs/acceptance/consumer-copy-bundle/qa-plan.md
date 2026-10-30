@@ -1,7 +1,7 @@
 # 租户文案包 QA 计划
 
 契约见同目录 [acceptance.feature](acceptance.feature)，取舍见
-[ADR-0185](../../adr/0185-consumer-copy-is-a-published-bundle.md)。
+[ADR-0186](../../adr/0186-consumer-copy-is-a-published-bundle.md)。
 
 ## 自动化用例（本片已实现并跑过）
 

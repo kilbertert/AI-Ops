@@ -3,7 +3,7 @@
 日期：2026-10-30（UTC）。分支`feat/consumer-copy-bundle`，基线`ebc56d5d`。
 本记录是**提交前**的本地验证；远端 CI、合并与部署不在本记录内。
 目标与缺口见[开发进度记录](../开发进度/2026-10-30-consumer-copy-bundle.md)，
-取舍见 [ADR-0185](../adr/0185-consumer-copy-is-a-published-bundle.md)。
+取舍见 [ADR-0186](../adr/0186-consumer-copy-is-a-published-bundle.md)。
 
 ## 环境与范围
 

@@ -210,6 +210,18 @@ class NodeClaimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class OperatorToolAuthorizationRequest(BaseModel):
+    """领工具授权时的请求体：**只有**模型提议的参数，别的一律 422。
+
+    参数是模型能给的唯一东西；租户、站点集合、路径、分页上限都由网关决定，所以
+    它们连字段都不存在。空体（订单诊断工具）仍然合法。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    arguments: dict[str, str] = Field(default_factory=dict, max_length=8)
+
+
 class NodeLoopCompletionRequest(BaseModel):
     """整轮终局通知的请求体。只有状态与一个短原因码，**没有业务数据、没有身份字段**。
 
@@ -1470,6 +1482,9 @@ def create_gateway_app(
     from aiops_diagnostics.operator.operator_cpms import OperatorCpms, OperatorRefused
 
     context.operator_cpms = OperatorCpms(context)
+    from aiops_diagnostics.consumer.consumer_tool_grants import ConsumerToolGrants
+
+    context.consumer_tool_grants = ConsumerToolGrants(context, selected_settings)
     from aiops_diagnostics.dify.self_service_api import register as register_self_service
 
     context.self_service_operator_identity = lambda session: authenticated_operator_console(context, session)
@@ -3753,15 +3768,25 @@ def create_gateway_app(
 
     @app.post("/v1/internal/operator-runs/{run_id}/tools/{tool}/authorization")
     def operator_tool_authorization(
-        run_id: str, tool: str, payload: NodeClaimRequest, request: Request, response: Response
+        run_id: str,
+        tool: str,
+        payload: OperatorToolAuthorizationRequest,
+        request: Request,
+        response: Response,
     ):
         response.headers["Cache-Control"] = "no-store"
-        return context.operator_cpms.grant(
+        grant = (
+            context.consumer_tool_grants.grant
+            if _is_consumer_run(context, run_id)
+            else context.operator_cpms.grant
+        )
+        return grant(
             run_id,
             request.headers.get("Authorization", "").removeprefix("Bearer "),
             request.headers.get("X-AI-Ops-Exec-Config", ""),
             tool,
             request.headers.get("X-AI-Ops-Tool-Contract", ""),
+            payload.arguments,
         )
 
     @app.post("/v1/internal/operator-runs/{run_id}/tools/{tool}/evidence")
@@ -3769,8 +3794,13 @@ def create_gateway_app(
         body = await _operator_json(request)
         from starlette.concurrency import run_in_threadpool
 
+        recorder = (
+            context.consumer_tool_grants.record
+            if _is_consumer_run(context, run_id)
+            else context.operator_cpms.record
+        )
         result = await run_in_threadpool(
-            context.operator_cpms.record,
+            recorder,
             run_id,
             request.headers.get("Authorization", "").removeprefix("Bearer "),
             request.headers.get("X-AI-Ops-Exec-Config", ""),
@@ -3778,6 +3808,21 @@ def create_gateway_app(
             body,
         )
         return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+    @app.get("/v1/internal/consumer-tools/{run_id}/{path:path}")
+    def consumer_tool_proxy(run_id: str, path: str, request: Request, response: Response):
+        """C 端运行的 CPMS 只读代理。
+
+        节点把请求发回这里，带的是网关签发的 grant token；**公司令牌不出网关**，
+        C 端也不带任何服务令牌。白名单是授权里那一个完整请求目标。
+        """
+        response.headers["Cache-Control"] = "no-store"
+        return context.consumer_tool_grants.proxy(
+            run_id,
+            request.headers.get("Authorization", "").removeprefix("Bearer "),
+            "/" + path,
+            request.url.query,
+        )
 
     @app.get("/v1/internal/operator-runs/{run_id}/cpms/{path:path}")
     def operator_cpms_proxy(run_id: str, path: str, request: Request, response: Response):
@@ -6546,6 +6591,18 @@ def _require_current_chat_dify_order(context, caller, qa, request):
 
 def _is_node_chat_qa(qa) -> bool:
     return str(qa.get("internal_run_id") or "").startswith(chat_execution.CHAT_RUN_PREFIX)
+
+
+def _is_consumer_run(context: Any, run_id: str) -> bool:
+    """这条 run 是 C 端运行还是管家运行。
+
+    判据是 run 自己的 operation —— 同一个端点服务两类运行，不能靠调用方自报。
+    """
+    run = context.agent_run_store.peek(run_id)
+    return run is not None and run.operation not in {
+        "operator_order_diagnosis",
+        "operator_conversation",
+    }
 
 
 def _require_consumer_self_order(caller: ScopeContext, business_entry: str | None, order_no: str) -> None:

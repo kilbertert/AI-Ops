@@ -1,7 +1,7 @@
 # C 端答复措辞做成按租户发布的文案包
 
 分支`feat/consumer-copy-bundle`，基线`ebc56d5d`。
-设计取舍见 [ADR-0185](../adr/0185-consumer-copy-is-a-published-bundle.md)，
+设计取舍见 [ADR-0186](../adr/0186-consumer-copy-is-a-published-bundle.md)，
 契约见 [acceptance.feature](../acceptance/consumer-copy-bundle/acceptance.feature)。
 
 ## 目标
