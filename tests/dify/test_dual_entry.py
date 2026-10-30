@@ -60,7 +60,9 @@ def source_document(ids=("kb-source",)):
     flow = picker_graph(list(ids))
     flow = json.loads(json.dumps(flow).replace("__MODEL__", "aiops-api"))
     # 受管客户端目标没有内容文件 ⇒ 只支持动态知识回答（文案与判定在代码里）。
-    flow = _upgrade().live_documents({"workflow": flow})["workflow"]
+    # 夹具里的 SYSTEM 与模板不同 ⇒ 迁移默认拒绝覆盖（运营可能改过它），
+    # 这条用例要的是"现役应用"，所以显式替换。
+    flow = _upgrade().live_documents({"workflow": flow}, replace_system=True)["workflow"]
     return {"app": {"mode": "advanced-chat", "name": "现役客服"}, "workflow": flow}
 
 
