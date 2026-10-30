@@ -107,26 +107,34 @@ def billing_answer(snapshot, language):
         }
     )
     refund = status.get(snapshot["refund_status"], "状态待核实" if zh else "status unverified")
+    # 同样是**纯文本**排版：前端不解析 Markdown。逐行一项，比用分号把五个字段串成一句
+    # 好读；免责说明单独成段，不和数据挤在同一个句子里。
+    from aiops_diagnostics.consumer.consumer_time import readable_time
+
+    when = readable_time(snapshot["observed_at"])
     if zh:
         text = (
-            f"订单 {snapshot['order_no']} 的账务记录：\n"
-            f"订单金额：{snapshot['order_amount'] or missing}；"
-            f"支付金额字段：{snapshot['recorded_payment_amount'] or missing}；\n"
-            f"退款记录：{refund}；记录的退款金额：{snapshot['recorded_refund_amount'] or missing}。\n"
-            "接口未提供币种，请与原订单页面核对。支付金额字段不证明已经扣款，退款记录不证明银行到账。"
-            "本客服未发起付款或退款。\n"
-            f"来源：{snapshot['source']}；查询时间（UTC）：{snapshot['observed_at']}。"
+            f"订单账单：{snapshot['order_no']}\n\n"
+            f"订单金额：{snapshot['order_amount'] or missing}\n"
+            f"支付金额：{snapshot['recorded_payment_amount'] or missing}\n"
+            f"退款记录：{refund}\n"
+            f"已退金额：{snapshot['recorded_refund_amount'] or missing}\n"
+            f"查询时间：{when}\n\n"
+            "注意：接口未提供币种，请与原订单页面核对。支付金额字段不证明已经扣款，"
+            "退款记录不证明银行到账。本客服未发起任何付款或退款。\n"
+            f"（技术标识：来源 {snapshot['source']}）"
         )
     else:
         text = (
-            f"Billing record for order {snapshot['order_no']}:\n"
-            f"Order amount: {snapshot['order_amount'] or missing}; "
-            f"payment amount field: {snapshot['recorded_payment_amount'] or missing};\n"
-            f"Refund record: {refund}; "
-            f"recorded refund amount: {snapshot['recorded_refund_amount'] or missing}.\n"
-            "No currency was supplied; check the original order page. The payment amount does not prove "
-            "a debit, and the refund record does not prove bank receipt. "
-            "No payment or refund was initiated.\n"
-            f"Source: {snapshot['source']}; observed at (UTC): {snapshot['observed_at']}."
+            f"Billing record: {snapshot['order_no']}\n\n"
+            f"Order amount: {snapshot['order_amount'] or missing}\n"
+            f"Payment amount: {snapshot['recorded_payment_amount'] or missing}\n"
+            f"Refund record: {refund}\n"
+            f"Refunded amount: {snapshot['recorded_refund_amount'] or missing}\n"
+            f"Checked at: {when}\n\n"
+            "Note: no currency was supplied, so check the original order page. The payment amount "
+            "does not prove a debit, and the refund record does not prove the money arrived. "
+            "No payment or refund was initiated here.\n"
+            f"(Technical: source {snapshot['source']})"
         )
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}

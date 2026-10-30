@@ -85,7 +85,11 @@ def test_fact_rendering_keeps_zero_amounts_unknown_status_and_identifiers(langua
     }
     for answer in (status_answer(snapshot, language, localized=True), billing_answer(snapshot, language)):
         text = answer["blocks"][0]["text"]
-        assert all(snapshot[k] in text for k in ("order_no", "source", "observed_at"))
+        # 订单号与来源必须原样保留；时间改成人读格式（2026-10-28 00:00:00 UTC），
+        # 所以比较的是**可核对的时刻**而不是原始 ISO 串 —— 断言不能因为排版变宽松。
+        assert all(snapshot[k] in text for k in ("order_no", "source"))
+        assert "2026-10-28 00:00:00" in text and "UTC" in text
+        assert snapshot["observed_at"] not in text, "微秒 ISO 串不应直接摆给用户"
     bill = billing_answer(snapshot, language)["blocks"][0]["text"]
     assert "12.30" in bill and "0" in bill
     if language in COPY:

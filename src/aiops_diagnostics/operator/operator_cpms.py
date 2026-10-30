@@ -723,20 +723,7 @@ class OperatorCpms:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         answer = run.snapshot["answer"]
         validate_answer(answer, run.snapshot["evidence"])
-        citations = [
-            f"{item['source']} · {item['observed_at']}" for item in run.snapshot["evidence"].values()
-        ]
-        text = "\n\n".join(
-            [
-                # 直接回答在**最前**：它是用户问的那一点，读的人第一眼要看到的不是概述。
-                answer["direct_answer"],
-                answer["summary"],
-                answer["probable_cause"],
-                *answer["next_steps"],
-                *answer["limitations"],
-                *citations,
-            ]
-        )
+        text = render_report(answer, run.snapshot["evidence"])
         return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
 
     def retract(self, route):
@@ -917,6 +904,59 @@ def validate_answer(answer, evidence):
     text = json.dumps(answer, ensure_ascii=False)
     if EXECUTED_MUTATION.search(text):
         _answer_refused("mutation_claim")
+
+
+def _readable_time(iso: object) -> str:
+    """``2026-10-29T12:34:45.123456+00:00`` → ``2026-10-29 12:34:45 UTC``。
+
+    取证时间带微秒是因为它是给核对用的；但直接摆在报告末尾，读者看到的是六个毫无意义的
+    数字。解析不了就原样返回，不硬凑。
+    """
+    try:
+        parsed = datetime.fromisoformat(str(iso))
+    except (TypeError, ValueError):
+        return str(iso)
+    if parsed.tzinfo is None:
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
+    return parsed.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+
+
+#: 证据来源标识 → 人话。报告末尾给的是"我查了哪里"，不是内部接口名。
+_SOURCE_LABELS = {
+    "cpms.orderDetail": "订单详情",
+    "cpms.chargingMonitor": "充电监测样本",
+}
+
+
+def render_report(answer, evidence) -> str:
+    """把结构化诊断渲染成**人读的报告**。
+
+    之前这里是 ``"\\n\\n".join([...])``：九段文字被摊平成同等重要的段落，列表失去编号、
+    没有任何小标题、技术标识（``cpms.orderDetail``、带微秒的 UTC 时间）直接摆给用户。
+    内容全对，但没有一处告诉读的人"哪句是结论、哪句是下一步"。
+
+    前端按 ``blocks[]`` 分派渲染、**不解析 Markdown**（frontend-api-brief §9），所以这里
+    只用纯文本能表达的层级：小标题、``-`` 列表、缩进、空行。
+
+    顺序是刻意的：先回答问题，再给事实，最后才是排查建议与缺证 —— 运维最常要的是前两段。
+    """
+    sections = [answer["direct_answer"]]
+    if answer["summary"]:
+        sections.append("【订单事实】\n" + answer["summary"])
+    if answer["probable_cause"]:
+        sections.append("【可能原因】\n" + answer["probable_cause"])
+    for title, key in (("【建议下一步】", "next_steps"), ("【证据缺口】", "limitations")):
+        if answer[key]:
+            # 编号而不是光秃秃的行：用户会说"第 2 条"，还能对上号。
+            items = "\n".join(f"{i}. {item}" for i, item in enumerate(answer[key], 1))
+            sections.append(title + "\n" + items)
+    if evidence:
+        lines = []
+        for item in evidence.values():
+            label = _SOURCE_LABELS.get(item.get("source"), item.get("source"))
+            lines.append(f"- {label}（{_readable_time(item.get('observed_at'))}）")
+        sections.append("【数据来源】\n" + "\n".join(lines))
+    return "\n\n".join(sections)
 
 
 def cpms_get(url, bearer, tenant, *, timeout=10):
