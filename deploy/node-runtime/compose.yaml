@@ -127,6 +127,7 @@ services:
     - ${AIOPS_NODE_CONFIG:?}/node/node.env
     command:
     - java
+    - -Daiops.node.tools-file=/etc/m2live/operator-tools.json
     - -jar
     - /app/aiops-execution-node.jar
     - --aiops.node.managed-publication=true
@@ -135,6 +136,12 @@ services:
     - ${AIOPS_NODE_STATE:?}/node:/home/node
     - ${AIOPS_NODE_CONFIG:?}/tls/public:/etc/m2live-tls:ro
     - ${AIOPS_NODE_CONFIG:?}/gateway/exec-manifest.json:/etc/m2live/exec-manifest.json:ro
+    - type: bind
+      source: ${AIOPS_NODE_CONFIG:?}/node/operator-tools.json
+      target: /etc/m2live/operator-tools.json
+      read_only: true
+      bind:
+        create_host_path: false
     mem_limit: 500m
     cpus: 0.22
     restart: unless-stopped
