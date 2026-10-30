@@ -193,3 +193,50 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
         proc.terminate()
         proc.communicate(timeout=5)
         upstream.shutdown()
+
+
+# --------------------------------------------------------------------------
+# 节点制品记录：源码摘要必须跟着源码走
+# --------------------------------------------------------------------------
+def _digest_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("node_source_digest", DEPLOY / "source_digest.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_node_source_digest_matches_the_lock():
+    """「节点源码改了但制品记录没更新」必须在 CI 变红。
+
+    2026-10-30 的线上故障就是这样漏过去的：`images.lock.json` 的 `node.sha256` 是个死常量，
+    而当时唯一的测试只断言「lock 与 HOST-CHANGE **两个常量彼此一致**」—— 两个常量互相点头，
+    谁也没看真实源码。CI 不构建 Java，所以 jar 摘要验不了；源码摘要不需要 JDK。
+    """
+    module = _digest_module()
+    value, count = module.digest()
+    assert count > 10, "源码摘要只覆盖了很少的文件，规则可能写错了"
+    assert value == module.locked(), (
+        "services/execution-node 的源码摘要与 images.lock.json 不一致：\n"
+        "  改了节点源码 → 按 deploy/node-runtime/README.md 构建并部署，然后更新\n"
+        "  images.lock.json 的 node.source_sha256 / sha256 / bytes / source_commit。\n"
+        "  只改文档或注释也照样要更新（摘要按字节算），这是有意的：制品记录必须指向真实源码。"
+    )
+
+
+def test_the_source_digest_actually_depends_on_the_source(tmp_path: Path):
+    """对照组：源码变了摘要必须变，否则上面那条只是「函数恒返回同一个值」。"""
+    module = _digest_module()
+    base, _ = module.digest()
+    copy = tmp_path / "node"
+    shutil.copytree(module.SOURCE, copy, ignore=shutil.ignore_patterns("target", "__pycache__"))
+    target = copy / "pom.xml"
+    target.write_text(target.read_text(encoding="utf-8") + "\n<!-- one more comment -->\n", encoding="utf-8")
+    changed, _ = module.digest(copy)
+    assert changed != base
+    # 构建产物不参与摘要：往 target/ 里丢文件不该改变它。
+    (copy / "target").mkdir(exist_ok=True)
+    (copy / "target" / "junk.jar").write_bytes(b"x")
+    assert module.digest(copy)[0] == changed

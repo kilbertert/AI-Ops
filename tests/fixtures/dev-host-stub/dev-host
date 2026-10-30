@@ -60,6 +60,12 @@ if [ "$1" = "exec" ]; then
     *curl*)
       printf '{"version":"0.0.0-stub"}\n'
       ;;
+    *AIOPS_NODE_BUILD*)
+      # 节点制品闸门读的是 41 上节点自己的构建标识。这里回答「节点已经是由本次
+      # 待部署 commit 构建的」，与上面 sha256sum 的做法同源：从 checkout 取，
+      # 不写死一个会过期的值。
+      printf '%s-stubjarstubj\n' "$(git rev-parse HEAD)"
+      ;;
     *sha256sum*)
       spec=""
       for word in "$@"; do
