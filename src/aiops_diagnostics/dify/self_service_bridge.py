@@ -64,6 +64,8 @@ def handle(handler, bridge):
                 "question",
                 "order_no",
                 "trial_id",
+                "knowledge_base_id",
+                "allowed",
             }
         ),
     )
@@ -80,6 +82,8 @@ def handle(handler, bridge):
         "trial": ("POST", "/trial"),
         "trial-result": ("POST", "/trial/result"),
         "trial-cancel": ("POST", "/trial/cancel"),
+        "knowledge": ("POST", "/knowledge"),
+        "knowledge-access": ("POST", "/knowledge/access"),
     }
     if action in {"operation", "retry"}:
         job = payload.pop("id", "")
@@ -112,7 +116,15 @@ def handle(handler, bridge):
             r"tr_[a-f0-9]{32}", payload["trial_id"]
         ):
             raise _Rejected(400, "无效预览")
-    elif set(payload) & {"question", "order_no", "trial_id"}:
+    elif action == "knowledge-access":
+        if (
+            set(payload) != {"app_id", "knowledge_base_id", "allowed"}
+            or type(payload["allowed"]) is not bool
+            or not isinstance(payload["knowledge_base_id"], str)
+            or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", payload["knowledge_base_id"])
+        ):
+            raise _Rejected(400, "无效知识授权参数")
+    elif set(payload) & {"question", "order_no", "trial_id", "knowledge_base_id", "allowed"}:
         raise _Rejected(400, "无效参数")
     # 应用状态/发布必须能由当前Dify工作区读到；平台跨租户开通另由公司目录和来源登记裁定。
     if action in {
@@ -124,6 +136,8 @@ def handle(handler, bridge):
         "trial",
         "trial-result",
         "trial-cancel",
+        "knowledge",
+        "knowledge-access",
     }:
         app_id = payload.get("app_id", "")
         if not re.fullmatch(r"[a-f0-9-]{36}", app_id):
