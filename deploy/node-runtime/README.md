@@ -32,8 +32,13 @@
 | `AIOPS_MODEL_UPSTREAM` / `AIOPS_MODEL_BASE_PATH` | 已批准的固定 HTTPS 供应商及 API 前缀 |
 
 最小目录：`platform/application.properties`、`node/node.env`、`gateway/exec-manifest.json`、
-`model-proxy/{upstream_api_key,proxy_token}`、`secrets/mysql_root`、`tls/{platform,proxy,public}`，
-以及 `tls/callback/{server.crt,server.key}`（回调叶子证书和私钥）。
+`node/operator-tools.json`、`model-proxy/{upstream_api_key,proxy_token}`、`secrets/mysql_root`、
+`tls/{platform,proxy,public}`，以及 `tls/callback/{server.crt,server.key}`（回调叶子证书和私钥）。
+
+**`node/operator-tools.json` 是工具定义本身**（ADR-0181）：从仓库的
+`src/aiops_diagnostics/operator/operator_tools.json` 原样复制，节点用
+`-Daiops.node.tools-file=<配置根>/node/operator-tools.json` 读它。加工具只换这一个文件，
+**不需要重建 JAR**。它读不到就是启动失败——不会被当成「没有工具」。
 仅复制所需配置与停稳后的平台数据库；不复制试验 Gateway、身份 fixture 或旧备份密钥。
 平台/节点无业务库凭据，模型出口只挂自己的凭据目录。
 

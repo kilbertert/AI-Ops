@@ -9,26 +9,41 @@ from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 PROVIDER_PATH = "/console/api/workspaces/current/tool-provider/api"
 
 
-def ensure_node_provider(console, workspace, gateway_url, manifest):
-    """从已实现的节点清单登记 CPMS 工具；提供方不持公司或整租户凭据。"""
-    from aiops_diagnostics.execution.chat_execution import OPERATOR_TOOL_NAMES
+#: 声明里的空参数集合。工具参数由运行输入提供，模型一个也不能给。
+EMPTY_SCHEMA = '{"type":"object","properties":{},"required":[],"additionalProperties":false}'
 
-    tools = manifest["tools"]
-    if not tools or any(t["name"] not in OPERATOR_TOOL_NAMES for t in tools):
-        raise ValueError("invalid CPMS node tool template")
+
+def ensure_node_provider(console, workspace, gateway_url, manifest=None, *, migrate=False):
+    """从**声明**登记 CPMS 工具；提供方不持公司或整租户凭据。
+
+    工具名、描述与参数集合都来自 `operator_tools.json`，不再从节点清单模板里抄 ——
+    模板是部署数据，声明才是定义。清单模板存在时仍然核一遍名字，避免「模板与声明各说
+    各话」被登记进 Dify。
+
+    ``migrate=True`` 时，已存在的 provider 若 schema 与当前声明不同，就地覆盖。这是
+    「schema 不同即抛错」之外的**显式**出路：改工具集是一次运营动作，不是一次报错。
+    """
+    from aiops_diagnostics.operator import operator_tools
+
+    declared = operator_tools.tools()
+    names = {tool.name for tool in declared}
+    if manifest is not None:
+        tools = manifest.get("tools") or []
+        if not tools or any(t["name"] not in names for t in tools):
+            raise ValueError("invalid CPMS node tool template")
     schema = {
         "openapi": "3.0.3",
         "info": {"title": "CPMS 节点只读工具", "version": "1.0.0"},
         "servers": [{"url": canonical_gateway_url(gateway_url)}],
         "paths": {
-            f"/v1/operator-tools/{t['name']}": {
+            f"/v1/operator-tools/{declared_name}": {
                 "post": {
-                    "operationId": t["name"],
-                    "summary": t["description"],
+                    "operationId": declared_name,
+                    "summary": description,
                     "description": "需要节点任务授权；请使用编辑器试运行，不使用共享业务凭据。",
                     "requestBody": {
                         "required": True,
-                        "content": {"application/json": {"schema": json.loads(t["input_schema"])}},
+                        "content": {"application/json": {"schema": json.loads(EMPTY_SCHEMA)}},
                     },
                     "responses": {
                         "200": {"description": "本次授权订单的CPMS证据"},
@@ -36,7 +51,7 @@ def ensure_node_provider(console, workspace, gateway_url, manifest):
                     },
                 }
             }
-            for t in tools
+            for declared_name, description in ((t.name, t.description) for t in declared)
         },
     }
     providers = console._call(
@@ -47,7 +62,20 @@ def ensure_node_provider(console, workspace, gateway_url, manifest):
     if any(p.get("name") == "cpms-node" for p in providers):
         existing = console._call(workspace, PROVIDER_PATH + "/get?provider=cpms-node", follow_redirects=False)
         if json.loads(existing["schema"]) != schema:
-            raise ValueError("existing cpms-node schema differs; migrate explicitly")
+            if not migrate:
+                raise ValueError("existing cpms-node schema differs; migrate explicitly")
+            console._call(
+                workspace,
+                PROVIDER_PATH + "/update?provider=cpms-node",
+                method="POST",
+                follow_redirects=False,
+                body={
+                    "provider": "cpms-node",
+                    "schema_type": "openapi",
+                    "schema": json.dumps(schema, ensure_ascii=False),
+                },
+            )
+            return {"action": "migrated", "provider": "cpms-node"}
         return {"action": "unchanged", "provider": "cpms-node"}
     result = console._call(
         workspace,

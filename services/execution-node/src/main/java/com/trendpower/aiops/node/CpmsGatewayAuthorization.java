@@ -52,7 +52,7 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
     }
 
     private static String path(String run, String tool) {
-        if (!run.matches("run_[A-Za-z0-9_-]{43}") || !CpmsReadTool.NAMES.contains(tool)) {
+        if (!run.matches("run_[A-Za-z0-9_-]{43}") || !OperatorTools.declares(tool)) {
             throw CpmsReadTool.refused("invalid_tool_identity");
         }
         return "/v1/internal/operator-runs/" + run + "/tools/" + tool;

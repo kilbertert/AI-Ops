@@ -89,8 +89,10 @@ class GovernedToolRuntime extends ToolRuntime {
         if (manifest == null) return List.of(tool);
         var result = new java.util.ArrayList<org.springframework.ai.tool.ToolCallback>();
         for (var declared : manifest.tools()) {
+            // **按名称从声明装配**：名单在 operator_tools.json 里，不再写在本文件。
+            // 拒绝判据没有放松——未在声明里的工具名仍然整轮失败，只是判据从常量变成了数据。
             if (ControlledChargingStatusTool.TOOL_NAME.equals(declared.name())) result.add(tool);
-            else if (CpmsReadTool.NAMES.contains(declared.name()) && cpmsAuthorization != null)
+            else if (OperatorTools.declares(declared.name()) && cpmsAuthorization != null)
                 result.add(new CpmsReadTool(declared.name(), cpmsAuthorization));
             else throw new ExecConfigViolation("TOOLS", "发布清单包含未实现的工具");
         }
