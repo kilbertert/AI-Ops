@@ -28,16 +28,17 @@
 | [#1224](https://github.com/kilbertert/AI-Ops/pull/1224) | 双端目录、客户端准备、逐端发布、草稿预览、ADR、契约 | `8a995897` | 通过；**CD 自检失败并自动回滚**（见 §6） |
 | [#1225](https://github.com/kilbertert/AI-Ops/pull/1225) | 页面双端入口与逐端状态 | `8161b4f4` | 通过（不改 `src/`，不触发 CD） |
 | [#1226](https://github.com/kilbertert/AI-Ops/pull/1226) | 启动纳管对已在册应用 no-op | `ffa9ed64` | 通过；**CD 成功** |
-| [#1227](https://github.com/kilbertert/AI-Ops/pull/1227) | 启动纳管补齐端/环境/目标 | 已合并 | 通过；CD **排队中**（runner 被别的会话占用） |
-| 本回执 PR | 进度、阻塞、回执 | 见 PR 链接 | 仅文档 |
+| [#1227](https://github.com/kilbertert/AI-Ops/pull/1227) | 启动纳管补齐端/环境/目标 | `f4601b25` | 通过；CD 成功（曾排队约 20 分钟，runner 被另一会话占用） |
+| [#1229](https://github.com/kilbertert/AI-Ops/pull/1229) | 终态可读前先撤销取数凭据（CI 抖动定位） | `bec88a1a` | 通过；CD 成功 |
+| [#1228](https://github.com/kilbertert/AI-Ops/pull/1228) | 本回执、进度与阻塞 | `ebada0b3` | 仅文档 |
 
 **部署制品（41，`aiops-gateway-41.service`）**
 
 | 项 | 值 |
 | --- | --- |
 | 部署前版本 | `1.0.0+e30318737089` |
-| 当前线上版本 | `1.0.0+ffa9ed645e12`（CD run `41057759344` success，20:45 北京时间） |
-| 源码落点 | `/opt/aiops-41/src/aiops_diagnostics/dify/{dual_entry.py,service_keys.py,self_service_store.py,self_service.py}`，mtime `2026-10-30 20:45:26` |
+| 当前线上版本 | `1.0.0+bec88a1ae690`（#1229 的 CD success，21:4x 北京时间）；期间依次经过 `ffa9ed645e12`、`f4601b25de9f` |
+| 源码落点 | `/opt/aiops-41/src/aiops_diagnostics/dify/{dual_entry.py,service_keys.py,self_service_store.py,self_service.py}`（20:45:26 起在位，后续两次部署在同一路径更新） |
 | 恢复点 | `/var/backups/aiops-41/backup-20261030-200848`（#1224 失败时自动回滚用的那一份） |
 | 未部署 | Dify web 补丁镜像（#1225 的页面改动）—— 见 BLOCKED §1 |
 
@@ -71,7 +72,7 @@
 | K1 平台按授权目录 | PASS | BLOCKED | `test_catalogue_lists_sources_per_entry`、`test_cross_tenant_create_requires_platform` |
 | K2 改一端不影响另一端 | PASS | BLOCKED | `test_publishing_one_entry_does_not_move_the_other` |
 | K3 改一个租户不影响其他 | PASS | BLOCKED | 受管行按 `(tenant, entry, scenario)` 分键 + 同上用例；真实双租户对照未做 |
-| L1 重启后可用 | PARTIAL | PARTIAL | 契约：`test_lost_key_response_is_reconciled_not_duplicated`（凭据回读）；真实：CD 重启后 `/health` ok、受管目录 5 行可读、启动纳管在生产库上执行 —— 但"已开通客户的双端资源"尚不存在 |
+| L1 重启后可用 | PARTIAL | PARTIAL | 契约：`test_lost_key_response_is_reconciled_not_duplicated`（凭据回读）；真实：三次 CD 重启后 `/health` ok（`1.0.0+bec88a1ae690`）、受管目录 5 行可读、启动纳管在生产库上执行 —— 但"已开通客户的双端资源"尚不存在 |
 | L2 版本不匹配阻止启用 | PASS | BLOCKED | `test_restoring_a_version_of_another_app_is_refused`、`test_restoring_with_a_stale_revision_is_refused` |
 
 ## 4. 复跑命令
@@ -87,7 +88,7 @@ uv run pytest -n 0 tests/execution/test_chat_route_bindings.py \
   tests/consumer/test_consumer_publication.py tests/dify/test_dify_app_registry.py
 
 # 全量
-uv run pytest -n 4          # 3625 passed, 9 skipped（既有跳过，本次未新增 skip）
+uv run pytest -n 4          # 3626 passed, 9 skipped（既有跳过，本次未新增 skip）
 
 # 静态
 uv run ruff check src tests && uv run ruff format --check src tests
@@ -123,6 +124,7 @@ dev-host exec 41 --allow-service-exec -- curl -sS http://172.18.0.1:8788/health
 | 2 | 受管目录里 5 行 `environment` 为空 | 启动纳管只写了应用与 agent 名 | 核对生产库时发现；#1227 补齐端/场景/环境/目标并加回归；CD 排队中（不影响生产） |
 | 3 | `test_readme_architecture` / 镜像锁 变红 | 新增模块未进 README；`src/` 变更后 m2-live-03 镜像锁必须重建 | README 补两行；按仓库流程 `build-image.sh --update-lock` 重建并写回摘要 |
 | 4 | 浏览器用例旧后端兼容那条失败 | 期望"客户端勾选未选中"，而旧后端形状下根本不渲染客户端选项 | 改断言为"不渲染"，理由写进用例注释 |
+| 5 | 只改文档的 #1228 连续两次 CI 红在两个**不同**用例 | 一次是"终态先可读、取数凭据后撤销"的窗口；另一次（`test_consumer_model_reply.py:172`）原因**未定位** | #1229 修顺序并加确定性回归（观察点钉在写终态那次调用内部）；另一个抖动如实保留为未修 |
 
 失败样本**没有被重试覆盖**：CD run `41053070025` 的失败结论、主机回执、回滚备份路径都保留。
 
@@ -142,10 +144,12 @@ dev-host exec 41 --allow-service-exec -- curl -sS http://172.18.0.1:8788/health
 1. Dify web 补丁镜像未构建部署 → 页面级真实验收的前提（BLOCKED §1）。
 2. 真实消费者/员工会话未执行（BLOCKED §2）。
 3. 41 未声明渠道（BLOCKED §3）。
-4. #1227 的 CD 排队（BLOCKED §4）。
+4. `test_consumer_model_reply.py:172` 的间歇失败（同一份代码本机 3/3 通过，CI 偶发返回 200）
+   —— 原因未定位，本片未修，不宣称已修。
 5. 管家端仍不支持带知识库发布（既有约束，本次未改）。
 6. `deploy/m2-live-03/images.lock.json` 与另一条分支 `fix/readable-answer-output` 会冲突
-   （两边都改同一文件）—— 后合并的一方需要重建锁。
+   （两边都改同一文件）—— 后合并的一方需要重建锁。本片每次 `src/` 变更都重建过一次
+   （最终 `source_sha256=397d4b18…`）。
 
 **清理**
 
