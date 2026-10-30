@@ -31,7 +31,9 @@
 - [x] 迁移脚本保留运营编辑（`--replace-system` 显式开关）。
 - [x] 16 格 + 两端生命周期 + 变异用例（51 项新增，六条变异逐条转红）。
 - [x] 开发进度/validation 记录、入口与部署文档、操作知识自检。
-- [ ] PR（不合并、不部署）。
+- [x] PR（不合并、不部署）：[#1223](https://github.com/kilbertert/AI-Ops/pull/1223)，
+      分支 `feat/dify-prompt-lifecycle`，`verify` / `Workflow policy` / `spec-tree lint` 全过，
+      `mergeStateStatus=CLEAN`。**未合并、未部署。**
 
 ## 实跑结果（本机）
 

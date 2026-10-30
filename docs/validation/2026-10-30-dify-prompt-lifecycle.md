@@ -99,7 +99,14 @@ Gateway 对外行为：`/v1/assistant/questions` 的响应形状未变（只是�
 提示词）。`/v1/dify/publish|retract|restore` 未改。**未执行** `verify-aiops-gateway`——
 本轮没有改动它的路由、鉴权或注册，改了的是正文内容判据，本地 pytest 已覆盖到交付与回读。
 
-## 七、未完成（不得记作通过）
+## 七、CI（候选 PR）
+
+PR [#1223](https://github.com/kilbertert/AI-Ops/pull/1223)：
+`verify` pass（3m17s）、`Workflow policy` pass、`spec-tree lint` pass、`Devin Review` pass
+（额度耗尽，未做实质复核），`mergeStateStatus=CLEAN`。基线推进到 `origin/main` f5b6cd56
+（#1221 只加文档）后重跑全量仍是 3647 passed / 9 skipped。
+
+## 八、未完成（不得记作通过）
 
 - **业务验收未完成**：41 上的真实 Dify 应用、真实 Java 节点、真实模型、原 H5 都没有跑。
   16 格样本的"两种风格"在本地是合成文本，只证明契约与判据，不证明真实模型写得像人。
