@@ -15,3 +15,5 @@ Maven编译打包通过（该模块原无JUnit测试，不能称Java单测通过
 
 最终Java jar已按源码重建，实际HTTP报告通过；Gateway镜像构建/源码锁及临时Gateway通过。
 节点锁与HOST-CHANGE已更新为本轮实际jar，线上部署待合并。
+
+补充真实Gateway HTTP入口：合法节点凭据报告只写该环境/节点，伪造仍403；5项专项通过。
