@@ -27,7 +27,7 @@
 三处共用不强，但「逐行核对 `tenantId` 与站点集合」是安全判据
 （`operator_cpms.py:956-966`），复制三份就必然漂移，而漂移的方向永远是放宽。
 同一个理由已经在别处被验证过：`operator_cpms.py:942-955` 的响应信封校验只写了一次，
-`search_sites` 与订单诊断共用 `cpms_get` 的信封校验。
+`query_sites` 与订单诊断共用 `cpms_get` 的信封校验。
 
 用户端两个形态都要，理由不同：前端拉列表需要可缓存、可分页的 REST；用户用自然语言问
 需要对话。它们不是同一个东西的两种外观，不能只做一个。
@@ -55,7 +55,7 @@
 
 - **C 端可见范围是一个未决问题，不能顺手实现。** C 端调用者的 `DataScope` 是 `self`，
   `resolve_query_scope` 对 `self` 返回 `site_ids=None`（`identity/query_scope.py:273-281`），
-  而在 `search_sites` 里 `None` 表示**不过滤**（`operator_cpms.py:928` 只在 `site_ids != ()`
+  而在 `query_sites` 里 `None` 表示**不过滤**（`operator_cpms.py:1021` 只在 `site_ids != ()`
   时进入查询循环）。直接复用等于把整租户站点名单交给任何 C 端用户。三个候选各有不同含义：
 
   | 候选 | 含义 | 代价 |

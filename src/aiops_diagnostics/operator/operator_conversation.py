@@ -78,7 +78,7 @@ def validate(answer, question):
         # **空关键词合法**：它表示"列出我可见范围内的站点"，不是"搜某个地点"。
         # 这里曾经要求关键词非空，把「我当前有哪些站点？」判成非法 —— 而那个限制
         # 只为防模型编造搜索条件，空关键词什么都没编。范围也从来不靠关键词收窄：
-        # ``search_sites()`` 逐行核对 tenantId 与站点集合。
+        # ``query_sites()`` 逐行核对 tenantId 与站点集合。
         # 搜索正文由CPMS生成，模型进度说明既不交付也不持久化。
         answer["text"] = ""
     elif terms or not answer["text"].strip() or EXECUTED_MUTATION.search(answer["text"]):

@@ -121,7 +121,7 @@ P3 才是把查站点变成工具。
 
 ## 6. 站点能力的三个入口
 
-站点查询要用三处，共用**同一份** scope 推导（`operator_cpms.search_sites` 里逐行核对
+站点查询要用三处，共用**同一份** scope 推导（`operator_cpms.query_sites` 里逐行核对
 `tenantId` 与站点集合、每页 50 最多 4 页、员工账号的 `total` 是租户口径这个已知坑）：
 
 | 入口 | 形态 | 现状 |
@@ -132,7 +132,7 @@ P3 才是把查站点变成工具。
 
 **`GET /v1/sites` 的 C 端口径尚未决定，实现不能先于这个决定。** 现状是：C 端调用者的
 `DataScope` 是 `self`，`resolve_query_scope` 对 `self` 返回 `site_ids=None`
-（`identity/query_scope.py:273-281`），而在 `search_sites` 里 `None` 表示**不过滤**。
+（`identity/query_scope.py:273-281`），而在 `query_sites` 里 `None` 表示**不过滤**。
 直接复用等于把整租户站点名单交给任何 C 端用户。三个候选（公开目录 / 与本人订单有关联的
 站点 / 不向 C 端开放）各有不同的权限含义，需要单独一条决定，不能顺手实现。
 

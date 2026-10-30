@@ -31,7 +31,7 @@
 
 1. **`GET /v1/sites` 的 C 端可见范围未决**（ADR-0177 §后果）。C 端调用者 `DataScope` 是
    `self`，`resolve_query_scope` 对 `self` 返回 `site_ids=None`（`identity/query_scope.py:273-281`），
-   而 `search_sites` 里 `None` 表示不过滤。直接复用等于把整租户站点名单交给任何 C 端用户。
+   而 `query_sites` 里 `None` 表示不过滤。直接复用等于把整租户站点名单交给任何 C 端用户。
    三个候选已列在 ADR-0177 里，需要单独一条决定，实现不得先于它。
 2. **0176 的多轮组合面未验证**：单轮「参数是提问原文子串」成立，不代表模型连续多轮换词
    仍然安全。
