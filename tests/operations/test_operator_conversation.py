@@ -328,7 +328,16 @@ def test_a_search_that_finds_nothing_still_says_try_another_place():
 
 
 @pytest.mark.parametrize("prose", ["为您查询充电站。", "编造站点：恶意站；已退款。"])
-def test_search_ignores_model_prose_and_delivers_only_cpms_sites(operator, monkeypatch, prose):
+def test_a_site_note_written_before_the_query_is_refused(operator, monkeypatch, prose):
+    """没有取数依据的找站说明**不能**被当成查询结果交付。
+
+    这里的行为在 2026-10-30 从"静默丢掉模型的话、照常交付站点"改成了"整轮失败"。理由：
+    静默丢掉会让写提示词的人以为那段话在生效，而它一次也没有出现过；失败会明确说出
+    原因（`OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE`）。**没有任何文字因此被交付**——这一条
+    比改动前更严，不是更松。
+
+    说明写在工具结果之后的情形见 `test_a_site_note_leads_and_the_facts_follow`。
+    """
     f = operator
     answer = {**selection(), "text": prose}
     monkeypatch.setattr(
@@ -339,12 +348,57 @@ def test_search_ignores_model_prose_and_delivers_only_cpms_sites(operator, monke
     )
     assert response.status_code == 202, response.text
     final = terminal(f, response.json()["qa_id"])
-    assert final.json()["status"] == "completed", final.text
-    assert "天河测试站" in final.text and prose not in final.text
+    assert final.json()["status"] == "failed", final.text
+    assert "天河测试站" not in final.text
     assert "恶意站" not in final.text and "已退款" not in final.text
-    snapshot = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"]).snapshot
-    assert snapshot["answer"]["text"] == ""
-    assert len(f["state"]["calls"]) == 1
+
+
+def test_a_site_note_leads_and_the_facts_follow():
+    """说明负责语气，事实由系统按证据写：名单只有一份，来源与限制都在它下面。"""
+    value = {**selection(), "text": "按您当前账号可见范围，我查到的站点在下面。"}
+    conversation.validate(value, "找广州天河充电站")
+    result = site_query_for(value)
+    text = conversation.render(value, result, "zh")["blocks"][0]["text"]
+    assert text.startswith("按您当前账号可见范围")
+    assert text.index("天河测试站") > text.index("按您当前账号可见范围")
+    assert "广州市天河区测试路" in text and "未按距离排序" in text
+
+
+def site_query_for(value):
+    """按当前账号可见范围真查一次（CPMS 用测试桩）。"""
+    rows = sites()
+
+    def reader(path, tenant):
+        return {"code": 0, "data": {"records": rows, "current": 1, "size": 50, "total": 1}}
+
+    return operator_cpms.query_sites(
+        operator_cpms.SiteScope(tenant_id="TENANT-A", site_ids=None, fingerprint="f"),
+        operator_cpms.site_keywords(value),
+        reader,
+        lambda: "f",
+    )
+
+
+@pytest.mark.parametrize(
+    "note",
+    [
+        "附近有 3 个站。",  # 数量：只能由系统写
+        "都在 5 公里以内。",  # 距离：没有定位就不成立
+        "每度电 1.2 元，有空闲枪口。",  # 价格与可用性：本轮没查
+    ],
+)
+def test_a_site_note_cannot_state_facts(note):
+    value = {**selection(), "text": note}
+    with pytest.raises(operator_cpms.OperatorRefused):
+        conversation.validate(value, "找广州天河充电站")
+
+
+def test_a_site_note_cannot_retype_a_site_name():
+    """站名地址只能出现在系统列出的清单里：重抄一份就会与证据漂开。"""
+    value = {**selection(), "text": "为您查询天河测试站。"}
+    conversation.validate(value, "找广州天河充电站")
+    with pytest.raises(operator_cpms.OperatorRefused):
+        conversation.render(value, site_query_for(value), "zh")
 
 
 def complete(f, run_id, answer):

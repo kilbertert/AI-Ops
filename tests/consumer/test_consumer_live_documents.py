@@ -163,7 +163,9 @@ def test_live_publication_ignores_missing_reviewed_file_and_snapshot_contains_no
     )
     upgrade = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(upgrade)
-    flow = upgrade.live_documents({"workflow": picker_graph(["kb-own"])})["workflow"]
+    # 夹具里的 SYSTEM 与模板不同 ⇒ 迁移默认拒绝覆盖（运营可能改过它）。
+    # 这条用例测的是发布设置，所以要显式替换。
+    flow = upgrade.live_documents({"workflow": picker_graph(["kb-own"])}, replace_system=True)["workflow"]
     target = {
         "tenant_id": "TENANT-A",
         "environment": "env-a",

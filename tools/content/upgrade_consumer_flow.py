@@ -60,7 +60,23 @@ def select_knowledge(source, libraries, plugin_identifier):
     return candidate
 
 
-def live_documents(source):
+def live_documents(source, *, replace_system=False):
+    """把仓库里的 documents 契约提示词写进 answer 节点 —— **不默认覆盖运营的编辑**。
+
+    这个函数以前无条件把 SYSTEM 换成 `consumer_documents.PROMPT`。而**运营的提示词就在
+    这个 SYSTEM 里**（ADR-0187）：一次迁移就会把他们改好的语气、开头、措辞全部吞掉，
+    而且从 diff 里看不出来 —— 因为模板“也是对的”。
+
+    现在的规则：
+
+    * SYSTEM 为空（老应用）→ 写入模板，这是**初始化**。
+    * SYSTEM 与模板逐字相同 → 不动，这是**幂等**。
+    * SYSTEM 与模板不同 → 拒绝，并说明两条路：确认要丢就用 `--replace-system`，
+      要保留就先把模板的契约要求（JSON 字段、``reply`` 用法）手动补进现有提示词。
+
+    拒绝而不是静默保留：静默保留会让「模板升级了、但线上还是旧契约」看起来像成功。
+    并发编辑同理 —— 两份内容不一致就是需要人来判断的那一刻，不是脚本可以代劳的。
+    """
     from aiops_diagnostics.consumer.consumer_documents import MODE_VARIABLE, PROMPT
 
     candidate = copy.deepcopy(source)
@@ -77,8 +93,16 @@ def live_documents(source):
     language = next(v for v in nodes["start"]["variables"] if v["variable"] == "language")
     language["options"] = list(SUPPORTED_LANGUAGES)
     prompts = nodes["answer"]["prompt_template"]
-    prompts[:] = [p for p in prompts if p.get("role") != "system"]
-    prompts.insert(0, {"role": "system", "text": PROMPT})
+    current = next((p for p in prompts if p.get("role") == "system"), None)
+    edited = (current or {}).get("text", "")
+    if not replace_system and edited.strip() and edited != PROMPT:
+        raise ValueError(
+            "answer 节点的 SYSTEM 与仓库模板不同：这是运营已编辑的提示词，拒绝覆盖。"
+            "确认要丢弃请加 --replace-system；要保留请把模板里的契约要求补进现有提示词。"
+        )
+    if replace_system or not edited.strip():
+        prompts[:] = [p for p in prompts if p.get("role") != "system"]
+        prompts.insert(0, {"role": "system", "text": PROMPT})
     nodes["answer"].setdefault("memory", {})["query_prompt_template"] = (
         "{{#sys.query#}}\n回答语言必须使用 {{#start.language#}}；按系统说明的语言名称翻译资料后回答。"
     )
@@ -129,11 +153,16 @@ def main():
     parser.add_argument("--knowledge-base", action="append")
     parser.add_argument("--knowledge-plugin")
     parser.add_argument("--live-documents", action="store_true")
+    parser.add_argument(
+        "--replace-system",
+        action="store_true",
+        help="连运营已编辑的 SYSTEM 一起换成仓库模板（会丢弃他们的改动）",
+    )
     args = parser.parse_args()
     os.umask(0o077)
     source = yaml.safe_load(args.source.read_text())
     if args.live_documents:
-        result = live_documents(source)
+        result = live_documents(source, replace_system=args.replace_system)
     elif args.knowledge_base or args.knowledge_plugin:
         if not args.knowledge_base or not args.knowledge_plugin:
             parser.error("选库迁移同时需要 --knowledge-base 与 --knowledge-plugin")

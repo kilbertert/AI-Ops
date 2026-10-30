@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -15,6 +16,8 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import (
     ALLOWED_VIDEO_TYPES,
     KnowledgeSearchGuard,
 )
+
+_LOGGER = logging.getLogger("aiops.consumer")
 
 SAFETY = re.compile(
     r"冒烟|火花|烧焦|触电|裸线|导线裸露|设备浸水|异常(?:发热|过热)|"
@@ -232,11 +235,43 @@ def digest(path):
 
 def fallback(code, language, content=None):
     text = text_for(code, language)
+    support = _support_line(language, content)
+    if support:
+        text += "\n" + support
+    return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}
+
+
+#: 这三类答复**没有任何本轮证据**，所以正文可以由提示词写（运营的语气），但一个数字都不许出现。
+NOTICE_KINDS = frozenset({"clarify", "not_found", "human"})
+
+
+def _support_line(language, content):
+    """受控的客服入口行。它由**内容包**给，不由模型写。"""
     routes = (content or {}).get("support", {})
     support = routes.get(language) or routes.get("en") or routes.get("zh")
+    if not support:
+        return ""
+    label = support["label"] + ": " if routes.get(language) is support else ""
+    return label + support["url"]
+
+
+def notice(kind, reply, language, content):
+    """提示词为澄清／无结果／转人工写的正文。客服入口行仍由系统追加。
+
+    与知识正文用**同一条语言判据**：提示词写的话必须使用用户选的语言。
+    """
+    from aiops_diagnostics.common.answer_language import AnswerSurface, answer_chinese_leak
+    from aiops_diagnostics.consumer.consumer_reply import validate_notice
+
+    text = validate_notice(reply, language=language)
+    support = _support_line(language, content)
     if support:
-        label = support["label"] + ": " if routes.get(language) is support else ""
-        text += "\n" + label + support["url"]
+        text += "\n" + support
+    # 本轮没有检索，所以**没有**可豁免的资源名：retrieved_titles 是空列表，不是省略。
+    # 省略会让 #376 的豁免退回"只看形状"，于是一段编出来的小标题会被当成资源名放行。
+    surface = AnswerSurface.from_public_blocks([{"kind": "text", "text": text}], retrieved_titles=[])
+    if answer_chinese_leak(surface, language):
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_LANGUAGE_INVALID", "notice language differs")
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}
 
 
@@ -391,9 +426,18 @@ def final_answer(raw, context, language, content, *, copy_pack=None):
             pack=copy_pack,
         )
     if selected.get("reply"):
-        # 没有实时快照时正文只能来自知识库或固定文案；模型不该在这里写正文，
-        # 否则一段没有取数依据的话会被当成"知识库回答"交付出去。
-        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply without live data")
+        # 没有实时快照时正文只能来自知识库或固定文案；**但澄清／无结果／转人工**是例外：
+        # 那三类话本来就没有证据可引，判据是"一个数字都不许出现"（`validate_notice`）。
+        # 模型若想在知识类答复里写正文，仍然拒绝 —— 一段没有取数依据的话不能冒充知识库回答。
+        if kind not in NOTICE_KINDS and kind != "unavailable":
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply without live data")
+        if kind == "unavailable" or (context or {}).get("status") in {"unavailable", "limited"}:
+            # **服务故障以系统文案为准**：模型没有故障信息，让它描述故障只会多一个错处，
+            # 而一句错的故障描述比"稍后重试"更难排查。这里不报错、也不降级成模板：
+            # 交付的正是这条出口本来的系统文案。
+            _LOGGER.info("consumer notice ignored: the service, not the model, describes the failure")
+        else:
+            return notice(kind, selected["reply"], language, content)
     if kind == "knowledge":
         row = next(
             (r for r in (context or {}).get("candidates", []) if r["faq_id"] == selected["faq_id"]), None

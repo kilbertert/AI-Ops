@@ -24,15 +24,29 @@ EXECUTED_MUTATION = re.compile(
 
 SCENARIO = "operator_conversation"
 SCHEMA = "operator-conversation/1"
+
+#: 找站说明的上限。它是**一两句开场**，不是答复正文：名单、数量、来源由系统写。
+MAX_SITE_NOTE_CHARS = 400
+
+#: 说明里不得出现的断言。它们全都是**事实**，而事实只能由系统按本轮证据写出：
+#: 数字（数量／距离／价格）、价格与距离的说法、以及实时可用性。
+SITE_FORBIDDEN = re.compile(
+    r"\d|元|价格|费用|收费|多少钱|免费|距离|公里|km|千米|米内|附近|空闲|可用|充电中|有枪|排队",
+    re.IGNORECASE,
+)
+
 INSTRUCTIONS = """你是只读充电运营管家。本轮没有选定订单，不提供订单工具或历史订单上下文。
 先理解用户的问题，不要把“订单”一词等同于查询某笔订单：状态含义、操作方法、闲聊和能力咨询
 正常回答；只有需要查看某次订单事实时才用order_required，说明需要提供或选择单号。
-找站、查站点位置使用site_search，name和address_terms只从用户原话提取站名或地点关键词，
+找站、查站点位置时**先调用 cpms_site_search** 取得当前账号可见的真实结果，再据此写一两句说明。
+name和address_terms只从用户原话提取站名或地点关键词，
 例如“广州天河附近的充电站”对应name="",address_terms=["广州","天河"]。
+说明写在该工具的**结果之后**，只负责开场与归纳语气：
+不得写数字、价格、距离、空闲枪口或具体站名地址——名单、数量、截断范围、无定位限制和来源
+全部由系统按本轮 CPMS 结果列出。没有调用工具就没有结果，此时text必须为空。
 无法确定地点时正常追问地点，不猜坐标、位置、站名、距离、价格或实时枪口状态。
-问“我有哪些站点”“我有几个站点”这类**列举**问题时也用site_search，但四个字段全空：
+问“我有哪些站点”“我有几个站点”这类**列举**问题时也用同一个工具，但关键词全空：
 系统按当前账号可见范围列出站点；你不要补关键词，也不要在text里写名单。
-site_search的站点由系统按当前账号可见范围查询，text必须为空，不得在text编造查询结果。
 没有检索工具，不得声称读过知识库或业务数据。应用SOP仅作领域背景，其订单步骤仅适用于订单诊断。
 不能执行或声称执行退款、重启、停充、改配置；可以提供操作指引，危险情况优先提示安全措施。
 仅输出一个JSON对象，恰好四字段：
@@ -91,9 +105,29 @@ def validate(answer, question):
         # 这里曾经要求关键词非空，把「我当前有哪些站点？」判成非法 —— 而那个限制
         # 只为防模型编造搜索条件，空关键词什么都没编。范围也从来不靠关键词收窄：
         # ``query_sites()`` 逐行核对 tenantId 与站点集合。
-        # 搜索正文由CPMS生成，模型进度说明既不交付也不持久化。
-        answer["text"] = ""
+        #
+        # **说明文字不再一律清空**：节点先调工具取数、再据此写说明时，那段话是有依据的，
+        # 交给 `validate_site_note` 判。没有取数依据的说明由 `operator_cpms` 拒绝
+        # （见 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE`），不在这里默认放行。
+        validate_site_note(answer["text"])
     elif terms or not answer["text"].strip() or EXECUTED_MUTATION.search(answer["text"]):
+        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+
+
+def validate_site_note(text):
+    """找站说明只负责语气：任何**事实**都不许它写。
+
+    判据是穷举的，不是启发式：数字、价格、距离、可用性一律不得出现。名单、数量、截断范围、
+    无定位限制和来源由 :func:`render` 按本轮 CPMS 证据写出 —— 所以"站名地址数量保真"不是
+    靠模型自觉，而是靠它**没有位置**去写这些。
+    """
+    if not isinstance(text, str) or len(text) > MAX_SITE_NOTE_CHARS:
+        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+    if not text.strip():
+        return
+    if SITE_FORBIDDEN.search(text):
+        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+    if EXECUTED_MUTATION.search(text):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
 
 
@@ -147,6 +181,15 @@ def render(answer, sites, language):
             )
         if not sites["empty_scope"]:
             text += "\n" + sites["source"] + " · " + sites["observed_at"]
+        # 模型写的说明只能**在前**：它负责语气，事实全部在它下面由系统写出。
+        # 说明里出现结果中的站名/地址就拒 —— 名单只能有一份，重拄一份就会漂。
+        note = (answer.get("text") or "").strip()
+        if note:
+            for row in sites["sites"]:
+                for fact in (row.get("name") or "", row.get("address") or ""):
+                    if fact and fact in note:
+                        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+            text = note + "\n\n" + text
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
 
 

@@ -33,6 +33,9 @@ FORBIDDEN = ("cpms.", "status_code=", "status_role=")
 #: 快照里"读者要能核对"的金额字段。空值不要求出现 —— 没给的值不能凭空写。
 AMOUNT_FIELDS = ("order_amount", "recorded_payment_amount", "recorded_refund_amount")
 
+#: 澄清／无结果／转人工这三类正文的上限。它们是**一句话的通知**，不是答复正文。
+MAX_NOTICE_CHARS = 600
+
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 
 
@@ -70,10 +73,23 @@ def validate_reply(reply: object, snapshot: dict, *, language: str) -> str:
         except ValueError:
             continue
         if expected not in present:
+            # 金额为 0 时，"没有这一项"就是它的说法：``没有退款记录`` 已经说完了这个事实，
+            # 再要求写出 ``0`` 只会逼模型说一句不自然的话。
+            from aiops_diagnostics.consumer.consumer_facts import covers_zero
+
+            if expected == 0 and covers_zero(text, field):
+                continue
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", f"reply does not carry the recorded {field}")
     # 反过来：正文里的**每一个**数字都必须能在证据里找到出处。
     # 只要求"该有的都在"拦不住编造 —— 一段既有 2.40 又编了 2.5 的正文会照样通过。
+    # 事实的四条判据（标签绑定／货币断言／到账承诺／状态方向）。它们问的不是"数字对不对"，
+    # 而是"这句话把哪个值说成了什么" —— 数字集合比对对"合计 20，付款 27.36"无能为力。
+    from aiops_diagnostics.consumer import consumer_facts
+
+    consumer_facts.check(text, snapshot)
     allowed = _evidence_numbers(snapshot, language)
+    # 带货币单位的数字不享受"小计数"豁免：``每小时 3 元`` 是价格断言，``第 3 条`` 不是。
+    allowed -= consumer_facts.currency_claims(text)
     invented = sorted(present - allowed)
     if invented:
         raise ChatRunUnavailable(
@@ -103,3 +119,37 @@ def model_reply(reply: object, snapshot: dict, *, language: str) -> dict:
     """把模型写的正文包成 blocks-v1。前端只认 `blocks[]`，形状必须与既有答复一致。"""
     text = validate_reply(reply, snapshot, language=language)
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}
+
+
+def validate_notice(reply: object, *, language: str) -> str:
+    """校验提示词为**澄清／无结果／转人工**写的正文。
+
+    这三类答复没有任何本轮证据：没有快照、没有资料片段。所以判据比 ``validate_reply`` 更硬——
+    **一个数字都不许出现**。理由很直接：这类话里出现的数字只可能是金额、时限、单号或承诺
+    （"3 个工作日内"），而这三类答复手上什么都没有。链接也不许写：客服入口由系统按内容包
+    追加，让模型复述 URL 只会多一个出错的地方。
+
+    没有带正文时行为与之前完全一致（系统固定文案），所以老应用不受影响。
+    """
+    from aiops_diagnostics.consumer import consumer_facts
+
+    if not isinstance(reply, str) or not reply.strip():
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "notice is empty")
+    text = reply.strip()
+    if len(text) > MAX_NOTICE_CHARS:
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "notice is too long")
+    for token in FORBIDDEN:
+        if token in text:
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "notice exposes internal identifiers")
+    if _NUMBER.search(text):
+        raise ChatRunUnavailable(
+            "CHATFLOW_FACT_INVENTED_AMOUNT", "notice states a number without any evidence this turn"
+        )
+    if re.search(r"https?://|www\.", text, re.IGNORECASE):
+        raise ChatRunUnavailable(
+            "CHATFLOW_ANSWER_INVALID", "notice must not write links; the support entry is appended"
+        )
+    if consumer_facts.EXECUTED.search(text):
+        raise ChatRunUnavailable("CHATFLOW_FACT_PROMISE", "notice claims an action the system did not take")
+    consumer_facts.check_promises(text)
+    return text

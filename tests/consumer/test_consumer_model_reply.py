@@ -40,7 +40,13 @@ def test_a_reply_that_carries_the_evidence_is_accepted():
         # 漏一个金额：读者会以为那项不存在。
         ("这单合计 2.4，付款 2.40。订单号 2107546575906942977。", "recorded_refund_amount"),
         # 编一个金额：即使该有的都在，多出来的数也是编的。
-        ("这单合计 2.5，账上记的付款 2.40，已退 0。订单号 2107546575906942977。", "not in the evidence"),
+        # 这里的理由从 `not in the evidence` 换成了标签绑定 —— 数字 2.5 挂在「合计」上，
+        # 而快照的合计是 2.4。这是**更具体**的判据，不是更松的判据：旧判据只能说出
+        # 「这个数没出处」，新判据能说出「你把哪个值说成了什么」。
+        (
+            "这单合计 2.5，账上记的付款 2.40，已退 0。订单号 2107546575906942977。",
+            "CHATFLOW_FACT_LABEL_MISMATCH",
+        ),
         # 数据里没有的时长。
         ("约 47 分钟充满，合计 2.4 / 2.40 / 0。订单号 2107546575906942977。", "not in the evidence"),
         # 内部标识。
@@ -55,7 +61,10 @@ def test_a_reply_that_carries_the_evidence_is_accepted():
 def test_replies_that_break_the_evidence_are_refused(text, reason):
     with pytest.raises(ChatRunUnavailable) as excinfo:
         validate_reply(text, SNAPSHOT, language="zh")
-    assert reason in str(excinfo.value)
+    if reason.startswith("CHATFLOW_"):
+        assert excinfo.value.code == reason
+    else:
+        assert reason in str(excinfo.value)
 
 
 def test_overlong_reply_is_refused():
@@ -124,9 +133,9 @@ def test_prompt_written_reply_is_delivered_and_survives_readback(tmp_path, monke
 
     from consumer.test_consumer_live_context import ask, done
 
-    reply = (
-        f"这单已经充完电结束了。订单号 {ORDER_A}，账上记的支付金额与订单金额都按原单页面对，没有退款记录。"
-    )
+    # 状态必须与快照同向：桩返回 status=0（充电中），正文就不能说「已经结束」。
+    # 这句在引入状态方向判据之前是「合格正文」，而它与快照是矛盾的 —— 这正是该判据存在的理由。
+    reply = f"这单还在充电中。订单号 {ORDER_A}，账上记的支付金额与订单金额都按原单页面对，没有退款记录。"
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         _wire_with_reply(tmp_path, monkeypatch, reply)(env, monkeypatch, tmp_path)
         first = ask(env).json()
@@ -147,7 +156,7 @@ def test_readback_refuses_a_reply_whose_numbers_do_not_match(tmp_path, monkeypat
 
     from consumer.test_consumer_live_context import ask, done
 
-    reply = f"这单已经充完电结束了。订单号 {ORDER_A}，没有退款记录。"
+    reply = f"这单还在充电中。订单号 {ORDER_A}，没有退款记录。"
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         _wire_with_reply(tmp_path, monkeypatch, reply)(env, monkeypatch, tmp_path)
         first = ask(env).json()
@@ -174,12 +183,16 @@ def test_readback_refuses_a_reply_whose_numbers_do_not_match(tmp_path, monkeypat
 
 
 def test_reply_without_live_data_is_refused():
-    """没有实时快照时模型不许写正文，否则一段无取数依据的话会被当成知识库回答交付。"""
+    """没有实时快照时，**知识类**答复不许由模型写正文。
+
+    否则一段无取数依据的话会被当成知识库回答交付。澄清／无结果／转人工是例外：那三类
+    本来就没有证据可引，判据换成「一个数字都不许出现」（`test_notice_is_written_by_the_prompt`）。
+    """
     from aiops_diagnostics.consumer.consumer_knowledge import final_answer
 
     with pytest.raises(ChatRunUnavailable) as excinfo:
         final_answer(
-            json.dumps({"kind": "not_found", "faq_id": "", "reply": "随便说点什么"}),
+            json.dumps({"kind": "knowledge", "faq_id": "", "reply": "随便说点什么"}),
             {"status": "no_result", "candidates": []},
             "zh",
             None,
