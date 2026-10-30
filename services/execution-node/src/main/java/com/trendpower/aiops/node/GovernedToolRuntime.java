@@ -96,9 +96,18 @@ class GovernedToolRuntime extends ToolRuntime {
                 result.add(new CpmsReadTool(declared.name(), cpmsAuthorization));
             else throw new ExecConfigViolation("TOOLS", "发布清单包含未实现的工具");
         }
-        if (result.stream().map(t -> t.getToolDefinition().name()).distinct().count() != result.size()
-                || (result.contains(tool) && result.size() != 1)) {
-            throw new ExecConfigViolation("TOOLS", "状态工具不能与管家CPMS工具混用或重复");
+        // 互斥不再按工具名硬编码，而是问「这一类运行允许哪些工具」。状态工具与订单诊断工具
+        // 仍然不能混用 —— 但那是允许集合的**结果**，不是一条名字特例。
+        String schema = manifest.schema();
+        java.util.Set<String> allowed = new java.util.HashSet<>(com.trendpower.aiops.node.exec.ToolSurface.allowed(schema));
+        if (result.stream().map(t -> t.getToolDefinition().name()).distinct().count() != result.size()) {
+            throw new ExecConfigViolation("TOOLS", "工具重复");
+        }
+        for (var callback : result) {
+            String name = callback.getToolDefinition().name();
+            if (!allowed.contains(name)) {
+                throw new ExecConfigViolation("TOOLS", "该运行类型不允许这个工具：" + name);
+            }
         }
         return List.copyOf(result);
     }
