@@ -344,25 +344,47 @@ def require_result(runtime, caller, qa):
         )
     current(runtime, caller, binding)
     if run.order_no:
-        from aiops_diagnostics.consumer.consumer_knowledge import live_answer
-
         context = runtime.dify_run_store.context(run.run_id) or {}
         live = context.get("live_snapshot", {})
         if (
             live.get("order_no") != run.order_no
             or live.get("source")
             != ("cpms.orderDetail" if run.data_kind == "billing" else "cpms.chargingInfo")
-            or live_answer(
-                live,
-                run.language,
-                localized=context.get("answer_language_version") == 2,
-                pack=copy_pack(runtime, caller, context, run.language),
-            )
-            != qa.get("result")
+            or _live_answer_differs(runtime, caller, context, run, live, qa.get("result"))
         ):
             raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "live evidence differs")
     if runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):
         raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "answer evidence differs")
+
+
+def _live_answer_differs(runtime, caller, context, run, live, stored):
+    """缓存的正文还是不是**这条快照**的答复。
+
+    两条合法来源：确定性渲染（可逐字重算）与模型按编排页提示词写的正文（不可重算）。
+    后者用**同一套证据校验**判：数字必须在证据里、内部标识不许出现、订单号必须在。
+    这比"逐字重算"弱一档（一份保留了全部数字的改写会通过），但比"什么都不校验"强得多，
+    而逐字重算在模型写正文的前提下根本做不到 —— 见 ADR-0187。
+    """
+    from aiops_diagnostics.consumer.consumer_knowledge import live_answer
+
+    expected = live_answer(
+        live,
+        run.language,
+        localized=context.get("answer_language_version") == 2,
+        pack=copy_pack(runtime, caller, context, run.language),
+    )
+    if stored == expected:
+        return False
+    blocks = (stored or {}).get("blocks") or []
+    if len(blocks) != 1 or blocks[0].get("kind") != "text":
+        return True
+    from aiops_diagnostics.consumer.consumer_reply import validate_reply
+
+    try:
+        validate_reply(blocks[0].get("text"), live, language=run.language)
+    except chat_execution.ChatRunUnavailable:
+        return True
+    return False
 
 
 def copy_pack(runtime, caller, context, language):
