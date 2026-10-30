@@ -329,7 +329,8 @@ def test_operator_dispatch_waits_for_a_valid_run_after_the_old_timeout(operator,
         if spec.timeout < 82:
             raise agent_runs.AgentRunDispatchError("agent platform unavailable")
         payload = json.loads(spec.body)
-        assert 82 <= payload["timeout"] <= spec.timeout <= agent_runs.RUN_TTL_SECONDS
+        assert 82 <= spec.timeout <= agent_runs.RUN_TTL_SECONDS
+        assert payload["timeout"] == 60  # 既有平台字段不变；当前Snail内部固定等300秒。
         assert node(operator, payload["sid"]).status_code == 200
         return {"content": ""}
 
