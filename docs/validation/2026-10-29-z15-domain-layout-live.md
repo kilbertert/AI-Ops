@@ -1,12 +1,12 @@
 # 领域目录上线回执
 
-第十片（`operator/`、`health/`、`data/`）已合并 `dc9e3eac` 并部署到 41，
+领域片（`operator/`、`health/`、`data/`）已合并 `dc9e3eac` 并部署到 41，
 生产版本 `1.0.0+dc9e3eacc4c5`，服务 `active`、`business_mutations=disabled`。
 
 ## 部署核对
 
 - `/opt/aiops-41/src/aiops_diagnostics/{operator,health,data}/` 三个包存在且完整。
-- 11 个旧包根模块（`operator_cpms.py`、`ops_analysis.py`、`ops_provider.py`、`health_*.py`、
+- 12 个旧包根模块（`operator_cpms.py`、`ops_analysis.py`、`ops_analysis_narrative.py`、`ops_provider.py`、`health_*.py`、
   `rules.py`、`sources.py`、`charging_status.py`、`order_status.py`）在生产上已不存在。
 - CD `40862498121` success。
 
