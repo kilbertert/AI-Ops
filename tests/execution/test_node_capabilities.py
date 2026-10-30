@@ -57,7 +57,7 @@ def test_incompatible_executor_cannot_publish_or_restore(managed, bad):  # noqa:
 
 def test_wrong_node_token_cannot_announce_capabilities(operator):  # noqa: F811
     f = operator
-    f["settings"].agent_run_config_file = f["target"].config_file
+    f["settings"].agent_run_config_file = ""
     response = f["client"].post(
         "/v1/internal/execution-node/capabilities",
         headers={"Authorization": "Bearer forged"},
@@ -70,7 +70,7 @@ def test_authenticated_node_reports_to_its_own_environment(operator):  # noqa: F
     from execution.test_m2_close_contract import NODE_A_TOKEN
 
     f = operator
-    f["settings"].agent_run_config_file = f["target"].config_file
+    f["settings"].agent_run_config_file = ""
     payload = record_ready(f["settings"].database_file, f["target"].config_file)
     with sqlite3.connect(f["settings"].database_file) as db:
         db.execute("DELETE FROM execution_node_capabilities")

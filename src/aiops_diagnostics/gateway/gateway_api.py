@@ -3535,15 +3535,16 @@ def create_gateway_app(
         authorization: Annotated[str | None, Header()] = None,
     ):
         from aiops_diagnostics.execution.node_capabilities import record
+        from aiops_diagnostics.execution.node_publication import all_targets
 
-        if not selected_settings.agent_run_config_file:
-            raise StandardAPIError(404, "AGENT_RUN_DISABLED", "node reporting disabled")
-        config = AgentRunConfig.load(Path(selected_settings.agent_run_config_file))
-        node = config.authenticate_node((authorization or "").removeprefix("Bearer "))
-        if node is None or not node.active or node.environment != selected_settings.execution_environment:
-            raise StandardAPIError(403, "NODE_NOT_AUTHORIZED", "node not authorized")
-        record(selected_settings.database_file, config, node, payload.model_dump())
-        return {"accepted": True}
+        token = (authorization or "").removeprefix("Bearer ")
+        for path in {t.config_file for t in all_targets(selected_settings)}:
+            config = AgentRunConfig.load(Path(path))
+            node = config.authenticate_node(token)
+            if node and node.active and node.environment == selected_settings.execution_environment:
+                record(selected_settings.database_file, config, node, payload.model_dump())
+                return {"accepted": True}
+        raise StandardAPIError(403, "NODE_NOT_AUTHORIZED", "node not authorized")
 
     @app.post("/v1/orders/{order_no}/charging-status/delegated")
     def delegated_charging_status(
