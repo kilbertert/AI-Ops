@@ -52,6 +52,19 @@ DIFY_TEST_WEB_IMAGE=<候选web镜像> uv run python tools/verification/verify_co
 仅启动一次性数据根/本机合成依赖，浏览器经宿主动态回环端口访问真实Dify页面和API；结束清本次栈及卷。
 需要宿主Playwright/Chromium。浏览器并行加载会耗尽API默认10连接，隔离compose配置100；这是验收配置，不改生产参数。
 
+提示词生命周期复跑：在上述命令追加`--prompt-browser`，实际编辑SYSTEM、预览、发布和恢复，
+再从正式问答接口分别核A/B/A。合成模型只根据收到的提示词标记返回正文，证明接线，不证明风格质量。
+原始请求、截图与正式响应留在输出报告所指的一次性私有根；不提交真实会话或业务材料。
+
+管家独立页面验证追加`--operator-browser`并设置`M3NODE_DEPS`（锁定依赖根，含lib/）和
+`PROMPT_NODE_CLASSES`（编译后的Java类根，含operator_tools.json）。编译沿用
+[节点输出验收方法](../operator-cpms/output-contract-qa.md)，必须带上
+`src/aiops_diagnostics/operator/operator_tools.json`资源，不能直接复用含冲突SLF4J版本的散装缓存。
+该模式跳过客户端业务场景，使用真实Dify受管编排页、发布桥、Gateway和Java；公司身份/CPMS/模型合成。
+选用与签名包匹配的公钥，正式包公钥在`plugins/consumer_knowledge/signing/public.pem`。
+主机高负载导致超时须记录失败；日志读取超时不能跳过compose down。若清理失败，按报告的
+`DIFY_TEST_ROOT`和项目名执行同一份compose的`down --remove-orphans`，只清本次隔离栈。
+
 ## 原应用迁移与验收
 
 导出原草稿及已发布版本，记录当前正式版本和publication-targets.json摘要。

@@ -31,6 +31,9 @@
 
 私有根`~/.cache/aiops-prompt-review-resume-20261030/`保留各轮JSON、模型输出、日志与测试JUnit。
 客户端通过原件prompt-browser-r8；管家通过原件operator-browser-r9；模型model-final-16。
+最终两端联合复跑final-pages：119/119、cleanup_ok=true；各端保留三次正式响应、页面请求、
+截图与逐文件源码摘要。执行开始时head为e10b1142且有本轮未提交改动，源码摘要才是精确身份。
+已保存本地提交：b8373bfe事实修复、2025003c验收器、f06112e9管家隔离装配、af49fc09页面驱动。
 原始临时根包含截图、保存请求、运行数据库及失败；不得向公开服务复制原始记录。
 远端CI仍只证明旧e10b1142，不证明本轮未推送改动。
 推送受原交付worktree未解决合并的重叠路径阻塞；未修改该worktree。

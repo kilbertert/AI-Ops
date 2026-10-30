@@ -113,6 +113,11 @@ uv run python tools/verification/verify_consumer_chatflow.py --out <私有报告
 第一条运行实际仓库用例并保存JUnit和源码身份；第二条起临时真实Dify/Gateway，默认模型合成。
 凭据从受控清单读取，原应用正式验收在合并制品部署后执行，保留旧版本作为恢复点。
 
+续办页面命令使用`--knowledge-plugin`、`--plugin-public-key`与`--prompt-browser`；管家独立
+验证用`--operator-browser`。完整前置、锁定Java资源与清理见
+[隔离页面手册](../../agents/consumer-wf01/knowledge-picker-deploy.md)。页面测试使用合成模型，
+真实模型样本必须另记；不能只凭关键词匹配声称风格质量。各次失败保留，不累计重试为全绿。
+
 ## 六、变异验证（必须转红）
 
 | 变异 | 期望转红的用例 |
