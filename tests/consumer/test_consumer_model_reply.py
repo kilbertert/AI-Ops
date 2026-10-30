@@ -198,3 +198,31 @@ def test_legacy_two_field_answer_still_works():
         None,
     )
     assert "2.4" in answer["blocks"][0]["text"]
+
+
+# ── documents 契约（线上应用那一版）：realtime 分支同样可以写 reply ──────────
+
+
+def test_documents_contract_accepts_a_realtime_reply():
+    from aiops_diagnostics.consumer.consumer_documents import answer_selection
+
+    raw = json.dumps({"kind": "realtime", "answer": "", "reference_ids": [], "reply": GOOD})
+    kind, answer = answer_selection(raw, {"status": "live", "live_snapshot": SNAPSHOT})
+    assert kind == "realtime"
+    assert answer["blocks"][0]["text"] == GOOD
+
+
+def test_documents_contract_still_refuses_reply_on_other_kinds():
+    from aiops_diagnostics.consumer.consumer_documents import answer_selection
+
+    raw = json.dumps({"kind": "clarify", "answer": "", "reference_ids": [], "reply": "随便说"})
+    with pytest.raises(ChatRunUnavailable):
+        answer_selection(raw, {"status": "live", "live_snapshot": SNAPSHOT})
+
+
+def test_documents_contract_without_reply_still_renders_deterministically():
+    from aiops_diagnostics.consumer.consumer_documents import answer_selection
+
+    raw = json.dumps({"kind": "realtime", "answer": "", "reference_ids": []})
+    kind, answer = answer_selection(raw, {"status": "live", "live_snapshot": SNAPSHOT})
+    assert kind == "realtime" and answer is None

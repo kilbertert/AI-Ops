@@ -58,9 +58,18 @@ def answer_selection(raw, context):
         selected = json.loads(raw)
     except (ValueError, TypeError) as exc:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid document answer") from exc
+    # 线上应用（documents 契约）可以在 realtime 分支多带一个 `reply`：编排页的提示词
+    # 用它写正文。其它 kind 不许带 —— 没有取数依据的一段话不能冒充知识库回答。
     if (
         not isinstance(selected, dict)
-        or set(selected) != {"kind", "answer", "reference_ids"}
+        or not {"kind", "answer", "reference_ids"}
+        <= set(selected)
+        <= {
+            "kind",
+            "answer",
+            "reference_ids",
+            "reply",
+        }
         or not isinstance(selected.get("kind"), str)
         or selected.get("kind")
         not in {"knowledge", "realtime", "human", "clarify", "not_found", "unavailable"}
@@ -74,7 +83,13 @@ def answer_selection(raw, context):
     ):
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid document answer values")
     if selected["kind"] != "knowledge":
-        if text or references:
+        reply = selected.get("reply")
+        if reply and selected["kind"] == "realtime" and context.get("live_snapshot"):
+            # 正文由提示词写：校验后直接交付（数字必须来自本轮快照，见 consumer_reply）。
+            from aiops_diagnostics.consumer.consumer_reply import model_reply
+
+            return selected["kind"], model_reply(reply, context["live_snapshot"], language="")
+        if text or references or reply:
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "non-document answer has content")
         return selected["kind"], None
     sources = {s["reference_id"]: s for s in context.get("sources", [])}
