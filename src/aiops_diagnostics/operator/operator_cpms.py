@@ -1188,6 +1188,53 @@ def cpms_site_reader(base: str, bearer: str):
     return read
 
 
+def site_page(scope: SiteScope, body, page: int, *, outside_scope="reject"):
+    """校验站点接口的**一页**并抽出可用的行。
+
+    与 :func:`query_sites` 是同一份判据：信封、分页回显、逐行租户与站点集合、字段形状。
+    抽出来的理由是 C 端工具只要一页（它按声明的固定分页取），而它必须与整份查询用
+    同一条核对 —— 否则「同一个接口两套事实」只是时间问题。
+    """
+    data = body.get("data") if isinstance(body, dict) else None
+    if (
+        not isinstance(body, dict)
+        or type(body.get("code")) is not int
+        or body["code"] != 0
+        or not isinstance(data, dict)
+        or not isinstance(data.get("records"), list)
+        or len(data["records"]) > SITE_PAGE_SIZE
+        or type(data.get("total")) is not int
+        or data["total"] < 0
+        or data.get("current") != page
+        or type(data.get("current")) is not int
+        or data.get("size") != SITE_PAGE_SIZE
+    ):
+        raise OperatorRefused("CPMS_INVALID_RESPONSE")
+    rows: list[dict[str, str]] = []
+    for item in data["records"]:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("id"), str)
+            or not item["id"]
+            or str(item.get("tenantId") or "") != scope.tenant_id
+        ):
+            raise OperatorRefused("CPMS_SCOPE_MISMATCH")
+        if scope.site_ids is not None and str(item["id"]) not in scope.site_ids:
+            if outside_scope == "skip":
+                continue
+            raise OperatorRefused("CPMS_SCOPE_MISMATCH")
+        selected = {key: str(item.get(key) or "") for key in ("id", "name", "address")}
+        if (
+            not isinstance(item.get("name"), str)
+            or not isinstance(item.get("address"), (str, type(None)))
+            or not selected["name"]
+            or any(len(v) > 1000 for v in selected.values())
+        ):
+            raise OperatorRefused("CPMS_INVALID_RESPONSE")
+        rows.append(selected)
+    return rows, data["total"]
+
+
 def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, outside_scope="reject"):
     """按显式范围与关键词读一次站点。
 
@@ -1217,44 +1264,12 @@ def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, 
             if reauthorize() != scope.fingerprint:
                 raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
             body = read(SITE_PATH + "?" + urlencode(keywords.params(page)), scope.tenant_id)
-            data = body.get("data") if isinstance(body, dict) else None
-            if (
-                not isinstance(body, dict)
-                or type(body.get("code")) is not int
-                or body["code"] != 0
-                or not isinstance(data, dict)
-                or not isinstance(data.get("records"), list)
-                or len(data["records"]) > SITE_PAGE_SIZE
-                or type(data.get("total")) is not int
-                or data["total"] < 0
-                or data.get("current") != page
-                or type(data.get("current")) is not int
-                or data.get("size") != SITE_PAGE_SIZE
-            ):
-                raise OperatorRefused("CPMS_INVALID_RESPONSE")
-            for item in data["records"]:
-                if (
-                    not isinstance(item, dict)
-                    or not isinstance(item.get("id"), str)
-                    or not item["id"]
-                    or str(item.get("tenantId") or "") != scope.tenant_id
-                ):
-                    raise OperatorRefused("CPMS_SCOPE_MISMATCH")
-                if scope.site_ids is not None and str(item["id"]) not in scope.site_ids:
-                    if outside_scope == "skip":
-                        continue
-                    raise OperatorRefused("CPMS_SCOPE_MISMATCH")
-                selected = {key: str(item.get(key) or "") for key in ("id", "name", "address")}
-                if (
-                    not isinstance(item.get("name"), str)
-                    or not isinstance(item.get("address"), (str, type(None)))
-                    or not selected["name"]
-                    or any(len(v) > 1000 for v in selected.values())
-                ):
-                    raise OperatorRefused("CPMS_INVALID_RESPONSE")
+            page_rows, page_total = site_page(scope, body, page, outside_scope=outside_scope)
+            for selected in page_rows:
                 if selected["id"] not in seen and keywords.matches(selected):
                     seen.add(selected["id"])
                     rows.append(selected)
+            data = body["data"]
             more = page * SITE_PAGE_SIZE < data["total"]
             total = max(total, data["total"])
             if len(rows) >= SITE_MAX_SHOWN or not more or not data["records"]:
