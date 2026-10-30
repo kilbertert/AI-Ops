@@ -1,6 +1,7 @@
 """Dify同源桥后的受控业务管理端点。"""
 
 import hmac
+import json
 from typing import Annotated
 
 from fastapi import Depends, Header, Request
@@ -67,6 +68,12 @@ def register(app, context):
     service.store.recover()
     if context.settings.operator_profiles_file:
         # 迁移现有应用的管理归属，不触碰版本或正式指针。
+        #
+        # **端/场景/环境/目标必须一起带过去。** 只写应用与 agent 名会让一条客户端登记落成
+        # `environment=''`、`targets_json='{}'`：目录里有这一行，而按
+        # `(租户, 环境)` 找客户端运行目标时找不到 —— 症状是"现役客户端应用在册但发布时说
+        # 它不受管"。管家行不受影响（它不按环境查目标），所以这个缺口只会在第一次纳管
+        # 客户端应用时出现。
         for binding in context.runtime.dify_app_registry.all():
             row = service.managed(binding.app_id)
             if row:
@@ -77,6 +84,12 @@ def register(app, context):
                     agent_name=row["agent_name"],
                     profile_id=row["profile_id"],
                     actor="managed-adoption",
+                    entry=row["entry"],
+                    scenario=row["scenario"],
+                    environment=row["environment"] or context.settings.execution_environment,
+                    targets=json.loads(row.get("targets_json") or "{}")
+                    if row["entry"] == "consumer"
+                    else None,
                 )
 
     def session(request: Request, authorization: Annotated[str | None, Header()] = None):
