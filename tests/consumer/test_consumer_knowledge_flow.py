@@ -251,3 +251,32 @@ def test_same_path_changed_content_invalidates_completed_qa(tmp_path, monkeypatc
         assert done(env, qa).json()["status"] == "completed"
         path.write_text(path.read_text() + "\n")
         assert done(env, qa).status_code == 410
+
+
+def test_data_grant_is_already_revoked_when_the_result_becomes_visible(tmp_path, monkeypatch):
+    """终态可读的那一刻，取数凭据必须已经失效。
+
+    反过来（先写 completed、再撤销凭据）会留下一个窗口：任何按状态轮询的读方 ——
+    回读接口、验收脚本、客户端 —— 都可能看到"结果已交付，而这次请求的凭据仍然可用"。
+    这条用例把观察点钉在**写终态的那一次调用**上，所以它不依赖调度时序。
+    2026-10-30 的 CI 在同一份代码上时而看到 `revoked`、时而看到 `consumed`，就是这个窗口。
+    """
+    from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
+
+    with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
+        runtime, _, _ = setup(env, monkeypatch, tmp_path)
+        wire(env, monkeypatch)
+        observed = []
+        real_update = runtime.store.update_assistant_question
+
+        def watched(qa_id, **kwargs):
+            if kwargs.get("status") == "completed":
+                grant = DataGrantStore(runtime.store.path).by_token(Workflow.token)
+                observed.append(grant.state if grant else "missing")
+            return real_update(qa_id, **kwargs)
+
+        monkeypatch.setattr(runtime.store, "update_assistant_question", watched)
+        post = ask(env)
+        assert post.status_code == 202, post.text
+        assert done(env, post.json()["qa_id"]).json()["status"] == "completed"
+        assert observed == ["revoked"]
