@@ -641,9 +641,12 @@ def test_the_gate_accepts_equal_or_newer_nodes_and_rejects_older_ones(tmp_path: 
     git("update-ref", "refs/heads/work", second)
 
     def accepted(target: str, node: str) -> bool:
-        return subprocess.run(
-            ["git", "merge-base", "--is-ancestor", target, node], cwd=repo, check=False
-        ).returncode == 0
+        return (
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", target, node], cwd=repo, check=False
+            ).returncode
+            == 0
+        )
 
     assert accepted(first, first), "节点与目标同一提交必须放行"
     assert accepted(first, second), "节点晚于目标必须放行"
