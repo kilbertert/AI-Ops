@@ -41,6 +41,19 @@ SITE_MAX_SHOWN = 10
 SITE_PATH = "/chSite/page"
 
 
+def diagnoses_an_order(run) -> bool:
+    """这次运行是不是**订单诊断**。
+
+    判据是运行类型 ``run.operation``，**不是订单号是否为空**。两者今天恰好一致——
+    签发时就是按有没有订单二选一的——但一致是结果，不是判据。一旦有不需要订单的能力
+    要进工具面，这个区别就是全部差别：拿订单号当判据，那种能力在类型上就写不出来。
+
+    订单号仍承担它真正的工作（拼路径、冻结站点、比证据），只是不再兼职表达
+    "这次跑的是什么"。
+    """
+    return run.operation == SCENARIO
+
+
 def operator_scope(caller, *, allow_empty=False):
     if not caller.subject.b_user_id or caller.delegated or caller.data_scope.type not in {"all", "organ"}:
         raise OperatorRefused("OPERATOR_SITE_SCOPE_REQUIRED")
@@ -137,7 +150,7 @@ class OperatorCpms:
 
     def authorize_readback(self, caller, qa_id, bearer):
         run = self.context.agent_run_store.by_qa(qa_id)
-        caller = self.refresh_scope(caller, allow_empty=bool(run and not run.order_no))
+        caller = self.refresh_scope(caller, allow_empty=bool(run and not diagnoses_an_order(run)))
         if run is None or run.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("QA_NOT_FOUND")
         from aiops_diagnostics.execution.node_publication import all_targets
@@ -158,7 +171,7 @@ class OperatorCpms:
         )
         if target is None:
             raise OperatorRefused("OPERATOR_TARGET_MISSING")
-        if not run.order_no:
+        if not diagnoses_an_order(run):
             return self.result(caller, qa_id)
         body = cpms_get(
             target.cpms_base_url + PATHS[TOOL_NAMES[0]] + run.order_no, bearer, caller.effective_tenant_id
@@ -359,7 +372,7 @@ class OperatorCpms:
         if not task.trial:
             bound_manifest = (
                 binding.manifest_text
-                if run.order_no
+                if diagnoses_an_order(run)
                 else operator_conversation.manifest(binding.manifest_text)
             )
             if bound_manifest != run.execution_manifest:
@@ -379,7 +392,11 @@ class OperatorCpms:
 
     def publication(self, run_id, token):
         _, run, _ = self._current(run_id, node_token=token)
-        if not run.order_no and run.state == "issued" and not self.context.agent_run_store.claim(run_id):
+        if (
+            not diagnoses_an_order(run)
+            and run.state == "issued"
+            and not self.context.agent_run_store.claim(run_id)
+        ):
             raise OperatorRefused("OPERATOR_CLAIM_CONFLICT")
         return {
             "run_id": run_id,
@@ -525,7 +542,7 @@ class OperatorCpms:
             if contains_secret(raw, (task.bearer, task.grant)):
                 _answer_refused("credential")
             sites = None
-            if run.order_no:
+            if diagnoses_an_order(run):
                 validate_answer(answer, task.evidence)
                 if not set(answer["evidence_tools"]).issubset(task.delivered):
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
@@ -553,7 +570,7 @@ class OperatorCpms:
                     if name in task.delivered
                 },
             }
-            if not run.order_no:
+            if not diagnoses_an_order(run):
                 snapshot["sites"] = sites
                 snapshot["language"] = task.language
             if not store.complete(
@@ -577,7 +594,7 @@ class OperatorCpms:
             dispatcher.question = (
                 (
                     "诊断本次授权订单，按已发布SOP读取证据并输出规定JSON。用户描述仅供理解问题："
-                    if self.context.agent_run_store.get(run_id).order_no
+                    if diagnoses_an_order(self.context.agent_run_store.get(run_id))
                     else "本轮未指定订单，按管家对话协议回答或提出站点搜索条件。用户问题："
                 )
                 + json.dumps(task.question, ensure_ascii=False)
@@ -623,7 +640,7 @@ class OperatorCpms:
         if not (run.snapshot or {}).get("trial"):
             bound_manifest = (
                 binding.manifest_text
-                if run.order_no
+                if diagnoses_an_order(run)
                 else operator_conversation.manifest(binding.manifest_text)
             )
             if execution_manifest.from_text(bound_manifest).identity != run.expected_agent_version:
@@ -647,7 +664,7 @@ class OperatorCpms:
             )
         ):
             raise OperatorRefused("OPERATOR_NODE_CHANGED")
-        if not run.order_no:
+        if not diagnoses_an_order(run):
             sites = run.snapshot.get("sites")
             scope = operator_scope(caller, allow_empty=True)
             if (

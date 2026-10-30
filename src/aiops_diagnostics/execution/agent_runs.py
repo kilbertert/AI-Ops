@@ -408,6 +408,11 @@ class AgentRunStore:
                     run_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
                     scope_json TEXT NOT NULL,
+                    -- 订单号**不**改成可空：SQLite 放松 NOT NULL 要重建整张表，而这是现役
+                    -- 运行的记录，重建的风险换来的只是"看起来更对"。无订单的运行由
+                    -- ``operation`` 表达，订单号留空串。同一个判断在标准诊断表上已经做过
+                    -- 一次（那边用 ``kind`` 区分分析作业，订单号同样绑空串，见
+                    -- ``gateway_store.start_analysis_job`` 的说明）。
                     order_no TEXT NOT NULL,
                     operation TEXT NOT NULL,
                     environment TEXT NOT NULL,

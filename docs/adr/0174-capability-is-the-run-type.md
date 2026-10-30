@@ -1,24 +1,27 @@
 # 174. 能力是 run 的类型，订单只是其中一种输入
 
 日期：2026-10-30
-状态：已采纳（设计定型，尚未实施）
+状态：已采纳（设计定型，已实施；**本条曾经写错两个子项，2026-10-30 修订，见「修订」**）
 
 ## 决定
 
-`agent_runs` 增加 `capability` 列，`order_no` 改为可空；**`capability` 是选择回答协议、
-工具面与范围推导的唯一判据**，`order_no` 降级为 capability 的一项输入。
+运行类型由 `agent_runs.operation` 承担 —— 它本来就承担着这件事；**不新增 `capability` 列**，
+也**不改 `order_no` 的可空性**。`operation` 是选择回答协议、工具面与范围推导的唯一判据，
+`order_no` 降级为该类型的一项输入。
 
 ```text
-capability = cpms_order_diagnosis   inputs={order_no}      scope=order_site
-capability = cpms_site_roster       inputs={}              scope=caller_sites
-capability = cpms_site_search       inputs={name,address}  scope=caller_sites
+operation = operator_order_diagnosis   inputs={order_no}      scope=order_site
+operation = operator_conversation      inputs={}              scope=caller_sites
+operation = <今后的能力>                inputs={...}            scope=<该能力的推导>
 ```
 
-现有九处「按有没有订单分支」的判断——`operator_cpms.py:129,150,355,375,521,548,572,619,643`——
-收敛到这一个判据上。
+现有九处「按有没有订单分支」的判断（`operator_cpms.py` 的 `refresh_scope` 调用点、
+`authorize_readback`、`publication` 的领取、`_current` 与 `result` 各一份的清单选择、
+`complete` 的协议选择与快照、`_worker` 的派发提示、`result` 的渲染）收敛到
+一个谓词 `diagnoses_an_order(run)` 上。
 
-`operation` 本来就已经承担这件事（`operator_cpms.py:230` 在两条场景之间选择，
-`gateway/gateway_api.py:3663` 已经拿它当分支条件）。缺的不是新概念，是把判据收到一处、
+`operation` 本来就已经承担这件事（`operator_cpms.py` 签发时在两条场景之间选择，
+`gateway/gateway_api.py` 已经拿它当分支条件）。缺的不是新概念，是把判据收到一处、
 把「有没有订单」从判据降级为输入。
 
 ## 依据
@@ -50,19 +53,32 @@ capability = cpms_site_search       inputs={name,address}  scope=caller_sites
 回读、取消、`_current` 的复核，拆表等于把这些状态机复制 N 份，而它们的正确性靠的是
 「只有一处能改终态」这条性质。
 
+## 修订（2026-10-30，实施时发现两处写错）
+
+初版写的「增加 `capability` 列，`order_no` 改为可空」在落地时被两条证据推翻：
+
+1. **`operation` 已经是运行类型，再加一列就是同一事实的第二份真源。** 它已经被
+   `gateway_api` 用作分支条件、被 `operator_cpms` 用作两处成员校验，签发时也是按它
+   二选一。新增一个与它平行的列，只会让「哪一个是判据」重新变成问题。
+2. **`order_no` 不改为可空。** SQLite 放松 `NOT NULL` 要重建整张表，而这是现役运行的
+   记录。仓库里已经对**同一个形状**做过这个判断：标准诊断表的 `order_no` 同样绑空串、
+   用 `kind` 区分类别，理由写在 `gateway_store.start_analysis_job` 里——「重建会把每一行
+   既有诊断记录置于风险中，换来的只是一个『看起来更对』」。那张分析作业单就是活证。
+
+改后的做法比初版**更小**：不增列、不改 schema，只把九处判据收成一个谓词。
+「无订单」这个状态仍然被完整表达——由 `operation` 表达，不再由订单号是否为空兼职。
+
 ## 后果与验证
 
-- **迁移需要回填**：`order_no` 非空的行回填 `cpms_order_diagnosis`，空串的行回填
-  `operator_conversation`。回填规则必须与今天 `operator_cpms.py:230` 的选择逐行一致，
-  这是本决定唯一可机械验证的等价条件。
+- **没有迁移，也没有回填**：不增列、不改约束，历史行一个字节不动。这是修订后最直接的
+  收益——初版要回填 9 处判据对应的历史语义，现在一行数据都不用碰。
 - **命名要单独决定**：`SCENARIO_OPERATOR_DIAGNOSIS = "operator_order_diagnosis"` 现在同时
   被当作 scenario（`node_publication.py:43`、`chat_route_bindings.py:168` 的字符串比较）
-  和 operation（`operator_cpms.py:230`）。改名会同时动绑定键与路由判据，因此**不在本决定内
-  顺手改**；P0 只加 `capability` 列，命名留给独立的一次决定。
+  和 operation。改名会同时动绑定键与路由判据，因此**不在本决定内随手改**，留给独立的一次决定。
 - **清单身份不受影响**：`operation` 是 run 上的列，不在 `operator-exec-config/1` 清单里，
   清单 identity（原始字节 sha256）不变，已发布版本不需要重发。
 - 验收：行为逐字不变，用现有 `tests/operations/test_operator_cpms.py` 与
-  `tests/operations/test_operator_conversation.py` 证明等价；另加一条针对回填规则的迁移测试
-  （同一批历史行，回填前后走出的协议分支相同）。
+  `tests/operations/test_operator_conversation.py` 证明等价；另一条测试专杀「拿订单号当判据」
+  这个变异——运行类型是无订单回合但订单号非空、以及反过来，两行都必须变红。
 
 方案与分期见 [工具架构](../agents/operator-cpms/tool-architecture.md)。
