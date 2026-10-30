@@ -13,3 +13,6 @@ vp原生测试入口避免重复vitest runner；真实页面登录及使用仍�
 **未完成业务验收**。本机私有证据：aiops-dify-self-service-research/direct-takeover/workflow-*。
 
 文档/目录25项通过；最终浏览器15项，真实工作流发布组件29项，vp lint无告警。
+
+联合验收发现原生Preview按钮仍会绕到没有取数授权的Dify调试路径；受管Chatflow隐藏该按钮，
+使用同工具栏内的受管预览；普通Dify应用保留原按钮。补丁组件检查与最终构建继续更新。
