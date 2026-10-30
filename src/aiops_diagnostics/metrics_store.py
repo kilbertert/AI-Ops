@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 
 METRICS_RETENTION_DAYS = 30
 

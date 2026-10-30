@@ -1,0 +1,13 @@
+Feature: 通用原语和会话资源归包
+  Scenario: 安装后保留业务入口
+    Given 新发布包已安装
+    When 使用独立运维命令与Gateway服务
+    Then 原命令名称和接口契约保持一致
+  Scenario: 会话资源跟随包交付
+    Given 干净wheel安装
+    When 读取固定FAQ目录
+    Then 原语言条目和正文完整可用
+  Scenario: 独立桥制品仍完整
+    Given 从同一修订打包发布桥
+    When 隔离导入并运行安装与恢复检查
+    Then 通用HTTP和生命周期依赖可用

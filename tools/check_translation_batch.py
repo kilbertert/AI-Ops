@@ -184,7 +184,7 @@ def main() -> int:
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
-    catalog = _load(root / "src" / "aiops_diagnostics" / "faq_catalog.json")
+    catalog = _load(root / "src" / "aiops_diagnostics" / "conversation" / "faq_catalog.json")
     entries = catalog["platforms"][args.platform]
     source_answers = {entry["question_id"]: entry["answer"] for entry in entries}
     source_questions = {entry["question_id"]: entry["question"] for entry in entries}

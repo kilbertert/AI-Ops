@@ -27,7 +27,7 @@ from operator_support import (
     patch_transport,
 )
 
-from aiops_diagnostics.config import UpmsSettings
+from aiops_diagnostics.common.config import UpmsSettings
 from aiops_diagnostics.data.sources import SITE_SCOPE_MAX_ROWS, MySQLSource
 from aiops_diagnostics.identity.query_scope import (
     MAX_SCOPE_IDS,

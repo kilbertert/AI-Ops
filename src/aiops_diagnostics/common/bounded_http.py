@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, NoReturn
 from urllib.parse import quote, urlencode
 
-from aiops_diagnostics.http_auth import build_internal_token_headers
+from aiops_diagnostics.common.http_auth import build_internal_token_headers
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
 

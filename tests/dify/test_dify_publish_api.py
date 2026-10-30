@@ -21,7 +21,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
@@ -286,7 +286,7 @@ class _OperatorDecisions:
 
     def resolve(self, caller, *, platform_entry=None):
         self.seen.append(platform_entry)
-        from aiops_diagnostics.faq import PlatformDecision
+        from aiops_diagnostics.conversation.faq import PlatformDecision
 
         return PlatformDecision(
             platform=str(platform_entry or "consumer"), available_platforms=(), b_subject_ids=(), reason="ok"

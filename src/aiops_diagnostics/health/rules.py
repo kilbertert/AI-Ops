@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.health.health_report_copy import stop_reason_fallback, ykc_stop_reason
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 
 ORDER_STATUS = {
     0: "充电中",

@@ -8,13 +8,13 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from aiops_diagnostics.common.private_files import validate_private_file
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     ALLOWED_IMAGE_TYPES,
     ALLOWED_VIDEO_TYPES,
     KnowledgeSearchGuard,
 )
-from aiops_diagnostics.private_files import validate_private_file
 
 SAFETY = re.compile(
     r"冒烟|火花|烧焦|触电|裸线|导线裸露|设备浸水|异常(?:发热|过热)|"
@@ -346,7 +346,7 @@ def final_answer(raw, context, language, content):
 
         kind, answer = answer_selection(raw, context)
         if answer is not None:
-            from aiops_diagnostics.answer_language import (
+            from aiops_diagnostics.common.answer_language import (
                 AnswerSurface,
                 answer_chinese_leak,
                 looks_like_asset_name,

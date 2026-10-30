@@ -133,7 +133,7 @@ def test_the_walker_reaches_the_real_tables(tool, cc) -> None:
     # 实测 83 条；下限取 50，留出增删文案的余量，同时足以证伪"一条都没遍历到"。
     assert len(stale) >= 50, f"遍历没有覆盖到真实文案表，只报了 {len(stale)} 条"
     for marker in (
-        "aiops_diagnostics.i18n.QA_FALLBACK_MESSAGES",
+        "aiops_diagnostics.common.i18n.QA_FALLBACK_MESSAGES",
         "aiops_diagnostics.health.health_report_copy.HEALTH_SUMMARY_MESSAGES",
         "shortcut_lifecycle._BUNDLED_SHORTCUTS",
         "shortcut_lifecycle._SHARED_ACTION_FIELDS",

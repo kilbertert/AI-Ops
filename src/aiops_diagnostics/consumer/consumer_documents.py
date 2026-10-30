@@ -4,9 +4,9 @@ import json
 import re
 from urllib.parse import urlsplit
 
+from aiops_diagnostics.common.redaction import redact_text
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 from aiops_diagnostics.knowledge.knowledge_retrieval import _URL_PATTERN
-from aiops_diagnostics.redaction import redact_text
 
 SCHEMA = "aiops-consumer-live/1"
 MODE_VARIABLE = "knowledge_answer_mode"

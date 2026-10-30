@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.data.sources import (
     FixtureSources,
     MySQLSource,

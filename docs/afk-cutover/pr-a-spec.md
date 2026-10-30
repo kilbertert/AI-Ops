@@ -36,8 +36,8 @@
 ## 模块改动点(不指文件路径,只指模块边界)
 
 - `aiops_diagnostics.data.sources`:新增 `HybridSources`;`HttpSources` 保留(可作为"全 HTTP 模式"被显式选择,future)
-- `aiops_diagnostics.http_auth` (新):封装 HMAC-SHA256 令牌生成与请求头组装(便于单元测试)
-- `aiops_diagnostics.config.Settings`:新增 `http.base_url` `http.internal_token.secret` `http.internal_token.expire_seconds` 三个配置项(均带 `None` 缺省 + 启动时校验"若任一 HTTP 方法被调用则这三项必填")
+- `aiops_diagnostics.common.http_auth` (新):封装 HMAC-SHA256 令牌生成与请求头组装(便于单元测试)
+- `aiops_diagnostics.common.config.Settings`:新增 `http.base_url` `http.internal_token.secret` `http.internal_token.expire_seconds` 三个配置项(均带 `None` 缺省 + 启动时校验"若任一 HTTP 方法被调用则这三项必填")
 - `tests.test_hybrid_sources`(新):mock HTTP + fixture 比对
 
 ---

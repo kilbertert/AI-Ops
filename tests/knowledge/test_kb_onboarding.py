@@ -290,7 +290,7 @@ def test_verify_embedding_rejects_a_blocked_key(monkeypatch: pytest.MonkeyPatch)
             __import__("io").BytesIO(b'{"error":{"code":"InvalidApiKey"}}'),
         )
 
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.open_response", _rejected)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.open_response", _rejected)
 
     with pytest.raises(OnboardError) as caught:
         verify_embedding(base_url="https://embed.example/v1", api_key="sk-secret-1234")

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.config import UpmsSettings
+from aiops_diagnostics.common.config import UpmsSettings
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from m2_live import upms_probe

@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from aiops_diagnostics.common.private_files import validate_private_file
 from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, SyncOutcome
 from aiops_diagnostics.execution import execution_manifest
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig
@@ -19,7 +20,6 @@ from aiops_diagnostics.identity.order_visibility import (
     normalize_tenant,
     visible_orders,
 )
-from aiops_diagnostics.private_files import validate_private_file
 from aiops_diagnostics.publication.agent_lifecycle import config_from_snapshot
 
 

@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from aiops_diagnostics.answer_language import answer_chinese_leak
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.answer_language import answer_chinese_leak
+from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.data.sources import MySQLSource
 from aiops_diagnostics.identity.query_scope import QueryScope
 from aiops_diagnostics.operator.ops_analysis import (

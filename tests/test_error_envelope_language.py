@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.conversation.faq import PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore

@@ -522,4 +522,4 @@ sequenceDiagram
 | 会话身份 | `src/aiops_diagnostics/identity/third_session_auth.py:217` |
 | 令牌身份 | `src/aiops_diagnostics/identity/company_token_auth.py:281` |
 | 行级渲染（只比租户） | `src/aiops_diagnostics/identity/order_visibility.py:208` |
-| 拒绝文案与码 | `src/aiops_diagnostics/clarification.py` |
+| 拒绝文案与码 | `src/aiops_diagnostics/conversation/clarification.py` |

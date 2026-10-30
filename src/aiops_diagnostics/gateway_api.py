@@ -20,25 +20,53 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from aiops_diagnostics import __version__, request_observation
-from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS, QUESTION
-from aiops_diagnostics.clarification import (
-    CLARIFY_LANGUAGE_UNROUTABLE,
-    CLARIFY_ORDER_REQUIRED,
-    CLARIFY_WRONG_ENTRY,
-    MESSAGE_KEY_BY_CODE,
-    missing_fields_for,
+from aiops_diagnostics.common.async_job_lifecycle import DIAGNOSIS, QUESTION
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.common.http_auth import (
+    INTERNAL_TOKEN_HEADER,
+    TIMESTAMP_HEADER,
+    validate_internal_token,
 )
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.i18n import (
+    DEFAULT_LANGUAGE,
+    QA_FALLBACK_MESSAGES,
+    clarification_message,
+    diagnosis_error_message,
+    effective_language,
+    free_text_unavailable_message,
+    resolve_language,
+)
+from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.consumer import consumer_knowledge_selection
 from aiops_diagnostics.consumer.consumer_order_chat import (
     asks_latest_order,
     is_order_status_question,
     status_answer,
 )
-from aiops_diagnostics.conversation_store import (
+from aiops_diagnostics.conversation.clarification import (
+    CLARIFY_LANGUAGE_UNROUTABLE,
+    CLARIFY_ORDER_REQUIRED,
+    CLARIFY_WRONG_ENTRY,
+    MESSAGE_KEY_BY_CODE,
+    missing_fields_for,
+)
+from aiops_diagnostics.conversation.conversation_store import (
     ConversationBusy,
     ConversationError,
     ConversationStore,
+)
+from aiops_diagnostics.conversation.faq import (
+    FAQ_NOT_FOUND,
+    PLATFORM_AMBIGUOUS,
+    PLATFORM_FORBIDDEN,
+    PLATFORM_OPERATOR,
+    PLATFORM_UNAVAILABLE,
+    FAQCatalog,
+    FAQError,
+    MySQLPlatformDirectory,
+    PlatformDecision,
+    PlatformDirectoryError,
+    PlatformIdentityResolver,
 )
 from aiops_diagnostics.data.charging_status import ChargingStatusError, read_charging_status
 from aiops_diagnostics.data.sources import SourceError, scoped_mysql_source
@@ -73,19 +101,6 @@ from aiops_diagnostics.execution.agent_runs import (
     SnailDispatcher,
     scope_from_json,
 )
-from aiops_diagnostics.faq import (
-    FAQ_NOT_FOUND,
-    PLATFORM_AMBIGUOUS,
-    PLATFORM_FORBIDDEN,
-    PLATFORM_OPERATOR,
-    PLATFORM_UNAVAILABLE,
-    FAQCatalog,
-    FAQError,
-    MySQLPlatformDirectory,
-    PlatformDecision,
-    PlatformDirectoryError,
-    PlatformIdentityResolver,
-)
 from aiops_diagnostics.gateway_config import (
     GatewayServerSettings,
     parse_dify_knowledge_bindings,
@@ -96,16 +111,6 @@ from aiops_diagnostics.gateway_store import (
     ACTIVE_HEALTH_JOB_STATUSES,
     TERMINAL_DIAGNOSIS_STATUSES,
     GatewayStore,
-)
-from aiops_diagnostics.http_auth import INTERNAL_TOKEN_HEADER, TIMESTAMP_HEADER, validate_internal_token
-from aiops_diagnostics.i18n import (
-    DEFAULT_LANGUAGE,
-    QA_FALLBACK_MESSAGES,
-    clarification_message,
-    diagnosis_error_message,
-    effective_language,
-    free_text_unavailable_message,
-    resolve_language,
 )
 from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
@@ -153,7 +158,6 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import (
 )
 from aiops_diagnostics.knowledge.knowledge_sources import KnowledgeSourceResolver
 from aiops_diagnostics.metrics_store import MetricsValidationError
-from aiops_diagnostics.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.publication.agent_content import AGENT_STARTERS
 from aiops_diagnostics.publication.agent_lifecycle import (
     AGENT_MANAGE_SCOPE,

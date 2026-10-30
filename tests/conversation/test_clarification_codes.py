@@ -27,7 +27,8 @@ from operator_support import (
     assistant_app,
 )
 
-from aiops_diagnostics.clarification import (
+from aiops_diagnostics.common.i18n import CLARIFICATION_MESSAGES, SUPPORTED_LANGUAGES
+from aiops_diagnostics.conversation.clarification import (
     CLARIFICATION_CODES,
     CLARIFY_ACCOUNT_HAS_NO_SITES,
     CLARIFY_ORDER_NOT_YOURS,
@@ -35,7 +36,6 @@ from aiops_diagnostics.clarification import (
     MISSING_FIELDS_BY_CODE,
     missing_fields_for,
 )
-from aiops_diagnostics.i18n import CLARIFICATION_MESSAGES, SUPPORTED_LANGUAGES
 
 _HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "operator"}
 _OUTSIDE_QUESTION = f"订单 {ORDER_OUTSIDE} 怎么还没退款"

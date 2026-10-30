@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from zipfile import ZipFile
 
-from aiops_diagnostics.faq import (
+from aiops_diagnostics.conversation.faq import (
     PLATFORM_AMBIGUOUS,
     PLATFORM_CONSUMER,
     PLATFORM_FORBIDDEN,
@@ -18,7 +18,7 @@ from aiops_diagnostics.faq import (
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 _GENERATOR_SPEC = importlib.util.spec_from_file_location(
-    "faq_generator", Path(__file__).parents[1] / "tools/generate_faq_catalog.py"
+    "faq_generator", Path(__file__).parents[2] / "tools/generate_faq_catalog.py"
 )
 assert _GENERATOR_SPEC and _GENERATOR_SPEC.loader
 faq_generator = importlib.util.module_from_spec(_GENERATOR_SPEC)

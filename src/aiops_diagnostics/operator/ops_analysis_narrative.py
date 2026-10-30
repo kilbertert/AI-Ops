@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from aiops_diagnostics.config import AgentSettings, ProviderConfig
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
-from aiops_diagnostics.model_request import resolve_provider_api_key, structured_request
+from aiops_diagnostics.common.config import AgentSettings, ProviderConfig
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, language_name
+from aiops_diagnostics.common.model_request import resolve_provider_api_key, structured_request
 
 #: 结构化输出：**两个字符串，没有数字字段**。这是「模型写不出数字」的第一道墙——
 #: 不是提示词里的请求，而是它连一个能填数字的位置都没有。第二道墙在装配处

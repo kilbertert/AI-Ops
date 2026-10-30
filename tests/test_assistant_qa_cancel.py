@@ -12,7 +12,7 @@ ANSWER = {"text": "分时电价按峰、谷、平段分别计价。", "reminder"
 
 def _runtime(tmp_path: Path):
     """Current task store on a private temporary root."""
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
     from aiops_diagnostics.gateway_store import GatewayStore

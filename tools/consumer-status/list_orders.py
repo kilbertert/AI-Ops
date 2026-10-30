@@ -19,7 +19,7 @@ def main() -> int:
         print("缺少 AIOPS_CHECK_SESSION", file=sys.stderr)
         return 2
 
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.data.sources import scoped_mysql_source
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.identity.query_scope import resolve_query_scope

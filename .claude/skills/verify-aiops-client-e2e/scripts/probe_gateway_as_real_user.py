@@ -46,7 +46,7 @@ def _settings(config_file: pathlib.Path):
 
 
 def _runtime(config_file: pathlib.Path):
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
 
     return Settings.from_config(config_file)
 

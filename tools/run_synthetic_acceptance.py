@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aiops_diagnostics.config import SafetySettings
+from aiops_diagnostics.common.config import SafetySettings
 from aiops_diagnostics.data.sources import FixtureSources
 from aiops_diagnostics.health.health_curves import build_curves
 from aiops_diagnostics.health.health_metrics import enrich_report

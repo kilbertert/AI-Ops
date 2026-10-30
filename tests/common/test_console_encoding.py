@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 
-from aiops_diagnostics.console_encoding import configure_windows_stdio
+from aiops_diagnostics.common.console_encoding import configure_windows_stdio
 
 
 def test_windows_stdio_is_reconfigured_for_redirected_unicode_output() -> None:

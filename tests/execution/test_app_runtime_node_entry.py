@@ -29,10 +29,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.agent_runs import SUCCEEDED, AgentRunStore
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime
@@ -970,7 +970,7 @@ def test_real_tcp_post_then_poll_reaches_the_node(tmp_path, monkeypatch):
 
 
 def test_conversation_turn_keeps_the_status_qa_link(tmp_path, monkeypatch):
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
     with node_chat(tmp_path, monkeypatch) as f:
         conversations = ConversationStore(f["settings"].database_file)

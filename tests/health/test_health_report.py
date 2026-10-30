@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aiops_diagnostics.config import SafetySettings
+from aiops_diagnostics.common.config import SafetySettings
 from aiops_diagnostics.health.health_report import HealthReportError, build_minimal_health_report
 
 

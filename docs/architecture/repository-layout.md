@@ -38,6 +38,9 @@ Dify专用适配、C端知识编排和静态页面入口保留原归属。见
 第九片将12个领域模块分入operator/health/data，25测试归operations/health/data，
 见[第九片验证](../validation/2026-10-29-z10-domain-package-layout.md)。
 
+2026-10-30追加：14个通用/会话模块与FAQ资源归common/conversation，17测试同迁；
+见[本片验证](../validation/2026-10-30-common-conversation-layout.md)。
+
 后续目标：Python按consumer/knowledge/identity/publication/gateway职责形成包，测试随职责归类；
 运行服务与一次性工具分开，部署面按服务聚合。每片更新调用者、资源加载、打包、CI与现役文档，
 保留错误处理与权限校验，不新建转发空壳或永久legacy目录。

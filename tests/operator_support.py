@@ -30,8 +30,8 @@ from urllib.parse import urlsplit
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.config import Settings
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
@@ -636,7 +636,7 @@ class FakeUpmsTransport:
 
 
 def patch_transport(monkeypatch: pytest.MonkeyPatch, transport: FakeUpmsTransport) -> None:
-    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", transport)
 
 
 def mysql_settings() -> Settings:

@@ -242,7 +242,7 @@ _api.ScopedOrderAuthorizer = lambda *_a, **_k: _Authorizer()
 
 # UPMS is a MySQL database; on this host it is a stub with the one answer these
 # scenarios need (a consumer identity that may use the consumer platform).
-import aiops_diagnostics.faq as _faq
+import aiops_diagnostics.conversation.faq as _faq
 
 
 class _Directory:
