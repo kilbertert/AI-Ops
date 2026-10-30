@@ -650,13 +650,13 @@ class LoginService:
             with self._operator_token_lock:
                 now = time.time()
                 self._operator_tokens = {k: v for k, v in self._operator_tokens.items() if v[0] > now}
-                if len(self._operator_tokens) < 128:
-                    self._operator_tokens[hashlib.sha256(session.access_token.encode()).hexdigest()] = (
-                        now + self.operator_token_seconds(),
-                        identity.token,
-                        identity.user_id,
-                        identity.tenant_id,
-                    )
+                # 成功登录必须保留授权；固定条数上限会让后续租户登录成功却无法使用管家。
+                self._operator_tokens[hashlib.sha256(session.access_token.encode()).hexdigest()] = (
+                    now + self.operator_token_seconds(),
+                    identity.token,
+                    identity.user_id,
+                    identity.tenant_id,
+                )
         # 审计/日志只用**非敏感**摘要：没有公司密码、没有公司令牌、没有 Dify 会话。
         summary = {
             "company_user_id": identity.user_id,

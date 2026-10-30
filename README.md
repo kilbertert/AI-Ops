@@ -27,7 +27,7 @@
 #1153退役残留和#1159领域迁移已合并，#1161补齐供应商单层围栏JSON解析；双端历史回归见
 [领域上线](docs/validation/2026-10-29-z15-domain-layout-live.md)与[围栏修复回归](docs/validation/2026-10-29-z16-operator-fenced-answer-live.md)。
 独立Dify桥与登录代理已随#1147更新包和模块入口；模型代理生产仍为旧发布包中的等字节实现。
-2026-10-30独立验收发现后续#1168的Gateway与Java节点版本未配套，当前管家订单请求失败，不能以历史成功认定当前整链合格。
+2026-10-30独立验收发现后续#1168两端未配套，补齐Java节点后原管家H5已独立复验通过；保留首次失败证据。
 后续Gateway、通用/会话模块和工具部署目录仍待完成，详见[本轮验收](docs/validation/2026-10-30-retirement-layout-acceptance.md)。
 
 ## 一、系统与入口

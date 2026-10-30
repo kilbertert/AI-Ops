@@ -35,3 +35,10 @@
 历史故障根因准确率、长期稳定性、原生APK/IPA未完成业务验收。
 生产访问按env-41-runbook与runtime-retirement-operations，读取SQLite使用mode=ro，未构造第二个生产app。
 本次登录/QA保留正常生命周期，仅清理自己创建的浏览器和隧道；原始账号、订单、日志、截图保存在私有证据目录。
+
+## 同日补部署后的复验
+
+另一交接会话按已合并源码补部署Java `6bcc7fda-51b249810095`，摘要与本会话独立构建一致；本会话没有重复部署。
+生产current已为6bcc7fda。09:50后本会话重新正常登录原管家H5、选单、提交，QA completed，报告原页面可见、页面错误0。
+精确qa_id关联唯一run succeeded/matched/node-41，快照含cpms_order_detail和cpms_charging_samples。
+基线失败与修复后成功分别保留；本次退役/领域批次回归验收通过，不代表长期稳定性或故障准确率通过。
