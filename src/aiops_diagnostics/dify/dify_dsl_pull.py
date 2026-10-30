@@ -962,6 +962,7 @@ def sync_workflow_from_dify(
     consumer_settings: dict | None = None,
     consumer_callback_base: str = "",
     consumer_libraries=None,
+    bootstrap: Callable[[dict], dict] | None = None,
 ) -> SyncOutcome:
     """把一个**workflow**应用的当前内容冻结成新的已发布版本。
 
@@ -973,10 +974,39 @@ def sync_workflow_from_dify(
 
     Dify 没有草稿区：保存即当前内容，所以"发布"= 把这个当前内容冻结。内容没变时
     按构造是 `unchanged`，重复点发布是 no-op。
+
+    ``bootstrap`` 是给**页面开通的新客户端**留的口子：那一步之前库里没有这个 agent，
+    而"先建一个只有配置的 V1、再发一个带编排的 V2"会让客户的第一个正式版本不是 V1。
+    给定它时，agent 不存在就按它返回的配置建一个草稿，并在**同一个**版本里冻结编排；
+    它拿到的是**已经导出一次**的那份文档，所以"建 agent 用的内容"与"冻结的内容"是同一份。
+    不给它时行为逐字不变（不存在即 refused）。
     """
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig
+    from aiops_diagnostics.publication.agent_manifest import admin_context
+
     client = DifyDslClient(source)
     existing = _find_by_name(manager, context, binding.agent_name)
-    if existing is None or existing.status != "published" or existing.published_version is None:
+    # 导出**只做一次**：bootstrap 需要同一份文档来取提示词与模型，而在这一步之后再导一次
+    # 会让"建 agent 用的那一份"和"冻结的那一份"有可能不是同一份。
+    dsl_text = client.export_dsl()
+    previous: dict
+    if existing is None:
+        if bootstrap is None:
+            return SyncOutcome(
+                binding.tenant_id,
+                binding.business_entry,
+                binding.app_id,
+                binding.agent_name,
+                "refused",
+                note="agent has no published configuration",
+            )
+        config = AgentConfig(**bootstrap(yaml.safe_load(dsl_text)))
+        manager._validate_config(config, enforce_model=True)
+        existing = manager.create(
+            admin_context(binding.tenant_id), name=binding.agent_name, description="", config=config
+        )
+        previous = {"name": existing.name, "description": existing.description, **config.to_dict()}
+    elif existing.status != "published" or existing.published_version is None:
         return SyncOutcome(
             binding.tenant_id,
             binding.business_entry,
@@ -985,10 +1015,11 @@ def sync_workflow_from_dify(
             "refused",
             note="agent has no published configuration",
         )
-    previous = manager.store.version(
-        existing.agent_id, existing.tenant_id, existing.published_version
-    ).snapshot
-    candidate = workflow_content(client.export_dsl())
+    else:
+        previous = manager.store.version(
+            existing.agent_id, existing.tenant_id, existing.published_version
+        ).snapshot
+    candidate = workflow_content(dsl_text)
     if consumer_settings is not None:
         from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
 
@@ -1041,7 +1072,11 @@ def sync_workflow_from_dify(
     }
     if consumer_settings is not None:
         snapshot_body["consumer_service"] = consumer_settings
-    agent = manager.fork_draft(context, existing.agent_id, expected_revision=existing.revision)
+    agent = (
+        manager.fork_draft(context, existing.agent_id, expected_revision=existing.revision)
+        if existing.status == "published"
+        else existing
+    )
     version = manager.store.publish(
         agent.agent_id,
         binding.tenant_id,

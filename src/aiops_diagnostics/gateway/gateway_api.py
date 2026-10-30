@@ -1183,6 +1183,41 @@ def _managed_app_route(context: Any, app_id: str):
     return binding, row, workspace
 
 
+def _managed_app_draft(context: Any, app_id: str):
+    """受管但还没成为正式版的副本：给试用一条**合成**路由，不写任何指针。
+
+    `state="draft"` 与 `revision=0` 是有意的：它们让任何"按正式版解释这次试用"的代码
+    当场失败，而不是悄悄把草稿当成正式版。真正需要成立的事实只有两条 ——
+    这个应用属于这个客户，且它的工作区可解析。
+    """
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+    from aiops_diagnostics.execution.chat_route_bindings import RouteBinding
+
+    row = SelfServiceStore(context.settings.database_file).app(app_id)
+    if row is None:
+        raise StandardAPIError(404, "DIFY_APP_NOT_BOUND", "app not bound")
+    if row["entry"] != "consumer":
+        raise StandardAPIError(409, "DIFY_APP_NOT_CONSUMER", "draft preview is for consumer apps")
+    if not context.settings.chat_route_bindings_file or not context.settings.execution_environment:
+        raise StandardAPIError(404, "CHAT_ROUTE_BINDINGS_DISABLED", "managed routes disabled")
+    workspace = _workspace_for_tenant(context, row["tenant_id"])
+    binding = DifyAppBinding(row["tenant_id"], "consumer", app_id, row["agent_name"])
+    route = RouteBinding(
+        environment=context.settings.execution_environment,
+        tenant_id=row["tenant_id"],
+        entry="consumer",
+        scenario="consumer_service",
+        engine="dify",
+        agent_id="",
+        agent_version_no=0,
+        app_id=app_id,
+        state="draft",
+        revision=0,
+    )
+    return binding, route, workspace
+
+
 def _tenant_in_scope(record_tenant: object, allowed_tenant: object) -> bool:
     """这一行的租户是否落在给定范围内 —— 用共享规则判，不就地写比较。"""
     from aiops_diagnostics.identity.order_visibility import (
@@ -1205,7 +1240,14 @@ def _workflow_trial_draft(
     from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource
     from aiops_diagnostics.dify.dify_workflow_trial import WorkflowTrial
 
-    binding, row, workspace = _managed_app_route(context, app_id)
+    try:
+        binding, row, workspace = _managed_app_route(context, app_id)
+        draft = False
+    except StandardAPIError:
+        # 受管但**尚未发布**的副本：试用按它当前的内容跑。发布前先试是产品要求
+        # （"未发布副本可先预览，不要求先有正式版"），所以这里不能沿用"必须有正式路由"。
+        binding, row, workspace = _managed_app_draft(context, app_id)
+        draft = True
     # 试用的范围必须落在**绑定所属租户**上。租户那一维走共享规则
     # （`order_visibility.visible_orders`）："这一行属于哪个租户、在不在范围内"
     # 在这个仓只有一处定义，不在这里手写比较。
@@ -1242,9 +1284,11 @@ def _workflow_trial_draft(
         }
         if candidates and candidates != {selected_order}:
             raise StandardAPIError(400, "TRIAL_ORDER_MISMATCH", "试用问题与选定订单不一致")
-        previous = context.agent_manager.store.version(
-            row.agent_id, row.tenant_id, row.agent_version_no
-        ).snapshot
+        previous = (
+            context.agent_manager.store.version(row.agent_id, row.tenant_id, row.agent_version_no).snapshot
+            if row.agent_id and row.agent_version_no
+            else {}
+        )
         try:
             frozen = publication_settings(
                 workflow_content(dsl),
@@ -1258,7 +1302,7 @@ def _workflow_trial_draft(
             )
         except ValueError as exc:
             raise StandardAPIError(409, "CONSUMER_FLOW_INVALID", str(exc)) from exc
-        return ConsumerTrial(dsl, source, row, frozen, question)
+        return ConsumerTrial(dsl, source, row, frozen, question, draft=draft)
     return WorkflowTrial(dsl, source, row)
 
 

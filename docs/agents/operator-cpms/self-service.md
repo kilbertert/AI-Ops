@@ -220,3 +220,63 @@ body传该测试ID，确认success_count=1；Dify随后同步应移除对应exte
 41的ops清单不随Gateway CD更新：用`git show <合并修订>:ops/environments/env-41.toml`生成制品，
 比较线上旧摘要与新制品，`dev-host cp 41 ... --artifact-sha256 ...`传入临时路径，
 备份原文件后以原服务属主/权限原子替换；不要为验配置直接运行整份写入reconcile。
+
+## 双端开通（客户端客服 + 管家）
+
+2026-10-30 起，同一个入口一次开通两端：目录 API 的 `entries[]` 每端各列一份已发布来源，
+开通任务的 `scope` 是 `both`/`consumer`/`operator`，`sources` 每端给一个
+`{app_id, version_no}`。旧的单来源字段 `source_app_id`/`source_version` 仍然可用，
+它只表达管家。
+
+**受管应用目录在同一个库里**：`operator_apps` 的 `entry` 列决定这一行是哪一端
+（`consumer` / `operator`）。任何按 `app_id` 查行的代码**必须显式说明要哪一端** ——
+`node_publication.all_targets` 与 `self_service_config.app_binding` 都因此只读
+`entry='operator'` 的行。漏掉这一条的症状是"开通一个客户端应用，管家端全部路由不可用"。
+
+### 客户端应用是怎么来的
+
+复制所选来源**已冻结的那一版**（`agent_versions` 里带 `workflow_id` 的快照），不是模板：
+运营调好的提示词、分支和选库都在现役应用里。复制时：
+
+1. 导出该快照对应的 workflow，用摘要核对"来源在本轮期间没变过"（变了即 `SETUP_SOURCE_CHANGED`）；
+2. 把知识选择节点**整段替换**成目标客户自己的对客库（源客户库 ID 一律不得带过来）；
+3. 目标客户没有资料时**自动建一个空的对客库**（客服会答"暂无资料"，不拿别人的资料补）；
+4. 幂等导入（应用 id 由 `workspace + job + ':consumer'` 派生），响应丢失后回读同一应用；
+5. 申请 Service 凭据：先取该应用的 key 列表快照 → 创建 → 再取快照核对"新增恰好一枚" →
+   以 0600 原子写入 `<AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR>/<app_id>.key`。
+   新增 0 枚或 ≥2 枚即 `SETUP_KEY_AMBIGUOUS`，**不切正式指针**，也不删别人的 key；
+   达到 Dify 的 10 枚上限即 `SETUP_KEY_LIMIT`。
+
+受管客户端目标只支持**动态知识回答**编排（`knowledge_answer_mode=documents`）；
+旧 FAQ 流程需要内容文件，受管行没有内容文件，因此明确拒绝 `SETUP_CONSUMER_CONTENT_REQUIRED`。
+
+### 渠道状态：声明，不推导
+
+哪一端的**使用渠道**已接入，读环境清单的 `[[channels]]`：
+
+```toml
+[[channels]]
+tenant_id = "1783022023241633792"
+entry = "consumer"          # consumer | operator
+channel = "ulink-h5"        # 渠道标识，只用于展示
+state = "connected"         # connected | pending
+note = ""                   # 可选，页面原样显示
+```
+
+没有声明 ⇒ 页面显示"AI 已准备，渠道待接入"。同一 `(租户, 端)` 出现两个矛盾状态 ⇒
+启动/读取即拒绝（`SETUP_CHANNEL_DECLARATION_INVALID`），不按"后写的赢"。
+
+### 已存在正式版时只建草稿
+
+目标客户已有该端正式应用时，开通只建草稿（`draft_only=true`），原正式版继续服务；
+只有客户主动点发布才推进指针。双端**不是一个事务**：一端失败另一端继续，整体 `partial`，
+重试只续跑失败端（已完成端不重复创建、不重复发布）。
+
+### 本地可复跑的关闭态验证
+
+```bash
+uv run python tools/verification/check_dual_entry_management.py --out var/verify-evidence
+```
+
+在一次性数据根起真实 Gateway，断言管理面匿名/错密钥/未启用平台一律被拒，且被拒的请求
+**不产生任何开通任务行**。它不证明真实 Dify 上的复制与凭据申请，也不证明真实用户可用。

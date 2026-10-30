@@ -721,6 +721,35 @@ class KbServiceClient:
             )
         return result
 
+    def create_knowledge_base(self, name: str, description: str = "") -> dict[str, Any]:
+        """在这个租户的空间里建一个**空**库。
+
+        为什么开通需要这个：客户端 Chatflow 的知识选择节点要求至少一个库（发布契约
+        `selected_libraries` 是 1..20），而新客户的空间里什么都没有。
+        拿别的客户的库填上去是数据事故；建一个空库、让客服老实说“暂无资料”才是要的行为。
+
+        幂等不在这一层：调用方先按名字列表匹配，命中就复用（`prepare.customer_knowledge_base`）。
+        """
+        if not name.strip() or len(name) > 128:
+            raise ValueError("knowledge base name is required")
+        url = join_url(self.base_url, "/kb/knowledge-bases")
+        headers = {"Content-Type": JSON_CONTENT_TYPE, **tenant_id_header(self.tenant_id)}
+        if self.service_token:
+            headers["Authorization"] = bearer_auth_header(self.service_token)
+        payload = request_json(
+            RequestSpec(
+                url=url,
+                method="POST",
+                headers=headers,
+                body=json_body({"name": name, "description": description}),
+                timeout=self.timeout,
+            ),
+            mapping=self._error_mapping(),
+            envelope=parse_data_key_envelope,
+        )
+        row = payload if isinstance(payload, Mapping) else {}
+        return dict(row)
+
     def search(self, knowledge_base_ids: tuple[str, ...], question: str, top_k: int) -> list[dict[str, Any]]:
         if not knowledge_base_ids:
             return []
