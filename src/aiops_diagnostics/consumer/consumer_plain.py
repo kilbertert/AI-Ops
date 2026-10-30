@@ -144,21 +144,27 @@ WORDS: dict[str, dict[str, str]] = {
 _TRADITIONAL_STATUS = {"充电中": "充電中", "充电结束": "充電結束", "未知": "未知"}
 
 
-def words(language: str) -> dict[str, str]:
-    """取词表。未收录的语种退回英文 —— 与既有实现同样的降级方向。"""
+def words(language: str, pack: dict[str, str] | None = None) -> dict[str, str]:
+    """取词表。`pack` 是租户文案包（已合并内置默认），None 就用内置文案。
+
+    未收录的语种退回英文 —— 与既有实现同样的降级方向。降级发生在**内置**层，
+    不在租户层：租户只发布了中文时，德语仍然拿内置德语，而不是中文。
+    """
+    if pack is not None:
+        return pack
     if language in WORDS:
         return WORDS[language]
     return WORDS["zh-Hant"] if language.startswith("zh") else WORDS["en"]
 
 
-def source_label(language: str, source: object) -> str:
+def source_label(language: str, source: object, pack: dict[str, str] | None = None) -> str:
     """内部来源标识换成人话。不认识的来源不猜含义，只说「业务记录」。"""
-    table = words(language)
+    table = words(language, pack)
     return table[SOURCE_KEYS.get(str(source), "source_unknown")]
 
 
-def refund_text(language: str, refund_status: object) -> str:
-    table = words(language)
+def refund_text(language: str, refund_status: object, pack: dict[str, str] | None = None) -> str:
+    table = words(language, pack)
     return table[REFUND_CODES.get(str(refund_status), "refund_unknown")]
 
 
@@ -170,10 +176,10 @@ def _amount(value: object) -> str | None:
     return text or None
 
 
-def _status_name(language: str, snapshot: dict) -> str:
+def _status_name(language: str, snapshot: dict, pack: dict[str, str] | None = None) -> str:
     from aiops_diagnostics.health.rules import status_label as business_status_label
 
-    table = words(language)
+    table = words(language, pack)
     role = snapshot["status_role"]
     if language == "en":
         return str(role).replace("_", " ")
@@ -185,28 +191,28 @@ def _status_name(language: str, snapshot: dict) -> str:
     return label
 
 
-def status_text(language: str, snapshot: dict) -> str:
-    table = words(language)
+def status_text(language: str, snapshot: dict, pack: dict[str, str] | None = None) -> str:
+    table = words(language, pack)
     colon = table["colon"]
     note = table["status_note"]
     if snapshot["status_role"] == "unknown":
         note += table["status_unknown_note"]
     return "\n".join(
         [
-            table["status_lede"].format(status=_status_name(language, snapshot)),
+            table["status_lede"].format(status=_status_name(language, snapshot, pack)),
             "",
             f"{table['status_order']}{colon}{snapshot['order_no']}",
             f"{table['status_time']}{colon}{readable_time(snapshot['observed_at'])}",
             "",
             note,
-            table["source_line"].format(source=source_label(language, snapshot["source"])),
+            table["source_line"].format(source=source_label(language, snapshot["source"], pack)),
         ]
     )
 
 
-def billing_text(language: str, snapshot: dict) -> str:
-    table = words(language)
-    refund = refund_text(language, snapshot["refund_status"])
+def billing_text(language: str, snapshot: dict, pack: dict[str, str] | None = None) -> str:
+    table = words(language, pack)
+    refund = refund_text(language, snapshot["refund_status"], pack)
     amount = _amount(snapshot["order_amount"])
     paid = _amount(snapshot["recorded_payment_amount"])
     refunded = _amount(snapshot["recorded_refund_amount"])
@@ -235,7 +241,7 @@ def billing_text(language: str, snapshot: dict) -> str:
     if refunded is not None:
         refund_item += table["billing_refunded"].format(value=refunded)
 
-    source = source_label(language, snapshot["source"])
+    source = source_label(language, snapshot["source"], pack)
     return "\n".join(
         [
             lede,

@@ -488,6 +488,61 @@ class GatewayStore:
                 ).fetchall()
         return [dict(row) for row in rows]
 
+    def publish_consumer_copy(self, tenant_id: str, bundle: dict[str, Any], *, published_by: str) -> int:
+        """发布一版租户文案包，返回版本号。
+
+        **只增不改**：每次发布写一行新版本，历史版本留着 —— 答复在生成时钉住版本，
+        回读要按那一版复现，删掉旧版就等于让在途答复无法核对。
+
+        内容与当前最新版完全相同时**不产生新版本**：重复发布同一份内容不该让版本号
+        白白前进，否则"哪一版改了字"这件事在版本号上就看不出来了。
+        """
+        import json as _json
+        from datetime import UTC, datetime
+
+        payload = _json.dumps(bundle, ensure_ascii=False, sort_keys=True)
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT version, payload_json FROM consumer_copy_bundles "
+                "WHERE tenant_id = ? ORDER BY version DESC LIMIT 1",
+                (tenant_id,),
+            ).fetchone()
+            if row is not None and row["payload_json"] == payload:
+                return int(row["version"])
+            version = int(row["version"]) + 1 if row is not None else 1
+            connection.execute(
+                "INSERT INTO consumer_copy_bundles "
+                "(tenant_id, version, payload_json, published_at, published_by) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (tenant_id, version, payload, datetime.now(UTC).isoformat(), published_by),
+            )
+        return version
+
+    def consumer_copy(self, tenant_id: str, version: int | None = None) -> tuple[int, dict[str, Any]]:
+        """取租户文案包。`version=None` 取当前最新版；没有发布过返回 `(0, {})`。
+
+        版本 0 表示"从未发布"，渲染时就是内置文案 —— 这条分支必须存在且安静：
+        没配置过文案的租户不该因为缺配置而拿不到答复。
+        """
+        import json as _json
+
+        with self._connection() as connection:
+            if version is None:
+                row = connection.execute(
+                    "SELECT version, payload_json FROM consumer_copy_bundles "
+                    "WHERE tenant_id = ? ORDER BY version DESC LIMIT 1",
+                    (tenant_id,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT version, payload_json FROM consumer_copy_bundles "
+                    "WHERE tenant_id = ? AND version = ?",
+                    (tenant_id, version),
+                ).fetchone()
+        if row is None:
+            return 0, {}
+        return int(row["version"]), _json.loads(row["payload_json"])
+
     def create_trial_job(
         self,
         scope_fingerprint: str,
@@ -1214,6 +1269,14 @@ class GatewayStore:
                     ON publish_audit_ledger(at DESC);
                 CREATE INDEX IF NOT EXISTS idx_publish_audit_app
                     ON publish_audit_ledger(app_id, at DESC);
+                CREATE TABLE IF NOT EXISTS consumer_copy_bundles (
+                    tenant_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    published_at TEXT NOT NULL,
+                    published_by TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, version)
+                );
                 -- 知识库控制台的访问账本（#926 / PRD #923）。
                 --
                 -- **为什么需要它**：登录代理用「租户 owner」身份进 RAGFlow，所以 RAGFlow

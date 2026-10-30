@@ -90,7 +90,7 @@ def read_billing_record(base_url, order_no, *, tenant_id, user_id):
     }
 
 
-def billing_answer(snapshot, language):
+def billing_answer(snapshot, language, *, pack: dict[str, str] | None = None):
     """本人这张单的账务记录。
 
     措辞来自 `consumer_plain`：先把「这单多少钱、付了多少、退没退」说成一句，
@@ -101,8 +101,8 @@ def billing_answer(snapshot, language):
     from aiops_diagnostics.consumer.consumer_plain import billing_text
 
     if language in COPY:
-        return live_answer(snapshot, language, "billing")
+        return live_answer(snapshot, language, "billing", pack=pack)
     return {
-        "blocks": [{"kind": "text", "text": billing_text(language, snapshot)}],
+        "blocks": [{"kind": "text", "text": billing_text(language, snapshot, pack)}],
         "retrieval_status": "not_found",
     }

@@ -318,7 +318,7 @@ def select_context(runtime, caller, binding, query, language, qa_id):
     return {"status": status, "candidates": list(candidates.values())[:5]}
 
 
-def live_answer(snapshot, language, *, localized=True):
+def live_answer(snapshot, language, *, localized=True, pack=None):
     if not localized:
         language = (
             ("zh" if language.startswith("zh") else "en")
@@ -328,13 +328,13 @@ def live_answer(snapshot, language, *, localized=True):
     if snapshot.get("source") == "cpms.orderDetail":
         from aiops_diagnostics.consumer.consumer_billing import billing_answer
 
-        return billing_answer(snapshot, language)
+        return billing_answer(snapshot, language, pack=pack)
     from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
-    return status_answer(snapshot, language, localized=localized)
+    return status_answer(snapshot, language, localized=localized, pack=pack)
 
 
-def final_answer(raw, context, language, content):
+def final_answer(raw, context, language, content, *, copy_pack=None):
     if (context or {}).get("status") == "safety":
         return fallback("safety", language, content)
     if (context or {}).get("status") == "photo_unreadable":
@@ -375,7 +375,10 @@ def final_answer(raw, context, language, content):
         if kind != "realtime" or selected["faq_id"]:
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "live answer kind differs")
         return live_answer(
-            context["live_snapshot"], language, localized=context.get("answer_language_version") == 2
+            context["live_snapshot"],
+            language,
+            localized=context.get("answer_language_version") == 2,
+            pack=copy_pack,
         )
     if kind == "knowledge":
         row = next(
@@ -553,6 +556,9 @@ def callback_context(
     )
     result["followup"] = followup
     result["answer_language_version"] = 2
+    # 钉住本轮所用的**文案版本**：答复生成后运营可能又发布一版措辞，
+    # 回读必须按生成时那一版复现（见 consumer_copy.resolve）。
+    result["copy_version"] = runtime.store.consumer_copy(caller.effective_tenant_id)[0]
     if binding.callback_version == 4:
         result["mode"] = "documents"
     valid()
