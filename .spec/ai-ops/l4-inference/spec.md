@@ -2,19 +2,19 @@
 title: l4-inference
 desc: 业务路线与一次性模型请求
 code:
-  - src/aiops_diagnostics/model_request.py
+  - src/aiops_diagnostics/common/model_request.py
 related:
   - src/aiops_diagnostics/consumer/consumer_intent.py
   - src/aiops_diagnostics/consumer/consumer_chat_service.py
   - src/aiops_diagnostics/operator/ops_analysis_narrative.py
   - src/aiops_diagnostics/dify/dify_trial.py
-  - src/aiops_diagnostics/answer_language.py
+  - src/aiops_diagnostics/common/answer_language.py
   - src/aiops_diagnostics/publication/qa_rag.py
   - src/aiops_diagnostics/publication/agent_debug.py
   - src/aiops_diagnostics/dify/dify_dsl_pull.py
-  - src/aiops_diagnostics/faq.py
+  - src/aiops_diagnostics/conversation/faq.py
   - src/aiops_diagnostics/publication/agent_manifest.py
-  - src/aiops_diagnostics/clarification.py
+  - src/aiops_diagnostics/conversation/clarification.py
   - src/aiops_diagnostics/dify/dify_tools_catalog.py
   - src/aiops_diagnostics/dify/dify_console_publish.py
   - src/aiops_diagnostics/dify/dify_knowledge_api.py

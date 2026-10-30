@@ -371,7 +371,7 @@ def test_busy_diagnosis_records_diagnosis_route_not_qa(tmp_path: Path) -> None:
 
     class _Busy:
         def begin_turn(self, *args, **kwargs):
-            from aiops_diagnostics.conversation_store import ConversationBusy
+            from aiops_diagnostics.conversation.conversation_store import ConversationBusy
 
             raise ConversationBusy("busy")
 

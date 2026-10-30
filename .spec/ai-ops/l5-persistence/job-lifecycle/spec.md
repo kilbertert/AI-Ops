@@ -3,7 +3,7 @@ title: job-lifecycle
 desc: 异步作业生命周期的唯一定义——四张表共用它
 hue: 30
 code:
-  - src/aiops_diagnostics/async_job_lifecycle.py#claim_guard
+  - src/aiops_diagnostics/common/async_job_lifecycle.py#claim_guard
 ---
 # job-lifecycle
 

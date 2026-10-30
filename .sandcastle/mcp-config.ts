@@ -104,7 +104,7 @@ export function mcpServers(): Record<string, { command: string; args: string[] }
       //
       //   without --project: Error: No active project, known projects: []
       //   with    --project: [{name_path:"AgentSettings", kind:"Class",
-      //                       relative_path:"src/aiops_diagnostics/config.py", …}]
+      //                       relative_path:"src/aiops_diagnostics/common/config.py", …}]
       //
       // The path is the sandbox's mount point, not the host's: this config is
       // read inside the container, where the repository always lands at the same

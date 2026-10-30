@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.data.sources import SourceError, TDengineSource
 
 ALLOWED = frozenset({"GUN-01", "PILE-01"})

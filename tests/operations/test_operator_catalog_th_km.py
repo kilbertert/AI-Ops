@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from aiops_diagnostics.faq import FAQCatalog
-from aiops_diagnostics.i18n import (
+from aiops_diagnostics.common.i18n import (
     SUPPORTED_LANGUAGES,
     can_prompt_in,
     chinese_leak,
     free_text_unavailable_message,
     resolve_language,
 )
+from aiops_diagnostics.conversation.faq import FAQCatalog
 
 _READ_ONLY = ("th", "km")
 
@@ -118,7 +118,7 @@ class _Authorizer:
 
 class _Directory:
     def roles_for_c_user(self, c_user_id: str, tenant_id: str):
-        from aiops_diagnostics.faq import PlatformRoleRecord
+        from aiops_diagnostics.conversation.faq import PlatformRoleRecord
 
         return (PlatformRoleRecord("B-1", c_user_id, tenant_id, "consumer"),)
 
@@ -165,7 +165,7 @@ class _Jobs:
 def _client(tmp_path, *, allowed_orders: set[str] | None = None):
     from fastapi.testclient import TestClient
 
-    from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
+    from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver
     from aiops_diagnostics.gateway_api import create_gateway_app
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.gateway_store import GatewayStore

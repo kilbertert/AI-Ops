@@ -7,7 +7,7 @@ from threading import Thread
 
 import pytest
 
-from aiops_diagnostics.config import ProviderConfig
+from aiops_diagnostics.common.config import ProviderConfig
 from aiops_diagnostics.consumer.consumer_intent import classify
 
 DECISION = {"intent": "order_status", "order_reference": "latest", "uses_context": False}

@@ -9,9 +9,9 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.common.model_request import resolve_provider_api_key
 from aiops_diagnostics.consumer import consumer_intent
-from aiops_diagnostics.model_request import resolve_provider_api_key
 
 
 def main():

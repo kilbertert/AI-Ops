@@ -11,11 +11,11 @@ from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import dotenv_values
 
-from aiops_diagnostics.platform_paths import (
+from aiops_diagnostics.common.platform_paths import (
     default_config_file,
     default_key_dir,
 )
-from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
+from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
 
 
 def _env(name: str, default: str = "", values: Mapping[str, str | None] | None = None) -> str:

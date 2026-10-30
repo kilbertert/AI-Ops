@@ -12,8 +12,8 @@ from typing import Any, Protocol
 
 import pymysql
 
-from aiops_diagnostics.config import Settings
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.identity.scope_context import ScopeContext
 
 PLATFORM_CONSUMER = "consumer"
@@ -276,7 +276,7 @@ class FAQCatalog:
 
     @classmethod
     def bundled(cls) -> FAQCatalog:
-        raw = files("aiops_diagnostics").joinpath("faq_catalog.json").read_text(encoding="utf-8")
+        raw = files("aiops_diagnostics.conversation").joinpath("faq_catalog.json").read_text(encoding="utf-8")
         return cls(json.loads(raw))
 
     def _localized(

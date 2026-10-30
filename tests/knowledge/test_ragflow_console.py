@@ -274,7 +274,7 @@ def test_the_ledger_records_refusals_too(tmp_path: Path) -> None:
 def _gateway(tmp_path: Path, ragflow: Any, **overrides: Any):
     from fastapi.testclient import TestClient
 
-    from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
+    from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver
     from aiops_diagnostics.gateway_api import create_gateway_app
     from aiops_diagnostics.gateway_config import GatewayServerSettings
 

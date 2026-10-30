@@ -3,7 +3,7 @@
 import pytest
 from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
-from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES
 from consumer.test_consumer_chat_service import Client, done
 from consumer.test_consumer_live_context import ask, wire
 from consumer.test_consumer_semantic_routing import semantic

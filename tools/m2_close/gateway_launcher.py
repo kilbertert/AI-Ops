@@ -103,7 +103,7 @@ class LocalPlatformDirectory:
     """
 
     def roles_for_c_user(self, c_user_id: str, tenant_id: str):
-        from aiops_diagnostics.faq import PlatformRoleRecord
+        from aiops_diagnostics.conversation.faq import PlatformRoleRecord
 
         return (PlatformRoleRecord("", c_user_id, tenant_id, "admin"),) if c_user_id else ()
 
@@ -179,7 +179,7 @@ class SyntheticOrderAuthorizer:
 
 def SQLiteConversationStore(database_file: Path):  # noqa: N802 - 构造器语义
     """本切片不碰会话存储：用仓库自己的实现指向同一个库，不新增替身。"""
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
     return ConversationStore(database_file)
 
@@ -196,7 +196,7 @@ def main() -> int:
     store = GatewayStore(settings.database_file)
     platform_resolver = None
     if os.environ.get("AIOPS_M2_PLATFORM_CONSUMER") == "1":
-        from aiops_diagnostics.faq import PlatformIdentityResolver
+        from aiops_diagnostics.conversation.faq import PlatformIdentityResolver
 
         platform_resolver = PlatformIdentityResolver(LocalPlatformDirectory())
     app = create_gateway_app(

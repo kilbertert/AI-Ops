@@ -24,9 +24,9 @@ from pathlib import Path
 
 import pytest
 
-SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
+SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 #: Dotted path, as `ast` reads it: the module that owns the shared entry point.
-GUARD_MODULE = "aiops_diagnostics.answer_language"
+GUARD_MODULE = "aiops_diagnostics.common.answer_language"
 #: The one file that may define the entry point rather than call it.
 GUARD_FILE = f"{GUARD_MODULE.rsplit('.', 1)[-1]}.py"
 #: The shared entry point every finalisation point must judge through.
@@ -317,7 +317,7 @@ def test_the_enumeration_covers_every_finalisation_point() -> None:
 # --------------------------------------------------------------------------
 
 _SYNTHETIC_HEADER = (
-    "from aiops_diagnostics.answer_language import AnswerSurface, answer_chinese_leak\n"
+    "from aiops_diagnostics.common.answer_language import AnswerSurface, answer_chinese_leak\n"
     "\n"
     "\n"
     "def judge(blocks, payload, language):\n"

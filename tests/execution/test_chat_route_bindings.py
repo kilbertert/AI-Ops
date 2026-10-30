@@ -807,7 +807,7 @@ def test_retracting_settles_a_live_trial_with_the_trials_own_credentials(tmp_pat
     """
     import os
 
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime, JobRegistration
     from aiops_diagnostics.gateway_store import GatewayStore

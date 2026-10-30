@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
     RequestSpec,
     bearer_auth_header,
@@ -14,8 +14,8 @@ from aiops_diagnostics.bounded_http import (
     json_body,
     request_json,
 )
-from aiops_diagnostics.config import AgentSettings, ProviderConfig
-from aiops_diagnostics.private_files import (
+from aiops_diagnostics.common.config import AgentSettings, ProviderConfig
+from aiops_diagnostics.common.private_files import (
     PrivatePathError,
     validate_private_directory,
     validate_private_file,

@@ -74,7 +74,7 @@
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/model_request.py",
+          "path": "src/aiops_diagnostics/common/model_request.py",
           "label": "code"
         }
       ],
@@ -170,7 +170,7 @@
           "label": "spec"
         },
         {
-          "path": "src/aiops_diagnostics/config.py",
+          "path": "src/aiops_diagnostics/common/config.py",
           "label": "code"
         }
       ],

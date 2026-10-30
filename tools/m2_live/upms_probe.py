@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from aiops_diagnostics.config import Settings, UpmsSettings
+from aiops_diagnostics.common.config import Settings, UpmsSettings
 from aiops_diagnostics.identity.scope_context import ScopeError
 from aiops_diagnostics.identity.third_session_auth import UpmsBSubjectDirectory
 

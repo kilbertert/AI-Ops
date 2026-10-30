@@ -218,7 +218,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, "/opt/aiops-41/src")          # 线上代码；不是本仓 checkout
 import pymysql
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 s = Settings.from_config(Path("/etc/aiops-41/production.env"))
 c = pymysql.connect(host=s.mysql.host, port=s.mysql.port, user=s.mysql.user,
                     password=s.mysql.password, database="qumall_upms")
@@ -731,7 +731,7 @@ cd /opt/aiops-41 && MP=$(systemctl show -p MainPID --value aiops-gateway-41)
 runuser -u aiops41 -- env $(tr '\0' '\n' < /proc/$MP/environ | grep -E '^AIOPS_' | xargs -d'\n') \
   .venv/bin/python - <<'EOF'
 import pathlib
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 s = Settings.from_config(GatewayServerSettings.from_env().server_config_file)
 print([p.name for p in s.agent.provider_chain(None)])
@@ -1868,7 +1868,7 @@ ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiop
 from pathlib import Path
 import sqlite3
 from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutStore
-from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES as L
+from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES as L
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
 # 请求返回的是【按租户合并】后的列表，所以要按**真实租户**逐个复核，不能只看平台行：
 # 租户发布了同名覆盖动作时，其译文缺口不会出现在平台行的统计里。

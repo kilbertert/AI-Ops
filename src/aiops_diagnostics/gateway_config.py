@@ -10,11 +10,11 @@ from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
-from aiops_diagnostics.config import selected_config_file
+from aiops_diagnostics.common.config import selected_config_file
+from aiops_diagnostics.common.platform_paths import config_root, data_root
+from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
 from aiops_diagnostics.deployment_environment import canonical_environment
 from aiops_diagnostics.gateway_logging import DEFAULT_LOG_LEVEL, parse_log_level
-from aiops_diagnostics.platform_paths import config_root, data_root
-from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 
 SAFE_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 

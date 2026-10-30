@@ -163,7 +163,7 @@ class Deps:
 
 
 def default_deps(*, config_file: str, session: str) -> Deps:
-    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.common.config import Settings
     from aiops_diagnostics.data.charging_status import read_charging_status
     from aiops_diagnostics.data.sources import scoped_mysql_source
     from aiops_diagnostics.gateway_config import GatewayServerSettings, charging_endpoint

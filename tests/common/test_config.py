@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.config import DisSettings, ProviderConfig, Settings, SSHSettings, UpmsSettings
+from aiops_diagnostics.common.config import DisSettings, ProviderConfig, Settings, SSHSettings, UpmsSettings
+from aiops_diagnostics.common.private_files import write_private_text
 from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.private_files import write_private_text
 
 
 def test_redacted_config_never_returns_password(monkeypatch) -> None:
@@ -150,7 +150,7 @@ def test_registry_rejects_duplicate_and_missing_base_url(monkeypatch) -> None:
 
 
 def test_legacy_single_provider_synthesized_without_registry() -> None:
-    from aiops_diagnostics.config import AgentSettings
+    from aiops_diagnostics.common.config import AgentSettings
 
     settings = AgentSettings(api_base_url="https://proxy.example/", model="gpt-5")
     provider = settings.select_provider(None)

@@ -634,7 +634,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 预期结果：两张表的语句**除表名外逐字相同**；健康表的状态集合差异来自其 profile；
   **网关里不再有手写的 `SET status = 'expired'` 语句**（逐行 UA 与逐条语句都查）。
 - 清理：无。
-- 结果：PASS（2026-09-30，`tests/test_async_job_lifecycle.py`；
+- 结果：PASS（2026-09-30，`tests/common/test_async_job_lifecycle.py`；
   以「某张表写回字面量 SQL」与「表名与 profile 配错」两条变异核对，各自转红）。
 
 ## 作业生命周期模块 QA 计划（#490）
@@ -648,7 +648,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 预期结果：数字与存储层既有取值逐一相同；**四张表真正的差异（health 无 `cancelled`、
   run 词汇不同）以显式字段声明**；状态集与三个时长在**本模块之外不再出现字面量**。
 - 清理：无。
-- 结果：PASS（2026-09-30，`tests/test_async_job_lifecycle.py`；
+- 结果：PASS（2026-09-30，`tests/common/test_async_job_lifecycle.py`；
   以「存储层写回字面量」两处与「重启也用 expired」三条变异核对，各自转红）。
 
 ### LIFECYCLE-02 三种成因互不混同
@@ -763,7 +763,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 有序动作：创建/列表/详情/删除；跨租户 GET；同用户 operator 入口 GET；重复 DELETE；faq:read-only 创建。
 - 预期结果：创建 201 且绑定入口与智能体版本；跨租户在身份层被拒（不可见）；跨入口统一 404；删除后 GET/重复 DELETE 均 404；faq:read-only 401/403。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/conversation/test_conversation_api.py`）。
 
 ### CONV-02 活跃订单绑定与省略订单号
 
@@ -773,7 +773,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 有序动作：绑定活跃订单（校验归属）；绑定未授权订单；带 conversation_id 提 follow-up 不带订单号；授权器撤销后再提 follow-up；带 conversation_id 提知识问题。
 - 预期结果：绑定需归属校验（未授权统一 404）；follow-up 复用活跃订单走 diagnosis（响应带 order_no_from_context）；撤销后清绑定走 qa 且响应 type=qa；知识问题始终 qa 且不触发诊断。
 - 清理：同上。
-- 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/conversation/test_conversation_api.py`）。
 
 ### CONV-03 上下文窗口与保留期
 
@@ -782,7 +782,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 有序动作：context_turns 读取；backdate expires_at 后 GET/LIST。
 - 预期结果：轮次窗口 ≤8；大轮次下 token 预算先生效（窗口 <8，总数 ≤8k+单轮）；无答案轮次不进入窗口；过期会话不可见。
 - 清理：删除临时数据库。
-- 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/conversation/test_conversation_api.py`）。
 
 ### CONV-04 并发忙与取消语义
 
@@ -790,7 +790,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 有序动作：begin_turn 占用生成槽后同会话再提问；构造过期 BUSY 锁后新提问；完成轮次后取消一轮。
 - 预期结果：占用时同会话 409 CONVERSATION_BUSY（无会话的提问不受影响）；崩溃锁 120s 自过期可重新提问；取消/无答案轮次不保留且释放槽位，不进入后续上下文。
 - 清理：同上。
-- 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
+- 结果：PASS（2026-09-10，pytest `tests/conversation/test_conversation_api.py`）。
 
 ### CONV-07 显式订单号的诊断加入会话（#484）
 
@@ -802,7 +802,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
   **不带会话时响应与本特性交付前逐字相同且不创建任何轮次**。
 - ⚠️ **本条不验证「可取消」**：诊断线没有取消端点，`turn_no` 只用于轮次归属与历史可见。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-30，`tests/test_conversation_api.py::test_an_explicit_order_diagnosis_joins_the_conversation`
+- 结果：PASS（2026-09-30，`tests/conversation/test_conversation_api.py::test_an_explicit_order_diagnosis_joins_the_conversation`
   与 `::test_an_explicit_order_without_a_conversation_is_unchanged`；源码级封口见 CONV-05 同文件）。
 
 ### CONV-06 会话历史进入提示词（#482）
@@ -832,9 +832,9 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
   答案字段（`summary` / `root_cause`，不是全量 `hypotheses`），差异只在轮次额外计入问题本身
   —— 这是 `context_turns()` 对**每一种**轮次的预算口径，不因诊断而变。
 - 清理：同上。
-- 结果：PASS（2026-09-30，`tests/test_conversation_api.py::test_concurrent_generation_returns_409_on_the_diagnosis_branch`、
+- 结果：PASS（2026-09-30，`tests/conversation/test_conversation_api.py::test_concurrent_generation_returns_409_on_the_diagnosis_branch`、
   `tests/test_standard_diagnosis_runtime.py::test_diagnosis_turn_is_filled_at_the_terminal_write`、
-  `::test_a_failed_diagnosis_drops_its_turn`；源码级守护 `tests/test_conversation_turn_shapes.py`）。
+  `::test_a_failed_diagnosis_drops_its_turn`；源码级守护 `tests/conversation/test_conversation_turn_shapes.py`）。
 - 证据边界：诊断作业由替身运行时驱动到终态；真实模型耗时下的 120s 崩溃兜底与前端解锁仍按
   `docs/agents/assistant-cancel-handoff.md` §2 的既有口径，不在本条内重新验证。
 
@@ -1241,7 +1241,7 @@ payload——非 OpenAI provider 从未遵守该 schema），故不是新增风�
 | AL-COV-02 | 本地 dev | 假模型返回纯英文 | 以 en 走客户问答 | 原样交付，不触发兜底 | `...::test_a_clean_english_answer_is_delivered_untouched` |
 | AL-COV-03 | 本地 dev | 假模型返回中文 | 以 zh 走客户问答 | 不触发兜底 | `...::test_chinese_answer_is_never_treated_as_a_leak` |
 | AL-COV-04 | 本地 dev | 同上 | 分别以 en/de/fr/es/pt 走 | 五语各自触发、兜底文案为对应语言 | `...::test_every_supported_non_chinese_language_is_guarded` |
-| AL-COV-05 | 本地 dev | 回答含中文文件名 | 校验该回答 | 不判为泄漏 | `tests/test_answer_language.py::test_resource_filename_in_a_media_title_is_exempt` |
+| AL-COV-05 | 本地 dev | 回答含中文文件名 | 校验该回答 | 不判为泄漏 | `tests/common/test_answer_language.py::test_resource_filename_in_a_media_title_is_exempt` |
 | AL-COV-06 | 本地 dev | 中文散文 + 中文文件名并存 | 校验该回答 | 判为泄漏 | `...::test_chinese_prose_beside_an_exempt_filename_is_still_a_leak` |
 | AL-COV-07 | 本地 dev | 存量行缺 fr 文案 | 读列表并捕获告警 | 返回中文回退；逐字段告警；告警不含文案正文 | `tests/publication/test_shortcut_api.py::test_live_rows_report_missing_translations_instead_of_falling_back_silently` |
 | AL-COV-08 | 本地 dev | 缺语言的快捷动作 | 运行覆盖度检查 | 失败并列出字段×语言；zh 不算缺口 | `...::test_copy_gap_gate_names_every_missing_field_and_language` |
@@ -1259,7 +1259,7 @@ payload——非 OpenAI provider 从未遵守该 schema），故不是新增风�
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| ANSWER-PAYLOAD-01 | 本地 dev | 四个回答面的生产源码 | 解析 `src/aiops_diagnostics/*.py`，按 import 绑定（含别名）枚举 `answer_chinese_leak` 的每个调用点，断言首个实参是契约构造结果或已被证明的字符串 | 四个调用点全部合规；出现裸 list / 裸 dict / 未证明的读值即报出文件与行号 | `tests/test_answer_caller_shapes.py::test_every_finalisation_point_hands_the_guard_the_contract_payload` |
+| ANSWER-PAYLOAD-01 | 本地 dev | 四个回答面的生产源码 | 解析 `src/aiops_diagnostics/*.py`，按 import 绑定（含别名）枚举 `answer_chinese_leak` 的每个调用点，断言首个实参是契约构造结果或已被证明的字符串 | 四个调用点全部合规；出现裸 list / 裸 dict / 未证明的读值即报出文件与行号 | `tests/common/test_answer_caller_shapes.py::test_every_finalisation_point_hands_the_guard_the_contract_payload` |
 | ANSWER-PAYLOAD-02 | 本地 dev | 同上 | 把 `qa_rag.py` / `agent_validator.py` 迁移前的实参按 AST 源码区间放回原文件 | 守护各自转红并指出该文件该行 | `...::test_the_guard_reports_the_payload_that_module_carried_before` |
 | ANSWER-PAYLOAD-03 | 本地 dev | 合成模块（形状同生产调用方） | 分别以裸 list、根因形状（`model_dump` 列表推导）、序列化 dict、整份 answer、单 block、类型本身作实参 | 逐一被守护拒绝；契约构造、`str()`、字面量、已证明字符串则不误报 | `...::test_a_caller_that_picks_its_own_shape_fails_the_guard`、`...::test_the_two_declared_inputs_are_accepted` |
 | ANSWER-PAYLOAD-04 | 本地 dev | 已挂载 `media_by_id` 的 payload（直驱 `qa_rag._finalize`） | 对同一取值分别只放 block `title`、只放 `media.title` | 两处结论一致；名称形态交付整卡，句子形态整卡被扣下 | `tests/publication/test_qa_rag.py::test_the_mounted_descriptor_is_judged_by_the_blocks_own_predicate` |
@@ -1380,11 +1380,11 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 复现命令（两个提交上分别执行，结果应当逐项相同）：
 
 ```text
-uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
+uv run pytest tests/test_assistant_api.py tests/conversation/test_conversation_api.py \
   tests/publication/test_shortcut_api.py tests/identity/test_caller_auth.py \
   tests/identity/test_order_visibility.py tests/identity/test_query_scope.py tests/identity/test_scope_context.py \
   tests/identity/test_scope_context_http.py tests/identity/test_scope_context_ds_fallback.py \
-  tests/test_cross_entry_visibility.py tests/test_faq.py tests/test_routing.py \
+  tests/test_cross_entry_visibility.py tests/conversation/test_faq.py tests/test_routing.py \
   tests/data/test_mysql_scope.py
 ```
 
@@ -1878,10 +1878,10 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| PLANG-01 | 本地 dev（真实 HTTP 面） | 固定问答目录已装配 | 对 9 个平台语言值逐个请求 `/v1/faq/recommendations` | PASS：`served` 依次为 `zh/en/pt/es/th/vi/mn/km/zh-Hant`，且正文是对应语言（非中文题面零汉字、繁体有繁体专用字且无简体专用字） | **HTTP 面**：`tests/test_faq_gateway_api.py::test_recommendations_answer_every_platform_language_value`（9 例，经 `create_gateway_app` + `TestClient`）；**解析面**：`tests/test_i18n.py::test_resolve_language_matrix`。突变：删别名表 / 从繁体地区集里去掉 `hk` → 均红 |
+| PLANG-01 | 本地 dev（真实 HTTP 面） | 固定问答目录已装配 | 对 9 个平台语言值逐个请求 `/v1/faq/recommendations` | PASS：`served` 依次为 `zh/en/pt/es/th/vi/mn/km/zh-Hant`，且正文是对应语言（非中文题面零汉字、繁体有繁体专用字且无简体专用字） | **HTTP 面**：`tests/conversation/test_faq_gateway_api.py::test_recommendations_answer_every_platform_language_value`（9 例，经 `create_gateway_app` + `TestClient`）；**解析面**：`tests/common/test_i18n.py::test_resolve_language_matrix`。突变：删别名表 / 从繁体地区集里去掉 `hk` → 均红 |
 | PLANG-02 | 本地 dev | 同上 | 发 `zh-TW` / `zh-HK` / `zh-MO` | PASS：解析为 `zh-Hant`（CLDR likelySubtags） | 同上；突变：清空 `_TRADITIONAL_CHINESE_REGIONS` → 红 |
 | PLANG-03 | 本地 dev | 同上 | 发 `zh-Hans-TW` / `zh-Hant-HK` | PASS：`zh` / `zh-Hant` —— 写出脚本时脚本压过地区 | 同上 |
-| PLANG-04 | 本地 dev | 同上 | 发 `tlh`（无端标签） | PASS：仍回退 `zh`，但 `aiops.i18n` 记一行含该标签的 INFO；该行**已消毒**（只留 `[a-z0-9-]`、截 24 字符），换行与空格都进不去 | `tests/test_i18n.py::test_an_unrecognized_tag_is_reported_before_it_falls_back`；突变：删掉日志块 → 红 |
+| PLANG-04 | 本地 dev | 同上 | 发 `tlh`（无端标签） | PASS：仍回退 `zh`，但 `aiops.i18n` 记一行含该标签的 INFO；该行**已消毒**（只留 `[a-z0-9-]`、截 24 字符），换行与空格都进不去 | `tests/common/test_i18n.py::test_an_unrecognized_tag_is_reported_before_it_falls_back`；突变：删掉日志块 → 红 |
 | PLANG-05 | 本地 dev | 同上 | 发 `en-US` | PASS：解析 `en`，且**不**产生上面那行日志 | 同上 |
 | PLANG-06 | 本地 dev | 全量套件 | `pytest tests/` | PASS：全绿（无 FAILED） | 见 PR 的验证小节 |
 | PLANG-07 | 41 实机 | 修复已部署（`0.1.0+15b434c429a0`） | 用真实生产 JWT，逐个平台语言值请求 `/v1/faq/recommendations` 与 `/v1/shortcuts` | **PASS 9/9**：三个曾经回退的值现在分别返回 `pt`/`es`/`zh-Hant`，其余六格逐字不变 | `docs/validation.md` §六（部署后实跑，2026-10-12） |

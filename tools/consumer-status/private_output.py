@@ -8,7 +8,7 @@
 2. **没有库外限制**：`--out .` 能把完整订单号写进仓库/工作树；
 3. **权限不是从创建起就私有**：先按 umask 创建、再 chmod，中间有一小段窗口。
 
-改为复用 `aiops_diagnostics.private_files.write_private_text`（tempfile + `replace`，
+改为复用 `aiops_diagnostics.common.private_files.write_private_text`（tempfile + `replace`，
 **不跟随符号链接**、创建即 0600、并校验目录属于当前用户且不是符号链接），
 再在工具侧补一条"必须在库外"的限制。
 """
@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from aiops_diagnostics.private_files import (
+from aiops_diagnostics.common.private_files import (
     PrivatePathError,
     validate_private_directory,
     write_private_text,

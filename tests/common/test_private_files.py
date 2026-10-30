@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.private_files import (
+from aiops_diagnostics.common.private_files import (
     PrivatePathError,
     ensure_private_directory,
     validate_private_directory,

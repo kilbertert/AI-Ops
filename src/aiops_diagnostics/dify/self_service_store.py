@@ -9,7 +9,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 
 
 class SetupConflict(ValueError):

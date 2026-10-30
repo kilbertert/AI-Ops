@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aiops_diagnostics.async_job_lifecycle import (
+from aiops_diagnostics.common.async_job_lifecycle import (
     DIAGNOSIS,
     HEALTH_JOB,
     LIVE,
@@ -171,7 +171,7 @@ def test_the_numbers_are_written_down_only_in_this_module() -> None:
     import re
     from pathlib import Path
 
-    package = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
+    package = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
     #: The lifecycle's own values, as they appear in source.
     patterns = [
         re.compile(r"timedelta\(seconds=30\)"),
@@ -204,7 +204,7 @@ def test_the_status_sets_are_written_down_only_in_this_module() -> None:
     """
     from pathlib import Path
 
-    package = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
+    package = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
     job_words = {
         "queued",
         "running",
@@ -289,7 +289,7 @@ def test_one_rendering_covers_every_table() -> None:
     the table name is substituted, and their parameters differ only in the
     status lists their profiles declare.
     """
-    from aiops_diagnostics.async_job_lifecycle import expire_statements
+    from aiops_diagnostics.common.async_job_lifecycle import expire_statements
 
     now = "2026-09-30T12:00:00+00:00"
     shapes = []
@@ -319,7 +319,7 @@ def test_the_health_table_sweeps_a_different_status_set() -> None:
     the other two name three. That is the whole of the difference, and it is
     readable off the profile rather than off a hand-edited SQL string.
     """
-    from aiops_diagnostics.async_job_lifecycle import expire_statements
+    from aiops_diagnostics.common.async_job_lifecycle import expire_statements
 
     health = expire_statements("health_report_jobs", HEALTH_JOB, "NOW")
     diagnosis = expire_statements("standard_diagnoses", DIAGNOSIS, "NOW")
@@ -342,7 +342,7 @@ def test_a_profile_with_no_interrupted_tier_still_renders_an_executable_sweep() 
     """
     from datetime import UTC, datetime, timedelta
 
-    from aiops_diagnostics.async_job_lifecycle import JobProfile, expire_statements
+    from aiops_diagnostics.common.async_job_lifecycle import JobProfile, expire_statements
 
     profile = JobProfile(
         name="probe",
@@ -370,7 +370,7 @@ def test_the_startup_shape_is_the_sweep_without_a_deadline_clause() -> None:
     rather than a second copy is what makes the difference visible — and it is
     the thing #492 decides about.
     """
-    from aiops_diagnostics.async_job_lifecycle import expire_statements
+    from aiops_diagnostics.common.async_job_lifecycle import expire_statements
 
     now = "NOW"
     startup = expire_statements("standard_diagnoses", DIAGNOSIS, now, require_deadline=False)
@@ -386,7 +386,7 @@ def test_a_table_the_module_does_not_own_is_refused() -> None:
     A name from anywhere else would be an injection surface; every caller today
     passes a literal and this keeps it that way.
     """
-    from aiops_diagnostics.async_job_lifecycle import expire_statements
+    from aiops_diagnostics.common.async_job_lifecycle import expire_statements
 
     with pytest.raises(ValueError):
         expire_statements("runs; DROP TABLE runs", DIAGNOSIS, "NOW")
@@ -405,7 +405,7 @@ def test_the_sweep_sql_is_written_down_only_in_this_module() -> None:
     import ast
     from pathlib import Path
 
-    package = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
+    package = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
     offenders: list[str] = []
     for path in sorted(package.rglob("*.py")):
         if path.name == "async_job_lifecycle.py":
@@ -430,7 +430,7 @@ def _method_pairs() -> dict[str, str]:
     import ast
     from pathlib import Path
 
-    store = Path(__file__).parents[1] / "src" / "aiops_diagnostics" / "gateway_store.py"
+    store = Path(__file__).parents[2] / "src" / "aiops_diagnostics" / "gateway_store.py"
     tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
     pairs: dict[str, str] = {}
     for node in ast.walk(tree):
@@ -458,7 +458,7 @@ def _boot_hook_pairs() -> dict[str, str]:
     import ast
     from pathlib import Path
 
-    store = Path(__file__).parents[1] / "src" / "aiops_diagnostics" / "gateway_store.py"
+    store = Path(__file__).parents[2] / "src" / "aiops_diagnostics" / "gateway_store.py"
     tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
     hook = next(
         node
@@ -522,7 +522,7 @@ def test_the_boot_hook_releases_the_conversation_slots_it_ends(tmp_path) -> None
     nothing completes the turn — so the boot hook has to, or the caller cannot
     ask again in that conversation for up to two minutes after a deploy.
     """
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
     from aiops_diagnostics.gateway_store import (
         DIAGNOSIS_RESTART_ERROR_CODE,
         GatewayStore,

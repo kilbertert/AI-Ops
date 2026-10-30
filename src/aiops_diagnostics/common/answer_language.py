@@ -6,7 +6,7 @@ diagnosis. Before this module, only the diagnosis path checked the language it
 actually produced, so a Chinese leak was found and fixed one surface at a time
 while its siblings stayed broken.
 
-The judgement itself lives in :mod:`aiops_diagnostics.i18n` beside the language
+The judgement itself lives in :mod:`aiops_diagnostics.common.i18n` beside the language
 tables; this module is the shared *application* of it, so a surface opts in by
 calling one function rather than reimplementing the rule.
 
@@ -51,7 +51,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from aiops_diagnostics.i18n import (
+from aiops_diagnostics.common.i18n import (
     DEFAULT_LANGUAGE,
     NON_CHINESE_LANGUAGES,
     chinese_leak,

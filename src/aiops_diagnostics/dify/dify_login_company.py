@@ -28,7 +28,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from aiops_diagnostics.bounded_http import (
+from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
     HttpFailure,
     RequestSpec,
@@ -168,7 +168,7 @@ def company_login(
     这里拿到的令牌是这次登录的直接产物，所以它上面的 `user_id` / `username` 是可信的
     —— 不是因为签名可信（它不可信），而是因为**我们亲手完成了这次交换**。
     """
-    from aiops_diagnostics.bounded_http import join_url
+    from aiops_diagnostics.common.bounded_http import join_url
 
     if not settings.encode_key:
         raise CompanyUnreachable("COMPANY_KEY_MISSING", "未配置公司密码 AES key（security.encode.key）")
@@ -280,7 +280,7 @@ def read_user_type(settings: CompanyAuthSettings, identity: CompanyIdentity) -> 
 
 def _user_info(settings: CompanyAuthSettings, identity: CompanyIdentity) -> dict[str, Any]:
     """GET ``/upms/user/info`` 并返回 **data** 段（权限码与 sysUser 都在里面）。"""
-    from aiops_diagnostics.bounded_http import join_url
+    from aiops_diagnostics.common.bounded_http import join_url
 
     client_type = settings.info_client_type or settings.client_type
     payload = request_json(
@@ -337,7 +337,7 @@ def fetch_captcha(settings: CompanyAuthSettings, random_str: str) -> tuple[bytes
     所以这里**故意不带 Accept**（第一版带了 `image/jpeg`，部署后才暴露：
     54 个单测全绿也测不出它 —— 它只在真上游上发生）。
     """
-    from aiops_diagnostics.bounded_http import join_url, open_response, read_body
+    from aiops_diagnostics.common.bounded_http import join_url, open_response, read_body
 
     spec = RequestSpec(
         url=join_url(settings.base_url, COMPANY_CAPTCHA_PATH, query={"randomStr": random_str}),

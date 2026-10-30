@@ -15,7 +15,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aiops_diagnostics.config import SafetySettings
+from aiops_diagnostics.common.config import SafetySettings
+from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.health.health_curves import build_curves
 from aiops_diagnostics.health.health_report import build_minimal_health_report
 from aiops_diagnostics.health.health_report_copy import (
@@ -25,7 +26,6 @@ from aiops_diagnostics.health.health_report_copy import (
     YKC_STOP_REASON_MESSAGES,
 )
 from aiops_diagnostics.health.rules import classify_stop_reason
-from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 
 _LANGS = SUPPORTED_LANGUAGES
 
@@ -59,7 +59,7 @@ def test_the_assembled_report_has_no_chinese_for_other_languages(language: str) 
     and the mistake this workstream has now made four times (#535, #536, #538,
     and here). So this goes through the real builder.
     """
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     report = build_minimal_health_report(_Sources([_order()]), "O-1", SafetySettings(), language)
     assert chinese_leak(report["summary"]) == "", report["summary"]
@@ -100,7 +100,7 @@ def test_the_upstream_sentence_never_becomes_the_localized_description() -> None
     in the requested language — and `test_the_report_keeps_the_upstream_words_
     beside_the_localized_value` pins the other half.
     """
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     upstream = "余额耗尽停止订单"
     result = classify_stop_reason("", "-1", upstream, language="en")
@@ -211,7 +211,7 @@ def test_the_declared_script_survives_storage(tmp_path) -> None:
     # region away before this point, so the three-subtag form never arrives from
     # the HTTP path. Widening the validator for an input nothing produces would
     # be speculative; the resolver's handling of it is asserted in
-    # `tests/test_i18n.py`.
+    # `tests/common/test_i18n.py`.
 
 
 @pytest.mark.parametrize("language", ["en", "de", "fr", "es", "pt"])
@@ -221,7 +221,7 @@ def test_an_unlisted_ykc_code_does_not_emit_chinese(language: str) -> None:
     It was briefly an English literal, which put English into a Chinese report —
     a regression this test pins in the other direction.
     """
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     text = classify_stop_reason("YKC", 999, None, language=language).description
     assert chinese_leak(text) == "", text
@@ -300,7 +300,7 @@ def test_the_report_keeps_the_upstream_words_beside_the_localized_value() -> Non
     * `reported_language` is null — the source does not declare one today, and
       guessing would be a claim we cannot support.
     """
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     order = _order(stopped_reason_content="拔出断电", stopped_reason_code=-7)
     report = build_minimal_health_report(_Sources([order]), "O-1", SafetySettings(), "en")

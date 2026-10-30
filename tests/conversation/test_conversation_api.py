@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
@@ -264,7 +264,7 @@ def test_busy_lock_expires(tmp_path: Path) -> None:
     """A crashed worker's generating flag self-expires after the lock window."""
     from datetime import UTC, datetime, timedelta
 
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
     client, _, _ = _client(tmp_path)
     conversation = _create_conversation(client)
@@ -287,7 +287,7 @@ def test_busy_lock_expires(tmp_path: Path) -> None:
 
 def test_cancelled_turn_never_survives_as_reply(tmp_path: Path) -> None:
     """release/complete with no answer drops the row; history stays clean."""
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
     client, _, _ = _client(tmp_path)
     conversation = _create_conversation(client)
@@ -328,7 +328,7 @@ def test_late_release_does_not_free_a_newer_turns_slot(tmp_path: Path) -> None:
     """
     from datetime import UTC, datetime, timedelta
 
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
     client, _, _ = _client(tmp_path)
     conversation = _create_conversation(client)
@@ -356,7 +356,7 @@ def test_late_release_does_not_free_a_newer_turns_slot(tmp_path: Path) -> None:
 
 def test_context_window_is_bounded(tmp_path: Path) -> None:
     """context_turns keeps at most 8 turns and the 8k-token budget."""
-    from aiops_diagnostics.conversation_store import (
+    from aiops_diagnostics.conversation.conversation_store import (
         CONTEXT_MAX_TOKENS,
         CONTEXT_MAX_TURNS,
         ConversationStore,
@@ -418,7 +418,7 @@ def test_conversation_retention_expires_after_30_days(tmp_path: Path) -> None:
     """Expired conversations vanish from list/get (30-day retention)."""
     from datetime import UTC, datetime, timedelta
 
-    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
     client, _, _ = _client(tmp_path)
     conversation = _create_conversation(client)

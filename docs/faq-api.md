@@ -112,7 +112,7 @@ X-Business-Entry: consumer
 
 ## 内容版本
 
-**当前 `faq_version`：`2026.10.09`**（以 `src/aiops_diagnostics/faq_catalog.json` 为准，此处只是快照）。
+**当前 `faq_version`：`2026.10.09`**（以 `src/aiops_diagnostics/conversation/faq_catalog.json` 为准，此处只是快照）。
 
 制品来源分两层，**不要混为一谈**：
 

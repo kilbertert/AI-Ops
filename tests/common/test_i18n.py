@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from aiops_diagnostics.i18n import (
+from aiops_diagnostics.common.i18n import (
     DEFAULT_LANGUAGE,
     NON_CHINESE_LANGUAGES,
     SUPPORTED_LANGUAGES,
@@ -124,7 +124,7 @@ def test_the_language_inventory_is_self_consistent() -> None:
     hold is that the list is well-formed and that the derived constants agree
     with it — not that it happens to contain six specific tags.
     """
-    from aiops_diagnostics.i18n import LANGUAGES, language_spec
+    from aiops_diagnostics.common.i18n import LANGUAGES, language_spec
 
     tags = [spec.tag for spec in LANGUAGES]
     assert len(set(tags)) == len(tags), "语言清单里有重复 tag"
@@ -170,7 +170,7 @@ def test_every_user_facing_table_covers_all_supported_languages(table_name: str)
     41 live (2026-09-18): the clarification and promo tables carried only zh+en
     while `language` echoed de/fr/es/pt. Structural check rather than trusting
     each table to have been filled in by hand."""
-    from aiops_diagnostics import i18n
+    from aiops_diagnostics.common import i18n
 
     table = getattr(i18n, table_name)
     missing = [lang for lang in SUPPORTED_LANGUAGES if lang not in table]
@@ -196,7 +196,7 @@ def test_every_user_facing_table_covers_all_supported_languages(table_name: str)
 @pytest.mark.parametrize("language", SUPPORTED_LANGUAGES)
 def test_clarification_message_never_falls_back_to_chinese_when_translated(language: str) -> None:
     """A supported language must get its OWN copy, not the zh fallback."""
-    from aiops_diagnostics.i18n import clarification_message
+    from aiops_diagnostics.common.i18n import clarification_message
 
     zh = clarification_message("zh", "order_no")
     for key in ("order_no", "context", "wrong_entry"):
@@ -217,20 +217,20 @@ def test_clarification_message_never_falls_back_to_chinese_when_translated(langu
 
 
 def test_chinese_leak_names_the_offending_characters() -> None:
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     assert chinese_leak('stop reason "余额耗尽停止订单" (balance exhausted)') == "余停单尽止耗订额"
 
 
 def test_chinese_leak_is_empty_for_ascii_and_for_english_prose() -> None:
-    from aiops_diagnostics.i18n import chinese_leak
+    from aiops_diagnostics.common.i18n import chinese_leak
 
     assert chinese_leak("stopped_reason_code=-1; balance_insufficient_stop=1") == ""
     assert chinese_leak("") == ""
 
 
 def test_the_default_language_is_not_in_the_guarded_set() -> None:
-    from aiops_diagnostics.i18n import (
+    from aiops_diagnostics.common.i18n import (
         DEFAULT_LANGUAGE,
         NON_CHINESE_LANGUAGES,
     )
@@ -251,7 +251,7 @@ def test_non_chinese_set_follows_the_declared_property_not_the_default() -> None
     distinguishing case is a SECOND Chinese script, which is exactly the
     addition this workstream is heading for.
     """
-    from aiops_diagnostics.i18n import LanguageSpec, non_chinese_languages
+    from aiops_diagnostics.common.i18n import LanguageSpec, non_chinese_languages
 
     synthetic = (
         LanguageSpec("zh", "Simplified Chinese", is_chinese=True),
@@ -328,7 +328,7 @@ def test_no_implicit_string_join_glues_two_words_together() -> None:
     suite can tell them apart — every table test asserts coverage and non-empty
     text, both of which the glued string satisfies.
     """
-    root = Path(__file__).parents[1]
+    root = Path(__file__).parents[2]
     offenders = [
         (str(path.relative_to(root)), line, left, right)
         for path in sorted((root / "src" / "aiops_diagnostics").rglob("*.py"))

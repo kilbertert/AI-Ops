@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
@@ -1106,7 +1106,7 @@ def test_bundled_seed_copy_covers_every_supported_language() -> None:
     be dead copy the coverage gate would then demand in eleven languages. That
     omission is asserted directly below rather than left implicit.
     """
-    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+    from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES
     from aiops_diagnostics.publication.shortcut_lifecycle import _BUNDLED_SHORTCUTS
 
     checked = 0
@@ -1293,7 +1293,7 @@ def test_copy_gap_gate_names_every_missing_field_and_language() -> None:
     # `zh-Hant` is a supported language in its own right, so a `zh`-only row is
     # missing it too. Expressed as the inventory minus the authority rather than
     # as NON_CHINESE_LANGUAGES, which deliberately excludes both Chinese tags.
-    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+    from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES
 
     assert {gap.language for gap in gaps} == set(SUPPORTED_LANGUAGES) - {"zh"}
     missing_pairs = {(gap.field, gap.language) for gap in gaps}
@@ -1304,7 +1304,7 @@ def test_copy_gap_gate_names_every_missing_field_and_language() -> None:
 
 
 def test_copy_gap_gate_is_empty_for_a_complete_row() -> None:
-    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+    from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES
     from aiops_diagnostics.publication.shortcut_lifecycle import Shortcut, shortcut_copy_gaps
 
     row = Shortcut(

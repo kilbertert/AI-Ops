@@ -180,7 +180,7 @@ from aiops_diagnostics.publication.agent_lifecycle import (
     allowed_models_from_settings,
 )
 from aiops_diagnostics.publication.agent_manifest import admin_context, load_manifest, reconcile_dify_registry
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
 from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource, _declared_dataset_ids
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces

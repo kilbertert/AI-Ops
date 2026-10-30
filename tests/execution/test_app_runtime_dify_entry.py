@@ -24,11 +24,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver
 from aiops_diagnostics.dify.dify_run_store import DifyRunStore
 from aiops_diagnostics.execution import chat_data_grant, chat_execution
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_to_json
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime
