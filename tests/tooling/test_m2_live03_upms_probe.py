@@ -12,7 +12,7 @@ import pytest
 
 from aiops_diagnostics.common.config import UpmsSettings
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "verification"))
 from m2_live import upms_probe
 
 

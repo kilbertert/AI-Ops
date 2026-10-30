@@ -11,10 +11,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).parents[2]
-sys.path.insert(0, str(ROOT / "tools"))
+# 构造器与被它 import 的 `merge_faq_i18n` 同目录，按默认脚本路径加载时兄弟模块才可见。
+sys.path.insert(0, str(ROOT / "tools" / "content"))
 spec = importlib.util.spec_from_file_location(
     "content_builder", ROOT / "tools/content/build_consumer_knowledge.py"
 )
+assert spec is not None and spec.loader is not None
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 

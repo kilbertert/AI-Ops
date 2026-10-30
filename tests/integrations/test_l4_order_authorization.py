@@ -276,11 +276,11 @@ def test_the_documents_agree_on_how_many_evidence_tests_there_are() -> None:
     `test_company_*.py` glob and is not one of them).
     """
     named = (
-        "test_recon_procedure_evidence.py",  # #475
-        "test_repo_index_evidence.py",  # #476
-        "test_company_entity_map.py",  # #477
-        "test_company_auth_scope.py",  # #478
-        "test_l4_order_authorization.py",  # #479
+        "integrations/test_recon_procedure_evidence.py",  # #475
+        "integrations/test_repo_index_evidence.py",  # #476
+        "integrations/test_company_entity_map.py",  # #477
+        "integrations/test_company_auth_scope.py",  # #478
+        "integrations/test_l4_order_authorization.py",  # #479
         "operations/test_operator_questions_triage.py",  # #480
     )
     for name in named:
