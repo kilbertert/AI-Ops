@@ -33,12 +33,13 @@
 | 20:45 | CD 部署 `ffa9ed64` | 成功；`/health` = `1.0.0+ffa9ed645e12`；`dual_entry.py`/`service_keys.py`/`self_service_store.py` 在 `/opt/aiops-41/src/…` 就位（mtime 20:45:26） |
 | 20:5x | 线上只读核对 | 匿名 `/v1/dify/management/catalogue`、`/operations` = 403；`/v1/openapi.json` = 200；`/v1/runs` = 404；`/v1/faq/catalog`、`/v1/assistant/questions` 匿名 = 401 |
 | 20:5x | 受管目录只读查询 | `operator_apps` 5 行，全部 `entry=operator`、`scenario=operator_order_diagnosis`；其中 3 行由启动纳管写入 |
-| 21:0x | CD 部署 `fix/dual-entry-adoption-env`（#1227） | 排队中；生产保持 `1.0.0+ffa9ed645e12` |
+| 21:1x | CD 部署 `f4601b25`（#1227） | 成功（排队约 20 分钟，runner 被另一会话占用）；`/health` = `1.0.0+f4601b25de9f` |
+| 21:4x | CD 部署 `bec88a1a`（#1229，取数凭据顺序修复） | 成功；`/health` = `1.0.0+bec88a1ae690`；匿名 catalogue 403、openapi 200、退役路由 404、消费者入口匿名 401 |
 
 ## 自动化结果（本机）
 
 ```bash
-uv run pytest -n 4                                       # 3625 passed, 9 skipped（既有跳过）
+uv run pytest -n 4                                       # 3626 passed, 9 skipped（既有跳过）
 uv run pytest -n 0 tests/dify/test_dual_entry.py \
   tests/consumer/test_consumer_draft_trial.py \
   tests/dify/test_self_service_adoption.py               # 26 + 3 + 5 = 34 passed
