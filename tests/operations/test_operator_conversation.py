@@ -9,7 +9,14 @@ import pytest
 from aiops_diagnostics.identity.scope_context import DataScope
 from aiops_diagnostics.operator import operator_conversation as conversation
 from aiops_diagnostics.operator import operator_cpms
-from operations.test_operator_cpms import APP, HEADERS, NODE_A_TOKEN, environment, terminal
+from operations.test_operator_cpms import (
+    APP,
+    HEADERS,
+    NODE_A_TOKEN,
+    environment,
+    tenant_owner,
+    terminal,
+)
 
 
 @pytest.fixture
@@ -57,6 +64,16 @@ def selection():
     return {"kind": "site_search", "text": "", "name": "", "address_terms": ["广州", "天河"]}
 
 
+def site_query(caller, value, *, auth=None):
+    """站点查询的调用壳：可见范围、关键词、读取函数、逐页复核各一处。"""
+    return operator_cpms.query_sites(
+        operator_cpms.site_scope(caller),
+        operator_cpms.site_keywords(value),
+        operator_cpms.cpms_site_reader("https://cpms.test", "private"),
+        auth or (lambda: caller.scope_fingerprint),
+    )
+
+
 def sites():
     return [
         {
@@ -82,7 +99,7 @@ def test_site_results_are_real_scoped_and_minimized(operator, monkeypatch):
     caller = f["resolver"].current
     value = selection()
     conversation.validate(value, "帮我找一下广州天河附近的充电站")
-    result = operator_cpms.search_sites(value, caller, "https://cpms.test", "private", lambda: caller)
+    result = site_query(caller, value)
     assert result["sites"] == [{"id": "SITE-1", "name": "天河测试站", "address": "广州市天河区测试路"}]
     assert parse_qs(urlsplit(calls[0][0]).query) == {
         "current": ["1"],
@@ -129,15 +146,57 @@ def test_site_search_rejects_bad_evidence(operator, monkeypatch, fault):
         )
 
     with pytest.raises(operator_cpms.OperatorRefused):
-        operator_cpms.search_sites(selection(), caller, "https://cpms.test", "private", auth)
+        site_query(caller, selection(), auth=lambda: auth().scope_fingerprint)
 
 
 def test_empty_scope_never_calls_cpms(operator, monkeypatch):
     caller = replace(operator["resolver"].current, data_scope=DataScope(type="organ"), scope_fingerprint="")
     monkeypatch.setattr(operator_cpms, "cpms_get", lambda *_: pytest.fail("empty scope read"))
-    result = operator_cpms.search_sites(selection(), caller, "https://cpms.test", "private", lambda: caller)
+    result = site_query(caller, selection())
     assert result["empty_scope"] and not result["sites"]
     assert "尚未分配" in conversation.render(selection(), result, "zh")["blocks"][0]["text"]
+
+
+def test_unbounded_scope_is_not_filtered_and_says_so_in_the_count(operator, monkeypatch):
+    """顶层账号没有站点集合：不按站点收窄，但计数口径必须标成租户口径。
+
+    ``site_ids is None`` 与 ``site_ids == ()`` 是两件相反的事 —— 前者"不过滤"，
+    后者"什么都看不到"。混用就会让一个空范围的账号看见整个租户。
+    """
+    caller = tenant_owner()
+    seen = []
+
+    def cpms(url, bearer, tenant, *, timeout):
+        page = int(parse_qs(urlsplit(url).query)["current"][0])
+        seen.append((url, tenant))
+        # 一页 50 条、total=152 ⇒ 会翻到第 2 页；分页回显不匹配就是 CPMS_INVALID_RESPONSE。
+        return {
+            "code": 0,
+            "data": {"records": sites() if page == 1 else [], "current": page, "size": 50, "total": 152},
+        }
+
+    monkeypatch.setattr(operator_cpms, "cpms_get", cpms)
+    result = site_query(caller, selection())
+    assert result["empty_scope"] is False
+    assert result["scope_limited"] is False, "顶层账号的站点集合是 None，不是被站点集合收窄"
+    assert result["total"] == 152 and len(result["sites"]) == 1
+    assert seen[0][1] == "TENANT-A"
+
+
+def test_a_search_without_a_match_is_empty_not_an_error(operator, monkeypatch):
+    """搜索没命中是"0 条结果"，不是"查不到"；计数仍来自 CPMS 自己的 total。"""
+    caller = operator["resolver"].current
+    monkeypatch.setattr(
+        operator_cpms,
+        "cpms_get",
+        lambda *_a, **_k: {
+            "code": 0,
+            "data": {"records": sites(), "current": 1, "size": 50, "total": 7},
+        },
+    )
+    result = site_query(caller, {"kind": "site_search", "text": "", "name": "", "address_terms": ["哈尔滨"]})
+    assert result["sites"] == []
+    assert result["empty_scope"] is False and result["total"] == 7
 
 
 def test_page_budget_is_bounded_and_not_claimed_complete(operator, monkeypatch):
@@ -150,7 +209,7 @@ def test_page_budget_is_bounded_and_not_claimed_complete(operator, monkeypatch):
         return {"code": 0, "data": {"records": sites(), "current": page, "size": 50, "total": 10000}}
 
     monkeypatch.setattr(operator_cpms, "cpms_get", cpms)
-    result = operator_cpms.search_sites(selection(), caller, "https://cpms.test", "private", lambda: caller)
+    result = site_query(caller, selection())
     assert calls == [1, 2, 3, 4] and result["limited"]
     assert len(result["sites"]) == 1
 
@@ -301,7 +360,8 @@ def test_site_search_uses_same_scope_on_all_entries(operator, monkeypatch, entry
             "VALUES (?,?,?,'ready',?,?)",
             ("TENANT-A", "env-a", "workspace", "2026-10-29", "2026-10-29"),
         )
-    body = {"question": "帮我找一下广州天河附近的充电站"}
+    # 显式标注类型：这个请求体后面会被塞进非字符串字段（`app_id`、`operator_preview`）。
+    body: dict[str, object] = {"question": "帮我找一下广州天河附近的充电站"}
     if entry == "managed":
         from aiops_diagnostics.execution import chat_execution
 
