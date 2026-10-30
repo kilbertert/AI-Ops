@@ -54,6 +54,8 @@ def app_binding(settings, app_id):
 
     if getattr(settings, "operator_profiles_file", ""):
         row = SelfServiceStore(settings.database_file).app(app_id)
-        if row:
+        # 只有管家行才是 operator 绑定。客户端行也住在这张表里，把它的 app_id 当成
+        # operator 绑定会让"这一版走节点引擎"变成一句凭空的事实。
+        if row and row["entry"] == "operator":
             return DifyAppBinding(row["tenant_id"], "operator", app_id, row["agent_name"])
     return next((b for b in DifyAppRegistry(settings.database_file).all() if b.app_id == app_id), None)

@@ -27,6 +27,10 @@ class ConsumerTrial:
     content: dict
     question: str
     binding: ChatBinding | None = None
+    #: 草稿预览：这个副本还没有正式版，`route` 是合成的（`state="draft"`）。
+    #: 试用本来就在**临时应用**里跑这份 DSL，所以它不需要正式路由也能证明"草稿可用"；
+    #: 需要的是"这份草稿仍然属于这个客户"，那一条由 `require_current` 的草稿分支查目录。
+    draft: bool = False
 
     def fingerprint(self):
         return hashlib.sha256(
@@ -37,6 +41,13 @@ class ConsumerTrial:
         ).hexdigest()
 
     def require_current(self, settings):
+        if self.draft:
+            from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+            row = SelfServiceStore(settings.database_file).app(self.route.app_id)
+            if row is None or row["tenant_id"] != self.route.tenant_id or row["entry"] != "consumer":
+                raise ValueError("trial draft is no longer managed")
+            return
         row = ChatRouteBindingStore(settings.chat_route_bindings_file).by_key(self.route.key)
         if (
             row is None

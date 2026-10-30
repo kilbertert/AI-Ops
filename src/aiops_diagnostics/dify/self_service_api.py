@@ -7,18 +7,33 @@ from fastapi import Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import dual_entry
 from . import self_service_identity as auth
 from .self_service import SelfService
 from .self_service_store import SetupConflict, public_job
 
 
+class SetupSource(BaseModel):
+    """一端的来源：已发布的应用 + 它当前的正式版本号。"""
+
+    model_config = ConfigDict(extra="forbid")
+    app_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
+    version_no: int = Field(ge=1)
+
+
 class SetupRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_key: str = Field(pattern=r"^[a-zA-Z0-9_-]{16,80}$")
-    source_app_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
-    source_version: int = Field(ge=1)
     tenant_id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     name: str = Field(min_length=1, max_length=128, pattern=r"^[^\x00-\x1f]+$")
+    #: 开通范围。默认双端；只开一端时把另一端从 `sources` 里去掉。
+    scope: str = Field(default="both", pattern=r"^(both|consumer|operator)$")
+    #: 每端一个来源。缺一端且该端在 `scope` 里 ⇒ `SETUP_SOURCE_REQUIRED`。
+    sources: dict[str, SetupSource] = Field(default_factory=dict)
+    #: 旧的单来源字段：它只能表达管家（“复制并开通客户管家”的入参）。保留它既有的
+    #: 调用方逐字可用；两者都给时以 `sources` 为准。
+    source_app_id: str | None = Field(default=None, pattern=r"^[a-f0-9-]{36}$")
+    source_version: int | None = Field(default=None, ge=1)
 
 
 class AppRequest(BaseModel):
@@ -91,31 +106,49 @@ def register(app, context):
         choices = auth.tenants(context, caller) if caller.platform else []
         allowed = {x["id"] for x in choices} | {caller.tenant_id}
         tenant_names = {row["id"]: row["name"] for row in choices}
-        sources = []
-        for route in service.routes.all():
-            if route.entry != "operator" or not route.active or route.tenant_id not in allowed:
-                continue
-            if not service.managed(route.app_id):
-                continue
-            agent = context.agent_manager.store.get(route.agent_id, route.tenant_id)
-            app_name = service.source_app_name(route.tenant_id, route.app_id, agent.name)
-            tenant_name = tenant_names.get(route.tenant_id, "")
-            # 标签回答的是「这是谁的哪个应用」：来源应用全部住在**客户工作区**里，
-            # 平台账号平时看不到它们，只写智能体名等于给出一个运营无从对照的字符串。
-            sources.append(
-                {
-                    "app_id": route.app_id,
-                    "tenant_id": route.tenant_id,
-                    "tenant_name": tenant_name,
-                    "app_name": app_name,
-                    "name": f"{tenant_name} / {app_name}" if tenant_name else app_name,
-                    "version_no": route.agent_version_no,
-                }
-            )
+
+        def sources_for(entry):
+            rows = []
+            for route in service.routes.all():
+                if route.entry != entry or not route.active or route.tenant_id not in allowed:
+                    continue
+                if route.scenario != dual_entry.scenario(entry):
+                    continue
+                managed = service.managed(route.app_id)
+                if not managed or managed["entry"] != entry:
+                    continue
+                agent = context.agent_manager.store.get(route.agent_id, route.tenant_id)
+                app_name = service.source_app_name(route.tenant_id, route.app_id, agent.name)
+                tenant_name = tenant_names.get(route.tenant_id, "")
+                # 标签回答的是「这是谁的哪个应用」：来源应用全部住在**客户工作区**里，
+                # 平台账号平时看不到它们，只写智能体名等于给出一个运营无从对照的字符串。
+                rows.append(
+                    {
+                        "app_id": route.app_id,
+                        "tenant_id": route.tenant_id,
+                        "tenant_name": tenant_name,
+                        "app_name": app_name,
+                        "name": f"{tenant_name} / {app_name}" if tenant_name else app_name,
+                        "version_no": route.agent_version_no,
+                    }
+                )
+            return rows
+
+        entries = [
+            {
+                "entry": entry,
+                "label": dual_entry.label(entry),
+                "scenario": dual_entry.scenario(entry),
+                "sources": sources_for(entry),
+            }
+            for entry in dual_entry.ENTRIES
+        ]
         return {
             "platform": caller.platform,
             "tenants": choices,
-            "sources": sources,
+            # 顶层 `sources` 保持管家端（既有前端不改也能跑）；读取方优先读 `entries`。
+            "sources": next(item["sources"] for item in entries if item["entry"] == "operator"),
+            "entries": entries,
             "workspaces": [
                 {
                     "workspace_id": r["workspace_id"],
