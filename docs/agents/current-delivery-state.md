@@ -14,8 +14,8 @@
 知识默认开户、工作区连接与隔离证据已独立复核，平台今日正常登录再次进入优链充RAGFlow成功。
 #1173的旧清单声明已补发41。真实订单发现Gateway已更新#1168而Java仍旧，CPMS证据不一致失败；
 补部署合并Java `6bcc7fda-51b249810095`后，同账号同订单原生预览完整报告、run succeeded/matched。
-本轮未切应用发布；优链充仍V1/revision2。另发现第129次正常登录丢授权，补漏PR待部署登录代理。
-见[独立复核回执](../validation/2026-10-30-dify-handoff-acceptance.md)。
+本轮未切应用发布；优链充仍V1/revision2。第129次正常登录丢授权已由#1178修复，合并3a6bd97a；Gateway和36登录代理均已部署。
+见[独立复核回执](../validation/2026-10-30-dify-handoff-acceptance.md)与[上线收尾](../validation/2026-10-30-dify-handoff-live.md)。
 
 ## 平台客户开通与默认知识空间已实测（2026-10-29）
 
