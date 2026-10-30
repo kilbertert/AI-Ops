@@ -6568,6 +6568,14 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
     if located is not None and located.kind == "service_trial":
         if trial["order_no"]:
             _require_visible_order(context, caller, trial["order_no"])
+        if not located.order_no and report.get("callback_version", 1) >= 3:
+            try:
+                consumer_knowledge_selection.require_owned(
+                    report.get("knowledge_base_ids", []),
+                    consumer_knowledge_selection.owned_libraries(context.runtime, caller.effective_tenant_id),
+                )
+            except ValueError as exc:
+                raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "所选知识库授权已变化") from exc
         if trial.get("trial_managed_draft"):
             from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 

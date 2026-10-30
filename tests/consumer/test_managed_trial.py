@@ -262,3 +262,29 @@ def test_trial_bridge_preserves_session_uses_trial_key_and_rejects_injected_scop
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_preview_readback_refuses_revoked_knowledge(managed_trial, monkeypatch):
+    f = managed_trial
+    tid = submit(f)
+    finish(f, tid)
+    # 将旧FAQ测试图的取证元数据标为选库版本；回读必须查询当前授权目录。
+    with f.runtime.store._connection(write=True) as db:
+        import json
+
+        result = json.loads(
+            db.execute("SELECT result_json FROM standard_diagnoses WHERE diagnosis_id=?", (tid,)).fetchone()[
+                0
+            ]
+        )
+        result["report"].update(callback_version=3, knowledge_base_ids=["revoked-library"])
+        db.execute(
+            "UPDATE standard_diagnoses SET result_json=? WHERE diagnosis_id=?", (json.dumps(result), tid)
+        )
+    monkeypatch.setattr(
+        api.consumer_knowledge_selection,
+        "owned_libraries",
+        lambda *a: [{"knowledge_base_id": "revoked-library", "audience": "internal"}],
+    )
+    response = f.env["client"].post(PATH + "/result", headers=HEADERS, json={"app_id": APP, "trial_id": tid})
+    assert response.status_code == 410, response.text

@@ -223,6 +223,8 @@ class ConsumerTrial:
                     "draft_sha256": self.fingerprint(),
                     "source_app_id": self.route.app_id,
                     "managed_draft": self.draft,
+                    "knowledge_base_ids": list(self.binding.knowledge_base_ids),
+                    "callback_version": self.binding.callback_version,
                 },
                 (),
                 (),
