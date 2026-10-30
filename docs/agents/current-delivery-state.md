@@ -41,7 +41,8 @@
 **未验**：真机／原 H5 上的实际观感（结论句是否在第一屏、`·` 与编号在真机的对齐）；
 九种非中文译文未经母语者复核。决策见 ADR-0182；本轮里程碑记录见
 [开发进度](../开发进度/2026-10-30-consumer-plain-answers-live.md)，探测过程与证据见
-[真机核对记录](../validation/2026-10-30-consumer-plain-answers-live-verified.md)。
+[真机核对记录](../validation/2026-10-30-consumer-plain-answers-live-verified.md)、
+[CD 推进后的复验](../validation/2026-10-30-consumer-plain-answers-recheck.md)。
 
 ## 来源版本下拉改成客户名与 Dify 应用名（2026-10-30）
 
