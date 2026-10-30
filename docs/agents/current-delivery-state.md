@@ -1,5 +1,38 @@
 # 当前交付状态索引
 
+## C 端答复先说结论并写人话（2026-10-30）
+
+两片已合并且已上线。#1175（`5de086c3`，CD run `41005913688` success）先把排版改成【分节、
+逐行、去微秒】；#1202（`0b58d502`，CD run `41010446836` success）再把**内容**改成
+「先一句结论，再逐项用人话解释」。
+41 上回读 `1.0.0+0b58d502adc5`（`business_mutations=disabled`），
+`/opt/aiops-41/src/aiops_diagnostics/consumer/consumer_plain.py` 已在位
+（mtime 2026-10-30 13:48:12 +0800）。
+现在账单答复第一段是「这单的账单合计 27.36，系统记录的支付金额是 0.00，没有退款记录。」，
+其后逐项解释「不等于银行已经扣款」「有这条记录也不代表银行已经到账」；
+状态答复第一段是「这单当前的状态是「充电结束」。」。
+`cpms.chargingInfo`／`cpms.orderDetail`／`status_code=` 全部退出用户正文，
+原始码只留在 `agent_runs.snapshot`。
+**方向纠正（写下来省下一次弯路）**：这条路由**不调模型**（`frontend-api-brief` 写明
+「该路径无模型调用」），改 Dify 应用的提示词对它毫无影响 —— 只有带「为什么／扣费／金额」
+的问题才会路由到 Dify 链。
+
+**真机核对结果（重要，不得读作已验收）**：41 上**摸不到这条面**。
+`/etc/aiops-41/production.env` 里没有 `AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED`，也没有
+`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL`，即 `consumer_order_chat_enabled=False`。
+用真实会话（Redis `app:3rd_session:*`，公网 `api.mall.qushiyun.com`，`/v1/faq/recommendations` 200）
+就本人真实订单提问，实测：
+
+- 「查一下我的订单 … 现在是什么状态」→ `404 TENANT_ENDPOINT_UNRESOLVED`（业务端点未登记）；
+- 「查一下订单 … 的账单」→ `409 CHAT_ROUTE_UNAVAILABLE`（业务执行路由未配置）。
+
+即：新代码**已部署但未启用**，真实用户现在拿不到这条答复。因此
+**不能把 ADR-0182 的渲染说成已在 41 上验过**，也不能根据一次 41 实测判断措辞好不好读。
+要真验，得先决定是否为该租户启用这两个开关（属于开关变更，不是本片范围）。
+**未验**：真机／原 H5 上的实际观感（结论句是否在第一屏、`·` 与编号在真机的对齐）；
+九种非中文译文未经母语者复核。决策见 ADR-0182，真机探测过程与证据见
+[真机核对记录](../validation/2026-10-30-consumer-plain-answers-live.md)。
+
 ## 来源版本下拉改成客户名与 Dify 应用名（2026-10-30）
 
 #1194合并`bf6085eb`，CD run `40999387411` 12m8s success；41的Gateway回读
