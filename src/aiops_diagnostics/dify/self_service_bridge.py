@@ -56,6 +56,11 @@ def handle(handler, bridge):
                 "draft",
                 "version_no",
                 "workspace_id",
+                # 双端开通：范围与每端来源。桥是**固定动作契约**，所以这两个字段不是
+                # "放行任意结构"，而是在下面逐字段校验形状 —— 桥放行、后端再校验，
+                # 等于让一个手写请求绕过第一道门。
+                "scope",
+                "sources",
             }
         ),
     )
@@ -85,6 +90,7 @@ def handle(handler, bridge):
         raise _Rejected(400, "无效管理动作")
     if (method == "GET" or action == "retry") and payload:
         raise _Rejected(400, "无效参数")
+    _validate_scope_and_sources(action, payload, _Rejected)
     # 应用状态/发布必须能由当前Dify工作区读到；平台跨租户开通另由公司目录和来源登记裁定。
     if action in {"status", "readiness", "publish", "versions", "version"}:
         app_id = payload.get("app_id", "")
@@ -179,3 +185,40 @@ def authorize_workspace(handler, bridge, session, workspace_id):
     )
     if code != 200 or not isinstance(result, dict) or result.get("workspace_id") != workspace_id:
         raise bridge._Rejected(403, "当前账号无权访问此客户知识库，请重新登录或联系平台管理员")
+
+
+_SCOPES = {"both", "consumer", "operator"}
+_ENTRIES = {"consumer", "operator"}
+_APP_ID = re.compile(r"[a-f0-9-]{36}")
+
+
+def _validate_scope_and_sources(action, payload, rejected):
+    """`scope`/`sources` 只属于 `create`，且形状固定。
+
+    桥这一层的职责是"浏览器只能提交固定动作的固定形状"。把新字段加进白名单却不校验形状，
+    等于把"未知字段拒绝"降级成"未知字段也转发"，而下游的 Pydantic 校验发生在**网关**上 ——
+    中间那一段（桥到网关）就变成谁都能塞东西的通道。
+    """
+    if "scope" not in payload and "sources" not in payload:
+        return
+    if action != "create":
+        raise rejected(400, "无效参数")
+    scope = payload.get("scope", "both")
+    if not isinstance(scope, str) or scope not in _SCOPES:
+        raise rejected(400, "无效开通范围")
+    sources = payload.get("sources")
+    if sources is None:
+        # 旧的单来源形状：由后端按管家处理，桥不额外解释。
+        return
+    if not isinstance(sources, dict) or not sources or set(sources) - _ENTRIES:
+        raise rejected(400, "无效来源")
+    wanted = _ENTRIES if scope == "both" else {scope}
+    if set(sources) != wanted:
+        raise rejected(400, "来源与开通范围不一致")
+    for spec in sources.values():
+        if not isinstance(spec, dict) or set(spec) != {"app_id", "version_no"}:
+            raise rejected(400, "无效来源")
+        if not isinstance(spec["app_id"], str) or not _APP_ID.fullmatch(spec["app_id"]):
+            raise rejected(400, "无效来源应用")
+        if type(spec["version_no"]) is not int or spec["version_no"] < 1:
+            raise rejected(400, "无效来源版本")

@@ -98,8 +98,22 @@ class ConsumerToolGrants:
         raise ConsumerToolRefused("CONSUMER_PROXY_UNRESOLVED", "node callback base is not configured")
 
     def _cpms_base(self, tenant_id: str) -> str:
+        """这个租户的业务地址：**受管登记优先**，其次才是环境变量里的现役登记。
+
+        受管行由开通时写入（来源是已批准的环境连接）。两者都没有就拒绝 —— 不回退到
+        "某个全局 URL"，那会把一个客户的业务连接发给所有客户。
+        """
+        from aiops_diagnostics.consumer.consumer_knowledge_grants import ConsumerEndpoints
         from aiops_diagnostics.gateway.gateway_config import charging_endpoint
 
+        database = getattr(self.settings, "database_file", "")
+        managed = (
+            ConsumerEndpoints(database).get(tenant_id, self.settings.execution_environment)
+            if database
+            else ""
+        )
+        if managed:
+            return managed
         try:
             return charging_endpoint(self.settings.charging_status_base_url, tenant_id)
         except ValueError as exc:

@@ -1,0 +1,40 @@
+diff --git a/web/app/(commonLayout)/app/(appDetailLayout)/[appId]/workflow/page.tsx b/web/app/(commonLayout)/app/(appDetailLayout)/[appId]/workflow/page.tsx
+index 35b13b99..947cd390 100644
+--- a/web/app/(commonLayout)/app/(appDetailLayout)/[appId]/workflow/page.tsx
++++ b/web/app/(commonLayout)/app/(appDetailLayout)/[appId]/workflow/page.tsx
+@@ -1,9 +1,13 @@
+ import WorkflowApp from '@/app/components/workflow-app'
++import { WorkflowManagedStrip } from '@/app/components/aiops-workflow-managed'
+ 
+ const Page = () => {
+   return (
+-    <div className="size-full overflow-x-auto">
+-      <WorkflowApp />
++    <div className="flex size-full flex-col overflow-x-auto">
++      <WorkflowManagedStrip />
++      <div className="min-h-0 flex-1">
++        <WorkflowApp />
++      </div>
+     </div>
+   )
+ }
+diff --git a/web/features/home/home-content/home-content.tsx b/web/features/home/home-content/home-content.tsx
+index ec216c12..34d00e5f 100644
+--- a/web/features/home/home-content/home-content.tsx
++++ b/web/features/home/home-content/home-content.tsx
+@@ -34,6 +34,7 @@ import dynamic from '@/next/dynamic'
+ import { consoleQuery } from '@/service/console'
+ import { trackCreateApp } from '@/utils/create-app-tracking'
+ import { hasPermission } from '@/utils/permission'
++import TenantSetup from '@/app/components/aiops-management'
+ import { HomeBanner } from '../banner/home-banner'
+ import { HomeIntro } from '../home-intro'
+ import { HomeShell } from '../home-shell'
+@@ -407,6 +408,7 @@ export function HomeContent() {
+   return (
+     <HomeShell>
+       <div className="flex flex-1 flex-col overflow-y-auto">
++        <TenantSetup />
+         <HomeIntro />
+         {systemFeatures.enable_explore_banner && <HomeBanner />}
+         <HomeRecommendations

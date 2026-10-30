@@ -193,17 +193,21 @@ class SelfServiceStore:
                 rows = db.execute("SELECT * FROM operator_apps WHERE entry=? ORDER BY app_id", (entry,))
             return [dict(r) for r in rows]
 
-    def consumer_target(self, tenant_id: str, environment: str) -> dict | None:
-        """这个客户在**这个环境**的受管客户端运行目标。
+    def consumer_target(self, tenant_id: str, environment: str, app_id: str) -> dict | None:
+        """这个客户在**这个环境**的、**这个应用**的受管客户端运行目标。
+
+        按应用身份取，不按租户取第一条：一个客户可以同时有"现役正式版 + 新草稿"，
+        按租户 `fetchone()` 会让第二份草稿永远拿不到自己的目标，于是它一发布就报
+        `SETUP_APP_NOT_MANAGED` —— 而那看起来像"目录丢了这一行"。
 
         返回目录行本身；调用方从 ``targets_json`` 取可发布能力。``tenant_id`` 的比较留给
-        调用方（`consumer_publication` 用与路由同一套 `tenant_matches`，避免这里再造一个
-        租户相等判据）。
+        调用方（`consumer_publication` 用与路由同一套 `tenant_matches`）。
         """
         with self.connection() as db:
             row = db.execute(
-                "SELECT * FROM operator_apps WHERE entry='consumer' AND environment=? AND tenant_id=?",
-                (environment, tenant_id),
+                "SELECT * FROM operator_apps"
+                " WHERE entry='consumer' AND environment=? AND tenant_id=? AND app_id=?",
+                (environment, tenant_id, app_id),
             ).fetchone()
         return dict(row) if row else None
 

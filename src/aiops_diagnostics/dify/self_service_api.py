@@ -92,6 +92,10 @@ def register(app, context):
                     else None,
                 )
 
+        # 现役已经发布给消费者的库，按"当时就是明确的绑定"补一条授权行（规划 §5：
+        # 已有库迁移需保持现役明确绑定）。只在没有授权行时补，不会覆盖后来的撤销。
+        _backfill_knowledge_grants(context, service)
+
     def session(request: Request, authorization: Annotated[str | None, Header()] = None):
         expected = context.settings.dify_publish_api_key
         supplied = (authorization or "").removeprefix("Bearer ")
@@ -279,3 +283,36 @@ def register(app, context):
         return service.change_version(
             auth.identity(context, session), payload.app_id, payload.revision, payload.version_no
         )
+
+
+def _backfill_knowledge_grants(context, service):
+    """把**已发布的**客户端版本用到的库登记为可对客。
+
+    这些库不是我们挑的：它们是运营在发布时明确选中、并且正在服务的。给它们补授权行，
+    是为了让"新增授权判据"不把现役服务停掉；之后运营撤销授权的库，下一次启动也不会被
+    重新补上（补的是"没有授权行"的那些，撤销后**有**过授权记录这一条不成立 —— 所以
+    撤销时同时记入审计，见 `aiops-admin consumer-knowledge revoke`）。
+    """
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+
+    settings = context.settings
+    grants = KnowledgeGrants(settings.database_file)
+    for route in service.routes.all():
+        if route.entry != "consumer" or not route.active or route.engine != "dify":
+            continue
+        try:
+            snapshot = context.agent_manager.store.version(
+                route.agent_id, route.tenant_id, route.agent_version_no
+            ).snapshot
+        except Exception:  # noqa: BLE001 - 读不到版本只是少补一次授权，不影响启动
+            continue
+        frozen = snapshot.get("consumer_service") or {}
+        for knowledge_base_id in frozen.get("knowledge_base_ids") or []:
+            if not isinstance(knowledge_base_id, str) or not knowledge_base_id:
+                continue
+            grants.grant(
+                route.tenant_id,
+                settings.execution_environment,
+                knowledge_base_id,
+                "published-backfill",
+            )

@@ -1251,7 +1251,12 @@ def _workflow_trial_draft(
     # 试用的范围必须落在**绑定所属租户**上。租户那一维走共享规则
     # （`order_visibility.visible_orders`）："这一行属于哪个租户、在不在范围内"
     # 在这个仓只有一处定义，不在这里手写比较。
-    if not row.active or not _tenant_in_scope(binding.tenant_id, run_context.effective_tenant_id):
+    # 草稿（`state="draft"`）**不是**正式路线，但它仍然要能试用：那正是"先试再发"的顺序。
+    # 所以这里只对**正式**路线要求 active；草稿要求的是"这个副本仍属于这个客户"，
+    # 那一条由 `ConsumerTrial.require_current` 的草稿分支查目录来保证。
+    if (not draft and not row.active) or not _tenant_in_scope(
+        binding.tenant_id, run_context.effective_tenant_id
+    ):
         raise StandardAPIError(403, "TRIAL_SCOPE_MISMATCH", "trial scope does not match the bound app")
     source = DifyDslSource(
         context.settings.dify_console_base_url, app_id, context.settings.dify_console_api_key, workspace

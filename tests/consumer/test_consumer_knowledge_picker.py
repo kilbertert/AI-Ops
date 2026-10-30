@@ -46,7 +46,7 @@ def test_node_selection_replaces_file_ids_and_requires_current_tenant_ownership(
         flow,
         {**CEILING, "knowledge_base_ids": ["kb-a"]},
         BASE,
-        owned_libraries=[{"knowledge_base_id": "kb-b"}],
+        owned_libraries=[{"knowledge_base_id": "kb-b", "audience": "customer"}],
     )
     assert result["knowledge_base_ids"] == ["kb-b"] and result["callback_version"] == 3
     for rows in ([], [{"knowledge_base_id": "kb-a"}]):
@@ -145,6 +145,12 @@ def test_picker_calls_only_selected_library_and_rejects_mismatch_before_cache(tm
         doc = json.loads(env["bindings"].read_text())
         doc["bindings"][0].update(callback_version=3, knowledge_base_ids=["kb-b"])
         env["bindings"].write_text(json.dumps(doc))
+        from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+
+        settings = env["app"].state.gateway.settings
+        KnowledgeGrants(settings.database_file).grant(
+            "TENANT-A", settings.execution_environment, "kb-b", "fixture"
+        )
         monkeypatch.setattr(
             kb, "list_knowledge_bases", lambda: [{"knowledge_base_id": "kb-b", "name": "B"}], raising=False
         )
@@ -182,7 +188,11 @@ def test_picker_calls_only_selected_library_and_rejects_mismatch_before_cache(tm
                     .status_code
                     == 503
                 )
-                monkeypatch.setattr(kb, "list_knowledge_bases", lambda: [{"knowledge_base_id": "kb-b"}])
+                monkeypatch.setattr(
+                    kb,
+                    "list_knowledge_bases",
+                    lambda: [{"knowledge_base_id": "kb-b", "audience": "customer"}],
+                )
                 return ChatflowReply(*ids, json.dumps({"kind": "knowledge", "faq_id": "KB-C-007"}), {})
 
         errors = []
@@ -267,9 +277,9 @@ def test_picker_upgrade_preserves_other_nodes_and_library_selection():
     for n in flow["graph"]["nodes"]:
         if "url" in n["data"]:
             n["data"]["url"] = n["data"]["url"].replace("http://gateway.invalid", BASE)
-    assert publication_settings(flow, CEILING, BASE, owned_libraries=[{"knowledge_base_id": "kb-b"}])[
-        "knowledge_base_ids"
-    ] == ["kb-b"]
+    assert publication_settings(
+        flow, CEILING, BASE, owned_libraries=[{"knowledge_base_id": "kb-b", "audience": "customer"}]
+    )["knowledge_base_ids"] == ["kb-b"]
 
 
 def test_plugin_never_redirects_credentials_and_uses_grant_for_content(monkeypatch):
