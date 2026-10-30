@@ -361,7 +361,7 @@ workflow:
             - kind 可为 knowledge、clarify、human、realtime、not_found、unavailable。
             - kind=knowledge 时必须给出本轮候选里的 faq_id；其余五种 faq_id 为空字符串。
             - 本轮 status 为 live 且含 live_snapshot 时，kind 必须是 realtime、faq_id 为空，并**自己写一段 reply**。
-            - 只有 realtime 才允许出现 reply；其它 kind 不要带 reply。
+            - realtime、clarify、not_found、human 可以带 reply；knowledge 与 unavailable 不要带。
             - 要求人工时选 human；无法定位问题时选 clarify；没有候选时按 status 选 not_found 或 unavailable。
 
             reply 的写法（这一段就是用户看到的正文）：
@@ -371,7 +371,18 @@ workflow:
             - 正文里出现的每个数字都必须能在本轮取数结果里找到；不要写"约 30 分钟"这类数据里没有的数字。
             - 必须写出订单号，读的人才能核对是哪一单。
             - 不要出现 cpms.、status_code=、status_role= 这类内部标识。
+            - 金额必须挂在它自己的标签上：合计/总额对订单金额，支付/付款对实付金额，退款对退款金额；
+              两个值互换会被拒收。
+            - 状态不能说反：本轮说结束就不能写"未结束"，说充电中就不能写"已结束"。
             - 不承诺执行停止充电、退款、建单或转接；不编造电话、时限或链接；不声称钱已到账。
+              "没有退款记录"这种否定说法是允许的。
+
+            clarify、not_found、human 的 reply（这三类没有任何本轮证据）：
+            - **不许出现任何数字、链接或"已提交/已退款"这类执行声明**；客服入口由系统追加。
+            - 只说"还需要什么信息"或"这次没查到什么"，一句话即可。
+
+            输出示例（clarify）：
+            {"kind":"clarify","faq_id":"","reply":"能说一下是哪一单、哪个站点吗？我按这个再查。"}
 
             输出示例（realtime）：
             {"kind":"realtime","faq_id":"","reply":"这单的账单合计 27.36，系统记录的支付金额是 0.00，没有退款记录。\n\n订单号：2113549588485718017"}

@@ -60,7 +60,23 @@ def select_knowledge(source, libraries, plugin_identifier):
     return candidate
 
 
-def live_documents(source):
+def live_documents(source, *, replace_system=False):
+    """把仓库里的 documents 契约提示词写进 answer 节点 —— **不默认覆盖运营的编辑**。
+
+    这个函数以前无条件把 SYSTEM 换成 `consumer_documents.PROMPT`。而**运营的提示词就在
+    这个 SYSTEM 里**（ADR-0187）：一次迁移就会把他们改好的语气、开头、措辞全部吞掉，
+    而且从 diff 里看不出来 —— 因为模板“也是对的”。
+
+    现在的规则：
+
+    * SYSTEM 为空（老应用）→ 写入模板，这是**初始化**。
+    * SYSTEM 与模板逐字相同 → 不动，这是**幂等**。
+    * SYSTEM 与模板不同 → 拒绝，并说明两条路：确认要丢就用 `--replace-system`，
+      要保留就先把模板的契约要求（JSON 字段、``reply`` 用法）手动补进现有提示词。
+
+    拒绝而不是静默保留：静默保留会让「模板升级了、但线上还是旧契约」看起来像成功。
+    并发编辑同理 —— 两份内容不一致就是需要人来判断的那一刻，不是脚本可以代劳的。
+    """
     from aiops_diagnostics.consumer.consumer_documents import MODE_VARIABLE, PROMPT
 
     candidate = copy.deepcopy(source)
@@ -77,8 +93,36 @@ def live_documents(source):
     language = next(v for v in nodes["start"]["variables"] if v["variable"] == "language")
     language["options"] = list(SUPPORTED_LANGUAGES)
     prompts = nodes["answer"]["prompt_template"]
+    from aiops_diagnostics.consumer.consumer_documents import _protocol_block
+
+    # **协议与表达分开存**：运营的文字在前，系统维护的协议块在后（带标记）。
+    # 迁移只替换带标记的那一块，运营写的内容一个字都不动 —— 不需要 `--replace-system`
+    # 丢弃内容，也不需要运营"手补协议"。
+    systems = [p for p in prompts if p.get("role") == "system"]
+    # 任何一代协议块都认（`<!-- aiops-protocol:` 前缀），否则旧块会被当成运营文字留下。
+    operator_text = "\n".join(
+        p.get("text", "")
+        for p in systems
+        if not p.get("text", "").lstrip().startswith("<!-- aiops-protocol:")
+    )
+    if replace_system or not operator_text.strip():
+        operator_text = PROMPT
     prompts[:] = [p for p in prompts if p.get("role") != "system"]
-    prompts.insert(0, {"role": "system", "text": PROMPT})
+    if operator_text:
+        # **不 strip**：运营文字逐字保留（首尾空白也算他们写的）。
+        prompts.insert(0, {"role": "system", "text": operator_text})
+    prompts.insert(1 if operator_text else 0, {"role": "system", "text": _protocol_block()})
+
+    # 按名字去重：第二次迁移不能再追加一个同名环境变量（发布门会判"环境变量重复"）。
+    variables[:] = [v for v in variables if v.get("name") != "answer_fact_contract"]
+    variables.append(
+        {
+            "id": "answer_fact_contract",
+            "name": "answer_fact_contract",
+            "value_type": "string",
+            "value": "slots",
+        }
+    )
     nodes["answer"].setdefault("memory", {})["query_prompt_template"] = (
         "{{#sys.query#}}\n回答语言必须使用 {{#start.language#}}；按系统说明的语言名称翻译资料后回答。"
     )
@@ -129,11 +173,16 @@ def main():
     parser.add_argument("--knowledge-base", action="append")
     parser.add_argument("--knowledge-plugin")
     parser.add_argument("--live-documents", action="store_true")
+    parser.add_argument(
+        "--replace-system",
+        action="store_true",
+        help="连运营已编辑的 SYSTEM 一起换成仓库模板（会丢弃他们的改动）",
+    )
     args = parser.parse_args()
     os.umask(0o077)
     source = yaml.safe_load(args.source.read_text())
     if args.live_documents:
-        result = live_documents(source)
+        result = live_documents(source, replace_system=args.replace_system)
     elif args.knowledge_base or args.knowledge_plugin:
         if not args.knowledge_base or not args.knowledge_plugin:
             parser.error("选库迁移同时需要 --knowledge-base 与 --knowledge-plugin")
