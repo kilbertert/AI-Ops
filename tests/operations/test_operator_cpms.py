@@ -321,6 +321,39 @@ def terminal(f, qa):
     raise AssertionError("no terminal")
 
 
+def test_operator_dispatch_waits_for_a_valid_run_after_the_old_timeout(operator, monkeypatch):
+    from aiops_diagnostics.execution import agent_runs
+
+    def platform(spec, **kwargs):
+        # 模拟82秒完成：旧75秒运输期限会在回调之前退出，测试无需真的等待。
+        if spec.timeout < 82:
+            raise agent_runs.AgentRunDispatchError("agent platform unavailable")
+        payload = json.loads(spec.body)
+        assert 82 <= payload["timeout"] <= spec.timeout <= agent_runs.RUN_TTL_SECONDS
+        assert node(operator, payload["sid"]).status_code == 200
+        return {"content": ""}
+
+    monkeypatch.setattr(agent_runs, "request_json", platform)
+    response = request(operator["client"])
+    assert response.status_code == 202
+    final = terminal(operator, response.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+
+
+def test_dispatch_refuses_an_expired_deadline_before_platform_access(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from aiops_diagnostics.execution import agent_runs
+
+    called = []
+    monkeypatch.setattr(agent_runs, "request_json", lambda *a, **kw: called.append(True))
+    dispatcher = agent_runs.SnailDispatcher()
+    dispatcher.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
+    with pytest.raises(agent_runs.AgentRunDispatchError):
+        dispatcher.dispatch(None, "run-expired")
+    assert called == []
+
+
 def test_operator_runs_two_cpms_tools_and_original_readback(operator, monkeypatch):
     f = operator
     monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
