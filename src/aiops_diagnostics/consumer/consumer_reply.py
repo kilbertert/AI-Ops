@@ -1,105 +1,68 @@
-"""让 chatflow 的提示词写正文，同时不许它编数字。
+"""让提示词写正文，事实由系统填：片段契约 + 旧契约兼容。
 
-2026-10-30 产品诉求：**在 Dify 编排页改提示词就能调整客户端的说话方式**。
+产品诉求是"在编排页改提示词就能改说话方式"。真正难的不是让模型写字，而是**让写出来的话
+不能造假**。第一版用"数字必须能在证据里找到"来兜，复核用反例证明它两头都错（见
+`consumer_facts` 的模块文档）。现在的形状是：
 
-此前做不到，原因不是提示词不生效，而是正文被丢掉了：`answer` 节点按 `{kind, faq_id}`
-严格解析，模型写的字只用来做分类；用户看到的正文由 `consumer_plain` 按快照渲染。
-于是"改提示词让回复更拟人"这件事在 C 端**没有任何着力点**。
+* 模型写 ``合计{{fact:total_amount}}``，系统用本轮快照填 ``27.36``；
+* 模型自己的文字里不许出现数字、状态名或支付结果 —— 这三样是**有限集合**，不是语义猜测；
+* 其余措辞完全自由。
 
-这个模块给模型开一个写正文的口子：`answer` 节点可以在 JSON 里多带一个 `reply` 字段。
-网关**不信任**它，只做三件事：
-
-1. **数字必须来自本轮快照**：快照里每一个非空金额都必须在正文里出现（数值相等即可，
-   `2.4` 与 `2.40` 都算），否则拒收 —— 编造或漏掉金额都会在这里被拦下。
-2. **内部标识不进正文**：`cpms.*`、`status_code=`、`status_role=` 一律拒收。
-3. **订单号必须在正文里**：没有它，读者无法核对这是哪一单。
-
-拒收不是"降级成模板"而是**整轮失败**：一份混着假数字的答复比一句"服务暂时不可用"更糟。
-没带 `reply` 时行为与之前完全一致（用确定性渲染），所以老应用不会被这次改动影响。
+老应用（`callback_version < 5`）继续走三条弱判据，行为不变。代价写在 `consumer_facts`。
 """
 
 from __future__ import annotations
 
-import re
-
+from aiops_diagnostics.consumer import consumer_facts
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
 #: 正文上限。答复是几句话，不是文档；放宽会让一次跑飞的模型把整屏刷满。
 MAX_REPLY_CHARS = 2000
 
+#: 澄清／无结果／转人工的上限。它们是一句话的通知。
+MAX_NOTICE_CHARS = 600
+
 #: 不许出现在用户正文里的内部标识。`cpms.` 是接口名，`status_code=` 是原始码。
 FORBIDDEN = ("cpms.", "status_code=", "status_role=")
 
-#: 快照里"读者要能核对"的金额字段。空值不要求出现 —— 没给的值不能凭空写。
-AMOUNT_FIELDS = ("order_amount", "recorded_payment_amount", "recorded_refund_amount")
 
-_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+def validate_reply(reply: object, snapshot: dict, *, language: str, contract: str = "slots") -> str:
+    """校验模型写的正文，返回可直接交付的文本。不合格就整轮失败。
 
-
-def _numbers(text: str) -> set[float]:
-    found: set[float] = set()
-    for token in _NUMBER.findall(text):
-        try:
-            found.add(float(token))
-        except ValueError:  # pragma: no cover - 正则保证可解析
-            continue
-    return found
-
-
-def validate_reply(reply: object, snapshot: dict, *, language: str) -> str:
-    """校验模型写的正文，返回可直接交付的文本。不合格就整轮失败。"""
+    **默认是片段契约**：判据的默认值必须是强的那个，弱判据只能由运行期显式传入
+    （旧发布版本的绑定会传 ``contract="legacy"``）。反过来（默认弱、新契约显式开）会让
+    任何忘记传参的调用点悄悄退回弱判据 —— 复核正是这样漏掉标签互换的。
+    """
     if not isinstance(reply, str) or not reply.strip():
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply is empty")
     text = reply.strip()
     if len(text) > MAX_REPLY_CHARS:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply is too long")
-    for token in FORBIDDEN:
-        if token in text:
-            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply exposes internal identifiers")
-    order_no = str(snapshot.get("order_no") or "")
-    if order_no and order_no not in text:
-        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply omits the order number")
-    # 金额：快照里给了的，正文里必须出现且数值相等。这是"不许漏写"的判据。
-    present = _numbers(text)
-    for field in AMOUNT_FIELDS:
-        value = snapshot.get(field)
-        if value is None or str(value).strip() == "":
-            continue
-        try:
-            expected = float(str(value))
-        except ValueError:
-            continue
-        if expected not in present:
-            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", f"reply does not carry the recorded {field}")
-    # 反过来：正文里的**每一个**数字都必须能在证据里找到出处。
-    # 只要求"该有的都在"拦不住编造 —— 一段既有 2.40 又编了 2.5 的正文会照样通过。
-    allowed = _evidence_numbers(snapshot, language)
-    invented = sorted(present - allowed)
-    if invented:
-        raise ChatRunUnavailable(
-            "CHATFLOW_ANSWER_INVALID", "reply contains numbers that are not in the evidence"
-        )
+    if contract == "slots":
+        return consumer_facts.check_bound_reply(text, snapshot, language)
+    consumer_facts.check_legacy(text, snapshot, language)
     return text
 
 
-def _evidence_numbers(snapshot: dict, language: str) -> set[float]:
-    """证据里出现过的所有数字：快照各字段（含订单号）＋可核对的时间。
-
-    另外放行 0–10 的整数：它们是"第 2 条""3 步"这类计数，不构成对金额的断言，
-    卡住它们只会让模型不敢组织语言。金额与订单号不在此列 —— 它们必须逐字来自快照。
-    """
-    import json
-
-    from aiops_diagnostics.consumer.consumer_time import readable_time
-
-    corpus = json.dumps(snapshot, ensure_ascii=False, default=str) + " "
-    corpus += readable_time(snapshot.get("observed_at"))
-    allowed = _numbers(corpus)
-    allowed.update(float(n) for n in range(0, 11))
-    return allowed
-
-
-def model_reply(reply: object, snapshot: dict, *, language: str) -> dict:
+def model_reply(reply: object, snapshot: dict, *, language: str, contract: str = "slots") -> dict:
     """把模型写的正文包成 blocks-v1。前端只认 `blocks[]`，形状必须与既有答复一致。"""
-    text = validate_reply(reply, snapshot, language=language)
+    text = validate_reply(reply, snapshot, language=language, contract=contract)
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}
+
+
+def validate_notice(reply: object, *, language: str) -> str:
+    """校验提示词为**澄清／无结果／转人工**写的正文。
+
+    这三类答复没有任何本轮证据：没有快照、没有资料片段。所以判据是"一个数字都不许出现"，
+    不许写链接，不许有支付结果或"已提交"类执行声明。没有带正文时行为与之前完全一致。
+    """
+    if not isinstance(reply, str) or not reply.strip():
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "notice is empty")
+    text = reply.strip()
+    if len(text) > MAX_NOTICE_CHARS:
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "notice is too long")
+    for token in FORBIDDEN:
+        if token in text:
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "notice exposes internal identifiers")
+    consumer_facts.check_notice(text)
+    return text

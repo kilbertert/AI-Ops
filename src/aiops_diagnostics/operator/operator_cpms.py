@@ -717,6 +717,10 @@ class OperatorCpms:
                 if answer["kind"] == "site_search":
                     sites = _sites_from_evidence(task.caller, task, answer)
                     if sites is None:
+                        # 节点没调工具：说明是在**看到结果之前**写的，不能当查询结果交付。
+                        # 这里拒而不是静默丢掉：静默丢掉会让提示词作者以为它在生效。
+                        if answer["text"].strip():
+                            raise OperatorRefused("OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE")
 
                         def current_search_scope():
                             current_task, _, _ = self._current(run_id, node_token=token, manifest=manifest)

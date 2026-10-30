@@ -2,6 +2,9 @@
 
 from urllib.parse import urlsplit
 
+#: 事实片段契约的开关。**由迁移写入**，运营不改它；它的存在让旧发布版本可以继续停在 4。
+FACT_CONTRACT_VARIABLE = "answer_fact_contract"
+
 PATHS = {kind: "/v1/internal/consumer-data/" + kind for kind in ("knowledge", "status", "billing")}
 TYPES = {
     "start": "start",
@@ -42,6 +45,14 @@ EDGES = {
 
 class ConsumerFlowError(ValueError):
     """可向运营展示的本地编排拒绝原因，不包含上游正文。"""
+
+
+def _fact_slots(workflow) -> bool:
+    """这个 workflow 是否声明了事实片段契约（由迁移写入的环境变量）。"""
+    return any(
+        item.get("name") == FACT_CONTRACT_VARIABLE and item.get("value") == "slots"
+        for item in (workflow or {}).get("environment_variables", [])
+    )
 
 
 def publication_settings(
@@ -237,6 +248,9 @@ def publication_settings(
             **ceiling,
             **flags,
             "knowledge_base_ids": list(selected),
-            "callback_version": 4 if documents else 3,
+            # 5 = documents 契约 + **事实片段契约**（reply 里的事实只能来自 {{fact:…}} 片段）。
+            # 它与 4 的区别不是形状而是判据强度：4 只比数字集合，5 要求数字/状态/支付结果
+            # 只能由系统填值。旧发布版本停在 4，行为不变。
+            "callback_version": 5 if _fact_slots(workflow) else 4 if documents else 3,
         }
     return {**ceiling, **flags, "callback_version": 2}

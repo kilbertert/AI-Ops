@@ -163,7 +163,9 @@ def test_live_publication_ignores_missing_reviewed_file_and_snapshot_contains_no
     )
     upgrade = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(upgrade)
-    flow = upgrade.live_documents({"workflow": picker_graph(["kb-own"])})["workflow"]
+    # 夹具里的 SYSTEM 与模板不同 ⇒ 迁移默认拒绝覆盖（运营可能改过它）。
+    # 这条用例测的是发布设置，所以要显式替换。
+    flow = upgrade.live_documents({"workflow": picker_graph(["kb-own"])}, replace_system=True)["workflow"]
     target = {
         "tenant_id": "TENANT-A",
         "environment": "env-a",
@@ -173,7 +175,8 @@ def test_live_publication_ignores_missing_reviewed_file_and_snapshot_contains_no
     }
     frozen = frozen_settings(target, documents=True)
     result = publication_settings(flow, frozen, BASE, owned_libraries=[{"knowledge_base_id": "kb-own"}])
-    assert result["callback_version"] == 4 and result["knowledge_base_ids"] == ["kb-own"]
+    # 5 = documents 契约 + 事实片段契约（迁移写入 answer_fact_contract=slots）。
+    assert result["callback_version"] == 5 and result["knowledge_base_ids"] == ["kb-own"]
     assert set(result["content"]) == {"schema", "state", "tenant_id", "environment"}
     assert result["content"]["schema"] == SCHEMA
 
