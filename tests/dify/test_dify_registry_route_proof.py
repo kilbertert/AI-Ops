@@ -1,4 +1,4 @@
-"""`tools/dify_registry_route_proof.py` 必须能**证伪**注册表（#587 判据二的取数器）。
+"""`tools/verification/dify_registry_route_proof.py` 必须能**证伪**注册表（#587 判据二的取数器）。
 
 判据说的是「至少一个真实租户经**显式注册表映射**被正确路由；未登记的仍然 fail closed」。
 这条判据有一个很容易自我欺骗的失败形态：**两个候选恰好相同**。在 41 的真实数据上，
@@ -30,7 +30,7 @@ KB = "kb-1"
 def _load():
     """按路径导入 —— `tools/` 不是包（先例：`tests/dify/test_dify_registry_blast_radius.py`）。"""
     spec = importlib.util.spec_from_file_location(
-        "dify_registry_route_proof", ROOT / "tools" / "dify_registry_route_proof.py"
+        "dify_registry_route_proof", ROOT / "tools" / "verification" / "dify_registry_route_proof.py"
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

@@ -159,7 +159,7 @@ def test_live_publication_ignores_missing_reviewed_file_and_snapshot_contains_no
     from consumer.test_consumer_knowledge_picker import picker_graph
 
     spec = importlib.util.spec_from_file_location(
-        "upgrade", Path(__file__).parents[2] / "tools/upgrade_consumer_flow.py"
+        "upgrade", Path(__file__).parents[2] / "tools/content/upgrade_consumer_flow.py"
     )
     upgrade = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(upgrade)

@@ -15,7 +15,7 @@ AI-Ops(充电订单只读诊断运行时)目前持有生产库凭据,直连 MySQ
 > **方案状态**:本方案最终采用 D 方案(2026-08-27 锁定),TDengine 段暂留直连,Java 侧不动,tsdata 侧不动。
 
 > **P0 阻断(2026-08-28 查实并标注)**:D 方案的 HTTP 段(经充电桩 Java 服务 `/diag/*` 访问 MySQL/Redis)**无法在当前生产生效**,因为 **Java 侧 `/diag/*` 从未合并/部署**:
-> - 本机 `backend-v2-domestic/` 快照(2026-07-07)中 **没有** 任何 `/diag` Controller;唯一的 `/diag/*` 实现是 AI-Ops 仓库内 `java/cloud-charging-pile-web/.../DiagQueryController.java`(待落地工件,`java/README.md` 明示"未编译/未部署/待验证")。
+> - 本机 `backend-v2-domestic/` 快照(2026-07-07)中 **没有** 任何 `/diag` Controller;唯一的 `/diag/*` 实现是 AI-Ops 仓库内 `integrations/cpms-java/cloud-charging-pile-web/.../DiagQueryController.java`(待落地工件,`integrations/cpms-java/README.md` 明示"未编译/未部署/待验证")。
 > - `.env.example` 默认 `AIOPS_HTTP_BASE_URL=http://127.0.0.1:8080` 指向的是 `web-chuhai-upscaler.service`(一个 Python 静态站,`Server: SimpleHTTP/0.6`),**不是充电桩 Java 服务**;`/diag/order` 在该端口返回 404。
 > - 生产主机 `124.243.178.156` 上有 SSH alias(`prod-charge-124`),但本机只读访问被拒(Permission denied),无法确认其上 `/diag/*` 是否已跑。
 >
@@ -404,7 +404,7 @@ Feature: 诊断查询接口
 | 7 | Spring Security OAuth2 资源服务器被注释 | 若平台后续强推 OAuth2,方案需调整 | 本次不启用;留作演进选项,不阻塞 |
 | 8 | TDengine 段仍直连 | 当前生产环境 AI-Ops 仍持有 TDengine 凭据,直到 Phase 3b 完成;tsdata 真正补洞之前 TDengine 段仍直连 | Phase 3a 只删 MySQL+Redis 凭据;Phase 3b 完成后才删 TDengine 凭据 |
 | 9 | D 方案不解决 tsdata 自身访问控制 | D 方案不解决 tsdata 自身被任意人访问的问题,tsdata 的无鉴权访问通道仍未关闭 | tsdata 保持内网隔离与现有运维限制;补洞后作为 Phase 3b 前置条件 |
-| 10 | **Java 侧 `/diag/*` 未落地(P0)** | D 方案 HTTP 段依赖充电桩 Java 服务 `/diag/*`;当前该服务未合并/部署(唯一工件在 AI-Ops `java/`,`java/README.md` 明示未编译/未验证);`.env.example` 默认 8080 是无关 Python 静态站;生产 124 只读 SSH 被拒,无法确认真实部署 | **回退直连**:AI-Ops 继续直连 MySQL/Redis/TDengine,`production.env` 不启用 HTTP 段;待 Java 侧 `/diag/*` 真实合并并部署后,再启用 HTTP 段并回收直连凭据(Phase 3b / 新 issue) |
+| 10 | **Java 侧 `/diag/*` 未落地(P0)** | D 方案 HTTP 段依赖充电桩 Java 服务 `/diag/*`;当前该服务未合并/部署(唯一工件在 AI-Ops `java/`,`integrations/cpms-java/README.md` 明示未编译/未验证);`.env.example` 默认 8080 是无关 Python 静态站;生产 124 只读 SSH 被拒,无法确认真实部署 | **回退直连**:AI-Ops 继续直连 MySQL/Redis/TDengine,`production.env` 不启用 HTTP 段;待 Java 侧 `/diag/*` 真实合并并部署后,再启用 HTTP 段并回收直连凭据(Phase 3b / 新 issue) |
 
 ---
 

@@ -37,7 +37,7 @@ def test_chinese_model_answer_is_not_delivered_as_mongolian(tmp_path, monkeypatc
 
 
 def test_live_prompt_names_languages_and_repeats_preference_after_context():
-    module = runpy.run_path("tools/upgrade_consumer_flow.py")
+    module = runpy.run_path("tools/content/upgrade_consumer_flow.py")
     source = yaml.safe_load(Path("deploy/dify-chat/consumer-service.dsl.yml").read_text())
     source = module["select_knowledge"](source, ["a" * 32], "trendpower/consumer_knowledge:0.0.1@" + "a" * 64)
     nodes = {n["id"]: n["data"] for n in module["live_documents"](source)["workflow"]["graph"]["nodes"]}

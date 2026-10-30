@@ -118,8 +118,8 @@ X-Business-Entry: consumer
 
 | 层 | 来源 | 备注 |
 |---|---|---|
-| 题面 | 产品宽表（consumer 6 列 / operator 11 列）**或** `tools/faq_i18n/questions_<lang>.json` | consumer 的 `vi/mn/th/km` 宽表没有对应列，题面为起草 |
-| 答案 | `tools/faq_i18n/{answers,operator_answers}_<lang>.json` | **全部为起草**，以简体权威答案为源 |
+| 题面 | 产品宽表（consumer 6 列 / operator 11 列）**或** `tools/content/faq_i18n/questions_<lang>.json` | consumer 的 `vi/mn/th/km` 宽表没有对应列，题面为起草 |
+| 答案 | `tools/content/faq_i18n/{answers,operator_answers}_<lang>.json` | **全部为起草**，以简体权威答案为源 |
 
 内容变更通过代码评审、自动化校验和版本发布完成，废弃的 `question_id` 不复用。
 
@@ -129,7 +129,7 @@ X-Business-Entry: consumer
 
 - **两个平台的固定问答目录均覆盖 11/11**（#565 补齐）。缺内容时回退 `zh`，
   响应里的 `language` 字段**如实上报实际服务的语言**。
-- `zh-Hant` 由简体权威**派生**（`tools/derive_zh_hant.py`，opencc `s2twp`），不是另求一套翻译。
+- `zh-Hant` 由简体权威**派生**（`tools/content/derive_zh_hant.py`，opencc `s2twp`），不是另求一套翻译。
 - **泰语/高棉语：固定目录可读，当前WF01与明确订单诊断可提问**（#1114/#1115）。
   只有未进入WF01、也没有明确订单的旧关键词路线保留拒绝，不能把旧分词限制当成模型语言禁令。
   现役H5九语种正文验证见[正式记录](validation/2026-10-28-consumer-multilingual_02-production.md)。

@@ -18,7 +18,7 @@ python deploy/m2-live-03/context_digest.py --check
 docker run --rm --network none --read-only --entrypoint python \
   aiops-m2-live-03-gateway:task-verification \
   -c 'from aiops_diagnostics.gateway.gateway_api import create_gateway_app; print("Gateway import: passed")'
-uv run pytest tests/test_m2_live03_deploy.py -n 0
+uv run pytest tests/tooling/test_m2_live03_deploy.py -n 0
 ```
 
 多任务并行时给 `M2LIVE_GATEWAY_IMAGE` 换一个任务专属 tag，不能覆盖其他任务镜像。

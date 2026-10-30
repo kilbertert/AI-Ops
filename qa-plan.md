@@ -348,8 +348,8 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 ## 合成数据离线验收
 
 - 数据制品：`examples/synthetic-acceptance/synthetic_acceptance.json` 与 `manifest.json`。
-- 生成：`uv run python tools/generate_synthetic_acceptance_data.py`。
-- 执行：`uv run python tools/run_synthetic_acceptance.py`。
+- 生成：`uv run python tools/experiments/generate_synthetic_acceptance_data.py`。
+- 执行：`uv run python tools/experiments/run_synthetic_acceptance.py`。
 - 预期：完整订单 400 点曲线被限制为 300 点；部分订单报告保留但 telemetry unavailable；跨租户订单返回 ORDER_NOT_FOUND。
 - 状态：离线仿真通过，不解除 REAL-API-01..04 的真实环境 blocked 状态。
 
@@ -371,7 +371,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 环境：本地 AI-Ops checkout，使用业务 DOCX 文件作为未追踪输入。
 - 前置：两个 DOCX 可读；输出目录为空或已有上一版目录。
 - 数据：用户端和管家端 DOCX。
-- 动作：运行 `uv run python tools/generate_faq_catalog.py`，校验 JSON 语法、版本、数量、前缀和推荐字段边界。
+- 动作：运行 `uv run python tools/content/generate_faq_catalog.py`，校验 JSON 语法、版本、数量、前缀和推荐字段边界。
 - 预期：生成 28 条 consumer、17 条 operator；推荐项不含答案；原文换行、数字和符号保留；重复/冲突统计可见。
 - 清理：删除临时输出；不把 DOCX 加入 Git。
 
@@ -1900,7 +1900,7 @@ uv run pytest tests/gateway/test_assistant_api.py tests/conversation/test_conver
 
 前置：Linux、仓库锁定依赖、空闲回环端口；不得使用生产数据根或真实凭据。
 数据：脚本内的 USER-A/USER-B、ORDER-A/ORDER-B 与不存在订单，回环 introspection/CPMS 桩。
-执行：从仓库根运行 `uv run python tools/verify_consumer_charging_status_http.py --out /tmp/charging-status-http.json`。
+执行：从仓库根运行 `uv run python tools/verification/verify_consumer_charging_status_http.py --out /tmp/charging-status-http.json`。
 脚本创建一次性数据根，停止进程并删除临时数据；报告留在指定输出位置。
 
 | ID | 对应验收规则 / 动作 | 预期观察 | 本轮结果 |
@@ -1982,8 +1982,8 @@ CLI 段证明拒绝方向；成功段注入合成订单授权源。未完成业�
 
 前置：Docker、固定平台源码 checkout（`SNAIL_SRC`）、节点 jar 已构建；全部在本机内网。
 数据：合成调用者身份、合成订单、桩模型与桩业务上游；不接公司服务、不读生产数据。
-执行：`uv run pytest tests/test_m2_close_aggregation.py`（16 项）与
-`SNAIL_SRC=… uv run python tools/m2_close/run_ic.py --out /tmp/m2-close.json`。
+执行：`uv run pytest tests/tooling/test_m2_close_aggregation.py`（16 项）与
+`SNAIL_SRC=… uv run python tools/experiments/m2_close/run_ic.py --out /tmp/m2-close.json`。
 
 | ID | 对应验收场景 | 预期观察 | 本轮结果 |
 |---|---|---|---|
@@ -2018,7 +2018,7 @@ CLI 段证明拒绝方向；成功段注入合成订单授权源。未完成业�
 ## MODEL-FRAME 模型出口响应完整性（本地合成）
 
 环境与数据：Linux 开发机、锁定依赖、curl、一次性证书及回环上游；不接真实供应商或生产状态根。
-执行：`uv run pytest tests/test_m2_live03_model_proxy.py`。各用例先构造对应上游响应，再经真实
+执行：`uv run pytest tests/tooling/test_m2_live03_model_proxy.py`。各用例先构造对应上游响应，再经真实
 TLS 出口发请求并读取到 EOF；夹具关闭服务与连接，临时目录由 pytest 回收。
 
 | 编号 | 上游输入 | 预期可观察结果 | 本轮结果 |
@@ -2088,7 +2088,7 @@ EXECCFG-TOOL-08）。此前"已在 manager 层可拒"的写法与实测相反，
 `ControlledChargingStatusTool`、本片新增的 `GuardedChatModelFactory`/`GuardedChatModel`。
 不接真实供应商、不访问 41、不读生产凭据。**本片不改 Gateway、不写运行记录。**
 
-执行方式：仓库内 `tools/m2_close/m3node/`（无私有绝对路径；缺依赖时非零退出，不跳过后报通过）；
+执行方式：仓库内 `tools/experiments/m2_close/m3node/`（无私有绝对路径；缺依赖时非零退出，不跳过后报通过）；
 原始输出留在私有目录。单命令复跑见该目录 README。
 
 | 编号 | 前提与动作 | 预期可观察结果 | 本轮结果 |
@@ -2130,7 +2130,7 @@ EXECCFG-TOOL-08）。此前"已在 manager 层可拒"的写法与实测相反，
 | EXECCFG-NODE-24 | 把 `run_phase` 改成 `return 0` 的变异 | 自检必须转红 | 通过（转红）|
 
 追溯：对应 `acceptance.feature` 的 `EXECCFG-NODE-01..24`。复跑：
-`M3NODE_JDK_IMAGE=… M3NODE_DEPS=… tools/m2_close/m3node/run.sh`（缺依赖即非零退出）。
+`M3NODE_JDK_IMAGE=… M3NODE_DEPS=… tools/experiments/m2_close/m3node/run.sh`（缺依赖即非零退出）。
 
 **未覆盖**：Gateway 签发与持久化、`agent_version` 回执、真实供应商与真实模型、
 真实业务订单、生产节点与生产节点身份；`EXECCFG-NODE-02` 的「未声明工具/未声明 system」
@@ -2148,9 +2148,9 @@ EXECCFG-TOOL-08）。此前"已在 manager 层可拒"的写法与实测相反，
 
 ```bash
 uv run pytest tests/execution/test_m3_gateway_exec_config.py tests/execution/test_m2_close_contract.py -o addopts='' -q
-M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/manifest_parity.py
-uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exec-config-http.json
-uv run python tools/m2_close/m3node/verify_migration_rollback.py --out /tmp/migration.json
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/experiments/m2_close/m3node/manifest_parity.py
+uv run python tools/experiments/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exec-config-http.json
+uv run python tools/experiments/m2_close/m3node/verify_migration_rollback.py --out /tmp/migration.json
 ```
 
 | 编号 | 前提与动作 | 预期可观察结果 | 本机结果 |
@@ -2189,13 +2189,13 @@ Gateway（本机验收的取舍，不是隔离证明）。不接真实供应商�
 
 ```bash
 # 1) 真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS（39 条判据）
-M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/verify_node_link.py --out /tmp/node-link.json
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/experiments/m2_close/m3node/verify_node_link.py --out /tmp/node-link.json
 
 # 2) 同 JVM 并发（自带替身 Gateway；distinct / early / late / first-error）
-M3NODE_DEPS=… M3NODE_JDK_IMAGE=… bash tools/m2_close/m3node/m3link/run.sh
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… bash tools/experiments/m2_close/m3node/m3link/run.sh
 
 # 3) 判据单测（状态机 + 端点 + 复核反例）
-uv run pytest tests/execution/test_m3_node_link_state.py tests/test_m3_node_link_completion.py
+uv run pytest tests/execution/test_m3_node_link_state.py tests/tooling/test_m3_node_link_completion.py
 ```
 
 | 编号 | 前提与动作 | 预期可观察结果 | 本机结果 |
@@ -2209,7 +2209,7 @@ uv run pytest tests/execution/test_m3_node_link_state.py tests/test_m3_node_link
 | EXECCFG-LINK-07 | 领取重试 | 交回同一份快照，业务不重读；最终仍要整轮确认 | 通过 |
 | EXECCFG-LINK-08 | 重复/冲突/坏回执 | 同状态同原因幂等；不同原因 409（**成功通知同理**）；`200 {}`/错 run/`state=failed` 不被节点当成功 | 通过 3/3 + 成功原因冲突 1 条；变异「只认 2xx」使三条同时转红；旧实现下 `completed` 的 `reason` 被丢弃、两条不同原因都 200 |
 | EXECCFG-LINK-09 | 撤销 / 恰好到期 | 完成通知被拒、记录保持撤销/过期、不复活、不改写审计列 | 通过 |
-| EXECCFG-LINK-08-NULL | 成功通知的省略/null/非空原因组合 | 同原因 200；无原因与非空原因互换 409；原记录逐列不变 | 运行 `uv run pytest tests/test_m3_node_link_completion.py -k success_retry_compares_missing`；六组通过；旧实现两条转红 |
+| EXECCFG-LINK-08-NULL | 成功通知的省略/null/非空原因组合 | 同原因 200；无原因与非空原因互换 409；原记录逐列不变 | 运行 `uv run pytest tests/tooling/test_m3_node_link_completion.py -k success_retry_compares_missing`；六组通过；旧实现两条转红 |
 | EXECCFG-LINK-10 | 未启用清单 | 领取即 `succeeded`（旧语义）；完成端点回 `NOT_TRACKED` 且**不改任何列**（含不被读路径顺带收敛成 `expired`）；回执键集合不变 | 通过；旧实现下已过期的未追踪行会被改成 `expired`（复核反例已入库） |
 | EXECCFG-LINK-11 | **同 JVM** 相同 run 重入（early / late 两个窗口） | 重复请求在**本地**被拒（`DuplicateRunRefused`），不发任何通知；原 run 正常完成；model=2、claims=1、一条 completed | 通过；旧实现下 early 会把 A 报成 `LoopIncomplete` |
 | EXECCFG-LINK-12 | **同 JVM** 两个不同 run 并发 | 两者都完成；各领一次、各一条通知 | 通过 |
@@ -2228,20 +2228,20 @@ HTTP 桩与临时状态根。
 
 ```bash
 # 1) 预检判据：合法基线 + 逐项破坏（含两条原始反例、覆盖层反例）
-uv run pytest tests/test_m2_live03_manifest_preflight.py tests/test_m2_live03_checks.py -o addopts= -q
+uv run pytest tests/tooling/test_m2_live03_manifest_preflight.py tests/tooling/test_m2_live03_checks.py -o addopts= -q
 
 # 2) 复跑工具：独占占位、不跟随重定向、证据只留摘要、观测不完整即非零
-uv run pytest tests/test_m3_live_replay_tool.py -o addopts= -q
+uv run pytest tests/tooling/test_m3_live_replay_tool.py -o addopts= -q
 
 # 3) 真实栈上的一次派发（宿主上；三个根一起给，只发一次，失败不重试）
 export M2LIVE_CONFIG=/etc/aiops-m2-live-m3 M2LIVE_STATE=/var/lib/aiops-m2-live-m3
 export M2LIVE_PROJECT=m2-live-03 M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.identity.yaml
-python3 tools/m2_close/m3live/live_replay.py baseline --out <证据目录>/prod-before.json
+python3 tools/experiments/m2_close/m3live/live_replay.py baseline --out <证据目录>/prod-before.json
 bash deploy/m2-live-03/checks.sh up
-python3 tools/m2_close/m3live/live_replay.py send --order-file <0600 订单文件> --out <证据目录>
-python3 tools/m2_close/m3live/live_replay.py collect --run-id <run_id> --out <证据目录>
+python3 tools/experiments/m2_close/m3live/live_replay.py send --order-file <0600 订单文件> --out <证据目录>
+python3 tools/experiments/m2_close/m3live/live_replay.py collect --run-id <run_id> --out <证据目录>
 bash deploy/m2-live-03/checks.sh down            # 同一组变量：down 也走同一个 COMPOSE 数组
-python3 tools/m2_close/m3live/live_replay.py cleanup --out <证据目录> \
+python3 tools/experiments/m2_close/m3live/live_replay.py cleanup --out <证据目录> \
   --prod-baseline <证据目录>/prod-before.json
 ```
 
@@ -2267,7 +2267,7 @@ python3 tools/m2_close/m3live/live_replay.py cleanup --out <证据目录> \
 ## M3-CLINE-ACCEPTANCE-01
 
 - 环境：隔离栈保留的成功 run；本轮不再派发模型。调用者是构造身份。
-- 本地回归：`uv run pytest tests/test_m2_live03_bootstrap.py`；改绑的模型、指令、应用及信封
+- 本地回归：`uv run pytest tests/tooling/test_m2_live03_bootstrap.py`；改绑的模型、指令、应用及信封
   都读回一致才通过，三个新负例在旧实现全红；临时平台替身无残留。
 - 只读样本核对：从 run 行取订单及 scope，用私有 runtime.env 的业务只读连接参数，
   在 READ ONLY 事务中按 order_no/tenant_id/本人筛选最多两行，要求唯一；同一身份发一次
@@ -2288,7 +2288,7 @@ RedisThirdSessionResolver，Redis/订单授权/CPMS/平台回呼为替身，不�
 | USER-ENTRY-04 | 破坏运行记录、身份和日志观测 | 非零、confirmed=false；正常对照通过 | 临时目录 |
 | USER-ENTRY-LIVE | 正常登录的明确授权账号及其本人订单，正式隔离栈 | 登录来源→正式解析→本人订单→同 run succeeded/matched→快照对照；App 页面另验 | baseline 在 up 前；始终 down，再 cleanup |
 
-复跑：`uv run pytest tests/test_m3_user_entry_tool.py tests/test_m3_live_replay_tool.py`。
+复跑：`uv run pytest tests/tooling/test_m3_user_entry_tool.py tests/tooling/test_m3_live_replay_tool.py`。
 真实步骤与各参与方缺口见 [用户入口验收手册](docs/agents/m3-user-entry-acceptance.md)。
 真实正向当前待本人订单样本，不能把本地正例或登录 API 200 当成业务验收。
 
@@ -2304,10 +2304,10 @@ RedisThirdSessionResolver，Redis/订单授权/CPMS/平台回呼为替身，不�
 | SNAPSHOT-03 | 最终授权回调内撤销/到期/停节点/改绑定 | 确認钩子触发，拒正文；失败原因和终态保留 | 同上 |
 | SNAPSHOT-04 | 篡改/缺失快照、未完成循环、禁用入口 | 失败无正文；共用回执与默认关闭保持原样 | 同上 |
 
-执行 `uv run pytest tests/test_m3_consumer_snapshot.py`，并运行既有真进程
-`tools/m2_close/m3node/verify_gateway_exec_config.py`。真实模型/用户/App 仍另验。
+执行 `uv run pytest tests/tooling/test_m3_consumer_snapshot.py`，并运行既有真进程
+`tools/experiments/m2_close/m3node/verify_gateway_exec_config.py`。真实模型/用户/App 仍另验。
 
 节点顺序复验：执行 `AIOPS_GATEWAY_ENVIRONMENT=verify M3NODE_DEPS=<锁定依赖目录>
-M3NODE_JDK_IMAGE=<已安装JDK镜像> uv run python tools/m2_close/m3node/verify_node_link.py --out <私有报告>`。
+M3NODE_JDK_IMAGE=<已安装JDK镜像> uv run python tools/experiments/m2_close/m3node/verify_node_link.py --out <私有报告>`。
 Gateway 技能 helper 的 `--port` 仅改变探测地址，运行时同步设置 `AIOPS_GATEWAY_PORT`，
 `--out` 使用仓内 gitignored 的 `.pytest_cache/`；临时根由 helper 创建并清理。

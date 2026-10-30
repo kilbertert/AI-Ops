@@ -2,7 +2,7 @@
 
 本文件是 Gateway 侧执行配置守卫的**可执行契约**。它不是验收证据 —— 证据在
 `docs/validation.md`，复跑命令在 `qa-plan.md` 的 `EXECCFG-GATEWAY` 一节。
-节点侧守卫是另一件事，见 `tools/m2_close/m3node/README.md`。
+节点侧守卫是另一件事，见 `tools/experiments/m2_close/m3node/README.md`。
 
 ## 0. 边界
 
@@ -44,7 +44,7 @@
 非 JSON、`schema` 不受支持、`history_policy` 不是 `none`、`model` 缺失、
 `model_options` 缺失、`system_messages` 空、`tools` 空、任一模型键或工具三项缺失/空白。
 
-**两条一致性由 `tools/m2_close/m3node/manifest_parity.py` 钉住**：同一组样本分别喂给
+**两条一致性由 `tools/experiments/m2_close/m3node/manifest_parity.py` 钉住**：同一组样本分别喂给
 Python 与 Java 的真实加载器，逐条比对结论，接受样例还要比对身份逐字相同。
 `model_options` 与工具的 description/schema 曾经是「Gateway 收、节点拒」的缝。
 
@@ -106,14 +106,14 @@ R1-1 的教训是放行路径各有一次机会，只覆盖其中一条会让另
 - 旧行三列保持 `NULL`，**不回填、不猜**；历史列逐字不变。
 - **回滚**：清空 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` ⇒ 走未启用分支；代码回滚后三列
   成了旧代码可忽略的附加列。已用**升级前的 `agent_runs.py`** 对升级后的库实测可读。
-- 证据：`tools/m2_close/m3node/verify_migration_rollback.py`（9 条判据）。
+- 证据：`tools/experiments/m2_close/m3node/verify_migration_rollback.py`（9 条判据）。
 
 ## 7. 验收（见 `qa-plan.md` 的 EXECCFG-GW-01..17）
 
 单测不够。对外行为变化必须用**真实进程**驱动：
 
 ```bash
-uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exec-config-http.json
+uv run python tools/experiments/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exec-config-http.json
 ```
 
 它在一个一次性数据根上起真 `create_gateway_app`，用回环 CPMS 与平台替身，
@@ -212,7 +212,7 @@ uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exe
 ### 8.5 验收
 
 ```bash
-M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/verify_node_link.py --out /tmp/node-link.json
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/experiments/m2_close/m3node/verify_node_link.py --out /tmp/node-link.json
 ```
 
 真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS，39 条判据（LINK-01..10，含三种坏回执）。

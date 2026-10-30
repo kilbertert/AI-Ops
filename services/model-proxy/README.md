@@ -5,7 +5,7 @@
 
 ```bash
 python services/model-proxy/model_proxy.py --help
-uv run pytest tests/test_m2_live03_model_proxy.py tests/test_m2_live03_delivery_boundaries.py
+uv run pytest tests/tooling/test_m2_live03_model_proxy.py tests/tooling/test_m2_live03_delivery_boundaries.py
 ```
 
 [镜像构建脚本](../../deploy/m2-live-03/build-image.sh)将源码放到

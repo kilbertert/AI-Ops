@@ -103,7 +103,7 @@ environment、执行配置是否真的核对过），而且漏得很安静 —�
 ## 在本契约内（本片补齐）
 
 - **真 Gateway → 真 Java 节点 → 同一 run 快照 → 原 GET** 的整链可复跑，
-  由 `tools/m2_close/m3node/verify_chat_node_entry.py` 交付；
+  由 `tools/experiments/m2_close/m3node/verify_chat_node_entry.py` 交付；
 - 外部平台（编排）、模型上游、CPMS、调用者身份、订单授权与选单数据用本地替身，
   但**领取与整轮完成通知由节点自己发出** —— 不用 Python 派发器代劳。
 

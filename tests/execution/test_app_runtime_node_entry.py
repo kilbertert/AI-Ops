@@ -13,7 +13,7 @@
 
 因此这里证明的是：聊天入口能按租户把一次请求交给**那一个**节点、把结果以原 blocks
 形状交回、并且在失败/越权/取消/停用/清单缺失时**不**伪造成功。
-真实 Java 节点整链在 `tools/m2_close/m3node/verify_chat_node_entry.py`，不在本文件。
+真实 Java 节点整链在 `tools/experiments/m2_close/m3node/verify_chat_node_entry.py`，不在本文件。
 """
 
 from __future__ import annotations

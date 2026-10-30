@@ -924,7 +924,7 @@ runuser -u aiops41 -- .venv/bin/aiops-admin --config /etc/aiops-41/production.en
 - `--db` 必须显式给（不 source env 时 `from_env()` 回退 XDG 会**静默建空库**）。
 - **`[[dify_apps]]` 是 fail-closed 的**：表里出现**任何一行**之后，未登记的
   `(租户, 入口)` 就什么都不选（`unavailable`）。所以"加一行"是整台主机的一次开关 ——
-  会把**谁**的答案改成什么，先跑 `tools/dify_registry_blast_radius.py` 量出来再动。
+  会把**谁**的答案改成什么，先跑 `tools/verification/dify_registry_blast_radius.py` 量出来再动。
 - 发布前 KB 活性校验会真实调用 kb-service；供应商欠费时（embedding 502）会误报
   "知识库不存在"，**这是误报**，充值后重试即恢复，不要据此删绑定。
 
@@ -1003,7 +1003,7 @@ PY
 **先看清事实**（三条，缺一条就会做出错误预期）：
 
 1. **`seed_bundled` 没有启动路径的调用方。** 全仓搜 `seed_bundled` 只会命中它自身的
-   docstring 与 `tools/migrate_shortcut_i18n.py` —— 网关启动**不会**播种。
+   docstring 与 `tools/content/migrate_shortcut_i18n.py` —— 网关启动**不会**播种。
 2. **播种出来的行是草稿**（`status=draft`，设计如此：发布是运营动作），入口看不到。
 3. **走 HTTP 发布在 41 上不可达**：管理面要求 `ROLE_AGENT_PUBLISHER/ADMIN` 或
    `ROLE_PLATFORM_ADMIN`，而 41 的公司令牌路径 `roles=frozenset()`（见 §3.1-bis 的
@@ -1832,7 +1832,7 @@ curl -s -H "third-session: <会话>" -H "tenant-id: <会话租户>" \
 所以在新语言之前发布的快捷动作永远拿不到新语言文案（请求新语言时 `served_language` 如实报 `zh`、
 文案回退简体）。`docs/validation.md` 有 #542 的完整实测记录。
 
-**工具**：`tools/migrate_shortcut_i18n.py`（随仓库走，**不要在 41 上手写 SQL**）。
+**工具**：`tools/content/migrate_shortcut_i18n.py`（随仓库走，**不要在 41 上手写 SQL**）。
 
 ### 步骤
 
@@ -1849,17 +1849,17 @@ PY
 # ② 把工具送上机（**只送工具**，不动 /opt/aiops-41 的源码 —— 那是部署产物）
 #    scp 不会创建中间目录，首次执行必须先建好，否则上传就在这一步停住。
 ssh aiops-41 'mkdir -p /tmp/mig542/tools'
-scp tools/migrate_shortcut_i18n.py aiops-41:/tmp/mig542/tools/
+scp tools/content/migrate_shortcut_i18n.py aiops-41:/tmp/mig542/tools/
 ssh aiops-41 'chmod -R a+rX /tmp/mig542'
 
 # ③ 预演（只读；打印每行将补哪些语言，不写任何东西）
 ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiops-41/src \
-  /opt/aiops-41/.venv/bin/python /tmp/mig542/tools/migrate_shortcut_i18n.py \
+  /opt/aiops-41/.venv/bin/python /tmp/mig542/tools/content/migrate_shortcut_i18n.py \
   --db /var/lib/aiops-41/gateway/gateway.db'
 
 # ④ 应用（**必须 runuser -u aiops41**：私有目录守卫会拒绝 root；工作目录须为 /opt/aiops-41）
 ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiops-41/src \
-  /opt/aiops-41/.venv/bin/python /tmp/mig542/tools/migrate_shortcut_i18n.py \
+  /opt/aiops-41/.venv/bin/python /tmp/mig542/tools/content/migrate_shortcut_i18n.py \
   --db /var/lib/aiops-41/gateway/gateway.db --apply'
 
 # ⑤ 复核（读；应 0 次回退）

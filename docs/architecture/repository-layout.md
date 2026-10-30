@@ -6,12 +6,12 @@ Python Thin Harness和诊断/设备CLI已完整删除；独立aiops-admin保留�
 C端与管家原H5、Dify原生预览及独立CPMS/跨主体拒绝已通过，证据见
 [退役真实验收](../validation/2026-10-29-runtime-retirement-live.md)。历史故障准确率不在此结论内。
 
-第一片将现役Java节点16个文件从`tools/m2_close/node/`整体迁至`services/execution-node/`，
+第一片将现役Java节点16个文件从`tools/experiments/m2_close/node/`整体迁至`services/execution-node/`，
 同步所有现役源码/构建/实验引用；原Java文件逐字不变，宿主安装目录不变。
 隔离驱动继续在tools，Gateway镜像不再包含节点源码。验证见
 [第一片回执](../validation/2026-10-29-execution-node-layout.md)。
 
-第二片将固定模型出口由`tools/m2_live/model_proxy.py`迁至`services/model-proxy/`，
+第二片将固定模型出口由`tools/verification/m2_live/model_proxy.py`迁至`services/model-proxy/`，
 同步两套Compose、镜像上下文和原测试导入，源码逐字不变；新Compose必须与新路径镜像成对交付。
 
 第三片将C端12个Python模块及语言JSON归到`src/aiops_diagnostics/consumer/`，
@@ -44,9 +44,14 @@ Dify专用适配、C端知识编排和静态页面入口保留原归属。见
 Gateway追加：10个网关模块归gateway，管家会话归operator，知识HTML跟随knowledge；
 22测试归类，三个服务/运维命令保留实际实现。见[验证](../validation/2026-10-30-gateway-package-layout.md)。
 
+工具追加：`tools/`根层按用途分入content、verification、experiments/m2_close、inventory；
+公司Java补丁移入integrations/cpms-java，25测试归tests/tooling、9测试归tests/integrations。
+见[本片验证](../validation/2026-10-30-tooling-layout.md)。
+
 后续目标：Python按consumer/knowledge/identity/publication/gateway职责形成包，测试随职责归类；
 运行服务与一次性工具分开，部署面按服务聚合。每片更新调用者、资源加载、打包、CI与现役文档，
 保留错误处理与权限校验，不新建转发空壳或永久legacy目录。
+2026-10-30：上述各片已全部落地，目录目标不再处于进行中状态。
 
 ## 2026-10-28调查归档（不再作为保留或执行决定）
 
@@ -177,10 +182,10 @@ docs/            # 架构、ADR、运行手册、规格、历史证据沿用已�
 | `agent_runs`、`execution_manifest`、`chat_execution`、`node_publication` | `execution/`；名称相似也不能与 `agent_engine` 混为旧执行器 |
 | `codex_runtime`、`codex_launcher`、`responses_adapter`、`turn_recovery` | `model/`；先拆共享会话依赖，最终是否删除由消费者决定 |
 | `agent_contracts`、`agent_workspace`、`sources`、`agent_runner` | 跨职责文件，必须先拆具体使用部分，不能整文件机械归类 |
-| `tools/m2_close/node/` | `services/execution-node/`；Maven 源码和自身测试一起迁，实验驱动留 tools |
-| `tools/m2_live/model_proxy.py` | `services/model-proxy/`；现役 compose 启动它，不是一次性探针 |
-| `tools/m2_close/` 剩余内容、`tools/m2_live/` 探针 | `tools/verification/` 或 `tools/experiments/`，按实际启动者区分；不按里程碑过时推定废弃 |
-| `java/cloud-charging-pile-web/` | `integrations/cpms-java/`；这是公司侧补丁，不是本仓现役节点 |
+| `tools/experiments/m2_close/node/` | `services/execution-node/`；Maven 源码和自身测试一起迁，实验驱动留 tools |
+| `tools/verification/m2_live/model_proxy.py` | `services/model-proxy/`；现役 compose 启动它，不是一次性探针 |
+| `tools/experiments/m2_close/` 剩余内容、`tools/verification/m2_live/` 探针 | `tools/verification/` 或 `tools/experiments/`，按实际启动者区分；不按里程碑过时推定废弃 |
+| `integrations/cpms-java/cloud-charging-pile-web/` | `integrations/cpms-java/`；这是公司侧补丁，不是本仓现役节点 |
 | `ops/dify-*` 与 `deploy/dify-36/` | 按 Dify 组件聚合同一部署面；脚本、JS/HTML、补丁原文、配置模板一起核对引用 |
 
 ## 四、迁移顺序与每片验收

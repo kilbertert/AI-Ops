@@ -85,7 +85,7 @@ flowchart LR
 | `src/aiops_diagnostics/consumer/`、`tests/consumer/` | C端工作流、知识与本人订单业务及对应测试 |
 | `services/execution-node/` | 现役 Java 节点源码、资源与 Maven 构建入口 |
 | `services/model-proxy/` | 现役固定目标模型代理 |
-| `tools/m2_live/` | 隔离栈探针与回环中继 |
+| `tools/verification/m2_live/` | 隔离栈探针与回环中继 |
 | `src/aiops_diagnostics/knowledge/`、`tests/knowledge/` | 知识检索、开户、绑定、同步守卫与对应测试 |
 | `src/aiops_diagnostics/identity/`、`tests/identity/` | 调用者身份、公司权限、订单范围和共享安全规则 |
 | `src/aiops_diagnostics/publication/`、`tests/publication/` | 发布内容、生命周期、快捷动作与校验 |
@@ -94,7 +94,8 @@ flowchart LR
 | `src/aiops_diagnostics/{operator,health,data}/` | 管家分析、健康报告、共享只读数据 |
 | `src/aiops_diagnostics/{common,conversation}/` | 通用原语、会话存储、澄清与固定FAQ资源 |
 | `src/aiops_diagnostics/gateway/`、`tests/gateway/` | HTTP装配、网关配置、存储、调度与观测 |
-| `tools/` | 内容生成、迁移和隔离验证 |
+| `tools/{content,verification,experiments,inventory}/` | 内容工具、业务验证、隔离实验与公司源码索引 |
+| `integrations/cpms-java/` | 公司Java受控接口补丁，独立于执行节点 |
 | `plugins/` | Dify 知识插件及其原生打包布局 |
 | `deploy/`、`ops/` | 部署制品、环境声明、代理配置与操作手册 |
 | `java/` | 公司侧 Java 集成补丁，不是执行节点源码 |

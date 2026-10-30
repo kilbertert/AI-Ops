@@ -57,7 +57,7 @@ def test_editor_knowledge_options_with_upstream_role_guards(tmp_path):
             IMAGE,
             "-",
         ],
-        input=(ROOT / "tools/verify_dify_knowledge_role.py").read_text(),
+        input=(ROOT / "tools/verification/verify_dify_knowledge_role.py").read_text(),
         capture_output=True,
         text=True,
         timeout=45,

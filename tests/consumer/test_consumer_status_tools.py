@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).parents[2]
-TOOLS = ROOT / "tools" / "consumer-status"
+TOOLS = ROOT / "tools" / "verification" / "consumer-status"
 
 
 def _load(name: str):

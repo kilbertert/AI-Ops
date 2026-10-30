@@ -8,7 +8,7 @@
   * 真实的 Dify 路线 worker 与回调端点。
 
 替身只有两类：**Dify 服务本身**（一个本地 HTTP 桩，因为本文件不是整链验收 ——
-真 Dify 的整链在 `tools/m2_close/m3node/verify_dify_chat_entry.py`）与 CPMS（合成上游）。
+真 Dify 的整链在 `tools/experiments/m2_close/m3node/verify_dify_chat_entry.py`）与 CPMS（合成上游）。
 
 这一组的强判据是**计数**：授权不满足时业务请求必须是 0；正常对照必须证明不是"全拒假绿"。
 """
