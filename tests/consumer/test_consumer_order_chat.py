@@ -183,7 +183,9 @@ def test_latest_and_explicit_answers_are_bound_to_private_evidence(provision):
         body = response.json()
         assert body["type"] == "qa" and body["status"] == "completed"
         text = body["result"]["blocks"][0]["text"]
-        assert ORDER in text and "充电结束" in text and "cpms.chargingInfo" in text
+        # 来源换成人话（ADR-0181）：读者认得出这段数据来自哪条记录，但看不到内部标识。
+        assert ORDER in text and "充电结束" in text and "充电状态记录" in text
+        assert "cpms.chargingInfo" not in text
         assert "PRIVATE-PLATE" not in text
         assert p.auth_calls[:2] == ["aiops:diagnoses:write", "aiops:orders:read"]
         assert p.scopes[0].tenant_id == "tenant-a" and p.scopes[0].user_id == "C-1"
@@ -270,7 +272,9 @@ def test_unknown_status_and_history_recheck(provision):
     p.status = "999"
     with TestClient(p.app) as client:
         response = query(client).json()
-        assert "status_role=unknown" in response["result"]["blocks"][0]["text"]
+        # 未知状态不再把原始码当正文：正文说人话，原始码只留在存储里的快照（ADR-0181）。
+        text = response["result"]["blocks"][0]["text"]
+        assert "未知" in text and "status_role=unknown" not in text
         p.allowed.clear()
         assert client.get("/v1/assistant/questions/" + response["qa_id"], headers=HEADERS).status_code == 404
         assert client.get("/v1/assistant/questions", headers=HEADERS).status_code == 200

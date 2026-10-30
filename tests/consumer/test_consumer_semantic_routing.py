@@ -30,7 +30,9 @@ def test_semantics_reach_live_order_instead_of_faq(tmp_path, monkeypatch, questi
         final = done(env, response.json()["qa_id"]).json()
         assert final["status"] == "completed", final
         assert len(calls) == 1 and env["upstream"].calls == 1 and not kb.calls
-        assert "cpms.chargingInfo" in final["result"]["blocks"][0]["text"]
+        # 来源写人话（ADR-0181）：证书是「读者认得出这条记录」，不是内部标识字面值。
+        text = final["result"]["blocks"][0]["text"]
+        assert "充电状态记录" in text and "cpms.chargingInfo" not in text
 
 
 def test_fresh_query_after_expired_faq_keeps_conversation_but_no_stale_memory(tmp_path, monkeypatch):

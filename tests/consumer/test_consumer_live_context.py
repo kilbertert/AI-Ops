@@ -77,7 +77,8 @@ def test_live_order_has_one_snapshot_and_never_carries_it_to_next_model_turn(tmp
         final = done(env, first["qa_id"]).json()
         assert final["status"] == "completed", final
         text = final["result"]["blocks"][0]["text"]
-        assert ORDER_A in text and "cpms.chargingInfo" in text and "UTC" in text
+        assert ORDER_A in text and "充电状态记录" in text and "UTC" in text
+        assert "cpms.chargingInfo" not in text
         assert env["upstream"].calls == 1 and len(kb.calls) == 1
         assert Client.calls[-1]["conversation_id"] == ""
         after = ask(env, "怎么查看费用？", first["conversation_id"])
