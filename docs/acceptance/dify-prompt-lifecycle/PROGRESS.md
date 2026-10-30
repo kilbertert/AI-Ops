@@ -35,6 +35,19 @@
       分支 `feat/dify-prompt-lifecycle`，`verify` / `Workflow policy` / `spec-tree lint` 全过，
       `mergeStateStatus=CLEAN`。**未合并、未部署。**
 
+## 复核修正（2026-10-30，第二轮）
+
+1. 独立反例 10 项：修复前全红，修复后全绿（`probe.py`，退出 0）。
+2. documents 契约放行 clarify/not_found/human 的 reply；归一化不再丢 reply。
+3. 事实判据换成封闭集合 + 两侧标签绑定；删掉开放式正则；支持 `{{fact:…}}` 片段。
+4. 协议与表达分离：协议块由系统维护，迁移只换协议块，运营文字不动。
+5. `callback_version` 4→5；旧版本停在 4 继续可用。
+6. 在途/历史：正常发布后旧 run 按签发版本交付；换凭据/内容/撤回仍拒。
+7. 找站：站名形状与可用性封闭词表，编造站名与英文可用性断言被拒。
+8. `verify_prompt_lifecycle.py` 版本检查改为真实绑定表执行；页面/模型项列 NOT_RUN。
+9. **未完成**：页面级（真实 Dify 编辑框 + 预览/发布/恢复）与真实模型验收 —— 本机无隔离
+   Dify 实例（`127.0.0.1:10018` 不可达），见 `docs/validation/2026-10-30-dify-prompt-lifecycle-correction.md`。
+
 ## 实跑结果（本机）
 
 - 基线 64 passed（改动后同一组仍 64 passed）；全量 `tests/` 3647 passed / 9 skipped / 0 failed。
