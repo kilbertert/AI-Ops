@@ -3384,7 +3384,12 @@ def create_gateway_app(
         # 让它不进入任何共享缓存；这条声明不替代 TLS 与授权，只是不让中间层多存一份。
         response.headers["Cache-Control"] = "no-store"
         if not selected_settings.charging_status_base_url:
-            raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "route not found")
+            from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
+
+            try:
+                consumer_endpoint(selected_settings, caller.effective_tenant_id)
+            except ValueError as exc:
+                raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "route not found") from exc
         _require_consumer_self_order(caller, business_entry, order_no)
         _require_visible_order(context, caller, order_no)
         return _charged_snapshot_response(selected_settings, context, caller, order_no)
@@ -3404,14 +3409,12 @@ def create_gateway_app(
         那条管（那条是给模型用的）。范围完全由服务端按会话身份推导，参数动不了它。
         """
         from aiops_diagnostics.consumer import consumer_sites as consumer_sites_module
-        from aiops_diagnostics.gateway.gateway_config import charging_endpoint
+        from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
 
         response.headers["Cache-Control"] = "no-store"
         _require_consumer_self(caller, business_entry)
         try:
-            base_url = charging_endpoint(
-                selected_settings.charging_status_base_url, caller.effective_tenant_id
-            )
+            base_url = consumer_endpoint(selected_settings, caller.effective_tenant_id)
         except ValueError as exc:
             raise StandardAPIError(
                 404, "TENANT_ENDPOINT_UNRESOLVED", "business endpoint is not registered"
@@ -6705,12 +6708,12 @@ def _authorized_consumer_snapshot(settings, caller, order_no, data_kind):
     if data_kind == "status":
         return _authorized_charging_snapshot(settings, caller, order_no)
     from aiops_diagnostics.consumer.consumer_billing import read_billing_record
-    from aiops_diagnostics.gateway.gateway_config import charging_endpoint
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
 
     if data_kind != "billing":
         raise ValueError("unsupported consumer data kind")
     return read_billing_record(
-        charging_endpoint(settings.charging_status_base_url, caller.effective_tenant_id),
+        consumer_endpoint(settings, caller.effective_tenant_id),
         order_no,
         tenant_id=caller.effective_tenant_id,
         user_id=caller.subject.c_user_id or "",
@@ -6725,10 +6728,10 @@ def _authorized_charging_snapshot(
     直读入口与节点回呼入口都走这里 —— 契约 §3.6 要求两个入口共用同一份授权读取规则，
     不能在内部端点上另造一条更宽松的。身份取自已验证的 ScopeContext，不取请求头。
     """
-    from aiops_diagnostics.gateway.gateway_config import charging_endpoint
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
 
     try:
-        endpoint = charging_endpoint(settings.charging_status_base_url, caller.effective_tenant_id)
+        endpoint = consumer_endpoint(settings, caller.effective_tenant_id)
     except ValueError as exc:
         raise StandardAPIError(
             404, "TENANT_ENDPOINT_UNRESOLVED", "business endpoint is not registered"

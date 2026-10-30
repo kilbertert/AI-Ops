@@ -31,8 +31,7 @@ def workspace(settings, tenant, name, console):
     return outcome.workspace_id
 
 
-def dependencies(console, workspace_id, profile, gateway_url):
-    model = profile["model"]
+def model_credentials(console, workspace_id, model):
     console.install_plugins(workspace_id, [model["plugin"]])
     path = "/console/api/workspaces/current/model-providers/" + model["provider"] + "/models/credentials"
     query = "?" + urlencode({"model": model["name"], "model_type": "llm"})
@@ -71,6 +70,10 @@ def dependencies(console, workspace_id, profile, gateway_url):
     for key in ("endpoint_url", "max_tokens_to_sample", "function_calling_type", "stream_function_calling"):
         if observed.get(key) != credentials.get(key):
             raise SetupRefused("SETUP_MODEL_CONFLICT")
+
+
+def dependencies(console, workspace_id, profile, gateway_url):
+    model_credentials(console, workspace_id, profile["model"])
     manifest_path = Path(profile["target"]["manifest_file"])
     validate_private_file(manifest_path)
     manifest = json.loads(manifest_path.read_text())
@@ -262,6 +265,7 @@ def rebind_knowledge(document: dict, knowledge_ids, *, forbidden_ids=()) -> dict
         # 没有受控检索节点（旧 FAQ 流程）或出现多个：都不是可以自动绑定的形态。
         raise SetupRefused("SETUP_KNOWLEDGE_BINDING_REQUIRED")
     matches[0]["tool_configurations"] = {"knowledge_base_ids": {"type": "constant", "value": selected}}
+    matches[0].pop("credential_id", None)
     return document
 
 
@@ -340,9 +344,6 @@ def copy_consumer_app(console, source, workspace_id, job_id, request, document):
 
 # ── 客户端依赖：插件、目录凭据、模型凭据、业务连接 ────────────────────────
 
-PLUGIN_CREDENTIALS = "/console/api/workspaces/current/tool-provider/builtin/{provider}/credentials"
-PLUGIN_ADD = "/console/api/workspaces/current/tool-provider/builtin/{provider}/add"
-
 
 def consumer_endpoint(context, tenant_id: str) -> str:
     """把**已批准的环境连接**登记成这个租户的受管业务地址，并返回它。
@@ -370,41 +371,59 @@ def consumer_endpoint(context, tenant_id: str) -> str:
 
 
 def consumer_plugin(console, workspace_id: str, settings, catalogue_token: str) -> str:
-    """安装并配置客户端知识插件，返回 provider id。
+    """按 Dify 1.17.1 的脱敏凭据列表对账，写入后校验并启用受管凭据。"""
+    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER
 
-    目录凭据（只用于列库）与"本轮取数凭据"是两把不同的东西：插件用它列库，正文读取必须
-    带本轮 data_grant。这里写入并**回读**确认，写不进去就不发布。
-    """
-    provider = (getattr(settings, "consumer_knowledge_plugin", "") or "").split("@", 1)[0]
-    if not provider:
+    if not getattr(settings, "consumer_knowledge_plugin", ""):
         raise SetupRefused("SETUP_CONSUMER_PLUGIN_REQUIRED")
     console.install_plugins(workspace_id, [settings.consumer_knowledge_plugin])
-    payload = {
-        "credentials": {
-            "gateway_url": settings.public_base_url.rstrip("/"),
-            "catalogue_token": catalogue_token,
-        },
-        "name": "aiops-managed",
-        "type": "builtin",
+    base = f"/console/api/workspaces/current/tool-provider/builtin/{PROVIDER}"
+    credentials = {
+        "gateway_url": settings.public_base_url.rstrip("/"),
+        "catalogue_token": catalogue_token,
     }
-    rows = console._call(workspace_id, PLUGIN_CREDENTIALS.format(provider=provider))
-    existing = [
-        row
-        for row in (rows or {}).get("credentials", [])
-        if (row.get("credentials") or {}).get("gateway_url") == payload["credentials"]["gateway_url"]
-        and (row.get("credentials") or {}).get("catalogue_token") == catalogue_token
-    ]
-    if not existing:
-        console._call(workspace_id, PLUGIN_ADD.format(provider=provider), method="POST", body=payload)
-        rows = console._call(workspace_id, PLUGIN_CREDENTIALS.format(provider=provider))
-        existing = [
-            row
-            for row in (rows or {}).get("credentials", [])
-            if (row.get("credentials") or {}).get("gateway_url") == payload["credentials"]["gateway_url"]
-        ]
-    if len(existing) != 1:
+
+    def managed():
+        rows = console._call(workspace_id, base + "/credentials")
+        if not isinstance(rows, list):
+            raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
+        selected = [r for r in rows if r.get("name") == "aiops-managed"]
+        if len(selected) > 1:
+            raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
+        return selected[0] if selected else None
+
+    existing = managed()
+    if existing:
+        # 密钥回读是掩码；更新接口会用传入的真实凭据校验，不能拿掩码比较密钥。
+        console._call(
+            workspace_id,
+            base + "/update",
+            method="POST",
+            body={
+                "credential_id": existing["id"],
+                "name": "aiops-managed",
+                "credentials": credentials,
+            },
+        )
+    else:
+        console._call(
+            workspace_id,
+            base + "/add",
+            method="POST",
+            body={
+                "name": "aiops-managed",
+                "type": "api-key",
+                "credentials": credentials,
+                "visibility": "all_team_members",
+            },
+        )
+    saved = managed()
+    if not saved or (saved.get("credentials") or {}).get("gateway_url") != credentials["gateway_url"]:
         raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
-    return provider
+    console._call(workspace_id, base + "/default-credential", method="POST", body={"id": saved["id"]})
+    if not managed().get("is_default"):
+        raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
+    return PROVIDER
 
 
 def consumer_models(console, workspace_id: str, document: dict, profile) -> list[str]:
@@ -426,15 +445,18 @@ def consumer_models(console, workspace_id: str, document: dict, profile) -> list
             wanted.append((provider, name))
     if not wanted:
         raise SetupRefused("SETUP_MODEL_CONNECTION_REQUIRED")
-    approved_provider = str((profile.get("model") or {}).get("provider") or "")
+    approved = profile.get("model") or {}
     ready = []
     for provider, name in wanted:
+        if (provider, name) == (approved.get("provider"), approved.get("name")):
+            model_credentials(console, workspace_id, approved)
+            ready.append(f"{provider}/{name}")
+            continue
         path = f"/console/api/workspaces/current/model-providers/{provider}/models/credentials"
-        saved = console._call(workspace_id, path + f"?model={name}&model_type=llm")
+        query = "?" + urlencode({"model": name, "model_type": "llm"})
+        saved = console._call(workspace_id, path + query)
         if saved.get("current_credential_id"):
             ready.append(f"{provider}/{name}")
             continue
-        if provider != approved_provider:
-            raise SetupRefused("SETUP_MODEL_CONNECTION_REQUIRED")
-        raise SetupRefused("SETUP_MODEL_CONFLICT")
+        raise SetupRefused("SETUP_MODEL_CONNECTION_REQUIRED")
     return ready
