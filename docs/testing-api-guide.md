@@ -122,6 +122,7 @@ curl -i --max-time 30 "$BASE_URL/v1/assistant/questions/$QA_ID" \
 | U03 | `GET /v1/banner` | 入口横幅配置 | 200，type=banner、banners；空数组可合法 |
 | M01 | `GET /v1/media/{signed_id}` | 读取本轮返回的签名媒体 | 200媒体字节；Range可206，失效403/404；非法Range为416 |
 | O01 | `GET /v1/orders/{order_no}/access` | 订单授权探针，不读正文 | 200，accessible=true；不可见/不存在404 |
+| O02 | `GET /v1/sites?name=&address=&limit=10` | C端可查站点：只含本人订单里出现过的站点 | 200，sites/shown/scope/empty；total恒为null（上游计数是租户口径） |
 | H01 | `POST /v1/health-report-jobs` | 充电健康报告 | 202，job_id；不等于故障根因诊断 |
 | H02 | `GET /v1/health-report-jobs/{job_id}` | 健康报告轮询 | 200，report在完成后可用 |
 | R01 | `POST /v1/standard/analyses` | 管家站点时间窗聚合；独立能力 | 202，analysis_id |

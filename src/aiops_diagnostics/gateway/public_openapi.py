@@ -31,6 +31,8 @@ OPERATIONS = {
     ("get", "/v1/banner"): ("FAQ与入口", "读取入口横幅", "Banners"),
     ("get", "/v1/media/{signed_id}"): ("媒体", "读取签名图片或视频", "Media"),
     ("get", "/v1/orders/{order_no}/access"): ("订单", "检查当前主体的订单权限", "OrderAccess"),
+    # 站点列表由 C 端会话身份推导范围（本人订单里出现过的站点），不接受任何范围参数。
+    ("get", "/v1/sites"): ("站点", "查询本人订单关联的站点", "Sites"),
     ("post", "/v1/health-report-jobs"): ("健康报告", "创建充电健康报告", "Health"),
     ("get", "/v1/health-report-jobs/{job_id}"): ("健康报告", "查询健康报告", "Health"),
     ("post", "/v1/standard/analyses"): ("管家分析", "创建站点时间窗分析", "Analysis"),
@@ -160,6 +162,22 @@ def _schemas() -> dict[str, Any]:
         ),
         "OrderAccess": _object(
             order_no=string, accessible={"type": "boolean", "const": True}, scope_fingerprint=string
+        ),
+        # 站点列表：范围由会话身份推导，`total` 恒为 null —— 上游那个计数是租户口径，
+        # 与「本人可见」不是同一个集合，给出去就会被当成"你有多少个"。
+        "Sites": _object(
+            sites={
+                "type": "array",
+                "items": _object(id=string, name=string, address=string),
+            },
+            shown={"type": "integer"},
+            total={"type": ["integer", "null"]},
+            scope={"type": "string", "const": "own_orders"},
+            scope_truncated={"type": "boolean"},
+            limited={"type": "boolean"},
+            empty={"type": ["string", "null"], "enum": ["none_visible", "no_match", None]},
+            source=string,
+            observed_at=string,
         ),
     }
 
