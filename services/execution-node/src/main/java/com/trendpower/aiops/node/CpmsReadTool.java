@@ -21,6 +21,8 @@ public final class CpmsReadTool implements ToolCallback {
     public static final String DETAIL = "cpms_order_detail";
     public static final String SAMPLES = "cpms_charging_samples";
     public static final Set<String> NAMES = Set.of(DETAIL, SAMPLES);
+    /** 工具授权契约版本。必须与 Gateway 侧 `operator_cpms.TOOL_CONTRACT` 逐字相同。 */
+    public static final String CONTRACT = "request-target/1";
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
@@ -37,13 +39,31 @@ public final class CpmsReadTool implements ToolCallback {
         void record(String runId, String manifestId, String tool, Grant grant, JsonNode evidence);
     }
 
+    /** 这一次要发的请求。**节点不再自己拼路径** —— 授权给什么就发什么。 */
+    public record Request(String method, String path, String query) {
+        public Request {
+            if (!"GET".equals(method) || path == null || !path.startsWith("/")
+                    || path.length() > 2048 || path.contains("..") || path.contains("\n")
+                    || query == null || query.length() > 2048 || query.contains("\n")
+                    || (path + (query.isEmpty() ? "" : "?" + query)).length() > 4096) {
+                throw refused("invalid_request_target");
+            }
+        }
+
+        String target() {
+            return query.isEmpty() ? path : path + "?" + query;
+        }
+    }
+
     public record Grant(String authorizationId, String tenantId, Set<String> siteIds,
-                        String orderNo, String baseUrl, String bearer, Instant expiresAt) {
+                        JsonNode inputs, Request request, String baseUrl, String bearer,
+                        Instant expiresAt) {
         public Grant {
             siteIds = Set.copyOf(siteIds);
             if (authorizationId == null || authorizationId.isBlank()
                     || tenantId == null || !tenantId.matches(ID)
-                    || orderNo == null || !orderNo.matches(ID) || siteIds.isEmpty()
+                    || inputs == null || !inputs.isObject() || inputs.isEmpty()
+                    || request == null || siteIds.isEmpty()
                     || siteIds.size() > 1000 || siteIds.stream().anyMatch(id -> !id.matches(ID))
                     || bearer == null || bearer.isBlank() || bearer.length() > 16384
                     || bearer.chars().anyMatch(c -> c <= 32 || c >= 127) || expiresAt == null) {
@@ -57,6 +77,13 @@ public final class CpmsReadTool implements ToolCallback {
                 throw refused("invalid_cpms_endpoint");
             }
             baseUrl = baseUrl.replaceAll("/+$", "");
+        }
+
+        /** 输入里的订单号；两个现役工具都需要它，缺失即无效授权。 */
+        String orderNo() {
+            JsonNode value = inputs.path("order_no");
+            if (!value.isTextual() || !value.asText().matches(ID)) throw refused("invalid_authorization");
+            return value.asText();
         }
 
         @Override public String toString() { return "CpmsGrant[redacted]"; }
@@ -91,15 +118,15 @@ public final class CpmsReadTool implements ToolCallback {
             String tool = definition.name();
             Grant grant = authorization.require(runId, manifestId, tool);
             requireLive(grant);
-            String path = DETAIL.equals(tool)
-                    ? "/chOrderInfo/getOrderInfoDetail/" + grant.orderNo()
-                    : "/iotChargingDevice/getChargingMonitor/" + grant.orderNo() + "?current=1&size=50";
-            JsonNode body = get(grant, path);
+            // 请求目标来自授权，不来自工具名 —— 这正是「新增一条只读路径不必改本文件」。
+            JsonNode body = get(grant, grant.request().target());
             ObjectNode data = DETAIL.equals(tool) ? detail(body, grant) : samples(body, grant);
             ObjectNode evidence = JSON.createObjectNode();
-            evidence.put("tool", tool).put("order_no", grant.orderNo())
-                    .put("source", DETAIL.equals(tool) ? "cpms.orderDetail" : "cpms.chargingMonitor")
-                    .put("observed_at", Instant.now().toString()).set("data", data);
+            evidence.put("tool", tool);
+            evidence.set("inputs", grant.inputs());
+            evidence.put("source", DETAIL.equals(tool) ? "cpms.orderDetail" : "cpms.chargingMonitor");
+            evidence.put("observed_at", Instant.now().toString());
+            evidence.set("data", data);
             requireLive(grant);
             Grant current = authorization.require(runId, manifestId, tool);
             requireLive(current);

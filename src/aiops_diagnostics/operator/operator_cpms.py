@@ -40,6 +40,32 @@ SITE_MAX_SHOWN = 10
 #: 站点列表的 CPMS 路径。查询参数由 :class:`SiteKeywords` 组装，不由调用方拼接。
 SITE_PATH = "/chSite/page"
 
+#: 工具授权的**契约版本**。节点必须逐字声明它，否则在领取授权那一步就被拒。
+#:
+#: 这不是版本号装饰：授权载荷从「订单号」换成「这一次要发的请求」是破坏性变更，
+#: 而两端的证据字段集合是**精确相等**比对的，混跑不会「碰巧还能用」，只会在某一次
+#: 完成回调里以缺字段的形状炸开。把拒绝移到授权那一步，混跑就有一个稳定的错误码。
+TOOL_CONTRACT = "request-target/1"
+TOOL_CONTRACT_HEADER = "X-AI-Ops-Tool-Contract"
+
+
+#: 每个工具这一次要发的请求。**路径在这里物化**，节点只执行拿到的那个请求 ——
+#: 这正是「新增一条只读路径不必改 Java」的那一步。
+def tool_request(tool: str, order_no: str) -> dict[str, str]:
+    """按工具名把这一次的请求目标算出来。`order_no` 目前是两个工具的路径参数。"""
+    if tool not in PATHS:
+        raise OperatorRefused("OPERATOR_TOOL_DISABLED")
+    if tool == TOOL_NAMES[1]:
+        return {"method": "GET", "path": PATHS[tool] + order_no, "query": "current=1&size=50"}
+    return {"method": "GET", "path": PATHS[tool] + order_no, "query": ""}
+
+
+def tool_inputs(tool: str, order_no: str) -> dict[str, str]:
+    """这一次运行的输入。订单号是**输入**，不再是授权载荷的中心。"""
+    if tool not in PATHS:
+        raise OperatorRefused("OPERATOR_TOOL_DISABLED")
+    return {"order_no": order_no}
+
 
 def diagnoses_an_order(run) -> bool:
     """这次运行是不是**订单诊断**。
@@ -405,7 +431,11 @@ class OperatorCpms:
             "operation": run.operation,
         }
 
-    def grant(self, run_id, token, manifest, tool):
+    def grant(self, run_id, token, manifest, tool, contract=""):
+        if contract != TOOL_CONTRACT:
+            # 旧节点不声明契约版本。挡在**领授权**这一步，而不是等它在完成回调里因为
+            # 证据缺字段而失败——那既不是稳定错误码，也发生在公司令牌已经用过之后。
+            raise OperatorRefused("OPERATOR_TOOL_CONTRACT_OUTDATED")
         task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
         if run.state == "issued" and not self.context.agent_run_store.claim(run_id):
             raise OperatorRefused("OPERATOR_CLAIM_CONFLICT")
@@ -416,21 +446,32 @@ class OperatorCpms:
             "authorization_id": hashlib.sha256(task.grant.encode()).hexdigest(),
             "tenant_id": task.caller.effective_tenant_id,
             "site_ids": [task.order_site_id],
-            "order_no": run.order_no,
+            "inputs": tool_inputs(tool, run.order_no),
+            "request": tool_request(tool, run.order_no),
+            "contract": TOOL_CONTRACT,
             "base_url": task.proxy_url + "/v1/internal/operator-runs/" + run_id + "/cpms",
             "bearer": task.grant,
             "expires_at": run.expires_at.isoformat(),
         }
 
-    def proxy(self, run_id, grant, path, query):
+    def proxy(self, run_id, grant, path, query, method="GET"):
         task = self.tasks.get(run_id)
         if task is None or not secrets.compare_digest(task.grant, grant):
             raise OperatorRefused("OPERATOR_GRANT_REJECTED")
         run = self.context.agent_run_store.get(run_id)
         if run is None:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
-        tool = next((name for name, prefix in PATHS.items() if path == prefix + run.order_no), None)
-        if tool is None or query != ("current=1&size=50" if tool == TOOL_NAMES[1] else ""):
+        # 白名单是**完整请求目标**：方法、路径、查询串三者都对才算。拿工具名反推路径
+        # 的做法已经去掉——那正是「加一条只读路径就要改 Java」的来源。
+        tool = next(
+            (
+                name
+                for name in PATHS
+                if tool_request(name, run.order_no) == {"method": method, "path": path, "query": query}
+            ),
+            None,
+        )
+        if tool is None:
             raise OperatorRefused("OPERATOR_PATH_REJECTED")
         with task.lock:
             self._current(run_id, tool=tool)
@@ -466,9 +507,8 @@ class OperatorCpms:
         run = self.context.agent_run_store.get(run_id)
         if run is None:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
-        return self.proxy(
-            run_id, grant, PATHS[tool] + run.order_no, "current=1&size=50" if tool == TOOL_NAMES[1] else ""
-        )
+        request = tool_request(tool, run.order_no)
+        return self.proxy(run_id, grant, request["path"], request["query"], request["method"])
 
     def record(self, run_id, token, manifest, tool, payload):
         if set(payload) != {"authorization_id", "evidence"}:
@@ -484,11 +524,11 @@ class OperatorCpms:
                 raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
             if (
                 not isinstance(evidence, dict)
-                or set(evidence) != {"tool", "order_no", "source", "observed_at", "data"}
+                or set(evidence) != {"tool", "inputs", "source", "observed_at", "data"}
                 or evidence.get("tool") != tool
                 or evidence.get("data") != expected["data"]
                 or evidence.get("source") != expected["source"]
-                or evidence.get("order_no") != run.order_no
+                or evidence.get("inputs") != tool_inputs(tool, run.order_no)
             ):
                 raise OperatorRefused("OPERATOR_EVIDENCE_MISMATCH")
             try:

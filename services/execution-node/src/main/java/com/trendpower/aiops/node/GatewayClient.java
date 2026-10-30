@@ -29,6 +29,7 @@ public class GatewayClient {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     static final String EXEC_CONFIG_HEADER = "X-AI-Ops-Exec-Config";
+    static final String TOOL_CONTRACT_HEADER = "X-AI-Ops-Tool-Contract";
 
     private final String baseUrl;
     private final String nodeToken;
@@ -52,6 +53,17 @@ public class GatewayClient {
 
     /** 一次调用要么拿到 2xx 的 JSON 正文，要么抛 {@link GatewayRefused}（不泄露上游正文）。 */
     public JsonNode post(String path, String body, String execConfig) {
+        return post(path, body, execConfig, null);
+    }
+
+    /**
+     * 带工具契约声明的一次调用。
+     *
+     * <p>契约头不是装饰：授权载荷从「订单号」换成「这一次要发的请求」是破坏性的，
+     * 两端的证据字段集合又是精确相等比对的 —— 混跑不会碰巧能用。把它做成一次显式
+     * 声明，旧 Gateway 与旧节点就各自在可预期的位置被拒。
+     */
+    public JsonNode post(String path, String body, String execConfig, String toolContract) {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))
                 .timeout(timeout)
@@ -61,6 +73,9 @@ public class GatewayClient {
                 .POST(HttpRequest.BodyPublishers.ofString(body));
         if (execConfig != null && !execConfig.isBlank()) {
             builder.header(EXEC_CONFIG_HEADER, execConfig);
+        }
+        if (toolContract != null && !toolContract.isBlank()) {
+            builder.header(TOOL_CONTRACT_HEADER, toolContract);
         }
         HttpResponse<String> response;
         try {

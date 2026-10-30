@@ -1,7 +1,7 @@
 # 175. 工具授权装请求目标，不装订单号
 
 日期：2026-10-30
-状态：已采纳（设计定型，尚未实施）
+状态：已采纳（已实施，2026-10-30）
 
 ## 决定
 
@@ -59,6 +59,48 @@ Grant 多一个 `site_query` 字段，代理多一条前缀规则。它输在形
 发布期的漂移检查可以顺带覆盖它。它输在生命周期不匹配：清单是发布期产出、跨 run 不变的，
 而路径里的订单号是 run 级的。让 run 级参数进入发布期清单，等于让清单随 run 变化，
 而清单的身份就是它原始字节的 sha256（`execution_manifest.py` 头部约束 1）。
+
+## 实现形态（2026-10-30 落地）
+
+授权载荷（Gateway → 节点）：
+
+```json
+{
+  "tenant_id": "...", "site_ids": ["..."],
+  "inputs":  {"order_no": "..."},
+  "request": {"method": "GET", "path": "/chOrderInfo/getOrderInfoDetail/ORDER-1", "query": ""},
+  "contract": "request-target/1",
+  "base_url": "...", "bearer": "...", "expires_at": "..."
+}
+```
+
+三处随之收敛：路径由 `operator_cpms.tool_request()` **一处**物化（网关侧），节点只执行
+`grant.request()`；代理按 `(method, path, query)` 三元组比对；证据字段集合从
+`{tool, order_no, source, observed_at, data}` 换成 `{tool, inputs, source, observed_at, data}`。
+
+**混跑怎么被显式拒绝。** 新增一个契约声明：节点在领取授权与上报证据时带
+`X-AI-Ops-Tool-Contract: request-target/1`，授权载荷也回带同一个 `contract` 值。
+
+- **旧节点 + 新网关**：网关在**领授权**那一步就拒（`OPERATOR_TOOL_CONTRACT_OUTDATED`），
+  而不是等完成回调里证据缺字段——后者发生在公司令牌已经用过之后。
+- **新节点 + 旧网关**：旧网关回一份没有 `contract`/`request` 的载荷，节点拒绝
+  （`authorization_contract_mismatch`）。
+
+两个方向都由验收程序覆盖，不是「碰巧失败」。
+
+## 部署顺序与回滚点
+
+**不能沿用「先网关后节点」。** 这道变更没有灰度窗口：新节点 + 旧网关会在领授权被拒，
+旧节点 + 新网关同样被拒——环境里任何一台没同步的节点在这段时间内**不可用**，这是设计
+选择（宁可显式拒绝，也不要一份字段不齐的证据）。
+
+1. 先构建并核对节点 JAR（`services/execution-node`，JDK 21，依赖预置），产物摘要入私有记录。
+2. 同一窗口内：停节点 → 替换 JAR → 启动 → 网关同步上线。节点在网关之前或之后启动都可以，
+   因为两个方向的拒绝都是显式的、可观测的。
+3. 回滚点：**网关与节点各自的上一个制品**。回滚必须是两端一起回；只回一端会落进上面
+   说的不可用状态，而且日志里只看得到拒绝码，看不出是「只回了一端」。
+4. 健康判据：一次真实单订单任务走完两个工具，`evidence_tools` 与报告字段齐全；
+   在此之前不要撤旧制品。
 
 ## 后果与验证
 
