@@ -17,20 +17,28 @@
 「该路径无模型调用」），改 Dify 应用的提示词对它毫无影响 —— 只有带「为什么／扣费／金额」
 的问题才会路由到 Dify 链。
 
-**真机核对结果（重要，不得读作已验收）**：41 上**摸不到这条面**。
-`/etc/aiops-41/production.env` 里没有 `AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED`，也没有
-`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL`，即 `consumer_order_chat_enabled=False`。
-用真实会话（Redis `app:3rd_session:*`，公网 `api.mall.qushiyun.com`，`/v1/faq/recommendations` 200）
-就本人真实订单提问，实测：
+**真机核对（已通过）**：真实会话 + 本人真实订单 + 公网入口，两种答复都返回了新格式：
 
-- 「查一下我的订单 … 现在是什么状态」→ `404 TENANT_ENDPOINT_UNRESOLVED`（业务端点未登记）；
-- 「查一下订单 … 的账单」→ `409 CHAT_ROUTE_UNAVAILABLE`（业务执行路由未配置）。
+- 状态：租户 `…861824`、订单 `2107546575906942977` →
+  「这单当前的状态是「充电结束」。」 + 订单号 + 查询时间 + 「这只是我查到的业务状态，不代表故障原因。」 + 「来源：充电状态记录」；
+- 账单：同一账号同一单 → 「这单的账单合计 2.4，系统记录的支付金额是 2.4，没有退款记录。」 + 三项人话注释。
 
-即：新代码**已部署但未启用**，真实用户现在拿不到这条答复。因此
-**不能把 ADR-0182 的渲染说成已在 41 上验过**，也不能根据一次 41 实测判断措辞好不好读。
-要真验，得先决定是否为该租户启用这两个开关（属于开关变更，不是本片范围）。
+**怎么确认用户看到的就是这条面**：41 的 `assistant_questions` 在 `2026-10-30T03:41:13Z`
+（与反馈截图的时刻同一分钟）只有一条 `qa_5c85458e…`，问题「帮我检测…这个订单的充电异常」，
+返回的正是**旧格式**：`订单 … 本次查询状态：充电结束（status_code=1，status_role=finished）。
+来源：cpms.chargingInfo；观察时间（UTC）：…504254+00:00`。
+它走的是 `consumer-chatflow` 绑定，但正文由 `chat_execution.answer_from_run` 复用
+`status_answer` 渲染 —— 所以**改 Dify 提示词对这条答复无效**，它是确定性快照渲染。
+
+**两个容易读错的开关事实（已核对，写下来）**：
+
+- 开关在 `/etc/aiops-41/gateway.env`（systemd `EnvironmentFile`），**不在** `production.env`；
+  那里 `AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED=1`、`AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED=1`。
+- `AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 只登记了租户 `1942105476598861824`。
+  其它租户问状态会得到 `404 TENANT_ENDPOINT_UNRESOLVED` —— 那是**端点未登记**，不是开关关了。
+
 **未验**：真机／原 H5 上的实际观感（结论句是否在第一屏、`·` 与编号在真机的对齐）；
-九种非中文译文未经母语者复核。决策见 ADR-0182，真机探测过程与证据见
+九种非中文译文未经母语者复核。决策见 ADR-0182，探测过程与证据见
 [真机核对记录](../validation/2026-10-30-consumer-plain-answers-live.md)。
 
 ## 来源版本下拉改成客户名与 Dify 应用名（2026-10-30）
