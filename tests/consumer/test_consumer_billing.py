@@ -66,7 +66,7 @@ def test_billing_record_is_not_a_payment_confirmation_and_null_is_not_zero(backe
     assert snapshot["order_amount"] == "2.26"
     text = billing_answer(snapshot, "zh")["blocks"][0]["text"]
     assert "不证明已经扣款" in text and "不证明银行到账" in text and "未提供币种" in text
-    assert "未退款" in text and "记录的退款金额：0" in text
+    assert "未退款" in text and "已退金额：0" in text
     backend["row"].update(refundStatus=2, refundAmount="1.10", payAmount=None)
     snapshot = read()
     assert snapshot["recorded_payment_amount"] is None
