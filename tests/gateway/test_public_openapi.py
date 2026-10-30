@@ -26,7 +26,7 @@ def test_public_operations_match_testing_guide_and_exclude_management(tmp_path):
         for m, p in re.findall(r"\| [A-Z]\d{2} \| `(GET|POST|DELETE) ([^`]+)`", guide)
     }
     actual = {(method, path) for path, item in spec["paths"].items() for method in item}
-    assert len(actual) == 19 and actual == documented
+    assert len(actual) == 20 and actual == documented
     serialized = json.dumps(spec)
     for private in (
         "/internal/",

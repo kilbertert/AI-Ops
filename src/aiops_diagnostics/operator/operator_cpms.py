@@ -1061,7 +1061,7 @@ def cpms_site_reader(base: str, bearer: str):
     return read
 
 
-def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize):
+def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, outside_scope="reject"):
     """按显式范围与关键词读一次站点。
 
     三段逻辑在这里合流：范围判定（含逐页复核）、CPMS 读取、结果对齐与计数口径。
@@ -1070,6 +1070,16 @@ def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize):
 
     ``read(path, tenant)`` 是传输，``reauthorize() -> fingerprint`` 是「读取期间撤权
     就停止后续交付」那条判据；两者都由调用方提供。空范围不发任何 CPMS 请求。
+
+    ``outside_scope`` 说明「上游返回了一条不在可见范围里的站点」该怎么处理，两个入口
+    的答案不同且都不该被对方沿用：
+
+    * ``reject``（管家）—— 上游请求已经带上站点集合，再出现范围外的行说明上游没有按
+      约定收窄，那是一处**违约**，整份响应不可信。
+    * ``skip``（C 端）—— 上游按租户返回，范围外的行是**预期内**的，本地过滤即可；
+      把它当违约会让「本人只有一个站点」的用户永远查不到自己的站点。
+
+    租户不符在两种模式下都是硬拒绝：那不是范围宽窄问题，是数据归属错误。
     """
     rows: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -1101,8 +1111,11 @@ def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize):
                     or not isinstance(item.get("id"), str)
                     or not item["id"]
                     or str(item.get("tenantId") or "") != scope.tenant_id
-                    or (scope.site_ids is not None and str(item["id"]) not in scope.site_ids)
                 ):
+                    raise OperatorRefused("CPMS_SCOPE_MISMATCH")
+                if scope.site_ids is not None and str(item["id"]) not in scope.site_ids:
+                    if outside_scope == "skip":
+                        continue
                     raise OperatorRefused("CPMS_SCOPE_MISMATCH")
                 selected = {key: str(item.get(key) or "") for key in ("id", "name", "address")}
                 if (
