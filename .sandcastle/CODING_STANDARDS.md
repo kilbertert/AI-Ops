@@ -16,6 +16,8 @@
 
 ## Structure & clarity
 
+- 新增或移动文件遵循 [现行目录规则](../docs/architecture/repository-layout.md#现行目录规则)，
+  提交前运行 `uv run pytest tests/test_repository_layout.py`。
 - Keep modules cohesive and separate concerns at established seams. Prefer a
   deep module with a small interface over pass-through layers or many shallow
   files. Introduce a new seam only when the current system has real variation.

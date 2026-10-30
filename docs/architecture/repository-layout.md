@@ -1,4 +1,48 @@
-# 仓库目录迁移
+# 仓库目录规范与迁移记录
+
+## 现行目录规则
+
+本节约束后续开发。下方迁移记录与调查归档解释历史，不能作为新增文件的放置依据。
+
+| 位置 | 应放内容 |
+|---|---|
+| `src/aiops_diagnostics/consumer/`、`operator/` | C端与管家的业务编排、规则与交付 |
+| `identity/` | 公司主体、调用者范围与共享授权规则 |
+| `data/`、`health/` | 共享只读数据访问与状态、健康指标/报告 |
+| `knowledge/`、`conversation/` | 知识检索/媒体/开户、会话/澄清/固定FAQ |
+| `publication/`、`execution/` | 内容发布生命周期、节点委派合同/运行账本 |
+| `dify/`、`gateway/` | Dify协议适配、HTTP装配/配置/调度/存储/观测 |
+| `common/` | 已有的跨领域HTTP、文件、配置、语言与生命周期原语；不吸收业务编排 |
+| 仓库根 | 已登记的构建、项目指令与交付入口；业务代码、工具和新文档进入对应目录 |
+| Python包根 | 版本初始化及三个现役命令实现；新业务模块进入上述职责包 |
+| `tests/<职责>/` | 对应职责的行为测试；管家使用`tests/operations/`，避免与Python标准库`operator`冲突 |
+| `tests/`根 | 现有跨服务部署、仓库规则、退役检查与共享夹具；新增业务测试进入职责目录 |
+| `tools/content/`、`verification/`、`experiments/`、`inventory/` | 内容生成/迁移、验证探针、隔离实验、公司源码索引；tools根只留说明与统一测试命令 |
+| `services/`、`integrations/` | 独立运行服务源码、公司侧集成补丁；新增常驻服务不得放进tools |
+| `deploy/<服务>/`、`ops/`既有目录 | 成套部署资产、环境清单/代理配置和运行手册；Gateway根层交付脚本保持唯一实现 |
+
+未写全前缀的Python目录均位于`src/aiops_diagnostics/`。JSON、HTML、YAML等运行资源跟随使用者所在包，
+通过`importlib.resources`加载并验证wheel/服务bundle中的资源；测试夹具放对应测试目录或`tests/fixtures/`。
+
+新增功能先找实际负责该业务的模块。仅为转发增加一层、建立泛化`utils/`收容业务、
+把正式运行组件放入实验目录，都不满足本规范。跨包复用依赖现有接口；共享授权规则只保留一份。
+
+### 自动约束与变更方式
+
+`tests/test_repository_layout.py`是根层文件与一级目录的检查清单，覆盖仓库根、`src/`、Python包根、`tests/`、
+`tools/`、`services/`、`integrations/`、`deploy/`、`ops/`，并禁止恢复旧`java/`入口。
+它检查Git已跟踪及未忽略的新文件，允许在已有职责目录内增加文件；构建缓存不参与判断。
+因此新增文件即使被README列出，只要落回根层或新增未登记的一级目录，仍会失败。
+
+现有`test_readme_architecture.py`继续检查模块索引、文档链接和新增导入循环，
+`test_runtime_retirement.py`继续检查旧模块缺失、退役导入和旧路由不可达。
+这三组测试由现有CI全量pytest执行，`verify`是保护主分支的必需检查，无需人工记得另跑。
+
+若确实需要新增一级目录或根层入口，在同一PR中说明职责、调用者和现有目录不合适的原因，
+同步本节与检查清单，并按项目ADR规则判断是否需要记录决定。不要仅为消除失败扩大清单。
+文件路径可以机械检查，放进已有目录的代码是否职责单一、接口是否合理、资源是否属于该包，仍须审查确认。
+
+本地检查：`uv run pytest tests/test_repository_layout.py tests/test_readme_architecture.py tests/test_runtime_retirement.py`。
 
 ## 2026-10-29：退役验收后开始
 
