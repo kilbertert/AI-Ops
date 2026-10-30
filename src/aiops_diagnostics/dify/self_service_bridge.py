@@ -61,6 +61,9 @@ def handle(handler, bridge):
                 # 等于让一个手写请求绕过第一道门。
                 "scope",
                 "sources",
+                "question",
+                "order_no",
+                "trial_id",
             }
         ),
     )
@@ -74,6 +77,9 @@ def handle(handler, bridge):
         "versions": ("POST", "/versions"),
         "version": ("POST", "/version"),
         "workspace": ("POST", "/workspace"),
+        "trial": ("POST", "/trial"),
+        "trial-result": ("POST", "/trial/result"),
+        "trial-cancel": ("POST", "/trial/cancel"),
     }
     if action in {"operation", "retry"}:
         job = payload.pop("id", "")
@@ -91,8 +97,34 @@ def handle(handler, bridge):
     if (method == "GET" or action == "retry") and payload:
         raise _Rejected(400, "无效参数")
     _validate_scope_and_sources(action, payload, _Rejected)
+    if action.startswith("trial"):
+        expected = {"app_id", "question", "order_no"} if action == "trial" else {"app_id", "trial_id"}
+        if set(payload) - expected or not handler.settings.trial_key:
+            raise _Rejected(400, "无效预览参数")
+        if action == "trial":
+            if not isinstance(payload.get("question"), str) or not 0 < len(payload["question"]) <= 4000:
+                raise _Rejected(400, "请填写预览问题")
+            if not isinstance(payload.get("order_no", ""), str) or not re.fullmatch(
+                r"[A-Za-z0-9_.:-]{0,64}", payload.get("order_no", "")
+            ):
+                raise _Rejected(400, "无效订单号")
+        elif not isinstance(payload.get("trial_id"), str) or not re.fullmatch(
+            r"tr_[a-f0-9]{32}", payload["trial_id"]
+        ):
+            raise _Rejected(400, "无效预览")
+    elif set(payload) & {"question", "order_no", "trial_id"}:
+        raise _Rejected(400, "无效参数")
     # 应用状态/发布必须能由当前Dify工作区读到；平台跨租户开通另由公司目录和来源登记裁定。
-    if action in {"status", "readiness", "publish", "versions", "version"}:
+    if action in {
+        "status",
+        "readiness",
+        "publish",
+        "versions",
+        "version",
+        "trial",
+        "trial-result",
+        "trial-cancel",
+    }:
         app_id = payload.get("app_id", "")
         if not re.fullmatch(r"[a-f0-9-]{36}", app_id):
             raise _Rejected(400, "无效应用")
@@ -107,7 +139,8 @@ def handle(handler, bridge):
         handler.settings.gateway_base_url + "/v1/dify/management" + path,
         method=method,
         headers={
-            "Authorization": "Bearer " + handler.settings.publish_key,
+            "Authorization": "Bearer "
+            + (handler.settings.trial_key if action.startswith("trial") else handler.settings.publish_key),
             "X-AIOps-Console-Session": session.access_token,
             "Content-Type": "application/json",
         },

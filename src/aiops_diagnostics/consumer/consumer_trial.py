@@ -31,6 +31,7 @@ class ConsumerTrial:
     #: 试用本来就在**临时应用**里跑这份 DSL，所以它不需要正式路由也能证明"草稿可用"；
     #: 需要的是"这份草稿仍然属于这个客户"，那一条由 `require_current` 的草稿分支查目录。
     draft: bool = False
+    authorize: object = None
 
     def fingerprint(self):
         return hashlib.sha256(
@@ -41,11 +42,18 @@ class ConsumerTrial:
         ).hexdigest()
 
     def require_current(self, settings):
+        if self.authorize:
+            self.authorize()
         if self.draft:
             from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 
             row = SelfServiceStore(settings.database_file).app(self.route.app_id)
-            if row is None or row["tenant_id"] != self.route.tenant_id or row["entry"] != "consumer":
+            if (
+                row is None
+                or row["tenant_id"] != self.route.tenant_id
+                or row["entry"] != "consumer"
+                or row["environment"] != self.route.environment
+            ):
                 raise ValueError("trial draft is no longer managed")
             return
         row = ChatRouteBindingStore(settings.chat_route_bindings_file).by_key(self.route.key)
@@ -66,6 +74,8 @@ class ConsumerTrial:
         runs = runtime.dify_run_store
         app_id = ""
         run_id = "consumer_trial_" + secrets.token_hex(16)
+        registration = JobRegistration(route_type="trial")
+        runtime._qa_registrations[trial_id] = registration
         try:
             app_id = admin.import_app_dsl(
                 self.source.workspace_id, yaml_content=self.dsl, name="WF01 trial " + trial_id
@@ -99,14 +109,14 @@ class ConsumerTrial:
             from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
             decision = validate(
-                runtime.classify_consumer(self.question, language=language, selected_order=True)
+                runtime.classify_consumer(self.question, language=language, selected_order=bool(order))
             )
             intent = decision["intent"]
             if intent not in {"knowledge", "order_status", "billing_record"} or decision["uses_context"]:
                 raise ChatRunUnavailable("TRIAL_CLARIFICATION_REQUIRED", message("clarify", language))
             kind = "billing" if intent == "billing_record" else "status"
             live = intent in {"order_status", "billing_record"}
-            if live and decision["order_reference"] != "explicit":
+            if live and (not order or decision["order_reference"] != "explicit"):
                 raise ChatRunUnavailable(
                     "TRIAL_ORDER_REQUIRED", "试用查询请明确使用选定订单，不支持另选最新单"
                 )
@@ -114,12 +124,16 @@ class ConsumerTrial:
                 self.binding.live_billing_record if kind == "billing" else self.binding.live_order_status
             ):
                 raise ChatRunUnavailable("CHATFLOW_LIVE_DISABLED", message("disabled", language))
-            runtime._require_chat_order_visible(scope, order)
+            if order:
+                runtime._require_chat_order_visible(scope, order)
             if not live:
                 from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
                 require_available(runtime, scope, self.binding)
             self.require_current(runtime.gateway_settings)
+            current_trial = runtime.store.get_standard_diagnosis(trial_id, scope.scope_fingerprint)
+            if registration.cancelled or not current_trial or current_trial["status"] != "running":
+                raise ValueError("trial cancelled")
             token, grant = grants.issue(
                 scope_fingerprint=scope.scope_fingerprint,
                 order_no=order if live else "",
@@ -146,8 +160,6 @@ class ConsumerTrial:
                 language=language,
                 data_kind=kind,
             )
-            registration = JobRegistration(route_type="trial")
-            runtime._qa_registrations[trial_id] = registration
             engine = DifyChatflowClient(runtime.gateway_settings.dify_chat_base_url)
             user = "trial:" + grant.grant_id
 
@@ -180,7 +192,8 @@ class ConsumerTrial:
             )
             if not live:
                 require_available(runtime, scope, self.binding)
-            runtime._require_chat_order_visible(scope, order)
+            if order:
+                runtime._require_chat_order_visible(scope, order)
             self.require_current(runtime.gateway_settings)
             latest = runs.get(run_id)
             if (
@@ -208,6 +221,8 @@ class ConsumerTrial:
                     "workflow_id": workflow_id,
                     "app_id": app_id,
                     "draft_sha256": self.fingerprint(),
+                    "source_app_id": self.route.app_id,
+                    "managed_draft": self.draft,
                 },
                 (),
                 (),

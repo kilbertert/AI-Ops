@@ -280,3 +280,18 @@ uv run python tools/verification/check_dual_entry_management.py --out var/verify
 
 在一次性数据根起真实 Gateway，断言管理面匿名/错密钥/未启用平台一律被拒，且被拒的请求
 **不产生任何开通任务行**。它不证明真实 Dify 上的复制与凭据申请，也不证明真实用户可用。
+
+### 客户端受管草稿预览与停止
+
+客户端工作流页预览先等待Dify保存草稿，再通过同源管理桥提交问题及可选明确订单。
+三条内部管理接口为`/v1/dify/management/trial`、`/trial/result`、`/trial/cancel`；
+使用独立试用服务key，不能用发布key替代。Gateway每次重新交换公司身份并检查当前客户应用。
+知识问题无需编造订单号；查单仍要求明确可见订单，预览不选择最近一单。
+
+作业表记录来源app与是否未发布草稿。未发布草稿回读按受管目录核对，不要求存在正式路由；
+正式应用预览仍验证原路由revision。停止先撤取数授权再落cancelled，迟到结果不会覆盖。
+临时Dify应用执行结束后删除。该过程不改变任何正式入口。
+
+验证：`uv run pytest -n 0 tests/consumer/test_managed_trial.py`，含完整临时执行、回读、
+停止后立即撤凭据、同租户不同用户/应用拒绝、途中公司权限改变及真实HTTP桥转发。
+远端模型、真实公司订单和页面仍须按业务验收核对。

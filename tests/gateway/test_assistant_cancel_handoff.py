@@ -216,6 +216,7 @@ _CANCEL_ROUTE = re.compile(r'@app\.(?:get|post|put|delete|patch)\(\s*"([^"]*canc
 _CANCEL_ROUTES = {
     "/v1/assistant/questions/{qa_id}/cancel",
     "/v1/dify/trial/{trial_id}/cancel",
+    "/v1/dify/management/trial/cancel",
 }
 
 
