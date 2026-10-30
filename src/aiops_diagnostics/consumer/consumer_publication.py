@@ -19,18 +19,18 @@ SCENARIO = "consumer_service"
 _CONFLICT = "consumer publication target conflicts with managed registration"
 
 
-def managed_target(settings, tenant_id: str):
-    """这个客户在本环境的**受管**客户端运行目标；没有则 None。
+def managed_target(settings, tenant_id: str, app_id: str):
+    """这个客户在**本环境、这个应用**的受管客户端运行目标；没有则 None。
 
     受管行是**新客户的第一权威**：页面开通的客户端应用不会再去手改一个 0600 文件。
-    现役文件继续生效（不重建、不改登记），两边冲突时显式拒绝。
+    按应用取（不是按租户取第一条）—— 一个客户可以同时有现役正式版和新草稿。
     """
     from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 
     environment = settings.execution_environment
     if not getattr(settings, "database_file", ""):
         return None
-    row = SelfServiceStore(settings.database_file).consumer_target(tenant_id, environment)
+    row = SelfServiceStore(settings.database_file).consumer_target(tenant_id, environment, app_id)
     if row is None:
         return None
     targets = json.loads(row.get("targets_json") or "{}")
@@ -128,20 +128,27 @@ def target_for(settings, binding):
     from aiops_diagnostics.identity.order_visibility import normalize_tenant
 
     tenant = normalize_tenant(binding.tenant_id) or ""
-    managed = managed_target(settings, tenant) if tenant else None
-    declared = [
-        row
-        for row in declared_rows(settings)
-        if tenant_matches(row["tenant_id"], binding.tenant_id)
-        and row["environment"] == settings.execution_environment
-    ]
-    if managed:
-        if any(row["app_id"] != managed["app_id"] for row in declared):
+    managed = managed_target(settings, tenant, binding.app_id) if tenant else None
+    declared = next(
+        (
+            row
+            for row in declared_rows(settings)
+            if row["app_id"] == binding.app_id
+            and tenant_matches(row["tenant_id"], binding.tenant_id)
+            and row["environment"] == settings.execution_environment
+        ),
+        None,
+    )
+    if managed and declared:
+        # **同一个应用**被两条权威各说一套才叫冲突。不同应用不冲突：一个客户可以同时有
+        # "现役正式版（文件登记）+ 新草稿（受管行）"，把"租户里有别的应用"当成冲突，
+        # 会让补开/换副本这件事永远做不了。
+        if sorted(managed["knowledge_base_ids"]) != sorted(declared["knowledge_base_ids"]) or any(
+            bool(managed[key]) != bool(declared[key]) for key in ("live_order_status", "live_billing_record")
+        ):
             raise ValueError(_CONFLICT)
-        if declared:
-            return declared[0]
-        return managed if managed["app_id"] == binding.app_id else None
-    return next((row for row in declared if row["app_id"] == binding.app_id), None)
+        return declared
+    return managed or declared
 
 
 def frozen_settings(target, *, documents=False):

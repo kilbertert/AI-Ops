@@ -306,12 +306,28 @@ class SelfService:
         targets = json.loads(row.get("targets_json") or "{}")
         route = self.route_for(row["tenant_id"], "consumer")
         model = ""
+        draft_sha256 = ""
         try:
             doc = self.console._call(row["workspace_id"], "/console/api/apps/" + row["app_id"])
             if isinstance(doc, dict):
                 model = str((doc.get("model_config") or {}).get("model", {}).get("name") or "")
         except Exception:  # noqa: BLE001 - 读模型名失败只降级展示
             model = ""
+        try:
+            from aiops_diagnostics.consumer import consumer_publication
+            from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, workflow_content
+
+            source = DifyDslSource(
+                self.settings.dify_console_base_url,
+                row["app_id"],
+                self.settings.dify_console_api_key,
+                row["workspace_id"],
+            )
+            draft_sha256 = consumer_publication.workflow_of(
+                workflow_content(DifyDslClient(source).export_dsl())
+            )
+        except Exception:  # noqa: BLE001 - 读不到草稿摘要只降级展示（发布时会拒绝缺摘要的客户端发布）
+            draft_sha256 = ""
         channel = dual_entry.channel_state(self._channels(), row["tenant_id"], "consumer")
         published = bool(route and route.active and route.app_id == row["app_id"])
         return {
@@ -330,6 +346,8 @@ class SelfService:
             "live_billing_record": bool(targets.get("live_billing_record")),
             "channel": channel["state"],
             "channel_note": channel["note"],
+            # 页面把它原样发回发布请求：发布冻结的必须是操作者看到的那一份。
+            "draft_sha256": draft_sha256,
             "readiness": dual_entry.readiness(
                 {"app_id": row["app_id"], "published": published, "state": ""}, channel
             ),
@@ -428,7 +446,7 @@ class SelfService:
             if caller.user_id != row["actor"]:
                 raise auth.SetupRefused("SETUP_ACTOR_CHANGED")
             auth.require_target(self.context, caller, request["tenant_id"])
-            provider = self._prepare_common(request, resources, save)
+            self._prepare_common(request, resources, save)
             entries = request["entries"]
             for entry in entries:
                 state = resources.setdefault("entries", {}).setdefault(
@@ -438,10 +456,13 @@ class SelfService:
                     continue  # 重试续跑：已完成端不重复创建、不重复发布
                 try:
                     if entry == "operator":
-                        self._run_operator(job_id, request, resources, state, provider, save, caller, session)
+                        self._run_operator(job_id, request, resources, state, save, caller, session)
                     else:
-                        self._run_consumer(job_id, request, resources, state, provider, save, caller, session)
+                        self._run_consumer(job_id, request, resources, state, save, caller, session)
                 except Exception as exc:  # noqa: BLE001 - 逐端记录，不牵连另一端
+                    import traceback as _tb
+
+                    _tb.print_exc()
                     state.update(state="failed", error_code=_error_code(exc))
                     save(entry + ":failed")
             failed = [e for e in entries if resources["entries"][e].get("state") == "failed"]
@@ -473,7 +494,12 @@ class SelfService:
             self.store.save(job_id, owner, step=step, resources=resources, state="failed", error=code)
 
     def _prepare_common(self, request, resources, save):
-        """客户空间的一次性准备：工作区、知识空间、模型/插件/节点 provider。"""
+        """客户空间的**公共**准备：工作区、知识空间、知识连接。
+
+        模型/插件/节点 provider **不在这里**：它们属于端。只开客户端时去装管家用的
+        `cpms-node` provider，会让"客户端的开通"依赖一个它根本不需要的外部动作 ——
+        而那个动作失败时，页面会显示"客户端开通失败"，指向一个与它无关的原因。
+        """
         if not resources.get("workspace_id"):
             resources["workspace_id"] = prepare.workspace(
                 self.settings, request["tenant_id"], request["tenant_name"], self.console
@@ -484,13 +510,7 @@ class SelfService:
             self.context, resources["workspace_id"], self.console
         )
         resources["knowledge_ready"] = True
-        save("dependencies")
-        profile = self._profile(request)
-        provider = prepare.dependencies(
-            self.console, resources["workspace_id"], profile, self.settings.public_base_url
-        )
-        resources["provider_id"] = provider
-        return provider
+        return None
 
     def _profile(self, request):
         profiles = config.profiles(self.settings)
@@ -500,9 +520,16 @@ class SelfService:
         # 只开客户端时也要装模型/插件：客服应用和管家共用一个工作区里的模型凭据。
         return next(iter(profiles.values()))
 
-    def _run_operator(self, job_id, request, resources, state, provider, save, caller, session):
+    def _run_operator(self, job_id, request, resources, state, save, caller, session):
         spec = request["sources"]["operator"]
         workspace_id = resources["workspace_id"]
+        save("operator:dependencies")
+        provider = resources.get("provider_id")
+        if not provider:
+            provider = prepare.dependencies(
+                self.console, workspace_id, self._profile(request), self.settings.public_base_url
+            )
+            resources["provider_id"] = provider
         save("operator:application")
         if not state.get("app_id"):
             state["app_id"] = prepare.create_app(
@@ -572,7 +599,7 @@ class SelfService:
             state.update(published=False, draft_only=True)
         state.update(state="ready" if state.get("published") else "draft", error_code="")
 
-    def _run_consumer(self, job_id, request, resources, state, provider, save, caller, session):
+    def _run_consumer(self, job_id, request, resources, state, save, caller, session):
         from aiops_diagnostics.consumer.consumer_publication import workflow_of
         from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, workflow_content
 
@@ -581,10 +608,19 @@ class SelfService:
         save("consumer:application")
         if not state.get("knowledge_base_ids"):
             state["knowledge_base_ids"] = [
-                prepare.customer_knowledge_base(
-                    self.context, request["tenant_id"], request["tenant_name"] + "－对客知识库"
-                )
+                prepare.customer_knowledge_base(self.context, request["tenant_id"])
             ]
+            # 显式登记这一次新建的库"允许对客"。没有这一行，发布契约与检索都会把它当内部库。
+            from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+
+            grants = KnowledgeGrants(self.settings.database_file)
+            for knowledge_base_id in state["knowledge_base_ids"]:
+                grants.grant(
+                    request["tenant_id"],
+                    self.settings.execution_environment,
+                    knowledge_base_id,
+                    caller.user_id,
+                )
         source = DifyDslSource(
             self.settings.dify_console_base_url,
             spec["app_id"],
@@ -594,6 +630,21 @@ class SelfService:
         document = yaml.safe_load(DifyDslClient(source).export_dsl(workflow_id=spec["workflow_id"]))
         if not isinstance(document, dict) or "workflow" not in document:
             raise auth.SetupRefused("SETUP_SOURCE_NOT_CONSUMER")
+        # 客户端的**实际依赖**在这里就位并回读：业务连接、知识插件与目录凭据、源编排用到的
+        # 每个模型。只复制 DSL 而说"资源就绪"，等于把问题推到客户第一次提问的时候。
+        save("consumer:dependencies")
+        state["business_endpoint"] = prepare.consumer_endpoint(self.context, request["tenant_id"])
+        from aiops_diagnostics.consumer.consumer_knowledge_selection import catalogue_token
+
+        token = catalogue_token(
+            self.settings.internal_token_secret,
+            self.settings.environment,
+            workspace_id,
+        )
+        state["plugin"] = prepare.consumer_plugin(self.console, workspace_id, self.settings, token)
+        state["models"] = prepare.consumer_models(
+            self.console, workspace_id, document, self._profile(request)
+        )
         # 来源在本轮期间改过 ⇒ 冻结的那份与现在能导出的不是同一份，拒绝而不是"按现在的来"。
         current = workflow_of(workflow_content(yaml.safe_dump(document, allow_unicode=True)))
         if current != spec["graph_sha256"]:
@@ -610,7 +661,11 @@ class SelfService:
             save("consumer:application")
         save("consumer:key")
         state["key_ref"] = service_keys.ensure(
-            self.console, self.settings.chat_dify_key_dir, workspace_id, state["app_id"]
+            self.console,
+            self.settings.chat_dify_key_dir,
+            workspace_id,
+            state["app_id"],
+            database=self.settings.database_file,
         )
         targets = {
             "knowledge_base_ids": list(state["knowledge_base_ids"]),
@@ -633,11 +688,17 @@ class SelfService:
         caller = auth.identity(self.context, session)
         auth.require_target(self.context, caller, request["tenant_id"])
         current = self.route_for(request["tenant_id"], "consumer")
-        if current is None or not current.active:
-            outcome = self.publish(caller, state["app_id"], current.revision if current else 0)
+        if current is None:
+            outcome = self.publish(caller, state["app_id"], 0)
             state.update(version_no=outcome["version_no"], published=True)
         elif current.app_id == state["app_id"]:
-            state.update(version_no=current.agent_version_no, published=True)
+            # 指针已经是这个应用：**只对账，不推进**。`active=False` 是"客户主动撤回了"，
+            # 不是"上次没发成功" —— 重试把它改回 active 等于替客户撤销了一个决定。
+            state.update(
+                version_no=current.agent_version_no,
+                published=current.active,
+                retracted=not current.active,
+            )
         else:
             state.update(published=False, draft_only=True)
         channel = dual_entry.channel_state(self._channels(), request["tenant_id"], "consumer")
@@ -654,7 +715,7 @@ class SelfService:
         with self.lock:
             row = self.authorize_app(caller, app_id)
             if row["entry"] == "consumer":
-                return self._publish_consumer(caller, row, revision)
+                return self._publish_consumer(caller, row, revision, expected_draft)
             doc = self.console._call(row["workspace_id"], "/console/api/apps/" + app_id)
             mc = doc["model_config"]
             if _declared_dataset_ids(mc):
@@ -705,7 +766,7 @@ class SelfService:
             )
             return {"version_no": outcome.version_no, "action": outcome.action, "app_id": app_id}
 
-    def _publish_consumer(self, caller, row, revision):
+    def _publish_consumer(self, caller, row, revision, expected_draft=None):
         """客户端发布：冻结编排 → 推进正式指针 → 回读凭据与知识库。
 
         推进指针这一步**复用控制台发布那条路径**（`gateway_api._advance_route_binding`），
@@ -734,11 +795,20 @@ class SelfService:
         from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, workflow_content
 
         document = yaml.safe_load(DifyDslClient(source).export_dsl())
-        if not consumer_documents.enabled(workflow_content(yaml.safe_dump(document, allow_unicode=True))):
+        workflow = workflow_content(yaml.safe_dump(document, allow_unicode=True))
+        if not consumer_documents.enabled(workflow):
             raise auth.SetupRefused("SETUP_CONSUMER_CONTENT_REQUIRED")
+        # 发布冻结的是**操作者确认过的那一份**。摘要由 `status` 给出（页面读到什么就发回
+        # 什么），发布时再算一次：中间被另一个标签页改过就拒绝，而不是把别人的内容发出去。
+        if expected_draft is not None and expected_draft != consumer_publication.workflow_of(workflow):
+            raise SetupConflict("SETUP_DRAFT_CHANGED")
         # 凭据先就位：发布只推路径，而一条指向不存在文件的路径等于"发布了也跑不起来"。
         key_ref = service_keys.ensure(
-            self.console, self.settings.chat_dify_key_dir, row["workspace_id"], row["app_id"]
+            self.console,
+            self.settings.chat_dify_key_dir,
+            row["workspace_id"],
+            row["app_id"],
+            database=self.settings.database_file,
         )
         settings = consumer_publication.frozen_settings(target, documents=True)
         from aiops_diagnostics.consumer.consumer_knowledge_selection import owned_libraries

@@ -86,6 +86,10 @@ class GatewayServerSettings:
     operator_trial_login_url: str = ""
     operator_trial_key: str = field(repr=False, default="")
     consumer_chatflow_enabled: bool = False
+    #: 客户端知识插件的**精确标识**（`provider/name:version@sha` 或 `provider/name`）。
+    #: 客户端开通要把它装进目标工作区并写入本工作区的目录凭据；空 = 客户端开通直接拒绝
+    #: （`SETUP_CONSUMER_PLUGIN_REQUIRED`），不"先发出去再说"。
+    consumer_knowledge_plugin: str = ""
     consumer_publication_targets_file: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
@@ -335,6 +339,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE"),
             consumer_publication_targets_file=_env("AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE"),
+            consumer_knowledge_plugin=_env("AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN")
+            or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN"),
             consumer_chatflow_enabled=(
                 _env("AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED")
                 or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED")

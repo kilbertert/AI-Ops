@@ -6,6 +6,7 @@
 """
 
 import json
+import re
 import uuid
 from types import SimpleNamespace
 from uuid import UUID, uuid5
@@ -73,6 +74,13 @@ class Console:
         self.created: list[str] = []
         self.key_posts = 0
         self.lose_key_response = False
+        self.plugin = ""
+        self.plugin_credentials: dict[str, list[dict]] = {}
+
+    def install_plugins(self, workspace_id, identifiers):
+        """真实实现会等安装任务落地；替身只需记录标识并让 credentials 端点可用。"""
+        self.plugin = identifiers[0]
+        return list(identifiers)
 
     def _app(self, app_id):
         return self.apps[app_id]
@@ -101,6 +109,25 @@ class Console:
             if self.lose_key_response:
                 raise TimeoutError("response lost after creation")
             return {"id": key_id, "token": token, "type": "app"}
+        if path == "/console/api/workspaces/current/plugin/list?page=1&page_size=100":
+            return {"plugins": [{"plugin_unique_identifier": self.plugin}]}
+        if path == "/console/api/workspaces/current/plugin/install/pkg":
+            self.plugin = (body or {}).get("plugin_unique_identifiers", [self.plugin])[0]
+            return {"task_id": "", "all_installed": True}
+        if path.startswith("/console/api/workspaces/current/tool-provider/builtin/"):
+            provider = path.split("/")[6]
+            if path.endswith("/credentials"):
+                if method == "GET":
+                    return {"credentials": self.plugin_credentials.setdefault(provider, [])}
+                raise AssertionError("credentials endpoint is GET only here")
+            if path.endswith("/add"):
+                self.plugin_credentials.setdefault(provider, []).append(
+                    {"id": f"cred-{len(self.plugin_credentials[provider]) + 1}", **body}
+                )
+                return {"result": "success"}
+        if path.startswith("/console/api/workspaces/current/model-providers/"):
+            provider = path.split("/")[6]
+            return {"current_credential_id": f"mc-{provider}", "credentials": {}, "load_balancing": {}}
         if path.startswith("/console/api/apps/"):
             app_id = path.rsplit("/", 1)[-1]
             return self._app(app_id)
@@ -190,6 +217,10 @@ def dual(operator, monkeypatch, tmp_path):  # noqa: F811
     settings.chat_dify_key_dir = str(tmp_path / "keys")
     (tmp_path / "keys").mkdir(mode=0o700)
     settings.environment_manifest_file = ""
+    settings.internal_token_secret = "fixture-internal-secret"
+    settings.consumer_knowledge_plugin = "trendpower/consumer_knowledge:0.0.1@fixture"
+    # 已批准的环境连接（裸 URL 形式：本环境所有租户走同一个 CPMS）。
+    settings.charging_status_base_url = "https://cpms.example.test"
 
     secret = tmp_path / "model.json"
     secret.write_text(
@@ -455,8 +486,11 @@ def test_consumer_import_uses_the_same_deterministic_app_id(dual):
     job = dual.service.create(dual.caller, request(dual))
     dual.service.run(job["id"], "session")
     app_id = public_job(dual.service.store.get(job["id"]))["entries"]["consumer"]["app_id"]
-    expected = str(uuid5(NS, "workspace-tenant-b" + ":" + job["id"] + ":consumer"))
-    assert app_id == expected
+    # 应用 id 由**补丁同一条派生**算出：uuid5(NS, tenant + ":" + request_id)，
+    # 而 request_id 本身是 UUID 形状（补丁的 Pydantic 约束是 ^[a-f0-9-]{36}$）。
+    assert app_id == prepare.consumer_app_id("workspace-tenant-b", job["id"])
+    request_id = prepare.consumer_request_id(job["id"])
+    assert re.fullmatch(r"[a-f0-9-]{36}", request_id)
 
 
 def test_lost_key_response_is_reconciled_not_duplicated(dual):
@@ -504,11 +538,11 @@ def test_consumer_failure_leaves_operator_ready_and_retry_only_resumes_consumer(
 
     real = prepare.customer_knowledge_base
 
-    def flaky(context, tenant_id, name):
+    def flaky(context, tenant_id):
         calls["consumer"] += 1
         if calls["consumer"] == 1:
             raise auth.SetupRefused("SETUP_KNOWLEDGE_FAILED")
-        return real(context, tenant_id, name)
+        return real(context, tenant_id)
 
     monkeypatch.setattr(prepare, "customer_knowledge_base", flaky)
     job = dual.service.create(dual.caller, request(dual))
@@ -526,7 +560,13 @@ def test_consumer_failure_leaves_operator_ready_and_retry_only_resumes_consumer(
     assert len(dual.console.created) == created + 1  # 只补建了客户端应用
 
 
-def test_operator_failure_leaves_consumer_ready(dual, monkeypatch):
+def test_operator_dependency_failure_leaves_consumer_ready(dual, monkeypatch):
+    """模型/节点 provider 是**端**的依赖，不是公共准备。
+
+    只开客户端时去装管家的 `cpms-node` provider，会让客户端开通依赖一个它不需要的外部
+    动作；反过来，管家那一步失败也不该把已经就绪的客户端一起判成失败。
+    """
+
     def boom(*_args, **_kwargs):
         raise auth.SetupRefused("SETUP_MODEL_CONFLICT")
 
@@ -534,9 +574,9 @@ def test_operator_failure_leaves_consumer_ready(dual, monkeypatch):
     job = dual.service.create(dual.caller, request(dual))
     dual.service.run(job["id"], "session")
     result = public_job(dual.service.store.get(job["id"]))
-    # 公共准备失败 ⇒ 两端都没起来，但状态是明确失败而不是"部分完成"
-    assert result["state"] == "failed"
-    assert result["error_code"] == "SETUP_MODEL_CONFLICT"
+    assert result["state"] == "partial", result
+    assert result["entries"]["operator"]["error_code"] == "SETUP_MODEL_CONFLICT"
+    assert result["entries"]["consumer"]["published"] is True
 
 
 # ── E：草稿预览、保存不发布、发布/撤回/恢复 ─────────────────────────────
@@ -635,7 +675,12 @@ def test_consumer_copy_rebinds_knowledge_and_never_carries_source_ids(dual):
     knowledge = next(n for n in document["workflow"]["graph"]["nodes"] if n["id"] == "knowledge")
     selected = knowledge["data"]["tool_configurations"]["knowledge_base_ids"]["value"]
     assert selected and "kb-source" not in selected
-    assert dual.kb.created == ["客户B－对客知识库"]
+    # 名字不再固定、更不按名字复用：每次开通都新建一个库，避免把同名内部库当对客库。
+    assert len(dual.kb.created) == 1 and dual.kb.created[0].startswith("对客知识库-")
+    # 新建的库被显式登记为"允许对客"
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+
+    assert KnowledgeGrants(dual.settings.database_file).granted(TARGET, "env-a") == set(selected)
 
 
 def test_rebind_refuses_source_ids_for_another_tenant():
@@ -717,7 +762,7 @@ def test_managed_registration_is_the_first_authority_for_consumer_targets(dual):
     assert target["app_id"] == "app-x" and target["knowledge_base_ids"] == ["kb-b"]
 
 
-def test_file_registration_conflicting_with_managed_row_is_refused(dual, tmp_path):
+def test_same_app_declared_by_file_and_managed_row_must_agree(dual, tmp_path):
     target_file = tmp_path / "consumer-targets.json"
     target_file.write_text(
         json.dumps(
@@ -738,20 +783,66 @@ def test_file_registration_conflicting_with_managed_row_is_refused(dual, tmp_pat
     )
     target_file.chmod(0o600)
     dual.settings.consumer_publication_targets_file = str(target_file)
+    app = "ffffffff-1111-2222-3333-444444444444"
     dual.service.store.register(
-        app_id="app-x",
+        app_id=app,
         tenant_id=TARGET,
         workspace_id="workspace-tenant-b",
-        agent_name="consumer-app-x",
+        agent_name="consumer-" + app,
         profile_id="",
         actor="fixture",
         entry="consumer",
         environment="env-a",
         targets={"knowledge_base_ids": ["kb-b"]},
     )
-    binding = DifyAppBinding(TARGET, "consumer", "app-x", "consumer-app-x")
+    binding = DifyAppBinding(TARGET, "consumer", app, "consumer-" + app)
+    # 同一个应用两条权威各说一套（文件说 kb-b、受管行说 kb-c）⇒ 拒绝
+    dual.service.store.set_targets(app, {"knowledge_base_ids": ["kb-c"], "live_order_status": True})
     with pytest.raises(ValueError, match="conflicts with managed registration"):
         consumer_publication.target_for(dual.settings, binding)
+
+
+def test_different_apps_of_one_tenant_do_not_conflict(dual, tmp_path):
+    """一个客户可以同时有"现役正式版（文件登记）+ 新草稿（受管行）"。
+
+    把"租户里有别的应用"当成冲突，会让补开/换副本这件事永远做不了 —— 独立验收 R5 的
+    反例就是这个：第二份草稿一发布就 `SETUP_APP_NOT_MANAGED`。
+    """
+    target_file = tmp_path / "consumer-targets.json"
+    target_file.write_text(
+        json.dumps(
+            {
+                "schema": "aiops-consumer-targets/1",
+                "targets": [
+                    {
+                        "tenant_id": TARGET,
+                        "environment": "env-a",
+                        "app_id": "ffffffff-1111-2222-3333-444444444444",
+                        "knowledge_base_ids": ["kb-b"],
+                        "live_order_status": True,
+                        "live_billing_record": True,
+                    }
+                ],
+            }
+        )
+    )
+    target_file.chmod(0o600)
+    dual.settings.consumer_publication_targets_file = str(target_file)
+    draft_app = "eeeeeeee-1111-2222-3333-444444444444"
+    dual.service.store.register(
+        app_id=draft_app,
+        tenant_id=TARGET,
+        workspace_id="workspace-tenant-b",
+        agent_name="consumer-" + draft_app,
+        profile_id="",
+        actor="fixture",
+        entry="consumer",
+        environment="env-a",
+        targets={"knowledge_base_ids": ["kb-b"], "live_order_status": True},
+    )
+    binding = DifyAppBinding(TARGET, "consumer", draft_app, "consumer-" + draft_app)
+    target = consumer_publication.target_for(dual.settings, binding)
+    assert target["app_id"] == draft_app and target["source"] == "managed"
 
 
 # ── L：版本不匹配阻止启用 ───────────────────────────────────────────────

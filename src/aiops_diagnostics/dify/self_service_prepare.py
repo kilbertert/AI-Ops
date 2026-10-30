@@ -202,23 +202,27 @@ def knowledge_connection(context, workspace_id, console):
 # 用模板生成一个客服应用等于重写一份编排，而运营已经调好的编排在现役应用里。
 
 
-def customer_knowledge_base(context, tenant_id: str, name: str) -> str:
-    """该客户的对客知识库 id：按名字复用，没有就建一个空库。
+def customer_knowledge_base(context, tenant_id: str) -> str:
+    """给这个客户建一个**新的**对客知识库并返回 id。**绝不按名字复用。**
+
+    名字不是判据：一个叫"对客知识库"的库完全可能是内部资料。按名字复用会把消费者的提问
+    接到内部资料上 —— 而且没有任何日志能看出这件事发生过（名字看起来完全正确）。
+    所以每次开通都建新库，名字里带租户与随机后缀，保证它只被这一次开通认领。
 
     **空库是有意为之**：新建客户没有资料是常态，拿别的客户的资料补上才是事故。
     客服在这种库上会答"暂无资料"，这正是要的行为（规划 §5）。
     """
+    import secrets
+
     client = getattr(context.runtime, "kb_search_client", None)
     if client is None:
         raise SetupRefused("SETUP_KNOWLEDGE_CONFIG_REQUIRED")
     from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
 
     tenant = client.for_tenant(tenant_id)
+    name = f"对客知识库-{tenant_id[-6:]}-{secrets.token_hex(3)}"[:128]
     try:
-        for row in tenant.list_knowledge_bases():
-            if row.get("name") == name:
-                return str(row["knowledge_base_id"])
-        created = tenant.create_knowledge_base(name, "客户对客资料（开通自动创建）")
+        created = tenant.create_knowledge_base(name, "客户对客资料（开通时自动创建，可改名为业务名）")
     except KnowledgeSearchUnavailable as exc:
         raise SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc
     knowledge_base_id = str(created.get("id") or created.get("knowledge_base_id") or "")
@@ -276,19 +280,45 @@ def consumer_source_ids(document: dict) -> tuple[str, ...]:
     return ()
 
 
+#: 幂等导入的命名空间。与 `deploy/dify-36/patches/1.17.1/09-idempotent-app-import.patch`
+#: 里的那个常量**必须逐字相同**：应用 id 由补丁按 `uuid5(NS, tenant_id + ":" + request_id)`
+#: 派生，我们只是提前算出同一个值用于核对。
+IMPORT_NAMESPACE = "6e5a60f0-9495-4c43-a714-d954c2609aeb"
+
+
+def consumer_request_id(job_id):
+    """客户端导入的 `request_id`：UUID 形状，且对同一 job 稳定。
+
+    补丁对 `request_id` 的约束是 ``^[a-f0-9-]{36}$``（见 `AppImportPayload`）。原来的
+    ``job_id + ":consumer"`` 带冒号与后缀，真实 Dify 会以
+    ``string_pattern_mismatch`` 拒绝 —— 而替身不校验，所以它一直是绿的。
+    """
+    from uuid import UUID, uuid5
+
+    return str(uuid5(UUID(IMPORT_NAMESPACE), "consumer:" + job_id))
+
+
+def consumer_app_id(workspace_id, job_id):
+    """与补丁一致的派生：``uuid5(NS, tenant_id + ":" + request_id)``。
+
+    Dify 的 `tenant_id` 就是工作区 id（`_current_user_and_tenant_id` 返回的那个），
+    所以这里用 `workspace_id`。**两侧必须算同一个值**，否则回读不到同一应用，
+    响应丢失后就会再建一个。
+    """
+    from uuid import UUID, uuid5
+
+    return str(uuid5(UUID(IMPORT_NAMESPACE), workspace_id + ":" + consumer_request_id(job_id)))
+
+
 def copy_consumer_app(console, source, workspace_id, job_id, request, document):
     """把已重绑定的 Chatflow 文档导入目标工作区，返回应用 id。
 
     幂等靠与管家同一条机制：``request_id`` 参与派生应用 id，响应丢失后回读同一应用。
     """
-    from uuid import UUID, uuid5
-
     capability = console._call(workspace_id, "/console/api/apps/imports")
     if capability.get("aiops_idempotent_import") != 1:
         raise SetupRefused("SETUP_IMPORT_UPGRADE_REQUIRED")
-    expected_id = str(
-        uuid5(UUID("6e5a60f0-9495-4c43-a714-d954c2609aeb"), workspace_id + ":" + job_id + ":consumer")
-    )
+    expected_id = consumer_app_id(workspace_id, job_id)
     result = console._call(
         workspace_id,
         "/console/api/apps/imports",
@@ -297,7 +327,7 @@ def copy_consumer_app(console, source, workspace_id, job_id, request, document):
             "mode": "yaml-content",
             "yaml_content": yaml.safe_dump(document, allow_unicode=True),
             "name": request["name"],
-            "request_id": job_id + ":consumer",
+            "request_id": consumer_request_id(job_id),
         },
     )
     if (
@@ -306,3 +336,105 @@ def copy_consumer_app(console, source, workspace_id, job_id, request, document):
     ):
         raise SetupRefused("SETUP_IMPORT_PENDING")
     return result["app_id"]
+
+
+# ── 客户端依赖：插件、目录凭据、模型凭据、业务连接 ────────────────────────
+
+PLUGIN_CREDENTIALS = "/console/api/workspaces/current/tool-provider/builtin/{provider}/credentials"
+PLUGIN_ADD = "/console/api/workspaces/current/tool-provider/builtin/{provider}/add"
+
+
+def consumer_endpoint(context, tenant_id: str) -> str:
+    """把**已批准的环境连接**登记成这个租户的受管业务地址，并返回它。
+
+    没有已批准连接就拒绝这一端（`SETUP_BUSINESS_CONNECTION_REQUIRED`）：
+    开通不能靠"上次那个全局 URL"，因为那可能属于别的客户。
+    """
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import ConsumerEndpoints, approved_endpoint
+
+    settings = context.settings
+    base = approved_endpoint(settings.charging_status_base_url, tenant_id)
+    if not base:
+        raise SetupRefused("SETUP_BUSINESS_CONNECTION_REQUIRED")
+    from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
+
+    base = canonical_gateway_url(base)
+    ConsumerEndpoints(settings.database_file).register(
+        tenant_id, settings.execution_environment, base, "setup"
+    )
+    stored = ConsumerEndpoints(settings.database_file).get(tenant_id, settings.execution_environment)
+    if stored != base:
+        # 写完回读：登记失败却继续发布，等于"发布了但第一次查单就 500"。
+        raise SetupRefused("SETUP_BUSINESS_CONNECTION_REQUIRED")
+    return base
+
+
+def consumer_plugin(console, workspace_id: str, settings, catalogue_token: str) -> str:
+    """安装并配置客户端知识插件，返回 provider id。
+
+    目录凭据（只用于列库）与"本轮取数凭据"是两把不同的东西：插件用它列库，正文读取必须
+    带本轮 data_grant。这里写入并**回读**确认，写不进去就不发布。
+    """
+    provider = (getattr(settings, "consumer_knowledge_plugin", "") or "").split("@", 1)[0]
+    if not provider:
+        raise SetupRefused("SETUP_CONSUMER_PLUGIN_REQUIRED")
+    console.install_plugins(workspace_id, [settings.consumer_knowledge_plugin])
+    payload = {
+        "credentials": {
+            "gateway_url": settings.public_base_url.rstrip("/"),
+            "catalogue_token": catalogue_token,
+        },
+        "name": "aiops-managed",
+        "type": "builtin",
+    }
+    rows = console._call(workspace_id, PLUGIN_CREDENTIALS.format(provider=provider))
+    existing = [
+        row
+        for row in (rows or {}).get("credentials", [])
+        if (row.get("credentials") or {}).get("gateway_url") == payload["credentials"]["gateway_url"]
+        and (row.get("credentials") or {}).get("catalogue_token") == catalogue_token
+    ]
+    if not existing:
+        console._call(workspace_id, PLUGIN_ADD.format(provider=provider), method="POST", body=payload)
+        rows = console._call(workspace_id, PLUGIN_CREDENTIALS.format(provider=provider))
+        existing = [
+            row
+            for row in (rows or {}).get("credentials", [])
+            if (row.get("credentials") or {}).get("gateway_url") == payload["credentials"]["gateway_url"]
+        ]
+    if len(existing) != 1:
+        raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
+    return provider
+
+
+def consumer_models(console, workspace_id: str, document: dict, profile) -> list[str]:
+    """确保源编排用到的每个模型在本工作区都有凭据，并回读确认。
+
+    只装管家 profile 的那一个模型是不够的：现役客服编排可能用另一个 provider。
+    平台只对**已批准**的 provider 提供凭据（profile 里的那个）；其余 provider 要求本工作区
+    已经有可用凭据 —— 没有就拒绝，不复制源客户的密钥、也不假装成功。
+    """
+    nodes = ((document.get("workflow") or {}).get("graph") or {}).get("nodes") or []
+    wanted = []
+    for node in nodes:
+        data = node.get("data") or {}
+        if data.get("type") != "llm":
+            continue
+        model = data.get("model") or {}
+        provider, name = str(model.get("provider") or ""), str(model.get("name") or "")
+        if provider and name and (provider, name) not in wanted:
+            wanted.append((provider, name))
+    if not wanted:
+        raise SetupRefused("SETUP_MODEL_CONNECTION_REQUIRED")
+    approved_provider = str((profile.get("model") or {}).get("provider") or "")
+    ready = []
+    for provider, name in wanted:
+        path = f"/console/api/workspaces/current/model-providers/{provider}/models/credentials"
+        saved = console._call(workspace_id, path + f"?model={name}&model_type=llm")
+        if saved.get("current_credential_id"):
+            ready.append(f"{provider}/{name}")
+            continue
+        if provider != approved_provider:
+            raise SetupRefused("SETUP_MODEL_CONNECTION_REQUIRED")
+        raise SetupRefused("SETUP_MODEL_CONFLICT")
+    return ready

@@ -1007,14 +1007,33 @@ def sync_workflow_from_dify(
         )
         previous = {"name": existing.name, "description": existing.description, **config.to_dict()}
     elif existing.status != "published" or existing.published_version is None:
-        return SyncOutcome(
-            binding.tenant_id,
-            binding.business_entry,
-            binding.app_id,
-            binding.agent_name,
-            "refused",
-            note="agent has no published configuration",
-        )
+        # 上一轮用 bootstrap 建了草稿、但随后的外部发布失败 ⇒ 库里留下一个**从未发布**的
+        # agent。重试如果一律拒绝，这条开通就永远修不好（只能人工删草稿），而那个草稿本来
+        # 就是我们自己上一步建的。
+        #
+        # 只接管"属于原操作"的那一个：配置必须与**这次**要建的配置逐项相同。不同就不动它 ——
+        # 人类的草稿不能因为"名字撞上"就被我们发布出去。
+        if bootstrap is None:
+            return SyncOutcome(
+                binding.tenant_id,
+                binding.business_entry,
+                binding.app_id,
+                binding.agent_name,
+                "refused",
+                note="agent has no published configuration",
+            )
+        wanted = AgentConfig(**bootstrap(yaml.safe_load(dsl_text)))
+        manager._validate_config(wanted, enforce_model=True)
+        if existing.config.to_dict() != wanted.to_dict():
+            return SyncOutcome(
+                binding.tenant_id,
+                binding.business_entry,
+                binding.app_id,
+                binding.agent_name,
+                "refused",
+                note="existing draft is not the one this operation created",
+            )
+        previous = {"name": existing.name, "description": existing.description, **wanted.to_dict()}
     else:
         previous = manager.store.version(
             existing.agent_id, existing.tenant_id, existing.published_version

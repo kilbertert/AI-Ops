@@ -24,7 +24,12 @@ def document_fixture(env, monkeypatch, tmp_path):
     doc = json.loads(env["bindings"].read_text())
     doc["bindings"][0]["callback_version"] = 4
     env["bindings"].write_text(json.dumps(doc))
-    monkeypatch.setattr(kb, "list_knowledge_bases", lambda: [{"knowledge_base_id": "kb-own"}], raising=False)
+    monkeypatch.setattr(
+        kb,
+        "list_knowledge_bases",
+        lambda: [{"knowledge_base_id": "kb-own", "audience": "customer"}],
+        raising=False,
+    )
     rows = []
     monkeypatch.setattr(kb, "search", lambda *args: rows.copy())
     received = []
@@ -174,7 +179,9 @@ def test_live_publication_ignores_missing_reviewed_file_and_snapshot_contains_no
         **CEILING,
     }
     frozen = frozen_settings(target, documents=True)
-    result = publication_settings(flow, frozen, BASE, owned_libraries=[{"knowledge_base_id": "kb-own"}])
+    result = publication_settings(
+        flow, frozen, BASE, owned_libraries=[{"knowledge_base_id": "kb-own", "audience": "customer"}]
+    )
     # 5 = documents 契约 + 事实片段契约（迁移写入 answer_fact_contract=slots）。
     assert result["callback_version"] == 5 and result["knowledge_base_ids"] == ["kb-own"]
     assert set(result["content"]) == {"schema", "state", "tenant_id", "environment"}

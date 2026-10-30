@@ -124,6 +124,8 @@ def test_startup_adoption_keeps_the_entry_environment_and_targets(tmp_path, monk
     class Service:
         def __init__(self, _context):
             self.store = db
+            # 启动时的授权补登会遍历正式路由；这个替身没有路由，返回空表。
+            self.routes = SimpleNamespace(all=lambda: ())
 
         def managed(self, _app_id):
             return {
@@ -154,7 +156,7 @@ def test_startup_adoption_keeps_the_entry_environment_and_targets(tmp_path, monk
     assert '"kb-own"' in str(row.get("targets_json"))
     # 受管目标按 (租户, 环境) 查得到 —— 这正是纳管之后要成立的那条事实
     target = managed_target(
-        SimpleNamespace(database_file=tmp_path / "db", execution_environment="env-a"), "TENANT-A"
+        SimpleNamespace(database_file=tmp_path / "db", execution_environment="env-a"), "TENANT-A", app
     )
     assert target and target["app_id"] == app and target["knowledge_base_ids"] == ["kb-own"]
     assert DifyAppBinding("TENANT-A", "consumer", app, "consumer-" + app).business_entry == "consumer"
