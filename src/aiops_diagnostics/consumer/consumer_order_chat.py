@@ -30,7 +30,13 @@ def asks_latest_order(question: str) -> bool:
     return bool(_LATEST.search(question))
 
 
-def status_answer(snapshot: dict[str, Any], language: str, *, localized=False) -> dict[str, Any]:
+def status_answer(
+    snapshot: dict[str, Any],
+    language: str,
+    *,
+    localized=False,
+    pack: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """本人这次查询到的业务状态。
 
     正文的措辞来自 `consumer_plain`：**先一句结论，再讲这句结论能拿去核对什么**。
@@ -40,8 +46,8 @@ def status_answer(snapshot: dict[str, Any], language: str, *, localized=False) -
     from aiops_diagnostics.consumer.consumer_plain import status_text
 
     if localized and language in COPY:
-        return live_answer(snapshot, language, "status")
+        return live_answer(snapshot, language, "status", pack=pack)
     # 前端按 blocks[] 分派渲染、不解析 Markdown（frontend-api-brief §9），
     # 所以层级只能靠分段与短行表达。
-    text = status_text(language, snapshot)
+    text = status_text(language, snapshot, pack)
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}

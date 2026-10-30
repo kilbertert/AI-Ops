@@ -64,6 +64,61 @@ def migrate_shortcuts(
     )
 
 
+@admin_app.command("consumer-copy")
+def consumer_copy(
+    action: Annotated[str, typer.Argument(help="publish 或 show")],
+    tenant: Annotated[str, typer.Option("--tenant", help="租户 id（= 会话里的 tenantId）")],
+    db: Annotated[Path, typer.Option("--db", exists=True, dir_okay=False, help="gateway 数据库文件")],
+    file: Annotated[
+        Path | None, typer.Option("--file", exists=True, dir_okay=False, help="文案包 JSON（publish 用）")
+    ] = None,
+    version: Annotated[int | None, typer.Option("--version", help="show 指定版本，缺省为当前版本")] = None,
+    published_by: Annotated[str, typer.Option("--by", help="发布者标识，写进台账")] = "aiops-admin",
+) -> None:
+    """查看或发布某租户的 C 端文案包。
+
+    文案包只能覆盖**内置文案里已有的键**，且占位符必须与内置一致 —— 少了 `{order_no}`
+    就等于把订单号从答复里删掉，那种"改措辞"是破坏可核对性（ADR-0183）。
+    """
+    from aiops_diagnostics.consumer.consumer_copy import CopyBundleInvalid, validate
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
+
+    store = GatewayStore(db)
+    if action == "show":
+        resolved, bundle = store.consumer_copy(tenant, version)
+        typer.echo(
+            json.dumps(
+                {"tenant_id": tenant, "version": resolved, "bundle": bundle},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+    if action != "publish":
+        raise typer.BadParameter("action 只能是 publish 或 show")
+    if file is None:
+        raise typer.BadParameter("publish 需要 --file")
+    raw = json.loads(file.read_text(encoding="utf-8"))
+    try:
+        bundle = {"languages": validate(raw)}
+    except CopyBundleInvalid as exc:
+        typer.echo(json.dumps({"published": False, "reason": str(exc)}, ensure_ascii=False))
+        raise typer.Exit(code=1) from exc
+    resolved = store.publish_consumer_copy(tenant, bundle, published_by=published_by)
+    typer.echo(
+        json.dumps(
+            {
+                "tenant_id": tenant,
+                "version": resolved,
+                "languages": sorted(bundle["languages"]),
+                "published_by": published_by,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def _reconcile_settings(config_file: Path | None) -> Settings:
     path = config_file if config_file is not None else selected_config_file()
     return Settings.from_config(path)

@@ -275,7 +275,14 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             from aiops_diagnostics.consumer.consumer_knowledge import binding_content, final_answer
 
             content = binding_content(binding, caller)
-            answer = final_answer(reply.answer, store.context(run_id), language, content)
+            context = store.context(run_id) or {}
+            answer = final_answer(
+                reply.answer,
+                context,
+                language,
+                content,
+                copy_pack=copy_pack(runtime, caller, context, language),
+            )
         else:
             answer = {"blocks": [{"kind": "text", "text": reply.answer}], "retrieval_status": "unavailable"}
         if not store.store_snapshot(run_id, answer) or not store.succeed(run_id):
@@ -345,12 +352,33 @@ def require_result(runtime, caller, qa):
             live.get("order_no") != run.order_no
             or live.get("source")
             != ("cpms.orderDetail" if run.data_kind == "billing" else "cpms.chargingInfo")
-            or live_answer(live, run.language, localized=context.get("answer_language_version") == 2)
+            or live_answer(
+                live,
+                run.language,
+                localized=context.get("answer_language_version") == 2,
+                pack=copy_pack(runtime, caller, context, run.language),
+            )
             != qa.get("result")
         ):
             raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "live evidence differs")
     if runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):
         raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "answer evidence differs")
+
+
+def copy_pack(runtime, caller, context, language):
+    """本轮该用哪一版文案。
+
+    `context` 里钉着 `copy_version`（生成时写入）；没有这个键的是历史答复 ——
+    它们按内置文案渲染，和引入文案包之前逐字相同。
+    """
+    from aiops_diagnostics.consumer.consumer_copy import resolve
+
+    return resolve(
+        runtime.store,
+        caller.effective_tenant_id,
+        version=(context or {}).get("copy_version"),
+        language=language,
+    )
 
 
 def previous_context(runtime, caller, binding, conversation):
