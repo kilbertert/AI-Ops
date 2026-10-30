@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -23,6 +24,28 @@ from operations.test_operator_cpms import (
 def operator(tmp_path, monkeypatch):
     with environment(tmp_path, monkeypatch) as f:
         yield f
+
+
+@pytest.mark.parametrize(
+    "operation, order_no, expected",
+    [
+        (operator_cpms.SCENARIO, "ORDER-1001", True),
+        # 有订单号、类型却是无订单回合：判据必须看类型，不能看订单号。
+        (conversation.SCENARIO, "ORDER-1001", False),
+        (conversation.SCENARIO, "", False),
+        # 没有订单号、类型是订单诊断：同样只看类型。
+        (operator_cpms.SCENARIO, "", True),
+    ],
+)
+def test_run_type_decides_not_the_presence_of_an_order_number(operation, order_no, expected):
+    """「这次跑的是什么」是**运行类型**说的，不是订单号是否为空说的。
+
+    这两个字段今天恰好一致——签发时就是按有没有订单二选一的——所以拿订单号当判据
+    现在也能跑通。这一步就是为了让那条路变红：岗哨写成 ``if run.order_no`` 时，
+    上表第 2、4 行会分别错成 True 与 False。
+    """
+    run = SimpleNamespace(operation=operation, order_no=order_no)
+    assert operator_cpms.diagnoses_an_order(run) is expected
 
 
 def test_no_order_question_reaches_node_without_business_reads(operator, monkeypatch):

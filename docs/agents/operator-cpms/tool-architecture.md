@@ -37,7 +37,7 @@
 
 | # | 载荷点 | 位置 | 现在依赖什么 | 目标 |
 | --- | --- | --- | --- | --- |
-| C1 | `agent_runs.order_no TEXT NOT NULL` | `agent_runs.py:411` | 无订单的 run 没有地方存放 | 可空 + 新增 `capability` 列 |
+| C1 | `agent_runs.order_no TEXT NOT NULL` | `agent_runs.py` 建表语句 | 无订单的 run 只能写空串 | 不改可空（SQLite 放松 `NOT NULL` 要重建表，`gateway_store` 已对同一形状做过这个判断），改由 `operation` 表达类型 |
 | C2 | 九处 `if run.order_no` | `operator_cpms.py:129,150,355,375,521,548,572,619,643` | 用「有没有订单」选协议、选范围、选渲染 | 收成 `run.operation`（`capability`）单一判据 |
 | C3 | Grant 的 `site_ids=[order_site_id]` | `operator_cpms.py:394` | 授权范围恒等于「订单所在的那一个站点」 | scope 推导策略：`order_site` / `caller_sites` |
 | C4 | Grant 的 `order_no` 必填 | `CpmsReadTool.java:40-60` | 授权载荷的形状 | `request{method,path,query}` + `inputs` |
@@ -73,7 +73,7 @@ C1–C3 是「订单绑在能力上」，C4–C7 是「订单绑在授权载荷�
 ### 4.1 run 有显式能力，订单是其中一种输入（ADR-0174）
 
 ```text
-agent_runs:  operation(=capability)  inputs_json  order_no NULLABLE
+agent_runs:  operation(=运行类型)  order_no(该类型的一项输入，仍 NOT NULL)
 ```
 
 ```text
@@ -111,7 +111,7 @@ CPMS 只读工具不再需要改 Java** —— 这是「工具架构调整机制
 
 | 阶段 | 改动面 | 等价证明 | 不做会怎样 |
 | --- | --- | --- | --- |
-| **P0 能力轴** | `agent_runs` 加 `capability`（回填：有单 → `cpms_order_diagnosis`，无单 → `operator_conversation`）、`order_no` 改可空、九处判据收敛 | 行为逐字不变，现有 `tests/operations/test_operator_cpms.py` 与 `tests/operations/test_operator_conversation.py` 即可证明等价 | 站点永远进不了工具面 |
+| **P0 能力轴** | 不增列、不改 schema：把九处「按有没有订单分支」收敛成一个谓词，判据改为 `run.operation` | 行为逐字不变，现有 `tests/operations/test_operator_cpms.py` 与 `tests/operations/test_operator_conversation.py` 即可证明等价；另有一条专杀「拿订单号当判据」的变异测试 | 站点永远进不了工具面 |
 | **P1 请求进授权** | Gateway + Java **一次配套发版**：Grant 换载荷、节点删路径硬编码、代理比对完整目标、证据改 `inputs` | `NodeLinkAcceptance` + `tools/experiments/m2_close/m3node/verify_operator_cpms.py`；C7 决定两端必须同版，不能灰度混跑 | 每加一个工具都要改 Java 并发版 |
 | **P2 声明源** | 一份能力声明 + 两侧生成 + CI 漂移检查；Dify provider 的「schema 不同就抛错」补一条显式迁移命令 | `manifest_parity` 扩成工具级；同一份声明生成的两侧产物逐字节相同 | 五处白名单继续各自漂移 |
 | **P3 站点工具** | 只加声明行，零 Java 改动 | 新增工具不改 `services/execution-node` | — |
