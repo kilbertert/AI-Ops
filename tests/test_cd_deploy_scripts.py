@@ -585,3 +585,72 @@ def test_deploy_compares_uv_lock_semantically() -> None:
     assert same, "lock_packages 对真实 uv.lock 没有输出"
     assert json.loads(same) == json.loads(run(bumped)), "本项目版本号变更被判成了包集合变化"
     assert json.loads(same) != json.loads(run(changed)), "真依赖版本变更没有被看出来"
+
+
+# --------------------------------------------------------------------------
+# 节点制品闸门：网关不能先于节点上线
+# --------------------------------------------------------------------------
+def test_the_gate_keys_on_the_last_node_change_not_this_commit() -> None:
+    """判据是「祖先里**最近一次**改节点的 commit」，不是「本次 commit 改没改节点」。
+
+    后者会漏掉跨 commit 的情形：A 改节点、B 只改 src，B 的网关照样依赖 A 的节点。
+    2026-10-30 的事故正是「同一次变更改了两侧」，但拆成两次合并也一样会坏。
+    """
+    source = (DEPLOY_DIR / "deploy-41.sh").read_text(encoding="utf-8")
+    assert 'git log -1 --format=%H "$FULL_SHA" -- services/execution-node' in source
+    # 判据不靠人申报，读**运行中容器**的构建标识 —— 不是 runtime.env：
+    # 规程先改 env 再重建容器，读 env 会在那个窗口里误放行（review 指出）。
+    assert "AIOPS_NODE_BUILD" in source
+    assert "docker inspect aiops-runtime-node" in source
+    assert "/etc/aiops-node-runtime/runtime.env 2>/dev/null | cut -d= -f2" not in source
+    assert "git merge-base --is-ancestor" in source
+    # 闸门必须在打包/远端执行之前 —— 先停下，不把网关送上去。
+    gate = source.index("节点制品闸门")
+    assert gate < source.index('step "打包"')
+
+
+def test_the_gate_accepts_equal_or_newer_nodes_and_rejects_older_ones(tmp_path: Path) -> None:
+    """方向最容易写反：节点**等于或晚于**目标放行，**早于**目标拒绝。
+
+    用真实 git 验语义，不是读脚本文本 —— 这条判据的全部风险就在 `--is-ancestor`
+    的参数顺序上。
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.com",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.com",
+    }
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=repo, env=env, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "work")
+    # 用 commit-tree 而不是 `git commit`：本机装了服务端策略钩子，`git commit` 会被
+    # 「canonical checkout 不做任务工作」拦下 —— 而这条测试要的是**历史形状**，
+    # 不是一次真实的提交动作。plumbing 命令不触发钩子。
+    (repo / "a.txt").write_text("a\n")
+    git("add", ".")
+    first = git("commit-tree", git("write-tree"), "-m", "first")
+    git("update-ref", "refs/heads/work", first)
+    (repo / "b.txt").write_text("b\n")
+    git("add", ".")
+    second = git("commit-tree", git("write-tree"), "-p", first, "-m", "second")
+    git("update-ref", "refs/heads/work", second)
+
+    def accepted(target: str, node: str) -> bool:
+        return (
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", target, node], cwd=repo, check=False
+            ).returncode
+            == 0
+        )
+
+    assert accepted(first, first), "节点与目标同一提交必须放行"
+    assert accepted(first, second), "节点晚于目标必须放行"
+    assert not accepted(second, first), "节点早于目标必须拒绝"

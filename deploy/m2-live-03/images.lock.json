@@ -8,10 +8,12 @@
   },
   "node": {
     "artifact": "aiops-execution-node.jar",
-    "sha256": "96eb342864e77ce82e255fffa22b526f933db915d1c2d74c86e69e5ee261703e",
-    "bytes": 106287254,
-    "source_commit": "92bcc74487a0828ad4678b55f7fa631b4523c191",
-    "build": "由本仓 services/execution-node 构建（可复现：pom 固定 project.build.outputTimestamp，同一份源码两次构建得到同一摘要）；构建命令见 tools/README.md"
+    "sha256": "4e2e23a6a06afbb6f8532dffdb17c8f8dc14cc572e6badfbfd749e2692facc8d",
+    "bytes": 106299691,
+    "source_commit": "ae290a0d6bf19309a953c07ab519dcbd5b82f8bc",
+    "build": "由本仓 services/execution-node 构建（可复现：pom 固定 project.build.outputTimestamp，同一份源码两次构建得到同一摘要）；构建命令见 tools/README.md",
+    "source_sha256": "bb74f1d33ed844e4d6fa0a89d726658ce98115639eb40156a26e0979ad39f0a5",
+    "source_digest_rule": "services/execution-node 下除 target/__pycache__/.idea 外全部文件的路径+内容摘要；命令见 deploy/node-runtime/source_digest.py"
   },
   "base_images": {
     "_comment": "按 ref 记录每个宿主实跑/实拉到的镜像身份。41 上 docker.io 直连不可达，ref 带宿主加速前缀；开发机用不带前缀的 ref。preflight 只认锁里的 ref 和它的 image ID，不认 tag 名，也不接受镜像覆盖参数绕开。",
