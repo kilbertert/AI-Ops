@@ -23,12 +23,12 @@
 
 详细边界见[退役说明](docs/runtime-retirement.md)，阶段与线上最后证据见
 [交付状态](docs/agents/current-delivery-state.md)和[测试交接](docs/testing-handoff.md)。
-目录迁移已完成Java节点、模型代理及consumer、knowledge、identity、publication、execution、dify八片，Gateway端已部署。
-管家输出格式缺口已在隔离Java/Gateway链路复现并修复：节点强制JSON模式、只提交最后模型轮。
-PR #1149的Java节点已部署，ulink原H5、Dify原生预览与AI-Ops试运行通过；
-见[真实验收](docs/validation/2026-10-29-z10b-operator-output-live.md)与[输出契约](docs/adr/0163-operator-output-is-a-runtime-contract.md)。
-最新见[Dify上线回执](docs/validation/2026-10-29-z09b-dify-layout-live.md)，独立桥/登录服务仍运行原发布包。
-模型代理生产容器仍使用旧发布包，后续升级必须成对交付Compose和镜像；详见[迁移回执](docs/validation/2026-10-29-z03-directory-migration-live.md)。
+目录迁移已完成Java节点、模型代理源码及consumer、knowledge、identity、publication、execution、dify、operator、health、data业务包。
+#1153退役残留和#1159领域迁移已合并，#1161补齐供应商单层围栏JSON解析；双端历史回归见
+[领域上线](docs/validation/2026-10-29-z15-domain-layout-live.md)与[围栏修复回归](docs/validation/2026-10-29-z16-operator-fenced-answer-live.md)。
+独立Dify桥与登录代理已随#1147更新包和模块入口；模型代理生产仍为旧发布包中的等字节实现。
+2026-10-30独立验收发现后续#1168两端未配套，补齐Java节点后原管家H5已独立复验通过；保留首次失败证据。
+后续Gateway、通用/会话模块和工具部署目录仍待完成，详见[本轮验收](docs/validation/2026-10-30-retirement-layout-acceptance.md)。
 
 ## 一、系统与入口
 
