@@ -3313,6 +3313,47 @@ def create_gateway_app(
         _require_visible_order(context, caller, order_no)
         return _charged_snapshot_response(selected_settings, context, caller, order_no)
 
+    @app.get("/v1/sites")
+    def consumer_sites(
+        response: Response,
+        name: str = "",
+        address: str = "",
+        limit: str = "",
+        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+    ) -> dict[str, Any]:
+        """C 端只读站点列表：范围只含**本人订单**里出现过的站点。
+
+        关键词由调用方直接提交，因此只受长度与字符约束，不受「必须出现在提问原文里」
+        那条管（那条是给模型用的）。范围完全由服务端按会话身份推导，参数动不了它。
+        """
+        from aiops_diagnostics.consumer import consumer_sites as consumer_sites_module
+        from aiops_diagnostics.gateway.gateway_config import charging_endpoint
+
+        response.headers["Cache-Control"] = "no-store"
+        _require_consumer_self(caller, business_entry)
+        try:
+            base_url = charging_endpoint(
+                selected_settings.charging_status_base_url, caller.effective_tenant_id
+            )
+        except ValueError as exc:
+            raise StandardAPIError(
+                404, "TENANT_ENDPOINT_UNRESOLVED", "business endpoint is not registered"
+            ) from exc
+        try:
+            return consumer_sites_module.sites_for_consumer(
+                caller,
+                base_url,
+                name=name,
+                address=address,
+                limit=consumer_sites_module.parse_limit(limit),
+            )
+        except consumer_sites_module.ConsumerSitesRefused as exc:
+            status = 403 if exc.code == "CONSUMER_SCOPE_REQUIRED" else 400
+            if exc.code.endswith("UNAVAILABLE"):
+                status = 502
+            raise StandardAPIError(status, exc.code, str(exc)) from exc
+
     @app.post("/v1/orders/{order_no}/charging-status/delegated")
     def delegated_charging_status(
         order_no: str,
@@ -6513,6 +6554,21 @@ def _require_consumer_self_order(caller: ScopeContext, business_entry: str | Non
         raise StandardAPIError(403, "CONSUMER_SCOPE_REQUIRED", "consumer self scope required")
     if not SAFE_ORDER_NO.fullmatch(order_no):
         raise StandardAPIError(400, "INVALID_ORDER_NO", "invalid order number")
+
+
+def _require_consumer_self(caller: ScopeContext, business_entry: str | None) -> None:
+    """C 端本人入口判据，**与订单无关**的那一半。
+
+    订单入口在此之上再加订单号形状；站点接口不需要订单，但入口判据必须逐字相同 ——
+    否则同一个 `third-session` 会在两条路上得到不同的口径。
+    """
+    if (
+        (business_entry or "").strip().lower() != "consumer"
+        or caller.delegated
+        or caller.data_scope.type != SCOPE_TYPE_SELF
+        or not caller.subject.c_user_id
+    ):
+        raise StandardAPIError(403, "CONSUMER_SCOPE_REQUIRED", "consumer self scope required")
 
 
 def _require_visible_order(context: Any, caller: ScopeContext, order_no: str) -> None:
