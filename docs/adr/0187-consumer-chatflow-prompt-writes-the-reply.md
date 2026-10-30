@@ -68,3 +68,22 @@
 的两条编造用例变红；把回读的合法性判定改成"直接放行"，篡改用例变红。
 
 未覆盖：真实 Dify 应用上的提示词改动与真机观感；本片**未完成业务验收**。
+
+## 补：线上应用用的是 documents 契约，那条路同样要开（2026-10-30）
+
+真机核对时发现**线上 app 的契约与仓库 DSL 不是同一版**：仓库副本是 `{kind, faq_id}`，
+而 41 上那个应用的 SYSTEM 提示词写的是 `{kind, answer, reference_ids}`，并且要求
+「若本轮 status=live 且有 live_snapshot，kind=realtime 且 **answer 为空**」。
+`consumer_documents.answer_selection` 也照此严格校验（非 knowledge 必须 `answer` 与
+`reference_ids` 都为空），随后 `final_answer` 把 raw 归一成 `{kind, faq_id}` 走确定性渲染。
+
+也就是说：**只改仓库 DSL 的提示词，对线上那条路没有任何影响**。同一个决定必须在
+documents 契约上也落一次：
+
+- `answer_selection` 允许 4 字段形态 `{kind, answer, reference_ids, reply}`；
+- `kind=realtime` 且本轮有 `live_snapshot` 时，`reply` 经 `consumer_reply` 校验后直接交付；
+- 其它 kind 带 `reply` 仍然拒绝（没有取数依据的话不能冒充知识库回答）；
+- 不带 `reply` 时行为与之前一致。
+
+这条也说明一件事：**「仓库里的 DSL」与「线上 Dify 里的那一份」是两份东西**，
+改动必须两边都做，否则会出现"代码改了、线上没变"或反之。核对方法见 41 手册 §4。
