@@ -127,43 +127,36 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
 SITE_TOOL = "cpms_site_search"
 
 
-def still_authorized(binding, run) -> bool:
-    """已签发的运行现在是否仍然**可以交付**。
-
-    判据不是 `route_revision` 相等：普通发布（只改提示词）会让 revision 前进，而 run 用的是它
-    冻结的清单，不该因此失败。真正必须拒的是**能力缩小**与**撤回**：
-
-    * 撤回：`binding_for_key` 找不到 active 行 ⇒ binding 为 None；
-    * 换应用：`app_id` 不同；
-    * 能力缩小：冻结清单里的工具在当前发布里已经不在 ⇒ 继续执行等于用旧授权做现在不许做的事。
-    """
-    # `binding` 是按 **run 自己的路由 key** 解析出来的，所以"是不是同一个 app"已经由解析保证；
-    # 这里只判撤回（解析不到）、revision 倒退与能力缩小。
-    if binding is None:
+def still_authorized(binding, run, *, trial=False) -> bool:
+    """冻结运行的模型/工具必须仍被当前应用授权，提示词可单独换版。"""
+    if binding is None or binding.entry != "operator" or binding.route_revision < run.route_revision:
         return False
-    if binding.route_revision < run.route_revision:
-        return False
-    frozen = _manifest_tools(run.snapshot.get("node_manifest") if run.snapshot else None)
-    if not frozen:
-        # 运行上没有冻结清单（当前只有订单诊断/无订单回合会存 answer/evidence）⇒ 退回旧判据：
-        # revision 必须相等。**这是如实记录的缺口**：管家端的"仅改提示词发布后旧 run 继续交付"
-        # 需要把冻结清单存到 run 上，本轮未做，因此这里保持严格，不假装已支持。
+    if not run.publication_app_id:
         return binding.route_revision == run.route_revision
-    return frozen <= _manifest_tools(getattr(binding, "manifest_text", ""))
-
-
-def _manifest_tools(text) -> set:
-    """清单里的工具名集合。读不出来就当作"未知"，按最严处理（空集合 ⇒ 冻结工具不被覆盖）。"""
-    if not isinstance(text, str) or not text.strip():
-        return set()
+    if binding.app_id != run.publication_app_id:
+        return False
+    if trial or str(run.chat_binding).startswith("operator-trial:"):
+        return binding.route_revision == run.route_revision
     try:
-        body = json.loads(text)
-    except (ValueError, TypeError):
-        return set()
-    tools = body.get("tools")
-    if not isinstance(tools, list):
-        return set()
-    return {tool.get("name") for tool in tools if isinstance(tool, dict) and tool.get("name")}
+        frozen = execution_manifest.from_text(run.execution_manifest)
+        current_text = (
+            binding.manifest_text
+            if diagnoses_an_order(run)
+            else operator_conversation.manifest(binding.manifest_text)
+        )
+        current = execution_manifest.from_text(current_text)
+        old_tools = {t["name"]: t["input_schema"] for t in json.loads(run.execution_manifest)["tools"]}
+        new_tools = {t["name"]: t["input_schema"] for t in json.loads(current_text)["tools"]}
+    except (ValueError, TypeError, KeyError):
+        return False
+    return (
+        frozen.identity == run.expected_agent_version
+        and all(
+            getattr(frozen, key) == getattr(current, key)
+            for key in ("provider_key", "adapter_key", "model_key", "endpoint", "history_policy")
+        )
+        and all(new_tools.get(name) == schema for name, schema in old_tools.items())
+    )
 
 
 def _sites_from_evidence(caller, task, answer):
@@ -316,7 +309,7 @@ class OperatorCpms:
         from aiops_diagnostics.execution.node_publication import all_targets
 
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if not still_authorized(binding, run):
+        if not still_authorized(binding, run, trial=bool((run.snapshot or {}).get("trial"))):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         target = next(
             (
@@ -416,6 +409,7 @@ class OperatorCpms:
                 chat_binding=binding.key,
                 execution_manifest=manifest_text,
                 route_revision=binding.route_revision,
+                publication_app_id=binding.app_id,
                 operation=SCENARIO if order else operator_conversation.SCENARIO,
             )
             qa = self.context.store.create_assistant_question(
@@ -479,7 +473,7 @@ class OperatorCpms:
         if not qa or qa["status"] not in QUESTION.active:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if not still_authorized(binding, run) or binding.entry != "operator":
+        if not still_authorized(binding, run, trial=task.trial) or binding.entry != "operator":
             raise OperatorRefused("OPERATOR_PUBLICATION_CHANGED")
         from aiops_diagnostics.execution.node_publication import all_targets
 
@@ -514,7 +508,7 @@ class OperatorCpms:
         if caller.scope_fingerprint != run.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if not still_authorized(binding, run):
+        if not still_authorized(binding, run, trial=task.trial):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         config = AgentRunConfig.load(Path(binding.config_file))
         if not any(
@@ -536,14 +530,6 @@ class OperatorCpms:
         expected = execution_manifest.from_text(run.execution_manifest)
         if expected.identity != run.expected_agent_version:
             raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
-        if not task.trial:
-            bound_manifest = (
-                binding.manifest_text
-                if diagnoses_an_order(run)
-                else operator_conversation.manifest(binding.manifest_text)
-            )
-            if bound_manifest != run.execution_manifest:
-                raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         if manifest is not None and manifest != expected.identity:
             raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         if tool is not None and (
@@ -842,17 +828,13 @@ class OperatorCpms:
         ):
             raise OperatorRefused("QA_NOT_FOUND")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if not still_authorized(binding, run) or run.expires_at <= datetime.now(UTC):
+        if not still_authorized(
+            binding, run, trial=bool((run.snapshot or {}).get("trial"))
+        ) or run.expires_at <= datetime.now(UTC):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         config = AgentRunConfig.load(Path(binding.config_file))
-        if not (run.snapshot or {}).get("trial"):
-            bound_manifest = (
-                binding.manifest_text
-                if diagnoses_an_order(run)
-                else operator_conversation.manifest(binding.manifest_text)
-            )
-            if execution_manifest.from_text(bound_manifest).identity != run.expected_agent_version:
-                raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
+        if execution_manifest.from_text(run.execution_manifest).identity != run.expected_agent_version:
+            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         run = self.context.agent_run_store.get(run.run_id)
         if (
             run is None
@@ -1045,7 +1027,7 @@ ANSWER_FIELDS = frozenset(
 
 
 def validate_answer(answer, evidence):
-    if not isinstance(answer, dict) or set(answer) != ANSWER_FIELDS:
+    if not isinstance(answer, dict) or set(answer) not in (ANSWER_FIELDS, ANSWER_FIELDS | {"reply"}):
         _answer_refused("shape")
     # `direct_answer` 与 summary/probable_cause 同一条文字判据：**空串即拒绝**。
     # 它是「这次回答的是用户问的那一点」的唯一落点；允许它为空，就等于允许模型交回一份
@@ -1066,6 +1048,8 @@ def validate_answer(answer, evidence):
         or not set(answer["evidence_tools"]).issubset(evidence)
     ):
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+    if "reply" in answer and (not isinstance(answer["reply"], str) or not 1 <= len(answer["reply"]) <= 6000):
+        _answer_refused("reply")
     text = json.dumps(answer, ensure_ascii=False)
     if EXECUTED_MUTATION.search(text):
         _answer_refused("mutation_claim")
@@ -1105,6 +1089,13 @@ def render_report(answer, evidence) -> str:
 
     顺序是刻意的：先回答问题，再给事实，最后才是排查建议与缺证 —— 运维最常要的是前两段。
     """
+    if answer.get("reply"):
+        sources = "\n".join(
+            f"- {_SOURCE_LABELS.get(item.get('source'), item.get('source'))}"
+            f"（{_readable_time(item.get('observed_at'))}）"
+            for item in evidence.values()
+        )
+        return answer["reply"] + ("\n\n【数据来源】\n" + sources if sources else "")
     sections = [answer["direct_answer"]]
     if answer["summary"]:
         sections.append("【订单事实】\n" + answer["summary"])

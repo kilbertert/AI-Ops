@@ -244,7 +244,9 @@ OPERATOR_OUTPUT = (
     '最终只输出JSON：{"direct_answer":"对用户本次提问的直接回答",'
     '"summary":"事实概述","probable_cause":"可能原因及不确定性",'
     '"next_steps":["检查建议"],"limitations":["缺失证据"],'
-    '"evidence_tools":["cpms_order_detail"]}。'
+    '"evidence_tools":["cpms_order_detail"],"reply":"面向用户的完整答复"}。'
+    "reply按应用提示词要求的语气、篇幅与顺序写作，先回答本次问题，保留不确定性和重要限制；"
+    "其它字段用于留存分析依据，不强制用户正文照搬这些章节。"
     "limitations 要区分「上游未提供该数据」与「本次未取到」；"
     "只能引用本次实际成功工具；样本不是完整时间线，当前状态不证明历史根因。"
 )

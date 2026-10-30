@@ -392,6 +392,8 @@ def final_answer(raw, context, language, content, *, copy_pack=None):
             raw, context, language=language, contract=(context or {}).get("fact_contract", "legacy")
         )
         if answer is not None:
+            if kind in NOTICE_KINDS:
+                return notice(kind, answer["blocks"][0]["text"], language, content)
             from aiops_diagnostics.common.answer_language import (
                 AnswerSurface,
                 answer_chinese_leak,
@@ -556,7 +558,7 @@ def callback_context(
     require_current()
 
     def valid():
-        if not run.order_no:
+        if not run.order_no and run.data_kind not in {"clarify", "human", "order_required"}:
             from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
             require_available(runtime, caller, binding)
@@ -631,6 +633,13 @@ def callback_context(
             "live_snapshot": read_snapshot(caller, run.order_no, run.data_kind),
         }
         if run.order_no
+        else {
+            "status": "notice",
+            "notice_kind": "human" if run.data_kind == "human" else "clarify",
+            "missing_order": run.data_kind == "order_required",
+            "sources": [],
+        }
+        if run.data_kind in {"clarify", "human", "order_required"}
         else select_context(runtime, caller, binding, query, run.language, run.qa_id)
     )
     result["followup"] = followup

@@ -61,22 +61,7 @@ def select_knowledge(source, libraries, plugin_identifier):
 
 
 def live_documents(source, *, replace_system=False):
-    """把仓库里的 documents 契约提示词写进 answer 节点 —— **不默认覆盖运营的编辑**。
-
-    这个函数以前无条件把 SYSTEM 换成 `consumer_documents.PROMPT`。而**运营的提示词就在
-    这个 SYSTEM 里**（ADR-0187）：一次迁移就会把他们改好的语气、开头、措辞全部吞掉，
-    而且从 diff 里看不出来 —— 因为模板“也是对的”。
-
-    现在的规则：
-
-    * SYSTEM 为空（老应用）→ 写入模板，这是**初始化**。
-    * SYSTEM 与模板逐字相同 → 不动，这是**幂等**。
-    * SYSTEM 与模板不同 → 拒绝，并说明两条路：确认要丢就用 `--replace-system`，
-      要保留就先把模板的契约要求（JSON 字段、``reply`` 用法）手动补进现有提示词。
-
-    拒绝而不是静默保留：静默保留会让「模板升级了、但线上还是旧契约」看起来像成功。
-    并发编辑同理 —— 两份内容不一致就是需要人来判断的那一刻，不是脚本可以代劳的。
-    """
+    """保留业务提示词，只替换系统协议块并幂等升级契约标记。"""
     from aiops_diagnostics.consumer.consumer_documents import MODE_VARIABLE, PROMPT
 
     candidate = copy.deepcopy(source)

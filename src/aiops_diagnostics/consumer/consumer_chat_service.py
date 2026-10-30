@@ -250,7 +250,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             conversation_id=upstream,
             on_started=started,
         )
-        if not latest.order_no:
+        if not latest.order_no and latest.data_kind not in {"clarify", "human", "order_required"}:
             from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
             require_available(runtime, caller, binding)
@@ -293,6 +293,11 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
                 content,
                 copy_pack=copy_pack(runtime, caller, context, language),
             )
+            if context.get("fact_contract") == "slots" and context.get("live_snapshot"):
+                import json
+
+                if not store.store_reply_source(run_id, json.loads(reply.answer)["reply"]):
+                    raise ValueError("reply source could not be stored")
         else:
             answer = {"blocks": [{"kind": "text", "text": reply.answer}], "retrieval_status": "unavailable"}
         if not store.store_snapshot(run_id, answer) or not store.succeed(run_id):
@@ -341,7 +346,7 @@ def require_result(runtime, caller, qa):
         )
     if run.order_no:
         runtime._require_chat_order_visible(caller, run.order_no)
-    else:
+    elif run.data_kind not in {"clarify", "human", "order_required"}:
         from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
         require_available(runtime, caller, binding)
@@ -376,6 +381,14 @@ def _live_answer_differs(runtime, caller, context, run, live, stored):
     """
     from aiops_diagnostics.consumer.consumer_knowledge import live_answer
 
+    if context.get("fact_contract") == "slots":
+        from aiops_diagnostics.consumer.consumer_reply import model_reply
+
+        source = runtime.dify_run_store.reply_source(run.run_id)
+        try:
+            return model_reply(source, live, language=run.language, contract="slots") != stored
+        except chat_execution.ChatRunUnavailable:
+            return True
     expected = live_answer(
         live,
         run.language,
@@ -390,7 +403,7 @@ def _live_answer_differs(runtime, caller, context, run, live, stored):
     from aiops_diagnostics.consumer.consumer_reply import validate_reply
 
     try:
-        validate_reply(blocks[0].get("text"), live, language=run.language)
+        validate_reply(blocks[0].get("text"), live, language=run.language, contract="legacy")
     except chat_execution.ChatRunUnavailable:
         return True
     return False

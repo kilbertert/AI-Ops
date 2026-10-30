@@ -589,7 +589,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             code == 200
             and final.get("status") == "completed"
             and stack.ORDER_LATEST in text
-            and "cpms.chargingInfo" in text
+            and "充电状态记录" in text
             and "DO-NOT-LEAK" not in text,
         )
         check(
@@ -661,8 +661,8 @@ def verify_knowledge(root, base, env, setup, model, check):
             and final.get("status") == "completed"
             and "部分退款记录" in text
             and "1.10" in text
-            and "不证明银行到账" in text
-            and "未提供币种" in text
+            and "不代表银行已经到账" in text
+            and "币种接口未提供" in text
             and "DO-NOT-LEAK" not in text,
         )
         check(
@@ -888,7 +888,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             "semantic CPMS trial runs real node",
             code == 200
             and result.get("status") == "completed"
-            and "cpms.chargingInfo" in result.get("result", {}).get("report", {}).get("summary", "")
+            and "充电状态记录" in result.get("result", {}).get("report", {}).get("summary", "")
             and len(stack.CpmsHandler.calls) == count + 1,
         )
         # 草稿开关独立于服务器能力上限；发布才切实际App行为。
@@ -909,7 +909,7 @@ def verify_knowledge(root, base, env, setup, model, check):
         code, old = question("我上一个订单现在是什么情况")
         check(
             "saving flag does not disable published CPMS",
-            code == 200 and old.get("status") == "completed" and "cpms.chargingInfo" in text_of(old),
+            code == 200 and old.get("status") == "completed" and "充电状态记录" in text_of(old),
         )
         count = len(stack.CpmsHandler.calls)
         code, trial = stack.http_json(

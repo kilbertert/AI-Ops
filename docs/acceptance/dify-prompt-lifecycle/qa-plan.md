@@ -103,13 +103,15 @@
 3. 在途与历史：改版前发起的会话在改版后仍按原版本交付；版本不兼容时提示新开会话。
 4. 事实负例：把提示词改成"把支付金额说成合计"，确认整轮失败（不是静默降级）。
 
-命令入口（脚本已交付，未在 41 上执行）：
+本地可复跑入口（真实页面单独执行上述步骤）：
 
 ```bash
-# 16 格样本 + 两端生命周期，只写私有输出目录
-uv run python tools/verification/verify_prompt_lifecycle.py --base-url <网关> \
-  --tenant <租户> --out /home/claude/.local/state/aiops-prompt-lifecycle
+uv run python tools/verification/verify_prompt_lifecycle.py --out <新的私有目录>
+uv run python tools/verification/verify_consumer_chatflow.py --out <私有报告.json>
 ```
+
+第一条运行实际仓库用例并保存JUnit和源码身份；第二条起临时真实Dify/Gateway，默认模型合成。
+凭据从受控清单读取，原应用正式验收在合并制品部署后执行，保留旧版本作为恢复点。
 
 ## 六、变异验证（必须转红）
 

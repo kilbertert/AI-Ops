@@ -87,6 +87,17 @@ def publication_settings(
     require(
         len(nodes) == len(graph.get("nodes", [])) and set(nodes) == set(TYPES), "必需节点缺失或存在未登记节点"
     )
+    if _fact_slots(workflow):
+        from aiops_diagnostics.consumer.consumer_documents import _protocol_block
+
+        require(documents, "事实段需要动态知识协议")
+        require(
+            any(
+                p.get("role") == "system" and p.get("text") == _protocol_block()
+                for p in nodes["answer"].get("prompt_template", [])
+            ),
+            "系统输出协议缺失或已修改，请恢复系统协议块后再发布",
+        )
     expected_types = {**TYPES, **({"knowledge": "tool"} if picker else {})}
     require(all(n.get("type") == expected_types[key] for key, n in nodes.items()), "节点类型已改变")
     require(not require_picker or picker, "已启用选库节点，不允许普通发布退回服务器固定选库")

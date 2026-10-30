@@ -131,7 +131,9 @@ def test_live_flow_upgrade_carries_all_languages_and_explicit_answer_language():
     nodes = {n["id"]: n["data"] for n in result["workflow"]["graph"]["nodes"]}
     lang = next(v for v in nodes["start"]["variables"] if v["variable"] == "language")
     assert set(lang["options"]) == set(SUPPORTED_LANGUAGES)
-    assert "{{#start.language#}}" in nodes["answer"]["prompt_template"][0]["text"]
+    assert "{{#start.language#}}" in "\n".join(
+        p["text"] for p in nodes["answer"]["prompt_template"] if p["role"] == "system"
+    )
 
 
 @pytest.mark.parametrize("language", ["mn", "th", "zh-Hant"])
