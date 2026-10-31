@@ -5,6 +5,7 @@
 由 41 上的真实验收证明，fixture 只证明契约。
 """
 
+import asyncio
 import json
 import re
 import uuid
@@ -29,6 +30,7 @@ from aiops_diagnostics.dify.self_service import SelfService
 from aiops_diagnostics.dify.self_service_api import SetupRequest, SetupSource
 from aiops_diagnostics.dify.self_service_store import public_job
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
+from aiops_diagnostics.execution.node_publication import NodeRouteConflict
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig
 from aiops_diagnostics.publication.agent_manifest import admin_context
 
@@ -1037,3 +1039,27 @@ def test_republishing_a_retracted_consumer_version_must_not_revive_it(dual):
     with pytest.raises(Exception, match="已撤回"):
         dual.service.publish(dual.caller, app_id, retired.revision)
     assert not routes.get("env-a", TARGET, "consumer", "consumer_service").active
+
+
+def test_retracted_publish_refusal_reaches_the_page_as_a_conflict_not_a_500(dual):
+    """拒绝要如实告诉运营"已撤回"，而不是 500 让页面显示"系统故障"。
+
+    2026-11-01 在 41 实测：撤回后重发被正确拒绝（指针没动），但 `NodeRouteConflict`
+    没有 HTTP 映射，请求以未处理异常返回 500 `SETUP_UNAVAILABLE`。
+    """
+    result = run(
+        dual,
+        request(
+            dual,
+            scope="consumer",
+            sources={"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}},
+        ),
+    )
+    app_id = result["entries"]["consumer"]["app_id"]
+    routes = ChatRouteBindingStore(dual.settings.chat_route_bindings_file)
+    route = routes.get("env-a", TARGET, "consumer", "consumer_service")
+    dual.service.change_version(dual.caller, app_id, route.revision)
+    handler = dual.f["app"].exception_handlers[NodeRouteConflict]
+    response = asyncio.run(handler(None, NodeRouteConflict("node route retracted")))
+    assert response.status_code == 409
+    assert b"retracted" in response.body

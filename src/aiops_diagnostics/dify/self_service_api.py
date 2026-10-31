@@ -8,6 +8,8 @@ from fastapi import Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from aiops_diagnostics.execution.node_publication import NodeRouteConflict
+
 from . import dual_entry
 from . import self_service_identity as auth
 from .self_service import SelfService
@@ -127,6 +129,18 @@ def register(app, context):
 
     @app.exception_handler(SetupConflict)
     async def conflict(_request, exc):
+        return JSONResponse(
+            status_code=409, content={"error": {"code": str(exc)}}, headers={"Cache-Control": "no-store"}
+        )
+
+    @app.exception_handler(NodeRouteConflict)
+    async def route_conflict(_request, exc):
+        """正式指针层面的拒绝，与 `SetupConflict` 同为 409。
+
+        不翻译它就是一个**未处理异常**：页面拿到 500 `SETUP_UNAVAILABLE`，运营看到的是
+        "系统故障"而不是"这一版已撤回 / 指针被别人改过"。2026-11-01 在 41 实测过一次：
+        撤回后重发被正确拒绝（指针没动），但响应是 500。
+        """
         return JSONResponse(
             status_code=409, content={"error": {"code": str(exc)}}, headers={"Cache-Control": "no-store"}
         )
