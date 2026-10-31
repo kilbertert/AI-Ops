@@ -735,6 +735,9 @@ class SelfService:
                 row["workspace_id"],
             )
             t = node_publication.managed_target(self.settings, row["profile_id"], app_id, row["tenant_id"])
+            from aiops_diagnostics.execution.node_capabilities import require_compatible
+
+            require_compatible(self.settings.database_file, t, json.loads(Path(t.manifest_file).read_text()))
             binding = config.app_binding(self.settings, app_id)
             outcome = node_publication.publish(
                 self.context.agent_manager,
@@ -910,6 +913,9 @@ class SelfService:
                     t = node_publication.managed_target(
                         self.settings, row["profile_id"], app_id, row["tenant_id"]
                     )
+                    from aiops_diagnostics.execution.node_capabilities import require_compatible
+
+                    require_compatible(self.settings.database_file, t, json.loads(snapshot["node_manifest"]))
                     node_publication.advance(
                         self.context, outcome, binding, t, revision, register_source=True
                     )

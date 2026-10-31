@@ -37,6 +37,7 @@ public final class OperatorTools {
     }
 
     private static volatile Map<String, Entry> loaded;
+    private static String loadedDigest;
 
     private OperatorTools() {
     }
@@ -47,7 +48,9 @@ public final class OperatorTools {
             synchronized (OperatorTools.class) {
                 current = loaded;
                 if (current == null) {
-                    current = parse(read());
+                    String raw = read();
+                    current = parse(raw);
+                    loadedDigest = digest(raw);
                     loaded = current;
                 }
             }
@@ -72,6 +75,20 @@ public final class OperatorTools {
 
     public static List<String> names() {
         return List.copyOf(entries().keySet());
+    }
+
+    public static String declarationDigest() {
+        entries();
+        return loadedDigest;
+    }
+
+    private static String digest(String raw) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 
     public static boolean declares(String name) {

@@ -4,6 +4,7 @@ import com.aizuda.snail.ai.agent.starter.EnableSnailAiAgent;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * M2-CLOSE-01 的合成执行节点。
@@ -13,6 +14,7 @@ import org.springframework.context.annotation.ComponentScan;
  * {@link GovernedToolRuntime} 覆盖默认 {@code ToolRuntime} 实现，而不是靠提示词。
  */
 @EnableSnailAiAgent
+@EnableScheduling
 @SpringBootApplication
 @ComponentScan({"com.aizuda.snail.ai.agent.example", "com.trendpower.aiops.node"})
 public class ExecutionNodeApplication {
