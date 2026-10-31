@@ -173,50 +173,6 @@ def _negated(text: str, start: int) -> bool:
     return bool(_NEGATION.search(text[max(0, start - 12) : start]))
 
 
-def check_legacy(text: str, snapshot: dict, language: str) -> None:
-    """旧契约（`callback_version < 5`）：三条弱判据，行为与改动前一致。
-
-    **它拦不住**标签互换、编造的单价、状态说反 —— 那是它被替换的原因。保留它只为"旧发布版本
-    继续可用"，并且判据强度写在这里，不让读者误以为老应用也受片段契约保护。
-    """
-    for token in ("cpms.", "status_code=", "status_role="):
-        if token in text:
-            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply exposes internal identifiers")
-    order_no = str(snapshot.get("order_no") or "")
-    if order_no and order_no not in text:
-        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply omits the order number")
-    # 旧契约原有的一条：快照里每个非空金额都必须在正文里（漏写会让读者以为那项不存在）。
-    for field in ("order_amount", "recorded_payment_amount", "recorded_refund_amount"):
-        raw = snapshot.get(field)
-        if raw is None or str(raw).strip() == "":
-            continue
-        try:
-            expected = Decimal(str(raw))
-        except InvalidOperation:
-            continue
-        if expected == 0 and ZERO_SAID["recorded_refund_amount"].search(text):
-            continue
-        if expected not in {Decimal(t) for t in re.findall(r"\d+(?:\.\d+)?", text)}:
-            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", f"reply does not carry the recorded {field}")
-    present = {Decimal(token) for token in re.findall(r"\d+(?:\.\d+)?", text)}
-    known = {Decimal(token) for token in re.findall(r"\d+(?:\.\d+)?", _evidence(snapshot, language))}
-    if present - known - {Decimal(n) for n in range(0, 11)}:
-        raise ChatRunUnavailable(
-            "CHATFLOW_ANSWER_INVALID", "reply contains numbers that are not in the evidence"
-        )
-
-
-def _evidence(snapshot: dict, language: str) -> str:
-    import json
-
-    return " ".join(
-        [
-            json.dumps(snapshot, ensure_ascii=False, default=str),
-            _readable_time(snapshot.get("observed_at")),
-        ]
-    )
-
-
 def check_notice(text: str) -> None:
     """澄清／无结果／转人工：本轮没有任何证据，所以**一个数字都不许出现**。
 
