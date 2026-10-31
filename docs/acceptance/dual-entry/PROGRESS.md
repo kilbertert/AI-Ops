@@ -18,6 +18,20 @@ Codex 会话 `01a180d5` 在第三批推送时被中断（并发工作区锁定�
 **仍未完成**：`aiops-41-platform-dify` 正常登录后的真实页面开通、真实消费者/员工原 H5
 会话、36 上的 web 镜像与桥/API 补丁同版部署。这些不是代码缺口，见 [BLOCKED.md](BLOCKED.md)。
 
+
+## 收尾（2026-10-31 晚）
+
+真实页面开通与发布已完成（见 [验收证据](../../validation/2026-10-31-real-page-onboarding.md) 与
+[收尾记录](../../validation/2026-10-31-dual-entry-wrap-up.md)）。逐项状态：
+
+| 项 | 状态 |
+| --- | --- |
+| 知识对客授权面板 | **完成**：根因是 36 的桥包落后（缺 `knowledge`/`knowledge-access`），重装后回读 9 个库 |
+| 36 web 镜像 | **完成**：`dual-entry-merged-86d63d4a` 已部署并页面验证 |
+| J2 未接入渠道不谎报 | **完成**：两端 `channel=pending`，客户端显示"该端尚未接入使用渠道" |
+| 真实消费者/员工会话（H/I/J1） | **未完成**：原 H5 登录卡在公司 mall API 的 SQL 错误 |
+| 孤儿知识库清理 | **未做**：8 个历次失败留下的 `对客知识库-<hash>` |
+
 ## Codex 直接接手（2026-10-31）
 
 用户已改为由 Codex 直接实现与验收，不再向 Claude 派发。当前分支 `fix/dual-entry-state-safety`，
