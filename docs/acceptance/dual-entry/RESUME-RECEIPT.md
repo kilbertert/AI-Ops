@@ -41,9 +41,34 @@ Devin Review 四次均为 "trial expired and no credits remaining"（跳过）�
 4. **真实消费者/员工会话**（A–L 的 H/I/J1）：依赖第 1 项。
 5. **渠道声明**（J2）：`env-41.toml` 仍无 `[[channels]]`；需要真实登录证据后再写。
 
-## 合并后补充观察
+## 合并后：节点升级与 CD 恢复
 
-`05e82e8e`（#1232，提示词生命周期）合入后，上一提交的 CD（`5ab4e4cf`）长时间排队未执行；
-`05e82e8e` 的 CD 在队列中。41 上实测 `/health` 在本次收尾时仍为
-`1.0.0+f168bf53abe1`（#1238），即 #1239/#1240 的 Gateway 变更**尚未**部署到线上。
-这不是失败，是排队；但"已合并"不等于"已部署"，回执不把二者混为一谈。
+`05e82e8e`（#1232，提示词生命周期）合入后，`5ab4e4cf` 的 CD 先因 runner 被一个孤儿
+update-branch 任务占住而排队，释放后执行**失败**——不是排队问题，是 `deploy-41.sh` 的
+节点制品闸门：最后一次改节点源码的是 `5ab4e4cf`（#1239），41 上运行的还是 `ae290a0d`。
+ADR-0175 没有灰度窗口，网关不能先于节点上线。
+
+按 `deploy/node-runtime/README.md` 处理（全部只落在 41 的既有节点目录与回滚点内）：
+
+1. `git archive 5ab4e4cf services/execution-node` 取干净源码，离线 Maven 构建
+   → `aiops-execution-node.jar` sha256 `6ffad741…`（含 `CapabilityReporter`）。
+2. 新建发布目录 `releases/5ab4e4cf6a89`（`cp -a` 旧发布，只替换 jar），
+   备份并改写 `runtime.env` 的 `AIOPS_NODE_DIST` / `AIOPS_NODE_BUILD`，
+   定点 `--no-deps --pull never --force-recreate node`，约 50s 就绪。
+3. **回调 nginx 必须同版重渲染**：旧 `gateway-callback.conf` 没有
+   `location = /v1/internal/execution-node/capabilities`，节点上报一律 404（节点侧静默重试）。
+   按新模板渲染后 `nginx -t` 通过、`systemctl restart aiops-node-callback`，
+   从节点网络空间探针由 404 → 422（无凭据拒绝，说明路由已通）。
+   渲染时**保留宿主已有的 `lua_package_path`/`lua_package_cpath`**——模板没有这两行，
+   直接覆盖会让回调起不来（实测过一次，已按备份恢复）。
+4. 节点重启后，Gateway 的 `execution_node_capabilities` 出现
+   `production-41 / node-41` 的真实报告，`tools_sha256` 与
+   `/etc/aiops-node-runtime/node/operator-tools.json` 的摘要逐字相同。
+5. `gh run rerun 41186947981` → **success**。
+
+收尾状态（只读回读）：41 `/health` = `1.0.0+05e82e8ec54e`，
+`business_mutations=disabled`，`/v1/openapi.json` 200、`/v1/runs` 404，
+`aiops-gateway-41` / `aiops-node-runtime` / `aiops-node-callback` 三个 unit 均 active。
+回滚点：`/etc/aiops-node-runtime/runtime.env.bak-20261031-1733` 与
+`gateway-callback.conf.bak-20261031`，指向旧发布 `releases/tools-964dbf353f73`
+（jar sha256 `4e2e23a6…`）。
