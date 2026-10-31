@@ -288,3 +288,69 @@ def test_preview_readback_refuses_revoked_knowledge(managed_trial, monkeypatch):
     )
     response = f.env["client"].post(PATH + "/result", headers=HEADERS, json={"app_id": APP, "trial_id": tid})
     assert response.status_code == 410, response.text
+
+
+def test_knowledge_trial_records_the_kind_it_actually_sends(managed_trial, monkeypatch):
+    """运行记录里的 `data_kind` 必须等于实际发给 Dify 的那个值。
+
+    2026-10-31 实测：旧代码记录写 `status`、请求传 `knowledge`，于是知识类预览
+    在库与日志里读起来像订单状态，排查被引到完全错的路径（当时据此误判"检索服务坏了"，
+    实际是选中的库是空库）。记录与实际不一致，比不记录更坏。
+    """
+    f = managed_trial
+    observed = {}
+
+    # `data_kind` 只在 callback_version >= 2 时随请求发出（旧发布版不带），
+    # 而本 fixture 走的是最小草稿；提到 2 才能观察"记录 vs 请求"这一对。
+    from aiops_diagnostics.consumer.consumer_trial import ConsumerTrial
+
+    original = ConsumerTrial.execute
+
+    def execute(self, *args):
+        self.content["callback_version"] = 2
+        return original(self, *args)
+
+    monkeypatch.setattr(ConsumerTrial, "execute", execute)
+
+    def capture(self, **kwargs):
+        observed.update(kwargs.get("inputs") or {})
+        raise RuntimeError("stop at the Dify request boundary")
+
+    from consumer.test_consumer_knowledge_flow import Workflow
+
+    monkeypatch.setattr(Workflow, "run", capture)
+    tid = submit(f)
+    finish(f, tid)
+    run = f.runtime.dify_run_store.by_qa(tid)
+    assert observed["data_kind"] == "knowledge"
+    assert run.data_kind == observed["data_kind"]
+
+
+def test_trial_failure_exposes_a_readable_reason(managed_trial):
+    """试运行失败时，结果面必须给出可读原因，而不是笼统的"未完成"。
+
+    运营看的是控制台面板；只回 `TRIAL_FAILED` 或一句通用文案，
+    "你忘了填订单号 / 这句话需要澄清"就会看起来像系统故障
+    （2026-10-31 实测就发生过这种误读）。
+    """
+    f = managed_trial
+    result = f.env["client"].post(
+        PATH,
+        headers=HEADERS,
+        json={"app_id": APP, "question": "我上一个订单现在什么情况"},
+    )
+    assert result.status_code in {202, 400, 409}, result.text
+    trial_id = result.json().get("trial_id")
+    if trial_id is None:
+        return  # 在提交阶段就被拒：此时由 HTTP 错误体承载原因，不在本用例范围
+    finish(f, trial_id)
+    payload = (
+        f.env["client"]
+        .post(PATH + "/result", headers=HEADERS, json={"app_id": APP, "trial_id": trial_id})
+        .json()
+    )
+    if payload.get("error_code"):
+        assert payload.get("error_message", "").strip(), payload
+        # 不把内部异常文本回显给运营
+        assert "Traceback" not in payload["error_message"]
+        assert "aiops_diagnostics" not in payload["error_message"]

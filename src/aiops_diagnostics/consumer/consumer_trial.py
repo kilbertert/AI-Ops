@@ -114,8 +114,11 @@ class ConsumerTrial:
             intent = decision["intent"]
             if intent not in {"knowledge", "order_status", "billing_record"} or decision["uses_context"]:
                 raise ChatRunUnavailable("TRIAL_CLARIFICATION_REQUIRED", message("clarify", language))
-            kind = "billing" if intent == "billing_record" else "status"
+            # **一个 kind，两处都用**：运行记录与发给 Dify 的 `data_kind` 必须是同一个值。
+            # 2026-10-31 实测：旧代码记录写 "status"、请求传 "knowledge"，
+            # 于是知识类预览在库/日志里被读成订单状态，排查时指向完全错的路径。
             live = intent in {"order_status", "billing_record"}
+            kind = ("billing" if intent == "billing_record" else "status") if live else "knowledge"
             if live and (not order or decision["order_reference"] != "explicit"):
                 raise ChatRunUnavailable(
                     "TRIAL_ORDER_REQUIRED", "试用查询请明确使用选定订单，不支持另选最新单"
@@ -182,11 +185,7 @@ class ConsumerTrial:
                     "language": language,
                     "has_photo": "no",
                     "data_grant": token,
-                    **(
-                        {"data_kind": kind if live else "knowledge"}
-                        if self.binding.callback_version >= 2
-                        else {}
-                    ),
+                    **({"data_kind": kind} if self.binding.callback_version >= 2 else {}),
                 },
                 on_started=started,
             )
