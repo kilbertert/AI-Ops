@@ -118,29 +118,62 @@ OPERATOR_SITES = {
 }
 
 OPERATOR_CASES = [
-    ("consult_status_meaning", "状态码 1 是什么意思？", {"tool": None}),
-    ("consult_howto", "怎么帮客户重新开一张单？", {"tool": None}),
+    # `validate_answer` 要求 evidence 是**以工具名为键**的映射，且 `cpms_order_detail`
+    # 必须在其中 —— 咨询类也要，因为契约是「先取证再回答」。
+    (
+        "consult_status_meaning",
+        "状态码 1 是什么意思？",
+        {"tools": ["cpms_order_detail"], "evidence": {"cpms_order_detail": OPERATOR_ORDER}},
+    ),
+    (
+        "consult_howto",
+        "怎么帮客户重新开一张单？",
+        {"tools": ["cpms_order_detail"], "evidence": {"cpms_order_detail": OPERATOR_ORDER}},
+    ),
     (
         "diagnose_order",
         "帮我看看 123456789012345 这单有没有异常。",
-        {"tool": "cpms_order_detail", "evidence": OPERATOR_ORDER},
+        {"tools": ["cpms_order_detail"], "evidence": {"cpms_order_detail": OPERATOR_ORDER}},
     ),
     (
         "diagnose_billing",
         "这单为什么收了 27.36？",
-        {"tool": "cpms_order_detail", "evidence": OPERATOR_ORDER},
+        {"tools": ["cpms_order_detail"], "evidence": {"cpms_order_detail": OPERATOR_ORDER}},
     ),
-    ("site_search", "附近有哪些站点？", {"tool": "cpms_sites", "evidence": OPERATOR_SITES}),
-    ("site_empty", "附近有哪些站点？", {"tool": "cpms_sites", "evidence": {"sites": [], "truncated": False}}),
+    (
+        "site_search",
+        "附近有哪些站点？",
+        {
+            "tools": ["cpms_order_detail", "cpms_site_search"],
+            "evidence": {"cpms_order_detail": OPERATOR_ORDER, "cpms_site_search": OPERATOR_SITES},
+        },
+    ),
+    (
+        "site_empty",
+        "附近有哪些站点？",
+        {
+            "tools": ["cpms_order_detail", "cpms_site_search"],
+            "evidence": {
+                "cpms_order_detail": OPERATOR_ORDER,
+                "cpms_site_search": {"sites": [], "truncated": False},
+            },
+        },
+    ),
     (
         "diagnose_en",
         "Check order 123456789012345 for anomalies.",
-        {"tool": "cpms_order_detail", "evidence": OPERATOR_ORDER},
+        {"tools": ["cpms_order_detail"], "evidence": {"cpms_order_detail": OPERATOR_ORDER}},
     ),
     (
         "site_no_match",
         "找个叫火星站的地方。",
-        {"tool": "cpms_sites", "evidence": {"sites": [], "truncated": False}},
+        {
+            "tools": ["cpms_order_detail", "cpms_site_search"],
+            "evidence": {
+                "cpms_order_detail": OPERATOR_ORDER,
+                "cpms_site_search": {"sites": [], "truncated": False},
+            },
+        },
     ),
 ]
 
@@ -175,7 +208,9 @@ body = {
     "model": os.environ.get("AIOPS_SAMPLE_MODEL", "deepseek-v4-flash"),
     "messages": payload["messages"],
     "stream": False,
-    "max_tokens": 2000,
+    # 该模型会先花 reasoning token。首轮用 2000 时有 8 条样本把预算全烧在推理上、
+    # 正文为空 —— 那是**采样参数太紧**，不是模型不合契约。给足预算再判。
+    "max_tokens": int(os.environ.get("AIOPS_SAMPLE_MAX_TOKENS", "8000")),
     "response_format": {"type": "json_object"},
 }
 req = urllib.request.Request(
@@ -208,9 +243,12 @@ def build_operator_prompt(question, case_context, style):
     sys.path.insert(0, str(ROOT / "src"))
     from aiops_diagnostics.execution.node_publication import OPERATOR_OUTPUT
 
-    if case_context.get("tool"):
-        evidence = json.dumps(case_context["evidence"], ensure_ascii=False)
-        tool_note = f"本轮已调用工具 {case_context['tool']}，结果：{evidence}"
+    if case_context.get("tools"):
+        parts = [
+            f"{name}: {json.dumps(case_context['evidence'][name], ensure_ascii=False)}"
+            for name in case_context["tools"]
+        ]
+        tool_note = "本轮已调用工具 —— " + " ; ".join(parts)
     else:
         tool_note = "本轮未调用任何工具。"
     return (
@@ -260,11 +298,12 @@ def judge_client(raw_text, context, language):
     return True, ""
 
 
-def judge_operator(raw_text, evidence):
+def judge_operator(raw_text, case_context):
     sys.path.insert(0, str(ROOT / "src"))
     from aiops_diagnostics.operator.operator_cpms import validate_answer
 
-    validate_answer(json.loads(raw_text), evidence if evidence else {})
+    # evidence 必须是以工具名为键的映射，且 `cpms_order_detail` 在其中 —— 这是契约本身。
+    validate_answer(json.loads(raw_text), case_context.get("evidence") or {})
     return True, ""
 
 
@@ -285,13 +324,20 @@ def run_one(job):
         return record
     record["model"] = raw.get("model")
     record["usage"] = raw.get("usage")
-    text = raw["choices"][0]["message"]["content"]
+    choice = raw["choices"][0]
+    # `finish_reason` 必须记下：`length` 说明是**采样预算**用完，与"模型写了不合契约的内容"
+    # 是两回事，不能混成一个失败率。
+    record["finish_reason"] = choice.get("finish_reason")
+    text = choice["message"]["content"]
     record["output"] = text
+    if not text.strip():
+        record.update(passed=False, stage="empty", error="model returned no body content")
+        return record
     try:
         if side == "client":
             judge_client(text, context, language)
         else:
-            judge_operator(text, context.get("evidence"))
+            judge_operator(text, context)
         record.update(passed=True, stage="ok")
     except Exception as exc:  # noqa: BLE001 - 失败原样记录
         record.update(passed=False, stage="judge", error=f"{type(exc).__name__}: {exc}")

@@ -2,7 +2,7 @@
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_facts import facts_for
+from aiops_diagnostics.consumer.consumer_facts import check_status_prose, facts_for
 from aiops_diagnostics.consumer.consumer_language import COPY
 from aiops_diagnostics.consumer.consumer_reply import model_reply, validate_reply
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
@@ -162,3 +162,42 @@ def test_d_an_inline_prefix_on_a_fact_segment_is_refused():
     assert "每个片段单独占一行，不得添加前后缀" in _protocol_block()
     with pytest.raises(ChatRunUnavailable):
         model_reply("账单内容：{{fact:billing_line}}", SNAPSHOT, language="zh", contract="slots")
+
+
+#: 真实模型样本里出现、被守卫**误拒**的正常追问（2026-10-31，32 次样本第 2 轮）。
+#: 两者的共同点：含否定字或状态词，但整句都不是状态断言。
+_NORMAL_FOLLOW_UPS = [
+    "还需要对照原账单和支付流水才能判断有没有异常。",
+    "你是不是想核对订单对应的充电站？",
+    "可以再给我一点线索，比如城市、路段或订单上的站点名称。",
+    "这笔单的费用明细要看充电记录里的哪一项？",
+]
+
+
+@pytest.mark.parametrize("text", _NORMAL_FOLLOW_UPS)
+def test_e_a_normal_follow_up_with_a_question_form_is_not_a_status_assertion(text):
+    """E. A-不-A 疑问式与名词化的场所词不算状态断言。
+
+    上一版用「否定词 × 状态词」单维判据：`有没有异常` 里的 `没有`+`异常`、
+    `充电站` 里的 `充电` 都被当成改写状态，把正常追问整轮拒掉。
+    修法是**先剥问句形式和名词**再判，而不是删掉判据 —— 真否定仍要拦（见下一条）。
+    """
+    check_status_prose(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "这笔订单尚未完结，仍在供电。",
+        "订单没有结束。",
+        "订单已经结束了。",
+        "The order has not finished and is still charging.",
+    ],
+)
+def test_e_a_real_negation_or_assertion_is_still_refused(text):
+    """对照组：同一批放宽之后，真正的状态改写必须仍然被拒。
+
+    没有这一条，上面的修法就退化成"把判据放松到什么都不拦"。
+    """
+    with pytest.raises(ChatRunUnavailable):
+        check_status_prose(text)

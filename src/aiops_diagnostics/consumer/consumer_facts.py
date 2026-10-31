@@ -52,6 +52,34 @@ _ASSERTION = re.compile(
 #: 判据只有"否定词 × 这些词"与"断言形式"两维，所以换一个同义词不会绕过第一维。
 _STATE_SYNONYMS = ("充电", "供电", "结束", "完成", "完结", "进行", "停止", "异常")
 
+#: **名词化**的状态词：它们是场所或设备（`充电站`/`充电桩`/`充电枪`），不是状态断言。
+#: 只有在命中这些复合词时才跳过该处匹配，单独的 `充电` 仍然算状态 —— 否则
+#: `你是不是想核对订单对应的充电站` 这类正常追问会被误拒（2026-10-31 真实模型样本实测）。
+_STATE_NOUNS = (
+    "充电站",
+    "充电桩",
+    "充电枪",
+    "充电线",
+    "充电口",
+    "充电卡",
+    "充电记录",
+    "异常单",
+    "异常码",
+)
+
+#: A-不-A 疑问式（`有没有`/`是不是`/`能不能`/`会不会`）：含否定字，但整句不是在否定。
+_A_NOT_A = re.compile(
+    r"(?:有没有|是不是|能不能|会不会|可不可以|要不要|对不对|行不行|有没有什么|是否)"
+)
+
+
+def _state_term_hit(clause: str, terms: tuple[str, ...]) -> bool:
+    """子句里是否有**状态**词——名词化的场所/设备词先剥掉，剩下的命中才算状态。"""
+    stripped = clause
+    for noun in _STATE_NOUNS:
+        stripped = stripped.replace(noun, "　")
+    return any(term in stripped for term in terms)
+
 
 def _state_terms() -> tuple[str, ...]:
     from aiops_diagnostics.consumer.consumer_language import COPY
@@ -100,7 +128,11 @@ def check_status_prose(text: str) -> None:
         low = clause.casefold()
         if not low.strip():
             continue
-        if any(mark in low for mark in _NEGATIONS) and any(term in low for term in terms):
+        # `有没有异常` / `是不是想核对` 是 A-不-A 疑问式：含否定字却不否定任何事。
+        # 按子句剥掉问句里的 A-不-A，再判否定 —— 否则正常追问会被当成状态改写。
+        if _A_NOT_A.search(low):
+            low = _A_NOT_A.sub("", low)
+        if any(mark in low for mark in _NEGATIONS) and _state_term_hit(low, terms):
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")
         if _ASSERTION.search(clause):
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")
