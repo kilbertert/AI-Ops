@@ -286,13 +286,7 @@ def register(app, context):
 
 
 def _backfill_knowledge_grants(context, service):
-    """把**已发布的**客户端版本用到的库登记为可对客。
-
-    这些库不是我们挑的：它们是运营在发布时明确选中、并且正在服务的。给它们补授权行，
-    是为了让"新增授权判据"不把现役服务停掉；之后运营撤销授权的库，下一次启动也不会被
-    重新补上（补的是"没有授权行"的那些，撤销后**有**过授权记录这一条不成立 —— 所以
-    撤销时同时记入审计，见 `aiops-admin consumer-knowledge revoke`）。
-    """
+    """首次纳管沿用现役选库；已登记（含已撤销）的库不被重新授权。"""
     from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
 
     settings = context.settings
@@ -315,4 +309,5 @@ def _backfill_knowledge_grants(context, service):
                 settings.execution_environment,
                 knowledge_base_id,
                 "published-backfill",
+                backfill=True,
             )

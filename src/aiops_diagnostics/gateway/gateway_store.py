@@ -555,6 +555,8 @@ class GatewayStore:
         tenant_id: str | None = None,
         workflow_trial: bool = False,
         node_trial: bool = False,
+        source_app_id: str = "",
+        managed_draft: bool = False,
     ) -> dict[str, Any]:
         """Create a **试运行** job (#772 F / #781). Shares ``standard_diagnoses``.
 
@@ -570,7 +572,7 @@ class GatewayStore:
         the same draft" without copying operator text into a second store.
         """
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
-        order_no = _scope(order_no, "order_no")
+        order_no = _scope(order_no, "order_no") if order_no else ""
         draft_fingerprint = _scope(draft_fingerprint, "draft_fingerprint")
         initiator = _scope(initiator, "initiator")
         tenant_id = _optional_scope(tenant_id, "tenant_id")
@@ -584,8 +586,9 @@ class GatewayStore:
                 INSERT INTO standard_diagnoses (
                     diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
                     internal_run_id, status, created_at, updated_at, deadline_at,
-                    kind, trial_draft_fingerprint, trial_initiator, tenant_id
-                ) VALUES (?, ?, ?, ?, NULL, ?, ?, 'queued', ?, ?, ?, 'trial', ?, ?, ?)
+                    kind, trial_draft_fingerprint, trial_initiator, tenant_id,
+                    trial_source_app_id, trial_managed_draft
+                ) VALUES (?, ?, ?, ?, NULL, ?, ?, 'queued', ?, ?, ?, 'trial', ?, ?, ?, ?, ?)
                 """,
                 (
                     trial_id,
@@ -600,6 +603,8 @@ class GatewayStore:
                     draft_fingerprint,
                     initiator,
                     tenant_id,
+                    source_app_id,
+                    int(managed_draft),
                 ),
             )
             row = connection.execute(
@@ -1394,6 +1399,8 @@ class GatewayStore:
                 # 默认 NULL 让存量行与存量 INSERT 的含义逐字不变。
                 ("trial_draft_fingerprint", "TEXT"),
                 ("trial_initiator", "TEXT"),
+                ("trial_source_app_id", "TEXT"),
+                ("trial_managed_draft", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if name not in diagnosis_columns:
                     connection.execute(f"ALTER TABLE standard_diagnoses ADD COLUMN {name} {definition}")

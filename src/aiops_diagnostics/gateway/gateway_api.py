@@ -385,6 +385,19 @@ class DifyTrialRequest(BaseModel):
     operator_preview: OperatorPreviewDraft | None = None
 
 
+class ManagedTrialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    app_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
+    order_no: str = Field(default="", max_length=64, pattern=r"^([A-Za-z0-9][A-Za-z0-9_.:-]{0,63})?$")
+    question: str = Field(min_length=1, max_length=4000)
+
+
+class ManagedTrialResultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    app_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
+    trial_id: str = Field(pattern=r"^tr_[a-f0-9]{32}$")
+
+
 class FAQAnswerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -2328,6 +2341,82 @@ def create_gateway_app(
                 status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected"
             )
 
+    def managed_trial_caller(request, app_id):
+        from aiops_diagnostics.dify import self_service_identity as auth
+
+        session = request.headers.get("X-AIOps-Console-Session", "")
+        row = context.self_service.authorize_app(auth.identity(context, session), app_id)
+        caller, _ = authenticated_operator_console(context, session)
+        if (
+            row["entry"] != "consumer"
+            or row["environment"] != context.settings.execution_environment
+            or not _tenant_in_scope(row["tenant_id"], caller.effective_tenant_id)
+        ):
+            raise StandardAPIError(403, "TRIAL_SCOPE_MISMATCH", "请使用客户公司账号预览当前客户端")
+        return caller
+
+    @app.post("/v1/dify/management/trial", status_code=202)
+    def managed_consumer_trial(
+        payload: ManagedTrialRequest,
+        request: Request,
+        _: None = Depends(dify_trial_credential),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ):
+        caller = managed_trial_caller(request, payload.app_id)
+        if payload.order_no:
+            _require_visible_order(context, caller, payload.order_no)
+        draft = _workflow_trial_draft(context, payload.app_id, caller, payload.question, payload.order_no)
+        from aiops_diagnostics.consumer.consumer_trial import ConsumerTrial
+
+        if not isinstance(draft, ConsumerTrial):
+            raise StandardAPIError(409, "TRIAL_TARGET_INVALID", "当前应用不是客户端客服编排")
+
+        def authorize():
+            current = managed_trial_caller(request, payload.app_id)
+            if current.scope_fingerprint != caller.scope_fingerprint:
+                raise StandardAPIError(403, "TRIAL_SCOPE_MISMATCH", "预览期间登录或授权已变化")
+
+        draft.authorize = authorize
+        trial = context.runtime.start_trial(
+            caller.subject.b_user_id, payload.order_no, draft, language, run_context=caller
+        )
+        if trial is None:
+            raise StandardAPIError(429, "TRIAL_BUSY", "已有预览正在执行", retryable=True)
+        return {"trial_id": trial["diagnosis_id"], "status": trial["status"]}
+
+    def managed_trial_result(payload, request):
+        caller = managed_trial_caller(request, payload.app_id)
+        trial = context.runtime.get_trial(caller, payload.trial_id)
+        if not trial or trial.get("trial_source_app_id") != payload.app_id:
+            raise StandardAPIError(404, "TRIAL_NOT_FOUND", "trial not found")
+        return caller, trial
+
+    @app.post("/v1/dify/management/trial/result")
+    def read_managed_consumer_trial(
+        payload: ManagedTrialResultRequest,
+        request: Request,
+        _: None = Depends(dify_trial_credential),  # noqa: B008
+    ):
+        caller, trial = managed_trial_result(payload, request)
+        if trial.get("result"):
+            _require_workflow_trial_result(context, caller, trial)
+        return {
+            "trial_id": payload.trial_id,
+            "status": trial["status"],
+            "result": trial.get("result"),
+            "error_code": trial.get("error_code"),
+        }
+
+    @app.post("/v1/dify/management/trial/cancel")
+    def cancel_managed_consumer_trial(
+        payload: ManagedTrialResultRequest,
+        request: Request,
+        _: None = Depends(dify_trial_credential),  # noqa: B008
+    ):
+        caller, _trial = managed_trial_result(payload, request)
+        result = context.runtime.cancel_trial(caller, payload.trial_id)
+        return {"trial_id": payload.trial_id, "status": result["status"]}
+
     @app.post("/v1/dify/trial", status_code=status.HTTP_202_ACCEPTED)
     def dify_trial(
         payload: DifyTrialRequest,
@@ -3399,7 +3488,12 @@ def create_gateway_app(
         # 让它不进入任何共享缓存；这条声明不替代 TLS 与授权，只是不让中间层多存一份。
         response.headers["Cache-Control"] = "no-store"
         if not selected_settings.charging_status_base_url:
-            raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "route not found")
+            from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
+
+            try:
+                consumer_endpoint(selected_settings, caller.effective_tenant_id)
+            except ValueError as exc:
+                raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "route not found") from exc
         _require_consumer_self_order(caller, business_entry, order_no)
         _require_visible_order(context, caller, order_no)
         return _charged_snapshot_response(selected_settings, context, caller, order_no)
@@ -3419,14 +3513,12 @@ def create_gateway_app(
         那条管（那条是给模型用的）。范围完全由服务端按会话身份推导，参数动不了它。
         """
         from aiops_diagnostics.consumer import consumer_sites as consumer_sites_module
-        from aiops_diagnostics.gateway.gateway_config import charging_endpoint
+        from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
 
         response.headers["Cache-Control"] = "no-store"
         _require_consumer_self(caller, business_entry)
         try:
-            base_url = charging_endpoint(
-                selected_settings.charging_status_base_url, caller.effective_tenant_id
-            )
+            base_url = consumer_endpoint(selected_settings, caller.effective_tenant_id)
         except ValueError as exc:
             raise StandardAPIError(
                 404, "TENANT_ENDPOINT_UNRESOLVED", "business endpoint is not registered"
@@ -6492,8 +6584,32 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
     ):
         return  # 旧诊断试用继续按原契约读取。
     if located is not None and located.kind == "service_trial":
-        _require_visible_order(context, caller, trial["order_no"])
-        _require_trial_source_route(context, located)
+        if trial["order_no"]:
+            _require_visible_order(context, caller, trial["order_no"])
+        if not located.order_no and report.get("callback_version", 1) >= 3:
+            try:
+                consumer_knowledge_selection.require_owned(
+                    report.get("knowledge_base_ids", []),
+                    consumer_knowledge_selection.owned_libraries(context.runtime, caller.effective_tenant_id),
+                )
+            except ValueError as exc:
+                raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "所选知识库授权已变化") from exc
+        if trial.get("trial_managed_draft"):
+            from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+            source = SelfServiceStore(context.settings.database_file).app(
+                trial.get("trial_source_app_id", "")
+            )
+            if (
+                not source
+                or not _tenant_in_scope(source["tenant_id"], located.tenant_id)
+                or source["entry"] != "consumer"
+                or source["environment"] != located.environment
+                or trial.get("trial_source_app_id") != source["app_id"]
+            ):
+                raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "trial source unavailable")
+        else:
+            _require_trial_source_route(context, located)
         latest = context.dify_run_store.get(located.run_id)
         snapshot = context.dify_run_store.snapshot(located.run_id)
         if (
@@ -6720,12 +6836,12 @@ def _authorized_consumer_snapshot(settings, caller, order_no, data_kind):
     if data_kind == "status":
         return _authorized_charging_snapshot(settings, caller, order_no)
     from aiops_diagnostics.consumer.consumer_billing import read_billing_record
-    from aiops_diagnostics.gateway.gateway_config import charging_endpoint
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
 
     if data_kind != "billing":
         raise ValueError("unsupported consumer data kind")
     return read_billing_record(
-        charging_endpoint(settings.charging_status_base_url, caller.effective_tenant_id),
+        consumer_endpoint(settings, caller.effective_tenant_id),
         order_no,
         tenant_id=caller.effective_tenant_id,
         user_id=caller.subject.c_user_id or "",
@@ -6740,10 +6856,10 @@ def _authorized_charging_snapshot(
     直读入口与节点回呼入口都走这里 —— 契约 §3.6 要求两个入口共用同一份授权读取规则，
     不能在内部端点上另造一条更宽松的。身份取自已验证的 ScopeContext，不取请求头。
     """
-    from aiops_diagnostics.gateway.gateway_config import charging_endpoint
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
 
     try:
-        endpoint = charging_endpoint(settings.charging_status_base_url, caller.effective_tenant_id)
+        endpoint = consumer_endpoint(settings, caller.effective_tenant_id)
     except ValueError as exc:
         raise StandardAPIError(
             404, "TENANT_ENDPOINT_UNRESOLVED", "business endpoint is not registered"

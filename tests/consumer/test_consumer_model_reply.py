@@ -246,3 +246,17 @@ def test_documents_contract_without_reply_still_renders_deterministically():
     raw = json.dumps({"kind": "realtime", "answer": "", "reference_ids": []})
     kind, answer = answer_selection(raw, {"status": "live", "live_snapshot": SNAPSHOT})
     assert kind == "realtime" and answer is None
+
+
+@pytest.mark.parametrize("observed", ["2026-10-31T01:47:12+00:00", "2026-10-31T01:12:47+00:00"])
+def test_observation_time_cannot_authorize_an_invented_amount(observed):
+    evidence = {"order_no": "ORDER-A-1", "observed_at": observed, "status_code": "1"}
+    with pytest.raises(ChatRunUnavailable, match="not in the evidence"):
+        validate_reply("这单多收了 47 元。订单号 ORDER-A-1。", evidence, language="zh")
+
+
+def test_exact_observation_timestamp_can_be_quoted_without_authorizing_its_digits():
+    from aiops_diagnostics.consumer.consumer_time import readable_time
+
+    text = GOOD + " 查询时间 " + readable_time(SNAPSHOT["observed_at"])
+    assert validate_reply(text, SNAPSHOT, language="zh") == text

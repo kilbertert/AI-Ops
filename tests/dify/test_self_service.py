@@ -794,3 +794,21 @@ def test_workspace_bridge_uses_current_profile_and_switches_only_after_authoriza
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_consumer_model_approval_validates_private_credentials_and_duplicate_identity(managed):
+    from pathlib import Path
+
+    from aiops_diagnostics.dify.self_service_config import profiles
+
+    f, *_ = managed
+    path = Path(f["settings"].operator_profiles_file)
+    body = json.loads(path.read_text())
+    model = body["profiles"][0]["model"]
+    body["profiles"][0]["consumer_models"] = [{**model, "name": "consumer-model"}]
+    path.write_text(json.dumps(body))
+    assert profiles(f["settings"])["default"]["consumer_models"][0]["name"] == "consumer-model"
+    body["profiles"][0]["consumer_models"] = [model]
+    path.write_text(json.dumps(body))
+    with pytest.raises(ValueError, match="duplicate approved model"):
+        profiles(f["settings"])

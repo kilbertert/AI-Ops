@@ -31,8 +31,7 @@ def workspace(settings, tenant, name, console):
     return outcome.workspace_id
 
 
-def dependencies(console, workspace_id, profile, gateway_url):
-    model = profile["model"]
+def model_credentials(console, workspace_id, model):
     console.install_plugins(workspace_id, [model["plugin"]])
     path = "/console/api/workspaces/current/model-providers/" + model["provider"] + "/models/credentials"
     query = "?" + urlencode({"model": model["name"], "model_type": "llm"})
@@ -71,6 +70,10 @@ def dependencies(console, workspace_id, profile, gateway_url):
     for key in ("endpoint_url", "max_tokens_to_sample", "function_calling_type", "stream_function_calling"):
         if observed.get(key) != credentials.get(key):
             raise SetupRefused("SETUP_MODEL_CONFLICT")
+
+
+def dependencies(console, workspace_id, profile, gateway_url):
+    model_credentials(console, workspace_id, profile["model"])
     manifest_path = Path(profile["target"]["manifest_file"])
     validate_private_file(manifest_path)
     manifest = json.loads(manifest_path.read_text())
@@ -202,32 +205,43 @@ def knowledge_connection(context, workspace_id, console):
 # 用模板生成一个客服应用等于重写一份编排，而运营已经调好的编排在现役应用里。
 
 
-def customer_knowledge_base(context, tenant_id: str) -> str:
-    """给这个客户建一个**新的**对客知识库并返回 id。**绝不按名字复用。**
-
-    名字不是判据：一个叫"对客知识库"的库完全可能是内部资料。按名字复用会把消费者的提问
-    接到内部资料上 —— 而且没有任何日志能看出这件事发生过（名字看起来完全正确）。
-    所以每次开通都建新库，名字里带租户与随机后缀，保证它只被这一次开通认领。
-
-    **空库是有意为之**：新建客户没有资料是常态，拿别的客户的资料补上才是事故。
-    客服在这种库上会答"暂无资料"，这正是要的行为（规划 §5）。
-    """
+def customer_knowledge_base(context, tenant_id: str, operation: dict, save) -> str:
+    """先持久化创建身份；结果不明时只对账，不再次POST或认领旧的同名库。"""
     import secrets
 
     client = getattr(context.runtime, "kb_search_client", None)
     if client is None:
         raise SetupRefused("SETUP_KNOWLEDGE_CONFIG_REQUIRED")
-    from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
-
     tenant = client.for_tenant(tenant_id)
-    name = f"对客知识库-{tenant_id[-6:]}-{secrets.token_hex(3)}"[:128]
+    if "knowledge_create" not in operation:
+        operation["knowledge_create"] = {
+            "name": "对客知识库-" + secrets.token_hex(16),
+            "before": [r["knowledge_base_id"] for r in tenant.list_knowledge_bases()],
+        }
+        save("consumer:knowledge")
+    pending = operation["knowledge_create"]
+
+    def reconcile():
+        candidates = [
+            r["knowledge_base_id"]
+            for r in tenant.list_knowledge_bases()
+            if r.get("name") == pending["name"] and r["knowledge_base_id"] not in pending["before"]
+        ]
+        if len(candidates) != 1:
+            raise SetupRefused("SETUP_KNOWLEDGE_CREATE_UNCONFIRMED")
+        return candidates[0]
+
+    if pending.get("attempted"):
+        return reconcile()
+    pending["attempted"] = True
+    save("consumer:knowledge")
     try:
-        created = tenant.create_knowledge_base(name, "客户对客资料（开通时自动创建，可改名为业务名）")
-    except KnowledgeSearchUnavailable as exc:
-        raise SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc
+        created = tenant.create_knowledge_base(pending["name"], "客户对客资料（开通自动创建）")
+    except Exception:
+        return reconcile()
     knowledge_base_id = str(created.get("id") or created.get("knowledge_base_id") or "")
-    if not knowledge_base_id:
-        raise SetupRefused("SETUP_KNOWLEDGE_FAILED")
+    if not knowledge_base_id or knowledge_base_id in pending["before"]:
+        raise SetupRefused("SETUP_KNOWLEDGE_CREATE_UNCONFIRMED")
     return knowledge_base_id
 
 
@@ -262,6 +276,7 @@ def rebind_knowledge(document: dict, knowledge_ids, *, forbidden_ids=()) -> dict
         # 没有受控检索节点（旧 FAQ 流程）或出现多个：都不是可以自动绑定的形态。
         raise SetupRefused("SETUP_KNOWLEDGE_BINDING_REQUIRED")
     matches[0]["tool_configurations"] = {"knowledge_base_ids": {"type": "constant", "value": selected}}
+    matches[0].pop("credential_id", None)
     return document
 
 
@@ -340,9 +355,6 @@ def copy_consumer_app(console, source, workspace_id, job_id, request, document):
 
 # ── 客户端依赖：插件、目录凭据、模型凭据、业务连接 ────────────────────────
 
-PLUGIN_CREDENTIALS = "/console/api/workspaces/current/tool-provider/builtin/{provider}/credentials"
-PLUGIN_ADD = "/console/api/workspaces/current/tool-provider/builtin/{provider}/add"
-
 
 def consumer_endpoint(context, tenant_id: str) -> str:
     """把**已批准的环境连接**登记成这个租户的受管业务地址，并返回它。
@@ -370,41 +382,59 @@ def consumer_endpoint(context, tenant_id: str) -> str:
 
 
 def consumer_plugin(console, workspace_id: str, settings, catalogue_token: str) -> str:
-    """安装并配置客户端知识插件，返回 provider id。
+    """按 Dify 1.17.1 的脱敏凭据列表对账，写入后校验并启用受管凭据。"""
+    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER
 
-    目录凭据（只用于列库）与"本轮取数凭据"是两把不同的东西：插件用它列库，正文读取必须
-    带本轮 data_grant。这里写入并**回读**确认，写不进去就不发布。
-    """
-    provider = (getattr(settings, "consumer_knowledge_plugin", "") or "").split("@", 1)[0]
-    if not provider:
+    if not getattr(settings, "consumer_knowledge_plugin", ""):
         raise SetupRefused("SETUP_CONSUMER_PLUGIN_REQUIRED")
     console.install_plugins(workspace_id, [settings.consumer_knowledge_plugin])
-    payload = {
-        "credentials": {
-            "gateway_url": settings.public_base_url.rstrip("/"),
-            "catalogue_token": catalogue_token,
-        },
-        "name": "aiops-managed",
-        "type": "builtin",
+    base = f"/console/api/workspaces/current/tool-provider/builtin/{PROVIDER}"
+    credentials = {
+        "gateway_url": settings.public_base_url.rstrip("/"),
+        "catalogue_token": catalogue_token,
     }
-    rows = console._call(workspace_id, PLUGIN_CREDENTIALS.format(provider=provider))
-    existing = [
-        row
-        for row in (rows or {}).get("credentials", [])
-        if (row.get("credentials") or {}).get("gateway_url") == payload["credentials"]["gateway_url"]
-        and (row.get("credentials") or {}).get("catalogue_token") == catalogue_token
-    ]
-    if not existing:
-        console._call(workspace_id, PLUGIN_ADD.format(provider=provider), method="POST", body=payload)
-        rows = console._call(workspace_id, PLUGIN_CREDENTIALS.format(provider=provider))
-        existing = [
-            row
-            for row in (rows or {}).get("credentials", [])
-            if (row.get("credentials") or {}).get("gateway_url") == payload["credentials"]["gateway_url"]
-        ]
-    if len(existing) != 1:
+
+    def managed():
+        rows = console._call(workspace_id, base + "/credentials")
+        if not isinstance(rows, list):
+            raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
+        selected = [r for r in rows if r.get("name") == "aiops-managed"]
+        if len(selected) > 1:
+            raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
+        return selected[0] if selected else None
+
+    existing = managed()
+    if existing:
+        # 密钥回读是掩码；更新接口会用传入的真实凭据校验，不能拿掩码比较密钥。
+        console._call(
+            workspace_id,
+            base + "/update",
+            method="POST",
+            body={
+                "credential_id": existing["id"],
+                "name": "aiops-managed",
+                "credentials": credentials,
+            },
+        )
+    else:
+        console._call(
+            workspace_id,
+            base + "/add",
+            method="POST",
+            body={
+                "name": "aiops-managed",
+                "type": "api-key",
+                "credentials": credentials,
+                "visibility": "all_team_members",
+            },
+        )
+    saved = managed()
+    if not saved or (saved.get("credentials") or {}).get("gateway_url") != credentials["gateway_url"]:
         raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
-    return provider
+    console._call(workspace_id, base + "/default-credential", method="POST", body={"id": saved["id"]})
+    if not managed().get("is_default"):
+        raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
+    return PROVIDER
 
 
 def consumer_models(console, workspace_id: str, document: dict, profile) -> list[str]:
@@ -426,15 +456,21 @@ def consumer_models(console, workspace_id: str, document: dict, profile) -> list
             wanted.append((provider, name))
     if not wanted:
         raise SetupRefused("SETUP_MODEL_CONNECTION_REQUIRED")
-    approved_provider = str((profile.get("model") or {}).get("provider") or "")
+    approved_models = [profile.get("model") or {}, *profile.get("consumer_models", [])]
     ready = []
     for provider, name in wanted:
+        approved = next(
+            (m for m in approved_models if (m.get("provider"), m.get("name")) == (provider, name)), {}
+        )
+        if (provider, name) == (approved.get("provider"), approved.get("name")):
+            model_credentials(console, workspace_id, approved)
+            ready.append(f"{provider}/{name}")
+            continue
         path = f"/console/api/workspaces/current/model-providers/{provider}/models/credentials"
-        saved = console._call(workspace_id, path + f"?model={name}&model_type=llm")
+        query = "?" + urlencode({"model": name, "model_type": "llm"})
+        saved = console._call(workspace_id, path + query)
         if saved.get("current_credential_id"):
             ready.append(f"{provider}/{name}")
             continue
-        if provider != approved_provider:
-            raise SetupRefused("SETUP_MODEL_CONNECTION_REQUIRED")
-        raise SetupRefused("SETUP_MODEL_CONFLICT")
+        raise SetupRefused("SETUP_MODEL_CONNECTION_REQUIRED")
     return ready

@@ -455,9 +455,6 @@ class SelfService:
                     else:
                         self._run_consumer(job_id, request, resources, state, save, caller, session)
                 except Exception as exc:  # noqa: BLE001 - 逐端记录，不牵连另一端
-                    import traceback as _tb
-
-                    _tb.print_exc()
                     state.update(state="failed", error_code=_error_code(exc))
                     save(entry + ":failed")
             failed = [e for e in entries if resources["entries"][e].get("state") == "failed"]
@@ -603,7 +600,7 @@ class SelfService:
         save("consumer:application")
         if not state.get("knowledge_base_ids"):
             state["knowledge_base_ids"] = [
-                prepare.customer_knowledge_base(self.context, request["tenant_id"])
+                prepare.customer_knowledge_base(self.context, request["tenant_id"], state, save)
             ]
             # 显式登记这一次新建的库"允许对客"。没有这一行，发布契约与检索都会把它当内部库。
             from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
@@ -616,6 +613,7 @@ class SelfService:
                     knowledge_base_id,
                     caller.user_id,
                 )
+            save("consumer:knowledge")
         source = DifyDslSource(
             self.settings.dify_console_base_url,
             spec["app_id"],
@@ -818,6 +816,7 @@ class SelfService:
             consumer_callback_base=self.settings.public_base_url,
             consumer_libraries=lambda: owned_libraries(self.context.runtime, row["tenant_id"]),
             bootstrap=bootstrap,
+            expected_workflow=workflow,
         )
         if outcome.action == "refused":
             raise auth.SetupRefused("SETUP_AGENT_UNAVAILABLE")

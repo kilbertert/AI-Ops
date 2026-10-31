@@ -770,6 +770,7 @@ class GatewayRuntime:
         draft: Any,
         language: str,
         trial_initiator: Any = None,
+        run_context: ScopeContext | None = None,
     ) -> dict[str, Any] | None:
         """提交一次试运行，或返回 ``None`` 表示并发超限（路由转 429）。
 
@@ -777,7 +778,7 @@ class GatewayRuntime:
         ``initiator`` 只进审计，**不是**授权依据（授权在这一层之外：钥匙决定能不能调，
         配置的租户决定能看什么）。
         """
-        run_context = (
+        run_context = run_context or (
             self.trial_context_for(trial_initiator)
             if trial_initiator is not None
             else self.trial_run_context()
@@ -796,6 +797,8 @@ class GatewayRuntime:
                 tenant_id=run_context.effective_tenant_id,
                 workflow_trial=callable(getattr(draft, "execute", None)),
                 node_trial=getattr(draft, "engine", "") == "node",
+                source_app_id=getattr(getattr(draft, "source", None), "app_id", ""),
+                managed_draft=bool(getattr(draft, "draft", False)),
             )
             trial_id = str(trial["diagnosis_id"])
             self._trial_jobs.add(trial_id)
@@ -811,6 +814,25 @@ class GatewayRuntime:
         with self._trial_lock:
             self._trial_jobs.discard(trial_id)
             self._trial_contexts.pop(trial_id, None)
+
+    def cancel_trial(self, context: ScopeContext, trial_id: str):
+        """先撤销取数再落取消终态；迟到 worker 由现有终态保护拒绝。"""
+        from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
+
+        trial = self.get_trial(context, trial_id)
+        if trial is None or trial["status"] not in ACTIVE_DIAGNOSIS_STATUSES:
+            return trial
+        DataGrantStore(self.store.path).revoke_for_qa(trial_id)
+        run = self.dify_run_store.by_qa(trial_id)
+        if run:
+            self.dify_run_store.cancel(run.run_id, "cancelled_by_caller")
+        registration = self._qa_registrations.get(trial_id)
+        if registration:
+            registration.cancelled = True
+        self.store.update_standard_diagnosis(trial_id, status="cancelled")
+        if registration:
+            self._interrupt_registered_turn(registration)
+        return self.get_trial(context, trial_id)
 
     def trial_run_context(self) -> ScopeContext:
         """试运行的**执行范围**：配置的固定调试租户，按**顶层账号口径**（整租户可见）。

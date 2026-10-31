@@ -115,16 +115,12 @@ class Console:
             self.plugin = (body or {}).get("plugin_unique_identifiers", [self.plugin])[0]
             return {"task_id": "", "all_installed": True}
         if path.startswith("/console/api/workspaces/current/tool-provider/builtin/"):
-            provider = path.split("/")[6]
-            if path.endswith("/credentials"):
-                if method == "GET":
-                    return {"credentials": self.plugin_credentials.setdefault(provider, [])}
-                raise AssertionError("credentials endpoint is GET only here")
-            if path.endswith("/add"):
-                self.plugin_credentials.setdefault(provider, []).append(
-                    {"id": f"cred-{len(self.plugin_credentials[provider]) + 1}", **body}
-                )
-                return {"result": "success"}
+            from dify.test_consumer_dependencies import Console as CredentialConsole
+
+            credentials = CredentialConsole(credentials=self.plugin_credentials)
+            result = credentials._call(workspace_id, path, method=method, body=body)
+            self.plugin_credentials = credentials.credentials
+            return result
         if path.startswith("/console/api/workspaces/current/model-providers/"):
             provider = path.split("/")[6]
             return {"current_credential_id": f"mc-{provider}", "credentials": {}, "load_balancing": {}}
@@ -538,11 +534,11 @@ def test_consumer_failure_leaves_operator_ready_and_retry_only_resumes_consumer(
 
     real = prepare.customer_knowledge_base
 
-    def flaky(context, tenant_id):
+    def flaky(context, tenant_id, operation, save):
         calls["consumer"] += 1
         if calls["consumer"] == 1:
             raise auth.SetupRefused("SETUP_KNOWLEDGE_FAILED")
-        return real(context, tenant_id)
+        return real(context, tenant_id, operation, save)
 
     monkeypatch.setattr(prepare, "customer_knowledge_base", flaky)
     job = dual.service.create(dual.caller, request(dual))
