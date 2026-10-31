@@ -1,6 +1,7 @@
 """正式配置边界，以及真正 nginx 的路径/认证透传。"""
 
 import json
+import re
 import shutil
 import socket
 import ssl
@@ -241,6 +242,26 @@ def test_node_source_digest_matches_the_lock():
         "  改了节点源码 → 按 deploy/node-runtime/README.md 构建并部署，然后更新\n"
         "  images.lock.json 的 node.source_sha256 / sha256 / bytes / source_commit。\n"
         "  只改文档或注释也照样要更新（摘要按字节算），这是有意的：制品记录必须指向真实源码。"
+    )
+
+
+def test_node_source_commit_is_a_real_commit():
+    """`node.source_commit` 必须是一个提交号，不能是分支名或占位符。
+
+    2026-10-31：#1239 把它写成了分支名占位符
+    `pending-merge:fix/dual-entry-runtime-compatibility` 并合入 main。它不影响任何校验
+    （jar 摘要与源码摘要各验各的），所以没人发现——但它是这一块唯一的「这是哪份源码」
+    的指路字段，写成非 SHA 就等于把指路牌摘了。
+
+    **判据是格式，不是"这个提交在历史里"**：CI 是 `fetch-depth: 1` 的浅克隆，祖先提交
+    在检出里根本不存在，按可达性断言会让正确的值在 CI 里假红（本 PR 第一次推送就是这样）。
+    而这次真正的缺陷形态恰是「不是 SHA」，格式校验抓得住它，且与克隆深度无关。
+    """
+    locked = json.loads((DEPLOY.parent / "m2-live-03" / "images.lock.json").read_text(encoding="utf-8"))
+    commit = locked["node"]["source_commit"]
+    assert re.fullmatch(r"[0-9a-f]{7,40}", commit), (
+        f"images.lock.json 的 node.source_commit={commit!r} 不是提交号。"
+        " 节点制品记录必须指向真实源码修订，不能写分支名或占位符。"
     )
 
 
