@@ -1144,14 +1144,23 @@ def _advance_route_binding(
     if (
         outcome.action == "unchanged"
         and existing is not None
-        and existing.active
         and existing.agent_id == outcome.agent_id
         and existing.agent_version_no == version_no
         and existing.workflow_id == outcome.workflow_id
     ):
         if expected_revision is not None and existing.revision != expected_revision:
             raise StandardAPIError(409, "ROUTE_BINDING_CONFLICT", "route binding moved")
-        return
+        # **已撤回的版本不能被"再发一次"复活**（与 `node_publication.advance` 同一条）。
+        # 撤回是显式决定，恢复也是显式动作；内容没变只说明不必冻结新版本，不说明操作者
+        # 想让它重新上线。2026-11-01 在 41 上实测：撤回后再点发布，这里返回 unchanged
+        # 之后仍会走到底下的 `store.publish()`，把刚撤回的版本推回 active。
+        if existing.active:
+            return
+        raise StandardAPIError(
+            status.HTTP_409_CONFLICT,
+            "ROUTE_BINDING_RETRACTED",
+            "该版本已撤回；要重新上线请用「恢复历史版本」",
+        )
     if expected_revision is None:
         raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "initial route revision unavailable")
     try:

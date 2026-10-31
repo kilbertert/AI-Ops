@@ -341,14 +341,25 @@ def advance(
     if (
         outcome.action == "unchanged"
         and previous
-        and previous.active
         and previous.agent_id == outcome.agent_id
         and previous.agent_version_no == outcome.version_no
         and previous.app_id == binding.app_id
         and previous.engine == "node"
         and previous.node_config_file == target.config_file
     ):
-        return
+        # **已撤回的版本不能被"再发一次"复活。**
+        #
+        # 撤回是客户/运营的一次显式决定，恢复也是（`change_version(version=…)`）。
+        # 2026-11-01 在 41 实测过这个缺口：撤回后对**同一份内容**再点发布，冻结结果是
+        # `unchanged`，而这里只在 `previous.active` 为真时才提前返回 —— 于是它走到底下的
+        # `store.publish()`，把刚撤回的版本重新推成 active。页面上的"撤回"因此可以被一次
+        # 无关的重复发布悄悄撤销，而操作者根本没打算恢复。
+        #
+        # 判据落在"这一版是否被撤回"上，而不是"内容有没有变"：内容没变只说明不必冻结新
+        # 版本，不说明操作者想要它重新上线。
+        if previous.active:
+            return
+        raise NodeRouteConflict("node route retracted")
     try:
         store.publish(
             environment=target.environment,
