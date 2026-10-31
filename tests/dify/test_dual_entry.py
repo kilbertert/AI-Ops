@@ -1059,7 +1059,6 @@ def test_retracted_publish_refusal_reaches_the_page_as_a_conflict_not_a_500(dual
     routes = ChatRouteBindingStore(dual.settings.chat_route_bindings_file)
     route = routes.get("env-a", TARGET, "consumer", "consumer_service")
     dual.service.change_version(dual.caller, app_id, route.revision)
-    retired = routes.get("env-a", TARGET, "consumer", "consumer_service")
     handler = dual.f["app"].exception_handlers[NodeRouteConflict]
     response = asyncio.run(handler(None, NodeRouteConflict("node route retracted")))
     assert response.status_code == 409
