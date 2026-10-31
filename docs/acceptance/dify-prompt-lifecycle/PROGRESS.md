@@ -23,6 +23,7 @@
 |---|---|---|
 | `ad11fe91` | #1238 | 3798 passed / 9 skipped / 0 failed |
 | `3a381923` | #1239 | 3803 passed / 9 skipped / 0 failed |
+| `51b9ff95` | #1240（受管工作流页） | 3803 passed / 9 skipped / 0 failed |
 
 `context_digest.py --check` 与 `source_digest.py --check` 在最终树上均 `match=true`。
 
