@@ -17,6 +17,22 @@
 
 ## 仍未完成
 
+- **生产原应用启用事实片段契约（`slots`）：未执行，是有意停下的。**
+  只读核对确认生产应用 `394b5399-…` 的环境变量只有 `cpms_status_enabled` /
+  `cpms_billing_enabled` / `knowledge_answer_mode=documents`，**没有 `answer_fact_contract`**，
+  所以线上仍走 `legacy`；SYSTEM 提示词 1338 字符且 `{{fact:` 出现 **0** 次、无协议块。
+
+  **为什么不能只加环境变量**：`render_segments` 要求必需的证据片段，提示词不产出
+  `{{fact:…}}` 时每个订单/账单问题都会整轮失败。两件事必须同一次发布完成。
+
+  **为什么没有直接跑仓库脚本**：唯一入口 `tools/content/upgrade_consumer_flow.py` 会
+  `candidate["workflow"]["graph"] = template["graph"]` —— **整张图换成仓库模板**后再拷回部分字段，
+  等于重写整个生产 chatflow（含 SYSTEM、节点结构、memory）。这超出"启用契约"的范围，
+  不应在没有明确同意的情况下执行。
+
+  已就绪：草稿回滚点 `sha256 ff5c5d33…`（20,632 字节）；已发布版本 `2026-10-30 10:07:00`；
+  只读读取器 `tools/verification/inspect_production_prompt.py`。
+
 - **41 原应用 / 原 H5 的真实模型页面验收：未执行。** 32 次样本直接调模型出口+校验器，
   不过 Dify 页面；117 项页面验收用的是合成模型。两者都不能替代生产原应用的真实链路。
 - **线上 `max_tokens` 未知**：`exec-manifest.json` 的 `model_options` 是 `{}`，仓库内无法核实实际生效值。
