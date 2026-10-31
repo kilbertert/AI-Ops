@@ -268,9 +268,15 @@ class SelfService:
     # ── 状态 ──────────────────────────────────────────────────────────
 
     def status(self, caller, app_id):
+        # 客户端的登记行**没有** profile（`profile_id=''`）：profile 是管家端的节点目标。
+        # 判"这是不是客户端"只能看这条登记的**真实端**。2026-10-31 实测：一条被错误登记成
+        # 管家端的客户端行让 `config.profiles()['']` 抛 KeyError，客户在页面上看客户端状态
+        # 一律 500，且双端开通因"来源端不符"被拒。
         row = self.authorize_app(caller, app_id)
-        if row["entry"] == "consumer":
+        if row["entry"] != "operator":
             return self._consumer_status(caller, row)
+        if not row["profile_id"]:
+            raise auth.SetupRefused("SETUP_APP_NOT_MANAGED")
         profile = config.profiles(self.settings)[row["profile_id"]]
         t = node_publication.managed_target(self.settings, row["profile_id"], app_id, row["tenant_id"])
         template = execution_manifest.load(t.manifest_file)
@@ -382,6 +388,12 @@ class SelfService:
             source = self.authorize_app(caller, spec.app_id)
             if source["entry"] != entry:
                 # 一端的应用不能改个标签当另一端：来源必须**本来就是**这个端。
+                # 页面只显示一个错误码，所以这里按"这一端有没有已发布来源"分两种：
+                # 该租户没有这一端的应用（需要先有来源）→ APP_NOT_MANAGED；
+                # 有这一端的应用但拿它当另一端用 → SOURCE_NOT_PUBLISHED。
+                same_tenant = [r for r in self.store.apps() if r["tenant_id"] == source["tenant_id"]]
+                if not any(r["entry"] == entry for r in same_tenant):
+                    raise auth.SetupRefused("SETUP_SOURCE_NOT_AVAILABLE")
                 raise auth.SetupRefused("SETUP_SOURCE_NOT_PUBLISHED")
             route = self.route_for(source["tenant_id"], entry)
             if not route or not route.active or route.app_id != spec.app_id:
