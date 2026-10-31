@@ -1,5 +1,23 @@
 # 进度
 
+## 六片修复逐片交付（2026-10-31，Claude 接力 Codex 会话）
+
+Codex 会话 `01a180d5` 在第三批推送时被中断（并发工作区锁定）。本会话按原计划的
+"六个小 PR，先状态安全，再依赖、受管预览、知识权限、兼容性，最后 UI" 逐片 rebase 到
+当时 `origin/main` 后交付：
+
+| 批 | 分支 | PR | 合并提交 | 内容 |
+| --- | --- | --- | --- | --- |
+| 1 状态安全 | `fix/dual-entry-state-safety` | #1235 | `1d4eb94d` | 已由 Codex 交付 |
+| 2 依赖实接 | `fix/dual-entry-dependencies` | #1236 | `e0341551` | 已由 Codex 交付 |
+| 3 受管预览 | `fix/dual-entry-managed-trial` | #1237 | `25d5b7dc` | 已由 Codex 交付 |
+| 4 知识对客授权 | `fix/dual-entry-knowledge-access` | #1238 | `f168bf53` | 本会话 rebase + 合并；9 项用例 |
+| 5 执行器兼容 | `fix/dual-entry-runtime-compatibility` | #1239 | `5ab4e4cf` | 本会话 rebase + 合并；65 项用例；摘要重建 |
+| 6 真实工作流页 | `fix/dual-entry-workflow-ui` | #1240 | `79acaf4c` | 本会话 rebase + 合并；浏览器 15 项 |
+
+**仍未完成**：`aiops-41-platform-dify` 正常登录后的真实页面开通、真实消费者/员工原 H5
+会话、36 上的 web 镜像与桥/API 补丁同版部署。这些不是代码缺口，见 [BLOCKED.md](BLOCKED.md)。
+
 ## Codex 直接接手（2026-10-31）
 
 用户已改为由 Codex 直接实现与验收，不再向 Claude 派发。当前分支 `fix/dual-entry-state-safety`，
