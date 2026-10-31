@@ -12,7 +12,7 @@
 ```python
 session = request.headers.get("X-AIOps-Console-Session", "")
 row = context.self_service.authorize_app(auth.identity(context, session), app_id)
-caller, _ = authenticated_operator_console(context, session)   # ← 公司登录
+caller, _ = authenticated_operator_console(context, session)  # ← 公司登录
 ```
 
 `console_identity("")` 直接抛 `OPERATOR_TRIAL_LOGIN_REQUIRED`，
