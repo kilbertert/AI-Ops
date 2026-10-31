@@ -32,6 +32,17 @@ Codex 会话 `01a180d5` 在第三批推送时被中断（并发工作区锁定�
 | 真实消费者/员工会话（H/I/J1） | **未完成**：原 H5 登录卡在公司 mall API 的 SQL 错误 |
 | 孤儿知识库清理 | **未做**：8 个历次失败留下的 `对客知识库-<hash>` |
 
+
+### 收尾追加（2026-10-31 深夜）
+
+- **孤儿知识库**：实际 4 个（不是 8），已逐个核对"0 文档 0 分段 无引用"后删除，
+  授权行置 revoked；该租户知识库 9 → 5。详见
+  [清理与登录根因](../../validation/2026-10-31-kb-cleanup-and-h5-login-blocker.md)。
+- **原 H5 登录**：不是资产问题。不存在的手机号得到同一错误；真实根因是公司商城后端
+  插入 `UserInfo` 时 `sysem_id`/`tenant_id` 为 null（`Field 'sysem_id' doesn't have a
+  default value` → `ThirdSession is null` NPE）。H/I/J1 仍未执行。
+- **待修**：`_run_consumer` 每轮重试都先建库，失败后留下空库；本轮只清产物未改代码。
+
 ## Codex 直接接手（2026-10-31）
 
 用户已改为由 Codex 直接实现与验收，不再向 Claude 派发。当前分支 `fix/dual-entry-state-safety`，
