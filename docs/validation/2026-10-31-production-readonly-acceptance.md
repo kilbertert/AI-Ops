@@ -44,18 +44,22 @@ result["fact_contract"] = "slots" if binding.callback_version >= 5 else "legacy"
 
 这也解释了为什么海量单测与 32 次样本都能通过，而生产没有暴露契约问题：**生产线还在旧契约上**。
 
-## 四、发现的另一个问题：控制台凭据失效
+## 四、⚠️ 订正：控制台凭据**没有**失效（我上一版判断错了）
 
-`AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY`（64 位，2026-10-21 起未变）在生产返回 **401**：
+本文最初版本断言 `AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY` 失效（401）。**那是错的**，
+而且错在两处，值得记下来：
 
-```
-GET /console/api/apps            → 401
-GET /console/api/account/profile → 401
-```
+1. **漏了必需的 `X-WORKSPACE-ID` 头**。`dify_console_admin._headers` 同时发
+   `Authorization: Bearer <key>` **和** `X-WORKSPACE-ID: <workspace>`；我只带了前者，
+   于是 401 —— 一个缺失的 header 看起来和一把失效的密钥一模一样。
+   带上正确 workspace 后 `/console/api/apps` 返回 **200**。
+2. **用错了 workspace**。我先用了 `AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID`（`2db44904…`），
+   该 workspace 里没有生产应用，于是拿到 404 —— 看起来又像"应用不存在"。
+   生产租户 `1942105476598861824` 的真实 workspace 是
+   `c3f871e1-ffd0-4a10-a84a-b8696f7acd25`（来自 `dify_workspaces` 表）。
 
-认证格式与代码一致（`Authorization: Bearer <key>`，见 `dify_console_admin.py:149`），
-所以不是我用错 header。**影响**：任何依赖 console API 的运维路径（如 `admin pull-dify`、
-产品侧提示词自助编辑）现在都无法通过该凭据访问控制台。
+两次都是**我的调用方式**错了，不是生产环境坏了。已在本文更正，并把正确的只读读取器
+落在 `tools/verification/inspect_production_prompt.py`。
 
 未验证是否为"密钥被轮换"或"Dify 侧账号变更"。**未做任何修复**，也不尝试绕过。
 这独立于本次需求，但会阻塞"运营在页面上改提示词"这条产品路径 —— 须单独处理。
