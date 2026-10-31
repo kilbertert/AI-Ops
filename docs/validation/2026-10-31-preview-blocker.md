@@ -1,39 +1,36 @@
-# 真实预览的执行障碍（2026-10-31）
+# 真实预览入口：advanced-chat 可用（2026-10-31）
 
-## 已确认事实
+## 结论
 
-目标应用 `394b5399-…`（WF01-Ulink-只读客服）的 mode 是 **`advanced-chat`**（console API 确认）。
+**不存在预览阻塞。** 上一版本文档把 404 误判为"能力边界"，那是打错了路由。
 
-Dify 1.17.1 的两个 console 草稿运行入口都**不接受 advanced-chat**：
+## 正确入口
 
-| 入口 | 对 advanced-chat 的响应 |
-|---|---|
-| `POST /console/api/apps/<id>/workflows/draft/run` | 404 `App mode is not in the supported list: {'workflow'}` |
-| `POST /console/api/apps/<id>/chat-messages` | 404 `App mode is not in the supported list: {'chat','agent','agent-chat'}` |
+目标应用 `394b5399-…` 的 mode 是 `advanced-chat`。可用的就地草稿运行接口是：
 
-即：**没有"就地预览草稿"的控制台接口**。这不是权限问题，是 Dify 的能力边界。
+```
+POST /console/api/apps/<app>/advanced-chat/workflows/draft/run
+```
 
-## 可用的两条路
+## 三次误判的经过（保留，避免有人重犯）
 
-**A. 临时应用预览**（仓库已有 `dify_workflow_trial.WorkflowTrial`）
-- 在生产 workspace 导入一个临时应用 → 发布它 → 用它的 service key 跑真实模型 → `finally` 删除。
-- 优点：跑的是**真实 Dify + 真实模型 + 真实知识插件**，且不动原应用的草稿与正式指针。
-- 代价：会在生产 workspace **短暂创建并删除一个应用**（有审计痕迹）；导入期间占用该 workspace。
+| 尝试的路径 | 响应 | 我当时的结论 | 实际含义 |
+|---|---|---|---|
+| `/apps/<id>/workflows/draft/run` | 404 `App mode is not in the supported list: {'workflow'}` | "advanced-chat 不支持草稿运行" | 该路由只服务 `workflow` 模式 |
+| `/apps/<id>/chat-messages` | 404 `{chat, agent, agent-chat}` | 同上 | 该路由不服务 `advanced-chat` |
+| `/apps/<id>/advanced-chat/workflows/draft/run` | **200，返回 SSE 事件** | —— | **正确入口** |
 
-**B. 直接发布到正式应用**
-- 跳过预览直接发布，再在正式入口验。
-- 代价：没有"预览 B 而正式仍是 A"这一步，违背 acceptance.feature 的
-  `Scenario: 预览用草稿，正式用发布版`，也会把未验证的提示词推给真实用户。
+误判根源：我先看到两个 404 就下了能力边界的结论，**没有把 `/advanced-chat/` 这个模式前缀试全**。
+404 的报文里其实已经点名了"支持哪些模式"，但我把它当成了"没有这个能力"，
+而不是"这个路径服务的是别的模式"。
 
-## 本轮判断
+## 该接口的性质
 
-选 A 需要在**生产 workspace 创建临时应用**——这是写操作，超出"只读 + 改提示词"的授权，
-必须由 owner 明确同意。选 B 不满足验收要求。
+`POST .../advanced-chat/workflows/draft/run` 执行的是**草稿图**，返回 `workflow_started` /
+`workflow_finished` 等 SSE 事件。它**不修改草稿、不改正式指针**，属于只读预览。
 
-因此本轮停在这里，把问题交回，不自行选择。
+因此本轮不需要：
+- 在生产 workspace 创建临时应用（`WorkflowTrial`）；
+- 跳过预览直接发布。
 
-## 另一个必须先解决的项
-
-旧 SYSTEM 与新协议块有 3 处硬冲突（见 `2026-10-31-legacy-system-conflict.md`），
-其中两条会**直接诱导**模型在事实片段外复述单号与状态——正是本次要拦的行为。
-预览要测的正是"纯追加够不够"，所以冲突分析先于预览完成，顺序没有颠倒。
+两条原本列为"备选"的路都不必走。
