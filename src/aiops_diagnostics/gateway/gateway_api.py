@@ -398,6 +398,13 @@ class ManagedTrialResultRequest(BaseModel):
     trial_id: str = Field(pattern=r"^tr_[a-f0-9]{32}$")
 
 
+class NodeCapabilitiesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schemas: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(min_length=1, max_length=10)
+    tool_contract: str = Field(min_length=1, max_length=64)
+    tools_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class FAQAnswerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -3521,6 +3528,23 @@ def create_gateway_app(
             if exc.code.endswith("UNAVAILABLE"):
                 status = 502
             raise StandardAPIError(status, exc.code, str(exc)) from exc
+
+    @app.post("/v1/internal/execution-node/capabilities")
+    def execution_node_capabilities(
+        payload: NodeCapabilitiesRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        from aiops_diagnostics.execution.node_capabilities import record
+        from aiops_diagnostics.execution.node_publication import all_targets
+
+        token = (authorization or "").removeprefix("Bearer ")
+        for path in {t.config_file for t in all_targets(selected_settings)}:
+            config = AgentRunConfig.load(Path(path))
+            node = config.authenticate_node(token)
+            if node and node.active and node.environment == selected_settings.execution_environment:
+                record(selected_settings.database_file, config, node, payload.model_dump())
+                return {"accepted": True}
+        raise StandardAPIError(403, "NODE_NOT_AUTHORIZED", "node not authorized")
 
     @app.post("/v1/orders/{order_no}/charging-status/delegated")
     def delegated_charging_status(

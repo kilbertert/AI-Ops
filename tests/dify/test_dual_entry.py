@@ -337,6 +337,10 @@ def dual(operator, monkeypatch, tmp_path):  # noqa: F811
             "live_billing_record": True,
         },
     )
+    from execution.test_node_capabilities import record_ready
+
+    record_ready(settings.database_file, f["target"].config_file)
+
     return SimpleNamespace(
         f=f,
         service=service,
