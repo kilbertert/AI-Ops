@@ -62,6 +62,11 @@ class VersionRequest(AppRequest):
     version_no: int | None = Field(default=None, ge=1)
 
 
+class KnowledgeAccessRequest(AppRequest):
+    knowledge_base_id: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,128}$")
+    allowed: bool = Field(strict=True)
+
+
 def register(app, context):
     service = SelfService(context)
     context.self_service = service
@@ -246,6 +251,48 @@ def register(app, context):
                 }
             return {"can_diagnose": False, "reason": "公司登录或场站权限暂时无法核验，请重新登录"}
         return {"can_diagnose": True, "reason": ""}
+
+    @app.post("/v1/dify/management/knowledge")
+    def knowledge(payload: AppRequest, session=Depends(session)):  # noqa: B008
+        from aiops_diagnostics.consumer.consumer_knowledge_selection import owned_libraries
+
+        row = service.authorize_app(auth.identity(context, session), payload.app_id)
+        if row["entry"] != "consumer":
+            raise auth.SetupRefused("SETUP_SOURCE_NOT_CONSUMER")
+        try:
+            libraries = owned_libraries(context.runtime, row["tenant_id"])
+        except ValueError as exc:
+            raise auth.SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc
+        return {
+            "libraries": [
+                {
+                    "id": r["knowledge_base_id"],
+                    "name": r.get("name") or r["knowledge_base_id"],
+                    "allowed": r["audience"] == "customer",
+                }
+                for r in libraries
+            ]
+        }
+
+    @app.post("/v1/dify/management/knowledge/access")
+    def knowledge_access(payload: KnowledgeAccessRequest, session=Depends(session)):  # noqa: B008
+        from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+
+        libraries = knowledge(AppRequest(app_id=payload.app_id), session)
+        if payload.knowledge_base_id not in {r["id"] for r in libraries["libraries"]}:
+            raise auth.SetupRefused("SETUP_KNOWLEDGE_CROSS_TENANT")
+        caller = auth.identity(context, session)
+        row = service.authorize_app(caller, payload.app_id)
+        grants = KnowledgeGrants(context.settings.database_file)
+        scope = row["tenant_id"], context.settings.execution_environment, payload.knowledge_base_id
+        if payload.allowed:
+            grants.grant(*scope, caller.user_id)
+        else:
+            grants.revoke(*scope)
+        return {
+            "id": payload.knowledge_base_id,
+            "allowed": payload.knowledge_base_id in grants.granted(*scope[:2]),
+        }
 
     @app.post("/v1/dify/management/operations", status_code=202)
     def create(payload: SetupRequest, session=Depends(session)):  # noqa: B008 - FastAPI dependency

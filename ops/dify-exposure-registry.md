@@ -34,6 +34,8 @@
 | 客户端草稿预览 | `/v1/dify/management/trial` | POST | 试用服务key＋正常公司Dify会话 | 当前客户受管应用，真实公司数据范围，临时应用运行不发布 |
 | 客户端预览回读 | `/v1/dify/management/trial/result` | POST | 同上＋同主体与来源app | 重新核对公司范围、草稿归属及执行证据 |
 | 客户端预览停止 | `/v1/dify/management/trial/cancel` | POST | 同上＋同主体与来源app | 撤销本轮取数并落取消终态，不操作公司业务数据 |
+| 本客户知识库目录 | `/v1/dify/management/knowledge` | POST | 发布服务key＋正常公司Dify会话＋app归属 | 仅本客户库名与对客授权状态，不返回正文 |
+| 知识对客授权 | `/v1/dify/management/knowledge/access` | POST | 同上，另核对库归属 | 显式允许或关闭消费者访问，默认内部，不改公司业务数据 |
 | 创建开通任务 | `/v1/dify/management/operations` | POST | 同上，仅平台管理且目标在公司目录 | 创建可恢复开通任务，模型/工具/工作区由后台准备，不写公司业务数据 |
 | 查询开通进度 | `/v1/dify/management/operations/{job_id}` | GET | 同上，操作发起人一致 | 回读自己的任务，不返回凭据 |
 | 重试开通任务 | `/v1/dify/management/operations/{job_id}/retry` | POST | 同上，重新校验目标授权 | 同一幂等任务续跑，不重复创建应用 |
