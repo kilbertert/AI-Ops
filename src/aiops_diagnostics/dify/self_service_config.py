@@ -9,6 +9,33 @@ from aiops_diagnostics.common.private_files import validate_private_file
 from .self_service_store import SelfServiceStore
 
 
+def approved_model_names(settings) -> tuple[str, ...]:
+    """profile 里**已批准**的端模型名（管家 `model` 与 `consumer_models`）。
+
+    只读名字，不做 `profiles()` 那套目标/清单/凭据校验 —— 那个函数证明的是"这台部署
+    能开通"，而这里回答的是"发布门允许哪些模型落在 agent 配置上"。两者失败含义不同：
+    profile 坏掉时网关应当在启动校验处报错（`create_gateway_app` 已经先调 `profiles()`），
+    而不是让发布门因为读不到而拒绝一个本来合法的发布。读不到就返回空，由调用方保持原值。
+    """
+    path_value = getattr(settings, "operator_profiles_file", "")
+    if not path_value:
+        return ()
+    try:
+        path = Path(path_value)
+        validate_private_file(path)
+        body = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return ()
+    names: set[str] = set()
+    for row in body.get("profiles") or []:
+        if not isinstance(row, dict):
+            continue
+        for model in [row.get("model"), *(row.get("consumer_models") or [])]:
+            if isinstance(model, dict) and isinstance(model.get("name"), str) and model["name"]:
+                names.add(model["name"])
+    return tuple(sorted(names))
+
+
 def profiles(settings):
     path = Path(settings.operator_profiles_file)
     validate_private_file(path)
