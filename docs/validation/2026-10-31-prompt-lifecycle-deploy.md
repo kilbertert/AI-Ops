@@ -45,6 +45,13 @@ deploy-41.sh: 网关不能先于节点上线。
 - `source_digest.py --check` → `4f64fbe0c254…`，与**从 `5ab4e4cf` 提交的树重算**的摘要一致，
   也与 main 当前源码摘要一致（`files=20`）
 
+补充（由执行会话确认，本会话未独立复验）：光换 jar 不足以让节点上报能力 ——
+capability 上报要经 41 宿主的回调 nginx，而 `/etc/aiops-node-runtime/gateway-callback.conf`
+仍是旧渲染，缺 `location = /v1/internal/execution-node/capabilities`，上报一律 404。
+按新模板重渲染并重启 `aiops-node-callback` 后，探针由 404 变 422（空体鉴权拒绝 = 路由已通）。
+重渲染时**必须保留宿主已有的 `lua_package_path` / `lua_package_cpath`**，模板里没有这两行，
+覆盖后 nginx 直接起不来。
+
 ⚠️ 遗留记录问题：`images.lock.json` 的 `node.source_commit` 在 main 上是占位符
 `pending-merge:fix/dual-entry-runtime-compatibility`（由 `5ab4e4cf` 引入）。
 jar 与源码摘要两项都指向 `5ab4e4cf`，所以**制品身份本身可核**；但该字段不可当作提交号使用，
@@ -52,7 +59,8 @@ jar 与源码摘要两项都指向 `5ab4e4cf`，所以**制品身份本身可核
 
 ## 四、CD 重跑与上线（attempt 2）
 
-节点跟上后 main 推进（#1241）自动拉起 CD，run `41186947981` **attempt 2 全部步骤 success**。
+节点跟上后，由双端开通执行会话 `gh run rerun 41186947981`；**attempt 2 全部步骤 success**。
+（本会话观察到的是该重跑的进行中状态，重跑由对方发起，不是 main 推进自动触发。）
 
 部署后核对：
 
