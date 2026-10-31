@@ -77,7 +77,14 @@ def dependencies(console, workspace_id, profile, gateway_url):
     manifest_path = Path(profile["target"]["manifest_file"])
     validate_private_file(manifest_path)
     manifest = json.loads(manifest_path.read_text())
-    ensure_node_provider(console, workspace_id, gateway_url, manifest)
+    try:
+        ensure_node_provider(console, workspace_id, gateway_url, manifest)
+    except ValueError as exc:
+        # 声明加了工具（#1205 的 `cpms_site_search`）但工作区里的 provider 还是旧 schema：
+        # 这不是"开通失败"，是**这个工作区的提供方比声明旧**。迁移是一次运营动作
+        # （`ensure_node_provider(migrate=True)`），不在这里替运营决定；但页面必须看得懂原因，
+        # 而不是一个 SETUP_STEP_FAILED。2026-10-31 两个客户都是这么卡住的。
+        raise SetupRefused("SETUP_PROVIDER_OUTDATED") from exc
     providers = console._call(workspace_id, "/console/api/workspaces/current/tool-providers?type=api")
     matches = [p for p in providers if p.get("name") == "cpms-node"]
     if len(matches) != 1:

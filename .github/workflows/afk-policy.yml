@@ -99,6 +99,11 @@ jobs:
         run: npx --yes tsx .sandcastle/profile-network.check.ts
       - name: Verify sandbox MCP config
         run: npx --yes tsx .sandcastle/mcp-config.check.ts
+      # The image name and the uid live in two files that have to agree, and a
+      # disagreement is invisible until a sandbox starts — where it reads as a
+      # runner or code problem. That is how one project stayed red for two weeks.
+      - name: Verify the sandbox image wiring
+        run: npx --yes tsx .sandcastle/profile-image.check.ts
       # The heartbeat filter's two failure modes are both silent: too wide eats
       # agent output, too narrow lets the flood back in with nothing reporting it.
       # Neither shows up as a failed run, so the match is asserted here.
