@@ -187,3 +187,49 @@ def test_only_explicit_grant_can_reenable_revoked_knowledge(tmp_path):
     assert g.granted("t", "env") == set()
     g.grant("t", "env", "kb", "operator")
     assert g.granted("t", "env") == {"kb"}
+
+
+@pytest.mark.parametrize("failure", ["consumer_endpoint", "consumer_plugin", "consumer_models"])
+def test_dependencies_fail_before_any_customer_library_is_created(dual, monkeypatch, failure):  # noqa: F811
+    original = getattr(prepare, failure)
+
+    def unavailable(*args, **kwargs):
+        raise prepare.SetupRefused("SETUP_STEP_FAILED")
+
+    monkeypatch.setattr(prepare, failure, unavailable)
+    only = {"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}}
+    for index in range(2):
+        job = dual.service.create(
+            dual.caller, request(dual, scope="consumer", sources=only, key=f"dependency-first-{index:03}")
+        )
+        for _ in range(2):
+            dual.service.run(job["id"], "session")
+            assert dual.service.store.get(job["id"])["state"] == "failed"
+        assert dual.kb.created == [], "failed setup created an unusable customer library"
+    monkeypatch.setattr(prepare, failure, original)
+    dual.service.run(job["id"], "session")
+    assert dual.service.store.get(job["id"])["state"] == "completed"
+    assert len(dual.kb.created) == 1
+
+
+def test_same_job_resumes_after_app_import_failure_without_creating_another_library(dual, monkeypatch):  # noqa: F811
+    real = prepare.copy_consumer_app
+    calls = []
+
+    def fail_once(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise TimeoutError("synthetic import unavailable")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(prepare, "copy_consumer_app", fail_once)
+    only = {"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}}
+    job = dual.service.create(
+        dual.caller, request(dual, scope="consumer", sources=only, key="import-resume-library-001")
+    )
+    dual.service.run(job["id"], "session")
+    assert dual.service.store.get(job["id"])["state"] == "failed"
+    assert len(dual.kb.created) == 1
+    dual.service.run(job["id"], "session")
+    assert dual.service.store.get(job["id"])["state"] == "completed"
+    assert len(dual.kb.created) == 1
