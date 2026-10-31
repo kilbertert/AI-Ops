@@ -1,51 +1,54 @@
-# 草稿预览失败的根因：插件 gateway_url 指向被拦截的公网路径（2026-10-31）
+# 草稿预览的授权约束（2026-10-31，实测）
 
-## 现象
+## 结论
 
-签发真实授权后跑草稿预览，`knowledge` 节点失败：
+**孤立签发一张 `data_grant` 不足以做草稿预览。** 网关会在
+`_authorized_consumer_snapshot` 里校验它**绑定了一次真实运行**：
 
 ```
-检索当前用户适用知识 → ValueError:
-知识目录或检索暂不可用，请核对工作区授权和发布状态
+grant.workflow_id ↔ run.workflow_id 一致
+且 _same_tenant_as_grant(run.tenant_id, grant.tenant_id)
+且 latest.state ∈ {RUNNING, SUCCEEDED}
+否则 → 403 DIFY_RUN_NOT_ACTIVE
 ```
 
-授权本身没问题（`grant.state=active`，`finally` 里已 `revoke`）。
+没有 `chat_dify_runs` 行时拿不到快照，插件抛 `ValueError`，
+外层报 `503 KNOWLEDGE_UNAVAILABLE`（掩码了真正原因）。
 
-## 根因
+## 我这一轮做的（全部已回滚）
 
-Dify 侧 `tool_builtin_providers` 里 `trendpower/consumer_knowledge` 的配置是：
+1. 用 `DataGrantStore.issue()` 签发短期授权（`environment=production-41`、
+   `tenant=1942105476598861824`、`workflow_id=7847fe49…`），**每次都在 `finally` 里 `revoke`**。
+2. 用它调 `POST /v1/internal/consumer-knowledge`：
+   - 直连 `172.18.0.1:8788` → `503 KNOWLEDGE_UNAVAILABLE`
+   - 走公网 `api.mall.qushiyun.com` → 同样 `503`
+   - 两条链路**都到达了我们的网关**（不是网络问题）
+3. 复核基础依赖，排除外因：
+   - 目录接口带正确目录凭据 → **200 / 458 字节**（直连与公网都通过）
+   - `KbServiceClient('http://127.0.0.1:29380', tenant_id='1942105476598861824').list_knowledge_bases()`
+     → **5 个库正常返回**
+   - kb 隧道 `aiops-36-kb-tunnel.service` = active
 
-```json
-{"gateway_url": "https://api.mall.qushiyun.com", "catalogue_token": "…"}
-```
+即：**目录、检索、隧道都是好的**，卡在"授权必须绑运行"这一条。
 
-公网入口实测：
+## 三条被我自己推翻的错误判断（保留过程）
 
-| 路径 | 状态 | 含义 |
-|---|---|---|
-| `/v1/internal/consumer-knowledge/catalogue` | **403** | 公司网关拦截，到不了我们的 Gateway |
-| `/v1/faq/recommendations` | 401 | 路由通、只是缺凭据 |
+| 我先前的说法 | 实测真相 |
+|---|---|
+| 「advanced-chat 不支持草稿预览」 | `/advanced-chat/workflows/draft/run` 返回 **200**，只是我把路径试漏了 |
+| 「公网 `/v1/internal/` 被拦截 403」 | 用 GET 打了 POST-only 端点才得 403；正确方法下公网**能到**网关 |
+| 「插件 `gateway_url` 指向不可达地址」 | 插件配的是根地址，实测**可达**；问题不在这 |
 
-即：插件被配置成访问一个**公网侧不可达**的内部端点。
-`/v1/internal/*` 是给**内网**用的（`ops/nginx/dify-consumer-callback.conf` 的精确 location），
-它必须在 36 与 41 之间的内网链路，而不是公网域名。
+三次都是**我读错了自己的测试结果**，而不是环境坏了。
+规律：看到非 2xx 就先假定"环境/能力限制"，而没有先核对**我的调用方式是否正确**
+（用错方法、试漏路由、拿错作用域）。
 
-## 为什么这不是本次改动引入的
+## 现在的位置
 
-`gateway_url` 是安装插件时写进 Dify 的配置，与提示词迁移无关。
-本轮只签发了预览授权与发起只读草稿运行。
+要做真实预览，必须产生一条**受管运行**（`chat_dify_runs`），
+仓库里对应的路径是 `consumer_trial` / `dify_workflow_trial`。它们会：
+- 写 `chat_dify_runs`、`chat_data_grants` 行；
+- `WorkflowTrial` 还会在生产 workspace 短暂导入并删除一个临时应用。
 
-## 影响
-
-**生产上任何 `knowledge` 类问答都会失败**，不只是预览。
-但生产记录里 `chat_dify_runs` 最近的成功记录（10-30）`retrieval_status=found`，
-说明当时这条链路是通的 —— 可能是之后变了，也可能成功记录走的是另一条路径。
-这一点我**没有查清**，不据此下结论。
-
-## 待确认
-
-1. 36 → 41 的内网回调链路当前是否通（`ops/nginx/dify-consumer-callback.conf` 是否已装）。
-2. `gateway_url` 应改成哪个地址（内网地址或带正确前缀的公网路径）。
-3. 是否是最近某次部署把它改成了根地址。
-
-修 `gateway_url` 属于**改生产 Dify 配置**，不在本次授权范围，需要单独决定。
+这一步的写面比"签发一张授权"大，需要单独确认。
+**本轮到此为止，未改任何生产配置、未建临时应用、授权已全部撤销。**
