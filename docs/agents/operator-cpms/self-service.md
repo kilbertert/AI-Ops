@@ -295,3 +295,26 @@ uv run python tools/verification/check_dual_entry_management.py --out var/verify
 验证：`uv run pytest -n 0 tests/consumer/test_managed_trial.py`，含完整临时执行、回读、
 停止后立即撤凭据、同租户不同用户/应用拒绝、途中公司权限改变及真实HTTP桥转发。
 远端模型、真实公司订单和页面仍须按业务验收核对。
+### 双端工作区依赖的实际 API（2026-10-31）
+
+固定 Dify 1.17.1：插件安装使用完整包标识，工具 provider 使用
+`trendpower/consumer_knowledge/consumer_knowledge`；两者不是同一个 ID。
+`GET /console/api/workspaces/current/tool-provider/builtin/<provider>/credentials` 返回顶层列表，
+密钥已脱敏。按受管名称定位，`add` 的类型为 `api-key`；重试使用 `update` 校验真实凭据，
+再 `default-credential` 激活并回读，不能拿脱敏字符串与密钥比较。
+复制知识节点会清除来源工作区的 `credential_id`，使用目标工作区刚配置的默认凭据。
+
+模型准备与管家共用同一实现：安装批准插件、读取模型凭据、必要时写入并切换后回读。
+批准对象为 provider 与模型名二元组；其他模型只能使用目标工作区已有有效凭据，
+不会从来源客户搬走密钥。新增客户业务连接登记完成后，Java、Chatflow状态/账务以及站点查询
+均通过同一租户/环境解析函数使用该连接；环境变量里已有的精确映射继续有效。
+
+只读核对方法：经 `dev-host exec 41 --allow-service-exec` 读取 gateway.env 中这三个配置键的
+存在性与非敏感值：`AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN`、
+`AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE`、`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL`。
+平台 profile 只输出模型/provider/插件标识及目标路径，不输出 credential_file 的内容。
+这次现场原值缺前两项，业务连接只含原租户；它们须同版部署时补齐，不代表代码测试失败。
+
+现役两端模型不同：profile 可加 `consumer_models` 数组，每项与 `model` 同形，
+明确列出来源客户端的 provider/模型名/包标识/受控凭据文件与预算；只给本数组中的模型自动配置。
+不得修改管家 `model.name` 让客户端勉强通过，也不得因 provider 相同就开放任意模型名。

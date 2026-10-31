@@ -162,10 +162,15 @@ class ConsumerEndpoints:
             )
         protect_private_file(self.path)
 
+    @contextmanager
     def _connection(self):
         connection = sqlite3.connect(str(self.path), timeout=15)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def get(self, tenant_id: str, environment: str) -> str:
         with self._connection() as db:
@@ -199,3 +204,12 @@ def approved_endpoint(value: str, tenant_id: str) -> str:
     if endpoints:
         return endpoints.get(tenant_id, "")
     return legacy or ""
+
+
+def consumer_endpoint(settings, tenant_id: str) -> str:
+    """Java 和 Chatflow 共用已登记的租户/环境连接，兼容现役配置。"""
+    from aiops_diagnostics.gateway.gateway_config import charging_endpoint
+
+    database = getattr(settings, "database_file", "")
+    managed = ConsumerEndpoints(database).get(tenant_id, settings.execution_environment) if database else ""
+    return managed or charging_endpoint(settings.charging_status_base_url, tenant_id)
