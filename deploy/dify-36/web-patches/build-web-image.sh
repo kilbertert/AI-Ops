@@ -7,7 +7,7 @@
 # 产物。两者同一套纪律：**版本钉死 + sha 核对**，镜像一换就拒绝执行，而不是把陈旧
 # 的补丁树烧进镜像。
 #
-# 跑法（开发机、root、在 deploy/dify-36/ 目录）： ./web-patches/build-web-image.sh
+# 跑法（开发机、claude、在 deploy/dify-36/ 目录）： ./web-patches/build-web-image.sh
 #
 # 产出：$DIFY_WEB_PATCHED_IMAGE（默认 aiops/dify-web-patched:1.17.1），可直接被
 # docker-compose.yaml 的 web.image 覆盖。
@@ -108,6 +108,7 @@ echo "ok: 补丁已落进源（两个标记都在）"
 
 cp "$VERSION_DIR/aiops-management.tsx" "$WORK/web/app/components/aiops-management.tsx"
 cp "$VERSION_DIR/aiops-management.ts" "$WORK/web/service/aiops-management.ts"
+cp "$VERSION_DIR/aiops-workflow-managed.tsx" "$WORK/web/app/components/aiops-workflow-managed.tsx"
 
 echo "== 3. 把构建命令换成 webpack"
 # 关键：**用 webpack 而不是 Turbopack**。实测 Turbopack（上游默认）在本机会在
@@ -123,7 +124,7 @@ import sys
 p = sys.argv[1]
 s = open(p).read()
 old = "RUN pnpm build && pnpm build:vinext"
-new = "RUN rm -rf .next/cache && pnpm build --webpack"
+new = "RUN rm -rf .next/cache && NODE_OPTIONS=--max-old-space-size=4608 MALLOC_ARENA_MAX=2 RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=1 pnpm build --webpack"
 if old not in s:
     raise SystemExit(f"FAIL: Dockerfile 里没有预期的构建行：{old!r}")
 s = s.replace(old, new, 1)
@@ -141,6 +142,18 @@ s = s.replace(vinext_copy, "", 1)
 open(p, "w").write(s)
 print("ok: Dockerfile 构建行 -> webpack，并去掉 vinext 产物 COPY")
 PYEOF
+
+# 限制完整工作流构建的内存；持久缓存曾导致本机多次 OOM，制品仍执行完整编译。
+python3 - "$WORK/web/next.config.ts" <<'PYMEM'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = "  output: 'standalone',"
+if anchor not in s:
+    raise SystemExit("FAIL: Next.js构建配置不匹配")
+s = s.replace(anchor, anchor + "\n  experimental: { cpus: 1, webpackMemoryOptimizations: true, webpackBuildWorker: true },\n  webpack: (config) => { config.parallelism = 1; config.cache = false; return config },", 1)
+open(p, "w").write(s)
+PYMEM
 
 echo "== 4. 构建镜像"
 # **`--no-cache-filter builder` 不是优化项，是正确性项。**

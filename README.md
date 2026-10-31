@@ -143,3 +143,6 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 
 执行器兼容性由 `execution.node_capabilities` 记录实际节点协议心跳；
 管家开通/发布/恢复前核对清单schema和工具声明摘要，过旧执行器不会被启用。
+双端客户服务的开通、客户端工作流发布/预览和知识使用范围操作见
+[业务管理手册](docs/agents/operator-cpms/self-service.md)；
+当前实施与未验项见[双端进度](docs/acceptance/dual-entry/PROGRESS.md)。
