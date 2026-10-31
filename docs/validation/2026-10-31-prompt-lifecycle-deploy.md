@@ -33,8 +33,14 @@ deploy-41.sh: 网关不能先于节点上线。
 - `git diff 5ab4e4cf 05e82e8e -- services/execution-node` → **空**
 - 闸门读的是**运行中容器**的 `AIOPS_NODE_BUILD`，不是 `runtime.env`（ADR-0175 无灰度窗口）
 
-期间唯一的 self-hosted runner 被一个孤儿 `Agent Update Branch` job 占用约 40 分钟，
-该 job 于 09:29:00 按自身 timeout 自行 `cancelled`（未代为取消）。
+期间唯一的 self-hosted runner 被一个孤儿 `Agent Update Branch` job 占住
+（job 自 08:28:29 起，按自身 60 分钟 timeout 于 09:28:49 被杀）。两个 CD 排队都在它后面：
+`5ab4e4cf` 的 CD 等了约 58 分钟（08:31:07→09:28:49），`05e82e8e` 的 CD 等了约 28 分钟
+（09:01:26→09:29:06）。两次都是**拿到 runner 后立刻**失败，失败原因与排队无关。
+
+⚠️ 订正：本文早期版本把该孤儿 job 写成「占用约 40 分钟、于 09:29:00 `cancelled`」，
+两处都不准。run 级 `updated_at=09:29:00` 是取消信号的记录时间，job 实际执行到 09:28:49；
+按执行区间算是 60 分钟。
 
 ## 三、节点先行部署（由双端开通会话执行）
 
