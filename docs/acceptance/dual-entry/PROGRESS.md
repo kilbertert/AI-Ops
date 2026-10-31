@@ -1,5 +1,13 @@
 # 进度
 
+## Codex 直接接手（2026-10-31）
+
+用户已改为由 Codex 直接实现与验收，不再向 Claude 派发。当前分支 `fix/dual-entry-state-safety`，
+基线 `f9865f17`。状态安全五项与 R13 已有固定反例及修复，尚未部署；
+后续继续处理受管连接、工作区模型/知识插件、真实编排页、配套部署与 A–L。
+以下第二轮记录保留其当时结论；R13 本轮根因为取证时间数字污染金额白名单。
+
+
 基线：`origin/main` @ `b0d0bd3f`（第二轮返工完成时）。第一轮基线 `4403681e`。
 中断后先读本文件，不重复已完成项。阻塞与所缺条件见 [BLOCKED.md](BLOCKED.md)。
 第二轮的依据：[INDEPENDENT-REVIEW.md](INDEPENDENT-REVIEW.md) 与 [CLAUDE-REWORK.md](CLAUDE-REWORK.md)。
