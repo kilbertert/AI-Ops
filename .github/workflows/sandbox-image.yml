@@ -1,0 +1,111 @@
+name: Sandbox image
+
+# Publish the Sandcastle sandbox image this project's AFK jobs run in.
+#
+# Why a workflow instead of a local `docker build`
+# ------------------------------------------------
+# The image used to live only in the development host's Docker daemon, created by
+# a `docker build` someone remembered to run. Nothing re-created it: the weekly
+# cleanup never touches images, `upgrade-afk.sh` prints the rebuild command as
+# prose rather than checking it, and Sandcastle's own `checkImageUid` runs
+# `docker image inspect` and reports "not found locally" instead of pulling.
+#
+# One project lost its image that way and `architecture-review` failed every
+# weekday for two weeks. The failure surfaced several steps into a job, which
+# reads as a runner or code problem rather than a missing artifact.
+#
+# A published image is re-pulled per job, so "the image is gone" stops being a
+# state a project can reach.
+#
+# The consequence worth knowing: a freshly scaffolded project has no image until
+# this workflow has run on main once. `bootstrap-afk.sh` says so in its report.
+#
+# Public package, so jobs pull it unauthenticated. Nothing secret is baked in —
+# credentials are mounted at run time (see the note in `.sandcastle/profile.ts`).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".sandcastle/Dockerfile"
+      - ".github/workflows/sandbox-image.yml"
+  pull_request:
+    paths:
+      - ".sandcastle/Dockerfile"
+      - ".github/workflows/sandbox-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: sandbox-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Lowercase on purpose: GHCR requires it and `github.repository` carries the
+  # owner's original casing.
+  IMAGE: ghcr.io/kilbertert/ai-ops-sandbox
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        # A pull request from this repository has a read-only GITHUB_TOKEN, so it
+        # builds and verifies but cannot publish. That is the split to want: the
+        # PR proves the Dockerfile still produces an image `profile.ts` can use,
+        # and only a merge to main puts one in the registry.
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .sandcastle
+          # Loaded into the local daemon on a PR so the verify step can run
+          # against it; pushed only where a login happened above.
+          load: ${{ github.event_name == 'pull_request' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          # Both tags, and both matter:
+          #   `<dockerfile-sha>` makes "which Dockerfile produced the `latest` I
+          #   just pulled?" answerable without trusting a timestamp.
+          #   `latest` is the one `profile.ts` names, because a consumer should
+          #   not have to know this repository's commit graph to start a sandbox.
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ hashFiles('.sandcastle/Dockerfile') }}
+          build-args: |
+            AGENT_UID=1000
+            AGENT_GID=1000
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=AFK sandbox image for ${{ github.repository }}
+          cache-from: type=gha,scope=sandbox-image
+          cache-to: type=gha,mode=max,scope=sandbox-image
+
+      - name: Verify the image is usable
+        # A green build only says the layers assembled. This asserts the two
+        # properties `.sandcastle/profile.ts` depends on, so a regression in the
+        # Dockerfile fails here rather than in a review job days later.
+        run: |
+          set -euo pipefail
+          image="${{ env.IMAGE }}:${{ hashFiles('.sandcastle/Dockerfile') }}"
+
+          uid=$(docker run --rm --entrypoint id "$image" -u)
+          test "$uid" = "1000" || {
+            echo "image User is '$uid', but profile.ts passes containerUid: 1000" >&2
+            exit 1
+          }
+
+          docker run --rm --entrypoint bash "$image" -lc 'command -v claude && command -v gh && command -v uv'
