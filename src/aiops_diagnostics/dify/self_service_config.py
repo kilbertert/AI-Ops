@@ -33,16 +33,26 @@ def profiles(settings):
             raise ValueError("node profile environment mismatch")
         if execution_manifest.load(target["manifest_file"]) is None:
             raise ValueError("profile manifest missing")
-        model = row["model"]
-        if not all(model.get(k) for k in ("plugin", "provider", "name", "credential_file")):
-            raise ValueError("profile model missing")
-        credential = Path(model["credential_file"])
-        validate_private_file(credential)
-        values = json.loads(credential.read_text())
-        if not values.get("api_key") or values.get("function_calling_type") != "tool_call":
-            raise ValueError("profile credentials missing tool capability")
-        if int(values["max_tokens_to_sample"]) < int(model["completion_params"]["max_tokens"]):
-            raise ValueError("profile output budget invalid")
+        consumer_models = row.get("consumer_models", [])
+        if not isinstance(consumer_models, list) or len(consumer_models) > 20:
+            raise ValueError("invalid consumer models")
+        seen = set()
+        for model in [row["model"], *consumer_models]:
+            if not isinstance(model, dict) or not all(
+                model.get(k) for k in ("plugin", "provider", "name", "credential_file")
+            ):
+                raise ValueError("profile model missing")
+            identity = model["provider"], model["name"]
+            if identity in seen:
+                raise ValueError("duplicate approved model")
+            seen.add(identity)
+            credential = Path(model["credential_file"])
+            validate_private_file(credential)
+            values = json.loads(credential.read_text())
+            if not values.get("api_key") or values.get("function_calling_type") != "tool_call":
+                raise ValueError("profile credentials missing tool capability")
+            if int(values["max_tokens_to_sample"]) < int(model["completion_params"]["max_tokens"]):
+                raise ValueError("profile output budget invalid")
         result[key] = row
     if not result:
         raise ValueError("operator profiles empty")
