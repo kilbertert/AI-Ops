@@ -59,6 +59,8 @@ class Console:
         self.credentials: dict[str, list[dict]] = credentials or {}
         self.model_credentials = model_credentials or {}
         self.calls = []
+        #: `default-credential` 被调用了几次 —— Dify 那里这是**翻转**，调多了会把默认关掉。
+        self.default_credential_calls = 0
 
     def install_plugins(self, workspace_id, identifiers):
         self.calls.append(("install", identifiers))
@@ -89,8 +91,16 @@ class Console:
                 row.update(name=body["name"], credentials=body["credentials"])
                 return {"result": "success"}
             if action == "default-credential":
-                for row in rows:
-                    row["is_default"] = row["id"] == body["id"]
+                self.default_credential_calls += 1
+                # Dify 1.17.1 实测语义：**翻转**。传当前默认项会把它关掉（2026-10-31，41：
+                # 连调三次，默认项在两条凭据之间来回切换）。替身必须照抄这个行为，
+                # 否则"凭据已是默认时不要调用"这条修复在测试里永远看不见。
+                target = next(r for r in rows if r["id"] == body["id"])
+                target["is_default"] = not target["is_default"]
+                if target["is_default"]:
+                    for row in rows:
+                        if row is not target:
+                            row["is_default"] = False
                 return {"result": "success"}
         if path.startswith("/console/api/workspaces/current/model-providers/"):
             # .../model-providers/<provider 可含斜杠>/models/credentials
@@ -292,3 +302,20 @@ def test_copy_removes_source_workspace_credential_reference():
     node["credential_id"] = "source-workspace-private-credential"
     prepare.rebind_knowledge(doc, ["customer-library"])
     assert "credential_id" not in node
+
+
+def test_already_default_credential_is_not_toggled_off():
+    """凭据已经是默认时不能再调 `default-credential` —— 它是翻转语义。
+
+    2026-10-31 在 41 上实测：同一 id 连调三次，默认项在两条凭据之间来回切换。
+    旧代码把"调用"当成"设为默认"，于是在凭据已默认的情况下恰好把它关掉，
+    紧接着的回读失败，页面看到 `SETUP_CONSUMER_PLUGIN_FAILED`（客户开通在
+    consumer:dependencies 步反复失败，而凭据其实一直是对的）。
+    """
+    console = Console()
+    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_first")
+    calls = console.default_credential_calls
+    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_second")
+    rows = console.credentials["trendpower/consumer_knowledge/consumer_knowledge"]
+    assert rows[0]["is_default"], "已是默认的凭据被翻转关掉了"
+    assert console.default_credential_calls == calls, "已是默认时又调了一次 default-credential"

@@ -438,7 +438,12 @@ def consumer_plugin(console, workspace_id: str, settings, catalogue_token: str) 
     saved = managed()
     if not saved or (saved.get("credentials") or {}).get("gateway_url") != credentials["gateway_url"]:
         raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
-    console._call(workspace_id, base + "/default-credential", method="POST", body={"id": saved["id"]})
+    # `default-credential` 是**翻转**，不是"设为默认"：Dify 1.17.1 实测（2026-10-31，41）
+    # 连调三次，默认项在两条凭据之间来回切换。把它当"设置"用，凭据**已经是**默认时这次调用
+    # 恰好把它关掉，紧接着的回读就失败 —— 页面看到的是 `SETUP_CONSUMER_PLUGIN_FAILED`，
+    # 而凭据其实一直是对的。只有当前不是默认时才调用。
+    if not saved.get("is_default"):
+        console._call(workspace_id, base + "/default-credential", method="POST", body={"id": saved["id"]})
     if not managed().get("is_default"):
         raise SetupRefused("SETUP_CONSUMER_PLUGIN_FAILED")
     return PROVIDER
