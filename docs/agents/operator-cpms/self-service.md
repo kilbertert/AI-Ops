@@ -326,3 +326,20 @@ uv run python tools/verification/check_dual_entry_management.py --out var/verify
 
 同源管理动作knowledge/knowledge-access仍走正常公司管理会话，服务端二次核对应用与库归属，
 不接受请求自行给租户。授权记录只保存库ID、操作者与时间；不复制来源客户资料。
+### 客户端工作流页的发布与构建
+
+受管客户端入口位于实际 `/app/<appId>/workflow` 顶部工具栏，替换原生发布器：
+先用 Dify 原生检查和保存，再读当前管理摘要与 Dify hash，确认保存后未被其他标签页修改，
+最后调用受管发布。页面同时提供“预览客户端客服”和“知识库使用范围”，不需填写技术ID。
+非受管应用继续使用原生发布器；管理状态未读到时禁用发布，避免误走另一条发布路径。
+
+完整构建实测需要限制内存：`NODE_OPTIONS=--max-old-space-size=4608`、
+`MALLOC_ARENA_MAX=2 RAYON_NUM_THREADS=1 UV_THREADPOOL_SIZE=1`，Next配置
+`experimental.cpus=1`、`webpackBuildWorker=true`、`webpackMemoryOptimizations=true`，
+webpack `parallelism=1` 并关闭持久缓存。已写入build-web-image.sh；不只改临时构建树。
+缓存开启时本机出现OOM，关闭后完整编译/静态页/standalone均成功。
+
+测试须使用该版本根依赖的 `vp test --project browser` 与 `vp test --project unit`；
+直接运行另一份vitest会与vite-plus浏览器runner重复加载，出现“找不到runner”。
+工作区依赖需包含packages/*/node_modules；TypeScript全量检查目前有上游
+`@langgenius/dev-proxy`声明缺失，记录原错，不能因Next默认跳过类型检查就说类型全通过。

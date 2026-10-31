@@ -23,6 +23,7 @@ export type Status = {
   channel?: string
   channel_note?: string
   readiness?: string
+  draft_sha256?: string
 }
 
 export type Source = { app_id: string; name: string; version_no: number }
@@ -65,6 +66,14 @@ export const messages: Record<string, string> = {
   SETUP_DRAFT_CHANGED: '草稿已被修改，请刷新确认后重新发布',
   SETUP_SOURCE_CHANGED: '来源正式版本已变化，请刷新后重新选择',
   SETUP_ROUTE_CHANGED: '正式版本已变化，请刷新确认后重新发布',
+  SETUP_EXECUTOR_UNAVAILABLE: '执行组件尚未就绪，请稍后重试或联系平台管理员',
+  SETUP_EXECUTOR_INCOMPATIBLE: '执行组件版本不匹配，请联系平台管理员升级后再发布',
+  SETUP_KNOWLEDGE_CREATE_UNCONFIRMED:
+    '知识库创建结果正在核对，请稍后重试；持续未确认请联系平台管理员',
+  SETUP_MODEL_CONNECTION_REQUIRED: '客户端所需模型尚未配置，请联系平台管理员',
+  SETUP_BUSINESS_CONNECTION_REQUIRED: '该客户的业务环境连接尚未配置，请联系平台管理员',
+  SETUP_CONSUMER_PLUGIN_REQUIRED: '客户端知识连接尚未配置，请联系平台管理员',
+  SETUP_CONSUMER_PLUGIN_FAILED: '客户端知识连接校验失败，请重试或联系平台管理员',
   SETUP_MODEL_CONFLICT: '模型配置与平台模板不一致，请联系平台管理员',
   SETUP_IMPORT_UPGRADE_REQUIRED: '平台导入服务尚未升级，请联系平台管理员',
   SETUP_KEY_LIMIT: '该应用的 Service 凭据已达上限，请联系平台管理员清理',
@@ -172,11 +181,12 @@ export function useManagedApp(appId: string) {
   const [readiness, setReadiness] = useState('')
   useEffect(() => {
     let active = true
+    if (!appId) return
     const load = () =>
       manage('status', { app_id: appId })
         .then((r) => {
           if (active) {
-            setStatus(r)
+            setStatus({ ...r, app_id: appId })
             setError('')
             if (r.managed)
               manage('readiness', { app_id: appId })
@@ -199,4 +209,17 @@ export function useManagedApp(appId: string) {
     }
   }, [appId])
   return { status: status?.app_id === appId ? status : null, error, readiness }
+}
+
+export async function publishManagedWorkflow(appId: string, revision: number, savedHash: string) {
+  // 调用方先等待原生保存成功；重新读摘要，避免拿页面载入时的旧摘要发布。
+  const current: Status = await manage('status', { app_id: appId })
+  if (!current.managed || current.entry !== 'consumer' || !current.draft_sha256)
+    throw new Error('无法核对当前草稿，请刷新后重试')
+  const { fetchWorkflowDraft } = await import('@/service/workflow')
+  const draft = await fetchWorkflowDraft(`/apps/${appId}/workflows/draft`)
+  if (draft.hash !== savedHash) throw new Error('草稿已被其他操作修改，请确认后重新发布')
+  const result = await manage('publish', { app_id: appId, revision, draft: current.draft_sha256 })
+  window.dispatchEvent(new CustomEvent('aiops-published', { detail: appId }))
+  return result
 }

@@ -1,6 +1,12 @@
 'use client'
 
-import type { EntryKey, EntryProgress, EntrySources, Source, Status } from '@/service/aiops-management'
+import type {
+  EntryKey,
+  EntryProgress,
+  EntrySources,
+  Source,
+  Status,
+} from '@/service/aiops-management'
 import { useEffect, useState } from 'react'
 import { entryLabels, manage, messages, steps } from '@/service/aiops-management'
 
@@ -19,10 +25,7 @@ type Operation = {
 }
 
 /** 没有 `entries[]` 的旧后端：退回"只有管家"的形状，页面照常可用。 */
-function entryList(catalogue: {
-  sources: Source[]
-  entries?: EntrySources[]
-}): EntrySources[] {
+function entryList(catalogue: { sources: Source[]; entries?: EntrySources[] }): EntrySources[] {
   if (catalogue.entries?.length) return catalogue.entries
   return [{ entry: 'operator', label: entryLabels.operator, sources: catalogue.sources }]
 }
@@ -38,16 +41,25 @@ function defaultName(tenantName: string, chosen: EntryKey[]) {
  */
 function entrySummary(progress: EntryProgress | undefined): string {
   if (!progress) return '等待中'
-  if (progress.state === 'failed')
-    return messages[progress.error_code || ''] || '这一端未完成'
+  if (progress.state === 'failed') return messages[progress.error_code || ''] || '这一端未完成'
   if (!progress.app_id) return '等待中'
   if (!progress.published) return progress.draft_only ? '草稿（原正式版继续服务）' : '尚未发布'
   if (progress.channel !== 'connected')
-    return progress.channel_note ? `已发布 · ${progress.channel_note}` : '已发布 · AI 已准备，渠道待接入'
+    return progress.channel_note
+      ? `已发布 · ${progress.channel_note}`
+      : '已发布 · AI 已准备，渠道待接入'
   return `已启用 · 正式 V${progress.version_no ?? '?'}`
 }
 
-export function ManagedPublish({ status, save }: { status: Status; save: () => Promise<unknown> }) {
+export function ManagedPublish({
+  status,
+  save,
+  disabled = false,
+}: {
+  status: Status
+  save: () => Promise<unknown>
+  disabled?: boolean
+}) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [versions, setVersions] = useState<number[]>([])
@@ -91,14 +103,12 @@ export function ManagedPublish({ status, save }: { status: Status; save: () => P
         </span>
       )}
       {entry === 'consumer' && status.channel !== 'connected' && (
-        <span data-aiops-channel="pending">
-          {status.channel_note || 'AI 已准备，渠道待接入'}
-        </span>
+        <span data-aiops-channel="pending">{status.channel_note || 'AI 已准备，渠道待接入'}</span>
       )}
       <button
         type="button"
         className="rounded-lg bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
-        disabled={busy}
+        disabled={busy || disabled}
         onClick={async () => {
           setBusy(true)
           setMessage('')
@@ -131,7 +141,11 @@ export function ManagedPublish({ status, save }: { status: Status; save: () => P
         >
           查看历史
         </button>
-        <select aria-label="历史版本" value={selected} onChange={(e) => setSelected(e.target.value)}>
+        <select
+          aria-label="历史版本"
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+        >
           <option value="">选择版本</option>
           {versions.map((v) => (
             <option key={v} value={v}>
@@ -192,8 +206,7 @@ export default function TenantSetup() {
         // 没有已发布来源的一端默认不勾：勾了也提交不了，只会让人以为坏了。
         setChosen((current) => {
           const next = { ...current }
-          for (const item of entryList(body))
-            if (!item.sources.length) next[item.entry] = false
+          for (const item of entryList(body)) if (!item.sources.length) next[item.entry] = false
           return next
         })
       })
@@ -304,7 +317,8 @@ export default function TenantSetup() {
                 value={tenant}
                 onChange={(e) => {
                   setTenant(e.target.value)
-                  const tenantName = catalogue.tenants.find((t) => t.id === e.target.value)?.name || ''
+                  const tenantName =
+                    catalogue.tenants.find((t) => t.id === e.target.value)?.name || ''
                   setName(defaultName(tenantName, picked.length ? picked : ['operator']))
                 }}
               >
@@ -337,7 +351,9 @@ export default function TenantSetup() {
                   const payload: Record<string, unknown> = {}
                   for (const key of picked) {
                     const appId = sources[key]
-                    const version = byEntry(key)?.sources.find((s) => s.app_id === appId)?.version_no
+                    const version = byEntry(key)?.sources.find(
+                      (s) => s.app_id === appId,
+                    )?.version_no
                     payload[key] = { app_id: appId, version_no: version }
                   }
                   const scope = picked.length === 2 ? 'both' : picked[0]
@@ -380,7 +396,10 @@ export default function TenantSetup() {
           {catalogue.operations.map((op) => {
             const progress = op.entries || {}
             return (
-              <div key={op.id} className="mt-3 flex flex-wrap items-center gap-3 rounded border p-3">
+              <div
+                key={op.id}
+                className="mt-3 flex flex-wrap items-center gap-3 rounded border p-3"
+              >
                 <strong>
                   {op.tenant_name} · {op.name}
                 </strong>

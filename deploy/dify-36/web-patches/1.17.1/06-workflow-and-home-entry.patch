@@ -1,28 +1,7 @@
-diff --git a/web/app/(commonLayout)/app/(appDetailLayout)/[appId]/workflow/page.tsx b/web/app/(commonLayout)/app/(appDetailLayout)/[appId]/workflow/page.tsx
-index 35b13b99..947cd390 100644
---- a/web/app/(commonLayout)/app/(appDetailLayout)/[appId]/workflow/page.tsx
-+++ b/web/app/(commonLayout)/app/(appDetailLayout)/[appId]/workflow/page.tsx
-@@ -1,9 +1,13 @@
- import WorkflowApp from '@/app/components/workflow-app'
-+import { WorkflowManagedStrip } from '@/app/components/aiops-workflow-managed'
- 
- const Page = () => {
-   return (
--    <div className="size-full overflow-x-auto">
--      <WorkflowApp />
-+    <div className="flex size-full flex-col overflow-x-auto">
-+      <WorkflowManagedStrip />
-+      <div className="min-h-0 flex-1">
-+        <WorkflowApp />
-+      </div>
-     </div>
-   )
- }
 diff --git a/web/features/home/home-content/home-content.tsx b/web/features/home/home-content/home-content.tsx
-index ec216c12..34d00e5f 100644
 --- a/web/features/home/home-content/home-content.tsx
 +++ b/web/features/home/home-content/home-content.tsx
-@@ -34,6 +34,7 @@ import dynamic from '@/next/dynamic'
+@@ -34,6 +34,7 @@
  import { consoleQuery } from '@/service/console'
  import { trackCreateApp } from '@/utils/create-app-tracking'
  import { hasPermission } from '@/utils/permission'
@@ -30,7 +9,7 @@ index ec216c12..34d00e5f 100644
  import { HomeBanner } from '../banner/home-banner'
  import { HomeIntro } from '../home-intro'
  import { HomeShell } from '../home-shell'
-@@ -407,6 +408,7 @@ export function HomeContent() {
+@@ -407,6 +408,7 @@
    return (
      <HomeShell>
        <div className="flex flex-1 flex-col overflow-y-auto">
@@ -38,3 +17,162 @@ index ec216c12..34d00e5f 100644
          <HomeIntro />
          {systemFeatures.enable_explore_banner && <HomeBanner />}
          <HomeRecommendations
+diff --git a/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx b/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx
+--- a/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx
++++ b/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx
+@@ -13,6 +13,7 @@
+ import { memo, useCallback, useMemo } from 'react'
+ import { useTranslation } from 'react-i18next'
+ import { useEdges } from 'reactflow'
++import { WorkflowManagedStrip } from '@/app/components/aiops-workflow-managed'
+ import { AppPublisher } from '@/app/components/app/app-publisher'
+ import { useStore as useAppStore } from '@/app/components/app/store'
+ import { useFeatures } from '@/app/components/base/features/hooks'
+@@ -30,6 +31,7 @@
+ import { BlockEnum, InputVarType, isTriggerNode } from '@/app/components/workflow/types'
+ import { systemFeaturesQueryOptions } from '@/features/system-features/client'
+ import useTheme from '@/hooks/use-theme'
++import { publishManagedWorkflow, useManagedApp } from '@/service/aiops-management'
+ import { fetchAppDetail } from '@/service/apps'
+ import { consoleQuery } from '@/service/console'
+ import { useInvalidateAppTriggers } from '@/service/use-tools'
+@@ -48,6 +50,7 @@
+   const appDetail = useAppStore((s) => s.appDetail)
+   const setAppDetail = useAppStore((s) => s.setAppDetail)
+   const appID = appDetail?.id
++  const { status: managedStatus, error: managedError } = useManagedApp(appID || '')
+   const { nodesReadOnly, getNodesReadOnly } = useNodesReadOnly()
+   const canReleaseAndVersion = useHooksStore((s) => s.accessControl.canReleaseAndVersion)
+   const { data: deploymentEdition } = useSuspenseQuery({
+@@ -192,6 +195,15 @@
+       if (await handleCheckBeforePublish()) {
+         const draftSyncResult = await handleSyncWorkflowDraft(true)
+         if (!draftSyncResult) throw new Error('Workflow draft sync failed')
++
++        if (managedStatus?.managed) {
++          await publishManagedWorkflow(appID!, managedStatus.route_revision, draftSyncResult.hash)
++          updatePublishedWorkflow(appID!)
++          await updateAppDetail()
++          resetWorkflowVersionHistory()
++          return
++        }
++        if (!managedStatus || managedError) throw new Error('无法核对应用发布状态，请刷新后重试')
+
+         const res = await publishWorkflow({
+           url: publishParams?.url || `/apps/${appID}/workflows/publish`,
+@@ -232,6 +244,8 @@
+       }
+     },
+     [
++      managedStatus,
++      managedError,
+       needWarningNodes,
+       handleCheckBeforePublish,
+       handleSyncWorkflowDraft,
+@@ -275,26 +289,41 @@
+           {t(($) => $['common.features'], { ns: 'workflow' })}
+         </Button>
+       )}
+-      <AppPublisher
+-        {...{
+-          publishedAt,
+-          draftUpdatedAt,
+-          disabled: nodesReadOnly || !hasWorkflowNodes || !canReleaseAndVersion,
+-          toolPublished,
+-          inputs: variables,
+-          outputs: endVariables,
+-          onRefreshData: handleToolConfigureUpdate,
+-          onPublish,
+-          onToggle: onPublisherToggle,
+-          workflowToolAvailable: lastPublishedHasUserInput,
+-          crossAxisOffset: 4,
+-          missingStartNode: !startNode,
+-          hasTriggerNode,
+-          startNodeLimitExceeded,
+-          publishDisabled: !hasWorkflowNodes || startNodeLimitExceeded || !canReleaseAndVersion,
+-          hasHumanInputNode,
+-        }}
+-      />
++      {managedStatus?.managed ? (
++        <WorkflowManagedStrip
++          status={managedStatus}
++          save={() => onPublish()}
++          sync={async () => handleSyncWorkflowDraft(true)}
++          disabled={nodesReadOnly || !canReleaseAndVersion}
++        />
++      ) : (
++        <AppPublisher
++          {...{
++            publishedAt,
++            draftUpdatedAt,
++            disabled:
++              !managedStatus ||
++              !!managedError ||
++              nodesReadOnly ||
++              !hasWorkflowNodes ||
++              !canReleaseAndVersion,
++            toolPublished,
++            inputs: variables,
++            outputs: endVariables,
++            onRefreshData: handleToolConfigureUpdate,
++            onPublish,
++            onToggle: onPublisherToggle,
++            workflowToolAvailable: lastPublishedHasUserInput,
++            crossAxisOffset: 4,
++            missingStartNode: !startNode,
++            hasTriggerNode,
++            startNodeLimitExceeded,
++            publishDisabled: !hasWorkflowNodes || startNodeLimitExceeded || !canReleaseAndVersion,
++            hasHumanInputNode,
++          }}
++        />
++      )}
++      {managedError && <span role="alert">{managedError}</span>}
+     </>
+   )
+ }
+diff --git a/web/app/components/workflow-app/components/workflow-header/index.tsx b/web/app/components/workflow-app/components/workflow-header/index.tsx
+--- a/web/app/components/workflow-app/components/workflow-header/index.tsx
++++ b/web/app/components/workflow-app/components/workflow-header/index.tsx
+@@ -2,8 +2,9 @@
+ import { memo, useCallback, useMemo } from 'react'
+ import { useShallow } from 'zustand/react/shallow'
+ import { useStore as useAppStore } from '@/app/components/app/store'
+ import Header from '@/app/components/workflow/header'
++import { useManagedApp } from '@/service/aiops-management'
+ import { useResetWorkflowVersionHistory } from '@/service/use-workflow'
+ import { useIsChatMode } from '../../hooks/use-is-chat-mode'
+ import ChatVariableTrigger from './chat-variable-trigger'
+ import FeaturesTrigger from './features-trigger'
+@@ -15,8 +16,9 @@
+       setCurrentLogItem: state.setCurrentLogItem,
+       setShowMessageLogModal: state.setShowMessageLogModal,
+     })),
+   )
++  const { status: managedStatus } = useManagedApp(appDetail?.id || '')
+   const resetWorkflowVersionHistory = useResetWorkflowVersionHistory()
+   const isChatMode = useIsChatMode()
+
+   const handleClearLogAndMessageModal = useCallback(() => {
+@@ -41,9 +43,9 @@
+           chatVariableTrigger: <ChatVariableTrigger />,
+         },
+         runAndHistoryProps: {
+           showRunButton: !isChatMode,
+-          showPreviewButton: isChatMode,
++          showPreviewButton: isChatMode && !!managedStatus && !managedStatus.managed,
+           viewHistoryProps,
+         },
+       },
+       viewHistory: {
+@@ -52,9 +54,9 @@
+       restoring: {
+         onRestoreSettled: resetWorkflowVersionHistory,
+       },
+     }
+-  }, [resetWorkflowVersionHistory, isChatMode, viewHistoryProps])
++  }, [resetWorkflowVersionHistory, isChatMode, viewHistoryProps, managedStatus])
+   return <Header {...headerProps} />
+ }
+
+ export default memo(WorkflowHeader)
