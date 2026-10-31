@@ -1011,3 +1011,29 @@ def test_outdated_provider_schema_is_reported_as_its_own_reason():
         prepare_module.dependencies(
             mock.Mock(), "workspace", {"model": {}, "target": {"manifest_file": str(manifest)}}, "https://gw"
         )
+
+
+def test_republishing_a_retracted_consumer_version_must_not_revive_it(dual):
+    """客户端同一条纪律：撤回后重发同一内容，不得把它推回 active。
+
+    网关侧 `_advance_route_binding()` 原来只在 `existing.active` 时才走 unchanged
+    提前返回，撤回后同样的请求会落到 `store.publish()`，把已撤回的版本复活。
+    """
+    result = run(
+        dual,
+        request(
+            dual,
+            scope="consumer",
+            sources={"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}},
+        ),
+    )
+    app_id = result["entries"]["consumer"]["app_id"]
+    routes = ChatRouteBindingStore(dual.settings.chat_route_bindings_file)
+    route = routes.get("env-a", TARGET, "consumer", "consumer_service")
+    dual.service.change_version(dual.caller, app_id, route.revision)
+    retired = routes.get("env-a", TARGET, "consumer", "consumer_service")
+    assert not retired.active
+
+    with pytest.raises(Exception, match="已撤回"):
+        dual.service.publish(dual.caller, app_id, retired.revision)
+    assert not routes.get("env-a", TARGET, "consumer", "consumer_service").active

@@ -193,4 +193,38 @@ def test_late_publication_cannot_overwrite_retraction(publication):
     )
     with pytest.raises(node_publication.NodeRouteConflict):
         node_publication.advance(f["context"], outcome, f["binding"], f["target"], first.route_revision)
+    print(
+        "DEBUG after retract active:",
+        routes.by_key(first.key).active,
+        "revision:",
+        routes.by_key(first.key).revision,
+    )
     assert not routes.by_key(first.key).active
+
+
+def test_republishing_unchanged_content_must_not_revive_a_retracted_version(publication):
+    """撤回后对**同一份内容**再发一次，必须拒绝而不是把版本推回 active。
+
+    2026-11-01 在 41 实测：撤回后点发布，冻结结果是 `unchanged`，而 `advance()` 只在
+    `previous.active` 为真时才提前返回 —— 于是它走到底下的 `store.publish()`，把刚撤回的
+    版本重新上线。撤回是显式决定，恢复也是；内容没变不构成恢复的理由。
+
+    **必须用撤回后的 revision**：`retract()` 自己也会 +1，拿撤回前的 revision 去调会被
+    更早的那条"revision 变了"拒绝 —— 那样测的是另一条守卫，这条缺口仍然漏着。
+    """
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
+
+    f = publication
+    first = publish(f, 0)
+    routes = ChatRouteBindingStore(f["db"])
+    retired = routes.retract(
+        environment=first.environment, tenant_id=first.tenant_id, entry=first.entry, scenario=first.scenario
+    )
+    assert not routes.by_key(first.key).active
+
+    # 内容一个字都没改：冻结结果必然是 unchanged。
+    outcome = node_publication.publish(f["manager"], f["admin"], f["binding"], f["source"], f["target"])
+    assert outcome.action == "unchanged"
+    with pytest.raises(node_publication.NodeRouteConflict, match="retracted"):
+        node_publication.advance(f["context"], outcome, f["binding"], f["target"], retired.revision)
+    assert not routes.by_key(first.key).active, "撤回被一次无关的重复发布复活了"
