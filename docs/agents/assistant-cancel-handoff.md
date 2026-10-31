@@ -2,6 +2,11 @@
 
 # 助手入口等待态与取消：BFF / 前端交接契约
 
+受管客户端草稿停止使用 `POST /v1/dify/management/trial/cancel`，body 为
+`{"app_id":"来源应用","trial_id":"本次预览"}`。浏览器通过同源manage动作 `trial-cancel`；
+桥使用独立试用key及当前Dify会话，Gateway重新交换公司身份，核对同主体、同客户和同来源应用。
+先撤销取数凭据与执行记录，再写cancelled；迟到结果不能覆盖取消，临时Dify应用由worker清理。
+
 管家 Dify 原生预览的取消走 `POST /v1/dify/trial/{trial_id}/cancel`：仅控制台桥持 trial
 服务凭据与当前公司会话调用，body 为 `{"app_id":"当前应用"}`，核对任务属于该主体/应用且为 trial；不可取消正式任务。
 浏览器使用同源 `/__aiops/operator-preview/cancel`，不持服务 key。详见[原生预览](operator-cpms/native-preview.md)。
