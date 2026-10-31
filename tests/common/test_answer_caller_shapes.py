@@ -292,6 +292,12 @@ def test_the_enumeration_covers_every_finalisation_point() -> None:
     inferred, so that removing the guard from it turns this test red instead of
     quietly shrinking the coverage it claims.
 
+    ``consumer_knowledge`` carries **two** points on purpose (2026-10-30): the
+    knowledge/live answer, and the clarify/no-result/human notice whose text the
+    orchestration prompt now writes. They are two different exits of the same
+    surface, both finalised through the same construction path, so the module
+    count stays two while the point count becomes three.
+
     It stays one module at #698 on purpose. The offline and fault-code cards are
     two more cards on the same surface, and they finalise through the **same**
     ``_prose_fields`` helper — so they add surfaces without adding a module. A
@@ -304,7 +310,7 @@ def test_the_enumeration_covers_every_finalisation_point() -> None:
         "consumer_knowledge.py",
         "ops_analysis.py",
     }
-    assert len(sites) == 2, sites
+    assert len(sites) == 3, sites
 
 
 # --------------------------------------------------------------------------

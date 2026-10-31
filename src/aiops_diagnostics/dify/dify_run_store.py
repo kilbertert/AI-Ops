@@ -158,6 +158,7 @@ class DifyRunStore:
                 ("has_photo", "INTEGER NOT NULL DEFAULT 0"),
                 ("data_kind", "TEXT NOT NULL DEFAULT 'status'"),
                 ("context_json", "TEXT"),
+                ("reply_source", "TEXT"),
                 ("language", "TEXT NOT NULL DEFAULT 'zh'"),
                 ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
             ):
@@ -209,7 +210,7 @@ class DifyRunStore:
         data_kind: str = "status",
         has_photo: bool = False,
     ) -> DifyRun:
-        if data_kind not in {"status", "billing"}:
+        if data_kind not in {"status", "billing", "clarify", "human", "order_required"}:
             raise ValueError("unsupported consumer data kind")
         now = _now()
         with self._connection(write=True) as connection:
@@ -358,6 +359,25 @@ class DifyRunStore:
                 "SELECT context_json FROM chat_dify_runs WHERE run_id=?", (run_id,)
             ).fetchone()
         return json.loads(row[0]) if row and row[0] else None
+
+    def store_reply_source(self, run_id: str, reply: str) -> bool:
+        """只存已校验的表达模板，回读重新填本轮事实，不信任缓存正文。"""
+        with self._connection(write=True) as connection:
+            return (
+                connection.execute(
+                    "UPDATE chat_dify_runs SET reply_source=? WHERE run_id=? "
+                    "AND state='running' AND reply_source IS NULL",
+                    (reply, run_id),
+                ).rowcount
+                == 1
+            )
+
+    def reply_source(self, run_id: str) -> str | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT reply_source FROM chat_dify_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return row[0] if row else None
 
     def store_snapshot(self, run_id: str, snapshot: dict[str, Any]) -> bool:
         """把**这一轮**的业务快照落库。只写一次：第二次读业务会得到另一份。

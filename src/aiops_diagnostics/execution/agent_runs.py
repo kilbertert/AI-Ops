@@ -302,6 +302,7 @@ class AgentRun:
     chat_binding: str | None = None
     execution_manifest: str | None = None
     route_revision: int = 0
+    publication_app_id: str = ""
 
     @property
     def exec_config_confirmed(self) -> bool:
@@ -442,6 +443,7 @@ class AgentRunStore:
             for name, kind in (
                 ("execution_manifest", "TEXT"),
                 ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
+                ("publication_app_id", "TEXT NOT NULL DEFAULT ''"),
             ):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {kind}")
@@ -475,6 +477,7 @@ class AgentRunStore:
         chat_binding: str | None = None,
         execution_manifest: str | None = None,
         route_revision: int = 0,
+        publication_app_id: str = "",
         operation: str = OPERATION_CHARGING_STATUS,
     ) -> AgentRun:
         # 32 字节随机；只作关联编号，不承载任何身份或范围。
@@ -488,8 +491,8 @@ class AgentRunStore:
                     environment, app_id, agent_id, expected_node_id, state,
                     gateway_version, created_at, expires_at,
                     expected_agent_version, exec_config_state, chat_binding,
-                    execution_manifest, route_revision
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    execution_manifest, route_revision, publication_app_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -510,6 +513,7 @@ class AgentRunStore:
                     chat_binding,
                     execution_manifest,
                     route_revision,
+                    publication_app_id,
                 ),
             )
         run = self.get(run_id)
@@ -962,6 +966,7 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         chat_binding=row["chat_binding"],
         execution_manifest=row["execution_manifest"],
         route_revision=int(row["route_revision"]),
+        publication_app_id=row["publication_app_id"],
     )
 
 

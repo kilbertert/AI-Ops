@@ -1,9 +1,13 @@
 """真Dify插件/选库/发布验证，由verify_consumer_chatflow的隔离栈调用。"""
 
 import json
+import sys
 import time
 import urllib.request
+from pathlib import Path
 from urllib.parse import urlencode
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "content"))
 
 from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, catalogue_token
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
@@ -97,6 +101,11 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
         check("node selection saved", code == 200)
 
     pub_headers = {"Authorization": "Bearer " + stack.PUBLISH_KEY}
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+
+    grants = KnowledgeGrants(database)
+    for library in ("kb-own", "kb-b"):
+        grants.grant(stack.TENANT, "env-local", library, "isolated-acceptance")
 
     def action(name, **fields):
         return stack.http_json(
@@ -305,9 +314,9 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
         hashlib.sha256(targets.read_bytes()).hexdigest() == before and not content.exists(),
     )
     answer, calls = ask("我上一个订单现在是什么情况")
-    check("live documents preserve CPMS status", "cpms.chargingInfo" in str(answer) and not calls)
+    check("live documents preserve CPMS status", "充电状态记录" in str(answer) and not calls)
     answer, calls = ask("查询我的最新订单退款记录")
-    check("live documents preserve CPMS billing", "cpms.orderDetail" in str(answer) and not calls)
+    check("live documents preserve CPMS billing", "订单账务记录" in str(answer) and not calls)
 
     # 通过真实Dify校验start语言枚举；模型为合成，只证明协议与事实渲染。
     for language in ("zh-Hant", "en", "de", "fr", "es", "pt", "vi", "mn", "th", "km"):
@@ -317,7 +326,50 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
             "multilingual CPMS " + language,
             answer.get("status") == "completed"
             and answer.get("language") == language
-            and "cpms.chargingInfo" in str(answer)
+            and stack.ORDER_LATEST in str(answer)
             and not calls,
         )
     app_headers.pop("Accept-Language")
+    if (root / "prompt-browser-enabled").exists():
+        import subprocess
+        import threading
+
+        from aiops_diagnostics.dify.dify_console_publish import BridgeSettings, make_server
+
+        namespace = env["DIFY_TEST_NAMESPACE"]
+        origin = "http://" + subprocess.check_output(["docker", "port", namespace, "3000"], text=True).strip()
+        bridge = make_server(
+            BridgeSettings(
+                listen_host="0.0.0.0",
+                listen_port=5004,
+                dify_base_url=base,
+                gateway_base_url=gateway,
+                publish_key=stack.PUBLISH_KEY,
+                trial_key=stack.TRIAL_KEY,
+                console_origin=origin,
+                workspace_id=workspace,
+            )
+        )
+        threading.Thread(target=bridge.serve_forever, daemon=True).start()
+        try:
+            (root / "prompt-browser-ready.json").write_text(
+                json.dumps(
+                    {
+                        "headers": headers,
+                        "app_id": app["app_id"],
+                        "version_no": published["version_no"],
+                        "gateway": gateway,
+                    }
+                )
+            )
+            until = time.monotonic() + 350
+            while not (root / "prompt-browser-result.json").exists() and time.monotonic() < until:
+                time.sleep(0.2)
+            result = root / "prompt-browser-result.json"
+            check(
+                "指定SYSTEM页面编辑与预览",
+                result.exists() and json.loads(result.read_text()).get("passed") is True,
+            )
+        finally:
+            bridge.shutdown()
+            bridge.server_close()

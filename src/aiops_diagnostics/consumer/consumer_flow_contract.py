@@ -2,6 +2,9 @@
 
 from urllib.parse import urlsplit
 
+#: 事实片段契约的开关。**由迁移写入**，运营不改它；它的存在让旧发布版本可以继续停在 4。
+FACT_CONTRACT_VARIABLE = "answer_fact_contract"
+
 PATHS = {kind: "/v1/internal/consumer-data/" + kind for kind in ("knowledge", "status", "billing")}
 TYPES = {
     "start": "start",
@@ -44,6 +47,14 @@ class ConsumerFlowError(ValueError):
     """可向运营展示的本地编排拒绝原因，不包含上游正文。"""
 
 
+def _fact_slots(workflow) -> bool:
+    """这个 workflow 是否声明了事实片段契约（由迁移写入的环境变量）。"""
+    return any(
+        item.get("name") == FACT_CONTRACT_VARIABLE and item.get("value") == "slots"
+        for item in (workflow or {}).get("environment_variables", [])
+    )
+
+
 def publication_settings(
     workflow, ceiling, public_base, *, require_split=False, require_picker=False, owned_libraries=None
 ):
@@ -76,6 +87,17 @@ def publication_settings(
     require(
         len(nodes) == len(graph.get("nodes", [])) and set(nodes) == set(TYPES), "必需节点缺失或存在未登记节点"
     )
+    if _fact_slots(workflow):
+        from aiops_diagnostics.consumer.consumer_documents import _protocol_block
+
+        require(documents, "事实段需要动态知识协议")
+        require(
+            any(
+                p.get("role") == "system" and p.get("text") == _protocol_block()
+                for p in nodes["answer"].get("prompt_template", [])
+            ),
+            "系统输出协议缺失或已修改，请恢复系统协议块后再发布",
+        )
     expected_types = {**TYPES, **({"knowledge": "tool"} if picker else {})}
     require(all(n.get("type") == expected_types[key] for key, n in nodes.items()), "节点类型已改变")
     require(not require_picker or picker, "已启用选库节点，不允许普通发布退回服务器固定选库")
@@ -237,6 +259,9 @@ def publication_settings(
             **ceiling,
             **flags,
             "knowledge_base_ids": list(selected),
-            "callback_version": 4 if documents else 3,
+            # 5 = documents 契约 + **事实片段契约**（reply 里的事实只能来自 {{fact:…}} 片段）。
+            # 它与 4 的区别不是形状而是判据强度：4 只比数字集合，5 要求数字/状态/支付结果
+            # 只能由系统填值。旧发布版本停在 4，行为不变。
+            "callback_version": 5 if _fact_slots(workflow) else 4 if documents else 3,
         }
     return {**ceiling, **flags, "callback_version": 2}

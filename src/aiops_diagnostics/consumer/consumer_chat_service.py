@@ -6,6 +6,7 @@ import hashlib
 import uuid
 from typing import Any
 
+from aiops_diagnostics.consumer.consumer_binding import deliverable_binding, require_pinned
 from aiops_diagnostics.dify.dify_chat_workflow import DifyWorkflowError, load_workflow_key
 from aiops_diagnostics.dify.dify_chatflow import DifyChatflowClient
 from aiops_diagnostics.dify.dify_run_store import still_valid
@@ -20,9 +21,9 @@ def version_key(binding: Any) -> str:
 
 
 def fingerprint(binding):
-    from aiops_diagnostics.consumer.consumer_knowledge import _binding_identity
+    from aiops_diagnostics.consumer.consumer_binding import identity
 
-    return _binding_identity(binding)
+    return identity(binding)
 
 
 def current(runtime, caller, binding):
@@ -103,7 +104,7 @@ def start(
             )
     # 单据轮次及其下一轮均不继承上游记忆，旧订单数据不会进入后续模型输入。
     if (
-        binding.callback_version == 4
+        binding.callback_version >= 4
         or order_no
         or photo_id
         or (previous and (previous.order_no or previous.has_photo))
@@ -200,7 +201,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
         runtime._release_conversation_turn(registration.conversation_turn)
         return
     try:
-        current(runtime, caller, binding)
+        require_pinned(runtime, caller, binding)
         key = load_workflow_key(binding.workflow_key_file)
         client = DifyChatflowClient(runtime.gateway_settings.dify_chat_base_url, timeout_seconds=90)
         # 同用户不同App/发布版本也不共用Dify用户上下文；上游只收到不可逆标识。
@@ -220,7 +221,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
 
         uploaded = client.upload_photo(key=key, user=user, image=image) if image else ""
         image = b""
-        current(runtime, caller, binding)
+        require_pinned(runtime, caller, binding)
         latest = store.get(run_id)
         if (
             registration.cancelled
@@ -249,11 +250,11 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             conversation_id=upstream,
             on_started=started,
         )
-        if not latest.order_no:
+        if not latest.order_no and latest.data_kind not in {"clarify", "human", "order_required"}:
             from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
             require_available(runtime, caller, binding)
-        current(runtime, caller, binding)
+        require_pinned(runtime, caller, binding)
         run = store.get(run_id)
         if (
             registration.cancelled
@@ -265,7 +266,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             raise ValueError("run is no longer active")
         if run.order_no:
             runtime._require_chat_order_visible(caller, run.order_no)
-            current(runtime, caller, binding)
+            require_pinned(runtime, caller, binding)
             run = store.get(run_id)
             if (
                 run is None
@@ -292,11 +293,16 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
                 content,
                 copy_pack=copy_pack(runtime, caller, context, language),
             )
+            if context.get("fact_contract") == "slots" and context.get("live_snapshot"):
+                import json
+
+                if not store.store_reply_source(run_id, json.loads(reply.answer)["reply"]):
+                    raise ValueError("reply source could not be stored")
         else:
             answer = {"blocks": [{"kind": "text", "text": reply.answer}], "retrieval_status": "unavailable"}
         if not store.store_snapshot(run_id, answer) or not store.succeed(run_id):
             raise ValueError("result could not be committed")
-        current(runtime, caller, binding)
+        require_pinned(runtime, caller, binding)
         # **先撤销取数能力，再公布终态。** 反过来会留下一个窗口：`status=completed` 已经
         # 可读，而这次请求的数据凭据还没失效 —— 读到的观察者（回读接口、验收脚本、
         # 任何按状态轮询的客户端）会看到"结果已交付但凭据仍然可用"。
@@ -329,16 +335,10 @@ def require_result(runtime, caller, qa):
     run = runtime.dify_run_store.by_qa(qa["qa_id"])
     if run is None or run.kind != "service" or run.scope_fingerprint != caller.scope_fingerprint:
         raise chat_execution.ChatRunUnavailable("QA_NOT_FOUND", "answer not found", http_status=404)
-    binding = chat_execution.select_binding(
-        runtime.gateway_settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
-    )
+    binding = deliverable_binding(runtime, caller, run)
     if (
-        binding is None
-        or fingerprint(binding) != run.binding_digest
-        or binding.app_id != run.app_id
+        binding.app_id != run.app_id
         or binding.workflow_id != run.workflow_id
-        or binding.route_revision != run.route_revision
-        or binding.agent_version_no != run.agent_version_no
         or binding.key != run.binding_key
     ):
         raise chat_execution.ChatRunUnavailable(
@@ -346,7 +346,7 @@ def require_result(runtime, caller, qa):
         )
     if run.order_no:
         runtime._require_chat_order_visible(caller, run.order_no)
-    else:
+    elif run.data_kind not in {"clarify", "human", "order_required"}:
         from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
         require_available(runtime, caller, binding)
@@ -355,7 +355,8 @@ def require_result(runtime, caller, qa):
         raise chat_execution.ChatRunUnavailable(
             "CHATFLOW_RESULT_EXPIRED", "chatflow result expired", http_status=410
         )
-    current(runtime, caller, binding)
+    # 这里**不再**要求"当前绑定 == 签发绑定"：那条判据属于新会话（见 `current`）。
+    # 撤回已经由 `deliverable_binding` 的 `_pinned_route_active` 挡住。
     if run.order_no:
         context = runtime.dify_run_store.context(run.run_id) or {}
         live = context.get("live_snapshot", {})
@@ -380,6 +381,14 @@ def _live_answer_differs(runtime, caller, context, run, live, stored):
     """
     from aiops_diagnostics.consumer.consumer_knowledge import live_answer
 
+    if context.get("fact_contract") == "slots":
+        from aiops_diagnostics.consumer.consumer_reply import model_reply
+
+        source = runtime.dify_run_store.reply_source(run.run_id)
+        try:
+            return model_reply(source, live, language=run.language, contract="slots") != stored
+        except chat_execution.ChatRunUnavailable:
+            return True
     expected = live_answer(
         live,
         run.language,
@@ -394,7 +403,7 @@ def _live_answer_differs(runtime, caller, context, run, live, stored):
     from aiops_diagnostics.consumer.consumer_reply import validate_reply
 
     try:
-        validate_reply(blocks[0].get("text"), live, language=run.language)
+        validate_reply(blocks[0].get("text"), live, language=run.language, contract="legacy")
     except chat_execution.ChatRunUnavailable:
         return True
     return False

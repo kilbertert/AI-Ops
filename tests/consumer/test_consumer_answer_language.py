@@ -40,8 +40,11 @@ def test_live_prompt_names_languages_and_repeats_preference_after_context():
     module = runpy.run_path("tools/content/upgrade_consumer_flow.py")
     source = yaml.safe_load(Path("deploy/dify-chat/consumer-service.dsl.yml").read_text())
     source = module["select_knowledge"](source, ["a" * 32], "trendpower/consumer_knowledge:0.0.1@" + "a" * 64)
-    nodes = {n["id"]: n["data"] for n in module["live_documents"](source)["workflow"]["graph"]["nodes"]}
-    prompt = nodes["answer"]["prompt_template"][0]["text"]
+    nodes = {
+        n["id"]: n["data"]
+        for n in module["live_documents"](source, replace_system=True)["workflow"]["graph"]["nodes"]
+    }
+    prompt = "\n".join(p["text"] for p in nodes["answer"]["prompt_template"] if p["role"] == "system")
     assert "mn=Mongolian" in prompt and "th=Thai" in prompt and "km=Khmer" in prompt
     assert "{{#start.language#}}" in nodes["answer"]["memory"]["query_prompt_template"]
 

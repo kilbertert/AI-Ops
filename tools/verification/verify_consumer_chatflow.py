@@ -78,9 +78,23 @@ class Model(BaseHTTPRequestHandler):
                         else "not_found",
                         "answer": text,
                         "reference_ids": [source["reference_id"]] if source else [],
+                        **(
+                            {
+                                "reply": "{{fact:billing_line}}"
+                                if payload["live_snapshot"].get("source") == "cpms.orderDetail"
+                                else "{{fact:status_line}}"
+                            }
+                            if payload.get("live_snapshot") and payload.get("fact_contract") == "slots"
+                            else {}
+                        ),
                     },
                     ensure_ascii=False,
                 )
+        if any(m.get("role") == "system" and "提示词页面保存核对" in str(m.get("content")) for m in messages):
+            selected = json.loads(answer)
+            if selected.get("reply"):
+                selected["reply"] = "提示词页面保存核对。\n" + selected["reply"]
+                answer = json.dumps(selected, ensure_ascii=False)
         if any("仅识别图片" in str(m.get("content")) for m in messages):
             answer = json.dumps({"readable": True, "text": "Startup failed."})
         if body.get("response_format", {}).get("json_schema", {}).get("name") == "consumer_intent":
@@ -90,6 +104,7 @@ class Model(BaseHTTPRequestHandler):
             intent, reference = {
                 "我上一个订单现在是什么情况": ("order_status", "latest"),
                 "看看选定这单的情况": ("order_status", "explicit"),
+                "订单号: ORDER-3001": ("order_status", "explicit"),
                 "帮我查看最新的订单的情况": ("order_status", "latest"),
                 "查询我的最新订单退款记录": ("billing_record", "latest"),
             }.get(question, ("knowledge", "none"))
@@ -184,6 +199,25 @@ def chatflow_dsl(_gateway: str) -> bytes:
 def isolated(args):
     root = Path(tempfile.mkdtemp(prefix="consumer-chatflow-"))
     root.chmod(0o700)
+    import hashlib
+
+    (root / "source-identity.json").write_text(
+        json.dumps(
+            {
+                "repository": str(ROOT),
+                "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+                "files": {
+                    str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+                    for folder in (ROOT / "src", ROOT / "tools/verification")
+                    for p in folder.rglob("*.py")
+                },
+            }
+        )
+    )
+    if args.prompt_browser:
+        (root / "prompt-browser-enabled").touch()
+    if args.operator_browser:
+        (root / "operator-browser-enabled").touch()
     if args.knowledge_plugin:
         shutil.copyfile(args.knowledge_plugin, root / "knowledge.signed.difypkg")
         key = root / "volumes/plugin_daemon/catalogue-public.pem"
@@ -272,9 +306,20 @@ def isolated(args):
     ]
     if args.knowledge_plugin:
         command[2:2] = ["-p", "127.0.0.1::3000", "-p", "127.0.0.1::5001"]
+    if args.prompt_browser or args.operator_browser:
+        command[2:2] = ["-p", "127.0.0.1::5004"]
+    if args.operator_browser:
+        command[2:2] = [
+            "-e",
+            "PROMPT_NODE_CLASSES=" + os.environ["PROMPT_NODE_CLASSES"],
+            "-e",
+            "M3NODE_DEPS=" + os.environ["M3NODE_DEPS"],
+        ]
     try:
         process = subprocess.Popen(command)
         browser_checked = False
+        prompt_checked = False
+        operator_checked = False
         while process.poll() is None:
             if not browser_checked and (root / "picker-browser-ready.json").exists():
                 browser_checked = True
@@ -287,6 +332,31 @@ def isolated(args):
                     ],
                     check=False,
                     timeout=180,
+                )
+            if not prompt_checked and (root / "prompt-browser-ready.json").exists():
+                prompt_checked = True
+                subprocess.run(
+                    [
+                        "/home/claude/miniconda3/bin/python",
+                        str(ROOT / "tools/verification/verify_prompt_browser.py"),
+                        str(root),
+                        name,
+                    ],
+                    check=False,
+                    timeout=360,
+                )
+            if not operator_checked and (root / "operator-browser-ready.json").exists():
+                operator_checked = True
+                subprocess.run(
+                    [
+                        "/home/claude/miniconda3/bin/python",
+                        str(ROOT / "tools/verification/verify_prompt_browser.py"),
+                        str(root),
+                        name,
+                        "--operator",
+                    ],
+                    check=False,
+                    timeout=420,
                 )
             time.sleep(0.2)
         if (root / "report.json").exists():
@@ -589,7 +659,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             code == 200
             and final.get("status") == "completed"
             and stack.ORDER_LATEST in text
-            and "cpms.chargingInfo" in text
+            and "充电状态记录" in text
             and "DO-NOT-LEAK" not in text,
         )
         check(
@@ -661,8 +731,8 @@ def verify_knowledge(root, base, env, setup, model, check):
             and final.get("status") == "completed"
             and "部分退款记录" in text
             and "1.10" in text
-            and "不证明银行到账" in text
-            and "未提供币种" in text
+            and "不代表银行已经到账" in text
+            and "币种接口未提供" in text
             and "DO-NOT-LEAK" not in text,
         )
         check(
@@ -888,7 +958,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             "semantic CPMS trial runs real node",
             code == 200
             and result.get("status") == "completed"
-            and "cpms.chargingInfo" in result.get("result", {}).get("report", {}).get("summary", "")
+            and "充电状态记录" in result.get("result", {}).get("report", {}).get("summary", "")
             and len(stack.CpmsHandler.calls) == count + 1,
         )
         # 草稿开关独立于服务器能力上限；发布才切实际App行为。
@@ -909,7 +979,7 @@ def verify_knowledge(root, base, env, setup, model, check):
         code, old = question("我上一个订单现在是什么情况")
         check(
             "saving flag does not disable published CPMS",
-            code == 200 and old.get("status") == "completed" and "cpms.chargingInfo" in text_of(old),
+            code == 200 and old.get("status") == "completed" and "充电状态记录" in text_of(old),
         )
         count = len(stack.CpmsHandler.calls)
         code, trial = stack.http_json(
@@ -998,7 +1068,13 @@ def main():
     parser.add_argument("--out", required=True)
     parser.add_argument("--knowledge-plugin")
     parser.add_argument("--plugin-public-key")
+    parser.add_argument("--prompt-browser", action="store_true")
+    parser.add_argument("--operator-browser", action="store_true")
     args = parser.parse_args()
+    if (args.prompt_browser or args.operator_browser) and not (
+        args.knowledge_plugin and args.plugin_public_key
+    ):
+        parser.error("--prompt-browser 需要签名知识插件与匹配公钥")
     os.umask(0o077)
     if "DIFY_TEST_NAMESPACE" not in os.environ:
         return isolated(args)
@@ -1057,96 +1133,117 @@ def main():
             setup.get("app_detail", {}).get("mode") == "advanced-chat"
             and all(s["ok"] for s in setup["steps"]),
         )
-        (root / "chatflow.yml").write_bytes(chatflow_dsl(""))
-        client = DifyChatflowClient(base, timeout_seconds=120)
-        args_run = {
-            "key": setup["service_key"],
-            "workflow_id": setup["workflow_id"],
-            "user": "consumer-a",
-            "inputs": {"language": "zh"},
-            "on_started": lambda *ids: None,
-        }
-        replies = []
-        for query in ["我的枪号A7，怎么开始？", "我刚才说的是哪把枪？", "再说一遍枪号"]:
-            reply = client.run(
-                **args_run, query=query, conversation_id=replies[-1].conversation_id if replies else ""
-            )
-            replies.append(reply)
-            check(f"turn {len(replies)} completed", "A7" in reply.answer)
-        check("same upstream conversation", len({r.conversation_id for r in replies}) == 1)
-        check(
-            "different upstream runs/messages",
-            len({r.workflow_run_id for r in replies}) == len({r.message_id for r in replies}) == 3,
-        )
-        other = client.run(**{**args_run, "user": "consumer-b"}, query="怎么开始？")
-        check(
-            "second user has separate conversation",
-            other.conversation_id != replies[0].conversation_id and "A7" not in other.answer,
-        )
-        check(
-            "model received actual prior conversation",
-            any(
-                len(r.get("messages", [])) >= 4 and "枪号A7" in json.dumps(r, ensure_ascii=False)
-                for r in Model.requests
-            ),
-        )
-        try:
-            client.run(
-                **{**args_run, "user": "consumer-b"}, query="继续", conversation_id=replies[0].conversation_id
-            )
-        except Exception as exc:
-            from aiops_diagnostics.dify.dify_chat_workflow import DifyWorkflowError
+        if (root / "operator-browser-enabled").exists() and not (root / "prompt-browser-enabled").exists():
+            from verify_operator_prompt_stack import verify_operator
 
-            check("foreign user cannot reuse upstream conversation", isinstance(exc, DifyWorkflowError))
+            web = stack._compose(env, "up", "-d", "web", timeout=120)
+            check("Dify web ready", web.returncode == 0)
+            verify_operator(root, base, env, setup, check)
+            report["passed"] = True
         else:
-            check("foreign user cannot reuse upstream conversation", False)
-        (root / "model-requests.json").write_text(json.dumps(Model.requests, ensure_ascii=False, indent=2))
-        gateway, gateway_base, diag = stack._start_gateway(
-            root=root,
-            model_url=f"http://127.0.0.1:{model.server_port}/v1",
-            cpms_base="http://127.0.0.1:1",
-            dify_base=base,
-            workflow_id=setup["workflow_id"],
-            key=setup["service_key"],
-            port=stack._free_port(),
-            service_app_id=setup["app_id"],
-        )
-        check("real Gateway ready", not diag.get("error"))
-        headers = {"Authorization": "Bearer " + stack.TOKEN, "X-Business-Entry": "consumer"}
-        conversation = ""
-        qa_ids = []
-        for query in ["我的枪号A7，怎么开始？", "我刚才说的是哪把枪？", "再说一遍枪号"]:
-            body = {"question": query, **({"conversation_id": conversation} if conversation else {})}
-            code, post = stack.http_json(gateway_base + "/v1/assistant/questions", "POST", body, headers)
-            check(f"App turn {len(qa_ids) + 1} admitted", code == 202)
-            conversation = post["conversation_id"]
-            qa = post["qa_id"]
-            qa_ids.append(qa)
-            deadline = time.monotonic() + 90
-            while time.monotonic() < deadline:
-                code, final = stack.http_json(gateway_base + "/v1/assistant/questions/" + qa, headers=headers)
-                if code != 200 or final.get("status") not in ("queued", "running"):
-                    break
-                time.sleep(0.1)
+            (root / "chatflow.yml").write_bytes(chatflow_dsl(""))
+            client = DifyChatflowClient(base, timeout_seconds=120)
+            args_run = {
+                "key": setup["service_key"],
+                "workflow_id": setup["workflow_id"],
+                "user": "consumer-a",
+                "inputs": {"language": "zh"},
+                "on_started": lambda *ids: None,
+            }
+            replies = []
+            for query in ["我的枪号A7，怎么开始？", "我刚才说的是哪把枪？", "再说一遍枪号"]:
+                reply = client.run(
+                    **args_run, query=query, conversation_id=replies[-1].conversation_id if replies else ""
+                )
+                replies.append(reply)
+                check(f"turn {len(replies)} completed", "A7" in reply.answer)
+            check("same upstream conversation", len({r.conversation_id for r in replies}) == 1)
             check(
-                f"App turn {len(qa_ids)} completed",
-                code == 200
-                and final.get("status") == "completed"
-                and "A7" in json.dumps(final, ensure_ascii=False),
+                "different upstream runs/messages",
+                len({r.workflow_run_id for r in replies}) == len({r.message_id for r in replies}) == 3,
             )
-        code, denied = stack.http_json(
-            gateway_base + "/v1/assistant/questions",
-            "POST",
-            {"question": "继续", "conversation_id": conversation},
-            {**headers, "Authorization": "Bearer " + stack.OTHER_TOKEN},
-        )
-        check("App foreign conversation refused", code == 404)
-        code, history = stack.http_json(gateway_base + "/v1/conversations/" + conversation, headers=headers)
-        check(
-            "App history contains three verified answers", code == 200 and len(history.get("turns", [])) == 3
-        )
-        verify_knowledge(root, base, env, setup, model, check)
-        report["passed"] = True
+            other = client.run(**{**args_run, "user": "consumer-b"}, query="怎么开始？")
+            check(
+                "second user has separate conversation",
+                other.conversation_id != replies[0].conversation_id and "A7" not in other.answer,
+            )
+            check(
+                "model received actual prior conversation",
+                any(
+                    len(r.get("messages", [])) >= 4 and "枪号A7" in json.dumps(r, ensure_ascii=False)
+                    for r in Model.requests
+                ),
+            )
+            try:
+                client.run(
+                    **{**args_run, "user": "consumer-b"},
+                    query="继续",
+                    conversation_id=replies[0].conversation_id,
+                )
+            except Exception as exc:
+                from aiops_diagnostics.dify.dify_chat_workflow import DifyWorkflowError
+
+                check("foreign user cannot reuse upstream conversation", isinstance(exc, DifyWorkflowError))
+            else:
+                check("foreign user cannot reuse upstream conversation", False)
+            (root / "model-requests.json").write_text(
+                json.dumps(Model.requests, ensure_ascii=False, indent=2)
+            )
+            gateway, gateway_base, diag = stack._start_gateway(
+                root=root,
+                model_url=f"http://127.0.0.1:{model.server_port}/v1",
+                cpms_base="http://127.0.0.1:1",
+                dify_base=base,
+                workflow_id=setup["workflow_id"],
+                key=setup["service_key"],
+                port=stack._free_port(),
+                service_app_id=setup["app_id"],
+            )
+            check("real Gateway ready", not diag.get("error"))
+            headers = {"Authorization": "Bearer " + stack.TOKEN, "X-Business-Entry": "consumer"}
+            conversation = ""
+            qa_ids = []
+            for query in ["我的枪号A7，怎么开始？", "我刚才说的是哪把枪？", "再说一遍枪号"]:
+                body = {"question": query, **({"conversation_id": conversation} if conversation else {})}
+                code, post = stack.http_json(gateway_base + "/v1/assistant/questions", "POST", body, headers)
+                check(f"App turn {len(qa_ids) + 1} admitted", code == 202)
+                conversation = post["conversation_id"]
+                qa = post["qa_id"]
+                qa_ids.append(qa)
+                deadline = time.monotonic() + 90
+                while time.monotonic() < deadline:
+                    code, final = stack.http_json(
+                        gateway_base + "/v1/assistant/questions/" + qa, headers=headers
+                    )
+                    if code != 200 or final.get("status") not in ("queued", "running"):
+                        break
+                    time.sleep(0.1)
+                check(
+                    f"App turn {len(qa_ids)} completed",
+                    code == 200
+                    and final.get("status") == "completed"
+                    and "A7" in json.dumps(final, ensure_ascii=False),
+                )
+            code, denied = stack.http_json(
+                gateway_base + "/v1/assistant/questions",
+                "POST",
+                {"question": "继续", "conversation_id": conversation},
+                {**headers, "Authorization": "Bearer " + stack.OTHER_TOKEN},
+            )
+            check("App foreign conversation refused", code == 404)
+            code, history = stack.http_json(
+                gateway_base + "/v1/conversations/" + conversation, headers=headers
+            )
+            check(
+                "App history contains three verified answers",
+                code == 200 and len(history.get("turns", [])) == 3,
+            )
+            verify_knowledge(root, base, env, setup, model, check)
+            if (root / "operator-browser-enabled").exists():
+                from verify_operator_prompt_stack import verify_operator
+
+                verify_operator(root, base, env, setup, check)
+            report["passed"] = True
     except Exception as exc:
         report["error"] = {"type": type(exc).__name__, "message": str(exc)}
         report["passed"] = False
@@ -1154,10 +1251,18 @@ def main():
         if gateway is not None:
             stack._stop(gateway)
         (root / "sse-events.json").write_text(json.dumps(observed_events, ensure_ascii=False, indent=2))
-        logs = stack._compose(env, "logs", "--no-color", "api", timeout=60)
-        (root / "api.log").write_text(logs.stdout + logs.stderr)
-        down = stack._compose(env, "down", "-v", "--remove-orphans", timeout=180)
-        report["cleanup_ok"] = down.returncode == 0
+        report["cleanup_errors"] = []
+        try:
+            logs = stack._compose(env, "logs", "--no-color", "api", timeout=60)
+            (root / "api.log").write_text(logs.stdout + logs.stderr)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            report["cleanup_errors"].append({"step": "logs", "type": type(exc).__name__})
+        try:
+            down = stack._compose(env, "down", "-v", "--remove-orphans", timeout=180)
+            report["cleanup_ok"] = down.returncode == 0
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            report["cleanup_ok"] = False
+            report["cleanup_errors"].append({"step": "down", "type": type(exc).__name__})
         model.shutdown()
         Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2))
         print(

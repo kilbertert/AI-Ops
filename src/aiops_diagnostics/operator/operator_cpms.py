@@ -20,7 +20,7 @@ from aiops_diagnostics.execution.agent_runs import AgentRunConfig, SnailDispatch
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
 from aiops_diagnostics.operator import operator_conversation, operator_tools
-from aiops_diagnostics.operator.operator_conversation import EXECUTED_MUTATION, OperatorRefused
+from aiops_diagnostics.operator.operator_conversation import OperatorRefused, claims_mutation
 
 SCENARIO = "operator_order_diagnosis"
 PREFIX = "operator-cpms-node:"
@@ -125,6 +125,38 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
 #: 站点查询工具的名字。这里是**唯一**按名字认它的地方：判断「这一轮是否已经用工具
 #: 取过站点」是运行级的事实，不是工具自身的属性。
 SITE_TOOL = "cpms_site_search"
+
+
+def still_authorized(binding, run, *, trial=False) -> bool:
+    """冻结运行的模型/工具必须仍被当前应用授权，提示词可单独换版。"""
+    if binding is None or binding.entry != "operator" or binding.route_revision < run.route_revision:
+        return False
+    if not run.publication_app_id:
+        return binding.route_revision == run.route_revision
+    if binding.app_id != run.publication_app_id:
+        return False
+    if trial or str(run.chat_binding).startswith("operator-trial:"):
+        return binding.route_revision == run.route_revision
+    try:
+        frozen = execution_manifest.from_text(run.execution_manifest)
+        current_text = (
+            binding.manifest_text
+            if diagnoses_an_order(run)
+            else operator_conversation.manifest(binding.manifest_text)
+        )
+        current = execution_manifest.from_text(current_text)
+        old_tools = {t["name"]: t["input_schema"] for t in json.loads(run.execution_manifest)["tools"]}
+        new_tools = {t["name"]: t["input_schema"] for t in json.loads(current_text)["tools"]}
+    except (ValueError, TypeError, KeyError):
+        return False
+    return (
+        frozen.identity == run.expected_agent_version
+        and all(
+            getattr(frozen, key) == getattr(current, key)
+            for key in ("provider_key", "adapter_key", "model_key", "endpoint", "history_policy")
+        )
+        and all(new_tools.get(name) == schema for name, schema in old_tools.items())
+    )
 
 
 def _sites_from_evidence(caller, task, answer):
@@ -277,7 +309,7 @@ class OperatorCpms:
         from aiops_diagnostics.execution.node_publication import all_targets
 
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if binding is None or binding.route_revision != run.route_revision:
+        if not still_authorized(binding, run, trial=bool((run.snapshot or {}).get("trial"))):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         target = next(
             (
@@ -377,6 +409,7 @@ class OperatorCpms:
                 chat_binding=binding.key,
                 execution_manifest=manifest_text,
                 route_revision=binding.route_revision,
+                publication_app_id=binding.app_id,
                 operation=SCENARIO if order else operator_conversation.SCENARIO,
             )
             qa = self.context.store.create_assistant_question(
@@ -440,7 +473,7 @@ class OperatorCpms:
         if not qa or qa["status"] not in QUESTION.active:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if binding is None or binding.entry != "operator" or binding.route_revision != run.route_revision:
+        if not still_authorized(binding, run, trial=task.trial) or binding.entry != "operator":
             raise OperatorRefused("OPERATOR_PUBLICATION_CHANGED")
         from aiops_diagnostics.execution.node_publication import all_targets
 
@@ -475,8 +508,8 @@ class OperatorCpms:
         if caller.scope_fingerprint != run.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if binding is None or binding.route_revision != run.route_revision:
-            raise OperatorRefused("OPERATOR_PUBLICATION_CHANGED")
+        if not still_authorized(binding, run, trial=task.trial):
+            raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         config = AgentRunConfig.load(Path(binding.config_file))
         if not any(
             n.active and n.node_id == run.expected_node_id and n.environment == run.environment
@@ -497,14 +530,6 @@ class OperatorCpms:
         expected = execution_manifest.from_text(run.execution_manifest)
         if expected.identity != run.expected_agent_version:
             raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
-        if not task.trial:
-            bound_manifest = (
-                binding.manifest_text
-                if diagnoses_an_order(run)
-                else operator_conversation.manifest(binding.manifest_text)
-            )
-            if bound_manifest != run.execution_manifest:
-                raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         if manifest is not None and manifest != expected.identity:
             raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         if tool is not None and (
@@ -709,6 +734,8 @@ class OperatorCpms:
                 _answer_refused("credential")
             sites = None
             if diagnoses_an_order(run):
+                if "{{fact:order_facts}}" in run.execution_manifest and "reply" not in answer:
+                    _answer_refused("reply_required")
                 validate_answer(answer, task.evidence)
                 if not set(answer["evidence_tools"]).issubset(task.delivered):
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
@@ -717,6 +744,10 @@ class OperatorCpms:
                 if answer["kind"] == "site_search":
                     sites = _sites_from_evidence(task.caller, task, answer)
                     if sites is None:
+                        # 节点没调工具：说明是在**看到结果之前**写的，不能当查询结果交付。
+                        # 这里拒而不是静默丢掉：静默丢掉会让提示词作者以为它在生效。
+                        if answer["text"].strip():
+                            raise OperatorRefused("OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE")
 
                         def current_search_scope():
                             current_task, _, _ = self._current(run_id, node_token=token, manifest=manifest)
@@ -741,6 +772,13 @@ class OperatorCpms:
             if not diagnoses_an_order(run):
                 snapshot["sites"] = sites
                 snapshot["language"] = task.language
+            else:
+                snapshot["language"] = task.language
+                # **在完成时渲染并冻结**：事实段的语言按运行所选语言，历史回读不再重算 ——
+                # 升级渲染器不会改写已经交付的答复。
+                snapshot["rendered_report"] = render_report(
+                    answer, snapshot["evidence"], language=task.language
+                )
             if not store.complete(
                 run_id, snapshot=snapshot, actual_node_id=run.expected_node_id, node_build=None
             ):
@@ -799,21 +837,13 @@ class OperatorCpms:
         ):
             raise OperatorRefused("QA_NOT_FOUND")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if (
-            binding is None
-            or binding.route_revision != run.route_revision
-            or run.expires_at <= datetime.now(UTC)
-        ):
+        if not still_authorized(
+            binding, run, trial=bool((run.snapshot or {}).get("trial"))
+        ) or run.expires_at <= datetime.now(UTC):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         config = AgentRunConfig.load(Path(binding.config_file))
-        if not (run.snapshot or {}).get("trial"):
-            bound_manifest = (
-                binding.manifest_text
-                if diagnoses_an_order(run)
-                else operator_conversation.manifest(binding.manifest_text)
-            )
-            if execution_manifest.from_text(bound_manifest).identity != run.expected_agent_version:
-                raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
+        if execution_manifest.from_text(run.execution_manifest).identity != run.expected_agent_version:
+            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         run = self.context.agent_run_store.get(run.run_id)
         if (
             run is None
@@ -848,8 +878,14 @@ class OperatorCpms:
         if scope.site_ids is not None and detail["siteId"] not in scope.site_ids:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         answer = run.snapshot["answer"]
+        if "{{fact:order_facts}}" in run.execution_manifest and "reply" not in answer:
+            _answer_refused("reply_required")
         validate_answer(answer, run.snapshot["evidence"])
-        text = render_report(answer, run.snapshot["evidence"])
+        # 历史 run 用**当时冻结**的正文；没有冻结文本的旧 run 按中文标签重算，
+        # 与它们签发时的呈现一致（升级不改写历史）。
+        text = run.snapshot.get("rendered_report") or render_report(
+            answer, run.snapshot["evidence"], language="zh"
+        )
         return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
 
     def retract(self, route):
@@ -1006,7 +1042,7 @@ ANSWER_FIELDS = frozenset(
 
 
 def validate_answer(answer, evidence):
-    if not isinstance(answer, dict) or set(answer) != ANSWER_FIELDS:
+    if not isinstance(answer, dict) or set(answer) not in (ANSWER_FIELDS, ANSWER_FIELDS | {"reply"}):
         _answer_refused("shape")
     # `direct_answer` 与 summary/probable_cause 同一条文字判据：**空串即拒绝**。
     # 它是「这次回答的是用户问的那一点」的唯一落点；允许它为空，就等于允许模型交回一份
@@ -1027,9 +1063,134 @@ def validate_answer(answer, evidence):
         or not set(answer["evidence_tools"]).issubset(evidence)
     ):
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+    if "reply" in answer and (not isinstance(answer["reply"], str) or not 1 <= len(answer["reply"]) <= 6000):
+        _answer_refused("reply")
+    if "reply" in answer:
+        _validate_reply_facts(answer["reply"])
     text = json.dumps(answer, ensure_ascii=False)
-    if EXECUTED_MUTATION.search(text):
+    if claims_mutation(text):
         _answer_refused("mutation_claim")
+
+
+def _validate_reply_facts(text):
+    from aiops_diagnostics.consumer.consumer_facts import check_notice, check_status_prose
+
+    slot = "{{fact:order_facts}}"
+    if text.splitlines().count(slot) != 1:
+        _answer_refused("order_facts_required")
+    for line in text.splitlines():
+        if line == slot:
+            continue
+        if "{{" in line or "}}" in line:
+            _answer_refused("fact_segment")
+        try:
+            check_notice(line)
+            check_status_prose(line)
+        except chat_execution.ChatRunUnavailable:
+            _answer_refused("unsupported_fact")
+
+
+#: 管家事实段的字段标签。**运行语言决定标签**（值与来源不变）。
+#: zh/en 有完整译文；其余语种退回英文并在 ADR 里记为缺口 —— 不把中文标签混进外文句子。
+_FACT_LABELS = {
+    "zh": {
+        "order": "订单号",
+        "status": "订单状态",
+        "electricityFee": "电费",
+        "serviceFee": "服务费",
+        "totalAmount": "合计",
+        "payAmount": "系统记录的支付金额",
+        "refundAmount": "系统记录的退款金额",
+        "electricity": "电量（kWh）",
+        "time": "充电时长",
+        "voltage": "电压",
+        "gunPower": "额定功率",
+        "stoppedReasonContent": "系统记录的停止原因",
+        "samples": "本次取得监测样本",
+        "missing": "未提供",
+        "limits": "币种和时长单位需与原订单核对；账务记录不证明银行到账，当前状态不证明历史故障原因。",
+        "colon": "：",
+    },
+    "en": {
+        "order": "Order",
+        "status": "Order status",
+        "electricityFee": "Electricity fee",
+        "serviceFee": "Service fee",
+        "totalAmount": "Total",
+        "payAmount": "Recorded payment amount",
+        "refundAmount": "Recorded refund amount",
+        "electricity": "Energy (kWh)",
+        "time": "Charging duration",
+        "voltage": "Voltage",
+        "gunPower": "Rated power",
+        "stoppedReasonContent": "Recorded stop reason",
+        "samples": "Monitoring samples returned",
+        "missing": "not provided",
+        "limits": (
+            "Currency and duration units must be checked against the original order; "
+            "a recorded payment does not prove the bank received it, and the current "
+            "status does not prove the historical root cause."
+        ),
+        "colon": ": ",
+    },
+}
+
+
+def _status_word(code, language: str) -> str:
+    """状态**值**也按运行语言：复用 `consumer_language.COPY` 的现役译文。"""
+    from aiops_diagnostics.consumer.consumer_language import COPY
+    from aiops_diagnostics.data.order_status import role_of
+    from aiops_diagnostics.health.rules import ORDER_STATUS
+
+    role = role_of(code).value
+    if language.startswith("zh"):
+        return ORDER_STATUS.get(code, str(code))
+    table = COPY.get(language)
+    if table and isinstance(table.get(role), str):
+        return table[role]
+    if language.startswith("zh"):
+        return ORDER_STATUS.get(code, str(code))
+    return role.replace("_", " ")
+
+
+def _fact_labels(language: str) -> dict[str, str]:
+    return _FACT_LABELS["zh" if language.startswith("zh") else "en"]
+
+
+def _order_fact_text(evidence, language="zh"):
+
+    labels = _fact_labels(language)
+    colon = labels["colon"]
+    item = evidence[TOOL_NAMES[0]]
+    detail = item["data"]
+    lines = [
+        labels["order"] + colon + str(item.get("order_no") or detail.get("orderNo") or labels["missing"])
+    ]
+    fields = (
+        ("status", "status"),
+        ("electricityFee", "electricityFee"),
+        ("serviceFee", "serviceFee"),
+        ("totalAmount", "totalAmount"),
+        ("payAmount", "payAmount"),
+        ("refundAmount", "refundAmount"),
+        ("electricity", "electricity"),
+        ("time", "time"),
+        ("voltage", "voltage"),
+        ("gunPower", "gunPower"),
+        ("stoppedReasonContent", "stoppedReasonContent"),
+    )
+    for key, label_key in fields:
+        value = detail.get(key)
+        if value is not None:
+            shown = _status_word(value, language) if key == "status" else str(value)
+            lines.append(labels[label_key] + colon + shown)
+    samples = evidence.get("cpms_charging_samples", {}).get("data")
+    if samples is not None:
+        lines.append(
+            labels["samples"] + colon + str(samples.get("samples_returned", len(samples.get("records", []))))
+        )
+    lines.append(labels["limits"])
+    return "\n".join(lines)
 
 
 def _readable_time(iso: object) -> str:
@@ -1048,13 +1209,25 @@ def _readable_time(iso: object) -> str:
 
 
 #: 证据来源标识 → 人话。报告末尾给的是"我查了哪里"，不是内部接口名。
+_SOURCE_LABELS_EN = {
+    "cpms.orderDetail": "Order detail",
+    "cpms.chargingMonitor": "Charging monitor samples",
+}
+
+
+def _source_label(source, language: str) -> str:
+    if language.startswith("zh"):
+        return _SOURCE_LABELS.get(source, source)
+    return _SOURCE_LABELS_EN.get(source) or _SOURCE_LABELS.get(source, source)
+
+
 _SOURCE_LABELS = {
     "cpms.orderDetail": "订单详情",
     "cpms.chargingMonitor": "充电监测样本",
 }
 
 
-def render_report(answer, evidence) -> str:
+def render_report(answer, evidence, *, language="zh") -> str:
     """把结构化诊断渲染成**人读的报告**。
 
     之前这里是 ``"\\n\\n".join([...])``：九段文字被摊平成同等重要的段落，列表失去编号、
@@ -1066,6 +1239,20 @@ def render_report(answer, evidence) -> str:
 
     顺序是刻意的：先回答问题，再给事实，最后才是排查建议与缺证 —— 运维最常要的是前两段。
     """
+    if answer.get("reply"):
+        zh = language.startswith("zh")
+        sources = "\n".join(
+            f"- {_source_label(item.get('source'), language)}"
+            + (
+                f"（{_readable_time(item.get('observed_at'))}）"
+                if zh
+                else f" ({_readable_time(item.get('observed_at'))})"
+            )
+            for item in evidence.values()
+        )
+        text = answer["reply"].replace("{{fact:order_facts}}", _order_fact_text(evidence, language))
+        heading = "【数据来源】" if zh else "Sources"
+        return text + (f"\n\n{heading}\n" + sources if sources else "")
     sections = [answer["direct_answer"]]
     if answer["summary"]:
         sections.append("【订单事实】\n" + answer["summary"])

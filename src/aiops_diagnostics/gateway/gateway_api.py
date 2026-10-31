@@ -2954,6 +2954,8 @@ def create_gateway_app(
                             400, "PHOTO_NOT_ALLOWED", "photo input is unavailable for this request"
                         )
                     _require_consumer_self_order(caller, "consumer", "pending")
+                    prompt_notices = service_binding.callback_version >= 5
+                    notice_kind = ""
                     if service_binding.content_file or service_binding.content_snapshot is not None:
                         from aiops_diagnostics.consumer import consumer_knowledge
 
@@ -2979,6 +2981,9 @@ def create_gateway_app(
                                 raise
                             if followup["unresolved_count"] >= 2:
                                 local_kind = "human"
+                        if local_kind == "human" and prompt_notices:
+                            notice_kind = "human"
+                            local_kind = ""
                         if local_kind:
                             if payload.photo_id:
                                 from aiops_diagnostics.consumer.consumer_chat_service import fingerprint
@@ -3042,6 +3047,16 @@ def create_gateway_app(
                         if refreshed is None or refreshed.qa_id != previous.qa_id:
                             return _consumer_intent_clarification("context", language)
                         previous = refreshed
+                    if prompt_notices and intent in {"clarify", "human"}:
+                        notice_kind = intent
+                        intent, uses_context = "knowledge", False
+                    if (
+                        prompt_notices
+                        and intent in {"order_status", "billing_record"}
+                        and reference in {"none", "unclear"}
+                    ):
+                        notice_kind = "order_required"
+                        intent, uses_context = "knowledge", False
                     if intent in {"write_request", "clarify"}:
                         return _consumer_intent_clarification(intent, language)
                     if intent in {"safety", "human", "unsupported_live"}:
@@ -3068,7 +3083,7 @@ def create_gateway_app(
                         observation.classify(candidate=intent == "order_status")
                         request_observation.mark_tenant(request, caller.effective_tenant_id)
                     live_order = ""
-                    data_kind = "billing" if intent == "billing_record" else "status"
+                    data_kind = notice_kind or ("billing" if intent == "billing_record" else "status")
                     if intent in {"order_status", "billing_record"}:
                         enabled = (
                             service_binding.live_billing_record
