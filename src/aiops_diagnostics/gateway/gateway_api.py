@@ -1413,6 +1413,23 @@ def _restore_bound_app(context: Any, app_id: str, version_no: int, initiator: tu
     return {"app_id": app_id, "action": "synced", "version_no": version_no}
 
 
+def _publish_allowlist(configured: tuple[str, ...], settings: Any) -> tuple[str, ...]:
+    """发布门的模型白名单 = 平台注册表的模型 + 各 profile 已批准的端模型。
+
+    受管客户端的模型**不在**平台 provider 注册表里：现役两端本来就用不同模型
+    （`self-service.md`：客户端一个、管家一个，不能互相覆盖），注册表只写管家那个。
+    只按注册表判白名单，会让"开通客户端后发布"必然失败 —— 2026-10-31 在 41 实测：
+    客户端草稿发布报 `model is not allowlisted`，而 profile 的 `consumer_models`
+    早已批准了它。profile 就是端模型的批准清单，与 `consumer_models()` 用同一份数据。
+    """
+    profiles_file = getattr(settings, "operator_profiles_file", "")
+    if not profiles_file:
+        return configured
+    from aiops_diagnostics.dify.self_service_config import approved_model_names
+
+    return tuple(dict.fromkeys([*configured, *approved_model_names(settings)]))
+
+
 def create_gateway_app(
     *,
     settings: GatewayServerSettings | None = None,
@@ -1500,7 +1517,9 @@ def create_gateway_app(
         selected_platform_resolver = PlatformIdentityResolver(MySQLPlatformDirectory(platform_settings))
     selected_faq_catalog = faq_catalog or FAQCatalog.bundled()
     if agent_manager is None:
-        configured_models = allowed_models_from_settings(diagnostic_settings)
+        configured_models = _publish_allowlist(
+            allowed_models_from_settings(diagnostic_settings), selected_settings
+        )
         knowledge_resolver = None
         if selected_settings.kb_service_base_url:
             # Real publish validation (T5/#171): bindings must resolve against
