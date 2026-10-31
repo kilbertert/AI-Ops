@@ -609,7 +609,38 @@ class SelfService:
 
         spec = request["sources"]["consumer"]
         workspace_id = resources["workspace_id"]
-        save("consumer:application")
+        source = DifyDslSource(
+            self.settings.dify_console_base_url,
+            spec["app_id"],
+            self.settings.dify_console_api_key,
+            spec["workspace_id"],
+        )
+        document = yaml.safe_load(DifyDslClient(source).export_dsl(workflow_id=spec["workflow_id"]))
+        if not isinstance(document, dict) or "workflow" not in document:
+            raise auth.SetupRefused("SETUP_SOURCE_NOT_CONSUMER")
+        # 来源在本轮期间改过 ⇒ 冻结的那份与现在能导出的不是同一份，拒绝而不是"按现在的来"。
+        current = workflow_of(workflow_content(yaml.safe_dump(document, allow_unicode=True)))
+        if current != spec["graph_sha256"]:
+            raise SetupConflict("SETUP_SOURCE_CHANGED")
+        # 客户端的**实际依赖**在这里就位并回读：业务连接、知识插件与目录凭据、源编排用到的
+        # 每个模型。只复制 DSL 而说"资源就绪"，等于把问题推到客户第一次提问的时候。
+        save("consumer:dependencies")
+        state["business_endpoint"] = prepare.consumer_endpoint(self.context, request["tenant_id"])
+        from aiops_diagnostics.consumer.consumer_knowledge_selection import catalogue_token
+
+        token = catalogue_token(
+            self.settings.internal_token_secret,
+            self.settings.environment,
+            workspace_id,
+        )
+        state["plugin"] = prepare.consumer_plugin(self.console, workspace_id, self.settings, token)
+        state["models"] = prepare.consumer_models(
+            self.console, workspace_id, document, self._profile(request)
+        )
+        forbidden = ()
+        if not _same_tenant(spec.get("workspace_id"), workspace_id):
+            forbidden = prepare.consumer_source_ids(document)
+        # 已确认来源与依赖可用后再分配客户库；后续失败仍由同一任务续跑。
         if not state.get("knowledge_base_ids"):
             state["knowledge_base_ids"] = [
                 prepare.customer_knowledge_base(self.context, request["tenant_id"], state, save)
@@ -626,37 +657,6 @@ class SelfService:
                     caller.user_id,
                 )
             save("consumer:knowledge")
-        source = DifyDslSource(
-            self.settings.dify_console_base_url,
-            spec["app_id"],
-            self.settings.dify_console_api_key,
-            spec["workspace_id"],
-        )
-        document = yaml.safe_load(DifyDslClient(source).export_dsl(workflow_id=spec["workflow_id"]))
-        if not isinstance(document, dict) or "workflow" not in document:
-            raise auth.SetupRefused("SETUP_SOURCE_NOT_CONSUMER")
-        # 客户端的**实际依赖**在这里就位并回读：业务连接、知识插件与目录凭据、源编排用到的
-        # 每个模型。只复制 DSL 而说"资源就绪"，等于把问题推到客户第一次提问的时候。
-        save("consumer:dependencies")
-        state["business_endpoint"] = prepare.consumer_endpoint(self.context, request["tenant_id"])
-        from aiops_diagnostics.consumer.consumer_knowledge_selection import catalogue_token
-
-        token = catalogue_token(
-            self.settings.internal_token_secret,
-            self.settings.environment,
-            workspace_id,
-        )
-        state["plugin"] = prepare.consumer_plugin(self.console, workspace_id, self.settings, token)
-        state["models"] = prepare.consumer_models(
-            self.console, workspace_id, document, self._profile(request)
-        )
-        # 来源在本轮期间改过 ⇒ 冻结的那份与现在能导出的不是同一份，拒绝而不是"按现在的来"。
-        current = workflow_of(workflow_content(yaml.safe_dump(document, allow_unicode=True)))
-        if current != spec["graph_sha256"]:
-            raise SetupConflict("SETUP_SOURCE_CHANGED")
-        forbidden = ()
-        if not _same_tenant(spec.get("workspace_id"), workspace_id):
-            forbidden = prepare.consumer_source_ids(document)
         document = prepare.rebind_knowledge(document, state["knowledge_base_ids"], forbidden_ids=forbidden)
         document.setdefault("app", {})["name"] = request["name"]
         if not state.get("app_id"):
