@@ -81,3 +81,26 @@ def test_new_operator_run_cannot_silently_fall_back_to_old_report(tmp_path, monk
         monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
         qa = request(f["client"]).json()["qa_id"]
         assert terminal(f, qa).json()["status"] == "failed"
+
+
+# --- 第四轮复核 C：管家英文正文字段标签与历史回读 ------------------------------
+
+
+def test_english_reply_gets_english_fact_labels_and_same_values():
+    """C. 英文运行的 facts 段必须是英文标签，值与来源不变。"""
+    value = answer("Checked your order.\n{{fact:order_facts}}\nAnything else to look at?")
+    text = render_report(value, EVIDENCE, language="en")
+    for expected in ("Order:", "Order status:", "Total:", "27.36", "20", "13.68", "Order detail"):
+        assert expected in text
+    assert not [char for char in text if "\u4e00" <= char <= "\u9fff"], "英文正文里不该有中文标签"
+
+
+def test_a_frozen_report_is_not_rewritten_by_a_later_upgrade():
+    """历史答案不能被升级后的渲染器改写：冻结文本优先。"""
+    value = answer("我帮你核对了一下。\n{{fact:order_facts}}")
+    frozen = "冻结的旧正文（中文标签）"
+    snapshot = {"answer": value, "evidence": EVIDENCE, "language": "zh", "rendered_report": frozen}
+    text = snapshot.get("rendered_report") or render_report(
+        snapshot["answer"], snapshot["evidence"], language="zh"
+    )
+    assert text == frozen

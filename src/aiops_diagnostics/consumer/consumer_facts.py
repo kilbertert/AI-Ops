@@ -38,25 +38,72 @@ _NEGATION = re.compile(
 )
 _CLAUSE = "。；;！!？?，,\n\r"
 _NUMBER = re.compile(r"\d")
-_STATUS_PROSE = re.compile(
-    r"充[电電]中|正在充[电電]|[还還]在充[电電]|[结結]束|[已未]完成|"
-    r"\b(?:charging|finished|ended|completed|stopped|pending|cancelled)\b",
+#: 否定词。与状态词**同子句**出现时，这句话就在改写状态 —— 与用哪个同义词无关。
+_NEGATIONS = ("未", "没有", "没", "尚未", "并未", "不", "并非", "无", "not", "never", "isn't", "hasn't")
+#: 状态断言形式（不是词表）：`正在/仍在/还在/已经/已` + 状态动词，或英文 `is/still/has` + 状态词。
+_ASSERTION = re.compile(
+    r"(?:正在|仍在|还在|已经|已|尚未|未|仍|还)\s*"
+    r"(?:充[电電]|供[电電]|[结結]束|完成|完结|進行|进行|停止|异常|異常)"
+    r"|\b(?:is|are|was|were|still|has|have)\s+(?:charging|finished|completed|ended|ongoing|pending|stopped)\b",
     re.IGNORECASE,
 )
+#: 产品用来描述订单状态的名词/动词。**这是维护中的词汇，不是对自然语言的穷举**：
+#: 它来自公司状态表、现役多语言文案（`consumer_language.COPY`）与运营/客服的实际说法。
+#: 判据只有"否定词 × 这些词"与"断言形式"两维，所以换一个同义词不会绕过第一维。
+_STATE_SYNONYMS = ("充电", "供电", "结束", "完成", "完结", "进行", "停止", "异常")
+
+
+def _state_terms() -> tuple[str, ...]:
+    from aiops_diagnostics.consumer.consumer_language import COPY
+    from aiops_diagnostics.health.rules import ORDER_STATUS
+
+    terms = set(_STATE_SYNONYMS)
+    terms.update(label for label in ORDER_STATUS.values() if label)
+    for table in COPY.values():
+        for key in ("charging", "finished", "waiting", "starting", "stopping", "abnormal"):
+            value = table.get(key)
+            if isinstance(value, str) and value:
+                terms.add(value.casefold())
+    return tuple(sorted(terms, key=len, reverse=True))
+
+
+def _state_labels() -> tuple[str, ...]:
+    """现役多语言文案里的状态词（`consumer_language.COPY`）。这是产品资源，不是同义词表。"""
+    from aiops_diagnostics.consumer.consumer_language import COPY
+
+    labels = set()
+    for table in COPY.values():
+        for key in ("charging", "finished", "waiting", "starting", "stopping", "abnormal"):
+            value = table.get(key)
+            if isinstance(value, str) and len(value) >= 3:
+                labels.add(value.casefold())
+    return tuple(sorted(labels, key=len, reverse=True))
 
 
 def check_status_prose(text: str) -> None:
-    """状态只由事实段给出，连否定状态名也不能进入自由旁白。"""
-    from aiops_diagnostics.consumer.consumer_language import COPY
+    """状态只由事实段给出：旁白不能断言、也不能**否定**状态。
 
-    labels = {
-        words[key].casefold()
-        for words in COPY.values()
-        for key in ("charging", "finished", "waiting", "starting", "stopping", "abnormal")
-        if words.get(key)
-    }
-    if _STATUS_PROSE.search(text) or any(label in text.casefold() for label in labels):
+    两个维度，都是有限的：
+    1. **否定词 × 状态词（同子句）** —— `尚未完结，仍在供电`、`has not finished` 都在这里；
+    2. **断言形式** —— `正在/仍在/还在/已经 + 状态动词`、`is/still + charging`。
+
+    刻意**不**拦截裸状态词：`Do you have any other questions about charging?` 是正常追问，
+    把它当断言拒绝正是上一版的错误（见 tests/consumer/test_prompt_fact_segments.py 的 B 例）。
+    """
+    terms = _state_terms()
+    low_all = text.casefold()
+    # 现役文案里的**状态标签**本身就是状态断言：出现在旁白里就是复述状态（含否定复述）。
+    # 词形按词干匹配（`terminé`/`terminée`、`abgeschlossen`/`abgeschlossene`）。
+    if any(label in low_all or (len(label) >= 5 and label[:-1] in low_all) for label in _state_labels()):
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")
+    for clause in re.split(r"[。；;！!？?，,\n\r]", text):
+        low = clause.casefold()
+        if not low.strip():
+            continue
+        if any(mark in low for mark in _NEGATIONS) and any(term in low for term in terms):
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")
+        if _ASSERTION.search(clause):
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")
 
 
 def _amount(raw: object) -> str | None:

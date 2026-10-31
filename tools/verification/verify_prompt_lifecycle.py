@@ -16,6 +16,7 @@ TESTS = [
     "tests/consumer/test_prompt_fact_segments.py",
     "tests/consumer/test_consumer_prompt_migration.py",
     "tests/operations/test_prompt_publication_lifecycle.py",
+    "tests/operations/test_operator_reply_facts.py",
 ]
 
 

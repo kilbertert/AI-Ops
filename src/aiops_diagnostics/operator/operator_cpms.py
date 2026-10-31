@@ -772,6 +772,13 @@ class OperatorCpms:
             if not diagnoses_an_order(run):
                 snapshot["sites"] = sites
                 snapshot["language"] = task.language
+            else:
+                snapshot["language"] = task.language
+                # **在完成时渲染并冻结**：事实段的语言按运行所选语言，历史回读不再重算 ——
+                # 升级渲染器不会改写已经交付的答复。
+                snapshot["rendered_report"] = render_report(
+                    answer, snapshot["evidence"], language=task.language
+                )
             if not store.complete(
                 run_id, snapshot=snapshot, actual_node_id=run.expected_node_id, node_build=None
             ):
@@ -874,7 +881,11 @@ class OperatorCpms:
         if "{{fact:order_facts}}" in run.execution_manifest and "reply" not in answer:
             _answer_refused("reply_required")
         validate_answer(answer, run.snapshot["evidence"])
-        text = render_report(answer, run.snapshot["evidence"])
+        # 历史 run 用**当时冻结**的正文；没有冻结文本的旧 run 按中文标签重算，
+        # 与它们签发时的呈现一致（升级不改写历史）。
+        text = run.snapshot.get("rendered_report") or render_report(
+            answer, run.snapshot["evidence"], language="zh"
+        )
         return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
 
     def retract(self, route):
@@ -1079,35 +1090,106 @@ def _validate_reply_facts(text):
             _answer_refused("unsupported_fact")
 
 
-def _order_fact_text(evidence):
-    from aiops_diagnostics.health.rules import status_label
+#: 管家事实段的字段标签。**运行语言决定标签**（值与来源不变）。
+#: zh/en 有完整译文；其余语种退回英文并在 ADR 里记为缺口 —— 不把中文标签混进外文句子。
+_FACT_LABELS = {
+    "zh": {
+        "order": "订单号",
+        "status": "订单状态",
+        "electricityFee": "电费",
+        "serviceFee": "服务费",
+        "totalAmount": "合计",
+        "payAmount": "系统记录的支付金额",
+        "refundAmount": "系统记录的退款金额",
+        "electricity": "电量（kWh）",
+        "time": "充电时长",
+        "voltage": "电压",
+        "gunPower": "额定功率",
+        "stoppedReasonContent": "系统记录的停止原因",
+        "samples": "本次取得监测样本",
+        "missing": "未提供",
+        "limits": "币种和时长单位需与原订单核对；账务记录不证明银行到账，当前状态不证明历史故障原因。",
+        "colon": "：",
+    },
+    "en": {
+        "order": "Order",
+        "status": "Order status",
+        "electricityFee": "Electricity fee",
+        "serviceFee": "Service fee",
+        "totalAmount": "Total",
+        "payAmount": "Recorded payment amount",
+        "refundAmount": "Recorded refund amount",
+        "electricity": "Energy (kWh)",
+        "time": "Charging duration",
+        "voltage": "Voltage",
+        "gunPower": "Rated power",
+        "stoppedReasonContent": "Recorded stop reason",
+        "samples": "Monitoring samples returned",
+        "missing": "not provided",
+        "limits": (
+            "Currency and duration units must be checked against the original order; "
+            "a recorded payment does not prove the bank received it, and the current "
+            "status does not prove the historical root cause."
+        ),
+        "colon": ": ",
+    },
+}
 
+
+def _status_word(code, language: str) -> str:
+    """状态**值**也按运行语言：复用 `consumer_language.COPY` 的现役译文。"""
+    from aiops_diagnostics.consumer.consumer_language import COPY
+    from aiops_diagnostics.data.order_status import role_of
+    from aiops_diagnostics.health.rules import ORDER_STATUS
+
+    role = role_of(code).value
+    if language.startswith("zh"):
+        return ORDER_STATUS.get(code, str(code))
+    table = COPY.get(language)
+    if table and isinstance(table.get(role), str):
+        return table[role]
+    if language.startswith("zh"):
+        return ORDER_STATUS.get(code, str(code))
+    return role.replace("_", " ")
+
+
+def _fact_labels(language: str) -> dict[str, str]:
+    return _FACT_LABELS["zh" if language.startswith("zh") else "en"]
+
+
+def _order_fact_text(evidence, language="zh"):
+
+    labels = _fact_labels(language)
+    colon = labels["colon"]
     item = evidence[TOOL_NAMES[0]]
     detail = item["data"]
-    lines = ["订单号：" + str(item.get("order_no") or detail.get("orderNo") or "未提供")]
+    lines = [
+        labels["order"] + colon + str(item.get("order_no") or detail.get("orderNo") or labels["missing"])
+    ]
     fields = (
-        ("status", "订单状态"),
-        ("electricityFee", "电费"),
-        ("serviceFee", "服务费"),
-        ("totalAmount", "合计"),
-        ("payAmount", "系统记录的支付金额"),
-        ("refundAmount", "系统记录的退款金额"),
-        ("electricity", "电量（kWh）"),
-        ("time", "充电时长"),
-        ("voltage", "电压"),
-        ("gunPower", "额定功率"),
-        ("stoppedReasonContent", "系统记录的停止原因"),
+        ("status", "status"),
+        ("electricityFee", "electricityFee"),
+        ("serviceFee", "serviceFee"),
+        ("totalAmount", "totalAmount"),
+        ("payAmount", "payAmount"),
+        ("refundAmount", "refundAmount"),
+        ("electricity", "electricity"),
+        ("time", "time"),
+        ("voltage", "voltage"),
+        ("gunPower", "gunPower"),
+        ("stoppedReasonContent", "stoppedReasonContent"),
     )
-    for key, label in fields:
+    for key, label_key in fields:
         value = detail.get(key)
         if value is not None:
-            lines.append(label + "：" + (status_label(value) if key == "status" else str(value)))
+            shown = _status_word(value, language) if key == "status" else str(value)
+            lines.append(labels[label_key] + colon + shown)
     samples = evidence.get("cpms_charging_samples", {}).get("data")
     if samples is not None:
         lines.append(
-            "本次取得监测样本：" + str(samples.get("samples_returned", len(samples.get("records", []))))
+            labels["samples"] + colon + str(samples.get("samples_returned", len(samples.get("records", []))))
         )
-    lines.append("币种和时长单位需与原订单核对；账务记录不证明银行到账，当前状态不证明历史故障原因。")
+    lines.append(labels["limits"])
     return "\n".join(lines)
 
 
@@ -1127,13 +1209,25 @@ def _readable_time(iso: object) -> str:
 
 
 #: 证据来源标识 → 人话。报告末尾给的是"我查了哪里"，不是内部接口名。
+_SOURCE_LABELS_EN = {
+    "cpms.orderDetail": "Order detail",
+    "cpms.chargingMonitor": "Charging monitor samples",
+}
+
+
+def _source_label(source, language: str) -> str:
+    if language.startswith("zh"):
+        return _SOURCE_LABELS.get(source, source)
+    return _SOURCE_LABELS_EN.get(source) or _SOURCE_LABELS.get(source, source)
+
+
 _SOURCE_LABELS = {
     "cpms.orderDetail": "订单详情",
     "cpms.chargingMonitor": "充电监测样本",
 }
 
 
-def render_report(answer, evidence) -> str:
+def render_report(answer, evidence, *, language="zh") -> str:
     """把结构化诊断渲染成**人读的报告**。
 
     之前这里是 ``"\\n\\n".join([...])``：九段文字被摊平成同等重要的段落，列表失去编号、
@@ -1146,13 +1240,19 @@ def render_report(answer, evidence) -> str:
     顺序是刻意的：先回答问题，再给事实，最后才是排查建议与缺证 —— 运维最常要的是前两段。
     """
     if answer.get("reply"):
+        zh = language.startswith("zh")
         sources = "\n".join(
-            f"- {_SOURCE_LABELS.get(item.get('source'), item.get('source'))}"
-            f"（{_readable_time(item.get('observed_at'))}）"
+            f"- {_source_label(item.get('source'), language)}"
+            + (
+                f"（{_readable_time(item.get('observed_at'))}）"
+                if zh
+                else f" ({_readable_time(item.get('observed_at'))})"
+            )
             for item in evidence.values()
         )
-        text = answer["reply"].replace("{{fact:order_facts}}", _order_fact_text(evidence))
-        return text + ("\n\n【数据来源】\n" + sources if sources else "")
+        text = answer["reply"].replace("{{fact:order_facts}}", _order_fact_text(evidence, language))
+        heading = "【数据来源】" if zh else "Sources"
+        return text + (f"\n\n{heading}\n" + sources if sources else "")
     sections = [answer["direct_answer"]]
     if answer["summary"]:
         sections.append("【订单事实】\n" + answer["summary"])

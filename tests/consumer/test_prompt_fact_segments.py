@@ -119,3 +119,46 @@ def test_live_segments_survive_readback_and_reject_changed_cached_text(tmp_path,
                 "UPDATE chat_dify_runs SET snapshot_json=? WHERE run_id=?", (json.dumps(tampered), run.run_id)
             )
         assert done(env, qa).status_code != 200
+
+
+# --- 第四轮复核的四个实际反例（先失败，再修） ---------------------------------
+
+
+#: 状态轮的快照形状（`cpms.chargingInfo`）：没有金额字段，只有状态与时间。
+STATUS_SNAPSHOT = {
+    "order_no": "123456789012345",
+    "source": "cpms.chargingInfo",
+    "observed_at": "2026-10-30T00:00:00Z",
+    "status_code": "1",
+    "status_role": "finished",
+}
+
+
+def test_a_negated_state_prose_cannot_contradict_the_evidence():
+    """A. 快照说结束，旁白写"尚未完结，仍在供电"必须拒绝。
+
+    判据不是"再列几个同义词"，而是**否定词 × 状态域名词**：旁白是否定或改写状态时，
+    无论用哪个词形，都在这里的两个维度上撞到。
+    """
+    text = "这笔订单尚未完结，仍在供电。\n{{fact:status_line}}"
+    with pytest.raises(ChatRunUnavailable):
+        model_reply(text, STATUS_SNAPSHOT, language="zh", contract="slots")
+
+
+def test_b_a_normal_english_follow_up_survives():
+    """B. 英文正常追问不属于状态断言，必须保留。"""
+    text = "{{fact:status_line}}\nDo you have any other questions about charging?"
+    answer = model_reply(text, STATUS_SNAPSHOT, language="en", contract="slots")
+    assert "other questions" in answer["blocks"][0]["text"]
+
+
+def test_d_an_inline_prefix_on_a_fact_segment_is_refused():
+    """D. `账单内容：{{fact:billing_line}}` 违反独立行协议，必须拒绝。
+
+    生成契约（协议块）与消费契约必须一致：片段单独占一行、不得加前后缀。
+    """
+    from aiops_diagnostics.consumer.consumer_documents import _protocol_block
+
+    assert "每个片段单独占一行，不得添加前后缀" in _protocol_block()
+    with pytest.raises(ChatRunUnavailable):
+        model_reply("账单内容：{{fact:billing_line}}", SNAPSHOT, language="zh", contract="slots")
