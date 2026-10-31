@@ -35,6 +35,7 @@ import hmac
 import json
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import (
@@ -101,12 +102,27 @@ class KeyOperations:
                 )
                 """
             )
+        # 旧版误存 token -> id，原位去掉token；历史备份由运维按凭据保留策略处理。
+        with self._connection() as db:
+            db.execute("PRAGMA secure_delete=ON")
+            for row in db.execute("SELECT app_id,before_json FROM service_key_ops").fetchall():
+                old = json.loads(row["before_json"])
+                if isinstance(old, dict):
+                    db.execute(
+                        "UPDATE service_key_ops SET before_json=? WHERE app_id=?",
+                        (json.dumps(sorted(old.values())), row["app_id"]),
+                    )
         protect_private_file(self.path)
 
+    @contextmanager
     def _connection(self):
         connection = sqlite3.connect(str(self.path), timeout=15)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def get(self, app_id: str) -> dict | None:
         with self._connection() as db:
@@ -118,7 +134,7 @@ class KeyOperations:
             db.execute(
                 "INSERT INTO service_key_ops(app_id,workspace_id,before_json,stage,updated_at)"
                 " VALUES(?,?,?,'creating',?) ON CONFLICT(app_id) DO NOTHING",
-                (app_id, workspace_id, json.dumps(before, sort_keys=True), time.time()),
+                (app_id, workspace_id, json.dumps(sorted(before.values())), time.time()),
             )
 
     def clear(self, app_id: str) -> None:
@@ -159,7 +175,9 @@ def ensure(console, key_dir: str | Path, workspace_id: str, app_id: str, *, data
     # 上一轮（可能是另一个进程 / 重启前）已经建过一枚但没能确认：先按持久快照对账。
     pending = ops.get(app_id) if ops is not None else None
     if pending and pending["stage"] == "creating":
-        known = set(json.loads(pending["before_json"]).values())
+        if pending["workspace_id"] != workspace_id:
+            raise SetupRefused("SETUP_KEY_AMBIGUOUS")
+        known = set(json.loads(pending["before_json"]))
         new = {token: key_id for token, key_id in before.items() if key_id not in known}
         if len(new) == 1:
             return _adopt(path, next(iter(new)), ops, app_id)

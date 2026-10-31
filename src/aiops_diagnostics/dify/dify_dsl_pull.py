@@ -963,6 +963,7 @@ def sync_workflow_from_dify(
     consumer_callback_base: str = "",
     consumer_libraries=None,
     bootstrap: Callable[[dict], dict] | None = None,
+    expected_workflow: dict | None = None,
 ) -> SyncOutcome:
     """把一个**workflow**应用的当前内容冻结成新的已发布版本。
 
@@ -989,6 +990,8 @@ def sync_workflow_from_dify(
     # 导出**只做一次**：bootstrap 需要同一份文档来取提示词与模型，而在这一步之后再导一次
     # 会让"建 agent 用的那一份"和"冻结的那一份"有可能不是同一份。
     dsl_text = client.export_dsl()
+    if expected_workflow is not None and workflow_content(dsl_text) != expected_workflow:
+        raise DifyDslMalformed("workflow changed after confirmation")
     previous: dict
     if existing is None:
         if bootstrap is None:
