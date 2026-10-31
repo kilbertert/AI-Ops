@@ -244,6 +244,25 @@ def test_node_source_digest_matches_the_lock():
     )
 
 
+def test_node_source_commit_is_a_real_commit():
+    """`node.source_commit` 必须是本仓里真实存在的提交。
+
+    2026-10-31：#1239 把它写成了分支名占位符
+    `pending-merge:fix/dual-entry-runtime-compatibility` 并合入 main。它不影响任何校验
+    （jar 摘要与源码摘要各验各的），所以没人发现——但它是这一块唯一的「这是哪份源码」
+    的指路字段，写成非 SHA 就等于把指路牌摘了。这里把它钉成可用 `git cat-file` 解析的值。
+    """
+    locked = json.loads((DEPLOY.parent / "m2-live-03" / "images.lock.json").read_text(encoding="utf-8"))
+    commit = locked["node"]["source_commit"]
+    probe = subprocess.run(
+        ["git", "cat-file", "-t", commit], cwd=DEPLOY.parents[1], capture_output=True, text=True
+    )
+    assert probe.returncode == 0 and probe.stdout.strip() == "commit", (
+        f"images.lock.json 的 node.source_commit={commit!r} 不是本仓里的提交。"
+        " 节点制品记录必须指向真实源码修订，不能写分支名或占位符。"
+    )
+
+
 def test_the_source_digest_actually_depends_on_the_source(tmp_path: Path):
     """对照组：源码变了摘要必须变，否则上面那条只是「函数恒返回同一个值」。"""
     module = _digest_module()
