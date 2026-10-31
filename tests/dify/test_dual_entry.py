@@ -657,6 +657,7 @@ def test_source_change_after_freezing_is_refused(dual):
     result = public_job(dual.service.store.get(job["id"]))
     assert result["state"] == "failed"
     assert result["entries"]["consumer"]["error_code"] == "SETUP_SOURCE_CHANGED"
+    assert dual.kb.created == [], "changed source allocated a customer library before refusal"
 
 
 # ── G：知识引用重绑 ─────────────────────────────────────────────────────
