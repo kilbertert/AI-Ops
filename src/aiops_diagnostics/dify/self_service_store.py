@@ -211,6 +211,30 @@ class SelfServiceStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def repair_entry(self, app_id: str, *, tenant_id: str, entry: str) -> bool:
+        """把一条端写错的旧登记改回注册表说的那一端；返回是否改动。
+
+        2026-10-31 现场：`operator_apps` 里一条**客户端**应用的端是 `operator`、场景是管家的、
+        `profile_id=''`。`register` 遇到同一条登记只会更新元数据，于是这条错行在每次启动纳管时
+        都被"确认"一次：页面读客户端状态 `KeyError: ''`（500），双端开通报
+        `SETUP_SOURCE_NOT_PUBLISHED`。
+
+        只有**注册表**能裁定端（`dify_app_registry.business_entry`），所以修复入口在这里，
+        而不是让任意 `register` 调用改端。改动范围只有端与场景；`profile_id` 由调用方随后用
+        `register` 覆盖。
+        """
+        scenario = dual_entry.scenario(entry)
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT tenant_id,entry FROM operator_apps WHERE app_id=?", (app_id,)).fetchone()
+            if row is None or row["tenant_id"] != tenant_id or row["entry"] == entry:
+                return False
+            db.execute(
+                "UPDATE operator_apps SET entry=?,scenario=?,profile_id='' WHERE app_id=?",
+                (entry, scenario, app_id),
+            )
+        return True
+
     def set_targets(self, app_id: str, targets: dict) -> None:
         with self.connection() as db:
             count = db.execute(
@@ -247,24 +271,26 @@ class SelfServiceStore:
             db.execute("BEGIN IMMEDIATE")
             old = db.execute("SELECT * FROM operator_apps WHERE app_id=?", (app_id,)).fetchone()
             if old:
-                if (
-                    tuple(
-                        old[k]
-                        for k in (
-                            "app_id",
-                            "tenant_id",
-                            "workspace_id",
-                            "agent_name",
-                            "profile_id",
-                            "entry",
-                            "scenario",
-                        )
-                    )
-                    != identity
-                ):
+                # **应用与客户**是这条登记的身份；工作区、agent 名、profile 是可推导的元数据。
+                # 同一应用既能是管家端也能是客户端（两端各有自己的 Dify 应用，但**同一个**
+                # 应用被登记成另一个端仍然是冲突）。所以端不放开：放开它就把"改个标签当另一端"
+                # 变成一条静默的更新。
+                if (old["app_id"], old["tenant_id"], old["entry"]) != (app_id, tenant_id, entry):
                     raise SetupConflict("SETUP_APP_CONFLICT")
-                if targets is not None and old["targets_json"] != encoded:
-                    db.execute("UPDATE operator_apps SET targets_json=? WHERE app_id=?", (encoded, app_id))
+                # 端写错的**旧行**由纳管（`repair_entry`）显式改回，见 api 层；这里只管同端更新。
+                db.execute(
+                    "UPDATE operator_apps SET workspace_id=?,agent_name=?,profile_id=?,scenario=?,"
+                    "environment=?,targets_json=? WHERE app_id=?",
+                    (
+                        workspace_id,
+                        agent_name,
+                        profile_id,
+                        scenario,
+                        environment or old["environment"],
+                        encoded if targets is not None else old["targets_json"],
+                        app_id,
+                    ),
+                )
                 return
             db.execute(
                 "INSERT INTO operator_apps"

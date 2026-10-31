@@ -9,6 +9,7 @@ import json
 import re
 import uuid
 from types import SimpleNamespace
+from unittest import mock
 from uuid import UUID, uuid5
 
 import pytest
@@ -904,3 +905,108 @@ def test_restoring_with_a_stale_revision_is_refused(dual):
     route = routes.get("env-a", TARGET, "consumer", "consumer_service")
     with pytest.raises(Exception, match="SETUP_ROUTE_CHANGED"):
         dual.service.change_version(dual.caller, app_id, route.revision - 1)
+
+
+# ── 2026-10-31 真实页面开通暴露的两个缺陷 ───────────────────────────────
+
+
+def test_consumer_status_does_not_need_an_operator_profile(dual):
+    """客户端登记行没有 profile；读它的状态不能因此崩。
+
+    真实事故：启动纳管把客户端应用写成了 operator 端 + `profile_id=''`，
+    页面读客户端状态直接 `KeyError: ''`（500），客户看不到自己客服端的任何状态。
+    """
+    service = dual.service
+    service.store.register(
+        app_id="eeeeeeee-1111-2222-3333-444444444444",
+        tenant_id=TENANT,
+        workspace_id="workspace-tenant-a",
+        agent_name="orphan-consumer",
+        profile_id="",
+        actor="fixture",
+        entry="consumer",
+        environment="env-a",
+    )
+    row = service.status(dual.caller, "eeeeeeee-1111-2222-3333-444444444444")
+    assert row["entry"] == "consumer" and row["managed"] is True
+
+
+def test_client_row_mislabelled_as_operator_is_repaired_by_adoption(dual):
+    """纳管必须把"端写错"的老行改回来，而不是原样写回去。
+
+    真实事故：`operator_apps` 里客户端应用的端是 operator、场景是管家的、profile 为空；
+    `store.register` 遇到同一条登记只更新元数据，于是错值在每次启动时都被"确认"一次，
+    双端开通因此报 `SETUP_SOURCE_NOT_PUBLISHED`，页面完全无法开通客户端。
+
+    端的裁定权在注册表（`dify_app_registry.business_entry`），所以修复是一次显式的
+    `repair_entry` —— 不是让任意 `register` 调用改端（那等于允许改标签当另一端）。
+    """
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+    store = SelfServiceStore(dual.settings.database_file)
+    store.repair_entry(CONSUMER_APP, tenant_id=TENANT, entry="operator")  # 造出"端写错"的旧行
+    store.register(
+        app_id=CONSUMER_APP,
+        tenant_id=TENANT,
+        workspace_id="workspace-tenant-a",
+        agent_name="consumer-source",
+        profile_id="operator-41",
+        actor="managed-adoption",
+        entry="operator",
+        scenario="operator_order_diagnosis",
+        environment="env-a",
+    )
+    assert store.repair_entry(CONSUMER_APP, tenant_id=TENANT, entry="consumer") is True
+    row = store.app(CONSUMER_APP)
+    assert (row["entry"], row["scenario"], row["profile_id"]) == ("consumer", "consumer_service", "")
+    # 已经是正确端时是 no-op，不写库。
+    assert store.repair_entry(CONSUMER_APP, tenant_id=TENANT, entry="consumer") is False
+    # 别的客户不能借这个入口改别人的登记。
+    assert store.repair_entry(CONSUMER_APP, tenant_id=TARGET, entry="consumer") is False
+
+
+def test_register_refuses_to_change_tenant_or_entry_of_an_existing_app(dual):
+    """修复端不等于允许把一行改挂到别的客户或另一个端上。"""
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore, SetupConflict
+
+    store = SelfServiceStore(dual.settings.database_file)
+    with pytest.raises(SetupConflict, match="SETUP_APP_CONFLICT"):
+        store.register(
+            app_id=CONSUMER_APP,
+            tenant_id=TARGET,  # 同一个应用不能改挂到别的客户
+            workspace_id="workspace-tenant-b",
+            agent_name="consumer-source",
+            profile_id="",
+            actor="fixture",
+            entry="consumer",
+            environment="env-a",
+        )
+
+
+def test_outdated_provider_schema_is_reported_as_its_own_reason():
+    """provider schema 比声明旧 ⇒ 页面看到 `SETUP_PROVIDER_OUTDATED`，不是 STEP_FAILED。
+
+    真实事故：`operator_tools.json` 加了 `cpms_site_search`，两个客户工作区的
+    `cpms-node` 还是两个工具的旧 schema；`ensure_node_provider(migrate=False)` 抛
+    ValueError，被归成 `SETUP_STEP_FAILED`，页面只说"开通失败"。
+
+    这里不借 `dual` 夹具：它把 `dependencies` 整个换成了替身（别的用例只要 provider id），
+    在替身上验证错误映射等于什么都没验证。
+    """
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    prepare_module = sys.modules["aiops_diagnostics.dify.self_service_prepare"]
+    manifest = Path(tempfile.mkdtemp()) / "exec-manifest.json"
+    manifest.write_text(json.dumps({"tools": []}))
+    manifest.chmod(0o600)
+
+    with (
+        mock.patch.object(prepare_module, "model_credentials", lambda *a: None),
+        mock.patch.object(prepare_module, "ensure_node_provider", side_effect=ValueError("schema differs")),
+        pytest.raises(auth.SetupRefused, match="SETUP_PROVIDER_OUTDATED"),
+    ):
+        prepare_module.dependencies(
+            mock.Mock(), "workspace", {"model": {}, "target": {"manifest_file": str(manifest)}}, "https://gw"
+        )

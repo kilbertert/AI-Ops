@@ -79,23 +79,32 @@ def register(app, context):
         # `(租户, 环境)` 找客户端运行目标时找不到 —— 症状是"现役客户端应用在册但发布时说
         # 它不受管"。管家行不受影响（它不按环境查目标），所以这个缺口只会在第一次纳管
         # 客户端应用时出现。
+        #
+        # **端由注册表裁定，不由受管目录里的旧行裁定。** 2026-10-31 现场：一条客户端
+        # 应用的登记端是 operator、场景是管家的、`profile_id=''`；`service.managed()` 又
+        # 优先返回那行旧数据，于是纳管把错值原样写回去（`register` 对同端行只更新元数据）——
+        # 页面读客户端状态 `KeyError: ''`（500），双端开通报 `SETUP_SOURCE_NOT_PUBLISHED`。
+        # 这里是唯一能把那行改回来的地方，所以先 `repair_entry` 再 `register`。
         for binding in context.runtime.dify_app_registry.all():
             row = service.managed(binding.app_id)
-            if row:
-                service.store.register(
-                    app_id=row["app_id"],
-                    tenant_id=row["tenant_id"],
-                    workspace_id=row["workspace_id"],
-                    agent_name=row["agent_name"],
-                    profile_id=row["profile_id"],
-                    actor="managed-adoption",
-                    entry=row["entry"],
-                    scenario=row["scenario"],
-                    environment=row["environment"] or context.settings.execution_environment,
-                    targets=json.loads(row.get("targets_json") or "{}")
-                    if row["entry"] == "consumer"
-                    else None,
-                )
+            if not row:
+                continue
+            service.store.repair_entry(
+                row["app_id"], tenant_id=row["tenant_id"], entry=binding.business_entry
+            )
+            entry = binding.business_entry
+            service.store.register(
+                app_id=row["app_id"],
+                tenant_id=row["tenant_id"],
+                workspace_id=row["workspace_id"],
+                agent_name=row["agent_name"],
+                profile_id="" if entry == "consumer" else row["profile_id"],
+                actor="managed-adoption",
+                entry=entry,
+                scenario=dual_entry.scenario(entry),
+                environment=row["environment"] or context.settings.execution_environment,
+                targets=json.loads(row.get("targets_json") or "{}") if entry == "consumer" else None,
+            )
 
         # 现役已经发布给消费者的库，按"当时就是明确的绑定"补一条授权行（规划 §5：
         # 已有库迁移需保持现役明确绑定）。只在没有授权行时补，不会覆盖后来的撤销。
