@@ -52,27 +52,55 @@ class KnowledgeGrants:
                 )
                 """
             )
+        with self._connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            columns = {r["name"] for r in db.execute("PRAGMA table_info(consumer_knowledge_grants)")}
+            if "revoked_at" not in columns:
+                db.execute("ALTER TABLE consumer_knowledge_grants ADD COLUMN revoked_at REAL")
         protect_private_file(self.path)
 
+    @contextmanager
     def _connection(self):
         connection = sqlite3.connect(str(self.path), timeout=15)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def granted(self, tenant_id: str, environment: str) -> set[str]:
         with self._connection() as db:
             rows = db.execute(
-                "SELECT knowledge_base_id FROM consumer_knowledge_grants WHERE tenant_id=? AND environment=?",
+                "SELECT knowledge_base_id FROM consumer_knowledge_grants "
+                "WHERE tenant_id=? AND environment=? AND revoked_at IS NULL",
                 (tenant_id, environment),
             ).fetchall()
         return {row["knowledge_base_id"] for row in rows}
 
-    def grant(self, tenant_id: str, environment: str, knowledge_base_id: str, granted_by: str) -> None:
+    def grant(
+        self,
+        tenant_id: str,
+        environment: str,
+        knowledge_base_id: str,
+        granted_by: str,
+        *,
+        backfill: bool = False,
+    ) -> None:
+        # 纳管只补从未登记的库；显式授权才允许覆盖撤销记录。
+        conflict = (
+            "DO NOTHING"
+            if backfill
+            else (
+                "DO UPDATE SET revoked_at=NULL, granted_by=excluded.granted_by, "
+                "granted_at=excluded.granted_at"
+            )
+        )
         with self._connection() as db:
             db.execute(
                 "INSERT INTO consumer_knowledge_grants"
                 "(tenant_id,environment,knowledge_base_id,granted_by,granted_at)"
-                " VALUES(?,?,?,?,?) ON CONFLICT(tenant_id,environment,knowledge_base_id) DO NOTHING",
+                " VALUES(?,?,?,?,?) ON CONFLICT(tenant_id,environment,knowledge_base_id) " + conflict,
                 (tenant_id, environment, knowledge_base_id, granted_by, time.time()),
             )
 
@@ -80,9 +108,9 @@ class KnowledgeGrants:
         with self._connection() as db:
             return (
                 db.execute(
-                    "DELETE FROM consumer_knowledge_grants"
-                    " WHERE tenant_id=? AND environment=? AND knowledge_base_id=?",
-                    (tenant_id, environment, knowledge_base_id),
+                    "UPDATE consumer_knowledge_grants SET revoked_at=? "
+                    "WHERE tenant_id=? AND environment=? AND knowledge_base_id=? AND revoked_at IS NULL",
+                    (time.time(), tenant_id, environment, knowledge_base_id),
                 ).rowcount
                 == 1
             )

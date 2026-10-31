@@ -534,11 +534,11 @@ def test_consumer_failure_leaves_operator_ready_and_retry_only_resumes_consumer(
 
     real = prepare.customer_knowledge_base
 
-    def flaky(context, tenant_id):
+    def flaky(context, tenant_id, operation, save):
         calls["consumer"] += 1
         if calls["consumer"] == 1:
             raise auth.SetupRefused("SETUP_KNOWLEDGE_FAILED")
-        return real(context, tenant_id)
+        return real(context, tenant_id, operation, save)
 
     monkeypatch.setattr(prepare, "customer_knowledge_base", flaky)
     job = dual.service.create(dual.caller, request(dual))

@@ -205,32 +205,43 @@ def knowledge_connection(context, workspace_id, console):
 # 用模板生成一个客服应用等于重写一份编排，而运营已经调好的编排在现役应用里。
 
 
-def customer_knowledge_base(context, tenant_id: str) -> str:
-    """给这个客户建一个**新的**对客知识库并返回 id。**绝不按名字复用。**
-
-    名字不是判据：一个叫"对客知识库"的库完全可能是内部资料。按名字复用会把消费者的提问
-    接到内部资料上 —— 而且没有任何日志能看出这件事发生过（名字看起来完全正确）。
-    所以每次开通都建新库，名字里带租户与随机后缀，保证它只被这一次开通认领。
-
-    **空库是有意为之**：新建客户没有资料是常态，拿别的客户的资料补上才是事故。
-    客服在这种库上会答"暂无资料"，这正是要的行为（规划 §5）。
-    """
+def customer_knowledge_base(context, tenant_id: str, operation: dict, save) -> str:
+    """先持久化创建身份；结果不明时只对账，不再次POST或认领旧的同名库。"""
     import secrets
 
     client = getattr(context.runtime, "kb_search_client", None)
     if client is None:
         raise SetupRefused("SETUP_KNOWLEDGE_CONFIG_REQUIRED")
-    from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
-
     tenant = client.for_tenant(tenant_id)
-    name = f"对客知识库-{tenant_id[-6:]}-{secrets.token_hex(3)}"[:128]
+    if "knowledge_create" not in operation:
+        operation["knowledge_create"] = {
+            "name": "对客知识库-" + secrets.token_hex(16),
+            "before": [r["knowledge_base_id"] for r in tenant.list_knowledge_bases()],
+        }
+        save("consumer:knowledge")
+    pending = operation["knowledge_create"]
+
+    def reconcile():
+        candidates = [
+            r["knowledge_base_id"]
+            for r in tenant.list_knowledge_bases()
+            if r.get("name") == pending["name"] and r["knowledge_base_id"] not in pending["before"]
+        ]
+        if len(candidates) != 1:
+            raise SetupRefused("SETUP_KNOWLEDGE_CREATE_UNCONFIRMED")
+        return candidates[0]
+
+    if pending.get("attempted"):
+        return reconcile()
+    pending["attempted"] = True
+    save("consumer:knowledge")
     try:
-        created = tenant.create_knowledge_base(name, "客户对客资料（开通时自动创建，可改名为业务名）")
-    except KnowledgeSearchUnavailable as exc:
-        raise SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc
+        created = tenant.create_knowledge_base(pending["name"], "客户对客资料（开通自动创建）")
+    except Exception:
+        return reconcile()
     knowledge_base_id = str(created.get("id") or created.get("knowledge_base_id") or "")
-    if not knowledge_base_id:
-        raise SetupRefused("SETUP_KNOWLEDGE_FAILED")
+    if not knowledge_base_id or knowledge_base_id in pending["before"]:
+        raise SetupRefused("SETUP_KNOWLEDGE_CREATE_UNCONFIRMED")
     return knowledge_base_id
 
 
