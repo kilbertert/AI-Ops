@@ -112,13 +112,28 @@ class ConsumerTrial:
                 runtime.classify_consumer(self.question, language=language, selected_order=bool(order))
             )
             intent = decision["intent"]
+            # **澄清/人工也要能预览**（Codex 复核第 3 项）。提示词里为 clarify/human
+            # 写的正文，运营必须在发布前看得到；旧代码把这类问题直接拒掉，
+            # 于是"我改的澄清话术"永远无法预览。
+            #
+            # 语义与正式路径一致（`gateway_api` 的 `prompt_notices` 分支）：
+            # clarify/human 转成 notice，按 knowledge 路径跑，`data_kind=notice_kind`。
+            # 这**不**放开订单授权：`order_required` 仍要求显式订单。
+            prompt_notices = self.binding.callback_version >= 5
+            notice_kind = ""
+            if prompt_notices and intent in {"clarify", "human"}:
+                notice_kind = intent
+                intent = "knowledge"
+                decision["uses_context"] = False
             if intent not in {"knowledge", "order_status", "billing_record"} or decision["uses_context"]:
                 raise ChatRunUnavailable("TRIAL_CLARIFICATION_REQUIRED", message("clarify", language))
             # **一个 kind，两处都用**：运行记录与发给 Dify 的 `data_kind` 必须是同一个值。
             # 2026-10-31 实测：旧代码记录写 "status"、请求传 "knowledge"，
             # 于是知识类预览在库/日志里被读成订单状态，排查时指向完全错的路径。
             live = intent in {"order_status", "billing_record"}
-            kind = ("billing" if intent == "billing_record" else "status") if live else "knowledge"
+            kind = notice_kind or (
+                ("billing" if intent == "billing_record" else "status") if live else "knowledge"
+            )
             if live and (not order or decision["order_reference"] != "explicit"):
                 raise ChatRunUnavailable(
                     "TRIAL_ORDER_REQUIRED", "试用查询请明确使用选定订单，不支持另选最新单"

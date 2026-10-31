@@ -354,3 +354,56 @@ def test_trial_failure_exposes_a_readable_reason(managed_trial):
         # 不把内部异常文本回显给运营
         assert "Traceback" not in payload["error_message"]
         assert "aiops_diagnostics" not in payload["error_message"]
+
+
+def test_clarification_trial_is_previewable_when_prompts_write_notices(managed_trial, monkeypatch):
+    """澄清类问题在 slots 发布版下应当**可预览**，而不是被直接拒掉。
+
+    运营为 clarify/human 写的正文，必须在发布前看得到；旧代码把这类问题
+    在 `ConsumerTrial` 里直接拒绝，于是"我改的澄清话术"永远无法预览。
+    语义与正式路径一致：转成 notice，按 knowledge 路径跑，`data_kind=notice_kind`。
+    """
+    f = managed_trial
+    seen = {}
+
+    import types
+
+    # 知识路径会走 `require_available` → 目录查询；与其它知识用例同样补桩。
+    monkeypatch.setattr(
+        f.kb,
+        "list_knowledge_bases",
+        lambda: [{"knowledge_base_id": "kb-own", "name": "own"}],
+        raising=False,
+    )
+
+    def classify(self, question, **kwargs):
+        return {"intent": "clarify", "uses_context": False, "order_reference": "none"}
+
+    # 只替换分类器本身；直接 setattr 在 runtime 上会连带覆盖 kb 桩的解析路径。
+    monkeypatch.setattr(f.runtime, "classify_consumer", types.MethodType(classify, f.runtime))
+
+    from aiops_diagnostics.consumer.consumer_trial import ConsumerTrial
+
+    original = ConsumerTrial.execute
+
+    def execute(self, *args):
+        self.content["callback_version"] = 5
+        return original(self, *args)
+
+    monkeypatch.setattr(ConsumerTrial, "execute", execute)
+
+    from consumer.test_consumer_knowledge_flow import Workflow
+
+    def capture(self, **kwargs):
+        seen.update(kwargs.get("inputs") or {})
+        raise RuntimeError("stop at the Dify request boundary")
+
+    monkeypatch.setattr(Workflow, "run", capture)
+    tid = submit(f)
+    row = finish(f, tid)
+    # 不再因"澄清意图"被拒；确实发起了请求，且类型是 notice
+    assert seen.get("data_kind") == "clarify", {
+        k: row.get(k) for k in ("status", "error_code", "error_message")
+    }
+    run = f.runtime.dify_run_store.by_qa(tid)
+    assert run.data_kind == seen["data_kind"]
