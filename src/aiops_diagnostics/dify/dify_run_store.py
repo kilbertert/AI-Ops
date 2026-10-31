@@ -210,7 +210,11 @@ class DifyRunStore:
         data_kind: str = "status",
         has_photo: bool = False,
     ) -> DifyRun:
-        if data_kind not in {"status", "billing", "clarify", "human", "order_required"}:
+        # `knowledge` 是**真实存在的取数类型**：试用路径会把知识问题一路送到 Dify，
+        # 只是在旧代码里记录被写成 `status`，与请求不一致（2026-10-31 实测：
+        # 知识预览在库/日志里读起来像订单状态，排查指向错的路径）。
+        # 这里接受它，是为了让"记录的类型"能等于"实际发出去的类型"。
+        if data_kind not in {"status", "billing", "knowledge", "clarify", "human", "order_required"}:
             raise ValueError("unsupported consumer data kind")
         now = _now()
         with self._connection(write=True) as connection:
