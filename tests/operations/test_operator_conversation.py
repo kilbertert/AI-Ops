@@ -549,3 +549,59 @@ def test_site_name_with_date_is_not_an_order(operator, monkeypatch):
     assert response.status_code == 202, response.text
     assert terminal(f, response.json()["qa_id"]).json()["status"] == "completed"
     assert f["state"]["calls"] and all(p.startswith("/chSite/page?") for p, _ in f["state"]["calls"])
+
+
+def _template_with_only_order_tools():
+    """生产形状的模板：只有两个订单取证工具，没有站点工具。
+
+    2026-11-01 生产事故的形状就是这份模板：`operator_conversation.manifest()` 按模板
+    过滤后得到空表，而 INSTRUCTIONS 仍要求模型「先调用 `cpms_site_search`」，模型只能
+    写字、网关按 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收，站点问题 100% 失败。
+    """
+    return json.dumps(
+        {
+            "schema": "operator-exec-config/1",
+            "name": "operator-node",
+            "history_policy": "none",
+            "model": {},
+            "model_options": {},
+            "system_messages": ["应用业务背景：SOP"],
+            "tools": [
+                {"name": name, "description": "d", "input_schema": operator_tools.tool(name).input_schema()}
+                for name in ("cpms_order_detail", "cpms_charging_samples")
+            ],
+        }
+    )
+
+
+def test_conversation_tools_come_from_declaration_not_from_template():
+    """模板缺站点工具时，会话回合仍要下发它 —— 判据是 `applies_to`，不是模板。
+
+    这条是上面那个生产事故的回归测试。夹具（`environment()`）用
+    `operator_tools.names()` 造模板，三个工具都在，所以旧测试一直是绿的：
+    夹具与判据同源，夹具就成了唯一事实来源。
+    """
+    manifest = json.loads(conversation.manifest(_template_with_only_order_tools()))
+    names = [tool["name"] for tool in manifest["tools"]]
+    assert names == ["cpms_site_search"]
+    assert manifest["tools"][0]["input_schema"] == operator_tools.tool("cpms_site_search").input_schema()
+    # 订单工具仍然不下发：无订单回合用不上它们。
+    assert "cpms_order_detail" not in names
+    assert "cpms_charging_samples" not in names
+
+
+def test_template_site_tool_is_not_duplicated():
+    """模板已经列了站点工具时，不因为按声明补齐而重复一条。"""
+    body = json.loads(_template_with_only_order_tools())
+    body["tools"].append(
+        {
+            "name": "cpms_site_search",
+            "description": "from-template",
+            "input_schema": operator_tools.tool("cpms_site_search").input_schema(),
+        }
+    )
+    manifest = json.loads(conversation.manifest(json.dumps(body)))
+    names = [tool["name"] for tool in manifest["tools"]]
+    assert names == ["cpms_site_search"]
+    # 模板那一条优先保留（描述沿用模板），schema 仍以声明为准。
+    assert manifest["tools"][0]["description"] == "from-template"
