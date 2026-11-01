@@ -23,6 +23,18 @@ live_snapshot: {order_no: 2109928861763776513, status_code: 1,
                 status_role: finished, observed_at: …, source: cpms.chargingInfo}
 ```
 
+请求归属（按 #1285 的要求先证明，再判成因）：
+
+```
+tenant_id  = 1942105476598861824
+binding    = consumer_service:production-41:1942105476598861824   ← 入口 consumer、场景 consumer_service
+caller     = service:java-bff      ← 不是 H5 会话身份
+```
+
+注意 `caller` 是**服务身份**（公司 BFF 转发），不是我的验收账号本身；
+这与 `chat_dify_runs` 历史记录一致（该链路一向由 `service:java-bff` 代表用户调用）。
+它**不代表**这是"别人的请求"——`live_snapshot.order_no` 确是我用验收账号解析出的本人订单。
+
 **这证明了三件事**：
 1. 订单号被正确授权（不再 `ORDER_NOT_FOUND`）；
 2. 新契约在 realtime 分支生效（`fact_contract=slots`、`status=live`）；
