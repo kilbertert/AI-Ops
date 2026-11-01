@@ -58,8 +58,10 @@ this.definition = DefaultToolDefinition.builder().name(name)
 
 ## 验证
 
-新增验收件 `tools/experiments/m2_close/m3node/ToolSchemaParity.java`：
+新增验收件 `tools/experiments/m2_close/m3node/ToolSchemaParity.java`，并**接进
+`run.sh` 的 `schema_phase`**（不接进去的话它只被编译、从不执行——复核指出过这一点）。
 期望值由 Python 侧同一份声明算出，Java 侧对**实际构造出的 `CpmsReadTool`** 自算一遍比对。
+无参数时打印 `STATUS=FAIL` 退出 2，避免"忘了传参"看起来像通过。
 
 ```
 cpms_order_detail      ff1b2d88…  PASS

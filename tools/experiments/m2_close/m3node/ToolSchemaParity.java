@@ -1,3 +1,5 @@
+package m3node;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.trendpower.aiops.node.CpmsReadTool;
 import com.trendpower.aiops.node.OperatorTools;
@@ -26,6 +28,12 @@ public final class ToolSchemaParity {
     };
 
     public static void main(String[] args) throws Exception {
+        // 没有期望值就什么都没验：报 PASS 会让"忘了传参"看起来像通过。
+        if (args.length == 0) {
+            System.out.println("FAIL no expected digests supplied");
+            System.out.println("STATUS=FAIL");
+            System.exit(2);
+        }
         int failures = 0;
         for (String pair : args) {
             int eq = pair.indexOf('=');
@@ -39,6 +47,7 @@ public final class ToolSchemaParity {
             if (!ok) failures++;
         }
         System.out.println("TOOL_SCHEMA_PARITY " + (failures == 0 ? "PASS" : "FAIL") + " assertions=" + args.length);
+        System.out.println(failures == 0 ? "STATUS=PASS" : "STATUS=FAIL");
         if (failures > 0) System.exit(1);
     }
 
