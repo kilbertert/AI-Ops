@@ -72,7 +72,7 @@ system message 明确要求：
 （[`2026-10-31-z-onboarding-resume.md`](2026-10-31-z-onboarding-resume.md)：`202 / completed`，
 正式路由 rev 5）。当前 rev 12 下 4/4 失败。
 
-### 2.2 消费者端：模型偶发不吐 JSON
+### 2.2 消费者端：偶发解析不出合法 JSON
 
 单次失败：
 
@@ -85,13 +85,31 @@ data_kind=status   language=en
 落点是 `consumer_documents.answer_selection` 的 `json.loads`。但**不是必现**：
 
 ```
-同租户 chat_dify_runs 总计 170，state=failed 17（约 10%）
+同租户 chat_dify_runs 总计 170 条，state != succeeded 17 条（10.0%）
 2026-11-01 14:37 两次同路径请求 succeeded（language=zh）
-按语言分：en 29 次全成功；13 次失败全部是 zh
+
+按语言（含本轮，GROUP BY 全表）：
+  en       33 条：failed  4（12.1%）
+  zh      113 条：failed 13（11.5%）
+  其余七种语言合计 24 条：failed 0
 ```
 
-所以"英文必失败"这个读法**不成立**——本轮这次是 `en`，但 `en` 的历史样本 29/29 成功，
-而 13 次失败都在 `zh`。这是**间歇性**的形态问题，不能从一次观测下语言结论。
+**按语言没有差异**：`en` 与 `zh` 的失败率同一量级，本轮这次 `en` 失败不是语言造成的。
+初版写成"en 29 次全成功、13 次失败全是 zh"，是把 `tail` 截断后的半张表当成了全表——
+`en` 另有 4 条失败被截掉。教训与本仓库已记过的一条同型：**计数一律用 `GROUP BY` 出全表，
+不要用管道尾部当结论**。
+
+这 17 条的构成也不是单一原因：
+
+| 原因 | 条数 |
+| --- | --- |
+| `CHATFLOW_ANSWER_INVALID` | 12（zh 11 / en 1） |
+| `trial_failed` | 2（zh） |
+| `DIFY_CHATFLOW_INVALID` / `CHATFLOW_EVIDENCE_UNAVAILABLE` / `CHATFLOW_UNAVAILABLE` | 各 1（en） |
+
+`json_syntax` 这个标记的语义要说准：它表示**输出以 `{` 或 `[` 开头但解析失败**，
+不等于"模型没吐 JSON"。截断、转义错误、尾逗号都落在这一档，标记本身分不出来。
+所以本文只说"这一轮没解析出合法 JSON"，不说"模型回答了纯文本"。
 
 此项已在另处处理中：PR #1291（已合并 `833e15b7`）在 `json.loads` 失败处补了**形态**标记
 （`plain_text:<n>` / `fenced` / `json_syntax` / `empty` / `not_text:<type>`），不记原文。
