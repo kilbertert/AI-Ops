@@ -277,3 +277,17 @@ def test_every_reader_of_the_model_output_tolerates_the_same_tail():
     )
     assert _has_reply(tail_only) is True
     assert _has_reply("这单已经充电结束了。") is False
+
+
+def test_protocol_says_to_use_only_the_segments_this_turn_actually_has():
+    """状态查询引用了 `billing_line` 是**合法 JSON 里的错内容**，守卫拒绝正确。
+
+    2026-11-01 生产实测：9 次订单查询里 3 次的模型输出是这个形状 ——
+    账单段并不在本轮快照里，模型却照"账单必须引用billing_line"那句写上了它。
+    协议块要讲清"只用本轮给出的段"，否则模型只能靠猜。
+    """
+    from aiops_diagnostics.consumer.consumer_documents import _protocol_block
+
+    text = _protocol_block()
+    assert "只引用本轮实际给出的段" in text
+    assert "看不到billing_line就不要写它" in text
