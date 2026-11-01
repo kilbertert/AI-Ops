@@ -85,7 +85,7 @@ operator 目标的 manifest_file = operator-exec-manifest.json（订单诊断用
 `operator_conversation.manifest()`（`operator_conversation.py:87`）在末尾**无条件把工具表清空**：
 
 ```python
-body["tools"] = kept          # 只留 applies_to 含 "conversation" 的
+body["tools"] = kept  # 只留 applies_to 含 "conversation" 的
 ...
 # 而 INSTRUCTIONS 里写着：本轮没有选定订单，不提供订单工具
 ```
