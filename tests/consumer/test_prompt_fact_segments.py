@@ -201,3 +201,20 @@ def test_e_a_real_negation_or_assertion_is_still_refused(text):
     """
     with pytest.raises(ChatRunUnavailable):
         check_status_prose(text)
+
+
+def test_non_json_answer_reports_shape_without_leaking_text():
+    """`invalid document answer` 要带上**形态**，但不能把模型原文写进错误里。
+
+    2026-11-01 排查订单链路时只拿到 `invalid document answer`，无法区分
+    "模型没按 JSON 答" 与 "答了 JSON 但被 markdown 围栏包住"。
+    原文是用户可见文本（可能含订单号、金额），所以只描述形态。
+    """
+    from aiops_diagnostics.consumer.consumer_documents import _json_failure_shape
+
+    assert _json_failure_shape("   ") == "empty"
+    assert _json_failure_shape("```json\n{}\n```") == "fenced"
+    assert _json_failure_shape('{"kind":"realtime",') == "json_syntax"
+    assert _json_failure_shape("这单已经充电结束了。").startswith("plain_text:")
+    # 形态里**不含**原文
+    assert "充电" not in _json_failure_shape("这单已经充电结束了。")
