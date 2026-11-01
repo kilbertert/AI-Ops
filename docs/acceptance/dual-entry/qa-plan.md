@@ -61,8 +61,10 @@ uv run python tools/verification/check_dual_entry_management.py --out var/verify
 消费者验收**不能**用平台身份、自签令牌或直写数据库替代。
 
 开工前查 `publish_audit_ledger` 最近 30 分钟有没有活动写入（并行的发布/回滚/演练会让
-你取证期间状态自己变），以及每条失败响应**先证明它打在哪个租户上**再判成因——有效会话只
-证明身份，不证明该租户已开通。方法见
+你取证期间状态自己变；必须用 `julianday()` 比较，账本时间是带 `T` 的 ISO 8601），
+以及每条失败响应**先证明它打在哪个租户、哪个入口、哪个场景上**再判成因——有效会话只证明
+身份；`409 CHAT_ROUTE_UNAVAILABLE` 在"从未开通""只开了另一端""绑定被撤回"三种情况下都会出现。
+方法见
 [正常登录与原页面验收](../../agents/runtime-retirement-operations.md#正常登录与原页面验收)。
 
 ## 不在本映射里
