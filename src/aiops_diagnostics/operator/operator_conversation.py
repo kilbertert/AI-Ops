@@ -76,7 +76,8 @@ address_terms必须保持本轮工具所用的地址关键词，例如["广州",
 无法确定地点时正常追问地点，不猜坐标、位置、站名、距离、价格或实时枪口状态。
 问“我有哪些站点”“我有几个站点”这类**列举**问题时也用同一个工具，但关键词全空：
 系统按当前账号可见范围列出站点；你不要补关键词，也不要在text里写名单。
-没有检索工具，不得声称读过知识库或业务数据。应用SOP仅作领域背景，其订单步骤仅适用于订单诊断。
+没有知识库检索工具，不得声称读过知识库或业务数据；站点查询只走 cpms_site_search。
+应用SOP仅作领域背景，其订单步骤仅适用于订单诊断。
 不能执行或声称执行退款、重启、停充、改配置；可以提供操作指引，危险情况优先提示安全措施。
 仅输出一个JSON对象，恰好四字段：
 {"kind":"answer|order_required|site_search","text":"回答或澄清","name":"站名关键词或空串","address_terms":[]}
@@ -91,7 +92,17 @@ def manifest(text):
     body["schema"] = SCHEMA
     # 无订单回合保留**能在这类运行里用的**工具（目前只有站点查询）。订单诊断工具没有
     # 订单就没有取证对象，删掉它们不是裁剪，是正确性。
+    #
+    # 名单以**声明**为准，不以模板为准：模板是「运营在这个源应用里勾了什么」，而会话回合
+    # 的工具集是「这类运行允许用什么」（ADR-0182，见 `applies_to`）。两者不是同一件事。
+    #
+    # 2026-11-01 生产事故：模板里只有两个订单工具，本函数按模板过滤后得到空表，而下面的
+    # INSTRUCTIONS 仍在要求模型「先调用 cpms_site_search」。模型只能写字，网关按
+    # `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收，站点问题 100% 失败。测试一直是绿的，
+    # 是因为 fixture 用 `operator_tools.names()` 造模板，恰好含这个工具 —— 夹具与判据同源，
+    # 夹具就成了唯一事实来源。见 `tests/operations/test_operator_conversation.py` 里那两例。
     kept = []
+    seen = set()
     for tool in body["tools"]:
         declared = operator_tools.tool(tool["name"])
         if "conversation" not in declared.applies_to:
@@ -99,6 +110,18 @@ def manifest(text):
         # 参数 schema 来自**声明**，不来自模板：模板只有运营勾选的名单，
         # 参数形状的唯一定义在声明里。
         kept.append({**tool, "input_schema": declared.input_schema()})
+        seen.add(tool["name"])
+    for declared in operator_tools.tools():
+        if "conversation" not in declared.applies_to or declared.name in seen:
+            continue
+        # 模板没列这个工具：按声明补一条。schema 同样来自声明。
+        kept.append(
+            {
+                "name": declared.name,
+                "description": declared.description,
+                "input_schema": declared.input_schema(),
+            }
+        )
     body["tools"] = kept
     sop = business_prompt("\n".join(body["system_messages"]))
     body["system_messages"] = ["应用业务背景：\n" + sop + "\n\n" + INSTRUCTIONS]
