@@ -41,11 +41,17 @@ D 仍判 **部分**，但与上一轮不同：**未通过的原因从"没做"变
 （`plain_text:<n>` / `fenced` / `json_syntax` / `empty` / `not_text:<type>`），只改诊断不改根因。
 本 PR 只证明"原入口会发生"并给出频度与语言分布，不重复修。
 
-## 一处没下结论的地方
+## 管家端根因已定位（2026-11-01 追加）
 
-管家端 `tools=[]` 有两个可能来源（模板 `manifest_file` 的工具表为空 / Dify 侧没勾
-`cpms_site_search`），需要到 36 的 Dify 控制台看实际勾选才能定。本记录只写定位路径，
-不写根因断言——`cpms_site_search` 的声明本身是对的（`applies_to:["conversation"]`）。
+`/etc/aiops-node-runtime/gateway/operator-exec-manifest.json` 的 `tools` 只有
+`cpms_order_detail` / `cpms_charging_samples`，**没有 `cpms_site_search`**。
+`candidate()` 取的是「模板 ∩ Dify 勾选」，模板没有就必然为空——所以不是 Dify 侧的问题。
+
+这正是 `docs/agents/operator-cpms/tool-architecture.md` §5 的 **P3 未做**：站点工具在节点侧
+从未实现，而对话提示词已经要求模型调它。**两边各走了一半。**
+
+2026-10-31 那次成功走的是另一分支：模型回空 text 时网关自己调 `query_sites()`。
+现在模型写了说明文字，就撞上拒收。**不是回归**，是模型输出形态把早就存在的不一致暴露了。
 
 ## 交付索引
 

@@ -65,12 +65,56 @@ system message 明确要求：
 2. Dify 侧 `agent_mode.tools` 没勾 `cpms_site_search`（`allowed` 为空 ⇒ `body["tools"]=[]`）。
 
 `cpms_site_search` 的声明本身是对的（`operator_tools.json`：`applies_to: ["conversation"]`），
-所以不是声明缺失。**本记录只证明现象与定位路径，不作根因断言**——需要在 36 的 Dify 控制台
-看该 app 实际勾选。
+所以不是声明缺失。
 
-**回归证据**：2026-10-31 用同一个问题（「列出本人可见场站及范围」）在同一入口成功过
-（[`2026-10-31-z-onboarding-resume.md`](2026-10-31-z-onboarding-resume.md)：`202 / completed`，
-正式路由 rev 5）。当前 rev 12 下 4/4 失败。
+### 根因（2026-11-01 追加定位）
+
+读 41 上的实际配置，两个来源都查实了：
+
+```
+/etc/aiops-41/gateway.env
+  AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE=/etc/aiops-node-runtime/gateway/node-targets.json
+operator 目标的 manifest_file
+  /etc/aiops-node-runtime/gateway/operator-exec-manifest.json
+该文件里的 tools
+  ['cpms_order_detail', 'cpms_charging_samples']      ← 没有 cpms_site_search
+```
+
+`node_publication.candidate()` 的过滤链是「模板里有的 ∩ Dify 侧勾了的」：
+
+```python
+template = {item["name"]: item for item in body["tools"]}   # 来自 manifest_file
+if not set(allowed).issubset(template):
+    raise ValueError("CPMS tool missing from node template")
+body["tools"] = [template[name] for name in allowed]
+```
+
+模板里没有 `cpms_site_search` ⇒ `template[name]` 取不到 ⇒ 结果 `[]`。所以**不是 Dify 侧
+勾没勾的问题，是节点模板从来没声明这个工具**。
+
+这与仓库自己的设计文档一致，不是我新发现的设计缺口：
+
+> `docs/agents/operator-cpms/tool-architecture.md` §6「站点能力的三个入口」
+> | 节点工具 | `cpms_site_search(name,address)` | **未实现，需 P1–P3** |
+>
+> §5 分期：P3「站点工具」= 只加声明行，零 Java 改动。
+
+也就是说：**能力未实现（P3 未做），但对话提示词已经要求模型去调它**
+（`operator_conversation.py` 的 INSTRUCTIONS：「找站、查站点位置时先调用 `cpms_site_search`」）。
+两边各走了一半——提示词先上了，工具没上。
+
+### 那 2026-10-31 为什么成功？
+
+那次走的是**另一条路**：`answer["text"]` 为空时，网关不拒收，而是自己调 `query_sites()`
+（`operator_cpms.py` 里 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 的反面分支）。当时模型
+回的是纯 `kind=site_search` + 空 text，于是网关代查，`202 / completed`。
+
+现在模型在 text 里写了说明（提示词鼓励"据此写一两句说明"），于是撞上拒收。**所以这不是
+同一条代码路径上的回归，是模型输出形态变了，把一条早就存在的不一致暴露出来**：
+提示词要求调一个不存在的工具，模型只能靠写字来表达，而一写字就被拒。
+
+上一版记的「回归」措辞不准确，此处订正。**D 项结论不变**（双端回答未通过），
+但性质从"回归"改为"**未实现的节点工具 + 已上线的提示词要求**"。
 
 ### 2.2 消费者端：偶发解析不出合法 JSON
 

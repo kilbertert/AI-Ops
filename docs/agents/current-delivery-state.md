@@ -6,8 +6,11 @@
 `operator_order_diagnosis` rev 12 与 `consumer_service` rev 14。但**两端助手这轮都失败**：
 
 - 管家端 4/4 失败：运行清单 `execution_manifest.tools=[]`，节点无法调用 `cpms_site_search`，
-  网关按 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收。2026-10-31 同一问题在同一入口曾成功
-  （正式路由 rev 5）。根因未定（模板工具表为空 / Dify 侧未勾，二选一）。
+  网关按 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收。**根因已定位**：节点模板
+  `operator-exec-manifest.json` 只声明了 `cpms_order_detail` / `cpms_charging_samples`，
+  从来没有 `cpms_site_search`——即 `tool-architecture.md` §5 的 **P3 未做**，而对话提示词
+  已经要求模型去调它。2026-10-31 那次成功走的是另一分支（模型回空 text，网关代查
+  `query_sites()`），不是同一条路径，因此**不是回归**。
 - 消费者端间歇失败：`CHATFLOW_ANSWER_INVALID`。同租户 170 条里 17 条失败（10%），
   按同一原因分层为 `zh` 11/113、`en` 1/33——样本太薄，不判语言是否成因。
 
