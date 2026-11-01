@@ -65,12 +65,68 @@ system message 明确要求：
 2. Dify 侧 `agent_mode.tools` 没勾 `cpms_site_search`（`allowed` 为空 ⇒ `body["tools"]=[]`）。
 
 `cpms_site_search` 的声明本身是对的（`operator_tools.json`：`applies_to: ["conversation"]`），
-所以不是声明缺失。**本记录只证明现象与定位路径，不作根因断言**——需要在 36 的 Dify 控制台
-看该 app 实际勾选。
+所以不是声明缺失。
 
-**回归证据**：2026-10-31 用同一个问题（「列出本人可见场站及范围」）在同一入口成功过
-（[`2026-10-31-z-onboarding-resume.md`](2026-10-31-z-onboarding-resume.md)：`202 / completed`，
-正式路由 rev 5）。当前 rev 12 下 4/4 失败。
+### 根因（2026-11-01 追加定位，经两轮订正）
+
+**先说结论：不是"节点没实现站点工具"，也不是"Dify 侧没勾"。** 这条路径上，
+**对话回合压根不会下发任何工具**。
+
+#### 走的是哪份清单
+
+```
+/etc/aiops-41/gateway.env
+  AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE=/etc/aiops-node-runtime/gateway/node-targets.json
+operator 目标的 manifest_file = operator-exec-manifest.json（订单诊断用）
+但本次路由的是 operator 的 conversation 分支
+  → operator_cpms.py:375  manifest_text = operator_conversation.manifest(binding.manifest_text)
+```
+
+`operator_conversation.manifest()`（`operator_conversation.py:87`）在末尾**无条件把工具表清空**：
+
+```python
+body["tools"] = kept  # 只留 applies_to 含 "conversation" 的
+...
+# 而 INSTRUCTIONS 里写着：本轮没有选定订单，不提供订单工具
+```
+
+模板里只有 `cpms_order_detail` / `cpms_charging_samples`，两者 `applies_to` 都不含
+`conversation`，于是 `kept=[]`。**所以 `tools=[]` 是这条分支的设计结果，不是配置缺项。**
+
+#### 真正的矛盾在提示词里
+
+同一次运行下发的 system message 自相矛盾：
+
+| 句子 | 出处 |
+| --- | --- |
+| 「找站、查站点位置时**先调用 `cpms_site_search`** 取得当前账号可见的真实结果」 | `operator_conversation.INSTRUCTIONS` |
+| 「系统按当前账号可见范围列出站点；你不要补关键词，也**不要在 text 里写名单**」 | 同上 |
+| 「没有调用工具就没有结果，此时 **text 必须为空**」 | 同上 |
+| 「**没有检索工具**，不得声称读过知识库或业务数据」（前半句在追加业务背景**之后**） | 同上 |
+
+最后一句里的「检索工具」指的是知识库检索，不是站点工具——但它和前三句放在同一段里，
+并且是**唯一一句说"没有工具"的话**。模型据此写了说明文字，网关按
+`OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收。
+
+#### 订正两处此前的说法
+
+1. 上一版说「节点模板从来没声明 `cpms_site_search`，是 P3 未做」——**这句不成立**。
+   节点侧已按声明装配：`GovernedToolRuntime.resolvedTools()` 对
+   `OperatorTools.declares(name)` 为真的工具会构造 `CpmsReadTool`，而
+   `OperatorTools` 读的正是 `operator_tools.json`（其中 `cpms_site_search` 有声明）。
+   缺的是**对话分支不下发工具**，不是节点不会执行。
+   （另：`tool-architecture.md` §6 那张"未实现"的表已过期，与本条不符，不该拿来当依据。）
+2. 上一版说这是「回归」——**也不准确**。2026-10-31 成功那次，模型回的是
+   `kind=site_search` + **空 text**，网关走的是自己调 `query_sites()` 的分支
+   （`OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 的反面），所以能成。
+   现在提示词让模型"再据此写一两句说明"，一写字就撞上拒收。**是提示词与
+   "对话分支不下发工具"这条设计互相打架**，不是同一条代码路径的回归。
+
+#### 仍待确认的一点
+
+`operator-exec-manifest.json` 的 mtime 是 2026-10-26，而对话分支本来就不用它，
+所以它是否该含 `cpms_site_search` **与本次失败无关**——但它和
+`tool-architecture.md` 的记录不一致，属于另一件事，本文不展开。
 
 ### 2.2 消费者端：偶发解析不出合法 JSON
 

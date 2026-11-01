@@ -41,11 +41,27 @@ D 仍判 **部分**，但与上一轮不同：**未通过的原因从"没做"变
 （`plain_text:<n>` / `fenced` / `json_syntax` / `empty` / `not_text:<type>`），只改诊断不改根因。
 本 PR 只证明"原入口会发生"并给出频度与语言分布，不重复修。
 
-## 一处没下结论的地方
+## 管家端根因（经两轮订正，已查实）
 
-管家端 `tools=[]` 有两个可能来源（模板 `manifest_file` 的工具表为空 / Dify 侧没勾
-`cpms_site_search`），需要到 36 的 Dify 控制台看实际勾选才能定。本记录只写定位路径，
-不写根因断言——`cpms_site_search` 的声明本身是对的（`applies_to:["conversation"]`）。
+**不是"节点没实现站点工具"，也不是"Dify 侧没勾"。这条分支压根不下发工具。**
+
+本次路由的是 operator 的 **conversation** 分支，走
+`operator_cpms.py:375` → `operator_conversation.manifest(binding.manifest_text)`。
+该函数只保留 `applies_to` 含 `conversation` 的工具；模板里只有
+`cpms_order_detail` / `cpms_charging_samples`（都是 `order`），于是 `kept=[]`。
+**`tools=[]` 是设计结果，不是配置缺项。**
+
+矛盾在提示词：同一份 system message 既写「找站时**先调用 `cpms_site_search`**」，
+又写「没有调用工具就没有结果，此时 **text 必须为空**」，还写「**没有检索工具**」。
+模型据此写说明文字，网关按 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收。
+
+### 订正两处
+
+1. 「P3 未做、节点没实现」**不成立**：`GovernedToolRuntime.resolvedTools()` 已能按
+   `operator_tools.json` 的声明装配 `CpmsReadTool`；`tool-architecture.md` §6 那张
+   "未实现"的表已过期。
+2. 「回归」**不准确**：10-31 成功那次模型回了空 text，网关代查 `query_sites()`；
+   现在提示词让它写字，就撞上拒收。是提示词与"对话分支不下发工具"打架，不是同一条路径回归。
 
 ## 交付索引
 

@@ -5,11 +5,12 @@
 用真实账号在原 H5 与原管家 H5 各跑一次：两端**登录与路由都正常**，请求分别落在
 `operator_order_diagnosis` rev 12 与 `consumer_service` rev 14。但**两端助手这轮都失败**：
 
-- 管家端 4/4 失败：运行清单 `execution_manifest.tools=[]`，节点无法调用 `cpms_site_search`，
-  网关按 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收。2026-10-31 同一问题在同一入口曾成功
-  （正式路由 rev 5）。根因未定（模板工具表为空 / Dify 侧未勾，二选一）。
-- 消费者端间歇失败：`CHATFLOW_ANSWER_INVALID`。同租户 170 条里 17 条失败（10%），
-  按同一原因分层为 `zh` 11/113、`en` 1/33——样本太薄，不判语言是否成因。
+- 管家端 4/4 失败：运行清单 `execution_manifest.tools=[]`，网关按
+  `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收。**根因不是"节点没实现"也不是"Dify 没勾"**：
+  对话分支走 `operator_conversation.manifest()`，它只保留 `applies_to` 含 `conversation`
+  的工具，而模板里只有两个订单工具，于是必然为空；但同一段提示词又要求模型
+  「先调用 `cpms_site_search`」，**下发的要求与下发的工具自相矛盾**。
+  2026-10-31 那次成功是因为模型回了空 text、网关代查 `query_sites()`，**不是回归**。
 
 所以下面 2026-10-31 那条"两端原 H5 正例通过"**不能当作当前可用性**。D 项判**部分**。
 详见[D 项双端复验](../validation/2026-11-01-t13-d-dual-entry-reverify.md)。
