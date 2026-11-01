@@ -86,6 +86,10 @@ lock_path, identity_path = sys.argv[1], sys.argv[2]
 lock = json.load(open(lock_path))
 identity = json.load(open(identity_path))
 section = lock.setdefault("gateway_image", {})
+# `dict.update()` 不会删除既有键：如果这份锁是旧版本带来的、还带着 `image_id`，
+# 它会**原地活下来**，于是锁里出现"旧的 image ID + 新的时间戳和摘要"这一对矛盾。
+# 显式 pop 才是让"锁不含 image_id"在反复构建后依然成立的那一步。
+section.pop("image_id", None)
 section.update(
     {
         "image": identity["image"].split(":")[0],
