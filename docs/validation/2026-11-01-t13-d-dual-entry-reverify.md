@@ -67,54 +67,66 @@ system message 明确要求：
 `cpms_site_search` 的声明本身是对的（`operator_tools.json`：`applies_to: ["conversation"]`），
 所以不是声明缺失。
 
-### 根因（2026-11-01 追加定位）
+### 根因（2026-11-01 追加定位，经两轮订正）
 
-读 41 上的实际配置，两个来源都查实了：
+**先说结论：不是"节点没实现站点工具"，也不是"Dify 侧没勾"。** 这条路径上，
+**对话回合压根不会下发任何工具**。
+
+#### 走的是哪份清单
 
 ```
 /etc/aiops-41/gateway.env
   AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE=/etc/aiops-node-runtime/gateway/node-targets.json
-operator 目标的 manifest_file
-  /etc/aiops-node-runtime/gateway/operator-exec-manifest.json
-该文件里的 tools
-  ['cpms_order_detail', 'cpms_charging_samples']      ← 没有 cpms_site_search
+operator 目标的 manifest_file = operator-exec-manifest.json（订单诊断用）
+但本次路由的是 operator 的 conversation 分支
+  → operator_cpms.py:375  manifest_text = operator_conversation.manifest(binding.manifest_text)
 ```
 
-`node_publication.candidate()` 的过滤链是「模板里有的 ∩ Dify 侧勾了的」：
+`operator_conversation.manifest()`（`operator_conversation.py:87`）在末尾**无条件把工具表清空**：
 
 ```python
-template = {item["name"]: item for item in body["tools"]}  # 来自 manifest_file
-if not set(allowed).issubset(template):
-    raise ValueError("CPMS tool missing from node template")
-body["tools"] = [template[name] for name in allowed]
+body["tools"] = kept          # 只留 applies_to 含 "conversation" 的
+...
+# 而 INSTRUCTIONS 里写着：本轮没有选定订单，不提供订单工具
 ```
 
-模板里没有 `cpms_site_search` ⇒ `template[name]` 取不到 ⇒ 结果 `[]`。所以**不是 Dify 侧
-勾没勾的问题，是节点模板从来没声明这个工具**。
+模板里只有 `cpms_order_detail` / `cpms_charging_samples`，两者 `applies_to` 都不含
+`conversation`，于是 `kept=[]`。**所以 `tools=[]` 是这条分支的设计结果，不是配置缺项。**
 
-这与仓库自己的设计文档一致，不是我新发现的设计缺口：
+#### 真正的矛盾在提示词里
 
-> `docs/agents/operator-cpms/tool-architecture.md` §6「站点能力的三个入口」
-> | 节点工具 | `cpms_site_search(name,address)` | **未实现，需 P1–P3** |
->
-> §5 分期：P3「站点工具」= 只加声明行，零 Java 改动。
+同一次运行下发的 system message 自相矛盾：
 
-也就是说：**能力未实现（P3 未做），但对话提示词已经要求模型去调它**
-（`operator_conversation.py` 的 INSTRUCTIONS：「找站、查站点位置时先调用 `cpms_site_search`」）。
-两边各走了一半——提示词先上了，工具没上。
+| 句子 | 出处 |
+| --- | --- |
+| 「找站、查站点位置时**先调用 `cpms_site_search`** 取得当前账号可见的真实结果」 | `operator_conversation.INSTRUCTIONS` |
+| 「系统按当前账号可见范围列出站点；你不要补关键词，也**不要在 text 里写名单**」 | 同上 |
+| 「没有调用工具就没有结果，此时 **text 必须为空**」 | 同上 |
+| 「**没有检索工具**，不得声称读过知识库或业务数据」（前半句在追加业务背景**之后**） | 同上 |
 
-### 那 2026-10-31 为什么成功？
+最后一句里的「检索工具」指的是知识库检索，不是站点工具——但它和前三句放在同一段里，
+并且是**唯一一句说"没有工具"的话**。模型据此写了说明文字，网关按
+`OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收。
 
-那次走的是**另一条路**：`answer["text"]` 为空时，网关不拒收，而是自己调 `query_sites()`
-（`operator_cpms.py` 里 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 的反面分支）。当时模型
-回的是纯 `kind=site_search` + 空 text，于是网关代查，`202 / completed`。
+#### 订正两处此前的说法
 
-现在模型在 text 里写了说明（提示词鼓励"据此写一两句说明"），于是撞上拒收。**所以这不是
-同一条代码路径上的回归，是模型输出形态变了，把一条早就存在的不一致暴露出来**：
-提示词要求调一个不存在的工具，模型只能靠写字来表达，而一写字就被拒。
+1. 上一版说「节点模板从来没声明 `cpms_site_search`，是 P3 未做」——**这句不成立**。
+   节点侧已按声明装配：`GovernedToolRuntime.resolvedTools()` 对
+   `OperatorTools.declares(name)` 为真的工具会构造 `CpmsReadTool`，而
+   `OperatorTools` 读的正是 `operator_tools.json`（其中 `cpms_site_search` 有声明）。
+   缺的是**对话分支不下发工具**，不是节点不会执行。
+   （另：`tool-architecture.md` §6 那张"未实现"的表已过期，与本条不符，不该拿来当依据。）
+2. 上一版说这是「回归」——**也不准确**。2026-10-31 成功那次，模型回的是
+   `kind=site_search` + **空 text**，网关走的是自己调 `query_sites()` 的分支
+   （`OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 的反面），所以能成。
+   现在提示词让模型"再据此写一两句说明"，一写字就撞上拒收。**是提示词与
+   "对话分支不下发工具"这条设计互相打架**，不是同一条代码路径的回归。
 
-上一版记的「回归」措辞不准确，此处订正。**D 项结论不变**（双端回答未通过），
-但性质从"回归"改为"**未实现的节点工具 + 已上线的提示词要求**"。
+#### 仍待确认的一点
+
+`operator-exec-manifest.json` 的 mtime 是 2026-10-26，而对话分支本来就不用它，
+所以它是否该含 `cpms_site_search` **与本次失败无关**——但它和
+`tool-architecture.md` 的记录不一致，属于另一件事，本文不展开。
 
 ### 2.2 消费者端：偶发解析不出合法 JSON
 
