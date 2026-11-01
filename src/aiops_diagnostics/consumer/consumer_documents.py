@@ -117,13 +117,74 @@ def _json_failure_shape(raw) -> str:
     return f"plain_text:{len(text)}"  # 纯文本，只记长度
 
 
-def answer_selection(raw, context, *, language="", contract="legacy"):
+def _object_end(text):
+    """从开头扫出**第一个完整 JSON 对象**的结束位置（不含），不在字符串里的括号才计数。
+
+    返回 `None` 表示这段文本根本不是"一个对象 + 尾巴"：没开启、没闭合、或开头就不是 `{`。
+    """
+    if not text.startswith("{"):
+        return None
+    depth, quoted, escaped = 0, False, False
+    for i, ch in enumerate(text):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                quoted = False
+            continue
+        if ch == '"':
+            quoted = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return None
+
+
+#: 对象之后允许出现的多余字符：**只有空白与引号/花括号/方括号**。
+#:
+#: 实测到的形状就是 `"}`。句号、逗号、中文标点**不在**其中 —— 没有样本支撑，
+#: 而每放宽一格就多一分"把一段话当尾巴"的空间。出现新形状时先看 `reject_detail`
+#: 记的形态，再决定要不要动这里。
+_TRAILING_GARBAGE = re.compile(r"[\s\"'`}\]]*")
+
+
+def load_selection(raw):
+    """解析模型这一轮的选择，容忍**完整对象之后**的标点尾巴。
+
+    实测（2026-11-01 生产，同一版提示词）：12 条答复里 4 条在正确的对象后多吐了一个
+    `"}`，对象本身完整、字段全对：
+
+        {"kind":"realtime",...,"reply":"{{fact:status_line}}\\n{{fact:observed_line}}"}"}
+
+    整轮丢掉这样一条，等于把一次成功的取数判成故障。但**只**救这一种形状：
+    对象必须是文本开头那一个（`:func:`_object_end``），尾巴只能是空白与标点 ——
+    半个对象、前面带话、后面带句子都照旧拒绝，那些不是"格式手滑"，是没按协议答。
+    """
     try:
-        selected = json.loads(raw)
+        return json.loads(raw)
     except (ValueError, TypeError) as exc:
+        text = raw if isinstance(raw, str) else ""
+        end = _object_end(text)
+        selected = None
+        if end is not None and _TRAILING_GARBAGE.fullmatch(text[end:]):
+            try:
+                selected = json.loads(text[:end])
+            except ValueError:
+                selected = None
+        if isinstance(selected, dict):
+            return selected
         raise ChatRunUnavailable(
             "CHATFLOW_ANSWER_INVALID", f"invalid document answer ({_json_failure_shape(raw)})"
         ) from exc
+
+
+def answer_selection(raw, context, *, language="", contract="legacy"):
+    selected = load_selection(raw)
     # 线上应用（documents 契约）可以在 realtime 分支多带一个 `reply`：编排页的提示词
     # 用它写正文。其它 kind 不许带 —— 没有取数依据的一段话不能冒充知识库回答。
     if (

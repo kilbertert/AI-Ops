@@ -294,9 +294,11 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
                 copy_pack=copy_pack(runtime, caller, context, language),
             )
             if context.get("fact_contract") == "slots" and context.get("live_snapshot"):
-                import json
+                from aiops_diagnostics.consumer.consumer_documents import load_selection
 
-                if not store.store_reply_source(run_id, json.loads(reply.answer)["reply"]):
+                # 与 `answer_selection` 走**同一个**解析器：模型多吐一个 `"}` 时，
+                # 一处容忍一处不容忍，会让"答出来了却存不下正文"变成新的失败面。
+                if not store.store_reply_source(run_id, load_selection(reply.answer)["reply"]):
                     raise ValueError("reply source could not be stored")
         else:
             answer = {"blocks": [{"kind": "text", "text": reply.answer}], "retrieval_status": "unavailable"}

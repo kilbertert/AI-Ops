@@ -122,6 +122,28 @@ def test_legacy_contract_delivers_a_prompt_written_notice():
     assert "https://support.example/zh" in text
 
 
+def test_a_trailing_brace_on_a_notice_does_not_turn_a_system_fallback_into_a_failure():
+    """尾巴不能让**系统兜底**变成整轮失败。
+
+    先澄清这条路径的边界（实测 4 种 status × 4 种 kind）：能承载模型正文的
+    `clarify/not_found/human` 在 `no_result`/`found` 下由 `answer_selection`
+    直接交付，走不到归一化；走到归一化的只有"服务侧不可用"这一支 ——
+    那里**按设计**用系统文案，模型写的 reply 被丢弃。
+
+    所以这里守的不是"正文被保住"（它本来就不该交付），而是：`_has_reply`
+    已经接受了带尾巴的原文，归一化若再严格一次就会抛 `JSONDecodeError`，
+    把一条本可交付的系统答复变成整轮失败。
+    """
+    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+
+    content = {"support": {"zh": {"label": "客服", "url": "https://support.example/zh"}}}
+    context = {"status": "limited", "candidates": [], "mode": "documents"}
+    tail_only = '{"kind": "not_found", "answer": "", "reference_ids": [], "reply": "这次没查到对应资料。"}"}'
+    answer = final_answer(tail_only, context, "zh", content)
+    assert answer["retrieval_status"] == "unavailable"
+    assert "这次没查到对应资料" not in answer["blocks"][0]["text"], "服务故障时以系统文案为准"
+
+
 def test_legacy_contract_keeps_system_text_on_service_failure():
     """服务故障时以系统文案为准：模型没有故障信息，让它描述故障只会多一个错处。"""
     from aiops_diagnostics.consumer.consumer_knowledge import final_answer
@@ -148,3 +170,18 @@ def test_safety_and_photo_outputs_never_depend_on_the_model():
             None,
         )
         assert "已到账" not in answer["blocks"][0]["text"]
+
+
+def test_a_trailing_brace_does_not_cost_the_user_the_answer_text():
+    """用户能看到的那一面：带尾巴的澄清正文必须照常送达。
+
+    Devin 在 #1294 上指出前一条只查了 `retrieval_status`，证明不了正文没丢。
+    这里用 `no_result`（模型正文合法的主路径）断言交付出去的文本本身。
+    """
+    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+
+    content = {"support": {"zh": {"label": "客服", "url": "https://support.example/zh"}}}
+    context = {"status": "no_result", "candidates": [], "mode": "documents"}
+    tail_only = '{"kind": "clarify", "answer": "", "reference_ids": [], "reply": "能说一下是哪一单吗？"}"}'
+    answer = final_answer(tail_only, context, "zh", content)
+    assert answer["blocks"][0]["text"].startswith("能说一下是哪一单吗？")
