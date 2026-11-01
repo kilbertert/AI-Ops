@@ -1866,6 +1866,26 @@ done'
 - **thirdSession 令牌 = 键名去掉 `app:3rd_session:` 前缀后的部分**。
 - **请求头 `tenant-id` 不能覆盖会话身份**：以会话 `tenantId` 为准，租户必须匹配，
   否则拿不到该租户的数据（实测：某演示会话实际解析为另一租户）。
+
+**按目标租户精确取会话，不要按手机号取"第一条"。** 同一个手机号可能在不同租户下都有账号，
+按手机号匹配会取到别的租户，进而把一个正确的 409 误判成回归（2026-11-01 实测两次）。
+先确认目标租户 id，再只输出该租户的会话；输出只打印键名是否命中，不打印会话值：
+
+```bash
+ssh aiops-41 '
+PW=$(grep -oE "^AIOPS_REDIS_PASSWORD=.*" /etc/aiops-41/production.env | cut -d= -f2)
+TARGET=1942105476598861824          # 目标租户，来自库里该受管行的 tenant_id
+for K in $(redis-cli -h 127.0.0.1 -p 6379 -a "$PW" --no-auth-warning --scan --pattern "app:3rd_session:*"); do
+  V=$(redis-cli -h 127.0.0.1 -p 6379 -a "$PW" --no-auth-warning get "$K" | tr -d " -¬")
+  case "$V" in
+    *"\"tenantId\":\"$TARGET\""*) echo "MATCH ${K#app:3rd_session:}";;
+  esac
+done'
+```
+
+取到之后**用之前再核一次**：`GET /v1/faq/recommendations` 200 只证明会话有效，
+不证明它属于目标租户。要判"该端是否开通"，读该租户在 `chat_route_bindings` /
+`operator_apps` 里对应 `(entry, scenario)` 的行，而不是看会话本身。
 - 先冒烟验证再使用：`GET /v1/faq/recommendations` 返回 200 即有效。
 - 会话是业务方提供的敏感凭据：**不落仓库、不贴文档、不写聊天记录**。
 
