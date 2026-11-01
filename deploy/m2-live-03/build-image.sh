@@ -89,7 +89,9 @@ section = lock.setdefault("gateway_image", {})
 section.update(
     {
         "image": identity["image"].split(":")[0],
-        "image_id": identity["image_id"],
+        # **不写 image_id**：它每次构建都不同（构建时间戳进镜像元数据），
+        # 写进受版本控制的锁只会与 built_at 脱节，且锁的注释本来就声明不收它。
+        # 它的家在宿主上的 identity.json，preflight 从那里读。
         "source_sha256": identity["source_sha256"],
         "uv_lock_sha256": identity["uv_lock_sha256"],
         "base_image": identity["base_image"],
