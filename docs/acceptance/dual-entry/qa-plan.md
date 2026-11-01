@@ -60,6 +60,14 @@ uv run python tools/verification/check_dual_entry_management.py --out var/verify
 把每条请求关联到确切的 QA/run/版本。凭据从库外加密清单现场读取，不打印、不入库。
 消费者验收**不能**用平台身份、自签令牌或直写数据库替代。
 
+开工前查 `publish_audit_ledger` 最近 30 分钟有没有活动写入（并行的发布/回滚/演练会让
+你取证期间状态自己变；必须用 `julianday()` 比较，账本时间是带 `T` 的 ISO 8601），
+以及每条失败响应**先证明它打在哪个租户、哪个入口、哪个场景上**再判成因——有效会话只证明
+身份；`409 CHAT_ROUTE_UNAVAILABLE` 覆盖"从未开通""只开了另一端""该端指针丢了"，而**绑定
+被撤回是 410 `CHAT_ROUTE_RETRACTED`**，不能混为一谈。要拿"绑定没变"当结论的检查，取证前后
+各读一次 `revision` 比对。方法见
+[正常登录与原页面验收](../../agents/runtime-retirement-operations.md#正常登录与原页面验收)。
+
 ## 不在本映射里
 
 新域名/小程序/安装包、公网暴露、账号提权、额外主机、业务写动作：不在本次授权范围，
