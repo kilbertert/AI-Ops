@@ -1337,7 +1337,7 @@ class GatewayRuntime:
             if not dify_store.succeed(run_id):
                 raise chat_execution.ChatRunUnavailable("DIFY_RUN_NOT_ACTIVE", "dify run is no longer active")
         except chat_execution.ChatRunUnavailable as exc:
-            self._settle_dify_failed(dify_store, grant_store, run_id, qa_id, exc.code)
+            self._settle_dify_failed(dify_store, grant_store, run_id, qa_id, exc.code, detail=str(exc))
             _LOGGER.warning("chat dify route rejected: %s: %s", exc.code, exc)
             return
         except dify_chat_workflow.DifyWorkflowError as exc:
@@ -1359,10 +1359,12 @@ class GatewayRuntime:
                 registration.conversation_turn, question, answer, status_qa_id=qa_id
             )
 
-    def _settle_dify_failed(self, dify_store, grant_store, run_id, qa_id: str, code: str) -> None:
+    def _settle_dify_failed(
+        self, dify_store, grant_store, run_id, qa_id: str, code: str, detail: str | None = None
+    ) -> None:
         if run_id is not None:
             with contextlib.suppress(Exception):
-                dify_store.fail(run_id, code.lower())
+                dify_store.fail(run_id, code.lower(), detail=detail[:200] if detail else None)
         with contextlib.suppress(Exception):
             grant_store.revoke_for_qa(qa_id)
         self.store.update_assistant_question(qa_id, status="failed", error_code=code)
