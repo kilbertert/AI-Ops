@@ -40,23 +40,40 @@
   有活动写入就等它停，或换一个不受影响的应用/租户再验。**不要**把"正在被别人改"的现象
   当成缺陷。
 
+  **账本只说明"开工前"的状态，不保证验收期间静止。** 验收开始后别人仍可能发布。
+  凡是要拿"绑定/版本没变"当结论的检查，取证**前后各读一次**目标绑定并比对：
+
+  ```sql
+  SELECT environment, tenant_id, entry, scenario, revision, agent_version_no, state
+    FROM chat_route_bindings
+   WHERE tenant_id = '<租户>' AND entry = '<entry>' AND scenario = '<scenario>';
+  ```
+
+  `revision` 前后不一致 ⇒ 这轮取证期间有人改过，该轮结论作废重来；不要用"我读的那一刻是好的"背书。
+
 - **每条失败响应都要先证明它问的是哪个租户、哪个入口、哪个场景，再判成因。**
-  `409 CHAT_ROUTE_UNAVAILABLE`（业务执行路由未配置）只说明**这一端这一场景**没有活动绑定，
-  它至少覆盖三种完全不同的情况：
+  助手入口的"没有可用路由"有**两个不同的状态码**，含义不能混：
+
+  | 响应 | 含义 | 判据 |
+  | --- | --- | --- |
+  | `409 CHAT_ROUTE_UNAVAILABLE` | 这一端这一场景**从来没有**活动绑定 | 该 `(environment, tenant_id, entry, scenario)` 在 `chat_route_bindings` 里没有行，或该行不是 `active` 且**不存在已撤回的行** |
+  | `410 CHAT_ROUTE_RETRACTED` | 这条绑定**被撤回过**（撤回是显式决定，不回落直读） | 同 key 有一行 `state=retracted` |
+
+  409 本身还要再分三种情况，它们的处置完全不同：
 
   | 情况 | 判据 |
   | --- | --- |
-  | 该租户从未开通 | 两张表里该租户都没有行 |
-  | **只开通了另一端**（如只开了管家端，消费者来问） | `operator_apps` 有行，但该端的 `consumer_service` 没有活动绑定 |
-  | 已开通但绑定被撤回/丢失 | 该端有登记，但 `chat_route_bindings` 里对应场景没有 `active` 行 |
+  | 该租户从未开通 | `chat_route_bindings` 与 `operator_apps` 里该租户都没有行 |
+  | **只开通了另一端**（如只开了管家端，消费者来问） | `operator_apps` 有 `entry=operator` 的行，但 `consumer` + `consumer_service` 没有活动绑定 |
+  | 该端有登记但指针丢了 | 该端在 `operator_apps` 有行，但对应场景没有 `active` 行、也没有 `retracted` 行 |
 
   **不能用"该租户在这两张表里有多少行"推断当前端的运行能力**——单端开通的租户会因此被误诊成
   "管家端开通后路由丢了"。正确做法是先确认这条请求的租户、入口与场景，再查
-  `chat_route_bindings` 里 `(environment, tenant_id, entry, scenario)` 那一行是否 `active`；
-  `operator_apps` 里的登记只说明"有过应用"，草稿、已撤回的行都不构成可运行绑定。
+  `chat_route_bindings` 里 `(environment, tenant_id, entry, scenario)` 那一行的 `state`；
+  `operator_apps` 里的登记只说明"有过应用"，草稿行不构成可运行绑定，已撤回的行构成的是 410 而不是 409。
 
   2026-11-01 实测过这个错法：按手机号从 Redis 里匹配到的会话属于另一个**未开通**租户，
-  于是把一个正确的拒绝当成了回归。有效会话只证明身份，不证明该端已开通。
+  于是把一个正确的 409 当成了回归。有效会话只证明身份，不证明该端已开通。
 
 - C端按原H5手机号验证码流程登录，用浏览器实际存储的third_session请求；有效会话回读仍需结果在有效期内。
 - 验收资产的历史“固定码”描述不能替代当前验证码。通过原页面正常发码后，按受控配置读取
