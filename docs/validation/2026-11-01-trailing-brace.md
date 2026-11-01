@@ -34,9 +34,20 @@
    **不含句号、逗号、中文标点** —— 那些没有样本，放宽就多一分把一段话当尾巴的空间。
 
 **同一份输出还有三个解析点**，一起改：`consumer_chat_service` 存 `reply_source`
-的那一处、`consumer_knowledge._has_reply`、`final_answer` 里的通知归一化。
-只改其中一两处的话，宽容了解析却存不下正文、或者正文退回固定文案 ——
-同一个成因换了个地方失败（后两处是 Devin 在 #1294 上逐条指出的）。
+的那一处、`consumer_knowledge._has_reply`、`final_answer` 里的通知归一化
+（后两处是 Devin 在 #1294 上逐条指出的）。
+
+三处的失败方式不同，逐一实测过：
+
+| 位置 | 只改解析、不改这里会怎样 |
+|---|---|
+| `store_reply_source` | 答出来了，但正文存不下 → 整轮 `ValueError` |
+| `_has_reply` | 正文被判丢，claim 类答复退回固定文案 |
+| 通知归一化 | 抛 `JSONDecodeError`，把**本可交付**的系统兜底变成整轮失败 |
+
+第三处的边界值得写清：能承载模型正文的 `clarify/not_found/human` 在
+`no_result`/`found` 下由 `answer_selection` 直接交付，走不到归一化；
+走到归一化的只有服务侧不可用那一支，那里**按设计**用系统文案。
 
 拒绝的边界同样重要：`{"kind":"x"} 好的`、`好的{"kind":"x"}`、半截对象、纯文本
 仍然整轮失败 —— 那些不是格式手滑，是没按协议答。放宽它们会让"把正文当 JSON 交"
