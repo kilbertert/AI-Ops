@@ -40,3 +40,18 @@ C 端模型参数：`max_tokens=1000`、`enable_thinking=false`、`temperature=0
 
 已纠正交接两点：`--live-documents` 走 `live_documents`、不整图替换（上一版回执判断有误）。
 下一步：旧 SYSTEM 技术协议冲突验证 → 真实模型预览 → 发布 → 正式新会话 → 恢复。
+
+## 第七轮：失败取证（2026-11-01）
+
+生产订单查询报 `reason=CHATFLOW_ANSWER_INVALID`、`reject_detail=invalid document answer`,
+`data_kind=status`，落点在 `consumer_documents.answer_selection` 的 `json.loads` ——
+即模型这一轮**没有输出 JSON**。要修就得先知道它输出的是什么形态。
+
+- #1288：`reason` 保持稳定错误码，新增 `reject_detail` 记具体判据（已部署）。
+- 本轮：在 `json.loads` 失败处补**形态**（`empty` / `fenced` / `json_syntax` /
+  `plain_text:<长度>` / `not_text:<类型>`），**不记原文** —— 原文是用户可见文本，
+  可能含订单号金额。详见 `docs/validation/2026-11-01-answer-shape.md`。
+
+下一步：部署后重跑订单查询（真实用户会话 `07b9229f…`、订单 `2109928861763776513`），
+按读到的形态决定改协议块约束、解析端容忍围栏，还是调 `max_tokens`。
+**业务验收未完成。**

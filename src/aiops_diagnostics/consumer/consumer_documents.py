@@ -97,11 +97,33 @@ def _fill_fact_slots(text: str) -> str:
     return text.replace("{_FACT_SLOTS}", " ".join("{{fact:" + name + "}}" for name in CLIENT_FACTS))
 
 
+def _json_failure_shape(raw) -> str:
+    """描述"为什么不是 JSON"，**不含原文**。
+
+    原文是模型生成的用户可见文本（可能含订单号、金额），不能写进 `reject_detail`。
+    但排障真正需要的是**形态**：是空、是带围栏的 JSON、是纯文本，还是 JSON 但截断。
+    2026-11-01 订单链路只拿到 `invalid document answer` 时，无法区分"模型没按 JSON 答"
+    与"模型答了 JSON 但被围栏包住"，这一条就是为那次缺口加的。
+    """
+    if not isinstance(raw, str):
+        return f"not_text:{type(raw).__name__}"
+    text = raw.strip()
+    if not text:
+        return "empty"
+    if text.startswith("```"):
+        return "fenced"
+    if text[:1] in "{[":
+        return "json_syntax"  # 看起来是 JSON 但解析失败（截断/尾逗号/转义）
+    return f"plain_text:{len(text)}"  # 纯文本，只记长度
+
+
 def answer_selection(raw, context, *, language="", contract="legacy"):
     try:
         selected = json.loads(raw)
     except (ValueError, TypeError) as exc:
-        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid document answer") from exc
+        raise ChatRunUnavailable(
+            "CHATFLOW_ANSWER_INVALID", f"invalid document answer ({_json_failure_shape(raw)})"
+        ) from exc
     # 线上应用（documents 契约）可以在 realtime 分支多带一个 `reply`：编排页的提示词
     # 用它写正文。其它 kind 不许带 —— 没有取数依据的一段话不能冒充知识库回答。
     if (
