@@ -61,7 +61,7 @@ route_revision           12
 exec_config_state        matched
 state                    succeeded
 scope.effective_tenant_id 1942105476598861824
-scope.caller             b_user_id=1942105476975915010  username=ulink  user_type=1
+scope.caller             b_user_id=<脱敏>  username=<运营账号>  user_type=1
 scope.permissions        ["aiops:diagnoses:write"]
 ```
 
@@ -88,19 +88,18 @@ scope.permissions        ["aiops:diagnoses:write"]
 
 ### 4.2 真实订单反例（同一员工身份）
 
-`ch_order_info` 里 Ulink（`1942105476598861824`）有 237 张订单；另取租户
-`1941847786056323072` 的一张订单做反例。
+`ch_order_info` 里 Ulink 租户有 237 张订单；另取**另一个租户**的一张订单做反例。
 
 | 用例 | 结果 |
 | --- | --- |
-| 本租户订单 `2116606276462800897` | **200 `completed`**，正文给出订单号、状态「充电结束」、电费 1.2 / 服务费 1.2 / 合计 2.4、电量 0.4003 kWh、停止原因 `Remote`。`agent_runs.state=succeeded`，同一 operator 绑定 rev 12 |
-| **另一租户**订单 `2100540689371045889` | **403** `CPMS_INVALID_RESPONSE`「operator request unavailable」 |
+| 本租户订单（脱敏） | **200 `completed`**，正文给出订单号、状态「充电结束」、电费/服务费/合计、电量、停止原因 `Remote`。`agent_runs.state=succeeded`，同一 operator 绑定 rev 12 |
+| **另一租户**订单（脱敏） | **403** `CPMS_INVALID_RESPONSE`「operator request unavailable」 |
 
 外租户订单被拒，说明"公司账号能登录"不等于"能读任意租户的订单"。
 
 ### 4.3 伪造租户头无效
 
-在页面上下文里给同一请求加 `tenant-id: 1941847786056323072`、`site: <同一值>`，
+在页面上下文里给同一请求加 `tenant-id: <另一租户>`、`site: <同一值>`，
 服务端 `agent_runs` 记录的仍是 `effective_tenant_id=1942105476598861824`、
 `chat_binding=…:1942105476598861824`。租户取自令牌，不取自请求头。
 
