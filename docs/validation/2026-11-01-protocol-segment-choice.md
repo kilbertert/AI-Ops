@@ -32,8 +32,15 @@ context_digest.py --check                     → match: true（rebase 后按实
 模型运行时读的是 Dify 工作流里**保存的** SYSTEM 文本，不是这个 Python 模块。
 所以本改动单独合并**不会改变生产行为**。完整路径：
 
-1. `tools/content/upgrade_consumer_flow.py --live-documents` 迁移现役工作流的协议块
-   （只替换带 `<!-- aiops-protocol:` 标记的那一块，运营文字逐字保留）。
+1. `tools/content/upgrade_consumer_flow.py --live-documents` 迁移现役工作流。
+   **注意它不只替换协议块**（`live_documents()` 里逐条可见）：
+   - 协议块：只换带 `<!-- aiops-protocol:` 标记的那一块，运营文字逐字保留；
+   - `environment_variables`：重建 `knowledge_answer_mode=documents` 与
+     `answer_fact_contract=slots`（同名先删后加，避免发布门判"环境变量重复"）；
+   - `start` 节点的 `language` 选项被重置为 `SUPPORTED_LANGUAGES`；
+   - `answer` 节点的 `memory.query_prompt_template` 被重写；
+   - `disabled` 节点的 `answer` 被固定为 unavailable 的 JSON。
+   所以迁移**不是**"只改一句话"，发布前要把这几项与线上现状逐条比对。
 2. 经 `POST /v1/dify/publish` 发布，使 `callback_version` 从新内容冻结。
 3. 同一订单连续 ≥10 次真实会话，确认 `CHATFLOW_FACT_UNKNOWN` 消失。
 
