@@ -159,6 +159,11 @@ class DifyRunStore:
                 ("data_kind", "TEXT NOT NULL DEFAULT 'status'"),
                 ("context_json", "TEXT"),
                 ("reply_source", "TEXT"),
+                # 失败时的**具体判据**（`ChatRunUnavailable` 的那句说明）。
+                # `reason` 是稳定错误码，调用方按它分支，语义不能改；但一个码常覆盖多种
+                # 情形（`CHATFLOW_ANSWER_INVALID` 同时可能是片段外复述、片段缺失、字段不符）。
+                # 2026-11-01 排查订单链路时正因为只有码，无法判断是提示词不明确还是守卫过严。
+                ("reject_detail", "TEXT"),
                 ("language", "TEXT NOT NULL DEFAULT 'zh'"),
                 ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
             ):
@@ -419,14 +424,20 @@ class DifyRunStore:
             )
             return cursor.rowcount == 1
 
-    def fail(self, run_id: str, reason: str) -> bool:
+    def fail(self, run_id: str, reason: str, detail: str | None = None) -> bool:
+        """`running → failed`。
+
+        `reason` 仍是**稳定错误码**（调用方按它分支，语义不变）；
+        `detail` 是可选的具体判据，单独存进 `reject_detail` —— 一个码常覆盖多种情形，
+        只有码时无法事后判断成因。
+        """
         with self._connection(write=True) as connection:
             cursor = connection.execute(
                 """
-                UPDATE chat_dify_runs SET state = ?, reason = ?, completed_at = ?
+                UPDATE chat_dify_runs SET state = ?, reason = ?, reject_detail = ?, completed_at = ?
                  WHERE run_id = ? AND state = ?
                 """,
-                (FAILED, reason, _now().isoformat(), run_id, RUNNING),
+                (FAILED, reason, detail, _now().isoformat(), run_id, RUNNING),
             )
             return cursor.rowcount == 1
 

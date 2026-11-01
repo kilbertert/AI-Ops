@@ -227,3 +227,34 @@ def test_thai_and_khmer_start_a_chatflow(tmp_path, monkeypatch):
             assert done(env, response.json()["qa_id"]).json()["status"] == "completed"
         assert len(Client.calls) == 2
         assert env["app"].state.gateway.store.count_assistant_questions() == 2
+
+
+def test_failure_reason_records_the_specific_judgement_not_only_the_code(tmp_path, monkeypatch):
+    """失败行的 `reason` 要能事后分辨成因，而不只是一个稳定错误码。
+
+    2026-11-01 排查订单链路时踩到：`CHATFLOW_ANSWER_INVALID` 同时覆盖
+    "片段外复述状态""片段缺失""字段不符"等多种情形，只留码无法判断
+    是提示词没写清楚、还是守卫过严。`ChatRunUnavailable` 自身带具体判据
+    （`str(exc)`），把它一并记进 `reason` 就能事后区分。
+    """
+    from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
+
+    with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
+        configure(env, monkeypatch)
+
+        def failure():
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "required evidence segment missing")
+
+        Client.before = failure
+        first = ask(env).json()
+        assert done(env, first["qa_id"]).json()["status"] == "failed"
+        import sqlite3
+
+        with sqlite3.connect(env["db"]) as db:
+            reason, detail = db.execute(
+                "SELECT reason, reject_detail FROM chat_dify_runs WHERE qa_id=?", (first["qa_id"],)
+            ).fetchone()
+        # `reason` 仍是稳定错误码——调用方按它分支，语义不变。
+        assert reason == "CHATFLOW_ANSWER_INVALID"
+        # 具体判据单独存，才能事后区分"提示词不明确"还是"守卫过严"。
+        assert detail == "required evidence segment missing"

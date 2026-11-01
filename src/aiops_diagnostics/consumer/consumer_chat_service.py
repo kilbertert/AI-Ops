@@ -320,7 +320,13 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             if isinstance(exc, (DifyWorkflowError, chat_execution.ChatRunUnavailable))
             else "CHATFLOW_UNAVAILABLE"
         )
-        store.fail(run_id, code)
+        # `reason` 保持稳定错误码；具体判据单独记，便于事后区分成因
+        # （同一个码可能覆盖片段外复述、片段缺失、字段不符等多种情形）。
+        store.fail(
+            run_id,
+            code,
+            str(exc).strip()[:200] if isinstance(exc, chat_execution.ChatRunUnavailable) else None,
+        )
         runtime.store.update_assistant_question(qa["qa_id"], status="failed", error_code=code)
         runtime._release_conversation_turn(registration.conversation_turn)
     finally:
