@@ -81,6 +81,14 @@
   **同一手机号可存在于多个租户**，所以取会话要按目标 `tenantId` 精确匹配，不要按手机号取第一条：
   [`env-41-runbook.md` §4.1](env-41-runbook.md) 有可直接运行的脚本。
 
+- **入口头在业务前端就可能被改写，别只看网关响应判"放没放行"。** 41 上管家 H5 站点的
+  `/etc/aiops-41/operator-h5-proxy.inc` 有 `proxy_set_header X-Business-Entry operator;`
+  并清空 `X-Third-Session` / `X-AIOps-Source-Key`。所以在这一页上把 `X-Business-Entry`
+  改成 `consumer` 是**测不出来的**：请求出浏览器前就被换回 `operator`，网关照样 202。
+  2026-11-01 踩过一次，差点把"nginx 改头"读成"网关放过伪造成员身份"。判据是网关日志里的
+  `faq_platform_decision … reason=<consumer_entry|operator_entry>` 或站点 nginx 配置本身；
+  真要测跨入口，换一个域名打网关。
+
 - **证明"读了知识库"要用库内专有内容，不能用本地短路分支的常量。** 消费者入口在检索**之前**
   先匹配 `SAFETY`（冒烟/发热/触电…）与 `HUMAN`（转人工…）两条正则，命中就直接返回常量文案、
   **根本不查库**。用这类问题取证时，回答与库内容"一致"只是因为常量本来就和写好的条目相同，
