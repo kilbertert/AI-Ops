@@ -66,16 +66,20 @@ run: consumer-chatflow:service_951700b693f341
 
 即"能直连上游"不等于"能交付给消费者"，中间那道 `require_owned` 是有效的。
 
-## I 管家站点范围 —— **未执行（缺凭证，不是故障）**
+## I 管家站点范围 —— **已补做并通过**（本节初版结论有误，见下）
 
-- 管家入口在线：`https://ulinkmanage.h5.mall.qushiyun.com/` **200**，
-  `/v1/shortcuts` **401**（需登录）。
-- 库外资产里**没有员工端（管家 H5 / tenant-app）的登录凭据**：只有
-  `aiops-41-platform-dify`（平台 Dify）与两租户的消费者手机号/账号。
-- 41 上现有 3 条 Ulink 会话全部是**在线真实客户**，不冒用。
+本项初版记的是"未执行（缺凭证）"。**这个结论是错的**：库外清单里
+`aiops-ulink-account-20261030` / `aiops-youlianchong-account-20261030` 的 `kind` 就是
+`account+password`，正是管家 H5（tenant-app）的登录形态；我把它们和 `phone+fixed-code`
+的消费者资产混成了"只有消费者账号"。
 
-所以本项不是"系统不通"，是**缺少受控的员工验收账号**。补一条 `tenant-app` 类型资产后
-即可执行，步骤与 G1 同形。
+补做结果（真实页面登录 + 真实会话 + 跨租户反例）见
+[`2026-11-01-t13-i-staff-entry.md`](2026-11-01-t13-i-staff-entry.md)。结论：
+
+- 员工端真实登录 **通过**（`/upms/token/login` 200，首页正文可见）；
+- 员工端助手 **通过**（`chat_binding=operator_order_diagnosis:production-41:1942…`，rev 12）；
+- 站点范围 **通过**：`user_type=1` 顶层租户账号，站点维度不受约束、范围等于整个租户；
+- 跨租户订单 **403 被拒**；伪造 `tenant-id` 头无效（租户取自令牌）。
 
 ## D 现役原客服迁移 —— **部分通过（资源留存与回滚语义已验；原入口双端复验未做）**
 
