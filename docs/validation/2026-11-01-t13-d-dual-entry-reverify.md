@@ -83,7 +83,7 @@ operator 目标的 manifest_file
 `node_publication.candidate()` 的过滤链是「模板里有的 ∩ Dify 侧勾了的」：
 
 ```python
-template = {item["name"]: item for item in body["tools"]}   # 来自 manifest_file
+template = {item["name"]: item for item in body["tools"]}  # 来自 manifest_file
 if not set(allowed).issubset(template):
     raise ValueError("CPMS tool missing from node template")
 body["tools"] = [template[name] for name in allowed]
