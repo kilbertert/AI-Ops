@@ -59,6 +59,10 @@
   | `409 CHAT_ROUTE_UNAVAILABLE` | 这一端这一场景**从来没有**活动绑定 | 该 `(environment, tenant_id, entry, scenario)` 在 `chat_route_bindings` 里没有行，或该行不是 `active` 且**不存在已撤回的行** |
   | `410 CHAT_ROUTE_RETRACTED` | 这条绑定**被撤回过**（撤回是显式决定，不回落直读） | 同 key 有一行 `state=retracted` |
 
+  **410 的前置是该端的能力开关已打开。** 以客户端为例，只有 `consumer_chatflow_enabled`
+  为真时请求才会走进 `select_binding()` 去看那条已撤回的行；开关关着时请求根本不查它，
+  最终仍是 409。所以看到 409 时要连开关一起看，不要把"没开能力"读成"绑定丢了"。
+
   409 本身还要再分三种情况，它们的处置完全不同：
 
   | 情况 | 判据 |
