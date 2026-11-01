@@ -179,6 +179,36 @@ fi
 guarded_phase "guarded acceptance" "$OUT/guarded.log"
 reverse_phase "reverse control (same fixtures, guard not enabled)" "$OUT/counter-proof.log"
 
+# 工具 schema 必须与声明逐字节一致（2026-11-01：节点对每个工具都用空参数 schema，
+# 与清单里的 name/address 对不上，verifyTools 判漂移、整轮起不来）。
+# 期望值从**同一份声明**算出，交给 Java 侧对实际构造出的工具自算一遍比对。
+schema_phase() {
+  local label="$1" log="$OUT/tool-schema.log"
+  local expected="" name digest
+  while IFS= read -r name; do
+    digest="$(cd "$REPO" && python3 -c "
+import sys, hashlib
+sys.path.insert(0, 'src')
+from aiops_diagnostics.operator import operator_tools
+print(hashlib.sha256(operator_tools.tool('$name').input_schema().encode()).hexdigest())
+")"
+    expected="$expected $name=$digest"
+  done < <(cd "$REPO" && python3 -c "
+import sys
+sys.path.insert(0, 'src')
+from aiops_diagnostics.operator import operator_tools
+print('\\n'.join(t.name for t in operator_tools.tools()))
+")
+
+  # 声明要带进容器：run_phase 只挂 /deps 与 /out，所以先拷进 $OUT。
+  cp "$REPO/src/aiops_diagnostics/operator/operator_tools.json" "$OUT/operator_tools.json"
+  run_phase "$label" "$log" "set -euo pipefail
+     java -Daiops.node.tools-file=/out/operator_tools.json \
+          -cp \"/out/classes:/deps/lib/*\" m3node.ToolSchemaParity$expected"
+}
+
+schema_phase "tool schema comes from the declaration"
+
 echo "== artifacts"
 sha256sum "$OUT/guarded.log" "$OUT/counter-proof.log" | tee "$OUT/logs.sha256"
 echo "STATUS=PASS"
