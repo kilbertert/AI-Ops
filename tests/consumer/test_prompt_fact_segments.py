@@ -218,3 +218,62 @@ def test_non_json_answer_reports_shape_without_leaking_text():
     assert _json_failure_shape("这单已经充电结束了。").startswith("plain_text:")
     # 形态里**不含**原文
     assert "充电" not in _json_failure_shape("这单已经充电结束了。")
+
+
+def test_a_complete_selection_followed_by_stray_punctuation_is_still_used():
+    """对象完整、只是尾巴多了 `"}"，不该判成坏答复。
+
+    2026-11-01 生产实测：同一版提示词 12 条答复里 4 条是这个形状，对象本身字段全对。
+    整轮丢掉它们，抹掉的是**已经成功取到数**的那一次。
+    """
+    from aiops_diagnostics.consumer.consumer_documents import load_selection
+
+    tail_only = (
+        '{"kind":"realtime","answer":"","reference_ids":[],'
+        '"reply":"{{fact:status_line}}\\n{{fact:observed_line}}"}"}'
+    )
+    assert load_selection(tail_only)["kind"] == "realtime"
+    assert load_selection('{"kind":"realtime","reference_ids":[]}}')["kind"] == "realtime"
+    # 对象里的花括号（事实片段）不参与"到哪儿结束"的判断
+    nested = '{"kind":"knowledge","answer":"a{b}c","reference_ids":["s1"]}'
+    assert load_selection(nested)["answer"] == "a{b}c"
+
+
+def test_tolerance_does_not_excuse_an_answer_that_is_not_a_json_object():
+    """放宽的边界：只救"对象 + 标点尾巴"。
+
+    前面带话、后面带句子、谱了一半的对象，都不是格式手滑，是没按协议答 ——
+    这些仍然整轮拒绝，否则"把正文当 JSON 交上来"会变成可以接受的行为。
+    """
+    import pytest
+
+    from aiops_diagnostics.consumer.consumer_documents import load_selection
+    from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
+
+    for raw in (
+        '{"kind":"x"} 好的',
+        '好的{"kind":"x"}',
+        '{"kind":"realtime","reference_ids":[',
+        "这单已经充电结束了。",
+        "",
+    ):
+        with pytest.raises(ChatRunUnavailable) as caught:
+            load_selection(raw)
+        assert caught.value.code == "CHATFLOW_ANSWER_INVALID"
+
+
+def test_every_reader_of_the_model_output_tolerates_the_same_tail():
+    """同一份输出有三个读取点，容忍度必须一致。
+
+    只放开 `answer_selection`、另外两处仍严格，会让"答出来了"变成"存不下正文"
+    或"正文退回固定文案" —— 同一个成因换个位置失败。2026-11-01 就是这样漏的：
+    先只想着解析，`store_reply_source` 与 `_has_reply` 都还在严格解析。
+    """
+    from aiops_diagnostics.consumer.consumer_knowledge import _has_reply
+
+    tail_only = (
+        '{"kind":"realtime","answer":"","reference_ids":[],'
+        '"reply":"{{fact:status_line}}\\n{{fact:observed_line}}"}"}'
+    )
+    assert _has_reply(tail_only) is True
+    assert _has_reply("这单已经充电结束了。") is False

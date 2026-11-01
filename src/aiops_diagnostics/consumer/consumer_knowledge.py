@@ -371,9 +371,14 @@ def live_answer(snapshot, language, *, localized=True, pack=None):
 
 
 def _has_reply(raw):
+    # 解析走 `load_selection`：同一份模型输出在 `answer_selection` 里已经被接受，
+    # 这里再严格一次只会把 `reply` 判丢、让正文退回固定文案。
+    from aiops_diagnostics.consumer.consumer_documents import load_selection
+    from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
+
     try:
-        body = json.loads(raw)
-    except (ValueError, TypeError):
+        body = load_selection(raw)
+    except ChatRunUnavailable:
         return False
     return isinstance(body, dict) and bool(body.get("reply"))
 
