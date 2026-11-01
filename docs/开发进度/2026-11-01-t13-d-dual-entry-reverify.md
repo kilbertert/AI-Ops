@@ -18,15 +18,19 @@
 | 真实登录 | 通过 | 通过 |
 | 落在正式绑定 | `operator_order_diagnosis` rev 12 | `consumer_service` rev 14 / v13 |
 | 本轮结果 | failed `OPERATOR_DIAGNOSIS_FAILED` | failed `CHATFLOW_ANSWER_INVALID` |
-| 原因 | 运行 manifest `tools=[]` → 节点无法调 `cpms_site_search` → 网关按 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收（4/4 复现） | 偶发解析不出合法 JSON（`json_syntax`）；同租户 170 条里 17 条失败（10%），按语言无差异（`en` 4/33、`zh` 13/113） |
+| 原因 | 运行 manifest `tools=[]` → 节点无法调 `cpms_site_search` → 网关按 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE` 拒收（4/4 复现） | 偶发解析不出合法 JSON（`json_syntax`）；同租户 170 条里 17 条失败（10%）；同原因按语言是 zh 11/113、en 1/33——样本太薄，不判语言是否成因 |
 
 D 仍判 **部分**，但与上一轮不同：**未通过的原因从"没做"变成了"做了并查出两个具体问题"**。
 
 ## 一条自己踩的坑
 
 初版把消费者端的失败分布写成「`en` 29 次全成功、13 次失败全是 `zh`」，据此暗示语言相关。
-实际 `GROUP BY` 全表是 `en` 4/33、`zh` 13/113——**同量级，与语言无关**。原因是计数时用了
-`| tail -10`，把 `en failed` 那一行截掉了。计数只用全表，不用管道尾部。
+改的时候又过头了：拿混算的 `en` 4/33、`zh` 13/113 反过来说「与语言无关」，同样站不住——
+那 17 条失败有三个不同原因，混在一起比没有意义。按同一原因拆开是 `zh` 11/113、`en` 1/33，
+`en` 的分子只有 1，样本太薄。**两个结论都不成立，只能记观测、不判成因。**
+
+两次都跟计数有关：第一次是 `| tail -10` 截掉了 `en failed` 那一行；第二次是没按原因分层。
+计数先出全表、再分层，两件都要做。
 
 另：`json_syntax` 只表示「输出以 `{` 或 `[` 开头但解析失败」，不等于模型没吐 JSON；
 截断、转义错误、尾逗号都落在这一档。
@@ -43,12 +47,14 @@ D 仍判 **部分**，但与上一轮不同：**未通过的原因从"没做"变
 `cpms_site_search`），需要到 36 的 Dify 控制台看实际勾选才能定。本记录只写定位路径，
 不写根因断言——`cpms_site_search` 的声明本身是对的（`applies_to:["conversation"]`）。
 
-## 交付索引没在本 PR 更新
+## 交付索引
 
-`docs/agents/current-delivery-state.md` 正被 `docs/youlian-operator-tenant` 与
-`fix/dify-handoff-acceptance` 两个活跃分支修改，`dev-worktree` 的冲突闸拦下了本分支对它的改动。
-本轮结论（**10-31 那条"两端原 H5 正例通过"不能当作当前可用性**）需要在其中一个分支落地后再补，
-或以独立小 PR 追加一行。
+`docs/agents/current-delivery-state.md` 顶部已补本轮结论：路由通过、两端回答失败，
+并明说 2026-10-31 那条「两端原 H5 正例通过」**不能当作当前可用性**。
+
+`pre-push` 的冲突闸报过 `branch-conflict`（该文件正被 `docs/youlian-operator-tenant` 与
+`fix/dify-handoff-acceptance` 改）。读闸的源码：它只**打印**提示、不阻断推送，
+所以照常提交；那两个分支若先合，本 PR 会有文本冲突，按本节结论取舍即可。
 
 ## 清理
 
