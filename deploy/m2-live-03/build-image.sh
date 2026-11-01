@@ -86,10 +86,16 @@ lock_path, identity_path = sys.argv[1], sys.argv[2]
 lock = json.load(open(lock_path))
 identity = json.load(open(identity_path))
 section = lock.setdefault("gateway_image", {})
+# `dict.update()` 不会删除既有键：如果这份锁是旧版本带来的、还带着 `image_id`，
+# 它会**原地活下来**，于是锁里出现"旧的 image ID + 新的时间戳和摘要"这一对矛盾。
+# 显式 pop 才是让"锁不含 image_id"在反复构建后依然成立的那一步。
+section.pop("image_id", None)
 section.update(
     {
         "image": identity["image"].split(":")[0],
-        "image_id": identity["image_id"],
+        # **不写 image_id**：它每次构建都不同（构建时间戳进镜像元数据），
+        # 写进受版本控制的锁只会与 built_at 脱节，且锁的注释本来就声明不收它。
+        # 它的家在宿主上的 identity.json，preflight 从那里读。
         "source_sha256": identity["source_sha256"],
         "uv_lock_sha256": identity["uv_lock_sha256"],
         "base_image": identity["base_image"],
