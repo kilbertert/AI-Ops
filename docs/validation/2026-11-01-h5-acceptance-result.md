@@ -2,13 +2,13 @@
 
 ## 做到了什么
 
-用库外受控验收账号 `aiops-ulink-phone-20261030`（Ulink 租户 `1942105476598861824`）
+用库外受控验收账号 `aiops-ulink-phone-20261030`（Ulink 租户；账号只按 asset_id 引用）
 在**原 H5 页面**完成真实登录：
 
 1. `https://ulink.h5.mall.qushiyun.com/shopPackage/pages/login/index`
 2. 填手机号 → 勾选隐私协议（`.agree_circle`）→ Next → 页面发码
    （"Code sent. Resend in 56 seconds"）
-3. 从受控 Redis `ver_code_default::13333555555` **在内存读取当次验证码**（TTL 281s），
+3. 从受控 Redis `ver_code_default::<验收手机号>` **在内存读取当次验证码**（TTL 281s），
    填回同一页面提交。**未打印、未写入 Redis、未使用固定码 8888**
 4. 登录成功，进入 H5 首页（站点地图 + Orders/My 等真实业务页）
 
