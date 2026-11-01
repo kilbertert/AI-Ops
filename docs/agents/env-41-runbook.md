@@ -1876,7 +1876,7 @@ ssh aiops-41 '
 PW=$(grep -oE "^AIOPS_REDIS_PASSWORD=.*" /etc/aiops-41/production.env | cut -d= -f2)
 TARGET=1942105476598861824          # 目标租户，来自库里该受管行的 tenant_id
 for K in $(redis-cli -h 127.0.0.1 -p 6379 -a "$PW" --no-auth-warning --scan --pattern "app:3rd_session:*"); do
-  V=$(redis-cli -h 127.0.0.1 -p 6379 -a "$PW" --no-auth-warning get "$K" | tr -d " -¬")
+  V=$(redis-cli -h 127.0.0.1 -p 6379 -a "$PW" --no-auth-warning get "$K" | tr -d "\000-\010")
   case "$V" in
     *"\"tenantId\":\"$TARGET\""*) echo "MATCH ${K#app:3rd_session:}";;
   esac
