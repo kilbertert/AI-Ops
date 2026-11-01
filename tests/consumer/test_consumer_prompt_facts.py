@@ -122,6 +122,24 @@ def test_legacy_contract_delivers_a_prompt_written_notice():
     assert "https://support.example/zh" in text
 
 
+def test_a_notice_with_a_trailing_brace_is_still_delivered():
+    """标点尾巴不能让澄清正文丢失：判对却取不出来，等于同一条缺陷换个位置。
+
+    Devin 在 #1294 上指出：`_has_reply` 接受带尾巴的对象、归一化时却仍用严格解析，
+    于是"请描述问题"这条正文在 `final_answer` 里被丢掉或报错。
+    """
+    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+
+    content = {"support": {"zh": {"label": "客服", "url": "https://support.example/zh"}}}
+    # documents 契约的字段是 answer/reference_ids/reply（`faq_id` 属于旧契约）。
+    # 走到归一化的那一支：取数不可用（`limited`）时 `answer_selection` 对
+    # 通知类返回 None，但原文**带了** reply —— 归一化要把这段正文保住。
+    context = {"status": "limited", "candidates": [], "mode": "documents"}
+    tail_only = '{"kind": "not_found", "answer": "", "reference_ids": [], "reply": "这次没查到对应资料。"}"}'
+    answer = final_answer(tail_only, context, "zh", content)
+    assert answer["retrieval_status"] == "unavailable"
+
+
 def test_legacy_contract_keeps_system_text_on_service_failure():
     """服务故障时以系统文案为准：模型没有故障信息，让它描述故障只会多一个错处。"""
     from aiops_diagnostics.consumer.consumer_knowledge import final_answer

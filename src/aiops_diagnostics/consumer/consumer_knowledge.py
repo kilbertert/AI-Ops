@@ -418,11 +418,16 @@ def final_answer(raw, context, language, content, *, copy_pack=None):
             return answer
         # 归一化时**不能丢 reply**：documents 契约的 clarify/not_found/human 正是靠它交付正文，
         # 而这里一旦丢掉，正文就会退回固定文案（复核实测到的第二个缺口）。
+        # 提取同样走 `load_selection`：`_has_reply` 已经接受了带尾巴的对象，这里再严格一次，
+        # 同一条澄清就变成"判得对、取不出来"。
+        from aiops_diagnostics.consumer.consumer_documents import load_selection
+
+        body = load_selection(raw) if _has_reply(raw) else {}
         raw = json.dumps(
             {
                 "kind": kind,
                 "faq_id": "",
-                **({"reply": json.loads(raw).get("reply")} if _has_reply(raw) else {}),
+                **({"reply": body.get("reply")} if body.get("reply") else {}),
             }
         )
     try:
