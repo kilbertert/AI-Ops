@@ -33,6 +33,7 @@ public final class OperatorTools {
     /** 一个工具的声明视图。Java 只关心装配需要的部分。 */
     record Entry(String name, String kind, String description, String source,
                  List<String> evidenceFields, List<String> appliesTo,
+                 List<String> modelInputs,
                  Map<String, com.fasterxml.jackson.databind.JsonNode> flags) {
     }
 
@@ -105,6 +106,24 @@ public final class OperatorTools {
         Entry entry = entries().get(name);
         if (entry == null) throw new ExecToolViolation("声明里没有这个工具: " + name);
         return entry.source();
+    }
+
+    /**
+     * 工具的参数 schema。**必须与 Gateway 侧 `operator_tools.OperatorTool.input_schema()`
+     * 逐字节一致** —— `verifyTools` 比的是这个字符串的 sha256，差一个空格就判漂移。
+     * 因此这里的拼接顺序、分隔符、键序都与 Python 那份逐字对应，改动要两边同改。
+     */
+    public static String inputSchema(String name) {
+        Entry entry = entries().get(name);
+        if (entry == null) throw new ExecToolViolation("声明里没有这个工具: " + name);
+        StringBuilder properties = new StringBuilder();
+        for (String input : entry.modelInputs()) {
+            if (properties.length() > 0) properties.append(',');
+            properties.append('"').append(input)
+                    .append("\":{\"type\":\"string\",\"maxLength\":80}");
+        }
+        return "{\"type\":\"object\",\"properties\":{" + properties
+                + "},\"required\":[],\"additionalProperties\":false}";
     }
 
     public static List<String> appliesTo(String name) {
@@ -216,8 +235,25 @@ public final class OperatorTools {
             Map<String, com.fasterxml.jackson.databind.JsonNode> flags = new LinkedHashMap<>();
             tool.path("response").path("flags").fields()
                     .forEachRemaining(f -> flags.put(f.getKey(), f.getValue()));
+            // 模型可以提议的参数。**必须读**：工具的 inputSchema 由它生成，而节点不读它时
+            // 只能退回一个空对象 schema，于是发布清单带来的真实 schema 与节点构造出的
+            // 定义对不上，`verifyTools` 判漂移、整轮失败（2026-11-01 站点工具即此）。
+            JsonNode declaredModelInputs = tool.path("model_inputs");
+            List<String> modelInputs = new java.util.ArrayList<>();
+            if (!declaredModelInputs.isMissingNode()) {
+                if (!declaredModelInputs.isArray()) {
+                    throw new ExecToolViolation("model_inputs 不合法: " + name);
+                }
+                for (JsonNode item : declaredModelInputs) {
+                    if (!item.isTextual() || item.asText().isBlank()) {
+                        throw new ExecToolViolation("model_inputs 不合法: " + name);
+                    }
+                    modelInputs.add(item.asText());
+                }
+            }
             if (result.put(name, new Entry(name, kind, description, source,
-                    List.copyOf(fields), List.copyOf(contexts), Map.copyOf(flags))) != null) {
+                    List.copyOf(fields), List.copyOf(contexts), List.copyOf(modelInputs),
+                    Map.copyOf(flags))) != null) {
                 throw new ExecToolViolation("重复的工具: " + name);
             }
         }

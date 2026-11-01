@@ -91,9 +91,12 @@ public final class CpmsReadTool implements ToolCallback {
     public CpmsReadTool(String name, Authorization authorization) {
         if (!OperatorTools.declares(name) || authorization == null) throw refused("unknown_tool");
         this.authorization = authorization;
+        // schema 取自**声明**，不是状态工具那个空参数常量：每个工具的模型参数不同，
+        // 而发布清单里的 schema 也来自同一份声明。两者必须是同一个字符串，
+        // `verifyTools` 比的就是它的 sha256（2026-11-01 站点工具曾因此整轮失败）。
         this.definition = DefaultToolDefinition.builder().name(name)
                 .description(OperatorTools.description(name))
-                .inputSchema(ControlledChargingStatusTool.SCHEMA).build();
+                .inputSchema(OperatorTools.inputSchema(name)).build();
     }
 
     @Override public ToolDefinition getToolDefinition() { return definition; }
