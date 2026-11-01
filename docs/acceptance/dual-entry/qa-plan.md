@@ -60,6 +60,11 @@ uv run python tools/verification/check_dual_entry_management.py --out var/verify
 把每条请求关联到确切的 QA/run/版本。凭据从库外加密清单现场读取，不打印、不入库。
 消费者验收**不能**用平台身份、自签令牌或直写数据库替代。
 
+开工前查 `publish_audit_ledger` 最近 30 分钟有没有活动写入（并行的发布/回滚/演练会让
+你取证期间状态自己变），以及每条失败响应**先证明它打在哪个租户上**再判成因——有效会话只
+证明身份，不证明该租户已开通。方法见
+[正常登录与原页面验收](../../agents/runtime-retirement-operations.md#正常登录与原页面验收)。
+
 ## 不在本映射里
 
 新域名/小程序/安装包、公网暴露、账号提权、额外主机、业务写动作：不在本次授权范围，
