@@ -1,6 +1,7 @@
 """管家非订单回合：模型理解问题，站点事实由当前权限下的CPMS响应生成。"""
 
 import json
+import logging
 import re
 
 from aiops_diagnostics.operator import operator_tools
@@ -154,17 +155,17 @@ def validate(answer, question):
         or not isinstance(answer["address_terms"], list)
         or len(answer["address_terms"]) > 4
     ):
-        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+        _answer_refused("answer_shape")
     terms = answer["address_terms"] + ([answer["name"]] if answer["name"] else [])
     spans = []
     for term in terms:
         if not isinstance(term, str) or not 1 <= len(term) <= 80 or not term.strip():
-            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+            _answer_refused("search_shape", "OPERATOR_INVALID_SEARCH")
         if any(c in term for c in "%_\\\r\n"):
-            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+            _answer_refused("search_characters", "OPERATOR_INVALID_SEARCH")
         span = question_span(term, question)
         if not span:
-            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+            _answer_refused("search_source", "OPERATOR_INVALID_SEARCH")
         spans.append(span)
     fixed = dict(
         answer,
@@ -182,8 +183,13 @@ def validate(answer, question):
         # （见 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE`），不在这里默认放行。
         validate_site_note(answer["text"])
     elif terms or not answer["text"].strip() or claims_mutation(answer["text"]):
-        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+        _answer_refused("answer_content")
     return fixed
+
+
+def _answer_refused(rule, code="OPERATOR_INVALID_ANSWER"):
+    logging.getLogger("aiops.operator").warning("operator_conversation_rejected rule=%s", rule)
+    raise OperatorRefused(code)
 
 
 def validate_site_note(text):
@@ -199,17 +205,19 @@ def validate_site_note(text):
     数量、名单、截断范围、无定位限制与来源由 :func:`render` 按本轮证据写出。
     """
     if not isinstance(text, str) or len(text) > MAX_SITE_NOTE_CHARS:
-        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+        _answer_refused("note_length")
     if not text.strip():
         return
     own = SITE_SLOT.sub(" ", text)
     if {name for name in SITE_SLOT.findall(text)} - set(SITE_FACTS):
-        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+        _answer_refused("note_slot")
     generic = re.sub(r"(?:目标|具体|某|该|这些|匹配的)站(?:点)?", "结果", own)
-    if SITE_FORBIDDEN.search(own) or SITE_NAME_SHAPE.search(generic):
-        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+    if SITE_FORBIDDEN.search(own):
+        _answer_refused("note_fact")
+    if SITE_NAME_SHAPE.search(generic):
+        _answer_refused("note_site_name")
     if claims_mutation(own):
-        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+        _answer_refused("note_mutation")
 
 
 #: 站点一次最多展示几条。与 ``operator_cpms.SITE_MAX_SHOWN`` 是**同一个上限**：

@@ -119,3 +119,16 @@ python3 -I path/to/probe_order_e2e.py "帮我分析这笔单的电费21160505162
   至少 20 次**，并把两次的时段写进记录。只跑一两次就下方向性结论，
   两次都是错的 —— 本仓库已实测踩过（把 0/8 当罪证、把 1/4 当回滚有效）。
 - 别拿"能跑通一次"当"稳定可用"。本轮 `completed` 只证明链路通，稳定性另计。
+
+## 站点回答拒收与验收标记恢复
+
+按本次 QA 查 `agent_runs.snapshot_json.evidence`：有 `cpms_site_search` 只证明工具取证，
+最终还须 `succeeded/matched` 和原页面正文。日志 `operator_conversation_rejected rule=`
+区分回答形状、关键词来源、说明长度/片段/事实/站名/动作断言；只记固定规则名。
+
+若已发布提示词留有历史验收标记，先逐字段比较对应不可变版本，不能只看 `snapshot.prompt`：
+节点实际读 `node_manifest.system_messages`。仅在已授权修复内，确认旧版除验收标记外
+逐字相等、无在途作业，备份路由和版本到项目私有备份目录，通过 `POST /v1/dify/restore`
+指定原应用与无标记版本；发布密钥从服务进程配置读取，走现役HTTP，不另构造生产app。
+恢复后检查审计、revision及其他路由不变；失败可用同API恢复原版本，不直接写数据库。
+恢复成功仍需原入口验证，不能把标记清理等同于稳定性改善。

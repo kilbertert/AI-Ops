@@ -886,3 +886,27 @@ def test_template_site_tool_is_not_duplicated():
     assert names == ["cpms_site_search"]
     # 模板那一条优先保留（描述沿用模板），schema 仍以声明为准。
     assert manifest["tools"][0]["description"] == "from-template"
+
+
+@pytest.mark.parametrize(
+    "text, rule",
+    [
+        ("私有内容" * 101, "note_length"),
+        ("私有内容{{fact:secret}}", "note_slot"),
+        ("私有内容7", "note_fact"),
+        ("私有虚构乙站", "note_site_name"),
+        ("私有内容已执行退款", "note_mutation"),
+    ],
+)
+def test_site_note_rejection_logs_only_the_rule(caplog, text, rule):
+    with pytest.raises(conversation.OperatorRefused, match="OPERATOR_INVALID_ANSWER"):
+        conversation.validate_site_note(text)
+    assert "operator_conversation_rejected rule=" + rule in caplog.text
+    assert "私有" not in caplog.text and "secret" not in caplog.text
+
+
+def test_conversation_rejection_logs_shape_without_answer(caplog):
+    with pytest.raises(conversation.OperatorRefused, match="OPERATOR_INVALID_ANSWER"):
+        conversation.validate({"private": "secret"}, "私有问题")
+    assert "rule=answer_shape" in caplog.text
+    assert "secret" not in caplog.text and "私有" not in caplog.text
