@@ -17,6 +17,8 @@
   站点名称/地址来自CPMS，未定位时不按距离排序；见[无订单对话](docs/agents/operator-cpms/conversation-qa.md)。
   无订单能力已上线并经ulink真实页面核验；[最新回执](docs/validation/2026-10-29-z14-operator-conversation-verified.md)
   另保留订单诊断偶发JSON失败的未完成项。
+- 节点站点工具通过 Gateway 代理取数，代理保留租户身份与分页字段，模型证据只留声明字段。
+  管家与消费者按各自权限校验；节点、Gateway 和回调配置需配套交付，见[站点代理验证](docs/acceptance/site-tool-proxy/qa-plan.md)。
 - Dify 试用只接受已登记 `app_id`，按绑定运行 Dify/Java 草稿；不接受裸 prompt/旧工具白名单。
 - 未配置业务路线时返回 `CHAT_ROUTE_UNAVAILABLE`，不回落 Python、通用问答或旧 FAQ 匹配。
 - 固定 FAQ API、健康报告、确定性聚合、知识库与发布管理继续保留。

@@ -102,6 +102,11 @@ Gateway，最后从同一合并修订构建/部署Dify控制台桥。旧节点�
 
 ### 仅更新Java节点jar
 
+若同一 PR 改了 Gateway 授权/响应和回调模板，不能按仅换 jar 收尾：先保存三者恢复点，
+从合并修订构建节点、按模板渲染回调（保留宿主已有 Lua 模块配置），节点就绪后重跑标准 CD。
+该窗口不发验收请求，直到 Gateway、节点、回调全部回读一致；失败按相容的整套版本恢复，
+不通过单独回退旧节点让新 Gateway 继续运行。站点代理校验见 ADR-0192。
+
 先在开发机从合并修订`git archive <merge> services/execution-node`解出干净源码，
 按[离线构建方法](../../docs/agents/operator-cpms/output-contract-qa.md)执行Maven package。
 不依赖旧target目录；缓存未预置clean插件时无需下载，使用新的归档目录即可。
