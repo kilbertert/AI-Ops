@@ -262,3 +262,20 @@ def test_a_fact_rejection_says_which_line_and_which_rule(caplog):
     assert "line=3" in message
     # 取证的边界：记判定事实，不记原文。
     assert "1.00" not in message and secret_line not in message
+
+
+def test_a_settlement_claim_is_refused_because_we_have_no_such_evidence():
+    """结算状态是**我们根本没有证据**的字段，正文不能断言它。
+
+    真实订单的 `cpms_order_detail` 34 个字段里没有任何 settlement 字段（接口缺口，
+    见 ADR-0193）。所以旁白里说「这单尚未结算」「已经结算完成」是在**凭空断言** ——
+    这与凭空写金额是同一类风险，而 `check_notice`（查数字）和 `check_status_prose`
+    （查充电/完成）都不会拦它。实测四句全部放行。
+
+    这条同时守住需求里点名的那条线：不得用充电状态冒充结算状态。
+    """
+    from aiops_diagnostics.operator.operator_cpms import OperatorRefused, _validate_reply_facts
+
+    for claim in ("这单尚未结算。", "该订单已经结算完成。", "结算状态是已结算。"):
+        with pytest.raises(OperatorRefused):
+            _validate_reply_facts("我帮你核对了本次记录。\n{{fact:order_facts}}\n" + claim)
