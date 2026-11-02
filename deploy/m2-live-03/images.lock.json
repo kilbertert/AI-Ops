@@ -11,12 +11,12 @@
     "sha256": "e3ee149baa7502583422c08cced9eb026b3ebd711c3770c45d8d61e1f6a10988",
     "bytes": 106302208,
     "source_commit": "c7592948",
-    "build": "由本仓 services/execution-node 构建（可复现：pom 固定 project.build.outputTimestamp，同一份源码两次构建得到同一摘要）；构建命令见 tools/README.md",
+    "build": "\u7531\u672c\u4ed3 services/execution-node \u6784\u5efa\uff08\u53ef\u590d\u73b0\uff1apom \u56fa\u5b9a project.build.outputTimestamp\uff0c\u540c\u4e00\u4efd\u6e90\u7801\u4e24\u6b21\u6784\u5efa\u5f97\u5230\u540c\u4e00\u6458\u8981\uff09\uff1b\u6784\u5efa\u547d\u4ee4\u89c1 tools/README.md",
     "source_sha256": "d8e30493ed99beca151710e681e1adb3468a47877cf867defa4943cfd5e5321d",
-    "source_digest_rule": "services/execution-node 下除 target/__pycache__/.idea 外全部文件的路径+内容摘要；命令见 deploy/node-runtime/source_digest.py"
+    "source_digest_rule": "services/execution-node \u4e0b\u9664 target/__pycache__/.idea \u5916\u5168\u90e8\u6587\u4ef6\u7684\u8def\u5f84+\u5185\u5bb9\u6458\u8981\uff1b\u547d\u4ee4\u89c1 deploy/node-runtime/source_digest.py"
   },
   "base_images": {
-    "_comment": "按 ref 记录每个宿主实跑/实拉到的镜像身份。41 上 docker.io 直连不可达，ref 带宿主加速前缀；开发机用不带前缀的 ref。preflight 只认锁里的 ref 和它的 image ID，不认 tag 名，也不接受镜像覆盖参数绕开。",
+    "_comment": "\u6309 ref \u8bb0\u5f55\u6bcf\u4e2a\u5bbf\u4e3b\u5b9e\u8dd1/\u5b9e\u62c9\u5230\u7684\u955c\u50cf\u8eab\u4efd\u300241 \u4e0a docker.io \u76f4\u8fde\u4e0d\u53ef\u8fbe\uff0cref \u5e26\u5bbf\u4e3b\u52a0\u901f\u524d\u7f00\uff1b\u5f00\u53d1\u673a\u7528\u4e0d\u5e26\u524d\u7f00\u7684 ref\u3002preflight \u53ea\u8ba4\u9501\u91cc\u7684 ref \u548c\u5b83\u7684 image ID\uff0c\u4e0d\u8ba4 tag \u540d\uff0c\u4e5f\u4e0d\u63a5\u53d7\u955c\u50cf\u8986\u76d6\u53c2\u6570\u7ed5\u5f00\u3002",
     "refs": {
       "26agah86.mirror.aliyuncs.com/library/mysql:8.0": {
         "host": "host-41",
@@ -48,12 +48,12 @@
     }
   },
   "gateway_image": {
-    "_comment": "由 deploy/m2-live-03/build-image.sh 在开发机/runner 构建。这里记录**可复现**的内容身份：source_sha256（src+tools+requirements+Dockerfile 的归档摘要）与 uv_lock_sha256。image_id 每次构建都不同（构建时间戳进镜像元数据），所以它不写进仓库：它在宿主加载制品后由 build-image.sh 的 identity.json 记录，preflight 优先比对内容标签，identity.json 存在时再核对 image ID。 本文件**不记录 image_id**：它每次构建都不同（构建时间戳进镜像元数据），写一个静态值只会与 built_at 脱节。宿主的 identity.json 才是它的家。",
+    "_comment": "\u7531 deploy/m2-live-03/build-image.sh \u5728\u5f00\u53d1\u673a/runner \u6784\u5efa\u3002\u8fd9\u91cc\u8bb0\u5f55**\u53ef\u590d\u73b0**\u7684\u5185\u5bb9\u8eab\u4efd\uff1asource_sha256\uff08src+tools+requirements+Dockerfile \u7684\u5f52\u6863\u6458\u8981\uff09\u4e0e uv_lock_sha256\u3002image_id \u6bcf\u6b21\u6784\u5efa\u90fd\u4e0d\u540c\uff08\u6784\u5efa\u65f6\u95f4\u6233\u8fdb\u955c\u50cf\u5143\u6570\u636e\uff09\uff0c\u6240\u4ee5\u5b83\u4e0d\u5199\u8fdb\u4ed3\u5e93\uff1a\u5b83\u5728\u5bbf\u4e3b\u52a0\u8f7d\u5236\u54c1\u540e\u7531 build-image.sh \u7684 identity.json \u8bb0\u5f55\uff0cpreflight \u4f18\u5148\u6bd4\u5bf9\u5185\u5bb9\u6807\u7b7e\uff0cidentity.json \u5b58\u5728\u65f6\u518d\u6838\u5bf9 image ID\u3002 \u672c\u6587\u4ef6**\u4e0d\u8bb0\u5f55 image_id**\uff1a\u5b83\u6bcf\u6b21\u6784\u5efa\u90fd\u4e0d\u540c\uff08\u6784\u5efa\u65f6\u95f4\u6233\u8fdb\u955c\u50cf\u5143\u6570\u636e\uff09\uff0c\u5199\u4e00\u4e2a\u9759\u6001\u503c\u53ea\u4f1a\u4e0e built_at \u8131\u8282\u3002\u5bbf\u4e3b\u7684 identity.json \u624d\u662f\u5b83\u7684\u5bb6\u3002",
     "image": "aiops-m2-live-03-gateway",
     "uv_lock_sha256": "5c2eb20c285dcbcdfc21b2449da7a562bf8c74415bb1708451149ebf7cacdb6f",
     "base_image": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
     "base_digest": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
-    "source_sha256": "cde637b740de019b9cbfdae14afdadb6107a202e9606368f6232be4d5c46a84e",
+    "source_sha256": "0d2b01a3d6cb2ac27d3178b6b2f6583714e14afacb398bc60ef8b354b9e1bca5",
     "built_at": "2026-11-02T12:53:14Z"
   }
 }
