@@ -291,3 +291,22 @@ def test_protocol_says_to_use_only_the_segments_this_turn_actually_has():
     text = _protocol_block()
     assert "只引用本轮实际给出的段" in text
     assert "看不到billing_line就不要写它" in text
+
+
+def test_protocol_does_not_demand_both_segments_at_once():
+    """协议不能要求「账单必须引用 billing_line，状态必须引用 status_line」并列。
+
+    2026-11-02 生产实测（连续 2/2 复现）：账单查询里模型写的是
+    `{{fact:billing_line}}\n{{fact:status_line}}` —— 账单快照没有 status_role，
+    于是 `CHATFLOW_FACT_UNKNOWN / required evidence segment missing`。
+    根因是协议第 81 行把两段并列成"必须引用"，模型读成"两个都要写"；
+    后面那句"看不到就不要写"不足以抵消前面那句绝对措辞。
+
+    守卫本身是对的（两个方向都拦得住、只引对应那段则放行），所以这里只钉措辞。
+    """
+    from aiops_diagnostics.consumer.consumer_documents import _protocol_block
+
+    text = _protocol_block()
+    assert "账单必须引用billing_line，状态必须引用status_line" not in text
+    assert "账单查询只引billing_line" in text
+    assert "状态查询只引status_line" in text
