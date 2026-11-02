@@ -85,7 +85,11 @@ def environment(tmp_path, monkeypatch):
                 "gunPower": 23,
                 "phone": "PRIVATE-PHONE",
             }
-            if "/getChargingMonitor/" in self.path:
+            if self.path.startswith("/chOrderInfo/getOrderUserPage?"):
+                assert self.headers.get("user-id") == "USER-A"
+                rows = [] if state.get("empty_orders") else [row]
+                data = {"records": rows, "total": len(rows), "size": 50, "current": 1}
+            elif "/getChargingMonitor/" in self.path:
                 data = {"records": [], "total": 0, "size": 50, "current": 1}
             elif self.path.startswith("/chSite/page?"):
                 from urllib.parse import parse_qs, urlsplit
@@ -94,7 +98,7 @@ def environment(tmp_path, monkeypatch):
                     "records": [
                         {
                             "id": state["site"],
-                            "tenantId": state["tenant"],
+                            "tenantId": state.get("site_tenant", state["tenant"]),
                             "name": "天河测试站",
                             "address": "广州市天河区测试路",
                             "contactPhone": "PRIVATE-PHONE",

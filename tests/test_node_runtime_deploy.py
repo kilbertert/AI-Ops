@@ -90,6 +90,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     )
     context = ssl.create_default_context(cafile=str(certificate / "server.crt"))
     seen = []
+    contracts = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
@@ -98,6 +99,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
             self.end_headers()
 
         def do_POST(self):  # noqa: N802
+            contracts.append(self.headers.get("X-AI-Ops-Tool-Contract"))
             seen.append(
                 (
                     self.path,
@@ -172,22 +174,30 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
             assert error.value.code in (403, 404)
         assert len(seen) == 3
         root = "/v1/internal/operator-runs/run_test"
-        for tail in (
-            "completions",
-            "tools/cpms_order_detail/authorization",
-            "tools/cpms_charging_samples/evidence",
-        ):
+        from aiops_diagnostics.operator import operator_tools
+
+        tails = ["completions"] + [
+            f"tools/{tool.name}/{action}"
+            for tool in operator_tools.tools()
+            for action in ("authorization", "evidence")
+        ]
+        for tail in tails:
             path = root + "/" + tail
             with opener.open(
                 urllib.request.Request(
                     f"https://127.0.0.1:{port}{path}",
                     data=b"{}",
-                    headers={"Authorization": "Bearer node-token", "X-AI-Ops-Exec-Config": "manifest"},
+                    headers={
+                        "Authorization": "Bearer node-token",
+                        "X-AI-Ops-Exec-Config": "manifest",
+                        "X-AI-Ops-Tool-Contract": "request-target/1",
+                    },
                 ),
                 timeout=2,
             ) as res:
                 assert res.status == 204
             assert seen[-1] == (path, "Bearer node-token", "manifest", b"{}")
+            assert contracts[-1] == "request-target/1"
         path = root + "/cpms/iotChargingDevice/getChargingMonitor/ORDER-1?current=1&size=50"
         with opener.open(
             urllib.request.Request(
@@ -197,8 +207,32 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
         ) as res:
             assert res.status == 204
         assert seen[-1] == (path, "Bearer task-grant", None, b"")
+        for tool in operator_tools.tools():
+            target = tool.request({"order_no": "ORDER-1", "name": "天河"})
+            path = root + "/cpms" + target["path"] + "?" + target["query"]
+            with opener.open(
+                urllib.request.Request(
+                    f"https://127.0.0.1:{port}{path}", headers={"Authorization": "Bearer task-grant"}
+                ),
+                timeout=2,
+            ) as res:
+                assert res.status == 204
+            assert seen[-1] == (path, "Bearer task-grant", None, b"")
+        path = "/v1/internal/consumer-tools/run_test/chSite/page?current=1&size=50"
+        with opener.open(
+            urllib.request.Request(
+                f"https://127.0.0.1:{port}{path}", headers={"Authorization": "Bearer task-grant"}
+            ),
+            timeout=2,
+        ) as res:
+            assert res.status == 204
+        before_refused = len(seen)
         for path, method in [
             (root + "/tools/shell/authorization", "POST"),
+            (root + "/cpms/chSite/page/EXTRA", "GET"),
+            (root + "/cpms/chOrderInfo/getOrderInfoDetail", "GET"),
+            ("/v1/internal/consumer-tools/run_test/chOrderInfo/getOrderInfoDetail/ORDER-1", "GET"),
+            ("/v1/internal/consumer-tools/run_test/chSite/page", "POST"),
             (root + "/cpms/chOrderInfo/stopCharging/ORDER-1", "GET"),
             (root + "/cpms/chOrderInfo/getOrderInfoDetail/ORDER-1", "POST"),
         ]:
@@ -207,7 +241,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
                     urllib.request.Request(f"https://127.0.0.1:{port}{path}", method=method), timeout=2
                 )
             assert error.value.code in (403, 404)
-        assert len(seen) == 7
+        assert len(seen) == before_refused
     finally:
         proc.terminate()
         proc.communicate(timeout=5)
