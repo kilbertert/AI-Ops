@@ -131,8 +131,11 @@ public final class CpmsToolAcceptance {
                 // 站点页：行身份是**站点**（id / name / address），没有 orderNo。
                 if (mode.startsWith("site")) {
                     String site = "{\"id\":\"S1\",\"tenantId\":\"T1\",\"name\":\"Test Site\",\"address\":\"addr\"}";
+                    // 缺少身份字段的站点必须拒绝；代理响应也保留租户身份。
+                    if (mode.equals("site-proxied")) site = "{\"id\":\"S1\",\"name\":\"Test Site\",\"address\":\"addr\"}";
                     if (mode.equals("site-wrong-tenant")) site = site.replace("\"T1\"", "\"T2\"");
                     if (mode.equals("site-wrong-site")) site = site.replace("\"S1\"", "\"S9\"");
+                    if (mode.equals("site-missing-id")) site = site.replace("\"id\":\"S1\",", "");
                     body = "{\"code\":0,\"data\":{\"records\":[" + site + "],\"total\":1,\"current\":1,\"size\":50}}";
                 }
                 if (mode.equals("wrong-order")) body = body.replace("ORDER-1", "ORDER-2");
@@ -233,7 +236,7 @@ public final class CpmsToolAcceptance {
         check(result.path("data").path("records").size() == 1
                 && "S1".equals(result.path("data").path("records").get(0).path("id").asText()),
                 "site row accepted without an order number");
-        for (String test : new String[]{"site-wrong-tenant", "site-wrong-site"}) {
+        for (String test : new String[]{"site-wrong-tenant", "site-wrong-site", "site-proxied", "site-missing-id"}) {
             mode = test;
             int before = recorded;
             refuse(() -> site.call("{}", CONTEXT), test);
