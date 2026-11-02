@@ -121,12 +121,20 @@ public final class CpmsToolAcceptance {
                 check("admin".equals(exchange.getRequestHeaders().getFirst("client-type")), "CPMS company entry");
                 String path = exchange.getRequestURI().toString();
                 check(path.equals("/chOrderInfo/getOrderInfoDetail/ORDER-1")
-                        || path.equals("/iotChargingDevice/getChargingMonitor/ORDER-1?current=1&size=50"),
+                        || path.equals("/iotChargingDevice/getChargingMonitor/ORDER-1?current=1&size=50")
+                        || path.equals("/chSite/page?current=1&size=50&type=0"),
                         "the granted request target, not a path composed here");
                 String row = "{\"orderNo\":\"ORDER-1\",\"tenantId\":\"T1\",\"siteId\":\"S1\","
                         + "\"status\":2,\"createdTime\":\"2026-10-25 08:00:00\",\"phone\":\"PRIVATE-PHONE\"}";
                 String body = "{\"code\":0,\"data\":{\"orderNo\":\"ORDER-1\",\"siteId\":\"S1\",\"chOrderInfoModel\":" + row + "}}";
                 if (mode.equals("samples")) body = "{\"code\":0,\"data\":{\"records\":[" + row + "],\"total\":80,\"current\":1,\"size\":50}}";
+                // 站点页：行身份是**站点**（id / name / address），没有 orderNo。
+                if (mode.startsWith("site")) {
+                    String site = "{\"id\":\"S1\",\"tenantId\":\"T1\",\"name\":\"Test Site\",\"address\":\"addr\"}";
+                    if (mode.equals("site-wrong-tenant")) site = site.replace("\"T1\"", "\"T2\"");
+                    if (mode.equals("site-wrong-site")) site = site.replace("\"S1\"", "\"S9\"");
+                    body = "{\"code\":0,\"data\":{\"records\":[" + site + "],\"total\":1,\"current\":1,\"size\":50}}";
+                }
                 if (mode.equals("wrong-order")) body = body.replace("ORDER-1", "ORDER-2");
                 if (mode.equals("wrong-tenant")) body = body.replace("T1", "T2");
                 if (mode.equals("wrong-site")) body = body.replace("S1", "S2");
@@ -199,10 +207,39 @@ public final class CpmsToolAcceptance {
                     {"GET", "/x", "a\nb"}, {"GET", "/../etc/passwd", ""}}) {
                 refuse(() -> new CpmsReadTool.Request(bad[0], bad[1], bad[2]), "request target: " + bad[1]);
             }
+            siteSearchHasNoOrderIdentity();
             mixedVersionIsRefusedInBothDirections();
             toolSurfaceFollowsTheRunType();
             System.out.println("CPMS_TOOL_ACCEPTANCE PASS assertions=" + passed + " http_calls=" + calls.get());
         } finally { server.stop(0); }
+    }
+
+    /**
+     * 站点工具是一次**无订单**回合：授权里没有 `order_no`，行身份是站点不是订单。
+     *
+     * <p>2026-11-02 生产事故：`identity()` 对每一行都要求 `orderNo`，站点行没有这个字段，
+     * 于是 `cpms_scope_mismatch` 被 catch-all 转成 `cpms_unavailable`——看起来像网络故障，
+     * 实际是判据错。这条钉住「无订单授权 + 站点行必须通过」。
+     */
+    static void siteSearchHasNoOrderIdentity() throws Exception {
+        mode = "site";
+        // 先取出 baseUrl 再覆盖 grant：右值在赋值前求值，否则会拿到上一条已过期的授权。
+        String base = grant.baseUrl();
+        grant = new CpmsReadTool.Grant("grant-s", "T1", Set.of("S1"), JSON.readTree("{}"),
+                new CpmsReadTool.Request("GET", "/chSite/page", "current=1&size=50&type=0"),
+                base, "PRIVATE-TOKEN", Instant.now().plusSeconds(60));
+        var site = new CpmsReadTool("cpms_site_search", AUTH);
+        JsonNode result = JSON.readTree(site.call("{}", CONTEXT));
+        check(result.path("data").path("records").size() == 1
+                && "S1".equals(result.path("data").path("records").get(0).path("id").asText()),
+                "site row accepted without an order number");
+        for (String test : new String[]{"site-wrong-tenant", "site-wrong-site"}) {
+            mode = test;
+            int before = recorded;
+            refuse(() -> site.call("{}", CONTEXT), test);
+            check(recorded == before, "no evidence for rejected site page: " + test);
+        }
+        mode = "detail";
     }
 
     static CpmsReadTool.Grant detailGrant(String base) throws Exception {
