@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from aiops_diagnostics import __version__
+from aiops_diagnostics.common import order_reference
 from aiops_diagnostics.common.async_job_lifecycle import DIAGNOSIS, QUESTION
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.http_auth import (
@@ -2903,8 +2904,14 @@ def create_gateway_app(
             if binding is not None:
                 _require_operator_company_token(request)
                 order_context = names_order(payload.question)
+                # 有 15 位以上纯数字段时，**它就是这一轮要查的单**：`_extract_order_no` 从左
+                # 到右取第一个含数字的 token，遇到「TEST2026-10-29 这笔单2116…」会先抓日期。
+                # 门槛与提取因此共用 `order_reference.digit_runs` 这组候选。
+                runs = order_reference.digit_runs(payload.question)
                 order = (
-                    payload.order_no or (_extract_order_no(payload.question) if order_context else "") or ""
+                    payload.order_no
+                    or (runs[0] if runs else (_extract_order_no(payload.question) if order_context else ""))
+                    or ""
                 )
                 target = next(
                     (

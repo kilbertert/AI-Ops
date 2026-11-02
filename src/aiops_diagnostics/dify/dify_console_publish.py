@@ -1957,8 +1957,12 @@ def _native_order(query):
         return ""
     if order_reference.WHOLE_TOKEN.fullmatch(query.strip()) and any(c.isdigit() for c in query):
         return query.strip()
-    explicit = re.findall(
-        r"(?:订单(?:号)?|order(?:\s+(?:id|no|number))?)\s*[:：#]?\s*([A-Za-z0-9_.:-]+)",
+    # 中英分开写：中文可以紧贴（`订单2116…`），英文必须有分隔（`order 123` / `order no: 123`）。
+    # 共用一条正则时，`ORDER-1001` 里的 `ORDER` 会被当成英文单词再截出一个 `-1001`，
+    # 同一张单变成两个候选，整条请求被拒（2026-11-02 评审实测）。
+    explicit = re.findall(r"订单(?:号)?\s*[:：#]?\s*([A-Za-z0-9_.:-]+)", query) + re.findall(
+        r"(?<![A-Za-z])order(?![A-Za-z])(?:\s+(?:id|no|number))?\s*(?:[:：]\s*|\s+)"
+        r"([A-Za-z0-9_.:-]+)",
         query,
         re.IGNORECASE,
     )
@@ -1968,6 +1972,12 @@ def _native_order(query):
         raise _Rejected(400, "订单号包含不支持的字符，请只提供一个完整有效的订单号")
     candidates = set(re.findall(r"(?<![A-Za-z0-9_.:-])[A-Za-z0-9_-]{6,64}(?![A-Za-z0-9_.:-])", query))
     candidates = {s for s in candidates if any(c.isdigit() for c in s) and (not s.isdigit() or len(s) >= 15)}
+    # 15 位以上的纯数字段**就是**这一轮的单号。候选扫描与 `_extract_order_no` 一样从左到右
+    # 取第一个含数字的 token，遇到「TEST2026-10-29 这笔单2116…」会先抓日期；门槛与提取
+    # 因此共用 `order_reference.digit_runs` 这组候选（2026-11-02 评审实测）。
+    runs = order_reference.digit_runs(query)
+    if len(runs) == 1:
+        return runs[0]
     candidates.update(s for s in explicit if any(c.isdigit() for c in s))
     if not candidates:
         return ""

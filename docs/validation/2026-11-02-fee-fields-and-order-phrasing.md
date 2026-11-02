@@ -107,6 +107,60 @@ docker run --rm --network none --read-only --entrypoint python \
 
 镜像里跑出来的 `True` 是这次构建真的带上了新模块的证据，不只是摘要对上了。
 
+## 评审抓到的两个真缺陷（已修，附复现）
+
+首轮 CI 全绿、单测全绿、镜像可导入，但 Devin Review 提了三条，其中两条**实测成立**：
+
+### 1. 日期排在单号前面时查错单
+
+```
+帮我分析站点 TEST2026-10-29 这笔单2116050516255272961
+  门槛 names_order → True
+  提取 _extract_order_no → 'TEST2026-10-29'      ← 查的是日期，不是订单
+```
+
+根因是**门槛与提取看的不是同一组候选**：门槛只问「句中有没有 15 位以上数字段」，
+提取器却从左到右取第一个含数字的 token。修法是把候选集定成一个函数
+`order_reference.digit_runs()`，两个入口都用它；纯数字段唯一时它就是这一轮的单号。
+
+修后：网关取 `2116050516255272961`；`帮我查询充电站 TEST2026-10-29 03:00:09` 仍为空。
+
+### 2. 英文单号紧贴中文时预览桥把一张单算成两张
+
+```
+帮我分析这笔单的电费ORDER-1001
+  → REJECT「请在本条消息中填写一个明确订单号；暂不支持“上一个订单”」
+```
+
+显式提取的 `order` 没有词边界，从 `ORDER-1001` 的 `ORDER` 又截出一个 `-1001`；
+候选扫描另得 `ORDER-1001`，并集长度 2 ⇒ 判定「说了两张单」。
+
+修法不是加边界，而是**中英分开写**：中文允许紧贴（`订单2116…` 是原生写法），
+英文必须有分隔符（`order 123` / `order no: 123`）。只加 `(?<![A-Za-z])` 会连
+`订单号:…` 也匹配不到 —— 那条的中文前缀紧贴在 `order` 之前。
+
+两个缺陷各补了用例：预览桥的参数化表加了这两条原话与一条 `order no:` 写法；
+`tests/common/test_order_reference.py` 直接断言 `digit_runs` 是两处共用的候选集。
+
+**为什么它们没被单测发现**：我的用例都拿「日期不在句子里」和「单号是纯数字」的输入，
+评审的两条恰好是两者的交叉。这说明「补了字段/换了判据」不等于「所有既有输入都还成立」。
+
+## Devin 的第三条：Gateway 本地服务验证（已补）
+
+`names_order` 改变了 `/v1/assistant/questions` 的管家路由，按 AGENTS.md 只用 pytest
+不够。按 `.claude/skills/verify-aiops-gateway/SKILL.md` 在一次性数据根真跑服务：
+
+```
+uv run python .claude/skills/verify-aiops-gateway/scripts/observe.py --out dist/verification/gateway
+  /health -> 200        /v1/assistant/questions -> 401
+  /v1/agents -> 401     /v1/openapi.json -> 200
+  /v1/runs,/v1/enroll,/v1/standard/diagnoses,/v1/dify/tools/order_snapshot -> 404
+  all checks passed
+```
+
+**该 skill 的边界照实说**：它证明启动、鉴权面与退役路由，**不**证明管家订单诊断整链、
+真实 CPMS 或模型行为 —— 那些仍依赖远端，本轮未覆盖。
+
 ## 未做
 
 - 真实订单验收：这些字段是否真有值、币种与单位，需按

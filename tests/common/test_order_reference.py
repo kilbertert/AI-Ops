@@ -55,3 +55,17 @@ def test_both_entries_ask_this_one_predicate():
     assert "order_reference" in inspect.getsource(dify_console_publish._native_order)
     # 预览桥用的是同一份：订单句子但没有单号时返回空串，由下游澄清。
     assert dify_console_publish._native_order("我上一个订单是什么情况") == ""
+
+
+def test_digit_runs_is_the_candidate_set_both_the_gate_and_the_extractor_use():
+    """门槛说「有长数字段」时，提取必须取**那一段**，不是第一个含数字的 token。
+
+    2026-11-02 评审实测：站点名 `TEST2026-10-29` 排在真正单号前面时，旧写法放行之后
+    从左边先抓日期，于是「查这张单」变成「查这个日期」。
+    """
+    from aiops_diagnostics.common.order_reference import digit_runs
+
+    question = "帮我分析站点 TEST2026-10-29 这笔单2116050516255272961"
+    assert names_order(question)
+    assert digit_runs(question) == ["2116050516255272961"]
+    assert digit_runs("帮我查询充电站 TEST2026-10-29 03:00:09") == []

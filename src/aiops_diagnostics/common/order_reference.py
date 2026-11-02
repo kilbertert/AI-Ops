@@ -29,10 +29,23 @@ WHOLE_TOKEN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 DIGIT_RUN = re.compile(r"\d+")
 
 
+def digit_runs(text: str) -> list[str]:
+    """句中 15 位以上的纯数字段 —— 「看起来像系统单号」的那一组。
+
+    **门槛与提取必须看同一组候选。** 曾经门槛只说「句中有长数字段」，提取器却从左到右
+    取第一个含数字的 token，于是「分析站点 TEST2026-10-29 这笔单2116…」被放行后，
+    真正被查的是站点名里的日期（2026-11-02 评审实测）。这里把候选定成一个函数，
+    两处都从这里取。
+    """
+    if not isinstance(text, str):
+        return []
+    return [run for run in DIGIT_RUN.findall(text) if len(run) >= MIN_BARE_DIGITS]
+
+
 def names_order(text: str) -> bool:
     """这条消息是否在指某一张订单（而不是在说站点、时刻或别的编号）。
 
-    三种成立：说了「订单」；整条消息是一个带数字的标识符；句中有一段 15 位以上的纯数字。
+    三种成立：说了「订单」；整条消息是一个带数字的标识符；句中有 15 位以上的纯数字段。
     带连字符/下划线的单号仍要写出「订单」—— 系统没有短到能被形状认出的那种单号。
     """
     if not isinstance(text, str) or not text.strip():
@@ -42,4 +55,4 @@ def names_order(text: str) -> bool:
     stripped = text.strip()
     if WHOLE_TOKEN.fullmatch(stripped) and any(char.isdigit() for char in stripped):
         return True
-    return any(len(run) >= MIN_BARE_DIGITS for run in DIGIT_RUN.findall(text))
+    return bool(digit_runs(text))
