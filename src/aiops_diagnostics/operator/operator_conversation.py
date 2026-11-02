@@ -374,15 +374,18 @@ def _roster_count(sites, zh):
     if total <= 0:
         return ""
     if not _count_is_total(sites, True):
-        # 租户口径，或工具只读了一页（整页都是本地过滤后的匹配、上游还有剩余页）：
-        # 那个 total 都不是「匹配到多少个」，只说显示了几条，余量交给「另有 N 个」。
+        # 这一页之外还有没读过的东西。此时**不能说「前 N 个」**：那意味着「按某种顺序
+        # 取到的最前面几条，其余也可知」。41 上 total=153 是常态，而我们只读了一页；
+        # 「本次读取到 N 个」才是事实。余量由「结果可能不完整」交代（limited），
+        # 已握有的多余行由「另有 N 个」交代。
         return (
-            f"当前账号可见范围内显示前 {shown} 个站点："
+            f"当前账号可见范围内，本次读取到 {shown} 个站点："
             if zh
-            else f"Showing the first {shown} sites in your scope:"
+            else f"Read {shown} sites in your scope on this pass:"
         )
     if total == shown:
         return ""
+    # 读全了且超出展示上限：这里的「前 N 个」是准的 —— total 行都在手里。
     return (
         f"当前账号可见范围内共 {total} 个站点，这里显示前 {shown} 个："
         if zh

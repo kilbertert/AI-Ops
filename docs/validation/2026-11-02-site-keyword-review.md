@@ -31,12 +31,12 @@ Gateway 比对，改口径会让每次真实运行以 `OPERATOR_EVIDENCE_MISMATC
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| Python 全量 | `uv run pytest` | **3868 passed, 9 skipped** |
+| Python 全量 | `uv run pytest` | **3869 passed, 9 skipped** |
 | 真实 Java→Gateway→合成 CPMS | `verify_site_proxy.py` | **12/12 场景通过**（两端、关键词、不匹配、空白、全租户、空范围、错租户） |
 | Java 工具验收 | `CpmsToolAcceptance` | **PASS assertions=214（基线 213）**，新增站点证据页字段整链一条 |
 | 真 nginx 回调白名单 | `tests/test_node_runtime_deploy.py` | 新增 `/cpms/chSite/pageBOGUS`、`/cpms/chSite/page/ORDER-1` 两条反例；被拒后进程仍在 |
 | Ruff | `ruff check` / `format --check` | 通过 |
-| 网关镜像锁 | `context_digest.py --check` | `c7d4a8a5…`，match: true（见下条） |
+| 网关镜像锁 | `context_digest.py --check` | `1f910bbb…`，match: true（见下条） |
 
 ## 镜像锁的一次假记录（已修根因）
 
@@ -62,6 +62,22 @@ Gateway 比对，改口径会让每次真实运行以 `OPERATOR_EVIDENCE_MISMATC
   「结果可能不完整」。
 
 「另有 N 个」不再在 `limited` 时补数字：那是「可能更多」，不是「已知还有 N 个」。
+
+## 「前 N 个」不再用于未读完的查询（复审新增）
+
+只读了一页时头一句原先是「当前账号可见范围内显示前 10 个站点：」。这个措辞承诺了一个
+顺序（「按某种顺序的最前面几条，其余也可知」），而 41 上 `total=153` 是常态、我们一次
+只读一页。三种事实现在各有一句话：
+
+| 事实 | 头一句 |
+|---|---|
+| 读全、超出展示上限 | 共 N 个站点，这里显示前 M 个 |
+| 读全、未超出 | 不回头一句，直接列 |
+| 只读了一页 | 本次读取到 M 个站点（余量交给「结果可能不完整」） |
+
+`tests/operations/test_operator_conversation.py::test_a_partial_read_never_claims_a_first_n_of_a_complete_list`
+同时钉住两半：未读完时不得出现「前 10 个」，读完 12 条时「共 12 个，这里显示前 10 个」
+必须成立。ADR-0172 与 ADR-0192 已同步。
 
 
 `m3node/run.sh`（NodeGuardAcceptance 与 ToolSchemaParity）在本机锁定依赖目录上因

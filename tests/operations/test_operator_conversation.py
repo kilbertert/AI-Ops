@@ -295,7 +295,7 @@ def test_asking_what_sites_i_have_is_a_roster_not_an_error():
         ),
         (
             {"total": 152, "scope_limited": True, "sites": [{"name": "站A", "address": "地址A"}]},
-            "显示前 1 个",
+            "本次读取到 1 个",
             "共 152",
         ),
         (
@@ -307,7 +307,7 @@ def test_asking_what_sites_i_have_is_a_roster_not_an_error():
         # 的计数，不是他这 1 个站点。只有断言"不能出现总数"能区分这两句文案。
         (
             {"total": 1, "scope_limited": True, "sites": [{"name": "站A", "address": "地址A"}]},
-            "显示前 1 个",
+            "本次读取到 1 个",
             "共 1",
         ),
     ],
@@ -414,12 +414,45 @@ def test_a_keyword_search_never_states_the_upstream_total_as_its_own_count(limit
     assert conversation.site_facts(roster, "zh-CN", listing=True)["site_count"] == expected
 
 
+def test_a_partial_read_never_claims_a_first_n_of_a_complete_list():
+    """只读了一页时说「显示前 N 个」是在承诺一个我们没有的顺序。
+
+    41 上 total=153 是常态（`docs/validation/2026-10-29-site-roster-live.md`），
+    而我们一次只读一页。「前 N 个」意味着「按某种顺序的最前面几条，其余也可知」；
+    只读到 10 行时必须说「本次读取到 N 个」并把「可能还有更多」交给既有提示。
+    读全且超出展示上限时，「前 N 个」才是准的。
+    """
+    partial = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-11-02T00:00:00+00:00",
+        "sites": [{"name": f"站{i}", "address": "地址"} for i in range(10)],
+        "total": 153,
+        "limited": True,
+        "empty_scope": False,
+        "scope_limited": False,
+    }
+    listing = {"kind": "site_search", "text": "", "name": "", "address_terms": []}
+    text = conversation.render(listing, partial, "zh-CN")["blocks"][0]["text"]
+    assert "本次读取到 10 个" in text
+    assert "前 10 个" not in text
+    assert "可能不完整" in text
+
+    complete = {
+        **partial,
+        "sites": [{"name": f"站{i}", "address": "地址"} for i in range(12)],
+        "total": 12,
+        "limited": False,
+    }
+    text = conversation.render(listing, complete, "zh-CN")["blocks"][0]["text"]
+    assert "共 12 个站点，这里显示前 10 个" in text  # 12 行都在手里，这句话是准的
+
+
 def test_tool_evidence_page_of_many_rows_shows_ten_and_says_how_many_more():
     """工具栏取回的是**一整页**：11 行不突破展示上限，也不能说成「查询不完整」。
 
     关键词既可能在上游被忽略、又能在本地过滤掉一部分，于是「权限内 11 条全命中」是
-    一个真实形状。它必须走「共 11 个，显示前 10 个／另有 1 个未列出」，而不是
-    「达到上限，结果可能不完整」——后者是查询没取全的意思，事实不是那样。
+    一个真实形状。它必须走「另有 1 个未列出」并给出确定的条数，而不是「达到上限，
+    结果可能不完整」——后者是查询没取全的意思，事实不是那样。
     """
     limit = operator_cpms.SITE_MAX_SHOWN
     rows = [{"id": f"SITE-{i}", "name": f"天河站{i}", "address": "广州天河"} for i in range(1, limit + 2)]

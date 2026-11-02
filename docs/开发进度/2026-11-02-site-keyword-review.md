@@ -18,9 +18,9 @@
   Java 站点证据页字段整链断言、ADR-0192 补第三处收口、
   acceptance.feature 与 qa-plan 补 SP-SHOW。
 - 镜像锁：`m3node/build/` 从构造上下文排除（`context_digest.py` 与 `build-image.sh` 同改），
-  本机与干净导出算出同一值 `c7d4a8a5…`，`--check` match: true。前一次写进锁的
+  本机与干净导出算出同一值 `1f910bbb…`，`--check` match: true。前一次写进锁的
   `8240bbed…` 是污染值，已作废。
-- 回归：Python 全量 3868 passed / 9 skipped；真实 Java→Gateway 12/12；Java 验收 214 断言；Ruff 通过。
+- 回归：Python 全量 3869 passed / 9 skipped；真实 Java→Gateway 12/12；Java 验收 214 断言；Ruff 通过。
 - 未完成：PR 审查线程逐条回复与合并；成套制品（jar/Gateway/回调）部署；原 H5 账号的
   站点正例、合法空结果、受限范围/跨租户拒绝；账单/知识与两种风格的两端预览→发布核验。
 
