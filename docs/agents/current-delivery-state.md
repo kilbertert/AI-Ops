@@ -20,13 +20,29 @@
 详见[接续验证](../validation/2026-11-02-fee-fields-followup.md)与
 [接续进度](fee-fields-followup/PROGRESS.md)。
 
-## 站点整链已合并部署，业务验收被一个既有 Dify 数据问题挡住（2026-11-02）
+## 站点回答拒收已定位并修复，两条真实正例通过（2026-11-02）
+
+#1310 合并 `2f38f4dc`，CD 自动部署；`/health` 为 `1.0.0+2f38f4dc1aaa`，部署源码与合并树
+逐字节相同。用冻结提示词 + 本轮 `cpms_site_search` 证据回放 18 次，定位到整轮拒收的
+**站名形状判据把「站点名称/站点详情」当编造站名**；修复为整条通用短语中性化，编造站名
+仍拒。原管家 H5 正常登录后列举与关键词搜索两条真实正例 `completed`，独立 CPMS 对照
+total=160、首三条站名与租户一致。
+
+**仍未验收**：合法空结果、受限范围与跨租户拒绝、D、H1、I；消费者链路的
+`CHATFLOW_ANSWER_INVALID` 是另一条判据（模型改写取证时间触发 legacy 逐数字校验）。
+详见[部署与验收回执](../validation/2026-11-02-site-note-deploy-2f38f4dc.md)。
+
+## 站点整链已合并部署（历史时点，2026-11-02）
+
+> **当时的判定已被后续进展取代，看上面一节。** 下面两条卡点都已解除：消费者
+> `chat_route_bindings` 已由另一发布动作改指 `394b5399`（12:22，revision 17），
+> 管家入口当轮也已取得公司令牌通道并通过真实登录。保留本节是为了说明当时的证据边界。
 
 #1302 合并为 `0fce8a58`，节点（jar `e3ee149b…`）、Gateway（`1.0.0+0fce8a58f725`）、
 回调配置三者从同一修订成套部署并逐项核验，详见
 [部署回执](../validation/2026-11-02-site-chain-deploy-0fce8a58.md)。
 
-**业务验收未完成**，卡点不在本次改动：
+**当时业务验收未完成**，卡点不在该次改动：
 
 - `chat_route_bindings` 的 `consumer_service` 指向 Dify app `07d15c42…`，而 36 的
   Dify 里该 app 与其 workflow 都已不存在 ⇒ consumer 问答必 `DIFY_UNAVAILABLE`。
