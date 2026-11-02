@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from aiops_diagnostics import __version__
+from aiops_diagnostics.common import order_reference
 from aiops_diagnostics.common.async_job_lifecycle import DIAGNOSIS, QUESTION
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.http_auth import (
@@ -36,6 +37,7 @@ from aiops_diagnostics.common.i18n import (
     free_text_unavailable_message,
     resolve_language,
 )
+from aiops_diagnostics.common.order_reference import names_order
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.consumer import consumer_knowledge_selection
 from aiops_diagnostics.consumer.consumer_order_chat import (
@@ -2901,11 +2903,15 @@ def create_gateway_app(
                 raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
             if binding is not None:
                 _require_operator_company_token(request)
-                order_context = re.search(r"订单|\border\b", payload.question, re.IGNORECASE) or re.fullmatch(
-                    r"[A-Za-z0-9_-]{1,64}", payload.question.strip()
-                )
+                order_context = names_order(payload.question)
+                # 有 15 位以上纯数字段时，**它就是这一轮要查的单**：`_extract_order_no` 从左
+                # 到右取第一个含数字的 token，遇到「TEST2026-10-29 这笔单2116…」会先抓日期。
+                # 门槛与提取因此共用 `order_reference.digit_runs` 这组候选。
+                runs = order_reference.digit_runs(payload.question)
                 order = (
-                    payload.order_no or (_extract_order_no(payload.question) if order_context else "") or ""
+                    payload.order_no
+                    or (runs[0] if runs else (_extract_order_no(payload.question) if order_context else ""))
+                    or ""
                 )
                 target = next(
                     (

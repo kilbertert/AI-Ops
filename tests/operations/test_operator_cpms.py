@@ -1091,3 +1091,25 @@ def test_answer_accepts_a_single_fenced_json_object(text):
 def test_answer_still_rejects_prose_and_multiple_objects(text):
     with pytest.raises(ValueError):
         operator_cpms.parse_answer(text)
+
+
+def test_order_written_without_the_word_order_still_reaches_the_order_turn(operator, monkeypatch):
+    """「这笔单」不是订单门槛（2026-11-02 反馈的第 2 条）。
+
+    截图原话：「帮我分析这笔单的电费2116050516255272961」。当时的判据要求消息里出现
+    「订单/order」，于是这句落进**无订单回合**：模型只能回来请用户先选一张订单，
+    一个 19 位单号就在句子里却没人去查。真实入口修好后，这一句必须签发订单诊断，
+    并且真的去 CPMS 读了那张单。
+    """
+    f = operator
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
+    response = f["client"].post(
+        "/v1/assistant/questions",
+        headers=HEADERS,
+        json={"question": f"帮我分析这笔单的电费{ORDER}"},
+    )
+    assert response.status_code == 202, response.text
+    # 无订单回合不会去 CPMS 读订单详情；有它说明这一句被当成订单诊断签发了。
+    assert any(path == "/chOrderInfo/getOrderInfoDetail/" + ORDER for path, _ in f["state"]["calls"])
+    final = terminal(f, response.json()["qa_id"])
+    assert final.status_code == 200 and final.json()["status"] == "completed", final.text
