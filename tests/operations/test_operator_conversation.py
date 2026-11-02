@@ -1,9 +1,11 @@
 """非订单提问必须经过现役节点，但不能取得订单工具。"""
 
 import json
+import re
 from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 
@@ -293,7 +295,7 @@ def test_asking_what_sites_i_have_is_a_roster_not_an_error():
         ),
         (
             {"total": 152, "scope_limited": True, "sites": [{"name": "站A", "address": "地址A"}]},
-            "显示前 1 个",
+            "本次读取到 1 个",
             "共 152",
         ),
         (
@@ -305,7 +307,7 @@ def test_asking_what_sites_i_have_is_a_roster_not_an_error():
         # 的计数，不是他这 1 个站点。只有断言"不能出现总数"能区分这两句文案。
         (
             {"total": 1, "scope_limited": True, "sites": [{"name": "站A", "address": "地址A"}]},
-            "显示前 1 个",
+            "本次读取到 1 个",
             "共 1",
         ),
     ],
@@ -315,7 +317,9 @@ def test_listing_reports_the_count_only_when_it_is_trustworthy(sites, needle, fo
     roster = {
         "source": "cpms.sitePage",
         "observed_at": "2026-10-29T00:00:00+00:00",
-        "limited": sites["total"] > 1,
+        # 直查已经读完了：这里的 total 与本地条数不等纯粹是租户口径/集合过滤造成的。
+        # （工具路径只有一页，``limited`` 会另走「另有 N 个」。）
+        "limited": False,
         "empty_scope": False,
         **sites,
     }
@@ -325,6 +329,156 @@ def test_listing_reports_the_count_only_when_it_is_trustworthy(sites, needle, fo
     assert needle in text
     if forbidden:
         assert forbidden not in text
+
+
+def test_rendering_never_lists_more_than_the_show_limit():
+    """工具栏的证据是**一整页 50 条**，展示上限 10 必须在这里收口。
+
+    2026-11-02 复审实测：上游忽略关键词、返回权限内的 11 条，render 直接 enumerate
+    ``sites["sites"]``，于是「共 1 个站点」下面列了 11 行 —— 两个数字彼此矛盾。
+    """
+    limit = operator_cpms.SITE_MAX_SHOWN
+    rows = [{"name": f"站{i}", "address": "地址"} for i in range(1, limit + 2)]
+    roster = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-10-29T00:00:00+00:00",
+        "sites": rows,
+        "total": len(rows),
+        "limited": True,
+        "empty_scope": False,
+        "scope_limited": True,
+    }
+    text = conversation.render(
+        {"kind": "site_search", "text": "", "name": "", "address_terms": []}, roster, "zh-CN"
+    )["blocks"][0]["text"]
+    assert len(re.findall(r"(?m)^\d+\.", text)) == limit
+    assert f"另有 {len(rows) - limit} 个" in text
+    assert conversation.site_facts(roster, "zh-CN")["site_count"] == str(limit)
+
+
+@pytest.mark.parametrize("limited", [False, True])
+def test_the_note_and_the_body_state_the_same_number(limited):
+    """同一段答复里不能有两个总数。
+
+    2026-11-02 复审：``site_facts`` 用的是展示条数，``render`` 用的是 total，
+    于是「共 10 个站点」紧跟着「共 500 个站点」。两者的判定必须同源，
+    不论这一页是否读完。
+    """
+    rows = [{"name": f"站{i}", "address": "地址"} for i in range(1, 11)]
+    roster = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-11-02T00:00:00+00:00",
+        "sites": rows,
+        "total": 500,
+        "limited": limited,
+        "empty_scope": False,
+        "scope_limited": False,
+    }
+    answer = {"kind": "site_search", "text": "共 {{fact:site_count}} 个站点", "name": "", "address_terms": []}
+    text = conversation.render(answer, roster, "zh-CN")["blocks"][0]["text"]
+    note = text.split("\n\n")[0]
+    body = text.split("\n\n", 1)[1]
+    numbers = {n for n in re.findall(r"共 (\d+) 个", note)}
+    assert len(numbers) == 1
+    stated = int(re.search(r"共 (\d+) 个", note).group(1))
+    body_numbers = set(re.findall(r"共 (\d+) 个", body))
+    assert body_numbers <= {str(stated)}, text  # 正文里出现的总数必须与说明一致
+    shown = len(re.findall(r"(?m)^\d+\.", text))
+    more = re.search(r"另有 (\d+) 个(?:匹配)?站点", text)
+    assert shown + (int(more.group(1)) if more else 0) == stated, text
+
+
+@pytest.mark.parametrize("limited", [False, True])
+def test_a_keyword_search_never_states_the_upstream_total_as_its_own_count(limited):
+    """搜索问法下 ``total`` 是**过滤前**的上游计数，不能当成「匹配到多少」。
+
+    2026-11-02 复审：工具证据的 total 未受关键词影响，于是「共 500 个」会被读成
+    「天河有 500 个站」。搜索问法只能说本地真正握有的行数。
+    """
+    rows = [{"name": f"天河站{i}", "address": "广州天河"} for i in range(1, 4)]
+    roster = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-11-02T00:00:00+00:00",
+        "sites": rows,
+        "total": 500,
+        "limited": limited,
+        "empty_scope": False,
+        "scope_limited": False,
+    }
+    answer = {"kind": "site_search", "text": "", "name": "天河", "address_terms": []}
+    text = conversation.render(answer, roster, "zh-CN")["blocks"][0]["text"]
+    assert "500" not in text
+    assert conversation.site_facts(roster, "zh-CN", listing=False)["site_count"] == str(len(rows))
+    # 列举问法读全了，total 才是答案；没读全就只说展示条数。
+    expected = "500" if not limited else str(len(rows))
+    assert conversation.site_facts(roster, "zh-CN", listing=True)["site_count"] == expected
+
+
+def test_a_partial_read_never_claims_a_first_n_of_a_complete_list():
+    """只读了一页时说「显示前 N 个」是在承诺一个我们没有的顺序。
+
+    41 上 total=153 是常态（`docs/validation/2026-10-29-site-roster-live.md`），
+    而我们一次只读一页。「前 N 个」意味着「按某种顺序的最前面几条，其余也可知」；
+    只读到 10 行时必须说「本次读取到 N 个」并把「可能还有更多」交给既有提示。
+    读全且超出展示上限时，「前 N 个」才是准的。
+    """
+    partial = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-11-02T00:00:00+00:00",
+        "sites": [{"name": f"站{i}", "address": "地址"} for i in range(10)],
+        "total": 153,
+        "limited": True,
+        "empty_scope": False,
+        "scope_limited": False,
+    }
+    listing = {"kind": "site_search", "text": "", "name": "", "address_terms": []}
+    text = conversation.render(listing, partial, "zh-CN")["blocks"][0]["text"]
+    assert "本次读取到 10 个" in text
+    assert "前 10 个" not in text
+    assert "可能不完整" in text
+
+    complete = {
+        **partial,
+        "sites": [{"name": f"站{i}", "address": "地址"} for i in range(12)],
+        "total": 12,
+        "limited": False,
+    }
+    text = conversation.render(listing, complete, "zh-CN")["blocks"][0]["text"]
+    assert "共 12 个站点，这里显示前 10 个" in text  # 12 行都在手里，这句话是准的
+
+
+def test_tool_evidence_page_of_many_rows_shows_ten_and_says_how_many_more():
+    """工具栏取回的是**一整页**：11 行不突破展示上限，也不能说成「查询不完整」。
+
+    关键词既可能在上游被忽略、又能在本地过滤掉一部分，于是「权限内 11 条全命中」是
+    一个真实形状。它必须走「另有 1 个未列出」并给出确定的条数，而不是「达到上限，
+    结果可能不完整」——后者是查询没取全的意思，事实不是那样。
+    """
+    limit = operator_cpms.SITE_MAX_SHOWN
+    rows = [{"id": f"SITE-{i}", "name": f"天河站{i}", "address": "广州天河"} for i in range(1, limit + 2)]
+    sites = operator_cpms._sites_from_evidence(
+        tenant_owner(),
+        SimpleNamespace(
+            delivered={operator_cpms.SITE_TOOL},
+            arguments={operator_cpms.SITE_TOOL: {"name": "天河"}},
+            evidence={
+                operator_cpms.SITE_TOOL: {
+                    "source": "cpms.sitePage",
+                    "observed_at": "2026-11-02T00:00:00+00:00",
+                    "data": {"records": rows, "total": len(rows), "truncated": False},
+                }
+            },
+        ),
+        {"kind": "site_search", "text": "", "name": "天河", "address_terms": []},
+    )
+    text = conversation.render(
+        {"kind": "site_search", "text": "", "name": "天河", "address_terms": []}, sites, "zh-CN"
+    )["blocks"][0]["text"]
+    assert len(re.findall(r"(?m)^\d+\.", text)) == limit
+    assert f"另有 {len(rows) - limit} 个" in text
+    assert "不完整" not in text  # 整页 11 条是查全了的，展示上限不改变这一点。
+    facts = conversation.site_facts(sites, "zh-CN")
+    assert len(re.findall(r"(?m)^\d+\.", facts["site_roster"])) == limit
 
 
 def test_a_search_that_finds_nothing_still_says_try_another_place():
@@ -344,6 +498,27 @@ def test_a_search_that_finds_nothing_still_says_try_another_place():
     )["blocks"][0]["text"]
     assert "未找到匹配站点" in searched
     assert "没有站点" in listed and "未找到匹配" not in listed
+
+
+def test_a_tool_page_that_matched_nothing_says_the_search_may_be_incomplete():
+    """工具只读第一页：本页没命中不等于范围里没有。
+
+    这是审查指出的真实缺口——「第一页无匹配、后续页可能有匹配」时，答复必须带着
+    上限提示，不能写成确定的「没有这个站点」。它也不是列举空的「你没有任何站点」。
+    """
+    empty = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-11-02T00:00:00+00:00",
+        "limited": True,  # 上游还有剩余页／本页被关键词过滤掉了
+        "empty_scope": False,
+        "sites": [],
+        "total": 152,
+        "scope_limited": False,
+    }
+    text = conversation.render(selection(), empty, "zh-CN")["blocks"][0]["text"]
+    assert "未找到匹配站点" in text
+    assert "可能不完整" in text
+    assert "没有站点" not in text
 
 
 @pytest.mark.parametrize("prose", ["为您查询充电站。", "编造站点：恶意站；已退款。"])
@@ -442,6 +617,65 @@ def complete(f, run_id, answer):
     assert response.status_code == 200, response.text
 
 
+def drive_site_tool(f, run_id, arguments):
+    """替身节点走**真实工具链**：领授权 → 按授权的请求目标取数 → 上报证据。
+
+    不写死路径与证据形状：两者都来自授权回执，与 Java 节点做的事逐字相同。站点工具
+    2026-11-02 之前在这条链上有两处断点（网关代理只认订单行、节点只认订单证据），
+    只测「授权 200」看不见它们。
+    """
+    headers = {
+        "Authorization": "Bearer " + NODE_A_TOKEN,
+        "X-AI-Ops-Tool-Contract": operator_cpms.TOOL_CONTRACT,
+    }
+    publication = f["client"].post(
+        "/v1/internal/charging-status/execution-config/" + run_id,
+        headers={"Authorization": "Bearer " + NODE_A_TOKEN},
+    )
+    assert publication.status_code == 200, publication.text
+    headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+    tool = operator_cpms.SITE_TOOL
+    response = f["client"].post(
+        f"/v1/internal/operator-runs/{run_id}/tools/{tool}/authorization",
+        headers=headers,
+        json={"arguments": arguments},
+    )
+    assert response.status_code == 200, response.text
+    grant = response.json()
+    request = grant["request"]
+    url = grant["base_url"] + request["path"]
+    if request["query"]:
+        url += "?" + request["query"]
+    response = f["client"].get(url, headers={"Authorization": "Bearer " + grant["bearer"]})
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    evidence = {
+        "tool": tool,
+        "inputs": grant["inputs"],
+        "source": "cpms.sitePage",
+        "observed_at": datetime.now(UTC).isoformat(),
+        "data": {
+            "records": [
+                {key: row.get(key, "") for key in ("id", "name", "address")} for row in data["records"]
+            ],
+            "total": data["total"],
+            "sample_limit": 50,
+            "truncated": data["total"] > len(data["records"]),
+            "ordering_guaranteed": False,
+            "complete_timeline": False,
+            "samples_returned": len(data["records"]),
+            "absence": None if data["records"] else "no_samples",
+        },
+    }
+    response = f["client"].post(
+        f"/v1/internal/operator-runs/{run_id}/tools/{tool}/evidence",
+        headers=headers,
+        json={"authorization_id": grant["authorization_id"], "evidence": evidence},
+    )
+    assert response.status_code == 200, response.text
+    return evidence
+
+
 @pytest.mark.parametrize("entry", ["formal", "trial", "native", "managed"])
 def test_site_search_uses_same_scope_on_all_entries(operator, monkeypatch, entry):
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
@@ -494,6 +728,53 @@ def test_site_search_uses_same_scope_on_all_entries(operator, monkeypatch, entry
     assert final.status_code == 200 and final.json()["status"] == "completed", final.text
     assert "天河测试站" in final.text and "PRIVATE-PHONE" not in final.text
     assert len(f["state"]["calls"]) == 1 and f["state"]["calls"][0][0].startswith("/chSite/page?")
+
+
+def test_site_tool_end_to_end_through_the_real_tool_chain(operator, monkeypatch):
+    """同一句原 H5 问题：授权 → 取数 → 证据 → 完成，最终正文来自本轮证据。
+
+    这是「工具参数 → CPMS 过滤器 → 冻结证据 → 最终答复」的整条闭环。只断言授权 200
+    会让下面两处断点继续躲着：
+      * 网关代理按订单行校验（`siteId`/`orderNo`），站点页没有这些字段；
+      * 节点只认订单形状的证据，站点页的证据它在本地就被拒。
+    """
+    f = operator
+    f["state"]["site_address"] = "广州天河测试路"
+    seen = []
+
+    def dispatch(_, config, run_id):
+        try:
+            evidence = drive_site_tool(f, run_id, {"address": "广州 天河"})
+            seen.append(evidence)
+            # 与 `complete()` 同形，但自己持有响应：那个夹具只返回拒绝回执的 json。
+            headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
+            publication = f["client"].post(
+                "/v1/internal/charging-status/execution-config/" + run_id, headers=headers
+            )
+            headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+            status = f["client"].post(
+                f"/v1/internal/operator-runs/{run_id}/completions",
+                headers=headers,
+                json={"status": "completed", "answer": json.dumps(selection())},
+            )
+            seen.append(("complete", status.status_code, status.text))
+            return status
+        except BaseException as exc:  # noqa: BLE001 - 夹具失败要能在断言里看见
+            seen.append(("dispatch failed", repr(exc)))
+            raise
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    response = f["client"].post(
+        "/v1/assistant/questions", headers=HEADERS, json={"question": "帮我找一下广州天河附近的充电站"}
+    )
+    assert response.status_code == 202, response.text
+    final = terminal(f, response.json()["qa_id"])
+    assert final.json()["status"] == "completed", (final.text, seen)
+    # 事实来自**这一份**证据：站点按工具参数里的地址查回来，不是第二次查询
+    cpms_calls = [path for path, _ in f["state"]["calls"] if path.startswith("/chSite/page?")]
+    assert len(cpms_calls) == 1
+    assert "address=" + quote("广州天河") in cpms_calls[0]
+    assert "天河测试站" in final.text
 
 
 def test_cancel_during_site_read_cannot_deliver(operator, monkeypatch):

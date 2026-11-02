@@ -32,7 +32,8 @@ TOOL_NAMES = operator_tools.names()
 #: 合起来是**「列举不能变成导出」**这条边界。改任何一个都要重新论证，不能当调参。
 SITE_PAGE_SIZE = 50
 SITE_MAX_PAGES = 4
-SITE_MAX_SHOWN = 10
+#: 展示上限的唯一定义在渲染模块（它被本模块导入，反向导入会成环），这里只是别名。
+SITE_MAX_SHOWN = operator_conversation.SITE_MAX_SHOWN
 
 #: 站点列表的 CPMS 路径。查询参数由 :class:`SiteKeywords` 组装，不由调用方拼接。
 SITE_PATH = "/chSite/page"
@@ -99,7 +100,7 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
     两条判据缺一不可：
 
     1. 键必须是声明里列过的那几个 —— 模型不能给工具加参数。
-    2. 每个值必须能在用户提问原文里找到（casefold 后是子串）——
+    2. 每个值必须能在用户提问原文里找到（只忽略空白与大小写，仍为连续子串）——
        编一个地址，或把上一个用户的地址搬过来，都在这里被判掉。
     """
     declared = _declared(tool)
@@ -116,9 +117,10 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
         stripped = value.strip()
         if not stripped:
             continue
-        if stripped.casefold() not in question.casefold():
+        original = operator_conversation.question_span(stripped, question)
+        if not original:
             raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-        cleaned[key] = stripped
+        cleaned[key] = original
     return cleaned
 
 
@@ -174,9 +176,9 @@ def _sites_from_evidence(caller, task, answer):
     if evidence is None:
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     arguments = task.arguments.get(SITE_TOOL, {})
-    terms = [term for term in answer["address_terms"] if term]
     if answer["name"] != arguments.get("name", "") or (
-        (max(terms, key=len) if terms else "") != arguments.get("address", "")
+        "".join(site_keywords(answer).address.split()).casefold()
+        != "".join(arguments.get("address", "").split()).casefold()
     ):
         raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
     data = evidence["data"]
@@ -185,10 +187,12 @@ def _sites_from_evidence(caller, task, answer):
         "source": evidence["source"],
         "observed_at": evidence["observed_at"],
         "sites": data["records"],
+        # `limited` 只说「查询可能没穷尽」；展示只列 10 条由渲染层的「另有 N 个」说明 ——
+        # 两件事混用会让一句「结果可能不完整」盖住本来完整的 11 条页。
         "limited": bool(data["truncated"]),
         "empty_scope": scope.site_ids == (),
         "total": int(data["total"]),
-        "scope_limited": True,
+        "scope_limited": scope.site_ids is not None,
     }
 
 
@@ -591,7 +595,7 @@ class OperatorCpms:
             "expires_at": run.expires_at.isoformat(),
         }
 
-    def _grant_sites(self, task, run, tool) -> list[str]:
+    def _grant_sites(self, task, run, tool) -> list[str] | None:
         """这一次授权允许碰的站点。
 
         订单诊断：订单所在的那**一个**站点（保持既有收窄）。
@@ -601,7 +605,7 @@ class OperatorCpms:
         if diagnoses_an_order(run):
             return [task.order_site_id]
         scope = operator_scope(task.caller, allow_empty=True)
-        return list(scope.site_ids or ())
+        return list(scope.site_ids) if scope.site_ids is not None else None
 
     def proxy(self, run_id, grant, path, query, method="GET"):
         task = self.tasks.get(run_id)
@@ -616,7 +620,8 @@ class OperatorCpms:
             (
                 name
                 for name in TOOL_NAMES
-                if tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
+                if allowed_in(name, run)
+                and tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
                 == {"method": method, "path": path, "query": query}
             ),
             None,
@@ -630,11 +635,29 @@ class OperatorCpms:
             if tool == TOOL_NAMES[1] and TOOL_NAMES[0] not in task.delivered:
                 raise OperatorRefused("OPERATOR_DETAIL_REQUIRED")
 
-            body = cpms_get(
-                task.base_url + path + ("?" + query if query else ""),
-                task.bearer,
-                task.caller.effective_tenant_id,
+            body = (
+                cpms_get(
+                    task.base_url + path + ("?" + query if query else ""),
+                    task.bearer,
+                    task.caller.effective_tenant_id,
+                )
+                if tool != SITE_TOOL or site_scope(task.caller).site_ids != ()
+                else {"code": 0, "data": {"records": [], "total": 0, "current": 1, "size": 50}}
             )
+            if tool == SITE_TOOL:
+                data, response = site_tool_result(
+                    site_scope(task.caller), body, tool, task.arguments.get(tool) or {}
+                )
+                self._current(run_id, tool=tool)
+                task.evidence[tool] = {
+                    "tool": tool,
+                    "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
+                    "source": operator_tools.tool(tool).source,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "data": data,
+                }
+                task.evidence[tool]["response"] = response
+                return task.evidence[tool]["response"]
             validate_body(body, task.caller, run.order_no, tool)
             rows = [body["data"]["chOrderInfoModel"]] if tool == TOOL_NAMES[0] else body["data"]["records"]
             if any(row["siteId"] != task.order_site_id for row in rows):
@@ -740,7 +763,7 @@ class OperatorCpms:
                 if not set(answer["evidence_tools"]).issubset(task.delivered):
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
             else:
-                operator_conversation.validate(answer, task.question)
+                answer = operator_conversation.validate(answer, task.question)
                 if answer["kind"] == "site_search":
                     sites = _sites_from_evidence(task.caller, task, answer)
                     if sites is None:
@@ -909,6 +932,40 @@ class OperatorCpms:
 #: 分时段明细（`periodFeeDetail`）在外层响应里，本层不取 —— 本次只补平铺金额。
 DETAIL_FIELDS = list(operator_tools.tool("cpms_order_detail").evidence_fields)
 SAMPLE_FIELDS = list(operator_tools.tool("cpms_charging_samples").evidence_fields)
+
+
+def site_tool_result(scope, body, tool, arguments, *, outside_scope="reject"):
+    """证据只含声明字段；节点取数仍需分页回显和已核对的租户身份。"""
+    rows, total = site_page(scope, body, 1, outside_scope=outside_scope)
+    keywords = SiteKeywords(
+        arguments.get("name", ""), (arguments["address"],) if arguments.get("address") else ()
+    )
+    rows = [row for row in rows if keywords.matches(row)]
+    declared = operator_tools.tool(tool)
+    data = {
+        "records": [{key: row[key] for key in declared.evidence_fields} for row in rows],
+        "total": total,
+        "sample_limit": declared.page_size,
+        # ``truncated`` 是**证据**字段：页面没有覆盖上游的全部行。它与「展示只列 10 条」
+        # 是两件事，不能合并 —— Java 节点按 ``total > rows.size()`` 逐字重算这一项并与
+        # 网关比对，改口径会让每一次真实运行都以 OPERATOR_EVIDENCE_MISMATCH 失败。
+        # 展示上限在 ``operator_conversation.shown_sites`` 收口。
+        "truncated": total > len(rows),
+        "ordering_guaranteed": declared.flags["ordering_guaranteed"],
+        "complete_timeline": declared.flags["complete_timeline"],
+        "samples_returned": len(rows),
+        "absence": declared.flags["absence_when_empty"] if not rows else None,
+    }
+    response = {
+        "code": 0,
+        "data": {
+            "records": [dict(row, tenantId=scope.tenant_id) for row in data["records"]],
+            "total": total,
+            "current": 1,
+            "size": declared.page_size,
+        },
+    }
+    return data, response
 
 
 def minimized_response(body, tool):
@@ -1331,6 +1388,11 @@ class SiteKeywords:
     @property
     def listing(self) -> bool:
         return not self.name and not self.address_terms
+
+    @property
+    def address(self) -> str:
+        """答复可把同一地址拆成多个关键词；仅用于对齐已执行的工具参数。"""
+        return "".join(self.address_terms)
 
     def params(self, page: int) -> dict[str, object]:
         params: dict[str, object] = {"current": page, "size": SITE_PAGE_SIZE, "type": 0}

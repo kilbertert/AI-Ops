@@ -58,12 +58,14 @@ public final class CpmsReadTool implements ToolCallback {
                         JsonNode inputs, Request request, String baseUrl, String bearer,
                         Instant expiresAt) {
         public Grant {
-            siteIds = Set.copyOf(siteIds);
+            siteIds = siteIds == null ? null : Set.copyOf(siteIds);
             if (authorizationId == null || authorizationId.isBlank()
                     || tenantId == null || !tenantId.matches(ID)
-                    || inputs == null || !inputs.isObject() || inputs.isEmpty()
-                    || request == null || siteIds.isEmpty()
-                    || siteIds.size() > 1000 || siteIds.stream().anyMatch(id -> !id.matches(ID))
+                    // inputs 空对象**合法**：站点工具是一次无订单回合，它的输入是关键词，
+                    // 关键词全空就是「列举我可见的站点」。有订单的工具由 orderNo() 把关。
+                    || inputs == null || !inputs.isObject()
+                    || request == null
+                    || (siteIds != null && (siteIds.size() > 1000 || siteIds.stream().anyMatch(id -> !id.matches(ID))))
                     || bearer == null || bearer.isBlank() || bearer.length() > 16384
                     || bearer.chars().anyMatch(c -> c <= 32 || c >= 127) || expiresAt == null) {
                 throw refused("invalid_authorization");
@@ -78,7 +80,7 @@ public final class CpmsReadTool implements ToolCallback {
             baseUrl = baseUrl.replaceAll("/+$", "");
         }
 
-        /** 输入里的订单号；两个现役工具都需要它，缺失即无效授权。 */
+        /** 只由订单工具读取；站点工具不借订单号判定身份。 */
         String orderNo() {
             JsonNode value = inputs.path("order_no");
             if (!value.isTextual() || !value.asText().matches(ID)) throw refused("invalid_authorization");
@@ -122,6 +124,10 @@ public final class CpmsReadTool implements ToolCallback {
             String tool = definition.name();
             Grant grant = authorization.require(runId, manifestId, tool, parameters);
             requireLive(grant);
+            if (!OperatorTools.appliesTo(tool).contains("conversation")) {
+                grant.orderNo();
+                if (grant.siteIds() == null || grant.siteIds().isEmpty()) throw refused("invalid_authorization");
+            }
             // 请求目标来自授权，不来自工具名 —— 这正是「新增一条只读路径不必改本文件」。
             JsonNode body = get(grant, grant.request().target());
             // 响应形状由**声明**决定，不由工具名决定：新增一个复用已有形状的工具，本文件不用改。
@@ -178,7 +184,7 @@ public final class CpmsReadTool implements ToolCallback {
 
     private static ObjectNode detail(JsonNode body, Grant grant, String tool) {
         JsonNode row = body.path("chOrderInfoModel");
-        identity(row, grant);
+        identity(row, grant, tool);
         if (!body.path("orderNo").isTextual() || !body.path("siteId").isTextual()
                 || !grant.orderNo().equals(body.path("orderNo").asText())
                 || !row.path("siteId").asText().equals(body.path("siteId").asText())) {
@@ -204,7 +210,7 @@ public final class CpmsReadTool implements ToolCallback {
         var selected = result.putArray("records");
         List<String> fields = OperatorTools.evidenceFields(tool);
         for (JsonNode row : rows) {
-            identity(row, grant);
+            identity(row, grant, tool);
             selected.add(select(row, fields));
         }
         // 分页标记与「缺样本」的措辞也来自声明：它们是这个工具的证据语义，不是引擎的常识。
@@ -219,11 +225,22 @@ public final class CpmsReadTool implements ToolCallback {
         return result;
     }
 
-    private static void identity(JsonNode row, Grant grant) {
-        if (!row.isObject() || !row.path("orderNo").isTextual() || !row.path("tenantId").isTextual()
-                || !row.path("siteId").isTextual() || !grant.orderNo().equals(row.path("orderNo").asText())
-                || !grant.tenantId().equals(row.path("tenantId").asText())
-                || !grant.siteIds().contains(row.path("siteId").asText())) {
+    private static void identity(JsonNode row, Grant grant, String tool) {
+        if (!row.isObject() || !row.path("tenantId").isTextual()
+                || !grant.tenantId().equals(row.path("tenantId").asText())) {
+            throw refused("cpms_scope_mismatch");
+        }
+        if (OperatorTools.appliesTo(tool).contains("conversation")) {
+            String siteId = row.path("id").asText("");
+            if (!row.path("id").isTextual() || !siteId.matches(ID)
+                    || (grant.siteIds() != null && !grant.siteIds().contains(siteId))) {
+                throw refused("cpms_scope_mismatch");
+            }
+            return;
+        }
+        if (!row.path("orderNo").isTextual() || !row.path("siteId").isTextual()
+                || !grant.orderNo().equals(row.path("orderNo").asText())
+                || grant.siteIds() == null || !grant.siteIds().contains(row.path("siteId").asText())) {
             throw refused("cpms_scope_mismatch");
         }
     }

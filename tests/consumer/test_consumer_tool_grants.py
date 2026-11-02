@@ -103,8 +103,9 @@ def grants(monkeypatch):
             )
         ],
     )
+    current_run = run()
     context = SimpleNamespace(
-        agent_run_store=SimpleNamespace(get=lambda _id: run(), peek=lambda _id: run()),
+        agent_run_store=SimpleNamespace(get=lambda _id: current_run, peek=lambda _id: current_run),
         store=SimpleNamespace(
             get_assistant_question=lambda *_a: {"question": QUESTION},
         ),
@@ -199,7 +200,17 @@ def test_evidence_is_submitted_with_the_node_credential(grants):
     """上报证据带的是节点令牌，不是 grant token —— 两者不能互相顶替。"""
     body = grant(grants)
     request = body["request"]
-    page = grants.proxy(RUN, body["bearer"], request["path"], request["query"])["data"]
+    response = grants.proxy(RUN, body["bearer"], request["path"], request["query"])
+    page = {
+        "records": [{k: row[k] for k in ("id", "name", "address")} for row in response["data"]["records"]],
+        "total": 2,
+        "sample_limit": 50,
+        "truncated": True,
+        "ordering_guaranteed": False,
+        "complete_timeline": False,
+        "samples_returned": 1,
+        "absence": None,
+    }
     evidence = {
         "tool": TOOL,
         "inputs": body["inputs"],
@@ -231,7 +242,17 @@ def test_evidence_is_submitted_with_the_node_credential(grants):
 def test_evidence_must_equal_what_the_gateway_projected(grants):
     body = grant(grants)
     request = body["request"]
-    page = grants.proxy(RUN, body["bearer"], request["path"], request["query"])["data"]
+    response = grants.proxy(RUN, body["bearer"], request["path"], request["query"])
+    page = {
+        "records": [{k: row[k] for k in ("id", "name", "address")} for row in response["data"]["records"]],
+        "total": 2,
+        "sample_limit": 50,
+        "truncated": True,
+        "ordering_guaranteed": False,
+        "complete_timeline": False,
+        "samples_returned": 1,
+        "absence": None,
+    }
     evidence = {
         "tool": TOOL,
         "inputs": body["inputs"],
@@ -297,3 +318,36 @@ def test_the_same_endpoint_dispatches_by_the_runs_own_operation():
     assert _is_consumer_run(context("charging_status"), RUN) is True
     assert _is_consumer_run(context("operator_order_diagnosis"), RUN) is False
     assert _is_consumer_run(context("operator_conversation"), RUN) is False
+
+
+def test_second_authorization_preserves_read_evidence_and_proxy_envelope(grants):
+    first = grant(grants)
+    request = first["request"]
+    response = grants.proxy(RUN, first["bearer"], request["path"], request["query"])
+    assert response["data"]["current"] == 1 and response["data"]["size"] == 50
+    assert response["data"]["records"][0]["tenantId"] == "T-1"
+    evidence = grants.grants[RUN].evidence
+    assert grant(grants) == first
+    assert grants.grants[RUN].evidence is evidence
+    assert grants.proxy(RUN, first["bearer"], request["path"], request["query"]) == response
+
+
+def test_revoked_run_cannot_reuse_a_cached_proxy_response(grants, monkeypatch):
+    body = grant(grants)
+    request = body["request"]
+    grants.proxy(RUN, body["bearer"], request["path"], request["query"])
+    monkeypatch.setattr(grants.context.agent_run_store, "get", lambda _: run(state="revoked"))
+    with pytest.raises(consumer_tool_grants.ConsumerToolRefused, match="inactive"):
+        grants.proxy(RUN, body["bearer"], request["path"], request["query"])
+
+
+@pytest.mark.parametrize("arguments", [{"name": "站点"}, {"address": "站点"}])
+def test_proxy_filters_authorized_sites_that_do_not_match_keywords(grants, arguments):
+    body = grant(grants, arguments)
+    request = body["request"]
+    response = grants.proxy(RUN, body["bearer"], request["path"], request["query"])
+    assert response["data"]["records"] == []
+    evidence = grants.grants[RUN].evidence["data"]
+    assert evidence["records"] == []
+    assert evidence["total"] == 2  # 上游计数不冒充本地匹配数量。
+    assert evidence["truncated"] is True

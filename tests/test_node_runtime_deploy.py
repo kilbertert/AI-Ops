@@ -90,6 +90,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     )
     context = ssl.create_default_context(cafile=str(certificate / "server.crt"))
     seen = []
+    contracts = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
@@ -98,6 +99,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
             self.end_headers()
 
         def do_POST(self):  # noqa: N802
+            contracts.append(self.headers.get("X-AI-Ops-Tool-Contract"))
             seen.append(
                 (
                     self.path,
@@ -117,14 +119,17 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    text = (DEPLOY / "gateway-callback.conf.template").read_text()
-    for key, value in {
-        "AIOPS_NODE_BRIDGE": "127.0.0.1",
-        "AIOPS_NODE_STATE": str(tmp_path),
-        "AIOPS_NODE_CONFIG": str(tmp_path),
-        "AIOPS_PRODUCTION_GATEWAY": f"http://127.0.0.1:{upstream.server_port}",
-    }.items():
-        text = text.replace("${" + key + "}", value)
+    import runpy
+
+    renderer = runpy.run_path(str(DEPLOY.parents[1] / "tools/content/render_node_callback.py"))
+    text = renderer["render"](
+        "127.0.0.1", str(tmp_path), str(tmp_path), f"http://127.0.0.1:{upstream.server_port}"
+    )
+    assert "lua_package_path" not in text
+    extras = 'lua_package_path "/synthetic/?.lua;;";'
+    assert extras in renderer["render"](
+        "127.0.0.1", str(tmp_path), str(tmp_path), "http://127.0.0.1:1", extras
+    )
     config = tmp_path / "nginx.conf"
     config.write_text(text.replace(":8788", f":{port}"))
     proc = subprocess.Popen(
@@ -172,22 +177,30 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
             assert error.value.code in (403, 404)
         assert len(seen) == 3
         root = "/v1/internal/operator-runs/run_test"
-        for tail in (
-            "completions",
-            "tools/cpms_order_detail/authorization",
-            "tools/cpms_charging_samples/evidence",
-        ):
+        from aiops_diagnostics.operator import operator_tools
+
+        tails = ["completions"] + [
+            f"tools/{tool.name}/{action}"
+            for tool in operator_tools.tools()
+            for action in ("authorization", "evidence")
+        ]
+        for tail in tails:
             path = root + "/" + tail
             with opener.open(
                 urllib.request.Request(
                     f"https://127.0.0.1:{port}{path}",
                     data=b"{}",
-                    headers={"Authorization": "Bearer node-token", "X-AI-Ops-Exec-Config": "manifest"},
+                    headers={
+                        "Authorization": "Bearer node-token",
+                        "X-AI-Ops-Exec-Config": "manifest",
+                        "X-AI-Ops-Tool-Contract": "request-target/1",
+                    },
                 ),
                 timeout=2,
             ) as res:
                 assert res.status == 204
             assert seen[-1] == (path, "Bearer node-token", "manifest", b"{}")
+            assert contracts[-1] == "request-target/1"
         path = root + "/cpms/iotChargingDevice/getChargingMonitor/ORDER-1?current=1&size=50"
         with opener.open(
             urllib.request.Request(
@@ -197,8 +210,36 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
         ) as res:
             assert res.status == 204
         assert seen[-1] == (path, "Bearer task-grant", None, b"")
+        for tool in operator_tools.tools():
+            target = tool.request({"order_no": "ORDER-1", "name": "天河"})
+            path = root + "/cpms" + target["path"] + "?" + target["query"]
+            with opener.open(
+                urllib.request.Request(
+                    f"https://127.0.0.1:{port}{path}", headers={"Authorization": "Bearer task-grant"}
+                ),
+                timeout=2,
+            ) as res:
+                assert res.status == 204
+            assert seen[-1] == (path, "Bearer task-grant", None, b"")
+        path = "/v1/internal/consumer-tools/run_test/chSite/page?current=1&size=50"
+        with opener.open(
+            urllib.request.Request(
+                f"https://127.0.0.1:{port}{path}", headers={"Authorization": "Bearer task-grant"}
+            ),
+            timeout=2,
+        ) as res:
+            assert res.status == 204
+        before_refused = len(seen)
         for path, method in [
             (root + "/tools/shell/authorization", "POST"),
+            # 每条 path_template **各自**成立，不统一加可选尾段：站点分页没有尾段，
+            # 订单详情必须有单号。这两种形状实测会被渲染器放行的，只有通过前缀兜底才会。
+            (root + "/cpms/chSite/page/ORDER-1", "GET"),
+            (root + "/cpms/chSite/pageBOGUS", "GET"),
+            (root + "/cpms/chSite/page/EXTRA", "GET"),
+            (root + "/cpms/chOrderInfo/getOrderInfoDetail", "GET"),
+            ("/v1/internal/consumer-tools/run_test/chOrderInfo/getOrderInfoDetail/ORDER-1", "GET"),
+            ("/v1/internal/consumer-tools/run_test/chSite/page", "POST"),
             (root + "/cpms/chOrderInfo/stopCharging/ORDER-1", "GET"),
             (root + "/cpms/chOrderInfo/getOrderInfoDetail/ORDER-1", "POST"),
         ]:
@@ -207,7 +248,10 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
                     urllib.request.Request(f"https://127.0.0.1:{port}{path}", method=method), timeout=2
                 )
             assert error.value.code in (403, 404)
-        assert len(seen) == 7
+        assert len(seen) == before_refused
+        # 被拒的请求不能带走进程：正则回溯或错配把 nginx 打崩，白名单看起来「生效」，
+        # 实际是上游全断。断言放在请求之后。
+        assert proc.poll() is None
     finally:
         proc.terminate()
         proc.communicate(timeout=5)

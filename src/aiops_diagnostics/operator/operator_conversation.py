@@ -128,6 +128,19 @@ def manifest(text):
     return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def question_span(value: str, question: str) -> str:
+    """只忽略空白和大小写匹配，返回用户原文；保留地名内部空格。"""
+    needle = "".join(value.split()).casefold()
+    if not needle:
+        return ""
+    positions = [i for i, char in enumerate(question) if not char.isspace() for _ in char.casefold()]
+    folded = "".join(char for char in question if not char.isspace()).casefold()
+    start = folded.find(needle)
+    if start < 0:
+        return ""
+    return question[positions[start] : positions[start + len(needle) - 1] + 1]
+
+
 def validate(answer, question):
     if (
         not isinstance(answer, dict)
@@ -143,15 +156,21 @@ def validate(answer, question):
     ):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
     terms = answer["address_terms"] + ([answer["name"]] if answer["name"] else [])
-    if any(
-        not isinstance(term, str)
-        or not 1 <= len(term) <= 80
-        or not term.strip()
-        or term.casefold() not in question.casefold()
-        or any(c in term for c in "%_\\\r\n")
-        for term in terms
-    ):
-        raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+    spans = []
+    for term in terms:
+        if not isinstance(term, str) or not 1 <= len(term) <= 80 or not term.strip():
+            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        if any(c in term for c in "%_\\\r\n"):
+            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        span = question_span(term, question)
+        if not span:
+            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        spans.append(span)
+    fixed = dict(
+        answer,
+        name=spans[-1] if answer["name"] else "",
+        address_terms=spans[: len(answer["address_terms"])],
+    )
     if answer["kind"] == "site_search":
         # **空关键词合法**：它表示"列出我可见范围内的站点"，不是"搜某个地点"。
         # 这里曾经要求关键词非空，把「我当前有哪些站点？」判成非法 —— 而那个限制
@@ -164,6 +183,7 @@ def validate(answer, question):
         validate_site_note(answer["text"])
     elif terms or not answer["text"].strip() or claims_mutation(answer["text"]):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+    return fixed
 
 
 def validate_site_note(text):
@@ -192,14 +212,56 @@ def validate_site_note(text):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
 
 
-def site_facts(sites, language) -> dict[str, str]:
+#: 站点一次最多展示几条。与 ``operator_cpms.SITE_MAX_SHOWN`` 是**同一个上限**：
+#: 那个模块导入本模块，反向导入会成环，所以常量住在这里、那边别名引用。
+SITE_MAX_SHOWN = 10
+
+
+def shown_sites(sites) -> list:
+    """渲染与事实填充共用的那十行；截断发生在这里，不在每个调用点。
+
+    上游查询、工具证据、C 端投影各自按自己的规则返回（工具固定第一页 50 条），
+    所以不能靠它们已经截过 —— 三条入口都在这里收口。
+    """
+    return sites["sites"][:SITE_MAX_SHOWN]
+
+
+def _count_is_total(sites, listing: bool) -> bool:
+    """``total`` 能不能当成「匹配到多少个」说出去。
+
+    两个理由说不能：列举之外（搜索）时它是**上游**计数，本地还要再过滤一遍；
+    以及这一页没读全（``limited`` 且未超出展示上限）时它只说明「还有更多」。
+    员工的租户口径（``scope_limited``）同理。
+    """
+    return (
+        listing
+        and not sites.get("scope_limited")
+        and not (sites.get("limited") and len(sites["sites"]) <= len(shown_sites(sites)))
+    )
+
+
+def _stated_count(sites, listing: bool) -> int:
+    """这次查询**可以说出去**的条数 —— 正文头一句与说明片段共用这一个数。
+
+    没列出的部分由「另有 N 个」交代，两个数因此永远对得上。
+    """
+    total = sites.get("total") or 0
+    if _count_is_total(sites, listing) and total > 0:
+        return total
+    return len(shown_sites(sites))
+
+
+def site_facts(sites, language, *, listing: bool = False) -> dict[str, str]:
     """这一轮**可以**填进说明的事实。与 :func:`render` 写的那份清单同源，不另算一遍。"""
     zh = language.startswith("zh")
+    rows = shown_sites(sites)
     return {
-        "site_count": str(len(sites["sites"])),
+        # 这个数必须与 :func:`render` 头一句相同：曾经的写法是 `len(shown_sites(...))`，
+        # 于是同一段答复里「共 10 个站点」紧跟着「共 500 个站点」（2026-11-02 复审）。
+        "site_count": str(_stated_count(sites, listing)),
         "site_roster": "\n".join(
             f"{i}. {row['name']} — {row['address'] or ('地址未提供' if zh else 'Address unavailable')}"
-            for i, row in enumerate(sites["sites"], 1)
+            for i, row in enumerate(rows, 1)
         ),
         "source": sites["source"],
         "observed_at": sites["observed_at"],
@@ -211,9 +273,9 @@ def site_facts(sites, language) -> dict[str, str]:
     }
 
 
-def fill_site_note(text, sites, language) -> str:
+def fill_site_note(text, sites, language, *, listing: bool = False) -> str:
     """把说明里的片段填成系统给出的事实。未知片段是协议错误，不是措辞问题。"""
-    facts = site_facts(sites, language)
+    facts = site_facts(sites, language, listing=listing)
     if {name for name in SITE_SLOT.findall(text)} - set(facts):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
     return SITE_SLOT.sub(lambda match: facts[match.group(1)], text)
@@ -245,7 +307,7 @@ def render(answer, sites, language):
                 ]
             lines.extend(
                 f"{i}. {s['name']} — {s['address'] or ('地址未提供' if zh else 'Address unavailable')}"
-                for i, s in enumerate(sites["sites"], 1)
+                for i, s in enumerate(shown_sites(sites), 1)
             )
             text = "\n".join(lines)
         elif listing:
@@ -269,12 +331,32 @@ def render(answer, sites, language):
             )
         if not sites["empty_scope"]:
             text += "\n" + sites["source"] + " · " + sites["observed_at"]
+        raw = shown_sites(sites)
+        if _count_is_total(sites, listing):
+            # 可信的总数与展示同源：说「共 N 个」，就得交代少列的那部分。
+            remaining = _stated_count(sites, listing) - len(raw)
+            line = (
+                f"另有 {remaining} 个站点未在此列出。"
+                if zh
+                else f"{remaining} more sites are not listed here."
+            )
+        else:
+            # 只能指出**本地确实握有**的匹配行，不能拿上游计数冒充：搜索问法下
+            # total 是过滤前的计数，说成「另有 N 个匹配」就是编的。
+            remaining = len(sites["sites"]) - len(raw)
+            line = (
+                f"另有 {remaining} 个匹配站点未在此列出。"
+                if zh
+                else f"{remaining} more matching sites are not listed here."
+            )
+        if remaining > 0:
+            text += "\n" + line
         # 模型写的说明只能**在前**：它负责语气，事实全部在它下面由系统写出。
         # 片段（{{fact:site_roster}} 等）由系统填值，说明里不会出现它自己编的名单。
         note = (answer.get("text") or "").strip()
         if note:
             validate_site_note(note)
-            text = fill_site_note(note, sites, language) + "\n\n" + text
+            text = fill_site_note(note, sites, language, listing=listing) + "\n\n" + text
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
 
 
@@ -283,18 +365,27 @@ def _roster_count(sites, zh):
 
     只在**数字可信**时给出总数：员工的 CPMS 计数是租户口径，还要再经站点集合过滤，
     两者不等时那个 total 不是"你有多少个"，此时只说显示了几条，不编总数。
+
+    与 :func:`site_facts` 的 ``site_count`` 是同一个判断：说明片段里的数字若与这里
+    的头一句不同，读者会在同一段答复里看到两个总数。
     """
-    shown = len(sites["sites"])
+    shown = len(shown_sites(sites))
     total = sites.get("total") or 0
-    trustworthy = not sites.get("scope_limited")
-    if total <= 0 or (trustworthy and total == shown):
+    if total <= 0:
         return ""
-    if not trustworthy:
+    if not _count_is_total(sites, True):
+        # 这一页之外还有没读过的东西。此时**不能说「前 N 个」**：那意味着「按某种顺序
+        # 取到的最前面几条，其余也可知」。41 上 total=153 是常态，而我们只读了一页；
+        # 「本次读取到 N 个」才是事实。余量由「结果可能不完整」交代（limited），
+        # 已握有的多余行由「另有 N 个」交代。
         return (
-            f"当前账号可见范围内显示前 {shown} 个站点："
+            f"当前账号可见范围内，本次读取到 {shown} 个站点："
             if zh
-            else f"Showing the first {shown} sites in your scope:"
+            else f"Read {shown} sites in your scope on this pass:"
         )
+    if total == shown:
+        return ""
+    # 读全了且超出展示上限：这里的「前 N 个」是准的 —— total 行都在手里。
     return (
         f"当前账号可见范围内共 {total} 个站点，这里显示前 {shown} 个："
         if zh
