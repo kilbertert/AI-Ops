@@ -188,7 +188,7 @@ def _sites_from_evidence(caller, task, answer):
         "limited": bool(data["truncated"]),
         "empty_scope": scope.site_ids == (),
         "total": int(data["total"]),
-        "scope_limited": True,
+        "scope_limited": scope.site_ids is not None,
     }
 
 
@@ -591,7 +591,7 @@ class OperatorCpms:
             "expires_at": run.expires_at.isoformat(),
         }
 
-    def _grant_sites(self, task, run, tool) -> list[str]:
+    def _grant_sites(self, task, run, tool) -> list[str] | None:
         """这一次授权允许碰的站点。
 
         订单诊断：订单所在的那**一个**站点（保持既有收窄）。
@@ -601,7 +601,7 @@ class OperatorCpms:
         if diagnoses_an_order(run):
             return [task.order_site_id]
         scope = operator_scope(task.caller, allow_empty=True)
-        return list(scope.site_ids or ())
+        return list(scope.site_ids) if scope.site_ids is not None else None
 
     def proxy(self, run_id, grant, path, query, method="GET"):
         task = self.tasks.get(run_id)
@@ -616,7 +616,8 @@ class OperatorCpms:
             (
                 name
                 for name in TOOL_NAMES
-                if tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
+                if allowed_in(name, run)
+                and tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
                 == {"method": method, "path": path, "query": query}
             ),
             None,
@@ -630,11 +631,27 @@ class OperatorCpms:
             if tool == TOOL_NAMES[1] and TOOL_NAMES[0] not in task.delivered:
                 raise OperatorRefused("OPERATOR_DETAIL_REQUIRED")
 
-            body = cpms_get(
-                task.base_url + path + ("?" + query if query else ""),
-                task.bearer,
-                task.caller.effective_tenant_id,
+            body = (
+                cpms_get(
+                    task.base_url + path + ("?" + query if query else ""),
+                    task.bearer,
+                    task.caller.effective_tenant_id,
+                )
+                if tool != SITE_TOOL or site_scope(task.caller).site_ids != ()
+                else {"code": 0, "data": {"records": [], "total": 0, "current": 1, "size": 50}}
             )
+            if tool == SITE_TOOL:
+                data, response = site_tool_result(site_scope(task.caller), body, tool)
+                self._current(run_id, tool=tool)
+                task.evidence[tool] = {
+                    "tool": tool,
+                    "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
+                    "source": operator_tools.tool(tool).source,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "data": data,
+                }
+                task.evidence[tool]["response"] = response
+                return task.evidence[tool]["response"]
             validate_body(body, task.caller, run.order_no, tool)
             rows = [body["data"]["chOrderInfoModel"]] if tool == TOOL_NAMES[0] else body["data"]["records"]
             if any(row["siteId"] != task.order_site_id for row in rows):
@@ -909,6 +926,32 @@ class OperatorCpms:
 #: 分时段明细（`periodFeeDetail`）在外层响应里，本层不取 —— 本次只补平铺金额。
 DETAIL_FIELDS = list(operator_tools.tool("cpms_order_detail").evidence_fields)
 SAMPLE_FIELDS = list(operator_tools.tool("cpms_charging_samples").evidence_fields)
+
+
+def site_tool_result(scope, body, tool, *, outside_scope="reject"):
+    """证据只含声明字段；节点取数仍需分页回显和已核对的租户身份。"""
+    rows, total = site_page(scope, body, 1, outside_scope=outside_scope)
+    declared = operator_tools.tool(tool)
+    data = {
+        "records": [{key: row[key] for key in declared.evidence_fields} for row in rows],
+        "total": total,
+        "sample_limit": declared.page_size,
+        "truncated": total > len(rows),
+        "ordering_guaranteed": declared.flags["ordering_guaranteed"],
+        "complete_timeline": declared.flags["complete_timeline"],
+        "samples_returned": len(rows),
+        "absence": declared.flags["absence_when_empty"] if not rows else None,
+    }
+    response = {
+        "code": 0,
+        "data": {
+            "records": [dict(row, tenantId=scope.tenant_id) for row in data["records"]],
+            "total": total,
+            "current": 1,
+            "size": declared.page_size,
+        },
+    }
+    return data, response
 
 
 def minimized_response(body, tool):

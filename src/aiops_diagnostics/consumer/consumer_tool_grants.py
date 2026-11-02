@@ -179,23 +179,31 @@ class ConsumerToolGrants:
             existing = self.grants.get(run_id)
             # 节点在取数前后各领一次并要求两次相等。同一 run、同一工具、同一参数
             # 必须拿到同一份 —— 否则第二次领取会被判成「授权变了」。
-            if existing is not None and existing.tool == tool and existing.arguments == cleaned:
-                token = existing.token
-            else:
-                token = secrets.token_urlsafe(32)
+            same = (
+                existing is not None
+                and existing.tool == tool
+                and existing.arguments == cleaned
+                and existing.site_ids == own.site_ids
+                and existing.fingerprint == caller.scope_fingerprint
+            )
+            token = existing.token if same else secrets.token_urlsafe(32)
             if existing is None and len(self.grants) >= 20:
                 raise ConsumerToolRefused("CONSUMER_BUSY", "too many consumer tool grants")
-            self.grants[run_id] = _Grant(
-                token=token,
-                fingerprint=caller.scope_fingerprint,
-                tenant_id=caller.effective_tenant_id,
-                c_user_id=c_user_id,
-                tool=tool,
-                arguments=cleaned,
-                request=declared.request(values),
-                site_ids=own.site_ids,
-                base_url=base,
-                expires_at=run.expires_at,
+            self.grants[run_id] = (
+                existing
+                if same
+                else _Grant(
+                    token=token,
+                    fingerprint=caller.scope_fingerprint,
+                    tenant_id=caller.effective_tenant_id,
+                    c_user_id=c_user_id,
+                    tool=tool,
+                    arguments=cleaned,
+                    request=declared.request(values),
+                    site_ids=own.site_ids,
+                    base_url=base,
+                    expires_at=run.expires_at,
+                )
             )
         return {
             "run_id": run_id,
@@ -220,6 +228,9 @@ class ConsumerToolGrants:
             raise ConsumerToolRefused("CONSUMER_GRANT_REJECTED", "grant rejected")
         if grant.expires_at <= datetime.now(UTC):
             raise ConsumerToolRefused("CONSUMER_GRANT_EXPIRED", "grant expired")
+        run = self.context.agent_run_store.get(run_id)
+        if run is None or run.state not in {"issued", "running"}:
+            raise ConsumerToolRefused("CONSUMER_RUN_INACTIVE", "consumer run is inactive")
         return grant
 
     def proxy(self, run_id: str, token: str, path: str, query: str, method: str = "GET"):
@@ -229,25 +240,19 @@ class ConsumerToolGrants:
         with grant.lock:
             if grant.evidence is not None:
                 return grant.evidence["response"]
-            body = consumer_sites._get(  # noqa: SLF001 - 同一凭据形状只有一处实现
-                grant.base_url + path + ("?" + query if query else ""),
-                grant.tenant_id,
-                grant.c_user_id,
+            body = (
+                consumer_sites._get(  # noqa: SLF001 - 同一凭据形状只有一处实现
+                    grant.base_url + path + ("?" + query if query else ""),
+                    grant.tenant_id,
+                    grant.c_user_id,
+                )
+                if grant.site_ids
+                else {"code": 0, "data": {"records": [], "total": 0, "current": 1, "size": 50}}
             )
             scope = operator_cpms.SiteScope(grant.tenant_id, grant.site_ids, grant.fingerprint)
-            page = int(query.rsplit("current=", 1)[1].split("&")[0]) if "current=" in query else 1
-            rows, total = operator_cpms.site_page(scope, body, page, outside_scope="skip")
             declared = self._declared(grant.tool)
-            data = {
-                "records": [{key: row[key] for key in declared.evidence_fields} for row in rows],
-                "total": total,
-                "sample_limit": declared.page_size,
-                "truncated": total > len(rows),
-                "ordering_guaranteed": False,
-                "complete_timeline": False,
-                "samples_returned": len(rows),
-                "absence": "no_samples" if not rows else None,
-            }
+            data, response = operator_cpms.site_tool_result(scope, body, grant.tool, outside_scope="skip")
+            self._current(run_id, token)
             grant.evidence = {
                 "tool": grant.tool,
                 "inputs": declared.declared_inputs(operator_cpms.run_values(grant.tool, "", grant.arguments)),
@@ -255,10 +260,8 @@ class ConsumerToolGrants:
                 "observed_at": datetime.now(UTC).isoformat(),
                 "data": data,
             }
-            grant.evidence["response"] = data
-            # 节点按 CPMS 的信封解析（`code` + `data`），代理必须原样回这个形状，
-            # 否则每一次取数都会被判成 `cpms_invalid_response`。
-            return {"code": 0, "data": data}
+            grant.evidence["response"] = response
+            return response
 
     def record(self, run_id: str, node_token: str, manifest_id: str, tool: str, payload):
         # 上报证据走的是节点自己的凭据（`GatewayClient.post` 只发节点令牌），

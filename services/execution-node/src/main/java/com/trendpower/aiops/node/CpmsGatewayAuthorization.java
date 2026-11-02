@@ -17,11 +17,14 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
                                                 com.fasterxml.jackson.databind.JsonNode arguments) {
         // 声明契约版本：旧 Gateway 不认识这个头，会回一份没有 `request` 的载荷，那样在
         // 下面被拒 —— 两个方向都落在可预期的位置，而不是等完成回调里缺字段。
+        var body = new ObjectMapper().createObjectNode();
+        body.set("arguments", arguments == null ? new ObjectMapper().createObjectNode() : arguments);
         JsonNode data = gateway.post(
                 path(run, tool) + "/authorization",
-                arguments == null ? "{}" : arguments.toString(), manifest, CpmsReadTool.CONTRACT);
+                body.toString(), manifest, CpmsReadTool.CONTRACT);
         if (!run.equals(data.path("run_id").asText()) || !tool.equals(data.path("tool").asText())
-                || !manifest.equals(data.path("manifest_id").asText()) || !data.path("site_ids").isArray()) {
+                || !manifest.equals(data.path("manifest_id").asText())
+                || !(data.path("site_ids").isArray() || data.path("site_ids").isNull())) {
             throw CpmsReadTool.refused("authorization_identity_mismatch");
         }
         if (!CpmsReadTool.CONTRACT.equals(data.path("contract").asText())) {
@@ -33,7 +36,7 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
         }
         JsonNode request = data.path("request");
         return new CpmsReadTool.Grant(data.path("authorization_id").asText(), data.path("tenant_id").asText(),
-                sites, data.path("inputs"),
+                data.path("site_ids").isNull() ? null : sites, data.path("inputs"),
                 new CpmsReadTool.Request(request.path("method").asText(), request.path("path").asText(),
                         request.path("query").asText()),
                 data.path("base_url").asText(),
