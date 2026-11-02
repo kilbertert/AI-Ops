@@ -72,8 +72,12 @@
 
 # 修复后复验（同日 22:39，网关 `1.0.0+c54735dbaa6a`）
 
-PR #1312 合并 `c54735db` → CD 成功 → Dify 原生发布（workflow `17d89f00`）→
-`/v1/dify/publish` 推进到 agent v18 / revision 19。
+PR #1312 合并 `c54735db` → CD 成功（网关 `1.0.0+c54735dbaa6a`）→
+Dify 原生 publish 生成中间版本 `17d89f00`（**未生效**）→
+`/v1/dify/publish` 冻结并推进到 **agent v18 / revision 19 / workflow `9c2cb04a`**。
+
+**生效的 workflow 是 `9c2cb04a`**：`chat_dify_runs` 里四次账单/状态复验（14:39、14:41）
+全部记录的是它；`17d89f00` 只是原生 publish 的中间产物，没有任何请求跑过它。
 
 ## 账单轮 —— 通过
 
@@ -111,4 +115,5 @@ PR #1312 合并 `c54735db` → CD 成功 → Dify 原生发布（workflow `17d89
 | 账单链路 | **通过**（修复后） |
 | 状态轮回归 | 通过 |
 
-截图：`w4.jpg`（账单页）、`v8.jpg`（越权反例 `order not found`）。
+截图未入库（含真实手机号与订单号，属于私有运行证据），存放于操作者私有目录
+`~/.cache/aiops-consumer-acceptance3-20261102/`：`w4.jpg`（账单页正文）、`v8.jpg`（越权反例 `order not found`）。
