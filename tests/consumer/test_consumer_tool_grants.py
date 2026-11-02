@@ -339,3 +339,15 @@ def test_revoked_run_cannot_reuse_a_cached_proxy_response(grants, monkeypatch):
     monkeypatch.setattr(grants.context.agent_run_store, "get", lambda _: run(state="revoked"))
     with pytest.raises(consumer_tool_grants.ConsumerToolRefused, match="inactive"):
         grants.proxy(RUN, body["bearer"], request["path"], request["query"])
+
+
+@pytest.mark.parametrize("arguments", [{"name": "站点"}, {"address": "站点"}])
+def test_proxy_filters_authorized_sites_that_do_not_match_keywords(grants, arguments):
+    body = grant(grants, arguments)
+    request = body["request"]
+    response = grants.proxy(RUN, body["bearer"], request["path"], request["query"])
+    assert response["data"]["records"] == []
+    evidence = grants.grants[RUN].evidence["data"]
+    assert evidence["records"] == []
+    assert evidence["total"] == 2  # 上游计数不冒充本地匹配数量。
+    assert evidence["truncated"] is True

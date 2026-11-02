@@ -1,6 +1,7 @@
 """非订单提问必须经过现役节点，但不能取得订单工具。"""
 
 import json
+import re
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -328,6 +329,65 @@ def test_listing_reports_the_count_only_when_it_is_trustworthy(sites, needle, fo
         assert forbidden not in text
 
 
+def test_rendering_never_lists_more_than_the_show_limit():
+    """工具栏的证据是**一整页 50 条**，展示上限 10 必须在这里收口。
+
+    2026-11-02 复审实测：上游忽略关键词、返回权限内的 11 条，render 直接 enumerate
+    ``sites["sites"]``，于是「共 1 个站点」下面列了 11 行 —— 两个数字彼此矛盾。
+    """
+    limit = operator_cpms.SITE_MAX_SHOWN
+    rows = [{"name": f"站{i}", "address": "地址"} for i in range(1, limit + 2)]
+    roster = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-10-29T00:00:00+00:00",
+        "sites": rows,
+        "total": len(rows),
+        "limited": True,
+        "empty_scope": False,
+        "scope_limited": True,
+    }
+    text = conversation.render(
+        {"kind": "site_search", "text": "", "name": "", "address_terms": []}, roster, "zh-CN"
+    )["blocks"][0]["text"]
+    assert len(re.findall(r"(?m)^\d+\.", text)) == limit
+    assert f"另有 {len(rows) - limit} 个" in text
+    assert conversation.site_facts(roster, "zh-CN")["site_count"] == str(limit)
+
+
+def test_tool_evidence_page_of_many_rows_shows_ten_and_says_how_many_more():
+    """工具栏取回的是**一整页**：11 行不突破展示上限，也不能说成「查询不完整」。
+
+    关键词既可能在上游被忽略、又能在本地过滤掉一部分，于是「权限内 11 条全命中」是
+    一个真实形状。它必须走「共 11 个，显示前 10 个／另有 1 个未列出」，而不是
+    「达到上限，结果可能不完整」——后者是查询没取全的意思，事实不是那样。
+    """
+    limit = operator_cpms.SITE_MAX_SHOWN
+    rows = [{"id": f"SITE-{i}", "name": f"天河站{i}", "address": "广州天河"} for i in range(1, limit + 2)]
+    sites = operator_cpms._sites_from_evidence(
+        tenant_owner(),
+        SimpleNamespace(
+            delivered={operator_cpms.SITE_TOOL},
+            arguments={operator_cpms.SITE_TOOL: {"name": "天河"}},
+            evidence={
+                operator_cpms.SITE_TOOL: {
+                    "source": "cpms.sitePage",
+                    "observed_at": "2026-11-02T00:00:00+00:00",
+                    "data": {"records": rows, "total": len(rows), "truncated": False},
+                }
+            },
+        ),
+        {"kind": "site_search", "text": "", "name": "天河", "address_terms": []},
+    )
+    text = conversation.render(
+        {"kind": "site_search", "text": "", "name": "天河", "address_terms": []}, sites, "zh-CN"
+    )["blocks"][0]["text"]
+    assert len(re.findall(r"(?m)^\d+\.", text)) == limit
+    assert f"另有 {len(rows) - limit} 个" in text
+    assert "不完整" not in text  # 整页 11 条是查全了的，展示上限不改变这一点。
+    facts = conversation.site_facts(sites, "zh-CN")
+    assert len(re.findall(r"(?m)^\d+\.", facts["site_roster"])) == limit
+
+
 def test_a_search_that_finds_nothing_still_says_try_another_place():
     """搜索没命中与列举为空是两件事，提示不能混用。"""
     empty = {
@@ -565,6 +625,7 @@ def test_site_tool_end_to_end_through_the_real_tool_chain(operator, monkeypatch)
       * 节点只认订单形状的证据，站点页的证据它在本地就被拒。
     """
     f = operator
+    f["state"]["site_address"] = "广州天河测试路"
     seen = []
 
     def dispatch(_, config, run_id):

@@ -134,7 +134,7 @@ def main():
                     run_id,
                     publication.json()["sha256"],
                     arguments,
-                    empty=label == "empty",
+                    empty=label in {"empty", "nonmatching"},
                     refused=label == "wrong-tenant",
                 )
                 if label == "wrong-tenant":
@@ -161,6 +161,7 @@ def main():
             for label, caller, arguments in [  # noqa: B007 - dispatch closure uses this case
                 ("scoped", scope(), {}),
                 ("keyword", scope(), {"name": "天河"}),
+                ("nonmatching", scope(), {"name": "站点"}),
                 ("spacing", scope(), {"address": "天 河"}),
                 ("tenant", tenant_owner(), {}),
                 ("wrong-tenant", scope(), {}),
@@ -213,6 +214,7 @@ def main():
         for label, arguments in [
             ("scoped", {}),
             ("keyword", {"name": "天河"}),
+            ("nonmatching", {"name": "站点"}),
             ("empty", {}),
             ("wrong-tenant", {}),
         ]:
@@ -237,7 +239,7 @@ def main():
                 run.run_id,
                 run.expected_agent_version,
                 arguments,
-                empty=label == "empty",
+                empty=label in {"empty", "nonmatching"},
                 refused=label == "wrong-tenant",
             )
             evidence = f["ctx"].consumer_tool_grants.grants[run.run_id].evidence

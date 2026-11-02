@@ -100,7 +100,7 @@ def environment(tmp_path, monkeypatch):
                             "id": state["site"],
                             "tenantId": state.get("site_tenant", state["tenant"]),
                             "name": "天河测试站",
-                            "address": "广州市天河区测试路",
+                            "address": state.get("site_address", "广州市天河区测试路"),
                             "contactPhone": "PRIVATE-PHONE",
                         }
                     ],

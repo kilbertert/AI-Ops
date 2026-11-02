@@ -17,7 +17,7 @@ from operations.test_operator_cpms import (  # noqa: F401
 )
 
 
-@pytest.mark.parametrize("arguments", [{}, {"name": "天河"}])
+@pytest.mark.parametrize("arguments", [{}, {"name": "天河"}, {"name": "站点"}, {"address": "站点"}])
 @pytest.mark.parametrize("mode", ["scoped", "tenant", "empty", "wrong-site", "wrong-tenant"])
 def test_site_tool_proxy_preserves_cpms_page_and_accepts_evidence(operator, monkeypatch, arguments, mode):  # noqa: F811
     f = operator
@@ -67,7 +67,7 @@ def test_site_tool_proxy_preserves_cpms_page_and_accepts_evidence(operator, monk
         assert page["current"] == 1 and page["size"] == 50
         assert page["records"] == (
             []
-            if mode == "empty"
+            if mode == "empty" or "站点" in arguments.values()
             else [
                 {
                     "id": "SITE-1",
@@ -90,7 +90,7 @@ def test_site_tool_proxy_preserves_cpms_page_and_accepts_evidence(operator, monk
             "kind": "site_search",
             "text": "查询结果如下。",
             "name": arguments.get("name", ""),
-            "address_terms": [],
+            "address_terms": [arguments["address"]] if arguments.get("address") else [],
         }
         completed = f["client"].post(
             f"/v1/internal/operator-runs/{run_id}/completions",
@@ -121,5 +121,7 @@ def test_site_tool_proxy_preserves_cpms_page_and_accepts_evidence(operator, monk
     assert result.json()["status"] == "completed", result.text
     if mode == "empty":
         assert not f["state"]["calls"]
+    elif "站点" in arguments.values():
+        assert "天河测试站" not in result.text
     else:
         assert "天河测试站" in result.text

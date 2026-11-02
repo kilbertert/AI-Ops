@@ -32,7 +32,8 @@ TOOL_NAMES = operator_tools.names()
 #: 合起来是**「列举不能变成导出」**这条边界。改任何一个都要重新论证，不能当调参。
 SITE_PAGE_SIZE = 50
 SITE_MAX_PAGES = 4
-SITE_MAX_SHOWN = 10
+#: 展示上限的唯一定义在渲染模块（它被本模块导入，反向导入会成环），这里只是别名。
+SITE_MAX_SHOWN = operator_conversation.SITE_MAX_SHOWN
 
 #: 站点列表的 CPMS 路径。查询参数由 :class:`SiteKeywords` 组装，不由调用方拼接。
 SITE_PATH = "/chSite/page"
@@ -186,6 +187,8 @@ def _sites_from_evidence(caller, task, answer):
         "source": evidence["source"],
         "observed_at": evidence["observed_at"],
         "sites": data["records"],
+        # `limited` 只说「查询可能没穷尽」；展示只列 10 条由渲染层的「另有 N 个」说明 ——
+        # 两件事混用会让一句「结果可能不完整」盖住本来完整的 11 条页。
         "limited": bool(data["truncated"]),
         "empty_scope": scope.site_ids == (),
         "total": int(data["total"]),
@@ -642,7 +645,9 @@ class OperatorCpms:
                 else {"code": 0, "data": {"records": [], "total": 0, "current": 1, "size": 50}}
             )
             if tool == SITE_TOOL:
-                data, response = site_tool_result(site_scope(task.caller), body, tool)
+                data, response = site_tool_result(
+                    site_scope(task.caller), body, tool, task.arguments.get(tool) or {}
+                )
                 self._current(run_id, tool=tool)
                 task.evidence[tool] = {
                     "tool": tool,
@@ -929,14 +934,22 @@ DETAIL_FIELDS = list(operator_tools.tool("cpms_order_detail").evidence_fields)
 SAMPLE_FIELDS = list(operator_tools.tool("cpms_charging_samples").evidence_fields)
 
 
-def site_tool_result(scope, body, tool, *, outside_scope="reject"):
+def site_tool_result(scope, body, tool, arguments, *, outside_scope="reject"):
     """证据只含声明字段；节点取数仍需分页回显和已核对的租户身份。"""
     rows, total = site_page(scope, body, 1, outside_scope=outside_scope)
+    keywords = SiteKeywords(
+        arguments.get("name", ""), (arguments["address"],) if arguments.get("address") else ()
+    )
+    rows = [row for row in rows if keywords.matches(row)]
     declared = operator_tools.tool(tool)
     data = {
         "records": [{key: row[key] for key in declared.evidence_fields} for row in rows],
         "total": total,
         "sample_limit": declared.page_size,
+        # ``truncated`` 是**证据**字段：页面没有覆盖上游的全部行。它与「展示只列 10 条」
+        # 是两件事，不能合并 —— Java 节点按 ``total > rows.size()`` 逐字重算这一项并与
+        # 网关比对，改口径会让每一次真实运行都以 OPERATOR_EVIDENCE_MISMATCH 失败。
+        # 展示上限在 ``operator_conversation.shown_sites`` 收口。
         "truncated": total > len(rows),
         "ordering_guaranteed": declared.flags["ordering_guaranteed"],
         "complete_timeline": declared.flags["complete_timeline"],

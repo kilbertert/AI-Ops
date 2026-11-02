@@ -232,6 +232,10 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
         before_refused = len(seen)
         for path, method in [
             (root + "/tools/shell/authorization", "POST"),
+            # 每条 path_template **各自**成立，不统一加可选尾段：站点分页没有尾段，
+            # 订单详情必须有单号。这两种形状实测会被渲染器放行的，只有通过前缀兜底才会。
+            (root + "/cpms/chSite/page/ORDER-1", "GET"),
+            (root + "/cpms/chSite/pageBOGUS", "GET"),
             (root + "/cpms/chSite/page/EXTRA", "GET"),
             (root + "/cpms/chOrderInfo/getOrderInfoDetail", "GET"),
             ("/v1/internal/consumer-tools/run_test/chOrderInfo/getOrderInfoDetail/ORDER-1", "GET"),
@@ -245,6 +249,9 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
                 )
             assert error.value.code in (403, 404)
         assert len(seen) == before_refused
+        # 被拒的请求不能带走进程：正则回溯或错配把 nginx 打崩，白名单看起来「生效」，
+        # 实际是上游全断。断言放在请求之后。
+        assert proc.poll() is None
     finally:
         proc.terminate()
         proc.communicate(timeout=5)

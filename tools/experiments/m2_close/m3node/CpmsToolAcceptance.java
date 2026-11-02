@@ -24,6 +24,7 @@ public final class CpmsToolAcceptance {
     static final AtomicInteger calls = new AtomicInteger();
     static volatile boolean revoked;
     static int recorded;
+    static JsonNode lastRecorded;
     static CpmsReadTool.Grant grant;
     static String contractEcho = CpmsReadTool.CONTRACT;
     static final CpmsReadTool.Authorization AUTH = new CpmsReadTool.Authorization() {
@@ -39,6 +40,7 @@ public final class CpmsToolAcceptance {
                                      CpmsReadTool.Grant value, JsonNode evidence) {
             if (revoked) throw CpmsReadTool.refused("revoked");
             check(!evidence.toString().contains("PRIVATE"), "evidence redaction");
+            lastRecorded = evidence.path("data");
             recorded++;
         }
     };
@@ -236,6 +238,15 @@ public final class CpmsToolAcceptance {
         check(result.path("data").path("records").size() == 1
                 && "S1".equals(result.path("data").path("records").get(0).path("id").asText()),
                 "site row accepted without an order number");
+        // 站点页的证据字段整链：Gateway 的 `record` 要求与它自己投影的那份**逐项相等**，
+        // 所以这里核的是形状而不是「有返回」——`truncated` 必须按 total 算，
+        // 不能顺带算上展示上限，否则每次真实运行都会 EVIDENCE_MISMATCH。
+        JsonNode page = lastRecorded;
+        check(page != null && page.path("records").size() == 1
+                && page.path("total").asLong() == 1 && !page.path("truncated").asBoolean()
+                && page.path("sample_limit").asInt() == 50 && page.path("samples_returned").asInt() == 1
+                && page.path("absence").isNull() && !page.path("ordering_guaranteed").asBoolean(),
+                "site page evidence carries the page shape the gateway recomputes");
         for (String test : new String[]{"site-wrong-tenant", "site-wrong-site", "site-proxied", "site-missing-id"}) {
             mode = test;
             int before = recorded;

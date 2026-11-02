@@ -19,3 +19,13 @@ M3NODE_DEPS=<依赖根> M3NODE_JDK_IMAGE=<JDK镜像digest> \
 uv run pytest -n 0 tests/operations/test_site_tool_proxy.py tests/consumer/test_consumer_tool_grants.py
 uv run pytest -n 0 tests/test_node_runtime_deploy.py
 ```
+
+SP-KEYWORD：在步骤 2 中让合成 CPMS 忽略关键词，返回权限内但名称不符的行，
+两端 Java 均应生成空 records 并成功上报；名称、地址分别由 Python 代理回归覆盖。
+清理沿用临时进程/数据库。工具按声明固定读取第 1 页、50 条；total 是上游计数，
+truncated 在过滤或剩余页存在时为真，不证明后续页无匹配。直查最多 4 页，覆盖不同。
+
+SP-SHOW：上游返回权限内超过 10 条匹配站点（合成 CPMS 忽略关键词即可构造），
+两端答复正文与 `{{fact:site_roster}}` 都只列 10 条，并出现「另有 N 个未列出」；
+`truncated` 仍按上游计数判定，不因展示截断翻转。回归在
+`tests/operations/test_operator_conversation.py`（渲染与证据复用各一条）。

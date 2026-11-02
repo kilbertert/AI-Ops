@@ -212,14 +212,29 @@ def validate_site_note(text):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
 
 
+#: 站点一次最多展示几条。与 ``operator_cpms.SITE_MAX_SHOWN`` 是**同一个上限**：
+#: 那个模块导入本模块，反向导入会成环，所以常量住在这里、那边别名引用。
+SITE_MAX_SHOWN = 10
+
+
+def shown_sites(sites) -> list:
+    """渲染与事实填充共用的那十行；截断发生在这里，不在每个调用点。
+
+    上游查询、工具证据、C 端投影各自按自己的规则返回（工具固定第一页 50 条），
+    所以不能靠它们已经截过 —— 三条入口都在这里收口。
+    """
+    return sites["sites"][:SITE_MAX_SHOWN]
+
+
 def site_facts(sites, language) -> dict[str, str]:
     """这一轮**可以**填进说明的事实。与 :func:`render` 写的那份清单同源，不另算一遍。"""
     zh = language.startswith("zh")
+    rows = shown_sites(sites)
     return {
-        "site_count": str(len(sites["sites"])),
+        "site_count": str(len(rows)),
         "site_roster": "\n".join(
             f"{i}. {row['name']} — {row['address'] or ('地址未提供' if zh else 'Address unavailable')}"
-            for i, row in enumerate(sites["sites"], 1)
+            for i, row in enumerate(rows, 1)
         ),
         "source": sites["source"],
         "observed_at": sites["observed_at"],
@@ -265,7 +280,7 @@ def render(answer, sites, language):
                 ]
             lines.extend(
                 f"{i}. {s['name']} — {s['address'] or ('地址未提供' if zh else 'Address unavailable')}"
-                for i, s in enumerate(sites["sites"], 1)
+                for i, s in enumerate(shown_sites(sites), 1)
             )
             text = "\n".join(lines)
         elif listing:
@@ -289,6 +304,15 @@ def render(answer, sites, language):
             )
         if not sites["empty_scope"]:
             text += "\n" + sites["source"] + " · " + sites["observed_at"]
+        raw = shown_sites(sites)
+        if len(raw) < len(sites["sites"]):
+            # 工具证据可以带回整整一页（50 条），而展示上限是 10。少说了这一句，
+            # 读者看到的就是「共 1 个站点」下面列了 50 行。
+            text += "\n" + (
+                f"另有 {len(sites['sites']) - len(raw)} 个匹配站点未在此列出。"
+                if zh
+                else f"{len(sites['sites']) - len(raw)} more matching sites are not listed here."
+            )
         # 模型写的说明只能**在前**：它负责语气，事实全部在它下面由系统写出。
         # 片段（{{fact:site_roster}} 等）由系统填值，说明里不会出现它自己编的名单。
         note = (answer.get("text") or "").strip()
@@ -304,7 +328,7 @@ def _roster_count(sites, zh):
     只在**数字可信**时给出总数：员工的 CPMS 计数是租户口径，还要再经站点集合过滤，
     两者不等时那个 total 不是"你有多少个"，此时只说显示了几条，不编总数。
     """
-    shown = len(sites["sites"])
+    shown = len(shown_sites(sites))
     total = sites.get("total") or 0
     trustworthy = not sites.get("scope_limited")
     if total <= 0 or (trustworthy and total == shown):

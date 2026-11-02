@@ -251,7 +251,9 @@ class ConsumerToolGrants:
             )
             scope = operator_cpms.SiteScope(grant.tenant_id, grant.site_ids, grant.fingerprint)
             declared = self._declared(grant.tool)
-            data, response = operator_cpms.site_tool_result(scope, body, grant.tool, outside_scope="skip")
+            data, response = operator_cpms.site_tool_result(
+                scope, body, grant.tool, grant.arguments, outside_scope="skip"
+            )
             self._current(run_id, token)
             grant.evidence = {
                 "tool": grant.tool,
