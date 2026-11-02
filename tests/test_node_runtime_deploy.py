@@ -60,6 +60,19 @@ def test_node_tool_declaration_mount_matches_the_jvm_path():
     }
 
 
+def _renderer():
+    """加载仓库里的回调配置渲染器（测试不自己拼白名单，那正是漏掉站点工具的方式）。"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "render_node_callback", DEPLOY.parents[1] / "tools/content/render_node_callback.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     nginx = shutil.which("nginx")
     if not nginx:
@@ -120,14 +133,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     # 用**真实渲染器**生成配置：工具白名单与取数路径来自声明，不在这里手写。
     # 2026-11-02 的站点工具事故正是"测试与模板各写一份、声明里加了一个白白漏掉"，
     # 夹具若自己拼白名单，就等于把同一处漏掉在测试里再藏一次。
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        "render_node_callback", DEPLOY.parents[1] / "tools/content/render_node_callback.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
+    module = _renderer()
 
     config = tmp_path / "nginx.conf"
     config.write_text(
@@ -225,6 +231,12 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
             (root + "/cpms/chOrderInfo/stopCharging/ORDER-1", "GET"),
             (root + "/cpms/chOrderInfo/getOrderInfoDetail/ORDER-1", "POST"),
             (root + "/cpms/chSite/page?current=1&size=50", "POST"),
+            # 白名单是**每条 path_template 各自成立**，不是「像某个前缀就行」。
+            # 2026-11-02 的候选实现给所有路径统一加可选斜杠/尾段，实测放行了下面三种
+            # 声明里根本没有的形状（站点分页没有尾段、订单路径必须有单号）。
+            (root + "/cpms/chSite/pageBOGUS", "GET"),
+            (root + "/cpms/chSite/page/ORDER-1", "GET"),
+            (root + "/cpms/chOrderInfo/getOrderInfoDetail", "GET"),
         ]:
             with pytest.raises(urllib.error.HTTPError) as error:
                 opener.open(
@@ -233,9 +245,25 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
             assert error.value.code in (403, 404)
         assert len(seen) == 7 + len(operator_tools.tools())
     finally:
+        # 「起得来」不等于「活得下去」：`nginx -t` 通过、启动后退出的形状是实撞过的
+        # （lua 模块加载失败）。整段请求跑完，进程必须仍是活的。
+        assert proc.poll() is None, proc.stderr.read().decode()
         proc.terminate()
         proc.communicate(timeout=5)
         upstream.shutdown()
+
+
+def test_the_template_carries_no_lua_directive_by_default(tmp_path):
+    """模板不能无条件带 Lua 指令：普通 nginx 会以 `unknown directive` 起不来。
+
+    41 的宝塔构建需要那两行，但它是**该环境**的受控配置，不是模板默认值。渲染器把
+    `AIOPS_NODE_LUA_DIRECTIVES` 原样拼进去 —— 传什么就有什么，不传就是空行。
+    """
+    module = _renderer()
+    plain = module.render("127.0.0.1", "/s", "/c", "http://127.0.0.1:8788")
+    assert not [line for line in plain.splitlines() if line.strip().startswith("lua_")]
+    lua = 'lua_package_path "/www/server/nginx/lib/lua/?.lua;;";'
+    assert lua in module.render("127.0.0.1", "/s", "/c", "http://127.0.0.1:8788", lua)
 
 
 # --------------------------------------------------------------------------

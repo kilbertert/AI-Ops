@@ -128,7 +128,36 @@ def manifest(text):
     return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def question_span(value: str, question: str) -> str:
+    """``value`` 在提问原文里对应的那一段（按用户的原样），否则空串。
+
+    **判据只有一条**：去掉空白后是原文的连续子串。两个入口共用它 —— 工具参数
+    （ADR-0176）与最终答复的关键词 —— 于是「工具参数 → CPMS 过滤器 → 冻结证据 →
+    最终答复」说的是同一串字，不会出现参数放行、答复被拒的裂缝。
+
+    逐词匹配（``all(part in question)``）看着像「只放宽分隔符」，实际放过了重排与重组：
+    实测「深圳福田和广州南山」里的「深圳」「南山」拼成「深圳 南山」照样通过。
+    这里要求**连续等序**，返回的也是原文里那一段，不是模型给的拼法。
+    """
+    needle = "".join(value.split())
+    if not needle:
+        return ""
+    order = [index for index, char in enumerate(question) if not char.isspace()]
+    haystack = "".join(question[index] for index in order).casefold()
+    found = haystack.find(needle.casefold())
+    if found < 0:
+        return ""
+    return "".join(question[index] for index in order[found : found + len(needle)])
+
+
 def validate(answer, question):
+    """放行一份最终答复，返回关键词已订正成原文那一段的那一份。
+
+    关键词判据与工具参数**共用** :func:`question_span`：只容忍空白，不容忍重排与重组。
+    这里如果不跟，就会出现「工具参数放行了、最终答复又把同一串字判成非原文」——
+    2026-11-02 实测就是这个形状：`address="广州 天河"` 过了工具那一关，最终
+    `address_terms=["广州","天河"]` 却因 `"广州"` 不是原文的连续子串被拒。
+    """
     if (
         not isinstance(answer, dict)
         or set(answer) != {"kind", "text", "name", "address_terms"}
@@ -143,15 +172,25 @@ def validate(answer, question):
     ):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
     terms = answer["address_terms"] + ([answer["name"]] if answer["name"] else [])
-    if any(
-        not isinstance(term, str)
-        or not 1 <= len(term) <= 80
-        or not term.strip()
-        or term.casefold() not in question.casefold()
-        or any(c in term for c in "%_\\\r\n")
-        for term in terms
-    ):
-        raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+    # 关键词只容忍空白：模型把「广州天河」写成 `["广州","天河"]` 或「广州 天河」都落到
+    # 原文的同一段上；重排/重组（「深圳南山」之于「深圳福田和广州南山」）仍然判非法。
+    spans = []
+    for term in terms:
+        if not isinstance(term, str) or not 1 <= len(term) <= 80 or not term.strip():
+            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        if any(c in term for c in "%_\\\r\n"):
+            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        span = question_span(term, question)
+        if not span:
+            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        spans.append(span)
+    # 关键词一律订正成原文那一段，于是「工具参数 → CPMS 过滤器 → 冻结证据 → 最终答复」
+    # 是同一串字；`_sites_from_evidence` 的一致性比对才有确定的对象。
+    fixed = dict(
+        answer,
+        name=spans[-1] if answer["name"] else "",
+        address_terms=spans[: len(answer["address_terms"])],
+    )
     if answer["kind"] == "site_search":
         # **空关键词合法**：它表示"列出我可见范围内的站点"，不是"搜某个地点"。
         # 这里曾经要求关键词非空，把「我当前有哪些站点？」判成非法 —— 而那个限制
@@ -164,6 +203,7 @@ def validate(answer, question):
         validate_site_note(answer["text"])
     elif terms or not answer["text"].strip() or claims_mutation(answer["text"]):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+    return fixed
 
 
 def validate_site_note(text):

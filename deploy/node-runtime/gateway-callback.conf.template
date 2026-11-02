@@ -3,11 +3,11 @@ pid ${AIOPS_NODE_STATE}/callback.pid;
 error_log stderr;
 events { worker_connections 128; }
 http {
-# 线上 nginx 是宝塔那套带 lua 模块的构建：缺这两行时 `nginx -t` 仍通过，
-# 但实际启动会以 `failed to load the 'resty.core' module` 退出。模板必须带上，
-# 否则"重渲染一次配置"就会把回调入口弄挂（2026-11-02 实撞过）。
-lua_package_path "/www/server/nginx/lib/lua/?.lua;;";
-lua_package_cpath "/www/server/nginx/lib/lua/?.so;;";
+# Lua 指令**只在**带 lua 模块的构建上写：普通 nginx 见到 `lua_package_path` 直接
+# `unknown directive` 起不来（2026-11-02 真 nginx 测试就是这么红的）。宿主若有既有
+# Lua 参数，作为该环境的受控配置放在 ${AIOPS_NODE_CONFIG}/callback-extra.conf，
+# 由渲染器整体拼接；模板自身不含 Lua 指令。
+${AIOPS_NODE_LUA_DIRECTIVES}
 access_log off;
 client_body_temp_path ${AIOPS_NODE_STATE}/client-temp;
 proxy_temp_path ${AIOPS_NODE_STATE}/proxy-temp;
@@ -41,7 +41,7 @@ server {
     # 站点工具 `cpms_site_search` 就是这样漏的 —— 声明里加了，模板里两处白名单
     # 都没跟上，节点调用被 `location / { return 404; }` 吃掉，运行期表现为
     # `cpms_unavailable`（不是 403，因为根本没到网关）。
-    location ~ ^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/(completions|tools/(${AIOPS_NODE_TOOL_NAMES})/(authorization|evidence))$ {
+    location ~ "^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/(completions|tools/(${AIOPS_NODE_TOOL_NAMES})/(authorization|evidence))$" {
         limit_except POST { deny all; }
         client_max_body_size 256k;
         proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
@@ -51,7 +51,9 @@ server {
         proxy_read_timeout 45s;
         proxy_buffering off;
     }
-    location ~ ^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/cpms/(${AIOPS_NODE_TOOL_PATHS})/?([A-Za-z0-9_-]+)?$ {
+    # 正则**必须加引号**：路径模板里的 `{1,80}` 会让 nginx 的配置分词器把 `}` 当成块结束，
+    # 报 `pcre2_compile() failed: missing closing parenthesis`（2026-11-02 实撞）。
+    location ~ "^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/cpms/(${AIOPS_NODE_TOOL_PATHS})$" {
         limit_except GET { deny all; }
         proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
         proxy_set_header Authorization $http_authorization;

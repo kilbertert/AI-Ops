@@ -99,8 +99,12 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
     两条判据缺一不可：
 
     1. 键必须是声明里列过的那几个 —— 模型不能给工具加参数。
-    2. 每个值必须能在用户提问原文里找到（casefold 后是子串）——
+    2. 每个值必须能在用户提问原文里找到（去掉空白后是原文的**连续子串**）——
        编一个地址，或把上一个用户的地址搬过来，都在这里被判掉。
+
+    放行时返回的值是**原文里那一段**，不是模型给的拼法：下游（CPMS 过滤器、证据
+    比对、最终答复的关键词）只认这一个值，于是「工具参数 → 过滤器 → 冻结证据 →
+    最终答复」是同一串字。
     """
     declared = _declared(tool)
     if arguments is None:
@@ -113,13 +117,23 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
             raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
         if len(value) > 80 or any(char in value for char in _ARGUMENT_FORBIDDEN):
             raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-        stripped = value.strip()
-        if not stripped:
+        if not value.strip():
             continue
-        if stripped.casefold() not in question.casefold():
-            raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-        cleaned[key] = stripped
+        cleaned[key] = from_question(value, question)
     return cleaned
+
+
+def _from_question(value: str, question: str) -> bool:
+    """这个值是不是**用户真的说过**的一整段。见 :func:`operator_conversation.question_span`。"""
+    return bool(operator_conversation.question_span(value, question))
+
+
+def from_question(value: str, question: str) -> str:
+    """模型提议的值 → **用户原文里的那一段**。查 CPMS 用返回值，不用模型的拼法。"""
+    span = operator_conversation.question_span(value, question)
+    if not span:
+        raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+    return span
 
 
 #: 站点查询工具的名字。这里是**唯一**按名字认它的地方：判断「这一轮是否已经用工具
@@ -174,9 +188,14 @@ def _sites_from_evidence(caller, task, answer):
     if evidence is None:
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     arguments = task.arguments.get(SITE_TOOL, {})
-    terms = [term for term in answer["address_terms"] if term]
+    # 两边都用**同一个过滤器含义**比较：工具参数是一条地址，最终答复是一组关键词；
+    # 它们说的必须是同一段原文。`site_keywords()` 是这条规则唯一的实现 —— 它把多个
+    # 关键词合成 CPMS 真正收到的那一个 `address`，所以「["广州","天河"]」与
+    # 「"广州天河"」在这里相等，而「"深圳 南山"」与「["深圳","南山"]」不相等。
+    # 2026-11-02 实测的失败正是这里：拿最长关键词（"广州"）比整串地址（"广州 天河"），
+    # 于是参数一放行、最终答复必然 `OPERATOR_SITE_SEARCH_MISMATCH`。
     if answer["name"] != arguments.get("name", "") or (
-        (max(terms, key=len) if terms else "") != arguments.get("address", "")
+        site_keywords(answer).address != arguments.get("address", "")
     ):
         raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
     data = evidence["data"]
@@ -612,11 +631,16 @@ class OperatorCpms:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         # 白名单是**完整请求目标**：方法、路径、查询串三者都对才算。拿工具名反推路径
         # 的做法已经去掉——那正是「加一条只读路径就要改 Java」的来源。
+        #
+        # 只比**这一次运行允许用的**工具：无订单回合没有订单号，遍历 `TOOL_NAMES`
+        # 会让订单工具的 `request()` 以「缺 order_no」抛 `ToolDeclarationError`，
+        # 于是站点工具每一次取数都在这里 500（2026-11-02 端到端复现）。
         tool = next(
             (
                 name
                 for name in TOOL_NAMES
-                if tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
+                if allowed_in(name, run)
+                and tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
                 == {"method": method, "path": path, "query": query}
             ),
             None,
@@ -635,6 +659,10 @@ class OperatorCpms:
                 task.bearer,
                 task.caller.effective_tenant_id,
             )
+            if not diagnoses_an_order(run):
+                # 站点工具：响应是一页站点，不是订单行。范围判据用**同一处**
+                # `site_page`（逐行核 tenantId 与站点集合），不在这里另写一套。
+                return self._site_response(task, run, tool, body, path, query)
             validate_body(body, task.caller, run.order_no, tool)
             rows = [body["data"]["chOrderInfoModel"]] if tool == TOOL_NAMES[0] else body["data"]["records"]
             if any(row["siteId"] != task.order_site_id for row in rows):
@@ -644,6 +672,41 @@ class OperatorCpms:
             task.evidence[tool] = project_evidence(body, run.order_no, tool)
             task.evidence[tool]["response"] = minimized_response(body, tool)
             return task.evidence[tool]["response"]
+
+    def _site_response(self, task, run, tool, body, path, query):
+        """站点页的证据：形状与 C 端代理**同一份**，范围判据走 `site_page`。
+
+        证据里的字段与节点上传的那份必须逐项相等（`record` 精确比对），因此这里只投影
+        声明里的 `evidence_fields`；分页标记同样来自声明。
+        """
+        declared = operator_tools.tool(tool)
+        page = int(
+            next((part.split("=", 1)[1] for part in query.split("&") if part.startswith("current=")), "1")
+        )
+        scope = operator_scope(task.caller, allow_empty=True)
+        rows, total = site_page(
+            SiteScope(task.caller.effective_tenant_id, scope.site_ids, task.caller.scope_fingerprint),
+            body,
+            page,
+        )
+        data = {
+            "records": [{key: row[key] for key in declared.evidence_fields} for row in rows],
+            "total": total,
+            "sample_limit": declared.page_size,
+            "truncated": total > len(rows),
+            "ordering_guaranteed": False,
+            "complete_timeline": False,
+            "samples_returned": len(rows),
+            "absence": "no_samples" if not rows else None,
+        }
+        task.evidence[tool] = {
+            "tool": tool,
+            "source": declared.source,
+            "observed_at": datetime.now(UTC).isoformat(),
+            "data": data,
+        }
+        task.evidence[tool]["response"] = {"code": 0, "data": data}
+        return task.evidence[tool]["response"]
 
     def invoke(self, grant, tool):
         if tool not in TOOL_NAMES:
@@ -740,7 +803,9 @@ class OperatorCpms:
                 if not set(answer["evidence_tools"]).issubset(task.delivered):
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
             else:
-                operator_conversation.validate(answer, task.question)
+                # `validate` 返回订正后的答复（关键词换成原文那一段）：后续一致性比对、
+                # 查询参数与快照都用它，不拿模型给的拼法再走一遍。
+                answer = operator_conversation.validate(answer, task.question)
                 if answer["kind"] == "site_search":
                     sites = _sites_from_evidence(task.caller, task, answer)
                     if sites is None:
@@ -1322,7 +1387,8 @@ class SiteKeywords:
     """一次站点查询的关键词。四个字段全空表示**列举**，不是搜索（ADR-0172）。
 
     ``address_terms`` 可以有多条（对话协议允许至多 4 条），而 CPMS 的 ``address``
-    只有一个：取最长的那个，与放开列举之前的行为逐字一致。
+    只有一个：取最长的那个，与放开列举之前的行为逐字一致。多条合起来的那一段原文见
+    :attr:`address`（只用于工具参数与最终答复的一致性比对）。
     """
 
     name: str = ""
@@ -1331,6 +1397,21 @@ class SiteKeywords:
     @property
     def listing(self) -> bool:
         return not self.name and not self.address_terms
+
+    @property
+    def address(self) -> str:
+        """多个 ``address_terms`` 合起来的**那一段原文**，只用于一致性比对。
+
+        工具参数里的地址是一条（用户说「广州天河」），对话协议里则允许拆成至多 4 个
+        关键词（「广州」「天河」）。同一次查询的两种写法是同一段原文按出现顺序拼起来，
+        所以比对用拼接 —— 拿最长词（「广州」）比整串地址，会让工具刚放行的参数在最终
+        答复里必然对不上（2026-11-02 实测的失败形状）。
+
+        **不用于 CPMS 过滤**：上游 ``address`` 过滤器的语义由公司侧定义，发出去的仍是
+        最长词（:meth:`params`），与放开列举之前逐字一致。本地 :meth:`matches` 再逐词
+        核对，所以宁可上游宽一点，不在没有证据的情况下改上游过滤器。
+        """
+        return "".join(term for term in self.address_terms if term)
 
     def params(self, page: int) -> dict[str, object]:
         params: dict[str, object] = {"current": page, "size": SITE_PAGE_SIZE, "type": 0}

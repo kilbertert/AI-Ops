@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -120,3 +121,88 @@ def test_conversation_manifest_keeps_only_conversation_tools():
     manifest = json.loads(operator_conversation.manifest(json.dumps(template)))
     assert [entry["name"] for entry in manifest["tools"]] == [TOOL]
     assert json.loads(manifest["tools"][0]["input_schema"])["properties"]
+
+
+def test_a_space_joined_place_is_still_the_users_own_words():
+    """模型按自然习惯用空格拼地点（「广州 天河」），不能因此判成编造。
+
+    2026-11-02 生产实测：用户说「广州天河附近的充电站」，模型给
+    `address="广州 天河"`；整串子串匹配失败 →
+    `OPERATOR_TOOL_ARGUMENTS_INVALID` → 节点兜底成 `cpms_unavailable`，
+    站点工具第一次被真实使用就 100% 失败。
+
+    放行后的值是**原文那一段**（「广州天河」）：下游（CPMS 过滤器、证据、最终答复）
+    都只认这一个值，不能让模型的拼法活到查询里。
+    """
+    assert operator_cpms.validate_tool_arguments(TOOL, {"address": "广州 天河"}, QUESTION) == {
+        "address": "广州天河"
+    }
+    # 放宽的只是分隔符：词本身仍然必须按原文顺序出现在原文里
+    for invented in ({"address": "广州 南山"}, {"address": "深圳 天河"}):
+        with pytest.raises(operator_cpms.OperatorRefused):
+            operator_cpms.validate_tool_arguments(TOOL, invented, QUESTION)
+
+
+@pytest.mark.parametrize(
+    "value,question",
+    [
+        # 重排：两段都在原文里，顺序反了
+        ("天河 广州", "帮我找一下广州天河附近的充电站"),
+        # 重组：各取一个词拼出一个用户没说过的地方
+        ("深圳 南山", "我关心深圳福田和广州南山"),
+    ],
+)
+def test_reordered_or_reassembled_places_are_refused(value, question):
+    """**逐词都在**不是判据 —— 它放过重排与重组。
+
+    ADR-0176 要求参数是提问原文的子串。把判据写成 `all(part in question)` 看着像
+    「只放宽分隔符」，实测放行「广州天河」→「天河 广州」与
+    「深圳福田和广州南山」→「深圳 南山」。这里钉住的是**连续等序**这一半。
+    """
+    with pytest.raises(operator_cpms.OperatorRefused):
+        operator_cpms.validate_tool_arguments(TOOL, {"address": value}, question)
+
+
+def test_tool_arguments_and_final_answer_speak_the_same_address(monkeypatch):
+    """工具参数 → CPMS 过滤器 → 冻结证据 → 最终答复 是**同一段原文**。
+
+    2026-11-02 实测的第二个失败：参数 `"广州 天河"` 被放行，最终答复按协议拆成
+    `["广州","天河"]`，`_sites_from_evidence` 拿最长词（「广州」）比整串地址，
+    于是合法的运行必然 `OPERATOR_SITE_SEARCH_MISMATCH`。
+    """
+    args = operator_cpms.validate_tool_arguments(TOOL, {"address": "广州 天河"}, QUESTION)
+    assert args == {"address": "广州天河"}
+    answer = operator_conversation.validate(
+        {"kind": "site_search", "text": "", "name": "", "address_terms": ["广州", "天河"]}, QUESTION
+    )
+    # 最终答复的关键词是原文里那几段（协议允许拆成多段），拼起来就是工具参数那一段
+    assert answer["address_terms"] == ["广州", "天河"]
+    assert operator_cpms.site_keywords(answer).address == args["address"]
+    task = SimpleNamespace(
+        delivered={TOOL},
+        arguments={TOOL: args},
+        evidence={
+            TOOL: {
+                "source": "cpms.sitePage",
+                "observed_at": "2026-11-02T00:00:00+00:00",
+                "data": {"records": [], "total": 0, "truncated": False},
+            }
+        },
+    )
+    # 范围由调用者决定，这里不是被测对象：只让它返回一个空范围，把断言留在一致性比对上。
+    monkeypatch.setattr(operator_cpms, "operator_scope", lambda *_, **__: SimpleNamespace(site_ids=()))
+    sites = operator_cpms._sites_from_evidence(object(), task, answer)
+    assert sites["source"] == "cpms.sitePage"
+
+
+def test_an_answer_about_a_different_place_is_still_refused():
+    """一致性检查本身没有放松：参数说一处、答复说另一处，照样拒。"""
+    task = SimpleNamespace(
+        delivered={TOOL}, arguments={TOOL: {"address": "广州天河"}}, evidence={TOOL: {"data": {}}}
+    )
+    with pytest.raises(operator_cpms.OperatorRefused, match="OPERATOR_SITE_SEARCH_MISMATCH"):
+        operator_cpms._sites_from_evidence(
+            None,
+            task,
+            {"kind": "site_search", "text": "", "name": "", "address_terms": ["哈尔滨"]},
+        )

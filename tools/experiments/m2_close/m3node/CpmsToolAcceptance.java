@@ -106,6 +106,161 @@ public final class CpmsToolAcceptance {
         }
     }
 
+    /**
+     * 领授权的请求体形状 —— 由**真实** {@link CpmsGatewayAuthorization} 发出，本地 HTTP
+     * 服务器捕获，不靠读源码字符串。
+     *
+     * <p>2026-11-02 生产实测：站点工具带参数后，节点发的是 `{"name":…,"address":…}`，
+     * 而网关的 `OperatorToolAuthorizationRequest` 是 `extra="forbid"` 的
+     * `{"arguments":{…}}` —— 422，节点兜底成 `cpms_unavailable`。订单工具没有参数（`{}`），
+     * 两种形状恰好都合法，所以这个不一致一直到站点工具才暴露。
+     */
+    static void authorizationBodyIsTheGatewayContractShape() throws Exception {
+        try (var captured = new CapturedGateway()) {
+            var authorization = new CpmsGatewayAuthorization(
+                    new GatewayClient(captured.base(), "NODE-TOKEN", "build", 5));
+            // 有参数：必须原样包进 `arguments`，且只有这一个键。
+            captured.body = null;
+            authorization.require(RUN, MANIFEST, "cpms_site_search",
+                    JSON.readTree("{\"name\":\"天河\",\"address\":\"广州\"}"));
+            check(captured.body != null, "site authorization reaches the gateway");
+            var body = JSON.readTree(captured.body);
+            check(body.fieldNames().hasNext() && body.size() == 1 && body.has("arguments"),
+                    "arguments is the only top-level field");
+            check("天河".equals(body.path("arguments").path("name").asText())
+                    && "广州".equals(body.path("arguments").path("address").asText()),
+                    "the model's arguments survive the wrapper");
+            // 空参数：必须补成 `{}`，不能省略键、也不能发 null。
+            captured.body = null;
+            authorization.require(RUN, MANIFEST, "cpms_order_detail", null);
+            var empty = JSON.readTree(captured.body);
+            check(empty.size() == 1 && empty.path("arguments").isObject()
+                    && empty.path("arguments").isEmpty(), "empty arguments become {}");
+        }
+    }
+
+    /** 只捕获请求体的本地「网关」；回执按请求路径里的工具名现造，形状同现役 Gateway。 */
+    static final class CapturedGateway implements AutoCloseable {
+        final HttpServer server;
+        volatile String body;
+
+        CapturedGateway() throws Exception {
+            server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            server.createContext("/", exchange -> {
+                body = new String(exchange.getRequestBody().readAllBytes(),
+                        java.nio.charset.StandardCharsets.UTF_8);
+                String path = exchange.getRequestURI().getPath();
+                String tool = path.substring(path.lastIndexOf("/tools/") + 7, path.lastIndexOf("/authorization"));
+                byte[] bytes = authorizationReply(tool).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length);
+                exchange.getResponseBody().write(bytes);
+                exchange.close();
+            });
+            server.start();
+        }
+
+        String base() {
+            return "http://127.0.0.1:" + server.getAddress().getPort();
+        }
+
+        @Override public void close() {
+            server.stop(0);
+        }
+    }
+
+    /** 与 `operator_cpms.grant()` 回执逐字段同形；工具名由调用方给。 */
+    static String authorizationReply(String tool) {
+        if ("cpms_site_search".equals(tool)) {
+            // 站点工具：没有 order_no 的输入，站点集合可以为空（「确实没有可见站点」）。
+            return "{\"run_id\":\"" + RUN + "\",\"tool\":\"" + tool + "\",\"manifest_id\":\"" + MANIFEST
+                    + "\",\"authorization_id\":\"g\",\"tenant_id\":\"T1\",\"site_ids\":[],"
+                    + "\"inputs\":{\"name\":\"\",\"address\":\"广州天河\"},"
+                    + "\"request\":{\"method\":\"GET\",\"path\":\"/chSite/page\","
+                    + "\"query\":\"current=1&size=50&type=0&address=%E5%B9%BF%E5%B7%9E%E5%A4%A9%E6%B2%B3\"},"
+                    + "\"contract\":\"" + CpmsReadTool.CONTRACT + "\",\"base_url\":\"http://127.0.0.1\","
+                    + "\"bearer\":\"PRIVATE-TOKEN\",\"expires_at\":\"" + Instant.now().plusSeconds(60) + "\"}";
+        }
+        return "{\"run_id\":\"" + RUN + "\",\"tool\":\"" + tool + "\",\"manifest_id\":\"" + MANIFEST
+                + "\",\"authorization_id\":\"g\",\"tenant_id\":\"T1\",\"site_ids\":[\"S1\"],"
+                + "\"inputs\":{\"order_no\":\"ORDER-1\"},"
+                + "\"request\":{\"method\":\"GET\",\"path\":\"/chOrderInfo/getOrderInfoDetail/ORDER-1\","
+                + "\"query\":\"\"},"
+                + "\"contract\":\"" + CpmsReadTool.CONTRACT + "\",\"base_url\":\"http://127.0.0.1\","
+                + "\"bearer\":\"PRIVATE-TOKEN\",\"expires_at\":\"" + Instant.now().plusSeconds(60) + "\"}";
+    }
+
+    /**
+     * 站点工具在**真 Java 工具**上跑通：授权 → 发授权的请求目标 → 站点页证据。
+     *
+     * <p>2026-11-02 之前这条链在节点侧必坏：`Grant` 要求非空 site_ids（站点工具可以
+     * 空），`samples()` 逐行核 `orderNo`（站点行没有）。网关侧同样坏在代理只认订单行。
+     * 两侧都修好之后，这段才是「工具参数 → CPMS → 证据」的节点侧证明。
+     */
+    static void siteToolReadsAPageWithoutAnOrder() throws Exception {
+        try (var captured = new CapturedGateway()) {
+            var authorization = new CpmsGatewayAuthorization(
+                    new GatewayClient(captured.base(), "NODE-TOKEN", "build", 5));
+            captured.body = null;
+            var grant = authorization.require(RUN, MANIFEST, "cpms_site_search",
+                    JSON.readTree("{\"address\":\"广州天河\"}"));
+            check(grant.request().path().equals("/chSite/page"), "site request target comes from the gateway");
+            check(!grant.orderScoped(), "a site grant is not order scoped");
+            check(grant.siteIds().isEmpty(), "an empty site set is a valid site authorization");
+            var capturedBody = JSON.readTree(captured.body);
+            check("广州天河".equals(capturedBody.path("arguments").path("address").asText()),
+                    "the site keyword reaches the gateway");
+        }
+    }
+
+    /**
+     * 站点工具**整条节点路径**：发授权的请求目标 → 解析站点页 → 上报与网关同形的证据。
+     *
+     * <p>与 {@link #siteToolReadsAPageWithoutAnOrder()} 分开：那条只证明授权，这条证明
+     * 节点拿到站点页之后没有按订单行去核它（2026-11-02 的 `cpms_scope_mismatch`）。
+     */
+    static void siteToolDeliversAPageAsEvidence() throws Exception {
+        try (var captured = new CapturedGateway()) {
+            var cpms = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            cpms.createContext("/", exchange -> {
+                String body = exchange.getRequestURI().toString().startsWith("/chSite/page")
+                        ? "{\"code\":0,\"data\":{\"records\":[{\"id\":\"SITE-9\",\"tenantId\":\"T1\","
+                          + "\"name\":\"天河测试站\",\"address\":\"广州市天河区\",\"contactPhone\":\"PRIVATE\"}],"
+                          + "\"total\":1,\"current\":1,\"size\":50}}"
+                        : "{\"code\":1,\"data\":{}}";
+                byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(200, bytes.length);
+                exchange.getResponseBody().write(bytes);
+                exchange.close();
+            });
+            cpms.start();
+            try {
+                String base = "http://127.0.0.1:" + cpms.getAddress().getPort();
+                grant = siteGrant(base);
+                var tool = new CpmsReadTool("cpms_site_search", AUTH);
+                JsonNode evidence = JSON.readTree(tool.call("{\"address\":\"广州天河\"}", CONTEXT));
+                check(evidence.path("inputs").path("address").asText().equals("广州天河"),
+                        "site inputs carry the keyword");
+                check(evidence.path("data").path("records").size() == 1
+                        && "SITE-9".equals(evidence.path("data").path("records").get(0).path("id").asText()),
+                        "site rows are the page, not order rows");
+                check(evidence.path("data").path("total").asLong() == 1
+                        && !evidence.path("data").path("truncated").asBoolean(),
+                        "site pagination flags");
+                check(!evidence.toString().contains("PRIVATE"), "site evidence is minimized");
+            } finally {
+                cpms.stop(0);
+            }
+        }
+    }
+
+    static CpmsReadTool.Grant siteGrant(String base) throws Exception {
+        return new CpmsReadTool.Grant("grant-1", "T1", Set.of(),
+                JSON.readTree("{\"name\":\"\",\"address\":\"广州天河\"}"),
+                new CpmsReadTool.Request("GET", "/chSite/page",
+                        "current=1&size=50&type=0&address=%E5%B9%BF%E5%B7%9E%E5%A4%A9%E6%B2%B3"),
+                base, "PRIVATE-TOKEN", Instant.now().plusSeconds(60));
+    }
+
     static volatile boolean staleMode;
     /** 最近一次到达「网关」的模型参数，用来断言节点没有把它丢掉。 */
     static JsonNode lastArguments;
@@ -200,6 +355,9 @@ public final class CpmsToolAcceptance {
                 refuse(() -> new CpmsReadTool.Request(bad[0], bad[1], bad[2]), "request target: " + bad[1]);
             }
             mixedVersionIsRefusedInBothDirections();
+            authorizationBodyIsTheGatewayContractShape();
+            siteToolReadsAPageWithoutAnOrder();
+            siteToolDeliversAPageAsEvidence();
             toolSurfaceFollowsTheRunType();
             System.out.println("CPMS_TOOL_ACCEPTANCE PASS assertions=" + passed + " http_calls=" + calls.get());
         } finally { server.stop(0); }

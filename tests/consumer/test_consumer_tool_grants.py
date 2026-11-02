@@ -299,32 +299,14 @@ def test_the_same_endpoint_dispatches_by_the_runs_own_operation():
     assert _is_consumer_run(context("operator_conversation"), RUN) is False
 
 
-def test_node_wraps_tool_arguments_in_the_gateway_contract_shape():
-    """节点领授权时必须包一层 `arguments` —— 裸发参数会被 422 拒掉。
+def test_the_gateway_model_and_the_node_wrapper_agree():
+    """网关的请求模型是 `extra="forbid"` 的 `{"arguments": {...}}`。
 
-    2026-11-02 生产实测：站点工具带参数（`name`/`address`）后，节点发的是
-    `{"name": ..., "address": ...}`，而网关的 `OperatorToolAuthorizationRequest`
-    是 `extra="forbid"` 的 `{"arguments": {...}}`，于是
-    `POST .../tools/cpms_site_search/authorization` 返回 **422**，节点把它兜底成
-    `cpms_unavailable`。订单工具没有参数（发 `{}`），两种形状恰好都合法，
-    这个不一致因此一直没暴露。
-
-    这里守的是**契约形状**：Java 里同名的 `authorizationBody()` 必须与这个模型一致。
+    节点侧的**真实行为**由 `CpmsToolAcceptance#authorizationBodyIsTheGatewayContractShape`
+    证明（编译 node 源码，让 `CpmsGatewayAuthorization` 真的发一次请求，本地服务器捕获
+    请求体）。这里只钉网关这一半：多给一个键就是 422，不是被忽略 —— 那正是节点曾经
+    422 的原因。
     """
-    import inspect
-    import json
-    import pathlib
-    import re
-
-    source = pathlib.Path(
-        "services/execution-node/src/main/java/com/trendpower/aiops/node/CpmsGatewayAuthorization.java"
-    ).read_text(encoding="utf-8")
-    # 请求体由 authorizationBody() 生成，且只放 arguments 一个键
-    assert "authorizationBody(arguments)" in source
-    assert re.search(r'body\.set\("arguments",', source), "节点没有把参数包进 arguments"
-    assert source.count("createObjectNode()") >= 2, "空参数必须补成 {} 而不是省略"
-
-    # 网关侧：同一个键名，且多余字段一律 422
     from pydantic import ValidationError
 
     from aiops_diagnostics.gateway.gateway_api import OperatorToolAuthorizationRequest

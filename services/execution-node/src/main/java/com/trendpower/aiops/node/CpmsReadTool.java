@@ -59,10 +59,15 @@ public final class CpmsReadTool implements ToolCallback {
                         Instant expiresAt) {
         public Grant {
             siteIds = Set.copyOf(siteIds);
+            // 站点工具可以带**空**站点集合：那是「这个账号确实没有可见站点」，网关照样
+            // 签发一次授权的目的就是让它回这个事实。订单工具的空集合仍是无效授权
+            // （订单必然属于某个站点，空集合说明授权坏了）。判据是**输入口径**，
+            // 不是工具名 —— 与网关 `_grant_sites` 同一条规则。
+            boolean orderScoped = inputs != null && inputs.path("order_no").isTextual();
             if (authorizationId == null || authorizationId.isBlank()
                     || tenantId == null || !tenantId.matches(ID)
                     || inputs == null || !inputs.isObject() || inputs.isEmpty()
-                    || request == null || siteIds.isEmpty()
+                    || request == null || (orderScoped && siteIds.isEmpty())
                     || siteIds.size() > 1000 || siteIds.stream().anyMatch(id -> !id.matches(ID))
                     || bearer == null || bearer.isBlank() || bearer.length() > 16384
                     || bearer.chars().anyMatch(c -> c <= 32 || c >= 127) || expiresAt == null) {
@@ -78,11 +83,17 @@ public final class CpmsReadTool implements ToolCallback {
             baseUrl = baseUrl.replaceAll("/+$", "");
         }
 
-        /** 输入里的订单号；两个现役工具都需要它，缺失即无效授权。 */
+        /** 输入里的订单号；**订单工具**需要它，缺失即无效授权。 */
         String orderNo() {
             JsonNode value = inputs.path("order_no");
             if (!value.isTextual() || !value.asText().matches(ID)) throw refused("invalid_authorization");
             return value.asText();
+        }
+
+        /** 这次授权是不是订单口径（输入带 `order_no`）。站点工具没有订单。 */
+        boolean orderScoped() {
+            JsonNode value = inputs.path("order_no");
+            return value.isTextual() && value.asText().matches(ID);
         }
 
         @Override public String toString() { return "CpmsGrant[redacted]"; }
@@ -126,7 +137,12 @@ public final class CpmsReadTool implements ToolCallback {
             JsonNode body = get(grant, grant.request().target());
             // 响应形状由**声明**决定，不由工具名决定：新增一个复用已有形状的工具，本文件不用改。
             String kind = OperatorTools.kind(tool);
-            ObjectNode data = "page".equals(kind) ? samples(body, grant, tool) : detail(body, grant, tool);
+            // 一页形状有两种：订单的诊断样本（逐行核订单/站点）与站点清单（没有订单号）。
+            // 判据是**授权口径**，不是工具名：站点工具没有订单，核 orderNo 必然不成立 ——
+            // 2026-11-02 生产实测它在这里以 `cpms_scope_mismatch` 失败。
+            ObjectNode data = !"page".equals(kind)
+                    ? detail(body, grant, tool)
+                    : (grant.orderScoped() ? samples(body, grant, tool) : sites(body, grant, tool));
             ObjectNode evidence = JSON.createObjectNode();
             evidence.put("tool", tool);
             evidence.set("inputs", grant.inputs());
@@ -214,6 +230,42 @@ public final class CpmsReadTool implements ToolCallback {
                 .put("ordering_guaranteed", OperatorTools.flagBool(tool, "ordering_guaranteed"))
                 .put("complete_timeline", OperatorTools.flagBool(tool, "complete_timeline"))
                 // 「没上报过样本」与「这批被截断」是两件事，证据里各占一个字段。
+                .put("samples_returned", rows.size())
+                .put("absence", rows.isEmpty() ? OperatorTools.flagText(tool, "absence_when_empty") : null);
+        return result;
+    }
+
+    /**
+     * 站点清单的一页。与订单样本**共用**分页/截断的措辞（来自声明），差别只在身份：
+     * 站点行没有 `orderNo`，身份是「租户 + 站点集合」。
+     */
+    private static ObjectNode sites(JsonNode body, Grant grant, String tool) {
+        JsonNode rows = body.path("records");
+        if (!rows.isArray() || rows.size() > OperatorTools.flagInt(tool, "sample_limit")
+                || !body.path("total").isIntegralNumber() || body.path("total").asLong() < rows.size()
+                || !body.path("current").isIntegralNumber() || !"1".equals(body.path("current").asText())
+                || !body.path("size").isIntegralNumber()
+                || body.path("size").asInt() != OperatorTools.flagInt(tool, "sample_limit")) {
+            throw refused("cpms_invalid_page");
+        }
+        ObjectNode result = JSON.createObjectNode();
+        var selected = result.putArray("records");
+        List<String> fields = OperatorTools.evidenceFields(tool);
+        for (JsonNode row : rows) {
+            // 租户不符是硬拒绝；站点集合为空表示「确实没有可见站点」，逐行时不会命中，
+            // 非空时仍要求命中 —— 与网关 `site_page(outside_scope="reject")` 同一条。
+            if (!row.isObject() || !row.path("tenantId").isTextual()
+                    || !grant.tenantId().equals(row.path("tenantId").asText())
+                    || !grant.siteIds().isEmpty() && !grant.siteIds().contains(row.path("id").asText())) {
+                throw refused("cpms_scope_mismatch");
+            }
+            selected.add(select(row, fields));
+        }
+        result.put("total", body.path("total").asLong())
+                .put("sample_limit", OperatorTools.flagInt(tool, "sample_limit"))
+                .put("truncated", body.path("total").asLong() > rows.size())
+                .put("ordering_guaranteed", OperatorTools.flagBool(tool, "ordering_guaranteed"))
+                .put("complete_timeline", OperatorTools.flagBool(tool, "complete_timeline"))
                 .put("samples_returned", rows.size())
                 .put("absence", rows.isEmpty() ? OperatorTools.flagText(tool, "absence_when_empty") : null);
         return result;

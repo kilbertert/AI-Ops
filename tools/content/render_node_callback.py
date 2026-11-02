@@ -45,23 +45,25 @@ def tool_names() -> str:
 
 
 def tool_paths() -> str:
-    """取数路径（不含请求参数、不含占位符）。
+    """取数路径的**完整模板**，每条都逐字正则转义。
 
-    `/chOrderInfo/getOrderInfoDetail/{order_no}` → `chOrderInfo/getOrderInfoDetail`
+    `/chOrderInfo/getOrderInfoDetail/{order_no}` → `chOrderInfo/getOrderInfoDetail/[A-Za-z0-9_-]{1,80}`
     `/chSite/page`                              → `chSite/page`
-    渲染时整段做正则转义，避免路径里的 `.` 之类被当成通配。
+
+    **不统一加可选尾段**：那样会放行 `chSite/page/ORDER-1`（站点分页没有尾段）和
+    `chOrderInfo/getOrderInfoDetail`（订单路径必须有单号），而这两条都不是声明里写过的
+    形状。白名单在这里是「每条 path_template 各自成立」，不是「像某个前缀就行」。
     """
     from aiops_diagnostics.operator import operator_tools
 
     paths = []
     for tool in operator_tools.tools():
-        path = tool.path_template.lstrip("/")
-        path = re.sub(r"/\{[a-z_]{1,32}\}", "", path)
-        paths.append(re.escape(path))
+        path = re.escape(tool.path_template.lstrip("/"))
+        paths.append(re.sub(r"\\\{[a-z_]{1,32}\\\}", "[A-Za-z0-9_-]{1,80}", path))
     return "|".join(paths)
 
 
-def render(bridge: str, state: str, config: str, gateway: str) -> str:
+def render(bridge: str, state: str, config: str, gateway: str, lua_directives: str = "") -> str:
     values = {
         "AIOPS_NODE_BRIDGE": bridge,
         "AIOPS_NODE_STATE": state,
@@ -69,6 +71,9 @@ def render(bridge: str, state: str, config: str, gateway: str) -> str:
         "AIOPS_PRODUCTION_GATEWAY": gateway,
         "AIOPS_NODE_TOOL_NAMES": tool_names(),
         "AIOPS_NODE_TOOL_PATHS": tool_paths(),
+        # 空串是**正确值**：普通 nginx 不支持 Lua 指令，模板里那两项留空即可
+        # （整行变成一个空行）。带 lua 模块的宿主把自己的两行参数传进来。
+        "AIOPS_NODE_LUA_DIRECTIVES": lua_directives,
     }
     text = TEMPLATE.read_text(encoding="utf-8")
     missing = {m.group(1) for m in PLACEHOLDER.finditer(text)} - set(values)
@@ -83,9 +88,14 @@ def main() -> int:
     parser.add_argument("--state", required=True, help="状态目录，例如 /var/lib/aiops-node-runtime")
     parser.add_argument("--config", required=True, help="配置目录，例如 /etc/aiops-node-runtime")
     parser.add_argument("--gateway", required=True, help="生产网关回调地址")
+    parser.add_argument(
+        "--lua-directives",
+        default="",
+        help="带 lua 模块的 nginx 构建才传（例如 41 的两行 lua_package_*）；普通 nginx 留空",
+    )
     parser.add_argument("--out", type=Path, help="写到哪里；省略则打印到 stdout")
     args = parser.parse_args()
-    text = render(args.bridge, args.state, args.config, args.gateway)
+    text = render(args.bridge, args.state, args.config, args.gateway, args.lua_directives)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
         print(f"已写入 {args.out}")

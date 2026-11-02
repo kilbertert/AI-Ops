@@ -44,9 +44,24 @@ Compose将它只读挂载到`/etc/m2live/operator-tools.json`，并在`-jar`之�
 仅复制所需配置与停稳后的平台数据库；不复制试验 Gateway、身份 fixture 或旧备份密钥。
 平台/节点无业务库凭据，模型出口只挂自己的凭据目录。
 
-把 `gateway-callback.conf.template` 中 **具名部署占位符**替换为本次配置：
-`AIOPS_NODE_BRIDGE`、`AIOPS_NODE_STATE`、`AIOPS_NODE_CONFIG`、`AIOPS_PRODUCTION_GATEWAY`（共四种名字），
-其中 STATE 出现多次。**不能无参数 envsubst**，否则会抹掉 nginx 的认证头变量。
+渲染**用渲染器**，不手工替换占位符：
+
+```bash
+# 普通 nginx（无 lua 模块）：不传 --lua-directives，模板里那两项留空。
+uv run python tools/content/render_node_callback.py \
+  --bridge <AIOPS_NODE_BRIDGE> --state <AIOPS_NODE_STATE> \
+  --config <AIOPS_NODE_CONFIG> --gateway <AIOPS_PRODUCTION_GATEWAY> \
+  --out <AIOPS_NODE_CONFIG>/gateway-callback.conf
+
+# 41 这种带 lua 模块的宿主：把该环境既有的 Lua 参数原样传进去（受控配置，不是模板默认）。
+#   --lua-directives 'lua_package_path "/www/server/nginx/lib/lua/?.lua;;"; ...'
+```
+
+渲染器负责从 `src/aiops_diagnostics/operator/operator_tools.json` 推导工具名与取数路径
+两处白名单，以及 `AIOPS_NODE_LUA_DIRECTIVES`；部署方只给 `AIOPS_NODE_BRIDGE`、
+`AIOPS_NODE_STATE`、`AIOPS_NODE_CONFIG`、`AIOPS_PRODUCTION_GATEWAY` 四个具名值
+（STATE 在模板里出现多次）。**不能无参数 envsubst**，否则会抹掉 nginx 的认证头变量。
+手工替换会漏掉推导出来的两项 —— 2026-11-02 的站点工具事故正是这样发生的。
 渲染到配置根的 `gateway-callback.conf`。创建项目身份可写的临时目录；入口仅监听内部网桥。
 回调使用 TLS 1.2/1.3；由节点已信任的项目 CA 签发叶子证书，SAN 包含实际网桥 IP，
 用途为 serverAuth。证书644、私钥600，所属身份与回调服务一致；不向节点挂载私钥。
@@ -63,8 +78,11 @@ ufw delete allow from "$AIOPS_NODE_SUBNET" to "$AIOPS_NODE_BRIDGE" port 8788 pro
 ```
 
 nginx 二进制位置按服务宿主现有安装核对；本 unit 使用 `/usr/bin/nginx`。
-含 Lua 模块的宿主构建须沿用现有 `lua_package_path`（必要时 `lua_package_cpath`）加入渲染配置；
-仅 `nginx -t` 不够，还要确认进程持续运行。普通 nginx 不添加不支持的 Lua 指令。
+模板**不含** Lua 指令：普通 nginx 见到 `lua_package_path` 直接 `unknown directive` 起不来。
+带 lua 模块的宿主（41 的宝塔构建）把既有 `lua_package_path` / `lua_package_cpath` 经
+`--lua-directives` 传进渲染配置，缺它们、只在 `nginx -t` 上通过、启动后才以
+`failed to load the 'resty.core' module` 退出——这是实撞过的形状。
+仅 `nginx -t` 不够，还要确认进程持续运行。
 
 通过 `dev-host cp ... --artifact-sha256 ...` 同步合并制品，再执行已批准的安装步骤：
 
