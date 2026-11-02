@@ -139,7 +139,7 @@ def test_every_backend_fee_field_reaches_the_answer():
     for label, value in [
         ("启动费用", "1.00"),
         ("优惠金额", "0"),
-        ("增值税比例", "2"),
+        ("增值税比例", "2%"),
         ("增值税费用", "0.16"),
         ("预付费", "10.00"),
         ("电损电费", "0.20"),
@@ -194,3 +194,71 @@ def test_output_contract_tells_the_model_the_fact_block_carries_every_fee():
         assert fee in OPERATOR_OUTPUT, fee
     assert "一个字都不要带数字" in OPERATOR_OUTPUT
     assert "不要提具体是哪几项费用" in OPERATOR_OUTPUT
+
+
+# -------------------------------------------- 2026-11-02：真实响应上的单位与空值语义
+
+
+def test_vat_is_rendered_as_a_percentage_not_a_bare_number():
+    """真实 CPMS 响应给的是 `vat: 2.0`，后台那一列写「增值税率 2%」。
+
+    印成 `2.0` 会被读成金额 —— 紧挨着的下一行正是「增值税费用 0.16」，两个数并排，
+    读错的代价是真金白银。这单实测值就是 `2.0`。
+    """
+    from aiops_diagnostics.operator.operator_cpms import _percent
+
+    assert _percent(2.0) == "2%"
+    assert _percent("2") == "2%"
+    assert _percent(6.5) == "6.5%"
+    assert _percent("不是数字") == "不是数字"
+
+
+def test_a_zero_fee_is_shown_as_zero_and_a_null_one_is_omitted():
+    """缺值、零值、不适用必须分开：`0` 是「这一项是 0」，`None` 是「后台没有这一列」。
+
+    真实订单上这三种都出现了：`dsServiceFee: 0.0`（该收，金额是 0）与
+    `occupyFee: null`（没有占位费这一项）。
+    """
+    from aiops_diagnostics.operator import operator_cpms
+
+    body = {
+        "code": 0,
+        "data": {"orderNo": FEE_ROW["orderNo"], "siteId": "SITE-1", "chOrderInfoModel": FEE_ROW},
+    }
+    evidence = {
+        "cpms_order_detail": operator_cpms.project_evidence(body, FEE_ROW["orderNo"], "cpms_order_detail")
+    }
+    text = operator_cpms._order_fact_text(evidence, "zh")
+    assert "电损服务费：0.10" in text
+    # 真实响应的这一单 `occupyFee` 是 null；换成缺失的同义写法 —— 两者都不出行。
+    assert "占位费" in text
+    row = {**FEE_ROW, "occupyFee": None, "launchFee": 1.0, "dsServiceFee": 0.0}
+    body = {"code": 0, "data": {"orderNo": row["orderNo"], "siteId": "SITE-1", "chOrderInfoModel": row}}
+    evidence = {
+        "cpms_order_detail": operator_cpms.project_evidence(body, row["orderNo"], "cpms_order_detail")
+    }
+    text = operator_cpms._order_fact_text(evidence, "zh")
+    assert "电损服务费：0.0" in text, "值为 0 必须照写，不能被当成缺值"
+    assert "占位费" not in text, "null 是「后台没有这一项」，不能补一行"
+    assert "启动费用：1.0" in text
+
+
+def test_a_fact_rejection_says_which_line_and_which_rule(caplog):
+    """`unsupported_fact` 一条码覆盖多种成因；只记码等于没取证。
+
+    失败的 run 不保存模型原文（实测 `snapshot_json.answer` 恒为 `None`），所以拒绝那一刻
+    是唯一的取证点。这里断言日志里能读出**哪条规则、第几行**，同时断言**原文不在日志里**。
+    """
+    import logging
+
+    from aiops_diagnostics.operator.operator_cpms import OperatorRefused, _validate_reply_facts
+
+    secret_line = "建议先核对启动费用为 1.00 的那一项。"
+    with caplog.at_level(logging.WARNING, logger="aiops.operator"), pytest.raises(OperatorRefused):
+        _validate_reply_facts("我帮你核对了本次记录。\n{{fact:order_facts}}\n" + secret_line)
+    message = caplog.text
+    assert "reason=unsupported_fact" in message
+    assert "detail=notice" in message
+    assert "line=3" in message
+    # 取证的边界：记判定事实，不记原文。
+    assert "1.00" not in message and secret_line not in message

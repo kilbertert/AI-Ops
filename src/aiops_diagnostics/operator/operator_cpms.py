@@ -10,6 +10,7 @@ import secrets
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -1088,8 +1089,19 @@ def parse_answer(raw):
             raise bare from None
 
 
-def _answer_refused(reason):
-    logging.getLogger("aiops.operator").warning("operator_answer_rejected reason=%s", reason)
+def _answer_refused(reason, detail=""):
+    """拒绝一次回答，并尽量记下**哪条规则**被触发。
+
+    只记 `reason=unsupported_fact` 时，下一跳只能靠猜：这条码同时覆盖「事实段外写了金额」
+    「写了状态」「写了支付结果」，成因完全不同。失败的 run 又**不保存模型的原始输出**
+    （`snapshot_json.answer` 恒为 `None`，实测），所以拒绝那一刻是唯一的取证点。
+
+    `detail` 由调用点给：命中规则名 + 行号 + 该行长度。**不记原文、不记金额** ——
+    日志没有脱敏层，而这行正是最容易带出金额的地方。
+    """
+    logging.getLogger("aiops.operator").warning(
+        "operator_answer_rejected reason=%s%s", reason, f" {detail}" if detail else ""
+    )
     raise OperatorRefused("OPERATOR_INVALID_ANSWER")
 
 
@@ -1135,16 +1147,21 @@ def _validate_reply_facts(text):
     slot = "{{fact:order_facts}}"
     if text.splitlines().count(slot) != 1:
         _answer_refused("order_facts_required")
-    for line in text.splitlines():
+    for index, line in enumerate(text.splitlines(), 1):
         if line == slot:
             continue
         if "{{" in line or "}}" in line:
             _answer_refused("fact_segment")
         try:
             check_notice(line)
+        except chat_execution.ChatRunUnavailable:
+            # 带行号与检查名：`unsupported_fact` 一条码覆盖多种成因，只记码等于没取证。
+            # **不记原文** —— 这几行正是最容易带出金额的。
+            _answer_refused("unsupported_fact", f"detail=notice line={index} len={len(line)}")
+        try:
             check_status_prose(line)
         except chat_execution.ChatRunUnavailable:
-            _answer_refused("unsupported_fact")
+            _answer_refused("unsupported_fact", f"detail=status line={index} len={len(line)}")
 
 
 #: 管家事实段的字段标签。**运行语言决定标签**（值与来源不变）。
@@ -1281,6 +1298,10 @@ def _order_fact_text(evidence, language="zh"):
             # 与报告末尾的取证时间同一个写法：CPMS 给的是不带时区的本地时间，原样显示，
             # 不补一个假的 UTC 后缀。
             shown = _readable_time(value)
+        elif key == "vat":
+            # CPMS 的 `vat` 是**百分数**（这单实测 `2.0`，后台那一列写「2%」）。
+            # 直接印 `2.0` 会被读成「2 元增值税」，所以带单位。
+            shown = _percent(value)
         else:
             shown = str(value)
         lines.append(labels[label_key] + colon + shown)
@@ -1291,6 +1312,20 @@ def _order_fact_text(evidence, language="zh"):
         )
     lines.append(labels["limits"])
     return "\n".join(lines)
+
+
+def _percent(value) -> str:
+    """`2.0` → `2%`。**只用于本来就是百分数的字段**（`vat`），不是通用格式化。
+
+    这单的真实响应给的是 `vat: 2.0`，而后台那一列写「增值税率 2%」。印成 `2.0`
+    会被读成金额 —— 同一行下面正好是「增值税费用 0.16」，两个数挨着，读错的代价是真金白银。
+    解析不了就原样返回，不猜。
+    """
+    try:
+        shown = format(Decimal(str(value)).normalize(), "f")
+    except (InvalidOperation, ValueError):
+        return str(value)
+    return shown + "%"
 
 
 def _yes_no(value, language: str) -> str:
