@@ -128,6 +128,19 @@ def manifest(text):
     return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def question_span(value: str, question: str) -> str:
+    """只忽略空白和大小写匹配，返回用户原文；保留地名内部空格。"""
+    needle = "".join(value.split()).casefold()
+    if not needle:
+        return ""
+    positions = [i for i, char in enumerate(question) if not char.isspace() for _ in char.casefold()]
+    folded = "".join(char for char in question if not char.isspace()).casefold()
+    start = folded.find(needle)
+    if start < 0:
+        return ""
+    return question[positions[start] : positions[start + len(needle) - 1] + 1]
+
+
 def validate(answer, question):
     if (
         not isinstance(answer, dict)
@@ -143,15 +156,21 @@ def validate(answer, question):
     ):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
     terms = answer["address_terms"] + ([answer["name"]] if answer["name"] else [])
-    if any(
-        not isinstance(term, str)
-        or not 1 <= len(term) <= 80
-        or not term.strip()
-        or term.casefold() not in question.casefold()
-        or any(c in term for c in "%_\\\r\n")
-        for term in terms
-    ):
-        raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+    spans = []
+    for term in terms:
+        if not isinstance(term, str) or not 1 <= len(term) <= 80 or not term.strip():
+            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        if any(c in term for c in "%_\\\r\n"):
+            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        span = question_span(term, question)
+        if not span:
+            raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        spans.append(span)
+    fixed = dict(
+        answer,
+        name=spans[-1] if answer["name"] else "",
+        address_terms=spans[: len(answer["address_terms"])],
+    )
     if answer["kind"] == "site_search":
         # **空关键词合法**：它表示"列出我可见范围内的站点"，不是"搜某个地点"。
         # 这里曾经要求关键词非空，把「我当前有哪些站点？」判成非法 —— 而那个限制
@@ -164,6 +183,7 @@ def validate(answer, question):
         validate_site_note(answer["text"])
     elif terms or not answer["text"].strip() or claims_mutation(answer["text"]):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+    return fixed
 
 
 def validate_site_note(text):

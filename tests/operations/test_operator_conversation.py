@@ -2,8 +2,9 @@
 
 import json
 from dataclasses import replace
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 
@@ -442,6 +443,65 @@ def complete(f, run_id, answer):
     assert response.status_code == 200, response.text
 
 
+def drive_site_tool(f, run_id, arguments):
+    """替身节点走**真实工具链**：领授权 → 按授权的请求目标取数 → 上报证据。
+
+    不写死路径与证据形状：两者都来自授权回执，与 Java 节点做的事逐字相同。站点工具
+    2026-11-02 之前在这条链上有两处断点（网关代理只认订单行、节点只认订单证据），
+    只测「授权 200」看不见它们。
+    """
+    headers = {
+        "Authorization": "Bearer " + NODE_A_TOKEN,
+        "X-AI-Ops-Tool-Contract": operator_cpms.TOOL_CONTRACT,
+    }
+    publication = f["client"].post(
+        "/v1/internal/charging-status/execution-config/" + run_id,
+        headers={"Authorization": "Bearer " + NODE_A_TOKEN},
+    )
+    assert publication.status_code == 200, publication.text
+    headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+    tool = operator_cpms.SITE_TOOL
+    response = f["client"].post(
+        f"/v1/internal/operator-runs/{run_id}/tools/{tool}/authorization",
+        headers=headers,
+        json={"arguments": arguments},
+    )
+    assert response.status_code == 200, response.text
+    grant = response.json()
+    request = grant["request"]
+    url = grant["base_url"] + request["path"]
+    if request["query"]:
+        url += "?" + request["query"]
+    response = f["client"].get(url, headers={"Authorization": "Bearer " + grant["bearer"]})
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    evidence = {
+        "tool": tool,
+        "inputs": grant["inputs"],
+        "source": "cpms.sitePage",
+        "observed_at": datetime.now(UTC).isoformat(),
+        "data": {
+            "records": [
+                {key: row.get(key, "") for key in ("id", "name", "address")} for row in data["records"]
+            ],
+            "total": data["total"],
+            "sample_limit": 50,
+            "truncated": data["total"] > len(data["records"]),
+            "ordering_guaranteed": False,
+            "complete_timeline": False,
+            "samples_returned": len(data["records"]),
+            "absence": None if data["records"] else "no_samples",
+        },
+    }
+    response = f["client"].post(
+        f"/v1/internal/operator-runs/{run_id}/tools/{tool}/evidence",
+        headers=headers,
+        json={"authorization_id": grant["authorization_id"], "evidence": evidence},
+    )
+    assert response.status_code == 200, response.text
+    return evidence
+
+
 @pytest.mark.parametrize("entry", ["formal", "trial", "native", "managed"])
 def test_site_search_uses_same_scope_on_all_entries(operator, monkeypatch, entry):
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
@@ -494,6 +554,52 @@ def test_site_search_uses_same_scope_on_all_entries(operator, monkeypatch, entry
     assert final.status_code == 200 and final.json()["status"] == "completed", final.text
     assert "天河测试站" in final.text and "PRIVATE-PHONE" not in final.text
     assert len(f["state"]["calls"]) == 1 and f["state"]["calls"][0][0].startswith("/chSite/page?")
+
+
+def test_site_tool_end_to_end_through_the_real_tool_chain(operator, monkeypatch):
+    """同一句原 H5 问题：授权 → 取数 → 证据 → 完成，最终正文来自本轮证据。
+
+    这是「工具参数 → CPMS 过滤器 → 冻结证据 → 最终答复」的整条闭环。只断言授权 200
+    会让下面两处断点继续躲着：
+      * 网关代理按订单行校验（`siteId`/`orderNo`），站点页没有这些字段；
+      * 节点只认订单形状的证据，站点页的证据它在本地就被拒。
+    """
+    f = operator
+    seen = []
+
+    def dispatch(_, config, run_id):
+        try:
+            evidence = drive_site_tool(f, run_id, {"address": "广州 天河"})
+            seen.append(evidence)
+            # 与 `complete()` 同形，但自己持有响应：那个夹具只返回拒绝回执的 json。
+            headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
+            publication = f["client"].post(
+                "/v1/internal/charging-status/execution-config/" + run_id, headers=headers
+            )
+            headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+            status = f["client"].post(
+                f"/v1/internal/operator-runs/{run_id}/completions",
+                headers=headers,
+                json={"status": "completed", "answer": json.dumps(selection())},
+            )
+            seen.append(("complete", status.status_code, status.text))
+            return status
+        except BaseException as exc:  # noqa: BLE001 - 夹具失败要能在断言里看见
+            seen.append(("dispatch failed", repr(exc)))
+            raise
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    response = f["client"].post(
+        "/v1/assistant/questions", headers=HEADERS, json={"question": "帮我找一下广州天河附近的充电站"}
+    )
+    assert response.status_code == 202, response.text
+    final = terminal(f, response.json()["qa_id"])
+    assert final.json()["status"] == "completed", (final.text, seen)
+    # 事实来自**这一份**证据：站点按工具参数里的地址查回来，不是第二次查询
+    cpms_calls = [path for path, _ in f["state"]["calls"] if path.startswith("/chSite/page?")]
+    assert len(cpms_calls) == 1
+    assert "address=" + quote("广州天河") in cpms_calls[0]
+    assert "天河测试站" in final.text
 
 
 def test_cancel_during_site_read_cannot_deliver(operator, monkeypatch):

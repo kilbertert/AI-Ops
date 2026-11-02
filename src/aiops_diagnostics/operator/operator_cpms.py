@@ -99,7 +99,7 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
     两条判据缺一不可：
 
     1. 键必须是声明里列过的那几个 —— 模型不能给工具加参数。
-    2. 每个值必须能在用户提问原文里找到（casefold 后是子串）——
+    2. 每个值必须能在用户提问原文里找到（只忽略空白与大小写，仍为连续子串）——
        编一个地址，或把上一个用户的地址搬过来，都在这里被判掉。
     """
     declared = _declared(tool)
@@ -116,9 +116,10 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
         stripped = value.strip()
         if not stripped:
             continue
-        if stripped.casefold() not in question.casefold():
+        original = operator_conversation.question_span(stripped, question)
+        if not original:
             raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-        cleaned[key] = stripped
+        cleaned[key] = original
     return cleaned
 
 
@@ -174,9 +175,9 @@ def _sites_from_evidence(caller, task, answer):
     if evidence is None:
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     arguments = task.arguments.get(SITE_TOOL, {})
-    terms = [term for term in answer["address_terms"] if term]
     if answer["name"] != arguments.get("name", "") or (
-        (max(terms, key=len) if terms else "") != arguments.get("address", "")
+        "".join(site_keywords(answer).address.split()).casefold()
+        != "".join(arguments.get("address", "").split()).casefold()
     ):
         raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
     data = evidence["data"]
@@ -757,7 +758,7 @@ class OperatorCpms:
                 if not set(answer["evidence_tools"]).issubset(task.delivered):
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
             else:
-                operator_conversation.validate(answer, task.question)
+                answer = operator_conversation.validate(answer, task.question)
                 if answer["kind"] == "site_search":
                     sites = _sites_from_evidence(task.caller, task, answer)
                     if sites is None:
@@ -1374,6 +1375,11 @@ class SiteKeywords:
     @property
     def listing(self) -> bool:
         return not self.name and not self.address_terms
+
+    @property
+    def address(self) -> str:
+        """答复可把同一地址拆成多个关键词；仅用于对齐已执行的工具参数。"""
+        return "".join(self.address_terms)
 
     def params(self, page: int) -> dict[str, object]:
         params: dict[str, object] = {"current": page, "size": SITE_PAGE_SIZE, "type": 0}
