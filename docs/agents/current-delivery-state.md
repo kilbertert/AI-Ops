@@ -1,5 +1,22 @@
 # 当前交付状态索引
 
+## 站点整链已合并部署，业务验收被一个既有 Dify 数据问题挡住（2026-11-02）
+
+#1302 合并为 `0fce8a58`，节点（jar `e3ee149b…`）、Gateway（`1.0.0+0fce8a58f725`）、
+回调配置三者从同一修订成套部署并逐项核验，详见
+[部署回执](../validation/2026-11-02-site-chain-deploy-0fce8a58.md)。
+
+**业务验收未完成**，卡点不在本次改动：
+
+- `chat_route_bindings` 的 `consumer_service` 指向 Dify app `07d15c42…`，而 36 的
+  Dify 里该 app 与其 workflow 都已不存在 ⇒ consumer 问答必 `DIFY_UNAVAILABLE`。
+- `operator` 入口要求公司令牌通道，`X-Third-Session` 被显式拒绝（403
+  `OPERATOR_COMPANY_TOKEN_REQUIRED`），本轮未取得该通道。
+
+因此站点真实正例、合法空结果、受限范围/跨租户拒绝、账单、知识、两种风格、
+两端页面生命周期**均未验收**。修复 Dify 绑定是一次 36 上的生产数据变更，需单独授权。
+
+
 ## T13 补做：H2 他人订单反例通过、L1 重启回读通过（2026-11-01）
 
 - **H2**：同租户另一消费者的订单返回 **404 `ORDER_NOT_FOUND`**，不返回任何字段
