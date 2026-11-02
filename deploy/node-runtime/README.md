@@ -44,10 +44,11 @@ Compose将它只读挂载到`/etc/m2live/operator-tools.json`，并在`-jar`之�
 仅复制所需配置与停稳后的平台数据库；不复制试验 Gateway、身份 fixture 或旧备份密钥。
 平台/节点无业务库凭据，模型出口只挂自己的凭据目录。
 
-把 `gateway-callback.conf.template` 中 **具名部署占位符**替换为本次配置：
-`AIOPS_NODE_BRIDGE`、`AIOPS_NODE_STATE`、`AIOPS_NODE_CONFIG`、`AIOPS_PRODUCTION_GATEWAY`（共四种名字），
-其中 STATE 出现多次。**不能无参数 envsubst**，否则会抹掉 nginx 的认证头变量。
-渲染到配置根的 `gateway-callback.conf`。创建项目身份可写的临时目录；入口仅监听内部网桥。
+通过 `uv run python tools/content/render_node_callback.py --bridge <网桥IP> --state <状态目录> \
+--config <配置目录> --gateway <Gateway地址> --out <输出配置>` 渲染 `gateway-callback.conf`。
+工具名与完整路径正则来自声明，新增工具不能遗漏回调。带 Lua 模块的宿主通过
+`--lua-directives` 传入现役两行配置；普通 nginx 留空。不得无参数 envsubst，以免抹掉认证头变量。
+创建项目身份可写的临时目录；入口仅监听内部网桥。
 回调使用 TLS 1.2/1.3；由节点已信任的项目 CA 签发叶子证书，SAN 包含实际网桥 IP，
 用途为 serverAuth。证书644、私钥600，所属身份与回调服务一致；不向节点挂载私钥。
 同一端口不再接受明文；项目运行配置和管家目标的 `proxy_base_url` 同步使用 HTTPS。

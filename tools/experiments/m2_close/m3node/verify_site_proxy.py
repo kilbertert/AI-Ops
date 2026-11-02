@@ -145,7 +145,7 @@ def main():
                     "kind": "site_search",
                     "text": "查询结果如下。",
                     "name": arguments.get("name", ""),
-                    "address_terms": [],
+                    "address_terms": ["天河"] if arguments.get("address") else [],
                 }
                 response = f["client"].post(
                     f"/v1/internal/operator-runs/{run_id}/completions",
@@ -161,6 +161,7 @@ def main():
             for label, caller, arguments in [  # noqa: B007 - dispatch closure uses this case
                 ("scoped", scope(), {}),
                 ("keyword", scope(), {"name": "天河"}),
+                ("spacing", scope(), {"address": "天 河"}),
                 ("tenant", tenant_owner(), {}),
                 ("wrong-tenant", scope(), {}),
                 (

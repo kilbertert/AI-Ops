@@ -119,14 +119,17 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    text = (DEPLOY / "gateway-callback.conf.template").read_text()
-    for key, value in {
-        "AIOPS_NODE_BRIDGE": "127.0.0.1",
-        "AIOPS_NODE_STATE": str(tmp_path),
-        "AIOPS_NODE_CONFIG": str(tmp_path),
-        "AIOPS_PRODUCTION_GATEWAY": f"http://127.0.0.1:{upstream.server_port}",
-    }.items():
-        text = text.replace("${" + key + "}", value)
+    import runpy
+
+    renderer = runpy.run_path(str(DEPLOY.parents[1] / "tools/content/render_node_callback.py"))
+    text = renderer["render"](
+        "127.0.0.1", str(tmp_path), str(tmp_path), f"http://127.0.0.1:{upstream.server_port}"
+    )
+    assert "lua_package_path" not in text
+    extras = 'lua_package_path "/synthetic/?.lua;;";'
+    assert extras in renderer["render"](
+        "127.0.0.1", str(tmp_path), str(tmp_path), "http://127.0.0.1:1", extras
+    )
     config = tmp_path / "nginx.conf"
     config.write_text(text.replace(":8788", f":{port}"))
     proc = subprocess.Popen(
