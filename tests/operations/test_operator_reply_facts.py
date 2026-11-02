@@ -179,3 +179,18 @@ def test_a_frozen_report_is_not_rewritten_by_a_later_upgrade():
         snapshot["answer"], snapshot["evidence"], language="zh"
     )
     assert text == frozen
+
+
+def test_output_contract_tells_the_model_the_fact_block_carries_every_fee():
+    """输出契约必须点明 `{{fact:order_facts}}` 里有费用区的各项金额（2026-11-02 反馈）。
+
+    但它**不能把字段枚举摆在「不要复述」前面而不同时收紧措辞** —— 线上实测：模型把枚举
+    当成可谈内容，开场就写金额/百分比，被 `check_notice` 判 `unsupported_fact` 整轮拒绝
+    （3 次里 2 次）。所以契约里同时要有「其它行一个字都不要带数字」这一句。
+    """
+    from aiops_diagnostics.execution.node_publication import OPERATOR_OUTPUT
+
+    for fee in ("启动费用", "优惠", "增值税"):
+        assert fee in OPERATOR_OUTPUT, fee
+    assert "一个字都不要带数字" in OPERATOR_OUTPUT
+    assert "不要提具体是哪几项费用" in OPERATOR_OUTPUT
