@@ -44,15 +44,15 @@ def test_other_numbers_are_not_orders(question):
 def test_both_entries_ask_this_one_predicate():
     """正式入口与预览桥各写过一份判据，于是同一句话走试用能识别、走正式入口不能。
 
-    判据只有一份才算修好：两处的源码里都不该再有自己那套「有没有『订单』」的正则。
+    判据与候选集都只有一份才算修好：两处的源码里都不该再有自己那套订单正则。
     """
     import inspect
 
     from aiops_diagnostics.dify import dify_console_publish
     from aiops_diagnostics.gateway import gateway_api
 
-    assert "names_order" in inspect.getsource(gateway_api)
-    assert "order_reference" in inspect.getsource(dify_console_publish._native_order)
+    assert "order_candidates" in inspect.getsource(gateway_api)
+    assert "order_candidates" in inspect.getsource(dify_console_publish._native_order)
     # 预览桥用的是同一份：订单句子但没有单号时返回空串，由下游澄清。
     assert dify_console_publish._native_order("我上一个订单是什么情况") == ""
 
@@ -69,3 +69,106 @@ def test_digit_runs_is_the_candidate_set_both_the_gate_and_the_extractor_use():
     assert names_order(question)
     assert digit_runs(question) == ["2116050516255272961"]
     assert digit_runs("帮我查询充电站 TEST2026-10-29 03:00:09") == []
+
+
+# --------------------------------------------------------------- 2026-11-02 交接复现
+
+
+@pytest.mark.parametrize(
+    "question,expected",
+    [
+        # Codex 在 099c1207 实测：带字母前缀的完整标识符被截成了纯数字尾巴。
+        ("订单 A2116050516255272961", "A2116050516255272961"),
+        ("帮我查订单 A2116050516255272961", "A2116050516255272961"),
+    ],
+)
+def test_a_letter_prefixed_identifier_keeps_its_prefix(question, expected):
+    """标识符是一个整体，不能只取它里面那段数字。
+
+    单号一旦带字母前缀，前缀就是它的一部分：截掉之后去查的是**另一张单**，
+    而且查不到时系统的说法是「订单不存在」——看起来像用户写错了。
+    """
+    from aiops_diagnostics.common.order_reference import order_candidates
+
+    assert order_candidates(question) == [expected]
+
+
+def test_two_different_orders_in_one_message_are_not_silently_reduced_to_one():
+    """一句话里点两张**不同**的单，不能悄悄只查一张。
+
+    `订单 ORDER-1001 和订单2116050516255272961` 里的短数字段（`-1001` 的四位）
+    不满足裸数字门槛，但它前面写着「订单」，那就是一张被点名的单。旧写法按候选集
+    大小挑，结果是**默认选了后者**——用户以为问了 A 和 B，系统只答了 B。
+    """
+    from aiops_diagnostics.common.order_reference import order_candidates
+
+    assert set(order_candidates("订单 ORDER-1001 和订单2116050516255272961")) == {
+        "ORDER-1001",
+        "2116050516255272961",
+    }
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # 同一张单重复出现（显式写一次 + 裸写一次）仍是**一张**单。
+        "订单2116050516255272961 这张单2116050516255272961",
+        "帮我查订单 2116050516255272961",
+        "帮我分析这笔单的电费2116050516255272961",
+    ],
+)
+def test_the_same_order_repeated_is_one_order(question):
+    from aiops_diagnostics.common.order_reference import order_candidates
+
+    assert order_candidates(question) == ["2116050516255272961"]
+
+
+# ------------------------------------- 2026-11-02 评审：四个由归并规则引入的缺陷
+
+
+def test_a_pasted_identifier_keeps_its_prefix():
+    """整条消息就是一个带前缀的标识符时，它就是单号本身。
+
+    回归：本轮第一版让形状判据（长数字段）先于「整条消息是标识符」，于是粘贴
+    `A2116050516255272961` 被拆成纯数字 —— 去查**另一张单**。原生预览在改动前是
+    保留前缀的，这是修出来的回归。
+    """
+    from aiops_diagnostics.common.order_reference import order_candidates
+
+    assert order_candidates("A2116050516255272961") == ["A2116050516255272961"]
+    assert order_candidates("  A2116050516255272961  ") == ["A2116050516255272961"]
+
+
+def test_the_same_digit_tail_as_a_separate_bare_number_is_two_orders():
+    """带前缀的单号与**独立出现**的同一段数字是两个候选。
+
+    按数字内容全局去重会把他们并成一个，于是正式入口不澄清、只查带前缀那张。
+    去重必须限定在「这个标识符自己包含的数字段」，而不是整句。
+    """
+    from aiops_diagnostics.common.order_reference import order_candidates
+
+    assert set(order_candidates("订单 A2116050516255272961 和 2116050516255272961")) == {
+        "A2116050516255272961",
+        "2116050516255272961",
+    }
+
+
+def test_a_trailing_full_stop_is_not_part_of_the_order_number():
+    """`订单 2116…2961.` 的单号是那串数字，句号是句子的一部分。
+
+    单号校验只允许字母/数字/下划线/连字符，带上句号会让整次运行失败。
+    """
+    from aiops_diagnostics.common.order_reference import order_candidates
+
+    assert order_candidates("订单 2116050516255272961.") == ["2116050516255272961"]
+    assert order_candidates("订单 2116050516255272961。") == ["2116050516255272961"]
+
+
+def test_a_dashed_identifier_that_contains_a_long_digit_run_is_one_order():
+    """`A123-2116050516255272961` 是一张合法的分段单号，尾段不是第二张单。
+
+    只按**第一个**数字段判「已被覆盖」会让尾段再进一次候选，于是一张单被要求澄清。
+    """
+    from aiops_diagnostics.common.order_reference import order_candidates
+
+    assert order_candidates("订单 A123-2116050516255272961") == ["A123-2116050516255272961"]

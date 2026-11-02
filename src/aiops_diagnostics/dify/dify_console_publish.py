@@ -1951,39 +1951,22 @@ def _native_refusal(answer):
 def _native_order(query):
     # 首片不做“上一单”推断；多个订单也不擅自选第一张。
     #
-    # 判据来自 `common.order_reference`，与正式管家入口同一份：「订单」二字不是门槛，
-    # 只写了 19 位单号的句子（「这笔单的电费2116…」）同样是在指一张订单。
+    # **提取和判据都来自 `common.order_reference`**，与正式管家入口同一份：「订单」二字
+    # 不是门槛，只写了 19 位单号的句子（「这笔单的电费2116…」）同样是在指一张订单。
+    #
+    # 这里曾经自己写一套正则，于是同一个问题在两处表现不同（2026-11-02 交接：
+    # `订单 A2116…` 的字母前缀被截掉、`订单 ORDER-1001 和订单2116…` 静默只取后者）。
     if not order_reference.names_order(query):
         return ""
-    if order_reference.WHOLE_TOKEN.fullmatch(query.strip()) and any(c.isdigit() for c in query):
-        return query.strip()
-    # 中英分开写：中文可以紧贴（`订单2116…`），英文必须有分隔（`order 123` / `order no: 123`）。
-    # 共用一条正则时，`ORDER-1001` 里的 `ORDER` 会被当成英文单词再截出一个 `-1001`，
-    # 同一张单变成两个候选，整条请求被拒（2026-11-02 评审实测）。
-    explicit = re.findall(r"订单(?:号)?\s*[:：#]?\s*([A-Za-z0-9_.:-]+)", query) + re.findall(
-        r"(?<![A-Za-z])order(?![A-Za-z])(?:\s+(?:id|no|number))?\s*(?:[:：]\s*|\s+)"
-        r"([A-Za-z0-9_.:-]+)",
-        query,
-        re.IGNORECASE,
-    )
-    if any(
-        any(c.isdigit() for c in item) and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item) for item in explicit
-    ):
+    candidates = order_reference.order_candidates(query)
+    unsafe = (item for item in candidates if any(c.isdigit() for c in item))
+    if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item) for item in unsafe):
         raise _Rejected(400, "订单号包含不支持的字符，请只提供一个完整有效的订单号")
-    candidates = set(re.findall(r"(?<![A-Za-z0-9_.:-])[A-Za-z0-9_-]{6,64}(?![A-Za-z0-9_.:-])", query))
-    candidates = {s for s in candidates if any(c.isdigit() for c in s) and (not s.isdigit() or len(s) >= 15)}
-    # 15 位以上的纯数字段**就是**这一轮的单号。候选扫描与 `_extract_order_no` 一样从左到右
-    # 取第一个含数字的 token，遇到「TEST2026-10-29 这笔单2116…」会先抓日期；门槛与提取
-    # 因此共用 `order_reference.digit_runs` 这组候选（2026-11-02 评审实测）。
-    runs = order_reference.digit_runs(query)
-    if len(runs) == 1:
-        return runs[0]
-    candidates.update(s for s in explicit if any(c.isdigit() for c in s))
     if not candidates:
         return ""
     if len(candidates) != 1:
         raise _Rejected(400, "请在本条消息中填写一个明确订单号；暂不支持“上一个订单”")
-    return candidates.pop()
+    return candidates[0]
 
 
 def _native_preview(handler):

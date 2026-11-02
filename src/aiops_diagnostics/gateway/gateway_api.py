@@ -37,7 +37,6 @@ from aiops_diagnostics.common.i18n import (
     free_text_unavailable_message,
     resolve_language,
 )
-from aiops_diagnostics.common.order_reference import names_order
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.consumer import consumer_knowledge_selection
 from aiops_diagnostics.consumer.consumer_order_chat import (
@@ -2903,16 +2902,23 @@ def create_gateway_app(
                 raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
             if binding is not None:
                 _require_operator_company_token(request)
-                order_context = names_order(payload.question)
-                # 有 15 位以上纯数字段时，**它就是这一轮要查的单**：`_extract_order_no` 从左
-                # 到右取第一个含数字的 token，遇到「TEST2026-10-29 这笔单2116…」会先抓日期。
-                # 门槛与提取因此共用 `order_reference.digit_runs` 这组候选。
-                runs = order_reference.digit_runs(payload.question)
-                order = (
-                    payload.order_no
-                    or (runs[0] if runs else (_extract_order_no(payload.question) if order_context else ""))
-                    or ""
-                )
+                # 订单身份来自 `common.order_reference`，与原生预览桥同一份实现。
+                #
+                # 这里曾经自己从左到右抓「第一个含数字的 token」，两个真缺陷：
+                # ① `订单 A2116…` 只取数字段，去查**另一张单**；② 句子里点两张不同的单时
+                # 静默只取一张（2026-11-02 交接）。候选集与判据现在都只有一个来源。
+                candidates = order_reference.order_candidates(payload.question)
+                if len(candidates) > 1 and not payload.order_no:
+                    # 说得不清楚就澄清，不擅自选一张 —— 挑错了用户看不出来。
+                    return _clarification(
+                        context,
+                        caller,
+                        decision,
+                        code=CLARIFY_ORDER_REQUIRED,
+                        question=payload.question,
+                        language=language,
+                    )
+                order = payload.order_no or (candidates[0] if candidates else "")
                 target = next(
                     (
                         r

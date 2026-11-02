@@ -13,6 +13,7 @@ from execution.test_app_runtime_dify_entry import dify_chat
 from execution.test_m2_close_contract import NODE_A_TOKEN, _write_config
 from execution.test_m3_gateway_exec_config import _write_manifest
 
+from aiops_diagnostics.conversation.clarification import CLARIFY_ORDER_REQUIRED
 from aiops_diagnostics.conversation.faq import PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
 from aiops_diagnostics.execution import chat_execution, node_publication
@@ -62,7 +63,7 @@ class Directory:
 
 @contextmanager
 def environment(tmp_path, monkeypatch):
-    state = {"calls": [], "site": "SITE-1", "tenant": "TENANT-A", "hook": None}
+    state = {"calls": [], "site": "SITE-1", "tenant": "TENANT-A", "hook": None, "order": ORDER}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -70,8 +71,9 @@ def environment(tmp_path, monkeypatch):
 
         def do_GET(self):  # noqa: N802
             state["calls"].append((self.path, self.headers.get("Authorization")))
+            # `state["order"]`：断言「查的是**哪一张**单」时用，默认就是 ORDER。
             row = {
-                "orderNo": ORDER,
+                "orderNo": state["order"],
                 "tenantId": state["tenant"],
                 "siteId": state["site"],
                 "status": 2,
@@ -109,7 +111,7 @@ def environment(tmp_path, monkeypatch):
                     "current": int(parse_qs(urlsplit(self.path).query)["current"][0]),
                 }
             else:
-                data = {"orderNo": ORDER, "siteId": state["site"], "chOrderInfoModel": row}
+                data = {"orderNo": state["order"], "siteId": state["site"], "chOrderInfoModel": row}
             if state["hook"]:
                 state["hook"]()
             body = json.dumps({"code": 0, "data": data}).encode()
@@ -1113,3 +1115,48 @@ def test_order_written_without_the_word_order_still_reaches_the_order_turn(opera
     assert any(path == "/chOrderInfo/getOrderInfoDetail/" + ORDER for path, _ in f["state"]["calls"])
     final = terminal(f, response.json()["qa_id"])
     assert final.status_code == 200 and final.json()["status"] == "completed", final.text
+
+
+# ------------------------------------------------- 2026-11-02 交接：两个入口一起验
+
+
+def _asked(f, monkeypatch, question):
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
+    return f["client"].post("/v1/assistant/questions", headers=HEADERS, json={"question": question})
+
+
+def test_a_letter_prefixed_order_reads_that_exact_identifier(operator, monkeypatch):
+    """`订单 A2116050516255272961` 必须去查**带 A 的那张单**。
+
+    交接实测：预览把前缀截掉，只拿数字段去查。查不到时系统的说法是「订单不存在」，
+    看起来像用户写错了号 —— 而真正错的是提取。
+    """
+    f = operator
+    f["state"]["order"] = "A2116050516255272961"
+    response = _asked(f, monkeypatch, "订单 A2116050516255272961")
+    assert response.status_code == 202, response.text
+    assert any(
+        path == "/chOrderInfo/getOrderInfoDetail/A2116050516255272961" for path, _ in f["state"]["calls"]
+    ), f["state"]["calls"]
+
+
+def test_two_different_orders_are_asked_back_not_silently_reduced_to_one(operator, monkeypatch):
+    """一句话点两张**不同**的单：不擅自选一张（2026-11-02 交接）。
+
+    交接实测的旧行为是「预览直接选中后者」—— 用户以为问了 A 和 B，系统只答了 B，
+    而且没有任何地方说它挑过。这里断言的是**不问 CPMS**：多单必须在签发前澄清。
+    """
+    f = operator
+    response = _asked(f, monkeypatch, f"订单 {ORDER} 和订单2116050516255272961")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["type"] == "clarification" and body["code"] == CLARIFY_ORDER_REQUIRED, body
+    assert not f["state"]["calls"]
+
+
+def test_the_same_order_written_twice_is_still_one_order(operator, monkeypatch):
+    """同一张单重复出现不是「多单」：显式写法与裸写法指同一个人。"""
+    f = operator
+    response = _asked(f, monkeypatch, f"订单{ORDER} 这张单{ORDER}")
+    assert response.status_code == 202, response.text
+    assert any(path == "/chOrderInfo/getOrderInfoDetail/" + ORDER for path, _ in f["state"]["calls"])
