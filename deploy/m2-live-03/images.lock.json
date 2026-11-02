@@ -10,7 +10,7 @@
     "artifact": "aiops-execution-node.jar",
     "sha256": "00b49b69db32ef5803978f1112a7450ee249b376089abb2d9cf2e366f3978035",
     "bytes": 106302423,
-    "source_commit": "PENDING_MERGE_SHA",
+    "source_commit": "01ff14de",
     "build": "由本仓 services/execution-node 构建（可复现：pom 固定 project.build.outputTimestamp，同一份源码两次构建得到同一摘要）；构建命令见 tools/README.md",
     "source_sha256": "b05b133230df34fcfbd402b388353dbf7ce1312dbc977d4968b705181c1dc2bf",
     "source_digest_rule": "services/execution-node 下除 target/__pycache__/.idea 外全部文件的路径+内容摘要；命令见 deploy/node-runtime/source_digest.py"
