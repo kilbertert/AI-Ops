@@ -44,7 +44,9 @@ def test_the_declaration_covers_the_live_tools():
     assert samples.kind == "page" and samples.page_size == 50
     assert samples.request({"order_no": "ORDER-1"})["query"] == "current=1&size=50"
     # 证据字段就是「模型能回答什么」：这两张表的长度是契约的一部分，改动要过 ADR。
-    assert len(detail.evidence_fields) == 26 and len(samples.evidence_fields) == 13
+    # 26 → 35：后台「费用信息」那一栏的金额（预付费、电损、启动、优惠、增值税、付款时间）
+    # 补进来，见 ADR-0193。
+    assert len(detail.evidence_fields) == 35 and len(samples.evidence_fields) == 13
     assert site.evidence_fields == ("id", "name", "address")
     assert site.request({"name": "天河", "address": ""})["query"] == (
         "current=1&size=50&type=0&name=%E5%A4%A9%E6%B2%B3"

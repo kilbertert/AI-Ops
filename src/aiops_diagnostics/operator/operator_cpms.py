@@ -1153,10 +1153,20 @@ _FACT_LABELS = {
     "zh": {
         "order": "订单号",
         "status": "订单状态",
+        "isPrePay": "是否预付费",
+        "prePayAmount": "预付费",
         "electricityFee": "电费",
         "serviceFee": "服务费",
+        "dsElectricFee": "电损电费",
+        "dsServiceFee": "电损服务费",
+        "launchFee": "启动费用",
+        "marketAmount": "优惠金额",
+        "vat": "增值税比例",
+        "vatFee": "增值税费用",
         "totalAmount": "合计",
         "payAmount": "系统记录的支付金额",
+        "payTime": "系统记录的付款时间",
+        "occupyFee": "占位费",
         "refundAmount": "系统记录的退款金额",
         "electricity": "电量（kWh）",
         "time": "充电时长",
@@ -1171,10 +1181,20 @@ _FACT_LABELS = {
     "en": {
         "order": "Order",
         "status": "Order status",
+        "isPrePay": "Prepaid",
+        "prePayAmount": "Prepaid amount",
         "electricityFee": "Electricity fee",
         "serviceFee": "Service fee",
+        "dsElectricFee": "Line-loss electricity fee",
+        "dsServiceFee": "Line-loss service fee",
+        "launchFee": "Startup fee",
+        "marketAmount": "Discount amount",
+        "vat": "VAT rate",
+        "vatFee": "Tax fee",
         "totalAmount": "Total",
         "payAmount": "Recorded payment amount",
+        "payTime": "Recorded payment time",
+        "occupyFee": "Occupancy fee",
         "refundAmount": "Recorded refund amount",
         "electricity": "Energy (kWh)",
         "time": "Charging duration",
@@ -1223,12 +1243,24 @@ def _order_fact_text(evidence, language="zh"):
     lines = [
         labels["order"] + colon + str(item.get("order_no") or detail.get("orderNo") or labels["missing"])
     ]
+    # 顺序按后台「费用信息」那一栏排：先问是否预付、预付了多少，再是各项费用，最后是合计与
+    # 实付。只列**上游给了值**的项 —— 缺字段就是「后台没有这一列」，不补零也不补空。
     fields = (
         ("status", "status"),
+        ("isPrePay", "isPrePay"),
+        ("prePayAmount", "prePayAmount"),
         ("electricityFee", "electricityFee"),
         ("serviceFee", "serviceFee"),
+        ("dsElectricFee", "dsElectricFee"),
+        ("dsServiceFee", "dsServiceFee"),
+        ("launchFee", "launchFee"),
+        ("occupyFee", "occupyFee"),
+        ("marketAmount", "marketAmount"),
+        ("vat", "vat"),
+        ("vatFee", "vatFee"),
         ("totalAmount", "totalAmount"),
         ("payAmount", "payAmount"),
+        ("payTime", "payTime"),
         ("refundAmount", "refundAmount"),
         ("electricity", "electricity"),
         ("time", "time"),
@@ -1238,9 +1270,20 @@ def _order_fact_text(evidence, language="zh"):
     )
     for key, label_key in fields:
         value = detail.get(key)
-        if value is not None:
-            shown = _status_word(value, language) if key == "status" else str(value)
-            lines.append(labels[label_key] + colon + shown)
+        if value is None:
+            continue
+        if key == "status":
+            shown = _status_word(value, language)
+        elif key == "isPrePay":
+            # 布尔值直接印 `True`/`False` 是给开发者看的；后台那一列写的是「是/否」。
+            shown = _yes_no(value, language)
+        elif key == "payTime":
+            # 与报告末尾的取证时间同一个写法：CPMS 给的是不带时区的本地时间，原样显示，
+            # 不补一个假的 UTC 后缀。
+            shown = _readable_time(value)
+        else:
+            shown = str(value)
+        lines.append(labels[label_key] + colon + shown)
     samples = evidence.get("cpms_charging_samples", {}).get("data")
     if samples is not None:
         lines.append(
@@ -1248,6 +1291,15 @@ def _order_fact_text(evidence, language="zh"):
         )
     lines.append(labels["limits"])
     return "\n".join(lines)
+
+
+def _yes_no(value, language: str) -> str:
+    """布尔证据按人话写。后台那一列是「是/否」，不是 `True`/`False`。"""
+    if value is True:
+        return "是" if language.startswith("zh") else "Yes"
+    if value is False:
+        return "否" if language.startswith("zh") else "No"
+    return str(value)
 
 
 def _readable_time(iso: object) -> str:

@@ -69,6 +69,9 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
 
+# 只 import `common` 里的模块：桥的服务宿主只装上面那份固定文件集，多加一个包内导入就会
+# ModuleNotFoundError（见下方发布桥制品说明）。
+from aiops_diagnostics.common import order_reference
 from aiops_diagnostics.common.async_job_lifecycle import DIAGNOSIS as DIAGNOSIS_PROFILE
 from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
@@ -1947,10 +1950,13 @@ def _native_refusal(answer):
 
 def _native_order(query):
     # 首片不做“上一单”推断；多个订单也不擅自选第一张。
-    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", query.strip()) and any(c.isdigit() for c in query):
-        return query.strip()
-    if not re.search(r"订单|\border\b", query, re.IGNORECASE):
+    #
+    # 判据来自 `common.order_reference`，与正式管家入口同一份：「订单」二字不是门槛，
+    # 只写了 19 位单号的句子（「这笔单的电费2116…」）同样是在指一张订单。
+    if not order_reference.names_order(query):
         return ""
+    if order_reference.WHOLE_TOKEN.fullmatch(query.strip()) and any(c.isdigit() for c in query):
+        return query.strip()
     explicit = re.findall(
         r"(?:订单(?:号)?|order(?:\s+(?:id|no|number))?)\s*[:：#]?\s*([A-Za-z0-9_.:-]+)",
         query,

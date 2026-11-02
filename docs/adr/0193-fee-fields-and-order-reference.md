@@ -1,0 +1,95 @@
+# 193. 费用区字段进证据与答复；「订单」二字不是订单门槛
+
+日期：2026-11-02
+状态：已采纳，随配套节点、Gateway、控制台桥交付
+
+## 背景
+
+2026-11-02 的两条真实反馈，同一张截图对：
+
+1. 后台「新能源车充电订单」的费用信息栏能看到是否预付费、预付费、电费、服务费、电损电费、
+   电损服务费、**启动费用**、充电总费用、**优惠金额**、**增值税比例**、**增值税费用**、
+   实付金额、结算状态、付款时间；而 AI 的答复只有电费与服务费。后台看得到的钱，
+   在答复里看不见。
+2. 同一张单，原话「帮我分析这笔单的电费2116050516255272961」送进管家，答复是
+   「本轮我没有订单查询工具与历史订单上下文……麻烦你先选择或提供具体订单」；
+   只把「这笔单」改成「这笔订单」就能分析。单号明明在句子里。
+
+两条是**两个独立缺陷**，只修一条不足以让这两张截图对得上。
+
+## 决策
+
+### 一、费用字段：先进声明，再进渲染
+
+- `operator_tools.json` 的 `cpms_order_detail.evidence_fields` 从 26 项补到 35 项：
+  `isPrePay`、`prePayAmount`、`dsElectricFee`、`dsServiceFee`、`launchFee`、`vat`、`vatFee`、
+  `payTime`、`occupyFee`。声明是唯一来源，Python 投影（`operator_cpms.DETAIL_FIELDS`）与
+  Java 节点（`CpmsReadTool` 经 `OperatorTools.evidenceFields`）都从它读，两端仍逐项相同。
+- `_order_fact_text` 按后台那一栏的顺序渲染，**只列上游给了值的项**：缺字段就是
+  「后台没有这一列」，不补零、不补「未提供」。上游真的给了 `0` 就写 `0`。
+- 布尔写成人话（`是/否`，`Yes/No`），不把 `True` 印给用户；`payTime` 走既有的
+  `_readable_time`，不把 CPMS 的 ISO 串摆进正文，也不补一个 CPMS 没给的 UTC 后缀。
+- 标签与公司自己的一致：`launchFee` 用 `orderDetail.startupFee`（启动费用 / Startup Fee）、
+  `vat` 用 `orderDetail.vat.label`（增值税率 / VAT）、`vatFee` 用 `orderDetail.taxFee`
+  （税费 / Tax Fee）、`marketAmount` 用 `orderDetail.discountReductionAmount`
+  （优惠减免金额 / Discount Amount）、`occupyFee` 用 `orderDetail.placeholderFee`
+  （占位费 / Placeholder Fee）。后台表头与 App 订单详情页本来就是这两套词，
+  我们不自创第三套。`dsElectricFee/dsServiceFee`（电损电费/服务费）两套词里都没有，
+  取字段注释的直译。
+- `OPERATOR_OUTPUT` 同步声明这些字段，让模型知道 `{{fact:order_facts}}` 里会出现什么、
+  不必也不该自己复述或算差额。
+
+**没有加入的列**：`settlementType`（结算方式：电费单独结算/随服务费结算）只在
+`ChOrderInfo` 上，`ChOrderInfoModel` 与 `OrderPageResp` 都没有，即
+`getOrderInfoDetail` 不返回它；后台的「结算状态」列来自另一处聚合。把它写进
+`evidence_fields` 只会让每次运行都少一个字段，不会让它出现。这是**已知缺口**，
+记在这里而不是假装覆盖。
+
+### 二、订单门槛：判据是形状，不是有没有那两个字
+
+新增 `common/order_reference.names_order(text)`，正式管家入口（`gateway_api`）与
+原生预览桥（`dify_console_publish._native_order`）**共用这一份**。成立条件三条：
+说了「订单/訂單/order」；整条消息就是一个带数字的标识符；句中有一段 15 位以上的纯数字。
+
+- 门槛本来挡的是**别的东西里的数字**：站点名 `TEST2026-10-29`、时刻 `03:00:09`、
+  手机号。它们要么被 `-`/`:` 切开，要么短于 15 位；系统订单号是 19 位雪花 id。
+- 「这笔单」「这单」「这一笔」因此不需要另立词表 —— 词表是第二份事实，会与真话术脱节。
+- `order` 的边界用 `(?<![A-Za-z])order(?![A-Za-z])` 而不是 `\border\b`：Python 的正则里
+  中文也算 `\w`，`电费ORDER-1001` 里的 `\border\b` **匹配不到**，而它正是要认的那一句。
+  这条在写测试时才暴露 —— 合成单号 `ORDER-1001` 紧贴中文。
+
+## 被否的替代方案
+
+- **只改提示词，告诉模型「这笔单」也是订单。** 门槛在网关 Python 里，模型看不到这条
+  消息：它进的是**无订单回合**，那一轮的工具清单里根本没有订单工具（ADR-0182/0184）。
+- **给「这笔单/这单/这一笔」加词表。** 换个说法又失效，且维护成本落在运营身上。
+- **把门槛整个删掉。** 站点名与时刻会被当成订单号，`OPERATOR_TARGET_MISSING` 或
+  签发失败；`test_site_name_with_date_is_not_an_order` 与
+  `帮我查询充电站 TEST2026-10-29 03:00:09` 两例守着这条线。
+- **只补证据字段、不改渲染。** 模型拿得到金额，但用户看的正文里仍然只有电费和服务费 ——
+  第一张截图的比较对象就是正文。
+
+## 验证
+
+- `tests/operations/test_operator_reply_facts.py::test_every_backend_fee_field_reaches_the_answer`
+  走**投影 + 渲染**全链（不是手写证据）。**变异验证**：从 `evidence_fields` 删掉
+  `launchFee/marketAmount/vat/vatFee`，该用例失败。
+- 同文件 `test_fee_lines_are_omitted_when_the_backend_has_no_such_column`：缺列不补行，
+  值为 0 照写 0。
+- `tests/operations/test_operator_cpms.py::test_order_written_without_the_word_order_still_reaches_the_order_turn`
+  用真实入口（`POST /v1/assistant/questions`）断言这一句**签发了订单诊断并真的读了那张单**。
+- `tests/common/test_order_reference.py`：正例反例两头覆盖；**变异验证**证毕 —— 把
+  `names_order` 的纯数字分支改成 `False`，网关用例与预览桥参数化用例同时失败。
+- `tests/operations/test_operator_native_preview.py` 增四条原话变体。
+- 全量 `uv run pytest`：3890 passed / 9 skipped。唯一的红是
+  `test_m2_live03_deploy.py::test_gateway_context_digest_is_reproducible_and_matches_the_lock`，
+  在干净的 `origin/main` 上同样红（镜像上下文摘要与锁值不符），与本次改动无关。
+
+## 缺口与后续
+
+- `settlementType` 与后台「结算状态」列仍未覆盖（见上）。
+- 纯电价分时段字段（`tip/peak/flat/valley*Fee`）与 `platformAmount` 在 41 上仍全为 NULL，
+  维持 ADR-0171 的判断不加。
+- **本地通过不证明真实订单上的行为**：真实 CPMS 响应是否真的带
+  `launchFee/vat/vatFee` 等字段、单位与币种是否如后台所示，仍需按
+  `docs/agents/operator-cpms/README.md` 在真实账号与订单上复核。本次未做该验收。
