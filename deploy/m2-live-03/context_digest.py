@@ -38,7 +38,11 @@ CONTEXT_SPEC = (
     ("src", ("__pycache__", "*.pyc")),
     ("services/model-proxy", ("__pycache__", "*.pyc")),
     ("tools/verification/m2_live", ("__pycache__", "*.pyc")),
-    ("tools/experiments/m2_close", ("__pycache__", "*.pyc", "node/target")),
+    # `m3node/build/` 是 `run.sh` 的编译产物目录（classes/、日志）。它不在
+    # `build-image.sh` 的 tar 排除表里，但同样的理由成立且更硬：一份被本机**.gitignore**
+    # 掉、每次运行都会变的目录若进了摘要，锁文件里的值就只代表某一台机器的某一次运行。
+    # 2026-11-02 实测：本机跑过 run.sh 后本地算出 8240bbed…，CI 在干净树上算出 68b229e2…。
+    ("tools/experiments/m2_close", ("__pycache__", "*.pyc", "node/target", "m3node/build")),
 )
 #: 直接放在上下文根的两个文件（`build-image.sh` 用 `cp` 放进去，日志里的路径是 `./名字`）。
 ROOT_FILES = ("deploy/m2-live-03/gateway.Dockerfile", "deploy/m2-live-03/gateway-requirements.txt")
@@ -56,6 +60,9 @@ def _excluded(relative: Path, patterns: tuple[str, ...]) -> bool:
                 return True
         elif pattern == "node/target":
             if relative.parts[:2] == ("node", "target"):
+                return True
+        elif pattern == "m3node/build":
+            if relative.parts[:2] == ("m3node", "build"):
                 return True
         else:  # pragma: no cover - 新增规则时应该显式处理
             raise SystemExit(f"unhandled exclude pattern: {pattern}")

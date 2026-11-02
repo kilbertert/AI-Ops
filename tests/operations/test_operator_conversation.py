@@ -317,7 +317,9 @@ def test_listing_reports_the_count_only_when_it_is_trustworthy(sites, needle, fo
     roster = {
         "source": "cpms.sitePage",
         "observed_at": "2026-10-29T00:00:00+00:00",
-        "limited": sites["total"] > 1,
+        # 直查已经读完了：这里的 total 与本地条数不等纯粹是租户口径/集合过滤造成的。
+        # （工具路径只有一页，``limited`` 会另走「另有 N 个」。）
+        "limited": False,
         "empty_scope": False,
         **sites,
     }
@@ -352,6 +354,64 @@ def test_rendering_never_lists_more_than_the_show_limit():
     assert len(re.findall(r"(?m)^\d+\.", text)) == limit
     assert f"另有 {len(rows) - limit} 个" in text
     assert conversation.site_facts(roster, "zh-CN")["site_count"] == str(limit)
+
+
+@pytest.mark.parametrize("limited", [False, True])
+def test_the_note_and_the_body_state_the_same_number(limited):
+    """同一段答复里不能有两个总数。
+
+    2026-11-02 复审：``site_facts`` 用的是展示条数，``render`` 用的是 total，
+    于是「共 10 个站点」紧跟着「共 500 个站点」。两者的判定必须同源，
+    不论这一页是否读完。
+    """
+    rows = [{"name": f"站{i}", "address": "地址"} for i in range(1, 11)]
+    roster = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-11-02T00:00:00+00:00",
+        "sites": rows,
+        "total": 500,
+        "limited": limited,
+        "empty_scope": False,
+        "scope_limited": False,
+    }
+    answer = {"kind": "site_search", "text": "共 {{fact:site_count}} 个站点", "name": "", "address_terms": []}
+    text = conversation.render(answer, roster, "zh-CN")["blocks"][0]["text"]
+    note = text.split("\n\n")[0]
+    body = text.split("\n\n", 1)[1]
+    numbers = {n for n in re.findall(r"共 (\d+) 个", note)}
+    assert len(numbers) == 1
+    stated = int(re.search(r"共 (\d+) 个", note).group(1))
+    body_numbers = set(re.findall(r"共 (\d+) 个", body))
+    assert body_numbers <= {str(stated)}, text  # 正文里出现的总数必须与说明一致
+    shown = len(re.findall(r"(?m)^\d+\.", text))
+    more = re.search(r"另有 (\d+) 个(?:匹配)?站点", text)
+    assert shown + (int(more.group(1)) if more else 0) == stated, text
+
+
+@pytest.mark.parametrize("limited", [False, True])
+def test_a_keyword_search_never_states_the_upstream_total_as_its_own_count(limited):
+    """搜索问法下 ``total`` 是**过滤前**的上游计数，不能当成「匹配到多少」。
+
+    2026-11-02 复审：工具证据的 total 未受关键词影响，于是「共 500 个」会被读成
+    「天河有 500 个站」。搜索问法只能说本地真正握有的行数。
+    """
+    rows = [{"name": f"天河站{i}", "address": "广州天河"} for i in range(1, 4)]
+    roster = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-11-02T00:00:00+00:00",
+        "sites": rows,
+        "total": 500,
+        "limited": limited,
+        "empty_scope": False,
+        "scope_limited": False,
+    }
+    answer = {"kind": "site_search", "text": "", "name": "天河", "address_terms": []}
+    text = conversation.render(answer, roster, "zh-CN")["blocks"][0]["text"]
+    assert "500" not in text
+    assert conversation.site_facts(roster, "zh-CN", listing=False)["site_count"] == str(len(rows))
+    # 列举问法读全了，total 才是答案；没读全就只说展示条数。
+    expected = "500" if not limited else str(len(rows))
+    assert conversation.site_facts(roster, "zh-CN", listing=True)["site_count"] == expected
 
 
 def test_tool_evidence_page_of_many_rows_shows_ten_and_says_how_many_more():

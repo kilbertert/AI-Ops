@@ -226,12 +226,39 @@ def shown_sites(sites) -> list:
     return sites["sites"][:SITE_MAX_SHOWN]
 
 
-def site_facts(sites, language) -> dict[str, str]:
+def _count_is_total(sites, listing: bool) -> bool:
+    """``total`` 能不能当成「匹配到多少个」说出去。
+
+    两个理由说不能：列举之外（搜索）时它是**上游**计数，本地还要再过滤一遍；
+    以及这一页没读全（``limited`` 且未超出展示上限）时它只说明「还有更多」。
+    员工的租户口径（``scope_limited``）同理。
+    """
+    return (
+        listing
+        and not sites.get("scope_limited")
+        and not (sites.get("limited") and len(sites["sites"]) <= len(shown_sites(sites)))
+    )
+
+
+def _stated_count(sites, listing: bool) -> int:
+    """这次查询**可以说出去**的条数 —— 正文头一句与说明片段共用这一个数。
+
+    没列出的部分由「另有 N 个」交代，两个数因此永远对得上。
+    """
+    total = sites.get("total") or 0
+    if _count_is_total(sites, listing) and total > 0:
+        return total
+    return len(shown_sites(sites))
+
+
+def site_facts(sites, language, *, listing: bool = False) -> dict[str, str]:
     """这一轮**可以**填进说明的事实。与 :func:`render` 写的那份清单同源，不另算一遍。"""
     zh = language.startswith("zh")
     rows = shown_sites(sites)
     return {
-        "site_count": str(len(rows)),
+        # 这个数必须与 :func:`render` 头一句相同：曾经的写法是 `len(shown_sites(...))`，
+        # 于是同一段答复里「共 10 个站点」紧跟着「共 500 个站点」（2026-11-02 复审）。
+        "site_count": str(_stated_count(sites, listing)),
         "site_roster": "\n".join(
             f"{i}. {row['name']} — {row['address'] or ('地址未提供' if zh else 'Address unavailable')}"
             for i, row in enumerate(rows, 1)
@@ -246,9 +273,9 @@ def site_facts(sites, language) -> dict[str, str]:
     }
 
 
-def fill_site_note(text, sites, language) -> str:
+def fill_site_note(text, sites, language, *, listing: bool = False) -> str:
     """把说明里的片段填成系统给出的事实。未知片段是协议错误，不是措辞问题。"""
-    facts = site_facts(sites, language)
+    facts = site_facts(sites, language, listing=listing)
     if {name for name in SITE_SLOT.findall(text)} - set(facts):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
     return SITE_SLOT.sub(lambda match: facts[match.group(1)], text)
@@ -305,20 +332,31 @@ def render(answer, sites, language):
         if not sites["empty_scope"]:
             text += "\n" + sites["source"] + " · " + sites["observed_at"]
         raw = shown_sites(sites)
-        if len(raw) < len(sites["sites"]):
-            # 工具证据可以带回整整一页（50 条），而展示上限是 10。少说了这一句，
-            # 读者看到的就是「共 1 个站点」下面列了 50 行。
-            text += "\n" + (
-                f"另有 {len(sites['sites']) - len(raw)} 个匹配站点未在此列出。"
+        if _count_is_total(sites, listing):
+            # 可信的总数与展示同源：说「共 N 个」，就得交代少列的那部分。
+            remaining = _stated_count(sites, listing) - len(raw)
+            line = (
+                f"另有 {remaining} 个站点未在此列出。"
                 if zh
-                else f"{len(sites['sites']) - len(raw)} more matching sites are not listed here."
+                else f"{remaining} more sites are not listed here."
             )
+        else:
+            # 只能指出**本地确实握有**的匹配行，不能拿上游计数冒充：搜索问法下
+            # total 是过滤前的计数，说成「另有 N 个匹配」就是编的。
+            remaining = len(sites["sites"]) - len(raw)
+            line = (
+                f"另有 {remaining} 个匹配站点未在此列出。"
+                if zh
+                else f"{remaining} more matching sites are not listed here."
+            )
+        if remaining > 0:
+            text += "\n" + line
         # 模型写的说明只能**在前**：它负责语气，事实全部在它下面由系统写出。
         # 片段（{{fact:site_roster}} 等）由系统填值，说明里不会出现它自己编的名单。
         note = (answer.get("text") or "").strip()
         if note:
             validate_site_note(note)
-            text = fill_site_note(note, sites, language) + "\n\n" + text
+            text = fill_site_note(note, sites, language, listing=listing) + "\n\n" + text
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
 
 
@@ -327,18 +365,24 @@ def _roster_count(sites, zh):
 
     只在**数字可信**时给出总数：员工的 CPMS 计数是租户口径，还要再经站点集合过滤，
     两者不等时那个 total 不是"你有多少个"，此时只说显示了几条，不编总数。
+
+    与 :func:`site_facts` 的 ``site_count`` 是同一个判断：说明片段里的数字若与这里
+    的头一句不同，读者会在同一段答复里看到两个总数。
     """
     shown = len(shown_sites(sites))
     total = sites.get("total") or 0
-    trustworthy = not sites.get("scope_limited")
-    if total <= 0 or (trustworthy and total == shown):
+    if total <= 0:
         return ""
-    if not trustworthy:
+    if not _count_is_total(sites, True):
+        # 租户口径，或工具只读了一页（整页都是本地过滤后的匹配、上游还有剩余页）：
+        # 那个 total 都不是「匹配到多少个」，只说显示了几条，余量交给「另有 N 个」。
         return (
             f"当前账号可见范围内显示前 {shown} 个站点："
             if zh
             else f"Showing the first {shown} sites in your scope:"
         )
+    if total == shown:
+        return ""
     return (
         f"当前账号可见范围内共 {total} 个站点，这里显示前 {shown} 个："
         if zh

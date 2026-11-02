@@ -31,12 +31,38 @@ Gateway 比对，改口径会让每次真实运行以 `OPERATOR_EVIDENCE_MISMATC
 
 | 项 | 命令 | 结果 |
 |---|---|---|
-| Python 全量 | `uv run pytest` | **3863 passed, 9 skipped** |
+| Python 全量 | `uv run pytest` | **3868 passed, 9 skipped** |
 | 真实 Java→Gateway→合成 CPMS | `verify_site_proxy.py` | **12/12 场景通过**（两端、关键词、不匹配、空白、全租户、空范围、错租户） |
 | Java 工具验收 | `CpmsToolAcceptance` | **PASS assertions=214（基线 213）**，新增站点证据页字段整链一条 |
 | 真 nginx 回调白名单 | `tests/test_node_runtime_deploy.py` | 新增 `/cpms/chSite/pageBOGUS`、`/cpms/chSite/page/ORDER-1` 两条反例；被拒后进程仍在 |
 | Ruff | `ruff check` / `format --check` | 通过 |
-| 网关镜像锁 | `context_digest.digest()` | `8240bbed…`，已按 `build-image.sh --update-lock` 的算法写入 `images.lock.json` |
+| 网关镜像锁 | `context_digest.py --check` | `c7d4a8a5…`，match: true（见下条） |
+
+## 镜像锁的一次假记录（已修根因）
+
+`0e912758` 里写进锁的 `8240bbed…` 与这棵树对不上：CI 在干净树上算 `68b229e2…`。
+根因不是那次内容改动，而是**本机 `tools/experiments/m2_close/m3node/build/`**（`run.sh`
+的编译产物，gitignored、每次运行都变）被算进了构造上下文摘要。于是摘要只代表
+「某台机器跑过 run.sh 之后的状态」，CI 永远对不上——与 `LC_ALL=C sort` 那条同一类错误。
+
+修的是排除规则本身，不是那个数字：`context_digest.py` 的 `CONTEXT_SPEC` 与
+`build-image.sh` 的 `tar --exclude` 同时加上 `m3node/build`。修完后本机（有 build/）
+与 `git archive` 干净导出算出同一个值，这才说明摘要与工作树状态无关。
+
+## 说明片段与正文头一句必须是同一个数（复审新增）
+
+`site_facts` 的 `site_count` 原先是「展示条数」，`render` 头一句用 `total`，于是
+「共 10 个站点」紧跟着「共 500 个站点」。现在两者共用 `_count_is_total` /
+`_stated_count` 一个判断：
+
+- 搜索问法：`total` 是上游**过滤前**计数，只能说本地握有的匹配行；差额用
+  「另有 N 个匹配站点未在此列出」。
+- 列举问法且读全了：`total` 才是「你有多少个」，差额用「另有 N 个站点」补齐。
+- 列举问法但只读了一页（`limited` 且未超出展示上限）：只说展示条数，加上既有的
+  「结果可能不完整」。
+
+「另有 N 个」不再在 `limited` 时补数字：那是「可能更多」，不是「已知还有 N 个」。
+
 
 `m3node/run.sh`（NodeGuardAcceptance 与 ToolSchemaParity）在本机锁定依赖目录上因
 `slf4j-api-1.7.36` 与 `2.0.18` 同时在 `lib/`、Logback 报「not a Logback LoggerContext」
