@@ -297,3 +297,39 @@ def test_the_same_endpoint_dispatches_by_the_runs_own_operation():
     assert _is_consumer_run(context("charging_status"), RUN) is True
     assert _is_consumer_run(context("operator_order_diagnosis"), RUN) is False
     assert _is_consumer_run(context("operator_conversation"), RUN) is False
+
+
+def test_node_wraps_tool_arguments_in_the_gateway_contract_shape():
+    """节点领授权时必须包一层 `arguments` —— 裸发参数会被 422 拒掉。
+
+    2026-11-02 生产实测：站点工具带参数（`name`/`address`）后，节点发的是
+    `{"name": ..., "address": ...}`，而网关的 `OperatorToolAuthorizationRequest`
+    是 `extra="forbid"` 的 `{"arguments": {...}}`，于是
+    `POST .../tools/cpms_site_search/authorization` 返回 **422**，节点把它兜底成
+    `cpms_unavailable`。订单工具没有参数（发 `{}`），两种形状恰好都合法，
+    这个不一致因此一直没暴露。
+
+    这里守的是**契约形状**：Java 里同名的 `authorizationBody()` 必须与这个模型一致。
+    """
+    import inspect
+    import json
+    import pathlib
+    import re
+
+    source = pathlib.Path(
+        "services/execution-node/src/main/java/com/trendpower/aiops/node/CpmsGatewayAuthorization.java"
+    ).read_text(encoding="utf-8")
+    # 请求体由 authorizationBody() 生成，且只放 arguments 一个键
+    assert "authorizationBody(arguments)" in source
+    assert re.search(r'body\.set\("arguments",', source), "节点没有把参数包进 arguments"
+    assert source.count("createObjectNode()") >= 2, "空参数必须补成 {} 而不是省略"
+
+    # 网关侧：同一个键名，且多余字段一律 422
+    from pydantic import ValidationError
+
+    from aiops_diagnostics.gateway.gateway_api import OperatorToolAuthorizationRequest
+
+    body = json.loads('{"arguments": {"name": "天河", "address": "广州"}}')
+    assert OperatorToolAuthorizationRequest(**body).arguments == {"name": "天河", "address": "广州"}
+    with pytest.raises(ValidationError):
+        OperatorToolAuthorizationRequest(name="天河", address="广州")

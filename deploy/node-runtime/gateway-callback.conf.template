@@ -3,6 +3,11 @@ pid ${AIOPS_NODE_STATE}/callback.pid;
 error_log stderr;
 events { worker_connections 128; }
 http {
+# 线上 nginx 是宝塔那套带 lua 模块的构建：缺这两行时 `nginx -t` 仍通过，
+# 但实际启动会以 `failed to load the 'resty.core' module` 退出。模板必须带上，
+# 否则"重渲染一次配置"就会把回调入口弄挂（2026-11-02 实撞过）。
+lua_package_path "/www/server/nginx/lib/lua/?.lua;;";
+lua_package_cpath "/www/server/nginx/lib/lua/?.so;;";
 access_log off;
 client_body_temp_path ${AIOPS_NODE_STATE}/client-temp;
 proxy_temp_path ${AIOPS_NODE_STATE}/proxy-temp;
@@ -30,7 +35,13 @@ server {
         proxy_set_header Content-Type $http_content_type;
         proxy_read_timeout 15s;
     }
-    location ~ ^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/(completions|tools/(cpms_order_detail|cpms_charging_samples)/(authorization|evidence))$ {
+    # 工具白名单与取数路径由渲染方从
+    # `src/aiops_diagnostics/operator/operator_tools.json` 生成（见
+    # `tools/content/render_node_callback.py`），**不在这里手写**：2026-11-02
+    # 站点工具 `cpms_site_search` 就是这样漏的 —— 声明里加了，模板里两处白名单
+    # 都没跟上，节点调用被 `location / { return 404; }` 吃掉，运行期表现为
+    # `cpms_unavailable`（不是 403，因为根本没到网关）。
+    location ~ ^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/(completions|tools/(${AIOPS_NODE_TOOL_NAMES})/(authorization|evidence))$ {
         limit_except POST { deny all; }
         client_max_body_size 256k;
         proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
@@ -40,7 +51,7 @@ server {
         proxy_read_timeout 45s;
         proxy_buffering off;
     }
-    location ~ ^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/cpms/(chOrderInfo/getOrderInfoDetail|iotChargingDevice/getChargingMonitor)/[A-Za-z0-9_-]+$ {
+    location ~ ^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/cpms/(${AIOPS_NODE_TOOL_PATHS})/?([A-Za-z0-9_-]+)?$ {
         limit_except GET { deny all; }
         proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
         proxy_set_header Authorization $http_authorization;

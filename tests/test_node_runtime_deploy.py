@@ -117,16 +117,24 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    text = (DEPLOY / "gateway-callback.conf.template").read_text()
-    for key, value in {
-        "AIOPS_NODE_BRIDGE": "127.0.0.1",
-        "AIOPS_NODE_STATE": str(tmp_path),
-        "AIOPS_NODE_CONFIG": str(tmp_path),
-        "AIOPS_PRODUCTION_GATEWAY": f"http://127.0.0.1:{upstream.server_port}",
-    }.items():
-        text = text.replace("${" + key + "}", value)
+    # 用**真实渲染器**生成配置：工具白名单与取数路径来自声明，不在这里手写。
+    # 2026-11-02 的站点工具事故正是"测试与模板各写一份、声明里加了一个白白漏掉"，
+    # 夹具若自己拼白名单，就等于把同一处漏掉在测试里再藏一次。
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "render_node_callback", DEPLOY.parents[1] / "tools/content/render_node_callback.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
     config = tmp_path / "nginx.conf"
-    config.write_text(text.replace(":8788", f":{port}"))
+    config.write_text(
+        module.render(
+            "127.0.0.1", str(tmp_path), str(tmp_path), f"http://127.0.0.1:{upstream.server_port}"
+        ).replace(":8788", f":{port}")
+    )
     proc = subprocess.Popen(
         [nginx, "-e", "stderr", "-c", str(config), "-g", "daemon off;"], stderr=subprocess.PIPE
     )
@@ -197,17 +205,33 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
         ) as res:
             assert res.status == 204
         assert seen[-1] == (path, "Bearer task-grant", None, b"")
+        # 声明里的**每一个**工具都必须能从节点到达网关。站点工具（无订单参数）
+        # 2026-11-02 就是漏在这里：声明有、白名单没有，运行期只看到 cpms_unavailable。
+        from aiops_diagnostics.operator import operator_tools
+
+        for tool in operator_tools.tools():
+            tail = tool.path_template.lstrip("/").replace("{order_no}", "ORDER-1")
+            path = root + "/cpms/" + tail
+            with opener.open(
+                urllib.request.Request(
+                    f"https://127.0.0.1:{port}{path}", headers={"Authorization": "Bearer task-grant"}
+                ),
+                timeout=2,
+            ) as res:
+                assert res.status == 204, f"{tool.name} 的取数路径没有放行"
+            assert seen[-1][0] == path
         for path, method in [
             (root + "/tools/shell/authorization", "POST"),
             (root + "/cpms/chOrderInfo/stopCharging/ORDER-1", "GET"),
             (root + "/cpms/chOrderInfo/getOrderInfoDetail/ORDER-1", "POST"),
+            (root + "/cpms/chSite/page?current=1&size=50", "POST"),
         ]:
             with pytest.raises(urllib.error.HTTPError) as error:
                 opener.open(
                     urllib.request.Request(f"https://127.0.0.1:{port}{path}", method=method), timeout=2
                 )
             assert error.value.code in (403, 404)
-        assert len(seen) == 7
+        assert len(seen) == 7 + len(operator_tools.tools())
     finally:
         proc.terminate()
         proc.communicate(timeout=5)

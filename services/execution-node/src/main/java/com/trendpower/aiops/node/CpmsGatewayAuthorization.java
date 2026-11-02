@@ -17,9 +17,14 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
                                                 com.fasterxml.jackson.databind.JsonNode arguments) {
         // 声明契约版本：旧 Gateway 不认识这个头，会回一份没有 `request` 的载荷，那样在
         // 下面被拒 —— 两个方向都落在可预期的位置，而不是等完成回调里缺字段。
+        //
+        // 请求体必须包一层 `arguments`：Gateway 的 `OperatorToolAuthorizationRequest`
+        // 是 `extra="forbid"` 的 `{"arguments": {...}}`。裸发参数会被 422 拒掉。
+        // 订单工具没有参数（发 `{}`），两种形状恰好都合法，所以这个不一致直到
+        // 站点工具（有 name/address）才暴露 —— 2026-11-02 生产实测 422。
         JsonNode data = gateway.post(
                 path(run, tool) + "/authorization",
-                arguments == null ? "{}" : arguments.toString(), manifest, CpmsReadTool.CONTRACT);
+                authorizationBody(arguments), manifest, CpmsReadTool.CONTRACT);
         if (!run.equals(data.path("run_id").asText()) || !tool.equals(data.path("tool").asText())
                 || !manifest.equals(data.path("manifest_id").asText()) || !data.path("site_ids").isArray()) {
             throw CpmsReadTool.refused("authorization_identity_mismatch");
@@ -51,6 +56,16 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
                 || !ack.path("accepted").isBoolean() || !ack.path("accepted").booleanValue()) {
             throw CpmsReadTool.refused("evidence_not_accepted");
         }
+    }
+
+    /**
+     * 领授权的请求体。**只有** `arguments` 一个字段 —— Gateway 侧是 `extra="forbid"`，
+     * 多给一个键就是 422，而不是被忽略。
+     */
+    private static String authorizationBody(com.fasterxml.jackson.databind.JsonNode arguments) {
+        var body = new ObjectMapper().createObjectNode();
+        body.set("arguments", arguments == null || arguments.isNull() ? new ObjectMapper().createObjectNode() : arguments);
+        return body.toString();
     }
 
     private static String path(String run, String tool) {
