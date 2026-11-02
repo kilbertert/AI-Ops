@@ -600,6 +600,39 @@ def test_a_site_note_cannot_retype_a_site_name():
         conversation.validate(invented, "找广州天河充电站")
 
 
+@pytest.mark.parametrize(
+    "note",
+    [
+        # 2026-11-02 真实回放里被误拒的三句，逐字取自模型输出。
+        "我帮你查了一下，当前账号可见的地点列表已经列在下方。由于清单较长，如需进一步筛选或定位，"
+        "可以告诉我站点名称或城市关键词，我再帮你缩小范围。",
+        "我帮你查了一下，系统已列出当前账号可见的结果。你可以核对一下，如需按地点或站名筛选，也可以告诉我。",
+        "我帮你查了一下，当前账号可见的地点列表在下方。结果较多，系统会分批展示；如需缩小范围，"
+        "可以告诉我地点关键词，或直接选择某个具体地点查看详情。",
+        "如需查看站点详情，请核对站点列表。",
+        "Your stations are listed below.",
+        "The station list is below.",
+    ],
+)
+def test_a_generic_site_noun_is_not_a_fabricated_name(note):
+    """「站点名称」「站点详情」「Your stations」是**类别**，不是给某个地方起名。
+
+    站点说明的职责是追问筛选条件，说一句「可以告诉我站点名称」是它的正常写法。把它判成
+    编造站名，等于让每轮站点问答有概率整轮失败 —— 2026-11-02 真实回放 18 次里就有 3 次
+    是这么被拒的（`rule=note_site_name`）。收窄形状后，编造站名仍被拒（见上一条测试）。
+    """
+    conversation.validate_site_note(note)
+
+
+@pytest.mark.parametrize(
+    "note", ["我帮你找到了虚构乙站详情。", "天河测试站信息如下。", "为您查询天河测试站。"]
+)
+def test_a_generic_suffix_does_not_launder_a_fabricated_name(note):
+    """通用短语只**整条**中性化。按后一个字跳过的写法会放行 `虚构乙站详情`（复审反例）。"""
+    with pytest.raises(operator_cpms.OperatorRefused):
+        conversation.validate_site_note(note)
+
+
 def complete(f, run_id, answer):
     headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
     publication = f["client"].post("/v1/internal/charging-status/execution-config/" + run_id, headers=headers)

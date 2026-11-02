@@ -51,9 +51,31 @@ SITE_FORBIDDEN = re.compile(
 #: 放行编造的名字（复核反例：`我帮你找到了虚构乙站`）。
 SITE_NAME_SHAPE = re.compile(
     # 「查到的站点」「可见的站」是**说法**不是名字：`的` 紧贴站名后缀时不算站名形状。
+    # 通用名词短语（`站点名称`/`站名`/`站点详情`…）由 :data:`GENERIC_SITE_WORDS` 先整体
+    # 中性化，不走这里 —— 逐个字跳过会放行 `虚构乙站详情`（复审反例）。
     r"[\u4e00-\u9fff]{2,8}(?<!的)(?:充电站|站点|站|充电桩|桩)"
-    r"|\b(?!(?:the|a|an|this|that|these|those|each|every|your|our|matching|nearest)\s)"
+    # 英文同理：「Test Station」是名字，「The station」「Your stations」不是。
+    r"|\b(?!(?i:the|a|an|all|any|some|this|that|these|those|each|every|your|our|matching|nearest|visible|no)\s)"
     r"[A-Z][A-Za-z0-9\-]{1,20}\s+(?:station|site)s?\b",
+)
+
+#: **通用名词短语**：说的是类别，不是给某个地方起名。整条词一起中性化再判站名形状。
+#: 必须是完整词（`站点名称` 含「点」），否则 `虚构乙站详情` 里的「站详情」会被误吞。
+#: 2026-11-02 真实回放 18 次里 3 次拒收全部是这个词形状（`可以告诉我站点名称`）。
+GENERIC_SITE_WORDS = (
+    "充电站名称",
+    "充电桩名称",
+    "站点名称",
+    "站点详情",
+    "站点列表",
+    "站点信息",
+    "站点位置",
+    "站点数量",
+    "站点标签",
+    "站点范围",
+    "站点目录",
+    "站点内容",
+    "站名",
 )
 
 #: 找站说明可以填的事实片段。键是协议的一部分，与 :func:`site_facts` 同源。
@@ -212,6 +234,10 @@ def validate_site_note(text):
     if {name for name in SITE_SLOT.findall(text)} - set(SITE_FACTS):
         _answer_refused("note_slot")
     generic = re.sub(r"(?:目标|具体|某|该|这些|匹配的)站(?:点)?", "结果", own)
+    # 通用名词短语**整条**中性化：它在说类别，不在给某个地方起名。逐个字跳过会放行
+    # `虚构乙站详情`（复审反例 `虚构乙站` + 通用尾巴），所以只认完整词。
+    for phrase in GENERIC_SITE_WORDS:
+        generic = generic.replace(phrase, "结果")
     if SITE_FORBIDDEN.search(own):
         _answer_refused("note_fact")
     if SITE_NAME_SHAPE.search(generic):
