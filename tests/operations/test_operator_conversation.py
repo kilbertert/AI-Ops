@@ -407,6 +407,27 @@ def test_a_search_that_finds_nothing_still_says_try_another_place():
     assert "没有站点" in listed and "未找到匹配" not in listed
 
 
+def test_a_tool_page_that_matched_nothing_says_the_search_may_be_incomplete():
+    """工具只读第一页：本页没命中不等于范围里没有。
+
+    这是审查指出的真实缺口——「第一页无匹配、后续页可能有匹配」时，答复必须带着
+    上限提示，不能写成确定的「没有这个站点」。它也不是列举空的「你没有任何站点」。
+    """
+    empty = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-11-02T00:00:00+00:00",
+        "limited": True,  # 上游还有剩余页／本页被关键词过滤掉了
+        "empty_scope": False,
+        "sites": [],
+        "total": 152,
+        "scope_limited": False,
+    }
+    text = conversation.render(selection(), empty, "zh-CN")["blocks"][0]["text"]
+    assert "未找到匹配站点" in text
+    assert "可能不完整" in text
+    assert "没有站点" not in text
+
+
 @pytest.mark.parametrize("prose", ["为您查询充电站。", "编造站点：恶意站；已退款。"])
 def test_a_site_note_written_before_the_query_is_refused(operator, monkeypatch, prose):
     """没有取数依据的找站说明**不能**被当成查询结果交付。
