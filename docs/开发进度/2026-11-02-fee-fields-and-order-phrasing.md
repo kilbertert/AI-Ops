@@ -22,9 +22,12 @@
 
 ## 验证
 
-- 全量 `uv run pytest`：3890 passed / 9 skipped。唯一红是
-  `test_m2_live03_deploy.py::test_gateway_context_digest_is_reproducible_and_matches_the_lock`，
-  在干净 `origin/main` 上同样红，与本次无关。
+- 全量 `uv run pytest`：3890 passed / 9 skipped（变更前后同数）。
+- 新模块进了 Gateway 镜像上下文，按 `docs/agents/local-gateway-build.md` 真构建镜像并
+  `--update-lock`：`files` 198 → 199，`source_sha256` `1f910bbb…` → `a6c2d22e…`；
+  `context_digest.py --check` 通过，镜像内导入新模块并跑通判据。
+  （首轮我误判这条为「与本次无关的既有失败」——`git stash` 不回收未跟踪文件，那个
+  「干净基线」里还带着新模块。订正过程记在验收记录里。）
 - `ruff format --check` / `ruff check`：通过。
 - 变异验证两条都做过：删掉 `launchFee` 等四个字段 → 费用用例红；把 `names_order` 的
   数字分支改成 `False` → 网关用例与预览桥参数化用例同时红。
@@ -32,11 +35,32 @@
 
 ## 已知缺口
 
-- 后台「结算状态」列（`settlementType`）不在 `getOrderInfoDetail` 的响应 DTO 里，
-  本次没有覆盖，已在 ADR 里如实记录。
+- 后台「结算状态」列**不是 `getOrderInfoDetail` 返回的字段**，本次没有覆盖。详见下方
+  「关于结算状态」。
 - **未完成真实订单验收**：真实 CPMS 是否真的返回 `launchFee/vat/vatFee` 等字段、
   单位与币种是否如后台所示，需要在真实账号与订单上复核（见
   `docs/agents/operator-cpms/README.md`）。本轮只有合成响应与本地全链。
+
+## 关于「结算状态没覆盖」是什么意思
+
+后台那张表最后一排有「结算状态」列（截图里是**订单已完成**）。它说的**不是充电订单状态**
+（充电中/已结束/异常），而是**这笔钱结没结算给运营商**：0=进行中、1=待结算、2=已结算/结算中、
+3=完成（对账单已发放）。这一列在**商城订单**（`cloud-mall-common` 的
+`OrderAdminListVo.settlementStatus`）上，我们的充电订单接口取不到它：
+
+| 载体 | 有 `settlementStatus` 吗 |
+| --- | --- |
+| 商城 `OrderAdminListVo` / `OrderListVo` / `OrderInfo` | 有 |
+| 充电订单表 `ChOrderInfo` / `ChOrderInfoModel` | **没有** |
+| `getOrderInfoDetail` 的响应 `OrderPageResp` | **没有** |
+| 充电占位订单 `ChOccupyOrderInfoController` | 有，但那是**占位费**订单的，不是本单的 |
+
+所以不是我漏加了一个字段，而是这个接口本来就不返回它。要覆盖它得新增一次跨服务查询
+（充电订单 → 商城结算单），涉及新的授权面与新的失败模式，不在本次修复范围内。
+「结算方式」（`ChOrderInfo.settlementType`，电费单独结算/随服务费结算）也是同样的处境：
+PO 上有、两个响应 DTO 上都没有。
+
+**答复里因此不会出现结算状态**，也**不会**用充电订单状态去冒充它。
 
 ## 下一步
 

@@ -39,11 +39,22 @@
 - `OPERATOR_OUTPUT` 同步声明这些字段，让模型知道 `{{fact:order_facts}}` 里会出现什么、
   不必也不该自己复述或算差额。
 
-**没有加入的列**：`settlementType`（结算方式：电费单独结算/随服务费结算）只在
-`ChOrderInfo` 上，`ChOrderInfoModel` 与 `OrderPageResp` 都没有，即
-`getOrderInfoDetail` 不返回它；后台的「结算状态」列来自另一处聚合。把它写进
-`evidence_fields` 只会让每次运行都少一个字段，不会让它出现。这是**已知缺口**，
-记在这里而不是假装覆盖。
+**没有加入的列**：后台那张表最后的「结算状态」列（截图显示**订单已完成**）说的是
+**这笔钱结没结算给运营商** —— `0=进行中, 1=待结算, 2=已结算/结算中, 3=完成（对账单已发放）`，
+见 `cloud-mall-common` 的 `OrderAdminListVo.settlementStatus`。它属于**商城订单**，
+不属于充电订单：
+
+| 载体 | `settlementStatus` |
+| --- | --- |
+| 商城 `OrderAdminListVo` / `OrderListVo` / `OrderInfo` | 有 |
+| 充电表 `ChOrderInfo` / `ChOrderInfoModel` | 无 |
+| `getOrderInfoDetail` 响应 `OrderPageResp` | 无 |
+
+同样的处境还有「结算方式」`ChOrderInfo.settlementType`（电费单独结算/随服务费结算）：
+PO 上有、两个响应 DTO 上都没有。所以这不是漏挑字段 —— 把它写进 `evidence_fields`
+只会让每次运行都少一个字段，不会让它出现。要覆盖得新增一次跨服务查询（充电订单 →
+商城结算单），带新的授权面与新的失败模式，不在本次范围。**答复里不会出现结算状态，
+也不会用充电订单状态去冒充它。** 这是**已知缺口**，记在这里而不是假装覆盖。
 
 ### 二、订单门槛：判据是形状，不是有没有那两个字
 
@@ -81,13 +92,14 @@
 - `tests/common/test_order_reference.py`：正例反例两头覆盖；**变异验证**证毕 —— 把
   `names_order` 的纯数字分支改成 `False`，网关用例与预览桥参数化用例同时失败。
 - `tests/operations/test_operator_native_preview.py` 增四条原话变体。
-- 全量 `uv run pytest`：3890 passed / 9 skipped。唯一的红是
-  `test_m2_live03_deploy.py::test_gateway_context_digest_is_reproducible_and_matches_the_lock`，
-  在干净的 `origin/main` 上同样红（镜像上下文摘要与锁值不符），与本次改动无关。
+- 全量 `uv run pytest`：3890 passed / 9 skipped（变更前后同为这个数）。
+- 新增模块改变了 Gateway 镜像构造上下文摘要（198 → 199 个文件，`1f910bbb…` → `a6c2d22e…`），
+  按 `docs/agents/local-gateway-build.md` 真构建镜像并 `--update-lock`，`context_digest.py
+  --check` 通过；镜像内导入 `order_reference` 并跑通判据。
 
 ## 缺口与后续
 
-- `settlementType` 与后台「结算状态」列仍未覆盖（见上）。
+- 后台「结算状态」列与 `settlementType` 仍未覆盖（见上）。
 - 纯电价分时段字段（`tip/peak/flat/valley*Fee`）与 `platformAmount` 在 41 上仍全为 NULL，
   维持 ADR-0171 的判断不加。
 - **本地通过不证明真实订单上的行为**：真实 CPMS 响应是否真的带

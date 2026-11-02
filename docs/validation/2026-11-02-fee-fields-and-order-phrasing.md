@@ -73,11 +73,39 @@ uv run ruff check …                 # → All checks passed!
 node .sandcastle/adr.check.mjs      # → adr check ok
 ```
 
-### 一个与本次无关的红
+### 镜像上下文摘要：我先判错了一次，这里订正
 
-`tests/tooling/test_m2_live03_deploy.py::test_gateway_context_digest_is_reproducible_and_matches_the_lock`
-失败（上下文摘要 `9c3419f2…` ≠ 锁值 `1f910bbb…`）。**在干净的 `origin/main` 上
-`git stash` 后同样失败**，是既有状态，不是本次引入。未在本次修复。
+首次全量跑时 `test_gateway_context_digest_is_reproducible_and_matches_the_lock` 失败
+（摘要 `9c3419f2…` ≠ 锁值 `1f910bbb…`）。我当时用 `git stash` 在干净 `origin/main` 上
+复现了同样的红，判定「既有状态，与本次无关」。
+
+**那个判断是错的。** `git stash` 不回收**未跟踪**文件，而本次新增的
+`src/aiops_diagnostics/common/order_reference.py` 正是未跟踪文件 —— 所谓「干净基线」
+里仍然带着它，摘要当然一样。正确的核对方式有两个，都指向同一结论：
+
+- `deploy/m2-live-03/context_digest.py --check` 在 `origin/main` 上 **match: true**；
+  在本分支上 `files` 从 198 变 199、摘要 `1f910bbb…` → `a6c2d22e…`。
+- main 上最近合并的 PR #1304 的 `verify` 是 **pass**。
+
+所以这是**本次改动引入的预期变化**，不是既有失败。按
+`docs/agents/local-gateway-build.md` 真构建镜像并 `--update-lock`：
+
+```
+docker pull python@sha256:70729b46…           # 锁里声明的 base
+M2LIVE_GATEWAY_IMAGE=aiops-m2-live-03-gateway:feephasing \
+M2LIVE_DIST=$PWD/dist/verification deploy/m2-live-03/build-image.sh --update-lock
+# source_sha256 = a6c2d22e49c47ef86b53aeacb32ea0826934c2df6a1aecf3e0da8d790109431e
+
+python deploy/m2-live-03/context_digest.py --check      # → match: true, files: 199
+docker run --rm --network none --read-only --entrypoint python \
+  aiops-m2-live-03-gateway:feephasing -c \
+  'from aiops_diagnostics.gateway.gateway_api import create_gateway_app; \
+   from aiops_diagnostics.common.order_reference import names_order; \
+   print("Gateway import: passed", names_order("帮我分析这笔单的电费2116050516255272961"))'
+# → Gateway import: passed True
+```
+
+镜像里跑出来的 `True` 是这次构建真的带上了新模块的证据，不只是摘要对上了。
 
 ## 未做
 
