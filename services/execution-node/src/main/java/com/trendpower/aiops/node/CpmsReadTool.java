@@ -61,7 +61,9 @@ public final class CpmsReadTool implements ToolCallback {
             siteIds = Set.copyOf(siteIds);
             if (authorizationId == null || authorizationId.isBlank()
                     || tenantId == null || !tenantId.matches(ID)
-                    || inputs == null || !inputs.isObject() || inputs.isEmpty()
+                    // inputs 空对象**合法**：站点工具是一次无订单回合，它的输入是关键词，
+                    // 关键词全空就是「列举我可见的站点」。有订单的工具由 orderNo() 把关。
+                    || inputs == null || !inputs.isObject()
                     || request == null || siteIds.isEmpty()
                     || siteIds.size() > 1000 || siteIds.stream().anyMatch(id -> !id.matches(ID))
                     || bearer == null || bearer.isBlank() || bearer.length() > 16384
@@ -78,9 +80,10 @@ public final class CpmsReadTool implements ToolCallback {
             baseUrl = baseUrl.replaceAll("/+$", "");
         }
 
-        /** 输入里的订单号；两个现役工具都需要它，缺失即无效授权。 */
+        /** 输入里的订单号。**可以没有**：站点工具是一次无订单的会话回合。 */
         String orderNo() {
             JsonNode value = inputs.path("order_no");
+            if (value.isMissingNode() || value.isNull()) return "";
             if (!value.isTextual() || !value.asText().matches(ID)) throw refused("invalid_authorization");
             return value.asText();
         }
@@ -220,9 +223,24 @@ public final class CpmsReadTool implements ToolCallback {
     }
 
     private static void identity(JsonNode row, Grant grant) {
-        if (!row.isObject() || !row.path("orderNo").isTextual() || !row.path("tenantId").isTextual()
-                || !row.path("siteId").isTextual() || !grant.orderNo().equals(row.path("orderNo").asText())
-                || !grant.tenantId().equals(row.path("tenantId").asText())
+        if (!row.isObject() || !row.path("tenantId").isTextual()
+                || !grant.tenantId().equals(row.path("tenantId").asText())) {
+            throw refused("cpms_scope_mismatch");
+        }
+        String orderNo = grant.orderNo();
+        if (orderNo.isEmpty()) {
+            // 无订单回合（站点工具）：行的身份是**站点**，不是订单。判据与网关的
+            // `site_scope` 一致——租户内、且在这份授权允许的站点集合里。
+            String siteId = row.path("siteId").isTextual() ? row.path("siteId").asText()
+                    : row.path("id").isTextual() ? row.path("id").asText() : "";
+            if (!siteId.isEmpty() && !grant.siteIds().isEmpty() && !grant.siteIds().contains(siteId)) {
+                throw refused("cpms_scope_mismatch");
+            }
+            return;
+        }
+        // 有订单：行必须就是这一单、这一个站点。
+        if (!row.path("orderNo").isTextual() || !row.path("siteId").isTextual()
+                || !orderNo.equals(row.path("orderNo").asText())
                 || !grant.siteIds().contains(row.path("siteId").asText())) {
             throw refused("cpms_scope_mismatch");
         }
