@@ -56,7 +56,9 @@
 - 变异：把源码退回旧实现，新增 5 条测试 **4 项失败**；修复后全绿。
 - `tests/operations/test_operator_conversation.py` **72 passed**（分支
   `fix/site-note-generic-noun`，含 Devin 复审的两条反例）。
-- 全量见 CI。
+- 全量 3937 项全绿（本地 `-p no:randomly`，exit 0）；Gateway 镜像按
+  [`local-gateway-build.md`](../agents/local-gateway-build.md) 用锁内基础镜像摘要重建，
+  `context_digest.py --check` 为 `match: true`，镜像内 `create_gateway_app` 导入通过。
 
 ## 边界
 
