@@ -1,5 +1,19 @@
 # 当前交付状态索引
 
+## 消费者端四项验收全部通过（2026-11-02）
+
+账单轮此前稳定失败（`CHATFLOW_FACT_UNKNOWN / required evidence segment missing`，2/2），
+根因是协议块把两段并列写成「账单必须引用 billing_line，状态必须引用 status_line」，
+模型读成"两个都要写"，而账单快照没有 `status_role`。#1312 改措辞（判据未动），
+合并 `c54735db` → CD → 重发 Dify（workflow `17d89f00`）→ agent v18 / revision 19。
+
+修复后真机四项全部通过：知识问答回归（sources=5）、越权订单反例（404，不建作业）、
+账单链路（金额与库内一致、免责语义完整）、状态轮回归（改措辞未打坏原路径）。
+详见[验收结果](../validation/2026-11-02-consumer-three-acceptance-result.md)；
+失败样本与根因见[修复前记录](../validation/2026-11-02-consumer-three-acceptance.md)。
+
+**未覆盖**：退款非零订单的渲染路径、账单轮的独立越权反例、结算状态字段。
+
 ## 费用字段与订单识别：订单提取已修待部署；答复稳定性仍未解决（2026-11-02）
 
 **四条进度要分开读**：代码合并 / 制品部署 / 契约生效 / 页面验收，本轮只完成第一项。
