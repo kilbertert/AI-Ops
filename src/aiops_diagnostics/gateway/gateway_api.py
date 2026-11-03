@@ -4258,7 +4258,16 @@ def create_gateway_app(
             if payload.status == "completed":
                 raise StandardAPIError(403, "AGENT_RUN_OPERATION_MISMATCH", "agent run refused")
             return context.operator_cpms.complete(
-                run_id, (authorization or "").removeprefix("Bearer "), exec_config, {"status": "failed"}
+                run_id,
+                (authorization or "").removeprefix("Bearer "),
+                exec_config,
+                # **`reason` 必须透传**：节点已经在发 `model_failed` / `model_stream_incomplete`
+                # / `node_failed`（`ReportingChatSessionRuntime.reportFailed`），此前这里把它整个
+                # 丢掉，统一记成 `operator_node_failed` —— 于是「模型调用失败」与「模型吐了但
+                # 不合格」在库里长得一样。2026-11-03 实测：上游额度耗尽（403
+                # `insufficient_user_quota`）时，用户看到的仍是 `OPERATOR_DIAGNOSIS_FAILED`，
+                # 排查方向被引到判据和提示词上，真实原因是一分钱没有。
+                {"status": "failed", "reason": payload.reason or ""},
             )
         config = chat_execution.callback_config(context.agent_run_store, run_id, selected_settings)
         if config is None:
