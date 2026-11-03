@@ -2311,6 +2311,85 @@ ssh yidong-36 '...同上的 select...'      # 期望三行都是 {"top_k": 4, ..
   都有内容**。判据已修（只报 `tenant-<租户>:<库>` 且该库确实消失），但删除本身不可逆，
   且会静默破坏引用它的 app。
 
+## 5.9 管家站点清单的只读现场核对（2026-11-03 新增）
+
+**何时用**：站点清单交付行为变更（说明审核、清单截断、范围过滤）后要证明"线上到底怎么答的"。
+
+### 部署前后各取一次快照（只读连接）
+
+`mode=ro` 打开库，**不写任何东西**。版本、路由、发布账本、在飞运行四项一起取，
+判据是"只换了代码，没换路由"：
+
+```bash
+dev-host exec 41 --allow-service-exec --timeout 60 -- /opt/aiops-41/.venv/bin/python - <<'PY'
+import json, sqlite3
+from datetime import datetime, timezone
+from urllib.request import urlopen
+c = sqlite3.connect('file:/var/lib/aiops-41/gateway/gateway.db?mode=ro', uri=True)
+c.row_factory = sqlite3.Row
+print(json.dumps({
+    'captured_at': datetime.now(timezone.utc).isoformat(),
+    'health': json.load(urlopen('http://172.18.0.1:8788/health', timeout=10)),
+    'routes': [dict(r) for r in c.execute(
+        'SELECT environment,tenant_id,entry,scenario,app_id,agent_id,agent_version_no,'
+        'revision,state,updated_at FROM chat_route_bindings ORDER BY entry,tenant_id,scenario')],
+    'recent_publish': [dict(r) for r in c.execute(
+        "SELECT id,at,app_id,version_no,action FROM publish_audit_ledger "
+        "WHERE julianday(at)>=julianday('now','-30 minutes') ORDER BY id")],
+    'active_runs': c.execute(
+        "SELECT count(*) FROM agent_runs WHERE state IN ('issued','running') "
+        "AND julianday(expires_at)>julianday('now')").fetchone()[0],
+}, ensure_ascii=False))
+PY
+```
+
+**判据**：`routes` 逐字段与部署前相同（含 `revision`）；`recent_publish` 为空说明没有人在
+同时发布；`active_runs=0` 说明没撞上别人的在飞运行。
+
+### 售后按 qa_id 读运行快照（判据在这里，不在答复措辞）
+
+**先拿 `qa_id`，再读运行记录**。站点说明的处置写在 `snapshot_json` 的
+`site_note_review.verdict` 与 `answer.text` 上，正文在 `rendered_result.blocks`：
+
+```bash
+dev-host exec 41 --allow-service-exec --timeout 60 -- /opt/aiops-41/.venv/bin/python - <<'PY'
+import json, sqlite3, sys
+c = sqlite3.connect('file:/var/lib/aiops-41/gateway/gateway.db?mode=ro', uri=True)
+c.row_factory = sqlite3.Row
+for qa in sys.argv[1:]:
+    r = c.execute('SELECT qa_id,state,gateway_version,snapshot_json FROM agent_runs WHERE qa_id=?',
+                  (qa,)).fetchone()
+    s = json.loads(r['snapshot_json'] or '{}')
+    blocks = (s.get('rendered_result') or {}).get('blocks') or []
+    print(qa, r['state'], r['gateway_version'],
+          'verdict=', (s.get('site_note_review') or {}).get('verdict'),
+          'note=', repr((s.get('answer') or {}).get('text', ''))[:60])
+    print('  rendered:', blocks[0]['text'][:200] if blocks else None)
+PY
+```
+
+期望形状：`verdict=allow` ⇒ `answer.text` 非空且出现在正文开头；`verdict=reject` ⇒
+`answer.text` 为空、正文只有系统清单（试用路径末尾多一句"说明未通过审核，已隐藏"）。
+运行状态仍是 `succeeded` —— **拒绝说明不等于拒绝整轮**。
+
+**运行 TTL 是 180 秒**：`operator_cpms.result()` 对 `expires_at` 过期的运行返回
+`410 OPERATOR_RESULT_RETRACTED`。所以"回读冻结"必须用 TTL 内新发的运行，
+不能拿几分钟前的 `qa_id` 反推回读坏了。
+
+### 两端真实会话
+
+- **管家 H5**：`ulinkmanage.h5.mall.qushiyun.com/aiPackage/pages/chat/chat`，用库外加密
+  清单里的 `aiops-ulink-account-20261030` 登录；输入框要先点 `.mode-btn` 才出现
+  （`input.uni-input-input`）。发布问题后按其返回的 `qa_id` 轮询
+  `/v1/assistant/questions/<id>`，请求头带 `X-Business-Entry: operator`。
+- **Dify 原生预览**：`dify.ranlei.work/app/137cc417-…/configuration`，会话过期会报
+  `OPERATOR_TRIAL_LOGIN_REQUIRED`。重新登录时**验证码必须用页面 `<img>` 上的
+  `randomStr`** 去取 `/__aiops/login/captcha?randomStr=…`，自己另生成一个会被判
+  `COMPANY_LOGIN_REJECTED`；连续 5 次失败会撞 `AIOPS_LOGIN_PROXY_BACKOFF_THRESHOLD=5/300s`
+  的 429 窗口，等窗口滑过去再试。预览请求走 `/__aiops/operator-preview`，返回 SSE。
+
+凭据一律运行时从 `~/.config/dev-host/secrets-age/` 读进内存，不落盘、不打印、不入仓库。
+
 ## 6. 真实验收边界（不得逾越）
 
 - 本地 fixture / 替身模型 / SQLite 直查 / 模型单次调用，**都不是**真实业务验收。
