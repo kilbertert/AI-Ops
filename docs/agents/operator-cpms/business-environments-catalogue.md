@@ -49,3 +49,9 @@ AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE=/etc/aiops-41/business-environments.jso
 4. 开通验证：对目标租户重新点「复制并开通」，客户端这一端应不再出现
    `SETUP_BUSINESS_CONNECTION_REQUIRED`；回读 `consumer_endpoints` 应有
    `(目标租户, production-41, 该地址)` 一行。
+
+## 回滚
+
+清空 `AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE` 只**停止新的自动登记**：已经写进
+`consumer_endpoints` 的 `(租户, 环境) → 地址` 行仍然生效，运行期照旧读它。
+要让某个租户失去业务连接，必须同时删掉那一行 —— 这是运维动作，不是改配置的副作用。
