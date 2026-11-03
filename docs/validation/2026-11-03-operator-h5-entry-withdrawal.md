@@ -108,7 +108,33 @@ GET  /v1/assistant/questions/qa_873a0801…      200  （轮询若干次）
 
 即请求命中的是该租户的 **operator 绑定**，不是消费者绑定，也不是未登记卡片。
 
-## 五、同域路由白名单复核（安装后）
+## 五、OH-04 单订单验收（补做）
+
+验收计划 OH-04 要求「选单 + 同次 Java 与两项 CPMS 证据」。用真实订单跑一次：
+
+- 页面输入「帮我分析这笔单的电费 `2117490429826162689`」（ulink 租户一张真实订单），
+  `POST /v1/assistant/questions` → 202，轮询到 `completed`。
+- 页面正文可读：订单号、状态「充电结束」、预付费 10.0、电费 1.11、服务费 1.11、启动费用 0.5、
+  合计 2.72、系统记录支付金额 2.72、退款 7.28、电量 0.011 kWh、充电时长 6、停止原因 `Remote`、
+  **本次取得监测样本：0**，并明确写出「账务记录不证明银行到账，当前状态不证明历史故障原因」。
+  数据来源段列出「订单详情」与「充电监测样本」两条及各自 UTC 时间。
+
+服务端（`agent_runs`，按 `qa_id` 取）：
+
+| 项 | 值 |
+|---|---|
+| `qa_14ec28a4…` `assistant_questions.status` | `completed`，`error_code` 空 |
+| `run_id` | `run_-a5DLdlNBioeTCui5k_SqOZEK_PrUfDyiMbfwpaDn4k` |
+| `order_no` | `2117490429826162689`（与问句逐字一致） |
+| `operation` / `chat_binding` | `operator_order_diagnosis` / `operator_order_diagnosis:production-41:1942105476598861824` |
+| `state` / `exec_config_state` / `route_revision` | `succeeded` / `matched` / 17 |
+| `actual_node_id` | `node-41` |
+| 工具 1 | `cpms_order_detail` → 真实字段（`electricityFee=1.11`、`launchFee=0.5`、`electricity=0.011`、`gunPower=120`） |
+| 工具 2 | `cpms_charging_samples` → `absence=no_samples`、`total=0`、`truncated=false` |
+
+即 Java 节点确实取了两项 CPMS 数据，**监测为空时页面写明缺证、没有推断设备正常**。
+
+## 六、同域路由白名单复核（安装后）
 
 `ulinkmanage` vhost 的 `aiops-assistant.conf` 与 `operator-h5-proxy.inc` 与备份逐字相同（无差异），
 线上实测：
@@ -125,7 +151,7 @@ GET  /v1/assistant/questions/qa_873a0801…      200  （轮询若干次）
 
 本仓 `tests/test_h5_assistant_routes.py` 3 项通过（nginx 片段与 `ops/nginx/h5-assistant-routes.txt` 一致）。
 
-## 六、回滚
+## 七、回滚
 
 ```bash
 python3 deploy/operator-h5.py --restore --backup /root/h5-backup-bb552982 --nginx /usr/bin/nginx
@@ -133,10 +159,12 @@ python3 deploy/operator-h5.py --restore --backup /root/h5-backup-bb552982 --ngin
 
 恢复后 vhost 指回 `ulinkmanage-h5-5121d9f8`，即上一轮已验收的制品；新制品目录不删除以便取证。
 
-## 七、边界
+## 八、边界
 
 - **只验证了首页无入口、聊天页可直达、一次真实提问全链路**。未覆盖：多语言界面、原生 APK/IPA、
   预约/计费/退款等业务写路径。
+- **OH-04 已按单订单补做并通过**（§五）。站点查询那次（`operator_conversation`）不构成 OH-04 证据，
+  两者是不同的路由与工具集合，不能互相顶替。
 - 公司仓该分支没有流水线，构建与浏览器检查均在本地/验收机执行，**不代表公司 CI**。
 - 撤回入口后，产品侧若仍需该能力，应改为在明确的位置（而非首页导航栏）提供入口，
   由调用方导航到 `/aiPackage/pages/chat/chat`。
