@@ -206,6 +206,26 @@ def approved_endpoint(value: str, tenant_id: str) -> str:
     return legacy or ""
 
 
+def approved_business_endpoint(settings, tenant_id: str) -> str:
+    """开通时该用哪个业务环境：**环境变量优先，清单接住未登记的租户**。
+
+    两条来源的语义不同，所以顺序不能反：
+    - `AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 是运维**按租户钉死**的地址（权威覆盖）；
+    - `AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE` 是平台**已批准的环境清单**，给还没有被
+      钉死的新客户用 —— 这正是"一键开通"不再需要改服务器文件的那一步。
+
+    清单里有多项却没声明默认 ⇒ 无法唯一确定，调用方据此给出
+    `SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS` 而不是替客户挑一个。
+    """
+    from aiops_diagnostics.consumer import business_environments
+
+    pinned = approved_endpoint(getattr(settings, "charging_status_base_url", ""), tenant_id)
+    if pinned:
+        return pinned
+    entries = business_environments.load(getattr(settings, "business_environments_file", ""))
+    return business_environments.approved_base_url(entries)
+
+
 def consumer_endpoint(settings, tenant_id: str) -> str:
     """Java 和 Chatflow 共用已登记的租户/环境连接，兼容现役配置。"""
     from aiops_diagnostics.gateway.gateway_config import charging_endpoint
