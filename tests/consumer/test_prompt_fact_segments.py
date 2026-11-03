@@ -363,3 +363,47 @@ def test_asserting_settlement_status_is_still_refused(text):
     """
     with pytest.raises(ChatRunUnavailable):
         check_status_prose(text)
+
+
+# ── 2026-11-03 评审：第一版仍有三处判错 ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 名词「结算状态」不等于断言：没有谓语就不在陈述结果。
+        "请核对结算状态。",
+        "建议核对一下结算状态。",
+        "结算状态如何？",
+        "结算状态是什么？",
+    ],
+)
+def test_a_settlement_noun_without_a_predicate_is_not_an_assertion(text):
+    """`结算状态` 是一个名词。它没有谓语时只是**提到**，不是断言。
+
+    第一版把 `结算` 后面的 `\\w*` 回溯到 `状态`，于是「请核对结算状态。」被拒 ——
+    而那正是我们要求的核对建议。
+    """
+    check_status_prose(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 口语完成体：`结算了` / `结算完了` / `结算掉` —— 第一版三个分支都没覆盖。
+        "这单结算了。",
+        "这单结算完了。",
+        # 问句里夹着的断言不能被整句豁免。
+        "这单已结算是否需要帮助？",
+    ],
+)
+def test_spoken_completions_and_assertions_inside_a_question_are_refused(text):
+    """两处漏检：口语完成体，以及「问句豁免」把同句的断言一起放掉。"""
+    with pytest.raises(ChatRunUnavailable):
+        check_status_prose(text)
+
+
+def test_a_pure_question_about_settlement_is_still_allowed():
+    """对照组：真正的疑问句必须放行，否则修法退化成「提都不能提」。"""
+    for text in ("是否已结算？", "这单结算了吗？", "要不要核对结算状态？"):
+        check_status_prose(text)

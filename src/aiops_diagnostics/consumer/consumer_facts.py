@@ -114,18 +114,26 @@ def _state_labels() -> tuple[str, ...]:
 #: 把上面两类正常句子全拒了，八条正例全红）。
 _SETTLEMENT_TERMS = ("结算", "对账", "對賬", "settle", "reconcil")
 
-#: 结算状态**被陈述**的形式。三组都要求「结算词」与「状态/动作」同现，且不是问句、
-#: 不是否定「有证据」。
+#: 结算状态**被陈述**的形式。共同点：必须有**谓语/完成体**，光有名词不算。
+#:
+#: 第一版把「结算 + 任意字符回溯到『状态』」当成断言，于是 `请核对结算状态。` 被拒 ——
+#: 那是名词，不是陈述（2026-11-03 评审实测）。所以第 ③ 组现在要求状态词后面**真的
+#: 接了谓语**（是/为/：），或者那句话以状态名词收尾但前面有主语断言。
 _SETTLEMENT_ASSERTION = re.compile(
-    # ① 结算 + 状态/动作：已结算 / 尚未结算 / 结算完成 / 结算中 / 结算给运营商
-    r"(?:结算|对账|對賬|settle|reconcil)\w*\s*"
-    r"(?:完成|已完成|中|完毕|给|至|到|状态|完成|completed|done|pending|in\s+progress)"
-    # ② 已/未/尚未/仍在 + 结算
-    r"|(?:已|已经|尚未|还未|未|没有|还没|正在|仍在|已经|still)\s*(?:结算|对账|對賬|settle|reconcil)"
-    # ③ 状态词直接挂在结算上：结算状态是…／结算状态为…
-    r"|(?:结算|对账|對賬)\s*状态\s*(?:是|为|：|:|is)",
+    # ① 结算 + 完成/进行体：结算了 / 结算完了 / 结算完成 / 结算中 / 结算给运营商
+    r"(?:结算|对账|對賬|settle|reconcil)\s*"
+    r"(?:了|完了|完成|中|完毕|给|至|到|completed|done|pending|in\s+progress)"
+    # ② 已/未/尚未/仍在… + 结算（肯定与否定同等对待）
+    r"|(?:已|已经|尚未|还未|未|没有|还没|正在|仍在|still)\s*(?:结算|对账|對賬|settle|reconcil)"
+    # ③ 结算状态 + 谓语 + **内容**：`结算状态是已结算` 是断言；`结算状态是…？`
+    #    剥掉疑问词后剩「结算状态是」，谓语后面没有内容，不是断言。
+    #    `结算状态如何？` 连谓语都没有，也不匹配。
+    r"|(?:结算|对账|對賬)\s*状态\s*(?:是|为|：|:|is)\s*[^\s　，,。；;！!？?]",
     re.IGNORECASE,
 )
+
+#: 疑问标记。分句切分把标点吃掉了，所以判问句要看**切分前**的原文。
+_QUESTION_MARK = re.compile(r"[？?]|(?:是否|有没有|要不要|需不需要|能否|可否|如何|怎么样)")
 
 #: **否定有证据**的说法：它们提到结算，但陈述的是「没有证据」，必须放行。
 #: 与上面的断言形式一起用 —— 先剥掉这些，再判断言。
@@ -138,6 +146,11 @@ _NO_EVIDENCE_ABOUT_SETTLEMENT = re.compile(
     r"(?:不在|不包含|没有|无)",
     re.IGNORECASE,
 )
+
+
+def _settlement_refused() -> None:
+    """结算断言：拒。一个薄封装，避免同一条长 message 重复三次。"""
+    raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "settlement status has no evidence source")
 
 
 def _settlement_asserted(clause: str) -> bool:
@@ -161,14 +174,33 @@ def check_status_prose(text: str) -> None:
     """
     terms = _state_terms()
     low_all = text.casefold()
-    # 结算：判**断言形式**，不是词出现。问句与「没有证据」的说法先剥掉。
-    for clause in re.split(r"[。；;！!？?，,\n\r]", text):
-        if not clause.strip() or _A_NOT_A.search(clause.casefold()):
+    # 结算：判**断言形式**，不是词出现。
+    #
+    # 问句豁免**不能在分句之后判**：切分把 `？` 吃掉了，`是否已结算？` 会被当成陈述；
+    # 反过来，按 `_A_NOT_A` 整句跳过又会把「这单已结算是否需要帮助？」里的断言一起放掉
+    # （2026-11-03 评审两个方向都实测到）。所以先按整句问句判定，再逐分句找断言。
+    for sentence in re.split(r"[。；;！!\n\r]", text):
+        if not sentence.strip():
             continue
-        if clause.rstrip().endswith(("？", "?")):
+        if _QUESTION_MARK.search(sentence):
+            # 问句豁免分两种情况，**必须先区分再剥**：
+            #   ① 整句就是一个问句（`是否已结算？`、`结算状态是什么？`）—— 没有任何陈述，
+            #      直接放行。剥掉疑问词再判会把 `已结算`、`结算了` 当成断言（误拒）。
+            #   ② 陈述 + 问句（`这单已结算是否需要帮助？`）—— 剥掉疑问部分后，
+            #      剩下的陈述仍要判。
+            # head 是问句**之前**的部分。`这单结算了吗？` 的 head 是 `这单结算了`，
+            # 但那句的「结算了」本身就在疑问之内（`了吗` 是问句形态），所以 head
+            # 末尾的完成体要先摘掉再判。
+            head = re.split(
+                r"是否|有没有|要不要|需不需要|能否|可否|如何|怎么样|什么|吗|呢|吧",
+                sentence,
+            )[0]
+            head = re.sub(r"(?:结算|对账|對賬)\s*(?:了|完了)$", "", head) or head
+            if _settlement_asserted(head):
+                _settlement_refused()
             continue
-        if _settlement_asserted(clause):
-            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "settlement status has no evidence source")
+        if _settlement_asserted(sentence):
+            _settlement_refused()
     # 现役文案里的**状态标签**本身就是状态断言：出现在旁白里就是复述状态（含否定复述）。
     # 词形按词干匹配（`terminé`/`terminée`、`abgeschlossen`/`abgeschlossene`）。
     if any(label in low_all or (len(label) >= 5 and label[:-1] in low_all) for label in _state_labels()):
