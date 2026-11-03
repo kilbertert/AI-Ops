@@ -79,35 +79,51 @@ PY
 | 场景 | 入口 | 会写审计账本 |
 |---|---|---|
 | 运营在页面上改完点「发布到管家」 | `POST /v1/dify/management/publish`（页面按钮背后的接口） | 是 |
-| 运营在 Dify 控制台改完，用网关发布 | `POST /v1/dify/publish`（body 只有 `app_id`，服务端密钥门） | 是 |
-| 无运营会话的受管操作 | 只能调 `node_publication.publish` + `advance` | **否** |
+| 注册表已指向目标应用后的再次发布 | `POST /v1/dify/publish`（body 只有 `app_id`，服务端密钥门） | 是 |
+| 直接调用底层发布器（历史事故路径，不作为常规迁移方法） | `node_publication.publish` + `advance` | **否** |
 
-前两条最终都落到 `_publish_bound_app`，第三条会**跳过 `record_publish_audit`**。
-选第三条就必须在回执里写明"本次没有审计行"，并且**不要事后补写**。
+首次跨应用迁移走管理面：它从 `operator_apps` 授权目标，调用 `SelfService.publish`，
+同步注册表和路由并记录审计。`/v1/dify/publish` 走 `_publish_bound_app`，
+先查 `dify_app_registry`；注册表仍指旧应用时，新应用会被 `DIFY_APP_NOT_BOUND` 拒绝。
+两条接口不是同一个入口，不能互换。缺运营会话时先取得正常授权会话，不降级为无审计发布。
 
-`SelfService.publish`（`self_service.py:719`）的前置只有两条：
+`SelfService.publish`（`self_service.py:719`）在应用授权、知识支持等检查之外的并发条件是：
 `expected_draft`（给了才比）与 `current.revision != revision` ⇒ `SETUP_ROUTE_CHANGED`。
 **它不比较 `current.app_id`。** 所以"迁移必须绕开标准发布"这个理由不成立。
 真正比较 `app_id` 的是 `change_version`（`self_service.py:885`）与
 `_managed_app_route`（`gateway_api.py:1192`，供 `/v1/dify/restore`、`/v1/dify/versions`）。
 
-## 4. 执行（受管动作）
+## 4. 执行与回读（受管管理面）
+
+在目标应用的管理面读取当前路由 revision 与草稿摘要，再点「发布到管家」。
+页面桥把正常 Dify 会话传到管理面；不要把服务端密钥或会话复制进记录。
+
+```http
+POST /v1/dify/management/publish
+{"app_id":"<目标应用>","revision":<当前路由 revision>,"draft":"<当前草稿摘要>"}
+```
+
+下面仅说明管理面内部调用，**不是可直接复制的迁移脚本**：
 
 ```text
 node_publication.publish(agent_manager, admin_context(tenant), binding, dsl_source, node_target)
     → SyncOutcome(action, version_no, agent_id)
-node_publication.advance(context, outcome, binding, node_target, expected_revision=<迁移前 revision>)
-    → 写 chat_route_bindings，revision+1；expected_revision 不符则 NodeRouteConflict
+node_publication.advance(context, outcome, binding, node_target,
+                         revision=<迁移前 revision>, register_source=True)
+    → 写 chat_route_bindings 与 dify_app_registry；revision 不符则 NodeRouteConflict
+context.store.record_publish_audit(...)
+    → 管理面记录此次发布身份与版本
 ```
 
-`advance` 自己会做：环境一致性检查、`expected_revision` CAS、`store.publish()` 写指针。
-不要自己 UPDATE 那张表。
+`advance` 接受的参数名是 `revision`；它在内部传给 `store.publish(expected_revision=...)`
+做 CAS。`register_source=True` 使注册表与路由在同一事务更新。底层函数本身不写审计；
+管理面负责后续记账。不要自己 UPDATE 路由表。
 
 执行后立刻回读三处并记录：
 
 1. `chat_route_bindings` 行（`app_id` / `agent_version_no` / `revision` / `state`）；
 2. `dify_app_registry` 对应行（是否同步到新 `app_id`）；
-3. `publish_audit_ledger` 是否新增一条（**用脚本路径时这里会是空的，如实记录**）。
+3. `publish_audit_ledger` 是否新增本次发布身份与版本的记录；缺失就如实记录交付缺口。
 
 ## 5. 恢复与回退
 
@@ -125,9 +141,10 @@ POST /v1/dify/management/version
 
 ### 5.2 退回已删除的旧应用
 
-**任何受管入口都不通**：`change_version` 与 `_managed_app_route` 都要求
-`current.app_id == app_id`，而路由此刻指向新 app。只能用迁移前备份人工写回，
-且**写回时 revision 必须取 `当前值 + 1`**，不能复用旧号。
+本手册没有验证过跨应用恢复方法。`change_version` 与 `_managed_app_route` 都要求
+`current.app_id == app_id`，所以不能用它们把新应用退回已删除的旧应用。
+备份不是直接覆盖数据库的授权，也不是可执行恢复方案；需要另行评审带 CAS、
+注册表一致性、权限与审计检查的恢复步骤。本手册不提供人工写表捷径。
 
 为什么不能写回旧 revision：`chat_execution.py:669` 用
 `record.route_revision != binding.route_revision` 判定回调配置。把 revision 退回旧值，
