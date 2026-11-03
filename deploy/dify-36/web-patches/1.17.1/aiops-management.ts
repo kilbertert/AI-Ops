@@ -72,6 +72,8 @@ export const messages: Record<string, string> = {
     '知识库创建结果正在核对，请稍后重试；持续未确认请联系平台管理员',
   SETUP_MODEL_CONNECTION_REQUIRED: '客户端所需模型尚未配置，请联系平台管理员',
   SETUP_BUSINESS_CONNECTION_REQUIRED: '该客户的业务环境连接尚未配置，请联系平台管理员',
+  SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS:
+    '平台登记了多个业务环境且未指定默认，请联系平台管理员在清单里指定后再开通',
   SETUP_CONSUMER_PLUGIN_REQUIRED: '客户端知识连接尚未配置，请联系平台管理员',
   SETUP_CONSUMER_PLUGIN_FAILED: '客户端知识连接校验失败，请重试或联系平台管理员',
   SETUP_MODEL_CONFLICT: '模型配置与平台模板不一致，请联系平台管理员',

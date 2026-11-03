@@ -368,12 +368,23 @@ def consumer_endpoint(context, tenant_id: str) -> str:
 
     没有已批准连接就拒绝这一端（`SETUP_BUSINESS_CONNECTION_REQUIRED`）：
     开通不能靠"上次那个全局 URL"，因为那可能属于别的客户。
+
+    批准来源有两条（顺序见 `approved_business_endpoint`）：环境变量里按租户钉死的地址，
+    以及平台已批准的环境清单。清单让新客户开通不需要改服务器文件 —— 那是"一键"能否成立的
+    分界；但清单有多项却没声明默认时拒绝，不替客户挑一个。
     """
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import ConsumerEndpoints, approved_endpoint
+    from aiops_diagnostics.consumer import business_environments
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import (
+        ConsumerEndpoints,
+        approved_business_endpoint,
+    )
 
     settings = context.settings
-    base = approved_endpoint(settings.charging_status_base_url, tenant_id)
+    base = approved_business_endpoint(settings, tenant_id)
     if not base:
+        entries = business_environments.load(getattr(settings, "business_environments_file", ""))
+        if business_environments.is_ambiguous(entries):
+            raise SetupRefused("SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS")
         raise SetupRefused("SETUP_BUSINESS_CONNECTION_REQUIRED")
     from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
