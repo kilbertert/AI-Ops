@@ -25,6 +25,83 @@ def settings(tmp_path, **overrides):
     return SimpleNamespace(**body)
 
 
+def catalogue(tmp_path, *environments):
+    import json
+    import os
+
+    path = tmp_path / "business-environments.json"
+    path.write_text(
+        json.dumps({"schema": "aiops-business-environments/1", "environments": list(environments)})
+    )
+    os.chmod(path, 0o600)
+    return str(path)
+
+
+def test_a_tenant_with_no_pinned_address_uses_the_approved_catalogue(tmp_path):
+    """一键开通的分界：新客户不必改环境变量 —— 清单里已批准的地址直接接住。"""
+    s = settings(
+        tmp_path,
+        business_environments_file=catalogue(
+            tmp_path, {"id": "cpms-41", "base_url": "https://cpms.example.test"}
+        ),
+    )
+    assert prepare.consumer_endpoint(SimpleNamespace(settings=s), "TENANT-NEW") == "https://cpms.example.test"
+    assert ConsumerEndpoints(s.database_file).get("TENANT-NEW", "env-a") == "https://cpms.example.test"
+
+
+def test_a_pinned_tenant_keeps_its_own_address_even_when_a_catalogue_exists(tmp_path):
+    """环境变量是权威覆盖：运维按租户钉死的地址优先于清单。"""
+    s = settings(
+        tmp_path,
+        charging_status_base_url="TENANT-A:https://a.example.test",
+        business_environments_file=catalogue(
+            tmp_path, {"id": "cpms-41", "base_url": "https://cpms.example.test"}
+        ),
+    )
+    assert prepare.consumer_endpoint(SimpleNamespace(settings=s), "TENANT-A") == "https://a.example.test"
+    assert prepare.consumer_endpoint(SimpleNamespace(settings=s), "TENANT-B") == "https://cpms.example.test"
+
+
+def test_two_catalogued_environments_without_a_default_refuse_instead_of_guessing(tmp_path):
+    """多项且无默认 ⇒ 拒绝。按文件顺序取第一个会把"顺序"变成语义，接错客户却显示成功。"""
+    s = settings(
+        tmp_path,
+        business_environments_file=catalogue(
+            tmp_path,
+            {"id": "a", "base_url": "https://a.example.test"},
+            {"id": "b", "base_url": "https://b.example.test"},
+        ),
+    )
+    with pytest.raises(SetupRefused, match="SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS"):
+        prepare.consumer_endpoint(SimpleNamespace(settings=s), "TENANT-NEW")
+
+
+def test_a_declared_default_resolves_an_otherwise_ambiguous_catalogue(tmp_path):
+    s = settings(
+        tmp_path,
+        business_environments_file=catalogue(
+            tmp_path,
+            {"id": "a", "base_url": "https://a.example.test"},
+            {"id": "b", "base_url": "https://b.example.test", "default": True},
+        ),
+    )
+    assert prepare.consumer_endpoint(SimpleNamespace(settings=s), "TENANT-NEW") == "https://b.example.test"
+
+
+def test_an_unusable_catalogue_fails_at_startup_not_at_first_onboarding(tmp_path):
+    """坏清单在启动时就被拒：活到开通才失败，页面会显示成"这一端失败"。"""
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"schema": "aiops-business-environments/1", "environments": [{"id": "a"}]}')
+    bad.chmod(0o600)
+    base = GatewayServerSettings(
+        data_home=tmp_path, database_file=tmp_path / "gw.db", business_environments_file=str(bad)
+    )
+    with pytest.raises(ValueError, match="business environment catalogue is unusable"):
+        base.validate()
+
+
 def test_approved_environment_connection_registers_the_target_tenant(tmp_path):
     """裸 URL = 本环境已批准的统一连接：登记到目标租户，解析得到同一个地址。"""
     s = settings(tmp_path, charging_status_base_url="https://cpms.example.test")

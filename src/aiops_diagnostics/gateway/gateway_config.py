@@ -45,6 +45,11 @@ class GatewayServerSettings:
     third_session_service_token: str = ""
     third_session_key_prefix: str = "app:3rd_session:"
     charging_status_base_url: str = ""
+    #: 平台**已批准的业务环境清单**（0600 JSON）。开通新客户时从这里取业务连接，
+    #: 不再"每来一个客户改一次环境变量并重启"。缺省为空 ⇒ 与今天逐字一致：只有
+    #: `charging_status_base_url` 里登记过的租户能开通客户端。
+    #: 环境变量仍优先：登记了某租户就用它的地址，清单只接住未登记的租户。
+    business_environments_file: str = ""
     consumer_order_chat_enabled: bool = False
     execution_environment: str = ""
     #: M2-CLOSE-01：执行环境 → 编排平台应用/智能体/节点的**可信绑定**（契约 §3.1）。
@@ -320,6 +325,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
             charging_status_base_url=_env("AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
+            business_environments_file=_env("AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE")
+            or _file_value(file_values, "AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE"),
             consumer_order_chat_enabled=(
                 _env("AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED")
                 or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED")
@@ -489,6 +496,16 @@ class GatewayServerSettings:
             parse_charging_endpoints(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
                 raise ValueError("charging status requires a logical execution environment")
+        if self.business_environments_file:
+            # 启动时整份校验：坏文件、重复 id、两个默认、非法 URL 都不许活到第一次开通 ——
+            # 那些在开通时才暴露时，页面显示的是"这一端失败"，指向一个看不出是配置错的原因。
+            from aiops_diagnostics.consumer import business_environments
+
+            try:
+                entries = business_environments.load(self.business_environments_file)
+                business_environments.validate(entries)
+            except business_environments.BusinessCatalogueError as exc:
+                raise ValueError(f"business environment catalogue is unusable: {exc}") from exc
         if self.consumer_order_chat_enabled and not self.charging_status_base_url:
             raise ValueError("consumer order chat requires its charging status endpoint")
 
