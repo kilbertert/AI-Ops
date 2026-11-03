@@ -20,7 +20,7 @@ from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig, SnailDispatcher
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
-from aiops_diagnostics.operator import operator_conversation, operator_tools
+from aiops_diagnostics.operator import operator_conversation, operator_tools, site_note_review
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused, claims_mutation
 
 SCENARIO = "operator_order_diagnosis"
@@ -240,6 +240,7 @@ class ActiveTask:
     language: str = "zh"
     trial: bool = False
     lock: object = field(default_factory=threading.RLock)
+    completion_lock: object = field(default_factory=threading.Lock)
 
 
 class OperatorCpms:
@@ -734,6 +735,11 @@ class OperatorCpms:
             }
 
     def complete(self, run_id, token, manifest, payload):
+        task, _, _ = self._current(run_id, node_token=token, manifest=manifest)
+        with task.completion_lock:
+            return self._complete(run_id, token, manifest, payload)
+
+    def _complete(self, run_id, token, manifest, payload):
         if set(payload) - {"status", "answer"}:
             raise OperatorRefused("OPERATOR_INVALID_BODY")
         task, run, _ = self._current(run_id, node_token=token, manifest=manifest)
@@ -769,7 +775,9 @@ class OperatorCpms:
                 if not set(answer["evidence_tools"]).issubset(task.delivered):
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
             else:
-                answer = operator_conversation.validate(answer, task.question)
+                answer = operator_conversation.validate(answer, task.question, check_site_note=False)
+                if SITE_TOOL in task.delivered and answer["kind"] != "site_search":
+                    raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
                 if answer["kind"] == "site_search":
                     sites = _sites_from_evidence(task.caller, task, answer)
                     if sites is None:
@@ -788,6 +796,15 @@ class OperatorCpms:
                             cpms_site_reader(task.base_url, task.bearer),
                             current_search_scope,
                         )
+        # 审核不持有证据锁；取消、撤权和证据回调仍能进行。完成前重新授权。
+        review = None
+        if sites is not None:
+            review = site_note_review.review(
+                answer, sites, task.language, self.context.runtime.diagnostic_settings.agent
+            )
+            if review["verdict"] != "allow":
+                answer = {**answer, "text": ""}
+        with task.lock:
             self._current(run_id, node_token=token, manifest=manifest)
             snapshot = {
                 "answer": answer,
@@ -801,6 +818,17 @@ class OperatorCpms:
             if not diagnoses_an_order(run):
                 snapshot["sites"] = sites
                 snapshot["language"] = task.language
+                snapshot["rendered_result"] = operator_conversation.render(
+                    answer, sites, task.language, reviewed=True
+                )
+                if review is not None:
+                    snapshot["site_note_review"] = review
+                    if task.trial and review["verdict"] not in {"allow", "empty"}:
+                        snapshot["rendered_result"]["blocks"][0]["text"] += (
+                            "\n\n查询结果已交付；说明未通过审核，已隐藏。"
+                            if task.language.startswith("zh")
+                            else "\n\nQuery results delivered; the unapproved explanation is hidden."
+                        )
             else:
                 snapshot["language"] = task.language
                 # **在完成时渲染并冻结**：事实段的语言按运行所选语言，历史回读不再重算 ——
@@ -901,7 +929,9 @@ class OperatorCpms:
                 and any(s["id"] not in scope.site_ids for s in sites["sites"])
             ):
                 raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-            return operator_conversation.render(run.snapshot["answer"], sites, run.snapshot["language"])
+            return run.snapshot.get("rendered_result") or operator_conversation.render(
+                run.snapshot["answer"], sites, run.snapshot["language"]
+            )
         scope = operator_scope(caller)
         detail = run.snapshot["evidence"][TOOL_NAMES[0]]["data"]
         if scope.site_ids is not None and detail["siteId"] not in scope.site_ids:

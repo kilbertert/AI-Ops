@@ -90,9 +90,9 @@ INSTRUCTIONS = """你是只读充电运营管家。本轮没有选定订单，�
 name和address_terms只从用户原话提取站名或地点关键词，
 例如“广州天河附近的充电站”对应name="",address_terms=["广州","天河"]。
 说明写在该工具的**结果之后**，只负责开场与归纳语气：
-text不重复任何地名、站名或服务细节，只说明“查到的结果在下方”，可加自然的核对建议和追问。
-text里不用“站/桩”字，统一以“结果”“地点”“列表”指代，具体名称只在系统清单中显示。
-即使只是复述用户问题，text也不重复地名和“附近/最近”；亲切风格可以回应“我帮你查了一下”，再问是否需要调整查询条件。
+text负责自然的开场、核对建议和追问，具体名称与数量由系统清单展示。
+必须按工具结果区分有结果、无匹配与空授权范围；未查询的信息可明确说明未查询，不能编造。
+不要断言营业时间、实时可用性、价格、距离或写操作已完成；亲切风格可自然回应并询问是否调整条件。
 address_terms必须保持本轮工具所用的地址关键词，例如["广州","天河"]，不能取完结果又改为空。
 不得写数字、价格、距离、空闲枪口或具体站名地址——名单、数量、截断范围、无定位限制和来源
 全部由系统按本轮 CPMS 结果列出。没有调用工具就没有结果，此时text必须为空。
@@ -164,7 +164,7 @@ def question_span(value: str, question: str) -> str:
     return question[positions[start] : positions[start + len(needle) - 1] + 1]
 
 
-def validate(answer, question):
+def validate(answer, question, *, check_site_note=True):
     if (
         not isinstance(answer, dict)
         or set(answer) != {"kind", "text", "name", "address_terms"}
@@ -200,10 +200,9 @@ def validate(answer, question):
         # 只为防模型编造搜索条件，空关键词什么都没编。范围也从来不靠关键词收窄：
         # ``query_sites()`` 逐行核对 tenantId 与站点集合。
         #
-        # **说明文字不再一律清空**：节点先调工具取数、再据此写说明时，那段话是有依据的，
-        # 交给 `validate_site_note` 判。没有取数依据的说明由 `operator_cpms` 拒绝
-        # （见 `OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE`），不在这里默认放行。
-        validate_site_note(answer["text"])
+        # 旧快照沿用字符校验；新完成流程在证据检查后独立审核说明（ADR-0195）。
+        if check_site_note:
+            validate_site_note(answer["text"])
     elif terms or not answer["text"].strip() or claims_mutation(answer["text"]):
         _answer_refused("answer_content")
     return fixed
@@ -315,7 +314,7 @@ def fill_site_note(text, sites, language, *, listing: bool = False) -> str:
     return SITE_SLOT.sub(lambda match: facts[match.group(1)], text)
 
 
-def render(answer, sites, language):
+def render(answer, sites, language, *, reviewed=False):
     if sites is None:
         text = answer["text"]
     else:
@@ -389,7 +388,8 @@ def render(answer, sites, language):
         # 片段（{{fact:site_roster}} 等）由系统填值，说明里不会出现它自己编的名单。
         note = (answer.get("text") or "").strip()
         if note:
-            validate_site_note(note)
+            if not reviewed:
+                validate_site_note(note)
             text = fill_site_note(note, sites, language, listing=listing) + "\n\n" + text
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
 
