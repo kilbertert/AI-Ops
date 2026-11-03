@@ -1146,16 +1146,34 @@ def _json_shape(raw) -> str:
 def _json_truncation_hint(raw) -> str:
     """`json_syntax` 的两种成因要分得开：被截断，还是自己拼错。
 
-    只加两个**结构**事实（长度、是否以 `}` 收尾），仍然不记原文：
-    截断的形状是「长度贴着一个上限、结尾没有闭合」，语法错的形状是「长度散落、括号配对」。
-    没有这一条，`json_syntax` 会让下一个人重新猜一遍（2026-11-03 实测就是这么发生的）。
+    ``closed=`` 只看末尾字符是不够的：截断恰好落在字符串里的 ``}`` 上也会得到 True，
+    而尾逗号语法错得到 False —— 单凭它判不了成因（2026-11-03 复审指出）。
+    所以再给一个**括号配对**事实：``depth=`` 是去掉字符串内容后从头累计的括号差，
+    ``depth>0`` 才说明结构没闭合（截断）；``depth=0`` 而解析失败才是语法错。
+    两个数字都不含原文，只是结构。
     """
     from aiops_diagnostics.consumer.consumer_documents import _json_failure_shape
 
     if not isinstance(raw, str) or _json_failure_shape(raw) != "json_syntax":
         return ""
     text = raw.rstrip()
-    return f" len={len(text)} closed={text.endswith('}')}"
+    depth, quoted, escaped = 0, False, False
+    for ch in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                quoted = False
+            continue
+        if ch == '"':
+            quoted = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+    return f" len={len(text)} closed={text.endswith('}')} depth={depth} in_string={quoted}"
 
 
 def _answer_refused(reason, detail=""):
