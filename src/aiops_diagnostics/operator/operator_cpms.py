@@ -885,25 +885,24 @@ class OperatorCpms:
             return {"run_id": run_id, "state": completed.state}
 
     def _untouched(self, run_id, task) -> bool:
-        """这一轮**什么都还没做过**，重派才是安全的。
+        """这次失败**是不是模型自己没交出可接受的答案**——重派安全且值得。
 
-        三个条件缺一不可，每一个都对应一次复审指出的真实后果：
+        2026-11-03 部署后实测改过一次：第一版要求「一次工具都没领过」，于是**已经取完证据
+        才被拒**的 run 全都不会重派 —— 而那正是生产上最常见的一种（工具轮先跑完，
+        模型最后一轮才吐错）。判据本身写错了方向。
 
-        * run 仍是 ``issued``/``running`` —— 没被推进说明答案被拒了（或压根没回调）；
-        * 没有工具证据 —— 已经取过数据再重派，会绕开「同一份证据」的不变量；
-        * **没有已放行的工具参数** —— 2026-11-03 复审指出：站点查询的授权会在取证据**之前**
-          就把模型提议的关键词记进 ``task.arguments``（``grant`` 里的 ``setdefault``）。
-          此时 ``evidence``/``delivered`` 都还是空，重派若换了关键词就会撞上
-          ``OPERATOR_TOOL_ARGUMENTS_CHANGED`` —— 一次本来能成功的查询被重试搞死。
+        重派实际上很安全，因为：
+
+        * **证据有缓存**：`grant` 里 `if tool in task.evidence: return …` —— 重派时
+          工具返回同一份证据，**不会**再请求一次 CPMS，也不会改动已冻结的事实；
+        * **参数已固定**：`task.arguments` 的 `setdefault` 让重派只能沿用同一组关键词，
+          模型换关键词会被 `OPERATOR_TOOL_ARGUMENTS_CHANGED` 挡下；
+        * **run 仍是 issued/running**：被推进过的 run 不会再走这条路。
+
+        所以这里只需要排除「run 已经不在了/已经终局」这一种情况。
         """
         run = self.context.agent_run_store.get(run_id)
-        return (
-            run is not None
-            and run.state in {"issued", "running"}
-            and not task.evidence
-            and not task.delivered
-            and not task.arguments
-        )
+        return run is not None and run.state in {"issued", "running"}
 
     def _worker(self, run_id, qa_id, config):
         store = self.context.store

@@ -1009,6 +1009,13 @@ def test_a_non_json_answer_is_redispatched_at_most_once(operator, monkeypatch, c
 
     def dispatch(self, config, run_id):
         attempts["n"] += 1
+        try:
+            return _dispatch_body(self, config, run_id)
+        except BaseException as exc:
+            print("DEBUG_DISPATCH_EXC", type(exc).__name__, str(exc)[:400])
+            raise
+
+    def _dispatch_body(self, config, run_id):
         headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
         publication = f["client"].post(
             "/v1/internal/charging-status/execution-config/" + run_id, headers=headers
@@ -1062,3 +1069,89 @@ def test_the_node_failure_reason_is_no_longer_collapsed(operator, monkeypatch, c
         )
         terminal(f, posted.json()["qa_id"])
     assert "operator_node_reported_failure reason=model_failed" in caplog.text
+
+
+def test_a_rejection_after_evidence_is_still_redispatched(operator, monkeypatch, caplog):
+    """**已经取完证据、上报过证据**才被拒的 run 也必须重派 —— 那是生产上最常见的一种。
+
+    2026-11-03 部署后实测：第一版判据要求「一次工具都没领过」，于是工具轮先跑完、
+    模型最后一轮才吐错的 run 全都不重派。判据写错了方向。
+
+    重派安全的原因写在 `_untouched` 的注释里：证据有缓存（`grant` 里
+    `if tool in task.evidence: return …`），重派复用同一份证据，不会二次请求 CPMS。
+    """
+    import logging
+
+    from aiops_diagnostics.execution.agent_runs import AgentRunDispatchError
+
+    f = operator
+    attempts = {"n": 0}
+    delivered = []
+
+    def dispatch(self, config, run_id):
+        attempts["n"] += 1
+        headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
+        publication = f["client"].post(
+            "/v1/internal/charging-status/execution-config/" + run_id, headers=headers
+        )
+        assert publication.status_code == 200, publication.text
+        headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+        headers["X-AI-Ops-Tool-Contract"] = operator_cpms.TOOL_CONTRACT
+
+        tool = operator_cpms.TOOL_NAMES[0]
+        granted = f["client"].post(
+            f"/v1/internal/operator-runs/{run_id}/tools/{tool}/authorization",
+            headers=headers,
+            json={"arguments": {}},
+        )
+        assert granted.status_code == 200, granted.text
+        grant = granted.json()
+        fetched = f["client"].get(
+            grant["base_url"] + grant["request"]["path"],
+            headers={"Authorization": "Bearer " + grant["bearer"]},
+        )
+        assert fetched.status_code == 200, fetched.text
+        body = fetched.json()
+        from aiops_diagnostics.operator.operator_cpms import project_evidence
+
+        # 证据必须与网关**自己投影出来的那份**逐字相等（`project_evidence` 会裁剪字段）。
+        # 直接回原始响应体会被判 OPERATOR_EVIDENCE_MISMATCH —— 那正是第一次尝试踩的坑。
+        projected = project_evidence(body, "ORDER-1001", tool)
+        # **上报证据**：`task.delivered` 只在这里被填充。不调它就只能覆盖「有证据」，
+        # 覆盖不到「已交付」（2026-11-03 复审指出）。
+        reported = f["client"].post(
+            f"/v1/internal/operator-runs/{run_id}/tools/{tool}/evidence",
+            headers=headers,
+            json={
+                "authorization_id": grant["authorization_id"],
+                "evidence": {
+                    "tool": tool,
+                    "inputs": grant["inputs"],
+                    "source": "cpms.orderDetail",
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "data": projected["data"],
+                },
+            },
+        )
+        assert reported.status_code == 200, reported.text
+        delivered.append(True)
+
+        # 再回一段纯文本：网关会拒，平台因此判定这次调用失败。
+        f["client"].post(
+            f"/v1/internal/operator-runs/{run_id}/completions",
+            headers=headers,
+            json={"status": "completed", "answer": "我帮你核对了本次记录，建议对照原账单。"},
+        )
+        raise AgentRunDispatchError("agent platform refused the completion")
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    with caplog.at_level(logging.WARNING, logger="aiops.operator"):
+        posted = f["client"].post(
+            "/v1/assistant/questions",
+            headers=HEADERS,
+            json={"question": "帮我分析这笔单的电费 ORDER-1001"},
+        )
+        terminal(f, posted.json()["qa_id"])
+    assert delivered, "证据上报必须真的发生过，否则覆盖不到 delivered 非空"
+    assert attempts["n"] == 1 + operator_cpms.MAX_RESAMPLES, "取过证据后再被拒，仍应重派一次"
+    assert "operator_resample" in caplog.text

@@ -68,6 +68,26 @@
   证据在 `dist/verification/gateway/aiops-gateway.json`。
   它**不能**验证远端模型行为、节点回调或真实业务准确率 —— 那些要靠部署后的复测。
 
+## 四之二、部署后复测发现的第二处判据错误
+
+PR 合并部署（`1.0.17+0b48d12707d3`）后同一张单复测 17 次：11 成功 / 6 失败。
+失败日志全是 `json_parse json_syntax len=769–1303 closed=False depth=1` ——
+**不是**「通篇正文」，是**截断**：JSON 写到一半被上游的 token 预算切断
+（失败前一轮 `completionTokens=1698–1840`，其中 reasoning 占大头）。
+
+更要紧的是：**重采样一次都没触发**。查下来是我自己的判据写错了方向 ——
+第一版要求「一次工具都没领过」（`not task.evidence and not task.delivered and not task.arguments`），
+而生产上最常见的那种恰恰是**工具轮先跑完、模型最后一轮才吐错**，此时证据与参数都非空。
+
+重派实际上是安全的：`grant` 里 `if tool in task.evidence: return …` —— 证据有缓存，
+重派复用同一份数据，不会二次请求 CPMS；`task.arguments` 的 `setdefault` 也保证沿用同一组关键词。
+
+判据已收窄为「run 仍是 issued/running」，并补了一条走**真实工具链**再被拒的测试；
+变异验证：换回旧判据后该测试变红。
+
+**截断本身仍未单独处理**：我们把 `model_options` 留空（`{}`），等于把输出预算交给上游默认值，
+而推理内容会挤占它。这是下一个要决定的事（显式设 `max_tokens`，还是接受截断后用重采样兜住）。
+
 ## 五、边界
 
 - **未部署**。生产仍是 `1.0.17+24184f75b224`。
