@@ -79,6 +79,55 @@ def _state_term_hit(clause: str, terms: tuple[str, ...]) -> bool:
     return any(term in stripped for term in terms)
 
 
+#: 否定词与状态词之间允许出现的成分。它们不改变「否定的是状态」这个判断：
+#: `还没结束`、`一直没充电完成`、`没有在充电`、`尚未开始充电` 都必须仍然算改写状态。
+#:
+#: 这里**只收状语与体貌标记**（仍在/已经/在/正在/开始/继续），不收实义动词。
+#: 判据靠的正是这个区分：`没**有在**充电` 里「在」是体貌标记，否定落在状态上；
+#: `未**取到**充电样本` 里「取到」是实义动词，否定落在「取到」上 —— 后者才是
+#: 要放行的缺证说明。2026-11-03 复审实测：只收状语、不收体貌标记时，
+#: `订单没有在充电` 会被漏放（而它在改动前是被拒的）。
+_NEGATION_ADVERBS = (
+    r"(?:仍|还|再|也|都|就|已|曾经|完全|根本|一直|始终|暂时|尚|并"
+    r"|在|正在|开始|继续|处于)*"
+)
+
+
+def _negates_state(clause: str, terms: tuple[str, ...]) -> bool:
+    """这个子句是不是在**否定订单状态**——否定词必须落在状态词的前面。
+
+    ## 为什么不能只判「同子句共现」
+
+    2026-11-03 实测：41 上同一张单（`2116050516255272961`）72 次运行里 53 次失败，
+    其中 13 次的日志是 `unsupported_fact detail=status line=3`。按同一份 manifest
+    重放 10 次模型调用，4 次被这条判据拦下，拦的都是这种句子：
+
+    * `我这边暂未取到本次**充电**的过程样本` —— 否定的对象是样例，不是订单状态；
+    * `本次没有取到**充电**过程明细`；
+    * `我无法仅凭现有记录判断费用是否**异常**` —— 否定的是"能判断"，不是"异常"。
+
+    共现判据把「未 + 充电」当成状态改写，于是一条**如实说明缺证**的句子被判成编造状态。
+    这正是提示词明确要求写的内容（「监测0条必须明确缺证」），两端规格互相打架：
+    提示词要求写缺证，判据一看到缺证里的「未/没有/无法 + 充电/异常」就整轮拒绝。
+    用户看到的就是 `<operation> 失败：OPERATOR_DIAGNOSIS_FAILED`，且**时好时坏** ——
+    模型每次措辞不同，撞上的概率约四成。
+
+    ## 判据
+
+    否定词后面（允许状语）**紧跟**状态词才算改写：`订单还没结束`、`未充电完成`。
+    `未取到…过程样本` 里「未」后面是 `取到`，不是状态词，放行。
+    """
+    stripped = clause
+    for noun in _STATE_NOUNS:
+        stripped = stripped.replace(noun, "　")
+    for negation in _NEGATIONS:
+        for match in re.finditer(re.escape(negation) + _NEGATION_ADVERBS + r"(?=.)", stripped):
+            tail = stripped[match.end() :]
+            if any(tail.startswith(term) for term in terms):
+                return True
+    return False
+
+
 def _state_terms() -> tuple[str, ...]:
     from aiops_diagnostics.consumer.consumer_language import COPY
     from aiops_diagnostics.health.rules import ORDER_STATUS
@@ -213,7 +262,7 @@ def check_status_prose(text: str) -> None:
         # 按子句剥掉问句里的 A-不-A，再判否定 —— 否则正常追问会被当成状态改写。
         if _A_NOT_A.search(low):
             low = _A_NOT_A.sub("", low)
-        if any(mark in low for mark in _NEGATIONS) and _state_term_hit(low, terms):
+        if _negates_state(low, terms):
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")
         if _ASSERTION.search(clause):
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")

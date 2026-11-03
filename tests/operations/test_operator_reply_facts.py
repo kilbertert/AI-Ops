@@ -330,3 +330,31 @@ def test_json_parse_says_the_shape_not_just_that_it_failed():
     assert _json_shape("我先说明一下").startswith("plain_text:")
     # 只描述形态，不泄露原文。
     assert "我先说明一下" not in _json_shape("我先说明一下")
+
+
+def test_json_syntax_failure_says_whether_it_looks_truncated(caplog):
+    """`json_syntax` 有两个成因：上游截断，或模型自己拼错。
+
+    2026-11-03 线上 5 次这个形态只记了 `json_syntax`，读者分不出是哪一种，
+    于是下一次只能重新猜。截断的形状是「长度、没有闭合」，语法错的形状是「闭合完整」。
+    这里断言**结构事实进了日志、原文没进**。
+    """
+
+    from aiops_diagnostics.operator.operator_cpms import _json_truncation_hint
+
+    truncated = '{"direct_answer":"已读取订单主表与充电样本接口，订单为预付费充'
+    hint = _json_truncation_hint(truncated)
+    assert hint == f" len={len(truncated)} closed=False depth=1 in_string=True"
+
+    malformed = '{"direct_answer":"x","summary":"y",}'
+    assert _json_truncation_hint(malformed) == f" len={len(malformed)} closed=True depth=0 in_string=False"
+
+    # 截断恰好落在字符串里的 `}` 上：末尾是 `}` 但结构没闭合，必须仍能认出来。
+    # 这正是复审指出的「closed 单独判不了成因」。
+    inside = '{"direct_answer":"结论是}'
+    assert "closed=True" in _json_truncation_hint(inside) or "closed=False" in _json_truncation_hint(inside)
+    assert "depth=1" in _json_truncation_hint(inside)
+
+    # 不是 json_syntax 的形态不加这一句：`plain_text:1230` 已经够说明问题。
+    assert _json_truncation_hint("这是一段纯文本") == ""
+    assert _json_truncation_hint("") == ""
