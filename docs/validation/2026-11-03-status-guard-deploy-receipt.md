@@ -52,18 +52,49 @@ qa_cbc7bfa4…  failed
   未在本轮重跑 12 次。
 - 判据仍是维护中的词汇表；ADR-0196 记录了保留的一处误拒。
 
-## 五、可复现
+
+## 五、这批 12 次的标识与复现
+
+**批次口径**：同一问题、同一入口（Dify 应用 `137cc417…` 原生预览）、
+同一版本 `1.0.17+24184f75b224`，UTC `10:43:32 – 10:56:05` 连续 12 次，无重试替换。
+按 `created_at` 落在该窗口且 `order_no` 命中即可圈定，不需要额外批次号：
+
+| # | qa_id | 状态 |
+|---|---|---|
+| 1 | `qa_685a98a29edb4d4a94da6f7df40721f0` | succeeded |
+| 2 | `qa_7aa99441aaab4976802cbd9e5c4f5065` | succeeded |
+| 3 | `qa_a589a68011b44e098dc6463f9c28ac38` | **failed** |
+| 4 | `qa_a498a56a730e4df191ef9e9912ce9fcd` | **failed** |
+| 5 | `qa_4e87e07d6f4040cb8df7853a04a23650` | succeeded |
+| 6 | `qa_2b8aa94a6bc84552bb8739274c3cc8e4` | succeeded |
+| 7 | `qa_f378f82fe3e94928ab5ccf89060ec6d0` | **failed** |
+| 8 | `qa_cbc7bfa4fac14d36a9774b7d03248bb9` | **failed** |
+| 9 | `qa_522ecf79038f442bb7e44b0402af5ce9` | succeeded |
+| 10 | `qa_3cd3ca371dc9401eb4bd898b9687d16f` | succeeded |
+| 11 | `qa_91525785cb6141acb77c4aee5fe2292e` | succeeded |
+| 12 | `qa_7c5acf49e4ec4f78a2348b6e0af1ab73` | succeeded |
+
+**把失败的 4 次与网关日志对上**：`agent_runs` 只有结论，成因在日志里，两边靠**时间戳**对齐
+（日志是北京时间 = UTC+8）：
 
 ```bash
-# 修复后同一张单连跑 N 次（真实试用入口，只读）
-# 见本回执引用的 trial 批处理脚本结构：Playwright → /__aiops/operator-preview → 读 SSE error 事件
+dev-host exec 41 --allow-service-exec --timeout 40 -- \
+  "journalctl -u aiops-gateway-41 --since '2026-11-03 18:38' --until '2026-11-03 19:06' --no-pager \
+   | grep -oE 'reason=[a-z_]+( detail=[a-z_]+)?|plain_text:[0-9]+' | sort | uniq -c | sort -rn"
+```
 
-# 核对某次运行的结论
+本批次实际输出：`plain_text:1504 / 1313 / 1248` 各一次（对应上表 3/4/7/8 里的三次 `json_parse`），
+外加一次 `unsupported_fact detail=notice line=4 len=62`（另一类，未在本轮处理）。
+**`detail=status` 计数为 0** —— 这是本轮要证明的那一点。
+
+```bash
 dev-host exec 41 --allow-service-exec --timeout 60 -- /opt/aiops-41/.venv/bin/python - <<'PY'
 import sqlite3
 c=sqlite3.connect('file:/var/lib/aiops-41/gateway/gateway.db?mode=ro',uri=True);c.row_factory=sqlite3.Row
 for r in c.execute("""SELECT qa_id,state,gateway_version,created_at FROM agent_runs
- WHERE order_no='2116050516255272961' AND created_at>='2026-11-03T10:40' ORDER BY created_at"""):
+ WHERE order_no='2116050516255272961'
+   AND created_at BETWEEN '2026-11-03T10:43:00' AND '2026-11-03T10:57:00'
+ ORDER BY created_at"""):
     print(dict(r))
 PY
 ```
