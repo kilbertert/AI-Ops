@@ -102,6 +102,19 @@ def test_an_unusable_catalogue_fails_at_startup_not_at_first_onboarding(tmp_path
         base.validate()
 
 
+def test_an_invalid_url_in_the_catalogue_fails_at_startup(tmp_path):
+    """地址规则只有 `canonical_gateway_url` 一份；清单里的 HTTP 远端地址在启动时就被拒。"""
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+
+    base = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gw.db",
+        business_environments_file=catalogue(tmp_path, {"id": "a", "base_url": "http://cpms.example.test"}),
+    )
+    with pytest.raises(ValueError, match="business environment catalogue is unusable"):
+        base.validate()
+
+
 def test_approved_environment_connection_registers_the_target_tenant(tmp_path):
     """裸 URL = 本环境已批准的统一连接：登记到目标租户，解析得到同一个地址。"""
     s = settings(tmp_path, charging_status_base_url="https://cpms.example.test")

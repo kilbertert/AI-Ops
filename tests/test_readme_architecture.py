@@ -154,8 +154,6 @@ def test_package_import_graph_has_no_new_cycles() -> None:
         ("execution.chat_execution", "dify.dify_chat_workflow"),
         ("execution.chat_execution", "gateway.gateway_config"),
         ("dify.dify_chat_workflow", "gateway.gateway_config"),
-        ("consumer.business_environments", "gateway.gateway_config"),
-        ("gateway.gateway_config", "consumer.business_environments"),
     }
     assert not cyclic - existing, "新增包内循环边: " + repr(sorted(cyclic - existing))
 

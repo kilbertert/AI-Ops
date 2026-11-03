@@ -79,6 +79,8 @@ def load(path: str | Path | None) -> tuple[dict, ...]:
             raise BusinessCatalogueError("business environment id is missing or duplicated")
         if not isinstance(base_url, str) or not base_url.strip():
             raise BusinessCatalogueError("business environment base_url is missing")
+        # 地址合法性**不在这里判**：`canonical_gateway_url` 是唯一那份 URL 规则，
+        # 由调用方（gateway_config.validate）对返回值再做一次，避免本节与它形成包内循环依赖。
         seen.add(identifier)
         entries.append(
             {**row, "id": identifier, "base_url": base_url.strip(), "default": row.get("default") is True}
@@ -87,17 +89,6 @@ def load(path: str | Path | None) -> tuple[dict, ...]:
         # 两条都声称是默认 ⇒ 又回到"没有唯一答案"。拒绝，不按顺序裁决。
         raise BusinessCatalogueError("business environment catalogue declares two defaults")
     return tuple(entries)
-
-
-def validate(entries: tuple[dict, ...]) -> None:
-    """地址合法性：复用 `canonical_gateway_url`，不在这里另写一份 URL 规则。"""
-    from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
-
-    for entry in entries:
-        try:
-            canonical_gateway_url(entry["base_url"])
-        except ValueError as exc:
-            raise BusinessCatalogueError(f"business environment {entry['id']} has an invalid URL") from exc
 
 
 def approved_base_url(entries: tuple[dict, ...]) -> str:

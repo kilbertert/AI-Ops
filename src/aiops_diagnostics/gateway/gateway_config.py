@@ -502,9 +502,9 @@ class GatewayServerSettings:
             from aiops_diagnostics.consumer import business_environments
 
             try:
-                entries = business_environments.load(self.business_environments_file)
-                business_environments.validate(entries)
-            except business_environments.BusinessCatalogueError as exc:
+                for entry in business_environments.load(self.business_environments_file):
+                    canonical_gateway_url(entry["base_url"])
+            except (business_environments.BusinessCatalogueError, ValueError) as exc:
                 raise ValueError(f"business environment catalogue is unusable: {exc}") from exc
         if self.consumer_order_chat_enabled and not self.charging_status_base_url:
             raise ValueError("consumer order chat requires its charging status endpoint")
