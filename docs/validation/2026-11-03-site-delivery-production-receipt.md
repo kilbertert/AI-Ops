@@ -123,6 +123,9 @@ OK   operator/site_note_review.py      c818b7e87c4f01d0
 
 ## 八、可复现步骤
 
+**方法已沉淀进仓**：[`env-41-runbook.md` §5.9](../agents/env-41-runbook.md) 含只读快照 SQL、
+按 `qa_id` 读运行快照的判据、两端真实会话的入口与踩坑。本节只列命令顺序：
+
 ```bash
 # 0. 合并前确认分支当前、检查全绿
 gh pr view 1320 --json mergeStateStatus,statusCheckRollup
@@ -131,14 +134,9 @@ gh pr view 1320 --json mergeStateStatus,statusCheckRollup
 gh api repos/kilbertert/AI-Ops/actions/runners -q '.runners[] | "\(.name) busy=\(.busy)"'
 gh run list --status in_progress --limit 10 --json databaseId,workflowName,headBranch
 
-# 2. 部署后只读快照（只读连接，不写）
-dev-host exec 41 --allow-service-exec --timeout 60 -- /opt/aiops-41/.venv/bin/python - \
-  <<'PY'   # 见 §三 的 SQL；库按 mode=ro 打开
-PY
-
-# 3. 两端验收脚本（凭据只从库外 age 清单读进内存，不落盘、不打印）
-python3 ~/.cache/aiops-resume-20261103/live/formal_verify2.py    # 管家 H5
-python3 ~/.cache/aiops-resume-20261103/live/native_login_verify.py  # Dify 原生预览
+# 2. 部署前后各取一次只读快照（runbook §5.9，mode=ro）
+# 3. 两端真实会话发问，拿 qa_id 回读运行快照（runbook §5.9）
+# 4. 判据：verdict + answer.text + rendered_result，不看答复措辞
 ```
 
 登录代理的会话寿命与退避窗口见 ADR-0136 / `docs/agents/env-41-runbook.md`。
