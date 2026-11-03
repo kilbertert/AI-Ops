@@ -374,6 +374,8 @@ def test_json_syntax_failure_says_whether_it_looks_truncated(caplog):
         '{"a":"b"},',  # 末尾多一个逗号
         '{"a":"b"}}',  # 多一个闭合括号
         '{"a":{"b":1}}"',  # 嵌套后再多一个引/括号
+        '{"a":"b"},\n',  # 装饰之间夹空白（2026-11-03 复审指出）
+        '```json\n{"a":"b"}"\n```',  # 围栏里也有同样的尾部装饰
     ],
 )
 def test_trailing_decoration_after_the_object_is_tolerated(raw):
@@ -387,6 +389,8 @@ def test_trailing_decoration_after_the_object_is_tolerated(raw):
     "raw",
     [
         '{"a":1}{"b":2}',  # 两个对象：挑哪一个都没有依据
+        '{"a":1}{}',  # 第二个是**空对象**，它仍然是第二个对象（2026-11-03 复审指出）
+        '{"a":1}, {',  # 已经开始写第二个对象，只是被截断
         "我帮你核对了本次记录。",  # 散文
         '{"a":"b',  # 截断
     ],
