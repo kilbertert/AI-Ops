@@ -28,6 +28,20 @@ PREFIX = "operator-cpms-node:"
 #: 工具名、路径、输入与证据字段全部来自 `operator_tools.json` —— 仓内唯一声明。
 TOOL_NAMES = operator_tools.names()
 
+#: 追加在节点那条用户消息末尾的强制提醒。**实测出来的，不是措辞偏好**：
+#: 带工具轮次的最后一步，`response_format=json_object` 有 36–44% 不生效（通篇正文），
+#: 加上这一句后同一实验降到 8%。它不改变协议 —— 交付与否仍由 `_complete` 的校验决定。
+JSON_ONLY_REMINDER = (
+    "\n\n最后一步只输出那个JSON对象本身：不要任何前言、标题、列表、"
+    "推理过程或解释，第一个字符必须是 {，最后一个字符必须是 }。"
+    "即使证据不足，也照样输出带缺证说明的JSON。"
+)
+
+#: 一次 run 因为「上游没给可接受的答案」最多重派几次。**1 是刻意的**：
+#: 实测单次失败率 36–44%，再派一次后剩余失败约 1–2%，再加一次只到 0.2% 却把最坏延迟
+#: 翻倍。更重要的理由是不掩盖故障：上游**持续**不守约时，多试几次会让它看起来像"慢"。
+MAX_RESAMPLES = 1
+
 #: 站点查询的三个上限：一页条数、最多页数、最多展示条数。
 #:
 #: 合起来是**「列举不能变成导出」**这条边界。改任何一个都要重新论证，不能当调参。
@@ -239,6 +253,9 @@ class ActiveTask:
     question: str = ""
     language: str = "zh"
     trial: bool = False
+    #: 本次运行已经因为「模型没吐 JSON」重派过几次。**上限是 1**，见 `_complete`。
+    #: 放在任务上而不是模块上：它属于这一次 run，跨 run 复用就没有"有界"可言了。
+    resamples: int = 0
     lock: object = field(default_factory=threading.RLock)
     completion_lock: object = field(default_factory=threading.Lock)
 
@@ -740,14 +757,20 @@ class OperatorCpms:
             return self._complete(run_id, token, manifest, payload)
 
     def _complete(self, run_id, token, manifest, payload):
-        if set(payload) - {"status", "answer"}:
+        if set(payload) - {"status", "answer", "reason"}:
             raise OperatorRefused("OPERATOR_INVALID_BODY")
         task, run, _ = self._current(run_id, node_token=token, manifest=manifest)
         store = self.context.agent_run_store
         if payload.get("status") not in {"completed", "failed"}:
             raise OperatorRefused("OPERATOR_INVALID_COMPLETION")
         if payload["status"] == "failed":
-            store.fail(run_id, "operator_node_failed")
+            # 节点给的原因码进运行记录，不再统一糊成 `operator_node_failed`。
+            # 它只用于**归因**，不改变任何判决：这条 run 仍然失败。
+            reason = str(payload.get("reason") or "")
+            store.fail(run_id, "operator_node_failed: " + reason if reason else "operator_node_failed")
+            logging.getLogger("aiops.operator").warning(
+                "operator_node_reported_failure reason=%s", reason or "-"
+            )
             return {"run_id": run_id, "state": "failed"}
         with task.lock:
             try:
@@ -770,6 +793,8 @@ class OperatorCpms:
                     _json_shape(raw),
                     _json_truncation_hint(raw),
                 )
+                # **重采样不在这里**：这是节点回调，从这里抛异常只能让本次回调失败，
+                # 不会让模型再答一次。有界重派在 `_worker` 里（见 `_resample_used`）。
                 raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
             from aiops_diagnostics.common.redaction import contains_secret
 
@@ -872,8 +897,42 @@ class OperatorCpms:
                 + json.dumps(task.question, ensure_ascii=False)
                 + "。回答语言："
                 + task.language
+                # 这一句是实测出来的，不是客套：`response_format=json_object` 对供应商只是**提示**，
+                # 带工具轮次的最后一轮实测有 36–44% 的响应是通篇正文、根本没有 JSON
+                # （2026-11-03，41 生产，每组 25 次）。把「最后一步只输出 JSON」写进模型
+                # 看得到的用户消息后，同一实验里失败率降到 8%（2/25）。
+                #
+                # 放在这里而不是节点的 system 提示词里：节点对 system 消息集合做**逐字**
+                # 校验（GuardedChatModel.verifySystemMessages），改它要换节点 jar 与清单；
+                # 而这条用户消息正是节点看到的那一条，只改 Python。
+                # 它也不越过协议 —— 最终用什么由 `_complete` 的校验决定，这里只是让模型少犯。
+                + JSON_ONLY_REMINDER
             )
-            dispatcher.dispatch(config, run_id)
+            # **有界重采样**：`response_format=json_object` 对供应商只是提示，上游失约是概率性的
+            # （2026-11-03 实测最后一轮 36–44% 不吐 JSON）。再要一次是合理的，**但只再要一次** ——
+            # 无限重试会把「上游持续不守约」伪装成「慢」，而它其实是故障。
+            #
+            # 重采样的位置只能在这里：`_complete` 是节点回调，从那里抛异常只会让**这次回调**
+            # 失败，节点收到非成功回执后**不重试**（`ReportingChatSessionRuntime.reportCompleted`
+            # 返回 false 即终局），模型不会再答一次。所以「再答一次」= 重新派发一次完整对话。
+            #
+            # 用 `run.agent_id` 作哨兵：只有这一轮**一次工具都没领过**才重派。这时模型还什么都没做，
+            # 重派不会重复取证，也不会与节点正在跑的旧轮次交错。task.evidence 非空则说明
+            # 已经取过证据，重派会绕开「同一份证据」的不变量 —— 那种情况直接按失败交付。
+            while True:
+                dispatcher.dispatch(config, run_id)
+                run = self.context.agent_run_store.get(run_id)
+                untouched = run is not None and run.state in {"issued", "running"}
+                if untouched and not task.evidence and not task.delivered:
+                    # 节点回调没把 run 推进（`_complete` 拒绝了答案），且这一轮没领过工具。
+                    task.resamples += 1
+                    if task.resamples > MAX_RESAMPLES:
+                        raise OperatorRefused("OPERATOR_RESULT_UNSTABLE")
+                    logging.getLogger("aiops.operator").warning(
+                        "operator_resample attempt=%d reason=no_answer_accepted", task.resamples
+                    )
+                    continue
+                break
             task = self.tasks[run_id]
             current = task.authorize()
             result = self.authorize_readback(current, qa_id, task.bearer)
@@ -881,10 +940,20 @@ class OperatorCpms:
                 self.context.runtime._complete_conversation_turn(
                     task.conversation_turn, task.question, result, status_qa_id=qa_id
                 )
-        except Exception:  # noqa: BLE001 - 后台失败必须收敛，凭据及上游正文不进日志。
+        except Exception as exc:  # noqa: BLE001 - 后台失败必须收敛，凭据及上游正文不进日志。
+            reason = _failure_reason(exc)
             if not self.context.agent_run_store.fail(run_id, "operator_failed"):
                 self.context.agent_run_store.refuse(run_id, "operator_failed")
-            store.update_assistant_question(qa_id, status="failed", error_code="OPERATOR_DIAGNOSIS_FAILED")
+            store.update_assistant_question(
+                qa_id, status="failed", error_code=_failure_code(exc)
+            )
+            # 失败**原因**单独记一行，和上面按码写的日志分开：这条是给值班的人看的，
+            # 而 `OPERATOR_DIAGNOSIS_FAILED` 一个码覆盖了「模型不吐 JSON」「上游没钱」
+            # 「答案不合格」等完全不同的成因。2026-11-03 实测：额度耗尽时用户看到的
+            # 与「模型写错 JSON」一模一样，于是排查方向被引到判据和提示词上。
+            logging.getLogger("aiops.operator").warning(
+                "operator_run_failed reason=%s code=%s", reason, _failure_code(exc)
+            )
             task = self.tasks.get(run_id)
             if task is not None:
                 self.context.runtime._release_conversation_turn(task.conversation_turn)
@@ -1174,6 +1243,40 @@ def _json_truncation_hint(raw) -> str:
         elif ch in "}]":
             depth -= 1
     return f" len={len(text)} closed={text.endswith('}')} depth={depth} in_string={quoted}"
+
+
+def _failure_code(exc: BaseException) -> str:
+    """这次失败对**用户**报哪个码。
+
+    此前一律 `OPERATOR_DIAGNOSIS_FAILED`，而那个码同时覆盖「模型不吐 JSON」「上游没钱」
+    「答案不合格」「节点掉线」—— 值班的人分不出该找谁。这里只把**已经能区分**的几类
+    分开，其余保持原码：宁可不分，不能猜错。
+    """
+    if isinstance(exc, OperatorRefused):
+        code = str(exc)
+        # 这些原因说明**上游/环境**有问题，不是这次回答不合格 —— 分开报。
+        if code in {
+            "OPERATOR_NODE_REJECTED",
+            "OPERATOR_NODE_CHANGED",
+            "OPERATOR_TARGET_MISSING",
+            "CPMS_UNAVAILABLE",
+            "OPERATOR_SCOPE_UNAVAILABLE",
+        }:
+            return "OPERATOR_DEPENDENCY_UNAVAILABLE"
+        if code == "OPERATOR_RESULT_UNSTABLE":
+            return "OPERATOR_MODEL_OUTPUT_UNSTABLE"
+    return "OPERATOR_DIAGNOSIS_FAILED"
+
+
+def _failure_reason(exc: BaseException) -> str:
+    """失败原因的一句话摘要，**只用于日志归因**，不进用户可见文本。
+
+    不记异常正文里可能带的凭据或上游原文：`AgentRunDispatchError` 的文案本来就是
+    「平台不可用」这种不含细节的句子，这里只额外带上类型与错误码。
+    """
+    if isinstance(exc, OperatorRefused):
+        return str(exc)
+    return type(exc).__name__
 
 
 def _answer_refused(reason, detail=""):

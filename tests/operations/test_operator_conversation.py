@@ -943,3 +943,99 @@ def test_conversation_rejection_logs_shape_without_answer(caplog):
         conversation.validate({"private": "secret"}, "私有问题")
     assert "rule=answer_shape" in caplog.text
     assert "secret" not in caplog.text and "私有" not in caplog.text
+
+
+# ─────────────────────── 2026-11-03：上游不吐 JSON 的三道防线
+#
+# 实测（41 生产，每组 25 次）：`response_format=json_object` 对供应商只是**提示**，
+# 带工具轮次的最后一轮有 36–44% 的响应是通篇正文。三件事一起做：
+#   ① 把「只输出 JSON」写进节点看到的那条用户消息 → 降到 8%
+#   ② 上游失约时有界重派一次（最多一次）
+#   ③ 节点的失败原因码不再被网关丢掉
+
+
+def test_the_node_question_carries_the_json_only_reminder(operator, monkeypatch):
+    """提醒必须真的到达模型看得到的那条消息里 —— 写在别处等于没写。"""
+    f = operator
+    seen = {}
+
+    # 注意读的是**实例**：`question` 是类属性，实例赋值只落在实例上，
+    # 读类属性会拿回那句固定的默认提问，测试就永远看不到真正发出去的内容。
+    def dispatch(self, config, run_id):
+        seen["question"] = self.question
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    posted = f["client"].post(
+        "/v1/assistant/questions", headers=HEADERS, json={"question": "订单状态3是什么意思"}
+    )
+    terminal(f, posted.json()["qa_id"])
+    assert "最后一步只输出那个JSON对象本身" in seen["question"]
+    assert "第一个字符必须是 {" in seen["question"]
+
+
+def test_a_non_json_answer_is_redispatched_at_most_once(operator, monkeypatch, caplog):
+    """上游失约 → 重派一次；**再失约就按失败交付**，不无限重试。
+
+    重派只能发生在「这一轮一次工具都没领过」的时候：那时模型还什么都没做，
+    重派不会重复取证，也不会跟节点正在跑的旧轮次交错。
+    """
+    import logging
+
+    f = operator
+    attempts = {"n": 0}
+
+    def dispatch(_, config, run_id):
+        attempts["n"] += 1
+        headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
+        publication = f["client"].post(
+            "/v1/internal/charging-status/execution-config/" + run_id, headers=headers
+        )
+        headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+        # 每一次都回一段**纯文本**，上游持续失约。
+        f["client"].post(
+            f"/v1/internal/operator-runs/{run_id}/completions",
+            headers=headers,
+            json={"status": "completed", "answer": "我帮你核对了本次记录，建议对照原账单。"},
+        )
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    with caplog.at_level(logging.WARNING, logger="aiops.operator"):
+        posted = f["client"].post(
+            "/v1/assistant/questions", headers=HEADERS, json={"question": "订单状态3是什么意思"}
+        )
+        final = terminal(f, posted.json()["qa_id"])
+    assert attempts["n"] == 1 + operator_cpms.MAX_RESAMPLES
+    assert final.json()["status"] == "failed"
+    assert "operator_resample" in caplog.text
+
+
+def test_the_node_failure_reason_is_no_longer_collapsed(operator, monkeypatch, caplog):
+    """节点已经在发 `model_failed` / `model_stream_incomplete`；网关不能再把它糊成一个码。
+
+    2026-11-03 实测：上游额度耗尽时节点报 `model_failed`，网关记成 `operator_node_failed`，
+    用户看到 `OPERATOR_DIAGNOSIS_FAILED` —— 与「模型写错 JSON」完全同形，排查方向被引偏。
+    """
+    import logging
+
+    f = operator
+
+    def dispatch(_, config, run_id):
+        headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
+        publication = f["client"].post(
+            "/v1/internal/charging-status/execution-config/" + run_id, headers=headers
+        )
+        headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+        f["client"].post(
+            f"/v1/internal/operator-runs/{run_id}/completions",
+            headers=headers,
+            json={"status": "failed", "reason": "model_failed"},
+        )
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    with caplog.at_level(logging.WARNING, logger="aiops.operator"):
+        posted = f["client"].post(
+            "/v1/assistant/questions", headers=HEADERS, json={"question": "订单状态3是什么意思"}
+        )
+        terminal(f, posted.json()["qa_id"])
+    assert "operator_node_reported_failure reason=model_failed" in caplog.text
