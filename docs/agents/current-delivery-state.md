@@ -1,5 +1,33 @@
 # 当前交付状态索引
 
+## 管家端 operator 路由已迁到 137cc417，协议同时换版（2026-11-03）
+
+`chat_route_bindings.operator_order_diagnosis`（租户 `…861824`）已由已删除的
+`2b0629cf` 迁到现存应用 `137cc417`。**当前只读回读**：
+
+| 字段 | 值 |
+|---|---|
+| app_id | `137cc417-f068-43c2-9d4a-43ebd254ea01` |
+| engine / state | `node` / `active` |
+| agent / 版本 | `agt_727264…` / `24` |
+| revision | `17` |
+| updated_at | `2026-11-03T02:50:51Z` |
+
+真机走新路由跑通一次（`route_revision=17`、run succeeded），**但这不等于生命周期验收**：
+
+- **生效的系统协议被同时换掉**：迁移前 rev16 服务的是 `agt_5c3e2e… v1`（系统消息 890 字符，
+  不含仓库当前 `OPERATOR_OUTPUT`），迁移后 v24 是 962 字符、含仓库当前协议。
+  工具、模型、业务提示词相同，**不是"只换 app_id"**。
+- **审计账本无 v24 记录**：脚本路径跳过了 `record_publish_audit`；该 app 最后一条账目是
+  v23 / `2026-11-02T14:36:06Z`。缺口如实保留，未补写、未改生产。
+- **Dify 侧编辑 → 发布 → 新会话仍未有证据**。
+
+回退方式已订正：只能走 `POST /v1/dify/management/version` 让 revision **递增**；
+把 17 写回 16 会重新满足 `chat_execution.py:669` 的回调版本检查，
+而退回已删应用在任何受管入口都会被 409 拒绝。
+方法见[路由迁移与恢复手册](operator-route-migration.md)，
+过程与证据见[验证记录](../validation/2026-11-03-operator-route-migration.md)。
+
 ## 站点说明校验仍有虚构站名漏洞，方案交 Codex 评估（2026-11-03）
 
 **站点模块有已知缺陷**：#1310 引入的「整词替换通用短语」在字符层分不开类别词与名字，
