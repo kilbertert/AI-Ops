@@ -6,17 +6,19 @@
 
 **只撤首页那一行入口按钮，不是撤聊天页。**
 
-「智能检测」聊天页本身是公司 2026-09-30 `e91d7bbc`「管家端集成AI客服」引入的，不是本轮交付。
-我们加的是 `pages/home/index.vue` 里的入口按钮（`57b4018e`），以及同轮的发送/停止按钮、
-生产环境关闭诊断模拟、请求不再打印含授权头的 cURL 三处行为修复。
+「智能检测」聊天页是公司自己实现的，首次提交为 `e91d7bbc`（2026-09-30「管家端集成AI客服」，
+作者与提交者均为公司开发者 liangyongfeng，一次性带入 2413 行聊天页、语音 SDK、batteryReport
+页面与 17 份翻译）。本仓从未交付过该页源码。我们对该页的全部改动是 `57b4018e` 的
++23/−12 行，加上 `pages/home/index.vue` 的入口按钮（同一次提交）。
+同轮的三处行为修复（发送/停止按钮、生产环境关闭诊断模拟、请求不再打印含授权头的 cURL）一并保留。
 
-| 文件 | 处置 |
-|---|---|
-| `pages/home/index.vue` | **删除**首页导航栏 `<button data-url="/aiPackage/pages/chat/chat">` |
-| `aiPackage/pages/chat/chat.vue` | 保留（聊天页与行为修复不动） |
-| `aiPackage/api/aiops.js` | 保留 |
-| `locale/{zh,en}.json` `chat.input.*` | 保留 |
-| `tools/build-h5.py`、`tools/h5/`、`tools/verify-h5.py` | 保留 |
+| 文件 | 归属 | 处置 |
+|---|---|---|
+| `pages/home/index.vue` | 我们（`57b4018e`） | **删除**首页导航栏 `<button data-url="/aiPackage/pages/chat/chat">` |
+| `aiPackage/pages/chat/chat.vue` | 公司（`e91d7bbc`），我们改过 23 行 | 保留 |
+| `aiPackage/api/aiops.js` | 公司（`e91d7bbc`），我们去掉了 cURL 打印 | 保留 |
+| `locale/{zh,en}.json` `chat.input.*` | 我们（`57b4018e`） | 保留 |
+| `tools/build-h5.py`、`tools/h5/`、`tools/verify-h5.py` | 我们（`5d8d9eb5`/`57b4018e`） | 保留 |
 
 撤掉入口后，聊天页仍由 `pages.json` 注册在 `/aiPackage/pages/chat/chat`，**有 URL 就能直达**。
 
