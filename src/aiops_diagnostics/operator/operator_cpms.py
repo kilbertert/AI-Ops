@@ -944,9 +944,7 @@ class OperatorCpms:
             reason = _failure_reason(exc)
             if not self.context.agent_run_store.fail(run_id, "operator_failed"):
                 self.context.agent_run_store.refuse(run_id, "operator_failed")
-            store.update_assistant_question(
-                qa_id, status="failed", error_code=_failure_code(exc)
-            )
+            store.update_assistant_question(qa_id, status="failed", error_code=_failure_code(exc))
             # 失败**原因**单独记一行，和上面按码写的日志分开：这条是给值班的人看的，
             # 而 `OPERATOR_DIAGNOSIS_FAILED` 一个码覆盖了「模型不吐 JSON」「上游没钱」
             # 「答案不合格」等完全不同的成因。2026-11-03 实测：额度耗尽时用户看到的
