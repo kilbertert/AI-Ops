@@ -1219,17 +1219,37 @@ def parse_answer(raw):
 
     这里只剥**一层**围栏且围栏内必须恰好一个 JSON 对象；散文、多份 JSON、残缺块
     仍然拒绝 —— 放宽的是供应商的装饰，不是输出的契约。
+
+    第三处装饰是**对象后面多出来的字符**（2026-11-03 实测）：模型偶尔把整个 JSON
+    多包一层引号，末尾变成 `…"}"`。`{"…"}"`、`{"…"}` + 一个 `"`、或者闭合后多一个
+    `}`，都只差最后一个字符，而整轮诊断因此失败。这里按 `_object_end` 扫出的**第一个
+    完整对象**重解析，并且只在这一段之后的残余是**空白或零散引号/逗号**时才接受 ——
+    两个对象叠在一起仍然拒绝，因为挑哪一个都没有依据。
     """
+    if not isinstance(raw, str):
+        raise ValueError("invalid answer")
     try:
         return json.loads(raw)
     except ValueError as bare:
         fenced = _FENCED_ANSWER.match(raw.strip())
-        if fenced is None:
-            raise
-        try:
-            return json.loads(fenced.group("body"))
-        except ValueError:
-            raise bare from None
+        if fenced is not None:
+            try:
+                return json.loads(fenced.group("body"))
+            except ValueError:
+                pass
+        text = raw.strip()
+        if text.startswith("{"):
+            from aiops_diagnostics.consumer.consumer_documents import _object_end
+
+            end = _object_end(text)
+            # 残余只允许是**装饰**：空白、引号、逗号、闭合括号。一个对象后面再跟一个
+            # 对象（`{"a":1}{"b":2}`）不在其中 —— 挑哪一个都没有依据，必须拒绝。
+            if end is not None and set(text[end:].strip(" \t\r\n")) <= set('"}{,'):
+                try:
+                    return json.loads(text[:end])
+                except ValueError:
+                    pass
+        raise bare from None
 
 
 def _json_shape(raw) -> str:

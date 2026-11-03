@@ -358,3 +358,42 @@ def test_json_syntax_failure_says_whether_it_looks_truncated(caplog):
     # 不是 json_syntax 的形态不加这一句：`plain_text:1230` 已经够说明问题。
     assert _json_truncation_hint("这是一段纯文本") == ""
     assert _json_truncation_hint("") == ""
+
+
+# ─────────────────────── 2026-11-03：对象后面的装饰字符不该毁掉整轮
+#
+# 41 实测：复测 20 次里 4 次失败，其中一次的内容结尾是 `…"}"` —— 模型把整个 JSON
+# 多包了一层引号。只差最后一个字符，而整轮诊断因此失败。
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"a":"b"}"',  # 末尾多一个引号
+        '{"a":"b"}\n"',  # 同样，但带换行
+        '{"a":"b"},',  # 末尾多一个逗号
+        '{"a":"b"}}',  # 多一个闭合括号
+        '{"a":{"b":1}}"',  # 嵌套后再多一个引/括号
+    ],
+)
+def test_trailing_decoration_after_the_object_is_tolerated(raw):
+    """放宽的是**装饰**，不是契约：对象本身仍必须是完整的、可解析的。"""
+    from aiops_diagnostics.operator.operator_cpms import parse_answer
+
+    assert parse_answer(raw) == ({"a": {"b": 1}} if raw.startswith('{"a":{"b"') else {"a": "b"})
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"a":1}{"b":2}',  # 两个对象：挑哪一个都没有依据
+        "我帮你核对了本次记录。",  # 散文
+        '{"a":"b',  # 截断
+    ],
+)
+def test_shapes_that_are_not_one_whole_object_are_still_refused(raw):
+    """对照组：放宽不能放宽到「随便截一个能解析的前缀」。"""
+    from aiops_diagnostics.operator.operator_cpms import parse_answer
+
+    with pytest.raises(ValueError):
+        parse_answer(raw)
