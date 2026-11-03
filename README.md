@@ -142,6 +142,9 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 本地检查不证明远端 Dify/Java、真实故障准确率或正式页面交付。
 
 管家原 H5 的制品构建、窄代理安装与恢复见[部署手册](docs/agents/operator-h5-deployment.md)。
+**管家 H5 首页自 2026-11-03 起不再提供助手入口**：首页导航栏的「智能检测」按钮已撤回，
+助手页仍注册在 `/aiPackage/pages/chat/chat`，只能由调用方按该路径导航进入；
+线上制品为该日从干净合并修订构建的版本，详见[撤回回执](docs/validation/2026-11-03-operator-h5-entry-withdrawal.md)。
 
 执行器兼容性由 `execution.node_capabilities` 记录实际节点协议心跳；
 管家开通/发布/恢复前核对清单schema和工具声明摘要，过旧执行器不会被启用。
