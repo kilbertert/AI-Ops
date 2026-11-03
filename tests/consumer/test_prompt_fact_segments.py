@@ -310,3 +310,56 @@ def test_protocol_does_not_demand_both_segments_at_once():
     assert "账单必须引用billing_line，状态必须引用status_line" not in text
     assert "账单查询只引billing_line" in text
     assert "状态查询只引status_line" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 结算类词：只拦**断言**，不拦「提到」                                    2026-11-03
+#
+# 2026-11-02 的第一版是「整段出现『结算』即拒绝」（`_settlement_hit`），过了头：
+# 核对建议 `请先核对账单。`、缺证说明 `目前没有结算状态的证据` 都被拒掉 ——
+# 而这两句恰恰是**我们要求模型写**的内容。下面正反两组是这次修的回归护栏。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SETTLEMENT_MENTIONS_THAT_MUST_PASS = [
+    # 核对建议
+    "请先核对账单。",
+    "建议对照原账单核对。",
+    "您可以先核对一下账单明细。",
+    # 缺证说明
+    "目前没有结算状态的证据。",
+    "本轮没有取得结算状态，无法判断。",
+    "系统未提供结算状态字段。",
+    "结算状态不在本次可用证据内。",
+    # 提问
+    "您想核对账单的哪一项？",
+    "需要我帮您核对结算相关信息吗？",
+]
+
+
+@pytest.mark.parametrize("text", _SETTLEMENT_MENTIONS_THAT_MUST_PASS)
+def test_mentioning_settlement_without_asserting_it_is_allowed(text):
+    """**提到**结算不等于**断言**结算状态。
+
+    没有这一组，修法就会退化成「模型提都不能提」—— 而框架恰恰要求它在
+    缺证说明里写清楚哪一项没有证据。
+    """
+    check_status_prose(text)
+
+
+_SETTLEMENT_ASSERTIONS_THAT_MUST_FAIL = [
+    "这单尚未结算。",
+    "该订单已经结算完成。",
+    "结算状态是已结算。",
+    "这笔费用还没有结算给运营商。",
+    "这单已结算。",
+]
+
+
+@pytest.mark.parametrize("text", _SETTLEMENT_ASSERTIONS_THAT_MUST_FAIL)
+def test_asserting_settlement_status_is_still_refused(text):
+    """对照组：放宽之后，**断言**结算状态必须仍然被拒。
+
+    肯定与否定同等处理 —— 没有证据时，「还没结算」与「已结算」是同等强度的断言。
+    """
+    with pytest.raises(ChatRunUnavailable):
+        check_status_prose(text)

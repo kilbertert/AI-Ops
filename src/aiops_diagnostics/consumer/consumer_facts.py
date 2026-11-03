@@ -106,18 +106,44 @@ def _state_labels() -> tuple[str, ...]:
     return tuple(sorted(labels, key=len, reverse=True))
 
 
-#: 结算状态词。**我们没有任何接口能给出它**：真实订单的 `cpms_order_detail` 34 个字段里
-#: 没有 settlement 字段（属于商城订单，见 ADR-0193）。所以旁白里出现它必然是凭空断言 ——
-#: 这不是「状态词表漏了一个」，而是**这一整类事实我们没有证据**。
-#: `check_notice` 查数字、`check_status_prose` 查充电/完成，两处都不拦它（2026-11-02 实测
-#: 四句全放行），于是「已经结算完成」可以直接出现在正文里。
+#: 结算状态词。**我们没有任何接口能给出它**（见 ADR-0193），所以旁白里**断言**它必然是
+#: 凭空断言。但「提到」不等于「断言」：`请先核对账单。`、`目前没有结算状态的证据。`
+#: 恰恰是我们**要求模型写**的两类内容（核对建议、缺证说明）。
+#:
+#: 所以这里判的是**断言形式**，不是词是否出现（2026-11-03 修：第一版整段出现即拒，
+#: 把上面两类正常句子全拒了，八条正例全红）。
 _SETTLEMENT_TERMS = ("结算", "对账", "對賬", "settle", "reconcil")
 
+#: 结算状态**被陈述**的形式。三组都要求「结算词」与「状态/动作」同现，且不是问句、
+#: 不是否定「有证据」。
+_SETTLEMENT_ASSERTION = re.compile(
+    # ① 结算 + 状态/动作：已结算 / 尚未结算 / 结算完成 / 结算中 / 结算给运营商
+    r"(?:结算|对账|對賬|settle|reconcil)\w*\s*"
+    r"(?:完成|已完成|中|完毕|给|至|到|状态|完成|completed|done|pending|in\s+progress)"
+    # ② 已/未/尚未/仍在 + 结算
+    r"|(?:已|已经|尚未|还未|未|没有|还没|正在|仍在|已经|still)\s*(?:结算|对账|對賬|settle|reconcil)"
+    # ③ 状态词直接挂在结算上：结算状态是…／结算状态为…
+    r"|(?:结算|对账|對賬)\s*状态\s*(?:是|为|：|:|is)",
+    re.IGNORECASE,
+)
 
-def _settlement_hit(clause: str) -> bool:
-    """子句是否在说结算。`结算` 不在 `_STATE_NOUNS` 里，没有需要剥的名词化用法。"""
-    low = clause.casefold()
-    return any(term in low for term in _SETTLEMENT_TERMS)
+#: **否定有证据**的说法：它们提到结算，但陈述的是「没有证据」，必须放行。
+#: 与上面的断言形式一起用 —— 先剥掉这些，再判断言。
+_NO_EVIDENCE_ABOUT_SETTLEMENT = re.compile(
+    r"(?:没有|无|未|未提供|不包含|不在|缺|缺少|无法|不可用|尚未取得)"
+    r"[^。；;！!？?，,\n]{0,10}(?:结算|对账|對賬)"
+    r"[^。；;！!？?，,\n]{0,10}(?:证据|字段|数据|信息|记录|状态|来源|内|范围)"
+    r"|(?:结算|对账|對賬)[^。；;！!？?，,\n]{0,10}(?:没有|无)证据"
+    r"|(?:结算|对账|對賬)[^状态。；;！!？?，,\n]{0,6}状态[^。；;！!？?，,\n]{0,6}"
+    r"(?:不在|不包含|没有|无)",
+    re.IGNORECASE,
+)
+
+
+def _settlement_asserted(clause: str) -> bool:
+    """这个子句是否在**陈述**结算状态（而不是提到、询问或说明没有证据）。"""
+    stripped = _NO_EVIDENCE_ABOUT_SETTLEMENT.sub("　", clause)
+    return bool(_SETTLEMENT_ASSERTION.search(stripped))
 
 
 def check_status_prose(text: str) -> None:
@@ -126,15 +152,23 @@ def check_status_prose(text: str) -> None:
     三个维度，都是有限的：
     1. **否定词 × 状态词（同子句）** —— `尚未完结，仍在供电`、`has not finished` 都在这里；
     2. **断言形式** —— `正在/仍在/还在/已经 + 状态动词`、`is/still + charging`；
-    3. **结算状态** —— 我们**没有**这个字段的证据，所以出现即拒绝（不做肯定/否定之分）。
+    3. **结算状态** —— 我们**没有**这个字段的证据，所以**断言**即拒绝（不做肯定/否定之分：
+       没证据时「还没结算」与「已结算」是同等强度的断言）。但**提到**结算不拒 ——
+       核对建议与缺证说明本来就要提它。
 
     刻意**不**拦截裸状态词：`Do you have any other questions about charging?` 是正常追问，
     把它当断言拒绝正是上一版的错误（见 tests/consumer/test_prompt_fact_segments.py 的 B 例）。
     """
     terms = _state_terms()
     low_all = text.casefold()
-    if _settlement_hit(text):
-        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "settlement status has no evidence source")
+    # 结算：判**断言形式**，不是词出现。问句与「没有证据」的说法先剥掉。
+    for clause in re.split(r"[。；;！!？?，,\n\r]", text):
+        if not clause.strip() or _A_NOT_A.search(clause.casefold()):
+            continue
+        if clause.rstrip().endswith(("？", "?")):
+            continue
+        if _settlement_asserted(clause):
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "settlement status has no evidence source")
     # 现役文案里的**状态标签**本身就是状态断言：出现在旁白里就是复述状态（含否定复述）。
     # 词形按词干匹配（`terminé`/`terminée`、`abgeschlossen`/`abgeschlossene`）。
     if any(label in low_all or (len(label) >= 5 and label[:-1] in low_all) for label in _state_labels()):
