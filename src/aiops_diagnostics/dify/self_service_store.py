@@ -312,6 +312,10 @@ _ENTRY_FIELDS = (
     "channel_note",
     "state",
     "error_code",
+    # 失败时的定位信息：步骤名是代码里的固定字面量，种类是异常类名。
+    # 异常**正文**不在这里 —— 它可能含上游原文（URL、id、凭据片段）。
+    "failed_step",
+    "failure_kind",
 )
 
 
@@ -346,4 +350,7 @@ def public_job(row: dict) -> dict:
         "version_no": resources.get("version_no"),
         "published": resources.get("published", False),
         "error_code": row["error_code"],
+        # 作业级失败的定位信息（两端都没走到时才有值；逐端失败看 `entries`）。
+        "failed_step": resources.get("failed_step"),
+        "failure_kind": resources.get("failure_kind"),
     }

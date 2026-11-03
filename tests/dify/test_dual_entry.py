@@ -1063,3 +1063,29 @@ def test_retracted_publish_refusal_reaches_the_page_as_a_conflict_not_a_500(dual
     response = asyncio.run(handler(None, NodeRouteConflict("node route retracted")))
     assert response.status_code == 409
     assert b"retracted" in response.body
+
+
+def test_a_consumer_source_failure_names_a_consumer_step(dual, monkeypatch):
+    """来源导出/校验失败时，定位必须落在客户端自己的步骤上。
+
+    反例：#1331 的第一版。`_run_consumer` 的第一个 `save()` 在来源校验**之后**，
+    于是这一段的失败被记成上一个端（或公共准备）的步骤名，页面把排障引到没问题的地方。
+    """
+    from aiops_diagnostics.dify import dify_dsl_pull
+
+    def explode(*args, **kwargs):
+        raise KeyError("workflow")
+
+    monkeypatch.setattr(dify_dsl_pull.DifyDslClient, "export_dsl", explode)
+    result = run(
+        dual,
+        request(
+            dual,
+            scope="consumer",
+            sources={"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}},
+        ),
+    )
+    entry = result["entries"]["consumer"]
+    assert entry["error_code"] == "SETUP_STEP_FAILED"
+    assert entry["failed_step"] == "consumer:source"
+    assert entry["failure_kind"] == "KeyError"

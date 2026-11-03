@@ -22,6 +22,8 @@ type Operation = {
   app_id?: string
   published: boolean
   error_code?: string
+  failed_step?: string
+  failure_kind?: string
 }
 
 /** 没有 `entries[]` 的旧后端：退回"只有管家"的形状，页面照常可用。 */
@@ -39,9 +41,27 @@ function defaultName(tenantName: string, chosen: EntryKey[]) {
  * 一端的状态要分开说四件事：资源准备好了吗、这一端发布了吗、渠道接入了吗、真实用户验过吗。
  * 合成一句"已启用"会让刚开通、还没人接入口的客户看起来已经能用。
  */
+/**
+ * 失败时的定位串：**在哪一步、哪一类异常**。
+ *
+ * 只给通用码（`SETUP_STEP_FAILED`）时，同一句"这一端未完成"对应十几种完全不同的缺陷，
+ * 事后只能靠人在生产上手工复现 —— 而复现动作本身会改变现场。步骤名与异常类名都不是
+ * 上游原文，给页面不泄漏任何内容；确切的栈在 journal 里。
+ */
+function failureDetail(step?: string, kind?: string): string {
+  const where = step ? steps[step] || step : ''
+  if (where && kind) return `${where}出错（${kind}）`
+  if (where) return `${where}出错`
+  return kind ? `出错（${kind}）` : ''
+}
+
 function entrySummary(progress: EntryProgress | undefined): string {
   if (!progress) return '等待中'
-  if (progress.state === 'failed') return messages[progress.error_code || ''] || '这一端未完成'
+  if (progress.state === 'failed') {
+    const generic = messages[progress.error_code || ''] || '这一端未完成'
+    const detail = progress.error_code === 'SETUP_STEP_FAILED' ? failureDetail(progress.failed_step, progress.failure_kind) : ''
+    return detail ? `${generic}：${detail}` : generic
+  }
   if (!progress.app_id) return '等待中'
   if (!progress.published) return progress.draft_only ? '草稿（原正式版继续服务）' : '尚未发布'
   if (progress.channel !== 'connected')
@@ -416,7 +436,12 @@ export default function TenantSetup() {
                 ))}
                 {op.state === 'failed' && (
                   <>
-                    <span>{messages[op.error_code || ''] || '当前步骤未完成'}</span>
+                    <span>
+                      {messages[op.error_code || ''] || '当前步骤未完成'}
+                      {op.error_code === 'SETUP_STEP_FAILED' &&
+                        failureDetail(op.failed_step, op.failure_kind) &&
+                        `：${failureDetail(op.failed_step, op.failure_kind)}`}
+                    </span>
                     <button
                       type="button"
                       className="underline"
