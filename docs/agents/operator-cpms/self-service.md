@@ -26,6 +26,13 @@ max_tokens_to_sample、function_calling_type=tool_call、stream_function_calling
 需要使用正常平台Dify登录，并具有公司aiops:agent:edit和aiops:agent:publish。
 目录为空时应由公司管理员管理账号的客户绑定，不能改用返回全租户的接口放宽范围。
 
+**业务环境地址随部署批准一次，不随租户增行**（ADR-0199）。`AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE`
+指向0600清单（schema `aiops-business-environments/1`，`environments: [{id, base_url, default?}]`），
+格式与写入方式见[业务环境清单](business-environments-catalogue.md)。开通时先取
+`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 里该租户的条目（运维钉死优先），没有再取清单里唯一的
+已批准地址；清单多项而无 `default: true` 时拒绝（`SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS`），
+不按文件顺序挑。清单坏了在启动时失败。不配这个键 ⇒ 行为与只有环境变量时逐字相同。
+
 ## 部署与验证
 
 1. 读取当前交付状态与41手册；备份现役源码/桥/前端镜像/配置及数据库在线副本。

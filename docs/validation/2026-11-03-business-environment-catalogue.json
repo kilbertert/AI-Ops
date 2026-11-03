@@ -1,0 +1,25 @@
+{
+  "cases": {
+    "valid_catalogue_starts": {
+      "status": 200,
+      "health": {
+        "ok": true,
+        "service": "aiops-gateway",
+        "version": "1.0.17",
+        "api_version": "v1",
+        "platform": "linux",
+        "business_mutations": "disabled"
+      }
+    },
+    "invalid_url_refuses_to_start": {
+      "returncode": 1,
+      "mentions_catalogue": true,
+      "tail": [
+        "╰──────────────────────────────────────────────────────────────────────────────╯",
+        "ValueError: business environment catalogue is unusable: remote gateway URL must ",
+        "use HTTPS"
+      ]
+    }
+  },
+  "failures": []
+}
