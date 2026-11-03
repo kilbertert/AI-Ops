@@ -407,3 +407,41 @@ def test_a_pure_question_about_settlement_is_still_allowed():
     """对照组：真正的疑问句必须放行，否则修法退化成「提都不能提」。"""
     for text in ("是否已结算？", "这单结算了吗？", "要不要核对结算状态？"):
         check_status_prose(text)
+
+
+# ───────────────────────────── 2026-11-03：否定必须落在状态词上，不是同句共现
+#
+# 41 上一张单（2116050516255272961）72 次运行里 53 次失败，其中 13 次日志是
+# `unsupported_fact detail=status line=3`。按同一份 manifest 重放 10 次真实模型调用，
+# 4 次被共现判据拦下，拦的全是**如实说明缺证**的句子。提示词明确要求
+# 「监测0条必须明确缺证」，判据却把这句话判成编造状态 —— 两端规格互相打架。
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "我这边暂未取到本次充电的过程样本，暂时无法从过程数据复核计费细节。",
+        "这次查询没有取到充电过程监测样本，暂时缺少逐分钟电量明细，无法替你还原完整充电时间线。",
+        "我无法仅凭现有记录判断费用是否异常，也不能据此断定没有问题。",
+        "本次没有取到充电过程明细，暂时无法逐秒核对计量是否一致。",
+    ],
+)
+def test_an_evidence_gap_sentence_is_not_a_status_rewrite(text):
+    """否定的对象是**样例/明细/判断能力**，不是订单状态。提示词要求写它，判据必须放行。"""
+    check_status_prose(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "订单还没结束。",
+        "该订单目前未结束。",
+        "这个订单一直没充电完成。",
+        "订单尚未完成。",
+        "这笔订单尚未完结，仍在供电。",
+    ],
+)
+def test_a_negation_that_lands_on_the_state_word_is_still_refused(text):
+    """对照组：否定**紧贴**状态词才是改写状态，放宽不能放宽到这里。"""
+    with pytest.raises(ChatRunUnavailable):
+        check_status_prose(text)

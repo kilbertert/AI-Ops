@@ -759,8 +759,16 @@ class OperatorCpms:
                 # `json_parse` 一个码覆盖**四种**完全不同的情形，此前一律记成
                 # 「模型没吐 JSON」，这是过度归因（2026-11-03 复核）。
                 # 只记形态与长度，**不记原文**：回答是用户可见文本，可能带单号与金额。
+                #
+                # `json_syntax` 尤其需要多说一句：它意味着**开头像 JSON 却解析失败**，
+                # 也就是被截断或带尾逗号。2026-11-03 线上 11 次里有 5 次是它，
+                # 而光凭 `json_syntax` 分不出「上游 max_tokens 截断」与「模型自己拼错」。
+                # 记下长度与是否以 `}` 收尾，就能分开这两件事 —— 长度贴着某个上限
+                # 反复出现且没有收尾，是截断；长度散落且收尾完整，是语法错。
                 logging.getLogger("aiops.operator").warning(
-                    "operator_answer_rejected reason=json_parse %s", _json_shape(raw)
+                    "operator_answer_rejected reason=json_parse %s%s",
+                    _json_shape(raw),
+                    _json_truncation_hint(raw),
                 )
                 raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
             from aiops_diagnostics.common.redaction import contains_secret
@@ -1133,6 +1141,21 @@ def _json_shape(raw) -> str:
     from aiops_diagnostics.consumer.consumer_documents import _json_failure_shape
 
     return _json_failure_shape(raw)
+
+
+def _json_truncation_hint(raw) -> str:
+    """`json_syntax` 的两种成因要分得开：被截断，还是自己拼错。
+
+    只加两个**结构**事实（长度、是否以 `}` 收尾），仍然不记原文：
+    截断的形状是「长度贴着一个上限、结尾没有闭合」，语法错的形状是「长度散落、括号配对」。
+    没有这一条，`json_syntax` 会让下一个人重新猜一遍（2026-11-03 实测就是这么发生的）。
+    """
+    from aiops_diagnostics.consumer.consumer_documents import _json_failure_shape
+
+    if not isinstance(raw, str) or _json_failure_shape(raw) != "json_syntax":
+        return ""
+    text = raw.rstrip()
+    return f" len={len(text)} closed={text.endswith('}')}"
 
 
 def _answer_refused(reason, detail=""):
