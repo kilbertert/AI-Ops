@@ -34,12 +34,26 @@ AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE=/etc/aiops-41/business-environments.jso
 | 第 1 次 retry | `failed / SETUP_STEP_FAILED`，但已写入 `business_endpoint`、`plugin`、`models`、`knowledge_base_ids`、`app_id`、`key_ref` | 业务连接这一步已通过；失败在其后的某一步 |
 | 第 2 次 retry | **`ready`，`published=true`，`version_no=1`** | 作业整体 `completed` |
 
-**第 1 次那个 `SETUP_STEP_FAILED` 的定位**：逐步复现后确认它来自 `service_keys.ensure`
-—— 上一轮在"创建 Service 凭据"这一步中断，留下了 `service_key_ops.stage='creating'`
-的持久快照（`app_id=548b8483…`、`before=[]`），而 Dify 上那枚 key 已经建出来了。
-按对账规则，**下一轮**应能认出"恰好新增一枚"；事实是直到第 2 次 retry 才落到
-`_adopt`。两次 retry 之间我未改动任何代码或数据，所以这是一次**可自愈但要多跑一轮**的
-形状，不是修复引入的新缺陷。它的代价是：页面上第一次重试仍显示"这一端未完成"。
+**第 1 次那个 `SETUP_STEP_FAILED`：归因未定，本记录不宣称根因。**
+
+已确证的只有三条：
+
+1. 该端资源的持久字段在**第 1 次 retry 内**就写齐了（`business_endpoint`、`plugin`、
+   `models`、`knowledge_base_ids`、`app_id`、`key_ref`），所以失败发生在 `consumer:key`
+   之后的 `consumer:register` / `consumer:publish` 之间。
+2. Dify 上该应用**只有一枚** service key，创建时间 `2026-11-03T17:54:29Z`；key 文件
+   `548b8483….key` 的 mtime 是 `2026-11-04T02:00:55+08:00`（同一时刻）。两枚时代不同
+   意味着文件不是由"第一次 retry 自己建出的那枚"写入的 —— 它由第一次 retry 之后、
+   第二次 retry 之前的一次独立操作写入。
+3. 那次独立操作是**我做的**：为定位失败点，我在 41 上用服务身份单独调过一次
+   `service_keys.ensure`（返回同一路径）。它自己就完成了 `_adopt`。
+
+所以「第一次 retry 因为 `service_key_ops` 快照要等下一轮才对账」这个说法**没有证据**，
+而且与 `service_keys.ensure` 的代码不符：`before=[]` 且列表恰好多出 1 枚时，同一轮就
+`_adopt`。**第一次 retry 的真实失败点仍未知**，`SETUP_STEP_FAILED` 也没留下栈。
+
+这也说明本片要修的那个可见性缺口是真的：一次失败在生产上**无法在事后**定位，
+只能靠人手工复现，而复现动作本身会改变现场。
 
 ## 三、结果回读（库 + 接口）
 
@@ -60,6 +74,6 @@ AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE=/etc/aiops-41/business-environments.jso
   渠道声明仍为空，页面按 `pending` 显示，这是有意的（没有渠道就没有"已接入"）。
 - **管家草稿切正式**：需要在页面上显式"发布到管家"，是一次切流量动作，本轮未做。
 - **失败原因不可见**：`SETUP_STEP_FAILED` 是 `_error_code()` 对非受控异常的兜底，
-  页面只显示通用码，journal 里也没有栈（那是预期内的：`self_service.py` 捕获后不记栈）。
-  定位靠的是在 41 上用服务身份逐步复现。若要让它可自助排查，需要给这一步单独的业务码
-  —— 那是另一处行为变更，不在本片范围。
+  页面只显示通用码，journal 里也没有栈（`self_service.py` 捕获后不记栈）。
+  第二轮那次的真实失败点因此**至今未知**（见第二节第 1 次 retry 一节）。
+  可见性修复见 PR #1331。
