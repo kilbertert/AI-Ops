@@ -326,7 +326,7 @@ finally:
 2. 租户主账号沿用既有all规则；普通/代理商账号的空站点范围不能用于成功取数正例。
    再查 `_operator_site_scope(Settings.from_config(...)).site_scope_by_b_user_id(...)`
    区分“权威目录明确空集合”和目录错误；不能把空集合改成all。
-3. 原首页“智能检测”→聊天页“订单检测”→原订单选择器→发送，记录本次POST响应。
+3. 直接打开聊天页 `/aiPackage/pages/chat/chat`（2026-11-03 起首页不再有入口）→“订单检测”→原订单选择器→发送，记录本次POST响应。
    成功需要202、QA completed、唯一Java run succeeded/matched、双工具及原页面完整报告。
    单纯模型冒烟、订单列表200或路由active不能替代这些条件。
 4. 若列表有订单而诊断空范围403，分别记录公司列表、UPMS店铺集合和站点归属；

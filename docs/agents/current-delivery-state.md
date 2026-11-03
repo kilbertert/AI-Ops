@@ -1,5 +1,12 @@
 # 当前交付状态索引
 
+## 管家 H5 首页「智能检测」入口已撤回并部署（2026-11-03）
+
+入口按钮是我们加的（公司 MR !145），聊天页本身是公司 2026-09-30 引入的。公司 MR **!146** 只删首页那一行，
+合并 `bb552982` → 干净构建 594 文件 → 41 上 `ulinkmanage-h5-bb552982` 安装，旧根保留。
+真实登录验收：首页无「智能检测」，聊天页**有 URL 仍可直达**并完成一次 `completed`（`operator` 绑定 rev 17）。
+详见[部署与验收回执](../validation/2026-11-03-operator-h5-entry-withdrawal.md)。
+
 ## 消费者端四项验收全部通过（2026-11-02）
 
 账单轮此前稳定失败（`CHATFLOW_FACT_UNKNOWN / required evidence segment missing`，2/2），
