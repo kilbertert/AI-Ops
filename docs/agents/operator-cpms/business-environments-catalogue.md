@@ -24,3 +24,28 @@ AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE=/etc/aiops-41/business-environments.jso
 #     {"id": "cpms-41", "base_url": "https://<当前 AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL 的地址>"}
 #   ]
 # }
+
+## 启用步骤（41）
+
+1. 写清单（产物门，内容取自已批准端点，不在文档里写明文值）：
+
+```bash
+printf '%s' '{"schema":"aiops-business-environments/1","environments":[
+  {"id":"cpms-41","base_url":"<与 AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL 同一地址>"}]}' \
+  | dev-host write 41 /etc/aiops-41/business-environments.json \
+      --artifact-sha256 <新文件 sha256>
+```
+
+2. 在 `/etc/aiops-41/gateway.env` 追加一行（同样按产物门写，带 `--if-sha256`）：
+
+```dotenv
+AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE=/etc/aiops-41/business-environments.json
+```
+
+3. 只 `systemctl restart aiops-gateway-41`；`/health` 回读版本与启动成功即生效。
+   启动失败说明清单不可用（权限不是 0600、schema 不对、URL 非法），按错误信息修清单，
+   不要先用空键启动再补。
+
+4. 开通验证：对目标租户重新点「复制并开通」，客户端这一端应不再出现
+   `SETUP_BUSINESS_CONNECTION_REQUIRED`；回读 `consumer_endpoints` 应有
+   `(目标租户, production-41, 该地址)` 一行。
