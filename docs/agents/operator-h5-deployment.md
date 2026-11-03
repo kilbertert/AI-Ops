@@ -2,6 +2,11 @@
 
 适用于已合并的公司管家 H5 与本仓窄代理。方法为本轮退役验收补齐，目录迁移仍等待真实页面通过。
 
+> **2026-11-03 起线上是 `ulinkmanage-h5-bb552982`**：撤回首页「智能检测」入口后的合并修订
+> （公司 MR !146）。vhost 静态根已切到该目录，旧根 `ulinkmanage-h5-5121d9f8` 保留、
+> 备份在 41 的 `/root/h5-backup-bb552982`。回执见
+> [撤回验收](../validation/2026-11-03-operator-h5-entry-withdrawal.md)。
+
 ## 制品准备
 
 1. 读公司仓 `docs/operator-h5/HANDOFF.md`，核干净 checkout、实际目标分支和当前远端修订。
