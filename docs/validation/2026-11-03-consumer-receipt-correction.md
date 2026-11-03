@@ -39,9 +39,9 @@
 
 ## 3. 「保存 ≠ 恢复」
 
-- `gateway_api.py:2063` `/v1/dify/publish` 的 docstring 明写：Dify **没有草稿区**，
-  `export_dsl` 读的是当前 `app.app_model_config_id` —— 也就是"保存"覆盖的那个指针。
-  所以控制台保存确实会改变**下一次导出**的内容，但它不改变已冻结的发布快照本身。
+- Dify agent-chat 的模型配置导出读取当前保存内容；消费者 Chatflow 另有草稿与已发布
+  workflow。不能将前者的描述推广成「Dify 没有草稿区」。保存影响候选内容，
+  不改变网关已经冻结的发布快照。
 - 正式入口用的是 `chat_route_bindings` 里冻结的 `workflow_id` / `agent_version_no`
   （`consumer_chat_service.py:140` 把 `binding.workflow_id` 带进运行），
   不读控制台当前内容。⇒ 保存之后必须再走一次发布（或受管恢复）才改变线上行为。
