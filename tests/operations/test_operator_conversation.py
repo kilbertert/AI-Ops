@@ -1044,3 +1044,62 @@ def test_the_node_failure_reason_is_no_longer_collapsed(operator, monkeypatch, c
         )
         terminal(f, posted.json()["qa_id"])
     assert "operator_node_reported_failure reason=model_failed" in caplog.text
+
+
+def test_a_rejection_after_evidence_is_still_redispatched(operator, monkeypatch, caplog):
+    """**已经取完证据**才被拒的 run 也必须重派 —— 那是生产上最常见的一种。
+
+    2026-11-03 部署后实测：第一版要求「一次工具都没领过」，于是工具轮先跑完、
+    模型最后一轮才吐错的 run 全都不重派。判据写错了方向。
+
+    重派安全的原因写在 `_untouched` 的注释里：证据有缓存（`grant` 里
+    `if tool in task.evidence: return …`），重派复用同一份证据，不会二次请求 CPMS。
+    """
+    import logging
+
+    from aiops_diagnostics.execution.agent_runs import AgentRunDispatchError
+
+    f = operator
+    attempts = {"n": 0}
+
+    def dispatch(self, config, run_id):
+        attempts["n"] += 1
+        headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
+        publication = f["client"].post(
+            "/v1/internal/charging-status/execution-config/" + run_id, headers=headers
+        )
+        headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+        # 先领一次订单工具授权并上报证据，再回一段纯文本 —— 这就是生产上最常见那种 run：
+        # 工具轮先跑完，模型最后一轮才吐错。此时 `task.evidence` 非空，
+        # 旧判据（`not task.evidence`）会拒绝重派，而它正是最该重派的一种。
+        tools = operator_cpms.TOOL_NAMES
+        tool = tools[0]
+        response = f["client"].post(
+            f"/v1/internal/operator-runs/{run_id}/tools/{tool}/authorization",
+            headers={**headers, "X-AI-Ops-Tool-Contract": operator_cpms.TOOL_CONTRACT},
+            json={"arguments": {}},
+        )
+        assert response.status_code == 200, f"GRANT_FAILED {response.status_code} {response.text}"
+        grant = response.json()
+        got = f["client"].get(
+            grant["base_url"] + grant["request"]["path"],
+            headers={"Authorization": "Bearer " + grant["bearer"]},
+        )
+        assert got.status_code == 200, f"CPMS_FAILED {got.status_code} {got.text}"
+        f["client"].post(
+            f"/v1/internal/operator-runs/{run_id}/completions",
+            headers=headers,
+            json={"status": "completed", "answer": "我帮你核对了本次记录，建议对照原账单。"},
+        )
+        raise AgentRunDispatchError("agent platform refused the completion")
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    with caplog.at_level(logging.WARNING, logger="aiops.operator"):
+        posted = f["client"].post(
+            "/v1/assistant/questions",
+            headers=HEADERS,
+            json={"question": "帮我分析这笔单的电费 ORDER-1001"},
+        )
+        terminal(f, posted.json()["qa_id"])
+    assert attempts["n"] == 1 + operator_cpms.MAX_RESAMPLES, "取过证据后再被拒，仍应重派一次"
+    assert "operator_resample" in caplog.text
