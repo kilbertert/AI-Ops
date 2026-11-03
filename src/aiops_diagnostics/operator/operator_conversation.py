@@ -23,6 +23,39 @@ EXECUTED_MUTATION = re.compile(
 )
 
 
+def _mentions_a_site_name(text):
+    """说明里是否出现了**像某个地方的名字**的站名片段。
+
+    判据只有两步，都不依赖站名清单：
+
+    1. 站名后缀后面紧跟类别尾巴（`站点名称`），且尾巴**前面没有任何实字** —— 那是在说
+       类别（`可以告诉我站点名称`），放行；前面有实字（`虚构乙站点名称`）就是在起名字。
+    2. 否则剥掉功能词，剩下的实字 ≥2 个 —— 那是一个名字（`虚构乙站`、`天河测试站`）。
+
+    已知边界：这是一条**启发式**，不是封闭词表。它比"整词替换"严格得多（后者在字符层
+    根本分不开 `站点名称` 与 `虚构乙站点名称`），但仍可能被刻意构造的措辞绕过。站名的
+    硬保证始终是"名单由系统列出"，这条只负责挡掉自然写出来的名字。
+    """
+    for match in SITE_NAME_HEAD.finditer(text):
+        head = match.group(1)
+        rest = text[match.end() :]
+        core = _concrete_chars(head)
+        if rest.startswith(GENERIC_TAILS):
+            if core:
+                return True
+            continue
+        if core >= 2:
+            return True
+    return False
+
+
+def _concrete_chars(head):
+    """剥掉功能词后还剩几个汉字。"""
+    for word in GENERIC_STOPWORDS:
+        head = head.replace(word, "")
+    return sum(1 for char in head if "\u4e00" <= char <= "\u9fff")
+
+
 def claims_mutation(text):
     return any(
         not re.search(r"(?:不能|没有|不会|未)(?:直接)?$", text[max(0, match.start() - 8) : match.start()])
@@ -59,24 +92,57 @@ SITE_NAME_SHAPE = re.compile(
     r"[A-Z][A-Za-z0-9\-]{1,20}\s+(?:station|site)s?\b",
 )
 
-#: **通用名词短语**：说的是类别，不是给某个地方起名。整条词一起中性化再判站名形状。
-#: 必须是完整词（`站点名称` 含「点」），否则 `虚构乙站详情` 里的「站详情」会被误吞。
-#: 2026-11-02 真实回放 18 次里 3 次拒收全部是这个词形状（`可以告诉我站点名称`）。
-GENERIC_SITE_WORDS = (
-    "充电站名称",
-    "充电桩名称",
-    "站点名称",
-    "站点详情",
-    "站点列表",
-    "站点信息",
-    "站点位置",
-    "站点数量",
-    "站点标签",
-    "站点范围",
-    "站点目录",
-    "站点内容",
-    "站名",
+#: 类别尾巴。**判定的是位置，不是词**：`站点名称` 与 `虚构乙站点名称` 在字符层无法
+#: 区分 —— 整词替换必然吞掉站名的末字（2026-11-03 复核：`虚构乙站点详情` /
+#: `虚构乙充电站名称` 被放行，虚构文字进了用户正文）。
+GENERIC_TAILS = ("名称", "详情", "列表", "信息", "位置", "数量", "标签", "范围", "目录", "内容", "名")
+
+#: 「这段在说类别」时出现的功能词。剥掉它们之后还剩**实字**，才可能是某个地方的名字。
+#: 这是启发式而非判据：它的作用是把「查到的站点」「可以告诉我站点名称」这类说法与
+#: 「虚构乙站」分开；真正的硬边界仍是「站名只能由系统列出，不在这里放行」。
+GENERIC_STOPWORDS = (
+    "找到了",
+    "可以",
+    "告诉我",
+    "如需",
+    "查看",
+    "核对",
+    "选择",
+    "当前",
+    "账号",
+    "可见",
+    "下方",
+    "也可以",
+    "某个",
+    "具体",
+    "地点",
+    "结果",
+    "筛选",
+    "条件",
+    "范围",
+    "关键词",
+    "城市",
+    "已经",
+    "按",
+    "或",
+    "和",
+    "再",
+    "也",
+    "就",
+    "都",
+    "还",
+    "在",
+    "的",
+    "我",
+    "你",
+    "您",
+    "请",
+    "对",
+    "下",
 )
+
+#: 逐个站名形状的**前缀**（`[\u4e00-\u9fff]{2,8}` 那部分），用于判断它是不是名字。
+SITE_NAME_HEAD = re.compile(r"([\u4e00-\u9fff]{2,8})(?<!的)(?:充电站|站点|站|充电桩|桩)")
 
 #: 找站说明可以填的事实片段。键是协议的一部分，与 :func:`site_facts` 同源。
 SITE_FACTS = ("site_count", "site_roster", "source", "observed_at", "limits")
@@ -234,13 +300,10 @@ def validate_site_note(text):
     if {name for name in SITE_SLOT.findall(text)} - set(SITE_FACTS):
         _answer_refused("note_slot")
     generic = re.sub(r"(?:目标|具体|某|该|这些|匹配的)站(?:点)?", "结果", own)
-    # 通用名词短语**整条**中性化：它在说类别，不在给某个地方起名。逐个字跳过会放行
-    # `虚构乙站详情`（复审反例 `虚构乙站` + 通用尾巴），所以只认完整词。
-    for phrase in GENERIC_SITE_WORDS:
-        generic = generic.replace(phrase, "结果")
     if SITE_FORBIDDEN.search(own):
         _answer_refused("note_fact")
-    if SITE_NAME_SHAPE.search(generic):
+    # 不再是"整词替换"：那样会把站名的末字一起吃掉。改成逐个形状判断**这一段是不是名字**。
+    if _mentions_a_site_name(generic):
         _answer_refused("note_site_name")
     if claims_mutation(own):
         _answer_refused("note_mutation")
