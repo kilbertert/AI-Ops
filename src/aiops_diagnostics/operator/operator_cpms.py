@@ -759,8 +759,16 @@ class OperatorCpms:
                 # `json_parse` 一个码覆盖**四种**完全不同的情形，此前一律记成
                 # 「模型没吐 JSON」，这是过度归因（2026-11-03 复核）。
                 # 只记形态与长度，**不记原文**：回答是用户可见文本，可能带单号与金额。
+                #
+                # `json_syntax` 尤其需要多说一句：它意味着**开头像 JSON 却解析失败**，
+                # 也就是被截断或带尾逗号。2026-11-03 线上 11 次里有 5 次是它，
+                # 而光凭 `json_syntax` 分不出「上游 max_tokens 截断」与「模型自己拼错」。
+                # 记下长度与是否以 `}` 收尾，就能分开这两件事 —— 长度贴着某个上限
+                # 反复出现且没有收尾，是截断；长度散落且收尾完整，是语法错。
                 logging.getLogger("aiops.operator").warning(
-                    "operator_answer_rejected reason=json_parse %s", _json_shape(raw)
+                    "operator_answer_rejected reason=json_parse %s%s",
+                    _json_shape(raw),
+                    _json_truncation_hint(raw),
                 )
                 raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
             from aiops_diagnostics.common.redaction import contains_secret
@@ -1133,6 +1141,39 @@ def _json_shape(raw) -> str:
     from aiops_diagnostics.consumer.consumer_documents import _json_failure_shape
 
     return _json_failure_shape(raw)
+
+
+def _json_truncation_hint(raw) -> str:
+    """`json_syntax` 的两种成因要分得开：被截断，还是自己拼错。
+
+    ``closed=`` 只看末尾字符是不够的：截断恰好落在字符串里的 ``}`` 上也会得到 True，
+    而尾逗号语法错得到 False —— 单凭它判不了成因（2026-11-03 复审指出）。
+    所以再给一个**括号配对**事实：``depth=`` 是去掉字符串内容后从头累计的括号差，
+    ``depth>0`` 才说明结构没闭合（截断）；``depth=0`` 而解析失败才是语法错。
+    两个数字都不含原文，只是结构。
+    """
+    from aiops_diagnostics.consumer.consumer_documents import _json_failure_shape
+
+    if not isinstance(raw, str) or _json_failure_shape(raw) != "json_syntax":
+        return ""
+    text = raw.rstrip()
+    depth, quoted, escaped = 0, False, False
+    for ch in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                quoted = False
+            continue
+        if ch == '"':
+            quoted = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+    return f" len={len(text)} closed={text.endswith('}')} depth={depth} in_string={quoted}"
 
 
 def _answer_refused(reason, detail=""):
