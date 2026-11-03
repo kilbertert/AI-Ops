@@ -1219,17 +1219,62 @@ def parse_answer(raw):
 
     这里只剥**一层**围栏且围栏内必须恰好一个 JSON 对象；散文、多份 JSON、残缺块
     仍然拒绝 —— 放宽的是供应商的装饰，不是输出的契约。
+
+    第三处装饰是**对象后面多出来的字符**（2026-11-03 实测）：模型偶尔把整个 JSON
+    多包一层引号，末尾变成 `…"}"`。`{"…"}"`、`{"…"}` + 一个 `"`、或者闭合后多一个
+    `}`，都只差最后一个字符，而整轮诊断因此失败。这里按 `_object_end` 扫出的**第一个
+    完整对象**重解析，并且只在这一段之后的残余是**空白或零散引号/逗号**时才接受 ——
+    两个对象叠在一起仍然拒绝，因为挑哪一个都没有依据。
     """
+    if not isinstance(raw, str):
+        raise ValueError("invalid answer")
     try:
         return json.loads(raw)
     except ValueError as bare:
         fenced = _FENCED_ANSWER.match(raw.strip())
-        if fenced is None:
-            raise
-        try:
-            return json.loads(fenced.group("body"))
-        except ValueError:
-            raise bare from None
+        if fenced is not None:
+            try:
+                return json.loads(fenced.group("body"))
+            except ValueError:
+                # 围栏里也可能带同样的尾部装饰 —— 走同一套宽容，否则
+                # 「裸对象加引号能过、围栏里加引号过不了」就是一处没道理的差异。
+                salvaged = _one_object(fenced.group("body"))
+                if salvaged is not None:
+                    return salvaged
+        salvaged = _one_object(raw.strip())
+        if salvaged is not None:
+            return salvaged
+        raise bare from None
+
+
+#: 对象之后允许出现的**装饰**字符。**不含 `{`**（2026-11-03 复审指出）：
+#: `{"a":1}{}` 的残余也是「合法」的大括号，而它其实是一个**第二个对象**；
+#: 把它当装饰就等于把双对象交付悄悄放行。只有右边的 `}` 是装饰。
+_TRAILING_DECORATION = frozenset('"},　 \t\r\n')
+
+#: 与上面同一集合的作用说明已在 `_one_object` 里；这里保留常量名可读性。
+
+
+def _one_object(text: str):
+    """`text` 是不是**一个完整对象 + 纯装饰**？是则返回解析结果，否则 `None`。
+
+    判据的要点是「残余里不能再出现一个对象的开头」：`_object_end` 只找第一个对象的
+    结尾，所以必须显式排除 `{`。两段空白之间的换行（`",\\n"`）要放行 ——
+    只 `strip` 两端会把夹在装饰中间的空白一并算成非法。
+    """
+    if not isinstance(text, str) or not text.startswith("{"):
+        return None
+    from aiops_diagnostics.consumer.consumer_documents import _object_end
+
+    end = _object_end(text)
+    if end is None:
+        return None
+    if not set(text[end:]) <= _TRAILING_DECORATION:
+        return None
+    try:
+        return json.loads(text[:end])
+    except ValueError:
+        return None
 
 
 def _json_shape(raw) -> str:
