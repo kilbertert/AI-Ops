@@ -80,14 +80,14 @@ def _unavailable(_):
     return RuntimeError("model upstream unavailable")
 
 
-def structured_request(*, provider, api_key, messages, name, schema):
+def structured_request(*, provider, api_key, messages, name, schema, max_output_tokens=1024):
     schema = {"name": name, "schema": schema, "strict": True}
     if provider.wire_api == "responses":
         path = "/responses"
         payload = {
             "model": provider.model,
             "input": messages,
-            "max_output_tokens": 1024,
+            "max_output_tokens": max_output_tokens,
             "text": {"format": {"type": "json_schema", **schema}},
             "stream": False,
             "store": False,
@@ -97,7 +97,7 @@ def structured_request(*, provider, api_key, messages, name, schema):
         payload = {
             "model": provider.model,
             "messages": messages,
-            "max_tokens": 1024,
+            "max_tokens": max_output_tokens,
             "response_format": {"type": "json_schema", "json_schema": schema},
             "stream": False,
         }
