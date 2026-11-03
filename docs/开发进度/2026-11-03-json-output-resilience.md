@@ -46,6 +46,7 @@
   测试永远看不到真正发出去的内容。已改成读实例，注释留在测试里。
 - 全量 **3995 passed / 9 skipped**（基线 3987，新增 8 条断言）。
 - 镜像内容锁按 `local-gateway-build.md` 真实重建，`context_digest.py --check` 一致。
+- `verify-aiops-gateway` 一次性数据根八项检查全过；不覆盖远端模型与节点回调。
 
 ## 里程碑信息
 

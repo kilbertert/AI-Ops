@@ -977,27 +977,32 @@ def test_the_node_question_carries_the_json_only_reminder(operator, monkeypatch)
 def test_a_non_json_answer_is_redispatched_at_most_once(operator, monkeypatch, caplog):
     """上游失约 → 重派一次；**再失约就按失败交付**，不无限重试。
 
-    重派只能发生在「这一轮一次工具都没领过」的时候：那时模型还什么都没做，
-    重派不会重复取证，也不会跟节点正在跑的旧轮次交错。
+    **假派发必须照抄生产的行为**：节点拒绝回执后，平台那次调用是**失败**的，
+    `SnailDispatcher` 把它映射成 `AgentRunDispatchError` 抛出来 —— 拒绝是以**异常**
+    回来的，不是以状态回来的（2026-11-03 复审指出第一版测试没模拟这一点，
+    于是它测的是一条生产上永远不会走到的路径）。
     """
     import logging
+
+    from aiops_diagnostics.execution.agent_runs import AgentRunDispatchError
 
     f = operator
     attempts = {"n": 0}
 
-    def dispatch(_, config, run_id):
+    def dispatch(self, config, run_id):
         attempts["n"] += 1
         headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
         publication = f["client"].post(
             "/v1/internal/charging-status/execution-config/" + run_id, headers=headers
         )
         headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
-        # 每一次都回一段**纯文本**，上游持续失约。
+        # 每一次都回一段**纯文本**，网关会拒；平台因此判定这次调用失败。
         f["client"].post(
             f"/v1/internal/operator-runs/{run_id}/completions",
             headers=headers,
             json={"status": "completed", "answer": "我帮你核对了本次记录，建议对照原账单。"},
         )
+        raise AgentRunDispatchError("agent platform unavailable")
 
     monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
     with caplog.at_level(logging.WARNING, logger="aiops.operator"):

@@ -38,6 +38,23 @@
    网关此前整个丢掉。额度耗尽那次（403 `insufficient_user_quota`）就是因此
    与「模型写错 JSON」完全同形。
 
+## 三之二、复审订正（同一 PR 内）
+
+第一版有三处真缺陷，全部在复审中指出并按实测修掉：
+
+1. **重采样在生产路径上根本不会执行**（最严重）。拒绝是**以异常回来的**：网关回 4xx/409
+   → 平台那次调用失败 → `SnailDispatcher` 映射成 `AgentRunDispatchError` 抛出 → 直接进
+   外层 except，永远走不到状态判断。第一版测试的假派发正常返回，掩盖了这一点。
+   现在先接住 `AgentRunDispatchError` 再判能否重派；测试的假派发也照抄生产行为
+   （先调完成端点、再抛 dispatch 错误）。已做变异验证：去掉修复后该测试变红。
+2. **站点查询重试会带着旧参数**。`grant` 在取证据**之前**就把模型提议的关键词记进
+   `task.arguments`，所以「没证据」不等于「没做过事」。重试换了关键词会撞
+   `OPERATOR_TOOL_ARGUMENTS_CHANGED`，把一次本来能成功的查询搞死。
+   判据补上 `not task.arguments`。
+3. **没回调的派发被误报成模型失约**。`OPERATOR_MODEL_OUTPUT_UNSTABLE` 现在只在
+   「派发成功、回调走完、run 仍没被推进」时出现 —— 那才是答案被拒。
+   派发本身失败时直接抛出，不冒充模型问题。
+
 ## 四、验证
 
 - 新增 3 条：提醒真的到达实例的 `question`；纯文本答案最多重派
@@ -46,6 +63,10 @@
   测试永远看不到真正发出去的内容。已改成读实例，注释留在测试里。
 - 全量 **3995 passed / 9 skipped**（基线 3987，新增 8 条断言）。
 - 镜像内容锁按 `local-gateway-build.md` 真实重建，`context_digest.py --check` 一致。
+- **`verify-aiops-gateway` 独立证据**：一次性数据根启动真实 Gateway，八项检查全过
+  （`/health` 只读、问答与管理接口匿名 401、公开 OpenAPI 200、四个退役端点 404），
+  证据在 `dist/verification/gateway/aiops-gateway.json`。
+  它**不能**验证远端模型行为、节点回调或真实业务准确率 —— 那些要靠部署后的复测。
 
 ## 五、边界
 

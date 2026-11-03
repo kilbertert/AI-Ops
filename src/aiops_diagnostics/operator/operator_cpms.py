@@ -17,7 +17,11 @@ from urllib.parse import urlencode
 from aiops_diagnostics.common.async_job_lifecycle import QUESTION
 from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, request_json
 from aiops_diagnostics.execution import chat_execution, execution_manifest
-from aiops_diagnostics.execution.agent_runs import AgentRunConfig, SnailDispatcher
+from aiops_diagnostics.execution.agent_runs import (
+    AgentRunConfig,
+    AgentRunDispatchError,
+    SnailDispatcher,
+)
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
 from aiops_diagnostics.operator import operator_conversation, operator_tools, site_note_review
@@ -880,6 +884,27 @@ class OperatorCpms:
                 raise OperatorRefused("OPERATOR_COMPLETE_REJECTED")
             return {"run_id": run_id, "state": completed.state}
 
+    def _untouched(self, run_id, task) -> bool:
+        """这一轮**什么都还没做过**，重派才是安全的。
+
+        三个条件缺一不可，每一个都对应一次复审指出的真实后果：
+
+        * run 仍是 ``issued``/``running`` —— 没被推进说明答案被拒了（或压根没回调）；
+        * 没有工具证据 —— 已经取过数据再重派，会绕开「同一份证据」的不变量；
+        * **没有已放行的工具参数** —— 2026-11-03 复审指出：站点查询的授权会在取证据**之前**
+          就把模型提议的关键词记进 ``task.arguments``（``grant`` 里的 ``setdefault``）。
+          此时 ``evidence``/``delivered`` 都还是空，重派若换了关键词就会撞上
+          ``OPERATOR_TOOL_ARGUMENTS_CHANGED`` —— 一次本来能成功的查询被重试搞死。
+        """
+        run = self.context.agent_run_store.get(run_id)
+        return (
+            run is not None
+            and run.state in {"issued", "running"}
+            and not task.evidence
+            and not task.delivered
+            and not task.arguments
+        )
+
     def _worker(self, run_id, qa_id, config):
         store = self.context.store
         try:
@@ -916,23 +941,32 @@ class OperatorCpms:
             # 失败，节点收到非成功回执后**不重试**（`ReportingChatSessionRuntime.reportCompleted`
             # 返回 false 即终局），模型不会再答一次。所以「再答一次」= 重新派发一次完整对话。
             #
-            # 用 `run.agent_id` 作哨兵：只有这一轮**一次工具都没领过**才重派。这时模型还什么都没做，
-            # 重派不会重复取证，也不会与节点正在跑的旧轮次交错。task.evidence 非空则说明
-            # 已经取过证据，重派会绕开「同一份证据」的不变量 —— 那种情况直接按失败交付。
+            # **拒绝是以异常形式回来的，不是以状态形式回来的**（2026-11-03 复审指出）。
+            # 网关回 4xx/409 给平台 → 平台那次调用失败 → `SnailDispatcher` 把它映射成
+            # `AgentRunDispatchError` 抛出来。所以「回调被拒」根本走不到下面那行状态判断，
+            # 会直接掉进外层 except。必须在这里先接住。
             while True:
-                dispatcher.dispatch(config, run_id)
-                run = self.context.agent_run_store.get(run_id)
-                untouched = run is not None and run.state in {"issued", "running"}
-                if untouched and not task.evidence and not task.delivered:
-                    # 节点回调没把 run 推进（`_complete` 拒绝了答案），且这一轮没领过工具。
+                try:
+                    dispatcher.dispatch(config, run_id)
+                except AgentRunDispatchError:
+                    if not self._untouched(run_id, task):
+                        raise
+                    if task.resamples >= MAX_RESAMPLES:
+                        raise
                     task.resamples += 1
-                    if task.resamples > MAX_RESAMPLES:
-                        raise OperatorRefused("OPERATOR_RESULT_UNSTABLE")
                     logging.getLogger("aiops.operator").warning(
-                        "operator_resample attempt=%d reason=no_answer_accepted", task.resamples
+                        "operator_resample attempt=%d reason=dispatch_refused", task.resamples
                     )
                     continue
-                break
+                if not self._untouched(run_id, task):
+                    break
+                # 派发本身成功、回调也走完了，但 run 没被推进 —— 说明 `_complete` 拒了答案。
+                if task.resamples >= MAX_RESAMPLES:
+                    raise OperatorRefused("OPERATOR_MODEL_OUTPUT_UNSTABLE")
+                task.resamples += 1
+                logging.getLogger("aiops.operator").warning(
+                    "operator_resample attempt=%d reason=no_answer_accepted", task.resamples
+                )
             task = self.tasks[run_id]
             current = task.authorize()
             result = self.authorize_readback(current, qa_id, task.bearer)
