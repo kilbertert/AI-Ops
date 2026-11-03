@@ -279,3 +279,54 @@ def test_a_settlement_claim_is_refused_because_we_have_no_such_evidence():
     for claim in ("这单尚未结算。", "该订单已经结算完成。", "结算状态是已结算。"):
         with pytest.raises(OperatorRefused):
             _validate_reply_facts("我帮你核对了本次记录。\n{{fact:order_facts}}\n" + claim)
+
+
+# ───────────────────────────────────────── 2026-11-03：两个错误码要有区分度
+#
+# 线上各出现 3 次，但一个码覆盖多种情形，日志里分不开 ⇒ 下一跳只能靠猜。
+# 下面断言的是**日志能分辨原因**，判决不变（仍然拒绝）。
+
+
+def test_evidence_missing_says_which_of_the_four_cases_it_is(caplog):
+    """`OPERATOR_EVIDENCE_MISSING` 有四个触发点，必须写清是哪一个。
+
+    2026-11-03 线上这个码出现 3 次，日志只有码本身，无法判断是
+    「没取到数」「取到了但模型没引」「引了不存在的工具」还是别处。
+    """
+    import logging
+
+    from aiops_diagnostics.operator.operator_conversation import OperatorRefused
+    from aiops_diagnostics.operator.operator_cpms import TOOL_NAMES, validate_answer
+
+    base = {
+        "direct_answer": "d",
+        "summary": "s",
+        "probable_cause": "p",
+        "next_steps": ["a"],
+        "limitations": ["b"],
+    }
+    cases = [
+        ({}, [TOOL_NAMES[0]], "not_read"),  # 根本没取到
+        ({TOOL_NAMES[0]: {"data": {}}}, [], "not_cited"),  # 取到了但没引
+        ({TOOL_NAMES[0]: {"data": {}}}, [TOOL_NAMES[0], "cpms_made_up"], "unknown_tool"),
+    ]
+    for evidence, cited, expected in cases:
+        with caplog.at_level(logging.WARNING, logger="aiops.operator"), pytest.raises(OperatorRefused):
+            validate_answer({**base, "evidence_tools": cited}, evidence)
+        assert f"detail={expected}" in caplog.text, (expected, caplog.text)
+        caplog.clear()
+
+
+def test_json_parse_says_the_shape_not_just_that_it_failed():
+    """`json_parse` 不等于「模型没吐 JSON」——空、围栏、截断、纯文本成因完全不同。
+
+    只记码时，2026-11-03 那 1 次无法判断是空回答、被围栏包住，还是 JSON 截断。
+    """
+    from aiops_diagnostics.operator.operator_cpms import _json_shape
+
+    assert _json_shape("") == "empty"
+    assert _json_shape("```json\n{}\n```") == "fenced"
+    assert _json_shape('{"a": 1') == "json_syntax"  # 截断
+    assert _json_shape("我先说明一下").startswith("plain_text:")
+    # 只描述形态，不泄露原文。
+    assert "我先说明一下" not in _json_shape("我先说明一下")
