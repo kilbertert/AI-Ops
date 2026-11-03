@@ -750,7 +750,12 @@ class OperatorCpms:
                     raise ValueError("invalid answer")
                 answer = parse_answer(raw)
             except ValueError as exc:
-                logging.getLogger("aiops.operator").warning("operator_answer_rejected reason=json_parse")
+                # `json_parse` 一个码覆盖**四种**完全不同的情形，此前一律记成
+                # 「模型没吐 JSON」，这是过度归因（2026-11-03 复核）。
+                # 只记形态与长度，**不记原文**：回答是用户可见文本，可能带单号与金额。
+                logging.getLogger("aiops.operator").warning(
+                    "operator_answer_rejected reason=json_parse %s", _json_shape(raw)
+                )
                 raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
             from aiops_diagnostics.common.redaction import contains_secret
 
@@ -1089,6 +1094,17 @@ def parse_answer(raw):
             raise bare from None
 
 
+def _json_shape(raw) -> str:
+    """回答为什么不是 JSON —— **复用** `consumer_documents._json_failure_shape`。
+
+    不另写一份：那份已经解决了同一个问题（描述形态、不泄露原文），
+    而且它自己的注释就写着这个缺口是 2026-11-01 订单链路发现的。
+    """
+    from aiops_diagnostics.consumer.consumer_documents import _json_failure_shape
+
+    return _json_failure_shape(raw)
+
+
 def _answer_refused(reason, detail=""):
     """拒绝一次回答，并尽量记下**哪条规则**被触发。
 
@@ -1131,6 +1147,19 @@ def validate_answer(answer, evidence):
         or TOOL_NAMES[0] not in answer["evidence_tools"]
         or not set(answer["evidence_tools"]).issubset(evidence)
     ):
+        # 同一个码覆盖**四种**完全不同的情形，日志里必须分得开 —— 否则下一跳只能猜
+        # （2026-11-03 线上 3 次这个码，无法归因）。区分的是原因，不是判决：
+        # 四种都仍然拒绝，只是写清是哪一种。
+        if TOOL_NAMES[0] not in evidence:
+            detail = "detail=not_read"  # 订单详情这一轮根本没取到
+        elif TOOL_NAMES[0] not in answer["evidence_tools"]:
+            detail = "detail=not_cited"  # 取到了，但模型没在 evidence_tools 里引它
+        else:
+            extra = sorted(set(answer["evidence_tools"]) - set(evidence))
+            detail = "detail=unknown_tool"  # 引了本轮没取过的工具
+            if extra:
+                detail += f" name={extra[0][:32]}"
+        logging.getLogger("aiops.operator").warning("operator_evidence_missing %s", detail)
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     if "reply" in answer and (not isinstance(answer["reply"], str) or not 1 <= len(answer["reply"]) <= 6000):
         _answer_refused("reply")

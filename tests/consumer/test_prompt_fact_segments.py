@@ -310,3 +310,100 @@ def test_protocol_does_not_demand_both_segments_at_once():
     assert "账单必须引用billing_line，状态必须引用status_line" not in text
     assert "账单查询只引billing_line" in text
     assert "状态查询只引status_line" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 结算类词：只拦**断言**，不拦「提到」                                    2026-11-03
+#
+# 2026-11-02 的第一版是「整段出现『结算』即拒绝」（`_settlement_hit`），过了头：
+# 核对建议 `请先核对账单。`、缺证说明 `目前没有结算状态的证据` 都被拒掉 ——
+# 而这两句恰恰是**我们要求模型写**的内容。下面正反两组是这次修的回归护栏。
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SETTLEMENT_MENTIONS_THAT_MUST_PASS = [
+    # 核对建议
+    "请先核对账单。",
+    "建议对照原账单核对。",
+    "您可以先核对一下账单明细。",
+    # 缺证说明
+    "目前没有结算状态的证据。",
+    "本轮没有取得结算状态，无法判断。",
+    "系统未提供结算状态字段。",
+    "结算状态不在本次可用证据内。",
+    # 提问
+    "您想核对账单的哪一项？",
+    "需要我帮您核对结算相关信息吗？",
+]
+
+
+@pytest.mark.parametrize("text", _SETTLEMENT_MENTIONS_THAT_MUST_PASS)
+def test_mentioning_settlement_without_asserting_it_is_allowed(text):
+    """**提到**结算不等于**断言**结算状态。
+
+    没有这一组，修法就会退化成「模型提都不能提」—— 而框架恰恰要求它在
+    缺证说明里写清楚哪一项没有证据。
+    """
+    check_status_prose(text)
+
+
+_SETTLEMENT_ASSERTIONS_THAT_MUST_FAIL = [
+    "这单尚未结算。",
+    "该订单已经结算完成。",
+    "结算状态是已结算。",
+    "这笔费用还没有结算给运营商。",
+    "这单已结算。",
+]
+
+
+@pytest.mark.parametrize("text", _SETTLEMENT_ASSERTIONS_THAT_MUST_FAIL)
+def test_asserting_settlement_status_is_still_refused(text):
+    """对照组：放宽之后，**断言**结算状态必须仍然被拒。
+
+    肯定与否定同等处理 —— 没有证据时，「还没结算」与「已结算」是同等强度的断言。
+    """
+    with pytest.raises(ChatRunUnavailable):
+        check_status_prose(text)
+
+
+# ── 2026-11-03 评审：第一版仍有三处判错 ──────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 名词「结算状态」不等于断言：没有谓语就不在陈述结果。
+        "请核对结算状态。",
+        "建议核对一下结算状态。",
+        "结算状态如何？",
+        "结算状态是什么？",
+    ],
+)
+def test_a_settlement_noun_without_a_predicate_is_not_an_assertion(text):
+    """`结算状态` 是一个名词。它没有谓语时只是**提到**，不是断言。
+
+    第一版把 `结算` 后面的 `\\w*` 回溯到 `状态`，于是「请核对结算状态。」被拒 ——
+    而那正是我们要求的核对建议。
+    """
+    check_status_prose(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # 口语完成体：`结算了` / `结算完了` / `结算掉` —— 第一版三个分支都没覆盖。
+        "这单结算了。",
+        "这单结算完了。",
+        # 问句里夹着的断言不能被整句豁免。
+        "这单已结算是否需要帮助？",
+    ],
+)
+def test_spoken_completions_and_assertions_inside_a_question_are_refused(text):
+    """两处漏检：口语完成体，以及「问句豁免」把同句的断言一起放掉。"""
+    with pytest.raises(ChatRunUnavailable):
+        check_status_prose(text)
+
+
+def test_a_pure_question_about_settlement_is_still_allowed():
+    """对照组：真正的疑问句必须放行，否则修法退化成「提都不能提」。"""
+    for text in ("是否已结算？", "这单结算了吗？", "要不要核对结算状态？"):
+        check_status_prose(text)
