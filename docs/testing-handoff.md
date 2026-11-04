@@ -25,6 +25,13 @@
 
 各结论直接链接见交付索引；旧测试数量、版本与当时失败保留在对应日期验收记录中。
 
+## 安卓真实用户验收
+
+优先使用现有[客户端验收技能](../.claude/skills/verify-aiops-client-e2e/SKILL.md)中的
+[adbx步骤](../.claude/skills/verify-aiops-client-e2e/features/android-adbx.md)，从已安装应用进入。
+本轮消费者APK1.2.15推荐问答/新会话通过，普通提问503失败，见[真机回执](validation/2026-11-04-android-adbx-acceptance.md)。
+原生包、Android H5和服务接口分别判定；保留失败，不把看到兜底文字算成功。
+
 ## 测试应走的主路径
 
 1. 正常登录原H5；普通问题、新会话、连续追问分别测试。记录选择语言、问题、预期与实际正文。
