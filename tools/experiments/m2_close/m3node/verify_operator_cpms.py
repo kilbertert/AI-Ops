@@ -22,7 +22,7 @@ from pytest import MonkeyPatch  # noqa: E402
 
 from aiops_diagnostics.operator import operator_cpms, operator_tools  # noqa: E402
 
-ORDER_TOOLS = ("cpms_order_detail", "cpms_charging_samples", "cpms_order_tariff")
+ORDER_TOOLS = ("cpms_order_detail", "cpms_charging_samples", "cpms_order_tariff", "cpms_order_billing")
 
 
 class Model(BaseHTTPRequestHandler):
@@ -306,8 +306,9 @@ def main():
                     break
             cases.append({"case": "java-loop", "status": final.status_code, "body": final.json()})
             assert final.status_code == 200 and final.json()["status"] == "completed", final.text
-            assert len(f["state"]["calls"]) == 7  # 节点取证3次、快照再验订单1次、签发/完成/回读各1次。
-            assert len(Model.calls) == 4
+            assert len(f["state"]["calls"]) == 9  # 四次取证、两次再验订单、签发/完成/回读各一次。
+            assert len(Model.calls) == 5
+            assert "订单金额验证" in final.text and "规则1 服务费折扣优惠" in final.text
             assert all(call.get("response_format") == {"type": "json_object"} for call in Model.calls)
             assert all(
                 "evidence_tools" in call["messages"][0]["content"] for call in Model.calls
@@ -466,7 +467,14 @@ def main():
                 if label == "general":
                     assert len(f["state"]["calls"]) == before and "异常已处理" in result.text
                 else:
-                    assert len(f["state"]["calls"]) == before + 1 and "天河测试站" in result.text, result.text
+                    from urllib.parse import parse_qs, urlsplit
+
+                    calls = f["state"]["calls"][before:]
+                    assert [parse_qs(urlsplit(path).query)["address"] for path, _ in calls] == [
+                        ["广州"],
+                        ["天河"],
+                    ]
+                    assert "天河测试站" in result.text, result.text
                     assert "PRIVATE-PHONE" not in result.text
                 assert [t["function"]["name"] for t in Model.calls[-1]["tools"]] == [
                     "cpms_site_search",
@@ -553,7 +561,7 @@ def main():
                 indent=2,
             )
         )
-    print("PASS: real Java tool loop, three CPMS tools, four model turns, all-off refuses")
+    print("PASS: real Java tool loop, four CPMS tools, five model turns, all-off refuses")
     return 0
 
 

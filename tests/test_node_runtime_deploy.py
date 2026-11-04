@@ -237,7 +237,9 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
             (root + "/cpms/chSite/page/ORDER-1", "GET"),
             (root + "/cpms/chSite/pageBOGUS", "GET"),
             (root + "/cpms/chSite/page/EXTRA", "GET"),
-            (root + "/cpms/chOrderInfo/getOrderInfoDetail", "GET"),
+            # 新账务路径是/chOrderInfo/{order}；无尾段才是缺订单。
+            # 订单值与路径逐字匹配仍由Gateway任务授权校验。
+            (root + "/cpms/chOrderInfo", "GET"),
             ("/v1/internal/consumer-tools/run_test/chOrderInfo/getOrderInfoDetail/ORDER-1", "GET"),
             ("/v1/internal/consumer-tools/run_test/chSite/page", "POST"),
             (root + "/cpms/chOrderInfo/stopCharging/ORDER-1", "GET"),

@@ -786,8 +786,13 @@ class OperatorCpms:
             self._current(run_id, tool=tool)
             if tool in task.evidence:
                 return task.evidence[tool]["response"]
-            if tool in (TOOL_NAMES[1], "cpms_order_tariff") and TOOL_NAMES[0] not in task.delivered:
+            if (
+                tool in (TOOL_NAMES[1], "cpms_order_tariff", "cpms_order_billing")
+                and TOOL_NAMES[0] not in task.delivered
+            ):
                 raise OperatorRefused("OPERATOR_DETAIL_REQUIRED")
+            if tool == "cpms_order_billing" and "cpms_order_tariff" not in task.delivered:
+                raise OperatorRefused("OPERATOR_TARIFF_REQUIRED")
 
             if tool == "cpms_station_plan":
                 data = self._station_plan(task, run)
@@ -805,7 +810,7 @@ class OperatorCpms:
                     },
                 }
                 return task.evidence[tool]["response"]
-            if tool == "cpms_order_tariff":
+            if tool in ("cpms_order_tariff", "cpms_order_billing"):
                 # 快照本身不含siteId；在同次调用中重新读取订单，防止转站后的旧证据放行。
                 detail = cpms_get(
                     task.base_url + tool_request(TOOL_NAMES[0], {"order_no": run.order_no})["path"],
@@ -838,8 +843,14 @@ class OperatorCpms:
                 }
                 task.evidence[tool]["response"] = response
                 return task.evidence[tool]["response"]
-            if tool == "cpms_order_tariff":
-                data = order_pricing.read_snapshot(body, task.caller, run.order_no)
+            if tool in ("cpms_order_tariff", "cpms_order_billing"):
+                from aiops_diagnostics.operator.order_billing import read_billing
+
+                data = (
+                    order_pricing.read_snapshot(body, task.caller, run.order_no)
+                    if tool == "cpms_order_tariff"
+                    else read_billing(body, task.caller, run.order_no, task.order_site_id)
+                )
                 self._current(run_id, tool=tool)
                 task.evidence[tool] = {
                     "tool": tool,
@@ -1909,6 +1920,14 @@ def _order_fact_text(evidence, language="zh", question=""):
         result += "\n\n" + order_pricing.historical_report(
             evidence["cpms_order_tariff"]["data"], detail, language
         )
+        from aiops_diagnostics.operator.order_billing import report
+
+        result += "\n\n" + report(
+            evidence["cpms_order_tariff"]["data"],
+            detail,
+            evidence.get("cpms_order_billing", {}).get("data"),
+            language,
+        )
     return result
 
 
@@ -1968,6 +1987,7 @@ _SOURCE_LABELS = {
     "cpms.orderDetail": "订单详情",
     "cpms.chargingMonitor": "充电监测样本",
     "cpms.orderTariff": "订单历史计费快照",
+    "cpms.orderBilling": "订单账务与优惠记录",
 }
 
 
