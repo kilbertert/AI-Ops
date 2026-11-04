@@ -442,6 +442,10 @@ class SelfService:
         request = json.loads(row["request_json"])
         resources = json.loads(row["resources_json"])
         step = row["step"]
+        # 上一轮留下的定位信息属于**那一次**失败。不清掉的话，这一次在别处失败时页面会把
+        # 上一次的位置当成这一次的 —— 那种"看起来有信息"比没有信息更坏。
+        resources.pop("failed_step", None)
+        resources.pop("failure_kind", None)
 
         def save(next_step):
             nonlocal step
@@ -461,13 +465,22 @@ class SelfService:
                 )
                 if state.get("state") == "ready":
                     continue  # 重试续跑：已完成端不重复创建、不重复发布
+                # 这一端上次的定位信息同理作废：它描述的是上一次，不是这一次。
+                state.pop("failed_step", None)
+                state.pop("failure_kind", None)
                 try:
                     if entry == "operator":
                         self._run_operator(job_id, request, resources, state, save, caller, session)
                     else:
                         self._run_consumer(job_id, request, resources, state, save, caller, session)
                 except Exception as exc:  # noqa: BLE001 - 逐端记录，不牵连另一端
-                    state.update(state="failed", error_code=_error_code(exc))
+                    state.update(
+                        state="failed",
+                        error_code=_error_code(exc),
+                        failed_step=step,
+                        failure_kind=_failure_kind(exc),
+                    )
+                    _log_failure(job_id, request["tenant_id"], entry, step, exc)
                     save(entry + ":failed")
             failed = [e for e in entries if resources["entries"][e].get("state") == "failed"]
             done = [e for e in entries if resources["entries"][e].get("state") in {"ready", "draft"}]
@@ -495,6 +508,9 @@ class SelfService:
         except Exception as exc:
             # 只保留固定业务码，供应商响应可能含凭据。
             code = str(exc) if isinstance(exc, (auth.SetupRefused, SetupConflict)) else "SETUP_STEP_FAILED"
+            resources["failed_step"] = step
+            resources["failure_kind"] = _failure_kind(exc)
+            _log_failure(job_id, request["tenant_id"], "job", step, exc)
             self.store.save(job_id, owner, step=step, resources=resources, state="failed", error=code)
 
     def _prepare_common(self, request, resources, save):
@@ -609,6 +625,9 @@ class SelfService:
 
         spec = request["sources"]["consumer"]
         workspace_id = resources["workspace_id"]
+        # 第一步之前就要有一个**属于客户端**的步骤名。否则来源导出/校验失败时，
+        # `failed_step` 还停在上一个端或公共准备那一步 —— 页面会把排障引到错误的位置。
+        save("consumer:source")
         source = DifyDslSource(
             self.settings.dify_console_base_url,
             spec["app_id"],
@@ -1024,6 +1043,35 @@ def _error_code(exc):
     if isinstance(exc, (auth.SetupRefused, SetupConflict, dual_entry.DualEntryError)):
         return str(exc)
     return "SETUP_STEP_FAILED"
+
+
+#: 页面能看到**步骤与异常种类**，看不到异常正文。
+#:
+#: 为什么不是正文：这一层接的是供应商响应与资源操作，异常文本里可能是 URL、app id、
+#: 甚至凭据片段（`service_keys` 的文档明说"供应商响应可能含凭据"）。一次失败要在事后
+#: 可定位，靠的是"在哪一步、哪一类"，不是把上游原文贴到页面上。
+#:
+#: 为什么异常种类不够、还必须有步骤：`KeyError('prompt')` 与 `KeyError('model_config')`
+#: 是同一种异常、两个完全不同的缺陷；只有种类时会去翻整条链。步骤名是代码自己写的
+#: 固定字面量（`save("consumer:key")` 那些），不是外部输入，所以它可以直接给页面。
+def _failure_kind(exc):
+    return type(exc).__name__[:64]
+
+
+def _log_failure(job_id, tenant_id, entry, step, exc):
+    """把栈写进 journal。值仍是固定业务码 —— 栈本身可能含上游原文，只进日志不进任务行。"""
+    import logging
+    import traceback
+
+    logging.getLogger("aiops.dify_self_service").warning(
+        "setup_step_failed job=%s tenant=%s entry=%s step=%s kind=%s\n%s",
+        job_id,
+        tenant_id,
+        entry,
+        step,
+        _failure_kind(exc),
+        "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    )
 
 
 def _mirror(resources, entries):
