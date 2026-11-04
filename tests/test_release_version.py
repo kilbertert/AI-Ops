@@ -171,3 +171,38 @@ else:
     elif result.returncode == 0:
         assert git("cat-file", "-t", "v1.2.3") == "tag"
         assert git("rev-parse", "v1.2.3^{commit}") == target
+
+
+@pytest.mark.parametrize("same_commit, exists", [(True, False), (True, True), (False, False)])
+def test_version_release_never_uses_notes_from_another_commit(tmp_path, same_commit, exists):
+    import os
+    import subprocess
+
+    cli = tmp_path / "gh"
+    cli.write_text(
+        '#!/bin/sh\nif [ "$2" = view ]; then exit "$TEST_VIEW_EXIT"; fi\nprintf "%s\\n" "$*" > "$TEST_CALL"\n'
+    )
+    cli.chmod(0o700)
+    workflow = (REPO_ROOT / ".github/workflows/cd.yml").read_text()
+    start = workflow.index('          if [ "$tagged_commit" = "$TARGET_SHA" ]')
+    end = workflow.index("\n      - name: Report failure", start)
+    call = tmp_path / "called"
+    subprocess.run(
+        ["bash", "-ec", textwrap.dedent(workflow[start:end])],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "tagged_commit": "release-a" if same_commit else "release-b",
+            "TARGET_SHA": "release-a",
+            "vtag": "v1.2.3",
+            "version": "1.2.3",
+            "notes": str(tmp_path / "notes"),
+            "TEST_VIEW_EXIT": "0" if exists else "1",
+            "TEST_CALL": str(call),
+        },
+        check=True,
+        timeout=10,
+    )
+    assert call.exists() == (same_commit and not exists)
+    if call.exists():
+        assert "--verify-tag" in call.read_text()

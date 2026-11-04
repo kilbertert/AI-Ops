@@ -330,7 +330,7 @@ jobs:
 
           # Existing version releases and tags are immutable; only a new version
           # release is created here, from the tag that was checked above.
-          if ! gh release view "$vtag" >/dev/null 2>&1; then
+          if [ "$tagged_commit" = "$TARGET_SHA" ] && ! gh release view "$vtag" >/dev/null 2>&1; then
             gh release create "$vtag" --verify-tag \
               --title "AI-Ops ${version}" --notes-file "$notes" --prerelease
           fi
