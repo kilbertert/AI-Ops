@@ -49,7 +49,7 @@ def require_compatible(database, target, manifest):
     ).hexdigest()
     contracts = (
         {OBJECT_CONTRACT}
-        if any(t.get("name") == "cpms_order_tariff" for t in manifest.get("tools", []))
+        if any(t.get("name") in {"cpms_order_tariff", "cpms_station_plan"} for t in manifest.get("tools", []))
         else {TOOL_CONTRACT, OBJECT_CONTRACT}
     )
     if (

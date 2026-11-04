@@ -209,8 +209,14 @@ address_terms必须保持本轮工具所用的地址关键词，例如["广州",
 没有知识库检索工具，不得声称读过知识库或业务数据；站点查询只走 cpms_site_search。
 应用SOP仅作领域背景，其订单步骤仅适用于订单诊断。
 不能执行或声称执行退款、重启、停充、改配置；可以提供操作指引，危险情况优先提示安全措施。
+询问指定站点未来充电方案或补充计划条件时调用cpms_station_plan，只传用户本轮提供的条件，
+不要重复前文已给的参数。缺条件时仍可用工具返回澄清，不编造日期、功率、电量。
+功率/电量参数只写原话数字，对应原话的kW/kWh；日期使用原话YYYY-MM-DD，不推断相对日期。
+basis只有用户明确确认“普通按量、不用优惠、不预约、不买保险、充完离场”时才传；
+timezone只传用户明确确认的IANA计费时区，如Asia/Shanghai，不从地点猜时区。
+该工具结果已含系统计算，最终必须{"kind":"station_plan","text":"","name":"","address_terms":[]}。
 仅输出一个JSON对象，恰好四字段：
-{"kind":"answer|order_required|site_search","text":"回答或澄清","name":"站名关键词或空串","address_terms":[]}
+{"kind":"answer|order_required|site_search|station_plan","text":"回答或澄清","name":"站名关键词或空串","address_terms":[]}
 answer/order_required的name必须为空且address_terms必须为空；text以用户要求语言写作。
 """
 
@@ -220,7 +226,7 @@ def manifest(text):
 
     body = json.loads(text)
     body["schema"] = SCHEMA
-    # 无订单回合保留**能在这类运行里用的**工具（目前只有站点查询）。订单诊断工具没有
+    # 无订单回合保留**能在这类运行里用的**工具（站点查询及管家专属方案）。订单诊断工具没有
     # 订单就没有取证对象，删掉它们不是裁剪，是正确性。
     #
     # 名单以**声明**为准，不以模板为准：模板是「运营在这个源应用里勾了什么」，而会话回合
@@ -235,14 +241,17 @@ def manifest(text):
     seen = set()
     for tool in body["tools"]:
         declared = operator_tools.tool(tool["name"])
-        if "conversation" not in declared.applies_to:
+        if not {"conversation", "operator_conversation"}.intersection(declared.applies_to):
             continue
         # 参数 schema 来自**声明**，不来自模板：模板只有运营勾选的名单，
         # 参数形状的唯一定义在声明里。
         kept.append({**tool, "input_schema": declared.input_schema()})
         seen.add(tool["name"])
     for declared in operator_tools.tools():
-        if "conversation" not in declared.applies_to or declared.name in seen:
+        if (
+            not {"conversation", "operator_conversation"}.intersection(declared.applies_to)
+            or declared.name in seen
+        ):
             continue
         # 模板没列这个工具：按声明补一条。schema 同样来自声明。
         kept.append(
@@ -276,7 +285,7 @@ def validate(answer, question, *, check_site_note=True):
         not isinstance(answer, dict)
         or set(answer) != {"kind", "text", "name", "address_terms"}
         or not isinstance(answer["kind"], str)
-        or answer["kind"] not in {"answer", "order_required", "site_search"}
+        or answer["kind"] not in {"answer", "order_required", "site_search", "station_plan"}
         or not isinstance(answer["text"], str)
         or len(answer["text"]) > 6000
         or not isinstance(answer["name"], str)
@@ -301,7 +310,10 @@ def validate(answer, question, *, check_site_note=True):
         name=spans[-1] if answer["name"] else "",
         address_terms=spans[: len(answer["address_terms"])],
     )
-    if answer["kind"] == "site_search":
+    if answer["kind"] == "station_plan":
+        if terms or answer["text"]:
+            _answer_refused("plan_content")
+    elif answer["kind"] == "site_search":
         # **空关键词合法**：它表示"列出我可见范围内的站点"，不是"搜某个地点"。
         # 这里曾经要求关键词非空，把「我当前有哪些站点？」判成非法 —— 而那个限制
         # 只为防模型编造搜索条件，空关键词什么都没编。范围也从来不靠关键词收窄：

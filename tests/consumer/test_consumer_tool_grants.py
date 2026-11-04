@@ -147,10 +147,11 @@ def test_arguments_must_come_from_the_question(grants):
         grant(grants, {"address": "深圳南山"})
 
 
-def test_a_tool_that_does_not_serve_this_run_type_is_refused(grants):
+@pytest.mark.parametrize("tool", ["cpms_order_detail", "cpms_order_tariff", "cpms_station_plan"])
+def test_a_tool_that_does_not_serve_this_run_type_is_refused(grants, tool):
     """订单诊断工具没有订单就没有取证对象：C 端运行里连声明都不该过。"""
     with pytest.raises(consumer_tool_grants.ConsumerToolRefused) as refused:
-        grants.grant(RUN, "node-token", MANIFEST, "cpms_order_detail", operator_cpms.TOOL_CONTRACT, None)
+        grants.grant(RUN, "node-token", MANIFEST, tool, operator_cpms.TOOL_CONTRACT, None)
     assert refused.value.code == "CONSUMER_TOOL_DISABLED"
 
 

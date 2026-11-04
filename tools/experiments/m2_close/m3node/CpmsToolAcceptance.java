@@ -281,7 +281,9 @@ public final class CpmsToolAcceptance {
         check(!order.contains(ControlledChargingStatusTool.TOOL_NAME), "order run refuses the status tool");
         check(!order.contains("cpms_site_search"), "order run refuses the conversation-only tool");
         var conversation = com.trendpower.aiops.node.exec.ToolSurface.allowed("operator-conversation/1");
-        check(conversation.equals(List.of("cpms_site_search")), "conversation run carries only the site tool");
+        check(Set.copyOf(conversation).equals(Set.of("cpms_site_search", "cpms_station_plan")),
+                "operator conversation supports the plan tool");
+        check(!consumer.contains("cpms_station_plan"), "consumer cannot use the operator plan tool");
         // AC3：未声明的工具名在**任何**运行类型下都不成立，拒绝码稳定。
         for (String schema : new String[]{"m3-exec-config/1", "operator-exec-config/1", "operator-conversation/1"}) {
             check(!com.trendpower.aiops.node.exec.ToolSurface.allows(schema, "shell"), "undeclared tool refused: " + schema);

@@ -45,7 +45,9 @@ public final class ToolSurface {
                 ? OperatorTools.namesIfAvailable()
                 : OperatorTools.names();
         for (String name : declared) {
-            if (OperatorTools.appliesTo(name).contains(context)) names.add(name);
+            if (OperatorTools.appliesTo(name).contains(context)
+                    || (OPERATOR_CONVERSATION.equals(schema)
+                        && OperatorTools.appliesTo(name).contains("operator_conversation"))) names.add(name);
         }
         // C 端还要状态工具：它是这一端唯一的订单事实入口。
         if (CONSUMER.equals(schema)) names.add(ControlledChargingStatusTool.TOOL_NAME);

@@ -44,7 +44,7 @@ _PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]{1,63})\}")
 KINDS = ("single", "page", "object")
 #: 运行类型。工具必须声明它能出现在哪一类运行里 —— 「无订单回合也能带工具」不等于
 #: 「任何工具都能在无订单回合里跑」：订单诊断工具没有订单就没有可取证的对象。
-CONTEXTS = ("order", "conversation")
+CONTEXTS = ("order", "conversation", "operator_conversation")
 
 
 class ToolDeclarationError(ValueError):

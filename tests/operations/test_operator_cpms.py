@@ -201,7 +201,12 @@ def environment(tmp_path, monkeypatch):
             ctx.agent_manager = manager
             binding = DifyAppBinding("TENANT-A", "operator", APP, "operator-node")
             ctx.runtime.dify_app_registry.put(binding)
-            candidate = {"prompt": "SOP_ONE", "enabled": list(operator_cpms.TOOL_NAMES)}  # 运营可以勾全部
+            candidate = {
+                "prompt": "SOP_ONE",
+                "enabled": [
+                    t.name for t in operator_tools.tools() if "operator_conversation" not in t.applies_to
+                ],
+            }  # 管家专属会话工具不勾进订单诊断清单。
             monkeypatch.setattr(
                 node_publication,
                 "DifyDslClient",
@@ -538,7 +543,12 @@ def test_a_node_that_does_not_declare_the_contract_is_refused_before_any_read(op
 def test_draft_toggle_does_not_publish_and_disabled_tool_cannot_be_called(operator, monkeypatch):
     f = operator
     f["candidate"]["enabled"] = [operator_cpms.TOOL_NAMES[0]]
-    assert len(json.loads(f["route"].manifest_text)["tools"]) == len(operator_cpms.TOOL_NAMES)
+    assert {t["name"] for t in json.loads(f["route"].manifest_text)["tools"]} == {
+        "cpms_order_detail",
+        "cpms_charging_samples",
+        "cpms_order_tariff",
+        "cpms_site_search",
+    }
     current = f["publish"](f["route"].route_revision)
     assert [v["name"] for v in json.loads(current.manifest_text)["tools"]] == [operator_cpms.TOOL_NAMES[0]]
     monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))

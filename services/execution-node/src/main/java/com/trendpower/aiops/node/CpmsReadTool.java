@@ -127,7 +127,8 @@ public final class CpmsReadTool implements ToolCallback {
             String tool = definition.name();
             Grant grant = authorization.require(runId, manifestId, tool, parameters);
             requireLive(grant);
-            if (!OperatorTools.appliesTo(tool).contains("conversation")) {
+            if (!OperatorTools.appliesTo(tool).contains("conversation")
+                    && !OperatorTools.appliesTo(tool).contains("operator_conversation")) {
                 grant.orderNo();
                 if (grant.siteIds() == null || grant.siteIds().isEmpty()) throw refused("invalid_authorization");
             }
@@ -206,7 +207,13 @@ public final class CpmsReadTool implements ToolCallback {
     }
 
     private static ObjectNode object(JsonNode body, Grant grant, String tool) {
-        identity(body, grant, tool);
+        if (OperatorTools.appliesTo(tool).contains("operator_conversation")) {
+            if (!grant.tenantId().equals(body.path("tenantId").asText())) throw refused("cpms_scope_mismatch");
+            String site = body.path("value").path("site_id").asText("");
+            if (!site.isEmpty() && (!site.matches(ID) || (grant.siteIds() != null && !grant.siteIds().contains(site)))) {
+                throw refused("cpms_scope_mismatch");
+            }
+        } else identity(body, grant, tool);
         JsonNode value = project(body.path("value"), OperatorTools.evidenceShape(tool), 0);
         if (!value.isObject()) throw refused("cpms_invalid_field");
         return (ObjectNode) value;
