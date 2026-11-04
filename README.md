@@ -137,7 +137,6 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 临时服务验证用[Gateway 技能](.claude/skills/verify-aiops-gateway/SKILL.md)，不对真实数据根运行测试。
 镜像及随制品交付的构建记录用[本地构建手册](docs/agents/local-gateway-build.md)；
 普通源码PR不改共享镜像输入锁，部署继续走既有合并制品流程。
-Dify控制台地址须为HTTPS或已登记隧道的回环地址；部署前和启动时均校验，见[连接预检手册](docs/agents/operator-cpms/dify-console-preflight.md)。
 
 站点工具的地点词在取证前以数组传递；本次协议升级须配套更新节点jar、工具声明和Gateway，
 操作及原入口验收见[站点查询QA](docs/agents/operator-cpms/site-query-real-path-qa.md)。

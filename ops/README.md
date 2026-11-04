@@ -6,6 +6,7 @@
 | 任务 | 现役方法 |
 |---|---|
 | Gateway部署、依赖升级、恢复、只读现场核对 | [环境手册](../docs/agents/env-41-runbook.md)、[依赖升级](../docs/agents/env-41-dependency-update.md) |
+| Dify控制台连接预检与预览恢复 | [连接手册](../docs/agents/operator-cpms/dify-console-preflight.md)：HTTPS或已登记隧道回环地址；部署与启动均校验 |
 | Dify/节点配套交付 | [Dify资产](../deploy/dify-36/README.md)、[节点资产](../deploy/node-runtime/README.md) |
 | 平台按客户开通两端与知识空间 | [自助开通](../docs/agents/operator-cpms/self-service.md)、[业务环境清单](../docs/agents/operator-cpms/business-environments-catalogue.md) |
 | 消费者编辑、试用、发布与恢复 | [正式发布手册](../docs/agents/consumer-wf01/live-release.md) |
