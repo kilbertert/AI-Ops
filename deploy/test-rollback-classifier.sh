@@ -60,6 +60,8 @@ check "超时" 124 124 "超时" ""
 # 6. 什么都没输出（连接中断）→ 状态未知
 check "无输出" 1 1 "状态未知" ""
 
+check "控制台预检拒绝" 1 1 "未重启服务" "console-preflight=refused"
+
 # 6b. restart 非零但自检仍判失败 → 依然走回滚路径（不应因 restart 非零而丢分类）
 check "部署 restart 非零 + 已回滚" 1 1 "已自动回滚" "deploy-restart-rc=nonzero
 selfcheck=failed

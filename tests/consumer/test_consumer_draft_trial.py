@@ -23,7 +23,7 @@ def draft_env(tmp_path, monkeypatch):
         settings.chat_execution_bindings_file = ""
         settings.chat_route_bindings_file = str(env["db"])
         settings.public_base_url = BASE
-        settings.dify_console_base_url = "http://dify.invalid"
+        settings.dify_console_base_url = "https://dify.invalid"
         settings.dify_console_api_key = "console-key"
         settings.consumer_publication_targets_file = ""
         context = env["app"].state.gateway

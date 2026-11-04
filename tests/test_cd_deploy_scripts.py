@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -654,3 +655,40 @@ def test_the_gate_accepts_equal_or_newer_nodes_and_rejects_older_ones(tmp_path: 
     assert accepted(first, first), "节点与目标同一提交必须放行"
     assert accepted(first, second), "节点晚于目标必须放行"
     assert not accepted(second, first), "节点早于目标必须拒绝"
+
+
+@pytest.mark.parametrize(
+    "url,allowed",
+    [("http://dify.invalid:10008", False), ("http://127.0.0.1:15001", True), ("https://dify.invalid", True)],
+)
+def test_console_preflight_stops_before_production_mutation(tmp_path, url, allowed):
+    source = (DEPLOY_DIR / "deploy-41.sh").read_text()
+    start = source.index("# 候选代码先验实际控制台配置")
+    end = source.index("rsync -a --delete /tmp/sync-check/aiops_diagnostics/", start)
+    block = source[start:end].replace("\\$", "$")
+    config = tmp_path / "gateway.env"
+    config.write_text(
+        f"AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL={url}\n"
+        "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY=synthetic\n"
+        f"AIOPS_GATEWAY_SERVER_CONFIG_FILE={tmp_path / 'production.env'}\n"
+    )
+    (tmp_path / "production.env").write_text("# synthetic\n")
+    block = block.replace("/etc/aiops-41/gateway.env", str(config))
+    block = block.replace("chown -R aiops41:aiops41 /tmp/sync-check", ":")
+    block = block.replace(
+        "runuser -u aiops41 -- env PYTHONPATH=/tmp/sync-check /opt/aiops-41/.venv/bin/python",
+        f"env PYTHONPATH={shlex.quote(str(REPO_ROOT / 'src'))} {shlex.quote(sys.executable)}",
+    )
+    block = block.replace("rm -rf /tmp/sync-check $REMOTE_TARBALL || true", ":")
+    marker = tmp_path / "production-mutated"
+    result = subprocess.run(
+        ["bash", "-eu"],
+        input=f"mutate_rc=0\n{block}\ntouch {shlex.quote(str(marker))}\n",
+        env={k: v for k, v in os.environ.items() if not k.startswith("AIOPS_")},
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert (result.returncode == 0) is allowed, result.stderr
+    assert marker.exists() is allowed
+    assert ("console-preflight=refused" in result.stdout) is not allowed

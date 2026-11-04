@@ -111,7 +111,7 @@ def test_startup_adoption_keeps_the_entry_environment_and_targets(tmp_path, monk
             operator_profiles_file="profiles.json",
             execution_environment="env-a",
             environment="verify",
-            dify_console_base_url="http://dify.invalid",
+            dify_console_base_url="https://dify.invalid",
             dify_console_api_key="console",
         ),
         runtime=SimpleNamespace(

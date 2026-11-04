@@ -144,7 +144,7 @@ def _trial_env(tmp_path: Path, monkeypatch, *, engine_fail: bool = False):
         chat_route_bindings_file=str(tmp_path / "gateway.db"),
         dify_chat_base_url="http://dify.invalid:5001",
         chat_dify_key_dir=str(tmp_path),
-        dify_console_base_url="http://dify.invalid:10008",
+        dify_console_base_url="https://dify.invalid",
         dify_console_api_key="console-key",
         execution_environment="env-a",
     )
@@ -177,7 +177,7 @@ def _draft(route: Any) -> WorkflowTrial:
     return WorkflowTrial(
         "app:\n  mode: workflow\nworkflow:\n  graph:\n    nodes: []\n    edges: []\n",
         DifyDslSource(
-            base_url="http://dify.invalid:10008",
+            base_url="https://dify.invalid",
             app_id=route.app_id,
             api_key="console-key",
             workspace_id="ws",
