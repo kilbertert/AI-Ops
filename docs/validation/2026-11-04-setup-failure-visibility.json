@@ -1,0 +1,23 @@
+{
+  "public_shape": {
+    "fields": [
+      "app_id",
+      "channel",
+      "channel_note",
+      "draft_only",
+      "error_code",
+      "failed_step",
+      "failure_kind",
+      "knowledge",
+      "published",
+      "state",
+      "version_no"
+    ],
+    "failed_step": "operator:dependencies",
+    "failure_kind": "ConnectTimeout",
+    "leaked": []
+  },
+  "health_status": 200,
+  "anonymous_operation": 403,
+  "failures": []
+}

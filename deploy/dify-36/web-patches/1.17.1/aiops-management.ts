@@ -43,6 +43,8 @@ export type EntryProgress = {
   channel_note?: string
   state?: string
   error_code?: string
+  failed_step?: string
+  failure_kind?: string
 }
 
 export const entryLabels: Record<EntryKey, string> = {
@@ -96,10 +98,14 @@ export const steps: Record<string, string> = {
   register: '登记应用',
   publish: '开通',
   'consumer:application': '准备客户端应用',
+  'consumer:source': '核对客户端来源',
+  'consumer:dependencies': '准备客户端依赖',
+  'consumer:knowledge': '分配客户知识库',
   'consumer:key': '申请并保存凭据',
   'consumer:register': '登记客户端应用',
   'consumer:publish': '发布客户端客服',
   'consumer:failed': '客户端未完成',
+  'operator:dependencies': '准备管家依赖',
   'operator:application': '准备管家应用',
   'operator:register': '登记管家应用',
   'operator:publish': '发布管家',

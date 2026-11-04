@@ -188,6 +188,70 @@ def test_failed_dependency_reuses_job_and_workspace(managed, monkeypatch):
     assert service.store.get(job["id"])["state"] == "completed"
 
 
+def test_a_generic_failure_says_which_step_and_kind_never_the_message(managed, monkeypatch, caplog):
+    """一次 `SETUP_STEP_FAILED` 必须能事后定位：步骤 + 异常种类给页面，栈给日志。
+
+    反例就是这次生产上的形状：同一句"这一端未完成"背后是 `consumer:key` 之后的某个
+    位置，没有步骤也没有种类，只能靠人在生产上手工复现 —— 而复现动作本身会改变现场。
+    """
+    _, service, caller, _, _ = managed
+
+    def dependencies(*args):
+        raise KeyError("credential-path-should-not-leak")
+
+    monkeypatch.setattr(prepare, "dependencies", dependencies)
+    job = service.create(caller, request())
+    with caplog.at_level("WARNING", logger="aiops.dify_self_service"):
+        service.run(job["id"], "normal-session")
+    failed = service.store.get(job["id"])
+    public = public_job(failed)
+    entry = public["entries"]["operator"]
+    assert entry["error_code"] == "SETUP_STEP_FAILED"
+    assert entry["failed_step"] == "operator:dependencies"
+    assert entry["failure_kind"] == "KeyError"
+    # 异常正文不进任务行，也不进公开形状；它只出现在日志里。
+    assert "credential-path-should-not-leak" not in json.dumps(public)
+    assert "credential-path-should-not-leak" in caplog.text
+    assert "operator:dependencies" in caplog.text
+
+
+def test_a_retry_does_not_publish_the_previous_failures_location(managed, monkeypatch):
+    """上一轮的失败位置必须随新一轮作废，否则页面把旧故障当成这一次的。"""
+    _, service, caller, _, _ = managed
+    calls = []
+
+    def dependencies(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            raise KeyError("first-round")
+        raise TimeoutError("second-round")
+
+    monkeypatch.setattr(prepare, "dependencies", dependencies)
+    job = service.create(caller, request())
+    service.run(job["id"], "normal-session")
+    first = public_job(service.store.get(job["id"]))["entries"]["operator"]
+    assert first["failure_kind"] == "KeyError"
+    service.run(job["id"], "normal-session")
+    second = public_job(service.store.get(job["id"]))["entries"]["operator"]
+    assert second["failure_kind"] == "TimeoutError"
+    assert second["failed_step"] == "operator:dependencies"
+
+
+def test_a_business_error_keeps_its_own_code(managed, monkeypatch):
+    """受控拒绝保留自己的可读码；步骤照样记下来，但页面只对兜底码追加定位串。"""
+    _, service, caller, _, _ = managed
+    monkeypatch.setattr(
+        prepare, "dependencies", lambda *a: (_ for _ in ()).throw(auth.SetupRefused("SETUP_MODEL_CONFLICT"))
+    )
+    job = service.create(caller, request())
+    service.run(job["id"], "normal-session")
+    entry = public_job(service.store.get(job["id"]))["entries"]["operator"]
+    assert entry["error_code"] == "SETUP_MODEL_CONFLICT"
+    # 定位信息照记（排障用），只是前端不对受控码追加"某步出错"。
+    assert entry["failed_step"] == "operator:dependencies"
+    assert entry["failure_kind"] == "SetupRefused"
+
+
 def test_cross_tenant_create_requires_platform(managed, monkeypatch):
     _, service, _, _, calls = managed
     monkeypatch.setattr(auth, "tenants", lambda *_: [])
