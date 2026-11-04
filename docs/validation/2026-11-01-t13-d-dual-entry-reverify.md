@@ -5,7 +5,7 @@
 原管家 H5 上各跑一次，比对两端是否都落在**当前正式路由**上。
 
 方法遵守
-[正常登录与原页面验收](../../agents/runtime-retirement-operations.md#正常登录与原页面验收)：
+[正常登录与原页面验收](../agents/runtime-retirement-operations.md#正常登录与原页面验收)：
 开工前查活跃发布、失败先证明租户/入口/场景、取证前后各读一次绑定 `revision`。
 
 ## 一、开工前状态（前后一致，取证期间无人改生产）
