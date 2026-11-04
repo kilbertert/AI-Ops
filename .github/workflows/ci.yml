@@ -108,6 +108,8 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          # 全量/降级判断要 diff 出这次推送改了哪些文件，浅克隆没有那个提交可比。
+          fetch-depth: 0
 
       # 🔴 `enable-cache: false` **because the runner is persistent** (#711).
       #
@@ -148,6 +150,51 @@ jobs:
       # ad hoc — which meant CI had it and every other venv did not, so a fresh
       # worktree ran serial (279 s vs 55 s) without saying so.
 
+      # ── 全量还是只跑"读文档"的那批？────────────────────────────────────────
+      #
+      # 实测（2026-11-04，run 41810218900）：全量 4114 条要 192 秒，占整个 job 的
+      # 86%。而最近 40 个提交里有 15 个只动 `docs/` —— 它们跑的是和上次一模一样的
+      # 代码。文档档实测 16.6 秒（39 个文件）。
+      #
+      # ⚠️ **默认全量，白名单才降级**。反过来写（默认降级、列举需要全量的路径）
+      # 会在漏配一个路径时静默少测，而这个仓已经踩过一次同类："path filter 让
+      # 改 README 的提交绕过了一条读 README 的测试"（本文件顶部的注释记着那次）。
+      # 所以判定写成"**所有**改动都在下面这份白名单里才降级"，任何一个白名单外
+      # 的文件出现就退回全量 —— 漏配的后果是多跑三分钟，不是假绿。
+      #
+      # 白名单只有文档：`docs/` 与根目录的 `*.md`。**不含 `tests/`** ——
+      # 改测试却不验证测试，是最不该省的那一格。
+      - name: Decide the test tier
+        id: tier
+        run: |
+          set -eo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          # PR 事件才有 base/head；其它触发方式一律全量。
+          if [ -z "$base" ] || [ -z "$head" ]; then
+            echo "tier=full" >> "$GITHUB_OUTPUT"
+            echo "没有 PR base/head —— 跑全量"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$base" "$head")
+          [ -n "$changed" ] || { echo "tier=full" >> "$GITHUB_OUTPUT"; echo "diff 为空 —— 跑全量"; exit 0; }
+          echo "本次改动的文件："
+          printf '%s\n' "$changed" | sed 's/^/  /'
+          # 全部落在 docs/ 或根目录的 .md 才算文档档。
+          # ⚠️ 两个锚点都是必须的：`^docs/` 挡住 `sub/docs/a.md`（别的目录下同名的
+          # 文档目录不是我们要的那份），`^[^/]+\.md$` 挡住 `sub/README.md`。
+          # 第一版漏了 `^`，`grep -vE 'docs/'` 会把 `sub/docs/a.md` 当成文档放过 ——
+          # `tests/test_ci_test_tier.py` 用这条反例抓住的。
+          off_docs=$(printf '%s\n' "$changed" | grep -vE '^docs/|^[^/]+\.md$' || true)
+          if [ -n "$off_docs" ]; then
+            echo "tier=full" >> "$GITHUB_OUTPUT"
+            echo "白名单之外有改动 ⇒ 全量："
+            printf '%s\n' "$off_docs" | sed 's/^/  /'
+          else
+            echo "tier=docs" >> "$GITHUB_OUTPUT"
+            echo "改动全在文档 —— 只跑读文档的那批"
+          fi
+
       - name: Run tests
         # 绿之外还要有量。三件事可能让这一步"绿得没有意义"：
         #   1. 收集为空（import 错误吞掉整个目录）——pytest 会以 0 退出；
@@ -155,21 +202,38 @@ jobs:
         #   3. 测试静默变成 skip —— **记成 pass 的 skip 是假绿**（本机另一仓
         #      health-flow 的 CI 注释专门写过这个形状：`445 passed, 4 skipped` 被读成通过）。
         #
-        # 基线：**CI 上 2740 passed / 10 skipped**。
+        # 基线：**全量 4114 passed / 9 skipped（192 秒）**；文档档 **738 条 / 32 秒**。
         # ⚠️ 比本机多一条跳过，不是异常：`test_cd_deploy_scripts.py` 的 dry-run
         # 需要 `dev-host`，而那东西只在开发机上 —— CI 是 GitHub-hosted，所以它跳过。
-        # 本机是 2741 / 9，差的就是这一条。（这个基线差异是本步骤第一版没料到的：
-        # 当时写死 `<= 9`，CI 立刻红，失败信息就是下面那句。是 `-rs` 打印的原因
-        # 让"多出来的这一条是有意的"一眼可判——换成一个只有计数的断言，这里就得靠猜。）
         # 用上限而非等号：新增测试不会让这条腐化。
         run: |
           set -eo pipefail
+          tier="${{ steps.tier.outputs.tier }}"
+          if [ "$tier" = "docs" ]; then
+            # 降级档的集合**不写死文件名** —— 写死之后新增一个读文档的测试就会被
+            # 静默漏掉，而"漏掉"在这里的形态就是绿。按"测试源码里提没提到文档"
+            # 现算，新测试自动进来。
+            # `"docs"/` 那一支是同一个意思的 pathlib 写法：`PROJECT_ROOT / "docs" / ...`
+            # 里没有 `docs/` 这个字面量，只认前一支会把这些测试留在档外。
+            targets=$(grep -rlE 'docs/|"docs" */|README\.md|qa-plan\.md|acceptance\.feature|SOP\.md|GLOSSARY\.md' \
+              tests --include='*.py' | grep -E '(^|/)test_.*\.py$' | sort | tr '\n' ' ')
+            echo "文档档：$(printf '%s' "$targets" | wc -w) 个文件"
+            # 集合算空了就退回全量，而不是交给下面的下限去猜。
+            # 实测 738 条 / 32 秒（2026-11-04；扩到 pathlib 写法后 45 个文件）。
+            if [ -z "${targets// /}" ]; then
+              echo "::warning::文档档没算出任何文件 —— 退回全量，避免收集为空"
+              targets=""; floor=4000
+            else
+              floor=400
+            fi
+          else
+            targets=""
+            floor=4000
+          fi
           # ⚠️ **不要再加 `-q`**：`pyproject.toml` 的 addopts 已经是 `-q`，再加一个
           # 就是 `-qq`，而 `-qq` 会把那句 "N passed, M skipped" 汇总行**整个吞掉**。
-          # （这正是本步骤第一版的 bug：grep 汇总行永远匹配不到，于是"跳过数=0"
-          # 读成一个通过的空集合。上一次 PR 里 CI 日志没有汇总行、只能靠数进度点
-          # 才知道跑了多少测试，根因就是它。）
-          uv run pytest -rs | tee /tmp/pytest.log
+          # shellcheck disable=SC2086 — $targets 是有意按空格分词的
+          uv run pytest -rs $targets | tee /tmp/pytest.log
           # ⚠️ `-rs` 会把逐条跳过原因排在**最后**，所以汇总行在它**上面**。
           # 用 `tail -1` 取会拿到一条 SKIPPED 明细，`[0-9]+ skipped` 便永远匹配不到
           # 而回退成 0（这个 bug 在本步骤的第一版里真实存在，靠跑一遍才发现）。
@@ -178,9 +242,9 @@ jobs:
             echo "::error::输出里没有 'N passed' 汇总行 —— 收集或执行没有真的发生"; exit 1; }
           total=$(printf '%s' "$summary" | grep -oE "^[0-9]+")
           skipped=$(printf '%s' "$summary" | grep -oE "[0-9]+ skipped" | grep -oE "[0-9]+" || echo 0)
-          echo "汇总：passed=$total skipped=$skipped"
-          [ "$total" -ge 2700 ] || {
-            echo "::error::只跑了 $total 个测试（基线约 2740）—— 有测试没被收集"; exit 1; }
+          echo "汇总：tier=$tier passed=$total skipped=$skipped"
+          [ "$total" -ge "$floor" ] || {
+            echo "::error::只跑了 $total 个测试（tier=$tier 的下限 $floor）—— 有测试没被收集"; exit 1; }
           [ "$skipped" -le 10 ] || {
             echo "::error::跳过数 $skipped 超过 CI 基线 10 —— 看上面 -rs 的原因列表，"
             echo "::error::确认多出来的是有意的环境跳过，而不是测试在悄悄跳过"; exit 1; }
