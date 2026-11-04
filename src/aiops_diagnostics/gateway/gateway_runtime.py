@@ -20,6 +20,7 @@ from aiops_diagnostics.common.redaction import redact_text
 from aiops_diagnostics.conversation.conversation_store import BUSY_LOCK_SECONDS
 from aiops_diagnostics.data.sources import SourceError, scoped_live_sources
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_from_json, scope_to_json
+from aiops_diagnostics.gateway import metrics_store as metrics_dims
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
 from aiops_diagnostics.health.health_curves import build_curves
@@ -952,7 +953,7 @@ class GatewayRuntime:
     def _record_trial_metric(self, context: ScopeContext, outcome: str, started_ms: float) -> None:
         self._record_metric(
             tenant_id=context.effective_tenant_id,
-            route_type="trial",
+            route_type=metrics_dims.ROUTE_TRIAL,
             outcome=outcome,
             duration_ms=int((time.monotonic() - started_ms) * 1000),
         )
