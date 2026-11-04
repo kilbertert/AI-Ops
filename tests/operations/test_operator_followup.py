@@ -121,6 +121,7 @@ def test_revoked_order_is_not_replayed_and_new_topic_does_not_inherit(tmp_path, 
             "电费如何计算",
             "功率是什么",
             "电量怎么算",
+            "那还有空闲充电桩吗",
         ]:
             assert not _operator_order_followup(question)
 
@@ -238,3 +239,31 @@ def test_preview_is_not_listed_or_read_as_a_formal_conversation(tmp_path, monkey
         assert c["conversation_id"] not in response.text
         response = f["client"].get("/v1/conversations/" + c["conversation_id"], headers=HEADERS)
         assert response.status_code == 404
+
+
+def test_new_charger_question_after_order_dispatches_without_order(tmp_path, monkeypatch):
+    with environment(tmp_path, monkeypatch) as f:
+        seen = []
+
+        def dispatch(self, cfg, run_id):
+            order = f["ctx"].agent_run_store.get(run_id).order_no
+            seen.append(order)
+            if order:
+                return node(f, run_id)
+            raise RuntimeError("probe stops before external model")
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        first = (
+            f["client"]
+            .post("/v1/assistant/questions", headers=HEADERS, json={"question": "电费", "order_no": ORDER})
+            .json()
+        )
+        assert terminal(f, first["qa_id"]).json()["status"] == "completed"
+        second = f["client"].post(
+            "/v1/assistant/questions",
+            headers=HEADERS,
+            json={"question": "那还有空闲充电桩吗", "conversation_id": first["conversation_id"]},
+        )
+        assert second.status_code == 202
+        terminal(f, second.json()["qa_id"])
+        assert seen == [ORDER, ""]

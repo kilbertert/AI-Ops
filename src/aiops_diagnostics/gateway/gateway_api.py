@@ -6079,10 +6079,15 @@ def _operator_order_followup(question):
         text,
     ):
         return False
+    if re.search(
+        r"这笔|这单|这张订单|该单|刚才.*(?:单|订单)|那笔|那张订单|this order|that order|previous order", text
+    ):
+        return True
     return bool(
-        re.search(
-            r"这笔|这单|这张|该单|刚才|那笔|那张|它|^那|"
-            r"this order|that order|previous order|what about|^and ",
+        re.fullmatch(
+            r"(?:那|那么|它的?|what about |and )(?:这笔单的?|这单的?)?"
+            r"(?:电压|电流|功率|电费|服务费|电量|时长|状态|停止原因|voltage|current|power|fee|energy)"
+            r"(?:呢|怎么样|如何|是多少|多少)?[？?。.!！ ]*",
             text,
         )
     )
