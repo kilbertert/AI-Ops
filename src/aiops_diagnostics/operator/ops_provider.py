@@ -64,17 +64,25 @@ def ensure_node_provider(console, workspace, gateway_url, manifest=None, *, migr
         if json.loads(existing["schema"]) != schema:
             if not migrate:
                 raise ValueError("existing cpms-node schema differs; migrate explicitly")
-            console._call(
+            result = console._call(
                 workspace,
                 PROVIDER_PATH + "/update?provider=cpms-node",
                 method="POST",
                 follow_redirects=False,
                 body={
                     "provider": "cpms-node",
+                    "original_provider": "cpms-node",
+                    "credentials": {"auth_type": "none"},
+                    "icon": existing.get("icon") or {"content": "🔎", "background": "#E0F2FE"},
+                    "privacy_policy": existing.get("privacy_policy"),
+                    "custom_disclaimer": existing.get("custom_disclaimer") or "",
+                    "labels": existing.get("labels") or [],
                     "schema_type": "openapi",
                     "schema": json.dumps(schema, ensure_ascii=False),
                 },
             )
+            if not isinstance(result, dict) or result.get("result") != "success":
+                raise ValueError("node provider migration not confirmed")
             return {"action": "migrated", "provider": "cpms-node"}
         return {"action": "unchanged", "provider": "cpms-node"}
     result = console._call(
