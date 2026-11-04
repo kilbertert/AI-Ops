@@ -168,12 +168,9 @@ def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
                 assert recorded.status_code == 200, recorded.text
             from operations.test_operator_agent import call_tool
 
-            _, head, _ = call_tool(f, run_id, "cpms_order_amount_check")
+            analysis, head, _ = call_tool(f, run_id, "cpms_order_amount_check")
             value = {
-                "reply": (
-                    "历史规则：{{cpms_order_amount_check#/tariff_notes}}\n"
-                    "{{cpms_order_amount_check#/checks/2}}"
-                ),
+                "reply": ("历史规则：" + "\n".join(analysis["data"]["tariff_notes"])),
                 "evidence_tools": ["cpms_order_amount_check"],
             }
             done = client.post(
@@ -188,8 +185,10 @@ def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
         final = terminal(f, created.json()["qa_id"])
         assert final.json()["status"] == "completed", final.text
         assert "历史规则" in final.text and "1.20" in final.text
-        assert "规则1 服务费折扣优惠" in final.text
-        assert "同轮订单与账务记录不一致" in final.text
+        run = f["ctx"].agent_run_store.by_qa(created.json()["qa_id"])
+        checks = run.snapshot["evidence"]["cpms_order_amount_check"]["data"]["checks"]
+        assert any(c["label"] == "规则1 服务费折扣优惠" for c in checks)
+        assert any("同轮订单与账务记录不一致" in str(c) for c in checks)
         assert len(reads) == 1
 
 

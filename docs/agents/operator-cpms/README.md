@@ -134,7 +134,7 @@ Dify1.17.1更新载荷需要original_provider、credentials和icon；现役命�
 新合同`operator-agent/1`把语义和工具顺序交给模型；Gateway逐次校验对象和权限。
 订单工具可接收用户提供或会话确认的order_no；每run只绑定一单，不接受模型提供身份或URL。
 `cpms_order_amount_check`/`cpms_order_process_stats`读取本轮已有证据计算并将结果回交模型，
-不执行后台重算。模型直接交付自然语言，关键值用工具data的JSON Pointer引用；不要求最终JSON。
+不执行后台重算。模型直接交付自然语言，按工具结果写必要证据和算式；不要求JSON或字段路径占位符。
 
 运营将[只读SOP种子](../../../src/aiops_diagnostics/operator/operator_sop.md)保存到应用编辑区，
 可以编辑业务顺序；发布快照包含实际SOP与所选工具，后续修改必须重新预览/发布。

@@ -53,7 +53,7 @@ def test_compound_place_uses_site_search_in_real_tool_path(tmp_path, monkeypatch
                 headers=headers,
                 json={
                     "status": "completed",
-                    "answer": "{{cpms_site_search#/records/0/name}}",
+                    "answer": "HuaJing Station",
                 },
             )
             assert response.status_code == 200, response.text

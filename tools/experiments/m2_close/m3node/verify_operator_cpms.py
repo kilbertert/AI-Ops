@@ -60,13 +60,13 @@ class Model(BaseHTTPRequestHandler):
             finish = "tool_calls"
         else:
             if self.mode == "site":
-                reply = "找到{{cpms_site_search#/records/0/name}}。"
+                reply = "找到" + observations[0]["data"]["records"][0]["name"] + "。"
             else:
                 assert any(
                     item["tool"] == "cpms_order_amount_check" and item["data"]["checks"]
                     for item in observations
                 )
-                reply = "核验结果：{{cpms_order_amount_check#/checks/2}}。需补充原始证据。"
+                reply = "核验结果待验证。需补充原始证据。"
             delta = {
                 "role": "assistant",
                 "content": reply,

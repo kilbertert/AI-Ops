@@ -62,7 +62,7 @@ def test_model_can_select_order_and_receive_calculation_before_answer(tmp_path, 
                 f,
                 run,
                 headers,
-                "这项核验：{{cpms_order_amount_check#/checks/2}}",
+                "这项核验待验证，缺少独立记录。",
                 ["cpms_order_amount_check"],
             )
 
@@ -119,23 +119,6 @@ def test_candidate_is_not_authorization_or_an_invented_order():
         operator_agent.order_candidate({"order_no": "invented"}, "查订单", "", "")
     with pytest.raises(operator_cpms.OperatorRefused):
         operator_agent.order_candidate({"order_no": "B"}, "查B", "A", "")
-
-
-def test_reference_cannot_change_a_missing_verification_to_pass():
-    data = {
-        "cpms_order_amount_check": {
-            "data": {
-                "checks": [
-                    {"label": "折扣", "formula": "服务费×折扣", "status": "待验证", "reason": "缺独立记录"}
-                ]
-            },
-            "observed_at": "now",
-        }
-    }
-    value = operator_agent.render("{{cpms_order_amount_check#/checks/0}}", data)
-    assert "待验证" in value["blocks"][0]["text"]
-    with pytest.raises(operator_cpms.OperatorRefused):
-        operator_agent.render("{{cpms_order_amount_check#/checks/9}}", data)
 
 
 def test_revoked_history_is_omitted_without_blocking_a_new_general_question(tmp_path, monkeypatch):
@@ -261,15 +244,11 @@ def test_history_only_followup_cannot_hide_revoked_ancestor(tmp_path, monkeypatc
         assert "敏感订单" not in str(seen[-1])
 
 
-def test_absent_reference_and_unknown_analysis_fail_closed():
+def test_absent_order_and_unknown_analysis_fail_closed():
     with pytest.raises(operator_cpms.OperatorRefused):
         operator_agent.order_candidate({}, "查询", "", "")
     with pytest.raises(operator_cpms.OperatorRefused):
         operator_agent.analysis({"cpms_order_detail": {"data": {}}}, "unknown")
-    with pytest.raises(operator_cpms.OperatorRefused):
-        operator_agent.render("{{cpms_order_detail#/orderNo}}", {})
-    with pytest.raises(operator_cpms.OperatorRefused):
-        operator_agent.render("{{invalid}}", {})
     with pytest.raises(operator_cpms.OperatorRefused):
         operator_agent.render("", {})
 
@@ -283,7 +262,7 @@ def test_process_statistics_tool_requires_only_current_detail_and_samples(tmp_pa
             evidence, head, _ = call_tool(f, run, "cpms_order_process_stats")
             assert evidence["data"]["sample_count"] == 0
             assert evidence["data"]["average_power_kw"] == "91.20"
-            finish(f, run, head, "平均功率{{cpms_order_process_stats#/average_power_kw}} kW。", [])
+            finish(f, run, head, "平均功率91.20 kW。", [])
 
         monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
         result = (

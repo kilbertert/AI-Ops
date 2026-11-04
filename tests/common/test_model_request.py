@@ -111,3 +111,35 @@ def test_narrative_must_be_complete(monkeypatch, payload):
     )
     with pytest.raises(RuntimeError):
         run_narrative_turn({"total": 1}, AgentSettings())
+
+
+@pytest.mark.parametrize("wire", ["responses", "chat"])
+def test_explicit_review_effort_keeps_other_callers_default(monkeypatch, wire):
+    calls = []
+
+    def request(spec, **kwargs):
+        calls.append(json.loads(spec.body))
+        if wire == "responses":
+            return {
+                "status": "completed",
+                "output": [
+                    {"type": "message", "content": [{"type": "output_text", "text": '{"verdict":"reject"}'}]}
+                ],
+            }
+        return {"choices": [{"finish_reason": "stop", "message": {"content": '{"verdict":"reject"}'}}]}
+
+    monkeypatch.setattr(model_request, "request_json", request)
+    args = dict(
+        provider=ProviderConfig("test", "https://model.example", wire_api=wire),
+        api_key="test",
+        messages=[],
+        name="review",
+        schema={},
+    )
+    model_request.structured_request(**args, reasoning_effort="none")
+    assert (
+        calls[0]["reasoning"]["effort"] if wire == "responses" else calls[0]["reasoning_effort"]
+    ) == "none"
+    assert calls[0].get("max_output_tokens", calls[0].get("max_tokens")) == 1024
+    model_request.structured_request(**args)
+    assert "reasoning" not in calls[1] and "reasoning_effort" not in calls[1]

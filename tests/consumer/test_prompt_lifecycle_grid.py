@@ -138,9 +138,9 @@ def test_grid_client_not_found(style):
     assert answer["blocks"][0]["text"].startswith(NOT_FOUND[style])
 
 
-# 管家统一模型回复允许不同风格，事实值通过引用固定。
+# 管家统一模型回复允许不同风格，答复自然表达并附真实来源。
 @pytest.mark.parametrize("style", STYLES)
-def test_operator_style_preserves_referenced_value(style):
+def test_operator_style_preserves_natural_reply(style):
     from aiops_diagnostics.operator.operator_agent import render
 
     lead = "记录如下。" if style == "简洁直接" else "我帮您看一下这条记录。"
@@ -148,7 +148,7 @@ def test_operator_style_preserves_referenced_value(style):
         "cpms_order_billing": {"data": {"payAmount": "27.36"}, "observed_at": "2026-10-30T09:08:26+00:00"}
     }
     value = render(
-        lead + "记录付款{{cpms_order_billing#/payAmount}}",
+        lead + "记录付款27.36",
         evidence,
     )
     assert value["blocks"][0]["text"].startswith(lead)

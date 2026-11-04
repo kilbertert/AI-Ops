@@ -88,7 +88,7 @@ def test_site_tool_proxy_preserves_cpms_page_and_accepts_evidence(operator, monk
         )
         assert recorded.status_code == 200, recorded.text
         answer = {
-            "reply": "{{cpms_site_search#/records/0/name}}"
+            "reply": evidence["data"]["records"][0]["name"]
             if evidence["data"]["records"]
             else "本次未找到可见匹配站点。",
             "evidence_tools": ["cpms_site_search"],

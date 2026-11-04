@@ -142,7 +142,7 @@ def test_original_chat_clarifies_then_returns_scoped_frozen_plan(tmp_path, monke
                 json={"authorization_id": grant["authorization_id"], "evidence": evidence},
             )
             assert ack.status_code == 200, ack.text
-            answer = {"reply": "{{cpms_station_plan#/text}}", "evidence_tools": ["cpms_station_plan"]}
+            answer = {"reply": value["text"], "evidence_tools": ["cpms_station_plan"]}
             ack = f["client"].post(
                 f"/v1/internal/operator-runs/{run_id}/completions",
                 headers=head,

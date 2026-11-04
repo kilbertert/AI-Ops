@@ -356,7 +356,15 @@ def node(f, run_id, *, tools=ORDER_TOOLS, before_complete=None, answer=None, con
         before_complete()
     if answer is None:
         answer = {
-            "reply": "本轮记录：{{cpms_order_detail#/stoppedReasonContent}}。请结合现场情况核对。",
+            "reply": "本轮记录："
+            + str(
+                f["ctx"]
+                .operator_cpms.tasks[run_id]
+                .evidence["cpms_order_detail"]["data"]
+                .get("stoppedReasonContent")
+                or "未提供停止原因"
+            )
+            + "。请结合现场情况核对。",
             "evidence_tools": list(tools),
         }
     return client.post(

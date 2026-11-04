@@ -52,6 +52,7 @@ def review(reply, evidence, history, question, language, settings):
             name="operator_evidence_review",
             schema=SCHEMA,
             max_output_tokens=1024,
+            reasoning_effort="none",
         )
         if (
             isinstance(payload, dict)

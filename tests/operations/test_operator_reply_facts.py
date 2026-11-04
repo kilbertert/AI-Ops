@@ -1,16 +1,9 @@
-"""输出引用基于工具数据，不接受任意字段/错工具引用。"""
+"""自然答复不再要求字段引用；实际取证来源由系统附加。"""
 
 import pytest
 
-from aiops_diagnostics.operator.operator_agent import pointer, render
+from aiops_diagnostics.operator.operator_agent import render
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused
-
-
-def test_json_pointer_escapes_and_missing_values():
-    assert pointer({"a/b": {"~c": None}}, "/a~1b/~0c") is None
-    for path in ["/none", "/a~2b", "/a~1b/~0c/deeper"]:
-        with pytest.raises(OperatorRefused):
-            pointer({"a/b": {"~c": None}}, path)
 
 
 def test_published_prompt_strips_only_the_known_runtime_suffix():
@@ -21,18 +14,14 @@ def test_published_prompt_strips_only_the_known_runtime_suffix():
     assert business_prompt("业务SOP") == "业务SOP"
 
 
-@pytest.mark.parametrize("path", ["/token", "/rows/01", "/rows/-1", "/rows/9"])
-def test_invalid_references_are_refused(path):
-    evidence = {"cpms_order_detail": {"data": {"rows": ["allowed"]}, "observed_at": "now"}}
+@pytest.mark.parametrize("answer", ["", " ", None, {}, "字" * 12001])
+def test_empty_or_unbounded_answer_is_refused(answer):
     with pytest.raises(OperatorRefused):
-        render("{{cpms_order_detail#" + path + "}}", evidence)
+        render(answer, {})
 
 
-def test_model_selects_only_relevant_fields_without_rewriting_values():
+def test_natural_reply_keeps_only_requested_detail_and_real_sources():
     evidence = {"cpms_order_detail": {"data": {"voltage": None, "payAmount": 99}, "observed_at": "now"}}
-    reply = render(
-        "电压记录：{{cpms_order_detail#/voltage}}",
-        evidence,
-    )
-    text = reply["blocks"][0]["text"]
-    assert "未提供" in text and "99" not in text
+    text = render("电压记录未提供。", evidence)["blocks"][0]["text"]
+    assert text.startswith("电压记录未提供。") and "99" not in text
+    assert "订单详情" in text and "订单金额核验" not in text
