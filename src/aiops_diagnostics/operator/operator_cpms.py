@@ -46,6 +46,13 @@ JSON_ONLY_REMINDER = (
 #: 翻倍。更重要的理由是不掩盖故障：上游**持续**不守约时，多试几次会让它看起来像"慢"。
 MAX_RESAMPLES = 1
 
+NODE_FAILURE_CODES = {
+    "model_quota_exhausted": "OPERATOR_MODEL_QUOTA_EXHAUSTED",
+    "model_failed": "OPERATOR_DEPENDENCY_UNAVAILABLE",
+    "node_failed": "OPERATOR_DEPENDENCY_UNAVAILABLE",
+    "model_stream_incomplete": "OPERATOR_MODEL_OUTPUT_UNSTABLE",
+}
+
 #: 站点查询的三个上限：一页条数、最多页数、最多展示条数。
 #:
 #: 合起来是**「列举不能变成导出」**这条边界。改任何一个都要重新论证，不能当调参。
@@ -347,6 +354,8 @@ class OperatorCpms:
         caller = self.refresh_scope(caller, allow_empty=bool(run and not diagnoses_an_order(run)))
         if run is None or run.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("QA_NOT_FOUND")
+        if run.state != "succeeded" or not run.snapshot:
+            raise OperatorRefused("OPERATOR_RESULT_UNAVAILABLE")
         from aiops_diagnostics.execution.node_publication import all_targets
 
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
@@ -938,8 +947,10 @@ class OperatorCpms:
         if payload["status"] == "failed":
             # 节点给的原因码进运行记录，不再统一糊成 `operator_node_failed`。
             # 它只用于**归因**，不改变任何判决：这条 run 仍然失败。
-            reason = str(payload.get("reason") or "")
-            store.fail(run_id, "operator_node_failed: " + reason if reason else "operator_node_failed")
+            reason = payload.get("reason")
+            if not isinstance(reason, str) or reason not in NODE_FAILURE_CODES:
+                reason = "node_failed"
+            store.fail(run_id, "operator_node_failed: " + reason)
             logging.getLogger("aiops.operator").warning(
                 "operator_node_reported_failure reason=%s", reason or "-"
             )
@@ -1094,6 +1105,13 @@ class OperatorCpms:
         run = self.context.agent_run_store.get(run_id)
         return run is not None and run.state in {"issued", "running"}
 
+    def _raise_node_failure(self, run_id):
+        run = self.context.agent_run_store.get(run_id)
+        if run is not None and run.state == "failed":
+            reason = (run.reason or "").removeprefix("operator_node_failed: ")
+            if reason in NODE_FAILURE_CODES:
+                raise OperatorRefused(NODE_FAILURE_CODES[reason])
+
     def _worker(self, run_id, qa_id, config):
         store = self.context.store
         try:
@@ -1147,6 +1165,7 @@ class OperatorCpms:
                 try:
                     dispatcher.dispatch(config, run_id)
                 except AgentRunDispatchError:
+                    self._raise_node_failure(run_id)
                     if not self._untouched(run_id, task):
                         raise
                     if task.resamples >= MAX_RESAMPLES:
@@ -1156,6 +1175,7 @@ class OperatorCpms:
                         "operator_resample attempt=%d reason=dispatch_refused", task.resamples
                     )
                     continue
+                self._raise_node_failure(run_id)
                 if not self._untouched(run_id, task):
                     break
                 # 派发本身成功、回调也走完了，但 run 没被推进 —— 说明 `_complete` 拒了答案。
@@ -1579,6 +1599,8 @@ def _failure_code(exc: BaseException) -> str:
     """
     if isinstance(exc, OperatorRefused):
         code = str(exc)
+        if code in NODE_FAILURE_CODES.values():
+            return code
         # 这些原因说明**上游/环境**有问题，不是这次回答不合格 —— 分开报。
         if code in {
             "OPERATOR_NODE_REJECTED",

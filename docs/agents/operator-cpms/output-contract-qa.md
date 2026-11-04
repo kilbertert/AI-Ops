@@ -35,3 +35,33 @@ Java整链及`tools/experiments/m2_close/m3node/run.sh`的守卫验收。比较�
 本地通过仅证明上述契约，不证明真实供应商服从参数、ulink线上恢复或故障准确率。
 上线后按[41运维手册](../env-41-runbook.md)在已授权账号与订单上分别驱动原生预览、
 AI-Ops试运行和正式入口，记录运行制品版本、时间、结果及拒绝场景；未执行则标待验证。
+
+## 额度失败回归（2026-11-04）
+
+- OC-06：同一隔离Java/Gateway脚本中注入首轮403，分别带
+  `insufficient_user_quota`、中文额度不足消息和普通权限拒绝；前两者显示额度不足，
+  普通403只能显示依赖不可用。无正文、不重派，未知错误正文不进入Gateway或页面。
+- OC-07：`uv run pytest tests/operations/test_operator_failure.py -n 0`。
+  真实Gateway、合成节点失败回调，覆盖有/无订单、派发返回/抛异常、原问答与试运行。
+  断言分类、中文提示、无额外CPMS读取、无TypeError；成功路径仍执行原授权校验。
+- 生产只读核对精确QA的`agent_runs.reason`与同时间节点日志；只提取HTTP状态和固定
+  失败类别，禁止输出上游正文、密钥片段、余额或账号。充值由操作者完成后，再以原页面
+  和同一已授权订单复测；没有真实复测不得宣称线上恢复。临时环境由脚本清理。
+
+只读定位顺序：先在服务身份下用SQLite `mode=ro`按本次`qa_id`读取
+`agent_runs`的`created_at/state/reason/gateway_version`，再按该时间窗口取日志：
+
+```bash
+# 日志可能带密钥片段或业务正文；只在远端归类后打印布尔值，禁止原样回传。
+dev-host exec 41 --allow-service-exec --timeout 45 -- python3 - <<'PY'
+import subprocess
+text = subprocess.check_output(
+    ["docker", "logs", "--since", "<UTC开始>", "--until", "<UTC结束>", "aiops-runtime-node"],
+    stderr=subprocess.STDOUT, text=True,
+)
+print({"http_403": "403:" in text, "quota_exhausted": "用户额度不足" in text})
+PY
+```
+
+时间取自精确QA，journal显示的本地时间必须先换算；不要用最新成功记录替代本次失败。
+充值后重新从原页面提交，核对同一问题的新QA、实际运行版本及可见正文。
