@@ -40,7 +40,7 @@ agent_runs 里 operator-trial 绑定的运行数：181
 | 从词表删掉 `trial` | 2 条红（正例 + 产而无判据） |
 | 把判据写回 `list_runs()` 第二处 | 1 条红（判据不重复） |
 
-全量 **4183 passed / 9 skipped**（含 `tests/gateway/test_metrics_dimensions.py` 25 条）。
+全量 **4188 passed / 9 skipped**（含 `tests/gateway/test_metrics_dimensions.py` 25 条）。
 
 ## 三之二、复审订正（同一 PR 内）
 
