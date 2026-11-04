@@ -1145,8 +1145,14 @@ def test_a_rejection_after_evidence_is_still_redispatched(operator, monkeypatch,
 # 会话轮次其实一直在库里记着（`conversation_turns`），但**从来没回喂给模型**。
 
 
-def _seen_question(operator, monkeypatch, *, conversation_id=None, turns=()):
-    """跑一次派发，返回节点实际收到的那条用户消息。"""
+def _seen_question(operator, monkeypatch, *, conversation_id=None):
+    """跑一次派发，返回节点实际收到的那条用户消息。
+
+    `monkeypatch` 必须是 **fixture** 传进来的那一个：自己 `pytest.MonkeyPatch()`
+    新建的实例不受 fixture 生命周期管理，测试结束后**不会撤销**，补丁会漏到后续用例。
+    2026-11-04 就是这么让 `test_operator_cpms.py` 的两条派发测试在全量时变红的
+    —— 单跑却全绿，看起来像 flaky，实际是污染。
+    """
     from aiops_diagnostics.operator.operator_cpms import SnailDispatcher
 
     seen = {}
@@ -1165,7 +1171,7 @@ def _seen_question(operator, monkeypatch, *, conversation_id=None, turns=()):
     return seen.get("question", "")
 
 
-def test_the_node_message_carries_the_previous_questions_of_the_conversation(operator):
+def test_the_node_message_carries_the_previous_questions_of_the_conversation(operator, monkeypatch):
     """同一会话的上一轮提问要出现在节点看到的那条消息里。
 
     它只能以**文字**形式出现：节点要求首次模型调用「恰好一条用户消息」，
@@ -1181,12 +1187,12 @@ def test_the_node_message_carries_the_previous_questions_of_the_conversation(ope
     store.begin_turn(conversation_id, scope, kind="qa", question="上一轮的问题")
     store.complete_turn(conversation_id, scope, 1, answer={"blocks": []})
 
-    question = _seen_question(operator, pytest.MonkeyPatch(), conversation_id=conversation_id)
+    question = _seen_question(operator, monkeypatch, conversation_id=conversation_id)
     assert "同一会话的前文" in question
     assert "上一轮的问题" in question
 
 
-def test_a_conversation_without_prior_turns_adds_nothing(operator):
+def test_a_conversation_without_prior_turns_adds_nothing(operator, monkeypatch):
     """第一轮没有任何前文可带 —— 不要塞一段空的「前文」占位。"""
     f = operator
     conversation = f["ctx"].runtime.conversation_store.create(
@@ -1194,11 +1200,11 @@ def test_a_conversation_without_prior_turns_adds_nothing(operator):
         business_entry="operator",
         agent_version_key="agt_testagent00#v1",
     )
-    question = _seen_question(operator, pytest.MonkeyPatch(), conversation_id=conversation["conversation_id"])
+    question = _seen_question(operator, monkeypatch, conversation_id=conversation["conversation_id"])
     assert "同一会话的前文" not in question
 
 
-def test_history_is_absent_when_the_question_is_not_in_a_conversation(operator):
+def test_history_is_absent_when_the_question_is_not_in_a_conversation(operator, monkeypatch):
     """不属于任何会话时不带历史，且不影响派发。"""
-    question = _seen_question(operator, pytest.MonkeyPatch())
+    question = _seen_question(operator, monkeypatch)
     assert "同一会话的前文" not in question
