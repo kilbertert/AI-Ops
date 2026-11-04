@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.redaction import ERROR_TEXT_SHORT_LIMIT
 
 #: 一张行可能处于的全部状态。``created`` 与 ``ready`` 的区别在于**后续步骤是否跑完**
 #: （插件、凭据、模板 DSL，#881）；对"这个租户的 workspace 是哪一个"这个问题，两者
@@ -384,7 +385,7 @@ class DifyWorkspaces:
             connection.execute(
                 "UPDATE dify_workspaces SET setup_state = 'failed', last_error = ?,"
                 " lease_expires_at = NULL, updated_at = ? WHERE tenant_id = ? AND environment = ?",
-                (error[:500], _iso(now_utc()), tenant_id, environment),
+                (error[:ERROR_TEXT_SHORT_LIMIT], _iso(now_utc()), tenant_id, environment),
             )
 
     def mark_ready(self, tenant_id: str, environment: str) -> None:
@@ -424,7 +425,7 @@ class DifyWorkspaces:
                 "UPDATE dify_workspaces SET setup_state ="
                 " CASE WHEN setup_state = 'ready' THEN 'ready' ELSE 'created' END,"
                 " last_error = ?, updated_at = ? WHERE tenant_id = ? AND environment = ?",
-                (error[:500], _iso(now_utc()), tenant_id, environment),
+                (error[:ERROR_TEXT_SHORT_LIMIT], _iso(now_utc()), tenant_id, environment),
             )
 
     def mark_unknown(self, tenant_id: str, environment: str, *, error: str) -> None:
@@ -435,7 +436,7 @@ class DifyWorkspaces:
             connection.execute(
                 "UPDATE dify_workspaces SET setup_state = 'unknown', last_error = ?,"
                 " lease_expires_at = NULL, updated_at = ? WHERE tenant_id = ? AND environment = ?",
-                (error[:500], _iso(now_utc()), tenant_id, environment),
+                (error[:ERROR_TEXT_SHORT_LIMIT], _iso(now_utc()), tenant_id, environment),
             )
 
 

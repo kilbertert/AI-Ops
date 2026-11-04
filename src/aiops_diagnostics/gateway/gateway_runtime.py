@@ -16,7 +16,7 @@ from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.i18n import (
     DEFAULT_LANGUAGE,
 )
-from aiops_diagnostics.common.redaction import redact_text
+from aiops_diagnostics.common.redaction import ERROR_TEXT_LIMIT, redact_text
 from aiops_diagnostics.conversation.conversation_store import BUSY_LOCK_SECONDS
 from aiops_diagnostics.data.sources import SourceError, scoped_live_sources
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_from_json, scope_to_json
@@ -2243,7 +2243,7 @@ def _internal_error_message(error: Exception, order_no: str | None) -> str:
     response gets the bounded, coded copy instead (``DIAGNOSIS_ERROR_MESSAGES``).
     """
     message = redact_text(str(error), preserve=(order_no or "",))
-    return message[:1000] if message else error.__class__.__name__
+    return message[:ERROR_TEXT_LIMIT] if message else error.__class__.__name__
 
 
 def close_gateway_runtime(runtime: GatewayRuntime) -> None:
