@@ -2061,13 +2061,33 @@ class SiteKeywords:
         """答复可把同一地址拆成多个关键词；仅用于对齐已执行的工具参数。"""
         return "".join(self.address_terms)
 
-    def params(self, page: int) -> dict[str, object]:
+    def params(self, page: int, address: str | None = None) -> dict[str, object]:
+        """这一页的 CPMS 查询参数。
+
+        ``address`` 由调用方逐词给（见 :meth:`address_queries`）：上游的 ``address``
+        是**子串匹配**，把「广州天河」整串传过去一条都匹配不到 —— 没有任何一条地址
+        同时包含这两个相连的字。
+        """
         params: dict[str, object] = {"current": page, "size": SITE_PAGE_SIZE, "type": 0}
         if self.name:
             params["name"] = self.name
-        if self.address_terms:
-            params["address"] = max(self.address_terms, key=len)
+        chosen = self.address if address is None else address
+        if chosen:
+            params["address"] = chosen
         return params
+
+    def address_queries(self) -> tuple[str, ...]:
+        """这一次要**分别**发给上游的地址词。空元组表示不按地址过滤。
+
+        2026-11-04 实测（41 生产）：
+
+        * ``address=广州天河`` → ``total: 0``（上游子串匹配，整串无人命中）
+        * ``address=天河`` → 命中 ``HuaJing Station``
+
+        用户说「广州天河」指的是**上下级地名叠在一起**，不是一个字面串。所以按词
+        分别查询再合并 —— 这正是用户脑子里"这一带"的意思。
+        """
+        return tuple(term for term in self.address_terms if term.strip())
 
     def matches(self, site: dict[str, str]) -> bool:
         """这一行是不是在用户说的那个地点。
@@ -2192,22 +2212,36 @@ def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, 
     limited = False
     total = 0
     if scope.site_ids != ():
-        for page in range(1, SITE_MAX_PAGES + 1):
-            if reauthorize() != scope.fingerprint:
-                raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-            body = read(SITE_PATH + "?" + urlencode(keywords.params(page)), scope.tenant_id)
-            page_rows, page_total = site_page(scope, body, page, outside_scope=outside_scope)
-            for selected in page_rows:
-                if selected["id"] not in seen and keywords.matches(selected):
-                    seen.add(selected["id"])
-                    rows.append(selected)
-            data = body["data"]
-            more = page * SITE_PAGE_SIZE < data["total"]
-            total = max(total, data["total"])
-            if len(rows) >= SITE_MAX_SHOWN or not more or not data["records"]:
-                limited = more or len(rows) > SITE_MAX_SHOWN
+        # **每个地址词各查一轮**（2026-11-04）。上游的 `address` 是子串匹配，
+        # 「广州天河」整串一条都匹配不到（实测 total: 0），而「天河」能命中
+        # HuaJing Station。用户说的「广州天河」是上级地名叠下级地名，不是一个字面串。
+        #
+        # 逐词查询会多打几次 CPMS，所以这里有两道收口：
+        #   1. 词数上限（`SITE_MAX_TERMS`）—— 协议本来最多允许 4 个；
+        #   2. 一旦已经凑满展示上限就停止后续词，不再白打请求。
+        # 合并按 `id` 去重：同一个站点可能同时命中两个词。
+        for term in keywords.address_queries() or (None,):
+            if len(rows) >= SITE_MAX_SHOWN:
+                limited = True
                 break
-            limited = more
+            for page in range(1, SITE_MAX_PAGES + 1):
+                if reauthorize() != scope.fingerprint:
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+                body = read(SITE_PATH + "?" + urlencode(keywords.params(page, address=term)), scope.tenant_id)
+                page_rows, page_total = site_page(scope, body, page, outside_scope=outside_scope)
+                for selected in page_rows:
+                    if selected["id"] not in seen and keywords.matches(selected):
+                        seen.add(selected["id"])
+                        rows.append(selected)
+                data = body["data"]
+                more = page * SITE_PAGE_SIZE < data["total"]
+                # 多词查询下 `total` 是**各词计数之和的上界**，不是"一共有多少个"——
+                # 同一个站会被两个词各数一次。只在单词查询时才敢把它当总数。
+                total = max(total, data["total"])
+                if len(rows) >= SITE_MAX_SHOWN or not more or not data["records"]:
+                    limited = limited or more or len(rows) > SITE_MAX_SHOWN
+                    break
+                limited = True
     if reauthorize() != scope.fingerprint:
         raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
     return {
@@ -2219,6 +2253,10 @@ def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, 
         # 列举问法要回答"我有多少个"，只给前 10 条等于没回答。``total`` 是 CPMS 对
         # 这次查询自己的计数；``scope_limited`` 说明它是否还经过站点集合过滤 ——
         # 员工账号的 total 是租户口径，不能直接当成"你有多少个"。
-        "total": total,
+        #
+        # **多词查询时不报 total**：每个词各数一次，同一个站会被数两遍，那个和不是
+        # "一共有多少个"。宁可说"本次读取到 N 个"（渲染层已有这条路径），也不报一个
+        # 加起来偏大的数 —— 数字段是用户会照着对账单的。
+        "total": total if len(keywords.address_queries()) <= 1 else 0,
         "scope_limited": scope.site_ids is not None,
     }

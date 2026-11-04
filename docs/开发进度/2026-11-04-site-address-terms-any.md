@@ -41,6 +41,10 @@ HuaJing 的地址：`49P4+2PV, … 天河公园 Tian He Qu, Guang Zhou Shi, …`
 - **变异验证**：改回 `all()` → `test_address_terms_are_any_not_all` 变红。
 - 全量回归通过。
 
+## 下一步
+
+合并 → CD 部署 → 用同一句「帮我找出广州天河的充电桩」复测，确认返回 HuaJing Station。
+
 ## 五、边界（必须说清）
 
 **这次修复不解决跨语言匹配。** 只给「广州」一个词时，仍然命不中拼音地址 `Guang Zhou`。
