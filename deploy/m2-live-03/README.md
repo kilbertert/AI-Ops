@@ -296,6 +296,7 @@ M2LIVE_PROJECT=m2-live-03-syn \
 M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.synthetic.yaml \
 M2LIVE_CONFIG=/tmp/m2live03-local/etc M2LIVE_STATE=/tmp/m2live03-local/state \
 M2LIVE_DIST=/tmp/m2live03-local/dist \
+M2LIVE_GATEWAY_IDENTITY_SHA256="<本次构建侧批准的identity.json摘要>" \
 M2LIVE_UID=$(id -u) M2LIVE_GID=$(id -g) M2LIVE_SYNTH_MODE=1 \
 bash deploy/m2-live-03/checks.sh up
 ```
