@@ -267,3 +267,14 @@ def test_time_service_uses_custom_periods_with_verified_minute_unit():
     text = historical_report(body, {}, "zh")
     assert "服务费 0.05/分钟" in text
     assert "99.99" not in text
+
+
+@pytest.mark.parametrize("rate", [None, "bad", "NaN"])
+def test_unusable_time_rate_is_reported_as_missing(rate):
+    from aiops_diagnostics.operator.order_pricing import historical_report
+
+    body = snapshot()["data"]
+    body["feeTemplate"].update(
+        {"billingMode": 1, "customServiceItems": [{"startTime": "00:00", "endTime": "23:59", "price": rate}]}
+    )
+    assert "服务费费率缺失或无效" in historical_report(body, {}, "zh")

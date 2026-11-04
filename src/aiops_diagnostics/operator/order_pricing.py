@@ -147,7 +147,12 @@ def historical_report(snapshot, detail, language):
         custom = template.get("customServiceItems") or []
         for row in custom:
             rate = number(row.get("price"))
-            if rate is not None:
+            if rate is None:
+                lines.append(
+                    f"{row.get('startTime')}–{row.get('endTime')}: "
+                    + ("服务费费率缺失或无效。" if zh else "Service rate missing or invalid.")
+                )
+            else:
                 lines.append(
                     f"{row.get('startTime')}–{row.get('endTime')}: "
                     + (f"服务费 {rate:f}/分钟" if zh else f"service {rate:f}/minute")
