@@ -38,6 +38,16 @@ public class GuardedChatModelFactory implements ChatModelFactory {
     private final ExecManifest manifest;
     @org.springframework.beans.factory.annotation.Value("${aiops.node.managed-publication:false}")
     private boolean managedPublication;
+    private final ThreadLocal<java.util.List<org.springframework.ai.chat.messages.Message>> messages = new ThreadLocal<>();
+
+    public java.util.List<org.springframework.ai.chat.messages.Message> messages() { return messages.get(); }
+
+    public java.util.List<org.springframework.ai.chat.messages.Message> useMessages(java.util.List<org.springframework.ai.chat.messages.Message> value) {
+        var previous = messages.get();
+        if (value == null) messages.remove(); else messages.set(java.util.List.copyOf(value));
+        return previous;
+    }
+
     private final ThreadLocal<ExecManifest> publication = new ThreadLocal<>();
 
     public ExecManifest usePublication(ExecManifest value) {
@@ -88,7 +98,7 @@ public class GuardedChatModelFactory implements ChatModelFactory {
         ChatModelSpec spec = specFactory.create(new ClientChatModelInput(modelConfig));
         ChatModel model = runtime.build(spec);
         // 每次 run 一个新守卫：跨 run 不共享可变状态，交错的两个 run 各持自己的期望与计数。
-        GuardedChatModel.ExecGuard guard = new GuardedChatModel.ExecGuard(manifest(), true);
+        GuardedChatModel.ExecGuard guard = new GuardedChatModel.ExecGuard(manifest(), true, messages.get());
         // 模型标识与有效选项只能在**构造出来的模型**上看到（实测：Prompt 上 options 为 null）。
         guard.verifyModelOptions(model.getOptions());
         return new GuardedChatModel(model, guard);

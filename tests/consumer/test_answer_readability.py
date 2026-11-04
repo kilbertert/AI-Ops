@@ -18,7 +18,6 @@ import pytest
 from aiops_diagnostics.consumer.consumer_billing import billing_answer
 from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 from aiops_diagnostics.consumer.consumer_time import readable_time
-from aiops_diagnostics.operator.operator_cpms import render_report
 
 ISO = "2026-10-29T12:34:45.123456+00:00"
 
@@ -69,30 +68,3 @@ def test_consumer_answers_are_labelled_lines_not_one_sentence(render, language):
     assert "2026-10-29 12:34:45" in text and "UTC" in text
     # 数据与免责说明分开成段，读的人不会把注意项当成数据。
     assert "\n\n" in text
-
-
-def test_operator_report_has_headings_numbered_steps_and_human_sources():
-    text = render_report(ANSWER, EVIDENCE)
-    # 第一段就是回答用户问的那一点。
-    assert text.startswith(ANSWER["direct_answer"])
-    for heading in ("【订单事实】", "【可能原因】", "【建议下一步】", "【证据缺口】", "【数据来源】"):
-        assert heading in text
-    # 列表带编号：用户会说"第 2 条"，而且能和正文对上。
-    assert "1. 核对远程停止操作记录" in text
-    assert "2. 调取邻近时段样本做功率对比" in text
-    # 来源给人话，不给内部接口标识；时间不带微秒。
-    assert "订单详情" in text and "充电监测样本" in text
-    assert "cpms.orderDetail" not in text and "cpms.chargingMonitor" not in text
-    assert ISO not in text
-
-
-def test_operator_report_omits_empty_sections_instead_of_printing_blank_headings():
-    thin = {
-        "direct_answer": "订单已结束。",
-        "summary": "",
-        "probable_cause": "",
-        "next_steps": [],
-        "limitations": [],
-    }
-    text = render_report(thin, {})
-    assert text == "订单已结束。"

@@ -246,3 +246,18 @@ environment/node_id/observed_at及协议摘要即可检查；不输出节点令�
 `mvn -s /var/maven/settings-docker.xml -Dmaven.repo.local=/var/maven/repository -DskipTests=false package`。
 验证实际Java报告：`python tools/verification/verify_node_capabilities.py dist/verification/node-capabilities`。
 使用合成Gateway、随机回环端口及无效Snail目标，约4秒收到报告；关闭自己的容器，不接生产。
+
+## 迁移到管家统一模型循环（operator-agent/1）
+
+该片改变订单参数和历史消息合同，必须按一套制品交付：新节点JAR、operator-tools声明、
+包含全量获准工具的Gateway模板、回调白名单、Gateway代码、目标应用的新SOP及工具选择。
+先在开发机完成真Java/Gateway与已授权外部依赖试验，保存原JAR/模板/声明/应用配置和版本。
+已有消费者状态节点仍用原协议，不能替换成管家清单。
+
+服务窗口无在飞任务时先装兼容新旧schema的节点和新工具声明，核capability的schema/摘要；
+再运行已合并Gateway标准CD，正常迁移cpms-node提供方，以目标应用草稿保存SOP和工具，
+预览通过后走正常publish，revision递增并核账本。新Gateway对旧应用协议明确拒绝启动，
+窗口内不能把“节点已就绪”当成“正式可用”。原H5和Dify两轮及新话题全部通过后记live。
+
+失败按配套制品恢复Gateway、节点/声明/模板，再通过正常恢复API切原版本，不回写revision、
+不覆盖问答库。当前项目无独立蓝绿业务入口，必须记录该窗口与恢复结果，不宣称无感切换。

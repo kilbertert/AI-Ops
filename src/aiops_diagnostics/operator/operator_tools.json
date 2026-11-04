@@ -1,18 +1,13 @@
 {
   "schema": "aiops-operator-tools/1",
   "_comment": [
-    "一个 CPMS 只读工具是什么 —— 仓内唯一声明。",
-    "网关侧的路径物化、输入、证据字段、来源标记、发布白名单与 provider 的 OpenAPI 生成，",
-    "以及节点侧的装配，都从这里读或由它校验。新增一个工具只加一条，不改节点源码。",
-    "边界（有意为之）：request 只能是 GET + 相对路径 + 声明里的查询参数表；",
-    "response.kind支持single、page与object；object的有界嵌套白名单由evidence_shape声明。",
-    "applies_to 说明这个工具能出现在哪一类运行里：order（有订单的诊断）与 conversation（无订单回合）。",
-    "model_inputs 是模型可以提议的那部分输入 —— 它决定发布清单里的 input_schema。运行绑定的输入（例如订单号）不出现在 schema 里：模型不能选它。"
+    "CPMS只读工具的唯一声明；模型可提出业务参数，身份、对象权限、请求地址与证据投影由系统校验。",
+    "applies_to保留工具数据对象类别，不决定管家本轮意图；统一管家循环可声明全部CPMS工具。"
   ],
   "tools": [
     {
       "name": "cpms_order_detail",
-      "description": "Read diagnostic fields for the authorized order from CPMS. Takes no arguments.",
+      "description": "Read diagnostic fields for the authorized order from CPMS. Optional order_no is a candidate supplied by the user or the current conversation; authorization is checked for each call.",
       "inputs": [
         "order_no"
       ],
@@ -75,11 +70,13 @@
       "applies_to": [
         "order"
       ],
-      "model_inputs": []
+      "model_inputs": [
+        "order_no"
+      ]
     },
     {
       "name": "cpms_charging_samples",
-      "description": "Read up to 50 CPMS charging samples for the authorized order. Ordering and completeness are not guaranteed. Takes no arguments.",
+      "description": "Read up to 50 CPMS charging samples for the authorized order. Ordering and completeness are not guaranteed. Optional order_no is a candidate supplied by the user or the current conversation; authorization is checked for each call.",
       "inputs": [
         "order_no"
       ],
@@ -127,7 +124,9 @@
       "applies_to": [
         "order"
       ],
-      "model_inputs": []
+      "model_inputs": [
+        "order_no"
+      ]
     },
     {
       "name": "cpms_site_search",
@@ -216,11 +215,13 @@
     },
     {
       "name": "cpms_order_tariff",
-      "description": "Read the authorized order historical tariff snapshot and period fees. Takes no arguments. Read order detail first.",
+      "description": "Read the authorized order historical tariff snapshot and period fees. Optional order_no is a candidate supplied by the user or the current conversation; authorization is checked for each call. Read order detail first.",
       "inputs": [
         "order_no"
       ],
-      "model_inputs": [],
+      "model_inputs": [
+        "order_no"
+      ],
       "applies_to": [
         "order"
       ],
@@ -457,11 +458,13 @@
     },
     {
       "name": "cpms_order_billing",
-      "description": "Read authorized order billing and recorded discount terms. Read order detail and historical tariff first; never infer a discount rate from paid amounts.",
+      "description": "Read authorized order billing. dsElectricFee/dsServiceFee are electricity-loss charges (电损电费/电损服务费), NOT discounts. marketAmount is recorded total reduction; discounts contains recorded terms only. Empty discounts does not prove no eligibility. Currency is not supplied: never infer yuan. Read order detail and historical tariff first. order_no optionally selects a user-referenced order; Gateway checks authorization.",
       "inputs": [
         "order_no"
       ],
-      "model_inputs": [],
+      "model_inputs": [
+        "order_no"
+      ],
       "applies_to": [
         "order"
       ],
@@ -514,6 +517,96 @@
           "couponPrice": null,
           "carRightPrice": null
         }
+      }
+    },
+    {
+      "name": "cpms_order_amount_check",
+      "description": "Verify recorded order amounts against historical tariff and billing evidence read in this run. Read detail, tariff and billing first. No input amounts; read-only, does not recalculate the stored bill. Each check is local arithmetic only: matching amounts do NOT prove no overcharge, correct original metering or discount eligibility. State the conclusion and limitations together.",
+      "inputs": [
+        "order_no"
+      ],
+      "model_inputs": [],
+      "applies_to": [
+        "order"
+      ],
+      "request": {
+        "method": "GET",
+        "path_template": "/order-amount-check/{order_no}",
+        "query": []
+      },
+      "source": "cpms.orderAmountCheck",
+      "response": {
+        "kind": "object",
+        "row_path": "value"
+      },
+      "evidence_fields": [
+        "checks",
+        "limitations",
+        "conclusion",
+        "template_name",
+        "tariff_notes"
+      ],
+      "evidence_shape": {
+        "checks": [
+          {
+            "label": null,
+            "formula": null,
+            "calculated": null,
+            "recorded": null,
+            "difference": null,
+            "status": null,
+            "reason": null
+          }
+        ],
+        "limitations": null,
+        "conclusion": null,
+        "template_name": null,
+        "tariff_notes": [
+          null
+        ]
+      }
+    },
+    {
+      "name": "cpms_order_process_stats",
+      "description": "Compute charging sample ranges and average power from current order detail and charging samples. Read both first. Limited samples are not a complete timeline or fault verdict.",
+      "inputs": [
+        "order_no"
+      ],
+      "model_inputs": [],
+      "applies_to": [
+        "order"
+      ],
+      "request": {
+        "method": "GET",
+        "path_template": "/order-process-stats/{order_no}",
+        "query": []
+      },
+      "source": "cpms.orderProcessStats",
+      "response": {
+        "kind": "object",
+        "row_path": "value"
+      },
+      "evidence_fields": [
+        "sample_count",
+        "complete_timeline",
+        "metrics",
+        "average_power_kw",
+        "limitations"
+      ],
+      "evidence_shape": {
+        "sample_count": null,
+        "complete_timeline": null,
+        "metrics": [
+          {
+            "name": null,
+            "unit": null,
+            "count": null,
+            "minimum": null,
+            "maximum": null
+          }
+        ],
+        "average_power_kw": null,
+        "limitations": null
       }
     }
   ]

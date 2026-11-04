@@ -28,6 +28,7 @@ def record(database, config, node, payload):
 
 def require_compatible(database, target, manifest):
     from aiops_diagnostics.dify.self_service_identity import SetupRefused
+    from aiops_diagnostics.operator import operator_tools
     from aiops_diagnostics.operator.operator_cpms import OBJECT_CONTRACT, TOOL_CONTRACT
 
     config = AgentRunConfig.load(Path(target.config_file))
@@ -49,7 +50,7 @@ def require_compatible(database, target, manifest):
     ).hexdigest()
     contracts = (
         {OBJECT_CONTRACT}
-        if any(t.get("name") in {"cpms_order_tariff", "cpms_station_plan"} for t in manifest.get("tools", []))
+        if any(operator_tools.tool(t["name"]).kind == "object" for t in manifest.get("tools", []))
         else {TOOL_CONTRACT, OBJECT_CONTRACT}
     )
     if (

@@ -10,7 +10,6 @@ import secrets
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -24,26 +23,21 @@ from aiops_diagnostics.execution.agent_runs import (
 )
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
-from aiops_diagnostics.operator import operator_conversation, operator_tools, order_pricing, site_note_review
-from aiops_diagnostics.operator.operator_conversation import OperatorRefused, claims_mutation
+from aiops_diagnostics.operator import (
+    operator_agent,
+    operator_answer_review,
+    operator_conversation,
+    operator_tools,
+    order_pricing,
+)
+from aiops_diagnostics.operator.operator_conversation import OperatorRefused
 
 SCENARIO = "operator_order_diagnosis"
 PREFIX = "operator-cpms-node:"
 #: 工具名、路径、输入与证据字段全部来自 `operator_tools.json` —— 仓内唯一声明。
 TOOL_NAMES = operator_tools.names()
 
-#: 追加在节点那条用户消息末尾的强制提醒。**实测出来的，不是措辞偏好**：
-#: 带工具轮次的最后一步，`response_format=json_object` 有 36–44% 不生效（通篇正文），
-#: 加上这一句后同一实验降到 8%。它不改变协议 —— 交付与否仍由 `_complete` 的校验决定。
-JSON_ONLY_REMINDER = (
-    "\n\n最后一步只输出那个JSON对象本身：不要任何前言、标题、列表、"
-    "推理过程或解释，第一个字符必须是 {，最后一个字符必须是 }。"
-    "即使证据不足，也照样输出带缺证说明的JSON。"
-)
-
-#: 一次 run 因为「上游没给可接受的答案」最多重派几次。**1 是刻意的**：
-#: 实测单次失败率 36–44%，再派一次后剩余失败约 1–2%，再加一次只到 0.2% 却把最坏延迟
-#: 翻倍。更重要的理由是不掩盖故障：上游**持续**不守约时，多试几次会让它看起来像"慢"。
+# 同一run最多一次有界重派，复用其已经读取的证据。
 MAX_RESAMPLES = 1
 
 NODE_FAILURE_CODES = {
@@ -113,6 +107,8 @@ def allowed_in(tool: str, run) -> bool:
 
     无订单回合可以带工具，但**不是任何工具**：订单诊断工具没有订单就没有取证对象。
     """
+    if operator_agent.is_agent(run):
+        return tool in TOOL_NAMES
     context = "order" if diagnoses_an_order(run) else "conversation"
     return context in _declared(tool).applies_to or (
         context == "conversation" and "operator_conversation" in _declared(tool).applies_to
@@ -206,11 +202,9 @@ def still_authorized(binding, run, *, trial=False) -> bool:
         return binding.route_revision == run.route_revision
     try:
         frozen = execution_manifest.from_text(run.execution_manifest)
-        current_text = (
-            binding.manifest_text
-            if diagnoses_an_order(run)
-            else operator_conversation.manifest(binding.manifest_text)
-        )
+        current_text = binding.manifest_text
+        if not operator_agent.is_agent(run) and not diagnoses_an_order(run):
+            return binding.route_revision == run.route_revision
         current = execution_manifest.from_text(current_text)
         old_tools = {t["name"]: t["input_schema"] for t in json.loads(run.execution_manifest)["tools"]}
         new_tools = {t["name"]: t["input_schema"] for t in json.loads(current_text)["tools"]}
@@ -226,59 +220,9 @@ def still_authorized(binding, run, *, trial=False) -> bool:
     )
 
 
-def _sites_from_evidence(caller, task, answer):
-    """这一轮已经用工具取过站点时，**复用那份证据**，不再查第二次。
-
-    两件事同时成立才算复用：证据在、且回答里的关键词与工具参数一致。不一致说明模型
-    在两次输出里说了不同的地方，那不是同一次查询 —— 拒绝比挑一个更安全。
-
-    这就是「两个入口同一份事实」的真正含义：不是两次查询碰巧相同，而是一次查询被两个
-    入口共用。
-    """
-    if SITE_TOOL not in task.delivered:
-        return None
-    evidence = task.evidence.get(SITE_TOOL)
-    if evidence is None:
-        raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
-    arguments = task.arguments.get(SITE_TOOL, {})
-    if answer["name"] != arguments.get("name", ""):
-        raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
-    if "address_terms" in arguments:
-        expected = tuple("".join(term.split()).casefold() for term in arguments["address_terms"])
-        observed = tuple("".join(term.split()).casefold() for term in answer["address_terms"])
-        if expected != observed:
-            raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
-    elif (
-        "".join(site_keywords(answer).address.split()).casefold()
-        != "".join(arguments.get("address", "").split()).casefold()
-    ):
-        raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
-    data = evidence["data"]
-    scope = operator_scope(caller, allow_empty=True)
-    return {
-        "source": evidence["source"],
-        "observed_at": evidence["observed_at"],
-        "sites": data["records"],
-        # `limited` 只说「查询可能没穷尽」；展示只列 10 条由渲染层的「另有 N 个」说明 ——
-        # 两件事混用会让一句「结果可能不完整」盖住本来完整的 11 条页。
-        "limited": bool(data["truncated"]),
-        "empty_scope": scope.site_ids == (),
-        "total": int(data["total"]),
-        "scope_limited": scope.site_ids is not None,
-    }
-
-
 def diagnoses_an_order(run) -> bool:
-    """这次运行是不是**订单诊断**。
-
-    判据是运行类型 ``run.operation``，**不是订单号是否为空**。两者今天恰好一致——
-    签发时就是按有没有订单二选一的——但一致是结果，不是判据。一旦有不需要订单的能力
-    要进工具面，这个区别就是全部差别：拿订单号当判据，那种能力在类型上就写不出来。
-
-    订单号仍承担它真正的工作（拼路径、冻结站点、比证据），只是不再兼职表达
-    "这次跑的是什么"。
-    """
-    return run.operation == SCENARIO
+    """统一循环取证后才绑定对象；旧运行按原类型回读。"""
+    return bool(run.order_no) if operator_agent.is_agent(run) else run.operation == SCENARIO
 
 
 def operator_scope(caller, *, allow_empty=False):
@@ -307,10 +251,14 @@ class ActiveTask:
     #: 每个工具这一次的取值（订单号或模型提议的关键词）。放行一次就固定，后续步骤只读它。
     arguments: dict = field(default_factory=dict)
     conversation_turn: tuple | None = None
+    selected_order: str = ""
+    active_order: str = ""
+    messages: list = field(default_factory=list)
+    history_runs: list = field(default_factory=list)
     question: str = ""
     language: str = "zh"
     trial: bool = False
-    #: 本次运行已经因为「模型没吐 JSON」重派过几次。**上限是 1**，见 `_complete`。
+    #: 本次运行可接受答复未完成时最多重派一次。
     #: 放在任务上而不是模块上：它属于这一次 run，跨 run 复用就没有"有界"可言了。
     resamples: int = 0
     lock: object = field(default_factory=threading.RLock)
@@ -406,6 +354,27 @@ class OperatorCpms:
         )
         if target is None:
             raise OperatorRefused("OPERATOR_TARGET_MISSING")
+        if operator_agent.is_agent(run):
+            task = ActiveTask(
+                caller,
+                binding,
+                lambda: self.refresh_scope(caller, allow_empty=True),
+                bearer,
+                target.cpms_base_url,
+                target.proxy_base_url,
+                "",
+            )
+            self._authorize_snapshot(task, run)
+            for previous_id in run.snapshot.get("history_runs", []):
+                previous = self.context.agent_run_store.peek(previous_id)
+                if (
+                    previous is None
+                    or previous.scope_fingerprint != caller.scope_fingerprint
+                    or not previous.snapshot
+                ):
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+                self._authorize_snapshot(task, previous)
+            return self.result(caller, qa_id)
         if not diagnoses_an_order(run):
             plan = (run.snapshot or {}).get("evidence", {}).get("cpms_station_plan", {}).get("data", {})
             if plan.get("site_id"):
@@ -465,23 +434,10 @@ class OperatorCpms:
 
         base, proxy = canonical_gateway_url(base), canonical_gateway_url(proxy)
         manifest_text = trial_manifest if trial_manifest is not None else binding.manifest_text
-        if not order:
-            manifest_text = operator_conversation.manifest(manifest_text)
+        if json.loads(manifest_text).get("schema") != operator_agent.SCHEMA:
+            raise OperatorRefused("OPERATOR_PUBLICATION_UPGRADE_REQUIRED")
         manifest = execution_manifest.from_text(manifest_text)
-        if order and (
-            TOOL_NAMES[0] not in manifest.tool_names or not set(manifest.tool_names).issubset(TOOL_NAMES)
-        ):
-            raise OperatorRefused("OPERATOR_DETAIL_TOOL_DISABLED")
-        # 查询只用于确认当前订单归属，不把它冒充节点本轮取得的诊断证据。
         order_site_id = ""
-        if order:
-            body = cpms_get(
-                base + tool_request(TOOL_NAMES[0], run_values(TOOL_NAMES[0], order))["path"],
-                bearer,
-                caller.effective_tenant_id,
-            )
-            validate_body(body, current, order, TOOL_NAMES[0])
-            order_site_id = body["data"]["siteId"]
         current = authorize()
         if current.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
@@ -496,7 +452,7 @@ class OperatorCpms:
             store = self.context.agent_run_store
             run = store.issue(
                 scope=caller,
-                order_no=order,
+                order_no="",
                 config=config,
                 gateway_version=__import__("aiops_diagnostics").__version__,
                 expected_agent_version=manifest.identity,
@@ -504,7 +460,7 @@ class OperatorCpms:
                 execution_manifest=manifest_text,
                 route_revision=binding.route_revision,
                 publication_app_id=binding.app_id,
-                operation=SCENARIO if order else operator_conversation.SCENARIO,
+                operation="operator_agent",
             )
             qa = self.context.store.create_assistant_question(
                 caller.scope_fingerprint,
@@ -524,6 +480,7 @@ class OperatorCpms:
                 proxy,
                 order_site_id,
                 conversation_turn=conversation_turn,
+                selected_order=order,
                 question=question,
                 language=language,
                 trial=trial_manifest is not None,
@@ -543,6 +500,113 @@ class OperatorCpms:
         future.add_done_callback(lambda _: self.context.runtime._qa_registrations.pop(qa["qa_id"], None))
         return qa
 
+    def _authorized_order(self, task, order, *, expected_site=""):
+        current = task.authorize()
+        if current.scope_fingerprint != task.caller.scope_fingerprint:
+            raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+        body = cpms_get(
+            task.base_url + tool_request(TOOL_NAMES[0], {"order_no": order})["path"],
+            task.bearer,
+            current.effective_tenant_id,
+        )
+        validate_body(body, current, order, TOOL_NAMES[0])
+        if expected_site and body["data"]["siteId"] != expected_site:
+            raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+        if task.authorize().scope_fingerprint != current.scope_fingerprint:
+            raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+        return body
+
+    def _authorize_snapshot(self, task, run):
+        scope = operator_scope(task.authorize(), allow_empty=True)
+        evidence = run.snapshot.get("evidence", {})
+        if run.order_no:
+            detail = evidence.get(TOOL_NAMES[0], {}).get("data", {})
+            if not detail.get("siteId"):
+                raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+            self._authorized_order(task, run.order_no, expected_site=detail["siteId"])
+        for name, item in evidence.items():
+            data = item["data"]
+            sites = [row["id"] for row in data.get("records", [])] if name == SITE_TOOL else []
+            if data.get("site_id"):
+                sites.append(data["site_id"])
+            for site in sites:
+                if scope.site_ids is not None and site not in scope.site_ids:
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+                body = cpms_get(
+                    task.base_url + "/chSite/" + site, task.bearer, task.caller.effective_tenant_id
+                )
+                row = body.get("data") if isinstance(body, dict) and body.get("code") == 0 else None
+                if not isinstance(row, dict) or (row.get("id"), row.get("tenantId")) != (
+                    site,
+                    task.caller.effective_tenant_id,
+                ):
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+
+    def _messages(self, task):
+        messages = []
+        task.history_runs = []
+        if task.conversation_turn:
+            conversation, scope, before = task.conversation_turn
+            store = self.context.runtime.conversation_store
+            current = store.get(conversation, scope)
+            task.active_order = current.get("active_order_no") or ""
+            if task.active_order:
+                try:
+                    self._authorized_order(task, task.active_order)
+                except OperatorRefused:
+                    task.active_order = ""
+            for turn in store.completed_context(conversation, scope, before=before):
+                previous = self.context.agent_run_store.by_qa(turn.get("status_qa_id"))
+                if not previous or previous.scope_fingerprint != scope or not previous.snapshot:
+                    continue
+                if previous.publication_app_id != task.binding.app_id:
+                    continue
+                try:
+                    self._authorize_snapshot(task, previous)
+                    inherited = previous.snapshot.get("history_runs", [])
+                    if len(inherited) > 60:
+                        raise OperatorRefused("OPERATOR_HISTORY_LIMIT")
+                    for dependency in inherited:
+                        source = self.context.agent_run_store.peek(dependency)
+                        if source is None or source.scope_fingerprint != scope or not source.snapshot:
+                            raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+                        self._authorize_snapshot(task, source)
+                except OperatorRefused as exc:
+                    if str(exc) == "OPERATOR_HISTORY_LIMIT":
+                        raise
+                    continue
+                answer = "\n".join(b.get("text", "") for b in (turn.get("answer") or {}).get("blocks", []))
+                if len(answer) > 10000:
+                    continue
+                dependencies = [key for key in [previous.run_id, *inherited] if key not in task.history_runs]
+                if len(task.history_runs) + len(dependencies) > 60:
+                    raise OperatorRefused("OPERATOR_HISTORY_LIMIT")
+                task.history_runs.extend(dependencies)
+                messages.extend(
+                    [
+                        {"role": "user", "content": turn["question"][:4000]},
+                        {"role": "assistant", "content": answer},
+                    ]
+                )
+        messages.append(
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "question": task.question,
+                        "page_selected_order": task.selected_order,
+                        "conversation_order": task.active_order,
+                        "language": task.language,
+                        "history_is_previous_observation": True,
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        )
+        while len(json.dumps(messages, ensure_ascii=False)) > 48000 and len(messages) > 1:
+            del messages[:2]
+        return messages
+
     def _prune(self):
         for key in list(self.tasks):
             run = self.context.agent_run_store.get(key)
@@ -559,7 +623,7 @@ class OperatorCpms:
         if (
             task is None
             or run is None
-            or run.operation not in {SCENARIO, operator_conversation.SCENARIO}
+            or run.operation not in {SCENARIO, operator_conversation.SCENARIO, "operator_agent"}
             or run.state not in {"issued", "running"}
         ):
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
@@ -641,7 +705,7 @@ class OperatorCpms:
         return task, latest, config
 
     def publication(self, run_id, token):
-        _, run, _ = self._current(run_id, node_token=token)
+        task, run, _ = self._current(run_id, node_token=token)
         if (
             not diagnoses_an_order(run)
             and run.state == "issued"
@@ -653,6 +717,7 @@ class OperatorCpms:
             "manifest": run.execution_manifest,
             "sha256": run.expected_agent_version,
             "operation": run.operation,
+            "messages": task.messages,
         }
 
     def grant(self, run_id, token, manifest, tool, contract="", arguments=None):
@@ -662,7 +727,27 @@ class OperatorCpms:
             raise OperatorRefused("OPERATOR_TOOL_CONTRACT_OUTDATED")
         task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
         # 参数放行发生在**取到公司令牌之前**：模型编的地址不会换来一次真实的对外请求。
-        arguments = validate_tool_arguments(tool, arguments, task.question)
+        arguments = arguments or {}
+        if tool in {"cpms_order_amount_check", "cpms_order_process_stats"}:
+            if arguments or not run.order_no:
+                raise OperatorRefused("OPERATOR_ANALYSIS_INVALID")
+        elif "order_no" in _declared(tool).inputs:
+            if set(arguments) - {"order_no"}:
+                raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+            candidate = operator_agent.order_candidate(
+                arguments, task.question, task.selected_order, run.order_no or task.active_order
+            )
+            with task.lock:
+                if run.order_no and run.order_no != candidate:
+                    raise OperatorRefused("OPERATOR_ORDER_CONFLICT")
+                detail = self._authorized_order(task, candidate, expected_site=task.order_site_id)
+                if not self.context.agent_run_store.bind_operator_order(run_id, candidate):
+                    raise OperatorRefused("OPERATOR_ORDER_CONFLICT")
+                task.order_site_id = detail["data"]["siteId"]
+                run = self.context.agent_run_store.get(run_id)
+                arguments = {"order_no": candidate}
+        else:
+            arguments = validate_tool_arguments(tool, arguments, task.question)
         if tool == "cpms_station_plan":
             previous = self._previous_plan(task)
             # 补齐或重复身份条件继续同一计划；真正更换站点/日期才重置。
@@ -788,7 +873,9 @@ class OperatorCpms:
         无订单（站点工具）：账号可见的站点集合；空集合是合法的（「你确实没有站点」），
         不放大成租户。
         """
-        if diagnoses_an_order(run):
+        if "order_no" in _declared(tool).inputs:
+            if not task.order_site_id:
+                raise OperatorRefused("OPERATOR_ORDER_REQUIRED")
             return [task.order_site_id]
         scope = operator_scope(task.caller, allow_empty=True)
         return list(scope.site_ids) if scope.site_ids is not None else None
@@ -806,7 +893,8 @@ class OperatorCpms:
             (
                 name
                 for name in TOOL_NAMES
-                if allowed_in(name, run)
+                if name in task.arguments
+                and allowed_in(name, run)
                 and tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
                 == {"method": method, "path": path, "query": query}
             ),
@@ -826,6 +914,36 @@ class OperatorCpms:
             if tool == "cpms_order_billing" and "cpms_order_tariff" not in task.delivered:
                 raise OperatorRefused("OPERATOR_TARIFF_REQUIRED")
 
+            if tool in {"cpms_order_amount_check", "cpms_order_process_stats"}:
+                required = {"cpms_order_detail"} | (
+                    {"cpms_order_tariff", "cpms_order_billing"}
+                    if tool == "cpms_order_amount_check"
+                    else {"cpms_charging_samples"}
+                )
+                if not required <= task.delivered:
+                    raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+                self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
+                data = operator_agent.analysis(
+                    task.evidence, "amount" if tool == "cpms_order_amount_check" else "process"
+                )
+                data = order_pricing.project(data, _declared(tool).evidence_shape)
+                task.evidence[tool] = {
+                    "tool": tool,
+                    "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments[tool])),
+                    "source": _declared(tool).source,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "data": data,
+                    "response": {
+                        "code": 0,
+                        "data": {
+                            "orderNo": run.order_no,
+                            "siteId": task.order_site_id,
+                            "tenantId": task.caller.effective_tenant_id,
+                            "value": data,
+                        },
+                    },
+                }
+                return task.evidence[tool]["response"]
             if tool == "cpms_station_plan":
                 data = self._station_plan(task, run)
                 self._current(run_id, tool=tool)
@@ -1004,124 +1122,52 @@ class OperatorCpms:
             )
             return {"run_id": run_id, "state": "failed"}
         with task.lock:
-            try:
-                raw = payload.get("answer", "")
-                if not isinstance(raw, str) or len(raw) > 24000:
-                    raise ValueError("invalid answer")
-                answer = parse_answer(raw)
-            except ValueError as exc:
-                # `json_parse` 一个码覆盖**四种**完全不同的情形，此前一律记成
-                # 「模型没吐 JSON」，这是过度归因（2026-11-03 复核）。
-                # 只记形态与长度，**不记原文**：回答是用户可见文本，可能带单号与金额。
-                #
-                # `json_syntax` 尤其需要多说一句：它意味着**开头像 JSON 却解析失败**，
-                # 也就是被截断或带尾逗号。2026-11-03 线上 11 次里有 5 次是它，
-                # 而光凭 `json_syntax` 分不出「上游 max_tokens 截断」与「模型自己拼错」。
-                # 记下长度与是否以 `}` 收尾，就能分开这两件事 —— 长度贴着某个上限
-                # 反复出现且没有收尾，是截断；长度散落且收尾完整，是语法错。
-                logging.getLogger("aiops.operator").warning(
-                    "operator_answer_rejected reason=json_parse %s%s",
-                    _json_shape(raw),
-                    _json_truncation_hint(raw),
-                )
-                # **重采样不在这里**：这是节点回调，从这里抛异常只能让本次回调失败，
-                # 不会让模型再答一次。有界重派在 `_worker` 里（见 `_resample_used`）。
-                raise OperatorRefused("OPERATOR_INVALID_ANSWER") from exc
+            raw = payload.get("answer", "")
+            if not isinstance(raw, str) or not 0 < len(raw.strip()) <= 12000:
+                raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+            answer = raw
             from aiops_diagnostics.common.redaction import contains_secret
 
             if contains_secret(raw, (task.bearer, task.grant)):
                 _answer_refused("credential")
-            sites = None
-            if diagnoses_an_order(run):
-                if "{{fact:order_facts}}" in run.execution_manifest and "reply" not in answer:
-                    _answer_refused("reply_required")
-                validate_answer(answer, task.evidence)
-                if not set(answer["evidence_tools"]).issubset(task.delivered):
-                    raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
-            else:
-                answer = operator_conversation.validate(answer, task.question, check_site_note=False)
-                if "cpms_station_plan" in task.delivered:
-                    if answer["kind"] != "station_plan":
-                        raise OperatorRefused("OPERATOR_PLAN_RESULT_REQUIRED")
-                elif answer["kind"] == "station_plan":
-                    raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
-                if (
-                    SITE_TOOL in task.delivered
-                    and answer["kind"] != "site_search"
-                    and "cpms_station_plan" not in task.delivered
-                ):
-                    raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
-                if answer["kind"] == "site_search":
-                    sites = _sites_from_evidence(task.caller, task, answer)
-                    if sites is None:
-                        # 节点没调工具：说明是在**看到结果之前**写的，不能当查询结果交付。
-                        # 这里拒而不是静默丢掉：静默丢掉会让提示词作者以为它在生效。
-                        if answer["text"].strip():
-                            raise OperatorRefused("OPERATOR_SITE_NOTE_WITHOUT_EVIDENCE")
+            if run.order_no:
+                self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
+            evidence = {
+                name: {k: v for k, v in item.items() if k != "response"}
+                for name, item in task.evidence.items()
+                if name in task.delivered
+            }
+            result = operator_agent.render(answer, evidence)
 
-                        def current_search_scope():
-                            current_task, _, _ = self._current(run_id, node_token=token, manifest=manifest)
-                            return current_task.caller.scope_fingerprint
-
-                        sites = query_sites(
-                            site_scope(task.caller),
-                            site_keywords(answer),
-                            cpms_site_reader(task.base_url, task.bearer),
-                            current_search_scope,
-                        )
-        # 审核不持有证据锁；取消、撤权和证据回调仍能进行。完成前重新授权。
-        review = None
-        if sites is not None:
-            review = site_note_review.review(
-                answer, sites, task.language, self.context.runtime.diagnostic_settings.agent
-            )
-            if review["verdict"] != "allow":
-                answer = {**answer, "text": ""}
+        review = operator_answer_review.review(
+            result["blocks"][0]["text"],
+            evidence,
+            task.messages[:-1],
+            task.question,
+            task.language,
+            self.context.runtime.diagnostic_settings.agent,
+        )
+        if review["verdict"] != "allow":
+            raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
         with task.lock:
             self._current(run_id, node_token=token, manifest=manifest)
+            if run.order_no:
+                self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
+            for previous_id in task.history_runs:
+                previous = self.context.agent_run_store.peek(previous_id)
+                if previous is None or not previous.snapshot:
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+                self._authorize_snapshot(task, previous)
             snapshot = {
                 "answer": answer,
                 "trial": task.trial,
-                "evidence": {
-                    name: {k: v for k, v in item.items() if k != "response"}
-                    for name, item in task.evidence.items()
-                    if name in task.delivered
-                },
+                "evidence": evidence,
+                "language": task.language,
+                "answer_review": review,
+                "history_runs": task.history_runs,
+                "rendered_result": result,
+                "plan_arguments": task.arguments.get("cpms_station_plan", {}),
             }
-            if not diagnoses_an_order(run):
-                snapshot["sites"] = sites
-                snapshot["language"] = task.language
-                snapshot["rendered_result"] = operator_conversation.render(
-                    answer, sites, task.language, reviewed=True
-                )
-                if "cpms_station_plan" in task.delivered:
-                    snapshot["plan_arguments"] = task.arguments["cpms_station_plan"]
-                    snapshot["rendered_result"] = {
-                        "blocks": [
-                            {
-                                "kind": "text",
-                                "text": task.evidence["cpms_station_plan"]["data"]["text"]
-                                + "\n\n规则查询时间："
-                                + _readable_time(task.evidence["cpms_station_plan"]["observed_at"]),
-                            }
-                        ],
-                        "retrieval_status": "unavailable",
-                    }
-                if review is not None:
-                    snapshot["site_note_review"] = review
-                    if task.trial and review["verdict"] not in {"allow", "empty"}:
-                        snapshot["rendered_result"]["blocks"][0]["text"] += (
-                            "\n\n查询结果已交付；说明未通过审核，已隐藏。"
-                            if task.language.startswith("zh")
-                            else "\n\nQuery results delivered; the unapproved explanation is hidden."
-                        )
-            else:
-                snapshot["language"] = task.language
-                # **在完成时渲染并冻结**：事实段的语言按运行所选语言，历史回读不再重算 ——
-                # 升级渲染器不会改写已经交付的答复。
-                snapshot["rendered_report"] = render_report(
-                    answer, snapshot["evidence"], language=task.language, question=task.question
-                )
             if not store.complete(
                 run_id, snapshot=snapshot, actual_node_id=run.expected_node_id, node_build=None
             ):
@@ -1168,47 +1214,9 @@ class OperatorCpms:
             dispatcher = SnailDispatcher()
             dispatcher.deadline_at = self.context.agent_run_store.get(run_id).expires_at
             task = self.tasks[run_id]
-            dispatcher.question = (
-                (
-                    "诊断本次授权订单，按已发布SOP读取证据并输出规定JSON。用户描述仅供理解问题："
-                    if diagnoses_an_order(self.context.agent_run_store.get(run_id))
-                    else "本轮未指定订单，按管家对话协议回答或提出站点搜索条件。用户问题："
-                )
-                + json.dumps(task.question, ensure_ascii=False)
-                + "。回答语言："
-                + task.language
-                # **同一会话的前几轮**（2026-11-04 反馈第 3 条：问「那这笔单的电压呢」时
-                # 接不上）。这里是「本级只有一条用户消息」这条不变量下**唯一**能带上下文的位置：
-                # 节点对**首次**模型调用要求「声明的 system + 恰好一条纯文本用户消息」，
-                # 多插一条 user/assistant 会被 `verifyInputShape` 直接拒。
-                # 所以历史以**文字形式**写进这一条消息，而不是拆成多条对话轮次。
-                #
-                # 只带最近几轮、每轮截断：它是给模型理解「这笔单」「它」指什么用的，
-                # 不是让模型复述前文 —— 复述会被 reply 的事实判据拦下。
-                + _conversation_context(self.context.runtime, task)
-                # 这一句是实测出来的，不是客套：`response_format=json_object` 对供应商只是**提示**，
-                # 带工具轮次的最后一轮实测有 36–44% 的响应是通篇正文、根本没有 JSON
-                # （2026-11-03，41 生产，每组 25 次）。把「最后一步只输出 JSON」写进模型
-                # 看得到的用户消息后，同一实验里失败率降到 8%（2/25）。
-                #
-                # 放在这里而不是节点的 system 提示词里：节点对 system 消息集合做**逐字**
-                # 校验（GuardedChatModel.verifySystemMessages），改它要换节点 jar 与清单；
-                # 而这条用户消息正是节点看到的那一条，只改 Python。
-                # 它也不越过协议 —— 最终用什么由 `_complete` 的校验决定，这里只是让模型少犯。
-                + JSON_ONLY_REMINDER
-            )
-            # **有界重采样**：`response_format=json_object` 对供应商只是提示，上游失约是概率性的
-            # （2026-11-03 实测最后一轮 36–44% 不吐 JSON）。再要一次是合理的，**但只再要一次** ——
-            # 无限重试会把「上游持续不守约」伪装成「慢」，而它其实是故障。
-            #
-            # 重采样的位置只能在这里：`_complete` 是节点回调，从那里抛异常只会让**这次回调**
-            # 失败，节点收到非成功回执后**不重试**（`ReportingChatSessionRuntime.reportCompleted`
-            # 返回 false 即终局），模型不会再答一次。所以「再答一次」= 重新派发一次完整对话。
-            #
-            # **拒绝是以异常形式回来的，不是以状态形式回来的**（2026-11-03 复审指出）。
-            # 网关回 4xx/409 给平台 → 平台那次调用失败 → `SnailDispatcher` 把它映射成
-            # `AgentRunDispatchError` 抛出来。所以「回调被拒」根本走不到下面那行状态判断，
-            # 会直接掉进外层 except。必须在这里先接住。
+            task.messages = self._messages(task)
+            dispatcher.question = task.question
+            # 已有取证固定在本run，最多一次重派，持续失败明确终止。
             while True:
                 try:
                     dispatcher.dispatch(config, run_id)
@@ -1269,7 +1277,7 @@ class OperatorCpms:
         if (
             run is None
             or run.scope_fingerprint != caller.scope_fingerprint
-            or run.operation not in {SCENARIO, operator_conversation.SCENARIO}
+            or run.operation not in {SCENARIO, operator_conversation.SCENARIO, "operator_agent"}
         ):
             raise OperatorRefused("QA_NOT_FOUND")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
@@ -1299,37 +1307,30 @@ class OperatorCpms:
             )
         ):
             raise OperatorRefused("OPERATOR_NODE_CHANGED")
-        if not diagnoses_an_order(run):
-            sites = run.snapshot.get("sites")
+        if operator_agent.is_agent(run):
             scope = operator_scope(caller, allow_empty=True)
-            plan = run.snapshot.get("evidence", {}).get("cpms_station_plan", {}).get("data", {})
-            if plan.get("site_id") and scope.site_ids is not None and plan["site_id"] not in scope.site_ids:
+            for item in run.snapshot.get("evidence", {}).values():
+                data = item["data"]
+                sites = [data.get("siteId"), data.get("site_id")]
+                if item["tool"] == SITE_TOOL:
+                    sites.extend(row["id"] for row in data.get("records", []))
+                if scope.site_ids is not None and any(site and site not in scope.site_ids for site in sites):
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+            return run.snapshot["rendered_result"]
+        scope = operator_scope(caller, allow_empty=not run.order_no)
+        evidence = run.snapshot.get("evidence", {})
+        if run.order_no:
+            site = evidence.get(TOOL_NAMES[0], {}).get("data", {}).get("siteId")
+            if not site or (scope.site_ids is not None and site not in scope.site_ids):
                 raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-            if (
-                sites
-                and scope.site_ids is not None
-                and any(s["id"] not in scope.site_ids for s in sites["sites"])
-            ):
-                raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-            return run.snapshot.get("rendered_result") or operator_conversation.render(
-                run.snapshot["answer"], sites, run.snapshot["language"]
-            )
-        scope = operator_scope(caller)
-        detail = run.snapshot["evidence"][TOOL_NAMES[0]]["data"]
-        if scope.site_ids is not None and detail["siteId"] not in scope.site_ids:
-            raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-        answer = run.snapshot["answer"]
-        if "{{fact:order_facts}}" in run.execution_manifest and "reply" not in answer:
-            _answer_refused("reply_required")
-        validate_answer(answer, run.snapshot["evidence"])
-        # 历史 run 用**当时冻结**的正文；没有冻结文本的旧 run 按中文标签重算，
-        # 与它们签发时的呈现一致（升级不改写历史）。
-        # 这里**不传 question**：那些 run 当初渲染时就没有按主题收窄，传一个空提问
-        # 能得到与当时一致的全量字段；传别的反而会让旧答复在回读时变形。
-        text = run.snapshot.get("rendered_report") or render_report(
-            answer, run.snapshot["evidence"], language="zh"
-        )
-        return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
+        if run.snapshot.get("rendered_result"):
+            return run.snapshot["rendered_result"]
+        if run.snapshot.get("rendered_report"):
+            return {
+                "blocks": [{"kind": "text", "text": run.snapshot["rendered_report"]}],
+                "retrieval_status": "unavailable",
+            }
+        raise OperatorRefused("OPERATOR_RESULT_UNAVAILABLE")
 
     def retract(self, route):
         with self.lock:
@@ -1396,7 +1397,7 @@ def site_tool_result(scope, body, tool, arguments, *, outside_scope="reject"):
         # ``truncated`` 是**证据**字段：页面没有覆盖上游的全部行。它与「展示只列 10 条」
         # 是两件事，不能合并 —— Java 节点按 ``total > rows.size()`` 逐字重算这一项并与
         # 网关比对，改口径会让每一次真实运行都以 OPERATOR_EVIDENCE_MISMATCH 失败。
-        # 展示上限在 ``operator_conversation.shown_sites`` 收口。
+        # 展示上限在工具投影中收口，不是模型意图分类。
         "truncated": total > len(rows),
         "ordering_guaranteed": declared.flags["ordering_guaranteed"],
         "complete_timeline": declared.flags["complete_timeline"],
@@ -1509,162 +1510,6 @@ def project_evidence(body, order, tool):
     }
 
 
-_FENCED_ANSWER = re.compile(r"\A```(?:json)?[ \t]*\r?\n(?P<body>.*?)\r?\n```\Z", re.DOTALL)
-
-
-def parse_answer(raw):
-    """把节点回传的正文解析成诊断报告。
-
-    实测（41，deepseek-v4-flash，流式 + 工具历史）：即使 `response_format=json_object`，
-    供应商仍会**间歇**用 ```json 围栏包住那份唯一的 JSON —— 同一提示词、同一请求，
-    三次里两次裸 JSON、一次带围栏。只做 `json.loads` 于是把一次合规回答判成
-    `json_parse` 失败，这正是 `OPERATOR_DIAGNOSIS_FAILED` 的确定性成因。
-
-    这里只剥**一层**围栏且围栏内必须恰好一个 JSON 对象；散文、多份 JSON、残缺块
-    仍然拒绝 —— 放宽的是供应商的装饰，不是输出的契约。
-
-    第三处装饰是**对象后面多出来的字符**（2026-11-03 实测）：模型偶尔把整个 JSON
-    多包一层引号，末尾变成 `…"}"`。`{"…"}"`、`{"…"}` + 一个 `"`、或者闭合后多一个
-    `}`，都只差最后一个字符，而整轮诊断因此失败。这里按 `_object_end` 扫出的**第一个
-    完整对象**重解析，并且只在这一段之后的残余是**空白或零散引号/逗号**时才接受 ——
-    两个对象叠在一起仍然拒绝，因为挑哪一个都没有依据。
-    """
-    if not isinstance(raw, str):
-        raise ValueError("invalid answer")
-    try:
-        return json.loads(raw)
-    except ValueError as bare:
-        fenced = _FENCED_ANSWER.match(raw.strip())
-        if fenced is not None:
-            try:
-                return json.loads(fenced.group("body"))
-            except ValueError:
-                # 围栏里也可能带同样的尾部装饰 —— 走同一套宽容，否则
-                # 「裸对象加引号能过、围栏里加引号过不了」就是一处没道理的差异。
-                salvaged = _one_object(fenced.group("body"))
-                if salvaged is not None:
-                    return salvaged
-        salvaged = _one_object(raw.strip())
-        if salvaged is not None:
-            return salvaged
-        raise bare from None
-
-
-#: 对象之后允许出现的**装饰**字符。**不含 `{`**（2026-11-03 复审指出）：
-#: `{"a":1}{}` 的残余也是「合法」的大括号，而它其实是一个**第二个对象**；
-#: 把它当装饰就等于把双对象交付悄悄放行。只有右边的 `}` 是装饰。
-_TRAILING_DECORATION = frozenset('"},　 \t\r\n')
-
-#: 与上面同一集合的作用说明已在 `_one_object` 里；这里保留常量名可读性。
-
-
-def _one_object(text: str):
-    """`text` 是不是**一个完整对象 + 纯装饰**？是则返回解析结果，否则 `None`。
-
-    判据的要点是「残余里不能再出现一个对象的开头」：`_object_end` 只找第一个对象的
-    结尾，所以必须显式排除 `{`。两段空白之间的换行（`",\\n"`）要放行 ——
-    只 `strip` 两端会把夹在装饰中间的空白一并算成非法。
-    """
-    if not isinstance(text, str) or not text.startswith("{"):
-        return None
-    from aiops_diagnostics.consumer.consumer_documents import _object_end
-
-    end = _object_end(text)
-    if end is None:
-        return None
-    if not set(text[end:]) <= _TRAILING_DECORATION:
-        return None
-    try:
-        return json.loads(text[:end])
-    except ValueError:
-        return None
-
-
-def _json_shape(raw) -> str:
-    """回答为什么不是 JSON —— **复用** `consumer_documents._json_failure_shape`。
-
-    不另写一份：那份已经解决了同一个问题（描述形态、不泄露原文），
-    而且它自己的注释就写着这个缺口是 2026-11-01 订单链路发现的。
-    """
-    from aiops_diagnostics.consumer.consumer_documents import _json_failure_shape
-
-    return _json_failure_shape(raw)
-
-
-def _json_truncation_hint(raw) -> str:
-    """`json_syntax` 的两种成因要分得开：被截断，还是自己拼错。
-
-    ``closed=`` 只看末尾字符是不够的：截断恰好落在字符串里的 ``}`` 上也会得到 True，
-    而尾逗号语法错得到 False —— 单凭它判不了成因（2026-11-03 复审指出）。
-    所以再给一个**括号配对**事实：``depth=`` 是去掉字符串内容后从头累计的括号差，
-    ``depth>0`` 才说明结构没闭合（截断）；``depth=0`` 而解析失败才是语法错。
-    两个数字都不含原文，只是结构。
-    """
-    from aiops_diagnostics.consumer.consumer_documents import _json_failure_shape
-
-    if not isinstance(raw, str) or _json_failure_shape(raw) != "json_syntax":
-        return ""
-    text = raw.rstrip()
-    depth, quoted, escaped = 0, False, False
-    for ch in text:
-        if quoted:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                quoted = False
-            continue
-        if ch == '"':
-            quoted = True
-        elif ch in "{[":
-            depth += 1
-        elif ch in "}]":
-            depth -= 1
-    return f" len={len(text)} closed={text.endswith('}')} depth={depth} in_string={quoted}"
-
-
-#: 带进节点消息的会话历史上限：轮数、每轮字符数。
-#: 理由是**成本与噪声**：历史只是让模型读懂「这笔单」「它」指什么，不是让它复述前文。
-#: 三轮够接上「刚才那张单」这类指代，再多只会挤占取证所需的上下文。
-HISTORY_TURNS = 3
-HISTORY_CHARS = 300
-
-
-def _conversation_context(store, task) -> str:
-    """把同一会话的前几轮压成一段文字，附在用户消息后面。
-
-    三条约束决定了它只能长这样：
-
-    1. **不能拆成多条对话轮次**：节点对首次模型调用要求「恰好一条纯文本用户消息」
-       （`GuardedChatModel.verifyInputShape`），多一条 user/assistant 会被拒；
-    2. **不能带业务数字**：`reply` 的其它行一个字都不许带数字，而事实段由系统生成 ——
-       历史里只留提问原文，不重复前几轮的事实段，否则模型会照着抄；
-    3. **读不到就当作没有**：会话存储不可用、或这一轮不属于任何会话时，静默跳过。
-       上下文是**增强**，不是交付条件；为它让整轮失败是本末倒置。
-    """
-    turn = getattr(task, "conversation_turn", None)
-    if not turn:
-        return ""
-    conversation_id, scope_fingerprint, turn_no = turn
-    store = getattr(store, "conversation_store", None) if store is not None else None
-    if store is None or turn_no is None or turn_no <= 1:
-        return ""
-    try:
-        questions = store.recent_questions(
-            conversation_id, scope_fingerprint, before=turn_no, limit=HISTORY_TURNS
-        )
-    except Exception:  # noqa: BLE001 - 历史不是当前事实，读取失败不回喂。
-        return ""
-    lines = ["- " + question[:HISTORY_CHARS] for question in questions if question.strip()]
-    if not lines:
-        return ""
-    return (
-        "\n\n【同一会话的前文】以下只是让您理解「这笔单」「它」指的是什么，"
-        "不要复述、不要据此推断任何事实：\n" + "\n".join(lines)
-    )
-
-
 def _failure_code(exc: BaseException) -> str:
     """这次失败对**用户**报哪个码。
 
@@ -1674,7 +1519,7 @@ def _failure_code(exc: BaseException) -> str:
     """
     if isinstance(exc, OperatorRefused):
         code = str(exc)
-        if code in NODE_FAILURE_CODES.values():
+        if code in NODE_FAILURE_CODES.values() or code == "OPERATOR_HISTORY_LIMIT":
             return code
         # 这些原因说明**上游/环境**有问题，不是这次回答不合格 —— 分开报。
         if code in {
@@ -1685,7 +1530,7 @@ def _failure_code(exc: BaseException) -> str:
             "OPERATOR_SCOPE_UNAVAILABLE",
         }:
             return "OPERATOR_DEPENDENCY_UNAVAILABLE"
-        if code == "OPERATOR_RESULT_UNSTABLE":
+        if code in {"OPERATOR_RESULT_UNSTABLE", "OPERATOR_ANSWER_NOT_GROUNDED"}:
             return "OPERATOR_MODEL_OUTPUT_UNSTABLE"
     return "OPERATOR_DIAGNOSIS_FAILED"
 
@@ -1715,391 +1560,6 @@ def _answer_refused(reason, detail=""):
         "operator_answer_rejected reason=%s%s", reason, f" {detail}" if detail else ""
     )
     raise OperatorRefused("OPERATOR_INVALID_ANSWER")
-
-
-ANSWER_FIELDS = frozenset(
-    {"direct_answer", "summary", "probable_cause", "next_steps", "limitations", "evidence_tools"}
-)
-
-
-def validate_answer(answer, evidence):
-    if not isinstance(answer, dict) or set(answer) not in (ANSWER_FIELDS, ANSWER_FIELDS | {"reply"}):
-        _answer_refused("shape")
-    # `direct_answer` 与 summary/probable_cause 同一条文字判据：**空串即拒绝**。
-    # 它是「这次回答的是用户问的那一点」的唯一落点；允许它为空，就等于允许模型交回一份
-    # 与提问无关的通用报告 —— 那正是 2026-10-29 反馈里「两个问题同一个答案」的形状。
-    for key in ("direct_answer", "summary", "probable_cause"):
-        if not isinstance(answer[key], str) or not 1 <= len(answer[key]) <= 2000:
-            _answer_refused("text_field")
-    for key in ("next_steps", "limitations", "evidence_tools"):
-        if (
-            not isinstance(answer[key], list)
-            or len(answer[key]) > 12
-            or any(not isinstance(v, str) or not 1 <= len(v) <= 1000 for v in answer[key])
-        ):
-            _answer_refused("list_field")
-    if (
-        TOOL_NAMES[0] not in evidence
-        or TOOL_NAMES[0] not in answer["evidence_tools"]
-        or not set(answer["evidence_tools"]).issubset(evidence)
-    ):
-        # 同一个码覆盖**四种**完全不同的情形，日志里必须分得开 —— 否则下一跳只能猜
-        # （2026-11-03 线上 3 次这个码，无法归因）。区分的是原因，不是判决：
-        # 四种都仍然拒绝，只是写清是哪一种。
-        if TOOL_NAMES[0] not in evidence:
-            detail = "detail=not_read"  # 订单详情这一轮根本没取到
-        elif TOOL_NAMES[0] not in answer["evidence_tools"]:
-            detail = "detail=not_cited"  # 取到了，但模型没在 evidence_tools 里引它
-        else:
-            extra = sorted(set(answer["evidence_tools"]) - set(evidence))
-            detail = "detail=unknown_tool"  # 引了本轮没取过的工具
-            if extra:
-                detail += f" name={extra[0][:32]}"
-        logging.getLogger("aiops.operator").warning("operator_evidence_missing %s", detail)
-        raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
-    if "reply" in answer and (not isinstance(answer["reply"], str) or not 1 <= len(answer["reply"]) <= 6000):
-        _answer_refused("reply")
-    if "reply" in answer:
-        _validate_reply_facts(answer["reply"])
-    text = json.dumps(answer, ensure_ascii=False)
-    if claims_mutation(text):
-        _answer_refused("mutation_claim")
-
-
-def _validate_reply_facts(text):
-    from aiops_diagnostics.consumer.consumer_facts import check_notice, check_status_prose
-
-    slot = "{{fact:order_facts}}"
-    if text.splitlines().count(slot) != 1:
-        _answer_refused("order_facts_required")
-    for index, line in enumerate(text.splitlines(), 1):
-        if line == slot:
-            continue
-        if "{{" in line or "}}" in line:
-            _answer_refused("fact_segment")
-        try:
-            check_notice(line)
-        except chat_execution.ChatRunUnavailable:
-            # 带行号与检查名：`unsupported_fact` 一条码覆盖多种成因，只记码等于没取证。
-            # **不记原文** —— 这几行正是最容易带出金额的。
-            _answer_refused("unsupported_fact", f"detail=notice line={index} len={len(line)}")
-        try:
-            check_status_prose(line)
-        except chat_execution.ChatRunUnavailable:
-            _answer_refused("unsupported_fact", f"detail=status line={index} len={len(line)}")
-
-
-#: 管家事实段的字段标签。**运行语言决定标签**（值与来源不变）。
-#: zh/en 有完整译文；其余语种退回英文并在 ADR 里记为缺口 —— 不把中文标签混进外文句子。
-_FACT_LABELS = {
-    "zh": {
-        "order": "订单号",
-        "status": "订单状态",
-        "isPrePay": "是否预付费",
-        "prePayAmount": "预付费",
-        "electricityFee": "电费",
-        "serviceFee": "服务费",
-        "dsElectricFee": "电损电费",
-        "dsServiceFee": "电损服务费",
-        "launchFee": "启动费用",
-        "marketAmount": "优惠金额",
-        "vat": "增值税比例",
-        "vatFee": "增值税费用",
-        "totalAmount": "合计",
-        "payAmount": "系统记录的支付金额",
-        "payTime": "系统记录的付款时间",
-        "occupyFee": "占位费",
-        "refundAmount": "系统记录的退款金额",
-        "electricity": "电量（kWh）",
-        "time": "充电时长",
-        "voltage": "电压",
-        "gunPower": "额定功率",
-        "stoppedReasonContent": "系统记录的停止原因",
-        "stoppedReasonCode": "系统记录的停止原因码",
-        "createdTime": "创建时间",
-        "stopTime": "结束时间",
-        "startSoc": "起始电量百分比",
-        "endSoc": "结束电量百分比",
-        "deviceCode": "设备编号",
-        "childDeviceCode": "枪编号",
-        "interfaceType": "接口类型",
-        "samples": "本次取得监测样本",
-        "missing": "未提供",
-        "limits": "币种和时长单位需与原订单核对；账务记录不证明银行到账，当前状态不证明历史故障原因。",
-        "colon": "：",
-    },
-    "en": {
-        "order": "Order",
-        "status": "Order status",
-        "isPrePay": "Prepaid",
-        "prePayAmount": "Prepaid amount",
-        "electricityFee": "Electricity fee",
-        "serviceFee": "Service fee",
-        "dsElectricFee": "Line-loss electricity fee",
-        "dsServiceFee": "Line-loss service fee",
-        "launchFee": "Startup fee",
-        "marketAmount": "Discount amount",
-        "vat": "VAT rate",
-        "vatFee": "Tax fee",
-        "totalAmount": "Total",
-        "payAmount": "Recorded payment amount",
-        "payTime": "Recorded payment time",
-        "occupyFee": "Occupancy fee",
-        "refundAmount": "Recorded refund amount",
-        "electricity": "Energy (kWh)",
-        "time": "Charging duration",
-        "voltage": "Voltage",
-        "gunPower": "Rated power",
-        "stoppedReasonCode": "Recorded stop-reason code",
-        "createdTime": "Created",
-        "stopTime": "Stopped",
-        "startSoc": "Start SOC",
-        "endSoc": "End SOC",
-        "deviceCode": "Device code",
-        "childDeviceCode": "Connector code",
-        "interfaceType": "Connector type",
-        "stoppedReasonContent": "Recorded stop reason",
-        "samples": "Monitoring samples returned",
-        "missing": "not provided",
-        "limits": (
-            "Currency and duration units must be checked against the original order; "
-            "a recorded payment does not prove the bank received it, and the current "
-            "status does not prove the historical root cause."
-        ),
-        "colon": ": ",
-    },
-}
-
-
-def _status_word(code, language: str) -> str:
-    """状态**值**也按运行语言：复用 `consumer_language.COPY` 的现役译文。"""
-    from aiops_diagnostics.consumer.consumer_language import COPY
-    from aiops_diagnostics.data.order_status import role_of
-    from aiops_diagnostics.health.rules import ORDER_STATUS
-
-    role = role_of(code).value
-    if language.startswith("zh"):
-        return ORDER_STATUS.get(code, str(code))
-    table = COPY.get(language)
-    if table and isinstance(table.get(role), str):
-        return table[role]
-    if language.startswith("zh"):
-        return ORDER_STATUS.get(code, str(code))
-    return role.replace("_", " ")
-
-
-def _fact_labels(language: str) -> dict[str, str]:
-    return _FACT_LABELS["zh" if language.startswith("zh") else "en"]
-
-
-def _order_fact_text(evidence, language="zh", question=""):
-    """订单事实段。**只列这次提问问到的那几项**（2026-11-04 反馈）。
-
-    此前不论问什么，这里都把 20 个字段全列出来：问「电压」和问「电费」的答复除结尾
-    之外逐字相同，读者拿到的不是回答而是一张抄下来的后台页。现在由
-    :func:`operator_conversation.order_fact_fields` 按提问原文选出主题字段；
-    **匹配不到主题时 `None`，退回原来的全量**，所以漏词只会回到旧行为。
-
-    另一处改动：上游**有这一列但值是空**时，明确写「未提供」。旧行为是直接跳过 ——
-    于是问「电压」的那一版明明电压是 `null`，答复里却一个字都不提，看起来像答非所问。
-    """
-    labels = _fact_labels(language)
-    colon = labels["colon"]
-    item = evidence[TOOL_NAMES[0]]
-    detail = item["data"]
-    lines = [
-        labels["order"] + colon + str(item.get("order_no") or detail.get("orderNo") or labels["missing"])
-    ]
-    # 顺序按后台「费用信息」那一栏排：先问是否预付、预付了多少，再是各项费用，最后是合计与
-    # 实付。只列**上游给了值**的项 —— 缺字段就是「后台没有这一列」，不补零也不补空。
-    fields = (
-        ("status", "status"),
-        ("isPrePay", "isPrePay"),
-        ("prePayAmount", "prePayAmount"),
-        ("electricityFee", "electricityFee"),
-        ("serviceFee", "serviceFee"),
-        ("dsElectricFee", "dsElectricFee"),
-        ("dsServiceFee", "dsServiceFee"),
-        ("launchFee", "launchFee"),
-        ("occupyFee", "occupyFee"),
-        ("marketAmount", "marketAmount"),
-        ("vat", "vat"),
-        ("vatFee", "vatFee"),
-        ("totalAmount", "totalAmount"),
-        ("payAmount", "payAmount"),
-        ("payTime", "payTime"),
-        ("refundAmount", "refundAmount"),
-        ("electricity", "electricity"),
-        ("time", "time"),
-        ("voltage", "voltage"),
-        ("gunPower", "gunPower"),
-        ("startSoc", "startSoc"),
-        ("endSoc", "endSoc"),
-        ("deviceCode", "deviceCode"),
-        ("childDeviceCode", "childDeviceCode"),
-        ("interfaceType", "interfaceType"),
-        ("createdTime", "createdTime"),
-        ("stopTime", "stopTime"),
-        ("stoppedReasonCode", "stoppedReasonCode"),
-        ("stoppedReasonContent", "stoppedReasonContent"),
-    )
-    focus = operator_conversation.order_fact_fields(question)
-    for key, label_key in fields:
-        if focus is not None and key not in focus:
-            continue
-        value = detail.get(key)
-        if value is None:
-            # 认得出主题、而这一项**正是主题字段**时，明确说「未提供」。
-            # 全量模式下保持旧行为（缺列就不出这一行），免得把整页都变成「未提供」。
-            if focus is None or key not in focus:
-                continue
-            lines.append(labels[label_key] + colon + labels["missing"])
-            continue
-        if key == "status":
-            shown = _status_word(value, language)
-        elif key == "isPrePay":
-            # 布尔值直接印 `True`/`False` 是给开发者看的；后台那一列写的是「是/否」。
-            shown = _yes_no(value, language)
-        elif key in {"payTime", "createdTime", "stopTime"}:
-            # 与报告末尾的取证时间同一个写法：CPMS 给的是不带时区的本地时间，原样显示，
-            # 不补一个假的 UTC 后缀。
-            shown = _readable_time(value)
-        elif key == "vat":
-            # CPMS 的 `vat` 是**百分数**（这单实测 `2.0`，后台那一列写「2%」）。
-            # 直接印 `2.0` 会被读成「2 元增值税」，所以带单位。
-            shown = _percent(value)
-        else:
-            shown = str(value)
-        lines.append(labels[label_key] + colon + shown)
-    samples = evidence.get("cpms_charging_samples", {}).get("data")
-    if samples is not None:
-        lines.append(
-            labels["samples"] + colon + str(samples.get("samples_returned", len(samples.get("records", []))))
-        )
-    lines.append(labels["limits"])
-    from aiops_diagnostics.operator.order_analysis import analysis
-
-    result = "\n".join(lines) + analysis(evidence, question, language)
-    if "cpms_order_tariff" in evidence:
-        result += "\n\n" + order_pricing.historical_report(
-            evidence["cpms_order_tariff"]["data"], detail, language
-        )
-        from aiops_diagnostics.operator.order_billing import report
-
-        result += "\n\n" + report(
-            evidence["cpms_order_tariff"]["data"],
-            detail,
-            evidence.get("cpms_order_billing", {}).get("data"),
-            language,
-        )
-    return result
-
-
-def _percent(value) -> str:
-    """`2.0` → `2%`。**只用于本来就是百分数的字段**（`vat`），不是通用格式化。
-
-    这单的真实响应给的是 `vat: 2.0`，而后台那一列写「增值税率 2%」。印成 `2.0`
-    会被读成金额 —— 同一行下面正好是「增值税费用 0.16」，两个数挨着，读错的代价是真金白银。
-    解析不了就原样返回，不猜。
-    """
-    try:
-        shown = format(Decimal(str(value)).normalize(), "f")
-    except (InvalidOperation, ValueError):
-        return str(value)
-    return shown + "%"
-
-
-def _yes_no(value, language: str) -> str:
-    """布尔证据按人话写。后台那一列是「是/否」，不是 `True`/`False`。"""
-    if value is True:
-        return "是" if language.startswith("zh") else "Yes"
-    if value is False:
-        return "否" if language.startswith("zh") else "No"
-    return str(value)
-
-
-def _readable_time(iso: object) -> str:
-    """``2026-10-29T12:34:45.123456+00:00`` → ``2026-10-29 12:34:45 UTC``。
-
-    取证时间带微秒是因为它是给核对用的；但直接摆在报告末尾，读者看到的是六个毫无意义的
-    数字。解析不了就原样返回，不硬凑。
-    """
-    try:
-        parsed = datetime.fromisoformat(str(iso))
-    except (TypeError, ValueError):
-        return str(iso)
-    if parsed.tzinfo is None:
-        return parsed.strftime("%Y-%m-%d %H:%M:%S")
-    return parsed.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
-
-
-#: 证据来源标识 → 人话。报告末尾给的是"我查了哪里"，不是内部接口名。
-_SOURCE_LABELS_EN = {
-    "cpms.orderDetail": "Order detail",
-    "cpms.chargingMonitor": "Charging monitor samples",
-    "cpms.orderTariff": "Historical order tariff",
-}
-
-
-def _source_label(source, language: str) -> str:
-    if language.startswith("zh"):
-        return _SOURCE_LABELS.get(source, source)
-    return _SOURCE_LABELS_EN.get(source) or _SOURCE_LABELS.get(source, source)
-
-
-_SOURCE_LABELS = {
-    "cpms.orderDetail": "订单详情",
-    "cpms.chargingMonitor": "充电监测样本",
-    "cpms.orderTariff": "订单历史计费快照",
-    "cpms.orderBilling": "订单账务与优惠记录",
-}
-
-
-def render_report(answer, evidence, *, language="zh", question="") -> str:
-    """把结构化诊断渲染成**人读的报告**。
-
-    之前这里是 ``"\\n\\n".join([...])``：九段文字被摊平成同等重要的段落，列表失去编号、
-    没有任何小标题、技术标识（``cpms.orderDetail``、带微秒的 UTC 时间）直接摆给用户。
-    内容全对，但没有一处告诉读的人"哪句是结论、哪句是下一步"。
-
-    前端按 ``blocks[]`` 分派渲染、**不解析 Markdown**（frontend-api-brief §9），所以这里
-    只用纯文本能表达的层级：小标题、``-`` 列表、缩进、空行。
-
-    顺序是刻意的：先回答问题，再给事实，最后才是排查建议与缺证 —— 运维最常要的是前两段。
-    """
-    if answer.get("reply"):
-        zh = language.startswith("zh")
-        sources = "\n".join(
-            f"- {_source_label(item.get('source'), language)}"
-            + (
-                f"（{_readable_time(item.get('observed_at'))}）"
-                if zh
-                else f" ({_readable_time(item.get('observed_at'))})"
-            )
-            for item in evidence.values()
-        )
-        text = answer["reply"].replace(
-            "{{fact:order_facts}}", _order_fact_text(evidence, language, question=question)
-        )
-        heading = "【数据来源】" if zh else "Sources"
-        return text + (f"\n\n{heading}\n" + sources if sources else "")
-    sections = [answer["direct_answer"]]
-    if answer["summary"]:
-        sections.append("【订单事实】\n" + answer["summary"])
-    if answer["probable_cause"]:
-        sections.append("【可能原因】\n" + answer["probable_cause"])
-    for title, key in (("【建议下一步】", "next_steps"), ("【证据缺口】", "limitations")):
-        if answer[key]:
-            # 编号而不是光秃秃的行：用户会说"第 2 条"，还能对上号。
-            items = "\n".join(f"{i}. {item}" for i, item in enumerate(answer[key], 1))
-            sections.append(title + "\n" + items)
-    if evidence:
-        lines = []
-        for item in evidence.values():
-            label = _SOURCE_LABELS.get(item.get("source"), item.get("source"))
-            lines.append(f"- {label}（{_readable_time(item.get('observed_at'))}）")
-        sections.append("【数据来源】\n" + "\n".join(lines))
-    return "\n\n".join(sections)
 
 
 def cpms_get(url, bearer, tenant, *, timeout=10):

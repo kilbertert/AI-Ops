@@ -126,3 +126,16 @@ aiops-admin --config <Gateway配置> ensure-node-provider \
 Dify1.17.1更新载荷需要original_provider、credentials和icon；现役命令保留图标/标签/说明，
 继续auth_type=none，收到success才记成功。先备份原提供方schema与应用model_config，
 再正常保存应用工具选择、预览并发布；不删建提供方或手改Dify数据库。
+
+## 统一自然语言与SOP模型循环
+
+新合同`operator-agent/1`把语义和工具顺序交给模型；Gateway逐次校验对象和权限。
+订单工具可接收用户提供或会话确认的order_no；每run只绑定一单，不接受模型提供身份或URL。
+`cpms_order_amount_check`/`cpms_order_process_stats`读取本轮已有证据计算并将结果回交模型，
+不执行后台重算。模型直接交付自然语言，关键值用工具data的JSON Pointer引用；不要求最终JSON。
+
+运营将[只读SOP种子](../../../src/aiops_diagnostics/operator/operator_sop.md)保存到应用编辑区，
+可以编辑业务顺序；发布快照包含实际SOP与所选工具，后续修改必须重新预览/发布。
+仓库种子文件不会热改线上提示词，不默认把旧根SOP的SQL/Redis操作变成可执行能力。
+原H5与Dify预览共享同一个模型执行合同及受控历史，读到旧答案前重新验证其对象可见性。
+详见[验收](../../acceptance/operator-agent-loop-qa-plan.md)及[节点迁移](../../../deploy/node-runtime/README.md#迁移到管家统一模型循环operator-agent1)。

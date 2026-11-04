@@ -67,7 +67,8 @@ public final class GuardedChatModel implements ChatModel {
     }
 
     private Prompt outputContract(Prompt prompt) {
-        if (!guard.enabled || !guard.manifest.operatorOutput()) return prompt;
+        if (!guard.enabled || !guard.manifest.operatorOutput()
+                || "operator-agent/1".equals(guard.manifest.schema())) return prompt;
         if (!(prompt.getOptions() instanceof OpenAiChatOptions options)) {
             throw new ExecConfigViolation("OUTPUT", "管家执行模型不支持JSON输出选项");
         }
@@ -95,10 +96,16 @@ public final class GuardedChatModel implements ChatModel {
         private final ExecManifest manifest;
         private final boolean enabled;
         private int modelCalls;
+        private final List<Message> conversation;
 
         ExecGuard(ExecManifest manifest, boolean enabled) {
+            this(manifest, enabled, null);
+        }
+
+        ExecGuard(ExecManifest manifest, boolean enabled, List<Message> conversation) {
             this.manifest = manifest;
             this.enabled = enabled;
+            this.conversation = conversation == null ? null : List.copyOf(conversation);
         }
 
         public String manifestId() {
@@ -116,6 +123,8 @@ public final class GuardedChatModel implements ChatModel {
                 modelCalls++;
                 return;
             }
+            if ("gateway-conversation/1".equals(manifest.historyPolicy()) && modelCalls >= 12)
+                throw new ExecConfigViolation("MODEL_BUDGET", "本轮模型调用达到上限");
             List<Message> messages = prompt.getInstructions() == null ? List.of() : prompt.getInstructions();
             verifySystemMessages(messages);
             verifyInputShape(messages);
@@ -165,6 +174,22 @@ public final class GuardedChatModel implements ChatModel {
          * （正常路径上历史/媒体已在 {@code GovernedToolRuntime.resolve} 提前拒绝，这里是不变量兜底。）
          */
         private void verifyInputShape(List<Message> messages) {
+            if ("gateway-conversation/1".equals(manifest.historyPolicy())) {
+                var actual = messages.stream().filter(m -> m.getMessageType() != MessageType.SYSTEM).toList();
+                if (conversation == null || actual.size() < conversation.size())
+                    throw new ExecConfigViolation("INPUT_SHAPE", "受控会话被删改");
+                for (int i = 0; i < conversation.size(); i++) {
+                    if (actual.get(i).getMessageType() != conversation.get(i).getMessageType()
+                            || !actual.get(i).getText().equals(conversation.get(i).getText()))
+                        throw new ExecConfigViolation("INPUT_SHAPE", "受控会话被删改");
+                }
+                for (int i = conversation.size(); i < actual.size(); i++) {
+                    if (modelCalls == 0 || (actual.get(i).getMessageType() != MessageType.ASSISTANT
+                            && actual.get(i).getMessageType() != MessageType.TOOL))
+                        throw new ExecConfigViolation("INPUT_SHAPE", "工具循环包含额外用户消息");
+                }
+                return;
+            }
             boolean firstCall = modelCalls == 0;
             int userMessages = 0;
             for (Message m : messages) {

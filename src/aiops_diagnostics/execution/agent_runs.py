@@ -571,6 +571,16 @@ class AgentRunStore:
             )
             return cursor.rowcount == 1
 
+    def bind_operator_order(self, run_id: str, order_no: str) -> bool:
+        """模型提出并经当前授权后的单一对象；禁止运行中换单或终态回写。"""
+        with self._connection(write=True) as connection:
+            cursor = connection.execute(
+                "UPDATE agent_runs SET order_no=? WHERE run_id=? AND operation='operator_agent' "
+                "AND state IN ('issued','running') AND expires_at>? AND (order_no='' OR order_no=?)",
+                (order_no, run_id, _now().isoformat(), order_no),
+            )
+            return cursor.rowcount == 1
+
     def record_observed_config(self, run_id: str, observed_agent_version: str) -> bool:
         """领取时把节点回传的**实际**身份落库（仅供审计，不覆盖签发时的期望）。
 

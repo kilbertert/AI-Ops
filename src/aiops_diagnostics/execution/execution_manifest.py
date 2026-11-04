@@ -23,6 +23,8 @@ from pathlib import Path
 #: 本片只接受这一个 schema 版本；其它值拒绝而不是忽略。
 SUPPORTED_SCHEMA = "m3-exec-config/1"
 OPERATOR_SCHEMA = "operator-exec-config/1"
+AGENT_SCHEMA = "operator-agent/1"
+AGENT_HISTORY = "gateway-conversation/1"
 
 #: 固定无历史模式。清单声明别的取值时拒绝整份清单。
 FIXED_HISTORY_POLICY = "none"
@@ -91,9 +93,15 @@ def from_text(text: str) -> ExecutionManifest:
 def _parse(payload: object, identity: str) -> ExecutionManifest:
     if not isinstance(payload, dict):
         raise ExecutionManifestError("execution manifest must be a JSON object")
-    if payload.get("schema") not in {SUPPORTED_SCHEMA, OPERATOR_SCHEMA, "operator-conversation/1"}:
+    if payload.get("schema") not in {
+        SUPPORTED_SCHEMA,
+        OPERATOR_SCHEMA,
+        "operator-conversation/1",
+        AGENT_SCHEMA,
+    }:
         raise ExecutionManifestError("unsupported execution manifest schema")
-    if payload.get("history_policy") != FIXED_HISTORY_POLICY:
+    history = AGENT_HISTORY if payload.get("schema") == AGENT_SCHEMA else FIXED_HISTORY_POLICY
+    if payload.get("history_policy") != history:
         raise ExecutionManifestError("unsupported history policy")
     model = payload.get("model")
     if not isinstance(model, dict):
@@ -113,7 +121,7 @@ def _parse(payload: object, identity: str) -> ExecutionManifest:
         raise ExecutionManifestError("execution manifest system messages are invalid")
     tools = payload.get("tools")
     if not isinstance(tools, list) or (
-        not tools and payload.get("schema") not in {OPERATOR_SCHEMA, "operator-conversation/1"}
+        not tools and payload.get("schema") not in {OPERATOR_SCHEMA, "operator-conversation/1", AGENT_SCHEMA}
     ):
         # 空工具集合不是合法期望，也不是拒绝手段（节点侧同一结论）。
         raise ExecutionManifestError("execution manifest declares no controlled tools")
@@ -140,7 +148,7 @@ def _parse(payload: object, identity: str) -> ExecutionManifest:
         endpoint=_required(model, "endpoint"),
         system_messages=tuple(system_messages),
         tool_names=tuple(names),
-        history_policy=FIXED_HISTORY_POLICY,
+        history_policy=history,
     )
 
 

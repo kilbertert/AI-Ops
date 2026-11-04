@@ -1,12 +1,11 @@
 """真实工具授权/代理/证据/回读，CPMS严格执行其子串过滤契约。"""
 
-import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from aiops_diagnostics.operator import operator_cpms
-from operations.test_operator_conversation import drive_site_tool, selection
+from operations.test_operator_conversation import drive_site_tool
 from operations.test_operator_cpms import HEADERS, NODE_A_TOKEN, environment, terminal
 
 
@@ -52,7 +51,10 @@ def test_compound_place_uses_site_search_in_real_tool_path(tmp_path, monkeypatch
             response = f["client"].post(
                 f"/v1/internal/operator-runs/{run_id}/completions",
                 headers=headers,
-                json={"status": "completed", "answer": json.dumps({**selection(), "address_terms": terms})},
+                json={
+                    "status": "completed",
+                    "answer": "{{cpms_site_search#/records/0/name}}",
+                },
             )
             assert response.status_code == 200, response.text
 

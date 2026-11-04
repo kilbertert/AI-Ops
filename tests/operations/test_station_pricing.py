@@ -61,7 +61,6 @@ def test_unprovable_plan_is_not_a_lowest_price(change):
 
 @pytest.mark.parametrize("missing", ["energy", "date", "name"])
 def test_original_chat_clarifies_then_returns_scoped_frozen_plan(tmp_path, monkeypatch, missing):
-    import json
     from datetime import UTC, datetime, timedelta
 
     from aiops_diagnostics.operator import operator_cpms
@@ -82,6 +81,8 @@ def test_original_chat_clarifies_then_returns_scoped_frozen_plan(tmp_path, monke
             return data[path] if path in data else original(url, bearer, tenant, **kwargs)
 
         monkeypatch.setattr(operator_cpms, "cpms_get", cpms)
+        f["candidate"]["enabled"].append("cpms_station_plan")
+        f["publish"](f["route"].route_revision)
         all_arguments = {
             "name": "天河测试站",
             "date": day,
@@ -141,11 +142,11 @@ def test_original_chat_clarifies_then_returns_scoped_frozen_plan(tmp_path, monke
                 json={"authorization_id": grant["authorization_id"], "evidence": evidence},
             )
             assert ack.status_code == 200, ack.text
-            answer = {"kind": "station_plan", "text": "", "name": "", "address_terms": []}
+            answer = {"reply": "{{cpms_station_plan#/text}}", "evidence_tools": ["cpms_station_plan"]}
             ack = f["client"].post(
                 f"/v1/internal/operator-runs/{run_id}/completions",
                 headers=head,
-                json={"status": "completed", "answer": json.dumps(answer)},
+                json={"status": "completed", "answer": answer["reply"]},
             )
             assert ack.status_code == 200, ack.text
             checked.append(value)

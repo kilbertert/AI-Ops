@@ -43,7 +43,11 @@ def ensure_node_provider(console, workspace, gateway_url, manifest=None, *, migr
                     "description": "需要节点任务授权；请使用编辑器试运行，不使用共享业务凭据。",
                     "requestBody": {
                         "required": True,
-                        "content": {"application/json": {"schema": json.loads(EMPTY_SCHEMA)}},
+                        "content": {
+                            "application/json": {
+                                "schema": json.loads(operator_tools.tool(declared_name).input_schema())
+                            }
+                        },
                     },
                     "responses": {
                         "200": {"description": "本次授权订单的CPMS证据"},

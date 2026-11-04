@@ -982,7 +982,7 @@ public class NodeGuardAcceptance {
         List<String> out = new ArrayList<>(List.of("exact", "system-drift", "model-drift",
                 "endpoint-drift", "options-drift", "tool-description-drift", "tool-schema-drift",
                 "history-drift", "media-drift", "memory-drift", "mcp-drift", "mid-loop-drift",
-                "advisor-appends-system", "cross-run", "output-contract-call", "output-contract-stream"));
+                "advisor-appends-system", "cross-run"));
         out.addAll(advisorDriftVariants());
         return List.copyOf(out);
     }

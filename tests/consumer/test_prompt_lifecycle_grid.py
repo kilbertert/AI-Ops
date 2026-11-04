@@ -15,8 +15,6 @@ import json
 import pytest
 
 from aiops_diagnostics.consumer.consumer_documents import answer_selection
-from aiops_diagnostics.operator import operator_conversation as conversation
-from aiops_diagnostics.operator import operator_cpms
 
 BILLING = {
     "order_no": "2107546575906942977",
@@ -140,131 +138,18 @@ def test_grid_client_not_found(style):
     assert answer["blocks"][0]["text"].startswith(NOT_FOUND[style])
 
 
-# --- 管家：3 类出口 × 2 风格 ---------------------------------------------------------
-
-CONSULT = {
-    "简洁直接": "状态 3 表示异常已由人工处理完毕。",
-    "亲切解释": "您看到的这个状态，意思是这次异常已经有同事人工处理过了，不用再操作。",
-}
-DIAGNOSIS = {
-    "简洁直接": {
-        "direct_answer": "这单的电费是 13.68，服务费 13.68，合计 27.36。",
-        "summary": "订单 2107546575906942977 已结束，电量 4.5598 kWh。",
-        "probable_cause": "金额构成与计费模板一致，未发现多计。",
-        "next_steps": ["如需核对分时电价，请提供计费模板"],
-        "limitations": ["上游未提供分时电价明细"],
-        "evidence_tools": ["cpms_order_detail"],
-    },
-    "亲切解释": {
-        "direct_answer": "帮您算了一下：电费 13.68，服务费 13.68，加起来是 27.36。",
-        "summary": "这单已经结束，充了 4.5598 kWh。",
-        "probable_cause": "这两笔金额和计费模板对得上，看起来没有多收。",
-        "next_steps": ["想核对分时电价的话，把计费模板发我"],
-        "limitations": ["这次没取到分时电价明细"],
-        "evidence_tools": ["cpms_order_detail"],
-    },
-}
-SITE_NOTE = {
-    "简洁直接": "按当前账号可见范围查到的站点如下。",
-    "亲切解释": "我按您账号能看到的范围查了一下，结果在下面，您可以按名字核对。",
-}
-EVIDENCE = {
-    "cpms_order_detail": {
-        "source": "cpms.orderDetail",
-        "observed_at": "2026-10-30T09:08:26+00:00",
-        "data": {"orderNo": "2107546575906942977"},
-    }
-}
-
-
+# 管家统一模型回复允许不同风格，事实值通过引用固定。
 @pytest.mark.parametrize("style", STYLES)
-def test_grid_operator_consult(style):
-    answer = {"kind": "answer", "text": CONSULT[style], "name": "", "address_terms": []}
-    conversation.validate(answer, "状态3是什么意思")
-    assert conversation.render(answer, None, "zh")["blocks"][0]["text"] == CONSULT[style]
+def test_operator_style_preserves_referenced_value(style):
+    from aiops_diagnostics.operator.operator_agent import render
 
-
-@pytest.mark.parametrize("style", STYLES)
-def test_grid_operator_diagnosis(style):
-    answer = DIAGNOSIS[style]
-    operator_cpms.validate_answer(answer, EVIDENCE)
-    report = operator_cpms.render_report(answer, EVIDENCE)
-    assert report.startswith(answer["direct_answer"])
-    assert "【订单事实】" in report and "【数据来源】" in report
-
-
-@pytest.mark.parametrize("style", STYLES)
-def test_grid_operator_site_search(style):
-    value = {
-        "kind": "site_search",
-        "text": SITE_NOTE[style],
-        "name": "天河",
-        "address_terms": ["广州", "天河"],
+    lead = "记录如下。" if style == "简洁直接" else "我帮您看一下这条记录。"
+    evidence = {
+        "cpms_order_billing": {"data": {"payAmount": "27.36"}, "observed_at": "2026-10-30T09:08:26+00:00"}
     }
-    conversation.validate(value, "找广州天河充电站")
-    sites = {
-        "source": "cpms.siteSearch",
-        "observed_at": "2026-10-30T09:08:26+00:00",
-        "sites": [{"id": "SITE-1", "name": "天河测试站", "address": "广州市天河区测试路"}],
-        "limited": False,
-        "empty_scope": False,
-        "total": 1,
-        "scope_limited": True,
-    }
-    text = conversation.render(value, sites, "zh")["blocks"][0]["text"]
-    assert text.startswith(SITE_NOTE[style])
-    assert "天河测试站" in text and "cpms.siteSearch" in text
-
-
-# --- 另覆盖：找站空结果、缺单、权限不足、多语言、取消与超时 -----------------------------
-
-
-def test_grid_site_search_empty_result_differs_from_empty_scope():
-    """空结果与空范围是两件事，话不能同形。"""
-    base = {
-        "source": "cpms.siteSearch",
-        "observed_at": "2026-10-30T09:08:26+00:00",
-        "limited": False,
-        "total": 0,
-        "scope_limited": True,
-    }
-    searched = conversation.render(
-        {"kind": "site_search", "text": "", "name": "", "address_terms": ["火星"]},
-        {**base, "sites": [], "empty_scope": False},
-        "zh",
-    )["blocks"][0]["text"]
-    listed = conversation.render(
-        {"kind": "site_search", "text": "", "name": "", "address_terms": []},
-        {**base, "sites": [], "empty_scope": True},
-        "zh",
-    )["blocks"][0]["text"]
-    assert "未找到匹配站点" in searched
-    assert "尚未分配可查询站点" in listed
-
-
-def test_grid_operator_without_an_order_asks_for_one():
-    answer = {"kind": "order_required", "text": "请提供订单号。", "name": "", "address_terms": []}
-    conversation.validate(answer, "帮我看看上一个订单")
-    assert conversation.render(answer, None, "zh")["blocks"][0]["text"] == "请提供订单号。"
-
-
-@pytest.mark.parametrize(
-    "language,note",
-    [
-        ("en", "Here is what I can see for your account."),
-        ("zh-Hant", "我按您帳號可見的範圍查了一下，結果如下。"),
-    ],
-)
-def test_grid_site_note_follows_the_operator_language(language, note):
-    value = {"kind": "site_search", "text": note, "name": "", "address_terms": []}
-    conversation.validate(value, "我有哪些站点")
-    sites = {
-        "source": "cpms.siteSearch",
-        "observed_at": "2026-10-30T09:08:26+00:00",
-        "sites": [{"id": "SITE-1", "name": "Tianhe", "address": "Guangzhou"}],
-        "limited": False,
-        "empty_scope": False,
-        "total": 1,
-        "scope_limited": True,
-    }
-    assert conversation.render(value, sites, language)["blocks"][0]["text"].startswith(note)
+    value = render(
+        lead + "记录付款{{cpms_order_billing#/payAmount}}",
+        evidence,
+    )
+    assert value["blocks"][0]["text"].startswith(lead)
+    assert "27.36" in value["blocks"][0]["text"]

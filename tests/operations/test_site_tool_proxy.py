@@ -1,6 +1,5 @@
 """站点工具走真实 Gateway 的授权、取数与证据回调；仅公司身份和 CPMS 合成。"""
 
-import json
 from dataclasses import replace
 
 import pytest
@@ -89,15 +88,15 @@ def test_site_tool_proxy_preserves_cpms_page_and_accepts_evidence(operator, monk
         )
         assert recorded.status_code == 200, recorded.text
         answer = {
-            "kind": "site_search",
-            "text": "查询结果如下。",
-            "name": arguments.get("name", ""),
-            "address_terms": [arguments["address"]] if arguments.get("address") else [],
+            "reply": "{{cpms_site_search#/records/0/name}}"
+            if evidence["data"]["records"]
+            else "本次未找到可见匹配站点。",
+            "evidence_tools": ["cpms_site_search"],
         }
         completed = f["client"].post(
             f"/v1/internal/operator-runs/{run_id}/completions",
             headers=headers,
-            json={"status": "completed", "answer": json.dumps(answer)},
+            json={"status": "completed", "answer": answer["reply"]},
         )
         assert completed.status_code == 200, completed.text
 

@@ -70,7 +70,7 @@ def test_node_failure_reaches_caller_without_readback(
         f["ctx"].operator_cpms.authorize_readback(
             f["resolver"].current, posted.json()["qa_id"], "operator-private"
         )
-    assert len(f["state"]["calls"]) == (1 if order else 0)
+    assert len(f["state"]["calls"]) == 0
     assert "private_upstream" not in caplog.text
     assert "TypeError" not in caplog.text
     assert "OPERATOR_RESULT_UNAVAILABLE" not in caplog.text

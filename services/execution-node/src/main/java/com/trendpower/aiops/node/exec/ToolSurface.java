@@ -29,6 +29,7 @@ public final class ToolSurface {
 
     public static final String OPERATOR_ORDER = "operator-exec-config/1";
     public static final String OPERATOR_CONVERSATION = "operator-conversation/1";
+    public static final String OPERATOR_AGENT = "operator-agent/1";
     public static final String CONSUMER = "m3-exec-config/1";
 
     private ToolSurface() {
@@ -36,6 +37,7 @@ public final class ToolSurface {
 
     /** 这一类运行允许的工具名，顺序稳定（声明顺序）。 */
     public static List<String> allowed(String schema) {
+        if (OPERATOR_AGENT.equals(schema)) return OperatorTools.names();
         Set<String> names = new LinkedHashSet<>();
         String context = context(schema);
         // C 端**不要求**声明在场：它的清单本来只有状态工具，CPMS 工具是挂了声明才有的增量。

@@ -42,6 +42,7 @@ if [[ -z "$DEPS" || ! -d "$DEPS/lib" ]]; then
 fi
 
 mkdir -p "$OUT/classes"
+cp "$REPO/src/aiops_diagnostics/operator/operator_tools.json" "$OUT/classes/operator_tools.json"
 echo "== compiling node sources + acceptance code"
 docker run --rm --pull=never --network=none --cap-drop=ALL \
   --user "$(id -u):$(id -g)" \
@@ -208,6 +209,8 @@ print('\\n'.join(t.name for t in operator_tools.tools()))
 }
 
 schema_phase "tool schema comes from the declaration"
+run_phase "controlled conversation and output modes" "$OUT/conversation.log" \
+  'java -cp "/out/classes:/deps/lib/*" com.trendpower.aiops.node.exec.OperatorConversationGuardAcceptance'
 
 echo "== artifacts"
 sha256sum "$OUT/guarded.log" "$OUT/counter-proof.log" | tee "$OUT/logs.sha256"

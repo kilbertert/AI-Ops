@@ -604,6 +604,20 @@ class ConversationStore:
             ).fetchone()
         return row[0] if row else None
 
+    def completed_context(self, conversation_id, scope_fingerprint, *, before, limit=6):
+        """仅同一主体的已完成回合；业务对象权限由使用方再核对。"""
+        self.get(conversation_id, scope_fingerprint)
+        if not 1 <= limit <= 10 or before < 1:
+            raise ConversationError("invalid context window")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT t.* FROM conversation_turns t JOIN conversations c USING(conversation_id) "
+                "WHERE t.conversation_id=? AND c.scope_fingerprint=? AND t.turn_no<? "
+                "AND t.answer_json IS NOT NULL ORDER BY t.turn_no DESC LIMIT ?",
+                (conversation_id, scope_fingerprint, before, limit),
+            ).fetchall()
+        return [_turn_from_row(row) for row in reversed(rows)]
+
     def recent_questions(
         self, conversation_id: str, scope_fingerprint: str, *, before: int, limit: int = 3
     ) -> list[str]:
