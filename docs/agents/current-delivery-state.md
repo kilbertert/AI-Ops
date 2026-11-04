@@ -32,7 +32,7 @@
 
 ## 已修成因与尚未闭环的风险
 
-- 订单状态守卫误拒、有界重派及JSON尾部装饰已分别由 #1322、#1325–#1327 处理。
+- 订单状态守卫误拒、有界重派及JSON尾部装饰已分别由 #1323、#1325–#1327 处理。
   [状态复测](../validation/2026-11-03-status-guard-deploy-receipt.md)、
   [重派](../validation/2026-11-03-json-output-resilience.md)、
   [尾部装饰](../validation/2026-11-03-json-trailing-decoration.md)各有不同基线；不把小批成功率合并为稳定性结论。
