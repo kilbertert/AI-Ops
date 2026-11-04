@@ -107,6 +107,20 @@ def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
         reads = []
 
         def upstream(url, bearer, tenant, **kwargs):
+            if "/chOrderInfo/ORDER-1001" in url:
+                from operations.test_order_billing import example
+
+                _, _, billing = example()
+                return {
+                    "code": 0,
+                    "data": {
+                        **billing,
+                        "orderNo": "ORDER-1001",
+                        "tenantId": "TENANT-A",
+                        "siteId": "SITE-1",
+                        "discountDetails": '{"serviceDiscount":8}',
+                    },
+                }
             if "/chFeeTemplateRecord/" in url:
                 reads.append(url)
                 data = snapshot()
@@ -121,10 +135,10 @@ def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
             head = {"Authorization": "Bearer " + NODE_A_TOKEN, **CONTRACT}
             publication = client.post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
             head["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
-            for tool in ("cpms_order_detail", "cpms_order_tariff"):
+            for tool in ("cpms_order_detail", "cpms_order_tariff", "cpms_order_billing"):
                 head["X-AI-Ops-Tool-Contract"] = (
                     operator_cpms.OBJECT_CONTRACT
-                    if tool == "cpms_order_tariff"
+                    if tool in ("cpms_order_tariff", "cpms_order_billing")
                     else operator_cpms.TOOL_CONTRACT
                 )
                 path = f"/v1/internal/operator-runs/{run_id}/tools/{tool}"
@@ -134,12 +148,12 @@ def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
                     headers={"Authorization": "Bearer " + grant["bearer"]},
                 )
                 assert result.status_code == 200, result.text
-                if tool == "cpms_order_tariff":
+                if tool in ("cpms_order_tariff", "cpms_order_billing"):
                     assert "PRIVATE" not in result.text
                     evidence = {
                         "tool": tool,
                         "inputs": grant["inputs"],
-                        "source": "cpms.orderTariff",
+                        "source": operator_tools.tool(tool).source,
                         "observed_at": datetime.now(UTC).isoformat(),
                         "data": result.json()["data"]["value"],
                     }
@@ -156,7 +170,7 @@ def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
             from operations.test_operator_reply_facts import answer
 
             value = answer("本次核对。\n{{fact:order_facts}}")
-            value["evidence_tools"] = ["cpms_order_detail", "cpms_order_tariff"]
+            value["evidence_tools"] = ["cpms_order_detail", "cpms_order_tariff", "cpms_order_billing"]
             done = client.post(
                 f"/v1/internal/operator-runs/{run_id}/completions",
                 headers=head,
@@ -169,11 +183,14 @@ def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
         final = terminal(f, created.json()["qa_id"])
         assert final.json()["status"] == "completed", final.text
         assert "历史计费核对" in final.text and "1.20" in final.text
+        assert "订单金额验证" in final.text and "规则1 服务费折扣优惠" in final.text
+        assert "同轮订单与账务记录不一致" in final.text
         assert len(reads) == 1
 
 
 @pytest.mark.parametrize("failure", ["old-node", "transfer", "revoked"])
-def test_tariff_refusal_precedes_business_read(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize("tool_name", ["cpms_order_tariff", "cpms_order_billing"])
+def test_tariff_refusal_precedes_business_read(tmp_path, monkeypatch, failure, tool_name):
     from threading import Event
 
     from aiops_diagnostics.operator import operator_cpms
@@ -188,11 +205,13 @@ def test_tariff_refusal_precedes_business_read(tmp_path, monkeypatch, failure):
             publication = client.post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
             head["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
             f["ctx"].operator_cpms.tasks[run_id].delivered.add("cpms_order_detail")
+            if tool_name == "cpms_order_billing":
+                f["ctx"].operator_cpms.tasks[run_id].delivered.add("cpms_order_tariff")
             if failure != "old-node":
                 head["X-AI-Ops-Tool-Contract"] = operator_cpms.OBJECT_CONTRACT
             if failure == "revoked":
                 f["resolver"].current = scope(site="SITE-OTHER")
-            path = f"/v1/internal/operator-runs/{run_id}/tools/cpms_order_tariff/authorization"
+            path = f"/v1/internal/operator-runs/{run_id}/tools/{tool_name}/authorization"
             response = client.post(path, headers=head, json={})
             if failure in {"old-node", "revoked"}:
                 assert response.status_code == 403, response.text
