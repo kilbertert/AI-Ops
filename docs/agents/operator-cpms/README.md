@@ -1,6 +1,8 @@
 # 管家 CPMS 工具实施
 
-更新：2026-11-04。节点、原管家H5与Dify原生预览已有真实链路证据，
+更新：2026-11-05。新合同及配套迁移以本页末尾“统一自然语言与SOP模型循环”为准；
+以下首片和JSON合同描述保留历史取舍，不再指导新应用发布。
+节点、原管家H5与Dify原生预览已有真实链路证据，
 见[退役验收](../../validation/2026-10-29-runtime-retirement-live.md)及
 [站点清单验收](../../validation/2026-11-03-site-delivery-production-receipt.md)。
 首页新增入口已撤回，原聊天页仍可访问；不是“整页未部署”或“路由仍撤回”。
@@ -18,8 +20,8 @@ JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、�
 见[场景](conversation.feature)、[QA与限制](conversation-qa.md)。
 流程与验收分别见 [acceptance.feature](acceptance.feature) 和 [qa-plan.md](qa-plan.md)。
 
-运营只维护业务SOP和工具选择。管家发布/试用自动追加输出要求，Java节点每轮启用JSON对象
-模式，并只把最后完整模型轮交给Gateway校验。页面显示可读报告，不要求运营手写JSON。
+运营只维护业务SOP和工具选择。新管家发布/试用自动追加工具与证据要求，Java节点以自然语言
+交付最后完整模型轮；结构化协议仅用于工具交互。旧JSON协议只保留历史与回退解释。
 遇到`OPERATOR_INVALID_ANSWER`时核对节点制品、输出模式和完成回合边界，不能通过放宽
 证据校验止错。详见[输出契约QA](output-contract-qa.md)与[决策](../../adr/0163-operator-output-is-a-runtime-contract.md)。
 
@@ -32,7 +34,7 @@ JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、�
 
 ## 首片 API 契约
 
-**报告必须回答用户问的那一点。** 答案的 `direct_answer` 为必填非空，且渲染在最前；
+**报告必须回答用户问的那一点。** 旧答案的 `direct_answer` 曾为必填非空，且渲染在最前；
 没有它，任何提问都只能被概述一遍 —— 2026-10-29 反馈的「两个问题同一份报告」就是
 这个形状（[ADR-0171](../../adr/0171-operator-report-answers-the-question-asked.md)）。
 订单详情取证已覆盖金额、退款、额定功率与接口类型，问电费/功率不再只能答「未提供」。

@@ -2,7 +2,8 @@
 
 现役Java源码与构建入口位于[services/execution-node](../../services/execution-node/README.md)。
 仓内源码迁移不改变宿主jar安装目录、systemd和容器挂载。
-管家JSON输出契约修复位于节点jar；仅更新Gateway或Dify提示词不会生效。按原流程从合并
+管家输出契约位于节点jar；新合同自然语言输出与迁移见本页末节，旧JSON规则仅供回退。
+仅更新Gateway或Dify提示词不会生效。按原流程从合并
 修订构建/核对节点制品，变更窗口切换后分别验原生预览、AI-Ops试用与正式入口。
 既有`operator-exec-config/1`清单无需重发；恢复时切回原jar并核对节点在线。
 本地候选的验证与线上限制见[输出契约QA](../../docs/agents/operator-cpms/output-contract-qa.md)。
@@ -94,7 +95,7 @@ Docker internal 网络的端口映射在本环境不生成宿主监听，不能�
 确认没有在飞工作再重启 Gateway。禁止另建生产 app 对象来“检查”状态库。
 
 开关覆盖 Gateway 的状态问法分流：未登记端点的其他租户仍可能收到 404。
-这不提供按人限流或自动证据清理。模型重试次数没有硬上限；失败不回落直读。
+这不提供按人限流或自动证据清理。新管家合同最多12次模型调用；失败不回落直读。
 
 ## 验收、退役和恢复
 
