@@ -35,15 +35,17 @@
 
 ## 取证通道（记录备查，不是网络修复）
 
-开发机到 `dify.ranlei.work:443` 的 TLS 握手持续被重置，所以页面验收走了一条本地通道：
-`ssh -L 18443:127.0.0.1:443 yidong-36` + 一个只绑回环的 CONNECT 代理
-（`127.0.0.1:18080` → `127.0.0.1:18443`）。浏览器 URL 与 `Origin` 仍是
-`https://dify.ranlei.work`，因此桥的同源校验照常生效。
+开发机到 `dify.ranlei.work:443` 的 TLS 握手持续被重置，所以页面验收走了一条本地通道。
+**可复用的启停步骤在 [`tools/verification/dify-console-tunnel/README.md`](../../tools/verification/dify-console-tunnel/README.md)**，
+脚本是同一目录下的 `proxy.py`（只绑回环的 CONNECT 代理）与 `capture.py`（用库外 0600 会话截图）。
+
+要点：隧道 `ssh -N -L 18443:127.0.0.1:443 yidong-36` → 代理 `127.0.0.1:18080`，
+浏览器 URL 与 `Origin` 仍是 `https://dify.ranlei.work`，因此桥的同源校验照常生效。
 
 **顺带证伪了一个猜想**：直接用 `https://dify.ranlei.work:18443` 访问会被桥拒绝
 （「请从Dify控制台操作」）—— 说明 Origin 校验是真的在工作，不是摆设。
 
-取证结束隧道与代理均已关闭，无残留进程。
+取证结束隧道与代理均已关闭，`pgrep` 无残留。
 
 ## 副作用与清理
 
@@ -53,6 +55,13 @@
 - 然后 `DELETE` 该行
 - 删后回读：优链充剩余两条作业都是 `completed`；两条正式路由未变
   （`operator a57602c1 active rev 2`、`consumer 548b8483 active rev 1`）
+
+## 交付状态索引的订正（待做）
+
+[当前交付状态索引](../agents/current-delivery-state.md) 里那一行仍写着「未完成业务验收」。
+订正被推迟：该文件与另两份同名记录**被兄弟工作区 `test/consumer-lifecycle-live` 的一次
+未完成合并占用**（`MERGE_HEAD` 存在、`UU` 冲突未解决）。等那个合并结束再订正，
+不在别人的在飞工作里动手。PR 里写明了这一处待补。
 
 ## 仍未验
 
