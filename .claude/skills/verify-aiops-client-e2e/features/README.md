@@ -15,6 +15,12 @@ python /tmp/probe.py --accept-live-app \
 python /tmp/probe.py --accept-live-app --entry operator --paths /v1/faq/catalog --languages zh,en
 ```
 
+## 安卓真机
+
+[adbx验收](android-adbx.md)证明已安装应用的页面操作与新增内容；使用
+`scripts/android_adbx.py --plan <库外计划> --out <新私有目录> --execute`。
+没有`--execute`只校验计划，退出2；屏幕新内容满足指定断言才退出0，仍需结合截图审阅业务语义。
+
 ## 各个面
 
 | 面 | 路由 | 证明它能用的判据 |
@@ -23,7 +29,7 @@ python /tmp/probe.py --accept-live-app --entry operator --paths /v1/faq/catalog 
 | 固定问答答案 | `POST /v1/faq/answer`（需 `question_id`） | 同上，且 `answer` 非空 |
 | 快捷动作 | `GET /v1/shortcuts` | 同上，且**逐行**读 `language` —— 在语言存在之前发布的行走 `zh` 并**如实上报**，那是诚实，不是缺陷 |
 | 统一助手 QA | `POST /v1/assistant/questions` | 路由可达；**模型行为在这里证不了**（需 provider） |
-| 单问诊断 | `POST /v1/standard/diagnoses` | 路由可达；存储侧的 `language` 列是「语言标签到达了持久化层」的证据 |
+| 旧标准诊断 | `POST /v1/standard/diagnoses` | 已退役，应为404；不作为真机验收入口 |
 | 健康报告 | `POST /v1/health-report-jobs` | 可达；该面在生产从未运行过时则无法证明 |
 
 ## 设备令牌够不到的路由
