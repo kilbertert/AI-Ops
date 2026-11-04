@@ -8,7 +8,11 @@ from aiops_diagnostics.operator import operator_cpms
 from operations.test_operator_cpms import APP, HEADERS, ORDER, environment, node, terminal
 
 
-def test_formal_followup_keeps_order_and_gets_fresh_evidence(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "question",
+    ["那这笔单的电压呢", "那为什么服务费折扣还不能判通过？", "那么增值税为什么不一致？"],
+)
+def test_formal_followup_keeps_order_and_gets_fresh_evidence(tmp_path, monkeypatch, question):
     with environment(tmp_path, monkeypatch) as f:
         seen = []
 
@@ -31,7 +35,7 @@ def test_formal_followup_keeps_order_and_gets_fresh_evidence(tmp_path, monkeypat
         second = f["client"].post(
             "/v1/assistant/questions",
             headers=HEADERS,
-            json={"question": "那这笔单的电压呢", "conversation_id": conversation},
+            json={"question": question, "conversation_id": conversation},
         )
         assert second.status_code == 202, second.text
         assert terminal(f, second.json()["qa_id"]).json()["status"] == "completed"
@@ -86,7 +90,8 @@ def test_formal_entry_rejects_other_context_before_dispatch(tmp_path, monkeypatc
         assert len(f["state"]["calls"]) == before
 
 
-def test_revoked_order_is_not_replayed_and_new_topic_does_not_inherit(tmp_path, monkeypatch):
+@pytest.mark.parametrize("question", ["那电压呢", "那为什么服务费折扣还不能判通过？"])
+def test_revoked_order_is_not_replayed_and_new_topic_does_not_inherit(tmp_path, monkeypatch, question):
     with environment(tmp_path, monkeypatch) as f:
         calls = []
 
@@ -105,7 +110,7 @@ def test_revoked_order_is_not_replayed_and_new_topic_does_not_inherit(tmp_path, 
         refused = f["client"].post(
             "/v1/assistant/questions",
             headers=HEADERS,
-            json={"question": "那电压呢", "conversation_id": first["conversation_id"]},
+            json={"question": question, "conversation_id": first["conversation_id"]},
         )
         assert refused.status_code == 403
         assert calls == [ORDER]
@@ -122,11 +127,16 @@ def test_revoked_order_is_not_replayed_and_new_topic_does_not_inherit(tmp_path, 
             "功率是什么",
             "电量怎么算",
             "那还有空闲充电桩吗",
+            "那服务费折扣一般为什么不能判通过？",
+            "那明天的税额怎么验证？",
+            "那服务费折扣是什么？",
+            "那服务费折扣活动怎么宣传？",
         ]:
             assert not _operator_order_followup(question)
 
 
-def test_native_trial_returns_and_reuses_conversation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("question", ["那电压呢", "那为什么服务费折扣还不能判通过？"])
+def test_native_trial_returns_and_reuses_conversation(tmp_path, monkeypatch, question):
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     with environment(tmp_path, monkeypatch) as f:
@@ -160,7 +170,7 @@ def test_native_trial_returns_and_reuses_conversation(tmp_path, monkeypatch):
         second = f["client"].post(
             "/v1/dify/trial",
             headers=headers,
-            json={"app_id": APP, "question": "那电压呢", "conversation_id": first.json()["conversation_id"]},
+            json={"app_id": APP, "question": question, "conversation_id": first.json()["conversation_id"]},
         )
         assert second.status_code == 202, second.text
         assert terminal(f, second.json()["trial_id"]).json()["status"] == "completed"
