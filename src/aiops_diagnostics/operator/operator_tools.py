@@ -11,7 +11,7 @@ OpenAPI 生成，以及节点侧的装配表。加一个工具要同步改五处
 ## 边界（有意为之，不是还没做完）
 
 - 请求只能是 `GET` + 相对路径 + 声明里的查询串。「任意 HTTP / SQL 工具」仍然不在方案内。
-- `response.kind` 只有两种：`single`（一个对象）与 `page`（一页记录 + 派生标记）。
+- `response.kind` 支持 `single`（订单）、`page`（分页）与 `object`（有界嵌套投影）。
   需要**新的**响应形状时，改的是引擎（两侧各一处），不是每个工具各写一遍 ——
   这与「每个工具改一次 Java」是两件事。
 - 声明里没有凭据、没有地址、没有租户：它只说形状，不说去哪。
@@ -41,7 +41,7 @@ _NAME = re.compile(r"[a-z][a-z0-9_]{2,63}")
 _INPUT = re.compile(r"[a-z][a-z0-9_]{1,63}")
 _PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]{1,63})\}")
 #: 响应形状。新增一种要同时改两侧引擎，因此是显式枚举而不是自由字符串。
-KINDS = ("single", "page")
+KINDS = ("single", "page", "object")
 #: 运行类型。工具必须声明它能出现在哪一类运行里 —— 「无订单回合也能带工具」不等于
 #: 「任何工具都能在无订单回合里跑」：订单诊断工具没有订单就没有可取证的对象。
 CONTEXTS = ("order", "conversation")
@@ -67,6 +67,7 @@ class OperatorTool:
     page_size: int | None
     flags: dict[str, object]
     evidence_fields: tuple[str, ...]
+    evidence_shape: dict | None = None
 
     def request(self, values: dict[str, str]) -> dict[str, str]:
         """这一次要发的请求。**路径与查询串都在这里物化** —— 节点只执行它。
@@ -156,6 +157,23 @@ def _parse_query(name: str, raw: object, inputs: set[str]) -> tuple[tuple[str, s
     return tuple(parsed)
 
 
+def _validate_shape(shape, depth=0):
+    _require(depth <= 6, "evidence_shape exceeds depth limit")
+    if shape is None:
+        return
+    if isinstance(shape, list):
+        _require(len(shape) == 1, "evidence_shape array needs one item shape")
+        _validate_shape(shape[0], depth + 1)
+        return
+    _require(isinstance(shape, dict) and bool(shape), "evidence_shape needs an object")
+    for key, value in shape.items():
+        _require(
+            isinstance(key, str) and bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", key)),
+            "evidence_shape has invalid key",
+        )
+        _validate_shape(value, depth + 1)
+
+
 def _tool(raw: object, seen: set[str]) -> OperatorTool:
     raw = _object(raw, "every tool")
     name = _text(raw.get("name"), "tool name")
@@ -197,7 +215,7 @@ def _tool(raw: object, seen: set[str]) -> OperatorTool:
     else:
         _require(page_size is None, f"{name}: only page responses declare page_size")
         _require(
-            bool(response.get("require_envelope_identity")),
+            kind == "object" or bool(response.get("require_envelope_identity")),
             f"{name}: single response must check the envelope",
         )
 
@@ -206,6 +224,13 @@ def _tool(raw: object, seen: set[str]) -> OperatorTool:
     for field in fields:
         _require(isinstance(field, str) and bool(field.strip()), f"{name}: bad evidence field {field!r}")
     _require(len(set(fields)) == len(fields), f"{name}: duplicate evidence field")
+
+    shape = raw.get("evidence_shape")
+    if kind == "object":
+        _require(isinstance(shape, dict) and set(shape) == set(fields), "object needs evidence_shape")
+        _validate_shape(shape)
+    else:
+        _require(shape is None, "only object responses declare evidence_shape")
 
     flags = _object(response.get("flags", {}), f"{name}: response.flags")
 
@@ -234,6 +259,7 @@ def _tool(raw: object, seen: set[str]) -> OperatorTool:
         page_size=page_size if isinstance(page_size, int) else None,
         flags=dict(flags),
         evidence_fields=tuple(fields),
+        evidence_shape=raw.get("evidence_shape"),
     )
 
 

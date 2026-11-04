@@ -91,6 +91,20 @@ def environment(tmp_path, monkeypatch):
                 assert self.headers.get("user-id") == "USER-A"
                 rows = [] if state.get("empty_orders") else [row]
                 data = {"records": rows, "total": len(rows), "size": 50, "current": 1}
+            elif self.path.startswith("/chFeeTemplateRecord/"):
+                data = {
+                    "orderNo": state["order"],
+                    "tenantId": state["tenant"],
+                    "feeTemplate": {
+                        "billingMode": 2,
+                        "type": 0,
+                        "feeTemplateItems": [
+                            {"startTime": "00:00", "endTime": "23:59", "price": "3", "feePrice": "3"}
+                        ],
+                    },
+                    "periodFeeDetail": [],
+                    "contact": "PRIVATE-PHONE",
+                }
             elif "/getChargingMonitor/" in self.path:
                 data = {"records": [], "total": 0, "size": 50, "current": 1}
             elif self.path.startswith("/chSite/page?"):

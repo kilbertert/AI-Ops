@@ -28,12 +28,12 @@ public final class OperatorTools {
     public static final String PATH_PROPERTY = "aiops.node.tools-file";
     public static final String DECLARATION = "operator_tools.json";
     public static final String SCHEMA = "aiops-operator-tools/1";
-    public static final List<String> KINDS = List.of("single", "page");
+    public static final List<String> KINDS = List.of("single", "page", "object");
 
     /** 一个工具的声明视图。Java 只关心装配需要的部分。 */
     record Entry(String name, String kind, String description, String source,
                  List<String> evidenceFields, List<String> appliesTo,
-                 List<String> modelInputs,
+                 List<String> modelInputs, JsonNode evidenceShape,
                  Map<String, com.fasterxml.jackson.databind.JsonNode> flags) {
     }
 
@@ -158,6 +158,14 @@ public final class OperatorTools {
         return flag(name, key).asText();
     }
 
+    public static JsonNode evidenceShape(String name) {
+        Entry entry = entries().get(name);
+        if (entry == null || !entry.evidenceShape().isObject()) {
+            throw new ExecToolViolation("工具缺少对象投影声明");
+        }
+        return entry.evidenceShape();
+    }
+
     public static String kind(String name) {
         Entry entry = entries().get(name);
         if (entry == null) throw new ExecToolViolation("声明里没有这个工具: " + name);
@@ -212,6 +220,7 @@ public final class OperatorTools {
             if (description.isBlank() || source.isBlank()) {
                 throw new ExecToolViolation("工具声明缺描述或来源: " + name);
             }
+            if ("object".equals(kind)) validateShape(tool.path("evidence_shape"), 0);
             JsonNode declaredFields = tool.path("evidence_fields");
             if (!declaredFields.isArray() || declaredFields.isEmpty()) {
                 throw new ExecToolViolation("工具声明缺 evidence_fields: " + name);
@@ -253,11 +262,27 @@ public final class OperatorTools {
             }
             if (result.put(name, new Entry(name, kind, description, source,
                     List.copyOf(fields), List.copyOf(contexts), List.copyOf(modelInputs),
-                    Map.copyOf(flags))) != null) {
+                    tool.path("evidence_shape"), Map.copyOf(flags))) != null) {
                 throw new ExecToolViolation("重复的工具: " + name);
             }
         }
         return Map.copyOf(result);
+    }
+
+    private static void validateShape(JsonNode shape, int depth) {
+        if (depth > 6 || shape.isMissingNode()) throw new ExecToolViolation("对象投影声明无效");
+        if (shape.isNull()) return;
+        if (shape.isArray() && shape.size() == 1) {
+            validateShape(shape.get(0), depth + 1);
+            return;
+        }
+        if (!shape.isObject() || shape.isEmpty()) throw new ExecToolViolation("对象投影声明无效");
+        shape.fields().forEachRemaining(field -> {
+            if (!field.getKey().matches("[A-Za-z][A-Za-z0-9_]{0,79}")) {
+                throw new ExecToolViolation("对象投影字段无效");
+            }
+            validateShape(field.getValue(), depth + 1);
+        });
     }
 
     /** 声明不合格或引用了未声明的工具。调用方把它变成整轮失败，不降级。 */

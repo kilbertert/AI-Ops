@@ -62,7 +62,7 @@
 | 制品 | 身份 |
 |---|---|
 | `snail-ai-server-exec.jar` | `8dd6b63504eae7cc479e1c3a7d674aa1529069d44e7967e4ed2158ef645d5cb0` |
-| `aiops-execution-node.jar` | `e3ee149baa7502583422c08cced9eb026b3ebd711c3770c45d8d61e1f6a10988`（站点工具按站点身份校验；固定构建时间戳；源码摘要见 `images.lock.json` 的 `node.source_sha256`） |
+| `aiops-execution-node.jar` | `a9c0ec749151fd6c7816f47708106c49889ee5424f058d73f57dd1c02fd99c2d`（站点工具按站点身份校验；固定构建时间戳；源码摘要见 `images.lock.json` 的 `node.source_sha256`） |
 | 平台源码 commit | `10c1d3e50b701be62da23a3403d79a41187ab8cd` |
 | Gateway 镜像 | 构建/分发件 `gateway-image/identity.json` 中的 Image ID；`images.lock.json` 中的内容摘要与镜像 `m2live.source` 标签一致 |
 | 依赖 | `gateway-requirements.txt`，由 `uv export --frozen` 从 `uv.lock` 生成，每条带 `--hash` |

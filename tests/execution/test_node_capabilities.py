@@ -20,7 +20,7 @@ def record_ready(database, config_path):
     node = next(n for n in config.node_token_hashes.values() if n.node_id == config.expected_node_id)
     payload = {
         "schemas": ["m3-exec-config/1", "operator-exec-config/1", "operator-conversation/1"],
-        "tool_contract": "request-target/1",
+        "tool_contract": "request-target/2",
         "tools_sha256": hashlib.sha256(
             files("aiops_diagnostics.operator").joinpath("operator_tools.json").read_bytes()
         ).hexdigest(),
@@ -29,7 +29,7 @@ def record_ready(database, config_path):
     return payload
 
 
-@pytest.mark.parametrize("bad", ["schema", "tools", "expired"])
+@pytest.mark.parametrize("bad", ["schema", "tools", "expired", "object-contract"])
 def test_incompatible_executor_cannot_publish_or_restore(managed, bad):  # noqa: F811
     f, service, caller, _, _ = managed
     before = service.route("TENANT-A")
@@ -38,6 +38,8 @@ def test_incompatible_executor_cannot_publish_or_restore(managed, bad):  # noqa:
     payload = record_ready(f["settings"].database_file, f["target"].config_file)
     if bad == "schema":
         payload["schemas"] = ["legacy/1"]
+    if bad == "object-contract":
+        payload["tool_contract"] = "request-target/1"
     if bad == "tools":
         payload["tools_sha256"] = "0" * 64
     with sqlite3.connect(f["settings"].database_file) as db:

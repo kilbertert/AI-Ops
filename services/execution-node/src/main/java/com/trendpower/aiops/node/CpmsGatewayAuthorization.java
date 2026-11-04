@@ -21,13 +21,13 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
         body.set("arguments", arguments == null ? new ObjectMapper().createObjectNode() : arguments);
         JsonNode data = gateway.post(
                 path(run, tool) + "/authorization",
-                body.toString(), manifest, CpmsReadTool.CONTRACT);
+                body.toString(), manifest, CpmsReadTool.contract(tool));
         if (!run.equals(data.path("run_id").asText()) || !tool.equals(data.path("tool").asText())
                 || !manifest.equals(data.path("manifest_id").asText())
                 || !(data.path("site_ids").isArray() || data.path("site_ids").isNull())) {
             throw CpmsReadTool.refused("authorization_identity_mismatch");
         }
-        if (!CpmsReadTool.CONTRACT.equals(data.path("contract").asText())) {
+        if (!CpmsReadTool.contract(tool).equals(data.path("contract").asText())) {
             throw CpmsReadTool.refused("authorization_contract_mismatch");
         }
         var sites = new HashSet<String>();
@@ -48,7 +48,7 @@ final class CpmsGatewayAuthorization implements CpmsReadTool.Authorization {
         var body = new ObjectMapper().createObjectNode();
         body.put("authorization_id", grant.authorizationId()).set("evidence", evidence);
         JsonNode ack = gateway.post(
-                path(run, tool) + "/evidence", body.toString(), manifest, CpmsReadTool.CONTRACT);
+                path(run, tool) + "/evidence", body.toString(), manifest, CpmsReadTool.contract(tool));
         if (!run.equals(ack.path("run_id").asText()) || !tool.equals(ack.path("tool").asText())
                 || !grant.authorizationId().equals(ack.path("authorization_id").asText())
                 || !ack.path("accepted").isBoolean() || !ack.path("accepted").booleanValue()) {

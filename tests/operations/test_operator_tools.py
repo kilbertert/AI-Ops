@@ -30,12 +30,13 @@ def test_the_declaration_covers_the_live_tools():
         "cpms_order_detail",
         "cpms_charging_samples",
         "cpms_site_search",
+        "cpms_order_tariff",
     ]
     # 哪一类运行能用哪个工具，是声明的一部分：订单工具没有订单就没有取证对象。
-    assert [tool.applies_to for tool in tools] == [("order",), ("order",), ("conversation",)]
+    assert [tool.applies_to for tool in tools] == [("order",), ("order",), ("conversation",), ("order",)]
     # 只有模型可以提议的那部分输入进发布清单的 schema。
-    assert [tool.model_inputs for tool in tools] == [(), (), ("name", "address")]
-    detail, samples, site = tools
+    assert [tool.model_inputs for tool in tools] == [(), (), ("name", "address"), ()]
+    detail, samples, site, tariff = tools
     assert detail.kind == "single" and detail.request({"order_no": "ORDER-1"}) == {
         "method": "GET",
         "path": "/chOrderInfo/getOrderInfoDetail/ORDER-1",
@@ -46,7 +47,7 @@ def test_the_declaration_covers_the_live_tools():
     # 证据字段就是「模型能回答什么」：这两张表的长度是契约的一部分，改动要过 ADR。
     # 26 → 35：后台「费用信息」那一栏的金额（预付费、电损、启动、优惠、增值税、付款时间）
     # 补进来，见 ADR-0193。
-    assert len(detail.evidence_fields) == 35 and len(samples.evidence_fields) == 13
+    assert len(detail.evidence_fields) == 43 and len(samples.evidence_fields) == 13
     assert site.evidence_fields == ("id", "name", "address")
     assert site.request({"name": "天河", "address": ""})["query"] == (
         "current=1&size=50&type=0&name=%E5%A4%A9%E6%B2%B3"

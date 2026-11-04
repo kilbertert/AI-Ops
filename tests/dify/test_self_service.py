@@ -105,6 +105,12 @@ def managed(operator, monkeypatch, tmp_path):
                     "tool_name": "cpms_site_search",
                     "enabled": True,
                 },
+                {
+                    "provider_id": "provider-id",
+                    "provider_type": "api",
+                    "tool_name": "cpms_order_tariff",
+                    "enabled": True,
+                },
             ]
         },
     }
