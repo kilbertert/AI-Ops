@@ -108,3 +108,10 @@ aiops-admin --config <Gateway配置> ensure-node-provider \
 见[SOP反馈接续](sop-followup.md)及[验收计划](../../acceptance/operator-pricing/qa-plan.md)。
 费用工具读取订单当时快照；分时展示电量不等于独立电表。Gateway按同轮证据生成并冻结
 统计、算式与缺证范围；结果不执行实际收费、退款或后台重算。
+
+### 更新已存在的工具提供方
+
+新增工具时对目标应用运行同一`ensure-node-provider`命令并显式加`--migrate`。
+Dify1.17.1更新载荷需要original_provider、credentials和icon；现役命令保留图标/标签/说明，
+继续auth_type=none，收到success才记成功。先备份原提供方schema与应用model_config，
+再正常保存应用工具选择、预览并发布；不删建提供方或手改Dify数据库。
