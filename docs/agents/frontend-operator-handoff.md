@@ -1,8 +1,10 @@
 # 管家端前端与测试交接
 
-更新：2026-10-28。公司MR !145已合并到abroad_standard（20e0a1a6），完整594文件构建和7项合成浏览器检查通过。
-合并回执明确未部署；本页不声称正式H5已发版。真实节点API回放见[证据](../validation/2026-10-26-operator-real-history-replay.md)，
-当前范围见[测试交接](../testing-handoff.md)与[管家CPMS手册](operator-cpms/README.md)。
+更新：2026-11-04。原管家H5与Java节点已经部署并有真实链路验收；
+后来首页新增入口撤回，已有聊天页仍可由URL访问。见
+[退役与页面验收](../validation/2026-10-29-runtime-retirement-live.md)、
+[入口撤回](../validation/2026-11-03-operator-h5-entry-withdrawal.md)及
+[当前范围](current-delivery-state.md)。原生安装包与完整业务准确率不在通过结论内。
 
 部署方法见[管家 H5 部署与恢复](operator-h5-deployment.md)。
 

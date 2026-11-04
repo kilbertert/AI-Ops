@@ -1,8 +1,10 @@
 # WF01 C端只读客服
 
-更新：2026-10-28。原H5已投入使用并提测，当前WF01 V8/revision7；状态与证据见
-[当前交付](../current-delivery-state.md)、[真实验收](../../validation/2026-10-28-consumer-multilingual_02-production.md)。
-下文描述当前动态文档模式；旧审核包仅在文末作为显式回滚兼容说明。
+更新：2026-11-04。原H5知识/本人状态/账单及消费者知识风格发布恢复已有真实证据；
+该次正式版本恢复为v18/revision21，草稿还原。见[当前交付](../current-delivery-state.md)与
+[生命周期验收](../../validation/2026-11-04-consumer-connection-and-lifecycle.md)。
+状态/账单双风格、双租户及长期稳定性继续验收；版本变化不改写历史样本归属。
+下文描述动态文档模式，旧审核包仅作为显式恢复兼容说明。
 
 ## 知识维护与媒体
 
