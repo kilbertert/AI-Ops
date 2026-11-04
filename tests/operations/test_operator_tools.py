@@ -93,8 +93,20 @@ def test_provider_migration_is_an_explicit_action():
             if path.endswith("/tool-providers?type=api"):
                 return [{"name": "cpms-node"}]
             if "/get" in path:
-                return {"schema": json.dumps({"openapi": "3.0.3", "paths": {}})}
+                return {
+                    "schema": json.dumps({"openapi": "3.0.3", "paths": {}}),
+                    "icon": {"background": "#abcdef", "content": "🔎"},
+                    "privacy_policy": "https://example.test/privacy",
+                    "custom_disclaimer": "notice",
+                    "labels": ["utilities"],
+                }
             if "/update" in path:
+                body = kwargs["body"]
+                assert body["original_provider"] == "cpms-node"
+                assert body["credentials"] == {"auth_type": "none"}
+                assert body["icon"] == {"background": "#abcdef", "content": "🔎"}
+                assert body["privacy_policy"] == "https://example.test/privacy"
+                assert body["labels"] == ["utilities"]
                 return {"result": "success"}
             raise AssertionError(path)
 
