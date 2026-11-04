@@ -857,6 +857,8 @@ EOF
 >
 > **版本标签与部署备注分开**：版本标签固定一次发布，部署备注 `release-<sha12>` 记录具体部署。
 > CD部署成功后先在已部署提交上创建新的注释语义版本标签，再生成变更记录与Release。
+> 使用GitHub官方Git Tags API先建注释对象、再建引用（[官方说明](https://docs.github.com/en/rest/git/tags)）；
+> 单独创建引用只能产生轻量标签，不能替代注释对象。
 > 若发布负责人已创建标签，CD保留其指向；并发创建时核验同一提交与注释类型，不强推。
 > 部署结束在规范checkout运行
 > `dev-changelog` 与 `dev-changelog --check`，使本地生成物和发布边界一致；不提交生成物。
