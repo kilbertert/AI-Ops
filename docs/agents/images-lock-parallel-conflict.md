@@ -52,10 +52,18 @@ overlap worktree=/home/claude/Projects/.worktrees/AI-Ops-consumer-free-question
 | **生产 CD**（`.github/workflows/cd.yml`） | **不读** | 生产部署走 `deploy/deploy-41.sh`，与该锁无关 |
 | **CI**（`.github/workflows/ci.yml`） | **不读** | 只跑 pytest |
 | `deploy/m2-live-03/checks.sh` | 读 | **受控试运行栈**的 preflight |
+| **`deploy/node-runtime/source_digest.py`** | **读** | **正式节点运行**的源码摘要核对（`--check`） |
+| **`deploy/node-runtime/README.md`** | **读** | 明写「平台、节点和镜像身份**沿用** `../m2-live-03/images.lock.json`」 |
 | `tests/tooling/test_m2_live03_deploy.py` | 读 | 校验"锁与当前源码一致" |
 | `tests/test_node_runtime_deploy.py` | 读 | 节点摘要与变更单一致 |
 
-也就是说：**这个锁只服务于 `m2-live-03` 那套合成栈。**
+⚠️ **这条要先纠正一个容易得出的错误推论**（初稿就写错了）：
+**锁不只为合成栈服务 —— `deploy/node-runtime/` 这条正式节点运行链路也在沿用它的制品身份。**
+所以"把 `m2-live-03` 整个归档"会连带打断节点运行链，不能只凭"41 上没跑合成栈"就下结论。
+
+不过这两条链**读的是不同字段**：节点链路读 `node.*`，Gateway 镜像读 `gateway_image.*`。
+`gateway_image.source_sha256` 随任何 `src/` 改动而变，而节点链路并不消费它 ——
+**冲突压力的来源是 Gateway 那个字段，不是整个文件。**
 
 ---
 
@@ -64,13 +72,17 @@ overlap worktree=/home/claude/Projects/.worktrees/AI-Ops-consumer-free-question
 | 事实 | 结论 |
 |---|---|
 | `deploy/m2-live-03/README.md` 自述是「41 同宿主，隔离」的受控试运行栈（隔离 Gateway `:8794`） | 是部署件 |
-| 41 上 `docker ps -a \| grep m2live` → **0 个容器** | 未部署 |
-| 41 上 `/opt/aiops-m2-live` **不存在**（`M2LIVE_DIST` 的默认根） | 从未在这台机器上跑过 |
-| 生产 `aiops-gateway-41.service`（`:8788`）独立运行，不读锁 | 与它无关 |
-| 但锁文件在 2026-11-04 当天被 5 个 PR 更新过（#1339/#1340/#1341/#1342/#1347） | 仍在被每个 `src/` 改动拖累 |
+| 41 上 `docker ps -a \| grep m2live` → **0 个容器** | 合成栈当前未运行 |
+| 41 上 `/opt/aiops-m2-live` **不存在**（`M2LIVE_DIST` 的默认根） | 合成栈未在这台机器上部署过 |
+| **但 `deploy/node-runtime/` 正在 41 上跑**（`aiops-node-runtime` / `aiops-node-callback` 均 active） | **节点链路是活的** |
+| 生产 `aiops-gateway-41.service`（`:8788`）独立运行，不读锁 | 与 Gateway 无关 |
+| 锁文件在 2026-11-04 当天被 5 个 PR 更新过（#1339/#1340/#1341/#1342/#1347） | 仍在被每个 `src/` 改动拖累 |
 
-**这一点需要接手者核实**：这套栈是"暂时没跑"还是"已经废弃"。
-文档里没有找到明确的退役记录。
+**结论要分开说**：
+
+- **合成栈**：41 上没在跑，也无部署痕迹 —— 但**不能**因此说它已废弃，需接手者确认它的定位。
+- **节点运行链路**：**活的**，正在 41 上运行，且读这个锁的 `node.*` 字段。
+  任何涉及 `services/execution-node` 的改动仍然必须更新它。
 
 ---
 
@@ -79,23 +91,38 @@ overlap worktree=/home/claude/Projects/.worktrees/AI-Ops-consumer-free-question
 ### A. 锁只在真正要跑试运行栈时重建
 
 - 做法：把 `test_gateway_context_digest_is_reproducible_and_matches_the_lock`
-  从"必须与当前 main 一致"改为"仅当锁被显式标记为 current 时才校验"，
-  或改成 `skip` 并附条件
+  从"必须与当前 main 一致"改为"仅当锁被显式标记为 current 时才校验"
+
+⚠️ **不能简单用 `pytest.mark.skip`**：`.github/workflows/ci.yml:245` 有一道闸门
+—— 跳过数**上限 10**，而基线已经是 9。多一跳就红：
+如果要在 A 方案里跳过一条测试，**必须同一个 PR 里把上限或基线一起调整**，
+否则 pytest 全绿、CI 仍然失败（而且失败信息会指向"跳过数超过基线"，与真正原因无关）。
 - 保留：`context_digest.py --check` 本身不变，部署试运行栈前照常用它
 - 代价：试运行栈的锁会**落后于 main**，下一次真要用它时必须先重建 + 单独提交
 
 ### B. 让测试只校验「可复现性」，不校验「与当前 main 一致」
 
-- 做法：测试里跑一次完整构建、比对两次构建是否逐字节相同，但不比对仓库里的锁值
-- 保留：防"摘要不可复现"这个真实缺陷（历史上真的发生过：`sort -z` 的 locale 依赖）
-- 代价：CI 里跑一次完整镜像构建，慢；且"锁落后于源码"这件事变得没人管
+- 做法：**分两件事说清比较对象**
+  1. **比什么**：比 `context_digest.py` 算出的**构造上下文摘要**（`src/`+tools+requirements+
+     Dockerfile 的路径+内容 sha256），**不是**镜像 ID。镜像 ID 每次构建都不同
+     （构建时间戳进镜像元数据），本来就不在锁里 —— 见锁文件里那条 `_comment`。
+  2. **和谁比**：同一份源码**跑两次** `context_digest.py`，两次结果必须逐字节相同
+     （这才是"可复现"的判据，也是历史上真的坏过的地方：`sort -z` 依赖 locale）。
+- 保留：防"摘要不可复现"这个真实缺陷
+- 代价："锁落后于源码"这件事变得没人管 —— 需要另一处（部署时）来管
 
-### C. 归档 `deploy/m2-live-03/`
+### C. 只把 `gateway_image.source_sha256` 从"随 PR 更新"里摘出来（**修正后的建议**）
 
-- 前提：确认这套受控试运行栈**已经废弃**（41 上从未部署、也没有部署计划）
-- 做法：按仓库惯例移入归档，锁、checks.sh、相关测试一并处理
-- 效果：冲突源彻底消失
-- 代价：如果它其实还要用，这一步代价很大
+- 前提：`deploy/node-runtime/` 只消费 `node.*`，不读 `gateway_image.source_sha256`
+  （`source_digest.py:44` 读的是整个文件，但比对用的是节点字段 —— 需接手者复核）
+- 做法：让 Gateway 镜像的"内容身份"记录在**部署时**产生（像 `identity.json` 那样），
+  而不是随每个 `src/` 改动的 PR 落进仓库
+- 保留：节点摘要仍随 `services/execution-node` 改动更新，且仍需评审
+- 效果：**冲突源是 `gateway_image.source_sha256` 这一个字段**，摘掉它冲突就消失；
+  不必动整份锁，更不必归档合成栈
+- 代价：需要改 `build-image.sh` 与那个 pytest 的契约
+
+> **原 C 方案（归档整个 `m2-live-03`）已撤回**：它会把仍在运行的节点链路一起打断。
 
 ---
 
