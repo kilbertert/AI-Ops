@@ -35,13 +35,15 @@ uv run python .claude/skills/verify-aiops-client-e2e/scripts/android_adbx.py \
 ```json
 {"package":"example.consumer","steps":[
   {"name":"faq","page":"aiPackage/pages/chat/chat","action":"tap",
-   "target":{"text":"一个推荐问题"},"expect":["预期答案中独有的片段"],"timeout":90},
+   "target":{"text":"一个推荐问题"},"expect":["预期答案中独有的片段"],
+   "assistant_marker":"AI生成注意甄别","timeout":90},
   {"name":"reset","page":"aiPackage/pages/chat/chat","action":"tap",
    "target":{"text":"新对话"},"expect":["欢迎语"],"absent":["上一轮答案独有片段"],"fresh":false}
 ]}
 ```
 
-`expect`的多个片段须在同一非输入框节点中；`fresh`默认true，操作前已有完整匹配就拒绝。
+回答验收须提供实测的`assistant_marker`，要求答案与AI标记处于同一直接父容器，排除用户气泡。
+没有此字段只验证页面文字，不证明是助手回答。`expect`的多个片段须在同一非输入框节点中；`fresh`默认true，操作前任一页面已有完整匹配就拒绝（包括后台目的页，防旧答案重新出现）。
 点击文本/输入本身能满足expect时拒绝，避免只验证用户回显。`absent`用于清空会话。
 `next_page`用于点击导航后验证目标页；`timeout`为1–240秒（单次adbx另有25秒硬上限）。
 动作仅支持tap、text、key（Back/Enter）、swipe、observe，不接受任意shell。

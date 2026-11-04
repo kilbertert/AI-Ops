@@ -17,7 +17,7 @@ def ui(page="chat[2]", text="new answer", background="old answer"):
     text="{page}" bounds="[0,0][1080,2000]">
     <node text="{text}" package="test.app" bounds="[0,200][800,400]"/></node>
     <node package="test.app" class="android.webkit.WebView" text="other[1]" bounds="[0,0][1080,2000]">
-    <node text="{background}" bounds="[0,200][800,400]"/></node></hierarchy>'''.encode()
+    <node text="{background}" package="test.app" bounds="[0,200][800,400]"/></node></hierarchy>'''.encode()
 
 
 def plan():
@@ -163,3 +163,60 @@ def test_invalid_types_are_plan_errors(key, value):
         p["steps"][0][key] = value
     with pytest.raises(ValueError):
         adbx.validate(p)
+
+
+def test_send_with_input_echo_does_not_pass(tmp_path, monkeypatch):
+    class SendEcho(FakeDevice):
+        changed = False
+        available = "serial device"
+
+        def ui(self):
+            if self.changed:
+                return ui(text="How to charge safely")
+            return ui(text="发送").replace(
+                b"</hierarchy>",
+                b'<node package="test.app" '
+                b'class="android.widget.EditText" text="How to charge safely" '
+                b'bounds="[0,0][100,100]"/></hierarchy>',
+            )
+
+    monkeypatch.setattr(adbx, "Device", SendEcho)
+    p = plan()
+    p["steps"][0].update(target={"text": "发送"}, expect=["How to charge safely"])
+    assert adbx.run(p, tmp_path, "adbx", None)["status"] == "FAIL"
+
+
+def test_navigation_cannot_relabel_old_destination_text_as_fresh(tmp_path, monkeypatch):
+    class Navigation(FakeDevice):
+        changed = False
+        available = "serial device"
+
+        def ui(self):
+            return (
+                ui(page="other[1]", text="old answer")
+                if self.changed
+                else ui(text="open", background="old answer")
+            )
+
+    monkeypatch.setattr(adbx, "Device", Navigation)
+    p = plan()
+    p["steps"][0].update(target={"text": "open"}, next_page="other", expect=["old answer"])
+    assert adbx.run(p, tmp_path, "adbx", None)["status"] == "FAIL"
+
+
+def test_answer_requires_shared_assistant_container():
+    xml = (
+        b'<hierarchy><node package="test.app" class="android.webkit.WebView" '
+        b'text="chat[2]" bounds="[0,0][1080,2000]">'
+        b'<node text="answer" bounds="[0,0][100,100]"/><node bounds="[0,150][100,400]">'
+        b'<node text="AI notice" bounds="[0,150][100,200]"/><node text="failed" bounds="[0,200][100,400]"/>'
+        b"</node></node></hierarchy>"
+    )
+    nodes = adbx.active_nodes(xml, "test.app", "chat")
+    assert not adbx.expectations(nodes, ["answer"], "AI notice")
+    assert adbx.expectations(nodes, ["failed"], "AI notice")
+    for hidden in (b'bounds="[0,0][0,0]"', b'bounds="[0,200][100,400]" visible-to-user="false"'):
+        hidden_xml = xml.replace(b'bounds="[0,200][100,400]"', hidden)
+        assert not adbx.expectations(
+            adbx.active_nodes(hidden_xml, "test.app", "chat"), ["failed"], "AI notice"
+        )

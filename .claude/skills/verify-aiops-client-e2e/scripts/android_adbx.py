@@ -65,7 +65,17 @@ def target(nodes, selector):
     return points.pop()
 
 
-def expectations(nodes, expected):
+def expectations(nodes, expected, assistant_marker=None):
+    if assistant_marker:
+        # 本APK的回答与AI标记是同一容器的直接子节点；不在页面祖先层匹配。
+        visible = set(nodes)
+        nodes = [
+            child
+            for parent in nodes
+            if any(c in visible and label(c) == assistant_marker for c in parent)
+            for child in parent
+            if child in visible and label(child) != assistant_marker
+        ]
     labels = [label(n) for n in nodes if n.get("class") != "android.widget.EditText"]
     return any(all(value in text for value in expected) for text in labels)
 
@@ -93,6 +103,7 @@ def validate(plan):
             "timeout",
             "fresh",
             "absent",
+            "assistant_marker",
         }:
             raise ValueError("非法步骤字段")
         for key in ("name", "page", "action"):
@@ -113,6 +124,10 @@ def validate(plan):
             or not 1 <= step.get("timeout", 60) <= 240
         ):
             raise ValueError("非法fresh/timeout")
+        if "assistant_marker" in step and (
+            not isinstance(step["assistant_marker"], str) or not step["assistant_marker"]
+        ):
+            raise ValueError("非法assistant_marker")
         absent = step.get("absent", [])
         if not isinstance(absent, list) or any(not isinstance(v, str) or not v for v in absent):
             raise ValueError("非法absent")
@@ -260,12 +275,17 @@ def run(plan, out, adbx, serial):
                 raise AssertionError("当前页面不符或UI为空")
             next_page = step.get("next_page", step["page"])
             if step.get("fresh", True) and expectations(
-                active_nodes(before, plan["package"], next_page), step["expect"]
+                active_nodes(before, plan["package"], ""), step["expect"]
             ):
                 raise AssertionError("预期内容已存在，不能证明本次操作产生新结果")
             # 预期不能由本轮用户气泡本身满足；断言应来自助手或后续页面。
-            submitted = step.get("text", "") or step.get("target", {}).get("text", "")
-            if submitted and all(value in submitted for value in step["expect"]):
+            submitted = [step.get("text", ""), step.get("target", {}).get("text", "")]
+            submitted.extend(
+                label(n)
+                for n in ET.fromstring(before).iter("node")
+                if n.get("package") == plan["package"] and n.get("class") == "android.widget.EditText"
+            )
+            if any(text and all(value in text for value in step["expect"]) for text in submitted):
                 raise AssertionError("预期与操作文本相同，可能只验证了用户回显")
             device.perform(step, nodes)
             deadline = time.monotonic() + step.get("timeout", 60)
@@ -274,7 +294,7 @@ def run(plan, out, adbx, serial):
                 device.foreground()
                 after = device.ui()
                 current = active_nodes(after, plan["package"], next_page)
-                if expectations(current, step["expect"]) and not any(
+                if expectations(current, step["expect"], step.get("assistant_marker")) and not any(
                     expectations(current, [v]) for v in step.get("absent", [])
                 ):
                     break
