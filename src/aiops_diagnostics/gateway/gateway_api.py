@@ -2434,6 +2434,7 @@ def create_gateway_app(
         payload: ManagedTrialResultRequest,
         request: Request,
         _: None = Depends(dify_trial_credential),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ):
         caller, trial = managed_trial_result(payload, request)
         if trial.get("result"):
@@ -2443,6 +2444,9 @@ def create_gateway_app(
             "status": trial["status"],
             "result": trial.get("result"),
             "error_code": trial.get("error_code"),
+            "error_message": diagnosis_error_message(language, trial["error_code"])
+            if trial.get("error_code")
+            else None,
         }
 
     @app.post("/v1/dify/management/trial/cancel")
@@ -3101,8 +3105,12 @@ def create_gateway_app(
                                 )
                             )
                         except (ValueError, RuntimeError, OSError) as exc:
+                            from aiops_diagnostics.common.model_request import ModelRequestError
+
                             raise _runtime_unavailable(
-                                "CONSUMER_INTENT_UNAVAILABLE",
+                                "CONSUMER_MODEL_QUOTA_EXHAUSTED"
+                                if isinstance(exc, ModelRequestError) and exc.reason == "quota_exhausted"
+                                else "CONSUMER_INTENT_UNAVAILABLE",
                                 consumer_intent.message("unavailable", language),
                                 exc,
                             ) from exc
@@ -7279,16 +7287,27 @@ def _runtime_unavailable(code: str, message: str, exc: Exception) -> StandardAPI
       `AgentRuntimeError`/`PROVIDER_UNAVAILABLE` is a provider problem. That is
       the whole diagnostic question this ticket exists to answer.
 
-    The response body is byte-identical to before, on purpose: the contract
-    promises "a stable 503", and turning this into a diagnostic channel for
-    callers is a different decision that nobody has made.
+    ModelRequestError carries only locally classified reason/status. Its
+    non-retryable dependency failures need operator action, not a retry loop.
+    Raw provider messages remain excluded from both the response and the log.
     """
-    _LOGGER.warning("runtime failure -> %s (%s)", code, type(exc).__name__)
+    from aiops_diagnostics.common.model_request import ModelRequestError
+
+    if isinstance(exc, ModelRequestError):
+        _LOGGER.warning(
+            "runtime failure -> %s (%s) reason=%s http_status=%s",
+            code,
+            type(exc).__name__,
+            exc.reason,
+            exc.http_status,
+        )
+    else:
+        _LOGGER.warning("runtime failure -> %s (%s)", code, type(exc).__name__)
     return StandardAPIError(
         status.HTTP_503_SERVICE_UNAVAILABLE,
         code,
         message,
-        retryable=True,
+        retryable=exc.retryable if isinstance(exc, ModelRequestError) else True,
     )
 
 

@@ -5,8 +5,18 @@ import json
 import pytest
 
 from aiops_diagnostics.common import model_request
+from aiops_diagnostics.common.bounded_http import HttpFailure
 from aiops_diagnostics.common.config import AgentSettings, ProviderConfig
 from aiops_diagnostics.operator.ops_analysis_narrative import run_narrative_turn
+
+
+@pytest.mark.parametrize(
+    "kind,reason", [("unavailable", "transport_unavailable"), ("invalid_body", "invalid_response")]
+)
+def test_model_failure_does_not_keep_untrusted_response_detail(kind, reason):
+    error = model_request._unavailable(HttpFailure(kind, detail="private response secret"))
+    assert error.reason == reason and error.retryable
+    assert "private" not in str(error) and "secret" not in str(vars(error))
 
 
 @pytest.mark.parametrize("wire", ["responses", "chat"])

@@ -912,11 +912,16 @@ class GatewayRuntime:
         try:
             result = draft.execute(self, trial_id, run_context, order_no, language)
         except Exception as exc:  # noqa: BLE001 - 逃出去就等于没有终态行
+            from aiops_diagnostics.common.model_request import ModelRequestError
             from aiops_diagnostics.consumer.consumer_intent import TRIAL_MESSAGES
             from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
             code = (
-                exc.code
+                "CONSUMER_MODEL_QUOTA_EXHAUSTED"
+                if isinstance(exc, ModelRequestError) and exc.reason == "quota_exhausted"
+                else "CONSUMER_INTENT_UNAVAILABLE"
+                if isinstance(exc, ModelRequestError)
+                else exc.code
                 if isinstance(exc, ChatRunUnavailable) and exc.code in TRIAL_MESSAGES
                 else "TRIAL_FAILED"
             )

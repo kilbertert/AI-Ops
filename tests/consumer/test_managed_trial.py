@@ -356,6 +356,26 @@ def test_trial_failure_exposes_a_readable_reason(managed_trial):
         assert "aiops_diagnostics" not in payload["error_message"]
 
 
+def test_trial_preserves_classifier_quota_without_echoing_provider(managed_trial, monkeypatch):
+    from consumer.test_consumer_intent_client import server
+    from consumer.test_consumer_model_failure import real_classifier
+
+    f = managed_trial
+    with server({"error": {"code": "insufficient_quota", "message": "private-provider-body"}}, 429) as (
+        base,
+        calls,
+    ):
+        real_classifier(f.runtime, monkeypatch, base)
+        tid = submit(f)
+        row = finish(f, tid)
+    assert row["status"] == "failed"
+    result = f.env["client"].post(PATH + "/result", headers=HEADERS, json={"app_id": APP, "trial_id": tid})
+    assert result.json()["error_code"] == "CONSUMER_MODEL_QUOTA_EXHAUSTED"
+    assert "额度不足" in result.json()["error_message"]
+    assert "private-provider-body" not in result.text + str(row)
+    assert len(calls) == 1 and not f.kb.calls and f.deleted
+
+
 def test_clarification_trial_is_previewable_when_prompts_write_notices(managed_trial, monkeypatch):
     """澄清类问题在 slots 发布版下应当**可预览**，而不是被直接拒掉。
 
