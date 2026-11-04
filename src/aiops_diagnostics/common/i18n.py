@@ -746,6 +746,9 @@ def diagnosis_failure_message(language: str, key: str) -> str:
 # `code` stays English and non-localized so a client can branch on it.
 DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
     "zh": {
+        "model_quota": "模型服务额度不足，请联系管理员补充额度后重试。",
+        "dependency": "模型或执行依赖不可用，请联系管理员检查服务。",
+        "model_output": "模型未返回完整有效的回答，请重试；持续失败请联系管理员。",
         "out_of_scope": "该订单不在当前授权范围内。",
         "failed": "本次诊断未能完成，请稍后重试。",
         "expired": "本次诊断已超时，请重新发起。",
@@ -753,6 +756,9 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "本次诊断未能完成。",
     },
     "zh-Hant": {
+        "model_quota": "模型服務額度不足，請聯絡管理員補充額度後重試。",
+        "dependency": "模型或執行依賴無法使用，請聯絡管理員檢查服務。",
+        "model_output": "模型未傳回完整有效的回答，請重試；持續失敗請聯絡管理員。",
         "out_of_scope": "該訂單不在當前授權範圍內。",
         "failed": "本次診斷未能完成，請稍後重試。",
         "expired": "本次診斷已超時，請重新發起。",
@@ -760,6 +766,16 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "本次診斷未能完成。",
     },
     "en": {
+        "model_quota": (
+            "Model service quota is exhausted. Ask an administrator to add credit before retrying."
+        ),
+        "dependency": (
+            "The model or execution service is unavailable. Ask an administrator to check the service."
+        ),
+        "model_output": (
+            "The model did not return a complete valid answer. Retry; contact an "
+            "administrator if this continues."
+        ),
         "out_of_scope": "This order is outside the authorized scope.",
         "failed": "This diagnosis could not be completed. Please try again later.",
         "expired": "This diagnosis timed out. Please start a new one.",
@@ -767,6 +783,18 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "This diagnosis could not be completed.",
     },
     "de": {
+        "model_quota": (
+            "Das Kontingent des Modelldienstes ist aufgebraucht. Bitten Sie die "
+            "Administration, Guthaben aufzuladen."
+        ),
+        "dependency": (
+            "Der Modell- oder Ausführungsdienst ist nicht verfügbar. Bitten Sie die "
+            "Administration um Prüfung."
+        ),
+        "model_output": (
+            "Das Modell lieferte keine vollständige gültige Antwort. Versuchen Sie es erneut; "
+            "wenden Sie sich bei weiteren Fehlern an die Administration."
+        ),
         "out_of_scope": "Dieser Auftrag liegt außerhalb des Berechtigungsbereichs.",
         "failed": "Diese Diagnose konnte nicht abgeschlossen werden. Bitte später erneut versuchen.",
         "expired": "Diese Diagnose hat das Zeitlimit überschritten. Bitte neu starten.",
@@ -774,6 +802,15 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "Diese Diagnose konnte nicht abgeschlossen werden.",
     },
     "fr": {
+        "model_quota": (
+            "Le quota du service de modèle est épuisé. Demandez à un administrateur de le "
+            "recharger avant de réessayer."
+        ),
+        "dependency": "Le service de modèle ou d’exécution est indisponible. Contactez un administrateur.",
+        "model_output": (
+            "Le modèle n’a pas fourni de réponse complète et valide. Réessayez ; contactez un "
+            "administrateur si le problème persiste."
+        ),
         "out_of_scope": "Cette commande est hors du périmètre autorisé.",
         "failed": "Ce diagnostic n'a pas pu aboutir. Veuillez réessayer plus tard.",
         "expired": "Ce diagnostic a expiré. Veuillez en lancer un nouveau.",
@@ -781,6 +818,17 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "Ce diagnostic n'a pas pu aboutir.",
     },
     "es": {
+        "model_quota": (
+            "La cuota del servicio del modelo se ha agotado. Pida a un administrador que "
+            "añada saldo antes de reintentar."
+        ),
+        "dependency": (
+            "El servicio del modelo o de ejecución no está disponible. Contacte con un administrador."
+        ),
+        "model_output": (
+            "El modelo no devolvió una respuesta completa y válida. Reintente; contacte con "
+            "un administrador si persiste."
+        ),
         "out_of_scope": "Este pedido está fuera del ámbito autorizado.",
         "failed": "Este diagnóstico no pudo completarse. Inténtelo de nuevo más tarde.",
         "expired": "Este diagnóstico ha caducado. Inicie uno nuevo.",
@@ -788,6 +836,15 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "Este diagnóstico no pudo completarse.",
     },
     "pt": {
+        "model_quota": (
+            "A quota do serviço de modelo esgotou-se. Peça a um administrador para adicionar "
+            "saldo antes de tentar novamente."
+        ),
+        "dependency": "O serviço de modelo ou de execução está indisponível. Contacte um administrador.",
+        "model_output": (
+            "O modelo não devolveu uma resposta completa e válida. Tente novamente; contacte "
+            "um administrador se persistir."
+        ),
         "out_of_scope": "Este pedido está fora do âmbito autorizado.",
         "failed": "Este diagnóstico não foi concluído. Tente novamente mais tarde.",
         "expired": "Este diagnóstico expirou. Inicie um novo.",
@@ -795,6 +852,12 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "Este diagnóstico não foi concluído.",
     },
     "vi": {
+        "model_quota": "Hạn mức dịch vụ mô hình đã hết. Hãy nhờ quản trị viên bổ sung trước khi thử lại.",
+        "dependency": "Dịch vụ mô hình hoặc thực thi không khả dụng. Hãy liên hệ quản trị viên để kiểm tra.",
+        "model_output": (
+            "Mô hình không trả về câu trả lời đầy đủ và hợp lệ. Hãy thử lại; liên hệ quản trị "
+            "viên nếu lỗi tiếp diễn."
+        ),
         "out_of_scope": "Đơn hàng này nằm ngoài phạm vi được phép.",
         "failed": "Chẩn đoán này không hoàn tất được. Vui lòng thử lại sau.",
         "expired": "Chẩn đoán này đã quá hạn. Vui lòng bắt đầu lại.",
@@ -802,6 +865,13 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "Chẩn đoán này không hoàn tất được.",
     },
     "mn": {
+        "model_quota": (
+            "Загварын үйлчилгээний эрх дууссан. Дахин оролдохын өмнө админаас эрх нэмэхийг хүснэ үү."
+        ),
+        "dependency": "Загвар эсвэл гүйцэтгэлийн үйлчилгээ ажиллахгүй байна. Админтай холбогдоно уу.",
+        "model_output": (
+            "Загвар бүрэн, зөв хариу буцаасангүй. Дахин оролдоно уу; алдаа давтагдвал админтай холбогдоно уу."
+        ),
         "out_of_scope": "Энэ захиалга зөвшөөрөгдсөн хүрээнээс гадуур байна.",
         "failed": "Энэ оношилгоо дуусгаж чадсангүй. Дараа дахин оролдоно уу.",
         "expired": "Энэ оношилгооны хугацаа хэтэрсэн. Дахин эхлүүлнэ үү.",
@@ -809,6 +879,9 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "Энэ оношилгоо дуусгаж чадсангүй.",
     },
     "th": {
+        "model_quota": "โควตาบริการโมเดลหมดแล้ว โปรดให้ผู้ดูแลระบบเติมโควตาก่อนลองใหม่",
+        "dependency": "บริการโมเดลหรือบริการประมวลผลไม่พร้อมใช้งาน โปรดติดต่อผู้ดูแลระบบ",
+        "model_output": ("โมเดลไม่ได้ส่งคำตอบที่สมบูรณ์และถูกต้อง โปรดลองใหม่ หากยังล้มเหลวให้ติดต่อผู้ดูแลระบบ"),
         "out_of_scope": "คำสั่งซื้อนี้อยู่นอกขอบเขตที่ได้รับอนุญาต",
         "failed": "การวินิจฉัยนี้ไม่สำเร็จ กรุณาลองใหม่ภายหลัง",
         "expired": "การวินิจฉัยนี้หมดเวลาแล้ว กรุณาเริ่มใหม่",
@@ -816,6 +889,9 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "generic": "การวินิจฉัยนี้ไม่สำเร็จ",
     },
     "km": {
+        "model_quota": "កូតាសេវាម៉ូដែលបានអស់។ សូមទាក់ទងអ្នកគ្រប់គ្រងឱ្យបន្ថែមកូតាមុនពេលសាកល្បងម្ដងទៀត។",
+        "dependency": "សេវាម៉ូដែលឬសេវាប្រតិបត្តិមិនអាចប្រើបាន។ សូមទាក់ទងអ្នកគ្រប់គ្រង។",
+        "model_output": ("ម៉ូដែលមិនបានផ្តល់ចម្លើយពេញលេញនិងត្រឹមត្រូវទេ។ សូមសាកល្បងម្ដងទៀត ហើយទាក់ទងអ្នកគ្រប់គ្រងប្រសិនបើបញ្ហាបន្ត។"),
         "out_of_scope": "ការបញ្ជាទិញនេះស្ថិតនៅក្រៅវិសាលភាពដែលបានអនុញ្ញាត",
         "failed": "ការវិនិច្ឆ័យនេះមិនបានសម្រេចទេ។ សូមព្យាយាមម្តងទៀតនៅពេលក្រោយ",
         "expired": "ការវិនិច្ឆ័យនេះផុតកំណត់ហើយ។ សូមចាប់ផ្តើមថ្មី",
@@ -829,6 +905,11 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
 # deliberately total-with-a-default rather than an exhaustive enumeration, so a
 # NEW code added later cannot make the surface fall back to the raw stored text.
 _DIAGNOSIS_ERROR_KEYS: dict[str, str] = {
+    "CONSUMER_MODEL_QUOTA_EXHAUSTED": "model_quota",
+    "CONSUMER_INTENT_UNAVAILABLE": "dependency",
+    "OPERATOR_MODEL_QUOTA_EXHAUSTED": "model_quota",
+    "OPERATOR_DEPENDENCY_UNAVAILABLE": "dependency",
+    "OPERATOR_MODEL_OUTPUT_UNSTABLE": "model_output",
     "DIAGNOSIS_ORDER_OUT_OF_SCOPE": "out_of_scope",
     "DIAGNOSIS_DEADLINE": "expired",
     "DIAGNOSIS_INTERRUPTED_BY_RESTART": "interrupted",

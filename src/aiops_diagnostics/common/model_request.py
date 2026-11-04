@@ -76,8 +76,36 @@ def resolve_provider_api_key(
     return value
 
 
-def _unavailable(_):
-    return RuntimeError("model upstream unavailable")
+class ModelRequestError(RuntimeError):
+    """仅携带受限原因与状态，不能把上游正文或凭据带到日志/页面。"""
+
+    def __init__(self, reason, http_status=None):
+        self.reason = reason
+        self.http_status = http_status
+        self.retryable = reason not in {"quota_exhausted", "auth_rejected"}
+        super().__init__(f"model request failed: reason={reason} http_status={http_status}")
+
+
+def _unavailable(failure):
+    # 兼容已实测的供应商403文案；403/429状态本身都不等于欠费。
+    quota = {"insufficient_quota", "insufficient_user_quota"}
+    if (
+        failure.code in quota
+        or failure.error_type in quota
+        or (failure.status == 403 and "用户额度不足" in failure.detail)
+    ):
+        reason = "quota_exhausted"
+    elif failure.kind == "auth_rejected":
+        reason = "auth_rejected"
+    elif failure.status == 429:
+        reason = "rate_limited"
+    elif failure.kind == "unavailable":
+        reason = "transport_unavailable"
+    elif failure.kind in {"invalid_body", "invalid_envelope"}:
+        reason = "invalid_response"
+    else:
+        reason = "upstream_error"
+    return ModelRequestError(reason, failure.status)
 
 
 def structured_request(*, provider, api_key, messages, name, schema, max_output_tokens=1024):
