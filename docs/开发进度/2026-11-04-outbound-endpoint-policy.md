@@ -7,7 +7,7 @@
 
 ## 已完成内容
 
-- `is_loopback_host` / `require_secure_endpoint`（ADR-0211）。
+- `is_loopback_host` / `require_secure_endpoint`（ADR-0213）。
 - 五份副本改调；UPMS / Dis / kb-service / 发布校验 / Dify console 补齐明文检查；
   `tdengine_proxy` 的 upstream 判定复用。
 - 新增 `tests/common/test_endpoint_policy.py`（39 条），含跨端点一致性。

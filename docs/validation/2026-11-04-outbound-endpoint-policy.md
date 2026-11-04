@@ -5,7 +5,7 @@
 
 ## 已完成内容
 
-- `is_loopback_host`（两种旧渲染的并集）、`require_secure_endpoint`（ADR-0211）。
+- `is_loopback_host`（两种旧渲染的并集）、`require_secure_endpoint`（ADR-0213）。
 - 五份副本改调：`config.canonical_provider_base_url`、`caller_auth.IntrospectionSettings`、
   `company_token_auth.CompanyTokenSettings`、`gateway_config.canonical_gateway_url`、
   `consumer_flow_contract`（这一份原本还漏了 `::1`）。
