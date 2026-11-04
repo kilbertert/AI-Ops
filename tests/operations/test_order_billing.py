@@ -17,6 +17,7 @@ def example():
         launchType="app",
         status=1,
         packageType=None,
+        electricity="1.2",
         electricityFee="2.4",
         serviceFee="2.4",
         launchFee="3",

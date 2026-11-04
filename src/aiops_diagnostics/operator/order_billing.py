@@ -95,6 +95,9 @@ def _verify(snapshot, detail, billing):
         or detail.get("packageType") is not None
     ):
         limitations.append("订单未结束或适用套餐，最终收费规则待核对")
+    energy = _amount(detail, "electricity")
+    if energy is None or energy == 0:
+        limitations.append("电量为零或缺失，启动费减免等特殊结算分支待核对")
     if billing is None:
         limitations.append("未取得已授权的账务/优惠明细")
     else:
@@ -140,7 +143,7 @@ def _verify(snapshot, detail, billing):
     basis = service + loss_s if service is not None and loss_s is not None else None
     reduction = basis - Decimal(shown(basis * rate / 10)) if basis is not None and rate is not None else None
     formula = (
-        f"{shown(basis)} - round({shown(basis)} × {rate * 10:f}%, 2) = {shown(reduction)}"
+        f"{shown(basis)} - {shown(basis)} × {rate * 10:f}% = {shown(reduction)}（折后价先取两位）"
         if reduction is not None
         else "服务费计费基数 - 服务费计费基数 × 折后比例"
     )
