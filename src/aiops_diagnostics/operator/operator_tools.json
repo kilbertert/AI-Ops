@@ -454,6 +454,67 @@
         "basis": null,
         "timezone": null
       }
+    },
+    {
+      "name": "cpms_order_billing",
+      "description": "Read authorized order billing and recorded discount terms. Read order detail and historical tariff first; never infer a discount rate from paid amounts.",
+      "inputs": [
+        "order_no"
+      ],
+      "model_inputs": [],
+      "applies_to": [
+        "order"
+      ],
+      "request": {
+        "method": "GET",
+        "path_template": "/chOrderInfo/{order_no}",
+        "query": []
+      },
+      "source": "cpms.orderBilling",
+      "response": {
+        "kind": "object",
+        "row_path": "data"
+      },
+      "evidence_fields": [
+        "orderNo",
+        "siteId",
+        "serviceFee",
+        "dsServiceFee",
+        "electricityFee",
+        "dsElectricFee",
+        "launchFee",
+        "parkFee",
+        "totalAmount",
+        "marketAmount",
+        "vat",
+        "vatFee",
+        "payAmount",
+        "reduceBalance",
+        "insuranceAmount",
+        "discounts"
+      ],
+      "evidence_shape": {
+        "orderNo": null,
+        "siteId": null,
+        "serviceFee": null,
+        "dsServiceFee": null,
+        "electricityFee": null,
+        "dsElectricFee": null,
+        "launchFee": null,
+        "parkFee": null,
+        "totalAmount": null,
+        "marketAmount": null,
+        "vat": null,
+        "vatFee": null,
+        "payAmount": null,
+        "reduceBalance": null,
+        "insuranceAmount": null,
+        "discounts": {
+          "serviceDiscount": null,
+          "couponPrice": null,
+          "carRightPrice": null
+        }
+      }
     }
   ]
 }

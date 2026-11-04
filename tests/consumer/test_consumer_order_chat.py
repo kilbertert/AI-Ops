@@ -60,12 +60,13 @@ def provision(tmp_path, monkeypatch):
                     },
                 }
             ).encode()
+            # 撤权先于响应送达，确保客户端完成取数后看到的已是撤权状态。
+            if state.revoke_after:
+                state.allowed.clear()
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-            if state.revoke_after:
-                state.allowed.clear()
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)

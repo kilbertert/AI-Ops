@@ -105,6 +105,13 @@ def environment(tmp_path, monkeypatch):
                     "periodFeeDetail": [],
                     "contact": "PRIVATE-PHONE",
                 }
+            elif self.path == "/chOrderInfo/" + state["order"]:
+                data = {
+                    **row,
+                    "discountDetails": '{"serviceDiscount":8}',
+                    "reduceBalance": 0,
+                    "insuranceAmount": 0,
+                }
             elif "/getChargingMonitor/" in self.path:
                 data = {"records": [], "total": 0, "size": 50, "current": 1}
             elif self.path.startswith("/chSite/page?"):
@@ -558,6 +565,7 @@ def test_draft_toggle_does_not_publish_and_disabled_tool_cannot_be_called(operat
         "cpms_charging_samples",
         "cpms_order_tariff",
         "cpms_site_search",
+        "cpms_order_billing",
     }
     current = f["publish"](f["route"].route_revision)
     assert [v["name"] for v in json.loads(current.manifest_text)["tools"]] == [operator_cpms.TOOL_NAMES[0]]
