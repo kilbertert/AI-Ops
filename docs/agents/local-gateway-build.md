@@ -40,3 +40,16 @@ Java节点、平台和基础镜像的既有输入锁与检查继续生效。不�
 
 这里验证的是构建内容与可导入性，不证明完整 Gateway 启动、真实模型、业务访问或生产部署。
 需验证 HTTP 契约时另用仓内 Gateway 验证技能，在一次性数据根执行。
+
+## 判断构建工具变更是否需要生产部署
+
+先比较现役部署提交到待交付提交的`src/`、`services/`、版本/依赖声明和实际部署入口。
+再按[环境手册](env-41-runbook.md)用`dev-host exec 41 --allow-service-exec`只读检查：
+`systemctl show`的ExecStart/Pre/Post，现役容器的`docker inspect`挂载与镜像ID，
+以及正式节点发布目录中的执行引用。记录确切提交、文件摘要和核对时刻，不能只看health版本。
+
+若变化仅在开发机/runner构建工具，且没有服务端执行引用，交付动作是同步主线并验证合并工具；
+不为“补部署”重启无变更的应用或安装未启用的隔离栈。runner由Actions checkout取得每次
+任务版本，不修改它当前运行中的工作目录。若发现实际引用，再按对应项目部署规程交付
+已合并制品，并保留原镜像、配置与恢复路径。#1355的实例见
+[部署范围核验](../validation/2026-11-04-build-identity-deployment-scope.md)。
