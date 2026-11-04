@@ -2434,10 +2434,7 @@ def create_gateway_app(
         payload: ManagedTrialResultRequest,
         request: Request,
         _: None = Depends(dify_trial_credential),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
     ):
-        from aiops_diagnostics.consumer.consumer_intent import trial_message
-
         caller, trial = managed_trial_result(payload, request)
         if trial.get("result"):
             _require_workflow_trial_result(context, caller, trial)
@@ -2446,9 +2443,6 @@ def create_gateway_app(
             "status": trial["status"],
             "result": trial.get("result"),
             "error_code": trial.get("error_code"),
-            "error_message": trial_message(trial["error_code"], language)
-            if trial.get("error_code")
-            else None,
         }
 
     @app.post("/v1/dify/management/trial/cancel")
@@ -2677,9 +2671,6 @@ def create_gateway_app(
                 "status": qa["status"],
                 "result": result,
                 "error_code": qa.get("error_code"),
-                "error_message": _qa_user_message(language, qa.get("error_code"))
-                if qa.get("error_code")
-                else None,
             }
         trial_initiator = TrialInitiator.from_headers(
             initiator, initiator_tenant, initiator_type, initiator_name
@@ -2705,9 +2696,12 @@ def create_gateway_app(
             #
             # 这里是**按请求语言渲染**的那一类文案（与诊断面同一条规则：请求语言只渲染
             # 服务端此刻写的话，不改结果本身的 `language`）。
-            from aiops_diagnostics.consumer.consumer_intent import trial_message
+            from aiops_diagnostics.consumer.consumer_intent import TRIAL_MESSAGES, message
 
-            body["error_message"] = trial_message(trial["error_code"], language)
+            key = TRIAL_MESSAGES.get(trial["error_code"])
+            body["error_message"] = (
+                message(key, language) if key else diagnosis_error_message(language, trial["error_code"])
+            )
         return body
 
     @app.get("/health")
@@ -3104,12 +3098,8 @@ def create_gateway_app(
                                 )
                             )
                         except (ValueError, RuntimeError, OSError) as exc:
-                            from aiops_diagnostics.common.model_request import ModelRequestError
-
                             raise _runtime_unavailable(
-                                "CONSUMER_MODEL_QUOTA_EXHAUSTED"
-                                if isinstance(exc, ModelRequestError) and exc.reason == "quota_exhausted"
-                                else "CONSUMER_INTENT_UNAVAILABLE",
+                                "CONSUMER_INTENT_UNAVAILABLE",
                                 consumer_intent.message("unavailable", language),
                                 exc,
                             ) from exc
@@ -6003,7 +5993,7 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
             {
                 "code": qa.get("error_code") or "QA_FAILED",
                 "message": _qa_user_message(language, qa.get("error_code")),
-                "retryable": qa.get("error_code") != "OPERATOR_MODEL_QUOTA_EXHAUSTED",
+                "retryable": True,
             }
             if status_value in {QUESTION.failed, QUESTION.expired}
             else None
@@ -6027,10 +6017,6 @@ def _qa_user_message(language: str, error_code: str | None) -> str:
     believes the wrong thing is broken. Only a verified retrieval failure gets
     the retrieval copy; the rest get the honest, cause-neutral one.
     """
-    from aiops_diagnostics.operator.operator_cpms import NODE_FAILURE_CODES
-
-    if error_code in NODE_FAILURE_CODES.values():
-        return diagnosis_error_message(language, error_code)
     pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
     return pack["unavailable"] if error_code == _KB_FAILURE_CODE else pack["generation_failed"]
 
@@ -7286,27 +7272,16 @@ def _runtime_unavailable(code: str, message: str, exc: Exception) -> StandardAPI
       `AgentRuntimeError`/`PROVIDER_UNAVAILABLE` is a provider problem. That is
       the whole diagnostic question this ticket exists to answer.
 
-    ModelRequestError carries only locally classified reason/status. Its
-    non-retryable dependency failures need operator action, not a retry loop.
-    Raw provider messages remain excluded from both the response and the log.
+    The response body is byte-identical to before, on purpose: the contract
+    promises "a stable 503", and turning this into a diagnostic channel for
+    callers is a different decision that nobody has made.
     """
-    from aiops_diagnostics.common.model_request import ModelRequestError
-
-    if isinstance(exc, ModelRequestError):
-        _LOGGER.warning(
-            "runtime failure -> %s (%s) reason=%s http_status=%s",
-            code,
-            type(exc).__name__,
-            exc.reason,
-            exc.http_status,
-        )
-    else:
-        _LOGGER.warning("runtime failure -> %s (%s)", code, type(exc).__name__)
+    _LOGGER.warning("runtime failure -> %s (%s)", code, type(exc).__name__)
     return StandardAPIError(
         status.HTTP_503_SERVICE_UNAVAILABLE,
         code,
         message,
-        retryable=exc.retryable if isinstance(exc, ModelRequestError) else True,
+        retryable=True,
     )
 
 

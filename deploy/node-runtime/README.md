@@ -16,9 +16,7 @@
 
 ## 配置与启动
 
-制品从已合并修订构建；平台、节点和基础镜像身份沿用 `../m2-live-03/images.lock.json`。
-Gateway/模型代理镜像的构建结果使用同次生成的`gateway-image/identity.json`，
-源码/依赖摘要和构建时间不再提交输入锁，方法见[构建手册](../../docs/agents/local-gateway-build.md)。
+制品从已合并修订构建；平台、节点和镜像身份沿用 `../m2-live-03/images.lock.json`。
 运行时不拉镜像、不装依赖。设置分别放在 `.dev-host.toml` 声明的三个节点目录中。
 `runtime.env` 是私有部署记录，0600，必须提供以下值：
 
@@ -202,7 +200,7 @@ timeout 45 docker exec aiops-runtime-node java -Xmx32m -cp /tmp TlsProbe \
 ## 模型代理源码归位后的发布
 
 合并修订通过`deploy/m2-live-03/build-image.sh --save <镜像tar>`在开发机/runner构建，
-构建记录保存在任务输出目录；合并后的实际交付须重建并携带同次`identity.json`，输入锁不改写，
+发布内容锁在任务分支构建验证时更新并随PR合并，合并后的构建不得改写清单，
 制品包含`services/model-proxy/model_proxy.py`。本片只移动源码，原文件与迁移前逐字相同。
 发布前核对新镜像内Compose入口的`--help`可执行，并在临时证书/合成上游下验证实际TLS请求。
 

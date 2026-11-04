@@ -222,10 +222,7 @@ def test_unbounded_scope_is_not_filtered_and_says_so_in_the_count(operator, monk
         }
 
     monkeypatch.setattr(operator_cpms, "cpms_get", cpms)
-    # **单词**查询：`total` 才等于 CPMS 的计数。多词是逐词各查一轮，同一个站会被
-    # 数两遍，那时不报 total（见 `query_sites` 的注释）—— 所以这里用单词问法。
-    single = {"kind": "site_search", "text": "", "name": "", "address_terms": ["天河"]}
-    result = site_query(caller, single)
+    result = site_query(caller, selection())
     assert result["empty_scope"] is False
     assert result["scope_limited"] is False, "顶层账号的站点集合是 None，不是被站点集合收窄"
     assert result["total"] == 152 and len(result["sites"]) == 1
@@ -258,35 +255,9 @@ def test_page_budget_is_bounded_and_not_claimed_complete(operator, monkeypatch):
         return {"code": 0, "data": {"records": sites(), "current": page, "size": 50, "total": 10000}}
 
     monkeypatch.setattr(operator_cpms, "cpms_get", cpms)
-    # 单词问法：分页预算就是 `SITE_MAX_PAGES` 页，不多翻。
-    single = {"kind": "site_search", "text": "", "name": "", "address_terms": ["天河"]}
-    result = site_query(caller, single)
+    result = site_query(caller, selection())
     assert calls == [1, 2, 3, 4] and result["limited"]
     assert len(result["sites"]) == 1
-
-
-def test_each_address_term_gets_its_own_page_budget(operator, monkeypatch):
-    """多词查询是**逐词**翻页，不是共享一份页预算。
-
-    上游 `address` 是子串匹配：「广州天河」整串查不到，「天河」能查到。所以每个词
-    都要自己翻页 —— 否则第二个词还没开始就被第一个词用光预算。
-    代价是请求数 = 词数 × 页数，所以词数受协议上限（至多 4 个）约束。
-    """
-    caller = operator["resolver"].current
-    calls = []
-
-    def cpms(url, *_, **kwargs):
-        query = parse_qs(urlsplit(url).query)
-        calls.append((query.get("address", [""])[0], int(query["current"][0])))
-        return {
-            "code": 0,
-            "data": {"records": [], "current": int(query["current"][0]), "size": 50, "total": 0},
-        }
-
-    monkeypatch.setattr(operator_cpms, "cpms_get", cpms)
-    site_query(caller, selection())  # ["广州", "天河"]
-    addresses = {address for address, _ in calls}
-    assert addresses == {"广州", "天河"}, f"两个词都要被查询到，实际：{calls}"
 
 
 @pytest.mark.parametrize(
@@ -789,11 +760,7 @@ def test_site_search_uses_same_scope_on_all_entries(operator, monkeypatch, entry
         final = f["client"].get("/v1/dify/trial/" + response.json()["trial_id"], headers=headers)
     assert final.status_code == 200 and final.json()["status"] == "completed", final.text
     assert "天河测试站" in final.text and "PRIVATE-PHONE" not in final.text
-    # **每个地址词各查一次**（2026-11-04）：上游 address 是子串匹配，「广州天河」
-    # 整串一条都匹配不到，而「天河」能命中。所以这里断言的是「至少发过一次、
-    # 且都打到站点接口」，而不是「恰好一次」—— 词数由用户的问法决定。
-    calls = f["state"]["calls"]
-    assert calls and all(call[0].startswith("/chSite/page?") for call in calls), calls
+    assert len(f["state"]["calls"]) == 1 and f["state"]["calls"][0][0].startswith("/chSite/page?")
 
 
 def test_site_tool_end_to_end_through_the_real_tool_chain(operator, monkeypatch):

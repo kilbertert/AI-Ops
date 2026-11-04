@@ -95,9 +95,8 @@ def message(code, language):
         return COPY[language]["intent_" + code]
     texts = {
         "unavailable": (
-            "智能客服服务暂不可用，请稍后再试或联系官方客服。尚未查询您的订单。",
-            "The assistant service is unavailable. Try later or contact official support. "
-            "No order was queried.",
+            "暂时无法理解这次请求，请稍后重试。尚未查询您的订单。",
+            "I could not interpret this request. Please try again shortly. No order was queried.",
         ),
         "clarify": (
             "请说明您想查哪笔订单的状态、账务记录，还是了解操作方法。",
@@ -134,10 +133,3 @@ def message(code, language):
         ),
     }
     return texts[code][0 if language.startswith("zh") else 1]
-
-
-def trial_message(code, language):
-    from aiops_diagnostics.common.i18n import diagnosis_error_message
-
-    key = TRIAL_MESSAGES.get(code)
-    return message(key, language) if key else diagnosis_error_message(language, code)

@@ -17,7 +17,7 @@
 | 死代码 | 删 25 个未被引用的 helper（含一个会 `NameError` 的） |
 | 措辞快照 | 10 条 `.env.example` 注释断言收窄为语义锚点 |
 
-净变化：**-377 / +178 行**，用例 4112 → 4100。
+净变化：**-377 / +331 行**，用例 4112 → 4100。
 
 ## 修好的假绿（每条都做过反向验证）
 
@@ -56,6 +56,19 @@
   `tests/test_repository_layout.py` 同步通过。
 - `uv run ruff check .` / `ruff format --check .` 全绿。
 - 8 条修复各自做了反向验证（改生产代码 → 红 → 恢复）。
+
+## 复核轮追加（Devin Review 四条）
+
+四条全部成立，都属同一形状：**断言范围比它声称的大**。逐条收紧并同样做反向验证。
+
+| 文件 | 原判据的漏洞 | 收紧后 | 反向验证 |
+|---|---|---|---|
+| `test_diag_shared_contract.py` | 整份 controller 找一次 `validateToken(`；删掉任一端点的校验，其余端点仍命中 | 按 `@GetMapping` 切成端点体，**每个端点**都要有 header + 校验 + 401 | 删 `/device` 的校验 → 红 |
+| `test_dify_login_page.py`（redirect） | `"redirect_url"` / `".redirect"` 在页面别处也能命中 | 解析提交请求体，要求其中有 `redirect` 字段 | 删 `redirect: redirect` → 红 |
+| `test_dify_login_page.py`（刷新） | `page.count("refreshCaptcha(")` 把**函数定义**算进 3 次 | 只数调用行（排除 `function ` 行） | 删 `.catch` 分支的刷新 → 红 |
+| `test_dify_registry_route_proof.py` | 任意带「不可区分」的 `.append` 都算数 | 限定接收者是 `failures` | 改成 `print("WARN …不可区分")` → 红 |
+
+同一轮订正里程碑记录的行数：`git diff --numstat` 实测 **+331 / -377**，原记 +178。
 
 **真实故障业务验收：未完成** —— 本轮只改测试，无用户可见行为变化。
 

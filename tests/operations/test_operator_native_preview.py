@@ -385,19 +385,3 @@ def test_missing_conversation_is_not_a_successful_preview(bridge, upstream):
     assert status == 502 and "OPERATOR_PREVIEW_VERSION_MISMATCH" in body
     assert "data:" not in body
     assert any(x["path"].endswith("/cancel") for x in upstream.calls)
-
-
-def test_native_preview_displays_quota_failure(bridge, upstream):
-    upstream.trial_result_body = {
-        "status": "failed",
-        "error_code": "OPERATOR_MODEL_QUOTA_EXHAUSTED",
-        "error_message": "模型服务额度不足，请联系管理员补充额度后重试。",
-        "result": None,
-    }
-    status, _, body = send(bridge)
-    assert status == 200
-    events = [json.loads(line[6:]) for line in body.splitlines() if line.startswith("data: ")]
-    error = next(event for event in events if event.get("event") == "error")
-    assert "额度不足" in error["message"]
-    assert "补充额度" in error["message"]
-    assert "message_end" not in body

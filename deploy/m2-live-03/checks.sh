@@ -44,6 +44,14 @@ print(d[sys.argv[2]][sys.argv[3]] or "")
 PY
 }
 
+registry_value() {  # registry_value <section> <key>（无该段/键时为空）
+  python3 - "$HERE/images.lock.json" "$1" "$2" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print((d.get(sys.argv[2]) or {}).get(sys.argv[3], ""))
+PY
+}
+
 # ---------------------------------------------------------------- 隔离门禁
 # 与真实启动路径共用同一份判据：`isolation_guard` 就是 gateway_server serve 调用的那个
 # 模块。这里在**同一个镜像、同一个 UID、同一组挂载**下跑它，因此「检查通过」与
@@ -239,14 +247,39 @@ PY
     bad "$manifest_report"
   fi
 
-  say "== Gateway 镜像身份（构建记录与输入锁） =="
-  local gw_ref image_report
+  say "== Gateway 镜像身份（内容摘要为主，加载身份为辅） =="
+  # 镜像 ID 含构建时间戳，每次重建都不同，所以它不在仓库里；**内容摘要**（与 uv.lock
+  # 绑定）才是可复现的身份。宿主上若有 build-image.sh 写出的 identity.json，再核对
+  # 实际加载的 ID —— 两者任一不符即拒绝。
+  local gw_ref gw_id src want_src want_id
   gw_ref=$(gateway_image)
-  if image_report=$(docker image inspect "$gw_ref" | python3 "$HERE/stack_checks.py" image \
-      "$DIST/gateway-image/identity.json" "$HERE/images.lock.json" "${M2LIVE_GATEWAY_IDENTITY_SHA256:-}"); then
-    ok "$image_report"
+  gw_id=$(docker image inspect -f '{{.Id}}' "$gw_ref" 2>/dev/null || true)
+  want_src=$(registry_value gateway_image source_sha256)
+  if [ -z "${gw_id:-}" ]; then
+    bad "Gateway 镜像不存在（先跑 build-image.sh 并在宿主 load）"
   else
-    bad "Gateway 构建身份不符：$image_report"
+    src=$(docker image inspect -f '{{ index .Config.Labels "m2live.source" }}' "$gw_ref" 2>/dev/null)
+    if [ -z "$want_src" ]; then
+      bad "images.lock.json 的 gateway_image.source_sha256 为空 —— 未记录内容身份"
+    elif [ "$src" != "$want_src" ]; then
+      bad "Gateway 内容摘要不符（锁 ${want_src:0:16}…，镜像标签 ${src:-（无）}）"
+    else
+      ok "Gateway 内容摘要 ${src:0:16}… 与 uv.lock 绑定"
+    fi
+    # 内容摘要标签**可以**被复制到替换镜像上（它是磁盘上的标签，不是镜像身份）。
+    # 唯一不可伪造的是宿主上 build-image.sh 写出的 identity.json：里面是那次构建的
+    # image ID。没有它就无法证明跑的是构建产物，所以 preflight 拒绝，而不是「只核对标签」。
+    local identity=$DIST/gateway-image/identity.json
+    if [ ! -f "$identity" ]; then
+      bad "缺 $identity：无法证明 Gateway 镜像是构建产物（标签可被复制）"
+    else
+      want_id=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["image_id"])' "$identity")
+      if [ "$gw_id" != "$want_id" ]; then
+        bad "Gateway 镜像 ID 与加载记录不符（记录 ${want_id#sha256:}，实际 ${gw_id#sha256:}）"
+      else
+        ok "Gateway 镜像 ID ${gw_id:7:12}… 与加载记录一致"
+      fi
+    fi
   fi
 
   say "== 模型出口（固定目标，必填） =="

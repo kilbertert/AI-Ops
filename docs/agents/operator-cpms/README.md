@@ -19,13 +19,6 @@ JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、�
 遇到`OPERATOR_INVALID_ANSWER`时核对节点制品、输出模式和完成回合边界，不能通过放宽
 证据校验止错。详见[输出契约QA](output-contract-qa.md)与[决策](../../adr/0163-operator-output-is-a-runtime-contract.md)。
 
-## 失败原因排查
-
-模型服务额度不足时，原问答与Dify预览应显示补充额度提示；普通模型/节点拒绝只能说明依赖不可用。
-仅反复修改SOP或重试无法恢复耗尽的账户。失败分类要求节点与Gateway配套部署，
-核对步骤和回归见[输出契约QA](output-contract-qa.md#额度失败回归2026-11-04)。
-本次候选修复的部署与实测状态见[验收记录](../../validation/2026-11-04-operator-failure-propagation.md)。
-
 ## 首片 API 契约
 
 **报告必须回答用户问的那一点。** 答案的 `direct_answer` 为必填非空，且渲染在最前；

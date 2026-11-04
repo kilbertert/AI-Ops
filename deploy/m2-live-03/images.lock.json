@@ -8,11 +8,11 @@
   },
   "node": {
     "artifact": "aiops-execution-node.jar",
-    "sha256": "b9440e25412a237b037cee796989e63cd93728209f03a76a7a7dca89e90fba3f",
-    "bytes": 106304542,
-    "source_commit": "0d326ea9",
+    "sha256": "2c95b6f5b7b041659798daa506868742c389b7724cb6d527170c27cc6b0a85ef",
+    "bytes": 106303908,
+    "source_commit": "b483f6b5",
     "build": "由本仓 services/execution-node 构建（可复现：pom 固定 project.build.outputTimestamp，同一份源码两次构建得到同一摘要）；构建命令见 tools/README.md",
-    "source_sha256": "7689908da493a0b8f183e914f5e0e1aa115d5cc6eae6e0dd8cfa1d1d03e81a90",
+    "source_sha256": "fbe812b5a28f23ceef4a848178c9ee0aa3664ae8e159a0ae44558390ff675b16",
     "source_digest_rule": "services/execution-node 下除 target/__pycache__/.idea 外全部文件的路径+内容摘要；命令见 deploy/node-runtime/source_digest.py"
   },
   "base_images": {
@@ -48,9 +48,12 @@
     }
   },
   "gateway_image": {
-    "_comment": "仅记录已批准的Gateway构建输入；源码/依赖摘要、镜像ID与时间由build-image.sh写入随制品交付的gateway-image/identity.json，不再提交生成值。",
+    "_comment": "由 deploy/m2-live-03/build-image.sh 在开发机/runner 构建。这里记录**可复现**的内容身份：source_sha256（src+tools+requirements+Dockerfile 的归档摘要）与 uv_lock_sha256。image_id 每次构建都不同（构建时间戳进镜像元数据），所以它不写进仓库：它在宿主加载制品后由 build-image.sh 的 identity.json 记录，preflight 优先比对内容标签，identity.json 存在时再核对 image ID。 本文件**不记录 image_id**：它每次构建都不同（构建时间戳进镜像元数据），写一个静态值只会与 built_at 脱节。宿主的 identity.json 才是它的家。",
     "image": "aiops-m2-live-03-gateway",
+    "uv_lock_sha256": "371623a3918ab04944818a108b462c79f03ceaa0296eb706bc8d8e948a7e716a",
     "base_image": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
-    "base_digest": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"
+    "base_digest": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
+    "source_sha256": "16194cfc55988ed5c0b8bd2fb9874c6184edc75cf9509f8f9ca17d99592105d0",
+    "built_at": "2026-11-04T07:30:47Z"
   }
 }

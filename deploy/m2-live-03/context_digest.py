@@ -1,9 +1,25 @@
 #!/usr/bin/env python3
-"""计算Gateway构建上下文摘要，按需与本次制品的identity.json核对。
+"""算出 Gateway 镜像的**构造上下文摘要**，并与 `images.lock.json` 里锁的值比对。
 
-与build-image.sh采用相同文件、排除和字节排序规则。无参数只输出摘要；
---check PATH核对源码、uv.lock和已批准基础镜像，旧记录不能证明新源码。
-构建记录不进Git；没有记录必须失败，不能回退到仓库中的历史摘要。
+`build-image.sh` 的 `m2live.source` 标签是这么来的：把 `src/`、`tools/verification/m2_live`、
+`tools/experiments/m2_close`、`services/model-proxy`、Dockerfile 与 requirements 装进一个目录，
+然后对「路径 + 内容」的
+排序列表再取一次 sha256。preflight 用这个值核对宿主上的镜像。
+
+问题在于它是**行内命令**：只有构建时才算得出来。于是锁文件里那个摘要无法在 CI 里核对，
+reviewer 想复核只能自己重写一遍管道 —— 而管道有两处容易走样：
+
+1. 源码与工具均排除 `__pycache__`、`*.pyc`；Java节点已迁到services，不属于Gateway镜像上下文；
+   旧工作树的node/target残留仍排除。
+2. 工作树里的未跟踪文件（例如验收产物 `tools/experiments/m2_close/m3node/build/`）会被 `tar` 带上。
+
+这个脚本不复刻那两行 `tar`，而是**按同一组排除规则逐文件挑选**，因此与工作树是否干净
+无关，也与从哪里运行无关。
+
+    python deploy/m2-live-03/context_digest.py            # 打印摘要
+    python deploy/m2-live-03/context_digest.py --check    # 与 images.lock.json 比对
+
+退出码：0 一致 / 1 不一致 / 2 前置缺失。
 """
 
 from __future__ import annotations
@@ -90,30 +106,24 @@ def digest() -> tuple[str, int]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", type=Path, metavar="IDENTITY", help="与本次构建的identity.json比对")
+    parser.add_argument("--check", action="store_true", help="与 images.lock.json 比对")
     parser.add_argument("--out", default="", help="把结果写成 JSON")
     args = parser.parse_args()
 
     value, count = digest()
+    lock_path = HERE / "images.lock.json"
     record: dict[str, object] = {"source_sha256": value, "files": count}
 
     code = 0
     if args.check:
-        try:
-            identity = json.loads(args.check.read_text())
-            expected = {
-                "source_sha256": value,
-                "uv_lock_sha256": hashlib.sha256((REPO / "uv.lock").read_bytes()).hexdigest(),
-                "base_digest": json.loads((HERE / "images.lock.json").read_text())["gateway_image"][
-                    "base_digest"
-                ],
-            }
-            record["mismatched"] = [key for key, wanted in expected.items() if identity.get(key) != wanted]
-            record["match"] = not record["mismatched"]
-            code = 0 if record["match"] else 1
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            print("构建记录或输入锁不可读，请重新构建并提供identity.json", file=sys.stderr)
+        if not lock_path.is_file():
+            print(f"missing {lock_path}", file=sys.stderr)
             return 2
+        locked = json.loads(lock_path.read_text())["gateway_image"]["source_sha256"]
+        record["locked"] = locked
+        record["match"] = locked == value
+        if locked != value:
+            code = 1
     text = json.dumps(record, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(text + "\n")

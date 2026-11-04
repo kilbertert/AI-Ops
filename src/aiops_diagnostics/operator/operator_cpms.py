@@ -46,13 +46,6 @@ JSON_ONLY_REMINDER = (
 #: 翻倍。更重要的理由是不掩盖故障：上游**持续**不守约时，多试几次会让它看起来像"慢"。
 MAX_RESAMPLES = 1
 
-NODE_FAILURE_CODES = {
-    "model_quota_exhausted": "OPERATOR_MODEL_QUOTA_EXHAUSTED",
-    "model_failed": "OPERATOR_DEPENDENCY_UNAVAILABLE",
-    "node_failed": "OPERATOR_DEPENDENCY_UNAVAILABLE",
-    "model_stream_incomplete": "OPERATOR_MODEL_OUTPUT_UNSTABLE",
-}
-
 #: 站点查询的三个上限：一页条数、最多页数、最多展示条数。
 #:
 #: 合起来是**「列举不能变成导出」**这条边界。改任何一个都要重新论证，不能当调参。
@@ -354,8 +347,6 @@ class OperatorCpms:
         caller = self.refresh_scope(caller, allow_empty=bool(run and not diagnoses_an_order(run)))
         if run is None or run.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("QA_NOT_FOUND")
-        if run.state != "succeeded" or not run.snapshot:
-            raise OperatorRefused("OPERATOR_RESULT_UNAVAILABLE")
         from aiops_diagnostics.execution.node_publication import all_targets
 
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
@@ -947,10 +938,8 @@ class OperatorCpms:
         if payload["status"] == "failed":
             # 节点给的原因码进运行记录，不再统一糊成 `operator_node_failed`。
             # 它只用于**归因**，不改变任何判决：这条 run 仍然失败。
-            reason = payload.get("reason")
-            if not isinstance(reason, str) or reason not in NODE_FAILURE_CODES:
-                reason = "node_failed"
-            store.fail(run_id, "operator_node_failed: " + reason)
+            reason = str(payload.get("reason") or "")
+            store.fail(run_id, "operator_node_failed: " + reason if reason else "operator_node_failed")
             logging.getLogger("aiops.operator").warning(
                 "operator_node_reported_failure reason=%s", reason or "-"
             )
@@ -1105,13 +1094,6 @@ class OperatorCpms:
         run = self.context.agent_run_store.get(run_id)
         return run is not None and run.state in {"issued", "running"}
 
-    def _raise_node_failure(self, run_id):
-        run = self.context.agent_run_store.get(run_id)
-        if run is not None and run.state == "failed":
-            reason = (run.reason or "").removeprefix("operator_node_failed: ")
-            if reason in NODE_FAILURE_CODES:
-                raise OperatorRefused(NODE_FAILURE_CODES[reason])
-
     def _worker(self, run_id, qa_id, config):
         store = self.context.store
         try:
@@ -1165,7 +1147,6 @@ class OperatorCpms:
                 try:
                     dispatcher.dispatch(config, run_id)
                 except AgentRunDispatchError:
-                    self._raise_node_failure(run_id)
                     if not self._untouched(run_id, task):
                         raise
                     if task.resamples >= MAX_RESAMPLES:
@@ -1175,7 +1156,6 @@ class OperatorCpms:
                         "operator_resample attempt=%d reason=dispatch_refused", task.resamples
                     )
                     continue
-                self._raise_node_failure(run_id)
                 if not self._untouched(run_id, task):
                     break
                 # 派发本身成功、回调也走完了，但 run 没被推进 —— 说明 `_complete` 拒了答案。
@@ -1599,8 +1579,6 @@ def _failure_code(exc: BaseException) -> str:
     """
     if isinstance(exc, OperatorRefused):
         code = str(exc)
-        if code in NODE_FAILURE_CODES.values():
-            return code
         # 这些原因说明**上游/环境**有问题，不是这次回答不合格 —— 分开报。
         if code in {
             "OPERATOR_NODE_REJECTED",
@@ -2083,54 +2061,19 @@ class SiteKeywords:
         """答复可把同一地址拆成多个关键词；仅用于对齐已执行的工具参数。"""
         return "".join(self.address_terms)
 
-    def params(self, page: int, address: str | None = None) -> dict[str, object]:
-        """这一页的 CPMS 查询参数。
-
-        ``address`` 由调用方逐词给（见 :meth:`address_queries`）：上游的 ``address``
-        是**子串匹配**，把「广州天河」整串传过去一条都匹配不到 —— 没有任何一条地址
-        同时包含这两个相连的字。
-        """
+    def params(self, page: int) -> dict[str, object]:
         params: dict[str, object] = {"current": page, "size": SITE_PAGE_SIZE, "type": 0}
         if self.name:
             params["name"] = self.name
-        chosen = self.address if address is None else address
-        if chosen:
-            params["address"] = chosen
+        if self.address_terms:
+            params["address"] = max(self.address_terms, key=len)
         return params
 
-    def address_queries(self) -> tuple[str, ...]:
-        """这一次要**分别**发给上游的地址词。空元组表示不按地址过滤。
-
-        2026-11-04 实测（41 生产）：
-
-        * ``address=广州天河`` → ``total: 0``（上游子串匹配，整串无人命中）
-        * ``address=天河`` → 命中 ``HuaJing Station``
-
-        用户说「广州天河」指的是**上下级地名叠在一起**，不是一个字面串。所以按词
-        分别查询再合并 —— 这正是用户脑子里"这一带"的意思。
-        """
-        return tuple(term for term in self.address_terms if term.strip())
-
     def matches(self, site: dict[str, str]) -> bool:
-        """这一行是不是在用户说的那个地点。
-
-        地址词之间是 ``any`` 而不是 ``all``（2026-11-04 修正）。用户说「广州天河」指的是
-        **广州市天河区这一带**，不是「同时出现『广州』与『天河』两个字面串」。用 ``all``
-        的实际后果是：HuaJing Station 的地址写作
-        ``… 天河公园 Tian He Qu, Guang Zhou Shi …`` ——「天河」命中、「广州」命不中
-        （地址里是拼音 ``Guang Zhou``），于是 ``all`` 一票否决，**一条真实存在的站点被
-        自己的过滤器丢掉了**，上游返回的总数却是对的。
-
-        站名仍然要求**全部命中**（它通常只有一个词，``all``/``any`` 等价；真给了多个词时
-        「都要出现」才是对的）。地点词放宽成 ``any`` 与「扩大范围」的产品直觉一致：
-        多给一个地名只会查得更宽，不会把一个真实结果筛掉。
-        """
         haystack = (site["name"] + " " + site["address"]).casefold()
-        if self.name.casefold() not in site["name"].casefold():
-            return False
-        if not self.address_terms:
-            return True
-        return any(term.casefold() in haystack for term in self.address_terms)
+        return self.name.casefold() in site["name"].casefold() and all(
+            term.casefold() in haystack for term in self.address_terms
+        )
 
 
 def site_scope(caller, *, allow_empty: bool = True) -> SiteScope:
@@ -2234,36 +2177,22 @@ def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, 
     limited = False
     total = 0
     if scope.site_ids != ():
-        # **每个地址词各查一轮**（2026-11-04）。上游的 `address` 是子串匹配，
-        # 「广州天河」整串一条都匹配不到（实测 total: 0），而「天河」能命中
-        # HuaJing Station。用户说的「广州天河」是上级地名叠下级地名，不是一个字面串。
-        #
-        # 逐词查询会多打几次 CPMS，所以这里有两道收口：
-        #   1. 词数上限（`SITE_MAX_TERMS`）—— 协议本来最多允许 4 个；
-        #   2. 一旦已经凑满展示上限就停止后续词，不再白打请求。
-        # 合并按 `id` 去重：同一个站点可能同时命中两个词。
-        for term in keywords.address_queries() or (None,):
-            if len(rows) >= SITE_MAX_SHOWN:
-                limited = True
+        for page in range(1, SITE_MAX_PAGES + 1):
+            if reauthorize() != scope.fingerprint:
+                raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+            body = read(SITE_PATH + "?" + urlencode(keywords.params(page)), scope.tenant_id)
+            page_rows, page_total = site_page(scope, body, page, outside_scope=outside_scope)
+            for selected in page_rows:
+                if selected["id"] not in seen and keywords.matches(selected):
+                    seen.add(selected["id"])
+                    rows.append(selected)
+            data = body["data"]
+            more = page * SITE_PAGE_SIZE < data["total"]
+            total = max(total, data["total"])
+            if len(rows) >= SITE_MAX_SHOWN or not more or not data["records"]:
+                limited = more or len(rows) > SITE_MAX_SHOWN
                 break
-            for page in range(1, SITE_MAX_PAGES + 1):
-                if reauthorize() != scope.fingerprint:
-                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-                body = read(SITE_PATH + "?" + urlencode(keywords.params(page, address=term)), scope.tenant_id)
-                page_rows, page_total = site_page(scope, body, page, outside_scope=outside_scope)
-                for selected in page_rows:
-                    if selected["id"] not in seen and keywords.matches(selected):
-                        seen.add(selected["id"])
-                        rows.append(selected)
-                data = body["data"]
-                more = page * SITE_PAGE_SIZE < data["total"]
-                # 多词查询下 `total` 是**各词计数之和的上界**，不是"一共有多少个"——
-                # 同一个站会被两个词各数一次。只在单词查询时才敢把它当总数。
-                total = max(total, data["total"])
-                if len(rows) >= SITE_MAX_SHOWN or not more or not data["records"]:
-                    limited = limited or more or len(rows) > SITE_MAX_SHOWN
-                    break
-                limited = True
+            limited = more
     if reauthorize() != scope.fingerprint:
         raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
     return {
@@ -2275,10 +2204,6 @@ def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, 
         # 列举问法要回答"我有多少个"，只给前 10 条等于没回答。``total`` 是 CPMS 对
         # 这次查询自己的计数；``scope_limited`` 说明它是否还经过站点集合过滤 ——
         # 员工账号的 total 是租户口径，不能直接当成"你有多少个"。
-        #
-        # **多词查询时不报 total**：每个词各数一次，同一个站会被数两遍，那个和不是
-        # "一共有多少个"。宁可说"本次读取到 N 个"（渲染层已有这条路径），也不报一个
-        # 加起来偏大的数 —— 数字段是用户会照着对账单的。
-        "total": total if len(keywords.address_queries()) <= 1 else 0,
+        "total": total,
         "scope_limited": scope.site_ids is not None,
     }

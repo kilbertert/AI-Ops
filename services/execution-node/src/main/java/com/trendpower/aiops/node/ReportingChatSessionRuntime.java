@@ -149,7 +149,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                     request.acceptCompletion(result);
                 }))
                 .errorConsumer(error -> finishOnce(execution, request, () -> {
-                    reportFailed(runId, modelFailureReason(error), manifestId);
+                    reportFailed(runId, "model_failed", manifestId);
                     forwardError(request, error);
                 }))
                 .build();
@@ -196,22 +196,6 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         return ack != null
                 && runId.equals(ack.path("run_id").asText(null))
                 && "succeeded".equals(ack.path("state").asText(null));
-    }
-
-    static String modelFailureReason(Throwable error) {
-        // 只识别服务端明确的额度证据；403本身也可能只是权限拒绝。
-        for (int depth = 0; error != null && depth < 16; depth++, error = error.getCause()) {
-            if (error instanceof com.openai.errors.OpenAIServiceException service) {
-                var codes = java.util.Set.of("insufficient_quota", "insufficient_user_quota");
-                if (codes.contains(service.code().orElse(""))
-                        || codes.contains(service.type().orElse(""))
-                        || (service.statusCode() == 403 && service.getMessage() != null
-                            && service.getMessage().contains("用户额度不足"))) {
-                    return "model_quota_exhausted";
-                }
-            }
-        }
-        return "model_failed";
     }
 
     /** 失败通知：尽力而为，绝不因为通知失败而改变本地错误路径。 */

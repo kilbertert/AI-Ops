@@ -20,7 +20,6 @@ from aiops_diagnostics.common.redaction import redact_text
 from aiops_diagnostics.conversation.conversation_store import BUSY_LOCK_SECONDS
 from aiops_diagnostics.data.sources import SourceError, scoped_live_sources
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_from_json, scope_to_json
-from aiops_diagnostics.gateway import metrics_store as metrics_dims
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
 from aiops_diagnostics.health.health_curves import build_curves
@@ -913,16 +912,11 @@ class GatewayRuntime:
         try:
             result = draft.execute(self, trial_id, run_context, order_no, language)
         except Exception as exc:  # noqa: BLE001 - 逃出去就等于没有终态行
-            from aiops_diagnostics.common.model_request import ModelRequestError
             from aiops_diagnostics.consumer.consumer_intent import TRIAL_MESSAGES
             from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
             code = (
-                "CONSUMER_MODEL_QUOTA_EXHAUSTED"
-                if isinstance(exc, ModelRequestError) and exc.reason == "quota_exhausted"
-                else "CONSUMER_INTENT_UNAVAILABLE"
-                if isinstance(exc, ModelRequestError)
-                else exc.code
+                exc.code
                 if isinstance(exc, ChatRunUnavailable) and exc.code in TRIAL_MESSAGES
                 else "TRIAL_FAILED"
             )
@@ -953,7 +947,7 @@ class GatewayRuntime:
     def _record_trial_metric(self, context: ScopeContext, outcome: str, started_ms: float) -> None:
         self._record_metric(
             tenant_id=context.effective_tenant_id,
-            route_type=metrics_dims.ROUTE_TRIAL,
+            route_type="trial",
             outcome=outcome,
             duration_ms=int((time.monotonic() - started_ms) * 1000),
         )

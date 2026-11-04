@@ -100,24 +100,17 @@ HTTP 200 的 HTML 也不算通过；空用户结果只证明接口可读，不�
 |---|---|
 | `compose.yaml` | 六个容器、四张网络、资源上限、显式 UID、只读挂载 |
 | `gateway.Dockerfile` + `gateway-requirements.txt` | Gateway 镜像：依赖由 `uv.lock` 导出并带哈希，启动不下载 |
-| `build-image.sh` | 构建镜像，输出并核验`$M2LIVE_DIST/gateway-image/identity.json`，不改Git输入锁 |
+| `build-image.sh` | 构建镜像并记录精确身份（镜像 ID + 内容摘要标签）；`--update-lock` 写回锁文件 |
 | `bootstrap.sh` / `bootstrap_platform.py` | 平台初始化：换默认管理员口令、禁用 demo 应用、注册应用/模型/智能体、回填绑定表（幂等） |
 | `compose.synthetic.yaml` | **只给开发机**：模型/CPMS/调用者身份替身，用于部署件本身的验收 |
 | `compose.identity.yaml` | 复跑用的覆盖层：只把 Gateway 的入口进程换成构造身份启动器（ADR-0058） |
 | `identity.env.template` | 构造身份三件套的**键名**；值只写在宿主上的 0600 文件里 |
-| `images.lock.json` | 平台与节点制品摘要、基础镜像身份（按 ref）、Gateway已批准基础镜像输入 |
+| `images.lock.json` | 平台与节点制品摘要、基础镜像身份（按 ref）、Gateway 构建身份 |
 | `gateway.env.template` / `node.env.template` | 两侧环境键名；真实值来自宿主上的 0600 文件 |
 | `make-certs.sh` | 生成本地 CA 与 platform 的服务端证书（幂等） |
 | `build-runtime-config.sh` | 从生产配置抽取**只读依赖白名单**；不完整就拒绝 |
 | `checks.sh` | preflight / up / ready / verify / deps / status / down |
 | `HOST-CHANGE.md` | 41 上的精确变更清单（不是授权） |
-
-Gateway的源码/依赖摘要、镜像ID和构建时间随镜像以`identity.json`交付；不再要求每个源码PR
-修改同一个锁。部署配置必须给出构建侧已批准的`M2LIVE_GATEWAY_IDENTITY_SHA256`，
-先核对本次记录的摘要，再核对记录与实载镜像及批准的基础镜像；旧镜像与旧记录成对遗留仍拒绝。
-构建及搬运步骤见[本地构建手册](../../docs/agents/local-gateway-build.md)，
-`context_digest.py --check <identity.json>`在构建侧证明记录对应当前源码与依赖。
-`--update-lock`已退役；平台、Java节点与基础镜像字段继续由原门禁核对。
 
 ## 数据与凭据边界
 
@@ -296,7 +289,6 @@ M2LIVE_PROJECT=m2-live-03-syn \
 M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.synthetic.yaml \
 M2LIVE_CONFIG=/tmp/m2live03-local/etc M2LIVE_STATE=/tmp/m2live03-local/state \
 M2LIVE_DIST=/tmp/m2live03-local/dist \
-M2LIVE_GATEWAY_IDENTITY_SHA256="<本次构建侧批准的identity.json摘要>" \
 M2LIVE_UID=$(id -u) M2LIVE_GID=$(id -g) M2LIVE_SYNTH_MODE=1 \
 bash deploy/m2-live-03/checks.sh up
 ```

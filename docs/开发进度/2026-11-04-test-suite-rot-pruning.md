@@ -46,7 +46,7 @@
 ## 当前分支或提交
 
 `test/slim-rotten-python-tests`，base `9ca549685d05`。
-净变化 **-377 / +178 行**，用例 4112 → 4100。
+净变化 **-377 / +331 行**，用例 4112 → 4100。
 
 ## 验证结果
 
@@ -56,6 +56,11 @@
 | `uv run ruff check .` | All checks passed |
 | `uv run ruff format --check .` | 1458 files already formatted |
 | 8 条修复的反向验证 | 改生产代码 → 红 → 恢复，逐条确认 |
+
+复核轮按 Devin Review 的四条建议又收紧了四处同类断言（端点逐个校验、
+登录页请求体字段、刷新**调用点**计数、`failures.append` 接收者），
+四条同样各做了一次反向验证。详见
+[验收记录](../validation/2026-11-04-test-suite-rot-pruning.md#复核轮追加devin-review-四条)。
 
 主仓根目录有一个未跟踪的 0 字节文件 `0`，会让 `tests/test_repository_layout.py`
 转红；干净 worktree 里该测试通过。该文件不是本轮产物，未处理。

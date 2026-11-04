@@ -38,67 +38,21 @@ METRICS_RETENTION_DAYS = 30
 #: ``_record_metric``'s ``contextlib.suppress(Exception)`` — the analysis line
 #: recorded **nothing at all**, silently, and the omission was invisible because
 #: the suppression is (correctly) there for exactly this kind of failure.
-#:
-#: ``trial`` (#799) is the third time the same shape happened: ``_record_trial_metric``
-#: writes ``route_type="trial"`` on both terminal paths of ``_execute_trial``, and
-#: every one of those rows was rejected and swallowed. Measured 2026-11-04 on 41:
-#: **181 trial runs, zero metric rows**.
-#:
-#: 每条成员后面那句「谁写它」是**结构性要求**，不是事故后的补记：下一个路由类型
-#: 上线时，「它叫什么」与「谁写它」必须写在同一行。`tests/test_metrics_dimensions.py`
-#: 会把这张表与生产点对账，成员缺失、或成员无人生产，都会在 CI 红。
 ROUTE_TYPES = frozenset(
     {
-        "faq",  # gateway_runtime: FAQ 命中
-        "qa",  # gateway_runtime: 通用问答（含 route_tag 兜底）
-        "diagnosis",  # gateway_runtime / gateway_api: 标准诊断
-        "debug",  # gateway_runtime: 调试运行
-        "clarification",  # gateway_runtime: 澄清回合
-        "promo",  # gateway_runtime: 宣传卡片（route_tag = "promo"）
-        "routing",  # gateway_runtime: 分类器自身的判定路径 (#392)
-        "order_auth",  # gateway_api: ORDER_AUTH_ROUTE
-        "operations_analysis",  # gateway_runtime: 运维分析面 (#697)
-        "trial",  # gateway_runtime: 试运行终态 (#799)
+        "faq",
+        "qa",
+        "diagnosis",
+        "debug",
+        "clarification",
+        "promo",
+        "routing",
+        "order_auth",
+        "operations_analysis",
     }
 )
 RETRIEVAL_STATUSES = frozenset({"", "found", "not_found", "unavailable", "limited"})
 OUTCOME_TYPES = frozenset({"completed", "failed", "cancelled", "busy"})
-
-#: 生产点引用的命名常量。**生产点不许再写裸字面量** —— 那正是「生产者与判据
-#: 是两份清单」的成因：字面量写在哪里、词表里有没有它，没有任何东西把两者连起来。
-ROUTE_QA = "qa"
-ROUTE_PROMO = "promo"
-ROUTE_TRIAL = "trial"
-ROUTE_ORDER_AUTH = "order_auth"
-OUTCOME_COMPLETED = "completed"
-OUTCOME_FAILED = "failed"
-OUTCOME_CANCELLED = "cancelled"
-OUTCOME_BUSY = "busy"
-
-#: 三个维度的名字 → 合法集合。**判据只从这里读**，不要在调用点再写一份
-#: （`record()` 与 `list_runs()` 此前各写一遍同形判断，改一处漏一处没有任何信号）。
-METRIC_DIMENSIONS: dict[str, frozenset[str]] = {
-    "route_type": ROUTE_TYPES,
-    "outcome": OUTCOME_TYPES,
-    "retrieval_status": RETRIEVAL_STATUSES,
-}
-
-
-def check_dimension(name: str, value: str, *, allow_empty: bool = False) -> None:
-    """这次写入/查询的维度值是否合法。**三个维度共用这一道判据。**
-
-    `allow_empty` 只给 `list_runs()` 的过滤参数用：那里 `route_type=None` 表示
-    「不按路由过滤」，而 `record()` 永远要求一个真实成员。
-
-    **只放过 `None`，不放过空字符串**：`?route_type=` 是「按一个空路由过滤」，
-    它不是「不过滤」—— 它必须继续是 422，而不是悄悄变成「返回空列表」。
-    第一版写成 `not value` 就把这两件事混成了一件事（2026-11-04 复审指出）。
-    """
-    if allow_empty and value is None:
-        return
-    if value not in METRIC_DIMENSIONS[name]:
-        raise MetricsValidationError(f"{name} is invalid")
-
 
 _SAFE_TENANT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.#:-]{0,127}$")
@@ -206,14 +160,12 @@ class MetricsStore:
         All inputs are validated against tight patterns; unknown values are
         rejected (never silently coerced) because aggregates feed admin views.
         """
-        check_dimension("route_type", route_type)
-        check_dimension("outcome", outcome)
-        # **这里不能用 `allow_empty`**：`retrieval_status` 的合法空值是空字符串 `""`
-        # （它本来就在集合里），而 `None` 不是 —— 让它过会落到 SQLite 的 NOT NULL，
-        # 抛的是 `sqlite3.IntegrityError` 而不是 `MetricsValidationError`，
-        # 又被 `_record_metric` 的 suppress 吞掉，症状与"词表里少一个成员"一模一样。
-        # 2026-11-04 复审指出。
-        check_dimension("retrieval_status", retrieval_status)
+        if route_type not in ROUTE_TYPES:
+            raise MetricsValidationError("route_type is invalid")
+        if outcome not in OUTCOME_TYPES:
+            raise MetricsValidationError("outcome is invalid")
+        if retrieval_status not in RETRIEVAL_STATUSES:
+            raise MetricsValidationError("retrieval_status is invalid")
         if not tenant_id or not _SAFE_TENANT.fullmatch(tenant_id):
             raise MetricsValidationError("tenant_id is invalid")
         for value, name in (
@@ -379,7 +331,8 @@ class MetricsStore:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         """Recent redacted run rows for one tenant (admin detail view)."""
-        check_dimension("route_type", route_type, allow_empty=True)
+        if route_type is not None and route_type not in ROUTE_TYPES:
+            raise MetricsValidationError("route_type is invalid")
         if not 1 <= limit <= 200:
             raise MetricsValidationError("limit is invalid")
         if not tenant_id or not _SAFE_TENANT.fullmatch(tenant_id):
