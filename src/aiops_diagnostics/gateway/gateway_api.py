@@ -2671,6 +2671,9 @@ def create_gateway_app(
                 "status": qa["status"],
                 "result": result,
                 "error_code": qa.get("error_code"),
+                "error_message": _qa_user_message(language, qa.get("error_code"))
+                if qa.get("error_code")
+                else None,
             }
         trial_initiator = TrialInitiator.from_headers(
             initiator, initiator_tenant, initiator_type, initiator_name
@@ -5993,7 +5996,7 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
             {
                 "code": qa.get("error_code") or "QA_FAILED",
                 "message": _qa_user_message(language, qa.get("error_code")),
-                "retryable": True,
+                "retryable": qa.get("error_code") != "OPERATOR_MODEL_QUOTA_EXHAUSTED",
             }
             if status_value in {QUESTION.failed, QUESTION.expired}
             else None
@@ -6017,6 +6020,10 @@ def _qa_user_message(language: str, error_code: str | None) -> str:
     believes the wrong thing is broken. Only a verified retrieval failure gets
     the retrieval copy; the rest get the honest, cause-neutral one.
     """
+    from aiops_diagnostics.operator.operator_cpms import NODE_FAILURE_CODES
+
+    if error_code in NODE_FAILURE_CODES.values():
+        return diagnosis_error_message(language, error_code)
     pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
     return pack["unavailable"] if error_code == _KB_FAILURE_CODE else pack["generation_failed"]
 
