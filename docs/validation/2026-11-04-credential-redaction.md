@@ -7,7 +7,7 @@
 
 | 项 | 改前 | 改后 |
 |---|---|---|
-| 自由文本名字 | `\b(password\|secret\|token\|api[_-]?key)\b`，`_` 处不成立 | 整段标识符匹配，`inside_token=` 同答案（ADR-0210） |
+| 自由文本名字 | `\b(password\|secret\|token\|api[_-]?key)\b`，`_` 处不成立 | 整段标识符匹配，`inside_token=` 同答案（ADR-0212） |
 | `signature_key` | 两条判据都漏（只靠 `repr=False`） | 映射键与自由文本都判为凭据 |
 | URL userinfo | `redact_text` 只认 `https?://`；`config` 另有 urlsplit 实现 | `redact_url_credentials()` 一处定义，任何 scheme |
 | 截断 | `[:1000]` × 4、`[:500]` × 3、`...[TRUNCATED]` 两处 | `ERROR_TEXT_LIMIT` / `ERROR_TEXT_SHORT_LIMIT` / `TRUNCATION_MARKER` / `truncate()` |

@@ -12,7 +12,7 @@ URL userinfo 有两套实现。收敛成一处，URL 部分走 `urlsplit`。
   变成一行薄壳。
 - 截断上限与标记收进 `TRUNCATION_MARKER` / `ERROR_TEXT_LIMIT` / `ERROR_TEXT_SHORT_LIMIT`
   / `truncate()`，`gateway_store` / `gateway_runtime` / `dify_workspaces` 引用常量。
-- ADR-0210；新增 `tests/common/test_redaction.py`。
+- ADR-0212；新增 `tests/common/test_redaction.py`。
 
 ## 当前分支或提交
 
