@@ -17,7 +17,7 @@
 | 死代码 | 删 25 个未被引用的 helper（含一个会 `NameError` 的） |
 | 措辞快照 | 10 条 `.env.example` 注释断言收窄为语义锚点 |
 
-净变化：**-377 / +178 行**，用例 4112 → 4100。
+净变化：**-377 / +331 行**，用例 4112 → 4100。
 
 ## 修好的假绿（每条都做过反向验证）
 
@@ -67,3 +67,21 @@
   找短标记、因而会假绿的那一批。
 - 主仓根目录有一个未跟踪的 0 字节文件 `0`，会让 `test_repository_layout.py` 转红。
   它不是本轮产物，未处理。
+
+## 复核轮追加（Devin Review 四条）
+
+四条全部成立，都是同一形状：**断言范围比它声称的大**。逐条收紧并各做一次反向验证。
+
+| 文件 | 漏洞 | 收紧后 | 反向验证 |
+|---|---|---|---|
+| `test_diag_shared_contract.py` | 整份 controller 只找一个 `validateToken(`；删掉任一端点的校验，其余端点仍命中 | 按 `@GetMapping` 切成端点体，**每个端点**都要有 header + 校验 + 401 | 删 `/device` 的校验 → 红 |
+| `test_dify_login_page.py`（redirect） | `"redirect_url"` / `".redirect"` 在页面别处也能命中 | 解析提交请求体，要求其中有 `redirect` 字段 | 删 `redirect: redirect` → 红 |
+| `test_dify_login_page.py`（刷新） | `page.count("refreshCaptcha(")` 把**函数定义**算进 3 次 | 只数调用行（排除 `function ` 行） | 删 `.catch` 分支的刷新 → 红 |
+| `test_dify_registry_route_proof.py` | 任意带「不可区分」的 `.append` 都算数 | 限定接收者是 `failures` | 改成 `print("WARN …不可区分")` → 红 |
+
+同一轮订正里程碑记录的行数：`git diff --numstat` 实测 **+331 / -377**，原记 +178。
+
+> **交付事故记录**：这四处修复最初与一个后来被 `revert` 的提交合在一起，
+> 重建分支时只救回了原提交，修复因此一度没进 `main`。合并后在 `origin/main` 上
+> 逐个 grep 才确认，随后以独立分支补交。教训：改动要各自独立成提交，
+> 与需要撤销的提交混在一起会让撤销把它一起带走。

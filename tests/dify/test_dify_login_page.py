@@ -72,15 +72,24 @@ def test_the_login_page_posts_the_validated_redirect_through(page: str) -> None:
     # `redirect: redirect` 这种写法钉的是实现里的局部命名，改名即红而行为不变。
     assert "window.location.assign(result.data.redirect" in page
     assert ".redirect" in page
+    # 请求体里必须**真的发出**服务端要校验的那个字段（`redirect` 是线协议名，
+    # 不是局部变量名）：删掉它，页面就不再把跳转目标交给 `safe_redirect_path`，
+    # 上面两条断言仍然成立。
+    import re
+
+    body = re.search(r"body:\s*JSON\.stringify\(\{(?P<fields>.*?)\}\)", page, re.DOTALL)
+    assert body is not None, "找不到提交请求体"
+    assert re.search(r"\bredirect\s*:", body.group("fields")), "请求体没有把 redirect 发给服务端校验"
 
 
 def test_the_captcha_can_be_refreshed_by_clicking(page: str) -> None:
     """点图刷新验证码（提交失败后也必须换一张：同一个 randomStr 用第二次会失败）。"""
     assert 'addEventListener("click"' in page and "captcha" in page
     # 失败分支里也要刷新 —— 少了它，重试会一直说"验证码错"。
-    # 判据是「提交失败路径上也调了刷新」，不再数 `refreshCaptcha();` 的字面次数
-    # （加一行注释或换一种调用写法都会让计数漂移）。
-    assert page.count("refreshCaptcha(") >= 3
+    # 判据是**调用点**而不是整个文件的字面次数：把函数定义那一处排除掉，
+    # 否则删掉任一失败分支的刷新，计数仍然达标。
+    calls = [line for line in page.splitlines() if "refreshCaptcha()" in line and "function " not in line]
+    assert len(calls) >= 3, f"刷新验证码的调用点只有 {len(calls)} 处：{calls}"
 
 
 # --------------------------------------------------------------------------- #
