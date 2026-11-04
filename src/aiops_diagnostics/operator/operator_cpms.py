@@ -84,17 +84,19 @@ def _declared(tool: str):
         raise OperatorRefused("OPERATOR_TOOL_DISABLED") from exc
 
 
-def tool_request(tool: str, values: dict[str, str]) -> dict[str, str]:
+def tool_request(tool: str, values: dict[str, str | list[str]]) -> dict[str, str]:
     """按工具名把这一次的请求目标物化出来。**这里是路径与查询串物化的唯一位置。**"""
     return _declared(tool).request(values)
 
 
-def tool_inputs(tool: str, values: dict[str, str]) -> dict[str, str]:
+def tool_inputs(tool: str, values: dict[str, str | list[str]]) -> dict[str, str]:
     """这一次运行的输入。订单号是**输入**，不再是授权载荷的中心。"""
     return _declared(tool).declared_inputs(values)
 
 
-def run_values(tool: str, order_no: str, arguments: dict[str, str] | None = None) -> dict[str, str]:
+def run_values(
+    tool: str, order_no: str, arguments: dict[str, str | list[str]] | None = None
+) -> dict[str, str | list[str]]:
     """把「运行绑定的输入」与「模型提议的参数」合成一次取值。
 
     订单诊断的输入来自运行本身（订单号），站点查询的输入来自模型 —— 两者在这里汇合，
@@ -123,7 +125,7 @@ def allowed_in(tool: str, run) -> bool:
 _ARGUMENT_FORBIDDEN = ("%", "_", "\\", "\r", "\n")
 
 
-def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, str]:
+def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, str | list[str]]:
     """放行模型提议的工具参数。**模型可以提议，能不能用由这里决定。**
 
     两条判据缺一不可：
@@ -137,8 +139,29 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
         arguments = {}
     if not isinstance(arguments, dict) or set(arguments) - set(declared.inputs):
         raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-    cleaned: dict[str, str] = {}
+    cleaned: dict[str, str | list[str]] = {}
     for key, value in arguments.items():
+        if tool == SITE_TOOL and key == "address_terms":
+            if not isinstance(value, list) or len(value) > 4:
+                raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+            terms = []
+            for term in value:
+                if (
+                    not isinstance(term, str)
+                    or not term.strip()
+                    or len(term) > 80
+                    or any(char in term for char in _ARGUMENT_FORBIDDEN)
+                ):
+                    raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+                original = operator_conversation.question_span(term, question)
+                if not original:
+                    raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+                if original not in terms:
+                    terms.append(original)
+            if sum(map(len, terms)) > 80:
+                raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+            cleaned[key] = terms
+            continue
         if not isinstance(value, str):
             raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
         forbidden = tuple(
@@ -161,6 +184,8 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
             ):
                 raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
         cleaned[key] = original
+    if tool == SITE_TOOL and cleaned.get("address") and "address_terms" in cleaned:
+        raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
     return cleaned
 
 
@@ -216,7 +241,14 @@ def _sites_from_evidence(caller, task, answer):
     if evidence is None:
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     arguments = task.arguments.get(SITE_TOOL, {})
-    if answer["name"] != arguments.get("name", "") or (
+    if answer["name"] != arguments.get("name", ""):
+        raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
+    if "address_terms" in arguments:
+        expected = tuple("".join(term.split()).casefold() for term in arguments["address_terms"])
+        observed = tuple("".join(term.split()).casefold() for term in answer["address_terms"])
+        if expected != observed:
+            raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
+    elif (
         "".join(site_keywords(answer).address.split()).casefold()
         != "".join(arguments.get("address", "").split()).casefold()
     ):
@@ -815,18 +847,18 @@ class OperatorCpms:
                 validate_body(detail, task.caller, run.order_no, TOOL_NAMES[0])
                 if detail["data"]["siteId"] != task.order_site_id:
                     raise OperatorRefused("CPMS_SCOPE_MISMATCH")
-            body = (
-                cpms_get(
-                    task.base_url + path + ("?" + query if query else ""),
-                    task.bearer,
-                    task.caller.effective_tenant_id,
-                )
-                if tool != SITE_TOOL or site_scope(task.caller).site_ids != ()
-                else {"code": 0, "data": {"records": [], "total": 0, "current": 1, "size": 50}}
-            )
             if tool == SITE_TOOL:
-                data, response = site_tool_result(
-                    site_scope(task.caller), body, tool, task.arguments.get(tool) or {}
+
+                def reauthorize():
+                    self._current(run_id, tool=tool)
+                    return task.caller.scope_fingerprint
+
+                data, response = read_site_tool(
+                    site_scope(task.caller),
+                    tool,
+                    task.arguments.get(tool) or {},
+                    cpms_site_reader(task.base_url, task.bearer),
+                    reauthorize,
                 )
                 self._current(run_id, tool=tool)
                 task.evidence[tool] = {
@@ -838,6 +870,11 @@ class OperatorCpms:
                 }
                 task.evidence[tool]["response"] = response
                 return task.evidence[tool]["response"]
+            body = cpms_get(
+                task.base_url + path + ("?" + query if query else ""),
+                task.bearer,
+                task.caller.effective_tenant_id,
+            )
             if tool == "cpms_order_tariff":
                 data = order_pricing.read_snapshot(body, task.caller, run.order_no)
                 self._current(run_id, tool=tool)
@@ -1306,12 +1343,39 @@ DETAIL_FIELDS = list(operator_tools.tool("cpms_order_detail").evidence_fields)
 SAMPLE_FIELDS = list(operator_tools.tool("cpms_charging_samples").evidence_fields)
 
 
+def read_site_tool(scope, tool, arguments, read, reauthorize, *, outside_scope="reject"):
+    keywords = tool_site_keywords(arguments)
+    rows, total, _ = read_site_pages(
+        scope,
+        keywords,
+        read,
+        reauthorize,
+        outside_scope=outside_scope,
+        max_pages=1,
+    )
+    body = {
+        "code": 0,
+        "data": {
+            "records": [dict(row, tenantId=scope.tenant_id) for row in rows[:SITE_PAGE_SIZE]],
+            "total": total,
+            "current": 1,
+            "size": SITE_PAGE_SIZE,
+        },
+    }
+    return site_tool_result(scope, body, tool, arguments, outside_scope=outside_scope)
+
+
+def tool_site_keywords(arguments):
+    terms = arguments.get("address_terms")
+    if terms is None:
+        terms = [arguments["address"]] if arguments.get("address") else []
+    return SiteKeywords(arguments.get("name", ""), tuple(terms))
+
+
 def site_tool_result(scope, body, tool, arguments, *, outside_scope="reject"):
     """证据只含声明字段；节点取数仍需分页回显和已核对的租户身份。"""
     rows, total = site_page(scope, body, 1, outside_scope=outside_scope)
-    keywords = SiteKeywords(
-        arguments.get("name", ""), (arguments["address"],) if arguments.get("address") else ()
-    )
+    keywords = tool_site_keywords(arguments)
     rows = [row for row in rows if keywords.matches(row)]
     declared = operator_tools.tool(tool)
     data = {
@@ -2067,8 +2131,8 @@ class SiteScope:
 class SiteKeywords:
     """一次站点查询的关键词。四个字段全空表示**列举**，不是搜索（ADR-0172）。
 
-    ``address_terms`` 可以有多条（对话协议允许至多 4 条），而 CPMS 的 ``address``
-    只有一个：取最长的那个，与放开列举之前的行为逐字一致。
+    地址词在取证前确定，最多4条。CPMS每次只收一个子串，查询器逐词读取再去重。
+    旧address字符串作为一条字面关键词，不在这里猜测地理边界。
     """
 
     name: str = ""
@@ -2209,76 +2273,51 @@ def site_page(scope: SiteScope, body, page: int, *, outside_scope="reject"):
     return rows, data["total"]
 
 
-def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, outside_scope="reject"):
-    """按显式范围与关键词读一次站点。
-
-    三段逻辑在这里合流：范围判定（含逐页复核）、CPMS 读取、结果对齐与计数口径。
-    对话回合、受控工具与只读接口都调这一处 —— 站点事实只能有一个来源，否则
-    「换个入口换一套事实」就只是时间问题。
-
-    ``read(path, tenant)`` 是传输，``reauthorize() -> fingerprint`` 是「读取期间撤权
-    就停止后续交付」那条判据；两者都由调用方提供。空范围不发任何 CPMS 请求。
-
-    ``outside_scope`` 说明「上游返回了一条不在可见范围里的站点」该怎么处理，两个入口
-    的答案不同且都不该被对方沿用：
-
-    * ``reject``（管家）—— 上游请求已经带上站点集合，再出现范围外的行说明上游没有按
-      约定收窄，那是一处**违约**，整份响应不可信。
-    * ``skip``（C 端）—— 上游按租户返回，范围外的行是**预期内**的，本地过滤即可；
-      把它当违约会让「本人只有一个站点」的用户永远查不到自己的站点。
-
-    租户不符在两种模式下都是硬拒绝：那不是范围宽窄问题，是数据归属错误。
-    """
-    rows: list[dict[str, str]] = []
-    seen: set[str] = set()
+def read_site_pages(scope, keywords, read, reauthorize, *, outside_scope="reject", max_pages=SITE_MAX_PAGES):
+    """所有入口共用取数与逐页授权；节点保持每词一页，直接查询最多每词四页。"""
+    rows = []
+    seen = set()
+    totals = []
     limited = False
-    total = 0
+    terms = keywords.address_queries() or (None,)
+    if len(terms) > 4:
+        raise OperatorRefused("OPERATOR_INVALID_SEARCH")
     if scope.site_ids != ():
-        # **每个地址词各查一轮**（2026-11-04）。上游的 `address` 是子串匹配，
-        # 「广州天河」整串一条都匹配不到（实测 total: 0），而「天河」能命中
-        # HuaJing Station。用户说的「广州天河」是上级地名叠下级地名，不是一个字面串。
-        #
-        # 逐词查询会多打几次 CPMS，所以这里有两道收口：
-        #   1. 词数上限（`SITE_MAX_TERMS`）—— 协议本来最多允许 4 个；
-        #   2. 一旦已经凑满展示上限就停止后续词，不再白打请求。
-        # 合并按 `id` 去重：同一个站点可能同时命中两个词。
-        for term in keywords.address_queries() or (None,):
-            if len(rows) >= SITE_MAX_SHOWN:
-                limited = True
-                break
-            for page in range(1, SITE_MAX_PAGES + 1):
+        for term in terms:
+            total = 0
+            for page in range(1, max_pages + 1):
                 if reauthorize() != scope.fingerprint:
                     raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
                 body = read(SITE_PATH + "?" + urlencode(keywords.params(page, address=term)), scope.tenant_id)
-                page_rows, page_total = site_page(scope, body, page, outside_scope=outside_scope)
-                for selected in page_rows:
-                    if selected["id"] not in seen and keywords.matches(selected):
-                        seen.add(selected["id"])
-                        rows.append(selected)
-                data = body["data"]
-                more = page * SITE_PAGE_SIZE < data["total"]
-                # 多词查询下 `total` 是**各词计数之和的上界**，不是"一共有多少个"——
-                # 同一个站会被两个词各数一次。只在单词查询时才敢把它当总数。
-                total = max(total, data["total"])
-                if len(rows) >= SITE_MAX_SHOWN or not more or not data["records"]:
-                    limited = limited or more or len(rows) > SITE_MAX_SHOWN
+                page_rows, total = site_page(scope, body, page, outside_scope=outside_scope)
+                for row in page_rows:
+                    if row["id"] not in seen and keywords.matches(row):
+                        seen.add(row["id"])
+                        rows.append(row)
+                more = page * SITE_PAGE_SIZE < total
+                if not more or not body["data"]["records"]:
+                    limited = limited or more
                     break
-                limited = True
+                if page == max_pages:
+                    limited = True
+            totals.append(total)
     if reauthorize() != scope.fingerprint:
         raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+    # 多查询计数只在全读完时等于去重结果；否则保留上界并标记未穷尽。
+    total = sum(totals) if limited else len(rows)
+    if len(terms) == 1:
+        total = max(totals, default=0)
+    return rows, total, limited
+
+
+def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, outside_scope="reject"):
+    rows, total, limited = read_site_pages(scope, keywords, read, reauthorize, outside_scope=outside_scope)
     return {
         "source": "cpms.sitePage",
         "observed_at": datetime.now(UTC).isoformat(),
         "sites": rows[:SITE_MAX_SHOWN],
-        "limited": limited,
+        "limited": limited or len(rows) > SITE_MAX_SHOWN,
         "empty_scope": scope.site_ids == (),
-        # 列举问法要回答"我有多少个"，只给前 10 条等于没回答。``total`` 是 CPMS 对
-        # 这次查询自己的计数；``scope_limited`` 说明它是否还经过站点集合过滤 ——
-        # 员工账号的 total 是租户口径，不能直接当成"你有多少个"。
-        #
-        # **多词查询时不报 total**：每个词各数一次，同一个站会被数两遍，那个和不是
-        # "一共有多少个"。宁可说"本次读取到 N 个"（渲染层已有这条路径），也不报一个
-        # 加起来偏大的数 —— 数字段是用户会照着对账单的。
-        "total": total if len(keywords.address_queries()) <= 1 else 0,
+        "total": total,
         "scope_limited": scope.site_ids is not None,
     }

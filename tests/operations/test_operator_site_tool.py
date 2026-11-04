@@ -22,10 +22,12 @@ def test_declared_parameters_land_in_the_manifest_schema():
     运行绑定的输入（订单号）不出现在这里：模型不能选它，写进去等于给它一个入口。
     """
     declared = operator_tools.tool(TOOL)
-    assert declared.inputs == ("name", "address")
-    assert declared.model_inputs == ("name", "address")
+    assert declared.inputs == ("name", "address", "address_terms")
+    assert declared.model_inputs == ("name", "address_terms")
     schema = json.loads(declared.input_schema())
-    assert set(schema["properties"]) == {"name", "address"}
+    assert set(schema["properties"]) == {"name", "address_terms"}
+    assert schema["properties"]["address_terms"]["maxItems"] == 4
+    assert schema["required"] == ["address_terms"]
     assert schema["additionalProperties"] is False
     # 订单工具仍然是空参数集合——这是既有契约，不能因为新工具而变。
     assert json.loads(operator_tools.tool("cpms_order_detail").input_schema()) == {

@@ -33,7 +33,7 @@ public final class OperatorTools {
     /** 一个工具的声明视图。Java 只关心装配需要的部分。 */
     record Entry(String name, String kind, String description, String source,
                  List<String> evidenceFields, List<String> appliesTo,
-                 List<String> modelInputs, JsonNode evidenceShape,
+                 List<String> modelInputs, JsonNode evidenceShape, JsonNode modelInputSchema,
                  Map<String, com.fasterxml.jackson.databind.JsonNode> flags) {
     }
 
@@ -116,6 +116,7 @@ public final class OperatorTools {
     public static String inputSchema(String name) {
         Entry entry = entries().get(name);
         if (entry == null) throw new ExecToolViolation("声明里没有这个工具: " + name);
+        if (entry.modelInputSchema().isObject()) return entry.modelInputSchema().toString();
         StringBuilder properties = new StringBuilder();
         for (String input : entry.modelInputs()) {
             if (properties.length() > 0) properties.append(',');
@@ -262,7 +263,7 @@ public final class OperatorTools {
             }
             if (result.put(name, new Entry(name, kind, description, source,
                     List.copyOf(fields), List.copyOf(contexts), List.copyOf(modelInputs),
-                    tool.path("evidence_shape"), Map.copyOf(flags))) != null) {
+                    tool.path("evidence_shape"), tool.path("model_input_schema"), Map.copyOf(flags))) != null) {
                 throw new ExecToolViolation("重复的工具: " + name);
             }
         }

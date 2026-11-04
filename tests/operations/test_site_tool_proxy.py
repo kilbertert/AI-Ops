@@ -31,6 +31,8 @@ def test_site_tool_proxy_preserves_cpms_page_and_accepts_evidence(operator, monk
         f["state"]["site"] = "SITE-X"
     elif mode == "wrong-tenant":
         f["state"]["tenant"] = "TENANT-X"
+    if mode.startswith("wrong-"):
+        f["state"]["site_ignore_filter"] = True
     replies = []
     failures = []
 

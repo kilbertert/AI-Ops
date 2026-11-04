@@ -68,8 +68,9 @@ class OperatorTool:
     flags: dict[str, object]
     evidence_fields: tuple[str, ...]
     evidence_shape: dict | None = None
+    model_input_schema: dict | None = None
 
-    def request(self, values: dict[str, str]) -> dict[str, str]:
+    def request(self, values: dict[str, str | list[str]]) -> dict[str, str]:
         """这一次要发的请求。**路径与查询串都在这里物化** —— 节点只执行它。
 
         查询参数表里每一项要么是常量（``value``），要么来自输入（``from``）；输入为空
@@ -89,6 +90,8 @@ class OperatorTool:
                 continue
             provided = values.get(raw, "")
             if provided:
+                if isinstance(provided, list):
+                    provided = json.dumps(provided, ensure_ascii=False, separators=(",", ":"))
                 parts.append(f"{name}={quote(provided, safe='')}")
         return {"method": self.method, "path": path, "query": "&".join(parts)}
 
@@ -98,14 +101,22 @@ class OperatorTool:
         运行绑定的输入（订单号）不在 schema 里：模型不能选它，写进去等于给它一个入口。
         排序固定，因为清单身份是原始字节的 sha256。
         """
+        if self.model_input_schema is not None:
+            return json.dumps(self.model_input_schema, ensure_ascii=False, separators=(",", ":"))
         properties = ",".join(f'"{name}":{{"type":"string","maxLength":80}}' for name in self.model_inputs)
         return (
             '{"type":"object","properties":{' + properties + '},"required":[],"additionalProperties":false}'
         )
 
-    def declared_inputs(self, values: dict[str, str]) -> dict[str, str]:
+    def declared_inputs(self, values: dict[str, str | list[str]]) -> dict[str, str | list[str]]:
         """这一次运行的输入。只保留声明里列过的那些，不多带。"""
-        return {name: str(values.get(name, "")) for name in self.inputs}
+        properties = (self.model_input_schema or {}).get("properties", {})
+        return {
+            name: values.get(name, [])
+            if properties.get(name, {}).get("type") == "array"
+            else str(values.get(name, ""))
+            for name in self.inputs
+        }
 
 
 def _require(condition: bool, message: str) -> None:
@@ -239,6 +250,13 @@ def _tool(raw: object, seen: set[str]) -> OperatorTool:
         set(model_inputs).issubset(set(inputs)),
         f"{name}: model_inputs must be a subset of inputs",
     )
+    schema = raw.get("model_input_schema")
+    if schema is not None:
+        _require(isinstance(schema, dict) and schema.get("type") == "object", "input schema must be object")
+        _require(
+            set(schema.get("properties", {})) == set(model_inputs), "schema inputs must match declaration"
+        )
+        _require(schema.get("additionalProperties") is False, "input schema must refuse extra properties")
     applies_to = _list(raw.get("applies_to"), f"{name}: applies_to")
     _require(bool(applies_to), f"{name}: applies_to must list the runs this tool may serve")
     for item in applies_to:
@@ -260,6 +278,7 @@ def _tool(raw: object, seen: set[str]) -> OperatorTool:
         flags=dict(flags),
         evidence_fields=tuple(fields),
         evidence_shape=raw.get("evidence_shape"),
+        model_input_schema=schema,
     )
 
 
