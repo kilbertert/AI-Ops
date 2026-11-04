@@ -108,7 +108,9 @@ def _unavailable(failure):
     return ModelRequestError(reason, failure.status)
 
 
-def structured_request(*, provider, api_key, messages, name, schema, max_output_tokens=1024):
+def structured_request(
+    *, provider, api_key, messages, name, schema, max_output_tokens=1024, reasoning_effort=None
+):
     schema = {"name": name, "schema": schema, "strict": True}
     if provider.wire_api == "responses":
         path = "/responses"
@@ -131,6 +133,13 @@ def structured_request(*, provider, api_key, messages, name, schema, max_output_
         }
     else:
         raise ValueError("unsupported model transport")
+    if reasoning_effort is not None:
+        if reasoning_effort not in {"none", "minimal", "low", "medium", "high"}:
+            raise ValueError("unsupported reasoning effort")
+        if provider.wire_api == "responses":
+            payload["reasoning"] = {"effort": reasoning_effort}
+        else:
+            payload["reasoning_effort"] = reasoning_effort
     body = request_json(
         RequestSpec(
             url=join_url(provider.base_url, path),

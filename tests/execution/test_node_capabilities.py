@@ -19,7 +19,12 @@ def record_ready(database, config_path):
     config = AgentRunConfig.load(Path(config_path))
     node = next(n for n in config.node_token_hashes.values() if n.node_id == config.expected_node_id)
     payload = {
-        "schemas": ["m3-exec-config/1", "operator-exec-config/1", "operator-conversation/1"],
+        "schemas": [
+            "m3-exec-config/1",
+            "operator-exec-config/1",
+            "operator-conversation/1",
+            "operator-agent/1",
+        ],
         "tool_contract": "request-target/2",
         "tools_sha256": hashlib.sha256(
             files("aiops_diagnostics.operator").joinpath("operator_tools.json").read_bytes()

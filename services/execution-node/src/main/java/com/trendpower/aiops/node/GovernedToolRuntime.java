@@ -135,9 +135,19 @@ class GovernedToolRuntime extends ToolRuntime {
      * M2 固定无历史模式。清单声明的是 {@code history_policy="none"}，那么运行输入就必须真的是
      * 无历史、无媒体、无记忆 —— 否则清单说的和实际跑的不是同一件事。
      */
-    private static void requireFixedInputMode(ChatDispatchRequest request) {
+    private void requireFixedInputMode(ChatDispatchRequest request) {
         List<ChatDispatchRequest.HistoryMessage> history = request.getHistoryMessages();
-        if (history != null && !history.isEmpty()) {
+        if ("gateway-conversation/1".equals(modelFactory.manifest().historyPolicy())) {
+            var expected = modelFactory.messages();
+            if (expected == null || history == null || history.size() != expected.size() - 1
+                    || !expected.getLast().getText().equals(request.getUserMessage()))
+                throw new ExecConfigViolation("INPUT_SHAPE", "Gateway会话不匹配");
+            for (int i = 0; i < history.size(); i++) {
+                if (!history.get(i).getRole().equals(i % 2 == 0 ? "user" : "assistant")
+                        || !history.get(i).getContent().equals(expected.get(i).getText()))
+                    throw new ExecConfigViolation("INPUT_SHAPE", "Gateway历史被修改");
+            }
+        } else if (history != null && !history.isEmpty()) {
             throw new ExecConfigViolation("INPUT_SHAPE",
                     "固定无历史模式下不接受历史消息，实际 " + history.size() + " 条");
         }

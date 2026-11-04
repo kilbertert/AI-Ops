@@ -41,22 +41,6 @@ def test_other_numbers_are_not_orders(question):
     assert not names_order(question)
 
 
-def test_both_entries_ask_this_one_predicate():
-    """正式入口与预览桥各写过一份判据，于是同一句话走试用能识别、走正式入口不能。
-
-    判据与候选集都只有一份才算修好：两处的源码里都不该再有自己那套订单正则。
-    """
-    import inspect
-
-    from aiops_diagnostics.dify import dify_console_publish
-    from aiops_diagnostics.gateway import gateway_api
-
-    assert "order_candidates" in inspect.getsource(gateway_api)
-    assert "order_candidates" in inspect.getsource(dify_console_publish._native_order)
-    # 预览桥用的是同一份：订单句子但没有单号时返回空串，由下游澄清。
-    assert dify_console_publish._native_order("我上一个订单是什么情况") == ""
-
-
 def test_digit_runs_is_the_candidate_set_both_the_gate_and_the_extractor_use():
     """门槛说「有长数字段」时，提取必须取**那一段**，不是第一个含数字的 token。
 

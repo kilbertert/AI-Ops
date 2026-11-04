@@ -21,7 +21,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from aiops_diagnostics import __version__
-from aiops_diagnostics.common import order_reference
 from aiops_diagnostics.common.async_job_lifecycle import DIAGNOSIS, QUESTION
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.http_auth import (
@@ -2550,8 +2549,6 @@ def create_gateway_app(
                 )
                 conversation = _operator_conversation(context, caller, binding, previous, trial=True)
                 order = payload.order_no
-                if not order and _operator_order_followup(payload.question):
-                    order = conversation.get("active_order_no") or ""
                 turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
                 try:
                     qa = context.runtime.start_operator_cpms(
@@ -2940,23 +2937,8 @@ def create_gateway_app(
                 # 这里曾经自己从左到右抓「第一个含数字的 token」，两个真缺陷：
                 # ① `订单 A2116…` 只取数字段，去查**另一张单**；② 句子里点两张不同的单时
                 # 静默只取一张（2026-11-02 交接）。候选集与判据现在都只有一个来源。
-                candidates = order_reference.order_candidates(payload.question)
-                if len(candidates) > 1 or (
-                    payload.order_no and candidates and candidates != [payload.order_no]
-                ):
-                    # 说得不清楚就澄清，不擅自选一张 —— 挑错了用户看不出来。
-                    return _clarification(
-                        context,
-                        caller,
-                        decision,
-                        code=CLARIFY_ORDER_REQUIRED,
-                        question=payload.question,
-                        language=language,
-                    )
                 conversation = _operator_conversation(context, caller, binding, conversation, trial=False)
-                order = payload.order_no or (candidates[0] if candidates else "")
-                if not order and _operator_order_followup(payload.question):
-                    order = conversation.get("active_order_no") or ""
+                order = payload.order_no or ""
                 target = next(
                     (
                         r
@@ -3748,6 +3730,7 @@ def create_gateway_app(
         if existing is not None and existing.operation in {
             "operator_order_diagnosis",
             "operator_conversation",
+            "operator_agent",
         }:
             raise StandardAPIError(403, "AGENT_RUN_OPERATION_MISMATCH", "agent run refused")
         # APP-RUNTIME-01：回调该用哪份配置，由**这条 run 自己**决定（聊天入口签发的用聊天
@@ -3990,7 +3973,11 @@ def create_gateway_app(
         """已认证目标节点取得本次冻结清单；不交订单数据或供应商凭据。"""
         response.headers["Cache-Control"] = "no-store"
         run = context.agent_run_store.get(run_id)
-        if run is not None and run.operation in {"operator_order_diagnosis", "operator_conversation"}:
+        if run is not None and run.operation in {
+            "operator_order_diagnosis",
+            "operator_conversation",
+            "operator_agent",
+        }:
             return context.operator_cpms.publication(run_id, (authorization or "").removeprefix("Bearer "))
         if run is None or not run.execution_manifest:
             raise StandardAPIError(404, "NODE_PUBLICATION_NOT_FOUND", "node publication unavailable")
@@ -4296,6 +4283,7 @@ def create_gateway_app(
         if existing is not None and existing.operation in {
             "operator_order_diagnosis",
             "operator_conversation",
+            "operator_agent",
         }:
             if payload.status == "completed":
                 raise StandardAPIError(403, "AGENT_RUN_OPERATION_MISMATCH", "agent run refused")
@@ -6030,6 +6018,12 @@ def _qa_user_message(language: str, error_code: str | None) -> str:
     """
     from aiops_diagnostics.operator.operator_cpms import NODE_FAILURE_CODES
 
+    if error_code == "OPERATOR_HISTORY_LIMIT":
+        return (
+            "这段对话的证据引用已达到上限，请新建对话继续。"
+            if language.startswith("zh")
+            else "This conversation reached its evidence limit. Start a new conversation to continue."
+        )
     if error_code in NODE_FAILURE_CODES.values():
         return diagnosis_error_message(language, error_code)
     pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
@@ -6083,37 +6077,6 @@ def _operator_conversation(context, caller, binding, conversation, *, trial):
     if conversation.get("operator_binding") != key:
         raise StandardAPIError(404, "CONVERSATION_NOT_FOUND", "conversation not found")
     return conversation
-
-
-def _operator_order_followup(question):
-    """只继承已确认订单的话题；找站、规则方案和通用解释不能被旧订单吞掉。"""
-    text = question.casefold()
-    if re.search(
-        r"站点|充电站|附近|方案|最便宜|明天|后天|什么意思|是什么|"
-        r"station|nearby|cheapest|plan|tomorrow|what does",
-        text,
-    ):
-        return False
-    if re.search(
-        r"这笔|这单|这张订单|该单|刚才.*(?:单|订单)|那笔|那张订单|this order|that order|previous order", text
-    ):
-        return True
-    # 核验结论的追问可省略“这单”；通用规则咨询仍不选旧订单。
-    if (
-        re.match(r"(?:那|那么|它)", text)
-        and re.search(r"折扣|优惠|税额|增值税|实付|充电费用", text)
-        and re.search(r"通过|不一致|待验证|缺证", text)
-        and not re.search(r"一般|通常|通用|活动|宣传", text)
-    ):
-        return True
-    return bool(
-        re.fullmatch(
-            r"(?:那|那么|它的?|what about |and )(?:这笔单的?|这单的?)?"
-            r"(?:电压|电流|功率|电费|服务费|电量|时长|状态|停止原因|voltage|current|power|fee|energy)"
-            r"(?:呢|怎么样|如何|是多少|多少)?[？?。.!！ ]*",
-            text,
-        )
-    )
 
 
 def _resolve_conversation(
@@ -6951,6 +6914,7 @@ def _is_consumer_run(context: Any, run_id: str) -> bool:
     return run is not None and run.operation not in {
         "operator_order_diagnosis",
         "operator_conversation",
+        "operator_agent",
     }
 
 

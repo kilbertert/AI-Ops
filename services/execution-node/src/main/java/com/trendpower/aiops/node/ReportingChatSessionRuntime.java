@@ -87,6 +87,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         com.trendpower.aiops.node.exec.ExecManifest previousManifest = null;
         String manifestId = null;
         boolean publicationInstalled = false;
+        var previousMessages = modelFactory.messages();
         try {
             if (managedPublication) {
                 JsonNode publication = gateway.post(
@@ -98,6 +99,37 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                         publication.path("manifest").asText(), publication.path("sha256").asText());
                 if (frozen.systemMessages().size() != 1) {
                     throw new IllegalStateException("node SOP requires one system message");
+                }
+                if ("gateway-conversation/1".equals(frozen.historyPolicy())) {
+                    var dispatch = request.getDispatchRequest();
+                    if ((dispatch.getHistoryMessages() != null && !dispatch.getHistoryMessages().isEmpty())
+                            || (dispatch.getMemoryContext() != null && !dispatch.getMemoryContext().isBlank()))
+                        throw new IllegalStateException("platform history is not accepted");
+                    var rows = publication.path("messages");
+                    if (!rows.isArray() || rows.isEmpty() || rows.size() > 13 || rows.toString().length() > 60000)
+                        throw new IllegalStateException("invalid gateway conversation");
+                    var messages = new java.util.ArrayList<org.springframework.ai.chat.messages.Message>();
+                    int index = 0;
+                    for (var row : rows) {
+                        String role = row.path("role").asText();
+                        String content = row.path("content").asText();
+                        if (!role.equals(index % 2 == 0 ? "user" : "assistant") || content.length() > 14000)
+                            throw new IllegalStateException("invalid gateway conversation message");
+                        messages.add(role.equals("user") ? new org.springframework.ai.chat.messages.UserMessage(content)
+                                : new org.springframework.ai.chat.messages.AssistantMessage(content));
+                        index++;
+                    }
+                    if (messages.size() % 2 != 1) throw new IllegalStateException("missing current user message");
+                    var history = new java.util.ArrayList<com.aizuda.snail.ai.common.dto.agent.ChatDispatchRequest.HistoryMessage>();
+                    for (int i = 0; i < messages.size() - 1; i++) {
+                        var message = new com.aizuda.snail.ai.common.dto.agent.ChatDispatchRequest.HistoryMessage();
+                        message.setRole(i % 2 == 0 ? "user" : "assistant");
+                        message.setContent(messages.get(i).getText());
+                        history.add(message);
+                    }
+                    dispatch.setHistoryMessages(history);
+                    dispatch.setUserMessage(messages.getLast().getText());
+                    modelFactory.useMessages(messages);
                 }
                 previousManifest = modelFactory.usePublication(frozen);
                 publicationInstalled = true;
@@ -122,6 +154,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         } finally {
             // 只恢复线程上下文：super.execute 在订阅后立即返回，流还在跑。
             if (publicationInstalled) modelFactory.usePublication(previousManifest);
+            modelFactory.useMessages(previousMessages);
             RunExecution.exit(previous);
         }
     }

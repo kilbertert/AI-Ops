@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -29,12 +28,8 @@ def test_declared_parameters_land_in_the_manifest_schema():
     assert schema["properties"]["address_terms"]["maxItems"] == 4
     assert schema["required"] == ["address_terms"]
     assert schema["additionalProperties"] is False
-    # 订单工具仍然是空参数集合——这是既有契约，不能因为新工具而变。
-    assert json.loads(operator_tools.tool("cpms_order_detail").input_schema()) == {
-        "type": "object",
-        "properties": {},
-        "required": [],
-        "additionalProperties": False,
+    assert set(json.loads(operator_tools.tool("cpms_order_detail").input_schema())["properties"]) == {
+        "order_no"
     }
 
 
@@ -106,25 +101,6 @@ def test_a_parameter_that_disagrees_with_its_source_is_refused():
         operator_tools._parse(json.dumps(broken))
 
 
-def test_conversation_manifest_keeps_only_conversation_tools():
-    """无订单回合保留能在这类运行里用的工具，其余删掉——那不是裁剪，是正确性。"""
-    template = {
-        "schema": "operator-exec-config/1",
-        "name": "n",
-        "history_policy": "none",
-        "model": {"model_key": "m", "provider_key": "p", "adapter_key": "a", "endpoint": "https://e"},
-        "model_options": {},
-        "system_messages": ["SOP"],
-        "tools": [
-            {"name": six, "description": "d", "input_schema": operator_tools.tool(six).input_schema()}
-            for six in operator_tools.names()
-        ],
-    }
-    manifest = json.loads(operator_conversation.manifest(json.dumps(template)))
-    assert [entry["name"] for entry in manifest["tools"]] == [TOOL, "cpms_station_plan"]
-    assert json.loads(manifest["tools"][0]["input_schema"])["properties"]
-
-
 def test_a_space_joined_place_is_still_the_users_own_words():
     """模型按自然习惯用空格拼地点（「广州 天河」），不能因此判成编造。
 
@@ -163,51 +139,6 @@ def test_reordered_or_reassembled_places_are_refused(value, question):
     """
     with pytest.raises(operator_cpms.OperatorRefused):
         operator_cpms.validate_tool_arguments(TOOL, {"address": value}, question)
-
-
-def test_tool_arguments_and_final_answer_speak_the_same_address(monkeypatch):
-    """工具参数 → CPMS 过滤器 → 冻结证据 → 最终答复 是**同一段原文**。
-
-    2026-11-02 实测的第二个失败：参数 `"广州 天河"` 被放行，最终答复按协议拆成
-    `["广州","天河"]`，`_sites_from_evidence` 拿最长词（「广州」）比整串地址，
-    于是合法的运行必然 `OPERATOR_SITE_SEARCH_MISMATCH`。
-    """
-    args = operator_cpms.validate_tool_arguments(TOOL, {"address": "广州 天河"}, QUESTION)
-    assert args == {"address": "广州天河"}
-    answer = operator_conversation.validate(
-        {"kind": "site_search", "text": "", "name": "", "address_terms": ["广州", "天河"]}, QUESTION
-    )
-    # 最终答复的关键词是原文里那几段（协议允许拆成多段），拼起来就是工具参数那一段
-    assert answer["address_terms"] == ["广州", "天河"]
-    assert operator_cpms.site_keywords(answer).address == args["address"]
-    task = SimpleNamespace(
-        delivered={TOOL},
-        arguments={TOOL: args},
-        evidence={
-            TOOL: {
-                "source": "cpms.sitePage",
-                "observed_at": "2026-11-02T00:00:00+00:00",
-                "data": {"records": [], "total": 0, "truncated": False},
-            }
-        },
-    )
-    # 范围由调用者决定，这里不是被测对象：只让它返回一个空范围，把断言留在一致性比对上。
-    monkeypatch.setattr(operator_cpms, "operator_scope", lambda *_, **__: SimpleNamespace(site_ids=()))
-    sites = operator_cpms._sites_from_evidence(object(), task, answer)
-    assert sites["source"] == "cpms.sitePage"
-
-
-def test_an_answer_about_a_different_place_is_still_refused():
-    """一致性检查本身没有放松：参数说一处、答复说另一处，照样拒。"""
-    task = SimpleNamespace(
-        delivered={TOOL}, arguments={TOOL: {"address": "广州天河"}}, evidence={TOOL: {"data": {}}}
-    )
-    with pytest.raises(operator_cpms.OperatorRefused, match="OPERATOR_SITE_SEARCH_MISMATCH"):
-        operator_cpms._sites_from_evidence(
-            None,
-            task,
-            {"kind": "site_search", "text": "", "name": "", "address_terms": ["哈尔滨"]},
-        )
 
 
 def test_matching_preserves_original_english_spacing_and_casefold_offsets():

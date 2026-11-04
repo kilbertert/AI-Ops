@@ -1,6 +1,8 @@
 # 管家 CPMS 工具实施
 
-更新：2026-11-04。节点、原管家H5与Dify原生预览已有真实链路证据，
+更新：2026-11-05。新合同及配套迁移以本页末尾“统一自然语言与SOP模型循环”为准；
+以下首片和JSON合同描述保留历史取舍，不再指导新应用发布。
+节点、原管家H5与Dify原生预览已有真实链路证据，
 见[退役验收](../../validation/2026-10-29-runtime-retirement-live.md)及
 [站点清单验收](../../validation/2026-11-03-site-delivery-production-receipt.md)。
 首页新增入口已撤回，原聊天页仍可访问；不是“整页未部署”或“路由仍撤回”。
@@ -18,8 +20,8 @@ JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、�
 见[场景](conversation.feature)、[QA与限制](conversation-qa.md)。
 流程与验收分别见 [acceptance.feature](acceptance.feature) 和 [qa-plan.md](qa-plan.md)。
 
-运营只维护业务SOP和工具选择。管家发布/试用自动追加输出要求，Java节点每轮启用JSON对象
-模式，并只把最后完整模型轮交给Gateway校验。页面显示可读报告，不要求运营手写JSON。
+运营只维护业务SOP和工具选择。新管家发布/试用自动追加工具与证据要求，Java节点以自然语言
+交付最后完整模型轮；结构化协议仅用于工具交互。旧JSON协议只保留历史与回退解释。
 遇到`OPERATOR_INVALID_ANSWER`时核对节点制品、输出模式和完成回合边界，不能通过放宽
 证据校验止错。详见[输出契约QA](output-contract-qa.md)与[决策](../../adr/0163-operator-output-is-a-runtime-contract.md)。
 
@@ -32,7 +34,7 @@ JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、�
 
 ## 首片 API 契约
 
-**报告必须回答用户问的那一点。** 答案的 `direct_answer` 为必填非空，且渲染在最前；
+**报告必须回答用户问的那一点。** 旧答案的 `direct_answer` 曾为必填非空，且渲染在最前；
 没有它，任何提问都只能被概述一遍 —— 2026-10-29 反馈的「两个问题同一份报告」就是
 这个形状（[ADR-0171](../../adr/0171-operator-report-answers-the-question-asked.md)）。
 订单详情取证已覆盖金额、退款、额定功率与接口类型，问电费/功率不再只能答「未提供」。
@@ -126,3 +128,16 @@ aiops-admin --config <Gateway配置> ensure-node-provider \
 Dify1.17.1更新载荷需要original_provider、credentials和icon；现役命令保留图标/标签/说明，
 继续auth_type=none，收到success才记成功。先备份原提供方schema与应用model_config，
 再正常保存应用工具选择、预览并发布；不删建提供方或手改Dify数据库。
+
+## 统一自然语言与SOP模型循环
+
+新合同`operator-agent/1`把语义和工具顺序交给模型；Gateway逐次校验对象和权限。
+订单工具可接收用户提供或会话确认的order_no；每run只绑定一单，不接受模型提供身份或URL。
+`cpms_order_amount_check`/`cpms_order_process_stats`读取本轮已有证据计算并将结果回交模型，
+不执行后台重算。模型直接交付自然语言，按工具结果写必要证据和算式；不要求JSON或字段路径占位符。
+
+运营将[只读SOP种子](../../../src/aiops_diagnostics/operator/operator_sop.md)保存到应用编辑区，
+可以编辑业务顺序；发布快照包含实际SOP与所选工具，后续修改必须重新预览/发布。
+仓库种子文件不会热改线上提示词，不默认把旧根SOP的SQL/Redis操作变成可执行能力。
+原H5与Dify预览共享同一个模型执行合同及受控历史，读到旧答案前重新验证其对象可见性。
+详见[验收](../../acceptance/operator-agent-loop-qa-plan.md)及[节点迁移](../../../deploy/node-runtime/README.md#迁移到管家统一模型循环operator-agent1)。

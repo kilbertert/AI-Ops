@@ -2002,7 +2002,7 @@ def _native_preview(handler):
         or len(tools) > 32
     ):
         raise _Rejected(400, "预览问题、提示词或工具配置无效")
-    order = _native_order(query)
+    order = ""  # 订单由模型提议，工具层核对来源和当前权限。
     http_status, answer = _native_gateway(
         handler,
         session,

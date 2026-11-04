@@ -42,7 +42,7 @@ def snapshot():
 
 def test_historical_snapshot_is_a_declared_order_only_tool():
     tool = operator_tools.tool("cpms_order_tariff")
-    assert tool.applies_to == ("order",) and tool.model_inputs == ()
+    assert tool.applies_to == ("order",) and tool.model_inputs == ("order_no",)
     assert tool.request({"order_no": "ORDER-1"})["path"] == "/chFeeTemplateRecord/ORDER-1"
 
 
@@ -96,7 +96,6 @@ def test_historical_arithmetic_does_not_call_derived_energy_independent():
 
 
 def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
-    import json
     from datetime import UTC, datetime
 
     from aiops_diagnostics.operator import operator_cpms
@@ -167,14 +166,17 @@ def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
                     json={"authorization_id": grant["authorization_id"], "evidence": evidence},
                 )
                 assert recorded.status_code == 200, recorded.text
-            from operations.test_operator_reply_facts import answer
+            from operations.test_operator_agent import call_tool
 
-            value = answer("本次核对。\n{{fact:order_facts}}")
-            value["evidence_tools"] = ["cpms_order_detail", "cpms_order_tariff", "cpms_order_billing"]
+            analysis, head, _ = call_tool(f, run_id, "cpms_order_amount_check")
+            value = {
+                "reply": ("历史规则：" + "\n".join(analysis["data"]["tariff_notes"])),
+                "evidence_tools": ["cpms_order_amount_check"],
+            }
             done = client.post(
                 f"/v1/internal/operator-runs/{run_id}/completions",
                 headers=head,
-                json={"status": "completed", "answer": json.dumps(value)},
+                json={"status": "completed", "answer": value["reply"]},
             )
             assert done.status_code == 200, done.text
 
@@ -182,9 +184,11 @@ def test_live_gateway_tariff_lifecycle(tmp_path, monkeypatch):
         created = request(f["client"])
         final = terminal(f, created.json()["qa_id"])
         assert final.json()["status"] == "completed", final.text
-        assert "历史计费核对" in final.text and "1.20" in final.text
-        assert "订单金额验证" in final.text and "规则1 服务费折扣优惠" in final.text
-        assert "同轮订单与账务记录不一致" in final.text
+        assert "历史规则" in final.text and "1.20" in final.text
+        run = f["ctx"].agent_run_store.by_qa(created.json()["qa_id"])
+        checks = run.snapshot["evidence"]["cpms_order_amount_check"]["data"]["checks"]
+        assert any(c["label"] == "规则1 服务费折扣优惠" for c in checks)
+        assert any("同轮订单与账务记录不一致" in str(c) for c in checks)
         assert len(reads) == 1
 
 

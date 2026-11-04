@@ -37,7 +37,7 @@ public final class ExecManifest {
 
     private static final String SUPPORTED_SCHEMA = "m3-exec-config/1";
     public static final List<String> SUPPORTED_SCHEMAS = List.of(
-            SUPPORTED_SCHEMA, "operator-exec-config/1", "operator-conversation/1");
+            SUPPORTED_SCHEMA, "operator-exec-config/1", "operator-conversation/1", "operator-agent/1");
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final String id;
@@ -211,14 +211,14 @@ public final class ExecManifest {
 
     private static ExecManifest parse(JsonNode root, String id, Path real) {
         String schema = text(root, "schema");
-        boolean conversation = "operator-conversation/1".equals(schema);
+        boolean conversation = "operator-conversation/1".equals(schema) || "operator-agent/1".equals(schema);
         if (!SUPPORTED_SCHEMAS.contains(schema)) {
             throw new ExecConfigViolation("MANIFEST",
                     "不支持的 schema（" + schema + "），只接受 " + SUPPORTED_SCHEMA);
         }
         String history = text(root, "history_policy");
         // M2 是固定无历史模式。取值不被支持时**拒绝清单**，而不是忽略这个字段继续跑。
-        if (!"none".equals(history)) {
+        if (!("operator-agent/1".equals(schema) ? "gateway-conversation/1" : "none").equals(history)) {
             throw new ExecConfigViolation("MANIFEST", "不支持的 history_policy：" + history);
         }
         JsonNode model = required(root, "model");

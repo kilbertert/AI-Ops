@@ -219,7 +219,7 @@ def test_original_preview_delivers_sse_without_credentials(bridge, upstream):
     assert SESSION not in body and TRIAL_KEY not in body
     call = next(x for x in upstream.calls if x["path"] == "/v1/dify/trial")
     assert call["body"]["operator_preview"]["pre_prompt"] == "CURRENT_DRAFT"
-    assert call["body"]["order_no"] == "2115330675982561281"
+    assert call["body"]["order_no"] == ""  # 由同一模型循环选择，桥不先做语义分类。
     assert call["headers"]["x-aiops-console-session"] == SESSION
 
 
@@ -266,7 +266,7 @@ def test_native_preview_rejects_nonempty_unimplemented_context(bridge, upstream,
     assert not any(x["path"] == "/v1/dify/trial" for x in upstream.calls)
 
 
-@pytest.mark.parametrize("fault", ["csrf", "origin", "session", "app", "multiple", "tenant"])
+@pytest.mark.parametrize("fault", ["csrf", "origin", "session", "app", "tenant"])
 def test_rejects_untrusted_input_before_gateway(bridge, upstream, fault):
     headers = dict(_browser_headers())
     body = {"app_id": APP_ID, "query": "订单 2115330675982561281", "pre_prompt": "p", "tools": []}

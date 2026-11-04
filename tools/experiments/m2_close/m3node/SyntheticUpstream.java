@@ -300,6 +300,10 @@ final class SyntheticUpstream implements AutoCloseable {
             send(exchange, 200, "application/json", mapper.writeValueAsBytes(ack));
             return;
         }
+        if (path.equals("/v1/internal/execution-node/capabilities")) {
+            send(exchange, 200, "application/json", "{}".getBytes(StandardCharsets.UTF_8));
+            return;
+        }
         claimCalls.incrementAndGet();
         claimPaths.add(path);
         ObjectNode body = mapper.createObjectNode();

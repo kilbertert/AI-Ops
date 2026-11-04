@@ -1,9 +1,8 @@
 """从原HTTP入口验证连续问答，不以拼入一句文本代替会话闭环。"""
 
-from types import SimpleNamespace
-
 import pytest
 
+from aiops_diagnostics.conversation.conversation_store import ConversationError
 from aiops_diagnostics.operator import operator_cpms
 from operations.test_operator_cpms import APP, HEADERS, ORDER, environment, node, terminal
 
@@ -17,9 +16,10 @@ def test_formal_followup_keeps_order_and_gets_fresh_evidence(tmp_path, monkeypat
         seen = []
 
         def dispatch(self, config, run_id):
+            result = node(f, run_id)
             run = f["ctx"].agent_run_store.get(run_id)
-            seen.append((run.order_no, self.question))
-            return node(f, run_id)
+            seen.append((run.order_no, f["ctx"].operator_cpms.tasks[run_id].messages))
+            return result
 
         monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
         first = f["client"].post(
@@ -40,7 +40,7 @@ def test_formal_followup_keeps_order_and_gets_fresh_evidence(tmp_path, monkeypat
         assert second.status_code == 202, second.text
         assert terminal(f, second.json()["qa_id"]).json()["status"] == "completed"
         assert [x[0] for x in seen] == [ORDER, ORDER]
-        assert "分析这笔订单的电费" in seen[1][1]
+        assert "分析这笔订单的电费" in str(seen[1][1])
         assert len(f["state"]["calls"]) > before, "追问不能把旧证据当成当前事实"
 
 
@@ -55,12 +55,10 @@ def test_history_reads_latest_completed_questions_and_not_other_scope(tmp_path):
     for n in range(1, 8):
         store.begin_turn(conv["conversation_id"], scope, kind="qa", question=f"历史问题{n}")
         store.complete_turn(conv["conversation_id"], scope, n, answer={"blocks": []})
-    task = SimpleNamespace(conversation_turn=(conv["conversation_id"], scope, 8))
-    text = operator_cpms._conversation_context(SimpleNamespace(conversation_store=store), task)
-    assert all(f"历史问题{n}" in text for n in (5, 6, 7))
-    assert "历史问题4" not in text
-    task.conversation_turn = (conv["conversation_id"], "other", 8)
-    assert operator_cpms._conversation_context(SimpleNamespace(conversation_store=store), task) == ""
+    turns = store.completed_context(conv["conversation_id"], scope, before=8, limit=3)
+    assert [t["question"] for t in turns] == ["历史问题5", "历史问题6", "历史问题7"]
+    with pytest.raises(ConversationError):
+        store.completed_context(conv["conversation_id"], "other", before=8)
 
 
 @pytest.mark.parametrize("mode", ["foreign-app", "preview", "foreign-owner"])
@@ -112,27 +110,12 @@ def test_revoked_order_is_not_replayed_and_new_topic_does_not_inherit(tmp_path, 
             headers=HEADERS,
             json={"question": question, "conversation_id": first["conversation_id"]},
         )
-        assert refused.status_code == 403
-        assert calls == [ORDER]
+        assert refused.status_code == 202
+        assert terminal(f, refused.json()["qa_id"]).json()["status"] == "failed"
+        assert calls == ["", ""]
         assert not f["ctx"].conversation_store.get(
             first["conversation_id"], f["resolver"].current.scope_fingerprint
         )["is_generating"]
-        from aiops_diagnostics.gateway.gateway_api import _operator_order_followup
-
-        for question in [
-            "附近有哪些站点",
-            "明天最便宜方案",
-            "订单状态是什么意思",
-            "电费如何计算",
-            "功率是什么",
-            "电量怎么算",
-            "那还有空闲充电桩吗",
-            "那服务费折扣一般为什么不能判通过？",
-            "那明天的税额怎么验证？",
-            "那服务费折扣是什么？",
-            "那服务费折扣活动怎么宣传？",
-        ]:
-            assert not _operator_order_followup(question)
 
 
 @pytest.mark.parametrize("question", ["那电压呢", "那为什么服务费折扣还不能判通过？"])
@@ -157,8 +140,9 @@ def test_native_trial_returns_and_reuses_conversation(tmp_path, monkeypatch, que
         seen = []
 
         def dispatch(self, config, run_id):
+            result = node(f, run_id)
             seen.append(f["ctx"].agent_run_store.get(run_id).order_no)
-            return node(f, run_id)
+            return result
 
         monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
         headers = {"Authorization": "Bearer trial-only", "X-AIOps-Console-Session": "valid-session"}
@@ -225,13 +209,35 @@ def test_late_completion_cannot_change_a_newer_turn_active_order(tmp_path):
 
 def test_explicit_order_disagreement_does_not_use_stale_order(tmp_path, monkeypatch):
     with environment(tmp_path, monkeypatch) as f:
+
+        def dispatch(_, cfg, run):
+            from execution.test_m2_close_contract import NODE_A_TOKEN
+
+            headers = {
+                "Authorization": "Bearer " + NODE_A_TOKEN,
+                "X-AI-Ops-Tool-Contract": operator_cpms.TOOL_CONTRACT,
+            }
+            pub = (
+                f["client"]
+                .post("/v1/internal/charging-status/execution-config/" + run, headers=headers)
+                .json()
+            )
+            headers["X-AI-Ops-Exec-Config"] = pub["sha256"]
+            denied = f["client"].post(
+                f"/v1/internal/operator-runs/{run}/tools/cpms_order_detail/authorization",
+                headers=headers,
+                json={"arguments": {"order_no": "ORDER-1002"}},
+            )
+            assert denied.status_code == 403 and denied.json()["error"]["code"] == "OPERATOR_ORDER_CONFLICT"
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
         response = f["client"].post(
             "/v1/assistant/questions",
             headers=HEADERS,
             json={"question": "分析订单 ORDER-1002 的电费", "order_no": ORDER},
         )
-        assert response.status_code == 200
-        assert response.json()["type"] == "clarification"
+        assert response.status_code == 202
+        assert terminal(f, response.json()["qa_id"]).json()["status"] == "failed"
         assert not f["state"]["calls"]
 
 
@@ -256,11 +262,14 @@ def test_new_charger_question_after_order_dispatches_without_order(tmp_path, mon
         seen = []
 
         def dispatch(self, cfg, run_id):
-            order = f["ctx"].agent_run_store.get(run_id).order_no
-            seen.append(order)
-            if order:
-                return node(f, run_id)
-            raise RuntimeError("probe stops before external model")
+            if not seen:
+                result = node(f, run_id)
+            else:
+                result = node(
+                    f, run_id, tools=(), answer={"reply": "您希望查询哪个站点？", "evidence_tools": []}
+                )
+            seen.append(f["ctx"].agent_run_store.get(run_id).order_no)
+            return result
 
         monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
         first = (
@@ -269,11 +278,14 @@ def test_new_charger_question_after_order_dispatches_without_order(tmp_path, mon
             .json()
         )
         assert terminal(f, first["qa_id"]).json()["status"] == "completed"
-        second = f["client"].post(
-            "/v1/assistant/questions",
-            headers=HEADERS,
-            json={"question": "那还有空闲充电桩吗", "conversation_id": first["conversation_id"]},
+        second = (
+            f["client"]
+            .post(
+                "/v1/assistant/questions",
+                headers=HEADERS,
+                json={"question": "那还有空闲充电桩吗", "conversation_id": first["conversation_id"]},
+            )
+            .json()
         )
-        assert second.status_code == 202
-        terminal(f, second.json()["qa_id"])
+        assert terminal(f, second["qa_id"]).json()["status"] == "completed"
         assert seen == [ORDER, ""]

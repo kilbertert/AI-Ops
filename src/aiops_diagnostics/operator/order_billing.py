@@ -153,7 +153,7 @@ def _verify(snapshot, detail, billing):
             formula,
             reduction,
             None,
-            "优惠记录中的serviceDiscount按折数保存（8=80%）；接口未提供独立服务费折扣额，不能把总优惠当此项",
+            "接口未提供独立服务费折扣额，不能把总优惠当此项；本单是否有折扣以实际优惠记录为准",
         )
     )
     components = (electric, service, _amount(detail, "launchFee"), loss_e, loss_s, park)
