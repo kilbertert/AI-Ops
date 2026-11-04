@@ -39,14 +39,6 @@ _SYS_USER: dict[str, Any] = {
 }
 
 
-def _user_info() -> dict[str, Any]:
-    return {"code": 0, "msg": None, "data": {"sysUser": _SYS_USER, "roles": [], "permissions": []}}
-
-
-def _roles(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return items
-
-
 def _role(ds_type: Any, ds_scope: Any = None) -> dict[str, Any]:
     return {"id": "ROLE-1", "roleCode": "ROLE_SHOP_USER", "dsType": ds_type, "dsScope": ds_scope}
 

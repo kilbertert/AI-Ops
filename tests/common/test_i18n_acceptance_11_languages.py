@@ -210,10 +210,9 @@ def test_catalog_gaps_are_exactly_as_recorded() -> None:
     # alphabetical, and the gap is a set of languages rather than a sequence.
     assert set(_catalog_languages("consumer")[1]) == set(CONSUMER_CATALOG_GAP)
     assert set(_catalog_languages("operator")[1]) == set(OPERATOR_CATALOG_GAP)
-    # Both platforms are complete: no language falls back on either. Asserted
-    # explicitly rather than left to the two empty tuples — an empty constant
-    # compared to an empty result passes even if the lookup itself broke.
-    assert set(CONSUMER_CATALOG_GAP) | set(OPERATOR_CATALOG_GAP) == set()
+    # 两个缺口常量都是空的。上一版在这里断言 `set(A) | set(B) == set()`，
+    # 那是拿本文件的两个常量互相比较 —— 目录查错时它照样绿。
+    # 真正的判据是上两行：缺口必须与目录里**实际**缺的语言相等。
 
 
 @pytest.mark.parametrize("language", LANGUAGES)

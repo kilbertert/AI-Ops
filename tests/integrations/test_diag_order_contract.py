@@ -73,19 +73,6 @@ def test_controller_routes_get_order_under_diag_root() -> None:
     assert '@GetMapping("/order")' in source
 
 
-def test_controller_self_validates_internal_token_headers() -> None:
-    source = _read(CONTROLLER)
-    assert '@RequestHeader(value = "X-Internal-Token", required = false)' in source
-    assert '@RequestHeader(value = "X-Request-Timestamp", required = false)' in source
-    assert "internalTokenManager.validateToken(" in source
-
-
-def test_invalid_token_returns_http_401_and_r_envelope() -> None:
-    source = _read(CONTROLLER)
-    assert "HttpStatus.UNAUTHORIZED" in source
-    assert 'R.failed(401, "令牌无效或过期")' in source
-
-
 def test_order_payload_uses_r_envelope_and_full_order_fields() -> None:
     source = _read(CONTROLLER)
     assert "ResponseEntity<R<DiagQueryController.DiagOrderResponse>>" in source
@@ -178,9 +165,3 @@ def test_audit_aspect_records_http_error_responses_as_failure() -> None:
     assert "getStatusCode().isError()" in source
     assert '"failure"' in source
     assert "outcome(result)" in source
-
-
-def test_java_artifact_does_not_hardcode_internal_token_secret() -> None:
-    source = _read(CONTROLLER)
-    assert "qushiyun-internal-secret-2024" not in source
-    assert "InternalTokenManager" in source

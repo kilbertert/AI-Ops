@@ -51,13 +51,6 @@ def _called_name(func: ast.expr) -> str:
     return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
 
 
-def _function(tree: ast.Module, name: str) -> ast.FunctionDef:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == name:
-            return node
-    raise AssertionError(f"{name} is gone: this guard points at nothing")
-
-
 def _claim_sites(tree: ast.Module) -> list[ast.Call]:
     return [
         node for node in ast.walk(tree) if isinstance(node, ast.Call) and _called_name(node.func) == CLAIM
