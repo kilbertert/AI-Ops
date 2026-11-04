@@ -2436,6 +2436,8 @@ def create_gateway_app(
         _: None = Depends(dify_trial_credential),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
     ):
+        from aiops_diagnostics.consumer.consumer_intent import trial_message
+
         caller, trial = managed_trial_result(payload, request)
         if trial.get("result"):
             _require_workflow_trial_result(context, caller, trial)
@@ -2444,7 +2446,7 @@ def create_gateway_app(
             "status": trial["status"],
             "result": trial.get("result"),
             "error_code": trial.get("error_code"),
-            "error_message": diagnosis_error_message(language, trial["error_code"])
+            "error_message": trial_message(trial["error_code"], language)
             if trial.get("error_code")
             else None,
         }
@@ -2703,12 +2705,9 @@ def create_gateway_app(
             #
             # 这里是**按请求语言渲染**的那一类文案（与诊断面同一条规则：请求语言只渲染
             # 服务端此刻写的话，不改结果本身的 `language`）。
-            from aiops_diagnostics.consumer.consumer_intent import TRIAL_MESSAGES, message
+            from aiops_diagnostics.consumer.consumer_intent import trial_message
 
-            key = TRIAL_MESSAGES.get(trial["error_code"])
-            body["error_message"] = (
-                message(key, language) if key else diagnosis_error_message(language, trial["error_code"])
-            )
+            body["error_message"] = trial_message(trial["error_code"], language)
         return body
 
     @app.get("/health")

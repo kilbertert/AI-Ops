@@ -326,7 +326,7 @@ def test_knowledge_trial_records_the_kind_it_actually_sends(managed_trial, monke
     assert run.data_kind == observed["data_kind"]
 
 
-def test_trial_failure_exposes_a_readable_reason(managed_trial):
+def test_trial_failure_exposes_a_readable_reason(managed_trial, monkeypatch):
     """试运行失败时，结果面必须给出可读原因，而不是笼统的"未完成"。
 
     运营看的是控制台面板；只回 `TRIAL_FAILED` 或一句通用文案，
@@ -334,26 +334,28 @@ def test_trial_failure_exposes_a_readable_reason(managed_trial):
     （2026-10-31 实测就发生过这种误读）。
     """
     f = managed_trial
+    monkeypatch.setattr(
+        f.runtime,
+        "classify_consumer",
+        lambda *a, **k: {"intent": "order_status", "order_reference": "latest", "uses_context": False},
+    )
     result = f.env["client"].post(
         PATH,
         headers=HEADERS,
         json={"app_id": APP, "question": "我上一个订单现在什么情况"},
     )
-    assert result.status_code in {202, 400, 409}, result.text
-    trial_id = result.json().get("trial_id")
-    if trial_id is None:
-        return  # 在提交阶段就被拒：此时由 HTTP 错误体承载原因，不在本用例范围
-    finish(f, trial_id)
+    assert result.status_code == 202, result.text
+    trial_id = result.json()["trial_id"]
+    assert finish(f, trial_id)["status"] == "failed"
     payload = (
         f.env["client"]
         .post(PATH + "/result", headers=HEADERS, json={"app_id": APP, "trial_id": trial_id})
         .json()
     )
-    if payload.get("error_code"):
-        assert payload.get("error_message", "").strip(), payload
-        # 不把内部异常文本回显给运营
-        assert "Traceback" not in payload["error_message"]
-        assert "aiops_diagnostics" not in payload["error_message"]
+    assert payload["error_code"] == "TRIAL_ORDER_REQUIRED"
+    assert "选定的订单" in payload["error_message"]
+    assert "Traceback" not in payload["error_message"]
+    assert "aiops_diagnostics" not in payload["error_message"]
 
 
 def test_trial_preserves_classifier_quota_without_echoing_provider(managed_trial, monkeypatch):

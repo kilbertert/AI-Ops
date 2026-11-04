@@ -134,3 +134,10 @@ def message(code, language):
         ),
     }
     return texts[code][0 if language.startswith("zh") else 1]
+
+
+def trial_message(code, language):
+    from aiops_diagnostics.common.i18n import diagnosis_error_message
+
+    key = TRIAL_MESSAGES.get(code)
+    return message(key, language) if key else diagnosis_error_message(language, code)
