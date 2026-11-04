@@ -1137,3 +1137,68 @@ def test_a_rejection_after_evidence_is_still_redispatched(operator, monkeypatch,
     assert delivered, "证据上报必须真的发生过，否则覆盖不到 delivered 非空"
     assert attempts["n"] == 1 + operator_cpms.MAX_RESAMPLES, "取过证据后再被拒，仍应重派一次"
     assert "operator_resample" in caplog.text
+
+
+# ───────────────────── 2026-11-04：同一会话的前文要能接上（反馈第 3 条）
+#
+# 实测：问完「帮我分析这笔单的电费」，接着问「那电压呢」，模型不知道「那」指哪张单。
+# 会话轮次其实一直在库里记着（`conversation_turns`），但**从来没回喂给模型**。
+
+
+def _seen_question(operator, monkeypatch, *, conversation_id=None, turns=()):
+    """跑一次派发，返回节点实际收到的那条用户消息。"""
+    from aiops_diagnostics.operator.operator_cpms import SnailDispatcher
+
+    seen = {}
+
+    def dispatch(self, config, run_id):
+        seen["question"] = self.question
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(SnailDispatcher, "dispatch", dispatch)
+
+    payload = {"question": "那电压呢"}
+    if conversation_id:
+        payload["conversation_id"] = conversation_id
+    posted = operator["client"].post("/v1/assistant/questions", headers=HEADERS, json=payload)
+    terminal(operator, posted.json()["qa_id"])
+    return seen.get("question", "")
+
+
+def test_the_node_message_carries_the_previous_questions_of_the_conversation(operator):
+    """同一会话的上一轮提问要出现在节点看到的那条消息里。
+
+    它只能以**文字**形式出现：节点要求首次模型调用「恰好一条用户消息」，
+    多插一条 assistant/user 会被 `verifyInputShape` 直接拒。
+    """
+    f = operator
+    store = f["ctx"].runtime.conversation_store
+    scope = f["resolver"].current.scope_fingerprint
+    conversation = store.create(
+        scope_fingerprint=scope, business_entry="operator", agent_version_key="agt_testagent00#v1"
+    )
+    conversation_id = conversation["conversation_id"]
+    store.begin_turn(conversation_id, scope, kind="qa", question="上一轮的问题")
+    store.complete_turn(conversation_id, scope, 1, answer={"blocks": []})
+
+    question = _seen_question(operator, pytest.MonkeyPatch(), conversation_id=conversation_id)
+    assert "同一会话的前文" in question
+    assert "上一轮的问题" in question
+
+
+def test_a_conversation_without_prior_turns_adds_nothing(operator):
+    """第一轮没有任何前文可带 —— 不要塞一段空的「前文」占位。"""
+    f = operator
+    conversation = f["ctx"].runtime.conversation_store.create(
+        scope_fingerprint=f["resolver"].current.scope_fingerprint,
+        business_entry="operator",
+        agent_version_key="agt_testagent00#v1",
+    )
+    question = _seen_question(operator, pytest.MonkeyPatch(), conversation_id=conversation["conversation_id"])
+    assert "同一会话的前文" not in question
+
+
+def test_history_is_absent_when_the_question_is_not_in_a_conversation(operator):
+    """不属于任何会话时不带历史，且不影响派发。"""
+    question = _seen_question(operator, pytest.MonkeyPatch())
+    assert "同一会话的前文" not in question
