@@ -241,3 +241,29 @@ def test_independent_order_period_energy_detects_rate_mismatch():
     # 同类多个不同时段价格不能拿总分时电量武断分配。
     body["feeTemplate"]["feeTemplateItems"][1]["type"] = 3
     assert "2 kWh ×" not in historical_report(body, detail, "zh")
+
+
+def test_upstream_default_false_does_not_disable_a_tariff_item():
+    from aiops_diagnostics.operator.order_pricing import historical_report
+
+    body = snapshot()["data"]
+    body["feeTemplate"]["feeTemplateItems"][0]["enabled"] = False
+    assert "电价 1.20/kWh" in historical_report(body, {}, "zh")
+
+
+def test_time_service_uses_custom_periods_with_verified_minute_unit():
+    from aiops_diagnostics.operator.order_pricing import historical_report
+
+    body = snapshot()["data"]
+    body["feeTemplate"].update(
+        {
+            "billingMode": 1,
+            "flat": "1.20",
+            "flatService": "99.99",
+            "customServiceItems": [{"startTime": "00:00", "endTime": "23:59", "price": "0.05"}],
+        }
+    )
+    body["feeTemplate"]["feeTemplateItems"] = [{"startTime": "00:00", "endTime": "23:59", "type": 2}]
+    text = historical_report(body, {}, "zh")
+    assert "服务费 0.05/分钟" in text
+    assert "99.99" not in text

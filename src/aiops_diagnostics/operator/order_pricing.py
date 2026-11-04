@@ -130,9 +130,10 @@ def historical_report(snapshot, detail, language):
     template = snapshot["feeTemplate"]
     lines = ["【历史计费核对】" if zh else "Historical billing checks"]
     mode = template.get("billingMode")
+    # 上游计费不按enabled过滤；该字段默认false也会参与计费。
     for row in template.get("feeTemplateItems") or []:
         price, service = period_rates(template, row)
-        if price is None or service is None:
+        if price is None or (mode != 1 and service is None):
             lines.append("时段费率缺项，无法核对。" if zh else "Incomplete period rates.")
             continue
         unit = (
@@ -142,6 +143,22 @@ def historical_report(snapshot, detail, language):
             f"{row.get('startTime')}–{row.get('endTime')}: "
             + (f"电价 {price:f}/kWh，服务费 {unit}" if zh else f"electricity {price:f}/kWh, service {unit}")
         )
+    if mode == 1:
+        custom = template.get("customServiceItems") or []
+        for row in custom:
+            rate = number(row.get("price"))
+            if rate is not None:
+                lines.append(
+                    f"{row.get('startTime')}–{row.get('endTime')}: "
+                    + (f"服务费 {rate:f}/分钟" if zh else f"service {rate:f}/minute")
+                )
+        lines.append(
+            "按实际分钟和时段另算；本轮尚未独立复核按时长服务费。"
+            if zh
+            else "Time-based service needs actual minutes per period; not independently verified here."
+        )
+        if not custom:
+            lines.append("按时长服务费时段缺失。" if zh else "Time-based service periods missing.")
     lines.extend(independent_period_check(template, detail, zh))
     periods = snapshot.get("periodFeeDetail") or []
     totals = [[], []]
