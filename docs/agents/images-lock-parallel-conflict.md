@@ -1,5 +1,11 @@
 # images.lock.json 的并行冲突：现状梳理与待决策
 
+> 接手补正：本页保留最初调查时点。后续采用[ADR-0208](../adr/0208-gateway-build-record-travels-with-artifact.md)
+> 的输入/构建记录分离方案；执行方法见[构建手册](local-gateway-build.md)，
+> 验收见[修复记录](../validation/2026-11-04-build-identity-artifacts.md)。
+> 本页“仅合成栈使用”及“CI不读”不可作为当前结论：正式节点流程读取其中平台/节点/基础镜像字段，
+> CI经pytest间接读取。未退役整套资产，未跳过检查，换分支名也不能解决未提交路径重叠。
+
 日期：2026-11-04。写给接手者（Codex/其他会话）。**本文只陈述事实与取舍，不含已执行的决定。**
 
 ---
