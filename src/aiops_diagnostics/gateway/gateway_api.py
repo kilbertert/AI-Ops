@@ -103,6 +103,7 @@ from aiops_diagnostics.execution.agent_runs import (
     SnailDispatcher,
     scope_from_json,
 )
+from aiops_diagnostics.gateway import metrics_store as metrics_dims
 from aiops_diagnostics.gateway import request_observation
 from aiops_diagnostics.gateway.gateway_config import (
     GatewayServerSettings,
@@ -7159,7 +7160,9 @@ def _clarification(
         message = free_text_unavailable_message(language)
     else:
         message = clarification_message(language, MESSAGE_KEY_BY_CODE[code])
-    _record_route_metric(context, caller, route_type="clarification", outcome="completed", error_code=code)
+    _record_route_metric(
+        context, caller, route_type=metrics_dims.ROUTE_CLARIFICATION, outcome="completed", error_code=code
+    )
     # The structural line the ticket asked for, minus the two things that must
     # never be in it: no identity, no order number — only the hashes the FAQ
     # module already logs for the same reason. It has somewhere to go now:
