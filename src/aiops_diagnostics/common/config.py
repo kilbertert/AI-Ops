@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
@@ -16,6 +16,7 @@ from aiops_diagnostics.common.platform_paths import (
     default_key_dir,
 )
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
+from aiops_diagnostics.common.redaction import redact_url_credentials
 
 
 def _env(name: str, default: str = "", values: Mapping[str, str | None] | None = None) -> str:
@@ -428,19 +429,12 @@ class Settings:
 
 
 def _redact_url_credentials(value: str) -> str:
-    """Remove URL userinfo before configuration is rendered or logged."""
-    try:
-        parsed = urlsplit(value)
-        if parsed.username is None and parsed.password is None:
-            return value
-        hostname = parsed.hostname or ""
-        if ":" in hostname and not hostname.startswith("["):
-            hostname = f"[{hostname}]"
-        if parsed.port is not None:
-            hostname = f"{hostname}:{parsed.port}"
-        return urlunsplit((parsed.scheme, "REDACTED@" + hostname, parsed.path, parsed.query, parsed.fragment))
-    except ValueError:
-        return "REDACTED"
+    """URL userinfo 的脱敏**只有一处定义**（`redaction.redact_url_credentials`）。
+
+    这里保留同名薄壳，是因为 `Settings.redacted()` 与 `tests/common/test_config.py`
+    都按这个名字调用；规则本身不再在本文件里。
+    """
+    return redact_url_credentials(value)
 
 
 def selected_config_file(config_file: Path | None = None) -> Path:
