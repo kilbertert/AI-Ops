@@ -221,7 +221,7 @@ class OperatorToolAuthorizationRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    arguments: dict[str, str] = Field(default_factory=dict, max_length=8)
+    arguments: dict[str, str | list[str]] = Field(default_factory=dict, max_length=8)
 
 
 class NodeLoopCompletionRequest(BaseModel):

@@ -45,7 +45,7 @@ def test_the_declaration_covers_the_live_tools():
     assert [tool.model_inputs for tool in tools] == [
         (),
         (),
-        ("name", "address"),
+        ("name", "address_terms"),
         (),
         ("name", "date", "start", "end", "energy", "power", "basis", "timezone"),
     ]

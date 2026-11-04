@@ -8,11 +8,11 @@
   },
   "node": {
     "artifact": "aiops-execution-node.jar",
-    "sha256": "b9440e25412a237b037cee796989e63cd93728209f03a76a7a7dca89e90fba3f",
-    "bytes": 106304542,
-    "source_commit": "0d326ea9",
+    "sha256": "a5e9a7559ed2037bda47e13693fc2aeb2665dd5abdfcd8fa92c1c9bb440cb94c",
+    "bytes": 106304770,
+    "source_commit": "d0c5dc95",
     "build": "由本仓 services/execution-node 构建（可复现：pom 固定 project.build.outputTimestamp，同一份源码两次构建得到同一摘要）；构建命令见 tools/README.md",
-    "source_sha256": "7689908da493a0b8f183e914f5e0e1aa115d5cc6eae6e0dd8cfa1d1d03e81a90",
+    "source_sha256": "482bff158f19990fbfc25a1775cdb099e0b9ed3f118097510133bd59f0da55af",
     "source_digest_rule": "services/execution-node 下除 target/__pycache__/.idea 外全部文件的路径+内容摘要；命令见 deploy/node-runtime/source_digest.py"
   },
   "base_images": {
