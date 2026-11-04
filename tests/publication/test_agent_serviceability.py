@@ -50,3 +50,53 @@ def test_serves_is_equality_with_the_live_version() -> None:
     assert serves(live, 3)
     assert not serves(live, 2)  # 更旧的版本不服务
     assert not serves(_Agent("disabled", 3), 3)
+
+
+class _PublishOkResolver:
+    """Knowledge binding resolver that accepts publishes (同 test_qa_rag 的 fixture)。"""
+
+    def validate(self, tenant_id: str, knowledge_base_ids: tuple[str, ...]) -> None:
+        del tenant_id, knowledge_base_ids
+
+
+def test_a_draft_agent_can_still_be_disabled(tmp_path) -> None:
+    """草稿态的 agent 必须还能被停用 —— 否则它无法下线。
+
+    改前 `disable()` 的 UPDATE 限定 `status = 'published'`；那时草稿本来就不服务，
+    所以这个缺口没有后果。判据改为读 `published_version` 之后，草稿仍在服务，
+    这条 UPDATE 就成了唯一的下线通道 —— 不放开它，运营只能看着它一直服务。
+    """
+    from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+
+    store = AgentStore(tmp_path / "gateway.db")
+    manager = AgentManager(store, knowledge_resolver=_PublishOkResolver())
+    subject = SubjectRecord(b_user_id="B-1", tenant_id="tenant-a")
+    admin = ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id="tenant-a",
+        data_scope=DataScope(type="self"),
+        roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        permissions=frozenset(),
+    )
+    agent = manager.create(
+        admin,
+        name="客服",
+        description="",
+        config=AgentConfig(
+            agent_type="customer",
+            prompt="p",
+            knowledge_base_ids=("kb-a",),
+            model="aiops-api",
+            output_contract="blocks-v1",
+        ),
+    )
+    manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
+    manager.fork_draft(admin, agent.agent_id, expected_revision=manager.get(admin, agent.agent_id).revision)
+    disabled = manager.disable(
+        admin, agent.agent_id, expected_revision=manager.get(admin, agent.agent_id).revision
+    )
+    assert disabled.status == "disabled"
+    assert live_version(disabled) is None

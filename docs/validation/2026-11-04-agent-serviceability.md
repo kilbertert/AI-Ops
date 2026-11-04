@@ -11,6 +11,9 @@
   → `live_version(agent) is None`。
 - `gateway_runtime._is_active`（媒体活性）：`published.status != "published"`
   → `live_version(published) is None`。
+- `AgentStore.disable()` 的 UPDATE 由 `status = 'published'` 放宽为
+  `status IN ('published', 'draft')`。判据改成读指针后，草稿仍在服务，这条 UPDATE
+  是唯一的下线通道；不放开它，草稿态**无法下线**（Codex Review 指出，P1）。
 
 **行为变化（显式列出）**：
 
@@ -40,12 +43,15 @@
   ——真实 `AgentStore`/`AgentManager`，`fork_draft` 后选择器仍选中 v1。
 - `tests/gateway/test_media_api.py::test_a_draft_edit_does_not_403_media_it_already_produced`
   ——真实 runtime，`fork_draft` 后 v1 签发的媒体仍 200。
+- `tests/publication/test_agent_serviceability.py::test_a_draft_agent_can_still_be_disabled`
+  ——真实 store，`fork_draft` 后仍能 `disable`，且 `live_version` 变 `None`。
 
 **反向验证（逐条实测）**：
 
 - 把 `qa_rag` 改回 `status != "published"` → 新问答测试红。
 - 把 `_is_active` 改回 `status != "published"` → 新媒体测试红（既有媒体测试仍是绿的，
   因为它们的草稿窗口都被「随后立即重新发布」掩盖 —— 这正是缺口）。
+- 把 `disable()` 的 WHERE 改回 `status = 'published'` → 草稿下线测试红。
 
 **真实故障业务验收：未完成** —— 本轮未在 41 上跑真实编辑窗口；本地证据只证明判据与
 两个调用点一致。

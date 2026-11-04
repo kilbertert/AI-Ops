@@ -23,6 +23,11 @@
 | `disabled` | 1 | None |
 | 任意 | NULL | None |
 
+**「停用」必须与判据同时放开**：`AgentStore.disable()` 的 UPDATE 原限定
+`status = 'published'`。判据改成读指针之前，草稿本来就不服务，所以那个限定没有后果；
+改完之后草稿仍在服务，这条 UPDATE 就成了**唯一**的下线通道 —— 不放开它，运营只能
+看着一个草稿一直服务。因此 `disable()` 接受 `published` 与 `draft` 两种状态。
+
 实现为 `publication/agent_serviceability.py` 的两个纯函数 `live_version` / `serves`，
 客服问答选择器与媒体活性（`_is_active`）改为调用它。媒体**不直接**用 `serves`：它刻意
 允许「更旧但仍绑着该知识库」的版本在剩余 TTL 内存活（ADR-0046 决策二），所以它要的是
