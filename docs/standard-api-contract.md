@@ -304,6 +304,15 @@ queued | running | completed | inconclusive | failed | expired | cancelled
 
 ### 5.2.1 错误信封的本地化约定（`code` 与 `message` 的分工）
 
+消费者自由提问的分类依赖故障仍返回503。明确额度错误返回
+`CONSUMER_MODEL_QUOTA_EXHAUSTED`且`retryable=false`；普通鉴权拒绝仍为
+`CONSUMER_INTENT_UNAVAILABLE`且不可自动重试，限流/网络/上游故障保留可重试标记。
+此处请求级`message`也是客户端直接展示的本地化服务提示，不把模型服务故障描述成用户表达不清。
+`retryable`描述自动重试是否有意义，额度/凭据恢复后允许用户重新发起。
+受管消费者草稿结果另返回固定本地化`error_message`；不回传存储或供应商的异常正文。
+日志只含本地原因枚举及HTTP状态。供应商403兼容规则与历史边界见
+[自由提问排查手册](agents/consumer-wf01/free-question-failures.md)。
+
 错误信封在所有面共用同一形状 `{"code", "message", "retryable"}`，但**两者的用途不同**，
 这一点此前只存在于实现里、从未写进契约（#538）。
 
