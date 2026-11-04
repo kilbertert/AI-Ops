@@ -1977,14 +1977,18 @@ def _native_preview(handler):
             {"app_id", "query", "pre_prompt", "tools", "response_mode", "conversation_id", "files", "inputs"}
         ),
     )
-    # Dify原生useChat附带这些字段；当前单订单预览不接受文件、变量或外部会话上下文。
+    # Dify原生useChat附带这些字段；会话仅接受Gateway返回的ID，不接受任意外部上下文。
     if (
         payload.pop("response_mode", "streaming") != "streaming"
         or payload.pop("files", []) != []
         or payload.pop("inputs", {}) != {}
-        or payload.pop("conversation_id", "") not in ("", None)
     ):
-        raise _Rejected(400, "管家预览仅支持当前明确订单，请清空会话、文件和变量后重试")
+        raise _Rejected(400, "管家预览暂不接受文件和变量，请移除后重试")
+    conversation_id = payload.pop("conversation_id", "") or ""
+    if not isinstance(conversation_id, str) or (
+        conversation_id and not re.fullmatch(r"conv_[a-f0-9]{32}", conversation_id)
+    ):
+        raise _Rejected(400, "预览会话无效，请新建会话")
     if payload.get("app_id") != app_id:
         raise _Rejected(403, "应用与当前页面不一致")
     query = payload.get("query")
@@ -2008,6 +2012,7 @@ def _native_preview(handler):
             "order_no": order,
             "question": query,
             "operator_preview": {"pre_prompt": prompt, "tools": tools},
+            **({"conversation_id": conversation_id} if conversation_id else {}),
         },
     )
     trial_id = answer.get("trial_id") if isinstance(answer, dict) else None
@@ -2020,7 +2025,7 @@ def _native_preview(handler):
     common = {
         "id": message_id,
         "message_id": message_id,
-        "conversation_id": "",
+        "conversation_id": answer.get("conversation_id", ""),
         "task_id": NATIVE_TASK_PREFIX + trial_id,
         "created_at": int(_time_module.time()),
     }

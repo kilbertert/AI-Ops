@@ -980,7 +980,11 @@ class OperatorCpms:
             result = self.authorize_readback(current, qa_id, task.bearer)
             if store.update_assistant_question(qa_id, status="completed", result=result):
                 self.context.runtime._complete_conversation_turn(
-                    task.conversation_turn, task.question, result, status_qa_id=qa_id
+                    task.conversation_turn,
+                    task.question,
+                    result,
+                    status_qa_id=qa_id,
+                    active_order_no=self.context.agent_run_store.get(run_id).order_no or None,
                 )
         except Exception as exc:  # noqa: BLE001 - 后台失败必须收敛，凭据及上游正文不进日志。
             reason = _failure_reason(exc)
@@ -1359,18 +1363,12 @@ def _conversation_context(store, task) -> str:
     if store is None or turn_no is None or turn_no <= 1:
         return ""
     try:
-        rows = store.turns(conversation_id, scope_fingerprint, limit=HISTORY_TURNS + 1)
-    except Exception:  # noqa: BLE001 - 上下文读不到就不带，不影响交付
+        questions = store.recent_questions(
+            conversation_id, scope_fingerprint, before=turn_no, limit=HISTORY_TURNS
+        )
+    except Exception:  # noqa: BLE001 - 历史不是当前事实，读取失败不回喂。
         return ""
-    prior = [row for row in rows if row.get("turn_no", 0) < turn_no][-HISTORY_TURNS:]
-    if not prior:
-        return ""
-    lines = []
-    for row in prior:
-        question = str(row.get("question") or "").strip()
-        if not question:
-            continue
-        lines.append("- " + question[:HISTORY_CHARS])
+    lines = ["- " + question[:HISTORY_CHARS] for question in questions if question.strip()]
     if not lines:
         return ""
     return (

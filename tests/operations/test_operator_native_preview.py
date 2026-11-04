@@ -348,3 +348,32 @@ def test_read_failure_cancels_and_does_not_send_success(bridge, upstream, monkey
     _, _, body = send(bridge)
     assert "重新登录" in body and "message_end" not in body
     assert calls[-1] == "/qa_test1/cancel"
+
+
+def test_preview_conversation_reaches_gateway_and_returns_in_sse(bridge, monkeypatch):
+    calls = []
+    conversation = "conv_" + "a" * 32
+    original = preview._native_gateway
+
+    def gateway(handler, session, path, **kwargs):
+        calls.append((path, kwargs.get("body")))
+        if path == "":
+            return 200, {"trial_id": "qa_test1", "status": "queued", "conversation_id": conversation}
+        return original(handler, session, path, **kwargs)
+
+    monkeypatch.setattr(preview, "_native_gateway", gateway)
+    status, _, body = send(
+        bridge,
+        {
+            "app_id": APP_ID,
+            "query": "那这笔单的电压呢",
+            "pre_prompt": "p",
+            "tools": [],
+            "conversation_id": conversation,
+        },
+    )
+    assert status == 200
+    assert calls[0][1]["conversation_id"] == conversation
+    assert calls[0][1]["order_no"] == ""
+    events = [json.loads(line[5:]) for line in body.splitlines() if line.startswith("data:")]
+    assert all(event["conversation_id"] == conversation for event in events if event.get("event") != "error")

@@ -12,6 +12,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, Query, Request, Response, status
@@ -384,6 +385,7 @@ class DifyTrialRequest(BaseModel):
     app_id: str = Field(min_length=1, max_length=64, pattern=r"^[0-9a-fA-F-]{8,64}$")
     question: str = Field(default="check order status", min_length=1, max_length=4000)
     operator_preview: OperatorPreviewDraft | None = None
+    conversation_id: str | None = Field(default=None, pattern=r"^conv_[a-f0-9]{32}$")
 
 
 class ManagedTrialRequest(BaseModel):
@@ -2532,22 +2534,46 @@ def create_gateway_app(
                         raise OperatorRefused("OPERATOR_TRIAL_LOGIN_CHANGED")
                     return current
 
-                qa = context.runtime.start_operator_cpms(
-                    context.operator_cpms,
-                    caller,
-                    binding,
-                    payload.order_no,
-                    payload.question,
-                    bearer=bearer,
-                    authorize=current_console_scope,
-                    base=target.cpms_base_url,
-                    proxy=target.proxy_base_url,
-                    conversation_turn=None,
-                    language=language,
-                    trial_manifest=manifest,
+                previous = (
+                    _resolve_conversation(
+                        context, caller, SimpleNamespace(platform="operator"), payload.conversation_id
+                    )
+                    if payload.conversation_id
+                    else None
                 )
-                return {"trial_id": qa["qa_id"], "status": qa["status"]}
-        if payload.operator_preview is not None:
+                conversation = _operator_conversation(context, caller, binding, previous, trial=True)
+                order = payload.order_no
+                if not order and _operator_order_followup(payload.question):
+                    order = conversation.get("active_order_no") or ""
+                turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
+                try:
+                    qa = context.runtime.start_operator_cpms(
+                        context.operator_cpms,
+                        caller,
+                        binding,
+                        order,
+                        payload.question,
+                        bearer=bearer,
+                        authorize=current_console_scope,
+                        base=target.cpms_base_url,
+                        proxy=target.proxy_base_url,
+                        conversation_turn=(
+                            conversation["conversation_id"],
+                            caller.scope_fingerprint,
+                            turn_no,
+                        ),
+                        language=language,
+                        trial_manifest=manifest,
+                    )
+                except Exception:
+                    _release_conversation_turn(context, conversation, turn_no)
+                    raise
+                return {
+                    "trial_id": qa["qa_id"],
+                    "status": qa["status"],
+                    "conversation_id": conversation["conversation_id"],
+                }
+        if payload.operator_preview is not None or payload.conversation_id is not None:
             raise StandardAPIError(403, "OPERATOR_PREVIEW_UNBOUND", "operator preview target not registered")
         if not payload.order_no:
             raise StandardAPIError(400, "TRIAL_ORDER_REQUIRED", "this trial requires an order")
@@ -2908,7 +2934,9 @@ def create_gateway_app(
                 # ① `订单 A2116…` 只取数字段，去查**另一张单**；② 句子里点两张不同的单时
                 # 静默只取一张（2026-11-02 交接）。候选集与判据现在都只有一个来源。
                 candidates = order_reference.order_candidates(payload.question)
-                if len(candidates) > 1 and not payload.order_no:
+                if len(candidates) > 1 or (
+                    payload.order_no and candidates and candidates != [payload.order_no]
+                ):
                     # 说得不清楚就澄清，不擅自选一张 —— 挑错了用户看不出来。
                     return _clarification(
                         context,
@@ -2918,7 +2946,10 @@ def create_gateway_app(
                         question=payload.question,
                         language=language,
                     )
+                conversation = _operator_conversation(context, caller, binding, conversation, trial=False)
                 order = payload.order_no or (candidates[0] if candidates else "")
+                if not order and _operator_order_followup(payload.question):
+                    order = conversation.get("active_order_no") or ""
                 target = next(
                     (
                         r
@@ -6018,6 +6049,38 @@ def _conversation_response(conversation: dict[str, Any]) -> dict[str, Any]:
         "updated_at": conversation["updated_at"],
         "expires_at": conversation["expires_at"],
     }
+
+
+def _operator_conversation(context, caller, binding, conversation, *, trial):
+    key = f"{binding.key}:{binding.app_id}:{'preview' if trial else 'formal'}"
+    agent_id = binding.agent_id or "agt_" + hashlib.sha256(key.encode()).hexdigest()[:32]
+    version = f"{agent_id}#v{binding.agent_version_no}"
+    if conversation is None:
+        return context.conversation_store.create(
+            scope_fingerprint=caller.scope_fingerprint,
+            business_entry="operator",
+            agent_version_key=version,
+            operator_binding=key,
+        )
+    if conversation.get("operator_binding") != key:
+        raise StandardAPIError(404, "CONVERSATION_NOT_FOUND", "conversation not found")
+    return conversation
+
+
+def _operator_order_followup(question):
+    """只继承已确认订单的话题；找站、规则方案和通用解释不能被旧订单吞掉。"""
+    from aiops_diagnostics.operator.operator_conversation import order_fact_fields
+
+    text = question.casefold()
+    if re.search(
+        r"站点|充电站|附近|方案|最便宜|明天|后天|什么意思|是什么|"
+        r"station|nearby|cheapest|plan|tomorrow|what does",
+        text,
+    ):
+        return False
+    return order_fact_fields(question) is not None or bool(
+        re.search(r"这笔|这单|该单|刚才|那笔|它|this order|that order|previous order", text)
+    )
 
 
 def _resolve_conversation(

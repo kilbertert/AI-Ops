@@ -122,6 +122,10 @@ class ConversationStore:
                 connection.execute(
                     "ALTER TABLE conversations ADD COLUMN last_turn_no INTEGER NOT NULL DEFAULT 0"
                 )
+            if "operator_binding" not in columns:
+                connection.execute(
+                    "ALTER TABLE conversations ADD COLUMN operator_binding TEXT NOT NULL DEFAULT ''"
+                )
             turn_columns = {
                 str(row[1]) for row in connection.execute("PRAGMA table_info(conversation_turns)")
             }
@@ -157,6 +161,7 @@ class ConversationStore:
         scope_fingerprint: str,
         business_entry: str,
         agent_version_key: str,
+        operator_binding: str = "",
     ) -> dict[str, Any]:
         scope = self._validate_scope(scope_fingerprint)
         if not _SAFE_ENTRY.fullmatch(business_entry or ""):
@@ -172,8 +177,8 @@ class ConversationStore:
                 INSERT INTO conversations (
                     conversation_id, scope_fingerprint, business_entry,
                     agent_version_key, active_order_no, generating_since,
-                    created_at, updated_at, expires_at
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+                    created_at, updated_at, expires_at, operator_binding
+                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -183,6 +188,7 @@ class ConversationStore:
                     _iso(now),
                     _iso(now),
                     _iso(expires_at),
+                    operator_binding,
                 ),
             )
         return self.get(conversation_id, scope_fingerprint)
@@ -377,6 +383,7 @@ class ConversationStore:
         token_count: int = 0,
         cancelled: bool = False,
         status_qa_id: str | None = None,
+        active_order_no: str | None = None,
     ) -> None:
         """Persist a finished turn and release the generation slot.
 
@@ -393,6 +400,8 @@ class ConversationStore:
         scope = self._validate_scope(scope_fingerprint)
         if status_qa_id is not None and not re.fullmatch(r"qa_[a-f0-9]{32}", status_qa_id):
             raise ConversationError("status question id is invalid")
+        if active_order_no is not None and not _SAFE_ORDER.fullmatch(active_order_no):
+            raise ConversationError("order number is invalid")
         now = _utc_now()
         with self._connection(write=True) as connection:
             self._expire_conversations(connection, now)
@@ -420,6 +429,12 @@ class ConversationStore:
                         conversation_id,
                         turn_no,
                     ),
+                )
+            if active_order_no is not None and not cancelled:
+                connection.execute(
+                    "UPDATE conversations SET active_order_no=? WHERE conversation_id=? "
+                    "AND scope_fingerprint=? AND generating_turn_no=?",
+                    (active_order_no, conversation_id, scope, turn_no),
                 )
             connection.execute(
                 """
@@ -578,6 +593,22 @@ class ConversationStore:
             budget -= cost
         selected.reverse()
         return selected
+
+    def recent_questions(
+        self, conversation_id: str, scope_fingerprint: str, *, before: int, limit: int = 3
+    ) -> list[str]:
+        """Completed questions only, bounded from the newest end and owner checked."""
+        self.get(conversation_id, scope_fingerprint)
+        if not 1 <= limit <= CONTEXT_MAX_TURNS or before < 1:
+            raise ConversationError("invalid question window")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT t.question FROM conversation_turns t JOIN conversations c USING(conversation_id) "
+                "WHERE t.conversation_id=? AND c.scope_fingerprint=? AND t.turn_no<? "
+                "AND t.answer_json IS NOT NULL ORDER BY t.turn_no DESC LIMIT ?",
+                (conversation_id, scope_fingerprint, before, limit),
+            ).fetchall()
+        return [str(row[0]) for row in reversed(rows)]
 
     def turns(
         self, conversation_id: str, scope_fingerprint: str, *, limit: int = 100
