@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import dotenv_values
 
+from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 from aiops_diagnostics.common.platform_paths import (
     default_config_file,
     default_key_dir,
@@ -83,7 +84,7 @@ def canonical_provider_base_url(value: str) -> str:
         raise ValueError("模型 API base_url 无效") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("模型 API base_url 必须是完整的 http 或 https 地址")
-    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+    if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
         raise ValueError("远程 模型 API base_url 必须使用 https")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("模型 API base_url 不得包含认证信息")
@@ -156,6 +157,10 @@ class UpmsSettings:
             parsed = urlsplit(self.base_url)
             if parsed.scheme not in {"http", "https"} or not parsed.hostname:
                 raise ValueError("UPMS base_url 必须是完整的 http 或 https 地址")
+            # 这个端点随请求发出服务侧凭据（UPMS 的 inside_token / Dis 的静态令牌），
+            # 因此与模型 provider 同一条规则：https 哪里都行，http 只给回环。
+            if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
+                raise ValueError("UPMS base_url 指向远端时必须使用 https")
             if parsed.username is not None or parsed.password is not None:
                 raise ValueError("UPMS base_url 不得包含认证信息")
             if parsed.query or parsed.fragment:
@@ -181,6 +186,10 @@ class DisSettings:
             parsed = urlsplit(self.base_url)
             if parsed.scheme not in {"http", "https"} or not parsed.hostname:
                 raise ValueError("Dis base_url 必须是完整的 http 或 https 地址")
+            # 这个端点随请求发出服务侧凭据（UPMS 的 inside_token / Dis 的静态令牌），
+            # 因此与模型 provider 同一条规则：https 哪里都行，http 只给回环。
+            if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
+                raise ValueError("Dis base_url 指向远端时必须使用 https")
             if parsed.username is not None or parsed.password is not None:
                 raise ValueError("Dis base_url 不得包含认证信息")
             if parsed.query or parsed.fragment:
