@@ -624,12 +624,12 @@ class OperatorCpms:
         arguments = validate_tool_arguments(tool, arguments, task.question)
         if tool == "cpms_station_plan":
             previous = self._previous_plan(task)
-            # 新站点或新日期是一组新条件；补充电量/功率则沿用上一计划的用户条件。
-            if (
-                previous
-                and set(arguments).intersection({"start", "end", "energy", "power", "basis", "timezone"})
-                and not set(arguments).intersection({"name", "date"})
-            ):
+            # 补齐或重复身份条件继续同一计划；真正更换站点/日期才重置。
+            changed = any(
+                key in previous and arguments.get(key, previous[key]) != previous[key]
+                for key in ("name", "date")
+            )
+            if previous and arguments and not changed:
                 arguments = {**previous, **arguments}
         task.arguments.setdefault(tool, arguments)
         if task.arguments[tool] != arguments:

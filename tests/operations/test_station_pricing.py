@@ -59,7 +59,8 @@ def test_unprovable_plan_is_not_a_lowest_price(change):
         cheapest(rows, "06:00", "10:00", energy, power)
 
 
-def test_original_chat_clarifies_then_returns_scoped_frozen_plan(tmp_path, monkeypatch):
+@pytest.mark.parametrize("missing", ["energy", "date", "name"])
+def test_original_chat_clarifies_then_returns_scoped_frozen_plan(tmp_path, monkeypatch, missing):
     import json
     from datetime import UTC, datetime, timedelta
 
@@ -81,15 +82,29 @@ def test_original_chat_clarifies_then_returns_scoped_frozen_plan(tmp_path, monke
             return data[path] if path in data else original(url, bearer, tenant, **kwargs)
 
         monkeypatch.setattr(operator_cpms, "cpms_get", cpms)
-        arguments = [
-            {"name": "天河测试站", "date": day, "start": "06:00", "end": "10:00"},
-            {
-                "energy": "3",
-                "power": "2",
-                "timezone": "Asia/Shanghai",
-                "basis": "普通按量、不用优惠、不预约、不买保险、充完离场",
-            },
-        ]
+        all_arguments = {
+            "name": "天河测试站",
+            "date": day,
+            "start": "06:00",
+            "end": "10:00",
+            "energy": "3",
+            "power": "2",
+            "timezone": "Asia/Shanghai",
+            "basis": "普通按量、不用优惠、不预约、不买保险、充完离场",
+        }
+        first_arguments = {k: v for k, v in all_arguments.items() if k != missing}
+        second_arguments = {missing: all_arguments[missing]}
+
+        def question(values):
+            return (
+                " ".join(
+                    v + ("kWh" if k == "energy" else "kW" if k == "power" else "") for k, v in values.items()
+                )
+                + " 最省费用方案"
+            )
+
+        first_question, second_question = question(first_arguments), question(second_arguments)
+        arguments = [first_arguments, second_arguments]
         checked = []
 
         def dispatch(_, config, run_id):
@@ -139,17 +154,17 @@ def test_original_chat_clarifies_then_returns_scoped_frozen_plan(tmp_path, monke
         first = f["client"].post(
             "/v1/assistant/questions",
             headers=HEADERS,
-            json={"question": f"天河测试站{day} 06:00到10:00最省费用方案"},
+            json={"question": first_question},
         )
         assert first.status_code == 202, first.text
         done = terminal(f, first.json()["qa_id"])
         assert done.json()["status"] == "completed", done.text
-        assert "所需电量" in done.text and not calls
+        assert "请补充" in done.text and not calls
         second = f["client"].post(
             "/v1/assistant/questions",
             headers=HEADERS,
             json={
-                "question": "补充3kWh和2kW，Asia/Shanghai，普通按量、不用优惠、不预约、不买保险、充完离场",
+                "question": second_question,
                 "conversation_id": first.json()["conversation_id"],
             },
         )
@@ -191,3 +206,31 @@ def test_plan_numbers_need_their_own_unit(arguments, question):
 
     with pytest.raises(OperatorRefused):
         validate_tool_arguments("cpms_station_plan", arguments, question)
+
+
+def test_baseline_above_package_cap_is_not_a_savings_claim():
+    from aiops_diagnostics.operator.station_pricing import plan_text
+    from operations.test_station_tariff import responses
+
+    template = responses()["/chFeeTemplate/TARIFF-1"]["data"]
+    template.update(
+        enablePackage=True,
+        feeTemplatePackages=[{"type": 2, "price": "5"}],
+        feeTemplateItems=[
+            {"startTime": "00:00", "endTime": "08:00", "price": "3", "feePrice": "0"},
+            {"startTime": "08:00", "endTime": "23:59", "price": "1", "feePrice": "0"},
+        ],
+    )
+    rules = {
+        "name": "合成站",
+        "date": "2026-11-06",
+        "holiday": False,
+        "timezone": "Asia/Shanghai",
+        "template": template,
+        "extras": {"parkFeeTemplateId": False},
+    }
+    text = plan_text(
+        rules, {"start": "06:00", "end": "10:00", "energy": "2", "power": "2", "timezone": "Asia/Shanghai"}
+    )
+    assert "预计节省" not in text
+    assert "最早开始方案超出可用套餐额度" in text

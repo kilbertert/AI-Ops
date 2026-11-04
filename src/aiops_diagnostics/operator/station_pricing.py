@@ -172,6 +172,7 @@ def plan_text(rules, arguments):
     if minimum is None or minimum < 0:
         raise PlanUnavailable("最低启动金额未核实，不能确认方案可执行。")
     package_note = ""
+    baseline_feasible = True
     if template.get("enablePackage") is True:
         amounts = [
             v
@@ -180,6 +181,7 @@ def plan_text(rules, arguments):
         ]
         if not amounts:
             raise PlanUnavailable("没有覆盖含税估算的金额套餐，请核对是否允许普通按量付款。")
+        baseline_feasible = max(amounts) >= baseline_total
         package_note = f"金额套餐是预付限额，非折扣；覆盖含税估算的最小额度为 {shown(min(amounts))}。"
     lines = [
         f"站点：{rules['name']}；计费日：{rules['date']}"
@@ -201,10 +203,13 @@ def plan_text(rules, arguments):
     if package_note:
         lines.append(package_note)
     lines.append(f"税额 {shown(subtotal)} × {vat:f}% = {shown(tax)}；含税合计 {shown(total)}。")
-    lines.append(
-        f"对比最早{arguments['start']}开始：含税{shown(baseline_total)}，"
-        f"预计节省{shown(baseline_total - total)}。"
-    )
+    if baseline_feasible:
+        lines.append(
+            f"对比最早{arguments['start']}开始：含税{shown(baseline_total)}，"
+            f"预计节省{shown(baseline_total - total)}。"
+        )
+    else:
+        lines.append("最早开始方案超出可用套餐额度，不能作为可执行的节省对照。")
     lines.append(f"最低启动金额 {shown(minimum)}；估算消费与预付门槛分别核对。")
     lines.append("采用已确认的普通按量、不用优惠、不预约、不买保险、充完离场条件；无停车模板。")
     lines.append(f"时间按已确认的计费时区 {arguments['timezone']}；假设持续达到输入功率、一次启动。")
