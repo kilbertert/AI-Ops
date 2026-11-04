@@ -7,7 +7,7 @@
 
 `ci.yml` 新增一步 `Decide the test tier`，在跑测试前判断这次 PR 改了哪些文件：
 
-- 改动**全部**落在 `docs/` 或根层 `*.md` → 只跑"读文档"的那批（实测 **683 条 / 26 秒**）
+- 改动**全部**落在 `docs/` 或根层 `*.md` → 只跑"读文档"的那批（实测 **738 条 / 32 秒**）
 - 其余任何情况 → 全量（**4141 条 / 192 秒**）
 
 降级档的测试集合**不写死文件名**，按"测试源码里提没提到文档"现算，新增一个读文档的
@@ -38,6 +38,21 @@
 
 **反向验证**：把判定正则的两个 `^` 锚点去掉，`sub/docs/a.md` 与 `sub/README.md` 两条
 立即转红 —— 其中 `sub/docs/a.md` 是真漏洞（第一版确实放过了它），是这套测试抓出来的。
+
+## 复核轮追加（Codex Review 一条）
+
+**发现成立**：选取正则只认 `docs/…` 这个字面量，而用 pathlib 拼路径的测试
+（`PROJECT_ROOT / "docs" / "agents" / "company-code-baseline.md"`）源码里没有这个字面量，
+被留在档外 —— 改这些文档时 CI 是绿的，守着它们的测试一条都没跑。实际漏了 5 个文件：
+`test_company_entity_map.py`、`test_company_auth_scope.py`、`test_operator_questions_triage.py`、
+`test_recon_procedure_evidence.py`、`test_repo_index_evidence.py`。
+
+修法与分档同一条原则：**不抄文件名清单**。正则补一支 `"docs" */`（`grep -E` 与 Python
+`re` 都认的写法），并新增 `test_the_docs_tier_selects_every_test_that_reads_docs`
+—— 它从 `tests/` 里**现找**用 `"docs" /` 读文档的文件，逐个要求被选取正则命中。
+删掉正则里那一支，这条测试列出全部 5 个漏掉的路径并转红（已实测）。
+
+改正后的量：文档档 **45 个文件 / 738 条 / 32 秒**（原记 683 条 / 26 秒）。
 
 全量：`4141 passed, 9 skipped in 204.95s`，`ruff check` / `format --check` 通过。
 

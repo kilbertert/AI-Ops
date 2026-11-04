@@ -202,7 +202,7 @@ jobs:
         #   3. 测试静默变成 skip —— **记成 pass 的 skip 是假绿**（本机另一仓
         #      health-flow 的 CI 注释专门写过这个形状：`445 passed, 4 skipped` 被读成通过）。
         #
-        # 基线：**全量 4114 passed / 9 skipped（192 秒）**；文档档 **约 260 条**。
+        # 基线：**全量 4114 passed / 9 skipped（192 秒）**；文档档 **738 条 / 32 秒**。
         # ⚠️ 比本机多一条跳过，不是异常：`test_cd_deploy_scripts.py` 的 dry-run
         # 需要 `dev-host`，而那东西只在开发机上 —— CI 是 GitHub-hosted，所以它跳过。
         # 用上限而非等号：新增测试不会让这条腐化。
@@ -213,11 +213,13 @@ jobs:
             # 降级档的集合**不写死文件名** —— 写死之后新增一个读文档的测试就会被
             # 静默漏掉，而"漏掉"在这里的形态就是绿。按"测试源码里提没提到文档"
             # 现算，新测试自动进来。
-            targets=$(grep -rlE 'docs/|README\.md|qa-plan\.md|acceptance\.feature|SOP\.md|GLOSSARY\.md' \
+            # `"docs"/` 那一支是同一个意思的 pathlib 写法：`PROJECT_ROOT / "docs" / ...`
+            # 里没有 `docs/` 这个字面量，只认前一支会把这些测试留在档外。
+            targets=$(grep -rlE 'docs/|"docs" */|README\.md|qa-plan\.md|acceptance\.feature|SOP\.md|GLOSSARY\.md' \
               tests --include='*.py' | grep -E '(^|/)test_.*\.py$' | sort | tr '\n' ' ')
             echo "文档档：$(printf '%s' "$targets" | wc -w) 个文件"
             # 集合算空了就退回全量，而不是交给下面的下限去猜。
-            # 实测 683 条 / 26 秒（2026-11-04）。
+            # 实测 738 条 / 32 秒（2026-11-04；扩到 pathlib 写法后 45 个文件）。
             if [ -z "${targets// /}" ]; then
               echo "::warning::文档档没算出任何文件 —— 退回全量，避免收集为空"
               targets=""; floor=4000

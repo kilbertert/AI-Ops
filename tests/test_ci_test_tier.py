@@ -111,3 +111,34 @@ def test_an_empty_diff_falls_back_to_full(tmp_path: Path) -> None:
 def test_a_missing_pr_base_falls_back_to_full(tmp_path: Path) -> None:
     """非 PR 触发（没有 base/head）时判据必须走全量。"""
     assert _decide(tmp_path, ["docs/a.md"], base="", head="") == "full"
+
+
+def _selector_pattern() -> str:
+    """`Run tests` 步骤里挑文档档测试集合用的那条正则，从 workflow 原文取出。"""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    match = re.search(r"targets=\$\(grep -rlE '([^']+)'", text)
+    assert match, "ci.yml 里找不到文档档的选取正则（改名或改形状了？）"
+    return match.group(1)
+
+
+def test_the_docs_tier_selects_every_test_that_reads_docs() -> None:
+    """读文档的方式不止 `docs/…` 一种写法。
+
+    用 pathlib 拼路径的测试（`ROOT / "docs" / "agents" / "x.md"`）源码里**没有**
+    `docs/` 这个字面量，只认字面量就会把它们留在档外：改那些文档时 CI 绿，
+    而守着这些文档的测试一条都没跑。这里用「tests/ 里真的出现了哪一种写法」
+    反推判据该认哪些写法，而不是再抄一份文件名清单。
+    """
+    pattern = _selector_pattern()
+    reading = [
+        path
+        for path in (REPO_ROOT / "tests").rglob("test_*.py")
+        if re.search(r"""["']docs["']\s*/""", path.read_text(encoding="utf-8"))
+    ]
+    assert reading, "tests/ 里找不到用 pathlib 读 docs 的测试 —— 这条判据本身失效了"
+    missed = [
+        str(path.relative_to(REPO_ROOT))
+        for path in reading
+        if not re.search(pattern, path.read_text(encoding="utf-8"))
+    ]
+    assert not missed, f"文档档没选中这些读 docs 的测试，改文档时它们不会跑：{missed}"
