@@ -1,11 +1,12 @@
-> 本退役分支已移除旧标准诊断接口；C端检测走业务工作流，管家走节点，统一使用 QA 回读。详见[退役说明](runtime-retirement.md)。
+> 旧标准诊断接口已退役并部署；C端检测走业务工作流，管家走节点，统一使用 QA 回读。详见[退役说明](runtime-retirement.md)。
 
 # AI-Ops 功能测试接口文档
 
-版本：2026-10-28｜适用对象：产品、测试、前端联调｜接口前缀：`/v1`
+范围索引更新：2026-11-04｜适用对象：产品、测试、前端联调｜接口前缀：`/v1`
 
 本文可单独转发。覆盖C端只读客服、管家节点诊断及相关用户接口；请求示例使用占位凭据和合成ID。
-接口字段按代码基线 `1370e11b` 核对，核心样例经临时Gateway实际请求验证；不是本次重新执行了生产验收。
+接口示例保留 `1370e11b` 时的临时Gateway验证边界；本次只更新状态导航，未重新驱动所有接口。
+新增站点与受管生命周期能力见[当前交付](agents/current-delivery-state.md)，接口形状以现役OpenAPI和对应契约为准。
 
 在线查阅：<https://api.mall.qushiyun.com/v1/docs>。
 OpenAPI 3.1导入地址：<https://api.mall.qushiyun.com/v1/openapi.json>。
@@ -22,8 +23,8 @@ OpenAPI 3.1导入地址：<https://api.mall.qushiyun.com/v1/openapi.json>。
 | C端H5登录页 | `https://ulink.h5.mall.qushiyun.com/shopPackage/pages/login/index` |
 | C端AI客服 | `https://ulink.h5.mall.qushiyun.com/aiPackage/pages/chat/chat` |
 | C端WF01 | 已启用；知识指导、本人订单状态/账务、连续问答、来源/媒体、多语言 |
-| 管家节点接口 | 2026-10-28记录为持续开放：`operator` / `node` / active；单订单CPMS详情与监测 |
-| 管家Dify预览 | 正常公司登录后的原生预览已连Java；公司管家App正式页面部署仍是独立交付项 |
+| 管家节点接口 | 已有真实订单及站点链路证据；#1335的针对性答复与连续提问仍需原入口回归 |
+| 管家Dify预览 | 正常公司登录后的原生预览与原H5已有链路证据；首页新增入口已撤回，聊天页仍可访问 |
 | 图片上传 | 现役未开放，不纳入本轮成功验收；回答内已有图片/视频可测 |
 | 健康报告、站点分析 | 已实现的独立能力，按本轮任务与数据源条件测试；不因WF01通过就视为通过 |
 

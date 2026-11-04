@@ -5,6 +5,9 @@
 
 ## 当前交付与退役范围
 
+2026-11-04阶段整理：[当前交付](docs/agents/current-delivery-state.md)、[收尾验收](docs/validation/2026-11-04-stage-closeout.md)、
+[待办与依赖](docs/reviews/2026-11-04-stage-closeout.md)。版本标签与后续部署修订分别追溯。
+
 已完成 Python Thin Harness 的代码退役：删除诊断/交互式/设备 CLI、Codex 子进程、
 工具循环、恢复工作区、旧诊断 HTTP 面和专属便携打包。运维入口保留为 `aiops-admin`。
 退役版本`1.0.0+fbab0f739322`已部署，C端/管家原H5及Dify原生预览链路已验收；
@@ -16,7 +19,7 @@
 - 管家没有指定订单时可咨询操作、解释状态或搜索当前账号可见站点；需要查具体订单时才请求单号。
   站点名称/地址来自CPMS，未定位时不按距离排序；见[无订单对话](docs/agents/operator-cpms/conversation-qa.md)。
   无订单能力已上线并经ulink真实页面核验；[最新回执](docs/validation/2026-10-29-z14-operator-conversation-verified.md)
-  另保留订单诊断偶发JSON失败的未完成项。
+  后续JSON与事实相关性修复见当前交付索引，长期稳定性仍未验收。
 - 节点站点工具通过 Gateway 代理取数，代理保留租户身份与分页字段，模型证据只留声明字段。
   管家与消费者按各自权限校验；节点、Gateway 和回调配置需配套交付，见[站点代理验证](docs/acceptance/site-tool-proxy/qa-plan.md)。
 - Dify 试用只接受已登记 `app_id`，按绑定运行 Dify/Java 草稿；不接受裸 prompt/旧工具白名单。

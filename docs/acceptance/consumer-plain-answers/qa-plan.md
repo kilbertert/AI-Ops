@@ -1,7 +1,7 @@
 # C端答复"先说结论"QA 计划
 
 契约见同目录 [acceptance.feature](acceptance.feature)。实现取舍见
-[ADR-0181](../../adr/0181-consumer-answers-lead-with-the-conclusion.md)。
+[ADR-0182](../../adr/0182-consumer-answers-lead-with-the-conclusion.md)。
 
 ## 自动化用例（可实现、可复跑）
 
@@ -22,4 +22,4 @@
 
 - 在真实账号与原 H5 上看两种答复的实际渲染（换行、`·` 项目符号、第一段是否真的在第一屏）。
 - 需要一次正常登录与一张本人订单；本轮没有做，因此本片**未完成业务验收**。
-- 部署瞬间回读影响：见 ADR-0181「代价」一节，需在部署前决定是否接受 180 秒窗口。
+- 部署瞬间回读影响：见 ADR-0182「代价」一节，需在部署前决定是否接受 180 秒窗口。

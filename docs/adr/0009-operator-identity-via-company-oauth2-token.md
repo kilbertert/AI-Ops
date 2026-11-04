@@ -58,7 +58,7 @@ Status: Accepted
   **形状判据必须窄到增强器那组字段** —— `username`/`client_id`/`exp`/`scope`/`authorities`
   对客户端凭据令牌同样存在。判定还只能写在**信封**上：无效令牌也返回 HTTP 200
   （`{"code":<码>,"msg":"token无效","data":null}`）。实现与依据见
-  [`company_token_auth.py`](../src/aiops_diagnostics/company_token_auth.py) 与
+  [`company_token_auth.py`](../../src/aiops_diagnostics/identity/company_token_auth.py) 与
   [company-platform-integration-baseline.md](../agents/company-platform-integration-baseline.md) §2.1。
 
 - **本决定不改变 ADR-0003 / ADR-0008 的状态。** 委托句柄仍未实现、客户端仍走共享会话直读；

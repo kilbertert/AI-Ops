@@ -1,6 +1,7 @@
 # 文档导航与维护范围
 
-更新：2026-10-28（北京时间）。本轮已交付功能进入测试验收与缺陷修复；阶段范围见[测试交接](testing-handoff.md)。
+更新：2026-11-04（北京时间）。阶段状态见[交付索引](agents/current-delivery-state.md)，
+本次整理见[收尾记录](validation/2026-11-04-stage-closeout.md)，开放任务见[台账](reviews/2026-11-04-stage-closeout.md)。
 文档描述已验证的能力和证据边界，不能把“已实现”“已部署”“测试方已验收”互相替代。
 
 ## 从哪里开始
@@ -11,8 +12,8 @@
 | 产品、测试：交付什么、怎样反馈缺陷 | [测试交接](testing-handoff.md) |
 | 系统方向、M1–M4剩余范围 | [系统策略复核](system-strategy-audit.md) |
 | 工程：真实调用链与职责 | [系统架构](system-architecture.md)、[README模块索引](../README.md#三系统模块与依赖关系) |
-| 仓库目录、旧执行器清理与迁移顺序 | [目录梳理与 Thin Harness 退役清单](architecture/repository-layout.md)；区分已删除与迁移建议 |
-| 运行版本、启用状态和证据 | [当前交付状态](agents/current-delivery-state.md)；该页后半为历史记录 |
+| 仓库目录、旧执行器清理与迁移顺序 | [现行目录规则](architecture/repository-layout.md#现行目录规则)；迁移已完成，旧调查仅解释历史 |
+| 运行版本、启用状态和证据 | [当前交付状态](agents/current-delivery-state.md)；按证据区分已合并、已部署和已验收 |
 | C端：知识上传、选库、多语言、实时查询 | [WF01手册](agents/consumer-wf01/README.md) |
 | 管家：公司身份、两项CPMS工具与节点 | [管家手册](agents/operator-cpms/README.md) |
 | 前端：C端和管家接线 | [C端交接](agents/consumer-wf01/app-handoff.md)、[管家交接](agents/frontend-operator-handoff.md) |
@@ -21,23 +22,20 @@
 | 设计理由、术语、自动开发流程 | [ADR](adr/)、[词汇表](../GLOSSARY.md)、[AFK](afk-workflow.md) |
 | 某次执行究竟验了什么 | [验收记录](validation/)、[开发进度](开发进度/)；按日期、文件名找对应记录 |
 
-## 各类文件如何收尾
+## 各类文档的职责与归档
 
-| 文档族 | 本轮处理与后续维护 |
+| 文档族 | 维护方式 |
 |---|---|
-| 根README、system-architecture、system-strategy-audit | 更新为当前产品入口、三条执行路径及剩余范围；修改架构时同步 |
-| current-delivery-state | 顶部给定日快照；原逐条记录保留当时结论，不再把旧“未启用”当今天状态 |
-| consumer-wf01、插件说明、知识导入 | 统一动态文档、选库发布、正文语言；审核副本只作旧版本兼容 |
-| operator-cpms与前端交接 | 分开API已验证、公司代码已合并、正式H5交付未证实；不推断旧provider已退役 |
-| gateway、ops、deploy | 明确新旧路径适用面；保留已验证的安装/回退手顺，实际操作仍按宿主政策 |
-| 快速上手、thin-harness、根SOP及architecture.md | 导航区分CLI/旧诊断内核适用面，不作为WF01或Java节点的配置流程 |
-| faq-api、standard-api-contract等接口参考 | 继续描述各自接口；WF01补充语义由手册及对应ADR给出，不将固定FAQ当动态知识 |
-| 按日期的validation、开发进度、reviews与ADR | 保留历史事实；新证据新增文件，旧决定由后继ADR说明，不改写当时结果 |
-| docs/validation.md、docs/开发进度.md | ADR-0097只读归档；本轮未修改 |
-| docs/handoff-brief.md、afk-cutover及旧前端排查 | 标明历史用途或提供当前导航；不按旧票号继续派工 |
-| docs/architecture/ai-ops-architecture.* | 旧诊断内核图快照，退出当前系统图位置；当前图在system-architecture.md |
-| docs/知识库材料、原型及公司源码 | 输入资料/本地材料；不批量搬入Git，不把未审核的工程记录公开 |
-| 旧任务工作树内system-strategy-audit.md | 未集成的2026-10-22草稿且有他人修改，保持原样；当前文档位于本目录 |
+| README、架构、测试交接、两端手册 | 描述现役入口与能力；状态引用交付索引，过时命令及时订正 |
+| current-delivery-state | 只保留当前状态、证据与下一步；旧快照从Git历史读取，不继续无限追加 |
+| acceptance、specs、QA计划 | 保存验收合同；PROGRESS/BLOCKED的当前结论须指向最新证据，旧执行记录标注时点 |
+| gateway、ops、deploy及agents操作手册 | 保存可复用方法；主机与凭据从受控记录读取，不能照历史命令恢复已退役能力 |
+| validation、开发进度 | 一次里程碑一个文件；新证据新增记录，不能用本次成功改写旧失败 |
+| reviews | 阶段复核与任务处置；PRD和执行依赖仍以GitHub原生issue关系为准 |
+| ADR、GLOSSARY | 决定与术语；新决定由后继ADR说明，不借整理改业务合同 |
+| validation.md、开发进度.md | ADR-0097只读归档；不追加、不移动 |
+| 旧架构图、探索稿、原型 | 保留历史用途；不当作现役架构、正式入口或已实现承诺 |
+| 原始日志、主机快照、会话、工作区清理清单 | 私有归档；仓库只留经过选择和脱敏的结论与方法 |
 
-本轮对当前入口和相关手册做内容同步，对其他文档按上述用途保留；没有声称逐条复验全部历史事实。
-本轮不修改运行时参考architecture.md和根SOP，因此不命中自动CD；不进行知识库导入、新业务开发。测试结果须注明运行修订、环境和时间。
+本轮同步当前导航、发布基线、退役状态、提示词与费用接续，补入滞留PR的历史验收摘要。
+不逐条重验全部历史事实，不删除原始失败记录或用户材料。

@@ -1,14 +1,13 @@
 # 管家 CPMS 工具实施
 
-Dify 预览模型参数报错的当前修复与复跑方法见 [模型参数手册](../dify-model-parameters.md)。
-本轮验证原 Agent 配置可正常回复，未调用真实订单工具，不改变下述业务整链验收边界。
+更新：2026-11-04。节点、原管家H5与Dify原生预览已有真实链路证据，
+见[退役验收](../../validation/2026-10-29-runtime-retirement-live.md)及
+[站点清单验收](../../validation/2026-11-03-site-delivery-production-receipt.md)。
+首页新增入口已撤回，原聊天页仍可访问；不是“整页未部署”或“路由仍撤回”。
 
-2026-10-28 新增原生预览接线与正式 Java 持续开放任务，使用明确订单号；具体生效状态与验收
-参见 [接线手册](native-preview.md) 和 `docs/validation/` 对应回执，不能将下文旧撤回状态当作新结论。
-
-当前阶段（2026-10-28）：节点API已有真实历史单回放，公司前端MR !145已合并且完整构建通过，
-回执仍为未部署；原管家H5/真人整链、有效Dify用户试用与业务结论未完成。最后现场回放后路由已撤回，
-本轮未重新探测现场，不据源码宣称后来已常驻启用。见[测试交接](../../testing-handoff.md)。
+JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、完整提示词生命周期、
+双租户和语义准确率仍待验，统一见[当前交付](../current-delivery-state.md)。
+模型参数排查见[手册](../dify-model-parameters.md)，不能用普通模型回复代替订单工具验收。
 
 目标：Java 节点以 CPMS 正式只读 API 取证，旧七工具不作为新链依赖。
 管家问答现区分无订单咨询/站点搜索与单订单诊断，订单不是聊天门槛；
@@ -84,7 +83,7 @@ uv run pytest tests/operations/test_operator_cpms.py tests/test_node_runtime_dep
 工具登记命令（在已配置控制台与目标文件的环境中）：
 
 ```bash
-aiops --config <Gateway配置> admin ensure-node-provider \
+aiops-admin --config <Gateway配置> ensure-node-provider \
   --app-id <已登记管家应用> --gateway-url <Gateway的HTTPS地址> --db <现有gateway.db>
 ```
 
