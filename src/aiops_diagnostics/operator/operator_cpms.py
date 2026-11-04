@@ -24,7 +24,7 @@ from aiops_diagnostics.execution.agent_runs import (
 )
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
-from aiops_diagnostics.operator import operator_conversation, operator_tools, site_note_review
+from aiops_diagnostics.operator import operator_conversation, operator_tools, order_pricing, site_note_review
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused, claims_mutation
 
 SCENARIO = "operator_order_diagnosis"
@@ -63,6 +63,7 @@ SITE_PATH = "/chSite/page"
 #: 而两端的证据字段集合是**精确相等**比对的，混跑不会「碰巧还能用」，只会在某一次
 #: 完成回调里以缺字段的形状炸开。把拒绝移到授权那一步，混跑就有一个稳定的错误码。
 TOOL_CONTRACT = "request-target/1"
+OBJECT_CONTRACT = "request-target/2"
 TOOL_CONTRACT_HEADER = "X-AI-Ops-Tool-Contract"
 
 
@@ -589,7 +590,7 @@ class OperatorCpms:
         }
 
     def grant(self, run_id, token, manifest, tool, contract="", arguments=None):
-        if contract != TOOL_CONTRACT:
+        if contract != (OBJECT_CONTRACT if tool == "cpms_order_tariff" else TOOL_CONTRACT):
             # 旧节点不声明契约版本。挡在**领授权**这一步，而不是等它在完成回调里因为
             # 证据缺字段而失败——那既不是稳定错误码，也发生在公司令牌已经用过之后。
             raise OperatorRefused("OPERATOR_TOOL_CONTRACT_OUTDATED")
@@ -612,7 +613,7 @@ class OperatorCpms:
             "site_ids": self._grant_sites(task, run, tool),
             "inputs": tool_inputs(tool, values),
             "request": tool_request(tool, values),
-            "contract": TOOL_CONTRACT,
+            "contract": contract,
             "base_url": task.proxy_url + "/v1/internal/operator-runs/" + run_id + "/cpms",
             "bearer": task.grant,
             "expires_at": run.expires_at.isoformat(),
@@ -655,9 +656,19 @@ class OperatorCpms:
             self._current(run_id, tool=tool)
             if tool in task.evidence:
                 return task.evidence[tool]["response"]
-            if tool == TOOL_NAMES[1] and TOOL_NAMES[0] not in task.delivered:
+            if tool in (TOOL_NAMES[1], "cpms_order_tariff") and TOOL_NAMES[0] not in task.delivered:
                 raise OperatorRefused("OPERATOR_DETAIL_REQUIRED")
 
+            if tool == "cpms_order_tariff":
+                # 快照本身不含siteId；在同次调用中重新读取订单，防止转站后的旧证据放行。
+                detail = cpms_get(
+                    task.base_url + tool_request(TOOL_NAMES[0], {"order_no": run.order_no})["path"],
+                    task.bearer,
+                    task.caller.effective_tenant_id,
+                )
+                validate_body(detail, task.caller, run.order_no, TOOL_NAMES[0])
+                if detail["data"]["siteId"] != task.order_site_id:
+                    raise OperatorRefused("CPMS_SCOPE_MISMATCH")
             body = (
                 cpms_get(
                     task.base_url + path + ("?" + query if query else ""),
@@ -680,6 +691,26 @@ class OperatorCpms:
                     "data": data,
                 }
                 task.evidence[tool]["response"] = response
+                return task.evidence[tool]["response"]
+            if tool == "cpms_order_tariff":
+                data = order_pricing.read_snapshot(body, task.caller, run.order_no)
+                self._current(run_id, tool=tool)
+                task.evidence[tool] = {
+                    "tool": tool,
+                    "inputs": {"order_no": run.order_no},
+                    "source": operator_tools.tool(tool).source,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "data": data,
+                    "response": {
+                        "code": 0,
+                        "data": {
+                            "orderNo": run.order_no,
+                            "tenantId": task.caller.effective_tenant_id,
+                            "siteId": task.order_site_id,
+                            "value": data,
+                        },
+                    },
+                }
                 return task.evidence[tool]["response"]
             validate_body(body, task.caller, run.order_no, tool)
             rows = [body["data"]["chOrderInfoModel"]] if tool == TOOL_NAMES[0] else body["data"]["records"]
@@ -1687,7 +1718,14 @@ def _order_fact_text(evidence, language="zh", question=""):
             labels["samples"] + colon + str(samples.get("samples_returned", len(samples.get("records", []))))
         )
     lines.append(labels["limits"])
-    return "\n".join(lines)
+    from aiops_diagnostics.operator.order_analysis import analysis
+
+    result = "\n".join(lines) + analysis(evidence, question, language)
+    if "cpms_order_tariff" in evidence:
+        result += "\n\n" + order_pricing.historical_report(
+            evidence["cpms_order_tariff"]["data"], detail, language
+        )
+    return result
 
 
 def _percent(value) -> str:
@@ -1732,6 +1770,7 @@ def _readable_time(iso: object) -> str:
 _SOURCE_LABELS_EN = {
     "cpms.orderDetail": "Order detail",
     "cpms.chargingMonitor": "Charging monitor samples",
+    "cpms.orderTariff": "Historical order tariff",
 }
 
 
@@ -1744,6 +1783,7 @@ def _source_label(source, language: str) -> str:
 _SOURCE_LABELS = {
     "cpms.orderDetail": "订单详情",
     "cpms.chargingMonitor": "充电监测样本",
+    "cpms.orderTariff": "订单历史计费快照",
 }
 
 

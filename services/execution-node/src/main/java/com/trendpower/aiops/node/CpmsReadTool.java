@@ -21,6 +21,9 @@ import java.util.Set;
 public final class CpmsReadTool implements ToolCallback {
     /** 工具授权契约版本。必须与 Gateway 侧 `operator_cpms.TOOL_CONTRACT` 逐字相同。 */
     public static final String CONTRACT = "request-target/1";
+    public static String contract(String tool) {
+        return "object".equals(OperatorTools.kind(tool)) ? "request-target/2" : CONTRACT;
+    }
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
@@ -132,7 +135,11 @@ public final class CpmsReadTool implements ToolCallback {
             JsonNode body = get(grant, grant.request().target());
             // 响应形状由**声明**决定，不由工具名决定：新增一个复用已有形状的工具，本文件不用改。
             String kind = OperatorTools.kind(tool);
-            ObjectNode data = "page".equals(kind) ? samples(body, grant, tool) : detail(body, grant, tool);
+            ObjectNode data = switch (kind) {
+                case "page" -> samples(body, grant, tool);
+                case "object" -> object(body, grant, tool);
+                default -> detail(body, grant, tool);
+            };
             ObjectNode evidence = JSON.createObjectNode();
             evidence.put("tool", tool);
             evidence.set("inputs", grant.inputs());
@@ -196,6 +203,43 @@ public final class CpmsReadTool implements ToolCallback {
         // 同一份「缺证」报告（41 实测，订单 2113549588485718017）。
         // 取证字段来自**声明**：这张表就是模型能回答什么，过去两侧各写一份，靠人记住同步。
         return select(row, OperatorTools.evidenceFields(tool));
+    }
+
+    private static ObjectNode object(JsonNode body, Grant grant, String tool) {
+        identity(body, grant, tool);
+        JsonNode value = project(body.path("value"), OperatorTools.evidenceShape(tool), 0);
+        if (!value.isObject()) throw refused("cpms_invalid_field");
+        return (ObjectNode) value;
+    }
+
+    private static JsonNode project(JsonNode value, JsonNode shape, int depth) {
+        if (depth > 6 || value.isMissingNode()) throw refused("cpms_invalid_field");
+        if (value.isNull()) return value;
+        if (shape.isNull()) {
+            if (!value.isValueNode() || (value.isTextual() && value.asText().length() > 1000)) {
+                throw refused("cpms_invalid_field");
+            }
+            return value;
+        }
+        if (shape.isArray()) {
+            if (!value.isArray() || value.size() > 64 || shape.size() != 1) {
+                throw refused("cpms_invalid_field");
+            }
+            var rows = JSON.createArrayNode();
+            value.forEach(row -> {
+                if (row.isNull()) throw refused("cpms_invalid_field");
+                rows.add(project(row, shape.get(0), depth + 1));
+            });
+            return rows;
+        }
+        if (!shape.isObject() || !value.isObject()) throw refused("cpms_invalid_field");
+        var result = JSON.createObjectNode();
+        shape.fields().forEachRemaining(field -> {
+            if (value.has(field.getKey())) {
+                result.set(field.getKey(), project(value.get(field.getKey()), field.getValue(), depth + 1));
+            }
+        });
+        return result;
     }
 
     private static ObjectNode samples(JsonNode body, Grant grant, String tool) {

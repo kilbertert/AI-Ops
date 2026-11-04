@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,7 +20,9 @@ sys.path.insert(0, str(ROOT / "tests"))
 from operations.test_operator_cpms import HEADERS, environment, request, tenant_owner  # noqa: E402
 from pytest import MonkeyPatch  # noqa: E402
 
-from aiops_diagnostics.operator import operator_cpms  # noqa: E402
+from aiops_diagnostics.operator import operator_cpms, operator_tools  # noqa: E402
+
+ORDER_TOOLS = ("cpms_order_detail", "cpms_charging_samples", "cpms_order_tariff")
 
 
 class Model(BaseHTTPRequestHandler):
@@ -36,7 +39,7 @@ class Model(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
         type(self).calls.append(body)
         tools = [m for m in body.get("messages", []) if m.get("role") == "tool"]
-        conversation = not body.get("tools")
+        conversation = not any(t["function"]["name"] == "cpms_order_detail" for t in body.get("tools", []))
         if type(self).fail and tools:
             self.send_response(500)
             self.send_header("Content-Length", "0")
@@ -50,8 +53,8 @@ class Model(BaseHTTPRequestHandler):
             )
             delta = {"role": "assistant", "content": json.dumps(answer, ensure_ascii=False)}
             finish = "stop"
-        elif len(tools) < 2:
-            tool = operator_cpms.TOOL_NAMES[len(tools)]
+        elif len(tools) < len(ORDER_TOOLS):
+            tool = ORDER_TOOLS[len(tools)]
             delta = {
                 "role": "assistant",
                 "content": "正在读取订单证据。",
@@ -72,7 +75,7 @@ class Model(BaseHTTPRequestHandler):
                 "probable_cause": "通信中断线索，需现场核查。",
                 "next_steps": ["检查网络。"],
                 "limitations": ["有限样本不是完整时间线。"],
-                "evidence_tools": list(operator_cpms.TOOL_NAMES),
+                "evidence_tools": list(ORDER_TOOLS),
                 "reply": "本轮记录如下。\n{{fact:order_facts}}\n请结合现场情况核对网络。",
             }
             delta = {"role": "assistant", "content": json.dumps(answer, ensure_ascii=False)}
@@ -134,6 +137,9 @@ def main():
         raise ValueError("locked JDK and dependency directory required")
     classes = out / "classes"
     classes.mkdir(exist_ok=True)
+    shutil.copyfile(
+        ROOT / "src/aiops_diagnostics/operator/operator_tools.json", classes / "operator_tools.json"
+    )
     docker = [
         "docker",
         "run",
@@ -191,6 +197,7 @@ def main():
         ):
             if args.tenant_owner:
                 f["resolver"].current = tenant_owner()
+            f["candidate"]["enabled"] = list(ORDER_TOOLS)
             raw = json.loads(f["manifest"].read_text())
             raw["model"] = {
                 "provider_key": "openai-compatible",
@@ -200,17 +207,9 @@ def main():
             }
             raw["model_options"] = {"temperature": 0.2, "top_p": 0.9, "max_tokens": 64}
             for tool in raw["tools"]:
-                tool["description"] = (
-                    "Read diagnostic fields for the authorized order from CPMS. Takes no arguments."
-                    if tool["name"] == operator_cpms.TOOL_NAMES[0]
-                    else (
-                        "Read up to 50 CPMS charging samples for the authorized order. "
-                        "Ordering and completeness are not guaranteed. Takes no arguments."
-                    )
-                )
-                tool["input_schema"] = (
-                    '{"type":"object","properties":{},"required":[],"additionalProperties":false}'
-                )
+                declared = operator_tools.tool(tool["name"])
+                tool["description"] = declared.description
+                tool["input_schema"] = declared.input_schema()
             f["manifest"].write_text(json.dumps(raw))
             current = f["publish"](f["route"].route_revision)
 
@@ -261,8 +260,8 @@ def main():
                     break
             cases.append({"case": "java-loop", "status": final.status_code, "body": final.json()})
             assert final.status_code == 200 and final.json()["status"] == "completed", final.text
-            assert len(f["state"]["calls"]) == 5  # 节点取证2次，签发/完成/回读授权各1次。
-            assert len(Model.calls) == 3
+            assert len(f["state"]["calls"]) == 7  # 节点取证3次、快照再验订单1次、签发/完成/回读各1次。
+            assert len(Model.calls) == 4
             assert all(call.get("response_format") == {"type": "json_object"} for call in Model.calls)
             assert all(
                 "evidence_tools" in call["messages"][0]["content"] for call in Model.calls
@@ -340,7 +339,7 @@ def main():
                                 "tool_name": name,
                                 "enabled": True,
                             }
-                            for name in operator_cpms.TOOL_NAMES
+                            for name in ORDER_TOOLS
                         ],
                     },
                 },
@@ -401,7 +400,7 @@ def main():
                 else:
                     assert len(f["state"]["calls"]) == before + 1 and "天河测试站" in result.text, result.text
                     assert "PRIVATE-PHONE" not in result.text
-                assert not Model.calls[-1].get("tools")
+                assert [t["function"]["name"] for t in Model.calls[-1]["tools"]] == ["cpms_site_search"]
                 assert Model.calls[-1]["response_format"] == {"type": "json_object"}
                 cases.append({"case": "java-no-order-" + label, "status": "completed"})
             f["candidate"]["enabled"] = []
@@ -437,7 +436,7 @@ def main():
                 indent=2,
             )
         )
-    print("PASS: real Java tool loop, two CPMS reads, three model turns, all-off refuses")
+    print("PASS: real Java tool loop, three CPMS tools, four model turns, all-off refuses")
     return 0
 
 

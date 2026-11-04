@@ -8,11 +8,11 @@
   },
   "node": {
     "artifact": "aiops-execution-node.jar",
-    "sha256": "e3ee149baa7502583422c08cced9eb026b3ebd711c3770c45d8d61e1f6a10988",
-    "bytes": 106302208,
-    "source_commit": "c7592948",
+    "sha256": "a9c0ec749151fd6c7816f47708106c49889ee5424f058d73f57dd1c02fd99c2d",
+    "bytes": 106303777,
+    "source_commit": "0ee9a196",
     "build": "由本仓 services/execution-node 构建（可复现：pom 固定 project.build.outputTimestamp，同一份源码两次构建得到同一摘要）；构建命令见 tools/README.md",
-    "source_sha256": "d8e30493ed99beca151710e681e1adb3468a47877cf867defa4943cfd5e5321d",
+    "source_sha256": "53b3bd4243477eb1d2d870d7dd0576ede55b8f7554ff830ed566bfe4274f67f2",
     "source_digest_rule": "services/execution-node 下除 target/__pycache__/.idea 外全部文件的路径+内容摘要；命令见 deploy/node-runtime/source_digest.py"
   },
   "base_images": {
@@ -53,7 +53,7 @@
     "uv_lock_sha256": "371623a3918ab04944818a108b462c79f03ceaa0296eb706bc8d8e948a7e716a",
     "base_image": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
     "base_digest": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
-    "source_sha256": "583351142174f097d0a18656b4bb3b0f5e1b952844446a92ac9ef47dfba48803",
-    "built_at": "2026-11-04T04:42:05Z"
+    "source_sha256": "1cdc691ce15a32772be8b722ad9aac4a2539b7b01fa6f2156514ce4952f4fadc",
+    "built_at": "2026-11-04T05:52:26Z"
   }
 }

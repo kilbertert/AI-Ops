@@ -102,3 +102,9 @@ aiops-admin --config <Gateway配置> ensure-node-provider \
 执行记录见[真实历史回放](../../validation/2026-10-26-operator-real-history-replay.md)。先保存现役应用DSL和配置摘要，独立查询CPMS核对输入，用户令牌只通过受控输入交给请求进程；不以SQL或旧工具代替节点本次取证。发布后从原问答POST拿qa_id，再按qa_id回读唯一run与同轮快照，不能取最新一行。
 
 撤回使用原 `/v1/dify/retract` API。发布密钥由实际Gateway的 `GatewayServerSettings.from_env()` 读取，不能假定一定在 `/proc/<pid>/environ` 的同名键里；用服务虚拟环境、项目身份和实际进程环境运行，**不要构造第二个生产app**。恢复程序先独立验证配置读取和HTTP错误处理，再交给一次性systemd timer；手动finally与timer不能成为同一个未验证脚本的两份假保证。撤回200之后还须核对路由retracted及本人历史GET410，随后清理本次timer。任何失败都保留QA/run，不覆盖数据库旧副本。
+
+### 历史计费与SOP分析
+
+见[SOP反馈接续](sop-followup.md)及[验收计划](../../acceptance/operator-pricing/qa-plan.md)。
+费用工具读取订单当时快照；分时展示电量不等于独立电表。Gateway按同轮证据生成并冻结
+统计、算式与缺证范围；结果不执行实际收费、退款或后台重算。

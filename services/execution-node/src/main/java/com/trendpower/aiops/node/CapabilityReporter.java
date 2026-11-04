@@ -19,7 +19,7 @@ public final class CapabilityReporter {
         try {
             gateway.post("/v1/internal/execution-node/capabilities", JSON.writeValueAsString(Map.of(
                     "schemas", ExecManifest.SUPPORTED_SCHEMAS,
-                    "tool_contract", CpmsReadTool.CONTRACT,
+                    "tool_contract", "request-target/2",
                     "tools_sha256", OperatorTools.declarationDigest())), null);
         } catch (Exception unavailable) {
             // Gateway先升级或尚不可达时等待下次报告，不影响现役运行。

@@ -5,7 +5,7 @@
     "网关侧的路径物化、输入、证据字段、来源标记、发布白名单与 provider 的 OpenAPI 生成，",
     "以及节点侧的装配，都从这里读或由它校验。新增一个工具只加一条，不改节点源码。",
     "边界（有意为之）：request 只能是 GET + 相对路径 + 声明里的查询参数表；",
-    "response.kind 只有 single 与 page 两种形状。需要新形状时改的是引擎，不是每个工具。",
+    "response.kind支持single、page与object；object的有界嵌套白名单由evidence_shape声明。",
     "applies_to 说明这个工具能出现在哪一类运行里：order（有订单的诊断）与 conversation（无订单回合）。",
     "model_inputs 是模型可以提议的那部分输入 —— 它决定发布清单里的 input_schema。运行绑定的输入（例如订单号）不出现在 schema 里：模型不能选它。"
   ],
@@ -62,7 +62,15 @@
         "startSoc",
         "endSoc",
         "gunPower",
-        "interfaceType"
+        "interfaceType",
+        "launchType",
+        "type",
+        "packageType",
+        "parkFee",
+        "tipElectricity",
+        "peakElectricity",
+        "flatElectricity",
+        "valleyElectricity"
       ],
       "applies_to": [
         "order"
@@ -178,6 +186,87 @@
         "name",
         "address"
       ]
+    },
+    {
+      "name": "cpms_order_tariff",
+      "description": "Read the authorized order historical tariff snapshot and period fees. Takes no arguments. Read order detail first.",
+      "inputs": [
+        "order_no"
+      ],
+      "model_inputs": [],
+      "applies_to": [
+        "order"
+      ],
+      "request": {
+        "method": "GET",
+        "path_template": "/chFeeTemplateRecord/{order_no}",
+        "query": []
+      },
+      "source": "cpms.orderTariff",
+      "response": {
+        "kind": "object",
+        "row_path": "data"
+      },
+      "evidence_fields": [
+        "feeTemplate",
+        "periodFeeDetail",
+        "missing"
+      ],
+      "evidence_shape": {
+        "feeTemplate": {
+          "name": null,
+          "type": null,
+          "billingMode": null,
+          "enableJfpg": null,
+          "electricityLoss": null,
+          "vat": null,
+          "enableLaunchFee": null,
+          "launchFee": null,
+          "enablePackage": null,
+          "freeChargingTime": null,
+          "tip": null,
+          "tipService": null,
+          "peak": null,
+          "peakService": null,
+          "flat": null,
+          "flatService": null,
+          "valley": null,
+          "valleyService": null,
+          "feeTemplateItems": [
+            {
+              "startTime": null,
+              "endTime": null,
+              "type": null,
+              "price": null,
+              "feePrice": null,
+              "enabled": null
+            }
+          ],
+          "customServiceItems": [
+            {
+              "startTime": null,
+              "endTime": null,
+              "type": null,
+              "price": null,
+              "feePrice": null,
+              "enabled": null
+            }
+          ]
+        },
+        "periodFeeDetail": [
+          {
+            "startTime": null,
+            "endTime": null,
+            "type": null,
+            "electricity": null,
+            "electricFee": null,
+            "serviceFee": null,
+            "totalFee": null,
+            "feeRate": null
+          }
+        ],
+        "missing": null
+      }
     }
   ]
 }
