@@ -206,3 +206,20 @@ def test_an_empty_route_filter_is_still_rejected(tmp_path: Path) -> None:
     # 空串 = 一个非法的过滤值。
     with pytest.raises(MetricsValidationError):
         metrics.list_runs(TENANT, route_type="")
+
+
+def test_a_null_retrieval_status_is_rejected_at_validation_not_at_sqlite(tmp_path: Path) -> None:
+    """`retrieval_status=None` 必须被判为**校验错误**，不能漏到 SQLite 的 NOT NULL。
+
+    漏过去的话抛的是 `sqlite3.IntegrityError`，而 `_record_metric` 的
+    `contextlib.suppress(Exception)` 会把两者一起吞掉 —— 症状与「词表里少一个成员」
+    完全一样：一行都没有，且没有任何提示。2026-11-04 复审指出。
+
+    合法的空值是**空字符串 `""`**（它本来就在集合里），不是 `None`。
+    """
+    metrics = MetricsStore(tmp_path / "gateway.db")
+    with pytest.raises(MetricsValidationError):
+        metrics.record(tenant_id=TENANT, route_type="qa", outcome="completed", retrieval_status=None)
+    # 空字符串仍然是合法的，照常落行。
+    metrics.record(tenant_id=TENANT, route_type="qa", outcome="completed", retrieval_status="")
+    assert len(metrics.list_runs(TENANT, limit=5)) == 1

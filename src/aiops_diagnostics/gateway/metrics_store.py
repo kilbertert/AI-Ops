@@ -208,7 +208,12 @@ class MetricsStore:
         """
         check_dimension("route_type", route_type)
         check_dimension("outcome", outcome)
-        check_dimension("retrieval_status", retrieval_status, allow_empty=True)
+        # **这里不能用 `allow_empty`**：`retrieval_status` 的合法空值是空字符串 `""`
+        # （它本来就在集合里），而 `None` 不是 —— 让它过会落到 SQLite 的 NOT NULL，
+        # 抛的是 `sqlite3.IntegrityError` 而不是 `MetricsValidationError`，
+        # 又被 `_record_metric` 的 suppress 吞掉，症状与"词表里少一个成员"一模一样。
+        # 2026-11-04 复审指出。
+        check_dimension("retrieval_status", retrieval_status)
         if not tenant_id or not _SAFE_TENANT.fullmatch(tenant_id):
             raise MetricsValidationError("tenant_id is invalid")
         for value, name in (

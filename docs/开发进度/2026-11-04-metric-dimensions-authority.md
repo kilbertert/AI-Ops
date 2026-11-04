@@ -30,7 +30,7 @@ agent_runs 里 operator-trial 绑定的运行数：181
 
 ## 三、验证
 
-**新增 24 条测试**（`tests/gateway/test_metrics_dimensions.py`）：
+**新增 25 条测试**（`tests/gateway/test_metrics_dimensions.py`）：
 
 - 三个维度 × 每个成员 = 18 条「真实 record + list_runs 有行」
 - 判据不重复（源码扫描）
@@ -45,7 +45,7 @@ agent_runs 里 operator-trial 绑定的运行数：181
 | 从词表删掉 `trial` | 2 条红（正例 + 产而无判据） |
 | 把判据写回 `list_runs()` 第二处 | 1 条红（判据不重复） |
 
-全量 **4126 passed / 9 skipped**。镜像内容锁真实重建，`context_digest.py --check` 一致。
+全量 **4128 passed / 9 skipped**。镜像内容锁真实重建，`context_digest.py --check` 一致。
 
 ## 四、过程中的两处自我纠正
 
