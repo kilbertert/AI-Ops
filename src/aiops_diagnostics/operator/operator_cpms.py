@@ -2070,10 +2070,25 @@ class SiteKeywords:
         return params
 
     def matches(self, site: dict[str, str]) -> bool:
+        """这一行是不是在用户说的那个地点。
+
+        地址词之间是 ``any`` 而不是 ``all``（2026-11-04 修正）。用户说「广州天河」指的是
+        **广州市天河区这一带**，不是「同时出现『广州』与『天河』两个字面串」。用 ``all``
+        的实际后果是：HuaJing Station 的地址写作
+        ``… 天河公园 Tian He Qu, Guang Zhou Shi …`` ——「天河」命中、「广州」命不中
+        （地址里是拼音 ``Guang Zhou``），于是 ``all`` 一票否决，**一条真实存在的站点被
+        自己的过滤器丢掉了**，上游返回的总数却是对的。
+
+        站名仍然要求**全部命中**（它通常只有一个词，``all``/``any`` 等价；真给了多个词时
+        「都要出现」才是对的）。地点词放宽成 ``any`` 与「扩大范围」的产品直觉一致：
+        多给一个地名只会查得更宽，不会把一个真实结果筛掉。
+        """
         haystack = (site["name"] + " " + site["address"]).casefold()
-        return self.name.casefold() in site["name"].casefold() and all(
-            term.casefold() in haystack for term in self.address_terms
-        )
+        if self.name.casefold() not in site["name"].casefold():
+            return False
+        if not self.address_terms:
+            return True
+        return any(term.casefold() in haystack for term in self.address_terms)
 
 
 def site_scope(caller, *, allow_empty: bool = True) -> SiteScope:
