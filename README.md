@@ -133,7 +133,8 @@ uv build
 
 Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`，配置键见 `.env.example`。
 临时服务验证用[Gateway 技能](.claude/skills/verify-aiops-gateway/SKILL.md)，不对真实数据根运行测试。
-镜像与内容锁用[本地构建手册](docs/agents/local-gateway-build.md)，部署用既有合并制品流程。
+镜像及随制品交付的构建记录用[本地构建手册](docs/agents/local-gateway-build.md)；
+普通源码PR不改共享镜像输入锁，部署继续走既有合并制品流程。
 
 ## 六、操作与验收导航
 
