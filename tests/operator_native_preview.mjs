@@ -42,4 +42,7 @@ const foreign = JSON.parse(body);
 foreign.model_config.agent_mode.tools[0].provider_id = 'another-provider';
 await window.fetch(url, { method: 'POST', headers, body: JSON.stringify(foreign) });
 assert.equal(calls[5].url, url);
+const followup = { query: '那电压呢', model_config, conversation_id: 'conv_' + 'a'.repeat(32) };
+await window.fetch(url, { method: 'POST', headers, body: JSON.stringify(followup) });
+assert.equal(JSON.parse(calls.at(-1).options.body).conversation_id, followup.conversation_id);
 console.log('native preview, Request stop, ordinary preview, origin, files, abort: passed');

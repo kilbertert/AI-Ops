@@ -38,6 +38,7 @@
     if (typeof document !== 'undefined' && document.querySelector && document.querySelector('[data-aiops-managed="true"]')) return originalFetch(input, options);
     var payload = stop ? {task_id: stop[2]} : {
       app_id: match[1], query: body.query, pre_prompt: config.pre_prompt,
+      conversation_id: body.conversation_id || "",
       tools: tools.map(function (t) {
         return {provider_id: t.provider_id, provider_type: t.provider_type, tool_name: t.tool_name, enabled: t.enabled !== false};
       }),

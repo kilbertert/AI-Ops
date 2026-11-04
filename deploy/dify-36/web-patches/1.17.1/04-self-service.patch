@@ -136,7 +136,7 @@
    if (url.startsWith('http://') || url.startsWith('https://')) return url
 --- a/web/app/components/app/configuration/debug/debug-with-single-model/index.tsx
 +++ b/web/app/components/app/configuration/debug/debug-with-single-model/index.tsx
-@@ -118,7 +118,25 @@
+@@ -118,10 +118,28 @@
  
        if ((config.file_upload as any)?.enabled && files?.length) data.files = files
  
@@ -162,7 +162,11 @@
 +      handleSend(target, payload, {
          onNotifyError: (message) => toast.error(message),
          onGetConversationMessages: (conversationId, getAbortController) =>
-           fetchConversationMessages(appId, conversationId, getAbortController),
+-          fetchConversationMessages(appId, conversationId, getAbortController),
++          managed ? Promise.resolve({ data: [] }) : fetchConversationMessages(appId, conversationId, getAbortController),
+         onGetSuggestedQuestions: (responseItemId, getAbortController) =>
+           fetchSuggestedQuestions(appId, responseItemId, getAbortController),
+       })
 --- a/web/service/debug.ts
 +++ b/web/service/debug.ts
 @@ -19,6 +19,8 @@

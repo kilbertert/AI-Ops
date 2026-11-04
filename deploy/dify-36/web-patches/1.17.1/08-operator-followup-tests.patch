@@ -1,0 +1,40 @@
+--- a/web/app/components/app/configuration/debug/debug-with-single-model/__tests__/index.spec.tsx
++++ b/web/app/components/app/configuration/debug/debug-with-single-model/__tests__/index.spec.tsx
+@@ -597,6 +597,37 @@
+     })
+   })
+ 
++  it('continues managed preview using the Gateway conversation and resets it', async () => {
++    const marker = document.createElement('div')
++    marker.dataset.aiopsManaged = 'true'
++    document.body.append(marker)
++    const conversation = 'conv_' + 'a'.repeat(32)
++    mockUseConfigFromDebugContext.mockReturnValue({ ...mockConfigFromDebugContext, agent_mode: { tools: [] } })
++    try {
++      render(<DebugWithSingleModel ref={ref as RefObject<DebugWithSingleModelRefType>} />)
++      fireEvent.click(screen.getByTestId('send-button'))
++      await waitFor(() => expect(mockSsePost).toHaveBeenCalledTimes(1))
++      expect(mockSsePost.mock.calls[0]![0]).toBe('/__aiops/operator-preview')
++      expect(mockSsePost.mock.calls[0]![1].body.conversation_id).toBe('')
++      const callbacks = mockSsePost.mock.calls[0]![2]
++      await act(async () => {
++        callbacks.onData('first answer', true, { conversationId: conversation, messageId: 'message-1', taskId: 'aiops_qa_test' })
++        await callbacks.onCompleted(false)
++      })
++      expect(mockFetchConversationMessages).not.toHaveBeenCalled()
++      fireEvent.click(screen.getByTestId('send-button'))
++      await waitFor(() => expect(mockSsePost).toHaveBeenCalledTimes(2))
++      expect(mockSsePost.mock.calls[1]![1].body.conversation_id).toBe(conversation)
++      await act(async () => { await mockSsePost.mock.calls[1]![2].onCompleted(false) })
++      act(() => ref.current?.handleRestart())
++      fireEvent.click(screen.getByTestId('send-button'))
++      await waitFor(() => expect(mockSsePost).toHaveBeenCalledTimes(3))
++      expect(mockSsePost.mock.calls[2]![1].body.conversation_id).toBe('')
++    } finally {
++      marker.remove()
++    }
++  })
++
+   // Props Tests
+   describe('Props', () => {
+     it('should respect checkCanSend returning true', async () => {

@@ -1824,6 +1824,7 @@ class GatewayRuntime:
         guarded: bool = False,
         stop_renewer: threading.Event | None = None,
         status_qa_id: str | None = None,
+        active_order_no: str | None = None,
     ) -> None:
         """Write a finished answer into the conversation turn (if any).
 
@@ -1865,6 +1866,7 @@ class GatewayRuntime:
                 token_count=_estimate_turn_tokens(question, answer),
                 cancelled=cancelled or answer is None,
                 status_qa_id=status_qa_id,
+                active_order_no=active_order_no,
             )
 
     def _finish_health_job(self, job_id: str, **fields: Any) -> bool:

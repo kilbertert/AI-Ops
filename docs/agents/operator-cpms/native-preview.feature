@@ -5,8 +5,8 @@ Feature: 管家原生预览与正式 Java 入口
       When 在 Dify 原生预览发送明确订单与问题
       Then Java 节点执行当前提示词及选中的 CPMS 工具
       And 结果在原预览面板呈现且不改变正式版本
-    Scenario: 缺少明确订单或身份
-      Given 问题仅为“我的上一个订单”或登录已失效
+    Scenario: 没有已确认订单或身份
+      Given 新会话没有已确认订单或登录已失效
       When 提交原生预览
       Then 明确提示订单必填或重新登录
       And 不创建业务任务或请求 CPMS

@@ -1181,7 +1181,10 @@ def test_the_node_message_carries_the_previous_questions_of_the_conversation(ope
     store = f["ctx"].runtime.conversation_store
     scope = f["resolver"].current.scope_fingerprint
     conversation = store.create(
-        scope_fingerprint=scope, business_entry="operator", agent_version_key="agt_testagent00#v1"
+        scope_fingerprint=scope,
+        business_entry="operator",
+        agent_version_key="agt_testagent00#v1",
+        operator_binding=f"{f['route'].key}:{APP}:formal",
     )
     conversation_id = conversation["conversation_id"]
     store.begin_turn(conversation_id, scope, kind="qa", question="上一轮的问题")
@@ -1199,6 +1202,7 @@ def test_a_conversation_without_prior_turns_adds_nothing(operator, monkeypatch):
         scope_fingerprint=f["resolver"].current.scope_fingerprint,
         business_entry="operator",
         agent_version_key="agt_testagent00#v1",
+        operator_binding=f"{f['route'].key}:{APP}:formal",
     )
     question = _seen_question(operator, monkeypatch, conversation_id=conversation["conversation_id"])
     assert "同一会话的前文" not in question

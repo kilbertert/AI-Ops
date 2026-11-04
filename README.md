@@ -16,6 +16,8 @@
 - C端聊天及订单检测快捷动作进入其 WF01 路线；订单检测使用本人订单状态分支，
   不再承诺旧 Python 的多源根因报告。独立状态查询和已有节点绑定保留。
 - 管家单订单请求与原生 Dify 试用走公司身份和 Java 节点的两项 CPMS 工具。
+- 管家正式入口与Dify预览使用各自的会话ID，订单相关追问沿用成功确认的订单并重新授权；
+  新会话、另一应用或另一主体不能继承，见[连续问答验收](docs/acceptance/operator-followup/qa-plan.md)。
 - 管家没有指定订单时可咨询操作、解释状态或搜索当前账号可见站点；需要查具体订单时才请求单号。
   站点名称/地址来自CPMS，未定位时不按距离排序；见[无订单对话](docs/agents/operator-cpms/conversation-qa.md)。
   无订单能力已上线并经ulink真实页面核验；[最新回执](docs/validation/2026-10-29-z14-operator-conversation-verified.md)
