@@ -170,13 +170,13 @@ def test_faq_reports_the_served_language_not_the_requested_one() -> None:
     # now is the same RULE on a language the operator side really lacks — an
     # unsupported tag, and the one gap left anywhere in the catalog.
     assert catalog.served_language("operator", "ja") == "zh"
-    unknown_or_missing = [
-        language
-        for language in ("vi", "mn", "th", "km")
-        if catalog.served_language("operator", language) != language
-    ]
-    for language in unknown_or_missing:
-        assert catalog.served_language("operator", language) == "zh"
+    # 覆盖全部受支持语言：列表语言只在**每一条**都有译文时才报该语言，
+    # 任何一条缺了就回落到 zh。这四项都已覆盖，所以这里断言的是"没有回落"，
+    # 而不是遍历一个今天就为空的缺口集合（那种写法一次都不执行）。
+    for language in ("vi", "mn", "th", "km"):
+        assert catalog.served_language("operator", language) == language, (
+            f"operator 目录在 {language} 上回落了 —— 清单会显示该语言而正文是中文"
+        )
 
 
 def test_the_public_catalog_entry_shape_is_unchanged() -> None:

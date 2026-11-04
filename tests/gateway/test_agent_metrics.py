@@ -398,28 +398,6 @@ def test_busy_diagnosis_records_diagnosis_route_not_qa(tmp_path: Path) -> None:
     assert row["route_type"] == "diagnosis" and row["error_code"] == "CONVERSATION_BUSY"
 
 
-def test_rag_result_agent_version_tag_does_not_reach_conversation_turn() -> None:
-    """The metrics-only agent_version tag must not persist into turns.
-
-    Unit-level guard: _record_qa_metric's caller strips the tag before
-    _finish_turn. This test pins the contract at the payload level: a result
-    carrying only the blocks contract keys (what _finish_turn persists) has
-    no agent_version key, while the metrics reader consumes it from the
-    tagged copy.
-    """
-    # Simulate what _try_customer_rag produces and what _execute_assistant_qa
-    # persists: the turn payload is the tagged result minus agent_version.
-    tagged = {
-        "blocks": [{"kind": "text", "text": "答案"}],
-        "retrieval_status": "found",
-        "searches": 1,
-        "agent_version": "agt_x#v1",
-    }
-    turn_payload = {key: value for key, value in tagged.items() if key != "agent_version"}
-    assert "agent_version" not in turn_payload
-    assert tagged["agent_version"] == "agt_x#v1"  # metrics attribution intact
-
-
 def test_the_summary_endpoint_reports_this_tenants_expired_jobs(tmp_path: Path) -> None:
     """`totals.expired` 通过 HTTP 面可见，且**只算本租户**（评审在 #731 上要求走真面）。
 

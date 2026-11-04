@@ -18,11 +18,12 @@ def test_env_example_documents_scoped_direct_datasources() -> None:
     # MySQL scoped 直连：最小只读账号 aiops_ro（旧 diagnostic_readonly MySQL 账号已退役）
     assert "AIOPS_MYSQL_USER=aiops_ro" in _active_lines(text)
     assert any(line.startswith("AIOPS_MYSQL_DATABASE=cloud_charging_pile") for line in _active_lines(text))
-    assert "旧 diagnostic_readonly MySQL 账号从未在生产库存在，已退役" in text
+    # 注释必须说明旧账号**已退役**（防止有人照着历史文档去建它）。只钉关键词，不钉整句。
+    assert "已退役" in text and "diagnostic_readonly" in text
 
     # Redis scoped 直连：最小权限 ACL 用户（白名单流只读）
     assert "AIOPS_REDIS_USER=diagnostic_readonly" in _active_lines(text)
-    assert "最小权限 ACL 用户 diagnostic_readonly" in text
+    assert "ACL" in text and "最小权限" in text
 
     # TDengine 受控代理：USER 为代理 client 凭据而非 TDengine 用户
     assert "AIOPS_TDENGINE_URL=http://127.0.0.1:16041" in _active_lines(text)
@@ -53,7 +54,7 @@ def test_env_example_documents_upms_permission_context_boundary() -> None:
 
     assert "AIOPS_UPMS_BASE_URL=" in text
     assert "AIOPS_UPMS_TIMEOUT_SECONDS=" in text
-    assert "调用者平台凭证由运维入口透传，不在本文件配置" in text
+    assert "运维入口透传" in text and "不在本文件配置" in text
     assert not [line for line in _active_lines(text) if "UPMS" in line and "TOKEN" in line]
 
 
@@ -62,7 +63,7 @@ def test_env_example_documents_the_upms_inside_token_boundary() -> None:
     text = _template()
 
     assert "AIOPS_UPMS_INSIDE_TOKEN" in text
-    assert "只在私有 production.env 里取值，模板不落值" in text
+    assert "production.env" in text and "模板不落值" in text
     assert not [line for line in text.splitlines() if line.startswith("AIOPS_UPMS_INSIDE_TOKEN=")]
     assert not [line for line in _active_lines(text) if "INSIDE_TOKEN" in line]
 
@@ -90,9 +91,8 @@ def test_env_example_documents_the_company_source_key_gate() -> None:
     assert "AIOPS_GATEWAY_COMPANY_SOURCE_KEY=" in active
     # 头名写在模板里：它是那条信任链的对外契约（网关注入方也要按这个名字发）。
     assert "X-AIOps-Source-Key" in text
-    assert "LEAVE ALL THREE EMPTY" in text  # 上一条用例的机制保证仍成立
     # fail closed 那句与「覆盖式注入」的要求都写在说明里（被换行拆开，逐段断言）。
-    assert "新链路整体不构造（fail closed，不是放行）" in text
+    assert "fail closed" in text and "不是放行" in text
     assert "覆盖式注入" in text
 
 

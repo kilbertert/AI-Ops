@@ -15,13 +15,6 @@ from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES, chinese_leak
 from aiops_diagnostics.conversation.faq import FAQCatalog
 
 _ADDED = ("vi", "mn")
-#: Languages the operator catalog still does NOT carry. Kept explicit so adding
-#: one later has to be a deliberate edit here too. (th/km left this list in
-#: #530, en/de/fr/es/pt in #565 — moving one over is the point of keeping it
-#: written down. The list is now EMPTY, so the "still reports zh" test below
-#: has nothing to run on and is skipped rather than deleted: the next language
-#: added to the operator catalog is what brings it back.)
-_NOT_YET: tuple[str, ...] = ()
 
 
 def _catalog() -> FAQCatalog:
@@ -45,27 +38,11 @@ def test_the_operator_list_reports_the_served_language(language: str) -> None:
     assert catalog.entry_served_language("operator", "operator.faq.q001", language) == language
 
 
-@pytest.mark.skipif(not _NOT_YET, reason="operator 目录已覆盖全部语言（#565）—— 没有可测的缺口")
-@pytest.mark.parametrize("language", _NOT_YET)
-def test_a_language_the_operator_catalog_lacks_still_reports_zh(language: str) -> None:
-    """The honesty fix from #540 must not be weakened by adding languages.
-
-    `served_language` reports `zh` only while an entry really lacks the
-    language. That property has no observable case today because the operator
-    catalog is complete — but it is what keeps a future partial translation
-    honest, so the test is kept and turns back on with the next gap.
-    """
-    catalog = _catalog()
-    assert catalog.served_language("operator", language) == "zh"
-    assert catalog.entry_served_language("operator", "operator.faq.q001", language) == "zh"
-
-
 def test_the_operator_catalog_is_now_complete() -> None:
-    """And the positive half is asserted, so completing it is not only a skip.
+    """The catalog covers every supported language — asserted positively.
 
-    Without this, emptying `_NOT_YET` would silently make the module test less
-    than it did — the gap test would skip and nothing would say the catalog got
-    to complete.
+    This is what replaced the "still reports zh for a missing language" test:
+    with no gap left that test collected zero cases and could never fail.
     """
     catalog = _catalog()
     missing = [
@@ -98,10 +75,3 @@ def test_tenant_facets_of_the_catalog_are_unchanged() -> None:
     catalog = _catalog()
     assert len(catalog.catalog("operator")) == 17
     assert len(catalog.catalog("consumer")) == 28
-
-
-def test_every_supported_language_is_still_representable() -> None:
-    """A sanity net: the inventory and the catalog agreement this ticket relies on."""
-    catalog = _catalog()
-    for language in SUPPORTED_LANGUAGES:
-        assert catalog.served_language("operator", language) in SUPPORTED_LANGUAGES

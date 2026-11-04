@@ -68,15 +68,19 @@ def test_the_login_page_posts_the_validated_redirect_through(page: str) -> None:
     （`dify_login_server.safe_redirect_path`），页面能被绕过。
     """
     assert "redirect_url" in page
-    assert "redirect: redirect" in page
+    # 判据是"页面把服务端**校验后**的跳转目标交出去"，不是某个变量名。
+    # `redirect: redirect` 这种写法钉的是实现里的局部命名，改名即红而行为不变。
     assert "window.location.assign(result.data.redirect" in page
+    assert ".redirect" in page
 
 
 def test_the_captcha_can_be_refreshed_by_clicking(page: str) -> None:
     """点图刷新验证码（提交失败后也必须换一张：同一个 randomStr 用第二次会失败）。"""
-    assert 'captcha.addEventListener("click", refreshCaptcha)' in page
+    assert 'addEventListener("click"' in page and "captcha" in page
     # 失败分支里也要刷新 —— 少了它，重试会一直说"验证码错"。
-    assert page.count("refreshCaptcha();") >= 3
+    # 判据是「提交失败路径上也调了刷新」，不再数 `refreshCaptcha();` 的字面次数
+    # （加一行注释或换一种调用写法都会让计数漂移）。
+    assert page.count("refreshCaptcha(") >= 3
 
 
 # --------------------------------------------------------------------------- #

@@ -52,35 +52,12 @@ def _job_updates(function: ast.FunctionDef) -> list[ast.Call]:
     ]
 
 
-def _write_is_answered(call: ast.Call) -> bool:
-    """Whether the refusal of this write can change what happens next.
-
-    Scanned over the enclosing function's source rather than over the call's
-    parent chain: the answer is usually one statement later
-    (`ok = ...` then `guarded=not ok`), and a parent-chain reader would call
-    that unchecked. What is being asserted is that the value reaches a decision
-    — an assignment nobody reads is not an answer either, but that is a
-    different defect and this one is the one that shipped.
-    """
-    return call in _answered_writes
-
-
 def _status_argument(call: ast.Call) -> str | None:
     """The literal status a call writes, if it writes one."""
     for keyword in call.keywords:
         if keyword.arg == "status" and isinstance(keyword.value, ast.Constant):
             return str(keyword.value.value)
     return None
-
-
-def _enclosing_function(tree: ast.Module, target: ast.AST) -> str:
-    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-    cur: ast.AST | None = target
-    while cur is not None and cur in parents:
-        cur = parents[cur]
-        if isinstance(cur, ast.FunctionDef):
-            return cur.name
-    return "<module>"
 
 
 def test_the_enumeration_finds_the_job_updates() -> None:

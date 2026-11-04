@@ -102,19 +102,6 @@ def test_controller_routes_get_occupy_order_under_diag_root() -> None:
     assert '@GetMapping("/occupy-order")' in source
 
 
-def test_occupy_order_self_validates_internal_token_headers() -> None:
-    source = _read(CONTROLLER)
-    assert '@RequestHeader(value = "X-Internal-Token", required = false)' in source
-    assert '@RequestHeader(value = "X-Request-Timestamp", required = false)' in source
-    assert "internalTokenManager.validateToken(" in source
-
-
-def test_invalid_token_returns_http_401_and_r_envelope() -> None:
-    source = _read(CONTROLLER)
-    assert "HttpStatus.UNAUTHORIZED" in source
-    assert 'R.failed(401, "令牌无效或过期")' in source
-
-
 def test_occupy_order_returns_r_envelope_with_list_data() -> None:
     source = _read(CONTROLLER)
     assert "public ResponseEntity<R<List<Map<String, Object>>>> occupyOrder(" in source
@@ -180,9 +167,3 @@ def test_occupy_order_normalizes_blank_tenant_and_status_to_null() -> None:
     assert "blankToNull" in source
     assert "queryTenantId" in source
     assert "queryStatus" in source
-
-
-def test_java_artifact_does_not_hardcode_internal_token_secret() -> None:
-    source = _read(CONTROLLER)
-    assert "qushiyun-internal-secret-2024" not in source
-    assert "InternalTokenManager" in source

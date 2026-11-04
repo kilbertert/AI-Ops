@@ -763,12 +763,12 @@ def test_operator_trial_uses_draft_without_changing_publication(operator, monkey
 
     panel = _trial_report_text(result.json(), "completed")
     snapshot = f["ctx"].agent_run_store.by_qa(trial).snapshot
-    # 完成时按运行语言渲染并**冻结**；面板就是那份冻结文本。没有冻结文本的旧 run
-    # 才按中文标签重算 —— 升级不改写已经交付的答复。
-    expected = snapshot.get("rendered_report") or operator_cpms.render_report(
-        snapshot["answer"], snapshot["evidence"], language="zh"
-    )
-    assert panel == expected
+    # 完成时按运行语言渲染并**冻结**；面板就是那份冻结文本。
+    # 判据必须取冻结值本身：`snapshot.get("rendered_report") or render_report(...)`
+    # 是**测试自己重算一遍**，`rendered_report` 一旦缺失它就悄悄退回重算，于是
+    # 「历史答复不被升级改写」这条永远成立 —— 被保护的行为一次都没被执行。
+    assert snapshot.get("rendered_report"), "完成的 run 没有冻结正文，历史回读会随渲染器漂移"
+    assert panel == snapshot["rendered_report"]
     assert "13.68" in panel and "27.36" in panel
     assert "订单详情" in panel and "充电监测样本" in panel
     assert ("UNSAVED_NATIVE_DRAFT" if native else "TRIAL_ONLY") in seen[0]
