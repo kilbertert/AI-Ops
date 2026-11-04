@@ -28,6 +28,7 @@ ORDER_TOOLS = ("cpms_order_detail", "cpms_charging_samples", "cpms_order_tariff"
 class Model(BaseHTTPRequestHandler):
     calls = []
     fail = False
+    provider_error = ""
     truncate = False
     invalid = ""
     conversation_kind = "general"
@@ -39,6 +40,24 @@ class Model(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
         type(self).calls.append(body)
+        if type(self).provider_error:
+            label = type(self).provider_error
+            message = "用户额度不足 PRIVATE-UPSTREAM" if label == "quota-message" else "PRIVATE-UPSTREAM"
+            payload = json.dumps(
+                {
+                    "error": {
+                        "message": message,
+                        "type": "error",
+                        "code": "insufficient_user_quota" if label == "quota-code" else "permission_denied",
+                    }
+                }
+            ).encode()
+            self.send_response(403)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         tools = [m for m in body.get("messages", []) if m.get("role") == "tool"]
         conversation = not any(t["function"]["name"] == "cpms_order_detail" for t in body.get("tools", []))
         if type(self).fail and tools:
@@ -256,7 +275,7 @@ def main():
                         "--scenario="
                         + (
                             "round2-500"
-                            if Model.fail
+                            if Model.fail or Model.provider_error
                             else "truncated"
                             if Model.truncate
                             else "claim-refused"
@@ -302,6 +321,9 @@ def main():
             run = f["ctx"].agent_run_store.by_qa(qa)
             assert run.exec_config_confirmed and run.actual_node_id == run.expected_node_id
             for label in (
+                "quota-code",
+                "quota-message",
+                "permission-denied",
                 "supplier-error",
                 "truncated",
                 "free-text",
@@ -312,6 +334,11 @@ def main():
                 "empty",
                 "oversized",
             ):
+                Model.provider_error = (
+                    label if label in {"quota-code", "quota-message", "permission-denied"} else ""
+                )
+                before_model = len(Model.calls)
+                before_cpms = len(f["state"]["calls"])
                 Model.fail = label == "supplier-error"
                 Model.truncate = label == "truncated"
                 Model.invalid = label if label not in {"supplier-error", "truncated"} else ""
@@ -326,7 +353,21 @@ def main():
                 assert failed.status_code == 200 and failed.json()["status"] == "failed", failed.text
                 assert not failed.json()["result"]
                 assert f["ctx"].agent_run_store.by_qa(failed_qa).state == "failed"
+                if Model.provider_error:
+                    expected = (
+                        "OPERATOR_DEPENDENCY_UNAVAILABLE"
+                        if label == "permission-denied"
+                        else "OPERATOR_MODEL_QUOTA_EXHAUSTED"
+                    )
+                    assert failed.json()["error"]["code"] == expected, failed.text
+                    assert len(Model.calls) == before_model + 1
+                    assert len(f["state"]["calls"]) == before_cpms + 1
+                    assert "PRIVATE-UPSTREAM" not in failed.text
+                    if label != "permission-denied":
+                        assert "额度不足" in failed.json()["error"]["message"]
+                        assert failed.json()["error"]["retryable"] is False
                 cases.append({"case": label, "status": "failed-without-answer"})
+            Model.provider_error = ""
             Model.fail = Model.truncate = False
             Model.invalid = ""
             from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
