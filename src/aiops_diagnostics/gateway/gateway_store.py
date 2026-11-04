@@ -20,7 +20,7 @@ from aiops_diagnostics.common.async_job_lifecycle import (
 )
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
-from aiops_diagnostics.common.redaction import redact_text
+from aiops_diagnostics.common.redaction import ERROR_TEXT_LIMIT, redact_text
 from aiops_diagnostics.identity.query_scope import MAX_SCOPE_IDS
 
 _LOGGER = logging.getLogger("aiops.gateway_store")
@@ -177,7 +177,7 @@ class GatewayStore:
                     status,
                     json.dumps(report, ensure_ascii=False) if report is not None else None,
                     error_code,
-                    redact_text(error_message or "")[:1000] if error_message else None,
+                    redact_text(error_message or "")[:ERROR_TEXT_LIMIT] if error_message else None,
                     _iso(now) if status == "running" else None,
                     _iso(completed_at) if completed_at else None,
                     _iso(expires_at) if expires_at else None,
@@ -653,7 +653,7 @@ class GatewayStore:
                     status,
                     json.dumps(result, ensure_ascii=False) if result is not None else None,
                     error_code,
-                    redact_text(error_message or "")[:1000] if error_message else None,
+                    redact_text(error_message or "")[:ERROR_TEXT_LIMIT] if error_message else None,
                     _iso(now) if status == "running" else None,
                     _iso(completed_at) if completed_at else None,
                     _iso(expires_at) if expires_at else None,
@@ -790,7 +790,7 @@ class GatewayStore:
                     status,
                     json.dumps(result, ensure_ascii=False) if result is not None else None,
                     error_code,
-                    redact_text(error_message or "")[:1000] if error_message else None,
+                    redact_text(error_message or "")[:ERROR_TEXT_LIMIT] if error_message else None,
                     _iso(now) if status == "running" else None,
                     _iso(completed_at) if completed_at else None,
                     _iso(expires_at) if expires_at else None,
