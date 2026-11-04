@@ -64,6 +64,7 @@ from aiops_diagnostics.common.bounded_http import (
     parse_data_key_envelope,
     request_json,
 )
+from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 from aiops_diagnostics.publication.agent_lifecycle import (
     Agent,
     AgentConfig,
@@ -166,6 +167,9 @@ class DifyDslClient:
             raise ValueError("Dify base URL must be an absolute http(s) URL")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("Dify base URL must not carry credentials, a query or a fragment")
+        # 这个请求带 console `api_key`：与 provider 同一条规则。
+        if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
+            raise ValueError("Dify base URL must use HTTPS unless it is a loopback address")
         if not _APP_ID.fullmatch(source.app_id.strip()):
             raise ValueError("Dify app id is invalid")
         if not 0.5 <= source.timeout <= 60:

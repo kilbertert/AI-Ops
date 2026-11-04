@@ -226,7 +226,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
         return _Response()
 
     monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", fake_urlopen)
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a", service_token="svc-token")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a", service_token="svc-token")
 
     image_grant = MediaGrant(
         resource_id="media_img",
@@ -244,7 +244,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
         expires_at=None,  # type: ignore[arg-type]
     )
     assert client.fetch_media(image_grant) == b"BLOB"
-    assert seen[-1][0] == "http://kb.local/kb/documents/images/ds1-img-key"
+    assert seen[-1][0] == "http://127.0.0.1:8799/kb/documents/images/ds1-img-key"
 
     video_grant = MediaGrant(
         resource_id="media_vid",
@@ -262,7 +262,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
         expires_at=None,  # type: ignore[arg-type]
     )
     assert client.fetch_media(video_grant) == b"BLOB"
-    assert seen[-1][0] == "http://kb.local/kb/knowledge-bases/kb-1/documents/doc-9/download"
+    assert seen[-1][0] == "http://127.0.0.1:8799/kb/knowledge-bases/kb-1/documents/doc-9/download"
     # Every fetch is tenant-scoped via the header, never via the path.
     assert seen[-1][1]["Tenant-id"] == "tenant-a"
     # Range requests are forwarded upstream so a seek fetches only the
@@ -272,7 +272,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
 
 
 def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None:
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a")
     grant = MediaGrant(
         resource_id="media_x",
         tenant_id="tenant-a",
@@ -314,7 +314,7 @@ def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None
 
 def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -> None:
     """RAGFlow can return document-not-found as HTTP 200 JSON."""
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a")
     grant = MediaGrant(
         resource_id="media_x",
         tenant_id="tenant-a",
@@ -376,7 +376,7 @@ def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -
 
 
 def test_kb_client_retries_transient_video_not_found(monkeypatch) -> None:
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a")
     grant = MediaGrant(
         resource_id="media_x",
         tenant_id="tenant-a",
@@ -422,7 +422,7 @@ def test_kb_client_retries_transient_video_not_found(monkeypatch) -> None:
 
 
 def test_kb_client_maps_http_200_unknown_business_error_to_unavailable(monkeypatch) -> None:
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a")
     grant = MediaGrant(
         resource_id="media_x",
         tenant_id="tenant-a",

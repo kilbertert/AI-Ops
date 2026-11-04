@@ -15,6 +15,7 @@ from aiops_diagnostics.common.bounded_http import (
     request_json,
     tenant_id_header,
 )
+from aiops_diagnostics.common.endpoint_policy import require_secure_endpoint
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
 )
@@ -59,7 +60,7 @@ class KbServiceKnowledgeClient:
     """
 
     def __init__(self, base_url: str, *, tenant_id: str, timeout: float = 10) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.base_url = require_secure_endpoint(base_url, what="kb-service base URL")
         self.tenant_id = tenant_id
         self.timeout = timeout
 
