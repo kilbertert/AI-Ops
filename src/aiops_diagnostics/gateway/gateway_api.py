@@ -6098,6 +6098,14 @@ def _operator_order_followup(question):
         r"这笔|这单|这张订单|该单|刚才.*(?:单|订单)|那笔|那张订单|this order|that order|previous order", text
     ):
         return True
+    # 核验结论的追问可省略“这单”；通用规则咨询仍不选旧订单。
+    if (
+        re.match(r"(?:那|那么|它)", text)
+        and re.search(r"折扣|优惠|税额|增值税|实付|充电费用", text)
+        and re.search(r"通过|不一致|待验证|缺证", text)
+        and not re.search(r"一般|通常|通用|活动|宣传", text)
+    ):
+        return True
     return bool(
         re.fullmatch(
             r"(?:那|那么|它的?|what about |and )(?:这笔单的?|这单的?)?"
