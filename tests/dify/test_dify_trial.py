@@ -17,6 +17,7 @@ from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
+from dify.conftest import seed_default_workspace
 
 TRIAL_KEY = "dify-trial-key-0123456789"
 KNOWLEDGE_KEY = "dify-knowledge-key-0123456789"
@@ -101,24 +102,6 @@ class _Orders:
         return order_no == ORDER
 
 
-#: 本文件里绑定行的默认租户（`_Runtime` 注册表里那一条）。
-_DEFAULT_TENANT = "T-1"
-
-
-def _seed_default_workspace(db: Path) -> None:
-    """给默认租户种一行 `ready`（#885）。既有用例只关心"试运行能不能跑"，不该全红。"""
-    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
-
-    workspaces = DifyWorkspaces(db)
-    with workspaces._connection(write=True) as connection:  # noqa: SLF001 — 测试造的是行
-        connection.execute(
-            "INSERT OR REPLACE INTO dify_workspaces (tenant_id, environment, workspace_id,"
-            " setup_state, created_at, updated_at) VALUES (?, ?, ?, 'ready',"
-            " '2026-10-21T00:00:00+00:00', '2026-10-21T00:00:00+00:00')",
-            (_DEFAULT_TENANT, "41", "ws-default"),
-        )
-
-
 def _client(tmp_path: Path, **overrides: Any) -> tuple[TestClient, _Runtime]:
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -132,7 +115,7 @@ def _client(tmp_path: Path, **overrides: Any) -> tuple[TestClient, _Runtime]:
     )
     settings.server_config_file.write_text("# test\n", encoding="utf-8")
     store = GatewayStore(settings.database_file)
-    _seed_default_workspace(settings.database_file)
+    seed_default_workspace(settings.database_file)
     runtime = _Runtime(store)
     app = create_gateway_app(
         settings=settings,

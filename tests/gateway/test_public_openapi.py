@@ -26,7 +26,9 @@ def test_public_operations_match_testing_guide_and_exclude_management(tmp_path):
         for m, p in re.findall(r"\| [A-Z]\d{2} \| `(GET|POST|DELETE) ([^`]+)`", guide)
     }
     actual = {(method, path) for path, item in spec["paths"].items() for method in item}
-    assert len(actual) == 20 and actual == documented
+    # 双向相等：多出来的操作（管理面被打开）与少掉的（文档说公开却不可达）都红。
+    # 不在这里再钉一个「应当有 20 条」的魔数 —— 那是同一个事实的第二个副本。
+    assert actual == documented
     serialized = json.dumps(spec)
     for private in (
         "/internal/",

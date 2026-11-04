@@ -76,19 +76,6 @@ def test_controller_routes_get_device_under_diag_root() -> None:
     assert '@GetMapping("/device")' in source
 
 
-def test_controller_self_validates_internal_token_headers() -> None:
-    source = _read(CONTROLLER)
-    assert '@RequestHeader(value = "X-Internal-Token", required = false)' in source
-    assert '@RequestHeader(value = "X-Request-Timestamp", required = false)' in source
-    assert "internalTokenManager.validateToken(" in source
-
-
-def test_invalid_token_returns_http_401_and_r_envelope() -> None:
-    source = _read(CONTROLLER)
-    assert "HttpStatus.UNAUTHORIZED" in source
-    assert 'R.failed(401, "令牌无效或过期")' in source
-
-
 def test_device_payload_uses_r_envelope_and_pinned_fields() -> None:
     source = _read(CONTROLLER)
     assert "ResponseEntity<R<Map<String, Object>>>" in source

@@ -169,10 +169,14 @@ def test_create_gateway_app_injects_the_operator_scope_into_a_real_runtime(tmp_p
     runtime = GatewayRuntime(
         store, settings, __import__("aiops_diagnostics.common.config", fromlist=["Settings"]).Settings()
     )
+    calls = []
+    original = runtime.set_trial_operator_scope
+    runtime.set_trial_operator_scope = lambda scope: (calls.append(scope), original(scope))[1]
     create_gateway_app(settings=settings, store=store, runtime=runtime, caller_resolver=None)  # type: ignore[arg-type]
-    # 未配置 UPMS ⇒ 解析器可能是 None；关键是**属性被设过**（注入路径走通），
-    # 而不是仍停留在类级默认。用一个哨兵确认装配层调到了 setter。
-    assert hasattr(runtime, "_trial_operator_scope")
+    # 未配置 UPMS ⇒ 注入的 scope 本身可以是 None。要证明的是**装配层调到了 setter**，
+    # 所以哨兵钉在调用上：`hasattr` 恒真 —— 构造器无条件设了 `self._trial_operator_scope = None`，
+    # 装配层一行都不调它也照样通过。
+    assert calls, "装配层没有调用 set_trial_operator_scope"
 
 
 def test_the_trial_scope_is_empty_when_no_operator_scope_was_injected() -> None:

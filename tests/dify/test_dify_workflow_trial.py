@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +22,7 @@ from typing import Any
 import pytest
 
 from aiops_diagnostics.dify.dify_workflow_trial import WorkflowTrial
-from aiops_diagnostics.execution import chat_data_grant, chat_execution
+from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -263,8 +264,12 @@ def test_a_trial_revokes_its_grant_even_when_the_engine_fails(tmp_path, monkeypa
     with _trial_env(tmp_path / "boom", monkeypatch, engine_fail=True) as (runtime, route, _a, _e):
         with pytest.raises(RuntimeError):
             _draft(route).execute(runtime, "tr_fail", _scope(), "ORDER-1", "zh")
-        grants = chat_data_grant.DataGrantStore(tmp_path / "boom" / "gateway.db")
-        states = [g.state for g in grants.all()] if hasattr(grants, "all") else []
+        # `DataGrantStore` 没有 `all()`；按属性存在与否取值的写法让 states 恒为空，
+        # `all([])` 恒真 —— 那条版本声称守住了「失败也撤销」，实际一条断言都没跑。
+        # 直接读表：同一 SQLite 文件，授权行由真实签发路径写入。
+        with sqlite3.connect(tmp_path / "boom" / "gateway.db") as connection:
+            states = [row[0] for row in connection.execute("SELECT state FROM chat_data_grants")]
+        assert states, "本次试用根本没有签发出取数授权，撤销无从谈起"
         assert all(state == "revoked" for state in states), states
 
 

@@ -25,6 +25,7 @@ from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResol
 from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
+from dify.conftest import seed_default_workspace
 
 PUBLISH_KEY = "dify-publish-key-0123456789"
 KNOWLEDGE_KEY = "dify-knowledge-key-0123456789"
@@ -55,24 +56,6 @@ class _Directory:
         return ()
 
 
-#: 既有用例的默认绑定租户（`_binding()` 的缺省值）。
-_DEFAULT_TENANT = "T-1"
-
-
-def _seed_default_workspace(db: Path) -> None:
-    """给默认租户种一行 `ready`（#884）。放在这里是因为每个用例都要它。"""
-    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
-
-    workspaces = DifyWorkspaces(db)
-    with workspaces._connection(write=True) as connection:  # noqa: SLF001 — 测试造的是行
-        connection.execute(
-            "INSERT OR REPLACE INTO dify_workspaces (tenant_id, environment, workspace_id,"
-            " setup_state, created_at, updated_at) VALUES (?, ?, ?, 'ready',"
-            " '2026-10-21T00:00:00+00:00', '2026-10-21T00:00:00+00:00')",
-            (_DEFAULT_TENANT, "41", "ws-default"),
-        )
-
-
 def _client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> TestClient:
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -87,7 +70,7 @@ def _client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> TestClient:
     settings.server_config_file.write_text("# test\n", encoding="utf-8")
     # 默认租户在映射表里有一行 `ready`：绝大多数的既有用例只关心"发布能不能过"，
     # 不该因为 #884 多了一张表而全红。需要别的状态（缺失 / creating）的用例自己种。
-    _seed_default_workspace(settings.database_file)
+    seed_default_workspace(settings.database_file)
     app = create_gateway_app(
         settings=settings,
         store=GatewayStore(settings.database_file),
@@ -322,7 +305,7 @@ def _operator_client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> Tes
         **overrides,
     )
     settings.server_config_file.write_text("# test\n", encoding="utf-8")
-    _seed_default_workspace(settings.database_file)
+    seed_default_workspace(settings.database_file)
     app = create_gateway_app(
         settings=settings,
         store=GatewayStore(settings.database_file),

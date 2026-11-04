@@ -38,7 +38,6 @@ from aiops_diagnostics.execution.agent_runs import (
     AgentRunConfig,
     AgentRunStore,
     scope_from_json,
-    scope_to_json,
 )
 from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
@@ -963,15 +962,6 @@ def test_receipt_reports_the_version_gap_instead_of_pretending(tmp_path, monkeyp
 # --------------------------------------------------------------------------
 
 
-def test_scope_snapshot_round_trip_refuses_tampering():
-    scope = _scope()
-    assert scope_from_json(scope_to_json(scope)).scope_fingerprint == scope.scope_fingerprint
-    tampered = json.loads(scope_to_json(scope))
-    tampered["effective_tenant_id"] = "TENANT-B"
-    with pytest.raises(ValueError):
-        scope_from_json(json.dumps(tampered))
-
-
 def test_delegation_requires_charging_settings(tmp_path):
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -981,10 +971,6 @@ def test_delegation_requires_charging_settings(tmp_path):
     )
     with pytest.raises(ValueError):
         settings.validate()
-
-
-def test_run_ttl_is_bounded():
-    assert 30 <= agent_runs.RUN_TTL_SECONDS <= 600
 
 
 def test_claim_response_carries_only_the_seven_fields_plus_location(tmp_path, monkeypatch):

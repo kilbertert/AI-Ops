@@ -127,6 +127,16 @@ def test_the_tool_asserts_distinguishability_rather_than_assuming_it() -> None:
     在两个实现下都成立 —— 一句在两个实现下都成立的话不是证据。
     """
     tool_module = _load()
-    source = Path(tool_module.__file__).read_text(encoding="utf-8")
-    assert "库是**副本**" in source, "必须写明库是副本（这是它安全的原因）"
-    assert "不可区分" in source, "必须把「不可区分」写成一个会失败的断言"
+    # 判据钉在**行为**上：`main()` 里把「不可区分」写成会进 `failures` 并退 1 的一条，
+    # 而不是只写进一句注释/说明。改文档措辞不该红，删掉这条判断才该红。
+    import ast
+
+    tree = ast.parse(Path(tool_module.__file__).read_text(encoding="utf-8"))
+    main = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "main")
+    appends = [
+        node
+        for node in ast.walk(main)
+        if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "append"
+    ]
+    credited = [node for node in appends if "不可区分" in ast.unparse(node)]
+    assert credited, "脚本必须把「不可区分」记成一条失败（`failures.append(...)`），否则退 0 是假 PASS"

@@ -50,9 +50,14 @@ def test_dual_entry_payload_crosses_the_real_bridge(bridge, upstream):  # noqa: 
     )
     assert status != 400, body
     assert "unexpected field" not in json.dumps(body)
-    # 桥转发到网关的那一刻，payload 原样带上两端来源
-    forwarded = upstream.manage_requests[-1] if hasattr(upstream, "manage_requests") else None
-    assert forwarded is None or forwarded["sources"]["consumer"]["app_id"] == CONSUMER
+    # 桥转发到网关的那一刻，payload 原样带上两端来源。
+    # 判据必须落在上游**真的**收到的那条请求上：`_Upstream` 只记 `calls`
+    # （含 path/body），没有 `manage_requests`；按属性存在与否取值的写法恒真。
+    forwarded = [c for c in upstream.calls if c["path"].startswith("/v1/dify/manage")]
+    assert len(forwarded) == 1, [c["path"] for c in upstream.calls]
+    sources = forwarded[0]["body"]["sources"]
+    assert sources["consumer"]["app_id"] == CONSUMER
+    assert sources["operator"]["app_id"] == OPERATOR
 
 
 def test_single_entry_payload_crosses_with_matching_scope(bridge):  # noqa: F811
@@ -126,7 +131,6 @@ def test_single_entry_payload_crosses_with_matching_scope(bridge):  # noqa: F811
 def test_malformed_dual_entry_payload_is_still_rejected_by_the_bridge(bridge, payload):  # noqa: F811
     status, body = _manage(payload, address=bridge)
     assert status == 400
-    assert "桥" not in json.dumps(body) or True  # 文案不参与判据，状态码才参与
 
 
 def test_scope_and_sources_are_create_only(bridge):  # noqa: F811
