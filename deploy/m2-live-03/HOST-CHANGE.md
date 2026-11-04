@@ -64,7 +64,7 @@
 | `snail-ai-server-exec.jar` | `8dd6b63504eae7cc479e1c3a7d674aa1529069d44e7967e4ed2158ef645d5cb0` |
 | `aiops-execution-node.jar` | `b9440e25412a237b037cee796989e63cd93728209f03a76a7a7dca89e90fba3f`（站点工具按站点身份校验；固定构建时间戳；源码摘要见 `images.lock.json` 的 `node.source_sha256`） |
 | 平台源码 commit | `10c1d3e50b701be62da23a3403d79a41187ab8cd` |
-| Gateway 镜像 | 构建/分发件 `gateway-image/identity.json` 中的 Image ID；`images.lock.json` 中的内容摘要与镜像 `m2live.source` 标签一致 |
+| Gateway 镜像 | 构建/分发件 `gateway-image/identity.json` 中的镜像ID与源码/依赖/基础镜像摘要；基础镜像仍须与`images.lock.json`的输入一致 |
 | 依赖 | `gateway-requirements.txt`，由 `uv export --frozen` 从 `uv.lock` 生成，每条带 `--hash` |
 
 preflight 对**镜像 ID**、`m2live.source` 标签、基础镜像 ref→image ID 三项比对。

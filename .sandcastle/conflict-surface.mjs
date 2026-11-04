@@ -53,14 +53,6 @@ const STRUCTURAL = new Map([
     },
   ],
   [
-    "deploy/m2-live-03/images.lock.json",
-    {
-      disposition: "exclusive",
-      why: "records the identity of a built artifact; only `build-image.sh --update-lock` writes it, and a build is already serial",
-      since: "2026-10-23",
-    },
-  ],
-  [
     ".afk-bootstrap.json",
     {
       disposition: "exclusive",
@@ -92,6 +84,12 @@ const STRUCTURAL = new Map([
  * undecided entry is the thing that says it currently is not.
  */
 const EXPLAINED_SHARED = new Map([
+  [
+    "deploy/m2-live-03/images.lock.json",
+    {
+      why: "reviewed base-image inputs and platform/node artifact pins; Gateway build outputs travel in identity.json outside Git (ADR-0208)",
+    },
+  ],
   ["docs/validation.md", { why: "frozen archive; no new entries are written to it since 2026-10-23" }],
   ["docs/开发进度.md", { why: "frozen archive; no new entries are written to it since 2026-10-23" }],
   [
