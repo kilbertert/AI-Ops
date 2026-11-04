@@ -1,6 +1,6 @@
 # 产品二轮反馈：订单模板到实付款核验
 
-分支`feat/order-billing-verification`，初始基线`da673ecb`。
+实现分支`feat/order-billing-verification`，初始基线`da673ecb`；交付分支`feat/order-billing-delivery`基于`9b24aad7`，将同一实现与ADR归入成套提交。
 业务目标是给出可追溯的金额形成过程和差异定位。原两份SOP已补取证顺序、四项算式与
 通过/不一致/待验证口径；新增受控`cpms_order_billing`取得旧详情接口缺失的优惠明细。
 金额由系统Decimal计算并冻结，模型不造数字；无历史模板或规则不适用时不假通过。
