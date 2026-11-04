@@ -31,12 +31,25 @@ def test_the_declaration_covers_the_live_tools():
         "cpms_charging_samples",
         "cpms_site_search",
         "cpms_order_tariff",
+        "cpms_station_plan",
     ]
     # 哪一类运行能用哪个工具，是声明的一部分：订单工具没有订单就没有取证对象。
-    assert [tool.applies_to for tool in tools] == [("order",), ("order",), ("conversation",), ("order",)]
+    assert [tool.applies_to for tool in tools] == [
+        ("order",),
+        ("order",),
+        ("conversation",),
+        ("order",),
+        ("operator_conversation",),
+    ]
     # 只有模型可以提议的那部分输入进发布清单的 schema。
-    assert [tool.model_inputs for tool in tools] == [(), (), ("name", "address"), ()]
-    detail, samples, site, tariff = tools
+    assert [tool.model_inputs for tool in tools] == [
+        (),
+        (),
+        ("name", "address"),
+        (),
+        ("name", "date", "start", "end", "energy", "power", "basis", "timezone"),
+    ]
+    detail, samples, site, tariff, plan = tools
     assert detail.kind == "single" and detail.request({"order_no": "ORDER-1"}) == {
         "method": "GET",
         "path": "/chOrderInfo/getOrderInfoDetail/ORDER-1",

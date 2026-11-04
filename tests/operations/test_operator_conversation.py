@@ -61,7 +61,7 @@ def test_no_order_question_reaches_node_without_business_reads(operator, monkeyp
         assert publication.status_code == 200, publication.text
         manifest = json.loads(publication.json()["manifest"])
         # 无订单回合可以带工具，但只能是**声明里允许这类运行用的**那些（ADR-0182）。
-        assert [tool["name"] for tool in manifest["tools"]] == ["cpms_site_search"]
+        assert [tool["name"] for tool in manifest["tools"]] == ["cpms_site_search", "cpms_station_plan"]
         assert manifest["tools"][0]["input_schema"] == operator_tools.tool("cpms_site_search").input_schema()
         headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
         response = f["client"].post(
@@ -897,7 +897,7 @@ def test_conversation_tools_come_from_declaration_not_from_template():
     """
     manifest = json.loads(conversation.manifest(_template_with_only_order_tools()))
     names = [tool["name"] for tool in manifest["tools"]]
-    assert names == ["cpms_site_search"]
+    assert names == ["cpms_site_search", "cpms_station_plan"]
     assert manifest["tools"][0]["input_schema"] == operator_tools.tool("cpms_site_search").input_schema()
     # 订单工具仍然不下发：无订单回合用不上它们。
     assert "cpms_order_detail" not in names
@@ -916,7 +916,7 @@ def test_template_site_tool_is_not_duplicated():
     )
     manifest = json.loads(conversation.manifest(json.dumps(body)))
     names = [tool["name"] for tool in manifest["tools"]]
-    assert names == ["cpms_site_search"]
+    assert names == ["cpms_site_search", "cpms_station_plan"]
     # 模板那一条优先保留（描述沿用模板），schema 仍以声明为准。
     assert manifest["tools"][0]["description"] == "from-template"
 

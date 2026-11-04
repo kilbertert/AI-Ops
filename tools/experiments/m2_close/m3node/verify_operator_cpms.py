@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +31,7 @@ class Model(BaseHTTPRequestHandler):
     truncate = False
     invalid = ""
     conversation_kind = "general"
+    plan_arguments = {}
 
     def log_message(self, *args):
         pass
@@ -45,7 +46,33 @@ class Model(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if conversation:
+        if conversation and type(self).conversation_kind == "plan":
+            if not tools:
+                delta = {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_plan",
+                            "type": "function",
+                            "function": {
+                                "name": "cpms_station_plan",
+                                "arguments": json.dumps(type(self).plan_arguments),
+                            },
+                        }
+                    ],
+                }
+                finish = "tool_calls"
+            else:
+                delta = {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {"kind": "station_plan", "text": "", "name": "", "address_terms": []}
+                    ),
+                }
+                finish = "stop"
+        elif conversation:
             answer = (
                 {"kind": "site_search", "text": "", "name": "", "address_terms": ["广州", "天河"]}
                 if type(self).conversation_kind == "sites"
@@ -400,9 +427,58 @@ def main():
                 else:
                     assert len(f["state"]["calls"]) == before + 1 and "天河测试站" in result.text, result.text
                     assert "PRIVATE-PHONE" not in result.text
-                assert [t["function"]["name"] for t in Model.calls[-1]["tools"]] == ["cpms_site_search"]
+                assert [t["function"]["name"] for t in Model.calls[-1]["tools"]] == [
+                    "cpms_site_search",
+                    "cpms_station_plan",
+                ]
                 assert Model.calls[-1]["response_format"] == {"type": "json_object"}
                 cases.append({"case": "java-no-order-" + label, "status": "completed"})
+            from operations.test_station_tariff import responses
+
+            data = responses()
+            original = operator_cpms.cpms_get
+
+            def pricing_upstream(url, bearer, tenant, **kwargs):
+                from urllib.parse import urlsplit
+
+                path = urlsplit(url).path
+                return data[path] if path in data else original(url, bearer, tenant, **kwargs)
+
+            patch.setattr(operator_cpms, "cpms_get", pricing_upstream)
+            Model.conversation_kind = "plan"
+            Model.plan_arguments = {
+                "name": "天河测试站",
+                "date": (datetime.now(UTC) + timedelta(days=2)).date().isoformat(),
+                "start": "06:00",
+                "end": "10:00",
+                "energy": "3",
+                "power": "2",
+                "timezone": "Asia/Shanghai",
+                "basis": "普通按量、不用优惠、不预约、不买保险、充完离场",
+            }
+            question = (
+                "天河测试站 "
+                + Model.plan_arguments["date"]
+                + " 06:00至10:00 3kWh 2kW Asia/Shanghai "
+                + Model.plan_arguments["basis"]
+            )
+            response = f["client"].post(
+                "/v1/assistant/questions", headers=HEADERS, json={"question": question}
+            )
+            assert response.status_code == 202, response.text
+            # Java JVM启动时间长于HTTP单测轮询窗口。
+            for _ in range(120):
+                time.sleep(0.5)
+                final = f["client"].get(
+                    "/v1/assistant/questions/" + response.json()["qa_id"], headers=HEADERS
+                )
+                if final.json()["status"] not in {"queued", "running"}:
+                    break
+            assert final.json()["status"] == "completed", final.text
+            assert "含税合计 5.50" in final.text and "06:00–07:30" in final.text, final.text
+            run = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"])
+            assert run.snapshot["evidence"]["cpms_station_plan"]["data"]["rules"]["template"]["vat"] == 0
+            cases.append({"case": "java-station-plan", "status": "completed-with-rules"})
             f["candidate"]["enabled"] = []
             f["publish"](current.route_revision)
             denied = request(f["client"])

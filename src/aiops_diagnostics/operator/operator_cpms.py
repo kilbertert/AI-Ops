@@ -105,7 +105,9 @@ def allowed_in(tool: str, run) -> bool:
     无订单回合可以带工具，但**不是任何工具**：订单诊断工具没有订单就没有取证对象。
     """
     context = "order" if diagnoses_an_order(run) else "conversation"
-    return context in _declared(tool).applies_to
+    return context in _declared(tool).applies_to or (
+        context == "conversation" and "operator_conversation" in _declared(tool).applies_to
+    )
 
 
 #: 工具参数的字符纪律（ADR-0176）。与对话协议的搜索词同源：
@@ -132,7 +134,12 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
     for key, value in arguments.items():
         if not isinstance(value, str):
             raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-        if len(value) > 80 or any(char in value for char in _ARGUMENT_FORBIDDEN):
+        forbidden = tuple(
+            c
+            for c in _ARGUMENT_FORBIDDEN
+            if not (tool == "cpms_station_plan" and key == "timezone" and c == "_")
+        )
+        if len(value) > 80 or any(char in value for char in forbidden):
             raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
         stripped = value.strip()
         if not stripped:
@@ -140,6 +147,12 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
         original = operator_conversation.question_span(stripped, question)
         if not original:
             raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+        if tool == "cpms_station_plan" and key in {"energy", "power"}:
+            units = r"(?:kwh|千瓦时|度)" if key == "energy" else r"(?:kw(?!h)|千瓦(?!时))"
+            if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", original) or not re.search(
+                r"(?<![0-9.])" + re.escape(original) + r"\s*" + units, question, re.I
+            ):
+                raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
         cleaned[key] = original
     return cleaned
 
@@ -353,6 +366,18 @@ class OperatorCpms:
         if target is None:
             raise OperatorRefused("OPERATOR_TARGET_MISSING")
         if not diagnoses_an_order(run):
+            plan = (run.snapshot or {}).get("evidence", {}).get("cpms_station_plan", {}).get("data", {})
+            if plan.get("site_id"):
+                body = cpms_get(
+                    target.cpms_base_url + "/chSite/" + plan["site_id"], bearer, caller.effective_tenant_id
+                )
+                site = body.get("data") if isinstance(body, dict) and body.get("code") == 0 else None
+                if (
+                    not isinstance(site, dict)
+                    or site.get("id") != plan["site_id"]
+                    or site.get("tenantId") != caller.effective_tenant_id
+                ):
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
             return self.result(caller, qa_id)
         body = cpms_get(
             target.cpms_base_url
@@ -590,13 +615,22 @@ class OperatorCpms:
         }
 
     def grant(self, run_id, token, manifest, tool, contract="", arguments=None):
-        if contract != (OBJECT_CONTRACT if tool == "cpms_order_tariff" else TOOL_CONTRACT):
+        if contract != (OBJECT_CONTRACT if _declared(tool).kind == "object" else TOOL_CONTRACT):
             # 旧节点不声明契约版本。挡在**领授权**这一步，而不是等它在完成回调里因为
             # 证据缺字段而失败——那既不是稳定错误码，也发生在公司令牌已经用过之后。
             raise OperatorRefused("OPERATOR_TOOL_CONTRACT_OUTDATED")
         task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
         # 参数放行发生在**取到公司令牌之前**：模型编的地址不会换来一次真实的对外请求。
         arguments = validate_tool_arguments(tool, arguments, task.question)
+        if tool == "cpms_station_plan":
+            previous = self._previous_plan(task)
+            # 补齐或重复身份条件继续同一计划；真正更换站点/日期才重置。
+            changed = any(
+                key in previous and arguments.get(key, previous[key]) != previous[key]
+                for key in ("name", "date")
+            )
+            if previous and arguments and not changed:
+                arguments = {**previous, **arguments}
         task.arguments.setdefault(tool, arguments)
         if task.arguments[tool] != arguments:
             raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_CHANGED")
@@ -618,6 +652,93 @@ class OperatorCpms:
             "bearer": task.grant,
             "expires_at": run.expires_at.isoformat(),
         }
+
+    def _previous_plan(self, task):
+        turn = task.conversation_turn
+        if not turn:
+            return {}
+        store = self.context.runtime.conversation_store
+        previous = store.previous_completed_qa(*turn)
+        run = self.context.agent_run_store.by_qa(previous) if previous else None
+        if not run or run.scope_fingerprint != task.caller.scope_fingerprint or not run.snapshot:
+            return {}
+        return run.snapshot.get("plan_arguments", {})
+
+    def _station_plan(self, task, run):
+        from aiops_diagnostics.operator import station_pricing, station_tariff
+
+        arguments = task.arguments.get("cpms_station_plan", {})
+        missing = [
+            label
+            for key, label in (
+                ("name", "站点名称"),
+                ("date", "日期YYYY-MM-DD"),
+                ("start", "最早开始HH:mm"),
+                ("end", "最晚结束HH:mm"),
+                ("energy", "所需电量kWh"),
+                ("power", "可持续功率kW"),
+                ("timezone", "计费时区如Asia/Shanghai"),
+                ("basis", "确认普通按量、不用优惠、不预约、不买保险、充完离场"),
+            )
+            if not arguments.get(key)
+        ]
+        data = {
+            **{
+                k: arguments.get(k, "")
+                for k in ("name", "date", "start", "end", "energy", "power", "basis", "timezone")
+            },
+            "site_id": "",
+            "text": "",
+        }
+        if missing:
+            data["text"] = (
+                "请补充：" + "、".join(missing) + "。这些条件决定连续充电费用，不能用额定功率代替。"
+            )
+            return data
+
+        try:
+            station_pricing.validate_conditions(arguments)
+        except station_pricing.PlanUnavailable as exc:
+            data["text"] = str(exc)
+            return data
+
+        def current():
+            return self._current(run.run_id, tool="cpms_station_plan")[0].caller.scope_fingerprint
+
+        sites = query_sites(
+            site_scope(task.caller),
+            SiteKeywords(arguments["name"]),
+            cpms_site_reader(task.base_url, task.bearer),
+            current,
+        )
+        if len(sites["sites"]) != 1 or sites["limited"]:
+            data["text"] = "没有唯一匹配的可见站点，请补充完整站点名称。"
+            return data
+        data["site_id"] = sites["sites"][0]["id"]
+        try:
+            rules = station_tariff.read_rules(
+                task.caller,
+                data["site_id"],
+                arguments["date"],
+                lambda path: cpms_get(task.base_url + path, task.bearer, task.caller.effective_tenant_id),
+                current,
+            )
+        except OperatorRefused as exc:
+            gaps = {
+                "OPERATOR_PLAN_PENDING_RULE_CHANGE": "该站点已有待生效的费率变更，需核对生效规则后比较。",
+                "OPERATOR_PLAN_SEASON_UNSUPPORTED": "季节时段配置不完整或跨年，需核对适用规则。",
+                "OPERATOR_PLAN_SITE_UNSUPPORTED": "当前仅支持四轮充电站的方案比较。",
+            }
+            if str(exc) not in gaps:
+                raise
+            data["text"] = gaps[str(exc)]
+            return data
+        data["rules"] = rules
+        try:
+            data["text"] = station_pricing.plan_text(rules, arguments)
+        except station_pricing.PlanUnavailable as exc:
+            data["text"] = str(exc)
+        return data
 
     def _grant_sites(self, task, run, tool) -> list[str] | None:
         """这一次授权允许碰的站点。
@@ -659,6 +780,22 @@ class OperatorCpms:
             if tool in (TOOL_NAMES[1], "cpms_order_tariff") and TOOL_NAMES[0] not in task.delivered:
                 raise OperatorRefused("OPERATOR_DETAIL_REQUIRED")
 
+            if tool == "cpms_station_plan":
+                data = self._station_plan(task, run)
+                self._current(run_id, tool=tool)
+                data = order_pricing.project(data, _declared(tool).evidence_shape)
+                task.evidence[tool] = {
+                    "tool": tool,
+                    "inputs": tool_inputs(tool, task.arguments.get(tool, {})),
+                    "source": _declared(tool).source,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "data": data,
+                    "response": {
+                        "code": 0,
+                        "data": {"tenantId": task.caller.effective_tenant_id, "value": data},
+                    },
+                }
+                return task.evidence[tool]["response"]
             if tool == "cpms_order_tariff":
                 # 快照本身不含siteId；在同次调用中重新读取订单，防止转站后的旧证据放行。
                 detail = cpms_get(
@@ -844,7 +981,16 @@ class OperatorCpms:
                     raise OperatorRefused("OPERATOR_EVIDENCE_NOT_DELIVERED")
             else:
                 answer = operator_conversation.validate(answer, task.question, check_site_note=False)
-                if SITE_TOOL in task.delivered and answer["kind"] != "site_search":
+                if "cpms_station_plan" in task.delivered:
+                    if answer["kind"] != "station_plan":
+                        raise OperatorRefused("OPERATOR_PLAN_RESULT_REQUIRED")
+                elif answer["kind"] == "station_plan":
+                    raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+                if (
+                    SITE_TOOL in task.delivered
+                    and answer["kind"] != "site_search"
+                    and "cpms_station_plan" not in task.delivered
+                ):
                     raise OperatorRefused("OPERATOR_SITE_SEARCH_MISMATCH")
                 if answer["kind"] == "site_search":
                     sites = _sites_from_evidence(task.caller, task, answer)
@@ -889,6 +1035,19 @@ class OperatorCpms:
                 snapshot["rendered_result"] = operator_conversation.render(
                     answer, sites, task.language, reviewed=True
                 )
+                if "cpms_station_plan" in task.delivered:
+                    snapshot["plan_arguments"] = task.arguments["cpms_station_plan"]
+                    snapshot["rendered_result"] = {
+                        "blocks": [
+                            {
+                                "kind": "text",
+                                "text": task.evidence["cpms_station_plan"]["data"]["text"]
+                                + "\n\n规则查询时间："
+                                + _readable_time(task.evidence["cpms_station_plan"]["observed_at"]),
+                            }
+                        ],
+                        "retrieval_status": "unavailable",
+                    }
                 if review is not None:
                     snapshot["site_note_review"] = review
                     if task.trial and review["verdict"] not in {"allow", "empty"}:
@@ -1075,6 +1234,9 @@ class OperatorCpms:
         if not diagnoses_an_order(run):
             sites = run.snapshot.get("sites")
             scope = operator_scope(caller, allow_empty=True)
+            plan = run.snapshot.get("evidence", {}).get("cpms_station_plan", {}).get("data", {})
+            if plan.get("site_id") and scope.site_ids is not None and plan["site_id"] not in scope.site_ids:
+                raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
             if (
                 sites
                 and scope.site_ids is not None

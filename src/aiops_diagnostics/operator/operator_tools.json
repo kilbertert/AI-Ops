@@ -267,6 +267,166 @@
         ],
         "missing": null
       }
+    },
+    {
+      "name": "cpms_station_plan",
+      "description": "Compare one continuous charging session at an explicitly named visible station. Extract name, date YYYY-MM-DD, start/end HH:mm, energy kWh and power kW from the user. Missing conditions return a clarification. Rates are read from CPMS, never invent them. basis must be the user-confirmed 普通按量、不用优惠、不预约、不买保险、充完离场; timezone is the user-confirmed IANA billing timezone.",
+      "inputs": [
+        "name",
+        "date",
+        "start",
+        "end",
+        "energy",
+        "power",
+        "basis",
+        "timezone"
+      ],
+      "model_inputs": [
+        "name",
+        "date",
+        "start",
+        "end",
+        "energy",
+        "power",
+        "basis",
+        "timezone"
+      ],
+      "applies_to": [
+        "operator_conversation"
+      ],
+      "request": {
+        "method": "GET",
+        "path_template": "/station-plan",
+        "query": [
+          {
+            "name": "name",
+            "from": "name"
+          },
+          {
+            "name": "date",
+            "from": "date"
+          },
+          {
+            "name": "start",
+            "from": "start"
+          },
+          {
+            "name": "end",
+            "from": "end"
+          },
+          {
+            "name": "energy",
+            "from": "energy"
+          },
+          {
+            "name": "power",
+            "from": "power"
+          },
+          {
+            "name": "basis",
+            "from": "basis"
+          },
+          {
+            "name": "timezone",
+            "from": "timezone"
+          }
+        ]
+      },
+      "source": "cpms.stationPlan",
+      "response": {
+        "kind": "object",
+        "row_path": "data"
+      },
+      "evidence_fields": [
+        "text",
+        "site_id",
+        "date",
+        "name",
+        "start",
+        "end",
+        "energy",
+        "power",
+        "rules",
+        "basis",
+        "timezone"
+      ],
+      "evidence_shape": {
+        "text": null,
+        "site_id": null,
+        "date": null,
+        "name": null,
+        "start": null,
+        "end": null,
+        "energy": null,
+        "power": null,
+        "rules": {
+          "site_id": null,
+          "date": null,
+          "holiday": null,
+          "timezone": null,
+          "name": null,
+          "extras": {
+            "parkFeeTemplateId": null,
+            "occupyBillingTemplateId": null,
+            "appointmentTemplateId": null,
+            "insuranceTemplateId": null
+          },
+          "template": {
+            "name": null,
+            "type": null,
+            "billingMode": null,
+            "enableJfpg": null,
+            "electricityLoss": null,
+            "vat": null,
+            "enableLaunchFee": null,
+            "launchFee": null,
+            "enablePackage": null,
+            "freeChargingTime": null,
+            "tip": null,
+            "tipService": null,
+            "peak": null,
+            "peakService": null,
+            "flat": null,
+            "flatService": null,
+            "valley": null,
+            "valleyService": null,
+            "feeTemplateItems": [
+              {
+                "startTime": null,
+                "endTime": null,
+                "type": null,
+                "price": null,
+                "feePrice": null,
+                "enabled": null
+              }
+            ],
+            "customServiceItems": [
+              {
+                "startTime": null,
+                "endTime": null,
+                "type": null,
+                "price": null,
+                "feePrice": null,
+                "enabled": null
+              }
+            ],
+            "feeTemplatePackages": [
+              {
+                "type": null,
+                "price": null,
+                "duration": null,
+                "energy": null
+              }
+            ],
+            "enablePackageType": [
+              null
+            ],
+            "startLimit": null
+          }
+        },
+        "basis": null,
+        "timezone": null
+      }
     }
   ]
 }

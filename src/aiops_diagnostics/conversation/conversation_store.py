@@ -594,6 +594,16 @@ class ConversationStore:
         selected.reverse()
         return selected
 
+    def previous_completed_qa(self, conversation_id, scope_fingerprint, before):
+        self.get(conversation_id, scope_fingerprint)
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT status_qa_id FROM conversation_turns WHERE conversation_id=? "
+                "AND turn_no<? AND answer_json IS NOT NULL ORDER BY turn_no DESC LIMIT 1",
+                (conversation_id, before),
+            ).fetchone()
+        return row[0] if row else None
+
     def recent_questions(
         self, conversation_id: str, scope_fingerprint: str, *, before: int, limit: int = 3
     ) -> list[str]:

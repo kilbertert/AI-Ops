@@ -119,7 +119,7 @@ def test_conversation_manifest_keeps_only_conversation_tools():
         ],
     }
     manifest = json.loads(operator_conversation.manifest(json.dumps(template)))
-    assert [entry["name"] for entry in manifest["tools"]] == [TOOL]
+    assert [entry["name"] for entry in manifest["tools"]] == [TOOL, "cpms_station_plan"]
     assert json.loads(manifest["tools"][0]["input_schema"])["properties"]
 
 
