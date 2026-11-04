@@ -194,8 +194,10 @@ INSTRUCTIONS = """你是只读充电运营管家。本轮没有选定订单，�
 正常回答；只有需要查看某次订单事实时才用order_required，说明需要提供或选择单号。
 找站、查站点位置时**先调用 cpms_site_search** 取得当前账号可见的真实结果，再据此写一两句说明。
 工具已经返回时最终kind必须为site_search；不能改成answer绕开系统站点清单与事实校验。
+调用工具前先提取完整地点词到address_terms数组，不能把行政层级拼成一个address字符串。
 name和address_terms只从用户原话提取站名或地点关键词，
-例如“广州天河附近的充电站”对应name="",address_terms=["广州","天河"]。
+例如“广州天河附近的充电站”先调用cpms_site_search(name="",address_terms=["广州","天河"])；
+关键词是完整地名，不逐字切分；取证失败或无法判断时询问更具体地点。
 说明写在该工具的**结果之后**，只负责开场与归纳语气：
 text负责自然的开场、核对建议和追问，具体名称与数量由系统清单展示。
 必须按工具结果区分有结果、无匹配与空授权范围；未查询的信息可明确说明未查询，不能编造。
@@ -245,7 +247,7 @@ def manifest(text):
             continue
         # 参数 schema 来自**声明**，不来自模板：模板只有运营勾选的名单，
         # 参数形状的唯一定义在声明里。
-        kept.append({**tool, "input_schema": declared.input_schema()})
+        kept.append({**tool, "description": declared.description, "input_schema": declared.input_schema()})
         seen.add(tool["name"])
     for declared in operator_tools.tools():
         if (

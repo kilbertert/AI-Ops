@@ -352,3 +352,33 @@ def test_proxy_filters_authorized_sites_that_do_not_match_keywords(grants, argum
     assert evidence["records"] == []
     assert evidence["total"] == 2  # 上游计数不冒充本地匹配数量。
     assert evidence["truncated"] is True
+
+
+def test_consumer_site_terms_use_same_query_without_broadening_own_scope(grants, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        grants.context.store, "get_assistant_question", lambda *_: {"question": "广州天河充过电的站"}
+    )
+    original = consumer_sites._get
+
+    def read(url, tenant, c_user_id, **kwargs):
+        if consumer_sites.ORDER_PAGE_PATH in url:
+            return original(url, tenant, c_user_id, **kwargs)
+        from urllib.parse import parse_qs, urlsplit
+
+        term = parse_qs(urlsplit(url).query)["address"][0]
+        calls.append(term)
+        rows = [
+            {"id": "SITE-A", "tenantId": "T-1", "name": "本人的站", "address": "天河公园 Guang Zhou"},
+            {"id": "SITE-B", "tenantId": "T-1", "name": "别人的站", "address": "天河公园"},
+        ]
+        rows = [row for row in rows if term in row["address"]]
+        return {"code": 0, "data": {"records": rows, "total": len(rows), "current": 1, "size": 50}}
+
+    monkeypatch.setattr(consumer_sites, "_get", read)
+    body = grant(grants, {"address_terms": ["广州", "天河"]})
+    target = body["request"]
+    response = grants.proxy(RUN, body["bearer"], target["path"], target["query"])
+    assert calls == ["广州", "天河"]
+    assert [row["id"] for row in response["data"]["records"]] == ["SITE-A"]
+    assert "别人的站" not in json.dumps(response, ensure_ascii=False)

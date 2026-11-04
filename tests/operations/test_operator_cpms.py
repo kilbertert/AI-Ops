@@ -117,19 +117,29 @@ def environment(tmp_path, monkeypatch):
             elif self.path.startswith("/chSite/page?"):
                 from urllib.parse import parse_qs, urlsplit
 
+                params = parse_qs(urlsplit(self.path).query)
+                assert self.headers.get("tenant-id") == state["tenant"]
+                site_rows = [
+                    {
+                        "id": state["site"],
+                        "tenantId": state.get("site_tenant", state["tenant"]),
+                        "name": "天河测试站",
+                        "address": state.get("site_address", "广州市天河区测试路"),
+                        "contactPhone": "PRIVATE-PHONE",
+                    }
+                ]
+                if not state.get("site_ignore_filter"):
+                    site_rows = [
+                        row
+                        for row in site_rows
+                        if params.get("address", [""])[0] in row["address"]
+                        and params.get("name", [""])[0] in row["name"]
+                    ]
                 data = {
-                    "records": [
-                        {
-                            "id": state["site"],
-                            "tenantId": state.get("site_tenant", state["tenant"]),
-                            "name": "天河测试站",
-                            "address": state.get("site_address", "广州市天河区测试路"),
-                            "contactPhone": "PRIVATE-PHONE",
-                        }
-                    ],
-                    "total": 1,
+                    "records": site_rows,
+                    "total": len(site_rows),
                     "size": 50,
-                    "current": int(parse_qs(urlsplit(self.path).query)["current"][0]),
+                    "current": int(params["current"][0]),
                 }
             else:
                 data = {"orderNo": state["order"], "siteId": state["site"], "chOrderInfoModel": row}

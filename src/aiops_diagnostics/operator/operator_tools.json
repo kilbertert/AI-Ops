@@ -131,10 +131,11 @@
     },
     {
       "name": "cpms_site_search",
-      "description": "Search charging sites visible to this account by name or address keyword. Both arguments are optional and must be words the user actually said.",
+      "description": "Search charging sites visible to this account. Extract complete place keywords BEFORE calling: 广州天河 -> address_terms [\"广州\",\"天河\"]. Do not concatenate place levels or invent words. Empty terms list visible sites; names and counts come from returned evidence.",
       "inputs": [
         "name",
-        "address"
+        "address",
+        "address_terms"
       ],
       "applies_to": [
         "conversation"
@@ -162,6 +163,10 @@
           {
             "name": "address",
             "from": "address"
+          },
+          {
+            "name": "address_terms",
+            "from": "address_terms"
           }
         ]
       },
@@ -184,8 +189,30 @@
       ],
       "model_inputs": [
         "name",
-        "address"
-      ]
+        "address_terms"
+      ],
+      "model_input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "address_terms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "maxItems": 4
+          }
+        },
+        "required": [
+          "address_terms"
+        ],
+        "additionalProperties": false
+      }
     },
     {
       "name": "cpms_order_tariff",

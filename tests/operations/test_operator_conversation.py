@@ -950,8 +950,8 @@ def test_template_site_tool_is_not_duplicated():
     manifest = json.loads(conversation.manifest(json.dumps(body)))
     names = [tool["name"] for tool in manifest["tools"]]
     assert names == ["cpms_site_search", "cpms_station_plan"]
-    # 模板那一条优先保留（描述沿用模板），schema 仍以声明为准。
-    assert manifest["tools"][0]["description"] == "from-template"
+    # 模板只保留启用集合；当前节点使用的描述与schema都来自同一声明。
+    assert manifest["tools"][0]["description"] == operator_tools.tool("cpms_site_search").description
 
 
 @pytest.mark.parametrize(

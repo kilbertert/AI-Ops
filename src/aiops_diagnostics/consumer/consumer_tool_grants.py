@@ -240,19 +240,20 @@ class ConsumerToolGrants:
         with grant.lock:
             if grant.evidence is not None:
                 return grant.evidence["response"]
-            body = (
-                consumer_sites._get(  # noqa: SLF001 - 同一凭据形状只有一处实现
-                    grant.base_url + path + ("?" + query if query else ""),
-                    grant.tenant_id,
-                    grant.c_user_id,
-                )
-                if grant.site_ids
-                else {"code": 0, "data": {"records": [], "total": 0, "current": 1, "size": 50}}
-            )
             scope = operator_cpms.SiteScope(grant.tenant_id, grant.site_ids, grant.fingerprint)
             declared = self._declared(grant.tool)
-            data, response = operator_cpms.site_tool_result(
-                scope, body, grant.tool, grant.arguments, outside_scope="skip"
+
+            def reauthorize():
+                self._current(run_id, token)
+                return grant.fingerprint
+
+            data, response = operator_cpms.read_site_tool(
+                scope,
+                grant.tool,
+                grant.arguments,
+                consumer_sites.site_reader(grant.base_url, grant.tenant_id, grant.c_user_id),
+                reauthorize,
+                outside_scope="skip",
             )
             self._current(run_id, token)
             grant.evidence = {
