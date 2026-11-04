@@ -56,12 +56,19 @@
 - 删后回读：优链充剩余两条作业都是 `completed`；两条正式路由未变
   （`operator a57602c1 active rev 2`、`consumer 548b8483 active rev 1`）
 
-## 交付状态索引的订正（待做）
+## 交付状态索引的订正（在 #1336，尚未合并）
 
-[当前交付状态索引](../agents/current-delivery-state.md) 里那一行仍写着「未完成业务验收」。
-订正被推迟：该文件与另两份同名记录**被兄弟工作区 `test/consumer-lifecycle-live` 的一次
-未完成合并占用**（`MERGE_HEAD` 存在、`UU` 冲突未解决）。等那个合并结束再订正，
-不在别人的在飞工作里动手。PR 里写明了这一处待补。
+[当前交付状态索引](../agents/current-delivery-state.md) 里那一行**仍写着「未完成业务验收」**，
+一直到 PR #1336 合并为止。那一行不是本记录的产物，也不由本 PR 改：
+
+- **#1336**：改索引那一行 + 上线验收记录与开发进度的结论 + 本记录的截图附件。
+  它已推送，但推送守卫要等兄弟工作区 `fix/operator-facts-relevance` 放开
+  `current-delivery-state.md` 才能放行（那条分支本身改了该文件）。
+- **本 PR**：只把这一段从「待做」改成实际状态，不碰任何被占用的路径。
+
+**更早的推迟原因**（保留为历史）：第一次写这份记录时，索引与另两份同名记录被兄弟工作区
+`test/consumer-lifecycle-live` 的一次未完成合并占用（`MERGE_HEAD` 存在、`UU` 冲突未解决），
+所以那轮 PR 只新增了记录。
 
 ## 仍未验
 
