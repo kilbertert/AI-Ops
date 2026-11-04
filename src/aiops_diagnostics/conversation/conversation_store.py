@@ -215,7 +215,7 @@ class ConversationStore:
             rows = connection.execute(
                 """
                 SELECT * FROM conversations
-                WHERE scope_fingerprint = ?
+                WHERE scope_fingerprint = ? AND operator_binding NOT LIKE '%:preview'
                 ORDER BY updated_at DESC LIMIT ?
                 """,
                 (scope, limit),

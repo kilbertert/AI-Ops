@@ -2021,11 +2021,21 @@ def _native_preview(handler):
         error = _native_refusal(answer)
         handler._json(http_status if 400 <= http_status < 500 else 502, error)
         return
+    returned_conversation = answer.get("conversation_id")
+    if not isinstance(returned_conversation, str) or not re.fullmatch(
+        r"conv_[a-f0-9]{32}", returned_conversation
+    ):
+        with contextlib.suppress(ConsolePublishError):
+            _native_gateway(handler, session, "/" + trial_id + "/cancel", body={"app_id": app_id})
+        handler._json(
+            502, {"code": "OPERATOR_PREVIEW_VERSION_MISMATCH", "message": "预览服务版本不匹配，请联系管理员"}
+        )
+        return
     message_id = str(uuid.uuid4())
     common = {
         "id": message_id,
         "message_id": message_id,
-        "conversation_id": answer.get("conversation_id", ""),
+        "conversation_id": returned_conversation,
         "task_id": NATIVE_TASK_PREFIX + trial_id,
         "created_at": int(_time_module.time()),
     }

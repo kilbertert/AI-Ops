@@ -6028,7 +6028,10 @@ def _require_conversation(
 ) -> dict[str, Any]:
     """Load a scope-owned conversation or raise the uniform 404."""
     try:
-        return context.conversation_store.get(conversation_id, caller.scope_fingerprint)
+        conversation = context.conversation_store.get(conversation_id, caller.scope_fingerprint)
+        if conversation.get("operator_binding", "").endswith(":preview"):
+            raise ConversationError("preview conversation is not a formal conversation")
+        return conversation
     except ConversationError as exc:
         raise StandardAPIError(
             status.HTTP_404_NOT_FOUND,
@@ -6069,8 +6072,6 @@ def _operator_conversation(context, caller, binding, conversation, *, trial):
 
 def _operator_order_followup(question):
     """只继承已确认订单的话题；找站、规则方案和通用解释不能被旧订单吞掉。"""
-    from aiops_diagnostics.operator.operator_conversation import order_fact_fields
-
     text = question.casefold()
     if re.search(
         r"站点|充电站|附近|方案|最便宜|明天|后天|什么意思|是什么|"
@@ -6078,8 +6079,12 @@ def _operator_order_followup(question):
         text,
     ):
         return False
-    return order_fact_fields(question) is not None or bool(
-        re.search(r"这笔|这单|该单|刚才|那笔|它|this order|that order|previous order", text)
+    return bool(
+        re.search(
+            r"这笔|这单|这张|该单|刚才|那笔|那张|它|^那|"
+            r"this order|that order|previous order|what about|^and ",
+            text,
+        )
     )
 
 

@@ -114,7 +114,14 @@ def test_revoked_order_is_not_replayed_and_new_topic_does_not_inherit(tmp_path, 
         )["is_generating"]
         from aiops_diagnostics.gateway.gateway_api import _operator_order_followup
 
-        for question in ["附近有哪些站点", "明天最便宜方案", "订单状态是什么意思"]:
+        for question in [
+            "附近有哪些站点",
+            "明天最便宜方案",
+            "订单状态是什么意思",
+            "电费如何计算",
+            "功率是什么",
+            "电量怎么算",
+        ]:
             assert not _operator_order_followup(question)
 
 
@@ -215,3 +222,19 @@ def test_explicit_order_disagreement_does_not_use_stale_order(tmp_path, monkeypa
         assert response.status_code == 200
         assert response.json()["type"] == "clarification"
         assert not f["state"]["calls"]
+
+
+def test_preview_is_not_listed_or_read_as_a_formal_conversation(tmp_path, monkeypatch):
+    with environment(tmp_path, monkeypatch) as f:
+        scope = f["resolver"].current.scope_fingerprint
+        c = f["ctx"].conversation_store.create(
+            scope_fingerprint=scope,
+            business_entry="operator",
+            agent_version_key="agt_test0000#v1",
+            operator_binding=f"{f['route'].key}:{APP}:preview",
+        )
+        response = f["client"].get("/v1/conversations", headers=HEADERS)
+        assert response.status_code == 200
+        assert c["conversation_id"] not in response.text
+        response = f["client"].get("/v1/conversations/" + c["conversation_id"], headers=HEADERS)
+        assert response.status_code == 404

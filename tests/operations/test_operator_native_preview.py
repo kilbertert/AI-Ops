@@ -164,7 +164,7 @@ def upstream():
 
 @pytest.fixture
 def bridge(upstream):
-    upstream.trial_body = {"trial_id": "qa_test1", "status": "queued"}
+    upstream.trial_body = {"trial_id": "qa_test1", "status": "queued", "conversation_id": "conv_" + "a" * 32}
     upstream.trial_result_body = {
         "trial_id": "qa_test1",
         "status": "completed",
@@ -377,3 +377,11 @@ def test_preview_conversation_reaches_gateway_and_returns_in_sse(bridge, monkeyp
     assert calls[0][1]["order_no"] == ""
     events = [json.loads(line[5:]) for line in body.splitlines() if line.startswith("data:")]
     assert all(event["conversation_id"] == conversation for event in events if event.get("event") != "error")
+
+
+def test_missing_conversation_is_not_a_successful_preview(bridge, upstream):
+    upstream.trial_body = {"trial_id": "qa_test1", "status": "queued"}
+    status, _, body = send(bridge)
+    assert status == 502 and "OPERATOR_PREVIEW_VERSION_MISMATCH" in body
+    assert "data:" not in body
+    assert any(x["path"].endswith("/cancel") for x in upstream.calls)
