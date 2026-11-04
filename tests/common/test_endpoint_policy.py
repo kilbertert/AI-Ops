@@ -74,7 +74,11 @@ LOOPBACK_PLAINTEXT = "http://127.0.0.1:8799"
 
 def _build_endpoints(remote: str) -> list[tuple[str, object]]:
     """十个端点各自的「构造/校验」入口，全部是今天生产代码里的真实调用点。"""
-    from aiops_diagnostics.common.config import DisSettings, ProviderConfig, UpmsSettings, canonical_provider_base_url
+    from aiops_diagnostics.common.config import (
+        DisSettings,
+        UpmsSettings,
+        canonical_provider_base_url,
+    )
     from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource
     from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
     from aiops_diagnostics.identity.caller_auth import IntrospectionSettings
@@ -84,7 +88,12 @@ def _build_endpoints(remote: str) -> list[tuple[str, object]]:
 
     return [
         ("provider", lambda: canonical_provider_base_url(remote)),
-        ("introspection", lambda: IntrospectionSettings(url=remote, client_id="i", client_secret="s", audience="a").validate()),
+        (
+            "introspection",
+            lambda: IntrospectionSettings(
+                url=remote, client_id="i", client_secret="s", audience="a"
+            ).validate(),
+        ),
         (
             "company check_token",
             lambda: CompanyTokenSettings(url=remote, client_id="i", client_secret="s").validate(),
@@ -98,20 +107,40 @@ def _build_endpoints(remote: str) -> list[tuple[str, object]]:
     ]
 
 
-@pytest.mark.parametrize("name", [
-    "provider", "introspection", "company check_token", "gateway client", "upms", "dis",
-    "kb-service", "kb-service (publish)", "dify console",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "provider",
+        "introspection",
+        "company check_token",
+        "gateway client",
+        "upms",
+        "dis",
+        "kb-service",
+        "kb-service (publish)",
+        "dify console",
+    ],
+)
 def test_every_endpoint_rejects_the_same_remote_plaintext_url(name: str) -> None:
     builders = dict(_build_endpoints(REMOTE_PLAINTEXT))
     with pytest.raises(ValueError):
         builders[name]()
 
 
-@pytest.mark.parametrize("name", [
-    "provider", "introspection", "company check_token", "gateway client", "upms", "dis",
-    "kb-service", "kb-service (publish)", "dify console",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "provider",
+        "introspection",
+        "company check_token",
+        "gateway client",
+        "upms",
+        "dis",
+        "kb-service",
+        "kb-service (publish)",
+        "dify console",
+    ],
+)
 def test_every_endpoint_accepts_the_same_loopback_plaintext_url(name: str) -> None:
     """回环明文一律接受 —— 五类端点此前根本不检查它是承重的，现在一致。"""
     builders = dict(_build_endpoints(LOOPBACK_PLAINTEXT))
