@@ -89,11 +89,14 @@ def check_dimension(name: str, value: str, *, allow_empty: bool = False) -> None
 
     `allow_empty` 只给 `list_runs()` 的过滤参数用：那里 `route_type=None` 表示
     「不按路由过滤」，而 `record()` 永远要求一个真实成员。
+
+    **只放过 `None`，不放过空字符串**：`?route_type=` 是「按一个空路由过滤」，
+    它不是「不过滤」—— 它必须继续是 422，而不是悄悄变成「返回空列表」。
+    第一版写成 `not value` 就把这两件事混成了一件事（2026-11-04 复审指出）。
     """
-    allowed = METRIC_DIMENSIONS[name]
-    if allow_empty and not value:
+    if allow_empty and value is None:
         return
-    if value not in allowed:
+    if value not in METRIC_DIMENSIONS[name]:
         raise MetricsValidationError(f"{name} is invalid")
 
 

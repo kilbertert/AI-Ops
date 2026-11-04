@@ -40,7 +40,30 @@ agent_runs 里 operator-trial 绑定的运行数：181
 | 从词表删掉 `trial` | 2 条红（正例 + 产而无判据） |
 | 把判据写回 `list_runs()` 第二处 | 1 条红（判据不重复） |
 
-全量 **4126 passed / 9 skipped**。镜像内容锁真实重建，`context_digest.py --check` 一致。
+全量 **4127 passed / 9 skipped**。镜像内容锁真实重建，`context_digest.py --check` 一致。
+
+## 三之二、复审订正（同一 PR 内）
+
+三条全部成立，逐条修：
+
+1. **空字符串回归（真回归）**：`check_dimension` 第一版写 `if allow_empty and not value`，
+   于是 `?route_type=` 从 422 变成「返回空列表」。`None`（不过滤）与 `""`（非法过滤值）
+   是两件事，改成 `value is None`。补 `test_an_empty_route_filter_is_still_rejected`。
+2. **常量映射让守卫失效**：测试里硬编码了 `ROUTE_TRIAL: "trial"`，常量被改成词表外的值
+   时守卫照样通过。改成从模块 `getattr` 取真实值。
+3. **试运行测试只测存储层**：直接调 `store.record()` 测的是"存储层收不收"，
+   而真正会坏的是"生产点还在不在写"。改成构造最小 runtime 替身、调用
+   `_record_trial_metric` 本身。
+
+**变异验证（四条全中）**：
+
+| 变异 | 结果 |
+|---|---|
+| 从词表删掉 `trial` | 2 条红 |
+| 判据写回 `list_runs()` 第二处 | 1 条红 |
+| 生产点改成 `route_type="trial_typo"` | 2 条红 |
+| 常量值改成 `trial_typo` | 2 条红 |
+| `allow_empty and not value`（退回空串放行） | 1 条红 |
 
 ## 四、过程中的两处自我纠正
 

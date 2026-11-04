@@ -108,15 +108,14 @@ def _produced_literals(dimension: str) -> set[str]:
     found: set[str] = set()
     keyword = re.compile(rf'\b{dimension}\s*=\s*"([a-z0-9_]+)"')
     named = re.compile(rf"\b{dimension}\s*=\s*(?:metrics_dims\.)?([A-Z][A-Z_]+)\b")
+    # **从模块里取真实的值，不在这里重写一遍**：硬编码映射会让守卫在常量被改成
+    # 词表外的值时仍然通过（2026-11-04 复审指出）。这样写，常量改坏了守卫就红。
+    from aiops_diagnostics.gateway import metrics_store as dims
+
     constants = {
-        "ROUTE_QA": "qa",
-        "ROUTE_PROMO": "promo",
-        "ROUTE_TRIAL": "trial",
-        "ROUTE_ORDER_AUTH": "order_auth",
-        "OUTCOME_COMPLETED": "completed",
-        "OUTCOME_FAILED": "failed",
-        "OUTCOME_CANCELLED": "cancelled",
-        "OUTCOME_BUSY": "busy",
+        name: getattr(dims, name)
+        for name in dir(dims)
+        if name.startswith(("ROUTE_", "OUTCOME_")) and isinstance(getattr(dims, name), str)
     }
     for path in SRC.rglob("*.py"):
         if path.name == "metrics_store.py":
@@ -149,18 +148,35 @@ def test_every_produced_route_type_is_declared():
 
 
 def test_trial_specifically_reaches_the_database(tmp_path: Path) -> None:
-    """#799 的正例：`POST /v1/dify/trial` 那条路径的终态必须留下了一行。
+    """#799 的正例：**走生产路径** `_record_trial_metric`，而不是直接调存储层。
 
     41 上实测的损失：**181 次 trial 运行，`agent_run_metrics` 里 trial 零行**。
-    上面两条对账能防住「再犯」，这一条钉住「这一次修好了」。
-    """
-    from aiops_diagnostics.gateway.metrics_store import ROUTE_TRIAL
 
-    assert ROUTE_TRIAL == "trial"
+    只调 `store.record(route_type="trial")` 是不够的 —— 那样测的是"存储层收不收这个值"，
+    而真正会出问题的是"**生产点还在不在写**"（2026-11-04 复审指出：直接写入的测试
+    在生产点被删掉后仍然会通过）。所以这里构造一个最小的 runtime 替身，
+    调它自己的 `_record_trial_metric`，再看库里有没有行。
+    """
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.gateway import metrics_store as dims
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+
+    assert dims.ROUTE_TRIAL == "trial"
     metrics = MetricsStore(tmp_path / "gateway.db")
-    metrics.record(tenant_id=TENANT, route_type=ROUTE_TRIAL, outcome="completed", duration_ms=12)
-    rows = metrics.list_runs(TENANT, route_type=ROUTE_TRIAL)
+    # 只取这一个方法真正用到的东西：`self.metrics_store` 与 `context.effective_tenant_id`。
+    # 不构造整个 GatewayRuntime —— 那需要平台、凭据与一堆与指标无关的装配。
+    runtime = SimpleNamespace(
+        metrics_store=metrics,
+        _record_metric=GatewayRuntime._record_metric.__get__(SimpleNamespace(metrics_store=metrics)),
+    )
+    context = SimpleNamespace(effective_tenant_id=TENANT)
+
+    GatewayRuntime._record_trial_metric(runtime, context, "completed", __import__("time").monotonic())
+
+    rows = metrics.list_runs(TENANT, route_type=dims.ROUTE_TRIAL)
     assert len(rows) == 1 and rows[0]["route_type"] == "trial"
+    assert rows[0]["outcome"] == "completed"
 
 
 def test_an_unknown_value_is_still_rejected():
@@ -174,3 +190,19 @@ def test_an_unknown_value_is_still_rejected():
     ):
         with pytest.raises(MetricsValidationError):
             check_dimension(name, value)
+
+
+def test_an_empty_route_filter_is_still_rejected(tmp_path: Path) -> None:
+    """`?route_type=`（空串）必须继续是 422，不能悄悄变成「返回空列表」。
+
+    `list_runs()` 的过滤参数里，`None` 是「不按路由过滤」，空串**不是** —— 它是
+    「按一个空路由过滤」，那不是一个合法的路由。第一版把两者一起放过了
+    （2026-11-04 复审指出：原本 422 的请求变成了空列表），这条盯住它。
+    """
+    metrics = MetricsStore(tmp_path / "gateway.db")
+    metrics.record(tenant_id=TENANT, route_type="qa", outcome="completed")
+    # `None` = 不过滤，照常返回全部。
+    assert len(metrics.list_runs(TENANT, route_type=None)) == 1
+    # 空串 = 一个非法的过滤值。
+    with pytest.raises(MetricsValidationError):
+        metrics.list_runs(TENANT, route_type="")

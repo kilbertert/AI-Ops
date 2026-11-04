@@ -30,7 +30,7 @@ agent_runs 里 operator-trial 绑定的运行数：181
 
 ## 三、验证
 
-**新增 23 条测试**（`tests/gateway/test_metrics_dimensions.py`）：
+**新增 24 条测试**（`tests/gateway/test_metrics_dimensions.py`）：
 
 - 三个维度 × 每个成员 = 18 条「真实 record + list_runs 有行」
 - 判据不重复（源码扫描）
