@@ -408,7 +408,7 @@ class GatewayRuntime:
             return
         self._record_metric(
             tenant_id=tenant_id,
-            route_type="operations_analysis",
+            route_type=metrics_dims.ROUTE_OPERATIONS_ANALYSIS,
             outcome="completed" if status == "completed" else "failed",
             error_code=error_code,
             duration_ms=int((time.monotonic() - started_ms) * 1000),
@@ -476,7 +476,7 @@ class GatewayRuntime:
             if ok:
                 self._record_metric(
                     tenant_id=context.effective_tenant_id,
-                    route_type="operations_analysis",
+                    route_type=metrics_dims.ROUTE_OPERATIONS_ANALYSIS,
                     outcome="failed",
                     error_code="ANALYSIS_FAILED",
                     duration_ms=int((time.monotonic() - started_ms) * 1000),
@@ -709,7 +709,7 @@ class GatewayRuntime:
             if ok:
                 self._record_metric(
                     tenant_id=context.effective_tenant_id,
-                    route_type="operations_analysis",
+                    route_type=metrics_dims.ROUTE_OPERATIONS_ANALYSIS,
                     outcome="failed",
                     error_code="ANALYSIS_FAILED",
                     duration_ms=int((time.monotonic() - started_ms) * 1000),

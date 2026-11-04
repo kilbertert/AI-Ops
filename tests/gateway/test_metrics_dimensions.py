@@ -223,3 +223,43 @@ def test_a_null_retrieval_status_is_rejected_at_validation_not_at_sqlite(tmp_pat
     # 空字符串仍然是合法的，照常落行。
     metrics.record(tenant_id=TENANT, route_type="qa", outcome="completed", retrieval_status="")
     assert len(metrics.list_runs(TENANT, limit=5)) == 1
+
+
+#: #799 的剩余欠账，按文件名钉住：**只许减少**。
+#:
+#: `trial`：`consumer_trial` / `dify_workflow_trial` 的 `JobRegistration` 只登记
+#: 「这是哪种作业」，真正的指标行由 `_record_trial_metric` 经 `ROUTE_TRIAL` 写。
+#: `qa`：operator 预览路径（`gateway_runtime:1138/:1190`、`gateway_api:6395`）今天
+#: 压根不写指标行 —— 它与 #799 的其余部分分开，见该 issue 的评论。
+BARE_LITERAL_ALLOWED = {
+    ("consumer/consumer_trial.py", "trial"),
+    ("dify/dify_workflow_trial.py", "trial"),
+    ("gateway/gateway_runtime.py", "qa"),
+    ("gateway/gateway_api.py", "qa"),
+}
+
+
+def test_the_allow_list_only_shrinks():
+    """白名单不能变成新的第二份词表：条目数只许减少。"""
+    assert len(BARE_LITERAL_ALLOWED) <= 4, (
+        "白名单变长了 —— 新增生产点应引用 metrics_store 的常量，不是加到这里"
+    )
+
+
+def test_producers_reference_the_named_constants():
+    """生产点引用 `ROUTE_*` 常量，而不是各写一份字面量。
+
+    `route_type="trial"` 写在五个文件里时，「加一个路由类型要改哪几行」没有答案；
+    引用常量之后，`ROUTE_TYPES` 与常量表就是同一处。这条测试钉住**不再增加新的一处**。
+    """
+    offenders = []
+    for path in SRC.rglob("*.py"):
+        if path.name == "metrics_store.py":
+            continue
+        rel = path.relative_to(SRC).as_posix()
+        for value in re.findall(r'\broute_type\s*=\s*"([a-z0-9_]+)"', path.read_text(encoding="utf-8")):
+            if (rel, value) not in BARE_LITERAL_ALLOWED:
+                offenders.append(f"{rel}: route_type={value!r}")
+    assert offenders == [], "这些生产点写了裸字面量，应改为引用 metrics_store 的常量：\n  " + "\n  ".join(
+        offenders
+    )
