@@ -905,6 +905,8 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
 # deliberately total-with-a-default rather than an exhaustive enumeration, so a
 # NEW code added later cannot make the surface fall back to the raw stored text.
 _DIAGNOSIS_ERROR_KEYS: dict[str, str] = {
+    "CONSUMER_MODEL_QUOTA_EXHAUSTED": "model_quota",
+    "CONSUMER_INTENT_UNAVAILABLE": "dependency",
     "OPERATOR_MODEL_QUOTA_EXHAUSTED": "model_quota",
     "OPERATOR_DEPENDENCY_UNAVAILABLE": "dependency",
     "OPERATOR_MODEL_OUTPUT_UNSTABLE": "model_output",
