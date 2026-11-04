@@ -4,30 +4,28 @@
 # 只在开发机/runner 运行。服务宿主拿到的是 `docker save` 出来的 tar，不在宿主下载依赖。
 #
 # 身份 = 镜像 ID（sha256）+ 一个内容摘要标签：
-#   m2live.source     构造上下文的 tar sha256（src + tools + requirements + Dockerfile）
+#   m2live.source     构造上下文内容摘要（src + tools + requirements + Dockerfile）
 #   m2live.lock       uv.lock 的 sha256（依赖范围的唯一来源）
 #   m2live.base      基础镜像的 repo digest
-# preflight 比对前两项，所以「把镜像重建成别的内容但打同一个 tag」会失败。
+# preflight 比对三项与镜像ID；构建记录随制品交付，不改仓库输入锁。
 #
 # 用法：
-#   deploy/m2-live-03/build-image.sh                 # 构建并写字
+#   deploy/m2-live-03/build-image.sh                 # 构建并输出记录
 #   deploy/m2-live-03/build-image.sh --save out.tar  # 另外导出可搬运的 tar
 set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd -- "$HERE/../.." && pwd)
 IMAGE=${M2LIVE_GATEWAY_IMAGE:-aiops-m2-live-03-gateway:local}
-BASE=${M2LIVE_BASE_IMAGE:-python:3.13-slim}
-OUT=${M2LIVE_DIST:-/opt/aiops-m2-live}/gateway-image
+LOCKED_BASE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["gateway_image"]["base_digest"])' "$HERE/images.lock.json")
+BASE=${M2LIVE_BASE_IMAGE:-$LOCKED_BASE}
+OUT=${M2LIVE_DIST:-$REPO/dist}/gateway-image
 SAVE=""
-UPDATE_LOCK=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --save) SAVE=$2; shift 2 ;;
-    # 把这次构建的精确身份写回 images.lock.json。构建与记录是两件事：
-    # 只有显式要求时才改仓库里被审查的那个文件。
-    --update-lock) UPDATE_LOCK=1; shift ;;
+    --update-lock) echo "--update-lock 已退役：构建记录只写入 $OUT/identity.json，仓库锁只维护输入" >&2; exit 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -51,14 +49,15 @@ cp "$HERE/gateway-requirements.txt" "$work/gateway-requirements.txt"
 
 # `LC_ALL=C` 不是风格问题：`sort` 默认按**本机 locale** 排序，同 141 个文件在
 # `en_US.UTF-8` 与 `C` 下顺序不同，摘要因此不同（实测 7e6dc9ca… vs e7c9af0c…）。
-# 锁文件里那个值必须与运行环境无关，否则每个 reviewer 算出自己的一个。
+# 构建记录必须与运行环境无关，否则每个 reviewer 算出自己的一个。
 context_sha=$(cd "$work" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
 lock_sha=$(sha256sum "$REPO/uv.lock" | awk '{print $1}')
 base_digest=$(docker image inspect -f '{{index .RepoDigests 0}}' "$BASE" 2>/dev/null || true)
 [ -n "$base_digest" ] || { echo "基础镜像 $BASE 没有 RepoDigest：先拉取，别用本地构建的替身" >&2; exit 2; }
+[ "$base_digest" = "$LOCKED_BASE" ] || { echo "基础镜像摘要与输入锁不符" >&2; exit 2; }
 
 DOCKER_BUILDKIT=1 docker build \
-  --build-arg M2LIVE_BASE_IMAGE="$BASE" \
+  --build-arg M2LIVE_BASE_IMAGE="$base_digest" \
   --label "m2live.source=$context_sha" \
   --label "m2live.lock=$lock_sha" \
   --label "m2live.base=$base_digest" \
@@ -66,52 +65,22 @@ DOCKER_BUILDKIT=1 docker build \
 
 image_id=$(docker image inspect -f '{{.Id}}' "$IMAGE")
 mkdir -p "$OUT"
-cat > "$OUT/identity.json" <<JSON
-{
-  "image": "$IMAGE",
-  "image_id": "$image_id",
-  "source_sha256": "$context_sha",
-  "uv_lock_sha256": "$lock_sha",
-  "base_image": "$BASE",
-  "base_digest": "$base_digest",
-  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-JSON
-cat "$OUT/identity.json"
-
-if [ "$UPDATE_LOCK" -eq 1 ]; then
-  python3 - "$HERE/images.lock.json" "$OUT/identity.json" <<'PY'
-import json, sys
-lock_path, identity_path = sys.argv[1], sys.argv[2]
-lock = json.load(open(lock_path))
-identity = json.load(open(identity_path))
-section = lock.setdefault("gateway_image", {})
-# `dict.update()` 不会删除既有键：如果这份锁是旧版本带来的、还带着 `image_id`，
-# 它会**原地活下来**，于是锁里出现"旧的 image ID + 新的时间戳和摘要"这一对矛盾。
-# 显式 pop 才是让"锁不含 image_id"在反复构建后依然成立的那一步。
-section.pop("image_id", None)
-section.update(
-    {
-        "image": identity["image"].split(":")[0],
-        # **不写 image_id**：它每次构建都不同（构建时间戳进镜像元数据），
-        # 写进受版本控制的锁只会与 built_at 脱节，且锁的注释本来就声明不收它。
-        # 它的家在宿主上的 identity.json，preflight 从那里读。
-        "source_sha256": identity["source_sha256"],
-        "uv_lock_sha256": identity["uv_lock_sha256"],
-        "base_image": identity["base_image"],
-        "base_digest": identity["base_digest"],
-        "built_at": identity["built_at"],
-    }
-)
-section.setdefault(
-    "_comment",
-    "由 build-image.sh --update-lock 写入：source_sha256 是构造上下文的摘要，"
-    "uv_lock_sha256 是 uv.lock 的摘要；preflight 两项都比对。",
-)
-open(lock_path, "w").write(json.dumps(lock, indent=2, ensure_ascii=False) + "\n")
-print(f"updated {lock_path}")
-PY
-fi
+python3 - "$OUT/identity.json" "$IMAGE" "$image_id" "$context_sha" "$lock_sha" "$BASE" "$base_digest" "$HERE/context_digest.py" <<'PY_IDENTITY'
+import json, subprocess, sys
+from datetime import UTC, datetime
+from pathlib import Path
+path = Path(sys.argv[1])
+record = dict(zip(("image", "image_id", "source_sha256", "uv_lock_sha256", "base_image", "base_digest"), sys.argv[2:8], strict=True))
+record["built_at"] = datetime.now(UTC).isoformat()
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+try:
+    subprocess.run([sys.executable, sys.argv[8], "--check", str(temporary)], check=True)
+    temporary.replace(path)
+finally:
+    temporary.unlink(missing_ok=True)
+print(json.dumps(record, ensure_ascii=False, indent=2))
+PY_IDENTITY
 
 if [ -n "$SAVE" ]; then
   docker save "$IMAGE" -o "$SAVE"
