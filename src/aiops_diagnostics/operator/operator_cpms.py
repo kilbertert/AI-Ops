@@ -871,7 +871,7 @@ class OperatorCpms:
                 # **在完成时渲染并冻结**：事实段的语言按运行所选语言，历史回读不再重算 ——
                 # 升级渲染器不会改写已经交付的答复。
                 snapshot["rendered_report"] = render_report(
-                    answer, snapshot["evidence"], language=task.language
+                    answer, snapshot["evidence"], language=task.language, question=task.question
                 )
             if not store.complete(
                 run_id, snapshot=snapshot, actual_node_id=run.expected_node_id, node_build=None
@@ -921,6 +921,15 @@ class OperatorCpms:
                 + json.dumps(task.question, ensure_ascii=False)
                 + "。回答语言："
                 + task.language
+                # **同一会话的前几轮**（2026-11-04 反馈第 3 条：问「那这笔单的电压呢」时
+                # 接不上）。这里是「本级只有一条用户消息」这条不变量下**唯一**能带上下文的位置：
+                # 节点对**首次**模型调用要求「声明的 system + 恰好一条纯文本用户消息」，
+                # 多插一条 user/assistant 会被 `verifyInputShape` 直接拒。
+                # 所以历史以**文字形式**写进这一条消息，而不是拆成多条对话轮次。
+                #
+                # 只带最近几轮、每轮截断：它是给模型理解「这笔单」「它」指什么用的，
+                # 不是让模型复述前文 —— 复述会被 reply 的事实判据拦下。
+                + _conversation_context(self.context.runtime, task)
                 # 这一句是实测出来的，不是客套：`response_format=json_object` 对供应商只是**提示**，
                 # 带工具轮次的最后一轮实测有 36–44% 的响应是通篇正文、根本没有 JSON
                 # （2026-11-03，41 生产，每组 25 次）。把「最后一步只输出 JSON」写进模型
@@ -1050,6 +1059,8 @@ class OperatorCpms:
         validate_answer(answer, run.snapshot["evidence"])
         # 历史 run 用**当时冻结**的正文；没有冻结文本的旧 run 按中文标签重算，
         # 与它们签发时的呈现一致（升级不改写历史）。
+        # 这里**不传 question**：那些 run 当初渲染时就没有按主题收窄，传一个空提问
+        # 能得到与当时一致的全量字段；传别的反而会让旧答复在回读时变形。
         text = run.snapshot.get("rendered_report") or render_report(
             answer, run.snapshot["evidence"], language="zh"
         )
@@ -1321,6 +1332,53 @@ def _json_truncation_hint(raw) -> str:
     return f" len={len(text)} closed={text.endswith('}')} depth={depth} in_string={quoted}"
 
 
+#: 带进节点消息的会话历史上限：轮数、每轮字符数。
+#: 理由是**成本与噪声**：历史只是让模型读懂「这笔单」「它」指什么，不是让它复述前文。
+#: 三轮够接上「刚才那张单」这类指代，再多只会挤占取证所需的上下文。
+HISTORY_TURNS = 3
+HISTORY_CHARS = 300
+
+
+def _conversation_context(store, task) -> str:
+    """把同一会话的前几轮压成一段文字，附在用户消息后面。
+
+    三条约束决定了它只能长这样：
+
+    1. **不能拆成多条对话轮次**：节点对首次模型调用要求「恰好一条纯文本用户消息」
+       （`GuardedChatModel.verifyInputShape`），多一条 user/assistant 会被拒；
+    2. **不能带业务数字**：`reply` 的其它行一个字都不许带数字，而事实段由系统生成 ——
+       历史里只留提问原文，不重复前几轮的事实段，否则模型会照着抄；
+    3. **读不到就当作没有**：会话存储不可用、或这一轮不属于任何会话时，静默跳过。
+       上下文是**增强**，不是交付条件；为它让整轮失败是本末倒置。
+    """
+    turn = getattr(task, "conversation_turn", None)
+    if not turn:
+        return ""
+    conversation_id, scope_fingerprint, turn_no = turn
+    store = getattr(store, "conversation_store", None) if store is not None else None
+    if store is None or turn_no is None or turn_no <= 1:
+        return ""
+    try:
+        rows = store.turns(conversation_id, scope_fingerprint, limit=HISTORY_TURNS + 1)
+    except Exception:  # noqa: BLE001 - 上下文读不到就不带，不影响交付
+        return ""
+    prior = [row for row in rows if row.get("turn_no", 0) < turn_no][-HISTORY_TURNS:]
+    if not prior:
+        return ""
+    lines = []
+    for row in prior:
+        question = str(row.get("question") or "").strip()
+        if not question:
+            continue
+        lines.append("- " + question[:HISTORY_CHARS])
+    if not lines:
+        return ""
+    return (
+        "\n\n【同一会话的前文】以下只是让您理解「这笔单」「它」指的是什么，"
+        "不要复述、不要据此推断任何事实：\n" + "\n".join(lines)
+    )
+
+
 def _failure_code(exc: BaseException) -> str:
     """这次失败对**用户**报哪个码。
 
@@ -1469,6 +1527,14 @@ _FACT_LABELS = {
         "voltage": "电压",
         "gunPower": "额定功率",
         "stoppedReasonContent": "系统记录的停止原因",
+        "stoppedReasonCode": "系统记录的停止原因码",
+        "createdTime": "创建时间",
+        "stopTime": "结束时间",
+        "startSoc": "起始电量百分比",
+        "endSoc": "结束电量百分比",
+        "deviceCode": "设备编号",
+        "childDeviceCode": "枪编号",
+        "interfaceType": "接口类型",
         "samples": "本次取得监测样本",
         "missing": "未提供",
         "limits": "币种和时长单位需与原订单核对；账务记录不证明银行到账，当前状态不证明历史故障原因。",
@@ -1496,6 +1562,14 @@ _FACT_LABELS = {
         "time": "Charging duration",
         "voltage": "Voltage",
         "gunPower": "Rated power",
+        "stoppedReasonCode": "Recorded stop-reason code",
+        "createdTime": "Created",
+        "stopTime": "Stopped",
+        "startSoc": "Start SOC",
+        "endSoc": "End SOC",
+        "deviceCode": "Device code",
+        "childDeviceCode": "Connector code",
+        "interfaceType": "Connector type",
         "stoppedReasonContent": "Recorded stop reason",
         "samples": "Monitoring samples returned",
         "missing": "not provided",
@@ -1530,8 +1604,17 @@ def _fact_labels(language: str) -> dict[str, str]:
     return _FACT_LABELS["zh" if language.startswith("zh") else "en"]
 
 
-def _order_fact_text(evidence, language="zh"):
+def _order_fact_text(evidence, language="zh", question=""):
+    """订单事实段。**只列这次提问问到的那几项**（2026-11-04 反馈）。
 
+    此前不论问什么，这里都把 20 个字段全列出来：问「电压」和问「电费」的答复除结尾
+    之外逐字相同，读者拿到的不是回答而是一张抄下来的后台页。现在由
+    :func:`operator_conversation.order_fact_fields` 按提问原文选出主题字段；
+    **匹配不到主题时 `None`，退回原来的全量**，所以漏词只会回到旧行为。
+
+    另一处改动：上游**有这一列但值是空**时，明确写「未提供」。旧行为是直接跳过 ——
+    于是问「电压」的那一版明明电压是 `null`，答复里却一个字都不提，看起来像答非所问。
+    """
     labels = _fact_labels(language)
     colon = labels["colon"]
     item = evidence[TOOL_NAMES[0]]
@@ -1562,18 +1645,34 @@ def _order_fact_text(evidence, language="zh"):
         ("time", "time"),
         ("voltage", "voltage"),
         ("gunPower", "gunPower"),
+        ("startSoc", "startSoc"),
+        ("endSoc", "endSoc"),
+        ("deviceCode", "deviceCode"),
+        ("childDeviceCode", "childDeviceCode"),
+        ("interfaceType", "interfaceType"),
+        ("createdTime", "createdTime"),
+        ("stopTime", "stopTime"),
+        ("stoppedReasonCode", "stoppedReasonCode"),
         ("stoppedReasonContent", "stoppedReasonContent"),
     )
+    focus = operator_conversation.order_fact_fields(question)
     for key, label_key in fields:
+        if focus is not None and key not in focus:
+            continue
         value = detail.get(key)
         if value is None:
+            # 认得出主题、而这一项**正是主题字段**时，明确说「未提供」。
+            # 全量模式下保持旧行为（缺列就不出这一行），免得把整页都变成「未提供」。
+            if focus is None or key not in focus:
+                continue
+            lines.append(labels[label_key] + colon + labels["missing"])
             continue
         if key == "status":
             shown = _status_word(value, language)
         elif key == "isPrePay":
             # 布尔值直接印 `True`/`False` 是给开发者看的；后台那一列写的是「是/否」。
             shown = _yes_no(value, language)
-        elif key == "payTime":
+        elif key in {"payTime", "createdTime", "stopTime"}:
             # 与报告末尾的取证时间同一个写法：CPMS 给的是不带时区的本地时间，原样显示，
             # 不补一个假的 UTC 后缀。
             shown = _readable_time(value)
@@ -1650,7 +1749,7 @@ _SOURCE_LABELS = {
 }
 
 
-def render_report(answer, evidence, *, language="zh") -> str:
+def render_report(answer, evidence, *, language="zh", question="") -> str:
     """把结构化诊断渲染成**人读的报告**。
 
     之前这里是 ``"\\n\\n".join([...])``：九段文字被摊平成同等重要的段落，列表失去编号、
@@ -1673,7 +1772,9 @@ def render_report(answer, evidence, *, language="zh") -> str:
             )
             for item in evidence.values()
         )
-        text = answer["reply"].replace("{{fact:order_facts}}", _order_fact_text(evidence, language))
+        text = answer["reply"].replace(
+            "{{fact:order_facts}}", _order_fact_text(evidence, language, question=question)
+        )
         heading = "【数据来源】" if zh else "Sources"
         return text + (f"\n\n{heading}\n" + sources if sources else "")
     sections = [answer["direct_answer"]]

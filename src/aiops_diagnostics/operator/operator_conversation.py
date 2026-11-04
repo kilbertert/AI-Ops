@@ -33,6 +33,113 @@ def claims_mutation(text):
 SCENARIO = "operator_conversation"
 SCHEMA = "operator-conversation/1"
 
+#: 订单问题问的是**哪个主题**。判据是封闭词表 + 提问原文，**不看模型输出** ——
+#: 模型只写开场语气，事实段由系统按这里选出的字段生成。
+#:
+#: 为什么需要这一步（2026-11-04 反馈）：此前不论问「电压」还是问「电费」，事实段一律把
+#: 20 个字段全列出来，于是两种问法的答复除结尾以外逐字相同。用户读到的不是回答，
+#: 是一张把后台整页抄下来的表 —— 而且「电压」这一问里电压其实是**空的**（上游
+#: `voltage: null`），满屏其他字段反而掩盖了「这一项没有」。
+#:
+#: 词表是**维护中的**，不是对自然语言的穷举：匹配不到任何主题时退回原有全量渲染，
+#: 所以漏词只会回到旧行为，不会答错主题。
+ORDER_TOPIC_FIELDS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        "fee",
+        ("电费", "服务费", "费用", "多少钱", "收费", "账单", "计费", "金额", "总价", "付款", "支付"),
+        (
+            "isPrePay",
+            "prePayAmount",
+            "electricityFee",
+            "serviceFee",
+            "dsElectricFee",
+            "dsServiceFee",
+            "launchFee",
+            "occupyFee",
+            "marketAmount",
+            "vat",
+            "vatFee",
+            "totalAmount",
+            "payAmount",
+            "payTime",
+            "refundAmount",
+        ),
+    ),
+    (
+        "energy",
+        ("电量", "用电", "度数", "kwh", "充电量"),
+        ("electricity", "time", "gunPower", "startSoc", "endSoc"),
+    ),
+    (
+        "electrical",
+        ("电压", "电流", "功率", "伏", "安培"),
+        ("voltage", "gunPower", "electricity", "time", "deviceCode", "childDeviceCode", "interfaceType"),
+    ),
+    (
+        "process",
+        ("过程", "明细", "曲线", "采样", "监测", "时间线", "多久", "时长"),
+        ("electricity", "time", "createdTime", "stopTime", "gunPower", "startSoc", "endSoc"),
+    ),
+    (
+        "stop",
+        ("停止", "结束", "中断", "故障", "异常", "为什么停", "原因", "状态"),
+        ("status", "stoppedReasonCode", "stoppedReasonContent", "stopTime", "createdTime", "time"),
+    ),
+)
+
+#: 字段总表与渲染顺序。无主题命中时**全部**按这个顺序列出（原有行为）；
+#: 命中主题时只保留主题字段，但顺序仍取自这里 —— 同一主题下两次提问的排布一致。
+ORDER_FACT_FIELDS_ALL = (
+    "status",
+    "isPrePay",
+    "prePayAmount",
+    "electricityFee",
+    "serviceFee",
+    "dsElectricFee",
+    "dsServiceFee",
+    "launchFee",
+    "occupyFee",
+    "marketAmount",
+    "vat",
+    "vatFee",
+    "totalAmount",
+    "payAmount",
+    "payTime",
+    "refundAmount",
+    "electricity",
+    "time",
+    "voltage",
+    "gunPower",
+    "startSoc",
+    "endSoc",
+    "deviceCode",
+    "childDeviceCode",
+    "interfaceType",
+    "createdTime",
+    "stopTime",
+    "stoppedReasonCode",
+    "stoppedReasonContent",
+)
+
+
+def order_fact_fields(question: str) -> tuple[str, ...] | None:
+    """这次提问只看哪几项事实；`None` 表示「没识别出主题，按全量列」。
+
+    返回的顺序固定用 `ORDER_FACT_FIELDS_ALL` 里的相对次序，这样同一个主题下
+    两次提问的事实段顺序一致 —— 读者对比两份答复时不会因为顺序不同而多看一眼。
+    """
+    text = (question or "").casefold()
+    if not text:
+        return None
+    chosen: set[str] = set()
+    for _, words, fields in ORDER_TOPIC_FIELDS:
+        if any(word.casefold() in text for word in words):
+            chosen.update(fields)
+    if not chosen:
+        return None
+    return tuple(name for name in ORDER_FACT_FIELDS_ALL if name in chosen)
+
+
 #: 找站说明的上限。它是**一两句开场**，不是答复正文：名单、数量、来源由系统写。
 MAX_SITE_NOTE_CHARS = 400
 
