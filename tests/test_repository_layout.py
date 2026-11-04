@@ -88,6 +88,7 @@ LAYOUT = {
                 "operator_support.py",
                 "test_bridge_knowledge_open.py",
                 "test_cd_deploy_scripts.py",
+                "test_ci_test_tier.py",
                 "test_console_bridge_deployment.py",
                 "test_env_41_editable_guard.py",
                 "test_env_example.py",
