@@ -27,6 +27,11 @@ EOF
   exit 124
 fi
 
+if printf '%s' "$OUT" | grep -c '^console-preflight=refused$' >/dev/null; then
+  printf '部署前控制台配置检查拒绝：未替换生产源码、未重启服务；修正控制台地址后重跑标准部署。\n' >&2
+  exit 1
+fi
+
 if printf '%s' "$OUT" | grep -c 'rollback=also-failed' >/dev/null; then
   RH=$(printf '%s\n' "$OUT" | sed -n 's/^rollback-health=//p' | head -1)
   RA=$(printf '%s\n' "$OUT" | sed -n 's/^rollback-active=//p' | head -1)

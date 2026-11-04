@@ -54,7 +54,7 @@ def prepare(env, monkeypatch, tmp_path):
     key.write_text("test-key")
     key.chmod(0o600)
     env["settings"].dify_publish_api_key = "publication-key"
-    env["settings"].dify_console_base_url = "http://dify.invalid"
+    env["settings"].dify_console_base_url = "https://dify.invalid"
     env["settings"].dify_console_api_key = "console-key"
     target = tmp_path / "consumer-targets.json"
     target.write_text(
@@ -305,7 +305,7 @@ def test_old_node_still_needs_its_own_publication_target(publication, monkeypatc
     old = publish_node(env, 0)
     env["settings"].chat_node_targets_file = ""
     env["settings"].dify_publish_api_key = "publication-key"
-    env["settings"].dify_console_base_url = "http://dify.invalid"
+    env["settings"].dify_console_base_url = "https://dify.invalid"
     env["settings"].dify_console_api_key = "console-key"
     monkeypatch.setattr(env["context"].dify_workspaces, "resolve", lambda *args: "workspace-a")
     response = env["client"].post("/v1/dify/publish", headers=PUBLISH, json={"app_id": old.app_id})
