@@ -113,7 +113,14 @@ public final class CpmsReadTool implements ToolCallback {
             if (parameters == null || !parameters.isObject()) throw refused("invalid_arguments");
             // 只检查形状：**能不能用**由网关判，因为只有它知道用户原话。
             for (var parameter : parameters.properties()) {
-                if (!parameter.getValue().isTextual() || parameter.getValue().asText().length() > 80) {
+                JsonNode value = parameter.getValue();
+                if (value.isArray()) {
+                    if (value.size() > 4) throw refused("invalid_arguments");
+                    for (JsonNode term : value) {
+                        if (!term.isTextual() || term.asText().isBlank() || term.asText().length() > 80)
+                            throw refused("invalid_arguments");
+                    }
+                } else if (!value.isTextual() || value.asText().length() > 80) {
                     throw refused("invalid_arguments");
                 }
             }
