@@ -82,3 +82,28 @@ agent_runs 里 operator-trial 绑定的运行数：181
   没有现网损失，本轮不扩大改动。
 - **`retrieval_status` 的托管值仍未显式化**——#799 验收第 5 条留给后续。这一条同样是
   「下一次静默丢失」的候选路径，本轮不碰也不假装修了。
+
+## 六、收口轮（#799 关闭前）：剩余裸字面量
+
+§五 记的「其余生产点仍是裸字面量」，本轮把**属于同一批**的两类收掉：
+
+| 生产点 | 改前 | 改后 |
+|---|---|---|
+| `gateway_runtime.py:410/:478/:711` | `route_type="operations_analysis"` | `metrics_dims.ROUTE_OPERATIONS_ANALYSIS` |
+| `gateway_api.py:7163` | `route_type="clarification"` | `metrics_dims.ROUTE_CLARIFICATION` |
+
+新增 `test_producers_reference_the_named_constants`：全量扫 `src/`，除白名单外不许再有
+`route_type="…"` 裸字面量；白名单条目数由 `test_the_allow_list_only_shrinks` 钉住**只许减少**。
+
+白名单里留下的四条是 #799 评论里点明的欠账，不是本轮的同类：
+
+- `consumer_trial.py` / `dify_workflow_trial.py` 的 `JobRegistration(route_type="trial")`
+  ——登记的是「这是哪种作业」，指标行由 `_record_trial_metric` 经 `ROUTE_TRIAL` 写。
+- operator 预览路径的 `route_type="qa"`（`gateway_runtime:1138/:1190`、`gateway_api:6395`）
+  ——**这条路径压根不写指标行**，属「没有写入点」而非「词表少成员」，需要单独决策
+  是否改变 `qa` 统计口径。
+
+**反向验证**：把一个生产点改回裸字面量 → `test_producers_reference_the_named_constants` 红；
+把 `route_type` 改成词表外的值 → `test_every_produced_route_type_is_declared` 红。两条都实测过。
+
+`uv run pytest tests/gateway/` → 204 passed。**未部署**（与 §五 同一边界）。
