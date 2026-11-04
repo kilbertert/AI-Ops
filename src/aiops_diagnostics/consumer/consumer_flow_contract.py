@@ -2,6 +2,8 @@
 
 from urllib.parse import urlsplit
 
+from aiops_diagnostics.common.endpoint_policy import is_loopback_host
+
 #: 事实片段契约的开关。**由迁移写入**，运营不改它；它的存在让旧发布版本可以继续停在 4。
 FACT_CONTRACT_VARIABLE = "answer_fact_contract"
 
@@ -106,7 +108,7 @@ def publication_settings(
     base = public_base.rstrip("/")
     parsed = urlsplit(base)
     require(
-        bool(parsed.netloc) and (parsed.scheme == "https" or parsed.hostname in {"127.0.0.1", "localhost"}),
+        bool(parsed.netloc) and (parsed.scheme == "https" or is_loopback_host(parsed.hostname)),
         "缺少可信回调地址",
     )
     require(

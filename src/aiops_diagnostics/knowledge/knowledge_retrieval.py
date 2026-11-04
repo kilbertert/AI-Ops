@@ -42,6 +42,7 @@ from aiops_diagnostics.common.bounded_http import (
     retry_delay,
     tenant_id_header,
 )
+from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 from aiops_diagnostics.common.redaction import redact_text
 
 KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
@@ -656,6 +657,9 @@ class KbServiceClient:
         parsed = urllib.parse.urlsplit(base_url.strip())
         if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
             raise ValueError("kb-service base URL must be an absolute URL without query or fragment")
+        # 这个请求带 `service_token` 进 Authorization：与 provider 同一条规则。
+        if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
+            raise ValueError("kb-service base URL must use HTTPS unless it is a loopback address")
         if not 0.5 <= timeout <= 60:
             raise ValueError("kb-service timeout must be between 0.5 and 60 seconds")
         if not tenant_id.strip():

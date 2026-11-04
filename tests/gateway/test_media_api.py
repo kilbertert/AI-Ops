@@ -226,7 +226,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
         return _Response()
 
     monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", fake_urlopen)
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a", service_token="svc-token")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a", service_token="svc-token")
 
     image_grant = MediaGrant(
         resource_id="media_img",
@@ -244,7 +244,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
         expires_at=None,  # type: ignore[arg-type]
     )
     assert client.fetch_media(image_grant) == b"BLOB"
-    assert seen[-1][0] == "http://kb.local/kb/documents/images/ds1-img-key"
+    assert seen[-1][0] == "http://127.0.0.1:8799/kb/documents/images/ds1-img-key"
 
     video_grant = MediaGrant(
         resource_id="media_vid",
@@ -262,7 +262,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
         expires_at=None,  # type: ignore[arg-type]
     )
     assert client.fetch_media(video_grant) == b"BLOB"
-    assert seen[-1][0] == "http://kb.local/kb/knowledge-bases/kb-1/documents/doc-9/download"
+    assert seen[-1][0] == "http://127.0.0.1:8799/kb/knowledge-bases/kb-1/documents/doc-9/download"
     # Every fetch is tenant-scoped via the header, never via the path.
     assert seen[-1][1]["Tenant-id"] == "tenant-a"
     # Range requests are forwarded upstream so a seek fetches only the
@@ -272,7 +272,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
 
 
 def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None:
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a")
     grant = MediaGrant(
         resource_id="media_x",
         tenant_id="tenant-a",
@@ -314,7 +314,7 @@ def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None
 
 def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -> None:
     """RAGFlow can return document-not-found as HTTP 200 JSON."""
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a")
     grant = MediaGrant(
         resource_id="media_x",
         tenant_id="tenant-a",
@@ -376,7 +376,7 @@ def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -
 
 
 def test_kb_client_retries_transient_video_not_found(monkeypatch) -> None:
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a")
     grant = MediaGrant(
         resource_id="media_x",
         tenant_id="tenant-a",
@@ -422,7 +422,7 @@ def test_kb_client_retries_transient_video_not_found(monkeypatch) -> None:
 
 
 def test_kb_client_maps_http_200_unknown_business_error_to_unavailable(monkeypatch) -> None:
-    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    client = KbServiceClient("http://127.0.0.1:8799", tenant_id="tenant-a")
     grant = MediaGrant(
         resource_id="media_x",
         tenant_id="tenant-a",
@@ -915,6 +915,86 @@ def test_serving_survives_the_agent_being_republished(tmp_path: Path) -> None:
     manager.disable(admin, agent.agent_id, expected_revision=latest.revision)
     response = runtime.serve_media(signed_id)
     assert response is not None and response.status_code == 403
+
+
+def test_a_draft_edit_does_not_403_media_it_already_produced(tmp_path: Path) -> None:
+    """#922 可用性侧的媒体面：打开草稿编辑不等于下线。
+
+    `fork_draft` 只改 `status`、保留 `published_version`；改前的 `_is_active` 要求
+    `status == "published"`，于是运营点一下「编辑」就把 v1 已签发的图片全变成 403。
+    停用仍然是立刻生效（同文件的 `test_serving_survives...` 尾段钉住）。
+    """
+    from aiops_diagnostics.common.config import Settings
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    store = GatewayStore(settings.database_file)
+    agent_store = AgentStore(settings.database_file)
+    signer = MediaResourceSigner("secret", ttl_seconds=600)
+    runtime = GatewayRuntime(
+        store,
+        settings,
+        Settings(agent=Settings().agent),  # type: ignore[arg-type]
+        kb_search_client=_FakeKbClient(lambda _grant: b"PNGDATA"),
+        media_signer=signer,
+        agent_store=agent_store,
+    )
+    subject = SubjectRecord(b_user_id="B-1", tenant_id="tenant-a")
+    admin = ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id="tenant-a",
+        data_scope=DataScope(type="self"),
+        roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        permissions=frozenset({"aiops:agents:manage"}),
+    )
+    manager = AgentManager(
+        agent_store,
+        allowed_models=("aiops-api",),
+        knowledge_resolver=_AlwaysValidKnowledge(),
+    )
+    agent = manager.create(
+        admin,
+        name="客服",
+        description="",
+        config=AgentConfig(
+            agent_type="customer",
+            prompt="p",
+            knowledge_base_ids=("kb-a",),
+            model="aiops-api",
+            output_contract="blocks-v1",
+        ),
+    )
+    v1 = manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
+    resource = signer.issue(
+        tenant_id="tenant-a",
+        agent_version=f"{agent.agent_id}#v{v1.version_no}",
+        session_id=None,
+        knowledge_base_id="kb-a",
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        backend_id="backend-1",
+        kind="image",
+        mime_type="image/png",
+        title="x.png",
+        reference_id="chunk-1",
+    )
+    signed_id = resource.url.rsplit("/", 1)[-1]
+    assert runtime.serve_media(signed_id).status_code == 200
+
+    manager.fork_draft(admin, agent.agent_id, expected_revision=manager.get(admin, agent.agent_id).revision)
+    response = runtime.serve_media(signed_id)
+    assert response is not None and response.status_code == 200, (
+        f"打开草稿编辑后已签发的媒体被拒，got {response.status_code}"
+    )
 
 
 def test_republish_that_removes_the_knowledge_base_revokes_media(tmp_path: Path) -> None:

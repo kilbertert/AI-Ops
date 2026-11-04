@@ -22,6 +22,7 @@ from aiops_diagnostics.common.bounded_http import (
     open_response,
     read_body,
 )
+from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 
 # 代理授权的 gun SELECT 列串与 sources.get_gun_samples 生成的 SQL 逐字节同源：
 # 同一函数派生、由 pin 测试兜底。代理是独立部署的 root 服务，SQL 形状漂移
@@ -91,11 +92,12 @@ class ProxySettings:
         if upstream.scheme != "http" or not upstream.hostname or upstream.path not in {"", "/"}:
             raise ProxyConfigError("upstream URL must be a plain HTTP origin")
         try:
-            upstream_address = ipaddress.ip_address(upstream.hostname)
             upstream_port = upstream.port
         except ValueError as exc:
             raise ProxyConfigError("upstream host and port must be valid") from exc
-        if not upstream_address.is_loopback:
+        # 「本机」只有一处定义（`endpoint_policy.is_loopback_host`）：`ipaddress` 单独的
+        # 渲染认不得 `localhost`，而那是一个合法的上游写法。
+        if not is_loopback_host(upstream.hostname):
             raise ProxyConfigError("upstream must be on a loopback address")
         if upstream_port is not None and not 1 <= upstream_port <= 65535:
             raise ProxyConfigError("upstream port must be valid")

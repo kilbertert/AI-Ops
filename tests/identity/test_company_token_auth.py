@@ -1508,7 +1508,9 @@ def test_an_upstream_failure_yields_no_roles_rather_than_an_exception() -> None:
     def boom(_settings, _token):
         raise OSError("upstream down")
 
-    source = CompanyPermissionSource(UpmsSettings(base_url="http://upms.invalid"), fetcher=boom)
+    source = CompanyPermissionSource(
+        UpmsSettings(base_url="http://127.0.0.1:9", timeout_seconds=1), fetcher=boom
+    )
     assert source.roles_for(TOKEN) == frozenset()
 
 
@@ -1523,7 +1525,9 @@ def test_the_permission_lookup_is_memoised_per_token() -> None:
         calls.append(token)
         return ("aiops:agent:edit",)
 
-    source = CompanyPermissionSource(UpmsSettings(base_url="http://upms.invalid"), fetcher=fetcher)
+    source = CompanyPermissionSource(
+        UpmsSettings(base_url="http://127.0.0.1:9", timeout_seconds=1), fetcher=fetcher
+    )
     first = source.roles_for("token-a")
     second = source.roles_for("token-a")
     source.roles_for("token-b")

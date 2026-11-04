@@ -323,7 +323,7 @@ class AgentStore:
             updated = connection.execute(
                 """
                 UPDATE agents SET status = 'disabled', revision = revision + 1, updated_at = ?
-                WHERE agent_id = ? AND tenant_id = ? AND status = 'published' AND revision = ?
+                WHERE agent_id = ? AND tenant_id = ? AND status IN ('published', 'draft') AND revision = ?
                 """,
                 (now, agent_id, tenant_id, expected_revision),
             )
