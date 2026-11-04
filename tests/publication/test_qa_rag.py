@@ -36,7 +36,7 @@ def test_select_customer_agent_requires_published_customer(tmp_path: Path) -> No
     manager = AgentManager(store, knowledge_resolver=_publish_ok())
     admin = _admin_context()
     agent = manager.create(admin, name="客服", description="", config=_customer_config())
-    assert select_customer_agent(store, "tenant-a") is None  # draft — not served
+    assert select_customer_agent(store, "tenant-a") is None  # 从未发布 —— 不服务
     manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
     selection = select_customer_agent(store, "tenant-a")
     assert selection is not None
@@ -45,6 +45,35 @@ def test_select_customer_agent_requires_published_customer(tmp_path: Path) -> No
     assert selection.version_no == 1
     # Another tenant sees nothing (tenant scope, no existence leak).
     assert select_customer_agent(store, "tenant-b") is None
+
+
+def test_a_draft_edit_does_not_take_the_live_version_offline(tmp_path: Path) -> None:
+    """编辑草稿不改变线上正在服务的那一版（#922 可用性侧）。
+
+    词条与 `fork_draft` 的数据层都写着这句话（`GLOSSARY.md` 的「智能体版本」、
+    `agent_lifecycle` 的 UPDATE 只改 `status`）。改前的选择器要求
+    `status == "published"`，于是打开草稿编辑等于一次静默下线。
+    """
+    store = AgentStore(tmp_path / "gateway.db")
+    manager = AgentManager(store, knowledge_resolver=_publish_ok())
+    admin = _admin_context()
+    agent = manager.create(admin, name="客服", description="", config=_customer_config())
+    manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
+
+    manager.fork_draft(admin, agent.agent_id, expected_revision=manager.get(admin, agent.agent_id).revision)
+
+    selection = select_customer_agent(store, "tenant-a")
+    assert selection is not None, "打开草稿编辑后线上问答断了"
+    assert selection.version_no == 1
+
+    # 停用仍然是立即停服 —— 另一个方向不变（另一条 agent，避免与草稿态纠缠）。
+    other = manager.create(admin, name="客服二", description="", config=_customer_config())
+    manager.publish(admin, other.agent_id, expected_revision=other.revision)
+    manager.disable(admin, other.agent_id, expected_revision=manager.get(admin, other.agent_id).revision)
+    assert all(
+        selection is None or selection.agent_id != other.agent_id
+        for selection in [select_customer_agent(store, "tenant-a")]
+    ), "停用的 agent 仍在服务"
 
 
 def test_select_customer_agent_skips_promo_pinned_agent(tmp_path: Path) -> None:
