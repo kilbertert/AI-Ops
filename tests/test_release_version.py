@@ -14,8 +14,11 @@
 from __future__ import annotations
 
 import re
+import textwrap
 import tomllib
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = REPO_ROOT / "VERSION"
@@ -80,3 +83,91 @@ def test_release_workflow_reads_the_version_file() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "cd.yml").read_text(encoding="utf-8")
     assert "VERSION" in workflow, "cd.yml 没有读 VERSION"
     assert "v${" in workflow or "v$version" in workflow, "cd.yml 没有用 VERSION 的值打 v* tag"
+
+
+@pytest.mark.parametrize(
+    "existing", [None, "annotated", "lightweight", "race_same", "race_other", "race_lightweight"]
+)
+def test_release_tag_creation_preserves_existing_versions(tmp_path, existing):
+    """执行CD真实标签片段：新标签有注释，旧标签不移动，并发冲突不能假成功。"""
+    import os
+    import subprocess
+
+    remote = tmp_path / "remote.git"
+    checkout = tmp_path / "checkout"
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Release test",
+        "GIT_AUTHOR_EMAIL": "release@example.test",
+        "GIT_COMMITTER_NAME": "Release test",
+        "GIT_COMMITTER_EMAIL": "release@example.test",
+    }
+
+    def git(*args, cwd=remote, text=""):
+        return subprocess.check_output(["git", *args], cwd=cwd, env=env, input=text, text=True).strip()
+
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(remote)], check=True, capture_output=True
+    )
+    tree = git("mktree")
+    first = git("commit-tree", tree, text="first\n")
+    target = git("commit-tree", tree, "-p", first, text="release\n")
+    git("update-ref", "refs/heads/main", target)
+    subprocess.run(["git", "clone", str(remote), str(checkout)], check=True, capture_output=True)
+    if existing in {"annotated", "lightweight"}:
+        if existing == "annotated":
+            git("tag", "-a", "v1.2.3", first, "-m", "previous release")
+        else:
+            git("update-ref", "refs/tags/v1.2.3", first)
+    before = git("rev-parse", "refs/tags/v1.2.3") if existing in {"annotated", "lightweight"} else None
+    cli = tmp_path / "gh"
+    cli.write_text(
+        "#!/usr/bin/env python3\n"
+        + """import os, subprocess, sys
+args = sys.argv[1:]
+fields = dict(args[i+1].split("=", 1) for i, arg in enumerate(args) if arg == "-f")
+remote = os.environ["TEST_REMOTE"]
+def git(*argv, text=""):
+    return subprocess.check_output(["git", "--git-dir="+remote, *argv], input=text, text=True).strip()
+if args[1].endswith("/git/tags"):
+    data = ("object " + fields["object"] + "\\ntype commit\\ntag " + fields["tag"]
+            + "\\ntagger Release test <release@example.test> 1 +0000\\n\\n" + fields["message"] + "\\n")
+    print(git("mktag", text=data))
+else:
+    race = os.environ["TEST_EXISTING"]
+    if race.startswith("race_"):
+        oid = fields["sha"] if race == "race_same" else os.environ["TEST_TARGET"]
+        if race == "race_other": oid = os.environ["TEST_FIRST"]
+        git("update-ref", fields["ref"], oid)
+        sys.exit(1)
+    git("update-ref", fields["ref"], fields["sha"], "0" * 40)
+"""
+    )
+    cli.chmod(0o700)
+    workflow = (REPO_ROOT / ".github/workflows/cd.yml").read_text()
+    start = workflow.index('          vtag="v${version}"')
+    end = workflow.index("          notes=$(mktemp)", start)
+    script = "set -eu\nversion=1.2.3\n" + textwrap.dedent(workflow[start:end])
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=checkout,
+        env={
+            **env,
+            "PATH": f"{tmp_path}:{env['PATH']}",
+            "TARGET_SHA": target,
+            "GITHUB_REPOSITORY": "example/repo",
+            "TEST_REMOTE": str(remote),
+            "TEST_EXISTING": existing or "",
+            "TEST_TARGET": target,
+            "TEST_FIRST": first,
+        },
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert (result.returncode == 0) == (existing not in {"race_other", "race_lightweight"}), result.stderr
+    if before:
+        assert git("rev-parse", "refs/tags/v1.2.3") == before
+    elif result.returncode == 0:
+        assert git("cat-file", "-t", "v1.2.3") == "tag"
+        assert git("rev-parse", "v1.2.3^{commit}") == target

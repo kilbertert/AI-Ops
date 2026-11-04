@@ -255,20 +255,6 @@ jobs:
           git config --local serverPolicy.publishesVersions true
           git config --local serverPolicy.changelogAtRelease true
 
-          notes=$(mktemp)
-          trap 'rm -f "$notes"' EXIT
-          dev-changelog "$repo_root"
-          if [ ! -s "$repo_root/CHANGELOG.md" ]; then
-            # This is the check that turns the silent skip into a named failure.
-            # `dev-changelog` exits 0 both when it writes the file and when it
-            # decides this repository does not owe one; only the file tells the
-            # two apart, and the error has to say which question was answered.
-            echo "::error::dev-changelog exited 0 but produced no $repo_root/CHANGELOG.md" >&2
-            echo "::error::usual cause: serverPolicy.publishesVersions is not declared in this checkout (it is local git config, never committed)" >&2
-            exit 1
-          fi
-          cp "$repo_root/CHANGELOG.md" "$notes"
-
           # One release per deployed commit, keyed by the commit itself.
           #
           # The version comes from the repository's `VERSION` file, which a
@@ -284,6 +270,41 @@ jobs:
             echo "::error::VERSION is empty — refusing to publish a release with no version" >&2
             exit 1
           fi
+
+          # Create an annotated version tag before rendering notes. The hosting
+          # API writes only tag objects/refs; no credential is persisted in Git.
+          vtag="v${version}"
+          if ! git ls-remote --exit-code origin "refs/tags/$vtag" >/dev/null 2>&1; then
+            tag_object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags" \
+              -f tag="$vtag" -f message="AI-Ops $version" \
+              -f object="$TARGET_SHA" -f type=commit --jq .sha)
+            if ! gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$vtag" -f sha="$tag_object" >/dev/null; then
+              # A simultaneous publisher may have created the same tag.
+              git fetch origin "refs/tags/$vtag:refs/tags/$vtag"
+              [ "$(git rev-parse "$vtag^{commit}")" = "$TARGET_SHA" ] || exit 1
+              [ "$(git cat-file -t "$vtag")" = tag ] || exit 1
+            fi
+          fi
+          git fetch origin "refs/tags/$vtag:refs/tags/$vtag"
+          tagged_commit=$(git rev-parse "$vtag^{commit}")
+          if [ "$tagged_commit" != "$TARGET_SHA" ]; then
+            echo "tag $vtag already points at ${tagged_commit:0:12}; leaving it there."
+          fi
+
+          notes=$(mktemp)
+          trap 'rm -f "$notes"' EXIT
+          dev-changelog "$repo_root"
+          if [ ! -s "$repo_root/CHANGELOG.md" ]; then
+            # This is the check that turns the silent skip into a named failure.
+            # `dev-changelog` exits 0 both when it writes the file and when it
+            # decides this repository does not owe one; only the file tells the
+            # two apart, and the error has to say which question was answered.
+            echo "::error::dev-changelog exited 0 but produced no $repo_root/CHANGELOG.md" >&2
+            echo "::error::usual cause: serverPolicy.publishesVersions is not declared in this checkout (it is local git config, never committed)" >&2
+            exit 1
+          fi
+          cp "$repo_root/CHANGELOG.md" "$notes"
 
           # One release per deployment, keyed by commit; the *tag* carries the
           # version. Two tags would be worse than one: measured 2026-10-23,
@@ -307,24 +328,11 @@ jobs:
               --prerelease
           fi
 
-          # The version tag is created once per version, on the deployed commit.
-          # Later deploys of the same version do not move it: a tag that walks
-          # forward is not a version, it is a pointer that keeps changing under
-          # everyone who recorded it.
-          vtag="v${version}"
-          if git rev-parse -q --verify "refs/tags/${vtag}" >/dev/null 2>&1; then
-            tagged_commit=$(git rev-list -n1 "$vtag")
-            if [ "$tagged_commit" != "$TARGET_SHA" ]; then
-              echo "tag $vtag already points at ${tagged_commit:0:12}; leaving it there."
-              echo "(bump VERSION to cut a new release; a version tag never moves)"
-            fi
-          else
-            gh release create "$vtag" \
-              --target "$TARGET_SHA" \
-              --title "AI-Ops ${version}" \
-              --notes-file "$notes" \
-              --prerelease
-            echo "created version tag $vtag at ${TARGET_SHA:0:12}"
+          # Existing version releases and tags are immutable; only a new version
+          # release is created here, from the tag that was checked above.
+          if ! gh release view "$vtag" >/dev/null 2>&1; then
+            gh release create "$vtag" --verify-tag \
+              --title "AI-Ops ${version}" --notes-file "$notes" --prerelease
           fi
 
       - name: Report failure
