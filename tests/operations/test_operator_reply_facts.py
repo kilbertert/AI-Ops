@@ -401,3 +401,75 @@ def test_shapes_that_are_not_one_whole_object_are_still_refused(raw):
 
     with pytest.raises(ValueError):
         parse_answer(raw)
+
+
+# ─────────────────── 2026-11-04：事实段必须跟着提问走，不能把整页抄下来
+#
+# 反馈原话：「返回数据都一样」「这样在回复中列出充电桩的各项数据应该不对」。
+# 实测同一张单问「电压」与问「电费」，答复除结尾外逐字相同；而问电压的那一版里
+# 电压其实是 `null`，满屏其他字段反而把「这一项没有」盖住了。
+
+
+def _fee_evidence():
+    from aiops_diagnostics.operator.operator_cpms import project_evidence
+
+    body = {
+        "code": 0,
+        "data": {"orderNo": FEE_ROW["orderNo"], "siteId": "SITE-1", "chOrderInfoModel": FEE_ROW},
+    }
+    return {"cpms_order_detail": project_evidence(body, FEE_ROW["orderNo"], "cpms_order_detail")}
+
+
+def test_a_voltage_question_shows_the_voltage_fields_not_the_whole_page():
+    from aiops_diagnostics.operator.operator_cpms import _order_fact_text
+
+    evidence = _fee_evidence()
+    voltage = _order_fact_text(evidence, "zh", question="帮我分析这笔单的电压")
+    fee = _order_fact_text(evidence, "zh", question="帮我分析这笔单的电费")
+
+    assert "电压" in voltage
+    # 费用区不该出现在「问电压」的答复里 —— 那正是「返回数据都一样」的来源。
+    assert "电费" not in voltage and "服务费" not in voltage
+    # 反过来，问电费时不该把电压、功率一并列出来。
+    assert "电费" in fee and "电压" not in fee and "额定功率" not in fee
+
+
+def test_the_same_order_answers_two_questions_differently():
+    """两问的事实段必须不同。**这条是反馈第 1 条的直接判据。**"""
+    from aiops_diagnostics.operator.operator_cpms import _order_fact_text
+
+    evidence = _fee_evidence()
+    a = _order_fact_text(evidence, "zh", question="帮我分析这笔单的电压")
+    b = _order_fact_text(evidence, "zh", question="帮我分析这笔单的电费")
+    assert a != b
+
+
+def test_a_topic_field_with_no_value_says_so_instead_of_vanishing():
+    """问电压而电压是 `null`：必须写「未提供」，不能整行消失。
+
+    旧行为是跳过空值。于是「问电压」的答复里一个电压字样都没有，读者无法判断
+    是答非所问、还是这一项本来就没有。
+    """
+    from aiops_diagnostics.operator.operator_cpms import _order_fact_text
+
+    evidence = {
+        "cpms_order_detail": {
+            "source": "cpms.orderDetail",
+            "order_no": "O-1",
+            "observed_at": "2026-11-04T00:00:00Z",
+            "data": {"orderNo": "O-1", "voltage": None, "gunPower": 7, "electricity": "1.7", "time": 23},
+        }
+    }
+    text = _order_fact_text(evidence, "zh", question="帮我分析这笔单的电压")
+    assert "电压：未提供" in text
+
+
+def test_an_unrecognized_question_still_gets_the_full_page():
+    """认不出主题时退回**原有全量渲染** —— 漏词只会回到旧行为，不会答错主题。"""
+    from aiops_diagnostics.operator.operator_cpms import _order_fact_text
+
+    evidence = _fee_evidence()
+    text = _order_fact_text(evidence, "zh", question="帮我查一下这个订单")
+    # `FEE_ROW` 里没有 voltage 这一列，所以这里只断言「费用区与订单区同时在场」——
+    # 全量的判据是**字段族都出来了**，不是某一行具体存在。
+    assert "电费" in text and "启动费用" in text and "订单状态" in text
