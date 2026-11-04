@@ -5,6 +5,7 @@
     stack_checks.py mounts   <state> <config-dir>
     stack_checks.py users    <uid>:<gid>
     stack_checks.py manifest
+    stack_checks.py image <identity.json> <images.lock.json>
 
 退出码 0 通过；1 不通过（原因写 stdout，一行）。
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 from pathlib import Path
@@ -227,15 +229,56 @@ def manifest(argv: list[str]) -> int:
     return 0
 
 
+def image(argv: list[str]) -> int:
+    """核对实际镜像、随制品保存的记录和已批准输入；记录本身不是签名。"""
+    try:
+        identity = json.loads(Path(argv[0]).read_text())
+        locked = json.loads(Path(argv[1]).read_text())["gateway_image"]
+        inspected = json.load(sys.stdin)
+        if not isinstance(inspected, list) or len(inspected) != 1:
+            raise ValueError("expected one image")
+        actual = inspected[0]
+        labels = actual["Config"]["Labels"]
+        for key in ("source_sha256", "uv_lock_sha256"):
+            if not re.fullmatch(r"[0-9a-f]{64}", identity[key]):
+                raise ValueError("invalid digest")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", identity["image_id"]):
+            raise ValueError("invalid image ID")
+        if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", identity["base_digest"]):
+            raise ValueError("invalid base digest")
+        mismatched = [
+            key
+            for key, actual_value in {
+                "image_id": actual["Id"],
+                "source_sha256": labels.get("m2live.source"),
+                "uv_lock_sha256": labels.get("m2live.lock"),
+                "base_digest": labels.get("m2live.base"),
+            }.items()
+            if identity[key] != actual_value
+        ]
+        if identity["base_digest"] != locked["base_digest"]:
+            mismatched.append("approved_base")
+    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+        print("缺失或非法构建记录、镜像信息或输入锁")
+        return 1
+    if mismatched:
+        print("不匹配：" + ", ".join(mismatched))
+        return 1
+    print("Gateway镜像ID、源码/依赖标签和基础镜像与构建记录一致")
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: stack_checks.py mounts|users|manifest ...", file=sys.stderr)
+        print("usage: stack_checks.py mounts|users|manifest|image ...", file=sys.stderr)
         return 2
     command, rest = sys.argv[1], sys.argv[2:]
     if command == "mounts":
         return mounts(rest)
     if command == "users":
         return users(rest)
+    if command == "image":
+        return image(rest)
     if command == "manifest":
         return manifest(rest)
     print(f"unknown command: {command}", file=sys.stderr)

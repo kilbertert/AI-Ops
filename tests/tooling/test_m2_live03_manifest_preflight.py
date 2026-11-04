@@ -54,7 +54,7 @@ def _fake_bin(tmp_path: Path) -> Path:
     docker = bin_dir / "docker"
     docker.write_text(
         f"#!{sys.executable}\n"
-        "import os, sys\n"
+        "import json, os, sys\n"
         "args = sys.argv[1:]\n"
         "with open(os.environ['M2_TEST_DOCKER_LOG'], 'a', encoding='utf-8') as fh:\n"
         "    fh.write(' '.join(args) + '\\n')\n"
@@ -71,8 +71,10 @@ def _fake_bin(tmp_path: Path) -> Path:
         "    sys.exit(0)\n"
         "if args[:2] == ['image', 'inspect']:\n"
         "    fmt = ' '.join(args[2:])\n"
-        "    key = 'M2_TEST_SOURCE' if 'm2live.source' in fmt else 'M2_TEST_IMAGE_ID'\n"
-        "    print(os.environ[key])\n"
+        "    if '-f' in args: print(os.environ['M2_TEST_IMAGE_ID'])\n"
+        "    else: print(json.dumps([{'Id':os.environ['M2_TEST_IMAGE_ID'], 'Config':{'Labels':{\n"
+        "        'm2live.source':os.environ['M2_TEST_SOURCE'], 'm2live.lock':os.environ['M2_TEST_LOCK'],\n"
+        "        'm2live.base':os.environ['M2_TEST_BASE']}}}]))\n"
         "    sys.exit(0)\n"
         "sys.exit(0)\n"
     )
@@ -191,14 +193,22 @@ def deployment(tmp_path):
         "base_images": {"refs": {ref: {"image_id": IMAGE_ID} for ref in BASE_REFS}},
         "gateway_image": {
             "image": "aiops-m2-live-03-gateway",
-            "source_sha256": "b" * 64,
-            "uv_lock_sha256": "c" * 64,
+            "base_digest": "python@sha256:" + "d" * 64,
         },
     }
     (deploy / "images.lock.json").write_text(json.dumps(lock))
     identity = dist / "gateway-image"
     identity.mkdir()
-    (identity / "identity.json").write_text(json.dumps({"image_id": IMAGE_ID}))
+    (identity / "identity.json").write_text(
+        json.dumps(
+            {
+                "image_id": IMAGE_ID,
+                "source_sha256": "b" * 64,
+                "uv_lock_sha256": "c" * 64,
+                "base_digest": "python@sha256:" + "d" * 64,
+            }
+        )
+    )
 
     bin_dir = _fake_bin(tmp_path)
     compose_json = tmp_path / "compose.json"
@@ -278,6 +288,8 @@ def _run_preflight(ctx, *, node_source=None, gateway_source=None, extra_env=None
         "M2_TEST_IMAGES": "\n".join((GATEWAY_IMAGE, *BASE_REFS)),
         "M2_TEST_IMAGE_ID": IMAGE_ID,
         "M2_TEST_SOURCE": "b" * 64,
+        "M2_TEST_LOCK": "c" * 64,
+        "M2_TEST_BASE": "python@sha256:" + "d" * 64,
     }
     env.update(extra_env or {})
     import subprocess
@@ -519,6 +531,8 @@ def test_up_refuses_to_start_any_container_when_the_manifest_is_broken(deploymen
         "M2_TEST_IMAGES": "\n".join((GATEWAY_IMAGE, *BASE_REFS)),
         "M2_TEST_IMAGE_ID": IMAGE_ID,
         "M2_TEST_SOURCE": "b" * 64,
+        "M2_TEST_LOCK": "c" * 64,
+        "M2_TEST_BASE": "python@sha256:" + "d" * 64,
     }
     result = subprocess.run(
         ["bash", str(ctx["deploy"] / "checks.sh"), "up"],
@@ -656,3 +670,54 @@ def test_manifest_refuses_write_only_or_executable_modes(tmp_path, mode):
     path.write_text("{}")
     path.chmod(mode)
     assert module._private_regular_problems("node", str(path))
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing",
+        "invalid_json",
+        "missing_field",
+        "empty_digest",
+        "wrong_id",
+        "source",
+        "dependency",
+        "base",
+        "unapproved_base",
+    ],
+)
+def test_preflight_rejects_wrong_build_identity(deployment, fault):
+    ctx = deployment
+    _write_env_files(ctx["config"], gateway_manifest=None, node_manifest=None)
+    path = ctx["dist"] / "gateway-image/identity.json"
+    identity = json.loads(path.read_text())
+    env = {}
+    if fault == "missing":
+        path.unlink()
+    elif fault == "invalid_json":
+        path.write_text("not-json")
+    elif fault == "missing_field":
+        del identity["uv_lock_sha256"]
+        path.write_text(json.dumps(identity))
+    elif fault == "empty_digest":
+        identity["source_sha256"] = ""
+        path.write_text(json.dumps(identity))
+        env["M2_TEST_SOURCE"] = ""
+    elif fault == "wrong_id":
+        identity["image_id"] = "sha256:" + "e" * 64
+        path.write_text(json.dumps(identity))
+    else:
+        key = {
+            "source": "M2_TEST_SOURCE",
+            "dependency": "M2_TEST_LOCK",
+            "base": "M2_TEST_BASE",
+            "unapproved_base": "M2_TEST_BASE",
+        }[fault]
+        env[key] = "python@sha256:" + "e" * 64 if "base" in fault else "e" * 64
+        if fault == "unapproved_base":
+            identity["base_digest"] = env[key]
+            path.write_text(json.dumps(identity))
+    result = _run_preflight(ctx, extra_env=env)
+    assert result.returncode != 0
+    assert "FAIL Gateway 构建身份不符" in result.stdout
+    assert "compose up" not in (ctx["tmp"] / "docker.log").read_text()
