@@ -213,6 +213,7 @@ class HttpFailure:
     #: ``DIFY_APP_NOT_BOUND``（这个 app 没登记）与 ``ORDER_NOT_FOUND``（这张订单看不到）
     #: 两种含义，只看状态码的调用方只能二选一地猜 —— 实测就猜错过。
     code: str = ""
+    error_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,7 +257,7 @@ def classify_http_error(exc: urllib.error.HTTPError, *, mapping: ErrorMapping) -
     分两次读第二次拿到空串——那会让 ``code`` 永远是空的，而调用方会以为"上游没给码"。
     """
     kind = AUTH_REJECTED if exc.code in mapping.auth_rejected_statuses else HTTP_ERROR
-    code, detail = "", ""
+    code, detail, error_type = "", "", ""
     with contextlib.suppress(Exception):
         payload = json.loads(exc.read().decode("utf-8", errors="replace"))
         if isinstance(payload, Mapping):
@@ -264,6 +265,7 @@ def classify_http_error(exc: urllib.error.HTTPError, *, mapping: ErrorMapping) -
             if isinstance(error, Mapping):
                 raw = error.get("code")
                 code = str(raw) if raw else ""
+                error_type = str(error.get("type") or "")
                 raw_message = error.get("message")
                 detail = str(raw_message) if raw_message else ""
             for key in mapping.detail_keys:
@@ -272,7 +274,7 @@ def classify_http_error(exc: urllib.error.HTTPError, *, mapping: ErrorMapping) -
                 value = payload.get(key)
                 if value:
                     detail = str(value)
-    return HttpFailure(kind=kind, status=exc.code, detail=detail, cause=exc, code=code)
+    return HttpFailure(kind=kind, status=exc.code, detail=detail, cause=exc, code=code, error_type=error_type)
 
 
 def classify_transport_error(exc: BaseException) -> HttpFailure:
