@@ -91,6 +91,23 @@ class Model(BaseHTTPRequestHandler):
                     ),
                 }
                 finish = "stop"
+        elif conversation and type(self).conversation_kind == "sites" and not tools:
+            delta = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_site",
+                        "type": "function",
+                        "function": {
+                            "name": "cpms_site_search",
+                            "arguments": json.dumps({"address_terms": ["广州", "天河"]}),
+                        },
+                    }
+                ],
+            }
+            finish = "tool_calls"
         elif conversation:
             answer = (
                 {"kind": "site_search", "text": "", "name": "", "address_terms": ["广州", "天河"]}
@@ -466,7 +483,12 @@ def main():
                 if label == "general":
                     assert len(f["state"]["calls"]) == before and "异常已处理" in result.text
                 else:
-                    assert len(f["state"]["calls"]) == before + 1 and "天河测试站" in result.text, result.text
+                    assert len(f["state"]["calls"]) == before + 2 and "天河测试站" in result.text, result.text
+                    run = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"])
+                    assert run.snapshot["evidence"]["cpms_site_search"]["inputs"]["address_terms"] == [
+                        "广州",
+                        "天河",
+                    ]
                     assert "PRIVATE-PHONE" not in result.text
                 assert [t["function"]["name"] for t in Model.calls[-1]["tools"]] == [
                     "cpms_site_search",

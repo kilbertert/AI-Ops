@@ -9,6 +9,10 @@ JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、�
 双租户和语义准确率仍待验，统一见[当前交付](../current-delivery-state.md)。
 模型参数排查见[手册](../dify-model-parameters.md)，不能用普通模型回复代替订单工具验收。
 
+站点查询在取证前传`address_terms`数组，最终答复复用同一组关键词；节点代理和直接查询
+共用有界读取，旧`address`字符串保持字面兼容。部署须同步节点jar、工具声明和Gateway，
+详见[真实工具链QA](site-query-real-path-qa.md)。关键词匹配不等于距离或行政区精确定位。
+
 目标：Java 节点以 CPMS 正式只读 API 取证，旧七工具不作为新链依赖。
 管家问答现区分无订单咨询/站点搜索与单订单诊断，订单不是聊天门槛；
 见[场景](conversation.feature)、[QA与限制](conversation-qa.md)。
