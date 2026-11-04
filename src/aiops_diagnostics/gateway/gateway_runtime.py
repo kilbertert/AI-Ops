@@ -64,6 +64,7 @@ from aiops_diagnostics.operator.ops_analysis import (
 from aiops_diagnostics.operator.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
+from aiops_diagnostics.publication.agent_serviceability import live_version
 
 _LOGGER = logging.getLogger("aiops.gateway_runtime")
 
@@ -2150,7 +2151,10 @@ class GatewayRuntime:
                 current = self.agent_store.version(agent_id, grant.tenant_id, published.published_version)
             except Exception:
                 return False
-            if published.status != "published":
+            # 未停用且有已发布指针 ⇒ 这个 agent 还活着（#922）。媒体刻意允许
+            # 「更旧但仍绑该知识库」的版本活在剩余 TTL 内（ADR-0046 决策二），
+            # 所以这里只问 live_version，不问它是否就是 latest。
+            if live_version(published) is None:
                 return False
             signed_kbs = tuple(version.snapshot.get("knowledge_base_ids") or ())
             current_kbs = tuple(current.snapshot.get("knowledge_base_ids") or ())

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from aiops_diagnostics.publication.agent_lifecycle import AgentStore
+from aiops_diagnostics.publication.agent_serviceability import live_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +52,7 @@ def select_customer_agent(
             continue
         if agent.agent_id in promo_targets:
             continue
-        if agent.status != "published" or agent.published_version is None:
+        if live_version(agent) is None:
             continue
         try:
             version = store.version(agent.agent_id, tenant_id, agent.published_version)
