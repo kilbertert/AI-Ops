@@ -221,6 +221,7 @@ def deployment(tmp_path):
         "bin": bin_dir,
         "compose_json": compose_json,
         "lock": lock,
+        "approved_identity": hashlib.sha256((identity / "identity.json").read_bytes()).hexdigest(),
     }
 
 
@@ -277,6 +278,7 @@ def _run_preflight(ctx, *, node_source=None, gateway_source=None, extra_env=None
         "M2LIVE_CONFIG": str(config),
         "M2LIVE_STATE": str(state),
         "M2LIVE_DIST": str(ctx["dist"]),
+        "M2LIVE_GATEWAY_IDENTITY_SHA256": ctx["approved_identity"],
         "M2LIVE_UID": uid,
         "M2LIVE_GID": str(os.getgid()),
         "M2LIVE_MODEL_UPSTREAM": "https://supplier.invalid",
@@ -687,6 +689,8 @@ def test_manifest_refuses_write_only_or_executable_modes(tmp_path, mode):
     ],
 )
 def test_preflight_rejects_wrong_build_identity(deployment, fault):
+    import hashlib
+
     ctx = deployment
     _write_env_files(ctx["config"], gateway_manifest=None, node_manifest=None)
     path = ctx["dist"] / "gateway-image/identity.json"
@@ -717,7 +721,38 @@ def test_preflight_rejects_wrong_build_identity(deployment, fault):
         if fault == "unapproved_base":
             identity["base_digest"] = env[key]
             path.write_text(json.dumps(identity))
+    if path.exists():
+        env["M2LIVE_GATEWAY_IDENTITY_SHA256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     result = _run_preflight(ctx, extra_env=env)
     assert result.returncode != 0
     assert "FAIL Gateway 构建身份不符" in result.stdout
     assert "compose up" not in (ctx["tmp"] / "docker.log").read_text()
+
+
+def test_previous_image_and_record_cannot_satisfy_new_delivery(deployment):
+    import hashlib
+
+    ctx = deployment
+    _write_env_files(ctx["config"], gateway_manifest=None, node_manifest=None)
+    path = ctx["dist"] / "gateway-image/identity.json"
+    approved = hashlib.sha256(path.read_bytes()).hexdigest()
+    previous = json.loads(path.read_text())
+    previous["source_sha256"] = "f" * 64
+    path.write_text(json.dumps(previous))
+    result = _run_preflight(
+        ctx,
+        extra_env={
+            "M2LIVE_GATEWAY_IDENTITY_SHA256": approved,
+            "M2_TEST_SOURCE": "f" * 64,
+        },
+    )
+    assert result.returncode != 0
+    assert "FAIL Gateway 构建身份不符" in result.stdout
+
+
+def test_preflight_requires_approved_delivery_identity(deployment):
+    ctx = deployment
+    _write_env_files(ctx["config"], gateway_manifest=None, node_manifest=None)
+    result = _run_preflight(ctx, extra_env={"M2LIVE_GATEWAY_IDENTITY_SHA256": ""})
+    assert result.returncode != 0
+    assert "FAIL Gateway 构建身份不符" in result.stdout

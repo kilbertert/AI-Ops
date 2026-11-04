@@ -9,6 +9,7 @@
 | BI-03 | 删除记录、破坏JSON、缺字段、给空摘要 | 预检非零，不能借仓库旧摘要或镜像标签通过 | 同上 |
 | BI-04 | 正常记录校验后改变源码或uv.lock | context_digest.py --check拒绝旧记录 | 同上 |
 | BI-05 | 一次真实Docker构建与镜像内导入 | 输出记录与Docker实读ID/标签一致；锁和Git状态无生成物修改 | 保留本任务构建证据 |
+| BI-06 | 固定本次批准记录摘要，再换成彼此匹配的旧镜像与旧记录，或删除批准摘要 | 预检非零；不能用旧对证明新交付 | pytest临时根自动清理 |
 
 对应自动化：`tests/tooling/test_gateway_build_identity.py`、
 `tests/tooling/test_m2_live03_manifest_preflight.py`及`test_m2_live03_deploy.py`。

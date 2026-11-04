@@ -81,6 +81,7 @@ finally:
     temporary.unlink(missing_ok=True)
 print(json.dumps(record, ensure_ascii=False, indent=2))
 PY_IDENTITY
+sha256sum "$OUT/identity.json"
 
 if [ -n "$SAVE" ]; then
   docker save "$IMAGE" -o "$SAVE"

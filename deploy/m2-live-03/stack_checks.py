@@ -5,7 +5,7 @@
     stack_checks.py mounts   <state> <config-dir>
     stack_checks.py users    <uid>:<gid>
     stack_checks.py manifest
-    stack_checks.py image <identity.json> <images.lock.json>
+    stack_checks.py image <identity.json> <images.lock.json> <批准的记录sha256>
 
 退出码 0 通过；1 不通过（原因写 stdout，一行）。
 """
@@ -232,7 +232,11 @@ def manifest(argv: list[str]) -> int:
 def image(argv: list[str]) -> int:
     """核对实际镜像、随制品保存的记录和已批准输入；记录本身不是签名。"""
     try:
-        identity = json.loads(Path(argv[0]).read_text())
+        raw = Path(argv[0]).read_bytes()
+        if not re.fullmatch(r"[0-9a-f]{64}", argv[2]) or hashlib.sha256(raw).hexdigest() != argv[2]:
+            print("构建记录不属于本次批准交付；缺失或不匹配的记录摘要")
+            return 1
+        identity = json.loads(raw)
         locked = json.loads(Path(argv[1]).read_text())["gateway_image"]
         inspected = json.load(sys.stdin)
         if not isinstance(inspected, list) or len(inspected) != 1:

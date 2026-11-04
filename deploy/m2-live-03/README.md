@@ -113,7 +113,8 @@ HTTP 200 的 HTML 也不算通过；空用户结果只证明接口可读，不�
 | `HOST-CHANGE.md` | 41 上的精确变更清单（不是授权） |
 
 Gateway的源码/依赖摘要、镜像ID和构建时间随镜像以`identity.json`交付；不再要求每个源码PR
-修改同一个锁。预检仍须记录与实载镜像一致，且基础镜像已获输入锁批准。
+修改同一个锁。部署配置必须给出构建侧已批准的`M2LIVE_GATEWAY_IDENTITY_SHA256`，
+先核对本次记录的摘要，再核对记录与实载镜像及批准的基础镜像；旧镜像与旧记录成对遗留仍拒绝。
 构建及搬运步骤见[本地构建手册](../../docs/agents/local-gateway-build.md)，
 `context_digest.py --check <identity.json>`在构建侧证明记录对应当前源码与依赖。
 `--update-lock`已退役；平台、Java节点与基础镜像字段继续由原门禁核对。

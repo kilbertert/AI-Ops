@@ -243,7 +243,7 @@ PY
   local gw_ref image_report
   gw_ref=$(gateway_image)
   if image_report=$(docker image inspect "$gw_ref" | python3 "$HERE/stack_checks.py" image \
-      "$DIST/gateway-image/identity.json" "$HERE/images.lock.json"); then
+      "$DIST/gateway-image/identity.json" "$HERE/images.lock.json" "${M2LIVE_GATEWAY_IDENTITY_SHA256:-}"); then
     ok "$image_report"
   else
     bad "Gateway 构建身份不符：$image_report"

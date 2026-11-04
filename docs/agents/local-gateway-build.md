@@ -30,7 +30,11 @@ Java节点、平台和基础镜像的既有输入锁与检查继续生效。不�
 
 交付时从已合并修订构建并保留其提交身份。`--save <路径>`导出镜像后，将镜像和同次构建的
 `identity.json`作为一组审核摘要、经既有`dev-host cp --artifact-sha256`传送；记录放到
-`$M2LIVE_DIST/gateway-image/identity.json`。`checks.sh preflight`核对实载镜像ID、三个标签和
+`$M2LIVE_DIST/gateway-image/identity.json`。构建侧输出该JSON的SHA-256；在批准的部署记录中
+固定它，并通过`M2LIVE_GATEWAY_IDENTITY_SHA256`传给预检（恢复旧版时使用旧版批准值）。
+该值是本次交付的选择，必须从构建侧记录取得，禁止在服务宿主临时对现存JSON取摘要作为期望值。
+没有这个独立期望值，旧镜像与旧记录一起遗留也会相互匹配，无法证明部署的是本次制品。
+`checks.sh preflight`先核对批准摘要，再核对实载镜像ID、三个标签和
 已批准基础镜像；缺失、非法或错配均拒绝。旧记录不能配新镜像，不能现场按标签重造记录。
 这份JSON不是签名，可信性依赖既有合并制品和受控传送流程；不宣称防止有权限者同时篡改两者。
 
