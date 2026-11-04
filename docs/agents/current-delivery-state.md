@@ -10,7 +10,10 @@
 
 ## 开通失败可归因（2026-11-04，`5bbf7e0d`）
 
-`SETUP_STEP_FAILED` 现在带 `failed_step` 与 `failure_kind`，页面显示「「某步」出错（Kind）」，完整栈只进 journal；异常正文不进任务行也不进公开形状（ADR-0200）。**未完成业务验收**：没有任何一次真实失败跑过新文案，页面也未人眼确认；同源桥的字段透传未实测（开发机到 `dify.ranlei.work:443` 的 TLS 握手间歇被重置，非本次引入）。记录见[上线与部署](../validation/2026-11-04-setup-failure-visibility-live.md)。
+`SETUP_STEP_FAILED` 现在带 `failed_step` 与 `failure_kind`，页面显示「「某步」出错（Kind）」，完整栈只进 journal；异常正文不进任务行也不进公开形状（ADR-0200）。**业务验收已通过（受控失败，2026-11-04）**：临时移开模型凭据文件后重跑 operator-only 作业，失败点在 `validate_private_file`（纯本地检查，任何外部写入之前）。同一次失败给出三层证据：作业行 `failed_step=operator:dependencies` / `failure_kind=PrivatePathError`、journal 完整栈、页面「**准备管家依赖出错（PrivatePathError）**」，经同源桥与真实登录会话读到（[截图](../validation/2026-11-04-setup-failure-controlled-acceptance.png)）；异常正文既不在页面上也不在任务行里。该测试作业行已备份后删除（`/var/backups/aiops-41/setup-job-33d291dd-20261104T011436Z.json`）。
+
+**未验**：其余失败形状（发布阶段、Dify 上游失败、`SetupConflict` 类）只有确定性用例；开发机到 `dify.ranlei.work:443` 的 TLS 握手仍被重置，页面验收走的是取证通道（`tools/verification/dify-console-tunnel/`），不是网络恢复。
+记录见[上线与部署](../validation/2026-11-04-setup-failure-visibility-live.md)与[受控失败的业务验收](../validation/2026-11-04-setup-failure-controlled-acceptance.md)。
 
 
 ## 业务环境清单已在 41 启用（2026-11-04，`010705a8`）
