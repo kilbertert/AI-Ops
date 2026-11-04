@@ -1,0 +1,11 @@
+# 安卓adbx验收集成
+
+分支test/android-adbx-acceptance，基线9ca54968。
+已有客户端验收技能新增真实安卓分支：外部adbx操作、控件/当前页面约束、有界等待、
+截图/XML与版本摘要、PASS/FAIL/UNVERIFIED回执。操作计划放库外，不另建ADB隧道系统。
+
+真机消费者APK推荐问答及新对话通过；普通提问失败，独立日志为503与CONSUMER_INTENT_UNAVAILABLE。
+验收记录见同日android-adbx-acceptance；失败另跟进，不改生产服务掩盖验收结果。
+下一步按回执修复普通问答，再扩大原生端回归范围；不能以H5或接口成功替代真机。
+
+验证：20项运行器反向检查、25项目录/文档检查、全量4123通过/9跳过，Ruff/格式检查通过。
