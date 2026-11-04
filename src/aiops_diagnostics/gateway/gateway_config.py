@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from dotenv import dotenv_values
 
 from aiops_diagnostics.common.config import selected_config_file
+from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 from aiops_diagnostics.common.platform_paths import config_root, data_root
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
 from aiops_diagnostics.gateway.deployment_environment import canonical_environment
@@ -833,7 +834,7 @@ def canonical_gateway_url(value: str) -> str:
         raise ValueError("gateway URL is invalid") from exc
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("gateway URL must be a complete HTTP or HTTPS URL")
-    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+    if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
         raise ValueError("remote gateway URL must use HTTPS")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("gateway URL must not contain credentials")

@@ -22,6 +22,7 @@ from aiops_diagnostics.common.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 from aiops_diagnostics.data.sources import mysql_site_mapper, scoped_live_sources
 from aiops_diagnostics.identity.query_scope import (
     QueryScope,
@@ -121,7 +122,7 @@ class IntrospectionSettings:
         parsed = urlsplit(self.url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("introspection URL must be a complete HTTP or HTTPS URL")
-        if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
             raise ValueError("remote introspection URL must use HTTPS")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("introspection URL must not contain credentials, query, or fragment")
