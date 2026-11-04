@@ -95,7 +95,7 @@ def _client(
         server_config_file=tmp_path / "production.env",
         environment=ENVIRONMENT,
         internal_token_secret=INTERNAL_SECRET,
-        dify_console_base_url="http://dify.invalid",
+        dify_console_base_url="https://dify.invalid",
         dify_console_api_key="console-key-0123456789",
         dify_external_knowledge_api_id=API_TEMPLATE if with_template else "",
     )

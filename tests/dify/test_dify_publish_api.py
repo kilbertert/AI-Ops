@@ -61,7 +61,7 @@ def _client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> TestClient:
         data_home=tmp_path,
         database_file=tmp_path / "gateway.db",
         server_config_file=tmp_path / "production.env",
-        dify_console_base_url=overrides.pop("dify_console_base_url", "http://dify.invalid:10008"),
+        dify_console_base_url=overrides.pop("dify_console_base_url", "https://dify.invalid"),
         dify_console_api_key=overrides.pop("dify_console_api_key", CONSOLE_KEY),
         # 部署身份（#884）：发布按 (绑定租户, 环境) 解析 workspace。
         environment=overrides.pop("environment", "41"),
@@ -222,7 +222,7 @@ def test_enabling_publish_without_a_console_credential_is_a_startup_error(tmp_pa
         database_file=tmp_path / "gateway.db",
         server_config_file=tmp_path / "production.env",
         dify_publish_api_key=PUBLISH_KEY,
-        dify_console_base_url="http://dify.invalid:10008",
+        dify_console_base_url="https://dify.invalid",
         dify_console_api_key="",
     )
     with pytest.raises(ValueError, match="DIFY_CONSOLE_API_KEY"):
@@ -241,7 +241,7 @@ def test_the_publish_key_must_differ_from_the_other_dify_keys(tmp_path) -> None:
         database_file=tmp_path / "gateway.db",
         server_config_file=tmp_path / "production.env",
         dify_publish_api_key="same-key-value",
-        dify_console_base_url="http://dify.invalid:10008",
+        dify_console_base_url="https://dify.invalid",
         dify_console_api_key=CONSOLE_KEY,
     )
     with pytest.raises(ValueError, match="must differ"):
@@ -299,7 +299,7 @@ def _operator_client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> Tes
         data_home=tmp_path,
         database_file=tmp_path / "gateway.db",
         server_config_file=tmp_path / "production.env",
-        dify_console_base_url="http://dify.invalid:10008",
+        dify_console_base_url="https://dify.invalid",
         dify_console_api_key=CONSOLE_KEY,
         environment=overrides.pop("environment", "41"),
         **overrides,
@@ -908,3 +908,26 @@ def test_a_slow_publish_cannot_undo_a_retraction_that_happened_meanwhile(tmp_pat
     assert response.status_code == 409, (response.text, final.state, final.agent_version_no)
     assert final.state == "retracted", "撤回不能被这次延迟的发布覆盖"
     assert final.agent_version_no == 1
+
+
+def test_insecure_console_endpoint_prevents_gateway_startup(tmp_path) -> None:
+    """非法部署配置必须在数据库和请求路径初始化前拒绝。"""
+    import pytest
+
+    config = tmp_path / "production.env"
+    config.write_text("# synthetic\n")
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=config,
+        dify_console_base_url="http://dify.invalid:10008",
+        dify_console_api_key=CONSOLE_KEY,
+    )
+    with pytest.raises(ValueError, match="AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL"):
+        create_gateway_app(settings=settings)
+    assert not settings.database_file.exists()
+
+
+def test_console_endpoint_accepts_existing_loopback_tunnel(tmp_path) -> None:
+    with _client(tmp_path, _Runtime(), dify_console_base_url="http://127.0.0.1:15001") as client:
+        assert client.get("/health").json()["ok"] is True

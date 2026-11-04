@@ -553,6 +553,27 @@ step_failed() { echo "mutate-failed=\$1"; mutate_rc=1; }
 
 rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check || step_failed "prepare-sync-dir"
 tar xzf $REMOTE_TARBALL -C /tmp/sync-check || step_failed "extract"
+# 候选代码先验实际控制台配置；失败时不替换源码，也不重启旧服务。
+if [ "\$mutate_rc" = 0 ]; then
+  chown -R aiops41:aiops41 /tmp/sync-check
+  if runuser -u aiops41 -- env PYTHONPATH=/tmp/sync-check /opt/aiops-41/.venv/bin/python - <<'PY'
+import os
+from dotenv import dotenv_values
+from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+os.environ.update({k: v for k, v in dotenv_values("/etc/aiops-41/gateway.env", interpolate=False).items() if v is not None})
+settings = GatewayServerSettings.from_env()
+if settings.dify_console_base_url:
+    DifyDslClient(DifyDslSource(settings.dify_console_base_url, "preflight", settings.dify_console_api_key))
+PY
+  then
+    echo "console-preflight=passed"
+  else
+    echo "console-preflight=refused"
+    rm -rf /tmp/sync-check $REMOTE_TARBALL || true
+    exit 1
+  fi
+fi
 rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnostics/ || step_failed "rsync-src"
 
 chown -R aiops41:aiops41 $REMOTE_SRC || step_failed "chown"

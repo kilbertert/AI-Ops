@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from dotenv import dotenv_values
 
 from aiops_diagnostics.common.config import selected_config_file
-from aiops_diagnostics.common.endpoint_policy import is_loopback_host
+from aiops_diagnostics.common.endpoint_policy import is_loopback_host, require_secure_endpoint
 from aiops_diagnostics.common.platform_paths import config_root, data_root
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
 from aiops_diagnostics.gateway.deployment_environment import canonical_environment
@@ -650,6 +650,8 @@ class GatewayServerSettings:
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL is required when a Dify console API key is set"
             )
+        if self.dify_console_base_url:
+            require_secure_endpoint(self.dify_console_base_url, what="AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL")
         # 发布路由要用**服务端**的控制台凭据去拉 Dify。只给发布密钥而不给控制台凭据，
         # 会得到一个"门开着、但每次调用都 502"的部署 —— 那正是 #586 那条「半配置是启动
         # 错误」的同一种形状：看起来装好了，实际整体不可用。
