@@ -9,6 +9,21 @@ import type {
 } from '@/service/aiops-management'
 import { Button } from '@langgenius/dify-ui/button'
 import { Checkbox } from '@langgenius/dify-ui/checkbox'
+import {
+  Combobox,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxInputGroup,
+  ComboboxItem,
+  ComboboxItemIndicator,
+  ComboboxItemText,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxPortal,
+  ComboboxPositioner,
+  ComboboxTrigger,
+  ComboboxValue,
+} from '@langgenius/dify-ui/combobox'
 import { Input } from '@langgenius/dify-ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@langgenius/dify-ui/popover'
 import {
@@ -97,6 +112,68 @@ function entryTone(progress: EntryProgress | undefined) {
 }
 
 const fieldLabel = 'system-xs-medium text-text-secondary'
+
+type SearchOption = { value: string; label: string }
+
+/**
+ * 可搜索的选择器：客户名单有几百行，纯下拉要挨个滚动。
+ * 触发钮保持 select 的外观与 aria-label，弹层顶部放检索框，输入即过滤。
+ */
+function SearchSelect({
+  label,
+  placeholder,
+  value,
+  onChange,
+  options,
+}: {
+  label: string
+  placeholder: string
+  value: string
+  onChange: (value: string) => void
+  options: SearchOption[]
+}) {
+  return (
+    <Combobox
+      items={options}
+      itemToStringLabel={(option: SearchOption) => option.label}
+      itemToStringValue={(option: SearchOption) => option.value}
+      value={options.find((option) => option.value === value) ?? null}
+      onValueChange={(option: SearchOption | null) => onChange(option?.value ?? '')}
+    >
+      <ComboboxTrigger aria-label={label} className="w-full">
+        <ComboboxValue placeholder={placeholder} />
+      </ComboboxTrigger>
+      <ComboboxPortal>
+        <ComboboxPositioner>
+          <ComboboxPopup aria-label={label}>
+            <div className="p-1 pb-0">
+              <ComboboxInputGroup className="h-8 min-h-8 px-2">
+                <span
+                  aria-hidden
+                  className="i-ri-search-line mr-0.5 size-4 shrink-0 text-components-input-text-placeholder"
+                />
+                <ComboboxInput
+                  aria-label={`搜索${label}`}
+                  placeholder="输入关键字筛选…"
+                  className="block h-4.5 grow px-1 py-0 system-sm-regular text-components-input-text-filled"
+                />
+              </ComboboxInputGroup>
+            </div>
+            <ComboboxList<SearchOption>>
+              {(option) => (
+                <ComboboxItem key={option.value} value={option}>
+                  <ComboboxItemText>{option.label}</ComboboxItemText>
+                  <ComboboxItemIndicator />
+                </ComboboxItem>
+              )}
+            </ComboboxList>
+            <ComboboxEmpty>没有匹配的客户</ComboboxEmpty>
+          </ComboboxPopup>
+        </ComboboxPositioner>
+      </ComboboxPortal>
+    </Combobox>
+  )
+}
 
 export function ManagedPublish({
   status,
@@ -320,19 +397,16 @@ export default function TenantSetup() {
           {open ? '收起客户 AI 服务' : '复制并开通客户 AI 服务'}
         </Button>
         <div className="flex w-52">
-          <Select value={selectedWorkspace} onValueChange={(v) => setSelectedWorkspace(v || '')}>
-            <SelectTrigger aria-label="已开通客户" className="w-full">
-              <SelectValue placeholder="选择已开通客户" />
-            </SelectTrigger>
-            <SelectContent>
-              {(catalogue.workspaces || []).map((w) => (
-                <SelectItem key={w.workspace_id} value={w.workspace_id}>
-                  <SelectItemText>{w.name}</SelectItemText>
-                  <SelectItemIndicator />
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <SearchSelect
+            label="已开通客户"
+            placeholder="选择已开通客户"
+            value={selectedWorkspace}
+            onChange={setSelectedWorkspace}
+            options={(catalogue.workspaces || []).map((w) => ({
+              value: w.workspace_id,
+              label: w.name,
+            }))}
+          />
         </div>
         <Button
           variant="secondary"
@@ -410,27 +484,17 @@ export default function TenantSetup() {
               ))}
             <div className="flex w-40 flex-col gap-1">
               <span className={fieldLabel}>客户</span>
-              <Select
+              <SearchSelect
+                label="客户"
+                placeholder="选择客户"
                 value={tenant}
-                onValueChange={(v) => {
-                  const next = v || ''
+                onChange={(next) => {
                   setTenant(next)
                   const tenantName = catalogue.tenants.find((t) => t.id === next)?.name || ''
                   setName(defaultName(tenantName, picked.length ? picked : ['operator']))
                 }}
-              >
-                <SelectTrigger aria-label="客户" className="w-full">
-                  <SelectValue placeholder="选择客户" />
-                </SelectTrigger>
-                <SelectContent>
-                  {catalogue.tenants.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      <SelectItemText>{t.name}</SelectItemText>
-                      <SelectItemIndicator />
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                options={catalogue.tenants.map((t) => ({ value: t.id, label: t.name }))}
+              />
             </div>
             <div className="flex w-56 flex-col gap-1">
               <span className={fieldLabel}>应用名称</span>

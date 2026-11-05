@@ -95,6 +95,37 @@ it('retries the same operation after a lost response without asking for technica
   })
 })
 
+it('filters the customer picker by keyword instead of scrolling', async () => {
+  const requests = stub((body) =>
+    body.action === 'catalogue'
+      ? Response.json({
+          ...catalogue,
+          tenants: [
+            { id: 'tenant-a', name: '客户甲' },
+            { id: 'tenant-b', name: '客户乙' },
+            { id: 'tenant-c', name: '丙公司' },
+          ],
+        })
+      : Response.json({ id: 'operation' }),
+  )
+  const screen = await render(<TenantSetup />)
+  await screen.getByRole('button', { name: '复制并开通客户 AI 服务' }).click()
+  await screen.getByRole('combobox', { name: '客户', exact: true }).click()
+  await screen.getByRole('combobox', { name: '搜索客户', exact: true }).fill('客户')
+  await expect.element(screen.getByRole('option', { name: '客户甲', exact: true })).toBeVisible()
+  await expect.element(screen.getByRole('option', { name: '客户乙', exact: true })).toBeVisible()
+  expect(screen.getByRole('option', { name: '丙公司' }).elements()).toHaveLength(0)
+  await screen.getByRole('combobox', { name: '搜索客户', exact: true }).fill('乙')
+  await expect.element(screen.getByRole('option', { name: '客户乙', exact: true })).toBeVisible()
+  expect(screen.getByRole('option', { name: '客户甲' }).elements()).toHaveLength(0)
+  await screen.getByRole('option', { name: '客户乙', exact: true }).click()
+  await pick(screen, '客户端客服来源', '客户甲 / 现役客服 · V5')
+  await pick(screen, '管家来源', '客户甲 / 标准管家 · V2')
+  await screen.getByRole('button', { name: '复制并开通', exact: true }).click()
+  const created = requests.find((x) => x.action === 'create')
+  expect(created).toMatchObject({ tenant_id: 'tenant-b', name: '客户乙－客服与管家' })
+})
+
 it('opens both ends by default and can open only one of them', async () => {
   const requests = stub((body) =>
     body.action === 'catalogue' ? Response.json(catalogue) : Response.json({ id: 'operation' }),
