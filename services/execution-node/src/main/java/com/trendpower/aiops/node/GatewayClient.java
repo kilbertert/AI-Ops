@@ -88,7 +88,7 @@ public class GatewayClient {
             throw new GatewayRefused(0, "gateway_interrupted");
         }
         if (response.statusCode() / 100 != 2) {
-            throw new GatewayRefused(response.statusCode(), errorCode(response.body()));
+            throw refusal(response.statusCode(), response.body());
         }
         try {
             return MAPPER.readTree(response.body());
@@ -97,13 +97,20 @@ public class GatewayClient {
         }
     }
 
-    private static String errorCode(String body) {
+    /** 解析 Gateway 拒绝体：错误码必有；`feedback`/`hint` 是可选的回喂标记。 */
+    static GatewayRefused refusal(int status, String body) {
+        String code = "unknown";
+        String hint = null;
+        boolean feedback = false;
         try {
-            JsonNode node = MAPPER.readTree(body).path("error").path("code");
-            return node.isTextual() ? node.asText() : "unknown";
-        } catch (IOException e) {
-            return "unknown";
+            JsonNode error = MAPPER.readTree(body).path("error");
+            if (error.path("code").isTextual()) code = error.path("code").asText();
+            feedback = error.path("feedback").isBoolean() && error.path("feedback").booleanValue();
+            if (error.path("hint").isTextual()) hint = error.path("hint").asText();
+        } catch (IOException ignored) {
+            // 不是 JSON 的拒绝体按 unknown 处理；仍不外传原文。
         }
+        return new GatewayRefused(status, code, feedback && hint != null && hint.length() <= 500 ? hint : null, feedback);
     }
 
     public String nodeBuild() {
@@ -115,11 +122,19 @@ public class GatewayClient {
 
         private final int status;
         private final String code;
+        private final String hint;
+        private final boolean feedback;
 
         GatewayRefused(int status, String code) {
+            this(status, code, null, false);
+        }
+
+        GatewayRefused(int status, String code, String hint, boolean feedback) {
             super("gateway refused (" + status + "): " + code);
             this.status = status;
             this.code = code;
+            this.hint = hint;
+            this.feedback = feedback && hint != null;
         }
 
         public int status() {
@@ -128,6 +143,16 @@ public class GatewayClient {
 
         public String code() {
             return code;
+        }
+
+        /** 网关标记了「模型可自己处理的业务拒绝」：把它作为工具结果回喂而不是终结整轮。 */
+        public boolean feedback() {
+            return feedback;
+        }
+
+        /** 回喂时给模型的提示语；非回喂拒绝恒为 null。 */
+        public String hint() {
+            return hint;
         }
 
         /** 能否安全地把这条信息交给模型/日志：只有状态码与我们自己的错误码。 */

@@ -65,7 +65,9 @@ def environment(tmp_path, monkeypatch):
     from aiops_diagnostics.operator import operator_answer_review
 
     monkeypatch.setattr(
-        operator_answer_review, "review", lambda *args: {"verdict": "allow", "version": "synthetic"}
+        operator_answer_review,
+        "review",
+        lambda *args, **kwargs: {"verdict": "allow", "version": "synthetic"},
     )
     state = {"calls": [], "site": "SITE-1", "tenant": "TENANT-A", "hook": None, "order": ORDER}
 
@@ -1179,3 +1181,101 @@ def test_the_same_order_written_twice_is_still_one_order(operator, monkeypatch):
     assert response.status_code == 202, response.text
     assert terminal(f, response.json()["qa_id"]).json()["status"] == "completed"
     assert any(path == "/chOrderInfo/getOrderInfoDetail/" + ORDER for path, _ in f["state"]["calls"])
+
+
+def test_business_refusals_are_marked_for_model_feedback_and_recorded(operator, monkeypatch):
+    """业务拒绝带 feedback 标记回喂节点并记入任务；授权完整性拒绝不标记。"""
+    f = operator
+    seen_reviews = []
+    from aiops_diagnostics.operator import operator_answer_review
+
+    def review(*args, **kwargs):
+        seen_reviews.append(kwargs.get("tool_refusals"))
+        return {"verdict": "allow", "version": "synthetic"}
+
+    monkeypatch.setattr(operator_answer_review, "review", review)
+    observed = {}
+
+    def dispatch(_, cfg, run_id):
+        client = f["client"]
+        head = {"Authorization": "Bearer " + NODE_A_TOKEN}
+        publication = client.post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
+        head["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+        tool = "cpms_order_detail"
+        path = f"/v1/internal/operator-runs/{run_id}/tools/{tool}"
+        # 1) 用户没提过的订单号：业务拒绝，回喂标记+提示必须在响应体里。
+        denied = client.post(
+            path + "/authorization",
+            headers={**head, **CONTRACT},
+            json={"arguments": {"order_no": "ORDER-9999"}},
+        )
+        assert denied.status_code == 403, denied.text
+        error = denied.json()["error"]
+        assert error["code"] == "OPERATOR_ORDER_NOT_REFERENCED"
+        assert error["feedback"] is True and error["hint"], denied.text
+        observed["hint"] = error["hint"]
+        # 2) 授权完整性拒绝：同一条链路不带回喂标记——模型无法自己修复它。
+        outdated = client.post(path + "/authorization", headers=head, json={})
+        assert outdated.status_code == 403, outdated.text
+        assert outdated.json()["error"]["code"] == "OPERATOR_TOOL_CONTRACT_OUTDATED"
+        assert "feedback" not in outdated.json()["error"]
+        # 3) 依赖顺序拒绝：先领账务授权再直接取数 → DETAIL_REQUIRED 也是业务拒绝。
+        grant = client.post(path + "/authorization", headers={**head, **CONTRACT}, json={"arguments": {}})
+        assert grant.status_code == 200, grant.text
+        grant = grant.json()
+        billing = client.post(
+            f"/v1/internal/operator-runs/{run_id}/tools/cpms_order_billing/authorization",
+            headers={**head, "X-AI-Ops-Tool-Contract": operator_cpms.OBJECT_CONTRACT},
+            json={"arguments": {}},
+        )
+        assert billing.status_code == 200, billing.text
+        billing = billing.json()
+        request = billing["request"]
+        denied = client.get(
+            billing["base_url"] + request["path"] + ("?" + request["query"] if request["query"] else ""),
+            headers={"Authorization": "Bearer " + billing["bearer"]},
+        )
+        assert denied.status_code == 403, denied.text
+        assert denied.json()["error"]["code"] == "OPERATOR_DETAIL_REQUIRED"
+        assert denied.json()["error"]["feedback"] is True
+        # 4) 正常读取订单详情并交付证据，然后给出「查无此单」式答复完成整轮。
+        request = grant["request"]
+        body = client.get(
+            grant["base_url"] + request["path"] + ("?" + request["query"] if request["query"] else ""),
+            headers={"Authorization": "Bearer " + grant["bearer"]},
+        )
+        assert body.status_code == 200, body.text
+        evidence = f["ctx"].operator_cpms.tasks[run_id].evidence[tool]
+        payload = {k: evidence[k] for k in ["tool", "source", "data", "observed_at"]}
+        payload["inputs"] = grant["inputs"]
+        recorded = client.post(
+            path + "/evidence",
+            headers={**head, **CONTRACT},
+            json={"authorization_id": grant["authorization_id"], "evidence": payload},
+        )
+        assert recorded.status_code == 200, recorded.text
+        return client.post(
+            f"/v1/internal/operator-runs/{run_id}/completions",
+            headers=head,
+            json={"status": "completed", "answer": "查无此单：该订单不在当前账号可见范围。"},
+        )
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202, submitted.text
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+    snapshot = f["ctx"].agent_run_store.by_qa(submitted.json()["qa_id"]).snapshot
+    assert snapshot["tool_refusals"] == [
+        {
+            "tool": "cpms_order_detail",
+            "code": "OPERATOR_ORDER_NOT_REFERENCED",
+            "message": observed["hint"],
+        },
+        {
+            "tool": "cpms_order_billing",
+            "code": "OPERATOR_DETAIL_REQUIRED",
+            "message": operator_cpms.FEEDBACK_REFUSALS["OPERATOR_DETAIL_REQUIRED"],
+        },
+    ]
+    assert seen_reviews and seen_reviews[-1] == snapshot["tool_refusals"]

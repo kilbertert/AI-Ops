@@ -62,7 +62,7 @@
 | 制品 | 身份 |
 |---|---|
 | `snail-ai-server-exec.jar` | `8dd6b63504eae7cc479e1c3a7d674aa1529069d44e7967e4ed2158ef645d5cb0` |
-| `aiops-execution-node.jar` | `9f165a7e9bdc3eeb4a760c31f5e0e1fbc1c79ff4485b52eb5a07b4f297616e6a`（统一管家模型循环候选，尚未生产部署；固定构建时间戳；源码摘要见 `images.lock.json` 的 `node.source_sha256`） |
+| `aiops-execution-node.jar` | `2811531eac88a2911451ebb6b8497788e8d14772c9a014572d204001c0a77f14`（工具拒绝回喂候选，尚未生产部署；固定构建时间戳；源码摘要见 `images.lock.json` 的 `node.source_sha256`） |
 | 平台源码 commit | `10c1d3e50b701be62da23a3403d79a41187ab8cd` |
 | Gateway 镜像 | 构建/分发件 `gateway-image/identity.json` 中的镜像ID与源码/依赖/基础镜像摘要；基础镜像仍须与`images.lock.json`的输入一致 |
 | 依赖 | `gateway-requirements.txt`，由 `uv export --frozen` 从 `uv.lock` 生成，每条带 `--hash` |
