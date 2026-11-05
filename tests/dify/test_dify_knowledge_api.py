@@ -585,8 +585,8 @@ def test_the_debug_key_must_differ_from_the_production_key(tmp_path: Path) -> No
 def test_config_round_trips_the_debug_keys_from_the_config_file(tmp_path: Path) -> None:
     """三键走**服务端配置文件**（41 上 `production.env` 的读取路径），不是进程 env。
 
-    与 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_*` 同一条：`from_env` 用 `_file_value` 读它。
-    这里直接驱动那个路径，避免"写进了文件却没生效"这种静默形态。
+    与 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_*` 同一条：`from_env` 按 `SETTING_SOURCES`
+    声明的来源读它（file=True ⇒ 可读服务端私有配置）。
     """
     from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
