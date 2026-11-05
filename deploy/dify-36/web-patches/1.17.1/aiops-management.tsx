@@ -501,6 +501,9 @@ export default function TenantSetup() {
             <div className="mt-3 flex flex-col gap-2">
               {catalogue.operations.map((op) => {
                 const progress = op.entries || {}
+                const anyEntryFailed = Object.values(progress).some(
+                  (v) => v?.state === 'failed',
+                )
                 return (
                   <div
                     key={op.id}
@@ -509,16 +512,32 @@ export default function TenantSetup() {
                     <span className="system-sm-semibold text-text-primary">
                       {op.tenant_name} · {op.name}
                     </span>
-                    <span className="system-xs-regular text-text-tertiary">
-                      {steps[op.step] || '准备中'}
-                    </span>
+                    {/* 步骤名只在进行中是有用信息；completed 时重复、failed 时误导 */}
+                    {['pending', 'running'].includes(op.state) && (
+                      <span className="system-xs-regular text-text-tertiary">
+                        {steps[op.step] || '准备中'}
+                      </span>
+                    )}
+                    {op.state === 'completed' && (
+                      <span className="system-xs-regular flex items-center gap-1.5 text-text-secondary">
+                        <StatusDot status="success" size="medium" />
+                        已完成
+                      </span>
+                    )}
                     {op.state === 'partial' && (
                       <span
                         role="status"
                         data-aiops-partial="true"
-                        className="system-xs-regular text-text-warning"
+                        className="system-xs-regular flex items-center gap-1.5 text-text-warning"
                       >
+                        <StatusDot status="warning" size="medium" />
                         {messages.SETUP_PARTIAL}
+                      </span>
+                    )}
+                    {op.state === 'failed' && (
+                      <span className="system-xs-regular flex items-center gap-1.5 text-text-destructive">
+                        <StatusDot status="error" size="medium" />
+                        未完成
                       </span>
                     )}
                     {Object.entries(progress).map(([key, value]) => (
@@ -533,38 +552,39 @@ export default function TenantSetup() {
                         </span>
                       </span>
                     ))}
-                    {op.state === 'failed' && (
-                      <>
-                        <span className="system-xs-regular text-text-destructive">
-                          {messages[op.error_code || ''] || '当前步骤未完成'}
-                          {op.error_code === 'SETUP_STEP_FAILED' &&
-                            failureDetail(op.failed_step, op.failure_kind) &&
-                            `：${failureDetail(op.failed_step, op.failure_kind)}`}
-                        </span>
-                        <Button
-                          variant="ghost-accent"
-                          size="small"
-                          onClick={async () => {
-                            try {
-                              await manage('retry', { id: op.id })
-                              await load()
-                            } catch (e) {
-                              setError(e instanceof Error ? e.message : '操作未完成')
-                            }
-                          }}
-                        >
-                          重试
-                        </Button>
-                      </>
-                    )}
-                    {op.state === 'completed' && (
-                      <span className="system-xs-regular text-text-tertiary">
-                        客户正常登录后可在自己的工作区查看
+                    {/* 入口级失败的行级错误与入口 chip 文案同源，只在没入口失败时补行级原因 */}
+                    {op.state === 'failed' && !anyEntryFailed && (
+                      <span className="system-xs-regular text-text-destructive">
+                        {messages[op.error_code || ''] || '当前步骤未完成'}
+                        {op.error_code === 'SETUP_STEP_FAILED' &&
+                          failureDetail(op.failed_step, op.failure_kind) &&
+                          `：${failureDetail(op.failed_step, op.failure_kind)}`}
                       </span>
+                    )}
+                    {op.state === 'failed' && (
+                      <Button
+                        variant="ghost-accent"
+                        size="small"
+                        onClick={async () => {
+                          try {
+                            await manage('retry', { id: op.id })
+                            await load()
+                          } catch (e) {
+                            setError(e instanceof Error ? e.message : '操作未完成')
+                          }
+                        }}
+                      >
+                        重试
+                      </Button>
                     )}
                   </div>
                 )
               })}
+              {catalogue.operations.some((op) => op.state === 'completed') && (
+                <p className="system-xs-regular text-text-tertiary">
+                  开通完成的应用，客户正常登录后可在自己的工作区查看。
+                </p>
+              )}
             </div>
           )}
         </section>
