@@ -24,6 +24,11 @@ const status = {
 }
 afterEach(() => vi.unstubAllGlobals())
 
+// 受管操作都在「受管发布」抽屉里；每个断言前先开抽屉。
+const openStrip = async (screen: Awaited<ReturnType<typeof render>>) => {
+  await screen.getByRole('button', { name: '受管发布', exact: true }).click()
+}
+
 it('publishes the newly saved digest instead of the initial page digest', async () => {
   const calls: Record<string, unknown>[] = []
   draft.hash = 'saved-hash'
@@ -44,6 +49,7 @@ it('publishes the newly saved digest instead of the initial page digest', async 
       save={() => publishManagedWorkflow('app-c', 2, 'saved-hash')}
     />,
   )
+  await openStrip(screen)
   await screen.getByRole('button', { name: '发布到客户端客服' }).click()
   await expect.element(screen.getByRole('status').first()).toHaveTextContent('已发布到客户端客服')
   expect(calls.find((c) => c.action === 'publish')).toMatchObject({
@@ -70,6 +76,7 @@ it('does not publish after another tab changes the saved graph', async () => {
       save={() => publishManagedWorkflow('app-c', 2, 'saved-hash')}
     />,
   )
+  await openStrip(screen)
   await screen.getByRole('button', { name: '发布到客户端客服' }).click()
   await expect.element(screen.getByRole('status').first()).toHaveTextContent('草稿已被其他操作修改')
   expect(calls.some((c) => c.action === 'publish')).toBe(false)
@@ -109,16 +116,29 @@ it('saves before preview and stops the same trial', async () => {
       }}
     />,
   )
-  await screen.getByText('预览客户端客服', { exact: true }).click()
+  await openStrip(screen)
   await screen.getByRole('textbox', { name: '预览问题', exact: true }).fill('怎么充电？')
   await screen.getByRole('button', { name: '开始预览', exact: true }).click()
   await expect.element(screen.getByRole('button', { name: '停止预览', exact: true })).toBeVisible()
-  expect(events.slice(0, 2)).toEqual(['save', 'trial'])
+  // save 必须先于 trial；抽屉打开触发的 knowledge 加载与本次断言无关，过滤掉。
+  expect(events.filter((e) => e === 'save' || e === 'trial')).toEqual(['save', 'trial'])
   await screen.getByRole('button', { name: '停止预览', exact: true }).click()
   await expect
     .element(screen.getByRole('status', { name: '预览结果' }))
     .toHaveTextContent('预览已停止')
   expect(events).toContain('trial-cancel')
+})
+
+it('keeps nested version popover usable inside the drawer', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json(status)))
+  const screen = await render(
+    <WorkflowManagedStrip status={status} save={async () => {}} sync={async () => true} />,
+  )
+  await openStrip(screen)
+  await screen.getByRole('button', { name: '版本操作', exact: true }).click()
+  // 嵌套 Popover 打开时外层抽屉不能被误关：内部按钮与外层标题都要还在。
+  await expect.element(screen.getByText('撤回当前正式版本')).toBeVisible()
+  await expect.element(screen.getByText('受管发布').first()).toBeVisible()
 })
 
 it('manages customer knowledge access without technical identifiers', async () => {
@@ -138,7 +158,7 @@ it('manages customer knowledge access without technical identifiers', async () =
   const screen = await render(
     <WorkflowManagedStrip status={status} save={async () => {}} sync={async () => true} />,
   )
-  await screen.getByText('知识库使用范围', { exact: true }).click()
+  await openStrip(screen)
   await screen.getByRole('checkbox', { name: '客户操作手册' }).click()
   await expect
     .element(screen.getByRole('status', { name: '知识授权结果' }))

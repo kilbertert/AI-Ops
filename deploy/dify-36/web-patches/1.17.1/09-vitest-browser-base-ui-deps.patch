@@ -11,6 +11,7 @@ index 43b2b7a3..d1b496c0 100644
 +              // 会另载一份原始 react，context 钩子以 dispatcher=null 崩溃。
 +              '@base-ui/react/button',
 +              '@base-ui/react/checkbox',
++              '@base-ui/react/drawer',
 +              '@base-ui/react/field',
 +              '@base-ui/react/input',
 +              '@base-ui/react/popover',
