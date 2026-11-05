@@ -122,6 +122,8 @@ Dify自助开通：`dify.self_service`组织双端业务流程，`dify.self_serv
 
 ## 五、本地运行与验证
 
+提交后的必需检查、自动同步、部署与发布排障统一见[Actions 交付手册](docs/agents/actions-delivery.md)。
+
 开发与交付按[验证分工](docs/agents/verification-workflow.md)执行：实现者聚焦功能，
 独立 Hacker 提供反例和用户入口证据；新增长期检查须有具体错误及独立判据。以下是交付检查，
 迭代时只运行与当前改动和疑点相关的部分，完整结果不代替业务验收。
