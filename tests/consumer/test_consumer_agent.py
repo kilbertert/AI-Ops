@@ -210,7 +210,23 @@ def test_agent_trial_uses_same_tools_and_rechecks_selected_objects(tmp_path, mon
 
         monkeypatch.setattr("aiops_diagnostics.dify.dify_dsl_pull.DifyDslClient", Draft)
         monkeypatch.setattr("aiops_diagnostics.consumer.consumer_trial.DifyDslClient", Draft)
-        caller = _Resolver().resolve("token-a", required_scope="aiops:orders:read")
+        from dataclasses import replace
+
+        from aiops_diagnostics.identity.scope_context import DataScope
+
+        caller = replace(
+            _Resolver().resolve("token-a", required_scope="aiops:orders:read"),
+            data_scope=DataScope(type="all"),
+            scope_fingerprint="",
+        )
+        # 生产运营预览按公司范围授权选定单；夹具原授权器仅模拟消费者本人范围。
+        monkeypatch.setattr(
+            env["orders"],
+            "can_access",
+            lambda scope, order: (
+                env["orders"].ownership.get(order) == "USER-A" and scope.effective_tenant_id == "TENANT-A"
+            ),
+        )
         monkeypatch.setattr(runtime, "trial_context_for", lambda *args: caller)
         monkeypatch.setattr(runtime, "trial_run_context", lambda *args: caller)
         monkeypatch.setattr(
@@ -238,6 +254,19 @@ def test_agent_trial_uses_same_tools_and_rechecks_selected_objects(tmp_path, mon
             def run(self, **kwargs):
                 ids = [str(uuid.uuid4()) for _ in range(4)]
                 kwargs["on_started"](*ids)
+                for resource, order in (("orders", ""), ("status", "OTHER")):
+                    denied = env["client"].post(
+                        "/v1/internal/consumer-data/agent",
+                        headers={"Authorization": "Bearer " + kwargs["inputs"]["data_grant"]},
+                        json={"resource": resource, "order_no": order},
+                    )
+                    assert denied.status_code == 200 and denied.json()["status"] == "refused"
+                knowledge = env["client"].post(
+                    "/v1/internal/consumer-data/agent",
+                    headers={"Authorization": "Bearer " + kwargs["inputs"]["data_grant"]},
+                    json={"resource": "knowledge", "query": "充电操作", "knowledge_base_ids": ["kb-own"]},
+                )
+                assert knowledge.status_code == 200 and knowledge.json()["status"] == "found", knowledge.text
                 response = env["client"].post(
                     "/v1/internal/consumer-data/agent",
                     headers={"Authorization": "Bearer " + kwargs["inputs"]["data_grant"]},
