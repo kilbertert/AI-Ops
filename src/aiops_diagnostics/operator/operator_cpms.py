@@ -684,9 +684,21 @@ class OperatorCpms:
             ):
                 del self.tasks[key]
 
-    def _current(self, run_id, *, node_token=None, manifest=None, tool=None):
+    def authenticate(self, run_id, *, node_token=None, manifest=None):
+        """协议级闸：run 存在、令牌属实为本 run 的期望节点、manifest 匹配。**所有**节点回调都过。"""
         try:
-            return self._check_current(run_id, node_token=node_token, manifest=manifest, tool=tool)
+            return self._authenticate(run_id, node_token=node_token, manifest=manifest)
+        except OperatorRefused as exc:
+            self._stamp_gate_refusal(run_id, str(exc))
+            raise
+
+    def authorize_execution(self, run_id, *, node_token=None, manifest=None, tool=None):
+        """执行级闸：协议身份之上，「本次执行仍被许可」。只包铸造/使用执行能力的面。"""
+        try:
+            run, config = self._authenticate(run_id, node_token=node_token, manifest=manifest)
+            return self._authorize_execution(
+                run_id, run=run, config=config, node_token=node_token, manifest=manifest, tool=tool
+            )
         except OperatorRefused as exc:
             self._stamp_gate_refusal(run_id, str(exc))
             raise
@@ -711,15 +723,34 @@ class OperatorCpms:
                 "operator_gate_refused stamp_failed run_id=%s code=%s", run_id, code
             )
 
-    def _check_current(self, run_id, *, node_token=None, manifest=None, tool=None):
-        task = self.tasks.get(run_id)
+    def _authenticate(self, run_id, *, node_token=None, manifest=None):
+        """run 存在 + 节点身份 + manifest——不判断「这次执行还许不许可」。"""
         run = self.context.agent_run_store.get(run_id)
-        if (
-            task is None
-            or run is None
-            or run.operation not in {SCENARIO, operator_conversation.SCENARIO, "operator_agent"}
-            or run.state not in {"issued", "running"}
-        ):
+        if run is None or run.operation not in {
+            SCENARIO,
+            operator_conversation.SCENARIO,
+            "operator_agent",
+        }:
+            raise OperatorRefused("OPERATOR_RUN_INACTIVE")
+        binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
+        if binding is None:
+            # 绑定已撤：没有 config 可验证节点身份，连「谁在上报」都存疑。
+            raise OperatorRefused("OPERATOR_NODE_REJECTED")
+        config = AgentRunConfig.load(Path(binding.config_file))
+        if node_token is not None:
+            node = config.authenticate_node(node_token)
+            if node is None or node.node_id != run.expected_node_id or node.environment != run.environment:
+                raise OperatorRefused("OPERATOR_NODE_REJECTED")
+        expected = execution_manifest.from_text(run.execution_manifest)
+        if expected.identity != run.expected_agent_version:
+            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
+        if manifest is not None and manifest != expected.identity:
+            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
+        return run, config
+
+    def _authorize_execution(self, run_id, *, run, config, node_token=None, manifest=None, tool=None):
+        task = self.tasks.get(run_id)
+        if task is None or run.state not in {"issued", "running"}:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         qa = self.context.store.get_assistant_question(run.qa_id, run.scope_fingerprint)
         if not qa or qa["status"] not in QUESTION.active:
@@ -739,7 +770,6 @@ class OperatorCpms:
             for t in all_targets(self.context.settings)
         ):
             raise OperatorRefused("OPERATOR_TARGET_CHANGED")
-        config = AgentRunConfig.load(Path(binding.config_file))
         if (config.environment, config.snail_app_id, str(config.snail_agent_id), config.expected_node_id) != (
             run.environment,
             run.app_id,
@@ -752,26 +782,14 @@ class OperatorCpms:
             for n in config.node_token_hashes.values()
         ):
             raise OperatorRefused("OPERATOR_NODE_REJECTED")
-        if node_token is not None:
-            node = config.authenticate_node(node_token)
-            if node is None or node.node_id != run.expected_node_id or node.environment != run.environment:
-                raise OperatorRefused("OPERATOR_NODE_REJECTED")
         caller = task.authorize()
         if caller.scope_fingerprint != run.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
         if not still_authorized(binding, run, trial=task.trial):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
-        config = AgentRunConfig.load(Path(binding.config_file))
-        if not any(
-            n.active and n.node_id == run.expected_node_id and n.environment == run.environment
-            for n in config.node_token_hashes.values()
-        ):
-            raise OperatorRefused("OPERATOR_NODE_REJECTED")
-        if node_token is not None:
-            node = config.authenticate_node(node_token)
-            if node is None or node.node_id != run.expected_node_id or node.environment != run.environment:
-                raise OperatorRefused("OPERATOR_NODE_REJECTED")
+        # task.authorize() 是对外调用：期间绑定/节点可能已变，身份与配置核验再来一遍。
+        run, config = self._authenticate(run_id, node_token=node_token, manifest=manifest)
         if (config.environment, config.snail_app_id, str(config.snail_agent_id), config.expected_node_id) != (
             run.environment,
             run.app_id,
@@ -779,11 +797,12 @@ class OperatorCpms:
             run.expected_node_id,
         ):
             raise OperatorRefused("OPERATOR_NODE_CHANGED")
+        if not any(
+            n.active and n.node_id == run.expected_node_id and n.environment == run.environment
+            for n in config.node_token_hashes.values()
+        ):
+            raise OperatorRefused("OPERATOR_NODE_REJECTED")
         expected = execution_manifest.from_text(run.execution_manifest)
-        if expected.identity != run.expected_agent_version:
-            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
-        if manifest is not None and manifest != expected.identity:
-            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         if tool is not None and (
             tool not in TOOL_NAMES or tool not in expected.tool_names or not allowed_in(tool, run)
         ):
@@ -798,8 +817,19 @@ class OperatorCpms:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         return task, latest, config
 
+    def _absorb_superseded(self, run_id, patch):
+        """授权已死后送达的交付物：收下进终局快照、标记 superseded、永不投递。"""
+        store = self.context.agent_run_store
+        store.absorb(run_id, {"superseded": True, **patch})
+        latest = store.get(run_id)
+        return {
+            "run_id": run_id,
+            "state": latest.state if latest else "failed",
+            "delivered": False,
+        }
+
     def publication(self, run_id, token):
-        task, run, _ = self._current(run_id, node_token=token)
+        task, run, _ = self.authorize_execution(run_id, node_token=token)
         if (
             not diagnoses_an_order(run)
             and run.state == "issued"
@@ -841,7 +871,7 @@ class OperatorCpms:
             # 旧节点不声明契约版本。挡在**领授权**这一步，而不是等它在完成回调里因为
             # 证据缺字段而失败——那既不是稳定错误码，也发生在公司令牌已经用过之后。
             raise OperatorRefused("OPERATOR_TOOL_CONTRACT_OUTDATED")
-        task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
+        task, run, _ = self.authorize_execution(run_id, node_token=token, manifest=manifest, tool=tool)
         # 参数放行发生在**取到公司令牌之前**：模型编的地址不会换来一次真实的对外请求。
         arguments = arguments or {}
         if tool in {"cpms_order_amount_check", "cpms_order_process_stats"}:
@@ -945,7 +975,7 @@ class OperatorCpms:
             return data
 
         def current():
-            return self._current(run.run_id, tool="cpms_station_plan")[0].caller.scope_fingerprint
+            return self.authorize_execution(run.run_id, tool="cpms_station_plan")[0].caller.scope_fingerprint
 
         sites = query_sites(
             site_scope(task.caller),
@@ -1020,7 +1050,7 @@ class OperatorCpms:
         if tool is None:
             raise OperatorRefused("OPERATOR_PATH_REJECTED")
         with task.lock:
-            self._current(run_id, tool=tool)
+            self.authorize_execution(run_id, tool=tool)
             if tool in task.evidence:
                 return task.evidence[tool]["response"]
             if (
@@ -1063,7 +1093,7 @@ class OperatorCpms:
                 return task.evidence[tool]["response"]
             if tool == "cpms_station_plan":
                 data = self._station_plan(task, run)
-                self._current(run_id, tool=tool)
+                self.authorize_execution(run_id, tool=tool)
                 data = order_pricing.project(data, _declared(tool).evidence_shape)
                 task.evidence[tool] = {
                     "tool": tool,
@@ -1090,7 +1120,7 @@ class OperatorCpms:
             if tool == SITE_TOOL:
 
                 def reauthorize():
-                    self._current(run_id, tool=tool)
+                    self.authorize_execution(run_id, tool=tool)
                     return task.caller.scope_fingerprint
 
                 data, response = read_site_tool(
@@ -1100,7 +1130,7 @@ class OperatorCpms:
                     cpms_site_reader(task.base_url, task.bearer),
                     reauthorize,
                 )
-                self._current(run_id, tool=tool)
+                self.authorize_execution(run_id, tool=tool)
                 task.evidence[tool] = {
                     "tool": tool,
                     "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
@@ -1123,7 +1153,7 @@ class OperatorCpms:
                     if tool == "cpms_order_tariff"
                     else read_billing(body, task.caller, run.order_no, task.order_site_id)
                 )
-                self._current(run_id, tool=tool)
+                self.authorize_execution(run_id, tool=tool)
                 task.evidence[tool] = {
                     "tool": tool,
                     "inputs": {"order_no": run.order_no},
@@ -1145,7 +1175,7 @@ class OperatorCpms:
             rows = [body["data"]["chOrderInfoModel"]] if tool == TOOL_NAMES[0] else body["data"]["records"]
             if any(row["siteId"] != task.order_site_id for row in rows):
                 raise OperatorRefused("CPMS_SCOPE_MISMATCH")
-            self._current(run_id, tool=tool)
+            self.authorize_execution(run_id, tool=tool)
             # 只保存裁剪后的业务证据；不记录公司令牌和原响应中的个人信息。
             task.evidence[tool] = project_evidence(body, run.order_no, tool)
             task.evidence[tool]["response"] = minimized_response(body, tool)
@@ -1177,7 +1207,43 @@ class OperatorCpms:
     def _record(self, run_id, token, manifest, tool, payload):
         if set(payload) != {"authorization_id", "evidence"}:
             raise OperatorRefused("OPERATOR_INVALID_BODY")
-        task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
+        run, config = self.authenticate(run_id, node_token=token, manifest=manifest)
+        if run.state == "succeeded":
+            # 成功收尾后的迟到记账：证据链已闭合，只回执不落库。
+            return {
+                "run_id": run_id,
+                "tool": tool,
+                "authorization_id": payload["authorization_id"],
+                "accepted": True,
+            }
+        dead = run.state not in {"issued", "running"}
+        task = self.tasks.get(run_id)
+        if not dead:
+            try:
+                task, run, config = self._authorize_execution(
+                    run_id, run=run, config=config, node_token=token, manifest=manifest, tool=tool
+                )
+            except OperatorRefused as exc:
+                self._stamp_gate_refusal(run_id, str(exc))
+                latest = self.context.agent_run_store.get(run_id)
+                if latest is None or latest.state in {"issued", "running"}:
+                    raise  # 非致命拒绝（如 TOOL_DISABLED）：照旧 403。
+                dead, run = True, latest
+        if dead:
+            # 死 run 交付的证据落终局快照——收下是取证，不投递是撤回的全部意义。
+            evidence = payload.get("evidence")
+            if not isinstance(evidence, dict) or evidence.get("tool") != tool:
+                raise OperatorRefused("OPERATOR_EVIDENCE_MISMATCH")
+            result = self._absorb_superseded(
+                run_id,
+                {"evidence": {tool: {k: v for k, v in evidence.items() if k != "response"}}},
+            )
+            return {
+                **result,
+                "tool": tool,
+                "authorization_id": payload["authorization_id"],
+                "accepted": True,
+            }
         with task.lock:
             expected = task.evidence.get(tool)
             evidence = payload.get("evidence")
@@ -1202,7 +1268,6 @@ class OperatorCpms:
                     raise ValueError("invalid observation time")
             except (ValueError, TypeError) as exc:
                 raise OperatorRefused("OPERATOR_EVIDENCE_MISMATCH") from exc
-            self._current(run_id, node_token=token, manifest=manifest, tool=tool)
             task.delivered.add(tool)
             partial = {
                 "answer": None,
@@ -1215,7 +1280,14 @@ class OperatorCpms:
             if not self.context.agent_run_store.complete(
                 run_id, snapshot=partial, actual_node_id=run.expected_node_id, node_build=None
             ):
-                raise OperatorRefused("OPERATOR_EVIDENCE_NOT_ACCEPTED")
+                # 死在写前一刻：收下进终局快照，不投递。
+                result = self._absorb_superseded(run_id, partial)
+                return {
+                    **result,
+                    "tool": tool,
+                    "authorization_id": payload["authorization_id"],
+                    "accepted": True,
+                }
             return {
                 "run_id": run_id,
                 "tool": tool,
@@ -1224,19 +1296,20 @@ class OperatorCpms:
             }
 
     def complete(self, run_id, token, manifest, payload):
-        task, _, _ = self._current(run_id, node_token=token, manifest=manifest)
-        with task.completion_lock:
+        task = self.tasks.get(run_id)
+        # 死 run 的 task 可能已被 _prune：上报不需要锁，活 run 的完成才串行化。
+        with task.completion_lock if task is not None else threading.Lock():
             return self._complete(run_id, token, manifest, payload)
 
     def _complete(self, run_id, token, manifest, payload):
         if set(payload) - {"status", "answer", "reason"}:
             raise OperatorRefused("OPERATOR_INVALID_BODY")
-        task, run, _ = self._current(run_id, node_token=token, manifest=manifest)
+        run, config = self.authenticate(run_id, node_token=token, manifest=manifest)
         store = self.context.agent_run_store
         if payload.get("status") not in {"completed", "failed"}:
             raise OperatorRefused("OPERATOR_INVALID_COMPLETION")
         if payload["status"] == "failed":
-            # 节点给的原因码进运行记录，不再统一糊成 `operator_node_failed`。
+            # 失败上报永远照录：节点给的原因码进运行记录，不再统一糊成 `operator_node_failed`。
             # 它只用于**归因**，不改变任何判决：这条 run 仍然失败。
             reason = payload.get("reason")
             if not isinstance(reason, str) or not (
@@ -1249,14 +1322,36 @@ class OperatorCpms:
                 "operator_node_reported_failure reason=%s", reason or "-"
             )
             return {"run_id": run_id, "state": "failed"}
+        raw = payload.get("answer", "")
+        if not isinstance(raw, str) or not 0 < len(raw.strip()) <= 12000:
+            raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+        if run.state == "succeeded":
+            # 幂等重放：成功已交付，再报一遍只回执。
+            return {"run_id": run_id, "state": "succeeded", "delivered": True}
+        dead = run.state not in {"issued", "running"}
+        task = self.tasks.get(run_id)
+        if not dead:
+            try:
+                task, run, config = self._authorize_execution(
+                    run_id, run=run, config=config, node_token=token, manifest=manifest
+                )
+            except OperatorRefused as exc:
+                self._stamp_gate_refusal(run_id, str(exc))
+                latest = store.get(run_id)
+                if latest is None or latest.state in {"issued", "running"}:
+                    raise
+                dead, run = True, latest
+        if dead:
+            # 授权已死的成功答复：收下、进终局快照、标记 superseded、不投递——
+            # 撤回存在的意义就是不投递，收下的动作与投递的动作是两件事。
+            return self._absorb_superseded(run_id, {"answer": raw})
+        answer = raw
+        if task is None:
+            raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         with task.lock:
-            raw = payload.get("answer", "")
-            if not isinstance(raw, str) or not 0 < len(raw.strip()) <= 12000:
-                raise OperatorRefused("OPERATOR_INVALID_ANSWER")
-            answer = raw
             from aiops_diagnostics.common.redaction import contains_secret
 
-            if contains_secret(raw, (task.bearer, task.grant)):
+            if contains_secret(answer, (task.bearer, task.grant)):
                 _answer_refused("credential")
             if run.order_no:
                 self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
@@ -1286,8 +1381,22 @@ class OperatorCpms:
         )
         if review["verdict"] != "allow":
             raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
+        superseded = {
+            "answer": answer,
+            "answer_review": review,
+            "evidence": evidence,
+        }
         with task.lock:
-            self._current(run_id, node_token=token, manifest=manifest)
+            try:
+                task, run, config = self._authorize_execution(
+                    run_id, run=run, config=config, node_token=token, manifest=manifest
+                )
+            except OperatorRefused as exc:
+                self._stamp_gate_refusal(run_id, str(exc))
+                latest = store.get(run_id)
+                if latest is None or latest.state in {"issued", "running"}:
+                    raise
+                return self._absorb_superseded(run_id, superseded)
             if run.order_no:
                 self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
             for previous_id in task.history_runs:
@@ -1309,11 +1418,14 @@ class OperatorCpms:
             if not store.complete(
                 run_id, snapshot=snapshot, actual_node_id=run.expected_node_id, node_build=None
             ):
-                raise OperatorRefused("OPERATOR_COMPLETE_REJECTED")
+                return self._absorb_superseded(run_id, superseded)
             verdict, completed = store.complete_loop(
                 run_id, observed_agent_version=manifest, actual_node_id=run.expected_node_id
             )
             if verdict not in {"completed", "already_completed"}:
+                latest = store.get(run_id)
+                if latest is not None and latest.state in {"failed", "revoked", "expired"}:
+                    return self._absorb_superseded(run_id, superseded)
                 raise OperatorRefused("OPERATOR_COMPLETE_REJECTED")
             return {"run_id": run_id, "state": completed.state}
 
