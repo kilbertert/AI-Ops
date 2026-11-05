@@ -40,10 +40,11 @@ function enrich(runs) {
   return runs.map((run) => {
     let totalCount = null;
     let pendingCount = null;
+    let deploymentConclusion = null;
     try {
-      totalCount = JSON.parse(
-        gh(["api", `repos/{owner}/{repo}/actions/runs/${run.databaseId}/jobs`, "--jq", ".total_count"]),
-      );
+      const jobs = JSON.parse(gh(["api", `repos/{owner}/{repo}/actions/runs/${run.databaseId}/jobs`]));
+      totalCount = jobs.total_count;
+      deploymentConclusion = jobs.jobs?.find((job) => job.name === "deploy-41")?.conclusion ?? null;
       pendingCount = JSON.parse(
         gh([
           "api",
@@ -55,7 +56,13 @@ function enrich(runs) {
     } catch {
       // 取不到就是 null（未知），判定侧按「不知道」处理，不按「没有」处理。
     }
-    return { ...run, totalCount, pendingCount };
+    // 发布说明单独失败不等于生产部署失败；旧 run 同样从部署 job 读取。
+    return {
+      ...run,
+      totalCount,
+      pendingCount,
+      ...(deploymentConclusion ? { status: "completed", conclusion: deploymentConclusion } : {}),
+    };
   });
 }
 
@@ -327,7 +334,7 @@ function main() {
   lines.push(
     "",
     "**批准门已于 2026-09-30 移除**（所有者决定）—— 因此「等批准」不该再出现；",
-    "卡住时怎么办、谁负责批准，见 `docs/agents/env-41-runbook.md` 的 CD 一节。",
+    "卡住时检查部署 runner、并发锁与访问链路，见 `docs/agents/env-41-runbook.md` 的 CD 一节。",
   );
   const body = lines.join("\n");
   if (dryRun) {

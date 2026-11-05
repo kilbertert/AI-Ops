@@ -1,143 +1,42 @@
 name: CD
 
-# 把合并到 main 的 src/ 部署到 41（AI-Ops Gateway 生产环境）。
-#
-# 与 CI 的分工：ci.yml 跑确定性检查（ruff / pytest / 编译 / 依赖）并作为 Ruleset
-# 的必需检查；本 workflow 只负责「把已合并的代码送上去」，不重复跑检查 —— 它在
-# main 上运行，而 main 只能通过带必需检查的 PR 进入。
-#
-# 与 AFK 的分工：AFK 只做 GitHub（分支 / PR / label），从不到达主机。到生产的
-# 交付此前 100% 靠人按 runbook §2 手工执行；本 workflow 是那条路的自动化版本，
-# 两者共用 deploy/deploy-41.sh，因此不会各自漂移。
-#
-# 🛑 **2026-09-30：人工批准门已按仓库所有者的明确决定去掉。**
-#
-# 决定原文：「我授权你可以自动的进行 CD 审批部署，不需要我认为的点击」——
-# 经追问确认取的是**永久去掉批准门**（不是本会话代批，也不是另加一条手动自动批）。
-#
-# 这意味着：**任何合并到 main 且命中下面 paths 的提交，都会自动部署到生产。**
-# `main` 仍由 Ruleset 保护（必须走 PR、必须通过必需检查、必须解决会话），
-# 所以「什么人能改生产」实际由**谁能合并到 main**决定 —— 那道门没有被去掉，
-# 只是从"合并后再点一次"变成了"合并即生效"。
-#
-# 去掉它换来的两样东西（都是实测过的痛点）：
-#   1. **#468 那类静默消失**：等批准的 run 与"根本没在跑"在 API 上长得一样，
-#      而卡住的等待不会自己出声（#407 的守望者补上了声音，但门本身还在挡路）；
-#   2. 「合并了但没部署」不再是一种可以停留很久的状态。
-#
-# ⚠️ **回滚就是一处**：在 GitHub 的 `production-41` 环境上重新加回 required reviewer。
-# 本文件不需要改，而且**没有**任何"自动放行"的代码要一起删 —— 见 job 的 environment
-# 注释：job 内是不可能批准自己的（审批在步骤开始之前）。决定记录见
-# `docs/agents/env-41-runbook.md` 的 CD 一节。
+# 仅部署受保护 main 的 Gateway 提交；部署锁不可取消。其他组件按各自手册交付。
 
 on:
   push:
     branches: [main]
-    # 只有会影响运行时的路径才部署。纯文档合并（本仓很常见）不该拉起一次
-    # 生产重启，也不该占用人工审批的注意力。
     paths:
       - "src/**"
-      # 只列 deploy/ 下**这次部署真的要执行**的那两个文件，不用 `deploy/**`（#520）。
-      #
-      # `deploy/**` 里混着两类东西：部署自己的可执行件，和与部署无关的只读取数/运维
-      # 脚本（`company-gitlab-api.sh`、`routing-window.sh`、`d4-cutover.py`、
-      # `record-manual-deploy.sh` 等）。过滤器一视同仁，于是改一个只读脚本也会：
-      # 重启生产、并把 #405 的观察窗重新计时（窗口起点 = 网关进程启动时刻）。
-      # #513/#514 就是这样各触发了一次 —— 它们只把 `company-gitlab-api.sh` 连同
-      # 文档一起改掉，网关根本不 import 它。
-      #
-      # 下面两个是 deploy-41.sh 直接调用的，缺一个部署就起不来：
-      #   - deploy-41.sh 自身（由下面的 run 步骤执行）
-      #   - classify-remote-result.sh（deploy-41.sh 解析主机回执时调用）
-      # `deploy/test-rollback-classifier.sh` 只在 CI 里跑（tests/test_cd_deploy_scripts.py），
-      # 上不了生产，所以不在触发器里。**新增第三个被 deploy-41.sh 调用的文件时要加进来**
-      # —— 漏加的后果是「改了它却不部署」，而 `paths` 不命中时不会有任何信号，
       - "deploy/deploy-41.sh"
       - "deploy/classify-remote-result.sh"
       - ".github/workflows/cd.yml"
-      # 依赖清单也观察：它们变了却不触发，生产会停在旧依赖上，而且下一次 src 合并会被
-      # 脚本的漂移门拦下 —— CD 就永远收敛不到 main。让变更被看见，由脚本判定"能否部署"
-      # 还是"需要先更新 41 的依赖环境"（后者需独立决定，脚本会明确报出而不是硬上）。
       - "pyproject.toml"
       - "uv.lock"
-  # 手动触发只用于**重跑当前 main**（例如上次部署失败后重试），不提供任意 commit
-  # 入口：一个能选任意 fetched commit 的输入，等于让有权批准环境的人把从未通过 main
-  # 必需检查的提交部署到生产 —— 那把 Ruleset 绕开了。
-  #
-  # 回滚不靠选 commit，靠 `--rollback-to`：它需要一个**已经部署过**的 commit，
-  # 走本地脚本或下面的 rollback_to 输入（该输入不在本 workflow 里，见 PR 说明）。
   workflow_dispatch:
 
 permissions:
-  # `write` is for the release-notes step at the end of this file, which creates
-  # a GitHub Release. It is deliberately NOT used to push commits: `main`'s
-  # ruleset requires a pull request for every update and lists no bypass actor,
-  # so a bot push would be rejected — and punching a bypass into that gate to
-  # save a changelog commit would trade the review boundary for cosmetics.
-  #
-  # The deploy itself reaches 41 over SSH with its own key, not this token.
-  contents: write
-
-# 并发控制放在 **job** 上，不放在 workflow 上 —— 这个区别是全部要点，两个错误版本
-# 都栽在这里（详见 job 的 concurrency 注释）：
-#   1. workflow 级 + cancel-in-progress: false → 实测死锁
-#   2. workflow 级 + cancel-in-progress: true → 可能把正在改生产的部署打断
-# job 级：锁在 job 即将启动时才获取，所以"等审批的"不持锁（不死锁）、
-#         "正在跑的"持锁（不被打断）。
+  contents: read
 
 jobs:
   deploy-41:
-    # 并发控制在 job 级（不是 workflow 级）。两个实测教训：
-    #   1. workflow 级 + cancel-in-progress: false → **死锁**：run 一创建就占住槽位，
-    #      CD #1 在审批门等 24 分钟后被取消，而被取消的 run 没释放槽位，之后所有 run
-    #      卡在 "waiting for another serialized run to finish"、jobs=0、永不推进。
-    #   2. workflow 级 + cancel-in-progress: true → **可能打断正在改生产的部署**：
-    #      新 push 在 job 启动前就取消旧 run，若它已获批并正在跑 deploy-41.sh，会在
-    #      改到一半时被杀（自检与回滚跑不到），而新 run 自己还在等审批 —— 没人修生产。
-    #
-    # job 级锁在**该 job 即将启动时**才获取，于是：等审批的 run 不持锁（新 run 不被
-    # 它挡住），正在执行的部署持锁（新 run 排队等它跑完）。取代"等审批的"、保护
-    # "正在跑的" —— 这正是要的。
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
     concurrency:
       group: cd-41-deploy
       cancel-in-progress: false
-    # 必须用 self-hosted：41 不在 GitHub-hosted runner 的可达范围内，而且
-    # deploy-41.sh 依赖 dev-host，后者的配置（~/.ssh/config、库外 hosts.toml、
-    # 私钥）只存在于本机 claude 账户下。GitHub-hosted runner 既不持有也够不到。
-    #
-    # 用**本仓专属 label**（server-dev-runner-AI-Ops 带 `AI-Ops`），不只是
-    # `self-hosted`：后者的含义是「任何一台自托管 runner」，任何新登记的 runner
-    # 都能领这个 job，从而拿到生产部署密钥与部署权。专属 label 把能执行 CD 的
-    # runner 收敛到已知那一台。
     runs-on: [self-hosted, AI-Ops]
     timeout-minutes: 20
 
-    # environment 仍然挂着（它承载**部署账本**与分支限制），但**已无 required reviewer**
-    # —— 门是在环境那侧去掉的，不是靠本文件绕过。因此 `production-41` 上的
-    # 部署记录、分支策略（只允许 main）、以及"哪个 commit 部署过、结果如何"的账本
-    # 全部保留，丢掉的是那个「点一下」。
-    #
-    # 🔴 **不要试图在 job 里自动批准自己的部署** —— 评审指出并已实测确认：
-    # GitHub 的 environment 审批发生在 **job 的步骤开始之前**，所以在 job 里写一个
-    # `pending_deployments` 批准步骤，在有 reviewer 时它**根本不会被执行**（job 自己
-    # 就卡在门上），在没有 reviewer 时它无事可做。那样写只会留下一个看起来像安全网的
-    # 死代码。要么去掉 reviewer（当前做法），要么保留门；**没有"在 job 内自动放行"这条路**。
     environment: production-41
 
     steps:
       - name: Check out the repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          # deploy-41.sh 用 `git archive <sha>` 取产物，所以需要该 commit 可达。
-          # fetch-depth: 0 保证 --rollback-to 一个较旧的 commit 也能取到。
           fetch-depth: 0
           persist-credentials: false
 
-      # 部署的永远是这次运行自己的 commit（GITHUB_SHA）。
-      # 不引入「让操作者挑一个别的 commit」的输入：environment 的 deployment 记录
-      # 是按 workflow ref/SHA 记的，若实际部署了另一个 sha，账本就会把生产归到错的
-      # commit 上 —— 而「哪个 commit 在跑」正是这套 CD 要能回答的问题。
-      # 回滚走 --rollback-to（见 runbook §2 的应急路径）。
       - name: Resolve the commit to deploy
         id: target
         run: |
@@ -155,17 +54,6 @@ jobs:
             echo "DEPLOY_41_CD_SSH_KEY 未设置 —— CD 拒绝退化到人工密钥" >&2
             exit 1
           fi
-          # 从 secret 幂等落到固定路径，别名 aiops-41-cd 指向它。让 secret 成为
-          # 权威来源：轮换 secret 后重跑即完成换钥，不必登机器。
-          #
-          # **有意不删**（本步骤不做清理）。两个理由：
-          #   1. 应急预案要能用。`deploy-41.sh --rollback-to` 是出事故时的回滚手段，
-          #      而密钥只应存在于 job 生命周期内的话，workflow 跑完之后人工回滚就没
-          #      密钥可用了 —— 恰恰在最需要它的时候失效。
-          #   2. 在这个 self-hosted runner 上「用完即删」没有隔离意义：runner 以
-          #      `claude` 运行，HOME 就是持有 ~/.ssh 的那个账户，同一把密钥本来就在
-          #      同一台机器的同一用户下。删掉只是剧场，不是边界。
-          # 真正的隔离要靠独立 runner 身份（另一个决定），不是靠删文件。
           install -d -m 700 "$HOME/.ssh"
           key="$HOME/.ssh/id_ed25519_41_cd"
           printf '%s\n' "$CD_SSH_KEY" > "$key"
@@ -174,18 +62,11 @@ jobs:
           echo "CD 部署密钥已就位（$(ssh-keygen -lf "$key" | awk '{print $2}')）"
 
       - name: Verify the CD identity resolves
-        # 别等到写生产时才发现身份不对：先确认别名解析到 CD 密钥、且主机清单
-        # 认为 41 是可写的服务类主机。deploy-41.sh 内部也会断言，这里先失败更早。
         env:
           PATH: /home/claude/miniconda3/bin:/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
         run: |
           set -euo pipefail
-          # 2>/dev/null：ssh -G 在无 tty 时会给 stderr 打 "Pseudo-terminal will not
-          # be allocated" 之类提示，别让它混进解析结果。
           alias_key=$(ssh -G aiops-41-cd 2>/dev/null | awk '$1=="identityfile"{print $2; exit}')
-          # 比**完整路径**，不是后缀：`*id_ed25519_41_cd` 会接受
-          # `.../evil/id_ed25519_41_cd` 这种形似路径 —— 看着通过了，实际用的是另一把
-          # 密钥。ssh 的 identityfile 可能显示为 `~/.ssh/...`，先展开再比。
           expanded=${alias_key/#\~/$HOME}
           if [ "$expanded" = "$HOME/.ssh/id_ed25519_41_cd" ]; then
             echo "别名 aiops-41-cd 解析到 CD 密钥（$alias_key）✓"
@@ -196,40 +77,51 @@ jobs:
           dev-host show 41 | sed 's/^/  /'
 
       - name: Deploy
+        id: deploy
         env:
-          # dev-host 用 `python3 -c` 解析 TOML，需要 tomllib（3.11+）。self-hosted
-          # runner 的 PATH 不含 miniconda，裸 python3 会落到 /usr/bin/python3 (3.10)
-          # 并抛 ModuleNotFoundError —— 那是「环境不对」而不是「部署失败」。
-          # deploy-41.sh 会先自检并在这种情况下以 65 退出，这里负责把解释器摆对。
           PATH: /home/claude/miniconda3/bin:/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
-          # 显式声明用 CD 身份。脚本的默认是**人工**别名（见 deploy-41.sh 的说明），
-          # 因为同一个脚本也服务人工应急回滚 —— 那种场景下 CD 密钥可能正是被吊销的
-          # 那把。自动化路径在这里明确选用 CD 身份。
           CD_SSH_ALIAS: aiops-41-cd
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: deploy/deploy-41.sh --commit "$TARGET_SHA"
 
-      # The changelog is produced here and published as a GitHub Release — it is
-      # NOT committed back to `main`.
-      #
-      # Measured 2026-10-23 before writing this: `main`'s ruleset requires a pull
-      # request for every update and lists no bypass actor, so a bot push would
-      # be rejected. Bypassing it would mean punching a hole in the gate that
-      # keeps unreviewed code out of production, to save one commit.
-      #
-      # Publishing also removes the last reason a pull request ever touched the
-      # file: it is gitignored, so no branch can conflict on it.
-      #
-      # Placed after Deploy on purpose: notes describing a release the deploy did
-      # not make are worse than no notes. A failed deploy skips this entirely.
-      - name: Publish release notes
+      - name: Summarize deployment
+        if: always()
         env:
-          # Same interpreter and tool path as Deploy: `dev-changelog` and its
-          # `git-cliff` dependency come from the server release unit, which a
-          # hosted runner does not have.
+          DEPLOY_RESULT: ${{ steps.deploy.outcome }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          {
+            echo '### Gateway 部署结果'
+            echo "- 提交：${TARGET_SHA:-未解析}"
+            echo "- 部署步骤：$DEPLOY_RESULT"
+            echo '- 失败时查看首个失败步骤，按部署手册核对现役版本与回滚记录。'
+            echo '- Java 节点、Dify、H5 与知识服务不由这个 workflow 一并部署。'
+            echo '- 业务验收单独记录；操作入口见 docs/agents/actions-delivery.md。'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release-notes:
+    needs: deploy-41
+    runs-on: [self-hosted, AI-Ops]
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: cd-release-notes
+      cancel-in-progress: false
+    steps:
+      - name: Check out the deployed commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.deploy-41.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Publish release notes
+        id: release
+        env:
           PATH: /home/claude/miniconda3/bin:/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          TARGET_SHA: ${{ needs.deploy-41.outputs.sha }}
         run: |
           set -eu
           if ! command -v dev-changelog >/dev/null 2>&1; then
@@ -237,42 +129,17 @@ jobs:
             exit 1
           fi
 
-          # Absolute paths, not `.` and not a bare filename: the first version
-          # did `dev-changelog . >/dev/null && cp CHANGELOG.md`, and on the
-          # runner the file was simply not there afterwards. Redirecting stdout
-          # to /dev/null is what made that invisible — `dev-changelog` announces
-          # which path it wrote, and that line was the only evidence. Leave the
-          # output in the log and resolve the repo root explicitly.
           repo_root=$(git rev-parse --show-toplevel)
 
-          # `dev-changelog` renders only for a repository that DECLARES it
-          # publishes versions, and that declaration is a local git config —
-          # `serverPolicy.publishesVersions`, never committed. Measured
-          # 2026-10-23: on the runner's fresh checkout the tool printed
-          # `skip … not declared`, wrote nothing, and **exited 0**, so the step
-          # failed one line later at `cp` with nothing in the log to say why.
-          # Declare it here, where the release is actually produced.
           git config --local serverPolicy.publishesVersions true
           git config --local serverPolicy.changelogAtRelease true
 
-          # One release per deployed commit, keyed by the commit itself.
-          #
-          # The version comes from the repository's `VERSION` file, which a
-          # human edits when cutting a release. CD never invents one.
-          #
-          # That split is the point: a version number is a statement about what
-          # a release contains, and deriving it from commits would let a
-          # mistyped `feat!` bump a major version that nobody decided. `VERSION`
-          # is authoritative; `pyproject.toml` and `__init__.py` are copies kept
-          # honest by `tests/test_release_version.py`.
           version=$(tr -d '[:space:]' < "$repo_root/VERSION")
           if [ -z "$version" ]; then
             echo "::error::VERSION is empty — refusing to publish a release with no version" >&2
             exit 1
           fi
 
-          # Create an annotated version tag before rendering notes. The hosting
-          # API writes only tag objects/refs; no credential is persisted in Git.
           vtag="v${version}"
           if ! git ls-remote --exit-code origin "refs/tags/$vtag" >/dev/null 2>&1; then
             tag_object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags" \
@@ -280,7 +147,6 @@ jobs:
               -f object="$TARGET_SHA" -f type=commit --jq .sha)
             if ! gh api "repos/$GITHUB_REPOSITORY/git/refs" \
               -f ref="refs/tags/$vtag" -f sha="$tag_object" >/dev/null; then
-              # A simultaneous publisher may have created the same tag.
               git fetch origin "refs/tags/$vtag:refs/tags/$vtag"
               [ "$(git rev-parse "$vtag^{commit}")" = "$TARGET_SHA" ] || exit 1
               [ "$(git cat-file -t "$vtag")" = tag ] || exit 1
@@ -296,25 +162,12 @@ jobs:
           trap 'rm -f "$notes"' EXIT
           dev-changelog "$repo_root"
           if [ ! -s "$repo_root/CHANGELOG.md" ]; then
-            # This is the check that turns the silent skip into a named failure.
-            # `dev-changelog` exits 0 both when it writes the file and when it
-            # decides this repository does not owe one; only the file tells the
-            # two apart, and the error has to say which question was answered.
             echo "::error::dev-changelog exited 0 but produced no $repo_root/CHANGELOG.md" >&2
             echo "::error::usual cause: serverPolicy.publishesVersions is not declared in this checkout (it is local git config, never committed)" >&2
             exit 1
           fi
           cp "$repo_root/CHANGELOG.md" "$notes"
 
-          # One release per deployment, keyed by commit; the *tag* carries the
-          # version. Two tags would be worse than one: measured 2026-10-23,
-          # `dev-changelog` splits sections on version tags, so a `v<version>+<sha>`
-          # tag per deploy would produce one section per deployment — the
-          # fragmentation the version was meant to remove.
-          #
-          # `--target` pins the release to the commit that was actually deployed,
-          # and `--verify-tag` is deliberately absent: the tag is created by this
-          # step against that commit, not pushed by a person beforehand.
           tag="release-${TARGET_SHA:0:12}"
           title="AI-Ops ${version} — deployed ${TARGET_SHA:0:12}"
           if gh release view "$tag" >/dev/null 2>&1; then
@@ -328,30 +181,21 @@ jobs:
               --prerelease
           fi
 
-          # Existing version releases and tags are immutable; only a new version
-          # release is created here, from the tag that was checked above.
           if [ "$tagged_commit" = "$TARGET_SHA" ] && ! gh release view "$vtag" >/dev/null 2>&1; then
             gh release create "$vtag" --verify-tag \
               --title "AI-Ops ${version}" --notes-file "$notes" --prerelease
           fi
 
       - name: Report failure
-        if: failure()
+        if: always()
         env:
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          RELEASE_RESULT: ${{ job.status }}
+          TARGET_SHA: ${{ needs.deploy-41.outputs.sha }}
         run: |
           {
-            echo "### CD 部署失败"
-            echo
-            echo "- commit: \`${TARGET_SHA}\`"
-            echo "- run: ${RUN_URL}"
-            echo
-            echo "41 上的服务状态与上一次备份见上面的步骤日志。"
-            echo
-            echo "回滚：本地执行 \`deploy/deploy-41.sh --rollback-to <上一个已知良好 commit>\`。"
-            echo "本 workflow **没有**「指定 commit」的输入（那会绕过 main 保护），"
-            echo "所以回滚只能走本地脚本 —— 它默认用人工身份，CD 密钥被吊销时也可用。"
-            echo
-            echo "注意：部署失败**不是**业务验收结论 —— 业务验收需按 runbook §5 由人执行。"
+            echo '### 发布说明结果'
+            echo "- 已部署提交：$TARGET_SHA"
+            echo "- 发布说明作业：$RELEASE_RESULT"
+            echo '- Gateway 部署已成功；此作业失败只重跑失败作业，不据此回滚或重启服务。'
+            echo '- 业务验收单独记录；操作入口见 docs/agents/actions-delivery.md。'
           } >> "$GITHUB_STEP_SUMMARY"
