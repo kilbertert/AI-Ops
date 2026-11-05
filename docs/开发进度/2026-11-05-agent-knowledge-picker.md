@@ -1,0 +1,9 @@
+# 客服Agent知识库下拉为空修复
+
+用户原页面点击检索知识库无内容。基线e6aed1ed，分支fix/agent-knowledge-picker。
+原浏览器复现：选项0个、无dynamic-options请求、无页面异常；同登录态直接请求目录200、5个库。
+成因为Agent的ToolSettingsPanel漏传currentTool/currentProvider；已有04补丁只覆盖独立工具节点。
+
+新增固定版本10补丁补齐两层参数传递，构建脚本核上游两文件摘要。保留目录权限、已选值、正式绑定。
+回归先在原组件失败（目录未请求），补修后真实表单的已选名称和多选值通过；相邻套件共4项通过。
+构建、原页面候选复验与最终交付见[验证](../validation/2026-11-05-agent-knowledge-picker.md)。

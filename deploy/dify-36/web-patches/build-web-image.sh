@@ -55,6 +55,8 @@ check_sha web/app/components/datasets/external-knowledge-base/create/ExternalApi
 check_sha web/models/datasets.ts 7da7895349e90cc963c725b12826be71c4f45827d829b23cfe077a18fb492ac9
 check_sha web/service/datasets.ts e5277febabf43ffc3d54b8fa6ff52305e9fd5ef18052c1ee404e78f958425a01
 check_sha web/app/components/workflow/nodes/tool/panel.tsx 76b230b92e8aa95f75ed63d89578ea90d25817466aedbed97753c79a55e45f76
+check_sha web/app/components/plugins/plugin-detail-panel/tool-selector/index.tsx 53209928e2ce92bb42740a6275fc32314283b654978296b4e1e5326a4f315a74
+check_sha web/app/components/plugins/plugin-detail-panel/tool-selector/components/tool-settings-panel.tsx c4383a099cfffb18b7320a6ec60bf4b50e8de1eb8f1ef0c2f25e596ba4beff6f
 
 check_sha web/app/components/apps/index.tsx f64172a2ce46876cc3e8769fe1dd06480ba97dd9aae270aafeac19dd4d6c204f
 check_sha web/app/components/app/configuration/configuration-view/index.tsx 2596b65ca35888c96c59f100b35a260e82af248459247ea13392deb713a63317

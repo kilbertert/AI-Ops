@@ -127,3 +127,16 @@ source为`PluginInstallationSource.Package`，传入同工作区旧/新完整标
 猜Gateway正式版。用户风格要求作为业务指令保留，系统JSON协议块由迁移删除。
 保存用hash并发检查，环境变量用environment_variable_patch，旧变量删除按id声明。
 恢复旧正式版后草稿可能仍为新图；恢复与还原草稿是两步，最终核对草稿和正式内容是否符合交付目标。
+
+## Agent内嵌工具的选库面板
+
+callback6的入口是智能客服节点→consumer_knowledge工具卡片→用户设置→检索知识库。
+`04-tool-dynamic-settings.patch`只覆盖独立工具节点；Agent使用另一条ToolSelector→ToolSettingsPanel→ToolForm链。
+`10-agent-tool-dynamic-settings.patch`在两层传递当前工具及provider，动态选项才能请求目录；
+缺这两个对象时没有网络请求、已选名称也无法解析，空下拉不能解读成知识库不存在。
+构建脚本同时钉住这两份上游文件摘要；保持原目录鉴权与发布选库规则，不靠静态库ID填选项。
+
+在任务自己的上游构建目录应用所有补丁后运行：
+`pnpm --dir web exec vp test --project unit app/components/plugins/plugin-detail-panel/tool-selector/__tests__/aiops-dynamic-settings.spec.tsx`。
+该测试从工具选择器跨真实表单/多选组件验证目录请求、已选回显和多选保存形状；
+原浏览器还需核对同工作区接口200和列表可见，不以测试替代生产页面。

@@ -1,0 +1,169 @@
+--- a/web/app/components/plugins/plugin-detail-panel/tool-selector/index.tsx
++++ b/web/app/components/plugins/plugin-detail-panel/tool-selector/index.tsx
+@@ -209,6 +209,7 @@
+           <ToolSettingsPanel
+             value={value}
+             currentProvider={currentProvider}
++            currentTool={currentTool}
+             nodeId={nodeId}
+             currType={currType}
+             settingsFormSchemas={settingsFormSchemas}
+--- a/web/app/components/plugins/plugin-detail-panel/tool-selector/components/tool-settings-panel.tsx
++++ b/web/app/components/plugins/plugin-detail-panel/tool-selector/components/tool-settings-panel.tsx
+@@ -3,6 +3,7 @@
+ import type { TabType } from '../hooks/use-tool-selector'
+ import type { ReasoningConfigValue } from './reasoning-config-form'
+ import type { CredentialFormSchema } from '@/app/components/header/account-setting/model-provider-page/declarations'
++import type { Tool } from '@/app/components/tools/types'
+ import type { ToolFormSchema } from '@/app/components/tools/utils/to-form-schema'
+ import type { ToolValue } from '@/app/components/workflow/block-selector/types'
+ import type { ToolVarInputs } from '@/app/components/workflow/nodes/tool/types'
+@@ -16,6 +17,7 @@
+ type ToolSettingsPanelProps = {
+   value?: ToolValue
+   currentProvider?: ToolWithProvider
++  currentTool?: Tool
+   nodeId: string
+   currType: TabType
+   settingsFormSchemas: ToolFormSchema[]
+@@ -51,6 +53,7 @@
+ export function ToolSettingsPanel({
+   value,
+   currentProvider,
++  currentTool,
+   nodeId,
+   currType,
+   settingsFormSchemas,
+@@ -138,6 +141,8 @@
+             schema={settingsFormSchemas as CredentialFormSchema[]}
+             value={settingsValue}
+             onChange={onSettingsFormChange}
++            currentProvider={currentProvider}
++            currentTool={currentTool}
+           />
+         </div>
+       )}
+--- /dev/null
++++ b/web/app/components/plugins/plugin-detail-panel/tool-selector/__tests__/aiops-dynamic-settings.spec.tsx
+@@ -0,0 +1,121 @@
++import { screen, waitFor } from '@testing-library/react'
++import userEvent from '@testing-library/user-event'
++import { useState } from 'react'
++import { FormTypeEnum } from '@/app/components/header/account-setting/model-provider-page/declarations'
++import { renderWorkflowFlowComponent } from '@/app/components/workflow/__tests__/workflow-test-env'
++import ToolSelector from '../index'
++
++const data = vi.hoisted(() => {
++  const tool = { name: 'consumer_knowledge' }
++  const provider = {
++    id: 'trendpower/consumer_knowledge/consumer_knowledge',
++    name: 'trendpower/consumer_knowledge/consumer_knowledge',
++    plugin_id: 'trendpower/consumer_knowledge',
++    is_team_authorization: true,
++    tools: [tool],
++  }
++  return { tool, provider, fetch: vi.fn(), change: vi.fn(), identity: vi.fn() }
++})
++vi.mock('@/app/components/header/account-setting/model-provider-page/hooks', () => ({
++  useLanguage: () => 'zh_Hans',
++}))
++vi.mock('@/app/components/workflow/nodes/_base/hooks/use-available-var-list', () => ({
++  default: () => ({ availableVars: [], availableNodesWithParent: [] }),
++}))
++vi.mock('@/service/use-plugins', async (original) => ({
++  ...(await original()),
++  useFetchDynamicOptions: (...args: unknown[]) => {
++    data.identity(...args)
++    return { mutateAsync: data.fetch }
++  },
++}))
++vi.mock('../components/tool-authorization-section', () => ({
++  ToolAuthorizationSection: () => null,
++}))
++vi.mock('../components/tool-base-form', () => ({ ToolBaseForm: () => null }))
++vi.mock('../hooks/use-tool-selector', () => ({
++  useToolSelector: () => {
++    const [settingsValue, setSettings] = useState({
++      knowledge_base_ids: { type: 'constant', value: ['kb-1'] },
++    })
++    return {
++      isShow: true,
++      setIsShow: vi.fn(),
++      isShowChooseTool: false,
++      setIsShowChooseTool: vi.fn(),
++      currType: 'settings',
++      setCurrType: vi.fn(),
++      currentProvider: data.provider,
++      currentTool: data.tool,
++      settingsFormSchemas: [
++        {
++          name: 'knowledge_base_ids',
++          variable: 'knowledge_base_ids',
++          label: { en_US: 'Knowledge bases', zh_Hans: '检索知识库' },
++          type: FormTypeEnum.dynamicSelect,
++          multiple: true,
++          required: true,
++          show_on: [],
++        },
++      ],
++      paramsFormSchemas: [],
++      showTabSlider: false,
++      userSettingsOnly: true,
++      reasoningConfigOnly: false,
++      manifestIcon: '',
++      inMarketPlace: false,
++      manifest: undefined,
++      handleSettingsFormChange: (value: typeof settingsValue) => {
++        data.change(value)
++        setSettings(value)
++      },
++      handleSelectTool: vi.fn(),
++      handleSelectMultipleTool: vi.fn(),
++      handleDescriptionChange: vi.fn(),
++      handleParamsFormChange: vi.fn(),
++      handleEnabledChange: vi.fn(),
++      handleAuthorizationItemClick: vi.fn(),
++      handleInstall: vi.fn(),
++      settingsValue,
++    }
++  },
++}))
++
++it('loads named knowledge options through the Agent tool popover and preserves multi-selection', async () => {
++  const user = userEvent.setup()
++  data.fetch.mockResolvedValue({
++    options: [
++      { value: 'kb-1', label: { en_US: 'Guide', zh_Hans: '充电指南' }, show_on: [] },
++      { value: 'kb-2', label: { en_US: 'Billing', zh_Hans: '账单说明' }, show_on: [] },
++    ],
++  })
++  renderWorkflowFlowComponent(
++    <ToolSelector
++      value={
++        { provider_name: data.provider.name, tool_name: data.tool.name, enabled: true } as never
++      }
++      isEdit
++      nodeId="node-1"
++      onSelect={vi.fn()}
++      nodeOutputVars={[]}
++      availableNodes={[]}
++    />,
++    { edges: [], nodes: [] },
++  )
++  await waitFor(() => expect(data.fetch).toHaveBeenCalledTimes(1))
++  expect(data.identity).toHaveBeenCalledWith(
++    data.provider.plugin_id,
++    data.provider.name,
++    data.tool.name,
++    'knowledge_base_ids',
++    'tool',
++    undefined,
++  )
++  const select = screen.getByRole('combobox', { name: '充电指南' })
++  await user.click(select)
++  expect(screen.getByRole('option', { name: '充电指南' })).toBeInTheDocument()
++  await user.click(screen.getByRole('option', { name: '账单说明' }))
++  expect(data.change).toHaveBeenLastCalledWith({
++    knowledge_base_ids: { type: 'constant', value: ['kb-1', 'kb-2'] },
++  })
++})
