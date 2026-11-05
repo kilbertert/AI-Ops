@@ -12,6 +12,16 @@ Status: Accepted
 秘密，改为派发者给脱敏结论并点名禁读路径。决策本身不变；另更正一处验收回执误报
 （审查报告实则持久化于 `.sandcastle/logs/`）。
 
+2026-11-05 外部复审第二轮：合并版再被复审发现四处并修——裁决读取仍接受内联引用标记
+（改为仅末尾独立行裁决，正文引用与代码样例不充当裁决，两个 prompt 同步写明合同）；
+`.sandcastle/.env` 的 `GH_TOKEN`/`GITHUB_TOKEN` 经 resolvedEnv 仍可注入审查容器
+（改为空凭据意图时把两键钉空以压住 resolvedEnv，并在容器创建后探测实际环境断言）；
+审查分支名按 issue-iteration 决定论复用（SDK 对已有 ref 忽略 baseBranch，会验旧码
+删错分支——改为 `Date.now()` 唯一名 + 核对审查 ref 与候选 tip 一致 + 只清理本run创建
+的分支）；围栏闭合尾部 `\s*` 接受 U+00A0（改为 `[ \t]*`，前导缩进同步收窄为
+`[ ]{0,3}`）。回执更正：外部复审执行者实为 Codex 而非 deepseek-v4.1-flash；终版复验
+两次派发上游停滞记为未执行；受影响凭据范围扩至 settings.deepseek.json 认证令牌。
+
 ## 决定
 
 执行规则集中在[验证分工](../agents/verification-workflow.md)，由 AGENTS、CLAUDE 与全部实现/验收入口引用。
