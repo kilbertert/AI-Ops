@@ -117,15 +117,13 @@ from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_UNAVAILABLE,
     CallerAuthError,
 )
+from aiops_diagnostics.identity.data_scope_rule import entry_data_scope
 from aiops_diagnostics.identity.query_scope import (
     ShopDirectory,
     SiteScopeMapper,
     operator_site_scope_from_shops,
 )
 from aiops_diagnostics.identity.scope_context import (
-    SCOPE_TYPE_ALL,
-    SCOPE_TYPE_ORGAN,
-    SCOPE_TYPE_SELF,
     DataScope,
     ScopeContext,
     ScopeError,
@@ -304,36 +302,29 @@ class CompanyTokenCallerResolver:
     def _data_scope(
         self, subject: SubjectRecord, shop_ids: tuple[str, ...], platform_entry: str | None
     ) -> DataScope:
-        """令牌路径的数据范围：**只有管家端入口**换成运营商站点集合。
+        """令牌路径的数据范围：判定序列唯一渲染在 ``data_scope_rule``（#644）。
 
-        与 ``third_session_auth`` 的那一行是**同一条边界**（#436 的回归修复）：替换
-        ``self`` 的语义是为管家端设计的（运营商员工要看本运营商名下站点的订单），但它在身份层
-        生效，若不按入口分流，消费者侧会被一并收窄与放宽。未知入口在这里按最窄的 ``self``
-        处理、不放宽 —— 非法入口随后由平台决策拒绝，范围已经先收紧。
-
-        判据用 ``is_operator_entry``（两份实现漂移的方向就是放宽，所以它只有一份）。
-
-        解析失败一律失败关闭为**空集合**（拒绝全部订单查询），不回落成租户级放行、也不套用
-        ``self`` —— 后者会把「查不到运营商范围」伪装成「只能看本人的单」。失败覆盖链路上每一种
-        逃逸方式：上游不可达/形状非法/数量超界（``ScopeError``）、充电库不可用（``SourceError``）、
-        范围 ID 不可用（``ValueError``）；不捕获就等于让一次授权故障变成 500。
+        本链与会话链的差异只有两个显式参数：令牌链**没有**「主体可用性」分支
+        （主体来自令牌声明，缺身份在更早处就被拒），显式传 ``False``；站点集合
+        来源是令牌 ``shop_ids`` 快照 → ``operator_site_scope_from_shops``
+        （ADR-0009 D2；会话链实时查 ``/shopuser/getShops``）。顶层账号在
+        ``resolve`` 里就连 ``shop_ids`` 都不解析 —— 提前返回与规则模块里那一条
+        同判据，并省掉可能触发 ``/shopuser/getShops`` 的那一跳。
         """
-        if not is_operator_entry(platform_entry):
-            return DataScope(type=SCOPE_TYPE_SELF)
-        if is_tenant_level_account(subject.user_type):
-            # 与 ``third_session_auth._data_scope`` 同一条边界、同一个判据：顶层账号
-            # （平台/租户主账号，``type ∈ {-1,1}``）的可见范围是整个租户。
-            # **不解析店铺集合**：它的空集合在这里既不表示「看不到订单」，多打一次
-            # ``/shopuser/getShops`` 也改变不了结论（见 ``resolve`` 里对 shop_ids 的
-            # 按需取值）—— 令牌常常不带 ``shop_ids``，提前返回可省掉那一跳。
-            return DataScope(type=SCOPE_TYPE_ALL)
-        try:
+
+        def _site_ids() -> tuple[str, ...]:
             with self._scope_mapper(self.scoped_settings) as mapper:
-                scope = operator_site_scope_from_shops(shop_ids, subject.tenant_id or "", mapper=mapper)
-        except (ScopeError, SourceError, ValueError) as exc:
-            _log_scope_unavailable(exc)
-            return DataScope(type=SCOPE_TYPE_ORGAN, site_ids=())
-        return DataScope(type=SCOPE_TYPE_ORGAN, site_ids=scope.site_ids)
+                return operator_site_scope_from_shops(
+                    shop_ids, subject.tenant_id or "", mapper=mapper
+                ).site_ids
+
+        return entry_data_scope(
+            platform_entry,
+            subject.user_type,
+            subject_unavailable=False,
+            site_ids=_site_ids,
+            on_unavailable=_log_scope_unavailable,
+        )
 
     def _claims(self, token: str) -> Mapping[str, Any]:
         """调公司 ``check_token`` 并取回身份声明（成功与失败是**两种形状**，见模块文档）。
