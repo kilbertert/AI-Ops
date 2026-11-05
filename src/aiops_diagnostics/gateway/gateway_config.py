@@ -91,6 +91,9 @@ class GatewayServerSettings:
     environment_manifest_file: str = ""
     operator_trial_login_url: str = ""
     operator_trial_key: str = field(repr=False, default="")
+    #: 时序数据门面（公司 tsdata 服务）的只读查询入口，`cpms_charging_timeline` 用它在
+    #: 授权订单窗口内取 TDengine 枪遥测。空 = 该工具按依赖不可用拒绝，不静默退化为空页。
+    operator_tsdata_url: str = ""
     consumer_chatflow_enabled: bool = False
     #: 客户端知识插件的**精确标识**（`provider/name:version@sha` 或 `provider/name`）。
     #: 客户端开通要把它装进目标工作区并写入本工作区的目录凭据；空 = 客户端开通直接拒绝
@@ -362,6 +365,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE"),
             operator_trial_login_url=_env("AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL"),
+            operator_tsdata_url=_env("AIOPS_GATEWAY_OPERATOR_TSDATA_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_TSDATA_URL"),
             operator_trial_key=_env("AIOPS_GATEWAY_OPERATOR_TRIAL_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_TRIAL_KEY"),
             chat_dify_key_dir=_env("AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR")

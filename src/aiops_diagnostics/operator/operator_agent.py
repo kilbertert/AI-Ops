@@ -87,6 +87,7 @@ def render(answer, evidence):
         "cpms_order_billing": "订单账务与优惠",
         "cpms_order_amount_check": "订单金额核验",
         "cpms_order_process_stats": "充电过程统计",
+        "cpms_charging_timeline": "充电枪时序遥测",
         "cpms_site_search": "可见站点查询",
         "cpms_station_plan": "未来充电费用方案",
     }
