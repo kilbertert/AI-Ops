@@ -266,11 +266,15 @@ async function main(): Promise<void> {
             );
 
             if (result.commits.length > 0) {
-              await withTimeout(
+              // The reviewer is a read-only Hacker: no GitHub token, and any
+              // commits it managed to make void its verdict. Its report lives
+              // only in stdout, so keep the tail in the run log — a BLOCKED or
+              // missing signal also keeps the branch out of this round.
+              const review = await withTimeout(
                 Number(process.env.AFK_RUN_TIMEOUT ?? 3600) * 1000,
                 `Review #${issue.number}`,
                 () => sandbox.run({
-                  ...profileConfig(),
+                  ...profileConfig(false),
                   name: `Reviewer #${issue.number}`,
                   promptFile: ".sandcastle/review-prompt.md",
                   promptArgs: {
@@ -281,6 +285,18 @@ async function main(): Promise<void> {
                   completionSignal: ["<promise>COMPLETE</promise>", "<promise>BLOCKED</promise>"],
                 }),
               );
+              const reportTail = (review.stdout ?? "").trim().split("\n").slice(-40).join("\n");
+              if (review.commits.length > 0) {
+                throw new Error(
+                  `Review #${issue.number} committed ${review.commits.length} commit(s); reviewer must be read-only. Output tail:\n${reportTail}`,
+                );
+              }
+              if (review.completionSignal !== "<promise>COMPLETE</promise>") {
+                throw new Error(
+                  `Review #${issue.number} did not signal COMPLETE (${review.completionSignal ?? "no signal"}); branch kept for fix-up. Output tail:\n${reportTail}`,
+                );
+              }
+              console.log(`  Review #${issue.number} COMPLETE. Output tail:\n${reportTail}`);
             }
             return result;
           } finally {
