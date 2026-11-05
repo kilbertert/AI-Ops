@@ -493,7 +493,14 @@ def consumer_models(console, workspace_id: str, document: dict, profile) -> list
     from aiops_diagnostics.consumer import consumer_agent_flow
 
     if consumer_agent_flow.enabled(document.get("workflow") or {}):
-        console.install_plugins(workspace_id, [consumer_agent_flow.AGENT_PLUGIN])
+        plugins = [consumer_agent_flow.AGENT_PLUGIN]
+        for node in nodes:
+            for tool in node.get("data", {}).get("agent_parameters", {}).get("tools", {}).get("value", []):
+                identifier = tool.get("plugin_unique_identifier", "")
+                if not identifier.startswith("trendpower/consumer_knowledge:0.0.2@"):
+                    raise SetupRefused("SETUP_CONSUMER_PLUGIN_REQUIRED")
+                plugins.append(identifier)
+        console.install_plugins(workspace_id, list(dict.fromkeys(plugins)))
     wanted = []
     for node in nodes:
         data = node.get("data") or {}

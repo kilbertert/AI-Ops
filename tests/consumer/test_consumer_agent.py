@@ -67,6 +67,16 @@ def test_agent_combines_tools_and_keeps_actual_answer_after_grant_expiry(tmp_pat
                 assert kwargs["conversation_id"] == ""
                 token = kwargs["inputs"]["data_grant"]
                 tokens.append(token)
+                assert (
+                    env["client"]
+                    .post(
+                        "/v1/internal/consumer-data/knowledge",
+                        headers={"Authorization": "Bearer " + token},
+                        json={"knowledge_base_ids": ["kb-own"]},
+                    )
+                    .status_code
+                    == 403
+                )
                 if len(observations) == 1:
                     for resource in ("status", "billing", "knowledge"):
                         response = env["client"].post(

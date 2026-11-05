@@ -103,3 +103,24 @@ def test_legacy_protocol_is_not_silently_retained_by_agent_migration():
     instruction = flow["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]["value"]
     assert instruction.startswith("按用户语言简短答复。")
     assert "<!-- aiops-protocol:" not in instruction and "仅输出JSON。" not in instruction
+
+
+def test_new_tenant_installs_source_agent_and_tool_versions():
+    from aiops_diagnostics.consumer.consumer_agent_flow import AGENT_PLUGIN
+    from aiops_diagnostics.dify.self_service_prepare import consumer_models
+
+    flow = candidate()
+    model = flow["graph"]["nodes"][1]["data"]["agent_parameters"]["model"]["value"]
+    installed = []
+
+    class Console:
+        def install_plugins(self, workspace, identifiers):
+            installed.extend(identifiers)
+
+        def _call(self, *args):
+            return {"current_credential_id": "existing-model"}
+
+    assert consumer_models(Console(), "target-workspace", {"workflow": flow}, {"model": {}}) == [
+        model["provider"] + "/" + model["model"]
+    ]
+    assert installed == [AGENT_PLUGIN, "trendpower/consumer_knowledge:0.0.2@" + "a" * 64]
