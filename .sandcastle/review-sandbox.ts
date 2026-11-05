@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { parseEnv } from "node:util";
 import { createSandbox, type Sandbox, type SandboxProvider, type BindMountSandboxProviderConfig } from "@ai-hero/sandcastle";
 import { claudeProfile } from "./profile.js";
 
@@ -14,7 +15,7 @@ const MODEL_ENV = new Set([
 // Sandcastle 0.12 exposes this shape at runtime but omits create/tag from its public type.
 type DockerProvider = SandboxProvider & BindMountSandboxProviderConfig & { tag: "bind-mount" };
 
-export function reviewProvider(input: SandboxProvider): DockerProvider {
+export function reviewProvider(input: SandboxProvider, modelEnv: Record<string, string> = {}): DockerProvider {
   const provider = input as DockerProvider;
   if (provider.tag !== "bind-mount" || typeof provider.create !== "function") throw new Error("Review requires the Docker bind-mount provider");
   return {
@@ -24,7 +25,7 @@ export function reviewProvider(input: SandboxProvider): DockerProvider {
         ...options,
         mounts: options.mounts.map((mount) => ({ ...mount, readonly: true })),
         env: {
-          ...Object.fromEntries(Object.entries(options.env).filter(([key]) => MODEL_ENV.has(key))),
+          ...Object.fromEntries(Object.entries({ ...options.env, ...modelEnv }).filter(([key]) => MODEL_ENV.has(key))),
           ...(provider.env.AFK_PROFILE ? { AFK_PROFILE: provider.env.AFK_PROFILE } : {}),
           GH_TOKEN: "",
           GITHUB_TOKEN: "",
@@ -82,6 +83,12 @@ export async function withReviewSandbox<T>(
   profile: string | undefined,
   work: (sandbox: Sandbox, agent: ReturnType<typeof claudeProfile>["agent"]) => Promise<T>,
 ): Promise<T> {
+  const envFile = join(root, ".sandcastle", ".env");
+  const configured = existsSync(envFile) ? parseEnv(readFileSync(envFile, "utf8")) : {};
+  const modelEnv = Object.fromEntries([...MODEL_ENV].flatMap((key) => {
+    const value = configured[key] || process.env[key];
+    return value ? [[key, value]] : [];
+  }));
   const candidate = cloneReviewCandidate(root, ref);
   let sandbox: Sandbox | undefined;
   try {
@@ -90,7 +97,7 @@ export async function withReviewSandbox<T>(
       cwd: candidate.directory,
       branch: "review-run",
       baseBranch: candidate.sha,
-      sandbox: reviewProvider(config.sandbox),
+      sandbox: reviewProvider(config.sandbox, modelEnv),
       hooks: config.hooks,
     });
     const result = await work(sandbox, config.agent);

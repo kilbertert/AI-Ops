@@ -64,7 +64,7 @@ try {
   // A second commit lets the hostile reviewer move refs without altering files.
   const other = git(["-c", "user.name=Boundary Check", "-c", "user.email=check@example.invalid", "commit-tree", tree, "-p", sha, "-m", "test(afk): second synthetic commit"]);
   git(["update-ref", "refs/heads/main", other]);
-  writeFileSync(join(fixture, ".sandcastle/.env"), "GH_TOKEN=fake-host-token\nGH_ENTERPRISE_TOKEN=fake-enterprise-token\n");
+  writeFileSync(join(fixture, ".sandcastle/.env"), "GH_TOKEN=fake-host-token\nGH_ENTERPRISE_TOKEN=fake-enterprise-token\nANTHROPIC_API_KEY=fake-required-model-token\n");
   clone = cloneReviewCandidate(fixture, "main");
   assert.equal(git(["rev-parse", "HEAD"], clone.directory), other);
   assert.equal(existsSync(join(clone.directory, ".sandcastle/.env")), false);
@@ -76,6 +76,8 @@ try {
     process.env.REVIEW_HOST_SENTINEL = "fake-host-secret";
     process.env.AFK_AGENT_GH_TOKEN = "fake-host-token";
     await withReviewSandbox(fixture, "main", "claude", async (sandbox) => {
+      const auth = await sandbox.exec('[ "$ANTHROPIC_API_KEY" = "fake-required-model-token" ] && echo retained');
+      assert.equal(auth.stdout.trim(), "retained", "default profile must retain allowed model authentication");
       const probe = await sandbox.exec("cat installation.json");
       assert.equal(probe.exitCode, 0, probe.stderr);
       assert.deepEqual(JSON.parse(probe.stdout), { container: true, hostSecret: false, github: false, enterprise: false });
