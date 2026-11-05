@@ -12,5 +12,5 @@ Ulink已演练v18→Agent→v18→Agent，revision递增；优链充也发布Age
 详见[验收记录](../validation/2026-11-05-consumer-agent-production-closeout.md)。
 安卓连续会话#1353仍等待公司新版安装包；用户已确认暂时无法发包。本轮不把该项判通过。
 
-归档使用docs/consumer-agent-release-acceptance分支，同步主线f882abc8。目录与README/架构文档检查25项通过，git diff --check通过。
+归档使用docs/consumer-agent-release-acceptance分支，同步主线4519f6f1。目录与README/架构文档检查25项通过，git diff --check通过。
 Devin未实际执行审查（额度不足），不把状态success当审查证据；确定性CI和独立反例均单独核对。
