@@ -279,6 +279,20 @@ def rebind_knowledge(document: dict, knowledge_ids, *, forbidden_ids=()) -> dict
         and (node.get("data") or {}).get("provider_id") == PROVIDER
         and (node.get("data") or {}).get("tool_name") == TOOL
     ]
+    from aiops_diagnostics.consumer import consumer_agent_flow
+
+    if consumer_agent_flow.enabled(workflow):
+        matches = [
+            tool
+            for node in nodes
+            for tool in (node.get("data") or {}).get("agent_parameters", {}).get("tools", {}).get("value", [])
+            if tool.get("provider_name") == PROVIDER and tool.get("tool_name") == TOOL
+        ]
+        if len(matches) != 1:
+            raise SetupRefused("SETUP_KNOWLEDGE_BINDING_REQUIRED")
+        matches[0]["settings"] = {"knowledge_base_ids": {"type": "constant", "value": selected}}
+        matches[0].pop("credential_id", None)
+        return document
     if len(matches) != 1:
         # 没有受控检索节点（旧 FAQ 流程）或出现多个：都不是可以自动绑定的形态。
         raise SetupRefused("SETUP_KNOWLEDGE_BINDING_REQUIRED")
@@ -292,6 +306,14 @@ def consumer_source_ids(document: dict) -> tuple[str, ...]:
     from aiops_diagnostics.consumer.consumer_knowledge_selection import selected_libraries
 
     workflow = document.get("workflow") or {}
+    from aiops_diagnostics.consumer import consumer_agent_flow
+
+    if consumer_agent_flow.enabled(workflow):
+        for node in workflow.get("graph", {}).get("nodes", []):
+            tools = node.get("data", {}).get("agent_parameters", {}).get("tools", {}).get("value", [])
+            for tool in tools:
+                if tool.get("tool_name") == consumer_agent_flow.TOOL:
+                    return selected_libraries({"tool_configurations": tool.get("settings", {})})
     for node in (workflow.get("graph") or {}).get("nodes") or []:
         data = node.get("data") or {}
         if data.get("type") == "tool" and data.get("tool_name") == "consumer_knowledge":
@@ -468,12 +490,20 @@ def consumer_models(console, workspace_id: str, document: dict, profile) -> list
     已经有可用凭据 —— 没有就拒绝，不复制源客户的密钥、也不假装成功。
     """
     nodes = ((document.get("workflow") or {}).get("graph") or {}).get("nodes") or []
+    from aiops_diagnostics.consumer import consumer_agent_flow
+
+    if consumer_agent_flow.enabled(document.get("workflow") or {}):
+        console.install_plugins(workspace_id, [consumer_agent_flow.AGENT_PLUGIN])
     wanted = []
     for node in nodes:
         data = node.get("data") or {}
-        if data.get("type") != "llm":
+        if data.get("type") == "agent":
+            selected = data.get("agent_parameters", {}).get("model", {}).get("value", {})
+            model = {**selected, "name": selected.get("model")}
+        elif data.get("type") == "llm":
+            model = data.get("model") or {}
+        else:
             continue
-        model = data.get("model") or {}
         provider, name = str(model.get("provider") or ""), str(model.get("name") or "")
         if provider and name and (provider, name) not in wanted:
             wanted.append((provider, name))
