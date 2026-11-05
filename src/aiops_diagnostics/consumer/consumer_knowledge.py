@@ -9,7 +9,9 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from aiops_diagnostics.common.i18n import localized_pack, rendering_language
 from aiops_diagnostics.common.private_files import validate_private_file
+from aiops_diagnostics.consumer.consumer_copy import COMPOSED_LANGUAGES
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     ALLOWED_IMAGE_TYPES,
@@ -104,7 +106,7 @@ def text_for(code, language):
 
     if language in COPY:
         return COPY[language]["knowledge_" + code]
-    return MESSAGES["zh" if language.startswith("zh") else "en"][code]
+    return localized_pack(MESSAGES, language)[code]
 
 
 def load_content(path: str, *, tenant: str, environment: str) -> dict:
@@ -150,7 +152,7 @@ def validate_content(body, *, tenant, environment):
             raise ValueError("consumer FAQ is not approved")
         if not isinstance(row.get("answers"), dict):
             raise ValueError("invalid consumer answers")
-        for language in ("zh", "en"):
+        for language in COMPOSED_LANGUAGES:
             answer = row["answers"].get(language)
             if not isinstance(answer, str) or not answer.strip() or len(answer) > 8000:
                 raise ValueError("invalid consumer answer")
@@ -163,7 +165,7 @@ def validate_content(body, *, tenant, environment):
         for field in ("knowledge_base_id", "document_id", "backend_id", "title"):
             if not isinstance(item.get(field), str) or not item[field].strip() or len(item[field]) > 256:
                 raise ValueError("invalid consumer media identity")
-        if item.get("language", "any") not in {"any", "zh", "en"}:
+        if item.get("language", "any") not in {"any", *COMPOSED_LANGUAGES}:
             raise ValueError("invalid consumer media language")
         allowed = {"image": ALLOWED_IMAGE_TYPES, "video": ALLOWED_VIDEO_TYPES}.get(item.get("kind"), ())
         if item.get("mime_type") not in allowed or not re.fullmatch(r"[A-Z]+-\d{3}", key):
@@ -328,7 +330,7 @@ def select_context(runtime, caller, binding, query, language, qa_id):
             candidates[key] = {
                 "faq_id": key,
                 "title": row.get("title", ""),
-                "answer": row["answers"]["zh" if language.startswith("zh") else "en"],
+                "answer": row["answers"][rendering_language(row["answers"], language)],
                 "reference_id": chunk.reference_id,
                 "media": [
                     runtime.media_signer.issue(
@@ -347,7 +349,8 @@ def select_context(runtime, caller, binding, query, language, qa_id):
                     for media_id in row.get("media_ids", [])
                     if (item := content.get("media", {})[media_id])["knowledge_base_id"]
                     in binding.knowledge_base_ids
-                    and item.get("language", "any") in {"any", "zh" if language.startswith("zh") else "en"}
+                    and item.get("language", "any")
+                    in {"any", rendering_language(COMPOSED_LANGUAGES, language)}
                 ],
             }
     status = "found" if candidates else "not_found" if result.status.value == "found" else result.status.value
@@ -355,16 +358,12 @@ def select_context(runtime, caller, binding, query, language, qa_id):
 
 
 def live_answer(snapshot, language, *, localized=True, pack=None):
-    if not localized:
-        language = (
-            ("zh" if language.startswith("zh") else "en")
-            if snapshot.get("source") == "cpms.orderDetail"
-            else (language if language in {"zh", "zh-Hant"} else "en")
-        )
+    # 「不本地化 ⇒ 组合面实际能渲染哪门语言」由各渲染面按自己的词表与清单上
+    # 声明的 fallback 回答（`rendering_language`）——这里不再手写折叠集合。
     if snapshot.get("source") == "cpms.orderDetail":
         from aiops_diagnostics.consumer.consumer_billing import billing_answer
 
-        return billing_answer(snapshot, language, pack=pack)
+        return billing_answer(snapshot, language, localized=localized, pack=pack)
     from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
     return status_answer(snapshot, language, localized=localized, pack=pack)

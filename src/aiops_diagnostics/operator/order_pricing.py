@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+from aiops_diagnostics.common.i18n import language_spec
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused
 from aiops_diagnostics.operator.order_analysis import number, shown
 
@@ -120,7 +121,9 @@ def independent_period_check(template, detail, zh):
 
 
 def historical_report(snapshot, detail, language):
-    zh = language.startswith("zh")
+    # 「这门语言是不是中文家族」读清单上声明的 `is_chinese`，未登记语种回落默认 zh。
+    spec = language_spec(language)
+    zh = spec.is_chinese if spec is not None else True
     if snapshot.get("missing") or not snapshot.get("feeTemplate"):
         return (
             "历史计费快照缺失，不能使用当前站点价替代。"

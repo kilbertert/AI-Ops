@@ -19,7 +19,7 @@ from __future__ import annotations
 from string import Formatter
 from typing import Any
 
-from aiops_diagnostics.consumer.consumer_plain import WORDS
+from aiops_diagnostics.consumer.consumer_plain import words
 
 #: 一条文案的上限。文案是短句与列表项，不是段落；放宽到几千字会让一条错误配置
 #: 直接把答复撑成没人读的长文，而发布校验是唯一能拦住它的地方。
@@ -45,10 +45,8 @@ def _fields(template: str) -> set[str]:
 
 
 def bundled(language: str) -> dict[str, str]:
-    """内置文案（代码里的默认）。未知语种按 `consumer_plain` 的既有降级取英文。"""
-    if language in WORDS:
-        return WORDS[language]
-    return WORDS["zh-Hant"] if language.startswith("zh") else WORDS["en"]
+    """内置文案（代码里的默认）。未知语种的回退方向由 `i18n.localized_pack` 统一回答。"""
+    return words(language)
 
 
 def validate(bundle: Any) -> dict[str, dict[str, str]]:

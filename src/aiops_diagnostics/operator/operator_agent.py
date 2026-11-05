@@ -5,6 +5,7 @@ import re
 from decimal import Decimal
 from importlib.resources import files
 
+from aiops_diagnostics.common.i18n import localized_pack
 from aiops_diagnostics.consumer.consumer_time import readable_time
 from aiops_diagnostics.operator import order_analysis, order_billing, order_pricing
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused
@@ -75,12 +76,12 @@ def analysis(evidence, section):
     )
 
 
-def render(answer, evidence):
-    if not isinstance(answer, str) or not 0 < len(answer.strip()) <= 12000:
-        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
-
-    text = answer.strip()
-    labels = {
+#: `render` 追加的数据来源尾段（标题 + 工具标签）。这张表覆盖中文与英文行；
+#: 缺行的语种按清单声明的 `fallback` 读英文（`localized_pack`），
+#: 不再像旧版那样把中文括号段拼进非中文答复（#1371 的删除测试）。
+_SOURCE_LABELS = {
+    "zh": {
+        "heading": "【本轮数据来源】",
         "cpms_order_detail": "订单详情",
         "cpms_charging_samples": "充电监测样本",
         "cpms_order_tariff": "订单历史计费模板",
@@ -90,8 +91,39 @@ def render(answer, evidence):
         "cpms_charging_timeline": "充电枪时序遥测",
         "cpms_site_search": "可见站点查询",
         "cpms_station_plan": "未来充电费用方案",
-    }
-    sources = [f"- {labels.get(t, t)} · {readable_time(evidence[t]['observed_at'])}" for t in evidence]
+    },
+    "zh-Hant": {
+        "heading": "【本輪資料來源】",
+        "cpms_order_detail": "訂單詳情",
+        "cpms_charging_samples": "充電監測樣本",
+        "cpms_order_tariff": "訂單歷史計費模板",
+        "cpms_order_billing": "訂單帳務與優惠",
+        "cpms_order_amount_check": "訂單金額核驗",
+        "cpms_order_process_stats": "充電過程統計",
+        "cpms_site_search": "可見站點查詢",
+        "cpms_station_plan": "未來充電費用方案",
+    },
+    "en": {
+        "heading": "Sources used for this answer",
+        "cpms_order_detail": "Order details",
+        "cpms_charging_samples": "Charging telemetry samples",
+        "cpms_order_tariff": "Historical billing template",
+        "cpms_order_billing": "Order billing and discounts",
+        "cpms_order_amount_check": "Order amount verification",
+        "cpms_order_process_stats": "Charging process statistics",
+        "cpms_site_search": "Visible site lookup",
+        "cpms_station_plan": "Future charging cost plan",
+    },
+}
+
+
+def render(answer, evidence, language="zh"):
+    if not isinstance(answer, str) or not 0 < len(answer.strip()) <= 12000:
+        raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+
+    text = answer.strip()
+    pack = localized_pack(_SOURCE_LABELS, language)
+    sources = [f"- {pack.get(t, t)} · {readable_time(evidence[t]['observed_at'])}" for t in evidence]
     if sources:
-        text += "\n\n【本轮数据来源】\n" + "\n".join(sources)
+        text += "\n\n" + pack["heading"] + "\n" + "\n".join(sources)
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}

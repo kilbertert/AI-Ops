@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+from aiops_diagnostics.common.i18n import localized_pack
 from aiops_diagnostics.consumer.consumer_time import readable_time
 
 #: 内部接口标识 → 读者能核对的来源名。与管家报告 `_SOURCE_LABELS` 同一套说法：
@@ -148,14 +149,13 @@ WORDS: dict[str, dict[str, str]] = {
 def words(language: str, pack: dict[str, str] | None = None) -> dict[str, str]:
     """取词表。`pack` 是租户文案包（已合并内置默认），None 就用内置文案。
 
-    未收录的语种退回英文 —— 与既有实现同样的降级方向。降级发生在**内置**层，
+    未收录语种按清单上声明的 `fallback` 回退（`i18n.localized_pack`）——
+    非中文缺行读英文，与既有降级同向。降级发生在**内置**层，
     不在租户层：租户只发布了中文时，德语仍然拿内置德语，而不是中文。
     """
     if pack is not None:
         return pack
-    if language in WORDS:
-        return WORDS[language]
-    return WORDS["zh-Hant"] if language.startswith("zh") else WORDS["en"]
+    return localized_pack(WORDS, language)
 
 
 def source_label(language: str, source: object, pack: dict[str, str] | None = None) -> str:

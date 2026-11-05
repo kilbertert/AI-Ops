@@ -29,17 +29,29 @@ class LanguageSpec:
     What remains is what is genuinely needed today:
 
     - the tag and its prompt-usable name (the old ``LANGUAGE_NAMES`` table);
-    - ``is_chinese``, which the leak guard's language set is derived from.
+    - ``is_chinese``, which the leak guard's language set is derived from;
+    - ``fallback``, which every copy-table reader shares.
 
     ``is_chinese`` is a property of the LANGUAGE, never derived from "is it the
     default". Those coincided while the default was the only Chinese language; a
     second Chinese script (``zh-Hant``) breaks the identity, and the guard would
     then judge every legitimate Traditional answer a Chinese leak.
+
+    ``fallback`` is the tag a copy table reads when this language has no row of
+    its own. It used to be answered per reader — one table fell to ``zh``,
+    another to ``en``, a third raised ``KeyError`` — so the same missing row
+    produced three different answers (#1371). One field, read by
+    ``rendering_language``, is the single answer now. The directions: a Chinese
+    script reads ``zh`` (the authority the catalogs are written in); any other
+    missing row reads ``en`` — readable to a non-Chinese reader, where ``zh``
+    would be a guaranteed leak-guard failure. ``en`` itself falls to the
+    authority.
     """
 
     tag: str
     name: str  # English display name, used in model prompts
     is_chinese: bool
+    fallback: str  # tag to read when this language has no row in a copy table
 
 
 # THE inventory. Adding a language is one entry here plus whatever its data
@@ -51,17 +63,17 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
     # is the point of making it a declared property rather than deriving it from
     # "is it the default": the output guard must not judge a legitimate
     # Traditional answer a Chinese leak (#527's D-6, consumed here).
-    LanguageSpec("zh", "Simplified Chinese", is_chinese=True),
-    LanguageSpec("zh-Hant", "Traditional Chinese", is_chinese=True),
-    LanguageSpec("en", "English", is_chinese=False),
-    LanguageSpec("de", "German", is_chinese=False),
-    LanguageSpec("fr", "French", is_chinese=False),
-    LanguageSpec("es", "Spanish", is_chinese=False),
-    LanguageSpec("pt", "Portuguese", is_chinese=False),
-    LanguageSpec("vi", "Vietnamese", is_chinese=False),
-    LanguageSpec("mn", "Mongolian", is_chinese=False),
-    LanguageSpec("th", "Thai", is_chinese=False),
-    LanguageSpec("km", "Khmer", is_chinese=False),
+    LanguageSpec("zh", "Simplified Chinese", is_chinese=True, fallback="zh"),
+    LanguageSpec("zh-Hant", "Traditional Chinese", is_chinese=True, fallback="zh"),
+    LanguageSpec("en", "English", is_chinese=False, fallback="zh"),
+    LanguageSpec("de", "German", is_chinese=False, fallback="en"),
+    LanguageSpec("fr", "French", is_chinese=False, fallback="en"),
+    LanguageSpec("es", "Spanish", is_chinese=False, fallback="en"),
+    LanguageSpec("pt", "Portuguese", is_chinese=False, fallback="en"),
+    LanguageSpec("vi", "Vietnamese", is_chinese=False, fallback="en"),
+    LanguageSpec("mn", "Mongolian", is_chinese=False, fallback="en"),
+    LanguageSpec("th", "Thai", is_chinese=False, fallback="en"),
+    LanguageSpec("km", "Khmer", is_chinese=False, fallback="en"),
 )
 
 # Must stay aligned with the i18n catalog shipped in faq_catalog.json (#200).
@@ -109,7 +121,7 @@ FREE_TEXT_UNAVAILABLE_MESSAGES: dict[str, str] = {
 
 def free_text_unavailable_message(language: str) -> str:
     """The read-only language's own words for "this entry cannot take this"."""
-    return FREE_TEXT_UNAVAILABLE_MESSAGES.get(language) or FREE_TEXT_UNAVAILABLE_MESSAGES[DEFAULT_LANGUAGE]
+    return localized_pack(FREE_TEXT_UNAVAILABLE_MESSAGES, language)
 
 
 def effective_language(language: str | None) -> str:
@@ -122,6 +134,40 @@ def effective_language(language: str | None) -> str:
 def language_spec(language: str) -> LanguageSpec | None:
     """The declared spec for ``language``, or ``None`` when it is unsupported."""
     return _BY_TAG.get(language)
+
+
+def fallback_language(language: str) -> str:
+    """The tag a copy table reads when ``language`` has no row of its own.
+
+    One declared direction per registered language (``LanguageSpec.fallback``);
+    an unregistered tag falls to :data:`DEFAULT_LANGUAGE`, the same answer
+    ``resolve_language`` gives.
+    """
+    spec = _BY_TAG.get(language)
+    if spec is None:
+        return DEFAULT_LANGUAGE
+    return spec.fallback
+
+
+def rendering_language(table, language: str) -> str:
+    """The tag whose row ``table`` can actually serve for ``language``.
+
+    First of ``language`` itself, its declared ``fallback``, and
+    :data:`DEFAULT_LANGUAGE` that exists as a key in ``table``. Works on any
+    container — dict, set, or tuple. A ``KeyError`` from a table that lacks all
+    three is the honest surfacing of a broken contract, not a fallback.
+    """
+    if language in table:
+        return language
+    candidate = fallback_language(language)
+    if candidate in table:
+        return candidate
+    return DEFAULT_LANGUAGE
+
+
+def localized_pack(table, language: str):
+    """``table[rendering_language(table, language)]`` — every reader's one rule."""
+    return table[rendering_language(table, language)]
 
 
 def non_chinese_languages(specs: tuple[LanguageSpec, ...]) -> frozenset[str]:
@@ -612,7 +658,7 @@ ZERO_ORDER_REMINDER_MESSAGES: dict[str, str] = {
 
 def zero_order_reminder(language: str) -> str:
     """The closing hint the zero-order answer must end with, in ``language``."""
-    return ZERO_ORDER_REMINDER_MESSAGES.get(language) or ZERO_ORDER_REMINDER_MESSAGES[DEFAULT_LANGUAGE]
+    return localized_pack(ZERO_ORDER_REMINDER_MESSAGES, language)
 
 
 # A diagnosis that did NOT produce a conclusion, stated for the USER.
@@ -730,7 +776,7 @@ DIAGNOSIS_FAILURE_MESSAGES: dict[str, dict[str, str]] = {
 
 def diagnosis_failure_message(language: str, key: str) -> str:
     """Bounded, localized text for a diagnosis that produced no conclusion."""
-    pack = DIAGNOSIS_FAILURE_MESSAGES.get(language) or DIAGNOSIS_FAILURE_MESSAGES[DEFAULT_LANGUAGE]
+    pack = localized_pack(DIAGNOSIS_FAILURE_MESSAGES, language)
     return pack.get(key) or DIAGNOSIS_FAILURE_MESSAGES[DEFAULT_LANGUAGE]["incomplete"]
 
 
@@ -933,7 +979,7 @@ _DIAGNOSIS_ERROR_KEYS: dict[str, str] = {
 
 def diagnosis_error_message(language: str, error_code: str | None) -> str:
     """The bounded, localized `error.message` for a diagnosis failure."""
-    pack = DIAGNOSIS_ERROR_MESSAGES.get(language) or DIAGNOSIS_ERROR_MESSAGES[DEFAULT_LANGUAGE]
+    pack = localized_pack(DIAGNOSIS_ERROR_MESSAGES, language)
     return pack[_DIAGNOSIS_ERROR_KEYS.get(error_code or "", "generic")]
 
 
@@ -943,7 +989,7 @@ def clarification_message(language: str, key: str) -> str:
     A missing key must never yield an empty message: the client renders this
     string verbatim, so an empty one would leave the user with a blank reply.
     """
-    pack = CLARIFICATION_MESSAGES.get(language) or CLARIFICATION_MESSAGES[DEFAULT_LANGUAGE]
+    pack = localized_pack(CLARIFICATION_MESSAGES, language)
     resolved = pack.get(key) or CLARIFICATION_MESSAGES[DEFAULT_LANGUAGE].get(key)
     if resolved:
         return resolved
