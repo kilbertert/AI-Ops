@@ -1,6 +1,6 @@
 # 管家端前端与测试交接
 
-更新：2026-11-04。原管家H5与Java节点已经部署并有真实链路验收；
+更新：2026-11-05。原管家H5与Java节点已经部署并有真实链路验收；
 后来首页新增入口撤回，已有聊天页仍可由URL访问。见
 [退役与页面验收](../validation/2026-10-29-runtime-retirement-live.md)、
 [入口撤回](../validation/2026-11-03-operator-h5-entry-withdrawal.md)及
@@ -26,7 +26,9 @@ Content-Type: application/json
 
 选单列表必须使用公司当前管家权限端点，不从消费者getOrderUserPage推导管理范围。
 收到202后只轮询本次qa_id；completed才渲染结果，failed/cancelled/retracted等终态保留真实提示，不自动重发。
-明确选择订单后交Java的cpms_order_detail/cpms_charging_samples；监测为空须提示缺证，不能推断设备正常。
+order_no是可选的明确选单；无单问题也进入Java的SOP模型循环，工具按发布清单开放。
+需要订单事实时才提议并授权对象，监测为空须提示缺证，不能推断设备正常。
+首次POST可自动创建conversation_id，后续普通提问复用该ID，新对话清空；历史不能替代当前权限和实时取数。
 
 ## 页面与配置
 
@@ -38,7 +40,7 @@ Dify试用使用运营个人会话与独立凭据交换，不等同App密码登�
 ## 发布后必须补的验收
 
 1. 确认公司构建修订、正式URL和实际静态文件一致，正常登录后能进入聊天页（2026-11-03 起首页不再有入口，按 `/aiPackage/pages/chat/chat` 直达）。
-2. 选择权限范围内历史订单，POST→真Java两工具→GET→页面报告，同一QA与快照对应。
+2. 选择权限范围内历史订单，POST→Java按SOP选工具→GET→页面回答，同一QA与快照对应。
 3. 另一主体/越权单、取消/撤回/过期拒交付，不把数据源缺失报成正常。
 4. 实际Dify保存/试用/发布/全关/恢复改变节点工具权限；再核旧provider引用及退役条件。
 

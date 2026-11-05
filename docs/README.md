@@ -1,7 +1,7 @@
 # 文档导航与维护范围
 
-更新：2026-11-04（北京时间）。阶段状态见[交付索引](agents/current-delivery-state.md)，
-本次整理见[收尾记录](validation/2026-11-04-stage-closeout.md)，开放任务见[台账](reviews/2026-11-04-stage-closeout.md)。
+更新：2026-11-05（北京时间）。阶段状态见[交付索引](agents/current-delivery-state.md)，
+本次整理见[收尾记录](validation/2026-11-05-architecture-stage-closeout.md)，开放任务见[台账](reviews/2026-11-05-architecture-stage-closeout.md)。
 文档描述已验证的能力和证据边界，不能把“已实现”“已部署”“测试方已验收”互相替代。
 
 ## 从哪里开始
@@ -15,7 +15,7 @@
 | 仓库目录、旧执行器清理与迁移顺序 | [现行目录规则](architecture/repository-layout.md#现行目录规则)；迁移已完成，旧调查仅解释历史 |
 | 运行版本、启用状态和证据 | [当前交付状态](agents/current-delivery-state.md)；按证据区分已合并、已部署和已验收 |
 | C端：知识上传、选库、多语言、实时查询 | [WF01手册](agents/consumer-wf01/README.md) |
-| 管家：公司身份、两项CPMS工具与节点 | [管家手册](agents/operator-cpms/README.md) |
+| 管家：公司身份、SOP、受控CPMS工具与节点 | [管家手册](agents/operator-cpms/README.md) |
 | 前端：C端和管家接线 | [C端交接](agents/consumer-wf01/app-handoff.md)、[管家交接](agents/frontend-operator-handoff.md) |
 | 部署、升级、回退 | [Gateway](gateway.md)、[节点](../deploy/node-runtime/README.md)、[Dify](../deploy/dify-36/README.md)、[WF01迁移](agents/consumer-wf01/live-knowledge-deploy.md) |
 | 本地服务与退役边界 | [快速上手](快速上手.md)、[旧执行器退役](runtime-retirement.md) |

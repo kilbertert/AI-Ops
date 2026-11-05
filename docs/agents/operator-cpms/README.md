@@ -1,6 +1,6 @@
 # 管家 CPMS 工具实施
 
-更新：2026-11-05。新合同及配套迁移以本页末尾“统一自然语言与SOP模型循环”为准；
+更新：2026-11-05。新合同及配套迁移以[系统架构的管家链](../../system-architecture.md#管家链sop决定取证步骤工具承担计算)为准；
 已部署与原页面结果见[本轮验收](../../validation/2026-11-05-operator-agent-live.md)。
 以下首片和JSON合同描述保留历史取舍，不再指导新应用发布。
 节点、原管家H5与Dify原生预览已有真实链路证据，
@@ -8,8 +8,9 @@
 [站点清单验收](../../validation/2026-11-03-site-delivery-production-receipt.md)。
 首页新增入口已撤回，原聊天页仍可访问；不是“整页未部署”或“路由仍撤回”。
 
-JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、完整提示词生命周期、
-双租户和语义准确率仍待验，统一见[当前交付](../current-delivery-state.md)。
+最终JSON与字段占位符协议已退役，现役SOP工具循环、针对性回答和追问已跑原入口；
+第二租户失效路由已恢复。业务拒绝回喂及运行中换版归因也有后继补验，
+见[当前交付](../current-delivery-state.md)。完整权限/生命周期矩阵和故障准确率仍待补证。
 模型参数排查见[手册](../dify-model-parameters.md)，不能用普通模型回复代替订单工具验收。
 
 站点查询在取证前传`address_terms`数组，最终答复复用同一组关键词；节点代理和直接查询
@@ -33,7 +34,7 @@ JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、�
 核对步骤和回归见[输出契约QA](output-contract-qa.md#额度失败回归2026-11-04)。
 本次候选修复的部署与实测状态见[验收记录](../../validation/2026-11-04-operator-failure-propagation.md)。
 
-## 首片 API 契约
+## 首片 API 契约（历史字段与限制参考）
 
 **报告必须回答用户问的那一点。** 旧答案的 `direct_answer` 曾为必填非空，且渲染在最前；
 没有它，任何提问都只能被概述一遍 —— 2026-10-29 反馈的「两个问题同一份报告」就是
@@ -72,7 +73,8 @@ JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、�
 
 ## 配置与复跑
 
-沿用 `CHAT_NODE_TARGETS_FILE`，管家行增加 `entry: operator`、`cpms_base_url`（公司 CPMS HTTPS 基址）、`proxy_base_url`（节点可达的 Gateway HTTPS 基址）。节点清单模板的工具集合以 `operator_tools.json` 为唯一声明（节点经 `-Daiops.node.tools-file` 读同一份文件）；不在模板或 Dify 配置中填写公司令牌。业务入口为原 `POST/GET /v1/assistant/questions`，必须是 operator 身份与显式订单。
+沿用 `CHAT_NODE_TARGETS_FILE`，管家行增加 `entry: operator`、`cpms_base_url`（公司 CPMS HTTPS 基址）、`proxy_base_url`（节点可达的 Gateway HTTPS 基址）。节点清单模板的工具集合以 `operator_tools.json` 为唯一声明（节点经 `-Daiops.node.tools-file` 读同一份文件）；不在模板或 Dify 配置中填写公司令牌。业务入口为原 `POST/GET /v1/assistant/questions`，必须是operator身份；新合同允许无订单咨询，
+需要订单事实时模型提议对象，系统授权后才读取。下述首片的显式订单要求不适用于所有新问题。
 
 `cpms_charging_timeline` 另需 `AIOPS_GATEWAY_OPERATOR_TSDATA_URL` 指向公司 tsdata 查询门面（`/tdadmin/data/query` 前缀）；空值时该工具按依赖不可用拒绝，不静默退化。
 

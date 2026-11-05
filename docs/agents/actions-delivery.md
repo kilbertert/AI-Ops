@@ -32,12 +32,12 @@ flowchart LR
 | Spec Tree | Ready PR、main、手动：规格 lint | 辅助；main 检查保留以暴露已合并规格漂移 |
 | Sync Open PRs | main 更新、每日只报告；手动指定一个 PR | 只更新明确指定、同仓库所有者的 PR |
 | CD | main 命中 src、部署入口、依赖声明等路径；手动只允许 main | 仅 Gateway；deploy-41 与 release-notes 分别报告 |
-| CD Watch | 每小时、手动 | 依据部署 job 结果报警；发布说明红灯不冒充部署失败 |
+| CD Watch | 每5分钟、手动（平台可能延迟） | 依据部署 job 结果报警；发布说明红灯不冒充部署失败 |
 | Agent Implement / PRD / PR、Promote Queued | issue/PR 标签或手动授权 | 开发执行与依赖推进，不是普通提交必须等待的检查 |
 | Agent Review、Update Branch、Architecture Review | 既有显式标签 | 按需 agent 工作；本轮不增加本地 reviewer 或必需模型检查 |
 | Sandbox image | 沙箱输入变更或手动 | AFK 的运行镜像，不是 Gateway 生产镜像 |
 
-GitLab mirror 已随最新主线纳入：按其 push 触发同步分支和标签至 GitLab，本轮不改其配置。
+GitLab mirror按push、delete及手动触发同步分支和标签；独立连接失败不代表Gateway部署失败。
 镜像同步成功不能替代上述 CI、合并或部署结果。
 
 ## 同步分支：自动报告，明确指定才更新
@@ -52,6 +52,8 @@ main 更新与每日任务只报告开放 PR 状态。交付负责人需要同�
 DIRTY 由原作者解决冲突，不自动加标签启动付费修复 agent。
 
 普通开发 PR 不会因别人合并而反复更新；作者在交付前同步最新 main 并重跑必需 CI。
+本地合并主线也受逐提交ADR检查：只同步既有设计时，在合并提交正文写明真实的`No-ADR:`理由；
+已推送提交不能靠后续提交补写它的说明，也不能通过强推或改检查绕过。
 平台 API 只提供 head 的原子检查；assignee/标签在读取之后变化仍有窄竞争窗。
 明确授权同步后的命令为 `gh workflow run sync-open-prs.yml --ref main -f pr_number=<PR>`。
 这会更新指定远端分支；只查状态时用下面的只读命令。
