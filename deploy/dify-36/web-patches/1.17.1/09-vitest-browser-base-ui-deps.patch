@@ -2,7 +2,7 @@ diff --git a/web/vite.config.ts b/web/vite.config.ts
 index 43b2b7a3..d1b496c0 100644
 --- a/web/vite.config.ts
 +++ b/web/vite.config.ts
-@@ -108,6 +108,15 @@ export default defineConfig(({ command, mode, isPreview }) => {
+@@ -108,6 +108,16 @@ export default defineConfig(({ command, mode, isPreview }) => {
                '@base-ui/react/fieldset',
                '@base-ui/react/number-field',
                '@base-ui/react/slider',
