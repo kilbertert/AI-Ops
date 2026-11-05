@@ -31,4 +31,7 @@ hosting service closes the referenced issues only when that PR is merged.
 
 Once you have merged and verified everything, output
 `<promise>COMPLETE</promise>`. If a blocker needs a human decision, output
-`<promise>BLOCKED</promise>`.
+`<promise>BLOCKED</promise>`. The verdict marker must occupy the LAST line of
+your output on its own — markers quoted in prose or code samples do not
+count as the verdict, and output without a standalone final verdict line is
+treated as no verdict.

@@ -81,21 +81,28 @@ export function isPrdIssue(title: string, body: string): boolean {
 }
 
 /**
- * The verdict a run actually emitted — parsed, not trusted.
+ * The verdict a run actually emitted — parsed from the END of the output.
  *
  * The SDK's `completionSignal` is `signals.find(sig => output.includes(sig))`:
  * the FIRST configured marker found anywhere in the transcript wins, so a
  * report quoting `<promise>COMPLETE</promise>` in prose satisfies the gate
  * even when the emitted verdict was BLOCKED (measured on an adversarial
- * report). In-band markers cannot be made unambiguous by prompt wording —
- * the check is the last line: every marker in the output must agree (one
- * distinct value), or the run has no verdict.
+ * report). Counting markers anywhere has the same hole in miniature: a
+ * single inline citation satisfies it too. The verdict therefore must be
+ * positional — a marker line counts only when it occupies a whole line,
+ * and the run has a verdict only when the LAST non-empty line is such a
+ * marker and every standalone marker line agrees on it. Prose references
+ * and code samples never count; in-band ambiguity beyond that cannot be
+ * distinguished from a real verdict, which is why the contract also asks
+ * the agent for the marker-as-last-line shape.
  */
 export function strictSignal(stdout: string): string | undefined {
-  const seen = new Set(
-    [...stdout.matchAll(/<promise>(COMPLETE|BLOCKED)<\/promise>/g)].map((m) => m[1]),
-  );
-  return seen.size === 1 ? [...seen][0] : undefined;
+  const standalone = /^\s*<promise>(COMPLETE|BLOCKED)<\/promise>\s*$/;
+  const lines = stdout.split("\n");
+  const seen = new Set(lines.map((l) => standalone.exec(l)?.[1]).filter((v) => v !== undefined));
+  if (seen.size !== 1) return undefined;
+  const lastLine = lines.findLast((l) => l.trim().length > 0) ?? "";
+  return standalone.test(lastLine) ? [...seen][0] : undefined;
 }
 
 type ReadyIssue = { number: number; title: string; body: string };
@@ -299,7 +306,15 @@ async function main(): Promise<void> {
               const issueBody = execFileSync("gh", ["issue", "view", String(issue.number)], {
                 encoding: "utf8",
               });
-              const reviewBranch = `review/${issue.number}-${iteration}`;
+              const expectedSha = execFileSync("git", ["rev-parse", issue.branch], {
+                encoding: "utf8",
+              }).trim();
+              // Unique per attempt: the SDK checks an EXISTING ref out as-is
+              // and ignores baseBranch, so a deterministic `review/N-1` left
+              // behind by a crashed run would make the next review audit
+              // stale commits — and the cleanup would delete a ref this run
+              // never created. (External re-review, #1397.)
+              const reviewBranch = `review/${issue.number}-${Date.now()}`;
               const reviewSandbox = await createSandbox({
                 ...profileConfig(false),
                 branch: reviewBranch,
@@ -312,6 +327,33 @@ async function main(): Promise<void> {
               });
               let review: RunResult | undefined;
               try {
+                // Prove the sandbox's ref is the candidate tip — checking the
+                // branch that was injected, not just the name we asked for.
+                const reviewHead = execFileSync("git", ["rev-parse", reviewBranch], {
+                  encoding: "utf8",
+                }).trim();
+                if (reviewHead !== expectedSha) {
+                  throw new Error(
+                    `Review #${issue.number} sandbox is at ${reviewHead}, expected candidate tip ${expectedSha}`,
+                  );
+                }
+                // The credentialless identity is asserted against the
+                // container's ACTUAL env, not the profile's return value:
+                // `.sandcastle/.env` keys reach the container via resolvedEnv
+                // even when the profile passes nothing. The profile pins the
+                // keys EMPTY for a credentialless run, so "present but empty"
+                // is expected — what must not appear is a non-empty value.
+                // The probe echoes a fixed sentinel: a leaked secret can
+                // never reach stdout or a thrown message.
+                const probe = await reviewSandbox.exec(
+                  '[ -n "${GH_TOKEN}${GITHUB_TOKEN}" ] && echo CREDENTIAL_PRESENT || echo clean',
+                );
+                if (probe.stdout.trim() !== "clean") {
+                  throw new Error(
+                    `Review #${issue.number} sandbox carries a non-empty GitHub credential (env assertion)`,
+                  );
+                }
+
                 review = await withTimeout(
                   Number(process.env.AFK_RUN_TIMEOUT ?? 3600) * 1000,
                   `Review #${issue.number}`,
