@@ -1,5 +1,7 @@
 name: Agent Implement (PR)
 
+run-name: Agent Implement (PR) / pr-${{ github.event.pull_request.number }}
+
 on:
   pull_request_target:
     types: [labeled]
@@ -29,7 +31,23 @@ jobs:
       GH_REPO: ${{ github.repository }}
 
     steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: controller
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.AFK_AGENT_READ_TOKEN }}
+
+      - name: Check current PR before consuming the agent slot
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node controller/.sandcastle/queue/pr-current.mjs
+
       - name: Pre-flight - refuse if PR is closed or merged
+        if: steps.current.outputs.proceed == 'true'
         id: state
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -43,7 +61,7 @@ jobs:
           fi
 
       - name: Pre-flight - refuse if there is nothing to act on
-        if: steps.state.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true'
         id: inputs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -68,7 +86,7 @@ jobs:
           fi
 
       - name: Transition labels - remove trigger and blocked, add in-progress
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -90,8 +108,9 @@ jobs:
       # AGENT_PAT, and like that step it READS BACK rather than trusting a
       # successful call: a draft that silently did not happen means the pushes
       # below cost the suite again, and nothing would say so.
+
       - name: Mark the pull request draft while it is being edited
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true'
         env:
           AGENT_PAT: ${{ secrets.AGENT_PAT }}
         run: |
@@ -111,18 +130,8 @@ jobs:
           fi
           echo "PR #${PR_NUMBER} is a draft while this job edits it."
 
-      - name: Checkout trusted controller
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          path: controller
-          fetch-depth: 0
-          persist-credentials: false
-          token: ${{ secrets.AFK_AGENT_READ_TOKEN }}
-
       - name: Checkout candidate PR head
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -132,7 +141,7 @@ jobs:
           token: ${{ secrets.AFK_AGENT_READ_TOKEN }}
 
       - name: Prepare candidate against current main
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true'
         working-directory: candidate
         run: |
           base_sha=$(git -C ../controller rev-parse HEAD)
@@ -140,7 +149,7 @@ jobs:
             prepare . "$BRANCH_HEAD_SHA" "$base_sha" "$BRANCH"
 
       - name: Setup Node.js 22
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -148,12 +157,12 @@ jobs:
           cache-dependency-path: controller/package-lock.json
 
       - name: Install trusted controller dependencies
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true'
         working-directory: controller
         run: npm ci
 
       - name: Run trusted implement controller against candidate
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true'
         id: implement
         working-directory: candidate
         env:
@@ -163,13 +172,20 @@ jobs:
           OUTPUT_DIR: ${{ runner.temp }}
         run: ../controller/node_modules/.bin/tsx ../controller/.sandcastle/implement-pr/implement-pr.ts
 
+      - name: Check current PR before delivery
+        id: deliver
+        if: steps.current.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node controller/.sandcastle/queue/pr-current.mjs
+
       - name: Verify candidate policy
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         working-directory: candidate
         run: AFK_ROOT="$PWD" node ../controller/.sandcastle/policy-check.mjs delivery
 
       - name: Capture trusted result bundle
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         id: result
         working-directory: candidate
         run: |
@@ -179,7 +195,7 @@ jobs:
           echo "changed=$(cat "${RUNNER_TEMP}/has_changes.txt")" >> "$GITHUB_OUTPUT"
 
       - name: Checkout clean delivery workspace
-        if: steps.result.outputs.changed == 'true'
+        if: steps.result.outputs.changed == 'true' && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -189,7 +205,7 @@ jobs:
           token: ${{ secrets.AFK_AGENT_READ_TOKEN }}
 
       - name: Import result into clean delivery workspace
-        if: steps.result.outputs.changed == 'true'
+        if: steps.result.outputs.changed == 'true' && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         working-directory: delivery
         env:
           AFK_READ_TOKEN: ${{ secrets.AFK_AGENT_READ_TOKEN }}
@@ -200,7 +216,7 @@ jobs:
           AFK_ROOT="$PWD" node ../controller/.sandcastle/policy-check.mjs delivery
 
       - name: Push result from clean delivery workspace
-        if: steps.result.outputs.changed == 'true'
+        if: steps.result.outputs.changed == 'true' && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         working-directory: delivery
         env:
           GH_TOKEN: ${{ secrets.AGENT_PAT }}
@@ -217,7 +233,7 @@ jobs:
           fi
 
       - name: Post thread replies
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && success()
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && success() && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPLIES: ${{ runner.temp }}/implement_thread_replies.json
@@ -238,7 +254,7 @@ jobs:
           done
 
       - name: Post new inline comments
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && success()
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && success() && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           INLINE: ${{ runner.temp }}/implement_new_inline_comments.json
@@ -261,7 +277,7 @@ jobs:
           done
 
       - name: Post top-level PR comments
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && success()
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && success() && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TOP: ${{ runner.temp }}/implement_top_level_comments.json
@@ -273,7 +289,7 @@ jobs:
           done
 
       - name: Mark blocked on failure
-        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && failure()
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && failure() && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed != 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -295,7 +311,7 @@ jobs:
           )"
 
       - name: Always remove in-progress label
-        if: always() && steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: always() && steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr edit "$PR_NUMBER" --remove-label "agent:in-progress" || true
@@ -305,8 +321,9 @@ jobs:
       # merged, and the human who would notice is not watching for that.
       # Marking it ready is also what triggers the check suite on the new content,
       # so this step is the point at which CI becomes worth running (ADR 0045).
+
       - name: Mark the pull request ready again
-        if: always() && steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        if: always() && steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true' && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed != 'false'
         env:
           AGENT_PAT: ${{ secrets.AGENT_PAT }}
         run: |

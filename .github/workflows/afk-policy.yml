@@ -40,6 +40,8 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npx --no-install tsx .sandcastle/review-boundary.check.ts
+      - name: Verify runner cancellation signal
+        run: npx --no-install tsx .sandcastle/queue/cancellation.check.ts
       - name: Verify sandbox network isolation
         run: npx --no-install tsx .sandcastle/profile-network.check.ts
       - name: Verify sandbox MCP config

@@ -1,5 +1,7 @@
 name: Agent Review
 
+run-name: Agent Review / pr-${{ github.event.pull_request.number }}
+
 on:
   # pull_request_target keeps the controller on trusted default-branch code.
   # Candidate code is checked out separately and runs only inside Sandcastle's
@@ -30,14 +32,6 @@ jobs:
       GH_REPO: ${{ github.repository }}
 
     steps:
-      - name: Transition labels - remove trigger and blocked, add in-progress
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr edit "$PR_NUMBER" --remove-label "agent:review" || true
-          gh pr edit "$PR_NUMBER" --remove-label "agent:blocked" || true
-          gh pr edit "$PR_NUMBER" --add-label "agent:in-progress"
-
       - name: Checkout trusted controller
         uses: actions/checkout@v4
         with:
@@ -47,7 +41,23 @@ jobs:
           persist-credentials: false
           token: ${{ secrets.AFK_AGENT_READ_TOKEN }}
 
+      - name: Check current PR before consuming the agent slot
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node controller/.sandcastle/queue/pr-current.mjs
+
+      - name: Transition labels - remove trigger and blocked, add in-progress
+        if: steps.current.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit "$PR_NUMBER" --remove-label "agent:review" || true
+          gh pr edit "$PR_NUMBER" --remove-label "agent:blocked" || true
+          gh pr edit "$PR_NUMBER" --add-label "agent:in-progress"
+
       - name: Checkout candidate PR head
+        if: steps.current.outputs.proceed == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -57,6 +67,7 @@ jobs:
           token: ${{ secrets.AFK_AGENT_READ_TOKEN }}
 
       - name: Prepare candidate against current main
+        if: steps.current.outputs.proceed == 'true'
         working-directory: candidate
         run: |
           base_sha=$(git -C ../controller rev-parse HEAD)
@@ -64,6 +75,7 @@ jobs:
             prepare . "$BRANCH_HEAD_SHA" "$base_sha" "$BRANCH"
 
       - name: Setup Node.js 22
+        if: steps.current.outputs.proceed == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -71,10 +83,12 @@ jobs:
           cache-dependency-path: controller/package-lock.json
 
       - name: Install trusted controller dependencies
+        if: steps.current.outputs.proceed == 'true'
         working-directory: controller
         run: npm ci
 
       - name: Run trusted review controller against candidate
+        if: steps.current.outputs.proceed == 'true'
         id: review
         working-directory: candidate
         env:
@@ -84,11 +98,20 @@ jobs:
           OUTPUT_DIR: ${{ runner.temp }}
         run: ../controller/node_modules/.bin/tsx ../controller/.sandcastle/review/review.ts
 
+      - name: Check current PR before delivery
+        id: deliver
+        if: steps.current.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node controller/.sandcastle/queue/pr-current.mjs
+
       - name: Verify candidate policy
+        if: steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         working-directory: candidate
         run: AFK_ROOT="$PWD" node ../controller/.sandcastle/policy-check.mjs delivery
 
       - name: Capture trusted result bundle
+        if: steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         id: result
         working-directory: candidate
         run: |
@@ -98,7 +121,7 @@ jobs:
           echo "changed=$(cat "${RUNNER_TEMP}/has_changes.txt")" >> "$GITHUB_OUTPUT"
 
       - name: Checkout clean delivery workspace
-        if: steps.result.outputs.changed == 'true'
+        if: steps.result.outputs.changed == 'true' && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
@@ -108,7 +131,7 @@ jobs:
           token: ${{ secrets.AFK_AGENT_READ_TOKEN }}
 
       - name: Import result into clean delivery workspace
-        if: steps.result.outputs.changed == 'true'
+        if: steps.result.outputs.changed == 'true' && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         working-directory: delivery
         env:
           AFK_READ_TOKEN: ${{ secrets.AFK_AGENT_READ_TOKEN }}
@@ -119,7 +142,7 @@ jobs:
           AFK_ROOT="$PWD" node ../controller/.sandcastle/policy-check.mjs delivery
 
       - name: Push result from clean delivery workspace
-        if: steps.result.outputs.changed == 'true'
+        if: steps.result.outputs.changed == 'true' && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         working-directory: delivery
         env:
           GH_TOKEN: ${{ secrets.AGENT_PAT }}
@@ -136,7 +159,7 @@ jobs:
           fi
 
       - name: Post PR review
-        if: success()
+        if: success() && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PAYLOAD: ${{ runner.temp }}/review_payload.json
@@ -147,7 +170,7 @@ jobs:
             --input "$PAYLOAD"
 
       - name: Mark PR ready for review
-        if: success()
+        if: success() && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         env:
           # AGENT_PAT, not GITHUB_TOKEN. `gh pr ready` calls the GraphQL
           # `markPullRequestReadyForReview`, and the workflow token is refused
@@ -179,7 +202,7 @@ jobs:
           echo "PR #${PR_NUMBER} is ready for review."
 
       - name: Post thread replies
-        if: success()
+        if: success() && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPLIES: ${{ runner.temp }}/replies.json
@@ -200,7 +223,7 @@ jobs:
           done
 
       - name: Mark blocked on failure
-        if: failure()
+        if: failure() && steps.current.outputs.proceed == 'true' && steps.deliver.outputs.proceed != 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -222,7 +245,7 @@ jobs:
           )"
 
       - name: Always remove in-progress label
-        if: always()
+        if: always() && steps.current.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr edit "$PR_NUMBER" --remove-label "agent:in-progress" || true
