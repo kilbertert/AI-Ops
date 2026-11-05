@@ -117,9 +117,14 @@ def test_site_names_must_come_from_delivered_current_or_authorized_history(monke
     history = [{"cpms_site_search": {"data": {"records": [{"name": "Original Station"}]}}}]
     result = operator_answer_review.review("解释上次站点", {}, [], "问", "zh", settings, history)
     assert result["verdict"] == expected and len(calls) == 1
-    assert operator_answer_review.known_facts([{"cpms_station_plan": {"data": {"name": "Plan Site"}}}]) == {
-        "Plan Site"
+    unresolved = {"cpms_station_plan": {"data": {"name": "Central"}}}
+    assert operator_answer_review.known_facts([unresolved]) == set()
+    resolved = {
+        "cpms_station_plan": {
+            "data": {"name": "Central", "site_id": "SITE-1", "rules": {"name": "Central Charging Station"}}
+        }
     }
+    assert operator_answer_review.known_facts([resolved]) == {"Central Charging Station"}
 
 
 def test_review_unavailable_does_not_deliver(monkeypatch):

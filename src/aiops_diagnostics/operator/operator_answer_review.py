@@ -30,8 +30,8 @@ def known_facts(evidence_sets):
         sites = evidence.get("cpms_site_search", {}).get("data", {}).get("records", [])
         names.update(row["name"] for row in sites if isinstance(row.get("name"), str))
         plan = evidence.get("cpms_station_plan", {}).get("data", {})
-        if isinstance(plan.get("name"), str):
-            names.add(plan["name"])
+        if plan.get("site_id") and isinstance((plan.get("rules") or {}).get("name"), str):
+            names.add(plan["rules"]["name"])
     return names
 
 
