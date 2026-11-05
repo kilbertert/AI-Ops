@@ -1139,6 +1139,13 @@ class OperatorCpms:
             }
             result = operator_agent.render(answer, evidence)
 
+        history_evidence = []
+        for previous_id in task.history_runs:
+            previous = store.peek(previous_id)
+            if previous is None or not previous.snapshot:
+                raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+            self._authorize_snapshot(task, previous)
+            history_evidence.append(previous.snapshot.get("evidence", {}))
         review = operator_answer_review.review(
             result["blocks"][0]["text"],
             evidence,
@@ -1146,6 +1153,7 @@ class OperatorCpms:
             task.question,
             task.language,
             self.context.runtime.diagnostic_settings.agent,
+            history_evidence,
         )
         if review["verdict"] != "allow":
             raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
