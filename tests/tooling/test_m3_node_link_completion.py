@@ -320,7 +320,7 @@ def test_completion_expiry_boundary_matches_the_claim_semantics(tmp_path, monkey
     manifest = _write_manifest(tmp_path)
     fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)
     expires = fixture["store"].get(run_id).expires_at
-    monkeypatch.setattr(agent_runs, "_now", lambda e=expires, o=offset_seconds: e + timedelta(seconds=o))
+    monkeypatch.setattr(agent_runs, "now_utc", lambda e=expires, o=offset_seconds: e + timedelta(seconds=o))
 
     response = _complete(fixture, run_id, identity=identity)
 
@@ -391,7 +391,7 @@ def test_failure_notice_after_expiry_does_not_overwrite_ttl_semantics(tmp_path, 
     manifest = _write_manifest(tmp_path)
     fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)
     expires = fixture["store"].get(run_id).expires_at
-    monkeypatch.setattr(agent_runs, "_now", lambda e=expires: e + timedelta(seconds=1))
+    monkeypatch.setattr(agent_runs, "now_utc", lambda e=expires: e + timedelta(seconds=1))
 
     response = _complete(fixture, run_id, status="failed", reason="model_failed", identity=identity)
 

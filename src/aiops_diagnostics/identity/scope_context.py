@@ -38,6 +38,7 @@ from aiops_diagnostics.common.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.common.config import UpmsSettings
+from aiops_diagnostics.common.scalar_rules import as_integer, format_stored_time
 
 SCOPE_ERROR_AUTH_FAILED = "scope.auth_failed"
 SCOPE_ERROR_CONFIG_MISSING = "scope.config_missing"
@@ -312,7 +313,7 @@ class ScopeContext:
             "effective_tenant_id": self.effective_tenant_id,
             "data_scope_type": self.data_scope.type,
             "scope_fingerprint": self.scope_fingerprint,
-            "resolved_at": self.resolved_at.isoformat(),
+            "resolved_at": format_stored_time(self.resolved_at),
         }
 
 
@@ -528,7 +529,7 @@ class UpmsDirectory:
             item_type = _optional_text(item.get("dsType"))
             if item_type is None:
                 continue
-            value = _to_int(item_type)
+            value = as_integer(item_type)
             if value is None or value not in _SCOPE_TYPE_BY_PLATFORM_CODE:
                 raise ScopeError(
                     f"UPMS 角色数据权限类型无法识别: {item_type}",
@@ -799,16 +800,9 @@ def _normalize_scope_type(value: Any) -> str:
         mapped = _SCOPE_TYPE_BY_PLATFORM_CODE.get(value)
     elif isinstance(value, str):
         text = value.strip().lower()
-        mapped = text if text in _SCOPE_TYPES else _SCOPE_TYPE_BY_PLATFORM_CODE.get(_to_int(text))
+        mapped = text if text in _SCOPE_TYPES else _SCOPE_TYPE_BY_PLATFORM_CODE.get(as_integer(text))
     else:
         mapped = None
     if mapped is None:
         raise ScopeError(f"UPMS 数据范围类型无法识别: {value!r}", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
     return mapped
-
-
-def _to_int(value: str) -> int | None:
-    try:
-        return int(value)
-    except ValueError:
-        return None

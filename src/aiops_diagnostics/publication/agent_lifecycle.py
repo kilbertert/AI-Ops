@@ -14,11 +14,12 @@ import uuid
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+from aiops_diagnostics.gateway import gateway_db
 
 AGENT_MANAGE_SCOPE = "aiops:agents:manage"
 AGENT_TYPES = frozenset({"customer", "operations"})
@@ -199,7 +200,7 @@ class AgentStore:
         self, tenant_id: str, name: str, description: str, config: AgentConfig, created_by: str
     ) -> Agent:
         agent_id = "agt_" + uuid.uuid4().hex
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             connection.execute(
                 """
@@ -240,7 +241,7 @@ class AgentStore:
         description: str,
         config: AgentConfig,
     ) -> Agent:
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             updated = connection.execute(
                 """
@@ -255,7 +256,7 @@ class AgentStore:
         return self.get(agent_id, tenant_id)
 
     def fork_draft(self, agent_id: str, tenant_id: str, expected_revision: int) -> Agent:
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             row = connection.execute(
                 "SELECT * FROM agents WHERE agent_id = ? AND tenant_id = ?",
@@ -284,7 +285,7 @@ class AgentStore:
         snapshot: dict[str, Any],
         published_by: str,
     ) -> AgentVersion:
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             row = connection.execute(
                 "SELECT status, revision FROM agents WHERE agent_id = ? AND tenant_id = ?",
@@ -318,7 +319,7 @@ class AgentStore:
         return AgentVersion(agent_id, tenant_id, version_no, snapshot, published_by, now)
 
     def disable(self, agent_id: str, tenant_id: str, expected_revision: int) -> Agent:
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             updated = connection.execute(
                 """
@@ -370,7 +371,7 @@ class AgentStore:
         raise AgentConflict(f"agent revision conflict: expected {revision}")
 
     def _initialize(self) -> None:
-        with self._connection() as connection:
+        with self._connection(write=True) as connection:
             connection.executescript(
                 """
                 PRAGMA journal_mode=WAL;
@@ -405,22 +406,9 @@ class AgentStore:
 
     @contextmanager
     def _connection(self, *, write: bool = False):
-        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=5000")
-        try:
-            if write:
-                connection.execute("BEGIN IMMEDIATE")
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）；本 store 走 LEASE profile。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
-            if write:
-                connection.commit()
-        except Exception:
-            if write:
-                connection.rollback()
-            raise
-        finally:
-            connection.close()
 
 
 def allowed_models_from_settings(settings: Any) -> tuple[str, ...]:
@@ -638,7 +626,3 @@ def _description(value: str) -> str:
 def _actor(context: Any) -> str:
     caller = getattr(context, "caller", None)
     return str(getattr(caller, "b_user_id", "agent-admin"))[:128]
-
-
-def _iso(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat()

@@ -107,7 +107,7 @@ def test_final_authorization_interleaving(tmp_path, monkeypatch, change):
                 f["store"].revoke(rid, "review_revoke")
             elif change == "expire":
                 expires = f["store"].peek(rid).expires_at
-                monkeypatch.setattr(agent_runs, "_now", lambda: expires)
+                monkeypatch.setattr(agent_runs, "now_utc", lambda: expires)
             else:
                 d = json.loads(f["config"].read_text())
                 if change == "node":

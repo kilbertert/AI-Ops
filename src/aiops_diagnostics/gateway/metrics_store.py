@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+from aiops_diagnostics.gateway import gateway_db
 
 METRICS_RETENTION_DAYS = 30
 
@@ -115,14 +117,6 @@ class MetricsValidationError(MetricsError):
     code = "METRICS_INVALID"
 
 
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
-def _iso(value: datetime) -> str:
-    return value.isoformat()
-
-
 _EXPIRE_SWEEP = {"at": datetime(1970, 1, 1, tzinfo=UTC)}
 
 
@@ -146,7 +140,7 @@ class MetricsStore:
         with self._connection(write=True) as connection:
             connection.executescript(
                 """
-                PRAGMA foreign_keys = ON;
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS agent_run_metrics (
                     metric_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -175,14 +169,11 @@ class MetricsStore:
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path)
-        connection.row_factory = sqlite3.Row
-        try:
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）。本 store 每次写只有
+        # 一条语句、块内不读后写——SINGLE_STATEMENT profile：它不持租约、
+        # 不做整段回滚，选择它是对「恰好单语句」的显式声明。
+        with gateway_db.connection(self.path, write=write, profile=gateway_db.SINGLE_STATEMENT) as connection:
             yield connection
-            if write:
-                connection.commit()
-        finally:
-            connection.close()
 
     # ── writes ────────────────────────────────────────────────────────
 
@@ -231,7 +222,7 @@ class MetricsStore:
             raise MetricsValidationError("counts must be non-negative")
         if duration_ms is not None and duration_ms < 0:
             raise MetricsValidationError("duration_ms must be non-negative")
-        now = created_at or _utc_now()
+        now = created_at or now_utc()
         metric_id = "mtr_" + uuid.uuid4().hex
         # ponytail: throttle expiry to one sweep per 10 minutes per process —
         # a DELETE on every insert was a per-write full scan under load.
@@ -263,13 +254,13 @@ class MetricsStore:
                     duration_ms,
                     token_count,
                     error_code,
-                    _iso(now),
+                    format_stored_time(now),
                 ),
             )
         return metric_id
 
     def _expire(self, connection: sqlite3.Connection, now: datetime) -> None:
-        cutoff = _iso(now - timedelta(days=METRICS_RETENTION_DAYS))
+        cutoff = format_stored_time(now - timedelta(days=METRICS_RETENTION_DAYS))
         connection.execute("DELETE FROM agent_run_metrics WHERE created_at < ?", (cutoff,))
 
     # ── reads ────────────────────────────────────────────────────────
@@ -282,7 +273,7 @@ class MetricsStore:
             raise MetricsValidationError("tenant_id is invalid")
         if limit_hours < 1 or limit_hours > 24 * METRICS_RETENTION_DAYS:
             raise MetricsValidationError("limit_hours is invalid")
-        cutoff = _iso(_utc_now() - timedelta(hours=limit_hours))
+        cutoff = format_stored_time(now_utc() - timedelta(hours=limit_hours))
         # ``routing`` and ``order_auth`` rows are component health, not user
         # interactions. One question that lost its routing hint and then
         # answered normally would otherwise count as two runs, one of them

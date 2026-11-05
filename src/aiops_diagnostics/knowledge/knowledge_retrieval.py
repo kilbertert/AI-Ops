@@ -20,7 +20,7 @@ import urllib.error
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -44,6 +44,7 @@ from aiops_diagnostics.common.bounded_http import (
 )
 from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 from aiops_diagnostics.common.redaction import redact_text
+from aiops_diagnostics.common.scalar_rules import as_datetime, now_utc
 
 KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
 ALLOWED_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
@@ -300,7 +301,7 @@ class MediaResourceSigner:
             if key not in {"session_id", "chunk_id", "title", "backend_id"}
         ):
             raise ValueError("media grant identifiers must be non-empty")
-        issued_at = _utc(now)
+        issued_at = as_datetime(now) or now_utc()
         resource_id = "media_" + secrets.token_urlsafe(24)
         expires_at = issued_at + timedelta(seconds=self._ttl)
         self._grants[resource_id] = MediaGrant(
@@ -343,7 +344,7 @@ class MediaResourceSigner:
         bare_id, signature = _split_resource_id(resource_id)
         expected = hmac.new(self._secret, bare_id.encode("ascii"), hashlib.sha256).hexdigest()[:24]
         grant = self._grants.get(bare_id)
-        current = _utc(now)
+        current = as_datetime(now) or now_utc()
         if (
             grant is None
             or not hmac.compare_digest(signature, expected)
@@ -375,7 +376,7 @@ class MediaResourceSigner:
         bare_id, signature = _split_resource_id(signed_id)
         expected = hmac.new(self._secret, bare_id.encode("ascii"), hashlib.sha256).hexdigest()[:24]
         grant = self._grants.get(bare_id)
-        current = _utc(now)
+        current = as_datetime(now) or now_utc()
         if (
             grant is None
             or not hmac.compare_digest(signature, expected)
@@ -1059,11 +1060,6 @@ def _split_resource_id(value: str) -> tuple[str, str]:
     ):
         raise MediaAccessDenied("media resource is not available")
     return bare, signature
-
-
-def _utc(value: datetime | None) -> datetime:
-    current = value or datetime.now(UTC)
-    return current if current.tzinfo else current.replace(tzinfo=UTC)
 
 
 def _first_string(item: Mapping[str, Any], *keys: str) -> str | None:

@@ -4,17 +4,23 @@ import hashlib
 import json
 import sqlite3
 import time
-from contextlib import closing
 from importlib.resources import files
 from pathlib import Path
 
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig
+from aiops_diagnostics.gateway import gateway_db
 
 MAX_AGE = 120
 
 
 def record(database, config, node, payload):
-    with closing(sqlite3.connect(database)) as db, db:
+    # 建表 + upsert 是多语句写——LEASE（gateway_db，#573）。observed_at 是
+    # epoch 秒列，不是 ISO 存储文本，不在 scalar_rules 的读取范围。
+    # WAL 只能在事务外设置（LEASE 入口已是 BEGIN IMMEDIATE），所以用
+    # 读连接声明文件属性，再进写租约。
+    with gateway_db.connection(database) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+    with gateway_db.connection(database, write=True) as db:
         db.execute("""CREATE TABLE IF NOT EXISTS execution_node_capabilities (
             environment TEXT NOT NULL,node_id TEXT NOT NULL,body TEXT NOT NULL,observed_at REAL NOT NULL,
             PRIMARY KEY(environment,node_id))""")
@@ -35,7 +41,7 @@ def require_compatible(database, target, manifest):
     if not any(n.active and n.node_id == config.expected_node_id for n in config.node_token_hashes.values()):
         raise SetupRefused("SETUP_EXECUTOR_UNAVAILABLE")
     try:
-        with closing(sqlite3.connect(database)) as db:
+        with gateway_db.connection(database) as db:
             row = db.execute(
                 "SELECT body,observed_at FROM execution_node_capabilities WHERE environment=? AND node_id=?",
                 (config.environment, config.expected_node_id),
