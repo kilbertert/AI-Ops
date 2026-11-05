@@ -26,6 +26,9 @@ def operator(tmp_path, monkeypatch):
         ("node_failed", "OPERATOR_DEPENDENCY_UNAVAILABLE"),
         ("private_upstream", "OPERATOR_DEPENDENCY_UNAVAILABLE"),
         ("model_stream_incomplete", "OPERATOR_MODEL_OUTPUT_UNSTABLE"),
+        # 节点保留**原始**工具拒绝码上报：归因留原码，对用户的码仍归一类。
+        ("tool_refused:OPERATOR_SCOPE_CHANGED", "OPERATOR_DEPENDENCY_UNAVAILABLE"),
+        ("tool_refused:cpms_unavailable", "OPERATOR_DEPENDENCY_UNAVAILABLE"),
     ],
 )
 def test_node_failure_reaches_caller_without_readback(
@@ -77,6 +80,10 @@ def test_node_failure_reaches_caller_without_readback(
     if reason == "private_upstream":
         run = f["ctx"].agent_run_store.by_qa(posted.json()["qa_id"])
         assert run.reason == "operator_node_failed: node_failed"
+    if reason.startswith("tool_refused:"):
+        # 原始拒绝码逐字进入运行记录——不再糊成 node_failed。
+        run = f["ctx"].agent_run_store.by_qa(posted.json()["qa_id"])
+        assert run.reason == "operator_node_failed: " + reason
     if reason == "model_quota_exhausted":
         assert "额度不足" in final.json()["error"]["message"]
         assert final.json()["error"]["retryable"] is False

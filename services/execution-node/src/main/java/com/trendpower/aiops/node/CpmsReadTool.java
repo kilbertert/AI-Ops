@@ -162,12 +162,37 @@ public final class CpmsReadTool implements ToolCallback {
             requireLive(grant);
             return JSON.writeValueAsString(evidence);
         } catch (CpmsRefused failure) {
+            if (failure.feedback()) {
+                return refusalResult(definition.name(), failure.getMessage(), failure.hint());
+            }
             throw failure;
+        } catch (GatewayClient.GatewayRefused failure) {
+            if (failure.feedback()) {
+                // 网关判定「模型能自己处理的业务拒绝」：作为工具结果回喂，让模型
+                // 修正参数、先补依赖或如实解释结局，而不是把整轮带进失败。
+                return refusalResult(definition.name(), failure.code(), failure.hint());
+            }
+            // 其余网关拒绝仍终结整轮；原始拒绝码留在异常里供终局归因。
+            throw refused("cpms_unavailable", failure.code());
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
             throw refused("interrupted");
         } catch (Exception failure) {
             // 上游正文、地址与访问令牌都不进入异常，避免模型或框架日志泄露。
+            throw refused("cpms_unavailable");
+        }
+    }
+
+    /** 回喂模型的拒绝结果：普通工具结果形状，模型读到的是业务结局而不是异常。 */
+    private static String refusalResult(String tool, String code, String hint) {
+        ObjectNode result = JSON.createObjectNode();
+        result.put("refused", true);
+        result.put("tool", tool);
+        result.put("code", code);
+        result.put("message", hint);
+        try {
+            return JSON.writeValueAsString(result);
+        } catch (Exception failure) {
             throw refused("cpms_unavailable");
         }
     }
@@ -188,7 +213,7 @@ public final class CpmsReadTool implements ToolCallback {
             // 总时限覆盖响应体读取；仅 HttpRequest.timeout 不作为完整读取截止的证明。
             if (!pending.isDone()) pending.cancel(true);
         }
-        if (response.statusCode() != 200) throw refused("cpms_http_error");
+        if (response.statusCode() != 200) throw proxyRefused(response.statusCode(), response.body());
         JsonNode envelope = JSON.readTree(response.body());
         if (envelope == null || !envelope.isObject() || !envelope.path("code").isIntegralNumber()
                 || !"0".equals(envelope.path("code").asText()) || !envelope.path("data").isObject()) {
@@ -321,8 +346,46 @@ public final class CpmsReadTool implements ToolCallback {
         if (grant == null || !Instant.now().isBefore(grant.expiresAt())) throw refused("authorization_expired");
     }
 
-    static CpmsRefused refused(String code) { return new CpmsRefused(code); }
+    /**
+     * 代{@code get} 读取网关代理的非 200 应答：带 `feedback` 标记的是模型可处理的
+     * 业务拒绝，转成可回喂的 {@link CpmsRefused}；否则保留网关原始码归因。
+     */
+    private static CpmsRefused proxyRefused(int status, byte[] body) {
+        try {
+            JsonNode error = JSON.readTree(body).path("error");
+            String code = error.path("code").asText("");
+            if (error.path("feedback").isBoolean() && error.path("feedback").booleanValue()
+                    && error.path("hint").isTextual() && error.path("hint").asText().length() <= 500
+                    && code.matches("[A-Z][A-Z0-9_]{1,80}")) {
+                return feedbackRefused(code, error.path("hint").asText());
+            }
+            return refused("cpms_http_error", code.isEmpty() ? "unknown" : code);
+        } catch (CpmsRefused failure) {
+            throw failure;
+        } catch (Exception ignored) {
+            return refused("cpms_http_error");
+        }
+    }
+
+    static CpmsRefused refused(String code) { return new CpmsRefused(code, null, null); }
+    static CpmsRefused refused(String code, String upstream) { return new CpmsRefused(code, upstream, null); }
+    static CpmsRefused feedbackRefused(String code, String hint) { return new CpmsRefused(code, code, hint); }
     static final class CpmsRefused extends RuntimeException {
-        CpmsRefused(String code) { super(code); }
+        private final String upstream;
+        private final String hint;
+
+        CpmsRefused(String code, String upstream, String hint) {
+            super(code);
+            this.upstream = upstream;
+            this.hint = hint;
+        }
+
+        /** 网关拒绝时它原来的码；本地拒绝时就是本码。只用于终局归因，不进模型可见文本。 */
+        String upstreamCode() { return upstream == null ? getMessage() : upstream; }
+
+        /** 非空表示该拒绝获准回喂模型；模型据此解释业务结局而不是整轮失败。 */
+        String hint() { return hint; }
+
+        boolean feedback() { return hint != null; }
     }
 }

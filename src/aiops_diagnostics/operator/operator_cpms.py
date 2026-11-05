@@ -47,6 +47,31 @@ NODE_FAILURE_CODES = {
     "model_stream_incomplete": "OPERATOR_MODEL_OUTPUT_UNSTABLE",
 }
 
+#: 节点上报的工具拒绝 reason 前缀（原始拒绝码跟在冒号后）。
+TOOL_REFUSED_PREFIX = "tool_refused:"
+
+#: **可以回喂模型的业务拒绝**——模型拿到结果后能自己修正参数、先补依赖，
+#: 或如实向用户说明「查无此单/没有权限/缺少条件」。这类拒绝在响应体里带
+#: `feedback` 标记与一段提示，新节点把它当工具结果交给模型而不是终结整轮。
+#:
+#: 不在这张表里的拒绝保持原样：授权/发布/节点完整性、并发抢占、运行已终结——
+#: 那些不是「换个参数再来一次」能解决的，回喂只会让模型在死局上空转。
+#: 提示语写给模型看，措辞必须导向用户可理解的结局，不得带出内部实现。
+FEEDBACK_REFUSALS = {
+    "OPERATOR_ORDER_REQUIRED": "缺少订单号；请向用户确认要查询的订单后再调用。",
+    "OPERATOR_ORDER_NOT_REFERENCED": "只能查询用户本句提到或已选定的订单；请向用户确认订单号。",
+    "OPERATOR_ORDER_CONFLICT": "每轮只能查询一笔订单；与当前订单不同请向用户说明不能同时查询。",
+    "OPERATOR_TOOL_ARGUMENTS_INVALID": "参数未通过校验；参数值必须来自用户原话，不能猜测。",
+    "OPERATOR_TOOL_ARGUMENTS_CHANGED": "同一工具本轮只能使用同一组参数；请沿用之前的参数。",
+    "OPERATOR_ANALYSIS_INVALID": "该工具不接受参数；需先取得订单证据后再调用。",
+    "OPERATOR_DETAIL_REQUIRED": "需先调用 cpms_order_detail 读取订单详情。",
+    "OPERATOR_TARIFF_REQUIRED": "需先调用 cpms_order_tariff 读取计费模板。",
+    "OPERATOR_EVIDENCE_MISSING": "需先取得该工具依赖的订单证据再调用。",
+    "OPERATOR_SITE_SCOPE_REQUIRED": "当前账号没有可见站点；请如实告知用户。",
+    "CPMS_INVALID_RESPONSE": "上游返回的数据无法识别；如实告知暂时无法查询，不要编造。",
+    "CPMS_SCOPE_MISMATCH": "该订单不在当前账号可见范围或不存在；如实告知查无此单或无权查看。",
+}
+
 #: 站点查询的三个上限：一页条数、最多页数、最多展示条数。
 #:
 #: 合起来是**「列举不能变成导出」**这条边界。改任何一个都要重新论证，不能当调参。
@@ -190,6 +215,21 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
 SITE_TOOL = "cpms_site_search"
 
 
+def _proxy_tool(task, run, method, path, query):
+    """白名单命中的工具名；查无对应授权目标时返回 ``None``（即 PATH_REJECTED 的前置事实）。"""
+    return next(
+        (
+            name
+            for name in TOOL_NAMES
+            if name in task.arguments
+            and allowed_in(name, run)
+            and tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
+            == {"method": method, "path": path, "query": query}
+        ),
+        None,
+    )
+
+
 def still_authorized(binding, run, *, trial=False) -> bool:
     """冻结运行的模型/工具必须仍被当前应用授权，提示词可单独换版。"""
     if binding is None or binding.entry != "operator" or binding.route_revision < run.route_revision:
@@ -261,6 +301,9 @@ class ActiveTask:
     #: 本次运行可接受答复未完成时最多重派一次。
     #: 放在任务上而不是模块上：它属于这一次 run，跨 run 复用就没有"有界"可言了。
     resamples: int = 0
+    #: 本轮已回喂模型的业务拒绝（`FEEDBACK_REFUSALS` 里的码）。答复复核据此区分
+    #: 「查无此单」与「编造」——被拒的调用不产生证据，模型只能凭这条记录解释结局。
+    refusals: list = field(default_factory=list)
     lock: object = field(default_factory=threading.RLock)
     completion_lock: object = field(default_factory=threading.Lock)
 
@@ -720,7 +763,29 @@ class OperatorCpms:
             "messages": task.messages,
         }
 
+    def _note_refusal(self, task, tool, exc):
+        """把一次**会回喂模型**的拒绝记到任务上，供答复复核区分「查无此单」与编造。
+
+        只记 `FEEDBACK_REFUSALS` 里的码——其余拒绝终结运行，轮不到复核。
+        去重并封顶：模型在同一拒绝上空转时记录不应跟着涨。
+        """
+        code = str(exc)
+        if task is None or code not in FEEDBACK_REFUSALS:
+            return
+        refusal = {"tool": tool or "", "code": code, "message": FEEDBACK_REFUSALS[code]}
+        with task.lock:
+            if refusal not in task.refusals and len(task.refusals) < 16:
+                task.refusals.append(refusal)
+
     def grant(self, run_id, token, manifest, tool, contract="", arguments=None):
+        task = self.tasks.get(run_id)
+        try:
+            return self._grant(run_id, token, manifest, tool, contract, arguments)
+        except OperatorRefused as exc:
+            self._note_refusal(task, tool, exc)
+            raise
+
+    def _grant(self, run_id, token, manifest, tool, contract, arguments):
         if contract != (OBJECT_CONTRACT if _declared(tool).kind == "object" else TOOL_CONTRACT):
             # 旧节点不声明契约版本。挡在**领授权**这一步，而不是等它在完成回调里因为
             # 证据缺字段而失败——那既不是稳定错误码，也发生在公司令牌已经用过之后。
@@ -882,6 +947,17 @@ class OperatorCpms:
 
     def proxy(self, run_id, grant, path, query, method="GET"):
         task = self.tasks.get(run_id)
+        try:
+            return self._proxy(run_id, grant, path, query, method)
+        except OperatorRefused as exc:
+            if task is not None:
+                run = self.context.agent_run_store.get(run_id)
+                tool = _proxy_tool(task, run, method, path, query) if run else None
+                self._note_refusal(task, tool, exc)
+            raise
+
+    def _proxy(self, run_id, grant, path, query, method):
+        task = self.tasks.get(run_id)
         if task is None or not secrets.compare_digest(task.grant, grant):
             raise OperatorRefused("OPERATOR_GRANT_REJECTED")
         run = self.context.agent_run_store.get(run_id)
@@ -889,17 +965,7 @@ class OperatorCpms:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         # 白名单是**完整请求目标**：方法、路径、查询串三者都对才算。拿工具名反推路径
         # 的做法已经去掉——那正是「加一条只读路径就要改 Java」的来源。
-        tool = next(
-            (
-                name
-                for name in TOOL_NAMES
-                if name in task.arguments
-                and allowed_in(name, run)
-                and tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
-                == {"method": method, "path": path, "query": query}
-            ),
-            None,
-        )
+        tool = _proxy_tool(task, run, method, path, query)
         if tool is None:
             raise OperatorRefused("OPERATOR_PATH_REJECTED")
         with task.lock:
@@ -1050,6 +1116,14 @@ class OperatorCpms:
         return self.proxy(run_id, grant, request["path"], request["query"], request["method"])
 
     def record(self, run_id, token, manifest, tool, payload):
+        task = self.tasks.get(run_id)
+        try:
+            return self._record(run_id, token, manifest, tool, payload)
+        except OperatorRefused as exc:
+            self._note_refusal(task, tool, exc)
+            raise
+
+    def _record(self, run_id, token, manifest, tool, payload):
         if set(payload) != {"authorization_id", "evidence"}:
             raise OperatorRefused("OPERATOR_INVALID_BODY")
         task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
@@ -1114,7 +1188,10 @@ class OperatorCpms:
             # 节点给的原因码进运行记录，不再统一糊成 `operator_node_failed`。
             # 它只用于**归因**，不改变任何判决：这条 run 仍然失败。
             reason = payload.get("reason")
-            if not isinstance(reason, str) or reason not in NODE_FAILURE_CODES:
+            if not isinstance(reason, str) or not (
+                reason in NODE_FAILURE_CODES
+                or re.fullmatch(TOOL_REFUSED_PREFIX + r"[A-Za-z0-9_]{1,80}", reason)
+            ):
                 reason = "node_failed"
             store.fail(run_id, "operator_node_failed: " + reason)
             logging.getLogger("aiops.operator").warning(
@@ -1154,6 +1231,7 @@ class OperatorCpms:
             task.language,
             self.context.runtime.diagnostic_settings.agent,
             history_evidence,
+            tool_refusals=list(task.refusals),
         )
         if review["verdict"] != "allow":
             raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
@@ -1175,6 +1253,7 @@ class OperatorCpms:
                 "history_runs": task.history_runs,
                 "rendered_result": result,
                 "plan_arguments": task.arguments.get("cpms_station_plan", {}),
+                "tool_refusals": list(task.refusals),
             }
             if not store.complete(
                 run_id, snapshot=snapshot, actual_node_id=run.expected_node_id, node_build=None
@@ -1213,6 +1292,10 @@ class OperatorCpms:
             reason = (run.reason or "").removeprefix("operator_node_failed: ")
             if reason in NODE_FAILURE_CODES:
                 raise OperatorRefused(NODE_FAILURE_CODES[reason])
+            if reason.startswith(TOOL_REFUSED_PREFIX):
+                # 节点保留原始拒绝码上报：归因在 run.reason，对**用户**仍归一类——
+                # 工具被它自己无法改变的拒绝打断，是依赖不可用，不是答复不合格。
+                raise OperatorRefused("OPERATOR_DEPENDENCY_UNAVAILABLE")
 
     def _worker(self, run_id, qa_id, config):
         store = self.context.store

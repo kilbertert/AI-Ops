@@ -12,7 +12,7 @@ from operations.test_operator_cpms import HEADERS, ORDER, environment, terminal
 @pytest.mark.parametrize("verdict", ["reject", "uncertain", "unavailable"])
 def test_unverified_reply_is_not_delivered(tmp_path, monkeypatch, verdict):
     with environment(tmp_path, monkeypatch) as f:
-        monkeypatch.setattr(operator_answer_review, "review", lambda *args: {"verdict": verdict})
+        monkeypatch.setattr(operator_answer_review, "review", lambda *args, **kwargs: {"verdict": verdict})
 
         def dispatch(_, config, run):
             _, head, _ = call_tool(f, run, "cpms_order_detail")
@@ -101,6 +101,8 @@ def test_review_uses_evidence_and_actual_reply_without_credentials(monkeypatch, 
     assert result["verdict"] == verdict
     assert "这笔需要复核" in seen[0]["messages"][1]["content"]
     assert "key" not in seen[0]["messages"][1]["content"]
+    # 复核输入必须携带本轮被拒工具清单——「查无此单」与「编造」靠它区分。
+    assert '"tool_refusals"' in seen[0]["messages"][1]["content"]
 
 
 @pytest.mark.parametrize("name,expected", [("Original Station", "allow"), ("猜测译名", "reject")])
