@@ -40,3 +40,30 @@
 
 PASS。三个定制面已切换为 dify-ui 原语并在生产生效，交互与无障碍属性
 （`data-aiops-*`、aria-label、role=status）保持，验证通道已关闭。
+
+---
+
+## 五、追加回执：受管发布条收进抽屉（`strip-drawer`，PR #1423）
+
+**背景**：`ui-polish` 上线后实测发现 workflow header 右侧行拥挤——受管三组控件
+（发布组/知识库/预览）平铺后与上游按钮叠成两行互相重叠。
+
+**修法**：header 只留单个「受管发布」触发钮，三组内容收进 dify-ui Drawer（右侧抽屉，
+`swipeDirection="right"`），预览/知识库改内联块；knowledge 在抽屉挂载时加载。
+
+| 项 | 值 |
+|---|---|
+| 镜像 | `aiops/dify-web-patched:strip-drawer`（`89e8ac4d571f`，36 组装 `97077d328093`） |
+| 产物 | 288M→gzip 85M，sha256 `89eaa8733c93b68638d7ed2a5c0bd06b451c06fb6d197cb6595a719f3186d99c` |
+| 部署 | `/opt/dify/deploy/.env` DIFY_WEB_IMAGE + force-recreate，容器 Ready 无报错 |
+
+**36 实测**（同取证通道，真实会话）：
+
+| 断言 | 结果 |
+|---|---|
+| 头行整洁：仅一个 `受管发布` 钮，无重叠 | PASS（截图 `drawer-header.png`） |
+| 抽屉打开三段齐整，含渠道警示/发布钮/版本操作/预览字段/知识库列表 | PASS（`drawer-open.png`） |
+| `details`=0；checkbox=5；空问题置灰 | PASS |
+| 浏览器规格 6/6（含抽屉内嵌套版本操作 Popover 不互关） | PASS |
+
+**结论**：PASS。header 拥挤/重叠消除，交互与无障碍标记保持。
