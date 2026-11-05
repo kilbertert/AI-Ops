@@ -1,33 +1,8 @@
 name: CI
 
-# `pull_request` only — deliberately NOT `push: main`.
-#
-# On `push: main` this job re-ran content CI had already verified on the pull
-# request, and the content is provably the same: a squash merge (this repository's
-# rule) produces a commit whose tree is byte-identical to the PR head's. Measured
-# 2026-10-18 on #828: `6684b5f6^{tree}` (PR head) and `89c2612e^{tree}` (merge)
-# are both `9e754088`. So the second run tested the same bytes twice.
-#
-# What the second run was buying — "the gate re-stands on the protected branch" —
-# is already bought by the ruleset: `main` requires the `verify` and
-# `Workflow policy` checks and forbids non-fast-forward pushes, so nothing reaches
-# `main` except through a pull request that passed them. That is the same premise
-# `cd.yml` already relies on; its own comment says it does not repeat the checks
-# "because main can only be entered through a PR carrying the required checks".
-#
-# This is NOT the same trade as skipping CI for docs-only changes, which was
-# measured and rejected: `tests/test_readme_architecture.py` asserts against
-# `README.md`, so a path filter would let a documentation edit bypass a test that
-# reads it.
+# PR 的确定性代码检查；必需检查名 verify 保持稳定。设计与排障见 docs/agents/actions-delivery.md。
 
 on:
-  # ⚠️ Activity types are listed EXPLICITLY, and `ready_for_review` is among them.
-  # GitHub's default set is `opened, synchronize, reopened` — and a job skipped
-  # because the PR was a draft records a `skipped` conclusion, which SATISFIES a
-  # required status check. So a draft that is marked ready without another push
-  # would never run this job and could still merge, unverified. Listing
-  # `ready_for_review` is what closes that hole; the job-level guard below is what
-  # keeps it from running during draft edits.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
@@ -40,67 +15,10 @@ concurrency:
 
 jobs:
   verify:
-    # ── Do not run while the pull request is a draft ────────────────────────────
-    # A draft is the platform's own word for "not ready to be judged", and this
-    # repository already uses it: `agent-implement.yml` and `agent-implement-prd.yml`
-    # open delivery PRs with `gh pr create --draft`.
-    #
-    # Why this is not just tidiness. Measured 2026-10-18: one AFK pull request
-    # (#825) ran this workflow 11 times — 8 successes plus 3 cancelled — about 16
-    # minutes of runner time. Nothing consumed a single one of those results:
-    # `grep -rn 'gh pr checks|statusCheckRollup|/check-runs' .sandcastle/ .github/`
-    # returns nothing, so no agent, review pass, or workflow reads a PR's CI
-    # conclusion. The agent verifies locally instead — `.sandcastle/implement.md`
-    # step 3 tells it to run the project's own check before committing.
-    #
-    # The rule this encodes: a CI run is worth its cost only when it (a) covers the
-    # content that is about to enter main AND (b) its result is used. A draft fails
-    # both.
-    #
-    # ⚠️ `ready_for_review` MUST be exempted, and that is not a detail. Measured on
-    # this repository (PR #833): when a draft is marked ready, the `ready_for_review`
-    # event fires, but its `pull_request.draft` field still reads `true` — the
-    # payload describes the transition, not the state after it. A guard that only
-    # tested `draft` therefore skipped the run for the one event that means "now
-    # judge it", and the PR ended with all three checks `skipping` and no way to
-    # revisit them. The exemption is what makes the guard correct rather than
-    # merely quiet.
-    #
-    # ⚠️ Written as a guard rather than as a `types: [...]` filter on purpose.
-    # `types: [ready_for_review]` alone would mean a NON-draft pull request never
-    # runs at all — it is already ready when `opened` fires. Keeping the trigger
-    # broad and the condition explicit is what makes "will this run?" readable from
-    # the file; a filter that silently drops events is the failure ADR 0010 and the
-    # 1.7.26 work both exist to prevent.
     if: >-
       github.event_name != 'pull_request' ||
       github.event.action == 'ready_for_review' ||
       github.event.pull_request.draft == false
-    # 🔴 **2026-10-12: back on the self-hosted runner, and that re-opens a gate.**
-    #
-    # This job was moved to `ubuntu-latest` with the argument above: a public
-    # repository's GitHub-hosted minutes are free, so the fork gate that a
-    # persistent runner needs could be retired. It is back on the persistent
-    # runner because **the account is currently locked for billing** ("The job
-    # was not started because your account is locked due to a billing issue") —
-    # every pull request's required checks refused to start, which blocks the
-    # default branch for *all* work, not just for forks.
-    #
-    # ⚠️ **What came back with it**: a persistent runner executes whatever the
-    # pull request contains. `add a fork guard` is only safe while this job is
-    # hosted; on `self-hosted` the protection is the repository's own boundary,
-    # measured (not assumed) on the day of the switch: `forks_count = 0`, and
-    # every pull request in the repository's history comes from the owner.
-    # **Re-measure before trusting it**, and move back to `ubuntu-latest` as
-    # soon as the account can start hosted jobs again:
-    #
-    #   gh api repos/kilbertert/AI-Ops --jq .forks_count
-    #   gh run list --workflow=ci.yml --limit 1 --json conclusion
-    #
-    # The agent-*.yml and architecture-review.yml workflows were never moved:
-    # they need the persistent filesystem, AGENT_PAT and the
-    # controller/candidate/delivery isolation, and .sandcastle/policy-check.mjs
-    # statically locks their owner-only same-repository gate.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -108,25 +26,9 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-          # 全量/降级判断要 diff 出这次推送改了哪些文件，浅克隆没有那个提交可比。
+          # 两点 diff 刻意保守：base 前进时，额外代码差异也走全量。
           fetch-depth: 0
 
-      # 🔴 `enable-cache: false` **because the runner is persistent** (#711).
-      #
-      # The action's post step prunes its cache directory, and on this host that
-      # prune hung the whole job: every real step (deps, lint, the full suite,
-      # compileall, `uv pip check`) had already finished green, then the job sat
-      # 5 minutes and failed on "Post Install uv" — the run reported **failure**
-      # for a suite that passed. (`package.yml` keeps `enable-cache: true`; it
-      # only runs on `v*` tags and manual dispatch, so a post-step hang there
-      # cannot close a required check.)
-      #
-      # The cache is not worth that risk here: it points at `/home/claude/.cache/uv`,
-      # which is a development-host cache with no run-to-run benefit on
-      # `ubuntu-latest` — where this job lived until the account's billing lock
-      # forced it back. If caching is wanted back, give it a
-      # `${{ runner.temp }}`-scoped directory **and** verify the post step
-      # completes before trusting it.
       - name: Install uv
         uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
         with:
@@ -134,43 +36,22 @@ jobs:
           python-version: "3.13"
 
       - name: Install locked dependencies
-        # `--inexact` 允许 venv 里存在 lockfile 之外的东西，供下一步装并行调度器。
-        # 不加它，下一步 `uv run` 的隐式同步会把刚装上的 xdist 删掉
-        # （实测：`uv sync --locked --dev` 之后 `import xdist` → ModuleNotFoundError）。
-        run: uv sync --locked --inexact --dev
+        run: uv sync --locked --dev
 
       - name: Run static checks
         run: |
           uv run ruff check .
           uv run ruff format --check .
 
-      # No scheduler install step. `pytest-xdist` is a declared dev dependency as of
-      # 2026-10-23, so `uv sync --locked --inexact --dev` above provides it, and
-      # `-n auto` lives in `pyproject.toml`'s addopts. It used to be installed here
-      # ad hoc — which meant CI had it and every other venv did not, so a fresh
-      # worktree ran serial (279 s vs 55 s) without saying so.
-
-      # ── 全量还是只跑"读文档"的那批？────────────────────────────────────────
-      #
-      # 实测（2026-11-04，run 41810218900）：全量 4114 条要 192 秒，占整个 job 的
-      # 86%。而最近 40 个提交里有 15 个只动 `docs/` —— 它们跑的是和上次一模一样的
-      # 代码。文档档实测 16.6 秒（39 个文件）。
-      #
-      # ⚠️ **默认全量，白名单才降级**。反过来写（默认降级、列举需要全量的路径）
-      # 会在漏配一个路径时静默少测，而这个仓已经踩过一次同类："path filter 让
-      # 改 README 的提交绕过了一条读 README 的测试"（本文件顶部的注释记着那次）。
-      # 所以判定写成"**所有**改动都在下面这份白名单里才降级"，任何一个白名单外
-      # 的文件出现就退回全量 —— 漏配的后果是多跑三分钟，不是假绿。
-      #
-      # 白名单只有文档：`docs/` 与根目录的 `*.md`。**不含 `tests/`** ——
-      # 改测试却不验证测试，是最不该省的那一格。
       - name: Decide the test tier
         id: tier
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -eo pipefail
-          base="${{ github.event.pull_request.base.sha }}"
-          head="${{ github.event.pull_request.head.sha }}"
-          # PR 事件才有 base/head；其它触发方式一律全量。
+          base="$PR_BASE"
+          head="$PR_HEAD"
           if [ -z "$base" ] || [ -z "$head" ]; then
             echo "tier=full" >> "$GITHUB_OUTPUT"
             echo "没有 PR base/head —— 跑全量"
@@ -180,12 +61,7 @@ jobs:
           [ -n "$changed" ] || { echo "tier=full" >> "$GITHUB_OUTPUT"; echo "diff 为空 —— 跑全量"; exit 0; }
           echo "本次改动的文件："
           printf '%s\n' "$changed" | sed 's/^/  /'
-          # 全部落在 docs/ 或根目录的 .md 才算文档档。
-          # ⚠️ 两个锚点都是必须的：`^docs/` 挡住 `sub/docs/a.md`（别的目录下同名的
-          # 文档目录不是我们要的那份），`^[^/]+\.md$` 挡住 `sub/README.md`。
-          # 第一版漏了 `^`，`grep -vE 'docs/'` 会把 `sub/docs/a.md` 当成文档放过 ——
-          # `tests/test_ci_test_tier.py` 用这条反例抓住的。
-          off_docs=$(printf '%s\n' "$changed" | grep -vE '^docs/|^[^/]+\.md$' || true)
+          off_docs=$(printf '%s\n' "$changed" | grep -vE '^docs/.*\.md$|^[^/]+\.md$' || true)
           if [ -n "$off_docs" ]; then
             echo "tier=full" >> "$GITHUB_OUTPUT"
             echo "白名单之外有改动 ⇒ 全量："
@@ -196,33 +72,19 @@ jobs:
           fi
 
       - name: Run tests
-        # 绿之外还要有量。三件事可能让这一步"绿得没有意义"：
-        #   1. 收集为空（import 错误吞掉整个目录）——pytest 会以 0 退出；
-        #   2. xdist worker 崩掉，它那份没跑；
-        #   3. 测试静默变成 skip —— **记成 pass 的 skip 是假绿**（本机另一仓
-        #      health-flow 的 CI 注释专门写过这个形状：`445 passed, 4 skipped` 被读成通过）。
-        #
-        # 基线：**全量 4114 passed / 9 skipped（192 秒）**；文档档 **738 条 / 32 秒**。
-        # ⚠️ 比本机多一条跳过，不是异常：`test_cd_deploy_scripts.py` 的 dry-run
-        # 需要 `dev-host`，而那东西只在开发机上 —— CI 是 GitHub-hosted，所以它跳过。
-        # 用上限而非等号：新增测试不会让这条腐化。
+        id: tests
+        env:
+          TEST_TIER: ${{ steps.tier.outputs.tier }}
         run: |
           set -eo pipefail
-          tier="${{ steps.tier.outputs.tier }}"
+          tier="$TEST_TIER"
           if [ "$tier" = "docs" ]; then
-            # 降级档的集合**不写死文件名** —— 写死之后新增一个读文档的测试就会被
-            # 静默漏掉，而"漏掉"在这里的形态就是绿。按"测试源码里提没提到文档"
-            # 现算，新测试自动进来。
-            # `"docs"/` 那一支是同一个意思的 pathlib 写法：`PROJECT_ROOT / "docs" / ...`
-            # 里没有 `docs/` 这个字面量，只认前一支会把这些测试留在档外。
             targets=$(grep -rlE 'docs/|"docs" */|README\.md|qa-plan\.md|acceptance\.feature|SOP\.md|GLOSSARY\.md' \
-              tests --include='*.py' | grep -E '(^|/)test_.*\.py$' | sort | tr '\n' ' ')
+              tests --include='*.py' | grep -E '(^|/)test_.*\.py$' | sort | tr '\n' ' ' || true)
             echo "文档档：$(printf '%s' "$targets" | wc -w) 个文件"
-            # 集合算空了就退回全量，而不是交给下面的下限去猜。
-            # 实测 738 条 / 32 秒（2026-11-04；扩到 pathlib 写法后 45 个文件）。
             if [ -z "${targets// /}" ]; then
               echo "::warning::文档档没算出任何文件 —— 退回全量，避免收集为空"
-              targets=""; floor=4000
+              targets=""; floor=4000; tier=full
             else
               floor=400
             fi
@@ -230,26 +92,51 @@ jobs:
             targets=""
             floor=4000
           fi
-          # ⚠️ **不要再加 `-q`**：`pyproject.toml` 的 addopts 已经是 `-q`，再加一个
-          # 就是 `-qq`，而 `-qq` 会把那句 "N passed, M skipped" 汇总行**整个吞掉**。
-          # shellcheck disable=SC2086 — $targets 是有意按空格分词的
-          uv run pytest -rs $targets | tee /tmp/pytest.log
-          # ⚠️ `-rs` 会把逐条跳过原因排在**最后**，所以汇总行在它**上面**。
-          # 用 `tail -1` 取会拿到一条 SKIPPED 明细，`[0-9]+ skipped` 便永远匹配不到
-          # 而回退成 0（这个 bug 在本步骤的第一版里真实存在，靠跑一遍才发现）。
-          summary=$(grep -E "[0-9]+ passed" /tmp/pytest.log | tail -1)
-          [ -n "$summary" ] || {
-            echo "::error::输出里没有 'N passed' 汇总行 —— 收集或执行没有真的发生"; exit 1; }
-          total=$(printf '%s' "$summary" | grep -oE "^[0-9]+")
-          skipped=$(printf '%s' "$summary" | grep -oE "[0-9]+ skipped" | grep -oE "[0-9]+" || echo 0)
-          echo "汇总：tier=$tier passed=$total skipped=$skipped"
-          [ "$total" -ge "$floor" ] || {
-            echo "::error::只跑了 $total 个测试（tier=$tier 的下限 $floor）—— 有测试没被收集"; exit 1; }
-          [ "$skipped" -le 10 ] || {
-            echo "::error::跳过数 $skipped 超过 CI 基线 10 —— 看上面 -rs 的原因列表，"
-            echo "::error::确认多出来的是有意的环境跳过，而不是测试在悄悄跳过"; exit 1; }
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/ci-results"
+          # pytest 的失败退出码由 pipefail 保留；XML 只负责结果计数与摘要。
+          # targets 是仓库测试路径列表，有意按空格分词。
+          # shellcheck disable=SC2086
+          uv run pytest -rs --junitxml="$RUNNER_TEMP/ci-results/pytest.xml" $targets | tee "$RUNNER_TEMP/ci-results/pytest.log"
+          uv run python tools/verification/ci_results.py "$RUNNER_TEMP/ci-results/pytest.xml" --floor "$floor" --tier "$tier"
 
       - name: Check imports and dependencies
         run: |
           uv run python -m compileall -q src tests
           uv pip check
+
+      - name: Build wheel and sdist
+        run: uv build --out-dir "$RUNNER_TEMP/dist"
+
+      - name: Build and inspect Gateway image
+        if: steps.tests.outputs.tier != 'docs'
+        run: |
+          base=$(python -c 'import json; print(json.load(open("deploy/m2-live-03/images.lock.json"))["gateway_image"]["base_digest"])')
+          docker pull "$base"
+          M2LIVE_GATEWAY_IMAGE=aiops-gateway:ci M2LIVE_DIST="$RUNNER_TEMP/ci-results" deploy/m2-live-03/build-image.sh
+          docker run --rm --network none --read-only --entrypoint python aiops-gateway:ci \
+            -c 'from aiops_diagnostics.gateway.gateway_api import create_gateway_app; print("Gateway import: passed")'
+
+      - name: Summarize CI
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          TEST_RESULT: ${{ steps.tests.outcome }}
+          TEST_TIER: ${{ steps.tests.outputs.tier || steps.tier.outputs.tier }}
+        run: |
+          {
+            echo '### 代码检查（verify）'
+            echo "- 结果：$RESULT；测试：$TEST_RESULT；分档：${TEST_TIER:-未判定}"
+            echo "- 被验证的合并提交：$GITHUB_SHA"
+            echo '- 失败时先看首个失败步骤；测试日志/XML 见 ci-results 制品。'
+            echo '- 本检查不代表已部署或已完成业务验收。'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test evidence
+        if: always() && steps.tests.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-results-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-results/
+          if-no-files-found: warn
+          retention-days: 7

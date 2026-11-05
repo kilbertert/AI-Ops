@@ -45,7 +45,7 @@
 本地检查：`uv run pytest tests/test_repository_layout.py tests/test_readme_architecture.py tests/test_runtime_retirement.py`。
 
 `tests/test_ci_test_tier.py`（2026-11-04 新增，根层）守护 `ci.yml` 的测试分档判定：
-默认全量，只有改动**全部**落在 `docs/` 与根层 `*.md` 时才降级到"读文档的那批"。
+默认全量，只有改动**全部**落在 `docs/**/*.md` 与根层 `*.md` 时才降级到"读文档的那批"。
 它抽 `ci.yml` 里那段判定脚本原文执行，喂进不同改动集合断言算出哪一档 —— 判定写宽
 等于把改代码的提交当文档放过，而那种错误看起来完全正常。放在 `tests/` 根层而不是
 某个职责目录，是因为它测的是仓库级交付流程（CI），与 `test_cd_deploy_scripts.py`、
