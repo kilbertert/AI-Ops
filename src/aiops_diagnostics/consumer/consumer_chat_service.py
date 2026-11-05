@@ -271,6 +271,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             user=user,
             query=question,
             inputs=inputs,
+            **({"agent_final_node": "answer"} if binding.callback_version == 6 else {}),
             **({"photo_id": uploaded} if uploaded else {}),
             conversation_id=upstream,
             on_started=started,
