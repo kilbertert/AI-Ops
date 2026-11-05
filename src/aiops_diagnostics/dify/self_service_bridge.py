@@ -2,6 +2,8 @@
 
 import re
 
+from aiops_diagnostics.identity.order_identity import is_order_identifier
+
 
 def handle(handler, bridge):
     # 支持 python -m 入口，拒绝异常必须属于运行中的同一个模块。
@@ -108,9 +110,8 @@ def handle(handler, bridge):
         if action == "trial":
             if not isinstance(payload.get("question"), str) or not 0 < len(payload["question"]) <= 4000:
                 raise _Rejected(400, "请填写预览问题")
-            if not isinstance(payload.get("order_no", ""), str) or not re.fullmatch(
-                r"[A-Za-z0-9_.:-]{0,64}", payload.get("order_no", "")
-            ):
+            raw_order = payload.get("order_no", "")
+            if not isinstance(raw_order, str) or (raw_order and not is_order_identifier(raw_order)):
                 raise _Rejected(400, "无效订单号")
         elif not isinstance(payload.get("trial_id"), str) or not re.fullmatch(
             r"tr_[a-f0-9]{32}", payload["trial_id"]

@@ -252,9 +252,9 @@ def _query(runtime, caller, binding, run, resource, query, order, libraries, rea
         }
     if not order:
         raise ChatRunUnavailable("CONSUMER_ORDER_REQUIRED", "请先确认订单或查询本人最近订单")
-    from aiops_diagnostics.common.order_reference import SAFE_ORDER_NO
+    from aiops_diagnostics.identity.order_identity import is_order_identifier
 
-    if not SAFE_ORDER_NO.fullmatch(order):
+    if not is_order_identifier(order):
         raise ChatRunUnavailable("CONSUMER_ORDER_REQUIRED", "订单号格式不正确")
     runtime._require_chat_order_visible(caller, order)
     snapshot = read_snapshot(caller, order, resource)

@@ -39,7 +39,6 @@ from aiops_diagnostics.common.i18n import (
     rendering_language,
     resolve_language,
 )
-from aiops_diagnostics.common.order_reference import SAFE_ORDER_NO
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.consumer import consumer_knowledge_selection
 from aiops_diagnostics.consumer.consumer_copy import COMPOSED_LANGUAGES
@@ -139,6 +138,12 @@ from aiops_diagnostics.identity.company_token_auth import (
     CompanyTokenCallerResolver,
     CompanyTokenSettings,
     PermissionSource,
+)
+from aiops_diagnostics.identity.order_identity import (
+    ORDER_ID_ATOM,
+    extract_order_identifier,
+    is_order_identifier,
+    order_identifier_candidates,
 )
 from aiops_diagnostics.identity.order_visibility import tenant_matches
 from aiops_diagnostics.identity.query_scope import (
@@ -247,7 +252,7 @@ class NodeLoopCompletionRequest(BaseModel):
 class HealthReportJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    order_no: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    order_no: str = Field(min_length=1, max_length=128, pattern=rf"^{ORDER_ID_ATOM}$")
 
 
 class AssistantQuestionRequest(BaseModel):
@@ -270,7 +275,7 @@ class AssistantQuestionRequest(BaseModel):
         default=None,
         min_length=1,
         max_length=128,
-        pattern=r"^[A-Za-z0-9_.:-]+$",
+        pattern=rf"^{ORDER_ID_ATOM}$",
     )
     conversation_id: str | None = Field(
         default=None,
@@ -388,7 +393,7 @@ class DifyTrialRequest(BaseModel):
     """试用已登记应用的草稿，执行路线由服务端绑定决定。"""
 
     model_config = ConfigDict(extra="forbid")
-    order_no: str = Field(default="", max_length=64, pattern=r"^([A-Za-z0-9][A-Za-z0-9_.:-]{0,63})?$")
+    order_no: str = Field(default="", max_length=128, pattern=rf"^({ORDER_ID_ATOM})?$")
     app_id: str = Field(min_length=1, max_length=64, pattern=r"^[0-9a-fA-F-]{8,64}$")
     question: str = Field(default="check order status", min_length=1, max_length=4000)
     operator_preview: OperatorPreviewDraft | None = None
@@ -398,7 +403,7 @@ class DifyTrialRequest(BaseModel):
 class ManagedTrialRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     app_id: str = Field(pattern=r"^[a-f0-9-]{36}$")
-    order_no: str = Field(default="", max_length=64, pattern=r"^([A-Za-z0-9][A-Za-z0-9_.:-]{0,63})?$")
+    order_no: str = Field(default="", max_length=128, pattern=rf"^({ORDER_ID_ATOM})?$")
     question: str = Field(min_length=1, max_length=4000)
 
 
@@ -1323,9 +1328,7 @@ def _workflow_trial_draft(
         from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
         from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
 
-        candidates = {
-            token for match in _ORDER_TOKEN.finditer(question) if (token := _extract_order_no(match.group(0)))
-        }
+        candidates = set(order_identifier_candidates(question))
         if candidates and candidates != {selected_order}:
             raise StandardAPIError(400, "TRIAL_ORDER_MISMATCH", "试用问题与选定订单不一致")
         previous = (
@@ -2924,7 +2927,7 @@ def create_gateway_app(
                 if (
                     shortcut.requires_order
                     and not payload.order_no
-                    and _extract_order_no(payload.question) is None
+                    and extract_order_identifier(payload.question) is None
                 ):
                     return _clarification(
                         context,
@@ -3181,11 +3184,7 @@ def create_gateway_app(
                             if not enabled:
                                 return _consumer_intent_clarification("disabled", language)
                             authenticated_chat_order_reader(context, caller, request)
-                            candidates = {
-                                token
-                                for match in _ORDER_TOKEN.finditer(payload.question)
-                                if (token := _extract_order_no(match.group(0)))
-                            }
+                            candidates = set(order_identifier_candidates(payload.question))
                             if reference in {"unclear", "none"} or len(candidates) > 1:
                                 return _consumer_intent_clarification("order", language)
                             if candidates and reference != "explicit":
@@ -3517,7 +3516,7 @@ def create_gateway_app(
             )
             return _conversation_response(conversation)
         candidate = str(candidate)
-        if not SAFE_ORDER_NO.fullmatch(candidate):
+        if not is_order_identifier(candidate):
             raise StandardAPIError(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "INVALID_REQUEST",
@@ -3548,7 +3547,7 @@ def create_gateway_app(
         order_no: str,
         caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
     ) -> dict[str, Any]:
-        if not SAFE_ORDER_NO.fullmatch(order_no):
+        if not is_order_identifier(order_no):
             raise StandardAPIError(
                 status.HTTP_400_BAD_REQUEST,
                 "INVALID_ORDER_NO",
@@ -5968,45 +5967,6 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_ORDER_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_.:-]{4,62}[A-Za-z0-9](?![A-Za-z0-9])")
-
-
-def _extract_order_no(text: str) -> str | None:
-    """Extract the first plausible order number from free text, or None.
-
-    Order numbers look like long alphanumeric/token runs (e.g. 19-digit
-    IDs or dashed codes). We match standalone tokens of 6-64 safe chars
-    (letters/digits/_.:-), which is a much stronger signal than bare digits
-    (which would also hit phone numbers). This is a cheap deterministic first
-    pass; a model disambiguation layer can refine it later.
-
-    A candidate MUST carry at least one digit. Without that rule the scan
-    returns the first ordinary WORD of a Latin-script question — `Please
-    check charging anomalies for order (2098…)` yielded ``Please``, so the
-    order was never found and the request silently degraded to a zero-order
-    answer (41 live, 2026-09-20). Chinese hid the defect: CJK characters are
-    outside the token class, so the scan skipped them and landed on the bare
-    order number. Requiring a digit is what tells an identifier apart from a
-    word; a real order number that carries none does not exist in this
-    system.
-    """
-    if not text:
-        return None
-    for match in _ORDER_TOKEN.finditer(text):
-        candidate = match.group(0)
-        if not any(char.isdigit() for char in candidate):
-            continue
-        # Skip pure-digit tokens that are too short to be order ids and could
-        # be phone numbers (<6 digits already excluded by length, but a long
-        # pure-digit run like a phone would be 11 digits — still ambiguous;
-        # order numbers in this system are >=15 chars). To be conservative,
-        # only treat pure-digit runs >=15 as order candidates.
-        if candidate.isdigit() and len(candidate) < 15:
-            continue
-        return candidate
-    return None
-
-
 def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str, Any]:
     """The one public shape of an assistant-question job.
 
@@ -6319,7 +6279,7 @@ def _consumer_intent_clarification(code, language):
 
 
 def _consumer_order_chat(context, caller, decision, payload, conversation, language, request):
-    order_no = payload.order_no or _extract_order_no(payload.question)
+    order_no = payload.order_no or extract_order_identifier(payload.question)
     authenticated_chat_order_reader(context, caller, request)
     if order_no is None and not asks_latest_order(payload.question):
         return _clarification(
@@ -6998,7 +6958,7 @@ def _require_consumer_self_order(caller: ScopeContext, business_entry: str | Non
         or not caller.subject.c_user_id
     ):
         raise StandardAPIError(403, "CONSUMER_SCOPE_REQUIRED", "consumer self scope required")
-    if not SAFE_ORDER_NO.fullmatch(order_no):
+    if not is_order_identifier(order_no):
         raise StandardAPIError(400, "INVALID_ORDER_NO", "invalid order number")
 
 

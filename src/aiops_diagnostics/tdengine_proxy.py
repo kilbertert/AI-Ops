@@ -30,6 +30,8 @@ from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 from aiops_diagnostics.data.sources import GUN_COLUMNS_SQL
 
 GUN_COLUMNS = GUN_COLUMNS_SQL
+#: 查询请求的传输层白名单，不是订单标识语法 —— 后者只有
+#: `identity.order_identity` 一处（#606）。
 SAFE_VALUE = r"[A-Za-z0-9_.:-]{1,128}"
 TIME_VALUE = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}"
 

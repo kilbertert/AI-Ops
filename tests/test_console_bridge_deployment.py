@@ -27,6 +27,8 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
         "common/bounded_http",
         "common/http_auth",
         "common/order_reference",
+        "identity/__init__",
+        "identity/order_identity",
     ):
         (package / f"{name}.py").parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "src/aiops_diagnostics" / f"{name}.py", package / f"{name}.py")
