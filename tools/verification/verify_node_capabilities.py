@@ -48,7 +48,7 @@ cmd = [
     str(root / "services/execution-node/target/aiops-execution-node.jar") + ":/app.jar:ro",
     "-v",
     str(root / "src/aiops_diagnostics/operator/operator_tools.json") + ":/tools.json:ro",
-    "eclipse-temurin:21-jdk",
+    "eclipse-temurin@sha256:5d90b26c0784ccf55af55f97cbcf7f3969c66a06299c93bdc72649219942a48f",
     "java",
     "-Xmx256m",
     "-Daiops.node.tools-file=/tools.json",
@@ -75,8 +75,13 @@ try:
     assert bodies, "actual Java did not report"
     body, auth = bodies[0]
     assert auth == "Bearer synthetic-only"
-    assert body["tool_contract"] == "request-target/1"
-    assert set(body["schemas"]) == {"m3-exec-config/1", "operator-exec-config/1", "operator-conversation/1"}
+    assert body["tool_contract"] == "request-target/2"
+    assert set(body["schemas"]) == {
+        "m3-exec-config/1",
+        "operator-exec-config/1",
+        "operator-conversation/1",
+        "operator-agent/1",
+    }
     assert (
         body["tools_sha256"]
         == hashlib.sha256(
