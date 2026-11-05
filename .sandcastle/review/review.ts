@@ -7,7 +7,7 @@ import { claudeProfile } from "../profile.js";
 import { parseDiffLines } from "./parse-diff-lines";
 import { ReviewOutput } from "./review-output";
 import { runWithExtraction } from "../run-with-extraction";
-import { runWithRetry } from "../run-with-retry";
+import { withReviewSandbox } from "../review-sandbox.js";
 
 const PR_NUMBER = required("PR_NUMBER");
 const BRANCH = required("BRANCH");
@@ -171,24 +171,30 @@ const AxisOutput = z.object({
 type Axis = "Standards" | "Spec";
 
 async function runAxis(axis: Axis, instructions: string) {
-  const result = await runWithRetry({
-    name: `review-pr-${PR_NUMBER}-${axis.toLowerCase()}`,
-    ...claudeProfile(process.env.AFK_PROFILE),
-    logging: { type: "stdout" },
-    promptFile: path.join(import.meta.dirname, "axis-prompt.md"),
-    promptArgs: {
-      PR_NUMBER,
-      BRANCH,
-      ISSUE_NUMBER,
-      ISSUE_TITLE: ISSUE_TITLE || "(no linked issue)",
-      PR_COMMENTS_JSON: JSON.stringify(prComments, null, 2),
-      REVIEW_AXIS: axis,
-      AXIS_INSTRUCTIONS: instructions,
-    },
-    output: sandcastle.Output.object({ tag: "output", schema: AxisOutput }),
-    maxAttempts: 3,
-  });
-  return { axis, report: AxisOutput.parse(result.output) };
+  const issueBody = ISSUE_NUMBER ? sh(`gh issue view ${ISSUE_NUMBER} --comments`) : "No linked issue.";
+  const result = await withReviewSandbox(process.cwd(), BRANCH, process.env.AFK_PROFILE, (sandbox, agent) =>
+    sandbox.run({
+      agent,
+      name: `review-pr-${PR_NUMBER}-${axis.toLowerCase()}`,
+      logging: { type: "stdout" },
+      promptFile: path.join(import.meta.dirname, "axis-prompt.md"),
+      promptArgs: {
+        PR_NUMBER,
+        BRANCH,
+        ISSUE_NUMBER,
+        ISSUE_TITLE: ISSUE_TITLE || "(no linked issue)",
+        ISSUE_BODY: issueBody,
+        PR_COMMENTS_JSON: JSON.stringify(prComments, null, 2),
+        REVIEW_AXIS: axis,
+        AXIS_INSTRUCTIONS: instructions,
+      },
+      signal: AbortSignal.timeout(Number(process.env.AFK_RUN_TIMEOUT ?? 3600) * 1000),
+    }),
+  );
+  const output = [...result.stdout.matchAll(/<output>([\s\S]*?)<\/output>/g)].at(-1)?.[1];
+  if (!output) throw new Error(`${axis} reviewer returned no report`);
+
+  return { axis, report: AxisOutput.parse(JSON.parse(output)) };
 }
 
 const axisResults = await Promise.all([

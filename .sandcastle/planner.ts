@@ -10,6 +10,8 @@
 //                 delivery branch, runs the full check, and the host opens a PR
 import { execFileSync, execSync } from "node:child_process";
 import { resolve } from "node:path";
+import { strictSignal } from "./review-signal.js";
+import { withReviewSandbox } from "./review-sandbox.js";
 import { pathToFileURL } from "node:url";
 import { run, createSandbox, type RunResult } from "@ai-hero/sandcastle";
 import { claudeProfile } from "./profile.js";
@@ -33,7 +35,6 @@ async function withTimeout<T>(ms: number, label: string, fn: () => Promise<T>): 
 
 const MAX_ITERATIONS = Number(process.env.AFK_RALPH_ITERATIONS ?? 10);
 const MAX_PARALLEL = Number(process.env.AFK_RALPH_PARALLEL ?? 4);
-const INSTALL_CMD = process.env.AFK_INSTALL_CMD ?? "npm ci";
 const PROFILE = process.env.AFK_PROFILE;
 
 // --- testable pure helpers -------------------------------------------------
@@ -80,30 +81,6 @@ export function isPrdIssue(title: string, body: string): boolean {
   );
 }
 
-/**
- * The verdict a run actually emitted — parsed from the END of the output.
- *
- * The SDK's `completionSignal` is `signals.find(sig => output.includes(sig))`:
- * the FIRST configured marker found anywhere in the transcript wins, so a
- * report quoting `<promise>COMPLETE</promise>` in prose satisfies the gate
- * even when the emitted verdict was BLOCKED (measured on an adversarial
- * report). Counting markers anywhere has the same hole in miniature: a
- * single inline citation satisfies it too. The verdict therefore must be
- * positional — a marker line counts only when it occupies a whole line,
- * and the run has a verdict only when the LAST non-empty line is such a
- * marker and every standalone marker line agrees on it. Prose references
- * and code samples never count; in-band ambiguity beyond that cannot be
- * distinguished from a real verdict, which is why the contract also asks
- * the agent for the marker-as-last-line shape.
- */
-export function strictSignal(stdout: string): string | undefined {
-  const standalone = /^\s*<promise>(COMPLETE|BLOCKED)<\/promise>\s*$/;
-  const lines = stdout.split("\n");
-  const seen = new Set(lines.map((l) => standalone.exec(l)?.[1]).filter((v) => v !== undefined));
-  if (seen.size !== 1) return undefined;
-  const lastLine = lines.findLast((l) => l.trim().length > 0) ?? "";
-  return standalone.test(lastLine) ? [...seen][0] : undefined;
-}
 
 type ReadyIssue = { number: number; title: string; body: string };
 
@@ -181,7 +158,7 @@ function profileConfig(includeGitHub = true) {
   // claudeProfile the explicit argument wins over ambient env, and a
   // container's env is fixed at `docker run` — nothing passed to a later
   // run() can remove a variable once the container exists.
-  const token = includeGitHub ? process.env.AFK_AGENT_GH_TOKEN : "";
+  const token = includeGitHub ? process.env.AFK_AGENT_GH_TOKEN ?? "" : "";
   return claudeProfile(PROFILE, { AFK_AGENT_GH_TOKEN: token });
 }
 
@@ -270,11 +247,6 @@ async function main(): Promise<void> {
             ...profileConfig(),
             branch: issue.branch,
             baseBranch: "origin/main",
-            hooks: {
-              host: {
-                onSandboxReady: [{ command: INSTALL_CMD }],
-              },
-            },
           });
           try {
             const result = await withTimeout(
@@ -295,96 +267,25 @@ async function main(): Promise<void> {
             );
 
             if (result.commits.length > 0) {
-              // The reviewer is a read-only Hacker in an ISOLATED identity: a
-              // fresh sandbox whose env never carried a GitHub credential.
-              // Container env is fixed at `docker run` and cannot be scrubbed
-              // for a later run(), so reusing the implementer's container
-              // would hand the reviewer the same live token (measured). The
-              // worktree forks from the implementer's branch — same commits,
-              // throwaway ref — and the issue body arrives via a prompt arg
-              // because the container has no `gh` credential to fetch it with.
               const issueBody = execFileSync("gh", ["issue", "view", String(issue.number)], {
                 encoding: "utf8",
               });
-              const expectedSha = execFileSync("git", ["rev-parse", issue.branch], {
-                encoding: "utf8",
-              }).trim();
-              // Unique per attempt: the SDK checks an EXISTING ref out as-is
-              // and ignores baseBranch, so a deterministic `review/N-1` left
-              // behind by a crashed run would make the next review audit
-              // stale commits — and the cleanup would delete a ref this run
-              // never created. (External re-review, #1397.)
-              const reviewBranch = `review/${issue.number}-${Date.now()}`;
-              const reviewSandbox = await createSandbox({
-                ...profileConfig(false),
-                branch: reviewBranch,
-                baseBranch: issue.branch,
-                hooks: {
-                  host: {
-                    onSandboxReady: [{ command: INSTALL_CMD }],
+              const review = await withReviewSandbox(process.cwd(), issue.branch, PROFILE, (reviewSandbox, agent) =>
+                reviewSandbox.run({
+                  agent,
+                  name: `Reviewer #${issue.number}`,
+                  promptFile: ".sandcastle/review-prompt.md",
+                  promptArgs: {
+                    ISSUE_NUMBER: String(issue.number),
+                    ISSUE_TITLE: issue.title,
+                    BRANCH: issue.branch,
+                    ISSUE_BODY: issueBody,
                   },
-                },
-              });
-              let review: RunResult | undefined;
-              try {
-                // Prove the sandbox's ref is the candidate tip — checking the
-                // branch that was injected, not just the name we asked for.
-                const reviewHead = execFileSync("git", ["rev-parse", reviewBranch], {
-                  encoding: "utf8",
-                }).trim();
-                if (reviewHead !== expectedSha) {
-                  throw new Error(
-                    `Review #${issue.number} sandbox is at ${reviewHead}, expected candidate tip ${expectedSha}`,
-                  );
-                }
-                // The credentialless identity is asserted against the
-                // container's ACTUAL env, not the profile's return value:
-                // `.sandcastle/.env` keys reach the container via resolvedEnv
-                // even when the profile passes nothing. The profile pins the
-                // keys EMPTY for a credentialless run, so "present but empty"
-                // is expected — what must not appear is a non-empty value.
-                // The probe echoes a fixed sentinel: a leaked secret can
-                // never reach stdout or a thrown message.
-                const probe = await reviewSandbox.exec(
-                  '[ -n "${GH_TOKEN}${GITHUB_TOKEN}" ] && echo CREDENTIAL_PRESENT || echo clean',
-                );
-                if (probe.stdout.trim() !== "clean") {
-                  throw new Error(
-                    `Review #${issue.number} sandbox carries a non-empty GitHub credential (env assertion)`,
-                  );
-                }
-
-                review = await withTimeout(
-                  Number(process.env.AFK_RUN_TIMEOUT ?? 3600) * 1000,
-                  `Review #${issue.number}`,
-                  () => reviewSandbox.run({
-                    ...profileConfig(false),
-                    name: `Reviewer #${issue.number}`,
-                    promptFile: ".sandcastle/review-prompt.md",
-                    promptArgs: {
-                      ISSUE_NUMBER: String(issue.number),
-                      ISSUE_TITLE: issue.title,
-                      BRANCH: issue.branch,
-                      ISSUE_BODY: issueBody,
-                    },
-                    completionSignal: ["<promise>COMPLETE</promise>", "<promise>BLOCKED</promise>"],
-                  }),
-                );
-              } finally {
-                await reviewSandbox.close();
-                // The review branch only existed to give the sandbox a ref.
-                try {
-                  execFileSync("git", ["branch", "-D", reviewBranch], { stdio: "ignore" });
-                } catch {
-                  /* the sandbox may have removed it already */
-                }
-              }
-              if (!review) {
-                // withTimeout threw before a result existed; the sandbox is
-                // already closed. Unreachable in practice — the throw
-                // propagates first — but keeps the type honest.
-                throw new Error(`Review #${issue.number} produced no result`);
-              }
+                  logging: { type: "file", path: resolve(".sandcastle/logs", `review-${issue.number}-${Date.now()}.log`) },
+                  signal: AbortSignal.timeout(Number(process.env.AFK_RUN_TIMEOUT ?? 3600) * 1000),
+                  completionSignal: ["<promise>COMPLETE</promise>", "<promise>BLOCKED</promise>"],
+                }),
+              );
               const reportTail = (review.stdout ?? "").trim().split("\n").slice(-40).join("\n");
               const reportBody = review.stdout.replace(/<promise>[^<]*<\/promise>/g, "").trim();
               if (review.commits.length > 0) {
