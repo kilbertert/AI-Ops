@@ -208,7 +208,7 @@ class DifyRunStore:
         # 只是在旧代码里记录被写成 `status`，与请求不一致（2026-10-31 实测：
         # 知识预览在库/日志里读起来像订单状态，排查指向错的路径）。
         # 这里接受它，是为了让"记录的类型"能等于"实际发出去的类型"。
-        if data_kind not in {"status", "billing", "knowledge", "clarify", "human", "order_required"}:
+        if data_kind not in {"status", "billing", "knowledge", "clarify", "human", "order_required", "agent"}:
             raise ValueError("unsupported consumer data kind")
         now = now_utc()
         with self._connection(write=True) as connection:
@@ -357,6 +357,47 @@ class DifyRunStore:
                 "SELECT context_json FROM chat_dify_runs WHERE run_id=?", (run_id,)
             ).fetchone()
         return json.loads(row[0]) if row and row[0] else None
+
+    def reserve_consumer_tool(self, run_id: str, tool: str, arguments: dict) -> int:
+        """在同一事务中占用调用预算；并发、失败和重放都计入本轮上限。"""
+        with self._connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT context_json FROM chat_dify_runs WHERE run_id=? AND data_kind='agent' "
+                "AND state='running' AND expires_at>?",
+                (run_id, format_stored_time(now_utc())),
+            ).fetchone()
+            if row is None or not row[0]:
+                raise DifyRunError("CHATFLOW_NOT_ACTIVE", "客服执行已结束")
+            context = json.loads(row[0])
+            calls = context.setdefault("calls", [])
+            if len(calls) >= 8:
+                raise DifyRunError("CONSUMER_TOOL_BUDGET", "本轮工具调用次数已用完")
+            calls.append({"tool": tool, "arguments": arguments, "result": None})
+            connection.execute(
+                "UPDATE chat_dify_runs SET context_json=? WHERE run_id=?",
+                (json.dumps(context, ensure_ascii=False), run_id),
+            )
+            return len(calls) - 1
+
+    def finish_consumer_tool(self, run_id: str, index: int, result: dict) -> bool:
+        with self._connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT context_json FROM chat_dify_runs WHERE run_id=? AND data_kind='agent' "
+                "AND state='running' AND expires_at>?",
+                (run_id, format_stored_time(now_utc())),
+            ).fetchone()
+            if row is None:
+                return False
+            context = json.loads(row[0])
+            call = context["calls"][index]
+            if call["result"] is not None:
+                return False
+            call["result"] = result
+            connection.execute(
+                "UPDATE chat_dify_runs SET context_json=? WHERE run_id=?",
+                (json.dumps(context, ensure_ascii=False), run_id),
+            )
+            return True
 
     def store_reply_source(self, run_id: str, reply: str) -> bool:
         """只存已校验的表达模板，回读重新填本轮事实，不信任缓存正文。"""

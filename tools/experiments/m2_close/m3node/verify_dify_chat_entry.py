@@ -759,6 +759,7 @@ def _start_gateway(
     service_live_order: bool = False,
     service_billing: bool = False,
     service_photo: bool = False,
+    service_callback_version: int = 2,
     service_publication_target: str = "",
 ) -> tuple[subprocess.Popen, str, dict[str, Any]]:
     """起真 Gateway（绑定表指向 Dify 路线），等它就绪。"""
@@ -864,7 +865,7 @@ def _start_gateway(
                                     "live_order_status": service_live_order,
                                     "live_billing_record": service_billing,
                                     "photo_enabled": service_photo,
-                                    "callback_version": 2 if service_content else 1,
+                                    "callback_version": service_callback_version if service_content else 1,
                                     "app_id": service_app_id,
                                     "agent_id": "agt_12345678",
                                     "agent_version_no": 1,

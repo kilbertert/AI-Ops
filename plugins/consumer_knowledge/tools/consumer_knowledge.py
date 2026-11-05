@@ -22,6 +22,21 @@ class ConsumerKnowledge(Tool):
         grant = tool_parameters.get("data_grant")
         if not isinstance(libraries, list) or not libraries or not isinstance(grant, str) or not grant:
             raise ValueError("请选择知识库，并通过已授权的试用或App入口执行")
+        resource = tool_parameters.get("resource")
+        if resource:
+            result = call(
+                self.runtime.credentials,
+                "/v1/internal/consumer-data/agent",
+                grant=grant,
+                body={
+                    "resource": resource,
+                    "query": tool_parameters.get("query", ""),
+                    "order_no": tool_parameters.get("order_no", ""),
+                    "knowledge_base_ids": libraries,
+                },
+            )
+            yield self.create_text_message(json.dumps(result, ensure_ascii=False))
+            return
         result = call(
             self.runtime.credentials,
             "/v1/internal/consumer-data/knowledge",

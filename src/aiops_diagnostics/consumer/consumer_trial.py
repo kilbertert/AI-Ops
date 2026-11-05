@@ -108,46 +108,51 @@ class ConsumerTrial:
             from aiops_diagnostics.consumer.consumer_intent import message, validate
             from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
-            decision = validate(
-                runtime.classify_consumer(self.question, language=language, selected_order=bool(order))
-            )
-            intent = decision["intent"]
-            # **澄清/人工也要能预览**（Codex 复核第 3 项）。提示词里为 clarify/human
-            # 写的正文，运营必须在发布前看得到；旧代码把这类问题直接拒掉，
-            # 于是"我改的澄清话术"永远无法预览。
-            #
-            # 语义与正式路径一致（`gateway_api` 的 `prompt_notices` 分支）：
-            # clarify/human 转成 notice，按 knowledge 路径跑，`data_kind=notice_kind`。
-            # 这**不**放开订单授权：`order_required` 仍要求显式订单。
-            prompt_notices = self.binding.callback_version >= 5
-            notice_kind = ""
-            if prompt_notices and intent in {"clarify", "human"}:
-                notice_kind = intent
-                intent = "knowledge"
-                decision["uses_context"] = False
-            if intent not in {"knowledge", "order_status", "billing_record"} or decision["uses_context"]:
-                raise ChatRunUnavailable("TRIAL_CLARIFICATION_REQUIRED", message("clarify", language))
-            # **一个 kind，两处都用**：运行记录与发给 Dify 的 `data_kind` 必须是同一个值。
-            # 2026-10-31 实测：旧代码记录写 "status"、请求传 "knowledge"，
-            # 于是知识类预览在库/日志里被读成订单状态，排查时指向完全错的路径。
-            live = intent in {"order_status", "billing_record"}
-            kind = notice_kind or (
-                ("billing" if intent == "billing_record" else "status") if live else "knowledge"
-            )
-            if live and (not order or decision["order_reference"] != "explicit"):
-                raise ChatRunUnavailable(
-                    "TRIAL_ORDER_REQUIRED", "试用查询请明确使用选定订单，不支持另选最新单"
+            if self.binding.callback_version == 6:
+                kind, live = "agent", bool(order)
+                if order:
+                    runtime._require_chat_order_visible(scope, order)
+            else:
+                decision = validate(
+                    runtime.classify_consumer(self.question, language=language, selected_order=bool(order))
                 )
-            if live and not (
-                self.binding.live_billing_record if kind == "billing" else self.binding.live_order_status
-            ):
-                raise ChatRunUnavailable("CHATFLOW_LIVE_DISABLED", message("disabled", language))
-            if order:
-                runtime._require_chat_order_visible(scope, order)
-            if not live:
-                from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
+                intent = decision["intent"]
+                # **澄清/人工也要能预览**（Codex 复核第 3 项）。提示词里为 clarify/human
+                # 写的正文，运营必须在发布前看得到；旧代码把这类问题直接拒掉，
+                # 于是"我改的澄清话术"永远无法预览。
+                #
+                # 语义与正式路径一致（`gateway_api` 的 `prompt_notices` 分支）：
+                # clarify/human 转成 notice，按 knowledge 路径跑，`data_kind=notice_kind`。
+                # 这**不**放开订单授权：`order_required` 仍要求显式订单。
+                prompt_notices = self.binding.callback_version >= 5
+                notice_kind = ""
+                if prompt_notices and intent in {"clarify", "human"}:
+                    notice_kind = intent
+                    intent = "knowledge"
+                    decision["uses_context"] = False
+                if intent not in {"knowledge", "order_status", "billing_record"} or decision["uses_context"]:
+                    raise ChatRunUnavailable("TRIAL_CLARIFICATION_REQUIRED", message("clarify", language))
+                # **一个 kind，两处都用**：运行记录与发给 Dify 的 `data_kind` 必须是同一个值。
+                # 2026-10-31 实测：旧代码记录写 "status"、请求传 "knowledge"，
+                # 于是知识类预览在库/日志里被读成订单状态，排查时指向完全错的路径。
+                live = intent in {"order_status", "billing_record"}
+                kind = notice_kind or (
+                    ("billing" if intent == "billing_record" else "status") if live else "knowledge"
+                )
+                if live and (not order or decision["order_reference"] != "explicit"):
+                    raise ChatRunUnavailable(
+                        "TRIAL_ORDER_REQUIRED", "试用查询请明确使用选定订单，不支持另选最新单"
+                    )
+                if live and not (
+                    self.binding.live_billing_record if kind == "billing" else self.binding.live_order_status
+                ):
+                    raise ChatRunUnavailable("CHATFLOW_LIVE_DISABLED", message("disabled", language))
+                if order:
+                    runtime._require_chat_order_visible(scope, order)
+                if not live:
+                    from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
-                require_available(runtime, scope, self.binding)
+                    require_available(runtime, scope, self.binding)
             self.require_current(runtime.gateway_settings)
             current_trial = runtime.store.get_standard_diagnosis(trial_id, scope.scope_fingerprint)
             if registration.cancelled or not current_trial or current_trial["status"] != "running":
@@ -178,6 +183,18 @@ class ConsumerTrial:
                 language=language,
                 data_kind=kind,
             )
+            if self.binding.callback_version == 6:
+                from aiops_diagnostics.consumer import consumer_agent
+
+                consumer_agent.initialize(
+                    runtime,
+                    run_id,
+                    {
+                        "history": [],
+                        "selected_order": order,
+                        "historical_results_are_not_current": True,
+                    },
+                )
             engine = DifyChatflowClient(runtime.gateway_settings.dify_chat_base_url)
             user = "trial:" + grant.grant_id
 
@@ -191,20 +208,29 @@ class ConsumerTrial:
                     registration.interrupt()
                     raise ValueError("trial cancelled")
 
+            inputs = {
+                "language": language,
+                "has_photo": "no",
+                "data_grant": token,
+                **({"data_kind": kind} if self.binding.callback_version >= 2 else {}),
+            }
+            if self.binding.callback_version == 6:
+                inputs = {
+                    "language": language,
+                    "data_grant": token,
+                    "conversation_context": json.dumps(
+                        runs.context(run_id)["conversation"], ensure_ascii=False
+                    ),
+                }
             reply = engine.run(
                 key=key,
                 workflow_id=workflow_id,
                 user=user,
                 query=self.question,
-                inputs={
-                    "language": language,
-                    "has_photo": "no",
-                    "data_grant": token,
-                    **({"data_kind": kind} if self.binding.callback_version >= 2 else {}),
-                },
+                inputs=inputs,
                 on_started=started,
             )
-            if not live:
+            if not live and self.binding.callback_version != 6:
                 require_available(runtime, scope, self.binding)
             if order:
                 runtime._require_chat_order_visible(scope, order)
@@ -218,12 +244,16 @@ class ConsumerTrial:
             ):
                 raise ValueError("trial ended")
             context = runs.context(run_id)
-            if live:
+            if live and self.binding.callback_version != 6:
                 snapshot = (context or {}).get("live_snapshot", {})
                 expected_source = "cpms.orderDetail" if kind == "billing" else "cpms.chargingInfo"
                 if snapshot.get("order_no") != order or snapshot.get("source") != expected_source:
                     raise ValueError("trial has no matching live snapshot")
-            answer = final_answer(reply.answer, context, language, self.content["content"])
+            if self.binding.callback_version == 6:
+                consumer_agent.require_evidence(runtime, scope, self.binding, context)
+                answer = consumer_agent.final_answer(reply.answer, context)
+            else:
+                answer = final_answer(reply.answer, context, language, self.content["content"])
             if not runs.store_snapshot(run_id, answer) or not runs.succeed(run_id):
                 raise ValueError("trial result not stored")
             return TrialResult(

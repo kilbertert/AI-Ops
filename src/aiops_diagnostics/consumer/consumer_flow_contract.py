@@ -60,6 +60,13 @@ def _fact_slots(workflow) -> bool:
 def publication_settings(
     workflow, ceiling, public_base, *, require_split=False, require_picker=False, owned_libraries=None
 ):
+    from aiops_diagnostics.consumer import consumer_agent_flow
+
+    if consumer_agent_flow.enabled(workflow):
+        try:
+            return consumer_agent_flow.publication_settings(workflow, ceiling, owned_libraries)
+        except ValueError as exc:
+            raise ConsumerFlowError(str(exc)) from exc
     graph = workflow.get("graph", {})
     from aiops_diagnostics.consumer import consumer_documents
 

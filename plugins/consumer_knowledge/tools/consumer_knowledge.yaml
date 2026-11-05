@@ -6,7 +6,7 @@ identity:
     en_US: Consumer knowledge retrieval
 description:
   human: *id001
-  llm: Use the published library selection with this request grant.
+  llm: 按需要查询本人订单、状态、账务、知识或人工联系指引，可以多次组合查询。orders返回本人最近5单，latest_order_no是最新订单；status与billing必须给出已确认的order_no；knowledge用query检索操作或政策。账务记录不证明支付渠道扣款/到账，状态记录不能诊断故障原因。
 parameters:
 - name: knowledge_base_ids
   type: dynamic-select
@@ -42,6 +42,60 @@ parameters:
     zh_Hans: 图片线索
     en_US: Image clue
   llm_description: Image clue
+- name: resource
+  type: select
+  form: llm
+  required: false
+  label:
+    zh_Hans: 要查询的资料类型
+    en_US: resource
+  human_description:
+    zh_Hans: 要查询的资料类型
+    en_US: resource
+  llm_description: 要查询的资料类型
+  options:
+  - value: knowledge
+    label:
+      en_US: knowledge
+      zh_Hans: knowledge
+  - value: orders
+    label:
+      en_US: orders
+      zh_Hans: orders
+  - value: status
+    label:
+      en_US: status
+      zh_Hans: status
+  - value: billing
+    label:
+      en_US: billing
+      zh_Hans: billing
+  - value: support
+    label:
+      en_US: support
+      zh_Hans: support
+- name: query
+  type: string
+  form: llm
+  required: false
+  label:
+    zh_Hans: 知识检索问题；其他查询可留空
+    en_US: query
+  human_description:
+    zh_Hans: 知识检索问题；其他查询可留空
+    en_US: query
+  llm_description: 知识检索问题；其他查询可留空
+- name: order_no
+  type: string
+  form: llm
+  required: false
+  label:
+    zh_Hans: 指定本人订单号；没有确认对象时先查orders或澄清
+    en_US: order_no
+  human_description:
+    zh_Hans: 指定本人订单号；没有确认对象时先查orders或澄清
+    en_US: order_no
+  llm_description: 指定本人订单号；没有确认对象时先查orders或澄清
 extra:
   python:
     source: tools/consumer_knowledge.py

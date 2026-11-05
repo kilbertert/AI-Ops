@@ -319,6 +319,7 @@ def test_wal_is_set_by_every_initializer_not_by_construction_order(tmp_path: Pat
 _IOFORMAT_LEDGER = {
     "common/scalar_rules.py",  # 权威本体
     "consumer/consumer_time.py",  # 展示层容错（读不出就显示原文）
+    "consumer/consumer_agent.py",  # 工具中的CPMS原始日期；保留上游偏移，不能把naive业务时间冒充UTC
     "consumer/consumer_tool_grants.py",  # 节点请求的 expires_at 是 wire 合同
     "execution/chat_execution.py",  # 节点回调快照校验：合同要求**显式** UTC 偏移
     "health/health_report.py",  # 报告对外字段（started_at/stopped_at/data_as_of 是响应形状）

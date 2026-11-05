@@ -150,6 +150,116 @@ def upgrade(source, public_base):
     return candidate
 
 
+def agent_conversation(source, plugin_identifier):
+    from aiops_diagnostics.consumer import consumer_agent_flow as flow
+    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, selected_libraries
+
+    candidate = copy.deepcopy(source)
+    workflow = candidate["workflow"]
+    nodes = {n["id"]: n for n in workflow["graph"]["nodes"]}
+    if set(nodes) != set(TYPES) or nodes["knowledge"]["data"].get("type") != "tool":
+        raise ValueError("请从现有WF01选库版本迁移")
+    libraries = list(selected_libraries(nodes["knowledge"]["data"]))
+    old = nodes["answer"]["data"]
+    business = "\n".join(
+        p.get("text", "")
+        for p in old.get("prompt_template", [])
+        if p.get("role") == "system" and not p.get("text", "").lstrip().startswith("<!-- aiops-protocol:")
+    )
+    model = copy.deepcopy(old["model"])
+    model["model"] = model.pop("name")
+    model["model_type"] = "llm"
+    nodes["start"]["data"]["variables"] = [
+        {
+            "variable": key,
+            "label": label,
+            "type": "text-input" if key != "conversation_context" else "paragraph",
+            "required": True,
+            "max_length": limit,
+            "options": [],
+        }
+        for key, label, limit in (
+            ("language", "语言", 16),
+            ("data_grant", "本轮授权", 512),
+            ("conversation_context", "受控会话历史", 40000),
+        )
+    ]
+    nodes["answer"]["data"] = {
+        "type": "agent",
+        "title": "智能客服",
+        "agent_strategy_provider_name": "langgenius/agent/agent",
+        "agent_strategy_name": "function_calling",
+        "agent_strategy_label": "FunctionCalling",
+        "version": "1",
+        "agent_parameters": {
+            "model": {"type": "constant", "value": model},
+            "instruction": {"type": "constant", "value": business + "\n\n" + flow.INSTRUCTION},
+            "query": {"type": "mixed", "value": flow.QUERY},
+            "maximum_iterations": {"type": "constant", "value": 8},
+            "tools": {
+                "type": "constant",
+                "value": [
+                    {
+                        "enabled": True,
+                        "type": "builtin",
+                        "provider_name": PROVIDER,
+                        "tool_name": flow.TOOL,
+                        "plugin_unique_identifier": plugin_identifier,
+                        "settings": {"knowledge_base_ids": {"type": "constant", "value": libraries}},
+                        "parameters": {
+                            "image_text": {"auto": 0, "value": {"type": "constant", "value": ""}},
+                            "data_grant": {
+                                "auto": 0,
+                                "value": {"type": "variable", "value": ["start", "data_grant"]},
+                            },
+                            **{
+                                key: {"auto": 1, "value": {"type": "constant", "value": ""}}
+                                for key in ("resource", "query", "order_no")
+                            },
+                        },
+                    }
+                ],
+            },
+        },
+    }
+    nodes["end"]["data"] = {"type": "answer", "title": "回复", "answer": "{{#answer.text#}}", "variables": []}
+    workflow["graph"]["nodes"] = [nodes[k] for k in ("start", "answer", "end")]
+    workflow["graph"]["edges"] = [
+        {
+            "id": a + "-" + b,
+            "source": a,
+            "target": b,
+            "sourceHandle": "source",
+            "targetHandle": "target",
+            "type": "custom",
+            "data": {"sourceType": nodes[a]["data"]["type"], "targetType": nodes[b]["data"]["type"]},
+        }
+        for a, b in (("start", "answer"), ("answer", "end"))
+    ]
+    workflow["conversation_variables"] = []
+    workflow["environment_variables"] = [
+        v
+        for v in workflow.get("environment_variables", [])
+        if v.get("name") not in {"answer_fact_contract", flow.MODE}
+    ]
+    workflow["environment_variables"].append(
+        {"id": flow.MODE, "name": flow.MODE, "value_type": "string", "value": "agent"}
+    )
+    dependencies = candidate.setdefault("dependencies", [])
+    dependencies[:] = [
+        d
+        for d in dependencies
+        if not str(d.get("value", {}).get("plugin_unique_identifier", "")).startswith(
+            ("trendpower/consumer_knowledge:", "langgenius/agent:")
+        )
+    ]
+    dependencies.extend(
+        {"type": "package", "value": {"plugin_unique_identifier": identifier}}
+        for identifier in (plugin_identifier, flow.AGENT_PLUGIN)
+    )
+    return candidate
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
@@ -158,6 +268,7 @@ def main():
     parser.add_argument("--knowledge-base", action="append")
     parser.add_argument("--knowledge-plugin")
     parser.add_argument("--live-documents", action="store_true")
+    parser.add_argument("--agent-conversation", action="store_true")
     parser.add_argument(
         "--replace-system",
         action="store_true",
@@ -166,7 +277,11 @@ def main():
     args = parser.parse_args()
     os.umask(0o077)
     source = yaml.safe_load(args.source.read_text())
-    if args.live_documents:
+    if args.agent_conversation:
+        if not args.knowledge_plugin:
+            parser.error("Agent迁移需要 --knowledge-plugin 新版完整标识")
+        result = agent_conversation(source, args.knowledge_plugin)
+    elif args.live_documents:
         result = live_documents(source, replace_system=args.replace_system)
     elif args.knowledge_base or args.knowledge_plugin:
         if not args.knowledge_base or not args.knowledge_plugin:
