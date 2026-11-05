@@ -4,6 +4,14 @@ Status: Accepted
 
 日期：2026-11-05。用户已确认采用；适用 AI-Ops 的交互式与 AFK 开发。
 
+2026-11-05 外部复审修订：首轮落地被独立复审发现四处实现层缺陷并修——审查轮 GitHub
+凭据经 `profileConfig(false)` 仍注入容器（进程环境补回且容器 env 不可擦除，改为
+第二只沙箱在创建时即不含凭据）；SDK `completionSignal` 用全文 `includes` 取首个
+信号，引用标记的报告可骗过闸门（改为全部标记须一致且报告非空）；`!`gh issue view``
+在沙箱内执行，改为派发者宿主渲染 `{{ISSUE_BODY}}`；派发边界的「工具白名单」不隔离
+秘密，改为派发者给脱敏结论并点名禁读路径。决策本身不变；另更正一处验收回执误报
+（审查报告实则持久化于 `.sandcastle/logs/`）。
+
 ## 决定
 
 执行规则集中在[验证分工](../agents/verification-workflow.md)，由 AGENTS、CLAUDE 与全部实现/验收入口引用。
