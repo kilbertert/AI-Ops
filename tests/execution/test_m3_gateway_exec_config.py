@@ -678,7 +678,7 @@ def _install_final_gate_probe(fixture, monkeypatch, *, event, calls, before=None
                     fixture["store"].refuse(run_id_, "exec_config_drift")
             else:
                 # 让时间在最终事务之前越过到期点。
-                monkeypatch.setattr(agent_runs, "_now", lambda: expires + timedelta(seconds=1))
+                monkeypatch.setattr(agent_runs, "now_utc", lambda: expires + timedelta(seconds=1))
         return original(run_id_, observed, **kwargs)
 
     monkeypatch.setattr(store, "confirm_exec_config", at_final_gate)
@@ -797,7 +797,7 @@ def test_expiry_boundary_uses_the_existing_semantics(tmp_path, monkeypatch):
         assert _delegate(fixture).status_code == 502
         run_id = _prepare_succeeded(fixture)
         expires = fixture["store"].get(run_id).expires_at
-        monkeypatch.setattr(agent_runs, "_now", lambda e=expires, o=offset: e + timedelta(seconds=o))
+        monkeypatch.setattr(agent_runs, "now_utc", lambda e=expires, o=offset: e + timedelta(seconds=o))
         response = _claim_with(fixture, run_id, identity)
         cases.append((label, response.status_code, _rows(fixture["store"])[0]["state"]))
         monkeypatch.undo()

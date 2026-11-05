@@ -17,6 +17,7 @@ from aiops_diagnostics.common.i18n import (
     DEFAULT_LANGUAGE,
 )
 from aiops_diagnostics.common.redaction import ERROR_TEXT_LIMIT, redact_text
+from aiops_diagnostics.common.scalar_rules import as_datetime, format_stored_time, now_utc, parse_stored_time
 from aiops_diagnostics.conversation.conversation_store import BUSY_LOCK_SECONDS
 from aiops_diagnostics.data.sources import SourceError, scoped_live_sources
 from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_from_json, scope_to_json
@@ -91,15 +92,6 @@ class JobRegistration:
     #: ``cancelled``. Reachable whenever a user stops a job that is still
     #: spinning up its workspace, which is the ordinary case.
     cancelled: bool = False
-
-
-def _as_datetime(value):
-    from datetime import UTC, datetime
-
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=UTC)
-    parsed = datetime.fromisoformat(str(value))
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 class GatewayRuntime:
@@ -506,8 +498,8 @@ class GatewayRuntime:
         kwargs = dict(
             language=language,
             site_ids=site_ids,
-            window_start=_as_datetime(window_start),
-            window_end=_as_datetime(window_end),
+            window_start=parse_stored_time(window_start),
+            window_end=parse_stored_time(window_end),
             reason_code=REASON_SCOPE_EMPTY,
         )
         if card == OPERATIONS_CARD_OFFLINE:
@@ -532,8 +524,8 @@ class GatewayRuntime:
         window = dict(
             language=language,
             site_ids=site_ids,
-            window_start=_as_datetime(window_start),
-            window_end=_as_datetime(window_end),
+            window_start=parse_stored_time(window_start),
+            window_end=parse_stored_time(window_end),
         )
         if card == OPERATIONS_CARD_OFFLINE:
             raw = sources.mysql.aggregate_offline_incidents(effective_sites, db_start, db_end)
@@ -645,8 +637,8 @@ class GatewayRuntime:
                     None,
                     language=language,
                     site_ids=site_ids,
-                    window_start=_as_datetime(window_start),
-                    window_end=_as_datetime(window_end),
+                    window_start=parse_stored_time(window_start),
+                    window_end=parse_stored_time(window_end),
                     reason_code=REASON_SCOPE_EMPTY,
                 )
             else:
@@ -662,8 +654,8 @@ class GatewayRuntime:
                         None,
                         language=language,
                         site_ids=site_ids,
-                        window_start=_as_datetime(window_start),
-                        window_end=_as_datetime(window_end),
+                        window_start=parse_stored_time(window_start),
+                        window_end=parse_stored_time(window_end),
                         reason_code=REASON_SCOPE_EMPTY,
                     )
                 else:
@@ -679,8 +671,8 @@ class GatewayRuntime:
                             None,
                             language=language,
                             site_ids=site_ids,
-                            window_start=_as_datetime(window_start),
-                            window_end=_as_datetime(window_end),
+                            window_start=parse_stored_time(window_start),
+                            window_end=parse_stored_time(window_end),
                             reason_code=REASON_NO_ORDERS,
                         )
                     else:
@@ -741,8 +733,8 @@ class GatewayRuntime:
             None,
             language=language,
             site_ids=site_ids,
-            window_start=_as_datetime(window_start),
-            window_end=_as_datetime(window_end),
+            window_start=parse_stored_time(window_start),
+            window_end=parse_stored_time(window_end),
         )
         payload = run_narrative_turn(
             facts,
@@ -756,8 +748,8 @@ class GatewayRuntime:
             payload,
             language=language,
             site_ids=site_ids,
-            window_start=_as_datetime(window_start),
-            window_end=_as_datetime(window_end),
+            window_start=parse_stored_time(window_start),
+            window_end=parse_stored_time(window_end),
         )
 
     def get_health_report(self, context: ScopeContext, job_id: str) -> dict[str, Any] | None:
@@ -1043,11 +1035,11 @@ class GatewayRuntime:
         #    never leave this method: a count of another tenant's expired jobs is
         #    cross-tenant data, and `expired_unattributed` (the NULL-tenant rows)
         #    is the worst case because it is one global number shared by all.
-        from datetime import UTC, datetime, timedelta
+        from datetime import timedelta
 
         totals = dict(summary.get("totals") or {})
         if agent_id is None:
-            cutoff = (datetime.now(UTC) - timedelta(hours=window_hours)).isoformat()
+            cutoff = format_stored_time(now_utc() - timedelta(hours=window_hours))
             expired = self.store.count_expired_jobs_by_tenant(since=cutoff)
             totals["expired"] = expired.get(tenant_id, 0)
         summary["totals"] = totals
@@ -1936,12 +1928,16 @@ class GatewayRuntime:
                 order = sources.get_orders(order_no)[0]
                 device = str(order.get("child_device_code") or order.get("device_code"))
                 try:
-                    samples = sources.get_gun_samples(
-                        device,
-                        _as_datetime(order["created_time"]),
-                        _as_datetime(order["stop_time"]),
-                        None,
-                    )
+                    # 缺失或坏掉的时间戳不是「数据源不可用」——as_datetime 给
+                    # None，在这里就地转成 SourceError，让报告以
+                    # telemetry=unavailable 完成而不是整单 SOURCE_UNAVAILABLE
+                    # 可重试（#573 行为变更：曾经 _as_datetime 抛 ValueError，
+                    # 落到外层通用异常归一类）。
+                    created_at = as_datetime(order.get("created_time"))
+                    stopped_at = as_datetime(order.get("stop_time"))
+                    if created_at is None or stopped_at is None:
+                        raise SourceError("order timestamps unavailable")
+                    samples = sources.get_gun_samples(device, created_at, stopped_at, None)
                 except SourceError:
                     samples = []
                     report["source_summary"]["telemetry"] = "unavailable"
@@ -2231,7 +2227,7 @@ def _db_window_bound(value: str) -> str:
     string the database sees independent of the offset a caller happened to
     write (``+08:00`` and the equivalent ``Z`` must select the same rows).
     """
-    return _as_datetime(value).astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    return parse_stored_time(value).astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _internal_error_message(error: Exception, order_no: str | None) -> str:

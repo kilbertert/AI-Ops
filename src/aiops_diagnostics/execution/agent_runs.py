@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure, RequestSpec, request_json
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
+from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -233,7 +235,7 @@ def scope_to_json(context: ScopeContext) -> str:
             },
             "roles": sorted(context.roles),
             "permissions": sorted(context.permissions),
-            "resolved_at": context.resolved_at.isoformat(),
+            "resolved_at": format_stored_time(context.resolved_at),
             "scope_fingerprint": context.scope_fingerprint,
         },
         ensure_ascii=False,
@@ -261,7 +263,7 @@ def scope_from_json(raw: str) -> ScopeContext:
         ),
         roles=frozenset(data["roles"]),
         permissions=frozenset(data["permissions"]),
-        resolved_at=datetime.fromisoformat(data["resolved_at"]),
+        resolved_at=parse_stored_time(data["resolved_at"]),
         scope_fingerprint=fingerprint,
     )
 
@@ -353,10 +355,10 @@ class AgentRun:
                 "agent_version": (self.expected_agent_version if self.exec_config_confirmed else None),
                 "agent_version_gap": self._version_gap(),
                 "result_sha256": digest,
-                "created_at": self.created_at.isoformat(),
-                "expires_at": self.expires_at.isoformat(),
-                "claimed_at": self.claimed_at.isoformat() if self.claimed_at else None,
-                "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+                "created_at": format_stored_time(self.created_at),
+                "expires_at": format_stored_time(self.expires_at),
+                "claimed_at": format_stored_time(self.claimed_at) if self.claimed_at else None,
+                "completed_at": format_stored_time(self.completed_at) if self.completed_at else None,
             }
         )
         return receipt
@@ -365,10 +367,6 @@ class AgentRun:
         if self.expected_agent_version is None:
             return EXEC_CONFIG_NOT_WIRED
         return None if self.exec_config_confirmed else EXEC_CONFIG_NOT_CONFIRMED
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
 
 
 def _expire_in(connection: sqlite3.Connection, run_id: str) -> None:
@@ -383,12 +381,12 @@ def _expire_in(connection: sqlite3.Connection, run_id: str) -> None:
         UPDATE agent_runs SET state = ?, reason = COALESCE(reason, 'ttl_elapsed')
          WHERE run_id = ? AND state IN (?, ?, ?) AND expires_at <= ?
         """,
-        (EXPIRED, run_id, ISSUED, RUNNING, SUCCEEDED, _now().isoformat()),
+        (EXPIRED, run_id, ISSUED, RUNNING, SUCCEEDED, format_stored_time(now_utc())),
     )
 
 
 def _ts(value: str | None) -> datetime | None:
-    return datetime.fromisoformat(value) if value else None
+    return parse_stored_time(value) if value else None
 
 
 class AgentRunStore:
@@ -404,9 +402,10 @@ class AgentRunStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        with self._connection() as connection:
+        with self._connection(write=True) as connection:
             connection.executescript(
                 """
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS agent_runs (
                     run_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
@@ -456,21 +455,10 @@ class AgentRunStore:
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=5000")
-        try:
-            if write:
-                connection.execute("BEGIN IMMEDIATE")
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）；补上曾经缺失的
+        # foreign_keys=ON。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
-            if write:
-                connection.commit()
-        except Exception:
-            if write:
-                connection.rollback()
-            raise
-        finally:
-            connection.close()
 
     def issue(
         self,
@@ -489,7 +477,7 @@ class AgentRunStore:
     ) -> AgentRun:
         # 32 字节随机；只作关联编号，不承载任何身份或范围。
         run_id = "run_" + secrets.token_urlsafe(32)
-        now = _now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             connection.execute(
                 """
@@ -513,8 +501,8 @@ class AgentRunStore:
                     config.expected_node_id,
                     ISSUED,
                     gateway_version,
-                    now.isoformat(),
-                    (now + timedelta(seconds=RUN_TTL_SECONDS)).isoformat(),
+                    format_stored_time(now),
+                    format_stored_time(now + timedelta(seconds=RUN_TTL_SECONDS)),
                     expected_agent_version,
                     (None if expected_agent_version is None else EXEC_CONFIG_EXPECTED),
                     chat_binding,
@@ -575,7 +563,7 @@ class AgentRunStore:
                 UPDATE agent_runs SET state = ?, claimed_at = ?
                  WHERE run_id = ? AND state = ? AND expires_at > ?
                 """,
-                (RUNNING, _now().isoformat(), run_id, ISSUED, _now().isoformat()),
+                (RUNNING, format_stored_time(now_utc()), run_id, ISSUED, format_stored_time(now_utc())),
             )
             return cursor.rowcount == 1
 
@@ -585,7 +573,7 @@ class AgentRunStore:
             cursor = connection.execute(
                 "UPDATE agent_runs SET order_no=? WHERE run_id=? AND operation='operator_agent' "
                 "AND state IN ('issued','running') AND expires_at>? AND (order_no='' OR order_no=?)",
-                (order_no, run_id, _now().isoformat(), order_no),
+                (order_no, run_id, format_stored_time(now_utc()), order_no),
             )
             return cursor.rowcount == 1
 
@@ -675,7 +663,7 @@ class AgentRunStore:
                         EXEC_CONFIG_DRIFT,
                         observed,
                         EXEC_CONFIG_MISMATCHED,
-                        _now().isoformat(),
+                        format_stored_time(now_utc()),
                         actual_node_id,
                         run_id,
                         ISSUED,
@@ -741,10 +729,10 @@ class AgentRunStore:
                     json.dumps(snapshot, ensure_ascii=False, sort_keys=True),
                     actual_node_id,
                     node_build,
-                    _now().isoformat(),
+                    format_stored_time(now_utc()),
                     run_id,
                     RUNNING,
-                    _now().isoformat(),
+                    format_stored_time(now_utc()),
                 ),
             )
             return cursor.rowcount == 1
@@ -814,7 +802,7 @@ class AgentRunStore:
                         EXEC_CONFIG_DRIFT,
                         observed,
                         EXEC_CONFIG_MISMATCHED,
-                        _now().isoformat(),
+                        format_stored_time(now_utc()),
                         actual_node_id,
                         run_id,
                         ISSUED,
@@ -833,7 +821,7 @@ class AgentRunStore:
                     return "not_active", run
                 if run.state not in {ISSUED, RUNNING}:
                     return "incomplete", run
-                now = _now()
+                now = now_utc()
                 if run.expires_at <= now:
                     return "expired", _read_run(connection, run_id)
                 cursor = connection.execute(
@@ -847,11 +835,11 @@ class AgentRunStore:
                         FAILED,
                         failure_reason,
                         actual_node_id,
-                        now.isoformat(),
+                        format_stored_time(now),
                         run_id,
                         ISSUED,
                         RUNNING,
-                        now.isoformat(),
+                        format_stored_time(now),
                     ),
                 )
                 if cursor.rowcount != 1:
@@ -879,7 +867,7 @@ class AgentRunStore:
             if run.state != RUNNING or run.snapshot is None:
                 # 没落到 running+快照就不存在「整轮完成」；issued/无快照都算未开始。
                 return "incomplete", run
-            now = _now()
+            now = now_utc()
             if run.expires_at <= now:
                 return "expired", _read_run(connection, run_id)
             cursor = connection.execute(
@@ -892,13 +880,13 @@ class AgentRunStore:
                 """,
                 (
                     SUCCEEDED,
-                    now.isoformat(),
+                    format_stored_time(now),
                     observed,
                     EXEC_CONFIG_MATCHED,
                     success_reason,
                     run_id,
                     RUNNING,
-                    now.isoformat(),
+                    format_stored_time(now),
                 ),
             )
             if cursor.rowcount != 1:
@@ -917,7 +905,7 @@ class AgentRunStore:
                    SET state = ?, reason = ?, actual_node_id = COALESCE(actual_node_id, ?), completed_at = ?
                  WHERE run_id = ? AND state IN (?, ?)
                 """,
-                (FAILED, reason, actual_node_id, _now().isoformat(), run_id, ISSUED, RUNNING),
+                (FAILED, reason, actual_node_id, format_stored_time(now_utc()), run_id, ISSUED, RUNNING),
             )
             return cursor.rowcount == 1
 
@@ -933,7 +921,7 @@ class AgentRunStore:
                 UPDATE agent_runs SET state = ?, reason = ?, completed_at = ?
                  WHERE run_id = ? AND state = ?
                 """,
-                (FAILED, reason, _now().isoformat(), run_id, SUCCEEDED),
+                (FAILED, reason, format_stored_time(now_utc()), run_id, SUCCEEDED),
             )
             return cursor.rowcount == 1
 
@@ -944,7 +932,7 @@ class AgentRunStore:
                 UPDATE agent_runs SET state = ?, reason = ?, completed_at = ?
                  WHERE run_id = ? AND state IN (?, ?, ?)
                 """,
-                (REVOKED, reason, _now().isoformat(), run_id, ISSUED, RUNNING, SUCCEEDED),
+                (REVOKED, reason, format_stored_time(now_utc()), run_id, ISSUED, RUNNING, SUCCEEDED),
             )
             return cursor.rowcount == 1
 
@@ -999,8 +987,8 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         observed_agent_version=row["observed_agent_version"],
         exec_config_state=row["exec_config_state"],
         gateway_version=row["gateway_version"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        expires_at=datetime.fromisoformat(row["expires_at"]),
+        created_at=parse_stored_time(row["created_at"]),
+        expires_at=parse_stored_time(row["expires_at"]),
         claimed_at=_ts(row["claimed_at"]),
         completed_at=_ts(row["completed_at"]),
         # 迁移保证这一列一定存在（新库建表即含，旧库由 _migrate_qa_link_column 补）。

@@ -21,6 +21,7 @@ from aiops_diagnostics.common.bounded_http import (
     parse_code_data_envelope,
     request_json,
 )
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.data.sources import GUN_COLUMN_NAMES
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import (
@@ -1199,7 +1200,7 @@ class OperatorCpms:
                     "tool": tool,
                     "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments[tool])),
                     "source": _declared(tool).source,
-                    "observed_at": datetime.now(UTC).isoformat(),
+                    "observed_at": format_stored_time(now_utc()),
                     "data": data,
                     "response": {
                         "code": 0,
@@ -1220,7 +1221,7 @@ class OperatorCpms:
                     "tool": tool,
                     "inputs": tool_inputs(tool, task.arguments.get(tool, {})),
                     "source": _declared(tool).source,
-                    "observed_at": datetime.now(UTC).isoformat(),
+                    "observed_at": format_stored_time(now_utc()),
                     "data": data,
                     "response": {
                         "code": 0,
@@ -1256,7 +1257,7 @@ class OperatorCpms:
                     "tool": tool,
                     "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
                     "source": operator_tools.tool(tool).source,
-                    "observed_at": datetime.now(UTC).isoformat(),
+                    "observed_at": format_stored_time(now_utc()),
                     "data": data,
                 }
                 task.evidence[tool]["response"] = response
@@ -1270,7 +1271,7 @@ class OperatorCpms:
                     "tool": tool,
                     "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
                     "source": _declared(tool).source,
-                    "observed_at": datetime.now(UTC).isoformat(),
+                    "observed_at": format_stored_time(now_utc()),
                     "data": data,
                     "response": response,
                 }
@@ -1293,7 +1294,7 @@ class OperatorCpms:
                     "tool": tool,
                     "inputs": {"order_no": run.order_no},
                     "source": operator_tools.tool(tool).source,
-                    "observed_at": datetime.now(UTC).isoformat(),
+                    "observed_at": format_stored_time(now_utc()),
                     "data": data,
                     "response": {
                         "code": 0,
@@ -1894,7 +1895,7 @@ def project_evidence(body, order, tool):
         "tool": tool,
         "order_no": order,
         "source": "cpms.orderDetail" if tool == TOOL_NAMES[0] else "cpms.chargingMonitor",
-        "observed_at": datetime.now(UTC).isoformat(),
+        "observed_at": format_stored_time(now_utc()),
         "data": selected,
     }
 
@@ -2218,7 +2219,7 @@ def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, 
     rows, total, limited = read_site_pages(scope, keywords, read, reauthorize, outside_scope=outside_scope)
     return {
         "source": "cpms.sitePage",
-        "observed_at": datetime.now(UTC).isoformat(),
+        "observed_at": format_stored_time(now_utc()),
         "sites": rows[:SITE_MAX_SHOWN],
         "limited": limited or len(rows) > SITE_MAX_SHOWN,
         "empty_scope": scope.site_ids == (),

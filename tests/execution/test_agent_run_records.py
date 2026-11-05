@@ -335,7 +335,7 @@ def test_complete_at_expiry_without_prior_read_stores_nothing(store, tmp_path, m
     config = AgentRunConfig.load(_config(tmp_path))
     run = store.issue(scope=_scope(), order_no="ORDER-A", config=config, gateway_version="t")
     assert store.claim(run.run_id) is True
-    monkeypatch.setattr(agent_runs, "_now", lambda: run.expires_at)
+    monkeypatch.setattr(agent_runs, "now_utc", lambda: run.expires_at)
     # 期限到达后不先 get()：complete 自己必须拒绝，不能依赖读取时的过期收敛。
     assert not store.complete(
         run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"

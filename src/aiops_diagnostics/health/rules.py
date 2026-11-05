@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
+from aiops_diagnostics.common.scalar_rules import as_datetime, declared_timezone
 from aiops_diagnostics.health.health_report_copy import stop_reason_fallback, ykc_stop_reason
 
 ORDER_STATUS = {
@@ -184,16 +185,27 @@ def order_window(
     because the two columns arrive from different writers with different
     tzinfo completeness; when one side is naive it adopts the other's zone, and
     when both are aware the later one is converted to the earlier one's zone.
+    Both columns go through ``as_datetime`` + ``declared_timezone`` (#573):
+    the first gives the parse, the second preserves whether the text declared
+    an offset — the reconcile below is a rule about THESE TWO COLUMNS, not
+    about scalar reading, so it lives here on top of the authority, not
+    inside it.
     """
-    created = _as_datetime(created_time)
+    created = as_datetime(created_time)
     if not created:
         return None
-    stopped = _as_datetime(stop_time) or datetime.now(tz=created.tzinfo)
-    if created.tzinfo is None and stopped.tzinfo is not None:
-        created = created.replace(tzinfo=stopped.tzinfo)
-    elif created.tzinfo is not None and stopped.tzinfo is None:
-        stopped = stopped.replace(tzinfo=created.tzinfo)
-    elif created.tzinfo is not None and stopped.tzinfo is not None:
+    stopped = as_datetime(stop_time)
+    created_zone = declared_timezone(created_time)
+    stopped_zone = declared_timezone(stop_time) if stopped is not None else None
+    if stopped is None:
+        stopped = datetime.now(tz=created.tzinfo)
+    elif created_zone is None and stopped_zone is not None:
+        # naive 列认对方声明的区——``as_datetime`` 已经把墙钟盖上 UTC，
+        # 这里是把同一个墙钟改挂到对方声明的偏移上，还原真实跨度。
+        created = created.replace(tzinfo=stopped_zone)
+    elif created_zone is not None and stopped_zone is None:
+        stopped = stopped.replace(tzinfo=created_zone)
+    else:
         stopped = stopped.astimezone(created.tzinfo)
     padding = timedelta(minutes=ORDER_WINDOW_PADDING_MINUTES)
     start = created - padding
@@ -201,17 +213,6 @@ def order_window(
     maximum_end = start + timedelta(hours=max_hours)
     clamped = end > maximum_end
     return start, min(end, maximum_end), clamped
-
-
-def _as_datetime(value: object) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str) and value:
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    return None
 
 
 def _parse_stop_code(value: str) -> int | None:

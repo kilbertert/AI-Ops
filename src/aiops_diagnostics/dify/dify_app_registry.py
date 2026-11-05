@@ -31,10 +31,11 @@ import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+from aiops_diagnostics.gateway import gateway_db
 
 #: The two business entries the platform rule already defines (``faq.PLATFORMS``).
 #: Restated rather than imported so this module stays a leaf: importing ``faq``
@@ -81,6 +82,7 @@ class DifyAppRegistry:
         with self._connection(write=True) as connection:
             connection.executescript(
                 """
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS dify_app_registry (
                     tenant_id TEXT NOT NULL,
                     business_entry TEXT NOT NULL,
@@ -95,14 +97,9 @@ class DifyAppRegistry:
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path)
-        connection.row_factory = sqlite3.Row
-        try:
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
-            if write:
-                connection.commit()
-        finally:
-            connection.close()
 
     # ── reads ─────────────────────────────────────────────────────────
 
@@ -151,7 +148,7 @@ class DifyAppRegistry:
                     binding.business_entry,
                     binding.app_id,
                     binding.agent_name,
-                    datetime.now(UTC).isoformat(),
+                    format_stored_time(now_utc()),
                 ),
             )
 

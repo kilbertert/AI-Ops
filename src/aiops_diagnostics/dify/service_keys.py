@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import hmac
 import json
-import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -45,6 +44,7 @@ from aiops_diagnostics.common.private_files import (
 )
 from aiops_diagnostics.dify.dify_chat_workflow import load_workflow_key
 from aiops_diagnostics.execution.chat_execution import key_file_for_app
+from aiops_diagnostics.gateway import gateway_db
 
 from .self_service_identity import SetupRefused
 
@@ -90,9 +90,10 @@ class KeyOperations:
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.executescript(
                 """
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS service_key_ops (
                     app_id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL,
@@ -103,7 +104,7 @@ class KeyOperations:
                 """
             )
         # 旧版误存 token -> id，原位去掉token；历史备份由运维按凭据保留策略处理。
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.execute("PRAGMA secure_delete=ON")
             for row in db.execute("SELECT app_id,before_json FROM service_key_ops").fetchall():
                 old = json.loads(row["before_json"])
@@ -115,14 +116,10 @@ class KeyOperations:
         protect_private_file(self.path)
 
     @contextmanager
-    def _connection(self):
-        connection = sqlite3.connect(str(self.path), timeout=15)
-        connection.row_factory = sqlite3.Row
-        try:
-            with connection:
-                yield connection
-        finally:
-            connection.close()
+    def _connection(self, *, write: bool = False):
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）。
+        with gateway_db.connection(self.path, write=write) as connection:
+            yield connection
 
     def get(self, app_id: str) -> dict | None:
         with self._connection() as db:
@@ -130,7 +127,7 @@ class KeyOperations:
         return dict(row) if row else None
 
     def start(self, app_id: str, workspace_id: str, before: dict[str, str]) -> None:
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.execute(
                 "INSERT INTO service_key_ops(app_id,workspace_id,before_json,stage,updated_at)"
                 " VALUES(?,?,?,'creating',?) ON CONFLICT(app_id) DO NOTHING",
@@ -138,7 +135,7 @@ class KeyOperations:
             )
 
     def clear(self, app_id: str) -> None:
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.execute("DELETE FROM service_key_ops WHERE app_id=?", (app_id,))
 
 

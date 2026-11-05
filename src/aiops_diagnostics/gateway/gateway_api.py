@@ -40,6 +40,7 @@ from aiops_diagnostics.common.i18n import (
     resolve_language,
 )
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file, write_private_text
+from aiops_diagnostics.common.scalar_rules import format_stored_time
 from aiops_diagnostics.consumer import consumer_knowledge_selection
 from aiops_diagnostics.consumer.consumer_copy import COMPOSED_LANGUAGES
 from aiops_diagnostics.consumer.consumer_order_chat import (
@@ -4480,8 +4481,8 @@ def create_gateway_app(
                 job = context.runtime.start_operations_analysis(
                     caller,
                     site_ids=site_ids,
-                    window_start=payload.window_start.isoformat(),
-                    window_end=payload.window_end.isoformat(),
+                    window_start=format_stored_time(payload.window_start),
+                    window_end=format_stored_time(payload.window_end),
                     language=language,
                 )
             else:
@@ -4489,8 +4490,8 @@ def create_gateway_app(
                     caller,
                     card=payload.card,
                     site_ids=site_ids,
-                    window_start=payload.window_start.isoformat(),
-                    window_end=payload.window_end.isoformat(),
+                    window_start=format_stored_time(payload.window_start),
+                    window_end=format_stored_time(payload.window_end),
                     language=language,
                 )
         except (ValueError, RuntimeError) as exc:
@@ -7377,8 +7378,8 @@ def _start_operations_review(
         job = context.runtime.start_operations_analysis(
             caller,
             site_ids=None,
-            window_start=window_start.isoformat(),
-            window_end=now.isoformat(),
+            window_start=format_stored_time(window_start),
+            window_end=format_stored_time(now),
             language=language,
         )
     except (ValueError, RuntimeError) as exc:

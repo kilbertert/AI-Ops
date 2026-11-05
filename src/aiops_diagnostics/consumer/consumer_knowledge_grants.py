@@ -20,12 +20,12 @@
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.gateway import gateway_db
 
 AUDIENCE_CUSTOMER = "customer"
 AUDIENCE_INTERNAL = "internal"
@@ -39,9 +39,10 @@ class KnowledgeGrants:
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.executescript(
                 """
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS consumer_knowledge_grants (
                     tenant_id TEXT NOT NULL,
                     environment TEXT NOT NULL,
@@ -52,22 +53,17 @@ class KnowledgeGrants:
                 )
                 """
             )
-        with self._connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+        with self._connection(write=True) as db:
             columns = {r["name"] for r in db.execute("PRAGMA table_info(consumer_knowledge_grants)")}
             if "revoked_at" not in columns:
                 db.execute("ALTER TABLE consumer_knowledge_grants ADD COLUMN revoked_at REAL")
         protect_private_file(self.path)
 
     @contextmanager
-    def _connection(self):
-        connection = sqlite3.connect(str(self.path), timeout=15)
-        connection.row_factory = sqlite3.Row
-        try:
-            with connection:
-                yield connection
-        finally:
-            connection.close()
+    def _connection(self, *, write: bool = False):
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）。
+        with gateway_db.connection(self.path, write=write) as connection:
+            yield connection
 
     def granted(self, tenant_id: str, environment: str) -> set[str]:
         with self._connection() as db:
@@ -96,7 +92,7 @@ class KnowledgeGrants:
                 "granted_at=excluded.granted_at"
             )
         )
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.execute(
                 "INSERT INTO consumer_knowledge_grants"
                 "(tenant_id,environment,knowledge_base_id,granted_by,granted_at)"
@@ -105,7 +101,7 @@ class KnowledgeGrants:
             )
 
     def revoke(self, tenant_id: str, environment: str, knowledge_base_id: str) -> bool:
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             return (
                 db.execute(
                     "UPDATE consumer_knowledge_grants SET revoked_at=? "
@@ -147,9 +143,10 @@ class ConsumerEndpoints:
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.executescript(
                 """
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS consumer_endpoints (
                     tenant_id TEXT NOT NULL,
                     environment TEXT NOT NULL,
@@ -163,14 +160,10 @@ class ConsumerEndpoints:
         protect_private_file(self.path)
 
     @contextmanager
-    def _connection(self):
-        connection = sqlite3.connect(str(self.path), timeout=15)
-        connection.row_factory = sqlite3.Row
-        try:
-            with connection:
-                yield connection
-        finally:
-            connection.close()
+    def _connection(self, *, write: bool = False):
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）。
+        with gateway_db.connection(self.path, write=write) as connection:
+            yield connection
 
     def get(self, tenant_id: str, environment: str) -> str:
         with self._connection() as db:
@@ -181,7 +174,7 @@ class ConsumerEndpoints:
         return str(row["base_url"]) if row else ""
 
     def register(self, tenant_id: str, environment: str, base_url: str, registered_by: str) -> None:
-        with self._connection() as db:
+        with self._connection(write=True) as db:
             db.execute(
                 "INSERT INTO consumer_endpoints"
                 "(tenant_id,environment,base_url,registered_by,registered_at) VALUES(?,?,?,?,?)"

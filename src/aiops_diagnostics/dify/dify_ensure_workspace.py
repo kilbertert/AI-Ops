@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from aiops_diagnostics.common.bounded_http import RequestSpec, join_url, request_json
+from aiops_diagnostics.common.scalar_rules import now_utc, parse_stored_time
 from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiError
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces, workspace_name
 from aiops_diagnostics.gateway.deployment_environment import canonical_environment
@@ -233,13 +234,11 @@ def ensure_workspace(
 
 
 def _lease_expired(row: dict[str, Any]) -> bool:
-    from aiops_diagnostics.dify.dify_workspaces import _parse_time, now_utc
-
     raw = str(row.get("lease_expires_at") or "")
     if not raw:
         # 没有租约的 creating = 旧行或崩溃在插入之后：按"已过期"处理，好让对账接手。
         return True
-    return _parse_time(raw) <= now_utc()
+    return parse_stored_time(raw) <= now_utc()
 
 
 def render(outcome: EnsureOutcome) -> str:

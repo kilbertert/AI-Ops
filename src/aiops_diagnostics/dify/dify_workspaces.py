@@ -36,12 +36,14 @@ import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.redaction import ERROR_TEXT_SHORT_LIMIT
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
+from aiops_diagnostics.gateway import gateway_db
 
 #: 一张行可能处于的全部状态。``created`` 与 ``ready`` 的区别在于**后续步骤是否跑完**
 #: （插件、凭据、模板 DSL，#881）；对"这个租户的 workspace 是哪一个"这个问题，两者
@@ -87,6 +89,7 @@ class DifyWorkspaces:
         with self._connection(write=True) as connection:
             connection.executescript(
                 """
+                PRAGMA journal_mode=WAL;
                 -- 一个租户在一个环境里的 Dify workspace（ADR-0059 / #879）。
                 --
                 -- 唯一键是 (tenant_id, environment)：两套独立 UPMS 的 tenant_id 各自
@@ -123,14 +126,10 @@ class DifyWorkspaces:
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path)
-        connection.row_factory = sqlite3.Row
-        try:
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）。租约登记处有读-改-写
+        # （:323 起），LEASE profile 的 BEGIN IMMEDIATE 让读与写在同一把锁里。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
-            if write:
-                connection.commit()
-        finally:
-            connection.close()
 
     # ── reads ─────────────────────────────────────────────────────────
 
@@ -332,7 +331,14 @@ class DifyWorkspaces:
                         "INSERT INTO dify_workspaces (tenant_id, environment, workspace_id, setup_state,"
                         " lease_owner, lease_expires_at, last_error, created_at, updated_at)"
                         " VALUES (?, ?, '', 'creating', ?, ?, '', ?, ?)",
-                        (tenant_id, environment, owner, _iso(expires), _iso(now), _iso(now)),
+                        (
+                            tenant_id,
+                            environment,
+                            owner,
+                            format_stored_time(expires),
+                            format_stored_time(now),
+                            format_stored_time(now),
+                        ),
                     )
                 except sqlite3.IntegrityError:
                     # 另一个进程在同一瞬间插入了 —— 它就是"正在建"，不是我。
@@ -344,14 +350,14 @@ class DifyWorkspaces:
                 return False
             if state == "unknown" and not allow_unknown:
                 return False
-            if state == "creating" and lease and _parse_time(str(lease)) > now:
+            if state == "creating" and lease and parse_stored_time(str(lease)) > now:
                 return False
             # failed，或租约已过期的 creating：接管。workspace_id 保持原值 ——
             # 已过期的 creating 可能已经建成了，对账（调用方）来决定要不要补 UUID。
             connection.execute(
                 "UPDATE dify_workspaces SET setup_state = 'creating', lease_owner = ?,"
                 " lease_expires_at = ?, updated_at = ? WHERE tenant_id = ? AND environment = ?",
-                (owner, _iso(expires), _iso(now), tenant_id, environment),
+                (owner, format_stored_time(expires), format_stored_time(now), tenant_id, environment),
             )
         return True
 
@@ -371,7 +377,7 @@ class DifyWorkspaces:
                 (
                     _identifier(workspace_id, "workspace_id"),
                     name.strip(),
-                    _iso(now_utc()),
+                    format_stored_time(now_utc()),
                     tenant_id,
                     environment,
                 ),
@@ -385,7 +391,7 @@ class DifyWorkspaces:
             connection.execute(
                 "UPDATE dify_workspaces SET setup_state = 'failed', last_error = ?,"
                 " lease_expires_at = NULL, updated_at = ? WHERE tenant_id = ? AND environment = ?",
-                (error[:ERROR_TEXT_SHORT_LIMIT], _iso(now_utc()), tenant_id, environment),
+                (error[:ERROR_TEXT_SHORT_LIMIT], format_stored_time(now_utc()), tenant_id, environment),
             )
 
     def mark_ready(self, tenant_id: str, environment: str) -> None:
@@ -401,7 +407,7 @@ class DifyWorkspaces:
             connection.execute(
                 "UPDATE dify_workspaces SET setup_state = 'ready', last_error = '', updated_at = ?"
                 " WHERE tenant_id = ? AND environment = ?",
-                (_iso(now_utc()), tenant_id, environment),
+                (format_stored_time(now_utc()), tenant_id, environment),
             )
 
     def mark_template_failed(self, tenant_id: str, environment: str, *, error: str) -> None:
@@ -425,7 +431,7 @@ class DifyWorkspaces:
                 "UPDATE dify_workspaces SET setup_state ="
                 " CASE WHEN setup_state = 'ready' THEN 'ready' ELSE 'created' END,"
                 " last_error = ?, updated_at = ? WHERE tenant_id = ? AND environment = ?",
-                (error[:ERROR_TEXT_SHORT_LIMIT], _iso(now_utc()), tenant_id, environment),
+                (error[:ERROR_TEXT_SHORT_LIMIT], format_stored_time(now_utc()), tenant_id, environment),
             )
 
     def mark_unknown(self, tenant_id: str, environment: str, *, error: str) -> None:
@@ -436,7 +442,7 @@ class DifyWorkspaces:
             connection.execute(
                 "UPDATE dify_workspaces SET setup_state = 'unknown', last_error = ?,"
                 " lease_expires_at = NULL, updated_at = ? WHERE tenant_id = ? AND environment = ?",
-                (error[:ERROR_TEXT_SHORT_LIMIT], _iso(now_utc()), tenant_id, environment),
+                (error[:ERROR_TEXT_SHORT_LIMIT], format_stored_time(now_utc()), tenant_id, environment),
             )
 
 
@@ -494,16 +500,3 @@ def _identifier(value: str, name: str) -> str:
     if not _SAFE_ID.fullmatch(candidate):
         raise ValueError(f"{name} contains unsupported characters")
     return candidate
-
-
-def now_utc() -> datetime:
-    """The module's clock, named so a lease test can reason about it."""
-    return datetime.now(UTC)
-
-
-def _iso(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat()
-
-
-def _parse_time(value: str) -> datetime:
-    return datetime.fromisoformat(value)

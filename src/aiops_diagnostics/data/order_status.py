@@ -20,7 +20,10 @@
 
 本模块是**纯提取**，不改变任何判定。因此 `role_of` 必须与它替换掉的每一条分支
 给出同一答案，包括 `engine._to_int` 的 `int(float(x))`（`"5.0"` 类输入）与
-`status_label` 对非数字返回「未知」。逐条等价见 `tests/data/test_order_status.py`。
+`status_label` 对非数字返回「未知」。整数读取本身在 #573 收口到
+`common.scalar_rules.as_integer`——整值浮点串仍读成整数（`"5.0"` → 5），
+非整值（`"3.5"`）从「截断成 3」收敛为「不认识的值」，一处声明。
+逐条等价见 `tests/data/test_order_status.py`。
 
 ## 边界
 
@@ -32,6 +35,8 @@
 from __future__ import annotations
 
 from enum import StrEnum
+
+from aiops_diagnostics.common.scalar_rules import as_integer
 
 
 class StatusRole(StrEnum):
@@ -68,29 +73,13 @@ STATUS_ROLES = frozenset(_ROLE_BY_STATUS.values()) | {StatusRole.UNKNOWN}
 KNOWN_STATUS_CODES = frozenset(_ROLE_BY_STATUS)
 
 
-def _to_int(value: object) -> int | None:
-    """公司那一列是数值型，但调用方手上常常是字符串。
-
-    `int(float(value))` 而不是 `int(value)`：`engine._to_int` 一直这么写，
-    而本模块是**纯提取**，必须与它逐条等价（`"5.0"` 要读成 5，不是未知）。
-    `None` 与 `""` 落到 `ValueError`/`TypeError`，都返回 `None`。
-    """
-    if isinstance(value, bool):
-        # `int(True) == 1` —— 把布尔读成一个状态码是没有任何依据的，归未知。
-        return None
-    try:
-        return int(float(value))  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-
-
 def role_of(status: object) -> StatusRole:
     """这个状态码在业务上是**什么角色**。
 
     ``None``、非数字、以及公司定义之外的 code 一律 ``UNKNOWN`` —— 它们是同一个
     「这一列不是我们认识的值」，不分辨「无值」与「奇怪的值」，因为两者的处置相同。
     """
-    numeric = _to_int(status)
+    numeric = as_integer(status)
     if numeric is None:
         return StatusRole.UNKNOWN
     return _ROLE_BY_STATUS.get(numeric, StatusRole.UNKNOWN)
