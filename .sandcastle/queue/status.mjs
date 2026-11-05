@@ -16,7 +16,7 @@ export function runnerSummary(runners) {
 export function fetchRunnerSummary() {
   try {
     // Runners API needs repository administration:read, unavailable to GITHUB_TOKEN.
-    if (!process.env.RUNNER_READ_TOKEN) return runnerSummary(null);
+    if (!process.env.RUNNER_READ_TOKEN) return { kind: "unknown", message: "未配置RUNNER_READ_TOKEN：需要本仓Administration:read" };
     const env = { ...process.env, GH_TOKEN: process.env.RUNNER_READ_TOKEN };
     delete env.RUNNER_READ_TOKEN;
     const data = JSON.parse(execFileSync('gh', ['api', 'repos/{owner}/{repo}/actions/runners?per_page=100'], {

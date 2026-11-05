@@ -69,7 +69,8 @@ Runner Probe是两条无模型/无生产访问作业：普通槽占用90秒，�
 不要通过取消真实他人工作来验证。长期观察至少20次真实合并，不人为造20次生产部署。
 
 CD Watch每5分钟运行（平台可能延迟），等待2分钟输出诊断，5分钟告警。runner清单需administration:read，
-使用已有受控AGENT_PAT仅供只读查询；GITHUB_TOKEN继续负责告警。token缺失或查询失败明确为未知。
+使用独立RUNNER_READ_TOKEN（fine-grained PAT，仅本仓库Administration:read）；GITHUB_TOKEN继续负责告警。
+既有AGENT_PAT和GITHUB_TOKEN现场均返回403，不能复用它们；token缺失或查询失败明确为未知。
 作业status从部署job读取，发布等待不冒充部署等待；不要只凭job.started_at判断拿到runner。
 
 查看等待者用`gh run list --status queued`及`--status in_progress`，再用
