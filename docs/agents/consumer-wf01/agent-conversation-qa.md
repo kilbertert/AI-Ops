@@ -34,7 +34,7 @@ Gateway 负责身份、权限、预算与来源，最终回答自然表达。对
 ## 复现命令与迁移方法
 
 先按[插件手册](knowledge-picker-deploy.md)构建并验签新版consumer_knowledge 0.0.2。
-官方Agent策略包从Dify市场按ADR0231固定标识下载并安装，检查manifest.verified、任务终态与工作区列表。
+官方Agent策略包从Dify市场按ADR0232固定标识下载并安装，检查manifest.verified、任务终态与工作区列表。
 不替换签名信任、不手改插件目录。两个插件分别安装；只有安装响应200不代表已可执行。
 
 ```bash
