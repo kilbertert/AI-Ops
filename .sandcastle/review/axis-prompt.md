@@ -75,13 +75,13 @@ concrete cases where the change skipped an adequate earlier ladder option.
 
 <linked-issue>
 
-!`if [ -n "{{ISSUE_NUMBER}}" ]; then gh issue view "{{ISSUE_NUMBER}}" --comments; else printf '%s\n' 'No linked issue.'; fi`
+{{ISSUE_BODY}}
 
 </linked-issue>
 
 <diff-to-main>
 
-Read the full diff with `git diff main...HEAD`, then inspect the changed files
+Read the full diff with `git diff origin/main...HEAD`, then inspect the changed files
 and relevant tests.
 
 </diff-to-main>

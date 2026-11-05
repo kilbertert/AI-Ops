@@ -47,6 +47,7 @@ gitlab_token.txt
 
 # AFK runner runtime dirs (not source)
 .sandcastle/worktrees/
+.sandcastle/reviews/
 
 # `CHANGELOG.md` is generated at release time, not per pull request.
 #
