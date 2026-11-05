@@ -79,6 +79,9 @@ grep -rn "<host>\|ssh \|scp \|redis-cli\|systemctl restart" docs/ ops/ README.md
 
 ## 验证与交付
 
+- 实现、修复、独立 Hack 和交付前，先读[验证分工](docs/agents/verification-workflow.md)。
+  实现者默认不扩张测试体系；新增长期检查须说明具体错误、独立判据与既有检查的缺口。
+  独立 Hacker 交付可复现反例及真实入口证据；必要的风险验证、确定性 CI 和人工判断仍保留。
 - 代码、配置、打包或文档流程变更都要运行与风险匹配的 formatter、静态检查、测试和构建检查。
 - 诊断/交互式/设备 CLI 与便携打包已退役；CI 验证 Linux 服务 wheel/sdist 与部署镜像。运维入口为 `aiops-admin`。
 - 每次 PR 只解决一个逻辑任务；AI 审查是建议，不替代确定性 CI 和人工判断。

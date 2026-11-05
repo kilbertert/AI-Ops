@@ -46,6 +46,8 @@ Not everything in here is necessarily actionable — reviewers may leave context
 1. Read the conversation. For each item, classify it in your head as: code change needed, reply needed (question / disagreement / clarification), or neither.
 2. For a code change, run the Economy ladder and stop at the first option that
    fully addresses the confirmed feedback.
+   执行 `docs/agents/verification-workflow.md`：重放已确认反例，按价值保留最小检查，
+   修复后交给独立 Hacker 复验；不因审查建议自动扩大测试范围。
 3. Make the code changes you decided on. Run `uv sync --extra dev && uv run pytest && uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`, before committing. Use conventional-commit messages (`feat:`, `fix:`, `refactor:`, etc.). Do NOT use a `RALPH:` prefix.
 
 Before you settle on an approach, search what this repository has already

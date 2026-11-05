@@ -37,8 +37,8 @@
   lowers total complexity; otherwise write the minimum custom code.
 - Prefer deletion and the fewest cohesive files. Add no configuration layer,
   interface, factory, or extension point for a variation that does not exist.
-- Leave the smallest runnable regression check for non-trivial behavior such
-  as branching logic, parsers, persistence, money, or security paths.
+- 实现、Hack、修复与交付先执行 [验证分工](../docs/agents/verification-workflow.md)。
+  必要的风险检查保留；新增长期检查说明具体错误、独立判据与已有检查的缺口。
 - No dead code, no commented-out blocks, no `console.log` debug leftovers.
 
 ## Compatibility & delivery
@@ -63,10 +63,8 @@
 - Follow the surrounding code's style and idioms.
 - Keep public contracts, schemas, and diagnostics stable; document changes
   that affect observability or interoperability.
-- Update the tests that cover behavior you changed, and keep them passing. A
-  regression test is the durable record that old behavior still holds, and it is
-  worth writing for exactly that reason. The full suite is a gate you run once
-  before delivery, not a loop you spin after every edit.
+- 按已确认行为维护相关检查，区分行为退化、需求变化和验证工具故障。
+  迭代运行最小相关检查，交付完成既定闸门；无新改动或疑点不重复昂贵验证。
 
 ## This project's specifics
 

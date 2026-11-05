@@ -42,21 +42,10 @@ option that fully satisfies this sub-issue and the parent PRD contract.
 
 # EXECUTION
 
-Let a test lead where a test is the cheapest way to pin the behavior: write it
-first, watch it fail, then implement to pass it. That is one technique, not a
-ritual. Reach for it where the behavior is non-trivial or a regression would
-otherwise be silent — branching logic, parsers, persistence, money, auth,
-data transforms.
-
-Do not manufacture a test to satisfy a quota. Prose, formatting, a rename, or
-a one-line wiring change owes none. Name the input that would break your
-change and pin that input; if you cannot name one, say so in the commit body
-rather than writing a test that asserts the implementation back to itself.
-
-While you iterate, run only the narrowest check that can falsify what you just
-did — the test files touching your change, the typecheck, the linter. The full
-gate below runs everything; run it once, when the change is complete, not after
-every edit.
+先执行 `docs/agents/verification-workflow.md` 的实现者步骤：完成最小功能，
+默认不扩张测试体系；必要的长期检查须说明具体错误、独立判据与既有检查缺口。
+迭代只验证当前改动和疑点，交付完成下列既定检查，并交给独立 Hacker 验收。
+作者负责必要的风险验证，但不得把自查或测试数量当作独立验收。
 
 Before committing, run `uv sync --extra dev`, `uv run pytest`, and
 `uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`.
