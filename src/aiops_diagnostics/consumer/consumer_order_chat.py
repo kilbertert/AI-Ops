@@ -42,12 +42,12 @@ def status_answer(
     正文的措辞来自 `consumer_plain`：**先一句结论，再讲这句结论能拿去核对什么**。
     这里只决定「用哪条渲染路」——本地化语种走 JSON 模板，其余（zh/zh-Hant/en）走代码。
     """
-    from aiops_diagnostics.consumer.consumer_language import COPY, live_answer
+    from aiops_diagnostics.consumer.consumer_language import COPY, live_answer, status_word
     from aiops_diagnostics.consumer.consumer_plain import status_text
 
     if localized and language in COPY:
         return live_answer(snapshot, language, "status", pack=pack)
     # 前端按 blocks[] 分派渲染、不解析 Markdown（frontend-api-brief §9），
     # 所以层级只能靠分段与短行表达。
-    text = status_text(language, snapshot, pack)
+    text = status_text(language, snapshot, pack, status_word=status_word(language, snapshot["status_role"]))
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}

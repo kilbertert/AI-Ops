@@ -6594,7 +6594,11 @@ def _require_current_chat_node_order(context, caller, qa, request):
     except chat_execution.ChatRunUnavailable as exc:
         raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
     # 缓存的正文必须**就是这条快照的渲染**：被改过、或写着另一条 run 的结果，都不能交出去。
-    if not chat_execution.answer_matches_snapshot(qa.get("result"), released.snapshot or {}):
+    if not chat_execution.answer_matches_snapshot(
+        qa.get("result"),
+        released.snapshot or {},
+        language=released.language or DEFAULT_LANGUAGE,
+    ):
         store.refuse(located.run_id, "qa_answer_mismatch")
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
 
@@ -6909,7 +6913,9 @@ def _require_current_chat_dify_order(context, caller, qa, request):
     snapshot = runs.snapshot(latest.run_id)
     if snapshot is None or snapshot.get("order_no") != order_no:
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
-    if not chat_execution.answer_matches_snapshot(qa.get("result"), snapshot):
+    if not chat_execution.answer_matches_snapshot(
+        qa.get("result"), snapshot, language=latest.language or DEFAULT_LANGUAGE
+    ):
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
 
 

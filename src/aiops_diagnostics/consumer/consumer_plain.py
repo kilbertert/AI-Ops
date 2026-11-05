@@ -13,8 +13,9 @@
 形成循环边（`tests/test_readme_architecture.py` 会红）。这里只依赖 `consumer_time`
 （另一个叶子），依赖方向始终单向。
 
-**语种分工**：`zh`／`zh-Hant`／`en` 在这里拼；其余八种走 `consumer_language.json` 的
-模板。加一种语言要同时改两处 —— 这是既有分工，不是本模块引入的。
+**语种分工**：`zh`／`en` 在这里拼；其余九种走 `consumer_language.json` 的模板。
+状态词不在这里产生 —— 它由 `consumer_language.status_word` 按角色取，`status_text`
+只是接收它。加一种语言要同时改两处 —— 这是既有分工，不是本模块引入的。
 """
 
 from __future__ import annotations
@@ -139,9 +140,9 @@ WORDS: dict[str, dict[str, str]] = {
     },
 }
 
-#: 简体状态标签 → 繁体。只覆盖公司状态表里实际出现的词，不做通用转换：
-#: 一个"看起来像繁体"的机械转换会改掉用户认得的术语。
-_TRADITIONAL_STATUS = {"充电中": "充電中", "充电结束": "充電結束", "未知": "未知"}
+#: 已删除的 `_TRADITIONAL_STATUS`：它只覆盖 5 个 code 中的 3 个，其余落回简体，
+#: 于是同一状态在客户端与回读里得到两个词。`zh-Hant` 的说法由
+#: `consumer_language.COPY` 给出（PRD #1371 的删除测试）。
 
 
 def words(language: str, pack: dict[str, str] | None = None) -> dict[str, str]:
@@ -176,30 +177,25 @@ def _amount(value: object) -> str | None:
     return text or None
 
 
-def _status_name(language: str, snapshot: dict, pack: dict[str, str] | None = None) -> str:
-    from aiops_diagnostics.health.rules import status_label as business_status_label
-
-    table = words(language, pack)
-    role = snapshot["status_role"]
-    if language == "en":
-        return str(role).replace("_", " ")
-    if role == "unknown":
-        return table["status_unknown"]
-    label = business_status_label(snapshot["status_code"])
-    if language == "zh-Hant":
-        return _TRADITIONAL_STATUS.get(label, label)
-    return label
-
-
-def status_text(language: str, snapshot: dict, pack: dict[str, str] | None = None) -> str:
+def status_text(
+    language: str,
+    snapshot: dict,
+    pack: dict[str, str] | None = None,
+    *,
+    status_word: str,
+) -> str:
     table = words(language, pack)
     colon = table["colon"]
     note = table["status_note"]
     if snapshot["status_role"] == "unknown":
         note += table["status_unknown_note"]
+    # 状态词由调用方从 `consumer_language.status_word` 取（唯一权威），必传：这里只
+    # 负责拼装，不再自己回答「这门语言下这句怎么说」—— 否则本模块就反过来依赖
+    # `consumer_language`，叶子职责与依赖方向都会破。
+    # （那是 #1371 收敛掉的第四份实现。）
     return "\n".join(
         [
-            table["status_lede"].format(status=_status_name(language, snapshot, pack)),
+            table["status_lede"].format(status=status_word),
             "",
             f"{table['status_order']}{colon}{snapshot['order_no']}",
             f"{table['status_time']}{colon}{readable_time(snapshot['observed_at'])}",
