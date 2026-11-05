@@ -250,7 +250,11 @@ TIMELINE_TOOL = "cpms_charging_timeline"
 TIMELINE_LIMIT = 64
 #: 发给 tsdata `QueryRequest.fields` 的列清单：SOP §2.2 那一份，`GUN_COLUMN_NAMES`
 #: 是仓内唯一权威（诊断直查与只读代理白名单也由它派生），前面补上 `_ts`。
-TIMELINE_FIELDS = ("_ts", *GUN_COLUMN_NAMES)
+#: 实测例外（41 生产回放，2026-11-05）：tsdata 门面的 `charging-gun_property`
+#: 没有 `batteryMinTemperature` 列（充电生产 TDengine 的同名表有），整表原样
+#: 发会被门面按列名拒（TDengine error: Invalid column name）。该列在行投影里
+#: 本来就可缺席（picked 跳过缺键、节点 project 跳过缺键），剔除不退化证据。
+TIMELINE_FIELDS = ("_ts", *(name for name in GUN_COLUMN_NAMES if name != "batteryMinTemperature"))
 _TIMELINE_DEVICE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _TIMELINE_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?")
 
