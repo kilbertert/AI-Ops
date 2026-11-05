@@ -1,0 +1,18 @@
+Feature: 管家答复的具体事实有来源
+  Rule: 部分正确不能掩盖无依据事实
+    Scenario: 金额正确但币种未知
+      Given 工具返回金额8.00但没有币种
+      When 回答声称实付8元
+      Then 复核指出币种无依据并拒绝交付
+    Scenario: 明确缺证
+      Given 回答明确说明无法确认币种
+      When 回答准确说明记录或限制
+      Then 不因出现货币字样而误拒
+    Scenario: 站点猜测别名
+      Given 工具只提供原始站点名称
+      When 回答附加无依据译名
+      Then 复核指出别名无依据
+    Scenario: 未完成检查
+      Given 复核响应截断、畸形或无法完成
+      When 系统判断能否交付
+      Then 不交付未核验正文
