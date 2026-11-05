@@ -80,6 +80,24 @@ export function isPrdIssue(title: string, body: string): boolean {
   );
 }
 
+/**
+ * The verdict a run actually emitted — parsed, not trusted.
+ *
+ * The SDK's `completionSignal` is `signals.find(sig => output.includes(sig))`:
+ * the FIRST configured marker found anywhere in the transcript wins, so a
+ * report quoting `<promise>COMPLETE</promise>` in prose satisfies the gate
+ * even when the emitted verdict was BLOCKED (measured on an adversarial
+ * report). In-band markers cannot be made unambiguous by prompt wording —
+ * the check is the last line: every marker in the output must agree (one
+ * distinct value), or the run has no verdict.
+ */
+export function strictSignal(stdout: string): string | undefined {
+  const seen = new Set(
+    [...stdout.matchAll(/<promise>(COMPLETE|BLOCKED)<\/promise>/g)].map((m) => m[1]),
+  );
+  return seen.size === 1 ? [...seen][0] : undefined;
+}
+
 type ReadyIssue = { number: number; title: string; body: string };
 
 function readyIssueCandidates(): ReadyIssue[] {
@@ -152,8 +170,12 @@ function openPrIssueNumbers(): Set<number> {
 }
 
 function profileConfig(includeGitHub = true) {
-  const token = includeGitHub ? process.env.AFK_AGENT_GH_TOKEN : undefined;
-  return claudeProfile(PROFILE, token ? { AFK_AGENT_GH_TOKEN: token } : undefined);
+  // An explicit empty string is the only reliable "no token": inside
+  // claudeProfile the explicit argument wins over ambient env, and a
+  // container's env is fixed at `docker run` — nothing passed to a later
+  // run() can remove a variable once the container exists.
+  const token = includeGitHub ? process.env.AFK_AGENT_GH_TOKEN : "";
+  return claudeProfile(PROFILE, { AFK_AGENT_GH_TOKEN: token });
 }
 
 function openDeliveryPr(
@@ -266,34 +288,74 @@ async function main(): Promise<void> {
             );
 
             if (result.commits.length > 0) {
-              // The reviewer is a read-only Hacker: no GitHub token, and any
-              // commits it managed to make void its verdict. Its report lives
-              // only in stdout, so keep the tail in the run log — a BLOCKED or
-              // missing signal also keeps the branch out of this round.
-              const review = await withTimeout(
-                Number(process.env.AFK_RUN_TIMEOUT ?? 3600) * 1000,
-                `Review #${issue.number}`,
-                () => sandbox.run({
-                  ...profileConfig(false),
-                  name: `Reviewer #${issue.number}`,
-                  promptFile: ".sandcastle/review-prompt.md",
-                  promptArgs: {
-                    ISSUE_NUMBER: String(issue.number),
-                    ISSUE_TITLE: issue.title,
-                    BRANCH: issue.branch,
+              // The reviewer is a read-only Hacker in an ISOLATED identity: a
+              // fresh sandbox whose env never carried a GitHub credential.
+              // Container env is fixed at `docker run` and cannot be scrubbed
+              // for a later run(), so reusing the implementer's container
+              // would hand the reviewer the same live token (measured). The
+              // worktree forks from the implementer's branch — same commits,
+              // throwaway ref — and the issue body arrives via a prompt arg
+              // because the container has no `gh` credential to fetch it with.
+              const issueBody = execFileSync("gh", ["issue", "view", String(issue.number)], {
+                encoding: "utf8",
+              });
+              const reviewBranch = `review/${issue.number}-${iteration}`;
+              const reviewSandbox = await createSandbox({
+                ...profileConfig(false),
+                branch: reviewBranch,
+                baseBranch: issue.branch,
+                hooks: {
+                  host: {
+                    onSandboxReady: [{ command: INSTALL_CMD }],
                   },
-                  completionSignal: ["<promise>COMPLETE</promise>", "<promise>BLOCKED</promise>"],
-                }),
-              );
+                },
+              });
+              let review: RunResult | undefined;
+              try {
+                review = await withTimeout(
+                  Number(process.env.AFK_RUN_TIMEOUT ?? 3600) * 1000,
+                  `Review #${issue.number}`,
+                  () => reviewSandbox.run({
+                    ...profileConfig(false),
+                    name: `Reviewer #${issue.number}`,
+                    promptFile: ".sandcastle/review-prompt.md",
+                    promptArgs: {
+                      ISSUE_NUMBER: String(issue.number),
+                      ISSUE_TITLE: issue.title,
+                      BRANCH: issue.branch,
+                      ISSUE_BODY: issueBody,
+                    },
+                    completionSignal: ["<promise>COMPLETE</promise>", "<promise>BLOCKED</promise>"],
+                  }),
+                );
+              } finally {
+                await reviewSandbox.close();
+                // The review branch only existed to give the sandbox a ref.
+                try {
+                  execFileSync("git", ["branch", "-D", reviewBranch], { stdio: "ignore" });
+                } catch {
+                  /* the sandbox may have removed it already */
+                }
+              }
+              if (!review) {
+                // withTimeout threw before a result existed; the sandbox is
+                // already closed. Unreachable in practice — the throw
+                // propagates first — but keeps the type honest.
+                throw new Error(`Review #${issue.number} produced no result`);
+              }
               const reportTail = (review.stdout ?? "").trim().split("\n").slice(-40).join("\n");
+              const reportBody = review.stdout.replace(/<promise>[^<]*<\/promise>/g, "").trim();
               if (review.commits.length > 0) {
                 throw new Error(
                   `Review #${issue.number} committed ${review.commits.length} commit(s); reviewer must be read-only. Output tail:\n${reportTail}`,
                 );
               }
-              if (review.completionSignal !== "<promise>COMPLETE</promise>") {
+              const verdict = strictSignal(review.stdout);
+              if (verdict !== "COMPLETE" || !reportBody) {
                 throw new Error(
-                  `Review #${issue.number} did not signal COMPLETE (${review.completionSignal ?? "no signal"}); branch kept for fix-up. Output tail:\n${reportTail}`,
+                  `Review #${issue.number} did not produce a clean COMPLETE verdict ` +
+                    `(signal: ${verdict ?? "ambiguous or none"}, report ${reportBody ? "present" : "empty"}); ` +
+                    `branch kept for fix-up. Output tail:\n${reportTail}`,
                 );
               }
               console.log(`  Review #${issue.number} COMPLETE. Output tail:\n${reportTail}`);
@@ -351,8 +413,8 @@ async function main(): Promise<void> {
         completionSignal: ["<promise>COMPLETE</promise>", "<promise>BLOCKED</promise>"],
       }),
     );
-    if (mergeResult.completionSignal !== "<promise>COMPLETE</promise>") {
-      throw new Error("Merger did not complete; delivery branch was not pushed.");
+    if (strictSignal(mergeResult.stdout) !== "COMPLETE") {
+      throw new Error("Merger did not produce a clean COMPLETE verdict; delivery branch was not pushed.");
     }
 
     const prUrl = openDeliveryPr(deliveryBranch, completed.map((entry) => entry.issue));

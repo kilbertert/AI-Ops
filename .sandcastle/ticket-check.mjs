@@ -219,7 +219,11 @@ function proseLines(text) {
   for (const line of lines) {
     const m = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
     if (fence !== null) {
-      if (m && m[1][0] === fence.ch && m[1].length >= fence.len) fence = null;
+      // A closing fence is the marker and nothing else — CommonMark allows
+      // only whitespace after it, so `~~~still-inside-code` is content, not
+      // a closer. Accepting trailing text let a heading posed after it read
+      // as prose while CommonMark says the block never ended. (#1383 review)
+      if (m && /^\s{0,3}(`{3,}|~{3,})\s*$/.test(line) && m[1][0] === fence.ch && m[1].length >= fence.len) fence = null;
       continue;
     }
     if (m) {
@@ -627,6 +631,14 @@ if (SELF_CHECK) {
       title: "调整 `src/app.ts`",
       body: "## 问题\n\n顺序不对，改 `src/app.ts`。\n\n~~~md\n## 不做什么\n- 不改 `src/b.ts`。\n\n## Acceptance criteria\n- [ ] 行为变更已断言\n~~~\n",
     },
+    // `~~~still-inside-code` is not a closing fence — CommonMark allows only
+    // whitespace after the marker. Treating it as one closed the block early
+    // and the heading after it read as prose: the gate passed a ticket whose
+    // acceptance section lives inside an unclosed code block. (#1383 review)
+    tildeFakeClose: {
+      title: "调整 `src/app.ts`",
+      body: "## 问题\n\n顺序不对，改 `src/app.ts`。\n\n## 不做什么\n\n- 不改 `src/b.ts`。\n\n~~~md\n样例\n~~~still-inside-code\n\n## Acceptance criteria\n\n- [ ] 行为变更已断言\n",
+    },
   };
 
   expect("criteria passes", judge(F.criteria).ok, true);
@@ -710,6 +722,14 @@ if (SELF_CHECK) {
   expect(
     "a ~~~ 不做什么 sample does not count",
     judge(F.tildeFence).findings.some((f) => f.id === "non-goals"),
+    true,
+  );
+  // The marker with trailing text never closes the block — the heading after
+  // it is still code, so the ticket must FAIL on acceptance, not pass.
+  expect("a fake-closed fence still fails the gate", judge(F.tildeFakeClose).ok, false);
+  expect(
+    "the fake-closed ticket fails on acceptance",
+    judge(F.tildeFakeClose).findings.some((f) => f.id === "acceptance" && f.level === "fail"),
     true,
   );
 
