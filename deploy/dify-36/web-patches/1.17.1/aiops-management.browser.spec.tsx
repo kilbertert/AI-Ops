@@ -55,6 +55,16 @@ function stub(routes: (body: Record<string, unknown>) => Response | Promise<Resp
   return requests
 }
 
+/** dify-ui Select：点开 combobox，再点可见 option。 */
+async function pick(
+  screen: Awaited<ReturnType<typeof render>>,
+  comboboxName: string,
+  optionName: string,
+) {
+  await screen.getByRole('combobox', { name: comboboxName, exact: true }).click()
+  await screen.getByRole('option', { name: optionName, exact: true }).click()
+}
+
 it('retries the same operation after a lost response without asking for technical IDs', async () => {
   let creates = 0
   sessionStorage.setItem('aiops-setup-request', 'corrupt-json')
@@ -65,9 +75,9 @@ it('retries the same operation after a lost response without asking for technica
   })
   const screen = await render(<TenantSetup />)
   await screen.getByRole('button', { name: '复制并开通客户 AI 服务' }).click()
-  await screen.getByRole('combobox', { name: '客户端客服来源' }).selectOptions('source-c')
-  await screen.getByRole('combobox', { name: '管家来源' }).selectOptions('source')
-  await screen.getByRole('combobox', { name: '客户', exact: true }).selectOptions('tenant')
+  await pick(screen, '客户端客服来源', '客户甲 / 现役客服 · V5')
+  await pick(screen, '管家来源', '客户甲 / 标准管家 · V2')
+  await pick(screen, '客户', '客户甲')
   await screen.getByRole('button', { name: '复制并开通', exact: true }).click()
   await expect.element(screen.getByRole('alert')).toHaveTextContent('网络中断')
   await screen.getByRole('button', { name: '复制并开通', exact: true }).click()
@@ -97,8 +107,8 @@ it('opens both ends by default and can open only one of them', async () => {
   await expect.element(operator).toBeChecked()
   await operator.click()
   await expect.element(operator).not.toBeChecked()
-  await screen.getByRole('combobox', { name: '客户端客服来源' }).selectOptions('source-c')
-  await screen.getByRole('combobox', { name: '客户', exact: true }).selectOptions('tenant')
+  await pick(screen, '客户端客服来源', '客户甲 / 现役客服 · V5')
+  await pick(screen, '客户', '客户甲')
   await screen.getByRole('button', { name: '复制并开通', exact: true }).click()
   const created = requests.find((x) => x.action === 'create')
   expect(created).toMatchObject({
@@ -182,8 +192,8 @@ it('still works against a backend that only knows the operator entry', async () 
   await expect.element(screen.getByRole('checkbox', { name: '管家' })).toBeChecked()
   // 旧后端只认识管家：页面不凭空造一个客户端选项，避免提交出后端不认识的形状
   expect(screen.getByRole('checkbox', { name: '客户端客服' }).elements()).toHaveLength(0)
-  await screen.getByRole('combobox', { name: '管家来源' }).selectOptions('source')
-  await screen.getByRole('combobox', { name: '客户', exact: true }).selectOptions('tenant')
+  await pick(screen, '管家来源', '客户甲 / 标准管家 · V2')
+  await pick(screen, '客户', '客户甲')
   await screen.getByRole('button', { name: '复制并开通', exact: true }).click()
   expect(requests.find((x) => x.action === 'create')).toMatchObject({
     scope: 'operator',
@@ -263,7 +273,7 @@ it('requires authorization before entering a customer workspace', async () => {
     return Response.json({ error: { code: 'SETUP_TENANT_FORBIDDEN' } }, { status: 403 })
   })
   const screen = await render(<TenantSetup />)
-  await screen.getByRole('combobox', { name: '已开通客户' }).selectOptions('ws-customer')
+  await pick(screen, '已开通客户', '客户甲')
   await screen.getByRole('button', { name: '进入工作区', exact: true }).click()
   await expect.element(screen.getByRole('alert')).toHaveTextContent('当前账号无权管理这个客户')
   expect(requests.at(-1)).toEqual({ action: 'workspace', workspace_id: 'ws-customer' })

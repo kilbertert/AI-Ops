@@ -94,7 +94,7 @@ it('saves before preview and stops the same trial', async () => {
       const body = JSON.parse(options.body)
       events.push(body.action)
       return Response.json({
-        trial_id: 'tr_' + 'a'.repeat(32),
+        trial_id: `tr_${'a'.repeat(32)}`,
         status: body.action === 'trial-cancel' ? 'cancelled' : 'running',
       })
     }),

@@ -1,0 +1,20 @@
+diff --git a/web/vite.config.ts b/web/vite.config.ts
+index 43b2b7a3..d1b496c0 100644
+--- a/web/vite.config.ts
++++ b/web/vite.config.ts
+@@ -108,6 +108,15 @@ export default defineConfig(({ command, mode, isPreview }) => {
+               '@base-ui/react/fieldset',
+               '@base-ui/react/number-field',
+               '@base-ui/react/slider',
++              // 我们注入的受管界面用到的 dify-ui 原语对应子路径。base-ui 的
++              // 子路径要么全预打包要么全不打包：只打包一部分时，未打包的内部文件
++              // 会另载一份原始 react，context 钩子以 dispatcher=null 崩溃。
++              '@base-ui/react/button',
++              '@base-ui/react/checkbox',
++              '@base-ui/react/field',
++              '@base-ui/react/input',
++              '@base-ui/react/popover',
++              '@base-ui/react/select',
+               'vite-plus/test/browser',
+               'dayjs/plugin/relativeTime',
+               'react-textarea-autosize',

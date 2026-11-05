@@ -66,6 +66,8 @@ check_sha web/app/components/app/configuration/debug/debug-with-single-model/ind
 
 check_sha web/service/debug.ts 784cb898a48d0ed4aae6b875b1d844d1095363e1a9997627a3fef05a51255a8c
 
+check_sha web/vite.config.ts 2f38f98a582b64bd1bf6d73384d1e66ea3fe9b9790f1bb4f287e0c164d18c54e
+
 echo "== 2. 打补丁（--fuzz=0：上下文对不上就失败）"
 # **先把工作树恢复干净。** 上一次构建留下的补丁产物会让 `patch` 停下来问
 # "文件已存在，要覆盖吗" —— 非交互环境里它默认答"不"，于是那一条补丁被**静默跳过**
