@@ -561,6 +561,84 @@ def test_evidence_field_set_is_exact(operator, monkeypatch, fault):
     assert final.json()["status"] != "completed", final.text
 
 
+@pytest.mark.parametrize("drift", ["derived-shape", "upstream-total"])
+def test_evidence_compare_is_provenance_only(operator, monkeypatch, drift):
+    """data 比对只认出处：派生形状字段（truncated/samples_returned/…）漂移照收——
+    快照存的是网关自己的投影；上游原值（total/records）不符仍照拒。"""
+    f = operator
+    observed = {}
+
+    def dispatch(_, cfg, run_id):
+        client = f["client"]
+        head = {"Authorization": "Bearer " + NODE_A_TOKEN, **CONTRACT}
+        publication = client.post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
+        head["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+
+        def fetch_report(tool):
+            grant = client.post(
+                f"/v1/internal/operator-runs/{run_id}/tools/{tool}/authorization",
+                headers=head,
+                json={"arguments": {"order_no": ORDER}},
+            ).json()
+            url = grant["base_url"] + grant["request"]["path"]
+            if grant["request"]["query"]:
+                url += "?" + grant["request"]["query"]
+            body = client.get(url, headers={"Authorization": "Bearer " + grant["bearer"]}).json()
+            evidence = operator_cpms.project_evidence(body, ORDER, tool)
+            evidence.pop("order_no")
+            evidence["inputs"] = grant["inputs"]
+            return grant, evidence
+
+        # 先正常交付 detail：samples 的授权要求 detail 已送达。
+        grant, evidence = fetch_report("cpms_order_detail")
+        assert (
+            client.post(
+                f"/v1/internal/operator-runs/{run_id}/tools/cpms_order_detail/evidence",
+                headers=head,
+                json={"authorization_id": grant["authorization_id"], "evidence": evidence},
+            ).status_code
+            == 200
+        )
+
+        grant, evidence = fetch_report("cpms_charging_samples")
+        if drift == "derived-shape":
+            # 节点重算口径漂移：每个派生字段都与网关投影不同——出处字段原样。
+            evidence["data"]["truncated"] = not evidence["data"]["truncated"]
+            evidence["data"]["samples_returned"] = 999
+            evidence["data"]["sample_limit"] = 1
+            evidence["data"]["ordering_guaranteed"] = not evidence["data"]["ordering_guaranteed"]
+            evidence["data"]["complete_timeline"] = not evidence["data"]["complete_timeline"]
+            evidence["data"].pop("absence", None)
+        else:
+            evidence["data"]["total"] = evidence["data"]["total"] + 1
+        response = client.post(
+            f"/v1/internal/operator-runs/{run_id}/tools/cpms_charging_samples/evidence",
+            headers=head,
+            json={"authorization_id": grant["authorization_id"], "evidence": evidence},
+        )
+        observed["record"] = (response.status_code, response.json())
+        return client.post(
+            f"/v1/internal/operator-runs/{run_id}/completions",
+            headers=head,
+            json={"status": "completed", "answer": json.dumps({"direct_answer": "x"})},
+        )
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    terminal(f, submitted.json()["qa_id"])
+    if drift == "derived-shape":
+        assert observed["record"][0] == 200, observed["record"]
+        # 收下的证据以网关投影为准——漂移的派生字段没有进快照。
+        run = f["ctx"].agent_run_store.by_qa(submitted.json()["qa_id"])
+        stored = run.snapshot["evidence"]["cpms_charging_samples"]["data"]
+        assert stored["samples_returned"] == len(stored["records"])
+        assert stored["truncated"] == (stored["total"] > len(stored["records"]))
+    else:
+        assert observed["record"][0] == 403, observed["record"]
+        assert observed["record"][1]["error"]["code"] == "OPERATOR_EVIDENCE_MISMATCH"
+
+
 def test_a_node_that_does_not_declare_the_contract_is_refused_before_any_read(operator, monkeypatch):
     """旧节点 + 新网关：拒绝必须发生在领授权，而不是完成回调里缺字段。"""
     f = operator

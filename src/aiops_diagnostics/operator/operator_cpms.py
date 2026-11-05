@@ -92,6 +92,30 @@ TOOL_CONTRACT = "request-target/1"
 OBJECT_CONTRACT = "request-target/2"
 TOOL_CONTRACT_HEADER = "X-AI-Ops-Tool-Contract"
 
+#: 证据 ``data`` 里的派生形状字段：网关投影时一处算定，节点回报时只能**重算同一公式**——
+#: 两份实现一旦口径漂移（上游 total / 过滤后行数 / 展示上限哪个是分母），每一次真实运行都
+#: 以 ``OPERATOR_EVIDENCE_MISMATCH`` 失败。逐字比对只认出处（上游原值与行内容）；派生字段
+#: 由网关自己的投影兜底——快照存的本来就是 ``task.evidence`` 里网关那份，不是节点回报值。
+DERIVED_EVIDENCE_FIELDS = frozenset(
+    {
+        "absence",
+        "complete_timeline",
+        "current",
+        "ordering_guaranteed",
+        "sample_limit",
+        "samples_returned",
+        "size",
+        "truncated",
+    }
+)
+
+
+def _provenance(data):
+    """证据 ``data`` 的出处投影：剥掉派生形状字段，只剩可逐字核验的上游原值。"""
+    if not isinstance(data, dict):
+        return data
+    return {key: value for key, value in data.items() if key not in DERIVED_EVIDENCE_FIELDS}
+
 
 #: 每个工具这一次要发的请求。**路径在这里物化**，节点只执行拿到的那个请求 ——
 #: 这正是「新增一条只读路径不必改 Java」的那一步。
@@ -1166,7 +1190,7 @@ class OperatorCpms:
                 not isinstance(evidence, dict)
                 or set(evidence) != {"tool", "inputs", "source", "observed_at", "data"}
                 or evidence.get("tool") != tool
-                or evidence.get("data") != expected["data"]
+                or _provenance(evidence.get("data")) != _provenance(expected["data"])
                 or evidence.get("source") != expected["source"]
                 or evidence.get("inputs")
                 != tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool)))
