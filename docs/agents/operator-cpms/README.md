@@ -72,7 +72,9 @@ JSON输出与事实相关性修复已陆续部署；#1335的原入口回归、�
 
 ## 配置与复跑
 
-沿用 `CHAT_NODE_TARGETS_FILE`，管家行增加 `entry: operator`、`cpms_base_url`（公司 CPMS HTTPS 基址）、`proxy_base_url`（节点可达的 Gateway HTTPS 基址）。节点清单模板仅包含 `cpms_order_detail`、`cpms_charging_samples` 的真实定义，见 Java 工具；不在模板或 Dify 配置中填写公司令牌。业务入口为原 `POST/GET /v1/assistant/questions`，必须是 operator 身份与显式订单。
+沿用 `CHAT_NODE_TARGETS_FILE`，管家行增加 `entry: operator`、`cpms_base_url`（公司 CPMS HTTPS 基址）、`proxy_base_url`（节点可达的 Gateway HTTPS 基址）。节点清单模板的工具集合以 `operator_tools.json` 为唯一声明（节点经 `-Daiops.node.tools-file` 读同一份文件）；不在模板或 Dify 配置中填写公司令牌。业务入口为原 `POST/GET /v1/assistant/questions`，必须是 operator 身份与显式订单。
+
+`cpms_charging_timeline` 另需 `AIOPS_GATEWAY_OPERATOR_TSDATA_URL` 指向公司 tsdata 查询门面（`/tdadmin/data/query` 前缀）；空值时该工具按依赖不可用拒绝，不静默退化。
 
 控制台试用额外配置：Gateway 的 `AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL` 与 `AIOPS_GATEWAY_OPERATOR_TRIAL_KEY`；登录代理的 `AIOPS_LOGIN_PROXY_OPERATOR_TRIAL_KEY` 使用同一把独立高熵密钥，至少32字符。该链只在配置后开启，登录代理最多在内存保留128个近期会话对应公司令牌，15分钟到期；到期访问时清理，重启后丢失。内部令牌交换路径仅供已认证 Gateway，经已批准 HTTPS 转发暴露，不向浏览器返回令牌。
 

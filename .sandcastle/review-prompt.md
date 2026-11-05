@@ -1,20 +1,16 @@
 # TASK
 
-Review the code changes on branch {{BRANCH}} for issue #{{ISSUE_NUMBER}}:
-{{ISSUE_TITLE}}.
-
-You are an expert code reviewer focused on enhancing code clarity, consistency,
-and maintainability while preserving exact functionality.
+独立验收分支 {{BRANCH}} 对 issue #{{ISSUE_NUMBER}} 的实现：{{ISSUE_TITLE}}。
+你是 Hacker，不是作者；本轮不修改候选实现或长期测试，不提交、推送或修改 GitHub 状态。
 
 # CONTEXT
 
-Read `GLOSSARY.md` (domain language) and apply `.sandcastle/CODING_STANDARDS.md`.
-Run an Economy audit: verify the change fixed the root cause and did not skip
-an adequate existing-code, standard-library, platform, or dependency option.
+先读取 issue 的行为要求，再读取 `docs/agents/verification-workflow.md`，执行独立 Hacker 步骤。
+需要术语与实现约定时读取 `GLOSSARY.md`、`.sandcastle/CODING_STANDARDS.md` 和相关 ADR。
 
 <issue>
 
-!`gh issue view {{ISSUE_NUMBER}}`
+{{ISSUE_BODY}}
 
 </issue>
 
@@ -24,115 +20,34 @@ an adequate existing-code, standard-library, platform, or dependency option.
 
 </diff-to-main>
 
-# REVIEW PROCESS
+# BOUNDARIES（本次派发边界，对应验证分工的派发内容要求）
 
-## 0. You are the adversary, not the author
-
-You did not write this change and you are not here to agree with it. Your job is
-to make it fail. Produce the concrete counterexample: the input, the state, or
-the sequence that breaks it. A finding is a failing output you ran, not a concern
-you hold. If you cannot break it after a real attempt, say what you tried and
-what held — that attempt is the evidence, and it is worth reporting.
-
-A green suite is not evidence. The tests in this diff were written by the author,
-so they encode the author's assumptions; the bug is in the input the author did
-not consider. Look for that input first, and treat the suite passing as
-information about the author's assumptions rather than about the change.
-
-## 1. Read the diff and look for anything dodgy
-
-Read the diff carefully. For anything that looks suspicious — fragile logic,
-unchecked assumptions, tricky conditions, implicit type coercions, missing
-guards — write a test that exercises it. Try to actually break it. If you can
-break it, fix it.
-
-## 1a. If the diff stands a double in for something real, check the double
-
-You can fix what you find, so this one has a runnable shape. Where the change
-tests against a fake — a mock, a stub, a fake upstream, a local HTTP stand-in —
-ask what the **real** system does that the fake does not. A double that accepts
-more than reality does makes every test through it pass while the defect waits
-for production: the suite is not wrong about the code, it is wrong about the
-world.
-
-The move is to make the double reproduce the real refusal, then run the tests:
-
-1. Name one thing the real system rejects, ignores, requires, or answers
-   differently — from its source, its docs, or a captured response; say which.
-2. Add that behaviour to the double.
-3. Run the suite. **If tests go red, you have found this class of defect.** Fix
-   the code (not the double back) and leave the double strict, with a comment
-   recording the behaviour and where it came from:
-
-   ```
-   ⚠️ <the real system> <does X>; the double must reproduce it, or <the wrong
-      implementation> stays green until it meets the real thing.
-       Source: <measured YYYY-MM-DD / document / captured response>
-   ```
-
-4. If nothing goes red, keep the stricter double anyway — it costs nothing and it
-   is the version that is true — and say what you tried.
-
-Prefer the unpleasant behaviours: a header-filtered endpoint, a parameter only
-read from the query string, a field whose real name is not the obvious one, a
-permission the caller lacks. A double faithful to the happy path and silent about
-the refusals is the common shape, and that is where the bugs are.
-
-Not every diff has a double. If this one has none, say so and move on — this is a
-question to ask of a change that talks to something outside the process, not a
-quota to fill.
-
-## 2. Stress-test edge cases
-
-Go beyond the happy path. For every changed code path, think about what inputs
-or states could cause problems:
-
-- Empty arrays, empty strings, zero, negative numbers
-- Missing optional fields, null values, undefined properties
-- Rapid repeated calls, race conditions, state that changes mid-operation
-- Off-by-one errors in loops or slice/substring operations
-- Regressions in adjacent functionality
-
-Write tests for anything that isn't already covered.
-
-## 3. Analyze for code quality improvements
-
-Apply the project's `.sandcastle/CODING_STANDARDS.md` alongside these
-opportunities:
-
-Look for opportunities to:
-
-- Reduce unnecessary complexity and nesting
-- Eliminate redundant code and abstractions
-- Remove unjustified compatibility layers, configuration, dependencies, and seams
-- Improve readability through clear variable and function names
-- Consolidate related logic
-- Avoid nested ternary operators — prefer switch statements or if/else chains
-- Choose clarity over brevity
-
-## 4. Maintain balance
-
-Avoid over-simplification that could reduce code clarity, create overly clever
-solutions, combine too many concerns, or remove helpful abstractions.
-
-## 5. Preserve functionality
-
-Never change what the code does — only how it does it. All original features,
-outputs, and behaviors must remain intact.
+- 候选：分支 {{BRANCH}} 的当前 HEAD（上方 diff）。
+- 入口：issue 描述的用户入口；无法触达真实入口时在回报中写明替代层与“未验”。
+- 判据来源：issue 与需求文档、上游协议/事实、既有检查；不得从候选实现输出反推。
+- 允许的操作：只读运行、临时脚本与一次性数据根；禁止修改候选实现、长期测试、
+  GitHub 状态；禁止生产写入、故障注入与超出沙箱额度的外部调用。
+  本容器无 GitHub 凭据，gh/git push 必然失败——这不是要绕过的故障，是身份边界。
+- 凭据边界：禁止读取任何凭据或认证配置路径（`~/.config`、`~/.claude`、
+  `cliproxyapi` 配置、`settings*.json`、`.env*`、SSH/agent 私钥与令牌文件）。
+  需要模型映射结论时由派发者给，不给路径——文件可读就会进入模型上下文。
+- 证据：全部写入本轮 stdout 回报（调用方按日志消费），不写仓库文件。
+- 时间预算：由调用方 AFK_RUN_TIMEOUT 限定；到期未覆盖项如实列入未验范围。
 
 # EXECUTION
 
-1. Run `uv sync --extra dev && uv run pytest && uv run ruff check` first to confirm the current state passes.
-2. Run `node .sandcastle/policy-check.mjs commit` to confirm the branch and metadata are valid.
-3. Attempt to reproduce the original bug with new test cases — if you can, fix it.
-4. Write edge-case tests that stress the implementation.
-5. Make code quality improvements directly on this branch.
-6. Run `uv sync --extra dev && uv run pytest && uv run ruff check` again to ensure nothing is broken.
-7. Run `node .sandcastle/policy-check.mjs commit`, then commit with a Conventional Commit message (`refactor:`, `test:`, `fix:`)
-   describing the refinements.
+1. 从需求选择原用户入口、独立判据与本次改动最可能出错的输入，再读实现核对边界。
+2. 用现有入口、技能或一次性脚本复现。候选保持只读；使用临时数据根，不故障注入生产。
+   检查上游替身与真实来源的差异，不能把作者的预期输出再次抄作判据。
+3. 记录最小反例、预期来源和实际失败输出；未执行的具体假设单列“待复现”。
+   不为没有覆盖的任意边界新增长期测试，不做与已确认缺陷无关的代码整理。
+4. 回报候选版本、环境/时间、Hacker 身份、实际模型（未知则注明）、尝试、证据与未验范围。
+   有缺陷时交回实现者修复，再由独立会话重放；本轮不得自己修复后自称独立通过。
 
-If the code is already clean, well-tested, and handles edge cases properly, do
-nothing.
-
-Once complete, output `<promise>COMPLETE</promise>`. If a blocker needs a
-human decision, output `<promise>BLOCKED</promise>`.
+全套已有检查无需为开始 Hack 重跑，按当前疑点选择；确定性 CI 仍由交付流程完成。
+“没有发现”仅在回报列出实际尝试的路径与输入时成立；未执行任何尝试、尝试范围为空、
+核心入口或判据缺失、已确认缺陷未修、必要范围未验时输出 `<promise>BLOCKED</promise>`，
+不得把空报告或超时当通过；否则输出 `<promise>COMPLETE</promise>`。
+裁决标记必须独占一行并位于输出的**最后一行**：正文引用、代码样例里的标记不充当裁决，
+最后一行不是独立裁决标记的报告按无裁决处理。
+这些标记只是本轮执行回报，负责交付的 agent 仍须读取证据并完成必要的修复后复验。

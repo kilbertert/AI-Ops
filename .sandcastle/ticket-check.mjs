@@ -134,6 +134,13 @@ const ACCEPTANCE_RE =
 /** The inline-label form, which needs no heading at all. */
 const ACCEPTANCE_LABEL_RE = /^\s*(?:\*\*)?\s*(acceptance(?: criteria)?|验收(?:标准)?)(?:\*\*)?\s*[:：]/i;
 
+// Tested per prose line (like ACCEPTANCE_RE), so `^` anchors each line's
+// start — no `m` needed. Testing the raw body instead was the #1383 defect
+// twice over: `^` bound only line one (a mid-body heading was invisible and
+// the warning fired on tickets that have the section), and with `m` it would
+// also match inside fenced code or HTML comments, letting a code sample
+// silence a warning about a section nobody wrote. PROBLEM_RE carried the
+// identical defect one line below the reported one.
 const NON_GOALS_RE =
   /^#{1,6} *(不做什么|不做|范围外|不包含|非目标|out of scope|non-goals?|not in scope|boundar)/i;
 const PROBLEM_RE = /^#{1,6} *(problem|背景|问题|为什么|动机|rationale|why|motivation|现象)/i;
@@ -202,14 +209,31 @@ function isPrd(title, body) {
 function proseLines(text) {
   const lines = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
   const out = [];
-  let inFence = false;
+  // A CommonMark fence is ` or ~, a run of at least three, closed by the same
+  // character in a run at least as long. Tracking the marker rather than a
+  // boolean is what keeps a `~~~` sample — and a ``` line inside ```` — out
+  // of prose: the boolean version read `~~~` content as text, so a sample
+  // `## Acceptance criteria` posed as a real section. (Replay finding, #1383.)
+  // CommonMark's indent is SPACES only (a tab is already an indented-code
+  // indent, and U+00A0 is not CommonMark whitespace at all): `\s{0,3}` let a
+  // NBSP-prefixed line pose as a fence. (#1397 re-review.)
+  let fence = null;
   let inComment = false;
   for (const line of lines) {
-    if (/^\s{0,3}```/.test(line)) {
-      inFence = !inFence;
+    const m = /^[ ]{0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence !== null) {
+      // A closing fence is the marker and nothing else — CommonMark allows
+      // only spaces/tabs after it, so `~~~still-inside-code` is content, not
+      // a closer, and so is `~~~`+U+00A0: `\s*$` accepted NBSP, closing the
+      // block where CommonMark keeps it open and letting a hidden heading
+      // read as prose. (#1383 review; NBSP case from #1397 re-review.)
+      if (m && /^[ ]{0,3}(`{3,}|~{3,})[ \t]*$/.test(line) && m[1][0] === fence.ch && m[1].length >= fence.len) fence = null;
       continue;
     }
-    if (inFence) continue;
+    if (m) {
+      fence = { ch: m[1][0], len: m[1].length };
+      continue;
+    }
     if (inComment) {
       if (line.includes("-->")) inComment = false;
       continue;
@@ -399,8 +423,8 @@ export function judge(ticket) {
     }
   }
 
-  if (!NON_GOALS_RE.test(body)) warn("non-goals", "no `Out of scope` / `不做什么` section — nothing bounds the change");
-  if (!PROBLEM_RE.test(body)) warn("problem", "no `Problem` / `背景` section — the reason is not written down");
+  if (!lines.some((l) => NON_GOALS_RE.test(l))) warn("non-goals", "no `Out of scope` / `不做什么` section — nothing bounds the change");
+  if (!lines.some((l) => PROBLEM_RE.test(l))) warn("problem", "no `Problem` / `背景` section — the reason is not written down");
 
   return done();
 }
@@ -590,6 +614,45 @@ if (SELF_CHECK) {
     // A symbol inside ZenTao's `<code>` is the same anchor a markdown backtick
     // is, and stripping the tag lost it.
     zentaoCode: { title: "需求名", body: "<p>改 <code>ScopeContext</code></p>", verify: "行为变更已断言" },
+    // Mid-body headings: `^` must anchor a line, not the whole body — both
+    // headings sit past line one, so either RE reverting to raw-body matching
+    // fails its assertion. #1383. (An earlier draft led with `## 问题` on
+    // line one, which matched with or without the fix — a blind assertion.)
+    midHeadings: {
+      title: "调整 `src/app.ts`",
+      body: "工单有一段开场白。\n\n## 问题\n\n顺序不对。\n\n## 不做什么\n\n- 不改 `src/b.ts`。\n\n## Acceptance criteria\n\n- [ ] 行为变更已断言\n",
+    },
+    // A heading inside a code sample or an HTML comment is not a section the
+    // ticket declares — `proseLines` exists to say exactly that. (#1383)
+    fencedHeading: {
+      title: "调整 `src/app.ts`",
+      body: "## 问题\n\n顺序不对，改 `src/app.ts`。\n\n## 模板参考\n\n```md\n## 不做什么\n- 照抄此节\n```\n\n## Acceptance criteria\n\n- [ ] 行为变更已断言\n",
+    },
+    // `~~~` is a legal CommonMark fence. Before the marker was tracked, a
+    // `~~~` sample posed as real sections — `## Acceptance criteria` inside
+    // one passed a ticket that must FAIL. (Replay finding, #1383.)
+    tildeFence: {
+      title: "调整 `src/app.ts`",
+      body: "## 问题\n\n顺序不对，改 `src/app.ts`。\n\n~~~md\n## 不做什么\n- 不改 `src/b.ts`。\n\n## Acceptance criteria\n- [ ] 行为变更已断言\n~~~\n",
+    },
+    // `~~~still-inside-code` is not a closing fence — CommonMark allows only
+    // whitespace after the marker. Treating it as one closed the block early
+    // and the heading after it read as prose: the gate passed a ticket whose
+    // acceptance section lives inside an unclosed code block. (#1383 review)
+    tildeFakeClose: {
+      title: "调整 `src/app.ts`",
+      body: "## 问题\n\n顺序不对，改 `src/app.ts`。\n\n## 不做什么\n\n- 不改 `src/b.ts`。\n\n~~~md\n样例\n~~~still-inside-code\n\n## Acceptance criteria\n\n- [ ] 行为变更已断言\n",
+    },
+    // `~~~` followed by U+00A0 is not a closing fence either — CommonMark
+    // whitespace after the marker means spaces/tabs, and NBSP is not
+    // CommonMark whitespace. JS `\s` accepts it, so the block closed early
+    // and the hidden acceptance section passed `--strict`. An independent
+    // CommonMark parser confirms the heading stays inside the block.
+    // (#1397 re-review.)
+    tildeNbspClose: {
+      title: "调整 `src/app.ts`",
+      body: "## 问题\n\n顺序不对，改 `src/app.ts`。\n\n## 不做什么\n\n- 不改 `src/b.ts`。\n\n~~~md\n样例\n~~~\u00a0\n\n## Acceptance criteria\n\n- [ ] 行为变更已断言\n",
+    },
   };
 
   expect("criteria passes", judge(F.criteria).ok, true);
@@ -646,6 +709,49 @@ if (SELF_CHECK) {
   expect(
     "a lone preference is not a fork",
     judge({ title: "调整 `src/a.ts`", body: "## Acceptance criteria\n\n- [ ] `src/a.ts` 用首选实现\n" }).ok,
+    true,
+  );
+
+  // `^`-anchored heading rules must see headings past line one — and must NOT
+  // see them inside fenced code, where a sample is not a declared section.
+  // (#1383; the fence case is a Hacker finding on the first fix attempt.)
+  expect(
+    "a mid-body 不做什么 section silences the warning",
+    judge(F.midHeadings).findings.some((f) => f.id === "non-goals"),
+    false,
+  );
+  expect(
+    "a mid-body 问题 section silences the warning",
+    judge(F.midHeadings).findings.some((f) => f.id === "problem"),
+    false,
+  );
+  expect(
+    "a fenced 不做什么 sample does not count",
+    judge(F.fencedHeading).findings.some((f) => f.id === "non-goals"),
+    true,
+  );
+  // The dangerous direction: a sample acceptance section must not pass the
+  // gate. Without tilde-fence tracking both of these go green.
+  expect("a ~~~ sample is not an acceptance section", judge(F.tildeFence).ok, false);
+  expect(
+    "a ~~~ 不做什么 sample does not count",
+    judge(F.tildeFence).findings.some((f) => f.id === "non-goals"),
+    true,
+  );
+  // The marker with trailing text never closes the block — the heading after
+  // it is still code, so the ticket must FAIL on acceptance, not pass.
+  expect("a fake-closed fence still fails the gate", judge(F.tildeFakeClose).ok, false);
+  expect(
+    "the fake-closed ticket fails on acceptance",
+    judge(F.tildeFakeClose).findings.some((f) => f.id === "acceptance" && f.level === "fail"),
+    true,
+  );
+  // Same gate, NBSP tail: `~~~`+U+00A0 must not close the block — CommonMark
+  // calls the heading inside it code, so the ticket must FAIL on acceptance.
+  expect("a NBSP-tailed fence still fails the gate", judge(F.tildeNbspClose).ok, false);
+  expect(
+    "the NBSP-closed ticket fails on acceptance",
+    judge(F.tildeNbspClose).findings.some((f) => f.id === "acceptance" && f.level === "fail"),
     true,
   );
 

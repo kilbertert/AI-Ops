@@ -608,6 +608,75 @@
         "average_power_kw": null,
         "limitations": null
       }
+    },
+    {
+      "name": "cpms_charging_timeline",
+      "description": "Read the authorized order raw charging-gun telemetry from the time-series store (charging-gun_property): rows ordered by ts within the order's createdTime~stopTime window on its childDeviceCode. This is the SOP §2.2 process source — use it when the monitor table (cpms_charging_samples) has no rows or a process question needs the raw stream: voltage/current/power/soc/errorCode over time. Read order detail first. Optional order_no is a candidate supplied by the user or the current conversation; authorization is checked for each call.",
+      "inputs": [
+        "order_no"
+      ],
+      "model_inputs": [
+        "order_no"
+      ],
+      "applies_to": [
+        "order"
+      ],
+      "request": {
+        "method": "GET",
+        "path_template": "/tsdata/chargingGunProperty/{order_no}",
+        "query": []
+      },
+      "source": "tsdata.gun_property",
+      "response": {
+        "kind": "object",
+        "row_path": "value"
+      },
+      "evidence_fields": [
+        "records",
+        "total",
+        "sample_limit",
+        "truncated",
+        "ordering_guaranteed",
+        "complete_timeline",
+        "samples_returned",
+        "absence",
+        "device",
+        "window_start",
+        "window_end"
+      ],
+      "evidence_shape": {
+        "records": [
+          {
+            "ts": null,
+            "txSerialNo": null,
+            "status": null,
+            "isReturn": null,
+            "isInsert": null,
+            "outputVoltage": null,
+            "outputCurrent": null,
+            "power": null,
+            "chargingTime": null,
+            "chargingElectricityQuantity": null,
+            "soc": null,
+            "temperature": null,
+            "batteryMaxTemperature": null,
+            "batteryMinTemperature": null,
+            "errorCode": null,
+            "errorReason": null,
+            "meterNow": null
+          }
+        ],
+        "total": null,
+        "sample_limit": null,
+        "truncated": null,
+        "ordering_guaranteed": null,
+        "complete_timeline": null,
+        "samples_returned": null,
+        "absence": null,
+        "device": null,
+        "window_start": null,
+        "window_end": null
+      }
     }
   ]
 }

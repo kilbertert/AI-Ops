@@ -103,3 +103,30 @@ def test_env_example_documents_dis_point_scope_boundary() -> None:
     assert "AIOPS_DIS_TOKEN=" in text
     assert "AIOPS_DIS_TIMEOUT_SECONDS=" in text
     assert "服务侧静态令牌" in text
+
+
+def test_env_example_mirrors_the_setting_source_table() -> None:
+    """#973：模板键集 = ``SETTING_SOURCES`` 键名 ∪ 三个派生路径键，逐键恰好一次；
+    只读进程环境的键（``file=False`` 与派生项）行尾必须带 `# 仅进程环境`，
+    其余键不得带 —— 标记错向两个方向都会让运维把键写进不读它的那份文件。"""
+    import re
+
+    from aiops_diagnostics.gateway.gateway_config import SETTING_SOURCES
+
+    key_lines: dict[str, list[str]] = {}
+    for line in _template().splitlines():
+        match = re.match(r"^(AIOPS_GATEWAY_[A-Z0-9_]+)=", line)
+        if match:
+            key_lines.setdefault(match.group(1), []).append(line)
+
+    derived = {
+        "AIOPS_GATEWAY_DATA_HOME",
+        "AIOPS_GATEWAY_DATABASE_FILE",
+        "AIOPS_GATEWAY_SERVER_CONFIG_FILE",
+    }
+    assert set(key_lines) == {s.env for s in SETTING_SOURCES.values()} | derived
+    assert all(len(lines) == 1 for lines in key_lines.values())
+
+    process_only = {s.env for s in SETTING_SOURCES.values() if not s.file} | derived
+    for env, (line,) in key_lines.items():
+        assert ("仅进程环境" in line) == (env in process_only), env

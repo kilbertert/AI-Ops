@@ -387,6 +387,7 @@ class NodeTrial:
             caller=scope,
             order_no=order,
             gateway_version="node-trial",
+            language=language,
         )
         runtime.agent_run_store.bind_qa(run.run_id, trial_id)
         try:

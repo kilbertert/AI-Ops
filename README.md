@@ -72,7 +72,7 @@ flowchart LR
 | 职责 | 当前模块 |
 |---|---|
 | 网关与服务 | `gateway.gateway_api.py`、`gateway.gateway_runtime.py`、`gateway_server.py`、`gateway.gateway_store.py`、`gateway.gateway_config.py`、`gateway.gateway_logging.py`、`gateway.public_openapi.py`、`gateway.request_observation.py`、`gateway.isolation_guard.py`、`gateway.deployment_environment.py` |
-| 身份与范围 | `identity.caller_auth.py`、`identity.company_token_auth.py`、`identity.company_permissions.py`、`identity.third_session_auth.py`、`identity.scope_context.py`、`identity.query_scope.py`、`identity.order_visibility.py`、`common.http_auth.py` |
+| 身份与范围 | `identity.caller_auth.py`、`identity.company_token_auth.py`、`identity.company_permissions.py`、`identity.data_scope_rule.py`、`identity.third_session_auth.py`、`identity.scope_context.py`、`identity.query_scope.py`、`identity.order_visibility.py`、`common.http_auth.py` |
 | C端业务 | `consumer.consumer_billing.py`、`consumer.consumer_facts.py`、`consumer.consumer_binding.py`、`consumer.consumer_chat_service.py`、`consumer.consumer_copy.py`、`consumer.consumer_documents.py`、`consumer.consumer_flow_contract.py`、`consumer.consumer_intent.py`、`consumer.consumer_knowledge.py`、`consumer.consumer_knowledge_selection.py`、`consumer.consumer_knowledge_grants.py`、`consumer.consumer_language.py`、`consumer.consumer_order_chat.py`、`consumer.consumer_photo.py`、`consumer.consumer_plain.py`、`consumer.consumer_reply.py`、`consumer.consumer_publication.py`、`consumer.consumer_sites.py`、`consumer.consumer_tool_grants.py`、`consumer.consumer_time.py`、`consumer.consumer_trial.py`、`consumer.business_environments.py`、`data.charging_status.py` |
 | 节点与试用 | `execution.agent_runs.py`、`execution.execution_manifest.py`、`execution.chat_execution.py`、`execution.chat_data_grant.py`、`execution.chat_route_bindings.py`、`execution.node_publication.py`、`operator.operator_cpms.py`、`operator.order_analysis.py`、`operator.order_pricing.py`、`operator.order_billing.py`、`operator.station_pricing.py`、`operator.station_tariff.py`、`operator.operator_tools.py`、`operator.operator_conversation.py`、`operator.operator_answer_review.py`、`dify.dify_trial.py`、`dify.dify_workflow_trial.py` |
 | 管理与发布 | `admin_cli.py`、`publication.agent_content.py`、`publication.agent_lifecycle.py`、`publication.agent_serviceability.py`、`publication.agent_manifest.py`、`publication.agent_debug.py`、`publication.shortcut_lifecycle.py`、`publication.shortcut_migration.py`、`operator.ops_provider.py`、`operator.operator_agent.py` |
@@ -122,6 +122,10 @@ Dify自助开通：`dify.self_service`组织双端业务流程，`dify.self_serv
 `dify.service_keys`申请、对账并落盘每应用的 Service 凭据；`dify.knowledge_connection`管理各工作区的知识连接。
 
 ## 五、本地运行与验证
+
+开发与交付按[验证分工](docs/agents/verification-workflow.md)执行：实现者聚焦功能，
+独立 Hacker 提供反例和用户入口证据；新增长期检查须有具体错误及独立判据。以下是交付检查，
+迭代时只运行与当前改动和疑点相关的部分，完整结果不代替业务验收。
 
 ```bash
 uv sync --locked --dev

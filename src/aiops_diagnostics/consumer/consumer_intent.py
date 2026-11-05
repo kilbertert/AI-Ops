@@ -89,51 +89,52 @@ def classify(question, *, provider, api_key, language, **context):
 
 
 def message(code, language):
+    from aiops_diagnostics.common.i18n import localized_pack
     from aiops_diagnostics.consumer.consumer_language import COPY
 
     if language in COPY:
         return COPY[language]["intent_" + code]
     texts = {
-        "unavailable": (
-            "智能客服服务暂不可用，请稍后再试或联系官方客服。尚未查询您的订单。",
-            "The assistant service is unavailable. Try later or contact official support. "
+        "unavailable": {
+            "zh": "智能客服服务暂不可用，请稍后再试或联系官方客服。尚未查询您的订单。",
+            "en": "The assistant service is unavailable. Try later or contact official support. "
             "No order was queried.",
-        ),
-        "clarify": (
-            "请说明您想查哪笔订单的状态、账务记录，还是了解操作方法。",
-            "Please specify whether you need an order status, billing records, or instructions.",
-        ),
-        "context": (
-            "之前的数据已失效。请重新说明问题，或选择订单；查询最近一笔可直接说“查我的最新订单”。",
-            "Previous data is no longer available. Please restate your request or select an order; "
+        },
+        "clarify": {
+            "zh": "请说明您想查哪笔订单的状态、账务记录，还是了解操作方法。",
+            "en": "Please specify whether you need an order status, billing records, or instructions.",
+        },
+        "context": {
+            "zh": "之前的数据已失效。请重新说明问题，或选择订单；查询最近一笔可直接说“查我的最新订单”。",
+            "en": "Previous data is no longer available. Please restate your request or select an order; "
             "you can ask for your latest order.",
-        ),
-        "write_request": (
-            "我目前只能查询和提供操作指引，不能代您退款、停止充电或修改订单。"
+        },
+        "write_request": {
+            "zh": "我目前只能查询和提供操作指引，不能代您退款、停止充电或修改订单。"
             "请通过 App 对应入口操作，或联系官方客服。",
-            "I can provide read-only information and guidance, but cannot issue refunds, stop charging "
+            "en": "I can provide read-only information and guidance, but cannot issue refunds, stop charging "
             "or change orders. Use the app’s relevant option or official support.",
-        ),
-        "trial_order": (
-            "试用只查询页面选定的订单。请问“查询选定订单的状态”，或返回页面重新选择订单。",
-            "Trials only query the order selected on the page. Ask for the selected order’s status, "
+        },
+        "trial_order": {
+            "zh": "试用只查询页面选定的订单。请问“查询选定订单的状态”，或返回页面重新选择订单。",
+            "en": "Trials only query the order selected on the page. Ask for the selected order’s status, "
             "or select a different order on the page.",
-        ),
-        "order": (
-            "请选择要查询的订单或提供订单号，也可以明确查询最近一笔订单。",
-            "Select an order, provide its number, or ask for your latest order.",
-        ),
-        "disabled": (
-            "当前客服尚未开通这项实时查询，您可以在 App 的订单或支付记录中查看。",
-            "This live query is not enabled. Please check the app’s order or payment records.",
-        ),
-        "conversation": (
-            "当前对话使用的服务版本已变化或上一轮未完成，请新建对话后重新提问。",
-            "The service version changed or the previous request did not complete. "
+        },
+        "order": {
+            "zh": "请选择要查询的订单或提供订单号，也可以明确查询最近一笔订单。",
+            "en": "Select an order, provide its number, or ask for your latest order.",
+        },
+        "disabled": {
+            "zh": "当前客服尚未开通这项实时查询，您可以在 App 的订单或支付记录中查看。",
+            "en": "This live query is not enabled. Please check the app’s order or payment records.",
+        },
+        "conversation": {
+            "zh": "当前对话使用的服务版本已变化或上一轮未完成，请新建对话后重新提问。",
+            "en": "The service version changed or the previous request did not complete. "
             "Please start a new conversation and ask again.",
-        ),
+        },
     }
-    return texts[code][0 if language.startswith("zh") else 1]
+    return localized_pack(texts[code], language)
 
 
 def trial_message(code, language):

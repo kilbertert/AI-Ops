@@ -48,6 +48,9 @@ is blocked.
 
 ## Delivery
 
+实现、独立 Hack、修复与交付执行[验证分工](agents/verification-workflow.md)。
+新增检查先说明错误与判据；独立轮次提供反例和入口证据，不以模型“无发现”代替验收。
+
 Agents commit on task branches and run deterministic checks. The host runner
 pushes branches, opens draft PRs, and merges only after CI and human review.
 No agent pushes the default branch directly.

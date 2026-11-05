@@ -14,7 +14,14 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from aiops_diagnostics.common.async_job_lifecycle import QUESTION
-from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, request_json
+from aiops_diagnostics.common.bounded_http import (
+    ErrorMapping,
+    RequestSpec,
+    json_body,
+    parse_code_data_envelope,
+    request_json,
+)
+from aiops_diagnostics.data.sources import GUN_COLUMN_NAMES
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import (
     AgentRunConfig,
@@ -91,6 +98,30 @@ SITE_PATH = "/chSite/page"
 TOOL_CONTRACT = "request-target/1"
 OBJECT_CONTRACT = "request-target/2"
 TOOL_CONTRACT_HEADER = "X-AI-Ops-Tool-Contract"
+
+#: 证据 ``data`` 里的派生形状字段：网关投影时一处算定，节点回报时只能**重算同一公式**——
+#: 两份实现一旦口径漂移（上游 total / 过滤后行数 / 展示上限哪个是分母），每一次真实运行都
+#: 以 ``OPERATOR_EVIDENCE_MISMATCH`` 失败。逐字比对只认出处（上游原值与行内容）；派生字段
+#: 由网关自己的投影兜底——快照存的本来就是 ``task.evidence`` 里网关那份，不是节点回报值。
+DERIVED_EVIDENCE_FIELDS = frozenset(
+    {
+        "absence",
+        "complete_timeline",
+        "current",
+        "ordering_guaranteed",
+        "sample_limit",
+        "samples_returned",
+        "size",
+        "truncated",
+    }
+)
+
+
+def _provenance(data):
+    """证据 ``data`` 的出处投影：剥掉派生形状字段，只剩可逐字核验的上游原值。"""
+    if not isinstance(data, dict):
+        return data
+    return {key: value for key, value in data.items() if key not in DERIVED_EVIDENCE_FIELDS}
 
 
 #: 每个工具这一次要发的请求。**路径在这里物化**，节点只执行拿到的那个请求 ——
@@ -213,6 +244,19 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
 #: 站点查询工具的名字。这里是**唯一**按名字认它的地方：判断「这一轮是否已经用工具
 #: 取过站点」是运行级的事实，不是工具自身的属性。
 SITE_TOOL = "cpms_site_search"
+TIMELINE_TOOL = "cpms_charging_timeline"
+#: 节点 object 投影的数组上限（`CpmsReadTool.project` 拒收 >64）。窗口内按 _ts 升序
+#: 取前 N 行，装不下的部分由 ``truncated``/``total`` 如实标出 —— 不翻页。
+TIMELINE_LIMIT = 64
+#: 发给 tsdata `QueryRequest.fields` 的列清单：SOP §2.2 那一份，`GUN_COLUMN_NAMES`
+#: 是仓内唯一权威（诊断直查与只读代理白名单也由它派生），前面补上 `_ts`。
+#: 实测例外（41 生产回放，2026-11-05）：tsdata 门面的 `charging-gun_property`
+#: 没有 `batteryMinTemperature` 列（充电生产 TDengine 的同名表有），整表原样
+#: 发会被门面按列名拒（TDengine error: Invalid column name）。该列在行投影里
+#: 本来就可缺席（picked 跳过缺键、节点 project 跳过缺键），剔除不退化证据。
+TIMELINE_FIELDS = ("_ts", *(name for name in GUN_COLUMN_NAMES if name != "batteryMinTemperature"))
+_TIMELINE_DEVICE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_TIMELINE_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?")
 
 
 def _proxy_tool(task, run, method, path, query):
@@ -660,15 +704,73 @@ class OperatorCpms:
             ):
                 del self.tasks[key]
 
-    def _current(self, run_id, *, node_token=None, manifest=None, tool=None):
-        task = self.tasks.get(run_id)
+    def authenticate(self, run_id, *, node_token=None, manifest=None):
+        """协议级闸：run 存在、令牌属实为本 run 的期望节点、manifest 匹配。**所有**节点回调都过。"""
+        try:
+            return self._authenticate(run_id, node_token=node_token, manifest=manifest)
+        except OperatorRefused as exc:
+            self._stamp_gate_refusal(run_id, str(exc))
+            raise
+
+    def authorize_execution(self, run_id, *, node_token=None, manifest=None, tool=None):
+        """执行级闸：协议身份之上，「本次执行仍被许可」。只包铸造/使用执行能力的面。"""
+        try:
+            run, config = self._authenticate(run_id, node_token=node_token, manifest=manifest)
+            return self._authorize_execution(
+                run_id, run=run, config=config, node_token=node_token, manifest=manifest, tool=tool
+            )
+        except OperatorRefused as exc:
+            self._stamp_gate_refusal(run_id, str(exc))
+            raise
+
+    def _stamp_gate_refusal(self, run_id, code):
+        """闸拒把原始码写进 run.reason：授权已死时上报必被同一道闸反杀，归因只剩这里能留。
+
+        fail() 只更新 issued/running——首拒生效、终局幂等，第二次闸拒不改写已落码。
+        两类不 stamp：OPERATOR_TOOL_DISABLED 的上报不带 tool、走不到这个判定，
+        现有 self-report 路径仍在；FEEDBACK_REFUSALS 是回喂业务码、拒绝点在闸外。
+        """
+        if code == "OPERATOR_TOOL_DISABLED" or code in FEEDBACK_REFUSALS:
+            return
+        try:
+            if self.context.agent_run_store.fail(run_id, TOOL_REFUSED_PREFIX + code):
+                logging.getLogger("aiops.operator").warning(
+                    "operator_gate_refused run_id=%s code=%s", run_id, code
+                )
+        except Exception:
+            # 归因动作不能让拒绝本身变形：stamp 失败只留日志，拒绝原样抛回节点。
+            logging.getLogger("aiops.operator").warning(
+                "operator_gate_refused stamp_failed run_id=%s code=%s", run_id, code
+            )
+
+    def _authenticate(self, run_id, *, node_token=None, manifest=None):
+        """run 存在 + 节点身份 + manifest——不判断「这次执行还许不许可」。"""
         run = self.context.agent_run_store.get(run_id)
-        if (
-            task is None
-            or run is None
-            or run.operation not in {SCENARIO, operator_conversation.SCENARIO, "operator_agent"}
-            or run.state not in {"issued", "running"}
-        ):
+        if run is None or run.operation not in {
+            SCENARIO,
+            operator_conversation.SCENARIO,
+            "operator_agent",
+        }:
+            raise OperatorRefused("OPERATOR_RUN_INACTIVE")
+        binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
+        if binding is None:
+            # 绑定已撤：没有 config 可验证节点身份，连「谁在上报」都存疑。
+            raise OperatorRefused("OPERATOR_NODE_REJECTED")
+        config = AgentRunConfig.load(Path(binding.config_file))
+        if node_token is not None:
+            node = config.authenticate_node(node_token)
+            if node is None or node.node_id != run.expected_node_id or node.environment != run.environment:
+                raise OperatorRefused("OPERATOR_NODE_REJECTED")
+        expected = execution_manifest.from_text(run.execution_manifest)
+        if expected.identity != run.expected_agent_version:
+            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
+        if manifest is not None and manifest != expected.identity:
+            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
+        return run, config
+
+    def _authorize_execution(self, run_id, *, run, config, node_token=None, manifest=None, tool=None):
+        task = self.tasks.get(run_id)
+        if task is None or run.state not in {"issued", "running"}:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         qa = self.context.store.get_assistant_question(run.qa_id, run.scope_fingerprint)
         if not qa or qa["status"] not in QUESTION.active:
@@ -688,7 +790,6 @@ class OperatorCpms:
             for t in all_targets(self.context.settings)
         ):
             raise OperatorRefused("OPERATOR_TARGET_CHANGED")
-        config = AgentRunConfig.load(Path(binding.config_file))
         if (config.environment, config.snail_app_id, str(config.snail_agent_id), config.expected_node_id) != (
             run.environment,
             run.app_id,
@@ -701,26 +802,14 @@ class OperatorCpms:
             for n in config.node_token_hashes.values()
         ):
             raise OperatorRefused("OPERATOR_NODE_REJECTED")
-        if node_token is not None:
-            node = config.authenticate_node(node_token)
-            if node is None or node.node_id != run.expected_node_id or node.environment != run.environment:
-                raise OperatorRefused("OPERATOR_NODE_REJECTED")
         caller = task.authorize()
         if caller.scope_fingerprint != run.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
         if not still_authorized(binding, run, trial=task.trial):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
-        config = AgentRunConfig.load(Path(binding.config_file))
-        if not any(
-            n.active and n.node_id == run.expected_node_id and n.environment == run.environment
-            for n in config.node_token_hashes.values()
-        ):
-            raise OperatorRefused("OPERATOR_NODE_REJECTED")
-        if node_token is not None:
-            node = config.authenticate_node(node_token)
-            if node is None or node.node_id != run.expected_node_id or node.environment != run.environment:
-                raise OperatorRefused("OPERATOR_NODE_REJECTED")
+        # task.authorize() 是对外调用：期间绑定/节点可能已变，身份与配置核验再来一遍。
+        run, config = self._authenticate(run_id, node_token=node_token, manifest=manifest)
         if (config.environment, config.snail_app_id, str(config.snail_agent_id), config.expected_node_id) != (
             run.environment,
             run.app_id,
@@ -728,11 +817,12 @@ class OperatorCpms:
             run.expected_node_id,
         ):
             raise OperatorRefused("OPERATOR_NODE_CHANGED")
+        if not any(
+            n.active and n.node_id == run.expected_node_id and n.environment == run.environment
+            for n in config.node_token_hashes.values()
+        ):
+            raise OperatorRefused("OPERATOR_NODE_REJECTED")
         expected = execution_manifest.from_text(run.execution_manifest)
-        if expected.identity != run.expected_agent_version:
-            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
-        if manifest is not None and manifest != expected.identity:
-            raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         if tool is not None and (
             tool not in TOOL_NAMES or tool not in expected.tool_names or not allowed_in(tool, run)
         ):
@@ -747,8 +837,19 @@ class OperatorCpms:
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         return task, latest, config
 
+    def _absorb_superseded(self, run_id, patch):
+        """授权已死后送达的交付物：收下进终局快照、标记 superseded、永不投递。"""
+        store = self.context.agent_run_store
+        store.absorb(run_id, {"superseded": True, **patch})
+        latest = store.get(run_id)
+        return {
+            "run_id": run_id,
+            "state": latest.state if latest else "failed",
+            "delivered": False,
+        }
+
     def publication(self, run_id, token):
-        task, run, _ = self._current(run_id, node_token=token)
+        task, run, _ = self.authorize_execution(run_id, node_token=token)
         if (
             not diagnoses_an_order(run)
             and run.state == "issued"
@@ -790,7 +891,7 @@ class OperatorCpms:
             # 旧节点不声明契约版本。挡在**领授权**这一步，而不是等它在完成回调里因为
             # 证据缺字段而失败——那既不是稳定错误码，也发生在公司令牌已经用过之后。
             raise OperatorRefused("OPERATOR_TOOL_CONTRACT_OUTDATED")
-        task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
+        task, run, _ = self.authorize_execution(run_id, node_token=token, manifest=manifest, tool=tool)
         # 参数放行发生在**取到公司令牌之前**：模型编的地址不会换来一次真实的对外请求。
         arguments = arguments or {}
         if tool in {"cpms_order_amount_check", "cpms_order_process_stats"}:
@@ -894,7 +995,7 @@ class OperatorCpms:
             return data
 
         def current():
-            return self._current(run.run_id, tool="cpms_station_plan")[0].caller.scope_fingerprint
+            return self.authorize_execution(run.run_id, tool="cpms_station_plan")[0].caller.scope_fingerprint
 
         sites = query_sites(
             site_scope(task.caller),
@@ -930,6 +1031,100 @@ class OperatorCpms:
         except station_pricing.PlanUnavailable as exc:
             data["text"] = str(exc)
         return data
+
+    def _charging_timeline(self, task, run):
+        """SOP §2.2 时序过程遥测：设备与窗口**只**取自已交付的订单详情证据。
+
+        tsdata 端点本身无鉴权、无租户隔离（公司内部门面），范围保证不来自请求形状，
+        而来自查询构造：``deviceId`` 只可能是授权订单详情里的 ``childDeviceCode``/
+        ``deviceCode``，窗口只可能是 ``createdTime``~``stopTime``。返回行上没有
+        ``orderNo``/``siteId``/``tenantId`` 可逐行核验 —— 这正是它不走
+        ``validate_body``、而像计算工具一样由网关合成证据的原因。
+        ``txSerialNo`` 不在详情证据里，设备+窗口本身就是 SOP 的充分谓词。
+        """
+        base = self.context.settings.operator_tsdata_url.rstrip("/")
+        if not base:
+            raise OperatorRefused("TSDATA_UNAVAILABLE")
+        detail = task.evidence.get(TOOL_NAMES[0], {}).get("data") or {}
+        device = detail.get("childDeviceCode") or detail.get("deviceCode") or ""
+        if not device:
+            raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+        if not _TIMELINE_DEVICE.fullmatch(str(device)):
+            raise OperatorRefused("CPMS_INVALID_RESPONSE")
+        start = _timeline_time(detail.get("createdTime"))
+        if start is None:
+            raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+        raw_end = detail.get("stopTime")
+        end = _timeline_time(raw_end)
+        if raw_end and end is None:
+            # 订单已停但停时不可读：窗口收不拢，不能拿「现在」冒充上界。
+            raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+        if end is None:
+            # 仍在充电的订单：上界取网关本地现在（与 CPMS/tsdata 同一时域）。
+            end = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        data = tsdata_query(
+            base + "/tdadmin/data/query",
+            {
+                "table": "charging-gun_property",
+                "deviceId": device,
+                "start": start,
+                "end": end,
+                "fields": list(TIMELINE_FIELDS),
+                "orderBy": "_ts",
+                "order": "ASC",
+                "page": 1,
+                "pageSize": TIMELINE_LIMIT,
+            },
+        )
+        records = data.get("records") if isinstance(data, dict) else None
+        if (
+            not isinstance(data, dict)
+            or type(data.get("count")) is not int
+            or not isinstance(records, list)
+            or len(records) > TIMELINE_LIMIT
+            or data["count"] < len(records)
+        ):
+            raise OperatorRefused("TSDATA_UNAVAILABLE")
+        shape_keys = _declared(TIMELINE_TOOL).evidence_shape["records"][0]
+        rows = []
+        for row in records:
+            if not isinstance(row, dict):
+                raise OperatorRefused("TSDATA_UNAVAILABLE")
+            picked = {}
+            for key in shape_keys:
+                source_key = "_ts" if key == "ts" else key
+                if source_key not in row:
+                    continue
+                value = row[source_key]
+                if isinstance(value, (dict, list)) or (isinstance(value, str) and len(value) > 1000):
+                    raise OperatorRefused("TSDATA_UNAVAILABLE")
+                picked[key] = value
+            rows.append(picked)
+        total = data["count"]
+        value = {
+            "records": rows,
+            "total": total,
+            "sample_limit": TIMELINE_LIMIT,
+            "truncated": total > len(rows),
+            # `_ts` 升序是查询构造出来的，完整性等于「窗口内全部行都装下了」。
+            "ordering_guaranteed": True,
+            "complete_timeline": total <= len(rows),
+            "samples_returned": len(rows),
+            "absence": None if rows else "no_samples",
+            "device": device,
+            "window_start": start,
+            "window_end": end,
+        }
+        response = {
+            "code": 0,
+            "data": {
+                "orderNo": run.order_no,
+                "siteId": task.order_site_id,
+                "tenantId": task.caller.effective_tenant_id,
+                "value": value,
+            },
+        }
+        return value, response
 
     def _grant_sites(self, task, run, tool) -> list[str] | None:
         """这一次授权允许碰的站点。
@@ -969,11 +1164,17 @@ class OperatorCpms:
         if tool is None:
             raise OperatorRefused("OPERATOR_PATH_REJECTED")
         with task.lock:
-            self._current(run_id, tool=tool)
+            self.authorize_execution(run_id, tool=tool)
             if tool in task.evidence:
                 return task.evidence[tool]["response"]
             if (
-                tool in (TOOL_NAMES[1], "cpms_order_tariff", "cpms_order_billing")
+                tool
+                in (
+                    TOOL_NAMES[1],
+                    "cpms_order_tariff",
+                    "cpms_order_billing",
+                    TIMELINE_TOOL,
+                )
                 and TOOL_NAMES[0] not in task.delivered
             ):
                 raise OperatorRefused("OPERATOR_DETAIL_REQUIRED")
@@ -1012,7 +1213,7 @@ class OperatorCpms:
                 return task.evidence[tool]["response"]
             if tool == "cpms_station_plan":
                 data = self._station_plan(task, run)
-                self._current(run_id, tool=tool)
+                self.authorize_execution(run_id, tool=tool)
                 data = order_pricing.project(data, _declared(tool).evidence_shape)
                 task.evidence[tool] = {
                     "tool": tool,
@@ -1039,7 +1240,7 @@ class OperatorCpms:
             if tool == SITE_TOOL:
 
                 def reauthorize():
-                    self._current(run_id, tool=tool)
+                    self.authorize_execution(run_id, tool=tool)
                     return task.caller.scope_fingerprint
 
                 data, response = read_site_tool(
@@ -1049,7 +1250,7 @@ class OperatorCpms:
                     cpms_site_reader(task.base_url, task.bearer),
                     reauthorize,
                 )
-                self._current(run_id, tool=tool)
+                self.authorize_execution(run_id, tool=tool)
                 task.evidence[tool] = {
                     "tool": tool,
                     "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
@@ -1058,6 +1259,20 @@ class OperatorCpms:
                     "data": data,
                 }
                 task.evidence[tool]["response"] = response
+                return task.evidence[tool]["response"]
+            if tool == TIMELINE_TOOL:
+                # 范围不经 `validate_body`（行上没有订单/租户字段）：设备与窗口
+                # 由已交付的订单详情证据构造，详情未交付走上面的 DETAIL_REQUIRED。
+                data, response = self._charging_timeline(task, run)
+                self.authorize_execution(run_id, tool=tool)
+                task.evidence[tool] = {
+                    "tool": tool,
+                    "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
+                    "source": _declared(tool).source,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "data": data,
+                    "response": response,
+                }
                 return task.evidence[tool]["response"]
             body = cpms_get(
                 task.base_url + path + ("?" + query if query else ""),
@@ -1072,7 +1287,7 @@ class OperatorCpms:
                     if tool == "cpms_order_tariff"
                     else read_billing(body, task.caller, run.order_no, task.order_site_id)
                 )
-                self._current(run_id, tool=tool)
+                self.authorize_execution(run_id, tool=tool)
                 task.evidence[tool] = {
                     "tool": tool,
                     "inputs": {"order_no": run.order_no},
@@ -1094,7 +1309,7 @@ class OperatorCpms:
             rows = [body["data"]["chOrderInfoModel"]] if tool == TOOL_NAMES[0] else body["data"]["records"]
             if any(row["siteId"] != task.order_site_id for row in rows):
                 raise OperatorRefused("CPMS_SCOPE_MISMATCH")
-            self._current(run_id, tool=tool)
+            self.authorize_execution(run_id, tool=tool)
             # 只保存裁剪后的业务证据；不记录公司令牌和原响应中的个人信息。
             task.evidence[tool] = project_evidence(body, run.order_no, tool)
             task.evidence[tool]["response"] = minimized_response(body, tool)
@@ -1126,7 +1341,43 @@ class OperatorCpms:
     def _record(self, run_id, token, manifest, tool, payload):
         if set(payload) != {"authorization_id", "evidence"}:
             raise OperatorRefused("OPERATOR_INVALID_BODY")
-        task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
+        run, config = self.authenticate(run_id, node_token=token, manifest=manifest)
+        if run.state == "succeeded":
+            # 成功收尾后的迟到记账：证据链已闭合，只回执不落库。
+            return {
+                "run_id": run_id,
+                "tool": tool,
+                "authorization_id": payload["authorization_id"],
+                "accepted": True,
+            }
+        dead = run.state not in {"issued", "running"}
+        task = self.tasks.get(run_id)
+        if not dead:
+            try:
+                task, run, config = self._authorize_execution(
+                    run_id, run=run, config=config, node_token=token, manifest=manifest, tool=tool
+                )
+            except OperatorRefused as exc:
+                self._stamp_gate_refusal(run_id, str(exc))
+                latest = self.context.agent_run_store.get(run_id)
+                if latest is None or latest.state in {"issued", "running"}:
+                    raise  # 非致命拒绝（如 TOOL_DISABLED）：照旧 403。
+                dead, run = True, latest
+        if dead:
+            # 死 run 交付的证据落终局快照——收下是取证，不投递是撤回的全部意义。
+            evidence = payload.get("evidence")
+            if not isinstance(evidence, dict) or evidence.get("tool") != tool:
+                raise OperatorRefused("OPERATOR_EVIDENCE_MISMATCH")
+            result = self._absorb_superseded(
+                run_id,
+                {"evidence": {tool: {k: v for k, v in evidence.items() if k != "response"}}},
+            )
+            return {
+                **result,
+                "tool": tool,
+                "authorization_id": payload["authorization_id"],
+                "accepted": True,
+            }
         with task.lock:
             expected = task.evidence.get(tool)
             evidence = payload.get("evidence")
@@ -1139,7 +1390,7 @@ class OperatorCpms:
                 not isinstance(evidence, dict)
                 or set(evidence) != {"tool", "inputs", "source", "observed_at", "data"}
                 or evidence.get("tool") != tool
-                or evidence.get("data") != expected["data"]
+                or _provenance(evidence.get("data")) != _provenance(expected["data"])
                 or evidence.get("source") != expected["source"]
                 or evidence.get("inputs")
                 != tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool)))
@@ -1151,7 +1402,6 @@ class OperatorCpms:
                     raise ValueError("invalid observation time")
             except (ValueError, TypeError) as exc:
                 raise OperatorRefused("OPERATOR_EVIDENCE_MISMATCH") from exc
-            self._current(run_id, node_token=token, manifest=manifest, tool=tool)
             task.delivered.add(tool)
             partial = {
                 "answer": None,
@@ -1164,7 +1414,14 @@ class OperatorCpms:
             if not self.context.agent_run_store.complete(
                 run_id, snapshot=partial, actual_node_id=run.expected_node_id, node_build=None
             ):
-                raise OperatorRefused("OPERATOR_EVIDENCE_NOT_ACCEPTED")
+                # 死在写前一刻：收下进终局快照，不投递。
+                result = self._absorb_superseded(run_id, partial)
+                return {
+                    **result,
+                    "tool": tool,
+                    "authorization_id": payload["authorization_id"],
+                    "accepted": True,
+                }
             return {
                 "run_id": run_id,
                 "tool": tool,
@@ -1173,19 +1430,20 @@ class OperatorCpms:
             }
 
     def complete(self, run_id, token, manifest, payload):
-        task, _, _ = self._current(run_id, node_token=token, manifest=manifest)
-        with task.completion_lock:
+        task = self.tasks.get(run_id)
+        # 死 run 的 task 可能已被 _prune：上报不需要锁，活 run 的完成才串行化。
+        with task.completion_lock if task is not None else threading.Lock():
             return self._complete(run_id, token, manifest, payload)
 
     def _complete(self, run_id, token, manifest, payload):
         if set(payload) - {"status", "answer", "reason"}:
             raise OperatorRefused("OPERATOR_INVALID_BODY")
-        task, run, _ = self._current(run_id, node_token=token, manifest=manifest)
+        run, config = self.authenticate(run_id, node_token=token, manifest=manifest)
         store = self.context.agent_run_store
         if payload.get("status") not in {"completed", "failed"}:
             raise OperatorRefused("OPERATOR_INVALID_COMPLETION")
         if payload["status"] == "failed":
-            # 节点给的原因码进运行记录，不再统一糊成 `operator_node_failed`。
+            # 失败上报永远照录：节点给的原因码进运行记录，不再统一糊成 `operator_node_failed`。
             # 它只用于**归因**，不改变任何判决：这条 run 仍然失败。
             reason = payload.get("reason")
             if not isinstance(reason, str) or not (
@@ -1198,14 +1456,36 @@ class OperatorCpms:
                 "operator_node_reported_failure reason=%s", reason or "-"
             )
             return {"run_id": run_id, "state": "failed"}
+        raw = payload.get("answer", "")
+        if not isinstance(raw, str) or not 0 < len(raw.strip()) <= 12000:
+            raise OperatorRefused("OPERATOR_INVALID_ANSWER")
+        if run.state == "succeeded":
+            # 幂等重放：成功已交付，再报一遍只回执。
+            return {"run_id": run_id, "state": "succeeded", "delivered": True}
+        dead = run.state not in {"issued", "running"}
+        task = self.tasks.get(run_id)
+        if not dead:
+            try:
+                task, run, config = self._authorize_execution(
+                    run_id, run=run, config=config, node_token=token, manifest=manifest
+                )
+            except OperatorRefused as exc:
+                self._stamp_gate_refusal(run_id, str(exc))
+                latest = store.get(run_id)
+                if latest is None or latest.state in {"issued", "running"}:
+                    raise
+                dead, run = True, latest
+        if dead:
+            # 授权已死的成功答复：收下、进终局快照、标记 superseded、不投递——
+            # 撤回存在的意义就是不投递，收下的动作与投递的动作是两件事。
+            return self._absorb_superseded(run_id, {"answer": raw})
+        answer = raw
+        if task is None:
+            raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         with task.lock:
-            raw = payload.get("answer", "")
-            if not isinstance(raw, str) or not 0 < len(raw.strip()) <= 12000:
-                raise OperatorRefused("OPERATOR_INVALID_ANSWER")
-            answer = raw
             from aiops_diagnostics.common.redaction import contains_secret
 
-            if contains_secret(raw, (task.bearer, task.grant)):
+            if contains_secret(answer, (task.bearer, task.grant)):
                 _answer_refused("credential")
             if run.order_no:
                 self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
@@ -1214,7 +1494,7 @@ class OperatorCpms:
                 for name, item in task.evidence.items()
                 if name in task.delivered
             }
-            result = operator_agent.render(answer, evidence)
+            result = operator_agent.render(answer, evidence, task.language)
 
         history_evidence = []
         for previous_id in task.history_runs:
@@ -1235,8 +1515,22 @@ class OperatorCpms:
         )
         if review["verdict"] != "allow":
             raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
+        superseded = {
+            "answer": answer,
+            "answer_review": review,
+            "evidence": evidence,
+        }
         with task.lock:
-            self._current(run_id, node_token=token, manifest=manifest)
+            try:
+                task, run, config = self._authorize_execution(
+                    run_id, run=run, config=config, node_token=token, manifest=manifest
+                )
+            except OperatorRefused as exc:
+                self._stamp_gate_refusal(run_id, str(exc))
+                latest = store.get(run_id)
+                if latest is None or latest.state in {"issued", "running"}:
+                    raise
+                return self._absorb_superseded(run_id, superseded)
             if run.order_no:
                 self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
             for previous_id in task.history_runs:
@@ -1258,11 +1552,14 @@ class OperatorCpms:
             if not store.complete(
                 run_id, snapshot=snapshot, actual_node_id=run.expected_node_id, node_build=None
             ):
-                raise OperatorRefused("OPERATOR_COMPLETE_REJECTED")
+                return self._absorb_superseded(run_id, superseded)
             verdict, completed = store.complete_loop(
                 run_id, observed_agent_version=manifest, actual_node_id=run.expected_node_id
             )
             if verdict not in {"completed", "already_completed"}:
+                latest = store.get(run_id)
+                if latest is not None and latest.state in {"failed", "revoked", "expired"}:
+                    return self._absorb_superseded(run_id, superseded)
                 raise OperatorRefused("OPERATOR_COMPLETE_REJECTED")
             return {"run_id": run_id, "state": completed.state}
 
@@ -1601,6 +1898,13 @@ def project_evidence(body, order, tool):
     }
 
 
+def _timeline_time(value) -> str | None:
+    """CPMS 时间（``yyyy-MM-dd HH:mm:ss`` 或 ISO）归一成 tsdata 接受的本地时间串。"""
+    if not isinstance(value, str) or not _TIMELINE_TIME.fullmatch(value.strip()):
+        return None
+    return value.strip().replace("T", " ")
+
+
 def _failure_code(exc: BaseException) -> str:
     """这次失败对**用户**报哪个码。
 
@@ -1618,6 +1922,7 @@ def _failure_code(exc: BaseException) -> str:
             "OPERATOR_NODE_CHANGED",
             "OPERATOR_TARGET_MISSING",
             "CPMS_UNAVAILABLE",
+            "TSDATA_UNAVAILABLE",
             "OPERATOR_SCOPE_UNAVAILABLE",
         }:
             return "OPERATOR_DEPENDENCY_UNAVAILABLE"
@@ -1677,6 +1982,33 @@ def cpms_get(url, bearer, tenant, *, timeout=10):
             invalid_body=unavailable,
             invalid_envelope=unavailable,
         ),
+    )
+
+
+def tsdata_query(url, payload, *, timeout=10):
+    """POST tsdata ``QueryRequest``；一切失败形状都归一成依赖不可用，不落成空页。"""
+
+    def unavailable(_):
+        return OperatorRefused("TSDATA_UNAVAILABLE")
+
+    return request_json(
+        RequestSpec(
+            url=url,
+            method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            body=json_body(payload),
+            timeout=timeout,
+            max_read_bytes=262144,
+            follow_redirects=False,
+        ),
+        mapping=ErrorMapping(
+            auth_rejected=unavailable,
+            http_error=unavailable,
+            unavailable=unavailable,
+            invalid_body=unavailable,
+            invalid_envelope=unavailable,
+        ),
+        envelope=parse_code_data_envelope,
     )
 
 

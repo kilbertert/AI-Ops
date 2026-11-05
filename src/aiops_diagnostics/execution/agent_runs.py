@@ -303,6 +303,8 @@ class AgentRun:
     execution_manifest: str | None = None
     route_revision: int = 0
     publication_app_id: str = ""
+    #: 签发时记录的语言。回读按它重算，不再枚举一组语言去猜；旧行为 ``None``。
+    language: str | None = None
 
     @property
     def exec_config_confirmed(self) -> bool:
@@ -431,7 +433,8 @@ class AgentRunStore:
                     claimed_at TEXT,
                     completed_at TEXT,
                     qa_id TEXT,
-                    chat_binding TEXT
+                    chat_binding TEXT,
+                    language TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_runs_scope
                     ON agent_runs(scope_fingerprint, created_at DESC);
@@ -444,6 +447,9 @@ class AgentRunStore:
                 ("execution_manifest", "TEXT"),
                 ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
                 ("publication_app_id", "TEXT NOT NULL DEFAULT ''"),
+                # 签发时记录的语言：回读按它重算，不再枚举一组语言去猜（PRD #1371）。
+                # 旧行保持 NULL，读取时回落到默认语言，不回填、不猜。
+                ("language", "TEXT"),
             ):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {kind}")
@@ -479,6 +485,7 @@ class AgentRunStore:
         route_revision: int = 0,
         publication_app_id: str = "",
         operation: str = OPERATION_CHARGING_STATUS,
+        language: str | None = None,
     ) -> AgentRun:
         # 32 字节随机；只作关联编号，不承载任何身份或范围。
         run_id = "run_" + secrets.token_urlsafe(32)
@@ -491,8 +498,8 @@ class AgentRunStore:
                     environment, app_id, agent_id, expected_node_id, state,
                     gateway_version, created_at, expires_at,
                     expected_agent_version, exec_config_state, chat_binding,
-                    execution_manifest, route_revision, publication_app_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    execution_manifest, route_revision, publication_app_id, language
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -514,6 +521,7 @@ class AgentRunStore:
                     execution_manifest,
                     route_revision,
                     publication_app_id,
+                    language,
                 ),
             )
         run = self.get(run_id)
@@ -940,6 +948,30 @@ class AgentRunStore:
             )
             return cursor.rowcount == 1
 
+    def absorb(self, run_id: str, patch: dict[str, Any]) -> bool:
+        """终局后仍可写的取证面：把迟到交付物并进快照，**不动** state 与 reason。
+
+        dict 值做一层深合并（迟到的 ``evidence`` 不冲掉已落库的兄弟项），其余键覆盖。
+        只服务「授权已死后送达的上报」——收下是取证，不投递是撤回的全部意义。
+        """
+        with self._connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT snapshot_json FROM agent_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            snapshot = json.loads(row["snapshot_json"]) if row["snapshot_json"] else {}
+            for key, value in patch.items():
+                if isinstance(value, dict) and isinstance(snapshot.get(key), dict):
+                    snapshot[key].update(value)
+                else:
+                    snapshot[key] = value
+            connection.execute(
+                "UPDATE agent_runs SET snapshot_json = ? WHERE run_id = ?",
+                (json.dumps(snapshot, ensure_ascii=False, sort_keys=True), run_id),
+            )
+            return True
+
 
 def _read_run(connection: sqlite3.Connection, run_id: str) -> AgentRun | None:
     row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
@@ -977,6 +1009,8 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         execution_manifest=row["execution_manifest"],
         route_revision=int(row["route_revision"]),
         publication_app_id=row["publication_app_id"],
+        # 迁移保证这一列一定存在；旧行是 NULL，读取时由调用方回落到默认语言。
+        language=row["language"],
     )
 
 

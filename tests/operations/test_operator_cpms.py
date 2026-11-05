@@ -1,10 +1,12 @@
 """管家 API 工具：真 Gateway/存储/HTTP，合成身份、CPMS及派发节点。"""
 
 import json
+import re
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -69,7 +71,14 @@ def environment(tmp_path, monkeypatch):
         "review",
         lambda *args, **kwargs: {"verdict": "allow", "version": "synthetic"},
     )
-    state = {"calls": [], "site": "SITE-1", "tenant": "TENANT-A", "hook": None, "order": ORDER}
+    state = {
+        "calls": [],
+        "tsdata_calls": [],
+        "site": "SITE-1",
+        "tenant": "TENANT-A",
+        "hook": None,
+        "order": ORDER,
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -84,6 +93,10 @@ def environment(tmp_path, monkeypatch):
                 "siteId": state["site"],
                 "status": 2,
                 "stoppedReasonContent": "Communication interrupted",
+                "deviceCode": state.get("device_code", "PILE-1"),
+                "childDeviceCode": state.get("child_device_code", "PILE-1-1"),
+                "createdTime": state.get("created_time", "2026-11-05 14:25:00"),
+                "stopTime": state.get("stop_time", "2026-11-05 14:32:00"),
                 "electricity": 4.5598,
                 "time": 3,
                 "electricityFee": "13.68",
@@ -164,6 +177,31 @@ def environment(tmp_path, monkeypatch):
             self.end_headers()
             self.wfile.write(body)
 
+        def do_POST(self):  # noqa: N802
+            status = 200
+            if self.path == "/tdadmin/data/query" and not state.get("tsdata_error"):
+                length = int(self.headers.get("Content-Length") or 0)
+                request = json.loads(self.rfile.read(length) or b"{}")
+                state["tsdata_calls"].append(request)
+                rows = state.get("tsdata_rows", [])
+                data = {
+                    "count": state.get("tsdata_count", len(rows)),
+                    "current": 1,
+                    "size": request.get("pageSize", 64),
+                    "pages": 1,
+                    "records": rows,
+                }
+            elif self.path == "/tdadmin/data/query":
+                status, data = 500, None
+            else:
+                status, data = 404, None
+            body = json.dumps({"code": 0, "data": data}).encode() if status == 200 else b"{}"
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -202,6 +240,7 @@ def environment(tmp_path, monkeypatch):
             )
             target_file.chmod(0o600)
             settings.chat_node_targets_file = str(target_file)
+            settings.operator_tsdata_url = f"http://127.0.0.1:{server.server_port}"
             ctx = f["app"].state.gateway
             resolver = Resolver()
             resolver.current = scope()
@@ -319,8 +358,16 @@ def node(f, run_id, *, tools=ORDER_TOOLS, before_complete=None, answer=None, con
         head.update(CONTRACT)
     for tool in tools:
         path = f"/v1/internal/operator-runs/{run_id}/tools/{tool}"
+        expected_contract = (
+            operator_cpms.OBJECT_CONTRACT
+            if operator_tools.tool(tool).kind == "object"
+            else operator_cpms.TOOL_CONTRACT
+        )
+        tool_head = {**head, "X-AI-Ops-Tool-Contract": expected_contract} if contract else head
         response = client.post(
-            path + "/authorization", headers=head, json={"arguments": {"order_no": f["state"]["order"]}}
+            path + "/authorization",
+            headers=tool_head,
+            json={"arguments": {"order_no": f["state"]["order"]}},
         )
         if not contract:
             # 旧节点不声明契约：挡在领授权这一步，而不是等完成回调里缺字段。
@@ -330,7 +377,7 @@ def node(f, run_id, *, tools=ORDER_TOOLS, before_complete=None, answer=None, con
         assert response.status_code == 200, response.text
         grant = response.json()
         assert grant["site_ids"] == ["SITE-1"]
-        assert grant["contract"] == operator_cpms.TOOL_CONTRACT
+        assert grant["contract"] == expected_contract
         assert grant["inputs"] == operator_cpms.tool_inputs(
             tool, operator_cpms.run_values(tool, f["state"]["order"])
         )
@@ -344,13 +391,23 @@ def node(f, run_id, *, tools=ORDER_TOOLS, before_complete=None, answer=None, con
         response = client.get(url, headers={"Authorization": "Bearer " + grant["bearer"]})
         assert response.status_code == 200, response.text
         assert "PRIVATE-PHONE" not in response.text
-        evidence = operator_cpms.project_evidence(response.json(), f["state"]["order"], tool)
-        assert set(evidence) == {"tool", "order_no", "source", "observed_at", "data"}
-        evidence.pop("order_no")
-        evidence["inputs"] = grant["inputs"]
+        if operator_tools.tool(tool).kind == "object":
+            # object 工具的节点证据 = 响应 `value` 经声明形状逐字投影。
+            evidence = {
+                "tool": tool,
+                "inputs": grant["inputs"],
+                "source": operator_tools.tool(tool).source,
+                "observed_at": datetime.now(UTC).isoformat(),
+                "data": response.json()["data"]["value"],
+            }
+        else:
+            evidence = operator_cpms.project_evidence(response.json(), f["state"]["order"], tool)
+            assert set(evidence) == {"tool", "order_no", "source", "observed_at", "data"}
+            evidence.pop("order_no")
+            evidence["inputs"] = grant["inputs"]
         response = client.post(
             path + "/evidence",
-            headers=head,
+            headers=tool_head,
             json={"authorization_id": grant["authorization_id"], "evidence": evidence},
         )
         assert response.status_code == 200, response.text
@@ -561,6 +618,84 @@ def test_evidence_field_set_is_exact(operator, monkeypatch, fault):
     assert final.json()["status"] != "completed", final.text
 
 
+@pytest.mark.parametrize("drift", ["derived-shape", "upstream-total"])
+def test_evidence_compare_is_provenance_only(operator, monkeypatch, drift):
+    """data 比对只认出处：派生形状字段（truncated/samples_returned/…）漂移照收——
+    快照存的是网关自己的投影；上游原值（total/records）不符仍照拒。"""
+    f = operator
+    observed = {}
+
+    def dispatch(_, cfg, run_id):
+        client = f["client"]
+        head = {"Authorization": "Bearer " + NODE_A_TOKEN, **CONTRACT}
+        publication = client.post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
+        head["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+
+        def fetch_report(tool):
+            grant = client.post(
+                f"/v1/internal/operator-runs/{run_id}/tools/{tool}/authorization",
+                headers=head,
+                json={"arguments": {"order_no": ORDER}},
+            ).json()
+            url = grant["base_url"] + grant["request"]["path"]
+            if grant["request"]["query"]:
+                url += "?" + grant["request"]["query"]
+            body = client.get(url, headers={"Authorization": "Bearer " + grant["bearer"]}).json()
+            evidence = operator_cpms.project_evidence(body, ORDER, tool)
+            evidence.pop("order_no")
+            evidence["inputs"] = grant["inputs"]
+            return grant, evidence
+
+        # 先正常交付 detail：samples 的授权要求 detail 已送达。
+        grant, evidence = fetch_report("cpms_order_detail")
+        assert (
+            client.post(
+                f"/v1/internal/operator-runs/{run_id}/tools/cpms_order_detail/evidence",
+                headers=head,
+                json={"authorization_id": grant["authorization_id"], "evidence": evidence},
+            ).status_code
+            == 200
+        )
+
+        grant, evidence = fetch_report("cpms_charging_samples")
+        if drift == "derived-shape":
+            # 节点重算口径漂移：每个派生字段都与网关投影不同——出处字段原样。
+            evidence["data"]["truncated"] = not evidence["data"]["truncated"]
+            evidence["data"]["samples_returned"] = 999
+            evidence["data"]["sample_limit"] = 1
+            evidence["data"]["ordering_guaranteed"] = not evidence["data"]["ordering_guaranteed"]
+            evidence["data"]["complete_timeline"] = not evidence["data"]["complete_timeline"]
+            evidence["data"].pop("absence", None)
+        else:
+            evidence["data"]["total"] = evidence["data"]["total"] + 1
+        response = client.post(
+            f"/v1/internal/operator-runs/{run_id}/tools/cpms_charging_samples/evidence",
+            headers=head,
+            json={"authorization_id": grant["authorization_id"], "evidence": evidence},
+        )
+        observed["record"] = (response.status_code, response.json())
+        return client.post(
+            f"/v1/internal/operator-runs/{run_id}/completions",
+            headers=head,
+            json={"status": "completed", "answer": json.dumps({"direct_answer": "x"})},
+        )
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    terminal(f, submitted.json()["qa_id"])
+    if drift == "derived-shape":
+        assert observed["record"][0] == 200, observed["record"]
+        # 收下的证据以网关投影为准——漂移的派生字段没有进快照。
+        run = f["ctx"].agent_run_store.by_qa(submitted.json()["qa_id"])
+        stored = run.snapshot["evidence"]["cpms_charging_samples"]["data"]
+        assert stored["samples_returned"] == len(stored["records"])
+        assert stored["truncated"] == (stored["total"] > len(stored["records"]))
+    else:
+        assert observed["record"][0] == 403, observed["record"]
+        assert observed["record"][1]["error"]["code"] == "OPERATOR_EVIDENCE_MISMATCH"
+
+
 def test_a_node_that_does_not_declare_the_contract_is_refused_before_any_read(operator, monkeypatch):
     """旧节点 + 新网关：拒绝必须发生在领授权，而不是完成回调里缺字段。"""
     f = operator
@@ -591,6 +726,7 @@ def test_draft_toggle_does_not_publish_and_disabled_tool_cannot_be_called(operat
         "cpms_order_billing",
         "cpms_order_amount_check",
         "cpms_order_process_stats",
+        "cpms_charging_timeline",
     }
     current = f["publish"](f["route"].route_revision)
     assert [v["name"] for v in json.loads(current.manifest_text)["tools"]] == [operator_cpms.TOOL_NAMES[0]]
@@ -1279,3 +1415,206 @@ def test_business_refusals_are_marked_for_model_feedback_and_recorded(operator, 
         },
     ]
     assert seen_reviews and seen_reviews[-1] == snapshot["tool_refusals"]
+
+
+TIMELINE_ROW = {
+    "_ts": "2026-11-05T06:26:41.000Z",
+    "txSerialNo": "509",
+    "status": 3,
+    "isReturn": 0,
+    "isInsert": 1,
+    "outputVoltage": 600,
+    "outputCurrent": 120,
+    "power": 72.0,
+    "chargingTime": 61,
+    "chargingElectricityQuantity": 1.2,
+    "soc": 41,
+    "temperature": 31,
+    "batteryMaxTemperature": 35,
+    "batteryMinTemperature": 28,
+    "errorCode": 0,
+    "errorReason": "",
+    "meterNow": 1234.5,
+    "extra": "DROPPED-BY-PROJECTION",
+}
+
+
+def _timeline_grant(f, run_id, head):
+    """替身节点领时序工具授权（object 契约版本），返回 (headers, grant)。"""
+    tool_head = {**head, "X-AI-Ops-Tool-Contract": operator_cpms.OBJECT_CONTRACT}
+    response = f["client"].post(
+        f"/v1/internal/operator-runs/{run_id}/tools/cpms_charging_timeline/authorization",
+        headers=tool_head,
+        json={"arguments": {"order_no": f["state"]["order"]}},
+    )
+    assert response.status_code == 200, response.text
+    return tool_head, response.json()
+
+
+def _deliver_detail(f, run_id):
+    """走完详情工具的授权+代理+证据上报，使 detail 进入 delivered。"""
+    head, grant = _authorized(f, run_id)
+    request = grant["request"]
+    body = f["client"].get(
+        grant["base_url"] + request["path"],
+        headers={"Authorization": "Bearer " + grant["bearer"]},
+    )
+    assert body.status_code == 200, body.text
+    evidence = operator_cpms.project_evidence(body.json(), f["state"]["order"], "cpms_order_detail")
+    evidence.pop("order_no")
+    evidence["inputs"] = grant["inputs"]
+    recorded = f["client"].post(
+        f"/v1/internal/operator-runs/{run_id}/tools/cpms_order_detail/evidence",
+        headers=head,
+        json={"authorization_id": grant["authorization_id"], "evidence": evidence},
+    )
+    assert recorded.status_code == 200, recorded.text
+    return head
+
+
+def _timeline_get(f, grant):
+    return f["client"].get(
+        grant["base_url"] + grant["request"]["path"],
+        headers={"Authorization": "Bearer " + grant["bearer"]},
+    )
+
+
+def test_charging_timeline_reads_tsdata_rows_in_the_order_window(operator, monkeypatch):
+    """SOP §2.2 第二条数据腿：设备与窗口由已交付详情证据裁出，tsdata 行按声明形状进证据。"""
+    f = operator
+    f["state"]["tsdata_rows"] = [dict(TIMELINE_ROW)]
+
+    def dispatch(_, cfg, run_id):
+        return node(f, run_id, tools=("cpms_order_detail", "cpms_charging_timeline"))
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+
+    call = f["state"]["tsdata_calls"][0]
+    assert call["table"] == "charging-gun_property"
+    assert call["deviceId"] == "PILE-1-1"
+    assert call["start"] == "2026-11-05 14:25:00"
+    assert call["end"] == "2026-11-05 14:32:00"
+    assert call["orderBy"] == "_ts" and call["order"] == "ASC"
+    assert call["pageSize"] == operator_cpms.TIMELINE_LIMIT
+    assert call["fields"] == list(operator_cpms.TIMELINE_FIELDS)
+    # tsdata 门面表没有 batteryMinTemperature 列，整表原样发会被门面拒。
+    assert "batteryMinTemperature" not in call["fields"]
+
+    snapshot = f["ctx"].agent_run_store.by_qa(submitted.json()["qa_id"]).snapshot
+    evidence = snapshot["evidence"]["cpms_charging_timeline"]
+    assert evidence["source"] == "tsdata.gun_property"
+    data = evidence["data"]
+    row = data["records"][0]
+    assert row["ts"] == "2026-11-05T06:26:41.000Z" and row["txSerialNo"] == "509"
+    assert "_ts" not in row and "extra" not in row
+    assert (
+        data["total"],
+        data["samples_returned"],
+        data["truncated"],
+        data["ordering_guaranteed"],
+        data["complete_timeline"],
+        data["absence"],
+    ) == (1, 1, False, True, True, None)
+    assert (data["device"], data["window_start"], data["window_end"]) == (
+        "PILE-1-1",
+        "2026-11-05 14:25:00",
+        "2026-11-05 14:32:00",
+    )
+
+
+def test_charging_timeline_running_order_uses_now_as_window_end(operator, monkeypatch):
+    """仍在充电的订单没有 stopTime：窗口上界取网关本地现在，不捏造停时。"""
+    f = operator
+    f["state"]["stop_time"] = ""
+
+    def dispatch(_, cfg, run_id):
+        return node(f, run_id, tools=("cpms_order_detail", "cpms_charging_timeline"))
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+
+    call = f["state"]["tsdata_calls"][0]
+    assert call["start"] == "2026-11-05 14:25:00"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", call["end"])
+    data = (
+        f["ctx"]
+        .agent_run_store.by_qa(submitted.json()["qa_id"])
+        .snapshot["evidence"]["cpms_charging_timeline"]["data"]
+    )
+    assert (data["samples_returned"], data["absence"], data["complete_timeline"]) == (
+        0,
+        "no_samples",
+        True,
+    )
+
+
+def test_charging_timeline_refuses_until_detail_is_delivered(operator, monkeypatch):
+    """详情未交付前调用时序工具：DETAIL_REQUIRED，不能拿别的单子的设备去查。"""
+    f = operator
+    observed = {}
+
+    def dispatch(_, cfg, run_id):
+        head, _ = _authorized(f, run_id)
+        _, grant = _timeline_grant(f, run_id, head)
+        observed["code"] = _refusal(_timeline_get(f, grant))
+        return node(f, run_id)
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+    assert observed["code"] == "OPERATOR_DETAIL_REQUIRED"
+
+
+def test_charging_timeline_refuses_when_order_has_no_device(operator, monkeypatch):
+    """详情里没有可用设备绑定：拒绝取证，不发 tsdata 请求。"""
+    f = operator
+    f["state"]["device_code"] = ""
+    f["state"]["child_device_code"] = ""
+    observed = {}
+
+    def dispatch(_, cfg, run_id):
+        head = _deliver_detail(f, run_id)
+        _, grant = _timeline_grant(f, run_id, head)
+        observed["code"] = _refusal(_timeline_get(f, grant))
+        return node(f, run_id)
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+    assert observed["code"] == "OPERATOR_EVIDENCE_MISSING"
+    assert f["state"]["tsdata_calls"] == []
+
+
+def test_charging_timeline_tsdata_failure_is_a_refusal_not_an_empty_page(operator, monkeypatch):
+    """tsdata 5xx：以依赖不可用拒绝收场，绝不落成 records:[]。"""
+    f = operator
+    f["state"]["tsdata_error"] = True
+    observed = {}
+
+    def dispatch(_, cfg, run_id):
+        head = _deliver_detail(f, run_id)
+        _, grant = _timeline_grant(f, run_id, head)
+        observed["code"] = _refusal(_timeline_get(f, grant))
+        return node(f, run_id)
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+    assert observed["code"] == "TSDATA_UNAVAILABLE"
+    assert (
+        operator_cpms._failure_code(operator_cpms.OperatorRefused("TSDATA_UNAVAILABLE"))
+        == "OPERATOR_DEPENDENCY_UNAVAILABLE"
+    )

@@ -254,9 +254,9 @@ def test_non_chinese_set_follows_the_declared_property_not_the_default() -> None
     from aiops_diagnostics.common.i18n import LanguageSpec, non_chinese_languages
 
     synthetic = (
-        LanguageSpec("zh", "Simplified Chinese", is_chinese=True),
-        LanguageSpec("zh-Hant", "Traditional Chinese", is_chinese=True),
-        LanguageSpec("en", "English", is_chinese=False),
+        LanguageSpec("zh", "Simplified Chinese", is_chinese=True, fallback="zh"),
+        LanguageSpec("zh-Hant", "Traditional Chinese", is_chinese=True, fallback="zh"),
+        LanguageSpec("en", "English", is_chinese=False, fallback="zh"),
     )
     result = non_chinese_languages(synthetic)
 

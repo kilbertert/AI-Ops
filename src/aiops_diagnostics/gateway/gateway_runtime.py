@@ -1605,6 +1605,7 @@ class GatewayRuntime:
                 caller=context,
                 order_no=order_no,
                 gateway_version=package_version(),
+                language=language,
             )
             run_id = run.run_id
             store.bind_qa(run.run_id, qa_id)

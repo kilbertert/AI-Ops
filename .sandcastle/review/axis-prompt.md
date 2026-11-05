@@ -22,18 +22,17 @@ break this diff, and say what you expect to happen instead. "The input `X` reach
 this branch, and the guard above it only covers `Y`" is a finding. "This looks
 fragile" is not — it names no input, so nobody can check it.
 
-A green suite is not evidence. The tests in this diff were written by the author,
-so they encode the author's assumptions; the bug is in the input the author did
-not consider. Look for that input first, and treat the suite passing as
-information about the author's assumptions rather than about the change.
+执行 `docs/agents/verification-workflow.md` 的独立 Hacker 步骤：先从需求设计输入，
+再读实现；按改动风险驱动原入口、构造反例，注明判据来源和未验范围。
+自动化结果只证明已执行条件，不能推出未执行的用户路径正确。
+临时脚本与数据可放一次性目录，候选实现和长期测试保持只读。
 
 If you cannot construct a counterexample after a real attempt, say what you
 tried — that attempt is the evidence, and it is worth reporting.
 
 ## Where green tests lie: the double is more forgiving than the real thing
 
-A green suite is not evidence for one specific, reproducible reason, and it is
-worth checking directly. When a test stands in a fake for a real external system
+A passing suite may miss real integration failures. When a test stands in a fake for a real external system
 — a mock, a stub, a fake upstream, a local HTTP stand-in — the double encodes
 what the author believed the real thing accepts. If it accepts more than the real
 thing does, every test through it passes and the defect is invisible until
@@ -110,4 +109,6 @@ Emit one `<output>` block as the last thing in your response:
 {"summary":"...","findings":[{"severity":"P1","path":"relative/path","line":42,"body":"..."}]}
 </output>
 
-Use an empty `findings` array when the diff is clean. Do not edit files.
+无已确认缺陷可返回空 `findings`；在 summary 写已尝试路径、Hacker 身份、判据、
+证据和未验范围。未执行的具体假设注明“待复现”，空数组不能表示未验路径已通过。
+不要修改候选文件。

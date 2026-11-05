@@ -263,8 +263,9 @@ PY
 
   say "== 路由归属 =="
   local prod_env=/etc/aiops-41/gateway.env
-  # 本栈的三个开关必须**显式非空**：Gateway 读取顺序是「环境变量 or 生产配置文件」，
-  # 空值会静默回退到生产文件里的同名键 —— 那正是「试运行实例继承生产路由」的形状。
+  # 本栈的三个开关必须**显式非空**：#973 起「键存在即值」，空串不再回退到生产文件，
+  # 而是把这个键**关死**（屏蔽同名文件键）—— 空值过去是「继承生产路由」，现在是
+  # 「本栈功能被静默屏蔽」，两个方向都要求这一条。
   local env_file=$CONFIG/gateway/gateway.env missing_switch=""
   for key in AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL AIOPS_GATEWAY_EXECUTION_ENVIRONMENT \
              AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE; do

@@ -55,7 +55,20 @@ export function claudeProfile(
   const explicitAgentToken = safeEnv.AFK_AGENT_GH_TOKEN;
   delete safeEnv.GH_TOKEN;
   delete safeEnv.AFK_AGENT_GH_TOKEN;
-  const agentToken = process.env.AFK_AGENT_GH_TOKEN ?? explicitAgentToken;
+  // The explicit argument wins over ambient env — including the empty string,
+  // which is how a caller says "no token": `process.env ?? explicit` (the
+  // earlier order) could never produce "none" whenever the host process had
+  // the variable set, so a "no GitHub" profile still carried the credential.
+  const agentToken = explicitAgentToken ?? process.env.AFK_AGENT_GH_TOKEN;
+  // An explicit empty string means "no GitHub identity", and that has to be
+  // asserted on the env the container finally receives — not only on this
+  // function's return value. The SDK merges `<repo>/.sandcastle/.env` keys
+  // into resolvedEnv at docker-run time; mergeProviderEnv gives this sandbox
+  // env precedence over it, so pinning both gh-recognised variables to ""
+  // is what actually keeps a credentialled .env out of the reviewer
+  // container. Omitting the keys (the earlier shape) let resolvedEnv's
+  // values through. (External re-review, #1397.)
+  const credentialless = explicitAgentToken === "";
 
   return {
     // `hooks` is an option of `run()`, NOT of the sandbox provider. It lived
@@ -108,6 +121,7 @@ export function claudeProfile(
         // the Dockerfile claude wrapper dispatches on it.
         ...(profile ? { AFK_PROFILE: profile } : {}),
         ...(agentToken ? { GH_TOKEN: agentToken } : {}),
+        ...(credentialless ? { GH_TOKEN: "", GITHUB_TOKEN: "" } : {}),
       },
       // Host networking is required only by profiles whose endpoint is the
       // host-loopback relay: a default-bridge container cannot reach the host's

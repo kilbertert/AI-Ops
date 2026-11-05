@@ -230,18 +230,22 @@ def test_the_gateway_and_the_login_proxy_share_one_predicate() -> None:
 
 
 def test_the_gateway_reads_the_deployment_identity_from_its_own_config(tmp_path: Path, monkeypatch) -> None:
+    from aiops_diagnostics.common.private_files import write_private_text
+
     monkeypatch.setenv("AIOPS_GATEWAY_ENVIRONMENT", ENVIRONMENT)
     monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(tmp_path / "gateway.env"))
-    (tmp_path / "gateway.env").write_text("# test\n", encoding="utf-8")
+    write_private_text(tmp_path / "gateway.env", "# test\n")
 
     settings = GatewayServerSettings.from_env()
     assert settings.environment == ENVIRONMENT
 
 
 def test_a_non_canonical_deployment_identity_is_a_startup_error(tmp_path: Path, monkeypatch) -> None:
+    from aiops_diagnostics.common.private_files import write_private_text
+
     monkeypatch.setenv("AIOPS_GATEWAY_ENVIRONMENT", "prod.41")
     monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(tmp_path / "gateway.env"))
-    (tmp_path / "gateway.env").write_text("# test\n", encoding="utf-8")
+    write_private_text(tmp_path / "gateway.env", "# test\n")
 
     with pytest.raises(ValueError):
         GatewayServerSettings.from_env().validate()
@@ -251,6 +255,7 @@ def test_serving_without_an_environment_refuses_to_start(tmp_path: Path, monkeyp
     """漏配 ⇒ 进程不起。让它起来的表现是"某个租户的工作区有时找得到、有时找不到"。"""
     from typer.testing import CliRunner
 
+    from aiops_diagnostics.common.private_files import write_private_text
     from aiops_diagnostics.gateway_server import app as gateway_app
 
     monkeypatch.setenv("AIOPS_HOME", str(tmp_path))
@@ -258,8 +263,9 @@ def test_serving_without_an_environment_refuses_to_start(tmp_path: Path, monkeyp
     monkeypatch.setenv("AIOPS_DATA_HOME", str(tmp_path / "data"))
     # `serve` validates the private config file before it looks at anything else, so a
     # missing one would fail for the wrong reason and this case would prove nothing.
+    # #973 起权限过宽也是拒因 —— 这里要的是「文件存在且合规」。
     config = tmp_path / "production.env"
-    config.write_text("# test\n", encoding="utf-8")
+    write_private_text(config, "# test\n")
     monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(config))
     monkeypatch.delenv("AIOPS_GATEWAY_ENVIRONMENT", raising=False)
     # `serve` refuses before it ever opens a socket, so no port is taken here.

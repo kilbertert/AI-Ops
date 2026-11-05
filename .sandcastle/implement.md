@@ -14,8 +14,8 @@ Requirements:
 
 1. Preserve the project's existing contracts and fail-closed guarantees. Do
    not invent a parallel runtime contract.
-2. Make the smallest coherent change and add or update focused tests for
-   behavior you change.
+2. 先执行 `docs/agents/verification-workflow.md` 的实现者步骤，聚焦最小功能；
+   必要的长期检查说明具体错误与独立判据，交付前安排独立 Hacker。
 3. Run `uv sync --extra dev && uv run pytest && uv run ruff check` before
    committing. Do not weaken or skip checks.
 

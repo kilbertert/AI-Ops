@@ -4,6 +4,7 @@ import os
 import re
 import secrets
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -27,6 +28,149 @@ MIN_SOURCE_KEY_LENGTH = 16
 #: 布尔类开关的「显式关闭」取值表。收全它是为了避免「配了但静默不生效」：
 #: 只认一小撮时，运维写 `off` 会看起来像关掉了、实际仍是默认（本仓反复出现的形态）。
 _FALSY_SETTINGS = frozenset({"0", "false", "no", "off", "disable", "disabled"})
+_TRUTHY_SETTINGS = frozenset({"1", "true", "yes", "on"})
+
+
+@dataclass(frozen=True, slots=True)
+class SettingSource:
+    """一个设置从哪里读的声明（#973）。
+
+    每个字段恰好四个判据：env 键名、是否读服务端私有配置、类型、默认值。
+    「谁优先」不在逐行里决定 —— 规则总共一条，写在 ``_resolve_source``：
+    进程 env **缺失** ⇒ 私有配置（``file=True`` 时）⇒ 默认值。键**存在**
+    （哪怕是 ``KEY=`` 的空串）就是这个键的值，不再向下回退 —— 与
+    ``Settings.from_config`` 同一条「显式空串即覆盖」语义。
+    """
+
+    env: str
+    file: bool = True
+    #: "str" | "int" | "float" | "bool" | "bool_not_falsy"（默认真、按 _FALSY_SETTINGS 判关）
+    kind: str = "str"
+    default: object = ""
+
+
+#: 「一个 Gateway 设置从哪里读」的唯一权威（#973）：``from_env`` 由它驱动，
+#: ``admin --config`` 的合并词表由它派生，``.env.example`` 的键清单由它核对。
+#: 每行一个 ``GatewayServerSettings`` 字段 —— ``data_home``/``database_file``/
+#: ``server_config_file`` 三个路径派生项除外（值由其它键算出，留在 ``from_env``
+#: 手写）。``file=False`` 的行只读进程 env：写进 ``production.env`` 不生效不是
+#: 漏读，是这一列的显式决定（监听参数、日志级别这类只该由进程给的值）。
+SETTING_SOURCES: dict[str, SettingSource] = {
+    "bind_host": SettingSource("AIOPS_GATEWAY_BIND", file=False, default="127.0.0.1"),
+    "port": SettingSource("AIOPS_GATEWAY_PORT", file=False, kind="int", default=8787),
+    "allow_fixtures": SettingSource("AIOPS_GATEWAY_ALLOW_FIXTURES", file=False, kind="bool", default=False),
+    "max_workers": SettingSource("AIOPS_GATEWAY_MAX_WORKERS", file=False, kind="int", default=2),
+    "introspection_url": SettingSource("AIOPS_GATEWAY_INTROSPECTION_URL", file=False),
+    "introspection_client_id": SettingSource("AIOPS_GATEWAY_INTROSPECTION_CLIENT_ID", file=False),
+    "introspection_client_secret": SettingSource("AIOPS_GATEWAY_INTROSPECTION_CLIENT_SECRET", file=False),
+    "standard_api_audience": SettingSource(
+        "AIOPS_GATEWAY_STANDARD_API_AUDIENCE", file=False, default="aiops-api"
+    ),
+    "introspection_timeout_seconds": SettingSource(
+        "AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS", file=False, kind="int", default=5
+    ),
+    "third_session_service_token": SettingSource("AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN"),
+    "third_session_key_prefix": SettingSource(
+        "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", default="app:3rd_session:"
+    ),
+    "charging_status_base_url": SettingSource("AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
+    "business_environments_file": SettingSource("AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE"),
+    "consumer_order_chat_enabled": SettingSource(
+        "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED", kind="bool", default=False
+    ),
+    "execution_environment": SettingSource("AIOPS_GATEWAY_EXECUTION_ENVIRONMENT"),
+    "agent_run_config_file": SettingSource("AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE"),
+    "execution_manifest_file": SettingSource("AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE"),
+    "chat_execution_bindings_file": SettingSource("AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE"),
+    "dify_chat_base_url": SettingSource("AIOPS_GATEWAY_DIFY_CHAT_BASE_URL"),
+    "chat_route_bindings_file": SettingSource("AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE"),
+    "consumer_publication_targets_file": SettingSource("AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE"),
+    "consumer_knowledge_plugin": SettingSource("AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN"),
+    "consumer_chatflow_enabled": SettingSource(
+        "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED", kind="bool", default=False
+    ),
+    "operator_profiles_file": SettingSource("AIOPS_GATEWAY_OPERATOR_PROFILES_FILE"),
+    "environment_manifest_file": SettingSource("AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE"),
+    "chat_node_targets_file": SettingSource("AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE"),
+    "operator_trial_login_url": SettingSource("AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL"),
+    "operator_tsdata_url": SettingSource("AIOPS_GATEWAY_OPERATOR_TSDATA_URL"),
+    "operator_trial_key": SettingSource("AIOPS_GATEWAY_OPERATOR_TRIAL_KEY"),
+    "chat_dify_key_dir": SettingSource("AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR"),
+    "company_check_token_url": SettingSource("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL"),
+    "company_token_client_id": SettingSource("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID"),
+    "company_token_client_secret": SettingSource("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET"),
+    "company_source_key": SettingSource("AIOPS_GATEWAY_COMPANY_SOURCE_KEY"),
+    "company_jwt_key": SettingSource("AIOPS_GATEWAY_COMPANY_JWT_KEY"),
+    "trust_company_payload": SettingSource(
+        "AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", kind="bool_not_falsy", default=True
+    ),
+    "kb_service_base_url": SettingSource("AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
+    "kb_service_timeout_seconds": SettingSource(
+        "AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", file=False, kind="float", default=10.0
+    ),
+    "kb_search_max_results": SettingSource("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", kind="int", default=10),
+    "media_signing_secret": SettingSource("AIOPS_GATEWAY_MEDIA_SIGNING_SECRET"),
+    "media_ttl_seconds": SettingSource(
+        "AIOPS_GATEWAY_MEDIA_TTL_SECONDS", file=False, kind="int", default=600
+    ),
+    "public_base_url": SettingSource("AIOPS_GATEWAY_PUBLIC_BASE_URL"),
+    "dify_knowledge_api_key": SettingSource("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"),
+    "dify_knowledge_bindings": SettingSource("AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"),
+    "dify_knowledge_autoregister": SettingSource(
+        "AIOPS_GATEWAY_DIFY_KNOWLEDGE_AUTOREGISTER", file=False, kind="bool", default=True
+    ),
+    "dify_debug_api_key": SettingSource("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY"),
+    "dify_debug_tenant": SettingSource("AIOPS_GATEWAY_DIFY_DEBUG_TENANT"),
+    "dify_debug_knowledge_ids": SettingSource("AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS"),
+    "dify_trial_api_key": SettingSource("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY"),
+    "dify_trial_debug_tenant": SettingSource("AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT"),
+    "dify_console_base_url": SettingSource("AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL"),
+    "dify_console_api_key": SettingSource("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY"),
+    "dify_console_workspace_id": SettingSource("AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID"),
+    "dify_external_knowledge_api_id": SettingSource("AIOPS_GATEWAY_DIFY_EXTERNAL_KNOWLEDGE_API_ID"),
+    "dify_publish_api_key": SettingSource("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
+    "environment": SettingSource("AIOPS_GATEWAY_ENVIRONMENT"),
+    "internal_token_secret": SettingSource("AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET"),
+    "internal_token_expire_seconds": SettingSource(
+        "AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS", kind="int", default=300
+    ),
+    "dify_inner_api_base_url": SettingSource("AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL"),
+    "dify_inner_api_key": SettingSource("AIOPS_GATEWAY_DIFY_INNER_API_KEY"),
+    "dify_workspace_model_api_key": SettingSource("AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY"),
+    "dify_workspace_model_endpoint": SettingSource(
+        "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT", default="https://api.deepseek.com/v1"
+    ),
+    "ragflow_credential_key": SettingSource("AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY"),
+    "ragflow_tenant_domain": SettingSource(
+        "AIOPS_GATEWAY_RAGFLOW_TENANT_DOMAIN", file=False, default="kb.internal"
+    ),
+    "ragflow_embedding_base_url": SettingSource("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_BASE_URL"),
+    "ragflow_embedding_api_key": SettingSource("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY"),
+    "ragflow_embedding_model": SettingSource(
+        "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_MODEL", file=False, default="text-embedding-3-large"
+    ),
+    "ragflow_console_base_url": SettingSource("AIOPS_GATEWAY_RAGFLOW_CONSOLE_BASE_URL"),
+    "ragflow_console_public_url": SettingSource("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL"),
+    "ragflow_console_public_pem": SettingSource("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_PEM"),
+    "ragflow_console_cookie_domain": SettingSource("AIOPS_GATEWAY_RAGFLOW_CONSOLE_COOKIE_DOMAIN"),
+    "knowledge_hop_ttl_seconds": SettingSource(
+        "AIOPS_GATEWAY_KNOWLEDGE_HOP_TTL_SECONDS", file=False, kind="float", default=60.0
+    ),
+    "routing_risk_at_least": SettingSource(
+        "AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", file=False, kind="float", default=0.5
+    ),
+    "routing_confidence_at_least": SettingSource(
+        "AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", file=False, kind="float", default=0.8
+    ),
+    "routing_risk_always_asks": SettingSource(
+        "AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS", file=False, kind="bool", default=True
+    ),
+    "log_level": SettingSource("AIOPS_GATEWAY_LOG_LEVEL", file=False, default=DEFAULT_LOG_LEVEL),
+}
+
+#: 不进 ``SETTING_SOURCES`` 的三个字段：值由其它键算出（data_home → database_file，
+#: SERVER_CONFIG_FILE → 私有配置本体），不是「env 或文件」的形状。
+DERIVED_SETTING_FIELDS = frozenset({"data_home", "database_file", "server_config_file"})
 
 
 @dataclass(slots=True)
@@ -91,6 +235,9 @@ class GatewayServerSettings:
     environment_manifest_file: str = ""
     operator_trial_login_url: str = ""
     operator_trial_key: str = field(repr=False, default="")
+    #: 时序数据门面（公司 tsdata 服务）的只读查询入口，`cpms_charging_timeline` 用它在
+    #: 授权订单窗口内取 TDengine 枪遥测。空 = 该工具按依赖不可用拒绝，不静默退化为空页。
+    operator_tsdata_url: str = ""
     consumer_chatflow_enabled: bool = False
     #: 客户端知识插件的**精确标识**（`provider/name:version@sha` 或 `provider/name`）。
     #: 客户端开通要把它装进目标工作区并写入本工作区的目录凭据；空 = 客户端开通直接拒绝
@@ -294,6 +441,9 @@ class GatewayServerSettings:
 
     @classmethod
     def from_env(cls) -> GatewayServerSettings:
+        # 三个路径派生项不走表：值由其它键算出（data_home → database_file、
+        # SERVER_CONFIG_FILE → 私有配置本体），不是「env 或文件」的形状；空串对
+        # 路径没有意义，`KEY=` 按缺失处理。
         data_home = Path(_env("AIOPS_GATEWAY_DATA_HOME") or data_root() / "gateway").expanduser()
         database_file = Path(_env("AIOPS_GATEWAY_DATABASE_FILE") or data_home / "gateway.db").expanduser()
         configured_server_file = _env("AIOPS_GATEWAY_SERVER_CONFIG_FILE")
@@ -302,177 +452,13 @@ class GatewayServerSettings:
             if configured_server_file
             else selected_config_file()
         )
-        file_values = _private_config_values(server_config_file)
+        file_values = _private_config_values(server_config_file, explicit=bool(configured_server_file))
+        resolved = {name: _resolve_source(source, file_values) for name, source in SETTING_SOURCES.items()}
         return cls(
             data_home=data_home.resolve(),
             database_file=database_file.resolve(),
-            bind_host=_env("AIOPS_GATEWAY_BIND", "127.0.0.1"),
-            port=_env_int("AIOPS_GATEWAY_PORT", 8787),
-            server_config_file=(
-                Path(configured_server_file).expanduser().resolve()
-                if configured_server_file
-                else selected_config_file()
-            ),
-            allow_fixtures=_env_bool("AIOPS_GATEWAY_ALLOW_FIXTURES"),
-            max_workers=_env_int("AIOPS_GATEWAY_MAX_WORKERS", 2),
-            introspection_url=_env("AIOPS_GATEWAY_INTROSPECTION_URL"),
-            introspection_client_id=_env("AIOPS_GATEWAY_INTROSPECTION_CLIENT_ID"),
-            introspection_client_secret=_env("AIOPS_GATEWAY_INTROSPECTION_CLIENT_SECRET"),
-            standard_api_audience=_env("AIOPS_GATEWAY_STANDARD_API_AUDIENCE", "aiops-api"),
-            introspection_timeout_seconds=_env_int("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS", 5),
-            third_session_service_token=_env("AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN")
-            or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN"),
-            third_session_key_prefix=_env("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX")
-            or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
-            charging_status_base_url=_env("AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
-            business_environments_file=_env("AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE"),
-            consumer_order_chat_enabled=(
-                _env("AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED")
-                or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED")
-            ).lower()
-            in {"1", "true", "yes", "on"},
-            execution_environment=_env("AIOPS_GATEWAY_EXECUTION_ENVIRONMENT")
-            or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT"),
-            agent_run_config_file=_env("AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE"),
-            execution_manifest_file=_env("AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE"),
-            chat_execution_bindings_file=_env("AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE"),
-            dify_chat_base_url=_env("AIOPS_GATEWAY_DIFY_CHAT_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL"),
-            chat_route_bindings_file=_env("AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE"),
-            consumer_publication_targets_file=_env("AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE"),
-            consumer_knowledge_plugin=_env("AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN")
-            or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN"),
-            consumer_chatflow_enabled=(
-                _env("AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED")
-                or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED")
-            ).lower()
-            in {"1", "true", "yes", "on"},
-            operator_profiles_file=_env("AIOPS_GATEWAY_OPERATOR_PROFILES_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_PROFILES_FILE"),
-            environment_manifest_file=_env("AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE"),
-            chat_node_targets_file=_env("AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE"),
-            operator_trial_login_url=_env("AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL"),
-            operator_trial_key=_env("AIOPS_GATEWAY_OPERATOR_TRIAL_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_TRIAL_KEY"),
-            chat_dify_key_dir=_env("AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR")
-            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR"),
-            company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL"),
-            company_token_client_id=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID")
-            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID"),
-            company_token_client_secret=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET")
-            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET"),
-            company_source_key=_env("AIOPS_GATEWAY_COMPANY_SOURCE_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_SOURCE_KEY"),
-            company_jwt_key=_env("AIOPS_GATEWAY_COMPANY_JWT_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_JWT_KEY"),
-            # 显式关闭的取值要**收全**（0/false/no/off/disable…）—— 只认一小撮时，
-            # 运维写 `off` 会**静默保持公司一致**（看起来像配了、实际没生效），
-            # 这正是本仓反复出现的「静默不生效」形态。未设 = 公司一致（默认）。
-            trust_company_payload=(
-                _env("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD")
-                or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD")
-                or "1"
-            )
-            .strip()
-            .lower()
-            not in _FALSY_SETTINGS,
-            kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
-            kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
-            # Reads the private server config too, not just the process env: the
-            # depth lives beside the KB URL it governs, and `kb_service_base_url`
-            # two lines up already accepts either source. An operator who put it
-            # in the file beside that URL would otherwise get a startup that
-            # succeeds and a setting that silently does nothing.
-            kb_search_max_results=_int_value(file_values, "AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", 10),
-            media_signing_secret=_env("AIOPS_GATEWAY_MEDIA_SIGNING_SECRET")
-            or _file_value(file_values, "AIOPS_GATEWAY_MEDIA_SIGNING_SECRET"),
-            media_ttl_seconds=_env_int("AIOPS_GATEWAY_MEDIA_TTL_SECONDS", 600),
-            public_base_url=_env("AIOPS_GATEWAY_PUBLIC_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_PUBLIC_BASE_URL"),
-            dify_knowledge_api_key=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"),
-            dify_knowledge_bindings=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"),
-            dify_knowledge_autoregister=_env_bool("AIOPS_GATEWAY_DIFY_KNOWLEDGE_AUTOREGISTER", True),
-            dify_debug_api_key=_env("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_API_KEY"),
-            dify_debug_tenant=_env("AIOPS_GATEWAY_DIFY_DEBUG_TENANT")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_TENANT"),
-            dify_debug_knowledge_ids=_env("AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS"),
-            dify_trial_api_key=_env("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TRIAL_API_KEY"),
-            dify_trial_debug_tenant=_env("AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT"),
-            dify_console_base_url=_env("AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL"),
-            dify_console_api_key=_env("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY"),
-            dify_console_workspace_id=_env("AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID"),
-            dify_external_knowledge_api_id=_env("AIOPS_GATEWAY_DIFY_EXTERNAL_KNOWLEDGE_API_ID")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_EXTERNAL_KNOWLEDGE_API_ID"),
-            dify_publish_api_key=_env("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
-            environment=_env("AIOPS_GATEWAY_ENVIRONMENT")
-            or _file_value(file_values, "AIOPS_GATEWAY_ENVIRONMENT"),
-            internal_token_secret=_env("AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET")
-            or _file_value(file_values, "AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET"),
-            # 与 `kb_search_max_results` 同一条规则：密钥在私有配置里，窗口也该能在它旁边调。
-            # 只读进程 env 时，运维改了 `production.env` 里的这一行会**静默不生效** ——
-            # 而它旁边那把密钥是从文件里读到的，读者有充分理由认为两者同源。
-            internal_token_expire_seconds=_int_value(
-                file_values, "AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS", 300
-            ),
-            dify_inner_api_base_url=_env("AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL"),
-            dify_inner_api_key=_env("AIOPS_GATEWAY_DIFY_INNER_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_INNER_API_KEY"),
-            dify_workspace_model_api_key=_env("AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY"),
-            # 与上面那把 key 同源：**进程 env 优先，其次服务端配置文件**。这里少了
-            # ``_file_value`` 会让「运维照着 runbook 写进 production.env」变成静默不生效
-            # —— 它有非空默认值，``_settings_with_config_file`` 的"只在为空时才补"补不上。
-            dify_workspace_model_endpoint=_env("AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT")
-            or _file_value(
-                file_values, "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT", "https://api.deepseek.com/v1"
-            ),
-            ragflow_credential_key=_env("AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY"),
-            ragflow_tenant_domain=_env("AIOPS_GATEWAY_RAGFLOW_TENANT_DOMAIN", "kb.internal"),
-            ragflow_embedding_base_url=_env("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_BASE_URL"),
-            ragflow_embedding_api_key=_env("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY")
-            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY"),
-            ragflow_embedding_model=_env("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_MODEL", "text-embedding-3-large"),
-            # #926 控制台入口。**这一行漏过一次**：字段声明了、路由读了，但 `from_env()`
-            # 从没给它们赋值 —— 所有单测都是直接构造 settings，于是谁也没发现。真机上的
-            # 表现是路由报 `KNOWLEDGE_CONSOLE_DISABLED`，而环境变量明明都在进程里。
-            ragflow_console_base_url=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_BASE_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_BASE_URL"),
-            ragflow_console_public_url=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL")
-            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL"),
-            ragflow_console_public_pem=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_PEM")
-            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_PEM"),
-            ragflow_console_cookie_domain=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_COOKIE_DOMAIN")
-            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_COOKIE_DOMAIN"),
-            knowledge_hop_ttl_seconds=_env_float("AIOPS_GATEWAY_KNOWLEDGE_HOP_TTL_SECONDS", 60.0),
-            routing_risk_at_least=_env_float("AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", 0.5),
-            routing_confidence_at_least=_env_float("AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", 0.8),
-            routing_risk_always_asks=_env_bool("AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS", True),
-            log_level=_env("AIOPS_GATEWAY_LOG_LEVEL", DEFAULT_LOG_LEVEL),
+            server_config_file=server_config_file,
+            **resolved,
         )
 
     def validate(self) -> None:
@@ -849,44 +835,56 @@ def _env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = _env(name)
-    return int(raw) if raw else default
+def _resolve_source(source: SettingSource, file_values: Mapping[str, str | None]) -> object:
+    """按声明取一个设置的值 —— 「谁优先」的规则总共就这一段（#973）。
 
+    **缺失才回退**：``os.getenv`` 给出 ``None``（键不存在）才看私有配置；
+    私有配置里也没有这个键才取默认值。键存在 —— 哪怕是 ``KEY=`` 的空串 ——
+    就用它自己，不再向下回退，与 ``Settings.from_config`` 同一个答案。
 
-def _int_value(values: dict[str, str | None], name: str, default: int) -> int:
-    """An int setting that may come from the process env or the private config.
-
-    Same two-source rule as ``_file_value``, but parsed: the env wins when set,
-    the private file is the fallback, and a value that is not an integer fails
-    loudly at construction rather than being dropped back to the default —
-    "the depth was raised" must not be a statement the config cannot support.
+    解析按 ``kind``：``str`` 的空串是有效值（清空即关）；数值/布尔把空串
+    按「等于默认」处理（``int("")`` 没有可辩护的含义），非空非法值在
+    构造期就报错，不回落默认。
     """
-    raw = _env(name) or _file_value(values, name)
-    return int(raw) if raw else default
+    raw = os.getenv(source.env)
+    if raw is None and source.file:
+        raw = file_values.get(source.env)
+    if raw is None:
+        return source.default
+    return _parse_source_value(source, raw)
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = _env(name)
-    return float(raw) if raw else default
+def _parse_source_value(source: SettingSource, raw: str) -> object:
+    """把一条原始串按 ``kind`` 解析成字段值（``--config`` 合并与
+    ``from_env`` 共用同一段解析）。"""
+    text = raw.strip()
+    if source.kind == "str":
+        return text
+    if not text:
+        return source.default
+    if source.kind == "int":
+        return int(text)
+    if source.kind == "float":
+        return float(text)
+    if source.kind == "bool":
+        return text.lower() in _TRUTHY_SETTINGS
+    if source.kind == "bool_not_falsy":
+        return text.lower() not in _FALSY_SETTINGS
+    raise ValueError(f"unknown setting kind: {source.kind!r}")
 
 
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = _env(name)
-    if not raw:
-        return default
-    return raw.lower() in {"1", "true", "yes", "on"}
+def _private_config_values(path: Path, *, explicit: bool = False) -> dict[str, str | None]:
+    """读服务端私有配置 —— 不存在/不可读都不再是静默空表（#973）。
 
-
-def _private_config_values(path: Path) -> dict[str, str | None]:
+    文件不存在：默认路径下没有配置是合法形态，记空表；但**显式点名**一份
+    不存在的文件是写错了路径，按 ``Settings.from_config`` 同一条规则拒掉。
+    文件存在但权限过宽：``PrivatePathError`` 直出 —— 与 ``from_config`` 给
+    同一个答案（启动失败）。静默返回空表等于「什么都没配」地把服务起起来，
+    之后每个请求都收成误导性的 401/503。
+    """
     if not path.is_file():
+        if explicit:
+            raise PrivatePathError(f"私有配置文件不存在: {path}")
         return {}
-    try:
-        validate_private_file(path)
-    except PrivatePathError:
-        return {}
+    validate_private_file(path)
     return dict(dotenv_values(path))
-
-
-def _file_value(values: dict[str, str | None], name: str, default: str = "") -> str:
-    return (values.get(name) or default).strip()
