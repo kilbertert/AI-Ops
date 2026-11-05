@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import re
 
+# 本人订单入口与工具参数共用的标识字符范围。
+SAFE_ORDER_NO = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
 #: 「这段话在说订单」的显式说法。`order` 的边界只能用 `[A-Za-z]` 写：Python 的 `\b` 把中文
 #: 也算作词字符，于是「电费ORDER-1001」里的 `\border\b` **匹配不到**，而它恰恰是我们
 #: 要认的那一句。
