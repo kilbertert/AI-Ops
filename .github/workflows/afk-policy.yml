@@ -1,186 +1,81 @@
 name: AFK Policy
 
-# `pull_request` only — see the note in `ci.yml`. Like `verify`, this is a
-# REQUIRED check (`Workflow policy`), so a failure cannot enter `main` and the
-# `push: main` re-run tested a byte-identical tree for no signal.
-#
-# ⚠️ `spec-tree.yml` deliberately keeps its main trigger. Its job is not required,
-# so a spec drift can merge, and that post-merge run was the only place it
-# surfaced. The rule is "drop the main trigger only for a check that blocks the
-# merge", not "drop it everywhere".
+# PR 的交付与 AFK 边界检查；必需检查名 Workflow policy 保持稳定。
 
 on:
-  # ⚠️ Activity types are listed EXPLICITLY, and `ready_for_review` is among them.
-  # GitHub's default set is `opened, synchronize, reopened` — and a job skipped
-  # because the PR was a draft records a `skipped` conclusion, which SATISFIES a
-  # required status check. So a draft that is marked ready without another push
-  # would never run this job and could still merge, unverified. Listing
-  # `ready_for_review` is what closes that hole; the job-level guard below is what
-  # keeps it from running during draft edits.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
 
+concurrency:
+  group: policy-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   workflows:
-    # ── Do not run while the pull request is a draft ────────────────────────────
-    # A draft is the platform's own word for "not ready to be judged", and this
-    # repository already uses it: `agent-implement.yml` and `agent-implement-prd.yml`
-    # open delivery PRs with `gh pr create --draft`.
-    #
-    # Why this is not just tidiness. Measured 2026-10-18: one AFK pull request
-    # (#825) ran this workflow 11 times — 8 successes plus 3 cancelled — about 16
-    # minutes of runner time. Nothing consumed a single one of those results:
-    # `grep -rn 'gh pr checks|statusCheckRollup|/check-runs' .sandcastle/ .github/`
-    # returns nothing, so no agent, review pass, or workflow reads a PR's CI
-    # conclusion. The agent verifies locally instead — `.sandcastle/implement.md`
-    # step 3 tells it to run the project's own check before committing.
-    #
-    # The rule this encodes: a CI run is worth its cost only when it (a) covers the
-    # content that is about to enter main AND (b) its result is used. A draft fails
-    # both.
-    #
-    # ⚠️ `ready_for_review` MUST be exempted, and that is not a detail. Measured on
-    # this repository (PR #833): when a draft is marked ready, the `ready_for_review`
-    # event fires, but its `pull_request.draft` field still reads `true` — the
-    # payload describes the transition, not the state after it. A guard that only
-    # tested `draft` therefore skipped the run for the one event that means "now
-    # judge it", and the PR ended with all three checks `skipping` and no way to
-    # revisit them. The exemption is what makes the guard correct rather than
-    # merely quiet.
-    #
-    # ⚠️ Written as a guard rather than as a `types: [...]` filter on purpose.
-    # `types: [ready_for_review]` alone would mean a NON-draft pull request never
-    # runs at all — it is already ready when `opened` fires. Keeping the trigger
-    # broad and the condition explicit is what makes "will this run?" readable from
-    # the file; a filter that silently drops events is the failure ADR 0010 and the
-    # 1.7.26 work both exist to prevent.
     if: >-
       github.event_name != 'pull_request' ||
       github.event.action == 'ready_for_review' ||
       github.event.pull_request.draft == false
     name: Workflow policy
-    # See `ci.yml`: this pair is a REQUIRED check, and the account's billing lock
-    # refuses to start hosted jobs at all — which blocks every pull request, not
-    # just untrusted ones. Back on the persistent runner until hosted jobs start
-    # again; `self-hosted` alone would match any self-hosted runner in the
-    # account, so the label set is explicit.
     runs-on: ubuntu-latest
-    # 10，不是 5。每个 `npx --yes tsx …` 步在冷启动时都要现装 tsx（实测 5 分 01 秒，
-    # 2026-10-22 run 39711959529），而 5 分钟的上限让**已经通过**的检查在收尾时被取消 ——
-    # 表现为 "Workflow policy 失败"，日志里却是 `profile-network check ok` 加一句
-    # `The operation was canceled`。取消一条已通过的必需检查，比它慢更糟。
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-          # `fetch-depth: 0` is required, not a preference: the decision-record
-          # check resolves the merge base against `base.sha`, and a shallow
-          # checkout does not have that commit — so the check would report that
-          # it cannot see the diff, and a gate that cannot see the diff is not a
-          # gate.
           fetch-depth: 0
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: 22
+          cache: npm
       - name: Verify AFK workflow boundaries
         run: node .sandcastle/policy-check.mjs workflows
       - name: Verify reviewer verdict and execution boundary
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
-          npx tsx .sandcastle/review-boundary.check.ts
-      # The profile-network check decides whether the agent sandbox keeps Docker
-      # bridge isolation. Without it in CI, a typo in the loopback-profile set
-      # silently widens the sandbox's reach — or silently breaks the relay
-      # profile — and nothing fails. It was a runnable check with no runner.
+          npx --no-install tsx .sandcastle/review-boundary.check.ts
       - name: Verify sandbox network isolation
-        run: npx --yes tsx .sandcastle/profile-network.check.ts
+        run: npx --no-install tsx .sandcastle/profile-network.check.ts
       - name: Verify sandbox MCP config
-        run: npx --yes tsx .sandcastle/mcp-config.check.ts
-      # The image name and the uid live in two files that have to agree, and a
-      # disagreement is invisible until a sandbox starts — where it reads as a
-      # runner or code problem. That is how one project stayed red for two weeks.
+        run: npx --no-install tsx .sandcastle/mcp-config.check.ts
       - name: Verify the sandbox image wiring
-        run: npx --yes tsx .sandcastle/profile-image.check.ts
-      # The heartbeat filter's two failure modes are both silent: too wide eats
-      # agent output, too narrow lets the flood back in with nothing reporting it.
-      # Neither shows up as a failed run, so the match is asserted here.
+        run: npx --no-install tsx .sandcastle/profile-image.check.ts
       - name: Verify the console heartbeat filter
-        run: npx --yes tsx .sandcastle/quiet-heartbeats.check.ts
-      # A stale map is read with the same confidence as the code, so it is
-      # checked rather than trusted. `--check` regenerates to stdout and
-      # compares — it never writes the file it is judging.
+        run: npx --no-install tsx .sandcastle/quiet-heartbeats.check.ts
       - name: Verify the repository map is current
         run: node .sandcastle/repo-map.check.mjs
-      # The prepare hook's two halves must agree — a script nobody registered
-      # silently reverts every run to the agent installing its own dependencies.
       - name: Verify the sandbox prepare hook
-        run: npx --yes tsx .sandcastle/sandbox-prepare.check.ts
-      # Whether a decision record is owed, and whether one was written.
-      #
-      # Two independent judgements, deliberately scoped differently:
-      #   * STRUCTURE covers the records this change touches — so adopting the
-      #     rule never requires backfilling a catalogue nobody edited.
-      #   * COVERAGE covers each of this branch's commits, judged against its own
-      #     parent. Per commit, not per diff: `git diff <ref> HEAD` is the
-      #     merge-base form and reports everything the branch carries, so one
-      #     tooling commit would answer for a feature commit beside it.
-      #
-      # A commit that owes a record and carries none fails here; one that owes
-      # none says so with a `No-ADR:` line in its body. Nothing is pinned to a
-      # ref — the script resolves the merge base itself.
-      #
-      # An empty `AFK_ADR_BASE` is a FAILURE, not a downgrade to a report. The
-      # expression below evaluates to "" when neither side exists, and a gate that
-      # quietly becomes a report reads as passing at exactly the moment it is
-      # misconfigured.
+        run: npx --no-install tsx .sandcastle/sandbox-prepare.check.ts
       - name: Verify decision records
         env:
           AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"
-      # `CHANGELOG.md` is generated from Conventional Commits, and the check is
-      # deliberately NOT here. Measured 2026-10-23: this job runs on
-      # `ubuntu-latest`, which has neither `dev-changelog` (installed by the
-      # server release unit) nor `git-cliff` (its one dependency). Installing
-      # both here would make the gate assert against a second generator rather
-      # than the one that produced the file.
-      #
-      # The check runs where the generator lives — `dev-policy-audit` on the
-      # development host, which is also where a hand-edit is made. This step
-      # exists only so the absence is recorded rather than rediscovered.
       - name: Note where the changelog check runs
         run: |
           echo "CHANGELOG.md is verified by dev-policy-audit on the development host;"
           echo "this job has neither dev-changelog nor git-cliff, so it cannot check it."
-      # The generator's own parser, not the map it produced: a regex that matches
-      # nothing yields a map that looks complete and omits the answer, and a fresh
-      # scaffold cannot catch that because a fresh scaffold has no console scripts
-      # to omit. Deliberately NOT wired into repo-map.check.mjs — the map check
-      # must use the shipping code path or it would validate one thing and ship
-      # another.
       - name: Repository-map generator self-check
         run: node .sandcastle/repo-map.mjs --self-check
-      # The conflict report's own tables, before it sweeps 100 branches: a path
-      # classified twice, or a disposition with no stated reason, would make the
-      # report read as complete while double-counting or silently dropping rows.
       - name: Conflict-surface table self-check
         run: node .sandcastle/conflict-surface.mjs --self-check
-      # Fails only on a `removed` path conflicting again — a generated file that
-      # came back into the tree. `exclusive` and `serial` entries are reports by
-      # design, so gating on them would keep this check red for reasons nobody
-      # can act on, which is how a check stops being read.
-      #
-      # ⚠️ Asks about THIS tree's index, not about the merge base and not about
-      # live branches. Measured on the PR that introduced this check, both of
-      # those readings made it fail the very change it was written for: the base
-      # still tracks the file, and 34 living branches still carry their own copy.
-      # "Is a removed path still tracked here" is answerable, actionable, and
-      # true exactly when the removal was reverted.
       - name: Conflict surface has no structural regression
         run: node .sandcastle/conflict-surface.mjs --check
+
+      - name: Summarize policy
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+        run: |
+          {
+            echo '### 交付检查（Workflow policy）'
+            echo "- 结果：$RESULT"
+            echo '- 本检查覆盖 AFK 隔离、工具自检与 ADR，不是模型审查。'
+            echo '- ADR 失败：先查看重复编号、缺失记录或提交中的 No-ADR 说明。'
+            echo '- 操作入口见 docs/agents/actions-delivery.md。'
+          } >> "$GITHUB_STEP_SUMMARY"

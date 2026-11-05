@@ -1,15 +1,7 @@
-"""CI 的测试分档判定：**默认全量，只有改动全在文档里才降级**。
+"""CI 默认全量，仅 Markdown 白名单可选文档档。
 
-`ci.yml` 的 `Decide the test tier` 一步决定这次 PR 跑全量（4114 条 / 192 秒）
-还是只跑读文档的那批（683 条 / 26 秒）。判定本身是一段 `git diff --name-only`
-加一个 `grep -vE`，它不会自己报错 —— 判断写宽了就是把改代码的提交当文档提交放过，
-而**看起来完全正常**。
-
-所以这里驱动 workflow 里那段脚本本身（不是它的副本），喂进不同的改动集合，
-断言它算出哪一档。脚本从文件里抽出来执行，改脚本即改判据。
-
-⚠️ 抽原文而不是复制逻辑，理由与 `test_release_version.py` 对 `cd.yml` 的做法一致：
-复制一份"测试里的判据"会和 CI 里那份各自漂移，而漂移的那天两边都显示绿。
+执行 workflow 原文，避免测试副本与实际门禁漂移；测试源码引用选择的文档集合
+仍是启发式，不代表完整依赖分析。
 """
 
 from __future__ import annotations
@@ -46,8 +38,7 @@ def _tier_script() -> str:
 
 def _decide(tmp_path: Path, changed: list[str], *, base: str = "aaa", head: str = "bbb") -> str:
     """跑 workflow 里那段脚本，返回它写出的 tier（或 `""` 表示没跑判定）。"""
-    script = _tier_script().replace("${{ github.event.pull_request.base.sha }}", base)
-    script = script.replace("${{ github.event.pull_request.head.sha }}", head)
+    script = _tier_script()
     # 脚本用 `git diff --name-only` 取改动；用一个假 git 顶替，输出就是喂进去的清单。
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -63,6 +54,8 @@ def _decide(tmp_path: Path, changed: list[str], *, base: str = "aaa", head: str 
         env={
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "GITHUB_OUTPUT": str(output),
+            "PR_BASE": base,
+            "PR_HEAD": head,
         },
         capture_output=True,
         text=True,
@@ -92,6 +85,8 @@ def test_documentation_only_changes_take_the_docs_tier(tmp_path: Path, changed: 
         ["tests/dify/test_dual_entry.py"],  # 改测试更要验证测试
         ["docs/a.md", "src/aiops_diagnostics/x.py"],  # 混合：只要有一个非文档就全量
         ["pyproject.toml"],
+        ["docs/check.py"],  # docs 中可执行内容仍走全量
+        ["docs/fixture.json"],
         ["ops/nginx/operator-h5.conf"],
         ["deploy/m2-live-03/checks.sh"],
         ["docsomething.py"],  # `docs` 前缀但不带斜杠，不是文档目录
