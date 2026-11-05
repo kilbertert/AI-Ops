@@ -300,4 +300,4 @@ def final_answer(raw, context):
                 sources.append(
                     {"retrieved_reference_id": "support", "title": route["label"], "content": route["url"]}
                 )
-    return render_sources_answer(raw, sources)
+    return render_sources_answer(raw, sources, preserve=order_ids(context))

@@ -81,6 +81,7 @@ case "$command" in
     [ "$#" -eq 4 ] || die "usage: $0 push REPO EXPECTED_HEAD BRANCH"
     repo="$2" expected="$3" branch="$4"
     valid_branch "$branch" "$repo"
+    node "$(dirname "$0")/queue/pr-current.mjs" --require
     actual="$(remote_head "$repo" "$branch")"
     [ "$actual" = "$expected" ] || die "branch advanced before delivery"
     git -C "$repo" push origin "HEAD:refs/heads/$branch"

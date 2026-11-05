@@ -20,7 +20,7 @@
 /** 未完成的 run 在 API 上的状态集合（GitHub 用 request 表示等待批准）。 */
 const UNFINISHED = new Set(["queued", "in_progress", "waiting", "requested", "pending"]);
 
-export const DEFAULT_STUCK_MINUTES = 30;
+export const DEFAULT_STUCK_MINUTES = 5;
 export const DEFAULT_STRAIGHT_FAILURES = 3;
 
 /**
@@ -145,15 +145,13 @@ export function classifyRun(run, options = {}) {
       reason: `已获批 ${Math.round(queueMinutes)} 分钟 —— 在等并发锁或运行器，仍在合理范围`,
     };
   }
-  // 阈值有据可依，不是拍的：持锁那个 job 自己有 20 分钟 `timeout-minutes`，
-  // 一次合法排队的上限因此就是"前一个跑完"≈ 20 分钟出头。超过 `stuckMinutes`（30）
-  // 仍未开始，成因只剩两种：运行器不在线，或前一个部署自己挂了没释放锁。
+  // 5分钟是内部等待目标；超过目标需诊断，不等于可以取消正在部署的作业。
   return {
     kind: "queued-too-long",
     ageMinutes: ageMinutesWait,
     reason:
-      `**获批后**已等待超过 ${stuckMinutes} 分钟仍未开始 —— 合法排队的上限是"前一个部署跑完"` +
-      `（它自己的 job 超时是 20 分钟）；超过它，成因是**运行器不在线**或前一个没释放锁`,
+      `**获批后**已等待超过 ${stuckMinutes} 分钟仍未开始` +
+      `；检查**运行器离线/忙碌**或前一个部署持锁`,
   };
 }
 

@@ -4,6 +4,7 @@ import {
   type RunOptions,
   type RunResult,
 } from "@ai-hero/sandcastle";
+import { cancellationSignal } from "./queue/cancellation.js";
 import { runWithRetry } from "./run-with-retry.js";
 
 /**
@@ -65,7 +66,8 @@ export async function runWithExtraction<T>(
 ): Promise<RunResult & { output: T }> {
   const { output, extractionPrompt, maxAttempts, ...produceOptions } = options;
 
-  const produce = await run(produceOptions);
+  const signal = produceOptions.signal ? AbortSignal.any([produceOptions.signal, cancellationSignal]) : cancellationSignal;
+  const produce = await run({ ...produceOptions, signal });
 
   const sessionId = produce.iterations.at(-1)?.sessionId;
   if (!sessionId) {
@@ -84,6 +86,7 @@ export async function runWithExtraction<T>(
 
   const extraction = await runWithRetry({
     ...extractionOptions,
+    signal,
     ...(produceOptions.name ? { name: `${produceOptions.name} (extract)` } : {}),
     prompt: extractionPrompt,
     resumeSession: sessionId,

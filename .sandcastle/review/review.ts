@@ -7,6 +7,7 @@ import { claudeProfile } from "../profile.js";
 import { parseDiffLines } from "./parse-diff-lines";
 import { ReviewOutput } from "./review-output";
 import { runWithExtraction } from "../run-with-extraction";
+import { cancellationSignal } from "../queue/cancellation.js";
 import { withReviewSandbox } from "../review-sandbox.js";
 
 const PR_NUMBER = required("PR_NUMBER");
@@ -188,7 +189,7 @@ async function runAxis(axis: Axis, instructions: string) {
         REVIEW_AXIS: axis,
         AXIS_INSTRUCTIONS: instructions,
       },
-      signal: AbortSignal.timeout(Number(process.env.AFK_RUN_TIMEOUT ?? 3600) * 1000),
+      signal: AbortSignal.any([cancellationSignal, AbortSignal.timeout(Number(process.env.AFK_RUN_TIMEOUT ?? 3600) * 1000)]),
     }),
   );
   const output = [...result.stdout.matchAll(/<output>([\s\S]*?)<\/output>/g)].at(-1)?.[1];

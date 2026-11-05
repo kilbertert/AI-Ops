@@ -123,6 +123,7 @@ Dify自助开通：`dify.self_service`组织双端业务流程，`dify.self_serv
 
 ## 五、本地运行与验证
 
+部署专用runner与过期任务回收见[队列治理](docs/agents/runner-queue.md)。
 提交后的必需检查、自动同步、部署与发布排障统一见[Actions 交付手册](docs/agents/actions-delivery.md)。
 
 开发与交付按[验证分工](docs/agents/verification-workflow.md)执行：实现者聚焦功能，

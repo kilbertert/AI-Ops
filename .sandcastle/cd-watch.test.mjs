@@ -146,11 +146,11 @@ cases.push([
   assess({
     runs: [
       { status: "pending", createdAt: "2026-09-30T15:28:00Z", totalCount: 1, pendingCount: 1 },
-      { status: "waiting", createdAt: "2026-09-30T15:10:00Z", totalCount: 1, pendingCount: 1 },
+      { status: "waiting", createdAt: "2026-09-30T15:26:00Z", totalCount: 1, pendingCount: 1 },
     ],
     unfinishedRuns: [
       { status: "pending", createdAt: "2026-09-30T15:28:00Z", totalCount: 1, pendingCount: 1 },
-      { status: "waiting", createdAt: "2026-09-30T15:10:00Z", totalCount: 1, pendingCount: 1 },
+      { status: "waiting", createdAt: "2026-09-30T15:26:00Z", totalCount: 1, pendingCount: 1 },
     ],
     fetchedOk: true,
     now,
