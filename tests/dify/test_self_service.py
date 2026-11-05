@@ -120,7 +120,7 @@ def managed(operator, monkeypatch, tmp_path):
             ]
         },
     }
-    for name in ("cpms_order_amount_check", "cpms_order_process_stats"):
+    for name in ("cpms_order_amount_check", "cpms_order_process_stats", "cpms_charging_timeline"):
         mc["agent_mode"]["tools"].append(
             {"provider_id": "provider-id", "provider_type": "api", "tool_name": name, "enabled": True}
         )
