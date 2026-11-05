@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 
+from aiops_diagnostics.common.i18n import language_spec, localized_pack
 from aiops_diagnostics.data.order_status import StatusRole, role_of
 from aiops_diagnostics.health.rules import ORDER_STATUS
 
@@ -29,7 +30,8 @@ def status_word(language: str, role: str) -> str:
     table = COPY.get(language)
     if table is not None and role in table:
         return table[role]
-    if language.startswith("zh"):
+    spec = language_spec(language)
+    if spec is not None and spec.is_chinese:
         return _ZH_STATUS_WORDS.get(role, _ZH_STATUS_WORDS[StatusRole.UNKNOWN.value])
     return role.replace("_", " ")
 
@@ -40,7 +42,7 @@ def live_answer(snapshot, language, kind, *, pack=None):
 
     # `pack` 是**合并后的词表**（内置 + 租户覆盖）。模板结构仍取自语言包：
     # 租户改的是词句，不是结构，所以占位符集合天然不变。
-    words = COPY[language] if pack is None else {**COPY[language], **pack}
+    words = localized_pack(COPY, language) if pack is None else {**localized_pack(COPY, language), **pack}
     values = dict(snapshot)
     # 时间在**两条渲染路**上必须是同一种写法：`localized=True` 走这里的模板，
     # 未本地化走 `consumer_order_chat`／`consumer_billing` 的函数。只改一边会让同一份

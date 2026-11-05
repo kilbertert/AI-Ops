@@ -35,10 +35,13 @@ from aiops_diagnostics.common.i18n import (
     diagnosis_error_message,
     effective_language,
     free_text_unavailable_message,
+    localized_pack,
+    rendering_language,
     resolve_language,
 )
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.consumer import consumer_knowledge_selection
+from aiops_diagnostics.consumer.consumer_copy import COMPOSED_LANGUAGES
 from aiops_diagnostics.consumer.consumer_order_chat import (
     asks_latest_order,
     is_order_status_question,
@@ -6018,6 +6021,15 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
 _KB_FAILURE_CODE = "KB_UNAVAILABLE"
 
 
+#: `OPERATOR_HISTORY_LIMIT` 的用户文案。与 `QA_FALLBACK_MESSAGES` 同一张
+#: 「按语言查词表、缺行读声明 fallback」的取法（`localized_pack`）。
+_HISTORY_LIMIT_MESSAGES = {
+    "zh": "这段对话的证据引用已达到上限，请新建对话继续。",
+    "zh-Hant": "這段對話的證據引用已達到上限，請新建對話繼續。",
+    "en": "This conversation reached its evidence limit. Start a new conversation to continue.",
+}
+
+
 def _qa_user_message(language: str, error_code: str | None) -> str:
     """The localized, actionable sentence a customer sees when a QA job fails.
 
@@ -6031,14 +6043,10 @@ def _qa_user_message(language: str, error_code: str | None) -> str:
     from aiops_diagnostics.operator.operator_cpms import NODE_FAILURE_CODES
 
     if error_code == "OPERATOR_HISTORY_LIMIT":
-        return (
-            "这段对话的证据引用已达到上限，请新建对话继续。"
-            if language.startswith("zh")
-            else "This conversation reached its evidence limit. Start a new conversation to continue."
-        )
+        return localized_pack(_HISTORY_LIMIT_MESSAGES, language)
     if error_code in NODE_FAILURE_CODES.values():
         return diagnosis_error_message(language, error_code)
-    pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
+    pack = localized_pack(QA_FALLBACK_MESSAGES, language)
     return pack["unavailable"] if error_code == _KB_FAILURE_CODE else pack["generation_failed"]
 
 
@@ -6497,7 +6505,7 @@ def _require_current_chat_order(context, caller, qa, request):
                 )
                 or (evidence.get("live_snapshot") and evidence.get("answer_language_version") != 2)
             ):
-                qa["language"] = "zh" if run.language.startswith("zh") else "en"
+                qa["language"] = rendering_language(COMPOSED_LANGUAGES, run.language)
                 if run.language == "zh-Hant" and run.data_kind == "status" and evidence.get("live_snapshot"):
                     qa["language"] = "zh-Hant"
         if run and run.order_no:

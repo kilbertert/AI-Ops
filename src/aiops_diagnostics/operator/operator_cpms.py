@@ -1494,7 +1494,7 @@ class OperatorCpms:
                 for name, item in task.evidence.items()
                 if name in task.delivered
             }
-            result = operator_agent.render(answer, evidence)
+            result = operator_agent.render(answer, evidence, task.language)
 
         history_evidence = []
         for previous_id in task.history_runs:

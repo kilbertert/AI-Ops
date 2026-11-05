@@ -3,6 +3,7 @@
 import json
 from decimal import Decimal, localcontext
 
+from aiops_diagnostics.common.i18n import language_spec
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused
 from aiops_diagnostics.operator.order_analysis import number, shown
 
@@ -233,7 +234,9 @@ def _verify(snapshot, detail, billing):
 
 def report(snapshot, detail, billing, language):
     result = verify(snapshot, detail, billing)
-    zh = language.startswith("zh")
+    # 「这门语言是不是中文家族」读清单上声明的 `is_chinese`，未登记语种回落默认 zh。
+    spec = language_spec(language)
+    zh = spec.is_chinese if spec is not None else True
     if not zh:
         labels = (
             "Historical tax rate (%)",

@@ -23,7 +23,7 @@ What is NOT here, deliberately:
 
 from __future__ import annotations
 
-from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, localized_pack
 
 #: The three summary sentences. Keys mirror the branches in
 #: ``health_report.build_minimal_health_report``.
@@ -750,7 +750,9 @@ YKC_STOP_REASON_MESSAGES: dict[str, dict[str, str]] = {
 
 
 def _pack(table: dict[str, dict[str, str]], language: str) -> dict[str, str]:
-    return table.get(language) or table[DEFAULT_LANGUAGE]
+    # 缺行时的回退方向是清单上声明的事实（`LanguageSpec.fallback`），
+    # 不在本模块另写一份 —— 见 `i18n.localized_pack`。
+    return localized_pack(table, language)
 
 
 def health_summary(language: str, key: str) -> str:

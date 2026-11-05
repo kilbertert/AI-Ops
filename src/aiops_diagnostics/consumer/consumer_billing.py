@@ -90,18 +90,21 @@ def read_billing_record(base_url, order_no, *, tenant_id, user_id):
     }
 
 
-def billing_answer(snapshot, language, *, pack: dict[str, str] | None = None):
+def billing_answer(snapshot, language, *, localized=True, pack: dict[str, str] | None = None):
     """本人这张单的账务记录。
 
     措辞来自 `consumer_plain`：先把「这单多少钱、付了多少、退没退」说成一句，
     再逐项解释术语。已有的免责语义逐字保留 —— 把「不证明已经扣款」简化成
     「不证明已到账」会让读者以为钱可能到了（上一版被测试拦下过一次）。
     """
+    from aiops_diagnostics.common.i18n import rendering_language
     from aiops_diagnostics.consumer.consumer_language import COPY, live_answer
-    from aiops_diagnostics.consumer.consumer_plain import billing_text
+    from aiops_diagnostics.consumer.consumer_plain import WORDS, billing_text
 
-    if language in COPY:
+    if localized and language in COPY:
         return live_answer(snapshot, language, "billing", pack=pack)
+    # 组合面只能整句输出 `WORDS` 覆盖的语言，与 `status_answer` 同一条收口。
+    language = rendering_language(WORDS, language)
     return {
         "blocks": [{"kind": "text", "text": billing_text(language, snapshot, pack)}],
         "retrieval_status": "not_found",
