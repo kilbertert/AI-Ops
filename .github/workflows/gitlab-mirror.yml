@@ -1,0 +1,37 @@
+name: Mirror to company GitLab
+
+# Mirrors every pushed ref to the company GitLab at ai-products/ai-ops.
+# This runs on GitHub's side because the development host's managed push
+# policy forbids direct pushes to the default branch, and the company
+# GitLab cannot reach github.com for pull mirroring.
+#
+# Requires repo secret GITLAB_MIRROR_TOKEN: a GitLab token (impersonation
+# or PAT) with write_repository on ai-products/ai-ops.
+
+on:
+  push:
+
+concurrency:
+  group: gitlab-mirror
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bare-clone branches and tags
+        run: |
+          git clone --bare \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            repo.git
+          # GitHub advertises refs/pull/*; the mirror carries heads+tags only.
+          git -C repo.git for-each-ref --format='%(refname)' 'refs/pull' \
+            | xargs -r -n1 git -C repo.git update-ref -d
+      - name: Push mirror to GitLab
+        run: |
+          # Company GitLab serves a self-signed certificate.
+          git -C repo.git -c http.sslVerify=false push --mirror \
+            "https://oauth2:${{ secrets.GITLAB_MIRROR_TOKEN }}@git.qushiyun.com:801/ai-products/ai-ops.git"
