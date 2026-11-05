@@ -234,7 +234,11 @@ class NodeLoopCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["completed", "failed"]
-    reason: str | None = Field(default=None, max_length=64, pattern=r"^[a-z0-9_]*$")
+    # `tool_refused:` 前缀携带网关上行的原始拒绝码（大小写混合）；其余原因码沿用
+    # 小写下划线惯例。放宽只认这一种新形状——自由文本仍然进不来。
+    reason: str | None = Field(
+        default=None, max_length=96, pattern=r"^([a-z0-9_]*|tool_refused:[A-Za-z0-9_]{1,80})$"
+    )
 
 
 class HealthReportJobRequest(BaseModel):
@@ -1579,7 +1583,11 @@ def create_gateway_app(
         lifespan=lifespan,
     )
     app.state.gateway = context
-    from aiops_diagnostics.operator.operator_cpms import OperatorCpms, OperatorRefused
+    from aiops_diagnostics.operator.operator_cpms import (
+        FEEDBACK_REFUSALS,
+        OperatorCpms,
+        OperatorRefused,
+    )
 
     context.operator_cpms = OperatorCpms(context)
     from aiops_diagnostics.consumer.consumer_tool_grants import ConsumerToolGrants
@@ -1596,19 +1604,23 @@ def create_gateway_app(
         if request.url.path.endswith("/completions"):
             safe_code = code if re.fullmatch(r"[A-Z][A-Z0-9_]{1,80}", code) else "OPERATOR_REFUSED"
             logging.getLogger("aiops.operator").warning("operator_completion_refused code=%s", safe_code)
+        error = {
+            "code": code,
+            "message": (
+                "当前账号未分配可诊断场站，请联系公司管理员分配或切换账号"
+                if code == "OPERATOR_SITE_SCOPE_REQUIRED"
+                else "operator request unavailable"
+            ),
+            "retryable": False,
+        }
+        if request.url.path.startswith("/v1/internal/") and code in FEEDBACK_REFUSALS:
+            # 节点看得懂的标记：这是模型能自己处理的业务拒绝，回喂而不是终结整轮。
+            # 旧节点忽略这两个字段，行为与现状一致；用户侧路径永远不带它们。
+            error["feedback"] = True
+            error["hint"] = FEEDBACK_REFUSALS[code]
         return JSONResponse(
             status_code=410 if code == "OPERATOR_RESULT_RETRACTED" else 403,
-            content={
-                "error": {
-                    "code": code,
-                    "message": (
-                        "当前账号未分配可诊断场站，请联系公司管理员分配或切换账号"
-                        if code == "OPERATOR_SITE_SCOPE_REQUIRED"
-                        else "operator request unavailable"
-                    ),
-                    "retryable": False,
-                }
-            },
+            content={"error": error},
             headers={"Cache-Control": "no-store"},
         )
 

@@ -243,8 +243,21 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                     return "model_quota_exhausted";
                 }
             }
+            // 工具被拒终结整轮时保留**原始拒绝码**归因：不再糊成 model_failed。
+            // 能被回喂的拒绝不会走到这里——它们已经是工具结果了。
+            if (error instanceof CpmsReadTool.CpmsRefused refused) {
+                return "tool_refused:" + reasonCode(refused.upstreamCode());
+            }
+            if (error instanceof GatewayClient.GatewayRefused refused) {
+                return "tool_refused:" + reasonCode(refused.code());
+            }
         }
         return "model_failed";
+    }
+
+    /** reason 只允许定长小写字母数字下划线；异常形状的码一律归 unknown。 */
+    private static String reasonCode(String code) {
+        return code != null && code.matches("[A-Za-z0-9_]{1,80}") ? code : "unknown";
     }
 
     /** 失败通知：尽力而为，绝不因为通知失败而改变本地错误路径。 */
