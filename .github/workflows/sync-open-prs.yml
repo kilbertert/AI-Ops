@@ -1,46 +1,24 @@
 name: Sync Open PRs
 
-# Keeps every open pull request from stalling on "update branch", and hands a real
-# conflict to the agent that already knows how to fix one.
-#
-# Why this exists (measured 2026-10-23): `main` took 32 merges in one day. Branch
-# protection is strict (`strict_required_status_checks_policy: true`), so every
-# merge leaves every other open PR BEHIND. And GitHub does not dispatch
-# `pull_request` workflows at all for a PR that has a merge conflict — the PR shows
-# DIRTY and CI looks "slow" when it never started (measured on #643: zero `CI` runs).
-#
-# The fix for the conflict *source* is the split into per-entry documents
-# (`AGENTS.md`); this workflow only handles what is left: a PR that is merely
-# behind, and a PR that genuinely conflicts.
-#
-# ⚠️ Do not reimplement conflict resolution here. `agent-update-branch.yml` already
-# does it with a real trust boundary — trusted controller checked out separately
-# from the candidate, a read-only token for the candidate, `AGENT_PAT` only for the
-# final push, and a policy check on the result. A second, simpler merge path would
-# be a second place to be wrong, and the simpler one is the one that would drift.
-# This workflow's whole job is to decide *which* PRs get that treatment.
-#
-# ⚠️ Runs on GitHub-hosted, not self-hosted, for the same reason `cd-watch.yml`
-# does: a watcher sharing a machine with what it watches goes quiet exactly when
-# that machine breaks. It runs `gh` only — no candidate code, no production.
-
+# main 与定时事件只报告状态；手动指定一个 PR 才更新，不改写提交历史。
+# 这不是合并队列：严格 base 检查、人工 review 和 Ruleset 继续决定是否可合并。
 on:
   push:
     branches: [main]
   schedule:
-    # Once a day, so a PR that fell behind while no one was merging is not
-    # stranded until the next merge. Off the hour to avoid the runner stampede.
     - cron: "23 3 * * *"
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "明确要同步 main 的 PR 编号（不会合并 PR）"
+        required: true
+        type: number
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 concurrency:
-  # A push to main and the daily tick can overlap; both enumerate PRs from scratch,
-  # so the older run adds nothing. Serialize rather than cancel: a cancelled run
-  # could stop between "labelled" and "reported".
   group: sync-open-prs
   cancel-in-progress: false
 
@@ -50,116 +28,50 @@ jobs:
     timeout-minutes: 10
     env:
       GH_REPO: ${{ github.repository }}
-      # A label applied with `GITHUB_TOKEN` does NOT trigger the workflow that
-      # listens for it — `agent-promote-queued.yml` hit exactly this and had to
-      # use AGENT_PAT for the same reason. Without this token the DIRTY half of
-      # this workflow silently does nothing.
-      GH_TOKEN: ${{ secrets.AGENT_PAT }}
     steps:
       - name: Refuse to run without a token that can trigger workflows
+        if: github.event_name == 'workflow_dispatch'
         env:
-          TOKEN: ${{ secrets.AGENT_PAT }}
+          GH_TOKEN: ${{ secrets.AGENT_PAT }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "AGENT_PAT is required: a GITHUB_TOKEN label cannot trigger agent-update-branch.yml" >&2
+          if [ -z "$GH_TOKEN" ]; then
+            echo 'AGENT_PAT is required; GITHUB_TOKEN cannot trigger downstream CI' >&2
             exit 1
           fi
 
-      - name: Update behind and conflicting pull requests
+      - name: Update one delivery candidate
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.AGENT_PAT }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-
-          # mergeStateStatus is computed lazily; right after a push it reads
-          # UNKNOWN for a few seconds. Wait rather than misclassify a PR as
-          # neither-behind-nor-conflicting.
-          for attempt in 1 2 3 4 5 6; do
-            rows=$(gh pr list --base main --state open --limit 100 \
-              --json number,isDraft,mergeStateStatus,autoMergeRequest)
-            if ! jq -e 'any(.[]; .mergeStateStatus == "UNKNOWN")' <<<"$rows" >/dev/null; then
-              break
-            fi
-            echo "mergeability still UNKNOWN (attempt $attempt); waiting"
-            sleep 10
-            if [ "$attempt" = 6 ]; then
-              echo "::warning::some PRs still report UNKNOWN; they are skipped this run"
-            fi
-          done
-
-          # Drafts are excluded on purpose: a draft's conflicts block nobody, and
-          # an agent run against a half-finished branch is pure waste.
-          #
-          # One line per PR, not a space-separated word list: an empty result must
-          # produce zero iterations. `for number in $empty` happens to work, but
-          # `<<<"$empty"` inside the loop body reads nothing and `grep` then blocks
-          # on stdin — verified in bash. Read with `while read` so an empty list is
-          # simply no lines.
-          behind=$(jq -r '.[] | select(.isDraft == false and .mergeStateStatus == "BEHIND") | .number' <<<"$rows")
-          dirty=$(jq -r '.[] | select(.isDraft == false and .mergeStateStatus == "DIRTY") | .number' <<<"$rows")
-
-          echo "behind: $(tr '\n' ' ' <<<"$behind" | sed 's/^ *$/<none>/')"
-          echo "dirty:  $(tr '\n' ' ' <<<"$dirty"  | sed 's/^ *$/<none>/')"
-
-          # Both mutation paths rewrite the branch or hand it to an agent, so both
-          # need the same guards. Putting them only in the DIRTY path was a real
-          # defect: a BEHIND PR that someone is assigned to, or that the implement
-          # agent is mid-flight on, would be rebased out from under its holder.
-          #
-          # Returns 0 when the PR may be touched, 1 when it must be left alone.
-          may_touch() {
-            local number=$1 labels assignees
-
-            # An agent is already on it: `agent-update-branch.yml` removes the
-            # trigger label when it starts, so re-adding it here would suggest a
-            # queue that does not exist. `agent:blocked` means the agent already
-            # tried and gave up — retrying it unchanged would loop.
-            labels=$(gh pr view "$number" --json labels --jq '[.labels[].name] | join(",")')
-            case ",${labels}," in
-              *,agent:in-progress,*|*,agent:update-branch,*|*,agent:blocked,*)
-                echo "::notice::#${number} already has an agent state (${labels}); leaving it alone" >&2
-                return 1
-                ;;
-            esac
-
-            # A PR with an assignee is someone's active work. Rewriting it would
-            # move a branch another person is holding, and the repository rule is
-            # not to rewrite a published task branch merely to resolve drift.
-            assignees=$(gh pr view "$number" --json assignees --jq '.assignees | length')
-            if [ "$assignees" != "0" ]; then
-              echo "::notice::#${number} is assigned; not touching it" >&2
-              return 1
-            fi
-            return 0
-          }
-
-          while read -r number; do
-            [ -n "$number" ] || continue
-            # A PR can be simultaneously BEHIND and DIRTY; DIRTY wins, because
-            # update-branch cannot resolve a conflict and would just fail.
-            if grep -qx "$number" <<<"$dirty"; then
-              continue
-            fi
-            may_touch "$number" || continue
-            echo "::notice::#${number} is behind — updating branch"
-            if ! gh pr update-branch "$number" --rebase; then
-              # Not fatal: the PR may have become DIRTY between the listing and
-              # this call, or the repository may disallow rebasing. It will be
-              # picked up as DIRTY on the next run.
-              echo "::warning::#${number} could not be updated in place; leaving it for the next run"
-            fi
-          done <<<"${behind:-}"
-
-          while read -r number; do
-            [ -n "$number" ] || continue
-            may_touch "$number" || continue
-
-            echo "::notice::#${number} conflicts — handing it to agent-update-branch"
-            gh pr edit "$number" --add-label "agent:update-branch"
-          done <<<"${dirty:-}"
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo 'PR 编号必须是正整数' >&2; exit 1; }
+          fields=number,state,baseRefName,isDraft,mergeStateStatus,author,isCrossRepository,assignees,labels,headRefOid
+          current=$(gh pr view "$PR_NUMBER" --json "$fields")
+          # $owner 是 jq 参数，不由 shell 展开。
+          # shellcheck disable=SC2016
+          eligible='.state == "OPEN" and .baseRefName == "main" and .isDraft == false
+            and .author.login == $owner and .isCrossRepository == false
+            and (.assignees | length == 0)
+            and all(.labels[]; .name != "agent:in-progress" and .name != "agent:update-branch" and .name != "agent:blocked")
+            and .mergeStateStatus == "BEHIND"'
+          if ! jq -e --arg owner "$REPOSITORY_OWNER" "$eligible" <<<"$current" >/dev/null; then
+            echo "#$PR_NUMBER 不满足同步条件；状态、占用或冲突需由原作者处理。" >&2
+            exit 1
+          fi
+          # expected_head_sha 防止覆盖读取之后作者刚推送的新提交。
+          head=$(jq -r '.headRefOid' <<<"$current")
+          gh api --method PUT "repos/$GH_REPO/pulls/$PR_NUMBER/update-branch" -f expected_head_sha="$head"
+          echo "已请求将 main 合入 #$PR_NUMBER；保留历史，等待新提交的必需 CI。" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Summarise what is still blocked
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh pr list --base main --state open --limit 100 \
-            --json number,title,isDraft,mergeStateStatus \
-            --jq '.[] | select(.isDraft == false) | select(.mergeStateStatus == "DIRTY" or .mergeStateStatus == "BLOCKED") | "#\(.number) \(.mergeStateStatus) — \(.title)"' \
-            | tee -a "$GITHUB_STEP_SUMMARY" || true
+            --json number,isDraft,mergeStateStatus \
+            --jq '.[] | select(.isDraft == false) | "#\(.number): \(.mergeStateStatus)"' \
+            >> "$GITHUB_STEP_SUMMARY"
