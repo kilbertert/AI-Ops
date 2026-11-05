@@ -2,10 +2,14 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export function current(pr, repo, number, head) {
+export function validatePr(pr) {
   if (!pr || !Number.isInteger(pr.number) || !['open', 'closed'].includes(pr.state)) {
     throw new Error('PR response is incomplete');
   }
+}
+
+export function current(pr, repo, number, head) {
+  validatePr(pr);
   return pr.number === Number(number) && pr.state === 'open' && !pr.merged
     && pr.user?.login === repo.split('/')[0] && pr.head?.repo?.full_name === repo
     && pr.base?.repo?.full_name === repo && pr.head?.sha === head;
@@ -15,9 +19,11 @@ export function readPr(repo, number) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? '') || !/^[1-9]\d*$/.test(number ?? '')) {
     throw new Error('Repository and PR number are required');
   }
-  return JSON.parse(execFileSync('gh', ['api', `repos/${repo}/pulls/${number}`], {
+  const pr = JSON.parse(execFileSync('gh', ['api', `repos/${repo}/pulls/${number}`], {
     encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'],
   }));
+  validatePr(pr);
+  return pr;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

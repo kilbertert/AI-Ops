@@ -7,6 +7,7 @@ export function runnerSummary(runners) {
   if (matching.some(r => r.labels.some(l => l.name.toLowerCase() === 'self-hosted'))) {
     return { kind: 'shared', message: '部署runner误带self-hosted标签，agent可能抢占' };
   }
+  if (matching.some(r => !['online', 'offline'].includes(r.status) || typeof r.busy !== 'boolean')) return runnerSummary(null);
   const online = matching.filter(r => r.status === 'online');
   return { kind: online.length ? (online.every(r => r.busy) ? 'busy' : 'available') : 'offline',
     message: `部署runner：匹配${matching.length}，在线${online.length}，忙碌${online.filter(r => r.busy).length}` };

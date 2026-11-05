@@ -40,7 +40,8 @@ assert.equal(current({...pr, state: 'open', merged: false}, repo, '7', 'b'.repea
 assert.throws(() => current({}, repo, '7', head));
 assert.throws(() => completePages([{total_count: 101, workflow_runs: [run]}]));
 assert.deepEqual(completePages([{total_count: 1, workflow_runs: [run]}]), [run]);
-assert.throws(() => completePages([{total_count: 2, workflow_runs: [run]}, {total_count: 2, workflow_runs: [run]}]));
+assert.throws(() => completePages([
+  {total_count: 2, workflow_runs: [run]}, {total_count: 2, workflow_runs: [run]}]));
 """
     subprocess.run(["node", "--input-type=module", "-e", script], cwd=ROOT, check=True)
 
@@ -163,6 +164,7 @@ assert.equal(runnerSummary(null).kind, 'unknown');
 assert.equal(runnerSummary([]).kind, 'missing');
 const runner = {labels: [{name: 'aiops-deploy'}], status: 'online', busy: false};
 assert.equal(runnerSummary([runner]).kind, 'available');
+assert.equal(runnerSummary([{...runner, busy: undefined}]).kind, 'unknown');
 assert.equal(runnerSummary([{...runner,labels:[{name:'AIOPS-DEPLOY'}]}]).kind, 'available');
 assert.equal(runnerSummary([{...runner,busy:true}]).kind, 'busy');
 assert.equal(runnerSummary([{...runner,status:'offline'}]).kind, 'offline');
