@@ -271,3 +271,21 @@ def test_agent_trial_uses_same_tools_and_rechecks_selected_objects(tmp_path, mon
             .status_code
             == 404
         )
+
+
+def test_recent_orders_preserve_authoritative_ordering_and_database_time():
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.consumer.consumer_agent import _query
+
+    runtime = SimpleNamespace(_require_chat_order_visible=lambda caller, order: None)
+    binding = SimpleNamespace(live_order_status=True, live_billing_record=True)
+    rows = [
+        {"order_no": "NEW", "created_time": datetime(2026, 11, 5, 10, 0)},
+        {"order_no": "OLDER", "created_time": datetime(2026, 11, 4, 10, 0)},
+    ]
+    result = _query(runtime, None, binding, None, "orders", "", "", None, None, lambda caller: rows)
+    assert result["latest_order_no"] == "NEW"
+    assert result["orders"][0]["created_time"] == "2026-11-05T10:00:00"
+    json.dumps(result)

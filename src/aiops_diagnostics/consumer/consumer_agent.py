@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
 
 from aiops_diagnostics.consumer import consumer_knowledge
 from aiops_diagnostics.consumer.consumer_binding import deliverable_binding, identity, require_pinned
@@ -236,7 +237,7 @@ def _query(runtime, caller, binding, run, resource, query, order, libraries, rea
             runtime._require_chat_order_visible(caller, number)
             orders.append(
                 {
-                    k: row[k]
+                    k: row[k].isoformat() if isinstance(row[k], (date, datetime)) else row[k]
                     for k in ("order_no", "created_time", "start_time", "end_time", "station_name")
                     if k in row
                 }
