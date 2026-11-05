@@ -2,6 +2,9 @@
 
 日期：2026-10-18
 状态：已采纳
+
+2026-11-05：[ADR 0220](0220-evidence-first-verification.md)修订本记录中测试证据的绝对表述；
+当前执行统一读取[验证分工](../agents/verification-workflow.md)，独立反例与两条入口的决定保留。
 影响版本：AFK 脚手架模板 1.7.25（`.sandcastle/review/axis-prompt.md` 新增 `# YOUR JOB`）；
 不改任何运行时代码
 
@@ -11,7 +14,7 @@
 
 | 链路 | 加载的 prompt | 1.7.24 覆盖 |
 |---|---|---|
-| 本机 ralph（`planner.ts:292`） | `.sandcastle/review-prompt.md` | ✅ |
+| 本机 ralph（`planner.ts` 的 Review 派发段） | `.sandcastle/review-prompt.md` | ✅ |
 | Actions `agent:review`（`review.ts:178`） | `.sandcastle/review/axis-prompt.md` | ❌ |
 
 1.7.24 把对抗授权交付到了第一条，并在其 ADR 里**明确考虑、且正确地否掉**了
