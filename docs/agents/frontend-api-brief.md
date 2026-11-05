@@ -762,8 +762,10 @@ X-Business-Entry: consumer                       # 建议始终显式（§2.1）
 Accept-Language: zh                              # 可选，影响 label/description 语言
 ```
 
-该读取接口复用助手只读权限；创建、发布、停用等管理操作继续需要
-`aiops:shortcuts:manage`，并额外校验对应管理角色。
+该读取接口复用助手只读权限。创建、发布、停用等管理操作的**能力判据**是
+对应管理角色（由公司权限码推导，ADR-0084）；路由同时把 `aiops:shortcuts:manage`
+声明为所需 scope，但该声明只在断言 scope 的凭据链（`ASSERTED` 档）上被逐一
+比对 —— 会话/公司令牌链上它不是授权依据（见 GLOSSARY「能力来源档」）。
 
 响应 `200`（2026-09-15 41 公网真实返回）：
 

@@ -117,6 +117,7 @@ from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_UNAVAILABLE,
     CallerAuthError,
 )
+from aiops_diagnostics.identity.capability import CAPABILITY_DERIVED
 from aiops_diagnostics.identity.data_scope_rule import entry_data_scope
 from aiops_diagnostics.identity.query_scope import (
     ShopDirectory,
@@ -255,7 +256,9 @@ class CompanyTokenCallerResolver:
         # ``source_key`` 同样无意义：**校验在分派处**（``SourceKeyCallerResolver``），能进到本方法
         # 说明门已经放行过。不在这里再验一次是有意的 —— 两处校验一旦漂移，漂移方向就是「其中一处
         # 放行」，而这里没有配置可比（密钥在分派器的配置里，不在本解析器里）。
-        del third_session, source_key
+        # #1040：``required_scope`` 同理 —— 本链是 DERIVED 档，请求的 scope 不被
+        # 读取；读它就是把回声写回 ``permissions`` 的形状复活。
+        del third_session, source_key, required_scope
         if not token or token.startswith("aops_"):
             raise CallerAuthError("invalid access token", code=CALLER_AUTH_INVALID)
         claims = self._claims(token)
@@ -294,9 +297,11 @@ class CompanyTokenCallerResolver:
             # 暴露）。读不到就保持空集 —— fail closed 的方向不变，只是不再把「上游没答」
             # 当成「这个人没有权限」的**唯一**可能。
             roles=self._roles(token),
-            # 与会话解析器一致：令牌已由公司校验，能力面不在这里裁；``required_scope`` 照常
-            # 通过，因此本路径不产出 403。
-            permissions=frozenset({required_scope}),
+            # DERIVED（#1040）：令牌已由公司校验，能力面由目录推导的角色裁，
+            # 请求的 scope 不参与 —— 记空集是「本链没有断言任何能力」。这条路径
+            # 不产出 403，但空集**不是**「调用者没有权限」的回声，是如实说「没断言」。
+            permissions=frozenset(),
+            capability_source=CAPABILITY_DERIVED,
         )
 
     def _data_scope(

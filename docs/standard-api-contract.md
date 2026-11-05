@@ -396,7 +396,7 @@ Authorization: Bearer <access_token>
 |---:|---|---|
 | 401 | `ACCESS_TOKEN_REQUIRED` | 缺少 Bearer token |
 | 401 | `INVALID_ACCESS_TOKEN` | token 无效、过期或不是 cloud-auth token |
-| 403 | `INSUFFICIENT_SCOPE` | 调用方没有接口所需能力 |
+| 403 | `INSUFFICIENT_SCOPE` | 凭据断言的 scope 集合不含本接口所需 scope。**只有断言 scope 的凭据链（`ASSERTED` 档）会产生此错**；会话/公司令牌/UPMS 链不做 scope 成员判定，那里的能力判据是角色门（见 GLOSSARY「能力来源档」） |
 | 400/422 | `INVALID_REQUEST` | 参数格式或字段不合法 |
 | 404 | `ORDER_NOT_FOUND` | 订单不存在或不在当前授权范围；不区分两者 |
 | 404 | `REPORT_JOB_NOT_FOUND` | 作业不存在或不属于当前调用者 |

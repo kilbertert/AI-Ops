@@ -29,6 +29,7 @@ from aiops_diagnostics.dify.dify_app_registry import (
     DifyAppRegistry,
     DifyAppRegistryError,
 )
+from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from aiops_diagnostics.publication.agent_manifest import (
@@ -67,6 +68,7 @@ class _Caller:
             data_scope=DataScope(type="self"),
             roles=frozenset({"ROLE_AGENT_ADMIN"}),
             permissions=frozenset({required_scope}),
+            capability_source=CAPABILITY_ASSERTED,
         )
 
 

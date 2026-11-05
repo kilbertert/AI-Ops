@@ -32,6 +32,7 @@ from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure, Req
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
 from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
+from aiops_diagnostics.identity.capability import CAPABILITY_UNASSERTED
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 #: 授权记录的有效期（契约 §4：固定 180 秒，不续期；到期须从已认证入口重新授权）。
@@ -235,6 +236,7 @@ def scope_to_json(context: ScopeContext) -> str:
             },
             "roles": sorted(context.roles),
             "permissions": sorted(context.permissions),
+            "capability_source": context.capability_source,
             "resolved_at": format_stored_time(context.resolved_at),
             "scope_fingerprint": context.scope_fingerprint,
         },
@@ -263,6 +265,9 @@ def scope_from_json(raw: str) -> ScopeContext:
         ),
         roles=frozenset(data["roles"]),
         permissions=frozenset(data["permissions"]),
+        # 早于 #1040 落库的行没有这一键：它们的 ``permissions`` 可能是回声形状，
+        # 记 ``UNASSERTED`` 只表示「当时没有档位记录」，不改写历史字段。
+        capability_source=str(data.get("capability_source") or CAPABILITY_UNASSERTED),
         resolved_at=parse_stored_time(data["resolved_at"]),
         scope_fingerprint=fingerprint,
     )

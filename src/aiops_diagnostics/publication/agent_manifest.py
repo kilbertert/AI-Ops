@@ -592,6 +592,7 @@ def _admin_context_factory() -> Any:
     """Synthetic admin ScopeContext per tenant (mirrors the test _context
     pattern in tests/publication/test_agent_lifecycle.py; b_user_id flows into
     created_by/published_by so reconcile writes stay auditable)."""
+    from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
     from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
     def _context(tenant_id: str):
@@ -603,7 +604,9 @@ def _admin_context_factory() -> Any:
             effective_tenant_id=tenant_id,
             data_scope=DataScope(type="self"),
             roles=frozenset({"ROLE_AGENT_ADMIN", "ROLE_PLATFORM_ADMIN"}),
+            # 合成上下文：断言就是代码写下的这组能力，记 ASSERTED 档（#1040）。
             permissions=frozenset({"aiops:agents:manage"}),
+            capability_source=CAPABILITY_ASSERTED,
         )
 
     return _context

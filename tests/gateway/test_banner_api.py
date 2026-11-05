@@ -28,6 +28,7 @@ from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
+from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
 
@@ -65,6 +66,7 @@ class _Caller:
             data_scope=DataScope(type="self"),
             roles=frozenset(roles),
             permissions=frozenset({required_scope}),
+            capability_source=CAPABILITY_ASSERTED,
         )
 
 

@@ -39,6 +39,7 @@ from aiops_diagnostics.common.bounded_http import (
 )
 from aiops_diagnostics.common.config import UpmsSettings
 from aiops_diagnostics.common.scalar_rules import as_integer, format_stored_time
+from aiops_diagnostics.identity.capability import CAPABILITY_SOURCES, CAPABILITY_UNASSERTED
 
 SCOPE_ERROR_AUTH_FAILED = "scope.auth_failed"
 SCOPE_ERROR_CONFIG_MISSING = "scope.config_missing"
@@ -251,6 +252,12 @@ class ScopeContext:
     调用者与目标主体是两个独立身份；有效租户、业务数据范围、调用者有效角色（含
     继承）和能力权限共同确定本次运行允许的查询范围。``scope_fingerprint`` 是上述
     范围语义的确定性哈希，供审计归因使用。
+
+    ``permissions`` 是**本链断言过的能力集**（#1040）：``ASSERTED`` 链记凭据声明的
+    原集合，``DERIVED``/``UNASSERTED`` 链记空集——它们没有断言任何能力，写非空
+    就是把「路由问它要什么」冒充成「凭据说它有什么」。档位本身记录在
+    ``capability_source``，规则只有一份（``capability.py``）；两者都**不进**指纹，
+    因为能力档位不改变任何可见性判定。
     """
 
     caller: SubjectRecord
@@ -260,10 +267,13 @@ class ScopeContext:
     data_scope: DataScope
     roles: frozenset[str]
     permissions: frozenset[str]
+    capability_source: str = CAPABILITY_UNASSERTED
     resolved_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     scope_fingerprint: str = ""
 
     def __post_init__(self) -> None:
+        if self.capability_source not in CAPABILITY_SOURCES:
+            raise ValueError(f"未知能力来源档: {self.capability_source}")
         expected = _scope_fingerprint(
             caller=self.caller,
             subject=self.subject,
@@ -288,6 +298,7 @@ class ScopeContext:
         data_scope: DataScope,
         roles: frozenset[str],
         permissions: frozenset[str],
+        capability_source: str = CAPABILITY_UNASSERTED,
         resolved_at: datetime | None = None,
     ) -> ScopeContext:
         return cls(
@@ -298,6 +309,7 @@ class ScopeContext:
             data_scope=data_scope,
             roles=frozenset(roles),
             permissions=frozenset(permissions),
+            capability_source=capability_source,
             resolved_at=resolved_at or datetime.now(UTC),
             scope_fingerprint="",
         )
@@ -312,6 +324,7 @@ class ScopeContext:
             "delegated": self.delegated,
             "effective_tenant_id": self.effective_tenant_id,
             "data_scope_type": self.data_scope.type,
+            "capability_source": self.capability_source,
             "scope_fingerprint": self.scope_fingerprint,
             "resolved_at": format_stored_time(self.resolved_at),
         }

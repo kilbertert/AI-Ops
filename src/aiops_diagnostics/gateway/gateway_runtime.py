@@ -31,6 +31,7 @@ from aiops_diagnostics.health.health_report import (
     HealthReportError,
     build_minimal_health_report,
 )
+from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
 from aiops_diagnostics.identity.order_visibility import tenant_matches
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import SCOPE_TYPE_ALL, DataScope, ScopeContext, SubjectRecord
@@ -2267,5 +2268,7 @@ def _tenant_wide_context(tenant_id: str) -> ScopeContext:
         effective_tenant_id=tenant_id,
         data_scope=DataScope(type=SCOPE_TYPE_ALL),
         roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        # 合成上下文：断言就是代码写下的这组能力，记 ASSERTED 档（#1040）。
         permissions=frozenset({"aiops:agents:manage"}),
+        capability_source=CAPABILITY_ASSERTED,
     )
