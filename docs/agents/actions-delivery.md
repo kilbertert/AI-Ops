@@ -1,7 +1,7 @@
 # Actions 交付手册
 
 代码检查通过、代码合并、组件部署和业务验收是四个结果。本手册描述本次调整后的行为；
-生效条件是对应 PR 经评审合并。设计依据见 [ADR](../adr/0232-actions-delivery-flow.md)。
+生效条件是对应 PR 经评审合并。设计依据见 [ADR](../adr/0233-actions-delivery-flow.md)。
 
 ## 从提交到交付
 

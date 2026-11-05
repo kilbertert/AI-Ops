@@ -59,57 +59,67 @@ def start(
     current(runtime, caller, binding)
     if binding.content_file or binding.content_snapshot is not None:
         consumer_knowledge.binding_content(binding, caller)
-    previous = runtime.dify_run_store.latest_conversation_run(
-        conversation["conversation_id"], caller.scope_fingerprint
-    )
+    agent_context = None
     upstream = ""
-    if (
-        uses_context
-        and expected_previous_qa_id is not None
-        and (previous.qa_id if previous else "") != expected_previous_qa_id
-    ):
-        from aiops_diagnostics.consumer.consumer_intent import message
+    if binding.callback_version == 6:
+        from aiops_diagnostics.consumer import consumer_agent
 
-        raise chat_execution.ChatRunUnavailable(
-            "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("context", language), http_status=409
+        agent_context = consumer_agent.conversation_context(
+            runtime, caller, conversation, registration.conversation_turn[2], order_no
         )
-    if previous:
-        previous_qa = runtime.store.get_assistant_question(previous.qa_id, caller.scope_fingerprint)
+        data_kind = "agent"
+    else:
+        previous = runtime.dify_run_store.latest_conversation_run(
+            conversation["conversation_id"], caller.scope_fingerprint
+        )
+        upstream = ""
         if (
-            previous_qa is None
-            or previous_qa["status"] != "completed"
-            or previous.state != "succeeded"
-            or previous.binding_digest != fingerprint(binding)
-            or previous.workflow_id != binding.workflow_id
-            or previous.route_revision != binding.route_revision
-            or previous.agent_version_no != binding.agent_version_no
+            uses_context
+            and expected_previous_qa_id is not None
+            and (previous.qa_id if previous else "") != expected_previous_qa_id
         ):
-            from aiops_diagnostics.consumer.consumer_intent import message
-
-            raise chat_execution.ChatRunUnavailable(
-                "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("conversation", language), http_status=409
-            )
-        if still_valid(previous) and uses_context:
-            require_result(runtime, caller, previous_qa)
-            upstream = previous.upstream_conversation_id
-            if not upstream:
-                raise chat_execution.ChatRunUnavailable(
-                    "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
-                )
-        elif uses_context:
             from aiops_diagnostics.consumer.consumer_intent import message
 
             raise chat_execution.ChatRunUnavailable(
                 "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("context", language), http_status=409
             )
-    # 单据轮次及其下一轮均不继承上游记忆，旧订单数据不会进入后续模型输入。
-    if (
-        binding.callback_version >= 4
-        or order_no
-        or photo_id
-        or (previous and (previous.order_no or previous.has_photo))
-    ):
-        upstream = ""
+        if previous:
+            previous_qa = runtime.store.get_assistant_question(previous.qa_id, caller.scope_fingerprint)
+            if (
+                previous_qa is None
+                or previous_qa["status"] != "completed"
+                or previous.state != "succeeded"
+                or previous.binding_digest != fingerprint(binding)
+                or previous.workflow_id != binding.workflow_id
+                or previous.route_revision != binding.route_revision
+                or previous.agent_version_no != binding.agent_version_no
+            ):
+                from aiops_diagnostics.consumer.consumer_intent import message
+
+                raise chat_execution.ChatRunUnavailable(
+                    "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("conversation", language), http_status=409
+                )
+            if still_valid(previous) and uses_context:
+                require_result(runtime, caller, previous_qa)
+                upstream = previous.upstream_conversation_id
+                if not upstream:
+                    raise chat_execution.ChatRunUnavailable(
+                        "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
+                    )
+            elif uses_context:
+                from aiops_diagnostics.consumer.consumer_intent import message
+
+                raise chat_execution.ChatRunUnavailable(
+                    "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("context", language), http_status=409
+                )
+        # 单据轮次及其下一轮均不继承上游记忆，旧订单数据不会进入后续模型输入。
+        if (
+            binding.callback_version >= 4
+            or order_no
+            or photo_id
+            or (previous and (previous.order_no or previous.has_photo))
+        ):
+            upstream = ""
     image = (
         runtime.consumer_photos.take(photo_id, caller.scope_fingerprint, fingerprint(binding))
         if photo_id
@@ -160,6 +170,8 @@ def start(
             data_kind=data_kind,
             has_photo=bool(image),
         )
+        if agent_context is not None:
+            consumer_agent.initialize(runtime, run_id, agent_context)
         runtime._qa_registrations[qa["qa_id"]] = registration
         future = runtime._executor.submit(
             execute, runtime, caller, qa, question, binding, upstream, registration, language, token, image
@@ -231,26 +243,43 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             or latest.binding_digest != fingerprint(binding)
         ):
             raise ValueError("run ended during upload")
+        inputs = {
+            "language": language,
+            "has_photo": "yes" if uploaded else "no",
+            **(
+                {"data_kind": latest.data_kind if latest.order_no else "knowledge"}
+                if binding.callback_version >= 2
+                else {}
+            ),
+            **({"data_grant": token} if token else {}),
+        }
+        if binding.callback_version == 6:
+            import json
+
+            from aiops_diagnostics.consumer import consumer_agent
+
+            consumer_agent.require_evidence(runtime, caller, binding, store.context(run_id))
+
+            inputs = {
+                "language": language,
+                "data_grant": token,
+                "conversation_context": json.dumps(store.context(run_id)["conversation"], ensure_ascii=False),
+            }
         reply = client.run(
             key=key,
             workflow_id=binding.workflow_id,
             user=user,
             query=question,
-            inputs={
-                "language": language,
-                "has_photo": "yes" if uploaded else "no",
-                **(
-                    {"data_kind": latest.data_kind if latest.order_no else "knowledge"}
-                    if binding.callback_version >= 2
-                    else {}
-                ),
-                **({"data_grant": token} if token else {}),
-            },
+            inputs=inputs,
             **({"photo_id": uploaded} if uploaded else {}),
             conversation_id=upstream,
             on_started=started,
         )
-        if not latest.order_no and latest.data_kind not in {"clarify", "human", "order_required"}:
+        if (
+            binding.callback_version != 6
+            and not latest.order_no
+            and latest.data_kind not in {"clarify", "human", "order_required"}
+        ):
             from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
 
             require_available(runtime, caller, binding)
@@ -264,7 +293,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             or run.binding_digest != fingerprint(binding)
         ):
             raise ValueError("run is no longer active")
-        if run.order_no:
+        if binding.callback_version != 6 and run.order_no:
             runtime._require_chat_order_visible(caller, run.order_no)
             require_pinned(runtime, caller, binding)
             run = store.get(run_id)
@@ -281,7 +310,13 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
                 "cpms.orderDetail" if run.data_kind == "billing" else "cpms.chargingInfo"
             ):
                 raise ValueError("live snapshot missing or belongs to another order")
-        if binding.content_file or binding.content_snapshot is not None:
+        if binding.callback_version == 6:
+            from aiops_diagnostics.consumer import consumer_agent
+
+            context = store.context(run_id)
+            consumer_agent.require_evidence(runtime, caller, binding, context)
+            answer = consumer_agent.final_answer(reply.answer, context)
+        elif binding.content_file or binding.content_snapshot is not None:
             from aiops_diagnostics.consumer.consumer_knowledge import binding_content, final_answer
 
             content = binding_content(binding, caller)
@@ -352,6 +387,16 @@ def require_result(runtime, caller, qa):
         raise chat_execution.ChatRunUnavailable(
             "CHATFLOW_BINDING_CHANGED", "chatflow binding changed", http_status=410
         )
+    if binding.callback_version == 6:
+        from aiops_diagnostics.consumer import consumer_agent
+
+        require_pinned(runtime, caller, binding)
+        consumer_agent.require_evidence(runtime, caller, binding, runtime.dify_run_store.context(run.run_id))
+        if run.state != "succeeded" or runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):
+            raise chat_execution.ChatRunUnavailable(
+                "CHATFLOW_EVIDENCE_UNAVAILABLE", "answer evidence differs"
+            )
+        return
     if run.order_no:
         runtime._require_chat_order_visible(caller, run.order_no)
     elif run.data_kind not in {"clarify", "human", "order_required"}:

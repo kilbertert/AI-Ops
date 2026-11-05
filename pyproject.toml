@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aiops-diagnostics"
-version = "1.1.2"
+version = "1.2.1"
 description = "Read-only charging order diagnostic runtime"
 readme = "README.md"
 requires-python = ">=3.11"

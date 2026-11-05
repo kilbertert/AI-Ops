@@ -249,6 +249,8 @@ def answer_prompt(document: dict) -> str:
     nodes = ((document.get("workflow") or {}).get("graph") or {}).get("nodes") or []
     for node in nodes:
         data = node.get("data") or {}
+        if data.get("type") == "agent":
+            return str(data.get("agent_parameters", {}).get("instruction", {}).get("value", ""))[:8000]
         if data.get("type") != "llm":
             continue
         template = data.get("prompt_template") or []
@@ -267,6 +269,8 @@ def answer_model(document: dict) -> str:
     nodes = ((document.get("workflow") or {}).get("graph") or {}).get("nodes") or []
     for node in nodes:
         data = node.get("data") or {}
+        if data.get("type") == "agent":
+            return str(data.get("agent_parameters", {}).get("model", {}).get("value", {}).get("model", ""))
         if data.get("type") != "llm":
             continue
         name = str(((data.get("model") or {}).get("name")) or "")

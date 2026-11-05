@@ -536,6 +536,8 @@ def callback_context(
         binding = deliverable_binding(runtime, caller, run)
     if binding is None or (not binding.content_file and binding.content_snapshot is None):
         raise ChatRunUnavailable("CHATFLOW_BINDING_CHANGED", "knowledge binding changed", http_status=403)
+    if binding.callback_version == 6:
+        raise ChatRunUnavailable("GRANT_CAPABILITY_MISMATCH", "Agent授权仅限新版工具回调", http_status=403)
     expected = run.data_kind if run.order_no else "knowledge"
     if (binding.callback_version >= 2 and capability != expected) or (
         binding.callback_version == 1 and capability is not None

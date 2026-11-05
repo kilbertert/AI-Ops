@@ -42,6 +42,54 @@ class Model(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.requests.append(body)
         messages = body.get("messages", [])
+        if body.get("tools"):
+            results = [m for m in messages if m.get("role") == "tool"]
+            message = {"role": "assistant", "content": "请确认第2步的设备提示。"}
+            if len(results) < 4 and "第2步仍然" not in str(messages):
+                message = {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": f"call_{len(results) + 1}",
+                            "type": "function",
+                            "function": {
+                                "name": body["tools"][0]["function"]["name"],
+                                "arguments": json.dumps(
+                                    {
+                                        "resource": ["orders", "status", "billing", "knowledge"][
+                                            len(results)
+                                        ],
+                                        "query": "启动充电操作" if len(results) == 3 else "",
+                                        "order_no": "ORDER-3001" if len(results) in (1, 2) else "",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "id": "agent-test",
+                        "object": "chat.completion",
+                        "created": 0,
+                        "model": "synthetic",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": message,
+                                "finish_reason": "tool_calls" if message.get("tool_calls") else "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+                    }
+                ).encode()
+            )
+            return
         remembered = any("枪号A7" in str(m.get("content")) for m in messages)
         answer = "请核对枪号A7。" if remembered else "请先提供枪号。"
         self.send_response(200)
@@ -214,6 +262,8 @@ def isolated(args):
             }
         )
     )
+    if args.agent_conversation:
+        (root / "agent-conversation-enabled").touch()
     if args.prompt_browser:
         (root / "prompt-browser-enabled").touch()
     if args.operator_browser:
@@ -1070,8 +1120,9 @@ def main():
     parser.add_argument("--plugin-public-key")
     parser.add_argument("--prompt-browser", action="store_true")
     parser.add_argument("--operator-browser", action="store_true")
+    parser.add_argument("--agent-conversation", action="store_true")
     args = parser.parse_args()
-    if (args.prompt_browser or args.operator_browser) and not (
+    if (args.prompt_browser or args.operator_browser or args.agent_conversation) and not (
         args.knowledge_plugin and args.plugin_public_key
     ):
         parser.error("--prompt-browser 需要签名知识插件与匹配公钥")
@@ -1095,6 +1146,16 @@ def main():
             file.write(
                 "FORCE_VERIFYING_SIGNATURE=true\nTHIRD_PARTY_SIGNATURE_VERIFICATION_ENABLED=true\nTHIRD_PARTY_SIGNATURE_VERIFICATION_PUBLIC_KEYS=/app/storage/catalogue-public.pem\n"
             )
+    if (root / "agent-conversation-enabled").exists():
+        original_http = stack.http_json
+
+        def tools_model(url, *args, **kwargs):
+            if url.endswith("/models/credentials") and kwargs.get("body"):
+                kwargs["body"]["credentials"]["function_calling_type"] = "tool_call"
+            return original_http(url, *args, **kwargs)
+
+        stack.http_json = tools_model
+
     import aiops_diagnostics.dify.dify_chatflow as transport
 
     event_reader = transport._events
@@ -1133,7 +1194,12 @@ def main():
             setup.get("app_detail", {}).get("mode") == "advanced-chat"
             and all(s["ok"] for s in setup["steps"]),
         )
-        if (root / "operator-browser-enabled").exists() and not (root / "prompt-browser-enabled").exists():
+        if (root / "agent-conversation-enabled").exists():
+            from verify_consumer_agent import verify
+
+            verify(root, base, env, setup, model, check)
+            report["passed"] = True
+        elif (root / "operator-browser-enabled").exists() and not (root / "prompt-browser-enabled").exists():
             from verify_operator_prompt_stack import verify_operator
 
             web = stack._compose(env, "up", "-d", "web", timeout=120)

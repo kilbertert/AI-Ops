@@ -249,6 +249,11 @@ def answer_selection(raw, context, *, language="", contract="legacy"):
         or context.get("status") != "found"
     ):
         raise ChatRunUnavailable("CHATFLOW_REFERENCE_INVALID", "answer did not cite this retrieval")
+    return "knowledge", render_sources_answer(text, [sources[ref] for ref in references])
+
+
+def render_sources_answer(text, sources):
+    """来源链接和媒体由已取证资料决定，正文可以是自然语言。"""
     urls = []
     for match in ANSWER_URL.finditer(text):
         url = match.group(0)
@@ -266,7 +271,7 @@ def answer_selection(raw, context, *, language="", contract="legacy"):
         ):
             url = url[:-1]
         urls.append(url)
-    allowed = {url for ref in references for url in _URL_PATTERN.findall(sources[ref].get("content", ""))}
+    allowed = {url for source in sources for url in _URL_PATTERN.findall(source.get("content", ""))}
     if not text.strip() or len(text) > 8000:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "document answer must not generate links")
     for url in urls:
@@ -281,8 +286,7 @@ def answer_selection(raw, context, *, language="", contract="legacy"):
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid document link")
     blocks = [{"kind": "text", "text": redact_text(text.strip())}]
     seen_media = set()
-    for ref in references:
-        source = sources[ref]
+    for source in sources:
         blocks.append(
             {"kind": "reference", "reference_id": source["retrieved_reference_id"], "title": source["title"]}
         )
@@ -290,4 +294,4 @@ def answer_selection(raw, context, *, language="", contract="legacy"):
             if media["url"] not in seen_media and len(seen_media) < 4:
                 seen_media.add(media["url"])
                 blocks.append({"kind": media["kind"], "media": media, "title": source["title"]})
-    return "knowledge", {"blocks": blocks, "retrieval_status": "found"}
+    return {"blocks": blocks, "retrieval_status": "found" if sources else "not_found"}

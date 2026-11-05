@@ -3033,176 +3033,187 @@ def create_gateway_app(
                             400, "PHOTO_NOT_ALLOWED", "photo input is unavailable for this request"
                         )
                     _require_consumer_self_order(caller, "consumer", "pending")
-                    prompt_notices = service_binding.callback_version >= 5
-                    notice_kind = ""
-                    if service_binding.content_file or service_binding.content_snapshot is not None:
-                        from aiops_diagnostics.consumer import consumer_knowledge
+                    if service_binding.callback_version == 6:
+                        authenticated_chat_order_reader(context, caller, request)
+                        if payload.order_no:
+                            _require_visible_order(context, caller, payload.order_no)
+                        live_order, data_kind = payload.order_no or "", "agent"
+                        uses_context, previous = True, None
+                    else:
+                        prompt_notices = service_binding.callback_version >= 5
+                        notice_kind = ""
+                        if service_binding.content_file or service_binding.content_snapshot is not None:
+                            from aiops_diagnostics.consumer import consumer_knowledge
 
-                        local_kind = (
-                            "safety"
-                            if consumer_knowledge.SAFETY.search(payload.question)
-                            else "human"
-                            if consumer_knowledge.HUMAN.search(payload.question)
-                            else ""
+                            local_kind = (
+                                "safety"
+                                if consumer_knowledge.SAFETY.search(payload.question)
+                                else "human"
+                                if consumer_knowledge.HUMAN.search(payload.question)
+                                else ""
+                            )
+                            if not local_kind and conversation is not None:
+                                try:
+                                    followup = consumer_knowledge.followup_context(
+                                        context.runtime,
+                                        caller,
+                                        payload.question,
+                                        conversation["conversation_id"],
+                                        require_result=consumer_chat_service.require_result,
+                                    )
+                                except chat_execution.ChatRunUnavailable as exc:
+                                    if exc.code == "CHATFLOW_RESULT_EXPIRED":
+                                        return _consumer_intent_clarification("context", language)
+                                    raise
+                                if followup["unresolved_count"] >= 2:
+                                    local_kind = "human"
+                            if local_kind == "human" and prompt_notices:
+                                notice_kind = "human"
+                                local_kind = ""
+                            if local_kind:
+                                if payload.photo_id:
+                                    from aiops_diagnostics.consumer.consumer_chat_service import fingerprint
+
+                                    context.runtime.consumer_photos.take(
+                                        payload.photo_id,
+                                        caller.scope_fingerprint,
+                                        fingerprint(service_binding),
+                                    )
+                                    context.runtime.consumer_photos.finish(payload.photo_id)
+                                content = None
+                                with contextlib.suppress(ValueError, OSError, PrivatePathError):
+                                    content = consumer_knowledge.binding_content(service_binding, caller)
+                                served_language = language
+                                answer = consumer_knowledge.fallback(local_kind, served_language, content)
+                                return JSONResponse(
+                                    status_code=200,
+                                    headers={"Cache-Control": "no-store"},
+                                    content={
+                                        "type": "clarification",
+                                        "missing_fields": [],
+                                        "message": answer["blocks"][0]["text"],
+                                        "language": served_language,
+                                    },
+                                )
+                        from aiops_diagnostics.consumer import consumer_chat_service, consumer_intent
+
+                        if payload.order_no:
+                            _require_visible_order(context, caller, payload.order_no)
+                        previous, previous_question = consumer_chat_service.previous_context(
+                            context.runtime, caller, service_binding, conversation
                         )
-                        if not local_kind and conversation is not None:
+                        selection = {"intent": "knowledge", "order_reference": "none", "uses_context": False}
+                        if not payload.photo_id and payload.shortcut_code != "smart_diagnosis":
                             try:
-                                followup = consumer_knowledge.followup_context(
-                                    context.runtime,
-                                    caller,
-                                    payload.question,
-                                    conversation["conversation_id"],
-                                    require_result=consumer_chat_service.require_result,
+                                selection = consumer_intent.validate(
+                                    context.runtime.classify_consumer(
+                                        payload.question,
+                                        language=language,
+                                        previous_question=previous_question,
+                                        previous_order=bool(previous and previous.order_no),
+                                        selected_order=bool(payload.order_no),
+                                    )
                                 )
-                            except chat_execution.ChatRunUnavailable as exc:
-                                if exc.code == "CHATFLOW_RESULT_EXPIRED":
-                                    return _consumer_intent_clarification("context", language)
-                                raise
-                            if followup["unresolved_count"] >= 2:
-                                local_kind = "human"
-                        if local_kind == "human" and prompt_notices:
-                            notice_kind = "human"
-                            local_kind = ""
-                        if local_kind:
-                            if payload.photo_id:
-                                from aiops_diagnostics.consumer.consumer_chat_service import fingerprint
+                            except (ValueError, RuntimeError, OSError) as exc:
+                                from aiops_diagnostics.common.model_request import ModelRequestError
 
-                                context.runtime.consumer_photos.take(
-                                    payload.photo_id, caller.scope_fingerprint, fingerprint(service_binding)
-                                )
-                                context.runtime.consumer_photos.finish(payload.photo_id)
+                                raise _runtime_unavailable(
+                                    "CONSUMER_MODEL_QUOTA_EXHAUSTED"
+                                    if isinstance(exc, ModelRequestError) and exc.reason == "quota_exhausted"
+                                    else "CONSUMER_INTENT_UNAVAILABLE",
+                                    consumer_intent.message("unavailable", language),
+                                    exc,
+                                ) from exc
+                        if payload.shortcut_code == "smart_diagnosis":
+                            selection = {
+                                "intent": "order_status",
+                                "order_reference": "explicit",
+                                "uses_context": False,
+                            }
+                        intent, reference = selection["intent"], selection["order_reference"]
+                        uses_context = selection["uses_context"] or reference == "previous"
+                        if previous and uses_context:
+                            refreshed, _ = consumer_chat_service.previous_context(
+                                context.runtime, caller, service_binding, conversation
+                            )
+                            if refreshed is None or refreshed.qa_id != previous.qa_id:
+                                return _consumer_intent_clarification("context", language)
+                            previous = refreshed
+                        if prompt_notices and intent in {"clarify", "human"}:
+                            notice_kind = intent
+                            intent, uses_context = "knowledge", False
+                        if (
+                            prompt_notices
+                            and intent in {"order_status", "billing_record"}
+                            and reference in {"none", "unclear"}
+                        ):
+                            notice_kind = "order_required"
+                            intent, uses_context = "knowledge", False
+                        if intent in {"write_request", "clarify"}:
+                            return _consumer_intent_clarification(intent, language)
+                        if intent in {"safety", "human", "unsupported_live"}:
                             content = None
                             with contextlib.suppress(ValueError, OSError, PrivatePathError):
                                 content = consumer_knowledge.binding_content(service_binding, caller)
-                            served_language = language
-                            answer = consumer_knowledge.fallback(local_kind, served_language, content)
+                            answer = consumer_knowledge.fallback(
+                                "realtime" if intent == "unsupported_live" else intent, language, content
+                            )
                             return JSONResponse(
                                 status_code=200,
                                 headers={"Cache-Control": "no-store"},
                                 content={
                                     "type": "clarification",
                                     "missing_fields": [],
+                                    "language": language,
                                     "message": answer["blocks"][0]["text"],
-                                    "language": served_language,
                                 },
                             )
-                    from aiops_diagnostics.consumer import consumer_chat_service, consumer_intent
-
-                    if payload.order_no:
-                        _require_visible_order(context, caller, payload.order_no)
-                    previous, previous_question = consumer_chat_service.previous_context(
-                        context.runtime, caller, service_binding, conversation
-                    )
-                    selection = {"intent": "knowledge", "order_reference": "none", "uses_context": False}
-                    if not payload.photo_id and payload.shortcut_code != "smart_diagnosis":
-                        try:
-                            selection = consumer_intent.validate(
-                                context.runtime.classify_consumer(
-                                    payload.question,
-                                    language=language,
-                                    previous_question=previous_question,
-                                    previous_order=bool(previous and previous.order_no),
-                                    selected_order=bool(payload.order_no),
-                                )
-                            )
-                        except (ValueError, RuntimeError, OSError) as exc:
-                            from aiops_diagnostics.common.model_request import ModelRequestError
-
-                            raise _runtime_unavailable(
-                                "CONSUMER_MODEL_QUOTA_EXHAUSTED"
-                                if isinstance(exc, ModelRequestError) and exc.reason == "quota_exhausted"
-                                else "CONSUMER_INTENT_UNAVAILABLE",
-                                consumer_intent.message("unavailable", language),
-                                exc,
-                            ) from exc
-                    if payload.shortcut_code == "smart_diagnosis":
-                        selection = {
-                            "intent": "order_status",
-                            "order_reference": "explicit",
-                            "uses_context": False,
-                        }
-                    intent, reference = selection["intent"], selection["order_reference"]
-                    uses_context = selection["uses_context"] or reference == "previous"
-                    if previous and uses_context:
-                        refreshed, _ = consumer_chat_service.previous_context(
-                            context.runtime, caller, service_binding, conversation
-                        )
-                        if refreshed is None or refreshed.qa_id != previous.qa_id:
+                        if uses_context and previous is None:
                             return _consumer_intent_clarification("context", language)
-                        previous = refreshed
-                    if prompt_notices and intent in {"clarify", "human"}:
-                        notice_kind = intent
-                        intent, uses_context = "knowledge", False
-                    if (
-                        prompt_notices
-                        and intent in {"order_status", "billing_record"}
-                        and reference in {"none", "unclear"}
-                    ):
-                        notice_kind = "order_required"
-                        intent, uses_context = "knowledge", False
-                    if intent in {"write_request", "clarify"}:
-                        return _consumer_intent_clarification(intent, language)
-                    if intent in {"safety", "human", "unsupported_live"}:
-                        content = None
-                        with contextlib.suppress(ValueError, OSError, PrivatePathError):
-                            content = consumer_knowledge.binding_content(service_binding, caller)
-                        answer = consumer_knowledge.fallback(
-                            "realtime" if intent == "unsupported_live" else intent, language, content
-                        )
-                        return JSONResponse(
-                            status_code=200,
-                            headers={"Cache-Control": "no-store"},
-                            content={
-                                "type": "clarification",
-                                "missing_fields": [],
-                                "language": language,
-                                "message": answer["blocks"][0]["text"],
-                            },
-                        )
-                    if uses_context and previous is None:
-                        return _consumer_intent_clarification("context", language)
-                    observation = request_observation.observation_of(request)
-                    if observation is not None:
-                        observation.classify(candidate=intent == "order_status")
-                        request_observation.mark_tenant(request, caller.effective_tenant_id)
-                    live_order = ""
-                    data_kind = notice_kind or ("billing" if intent == "billing_record" else "status")
-                    if intent in {"order_status", "billing_record"}:
-                        enabled = (
-                            service_binding.live_billing_record
-                            if data_kind == "billing"
-                            else service_binding.live_order_status
-                        )
-                        if not enabled:
-                            return _consumer_intent_clarification("disabled", language)
-                        authenticated_chat_order_reader(context, caller, request)
-                        candidates = set(order_identifier_candidates(payload.question))
-                        if reference in {"unclear", "none"} or len(candidates) > 1:
-                            return _consumer_intent_clarification("order", language)
-                        if candidates and reference != "explicit":
-                            return _consumer_intent_clarification("order", language)
-                        if payload.order_no and reference != "explicit":
-                            return _consumer_intent_clarification("order", language)
-                        if payload.order_no and candidates and candidates != {payload.order_no}:
-                            return _consumer_intent_clarification("order", language)
-                        live_order = payload.order_no or (
-                            next(iter(candidates), "") if reference == "explicit" else ""
-                        )
-                        if not live_order and reference == "latest":
-                            with scoped_mysql_source(
-                                Settings.from_config(context.settings.server_config_file),
-                                resolve_query_scope(caller),
-                            ) as source:
-                                rows = source.list_orders(page=1, page_size=1)
-                            if not rows:
-                                raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
-                            live_order = str(rows[0]["order_no"])
-                        elif not live_order and reference == "previous" and previous:
-                            live_order = previous.order_no
-                        if not live_order:
-                            return _consumer_intent_clarification("order", language)
-                        _require_consumer_self_order(caller, "consumer", live_order)
-                        _require_visible_order(context, caller, live_order)
+                        observation = request_observation.observation_of(request)
+                        if observation is not None:
+                            observation.classify(candidate=intent == "order_status")
+                            request_observation.mark_tenant(request, caller.effective_tenant_id)
+                        live_order = ""
+                        data_kind = notice_kind or ("billing" if intent == "billing_record" else "status")
+                        if intent in {"order_status", "billing_record"}:
+                            enabled = (
+                                service_binding.live_billing_record
+                                if data_kind == "billing"
+                                else service_binding.live_order_status
+                            )
+                            if not enabled:
+                                return _consumer_intent_clarification("disabled", language)
+                            authenticated_chat_order_reader(context, caller, request)
+                            candidates = set(order_identifier_candidates(payload.question))
+                            if reference in {"unclear", "none"} or len(candidates) > 1:
+                                return _consumer_intent_clarification("order", language)
+                            if candidates and reference != "explicit":
+                                return _consumer_intent_clarification("order", language)
+                            if payload.order_no and reference != "explicit":
+                                return _consumer_intent_clarification("order", language)
+                            if payload.order_no and candidates and candidates != {payload.order_no}:
+                                return _consumer_intent_clarification("order", language)
+                            live_order = payload.order_no or (
+                                next(iter(candidates), "") if reference == "explicit" else ""
+                            )
+                            if not live_order and reference == "latest":
+                                with scoped_mysql_source(
+                                    Settings.from_config(context.settings.server_config_file),
+                                    resolve_query_scope(caller),
+                                ) as source:
+                                    rows = source.list_orders(page=1, page_size=1)
+                                if not rows:
+                                    raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
+                                live_order = str(rows[0]["order_no"])
+                            elif not live_order and reference == "previous" and previous:
+                                live_order = previous.order_no
+                            if not live_order:
+                                return _consumer_intent_clarification("order", language)
+                            _require_consumer_self_order(caller, "consumer", live_order)
+                            _require_visible_order(context, caller, live_order)
+                    from aiops_diagnostics.consumer import consumer_intent
+
                     if conversation is None:
                         conversation = context.conversation_store.create(
                             scope_fingerprint=caller.scope_fingerprint,
@@ -4149,7 +4160,7 @@ def create_gateway_app(
 
         response.headers["Cache-Control"] = "no-store"
         capability = request.path_params.get("capability")
-        if capability is not None and capability not in {"knowledge", "status", "billing"}:
+        if capability is not None and capability not in {"knowledge", "status", "billing", "agent"}:
             raise StandardAPIError(404, "CONSUMER_CAPABILITY_UNKNOWN", "未知取数能力")
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(401, "GRANT_REQUIRED", "knowledge grant required")
@@ -4160,6 +4171,27 @@ def create_gateway_app(
                 if len(raw) > 6000:
                     raise StandardAPIError(413, "PHOTO_CONTEXT_INVALID", "image context too large")
             image_text = raw.decode("utf-8")
+            if capability == "agent":
+                from starlette.concurrency import run_in_threadpool
+
+                from aiops_diagnostics.consumer import consumer_agent
+
+                def own_orders(scope):
+                    with scoped_mysql_source(
+                        Settings.from_config(context.settings.server_config_file), resolve_query_scope(scope)
+                    ) as source:
+                        return source.list_orders(page=1, page_size=5)
+
+                return await run_in_threadpool(
+                    consumer_agent.callback,
+                    context.runtime,
+                    authorization[7:],
+                    json.loads(image_text or "{}"),
+                    read_snapshot=lambda scope, order, kind: _authorized_consumer_snapshot(
+                        context.settings, scope, order, kind
+                    ),
+                    list_orders=own_orders,
+                )
             knowledge_base_ids = None
             if capability in {"status", "billing"} and image_text.strip():
                 raise StandardAPIError(400, "CONSUMER_DATA_INPUT_INVALID", "订单与身份不能由节点参数指定")
@@ -6469,7 +6501,7 @@ def _require_current_chat_order(context, caller, qa, request):
                 qa["language"] = rendering_language(COMPOSED_LANGUAGES, run.language)
                 if run.language == "zh-Hant" and run.data_kind == "status" and evidence.get("live_snapshot"):
                     qa["language"] = "zh-Hant"
-        if run and run.order_no:
+        if run and (run.order_no or run.data_kind == "agent"):
             authenticated_chat_order_reader(context, caller, request)
         try:
             return consumer_chat_service.require_result(context.runtime, caller, qa)
@@ -6701,6 +6733,11 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
     ):
         return  # 旧诊断试用继续按原契约读取。
     if located is not None and located.kind == "service_trial":
+        if located.data_kind == "agent":
+            from aiops_diagnostics.consumer.consumer_agent import order_ids
+
+            for order in order_ids(context.dify_run_store.context(located.run_id)):
+                _require_visible_order(context, caller, order)
         if trial["order_no"]:
             _require_visible_order(context, caller, trial["order_no"])
         if not located.order_no and report.get("callback_version", 1) >= 3:
