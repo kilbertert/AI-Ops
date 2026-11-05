@@ -364,7 +364,7 @@ class DifyRunStore:
             row = connection.execute(
                 "SELECT context_json FROM chat_dify_runs WHERE run_id=? AND data_kind='agent' "
                 "AND state='running' AND expires_at>?",
-                (run_id, _now().isoformat()),
+                (run_id, format_stored_time(now_utc())),
             ).fetchone()
             if row is None or not row[0]:
                 raise DifyRunError("CHATFLOW_NOT_ACTIVE", "客服执行已结束")
@@ -384,7 +384,7 @@ class DifyRunStore:
             row = connection.execute(
                 "SELECT context_json FROM chat_dify_runs WHERE run_id=? AND data_kind='agent' "
                 "AND state='running' AND expires_at>?",
-                (run_id, _now().isoformat()),
+                (run_id, format_stored_time(now_utc())),
             ).fetchone()
             if row is None:
                 return False
