@@ -97,3 +97,33 @@ PASS。三个定制面已切换为 dify-ui 原语并在生产生效，交互与�
 | 容器 | `Next.js 16.3.4 ✓ Ready`，无报错 |
 
 **结论**：PASS。操作行信息去重后整洁可读，`data-aiops-*` 断言面与重试路径保持。
+
+---
+
+## 七、追加回执：客户/已开通客户选择器加关键字搜索（`tenant-search`，PR #1428）
+
+**背景**：`/apps` TenantSetup 面板的「客户」下拉有 300+ 条客户行，纯滚动逐个
+找不可用。同一面板里「已开通客户」也是同一形态。
+
+**修法**：新增共享 `SearchSelect`（dify-ui Combobox `TriggerWithPopupInput` 形态：
+trigger + 弹层内搜索输入 + 选项列表 + 空态），两个选择器一起换掉；
+弹层默认按输入过滤，传 `itemToStringValue` 保证 options 重建时选中态稳定。
+入口来源两项是小列表，保持 Select。
+
+| 项 | 值 |
+|---|---|
+| 镜像 | `aiops/dify-web-patched:tenant-search`（36 组装 `998559b10c57`） |
+| 产物 | 288M→gzip 85M，sha256 `c4e62d70b967077e9e8840f695804dc6aba8316856a753d95df324b51f33ff7a` |
+| 部署 | `/opt/dify/deploy/.env` DIFY_WEB_IMAGE + force-recreate，容器 Ready 无报错 |
+
+**36 实测**（同取证通道，真实会话 + 交互探针，截图 `tenant-search-open.png` /
+`tenant-search-filtered.png` / `tenant-search-workspace.png`）：
+
+| 断言 | 结果 |
+|---|---|
+| 「客户」下拉弹层含搜索输入（`搜索客户`） | PASS |
+| 关键字过滤真在缩列表 | PASS：328 条 → 填「威昌」→ 1 条（永威昌盛） |
+| 「已开通客户」下拉同样含搜索输入（`搜索已开通客户`） | PASS |
+| 容器 | `Next.js 16.3.4 ✓ Ready`，无报错 |
+
+**结论**：PASS。客户选择从滚动 300+ 行变为关键字即筛。
