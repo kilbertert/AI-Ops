@@ -52,7 +52,7 @@ age -d -i ~/.config/dev-host/secrets-age/key.txt \
 | 41 主机 | `47.97.160.153`（root 登录，方式见 §1） |
 | 运行源码 | `/opt/aiops-41/src/aiops_diagnostics/` |
 | Gateway 数据库 | `/var/lib/aiops-41/gateway/gateway.db`（SQLite） |
-| 服务配置（**服务端配置**） | `/etc/aiops-41/production.env`（含凭据，勿打印明文）。由 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向，供 `Settings.from_config` 读取：模型 provider、KB、Redis 等**配置项**在这里 |
+| 服务配置（**服务端配置**） | `/etc/aiops-41/production.env`（含凭据，勿打印明文）。由 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向，`Settings.from_config` 与 `GatewayServerSettings.from_env` 都读它：模型 provider、KB、Redis 等**配置项**，以及 `SETTING_SOURCES` 里 `file=True` 的网关字段在这里 |
 | 服务配置（**进程环境**） | `/etc/aiops-41/gateway.env`。systemd 单元的 `EnvironmentFile` 是**它**，不是 `production.env` |
 | 平台清单 | `/opt/aiops-41/ops/environments/env-41.toml` |
 | 服务单元 | `aiops-gateway-41.service`、`aiops-36-kb-tunnel.service` |
@@ -135,7 +135,7 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 | 文件 | 谁读它 | 放什么 |
 |---|---|---|
 | `/etc/aiops-41/gateway.env` | systemd 的 `EnvironmentFile` | **进程环境变量**。运行时从**进程 env** 构造的配置（如 Jev 客户端的 `AIOPS_GATEWAY_JEV_*`）必须放这里 |
-| `/etc/aiops-41/production.env` | 由 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向，`Settings.from_config` 读取 | 服务端**配置项**（模型 provider、KB、Redis 凭据等）|
+| `/etc/aiops-41/production.env` | 由 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向，`Settings.from_config` 与 `GatewayServerSettings.from_env` 读取 | 服务端**配置项**（模型 provider、KB、Redis 凭据，以及 `SETTING_SOURCES` 里 `file=True` 的网关字段 —— 哪些字段读这份文件见 `gateway_config.SETTING_SOURCES`，`.env.example` 里行尾标 `# 仅进程环境` 的键不读它）|
 
 **实测教训**：把 `AIOPS_GATEWAY_JEV_*` 写进 `production.env` 后重启，进程 env 里**根本看不到这些变量**，路由静默退回原模型分类器 —— 没有任何报错。写入 `gateway.env` 才生效。**改配置后务必用 `tr '\0' '\n' < /proc/<MainPID>/environ` 确认变量真的进了进程**，不要只看文件写没写。
 
@@ -2410,3 +2410,26 @@ PY
 节点运行根及访问声明见 `.dev-host.toml`，安装、内部回调、Gateway 发布接线、
 验收后退役和恢复步骤见[正式节点手册](../../deploy/node-runtime/README.md)。
 所有主机访问继续使用 `dev-host`；只同步已合并制品，先核对摘要再安装服务。
+
+## 出站地址收紧后的配置恢复
+
+升级后服务启动失败，或预览返回`OPERATOR_PREVIEW_INVALID`且未建run时，先区分
+启动配置校验和`DifyDslClient`的草稿读取校验。远端HTTP被拒绝不能靠关闭安全检查恢复。
+
+1. 用`dev-host`读取当前进程的实际配置来源，输出键名与错误分类；不打印凭据。
+   分别核对UPMS、Dify Chat与Dify Console：Chat可用不代表Console使用同一地址。
+   同时查unit的`EnvironmentFile`与进程同名环境变量；`gateway.env`注入值优先于
+   `production.env`，只改后者即使重启成功也不会生效。
+2. 按本手册§1.5核UPMS服务身份。仅当主机地址、端口和路径映射证明为同一服务，
+   才能提出改回环入口；不能只凭端口相同认定等价。
+3. Dify控制台的同应用只读校验、实际配置来源和CD预检步骤见
+   [控制台连接手册](operator-cpms/dify-console-preflight.md)，按其方法复验原草稿。
+4. 遗留DIS地址停用前核对运行调用者；无生产调用才可提出清空URL并保留令牌。
+5. 每个配置键均按批准范围处理：备份实际承载该键的配置文件，比较修改前摘要与在飞任务，
+   只替换批准键、保持所有者及0600权限，再原子写回。摘要变化或存在在飞任务时停止。
+6. 修因后重跑原已合并修订的标准CD（`gh run rerun <原CD运行号>`），核对health与实际
+   进程配置，再做原预览和H5业务验证。不得手改运行源码或放宽HTTPS规则。
+
+失败恢复分开处理代码与配置：CD按标准脚本回滚制品，配置只还原本次键，避免覆盖并行
+变更。旧不安全地址恢复后仍会被拒绝，不能将“已回退”写成“功能已恢复”。原始摘要、
+备份位置、业务账号和响应保存在私有变更单；仓库只记录方法及已验证边界。
