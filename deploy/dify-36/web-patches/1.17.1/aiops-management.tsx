@@ -7,6 +7,20 @@ import type {
   Source,
   Status,
 } from '@/service/aiops-management'
+import { Button } from '@langgenius/dify-ui/button'
+import { Checkbox } from '@langgenius/dify-ui/checkbox'
+import { Input } from '@langgenius/dify-ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@langgenius/dify-ui/popover'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectItemIndicator,
+  SelectItemText,
+  SelectTrigger,
+  SelectValue,
+} from '@langgenius/dify-ui/select'
+import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { useEffect, useState } from 'react'
 import { entryLabels, manage, messages, steps } from '@/service/aiops-management'
 
@@ -38,10 +52,6 @@ function defaultName(tenantName: string, chosen: EntryKey[]) {
 }
 
 /**
- * 一端的状态要分开说四件事：资源准备好了吗、这一端发布了吗、渠道接入了吗、真实用户验过吗。
- * 合成一句"已启用"会让刚开通、还没人接入口的客户看起来已经能用。
- */
-/**
  * 失败时的定位串：**在哪一步、哪一类异常**。
  *
  * 只给通用码（`SETUP_STEP_FAILED`）时，同一句"这一端未完成"对应十几种完全不同的缺陷，
@@ -55,11 +65,18 @@ function failureDetail(step?: string, kind?: string): string {
   return kind ? `出错（${kind}）` : ''
 }
 
+/**
+ * 一端的状态要分开说四件事：资源准备好了吗、这一端发布了吗、渠道接入了吗、真实用户验过吗。
+ * 合成一句"已启用"会让刚开通、还没人接入口的客户看起来已经能用。
+ */
 function entrySummary(progress: EntryProgress | undefined): string {
   if (!progress) return '等待中'
   if (progress.state === 'failed') {
     const generic = messages[progress.error_code || ''] || '这一端未完成'
-    const detail = progress.error_code === 'SETUP_STEP_FAILED' ? failureDetail(progress.failed_step, progress.failure_kind) : ''
+    const detail =
+      progress.error_code === 'SETUP_STEP_FAILED'
+        ? failureDetail(progress.failed_step, progress.failure_kind)
+        : ''
     return detail ? `${generic}：${detail}` : generic
   }
   if (!progress.app_id) return '等待中'
@@ -70,6 +87,16 @@ function entrySummary(progress: EntryProgress | undefined): string {
       : '已发布 · AI 已准备，渠道待接入'
   return `已启用 · 正式 V${progress.version_no ?? '?'}`
 }
+
+/** `entrySummary` 四态对应的灯色，文案与灯永远同源。 */
+function entryTone(progress: EntryProgress | undefined) {
+  if (!progress || !progress.app_id) return 'disabled' as const
+  if (progress.state === 'failed') return 'error' as const
+  if (progress.published && progress.channel === 'connected') return 'success' as const
+  return 'warning' as const
+}
+
+const fieldLabel = 'system-xs-medium text-text-secondary'
 
 export function ManagedPublish({
   status,
@@ -107,10 +134,12 @@ export function ManagedPublish({
       data-aiops-app={status.app_id}
       data-aiops-entry={entry}
       data-aiops-revision={status.route_revision}
-      className="flex flex-wrap items-center gap-2 text-sm"
+      className="flex flex-wrap items-center gap-2"
     >
-      <span data-aiops-entry-label="true">{entryLabels[entry]}</span>
-      <span>
+      <span data-aiops-entry-label="true" className="system-sm-semibold text-text-primary">
+        {entryLabels[entry]}
+      </span>
+      <span className="system-xs-regular text-text-tertiary">
         {status.model} ·{' '}
         {status.model_options.max_tokens
           ? `${status.model_options.max_tokens} token`
@@ -118,17 +147,23 @@ export function ManagedPublish({
         · {status.published ? `正式 V${status.version_no}` : '尚未发布'}
       </span>
       {entry === 'consumer' && (
-        <span data-aiops-knowledge="true">
+        <span
+          data-aiops-knowledge="true"
+          className="system-xs-regular text-text-tertiary"
+        >
           对客知识库 {status.knowledge_base_ids?.length || 0} 个
         </span>
       )}
       {entry === 'consumer' && status.channel !== 'connected' && (
-        <span data-aiops-channel="pending">{status.channel_note || 'AI 已准备，渠道待接入'}</span>
+        <span data-aiops-channel="pending" className="system-xs-regular text-text-warning">
+          {status.channel_note || 'AI 已准备，渠道待接入'}
+        </span>
       )}
-      <button
-        type="button"
-        className="rounded-lg bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
-        disabled={busy || disabled}
+      <Button
+        variant="primary"
+        size="small"
+        loading={busy}
+        disabled={disabled}
         onClick={async () => {
           setBusy(true)
           setMessage('')
@@ -143,41 +178,61 @@ export function ManagedPublish({
         }}
       >
         {busy ? '发布中…' : `发布到${entryLabels[entry]}`}
-      </button>
-      <details>
-        <summary className="cursor-pointer">版本操作</summary>
-        <button type="button" disabled={busy || !status.published} onClick={() => change()}>
-          撤回当前正式版本
-        </button>
-        <button
-          type="button"
-          onClick={async () => {
-            try {
-              setVersions((await manage('versions', { app_id: status.app_id })).versions)
-            } catch (e) {
-              setMessage(e instanceof Error ? e.message : '操作未完成')
-            }
-          }}
-        >
-          查看历史
-        </button>
-        <select
-          aria-label="历史版本"
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-        >
-          <option value="">选择版本</option>
-          {versions.map((v) => (
-            <option key={v} value={v}>
-              V{v}
-            </option>
-          ))}
-        </select>
-        <button type="button" disabled={busy || !selected} onClick={() => change(Number(selected))}>
-          恢复所选版本
-        </button>
-      </details>
-      <span role="status">{message}</span>
+      </Button>
+      <Popover>
+        <PopoverTrigger
+          render={<Button variant="secondary" size="small">版本操作</Button>}
+        />
+        <PopoverContent placement="bottom-end">
+          <div className="flex w-56 flex-col gap-2">
+            <Button
+              variant="tertiary"
+              size="small"
+              disabled={busy || !status.published}
+              onClick={() => change()}
+            >
+              撤回当前正式版本
+            </Button>
+            <Button
+              variant="tertiary"
+              size="small"
+              onClick={async () => {
+                try {
+                  setVersions((await manage('versions', { app_id: status.app_id })).versions)
+                } catch (e) {
+                  setMessage(e instanceof Error ? e.message : '操作未完成')
+                }
+              }}
+            >
+              查看历史
+            </Button>
+            <Select value={selected} onValueChange={(v) => setSelected(v || '')}>
+              <SelectTrigger aria-label="历史版本" className="w-full">
+                <SelectValue placeholder="选择版本" />
+              </SelectTrigger>
+              <SelectContent>
+                {versions.map((v) => (
+                  <SelectItem key={v} value={String(v)}>
+                    <SelectItemText>V{v}</SelectItemText>
+                    <SelectItemIndicator />
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="secondary"
+              size="small"
+              disabled={busy || !selected}
+              onClick={() => change(Number(selected))}
+            >
+              恢复所选版本
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+      <span role="status" className="system-xs-regular text-text-secondary">
+        {message}
+      </span>
     </div>
   )
 }
@@ -253,117 +308,144 @@ export default function TenantSetup() {
   }, [open, catalogue])
   if (error && !catalogue)
     return (
-      <p role="alert" className="px-6 py-2 text-amber-700">
+      <p role="alert" className="system-sm-regular px-6 py-2 text-text-warning">
         {error}
       </p>
     )
   if (!catalogue?.platform) return null
   return (
     <div className="px-6 py-3">
-      <button
-        type="button"
-        className="rounded-lg bg-blue-600 px-4 py-2 text-white"
-        onClick={() => setOpen(!open)}
-      >
-        {open ? '收起客户 AI 服务' : '复制并开通客户 AI 服务'}
-      </button>
-      <div className="mt-3 flex items-center gap-2">
-        <select
-          aria-label="已开通客户"
-          value={selectedWorkspace}
-          onChange={(e) => setSelectedWorkspace(e.target.value)}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="primary" size="medium" onClick={() => setOpen(!open)}>
+          {open ? '收起客户 AI 服务' : '复制并开通客户 AI 服务'}
+        </Button>
+        <div className="flex w-52">
+          <Select value={selectedWorkspace} onValueChange={(v) => setSelectedWorkspace(v || '')}>
+            <SelectTrigger aria-label="已开通客户" className="w-full">
+              <SelectValue placeholder="选择已开通客户" />
+            </SelectTrigger>
+            <SelectContent>
+              {(catalogue.workspaces || []).map((w) => (
+                <SelectItem key={w.workspace_id} value={w.workspace_id}>
+                  <SelectItemText>{w.name}</SelectItemText>
+                  <SelectItemIndicator />
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button
+          variant="secondary"
+          size="medium"
+          disabled={busy || !selectedWorkspace}
+          onClick={() => enter()}
         >
-          <option value="">选择已开通客户</option>
-          {(catalogue.workspaces || []).map((w) => (
-            <option key={w.workspace_id} value={w.workspace_id}>
-              {w.name}
-            </option>
-          ))}
-        </select>
-        <button type="button" disabled={busy || !selectedWorkspace} onClick={() => enter()}>
           进入工作区
-        </button>
-        <button type="button" disabled={busy || !selectedWorkspace} onClick={() => enter(true)}>
+        </Button>
+        <Button
+          variant="secondary"
+          size="medium"
+          disabled={busy || !selectedWorkspace}
+          onClick={() => enter(true)}
+        >
           进入知识库
-        </button>
+        </Button>
       </div>
-      {!open && error && <p role="alert">{error}</p>}
+      {!open && error && (
+        <p role="alert" className="system-sm-regular mt-2 text-text-destructive">
+          {error}
+        </p>
+      )}
       {open && (
-        <section aria-label="开通客户 AI 服务" className="mt-3 rounded-xl border p-4">
+        <section
+          aria-label="开通客户 AI 服务"
+          className="mt-3 rounded-xl border-[0.5px] border-components-card-border bg-components-card-bg p-4 shadow-xs shadow-shadow-shadow-3"
+        >
           <fieldset className="mb-3 flex flex-wrap items-center gap-4">
-            <legend className="text-sm text-gray-600">开通范围</legend>
+            <legend className="system-sm-medium text-text-secondary">开通范围</legend>
             {entries.map((item) => (
               <label key={item.entry} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+                <Checkbox
                   aria-label={item.label}
                   checked={Boolean(chosen[item.entry])}
                   disabled={!item.sources.length}
-                  onChange={(e) => setChosen({ ...chosen, [item.entry]: e.target.checked })}
+                  onCheckedChange={(checked) =>
+                    setChosen({ ...chosen, [item.entry]: checked === true })
+                  }
                 />
-                <span>{item.label}</span>
+                <span className="system-sm-regular text-text-primary">{item.label}</span>
                 {!item.sources.length && (
-                  <span className="text-xs text-gray-500">（暂无已发布来源，可稍后补开）</span>
+                  <span className="system-xs-regular text-text-tertiary">
+                    （暂无已发布来源，可稍后补开）
+                  </span>
                 )}
               </label>
             ))}
           </fieldset>
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap items-end gap-3">
             {entries
               .filter((item) => chosen[item.entry])
               .map((item) => (
-                <label key={item.entry}>
-                  {item.label}来源
-                  <select
-                    aria-label={`${item.label}来源`}
-                    className="mx-2 rounded border p-2"
+                <div key={item.entry} className="flex w-56 flex-col gap-1">
+                  <span className={fieldLabel}>{item.label}来源</span>
+                  <Select
                     value={sources[item.entry] || ''}
-                    onChange={(e) => setSources({ ...sources, [item.entry]: e.target.value })}
+                    onValueChange={(v) => setSources({ ...sources, [item.entry]: v || '' })}
                   >
-                    <option value="">选择已发布{item.label}</option>
-                    {item.sources.map((s) => (
-                      <option key={s.app_id} value={s.app_id}>
-                        {s.name} · V{s.version_no}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    <SelectTrigger aria-label={`${item.label}来源`} className="w-full">
+                      <SelectValue placeholder={`选择已发布${item.label}`} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {item.sources.map((s) => (
+                        <SelectItem key={s.app_id} value={s.app_id}>
+                          <SelectItemText>
+                            {s.name} · V{s.version_no}
+                          </SelectItemText>
+                          <SelectItemIndicator />
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               ))}
-            <label>
-              客户
-              <select
-                aria-label="客户"
-                className="mx-2 rounded border p-2"
+            <div className="flex w-40 flex-col gap-1">
+              <span className={fieldLabel}>客户</span>
+              <Select
                 value={tenant}
-                onChange={(e) => {
-                  setTenant(e.target.value)
-                  const tenantName =
-                    catalogue.tenants.find((t) => t.id === e.target.value)?.name || ''
+                onValueChange={(v) => {
+                  const next = v || ''
+                  setTenant(next)
+                  const tenantName = catalogue.tenants.find((t) => t.id === next)?.name || ''
                   setName(defaultName(tenantName, picked.length ? picked : ['operator']))
                 }}
               >
-                <option value="">选择客户</option>
-                {catalogue.tenants.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              应用名称
-              <input
+                <SelectTrigger aria-label="客户" className="w-full">
+                  <SelectValue placeholder="选择客户" />
+                </SelectTrigger>
+                <SelectContent>
+                  {catalogue.tenants.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      <SelectItemText>{t.name}</SelectItemText>
+                      <SelectItemIndicator />
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex w-56 flex-col gap-1">
+              <span className={fieldLabel}>应用名称</span>
+              <Input
                 aria-label="应用名称"
-                className="mx-2 rounded border p-2"
                 maxLength={128}
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onValueChange={setName}
               />
-            </label>
-            <button
-              type="button"
-              className="rounded bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
-              disabled={busy || !ready || !tenant || !name.trim()}
+            </div>
+            <Button
+              variant="primary"
+              size="medium"
+              loading={busy}
+              disabled={!ready || !tenant || !name.trim()}
               onClick={async () => {
                 setBusy(true)
                 setError('')
@@ -408,60 +490,83 @@ export default function TenantSetup() {
               }}
             >
               {busy ? '提交中…' : '复制并开通'}
-            </button>
+            </Button>
           </div>
-          <p role="alert" className="my-2 text-red-600">
-            {error}
-          </p>
-          {catalogue.operations.map((op) => {
-            const progress = op.entries || {}
-            return (
-              <div
-                key={op.id}
-                className="mt-3 flex flex-wrap items-center gap-3 rounded border p-3"
-              >
-                <strong>
-                  {op.tenant_name} · {op.name}
-                </strong>
-                <span>{steps[op.step] || '准备中'}</span>
-                {op.state === 'partial' && (
-                  <span role="status" data-aiops-partial="true">
-                    {messages.SETUP_PARTIAL}
-                  </span>
-                )}
-                {Object.entries(progress).map(([key, value]) => (
-                  <span key={key} data-aiops-progress={key}>
-                    {entryLabels[key as EntryKey] || key}：{entrySummary(value)}
-                  </span>
-                ))}
-                {op.state === 'failed' && (
-                  <>
-                    <span>
-                      {messages[op.error_code || ''] || '当前步骤未完成'}
-                      {op.error_code === 'SETUP_STEP_FAILED' &&
-                        failureDetail(op.failed_step, op.failure_kind) &&
-                        `：${failureDetail(op.failed_step, op.failure_kind)}`}
+          {error ? (
+            <p role="alert" className="system-sm-regular my-2 text-text-destructive">
+              {error}
+            </p>
+          ) : null}
+          {catalogue.operations.length > 0 && (
+            <div className="mt-3 flex flex-col gap-2">
+              {catalogue.operations.map((op) => {
+                const progress = op.entries || {}
+                return (
+                  <div
+                    key={op.id}
+                    className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border-[0.5px] border-divider-regular bg-components-panel-bg px-4 py-3"
+                  >
+                    <span className="system-sm-semibold text-text-primary">
+                      {op.tenant_name} · {op.name}
                     </span>
-                    <button
-                      type="button"
-                      className="underline"
-                      onClick={async () => {
-                        try {
-                          await manage('retry', { id: op.id })
-                          await load()
-                        } catch (e) {
-                          setError(e instanceof Error ? e.message : '操作未完成')
-                        }
-                      }}
-                    >
-                      重试
-                    </button>
-                  </>
-                )}
-                {op.state === 'completed' && <span>客户正常登录后可在自己的工作区查看</span>}
-              </div>
-            )
-          })}
+                    <span className="system-xs-regular text-text-tertiary">
+                      {steps[op.step] || '准备中'}
+                    </span>
+                    {op.state === 'partial' && (
+                      <span
+                        role="status"
+                        data-aiops-partial="true"
+                        className="system-xs-regular text-text-warning"
+                      >
+                        {messages.SETUP_PARTIAL}
+                      </span>
+                    )}
+                    {Object.entries(progress).map(([key, value]) => (
+                      <span
+                        key={key}
+                        data-aiops-progress={key}
+                        className="system-xs-regular flex items-center gap-1.5 text-text-secondary"
+                      >
+                        <StatusDot status={entryTone(value)} size="medium" />
+                        <span>
+                          {entryLabels[key as EntryKey] || key}：{entrySummary(value)}
+                        </span>
+                      </span>
+                    ))}
+                    {op.state === 'failed' && (
+                      <>
+                        <span className="system-xs-regular text-text-destructive">
+                          {messages[op.error_code || ''] || '当前步骤未完成'}
+                          {op.error_code === 'SETUP_STEP_FAILED' &&
+                            failureDetail(op.failed_step, op.failure_kind) &&
+                            `：${failureDetail(op.failed_step, op.failure_kind)}`}
+                        </span>
+                        <Button
+                          variant="ghost-accent"
+                          size="small"
+                          onClick={async () => {
+                            try {
+                              await manage('retry', { id: op.id })
+                              await load()
+                            } catch (e) {
+                              setError(e instanceof Error ? e.message : '操作未完成')
+                            }
+                          }}
+                        >
+                          重试
+                        </Button>
+                      </>
+                    )}
+                    {op.state === 'completed' && (
+                      <span className="system-xs-regular text-text-tertiary">
+                        客户正常登录后可在自己的工作区查看
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </section>
       )}
     </div>
