@@ -78,9 +78,6 @@ OPERATOR_TOOL_NAMES = operator_tools.names()
 #: 唯一允许的入口。operator/代查不走这条路线（它们的授权判据完全不同）。
 ENTRY_CONSUMER = "consumer"
 
-#: 答案渲染支持的语言。回读一致性校验按这一组重算（见 `answer_matches_snapshot`）。
-ANSWER_LANGUAGES = ("zh", "zh-Hant", "en")
-
 #: 快照必须**恰好**是这五个字段：多一个字段意味着有人往里塞了别的来源。
 SNAPSHOT_FIELDS = frozenset({"order_no", "status_code", "status_role", "observed_at", "source"})
 
@@ -698,6 +695,7 @@ def issue_for_store(
     caller: ScopeContext,
     order_no: str,
     gateway_version: str,
+    language: str | None = None,
 ) -> tuple[AgentRun, AgentRunConfig]:
     """签发一条**绑定在案**的 run，并返回本次使用的配置（派发需要它）。"""
     from aiops_diagnostics.execution import execution_manifest
@@ -733,6 +731,7 @@ def issue_for_store(
         chat_binding=binding.key,
         execution_manifest=binding.manifest_text or None,
         route_revision=binding.route_revision,
+        language=language,
     )
     return run, config
 
@@ -888,33 +887,40 @@ def _refuse_unless_snapshot_valid(store: Any, run: AgentRun) -> None:
 # --------------------------------------------------------------------------
 
 
-def answer_from_run(run: AgentRun, *, language: str) -> dict[str, Any]:
+def answer_from_run(run: AgentRun, *, language: str | None = None) -> dict[str, Any]:
     """把该 run 的**成功快照**适配成原回答格式。不读第二个来源。
 
     快照的字段集合与确定性直读那条路一致，所以渲染复用同一个 `status_answer` ——
     App 看到的 blocks 形状不会因为「谁来读」而变。
+
+    语言默认取**签发时记录**的那一个（`run.language`），与 `binding_key` /
+    `route_revision` 同一种「按签发时那一条」的纪律。旧行是 ``None``，回落到默认
+    语言 —— 与今天旧记录的实际行为一致，不回填、不猜。
     """
+    from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
     from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
     if run.snapshot is None:
         raise ChatRunUnavailable("AGENT_RUN_NO_RESULT", "agent run produced no result")
-    return status_answer(run.snapshot, language)
+    return status_answer(run.snapshot, language or run.language or DEFAULT_LANGUAGE)
 
 
-def answer_matches_snapshot(result: Any, snapshot: dict[str, Any]) -> bool:
-    """缓存下来的 QA 正文是不是**这条快照**的渲染。
+def answer_matches_snapshot(result: Any, snapshot: dict[str, Any], *, language: str) -> bool:
+    """缓存下来的 QA 正文是不是**这条快照**按**签发时那门语言**的渲染。
 
-    回读时重算一次，不一致就拒绝：一份被改过（或被写错 run）的正文不能被当成
-    同一条 run 的结果交出去。语言按受支持的那几种都试一遍 —— 缓存正文的渲染语言
-    与本次请求头无关，用请求头去比对会把一次正常的换语言回读判成篡改。
+    回读时按 `language` 重算一次，不一致就拒绝：一份被改过（或被写错 run）的正文
+    不能被当成同一条 run 的结果交出去。语言是**签发时记录**的，不是请求头 ——
+    用请求头去比对会把一次正常的换语言回读判成篡改。
+
+    这里不再枚举一组语言去试：枚举越多越慢、也越容易误放行，而「这条 run 用的
+    哪门语言」在签发时就已经知道。
     """
     from aiops_diagnostics.consumer.consumer_order_chat import status_answer
 
-    return any(result == status_answer(snapshot, language) for language in ANSWER_LANGUAGES)
+    return result == status_answer(snapshot, language)
 
 
 __all__ = [
-    "ANSWER_LANGUAGES",
     "BINDINGS_SCHEMA",
     "CHAT_RUN_PREFIX",
     "ChatBinding",
