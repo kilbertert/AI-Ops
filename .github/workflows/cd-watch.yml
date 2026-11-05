@@ -26,10 +26,13 @@ name: CD Watch
 
 on:
   schedule:
-    # 每小时的第 7 分钟。刻意避开 :00 —— 整点是所有人的默认选择，GitHub 在
-    # 那些时刻会延迟计划任务（本 job 对分钟数没有要求，避开就没有代价）。
-    - cron: "7 * * * *"
+    # 每5分钟检查；GitHub计划任务可能延迟，不是实时SLA。
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
   workflow_dispatch:
+
+concurrency:
+  group: cd-watch
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -41,7 +44,7 @@ jobs:
     # GitHub-hosted（理由见文件头）：与 CD 用的 self-hosted runner **故意不共用**，
     # 否则 runner 掉线时守望者一起停摆，恰好漏掉它该报的那件事。
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -56,6 +59,8 @@ jobs:
       # 这一段同时也是「可复跑的检查」—— 任何人在本机跑 `node .sandcastle/cd-watch.mjs
       # --dry-run` 都能回答「此刻是否有待批准的 CD」。
       - name: Assess the CD state (read-only)
+        env:
+          RUNNER_READ_TOKEN: ${{ secrets.AGENT_PAT }}
         run: node .sandcastle/cd-watch.mjs --dry-run
 
       # 判定自检：用票里记录的真实形态（含 jobs=0 的死锁）驱动全部分支。
@@ -71,6 +76,8 @@ jobs:
           node .sandcastle/cd-watch.test.mjs || { echo 'watchdog 分支自检失败' >&2; exit 1; }
 
       - name: Raise or update the alarm
+        env:
+          RUNNER_READ_TOKEN: ${{ secrets.AGENT_PAT }}
         run: node .sandcastle/cd-watch.mjs
 
       - name: Summarize
@@ -79,7 +86,7 @@ jobs:
           {
             echo "### CD Watch"
             echo
-            echo "判定逻辑见 \`.sandcastle/deploy-state.mjs\`；阈值：卡住 30 分钟、连续失败 3 次。"
+            echo "判定逻辑见 \`.sandcastle/deploy-state.mjs\`；阈值：排队 5 分钟（2 分钟输出诊断）、连续失败 3 次。"
             echo
             echo "**批准门已于 2026-09-30 移除**（所有者决定）：合并即自动部署，不再有人工批准。"
             echo "卡住时检查部署 runner、并发锁与访问链路，见 \`docs/agents/env-41-runbook.md\` 的 CD 一节。"

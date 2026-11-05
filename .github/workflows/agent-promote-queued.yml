@@ -16,7 +16,7 @@ jobs:
   promote:
     # Wontfix closes don't unblock anything in a meaningful sense.
     if: github.event.issue.state_reason != 'not_planned'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       issues: write

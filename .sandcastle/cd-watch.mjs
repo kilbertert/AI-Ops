@@ -19,6 +19,7 @@
  * 用法：`gh auth login` 之后 `node .sandcastle/cd-watch.mjs [--dry-run] [--limit N]`
  */
 
+import { fetchRunnerSummary } from "./queue/status.mjs";
 import { execFileSync } from "node:child_process";
 import {
   DEFAULT_STRAIGHT_FAILURES,
@@ -41,10 +42,13 @@ function enrich(runs) {
     let totalCount = null;
     let pendingCount = null;
     let deploymentConclusion = null;
+    let deploymentStatus;
     try {
       const jobs = JSON.parse(gh(["api", `repos/{owner}/{repo}/actions/runs/${run.databaseId}/jobs`]));
       totalCount = jobs.total_count;
-      deploymentConclusion = jobs.jobs?.find((job) => job.name === "deploy-41")?.conclusion ?? null;
+      const deployment = jobs.jobs?.find((job) => job.name === "deploy-41");
+      deploymentConclusion = deployment?.conclusion ?? null;
+      deploymentStatus = deployment?.status;
       pendingCount = JSON.parse(
         gh([
           "api",
@@ -61,6 +65,7 @@ function enrich(runs) {
       ...run,
       totalCount,
       pendingCount,
+      ...(deploymentStatus ? { status: deploymentStatus } : {}),
       ...(deploymentConclusion ? { status: "completed", conclusion: deploymentConclusion } : {}),
     };
   });
@@ -267,6 +272,9 @@ function main() {
   // 「有没有谁卡住」吃**全部未完成**的 run；「连续多少次没成功」吃**最近 N 次**。
   // 两份数据不能互换 —— 用窗口去找卡住的 run 等于用一个随时间收窄的窗口去找一个
   // 随时间更该被看见的东西。
+  const runner = fetchRunnerSummary();
+  delete process.env.RUNNER_READ_TOKEN;
+  console.log(runner.message);
   const result = assess({
     runs: recent.runs,
     // `null` = 这份取数失败（**不是**「没有未完成的 run」）—— 空数组与 null 含义不同。
@@ -276,6 +284,16 @@ function main() {
     straightFailures: DEFAULT_STRAIGHT_FAILURES,
   });
 
+  if (unfinished.runs.some(run => run.status !== 'completed') && ['unknown', 'missing', 'shared', 'offline'].includes(runner.kind)) {
+    result.alarms.push({ kind: `runner-${runner.kind}`, reason: runner.message });
+    result.ok = false;
+  }
+  for (const run of unfinished.runs) {
+    const queued = (Date.now() - Date.parse(run.approvedAt ?? '')) / 60000;
+    if (run.status !== 'completed' && run.status !== 'in_progress' && queued >= 2) {
+      console.log(`CD ${run.databaseId}: 已等待${Math.round(queued)}分钟；${runner.message}；继续核对并发锁`);
+    }
+  }
   if (result.ok) {
     // Healthy — but `ok` on its own leaves no trace. Close whatever alarm is
     // open, so "recovered" stops looking identical to "still broken". The

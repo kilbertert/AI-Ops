@@ -25,7 +25,7 @@ jobs:
     concurrency:
       group: cd-41-deploy
       cancel-in-progress: false
-    runs-on: [self-hosted, AI-Ops]
+    runs-on: aiops-deploy
     timeout-minutes: 20
 
     environment: production-41
@@ -101,7 +101,7 @@ jobs:
 
   release-notes:
     needs: deploy-41
-    runs-on: [self-hosted, AI-Ops]
+    runs-on: aiops-deploy
     timeout-minutes: 10
     permissions:
       contents: write
