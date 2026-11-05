@@ -1500,7 +1500,9 @@ def test_charging_timeline_reads_tsdata_rows_in_the_order_window(operator, monke
     assert call["end"] == "2026-11-05 14:32:00"
     assert call["orderBy"] == "_ts" and call["order"] == "ASC"
     assert call["pageSize"] == operator_cpms.TIMELINE_LIMIT
-    assert call["fields"] == ["_ts", *operator_cpms.GUN_COLUMN_NAMES]
+    assert call["fields"] == list(operator_cpms.TIMELINE_FIELDS)
+    # tsdata 门面表没有 batteryMinTemperature 列，整表原样发会被门面拒。
+    assert "batteryMinTemperature" not in call["fields"]
 
     snapshot = f["ctx"].agent_run_store.by_qa(submitted.json()["qa_id"]).snapshot
     evidence = snapshot["evidence"]["cpms_charging_timeline"]
