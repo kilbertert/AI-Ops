@@ -10,6 +10,7 @@
 # one would make every run write to production state.
 set -euo pipefail
 
+npm ci
 uv sync --locked --dev
 
 # No ad-hoc test-scheduler install here any more. `pytest-xdist` is a declared dev

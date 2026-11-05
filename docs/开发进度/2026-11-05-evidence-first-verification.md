@@ -23,8 +23,8 @@
 - 未完成/遗留：
   - 受影响凭据轮换由宿主执行，范围含 cliproxyapi 上游 key 与
     settings.deepseek.json 认证令牌；凭据事件在轮换前不算闭环。
-  - 终版独立复验仍欠一次成功执行（两次上游停滞）；模型可用性不构成合并
-    检查，但不免除验收义务。
+  - #1403 终版已由 claude-devin / swe-2-max 独立复验；H1/H3/H4 残余由
+    [后续执行边界修复](2026-11-05-reviewer-execution-boundary.md)承接，不能据 COMPLETE 忽略实测缺口。
   - 审查隔离的代价：每个带提交 issue 多一次容器创建与 `npm ci`。
   - 节时与检错收益需更多真实任务量化；本分工不强制每轮找到漏洞。
 - 证据：`docs/validation/2026-11-05-evidence-first-verification.md`（含两轮外部复审处置表）。

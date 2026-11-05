@@ -125,6 +125,7 @@ Dify自助开通：`dify.self_service`组织双端业务流程，`dify.self_serv
 开发与交付按[验证分工](docs/agents/verification-workflow.md)执行：实现者聚焦功能，
 独立 Hacker 提供反例和用户入口证据；新增长期检查须有具体错误及独立判据。以下是交付检查，
 迭代时只运行与当前改动和疑点相关的部分，完整结果不代替业务验收。
+独立审查在容器私有 Git 副本运行，安装和隔离复验见[执行手册](docs/agents/reviewer-execution.md)。
 
 ```bash
 uv sync --locked --dev
