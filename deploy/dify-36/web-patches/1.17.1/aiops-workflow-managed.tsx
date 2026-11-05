@@ -1,6 +1,11 @@
 'use client'
 
 import type { Status } from '@/service/aiops-management'
+import { Button } from '@langgenius/dify-ui/button'
+import { Checkbox } from '@langgenius/dify-ui/checkbox'
+import { Input } from '@langgenius/dify-ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@langgenius/dify-ui/popover'
+import { Textarea } from '@langgenius/dify-ui/textarea'
 import { useEffect, useRef, useState } from 'react'
 import { ManagedPublish } from '@/app/components/aiops-management'
 import { manage } from '@/service/aiops-management'
@@ -95,51 +100,59 @@ export function WorkflowManagedStrip({ status, save, sync, disabled = false }: P
     }
   }
   return (
-    <section aria-label="受管发布" data-aiops-workflow-managed={status.app_id}>
+    <section
+      aria-label="受管发布"
+      data-aiops-workflow-managed={status.app_id}
+      className="flex flex-wrap items-center gap-2"
+    >
       <ManagedPublish status={status} save={save} disabled={disabled || !!trial} />
       <KnowledgeAccess appId={status.app_id} disabled={disabled} />
-      <details className="relative">
-        <summary className="cursor-pointer">预览客户端客服</summary>
-        <div className="absolute right-0 z-50 flex w-96 flex-col gap-3 rounded-lg border bg-components-panel-bg p-4 shadow-lg">
-          <label>
-            问题
-            <textarea
-              aria-label="预览问题"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              disabled={busy || !!trial}
-              maxLength={4000}
-              className="w-full rounded border p-2"
-            />
-          </label>
-          <label>
-            订单号（查单时填写）
-            <input
-              aria-label="预览订单号"
-              value={order}
-              onChange={(e) => setOrder(e.target.value)}
-              disabled={busy || !!trial}
-              maxLength={64}
-              className="w-full rounded border p-2"
-            />
-          </label>
-          <button
-            type="button"
-            disabled={disabled || busy || (!trial && !question.trim())}
-            onClick={trial ? cancel : start}
-            className="rounded bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
-          >
-            {trial ? '停止预览' : '开始预览'}
-          </button>
-          <div
-            role="status"
-            aria-label="预览结果"
-            className="max-h-80 overflow-y-auto whitespace-pre-wrap"
-          >
-            {message}
+      <Popover>
+        <PopoverTrigger
+          render={<Button variant="secondary" size="small">预览客户端客服</Button>}
+        />
+        <PopoverContent placement="bottom-end">
+          <div className="flex w-96 flex-col gap-3">
+            <div className="flex flex-col gap-1">
+              <span className="system-xs-medium text-text-secondary">问题</span>
+              <Textarea
+                aria-label="预览问题"
+                value={question}
+                onValueChange={setQuestion}
+                disabled={busy || !!trial}
+                maxLength={4000}
+                rows={3}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="system-xs-medium text-text-secondary">订单号（查单时填写）</span>
+              <Input
+                aria-label="预览订单号"
+                value={order}
+                onValueChange={setOrder}
+                disabled={busy || !!trial}
+                maxLength={64}
+              />
+            </div>
+            <Button
+              variant="primary"
+              size="small"
+              loading={busy}
+              disabled={disabled || (!trial && !question.trim())}
+              onClick={trial ? cancel : start}
+            >
+              {trial ? '停止预览' : '开始预览'}
+            </Button>
+            <div
+              role="status"
+              aria-label="预览结果"
+              className="system-sm-regular max-h-80 overflow-y-auto whitespace-pre-wrap text-text-secondary"
+            >
+              {message}
+            </div>
           </div>
-        </div>
-      </details>
+        </PopoverContent>
+      </Popover>
     </section>
   )
 }
@@ -174,31 +187,42 @@ function KnowledgeAccess({ appId, disabled }: { appId: string; disabled: boolean
     }
   }
   return (
-    <details
-      className="relative"
-      onToggle={(event) => {
-        if (event.currentTarget.open) void load()
+    <Popover
+      onOpenChange={(open) => {
+        if (open) void load()
       }}
     >
-      <summary className="cursor-pointer">知识库使用范围</summary>
-      <div className="absolute right-0 z-50 flex max-h-96 w-96 flex-col gap-3 overflow-y-auto rounded-lg border bg-components-panel-bg p-4 shadow-lg">
-        <p>只有允许对客的知识库才可供客户端检索。关闭后立即停止使用；新增资料先在知识空间上传。</p>
-        {libraries.map((row) => (
-          <label key={row.id} className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={row.allowed}
-              disabled={disabled || busy}
-              onChange={(event) => void change(row.id, event.target.checked)}
-            />
-            {row.name}
-          </label>
-        ))}
-        {!busy && !libraries.length && <p>当前客户暂无知识库</p>}
-        <span role="status" aria-label="知识授权结果">
-          {message}
-        </span>
-      </div>
-    </details>
+      <PopoverTrigger
+        render={<Button variant="secondary" size="small">知识库使用范围</Button>}
+      />
+      <PopoverContent placement="bottom-end">
+        <div className="flex max-h-96 w-96 flex-col gap-3 overflow-y-auto">
+          <p className="system-xs-regular text-text-tertiary">
+            只有允许对客的知识库才可供客户端检索。关闭后立即停止使用；新增资料先在知识空间上传。
+          </p>
+          {libraries.map((row) => (
+            <label key={row.id} className="flex items-center gap-2">
+              <Checkbox
+                aria-label={row.name}
+                checked={row.allowed}
+                disabled={disabled || busy}
+                onCheckedChange={(checked) => void change(row.id, checked === true)}
+              />
+              <span className="system-sm-regular text-text-primary">{row.name}</span>
+            </label>
+          ))}
+          {!busy && !libraries.length && (
+            <p className="system-xs-regular text-text-tertiary">当前客户暂无知识库</p>
+          )}
+          <span
+            role="status"
+            aria-label="知识授权结果"
+            className="system-xs-regular text-text-secondary"
+          >
+            {message}
+          </span>
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
