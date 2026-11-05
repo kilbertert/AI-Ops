@@ -23,6 +23,7 @@ from aiops_diagnostics.common.private_files import ensure_private_directory, pro
 from aiops_diagnostics.common.redaction import ERROR_TEXT_LIMIT, redact_text
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.identity.order_identity import normalize_order_identifier
 from aiops_diagnostics.identity.query_scope import MAX_SCOPE_IDS
 
 _LOGGER = logging.getLogger("aiops.gateway_store")
@@ -96,7 +97,7 @@ class GatewayStore:
         tenant_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
-        order_no = _scope(order_no, "order_no")
+        order_no = _order_no(order_no, "order_no")
         rule_version = _scope(rule_version, "rule_version")
         now = now_utc()
         with self._connection(write=True) as connection:
@@ -573,7 +574,7 @@ class GatewayStore:
         the same draft" without copying operator text into a second store.
         """
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
-        order_no = _scope(order_no, "order_no") if order_no else ""
+        order_no = _order_no(order_no, "order_no") if order_no else ""
         draft_fingerprint = _scope(draft_fingerprint, "draft_fingerprint")
         initiator = _scope(initiator, "initiator")
         tenant_id = _optional_scope(tenant_id, "tenant_id")
@@ -1512,6 +1513,19 @@ def _scope(value: str, name: str) -> str:
 
 def _optional_scope(value: str | None, name: str) -> str | None:
     return _scope(value, name) if value and value.strip() else None
+
+
+def _order_no(value: str, name: str) -> str:
+    """订单号校验走订单标识权威（#606），不借 ``SAFE_SCOPE`` 的语法。
+
+    ``SAFE_SCOPE`` 的首字符必须是字母数字这条是为 scope 指纹写的；复用它
+    曾让「请求体已接受的首字符为符号的订单号」在建表时被拒——同一输入两
+    个答案。错误形状与 ``_scope`` 逐字相同，调用方的 except 不需要改。
+    """
+    candidate = normalize_order_identifier(value)
+    if candidate is None:
+        raise ValueError(f"{name} contains unsupported characters")
+    return candidate
 
 
 #: 运维分析作业的 id 前缀（#697）。与 ``dx_`` 并列在诊断作业表上，靠它区分种类。

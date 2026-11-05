@@ -7,6 +7,7 @@ from importlib.resources import files
 
 from aiops_diagnostics.common.i18n import localized_pack
 from aiops_diagnostics.consumer.consumer_time import readable_time
+from aiops_diagnostics.identity.order_identity import is_order_identifier
 from aiops_diagnostics.operator import order_analysis, order_billing, order_pricing
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused
 
@@ -46,7 +47,9 @@ def is_agent(run):
 def order_candidate(arguments, question, selected_order, active_order):
     """候选来源与授权分开：模型只能提出用户给过或会话已确认的对象。"""
     value = arguments.get("order_no") or selected_order or active_order
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value):
+    # 形状判定走订单标识权威（#606）——这里曾经另写一份 `[A-Za-z0-9_-]{1,80}`，
+    # 合同承诺的 `.`/`:` 形状会被当成「没给订单号」拒掉。
+    if not is_order_identifier(value):
         raise OperatorRefused("OPERATOR_ORDER_REQUIRED")
     in_message = re.search(r"(?<![A-Za-z0-9_-])" + re.escape(value) + r"(?![A-Za-z0-9_-])", question)
     if value not in {selected_order, active_order} and not in_message:
