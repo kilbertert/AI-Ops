@@ -63,7 +63,7 @@ def normalize_tenant(value: object) -> str | None:
     """The one normalization for the tenant dimension.
 
     Strips surrounding whitespace and decodes bytes, so that a tenant taken
-    from a request (which ``parse_request`` strips), a tenant stored in a row,
+    from a request, a tenant stored in a row,
     and a tenant bound into SQL all compare equal regardless of how they
     arrived. Returns ``None`` for anything that cannot carry a usable tenant —
     absent, empty, blank, or a non-string type — so callers never have to
