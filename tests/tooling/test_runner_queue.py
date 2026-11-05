@@ -130,6 +130,114 @@ else:
     assert "terminal state confirmed" in result.stdout
 
 
+def test_run_retirement_retries_drifting_listing(tmp_path):
+    """run 列表最终一致：total_count 瞬时领先 items 时重试而不是拒绝清理。"""
+    repo = "owner/example"
+    run = {
+        "id": 1,
+        "path": ".github/workflows/agent-review.yml",
+        "event": "pull_request_target",
+        "display_title": "Agent Review / pr-7",
+        "status": "in_progress",
+        "created_at": "2026-11-05T11:00:00Z",
+        "head_branch": "task",
+        "repository": {"full_name": repo},
+    }
+    pr = {
+        "number": 7,
+        "state": "closed",
+        "closed_at": "2026-11-05T12:00:00Z",
+        "user": {"login": "owner"},
+        "head": {"ref": "task", "repo": {"full_name": repo}},
+        "base": {"repo": {"full_name": repo}},
+    }
+    (tmp_path / "fixture.json").write_text(json.dumps({"run": run, "pr": pr}))
+    cli = tmp_path / "gh"
+    cli.write_text("""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+root=Path(os.environ['FIXTURE']); data=json.loads((root/'fixture.json').read_text()); endpoint=sys.argv[2]
+if 'status=' in endpoint:
+    marker=root/'queued-calls'
+    n=int(marker.read_text()) if marker.exists() else 0
+    n+=1; marker.write_text(str(n))
+    # 首个 status 查询的第一次响应漂移：count=2 但只回 1 项，之后稳定。
+    if n==1:
+        print(json.dumps([{'total_count':2,'workflow_runs':[data['run']]}]))
+    else:
+        print(json.dumps([{'total_count':1,'workflow_runs':[data['run']]}]))
+elif endpoint.endswith('/cancel'):
+    (root/'cancelled').write_text(endpoint)
+elif '/pulls/' in endpoint:
+    print(json.dumps(data['pr']))
+else:
+    run=data['run']
+    if (root/'cancelled').exists(): run['status']='completed'
+    print(json.dumps(run))
+""")
+    cli.chmod(0o700)
+    result = subprocess.run(
+        ["node", ".sandcastle/queue/retire-runs.mjs"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "FIXTURE": str(tmp_path),
+            "GH_REPO": repo,
+        },
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "cancelled").read_text() == "repos/owner/example/actions/runs/1/cancel"
+
+
+def test_run_retirement_still_fails_closed_on_persistent_truncation(tmp_path):
+    """持续不一致（真正的 API 截断）仍然拒清，fail-closed 语义不变。"""
+    repo = "owner/example"
+    run = {
+        "id": 1,
+        "path": ".github/workflows/agent-review.yml",
+        "event": "pull_request_target",
+        "display_title": "Agent Review / pr-7",
+        "status": "in_progress",
+        "created_at": "2026-11-05T11:00:00Z",
+        "head_branch": "task",
+        "repository": {"full_name": repo},
+    }
+    (tmp_path / "fixture.json").write_text(json.dumps({"run": run}))
+    cli = tmp_path / "gh"
+    cli.write_text("""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+root=Path(os.environ['FIXTURE']); data=json.loads((root/'fixture.json').read_text()); endpoint=sys.argv[2]
+if 'status=' in endpoint:
+    print(json.dumps([{'total_count':2,'workflow_runs':[data['run']]}]))
+elif '/pulls/' in endpoint:
+    print(json.dumps({}))
+else:
+    print(json.dumps(data['run']))
+""")
+    cli.chmod(0o700)
+    result = subprocess.run(
+        ["node", ".sandcastle/queue/retire-runs.mjs"],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "FIXTURE": str(tmp_path),
+            "GH_REPO": repo,
+        },
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode != 0
+    assert "Run listing was truncated" in result.stderr
+    assert not (tmp_path / "cancelled").exists()
+
+
 def test_runner_routing_and_early_gates():
     def workflow(name):
         return yaml.safe_load((ROOT / ".github/workflows" / name).read_text())

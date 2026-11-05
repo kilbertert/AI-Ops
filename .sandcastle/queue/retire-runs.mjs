@@ -51,11 +51,25 @@ export function completePages(pages) {
 export async function retire(repo, { number, closedAt, dryRun = false } = {}) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? '')) throw new Error('GH_REPO is required');
   if (number && !/^[1-9]\d*$/.test(number)) throw new Error('Invalid PR number');
-  // Read every page before making the first cancellation request.
+  // Read every page before making the first cancellation request. The runs
+  // listing is eventually consistent: while agent runs churn (PR close fires
+  // this job) total_count can transiently disagree with the returned items, so
+  // a drifting listing is retried instead of treated as truncation. A listing
+  // that stays inconsistent still fails closed.
   const runs = [];
   for (const status of active) {
-    const pages = JSON.parse(api(repo, `actions/runs?status=${status}&per_page=100`, '--paginate', '--slurp'));
-    runs.push(...completePages(pages));
+    let listed = null, lastErr;
+    for (let attempt = 0; attempt < 4 && !listed; attempt++) {
+      if (attempt) await new Promise(resolve => setTimeout(resolve, 2000));
+      try {
+        const pages = JSON.parse(api(repo, `actions/runs?status=${status}&per_page=100`, '--paginate', '--slurp'));
+        listed = completePages(pages);
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (!listed) throw lastErr;
+    runs.push(...listed);
   }
   const cancelled = new Set();
   for (const candidate of runs) {
