@@ -31,6 +31,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.consumer import consumer_sites
 from aiops_diagnostics.execution.agent_runs import scope_from_json
 from aiops_diagnostics.operator import operator_cpms, operator_tools
@@ -260,7 +261,7 @@ class ConsumerToolGrants:
                 "tool": grant.tool,
                 "inputs": declared.declared_inputs(operator_cpms.run_values(grant.tool, "", grant.arguments)),
                 "source": declared.source,
-                "observed_at": datetime.now(UTC).isoformat(),
+                "observed_at": format_stored_time(now_utc()),
                 "data": data,
             }
             grant.evidence["response"] = response

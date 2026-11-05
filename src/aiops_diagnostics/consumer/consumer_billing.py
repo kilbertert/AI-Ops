@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 
@@ -13,6 +12,7 @@ from aiops_diagnostics.common.bounded_http import (
     parse_code_data_envelope,
     request_json,
 )
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.data.charging_status import ChargingStatusError
 from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
@@ -85,7 +85,7 @@ def read_billing_record(base_url, order_no, *, tenant_id, user_id):
         "recorded_payment_amount": _amount(row.get("payAmount")),
         "refund_status": str(refund) if refund is not None else None,
         "recorded_refund_amount": _amount(row.get("refundAmount")),
-        "observed_at": datetime.now(UTC).isoformat(),
+        "observed_at": format_stored_time(now_utc()),
         "source": "cpms.orderDetail",
     }
 

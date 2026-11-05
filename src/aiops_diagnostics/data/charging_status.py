@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -13,6 +12,7 @@ from aiops_diagnostics.common.bounded_http import (
     parse_code_data_envelope,
     request_json,
 )
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.data.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
 from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
@@ -56,6 +56,6 @@ def read_charging_status(base_url: str, order_no: str, *, tenant_id: str, user_i
         "order_no": order_no,
         "status_code": status,
         "status_role": role_of(status).value if known else StatusRole.UNKNOWN.value,
-        "observed_at": datetime.now(UTC).isoformat(),
+        "observed_at": format_stored_time(now_utc()),
         "source": "cpms.chargingInfo",
     }

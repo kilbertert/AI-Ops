@@ -46,9 +46,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 
 #: 表只认这两个状态。没有 `deleted`：撤回不删行（见模块文档第 2 条）。
 STATE_ACTIVE = "active"
@@ -100,8 +101,6 @@ class RouteBinding:
         return self.state == STATE_ACTIVE
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class ChatRouteBindingStore:
@@ -201,7 +200,7 @@ class ChatRouteBindingStore:
         """
         if engine not in (ENGINE_NODE, ENGINE_DIFY):
             raise RouteBindingError("ROUTE_ENGINE_UNKNOWN", "unknown engine")
-        now = _now()
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             current = connection.execute(
                 """
@@ -306,7 +305,7 @@ class ChatRouteBindingStore:
         "本来就撤回了"与"这次撤回成功"对调用方是同一个答案，而删除行会是另一个答案
         （请求会掉回直读）。
         """
-        now = _now()
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             current = connection.execute(
                 """

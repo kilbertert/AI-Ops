@@ -19,12 +19,13 @@ import uuid
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.publication.agent_lifecycle import SAFE_ID
 
 logger = logging.getLogger(__name__)
@@ -792,7 +793,7 @@ class ShortcutStore:
         created_by: str,
     ) -> Shortcut:
         shortcut_id = "sct_" + uuid.uuid4().hex
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         payload = {
             "labels": labels,
             "descriptions": descriptions,
@@ -945,7 +946,7 @@ class ShortcutStore:
         # different kind of resource. Letting an edit move a row between
         # surfaces would make "which endpoint serves this" mutable config,
         # which is the implicit-input shape the explicit column exists to end.
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         payload = {
             "labels": labels,
             "descriptions": descriptions,
@@ -978,7 +979,7 @@ class ShortcutStore:
         return self.get(shortcut_id, tenant_id)
 
     def fork_draft(self, shortcut_id: str, tenant_id: str, expected_revision: int) -> Shortcut:
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             updated = connection.execute(
                 """
@@ -999,7 +1000,7 @@ class ShortcutStore:
         snapshot: dict[str, Any],
         published_by: str,
     ) -> ShortcutVersion:
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             row = connection.execute(
                 "SELECT status, revision FROM shortcuts WHERE shortcut_id = ? AND tenant_id = ?",
@@ -1036,7 +1037,7 @@ class ShortcutStore:
         return ShortcutVersion(shortcut_id, tenant_id, version_no, snapshot, published_by, now)
 
     def disable(self, shortcut_id: str, tenant_id: str, expected_revision: int) -> Shortcut:
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             updated = connection.execute(
                 """
@@ -1050,7 +1051,7 @@ class ShortcutStore:
         return self.get(shortcut_id, tenant_id)
 
     def enable(self, shortcut_id: str, tenant_id: str, expected_revision: int) -> Shortcut:
-        now = _iso(datetime.now(UTC))
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             updated = connection.execute(
                 """
@@ -1102,7 +1103,7 @@ class ShortcutStore:
         raise ShortcutConflict(f"shortcut revision conflict: expected {revision}")
 
     def _initialize(self) -> None:
-        with self._connection() as connection:
+        with self._connection(write=True) as connection:
             connection.executescript(
                 """
                 PRAGMA journal_mode=WAL;
@@ -1154,22 +1155,9 @@ class ShortcutStore:
 
     @contextmanager
     def _connection(self, *, write: bool = False):
-        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=5000")
-        try:
-            if write:
-                connection.execute("BEGIN IMMEDIATE")
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）；本 store 走 LEASE profile。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
-            if write:
-                connection.commit()
-        except Exception:
-            if write:
-                connection.rollback()
-            raise
-        finally:
-            connection.close()
 
 
 class ShortcutManager:
@@ -1625,5 +1613,3 @@ def _json(value: dict[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def _iso(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat()

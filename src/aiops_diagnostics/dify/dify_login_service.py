@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.dify.dify_login_company import (
     CompanyAuthSettings,
     CompanyIdentity,
@@ -250,7 +251,7 @@ class MappingStore:
     ) -> None:
         import json
 
-        now = _utc_now()
+        now = format_stored_time(now_utc())
         with self._lock, self._connect() as connection:
             connection.execute(
                 """
@@ -308,7 +309,7 @@ class MappingStore:
                     "INSERT INTO dify_login_audit"
                     " (at, company_user_id, dify_account_id, action, reason_code)"
                     " VALUES (?, ?, ?, ?, ?)",
-                    (_utc_now(), company_user_id, dify_account_id, action, reason_code),
+                    (format_stored_time(now_utc()), company_user_id, dify_account_id, action, reason_code),
                 )
         except sqlite3.Error:  # pragma: no cover - 磁盘问题不该挡登录
             _LOGGER.warning("dify-login: audit write failed for %s/%s", company_user_id, action)
@@ -329,7 +330,7 @@ class MappingStore:
         with self._lock, self._connect() as connection:
             connection.execute(
                 "UPDATE dify_login_mappings SET status = ?, last_reconciled_at = ? WHERE company_user_id = ?",
-                (status, _utc_now(), company_user_id),
+                (status, format_stored_time(now_utc()), company_user_id),
             )
 
     def retag_email(self, company_user_id: str, dify_email: str) -> None:
@@ -347,14 +348,10 @@ class MappingStore:
             connection.execute(
                 "UPDATE dify_login_mappings SET dify_email = ?, last_reconciled_at = ?"
                 " WHERE company_user_id = ?",
-                (dify_email, _utc_now(), company_user_id),
+                (dify_email, format_stored_time(now_utc()), company_user_id),
             )
 
 
-def _utc_now() -> str:
-    from datetime import UTC, datetime
-
-    return datetime.now(UTC).isoformat()
 
 
 class LoginService:
@@ -712,7 +709,7 @@ def _workspace_refusal(tenant_id: str, exc: Any) -> str:
 
 
 def utc_iso() -> str:
-    return _utc_now()
+    return format_stored_time(now_utc())
 
 
 __all__ = [

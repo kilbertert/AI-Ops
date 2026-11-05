@@ -19,12 +19,14 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.redaction import redact_text
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
+from aiops_diagnostics.gateway import gateway_db
 
 CONVERSATION_RETENTION_DAYS = 30
 CONTEXT_MAX_TURNS = 8
@@ -70,6 +72,7 @@ class ConversationStore:
         with self._connection(write=True) as connection:
             connection.executescript(
                 """
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS conversations (
                     conversation_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
@@ -135,21 +138,11 @@ class ConversationStore:
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=5000")
-        try:
-            if write:
-                connection.execute("BEGIN IMMEDIATE")
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）。本 store 补上了
+        # foreign_keys=ON —— 曾经少了这一条（同一文件上没有「不强制
+        # 外键」这个选项）。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
-            if write:
-                connection.commit()
-        except Exception:
-            if write:
-                connection.rollback()
-            raise
-        finally:
-            connection.close()
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -167,7 +160,7 @@ class ConversationStore:
         if not _SAFE_ENTRY.fullmatch(business_entry or ""):
             raise ConversationError("business entry is invalid")
         agent_version_key = self._validate_agent_version(agent_version_key)
-        now = _utc_now()
+        now = now_utc()
         conversation_id = "conv_" + uuid.uuid4().hex
         expires_at = now + timedelta(days=CONVERSATION_RETENTION_DAYS)
         with self._connection(write=True) as connection:
@@ -185,9 +178,9 @@ class ConversationStore:
                     scope,
                     business_entry,
                     agent_version_key,
-                    _iso(now),
-                    _iso(now),
-                    _iso(expires_at),
+                    format_stored_time(now),
+                    format_stored_time(now),
+                    format_stored_time(expires_at),
                     operator_binding,
                 ),
             )
@@ -197,7 +190,7 @@ class ConversationStore:
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
         with self._connection(write=True) as connection:
-            self._expire_conversations(connection, _utc_now())
+            self._expire_conversations(connection, now_utc())
             row = connection.execute(
                 "SELECT * FROM conversations WHERE conversation_id = ? AND scope_fingerprint = ?",
                 (conversation_id, scope),
@@ -211,7 +204,7 @@ class ConversationStore:
         if not 1 <= limit <= 200:
             raise ConversationError("limit must be between 1 and 200")
         with self._connection(write=True) as connection:
-            self._expire_conversations(connection, _utc_now())
+            self._expire_conversations(connection, now_utc())
             rows = connection.execute(
                 """
                 SELECT * FROM conversations
@@ -226,7 +219,7 @@ class ConversationStore:
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
         with self._connection(write=True) as connection:
-            self._expire_conversations(connection, _utc_now())
+            self._expire_conversations(connection, now_utc())
             deleted = connection.execute(
                 "DELETE FROM conversations WHERE conversation_id = ? AND scope_fingerprint = ?",
                 (conversation_id, scope),
@@ -254,7 +247,7 @@ class ConversationStore:
         scope = self._validate_scope(scope_fingerprint)
         if order_no is not None and not _SAFE_ORDER.fullmatch(order_no):
             raise ConversationError("order number is invalid")
-        now = _utc_now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             self._expire_conversations(connection, now)
             updated = connection.execute(
@@ -265,8 +258,8 @@ class ConversationStore:
                 """,
                 (
                     order_no,
-                    _iso(now),
-                    _iso(now + timedelta(days=CONVERSATION_RETENTION_DAYS)),
+                    format_stored_time(now),
+                    format_stored_time(now + timedelta(days=CONVERSATION_RETENTION_DAYS)),
                     conversation_id,
                     scope,
                 ),
@@ -283,7 +276,7 @@ class ConversationStore:
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
         agent_version_key = self._validate_agent_version(agent_version_key)
-        now = _utc_now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             self._expire_conversations(connection, now)
             updated = connection.execute(
@@ -292,7 +285,7 @@ class ConversationStore:
                 SET agent_version_key = ?, updated_at = ?
                 WHERE conversation_id = ? AND scope_fingerprint = ?
                 """,
-                (agent_version_key, _iso(now), conversation_id, scope),
+                (agent_version_key, format_stored_time(now), conversation_id, scope),
             ).rowcount
             if not updated:
                 raise ConversationNotFound("conversation not found")
@@ -328,7 +321,7 @@ class ConversationStore:
         if kind not in {"qa", "diagnosis", "faq"}:
             raise ConversationError("turn kind is invalid")
         question = self._validate_question(question)
-        now = _utc_now()
+        now = now_utc()
         lock_expiry = now - timedelta(seconds=BUSY_LOCK_SECONDS)
         with self._connection(write=True) as connection:
             self._expire_conversations(connection, now)
@@ -341,7 +334,7 @@ class ConversationStore:
             ).fetchone()
             if row is None:
                 raise ConversationNotFound("conversation not found")
-            generating_since = _parse_iso(row["generating_since"]) if row["generating_since"] else None
+            generating_since = parse_stored_time(row["generating_since"]) if row["generating_since"] else None
             if generating_since is not None and generating_since > lock_expiry:
                 raise ConversationBusy("conversation already has a generating turn")
             highest_row = connection.execute(
@@ -360,7 +353,14 @@ class ConversationStore:
                     (turn_id, conversation_id, turn_no, kind, question, token_count, created_at)
                 VALUES (?, ?, ?, ?, ?, 0, ?)
                 """,
-                ("turn_" + uuid.uuid4().hex, conversation_id, next_no, kind, question, _iso(now)),
+                (
+                    "turn_" + uuid.uuid4().hex,
+                    conversation_id,
+                    next_no,
+                    kind,
+                    question,
+                    format_stored_time(now),
+                ),
             )
             connection.execute(
                 """
@@ -369,7 +369,7 @@ class ConversationStore:
                     updated_at = ?
                 WHERE conversation_id = ?
                 """,
-                (_iso(now), next_no, next_no, _iso(now), conversation_id),
+                (format_stored_time(now), next_no, next_no, format_stored_time(now), conversation_id),
             )
             return int(next_no)
 
@@ -402,7 +402,7 @@ class ConversationStore:
             raise ConversationError("status question id is invalid")
         if active_order_no is not None and not _SAFE_ORDER.fullmatch(active_order_no):
             raise ConversationError("order number is invalid")
-        now = _utc_now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             self._expire_conversations(connection, now)
             row = connection.execute(
@@ -424,7 +424,7 @@ class ConversationStore:
                     (
                         json.dumps(answer, ensure_ascii=False) if answer else None,
                         max(0, int(token_count)),
-                        _iso(now),
+                        format_stored_time(now),
                         status_qa_id,
                         conversation_id,
                         turn_no,
@@ -444,8 +444,8 @@ class ConversationStore:
                 WHERE conversation_id = ? AND scope_fingerprint = ? AND generating_turn_no = ?
                 """,
                 (
-                    _iso(now),
-                    _iso(now + timedelta(days=CONVERSATION_RETENTION_DAYS)),
+                    format_stored_time(now),
+                    format_stored_time(now + timedelta(days=CONVERSATION_RETENTION_DAYS)),
                     conversation_id,
                     scope,
                     turn_no,
@@ -474,7 +474,7 @@ class ConversationStore:
             cursor = connection.execute(
                 "UPDATE conversations SET generating_since = ?"
                 " WHERE conversation_id = ? AND scope_fingerprint = ? AND generating_turn_no = ?",
-                (_iso(_utc_now()), conversation_id, scope, turn_no),
+                (format_stored_time(now_utc()), conversation_id, scope, turn_no),
             )
             return cursor.rowcount > 0
 
@@ -684,7 +684,7 @@ class ConversationStore:
 
     @staticmethod
     def _expire_conversations(connection: sqlite3.Connection, now: datetime) -> None:
-        stamp = _iso(now)
+        stamp = format_stored_time(now)
         connection.execute(
             "DELETE FROM conversation_turns WHERE conversation_id IN"
             " (SELECT conversation_id FROM conversations WHERE expires_at <= ?)",
@@ -707,16 +707,3 @@ def _turn_from_row(row: sqlite3.Row) -> dict[str, Any]:
     raw = result.pop("answer_json", None)
     result["answer"] = json.loads(raw) if raw else None
     return result
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
-def _iso(value: datetime) -> str:
-    return value.isoformat()
-
-
-def _parse_iso(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value)
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)

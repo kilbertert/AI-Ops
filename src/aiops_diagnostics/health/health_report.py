@@ -5,6 +5,7 @@ from typing import Any, Protocol
 
 from aiops_diagnostics.common.config import SafetySettings
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
+from aiops_diagnostics.common.scalar_rules import as_datetime
 from aiops_diagnostics.data.order_status import is_charging
 from aiops_diagnostics.health.health_metrics import RULE_VERSION as HEALTH_RULE_VERSION
 from aiops_diagnostics.health.health_report_copy import health_summary
@@ -48,8 +49,8 @@ def build_minimal_health_report(
     if not (order.get("child_device_code") or order.get("device_code")):
         raise HealthReportError("order device is missing", code="DEVICE_MISSING")
 
-    started_at = _datetime(order.get("created_time"))
-    stopped_at = _datetime(order.get("stop_time"))
+    started_at = as_datetime(order.get("created_time"))
+    stopped_at = as_datetime(order.get("stop_time"))
     if started_at is None or stopped_at is None or stopped_at <= started_at:
         raise HealthReportError("order time window is invalid", code="ORDER_WINDOW_INVALID")
     if (stopped_at - started_at).total_seconds() > safety.max_order_window_hours * 3600:
@@ -140,13 +141,3 @@ def _indicator(
     }
 
 
-def _datetime(value: object) -> datetime | None:
-    if isinstance(value, datetime):
-        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-    if isinstance(value, str) and value.strip():
-        try:
-            parsed = datetime.fromisoformat(value.strip())
-        except ValueError:
-            return None
-        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
-    return None

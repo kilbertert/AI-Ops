@@ -8,7 +8,7 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,8 @@ from aiops_diagnostics.common.async_job_lifecycle import (
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.redaction import ERROR_TEXT_LIMIT, redact_text
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
+from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.identity.query_scope import MAX_SCOPE_IDS
 
 _LOGGER = logging.getLogger("aiops.gateway_store")
@@ -96,7 +98,7 @@ class GatewayStore:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         order_no = _scope(order_no, "order_no")
         rule_version = _scope(rule_version, "rule_version")
-        now = _utc_now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             self._expire_health_jobs(connection, now)
             row = connection.execute(
@@ -126,9 +128,9 @@ class GatewayStore:
                     order_no,
                     rule_version,
                     _language(language),
-                    _iso(now),
-                    _iso(now),
-                    _iso(now + HEALTH_JOB_DEADLINE),
+                    format_stored_time(now),
+                    format_stored_time(now),
+                    format_stored_time(now + HEALTH_JOB_DEADLINE),
                     tenant_id,
                 ),
             )
@@ -149,7 +151,7 @@ class GatewayStore:
     ) -> bool:
         if status not in ACTIVE_HEALTH_JOB_STATUSES | TERMINAL_HEALTH_JOB_STATUSES:
             raise ValueError("invalid health-report job status")
-        now = _utc_now()
+        now = now_utc()
         completed_at = now if status in TERMINAL_HEALTH_JOB_STATUSES else None
         expires_at = (
             now + HEALTH_JOB_COMPLETED_RETENTION
@@ -178,10 +180,10 @@ class GatewayStore:
                     json.dumps(report, ensure_ascii=False) if report is not None else None,
                     error_code,
                     redact_text(error_message or "")[:ERROR_TEXT_LIMIT] if error_message else None,
-                    _iso(now) if status == "running" else None,
-                    _iso(completed_at) if completed_at else None,
-                    _iso(expires_at) if expires_at else None,
-                    _iso(now),
+                    format_stored_time(now) if status == "running" else None,
+                    format_stored_time(completed_at) if completed_at else None,
+                    format_stored_time(expires_at) if expires_at else None,
+                    format_stored_time(now),
                     job_id,
                 ),
             )
@@ -189,7 +191,7 @@ class GatewayStore:
 
     def get_health_job(self, job_id: str, scope_fingerprint: str) -> dict[str, Any] | None:
         with self._connection(write=True) as connection:
-            self._expire_health_jobs(connection, _utc_now())
+            self._expire_health_jobs(connection, now_utc())
             row = connection.execute(
                 "SELECT * FROM health_report_jobs WHERE job_id = ? AND scope_fingerprint = ?",
                 (job_id, scope_fingerprint),
@@ -207,7 +209,7 @@ class GatewayStore:
         # statements; what differs between them is what their profiles declare,
         # so a difference between two tables is now a difference between two
         # profiles rather than a difference between two hand-edits.
-        statements = expire_statements("health_report_jobs", HEALTH_JOB, _iso(now))
+        statements = expire_statements("health_report_jobs", HEALTH_JOB, format_stored_time(now))
         connection.execute(*statements.claim)
         connection.execute(*statements.sweep)
 
@@ -262,7 +264,7 @@ class GatewayStore:
         rule_version = _scope(rule_version, "rule_version")
         card = _scope(card, "card")
         language = _language(language)
-        now = _utc_now()
+        now = now_utc()
         analysis_id = ANALYSIS_ID_PREFIX + uuid.uuid4().hex
         with self._connection(write=True) as connection:
             self._expire_diagnoses(connection, now)
@@ -278,12 +280,12 @@ class GatewayStore:
                     analysis_id,
                     scope_fingerprint,
                     language,
-                    _iso(now),
-                    _iso(now),
-                    _iso(now + DIAGNOSIS_DEADLINE),
+                    format_stored_time(now),
+                    format_stored_time(now),
+                    format_stored_time(now + DIAGNOSIS_DEADLINE),
                     json.dumps(list(clean_sites), ensure_ascii=False) if clean_sites is not None else None,
-                    _iso(start),
-                    _iso(end),
+                    format_stored_time(start),
+                    format_stored_time(end),
                     rule_version,
                     card,
                     tenant_id,
@@ -332,7 +334,7 @@ class GatewayStore:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        _iso(_utc_now()),
+                        format_stored_time(now_utc()),
                         app_id,
                         tenant_id,
                         business_entry,
@@ -365,7 +367,7 @@ class GatewayStore:
         兑换那一步仍然要求一次有效的 RAGFlow 登录，而登录用的是租户自己的凭据。
         """
         ticket = secrets.token_urlsafe(32)
-        now = _utc_now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             connection.execute(
                 "INSERT INTO knowledge_hop_tickets"
@@ -376,8 +378,8 @@ class GatewayStore:
                     tenant_id,
                     environment,
                     workspace_id,
-                    _iso(now),
-                    _iso(now + timedelta(seconds=ttl_seconds)),
+                    format_stored_time(now),
+                    format_stored_time(now + timedelta(seconds=ttl_seconds)),
                 ),
             )
         return ticket
@@ -396,7 +398,7 @@ class GatewayStore:
         """
         if not ticket:
             return None
-        now = _utc_now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             row = connection.execute(
                 "SELECT tenant_id, environment, workspace_id, expires_at, used_at"
@@ -405,11 +407,11 @@ class GatewayStore:
             ).fetchone()
             if row is None or str(row["environment"]) != environment:
                 return None
-            if str(row["used_at"] or "") or datetime.fromisoformat(str(row["expires_at"])) <= now:
+            if str(row["used_at"] or "") or parse_stored_time(str(row["expires_at"])) <= now:
                 return None
             updated = connection.execute(
                 "UPDATE knowledge_hop_tickets SET used_at = ? WHERE ticket = ? AND used_at IS NULL",
-                (_iso(now), ticket),
+                (format_stored_time(now), ticket),
             )
             if updated.rowcount != 1:
                 return None
@@ -420,7 +422,7 @@ class GatewayStore:
 
     def prune_hop_tickets(self, *, older_than_seconds: float = 600.0) -> int:
         """删掉很久以前的行。票只在秒级有用，留一天的行只是垃圾。"""
-        cutoff = _iso(_utc_now() - timedelta(seconds=older_than_seconds))
+        cutoff = format_stored_time(now_utc() - timedelta(seconds=older_than_seconds))
         with self._connection(write=True) as connection:
             deleted = connection.execute("DELETE FROM knowledge_hop_tickets WHERE expires_at < ?", (cutoff,))
         return int(deleted.rowcount or 0)
@@ -453,7 +455,7 @@ class GatewayStore:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        _iso(_utc_now()),
+                        format_stored_time(now_utc()),
                         tenant_id,
                         environment,
                         company_user_id,
@@ -498,10 +500,9 @@ class GatewayStore:
         白白前进，否则"哪一版改了字"这件事在版本号上就看不出来了。
         """
         import json as _json
-        from datetime import UTC, datetime
 
         payload = _json.dumps(bundle, ensure_ascii=False, sort_keys=True)
-        with self._connection() as connection:
+        with self._connection(write=True) as connection:
             row = connection.execute(
                 "SELECT version, payload_json FROM consumer_copy_bundles "
                 "WHERE tenant_id = ? ORDER BY version DESC LIMIT 1",
@@ -514,7 +515,7 @@ class GatewayStore:
                 "INSERT INTO consumer_copy_bundles "
                 "(tenant_id, version, payload_json, published_at, published_by) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (tenant_id, version, payload, datetime.now(UTC).isoformat(), published_by),
+                (tenant_id, version, payload, format_stored_time(now_utc()), published_by),
             )
         return version
 
@@ -577,7 +578,7 @@ class GatewayStore:
         initiator = _scope(initiator, "initiator")
         tenant_id = _optional_scope(tenant_id, "tenant_id")
         language = _language(language)
-        now = _utc_now()
+        now = now_utc()
         trial_id = TRIAL_ID_PREFIX + uuid.uuid4().hex
         with self._connection(write=True) as connection:
             self._expire_diagnoses(connection, now)
@@ -597,9 +598,9 @@ class GatewayStore:
                     redact_text(question),
                     language,
                     "node-sop-trial" if node_trial else "dify-workflow-trial" if workflow_trial else None,
-                    _iso(now),
-                    _iso(now),
-                    _iso(now + DIAGNOSIS_DEADLINE),
+                    format_stored_time(now),
+                    format_stored_time(now),
+                    format_stored_time(now + DIAGNOSIS_DEADLINE),
                     draft_fingerprint,
                     initiator,
                     tenant_id,
@@ -624,7 +625,7 @@ class GatewayStore:
     ) -> bool:
         if status not in ACTIVE_DIAGNOSIS_STATUSES | TERMINAL_DIAGNOSIS_STATUSES:
             raise ValueError("invalid standard-diagnosis status")
-        now = _utc_now()
+        now = now_utc()
         completed_at = now if status in TERMINAL_DIAGNOSIS_STATUSES else None
         expires_at = (
             now + DIAGNOSIS_COMPLETED_RETENTION
@@ -654,10 +655,10 @@ class GatewayStore:
                     json.dumps(result, ensure_ascii=False) if result is not None else None,
                     error_code,
                     redact_text(error_message or "")[:ERROR_TEXT_LIMIT] if error_message else None,
-                    _iso(now) if status == "running" else None,
-                    _iso(completed_at) if completed_at else None,
-                    _iso(expires_at) if expires_at else None,
-                    _iso(now),
+                    format_stored_time(now) if status == "running" else None,
+                    format_stored_time(completed_at) if completed_at else None,
+                    format_stored_time(expires_at) if expires_at else None,
+                    format_stored_time(now),
                     diagnosis_id,
                 ),
             )
@@ -671,7 +672,7 @@ class GatewayStore:
         if not diagnosis_id.startswith(("dx_", ANALYSIS_ID_PREFIX, TRIAL_ID_PREFIX)):
             return None
         with self._connection(write=True) as connection:
-            self._expire_diagnoses(connection, _utc_now())
+            self._expire_diagnoses(connection, now_utc())
             row = connection.execute(
                 """
                 SELECT * FROM standard_diagnoses
@@ -690,7 +691,7 @@ class GatewayStore:
         if not 1 <= limit <= 200:
             raise ValueError("limit must be between 1 and 200")
         with self._connection(write=True) as connection:
-            self._expire_diagnoses(connection, _utc_now())
+            self._expire_diagnoses(connection, now_utc())
             rows = connection.execute(
                 """
                 SELECT diagnosis_id, order_no, question, indicator_code, status,
@@ -723,7 +724,7 @@ class GatewayStore:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         question = _question(question, "question")
         tenant_id = _optional_scope(tenant_id, "tenant_id")
-        now = _utc_now()
+        now = now_utc()
         qa_id = "qa_" + uuid.uuid4().hex
         with self._connection(write=True) as connection:
             self._expire_assistant_questions(connection, now)
@@ -739,9 +740,9 @@ class GatewayStore:
                     scope_fingerprint,
                     redact_text(question),
                     internal_run_id,
-                    _iso(now),
-                    _iso(now),
-                    _iso(now + DIAGNOSIS_DEADLINE),
+                    format_stored_time(now),
+                    format_stored_time(now),
+                    format_stored_time(now + DIAGNOSIS_DEADLINE),
                     tenant_id,
                 ),
             )
@@ -762,7 +763,7 @@ class GatewayStore:
     ) -> bool:
         if status not in ACTIVE_DIAGNOSIS_STATUSES | TERMINAL_DIAGNOSIS_STATUSES:
             raise ValueError("invalid assistant-question status")
-        now = _utc_now()
+        now = now_utc()
         completed_at = now if status in TERMINAL_DIAGNOSIS_STATUSES else None
         expires_at = (
             now + DIAGNOSIS_COMPLETED_RETENTION
@@ -791,10 +792,10 @@ class GatewayStore:
                     json.dumps(result, ensure_ascii=False) if result is not None else None,
                     error_code,
                     redact_text(error_message or "")[:ERROR_TEXT_LIMIT] if error_message else None,
-                    _iso(now) if status == "running" else None,
-                    _iso(completed_at) if completed_at else None,
-                    _iso(expires_at) if expires_at else None,
-                    _iso(now),
+                    format_stored_time(now) if status == "running" else None,
+                    format_stored_time(completed_at) if completed_at else None,
+                    format_stored_time(expires_at) if expires_at else None,
+                    format_stored_time(now),
                     qa_id,
                 ),
             )
@@ -806,7 +807,7 @@ class GatewayStore:
         scope_fingerprint: str,
     ) -> dict[str, Any] | None:
         with self._connection(write=True) as connection:
-            self._expire_assistant_questions(connection, _utc_now())
+            self._expire_assistant_questions(connection, now_utc())
             row = connection.execute(
                 """
                 SELECT * FROM assistant_questions
@@ -880,7 +881,7 @@ class GatewayStore:
         """
         if not knowledge_base_ids:
             raise ValueError("a knowledge source needs at least one knowledge base")
-        now = _utc_now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             connection.execute(
                 """
@@ -900,7 +901,7 @@ class GatewayStore:
                     "|".join(knowledge_base_ids),
                     display_name,
                     created_by,
-                    _iso(now),
+                    format_stored_time(now),
                 ),
             )
         return {
@@ -954,7 +955,7 @@ class GatewayStore:
         without a check timestamp, so the next run knows to repair instead of
         concluding "already onboarded" and walking away.
         """
-        now = _iso(_utc_now())
+        now = format_stored_time(now_utc())
         with self._connection(write=True) as connection:
             existing = connection.execute(
                 "SELECT created_at, model_checked_at FROM ragflow_tenants"
@@ -1010,7 +1011,7 @@ class GatewayStore:
         if not 1 <= limit <= 200:
             raise ValueError("limit must be between 1 and 200")
         with self._connection(write=True) as connection:
-            self._expire_assistant_questions(connection, _utc_now())
+            self._expire_assistant_questions(connection, now_utc())
             rows = connection.execute(
                 """
                 SELECT qa_id, question, status, created_at, updated_at
@@ -1134,13 +1135,13 @@ class GatewayStore:
 
     @staticmethod
     def _expire_diagnoses(connection: sqlite3.Connection, now: datetime) -> None:
-        statements = expire_statements("standard_diagnoses", DIAGNOSIS, _iso(now))
+        statements = expire_statements("standard_diagnoses", DIAGNOSIS, format_stored_time(now))
         connection.execute(*statements.claim)
         connection.execute(*statements.sweep)
 
     @staticmethod
     def _expire_assistant_questions(connection: sqlite3.Connection, now: datetime) -> None:
-        statements = expire_statements("assistant_questions", QUESTION, _iso(now))
+        statements = expire_statements("assistant_questions", QUESTION, format_stored_time(now))
         connection.execute(*statements.claim)
         connection.execute(*statements.sweep)
 
@@ -1184,11 +1185,10 @@ class GatewayStore:
     # oversight rather than a decision.
 
     def _initialize(self) -> None:
-        with self._connection() as connection:
+        with self._connection(write=True) as connection:
             connection.executescript(
                 """
                 PRAGMA journal_mode=WAL;
-                PRAGMA foreign_keys=ON;
                 CREATE TABLE IF NOT EXISTS health_report_jobs (
                     job_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
@@ -1458,22 +1458,10 @@ class GatewayStore:
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA busy_timeout=5000")
-        try:
-            if write:
-                connection.execute("BEGIN IMMEDIATE")
+        # 连接参数与锁纪律只有一份（gateway_db，#573）；本 store 是 LEASE
+        # profile 的原样，读后写与多语句写都靠 BEGIN IMMEDIATE 持租约。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
-            if write:
-                connection.commit()
-        except Exception:
-            if write:
-                connection.rollback()
-            raise
-        finally:
-            connection.close()
 
 
 def _health_job_from_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -1510,10 +1498,9 @@ def _window_bound(value: str, name: str) -> datetime:
     if not text:
         raise ValueError(f"{name} is required")
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parse_stored_time(text)
     except ValueError as exc:
         raise ValueError(f"{name} is not an ISO-8601 timestamp") from exc
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _scope(value: str, name: str) -> str:
@@ -1571,13 +1558,5 @@ def _label(value: str, name: str) -> str:
     return candidate
 
 
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
-def _iso(value: datetime) -> str:
-    return value.astimezone(UTC).isoformat()
-
-
-def _parse_time(value: str) -> datetime:
-    return datetime.fromisoformat(value)

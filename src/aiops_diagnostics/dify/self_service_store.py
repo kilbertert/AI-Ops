@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
@@ -20,6 +19,7 @@ from pathlib import Path
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.dify import dual_entry
+from aiops_diagnostics.gateway import gateway_db
 
 
 class SetupConflict(ValueError):
@@ -32,6 +32,7 @@ class SelfServiceStore:
         ensure_private_directory(self.path.parent)
         with self.connection() as db:
             db.executescript("""
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS operator_apps (
                     app_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
                     workspace_id TEXT NOT NULL, agent_name TEXT NOT NULL,
@@ -61,9 +62,11 @@ class SelfServiceStore:
 
     @contextmanager
     def connection(self):
-        with sqlite3.connect(self.path, timeout=15) as db:
-            db.row_factory = sqlite3.Row
-            yield db
+        # 本 store 每个方法都在写（含建表初始化），统一走 LEASE——连接与
+        # 锁纪律唯一渲染在 gateway_db（#573）。顺带修正一处泄漏：
+        # `with sqlite3.connect()` 提交/回滚但**不关闭**连接。
+        with gateway_db.connection(self.path, write=True) as connection:
+            yield connection
 
     def recover(self):
         with self.connection() as db:
@@ -80,7 +83,7 @@ class SelfServiceStore:
     def create(self, actor: str, request_key: str, request: dict) -> dict:
         encoded = json.dumps(request, ensure_ascii=False, sort_keys=True)
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            # 租约由 LEASE 在连接入口持有——这里不再需要手动 BEGIN。
             row = db.execute(
                 "SELECT * FROM operator_setup_jobs WHERE actor=? AND request_key=?", (actor, request_key)
             ).fetchone()
@@ -142,7 +145,7 @@ class SelfServiceStore:
 
     def claim(self, job_id: str, owner: str) -> bool:
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            # 租约由 LEASE 在连接入口持有——这里不再需要手动 BEGIN。
             row = db.execute("SELECT * FROM operator_setup_jobs WHERE id=?", (job_id,)).fetchone()
             if row is None or row["state"] == "completed" or row["lease_until"] > time.time():
                 return False
@@ -225,7 +228,7 @@ class SelfServiceStore:
         """
         scenario = dual_entry.scenario(entry)
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            # 租约由 LEASE 在连接入口持有——这里不再需要手动 BEGIN。
             row = db.execute("SELECT tenant_id,entry FROM operator_apps WHERE app_id=?", (app_id,)).fetchone()
             if row is None or row["tenant_id"] != tenant_id or row["entry"] == entry:
                 return False
@@ -268,7 +271,7 @@ class SelfServiceStore:
         identity = (app_id, tenant_id, workspace_id, agent_name, profile_id, entry, scenario)
         encoded = json.dumps(targets or {}, ensure_ascii=False, sort_keys=True)
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            # 租约由 LEASE 在连接入口持有——这里不再需要手动 BEGIN。
             old = db.execute("SELECT * FROM operator_apps WHERE app_id=?", (app_id,)).fetchone()
             if old:
                 # **应用与客户**是这条登记的身份；工作区、agent 名、profile 是可推导的元数据。

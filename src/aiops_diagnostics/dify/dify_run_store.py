@@ -25,9 +25,12 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
+from aiops_diagnostics.gateway import gateway_db
 
 #: 与 `agent_runs` 同一口径：180 秒，不因为重试或轮询而延长。
 DIFY_RUN_TTL_SECONDS = 180
@@ -82,8 +85,6 @@ class DifyRun:
     has_photo: bool = False
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
 
 
 def still_valid(run: DifyRun, *, now: datetime | None = None) -> bool:
@@ -94,11 +95,11 @@ def still_valid(run: DifyRun, *, now: datetime | None = None) -> bool:
     这条判据在成功路径上从未生效 —— 一次演示里把 `expires_at` 改成过去时间，
     `get()` 依旧返回 succeeded。
     """
-    return run.expires_at > (now or _now())
+    return run.expires_at > (now or now_utc())
 
 
 def _ts(value: str | None) -> datetime | None:
-    return datetime.fromisoformat(value) if value else None
+    return parse_stored_time(value) if value else None
 
 
 class DifyRunStore:
@@ -109,6 +110,7 @@ class DifyRunStore:
         with self._connection(write=True) as connection:
             connection.executescript(
                 """
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS chat_dify_runs (
                     run_id TEXT PRIMARY KEY,
                     qa_id TEXT NOT NULL,
@@ -176,21 +178,10 @@ class DifyRunStore:
 
     @contextmanager
     def _connection(self, *, write: bool = False):
-        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=5000")
-        try:
-            if write:
-                connection.execute("BEGIN IMMEDIATE")
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）；补上曾经缺失的
+        # foreign_keys=ON。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
-            if write:
-                connection.commit()
-        except Exception:
-            if write:
-                connection.rollback()
-            raise
-        finally:
-            connection.close()
 
     def issue(
         self,
@@ -221,7 +212,7 @@ class DifyRunStore:
         # 这里接受它，是为了让"记录的类型"能等于"实际发出去的类型"。
         if data_kind not in {"status", "billing", "knowledge", "clarify", "human", "order_required"}:
             raise ValueError("unsupported consumer data kind")
-        now = _now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             connection.execute(
                 """
@@ -245,8 +236,8 @@ class DifyRunStore:
                     workflow_id,
                     grant_id,
                     RUNNING,
-                    now.isoformat(),
-                    (now + timedelta(seconds=DIFY_RUN_TTL_SECONDS)).isoformat(),
+                    format_stored_time(now),
+                    format_stored_time(now + timedelta(seconds=DIFY_RUN_TTL_SECONDS)),
                     agent_version_no,
                     kind,
                     route_revision,
@@ -357,7 +348,7 @@ class DifyRunStore:
                 connection.execute(
                     "UPDATE chat_dify_runs SET context_json=? WHERE run_id=? AND state='running' "
                     "AND expires_at>? AND context_json IS NULL",
-                    (json.dumps(context, ensure_ascii=False), run_id, _now().isoformat()),
+                    (json.dumps(context, ensure_ascii=False), run_id, format_stored_time(now_utc())),
                 ).rowcount
                 == 1
             )
@@ -420,7 +411,7 @@ class DifyRunStore:
                  WHERE run_id = ? AND state = ? AND expires_at > ?
                    AND workflow_run_id IS NOT NULL
                 """,
-                (SUCCEEDED, _now().isoformat(), run_id, RUNNING, _now().isoformat()),
+                (SUCCEEDED, format_stored_time(now_utc()), run_id, RUNNING, format_stored_time(now_utc())),
             )
             return cursor.rowcount == 1
 
@@ -437,7 +428,7 @@ class DifyRunStore:
                 UPDATE chat_dify_runs SET state = ?, reason = ?, reject_detail = ?, completed_at = ?
                  WHERE run_id = ? AND state = ?
                 """,
-                (FAILED, reason, detail, _now().isoformat(), run_id, RUNNING),
+                (FAILED, reason, detail, format_stored_time(now_utc()), run_id, RUNNING),
             )
             return cursor.rowcount == 1
 
@@ -449,7 +440,7 @@ class DifyRunStore:
                 UPDATE chat_dify_runs SET state = ?, reason = ?, completed_at = ?
                  WHERE run_id = ? AND state = ?
                 """,
-                (CANCELLED, reason, _now().isoformat(), run_id, RUNNING),
+                (CANCELLED, reason, format_stored_time(now_utc()), run_id, RUNNING),
             )
             return cursor.rowcount == 1
 
@@ -462,7 +453,7 @@ def _expire_in(connection: sqlite3.Connection, run_id: str) -> None:
                                   completed_at = COALESCE(completed_at, ?)
          WHERE run_id = ? AND state = ? AND expires_at <= ?
         """,
-        (EXPIRED, _now().isoformat(), run_id, RUNNING, _now().isoformat()),
+        (EXPIRED, format_stored_time(now_utc()), run_id, RUNNING, format_stored_time(now_utc())),
     )
 
 
@@ -483,8 +474,8 @@ def _run_from_row(row: sqlite3.Row) -> DifyRun:
         grant_id=row["grant_id"],
         state=row["state"],
         reason=row["reason"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        expires_at=datetime.fromisoformat(row["expires_at"]),
+        created_at=parse_stored_time(row["created_at"]),
+        expires_at=parse_stored_time(row["expires_at"]),
         completed_at=_ts(row["completed_at"]),
         agent_version_no=int(row["agent_version_no"] or 0),
         kind=row["kind"],

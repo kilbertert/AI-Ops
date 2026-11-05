@@ -35,8 +35,11 @@ import secrets
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
+
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
+from aiops_diagnostics.gateway import gateway_db
 
 #: 取数授权的有效期。与本项目既定的 run TTL 对齐，**不因为重试而续期**。
 GRANT_TTL_SECONDS = 180
@@ -77,10 +80,6 @@ class DataGrant:
     consumed_at: datetime | None
 
 
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
 def _hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -93,6 +92,7 @@ class DataGrantStore:
         with self._connection(write=True) as connection:
             connection.executescript(
                 """
+                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS chat_data_grants (
                     grant_id TEXT PRIMARY KEY,
                     token_hash TEXT NOT NULL UNIQUE,
@@ -114,21 +114,10 @@ class DataGrantStore:
 
     @contextmanager
     def _connection(self, *, write: bool = False):
-        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout=5000")
-        try:
-            if write:
-                connection.execute("BEGIN IMMEDIATE")
+        # 连接与锁纪律唯一渲染在 gateway_db（#573）；补上曾经缺失的
+        # foreign_keys=ON。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
-            if write:
-                connection.commit()
-        except Exception:
-            if write:
-                connection.rollback()
-            raise
-        finally:
-            connection.close()
 
     def issue(
         self,
@@ -143,7 +132,7 @@ class DataGrantStore:
         """签发一张。返回 (明文 token, 记录)；明文只在这一刻存在。"""
         token = GRANT_PREFIX + secrets.token_urlsafe(GRANT_BYTES)
         grant_id = "cdg_" + secrets.token_hex(8)
-        now = _now()
+        now = now_utc()
         with self._connection(write=True) as connection:
             connection.execute(
                 """
@@ -162,8 +151,8 @@ class DataGrantStore:
                     qa_id,
                     workflow_id,
                     ACTIVE,
-                    now.isoformat(),
-                    (now + timedelta(seconds=GRANT_TTL_SECONDS)).isoformat(),
+                    format_stored_time(now),
+                    format_stored_time(now + timedelta(seconds=GRANT_TTL_SECONDS)),
                 ),
             )
         return token, self.by_id(grant_id)  # type: ignore[return-value]
@@ -196,7 +185,7 @@ class DataGrantStore:
                 UPDATE chat_data_grants SET state = ?, consumed_at = ?
                  WHERE grant_id = ? AND state = ? AND expires_at > ?
                 """,
-                (CONSUMED, _now().isoformat(), grant_id, ACTIVE, _now().isoformat()),
+                (CONSUMED, format_stored_time(now_utc()), grant_id, ACTIVE, format_stored_time(now_utc())),
             )
             return cursor.rowcount == 1
 
@@ -229,9 +218,9 @@ def _grant_from_row(row: sqlite3.Row) -> DataGrant:
         qa_id=row["qa_id"],
         workflow_id=row["workflow_id"],
         state=row["state"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        expires_at=datetime.fromisoformat(row["expires_at"]),
-        consumed_at=datetime.fromisoformat(row["consumed_at"]) if row["consumed_at"] else None,
+        created_at=parse_stored_time(row["created_at"]),
+        expires_at=parse_stored_time(row["expires_at"]),
+        consumed_at=parse_stored_time(row["consumed_at"]) if row["consumed_at"] else None,
     )
 
 
@@ -248,7 +237,7 @@ def usable(grant: DataGrant | None, *, now: datetime | None = None) -> DataGrant
         raise DataGrantError("GRANT_UNKNOWN", "data grant is not recognised")
     if grant.state == REVOKED:
         raise DataGrantError("GRANT_REVOKED", "data grant has been revoked")
-    if grant.expires_at <= (now or _now()):
+    if grant.expires_at <= (now or now_utc()):
         raise DataGrantError("GRANT_EXPIRED", "data grant has expired")
     return grant
 
