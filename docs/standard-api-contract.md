@@ -1,13 +1,18 @@
 # AI-Ops 标准后端接口报告
 
+> 2026-11-05适用范围订正：本页健康报告字段仍作参考；第5节单问诊断和第7节旧调用流程为历史合同，
+> `/v1/standard/diagnoses` 已退役。现役两端问答使用 `/v1/assistant/questions`，支持有界连续会话，
+> 接线以[测试接口文档](testing-api-guide.md)、[系统架构](system-architecture.md)及线上OpenAPI为准。
+> 本页旧环境部署表不构成当前可用性证明。
+
 ## 1. 这套接口解决什么问题
 
 AI-Ops 提供的是消费端无关的标准后端 HTTP API。调用方可以是业务后端、BFF、Web、移动端接入层或运维平台；接口不绑定小程序页面，也不要求调用方了解 AI-Ops 内部数据库、Gateway、provider 或 Agent 实现。
 
-目前提供两类独立能力：
+以下两类说明中，健康报告仍保留，单问诊断仅解释历史：
 
 1. **充电健康报告**：针对一笔已授权充电订单，按确定性规则计算指标、雷达评分、曲线和数据完整度。
-2. **单问诊断**：针对一笔已授权充电订单提交一个独立问题，异步生成诊断状态和诊断结果。
+2. **单问诊断（已退役接口）**：针对一笔已授权充电订单提交一个独立问题，异步生成诊断状态和诊断结果。
 
 健康报告不是故障根因结论；诊断报告也不会把客户端提交的分数或曲线当成证据。两者可以被同一个上层产品同时展示，但接口和生命周期彼此独立。
 
@@ -41,7 +46,7 @@ AI-Ops 提供的是消费端无关的标准后端 HTTP API。调用方可以是�
 ```http
 Authorization: Bearer <aiops_service_token>
 Content-Type: application/json
-third-session: <thirdSession>   # 全小写；X-Third-Session 会被 nginx 丢弃
+third-session: <thirdSession>   # 公网入口头；直达Gateway用X-Third-Session
 ```
 
 示例：
@@ -64,7 +69,7 @@ C 端 `thirdSession`：
 
 ```http
 Authorization: Bearer <aiops_service_token>
-third-session: <thirdSession>   # 全小写；X-Third-Session 会被 nginx 丢弃
+third-session: <thirdSession>   # 公网入口头；直达Gateway用X-Third-Session
 
 `thirdSession` 不是 JWT 或服务凭据。AI-Ops 通过只读 Redis 查询
 `app:3rd_session:<thirdSession>`，解析会话后建立 `ScopeContext`；小程序不直接调用 AI-Ops。
@@ -229,7 +234,7 @@ normal | attention | abnormal | unavailable
 
 前端或其他调用方只根据状态渲染，不解析中文阈值，也不自行重算。
 
-## 5. 单问诊断接口
+## 5. 单问诊断接口（历史，现役返回404）
 
 ### 5.1 创建诊断
 
@@ -408,7 +413,7 @@ Authorization: Bearer <access_token>
 
 内部异常细节只进入脱敏日志，不返回异常类型、SQL、绝对路径、密码或原始响应。
 
-## 7. 调用方最小流程
+## 7. 调用方最小流程（历史单问诊断）
 
 ```text
 1. 从 cloud-auth 获取 Bearer access token

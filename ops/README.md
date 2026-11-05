@@ -1,6 +1,6 @@
 # 运维入口与适用边界
 
-更新：2026-11-04。运行版本、启用与验收见[交付索引](../docs/agents/current-delivery-state.md)，
+更新：2026-11-05。运行版本、启用与验收见[交付索引](../docs/agents/current-delivery-state.md)，
 本页只说明方法入口。部署与读取主机沿用项目声明及库外受控清单，不从历史记录猜地址或凭据。
 
 | 任务 | 现役方法 |
@@ -66,6 +66,13 @@ include，**只转发 H5 聊天页实际调用的 12 条路径**。清单的唯�
 宿主安装属于**产物部署**（CD 只管 `src/` 到 `/opt/aiops-41`），
 按 `deploy/manual-deploys.md` 留痕。回滚 = 删两个文件 + `nginx -t` + reload。
 
-新版WF01同一片段增加精确范围`/v1/internal/consumer-data/(knowledge|status|billing)`的POST转发，
+新版WF01同一片段增加精确范围`/v1/internal/consumer-data/(knowledge|status|billing|agent)`的POST转发，
 保留旧consumer-knowledge供旧发布版与显式恢复使用。新凭据在Gateway会拒绝旧回调，不能靠URL切换能力。
 Nginx仍清空消费者/运营身份头，只透传本次grant。未匹配的后缀不能落入此内部转发规则。
+
+## 当前组件交付边界
+
+Gateway标准CD不自动发布应用、不重建Java节点/Dify网页/插件，也不更新手机安装包。
+节点协议、工具声明与回调须配套；应用正式版、草稿、Service key与知识索引分别核对。
+客服callback6插件升级、原模型tool_call与原生最终轮行为见[插件手册](../docs/agents/consumer-wf01/knowledge-picker-deploy.md)
+及[架构](../docs/system-architecture.md)。本阶段完整核对与未验范围见[任务台账](../docs/reviews/2026-11-05-architecture-stage-closeout.md)。

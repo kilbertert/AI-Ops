@@ -1,37 +1,32 @@
 # WF01 C端只读客服
 
-更新：2026-11-04。原H5知识/本人状态/账单及消费者知识风格发布恢复已有真实证据；
-该次正式版本恢复为v18/revision21，草稿还原。见[当前交付](../current-delivery-state.md)与
-[生命周期验收](../../validation/2026-11-04-consumer-connection-and-lifecycle.md)。
-状态/账单双风格、双租户及长期稳定性继续验收；版本变化不改写历史样本归属。
-下文描述动态文档模式，旧审核包仅作为显式恢复兼容说明。
+更新：2026-11-05。现役客服为callback_version6，1.2.5已完成原Dify与安卓单轮复验；
+原H5连续问答与发布恢复已有同轮证据。Ulink正式Agent v21/revision25、优链充v2/revision2，
+具体时点见[生产验收](../../validation/2026-11-05-consumer-agent-production-closeout.md)。
+本页先说明现役合同，旧callback1–5仅供恢复解释；不能把旧分类器当成新Agent的前置步骤。
 
 ## 新版 Agent 会话（callback_version 6）
 
 新发布合同将流程收敛为开始 → Dify 官方 Function Calling Agent → 回复。
 自然语言直接进入 Agent；模型按需组合本人最近订单、状态、账务、知识检索和人工指引，
 Gateway 不再先分类成互斥能力，也不覆盖“还是不行”等反馈。最终正文自然表达，
-工具参数/证据仍结构化，来源链接和媒体只来自本轮记录。
+工具参数/证据仍结构化，来源链接和媒体只来自本轮记录。最终正文取最后成功无工具轮次，不能拼接Agent累计text中的工具过程。
 
-会话使用原 conversation_id，保存最近已完成问题与实际答案；每次进入模型前和回读时重新核验
+会话使用原 conversation_id，保存有界的已完成问题与实际答案（当前最近6回合并受字符上限约束）；每次进入模型前和回读时重新核验
 其中业务对象与知识授权。180秒仍限制本轮运行与取数凭据，不再让历史问答随之失忆。
 历史结果标明不是当前状态，实时追问重新读。最多8次工具调用，失败与并发都计数；
 取消、结束或撤权后不能继续取数。未调用工具的澄清也可以完成，不要求虚构来源。
 
 首次迁移保持原模型、业务提示词与已授权库，删除系统最终JSON/事实段协议；
 已有callback 1–5保留其原合同用于显式恢复。照片输入本轮未迁移，默认关闭。
-方法见[Agent迁移与验收](agent-conversation-qa.md)。本节描述候选能力，线上状态以本轮回执为准。
+方法见[Agent迁移与验收](agent-conversation-qa.md)。本节合同已部署，真实覆盖范围以本轮回执为准。
 
 安卓1.2.15/code24的实际安装包没有conversation_id传递；公司chargeAbroadNew源码已有修复，
 用户确认当前没有可用新包，发包由其他同事负责。#1353保持等待发包，不算连续会话验收通过。
 
-## 旧发布合同（callback_version 1–5）
-
-以下固定分支、输出协议、180秒历史限制只描述旧发布版本及其恢复行为。
-
 ## 知识维护与媒体
 
-把资料放进Chatflow“检索当前用户适用知识”节点所选的知识库，解析/索引完成后即可供新问题检索。
+把资料放进客服Agent的受控工具配置所选知识库（旧图为“检索当前用户适用知识”节点），解析/索引完成后即可供新问题检索。
 更新/删除资料影响新问题，不需要KB编号、approved字段、服务器content.json或媒体挂载表。
 知识库内容不是流程指令；模型依据本轮来源组织回答，不用自身记忆补费用、承诺或实时订单事实。
 
@@ -48,44 +43,21 @@ Gateway 不再先分类成互斥能力，也不覆盖“还是不行”等反馈
 见[选库部署与权限](knowledge-picker-deploy.md)、[ADR-0151](../../adr/0151-consumer-knowledge-node-selection.md)
 及已替代其审核限制的[ADR-0152](../../adr/0152-knowledge-documents-are-the-live-answer-source.md)。
 
-## 实时查询与语义分流
+## 现役取数、语言与会话
 
-普通文字先做一次结构化语义分类：状态、账务、知识、人工、安全、写请求、无法核实的实时需求或澄清。
-分类器只能返回能力/订单指代/是否依赖前文，实际身份与单号由Gateway确定；多单或不一致先澄清。
-当前分类预算1024输出token、HTTP操作超时20秒，无应用自动重试；不把该超时当整个POST的硬截止。
-危险/人工的既有明确中英文快速提示不等待模型，其他自然表达依赖语义模型，不能承诺全语言离线识险。
-供应商故障返回CONSUMER_INTENT_UNAVAILABLE，不回落关键词或旧答案。见[ADR-0149](../../adr/0149-consumer-semantic-routing.md)。
+官方Agent按需组合知识、本人最近订单、状态、账务和联系指引，回调统一为
+`POST /v1/internal/consumer-data/agent`。模型提供resource/query/order_no，发布图固定所选库；
+Gateway校验grant、主体、订单、图版本、取消及预算，取数前后和交付时均检查。
+状态/账务仍为记录，不代表故障根因或支付渠道到账凭证；缺少币种和差额成因不能猜。
 
-| 分支 | Dify取数节点 | 交付边界 |
-|---|---|---|
-| 知识 | consumer_knowledge插件 | 节点所选库的当轮来源；kind/answer/reference_ids结构化回答 |
-| 本人状态 | cpms_status HTTP | 同轮CPMS充电状态、来源、UTC观察时间；不等于故障根因 |
-| 本人账务 | cpms_billing HTTP | 原金额及退款记录；缺失不当零，不猜币种、不等于扣款或银行到账 |
+App的Accept-Language作为回答语言输入，即使提问是另一语言；语义质量需实际审校。
+首次POST返回Gateway conversation_id，后续普通问题原样携带；这不是Dify会话ID。
+已完成历史不因180秒取数凭据到期而消失；当前事实需重新读取。发布改变、撤权或失效历史
+可以要求新建会话，不能用旧正文授权新取数。原Dify预览按运营公司范围仅查明确选定订单，
+正式消费者仍仅本人；预览不能列管理员最近订单。
 
-live_order_status/live_billing_record分别随发布版控制。运营在Dify环境变量中配置
-cpms_status_enabled/cpms_billing_enabled（字符串true/false）；保存只影响草稿试用，发布才影响App。
-URL、凭据引用与能力分支是发布契约，删除必需节点或改错地址会拒绝发布。
-最新/指定/可信前轮订单都需本人授权。
-HTTP节点凭data_grant回调精确的`/v1/internal/consumer-data/{knowledge,status,billing}`；
-旧回调`/v1/internal/consumer-knowledge`继续兼容。模型不持公司凭据，也不选择回调地址/租户。
-回调读前读后、worker写前及历史回读核对授权、绑定、取消和TTL。失败不换引擎或直读。
-本退役分支将 C端“订单检测”快捷按钮接入 WF01 本人状态分支，不再启动 Python 根因诊断；
-生产启用以本分支部署证据为准。
-
-## 语言与会话
-
-App的Accept-Language决定回答语言，即使问题/来源是其他语言。现役H5支持简体、英文、葡萄牙语、
-西班牙语、泰语、越南语、蒙古语、高棉语、繁体；后端另支持德/法语，但本轮未在该H5点选。
-Dify输入枚举与模型提示一致，状态/账务/安全/人工等固定文案按语言渲染。模型正文过语言守卫，
-精确引用的原文件名可保留；只有文件名不构成答案。字符检查不保证全部外语语义正确。
-
-首次POST返回Gateway conversation_id，后续普通问题原样携带；不是Dify会话ID。
-过期快照不再用于上下文，但明确的新问题可以重新查询；依赖失效前文需重述，旧GET仍拒绝。
-失败/取消/换发布版需新会话；历史保留当轮正文与实际语言，不因GET的语言头重写。
-实时轮次及下一轮不复用Dify上游记忆；知识续问也须过当前绑定和有效期检查。
-
-第一次明确未解决反馈追问步骤，重复反馈提供人工指引；目前相关快捷规则覆盖显式中英文表达。
-人工按钮进入原联系页，配置为空不声称已接通。未知实时能力、退款或停止充电执行请求不交给模型代办。
+知识/模型不可用时如实报告或澄清，不回落旧FAQ或另一个引擎。人工指引只证明联系入口，
+实际接通、图片输入和新APK连续会话仍按[测试交接](../../testing-handoff.md)分别判定。
 
 ## 发布、试用、撤回和恢复
 
@@ -118,14 +90,16 @@ photo_id一次性绑定主体与发布内容，不能与显式订单同时使用
 当前实现上限4MiB/1200万像素，规范化至最大边1600；每主体2图、进程32图，未使用5分钟过期。
 这些是单进程限制；图片重启丢失，不能据此宣称跨进程持久化。Gateway内存清理不等于Dify上游文件被删除；原生文件读取、APK/IPA和完整真机验收仍未完成。
 
-## 验证与旧版兼容
+## 验证与旧版兼容（callback_version 1–5）
 
-复跑入口：`uv run python tools/verification/verify_consumer_chatflow.py --out <私有报告>`；
+新版复跑入口见[Agent QA计划](agent-conversation-qa.md)，使用 `--agent-conversation` 及固定签名插件。
+旧合同复跑入口：`uv run python tools/verification/verify_consumer_chatflow.py --out <私有报告>`；
 选库/当前图需配套签名插件、公钥和DIFY_TEST_WEB_IMAGE，见[迁移手册](live-knowledge-deploy.md)。
 详细用例见[QA计划](qa-plan.md)与[测试交接](../../testing-handoff.md)。隔离成功不能替代真实供应商/业务/H5证据。
 
+旧1–5使用分类/固定分支或模板；当时的180秒历史限制不适用于callback6。
 旧callback_version 1–3读取aiops-consumer-reviewed/1审核包，kind/faq_id只选标准答案，
 entries.answers.zh/en及media_ids属于旧协议。`tools/content/build_consumer_knowledge.py`保留编译历史材料，
 历史包可用`uv run python tools/content/build_consumer_knowledge.py <私有原包> --output <新私有目录>`重建，输出仍为草稿。
-新版callback_version=4/documents不使用这些准入规则，不要求产品维护两个副本。
+旧动态文档合同callback_version=4/documents不使用这些准入规则，不要求产品维护两个副本。
 旧正文按实际中英文标记、旧实时快照按原模板核验，不改写已有QA。回滚可恢复旧版本，不能自动故障回落。

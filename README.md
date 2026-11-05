@@ -1,12 +1,13 @@
 # AI-Ops
 
 面向公司 C端与管家端的只读业务助手。公司 App/H5 是用户入口，Gateway 负责身份、范围、
-发布绑定、作业和交付；C端工作流与 Java 节点各自负责已登记业务场景。
+发布绑定、作业和交付；客服由 Dify 官方 Agent 执行，管家由 Java 节点执行；模型按SOP选择证据，系统负责授权与计算。
 
 ## 当前交付与退役范围
 
-2026-11-04阶段整理：[当前交付](docs/agents/current-delivery-state.md)、[收尾验收](docs/validation/2026-11-04-stage-closeout.md)、
-[待办与依赖](docs/reviews/2026-11-04-stage-closeout.md)。版本标签与后续部署修订分别追溯。
+2026-11-05阶段整理：[系统架构](docs/system-architecture.md)、[当前交付](docs/agents/current-delivery-state.md)、
+[架构核对](docs/validation/2026-11-05-architecture-stage-closeout.md)、[任务台账](docs/reviews/2026-11-05-architecture-stage-closeout.md)。
+客服生产版1.2.5的原Dify/安卓复验已完成；H5连续问答与发布恢复另有同轮证据，旧APK连续会话仍待发包。
 
 已完成 Python Thin Harness 的代码退役：删除诊断/交互式/设备 CLI、Codex 子进程、
 工具循环、恢复工作区、旧诊断 HTTP 面和专属便携打包。运维入口保留为 `aiops-admin`。
@@ -15,13 +16,13 @@
 
 - C端聊天及订单检测快捷动作进入其 WF01 路线；订单检测使用本人订单状态分支，
   不再承诺旧 Python 的多源根因报告。独立状态查询和已有节点绑定保留。
-- 管家单订单请求与原生 Dify 试用走公司身份和 Java 节点的两项 CPMS 工具。
+- 管家单订单请求与原生 Dify 试用走公司身份和 Java 节点；工具按已发布清单启用，覆盖订单、监测、历史模板、账务、核验与站点。
 - 管家正式入口与Dify预览使用各自的会话ID，订单相关追问沿用成功确认的订单并重新授权；
   新会话、另一应用或另一主体不能继承，见[连续问答验收](docs/acceptance/operator-followup/qa-plan.md)。
 - 管家没有指定订单时可咨询操作、解释状态或搜索当前账号可见站点；需要查具体订单时才请求单号。
   站点名称/地址来自CPMS，未定位时不按距离排序；见[无订单对话](docs/agents/operator-cpms/conversation-qa.md)。
   无订单能力已上线并经ulink真实页面核验；[最新回执](docs/validation/2026-10-29-z14-operator-conversation-verified.md)
-  后续JSON与事实相关性修复见当前交付索引，长期稳定性仍未验收。
+  后续统一模型循环已删除最终JSON协议；事实复核与边界见当前交付索引，长期稳定性仍未验收。
 - 节点站点工具通过 Gateway 代理取数，代理保留租户身份与分页字段，模型证据只留声明字段。
   管家与消费者按各自权限校验；节点、Gateway 和回调配置需配套交付，见[站点代理验证](docs/acceptance/site-tool-proxy/qa-plan.md)。
 - Dify 试用只接受已登记 `app_id`，按绑定运行 Dify/Java 草稿；不接受裸 prompt/旧工具白名单。
@@ -43,8 +44,8 @@ Gateway、通用/会话、工具与公司集成目录已分别通过#1181/#1182/
 ```mermaid
 flowchart LR
   App[公司 C端/管家 App] --> Gateway[Gateway 身份与业务路由]
-  Gateway --> Consumer[C端 Dify 工作流]
-  Gateway --> Node[Java 节点]
+  Gateway --> Consumer[C端 Dify 官方 Agent]
+  Gateway --> Node[管家 Java 模型工具循环]
   Console[Dify 控制台草稿] --> Trial[按绑定试用]
   Trial --> Consumer
   Trial --> Node
@@ -82,7 +83,7 @@ flowchart LR
 | Dify集成 | `dify.dify_app_registry.py`、`dify.dify_chat_workflow.py`、`dify.dify_chatflow.py`、`dify.dify_console_admin.py`、`dify.dify_console_publish.py`、`dify.dify_debug_identity.py`、`dify.dify_dsl_pull.py`、`dify.dify_ensure_workspace.py`、`dify.dify_inner_api.py`、`dify.dify_knowledge_api.py`、`dify.dify_knowledge_datasets.py`、`dify.dify_knowledge_migration.py`、`dify.dify_login_company.py`、`dify.dify_login_provision.py`、`dify.dify_login_proxy.py`、`dify.dify_login_server.py`、`dify.dify_login_service.py`、`dify.dify_run_store.py`、`dify.dify_tenant_access.py`、`dify.dify_tools_catalog.py`、`dify.dify_workspace_directory.py`、`dify.dify_workspace_ready.py`、`dify.dify_workspaces.py` |
 
 `publication.agent_debug.py` 仅保留发布前的知识绑定校验；`publication.qa_rag.py` 仅保留已发布客服元数据选择。
-`common.model_request.py` 是一次性有界 HTTP 请求，供 C端语义分类、聚合说明和站点说明审核使用，不含会话/工具循环。
+`common.model_request.py` 是一次性有界 HTTP 请求，供旧客服合同语义分类、聚合说明和事实审核使用，不含会话/工具循环。
 `operator.order_billing.py` 根据历史模板和订单优惠记录逐项核对折扣、充电费用、税费及实付款；
 依照[SOP金额验证流程](SOP.md#223-按订单历史计费模板检验金额产品测试补充)，区分算术相符与证据不足。
 `operator.ops_provider.py`、`operator.operator_agent.py` 只登记现役 `cpms-node`，旧 Python/共享租户 provider 已退出。
@@ -175,5 +176,5 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 站点清单通过权限与证据检查后独立交付；说明审核拒绝或不可用时隐藏说明，运营试用显示提示。审核复用网关配置的模型，无工具、无自动重试；历史回读不重审，权限撤回仍拒绝。见 [ADR-0195](docs/adr/0195-site-evidence-survives-note-refusal.md)。
 
 管家统一循环改造使用业务SOP、会话及受控工具；模型理解意图与选择证据，系统独立授权和计算。
-当前迁移与验收见[实施计划](docs/acceptance/operator-agent-loop-qa-plan.md)，
+原H5、原Dify与第二租户已取得限定范围的验收证据；完整步骤见[验收计划](docs/acceptance/operator-agent-loop-qa-plan.md)，
 线上状态以[交付索引](docs/agents/current-delivery-state.md)为准，不能由源码推断已迁移。

@@ -1,9 +1,10 @@
 # 自由提问故障定位
 
-推荐问题可以直接返回固定FAQ；自由文本必须先由`GatewayRuntime.classify_consumer`选择能力，
-再由网关核对授权、读取允许的数据并启动回答。因此推荐问答成功不能证明自由问答可用。
+2026-11-05：先核已发布callback版本。现役callback6直接进入Dify官方Agent，
+不调用`GatewayRuntime.classify_consumer`；应沿QA→Dify运行→工具记录→最终轮检查。
+下面分类器故障与探针仅适用于旧callback1–5。固定FAQ成功仍不能证明自由问答可用。
 
-## 原因与处置
+## 旧分类器的原因与处置
 
 `common.model_request`复用HTTP骨架保留受限原因，绝不输出`HttpFailure.detail`、问题或凭据。
 
@@ -27,7 +28,7 @@
 2. 只读查询请求时间附近的服务日志：
    `dev-host exec 41 --allow-service-exec -- journalctl -u aiops-gateway-41.service --since <ISO时间> --until <ISO时间> --no-pager`。
    用相同时间和设备UA核对访问日志状态；分类失败发生在建QA前，QA为空不表示手机没请求。
-3. 若需独立分类探针，取服务MainPID，从`/proc/<pid>/environ`在内存复制运行环境，
+3. 仅旧合同需要独立分类探针，取服务MainPID，从`/proc/<pid>/environ`在内存复制运行环境，
    以服务身份在部署目录调用`GatewayRuntime.classify_consumer`，只构造带
    `GatewayServerSettings.from_env()`的轻量参数对象。**不构造GatewayRuntime或ASGI应用**，
    避免启动恢复逻辑改写在途任务。配置由`Settings.from_config`读取；密钥不进参数/输出。
