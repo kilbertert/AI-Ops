@@ -106,3 +106,24 @@ Dify1.17.1默认将dynamic-options设为admin/owner。公司映射账号通常�
 管理员API200只可作对照，不能代替这一项。浏览器完整回归已在隔离栈使用真实editor角色执行。
 API冷启动时单次curl超时只代表尚未就绪：配置连接/总超时，捕获TimeoutExpired后继续轮询，使用统一总截止决定回滚。
 重建前后均核原文件与配置摘要；不能因为一次立即探活失败就把已成功启动的修复判断为制品错误。
+
+## 已装本地插件升级与模型参数（2026-11-05实测）
+
+`install/pkg`用于首次安装；同plugin_id已有旧版时，任务报success也可能保持旧安装标识。
+上传候选后核对manifest.verified及工作区实际plugin_unique_identifier，不能只等task成功。
+市场关闭且使用自签项目包时，使用Dify容器内既有`PluginInstaller.upgrade_plugin`，
+source为`PluginInstallationSource.Package`，传入同工作区旧/新完整标识和新标识meta；
+不卸载旧版来代替升级，不重写插件目录。调用前`decode_plugin_from_identifier`核已上传签名包，
+调用后按task及工作区清单确认；`PluginService.invalidate_plugin_model_providers_cache`清该工作区缓存。
+通过`dev-host exec 36`运行既有服务管理API，脚本不写运行源码；只对指定的已授权工作区操作。
+失败保留旧包与原标识，使用同一升级服务恢复原版；旧发布图仍依赖旧工具参数兼容性。
+
+模型`GET .../models/credentials`返回部分掩码，不能当成真实key提交。更新同credential_id时，
+秘密字段使用Dify官方`[__HIDDEN__]`哨兵，PUT同一路径仅修改function_calling_type=tool_call；
+平台用原加密秘密验证，回读核原credential_id不变。先保存原非秘密参数，恢复也用同一接口。
+不能另建同名凭据却忘记切默认，也不把key写进脚本或输出。
+
+正式发布前导出当前草稿与精确route.workflow_id的版本；草稿可含未发布编辑，不用Dify当前published指针
+猜Gateway正式版。用户风格要求作为业务指令保留，系统JSON协议块由迁移删除。
+保存用hash并发检查，环境变量用environment_variable_patch，旧变量删除按id声明。
+恢复旧正式版后草稿可能仍为新图；恢复与还原草稿是两步，最终核对草稿和正式内容是否符合交付目标。
