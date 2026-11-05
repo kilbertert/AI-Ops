@@ -174,3 +174,33 @@ assert.equal(runnerSummary([{...runner,labels:[...runner.labels,{name:'self-host
         cwd=ROOT,
         check=True,
     )
+
+
+def test_missing_runner_credential_never_closes_monitor_alarm(tmp_path):
+    cli = tmp_path / "gh"
+    cli.write_text("""#!/usr/bin/env python3
+import json,sys
+args=sys.argv[1:]
+if args[0]=='run':
+    print('[]' if '--status' in args else '[{"databaseId":1,"status":"completed","conclusion":"success"}]')
+elif args[0]=='issue': print('[{"number":99}]')
+elif args[1].endswith('/jobs'):
+    print('{"total_count":1,"jobs":[{"name":"deploy-41","status":"completed","conclusion":"success"}]}')
+elif 'pending_deployments' in args[1]: print('0')
+else: print('[]')
+""")
+    cli.chmod(0o700)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    env.pop("RUNNER_READ_TOKEN", None)
+    result = subprocess.run(
+        ["node", ".sandcastle/cd-watch.mjs", "--dry-run"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "runner-unknown" in result.stdout
+    assert "Administration:read" in result.stdout
+    assert "CD 告警条件不再成立" not in result.stdout

@@ -284,7 +284,7 @@ function main() {
     straightFailures: DEFAULT_STRAIGHT_FAILURES,
   });
 
-  if (unfinished.runs.some(run => run.status !== 'completed') && ['unknown', 'missing', 'shared', 'offline'].includes(runner.kind)) {
+  if (['unknown', 'missing', 'shared', 'offline'].includes(runner.kind)) {
     result.alarms.push({ kind: `runner-${runner.kind}`, reason: runner.message });
     result.ok = false;
   }
