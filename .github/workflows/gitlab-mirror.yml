@@ -8,8 +8,13 @@ name: Mirror to company GitLab
 # Requires repo secret GITLAB_MIRROR_TOKEN: a GitLab token (impersonation
 # or PAT) with write_repository on ai-products/ai-ops.
 
+# push covers branch/tag updates; delete covers removals (branch/tag
+# deletion emits a separate event, not push); workflow_dispatch allows a
+# manual re-sync (e.g. after the GitLab side is restored or reseeded).
 on:
   push:
+  delete:
+  workflow_dispatch:
 
 concurrency:
   group: gitlab-mirror
