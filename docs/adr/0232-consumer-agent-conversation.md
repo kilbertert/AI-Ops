@@ -50,3 +50,8 @@ CPMS原始创建时间只做工具JSON序列化并保留上游时区声明，不
 禁止列管理员订单或另选对象。正式App仍强制消费者self范围；不能把预览范围放宽套到正式问答。
 
 自然正文脱敏仅保留已授权证据中的订单标识，复用redact_text的preserve接口；未取证长号和电话不放行。
+
+官方Agent的text累计所有轮次内容，包括调用工具前的过程文字。真实SSE的agent_log按node_id、
+parent_id、status及tool_responses区分轮次；仅最后一个成功且没有工具调用的轮次llm_response
+作为最终正文。缺失最终轮或之后又开始一轮则拒绝交付，不用关键词截断、不新增模型。
+该规则仅callback6启用，旧工作流继续使用原message/replace协议。
