@@ -58,6 +58,7 @@ class DifyChatflowClient:
         inputs: dict[str, Any],
         conversation_id: str = "",
         photo_id: str = "",
+        agent_final_node: str = "",
         on_started: Callable[[str, str, str, str], None],
     ) -> ChatflowReply:
         for value in [
@@ -99,6 +100,7 @@ class DifyChatflowClient:
         identity: tuple[str, str, str, str] | None = None
         finished = False
         answer = ""
+        agent_answer = None
         metadata = None
         deadline = time.monotonic() + self.timeout_seconds
         try:
@@ -117,6 +119,20 @@ class DifyChatflowClient:
                         ):
                             if field in event and event[field] != expected:
                                 raise _invalid()
+                    if kind == "agent_log" and agent_final_node:
+                        data = event.get("data") or {}
+                        output = (data.get("data") or {}).get("output")
+                        if data.get("node_id") == agent_final_node and data.get("parent_id") is None:
+                            if data.get("status") == "start":
+                                agent_answer = None
+                            elif data.get("status") == "success" and isinstance(output, dict):
+                                final = output.get("llm_response")
+                                if (
+                                    output.get("tool_responses") == []
+                                    and isinstance(final, str)
+                                    and final.strip()
+                                ):
+                                    agent_answer = final
                     if kind in {"workflow_started", "workflow_finished"}:
                         data = event.get("data")
                         if not isinstance(data, dict) or data.get("id") != event.get("workflow_run_id"):
@@ -185,6 +201,10 @@ class DifyChatflowClient:
                             raise _invalid()
                     # Dify 1.17.1先message_end，再workflow_finished；两者齐全才交付。
                     if identity and finished and metadata is not None:
+                        if agent_final_node:
+                            if not agent_answer:
+                                raise _invalid()
+                            answer = agent_answer
                         return ChatflowReply(*identity, answer, metadata)
         except TRANSPORT_FAILURES as exc:
             raise _failure(HttpFailure("unavailable")) from exc
