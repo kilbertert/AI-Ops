@@ -661,6 +661,33 @@ class OperatorCpms:
                 del self.tasks[key]
 
     def _current(self, run_id, *, node_token=None, manifest=None, tool=None):
+        try:
+            return self._check_current(run_id, node_token=node_token, manifest=manifest, tool=tool)
+        except OperatorRefused as exc:
+            self._stamp_gate_refusal(run_id, str(exc))
+            raise
+
+    def _stamp_gate_refusal(self, run_id, code):
+        """闸拒把原始码写进 run.reason：授权已死时上报必被同一道闸反杀，归因只剩这里能留。
+
+        fail() 只更新 issued/running——首拒生效、终局幂等，第二次闸拒不改写已落码。
+        两类不 stamp：OPERATOR_TOOL_DISABLED 的上报不带 tool、走不到这个判定，
+        现有 self-report 路径仍在；FEEDBACK_REFUSALS 是回喂业务码、拒绝点在闸外。
+        """
+        if code == "OPERATOR_TOOL_DISABLED" or code in FEEDBACK_REFUSALS:
+            return
+        try:
+            if self.context.agent_run_store.fail(run_id, TOOL_REFUSED_PREFIX + code):
+                logging.getLogger("aiops.operator").warning(
+                    "operator_gate_refused run_id=%s code=%s", run_id, code
+                )
+        except Exception:
+            # 归因动作不能让拒绝本身变形：stamp 失败只留日志，拒绝原样抛回节点。
+            logging.getLogger("aiops.operator").warning(
+                "operator_gate_refused stamp_failed run_id=%s code=%s", run_id, code
+            )
+
+    def _check_current(self, run_id, *, node_token=None, manifest=None, tool=None):
         task = self.tasks.get(run_id)
         run = self.context.agent_run_store.get(run_id)
         if (
