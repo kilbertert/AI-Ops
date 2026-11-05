@@ -219,9 +219,7 @@ def _token_scope(
         client_id="aiops",
         client_secret="check-token-secret",
     )
-    resolver = CompanyTokenCallerResolver(
-        settings, mysql_settings(), scope_mapper_factory=factory
-    )
+    resolver = CompanyTokenCallerResolver(settings, mysql_settings(), scope_mapper_factory=factory)
     return resolver._data_scope(subject, shop_ids, entry)
 
 
@@ -249,9 +247,7 @@ def test_both_credential_chains_answer_the_same_scope(entry: str | None, user_ty
 def test_both_chains_fail_closed_to_the_same_empty_organ() -> None:
     """失败落点也一致：空 ``organ``，各记各的日志行（词汇不同、分支相同）。"""
     subject = b_subject()
-    session = _session_scope(
-        subject, "operator", OperatorScope(SHOP_IDS, SITES, error=ScopeError("upms"))
-    )
+    session = _session_scope(subject, "operator", OperatorScope(SHOP_IDS, SITES, error=ScopeError("upms")))
     token = _token_scope(subject, "operator", error=SourceError("mysql"))
     assert session == token == EMPTY_ORGAN
 
@@ -268,8 +264,7 @@ def test_only_the_session_chain_has_the_subject_unavailable_branch() -> None:
     令牌声明，缺身份在更早处已被拒 —— 它在调用点显式传 ``False``。"""
     operator_scope = OperatorScope(SHOP_IDS, SITES)
     assert (
-        _session_scope(b_subject(b_subject_reason="c_mapping_not_found"), "operator", operator_scope)
-        == SELF
+        _session_scope(b_subject(b_subject_reason="c_mapping_not_found"), "operator", operator_scope) == SELF
     )
     assert _session_scope(b_subject(), "operator", None) == SELF
     # 令牌链对同样的「可用主体 + operator 入口」给 organ，证明它没有该分支。
@@ -281,9 +276,7 @@ def test_each_chain_logs_its_own_line_on_unavailable(caplog: pytest.LogCaptureFi
     就无法从日志判断是哪条链坏了。"""
     subject = b_subject()
     with caplog.at_level("INFO"):
-        _session_scope(
-            subject, "operator", OperatorScope(SHOP_IDS, SITES, error=ScopeError("upms"))
-        )
+        _session_scope(subject, "operator", OperatorScope(SHOP_IDS, SITES, error=ScopeError("upms")))
         _token_scope(subject, "operator", error=SourceError("mysql"))
     messages = [record.getMessage() for record in caplog.records]
     assert any("third_session operator_scope_unavailable" in m for m in messages)
@@ -317,10 +310,7 @@ def test_the_upms_path_returns_the_same_context_for_every_entry() -> None:
     resolver = UpmsCallerResolver(upms_settings())
     resolver.resolver = _FixedResolver()  # type: ignore[assignment]
     for entry in ("operator", "consumer", None):
-        assert (
-            resolver.resolve("token", required_scope="aiops:orders:read", platform_entry=entry)
-            is context
-        )
+        assert resolver.resolve("token", required_scope="aiops:orders:read", platform_entry=entry) is context
 
 
 def test_the_introspection_path_returns_the_same_context_for_every_entry(
@@ -491,14 +481,10 @@ def test_platform_paths_delete_the_entry_argument() -> None:
     tree = _tree(CALLER_AUTH)
     for class_name in ("UpmsCallerResolver", "IntrospectionCallerResolver"):
         klass = next(
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ClassDef) and node.name == class_name
+            node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == class_name
         )
         resolve = next(
-            node
-            for node in klass.body
-            if isinstance(node, ast.FunctionDef) and node.name == "resolve"
+            node for node in klass.body if isinstance(node, ast.FunctionDef) and node.name == "resolve"
         )
         deleted = {
             target.id
