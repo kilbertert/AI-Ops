@@ -1,5 +1,7 @@
 ## Verification
 
+实现、修复、独立 Hack 和交付前，读取并执行[验证分工](docs/agents/verification-workflow.md)。
+
 Project constraints live in `AGENTS.md`. For anything that changes the Gateway's
 outward behavior, see its `验证与交付` section: unit tests are not sufficient —
 run the `verify-aiops-gateway` skill against a throwaway data root and capture
