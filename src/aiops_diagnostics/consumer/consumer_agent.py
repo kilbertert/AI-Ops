@@ -113,7 +113,9 @@ def callback(runtime, token, body, *, read_snapshot, list_orders):
     ):
         raise ChatRunUnavailable("GRANT_SCOPE_MISMATCH", "客服授权不匹配", http_status=403)
     caller = scope_from_json(run.scope_json)
-    if caller.delegated or caller.data_scope.type != "self" or not caller.subject.c_user_id:
+    if run.kind == "service" and (
+        caller.delegated or caller.data_scope.type != "self" or not caller.subject.c_user_id
+    ):
         raise ChatRunUnavailable("CONSUMER_SCOPE_REQUIRED", "仅允许本人查询", http_status=403)
     trial = None
     if run.kind == "service_trial":
@@ -221,6 +223,11 @@ def _query(runtime, caller, binding, run, resource, query, order, libraries, rea
             "support": content.get("support", {}),
             "limitation": "仅提供联系指引，不代表已转接人工",
         }
+    if run is not None and run.kind == "service_trial":
+        if resource == "orders":
+            return {"status": "refused", "message": "运营预览请在页面选择订单，不列出消费者订单"}
+        if not run.order_no or order != run.order_no:
+            raise ChatRunUnavailable("CONSUMER_ORDER_REQUIRED", "只能查询预览中明确选定的订单")
     if not (
         binding.live_order_status
         if resource == "status"
