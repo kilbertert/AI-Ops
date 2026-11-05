@@ -91,6 +91,10 @@ jobs:
           node-version: 22
       - name: Verify AFK workflow boundaries
         run: node .sandcastle/policy-check.mjs workflows
+      - name: Verify reviewer verdict and execution boundary
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx tsx .sandcastle/review-boundary.check.ts
       # The profile-network check decides whether the agent sandbox keeps Docker
       # bridge isolation. Without it in CI, a typo in the loopback-profile set
       # silently widens the sandbox's reach — or silently breaks the relay
