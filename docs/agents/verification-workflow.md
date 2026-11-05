@@ -63,7 +63,11 @@
 不能只凭别名声称已经使用指定模型；不可用时报告原因，不静默换模型。
 
 没有 CodexHost 连接时，可在已授权的任务目录使用现有 `claude-deepseek` CLI 启动独立会话。
-先查 `claude-deepseek --help`，并在受控配置中核对模型映射，只读取必要标识，不输出密钥。
+先查 `claude-deepseek --help`。**模型映射由派发者核对后把结论写进任务，Hacker 不读配置**：
+工具白名单不隔离秘密——文件可读就会进入模型上下文并随调用上行到供应商。每条派发
+边界必须点名禁读路径：`~/.config`、`~/.claude`、`cliproxyapi` 配置、`settings*.json`、
+`.env*`、SSH/agent 私钥与令牌文件。已发生一次实测泄露：核对别名的指示把 Hacker 引向
+cliproxyapi config.yaml，其中的上游 key 进入了模型上下文；此后一律派发者给结论、不给路径。
 例如只读文档/流程验收可使用以下命令；实际程序 Hack 再按任务范围开放必要执行工具：
 
 ```bash

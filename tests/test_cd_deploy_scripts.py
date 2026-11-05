@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from aiops_diagnostics.common.private_files import write_private_text
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_DIR = REPO_ROOT / "deploy"
 CD_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "cd.yml"
@@ -672,7 +674,8 @@ def test_console_preflight_stops_before_production_mutation(tmp_path, url, allow
         "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY=synthetic\n"
         f"AIOPS_GATEWAY_SERVER_CONFIG_FILE={tmp_path / 'production.env'}\n"
     )
-    (tmp_path / "production.env").write_text("# synthetic\n")
+    # #973 起 from_env 对点名文件先过权限闸：0644 的桩文件会让预检因错误原因被拒。
+    write_private_text(tmp_path / "production.env", "# synthetic\n")
     block = block.replace("/etc/aiops-41/gateway.env", str(config))
     block = block.replace("chown -R aiops41:aiops41 /tmp/sync-check", ":")
     block = block.replace(

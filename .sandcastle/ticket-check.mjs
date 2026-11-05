@@ -214,12 +214,20 @@ function proseLines(text) {
   // boolean is what keeps a `~~~` sample — and a ``` line inside ```` — out
   // of prose: the boolean version read `~~~` content as text, so a sample
   // `## Acceptance criteria` posed as a real section. (Replay finding, #1383.)
+  // CommonMark's indent is SPACES only (a tab is already an indented-code
+  // indent, and U+00A0 is not CommonMark whitespace at all): `\s{0,3}` let a
+  // NBSP-prefixed line pose as a fence. (#1397 re-review.)
   let fence = null;
   let inComment = false;
   for (const line of lines) {
-    const m = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    const m = /^[ ]{0,3}(`{3,}|~{3,})/.exec(line);
     if (fence !== null) {
-      if (m && m[1][0] === fence.ch && m[1].length >= fence.len) fence = null;
+      // A closing fence is the marker and nothing else — CommonMark allows
+      // only spaces/tabs after it, so `~~~still-inside-code` is content, not
+      // a closer, and so is `~~~`+U+00A0: `\s*$` accepted NBSP, closing the
+      // block where CommonMark keeps it open and letting a hidden heading
+      // read as prose. (#1383 review; NBSP case from #1397 re-review.)
+      if (m && /^[ ]{0,3}(`{3,}|~{3,})[ \t]*$/.test(line) && m[1][0] === fence.ch && m[1].length >= fence.len) fence = null;
       continue;
     }
     if (m) {
@@ -627,6 +635,24 @@ if (SELF_CHECK) {
       title: "调整 `src/app.ts`",
       body: "## 问题\n\n顺序不对，改 `src/app.ts`。\n\n~~~md\n## 不做什么\n- 不改 `src/b.ts`。\n\n## Acceptance criteria\n- [ ] 行为变更已断言\n~~~\n",
     },
+    // `~~~still-inside-code` is not a closing fence — CommonMark allows only
+    // whitespace after the marker. Treating it as one closed the block early
+    // and the heading after it read as prose: the gate passed a ticket whose
+    // acceptance section lives inside an unclosed code block. (#1383 review)
+    tildeFakeClose: {
+      title: "调整 `src/app.ts`",
+      body: "## 问题\n\n顺序不对，改 `src/app.ts`。\n\n## 不做什么\n\n- 不改 `src/b.ts`。\n\n~~~md\n样例\n~~~still-inside-code\n\n## Acceptance criteria\n\n- [ ] 行为变更已断言\n",
+    },
+    // `~~~` followed by U+00A0 is not a closing fence either — CommonMark
+    // whitespace after the marker means spaces/tabs, and NBSP is not
+    // CommonMark whitespace. JS `\s` accepts it, so the block closed early
+    // and the hidden acceptance section passed `--strict`. An independent
+    // CommonMark parser confirms the heading stays inside the block.
+    // (#1397 re-review.)
+    tildeNbspClose: {
+      title: "调整 `src/app.ts`",
+      body: "## 问题\n\n顺序不对，改 `src/app.ts`。\n\n## 不做什么\n\n- 不改 `src/b.ts`。\n\n~~~md\n样例\n~~~\u00a0\n\n## Acceptance criteria\n\n- [ ] 行为变更已断言\n",
+    },
   };
 
   expect("criteria passes", judge(F.criteria).ok, true);
@@ -710,6 +736,22 @@ if (SELF_CHECK) {
   expect(
     "a ~~~ 不做什么 sample does not count",
     judge(F.tildeFence).findings.some((f) => f.id === "non-goals"),
+    true,
+  );
+  // The marker with trailing text never closes the block — the heading after
+  // it is still code, so the ticket must FAIL on acceptance, not pass.
+  expect("a fake-closed fence still fails the gate", judge(F.tildeFakeClose).ok, false);
+  expect(
+    "the fake-closed ticket fails on acceptance",
+    judge(F.tildeFakeClose).findings.some((f) => f.id === "acceptance" && f.level === "fail"),
+    true,
+  );
+  // Same gate, NBSP tail: `~~~`+U+00A0 must not close the block — CommonMark
+  // calls the heading inside it code, so the ticket must FAIL on acceptance.
+  expect("a NBSP-tailed fence still fails the gate", judge(F.tildeNbspClose).ok, false);
+  expect(
+    "the NBSP-closed ticket fails on acceptance",
+    judge(F.tildeNbspClose).findings.some((f) => f.id === "acceptance" && f.level === "fail"),
     true,
   );
 

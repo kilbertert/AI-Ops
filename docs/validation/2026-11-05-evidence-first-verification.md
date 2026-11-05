@@ -40,8 +40,9 @@ ADR 编号 0220 = origin/main 最大号 0219 + 1（检查时点 2026-11-05）。
 存在该别名（629、686 行）；交互式包装器透传 `--model`（`~/.local/bin/claude-deepseek`）。
 模型自报身份按规则不作判据，以配置与返回元数据为准。
 **时长**：成功轮 775 秒（预算 15 分钟硬上限）。第一轮宽范围派发在 agent 循环内停滞
-87 分钟无产出，按派发纪律终止后收窄范围重派；该事实本身记入回执（派发须写明
-分钟预算与文件清单的教训）。
+87 分钟无产出，按派发纪律终止后收窄范围重派。**成本按全量计**：87 分钟空转 + 775 秒
+成功轮 + F1–F9 修复轮 + 后续两轮实战复验（#1384），不是只算 775 秒；该事实本身记入
+回执（派发须写明分钟预算与文件清单的教训）。
 
 ### 发现与处置
 
@@ -51,7 +52,7 @@ ADR 编号 0220 = origin/main 最大号 0219 + 1（检查时点 2026-11-05）。
 | F2 | 软 | 反例转长期检查无执行者（Hacker 只读、实现者不默认扩张） | 已修：明确由实现者修复轮转换；Hacker 仅授权写入轮落盘且须再换手 |
 | F3 | 硬 | 规则写 `dsv4.1f`，任何配置中不存在该名 | 已修：改为真实别名 `deepseek-v4.1-flash` |
 | F4 | 硬 | `review-prompt.md` 缺规则要求的派发边界（入口/判据/允许操作/证据/预算） | 已修：新增 BOUNDARIES 块，逐条对应派发内容要求 |
-| F5 | 硬 | `planner.ts` 只消费 1 bit 信号，审查报告随 sandbox 丢弃 | 已修：stdout 尾部 40 行随抛出错误与 COMPLETE 日志留存 |
+| F5 | 硬 | `planner.ts` 只消费 1 bit 信号，审查报告随 sandbox 丢弃 | **误报（前提错）**：SDK 默认把每轮 agent 输出写入宿主 `.sandcastle/logs/`（`agent-*-reviewer-*.log`），报告并未随容器丢失；stdout 尾部留存仍保留为冗余路径 |
 | F6 | 低 | ADR 0036 引用 `planner.ts:292` 行号已漂移 | 已修：改符号名引用 |
 | F7 | — | 逐字合规即可零验收（F1 的复合形态） | 随 F1 修复 |
 | F8 | 结构性 | 审查轮仍持 GH token，审查提交可静默进合并 | 已修：`profileConfig(false)` 去 token；`review.commits > 0` 即抛错 |
@@ -76,6 +77,61 @@ ADR 编号 0220 = origin/main 最大号 0219 + 1（检查时点 2026-11-05）。
 
 - 新分工在真实业务任务中的节时与检错收益：待后续任务按分工末段口径记录
   （有效反例、误报、总耗时、返工成本）。
+
+## 外部复审（2026-11-05 复审轮，Codex 外部会话，结论：暂不通过）
+
+> 订正：本节早前把复审执行者误记为 `deepseek-v4.1-flash`；实际为本会话外的 Codex。
+> 处置表中的修复为第一轮复审修复（PR #1397，合并 224ac847）。
+
+复审对合并后终版提出四项，均已按复审判据修复（实现见修复提交）：
+
+| 发现 | 级别 | 处置 |
+|---|---|---|
+| 派发把真实凭据带进模型上下文（Hacker 读代理配置/settings） | P1 | 规则与派发模板改为「派发者给脱敏结论、不给路径」，点名禁读凭据路径；受影响凭据轮换由宿主执行（范围含 cliproxyapi 上游 key 与 settings.deepseek.json 认证令牌，见交付说明） |
+| `profileConfig(false)` 不去 token（进程环境补回 + 容器 env 不可擦） | P1 | 显式空值优先于环境变量；审查改为第二只无凭据沙箱（fork 实现分支），回执「已修」表述已订正 |
+| SDK `completionSignal` 全文 `includes` 取首信号，引用标记骗过闸门 | P1 | 全部标记须一致（冲突/缺失判失败）+ 报告非空；merger 同闸 |
+| `~~~still-inside-code` 被当闭合围栏（CommonMark 仅允许尾部空白） | P2 | 闭合判定收紧 + 反例 fixture 保存（`tildeFakeClose`） |
+
+复审同时指出 F5 前提不成立（已更正为误报）、本回执缺 #1377 终版独立复验记录、
+缺规定的 `docs/开发进度/` 文件（已补）、首轮 87 分钟空转须计入成本（已计）。
+
+**终版独立复验（#1397 修复版）终态：未执行。** 两次派发（900s / 600s 硬上限）均因
+上游 deepseek-v4.1-flash 流式停滞零产出被 timeout 终结——非「模型认可」亦非
+「未发现问题」，按未执行计；任务文件留存 `/tmp/hack-review-hardening.md`。
+
+## 外部复审第二轮（2026-11-05，Codex 外部会话，结论：仍暂不通过）
+
+复审核对合并提交 224ac847，确认「COMPLETE 与 BLOCKED 冲突」与
+`~~~still-inside-code` 两反例已被拦截，另提出四项新发现：
+
+| 发现 | 级别 | 处置 |
+|---|---|---|
+| `strictSignal` 仍接受内联引用标记（示例句即放行） | P1 | 改为位置判定：仅独占整行的标记计数，且最后一非空行必须是独立裁决；两个 prompt 写明「末行独立裁决」合同；R1/R2 两轮 PoC 九例断言全过 |
+| `.sandcastle/.env` 的 `GH_TOKEN`/`GITHUB_TOKEN` 经 resolvedEnv 仍可注入审查容器 | P1 | `credentialless` 意图时把两键钉空（sandbox env 优先于 resolvedEnv）+ 容器创建后探测实际环境断言（哨兵输出，密钥永不落日志） |
+| 审查分支决定论重名 → SDK 复用已有 ref 忽略 baseBranch，验旧码删错分支 | P1 | `review/N-Date.now()` 唯一名 + `git rev-parse` 核对审查 ref==候选 tip + 清理只针对本 run 创建的分支 |
+| 围栏闭合尾部 `\s*` 接受 U+00A0（NBSP 伪闭合再次放行） | P2 | 尾部限定 `[ \t]*`，前导缩进收窄 `[ ]{0,3}`（CommonMark 缩进只认空格）；`tildeNbspClose` 反例 fixture |
+
+复审要求的回执订正：轮换范围扩至 `settings.deepseek.json` 认证令牌（不只上游
+key）；「模型可用性不构成合并检查」不等于验收免除——终版独立复验须由独立执行者
+实际完成后方记完成；复审执行者标签订正如上。
+
+**第二轮终版独立复验（claude-devin / swe-2-max，2026-11-05，结论 COMPLETE）**：
+deepseek-v4.1-flash 三次派发停滞后改经 claude-devin 通道执行；16 例 strictSignal
+断言、SDK env 合并顺序核对、worktree-add 路径 /tmp 重放、围栏变体实测——四项
+复审发现全部验证通过。新发现均为残余/预存，非复审项失守：
+
+| 编号 | 级别 | 发现 | 处置 |
+|---|---|---|---|
+| H1 | 低 | `strictSignal` 不追踪围栏：未闭合围栏末行标记仍当裁决；闭合围栏内独立标记行可否决真裁决（fail-closed 仅致误拒） | 记录为已知边界：裁决闸不是 CommonMark 解析器；误拒方向安全，逃逸面要求报告恰好以未闭合围栏收尾的畸形输出 |
+| H2 | 低 | `Date.now()` 唯一化不兜 plan 产出重复 issue 号 + 同毫秒（同名 review 分支→两容器共享 worktree） | 记录为已知边界：需 plan 重复出号且同毫秒，非本轮引入风险面；`selectReadyIssues` 去重为可选项 |
+| H3 | 预存 | 宿主 hook `npm ci` 带全量凭据（gh 登录 + `AFK_AGENT_GH_TOKEN`）执行候选 `package.json` 生命周期脚本——容器级隔离不盖宿主执行面 | 记录为结构性边界：实现者沙箱同路径同暴露，边际暴露为零；「审查身份无凭据」断言仅对容器内成立。修宿主 hook 需 INSTALL_CMD 重构，超出本处置范围 |
+| H4 | 残余 | 探针只钉 `GH_TOKEN`/`GITHUB_TOKEN`：`.env` 其他键（`GIT_ASKPASS`/`GH_CONFIG_DIR`/`GIT_SSH_COMMAND`/`GH_ENTERPRISE_TOKEN`）仍注入；容器经 git mount 共享宿主 object store，`git update-ref`/`commit-tree` 可免凭据改写宿主任意 ref，`review.commits` 只量审查分支 | 记录为信任边界：git object store 共享是 SDK 机制，审查容器可写宿主 ref 属跨边界风险（候选代码可注入指令诱导），`review.commits` 检查不覆盖；修需 SDK 层 mount/钩子改动，超出本处置范围 |
+| H5 | 信息 | `main.ts`（npm run afk 单 issue）仍信 SDK `completionSignal`；实现者结果未过 `strictSignal` | 判据只要求 review/merge 闸，已覆盖；实现者假 COMPLETE 只致早停、commits 仍进审查，闸不失守 |
+
+未验范围（复验者如实记录）：真实 docker 沙箱未跑（探针/`docker run -e` 终态按 SDK
+源码确认）；`.sandcastle/.env` 未实建（两处 checkout 均无该文件）；镜像烘焙面
+（.gitconfig/.netrc/credential.helper/ssh）未查；`git worktree add` 在真实 SDK
+调用下未跑。
 - AFK 两条链路未在本轮真实跑批验证；planner.ts 改动经类型解析与逻辑核对，
   未经一次完整 ralph 运行。
 - `claude-deepseek` 对 `deepseek-v4.1-flash` 的实际路由以 cliproxyapi 配置为准；
