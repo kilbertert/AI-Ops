@@ -114,6 +114,24 @@ ADR 编号 0220 = origin/main 最大号 0219 + 1（检查时点 2026-11-05）。
 复审要求的回执订正：轮换范围扩至 `settings.deepseek.json` 认证令牌（不只上游
 key）；「模型可用性不构成合并检查」不等于验收免除——终版独立复验须由独立执行者
 实际完成后方记完成；复审执行者标签订正如上。
+
+**第二轮终版独立复验（claude-devin / swe-2-max，2026-11-05，结论 COMPLETE）**：
+deepseek-v4.1-flash 三次派发停滞后改经 claude-devin 通道执行；16 例 strictSignal
+断言、SDK env 合并顺序核对、worktree-add 路径 /tmp 重放、围栏变体实测——四项
+复审发现全部验证通过。新发现均为残余/预存，非复审项失守：
+
+| 编号 | 级别 | 发现 | 处置 |
+|---|---|---|---|
+| H1 | 低 | `strictSignal` 不追踪围栏：未闭合围栏末行标记仍当裁决；闭合围栏内独立标记行可否决真裁决（fail-closed 仅致误拒） | 记录为已知边界：裁决闸不是 CommonMark 解析器；误拒方向安全，逃逸面要求报告恰好以未闭合围栏收尾的畸形输出 |
+| H2 | 低 | `Date.now()` 唯一化不兜 plan 产出重复 issue 号 + 同毫秒（同名 review 分支→两容器共享 worktree） | 记录为已知边界：需 plan 重复出号且同毫秒，非本轮引入风险面；`selectReadyIssues` 去重为可选项 |
+| H3 | 预存 | 宿主 hook `npm ci` 带全量凭据（gh 登录 + `AFK_AGENT_GH_TOKEN`）执行候选 `package.json` 生命周期脚本——容器级隔离不盖宿主执行面 | 记录为结构性边界：实现者沙箱同路径同暴露，边际暴露为零；「审查身份无凭据」断言仅对容器内成立。修宿主 hook 需 INSTALL_CMD 重构，超出本处置范围 |
+| H4 | 残余 | 探针只钉 `GH_TOKEN`/`GITHUB_TOKEN`：`.env` 其他键（`GIT_ASKPASS`/`GH_CONFIG_DIR`/`GIT_SSH_COMMAND`/`GH_ENTERPRISE_TOKEN`）仍注入；容器经 git mount 共享宿主 object store，`git update-ref`/`commit-tree` 可免凭据改写宿主任意 ref，`review.commits` 只量审查分支 | 记录为信任边界：git object store 共享是 SDK 机制，审查容器可写宿主 ref 属跨边界风险（候选代码可注入指令诱导），`review.commits` 检查不覆盖；修需 SDK 层 mount/钩子改动，超出本处置范围 |
+| H5 | 信息 | `main.ts`（npm run afk 单 issue）仍信 SDK `completionSignal`；实现者结果未过 `strictSignal` | 判据只要求 review/merge 闸，已覆盖；实现者假 COMPLETE 只致早停、commits 仍进审查，闸不失守 |
+
+未验范围（复验者如实记录）：真实 docker 沙箱未跑（探针/`docker run -e` 终态按 SDK
+源码确认）；`.sandcastle/.env` 未实建（两处 checkout 均无该文件）；镜像烘焙面
+（.gitconfig/.netrc/credential.helper/ssh）未查；`git worktree add` 在真实 SDK
+调用下未跑。
 - AFK 两条链路未在本轮真实跑批验证；planner.ts 改动经类型解析与逻辑核对，
   未经一次完整 ralph 运行。
 - `claude-deepseek` 对 `deepseek-v4.1-flash` 的实际路由以 cliproxyapi 配置为准；
