@@ -252,7 +252,7 @@ def answer_selection(raw, context, *, language="", contract="legacy"):
     return "knowledge", render_sources_answer(text, [sources[ref] for ref in references])
 
 
-def render_sources_answer(text, sources):
+def render_sources_answer(text, sources, *, preserve=()):
     """来源链接和媒体由已取证资料决定，正文可以是自然语言。"""
     urls = []
     for match in ANSWER_URL.finditer(text):
@@ -284,7 +284,7 @@ def render_sources_answer(text, sources):
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "link was not in cited documents")
     if re.search(r"https?://|www\.", ANSWER_URL.sub("", text), re.I):
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid document link")
-    blocks = [{"kind": "text", "text": redact_text(text.strip())}]
+    blocks = [{"kind": "text", "text": redact_text(text.strip(), preserve=preserve)}]
     seen_media = set()
     for source in sources:
         blocks.append(

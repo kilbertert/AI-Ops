@@ -318,3 +318,14 @@ def test_recent_orders_preserve_authoritative_ordering_and_database_time():
     assert result["latest_order_no"] == "NEW"
     assert result["orders"][0]["created_time"] == "2026-11-05T10:00:00"
     json.dumps(result)
+
+
+def test_natural_answer_retains_only_evidenced_order_identifiers():
+    from aiops_diagnostics.consumer.consumer_agent import final_answer
+
+    own, unverified = "2117784634192551937", "2117784634192551999"
+    context = {"calls": [{"tool": "status", "result": {"order_ids": [own], "status": "found"}}]}
+    text = final_answer(f"订单{own}已结束；其他编号{unverified}，电话13800138000。", context)["blocks"][0][
+        "text"
+    ]
+    assert own in text and unverified not in text and "13800138000" not in text
