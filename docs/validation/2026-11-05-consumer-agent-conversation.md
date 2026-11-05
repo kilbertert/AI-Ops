@@ -1,6 +1,6 @@
 # 客服 Agent 会话改造验证
 
-日期：2026-11-05（北京时间）。任务分支`refactor/consumer-agent-conversation`，
+日期：2026-11-05（北京时间）。任务分支`refactor/consumer-agent-delivery`，
 起始基线`019a7b80`，候选尚未合并部署。判据为用户确认的
 [场景](../agents/consumer-wf01/agent-conversation.feature)与[QA计划](../agents/consumer-wf01/agent-conversation-qa.md)。
 
@@ -43,3 +43,9 @@ adbx成功连接原设备，读取现装com.trend.ulink1.2.15/code24及其app-se
 **未完成业务验收**：生产新合同发布/恢复、原H5任务集、两租户正式入口和最终真实模型选择仍待验证；
 没有工程师确认的真实故障，不宣称业务准确率、长期稳定性、全语言、图片或人工接通已验收。
 原始记录位于本任务私有证据目录，不提交账号、凭据、模型输入或业务正文。
+
+交付分支由原consumer-agent-conversation迁至consumer-agent-delivery：已推送的小提交未各自触碰ADR，
+逐提交Workflow policy失败。保留原推送历史，通过新分支逐个补齐同一ADR，不强推、不改检查。
+最终源码与原候选逐字相同，只有ADR/交付记录补充。同步主线64def58e后全量4252通过/8跳过，
+版本1.2.0相关62项通过、wheel/sdist构建通过。Devin实际审查因试用到期/额度不足跳过；
+无审查线程，不能宣称Devin完成。41现有SSH跳板超时，最后模型复验和部署后原H5仍待完成。
