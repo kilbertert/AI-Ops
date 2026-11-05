@@ -220,7 +220,10 @@ class UpmsCallerResolver:
         platform_entry: str | None = None,
         source_key: str | None = None,
     ) -> ScopeContext:
-        del third_session, source_key
+        # #644：平台凭据路径**不读**入口头 —— 范围由 UPMS 目录按令牌断言，会话/令牌链上
+        # 那条「入口绑定数据范围」的判定（``entry_data_scope``）不属于这里。写成 ``del``
+        # 是有意的：谁后来真读它会直接 NameError，而不是悄悄拿到一个没人决定过含义的值。
+        del third_session, source_key, platform_entry
         try:
             context = self.resolver.resolve(ScopeRequest(credential=token))
         except ScopeError as exc:
@@ -245,7 +248,10 @@ class IntrospectionCallerResolver:
         platform_entry: str | None = None,
         source_key: str | None = None,
     ) -> ScopeContext:
-        del third_session, source_key
+        # #644：与 ``UpmsCallerResolver`` 同一决定 —— 自省路径的范围由令牌载荷
+        # （``data_scope`` 声明）断言，入口头不被读取；``del`` 保证后来真读它的人
+        # 撞上 NameError 而不是沉默语义。
+        del third_session, source_key, platform_entry
         if not token or token.startswith("aops_"):
             raise CallerAuthError("invalid access token", code=CALLER_AUTH_INVALID)
         payload = self._introspect(token)

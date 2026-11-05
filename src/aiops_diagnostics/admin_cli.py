@@ -11,7 +11,7 @@ from typing import Annotated, Any
 import typer
 
 from aiops_diagnostics.common.config import Settings, selected_config_file
-from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_config import SETTING_SOURCES, GatewayServerSettings
 
 admin_app = typer.Typer(name="admin", help="AI-Ops 网关管理操作（环境清单收敛）", no_args_is_help=True)
 
@@ -416,7 +416,9 @@ def _console_settings_from(path: Path) -> dict[str, str]:
     """
     from aiops_diagnostics.gateway.gateway_config import _private_config_values
 
-    values = _private_config_values(path)
+    # #973 / Option A：``--config`` 是显式点名 —— 不存在的路径是写错了，
+    # 按 `Settings.from_config` 同一条规则拒掉，不静默当空表。
+    values = _private_config_values(path, explicit=True)
     keys = (
         "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL",
         "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY",
@@ -451,7 +453,14 @@ def _dify_console_and_db(ctx: typer.Context, db: Path | None) -> tuple[Any, Path
         from_file = _console_settings_from(Path(config_file).expanduser().resolve())
         console = dataclasses.replace(
             console,
-            **{name: value for name, value in from_file.items() if value and not getattr(console, name, "")},
+            # #973：判据与主合并同一 —— 进程 env **有没有这个键**（``KEY=`` 的空串
+            # 是值、不输），不是「解析出来的属性空不空」；env 缺席时 --config 那行
+            # 才算数（operator 点名这份文件就是要它决定这次拉取）。
+            **{
+                name: value
+                for name, value in from_file.items()
+                if value and f"AIOPS_GATEWAY_{name.upper()}" not in os.environ
+            },
         )
     # 部署身份与两条命令的**其他**密钥同源（同一个 `--config` 文件），因为它就是
     # `AIOPS_GATEWAY_ENVIRONMENT` —— 41 上那份 `/etc/aiops-41/production.env` 里的一行。
@@ -724,13 +733,19 @@ def _settings_with_config_file(ctx: typer.Context) -> GatewayServerSettings:
     config_file = ctx.obj.get("config_file") if ctx.obj else None
     if config_file is None:
         return settings
-    from aiops_diagnostics.gateway.gateway_config import _private_config_values
+    from aiops_diagnostics.gateway.gateway_config import _parse_source_value, _private_config_values
 
-    values = _private_config_values(Path(config_file).expanduser().resolve())
+    values = _private_config_values(Path(config_file).expanduser().resolve(), explicit=True)
     for name, attribute in _SETTING_FOR.items():
-        value = values.get(name) or ""
-        if value and not os.environ.get(name):
-            setattr(settings, attribute, value)
+        # #973：「有没有」按键存在性判（与统一来源规则一致 —— 进程 env 里
+        # ``KEY=`` 的空串也是一个**值**，不输）；合并进来的值按字段声明
+        # 的 ``kind`` 解析，不写裸字符串进 int/bool 字段。
+        if name in os.environ:
+            continue
+        value = values.get(name)
+        if value is None:
+            continue
+        setattr(settings, attribute, _parse_source_value(SETTING_SOURCES[attribute], value))
     return settings
 
 
@@ -1485,17 +1500,7 @@ def _name_overrides(value: str) -> dict[str, str]:
     return out
 
 
-#: CLI 参数名 → `GatewayServerSettings` 字段。放在函数外，字典只写一次 —— 上面那个循环
-#: 复制五份 `setattr` 字符串是"同一规则两份实现"的经典起点。
-_SETTING_FOR = {
-    "AIOPS_GATEWAY_ENVIRONMENT": "environment",
-    "AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL": "dify_inner_api_base_url",
-    "AIOPS_GATEWAY_DIFY_INNER_API_KEY": "dify_inner_api_key",
-    "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL": "dify_console_base_url",
-    "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY": "dify_console_api_key",
-    "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY": "dify_workspace_model_api_key",
-    "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT": "dify_workspace_model_endpoint",
-    "AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY": "ragflow_credential_key",
-    "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_BASE_URL": "ragflow_embedding_base_url",
-    "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY": "ragflow_embedding_api_key",
-}
+#: CLI 参数名 → `GatewayServerSettings` 字段。不再手抄词表（#973）：凡是声明
+#: 了「可读私有配置」的字段（``SETTING_SOURCES`` 里 ``file=True`` 的行），
+#: ``--config`` 里写到它就生效；判据仍是「进程 env 有没有这个键」（ADR-0069）。
+_SETTING_FOR = {source.env: name for name, source in SETTING_SOURCES.items() if source.file}

@@ -9,12 +9,13 @@ from typing import Any, Protocol
 import redis
 
 from aiops_diagnostics.common.config import Settings, UpmsSettings
-from aiops_diagnostics.data.sources import SourceError, mysql_site_mapper
+from aiops_diagnostics.data.sources import mysql_site_mapper
 from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_INVALID,
     CALLER_AUTH_UNAVAILABLE,
     CallerAuthError,
 )
+from aiops_diagnostics.identity.data_scope_rule import entry_data_scope
 from aiops_diagnostics.identity.query_scope import (
     QueryScope,
     UpmsShopDirectory,
@@ -27,16 +28,11 @@ from aiops_diagnostics.identity.scope_context import (
     C_MAPPING_NOT_CONFIGURED,
     C_MAPPING_NOT_FOUND,
     C_MAPPING_TENANT_MISMATCH,
-    SCOPE_TYPE_ALL,
-    SCOPE_TYPE_ORGAN,
-    SCOPE_TYPE_SELF,
     DataScope,
     ScopeContext,
     ScopeError,
     SubjectRecord,
     UpmsDirectory,
-    is_operator_entry,
-    is_tenant_level_account,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -215,16 +211,12 @@ class RedisThirdSessionResolver:
         )
 
     def _data_scope(self, subject: SubjectRecord, tenant_id: str, platform_entry: str | None) -> DataScope:
-        """会话的业务数据范围：有唯一 B 端主体时取其运营商站点集合。
+        """会话的业务数据范围：判定序列唯一渲染在 ``data_scope_rule``（#644）。
 
-        解析失败一律失败关闭为**空集合**——拒绝全部订单查询，不回落为租户级放行，
-        也绝不套用 ``self``（那会把「查不到自己的运营商范围」伪装成「只能看本人的
-        单」）。失败覆盖链路上每一种逃逸方式：上游不可达/响应形状非法/数量超界
-        （``ScopeError``）、充电库不可用（``SourceError``）、范围 ID 不可用
-        （``ValueError``）；不捕获就等于让一次授权故障变成 500。
-
-        失败原因单独记一行，与 #425 区分的两种空集合成因（账号漏登记 /
-        已登记店铺无站点）都不是一回事：那些要去补数据，这里要去看上游。
+        本链与令牌链的差异只有两个显式参数：主体可用性（拿不到同租户内
+        唯一 B 端主体、或 ``operator_scope`` 未注入 ⇒ 最窄 ``self``——
+        令牌链没有这一支），与站点集合来源（本链实时查 UPMS
+        ``/shopuser/getShops``，令牌链用令牌快照）。
 
         ponytail: 授予条件只有「唯一 B 端主体 + 其店铺集合 + operator 入口」，**不含
         管家端角色** —— 入口已按 #423 修复传进本层（缺失或非法时按最窄处理），但角色
@@ -238,43 +230,20 @@ class RedisThirdSessionResolver:
         实测确认它是管家端请求的热点成本后，改为按请求/按次运行复用一条隧道，或
         加短 TTL 的主体级缓存——后者会引入授权范围 staleness，须先定可接受上限。
         """
-
-        # 运营商站点范围**只在管家端入口生效**（#423 回归修复）。
-        #
-        # 替换 ``self`` 的语义是为管家端设计的：运营商员工要看本运营商名下站点的
-        # 订单。但该替换发生在**身份层**，原先对两个内容域同时生效，于是消费者侧
-        # 的「本人可见」被换成「本运营商站点可见」——两个方向都错：本人订单可能被
-        # 拒（站点不在集合内），他人订单可能被放行（同站点同运营商）。实测确认过
-        # 后者：``consumer`` 入口能查到**他人**名下、位于该运营商站点的订单。
-        #
-        # 因此按入口分流：只有 ``operator`` 用运营商站点范围；其余（``consumer``、
-        # 缺少入口、入口非法）一律保持 ``self``。**未知入口按最窄的 ``self`` 处理，
-        # 不放宽** —— 非法入口随后由平台决策拒绝，范围在这里已经先收紧。
-        # 判据本身在 ``is_operator_entry`` 里只有一份（规范化与
-        # ``PlatformIdentityResolver`` 同一套），令牌路径用的是同一个函数：两份实现一旦
-        # 漂移，漂移方向就是放宽。
-        if not is_operator_entry(platform_entry):
-            return DataScope(type=SCOPE_TYPE_SELF)
-
-        if is_tenant_level_account(subject.user_type):
-            # 顶层账号（平台/租户主账号）：公司自己的店铺隔离门对它**不做店铺隔离**
-            # （``ShopIdInterceptor.judge()`` 对 type ∈ {-1,1} 直接 return），因此它的
-            # 可见范围是**整个租户**，数据上表现为「没有店铺绑定」。
-            # 到本 PRD 为止这里走的是运营商分支，空店铺集合 ⇒ 空站点 ⇒ 一条订单都查不到；
-            # 那是把「不受站点维度约束」读成了「看不到任何订单」。
-            # 租户谓词照常下推（``resolve_query_scope`` 对 all 范围只保留租户过滤），
-            # 因此这里放宽的是**站点维度**，不是租户边界。
-            return DataScope(type=SCOPE_TYPE_ALL)
-
         directory = self.operator_scope
-        if subject.b_subject_reason or directory is None:
-            return DataScope(type=SCOPE_TYPE_SELF)
-        try:
-            scope = directory.site_scope_by_b_user_id(subject.b_user_id, tenant_id)
-        except (ScopeError, SourceError, ValueError) as exc:
-            _log_operator_scope_unavailable(exc)
-            return DataScope(type=SCOPE_TYPE_ORGAN, site_ids=())
-        return DataScope(type=SCOPE_TYPE_ORGAN, site_ids=scope.site_ids)
+
+        def _site_ids() -> tuple[str, ...]:
+            # ``directory is None`` 时 subject_unavailable=True，不会走到这里。
+            assert directory is not None
+            return directory.site_scope_by_b_user_id(subject.b_user_id, tenant_id).site_ids
+
+        return entry_data_scope(
+            platform_entry,
+            subject.user_type,
+            subject_unavailable=bool(subject.b_subject_reason or directory is None),
+            site_ids=_site_ids,
+            on_unavailable=_log_operator_scope_unavailable,
+        )
 
     def _resolve_subject(self, user_id: str, tenant_id: str) -> SubjectRecord:
         """会话主体：C 端 id 恒等于会话 ``userId``，B 端 id 由既有 C→B 映射补全。
