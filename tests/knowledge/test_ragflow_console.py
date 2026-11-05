@@ -307,6 +307,7 @@ def _gateway(tmp_path: Path, ragflow: Any, **overrides: Any):
 
 class _CallerResolver:
     def resolve(self, token: str, *, required_scope: str, **_: Any):
+        from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
         from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
         subject = SubjectRecord(b_user_id="", c_user_id="C-42", tenant_id=TENANT)
@@ -318,6 +319,7 @@ class _CallerResolver:
             data_scope=DataScope(type="self"),
             roles=frozenset({"ROLE_AGENT_ADMIN"}),
             permissions=frozenset({required_scope}),
+            capability_source=CAPABILITY_ASSERTED,
         )
 
 

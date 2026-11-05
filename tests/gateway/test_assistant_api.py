@@ -12,6 +12,7 @@ from aiops_diagnostics.gateway.gateway_api import (
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import ASSISTANT_QUESTION_RESTART_ERROR_CODE, GatewayStore
 from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
+from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
 from aiops_diagnostics.identity.order_identity import extract_order_identifier as _extract_order_no
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -44,6 +45,7 @@ class _Caller:
             data_scope=DataScope(type="self"),
             roles=frozenset({"ROLE_AGENT_ADMIN"}),
             permissions=frozenset({required_scope}),
+            capability_source=CAPABILITY_ASSERTED,
         )
 
 

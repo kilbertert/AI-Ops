@@ -15,6 +15,7 @@ from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_UNAVAILABLE,
     CallerAuthError,
 )
+from aiops_diagnostics.identity.capability import CAPABILITY_DERIVED
 from aiops_diagnostics.identity.data_scope_rule import entry_data_scope
 from aiops_diagnostics.identity.query_scope import (
     QueryScope,
@@ -156,7 +157,9 @@ class RedisThirdSessionResolver:
     ) -> ScopeContext:
         # ``source_key`` 与本解析器无关：它决定的是「走哪条信任模式」，而走到这里说明分派已经
         # 落在这条既有链上（没有密钥、密钥不对、或根本没配置门）。
-        del source_key
+        # #1040：``required_scope`` 同理 —— 本链是 DERIVED 档，请求的 scope 不被
+        # 读取；读它就是把回声写回 ``permissions`` 的形状复活。
+        del source_key, required_scope
         if not secrets.compare_digest(token, self.settings.service_token):
             raise CallerAuthError("service authentication failed", code=CALLER_AUTH_INVALID)
         if not third_session or len(third_session) > 256 or any(c in third_session for c in "\r\n"):
@@ -207,7 +210,11 @@ class RedisThirdSessionResolver:
             effective_tenant_id=tenant_id,
             data_scope=self._data_scope(subject, tenant_id, platform_entry),
             roles=frozenset(),
-            permissions=frozenset({required_scope}),
+            # DERIVED（#1040）：能力由目录推导（角色/权限码门），请求的 scope
+            # 不参与授权 —— 记空集是「本链没有断言任何能力」，不是「这个调用者
+            # 没有权限」。把 ``required_scope`` 写进来就是回声冒充断言。
+            permissions=frozenset(),
+            capability_source=CAPABILITY_DERIVED,
         )
 
     def _data_scope(self, subject: SubjectRecord, tenant_id: str, platform_entry: str | None) -> DataScope:

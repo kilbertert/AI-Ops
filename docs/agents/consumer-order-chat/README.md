@@ -15,8 +15,10 @@
   使用现有分页查询（内部最多读两行），只向 CPMS 查询选中的一单；工单归属沿用 `consumer_id` 判据。
 - `{"question":"查询这个订单的状态","order_no":"<订单号>"}`：显式号优先；正文中的订单号也沿用现有提取器。
   无号且没明确说最新则要求补订单号，不猜历史订单。
-- 入口只接受显式 consumer、非代查 self 和有效 C 端身份。助手仍要求 `aiops:diagnoses:write`，
-  此路径另问同一身份解析器验证 `aiops:orders:read`，范围指纹必须一致。模型或请求参数不能提供租户/用户。
+- 入口只接受显式 consumer、非代查 self 和有效 C 端身份。助手路由把 `aiops:diagnoses:write`
+  声明为所需 scope，此路径再以 `aiops:orders:read` 声明问同一身份解析器并要求两次解析的
+  范围指纹一致 —— 钉住的是**同一身份**（指纹相等），能力判据是角色门；scope 声明只在断言
+  它的凭据链（`ASSERTED` 档）上被逐一比对。模型或请求参数不能提供租户/用户。
 - 返回前再次核对订单可见性。成功响应 `202 type=qa,status=completed,result.blocks`，随后 GET 200
   重验本人权限和证据；App 原有 `fetchAssistantQa` 与 blocks 渲染可直接消费。超时无自动重发。
 - 明确的简体/繁体/英文状态查询才进入本片；诊断、扣费原因、写动作、快捷动作及其他语言保持原路由。

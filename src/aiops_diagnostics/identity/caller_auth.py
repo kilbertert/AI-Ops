@@ -5,7 +5,7 @@ import logging
 import secrets
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -24,6 +24,12 @@ from aiops_diagnostics.common.bounded_http import (
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 from aiops_diagnostics.data.sources import mysql_site_mapper, scoped_live_sources
+from aiops_diagnostics.identity.capability import (
+    CAPABILITY_ASSERTED,
+    CAPABILITY_UNASSERTED,
+    VERDICT_REFUSE,
+    capability_verdict,
+)
 from aiops_diagnostics.identity.query_scope import (
     QueryScope,
     ShopDirectory,
@@ -223,15 +229,22 @@ class UpmsCallerResolver:
         # #644：平台凭据路径**不读**入口头 —— 范围由 UPMS 目录按令牌断言，会话/令牌链上
         # 那条「入口绑定数据范围」的判定（``entry_data_scope``）不属于这里。写成 ``del``
         # 是有意的：谁后来真读它会直接 NameError，而不是悄悄拿到一个没人决定过含义的值。
-        del third_session, source_key, platform_entry
+        # #1040：``required_scope`` 同理 —— 本链是 UNASSERTED 档，请求的 scope 不被
+        # 读取；读它就是给「有任意权限就放行」的错配检查复活。
+        del third_session, source_key, platform_entry, required_scope
         try:
             context = self.resolver.resolve(ScopeRequest(credential=token))
         except ScopeError as exc:
             raise CallerAuthError("platform access token rejected", code=CALLER_AUTH_INVALID) from exc
-        # ponytail: cloud-auth currently exposes platform permissions, not resource scopes.
-        if not context.permissions and required_scope:
-            raise CallerAuthError("platform caller has no permissions", code=CALLER_AUTH_FORBIDDEN)
-        return context
+        # UNASSERTED（#1040）：cloud-auth 暴露的是**平台权限**（有没有任何一项），
+        # 不是资源 scope —— 拿它判「有没有 required_scope」是错配（原「有任意权限
+        # 就放行」检查对同一份权限集与自省链给出相反答案）。本链只判身份与租户，
+        # 能力由角色门另行拒绝；``permissions`` 记空集即如实标注「没有断言」。
+        return replace(
+            context,
+            permissions=frozenset(),
+            capability_source=CAPABILITY_UNASSERTED,
+        )
 
 
 class IntrospectionCallerResolver:
@@ -268,7 +281,8 @@ class IntrospectionCallerResolver:
             raise CallerAuthError("access token audience is not accepted", code=CALLER_AUTH_INVALID)
 
         scopes = frozenset(_scope_values(payload.get("scope")))
-        if required_scope not in scopes:
+        # ASSERTED（#1040）：凭据自身断言了 scope 集合，成员判定走唯一的那张表。
+        if capability_verdict(CAPABILITY_ASSERTED, required_scope, scopes) == VERDICT_REFUSE:
             raise CallerAuthError("access token scope is insufficient", code=CALLER_AUTH_FORBIDDEN)
 
         expires_at = payload.get("exp")
@@ -297,6 +311,7 @@ class IntrospectionCallerResolver:
             data_scope=data_scope,
             roles=roles,
             permissions=permissions,
+            capability_source=CAPABILITY_ASSERTED,
         )
 
     def _introspect(self, token: str) -> Mapping[str, Any]:

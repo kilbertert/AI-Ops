@@ -98,7 +98,7 @@ flowchart LR
 | `services/model-proxy/` | 现役固定目标模型代理 |
 | `tools/verification/m2_live/` | 隔离栈探针与回环中继 |
 | `src/aiops_diagnostics/knowledge/`、`tests/knowledge/` | 知识检索、开户、绑定、同步守卫与对应测试 |
-| `src/aiops_diagnostics/identity/`、`tests/identity/` | 调用者身份、公司权限、订单范围和共享安全规则 |
+| `src/aiops_diagnostics/identity/`、`tests/identity/` | 调用者身份、公司权限、能力来源档（`identity.capability`）、订单范围和共享安全规则 |
 | `src/aiops_diagnostics/publication/`、`tests/publication/` | 发布内容、生命周期、快捷动作与校验 |
 | `src/aiops_diagnostics/execution/`、`tests/execution/` | 路线、节点委派、执行清单与数据授权 |
 | `src/aiops_diagnostics/dify/`、`tests/dify/` | Dify协议、工作空间、登录、发布和知识适配 |

@@ -29,6 +29,7 @@ def configure_admin(
 
 
 def _platform_migration_context() -> Any:
+    from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
     from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
     subject = SubjectRecord(b_user_id="platform-shortcut-migration", tenant_id="platform")
@@ -39,7 +40,9 @@ def _platform_migration_context() -> Any:
         effective_tenant_id="platform",
         data_scope=DataScope(type="all"),
         roles=frozenset({"ROLE_PLATFORM_ADMIN"}),
+        # 合成上下文：断言就是代码写下的这组能力，记 ASSERTED 档（#1040）。
         permissions=frozenset({"aiops:shortcuts:manage"}),
+        capability_source=CAPABILITY_ASSERTED,
     )
 
 

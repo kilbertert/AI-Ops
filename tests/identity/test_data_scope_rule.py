@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ from aiops_diagnostics.identity.caller_auth import (
     IntrospectionSettings,
     UpmsCallerResolver,
 )
+from aiops_diagnostics.identity.capability import CAPABILITY_UNASSERTED
 from aiops_diagnostics.identity.company_token_auth import (
     CompanyTokenCallerResolver,
     CompanyTokenSettings,
@@ -300,7 +302,11 @@ def _platform_context() -> ScopeContext:
 
 
 def test_the_upms_path_returns_the_same_context_for_every_entry() -> None:
-    """UPMS 平台凭据路径：范围由目录按令牌断言，入口头不参与。"""
+    """UPMS 平台凭据路径：范围由目录按令牌断言，入口头不参与。
+
+    #1040 之后本链把上下文归一成 UNASSERTED（``permissions`` 置空 —— 目录
+    权限码不是资源 scope），判据随之从「同一对象」改为「逐入口同一答案」。
+    """
     context = _platform_context()
 
     class _FixedResolver:
@@ -309,8 +315,13 @@ def test_the_upms_path_returns_the_same_context_for_every_entry() -> None:
 
     resolver = UpmsCallerResolver(upms_settings())
     resolver.resolver = _FixedResolver()  # type: ignore[assignment]
+    expected = replace(
+        context,
+        permissions=frozenset(),
+        capability_source=CAPABILITY_UNASSERTED,
+    )
     for entry in ("operator", "consumer", None):
-        assert resolver.resolve("token", required_scope="aiops:orders:read", platform_entry=entry) is context
+        assert resolver.resolve("token", required_scope="aiops:orders:read", platform_entry=entry) == expected
 
 
 def test_the_introspection_path_returns_the_same_context_for_every_entry(
