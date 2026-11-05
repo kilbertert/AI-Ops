@@ -21,6 +21,7 @@ from aiops_diagnostics.gateway import gateway_api
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CallerAuthError
+from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 ORDER = "2096164064667852801"
@@ -88,6 +89,7 @@ def provision(tmp_path, monkeypatch):
                 data_scope=DataScope(type="self"),
                 roles=frozenset(),
                 permissions=frozenset({required_scope}),
+                capability_source=CAPABILITY_ASSERTED,
             )
             if getattr(state, "identity_changes", False) and required_scope == "aiops:orders:read":
                 subject = SubjectRecord(b_user_id="other", c_user_id="other", tenant_id="tenant-a")
@@ -99,6 +101,7 @@ def provision(tmp_path, monkeypatch):
                     data_scope=DataScope(type="self"),
                     roles=frozenset(),
                     permissions=frozenset({required_scope}),
+                    capability_source=CAPABILITY_ASSERTED,
                 )
             return state.override if hasattr(state, "override") else scope
 

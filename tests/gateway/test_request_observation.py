@@ -32,6 +32,7 @@ from aiops_diagnostics.gateway import request_observation as ro
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.caller_auth import CallerAuthError
+from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 ORDER = "2096164064667852801"
@@ -154,6 +155,7 @@ def provision(tmp_path, monkeypatch):
                 data_scope=DataScope(type="self"),
                 roles=frozenset(),
                 permissions=frozenset({required_scope}),
+                capability_source=CAPABILITY_ASSERTED,
             )
 
     class Directory:

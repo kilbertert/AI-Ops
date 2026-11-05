@@ -22,4 +22,10 @@ code:
 - 主体不存在 / 映射歧义 / 租户越权 / 范围为空 / UPMS 或 Dis 不可用 ⇒ **立即 fail closed**，
   不回退为无范围直查，也不触发任何业务数据库查询。
 - 凭证只透传给目录服务，绝不进入 `ScopeContext`、审计摘要或错误消息。
+- `permissions` 记**本链断言过的能力集**：`ASSERTED` 链记凭据声明的原集合，
+  `DERIVED`/`UNASSERTED` 链记空集——它们没有断言任何能力，写非空就是把
+  「路由问它要什么」冒充成「凭据说它有什么」（#1040）。
+- `capability_source` 记能力档位本身，档位规则只有一份（`capability.py`）；
+  未知档构造即拒。`permissions` 与 `capability_source` 都**不进**
+  `scope_fingerprint`——能力档位不改变任何可见性判定。
 - `scope_fingerprint` 变化即下游缓存与授权失效。
