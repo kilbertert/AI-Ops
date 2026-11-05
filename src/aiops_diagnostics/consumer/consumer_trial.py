@@ -228,6 +228,7 @@ class ConsumerTrial:
                 user=user,
                 query=self.question,
                 inputs=inputs,
+                **({"agent_final_node": "answer"} if self.binding.callback_version == 6 else {}),
                 on_started=started,
             )
             if not live and self.binding.callback_version != 6:
