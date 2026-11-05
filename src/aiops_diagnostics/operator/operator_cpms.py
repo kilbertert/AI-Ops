@@ -28,6 +28,7 @@ from aiops_diagnostics.execution.agent_runs import (
     AgentRunDispatchError,
     SnailDispatcher,
 )
+from aiops_diagnostics.identity.order_identity import is_order_identifier
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
 from aiops_diagnostics.operator import (
@@ -511,7 +512,7 @@ class OperatorCpms:
         trial_manifest=None,
     ):
         conversation_turn = registration.conversation_turn
-        if order and not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", order):
+        if order and not is_order_identifier(order):
             raise OperatorRefused("ORDER_INVALID")
         operator_scope(caller, allow_empty=not order)
         current = authorize()

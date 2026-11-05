@@ -80,6 +80,7 @@ from aiops_diagnostics.common.bounded_http import (
     json_body,
     request_json,
 )
+from aiops_diagnostics.identity.order_identity import is_order_identifier
 
 _LOGGER = logging.getLogger("aiops.dify_console_publish")
 
@@ -93,8 +94,10 @@ CONSOLE_CSRF_HEADER = "X-CSRF-Token"
 # 平台账号的两个哨兵值。
 #
 # ⚠️ **不 import 它们的原始出处**：发布桥的部署制品只含
-# `{__init__, dify_console_publish, async_job_lifecycle, bounded_http, http_auth}.py`
-# （`ops/dify-console-bridge/build-bundle.sh:13`）。从 `dify_login_service` 或
+# `common/{__init__, async_job_lifecycle, bounded_http, http_auth, order_reference}.py`、
+# `dify/{__init__, dify_console_publish, self_service_bridge}.py` 与
+# `identity/{__init__, order_identity}.py`
+# （`ops/dify-console-bridge/build-bundle.sh`）。从 `dify_login_service` 或
 # `dify_workspaces` 导入会让桥在服务宿主上 `ModuleNotFoundError` —— 实测 2026-10-25：
 # 五个部署测试立刻转红，而它们在本地全绿。这是本模块唯一允许"重写一个常量"的地方，
 # 代价由 `tests/dify/test_dify_console_publish.py` 的两条对照用例钉住。
@@ -1960,7 +1963,7 @@ def _native_order(query):
         return ""
     candidates = order_reference.order_candidates(query)
     unsafe = (item for item in candidates if any(c.isdigit() for c in item))
-    if any(not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item) for item in unsafe):
+    if any(not is_order_identifier(item) for item in unsafe):
         raise _Rejected(400, "订单号包含不支持的字符，请只提供一个完整有效的订单号")
     if not candidates:
         return ""

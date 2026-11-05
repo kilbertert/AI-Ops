@@ -25,6 +25,7 @@ from typing import Any
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.redaction import redact_text
+from aiops_diagnostics.identity.order_identity import is_order_identifier
 
 CONVERSATION_RETENTION_DAYS = 30
 CONTEXT_MAX_TURNS = 8
@@ -32,7 +33,6 @@ CONTEXT_MAX_TOKENS = 8000
 BUSY_LOCK_SECONDS = 120  # a crashed worker's generating flag self-expires
 
 _SAFE_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
-_SAFE_ORDER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _SAFE_ENTRY = re.compile(r"^(consumer|operator)$")
 _QUESTION_MAX = 4000
 
@@ -252,7 +252,7 @@ class ConversationStore:
         """
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
-        if order_no is not None and not _SAFE_ORDER.fullmatch(order_no):
+        if order_no is not None and not is_order_identifier(order_no):
             raise ConversationError("order number is invalid")
         now = _utc_now()
         with self._connection(write=True) as connection:
@@ -400,7 +400,7 @@ class ConversationStore:
         scope = self._validate_scope(scope_fingerprint)
         if status_qa_id is not None and not re.fullmatch(r"qa_[a-f0-9]{32}", status_qa_id):
             raise ConversationError("status question id is invalid")
-        if active_order_no is not None and not _SAFE_ORDER.fullmatch(active_order_no):
+        if active_order_no is not None and not is_order_identifier(active_order_no):
             raise ConversationError("order number is invalid")
         now = _utc_now()
         with self._connection(write=True) as connection:

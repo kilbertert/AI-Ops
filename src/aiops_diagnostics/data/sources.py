@@ -42,6 +42,8 @@ from aiops_diagnostics.identity.scope_context import ScopeError
 from aiops_diagnostics.operator.ops_analysis import ABNORMAL_STATUS, NORMAL_STATUS
 
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+#: 传输层注入白名单（SQL 字面量等）：它防护的是「值能不能安全插进查询」,
+#: 不定义订单号长什么样 —— 订单标识的语法只有 `identity.order_identity` 一处（#606）。
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
@@ -1047,6 +1049,8 @@ def _safe_literal(value: str | None) -> str:
     return value
 
 
+#: URL 插值的传输层白名单（比 ``SAFE_VALUE`` 多一个 ``+``)：同样是注入防护,
+#: 不是标识符语法（#606）。
 SAFE_HTTP_PARAM = re.compile(r"^[A-Za-z0-9_.:+-]{1,128}$")
 
 
