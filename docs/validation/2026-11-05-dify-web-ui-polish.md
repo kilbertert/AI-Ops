@@ -67,3 +67,33 @@ PASS。三个定制面已切换为 dify-ui 原语并在生产生效，交互与�
 | 浏览器规格 6/6（含抽屉内嵌套版本操作 Popover 不互关） | PASS |
 
 **结论**：PASS。header 拥挤/重叠消除，交互与无障碍标记保持。
+
+---
+
+## 六、追加回执：开通操作行去重降噪（`ops-declutter`，PR #1426）
+
+**背景**：`/apps` TenantSetup 面板的开通操作行既在行级重复错误文案，又在每个
+入口 chip 里重复同一来源的 `messages[error_code]+failureDetail`，再加逐行脚注，
+同一条信息出现两到三遍，行长且乱。
+
+**修法**：行级只留状态徽标（已完成/部分完成/未完成）+ 各入口 chip（明细只此一份）
++ 失败行的重试钮；行级错误文案仅当操作失败且没有任何入口级明细时兜底；脚注
+「开通完成的应用…」改为列表底部单例。
+
+| 项 | 值 |
+|---|---|
+| 镜像 | `aiops/dify-web-patched:ops-declutter`（36 组装 `774d5d33d370`） |
+| 产物 | 288M→gzip 85M，sha256 `41fd8541c83756c71aa51e800262c96e1dfa4c40607d1580eaf48684f53f39a8` |
+| 部署 | `/opt/dify/deploy/.env` DIFY_WEB_IMAGE + force-recreate，容器 Ready 无报错 |
+
+**36 实测**（同取证通道，真实会话，截图 `ops-declutter-panel.png`）：
+
+| 断言 | 结果 |
+|---|---|
+| 状态徽标：已完成(绿)/部分完成(橙)/未完成(红) | PASS |
+| 入口 chip 承载明细（`data-aiops-progress` 保持） | PASS：如「客户端客服：该端尚未接入使用渠道」「管家：草稿（原正式版继续服务）」 |
+| 行级不再重复入口 chip 已含的错误文案 | PASS：未完成行只见徽标+chip+重试 |
+| 脚注单例 | PASS：仅列表底部一处 |
+| 容器 | `Next.js 16.3.4 ✓ Ready`，无报错 |
+
+**结论**：PASS。操作行信息去重后整洁可读，`data-aiops-*` 断言面与重试路径保持。
