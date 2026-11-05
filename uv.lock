@@ -42,7 +42,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1" },
     { name = "pillow", specifier = ">=12,<13" },
-    { name = "pymysql", extras = ["rsa"], specifier = ">=1.1.2,<2" },
+    { name = "pymysql", extras = ["rsa"], specifier = ">=1.1.1,<2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<7" },
     { name = "python-dotenv", specifier = ">=1.0,<2" },
