@@ -13,11 +13,9 @@ from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, ca
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
 
-def verify_picker(root, base, env, setup, app, gateway, database, content, knowledge, check):
+def install_signed_plugin(root, base, headers, workspace, check):
     import verify_dify_chat_entry as stack
 
-    headers = setup["console_headers"]
-    workspace = stack._console_workspace(base, headers)
     admin = DifyConsoleAdmin(ConsoleApiSettings(base, stack.ADMIN_API_KEY, install_timeout=180))
     boundary = "picker-upload-boundary"
     blob = (root / "knowledge.signed.difypkg").read_bytes()
@@ -48,6 +46,15 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
     check("plugin installation accepted", code == 200)
     admin._await_install_task(workspace, installed["task_id"], expected=[identifier])
     check("knowledge plugin installed", identifier in admin.installed_plugin_ids(workspace))
+    return identifier
+
+
+def verify_picker(root, base, env, setup, app, gateway, database, content, knowledge, check):
+    import verify_dify_chat_entry as stack
+
+    headers = setup["console_headers"]
+    workspace = stack._console_workspace(base, headers)
+    identifier = install_signed_plugin(root, base, headers, workspace, check)
     credential = {
         "gateway_url": gateway,
         "catalogue_token": catalogue_token("synthetic-catalogue-secret", "dify-chat-acceptance", workspace),
