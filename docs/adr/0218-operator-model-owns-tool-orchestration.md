@@ -50,3 +50,7 @@ Status: Accepted（用户已批准架构草案并授权实施）。
 映射依据[Responses推理说明](https://developers.openai.com/api/docs/guides/reasoning)：输出预算
 含推理令牌，未完成响应不得当作结果；兼容供应商实际行为以本轮探测为准，不推断所有模型支持。
 实测none返回完整reject（7输出令牌），没有把缺失结果默认为通过；完整正反整链仍单独验收。
+
+交付补记：真实节点心跳探针必须断言现役request-target/2和operator-agent/1；
+保留旧schema是回退兼容，不得让探针仍把旧列表当完整合同。探针锁定实测JDK摘要，
+以合并JAR实际报告及声明摘要核验，见2026-11-05部署验收。

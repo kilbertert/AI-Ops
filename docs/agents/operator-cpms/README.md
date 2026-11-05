@@ -1,6 +1,7 @@
 # 管家 CPMS 工具实施
 
 更新：2026-11-05。新合同及配套迁移以本页末尾“统一自然语言与SOP模型循环”为准；
+已部署与原页面结果见[本轮验收](../../validation/2026-11-05-operator-agent-live.md)。
 以下首片和JSON合同描述保留历史取舍，不再指导新应用发布。
 节点、原管家H5与Dify原生预览已有真实链路证据，
 见[退役验收](../../validation/2026-10-29-runtime-retirement-live.md)及
@@ -141,3 +142,15 @@ Dify1.17.1更新载荷需要original_provider、credentials和icon；现役命�
 仓库种子文件不会热改线上提示词，不默认把旧根SOP的SQL/Redis操作变成可执行能力。
 原H5与Dify预览共享同一个模型执行合同及受控历史，读到旧答案前重新验证其对象可见性。
 详见[验收](../../acceptance/operator-agent-loop-qa-plan.md)及[节点迁移](../../../deploy/node-runtime/README.md#迁移到管家统一模型循环operator-agent1)。
+
+### 自然语言答复的事实复核
+
+运行快照的`answer_review`分别记录模型判定和抽取的`currencies`/`station_names`。
+排查时按本次qa_id读取，不能取最新运行代替；只有已交付且当前仍授权的证据可支持实体。
+站点查询使用records.name，未来方案使用已解析rules.name，用户搜索参数不属于证据。
+现役工具未提供币种，金额仅展示记录数值；未来增加币种须同步工具投影及比对合同。
+
+真实页面验收除completed还需逐句核对：币种/站名/优惠/税额限定，不能把HTTP成功当业务通过。
+先保存SOP和provider备份，草稿预览通过再正常发布；系统提示变更需要重新发布快照。
+SOP顺序实验用两个可执行顺序分别预览同题，以同轮evidence.observed_at排序；正常接口恢复草稿，
+复核正式revision未因草稿变化而推进。原始数据与页面状态只保存在私有证据目录。
