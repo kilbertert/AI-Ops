@@ -626,5 +626,3 @@ def _description(value: str) -> str:
 def _actor(context: Any) -> str:
     caller = getattr(context, "caller", None)
     return str(getattr(caller, "b_user_id", "agent-admin"))[:128]
-
-

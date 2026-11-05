@@ -806,6 +806,3 @@ def _normalize_scope_type(value: Any) -> str:
     if mapped is None:
         raise ScopeError(f"UPMS 数据范围类型无法识别: {value!r}", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
     return mapped
-
-
-

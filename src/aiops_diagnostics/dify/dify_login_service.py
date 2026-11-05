@@ -352,8 +352,6 @@ class MappingStore:
             )
 
 
-
-
 class LoginService:
     """一次登录的完整流程。**副作用只有两处**：映射表、以及（首次登录时的）Dify 开户。"""
 

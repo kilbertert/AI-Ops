@@ -139,5 +139,3 @@ def _indicator(
         "reference": None,
         "reason_code": reason_code,
     }
-
-

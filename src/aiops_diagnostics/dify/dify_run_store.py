@@ -85,8 +85,6 @@ class DifyRun:
     has_photo: bool = False
 
 
-
-
 def still_valid(run: DifyRun, *, now: datetime | None = None) -> bool:
     """这条记录**此刻**还在有效期里吗。
 

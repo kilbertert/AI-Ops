@@ -1556,7 +1556,3 @@ def _label(value: str, name: str) -> str:
     if not candidate or len(candidate) > 128 or any(ord(character) < 32 for character in candidate):
         raise ValueError(f"{name} is invalid")
     return candidate
-
-
-
-

@@ -1611,5 +1611,3 @@ def _actor(context: Any) -> str:
 
 def _json(value: dict[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-

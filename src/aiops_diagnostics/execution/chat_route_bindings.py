@@ -101,8 +101,6 @@ class RouteBinding:
         return self.state == STATE_ACTIVE
 
 
-
-
 class ChatRouteBindingStore:
     """`chat_route_bindings` 表。与网关共用同一个 SQLite 文件，各自建表。"""
 

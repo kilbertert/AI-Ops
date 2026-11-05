@@ -14,8 +14,15 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from aiops_diagnostics.common.async_job_lifecycle import QUESTION
-from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, request_json
+from aiops_diagnostics.common.bounded_http import (
+    ErrorMapping,
+    RequestSpec,
+    json_body,
+    parse_code_data_envelope,
+    request_json,
+)
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+from aiops_diagnostics.data.sources import GUN_COLUMN_NAMES
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import (
     AgentRunConfig,
@@ -238,6 +245,15 @@ def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, st
 #: 站点查询工具的名字。这里是**唯一**按名字认它的地方：判断「这一轮是否已经用工具
 #: 取过站点」是运行级的事实，不是工具自身的属性。
 SITE_TOOL = "cpms_site_search"
+TIMELINE_TOOL = "cpms_charging_timeline"
+#: 节点 object 投影的数组上限（`CpmsReadTool.project` 拒收 >64）。窗口内按 _ts 升序
+#: 取前 N 行，装不下的部分由 ``truncated``/``total`` 如实标出 —— 不翻页。
+TIMELINE_LIMIT = 64
+#: 发给 tsdata `QueryRequest.fields` 的列清单：SOP §2.2 那一份，`GUN_COLUMN_NAMES`
+#: 是仓内唯一权威（诊断直查与只读代理白名单也由它派生），前面补上 `_ts`。
+TIMELINE_FIELDS = ("_ts", *GUN_COLUMN_NAMES)
+_TIMELINE_DEVICE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_TIMELINE_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?")
 
 
 def _proxy_tool(task, run, method, path, query):
@@ -1013,6 +1029,100 @@ class OperatorCpms:
             data["text"] = str(exc)
         return data
 
+    def _charging_timeline(self, task, run):
+        """SOP §2.2 时序过程遥测：设备与窗口**只**取自已交付的订单详情证据。
+
+        tsdata 端点本身无鉴权、无租户隔离（公司内部门面），范围保证不来自请求形状，
+        而来自查询构造：``deviceId`` 只可能是授权订单详情里的 ``childDeviceCode``/
+        ``deviceCode``，窗口只可能是 ``createdTime``~``stopTime``。返回行上没有
+        ``orderNo``/``siteId``/``tenantId`` 可逐行核验 —— 这正是它不走
+        ``validate_body``、而像计算工具一样由网关合成证据的原因。
+        ``txSerialNo`` 不在详情证据里，设备+窗口本身就是 SOP 的充分谓词。
+        """
+        base = self.context.settings.operator_tsdata_url.rstrip("/")
+        if not base:
+            raise OperatorRefused("TSDATA_UNAVAILABLE")
+        detail = task.evidence.get(TOOL_NAMES[0], {}).get("data") or {}
+        device = detail.get("childDeviceCode") or detail.get("deviceCode") or ""
+        if not device:
+            raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+        if not _TIMELINE_DEVICE.fullmatch(str(device)):
+            raise OperatorRefused("CPMS_INVALID_RESPONSE")
+        start = _timeline_time(detail.get("createdTime"))
+        if start is None:
+            raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+        raw_end = detail.get("stopTime")
+        end = _timeline_time(raw_end)
+        if raw_end and end is None:
+            # 订单已停但停时不可读：窗口收不拢，不能拿「现在」冒充上界。
+            raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+        if end is None:
+            # 仍在充电的订单：上界取网关本地现在（与 CPMS/tsdata 同一时域）。
+            end = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        data = tsdata_query(
+            base + "/tdadmin/data/query",
+            {
+                "table": "charging-gun_property",
+                "deviceId": device,
+                "start": start,
+                "end": end,
+                "fields": list(TIMELINE_FIELDS),
+                "orderBy": "_ts",
+                "order": "ASC",
+                "page": 1,
+                "pageSize": TIMELINE_LIMIT,
+            },
+        )
+        records = data.get("records") if isinstance(data, dict) else None
+        if (
+            not isinstance(data, dict)
+            or type(data.get("count")) is not int
+            or not isinstance(records, list)
+            or len(records) > TIMELINE_LIMIT
+            or data["count"] < len(records)
+        ):
+            raise OperatorRefused("TSDATA_UNAVAILABLE")
+        shape_keys = _declared(TIMELINE_TOOL).evidence_shape["records"][0]
+        rows = []
+        for row in records:
+            if not isinstance(row, dict):
+                raise OperatorRefused("TSDATA_UNAVAILABLE")
+            picked = {}
+            for key in shape_keys:
+                source_key = "_ts" if key == "ts" else key
+                if source_key not in row:
+                    continue
+                value = row[source_key]
+                if isinstance(value, (dict, list)) or (isinstance(value, str) and len(value) > 1000):
+                    raise OperatorRefused("TSDATA_UNAVAILABLE")
+                picked[key] = value
+            rows.append(picked)
+        total = data["count"]
+        value = {
+            "records": rows,
+            "total": total,
+            "sample_limit": TIMELINE_LIMIT,
+            "truncated": total > len(rows),
+            # `_ts` 升序是查询构造出来的，完整性等于「窗口内全部行都装下了」。
+            "ordering_guaranteed": True,
+            "complete_timeline": total <= len(rows),
+            "samples_returned": len(rows),
+            "absence": None if rows else "no_samples",
+            "device": device,
+            "window_start": start,
+            "window_end": end,
+        }
+        response = {
+            "code": 0,
+            "data": {
+                "orderNo": run.order_no,
+                "siteId": task.order_site_id,
+                "tenantId": task.caller.effective_tenant_id,
+                "value": value,
+            },
+        }
+        return value, response
+
     def _grant_sites(self, task, run, tool) -> list[str] | None:
         """这一次授权允许碰的站点。
 
@@ -1055,7 +1165,13 @@ class OperatorCpms:
             if tool in task.evidence:
                 return task.evidence[tool]["response"]
             if (
-                tool in (TOOL_NAMES[1], "cpms_order_tariff", "cpms_order_billing")
+                tool
+                in (
+                    TOOL_NAMES[1],
+                    "cpms_order_tariff",
+                    "cpms_order_billing",
+                    TIMELINE_TOOL,
+                )
                 and TOOL_NAMES[0] not in task.delivered
             ):
                 raise OperatorRefused("OPERATOR_DETAIL_REQUIRED")
@@ -1140,6 +1256,20 @@ class OperatorCpms:
                     "data": data,
                 }
                 task.evidence[tool]["response"] = response
+                return task.evidence[tool]["response"]
+            if tool == TIMELINE_TOOL:
+                # 范围不经 `validate_body`（行上没有订单/租户字段）：设备与窗口
+                # 由已交付的订单详情证据构造，详情未交付走上面的 DETAIL_REQUIRED。
+                data, response = self._charging_timeline(task, run)
+                self.authorize_execution(run_id, tool=tool)
+                task.evidence[tool] = {
+                    "tool": tool,
+                    "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
+                    "source": _declared(tool).source,
+                    "observed_at": format_stored_time(now_utc()),
+                    "data": data,
+                    "response": response,
+                }
                 return task.evidence[tool]["response"]
             body = cpms_get(
                 task.base_url + path + ("?" + query if query else ""),
@@ -1765,6 +1895,13 @@ def project_evidence(body, order, tool):
     }
 
 
+def _timeline_time(value) -> str | None:
+    """CPMS 时间（``yyyy-MM-dd HH:mm:ss`` 或 ISO）归一成 tsdata 接受的本地时间串。"""
+    if not isinstance(value, str) or not _TIMELINE_TIME.fullmatch(value.strip()):
+        return None
+    return value.strip().replace("T", " ")
+
+
 def _failure_code(exc: BaseException) -> str:
     """这次失败对**用户**报哪个码。
 
@@ -1782,6 +1919,7 @@ def _failure_code(exc: BaseException) -> str:
             "OPERATOR_NODE_CHANGED",
             "OPERATOR_TARGET_MISSING",
             "CPMS_UNAVAILABLE",
+            "TSDATA_UNAVAILABLE",
             "OPERATOR_SCOPE_UNAVAILABLE",
         }:
             return "OPERATOR_DEPENDENCY_UNAVAILABLE"
@@ -1841,6 +1979,33 @@ def cpms_get(url, bearer, tenant, *, timeout=10):
             invalid_body=unavailable,
             invalid_envelope=unavailable,
         ),
+    )
+
+
+def tsdata_query(url, payload, *, timeout=10):
+    """POST tsdata ``QueryRequest``；一切失败形状都归一成依赖不可用，不落成空页。"""
+
+    def unavailable(_):
+        return OperatorRefused("TSDATA_UNAVAILABLE")
+
+    return request_json(
+        RequestSpec(
+            url=url,
+            method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            body=json_body(payload),
+            timeout=timeout,
+            max_read_bytes=262144,
+            follow_redirects=False,
+        ),
+        mapping=ErrorMapping(
+            auth_rejected=unavailable,
+            http_error=unavailable,
+            unavailable=unavailable,
+            invalid_body=unavailable,
+            invalid_envelope=unavailable,
+        ),
+        envelope=parse_code_data_envelope,
     )
 
 
