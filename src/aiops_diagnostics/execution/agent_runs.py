@@ -940,6 +940,30 @@ class AgentRunStore:
             )
             return cursor.rowcount == 1
 
+    def absorb(self, run_id: str, patch: dict[str, Any]) -> bool:
+        """终局后仍可写的取证面：把迟到交付物并进快照，**不动** state 与 reason。
+
+        dict 值做一层深合并（迟到的 ``evidence`` 不冲掉已落库的兄弟项），其余键覆盖。
+        只服务「授权已死后送达的上报」——收下是取证，不投递是撤回的全部意义。
+        """
+        with self._connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT snapshot_json FROM agent_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            snapshot = json.loads(row["snapshot_json"]) if row["snapshot_json"] else {}
+            for key, value in patch.items():
+                if isinstance(value, dict) and isinstance(snapshot.get(key), dict):
+                    snapshot[key].update(value)
+                else:
+                    snapshot[key] = value
+            connection.execute(
+                "UPDATE agent_runs SET snapshot_json = ? WHERE run_id = ?",
+                (json.dumps(snapshot, ensure_ascii=False, sort_keys=True), run_id),
+            )
+            return True
+
 
 def _read_run(connection: sqlite3.Connection, run_id: str) -> AgentRun | None:
     row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()

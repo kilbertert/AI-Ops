@@ -113,7 +113,7 @@ def test_gate_refusal_stamps_original_code(operator, monkeypatch, caplog):
         denied = f["client"].post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
         observed["status"] = denied.status_code
         observed["code"] = denied.json()["error"]["code"]
-        # 上报同样过闸：第二次拒绝不得改写已落的码（首写胜出）。
+        # 失败上报只过协议闸：授权已死也照收，且不得改写已落的码（首写胜出）。
         observed["report"] = (
             f["client"]
             .post(
@@ -137,7 +137,7 @@ def test_gate_refusal_stamps_original_code(operator, monkeypatch, caplog):
     assert observed == {
         "status": 403,
         "code": "OPERATOR_PUBLICATION_CHANGED",
-        "report": 403,
+        "report": 200,
     }
     run = f["ctx"].agent_run_store.by_qa(posted.json()["qa_id"])
     assert run.state == "failed"
@@ -148,6 +148,74 @@ def test_gate_refusal_stamps_original_code(operator, monkeypatch, caplog):
     assert len(attempts) == 1
     assert "operator_gate_refused" in caplog.text
     assert "OPERATOR_PUBLICATION_CHANGED" in caplog.text
+
+
+def test_reports_land_after_authorization_death(operator, monkeypatch):
+    """授权已死：执行面仍硬拒，但失败/证据/成功上报全部照录进终局快照，不投递。"""
+    f = operator
+    entered, release = threading.Event(), threading.Event()
+    observed = {}
+
+    def dispatch(_, cfg, run_id):
+        head = {"Authorization": "Bearer " + NODE_A_TOKEN}
+        # 授权还活着：节点照常领配置，manifest 身份凭证在手。
+        publication = f["client"].post(
+            "/v1/internal/charging-status/execution-config/" + run_id, headers=head
+        )
+        assert publication.status_code == 200, publication.text
+        head["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+        entered.set()
+        assert release.wait(5)
+        # 授权已死：执行能力面（再领配置）照样 403。
+        observed["publication"] = (
+            f["client"]
+            .post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
+            .status_code
+        )
+        # 上报面不再被授权闸反杀：证据、结局都收。
+        record = f["client"].post(
+            f"/v1/internal/operator-runs/{run_id}/tools/cpms_order_detail/evidence",
+            headers=head,
+            json={
+                "authorization_id": "late",
+                "evidence": {"tool": "cpms_order_detail", "data": {"siteId": "SITE-1"}},
+            },
+        )
+        observed["record"] = (record.status_code, record.json().get("delivered"))
+        complete = f["client"].post(
+            "/v1/internal/operator-runs/" + run_id + "/completions",
+            headers=head,
+            json={"status": "completed", "answer": "站点电压正常"},
+        )
+        observed["complete"] = (complete.status_code, complete.json().get("delivered"))
+        raise AgentRunDispatchError("node session done")
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    posted = request(f["client"])
+    assert posted.status_code == 202, posted.text
+    assert entered.wait(5)
+    f["candidate"]["enabled"] = []
+    f["publish"](f["route"].route_revision)
+    release.set()
+    final = terminal(f, posted.json()["qa_id"])
+    assert observed == {
+        "publication": 403,
+        "record": (200, False),
+        "complete": (200, False),
+    }
+    run = f["ctx"].agent_run_store.by_qa(posted.json()["qa_id"])
+    assert run.state == "failed"
+    assert run.reason == "tool_refused:OPERATOR_PUBLICATION_CHANGED"
+    assert run.snapshot["superseded"] is True
+    assert run.snapshot["answer"] == "站点电压正常"
+    assert run.snapshot["evidence"]["cpms_order_detail"]["data"]["siteId"] == "SITE-1"
+    assert final.json()["status"] == "failed"
+    assert final.json()["error"]["code"] == "OPERATOR_DEPENDENCY_UNAVAILABLE"
+    # 不投递：用户侧回读仍是终局拒绝。
+    with pytest.raises(operator_cpms.OperatorRefused, match="OPERATOR_RESULT_UNAVAILABLE"):
+        f["ctx"].operator_cpms.authorize_readback(
+            f["resolver"].current, posted.json()["qa_id"], "operator-private"
+        )
 
 
 def test_tool_disabled_refusal_still_self_reports(operator, monkeypatch):
