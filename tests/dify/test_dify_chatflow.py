@@ -170,3 +170,36 @@ def test_text_after_message_end_is_not_a_complete_answer(server):
     events.insert(3, event("message", answer="late text"))
     with pytest.raises(DifyWorkflowError):
         run(client)
+
+
+def test_agent_delivers_only_last_completed_round_without_tools(server):
+    client, state = server
+
+    def log(status, output=None, parent=None, node="answer"):
+        return event(
+            "agent_log",
+            data={
+                "node_id": node,
+                "parent_id": parent,
+                "status": status,
+                "data": {"output": output} if output is not None else {},
+            },
+        )
+
+    state["events"] = [
+        event("workflow_started", data={"id": RUN, "workflow_id": WORKFLOW}),
+        log("start"),
+        event("message", answer="Let me check.\n"),
+        log("success", {"llm_response": "Let me check.", "tool_responses": [{"result": "found"}]}),
+        log("start"),
+        event("message", answer="订单已完成。"),
+        log("success", {"llm_response": "订单已完成。", "tool_responses": []}),
+        *transcript()[-2:],
+    ]
+    assert run(client, agent_final_node="answer").answer == "订单已完成。"
+    state["events"].insert(-2, log("start"))
+    with pytest.raises(DifyWorkflowError):
+        run(client, agent_final_node="answer")
+    state["events"] = transcript()
+    with pytest.raises(DifyWorkflowError):
+        run(client, agent_final_node="answer")
