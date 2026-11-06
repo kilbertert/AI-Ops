@@ -48,7 +48,7 @@
 @@ -194,16 +194,30 @@
      [value, onSelect],
    )
- 
+
 +  // Legacy Agent v1 stores the form value directly; editing must preserve its runtime shape.
 +  const legacySettingKeys = useMemo(
 +    () =>
@@ -76,11 +76,11 @@
 -    [value, onSelect],
 +    [value, onSelect, legacySettingKeys],
    )
- 
+
    const handleParamsFormChange = useCallback(
 @@ -253,10 +267,12 @@
    }, [invalidateAllBuiltinTools, invalidateInstalledPluginList])
- 
+
    const settingsValue = useMemo((): ResourceVarInputs => {
 -    return getPlainValue(
 -      (value?.settings || {}) as Record<string, { value: unknown }>,
@@ -92,7 +92,7 @@
 +    })
 +    return settings as ResourceVarInputs
 +  }, [value?.settings, legacySettingKeys])
- 
+
    return {
      isShow,
 --- /dev/null
