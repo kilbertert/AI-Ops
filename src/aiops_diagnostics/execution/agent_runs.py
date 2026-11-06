@@ -560,6 +560,20 @@ class AgentRunStore:
             row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return _run_from_row(row) if row else None
 
+    def has_succeeded_for_tenant(self, tenant_id: str) -> bool:
+        """该租户的管家端有没有一条真实成功运行——渠道"已接入"的观测证据。
+
+        管家端诊断走节点执行器：``app_id`` 是节点身份，租户归属在
+        ``scope_json.caller.tenant_id``（公司账号的 organ）。控制台试运行不记在此表。
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT EXISTS(SELECT 1 FROM agent_runs WHERE state = ?"
+                " AND json_extract(scope_json, '$.caller.tenant_id') = ?)",
+                (SUCCEEDED, tenant_id),
+            ).fetchone()
+        return bool(row and row[0])
+
     def claim(self, run_id: str) -> bool:
         """``issued → running``。返回 True 的那一个调用者是唯一被允许读业务的人。"""
         with self._connection(write=True) as connection:

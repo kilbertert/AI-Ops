@@ -257,9 +257,9 @@ body传该测试ID，确认success_count=1；Dify随后同步应移除对应exte
 受管客户端目标只支持**动态知识回答**编排（`knowledge_answer_mode=documents`）；
 旧 FAQ 流程需要内容文件，受管行没有内容文件，因此明确拒绝 `SETUP_CONSUMER_CONTENT_REQUIRED`。
 
-### 渠道状态：声明，不推导
+### 渠道状态：声明优先，流量推导兜底
 
-哪一端的**使用渠道**已接入，读环境清单的 `[[channels]]`：
+哪一端的**使用渠道**已接入，优先读环境清单的 `[[channels]]`：
 
 ```toml
 [[channels]]
@@ -270,8 +270,17 @@ state = "connected"         # connected | pending
 note = ""                   # 可选，页面原样显示
 ```
 
-没有声明 ⇒ 页面显示"AI 已准备，渠道待接入"。同一 `(租户, 端)` 出现两个矛盾状态 ⇒
-启动/读取即拒绝（`SETUP_CHANNEL_DECLARATION_INVALID`），不按"后写的赢"。
+声明行是**显式裁决**——`state = "pending"` 可用来把流量在跑但业务上尚未接入的端
+人工压回"待接入"，观测证据不推翻它。同一 `(租户, 端)` 出现两个矛盾状态 ⇒
+读取即拒绝（`SETUP_CHANNEL_DECLARATION_INVALID`），不按"后写的赢"。
+
+**无声明时从真实流量推导**：客户端落 `chat_dify_runs`（`tenant_id` +
+`binding_key` 形如 `consumer_service:<env>:<tenant>`），管家端落 `agent_runs`
+（租户归属在 `scope_json.caller.tenant_id`，`app_id` 是节点身份不是租户）。
+任一表有一条 `succeeded` ⇒ `connected`；都没有 ⇒ 页面显示"AI 已准备，渠道待接入"
+（fail closed）。观测查询失败按未接入显示，与声明缺省同方向。
+
+这样新租户、新环境不再需要逐台手工编辑清单；声明只留给"流量在、业务未接入"的例外。
 
 ### 已存在正式版时只建草稿
 

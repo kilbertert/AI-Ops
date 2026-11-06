@@ -331,6 +331,21 @@ class DifyRunStore:
                 ).fetchall()
         return [_run_from_row(row) for row in rows]
 
+    def has_succeeded_for_tenant(self, tenant_id: str) -> bool:
+        """该租户的客户端入口有没有一条真实成功运行——渠道"已接入"的观测证据。
+
+        `chat_dify_runs` 只落 consumer 场景的真实 chat 执行（`binding_key` 形如
+        ``consumer_service:<env>:<tenant>``），控制台试运行不走这条路。一条
+        ``succeeded`` 就证明有前端真的在调它——声明制想要的证据，只是不用手写。
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT EXISTS(SELECT 1 FROM chat_dify_runs"
+                " WHERE tenant_id = ? AND state = ? AND binding_key LIKE 'consumer_service:%')",
+                (tenant_id, SUCCEEDED),
+            ).fetchone()
+        return bool(row and row[0])
+
     def by_qa(self, qa_id: str) -> DifyRun | None:
         """按 QA 反查承载它的执行记录。**只读**，不做过期收敛。"""
         with self._connection() as connection:

@@ -15,11 +15,15 @@
 同一个端可以有多个场景（例如客户端除了 Chatflow 客服还有 `consumer_own_order_status` 状态路线），
 但本模块只登记**首片闭环使用的那一个**场景；多场景选择器是另一件事，不在这里预先造。
 
-## 渠道状态来自声明，不来自推导
+## 渠道状态：声明优先，流量推导兜底
 
 "AI 已准备"和"用户能用"是两件事。渠道是否接入不从这个端有没有应用、有没有正式版推出来——
-那样会让"刚开通的客户"显示成"可用"，而实际上没有任何前端在调它。渠道状态读环境清单的
-``[[channels]]`` 段；没有声明就是 ``pending``（fail closed：宁可显示"待接入"）。
+那样会让"刚开通的客户"显示成"可用"，而实际上没有任何前端在调它。
+
+渠道状态的判据分两档：环境清单 ``[[channels]]`` 段的**声明行是显式裁决**（含把它强压回
+``pending`` 的人工标记），无声明时看**观测**——这条端有没有一条真实成功的运行记录。
+一条都没有就是 ``pending``（fail closed：宁可显示"待接入"）。这样新租户/新环境不需要
+逐台手工编辑清单，声明只留给"流量在但业务上还没接入"的例外。
 """
 
 from __future__ import annotations
@@ -122,12 +126,19 @@ def channels(path: str | Path, environment: str) -> dict[tuple[str, str], dict]:
     return result
 
 
-def channel_state(declared: dict, tenant_id: str, entry: str) -> dict:
-    """一个端此刻的渠道状态。未声明 ⇒ `pending`（不是"未知"，也不是"可用"）。"""
+def channel_state(declared: dict, tenant_id: str, entry: str, *, observed: bool = False) -> dict:
+    """一个端此刻的渠道状态。
+
+    声明行赢——``declared`` 里有这一端就按它（含显式 ``pending``，那是人工把它压回
+    "未接入"的标记，流量证据不能推翻）。无声明看 ``observed``：有真实成功流量即
+    ``connected``；两者都没有 ⇒ ``pending``（不是"未知"，也不是"可用"）。
+    """
     found = declared.get((tenant_id, entry))
-    if found is None:
-        return {"state": CHANNEL_PENDING, "channel": "", "note": "该端尚未接入使用渠道"}
-    return dict(found)
+    if found is not None:
+        return dict(found)
+    if observed:
+        return {"state": CHANNEL_CONNECTED, "channel": "", "note": ""}
+    return {"state": CHANNEL_PENDING, "channel": "", "note": "该端尚未接入使用渠道"}
 
 
 def readiness(entry_row: dict, channel: dict) -> str:

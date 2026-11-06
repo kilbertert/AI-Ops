@@ -37,6 +37,7 @@ from pathlib import Path
 import yaml
 
 from aiops_diagnostics.execution import execution_manifest, node_publication
+from aiops_diagnostics.execution.agent_runs import AgentRunStore
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.publication.agent_manifest import admin_context
 
@@ -46,6 +47,7 @@ from . import self_service_identity as auth
 from . import self_service_prepare as prepare
 from .dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 from .dify_dsl_pull import DifyDslSource, _declared_dataset_ids
+from .dify_run_store import DifyRunStore
 from .dify_workspaces import DifyWorkspaces
 from .self_service_store import SelfServiceStore, SetupConflict
 
@@ -303,7 +305,7 @@ class SelfService:
             "version_no": route.agent_version_no if route and route.app_id == app_id else None,
             "route_revision": route.revision if route else 0,
             "profile": profile["name"],
-            "channel": dual_entry.channel_state(self._channels(), row["tenant_id"], "operator")["state"],
+            "channel": self._channel_state(row["tenant_id"], "operator")["state"],
         }
 
     def _consumer_status(self, caller, row):
@@ -332,7 +334,7 @@ class SelfService:
             )
         except Exception:  # noqa: BLE001 - 读不到草稿摘要只降级展示（发布时会拒绝缺摘要的客户端发布）
             draft_sha256 = ""
-        channel = dual_entry.channel_state(self._channels(), row["tenant_id"], "consumer")
+        channel = self._channel_state(row["tenant_id"], "consumer")
         published = bool(route and route.active and route.app_id == row["app_id"])
         return {
             "managed": True,
@@ -362,6 +364,28 @@ class SelfService:
             getattr(self.settings, "environment_manifest_file", ""),
             self.settings.execution_environment,
         )
+
+    def _channel_state(self, tenant_id: str, entry: str) -> dict:
+        """渠道状态的唯一组装点：声明行是显式裁决，无声明时用真实流量推导。
+
+        声明行在场就不查库——它可能是人工压回 ``pending`` 的标记，流量证据不能推翻。
+        """
+        declared = self._channels()
+        if (tenant_id, entry) in declared:
+            return dual_entry.channel_state(declared, tenant_id, entry)
+        return dual_entry.channel_state(
+            declared, tenant_id, entry, observed=self._channel_observed(tenant_id, entry)
+        )
+
+    def _channel_observed(self, tenant_id: str, entry: str) -> bool:
+        """这条端有没有一条真实成功运行。观测失败按未接入显示，与声明缺省同方向。"""
+        try:
+            if entry == "operator":
+                # 管家端诊断落 agent_runs，租户在 scope_json.caller.tenant_id。
+                return AgentRunStore(self.settings.database_file).has_succeeded_for_tenant(tenant_id)
+            return DifyRunStore(self.settings.database_file).has_succeeded_for_tenant(tenant_id)
+        except Exception:  # noqa: BLE001 - fail-closed：查不出来按未接入显示
+            return False
 
     # ── 创建 ──────────────────────────────────────────────────────────
 
@@ -733,7 +757,7 @@ class SelfService:
             )
         else:
             state.update(published=False, draft_only=True)
-        channel = dual_entry.channel_state(self._channels(), request["tenant_id"], "consumer")
+        channel = self._channel_state(request["tenant_id"], "consumer")
         state.update(
             state="ready" if state.get("published") else "draft",
             error_code="",
