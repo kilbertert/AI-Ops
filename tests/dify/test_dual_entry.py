@@ -25,6 +25,7 @@ from aiops_diagnostics.dify import dual_entry, service_keys
 from aiops_diagnostics.dify import self_service_identity as auth
 from aiops_diagnostics.dify import self_service_prepare as prepare
 from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
+from aiops_diagnostics.dify.dify_run_store import DifyRunStore
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.dify.self_service import SelfService
 from aiops_diagnostics.dify.self_service_api import SetupRequest, SetupSource
@@ -737,6 +738,48 @@ def test_channel_state_comes_from_declaration_not_from_publication(dual, tmp_pat
     declared = dual_entry.channels(str(manifest), "env-a")
     assert dual_entry.channel_state(declared, TARGET, "consumer")["state"] == "connected"
     assert dual_entry.channel_state(declared, TARGET, "operator")["state"] == "pending"
+
+
+def test_channel_state_declared_wins_over_observed():
+    declared = {("t", "consumer"): {"channel": "h5", "state": "pending", "note": "人工"}}
+    # 声明行是显式裁决：人工压回 pending 不被流量证据推翻。
+    assert dual_entry.channel_state(declared, "t", "consumer", observed=True)["state"] == "pending"
+    # 无声明：观测到流量 ⇒ connected；没流量 ⇒ pending（fail closed）。
+    assert dual_entry.channel_state({}, "t", "consumer", observed=True)["state"] == "connected"
+    assert dual_entry.channel_state({}, "t", "consumer")["state"] == "pending"
+
+
+def test_channel_state_derives_connected_from_observed_traffic(dual, tmp_path):
+    """无声明时从真实成功流量推导客户端渠道；声明行仍赢。"""
+    store = DifyRunStore(dual.settings.database_file)
+    assert dual.service._channel_state(TARGET, "consumer")["state"] == "pending"
+    store.issue(
+        run_id="run-obs-1",
+        qa_id="qa-1",
+        scope_fingerprint="fp",
+        scope_json="{}",
+        binding_key=f"consumer_service:env-a:{TARGET}",
+        order_no="",
+        environment="env-a",
+        tenant_id=TARGET,
+        app_id="app-x",
+        workflow_id="wf-1",
+        grant_id="g-1",
+    )
+    # running 不是证据——渠道已接入要的是一条真正跑完的。
+    assert dual.service._channel_state(TARGET, "consumer")["state"] == "pending"
+    store.bind_workflow("run-obs-1", workflow_run_id="wr-1", task_id="t-1")
+    store.succeed("run-obs-1")
+    assert dual.service._channel_state(TARGET, "consumer")["state"] == "connected"
+    # 声明行仍是显式裁决：人工压回 pending 不被这条流量推翻。
+    manifest = tmp_path / "env.toml"
+    manifest.write_text(
+        f'[[channels]]\ntenant_id = "{TARGET}"\nentry = "consumer"\n'
+        'channel = "ulink-h5"\nstate = "pending"\nnote = "人工压回"\n'
+    )
+    dual.settings.environment_manifest_file = str(manifest)
+    state = dual.service._channel_state(TARGET, "consumer")
+    assert state["state"] == "pending" and state["note"] == "人工压回"
 
 
 def test_conflicting_channel_declarations_are_refused(tmp_path):

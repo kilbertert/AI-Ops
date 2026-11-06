@@ -342,3 +342,14 @@ def test_complete_at_expiry_without_prior_read_stores_nothing(store, tmp_path, m
     )
     stored = store.get(run.run_id)
     assert stored.state == EXPIRED and stored.snapshot is None
+
+
+def test_has_succeeded_for_tenant_is_channel_evidence(store, tmp_path):
+    """管家端渠道观测：caller.tenant_id 有一条 succeeded 才算"已接入"。"""
+    config = AgentRunConfig.load(_config(tmp_path))
+    run = store.issue(scope=_scope(), order_no="ORDER-A", config=config, gateway_version="t")
+    assert store.has_succeeded_for_tenant("TENANT-A") is False
+    assert store.claim(run.run_id) is True
+    assert store.complete(run.run_id, snapshot={"x": 1}, actual_node_id="node-a1", node_build="b") is True
+    assert store.has_succeeded_for_tenant("TENANT-A") is True
+    assert store.has_succeeded_for_tenant("TENANT-B") is False
