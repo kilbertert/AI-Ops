@@ -196,14 +196,35 @@ agent_name = "ops-methodology-700"
 
 # ── 使用渠道 ──────────────────────────────────────────────────────────
 # 渠道状态是声明不是推导（dify/dual_entry.py）：只写**有真实证据**的行。
-# 本行证据：gateway.db `chat_dify_runs` 该租户 consumer 端累计 succeeded
-# 170+ 条（2026-11-05 前，最新 13:38Z）；C 端入口为 ulink H5 AI 客服
+#
+# 现役租户是两个：ulink `1942105476598861824` 与 优链充 `1941847786056323072`
+# —— 不是同一租户两个 id，别抄错。
+#
+# consumer 端证据看 `chat_dify_runs`（按 app_id）：ulink consumer 累计
+# succeeded 170+ 条（最新 2026-11-05T13:38Z）；C 端入口为 ulink H5 AI 客服
 # （https://ulink.h5.mall.qushiyun.com/aiPackage/pages/chat/chat）。
-# operator 端未声明：管家端 H5 存在，但查不到该租户 operator 运行流量，
-# 按 fail-closed 显示「待接入」——有了真实使用证据再写。
+# 优链充 consumer 查不到运行 → 不声明，继续 pending。
+#
+# operator 端证据**不在** chat_dify_runs：管家端诊断走节点执行器，落在
+# `agent_runs`（app_id 是节点身份 aiops-m2live03），租户归属在
+# `scope_json.caller.tenant_id`。实测：ulink operator succeeded 299 条
+# （最新 2026-11-06T07:15Z，管家端 App 一直在用）；优链充 operator
+# succeeded 14 条（最新 2026-11-05T03:22Z）。两端都声明 connected。
 
 [[channels]]
 tenant_id = "1942105476598861824"
 entry = "consumer"
 channel = "ulink-h5"
+state = "connected"
+
+[[channels]]
+tenant_id = "1942105476598861824"
+entry = "operator"
+channel = "ulink-operator-app"
+state = "connected"
+
+[[channels]]
+tenant_id = "1941847786056323072"
+entry = "operator"
+channel = "youlian-operator-app"
 state = "connected"
