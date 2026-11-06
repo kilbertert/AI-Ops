@@ -140,3 +140,7 @@ callback6的入口是智能客服节点→consumer_knowledge工具卡片→用�
 `pnpm --dir web exec vp test --project unit app/components/plugins/plugin-detail-panel/tool-selector/__tests__/aiops-dynamic-settings.spec.tsx`。
 该测试从工具选择器跨真实表单/多选组件验证目录请求、已选回显和多选保存形状；
 原浏览器还需核对同工作区接口200和列表可见，不以测试替代生产页面。
+
+Agent v1的settings字段可以直接保存 `{type: constant, value: [...]}`，新编辑器使用
+`{value: {type: constant, value: [...]}}`。10补丁按已有字段形状解包和保存，不能因点选而改变运行协议。
+回归必须使用真实useToolSelector，否则mock后的settingsValue会掩盖已选值丢失。
