@@ -641,7 +641,7 @@ def test_dependencies_activate_model_before_marking_ready(managed, monkeypatch):
         }
 
     console = SimpleNamespace(_call=call, install_plugins=lambda *_: None)
-    monkeypatch.setattr(prepare, "ensure_node_provider", lambda *_: None)
+    monkeypatch.setattr(prepare, "ensure_node_provider", lambda *_, **kw: None)
     original = REAL_DEPENDENCIES
     assert original(console, "workspace", profile, "https://gateway.example") == "provider"
     assert original(console, "workspace", profile, "https://gateway.example") == "provider"
@@ -896,3 +896,23 @@ def test_consumer_model_approval_validates_private_credentials_and_duplicate_ide
     path.write_text(json.dumps(body))
     with pytest.raises(ValueError, match="duplicate approved model"):
         profiles(f["settings"])
+
+
+def test_retry_rechecks_dependencies_instead_of_trusting_saved_provider(managed, monkeypatch):
+    _, service, caller, _, _ = managed
+    checks = []
+    original_create = prepare.create_app
+
+    def dependencies(*args):
+        checks.append("checked")
+        return "provider-id"
+
+    monkeypatch.setattr(prepare, "dependencies", dependencies)
+    monkeypatch.setattr(prepare, "create_app", lambda *a, **kw: (_ for _ in ()).throw(TimeoutError()))
+    job = service.create(caller, request())
+    service.run(job["id"], "session")
+    assert service.store.get(job["id"])["state"] == "failed"
+    monkeypatch.setattr(prepare, "create_app", original_create)
+    service.run(job["id"], "session")
+    assert service.store.get(job["id"])["state"] == "completed"
+    assert len(checks) == 2
