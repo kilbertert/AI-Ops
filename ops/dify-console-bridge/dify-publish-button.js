@@ -223,7 +223,9 @@
     btn.textContent = label;
     btn.style.cssText =
       'margin-right:8px;padding:0 14px;height:32px;border-radius:6px;cursor:pointer;' +
-      'border:1px solid ' + bg + ';background:' + bg + ';color:#fff;font-size:13px;';
+      'border:1px solid ' + bg + ';background:' + bg + ';color:#fff;font-size:13px;' +
+      // 头部是 flex 行：节点面板一开它就被挤压。不声明这两条，文字折行、按钮变形。
+      'white-space:nowrap;flex-shrink:0;';
     return btn;
   }
 
@@ -268,9 +270,21 @@
       .finally(function () { btn.disabled = false; });
   }
 
+  /*
+   * 受管界面有两种标记，都得认：
+   *   * `data-aiops-workflow-managed` —— 工作流页头部「受管发布」条，受管应用一进
+   *     编排页就在 DOM 里（它出现 = 头部已由受管条接管，遗产按钮必须退场）；
+   *   * `data-aiops-managed="true"` —— 受管面板本体（抽屉内容 / 自助页标记）。
+   *
+   * 只查后一种是踩过的坑：面板标记只在抽屉打开时存在，工作流页上永远缺席 ——
+   * 守卫形同虚设，四个遗产钮与「受管发布」挤同一行，节点面板一开就折行变形。
+   */
+  var AIOPS_MANAGED_SEL = '[data-aiops-managed="true"], [data-aiops-workflow-managed]';
+  var AIOPS_HEADER_BTN_IDS = [AIOPS_TRIAL_BTN_ID, AIOPS_RETRACT_BTN_ID, AIOPS_RESTORE_BTN_ID, AIOPS_BTN_ID];
+
   function aiopsMount() {
-    if (document.querySelector('[data-aiops-managed="true"]')) {
-      [AIOPS_BTN_ID, AIOPS_TRIAL_BTN_ID, AIOPS_RETRACT_BTN_ID, AIOPS_RESTORE_BTN_ID].forEach(function (id) {
+    if (document.querySelector(AIOPS_MANAGED_SEL)) {
+      AIOPS_HEADER_BTN_IDS.forEach(function (id) {
         var node = document.getElementById(id); if (node) node.remove();
       });
       return;
@@ -318,17 +332,15 @@
   }
 
   /*
-   * Dify 是 SPA，路由变化不触发 load。用**只在页面里**跑的观察器挂载。
-   * 挂不上就是挂不上 —— 静默降级：没有按钮，Dify 照常。
+   * Dify 是 SPA，路由变化不触发 load。用**只在页面里**跑的对账循环：
+   * 每一 tick 判一次"受管界面在不在"——在就摘干净，不在就补缺。
+   *
+   * **轮询不能有次数上限**，与 dify-knowledge-open.js 同一判据。"挂满 4 颗或试
+   * 40 次就停表"踩过的坑：受管标记由 React 异步挂上（状态还没回来遗产钮已注入），
+   * 定时器一停就再没人摘 —— 它们以非 React 节点赖在头部 flex 行里变形。
+   * 每 500ms 的代价是两次 DOM 查询；挂不上就是挂不上，静默降级，Dify 照常。
    */
-  var tries = 0;
-  var timer = setInterval(function () {
-    tries += 1;
+  setInterval(function () {
     try { aiopsMount(); } catch (e) { /* 静默降级 */ }
-    // 两颗都挂上才停；只看发布那颗会让试运行那颗在第一颗挂上后就再也不重试。
-    var mounted =
-      document.getElementById(AIOPS_BTN_ID) && document.getElementById(AIOPS_TRIAL_BTN_ID) &&
-      document.getElementById(AIOPS_RETRACT_BTN_ID) && document.getElementById(AIOPS_RESTORE_BTN_ID);
-    if (mounted || tries > 40) { clearInterval(timer); }
   }, 500);
 })();
