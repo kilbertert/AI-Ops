@@ -116,6 +116,7 @@ flowchart LR
 | `.spec/` | 受维护行为与规格映射 |
 | `.github/`、`.sandcastle/` | 开发交付治理 |
 
+开通依赖从所选来源发布图与系统工具声明取得，每次重试核对实际状态；不再维护独立全局知识插件版本。
 Dify自助开通：`dify.self_service`组织双端业务流程，`dify.self_service_api`提供固定管理端点，
 `dify.self_service_bridge`校验同源会话，`dify.self_service_identity`读取公司管理权限，
 `dify.self_service_config`解析平台连接，`dify.self_service_prepare`准备依赖与应用，

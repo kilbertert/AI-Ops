@@ -316,9 +316,8 @@ uv run python tools/verification/check_dual_entry_management.py --out var/verify
 不会从来源客户搬走密钥。新增客户业务连接登记完成后，Java、Chatflow状态/账务以及站点查询
 均通过同一租户/环境解析函数使用该连接；环境变量里已有的精确映射继续有效。
 
-只读核对方法：经 `dev-host exec 41 --allow-service-exec` 读取 gateway.env 中这三个配置键的
-存在性与非敏感值：`AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN`、
-`AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE`、`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL`。
+只读核对方法：经 `dev-host exec 41 --allow-service-exec` 读取 gateway.env 中这两个配置键的
+存在性与非敏感值：`AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE`、`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL`。
 平台 profile 只输出模型/provider/插件标识及目标路径，不输出 credential_file 的内容。
 这次现场原值缺前两项，业务连接只含原租户；它们须同版部署时补齐，不代表代码测试失败。
 
@@ -350,3 +349,24 @@ webpack `parallelism=1` 并关闭持久缓存。已写入build-web-image.sh；�
 直接运行另一份vitest会与vite-plus浏览器runner重复加载，出现“找不到runner”。
 工作区依赖需包含packages/*/node_modules；TypeScript全量检查目前有上游
 `@langgenius/dev-proxy`声明缺失，记录原错，不能因Next默认跳过类型检查就说类型全通过。
+
+
+## 开通依赖的权威来源与升级后重试
+
+[ADR-0235](../../adr/0235-onboarding-dependencies-follow-authorities.md)：知识插件精确标识读取
+所选来源发布图的tool/Agent工具节点。`AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN`已退役，
+遗留env键不再影响开通，不能用改该键替代升级来源。官方Agent策略按发布合同固定，模型仍只用
+平台批准profile的凭据或目标工作区已有有效凭据，不复制来源客户密钥。
+
+开通和失败重试都会重新核对目标依赖，不因存过provider_id就跳过。受管cpms-node旧目录
+在任务内按声明更新并回读；生成schema的`x-aiops-projection-sha256`记录内容摘要，
+下一次升级可识别未被改写的旧版本；摘要失配、地址变化、额外工具或共享鉴权等冲突拒绝，保留人工配置。
+用户已确认的开通权限覆盖本次受管依赖准备，不使任何新的工具自动进入已有正式应用。
+
+插件首次安装后总要回读精确版本。同插件其他版本仍存在时返回`DIFY_PLUGIN_VERSION_CONFLICT`，
+不卸载、不猜兼容、不自动降级；平台通过[共享插件升级](../consumer-wf01/knowledge-picker-deploy.md)
+确认兼容和回退路径后再重试原任务。安装失败/超时/结果未就绪分别保留固定错误码，
+上游原始报错只进受控日志。不能看到HTTP200就标记准备完成。
+
+验证新版本至少包含：新工作区首次开通、旧目录重新开通、旧全局env残留、失败响应后的同任务重试，
+并比较已有正式路由与授权范围。原任务重试须经正常页面或管理retry接口，不直接改任务数据库。
