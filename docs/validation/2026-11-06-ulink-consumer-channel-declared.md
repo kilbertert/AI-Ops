@@ -14,10 +14,14 @@
 
 ## 证据（声明前提）
 
-- `chat_dify_runs`：tenant_id `1942105476598861824`（`chat_route_bindings` 口径——
-  与注释中另一优链充 id `1941847786056323072` 不同）consumer 端 succeeded 170+，
+- `chat_dify_runs`：tenant_id `1942105476598861824`（ulink 租户；`1941847786056323072`
+  是**另一个租户**优链充，不是别名）consumer 端 succeeded 170+，
   最新 2026-11-05T13:38Z；入口 = `ulink.h5.mall.qushiyun.com` AI 客服页
-- operator 端查不到运行流量 → 按设计不声明，继续 pending
+- ~~operator 端查不到运行流量~~ **订正（2026-11-06 同日复核）**：operator 诊断不走
+  `chat_dify_runs`，落 `agent_runs`、租户在 `scope_json.caller.tenant_id`。实测
+  ulink operator succeeded 299（最新 2026-11-06）、优链充 operator succeeded 14
+  （最新 2026-11-05），两端均补声明 connected；优链充 consumer 仍零流量，
+  继续 pending。
 
 ## 落地
 
