@@ -123,3 +123,35 @@ def test_a_trial_id_is_only_sent_back_as_a_bounded_string(script: str) -> None:
     ``test_it_speaks_only_to_our_own_routes`` 钉住。
     """
     assert "JSON.stringify({ trial_id: trialId })" in script
+
+
+def test_the_managed_strip_marker_stands_the_legacy_buttons_down(script: str) -> None:
+    """头部受管条的标记 ``data-aiops-workflow-managed`` 必须让遗产按钮退场。
+
+    旧判据只查 ``data-aiops-managed="true"`` —— 那是受管面板本体的标记，抽屉没开时
+    根本不在 DOM 里，工作流页上守卫形同虚设：四个遗产钮与「受管发布」挤进同一条
+    头部 flex 行，节点面板一开就折行变形（2026-11-06 线上实测）。
+
+    标记由 React 异步挂上（状态接口没回来遗产钮已注入），所以对账循环**不许停表**：
+    出现 ``clearInterval`` 就是又写回了"挂满或试 N 次就停"，标记迟到的窗口里没人摘。
+    """
+    assert "data-aiops-workflow-managed" in script
+    assert "clearInterval(" not in script
+
+
+def test_injected_header_buttons_never_wrap(script: str) -> None:
+    """注入按钮的文字**不折行、不被压缩**：头部 flex 行被节点面板挤压时保持单行。"""
+    assert "white-space:nowrap" in script
+    assert "flex-shrink:0" in script
+
+
+def test_the_preview_bypass_recognizes_the_strip_marker() -> None:
+    """``operator-native-preview.js`` 的退场判据与按钮脚本同一份标记集合。
+
+    两个脚本打包进同一份投放文件（``build-bundle.sh`` 拼接），只修一个的守卫，
+    另一个仍会把受管页当成非受管页去劫持原生预览请求。
+    """
+    preview = (ROOT / "ops" / "dify-console-bridge" / "operator-native-preview.js").read_text(
+        encoding="utf-8"
+    )
+    assert "data-aiops-workflow-managed" in preview
