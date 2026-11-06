@@ -127,3 +127,46 @@ trigger + 弹层内搜索输入 + 选项列表 + 空态），两个选择器一�
 | 容器 | `Next.js 16.3.4 ✓ Ready`，无报错 |
 
 **结论**：PASS。客户选择从滚动 300+ 行变为关键字即筛。
+
+---
+
+## 八、追加回执：主页只列租户自己的应用（`home-only-apps`，PR #1429）
+
+**背景**：Dify 主页（`/`）下半屏是 explore 推荐的「模板」画廊——分类 tab、
+搜索框、整墙模板卡片，与本部署只服务租户自有应用的定位不符。
+
+**修法**：新增 `11-home-only-tenant-apps.patch`（两文件）：
+- `features/home/home-content/home-content.tsx`：删 `HomeTemplatesHeader` +
+  `TemplateCard` 网格 JSX，连带删掉专用状态（categories/keywords/
+  filteredList/useQueryState/useLocale）与 `explore.apps` 查询
+- `features/home/page.tsx`：删 `explore.apps` 服务端预取
+
+保留：`ContinueWork`（最近）、LearnDify 与 HomeBanner（均 systemFeatures
+门控）、TenantSetup 面板。
+
+**验证分工**（本轮起按服务共识改为「先合并后部署」；协调方独占终态构建）：
+
+| 层 | 检查 | 结果 |
+|---|---|---|
+| 补丁面 | `--dry-run` 打补丁通过（9 hunks） | PASS |
+| 编译面 | esbuild 解析两文件通过；无悬挂引用 | PASS |
+| 制品面 | 候选镜像产物 grep：`home-templates-title` 标记不存在、`复制并开通客户` 存在 | PASS |
+| 终态 | main `b4afb94a`（含 #1429/#1430/#1432/#1433）统一构建 `release-b4afb94a`，36 容器 `ce992b141186` | — |
+
+**36 实测**（终态镜像，同取证通道 + 交互探针，截图 `home-only-apps.png`）：
+
+| 断言 | 结果 |
+|---|---|
+| Templates / 模板 区块（含分类 tab、搜索、卡片墙） | PASS：正文与 DOM 均不存在 |
+| Workflow Planning Assistant（代表性模板卡） | PASS：不存在 |
+| Welcome back + Recents（租户自有 app ×2） | PASS |
+| 复制并开通客户 AI 服务（受管面板） | PASS |
+
+**结论**：PASS。主页信息面收敛为 欢迎回来 + 最近（租户自有应用）+ 受管面板；
+explore 模板数据不再请求也不再渲染。
+
+**过程备注**：首轮构建误在主检出执行——`build-web-image.sh` 的
+`VERSION_DIR` 是 `$PWD` 相对路径，产出的镜像不含分支补丁，36 实测仍渲染
+画廊而"部署成功"。教训：构建必须在持有补丁的 checkout（worktree/合后 main）
+里跑；本机 15G 内存被 webpack+多会话叠加压爆重启过一次，全机约定同一时刻
+只跑一个 web 构建。
