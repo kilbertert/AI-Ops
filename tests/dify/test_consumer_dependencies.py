@@ -200,22 +200,42 @@ class Console:
         raise AssertionError(f"unexpected call {method} {path}")
 
 
+def plugin_document():
+    return {
+        "workflow": {
+            "graph": {
+                "nodes": [
+                    {
+                        "data": {
+                            "type": "tool",
+                            "provider_name": "trendpower/consumer_knowledge/consumer_knowledge",
+                            "tool_name": "consumer_knowledge",
+                            "plugin_unique_identifier": "trendpower/consumer_knowledge:0.0.1@" + "a" * 64,
+                        }
+                    }
+                ]
+            }
+        }
+    }
+
+
 def plugin_settings():
     return SimpleNamespace(
-        consumer_knowledge_plugin="trendpower/consumer_knowledge:0.0.1@sha",
         public_base_url="https://api.example.test",
     )
 
 
 def test_plugin_installation_writes_the_workspace_catalogue_credential_once():
     console = Console()
-    provider = prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_token")
+    provider = prepare.consumer_plugin(
+        console, "workspace-target", plugin_settings(), "ckc_token", plugin_document()
+    )
     assert provider == "trendpower/consumer_knowledge/consumer_knowledge"
-    assert console.installed == ["trendpower/consumer_knowledge:0.0.1@sha"]
+    assert console.installed == ["trendpower/consumer_knowledge:0.0.1@" + "a" * 64]
     added = [c for c in console.calls if c[0] == "POST" and c[1].endswith("/add")]
     assert len(added) == 1
     # 脱敏回读后再次更新校验，仍只保留同一枚受管凭据
-    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_token")
+    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_token", plugin_document())
     added = [c for c in console.calls if c[0] == "POST" and c[1].endswith("/add")]
     assert len(added) == 1
 
@@ -226,8 +246,9 @@ def test_plugin_without_configuration_refuses_instead_of_publishing():
         prepare.consumer_plugin(
             console,
             "workspace-target",
-            SimpleNamespace(consumer_knowledge_plugin="", public_base_url="https://api.example.test"),
+            SimpleNamespace(public_base_url="https://api.example.test"),
             "ckc_token",
+            {"workflow": {"graph": {"nodes": []}}},
         )
 
 
@@ -373,8 +394,10 @@ def test_plugin_retry_after_lost_add_receipt_reuses_masked_credentials():
 
     console = LostReceipt()
     with pytest.raises(TimeoutError):
-        prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_token")
-    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_rotated")
+        prepare.consumer_plugin(
+            console, "workspace-target", plugin_settings(), "ckc_token", plugin_document()
+        )
+    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_rotated", plugin_document())
     rows = console.credentials["trendpower/consumer_knowledge/consumer_knowledge"]
     assert len(rows) == 1 and rows[0]["is_default"]
     assert rows[0]["credentials"]["catalogue_token"] == "ckc_rotated"
@@ -403,9 +426,9 @@ def test_already_default_credential_is_not_toggled_off():
     consumer:dependencies 步反复失败，而凭据其实一直是对的）。
     """
     console = Console()
-    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_first")
+    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_first", plugin_document())
     calls = console.default_credential_calls
-    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_second")
+    prepare.consumer_plugin(console, "workspace-target", plugin_settings(), "ckc_second", plugin_document())
     rows = console.credentials["trendpower/consumer_knowledge/consumer_knowledge"]
     assert rows[0]["is_default"], "已是默认的凭据被翻转关掉了"
     assert console.default_credential_calls == calls, "已是默认时又调了一次 default-credential"

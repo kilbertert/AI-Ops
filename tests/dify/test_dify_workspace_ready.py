@@ -697,3 +697,28 @@ def test_a_rerun_does_not_switch_again(tmp_path: Path, console: _Console) -> Non
     assert outcome.credential_activated is False
     assert console.switched_to is None
     assert console.post_paths() == []
+
+
+def test_successful_install_receipt_requires_the_exact_version_in_workspace(monkeypatch):
+    from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
+
+    console = DifyConsoleAdmin(ConsoleApiSettings("https://dify.example", "synthetic"))
+    wanted = "trendpower/consumer_knowledge:0.0.2@" + "a" * 64
+    monkeypatch.setattr(console, "installed_plugin_ids", lambda _: set())
+    monkeypatch.setattr(console, "_call", lambda *a, **kw: {"all_installed": True})
+    with pytest.raises(ConsoleApiError) as exc:
+        console.install_plugins(WORKSPACE, [wanted])
+    assert exc.value.code == "DIFY_PLUGIN_INSTALL_INCOMPLETE"
+
+
+def test_installing_other_version_does_not_mutate_shared_plugin(monkeypatch):
+    from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
+
+    console = DifyConsoleAdmin(ConsoleApiSettings("https://dify.example", "synthetic"))
+    old = "trendpower/consumer_knowledge:0.0.1@" + "a" * 64
+    wanted = "trendpower/consumer_knowledge:0.0.2@" + "b" * 64
+    monkeypatch.setattr(console, "installed_plugin_ids", lambda _: {old})
+    monkeypatch.setattr(console, "_call", lambda *a, **kw: pytest.fail("must not replace shared plugin"))
+    with pytest.raises(ConsoleApiError) as exc:
+        console.install_plugins(WORKSPACE, [wanted])
+    assert exc.value.code == "DIFY_PLUGIN_VERSION_CONFLICT"
