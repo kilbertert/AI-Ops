@@ -1,0 +1,188 @@
+--- a/web/features/home/page.tsx
++++ b/web/features/home/page.tsx
+@@ -12,13 +12,7 @@
+   const homeQueryClient = getQueryClient()
+   const locale = await getLocaleOnServer()
+ 
+-  void homeQueryClient
+-    .query(
+-      consoleQuery.explore.apps.get.queryOptions({
+-        input: { query: { language: locale } },
+-      }),
+-    )
+-    .catch(noop)
++  // aiops: 主页不再渲染模板画廊，explore.apps 预取一并去掉（banner 仍按 flag 预取）。
+   void homeQueryClient
+     .query(
+       consoleQuery.apps.recent.get.queryOptions({
+--- a/web/features/home/home-content/home-content.tsx
++++ b/web/features/home/home-content/home-content.tsx
+@@ -4,13 +4,9 @@
+ import type { CreateAppModalProps } from '@/app/components/explore/create-app-modal'
+ import type { StepByStepTourTaskId } from '@/app/components/step-by-step-tour/types'
+ import type { TrackCreateAppParams } from '@/utils/create-app-tracking'
+-import { cn } from '@langgenius/dify-ui/cn'
+-import { useQueryClient, useSuspenseQueries, useSuspenseQuery } from '@tanstack/react-query'
++import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
+ import { useAtomValue, useSetAtom } from 'jotai'
+-import { useQueryState } from 'nuqs'
+-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+-import { useTranslation } from 'react-i18next'
+-import { MAIN_NAV_APP_CARD_GRID_CLASS_NAME } from '@/app/components/main-nav/app-card-grid'
++import { useCallback, useEffect, useRef, useState } from 'react'
+ import {
+   getStepByStepTourPermissionVariant,
+   trackStepByStepTourEvent,
+@@ -25,7 +21,6 @@
+ } from '@/app/components/step-by-step-tour/state'
+ import { STEP_BY_STEP_TOUR_TARGETS } from '@/app/components/step-by-step-tour/target-registry'
+ import { STEP_BY_STEP_TOUR_TASKS } from '@/app/components/step-by-step-tour/tasks'
+-import { useLocale } from '@/context/i18n'
+ import { workspacePermissionKeysAtom } from '@/context/permission-state'
+ import { systemFeaturesQueryOptions } from '@/features/system-features/client'
+ import { useImportDSL } from '@/hooks/use-import-dsl'
+@@ -38,9 +33,7 @@
+ import { HomeBanner } from '../banner/home-banner'
+ import { HomeIntro } from '../home-intro'
+ import { HomeShell } from '../home-shell'
+-import { TemplateCard } from '../template-card'
+ import { HomeRecommendations } from './recommendations'
+-import { HomeTemplatesHeader } from './templates-header'
+ 
+ const TryApp = dynamic(() => import('@/app/components/explore/try-app'), { ssr: false })
+ const CreateAppModal = dynamic(() => import('@/app/components/explore/create-app-modal'), {
+@@ -54,24 +47,17 @@
+ const HOME_STEP_BY_STEP_TOUR_TASK_ID = 'home' satisfies StepByStepTourTaskId
+ 
+ export function HomeContent() {
+-  const { t } = useTranslation()
+-  const locale = useLocale()
+   const queryClient = useQueryClient()
+   const workspacePermissionKeys = useAtomValue(workspacePermissionKeysAtom)
+   const { data: systemFeatures } = useSuspenseQuery(systemFeaturesQueryOptions())
+-  const [templatesQuery, recentAppsQuery] = useSuspenseQueries({
+-    queries: [
+-      consoleQuery.explore.apps.get.queryOptions({
+-        input: { query: { language: locale } },
+-      }),
+-      consoleQuery.apps.recent.get.queryOptions({
+-        input: { query: { limit: 8 } },
+-      }),
+-    ],
+-  })
+-  const templatesData = templatesQuery.data
+-  const continueWorkApps = recentAppsQuery.data.data
+-  const allCategoriesEn = t(($) => $['apps.allCategories'], { ns: 'explore', lng: 'en' })
++  // aiops: 主页只列当前租户自己的应用——explore 模板画廊整个摘掉，
++  // 连它的 categories/keywords 状态与 explore.apps 请求一起去掉。
++  const { data: recentAppsData } = useSuspenseQuery(
++    consoleQuery.apps.recent.get.queryOptions({
++      input: { query: { limit: 8 } },
++    }),
++  )
++  const continueWorkApps = recentAppsData.data
+   const canCreateApp = hasPermission(workspacePermissionKeys, 'app.create_and_management')
+   const activeStepByStepTourTaskId = useAtomValue(activeStepByStepTourTaskIdAtom)
+   const activeStepByStepTourGuideIndex = useAtomValue(activeStepByStepTourGuideIndexAtom)
+@@ -109,42 +95,6 @@
+     [canCreateApp],
+   )
+ 
+-  const [keywords, setKeywords] = useState('')
+-
+-  const [currCategory, setCurrCategory] = useQueryState('category', {
+-    defaultValue: allCategoriesEn,
+-  })
+-
+-  const visibleCategories = useMemo(() => {
+-    const categoriesWithApps = new Set<string>()
+-    templatesData.recommended_apps.forEach((app) => {
+-      app.categories?.forEach((category) => categoriesWithApps.add(category))
+-    })
+-
+-    return templatesData.categories.filter((category) => categoriesWithApps.has(category))
+-  }, [templatesData])
+-
+-  const activeCategory = visibleCategories.includes(currCategory) ? currCategory : allCategoriesEn
+-
+-  const filteredList = useMemo(() => {
+-    return [...templatesData.recommended_apps]
+-      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+-      .filter(
+-        (item) => activeCategory === allCategoriesEn || item.categories?.includes(activeCategory),
+-      )
+-  }, [templatesData, activeCategory, allCategoriesEn])
+-
+-  const searchFilteredList = useMemo(() => {
+-    if (!keywords || !filteredList || filteredList.length === 0) return filteredList
+-
+-    const lowerCaseSearchKeywords = keywords.toLowerCase()
+-
+-    return filteredList.filter(
+-      (item) =>
+-        item.app && item.app.name && item.app.name.toLowerCase().includes(lowerCaseSearchKeywords),
+-    )
+-  }, [keywords, filteredList])
+-
+   const [currApp, setCurrApp] = useState<RecommendedAppResponse | null>(null)
+   const [isShowCreateModal, setIsShowCreateModal] = useState(false)
+ 
+@@ -251,10 +201,6 @@
+       hideTryAppPanel()
+     }
+   }, [currentTryApp, hideTryAppPanel, homeTryAppCreateGuideActive, isShowCreateModal])
+-  const handleTryApp = useCallback((app: RecommendedAppResponse) => {
+-    isCurrentTryAppFromLearnDifyRef.current = false
+-    setCurrentTryApp(app)
+-  }, [])
+   const handleTryAppFromLearnDify = useCallback(
+     (app: RecommendedAppResponse) => {
+       isCurrentTryAppFromLearnDifyRef.current = true
+@@ -307,14 +253,6 @@
+     setCurrApp(app)
+     setIsShowCreateModal(true)
+   }, [])
+-  const handleCreateFromTemplate = useCallback((app: RecommendedAppResponse) => {
+-    currentCreateAppTrackingRef.current = {
+-      source: 'explore_template_list',
+-      templateId: app.app_id,
+-    }
+-    setCurrApp(app)
+-    setIsShowCreateModal(true)
+-  }, [])
+   const trackCurrentCreateApp = useCallback((appMode?: string | null) => {
+     const currentCreateAppTracking = currentCreateAppTrackingRef.current
+     const resolvedAppMode = appMode ?? currentCreateAppModeRef.current
+@@ -418,32 +356,6 @@
+           onCreate={handleCreateFromLearnDify}
+           onTry={handleTryAppFromLearnDify}
+         />
+-
+-        <HomeTemplatesHeader
+-          allCategoriesEn={allCategoriesEn}
+-          categories={visibleCategories}
+-          currCategory={activeCategory}
+-          keywords={keywords}
+-          onCategoryChange={setCurrCategory}
+-          onKeywordsChange={setKeywords}
+-        />
+-
+-        <div className={cn('relative flex flex-1 shrink-0 grow flex-col pb-6')}>
+-          <section
+-            aria-labelledby="home-templates-title"
+-            className={cn('shrink-0 content-start gap-2.5 px-8', MAIN_NAV_APP_CARD_GRID_CLASS_NAME)}
+-          >
+-            {searchFilteredList.map((app) => (
+-              <TemplateCard
+-                key={app.app_id}
+-                app={app}
+-                canCreate={canCreateApp}
+-                onCreate={() => handleCreateFromTemplate(app)}
+-                onTry={handleTryApp}
+-              />
+-            ))}
+-          </section>
+-        </div>
+       </div>
+       {isShowCreateModal && (
+         <CreateAppModal
