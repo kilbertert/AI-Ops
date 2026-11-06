@@ -52,6 +52,24 @@
 合并部署后页面**应无可见变化**（回归判据：三条仍 connected、优链充 consumer
 仍 pending）。推导路径的生产自然触发点是第一个未声明新租户。
 
+## 部署后实测（2026-11-06，41，CD 42183202972 后）
+
+经 `runuser -u aiops41` 真 settings → `SelfService._channel_state`：
+
+| 端 | 结果 | 说明 |
+|---|---|---|
+| ulink consumer | connected | 声明行 |
+| ulink operator | connected | 声明行 |
+| 优链充 operator | connected | 声明行 |
+| 优链充 consumer | **connected** | **推导**——与计划判据不同，见下 |
+
+**订正**：计划预期「优链充 consumer 仍 pending」——依据是当天上午按**登记
+app_id** 窄口径查得的「零流量」。实测 `chat_dify_runs` 有 1 条
+`tenant_id=1941847786056323072` + `binding_key=consumer_service:production-41:*`
+的 `succeeded` 行（2026-11-05T12:48Z，走 app `8d9610e5`，非绑定行登记的
+`548b8483`）。归属口径是 `tenant_id + binding_key`——该端确实被真实调通过，
+推导结果正确；之前的「零流量」声明依据本身是错的。
+
 ## 未验范围
 
 - 不证真实 Dify 控制台会话路径下的端到端（`/​__aiops/manage` 三门头链路未在本轮重跑；
