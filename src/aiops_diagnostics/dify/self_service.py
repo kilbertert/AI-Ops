@@ -544,12 +544,10 @@ class SelfService:
         spec = request["sources"]["operator"]
         workspace_id = resources["workspace_id"]
         save("operator:dependencies")
-        provider = resources.get("provider_id")
-        if not provider:
-            provider = prepare.dependencies(
-                self.console, workspace_id, self._profile(request), self.settings.public_base_url
-            )
-            resources["provider_id"] = provider
+        provider = prepare.dependencies(
+            self.console, workspace_id, self._profile(request), self.settings.public_base_url
+        )
+        resources["provider_id"] = provider
         save("operator:application")
         if not state.get("app_id"):
             state["app_id"] = prepare.create_app(
@@ -652,7 +650,7 @@ class SelfService:
             self.settings.environment,
             workspace_id,
         )
-        state["plugin"] = prepare.consumer_plugin(self.console, workspace_id, self.settings, token)
+        state["plugin"] = prepare.consumer_plugin(self.console, workspace_id, self.settings, token, document)
         state["models"] = prepare.consumer_models(
             self.console, workspace_id, document, self._profile(request)
         )
@@ -1040,6 +1038,18 @@ def _same_tenant(source_workspace, target_workspace):
 
 
 def _error_code(exc):
+    from .dify_console_admin import ConsoleApiError
+
+    if isinstance(exc, ConsoleApiError) and exc.code in {
+        "DIFY_PLUGIN_VERSION_CONFLICT",
+        "DIFY_PLUGIN_PACKAGE_MISSING",
+        "DIFY_PLUGIN_INSTALL_INCOMPLETE",
+        "DIFY_PLUGIN_INSTALL_FAILED",
+        "DIFY_PLUGIN_INSTALL_TIMEOUT",
+        "DIFY_CONSOLE_UNREACHABLE",
+        "DIFY_CREDENTIAL_INVALID",
+    }:
+        return exc.code
     if isinstance(exc, (auth.SetupRefused, SetupConflict, dual_entry.DualEntryError)):
         return str(exc)
     return "SETUP_STEP_FAILED"

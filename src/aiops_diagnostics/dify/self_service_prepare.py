@@ -1,6 +1,7 @@
 """工作区依赖和应用创建；外部副作用均可用持久操作ID对账。"""
 
 import json
+import re
 from importlib.resources import files
 from pathlib import Path
 from urllib.parse import urlencode
@@ -78,12 +79,9 @@ def dependencies(console, workspace_id, profile, gateway_url):
     validate_private_file(manifest_path)
     manifest = json.loads(manifest_path.read_text())
     try:
-        ensure_node_provider(console, workspace_id, gateway_url, manifest)
+        ensure_node_provider(console, workspace_id, gateway_url, manifest, reconcile=True)
     except ValueError as exc:
-        # 声明加了工具（#1205 的 `cpms_site_search`）但工作区里的 provider 还是旧 schema：
-        # 这不是"开通失败"，是**这个工作区的提供方比声明旧**。迁移是一次运营动作
-        # （`ensure_node_provider(migrate=True)`），不在这里替运营决定；但页面必须看得懂原因，
-        # 而不是一个 SETUP_STEP_FAILED。2026-10-31 两个客户都是这么卡住的。
+        # 自动收敛仅允许系统托管目录；外部地址或自定义工具须人工确认。
         raise SetupRefused("SETUP_PROVIDER_OUTDATED") from exc
     providers = console._call(workspace_id, "/console/api/workspaces/current/tool-providers?type=api")
     matches = [p for p in providers if p.get("name") == "cpms-node"]
@@ -421,13 +419,46 @@ def consumer_endpoint(context, tenant_id: str) -> str:
     return base
 
 
-def consumer_plugin(console, workspace_id: str, settings, catalogue_token: str) -> str:
+def consumer_plugins(document: dict) -> list[str]:
+    """执行图中的精确标识是开通依赖；不读会随部署漂移的全局默认值。"""
+    from aiops_diagnostics.consumer import consumer_agent_flow
+    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER
+
+    workflow = document.get("workflow") or {}
+    agent = consumer_agent_flow.enabled(workflow)
+    plugins = [consumer_agent_flow.AGENT_PLUGIN] if agent else []
+    knowledge = set()
+    for node in (workflow.get("graph") or {}).get("nodes") or []:
+        data = node.get("data") or {}
+        tools = (
+            data.get("agent_parameters", {}).get("tools", {}).get("value", [])
+            if data.get("type") == "agent"
+            else [data]
+            if data.get("type") == "tool"
+            else []
+        )
+        for tool in tools:
+            identifier = tool.get("plugin_unique_identifier", "")
+            if (
+                tool.get("provider_name") != PROVIDER
+                or tool.get("tool_name") != "consumer_knowledge"
+                or not isinstance(identifier, str)
+                or not re.fullmatch(
+                    r"trendpower/consumer_knowledge:[0-9]+\.[0-9]+\.[0-9]+@[a-f0-9]{64}", identifier
+                )
+            ):
+                raise SetupRefused("SETUP_CONSUMER_PLUGIN_REQUIRED")
+            knowledge.add(identifier)
+    if len(knowledge) != 1:
+        raise SetupRefused("SETUP_CONSUMER_PLUGIN_REQUIRED")
+    return [*plugins, *knowledge]
+
+
+def consumer_plugin(console, workspace_id: str, settings, catalogue_token: str, document: dict) -> str:
     """按 Dify 1.17.1 的脱敏凭据列表对账，写入后校验并启用受管凭据。"""
     from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER
 
-    if not getattr(settings, "consumer_knowledge_plugin", ""):
-        raise SetupRefused("SETUP_CONSUMER_PLUGIN_REQUIRED")
-    console.install_plugins(workspace_id, [settings.consumer_knowledge_plugin])
+    console.install_plugins(workspace_id, consumer_plugins(document))
     base = f"/console/api/workspaces/current/tool-provider/builtin/{PROVIDER}"
     credentials = {
         "gateway_url": settings.public_base_url.rstrip("/"),
@@ -490,17 +521,6 @@ def consumer_models(console, workspace_id: str, document: dict, profile) -> list
     已经有可用凭据 —— 没有就拒绝，不复制源客户的密钥、也不假装成功。
     """
     nodes = ((document.get("workflow") or {}).get("graph") or {}).get("nodes") or []
-    from aiops_diagnostics.consumer import consumer_agent_flow
-
-    if consumer_agent_flow.enabled(document.get("workflow") or {}):
-        plugins = [consumer_agent_flow.AGENT_PLUGIN]
-        for node in nodes:
-            for tool in node.get("data", {}).get("agent_parameters", {}).get("tools", {}).get("value", []):
-                identifier = tool.get("plugin_unique_identifier", "")
-                if not identifier.startswith("trendpower/consumer_knowledge:0.0.2@"):
-                    raise SetupRefused("SETUP_CONSUMER_PLUGIN_REQUIRED")
-                plugins.append(identifier)
-        console.install_plugins(workspace_id, list(dict.fromkeys(plugins)))
     wanted = []
     for node in nodes:
         data = node.get("data") or {}
