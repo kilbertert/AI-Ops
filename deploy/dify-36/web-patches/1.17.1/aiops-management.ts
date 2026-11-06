@@ -53,6 +53,7 @@ export const entryLabels: Record<EntryKey, string> = {
 }
 
 export const messages: Record<string, string> = {
+  SETUP_KEY_DIRECTORY_UNWRITABLE: '应用凭据存储不可写，请联系平台管理员修复后重试',
   SETUP_KNOWLEDGE_FAILED: '知识库准备或模型校验失败，请重试；持续失败请联系平台管理员',
   SETUP_KNOWLEDGE_REQUIRED: '请重试以补齐默认知识库空间',
   SETUP_KNOWLEDGE_CONFIG_REQUIRED: '平台知识库连接未就绪，请联系平台管理员',
