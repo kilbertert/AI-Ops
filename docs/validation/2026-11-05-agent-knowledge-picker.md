@@ -30,7 +30,9 @@ ToolSelector已有currentTool，但没有传给ToolSettingsPanel，后者也未�
 不再用mock设置hook的结果宣称覆盖真实保存链。
 
 独立Codex会话knowledge_picker_verify已执行首片三项破坏反例：删除任何一层provider/tool均重现0请求/0选项；
-候选正常时目录、显示和写回形状正确。该回执不是浏览器布局或生产证明；后继形状修复需独立复核。
+候选正常时目录、显示和写回形状正确。该回执不是浏览器布局或生产证明；后继由独立Codex会话picker_shape_verify实际执行真实hook与转换函数，
+旧/新/混合字段的删除、清空、重选、重排和序列化回读均通过；分别去掉读/写兼容时旧与混合形状失败，
+新形状对照仍通过。无DOM/HTTP/生产保存证明，不替代最终原页面复验。
 Devin/Codex云审查因额度不足跳过，无遗留审查线程。
 
 ## 待完成与边界
