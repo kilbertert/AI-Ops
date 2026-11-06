@@ -124,7 +124,7 @@ class SelfServiceStore:
         with self.connection() as db:
             db.execute(
                 "UPDATE operator_setup_jobs SET state='pending',error_code='' "
-                "WHERE id=? AND (state='failed' OR (state='running' AND lease_until<?))",
+                "WHERE id=? AND (state IN ('failed','partial') OR (state='running' AND lease_until<?))",
                 (job_id, time.time()),
             )
 

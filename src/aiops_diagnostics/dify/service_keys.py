@@ -33,11 +33,13 @@ from __future__ import annotations
 
 import hmac
 import json
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import (
+    PrivatePathError,
     ensure_private_directory,
     protect_private_file,
     write_private_text,
@@ -56,6 +58,19 @@ def key_path(key_dir: str | Path, app_id: str) -> Path:
     if not str(key_dir).strip():
         raise SetupRefused("SETUP_KEY_DIRECTORY_REQUIRED")
     return Path(key_file_for_app(key_dir, app_id))
+
+
+def storage_ready(key_dir: str | Path) -> None:
+    """在当前服务沙箱内验证原子落盘；不靠宿主权限位推断可写。"""
+    if not str(key_dir).strip():
+        raise SetupRefused("SETUP_KEY_DIRECTORY_REQUIRED")
+    directory = Path(key_dir).expanduser().absolute()
+    try:
+        ensure_private_directory(directory)
+        with tempfile.TemporaryDirectory(prefix=".write-check-", dir=directory) as probe:
+            write_private_text(Path(probe) / "probe", "storage-check\n")
+    except (OSError, PrivatePathError) as exc:
+        raise SetupRefused("SETUP_KEY_DIRECTORY_UNWRITABLE") from exc
 
 
 def list_keys(console, workspace_id: str, app_id: str) -> dict[str, str]:
@@ -168,6 +183,8 @@ def ensure(console, key_dir: str | Path, workspace_id: str, app_id: str, *, data
     if existing and existing not in before:
         # 文件里的 key 已经不属于这个应用（被删掉或应用换了）：不复用，也不静默继续。
         existing = ""
+
+    storage_ready(key_dir)
 
     # 上一轮（可能是另一个进程 / 重启前）已经建过一枚但没能确认：先按持久快照对账。
     pending = ops.get(app_id) if ops is not None else None

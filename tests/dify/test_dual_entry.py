@@ -558,6 +558,8 @@ def test_consumer_failure_leaves_operator_ready_and_retry_only_resumes_consumer(
     assert first["entries"]["operator"]["state"] == "ready"
     operator_app = first["entries"]["operator"]["app_id"]
     created = len(dual.console.created)
+    dual.service.store.pending(job["id"])
+    assert dual.service.store.get(job["id"])["state"] == "pending"
     dual.service.run(job["id"], "session")
     second = public_job(dual.service.store.get(job["id"]))
     assert second["state"] == "completed", second

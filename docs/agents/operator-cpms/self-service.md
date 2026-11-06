@@ -370,3 +370,23 @@ webpack `parallelism=1` 并关闭持久缓存。已写入build-web-image.sh；�
 
 验证新版本至少包含：新工作区首次开通、旧目录重新开通、旧全局env残留、失败响应后的同任务重试，
 并比较已有正式路由与授权范围。原任务重试须经正常页面或管理retry接口，不直接改任务数据库。
+
+## 运行凭据目录只读的恢复
+
+`ProtectSystem=full`会使服务内的/etc只读；目录属主正确或宿主root能写不代表Gateway能写。
+`AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR`必须指向已声明服务数据根下的私有目录。
+
+1. 读取Gateway实际进程配置、systemd User/ProtectSystem/ReadWritePaths，只输出目标路径与模式。
+2. 在线SQLite备份放到服务身份可写的数据根；不要假设历史backups目录也属于它。
+3. 备份gateway.env，在现役数据根建立服务属主0700的dify-keys；旧目录每个文件须普通非链接、
+   服务属主、0600。逐个复制并核摘要，新目录同名且内容不同则停止；保留旧文件不移动。
+4. 只替换gateway.env中唯一的`AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR`行；配置文件位置由私有清单记录，
+   不回写数据库中的正式路由、旧绝对key引用或密钥账本。采用已合并版本的正常CD部署重启，
+   服务沙箱仍保持原保护。恢复时换回备份env并正常重启，保留新资源与业务记录。
+5. 沙箱验证使用`nsenter --target <Gateway MainPID> --mount -- <服务Python> -`，
+   读取进程env后降到同一服务uid/gid，调用`service_keys.storage_ready`；不生成/打印真实密钥。
+6. 正常平台登录后点击原partial/failed任务的重试；首次失误已申请的key由账本对账复用，
+   不删key、不新建任务。确认两端完成、应用ID复用、全部正式路由逐字段不变。
+
+这里的文件拷贝和env路径调整是已确认故障的部署配置恢复，不能被读成任意租户配置修改授权。
+保护配置不得为通过验证而关闭；原子探针仍可能在之后遇到满盘，重试依据账本恢复。
