@@ -193,3 +193,17 @@ agent_name = "ops-methodology-700"
 # - 之后该租户的发布、切版、撤回一律走 Dify 页面与 `POST /v1/dify/publish`，不回写本文件。
 # - 新租户**在开通之前**声明、按 `operator-cpms/multitenant.md` 登记；一旦经页面开通，
 #   同样要删掉它的 `[[dify_apps]]`，否则下一次收敛会被它拦住。
+
+# ── 使用渠道 ──────────────────────────────────────────────────────────
+# 渠道状态是声明不是推导（dify/dual_entry.py）：只写**有真实证据**的行。
+# 本行证据：gateway.db `chat_dify_runs` 该租户 consumer 端累计 succeeded
+# 170+ 条（2026-11-05 前，最新 13:38Z）；C 端入口为 ulink H5 AI 客服
+# （https://ulink.h5.mall.qushiyun.com/aiPackage/pages/chat/chat）。
+# operator 端未声明：管家端 H5 存在，但查不到该租户 operator 运行流量，
+# 按 fail-closed 显示「待接入」——有了真实使用证据再写。
+
+[[channels]]
+tenant_id = "1942105476598861824"
+entry = "consumer"
+channel = "ulink-h5"
+state = "connected"
