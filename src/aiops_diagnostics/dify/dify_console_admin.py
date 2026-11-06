@@ -217,15 +217,29 @@ class DifyConsoleAdmin:
         missing = [item for item in identifiers if item not in have]
         if not missing:
             return []
-        started = self._call(
-            workspace_id,
-            PLUGIN_INSTALL_PKG_PATH,
-            method="POST",
-            body={"plugin_unique_identifiers": missing},
-        )
+        # 同一插件只装一版；install/pkg不执行升级，不能替副本更换共享运行代码。
+        if any(old.split(":", 1)[0] == new.split(":", 1)[0] for old in have for new in missing):
+            raise ConsoleApiError(
+                "DIFY_PLUGIN_VERSION_CONFLICT", "工作区已安装其他版本，须先完成共享插件兼容迁移"
+            )
+        try:
+            started = self._call(
+                workspace_id,
+                PLUGIN_INSTALL_PKG_PATH,
+                method="POST",
+                body={"plugin_unique_identifiers": missing},
+            )
+        except ConsoleApiError as exc:
+            if exc.code == "DIFY_CONSOLE_REJECTED":
+                raise ConsoleApiError(
+                    "DIFY_PLUGIN_INSTALL_FAILED", "Dify插件安装被拒绝", status=exc.status
+                ) from exc
+            raise
         task_id = str((started or {}).get("task_id") or "") if isinstance(started, dict) else ""
         if task_id and not (started or {}).get("all_installed"):
             self._await_install_task(workspace_id, task_id, expected=missing)
+        if not set(identifiers) <= self.installed_plugin_ids(workspace_id):
+            raise ConsoleApiError("DIFY_PLUGIN_INSTALL_INCOMPLETE", "安装回执成功但所需插件版本未全部就绪")
         return missing
 
     def _await_install_task(self, workspace_id: str, task_id: str, *, expected: list[str]) -> None:

@@ -91,43 +91,96 @@ def test_publication_and_provider_read_the_same_declaration():
     )
 
 
+class ProviderConsole:
+    def __init__(self):
+        self.calls = []
+        self.current = None
+        self.keep_old = False
+
+    def _call(self, workspace, path, **kwargs):
+        self.calls.append(path)
+        if path.endswith("/tool-providers?type=api"):
+            return [{"name": "cpms-node"}] if self.current is not None else []
+        if "/get" in path:
+            return {
+                "schema": json.dumps(self.current),
+                "credentials": {"auth_type": "none"},
+                "icon": {"background": "#abcdef", "content": "🔎"},
+                "privacy_policy": "https://example.test/privacy",
+                "labels": ["utilities"],
+            }
+        if "/add" in path or "/update" in path:
+            body = kwargs["body"]
+            assert body["credentials"] == {"auth_type": "none"}
+            if not self.keep_old:
+                self.current = json.loads(body["schema"])
+            return {"result": "success"}
+        raise AssertionError(path)
+
+
 def test_provider_migration_is_an_explicit_action():
-    """schema 变了：不加 --migrate 是明确报错，加了是一次可审计的覆盖。"""
-
-    class Console:
-        def __init__(self):
-            self.calls = []
-
-        def _call(self, workspace, path, **kwargs):
-            self.calls.append(path)
-            if path.endswith("/tool-providers?type=api"):
-                return [{"name": "cpms-node"}]
-            if "/get" in path:
-                return {
-                    "schema": json.dumps({"openapi": "3.0.3", "paths": {}}),
-                    "icon": {"background": "#abcdef", "content": "🔎"},
-                    "privacy_policy": "https://example.test/privacy",
-                    "custom_disclaimer": "notice",
-                    "labels": ["utilities"],
-                }
-            if "/update" in path:
-                body = kwargs["body"]
-                assert body["original_provider"] == "cpms-node"
-                assert body["credentials"] == {"auth_type": "none"}
-                assert body["icon"] == {"background": "#abcdef", "content": "🔎"}
-                assert body["privacy_policy"] == "https://example.test/privacy"
-                assert body["labels"] == ["utilities"]
-                return {"result": "success"}
-            raise AssertionError(path)
-
+    console = ProviderConsole()
+    console.current = {"openapi": "3.0.3", "paths": {}}
     with pytest.raises(ValueError, match="migrate explicitly"):
-        ops_provider.ensure_node_provider(Console(), "ws", "https://gateway.example")
-    console = Console()
+        ops_provider.ensure_node_provider(console, "ws", "https://gateway.example")
     assert ops_provider.ensure_node_provider(console, "ws", "https://gateway.example", migrate=True) == {
         "action": "migrated",
         "provider": "cpms-node",
     }
-    assert any("/update" in path for path in console.calls)
+
+
+@pytest.mark.parametrize(
+    "conflict", [None, "server", "custom-tool", "credentials", "custom-header", "custom-body", "readback"]
+)
+def test_reconcile_managed_provider_preserves_unowned_state_and_checks_readback(conflict):
+    import copy
+
+    console = ProviderConsole()
+    ops_provider.ensure_node_provider(console, "ws", "https://gateway.example")
+    expected = copy.deepcopy(console.current)
+    console.current.pop("x-aiops-projection-sha256", None)
+    first = next(iter(console.current["paths"]))
+    console.current["paths"] = {first: console.current["paths"][first]}
+    console.current["paths"][first]["post"]["requestBody"]["content"]["application/json"]["schema"] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+    if conflict == "server":
+        console.current["servers"] = [{"url": "https://another.example"}]
+    elif conflict == "custom-tool":
+        console.current["paths"]["/custom"] = {"post": {"operationId": "custom"}}
+    elif conflict == "credentials":
+        console.current["security"] = [{"api_key": []}]
+    elif conflict == "custom-header":
+        console.current["paths"][first]["post"]["parameters"] = [
+            {"in": "header", "name": "X-Custom", "schema": {"type": "string", "default": "custom"}}
+        ]
+    elif conflict == "custom-body":
+        console.current["paths"][first]["post"]["requestBody"]["content"]["application/json"]["schema"][
+            "properties"
+        ]["custom"] = {"type": "string"}
+    elif conflict == "readback":
+        console.keep_old = True
+    before = copy.deepcopy(console.current)
+    console.calls.clear()
+    if conflict:
+        with pytest.raises(ValueError):
+            ops_provider.ensure_node_provider(console, "ws", "https://gateway.example", reconcile=True)
+        assert console.current == before
+        assert any("/update" in p for p in console.calls) is (conflict == "readback")
+    else:
+        result = ops_provider.ensure_node_provider(console, "ws", "https://gateway.example", reconcile=True)
+        assert result["action"] == "migrated" and console.current == expected
+        console.calls.clear()
+        assert (
+            ops_provider.ensure_node_provider(console, "ws", "https://gateway.example", reconcile=True)[
+                "action"
+            ]
+            == "unchanged"
+        )
+        assert not any("/update" in p for p in console.calls)
 
 
 @pytest.mark.parametrize(
@@ -189,3 +242,27 @@ def test_the_node_source_names_no_tool_at_all():
         text = path.read_text(encoding="utf-8")
         offenders.extend(f"{path.name}: {name}" for name in declared if name in text)
     assert offenders == []
+
+
+def test_managed_provider_creation_must_be_confirmed_by_readback():
+    console = ProviderConsole()
+    console.keep_old = True
+    with pytest.raises(ValueError, match="confirmed"):
+        ops_provider.ensure_node_provider(console, "ws", "https://gateway.example", reconcile=True)
+
+
+def test_intact_generated_projection_survives_later_input_schema_changes():
+    console = ProviderConsole()
+    ops_provider.ensure_node_provider(console, "ws", "https://gateway.example")
+    path = "/v1/operator-tools/cpms_order_detail"
+    request = console.current["paths"][path]["post"]["requestBody"]
+    request["content"]["application/json"]["schema"]["properties"]["order_no"]["maxLength"] = 64
+    console.current["x-aiops-projection-sha256"] = ops_provider._projection_digest(console.current)
+    assert (
+        ops_provider.ensure_node_provider(console, "ws", "https://gateway.example", reconcile=True)["action"]
+        == "migrated"
+    )
+    # 人工在已有生成物里改动任一请求参数，旧内容标记不再匹配，不能静默覆盖。
+    console.current["paths"][path]["post"]["requestBody"]["required"] = False
+    with pytest.raises(ValueError, match="managed projection"):
+        ops_provider.ensure_node_provider(console, "ws", "https://gateway.example", reconcile=True)

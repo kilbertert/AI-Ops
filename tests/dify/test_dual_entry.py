@@ -62,6 +62,9 @@ def source_document(ids=("kb-source",)):
     # 模板里的 `__MODEL__` 是部署时替换的占位符；这里换成白名单里的模型名，
     # 与真实部署里"模型由 profile 决定"一致。
     flow = picker_graph(list(ids))
+    next(n for n in flow["graph"]["nodes"] if n["id"] == "knowledge")["data"]["plugin_unique_identifier"] = (
+        "trendpower/consumer_knowledge:0.0.1@" + "a" * 64
+    )
     flow = json.loads(json.dumps(flow).replace("__MODEL__", "aiops-api"))
     # 受管客户端目标没有内容文件 ⇒ 只支持动态知识回答（文案与判定在代码里）。
     flow = _upgrade().live_documents({"workflow": flow})["workflow"]
@@ -217,7 +220,6 @@ def dual(operator, monkeypatch, tmp_path):  # noqa: F811
     (tmp_path / "keys").mkdir(mode=0o700)
     settings.environment_manifest_file = ""
     settings.internal_token_secret = "fixture-internal-secret"
-    settings.consumer_knowledge_plugin = "trendpower/consumer_knowledge:0.0.1@fixture"
     # 已批准的环境连接（裸 URL 形式：本环境所有租户走同一个 CPMS）。
     settings.charging_status_base_url = "https://cpms.example.test"
 
@@ -1089,3 +1091,67 @@ def test_a_consumer_source_failure_names_a_consumer_step(dual, monkeypatch):
     assert entry["error_code"] == "SETUP_STEP_FAILED"
     assert entry["failed_step"] == "consumer:source"
     assert entry["failure_kind"] == "KeyError"
+
+
+def test_onboarding_uses_source_plugin_before_any_model_preparation(dual, monkeypatch):
+    """事故判据：官方发布图固定0.0.2，旧默认0.0.1不存在；真实开通不可先安装旧包。"""
+    import sys
+
+    from aiops_diagnostics.consumer import consumer_agent_flow
+    from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
+
+    original = source_document
+    pinned = "trendpower/consumer_knowledge:0.0.2@" + "a" * 64
+
+    frozen_document = _upgrade().agent_conversation(original(), pinned)
+
+    def source(ids=("kb-source",)):
+        return json.loads(json.dumps(frozen_document))
+
+    monkeypatch.setattr(sys.modules[__name__], "source_document", source)
+    # Fixture来源已发布：用同一正常版本快照承载升级后的图，不绕过create/run。
+    store = dual.context.agent_manager.store
+    route = dual.service.route_for(TENANT, "consumer")
+    version = store.version(route.agent_id, TENANT, route.agent_version_no)
+    from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
+
+    snapshot = {**version.snapshot, "workflow": workflow_content(yaml.safe_dump(source()))}
+    agent = store.get(route.agent_id, TENANT)
+    agent = store.fork_draft(agent.agent_id, TENANT, agent.revision)
+    published = store.publish(agent.agent_id, TENANT, agent.revision, snapshot, published_by="fixture")
+    dual.service.routes.publish(
+        environment="env-a",
+        tenant_id=TENANT,
+        entry="consumer",
+        scenario="consumer_service",
+        engine="dify",
+        agent_id=route.agent_id,
+        agent_version_no=published.version_no,
+        app_id=CONSUMER_APP,
+        workflow_id=SOURCE_WORKFLOW,
+        expected_revision=route.revision,
+    )
+    dual.consumer_version = published.version_no
+    stale_plugin = "trendpower/consumer_knowledge:0.0.1@" + "b" * 64
+    monkeypatch.setenv("AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN", stale_plugin)
+    installed = []
+    original_install = dual.console.install_plugins
+
+    def install(workspace, identifiers):
+        installed.extend(identifiers)
+        if stale_plugin in identifiers:
+            raise ConsoleApiError("DIFY_CONSOLE_REJECTED", "500 plugin not found", status=500)
+        return original_install(workspace, identifiers)
+
+    monkeypatch.setattr(dual.console, "install_plugins", install)
+    result = run(
+        dual,
+        request(
+            dual,
+            scope="consumer",
+            sources={"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}},
+        ),
+    )
+    assert result["state"] == "completed", result
+    assert pinned in installed and consumer_agent_flow.AGENT_PLUGIN in installed
+    assert stale_plugin not in installed

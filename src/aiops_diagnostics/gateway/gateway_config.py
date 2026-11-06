@@ -85,7 +85,6 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     "dify_chat_base_url": SettingSource("AIOPS_GATEWAY_DIFY_CHAT_BASE_URL"),
     "chat_route_bindings_file": SettingSource("AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE"),
     "consumer_publication_targets_file": SettingSource("AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE"),
-    "consumer_knowledge_plugin": SettingSource("AIOPS_GATEWAY_CONSUMER_KNOWLEDGE_PLUGIN"),
     "consumer_chatflow_enabled": SettingSource(
         "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED", kind="bool", default=False
     ),
@@ -239,10 +238,6 @@ class GatewayServerSettings:
     #: 授权订单窗口内取 TDengine 枪遥测。空 = 该工具按依赖不可用拒绝，不静默退化为空页。
     operator_tsdata_url: str = ""
     consumer_chatflow_enabled: bool = False
-    #: 客户端知识插件的**精确标识**（`provider/name:version@sha` 或 `provider/name`）。
-    #: 客户端开通要把它装进目标工作区并写入本工作区的目录凭据；空 = 客户端开通直接拒绝
-    #: （`SETUP_CONSUMER_PLUGIN_REQUIRED`），不"先发出去再说"。
-    consumer_knowledge_plugin: str = ""
     consumer_publication_targets_file: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是

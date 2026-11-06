@@ -107,7 +107,7 @@ def test_legacy_protocol_is_not_silently_retained_by_agent_migration():
 
 def test_new_tenant_installs_source_agent_and_tool_versions():
     from aiops_diagnostics.consumer.consumer_agent_flow import AGENT_PLUGIN
-    from aiops_diagnostics.dify.self_service_prepare import consumer_models
+    from aiops_diagnostics.dify.self_service_prepare import consumer_models, consumer_plugins
 
     flow = candidate()
     model = flow["graph"]["nodes"][1]["data"]["agent_parameters"]["model"]["value"]
@@ -120,6 +120,7 @@ def test_new_tenant_installs_source_agent_and_tool_versions():
         def _call(self, *args):
             return {"current_credential_id": "existing-model"}
 
+    installed.extend(consumer_plugins({"workflow": flow}))
     assert consumer_models(Console(), "target-workspace", {"workflow": flow}, {"model": {}}) == [
         model["provider"] + "/" + model["model"]
     ]
