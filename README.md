@@ -179,3 +179,5 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 管家统一循环改造使用业务SOP、会话及受控工具；模型理解意图与选择证据，系统独立授权和计算。
 原H5、原Dify与第二租户已取得限定范围的验收证据；完整步骤见[验收计划](docs/acceptance/operator-agent-loop-qa-plan.md)，
 线上状态以[交付索引](docs/agents/current-delivery-state.md)为准，不能由源码推断已迁移。
+
+一键开通生成的应用凭据属于持久运行数据；目录迁移与沙箱内可写性验收见[开通手册](docs/agents/operator-cpms/self-service.md#运行凭据目录只读的恢复)。

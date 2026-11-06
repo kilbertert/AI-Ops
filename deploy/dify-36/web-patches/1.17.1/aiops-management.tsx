@@ -625,7 +625,7 @@ export default function TenantSetup() {
                           `：${failureDetail(op.failed_step, op.failure_kind)}`}
                       </span>
                     )}
-                    {op.state === 'failed' && (
+                    {['failed', 'partial'].includes(op.state) && (
                       <Button
                         variant="ghost-accent"
                         size="small"

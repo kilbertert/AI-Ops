@@ -168,8 +168,8 @@ it('does not preselect an end without a published source', async () => {
   expect(requests.filter((x) => x.action === 'create')).toHaveLength(0)
 })
 
-it('reports each end separately and never claims a pending channel is usable', async () => {
-  stub((body) =>
+it('reports each end separately and retries the original partial operation', async () => {
+  const requests = stub((body) =>
     body.action === 'catalogue'
       ? Response.json({
           ...catalogue,
@@ -210,6 +210,8 @@ it('reports each end separately and never claims a pending channel is usable', a
   await expect.element(screen.getByText('客户端客服：已发布 · AI 已准备，渠道待接入')).toBeVisible()
   await expect.element(screen.getByText('管家：模型配置与平台模板不一致')).toBeVisible()
   await expect.element(screen.getByRole('status')).toHaveTextContent('部分完成')
+  await screen.getByRole('button', { name: '重试', exact: true }).click()
+  expect(requests.find((x) => x.action === 'retry')).toEqual({ action: 'retry', id: 'op-1' })
 })
 
 it('still works against a backend that only knows the operator entry', async () => {

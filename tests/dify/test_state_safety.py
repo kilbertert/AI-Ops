@@ -233,3 +233,88 @@ def test_same_job_resumes_after_app_import_failure_without_creating_another_libr
     dual.service.run(job["id"], "session")
     assert dual.service.store.get(job["id"])["state"] == "completed"
     assert len(dual.kb.created) == 1
+
+
+@pytest.mark.parametrize("failure", ["readonly", "full"])
+def test_key_storage_refusal_precedes_external_key_creation(tmp_path, monkeypatch, failure):
+    import errno
+
+    from dify.test_dual_entry import Console
+
+    console = Console()
+    real = service_keys.ensure_private_directory
+    key_dir = tmp_path / "keys"
+
+    def unavailable(path):
+        if path == key_dir:
+            raise OSError(errno.EROFS if failure == "readonly" else errno.ENOSPC, "synthetic storage refusal")
+        return real(path)
+
+    monkeypatch.setattr(service_keys, "ensure_private_directory", unavailable)
+    with pytest.raises(service_keys.SetupRefused, match="SETUP_KEY_DIRECTORY_UNWRITABLE"):
+        service_keys.ensure(
+            console, key_dir, "w", "11111111-1111-4111-8111-111111111111", database=tmp_path / "db"
+        )
+    assert console.key_posts == 0
+
+
+def test_unwritable_keys_fail_before_customer_resources(dual, monkeypatch):  # noqa: F811
+    from aiops_diagnostics.dify.self_service_store import public_job
+
+    real = service_keys.ensure_private_directory
+    key_dir = service_keys.Path(dual.settings.chat_dify_key_dir)
+
+    def unavailable(path):
+        if path == key_dir:
+            raise OSError(30, "synthetic read-only filesystem")
+        return real(path)
+
+    monkeypatch.setattr(service_keys, "ensure_private_directory", unavailable)
+    only = {"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}}
+    job = dual.service.create(
+        dual.caller, request(dual, scope="consumer", sources=only, key="key-storage-first-001")
+    )
+    dual.service.run(job["id"], "session")
+    result = public_job(dual.service.store.get(job["id"]))
+    assert result["entries"]["consumer"]["error_code"] == "SETUP_KEY_DIRECTORY_UNWRITABLE"
+    assert dual.kb.created == []
+    assert dual.console.created == []
+    assert dual.console.key_posts == 0
+
+    monkeypatch.setattr(service_keys, "ensure_private_directory", real)
+    dual.service.run(job["id"], "session")
+    assert dual.service.store.get(job["id"])["state"] == "completed"
+    assert len(dual.kb.created) == 1
+    assert dual.console.key_posts == 1
+
+
+def test_retry_reuses_valid_key_when_storage_becomes_readonly(dual, monkeypatch):  # noqa: F811
+    from aiops_diagnostics.dify.self_service_identity import SetupRefused
+    from aiops_diagnostics.dify.self_service_store import public_job
+
+    publish = dual.service.publish
+
+    def fail_once(caller, app, *args):
+        if dual.service.managed(app)["entry"] == "consumer":
+            raise SetupRefused("SETUP_EXECUTOR_UNAVAILABLE")
+        return publish(caller, app, *args)
+
+    monkeypatch.setattr(dual.service, "publish", fail_once)
+    job = dual.service.create(dual.caller, request(dual, key="readonly-key-retry-001"))
+    dual.service.run(job["id"], "session")
+    first = public_job(dual.service.store.get(job["id"]))
+    assert first["state"] == "partial"
+    apps = {end: item["app_id"] for end, item in first["entries"].items()}
+    assert dual.console.key_posts == 1
+    monkeypatch.setattr(dual.service, "publish", publish)
+
+    def readonly(path):
+        raise OSError(30, "synthetic read-only mount")
+
+    monkeypatch.setattr(service_keys, "storage_ready", readonly)
+    dual.service.store.pending(job["id"])
+    dual.service.run(job["id"], "session")
+    second = public_job(dual.service.store.get(job["id"]))
+    assert second["state"] == "completed"
+    assert {end: item["app_id"] for end, item in second["entries"].items()} == apps
+    assert dual.console.key_posts == 1
