@@ -642,7 +642,16 @@ class SelfService:
         # 客户端的**实际依赖**在这里就位并回读：业务连接、知识插件与目录凭据、源编排用到的
         # 每个模型。只复制 DSL 而说"资源就绪"，等于把问题推到客户第一次提问的时候。
         save("consumer:dependencies")
-        service_keys.storage_ready(self.settings.chat_dify_key_dir)
+        if state.get("app_id"):
+            state["key_ref"] = service_keys.ensure(
+                self.console,
+                self.settings.chat_dify_key_dir,
+                workspace_id,
+                state["app_id"],
+                database=self.settings.database_file,
+            )
+        else:
+            service_keys.storage_ready(self.settings.chat_dify_key_dir)
         state["business_endpoint"] = prepare.consumer_endpoint(self.context, request["tenant_id"])
         from aiops_diagnostics.consumer.consumer_knowledge_selection import catalogue_token
 

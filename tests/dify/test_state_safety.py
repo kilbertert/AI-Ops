@@ -286,3 +286,35 @@ def test_unwritable_keys_fail_before_customer_resources(dual, monkeypatch):  # n
     assert dual.service.store.get(job["id"])["state"] == "completed"
     assert len(dual.kb.created) == 1
     assert dual.console.key_posts == 1
+
+
+def test_retry_reuses_valid_key_when_storage_becomes_readonly(dual, monkeypatch):  # noqa: F811
+    from aiops_diagnostics.dify.self_service_identity import SetupRefused
+    from aiops_diagnostics.dify.self_service_store import public_job
+
+    publish = dual.service.publish
+
+    def fail_once(caller, app, *args):
+        if dual.service.managed(app)["entry"] == "consumer":
+            raise SetupRefused("SETUP_EXECUTOR_UNAVAILABLE")
+        return publish(caller, app, *args)
+
+    monkeypatch.setattr(dual.service, "publish", fail_once)
+    job = dual.service.create(dual.caller, request(dual, key="readonly-key-retry-001"))
+    dual.service.run(job["id"], "session")
+    first = public_job(dual.service.store.get(job["id"]))
+    assert first["state"] == "partial"
+    apps = {end: item["app_id"] for end, item in first["entries"].items()}
+    assert dual.console.key_posts == 1
+    monkeypatch.setattr(dual.service, "publish", publish)
+
+    def readonly(path):
+        raise OSError(30, "synthetic read-only mount")
+
+    monkeypatch.setattr(service_keys, "storage_ready", readonly)
+    dual.service.store.pending(job["id"])
+    dual.service.run(job["id"], "session")
+    second = public_job(dual.service.store.get(job["id"]))
+    assert second["state"] == "completed"
+    assert {end: item["app_id"] for end, item in second["entries"].items()} == apps
+    assert dual.console.key_posts == 1
