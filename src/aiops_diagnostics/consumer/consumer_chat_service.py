@@ -12,6 +12,7 @@ from aiops_diagnostics.dify.dify_chatflow import DifyChatflowClient
 from aiops_diagnostics.dify.dify_run_store import still_valid
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.agent_runs import scope_to_json
+from aiops_diagnostics.execution.run_deliverability import deliverable
 
 PREFIX = "consumer-chatflow:"
 
@@ -99,7 +100,7 @@ def start(
                 raise chat_execution.ChatRunUnavailable(
                     "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("conversation", language), http_status=409
                 )
-            if still_valid(previous) and uses_context:
+            if deliverable(previous) and uses_context:
                 require_result(runtime, caller, previous_qa)
                 upstream = previous.upstream_conversation_id
                 if not upstream:
@@ -393,7 +394,11 @@ def require_result(runtime, caller, qa):
 
         require_pinned(runtime, caller, binding)
         consumer_agent.require_evidence(runtime, caller, binding, runtime.dify_run_store.context(run.run_id))
-        if run.state != "succeeded" or runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):
+        if not deliverable(run):
+            raise chat_execution.ChatRunUnavailable(
+                "CHATFLOW_RESULT_EXPIRED", "chatflow result expired", http_status=410
+            )
+        if runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):
             raise chat_execution.ChatRunUnavailable(
                 "CHATFLOW_EVIDENCE_UNAVAILABLE", "answer evidence differs"
             )
@@ -405,7 +410,7 @@ def require_result(runtime, caller, qa):
 
         require_available(runtime, caller, binding)
     latest = runtime.dify_run_store.get(run.run_id)
-    if latest is None or latest.state != "succeeded" or not still_valid(latest):
+    if latest is None or not deliverable(latest):
         raise chat_execution.ChatRunUnavailable(
             "CHATFLOW_RESULT_EXPIRED", "chatflow result expired", http_status=410
         )
@@ -487,12 +492,7 @@ def previous_context(runtime, caller, binding, conversation):
     run = runtime.dify_run_store.latest_conversation_run(
         conversation["conversation_id"], caller.scope_fingerprint
     )
-    if (
-        not run
-        or run.state != "succeeded"
-        or not still_valid(run)
-        or run.binding_digest != fingerprint(binding)
-    ):
+    if not run or not deliverable(run) or run.binding_digest != fingerprint(binding):
         return None, ""
     qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
     if not qa or qa["status"] != "completed":

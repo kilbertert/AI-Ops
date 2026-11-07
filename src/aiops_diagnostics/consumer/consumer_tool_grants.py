@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.consumer import consumer_sites
 from aiops_diagnostics.execution.agent_runs import scope_from_json
+from aiops_diagnostics.execution.run_deliverability import expired
 from aiops_diagnostics.operator import operator_cpms, operator_tools
 
 #: 本模块只服务这一类工具：声明里说它能在无订单回合里用。
@@ -76,7 +77,7 @@ class ConsumerToolGrants:
     # ── 内部 ────────────────────────────────────────────────────────────
     def _prune(self) -> None:
         now = datetime.now(UTC)
-        for key in [k for k, g in self.grants.items() if g.expires_at <= now]:
+        for key in [k for k, g in self.grants.items() if expired(g, now=now)]:
             self.grants.pop(key, None)
 
     def _proxy_base(self, run) -> str:
@@ -118,7 +119,7 @@ class ConsumerToolGrants:
         from aiops_diagnostics.execution import chat_execution
 
         run = self.context.agent_run_store.get(run_id)
-        if run is None or run.state not in {"issued", "running"} or run.expires_at <= datetime.now(UTC):
+        if run is None or run.state not in {"issued", "running"} or expired(run):
             raise ConsumerToolRefused("CONSUMER_RUN_INACTIVE", "consumer run is inactive")
         config = chat_execution.callback_config(self.context.agent_run_store, run_id, self.settings)
         if config is None:
@@ -227,7 +228,7 @@ class ConsumerToolGrants:
             grant = self.grants.get(run_id)
         if grant is None or not secrets.compare_digest(grant.token, token):
             raise ConsumerToolRefused("CONSUMER_GRANT_REJECTED", "grant rejected")
-        if grant.expires_at <= datetime.now(UTC):
+        if expired(grant):
             raise ConsumerToolRefused("CONSUMER_GRANT_EXPIRED", "grant expired")
         run = self.context.agent_run_store.get(run_id)
         if run is None or run.state not in {"issued", "running"}:

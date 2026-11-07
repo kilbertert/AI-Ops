@@ -29,6 +29,7 @@ from aiops_diagnostics.execution.agent_runs import (
     AgentRunDispatchError,
     SnailDispatcher,
 )
+from aiops_diagnostics.execution.run_deliverability import deliverable, expired
 from aiops_diagnostics.identity.order_identity import is_order_identifier
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
@@ -428,7 +429,9 @@ class OperatorCpms:
         from aiops_diagnostics.execution.node_publication import all_targets
 
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if not still_authorized(binding, run, trial=bool((run.snapshot or {}).get("trial"))):
+        # 窗口判据与 `result()` 同一条（`expired`）：过期与「授权已撤回」同码，
+        # 不新增错误码；改的只是"仅凭行状态就放行"这件事。
+        if not still_authorized(binding, run, trial=bool((run.snapshot or {}).get("trial"))) or expired(run):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         target = next(
             (
@@ -699,11 +702,7 @@ class OperatorCpms:
     def _prune(self):
         for key in list(self.tasks):
             run = self.context.agent_run_store.get(key)
-            if (
-                run is None
-                or run.expires_at <= datetime.now(UTC)
-                or run.state in {"failed", "revoked", "expired"}
-            ):
+            if run is None or expired(run) or run.state in {"failed", "revoked", "expired"}:
                 del self.tasks[key]
 
     def authenticate(self, run_id, *, node_token=None, manifest=None):
@@ -831,11 +830,7 @@ class OperatorCpms:
             # 未声明的工具、没被勾选的工具、以及「这一类运行不该用的工具」都在这里挡住。
             raise OperatorRefused("OPERATOR_TOOL_DISABLED")
         latest = self.context.agent_run_store.get(run_id)
-        if (
-            latest is None
-            or latest.state not in {"issued", "running"}
-            or latest.expires_at <= datetime.now(UTC)
-        ):
+        if latest is None or latest.state not in {"issued", "running"} or expired(latest):
             raise OperatorRefused("OPERATOR_RUN_INACTIVE")
         return task, latest, config
 
@@ -1671,21 +1666,13 @@ class OperatorCpms:
         ):
             raise OperatorRefused("QA_NOT_FOUND")
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
-        if not still_authorized(
-            binding, run, trial=bool((run.snapshot or {}).get("trial"))
-        ) or run.expires_at <= datetime.now(UTC):
+        if not still_authorized(binding, run, trial=bool((run.snapshot or {}).get("trial"))) or expired(run):
             raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
         config = AgentRunConfig.load(Path(binding.config_file))
         if execution_manifest.from_text(run.execution_manifest).identity != run.expected_agent_version:
             raise OperatorRefused("OPERATOR_MANIFEST_MISMATCH")
         run = self.context.agent_run_store.get(run.run_id)
-        if (
-            run is None
-            or run.state != "succeeded"
-            or not run.exec_config_confirmed
-            or not run.snapshot
-            or run.expires_at <= datetime.now(UTC)
-        ):
+        if run is None or not deliverable(run) or not run.exec_config_confirmed or not run.snapshot:
             raise OperatorRefused("OPERATOR_RESULT_UNAVAILABLE")
         if (
             (config.environment, config.snail_app_id, str(config.snail_agent_id), config.expected_node_id)

@@ -88,7 +88,6 @@ from aiops_diagnostics.dify.dify_knowledge_api import (
     parse_dify_retrieval_request,
 )
 from aiops_diagnostics.dify.dify_run_store import DifyRunStore
-from aiops_diagnostics.dify.dify_run_store import still_valid as dify_run_still_valid
 from aiops_diagnostics.dify.dify_trial import TrialInitiator, TrialRefused
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
 from aiops_diagnostics.execution import chat_execution, execution_manifest
@@ -106,6 +105,7 @@ from aiops_diagnostics.execution.agent_runs import (
     SnailDispatcher,
     scope_from_json,
 )
+from aiops_diagnostics.execution.run_deliverability import deliverable
 from aiops_diagnostics.gateway import metrics_store as metrics_dims
 from aiops_diagnostics.gateway import request_observation
 from aiops_diagnostics.gateway.gateway_config import (
@@ -6768,8 +6768,8 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
         snapshot = context.dify_run_store.snapshot(located.run_id)
         if (
             located.scope_fingerprint != caller.scope_fingerprint
-            or latest.state != "succeeded"
-            or not dify_run_still_valid(latest)
+            or latest is None
+            or not deliverable(latest)
             or not snapshot
             or report.get("summary") != snapshot["blocks"][0]["text"]
             or any(
@@ -6786,7 +6786,7 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
     _require_visible_order(context, caller, located.order_no)
     _require_trial_source_route(context, located)
     latest = context.dify_run_store.get(located.run_id)
-    if latest is None or latest.state != "succeeded" or not dify_run_still_valid(latest):
+    if latest is None or not deliverable(latest):
         raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "trial result unavailable")
     snapshot = context.dify_run_store.snapshot(latest.run_id)
     if not snapshot or snapshot.get("order_no") != latest.order_no:
@@ -6912,9 +6912,10 @@ def _require_current_chat_dify_order(context, caller, qa, request):
     latest = runs.get(located.run_id)
     if latest is None or latest.state != "succeeded":
         raise StandardAPIError(404, "AGENT_RUN_NO_RESULT", "dify run produced no result")
-    # 显式判有效期：`get()` 的过期收敛只处理 `running`，一条 succeeded 的记录过了
-    # 180 秒仍然是 succeeded —— 不判这里，"回读必须看 TTL"在成功路径上从未生效。
-    if not dify_run_still_valid(latest):
+    # 交付判据只有一条：`deliverable()`（成功态 + 180 秒窗口）。`get()` 的过期收敛只处理
+    # `running`，一条 succeeded 的记录过了 180 秒仍然是 succeeded —— 不判这里，
+    # "回读必须看 TTL"在成功路径上从未生效。
+    if not deliverable(latest):
         raise StandardAPIError(410, "AGENT_RUN_EXPIRED", "dify run has expired")
     snapshot = runs.snapshot(latest.run_id)
     if snapshot is None or snapshot.get("order_no") != order_no:
