@@ -65,13 +65,14 @@
 
 ## 当前分支与提交
 
-- 分支：`main`（HEAD `f12af6ab`），**尚未提交**。
+- 分支：`fix/result-deliverability-single-predicate`（基于 `origin/main` `03aca048`），提交 `8fe13024`。
+- PR：https://github.com/kilbertert/AI-Ops/pull/1444
 - 改动文件：`src/aiops_diagnostics/execution/run_deliverability.py`（新增）、`src/aiops_diagnostics/dify/dify_run_store.py`、`src/aiops_diagnostics/consumer/consumer_chat_service.py`、`src/aiops_diagnostics/consumer/consumer_agent.py`、`src/aiops_diagnostics/consumer/consumer_tool_grants.py`、`src/aiops_diagnostics/operator/operator_cpms.py`、`src/aiops_diagnostics/gateway/gateway_api.py`、`README.md`；`tests/test_result_deliverability_convergence.py`（新增）、`tests/execution/test_run_deliverability.py`（新增）、`tests/test_repository_layout.py`、`tests/consumer/test_consumer_agent.py`。
 
 ## 验证结果
 
 - `uv run ruff check` / `uv run ruff format`：通过（format 重排 3 个文件，check 修 1 处 import 顺序）。
-- `uv run pytest -o addopts="-n 4" -q`：**4724 passed / 9 skipped / 0 failed**（4733 collected，224.84s）。第一次跑时唯一失败是 README 分层表未列新模块，已修。
+- `uv run pytest -o addopts="-n 4" -q`（worktree，基于 `origin/main` `03aca048`）：**4730 passed / 9 skipped / 0 failed**（4739 collected，220.69s）。同一命令在 canonical checkout（`main` `f12af6ab`）上是 4724 passed / 9 skipped / 0 failed（4733 collected，224.84s）；差额 6 条来自 `origin/main` 领先的那 7 个提交新增的测试。第一次跑时唯一失败是 README 分层表未列新模块，已修。
 - `uv run pytest tests/execution tests/consumer tests/operations`：1368 passed / 1 skipped。
 - `uv run pytest tests/gateway tests/dify`：全绿。
 

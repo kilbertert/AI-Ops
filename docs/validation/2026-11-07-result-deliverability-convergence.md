@@ -2,20 +2,21 @@
 
 ## 一、确定性检查（可复现）
 
-全部在仓库根 `/home/claude/Projects/AI-Ops`、分支 `main`、HEAD `f12af6ab` 上执行。
+全部在仓库内执行，两处：canonical checkout `/home/claude/Projects/AI-Ops`（分支 `main`、HEAD `f12af6ab`）与交付 worktree `/home/claude/Projects/.worktrees/AI-Ops-result-deliverability-single-predicate`（分支 `fix/result-deliverability-single-predicate`、提交 `8fe13024`、基于 `origin/main` `03aca048`，PR https://github.com/kilbertert/AI-Ops/pull/1444）。
 
 | 命令 | 结果 |
 | --- | --- |
 | `uv run ruff check` | All checks passed |
 | `uv run ruff format --check`（改动文件） | 通过（本次 format 重排 3 个文件） |
-| `uv run pytest -o addopts="-n 4" -q` | **4724 passed / 9 skipped / 0 failed**（4733 collected，224.84s） |
+| `uv run pytest -o addopts="-n 4" -q`（worktree，交付基线） | **4730 passed / 9 skipped / 0 failed**（4739 collected，220.69s） |
+| 同上（canonical checkout `f12af6ab`） | 4724 passed / 9 skipped / 0 failed（4733 collected，224.84s）；差额 6 条来自 `origin/main` 领先的 7 个提交新增的测试 |
 | `uv run pytest tests/test_readme_architecture.py tests/test_repository_layout.py tests/test_runtime_retirement.py tests/test_result_deliverability_convergence.py tests/execution/test_run_deliverability.py -o addopts="" -q` | **78 passed** |
 | `uv run pytest tests/execution tests/consumer tests/operations` | 1368 passed / 1 skipped |
 | `uv run pytest tests/gateway tests/dify` | 全绿（EXIT=0） |
 
 ### 唯一失败与修复
 
-全量跑第一次出现 `tests/test_readme_architecture.py::test_every_package_module_is_named_in_the_readme` 失败：新增模块 `src/aiops_diagnostics/execution/run_deliverability.py` 未写进 README 第三节分层表。修复方式是在 `README.md:78` 的「节点与试用」行 `execution.agent_runs.py` 之后补上 `execution.run_deliverability.py`，复跑 78 passed；最终全量 4724 passed / 9 skipped / 0 failed。
+全量跑第一次出现 `tests/test_readme_architecture.py::test_every_package_module_is_named_in_the_readme` 失败：新增模块 `src/aiops_diagnostics/execution/run_deliverability.py` 未写进 README 第三节分层表。修复方式是在 `README.md:78` 的「节点与试用」行 `execution.agent_runs.py` 之后补上 `execution.run_deliverability.py`，复跑 78 passed；最终全量 4730 passed / 9 skipped / 0 failed（worktree）。
 
 ### 新增的长期检查（按 `docs/agents/verification-workflow.md` 的一句话说明）
 
