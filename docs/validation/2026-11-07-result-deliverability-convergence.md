@@ -52,3 +52,32 @@
 ## 四、业务验收
 
 **未完成业务验收。** 本记录只包含自动化检查、夹具级回归与源码级守护证据；没有工程师确认的真实故障案例，不把夹具或测试绿灯写成真实故障结论。
+
+## 五、复核补记（第二会话评审，2026-11-07）
+
+由独立于实现会话的评审复核后补记；原文未改动，分歧处以本节为准。
+
+### 复核执行的验证
+
+- 对照 #1443 PRD a–e 逐条审计 diff：判据定义、`still_valid` 降级、全部调用点改判、404/410 合同分离，均属实。
+- 现存 6 处 `still_valid` 调用点逐一核对，全部是 `state != "running"` 配对的**存活判据**（tool 回调、trial、上传中途活性检查），非交付面，保留正确。
+- `src/` 剩余 `expires_at` 裸比较全部在他域（`chat_data_grant.usable`、`knowledge_retrieval` grant 清理、会话 30 天保留、JWT exp、hop ticket、`agent_runs` 内部收敛 SQL），属定义处或 PRD 范围外。
+- 变异抽查（评审会话注入后已还原）：v6 分支删 `deliverable` 检查 → `test_an_expired_run_is_refused_and_not_inherited` 变红；写回「手写 state+窗口组合」与「by_qa 后仅凭 state」两种形状 → AST 守护两条规则分别变红。守护有真实拦截力。
+- worktree `.venv` editable 安装指向 worktree 自身 `src`，上文测试数字可信；评审另复跑 51 条相关用例全绿。
+
+### verify-aiops-gateway（补 §三 的缺口）
+
+§三 称「不属对外行为变更故不需真跑」——v6 回读 200→410 **正是对外行为变更**（PRD-e 的本意），`AGENTS.md` 的判据应适用。评审已在交付 worktree 执行：
+
+```
+uv run python .claude/skills/verify-aiops-gateway/scripts/observe.py --out dist/verification/gateway
+```
+
+一次性数据根 `/tmp/aiops-verify-z116z161`、动态回环端口、真实 `aiops-gateway serve`（1.2.7）：`/health` 只读 200；`/v1/assistant/questions`、`/v1/agents` 匿名 401；`/v1/openapi.json` 200；`/v1/runs`、`/v1/enroll`、`/v1/standard/diagnoses`、`/v1/dify/tools/order_snapshot` 均 404 —— 全部通过，证据 `dist/verification/gateway/aiops-gateway.json`（gitignored）。该 skill 自身声明不覆盖远端 Dify/Java 执行，v6 语义由 §一 的夹具级用例承载。
+
+### 更正与补充
+
+1. **`authorize_readback`（`operator_cpms.py:434`）是新增判据，不是平移。** 基线该行只有 `still_authorized`，没有窗口比较——PRD 把 `:428-430` 误记为内联比较点。行为差异：过期的 `succeeded` 行（`by_qa` 不收敛）以前会先做 target 查找、甚至发一次真实 CPMS 请求，到 `result()` 才被拒；现在入口即拒。错误码同为 `OPERATOR_RESULT_RETRACTED`（410），但「过期 + target 缺失/scope 变更」的组合从 403 变为 410。方向与 PRD-e 同一缺陷形状，属合理补充，但「窗口类 4 处平移」的表述少算了这一处新闸门。
+2. **管家侧同形状表面未收敛（PRD 未点名，记为开放问题）**：`operator_cpms.py:651`（`history_runs` 装配）与 `:945` `_previous_plan` 用 `by_qa` + `snapshot` 存在性把上一轮数据喂给下一轮，与 consumer v6 历史继承同一形状，无窗口判据，且因不比较 `state == "succeeded"` 对 AST 守护不可见。管家会话跨 180 秒继承上一轮证据是否有意，留 #1443 由 PRD 作者裁定；本 PR 未改其行为。
+3. **守护残余盲区**（除 §二.4 已声明者外）：`"succeeded" == run.state` 反向写法与 `run.state in ("succeeded",)` 成员写法可绕过两条规则——威胁模型是「忘记判」而非对抗性规避，不视为缺陷，记录在案。
+4. §一 的 4730/4724 差额归因方向写反：6 条是**本 PR 新增**用例（3 谓词 + 1 v6 + 2 守护），非「origin/main 领先的 7 个提交」；且 `origin/main` 即本分支基线 `03aca048`，并未领先。数字本身一致。
