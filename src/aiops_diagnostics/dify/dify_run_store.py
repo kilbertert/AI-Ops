@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
+from aiops_diagnostics.execution.run_deliverability import expired
 from aiops_diagnostics.gateway import gateway_db
 
 #: 与 `agent_runs` 同一口径：180 秒，不因为重试或轮询而延长。
@@ -86,14 +87,16 @@ class DifyRun:
 
 
 def still_valid(run: DifyRun, *, now: datetime | None = None) -> bool:
-    """这条记录**此刻**还在有效期里吗。
+    """这条记录**此刻**还在 180 秒窗口里吗（窗口是否关闭的**否定**）。
 
-    必须单独判，不能指望 `get()` 的过期收敛：那个收敛只把 `running` 改成 `expired`，
-    一条 **succeeded** 的记录过了 180 秒仍然是 `succeeded`。结果就是"回读必须看 TTL"
-    这条判据在成功路径上从未生效 —— 一次演示里把 `expires_at` 改成过去时间，
-    `get()` 依旧返回 succeeded。
+    判据已收敛到 `execution/run_deliverability.py`（#1443）：本函数保留为
+    「这一轮还在不在」这类**存活判据**的入口，不再自己比较 `expires_at`。
+    交付判据是 `deliverable()`，不要用它。
+
+    注意 `get()` 的过期收敛只把 `running` 改成 `expired`，一条 **succeeded** 的记录
+    过了 180 秒仍然是 `succeeded` —— 所以窗口必须单独判，不能指望行状态。
     """
-    return run.expires_at > (now or now_utc())
+    return not expired(run, now=now)
 
 
 def _ts(value: str | None) -> datetime | None:

@@ -100,6 +100,7 @@ LAYOUT = {
                 "test_readme_architecture.py",
                 "test_release_version.py",
                 "test_repository_layout.py",
+                "test_result_deliverability_convergence.py",
                 "test_runtime_retirement.py",
                 "test_tdengine_proxy.py",
                 "test_transport_convergence.py",

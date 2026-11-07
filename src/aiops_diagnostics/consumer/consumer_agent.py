@@ -12,6 +12,7 @@ from aiops_diagnostics.dify.dify_run_store import DifyRunError, still_valid
 from aiops_diagnostics.execution.agent_runs import scope_from_json
 from aiops_diagnostics.execution.chat_data_grant import DataGrantStore, usable
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
+from aiops_diagnostics.execution.run_deliverability import deliverable
 
 RESOURCES = {"knowledge", "orders", "status", "billing", "support"}
 
@@ -53,7 +54,7 @@ def conversation_context(runtime, caller, conversation, before, selected_order="
     ):
         qa = runtime.store.get_assistant_question(turn.get("status_qa_id"), caller.scope_fingerprint)
         run = runtime.dify_run_store.by_qa(qa["qa_id"]) if qa else None
-        if run is None or run.state != "succeeded" or qa["status"] != "completed":
+        if run is None or not deliverable(run) or qa["status"] != "completed":
             continue
         binding = deliverable_binding(runtime, caller, run)
         require_pinned(runtime, caller, binding)

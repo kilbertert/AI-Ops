@@ -109,8 +109,8 @@ def test_agent_combines_tools_and_keeps_actual_answer_after_grant_expiry(tmp_pat
         second = ask(env, "第2步仍然没有反应", first["conversation_id"])
         assert second.status_code == 202, second.text
         assert done(env, second.json()["qa_id"]).json()["status"] == "completed"
-        assert observations[1]["history"][0]["answer"] == "这笔订单已结束。请确认第2步的设备提示。"
-        assert observations[1]["history"][0]["order_ids"] == [ORDER_A]
+        # #1443：这一轮的 180 秒窗口已过，历史不再进下一轮（取数授权也早已撤销）。
+        assert observations[1]["history"] == []
         assert len(reads) == 2
         assert (
             env["client"]
@@ -129,9 +129,44 @@ def test_agent_combines_tools_and_keeps_actual_answer_after_grant_expiry(tmp_pat
         )
         assert other.status_code == 404
         env["orders"].ownership[ORDER_A] = "USER-B"
+        # 第 1 轮绑着 ORDER_A：改归属后回读 404。
         assert done(env, first["qa_id"]).status_code == 404
-        assert done(env, second.json()["qa_id"]).status_code == 404
-        assert ask(env, "继续", first["conversation_id"]).status_code == 404
+        # #1443：第 2 轮不再继承那一轮，它的上下文里没有订单，归属变更不影响它的回读。
+        assert done(env, second.json()["qa_id"]).status_code == 200
+        # 同一会话的新问题照常受理（历史里没有可泄漏的订单）。
+        assert ask(env, "继续", first["conversation_id"]).status_code == 202
+
+
+def test_an_expired_run_is_refused_and_not_inherited(tmp_path, monkeypatch):
+    """#1443：v6 的两个交付面共用同一条判据 —— 回读 410，历史也不再继承。"""
+    with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
+        runtime, kb = wire(env, monkeypatch, tmp_path)
+        observations = []
+
+        class Agent(Client):
+            def run(self, **kwargs):
+                ids = [str(uuid.uuid4()) for _ in range(4)]
+                kwargs["on_started"](*ids)
+                observations.append(json.loads(kwargs["inputs"]["conversation_context"]))
+                return ChatflowReply(*ids, "这笔订单已结束。请确认第2步的设备提示。", {})
+
+        monkeypatch.setattr("aiops_diagnostics.consumer.consumer_chat_service.DifyChatflowClient", Agent)
+        first = ask(env)
+        assert first.status_code == 202, first.text
+        first = first.json()
+        assert done(env, first["qa_id"]).json()["status"] == "completed"
+        with sqlite3.connect(runtime.store.path) as db:
+            db.execute(
+                "UPDATE chat_dify_runs SET expires_at='2000-01-01T00:00:00+00:00' WHERE qa_id=?",
+                (first["qa_id"],),
+            )
+        # 回读面：窗口已过 → 410，不再返回正文。
+        assert done(env, first["qa_id"]).status_code == 410
+        # 历史面：同一会话的下一问不继承那一轮。
+        second = ask(env, "第2步仍然没有反应", first["conversation_id"])
+        assert second.status_code == 202, second.text
+        assert done(env, second.json()["qa_id"]).json()["status"] == "completed"
+        assert observations[1]["history"] == []
 
 
 def test_tool_denial_does_not_read_and_budget_is_atomic(tmp_path, monkeypatch):
