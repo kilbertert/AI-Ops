@@ -56,6 +56,8 @@ def test_agent_migration_preserves_business_prompt_model_and_permission_ceiling(
         "unbounded",
         "hidden_history",
         "grant_description",
+        "missing_grant",
+        "missing_query_context",
     ],
 )
 def test_publication_refuses_broader_authority(change):
@@ -67,6 +69,10 @@ def test_publication_refuses_broader_authority(change):
         tool["parameters"]["data_grant"]["auto"] = 1
     elif change == "grant_prompt":
         params["instruction"]["value"] += "{{#start.data_grant#}}"
+    elif change == "missing_grant":
+        tool["parameters"]["data_grant"] = {"auto": 0, "value": {"type": "mixed", "value": ""}}
+    elif change == "missing_query_context":
+        params["query"] = {"type": "constant", "value": "{{#sys.query#}}"}
     elif change == "grant_description":
         tool["extra"] = {"description": "{{#start.data_grant#}}"}
     elif change == "foreign_tool":
@@ -125,3 +131,10 @@ def test_new_tenant_installs_source_agent_and_tool_versions():
         model["provider"] + "/" + model["model"]
     ]
     assert installed == [AGENT_PLUGIN, "trendpower/consumer_knowledge:0.0.2@" + "a" * 64]
+
+
+@pytest.mark.parametrize("query_type", ["mixed", "constant"])
+def test_agent_editor_query_serialization_preserves_runtime_templates(query_type):
+    flow = candidate()
+    flow["graph"]["nodes"][1]["data"]["agent_parameters"]["query"]["type"] = query_type
+    assert publish(flow)["callback_version"] == 6
