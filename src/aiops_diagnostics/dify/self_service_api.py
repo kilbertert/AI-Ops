@@ -8,6 +8,7 @@ from fastapi import Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
 from aiops_diagnostics.execution.node_publication import NodeRouteConflict
 
 from . import dual_entry
@@ -131,6 +132,14 @@ def register(app, context):
     async def conflict(_request, exc):
         return JSONResponse(
             status_code=409, content={"error": {"code": str(exc)}}, headers={"Cache-Control": "no-store"}
+        )
+
+    @app.exception_handler(ConsumerFlowError)
+    async def invalid_consumer_flow(_request, exc):
+        return JSONResponse(
+            status_code=409,
+            content={"error": {"code": "CONSUMER_FLOW_INVALID", "message": str(exc)}},
+            headers={"Cache-Control": "no-store"},
         )
 
     @app.exception_handler(NodeRouteConflict)

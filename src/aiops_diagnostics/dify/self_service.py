@@ -771,7 +771,21 @@ class SelfService:
         with self.lock:
             row = self.authorize_app(caller, app_id)
             if row["entry"] == "consumer":
-                return self._publish_consumer(caller, row, revision, expected_draft)
+                from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
+
+                try:
+                    return self._publish_consumer(caller, row, revision, expected_draft)
+                except ConsumerFlowError:
+                    self.context.store.record_publish_audit(
+                        app_id=app_id,
+                        action="refused",
+                        reason_code="CONSUMER_FLOW_INVALID",
+                        tenant_id=row["tenant_id"],
+                        business_entry="consumer",
+                        agent_name=row["agent_name"],
+                        company_user_id=caller.user_id,
+                    )
+                    raise
             doc = self.console._call(row["workspace_id"], "/console/api/apps/" + app_id)
             mc = doc["model_config"]
             if _declared_dataset_ids(mc):

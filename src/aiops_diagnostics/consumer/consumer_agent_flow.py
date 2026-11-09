@@ -79,7 +79,11 @@ def publication_settings(workflow, ceiling, owned_libraries):
     )
     params = node.get("agent_parameters", {})
     require(set(params) == {"model", "instruction", "query", "maximum_iterations", "tools"}, "Agent参数错误")
-    require(params["query"] == {"type": "mixed", "value": QUERY}, "必须接收当前问题、语言和受控历史")
+    # Dify 1.17.1 对 mixed/constant 文本都展开模板，编辑器保存为 constant。
+    require(
+        params["query"] in ({"type": "mixed", "value": QUERY}, {"type": "constant", "value": QUERY}),
+        "必须接收当前问题、语言和受控历史",
+    )
     instruction = params["instruction"]
     require(
         instruction.get("type") == "constant"
@@ -120,6 +124,10 @@ def publication_settings(workflow, ceiling, owned_libraries):
             for key in ("resource", "query", "order_no")
         },
     }
+    require(
+        (tool.get("parameters") or {}).get("data_grant") == expected["data_grant"],
+        "查询工具的本轮授权必须手动引用开始节点 data_grant，不能留空或由模型生成",
+    )
     require(tool.get("parameters") == expected, "授权必须手动绑定，模型只生成业务参数")
     require(
         "data_grant" not in str({k: v for k, v in tool.items() if k != "parameters"}),

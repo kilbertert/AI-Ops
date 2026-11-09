@@ -1,0 +1,81 @@
+--- a/web/app/components/plugins/plugin-detail-panel/tool-selector/components/reasoning-config-form.tsx
++++ b/web/app/components/plugins/plugin-detail-panel/tool-selector/components/reasoning-config-form.tsx
+@@ -233,7 +233,7 @@
+                 onChange={handleTypeChange(variable, defaultValue)}
+               />
+             )}
+-            {isString && (
++            {isString && !showVariableSelector && (
+               <MixedVariableTextInput
+                 value={(varInput?.value as string) || ''}
+                 onChange={handleValueChange(variable, type)}
+--- /dev/null
++++ b/web/app/components/plugins/plugin-detail-panel/tool-selector/components/__tests__/aiops-variable-roundtrip.spec.tsx
+@@ -0,0 +1,67 @@
++import type { ReasoningConfigValue } from '../reasoning-config-form'
++import type { ToolFormSchema } from '@/app/components/tools/utils/to-form-schema'
++import { screen, waitFor } from '@testing-library/react'
++import { useState } from 'react'
++import { FormTypeEnum } from '@/app/components/header/account-setting/model-provider-page/declarations'
++import { renderWorkflowFlowComponent } from '@/app/components/workflow/__tests__/workflow-test-env'
++import { VarType } from '@/app/components/workflow/nodes/tool/types'
++import ReasoningConfigForm from '../reasoning-config-form'
++
++vi.mock('@/service/use-tools', () => ({
++  useAllBuiltInTools: () => ({ data: [] }),
++  useAllCustomTools: () => ({ data: [] }),
++  useAllWorkflowTools: () => ({ data: [] }),
++  useAllMCPTools: () => ({ data: [] }),
++}))
++vi.mock('@/service/use-common', async (original) => ({
++  ...(await original()),
++  useSchemaTypeDefinitions: () => ({ data: {} }),
++}))
++vi.mock('@/app/components/header/account-setting/model-provider-page/hooks', () => ({
++  useLanguage: () => 'en_US',
++}))
++
++it('opening the real parameter form preserves a string variable reference', async () => {
++  const changed = vi.fn()
++  const schema: ToolFormSchema = {
++    variable: 'data_grant',
++    type: FormTypeEnum.textInput,
++    name: 'data_grant',
++    _type: 'string',
++    form: 'llm',
++    show_on: [],
++    label: { en_US: 'Grant', zh_Hans: '本轮授权' },
++    required: true,
++    default: '',
++    scope: '',
++    url: '',
++    options: [],
++  }
++  function Harness() {
++    const [value, setValue] = useState<ReasoningConfigValue>({
++      data_grant: { auto: 0, value: { type: VarType.variable, value: ['start', 'data_grant'] } },
++    })
++    return (
++      <>
++        <ReasoningConfigForm
++          value={value}
++          onChange={(next) => {
++            changed(next)
++            setValue(next)
++          }}
++          schemas={[schema]}
++          nodeOutputVars={[]}
++          availableNodes={[]}
++          nodeId="answer"
++        />
++        <output data-testid="saved">{JSON.stringify(value)}</output>
++      </>
++    )
++  }
++  renderWorkflowFlowComponent(<Harness />, { nodes: [], edges: [] })
++  await waitFor(() => expect(screen.getByTestId('saved')).toHaveTextContent('data_grant'))
++  await new Promise((resolve) => setTimeout(resolve, 100))
++  expect(changed).not.toHaveBeenCalled()
++  expect(screen.getByTestId('saved')).toHaveTextContent('"value":["start","data_grant"]')
++  expect(document.querySelector('[contenteditable=true]')).toBeNull()
++})
