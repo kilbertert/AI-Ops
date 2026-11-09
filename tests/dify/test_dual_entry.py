@@ -1200,3 +1200,39 @@ def test_onboarding_uses_source_plugin_before_any_model_preparation(dual, monkey
     assert result["state"] == "completed", result
     assert pinned in installed and consumer_agent_flow.AGENT_PLUGIN in installed
     assert stale_plugin not in installed
+
+
+def test_consumer_contract_failure_is_a_safe_http_refusal(dual, monkeypatch):
+    from starlette.testclient import TestClient
+
+    dual.settings.dify_publish_api_key = "management-key"
+    dual.context.self_service.console = dual.console
+    # Use the actual publisher with a draft whose input contract was broken by editing.
+    result = run(
+        dual,
+        request(
+            dual,
+            scope="consumer",
+            sources={"consumer": {"app_id": dual.consumer_source, "version_no": dual.consumer_version}},
+        ),
+    )
+    app = result["entries"]["consumer"]["app_id"]
+    graph = dual.console.apps[app]["workflow"]["graph"]
+    next(n for n in graph["nodes"] if n["id"] == "start")["data"]["variables"] = []
+    status = dual.service.status(dual.caller, app)
+    before = dual.service.route_for(TARGET, "consumer")
+    publishes = []
+    monkeypatch.setattr(Dsl, "publish_workflow", lambda *a, **k: publishes.append(True))
+    with TestClient(dual.f["app"], raise_server_exceptions=False) as client:
+        response = client.post(
+            "/v1/dify/management/publish",
+            headers={"Authorization": "Bearer management-key", "X-AIOps-Console-Session": "session"},
+            json={"app_id": app, "revision": status["route_revision"], "draft": status["draft_sha256"]},
+        )
+    assert response.status_code == 409, response.text
+    assert publishes == []
+    assert response.json()["error"]["code"] == "CONSUMER_FLOW_INVALID"
+    assert "输入" in response.json()["error"]["message"]
+    assert dual.service.route_for(TARGET, "consumer") == before
+    audit = dual.context.store.publish_audit_entries(app_id=app)[0]
+    assert (audit["action"], audit["reason_code"]) == ("refused", "CONSUMER_FLOW_INVALID")

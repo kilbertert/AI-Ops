@@ -144,3 +144,13 @@ callback6的入口是智能客服节点→consumer_knowledge工具卡片→用�
 Agent v1的settings字段可以直接保存 `{type: constant, value: [...]}`，新编辑器使用
 `{value: {type: constant, value: [...]}}`。10补丁按已有字段形状解包和保存，不能因点选而改变运行协议。
 回归必须使用真实useToolSelector，否则mock后的settingsValue会掩盖已选值丢失。
+
+## 参数面板打开后发布失败
+
+先比对草稿与同应用正式图的query和工具parameters，禁止打印实际grant/凭据。
+Dify1.17.1的Agent字符串query在保存时变constant，运行时仍展开模板；不要据type变化
+就改模型。string手动变量必须以变量选择器编辑，不能让文本框把selector数组当空文本。
+修复后从已合并补丁13构建完整web并部署，先打开参数面板确认grant引用不变，再发布。
+存量坏草稿修复只替换已核对丢失的start.data_grant引用，走正常workflow draft保存并
+使用当前hash；保留模型、业务指令、知识库选择及其授权。先留原始快照，回读比对后
+才点击受管发布；拒绝应显示CONSUMER_FLOW_INVALID和具体原因，失败不改正式指针。

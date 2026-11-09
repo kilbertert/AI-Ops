@@ -50,6 +50,16 @@ def selected_libraries(node):
 AUDIENCE_CUSTOMER = "customer"
 
 
+def publication_libraries(source):
+    """目录故障不是可展示的合同正文，只公开固定原因。"""
+    from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
+
+    try:
+        return source() if callable(source) else source
+    except (ValueError, TypeError, KnowledgeSearchUnavailable) as exc:
+        raise ValueError("知识库目录暂不可用，请稍后重试") from exc
+
+
 def require_owned(selected, rows):
     """选中的库必须**属于本租户**且**允许对客**。
 

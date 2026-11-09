@@ -232,6 +232,7 @@ def publication_settings(
         from aiops_diagnostics.consumer.consumer_knowledge_selection import (
             PROVIDER,
             TOOL,
+            publication_libraries,
             require_owned,
             selected_libraries,
         )
@@ -261,7 +262,7 @@ def publication_settings(
             selected = selected_libraries(n)
             if owned_libraries is None:
                 raise ValueError("无法核验租户知识库目录，请稍后再试")
-            require_owned(selected, owned_libraries() if callable(owned_libraries) else owned_libraries)
+            require_owned(selected, publication_libraries(owned_libraries))
         except ValueError as exc:
             raise ConsumerFlowError(str(exc)) from exc
         return {
