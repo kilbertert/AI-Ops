@@ -37,7 +37,7 @@ import {
 } from '@langgenius/dify-ui/select'
 import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { useEffect, useState } from 'react'
-import { entryLabels, manage, messages, steps } from '@/service/aiops-management'
+import { entryLabels, failureText, manage, messages, steps } from '@/service/aiops-management'
 
 type Item = { id: string; name: string }
 type Operation = {
@@ -87,7 +87,7 @@ function failureDetail(step?: string, kind?: string): string {
 function entrySummary(progress: EntryProgress | undefined): string {
   if (!progress) return '等待中'
   if (progress.state === 'failed') {
-    const generic = messages[progress.error_code || ''] || '这一端未完成'
+    const generic = failureText({ error_code: progress.error_code }, '这一端未完成')
     const detail =
       progress.error_code === 'SETUP_STEP_FAILED'
         ? failureDetail(progress.failed_step, progress.failure_kind)
@@ -619,7 +619,7 @@ export default function TenantSetup() {
                     {/* 入口级失败的行级错误与入口 chip 文案同源，只在没入口失败时补行级原因 */}
                     {op.state === 'failed' && !anyEntryFailed && (
                       <span className="system-xs-regular text-text-destructive">
-                        {messages[op.error_code || ''] || '当前步骤未完成'}
+                        {failureText({ error_code: op.error_code }, '当前步骤未完成')}
                         {op.error_code === 'SETUP_STEP_FAILED' &&
                           failureDetail(op.failed_step, op.failure_kind) &&
                           `：${failureDetail(op.failed_step, op.failure_kind)}`}

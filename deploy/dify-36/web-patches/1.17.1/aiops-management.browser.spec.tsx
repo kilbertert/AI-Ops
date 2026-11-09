@@ -286,6 +286,60 @@ it('publishes with the loaded route revision and reports concurrent publication 
   expect(calls[0]?.draft).toMatch(/^[a-f0-9]{64}$/)
 })
 
+it('translates the retracted-version refusal instead of blaming the session', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      Response.json(
+        {
+          error: {
+            code: 'ROUTE_BINDING_RETRACTED',
+            message: '该版本已撤回；要重新上线请用「恢复历史版本」',
+          },
+        },
+        { status: 409 },
+      ),
+    ),
+  )
+  await expect(publishManaged('app', { pre_prompt: 'SOP' }, 3)).rejects.toThrow(
+    '该版本已撤回',
+  )
+})
+
+it('shows the backend message with its code for codes without a translation', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      Response.json(
+        { error: { code: 'DIFY_FUTURE_CODE', message: 'upstream refused' } },
+        { status: 409 },
+      ),
+    ),
+  )
+  await expect(publishManaged('app', { pre_prompt: 'SOP' }, 3)).rejects.toThrow(
+    'upstream refused（DIFY_FUTURE_CODE）',
+  )
+})
+
+it('falls back to the bare code rather than a misleading relogin hint', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json({ error: { code: 'SETUP_FUTURE_CODE' } }, { status: 403 })),
+  )
+  const error = await publishManaged('app', { pre_prompt: 'SOP' }, 3).catch((e) => e)
+  expect(error).toBeInstanceOf(Error)
+  expect(error.message).toContain('SETUP_FUTURE_CODE')
+  expect(error.message).not.toContain('重新登录')
+})
+
+it('describes a non-JSON upstream failure instead of a parse exception', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response('<html>bad gateway</html>', { status: 502 })),
+  )
+  await expect(publishManaged('app', { pre_prompt: 'SOP' }, 3)).rejects.toThrow('502')
+})
+
 it('shows the model default when Java has no explicit output cap', async () => {
   const screen = await render(
     <ManagedPublish status={{ ...status, model_options: {} }} save={async () => true} />,
