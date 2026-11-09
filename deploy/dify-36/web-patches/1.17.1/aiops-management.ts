@@ -100,7 +100,7 @@ export const messages: Record<string, string> = {
   // 以下按后端可产出的 code 维护；漏收录的 code 由 `failureText` 原样带码兜底，
   // 缺译文只影响可读性，不再冒充"请重新登录"的会话问题。
   SETUP_APP_NOT_MANAGED: '该应用不在受管应用登记中，请核对应用归属或联系平台管理员',
-  SETUP_APP_CONFLICT: '该应用已被其他任务占用，请刷新后重试',
+  SETUP_APP_CONFLICT: '该应用的登记身份与既有记录冲突（归属或端不一致），请核对应用登记或联系平台管理员',
   SETUP_ACTOR_CHANGED: '开通任务信息已变化，请刷新后重试',
   SETUP_BUSY: '有任务正在执行，请稍后重试',
   SETUP_CHANNEL_DECLARATION_INVALID: '渠道接入声明无效，请联系平台管理员核对清单',

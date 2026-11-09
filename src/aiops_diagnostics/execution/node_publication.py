@@ -358,7 +358,9 @@ def advance(
             source_agent_name=binding.agent_name if register_source else "",
         )
     except RouteBindingError as exc:
-        raise NodeRouteConflict(str(exc)) from exc
+        #: 透出的是 ``code``（ROUTE_BINDING_*）而不是 ``str(exc)``：信封只有 code 一个
+        #: 槽位，把给人看的 message 当 code 会让客户端只能按英文短句匹配。
+        raise NodeRouteConflict(exc.code) from exc
 
 
 @dataclass(frozen=True)
