@@ -97,6 +97,48 @@ export const messages: Record<string, string> = {
   SETUP_STEP_FAILED: '当前步骤未完成，可以重试；持续失败请联系平台管理员',
   OPERATOR_SITE_SCOPE_REQUIRED: '当前账号未分配可诊断场站，请联系公司管理员分配或切换账号',
   OPERATOR_TRIAL_LOGIN_REQUIRED: '公司登录已过期，请重新登录后继续',
+  // 以下按后端可产出的 code 维护；漏收录的 code 由 `failureText` 原样带码兜底，
+  // 缺译文只影响可读性，不再冒充"请重新登录"的会话问题。
+  SETUP_APP_NOT_MANAGED: '该应用不在受管应用登记中，请核对应用归属或联系平台管理员',
+  SETUP_APP_CONFLICT: '该应用已被其他任务占用，请刷新后重试',
+  SETUP_ACTOR_CHANGED: '开通任务信息已变化，请刷新后重试',
+  SETUP_BUSY: '有任务正在执行，请稍后重试',
+  SETUP_CHANNEL_DECLARATION_INVALID: '渠道接入声明无效，请联系平台管理员核对清单',
+  SETUP_CREDENTIAL_REQUIRED: '发布服务凭据未配置，请联系平台管理员',
+  SETUP_DISABLED: '自助管理未启用，请联系平台管理员',
+  SETUP_ENTRY_UNKNOWN: '应用入口类型无法识别，请联系平台管理员',
+  SETUP_SCOPE_UNKNOWN: '开通范围无法识别，请联系平台管理员',
+  SETUP_IDENTITY_MISMATCH: '公司身份与应用账号不匹配，请重新登录或联系平台管理员',
+  SETUP_IMPORT_PENDING: '应用导入尚未完成，请稍后重试',
+  SETUP_JOB_MISSING: '开通任务记录缺失，请联系平台管理员',
+  SETUP_KEY_LIST_UNAVAILABLE: '应用凭据清单读取失败，请稍后重试或联系平台管理员',
+  SETUP_KEY_UNAVAILABLE: '应用凭据不可用，请联系平台管理员',
+  SETUP_KNOWLEDGE_CONNECTION_FAILED: '知识库连接校验失败，请重试或联系平台管理员',
+  SETUP_KNOWLEDGE_NOT_SUPPORTED: '该应用含有暂不支持的知识库声明，请联系平台管理员',
+  SETUP_LEASE_LOST: '任务执行权已失效，请重试',
+  SETUP_OPERATION_NOT_FOUND: '开通任务不存在或不属于当前账号',
+  SETUP_PROVIDER_UNAVAILABLE: '工具目录暂时不可用，请稍后重试',
+  SETUP_REQUEST_CHANGED: '开通请求已变化，请重新发起',
+  SETUP_SOURCE_NOT_AVAILABLE: '该端没有可用的来源应用，请先完成来源发布',
+  SETUP_VERSION_MISMATCH: '所选版本不属于该应用，请刷新后重试',
+  SETUP_WORKSPACE_PENDING: '工作区尚未就绪，请稍后重试',
+  SETUP_UNAVAILABLE: '管理服务暂时不可用，请稍后重试',
+  COMPANY_DIRECTORY_UNAVAILABLE: '公司目录服务暂时不可用，请稍后重试',
+  // 路由指针层：撤回/并发改动/配置冲突都以「操作」的面目出现，不是登录问题。
+  ROUTE_BINDING_RETRACTED: '该版本已撤回；要重新上线请用「恢复历史版本」',
+  ROUTE_BINDING_CONFLICT: '正式版本在页面打开后已变化，请刷新后重试',
+  ROUTE_BINDING_MISSING: '正式版本指针缺失，请联系平台管理员',
+  ROUTE_BINDING_UNAVAILABLE: '正式版本指针暂时不可用，请稍后重试',
+  ROUTE_ENGINE_UNKNOWN: '路由执行组件类型未知，请联系平台管理员',
+  CHAT_ROUTE_BINDING_COLLIDES_WITH_FILE: '该客户路由仍登记在配置文件中，请联系平台管理员核对',
+  DIFY_KEY_DIR_UNSET: '应用凭据目录未配置，请联系平台管理员',
+  DIFY_CHAT_BASE_URL_UNSET: '聊天执行地址未配置，请联系平台管理员',
+  DIFY_ROUTE_NOT_ADVANCED: '发布产物缺少可绑定的版本身份，请联系平台管理员',
+  // 管家发布的 NodeRouteConflict 把英文短句当 code 用，逐句对应。
+  'node route revision missing': '正式版本指针缺失，请联系平台管理员',
+  'node route revision changed': '正式版本已变化，请刷新后重新发布',
+  'node route retracted': '该版本已撤回；要重新上线请用「恢复历史版本」',
+  'node target environment changed': '执行目标环境已变化，请联系平台管理员',
 }
 
 export const steps: Record<string, string> = {
@@ -122,25 +164,64 @@ export const steps: Record<string, string> = {
   complete: '配置完成',
 }
 
+type ErrorBody = {
+  error?: { code?: unknown; message?: unknown } | null
+  error_code?: unknown
+  reason?: unknown
+  detail?: unknown
+}
+
+/**
+ * 错误响应 → 给用户看的句子。
+ *
+ * 后端只承诺 `error.code`；`reason`（桥拒绝）、`error.message`（标准信封）、
+ * `detail`（框架拒绝）各只有一部分路径给。顺序：**本表译文 → 后端正文 →
+ * 原样带 code → 兜底**。这样后端每加一个 code 不会自动变成用户可见的假话 —
+ * 最差的显示是「兜底（CODE）」，一张截图就能定位，而不是一句误导性的
+ * 「请重新登录」。
+ */
+export function failureText(body: unknown, fallback = '管理操作未完成，请稍后重试'): string {
+  const data = (body ?? {}) as ErrorBody
+  const code = String(data.error?.code ?? data.error_code ?? '')
+  if (code && messages[code]) return messages[code]
+  const detail = [data.reason, data.error?.message, data.detail].find(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0,
+  )
+  if (detail) return code ? `${detail}（${code}）` : detail
+  return code ? `${fallback}（${code}）` : fallback
+}
+
 export async function manage(action: string, payload: Record<string, unknown> = {}) {
   const cookie = document.cookie
     .split(';')
     .map((x) => x.trim())
     .find((x) => x.startsWith('__Host-csrf_token=') || x.startsWith('csrf_token='))
-  const response = await fetch('/__aiops/manage', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-CSRF-Token': cookie ? decodeURIComponent(cookie.slice(cookie.indexOf('=') + 1)) : '',
-    },
-    body: JSON.stringify({ action, ...payload }),
-  })
-  const body = await response.json()
-  if (!response.ok)
-    throw new Error(
-      messages[body.error?.code] || body.reason || '管理操作未完成，请重新登录或联系平台管理员',
-    )
+  let response: Response
+  try {
+    response = await fetch('/__aiops/manage', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': cookie ? decodeURIComponent(cookie.slice(cookie.indexOf('=') + 1)) : '',
+      },
+      body: JSON.stringify({ action, ...payload }),
+    })
+  } catch (e) {
+    // fetch 的拒绝只有一种语义：传输层失败（同源下即断网或服务不可达）。
+    // 业务拒绝永远走 JSON 响应体。TypeError 之外的原样上抛 —— 那是调用方/替身的
+    // 异常，不是这条通道的语义，吞掉会让测试替身测不到自己的拒绝。
+    if (e instanceof TypeError) throw new Error('无法连接管理服务，请检查网络后重试')
+    throw e
+  }
+  const body = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new Error(failureText(body, `管理操作未完成（${response.status}），请稍后重试`))
+  }
+  // 2xx 但响应体不是 JSON：桥/代理层故障，不是业务答复。原来的 `Unexpected token`
+  // 原文直接上屏，现在说人话。
+  if (body === null || typeof body !== 'object')
+    throw new Error('管理服务返回了无法解析的响应')
   return body
 }
 
