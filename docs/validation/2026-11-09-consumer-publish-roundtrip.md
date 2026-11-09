@@ -32,3 +32,13 @@ DeepSeek指定模型CLI无回执，独立Codex会话已接续，不能将无输�
 
 Gateway与Dify web同版交付；不换模型、不重配知识服务、不修改客户知识资料。
 修复后须从原页面保存和发布核对，不把本地通过当生产成功。
+
+## 独立反例与审查修复
+
+DeepSeek指定CLI达到480秒无产物，未验。独立Codex会话实际验证：固定表单相邻文本
+编辑/重开保留grant；撤销一行修复会再次清空。HTTP反例覆盖正确两种query、空/自动/
+错误grant、越权库、缺历史/额外授权，拒绝时无Dify发布且正式指针/版本列表不变。
+H1：真实KbServiceClient的document_count解析失败会将字段原文带入ConsumerFlowError。
+修复目录调用边界，解析/访问错误只显示固定目录不可用；旧动态流与Agent复用。
+Devin审查发现非空列表parameters触发AttributeError，已补类型判断并先红后绿。
+完整复验与最终CI待记录；原页面发布仍未完成，不把修复候选当线上版本。

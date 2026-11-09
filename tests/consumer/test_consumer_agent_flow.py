@@ -58,6 +58,7 @@ def test_agent_migration_preserves_business_prompt_model_and_permission_ceiling(
         "grant_description",
         "missing_grant",
         "missing_query_context",
+        "malformed_parameters",
     ],
 )
 def test_publication_refuses_broader_authority(change):
@@ -69,6 +70,8 @@ def test_publication_refuses_broader_authority(change):
         tool["parameters"]["data_grant"]["auto"] = 1
     elif change == "grant_prompt":
         params["instruction"]["value"] += "{{#start.data_grant#}}"
+    elif change == "malformed_parameters":
+        tool["parameters"] = ["data_grant"]
     elif change == "missing_grant":
         tool["parameters"]["data_grant"] = {"auto": 0, "value": {"type": "mixed", "value": ""}}
     elif change == "missing_query_context":
@@ -138,3 +141,20 @@ def test_agent_editor_query_serialization_preserves_runtime_templates(query_type
     flow = candidate()
     flow["graph"]["nodes"][1]["data"]["agent_parameters"]["query"]["type"] = query_type
     assert publish(flow)["callback_version"] == 6
+
+
+def test_catalogue_failure_details_do_not_become_public_contract_errors(monkeypatch):
+    marker = "SYNTHETIC_UPSTREAM_SECRET"
+
+    from aiops_diagnostics.knowledge import knowledge_retrieval
+
+    client = knowledge_retrieval.KbServiceClient("https://kb.example", tenant_id="fixture")
+    monkeypatch.setattr(
+        knowledge_retrieval,
+        "request_json",
+        lambda *a, **k: [{"id": "kb-own", "document_count": marker}],
+    )
+    with pytest.raises(ConsumerFlowError) as error:
+        publication_settings(candidate(), CEILING, BASE, owned_libraries=client.list_knowledge_bases)
+    assert marker not in str(error.value)
+    assert "知识库目录暂不可用" in str(error.value)

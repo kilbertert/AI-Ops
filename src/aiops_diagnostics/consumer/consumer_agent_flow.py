@@ -2,6 +2,7 @@
 
 from aiops_diagnostics.consumer.consumer_knowledge_selection import (
     PROVIDER,
+    publication_libraries,
     require_owned,
     selected_libraries,
 )
@@ -125,7 +126,8 @@ def publication_settings(workflow, ceiling, owned_libraries):
         },
     }
     require(
-        (tool.get("parameters") or {}).get("data_grant") == expected["data_grant"],
+        isinstance(tool.get("parameters"), dict)
+        and tool["parameters"].get("data_grant") == expected["data_grant"],
         "查询工具的本轮授权必须手动引用开始节点 data_grant，不能留空或由模型生成",
     )
     require(tool.get("parameters") == expected, "授权必须手动绑定，模型只生成业务参数")
@@ -142,7 +144,7 @@ def publication_settings(workflow, ceiling, owned_libraries):
     require(set(tool.get("settings", {})) == {"knowledge_base_ids"}, "工具配置仅允许选择知识库")
     libraries = selected_libraries({"tool_configurations": tool["settings"]})
     require(owned_libraries is not None, "无法核验知识库归属")
-    require_owned(libraries, owned_libraries() if callable(owned_libraries) else owned_libraries)
+    require_owned(libraries, publication_libraries(owned_libraries))
     env = {v.get("name"): v for v in workflow.get("environment_variables", [])}
     require(len(env) == len(workflow.get("environment_variables", [])), "环境变量重复")
     flags = {}
