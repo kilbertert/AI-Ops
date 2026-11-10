@@ -119,6 +119,29 @@ def test_running_then_failed_does_not_deliver_report(bridge, upstream, monkeypat
     assert "message_end" not in body and len(reads) == 2
 
 
+def test_waiting_progress_precedes_reviewed_answer(bridge, upstream, monkeypatch):
+    monkeypatch.setattr(preview, "NATIVE_POLL_SECONDS", 0)
+    original = preview._native_gateway
+    reads = []
+
+    def gateway(handler, session, path, **kwargs):
+        if path and not reads:
+            reads.append(path)
+            return 200, {"status": "running", "progress": {"phase": "review", "elapsed_ms": 15000}}
+        return original(handler, session, path, **kwargs)
+
+    monkeypatch.setattr(preview, "_native_gateway", gateway)
+    code, headers, body = send(bridge)
+    events = [json.loads(line[5:]) for line in body.splitlines() if line.startswith("data:")]
+    progress = next(e for e in events if "执行进度" in e.get("thought", ""))
+    answer = next(e for e in events if "本次订单事实" in e.get("answer", ""))
+    assert code == 200 and headers["X-Accel-Buffering"] == "no"
+    assert "核对回答与证据" in progress["thought"] and "15 秒" in progress["thought"]
+    assert events.index(progress) < events.index(answer)
+    assert events[events.index(answer) - 1]["id"] != progress["id"]
+    assert "执行进度" not in answer["answer"]
+
+
 @pytest.mark.parametrize(
     "query,expected",
     [
