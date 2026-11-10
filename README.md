@@ -183,3 +183,5 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 一键开通生成的应用凭据属于持久运行数据；目录迁移与沙箱内可写性验收见[开通手册](docs/agents/operator-cpms/self-service.md#运行凭据目录只读的恢复)。
 
 客服编辑与发布故障的字段核对、原页面恢复见[知识选择与发布手册](docs/agents/consumer-wf01/knowledge-picker-deploy.md#参数面板打开后发布失败)。
+
+设备离线分析以同一受控读面服务offline卡与管家Agent；新增业务时区配置和发布步骤见[离线手册](docs/agents/operator-cpms/device-offline.md)。

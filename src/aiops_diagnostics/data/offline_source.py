@@ -37,7 +37,7 @@ def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=Fa
             raise SourceError("离线分析需要一致性读取")
         cur.execute(
             "SELECT m.id,m.site_id,m.device_code FROM iot_charging_device m WHERE "
-            + where
+            + where.replace("m.device_id", "m.id")
             + " ORDER BY m.id LIMIT %s",
             [*params, MAX_DEVICES + 1],
         )
@@ -103,6 +103,12 @@ def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=Fa
     )
     result["quality"]["unverified_device_records"] = rejected
     result["quality"]["devices_missing_code"] = sum(not d["device_code"] for d in devices)
+    result["quality"]["coverage"] = (
+        "partial" if rejected or result["quality"]["devices_missing_code"] else "current_devices"
+    )
+    if result["quality"]["coverage"] == "partial":
+        result["order_overlap"]["share"] = None
+    result["limitations"] += " 仅覆盖当前可授权且编码可查的设备；已删除设备或历史编码变化可能缺记录。"
     result["scope"] = {"site_count": len(sites) if sites is not None else None, "device_id": device_id}
     result["references"] = {
         "devices": sorted({(r["id"], r["site_id"]) for r in devices}),

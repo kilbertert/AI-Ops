@@ -166,3 +166,44 @@ def test_offline_tool_parameters_cannot_invent_objects():
         offline_tool.arguments(None, task, None, {"device": "invented"})
     with pytest.raises(OperatorRefused):
         offline_tool.arguments(None, task, None, {"tenant_id": "other"})
+
+
+def test_card_with_zero_new_incidents_keeps_details_and_private_refs_off_wire(monkeypatch):
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.common.config import Settings
+    from aiops_diagnostics.data import offline_source
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+
+    config = Settings()
+    config.mysql.timezone = "UTC"
+    detail = run([event("2026-10-30T00:00:00Z")])
+    refs = {"devices": [["D", "S"]], "orders": []}
+    monkeypatch.setattr(
+        offline_source,
+        "read",
+        lambda *a, **k: (
+            {"incidents": 0, "offline_devices": 0, "open_incidents": 0, "offline_minutes": 0},
+            {**detail, "references": refs},
+        ),
+    )
+    monkeypatch.setattr(offline_source, "require_references", lambda *a: None)
+    runtime = SimpleNamespace(diagnostic_settings=config)
+    source = SimpleNamespace(mysql=SimpleNamespace(count_devices=lambda *_: 1))
+    result = GatewayRuntime._compute_card(runtime, "offline", source, ("S",), START, END, "zh", ("S",))
+    assert result["device_offline"]["open_incident_list"]["total"] == 1
+    assert result["incidents"] is None  # 原空摘要合同未改
+    job = {"result": result}
+    runtime.store = SimpleNamespace(get_standard_diagnosis=lambda *_: job)
+    from contextlib import contextmanager
+
+    from aiops_diagnostics.data import sources
+    from operations.test_operator_cpms import scope
+
+    @contextmanager
+    def mysql(*a):
+        yield source.mysql
+
+    monkeypatch.setattr(sources, "scoped_mysql_source", mysql)
+    observed = GatewayRuntime.get_operations_analysis(runtime, scope(), "an_test")
+    assert "_offline_references" not in observed["result"]

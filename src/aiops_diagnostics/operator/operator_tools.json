@@ -821,7 +821,8 @@
           "invalid_incident_times": null,
           "duplicate_or_missing_order_ids": null,
           "unverified_device_records": null,
-          "devices_missing_code": null
+          "devices_missing_code": null,
+          "coverage": null
         },
         "scope": {
           "site_count": null,
