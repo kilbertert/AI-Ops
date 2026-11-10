@@ -68,6 +68,9 @@ def handle(handler, bridge):
                 "trial_id",
                 "knowledge_base_id",
                 "allowed",
+                "page",
+                "limit",
+                "run_id",
             }
         ),
     )
@@ -86,6 +89,8 @@ def handle(handler, bridge):
         "trial-cancel": ("POST", "/trial/cancel"),
         "knowledge": ("POST", "/knowledge"),
         "knowledge-access": ("POST", "/knowledge/access"),
+        "run-logs": ("POST", "/run-logs"),
+        "run-log": ("POST", "/run-logs/detail"),
     }
     if action in {"operation", "retry"}:
         job = payload.pop("id", "")
@@ -103,6 +108,21 @@ def handle(handler, bridge):
     if (method == "GET" or action == "retry") and payload:
         raise _Rejected(400, "无效参数")
     _validate_scope_and_sources(action, payload, _Rejected)
+    if action in {"run-logs", "run-log"}:
+        expected = {"app_id", "page", "limit"} if action == "run-logs" else {"app_id", "run_id"}
+        if set(payload) - expected:
+            raise _Rejected(400, "无效日志参数")
+        if action == "run-logs":
+            for key, default, maximum in (("page", 1, 1000), ("limit", 20, 50)):
+                value = payload.get(key, default)
+                if type(value) is not int or not 1 <= value <= maximum:
+                    raise _Rejected(400, "无效日志分页")
+        elif not isinstance(payload.get("run_id"), str) or not re.fullmatch(
+            r"run_[A-Za-z0-9_-]{43}", payload["run_id"]
+        ):
+            raise _Rejected(400, "无效运行编号")
+    elif set(payload) & {"page", "limit", "run_id"}:
+        raise _Rejected(400, "无效参数")
     if action.startswith("trial"):
         expected = {"app_id", "question", "order_no"} if action == "trial" else {"app_id", "trial_id"}
         if set(payload) - expected or not handler.settings.trial_key:
@@ -139,9 +159,11 @@ def handle(handler, bridge):
         "trial-cancel",
         "knowledge",
         "knowledge-access",
+        "run-logs",
+        "run-log",
     }:
         app_id = payload.get("app_id", "")
-        if not re.fullmatch(r"[a-f0-9-]{36}", app_id):
+        if not isinstance(app_id, str) or not re.fullmatch(r"[a-f0-9-]{36}", app_id):
             raise _Rejected(400, "无效应用")
         code, app = _request(
             handler.settings.dify_base_url + "/console/api/apps/" + app_id,
