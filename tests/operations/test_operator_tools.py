@@ -36,6 +36,7 @@ def test_the_declaration_covers_the_live_tools():
         "cpms_order_amount_check",
         "cpms_order_process_stats",
         "cpms_charging_timeline",
+        "cpms_device_offline",
     )
     assert tuple(t.name for t in tools) == expected
     assert all(

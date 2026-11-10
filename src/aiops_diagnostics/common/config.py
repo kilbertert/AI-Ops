@@ -121,6 +121,7 @@ class MySQLSettings:
     user: str = ""
     password: str = ""
     database: str = "cloud_charging_pile"
+    timezone: str = ""
 
 
 @dataclass(slots=True)
@@ -370,6 +371,7 @@ class Settings:
                 user=env("AIOPS_MYSQL_USER"),
                 password=env("AIOPS_MYSQL_PASSWORD"),
                 database=env("AIOPS_MYSQL_DATABASE", "cloud_charging_pile"),
+                timezone=env("AIOPS_MYSQL_TIMEZONE"),
             ),
             tdengine=TDengineSettings(
                 url=env("AIOPS_TDENGINE_URL", "http://127.0.0.1:16041"),

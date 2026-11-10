@@ -28,6 +28,13 @@ SCHEMA = {
 def known_facts(evidence_sets):
     names = set()
     for evidence in evidence_sets:
+        offline = evidence.get("cpms_device_offline", {}).get("data", {})
+        for group in ("top_devices", "open_incident_list"):
+            names.update(
+                row["site_name"]
+                for row in offline.get(group, {}).get("items", [])
+                if isinstance(row.get("site_name"), str)
+            )
         sites = evidence.get("cpms_site_search", {}).get("data", {}).get("records", [])
         names.update(row["name"] for row in sites if isinstance(row.get("name"), str))
         plan = evidence.get("cpms_station_plan", {}).get("data", {})
@@ -53,7 +60,12 @@ def review(reply, evidence, history, question, language, settings, history_evide
                         {
                             "question": question,
                             "reply": reply,
-                            "current_evidence": evidence,
+                            "current_evidence": {
+                                name: {k: v for k, v in item.items() if k != "offline_references"}
+                                if name == "cpms_device_offline" and isinstance(item, dict)
+                                else item
+                                for name, item in evidence.items()
+                            },
                             "conversation_history_not_current_facts": history,
                             "language": language,
                             "tool_refusals": list(tool_refusals),

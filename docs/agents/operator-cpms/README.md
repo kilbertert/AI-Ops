@@ -158,3 +158,5 @@ Dify1.17.1更新载荷需要original_provider、credentials和icon；现役命�
 先保存SOP和provider备份，草稿预览通过再正常发布；系统提示变更需要重新发布快照。
 SOP顺序实验用两个可执行顺序分别预览同题，以同轮evidence.observed_at排序；正常接口恢复草稿，
 复核正式revision未因草稿变化而推进。原始数据与页面状态只保存在私有证据目录。
+
+设备离线分析候选工具与配置、上线步骤见[离线手册](device-offline.md)；只读记录/时间关联不能代替物理故障根因。

@@ -213,6 +213,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "gateway/metrics_store.py": 2,  # 租户 id / 指标 id
     "identity/query_scope.py": 1,  # 路径段
     "identity/scope_context.py": 1,  # 路径段
+    "operator/offline_tool.py": 1,  # 离线工具设备/站点查询参数，不是订单语法
     "operator/operator_cpms.py": 3,  # 失败原因码 / 回调 siteId / 时序遥测 device
     "operator/operator_tools.py": 1,  # 工具参数名
     "operator/station_tariff.py": 1,  # 站点 id

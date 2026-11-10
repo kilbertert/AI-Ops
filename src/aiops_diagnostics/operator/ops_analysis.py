@@ -130,6 +130,7 @@ class OfflineAggregate:
     offline_minutes: int
     #: 范围内的设备总数（分母）。``None`` 表示分母没取到。
     devices_total: int | None = None
+    details: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +333,7 @@ def build_offline_contract(
         payload, language, counted=counted, surface="operations_analysis"
     )
     return {
+        **({"device_offline": aggregate.details} if aggregate.details is not None else {}),
         "incidents": aggregate.incidents if counted else None,
         "offline_devices": aggregate.offline_devices if counted else None,
         "open_incidents": aggregate.open_incidents if counted else None,
