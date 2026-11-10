@@ -304,7 +304,15 @@ class GatewayRuntime:
         return job
 
     def get_operations_analysis(self, context: ScopeContext, analysis_id: str) -> dict[str, Any] | None:
-        return self.store.get_standard_diagnosis(analysis_id, context.scope_fingerprint)
+        job = self.store.get_standard_diagnosis(analysis_id, context.scope_fingerprint)
+        if job and (job.get("result") or {}).get("_offline_references"):
+            from aiops_diagnostics.data import offline_source
+            from aiops_diagnostics.data.sources import scoped_mysql_source
+
+            with scoped_mysql_source(self.diagnostic_settings, resolve_query_scope(context)) as source:
+                offline_source.require_references(source, job["result"]["_offline_references"])
+            job["result"] = {k: v for k, v in job["result"].items() if k != "_offline_references"}
+        return job
 
     def start_operations_card(
         self,
@@ -427,16 +435,32 @@ class GatewayRuntime:
             if effective_sites == ():
                 result = self._empty_card_result(card, language, site_ids, window_start, window_end)
             else:
-                with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
-                    result = self._compute_card(
-                        card,
-                        sources,
-                        effective_sites,
-                        window_start,
-                        window_end,
-                        language,
-                        site_ids,
-                    )
+                from types import SimpleNamespace
+
+                from aiops_diagnostics.data.sources import scoped_mysql_source
+
+                if card == OPERATIONS_CARD_OFFLINE and self.diagnostic_settings.mysql.timezone:
+                    with scoped_mysql_source(self.diagnostic_settings, scope) as mysql:
+                        result = self._compute_card(
+                            card,
+                            SimpleNamespace(mysql=mysql),
+                            effective_sites,
+                            window_start,
+                            window_end,
+                            language,
+                            site_ids,
+                        )
+                else:
+                    with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
+                        result = self._compute_card(
+                            card,
+                            sources,
+                            effective_sites,
+                            window_start,
+                            window_end,
+                            language,
+                            site_ids,
+                        )
         # `except Exception`, not an enumerated tuple, and that is the whole point
         # (#700 → #721). Three separate passes added one class each time —
         # `AgentRuntimeError` (a `RuntimeError`), then `TypeError` — and each fix
@@ -529,7 +553,17 @@ class GatewayRuntime:
             window_end=parse_stored_time(window_end),
         )
         if card == OPERATIONS_CARD_OFFLINE:
-            raw = sources.mysql.aggregate_offline_incidents(effective_sites, db_start, db_end)
+            details, references = None, None
+            if self.diagnostic_settings.mysql.timezone:
+                from aiops_diagnostics.data import offline_source
+
+                raw, details = offline_source.read(
+                    sources.mysql, effective_sites, window_start, window_end, now_utc(), include_legacy=True
+                )
+                references = details.pop("references")
+                offline_source.require_references(sources.mysql, references)
+            else:
+                raw = sources.mysql.aggregate_offline_incidents(effective_sites, db_start, db_end)
             if raw is None:
                 return self._empty_card_result(card, language, site_ids, window_start, window_end)
             aggregate = OfflineAggregate(
@@ -538,11 +572,16 @@ class GatewayRuntime:
                 open_incidents=int(raw["open_incidents"]),
                 offline_minutes=int(raw["offline_minutes"]),
                 devices_total=devices_total,
+                details=details,
             )
             if aggregate.incidents == 0:
-                return build_offline_contract(aggregate, None, reason_code=REASON_NO_INCIDENTS, **window)
-            payload = self._narrative_for(card, aggregate, window)
-            return build_offline_contract(aggregate, payload, **window)
+                result = build_offline_contract(aggregate, None, reason_code=REASON_NO_INCIDENTS, **window)
+            else:
+                payload = self._narrative_for(card, aggregate, window)
+                result = build_offline_contract(aggregate, payload, **window)
+            if references is not None:
+                result["_offline_references"] = references
+            return result
         if card == OPERATIONS_CARD_PAYMENT:
             raw_payment = sources.mysql.aggregate_payment_split(effective_sites, db_start, db_end)
             if raw_payment is None:
