@@ -1187,6 +1187,14 @@ class OperatorCpms:
         with task.lock:
             self.authorize_execution(run_id, tool=tool)
             if tool in task.evidence:
+                refs = task.evidence[tool].get("offline_references")
+                if refs is not None:
+                    from aiops_diagnostics.operator import offline_tool
+
+                    try:
+                        offline_tool.require_current(self, task, refs)
+                    except SourceError as exc:
+                        raise OperatorRefused("OPERATOR_SCOPE_CHANGED") from exc
                 return task.evidence[tool]["response"]
             if (
                 tool

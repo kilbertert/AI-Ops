@@ -207,3 +207,45 @@ def test_card_with_zero_new_incidents_keeps_details_and_private_refs_off_wire(mo
     monkeypatch.setattr(sources, "scoped_mysql_source", mysql)
     observed = GatewayRuntime.get_operations_analysis(runtime, scope(), "an_test")
     assert "_offline_references" not in observed["result"]
+
+
+def test_cached_offline_tool_rechecks_device_scope(tmp_path, monkeypatch):
+    from aiops_diagnostics.data.sources import SourceError
+    from aiops_diagnostics.operator import offline_tool, operator_cpms
+    from operations.test_operator_agent import call_tool, finish
+    from operations.test_operator_cpms import HEADERS, environment, terminal
+
+    data = run([event("2026-10-30T00:00:00Z")])
+    changed = False
+
+    def require(*args):
+        if changed:
+            raise SourceError("device moved")
+
+    monkeypatch.setattr(offline_tool, "require_current", require)
+    monkeypatch.setattr(offline_tool, "query", lambda *a: (data, {"devices": [["D", "S"]], "orders": []}))
+    with environment(tmp_path, monkeypatch) as f:
+        f["candidate"]["enabled"].append(offline_tool.NAME)
+        f["publish"](f["route"].route_revision)
+
+        def dispatch(_, config, run_id):
+            nonlocal changed
+            _, headers, _ = call_tool(f, run_id, offline_tool.NAME)
+            task = f["ctx"].operator_cpms.tasks[run_id]
+            changed = True
+            response = f["client"].get(
+                task.proxy_url + "/v1/internal/operator-runs/" + run_id + "/cpms/aiops/device-offline",
+                headers={"Authorization": "Bearer " + task.grant},
+            )
+            assert response.status_code == 403, response.text
+            assert "PILE" not in response.text
+            changed = False
+            finish(f, run_id, headers, "记录只提供离线线索。", [offline_tool.NAME])
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        first = (
+            f["client"]
+            .post("/v1/assistant/questions", headers=HEADERS, json={"question": "最近离线情况"})
+            .json()
+        )
+        assert terminal(f, first["qa_id"]).json()["status"] == "completed"

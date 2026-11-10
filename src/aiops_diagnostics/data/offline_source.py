@@ -46,21 +46,27 @@ def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=Fa
             raise SourceError("离线分析设备超过上限，请缩小站点范围")
         if not devices:
             raise SourceError("没有可见设备")
-        codes = sorted({d["device_code"] for d in devices if d["device_code"]})
-        if not codes:
-            raise SourceError("设备编码缺失，无法完整读取离线事件")
         device_ids = [d["id"] for d in devices]
+        cur.execute("SHOW INDEX FROM iot_device_offline_monitor")
+        indexes = cur.fetchall()
+        if not any(
+            r["Key_name"] == "aiops_offline_device_time"
+            and r["Column_name"] == "device_id"
+            and r["Seq_in_index"] == 1
+            for r in indexes
+        ):
+            raise SourceError("离线分析缺少设备归属查询索引，请联系管理员完成部署")
         cur.execute(
             "SELECT m.id,m.tenant_id,m.device_id,d.device_code,m.site_id,m.offline_time,m.recover_time,"
             "d.id AS verified_device,d.online_status,s.name AS site_name FROM iot_device_offline_monitor m "
-            "FORCE INDEX (iot_device_offline_monitor_device_code_index)"
+            "FORCE INDEX (aiops_offline_device_time)"
             + joins
             + "WHERE "
             + where
-            + f" AND m.device_code IN ({_placeholders(len(codes))})"
+            + f" AND m.device_id IN ({_placeholders(len(device_ids))})"
             + " AND (m.offline_time IS NULL OR (m.offline_time<=%s AND (m.recover_time IS NULL"
             " OR m.recover_time>=%s OR m.recover_time<=m.offline_time))) ORDER BY m.id LIMIT %s",
-            [*params, *codes, bounds[2], bounds[0], MAX_ROWS + 1],
+            [*params, *device_ids, bounds[2], bounds[0], MAX_ROWS + 1],
         )
         events = cur.fetchall()
         cur.execute(
@@ -102,13 +108,10 @@ def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=Fa
         timezone=timezone,
     )
     result["quality"]["unverified_device_records"] = rejected
-    result["quality"]["devices_missing_code"] = sum(not d["device_code"] for d in devices)
-    result["quality"]["coverage"] = (
-        "partial" if rejected or result["quality"]["devices_missing_code"] else "current_devices"
-    )
+    result["quality"]["coverage"] = "partial" if rejected else "current_devices"
     if result["quality"]["coverage"] == "partial":
         result["order_overlap"]["share"] = None
-    result["limitations"] += " 仅覆盖当前可授权且编码可查的设备；已删除设备或历史编码变化可能缺记录。"
+    result["limitations"] += " 仅覆盖当前可授权设备；已删除设备或历史归属变化可能缺记录。"
     result["scope"] = {"site_count": len(sites) if sites is not None else None, "device_id": device_id}
     result["references"] = {
         "devices": sorted({(r["id"], r["site_id"]) for r in devices}),
