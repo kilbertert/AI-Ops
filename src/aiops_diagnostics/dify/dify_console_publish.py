@@ -2064,6 +2064,7 @@ def _native_preview(handler):
             }
         )
         deadline = _time_module.monotonic() + NATIVE_TIMEOUT_SECONDS
+        last_progress = None
         while _time_module.monotonic() < deadline:
             http_status, result = _native_gateway(handler, session, "/" + trial_id)
             if http_status != 200 or not isinstance(result, dict):
@@ -2071,6 +2072,20 @@ def _native_preview(handler):
                 return
             if result.get("status") in TRIAL_TERMINAL_STATUSES:
                 if result["status"] == "completed":
+                    if last_progress is not None:
+                        handler._sse(
+                            {
+                                **common,
+                                "id": message_id + "-answer",
+                                "event": "agent_thought",
+                                "position": 2,
+                                "thought": "",
+                                "tool": "",
+                                "tool_input": "",
+                                "observation": "",
+                                "message_files": [],
+                            }
+                        )
                     handler._sse(
                         {
                             **common,
@@ -2090,6 +2105,33 @@ def _native_preview(handler):
                     )
                 finished = True
                 return
+            progress = result.get("progress") or {}
+            phase = progress.get("phase")
+            label = {
+                "queued": "等待执行",
+                "dispatch": "正在生成并按需取证",
+                "tool": "正在查询业务记录",
+                "generating": "正在整理回答",
+                "review": "正在核对回答与证据",
+                "resample": "正在重新生成回答",
+            }.get(phase)
+            elapsed = progress.get("elapsed_ms")
+            if label and isinstance(elapsed, int) and elapsed >= 0:
+                current = (phase, elapsed // 5000)
+                if current != last_progress:
+                    handler._sse(
+                        {
+                            **common,
+                            "event": "agent_thought",
+                            "position": 1,
+                            "thought": f"执行进度：{label}（已用时 {elapsed // 1000} 秒）",
+                            "tool": "",
+                            "tool_input": "",
+                            "observation": "",
+                            "message_files": [],
+                        }
+                    )
+                    last_progress = current
             handler.wfile.write(b": waiting\n\n")
             handler.wfile.flush()
             _time_module.sleep(NATIVE_POLL_SECONDS)

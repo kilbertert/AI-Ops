@@ -7,7 +7,9 @@ import json
 import logging
 import re
 import secrets
+import sqlite3
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -357,6 +359,10 @@ class ActiveTask:
     refusals: list = field(default_factory=list)
     lock: object = field(default_factory=threading.RLock)
     completion_lock: object = field(default_factory=threading.Lock)
+    trace_lock: object = field(default_factory=threading.Lock)
+    started_at: float = field(default_factory=time.monotonic)
+    trace_failed: bool = False
+    finished_elapsed_ms: int | None = None
 
 
 class OperatorCpms:
@@ -364,6 +370,76 @@ class OperatorCpms:
         self.context = context
         self.tasks = {}
         self.lock = threading.RLock()
+
+    def _trace(self, run_id, phase, status="running", *, tool=None, duration_ms=None):
+        task = self.tasks.get(run_id)
+        if task is None or task.trace_failed:
+            return
+        with task.trace_lock:
+            if task.finished_elapsed_ms is not None:
+                return
+            event = {
+                "phase": phase,
+                "status": status,
+                "at": datetime.now(UTC).isoformat(),
+                "elapsed_ms": max(0, int((time.monotonic() - task.started_at) * 1000)),
+            }
+            if phase in {"completed", "failed", "cancelled", "expired"}:
+                task.finished_elapsed_ms = event["elapsed_ms"]
+                duration_ms = event["elapsed_ms"]
+            if tool:
+                event["tool"] = tool
+            if duration_ms is not None:
+                event["duration_ms"] = max(0, int(duration_ms))
+            try:
+                self.context.agent_run_store.record_trace(run_id, event)
+            except sqlite3.Error:
+                # 观测失败不能打断业务收尾，尤其不能留下永久 running 的问题。
+                task.trace_failed = True
+                logging.getLogger("aiops.operator").warning("operator_trace_unavailable")
+
+    def progress(self, caller, qa_id, qa=None):
+        """只在调用方完成当前入口授权后读取；不包含业务对象或答案。"""
+        run = self.context.agent_run_store.by_qa(qa_id)
+        if run is None or not operator_agent.is_agent(run):
+            return None
+        caller = self.refresh_scope(caller, allow_empty=True)
+        if run.scope_fingerprint != caller.scope_fingerprint:
+            return None
+        task = self.tasks.get(run.run_id)
+        if run.state in {"issued", "running"} and expired(run):
+            run = self.context.agent_run_store.get(run.run_id)
+        if run.state == "expired" and qa is not None and qa["status"] in QUESTION.active:
+            self.context.store.update_assistant_question(qa_id, status="expired")
+            qa.update(status="expired", result=None)
+        terminal = run.state not in {"issued", "running", "succeeded"} or (
+            qa is not None and qa["status"] == "completed"
+        )
+        phase = {"succeeded": "completed", "revoked": "cancelled"}.get(run.state, run.state)
+        if terminal and task is not None:
+            self._trace(run.run_id, phase, phase)
+            run = self.context.agent_run_store.by_qa(qa_id)
+        last = run.trace[-1] if run.trace else {}
+        if not terminal:
+            phase = last.get("phase", "queued")
+            if phase == "tool" and last.get("status") != "running":
+                phase = "generating"
+        if task is not None and task.trace_failed:
+            elapsed_ms = None
+        elif terminal and task is not None and task.finished_elapsed_ms is not None:
+            elapsed_ms = task.finished_elapsed_ms
+        elif terminal and last.get("phase") in {"completed", "failed", "cancelled", "expired"}:
+            elapsed_ms = last["elapsed_ms"]
+        elif task is not None:
+            elapsed_ms = int((time.monotonic() - task.started_at) * 1000)
+        else:
+            elapsed_ms = None  # 缺少持久终点时，不用另一种时钟猜出精确耗时。
+        return {
+            "phase": phase,
+            "elapsed_ms": max(0, elapsed_ms) if elapsed_ms is not None else None,
+            "tool_count": len({e["tool"] for e in run.trace if e.get("tool") and e["status"] == "succeeded"}),
+            "resamples": sum(e["phase"] == "resample" for e in run.trace),
+        }
 
     def console_identity(self, session):
         settings = self.context.settings
@@ -1164,13 +1240,24 @@ class OperatorCpms:
 
     def proxy(self, run_id, grant, path, query, method="GET"):
         task = self.tasks.get(run_id)
+        started = time.monotonic()
         try:
-            return self._proxy(run_id, grant, path, query, method)
+            result = self._proxy(run_id, grant, path, query, method)
+            run = self.context.agent_run_store.peek(run_id)
+            tool = _proxy_tool(task, run, method, path, query)
+            self._trace(
+                run_id, "tool", "succeeded", tool=tool, duration_ms=(time.monotonic() - started) * 1000
+            )
+            return result
         except OperatorRefused as exc:
             if task is not None:
                 run = self.context.agent_run_store.get(run_id)
                 tool = _proxy_tool(task, run, method, path, query) if run else None
                 self._note_refusal(task, tool, exc)
+                if tool and secrets.compare_digest(task.grant, grant):
+                    self._trace(
+                        run_id, "tool", "refused", tool=tool, duration_ms=(time.monotonic() - started) * 1000
+                    )
             raise
 
     def _proxy(self, run_id, grant, path, query, method):
@@ -1187,6 +1274,7 @@ class OperatorCpms:
             raise OperatorRefused("OPERATOR_PATH_REJECTED")
         with task.lock:
             self.authorize_execution(run_id, tool=tool)
+            self._trace(run_id, "tool", tool=tool)
             if tool in task.evidence:
                 if tool == communication.NAME:
                     communication.require_current(self, task, run)
@@ -1585,6 +1673,8 @@ class OperatorCpms:
                 raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
             self._authorize_snapshot(task, previous)
             history_evidence.append(previous.snapshot.get("evidence", {}))
+        self._trace(run_id, "review")
+        review_started = time.monotonic()
         review = operator_answer_review.review(
             result["blocks"][0]["text"],
             evidence,
@@ -1594,6 +1684,12 @@ class OperatorCpms:
             self.context.runtime.diagnostic_settings.agent,
             history_evidence,
             tool_refusals=list(task.refusals),
+        )
+        self._trace(
+            run_id,
+            "review",
+            "succeeded" if review["verdict"] == "allow" else "refused",
+            duration_ms=(time.monotonic() - review_started) * 1000,
         )
         if review["verdict"] != "allow":
             raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
@@ -1696,6 +1792,7 @@ class OperatorCpms:
             # 已有取证固定在本run，最多一次重派，持续失败明确终止。
             while True:
                 try:
+                    self._trace(run_id, "dispatch")
                     dispatcher.dispatch(config, run_id)
                 except AgentRunDispatchError:
                     self._raise_node_failure(run_id)
@@ -1704,6 +1801,7 @@ class OperatorCpms:
                     if task.resamples >= MAX_RESAMPLES:
                         raise
                     task.resamples += 1
+                    self._trace(run_id, "resample")
                     logging.getLogger("aiops.operator").warning(
                         "operator_resample attempt=%d reason=dispatch_refused", task.resamples
                     )
@@ -1715,6 +1813,7 @@ class OperatorCpms:
                 if task.resamples >= MAX_RESAMPLES:
                     raise OperatorRefused("OPERATOR_MODEL_OUTPUT_UNSTABLE")
                 task.resamples += 1
+                self._trace(run_id, "resample")
                 logging.getLogger("aiops.operator").warning(
                     "operator_resample attempt=%d reason=no_answer_accepted", task.resamples
                 )
@@ -1722,6 +1821,7 @@ class OperatorCpms:
             current = task.authorize()
             result = self.authorize_readback(current, qa_id, task.bearer)
             if store.update_assistant_question(qa_id, status="completed", result=result):
+                self._trace(run_id, "completed", "succeeded")
                 self.context.runtime._complete_conversation_turn(
                     task.conversation_turn,
                     task.question,
@@ -1730,6 +1830,7 @@ class OperatorCpms:
                     active_order_no=self.context.agent_run_store.get(run_id).order_no or None,
                 )
         except Exception as exc:  # noqa: BLE001 - 后台失败必须收敛，凭据及上游正文不进日志。
+            self._trace(run_id, "failed", "failed")
             reason = _failure_reason(exc)
             if not self.context.agent_run_store.fail(run_id, "operator_failed"):
                 self.context.agent_run_store.refuse(run_id, "operator_failed")
