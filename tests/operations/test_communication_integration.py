@@ -41,7 +41,10 @@ def test_empty_sources_are_delivered_as_independent_results(operator, monkeypatc
     snapshot = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"]).snapshot
     data = snapshot["evidence"][communication.NAME]["data"]
     assert all(s["status"] == "empty" and s["total"] == 0 for s in data["sources"])
-    assert [p["deviceId"] for p in f["state"]["tsdata_calls"]] == [
+    calls = sorted(
+        f["state"]["tsdata_calls"], key=lambda p: [s[0] for s in communication.SOURCES].index(p["table"])
+    )
+    assert [p["deviceId"] for p in calls] == [
         "PILE-1",
         "PILE-1",
         "PILE-1-1",

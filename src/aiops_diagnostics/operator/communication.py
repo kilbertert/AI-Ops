@@ -1,10 +1,13 @@
 """订单通讯与事件的有界候选元数据；不交付未知报文正文。"""
 
 import re
-from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, wait
+from datetime import timedelta
+from threading import BoundedSemaphore
+from time import monotonic
 from zoneinfo import ZoneInfo
 
-from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
 from aiops_diagnostics.operator.device_offline import instant
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused
 
@@ -21,12 +24,30 @@ SOURCES = (
     ("charging-gun_fi", "childDeviceCode", "functionId"),
 )
 LIMIT = SOURCE_LIMIT * len(SOURCES)
+SOURCE_BUDGET_SECONDS = 4.0
+# 进程级有界；超时底层读取仍占槽位，后续请求不会堆积线程或排队任务。
+_SOURCE_POOL = ThreadPoolExecutor(max_workers=len(SOURCES), thread_name_prefix="order-source")
+_SOURCE_SLOTS = BoundedSemaphore(len(SOURCES))
+
+
+def _read_before(read, url, payload, deadline):
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError
+    result = read(url, payload, timeout=remaining)
+    if monotonic() > deadline:
+        raise TimeoutError
+    return result
+
+
+def valid_device_code(value):
+    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value) is not None
 
 
 def order_window(detail, as_of, timezone):
     """沿用已声明业务时区；不从枪编码猜父设备，不把无效停时当充电中。"""
     device = detail.get("deviceCode")
-    if not isinstance(device, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", device):
+    if not valid_device_code(device):
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     try:
         zone = ZoneInfo(timezone)
@@ -64,7 +85,7 @@ def _records(data, device, bounds, event_field):
         or (not rows and count != 0)
     ):
         raise ValueError("invalid source page")
-    start, end = (datetime.fromisoformat(bounds[k]) for k in ("window_start", "window_end"))
+    start, end = (parse_stored_time(bounds[k]) for k in ("window_start", "window_end"))
     zone, previous, result = ZoneInfo(bounds["timezone"]), start, []
     for row in rows:
         if not isinstance(row, dict) or row.get("device") != device:
@@ -85,11 +106,12 @@ def _records(data, device, bounds, event_field):
 
 
 def read_sources(detail, bounds, base, read):
-    sources = []
+    sources, pending = [], []
+    deadline = monotonic() + SOURCE_BUDGET_SECONDS
     zone = ZoneInfo(bounds["timezone"])
     # QueryRequest 使用源库本地时间，与既有 charging_timeline 的门面合同相同。
     start, end = (
-        datetime.fromisoformat(bounds[k]).astimezone(zone).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        parse_stored_time(bounds[k]).astimezone(zone).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         for k in ("window_start", "window_end")
     )
     for table, device_key, event_field in SOURCES:
@@ -104,14 +126,19 @@ def read_sources(detail, bounds, base, read):
         }
         sources.append(source)
         device = detail.get(device_key)
-        if not isinstance(device, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", device):
+        if not valid_device_code(device):
             source["reason"] = "missing_device"
             continue
         if not base:
             source["reason"] = "source_not_configured"
             continue
+        if not _SOURCE_SLOTS.acquire(blocking=False):
+            source["reason"] = "source_busy"
+            continue
         try:
-            data = read(
+            future = _SOURCE_POOL.submit(
+                _read_before,
+                read,
                 base.rstrip("/") + "/tdadmin/data/query",
                 {
                     "table": table,
@@ -124,8 +151,26 @@ def read_sources(detail, bounds, base, read):
                     "page": 1,
                     "pageSize": SOURCE_LIMIT,
                 },
+                deadline,
             )
+        except BaseException:
+            _SOURCE_SLOTS.release()
+            raise
+        future.add_done_callback(lambda _: _SOURCE_SLOTS.release())
+        pending.append((source, future, device, event_field))
+    if pending:
+        wait([item[1] for item in pending], timeout=max(0, deadline - monotonic()))
+    for source, future, device, event_field in pending:
+        if not future.done():
+            future.cancel()
+            source["reason"] = "source_timeout"
+            continue
+        try:
+            data = future.result()
             rows, count = _records(data, device, bounds, event_field)
+        except TimeoutError:
+            source["reason"] = "source_timeout"
+            continue
         except OperatorRefused as exc:
             if str(exc) != "TSDATA_UNAVAILABLE":
                 raise
@@ -168,10 +213,6 @@ def query(owner, task, run, read):
     detail = require_current(owner, task, run)
     bounds = order_window(detail, now_utc(), owner.context.runtime.diagnostic_settings.mysql.timezone)
 
-    def authorized_read(url, payload):
-        owner.authorize_execution(run.run_id, tool=NAME)
-        return read(url, payload)
-
-    result = read_sources(detail, bounds, owner.context.settings.operator_tsdata_url, authorized_read)
+    result = read_sources(detail, bounds, owner.context.settings.operator_tsdata_url, read)
     require_current(owner, task, run)
     return result

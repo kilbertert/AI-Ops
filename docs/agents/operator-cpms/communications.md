@@ -62,7 +62,7 @@
 最多覆盖创建起 24 小时，超出时保留原结束点并标明窗口截断；固定五源每源12行，合计最多60行，保持在原64行总上限内。没有父设备不从枪编码反推，不回退查询整个站点。
 
 每源返回 `status=records/empty/unavailable`。`unavailable` 的 `total/truncated` 为 null，
-原因区分未配置、缺设备、源不可用、响应无效；不回传 HTTP 错误正文。`empty` 只表示查询
+原因区分未配置、缺设备、源不可用、响应无效、取源超时和取源繁忙；不回传 HTTP 错误正文。`empty` 只表示查询
 成功且当前有界窗口0条。返回行逐个核对设备标签、时间窗口与升序，未知字段一律丢弃。
 行只含 `ts/event/association`，`event` 是原事件名或调用名（通讯行可空），
 `association=device_window_candidate` 明确不是订单关联。来源不会互相替代。
@@ -122,3 +122,14 @@ uv run python tools/verification/verify_node_capabilities.py \
 
 `No tests to run`仅表示没有JUnit套件，不是行为通过。实际Java装配与工具HTTP投影证据
 见本次[集成验证回执](../../validation/2026-11-10-operator-communication-integration.md)。
+
+### 并发与耗时边界
+
+五个固定源共用4秒取源预算，最多5个进程级工作线程/在途请求；满额直接报告`source_busy`，
+不排队。到截止点未完成的源为`source_timeout`，总数未知；源返回顺序仍按工具固定声明。
+授权与订单范围在取源前后分别核验，耗时或上游错误不会省略这些检查。
+HTTP读取显式接收剩余`timeout`，慢滴流等尚未退出的底层任务继续占槽，迟到结果不能改已交付字段。
+不改Java工具10秒HTTP时限；公司身份/订单查验与宿主调度仍可能消耗预算外时间。
+
+父会话已通过DESCRIBE确认event为NCHAR、functionId为VARCHAR、_ts为TIMESTAMP；
+门面时间为UTC ISO，仍没有comm表。上述列事实不产生新的正文或关联能力。
