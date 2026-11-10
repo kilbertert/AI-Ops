@@ -104,11 +104,14 @@ def analyze(events, orders, *, start, end, as_of, timezone):
             "incidents": len(merged(spans)),
             "raw_events": raw_count[key],
             "new_events": new_count[key],
-            "offline_seconds": seconds(spans),
+            "offline_seconds": None if key in invalid_devices else seconds(spans),
+            "known_offline_seconds": seconds(spans),
+            "duration_complete": key not in invalid_devices,
         }
-        for key, spans in intervals.items()
+        for key in sorted(set(intervals) | invalid_devices)
+        for spans in [intervals.get(key, [])]
     ]
-    top.sort(key=lambda row: (-row["offline_seconds"], -row["incidents"], row["device_id"]))
+    top.sort(key=lambda row: (-row["known_offline_seconds"], -row["incidents"], row["device_id"]))
     current = [
         {
             **by_device[key],
@@ -201,11 +204,17 @@ def analyze(events, orders, *, start, end, as_of, timezone):
         "summary": {
             "new_events": sum(new_count.values()),
             "devices": len(top),
-            "offline_seconds": None if invalid_devices else sum(r["offline_seconds"] for r in top),
-            "known_offline_seconds": sum(r["offline_seconds"] for r in top),
+            "offline_seconds": None if invalid_devices else sum(r["known_offline_seconds"] for r in top),
+            "known_offline_seconds": sum(r["known_offline_seconds"] for r in top),
             "unknown_duration_devices": len(invalid_devices),
         },
-        "top_devices": {"total": len(top), "truncated": len(top) > 10, "items": top[:10]},
+        "top_devices": {
+            "total": len(top),
+            "truncated": len(top) > 10,
+            "items": top[:10],
+            "ordering": "known_duration_desc",
+            "ranking_complete": not bool(invalid_devices),
+        },
         "open_incident_list": {
             "as_of": format_stored_time(now),
             "total": len(current),

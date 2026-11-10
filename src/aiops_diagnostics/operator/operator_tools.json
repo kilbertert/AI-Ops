@@ -764,9 +764,13 @@
               "offline_time": null,
               "seconds_open": null,
               "unclosed_events": null,
-              "platform_state_conflict": null
+              "platform_state_conflict": null,
+              "known_offline_seconds": null,
+              "duration_complete": null
             }
-          ]
+          ],
+          "ordering": null,
+          "ranking_complete": null
         },
         "open_incident_list": {
           "as_of": null,

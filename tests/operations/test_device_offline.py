@@ -260,3 +260,19 @@ def test_cached_offline_tool_rechecks_device_scope(tmp_path, monkeypatch):
             .json()
         )
         assert terminal(f, first["qa_id"]).json()["status"] == "completed"
+
+
+def test_ranking_does_not_present_partial_device_duration_as_complete():
+    result = run(
+        [
+            event("2026-11-01T01:00:00Z", "2026-11-01T03:00:00Z"),
+            event(None, "2026-11-01T04:00:00Z"),
+            event("2026-11-01T00:00:00Z", "2026-11-01T03:30:00Z", device_id="D2"),
+        ]
+    )
+    rows = {r["device_id"]: r for r in result["top_devices"]["items"]}
+    assert rows["D"]["offline_seconds"] is None
+    assert rows["D"]["known_offline_seconds"] == 7200
+    assert not rows["D"]["duration_complete"]
+    assert not result["top_devices"]["ranking_complete"]
+    assert result["top_devices"]["ordering"] == "known_duration_desc"
