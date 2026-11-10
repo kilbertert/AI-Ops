@@ -839,6 +839,69 @@
       "applies_to": [
         "operator_conversation"
       ]
+    },
+    {
+      "name": "cpms_order_communications",
+      "description": "Read bounded communication and charging-event metadata for an authorized order. Read and deliver order detail first. The gateway derives parent/gun devices and the order window, capped at 24 hours and 12 rows per source (60 total). Each source distinguishes empty from unavailable. All rows are device-window candidates, NOT proven order transactions. No raw payload, decoded body or unverified direction/code is returned. Use for explicit communication/event/log questions; do not replace source gaps with old answers. Optional order_no must refer to the user-selected order.",
+      "inputs": [
+        "order_no"
+      ],
+      "model_inputs": [
+        "order_no"
+      ],
+      "applies_to": [
+        "order"
+      ],
+      "request": {
+        "method": "GET",
+        "path_template": "/tsdata/orderCommunications/{order_no}",
+        "query": []
+      },
+      "source": "tsdata.order_communications",
+      "response": {
+        "kind": "object",
+        "row_path": "value"
+      },
+      "evidence_fields": [
+        "device",
+        "window_start",
+        "window_end",
+        "order_window_end",
+        "window_truncated",
+        "timezone",
+        "sample_limit",
+        "sources",
+        "association",
+        "limitations"
+      ],
+      "evidence_shape": {
+        "device": null,
+        "window_start": null,
+        "window_end": null,
+        "order_window_end": null,
+        "window_truncated": null,
+        "timezone": null,
+        "sample_limit": null,
+        "sources": [
+          {
+            "table": null,
+            "status": null,
+            "reason": null,
+            "records": [
+              {
+                "ts": null,
+                "event": null,
+                "association": null
+              }
+            ],
+            "total": null,
+            "truncated": null,
+            "sample_limit": null
+          }
+        ],
+        "association": null,
+        "limitations": null
+      }
     }
   ]
 }

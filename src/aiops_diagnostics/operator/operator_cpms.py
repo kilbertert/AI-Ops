@@ -36,6 +36,7 @@ from aiops_diagnostics.identity.order_identity import is_order_identifier
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
 from aiops_diagnostics.operator import (
+    communication,
     operator_agent,
     operator_answer_review,
     operator_conversation,
@@ -1275,6 +1276,8 @@ class OperatorCpms:
             self.authorize_execution(run_id, tool=tool)
             self._trace(run_id, "tool", tool=tool)
             if tool in task.evidence:
+                if tool == communication.NAME:
+                    communication.require_current(self, task, run)
                 refs = task.evidence[tool].get("offline_references")
                 if refs is not None:
                     from aiops_diagnostics.operator import offline_tool
@@ -1291,6 +1294,7 @@ class OperatorCpms:
                     "cpms_order_tariff",
                     "cpms_order_billing",
                     TIMELINE_TOOL,
+                    communication.NAME,
                 )
                 and TOOL_NAMES[0] not in task.delivered
             ):
@@ -1397,6 +1401,25 @@ class OperatorCpms:
                     "data": data,
                 }
                 task.evidence[tool]["response"] = response
+                return task.evidence[tool]["response"]
+            if tool == communication.NAME:
+                data = communication.query(self, task, run, tsdata_query)
+                task.evidence[tool] = {
+                    "tool": tool,
+                    "inputs": tool_inputs(tool, run_values(tool, run.order_no, task.arguments.get(tool))),
+                    "source": _declared(tool).source,
+                    "observed_at": format_stored_time(now_utc()),
+                    "data": data,
+                    "response": {
+                        "code": 0,
+                        "data": {
+                            "orderNo": run.order_no,
+                            "siteId": task.order_site_id,
+                            "tenantId": task.caller.effective_tenant_id,
+                            "value": data,
+                        },
+                    },
+                }
                 return task.evidence[tool]["response"]
             if tool == TIMELINE_TOOL:
                 # 范围不经 `validate_body`（行上没有订单/租户字段）：设备与窗口
