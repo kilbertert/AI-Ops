@@ -2,6 +2,7 @@
 
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from aiops_diagnostics.operator import operator_answer_review, operator_cpms
 from operations.test_operator_cpms import HEADERS, node, operator, request, terminal  # noqa: F401
@@ -68,3 +69,38 @@ def test_trace_is_bounded_and_survives_snapshot_updates(operator, monkeypatch): 
     assert saved.state == run.state and saved.snapshot == run.snapshot
     assert len(saved.trace) == 128 and saved.trace[0] == first
     assert saved.trace[-1]["elapsed_ms"] == 149
+
+
+def test_cancel_does_not_wait_for_tool_lock(operator, monkeypatch):  # noqa: F811
+    entered, release = threading.Event(), threading.Event()
+
+    def dispatch(_, config, run):
+        with operator["ctx"].operator_cpms.tasks[run].lock:
+            entered.set()
+            assert release.wait(5)
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    qa = request(operator["client"]).json()["qa_id"]
+    assert entered.wait(5)
+    with ThreadPoolExecutor() as pool:
+        stopped = pool.submit(
+            operator["client"].post, "/v1/assistant/questions/" + qa + "/cancel", headers=HEADERS
+        )
+        try:
+            assert stopped.result(timeout=1).json()["status"] == "cancelled"
+        finally:
+            release.set()
+
+
+def test_failed_readback_is_not_recorded_as_completed(operator, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, config, run: node(operator, run))
+
+    def withdrawn(*args):
+        raise operator_cpms.OperatorRefused("OPERATOR_RESULT_RETRACTED")
+
+    monkeypatch.setattr(operator["ctx"].operator_cpms, "authorize_readback", withdrawn)
+    qa = request(operator["client"]).json()["qa_id"]
+    assert terminal(operator, qa).json()["status"] == "failed"
+    trace = operator["ctx"].agent_run_store.by_qa(qa).trace
+    assert trace[-1]["phase"] == "failed"
+    assert not any(event["phase"] == "completed" for event in trace)

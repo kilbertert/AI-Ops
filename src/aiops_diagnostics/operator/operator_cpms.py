@@ -358,6 +358,7 @@ class ActiveTask:
     refusals: list = field(default_factory=list)
     lock: object = field(default_factory=threading.RLock)
     completion_lock: object = field(default_factory=threading.Lock)
+    trace_lock: object = field(default_factory=threading.Lock)
     started_at: float = field(default_factory=time.monotonic)
     trace_failed: bool = False
     finished_elapsed_ms: int | None = None
@@ -373,7 +374,7 @@ class OperatorCpms:
         task = self.tasks.get(run_id)
         if task is None or task.trace_failed:
             return
-        with task.lock:
+        with task.trace_lock:
             if task.finished_elapsed_ms is not None:
                 return
             event = {
@@ -410,7 +411,9 @@ class OperatorCpms:
         if run.state == "expired" and qa is not None and qa["status"] in {"queued", "running"}:
             self.context.store.update_assistant_question(qa_id, status="expired")
             qa.update(status="expired", result=None)
-        terminal = run.state not in {"issued", "running"}
+        terminal = run.state not in {"issued", "running", "succeeded"} or (
+            qa is not None and qa["status"] == "completed"
+        )
         phase = {"succeeded": "completed", "revoked": "cancelled"}.get(run.state, run.state)
         if terminal and task is not None:
             self._trace(run.run_id, phase, phase)
@@ -1720,7 +1723,6 @@ class OperatorCpms:
                 if latest is not None and latest.state in {"failed", "revoked", "expired"}:
                     return self._absorb_superseded(run_id, superseded)
                 raise OperatorRefused("OPERATOR_COMPLETE_REJECTED")
-            self._trace(run_id, "completed", "succeeded")
             return {"run_id": run_id, "state": completed.state}
 
     def _untouched(self, run_id, task) -> bool:
@@ -1796,6 +1798,7 @@ class OperatorCpms:
             current = task.authorize()
             result = self.authorize_readback(current, qa_id, task.bearer)
             if store.update_assistant_question(qa_id, status="completed", result=result):
+                self._trace(run_id, "completed", "succeeded")
                 self.context.runtime._complete_conversation_turn(
                     task.conversation_turn,
                     task.question,
