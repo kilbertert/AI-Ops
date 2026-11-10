@@ -40,6 +40,17 @@
 COMM25项通过；LOG独立3组API/分页/权限输入通过，作者另有完整Chromium6项。
 以上不相加为“业务通过率”；实际模型与原页面另按上表计。
 
+独立会话以脱敏标识关联私有证据索引 `order-feedback-20261110/evidence-index.json`；
+索引保存完整会话标识、文件名与SHA256，原件不进入公开仓库。
+
+| 执行标识（会话尾段） | 实际模型 | 判据与私有回执 |
+|---|---|---|
+| RUN-H（70994f971de5） | Codex原生默认；精确后端模型标识未取得 | 本仓RUN-01/02、取消及时间合同；run-hack.md / run-hack-retest.md / run-hack-final.md |
+| COMM-H（70994f971de5，后继独立轮） | 同上；不是COMM实现者 | COMM-01、已核上游字段与最后授权；comm-independent-hack.md |
+| LOG-H（b10bf8a12207） | Codex原生默认；精确后端模型标识未取得 | LOG-01、本人应用/租户/当前范围合同；log-independent-hack.md |
+
+私有证据集合名与本次任务一致，受控运维记录持有其位置；不得用候选代码输出反推判据。
+
 ## H5 配套状态
 
 公司MR !148：本地完整构建594文件、11项Chromium验证及2项构建配置检查通过；
