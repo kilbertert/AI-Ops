@@ -100,11 +100,13 @@ _SOURCE_LABELS = {
         "cpms_order_amount_check": "订单金额核验",
         "cpms_order_process_stats": "充电过程统计",
         "cpms_charging_timeline": "充电枪时序遥测",
+        "cpms_order_communications": "订单窗口事件候选与通讯源状态",
         "cpms_site_search": "可见站点查询",
         "cpms_station_plan": "未来充电费用方案",
     },
     "zh-Hant": {
         "heading": "【本輪資料來源】",
+        "cpms_order_communications": "訂單窗口事件候選與通訊來源狀態",
         "cpms_order_detail": "訂單詳情",
         "cpms_charging_samples": "充電監測樣本",
         "cpms_order_tariff": "訂單歷史計費模板",
@@ -116,6 +118,7 @@ _SOURCE_LABELS = {
     },
     "en": {
         "heading": "Sources used for this answer",
+        "cpms_order_communications": "Order-window event candidates and communication source status",
         "cpms_device_offline": "Recorded device outages and overlapping orders",
         "cpms_order_detail": "Order details",
         "cpms_charging_samples": "Charging telemetry samples",

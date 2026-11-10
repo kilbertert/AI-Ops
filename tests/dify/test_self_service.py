@@ -80,50 +80,17 @@ def managed(operator, monkeypatch, tmp_path):
     monkeypatch.setattr(prepare, "knowledge_connection", lambda *_: "workspace-api")
     monkeypatch.setattr(prepare, "workspace", workspace)
     monkeypatch.setattr(prepare, "dependencies", lambda *_: "provider-id")
+    # 复制的源版本由operator夹具发布；合成Dify草稿必须使用同一份已选工具集合。
     mc = {
-        "pre_prompt": "SOP_ONE",
+        "pre_prompt": f["candidate"]["prompt"],
         "model": {"name": "aiops-api"},
         "agent_mode": {
             "tools": [
-                {
-                    "provider_id": "provider-id",
-                    "provider_type": "api",
-                    "tool_name": "cpms_order_detail",
-                    "enabled": True,
-                },
-                {
-                    "provider_id": "provider-id",
-                    "provider_type": "api",
-                    "tool_name": "cpms_charging_samples",
-                    "enabled": True,
-                },
-                # 源应用声明了它就发布它：清单里的工具集来自源应用的勾选，
-                # 不是代码里的默认值。
-                {
-                    "provider_id": "provider-id",
-                    "provider_type": "api",
-                    "tool_name": "cpms_site_search",
-                    "enabled": True,
-                },
-                {
-                    "provider_id": "provider-id",
-                    "provider_type": "api",
-                    "tool_name": "cpms_order_tariff",
-                    "enabled": True,
-                },
-                {
-                    "provider_id": "provider-id",
-                    "provider_type": "api",
-                    "tool_name": "cpms_order_billing",
-                    "enabled": True,
-                },
+                {"provider_id": "provider-id", "provider_type": "api", "tool_name": name, "enabled": True}
+                for name in f["candidate"]["enabled"]
             ]
         },
     }
-    for name in ("cpms_order_amount_check", "cpms_order_process_stats", "cpms_charging_timeline"):
-        mc["agent_mode"]["tools"].append(
-            {"provider_id": "provider-id", "provider_type": "api", "tool_name": name, "enabled": True}
-        )
     service.console = SimpleNamespace(_call=lambda *_: {"model_config": mc})
     calls = []
 
