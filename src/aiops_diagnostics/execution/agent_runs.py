@@ -313,6 +313,9 @@ class AgentRun:
     #: 签发时记录的语言。回读按它重算，不再枚举一组语言去猜；旧行为 ``None``。
     language: str | None = None
 
+    #: 执行元数据独立于业务快照，迟到证据和结果覆盖不能抹掉阶段记录。
+    trace: tuple[dict[str, Any], ...] = ()
+
     @property
     def exec_config_confirmed(self) -> bool:
         """核对过**且**一致。``expected`` 只说明签发时固定了期望，不是核对。"""
@@ -454,6 +457,7 @@ class AgentRunStore:
                 # 签发时记录的语言：回读按它重算，不再枚举一组语言去猜（PRD #1371）。
                 # 旧行保持 NULL，读取时回落到默认语言，不回填、不猜。
                 ("language", "TEXT"),
+                ("trace_json", "TEXT"),
             ):
                 if name not in columns:
                     connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {kind}")
@@ -559,6 +563,25 @@ class AgentRunStore:
         with self._connection() as connection:
             row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return _run_from_row(row) if row else None
+
+    def record_trace(self, run_id: str, event: dict[str, Any]) -> None:
+        """有界执行元数据；不修改运行状态或结果交付时效。"""
+        if set(event) - {"phase", "status", "at", "elapsed_ms", "duration_ms", "tool"}:
+            raise ValueError("unexpected trace field")
+        with self._connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT trace_json FROM agent_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                return
+            trace = json.loads(row["trace_json"] or "[]")
+            # 保留起点和最新127个事件，重复调用不能无限增大账本。
+            trace = (trace[:1] + trace[-126:]) if len(trace) >= 128 else trace
+            trace.append(event)
+            connection.execute(
+                "UPDATE agent_runs SET trace_json = ? WHERE run_id = ?",
+                (json.dumps(trace, ensure_ascii=False), run_id),
+            )
 
     def has_succeeded_for_tenant(self, tenant_id: str) -> bool:
         """该租户的管家端有没有一条真实成功运行——渠道"已接入"的观测证据。
@@ -1018,6 +1041,7 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         publication_app_id=row["publication_app_id"],
         # 迁移保证这一列一定存在；旧行是 NULL，读取时由调用方回落到默认语言。
         language=row["language"],
+        trace=tuple(json.loads(row["trace_json"] or "[]")),
     )
 
 

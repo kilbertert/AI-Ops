@@ -2656,6 +2656,7 @@ def create_gateway_app(
         ):
             raise StandardAPIError(404, "TRIAL_NOT_FOUND", "trial not found")
         qa = context.runtime.cancel_assistant_qa(caller, trial_id)
+        context.operator_cpms.progress(caller, trial_id, qa)
         return {"trial_id": trial_id, "status": qa["status"]}
 
     @app.get("/v1/dify/trial/{trial_id}")
@@ -2685,6 +2686,7 @@ def create_gateway_app(
             qa = context.store.get_assistant_question(trial_id, caller.scope_fingerprint)
             if qa is None or not str(qa.get("internal_run_id", "")).startswith(operator_cpms.PREFIX):
                 raise StandardAPIError(404, "TRIAL_NOT_FOUND", "trial not found")
+            progress = context.operator_cpms.progress(caller, trial_id, qa)
             result = None
             if qa["status"] == "completed":
                 rendered = context.operator_cpms.authorize_readback(caller, trial_id, bearer)
@@ -2694,6 +2696,7 @@ def create_gateway_app(
                 "status": qa["status"],
                 "result": result,
                 "error_code": qa.get("error_code"),
+                "progress": progress,
                 "error_message": _qa_user_message(language, qa.get("error_code"))
                 if qa.get("error_code")
                 else None,
@@ -3297,7 +3300,11 @@ def create_gateway_app(
             )
         _require_current_chat_order(context, caller, qa, request)
         response.headers["Cache-Control"] = "no-store"
-        return _assistant_question_response(qa, language)
+        progress = context.operator_cpms.progress(caller, qa_id, qa)
+        return {
+            **_assistant_question_response(qa, language),
+            "progress": progress,
+        }
 
     @app.post("/v1/assistant/questions/{qa_id}/cancel")
     def cancel_assistant_question(
@@ -3331,6 +3338,7 @@ def create_gateway_app(
             )
         _require_current_chat_order(context, caller, qa, request)
         response.headers["Cache-Control"] = "no-store"
+        context.operator_cpms.progress(caller, qa_id, qa)
         return _assistant_question_response(qa, language)
 
     @app.get("/v1/assistant/questions")
