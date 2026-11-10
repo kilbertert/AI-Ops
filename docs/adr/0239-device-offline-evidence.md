@@ -33,3 +33,9 @@ Status: Accepted
 
 质量计数仅描述本次历史/当前候选：已知起止均在窗口前的倒置事件不作全库扫描，
 若调用方已提供该行则可记质量，但不进入当前排行或完整性分母。
+
+上线复验发现数据库默认READ COMMITTED，不能依赖其默认值获得一致性。离线读面在专属连接中，
+先SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ，再START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY；
+其他查询仍使用原默认，授权回读另起连接。只改变当前短生命周期连接，不修改数据库全局设置。
+映射依据：[MySQL 8 SET TRANSACTION](https://dev.mysql.com/doc/refman/8.0/en/set-transaction.html)与
+[一致性读](https://dev.mysql.com/doc/refman/8.0/en/innodb-consistent-read.html)。

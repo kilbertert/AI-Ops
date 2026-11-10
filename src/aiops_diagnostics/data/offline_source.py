@@ -36,7 +36,7 @@ def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=Fa
         " AND d.tenant_id=m.tenant_id AND d.site_id=m.site_id"
         " LEFT JOIN ch_site s ON s.id=m.site_id AND s.tenant_id=m.tenant_id "
     )
-    with source._cursor() as cur:
+    with source._cursor(consistent_snapshot=True) as cur:
         cur.execute("SELECT @@transaction_isolation AS isolation_level")
         if cur.fetchone()["isolation_level"] != "REPEATABLE-READ":
             raise SourceError("离线分析需要一致性读取")
