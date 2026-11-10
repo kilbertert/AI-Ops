@@ -677,6 +677,161 @@
         "window_start": null,
         "window_end": null
       }
+    },
+    {
+      "name": "cpms_device_offline",
+      "description": "Analyze recorded device offline periods, current unclosed records and overlapping orders in the authorized scope. Omit start/end for last 7 days or supply both RFC3339 timestamps with offset, maximum 31 days. Optional site_id/device must be named by the user or obtained from prior authorized evidence. Empty scope means current visible sites, never cross-tenant. Recorded overlap is not proof of physical cause.",
+      "inputs": [
+        "start",
+        "end",
+        "site_id",
+        "device"
+      ],
+      "model_inputs": [
+        "start",
+        "end",
+        "site_id",
+        "device"
+      ],
+      "request": {
+        "method": "GET",
+        "path_template": "/aiops/device-offline",
+        "query": [
+          {
+            "name": "start",
+            "from": "start"
+          },
+          {
+            "name": "end",
+            "from": "end"
+          },
+          {
+            "name": "site_id",
+            "from": "site_id"
+          },
+          {
+            "name": "device",
+            "from": "device"
+          }
+        ]
+      },
+      "source": "cpms.deviceOfflineRecords",
+      "response": {
+        "kind": "object",
+        "row_path": "value"
+      },
+      "evidence_fields": [
+        "schema",
+        "as_of",
+        "window",
+        "summary",
+        "top_devices",
+        "open_incident_list",
+        "order_overlap",
+        "quality",
+        "scope",
+        "limitations"
+      ],
+      "evidence_shape": {
+        "schema": null,
+        "as_of": null,
+        "window": {
+          "start": null,
+          "end": null,
+          "timezone": null
+        },
+        "summary": {
+          "new_events": null,
+          "devices": null,
+          "offline_seconds": null
+        },
+        "top_devices": {
+          "total": null,
+          "truncated": null,
+          "items": [
+            {
+              "device_id": null,
+              "device_code": null,
+              "site_id": null,
+              "site_name": null,
+              "online_status": null,
+              "incidents": null,
+              "raw_events": null,
+              "new_events": null,
+              "offline_seconds": null,
+              "offline_time": null,
+              "seconds_open": null,
+              "unclosed_events": null,
+              "platform_state_conflict": null
+            }
+          ]
+        },
+        "open_incident_list": {
+          "as_of": null,
+          "total": null,
+          "truncated": null,
+          "items": [
+            {
+              "device_id": null,
+              "device_code": null,
+              "site_id": null,
+              "site_name": null,
+              "online_status": null,
+              "incidents": null,
+              "raw_events": null,
+              "new_events": null,
+              "offline_seconds": null,
+              "offline_time": null,
+              "seconds_open": null,
+              "unclosed_events": null,
+              "platform_state_conflict": null
+            }
+          ]
+        },
+        "order_overlap": {
+          "abnormal_orders": null,
+          "evaluable": null,
+          "unknown": null,
+          "overlapped": null,
+          "share": null,
+          "by_status": [
+            {
+              "status": null,
+              "candidates": null,
+              "evaluable": null,
+              "overlapped": null,
+              "unknown": null
+            }
+          ],
+          "total": null,
+          "truncated": null,
+          "items": [
+            {
+              "order_no": null,
+              "device_id": null,
+              "site_id": null,
+              "status": null,
+              "overlap_seconds": null,
+              "record_start": null,
+              "record_end": null
+            }
+          ]
+        },
+        "quality": {
+          "invalid_incident_times": null,
+          "duplicate_or_missing_order_ids": null,
+          "unverified_device_records": null,
+          "devices_missing_code": null
+        },
+        "scope": {
+          "site_count": null,
+          "device_id": null
+        },
+        "limitations": null
+      },
+      "applies_to": [
+        "operator_conversation"
+      ]
     }
   ]
 }

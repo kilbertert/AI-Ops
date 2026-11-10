@@ -22,7 +22,7 @@ from aiops_diagnostics.common.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
-from aiops_diagnostics.data.sources import GUN_COLUMN_NAMES
+from aiops_diagnostics.data.sources import GUN_COLUMN_NAMES, SourceError
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import (
     AgentRunConfig,
@@ -68,6 +68,9 @@ TOOL_REFUSED_PREFIX = "tool_refused:"
 #: 那些不是「换个参数再来一次」能解决的，回喂只会让模型在死局上空转。
 #: 提示语写给模型看，措辞必须导向用户可理解的结局，不得带出内部实现。
 FEEDBACK_REFUSALS = {
+    "OPERATOR_OFFLINE_UNAVAILABLE": (
+        "离线资料暂不可用或范围过大，请缩小范围或联系管理员；不能据此判断没有离线。"
+    ),
     "OPERATOR_ORDER_REQUIRED": "缺少订单号；请向用户确认要查询的订单后再调用。",
     "OPERATOR_ORDER_NOT_REFERENCED": "只能查询用户本句提到或已选定的订单；请向用户确认订单号。",
     "OPERATOR_ORDER_CONFLICT": "每轮只能查询一笔订单；与当前订单不同请向用户说明不能同时查询。",
@@ -609,6 +612,14 @@ class OperatorCpms:
         return body
 
     def _authorize_snapshot(self, task, run):
+        from aiops_diagnostics.operator import offline_tool
+
+        refs = run.snapshot.get("evidence", {}).get(offline_tool.NAME, {}).get("offline_references")
+        if refs is not None:
+            try:
+                offline_tool.require_current(self, task, refs)
+            except SourceError as exc:
+                raise OperatorRefused("OPERATOR_SCOPE_CHANGED") from exc
         scope = operator_scope(task.authorize(), allow_empty=True)
         evidence = run.snapshot.get("evidence", {})
         if run.order_no:
@@ -689,6 +700,8 @@ class OperatorCpms:
                         "page_selected_order": task.selected_order,
                         "conversation_order": task.active_order,
                         "language": task.language,
+                        "current_time": now_utc().isoformat(),
+                        "business_timezone": self.context.runtime.diagnostic_settings.mysql.timezone,
                         "history_is_previous_observation": True,
                     },
                     ensure_ascii=False,
@@ -891,14 +904,25 @@ class OperatorCpms:
         task, run, _ = self.authorize_execution(run_id, node_token=token, manifest=manifest, tool=tool)
         # 参数放行发生在**取到公司令牌之前**：模型编的地址不会换来一次真实的对外请求。
         arguments = arguments or {}
-        if tool in {"cpms_order_amount_check", "cpms_order_process_stats"}:
+        from aiops_diagnostics.operator import offline_tool
+
+        if tool == offline_tool.NAME:
+            arguments = offline_tool.arguments(self, task, run, arguments)
+        elif tool in {"cpms_order_amount_check", "cpms_order_process_stats"}:
             if arguments or not run.order_no:
                 raise OperatorRefused("OPERATOR_ANALYSIS_INVALID")
         elif "order_no" in _declared(tool).inputs:
             if set(arguments) - {"order_no"}:
                 raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
+            _, _, observed_orders = offline_tool.selectors(offline_tool.prior_data(self, task))
+            requested_order = arguments.get("order_no")
             candidate = operator_agent.order_candidate(
-                arguments, task.question, task.selected_order, run.order_no or task.active_order
+                arguments,
+                task.question,
+                task.selected_order,
+                requested_order
+                if requested_order in observed_orders
+                else (run.order_no or task.active_order),
             )
             with task.lock:
                 if run.order_no and run.order_no != candidate:
@@ -1208,6 +1232,27 @@ class OperatorCpms:
                     },
                 }
                 return task.evidence[tool]["response"]
+            from aiops_diagnostics.operator import offline_tool
+
+            if tool == offline_tool.NAME:
+                try:
+                    data, refs = offline_tool.query(self, task, run)
+                except (SourceError, ValueError) as exc:
+                    raise OperatorRefused("OPERATOR_OFFLINE_UNAVAILABLE") from exc
+                data = order_pricing.project(data, _declared(tool).evidence_shape)
+                task.evidence[tool] = {
+                    "tool": tool,
+                    "inputs": tool_inputs(tool, task.arguments.get(tool, {})),
+                    "source": _declared(tool).source,
+                    "observed_at": format_stored_time(now_utc()),
+                    "data": data,
+                    "offline_references": refs,
+                    "response": {
+                        "code": 0,
+                        "data": {"tenantId": task.caller.effective_tenant_id, "value": data},
+                    },
+                }
+                return task.evidence[tool]["response"]
             if tool == "cpms_station_plan":
                 data = self._station_plan(task, run)
                 self.authorize_execution(run_id, tool=tool)
@@ -1491,6 +1536,15 @@ class OperatorCpms:
                 for name, item in task.evidence.items()
                 if name in task.delivered
             }
+            from aiops_diagnostics.operator import offline_tool
+
+            if offline_tool.NAME in evidence:
+                try:
+                    offline_tool.require_current(
+                        self, task, evidence[offline_tool.NAME]["offline_references"]
+                    )
+                except SourceError as exc:
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED") from exc
             result = operator_agent.render(answer, evidence, task.language)
 
         history_evidence = []
@@ -1530,6 +1584,13 @@ class OperatorCpms:
                 return self._absorb_superseded(run_id, superseded)
             if run.order_no:
                 self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
+            if offline_tool.NAME in evidence:
+                try:
+                    offline_tool.require_current(
+                        self, task, evidence[offline_tool.NAME]["offline_references"]
+                    )
+                except SourceError as exc:
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED") from exc
             for previous_id in task.history_runs:
                 previous = self.context.agent_run_store.peek(previous_id)
                 if previous is None or not previous.snapshot:
