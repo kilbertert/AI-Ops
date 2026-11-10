@@ -363,6 +363,10 @@ def register(app, context):
             auth.identity(context, session), payload.app_id, payload.revision, payload.version_no
         )
 
+    from .operator_run_logs import register as register_run_logs
+
+    register_run_logs(app, context, service, session)
+
 
 def _backfill_knowledge_grants(context, service):
     """首次纳管沿用现役选库；已登记（含已撤销）的库不被重新授权。"""
