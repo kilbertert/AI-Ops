@@ -420,22 +420,19 @@ class OperatorCpms:
             phase = last.get("phase", "queued")
             if phase == "tool" and last.get("status") != "running":
                 phase = "generating"
-        if terminal and task is not None and task.finished_elapsed_ms is not None:
+        if task is not None and task.trace_failed:
+            elapsed_ms = None
+        elif terminal and task is not None and task.finished_elapsed_ms is not None:
             elapsed_ms = task.finished_elapsed_ms
         elif terminal and last.get("phase") in {"completed", "failed", "cancelled", "expired"}:
             elapsed_ms = last["elapsed_ms"]
         elif task is not None:
             elapsed_ms = int((time.monotonic() - task.started_at) * 1000)
         else:
-            elapsed_ms = int(
-                (
-                    (run.completed_at or min(datetime.now(UTC), run.expires_at)) - run.created_at
-                ).total_seconds()
-                * 1000
-            )
+            elapsed_ms = None  # 缺少持久终点时，不用另一种时钟猜出精确耗时。
         return {
             "phase": phase,
-            "elapsed_ms": max(0, elapsed_ms),
+            "elapsed_ms": max(0, elapsed_ms) if elapsed_ms is not None else None,
             "tool_count": len({e["tool"] for e in run.trace if e.get("tool") and e["status"] == "succeeded"}),
             "resamples": sum(e["phase"] == "resample" for e in run.trace),
         }
