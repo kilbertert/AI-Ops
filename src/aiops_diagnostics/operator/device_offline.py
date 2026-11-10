@@ -86,7 +86,8 @@ def analyze(events, orders, *, start, end, as_of, timezone):
                 raise ValueError("invalid incident time")
         except (ValueError, TypeError):
             quality["invalid_incident_times"] += 1
-            invalid_devices.add(key)
+            if row.get("history_candidate", True):
+                invalid_devices.add(key)
             if row.get("recover_time") is None:
                 unknown_open[key] += 1
             continue

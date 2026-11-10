@@ -921,7 +921,7 @@ class OperatorCpms:
                 task.question,
                 task.selected_order,
                 requested_order
-                if requested_order in observed_orders
+                if len(observed_orders) == 1 and requested_order in observed_orders
                 else (run.order_no or task.active_order),
             )
             with task.lock:

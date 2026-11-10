@@ -1,6 +1,8 @@
 """单一只读快照下的离线事实；先范围下推，再核对设备当前归属。"""
 
-from aiops_diagnostics.common.scalar_rules import format_stored_time
+from zoneinfo import ZoneInfo
+
+from aiops_diagnostics.common.scalar_rules import format_stored_time, parse_stored_time
 from aiops_diagnostics.data.sources import SourceError, _placeholders
 from aiops_diagnostics.operator import device_offline
 
@@ -8,11 +10,14 @@ MAX_ROWS = 5000
 MAX_DEVICES = 1000
 
 
-def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=False):
+def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=False, summary_only=False):
     timezone = source.settings.mysql.timezone
     if not timezone:
         raise SourceError("离线分析尚未声明业务数据时区")
-    lo, hi, now, zone = device_offline.window(start, end, as_of, timezone)
+    if summary_only:
+        lo, hi, now, zone = parse_stored_time(start), parse_stored_time(end), as_of, ZoneInfo(timezone)
+    else:
+        lo, hi, now, zone = device_offline.window(start, end, as_of, timezone)
     if source.scope is None or not source.scope.tenant_id or source.scope.user_id:
         raise SourceError("离线分析需要明确租户与管家站点范围")
     sites = source._bounded_sites(site_ids)
@@ -56,34 +61,50 @@ def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=Fa
             for r in indexes
         ):
             raise SourceError("离线分析缺少设备归属查询索引，请联系管理员完成部署")
-        cur.execute(
-            "SELECT m.id,m.tenant_id,m.device_id,d.device_code,m.site_id,m.offline_time,m.recover_time,"
-            "d.id AS verified_device,d.online_status,s.name AS site_name FROM iot_device_offline_monitor m "
-            "FORCE INDEX (aiops_offline_device_time)"
-            + joins
-            + "WHERE "
-            + where
-            + f" AND m.device_id IN ({_placeholders(len(device_ids))})"
-            + " AND (m.offline_time IS NULL OR (m.offline_time<=%s AND (m.recover_time IS NULL"
-            " OR m.recover_time>=%s OR m.recover_time<=m.offline_time))) ORDER BY m.id LIMIT %s",
-            [*params, *device_ids, bounds[2], bounds[0], MAX_ROWS + 1],
-        )
-        events = cur.fetchall()
-        cur.execute(
-            "SELECT m.order_no,m.tenant_id,m.device_id,m.site_id,m.created_time,m.stop_time,m.status,"
-            "d.id AS verified_device FROM ch_order_info m FORCE INDEX (ch_order_info_device_id_index)"
-            + joins
-            + "WHERE "
-            + where
-            + f" AND m.device_id IN ({_placeholders(len(device_ids))})"
-            + " AND (m.created_time IS NULL OR m.created_time<%s)"
-            " AND (m.stop_time IS NULL OR m.stop_time>=%s OR m.stop_time<=m.created_time)"
-            " ORDER BY m.order_no LIMIT %s",
-            [*params, *device_ids, bounds[1], bounds[0], MAX_ROWS + 1],
-        )
-        orders = cur.fetchall()
-        if len(events) > MAX_ROWS or len(orders) > MAX_ROWS:
-            raise SourceError("离线分析数据超过单次上限，请缩小站点或设备范围")
+        events, orders = [], []
+        if not summary_only:
+            select_events = (
+                "SELECT m.id,m.tenant_id,m.device_id,d.device_code,m.site_id,m.offline_time,m.recover_time,"
+                "d.id AS verified_device,d.online_status,s.name AS site_name "
+                "FROM iot_device_offline_monitor m "
+                "FORCE INDEX (aiops_offline_device_time)"
+                + joins
+                + "WHERE "
+                + where
+                + f" AND m.device_id IN ({_placeholders(len(device_ids))})"
+            )
+            cur.execute(
+                select_events + " AND (m.offline_time IS NULL OR m.offline_time<%s)"
+                " AND (m.recover_time IS NULL OR m.recover_time>=%s OR m.recover_time<=m.offline_time)"
+                " ORDER BY m.id LIMIT %s",
+                [*params, *device_ids, bounds[1], bounds[0], MAX_ROWS + 1],
+            )
+            events = [dict(r, history_candidate=True) for r in cur.fetchall()]
+            cur.execute(
+                select_events + " AND (m.offline_time IS NULL OR m.offline_time<=%s)"
+                " AND (m.recover_time IS NULL OR m.recover_time>%s) ORDER BY m.id LIMIT %s",
+                [*params, *device_ids, bounds[2], bounds[2], MAX_ROWS + 1],
+            )
+            current = cur.fetchall()
+            if len(events) > MAX_ROWS or len(current) > MAX_ROWS:
+                raise SourceError("离线分析数据超过单次上限，请缩小站点或设备范围")
+            recorded_ids = {r["id"] for r in events}
+            events.extend(dict(r, history_candidate=False) for r in current if r["id"] not in recorded_ids)
+            cur.execute(
+                "SELECT m.order_no,m.tenant_id,m.device_id,m.site_id,m.created_time,m.stop_time,m.status,"
+                "d.id AS verified_device FROM ch_order_info m FORCE INDEX (ch_order_info_device_id_index)"
+                + joins
+                + "WHERE "
+                + where
+                + f" AND m.device_id IN ({_placeholders(len(device_ids))})"
+                + " AND (m.created_time IS NULL OR m.created_time<%s)"
+                " AND (m.stop_time IS NULL OR m.stop_time>=%s OR m.stop_time<=m.created_time)"
+                " ORDER BY m.order_no LIMIT %s",
+                [*params, *device_ids, bounds[1], bounds[0], MAX_ROWS + 1],
+            )
+            orders = cur.fetchall()
+            if len(orders) > MAX_ROWS:
+                raise SourceError("离线分析数据超过单次上限，请缩小站点或设备范围")
         legacy = None
         if include_legacy:
             # 兼容卡原有摘要；不能把当前设备过滤后的新统计冒充旧字段。
@@ -103,19 +124,23 @@ def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=Fa
             legacy = {k: int(v or 0) for k, v in cur.fetchone().items()}
             legacy["devices_total"] = len(devices)
     rejected = sum(not row["verified_device"] for row in [*events, *orders])
-    result = device_offline.analyze(
-        [r for r in events if r["verified_device"]],
-        [r for r in orders if r["verified_device"]],
-        start=format_stored_time(lo),
-        end=format_stored_time(hi),
-        as_of=now,
-        timezone=timezone,
-    )
+    result = {"status": "unavailable", "reason": "DETAIL_WINDOW_UNSUPPORTED", "quality": {}}
+    if not summary_only:
+        result = device_offline.analyze(
+            [r for r in events if r["verified_device"]],
+            [r for r in orders if r["verified_device"]],
+            start=format_stored_time(lo),
+            end=format_stored_time(hi),
+            as_of=now,
+            timezone=timezone,
+        )
     result["quality"]["unverified_device_records"] = rejected
     result["quality"]["coverage"] = "partial" if rejected else "current_devices"
-    if result["quality"]["coverage"] == "partial":
+    if result["quality"]["coverage"] == "partial" and not summary_only:
         result["order_overlap"]["share"] = None
-    result["limitations"] += " 仅覆盖当前可授权设备；已删除设备或历史归属变化可能缺记录。"
+    result["limitations"] = (
+        result.get("limitations", "") + " 仅覆盖当前可授权设备；已删除设备或历史归属变化可能缺记录。"
+    )
     result["scope"] = {"site_count": len(sites) if sites is not None else None, "device_id": device_id}
     result["references"] = {
         "devices": sorted({(r["id"], r["site_id"]) for r in devices}),

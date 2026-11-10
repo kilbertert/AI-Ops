@@ -276,3 +276,124 @@ def test_ranking_does_not_present_partial_device_duration_as_complete():
     assert not rows["D"]["duration_complete"]
     assert not result["top_devices"]["ranking_complete"]
     assert result["top_devices"]["ordering"] == "known_duration_desc"
+
+
+def test_current_only_bad_incident_does_not_change_historical_duration():
+    result = run(
+        [event("2026-11-01T01:00:00Z", "2026-11-01T03:00:00Z"), event("bad-time", history_candidate=False)]
+    )
+    assert result["summary"]["offline_seconds"] == 7200
+    assert result["top_devices"]["ranking_complete"]
+    assert result["open_incident_list"]["total"] == 1
+    assert result["open_incident_list"]["items"][0]["seconds_open"] is None
+
+
+def test_legacy_card_long_window_keeps_summary_without_new_details(monkeypatch):
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.common.config import Settings
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+
+    cfg = Settings()
+    cfg.mysql.timezone = "UTC"
+    runtime = SimpleNamespace(diagnostic_settings=cfg, _narrative_for=lambda *a: None)
+    mysql = SimpleNamespace(
+        count_devices=lambda *_: 2,
+        aggregate_offline_incidents=lambda *a: {
+            "incidents": 1,
+            "offline_devices": 1,
+            "open_incidents": 0,
+            "offline_minutes": 60,
+        },
+    )
+    from aiops_diagnostics.data import offline_source
+
+    def read(*args, **kwargs):
+        assert kwargs["summary_only"]
+        return {
+            "incidents": 1,
+            "offline_devices": 1,
+            "open_incidents": 0,
+            "offline_minutes": 60,
+            "devices_total": 2,
+        }, {
+            "status": "unavailable",
+            "reason": "DETAIL_WINDOW_UNSUPPORTED",
+            "references": {"devices": [], "orders": []},
+        }
+
+    monkeypatch.setattr(offline_source, "read", read)
+    monkeypatch.setattr(offline_source, "require_references", lambda *_: None)
+    result = GatewayRuntime._compute_card(
+        runtime,
+        "offline",
+        SimpleNamespace(mysql=mysql),
+        None,
+        "2026-01-01T00:00:00Z",
+        "2026-04-01T00:00:00Z",
+        "zh",
+        None,
+    )
+    assert result["offline_minutes"] == 60
+    assert result["device_offline"]["reason"] == "DETAIL_WINDOW_UNSUPPORTED"
+
+
+def test_multiple_historical_orders_require_explicit_choice(tmp_path, monkeypatch):
+    from execution.test_m2_close_contract import NODE_A_TOKEN
+
+    from aiops_diagnostics.operator import offline_tool, operator_cpms
+    from operations.test_operator_agent import call_tool, finish
+    from operations.test_operator_cpms import HEADERS, ORDER, environment, terminal
+
+    data = run([event("2026-10-30T00:00:00Z")], [order(ORDER), order("SECOND")])
+    monkeypatch.setattr(offline_tool, "query", lambda *a: (data, {"devices": [], "orders": []}))
+    monkeypatch.setattr(offline_tool, "require_current", lambda *a: None)
+    with environment(tmp_path, monkeypatch) as f:
+        f["candidate"]["enabled"].append(offline_tool.NAME)
+        f["publish"](f["route"].route_revision)
+        seen = []
+
+        def dispatch(_, config, run_id):
+            if not seen:
+                _, head, _ = call_tool(f, run_id, offline_tool.NAME)
+                finish(f, run_id, head, "有两笔关联订单，请确认要分析哪笔。", [offline_tool.NAME])
+            else:
+                head = {"Authorization": "Bearer " + NODE_A_TOKEN}
+                published = (
+                    f["client"]
+                    .post("/v1/internal/charging-status/execution-config/" + run_id, headers=head)
+                    .json()
+                )
+                head.update(
+                    {
+                        "X-AI-Ops-Exec-Config": published["sha256"],
+                        "X-AI-Ops-Tool-Contract": "request-target/1",
+                    }
+                )
+                refused = f["client"].post(
+                    f"/v1/internal/operator-runs/{run_id}/tools/cpms_order_detail/authorization",
+                    headers=head,
+                    json={"arguments": {"order_no": ORDER}},
+                )
+                assert refused.status_code == 403
+                assert refused.json()["error"]["code"] == "OPERATOR_ORDER_NOT_REFERENCED"
+                finish(f, run_id, head, "请提供要分析的订单号。", [])
+            seen.append(run_id)
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        first = (
+            f["client"]
+            .post("/v1/assistant/questions", headers=HEADERS, json={"question": "最近离线情况"})
+            .json()
+        )
+        assert terminal(f, first["qa_id"]).json()["status"] == "completed"
+        second = (
+            f["client"]
+            .post(
+                "/v1/assistant/questions",
+                headers=HEADERS,
+                json={"question": "分析关联订单", "conversation_id": first["conversation_id"]},
+            )
+            .json()
+        )
+        assert terminal(f, second["qa_id"]).json()["status"] == "completed"

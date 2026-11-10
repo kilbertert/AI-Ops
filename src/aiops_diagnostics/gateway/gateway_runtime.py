@@ -545,6 +545,17 @@ class GatewayRuntime:
     ) -> dict[str, Any]:
         """One card end to end: aggregate → optional model turn → assembled contract."""
         db_start, db_end = _db_window_bound(window_start), _db_window_bound(window_end)
+        offline_details_available = False
+        if card == OPERATIONS_CARD_OFFLINE and self.diagnostic_settings.mysql.timezone:
+            from aiops_diagnostics.operator import device_offline
+
+            try:
+                device_offline.window(
+                    window_start, window_end, now_utc(), self.diagnostic_settings.mysql.timezone
+                )
+                offline_details_available = True
+            except ValueError:
+                pass  # 旧卡仍支持原窗口，新明细单独声明不可用。
         devices_total = (
             None
             if card == OPERATIONS_CARD_OFFLINE and self.diagnostic_settings.mysql.timezone
@@ -562,7 +573,13 @@ class GatewayRuntime:
                 from aiops_diagnostics.data import offline_source
 
                 raw, details = offline_source.read(
-                    sources.mysql, effective_sites, window_start, window_end, now_utc(), include_legacy=True
+                    sources.mysql,
+                    effective_sites,
+                    window_start,
+                    window_end,
+                    now_utc(),
+                    include_legacy=True,
+                    summary_only=not offline_details_available,
                 )
                 devices_total = raw.pop("devices_total")
                 references = details.pop("references")
@@ -586,6 +603,8 @@ class GatewayRuntime:
                 result = build_offline_contract(aggregate, payload, **window)
             if references is not None:
                 result["_offline_references"] = references
+            elif self.diagnostic_settings.mysql.timezone:
+                result["device_offline"] = {"status": "unavailable", "reason": "DETAIL_WINDOW_UNSUPPORTED"}
             return result
         if card == OPERATIONS_CARD_PAYMENT:
             raw_payment = sources.mysql.aggregate_payment_split(effective_sites, db_start, db_end)
