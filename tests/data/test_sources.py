@@ -253,3 +253,25 @@ class _BinaryRedisClient:
 
     def close(self):
         return None
+
+
+@pytest.mark.parametrize("abort", [False, True])
+def test_mysql_consistent_snapshot_is_read_only_and_closed(monkeypatch, abort):
+    from aiops_diagnostics.data.sources import SourceError
+
+    settings = Settings.from_env()
+    settings.mysql.user, settings.mysql.password = "readonly", "secret"
+    connection = _FakeConnection()
+    monkeypatch.setattr("aiops_diagnostics.data.sources.pymysql.connect", lambda **kwargs: connection)
+    try:
+        with MySQLSource(settings)._cursor(consistent_snapshot=True) as cursor:
+            commands = [sql for sql, _ in cursor.calls]
+            assert commands[1:] == [
+                "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+                "START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY",
+            ]
+            if abort:
+                raise SourceError("query failed")
+    except SourceError:
+        assert abort
+    assert connection.rolled_back and connection.closed
