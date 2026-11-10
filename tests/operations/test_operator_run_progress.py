@@ -1,5 +1,6 @@
 """用户等待时可见真实取证和复核阶段，阶段记录不交付答案。"""
 
+import sqlite3
 import threading
 
 from aiops_diagnostics.operator import operator_answer_review, operator_cpms
@@ -38,3 +39,32 @@ def test_progress_during_review_and_after_completion(operator, monkeypatch):  # 
     assert all(
         set(item) <= {"phase", "status", "at", "elapsed_ms", "duration_ms", "tool"} for item in run.trace
     )
+
+
+def test_trace_write_failure_does_not_leave_question_running(operator, monkeypatch):  # noqa: F811
+    def locked(*args):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(operator["ctx"].agent_run_store, "record_trace", locked)
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, config, run: node(operator, run))
+    qa = request(operator["client"]).json()["qa_id"]
+    assert terminal(operator, qa).json()["status"] == "completed"
+
+
+def test_trace_is_bounded_and_survives_snapshot_updates(operator, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, config, run: node(operator, run))
+    qa = request(operator["client"]).json()["qa_id"]
+    assert terminal(operator, qa).json()["status"] == "completed"
+    store = operator["ctx"].agent_run_store
+    run = store.by_qa(qa)
+    first = run.trace[0]
+    for elapsed in range(150):
+        store.record_trace(
+            run.run_id,
+            {"phase": "tool", "status": "succeeded", "at": "2026-11-10T00:00:00Z", "elapsed_ms": elapsed},
+        )
+    store.absorb(run.run_id, {"evidence": {}})
+    saved = store.by_qa(qa)
+    assert saved.state == run.state and saved.snapshot == run.snapshot
+    assert len(saved.trace) == 128 and saved.trace[0] == first
+    assert saved.trace[-1]["elapsed_ms"] == 149

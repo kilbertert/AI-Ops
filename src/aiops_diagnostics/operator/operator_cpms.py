@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import secrets
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -358,6 +359,7 @@ class ActiveTask:
     lock: object = field(default_factory=threading.RLock)
     completion_lock: object = field(default_factory=threading.Lock)
     started_at: float = field(default_factory=time.monotonic)
+    trace_failed: bool = False
 
 
 class OperatorCpms:
@@ -368,7 +370,7 @@ class OperatorCpms:
 
     def _trace(self, run_id, phase, status="running", *, tool=None, duration_ms=None):
         task = self.tasks.get(run_id)
-        if task is None:
+        if task is None or task.trace_failed:
             return
         with task.lock:
             event = {
@@ -381,7 +383,12 @@ class OperatorCpms:
                 event["tool"] = tool
             if duration_ms is not None:
                 event["duration_ms"] = max(0, int(duration_ms))
-            self.context.agent_run_store.record_trace(run_id, event)
+            try:
+                self.context.agent_run_store.record_trace(run_id, event)
+            except sqlite3.Error:
+                # 观测失败不能打断业务收尾，尤其不能留下永久 running 的问题。
+                task.trace_failed = True
+                logging.getLogger("aiops.operator").warning("operator_trace_unavailable")
 
     def progress(self, caller, qa_id):
         """只在调用方完成当前入口授权后读取；不包含业务对象或答案。"""
