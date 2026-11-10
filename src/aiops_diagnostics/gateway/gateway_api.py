@@ -2694,6 +2694,7 @@ def create_gateway_app(
                 "status": qa["status"],
                 "result": result,
                 "error_code": qa.get("error_code"),
+                "progress": context.operator_cpms.progress(caller, trial_id),
                 "error_message": _qa_user_message(language, qa.get("error_code"))
                 if qa.get("error_code")
                 else None,
@@ -3297,7 +3298,10 @@ def create_gateway_app(
             )
         _require_current_chat_order(context, caller, qa, request)
         response.headers["Cache-Control"] = "no-store"
-        return _assistant_question_response(qa, language)
+        return {
+            **_assistant_question_response(qa, language),
+            "progress": context.operator_cpms.progress(caller, qa_id),
+        }
 
     @app.post("/v1/assistant/questions/{qa_id}/cancel")
     def cancel_assistant_question(
