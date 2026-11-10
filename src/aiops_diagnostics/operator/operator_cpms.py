@@ -408,7 +408,7 @@ class OperatorCpms:
         task = self.tasks.get(run.run_id)
         if run.state in {"issued", "running"} and expired(run):
             run = self.context.agent_run_store.get(run.run_id)
-        if run.state == "expired" and qa is not None and qa["status"] in {"queued", "running"}:
+        if run.state == "expired" and qa is not None and qa["status"] in QUESTION.active:
             self.context.store.update_assistant_question(qa_id, status="expired")
             qa.update(status="expired", result=None)
         terminal = run.state not in {"issued", "running", "succeeded"} or (
