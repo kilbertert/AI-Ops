@@ -397,3 +397,10 @@ def test_multiple_historical_orders_require_explicit_choice(tmp_path, monkeypatc
             .json()
         )
         assert terminal(f, second["qa_id"]).json()["status"] == "completed"
+
+
+def test_known_invalid_incident_before_window_does_not_rank_device():
+    result = run([event("2026-10-01T00:00:00Z", "2026-09-30T00:00:00Z")])
+    assert result["summary"]["devices"] == 0
+    assert result["top_devices"]["total"] == 0
+    assert result["summary"]["offline_seconds"] == 0

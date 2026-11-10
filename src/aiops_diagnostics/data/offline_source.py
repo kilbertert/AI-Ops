@@ -75,9 +75,9 @@ def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=Fa
             )
             cur.execute(
                 select_events + " AND (m.offline_time IS NULL OR m.offline_time<%s)"
-                " AND (m.recover_time IS NULL OR m.recover_time>=%s OR m.recover_time<=m.offline_time)"
+                " AND (m.recover_time IS NULL OR m.recover_time>=%s OR m.offline_time>=%s)"
                 " ORDER BY m.id LIMIT %s",
-                [*params, *device_ids, bounds[1], bounds[0], MAX_ROWS + 1],
+                [*params, *device_ids, bounds[1], bounds[0], bounds[0], MAX_ROWS + 1],
             )
             events = [dict(r, history_candidate=True) for r in cur.fetchall()]
             cur.execute(

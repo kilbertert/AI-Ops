@@ -80,13 +80,16 @@ def analyze(events, orders, *, start, end, as_of, timezone):
         by_device[key] = {
             k: row.get(k) for k in ("device_id", "device_code", "site_id", "site_name", "online_status")
         }
+        began, ended = None, None
         try:
-            began, ended = instant(row.get("offline_time"), zone), instant(row.get("recover_time"), zone)
+            began = instant(row.get("offline_time"), zone)
+            ended = instant(row.get("recover_time"), zone)
             if began is None or began > now or (ended is not None and ended <= began):
                 raise ValueError("invalid incident time")
         except (ValueError, TypeError):
             quality["invalid_incident_times"] += 1
-            if row.get("history_candidate", True):
+            outside = began is not None and ended is not None and max(began, ended) < lo
+            if row.get("history_candidate", True) and not outside:
                 invalid_devices.add(key)
             if row.get("recover_time") is None:
                 unknown_open[key] += 1
