@@ -79,3 +79,9 @@ LOG-01：临时 Gateway 根，生成双用户/双应用/双租户、撤权和过
 调用列表/详情，核对实际账本的引用与状态、字段白名单、no-store 和数据库未写；清理临时根。
 LOG-02：获准后在原 Dify 完成成功/失败试用，打开原日志入口比对同一 QA；
 另用普通 app/consumer 检查原生日志，撤权后刷新，关闭浏览器。实现者的合成检查不替代此项。
+
+RUN 合入后，联动检查通过真实 `store.record_trace` 持久化事件，再比对列表/详情 API 的
+trace、累计耗时与工具耗时。只读检查用 SQLite authorizer 拒绝写 SQL，并比较完整运行记录；
+不能以数据库文件字节相同为判据，WAL checkpoint 会刷新物理页而不改逻辑记录。
+两个日志 POST 入口登记在 `ops/dify-exposure-registry.md`；标识符语法台账只登记
+`run_id` 等真实非订单字段，订单语法仍由 `order_identity` 负责。

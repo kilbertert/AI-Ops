@@ -141,13 +141,13 @@ def test_startup_adoption_keeps_the_entry_environment_and_targets(tmp_path, monk
             }
 
     class App:
-        """够用的 FastAPI 替身：`register` 只用到三个装饰器与 `exception_handler`。"""
+        """纳管装配所需的 FastAPI 装饰器替身，包含日志响应中间件。"""
 
         def _decorator(self, *_args, **_kwargs):
             return lambda fn: fn
 
         get = post = _decorator
-        exception_handler = _decorator
+        exception_handler = middleware = _decorator
 
     monkeypatch.setattr(self_service_api, "SelfService", Service)
     self_service_api.register(App(), context)

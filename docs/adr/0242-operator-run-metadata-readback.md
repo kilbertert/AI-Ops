@@ -42,4 +42,7 @@ trace 字段白名单为 `phase`、`at`、`elapsed_ms`、`duration_ms`、`tool`�
 Gateway、同源 bridge 和 Dify web 需配套发布。元数据、工具阶段和构建通过都不证明业务答案正确。
 日志权限、过期只读投影及 UI 检查见[运行说明](../agents/operator-cpms/run-logs.md)与
 [补验记录](../validation/2026-11-10-dify-operator-run-logs-followup.md)；
-RUN 实际 trace 持久化联动在其合入 main 后验证，真实整链由父任务验收。
+RUN 合入 main 后，联动检查通过 `record_trace` 写入真实账本，再从列表及详情 API 读取，
+不以构造对象替代持久化。只读判据观察 SQL 操作并核对完整运行记录不变；
+不比较 SQLite 文件字节，因为 WAL checkpoint 可改变物理页而不改变任何逻辑数据。
+写入尝试由 SQLite authorizer 拒绝并使检查失败，真实整链由父任务验收。

@@ -202,8 +202,9 @@ _ALLOWED_ALPHABET_LITERALS = {
     "dify/dify_login_proxy.py": 2,  # 登录会话 id / token
     "dify/dify_login_server.py": 1,  # 登录 id
     "dify/dify_workspaces.py": 1,  # 应用 id
+    "dify/operator_run_logs.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
     "dify/self_service_api.py": 1,  # knowledge_base_id
-    "dify/self_service_bridge.py": 1,  # knowledge_base_id（order_no 已收口到权威）
+    "dify/self_service_bridge.py": 2,  # knowledge_base_id / run_id；app_id 为十六进制 UUID
     "dify/self_service_identity.py": 1,  # 租户 id
     "execution/chat_execution.py": 3,  # 智能体 id / libraries 键 ×2
     "gateway/gateway_api.py": 11,  # 拒绝码 / conv_ / code / app_id / knowledge / tenant /
