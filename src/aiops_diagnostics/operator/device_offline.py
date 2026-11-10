@@ -72,10 +72,14 @@ def analyze(events, orders, *, start, end, as_of, timezone):
     intervals, by_device, opens = defaultdict(list), {}, defaultdict(list)
     quality = Counter()
     invalid_devices = set()
+    unknown_open = Counter()
     raw_count, new_count = Counter(), Counter()
     # 身份由读面校验；事件与订单仍必须是同一租户/设备/站点才能关联。
     for row in events:
         key = (row["tenant_id"], row["device_id"], row["site_id"])
+        by_device[key] = {
+            k: row.get(k) for k in ("device_id", "device_code", "site_id", "site_name", "online_status")
+        }
         try:
             began, ended = instant(row.get("offline_time"), zone), instant(row.get("recover_time"), zone)
             if began is None or began > now or (ended is not None and ended <= began):
@@ -83,10 +87,9 @@ def analyze(events, orders, *, start, end, as_of, timezone):
         except (ValueError, TypeError):
             quality["invalid_incident_times"] += 1
             invalid_devices.add(key)
+            if row.get("recover_time") is None:
+                unknown_open[key] += 1
             continue
-        by_device[key] = {
-            k: row.get(k) for k in ("device_id", "device_code", "site_id", "site_name", "online_status")
-        }
         if ended is None or ended > now:
             opens[key].append((began, now))
         if lo <= began < hi:
@@ -116,7 +119,25 @@ def analyze(events, orders, *, start, end, as_of, timezone):
         }
         for key, spans in opens.items()
     ]
-    current.sort(key=lambda row: (-row["seconds_open"], row["device_id"]))
+    for key, count in unknown_open.items():
+        existing = next(
+            (row for row in current if row["device_id"] == key[1] and row["site_id"] == key[2]), None
+        )
+        if existing is not None:
+            existing.update(
+                seconds_open=None, offline_time=None, unclosed_events=existing["unclosed_events"] + count
+            )
+        else:
+            current.append(
+                {
+                    **by_device[key],
+                    "offline_time": None,
+                    "seconds_open": None,
+                    "unclosed_events": count,
+                    "platform_state_conflict": by_device[key]["online_status"] == 1,
+                }
+            )
+    current.sort(key=lambda row: (row["seconds_open"] is None, -(row["seconds_open"] or 0), row["device_id"]))
     counts = {
         str(code): {"status": code, "candidates": 0, "evaluable": 0, "overlapped": 0, "unknown": 0}
         for code in (0, 1, 2, 3, 5)
@@ -180,12 +201,15 @@ def analyze(events, orders, *, start, end, as_of, timezone):
         "summary": {
             "new_events": sum(new_count.values()),
             "devices": len(top),
-            "offline_seconds": sum(r["offline_seconds"] for r in top),
+            "offline_seconds": None if invalid_devices else sum(r["offline_seconds"] for r in top),
+            "known_offline_seconds": sum(r["offline_seconds"] for r in top),
+            "unknown_duration_devices": len(invalid_devices),
         },
         "top_devices": {"total": len(top), "truncated": len(top) > 10, "items": top[:10]},
         "open_incident_list": {
             "as_of": format_stored_time(now),
             "total": len(current),
+            "unknown_duration_devices": len(unknown_open),
             "truncated": len(current) > 50,
             "items": current[:50],
         },

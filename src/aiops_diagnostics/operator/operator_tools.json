@@ -743,7 +743,9 @@
         "summary": {
           "new_events": null,
           "devices": null,
-          "offline_seconds": null
+          "offline_seconds": null,
+          "known_offline_seconds": null,
+          "unknown_duration_devices": null
         },
         "top_devices": {
           "total": null,
@@ -786,7 +788,8 @@
               "unclosed_events": null,
               "platform_state_conflict": null
             }
-          ]
+          ],
+          "unknown_duration_devices": null
         },
         "order_overlap": {
           "abnormal_orders": null,

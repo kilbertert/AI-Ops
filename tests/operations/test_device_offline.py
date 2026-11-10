@@ -40,7 +40,9 @@ def run(events, orders=()):
 
 def test_window_prior_open_event_survives_zero_new_events():
     result = run([event("2026-10-30T00:00:00Z")])
-    assert result["summary"] == {"new_events": 0, "devices": 1, "offline_seconds": 86400}
+    assert result["summary"]["new_events"] == 0
+    assert result["summary"]["devices"] == 1
+    assert result["summary"]["offline_seconds"] == 86400
     assert result["open_incident_list"]["items"][0]["seconds_open"] == 4 * 86400
 
 
@@ -76,6 +78,9 @@ def test_touching_boundary_and_different_identity_never_overlap():
 def test_bad_event_does_not_prove_no_order_impact():
     result = run([event(None)], [order("A")])
     assert result["quality"]["invalid_incident_times"] == 1
+    assert result["open_incident_list"]["total"] == 1
+    assert result["open_incident_list"]["items"][0]["seconds_open"] is None
+    assert result["summary"]["offline_seconds"] is None
     assert result["order_overlap"]["unknown"] == 1
     assert result["order_overlap"]["share"] is None
 
@@ -183,7 +188,13 @@ def test_card_with_zero_new_incidents_keeps_details_and_private_refs_off_wire(mo
         offline_source,
         "read",
         lambda *a, **k: (
-            {"incidents": 0, "offline_devices": 0, "open_incidents": 0, "offline_minutes": 0},
+            {
+                "incidents": 0,
+                "offline_devices": 0,
+                "open_incidents": 0,
+                "offline_minutes": 0,
+                "devices_total": 1,
+            },
             {**detail, "references": refs},
         ),
     )

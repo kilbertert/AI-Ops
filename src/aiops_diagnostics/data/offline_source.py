@@ -92,12 +92,16 @@ def read(source, site_ids, start, end, as_of, *, device_id="", include_legacy=Fa
                 "SELECT COUNT(*) incidents,COUNT(DISTINCT m.device_id) offline_devices,"
                 "SUM(m.recover_time IS NULL) open_incidents,SUM(CASE WHEN m.recover_time IS NULL THEN 0"
                 " ELSE GREATEST(TIMESTAMPDIFF(MINUTE,m.offline_time,LEAST(m.recover_time,%s)),0) END)"
-                " offline_minutes FROM iot_device_offline_monitor m WHERE "
+                " offline_minutes FROM iot_device_offline_monitor m FORCE INDEX (aiops_offline_device_time) "
+                + joins
+                + " WHERE "
                 + where
+                + f" AND m.device_id IN ({_placeholders(len(device_ids))}) AND d.id IS NOT NULL"
                 + " AND m.offline_time>=%s AND m.offline_time<%s",
-                [legacy_end, *params, legacy_start, legacy_end],
+                [legacy_end, *params, *device_ids, legacy_start, legacy_end],
             )
             legacy = {k: int(v or 0) for k, v in cur.fetchone().items()}
+            legacy["devices_total"] = len(devices)
     rejected = sum(not row["verified_device"] for row in [*events, *orders])
     result = device_offline.analyze(
         [r for r in events if r["verified_device"]],

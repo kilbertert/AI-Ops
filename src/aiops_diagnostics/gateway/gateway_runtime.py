@@ -545,7 +545,11 @@ class GatewayRuntime:
     ) -> dict[str, Any]:
         """One card end to end: aggregate → optional model turn → assembled contract."""
         db_start, db_end = _db_window_bound(window_start), _db_window_bound(window_end)
-        devices_total = sources.mysql.count_devices(effective_sites)
+        devices_total = (
+            None
+            if card == OPERATIONS_CARD_OFFLINE and self.diagnostic_settings.mysql.timezone
+            else sources.mysql.count_devices(effective_sites)
+        )
         window = dict(
             language=language,
             site_ids=site_ids,
@@ -560,6 +564,7 @@ class GatewayRuntime:
                 raw, details = offline_source.read(
                     sources.mysql, effective_sites, window_start, window_end, now_utc(), include_legacy=True
                 )
+                devices_total = raw.pop("devices_total")
                 references = details.pop("references")
                 offline_source.require_references(sources.mysql, references)
             else:
