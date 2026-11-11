@@ -1,0 +1,80 @@
+---
+description: "测试架构速查：conftest 双锁（checkout 锁+主机槽位 MAX=2、跨兄弟仓同名、/tmp 刻意、获取顺序）、xdist 钉在 uv.lock 外保 CD 漂移闸、CI 分层+通过数下限、布局/README/退役三个强制测试、bitter doubles ADR-0030、verify-aiops-gateway 能与不能证明的边界、探针退出码 0/1/2"
+kind: reference
+relations:
+  related:
+    - execution-model.mdx
+    - governance/governance-afk.mdx
+code:
+  paths:
+    - tests/conftest.py
+    - tests/test_repository_layout.py
+    - tests/test_readme_architecture.py
+    - tests/test_runtime_retirement.py
+    - tests/test_ci_test_tier.py
+    - tests/test_cd_deploy_scripts.py
+    - .github/workflows/ci.yml
+    - .claude/skills/verify-aiops-gateway/SKILL.md
+    - tools/verification/ci_results.py
+    - tools/README.md
+    - docs/architecture/repository-layout.md
+    - docs/agents/verification-workflow.md
+---
+
+# 测试架构速查
+
+事故雕刻出来的结构：每条规则几乎都对应一次实测故障，conftest 的注释块就是设计记录。
+
+## conftest 双锁（tests/conftest.py）
+
+2026-10-23 负载 79 事故：七个并行全量 run×`-n 4`≈28 worker 把 sshd 和 tailscaled 一起饿死。两把锁护两种资源：
+
+| 锁 | 护什么 | 要点 |
+|---|---|---|
+| `aiops-pytest-<sha16>.lock` | 同 checkout 共享 venv/SQLite fixture/缓存 | 正确性不是负载 |
+| `host-test-slot-N.lock`（`MAX_CONCURRENT_RUNS=2`，`AIOPS_PYTEST_SLOTS` 可覆盖） | 主机本身是被耗尽资源 | **文件名不带仓名**——兄弟仓（health-flow、genesis-evidence）共用同一文件名与同一批核；三仓必须拼得一字不差 |
+
+- `SHARED_LOCK_DIR=/tmp/aiops-host-test-slots` **刻意**不用 `tempfile.gettempdir()`——AFK 沙箱有自己的 /tmp；`.sandcastle/profile.ts` 把该路径按原样挂进每个沙箱。目录 777、槽文件 0666（容器 agent uid≠宿主 user；0640/0644 都实测失败——flock 要 O_RDWR）。
+- 获取顺序：**先 checkout 锁再主机槽**（反序曾让排队 run 占着槽不走）。仅 controller 经 `PYTEST_XDIST_WORKER` 判定（worker 会在同一文件上死锁）。`-n 0` 跳过 checkout 锁（单文件快路）但仍占主机槽——CPU 秒也是资源。`WAIT_SECONDS=1800` 后 `pytest.UsageError`——宁可拒排队也不无声挂死。flock 探针逐槽试（无队列语义）。
+- 锁在 conftest 不在 tools/test.sh，因为 CI/implement.md/review prompts 都直接拼 `uv run pytest`（首版 wrapper 锁被 AFK 闸实测绕过）。
+- `serve_forever` poll_interval 补丁：默认 0.5s→仅当调用方省略参数时改 0.01s（哨兵区分——`tdengine_proxy.py` 显式传 0.5 不得被覆盖）；最慢文件 96.73s→2.97s（ADR-0037）。
+
+## xdist 在锁文件外（ADR-0038）
+
+`pytest-xdist==3.8.0`+`execnet==2.1.2` 经 `uv run --with` 提供——**刻意不进 pyproject/uv.lock**：deploy-41.sh 漂移闸比对 uv.lock，进去会停掉所有 CD。确定性声明是"任意 -n 下测试集相同"，不是依赖图字节可复现。唯一共享可写状态文件（`test_merge_faq_i18n_tool.py`）已改私有 worktree fixture；AST 扫描确认零固定端口/零绝对路径写。
+
+## CI 分层与下限（ADR-0215）
+
+默认 FULL；**仅当**全部变更都是 `docs/**/*.md` 或根 `*.md` 才 docs 层；层由 grep 测试源码里的文档引用算出（自含启发式，不是依赖分析）；算空 → 回落 full（空绿是本仓反复出现的假绿形状）。下限：full passed≥4000、docs passed≥400、skipped≤10——是异常捕捉不是完整性证明。`test_ci_test_tier.py` **逐字**驱动 ci.yml 脚本，守卫与实现不能漂移。证据地板：pytest 退出码说了算，JUnit XML 计数，`tools/verification/ci_results.py` 强制下限。
+
+## 强制测试三件套
+
+- `test_repository_layout.py`：白名单根文件+每层一级目录（签入与未忽略未跟踪都算；构建缓存排除）；新一级目录要同 PR 理由+清单同步。规则文档：`docs/architecture/repository-layout.md`。
+- `test_readme_architecture.py`：README 模块索引、链接解析、不许**新**import 环（现有 node-assembly 环冻结在具体边）。
+- `test_runtime_retirement.py`：已退役模块/import/路由保持缺席。
+- 三个都在必需检查 `verify` 内跑——不靠人工纪律。
+
+## Bitter doubles（ADR-0030）
+
+替身必须复现上游**真实拒绝**，不是想象的宽容：`_FakeCompany` 过滤 Accept 头（非 `*/*`→404）、从 query string 解析登录参数；`_FakeDify` 返回 `invitation_results` 不是 `results`、带 Authorization 拒 `/activate`。三个部署日缺陷全是绿单测因为替身验证的是自洽不是可接受（54 测 3 漏）。每个依赖上游的修复要反向验证：回退实现 → 点名测试必须红。"意外上游形状"分支不许静默通过。
+
+## verify-aiops-gateway 边界（.claude/skills/verify-aiops-gateway/）
+
+**能**证：启动、auth 模型、public OpenAPI、退役路由 404——在清空 `AIOPS_*`、动态回环端口的**一次性数据根**上起真 `aiops-gateway serve`。
+**不能**证：`/diag/*` 真实诊断、模型驱动 run、KB 活性、远端 Dify/Java、生产部署。AGENTS.md 合同要求改动落在这些面时**明说**该边界。绝不对真 `AIOPS_DATA_HOME` 跑；证据里绝不出现设备 token。
+
+## 探针与验证分工
+
+- 探针退出纪律：0 通过 / 1 有发现 / **2 未收集**（plan-only 不算过）——`tools/README.md`。
+- `tools/experiments/m2_close/`：隔离栈驱动（`run_ic.py`、`m3node/` 真 Java 链路 39 条 LINK 判据、`manifest_parity.py` 跨语言 manifest 检查）——证明装配/协议，**永不**证明业务验收。**这一类永远不能整体删**：它是唯一的真 Java 验证线束（tools/README.md）。
+- 验收判据陷阱：只查输出形状不查路由的判据会假 PASS——路由证明先于形状判定。
+- 分工（`docs/agents/verification-workflow.md`，ADR-0220/0034）：实现者从已确认需求写 oracle（绝不从自己的产出推）；迭代期跑最小证伪检查，收口时完整闸只跑一次；新长期检查需一句话"查什么错、oracle 哪来的、现有检查为何漏"。独立 Hacker=不同会话，自设计攻击输入，"没发现"要附试过的路径与输入才算数；改过候选就成其作者要重新交接。长期套件禁：凑覆盖用例、断言实现自身输出的测试、私有调用顺序锁、同形状冗余叠加。
+
+## Canonical anchors
+
+- `tests/conftest.py`（双锁，注释即设计记录）
+- `.github/workflows/ci.yml` + `tests/test_ci_test_tier.py`（分层）
+- `tests/test_repository_layout.py`、`test_readme_architecture.py`、`test_runtime_retirement.py`（强制三件套）
+- `.claude/skills/verify-aiops-gateway/SKILL.md`（技能边界）
+- `tools/verification/ci_results.py`（下限执行）
+- `docs/agents/verification-workflow.md`（分工）

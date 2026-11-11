@@ -1,0 +1,64 @@
+---
+description: "聊天以外的有界只读面共同形状「确定性范围读→有界结果→标注缺失」：健康报告 30s 作业+health-v2 词表、data/sources 行数界、运维分析四卡+两字符串叙述、device_offline、通讯候选 60 行/24h/4s 共享预算、FAQ 平台隔离"
+kind: architecture
+relations:
+  related:
+    - execution-model.mdx
+    - identity/identity-scope.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/health/health_report.py
+    - src/aiops_diagnostics/health/rules.py
+    - src/aiops_diagnostics/gateway/gateway_runtime.py
+    - src/aiops_diagnostics/data/sources.py
+    - src/aiops_diagnostics/data/order_status.py
+    - src/aiops_diagnostics/data/offline_source.py
+    - src/aiops_diagnostics/data/charging_status.py
+    - src/aiops_diagnostics/operator/ops_analysis.py
+    - src/aiops_diagnostics/operator/ops_analysis_narrative.py
+    - src/aiops_diagnostics/operator/device_offline.py
+    - src/aiops_diagnostics/operator/offline_tool.py
+    - src/aiops_diagnostics/operator/communication.py
+    - src/aiops_diagnostics/conversation/faq.py
+    - src/aiops_diagnostics/conversation/faq_catalog.json
+---
+
+# 有界只读面（聊天以外的现役功能）
+
+所有面共享同一形状：**确定性范围读 → 有界结果 → 可选的模型在程序产出的数字上写受约束说明**。模型从不算数。每个面降级为"标注缺失"而非编造答案。
+
+## 健康报告（health/）
+
+- 异步 `health_report_jobs`（30s deadline）；`RULE_VERSION="health-v2"` 是规则版本唯一句柄——改规则搜常量，不是搜文档。
+- `ORDER_STATUS` 词表 `{0充电中,1充电结束,2不可控异常,3异常已人工处理,5可控异常结束}`（`rules.py`）；`StatusRole`（`data/order_status.py`）是状态角色的唯一权威（曾收敛 5 份副本）。
+- 遥测 `SourceError` → `telemetry=unavailable`，**不是作业失败**；30s → `REPORT_TIMEOUT`；订单歧义 → `ORDER_NOT_FOUND`/`ORDER_AMBIGUOUS`；`MAX_CURVE_POINTS=300`。
+
+## 数据读取层（data/）
+
+- `sources.py`：pymysql 只读层。`SITE_SCOPE_MAX_ROWS=1000`（+1 行探测截断 → `ScopeError SCOPE_ERROR_SCOPE_TOO_LARGE`）；`FAULT_CODE_RANK_LIMIT=7`；`MAX_EXECUTION_TIME` hint；latest-3-orders 助手。
+- `offline_source.py`：REPEATABLE-READ 强制，`MAX_ROWS=5000`、`MAX_DEVICES=1000`，必须带 tenant+site 范围。
+- `charging_status.py`：`/chOrderInfo/chargingInfo/{order}` 带 `tenant-id`+`user-id` 头、无 token（consumer 凭据形状）；`ChargingStatusError` 统一。
+
+## 运维分析与设备离线（operator/）
+
+- `ops_analysis.py`：恰好 4 卡（failure_rate/offline/fault_code/payment），`RULE_VERSION="ops-analysis-v1"`；输入=站点集合+时间窗、**无 order_no**；`reasons` 词表（`SCOPE_EMPTY`、`NO_ORDERS_IN_WINDOW`…）；支付卡诚实标 `NO_PAYMENT_FAILURE_SOURCE`——`is_pay`+`refund_status` 证不了渠道失败；叙述失败绝不收回数字。
+- `ops_analysis_narrative.py` `OPS_NARRATIVE_SCHEMA` 恰 2 个字符串字段（main_cause、recommendation）——无数字字段是挡住模型编数的第一堵墙。
+- `device_offline.py` `SCHEMA="device-offline/1"`：确定性关联"离线时段×订单"；`instant()` 拒绝 DST-fold 歧义本地时间；`window()` ≤31 天（声明强制）；`offline_tool.py` 接 `cpms_device_offline`，`prior_data` = history_runs+当前已交付。
+- `communication.py` `cpms_order_communications`（ADR-0241）：`SOURCE_LIMIT=12`×5 源=`LIMIT=60`、`MAX_WINDOW=24h`、`SOURCE_BUDGET_SECONDS=4.0` 共享截止；进程级 `ThreadPoolExecutor(5)`+`BoundedSemaphore(5)`（不排队）；每源状态 `records/empty/unavailable`+原因（`source_busy/source_timeout/source_unavailable/source_not_configured/missing_device/invalid_source_response`）；`require_current` 信缓存证据前，先对当前订单重核 deviceCode/childDeviceCode/createdTime/stopTime/status 未变。
+
+## FAQ（conversation/faq.py）
+
+平台隔离 consumer/operator；`MySQLPlatformDirectory` 只读 UPMS（`sys_user`/`sys_user_role` 身份解析）；`faq_catalog.json` 是签入的固定内容；码 `FAQ_NOT_FOUND`/`PLATFORM_AMBIGUOUS`/`PLATFORM_FORBIDDEN`/`PLATFORM_UNAVAILABLE`。无模型、无订单——固定入口不用于掩盖自由提问失败。
+
+## 边界
+
+这些接口复用身份、范围与作业存储，但**不能因为聊天链通过就视为都完成验收**。`RULE_VERSION` 字符串（`health-v2`、`ops-analysis-v1`）是规则变更的版本句柄。超时是 profile 常量（30s 健康、15min QA/诊断），不是逐调用猜测。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/health/health_report.py` + `rules.py`（装配+词表+health-v2）
+- `src/aiops_diagnostics/gateway/gateway_runtime.py` (_execute_health_report 生命周期)
+- `src/aiops_diagnostics/data/sources.py`、`offline_source.py`、`charging_status.py`
+- `src/aiops_diagnostics/operator/ops_analysis.py` + `ops_analysis_narrative.py`（4 卡+2 字符串）
+- `src/aiops_diagnostics/operator/communication.py`（24h/60 行/4s 共享预算+require_current）
+- `src/aiops_diagnostics/conversation/faq.py` + `faq_catalog.json`

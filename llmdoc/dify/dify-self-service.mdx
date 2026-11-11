@@ -1,0 +1,65 @@
+---
+description: "自助开通面：dual_entry 词表 entry/scenario/channel（声明优先+观测兜底）、operator_apps 双入口遗留命名、self_service 幂等作业 UNIQUE(actor,request_key)、service_keys 快照→创建→对账且只发路径不发密钥、knowledge_connection、开通装配清单、bridge 同源闸、SETUP_* 码命名失败步骤+下一步"
+kind: architecture
+relations:
+  requires:
+    - dify/dify-console-access.mdx
+    - knowledge/knowledge-plane.mdx
+  related:
+    - execution-model.mdx
+    - dify/dify-execution-publishing.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/dify/dual_entry.py
+    - src/aiops_diagnostics/dify/self_service.py
+    - src/aiops_diagnostics/dify/self_service_api.py
+    - src/aiops_diagnostics/dify/self_service_bridge.py
+    - src/aiops_diagnostics/dify/self_service_config.py
+    - src/aiops_diagnostics/dify/self_service_identity.py
+    - src/aiops_diagnostics/dify/self_service_prepare.py
+    - src/aiops_diagnostics/dify/self_service_store.py
+    - src/aiops_diagnostics/dify/service_keys.py
+    - src/aiops_diagnostics/dify/knowledge_connection.py
+    - src/aiops_diagnostics/dify/operator_run_logs.py
+    - src/aiops_diagnostics/dify/dify_workspace_template.dsl.yml
+---
+
+# 自助开通面（受管应用目录）
+
+问题：一个新客户如何被开通到能用。受管目录在 `operator_apps`（**名字是遗留债：该表同时装 consumer 与 operator 两种 entry**——任何查询代码必须声明要哪个 entry；ADR-0189：一行 consumer 记录的空 `profile_id` 曾让所有 operator 节点路由崩掉）。
+
+## 词表（dual_entry 一处持有）
+
+- `entry` = 业务入口（`consumer`/`operator`）；`scenario` = 执行路由（首个切片每入口一条已注册）；`channel` = 该入口是否接线。
+- channel 语义 = **声明优先 + 观测兜底**：有声明看声明；无声明且无成功 run = `pending` fail-closed。`has_succeeded_for_tenant` 看的是成功运行记录不是配置——"AI 准备好了"≠"用户能用上"。
+
+## 幂等作业与顺序
+
+- `operator_setup_jobs`：`UNIQUE(actor, request_key)` + step + resources JSON + 租约；服务重启把中断作业标 retryable；**凭据绝不入库**（ADR-0162）。HTTP 202 = "已受理"，完成只能由读作业状态证明——失败永不写成功结果。
+- 一次开通 = 公共准备一次 + 每入口准备：`workspace → knowledge → dependencies`（共享客户空间）然后 `consumer: application → key → register → publish` / `operator: application → register → publish`。**两入口不是一个事务**——一个失败不回滚另一个（外部资源无法可靠回滚），`partial` 是诚实状态；`failed_step` 记进 resources，重试只续失败的那个入口。
+- 开通必须装配：环境登记（business-environments manifest）、工作区（claim→create→ready）、知识空间（RAGFlow 租户，`knowledge_ready` 才算 "complete"）、模型凭据（写+激活+读回）、cpms-node 工具 provider（OpenAPI 派生目录带 `x-` 规格哈希做漂移检测）、每工作区知识连接、Service key、节点能力检查。**依赖每次重试都要对权威重验**——不读全局默认插件版本（ADR-0235：工作区已跑 0.0.2 还装 0.0.1 是真事故）。
+
+## Service key 生命周期（service_keys.py）
+
+snapshot-先 → create → reconcile：Dify 只在创建时返回完整 token（1.17.1 的 list 会带全量——这个依赖就是对账路径）；对账歧义（0 或 >1 个 key）= **不切指针、不猜**别人的集成 key；key 只以 `<key_dir>/<app_id>.key` 0600 原子文件交付——发布推的是**路径**不是密钥进表/日志/作业 JSON；Dify 10 key 上限到 → `SETUP_KEY_LIMIT` 拒绝而不是删一个可能还活着的 key。
+
+## 边界与守卫
+
+- `self_service_bridge` 同源闸：Origin==console_origin **且** Referer 同源 **且** `Sec-Fetch-Site∈{∅,same-origin}` **且**有效 Dify 会话 **且**`角色∈{owner,admin,editor}` **且** `application/json`——之后只转发服务端验证过的浏览器会话；浏览器永远见不到内部令牌或平台 key。
+- `self_service_identity`：管理身份只经真 Dify 登录交换读，浏览器不提供任何身份声明。`self_service_config` = 平台维护的 profiles（JSON 0600）被应用引用；不接受浏览器给的路径/凭据/端点。
+- 草稿完整性：发布比对当前草稿指纹与创建时冻结值；并发发布或源版本变化 → `SETUP_DRAFT_CHANGED`/`SETUP_SOURCE_CHANGED`/`SETUP_ACTOR_CHANGED`——让运营刷新，不是系统猜。
+- `dify/operator_run_logs.py`（本包的 FastAPI 管理面）：Java run 元数据只读视图，逐请求重验公司身份+app 归属+租户；过期业务结果保持过期（不恢复）；`no-store`。与 `execution/operator_run_logs.py`（账本投影）同名不同层，别混。
+- `knowledge_connection.py`：`ExternalKnowledgeApis.tenant_id` 是**工作区级**的；只有平台端点/key 可作创建模板。
+
+## 失败语义
+
+约 55 个稳定 `SETUP_*` 码——**每个码命名失败的步骤和下一步动作**（`SETUP_KEY_DIRECTORY_UNWRITABLE` → 修 systemd 保护目录；`SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS` → 标 `default:true`；`SETUP_APP_FORBIDDEN`/`SETUP_TENANT_FORBIDDEN`/`SETUP_IDENTITY_MISMATCH` → 授权问题不是配置）。拒绝 ≠ 冲突 ≠ 流程非法——三条不同的异常路径（`self_service_api.py`）。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/dify/dual_entry.py`（entry/scenario/channel 词表+channel 语义）
+- `src/aiops_diagnostics/dify/self_service.py` + `self_service_store.py`（幂等作业、partial 状态）
+- `src/aiops_diagnostics/dify/service_keys.py`（快照→创建→对账、路径不发密钥）
+- `src/aiops_diagnostics/dify/self_service_bridge.py`（同源闸）
+- `src/aiops_diagnostics/dify/knowledge_connection.py`（工作区级知识连接）
+- `docs/agents/operator-cpms/self-service.md`（操作员视角流程）

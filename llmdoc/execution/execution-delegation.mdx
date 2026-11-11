@@ -1,0 +1,72 @@
+---
+description: "节点委派与运行生命周期：AgentRunConfig 信任边界与每次重读、issue/claim/release 原子化、release_candidate 授权后重读顺序、exec-config 单事务、能力闸、chat_route_bindings 撤回留行 410≠404、数据 grant 一次性+预算、回调两级闸、deliverable() 唯一判定、180s TTL"
+kind: architecture
+relations:
+  requires:
+    - identity/identity-scope.mdx
+  related:
+    - execution-model.mdx
+    - execution/execution-node-contract.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/execution/agent_runs.py
+    - src/aiops_diagnostics/execution/chat_execution.py
+    - src/aiops_diagnostics/execution/chat_route_bindings.py
+    - src/aiops_diagnostics/execution/chat_data_grant.py
+    - src/aiops_diagnostics/execution/execution_manifest.py
+    - src/aiops_diagnostics/execution/node_capabilities.py
+    - src/aiops_diagnostics/execution/node_publication.py
+    - src/aiops_diagnostics/execution/run_deliverability.py
+    - src/aiops_diagnostics/execution/operator_run_logs.py
+    - src/aiops_diagnostics/gateway/gateway_api.py
+---
+
+# 执行委派（agent_runs ↔ Java 节点）
+
+## 信任边界
+
+- `AgentRunConfig`（`agent_runs.py`）：受信绑定，不接受任何 client/model/platform 可控字段；**`load()` 每次调用重读文件**——吊销节点 = 改文件，下一次 claim 即拒绝。文件权限与 production.env 同纪律；节点 token 只存 sha256 摘要；`expected_node_id` 必须是注册节点（同环境不能换节点 claim）。
+- `authenticate_node`：节点身份只来自凭据摘要 + active 标志，回调体为空 strict 模型，多字段即 422。
+
+## 运行生命周期
+
+- `issue`：冻结 scope_json + environment + binding + expected_node + TTL（180s，`RUN_TTL_SECONDS`）。
+- `claim`：原子条件 UPDATE；`get` 在读事务内收敛过期。
+- `confirm_exec_config`：比较/记录/释放在一个写事务内；不一致 → failed + `exec_config_drift`。
+- `complete`/`complete_loop`：11 种终态判定；`fail()` 只能从 `issued|running`（首写获胜）；`refuse()` 只做 `succeeded→failed`（交付后复核失败用）；`absorb()` 把迟到交付深合并进 `snapshot_json` 并标 `superseded:true`——收到≠交付，不动 state/reason（ADR-0223）。
+- `run_deliverability.deliverable()`：`succeeded AND NOT expired` 是"结果能否交付"的唯一判定——两本账曾各自算 TTL 导致过期内容被交付（见 [execution-model](../execution-model.mdx)）。
+
+## 回调两级闸（ADR-0222/0223）
+
+- `authenticate`：协议检查（run 存在、binding、node token、manifest 匹配），不被 catch。
+- `authorize_execution`：完整重授权，只包铸造/使用能力的面。
+- 上报面（`record`/`complete`）软检查：授权已死但 run 仍活 → 记 `run.reason` 后重抛（收到证据≠允许交付）；run 已终态 → `absorb()` 收下交付物。
+- 授权闸拒绝在抛出点给 `run.reason` 盖 `tool_refused:<CODE>`，`fail()` 状态窗保证首写获胜；盖戳失败不得改变拒绝形状。
+- `deny_release` 用 fail()+refuse() 钉终态（fail() 单独对 succeeded 是 no-op）。
+- **release_candidate 顺序**：先做阻塞式外部授权，**再**重读 config+record——反序会泄漏授权窗口内的吊销/过期/停用（实测 3 次）。绑定比较的是 config 期望节点而不只是 bearer；快照按 SNAPSHOT_FIELDS 自洽。每条回放路径过同一个 release 判定（R1-1）。
+
+## 路由绑定与 exec 配置
+
+- `chat_route_bindings`：PK `(environment, tenant_id, entry, scenario)`，只有 `active`/`retracted`；publish/retract 是 `revision` 上的 CAS。**撤回留行**（ADR-0127）：retracted → 410 `CHAT_ROUTE_RETRACTED`，与"从未配置"的 404/`CHARGING_STATUS_DISABLED` 可区分——删行会让 select_binding 落回直读，那等于冒充"仍在服役"。撤回的 revision 不可再发布（`NodeRouteConflict`）。
+- `execution_manifest.py`：manifest 身份 = **原始字节 sha256**（重序列化会制造漂移）；schemas `m3-exec-config/1|operator-exec-config/1|operator-agent/1|gateway-conversation/1`；已配置但非法 → 启动失败；拒 symlink/非常规文件/组可读；manifest 不含凭据。
+- `node_capabilities.require_compatible`：注册+active+心跳 ≤120s+schema+tool_contract+`tools_sha256`（对 operator_tools.json）→ `SETUP_EXECUTOR_UNAVAILABLE/INCOMPATIBLE`。后台检查**不自动撤**现役路由。
+- `node_publication.advance`：route CAS + retracted guard + revision guard；冲突类是刻意的"保持当前已发布状态"，不是错误。
+
+## 数据 grant（ADR-0124/0175）
+
+`chat_data_grant.py`：`cdg_`+32B 随机，只存 sha256，绑定 scope_fingerprint/订单/environment/tenant/qa/workflow，`GRANT_TTL_SECONDS=180`。`consume` 只认首次读（后续回放快照）；所有终态都 `revoke_for_qa`。grant 承载**整个请求**（method/path/query）+ inputs——节点不组 CPMS 路径；只有 run_id/qa_id 取不到数据。模块边界：grant 答的是"这个取数凭据是否有效"，调用方读完前仍要重跑订单授权。consumer 链的 6 元组复核见 [consumer/consumer-chat](../consumer/consumer-chat.mdx)。
+
+## 内部面（gateway_api.py）
+
+`/v1/internal/*`：capabilities 上报、delegated/claim charging-status（同一授权+同一读取）、release_candidate/deny_release、node_execution_config（发 manifest 前重验节点+env+可见性+授权后重读+身份匹配）、`operator_tool_authorization`（按 run 自己的 `operation` 分流 operator/consumer 授权，ADR-0185——节点分不清在取谁的数据）、`consumer_tool_proxy`/`operator_cpms_proxy`（节点拿网关签发的 grant 回调，公司令牌永不出网关，白名单=所授请求目标）、`consumer_knowledge_context`、`dify_chat_read`（回放缓存前先查 binding 仍有效——回放也是交数据）。`NO_STORE_PATH_PREFIXES`：按人授权的结果不可缓存，错误响应也一样（否则 403 体会被按订单号 URL 缓存）。`dify_workspace_credential` 走内部令牌闸，未配 secret 整路由 404，跨环境请求 400。
+
+`execution/operator_run_logs.py` 是**账本投影**（scope_fingerprint+caller+tenant+operation 过滤，永不复用含业务摘要的 receipt/snapshot）；同名的 `dify/operator_run_logs.py` 是管理面 FastAPI 入口，两层别混。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/execution/agent_runs.py` (AgentRunConfig, claim, confirm_exec_config, absorb)
+- `src/aiops_diagnostics/execution/chat_execution.py` (select_binding, final_release, callback_config)
+- `src/aiops_diagnostics/execution/chat_data_grant.py`（模块 docstring 即合同）
+- `src/aiops_diagnostics/execution/chat_route_bindings.py`（模块 docstring 记三条决定）
+- `src/aiops_diagnostics/execution/run_deliverability.py`（唯一交付判定）
+- `src/aiops_diagnostics/gateway/gateway_api.py` (`/v1/internal/*` 回调面)

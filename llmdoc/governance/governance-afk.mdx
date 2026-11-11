@@ -1,0 +1,76 @@
+---
+description: "AFK 治理机：阶段闸 grill→spec→tickets→implement 各需显式命令、必需检查 verify+Workflow policy 不可加 paths 过滤、ADR-0002 可信控制面、双轴对抗评审+容器内独立 git、runner 舰队标签隔离仅调度、ADR 约定+里程碑一文件一记录（冲突 PR 不派发 CI）、spec-tree 仅建议、sync-open-prs 纪律"
+kind: architecture
+relations:
+  related:
+    - execution-model.mdx
+    - deployment/delivery-and-hosts.mdx
+    - governance/test-architecture.mdx
+code:
+  paths:
+    - docs/afk-workflow.md
+    - docs/agents/architecture-decisions.md
+    - docs/agents/reviewer-execution.md
+    - docs/agents/runner-queue.md
+    - AGENTS.md
+    - .sandcastle/policy-check.mjs
+    - .sandcastle/adr.check.mjs
+    - .sandcastle/consensus-contract.json
+    - .sandcastle/review-sandbox.ts
+    - .github/workflows/afk-policy.yml
+    - .github/workflows/ci.yml
+    - .github/workflows/sync-open-prs.yml
+    - .github/workflows/spec-tree.yml
+    - .github/workflows/runner-probe.yml
+---
+
+# AFK 治理机
+
+## 阶段闸（docs/afk-workflow.md）
+
+`idea → /grill-with-docs → /to-spec → /to-tickets → implement → review → merge`。Grilling 只在 frontier 清空时结束：报 `GRILLING_COMPLETE`+总结共识+请用户确认+**停**——确认只完成 grilling，不授权任何事；进入下一阶段必须用户显式 `/to-spec`、`/to-tickets`、`/implement`、`/implement-spec` 或 `agent:implement` 标签。多会话工作走 `/to-spec`→`/to-tickets` 再实现。
+
+planner 永不选：PRD、有子 issue 的父 issue、嵌套子 issue、有 open blocker 的 issue、被 open PR 占用的 issue；全部候选受阻时**没有强制兜底**。
+
+## 必需检查（名字是稳定合同）
+
+`verify`（ci.yml）和 `Workflow policy`（afk-policy.yml）。**永不给它们加顶层 `paths` 过滤**（required-check 被 skip 的语义会让保护失效）；draft PR 跳过，draft→ready 重触发；Devin Review 仅建议——作者处理线程。`Workflow policy` 跑 policy-check.mjs workflows、review-boundary/queue-cancellation/profile-network/mcp-config/profile-image/quiet-heartbeats/repo-map/sandbox-prepare 各 check、`adr.check.mjs --base`、conflict-surface 检查。
+
+## 可信控制面（ADR-0002）
+
+PR 变更类工作流只收**仓库 owner 创作的本仓分支**。宿主编排+依赖来自默认分支控制器检出；候选命令在 Docker 里只拿只读 token；产出 commit 经**已验证的 Git bundle**进入干净交付检出，之后宿主才注入 `AGENT_PAT`；交付凭据缺失/失败 → `agent:blocked`，无 `GITHUB_TOKEN` 兜底。`policy-check.mjs workflows` 在三个 PR 工作流+三个交付工作流上断言这套接线。
+
+## 评审模型（ADR-0035/0036/0229）
+
+双轴对抗：本地 ralph（`review-prompt.md`）+ Actions `agent:review`（`review/axis-prompt.md`），再由 `review/prompt.md` 当修复者消化两轴产出。对抗职责：发现必须是可演示的失败或精确到可核的输入（"X 到达此分支而守卫只覆盖 Y"），不接受"担忧"；绿套件不是证据（diff 的测试编码的是作者的假设）；axis 评审**可以跑东西**（read-only 禁的是编辑/提交/推送/评论，不是执行）。独立性来自新上下文+职责，**不是**模型差异——同族模型同 prompt 集。
+
+`review-sandbox.ts`：`git clone --no-local` 独立对象库、容器内自带可写副本、宿主挂载只读、`npm ci`/`uv sync` 在容器内经 `sandbox-prepare.sh`（绝不在宿主）；`.sandcastle/reviews/` 是 gitignored 临时区。评审沙箱不持有宿主 git 所有权。
+
+## Runner 舰队（ADR-0234）
+
+GitHub-hosted 跑 CI/policy/探针/watch；原 agent runner 跑模型工作（一实例一槽）；专用 `aiops-deploy` runner（只用自定义 label，**绝不用 `self-hosted`**）跑 CD+release-notes+runner-probe。**标签隔离只是调度**——同账号同主机，CPU/Docker/凭据边界不变；MemoryHigh/Max 限的是 unit 不是 Docker daemon 的容器。
+
+陈旧 PR 任务取消：固定 run-name `<workflow> / pr-<number>`，close 事件+30min 清扫，白名单取消"close 前创建且 PR 仍关"的同仓同分支 run；不强杀、不清容器。Runner probe 两个无模型 job：普通槽占 90s、deploy 槽查部署命令存在；验证靠 jobs API 的 runner-ids+重叠执行，不是两个绿灯。
+
+## ADR 与里程碑纪律
+
+- `docs/agents/architecture-decisions.md`：行为、架构、跨文件合同、流程/工具、测试策略、持久化/网络/配置格式变化都欠一条记录；记录形态 = 读者可分支的状态 + 考虑过的备选 + 实际权衡。`No-ADR:` 在 commit body 是显式逃逸门——沉默永远不行。`adr.check.mjs` 对触及的记录查结构、`--base` 查覆盖；它**刻意不读**约定文档，测试的是 `feat:`/`fix:` 主题+路径形状+`No-ADR:` 行。**编号在并行分支上撞**：取号看 origin/main 最大号，多分支工作要预留。
+- 里程碑一文件一记录（AGENTS.md）：每个交付里程碑**新增不改** `docs/开发进度/<date>-<slug>.md`+`docs/validation/<date>-<slug>.md`。原因不是洁癖：追加式文件总在第 1 行插入 → 必冲突（~40 个合并 PR 里 23 个碰 validation.md）→ **冲突的 PR 根本不派发 pull_request 工作流** → "CI 卡住"其实是"CI 从没跑"。两份旧平文件是只读档案；最新验收=docs/validation/ 按名最新的文件。
+- `spec-tree.yml`（ADR-0032）：`.spec/` 是意图真相；lint 仅建议（不是必需检查）——主干检查保留正是为了暴露已合并的漂移。
+- `consensus-contract.json`：不可例外不变量 = account-boundary、default-branch-protection、pull-request-delivery、deterministic-ci、secret-isolation、runner-isolation；`.afk-exceptions.json` 条目需 invariant+reason+scope+compensating_control+owner+approved_at+expires_at，拒未知/不可例外/过期项。
+- `sync-open-prs.yml`：默认只报；手动 `gh workflow run -f pr_number=` 处理单个 PR；严格资格（OPEN、base=main、非 draft、同仓 owner-author、无 assignee、无 agent 标签、BEHIND）；update-branch API 带 `expected_head_sha`；DIRTY → 作者修，不派付费修复 agent；`allow_auto_merge=false` 刻意。
+
+## 失败语义
+
+policy 失败 → 看具体步骤，别按名字猜"模型评审"；ADR 红 → 重号/缺记录/缺 `No-ADR:` 理由；取消竞态窗口窄且已知（GitHub cancel API 无条件版本）；各 *.check.* 是沙箱接线的自检，不是业务检查。
+
+`.sandcastle/` 是模板管理——权威恢复源是 afk-bootstrap 模板仓（upgrade-afk.sh 升级，端点挂载式）；仓内本地增量是 prompt 段与 `CODING_STANDARDS.md`。
+
+## Canonical anchors
+
+- `docs/afk-workflow.md`（阶段闸）
+- `.sandcastle/policy-check.mjs` + `.github/workflows/afk-policy.yml`（必需检查接线）
+- `.sandcastle/review-sandbox.ts` + `docs/agents/reviewer-execution.md`（评审沙箱）
+- `.sandcastle/adr.check.mjs` + `docs/agents/architecture-decisions.md`（ADR 合同）
+- `docs/agents/runner-queue.md`（舰队）
+- `AGENTS.md`（里程碑纪律）
