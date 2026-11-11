@@ -284,12 +284,18 @@ def order_composition(source):
         flow.ORDER_COMPOSITION_INSTRUCTION_V1,
         flow.ORDER_COMPOSITION_INSTRUCTION_V2,
         flow.ORDER_COMPOSITION_INSTRUCTION_V3,
+        flow.ORDER_COMPOSITION_INSTRUCTION_V4,
         flow.ORDER_COMPOSITION_INSTRUCTION,
     )
     if sum(text.count(block) for block in blocks) > 1:
         raise ValueError("重复订单构成规则块，拒绝迁移")
     for block in blocks:
         text = text.replace(block, "", 1)
+    # 产品已撤销这条旧计算许可；只替换完整已知短句，保留周围运营文本。
+    text = text.replace(
+        "只报告工具原值及可核对的算术差额",
+        "只报告同名字段原值；金额不同仅并列原值，不计算差额",
+    )
     updated = text + ("" if text.endswith("\n") else "\n") + flow.ORDER_COMPOSITION_INSTRUCTION
     if "aiops-order-composition:" in text or len(updated) > 16000:
         raise ValueError("重复标记或指令超限，拒绝迁移")
