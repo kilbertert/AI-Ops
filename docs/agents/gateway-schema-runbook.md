@@ -18,7 +18,8 @@ aiops-admin schema check --db /path/to/gateway.db
 不代表已达到版本1。当前版本完整检查列/type/notnull/default/pk、外键、唯一约束、
 索引名称/列序/排序/collation/partial，及PRAGMA未表示的CHECK等声明。
 未知版本、错误库、未知默认/约束/索引冲突拒绝，不能手工改user_version绕过。
-额外历史表保留并报告；唯一允许的默认差异是旧 `chat_dify_runs.scope_json DEFAULT ''`。
+额外历史表保留并报告；唯一允许的默认差异是旧 `chat_dify_runs.scope_json DEFAULT ''`；
+2026-11-11 全舰队盘点未发现任何现存库携带该默认，证据见[盘点验收](../validation/2026-11-11-schema-legacy-default-inventory.md)。
 迁移失败不改逻辑schema、行和版本；首次空文件与WAL模式可能保留。
 
 ## 一致备份与副本演练
