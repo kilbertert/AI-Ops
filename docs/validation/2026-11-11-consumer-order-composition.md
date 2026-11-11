@@ -66,3 +66,12 @@ Gateway观察通过；3项内存变异（丢电费、null转零、绕过旧兼�
 
 PR交付前提交候选后接入最新origin/main，核对llmdoc属主文档及提交覆盖门禁。
 本轮没有远端/本地分支删除或worktree清理；合并与部署由父会话执行。
+
+## PR交付前复核
+
+候选4个提交已无冲突rebase至`5d8704b1`，含llmdoc初始化及客服发布回执合并。
+源码提交携带ADR0246或No-ADR说明，逐提交ADR门禁通过；目录/文档/版本/迁移57项通过，
+ruff、wheel/sdist、Gateway镜像重建与容器导入通过。未因文档/版本变更重复本地全量；PR CI执行完整检查。
+仅更新consumer/common/gateway三篇llmdoc，以CLI刷新对应validatedRevision，未手改meta台账。
+原记录的`@tokenroll/llmdoc@3.6.1`在当前npm源不可用，本轮明确使用可用3.6.0；validate通过，
+四个源码/工具路径均有owner，概念“订单构成”首项命中consumer文档。

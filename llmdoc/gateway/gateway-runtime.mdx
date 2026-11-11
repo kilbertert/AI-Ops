@@ -47,6 +47,10 @@ code:
 - `admin_cli.py`：reconcile/onboard-tenant/credential 轮换/ensure-workspace/pull-dify 等特权面；迁移类命令构造合成 ASSERTED ScopeContext，不走请求身份。
 - `tdengine_proxy.py`：独立部署的只读遥测代理——监听和上游都限回环（`is_loopback_host` 唯一回环规则）、仅 `iot` 库、仅 POST `/rest/sql/iot`、SQL 白名单（`SHOW STABLES` 或精确 `GUN_QUERY`）、≤168h、≤2000 行、无日志。`GUN_COLUMNS` 与 `data/sources.py` 共享同一份字节——两个独立部署，漂移会被在线代理拒绝，所以共享不复制。
 
+消费者账务回调接线由`_authorized_consumer_snapshot`区分合同：仅v6 agent回调传
+`include_composition=True`；旧callback默认False，均复用既有主体端点与调用方前后授权。
+字段与图迁移规则见[consumer/consumer-chat](../consumer/consumer-chat.mdx)，无新路由或权限扩张。
+
 ## Canonical anchors
 
 - `src/aiops_diagnostics/gateway_server.py` (serve)
