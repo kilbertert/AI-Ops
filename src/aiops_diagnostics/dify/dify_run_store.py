@@ -108,10 +108,9 @@ class DifyRunStore:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS chat_dify_runs (
                     run_id TEXT PRIMARY KEY,
                     qa_id TEXT NOT NULL,
@@ -134,6 +133,10 @@ class DifyRunStore:
                     snapshot_json TEXT,
                     agent_version_no INTEGER NOT NULL DEFAULT 0
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_chat_dify_runs_qa
                     ON chat_dify_runs(qa_id);
                 """

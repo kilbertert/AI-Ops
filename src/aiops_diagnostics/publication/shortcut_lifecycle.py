@@ -1103,10 +1103,9 @@ class ShortcutStore:
         raise ShortcutConflict(f"shortcut revision conflict: expected {revision}")
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS shortcuts (
                     shortcut_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -1126,8 +1125,16 @@ class ShortcutStore:
                     updated_at TEXT NOT NULL,
                     UNIQUE(tenant_id, business_entry, code)
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_shortcuts_listing
                     ON shortcuts(tenant_id, business_entry, status, sort_order);
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS shortcut_versions (
                     shortcut_id TEXT NOT NULL,
                     tenant_id TEXT NOT NULL,

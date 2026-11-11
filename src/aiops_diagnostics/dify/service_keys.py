@@ -105,10 +105,9 @@ class KeyOperations:
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with self._connection(write=True) as db:
-            db.executescript(
+        with gateway_db.initialize(self.path) as db:
+            db.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS service_key_ops (
                     app_id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL,

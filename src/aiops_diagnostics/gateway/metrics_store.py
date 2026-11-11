@@ -137,10 +137,9 @@ class MetricsStore:
         self._initialize()
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS agent_run_metrics (
                     metric_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -157,10 +156,22 @@ class MetricsStore:
                     error_code TEXT,
                     created_at TEXT NOT NULL
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_agent_metrics_tenant_created
                     ON agent_run_metrics(tenant_id, created_at DESC);
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_agent_metrics_agent
                     ON agent_run_metrics(agent_id, created_at DESC);
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_agent_metrics_created
                     ON agent_run_metrics(created_at);
                 """

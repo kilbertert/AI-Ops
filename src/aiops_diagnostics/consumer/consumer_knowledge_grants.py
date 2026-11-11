@@ -39,10 +39,9 @@ class KnowledgeGrants:
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with self._connection(write=True) as db:
-            db.executescript(
+        with gateway_db.initialize(self.path) as db:
+            db.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS consumer_knowledge_grants (
                     tenant_id TEXT NOT NULL,
                     environment TEXT NOT NULL,
@@ -53,7 +52,6 @@ class KnowledgeGrants:
                 )
                 """
             )
-        with self._connection(write=True) as db:
             columns = {r["name"] for r in db.execute("PRAGMA table_info(consumer_knowledge_grants)")}
             if "revoked_at" not in columns:
                 db.execute("ALTER TABLE consumer_knowledge_grants ADD COLUMN revoked_at REAL")
@@ -143,10 +141,9 @@ class ConsumerEndpoints:
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with self._connection(write=True) as db:
-            db.executescript(
+        with gateway_db.initialize(self.path) as db:
+            db.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS consumer_endpoints (
                     tenant_id TEXT NOT NULL,
                     environment TEXT NOT NULL,

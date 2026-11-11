@@ -69,10 +69,9 @@ class ConversationStore:
     # ------------------------------------------------------------------
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS conversations (
                     conversation_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
@@ -86,8 +85,16 @@ class ConversationStore:
                     updated_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_conversations_scope_created
                     ON conversations(scope_fingerprint, created_at DESC);
+                """
+            )
+            connection.execute(
+                """
                 -- 旧诊断轮次没有订单绑定，仍保留 #497 的已知代价；
                 -- 本人状态查询新增 status_qa_id，回读重授权且不进入模型上下文。
                 -- 缺这条边 ⇒ 一行轮次说不出自己属于哪一单 ⇒ context_turns() 无法在
@@ -109,6 +116,10 @@ class ConversationStore:
                     created_at TEXT NOT NULL,
                     UNIQUE (conversation_id, turn_no)
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_conversation_turns_conversation
                     ON conversation_turns(conversation_id, turn_no DESC);
                 """

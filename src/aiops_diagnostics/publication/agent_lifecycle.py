@@ -371,10 +371,9 @@ class AgentStore:
         raise AgentConflict(f"agent revision conflict: expected {revision}")
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS agents (
                     agent_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -388,8 +387,16 @@ class AgentStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_agents_tenant_created
                     ON agents(tenant_id, created_at DESC);
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS agent_versions (
                     agent_id TEXT NOT NULL,
                     tenant_id TEXT NOT NULL,
