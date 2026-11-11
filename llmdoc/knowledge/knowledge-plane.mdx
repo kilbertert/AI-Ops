@@ -1,0 +1,71 @@
+---
+description: "知识平面（RAGFlow×Dify 外部知识）：检索权威在网关不在 Dify、knowledge_id 派生语法 tenant-<id>[:<dataset>]、来源优先级 manual>env>auto、dataset 创建后 PATCH 两步+幂等键、picker-open 触发同步且队列不丢、1:1:1 三元组、ragflow_console owner-hop 记台账、插件凭据分离、kb-service 租户与暴露登记"
+kind: architecture
+relations:
+  related:
+    - execution-model.mdx
+    - dify/dify-console-access.mdx
+    - dify/dify-self-service.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/knowledge/knowledge_retrieval.py
+    - src/aiops_diagnostics/knowledge/knowledge_sources.py
+    - src/aiops_diagnostics/knowledge/knowledge_triple.py
+    - src/aiops_diagnostics/knowledge/knowledge_dataset_sync_guard.py
+    - src/aiops_diagnostics/knowledge/kb_onboarding.py
+    - src/aiops_diagnostics/knowledge/ragflow_console.py
+    - src/aiops_diagnostics/dify/dify_knowledge_api.py
+    - src/aiops_diagnostics/dify/dify_knowledge_datasets.py
+    - src/aiops_diagnostics/dify/dify_knowledge_migration.py
+    - plugins/consumer_knowledge/manifest.yaml
+    - plugins/consumer_knowledge/client.py
+    - ops/knowledge-console/kb-mall-hop.conf
+---
+
+# 知识平面（RAGFlow × Dify 外部知识）
+
+**检索权威在我们这边，不在 Dify。** `/v1/dify/retrieval` 适配器实现 Dify External Knowledge API 形状，但租户与允许名单只来自我们的注册表按 `knowledge_id` 查——请求里没有任何字段能扩大它们（"Dify 问我们就给"的后门被这个设计堵死）。Dify 到 kb-service/RAGFlow 端口没有路由——知识只经此适配器到达 Dify（该跳在 `ops/dify-exposure-registry.md` 登记且 CI 断言）。
+
+## knowledge_id 语法（派生不存储）
+
+- `tenant-<tenant_id>` → 该租户全部库（#925 遗留形状，**冻结**——已在运营的 Dify 配置里）。
+- `tenant-<tenant_id>:<dataset_id>` → 恰好一个库（ADR-0095：Dify composer 每个 `external_knowledge_id` 只见一个外部 dataset）。
+- **派生而非存 UUID**：Dify 把这个字符串持久化在自己的配置里，存 UUID 会让改名=全部已配置应用瞬间 404；派生让每个进程永远算出同一个值。
+- 按库形式要求 dataset 出现在**该租户自己的** RAGFlow 列表里，否则与未注册同答 404——不泄漏存在/归属（tenant id 本身是公开值）。
+
+## 来源优先级与 dataset 生命周期
+
+- 优先级一处持有（`knowledge_sources.py`）：**手动 DB 行（`dify_knowledge_bindings`）> env 行 > 自动派生 1:1:1**——手动赢因为它是最新的人类决定；auto 只补缺；每次检索都读表（取消勾选下一问生效，无缓存）。
+- Dify dataset 两步（ADR-0096）：create 载荷没有 `permission` 字段（默认 `only_me`——这是"知识库未找到"的真因），必须建后 PATCH，且 PATCH 要两个 external 字段一起给否则 500。幂等键 `(workspace, external_knowledge_id)`——名字无唯一约束；名字上限 40 不是 100（create 宽 PATCH 严会产生看不见的孤儿行）。
+- **同步触发 = picker 打开**（ADR-0122）：`POST /v1/internal/knowledge/sync` 由 Dify web patch 在"添加知识"对话框触发（不是我们列表路由——最初的猜测是错的）。同步失败永不改变列表响应；孤儿只记日志不自动删，除非 `retire_orphans`（4 重保护：默认关、只动派生 `tenant-X:Y` 形状、上游读失败不得调 `run()`、dry-run 不写）。
+- **同步闸排队不丢**（`knowledge_dataset_sync_guard.py`）：两遍同步 → 第二遍等第一遍完成后跑全新一轮——时间下限版曾把用户 9 秒前刚建的库吞掉（41 真事故）。
+
+## 1:1:1 三元组与凭据保管
+
+- `knowledge_triple.py`：公司租户 ↔ Dify 工作区 ↔ RAGFlow 租户，三个互相指向的对象；验证命令报**三个 yes/no** 不是一个布尔——缺的件不同修法不同（缺工作区→ensure；缺 RAGFlow→onboard；都在但模型未验→重跑）。
+- `kb_onboarding.py` (`onboard-tenant`)：一条命令幂等装配三个对象；RAGFlow 密码保管在这里（kb-service 只存 token，我们必须存密文）；`model_checked_at` NULL = 半成品，重跑**补完**不跳过——"存在"≠"已验证"。
+- `ragflow_console.py`：RAGFlow 把租户绑在登录账号上（我们的模型没有共享团队视图），所以代理以 owner 凭据**扮演 owner**；每一跳（成功+拒绝）写 `knowledge_access_ledger`；租户只来自调用者身份（没有请求参数）；禁 lazy-create（kb-service 会在检索时自注册，绕过我们的幂等保管）；未注册≠禁止（运营指引不同）。`ops/knowledge-console/kb-mall-hop.conf` 是 ticket 兑换位置，挂在 kb 域自己上——浏览器不跨源带 cookie。
+- `dify_knowledge_migration.py`：把外部知识配置迁进租户工作区并自检三个已知断点（dataset 在新工作区但 API 模板在旧=403；`dataset_permissions.has_permission` 是布尔要随租户一起更；跨工作区同名 API 模板必须解析到本地那个）。
+
+## 插件凭据分离（plugins/consumer_knowledge/）
+
+官方 Agent 调用的受控工具：`knowledge_base_ids` 是 `dynamic-select multiple`（目录凭据只能**列**本工作区的库——工作区级 HMAC 派生 token，无过期，随工作区映射或主密钥而死）；`data_grant` 每轮作为 llm-form 参数注入（一次性凭据，见 [execution-delegation](../execution/execution-delegation.mdx)）。**模型选库但只收到检索响应——拿不到 grant。** 客户端合同：HTTPS 根（回环 http 例外）、不跟重定向、响应 ≤128KB；`gateway_url`/`catalogue_token` 是 provider 凭据。
+
+## 边界与坑
+
+- 404 同一答案覆盖未注册/跨租户猜测/调试身份探测——403 会泄漏存在性。
+- 检索不可用 → 通用"暂时不可用"，上游细节不转发。
+- 媒体：签名 URL 带 `agent_version=f"dify:{knowledge_id}"` 跳过版本活性检查（没有 agent——活性 = 每检索重读注册行）；注销 → 立即 404，已签 URL 在 TTL≤600s 内活完是接受的代价（ADR-0077）。URL 必须绝对——相对地址会解析到 Dify 自己主机=404（实测）。
+- 欠费：provider 403 带配额消息是 `ProviderOutage`，按 `AIOPS_PROVIDERS` 顺序 failover（只接在所选 entry 之后；不开第二个配置键——第二份列表会悄悄漂移，ADR-0046）。
+- **`api_key_header_prefix` 坑**：Dify 工具提供方默认 `basic` → 把 key 拼成 `Basic Bearer <key>` → 注册看着成功、调用时才 401。判法：401=prefix 错，403=key 值错。
+- kb-service 租户是另一份 SQLite 映射（`ragflow_tenants`）——那里的 "tenant id" 既不是 RAGFlow 用户名也不是 UPMS tenant（ADR-0063）。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/knowledge/knowledge_sources.py`（knowledge_id 语法+优先级）
+- `src/aiops_diagnostics/dify/dify_knowledge_api.py` + `dify_knowledge_datasets.py`（检索适配器+两步创建）
+- `src/aiops_diagnostics/knowledge/knowledge_dataset_sync_guard.py`（排队不丢）
+- `src/aiops_diagnostics/knowledge/knowledge_triple.py` + `kb_onboarding.py`（1:1:1+凭据保管）
+- `src/aiops_diagnostics/knowledge/ragflow_console.py`（owner-hop+台账）
+- `plugins/consumer_knowledge/`（受控插件+凭据分离）
+- `ops/dify-exposure-registry.md`（知识跳的暴露登记）

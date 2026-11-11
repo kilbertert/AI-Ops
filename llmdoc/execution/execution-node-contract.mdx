@@ -1,0 +1,71 @@
+---
+description: "Java 执行节点合同：四个 ExecManifest schema、30s/120s 能力心跳驱动 SETUP_EXECUTOR_*、工具声明是挂载数据不是代码、宿主机 nginx 回调白名单由声明渲染（不重渲染即 404）、成套交付规则、完成确认运行时、混版本 403 是设计、model-proxy 固定出口 ADR-0041"
+kind: architecture
+relations:
+  requires:
+    - execution/execution-delegation.mdx
+  related:
+    - execution-model.mdx
+    - deployment/delivery-and-hosts.mdx
+code:
+  paths:
+    - services/execution-node/src/main/java/com/trendpower/aiops/node/exec/ExecManifest.java
+    - services/execution-node/src/main/java/com/trendpower/aiops/node/exec/GuardedChatModel.java
+    - services/execution-node/src/main/java/com/trendpower/aiops/node/CapabilityReporter.java
+    - services/execution-node/src/main/java/com/trendpower/aiops/node/ReportingChatSessionRuntime.java
+    - services/execution-node/src/main/java/com/trendpower/aiops/node/OperatorTools.java
+    - services/execution-node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java
+    - services/model-proxy/model_proxy.py
+    - deploy/node-runtime/gateway-callback.conf.template
+    - deploy/node-runtime/README.md
+    - deploy/node-runtime/compose.yaml
+    - deploy/node-runtime/source_digest.py
+    - tools/content/render_node_callback.py
+---
+
+# Java 执行节点合同
+
+节点是 Spring Boot fat jar（`aiops-execution-node.jar`，JDK21，`project.build.outputTimestamp` 钉住可复现），在 snail-ai 平台上执行 Gateway 委派的授权任务。Python 侧合同见 [execution-delegation](execution-delegation.mdx)，本页是 Java 侧及配套部署面。
+
+## 协议面
+
+- `ExecManifest.SUPPORTED_SCHEMAS` = `m3-exec-config/1`、`operator-exec-config/1`、`operator-conversation/1`、`operator-agent/1`。**新 schema 需要节点+声明+Gateway+Dify 应用一起迁移——"不能只换提示词"**（services/execution-node/README.md）。
+- **能力心跳**：`CapabilityReporter` 每 30s（初始延迟 1s）POST `/v1/internal/execution-node/capabilities`，带 `schemas`、`tool_contract:"request-target/2"`、`tools_sha256`（实际加载声明的摘要）。上报失败静默重试（Gateway 先升级时等下一轮）。Gateway 端 120s 过期；onboarding/publish/restore 只在目标节点支持候选协议且摘要一致时推进正式指针，否则 `SETUP_EXECUTOR_UNAVAILABLE`/`SETUP_EXECUTOR_INCOMPATIBLE`。
+- **工具声明是挂载数据不是代码**（ADR-0181）：`node/operator-tools.json` 逐字复制自 `src/aiops_diagnostics/operator/operator_tools.json`，只读 bind-mount 进容器，`-Daiops.node.tools-file` 指给 JVM。改声明 = 定向重建容器，**不用重打 jar**；缺失/非法声明绝不当作"没有工具"静默处理。
+- **完成确认**：`ReportingChatSessionRuntime` 是框架 `ChatSessionRuntime` 的 `@Primary` 子类——框架完成回调在截断的末轮也会触发且没有取消/退出回调，所以它在报成功**之前**插入一次有界的 Gateway 确认；未确认走 errorConsumer。无 manifest 时完全透传。
+- **模型循环**：operator 合同每 run 最多 12 次模型调用（`GuardedChatModel` `modelCalls >= 12` → `MODEL_BUDGET`，gateway-conversation/1 历史策略下），失败无直读降级。
+- **混版本 403 是设计**（ADR-0175）：两端对 `OPERATOR_TOOL_CONTRACT_OUTDATED` 显式拒绝，没有灰色窗口；协议兼容性由 Gateway + 心跳共同持有。
+
+## 回调白名单在宿主机 nginx，不在节点
+
+`deploy/node-runtime/gateway-callback.conf.template`：内网 bridge `:8788` TLS-only 独立 nginx，location 是精确正则——`/v1/internal/operator-runs/run_*/{completions,tools/(${AIOPS_NODE_TOOL_NAMES})/(authorization|evidence)}`、`cpms/(${AIOPS_NODE_TOOL_PATHS})`、capabilities、charging-status、consumer chSite/page。
+
+- 由 `tools/content/render_node_callback.py` 从工具声明渲染——**新工具必须重渲染回调，否则在 nginx 层 404**（死在代理层，不是业务拒绝）。
+- 带 Lua 的宿主要传 `--lua-directives` 保住 `lua_package_*`；裸 envsubst 会擦掉 auth 头变量，禁用。
+- 防火墙：只允许节点子网 → bridge:8788，永不 0.0.0.0/0。TLS 探针要带 CA 证书轮询，无凭据期望 **403 是成功**；`000`/超时才是失败，明文打 TLS 口应得 400。
+- 节点回调走项目 CA 的 HTTPS：明文 400、不受信 403（ADR-0146/0147 实测）。
+
+## 成套交付（ships as a set）
+
+jar + 工具声明 + 回调白名单 + Gateway 代码，合同变化时必须成套移动；同一 PR 改了 Gateway 授权/响应和回调模板，不能只换 jar 收尾。规程：留全三个还原点 → 按已合并修订重打节点 → 重渲染回调 → 节点就绪 → **再**跑标准 CD。jar 回滚 = 还原旧 runtime.env 字节 + `current` 指针 + 只对 node 服务 `up -d --no-deps --pull never --force-recreate node`，不碰 DB。就绪探针前 ~40s 会假阴（0.22 CPU 配额冷启动 ~62s），上限 240s。
+
+Gateway 不得跑在节点之前（ADR-0188）：`deploy/deploy-41.sh` 节点闸要求运行中容器的 `AIOPS_NODE_BUILD` ≥ 目标祖先里最后一个碰 `services/execution-node/` 的提交；2026-10-30 曾全部 tool grant 403。闸读**运行容器**的 build stamp 而非 runtime.env——env 与容器窗口正是当时的 bug。机制见 [deployment/delivery-and-hosts](../deployment/delivery-and-hosts.mdx)。
+
+## model-proxy：固定出口（ADR-0041）
+
+节点没有通用出网。`services/model-proxy/model_proxy.py` 在 `modellink`（internal 网，只有节点和代理）上转发到**一个**部署钉死的上游（`M2LIVE_MODEL_UPSTREAM`，带路径前缀拒绝启动）；路径白名单 `/chat/completions`、`/v1/chat/completions`、`/v1/models`，无 CONNECT——请求里没有任何东西能重定向它。
+
+- 凭据分离：provider key 只在代理容器（0600 文件），节点拿代理专用 token，两者由 `prepare-secrets.sh` 分别铸造，不与公司/业务凭据混。
+- TLS 两条腿都验（节点→代理走栈 CA，代理→provider 走公共 CA），无关闭开关。
+- 代理是哑管不是适配层：不证明上游可用、不证明模型名被接受、不审计。响应重帧按 RFC 9112 §6.3：透传 CL 或重帧 chunked；TE+CL 矛盾/不可解析重复 CL → `502 proxy.upstream_response_ambiguous`，绝不猜测或截断；永不缓冲 body。
+- 生产 provider 现状：baoyun 单线（failover 已退役）；内部资源名绝不出网（synthetic stub 见到就 400）。
+- 交付：源码随 Gateway 镜像走 `/opt/aiops-src/services/model-proxy/model_proxy.py`——新 Compose 必须配含该路径的镜像一起换，切换是 Compose+镜像成对的原子操作。
+
+## Canonical anchors
+
+- `services/execution-node/src/main/java/com/trendpower/aiops/node/CapabilityReporter.java`
+- `services/execution-node/src/main/java/com/trendpower/aiops/node/exec/ExecManifest.java`
+- `services/execution-node/src/main/java/com/trendpower/aiops/node/ReportingChatSessionRuntime.java`
+- `deploy/node-runtime/gateway-callback.conf.template` + `tools/content/render_node_callback.py`
+- `deploy/node-runtime/README.md`（最承重的交付文档：runtime.env、声明挂载、回调渲染、jar 置换规程）
+- `services/model-proxy/model_proxy.py` + `docs/adr/0041-model-egress-is-a-fixed-target.md`

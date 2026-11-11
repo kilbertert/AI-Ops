@@ -1,0 +1,72 @@
+{
+  "schema": "llmdoc.meta/v3",
+  "baseline": {
+    "revision": "e5e952e179b0b2049780853fccdc1e6507fd3914",
+    "verifiedAt": "2026-11-11T04:25:08.052Z"
+  },
+  "documents": {
+    "execution-model.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "gateway/gateway-runtime.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "gateway/gateway-store.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "identity/identity-scope.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "execution/execution-delegation.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "execution/execution-node-contract.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "common/shared-primitives.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "consumer/consumer-chat.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "operator/operator-chat.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "conversation/conversation-store.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "analytics/bounded-read-surfaces.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "publication/publication-lifecycle.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "dify/dify-execution-publishing.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "dify/dify-console-access.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "dify/dify-self-service.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "knowledge/knowledge-plane.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "deployment/delivery-and-hosts.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "governance/governance-afk.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    },
+    "governance/test-architecture.mdx": {
+      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+    }
+  },
+  "convergence": {
+    "capturedAt": "2026-11-11T04:12:30Z",
+    "source": "init",
+    "documentCount": 1,
+    "totalEstimatedTokens": 5
+  }
+}

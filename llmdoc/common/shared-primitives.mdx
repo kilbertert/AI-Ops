@@ -1,0 +1,57 @@
+---
+description: "共享原语速查：bounded_http 管线与拒绝分类、endpoint_policy 唯一回环规则、http_auth 内部 HMAC、private_files 0700/0600、scalar_rules 唯一时间权威、redaction 面、model_request 原因分类、order_reference 候选、i18n 清单与 answer_language 泄漏闸"
+kind: reference
+relations:
+  related:
+    - execution-model.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/common/bounded_http.py
+    - src/aiops_diagnostics/common/endpoint_policy.py
+    - src/aiops_diagnostics/common/http_auth.py
+    - src/aiops_diagnostics/common/private_files.py
+    - src/aiops_diagnostics/common/scalar_rules.py
+    - src/aiops_diagnostics/common/redaction.py
+    - src/aiops_diagnostics/common/model_request.py
+    - src/aiops_diagnostics/common/order_reference.py
+    - src/aiops_diagnostics/common/i18n.py
+    - src/aiops_diagnostics/common/answer_language.py
+    - src/aiops_diagnostics/common/config.py
+    - src/aiops_diagnostics/common/platform_paths.py
+---
+
+# 共享原语速查
+
+`common/` 是被各域复用的横切原语；每个原语刻意只有一个实现——历史教训是同一规则两份副本漂移，且漂移方向总是放宽。`async_job_lifecycle.py` 归 [gateway/gateway-store](../gateway/gateway-store.mdx)。
+
+## HTTP 与端点
+
+- `bounded_http.py`：urllib-only 骨架。`RequestSpec`/`ErrorMapping`/`HttpFailure`/`request_json`/`RetryPolicy`（仅 GET）/`classify_failure`；三种信封解析（raw、data_key、code_data）。`HttpFailure.cause is None` ⇔ 信封拒绝（有响应但业务拒绝），`cause` 非空 = 传输失败。`TRANSPORT_FAILURES` 是捕获集合；`AUTH_REJECTED_STATUSES={401,403}`；`_NoRedirectHandler` 拒绝一切重定向。
+- `endpoint_policy.py`：`is_loopback_host` = `{localhost, localhost.}` ∪ `ipaddress.is_loopback`——**唯一的回环规则**（ipaddress 单独看不出 `localhost`）；`require_secure_endpoint` = https 或回环 http，禁 userinfo/query/fragment。
+- `http_auth.py`：内部令牌 `hex(HMAC-SHA256(secret, "{ts}:{expire}"))`，走 `X-Internal-Token`+`X-Request-Timestamp`；支持多 secret 轮换；fail closed。
+
+## 文件与配置
+
+- `private_files.py`：`validate_private_directory`/`validate_private_file`（0700/0600、属主、禁 symlink）；`write_private_text`/`append_private_text`（mkstemp+降权原子写）；`PrivatePathError`。含 Windows ACL 助手。
+- `platform_paths.py`：`AIOPS_HOME`/`AIOPS_CONFIG_HOME`/`AIOPS_DATA_HOME` 覆盖；默认配置文件 = production.env。
+- `config.py`：`Settings.from_env/from_config`、providers registry（`_parse_providers`，含旧单 provider 回落）、`redacted()`（配置值的脱敏投影）、`selected_config_file`。
+
+## 标量与时间
+
+- `scalar_rules.py`：**外部标量读取与存储时间的唯一权威**（docstring 列了它取代的七个互相矛盾的时间解析器）。`as_datetime`/`as_integer` 永不抛；`parse_stored_time` 会抛；`format_stored_time` UTC+offset；`now_utc`。
+- `redaction.py`：`SENSITIVE_KEY` 正则集、`redact_url_credentials`、`redact_text(preserve=)`、`sanitize_data`（上下文保留）、`contains_secret`、`truncate`（`ERROR_TEXT_LIMIT`）。
+- `model_request.py`：`structured_request` 一次性结构化调用（无子进程/线程/工具循环）；原因分类：`quota_exhausted`/`auth_rejected` 不可重试，`rate_limited`/`transport_unavailable`/`invalid_response`/`upstream_error` 可重试。
+- `order_reference.py`：`order_candidates`——粘贴订单优先于形状命中；数字段按区间归并；剥尾部句读；`MIN_BARE_DIGITS=15`。网关与 preview bridge 共用同一份实现。
+
+## 语言
+
+- `i18n.py`：`LANGUAGES` 元组是语言清单的唯一权威；`LanguageSpec(tag,name,is_chinese,fallback)`——`is_chinese` 是语言的属性而非"是否默认"（zh-Hant 会打破这个等式）；`fallback` 是唯一复制表回退（中文脚本回 zh，其他回 en）。语言永远不扩大权限/路由/manifest。
+- `answer_language.py`：输出侧泄漏闸——能证"没漏中文"，证不了翻译正确；标题豁免只限媒体/参考块上名字形状的标题；输入合同是 `AnswerSurface` 或 `str`，其他类型 `TypeError`（形状错误不能静默换判定规则）。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/common/bounded_http.py`（docstring + request_json）
+- `src/aiops_diagnostics/common/endpoint_policy.py` (is_loopback_host)
+- `src/aiops_diagnostics/common/scalar_rules.py`（docstring）
+- `src/aiops_diagnostics/common/i18n.py` (LANGUAGES)
+- `src/aiops_diagnostics/common/answer_language.py`（docstring）

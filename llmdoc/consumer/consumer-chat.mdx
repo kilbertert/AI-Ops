@@ -1,0 +1,64 @@
+---
+description: "消费者客服链（callback_version=6 硬闸）：Dify 官方 Agent 只提工具调用、五类资源+原子预算 8、grant 六元组复核+取数前后重验、SSE 身份四元组与最终回答抽取规则、发布顺序先撤 grant 后 completed、conversation_id 续会话、试用范围限制、旧 callback<6 冻结"
+kind: architecture
+relations:
+  requires:
+    - identity/identity-scope.mdx
+  related:
+    - execution-model.mdx
+    - conversation/conversation-store.mdx
+    - dify/dify-execution-publishing.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/consumer/consumer_agent.py
+    - src/aiops_diagnostics/consumer/consumer_chat_service.py
+    - src/aiops_diagnostics/consumer/consumer_agent_flow.py
+    - src/aiops_diagnostics/consumer/consumer_tool_grants.py
+    - src/aiops_diagnostics/consumer/consumer_sites.py
+    - src/aiops_diagnostics/consumer/consumer_knowledge_grants.py
+    - src/aiops_diagnostics/consumer/consumer_trial.py
+    - src/aiops_diagnostics/dify/dify_chatflow.py
+    - src/aiops_diagnostics/dify/dify_run_store.py
+---
+
+# 消费者客服链（callback_version=6）
+
+入口 `POST /v1/assistant/questions` platform=consumer → `consumer_chat_service.start()`。Gateway 持有身份、范围、grant 签发、历史组装、工具授权、结果抽取与持久化；Dify 官方 Function Calling Agent（钉 `langgenius/agent:0.0.51`，`consumer_agent_flow.py`）只提议工具调用和正文——三节点图 `MODE="consumer_orchestration"`、`TOOL="consumer_knowledge"`。
+
+## 协议硬闸与历史
+
+- `callback_version=6` 是硬闸：其他版本一律 `CHATFLOW_BINDING_CHANGED`（`consumer_agent.py`）。v1–5 只为显式已发布版本恢复保留，其分类器/模板/短期上下文规则**不是**新链主路径（`consumer_intent/facts/reply/documents` 冻结，合同从 `docs/runtime-retirement.md`+ADR-0232 恢复）。
+- 历史两轮有界：`completed_context(before, limit=6)` 最多 6 个已完成回合且**每回合再授权**（见 [conversation/conversation-store](../conversation/conversation-store.mdx)）；序列化为 `question[:2000]`/`answer[:4000]` 装进 32,000 字符 `conversation_context`，标 `historical_results_are_not_current:true`。
+
+## 工具面与预算
+
+- 固定 5 类资源 `{"knowledge","orders","status","billing","support"}`；每次调用消耗原子预算 **8**（`dify_run_store.py` 同一事务扣减）。
+- `status`/`billing` 还要求按绑定的 `live_order_status`/`live_billing_record` 开关。
+- grant = 能力令牌绑六元组 `(grant_id, scope_fingerprint, order_no, tenant_id, environment, workflow_id)`；`callback()` 重匹配全部六个，并在上游查询**前和后**各跑 `valid()`（180s TTL）。`kind=service` 另要求 `CONSUMER_SCOPE_REQUIRED`——consumer 范围只有 self。
+- 试用/预览（`service_trial`）只许查明确选中的订单，orders 列表整体拒绝。
+- C 端 CPMS 授权（`consumer_tool_grants.py`）：只带 `tenant-id`+`user-id` 头、无 token；范围=本人订单站点；越界是**跳过**不是拒绝。
+- 本人站点面（`consumer_sites.py`）：`MAX_ORDER_PAGES=4`、页 50、`MAX_OWN_SITES=200`、恒发 `user-id`、展示上限 `SITE_MAX_SHOWN=10`。
+- 知识授权（`consumer_knowledge_grants.py`）：显式 `(tenant, env, library)` 行在发布和检索两处检查，吊销即时生效。
+
+## SSE 与最终回答（规则不是启发式）
+
+- 身份四元组 `(workflow_run_id, task_id, conversation_id, message_id)` 在 `workflow_started` 绑死后每个事件必须匹配；`workflow_id` 必须等于请求的；`message_end` 与 `workflow_finished` 都要到齐（`dify_chatflow.py`）。任一漂移 → `DIFY_WORKFLOW_*`/`DIFY_CHATFLOW_INVALID`，半截正文绝不交付。
+- 最终回答抽取：最后一个 `node_id=="answer"` 且 `parent_id is None`、`status=="success"`、`tool_responses==[]`、`llm_response` 非空的 `agent_log` 事件；`node_id=="start"` 会重置候选。答案 ≤32,000 字符。
+- consumer `final_answer` ≤8,000；所有工具调用必须有结果；来源按 `retrieved_reference_id` 去重；订单号在脱敏中保留。
+- Dify `user` = `sha256(scope_fingerprint:binding.key:workflow_id)`；`bind_workflow`/`bind_message` 拒绝身份漂移。多轮续聊用 **Gateway 自己的 `conversation_id`**，不是 Dify 的（旧链才用 `upstream_conversation_id`+绑定指纹相等）。
+
+## 发布顺序与失败语义
+
+- 数据 grant **先于** run 置 `completed` 被吊销——completed 的运行不持有活凭据（`consumer_chat_service.py`）。
+- `require_result` 回读核对：绑定未变 + `require_evidence` + `deliverable()` + `snapshot == qa.result`。
+- `succeeded` 过了窗口仍是 succeeded，`_expire_in` 只转 `running→expired`；能否交付由 `run_deliverability` 判。
+- 业务拒绝回喂模型作为工具结果（不是 run 失败）；预算耗尽、`CHATFLOW_EVIDENCE_UNAVAILABLE`（历史回合快照不再等于 qa.result）、SSE 身份不匹配、运行 180s 过期是终止路径。
+- 本链没有任何业务写工具可声明。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/consumer/consumer_agent.py`（callback 合同、历史组装、资源分派、final_answer 规则）
+- `src/aiops_diagnostics/consumer/consumer_chat_service.py`（start/grant/吊销/发布顺序/读回）
+- `src/aiops_diagnostics/dify/dify_chatflow.py`（SSE 身份四元组 + agent_final_node 抽取）
+- `src/aiops_diagnostics/dify/dify_run_store.py`（运行账、180s、原子预算）
+- `src/aiops_diagnostics/consumer/consumer_tool_grants.py`（C 端授权形状）

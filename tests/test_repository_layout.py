@@ -43,6 +43,7 @@ LAYOUT = {
                 "docs",
                 "examples",
                 "integrations",
+                "llmdoc",
                 "ops",
                 "plugins",
                 "services",

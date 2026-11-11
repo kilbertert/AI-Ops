@@ -1,0 +1,69 @@
+---
+description: "管家链 operator-agent/1：Java 节点跑模型循环、订单候选校验、回调两级闸 authenticate/authorize_execution、FEEDBACK_REFUSALS 回喂 vs tool_refused: 首写获胜、证据记录 provenance、complete() 顺序+answer_review verdict=allow+程序核验、operator_tools.json 唯一声明、Java 侧 12 次 MODEL_BUDGET"
+kind: architecture
+relations:
+  requires:
+    - identity/identity-scope.mdx
+    - execution/execution-delegation.mdx
+  related:
+    - execution-model.mdx
+    - execution/execution-node-contract.mdx
+    - conversation/conversation-store.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/operator/operator_agent.py
+    - src/aiops_diagnostics/operator/operator_cpms.py
+    - src/aiops_diagnostics/operator/operator_tools.py
+    - src/aiops_diagnostics/operator/operator_tools.json
+    - src/aiops_diagnostics/operator/operator_answer_review.py
+    - src/aiops_diagnostics/operator/operator_conversation.py
+    - src/aiops_diagnostics/operator/order_billing.py
+    - src/aiops_diagnostics/operator/order_pricing.py
+    - src/aiops_diagnostics/operator/order_analysis.py
+    - src/aiops_diagnostics/operator/ops_provider.py
+    - src/aiops_diagnostics/operator/operator_sop.md
+---
+
+# 管家链（operator-agent/1 → Java 节点）
+
+入口 `POST /v1/assistant/questions` platform=operator → `select_binding(scenario="operator_order_diagnosis")` → 公司 Bearer 必须 → `all_targets` 必须有匹配的 `(entry, app_id, tenant, environment, cpms_base_url, proxy_base_url)` 否则 `OPERATOR_TARGET_MISSING`。
+
+模型循环在 Java 节点（`ReportingChatSessionRuntime`，Spring AI，合同见 [execution/execution-node-contract](../execution/execution-node-contract.mdx)）；Python 侧是授权、证据记录与答案验收的权威。
+
+## SOP 与声明
+
+- `SCHEMA="operator-agent/1"`、`HISTORY_POLICY="gateway-conversation/1"`；SOP = 冻结 `INSTRUCTIONS` + 已发布 `operator_sop.md` 内容随 manifest 快照走；manifest 身份在每个回调必须等于 `run.expected_agent_version`。
+- `operator/operator_tools.json` 是"什么是一个工具"的**唯一声明**（ADR-0181）：name/desc/input/request-template/response-shape/evidence-fields；两个引擎（Python 授权 + Java 执行）都读它；不可读 = 启动失败。`KINDS=(single,page,object)`、`CONTEXTS=(order,conversation,operator_conversation)`、`applies_to` 按 run 类型裁工具面；`model_inputs ⊂ inputs`（order_no 是输入但不是模型参数）。声明强制 GET-only——只读边界在这里执行。
+- `request()` 是唯一物化 path+query 的地方；`ops_provider.py` 用声明注册 Dify `cpms-node` provider（`EMPTY_SCHEMA`）。
+
+## 订单绑定与回调两级闸
+
+- `order_candidate`：候选必须出现在问题文本或已选中/激活，否则 `OPERATOR_ORDER_REQUIRED`/`NOT_REFERENCED`/`CONFLICT`；`bind_operator_order` 绑且只绑一单并冻结 `order_site_id`。
+- 两级闸（ADR-0223）：`authenticate` = 协议检查（run 存在、node token、manifest 匹配）；`authorize_execution` = 完整当前授权——task/qa 存活、still_authorized、targets 四元组、scope 指纹、工具 enabled+`allowed_in`、未过期、非 `RESULT_RETRACTED`。grant 合同检查 → `TOOL_CONTRACT="request-target/1"`/`OBJECT_CONTRACT="request-target/2"` 不匹配即 `OPERATOR_TOOL_CONTRACT_OUTDATED`。
+
+## 拒绝分流（ADR-0221/0222）
+
+- `FEEDBACK_REFUSALS`：12 个可纠正业务码带中文模型提示，作为**工具结果回喂**；其余拒绝终止运行。
+- `_stamp_gate_refusal` 在抛出点给 `run.reason` 盖 `tool_refused:<code>`（跳过 `TOOL_DISABLED` 和 feedback 码）；`fail()` 从 `issued|running` 首写获胜——先写的人赢，后到的不覆盖。
+
+## 证据与完成
+
+- `_record` 用 `_provenance` 比较：剥 `DERIVED_EVIDENCE_FIELDS`（ADR-0224）+ inputs + source + `authorization_id=sha256(grant)` + `observed_at ∈ [claimed_at, now]`。`task.arguments.setdefault` 强制同 run 同工具同参数 → `OPERATOR_TOOL_ARGUMENTS_CHANGED`。`task.evidence[tool]` 有缓存——重采样不重取。
+- `_complete` 顺序：authenticate → failed run 记 verbatim 原因（`operator_node_failed:`/`tool_refused:`）→ 答案 ≤12,000 → 幂等 → 死 run absorb → `contains_secret` → 重验订单+离线引用 → `render()`（≤12,000+来源尾注）→ `history_runs` 再授权（≤60）→ **answer_review verdict 必须 allow** 否则 `OPERATOR_ANSWER_NOT_GROUNDED` → 再授权 → `store.complete`+`complete_loop`。
+- 失败/迟到上报经协议闸收存，执行与成功交付仍过完整授权闸（ADR-0223）。
+- `_worker` `MAX_RESAMPLES=1`；`ActiveTask` 上限 20 → `OPERATOR_BUSY`；`_raise_node_failure` 映射 `NODE_FAILURE_CODES` 与 `tool_refused` → `OPERATOR_DEPENDENCY_UNAVAILABLE`。
+- `_messages`：`completed_context` 历史逐回合 `_authorize_snapshot` 再授权，`question[:4000]`、`answer≤10000`、总 ≤48,000、`history_runs` ≤60；末条 user 消息带 `question`+`page_selected_order`+`conversation_order`+`language`+`current_time`+`business_timezone`+`history_is_previous_observation`。
+
+## 答案复核与确定性计算
+
+- `operator_answer_review.py`：模型只判**凭空断言**；它抽出的 `currencies[]`/`station_names[]` 由程序对照 `known_facts()` 核验——模型的 allow 不能覆盖程序检查（ADR-0225/0219）。`REVIEW_VERSION=sha256(SYSTEM)`，1024 tokens，`reasoning_effort="none"`。站点说明复核按 run 判——同一问题不同 run 得不同结论合法。独立 `site_note_review.py` 已删（#1372），职责并入本层。
+- `analysis()` 只对已取证据计算；`order_billing/order_pricing/order_analysis` 用 `Decimal` 按历史费率核金额——`cpms_order_amount_check`/`cpms_order_process_stats` 的 `model_inputs=[]`，模型不能提交金额当核验事实。局部算术相符推不出优惠资格、原始计量、支付到账或整单无多收。
+- Java 侧预算：`GuardedChatModel` `modelCalls >= 12` → `MODEL_BUDGET`（见 [execution-node-contract](../execution/execution-node-contract.mdx)）。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/operator/operator_cpms.py`（_grant/_record/_complete/_worker/_messages 全部闸所在）
+- `src/aiops_diagnostics/operator/operator_agent.py`（SCHEMA/INSTRUCTIONS/order_candidate/analysis/render）
+- `src/aiops_diagnostics/operator/operator_tools.json` + `operator_tools.py`（唯一声明）
+- `src/aiops_diagnostics/operator/operator_answer_review.py`（verdict=allow + 程序核验）
+- `services/execution-node/.../GuardedChatModel.java`（12 次预算）

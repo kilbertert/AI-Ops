@@ -1,0 +1,50 @@
+---
+description: "会话持久化与归属：conversations/turns 按 scope_fingerprint 门控读、120s 生成锁与恢复、turn_no 永不复用、两个历史窗口（context_turns vs 每次再授权的 completed_context）、clarify 码、assistant_questions 生命周期"
+kind: architecture
+relations:
+  requires:
+    - identity/identity-scope.mdx
+  related:
+    - execution-model.mdx
+    - gateway/gateway-store.mdx
+    - consumer/consumer-chat.mdx
+    - operator/operator-chat.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/conversation/conversation_store.py
+    - src/aiops_diagnostics/conversation/clarification.py
+    - src/aiops_diagnostics/common/async_job_lifecycle.py
+---
+
+# 会话存储与归属
+
+## 归属门控
+
+- `conversations` PK `conv_`+uuid；**每次查读都按 `scope_fingerprint` 过滤**——跨范围的会话与"不存在"无法区分（不泄漏存在性）。`business_entry ∈ {consumer,operator}`；`agent_version_key` = `agt_hex#vN`。
+- `active_order_no` 被持久化但 `set_active_order` **不查归属**——调用方负责先验证订单可见再绑定（规则见 [identity-scope](../identity/identity-scope.mdx)）。
+
+## 生成锁
+
+- `generating_since`+`generating_turn_no`，`BUSY_LOCK_SECONDS=120`：崩溃 worker 的生成标记自行过期；窗口内 `begin_turn` 抛 `ConversationBusy`；`renew_turn_claim` 续期；`recover_interrupted_turns` 在 boot path 清扫（位置理由见 [gateway/gateway-store](../gateway/gateway-store.mdx)）。
+
+## 回合与历史
+
+- `conversation_turns` UNIQUE `(conversation_id, turn_no)`；`turn_no` 取 `max(last_turn_no+1, max_row+1)` **永不复用**；`kind ∈ {qa,diagnosis,faq}`；question ≤4,000 字符且入库即脱敏；`status_qa_id` 链回作业行。
+- **两个历史窗口刻意不同**：
+  - `context_turns`：最多 8 回合 / 8,000 tokens，最新必留，排除未答与 `status_qa_id` 回合。已知缺口写明："recent 不是权限检查"——已离开范围的订单仍在窗口内。
+  - `completed_context(before, limit=6)`：JOIN 回订单做范围复核——**两条聊天链实际消费的是这个**（consumer 见 [consumer-chat](../consumer/consumer-chat.mdx)，operator 见 [operator-chat](../operator/operator-chat.mdx)）。历史回合是"再授权后的解释材料"，不能冒充当前事实。
+- `clarification.py`：`CLARIFY_*` 码命名决定而非话术（`CLARIFY_WRONG_ENTRY`、`CLARIFY_ORDER_REQUIRED` 由快捷动作守卫产出）。
+
+## QA 作业账
+
+- `assistant_questions`（`qa_` id）：`queued/running/completed/failed/cancelled/expired`；profile `QUESTION`（deadline 15min、completed_retention 15min、interrupted 5min），`HEALTH_JOB` deadline 30s——profile/终态规则与清扫纪律统一在 `common/async_job_lifecycle.py`（见 [gateway-store](../gateway/gateway-store.mdx)）。
+- 读按 scope_fingerprint 门控；`GET /v1/assistant/questions/{qa_id}` 返回冻结结果。
+- 运行交付判定唯一权威是 `run_deliverability.deliverable()`（180s）——任何其他 TTL 算术都是错的。
+- 运行账词汇（`issued/running/succeeded/failed/revoked/expired`、`fail()` 首写获胜、`refuse()` succeeded→failed、`absorb()` 收存不交付）由 [execution/execution-delegation](../execution/execution-delegation.mdx) 持有；撤回绑定的 410 `CHAT_ROUTE_RETRACTED` 语义见同页（撤回留行，直读回落仅当从未有绑定）。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/conversation/conversation_store.py`（conversations/turns/context_turns/completed_context/生成锁/恢复）
+- `src/aiops_diagnostics/conversation/clarification.py`（CLARIFY_* 码）
+- `src/aiops_diagnostics/common/async_job_lifecycle.py`（profile 与终态）
+- `src/aiops_diagnostics/execution/run_deliverability.py`（唯一交付判定）
