@@ -83,3 +83,9 @@ fetch/prune确认base仍为`b9496f50`。v5源码、upgrade与两份测试逐字�
 llmdoc validate、wheel/sdist、Gateway镜像构建及无网络只读容器导入通过。
 证据在`dist/verification/consumer-source-values-delivery/`，包括冻结文件hash与构建身份。
 没有重复全量或模型回放；两草稿preview仍由父会话执行，不声明上线或新增真实工具循环验收通过。
+
+## PR评审补修
+
+Devin指出“仅取得状态”场景不应套用“取得状态和账务”的固定句子，已按实际取得资料描述范围，
+禁止把未查或被拒绝工具说成已经查到。金额及字段原值规则不变；原始三次工具预览保留，
+最终文字变更后的同题复验另记。本候选未正式发布，因此不为未发布v5中间文本新增永久迁移版本。
