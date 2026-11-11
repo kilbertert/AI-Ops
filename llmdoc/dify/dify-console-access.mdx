@@ -1,0 +1,63 @@
+---
+description: "Dify 控制台准入：登录代理用 SECRET_KEY 自签 HS256 会话（Dify 无改密 API）、公司登录交换是唯一身份源、invite→activate 开通、逐请求 TLS 闸、bridge BFF 人机分离+LOGIN_PROXY_URL 三态、workspace 生命周期 claim→create→ready、resolve 码绝不返回空串、inner-api 转发器、按工作区准入"
+kind: architecture
+relations:
+  related:
+    - execution-model.mdx
+    - dify/dify-execution-publishing.mdx
+    - dify/dify-self-service.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/dify/dify_login_proxy.py
+    - src/aiops_diagnostics/dify/dify_login_server.py
+    - src/aiops_diagnostics/dify/dify_login_service.py
+    - src/aiops_diagnostics/dify/dify_login_company.py
+    - src/aiops_diagnostics/dify/dify_login_provision.py
+    - src/aiops_diagnostics/dify/dify_console_publish.py
+    - src/aiops_diagnostics/dify/dify_console_admin.py
+    - src/aiops_diagnostics/dify/dify_workspaces.py
+    - src/aiops_diagnostics/dify/dify_ensure_workspace.py
+    - src/aiops_diagnostics/dify/dify_workspace_ready.py
+    - src/aiops_diagnostics/dify/dify_workspace_directory.py
+    - src/aiops_diagnostics/dify/dify_tenant_access.py
+    - src/aiops_diagnostics/dify/dify_inner_api.py
+    - ops/dify-console-bridge/README.md
+    - ops/dify-login-proxy/README.md
+    - ops/dify-inner-api/README.md
+---
+
+# Dify 控制台准入
+
+问题：公司用户如何合法地到达一个 Dify 工作区。答案分三段：登录代理发会话 → 开通邀请 → 工作区生命周期。bridge 的浏览器侧在本页，网关侧发布面在 [dify-execution-publishing](dify-execution-publishing.mdx)。
+
+## 登录代理（自签会话）
+
+- 代理用 Dify `SECRET_KEY` **自签** HS256 会话 JWT `{user_id,exp,iss,sub}`——Dify 只验签名+查 user_id，不验密码不存会话。原因：Dify 1.17.1 **没有给既有账号设密码的 API**（ADR-0023）。接受的代价：持有 SECRET_KEY = 能给任何账号铸会话 + 保护全部存储凭据 → 代理只听回环、不落盘不落日志任何密码/令牌。
+- **公司登录交换是唯一身份源**：代理自己做真 `/upms/token/login`（密码 AES 表单；失败是 HTTP 200+`code:-1000` 只靠中文 msg 区分），再按固定 `client-type` 头读 `/upms/user/info`（未知 client-type → 空角色集=静默"无权限"）。浏览器带来的公司令牌从不被信任。
+- 开通 = invite→activate→lookup，全走官方端点、无邮件（邀请 token 在响应里带回）；账号邮箱 = 确定性 `{environment}-{company_user_id}@aiops-login.invalid`——environment 是必填部署身份无默认（默认值会把 ADR-0061 修掉的跨环境账号碰撞悄悄引回来）。
+- TLS 是**逐请求**闸（`X-Forwarded-Proto==https`，缺=拒）不是配置串检查——明文 :10008 入口与 TLS 共用同一份 nginx conf，配置证明不了任何事（ADR-0055）。`X-Real-IP` 退避。
+- 已知接受项：refresh-token 恒 401——Dify refresh 是 Redis 一次性串，自签会话铸不出；前端不会把有效 access cookie 用户踢回，所以 `ACCESS_MINUTES` 是硬上限。`__Host-` 前缀恰好出现在 3 处（签发、登出清理、开通里硬编码的 csrf cookie 名）——漏第三处 = 新账号无法开通而老账号正常（ADR-0028）。
+
+## 工作区生命周期
+
+- 模型：`dify_workspaces(tenant_id, environment) → workspace_id + setup_state`——`(tenant,environment)` 二元组，因为两个 UPMS 能发出碰撞的 tenant_id（`environment` **不在**公司 JWT 里）。
+- `DifyWorkspaces.resolve` 返回 id 或**带码异常**（`UNRESOLVED`/`CREATING`/`FAILED`/`UNKNOWN`）——**绝不返回 `""`**：空 workspace_id = Dify 平台根 = 别人的工作区（ADR-0067）。码带下一步：UNRESOLVED→ensure-workspace；CREATING→重试；FAILED→重建；UNKNOWN→先对账别重建（Dify 没有删 workspace 的 API，重试会造永久孤儿，ADR-0068）。
+- 创建 = 先认领后创建 + 租约 + 名字对账（0=安全、1=收养、>1=`AMBIGUOUS` 交人）；`ensure-workspace`（建壳）vs `ensure-ready`（插件+每工作区凭据+模板 DSL+**激活**它写的凭据——读回 `current_credential_name`，"凭据存在"≠"凭据激活"，ADR-0078 真事故）。模板 DSL 刻意不带 `model_config.model` 与 `dataset_configs`（每工作区的值还不存在）。
+- `inner_api`（`POST /inner/api/enterprise/workspace`+成员端点）是**唯一**建工作区路径——console API 没有；经逐连接 `docker inspect` 的回环转发器+SSH 隧道到达；隧道不是授权（`X-Inner-Api-Key` 仍必须）。`failed`（错误响应/拒连）与 `unknown`（超时/短读/200 无 id）按 `HttpFailure.cause` 类型分——重试 unknown 会造永久孤儿。
+- `dify_console_admin.py`：`ADMIN_API_KEY + X-WORKSPACE-ID` 以该工作区 owner 身份操作；插件安装是异步任务要轮询到 success；凭据由 Dify 实验（假 key → 400）；每工作区凭据（每租户 RSA key）必须分开。
+
+## Bridge（BFF 人机分离）
+
+- `dify_console_publish.py`：先验人（Dify 会话 cookie+CSRF+工作区角色），再以机器身份用共享发布 key 调网关。Origin/Sec-Fetch/Referer 是请求上下文（反 CSRF），**从不是授权**；`app_id` 从 Referer 路径取；上游重定向不跟；上游错误 `code` 重建进 `{"error":{code}}` 信封而不是按 HTTP status 猜（ADR-0064）。
+- `AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL` 一键驱动三件事：发布授权、试用订单范围、审计发起者——设计上无半开状态（ADR-0028 §2）。配了但不可达：发布**拒绝**（fail-closed，落回 owner/admin 是静默扩权）；试用**回落**调试租户——刻意不对称，该行为先于决策且已被接受。
+- 控制台准入按工作区：租户账号进**自己**工作区不需全局权限码（隔离本身是闸）；平台共享工作区仍要全局 `aiops:agent:edit`/`aiops:agent:publish` 码（ADR-0139）。权限码是公司 UPMS 的两条 `sys_menu`+两个空角色（menu→role→user 模型）；`POST /menu` 自动授给 role_id=1，平台账号 system/huqq 因此持有发布——已接受、已审计（ADR-0029）。
+- 登录失败对用户只有一句中文，绝不回显密码/令牌/上游响应体；八种原因只在结构化 result-code 日志里区分（ADR-0053）。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/dify/dify_login_proxy.py` + `dify_login_company.py`（自签会话+唯一身份源）
+- `src/aiops_diagnostics/dify/dify_workspaces.py` (resolve 码非空串)
+- `src/aiops_diagnostics/dify/dify_ensure_workspace.py` + `dify_workspace_ready.py`（claim→create→ready/激活）
+- `src/aiops_diagnostics/dify/dify_console_publish.py`（BFF 人机分离、LOGIN_PROXY_URL 三态）
+- `src/aiops_diagnostics/dify/dify_inner_api.py`（failed≠unknown）
+- `ops/dify-console-bridge/README.md`、`ops/dify-login-proxy/README.md`、`ops/dify-inner-api/README.md`（部署资产与坑清单）

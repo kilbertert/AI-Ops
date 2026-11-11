@@ -1,0 +1,56 @@
+---
+description: "发布生命周期：agent_versions 只增不改、live_version 唯一服役判定、chat_route_bindings CAS 发布/撤回/恢复（撤回留行）、publish_audit_ledger 追加且永不抛错、发布顺序 Dify→route→audit、快捷动作 jump≠prompt、qa_rag 开场选择、agent_debug 预检"
+kind: architecture
+relations:
+  related:
+    - execution-model.mdx
+    - execution/execution-delegation.mdx
+    - dify/dify-execution-publishing.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/publication/agent_lifecycle.py
+    - src/aiops_diagnostics/publication/agent_serviceability.py
+    - src/aiops_diagnostics/publication/qa_rag.py
+    - src/aiops_diagnostics/publication/shortcut_lifecycle.py
+    - src/aiops_diagnostics/publication/agent_debug.py
+    - src/aiops_diagnostics/publication/agent_manifest.py
+    - src/aiops_diagnostics/execution/chat_route_bindings.py
+    - src/aiops_diagnostics/execution/node_publication.py
+    - src/aiops_diagnostics/gateway/gateway_store.py
+---
+
+# 发布生命周期
+
+## 版本与服役判定
+
+- `agent_versions` `(agent_id, version_no)` **INSERT-only 不可变**；publish → `version_no = MAX+1`。`agents` 行带 `status ∈ {draft,published,disabled}` + `published_version` 指针 + `revision` CAS。
+- `fork_draft` 刻意保留 `published_version`；`delete_draft` 只许未发布过的；`AgentManager` 角色闸（EDIT/VIEW/PUBLISH_ROLES）；模型白名单只在发布时检查。
+- `live_version()`（`agent_serviceability.py`）是服役判定的**唯一权威**：`LIVE_STATUSES={published,draft}` + `published_version`——编辑中的草稿仍服役其已发布版；`disabled` → None 立即停。
+- **任何已发布内容的恢复源是 `agent_versions.snapshot_json`**（prompt、SOP 文本、knowledge_base_ids、工具集）——git 历史不是服役真相。
+
+## 路由绑定（CAS）
+
+- `chat_route_bindings` PK `(environment, tenant_id, entry, scenario)`，`engine ∈ {node,dify}`，发布/撤回都在 `revision` 上 CAS 原地改状态。**撤回留行**：幂等且 retracted 拒绝是 `CHAT_ROUTE_RETRACTED` 410，与从未配置的 404 可区分（见 [execution-delegation](../execution/execution-delegation.mdx)——删行会静默落回直读）。
+- `by_key = "scenario:env:tenant"` 供 issue 时查寻。
+- **恢复 = 对路由绑定调 `publish()` 指向旧 version_no**——绝不回写版本行；恢复正式版与还原草稿是两步。
+
+## 发布顺序与审计
+
+- 顺序（`gateway_api.py` publish 路由）：**Dify 发布 → 路由 CAS 推进 → 审计**；`_advance_route_binding` 分写 `app_id`/`workflow_id`/`version`。Node 路由走 `node_publication.advance`（route CAS + retracted guard + revision guard；冲突类刻意"保持当前已发布"）。
+- `dify_app_registry` 在发布时 upsert `(tenant, entry)→(app_id, agent_name)`。
+- `publish_audit_ledger`（`gateway_store.py`）**append-only 且永不向发布路径抛错**；记录发起者身份（审计不是授权）。ADR-0188 的节点制品闸在工具合同变化时先挡 Gateway 部署（见 [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)）。
+
+## 开场与快捷动作
+
+- `qa_rag.select_customer_agent`：**只服务开场消息/快捷动作路径**；只取 published（经 `live_version`）；被任何已发布快捷动作钉为目标的"推广"agent 被排除在普通 QA 之外（设计如此，静默排除）。`agent_name` 来自注册表把选择变成查表，`None` 保留注册表前的"最新发布"回落；store 失败 → None → 零阶路径。
+- `shortcut_lifecycle.py`：`(tenant, business_entry, code)` 身份；同 draft→published→disabled 生命周期；`BANNER_KIND="banner"` vs 动作类；**`jump_path` 跳转动作永远到不了助手入口**；prompt 动作才提交问题；`requires_order` → `CLARIFY_ORDER_REQUIRED`，入口错 → `CLARIFY_WRONG_ENTRY`；内部平台与租户范围分开；文案缺口是确定性 CI 闸。
+- `agent_debug.py`：发布前检查（知识绑定/解析/可用性）；`agent_manifest.py` `EnvironmentManifest` 装载+对账。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/publication/agent_lifecycle.py`（不可变版本+角色闸）
+- `src/aiops_diagnostics/publication/agent_serviceability.py` (live_version 唯一判定)
+- `src/aiops_diagnostics/execution/chat_route_bindings.py`（路由 CAS）
+- `src/aiops_diagnostics/gateway/gateway_store.py` (publish_audit_ledger)
+- `src/aiops_diagnostics/publication/qa_rag.py`（开场选择是查表不是搜索）
+- `src/aiops_diagnostics/gateway/gateway_api.py`（发布编排顺序）

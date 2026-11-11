@@ -1,0 +1,70 @@
+---
+description: "身份解析与数据范围：resolver 装配与 source-key 闸顺序、四条凭据链、能力三档 ASSERTED/DERIVED/UNASSERTED、scope_fingerprint 计入与排除字段、entry_data_scope 四步失败关闭、QueryScope 语义、shop≠site、订单可见性三渲染、订单号语法"
+kind: architecture
+relations:
+  related:
+    - execution-model.mdx
+    - common/shared-primitives.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/identity/caller_auth.py
+    - src/aiops_diagnostics/identity/third_session_auth.py
+    - src/aiops_diagnostics/identity/company_token_auth.py
+    - src/aiops_diagnostics/identity/company_permissions.py
+    - src/aiops_diagnostics/identity/capability.py
+    - src/aiops_diagnostics/identity/scope_context.py
+    - src/aiops_diagnostics/identity/data_scope_rule.py
+    - src/aiops_diagnostics/identity/query_scope.py
+    - src/aiops_diagnostics/identity/order_visibility.py
+    - src/aiops_diagnostics/identity/order_identity.py
+    - src/aiops_diagnostics/gateway/gateway_api.py
+---
+
+# 身份与数据范围
+
+## Resolver 装配（gateway_api.py）
+
+- source-key 闸在会话级**之前**（`_caller_resolver`）：会话级命中会 early return，闸放后面会让公司令牌链在有 `third_session_service_token` 的部署上整条不可达（41 实测）。未配置 `company_source_key` → 整条新链不构造，不是放行。
+- `_company_token_resolver` 配置读取失败返回 None → 回落到旧链 → 带 key 的请求得到 401 而非放行。
+- `_fallback_caller_resolver` 逐字选择：`third_session_service_token` → RedisThirdSessionResolver；无 `introspection_url` → UpmsCallerResolver；否则 IntrospectionCallerResolver；配置错 → DisabledCallerResolver。
+- `_authenticate_caller` 是 CallerAuthError → 出口错误的**唯一**映射点（之前有三个漂移副本）；`platform_entry`/`source_key` 无条件传给每个 resolver，请求不能靠加头改变语义；`CONFIG_MISSING` → 503 `ACCESS_TOKEN_VALIDATION_UNAVAILABLE`（在此决定，不在抛出点）。
+
+## 四条凭据链与能力三档（ADR-0231）
+
+| 链 | Resolver | 档位 | 要点 |
+|---|---|---|---|
+| Introspection | IntrospectionCallerResolver | ASSERTED | RFC7662 active+audience+scope+expiry；唯一能产出 `INSUFFICIENT_SCOPE` 403 的链 |
+| Session | RedisThirdSessionResolver | DERIVED | service_token compare_digest → `app:3rd_session:` → C-userId/tenantId；C→B 经 `BSubjectDirectory` 同租户过滤+唯一性+echo 校验 |
+| Company token | CompanyTokenCallerResolver | DERIVED | check_token 远程 vs 本地 HS256 互斥（validate()）；`trust_company_payload` 默认不验签（公司对齐，靠 source-key 闸缓解） |
+| UPMS | UpmsCallerResolver | UNASSERTED | 目录推导 |
+
+- DERIVED/UNASSERTED 链 `permissions=frozenset()` 是语法闸——"路由要求"不等于"凭据声明"（echo 陷阱）。`capability_verdict` 是唯一判定表。
+- **未证实的坑**：check_token 的服务间调用可行性未验证（模块 docstring 保留整个 caveat）——按未验证对待，不要当事实引用。
+- `CompanyPermissionSource` 用**调用者自己的 token** 调 `/user/info`；`PermissionCodeCache` 按 **token 指纹**缓存（吊销半径=令牌寿命而非用户 id）；上游失败 → 空 roles + 可区分日志（fail closed 不是 500）。真实身份路径 roles 恒空的缺陷由此修。
+- session 链 `_data_scope` 调 `entry_data_scope` 并走 `/shopuser/getShops` 实查（ponytail：无缓存，升级需给陈旧度上界）。
+
+## ScopeContext 与指纹
+
+- `scope_context.py` 模块 docstring 即身份合同：caller 只来自有效凭据、subject≠caller、碰 DB 前先 fail closed、凭据不进 ScopeContext/审计/报错。
+- `ScopeContext` 冻结；`__post_init__` 重算指纹并**拒绝与所供值不符的指纹**。
+- `_scope_fingerprint` 计入：caller/subject 的 b+c id、subject_user_type（改变可见性）、delegated、effective_tenant_id、完整 data_scope、排序 roles。**排除**：`permissions`、`capability_source`、`b_subject_reason`——它们不改变可见性，改了不该让历史全部失效。
+- `is_operator_entry` 由 `X-Business-Entry` 头决定**内容域**而非身份；未识别 → False = 最窄。
+- 会话→B 主体的占位 `b_user_id` 带 `b_subject_reason` 码（NOT_CONFIGURED/FAILED/NOT_FOUND/TENANT_MISMATCH/AMBIGUOUS/C_USER_MISMATCH）；consumer 不受影响，operator 消费必须对非空 reason fail closed。
+
+## 数据范围与可见性
+
+- `entry_data_scope`（`data_scope_rule.py`）四步是"入口+主体→数据范围"的唯一序列：(1) 仅 operator 入口否则 self；(2) 租户级账号 `type∈{-1,1}` → all；(3) `subject_unavailable` → self；(4) caller 供 site_ids → organ。任何不可用 → `organ` + `site_ids=()`——失败关闭到空集，**绝不**回落全租户或 self（两者对同一订单答案相反）。
+- `QueryScope`：tenant 恒定；`site_ids=None` = 租户内全部，`()` = 空集短路不打 SQL；`MAX_SCOPE_IDS=1000`。目录/配置任何失败在碰 MySQL 前抛 ScopeError。
+- **shop ≠ site**：`resolve_operator_site_scope` 必须经 `ch_site.shop_id` 映射（953/954 行相等仅一个例外）；两种空集原因分开记日志：`no_shop_binding`（登记缺口）vs `shop_without_site`（数据缺口）。
+- `order_visibility.py`：一条租户可见性规则三种渲染——`resolve_device_tenant`（入口）、`visible_orders`（行）、`scope_where_sql`（参数绑定 SQL）；UNKNOWN_TENANT fail closed。
+- `order_identity.py`：`ORDER_ID_ATOM` 是订单号语法的唯一权威；自由文本候选要求含数字且纯数字段 ≥15 字符（曾把 "Please" 当订单号）。
+- `ScopedOrderAuthorizer`：快照优先，`organ` 范围拒绝后经 `/shopuser/getShops` 拿第二意见（快照会陈旧）；兜底异常一律保持拒绝只记类型名——编程错误不得把 deny 变成 500。
+- 内部服务面用 `common/http_auth.py` 的 HMAC+时间戳令牌（`X-Internal-Token`），未配置 secret 的路由整体 404。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/identity/scope_context.py`（docstring、ScopeContext、_scope_fingerprint、is_operator_entry）
+- `src/aiops_diagnostics/identity/data_scope_rule.py` (entry_data_scope)
+- `src/aiops_diagnostics/identity/query_scope.py` (resolve_query_scope, operator_site_scope_from_shops)
+- `src/aiops_diagnostics/identity/caller_auth.py` (SourceKeyCallerResolver, ScopedOrderAuthorizer)
+- `src/aiops_diagnostics/gateway/gateway_api.py` (_caller_resolver, _authenticate_caller)

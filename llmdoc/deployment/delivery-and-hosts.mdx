@@ -1,0 +1,82 @@
+---
+description: "交付面与主机拓扑：按组件制品表（Gateway src/ 是唯一 CD 制品、文件拷贝无 .git）、dev-host 角色断言+artifact-sha256、deploy-41.sh 各闸（陈旧审批/节点制品/依赖漂移/健康+自动回滚）、images.lock 合同、暴露登记纪律、41/36 分工、手工部署台账、GitLab 镜像非运行源、CD 审批闸已永久移除"
+kind: architecture
+relations:
+  related:
+    - execution-model.mdx
+    - execution/execution-node-contract.mdx
+    - governance/governance-afk.mdx
+code:
+  paths:
+    - deploy/deploy-41.sh
+    - deploy/classify-remote-result.sh
+    - deploy/record-manual-deploy.sh
+    - deploy/node-runtime/README.md
+    - deploy/dify-36/README.md
+    - ops/README.md
+    - ops/dify-exposure-registry.md
+    - ops/environments/env-41.toml
+    - docs/agents/actions-delivery.md
+    - docs/agents/env-41-runbook.md
+    - .github/workflows/cd.yml
+    - .github/workflows/cd-watch.yml
+    - .github/workflows/gitlab-mirror.yml
+    - .sandcastle/cd-watch.mjs
+    - .sandcastle/deploy-state.mjs
+---
+
+# 交付面与主机拓扑
+
+核心事实：**制品按组件拆分、所有者各不相同。"合并绿灯"永远不等于"所有组件都新"。**
+
+## 制品-组件表
+
+| 组件 | 目标 | 机制 |
+|---|---|---|
+| Gateway `src/` | 41 `/opt/aiops-41` | `cd.yml` push to main（限 `src/**`、deploy 脚本、cd.yml、pyproject.toml、uv.lock）→ `deploy-41.sh --commit $SHA`。**文件拷贝部署，41 上没有 .git** |
+| Gateway release notes | GitHub Releases | deploy-41 之后独立 job，可单独重跑；其失败绝不意味部署失败（ADR-0233） |
+| Java 节点 jar+声明+回调 | 41 node-runtime | 手工三件套（见 [execution-node-contract](../execution/execution-node-contract.mdx)）：git archive→离线 mvn→`dev-host cp --artifact-sha256`→原子 `current`→定向重建→就绪轮询 |
+| model-proxy | 41 | 随 Gateway 镜像走；Compose+镜像成对切换（见 [execution-node-contract](../execution/execution-node-contract.mdx)） |
+| Dify 栈+console bridge+web 镜像 | 36 `/opt/dify` | 独立版本化：上游 1.17.1+`patches/`（sha256 校验 apply，拒陈旧补丁）+`web-patches/` 重建镜像（**只认 webpack**，Turbopack 零产物）；`DIFY_WEB_IMAGE` 切换必须 `--force-recreate` |
+| Dify 应用 DSL | Dify console | `deploy/dify-chat/*.dsl.yml` 版本化资产；改 prompt 要 `--live-documents` 迁移+`/v1/dify/publish` 才算生效 |
+| kb-service 补丁 | 36 | `deploy/kb-service/build.py`+`verify_defaults.py`；dev-host cp+原子替换+只重启适配器 |
+| 宿主机 nginx 片段 | 41/36 vhosts | `ops/nginx/*.conf` 作已识别制品安装（`--artifact-sha256`+`nginx -t`+reload）；**在 CD 之外**，记 `deploy/manual-deploys.md` |
+| GitLab 镜像 | 公司 GitLab ai-products/ai-ops | `gitlab-mirror.yml` 镜像每个 push 的 ref。**镜像不是运行源**——镜像成功≠CI/合并/部署；其独立失败≠部署失败 |
+
+## dev-host 传输合同
+
+统一主机访问：`dev-host show` 断言 role=service-host+status=active 否则停；`dev-host cp --artifact-sha256` 在上传时强制制品身份（不符 exit 77——策略闸不是自我声明）；`dev-host exec --allow-service-exec` 门控服务主机写。CD 用派生注册表视图，只换 `ssh_alias→aiops-41-cd`，与权威 `~/.config/dev-host/hosts.toml` 逐字段核对。
+
+## deploy-41.sh 各闸（每道都是事故修复）
+
+- **陈旧审批闸**：目标 commit 是当前生产 commit 的祖先 → 拒；job 并发串行化但不给审批排序；`--rollback-to` 自豁免。
+- **节点制品闸**（ADR-0188）：目标祖先里最后一个碰 `services/execution-node/` 的 commit ≤ 运行容器 `AIOPS_NODE_BUILD`（读 `docker inspect` 不读 runtime.env——env 与容器窗口就是真 bug）。不过 → "先部署节点，再重跑 CD"。机制背景见 [execution-node-contract](../execution/execution-node-contract.mdx)。
+- **依赖漂移闸**：pyproject 按依赖**声明**比（注释差异曾卡死 CD）；uv.lock 按解析包集比（去掉本项目自身版本）。漂移 → 停并指向依赖更新手册；41 上绝不自动安装（uv sync 会替换 editable 安装悄悄弄坏 src 同步）。
+- **健康+自动回滚**：变更阶段累积状态绝不早退（远端 `set -e` 中断曾留半部署）；检查 = mutate_rc==0 + systemctl active + `/health` 版本==`<semver>+<sha12>`；回滚恢复自带备份并用同一解析器核对部署前版本；marker 只走 stdout 给 `classify-remote-result.sh` 分类（测试钉住失败分类法）。
+- **console 预检**：替换源码前先用候选代码验活 Dify 控制台配置。
+
+## images.lock.json 合同
+
+平台 jar（snail-ai 钉 gitee 提交+sha+bytes）、node `{jar sha256, source_commit, source_sha256}`（`source_digest.py` 字节级含注释）、`base_images.refs` 按主机（41 走镜像前缀 ref；preflight 只认锁定 ref+image_id，不认 tag 名或 image-override 参数）、`gateway_image` = 仅 base digest——产出属于随制品走的 `gateway-image/identity.json`（ADR-0208；`M2LIVE_GATEWAY_IDENTITY_SHA256` 必须来自构建侧记录，绝不在服务主机重算）。`--update-lock` 被拒；普通 src PR 不碰它。
+
+## 暴露纪律与拓扑
+
+- `ops/dify-exposure-registry.md` 是 Dify 可达面的唯一声明；列序是合同（CI 按单元格位置解析）；`tests/dify/test_dify_exposure_registry.py` 断言声明==路由；表外必须不可达——**从 Dify 容器的 netns 验**（宿主机视角会撒谎）。新公网暴露从**观测流量**决定，不从监听端口。
+- `ops/nginx` 片段用方法分流 location 而非路径正则（一个 `location ~` 曾把 `POST /v1/shortcuts` 管理面打开）；`limit_except` 不够。
+- 主机：41=服务主机（Gateway+node-runtime+隔离 m2-live-03 栈）；36=移动云（Dify 1.17.1、kb-service、RAGFlow——Dify 栈刻意不加 docker 组不与兄弟共 DB/Redis/向量库）。**CD 只部署 41，不碰 36**——合并绿灯不等于两台都更新；36 资产是另一交付路径的手工检出。
+- 手工部署台账 `deploy/manual-deploys.md`：任何绕 CD 上生产的动作必须**当日**经 `deploy/record-manual-deploy.sh` 追加——六次连续 CD 失败曾因手工 rsync 保持生产更新而无人察觉（#407）。台账 append-only，永不重写。
+- CD Watch（`.sandcastle/cd-watch.mjs`+`cd-watch.yml`）：每 5min 跑在 **GitHub-hosted** runner（看守者与被看守机器同死就没意义）；经 `pending_deployments` 判 deploy-41 结果（等待与没跑看起来一样）+最近完成 runs；开 `cd:needs-attention` issue 而非报错红——未关的 issue 本身就是警报。
+- **CD 审批闸已永久移除**（2026-09-30 明确决定）："能合并 main 的人"=="能改生产的人"；Ruleset（PR+必需检查+会话解决）是剩余闸门。回滚方法=给 `production-41` 环境重加 required_reviewers。
+
+## 失败语义速查
+
+deploy-41 失败 → 生产未更新（远端自检回滚）；release-notes 失败 → 生产已更新，重跑 job 即可；deploy 排队/pending → 查 runner 在线/忙碌+并发锁，别假设"等审批"；**PR 冲突 → pull_request 工作流根本不派发**（先按 sha 查 total_count 证明"没跑"，再谈"慢"）。
+
+## Canonical anchors
+
+- `deploy/deploy-41.sh`（各闸）+ `deploy/classify-remote-result.sh`（失败分类法）
+- `deploy/node-runtime/README.md`（最承重的节点交付文档）
+- `deploy/m2-live-03/images.lock.json`（制品身份合同）
+- `ops/dify-exposure-registry.md`（暴露唯一声明）
+- `docs/agents/actions-delivery.md`、`docs/agents/env-41-runbook.md`（交付手册+主机合同）
+- `.github/workflows/{cd.yml,cd-watch.yml,gitlab-mirror.yml}`

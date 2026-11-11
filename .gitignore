@@ -15,6 +15,10 @@ reports/
 .aiops/
 node_modules/
 
+# llmdoc 临时工作区：调查底稿、reflection 候选是本机易失缓存（与 .pytest_cache/
+# 同性质），不入仓；正式知识面在已登记的 llmdoc/。
+.llmdoc-tmp/
+
 # Read-only production source snapshot used to derive diagnostic rules.
 backend-v2-domestic/
 backend-v2-domestic.zip
