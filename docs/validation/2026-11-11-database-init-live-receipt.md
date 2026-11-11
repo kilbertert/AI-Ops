@@ -72,12 +72,12 @@ Ruff检查与格式检查通过，4份文档的相对链接及新增制品命令
 显式填写路径与readiness，所有选定路径先核非空、绝对、无符号链接/嵌套/同文件冲突及存在性；
 active与backup存在、failed不存在后才停服务。env/unit/nginx分别按本次变更标志恢复，正式数据库不参与。
 
-从手册原文提取代码块，只替换填写区；在临时目录执行真实mv/cp，以systemctl/nginx替身记录调用次序：
+此前对aa73974f版手册原文提取代码块，只替换填写区；在临时目录执行真实mv/cp，以systemctl/nginx替身记录调用次序：
 
 | 组合 | 实际判据与结果 |
 |---|---|
 | code-only | 只恢复完整代码，无配置备份也通过；无daemon-reload/nginx调用 |
-| env-only（代码回退＋仅env恢复） | 环境文件内容和模式恢复；unit/nginx保持原值，无其备份也通过 |
+| env-only（代码回退＋仅env恢复） | 环境文件内容恢复；unit/nginx保持原值，无其备份也通过；配置元数据语义见下方补验 |
 | unit+nginx | unit及两份nginx文件恢复，daemon-reload→nginx -t→reload→start顺序通过；env保持原值 |
 
 另有11项前置拒绝通过：未ready、未替换占位路径、空路径、相对路径、同路径、嵌套路径、缺backup、
@@ -85,7 +85,20 @@ active与backup存在、failed不存在后才停服务。env/unit/nginx分别按
 模拟nginx校验失败时，旧代码/指定配置已经恢复，但未reload、未start，停在可定位的失败点。
 共15项执行通过，各项数据库哨兵不变；不是仅bash语法检查，也不是生产回滚演练。
 
-复跑命令：`uv run python dist/verification/database-init-live-receipt/rollback-review/replay.py`。
-临时驱动及提取的示例、调用次序、结果保留在同目录，不新增部署器或长期测试框架。
+上述`replay.py`是未入仓的私人一次性验证脚本，位于忽略目录；干净checkout没有该文件，不能直接复跑。
+可联系维护者获取选定、脱敏的验证artifact（制品）。可复制的执行合同是仓库[手册§7.2](../agents/dify-login-proxy-36-runbook.md#72-一个回滚入口配置按本次变更独立恢复)，
+不是该私人脚本；本次不为留存验证而新增长期脚本或部署器。
 本次只修手册并追加本回执，不修改源码/版本；文档/目录定向检查25 passed，Ruff检查/格式及diff检查通过，
-未重复653项文档档测试。父会话负责三个review回复、resolve与一次复审。
+未重复653项文档档测试。父会话已处理首轮三个review并请求一次复审；复审预算已用完，不再请求新review。
+
+### 配置元数据补验与最终边界
+
+父会话确认`cp -a`恢复可能导入错误备份元数据的风险，但“因此代理必然启动失败”的推论不成立：
+系统服务的EnvironmentFile由systemd系统管理器（root）读取，服务身份直接读文件的预检是另一条路径。
+手册改为备份时`cp -a`并记录原UID/GID/mode、恢复前核对；向已存在配置恢复内容使用
+`cp --no-preserve=mode,ownership`，不导入备份属组或mode。
+
+本地GNU coreutils 9.4实测两组普通文件：目标0640/备份0600、目标0600/备份0644。
+内容均回退成功，目标mode、UID、GID保持原样；`cp -a`对照均复制了备份mode。仅同一开发用户临时文件，
+未创建测试用户、未执行chown或修改生产权限；不冒充跨用户属组或ACL/SELinux验证。
+结果留私人证据`metadata-review/cp-metadata.json`。父会话按证据回复/关闭最终线程，本轮不追加复审请求。

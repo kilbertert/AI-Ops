@@ -75,6 +75,7 @@ dev-host cp "$LOGIN_TARGET" "$LOGIN_ARTIFACT" --dest "$LOGIN_ARTIFACT_DEST" \
 临时SQLite副本放在服务数据目录内由服务身份创建的私有临时子目录，不覆盖正式文件。
 
 切换前分别备份并记录代码目录、环境文件、服务单元的原路径、备份位置、摘要与恢复顺序。
+配置备份使用`cp -a`，并用`stat -c '%u:%g %a'`记录原文件UID、GID与mode、核对备份保留的元数据。
 备份目录使用本次唯一标识，先确认目标不存在，避免`mv`遇到已有目录时意外嵌套；恢复前同样检查失败代码留存位置。
 环境文件和单元即使本次不改也保留备份；不打印配置正文。仅当本次另改nginx时才备份并执行§4/§7的配置步骤。
 
@@ -363,6 +364,10 @@ E. `POST http://36.156.159.175:10008/__aiops/login` 带伪造头 `X-Forwarded-Pr
 所有路径都须是无符号链接、无`..`且不以`/`结尾的绝对路径；代码和配置位置不能相同或互相嵌套。
 `LOGIN_READY=NO`使原样粘贴停止；确认目标、备份与变更标志后才改成`YES`，占位路径仍会被拒绝。
 `env-only`指代码回退同时仅恢复env；它不要求unit或nginx有备份。
+恢复前按备份记录核对现役目标与备份的UID/GID/mode；现役目标不符合原记录时先停止并核实原因，
+不要靠复制备份元数据覆盖问题。下例只向已存在的普通配置文件恢复内容，保留目标属主、属组和mode。
+系统服务的`EnvironmentFile=`由systemd系统管理器（root）读取，并非由代理进程读取；
+备份属组错误是权限漂移风险，不能据此断言代理必然启动失败。服务身份直接读文件的预检另核读权限。
 
 ```bash
 set -euo pipefail
@@ -431,7 +436,7 @@ systemctl stop "$LOGIN_SERVICE"
 mv -- "$LOGIN_ACTIVE_ROOT" "$LOGIN_FAILED_ROOT"
 mv -- "$LOGIN_CODE_BACKUP" "$LOGIN_ACTIVE_ROOT"
 for i in "${!login_files[@]}"; do
-  cp -a -- "${login_backups[i]}" "${login_files[i]}"
+  cp --no-preserve=mode,ownership -- "${login_backups[i]}" "${login_files[i]}"
 done
 if [ "$LOGIN_UNIT_CHANGED" = 1 ]; then systemctl daemon-reload; fi
 if [ "$LOGIN_NGINX_CHANGED" = 1 ]; then
