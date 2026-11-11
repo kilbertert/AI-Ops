@@ -457,6 +457,13 @@ class GatewayServerSettings:
         )
 
     def validate(self) -> None:
+        from aiops_diagnostics.gateway import gateway_schema
+
+        # 必须早于内部路由 store 构造；同版本漂移也拒绝启动。
+        for database in (self.database_file, self.chat_route_bindings_file):
+            if database and Path(database).is_file():
+                gateway_schema.startup(Path(database))
+
         if bool(self.operator_trial_login_url) != bool(self.operator_trial_key):
             raise ValueError("operator trial login URL and key must be configured together")
         if self.operator_trial_key:

@@ -111,6 +111,9 @@ class GatewayRuntime:
         dify_workspaces: Any = None,
         knowledge_dataset_sync_guard: Any = None,
     ) -> None:
+        from aiops_diagnostics.gateway import gateway_schema
+
+        gateway_schema.startup(store.path)
         self.store = store
         self.gateway_settings = gateway_settings
         self.diagnostic_settings = diagnostic_settings
