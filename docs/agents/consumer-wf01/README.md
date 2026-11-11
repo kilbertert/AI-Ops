@@ -53,8 +53,8 @@ Gateway校验grant、主体、订单、图版本、取消及预算，取数前�
 1.7.1在原billing中补充订单摘要、完整费用白名单及有界分时记录，详情与费用问题据此回答；
 零、缺项、无效值和截断分开说明，分时电量不作为独立计量证据。现役v6发布图还须精确更新指令块，
 保留运营前后文本。1.7.2将事实约束v2放到全文末尾，明确缺币种/缺项与禁止模型自行合计、
-未核验安抚结论；1.7.3候选v3进一步要求开头概括与缺项一致，不保证记录齐全。
-方法与字段映射见[订单构成QA](order-composition-qa.md)，草稿先验范围见[本轮记录](../../validation/2026-11-11-consumer-composition-completeness.md)。
+未核验安抚结论；1.7.3的v3要求开头概括与缺项一致，1.7.4候选v4补充跨语言逐字段区分零收费与缺项。
+方法与字段映射见[订单构成QA](order-composition-qa.md)，英文草稿先验范围见[本轮记录](../../validation/2026-11-11-consumer-fee-presence.md)。
 
 App的Accept-Language作为回答语言输入，即使提问是另一语言；语义质量需实际审校。
 首次POST返回Gateway conversation_id，后续普通问题原样携带；这不是Dify会话ID。
