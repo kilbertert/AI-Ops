@@ -4201,7 +4201,7 @@ def create_gateway_app(
                     authorization[7:],
                     json.loads(image_text or "{}"),
                     read_snapshot=lambda scope, order, kind: _authorized_consumer_snapshot(
-                        context.settings, scope, order, kind
+                        context.settings, scope, order, kind, include_composition=True
                     ),
                     list_orders=own_orders,
                 )
@@ -7003,7 +7003,7 @@ def _require_visible_order(context: Any, caller: ScopeContext, order_no: str) ->
         raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
 
 
-def _authorized_consumer_snapshot(settings, caller, order_no, data_kind):
+def _authorized_consumer_snapshot(settings, caller, order_no, data_kind, *, include_composition=False):
     if data_kind == "status":
         return _authorized_charging_snapshot(settings, caller, order_no)
     from aiops_diagnostics.consumer.consumer_billing import read_billing_record
@@ -7016,6 +7016,7 @@ def _authorized_consumer_snapshot(settings, caller, order_no, data_kind):
         order_no,
         tenant_id=caller.effective_tenant_id,
         user_id=caller.subject.c_user_id or "",
+        include_composition=include_composition,
     )
 
 

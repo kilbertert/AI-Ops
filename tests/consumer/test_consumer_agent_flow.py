@@ -46,6 +46,36 @@ def test_agent_migration_preserves_business_prompt_model_and_permission_ceiling(
     assert not ceiling["live_order_status"]
 
 
+@pytest.mark.parametrize("suffix", ["", "\n运营要求：不用Markdown；结论、依据、末尾明细。"])
+def test_order_composition_migration_is_exact_idempotent_and_preserves_business(suffix):
+    from aiops_diagnostics.consumer import consumer_agent_flow as flow
+
+    source = {"workflow": candidate(), "dependencies": [{"unchanged": True}]}
+    instruction = source["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]
+    business = "运营自定义：请使用原有措辞。\n\n"
+    instruction["value"] = business + flow.BASE_INSTRUCTION + suffix
+    original = copy.deepcopy(source)
+    updated = upgrade.order_composition(source)
+    assert source == original
+    assert upgrade.order_composition(updated) == updated
+    expected = copy.deepcopy(source)
+    expected["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]["value"] = (
+        business + flow.INSTRUCTION + suffix
+    )
+    assert updated == expected
+    assert publish(updated["workflow"])["callback_version"] == 6
+    for invalid in (
+        flow.BASE_INSTRUCTION.replace("8次", "9次").replace("你是充电客服", "你是客服"),
+        flow.BASE_INSTRUCTION * 2,
+        flow.BASE_INSTRUCTION + "<!-- aiops-order-composition:2 -->",
+    ):
+        instruction["value"] = business + invalid + suffix
+        with pytest.raises(ValueError):
+            upgrade.order_composition(source)
+    with pytest.raises(ValueError, match="v6"):
+        upgrade.order_composition({"workflow": picker_graph(["kb-own"])})
+
+
 @pytest.mark.parametrize(
     "change",
     [

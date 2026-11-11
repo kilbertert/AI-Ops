@@ -369,7 +369,7 @@ def test_chatflow_and_node_use_the_managed_tenant_endpoint(tmp_path, monkeypatch
     caller = SimpleNamespace(effective_tenant_id="TENANT-B", subject=SimpleNamespace(c_user_id="USER-B"))
     seen = []
 
-    def read(base, order, *, tenant_id, user_id):
+    def read(base, order, *, tenant_id, user_id, include_composition=False):
         seen.append((base, order, tenant_id, user_id))
         return {"order_no": order}
 
