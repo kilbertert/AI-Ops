@@ -261,7 +261,7 @@ def agent_conversation(source, plugin_identifier):
 
 
 def order_composition(source):
-    """现役v6仅替换唯一完整仓库指令块，运营前后文本逐字保留。"""
+    """现役v6保留业务文本，只将唯一已知订单规则升级并放到全文末尾。"""
     from aiops_diagnostics.consumer import consumer_agent_flow as flow
 
     candidate = copy.deepcopy(source)
@@ -278,11 +278,15 @@ def order_composition(source):
     text = instruction.get("value")
     if instruction.get("type") != "constant" or not isinstance(text, str):
         raise ValueError("无法识别Agent指令")
-    old = flow.INSTRUCTION if flow.INSTRUCTION in text else flow.BASE_INSTRUCTION
     if text.count(flow.BASE_INSTRUCTION) != 1:
         raise ValueError("原Agent指令块不唯一或不匹配，需人工核对业务文本")
-    updated = text.replace(old, flow.INSTRUCTION, 1)
-    if "aiops-order-composition:" in text.replace(old, "", 1) or len(updated) > 16000:
+    blocks = (flow.ORDER_COMPOSITION_INSTRUCTION_V1, flow.ORDER_COMPOSITION_INSTRUCTION)
+    if sum(text.count(block) for block in blocks) > 1:
+        raise ValueError("重复订单构成规则块，拒绝迁移")
+    for block in blocks:
+        text = text.replace(block, "", 1)
+    updated = text + ("" if text.endswith("\n") else "\n") + flow.ORDER_COMPOSITION_INSTRUCTION
+    if "aiops-order-composition:" in text or len(updated) > 16000:
         raise ValueError("重复标记或指令超限，拒绝迁移")
     instruction["value"] = updated
     return candidate
