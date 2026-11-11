@@ -28,7 +28,7 @@
 完整判据与结果见[验收记录](../validation/2026-11-11-llmdoc-bootstrap.md)。
 
 当前缺口：README.md:184 遗留一处 `site_note_review` 失效提及（已标记，未在本轮修）；
-Dify 工具提供方 `api_key_header_prefix` 坑仍只存在于扁平档案，未收入检索面；
+Dify 工具提供方 `api_key_header_prefix` 坑已收入 `llmdoc/knowledge/knowledge-plane.mdx`；
 检索面质量未经真实任务回用验证。
 未完成业务验收：本里程碑为文档/工具面，无业务旅程适用。
 

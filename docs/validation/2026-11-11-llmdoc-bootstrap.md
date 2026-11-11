@@ -48,5 +48,5 @@ delivery-services-governance）与合并后的 `domain-owner-matrix.md`。
 未完成业务验收：本里程碑为文档/工具面，无业务旅程适用；检索面质量待后续真实任务回用。
 已知未修项：README.md:184 遗留 `site_note_review` 失效提及；
 Dify 工具提供方 `api_key_header_prefix` 坑（默认 `basic` 会把 Bearer 组装成
-`Basic Bearer`，调用时才 401）仍只在扁平档案，未收入检索面。
+`Basic Bearer`，调用时才 401）已收入 `llmdoc/knowledge/knowledge-plane.mdx`。
 分支未推送、未开 PR。
