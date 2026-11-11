@@ -48,7 +48,7 @@ def test_agent_migration_preserves_business_prompt_model_and_permission_ceiling(
 
 
 @pytest.mark.parametrize("suffix", ["", "\n运营要求：核心结论应安抚并说明有无问题；不用Markdown，末尾明细。"])
-@pytest.mark.parametrize("version", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("version", [0, 1, 2, 3, 4, 5])
 def test_order_composition_migration_is_exact_idempotent_and_preserves_business(suffix, version):
     from aiops_diagnostics.consumer import consumer_agent_flow as flow
 
@@ -73,6 +73,11 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
         )
         instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION_V3
     elif version == 4:
+        assert hashlib.sha256(flow.ORDER_COMPOSITION_INSTRUCTION_V4.encode()).hexdigest() == (
+            "b229955ccf22f797afa77f52b116d0e9c4c77eff2807b63b65c6affd48dfe4fd"
+        )
+        instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION_V4
+    elif version == 5:
         instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION
     original = copy.deepcopy(source)
     updated = upgrade.order_composition(source)
@@ -89,7 +94,7 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
     assert updated == expected
     assert updated["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"][
         "value"
-    ].endswith("<!-- /aiops-order-composition:4 -->\n")
+    ].endswith("<!-- /aiops-order-composition:5 -->\n")
     assert publish(updated["workflow"])["callback_version"] == 6
     for invalid in (
         flow.BASE_INSTRUCTION.replace("8次", "9次").replace("你是充电客服", "你是客服"),
@@ -98,6 +103,8 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V1 * 2,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V2 * 2,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V3 * 2,
+        flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V4 * 2,
+        flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V4 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V3 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V2 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V1 + flow.ORDER_COMPOSITION_INSTRUCTION,
@@ -112,6 +119,31 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
             upgrade.order_composition(source)
     with pytest.raises(ValueError, match="v6"):
         upgrade.order_composition({"workflow": picker_graph(["kb-own"])})
+
+
+def test_migration_removes_known_arithmetic_permission_without_replacing_business_text():
+    from aiops_diagnostics.consumer import consumer_agent_flow as flow
+
+    source = {"workflow": candidate()}
+    instruction = source["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]
+    business = (
+        "金额核对只报告工具原值及可核对的算术差额。其余风格保留。\n"
+        "简短依据：只报告工具原值及可核对的算术差额；未知原因如实说明。"
+    )
+    instruction["value"] = flow.BASE_INSTRUCTION + business + "\n"
+    expected = copy.deepcopy(source)
+    replacement = "只报告同名字段原值；金额不同仅并列原值，不计算差额"
+    expected["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]["value"] = (
+        flow.BASE_INSTRUCTION
+        + business.replace("只报告工具原值及可核对的算术差额", replacement)
+        + "\n"
+        + flow.ORDER_COMPOSITION_INSTRUCTION
+    )
+    original = copy.deepcopy(source)
+    changed = upgrade.order_composition(source)
+    assert changed == expected
+    assert source == original
+    assert upgrade.order_composition(changed) == changed
 
 
 @pytest.mark.parametrize(

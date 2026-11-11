@@ -74,7 +74,7 @@ marketAmount优惠减免、vat税率%、vatFee税费分别说明；order_amount�
 缺项、异常与截断按工具说明；退款和支付仅是账务记录，不证明银行扣款或到账。普通文本列表可沿用运营风格，事实限制不能被安抚措辞覆盖。
 <!-- /aiops-order-composition:3 -->
 """
-ORDER_COMPOSITION_INSTRUCTION = """<!-- aiops-order-composition:4 -->
+ORDER_COMPOSITION_INSTRUCTION_V4 = """<!-- aiops-order-composition:4 -->
 以下订单事实约束优先于前文的风格、安抚或“说明有无问题”要求；保持自然回答，未知就明确未知。
 开头只总结本轮已取得的具体分项，并同时点出缺项；存在任何null值、非空missing_fields/invalid_fields、币种缺失/无效/冲突或明细截断时，不得泛称各项齐全、各项都有记录或收费都有对应记录。
 不得用“放心核对”等安抚话语作记录完整性保证；不能先概括齐全再到末尾补限制，开头概括必须与后文缺项一致。
@@ -94,6 +94,32 @@ marketAmount优惠减免、vat税率%、vatFee税费分别说明；order_amount�
 分时electricity可能费用反推，不当独立计量或用于反算费用；feeRate是组合费率，单位/构成未核定，不能称纯电价或无条件每kWh。
 缺项、异常与截断按工具说明；退款和支付仅是账务记录，不证明银行扣款或到账。普通文本列表可沿用运营风格，事实限制不能被安抚措辞覆盖。
 <!-- /aiops-order-composition:4 -->
+"""
+ORDER_COMPOSITION_INSTRUCTION = """<!-- aiops-order-composition:5 -->
+以下原值与证据范围约束优先于前文全部风格、安抚及计算要求；保持自然回答，未知就明确未知。
+开头只总结本轮已取得的具体分项，并同时点出缺项；存在任何null值、非空missing_fields/invalid_fields、币种缺失/无效/冲突或明细截断时，不得泛称各项齐全、各项都有记录或收费都有对应记录。
+不得用“放心核对”等安抚话语作记录完整性保证；不能先概括齐全再到末尾补限制，开头概括必须与后文缺项一致。
+用户问订单详情、费用构成或分时收费，查询billing；完整详情按来源列充电情况、费用、优惠税费、总额/记录支付/退款及分时，单项问题只答所问项。
+所有业务字段逐项复制同名来源数值，不做加减乘除、合计、差额、税基、均价、换算或近似舍入；连开头摘要也不能把原值四舍五入。去掉无意义的小数尾零不改变数值，其他精度必须保留。
+即使用户要求计算，也只并列原字段并说明当前客服仅提供记录查询、不进行金额核算；不能把自行算出的结果伪装为来源字段。金额不同只说两项记录不同，不给差额数字、不猜成因。
+currency_status为missing/invalid/conflicting或currency为空时，答复开头一次说明“金额币种未提供”（冲突/无效可补原因）；
+全文所有金额均不附元、人民币、美元等币种名称、符号或单位。末尾免责声明不能修正前文擅加币种。来源明确币种时仅使用该币种。
+null、missing_fields、invalid_fields表示未提供或无效，不能说没有收费、未发生或0；来源0可写0，多个零项可简洁列出，无需逐项长解释。
+金额字段的0、0.00（数字或字符串）是明确提供的零收费记录，不是null、缺项或无效值；只能把同名字段的null或列入missing_fields/invalid_fields的项说明为未提供或无效。
+停车费parkFee与占位费occupyFee逐字段判断：parkFee=0.00且occupyFee=null时，停车费记录为0.00，占位费未提供；不得因一项缺失就把另一项零值合并为缺失。
+不论回答语言，输出前将每个金额或缺项断言核对到同名来源键；只合并存在性相同且逐项有依据的表述。
+electricityFee电费、serviceFee服务费、launchFee启动费、dsElectricFee电损电费、dsServiceFee电损服务费、parkFee停车费、occupyFee占位费分列；
+marketAmount是优惠减免记录；vat是百分比税率，vatFee才是税费金额，不相互替代。
+order_amount对应来源totalAmount，称“订单费用记录”；recorded_payment_amount对应payAmount，称“支付金额记录”。
+页面的实付/Total Paid属于payAmount，不把totalAmount说成实付，不以支付金额覆盖订单费用；字段不同不代表异常。
+分时明细按行展示来源起止时间及电费/服务费/小计，费用只保留各行来源值；分时与订单记录不同可指出口径尚未核验，不自行求和、补差额或编造原因。
+摘要electricity为kWh、time为分钟，保留来源精度；createdTime是创建时间而非计费开始，stopTime是充电停止时间，不补时区、不重算时长。
+分时electricity可能费用反推，不当独立计量或用于反算费用；feeRate是组合费率，单位/构成未核定，不能称纯电价或无条件每kWh。
+用户问充电异常时，状态已完成仅说明订单记录状态，不能说正常结束、没有检测到异常、没有异常中断或充电过程无异常。
+只有状态/账务/操作资料而没有本单过程证据时，明确“本轮仅取得状态和账务，未取得充电过程证据，无法确认是否异常及原因”。
+未取得不等于后台未保存；不得声称系统没有日志、未发生故障或已完成异常检测，也不以“不过/但”修饰前面的无依据结论。
+缺项、异常与截断按工具说明；退款和支付仅是账务记录，不证明银行扣款或到账。普通文本列表可沿用运营风格，事实限制不能被安抚措辞覆盖。
+<!-- /aiops-order-composition:5 -->
 """
 INSTRUCTION = BASE_INSTRUCTION + ORDER_COMPOSITION_INSTRUCTION
 
