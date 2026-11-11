@@ -351,67 +351,99 @@ E. `POST http://36.156.159.175:10008/__aiops/login` 带伪造头 `X-Forwarded-Pr
 **只回滚代码，不回滚数据库。** 正式DB从切换前到恢复后都保持原位，不从预检临时副本或旧备份覆盖；
 否则会丢失切换后合法写入。数据库恢复是另行授权的事故操作，本手顺不包含它。
 
-### 7.2 同时修改nginx/环境的历史专项步骤
+### 7.2 一个回滚入口，配置按本次变更独立恢复
 
-`LOGIN_ACTIVE_ROOT`、`LOGIN_CODE_BACKUP`、`LOGIN_FAILED_ROOT`分别取本次现役代码、完整备份和失败候选留存位置。
-以下仅用于本次确实修改相应配置的情况；执行时遵守§7.1的完整代码恢复约定，不先重复执行一次恢复，
-不能将这些配置备份当默认回滚集合。
+本次阶段1只切换代码，三个`*_CHANGED`均为0。若某次还改过env、unit或nginx，分别设为1：
+只启用的配置才要求备份并恢复；unit恢复后才daemon-reload，nginx恢复后才校验并reload。
+两份nginx配置相互依赖，修改该链路时一起备份/恢复。环境标识影响账号派生，改过env也必须恢复，
+但不因此要求nginx备份。数据库不在任何恢复路径中。
 
-**四处备份、三个时间戳** —— 代码、两个 nginx 文件、环境文件是在不同命令里分别备份的。
-两个 nginx 文件通常共用一条命令、一个时间戳，另外两处各自不同（2026-10-19 那次：
-代码 `20261019182443`、nginx `20261019182623`）。先看清楚：
-
-```bash
-ssh yidong-36 'ls -d /opt/aiops-login-proxy.bak-*
-  ls /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-*
-  ls /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-*
-  sudo ls /etc/aiops-login-proxy/login-proxy.env.bak-*'
-```
-
-然后填**三个**变量（环境文件那份只有在你改过它时才有；没改过就不要恢复它，
-否则会把别人后加的键退回去）：
+以下是**在已确认的目标主机维护shell里执行**的一个Bash示例，不要在开发机直接执行。
+通过既有`dev-host`受控操作入口进入目标；从本次备份记录逐项填写路径，先复核代码布局与权限。
+所有路径都须是无符号链接、无`..`且不以`/`结尾的绝对路径；代码和配置位置不能相同或互相嵌套。
+`LOGIN_READY=NO`使原样粘贴停止；确认目标、备份与变更标志后才改成`YES`，占位路径仍会被拒绝。
+`env-only`指代码回退同时仅恢复env；它不要求unit或nginx有备份。
 
 ```bash
-CODE_TS=20261019182443    # ← 代码包那个
-NGX_TS=20261019182623     # ← nginx 那个
-ENV_TS=20261020180542     # ← 环境文件那个；没改过环境文件就留空
-ssh yidong-36 "set -e
-  test -d \"$LOGIN_CODE_BACKUP\"                    # 存在性先验，缺了就停
-  test -f /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-$NGX_TS
-  test -f /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-$NGX_TS
-  if [ -n \"$ENV_TS\" ]; then test -f /etc/aiops-login-proxy/login-proxy.env.bak-$ENV_TS; fi
-  test ! -e \"$LOGIN_FAILED_ROOT\"
-  systemctl stop aiops-dify-login-proxy
-  mv \"$LOGIN_ACTIVE_ROOT\" \"$LOGIN_FAILED_ROOT\"
-  mv \"$LOGIN_CODE_BACKUP\" \"$LOGIN_ACTIVE_ROOT\"
-  cp /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-$NGX_TS \
-     /www/server/panel/vhost/nginx/dify-console-10008.conf
-  cp /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-$NGX_TS \
-     /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf
-  if [ -n \"$ENV_TS\" ]; then cp /etc/aiops-login-proxy/login-proxy.env.bak-$ENV_TS \
-     /etc/aiops-login-proxy/login-proxy.env; fi
+set -euo pipefail
+LOGIN_READY=NO
+LOGIN_SERVICE='REPLACE.service'
+LOGIN_ACTIVE_ROOT='/REPLACE/active-code'
+LOGIN_CODE_BACKUP='/REPLACE/code-backup'
+LOGIN_FAILED_ROOT='/REPLACE/failed-code'
+LOGIN_ENV_CHANGED=0
+LOGIN_ENV_FILE='/REPLACE/current.env'
+LOGIN_ENV_BACKUP='/REPLACE/backup.env'
+LOGIN_UNIT_CHANGED=0
+LOGIN_UNIT_FILE='/REPLACE/current.service'
+LOGIN_UNIT_BACKUP='/REPLACE/backup.service'
+LOGIN_NGINX_CHANGED=0
+LOGIN_NGINX_SITE='/REPLACE/current-site.conf'
+LOGIN_NGINX_SITE_BACKUP='/REPLACE/backup-site.conf'
+LOGIN_NGINX_SNIPPET='/REPLACE/current-snippet.conf'
+LOGIN_NGINX_SNIPPET_BACKUP='/REPLACE/backup-snippet.conf'
+
+[ "$LOGIN_READY" = YES ] || { echo '未确认目标与备份，停止'; exit 1; }
+[[ "$LOGIN_SERVICE" =~ ^[A-Za-z0-9_.@-]+\.service$ && "$LOGIN_SERVICE" != *REPLACE* ]]
+for flag in "$LOGIN_ENV_CHANGED" "$LOGIN_UNIT_CHANGED" "$LOGIN_NGINX_CHANGED"; do
+  [[ "$flag" = 0 || "$flag" = 1 ]]
+done
+login_files=(); login_backups=()
+if [ "$LOGIN_ENV_CHANGED" = 1 ]; then
+  login_files+=("$LOGIN_ENV_FILE"); login_backups+=("$LOGIN_ENV_BACKUP")
+fi
+if [ "$LOGIN_UNIT_CHANGED" = 1 ]; then
+  [[ "${LOGIN_UNIT_FILE##*/}" = "$LOGIN_SERVICE" ]]
+  login_files+=("$LOGIN_UNIT_FILE"); login_backups+=("$LOGIN_UNIT_BACKUP")
+fi
+if [ "$LOGIN_NGINX_CHANGED" = 1 ]; then
+  login_files+=("$LOGIN_NGINX_SITE" "$LOGIN_NGINX_SNIPPET")
+  login_backups+=("$LOGIN_NGINX_SITE_BACKUP" "$LOGIN_NGINX_SNIPPET_BACKUP")
+fi
+login_paths=("$LOGIN_ACTIVE_ROOT" "$LOGIN_CODE_BACKUP" "$LOGIN_FAILED_ROOT"
+             "${login_files[@]}" "${login_backups[@]}")
+for path in "${login_paths[@]}"; do
+  [[ "$path" = /* && "$path" != / && "$path" != *REPLACE* ]]
+  [[ "$(realpath -m -- "$path")" = "$path" ]]
+done
+for ((i=0; i<${#login_paths[@]}; i++)); do
+  for ((j=i+1; j<${#login_paths[@]}; j++)); do
+    a="${login_paths[i]}/"; b="${login_paths[j]}/"
+    [[ "$a" != "$b"* && "$b" != "$a"* ]]
+    if [ -e "${login_paths[i]}" ] && [ -e "${login_paths[j]}" ]; then
+      [[ ! "${login_paths[i]}" -ef "${login_paths[j]}" ]]
+    fi
+  done
+done
+[[ -d "$LOGIN_ACTIVE_ROOT" && -d "$LOGIN_CODE_BACKUP" ]]
+[[ ! -e "$LOGIN_FAILED_ROOT" && ! -L "$LOGIN_FAILED_ROOT" ]]
+[[ -d "$(dirname -- "$LOGIN_FAILED_ROOT")" ]]
+[[ "$(stat -c %d -- "$LOGIN_ACTIVE_ROOT")" = "$(stat -c %d -- "$LOGIN_CODE_BACKUP")" ]]
+[[ "$(stat -c %d -- "$LOGIN_ACTIVE_ROOT")" = "$(stat -c %d -- "$(dirname -- "$LOGIN_FAILED_ROOT")")" ]]
+for path in "${login_files[@]}" "${login_backups[@]}"; do
+  [[ -f "$path" ]]
+done
+command -v systemctl >/dev/null
+if [ "$LOGIN_NGINX_CHANGED" = 1 ]; then command -v nginx >/dev/null; fi
+
+# 所有前置检查完成后才停止服务；失败中止，不自动启动半恢复的服务。
+systemctl stop "$LOGIN_SERVICE"
+mv -- "$LOGIN_ACTIVE_ROOT" "$LOGIN_FAILED_ROOT"
+mv -- "$LOGIN_CODE_BACKUP" "$LOGIN_ACTIVE_ROOT"
+for i in "${!login_files[@]}"; do
+  cp -a -- "${login_backups[i]}" "${login_files[i]}"
+done
+if [ "$LOGIN_UNIT_CHANGED" = 1 ]; then systemctl daemon-reload; fi
+if [ "$LOGIN_NGINX_CHANGED" = 1 ]; then
   nginx -t
   nginx -s reload
-  systemctl start aiops-dify-login-proxy"
+fi
+systemctl start "$LOGIN_SERVICE"
+systemctl is-active --quiet "$LOGIN_SERVICE"
 ```
 
-**为什么环境文件也在回滚范围里**（#864）：`AIOPS_LOGIN_PROXY_ENVIRONMENT` 决定账号邮箱
-的前缀。回滚代码却留下一个改错的环境值，下一次部署会**在错误的环境前缀下派生账号** ——
-那是静默的、只有在两个环境撞号时才显形的错。`ENV_TS` 留空是给"这次没动环境文件"
-的情形，不是省略它的理由。
-
-四处要点：
-
-1. **两份 nginx 配置都要恢复**，不能只恢复一份 —— snippet 引用 10008 那一层定义的
-   `$aiops_upstream_proto`，只回一半会比回滚前更坏（所有登录被拒）。
-2. `set -e`：任何一步失败就停，不会出现"配置没恢复但服务已启动"。
-3. **`nginx -t` 在 `nginx -s reload` 之前**；`-t` 失败就不要 reload（旧配置还在跑，
-   服务停止中，此时人工介入比 reload 坏配置安全）。
-4. 代理**在停服务与恢复文件之间**处于停止状态。若中途失败，先别急着 `start` ——
-   先把文件恢复完，再起服务；起之前用 §6 的 A/B/C 三条确认，并重跑 §3.5 的探针
-   （回滚后的代码可能还不认识 `AIOPS_LOGIN_PROXY_ENVIRONMENT`，那也正是要回滚的情形之一）。
-
-nginx 两处要**一起**回滚（snippet 引用了 10008 那一层定义的变量）。
+`nginx -t`失败就不reload、不start登录代理；保留失败位置，修正本次恢复文件后再按批准步骤继续。
+退出成功仍须按§5核对实际加载的代码身份，再按§5.1正常重登；不要用恢复旧DB绕开登录或数据问题。
 
 ## 8. 已知的坑
 

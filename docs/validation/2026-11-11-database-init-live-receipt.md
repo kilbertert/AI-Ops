@@ -64,3 +64,28 @@ Ruff检查与格式检查通过，4份文档的相对链接及新增制品命令
 文档证据留`dist/verification/database-init-live-receipt/`，与父会话真实交付证据分开。
 本轮按授权提交、推送这4份文档并创建独立docs PR，父会话负责合并；
 阶段2继续独立实施，后续由父会话同步新的main。本文保留e60a6049交付时点的证据。
+
+## PR #1465回滚手册复验
+
+父会话确认Devin提出的三项文档缺陷成立：联合回滚遗漏unit恢复/daemon-reload；仅env变更却要求nginx备份；
+旧示例只有时间戳赋值，缺少实际使用的路径变量。现已删除该复制型脚本，改为§7.2一个可执行示例：
+显式填写路径与readiness，所有选定路径先核非空、绝对、无符号链接/嵌套/同文件冲突及存在性；
+active与backup存在、failed不存在后才停服务。env/unit/nginx分别按本次变更标志恢复，正式数据库不参与。
+
+从手册原文提取代码块，只替换填写区；在临时目录执行真实mv/cp，以systemctl/nginx替身记录调用次序：
+
+| 组合 | 实际判据与结果 |
+|---|---|
+| code-only | 只恢复完整代码，无配置备份也通过；无daemon-reload/nginx调用 |
+| env-only（代码回退＋仅env恢复） | 环境文件内容和模式恢复；unit/nginx保持原值，无其备份也通过 |
+| unit+nginx | unit及两份nginx文件恢复，daemon-reload→nginx -t→reload→start顺序通过；env保持原值 |
+
+另有11项前置拒绝通过：未ready、未替换占位路径、空路径、相对路径、同路径、嵌套路径、缺backup、
+缺active、failed已存在、缺本次env备份、符号链接父目录。均未调用stop且代码不变。
+模拟nginx校验失败时，旧代码/指定配置已经恢复，但未reload、未start，停在可定位的失败点。
+共15项执行通过，各项数据库哨兵不变；不是仅bash语法检查，也不是生产回滚演练。
+
+复跑命令：`uv run python dist/verification/database-init-live-receipt/rollback-review/replay.py`。
+临时驱动及提取的示例、调用次序、结果保留在同目录，不新增部署器或长期测试框架。
+本次只修手册并追加本回执，不修改源码/版本；文档/目录定向检查25 passed，Ruff检查/格式及diff检查通过，
+未重复653项文档档测试。父会话负责三个review回复、resolve与一次复审。
