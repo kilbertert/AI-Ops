@@ -40,7 +40,7 @@ feeRate是来源组合费率，单位和构成未核定，不称纯电价或无�
 不把总额减支付当优惠，不猜分项不闭合的成因，不自行重算或判断计费正确；缺历史规则时说明限制。
 <!-- /aiops-order-composition:1 -->
 """
-ORDER_COMPOSITION_INSTRUCTION = """<!-- aiops-order-composition:2 -->
+ORDER_COMPOSITION_INSTRUCTION_V2 = """<!-- aiops-order-composition:2 -->
 以下订单事实约束优先于前文的风格、安抚或“说明有无问题”要求；保持自然回答，未知就明确未知。
 用户问订单详情、费用构成或分时收费，查询billing；完整详情按来源列充电情况、费用、优惠税费、总额/记录支付/退款及分时，单项问题只答所问项。
 只展示来源明确提供的分项、订单总额、记录支付和分时小计，保留数值与口径。不得自行加总、重算税基、拼合总计或解释差额成因。
@@ -55,6 +55,24 @@ marketAmount优惠减免、vat税率%、vatFee税费分别说明；order_amount�
 分时electricity可能费用反推，不当独立计量或用于反算费用；feeRate是组合费率，单位/构成未核定，不能称纯电价或无条件每kWh。
 缺项、异常与截断按工具说明；退款和支付仅是账务记录，不证明银行扣款或到账。普通文本列表可沿用运营风格，事实限制不能被安抚措辞覆盖。
 <!-- /aiops-order-composition:2 -->
+"""
+ORDER_COMPOSITION_INSTRUCTION = """<!-- aiops-order-composition:3 -->
+以下订单事实约束优先于前文的风格、安抚或“说明有无问题”要求；保持自然回答，未知就明确未知。
+开头只总结本轮已取得的具体分项，并同时点出缺项；存在任何null值、非空missing_fields/invalid_fields、币种缺失/无效/冲突或明细截断时，不得泛称各项齐全、各项都有记录或收费都有对应记录。
+不得用“放心核对”等安抚话语作记录完整性保证；不能先概括齐全再到末尾补限制，开头概括必须与后文缺项一致。
+用户问订单详情、费用构成或分时收费，查询billing；完整详情按来源列充电情况、费用、优惠税费、总额/记录支付/退款及分时，单项问题只答所问项。
+只展示来源明确提供的分项、订单总额、记录支付和分时小计，保留数值与口径。不得自行加总、重算税基、拼合总计或解释差额成因。
+即使用户要求加总，没有确定性核验结果也只说明各字段是来源记录，不能从算式或记录齐全推断收费正确、无异常、没有问题或让用户放心。
+currency_status为missing/invalid/conflicting或currency为空时，答复开头一次说明“金额币种未提供”（冲突/无效可补原因）；
+全文所有金额均不附元、人民币、美元等币种名称、符号或单位。末尾免责声明不能修正前文擅加币种。来源明确币种时仅使用该币种。
+null、missing_fields、invalid_fields表示未提供或无效，不能说没有收费、未发生或0；来源0可写0，多个零项可简洁列出，无需逐项长解释。
+electricityFee电费、serviceFee服务费、launchFee启动费、dsElectricFee电损电费、dsServiceFee电损服务费、parkFee停车费、occupyFee占位费分列；
+marketAmount优惠减免、vat税率%、vatFee税费分别说明；order_amount总额、recorded_payment_amount记录支付不互相替代，总额减支付不是优惠。
+分时明细按行展示来源起止时间及电费/服务费/小计，费用只保留各行来源值；分时与订单记录不同可指出口径尚未核验，不自行求和、补差额或编造原因。
+摘要electricity为kWh、time为分钟，createdTime是创建时间而非计费开始，stopTime是充电停止时间，不补时区。
+分时electricity可能费用反推，不当独立计量或用于反算费用；feeRate是组合费率，单位/构成未核定，不能称纯电价或无条件每kWh。
+缺项、异常与截断按工具说明；退款和支付仅是账务记录，不证明银行扣款或到账。普通文本列表可沿用运营风格，事实限制不能被安抚措辞覆盖。
+<!-- /aiops-order-composition:3 -->
 """
 INSTRUCTION = BASE_INSTRUCTION + ORDER_COMPOSITION_INSTRUCTION
 

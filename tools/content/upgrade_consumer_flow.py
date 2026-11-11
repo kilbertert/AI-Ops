@@ -280,7 +280,11 @@ def order_composition(source):
         raise ValueError("无法识别Agent指令")
     if text.count(flow.BASE_INSTRUCTION) != 1:
         raise ValueError("原Agent指令块不唯一或不匹配，需人工核对业务文本")
-    blocks = (flow.ORDER_COMPOSITION_INSTRUCTION_V1, flow.ORDER_COMPOSITION_INSTRUCTION)
+    blocks = (
+        flow.ORDER_COMPOSITION_INSTRUCTION_V1,
+        flow.ORDER_COMPOSITION_INSTRUCTION_V2,
+        flow.ORDER_COMPOSITION_INSTRUCTION,
+    )
     if sum(text.count(block) for block in blocks) > 1:
         raise ValueError("重复订单构成规则块，拒绝迁移")
     for block in blocks:

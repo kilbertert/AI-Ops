@@ -1,6 +1,7 @@
 """新版发布不能把回调授权或库选择交给模型。"""
 
 import copy
+import hashlib
 import importlib.util
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def test_agent_migration_preserves_business_prompt_model_and_permission_ceiling(
 
 
 @pytest.mark.parametrize("suffix", ["", "\n运营要求：核心结论应安抚并说明有无问题；不用Markdown，末尾明细。"])
-@pytest.mark.parametrize("version", [0, 1, 2])
+@pytest.mark.parametrize("version", [0, 1, 2, 3])
 def test_order_composition_migration_is_exact_idempotent_and_preserves_business(suffix, version):
     from aiops_diagnostics.consumer import consumer_agent_flow as flow
 
@@ -60,6 +61,12 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
             business + flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V1 + suffix
         )
     elif version == 2:
+        # 已发布1.7.2的完整v2字节合同，避免改动旧块后真实图无法升级。
+        assert hashlib.sha256(flow.ORDER_COMPOSITION_INSTRUCTION_V2.encode()).hexdigest() == (
+            "08647e7f1a6030c00f28dc80aa977487f6bfb5f4e23bc41c3b15c14be401eded"
+        )
+        instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION_V2
+    elif version == 3:
         instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION
     original = copy.deepcopy(source)
     updated = upgrade.order_composition(source)
@@ -76,16 +83,19 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
     assert updated == expected
     assert updated["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"][
         "value"
-    ].endswith("<!-- /aiops-order-composition:2 -->\n")
+    ].endswith("<!-- /aiops-order-composition:3 -->\n")
     assert publish(updated["workflow"])["callback_version"] == 6
     for invalid in (
         flow.BASE_INSTRUCTION.replace("8次", "9次").replace("你是充电客服", "你是客服"),
         flow.BASE_INSTRUCTION * 2,
         flow.BASE_INSTRUCTION + "<!-- aiops-order-composition:2 -->",
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V1 * 2,
+        flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V2 * 2,
+        flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V2 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V1 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION.replace("币种", "单位", 1),
         flow.BASE_INSTRUCTION + "<!-- aiops-order-composition:3 -->",
+        flow.BASE_INSTRUCTION + "<!-- aiops-order-composition:4 -->",
         flow.BASE_INSTRUCTION + "运营文本" * 4000,
     ):
         instruction["value"] = business + invalid + suffix
