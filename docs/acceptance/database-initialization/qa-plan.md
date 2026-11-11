@@ -35,8 +35,8 @@
 执行：`uv run ruff check .`、`uv run ruff format --check .`；定向 scalar_rules、
 chat_route_bindings、dify 及受影响调用者；`uv run pytest`；`uv build`；镜像构建。
 证据写入 `dist/verification/database-initialization/`，不含生产数据或凭据。
-本阶段不改变HTTP合同；Gateway真实原入口、独立Hack与审查由父会话安排。
+本阶段不改变HTTP合同；父会话已执行临时Gateway的8项HTTP检查，独立Hack实测范围无发现，详见本阶段验收记录。
 
 父会话已提供只读一致副本回放摘要，见本阶段验收记录；不替代上述作者合成检查或真实业务旅程。
-未验：真实模型/KB与业务准确率；独立Hack正在进行、待回执。未完成业务验收。
+未验：真实模型/KB、原App/H5业务旅程与业务准确率。未完成业务验收。
 构造持锁、user_version、统一schema与启动治理属于#1462；本阶段不能关闭#1448。

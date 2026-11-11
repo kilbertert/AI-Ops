@@ -30,7 +30,7 @@
 | `deploy/m2-live-03/build-image.sh`，本轮专用M2LIVE_GATEWAY_IMAGE与M2LIVE_DIST | 通过 | 通过 | before/after-image.log、对应gateway-image/identity.json |
 | 容器 `--network none --read-only --entrypoint python` 导入Gateway | — | 通过 | image-import.log |
 | `node .sandcastle/adr.check.mjs` | — | 结构报告无0243问题；旧ADR建议仍报告 | adr-structure-report.log |
-| `node .sandcastle/adr.check.mjs --base origin/main` | — | 退出0，但范围0提交，**不算逐提交覆盖验收** | adr-check.log |
+| `node .sandcastle/adr.check.mjs --base origin/main` | 首次实现未提交，范围0，不算覆盖验收 | 三提交范围检查实际通过，1项No-ADR豁免被识别 | delivery/adr-commit-3.log |
 | `dev-worktree audit` | — | 通过；本地台账单独保留 | 本地交接记录 |
 
 构建首次因本地无锁定基础镜像失败；按既有CI方法拉取精确digest后重跑成功（image-base-pull.log）。
@@ -76,14 +76,70 @@
 本轮不改业务语义，沿用上述全量4841 passed、9 skipped及schema对照结果，不重复全量套件。
 版本/文档检查38 passed，Ruff检查与格式检查通过，1.6.1 wheel/sdist构建通过。
 证据为delivery/version-doc-tests.log、delivery/ruff-*.log与delivery/build.log。
-初始化提交0eb2a6c8与连接提交2e603917已分别通过逐提交ADR检查；
-最终测试/文档/版本提交的覆盖检查与PR checks状态在交接时据实记录。
+初始化提交0eb2a6c8、连接提交2e603917及测试/文档/版本提交bcbdf5f1完成后，
+已实际执行 `node .sandcastle/adr.check.mjs --base origin/main`，退出码0：
+`coverage judged 3 commit(s)`、`1 waived`、`adr check ok (232 record(s))`。
+证据为delivery/adr-commit-3.log，本次同范围复核也通过（hack-followup/adr-three-commits.log）。
+这里记录的是逐提交ADR覆盖，不代表Python测试覆盖；PR checks另由GitHub报告。
 首次实现的镜像证据仅对应当时1.6.0元数据，不冒充1.6.1镜像制品。
+
+## 独立Hack与临时Gateway回执（2026-11-11）
+
+独立执行者为Codex原生默认配置，未切换模型；没有可独立核对的具体模型版本字符串，
+不能写成DeepSeek或猜测模型名。执行时间02:46:18–02:57:05 UTC，Python 3.13.13 / SQLite 3.51.2。
+结论限定为**已实际执行的范围内未发现候选缺陷**，和作者合成检查、父会话副本回放分别记录。
+
+- 15个Gateway store的88个DDL成功后异常断点全部回滚到原schema和逻辑行，连接立即关闭、重试成功；
+  Mapping保留原独立事务约定，不在此原子DDL矩阵内。
+- 原版负向对照3项均抓住旧缺陷：历史补列留下部分schema、SelfService读锁等待失败、Mapping上下文退出未关闭。
+- 12线程路由CAS为1胜11拒；跨表发布失败回滚，8并发claim仅1个成功；15个store同库并发初始化通过。
+- RuntimeError/KeyboardInterrupt/SystemExit、PRAGMA/row_factory及延迟外键提交失败等退出路径回滚并关闭；
+  Mapping/Route各500次读取fd增长0。Route锁等待约5秒后拒绝，纯读仍可进行。
+- 固定历史DDL、结构对照、scope_json默认差异、TTL/状态、KeyOperations安全清理、心跳失败回滚均有实际输入；
+  既有两个回归文件17项通过。并发仅覆盖报告中的调度，不声称穷尽。
+
+Hack未读取生产或副本，未验真实业务、断电/磁盘损坏/磁盘满、其他Python/SQLite版本或全部历史形状。
+父会话已核对候选diff；本次再核对17个实现源码SHA256与交付前清单一致，文档更新不改变代码哈希。
+1.6.0到1.6.1只更新版本元数据，业务实现不变；不把新版本号等同新增业务验证。
+
+父会话执行命令：
+
+```bash
+uv run python .claude/skills/verify-aiops-gateway/scripts/observe.py --out dist/verification/database-initialization/gateway
+```
+
+已核对gateway/aiops-gateway.json：8项HTTP检查通过——health自报1.6.1，两个受保护入口无令牌返回401，
+OpenAPI返回200，四个退役/未开放入口返回404。临时根已由父会话清理。
+该结果仅证明本地真实进程的启动、鉴权与API边界，不证明模型诊断、KB或原App/H5业务旅程。
+
+## 最小风险核对
+
+本仓已声明pytest-cov并安装coverage，故对5个改动连接helper运行分支覆盖；没有为本次文档变更新增长期测试。
+执行命令（覆盖数据与JSON均留在忽略的验收目录）：
+
+```bash
+COVERAGE_FILE=dist/verification/database-initialization/hack-followup/.coverage uv run pytest \
+  tests/gateway/test_database_initialization.py tests/dify/test_store_connection_boundaries.py \
+  tests/common/test_scalar_rules.py --cov=aiops_diagnostics.gateway.gateway_db \
+  --cov=aiops_diagnostics.dify.dify_login_service --cov=aiops_diagnostics.dify.self_service_store \
+  --cov=aiops_diagnostics.execution.chat_route_bindings --cov-branch \
+  --cov-report=json:dist/verification/database-initialization/hack-followup/coverage.json
+```
+
+实际67项通过。首次覆盖缺少非法profile拒绝分支，临时断言补验拒绝且连接已关闭后合并coverage数据：
+5个helper共32条可执行语句、8个分支全部覆盖；指标只针对这些helper，不代表整个store模块覆盖率。
+Ruff C901按复杂度上限10检查这5个helper通过；提取函数的临时副本不改候选源码。
+证据：hack-followup/risk-coverage.log、helper-coverage-summary.json、profile-refusal.log、helper-complexity.log。
+
+项目未声明/安装mutmut、cosmic-ray等mutation框架；本轮不引入工具。持久化风险采用独立Hack的
+88处成功后故障注入与3项原版反向对照作为替代证据，**没有运行mutation框架或计算mutation score**。
+文档/目录检查25项通过，Ruff与ADR检查通过。本次只补文档和风险证据，不重复全量或镜像；
+原有未验边界继续保留。
 
 ## 未验与交接
 
 未完成业务验收。真实模型诊断、KB活性、原App/H5业务旅程尚未验证。
-独立Hack正在进行、待回执；作者自查与父会话副本回放均不冒充独立Hack结论。
+独立Hack已在上述实际范围完成且无发现；父会话已读完整报告并核对候选diff，负责Devin线程处置与后续交付。
 本阶段通过#1461交付，Refs #1448；store构造锁及统一schema/version升级留给#1462，不能关闭父issue。
 本轮仅提交、推送及创建一个PR，不合并/部署；PR检查状态及后续审查闭环由父会话接手。
 
