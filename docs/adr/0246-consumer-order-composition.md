@@ -3,7 +3,7 @@
 Status: Accepted
 
 日期：2026-11-11。订单投影及v2–v4已交付；严格原值v5随1.7.5部署，现役证据见
-[上线回执](../validation/2026-11-11-consumer-source-values-live.md)，下方保留各阶段决策时点。
+[上线回执](../validation/2026-11-11-consumer-source-values_02-live.md)，下方保留各阶段决策时点。
 
 ## 决策与来源
 
