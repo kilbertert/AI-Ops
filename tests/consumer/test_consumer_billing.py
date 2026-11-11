@@ -201,6 +201,9 @@ def read_composition(backend, **kwargs):
 def test_composition_keeps_source_amounts_periods_and_no_personal_data(backend):
     composition_source(backend)
     result = read_composition(backend)
+    # 独立来源总额/支付与分项和不同，不能由reader重算或互相替换。
+    assert result["order_amount"] == "8.50"
+    assert result["recorded_payment_amount"] == "7.50"
     assert result["order_summary"]["time"] == "30"
     assert result["order_summary"]["electricity"] == "6.25"
     assert result["order_summary"]["createdTime"] == "2026-11-11 08:00:00"
