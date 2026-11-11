@@ -43,7 +43,7 @@ from typing import Any
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.redaction import ERROR_TEXT_SHORT_LIMIT
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 #: 一张行可能处于的全部状态。``created`` 与 ``ready`` 的区别在于**后续步骤是否跑完**
 #: （插件、凭据、模板 DSL，#881）；对"这个租户的 workspace 是哪一个"这个问题，两者
@@ -86,41 +86,7 @@ class DifyWorkspaces:
         self._initialize()
 
     def _initialize(self) -> None:
-        with gateway_db.initialize(self.path) as connection:
-            connection.execute(
-                """
-                -- 一个租户在一个环境里的 Dify workspace（ADR-0059 / #879）。
-                --
-                -- 唯一键是 (tenant_id, environment)：两套独立 UPMS 的 tenant_id 各自
-                -- 生成，只有环境列能分辨撞号的两个人。`dify_app_registry` **不动** ——
-                -- 它记的是"哪个 app 服务哪个入口"，与"租户的工作区是哪个"是两个问题。
-                --
-                -- workspace_id 允许为空：`creating` 行在 workspace 建出来之前就是空的，
-                -- 而"先占位、再建"正是唯一能把同一租户的两次首次登录串行化的顺序。
-                CREATE TABLE IF NOT EXISTS dify_workspaces (
-                    tenant_id TEXT NOT NULL,
-                    environment TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL DEFAULT '',
-                    -- 建的时候用的**派生名**。对账按这一列，不按当前派生值 ——
-                    -- 名字里带公司名之后，公司改名会让"当前派生值"变化，而对账必须按
-                    -- 建的时候那个名字去 Dify 里找，否则会命中 0 ⇒ 重建 ⇒ 永久孤儿。
-                    workspace_name TEXT NOT NULL DEFAULT '',
-                    setup_state TEXT NOT NULL,
-                    lease_owner TEXT NOT NULL DEFAULT '',
-                    lease_expires_at TEXT,
-                    last_error TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (tenant_id, environment)
-                );
-                """
-            )
-            # 老库补列：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表加列。
-            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(dify_workspaces)")}
-            if "workspace_name" not in columns:
-                connection.execute(
-                    "ALTER TABLE dify_workspaces ADD COLUMN workspace_name TEXT NOT NULL DEFAULT ''"
-                )
+        gateway_schema.ensure(self.path)
         protect_private_file(self.path)
 
     @contextmanager

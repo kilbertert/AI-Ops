@@ -31,7 +31,7 @@ from typing import Any
 
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
 from aiops_diagnostics.execution.run_deliverability import expired
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 #: 与 `agent_runs` 同一口径：180 秒，不因为重试或轮询而延长。
 DIFY_RUN_TTL_SECONDS = 180
@@ -104,81 +104,11 @@ def _ts(value: str | None) -> datetime | None:
 
 
 class DifyRunStore:
-    """执行记录表。与网关共用同一个 SQLite 文件，各自建表。"""
+    """执行记录表。与网关共用同一个 SQLite 文件，结构委托 gateway_schema。"""
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        with gateway_db.initialize(self.path) as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS chat_dify_runs (
-                    run_id TEXT PRIMARY KEY,
-                    qa_id TEXT NOT NULL,
-                    scope_fingerprint TEXT NOT NULL,
-                    scope_json TEXT NOT NULL,
-                    binding_key TEXT NOT NULL DEFAULT '',
-                    order_no TEXT NOT NULL,
-                    environment TEXT NOT NULL,
-                    tenant_id TEXT NOT NULL,
-                    app_id TEXT NOT NULL,
-                    workflow_id TEXT NOT NULL,
-                    workflow_run_id TEXT,
-                    task_id TEXT,
-                    grant_id TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    reason TEXT,
-                    created_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    completed_at TEXT,
-                    snapshot_json TEXT,
-                    agent_version_no INTEGER NOT NULL DEFAULT 0
-                );
-                """
-            )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_chat_dify_runs_qa
-                    ON chat_dify_runs(qa_id);
-                """
-            )
-            # 幂等迁移：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表加列。
-            existing = {row["name"] for row in connection.execute("PRAGMA table_info(chat_dify_runs)")}
-            if "snapshot_json" not in existing:
-                connection.execute("ALTER TABLE chat_dify_runs ADD COLUMN snapshot_json TEXT")
-            if "binding_key" not in existing:
-                connection.execute(
-                    "ALTER TABLE chat_dify_runs ADD COLUMN binding_key TEXT NOT NULL DEFAULT ''"
-                )
-            if "scope_json" not in existing:
-                connection.execute(
-                    "ALTER TABLE chat_dify_runs ADD COLUMN scope_json TEXT NOT NULL DEFAULT ''"
-                )
-            # 签发时冻结**正式版本号**：撤回/重新发布之后，回读靠它判断"这条 run 跑的那一版
-            # 还是不是现在对外的那一版"。默认 0 = 文件登记（没有版本概念），不受影响。
-            for column, declaration in (
-                ("kind", "TEXT NOT NULL DEFAULT 'chat'"),
-                ("conversation_id", "TEXT NOT NULL DEFAULT ''"),
-                ("upstream_conversation_id", "TEXT NOT NULL DEFAULT ''"),
-                ("message_id", "TEXT NOT NULL DEFAULT ''"),
-                ("binding_digest", "TEXT NOT NULL DEFAULT ''"),
-                ("has_photo", "INTEGER NOT NULL DEFAULT 0"),
-                ("data_kind", "TEXT NOT NULL DEFAULT 'status'"),
-                ("context_json", "TEXT"),
-                ("reply_source", "TEXT"),
-                # 失败时的**具体判据**（`ChatRunUnavailable` 的那句说明）。
-                # `reason` 是稳定错误码，调用方按它分支，语义不能改；但一个码常覆盖多种
-                # 情形（`CHATFLOW_ANSWER_INVALID` 同时可能是片段外复述、片段缺失、字段不符）。
-                # 2026-11-01 排查订单链路时正因为只有码，无法判断是提示词不明确还是守卫过严。
-                ("reject_detail", "TEXT"),
-                ("language", "TEXT NOT NULL DEFAULT 'zh'"),
-                ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
-            ):
-                if column not in existing:
-                    connection.execute(f"ALTER TABLE chat_dify_runs ADD COLUMN {column} {declaration}")
-            if "agent_version_no" not in existing:
-                connection.execute(
-                    "ALTER TABLE chat_dify_runs ADD COLUMN agent_version_no INTEGER NOT NULL DEFAULT 0"
-                )
+        gateway_schema.ensure(self.path)
 
     @contextmanager
     def _connection(self, *, write: bool = False):

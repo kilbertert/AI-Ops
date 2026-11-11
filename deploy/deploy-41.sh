@@ -302,7 +302,7 @@ INIT="$WORK/aiops_diagnostics/__init__.py"
 [ -f "$INIT" ] || die "缺少 $INIT"
 BASE_VERSION=$(sed -n 's/^__version__ *= *"\([^"]*\)".*/\1/p' "$INIT" | head -1)
 [ -n "$BASE_VERSION" ] || die "无法从 __init__.py 读出 __version__"
-FILE_VERSION=$(tr -d '[:space:]' < "$REPO_ROOT/VERSION" 2>/dev/null || true)
+FILE_VERSION=$(git show "$FULL_SHA:VERSION" | tr -d '[:space:]')
 [ -n "$FILE_VERSION" ] || die "缺少仓库根 VERSION 文件"
 [ "$BASE_VERSION" = "$FILE_VERSION" ] \
   || die "__version__ ($BASE_VERSION) 与 VERSION ($FILE_VERSION) 不一致 —— 先同步，否则 /health 会自报一个过期版本"
@@ -508,6 +508,9 @@ set -eu
 TS=\$(date +%Y%m%d-%H%M%S)
 B=/var/backups/aiops-41/backup-\$TS
 mkdir -p "\$B/refs"
+# 本次备份仍由 root 持有；服务组仅可穿过它到达私有 schema 目录。
+chgrp aiops41 "\$B"
+chmod 0710 "\$B"
 cp -a $REMOTE_SRC "\$B"/
 # 清理上一次被 kill 的部署留下的产物。正常路径与回滚路径都会删掉自己的 tar，
 # 但**被超时/断线 kill 的那次**删不了 —— 实测留下过 24MB 残留（2026-09-23 钻演）。
@@ -555,7 +558,7 @@ rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check || step_failed "prepare-sync-
 tar xzf $REMOTE_TARBALL -C /tmp/sync-check || step_failed "extract"
 # 候选代码先验实际控制台配置；失败时不替换源码，也不重启旧服务。
 if [ "\$mutate_rc" = 0 ]; then
-  chown -R aiops41:aiops41 /tmp/sync-check
+  chown -R aiops41:aiops41 /tmp/sync-check || step_failed "chown-candidate"
   if runuser -u aiops41 -- env PYTHONPATH=/tmp/sync-check /opt/aiops-41/.venv/bin/python - <<'PY'
 import os
 from dotenv import dotenv_values
@@ -570,6 +573,65 @@ PY
     echo "console-preflight=passed"
   else
     echo "console-preflight=refused"
+    rm -rf /tmp/sync-check $REMOTE_TARBALL || true
+    exit 1
+  fi
+fi
+# 一致备份与副本演练先于源码替换；失败时旧服务继续运行。
+if [ "\$mutate_rc" = 0 ]; then
+  mkdir -p "\$B/schema" && chmod 0700 "\$B/schema" && chown aiops41:aiops41 "\$B/schema" \
+    || step_failed "schema-backup-dir"
+  if [ "\$mutate_rc" = 0 ] && runuser -u aiops41 -- env PYTHONPATH=/tmp/sync-check /opt/aiops-41/.venv/bin/python - "\$B/schema/gateway.db" <<'PYSCHEMA'
+import dataclasses
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+from dotenv import dotenv_values
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+os.environ.update({k: v for k, v in dotenv_values("/etc/aiops-41/gateway.env", interpolate=False).items() if v is not None})
+settings = GatewayServerSettings.from_env()
+source = Path(settings.database_file)
+# 当前部署必须已有数据库；拼错路径不能被当成空库上线。
+report = gateway_schema.rehearse(source, Path(sys.argv[1]))
+# validate 会构造路由 store；检查的是演练库，不能在预检中写真实库。
+with tempfile.TemporaryDirectory(prefix='schema-settings-') as root:
+    trial = Path(root) / 'gateway.db'
+    with gateway_db.connection(Path(sys.argv[1]), readonly=True) as original, gateway_db.connection(trial) as target:
+        original.backup(target)
+    gateway_schema.startup(trial)
+    route = settings.chat_route_bindings_file
+    if route and Path(route).resolve() != source.resolve():
+        raise ValueError('managed routes must share gateway database')
+    dataclasses.replace(settings, database_file=trial, chat_route_bindings_file=str(trial) if route else '').validate()
+print(json.dumps(report))
+PYSCHEMA
+  then
+    echo "schema-preflight=passed"
+  else
+    echo "schema-preflight=refused"
+    rm -rf /tmp/sync-check $REMOTE_TARBALL || true
+    exit 1
+  fi
+fi
+# 真实迁移仍在替换源码前，单事务失败即拒绝；不自动恢复数据库备份。
+if [ "\$mutate_rc" = 0 ]; then
+  if runuser -u aiops41 -- env PYTHONPATH=/tmp/sync-check /opt/aiops-41/.venv/bin/python - <<'PYMIGRATE'
+import os
+from dotenv import dotenv_values
+from aiops_diagnostics.gateway import gateway_schema
+from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+os.environ.update({k: v for k, v in dotenv_values("/etc/aiops-41/gateway.env", interpolate=False).items() if v is not None})
+settings = GatewayServerSettings.from_env()
+gateway_schema.startup(settings.database_file)
+gateway_schema.integrity(settings.database_file)
+PYMIGRATE
+  then
+    echo "schema-migrate=passed"
+  else
+    echo "schema-migrate=refused"
     rm -rf /tmp/sync-check $REMOTE_TARBALL || true
     exit 1
   fi

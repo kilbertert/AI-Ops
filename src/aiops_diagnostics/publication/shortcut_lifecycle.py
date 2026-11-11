@@ -25,7 +25,7 @@ from typing import Any, NamedTuple
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 from aiops_diagnostics.publication.agent_lifecycle import SAFE_ID
 
 logger = logging.getLogger(__name__)
@@ -1103,61 +1103,7 @@ class ShortcutStore:
         raise ShortcutConflict(f"shortcut revision conflict: expected {revision}")
 
     def _initialize(self) -> None:
-        with gateway_db.initialize(self.path) as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS shortcuts (
-                    shortcut_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    business_entry TEXT NOT NULL,
-                    code TEXT NOT NULL,
-                    intent TEXT NOT NULL,
-                    requires_order INTEGER NOT NULL,
-                    sort_order INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    revision INTEGER NOT NULL,
-                    fields_json TEXT NOT NULL,
-                    published_version INTEGER,
-                    kind TEXT NOT NULL DEFAULT 'button',
-                    image_url TEXT,
-                    created_by TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(tenant_id, business_entry, code)
-                );
-                """
-            )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_shortcuts_listing
-                    ON shortcuts(tenant_id, business_entry, status, sort_order);
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS shortcut_versions (
-                    shortcut_id TEXT NOT NULL,
-                    tenant_id TEXT NOT NULL,
-                    version_no INTEGER NOT NULL,
-                    snapshot_json TEXT NOT NULL,
-                    published_by TEXT NOT NULL,
-                    published_at TEXT NOT NULL,
-                    PRIMARY KEY(shortcut_id, version_no),
-                    FOREIGN KEY(shortcut_id) REFERENCES shortcuts(shortcut_id) ON DELETE CASCADE
-                );
-                """
-            )
-            # No migration framework in this repo: an existing database gets
-            # the columns added in place. Two separate additions because they
-            # arrived in the same release but one is NOT NULL, and a NOT NULL
-            # column must carry its default for the existing rows to be valid.
-            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(shortcuts)").fetchall()}
-            if "kind" not in columns:
-                connection.execute(
-                    f"ALTER TABLE shortcuts ADD COLUMN kind TEXT NOT NULL DEFAULT '{BUTTON_KIND}'"
-                )
-            if "image_url" not in columns:
-                connection.execute("ALTER TABLE shortcuts ADD COLUMN image_url TEXT")
+        gateway_schema.ensure(self.path)
         protect_private_file(self.path)
 
     @contextmanager

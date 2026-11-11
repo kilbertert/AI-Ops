@@ -11,6 +11,7 @@ from typing import Annotated, Any
 import typer
 
 from aiops_diagnostics.common.config import Settings, selected_config_file
+from aiops_diagnostics.gateway import gateway_schema
 from aiops_diagnostics.gateway.gateway_config import SETTING_SOURCES, GatewayServerSettings
 
 admin_app = typer.Typer(name="admin", help="AI-Ops 网关管理操作（环境清单收敛）", no_args_is_help=True)
@@ -26,6 +27,27 @@ def configure_admin(
     context.ensure_object(dict)
     if config_file is not None:
         context.obj["config_file"] = config_file
+
+
+@admin_app.command("schema")
+def schema_command(
+    action: Annotated[str, typer.Argument(help="check（只读）或 migrate（原子升级）")],
+    db: Annotated[Path, typer.Option("--db", dir_okay=False, help="明确指定 Gateway SQLite 文件")],
+) -> None:
+    """检查或升级全库结构；只输出版本、结构告警，不读取业务值。"""
+    import sqlite3
+
+    if action not in {"check", "migrate"}:
+        raise typer.BadParameter("action 只能是 check 或 migrate")
+    try:
+        if action == "migrate":
+            gateway_schema.ensure(db)
+        report = gateway_schema.check(db)
+    except (gateway_schema.SchemaError, sqlite3.Error, OSError) as exc:
+        # SQLite 错误可能携带用户构造的 SQL；输出稳定分类而非原始异常。
+        typer.echo(json.dumps({"error": "SCHEMA_REFUSED", "type": type(exc).__name__}))
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(report, ensure_ascii=False))
 
 
 def _platform_migration_context() -> Any:
@@ -55,6 +77,7 @@ def migrate_shortcuts(
     from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutManager, ShortcutStore
     from aiops_diagnostics.publication.shortcut_migration import migrate_shortcuts as run_migration
 
+    gateway_schema.startup(db)
     reports = run_migration(
         ShortcutManager(ShortcutStore(db)), _platform_migration_context(), dry_run=dry_run
     )
@@ -86,6 +109,7 @@ def consumer_copy(
     from aiops_diagnostics.consumer.consumer_copy import CopyBundleInvalid, validate
     from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
+    gateway_schema.startup(db)
     store = GatewayStore(db)
     if action == "show":
         resolved, bundle = store.consumer_copy(tenant, version)
@@ -186,6 +210,7 @@ def reconcile(
         )
         raise typer.Exit(code=2)
 
+    gateway_schema.startup(database)
     knowledge_resolver = None
     if kb_url:
         knowledge_resolver = KbBindingResolver(
@@ -492,6 +517,7 @@ def _dify_console_and_db(ctx: typer.Context, db: Path | None) -> tuple[Any, Path
             err=True,
         )
         raise typer.Exit(code=2)
+    gateway_schema.startup(database)
     return console, database
 
 
@@ -820,6 +846,7 @@ def check_knowledge_triple_command(
             raise typer.Exit(code=2)
         names[key.strip()] = value.strip()
 
+    gateway_schema.startup(database)
     results = check(
         store=GatewayStore(database), environment=settings.environment, dify_workspace_names=names
     )
@@ -907,6 +934,7 @@ def onboard_tenant_command(
         raise typer.Exit(code=2)
 
     workspace_step = None
+    gateway_schema.startup(database)
     if not skip_workspace:
         inner = DifyInnerApi(
             InnerApiSettings(
@@ -996,6 +1024,7 @@ def adopt_ragflow_tenant_command(
         typer.secho("缺少 AIOPS_GATEWAY_KB_SERVICE_BASE_URL", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)
     password = sys.stdin.readline().rstrip("\n")
+    gateway_schema.startup(database)
     try:
         outcome = adopt_existing_account(
             tenant_id=tenant,
@@ -1031,6 +1060,7 @@ def rotate_ragflow_credential_command(
 
     settings = _onboarding_settings_or_exit(ctx, needs_embedding=False)
     database = db or settings.database_file
+    gateway_schema.startup(database)
     try:
         result = rotate_credential(
             tenant_id=tenant,
@@ -1120,6 +1150,7 @@ def ensure_workspace_command(
         )
         raise typer.Exit(code=2)
 
+    gateway_schema.startup(database)
     try:
         outcome = ensure_workspace(
             tenant_id=tenant,
@@ -1179,6 +1210,7 @@ def grant_tenant_access_command(
         typer.secho("缺少数据库路径：需要它查 (租户, 环境) → workspace", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)
 
+    gateway_schema.startup(settings.database_file)
     try:
         outcome = grant_tenant_access(
             tenant_id=tenant,
@@ -1264,6 +1296,7 @@ def ensure_ready_command(
         )
         raise typer.Exit(code=2)
 
+    gateway_schema.startup(database)
     try:
         outcome = ensure_ready(
             tenant_id=tenant,
@@ -1414,6 +1447,7 @@ def sync_knowledge_datasets_command(
         )
         raise typer.Exit(code=2)
 
+    gateway_schema.startup(database)
     store = GatewayStore(database)
     # 三件事各自可区分：没开户、workspace 解析不出来、RAGFlow 清单读不到。压成一句
     # "同步失败"会让人回头查三张表。

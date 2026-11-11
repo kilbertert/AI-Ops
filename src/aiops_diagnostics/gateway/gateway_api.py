@@ -1482,6 +1482,11 @@ def create_gateway_app(
         ):
             raise ValueError("managed node routes must share the gateway version database")
     selected_store = store or GatewayStore(selected_settings.database_file)
+    from aiops_diagnostics.dify.service_keys import KeyOperations
+    from aiops_diagnostics.gateway import gateway_schema
+
+    gateway_schema.startup(selected_store.path)
+    KeyOperations(selected_store.path).clean_legacy()
     # Restart recovery, before this app can serve anything: every job the
     # previous process left `queued`/`running` is converged to an honest
     # terminal state here instead of hanging until its deadline (T3/#356,
