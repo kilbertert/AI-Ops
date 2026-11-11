@@ -41,6 +41,22 @@
 Gateway、通用/会话、工具与公司集成目录已分别通过#1181/#1182/#1184归位并上线；
 最终范围与独立复验见[目录收尾](docs/validation/2026-10-30-z20-layout-final-acceptance.md)。
 
+## Gateway 数据库升级
+
+阶段1（#1461）已随1.6.1上线。本轮1.7.0为交付候选，尚未上线。
+1.7.0 将28张Gateway表交给 `gateway.gateway_schema.py`，普通store构造只读版本；
+服务启动与运维完整检查，拒绝未知版本和结构漂移。独立 `mappings.db` 不纳入。
+
+```bash
+aiops-admin schema check --db /path/to/gateway.db
+aiops-admin schema migrate --db /path/to/gateway.db
+```
+
+`check` 不建库、不迁移，只报告版本与结构警告；版本0表示可升级旧库，版本1为当前合同。
+`migrate` 原子建立完整结构，只允许登记的历史补列，不重建表或猜测授权身份。
+部署前必须一致备份与副本演练；恢复代码不会自动恢复旧数据库覆盖新写入。
+方法见[升级手册](docs/agents/gateway-schema-runbook.md)，判据见[QA计划](docs/acceptance/gateway-schema/qa-plan.md)。
+
 ## 一、系统与入口
 
 ```mermaid
