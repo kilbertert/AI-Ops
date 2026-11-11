@@ -459,38 +459,32 @@ def test_every_same_file_store_delegates_to_gateway_db() -> None:
     assert set(holders) == {"gateway/metrics_store.py", "gateway/gateway_db.py"}, holders
 
 
-def test_every_initializer_uses_atomic_initialization() -> None:
-    """DDL 委托事务外WAL与单一LEASE，不能由executescript提前提交。"""
+def test_gateway_ddl_has_one_authority() -> None:
+    """持久结构只在 schema 模块声明；Mapping 是独立文件的具名例外。"""
     offenders = []
-    for rel in sorted(_DELEGATED_STORE_FILES):
-        tree = ast.parse((SOURCE_ROOT / rel).read_text(encoding="utf-8"))
-        initializers = {
-            id(child)
-            for node in ast.walk(tree)
-            if isinstance(node, ast.With)
-            and any(
-                isinstance(item.context_expr, ast.Call)
-                and ast.unparse(item.context_expr.func) == "gateway_db.initialize"
-                for item in node.items
-            )
-            for child in ast.walk(node)
-        }
-        for node in ast.walk(tree):
+    for path in SOURCE_ROOT.rglob("*.py"):
+        rel = str(path.relative_to(SOURCE_ROOT))
+        if rel in {"gateway/gateway_schema.py", "dify/dify_login_service.py"}:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 if node.func.attr == "executescript":
-                    offenders.append(f"{rel}:{node.lineno} executescript")
+                    offenders.append(f"{rel}:{node.lineno}")
                 if (
                     node.func.attr == "execute"
+                    and node.args
                     and any(
-                        isinstance(arg, ast.Constant)
-                        and isinstance(arg.value, str)
-                        and "CREATE TABLE" in arg.value
-                        for arg in node.args
+                        isinstance(value, ast.Constant)
+                        and isinstance(value.value, str)
+                        and any(
+                            ddl in value.value.upper()
+                            for ddl in ("CREATE TABLE", "ALTER TABLE", "CREATE INDEX")
+                        )
+                        for value in ast.walk(node.args[0])
                     )
-                    and id(node) not in initializers
                 ):
-                    offenders.append(f"{rel}:{node.lineno} DDL outside initialize")
-    assert offenders == [], f"同库DDL须使用原子初始化：{offenders}"
+                    offenders.append(f"{rel}:{node.lineno}")
+    assert offenders == [], f"Gateway DDL 必须委托唯一权威：{offenders}"
 
 
 # ---------------------------------------------------------------------------

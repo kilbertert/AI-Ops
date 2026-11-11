@@ -199,6 +199,9 @@ def test_opening_old_database_preserves_retired_data(tmp_path):
 
     path = tmp_path / "old.db"
     with sqlite3.connect(path) as connection:
+        from gateway.test_database_initialization import LEGACY_DIFY
+
+        connection.execute(LEGACY_DIFY)
         connection.execute("CREATE TABLE runs (run_id TEXT, result_json TEXT)")
         connection.execute("INSERT INTO runs VALUES ('old', 'evidence')")
     GatewayStore(path)

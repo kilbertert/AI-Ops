@@ -30,7 +30,7 @@ from typing import Any
 
 from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure, RequestSpec, request_json
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 from aiops_diagnostics.identity.capability import CAPABILITY_UNASSERTED
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
@@ -49,12 +49,6 @@ EXPIRED = "expired"
 #: 智能体发布版本还没有接线（M1/M3 的追溯缺口）。回执里显式写出缺口，
 #: 而不是留一个 null 让人读成「字段齐全」。
 #: M3：执行配置身份。签发时固定**期望**，领取时落入**实际**，两者都只来自受控来源。
-EXEC_CONFIG_COLUMNS = (
-    "expected_agent_version",
-    "observed_agent_version",
-    "exec_config_state",
-)
-
 #: 未接线时的回执取值（与今天逐字一致）。
 EXEC_CONFIG_NOT_WIRED = "not_wired"
 
@@ -73,36 +67,6 @@ TERMINAL_STATES = frozenset({FAILED, REVOKED, EXPIRED})
 EXEC_CONFIG_EXPECTED = "expected"
 EXEC_CONFIG_MATCHED = "matched"
 EXEC_CONFIG_MISMATCHED = "mismatched"
-
-
-#: 让「哪个 QA 由哪条 run 承载」是**存储关联**，不是从字符串反推。
-#: 旧行保持 NULL；没有这一列的库由下面的迁移补上。
-#:
-#: ``chat_binding`` 是同一条纪律的另一半：一条 run 签发时用的**是哪一个**（环境，租户，
-#: 入口，场景）绑定，也冻在记录里。回调与回读都按它找回签发时那一条，而不是拿当前
-#: 第一条看起来像的配置。文本拼接没有出现在任何判据里 —— 它是键，不是解析对象。
-LINK_COLUMNS = ("qa_id", "chat_binding")
-
-
-def _migrate_qa_link_column(connection: sqlite3.Connection) -> None:
-    existing = {row["name"] for row in connection.execute("PRAGMA table_info(agent_runs)")}
-    for column in LINK_COLUMNS:
-        if column not in existing:
-            connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {column} TEXT")
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_agent_runs_qa ON agent_runs(qa_id)")
-
-
-def _migrate_execution_config_columns(connection: sqlite3.Connection) -> None:
-    """给已有的库补 M3 的三列。
-
-    ``CREATE TABLE IF NOT EXISTS`` **不会**给已存在的表加列 —— 所以列变更必须显式迁移，
-    不能只改建表语句（那会让人以为"新库有、旧库也有"）。
-    幂等：已有的列跳过；旧行保持 ``NULL``，**不回填、不猜**。
-    """
-    existing = {row["name"] for row in connection.execute("PRAGMA table_info(agent_runs)")}
-    for column in EXEC_CONFIG_COLUMNS:
-        if column not in existing:
-            connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {column} TEXT")
 
 
 AGENT_VERSION_GAP = "not_wired"
@@ -398,7 +362,7 @@ def _ts(value: str | None) -> datetime | None:
 
 
 class AgentRunStore:
-    """授权记录与其生命周期。与 Gateway 共用同一个 SQLite 文件，各自建表。
+    """授权记录与其生命周期。与 Gateway 共用同一个 SQLite 文件，结构委托 gateway_schema。
 
     状态只有一条单向路径 ``issued → running → succeeded``，以及三个终态
     ``failed`` / ``revoked`` / ``expired``。每一次状态变化都是一条带条件的 UPDATE，
@@ -410,60 +374,7 @@ class AgentRunStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        with gateway_db.initialize(self.path) as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS agent_runs (
-                    run_id TEXT PRIMARY KEY,
-                    scope_fingerprint TEXT NOT NULL,
-                    scope_json TEXT NOT NULL,
-                    -- 订单号**不**改成可空：SQLite 放松 NOT NULL 要重建整张表，而这是现役
-                    -- 运行的记录，重建的风险换来的只是"看起来更对"。无订单的运行由
-                    -- ``operation`` 表达，订单号留空串。同一个判断在标准诊断表上已经做过
-                    -- 一次（那边用 ``kind`` 区分分析作业，订单号同样绑空串，见
-                    -- ``gateway_store.start_analysis_job`` 的说明）。
-                    order_no TEXT NOT NULL,
-                    operation TEXT NOT NULL,
-                    environment TEXT NOT NULL,
-                    app_id TEXT NOT NULL,
-                    agent_id TEXT NOT NULL,
-                    expected_node_id TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    reason TEXT,
-                    snapshot_json TEXT,
-                    actual_node_id TEXT,
-                    node_build TEXT,
-                    gateway_version TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    claimed_at TEXT,
-                    completed_at TEXT,
-                    qa_id TEXT,
-                    chat_binding TEXT,
-                    language TEXT
-                );
-                """
-            )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_agent_runs_scope
-                    ON agent_runs(scope_fingerprint, created_at DESC);
-                """
-            )
-            _migrate_execution_config_columns(connection)
-            _migrate_qa_link_column(connection)
-            columns = {row["name"] for row in connection.execute("PRAGMA table_info(agent_runs)")}
-            for name, kind in (
-                ("execution_manifest", "TEXT"),
-                ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
-                ("publication_app_id", "TEXT NOT NULL DEFAULT ''"),
-                # 签发时记录的语言：回读按它重算，不再枚举一组语言去猜（PRD #1371）。
-                # 旧行保持 NULL，读取时回落到默认语言，不回填、不猜。
-                ("language", "TEXT"),
-                ("trace_json", "TEXT"),
-            ):
-                if name not in columns:
-                    connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {kind}")
+        gateway_schema.ensure(self.path)
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
