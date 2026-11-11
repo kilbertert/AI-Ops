@@ -52,7 +52,7 @@ M2LIVE_GATEWAY_IMAGE=aiops-gateway:consumer-order-composition M2LIVE_DIST="$PWD/
 docker run --rm --network none --read-only --entrypoint python aiops-gateway:consumer-order-composition -c 'from aiops_diagnostics.gateway.gateway_api import create_gateway_app; print("Gateway import: passed")'
 ```
 
-父会话在获准发布流程中更新Gateway **1.7.3镜像**及执行离线迁移的同版本工具包；
+父会话在获准发布流程中更新Gateway **1.7.4镜像**及执行离线迁移的同版本工具包；
 不需要更新Java节点、消费者签名插件、公司App/H5或数据库schema。
 现役两张消费者Agent图均要更新已知指令块；仅换Gateway代码不会自动改已发布图。
 先保存原草稿、正式图和hash，再运行以下离线命令（只写新文件，不导入/发布）：
@@ -62,8 +62,8 @@ uv run python tools/content/upgrade_consumer_flow.py <原v6草稿.yml> \
   --gateway <原可信根地址> --order-composition --out <新草稿.yml>
 ```
 
-1.7.3迁移保留BASE与前后运营文本，只移除唯一完整已知v1/v2/v3规则，并将v3追加到全文末尾。
-支持原BASE、BASE后已有v1、已发布v2、当前v3四种形状；重复运行结果一致。已发布v2按完整字节冻结。
+1.7.4迁移保留BASE与前后运营文本，只移除唯一完整已知v1/v2/v3/v4规则，并将v4追加到全文末尾。
+支持BASE、v1、已发布v2/v3、当前v4；重复运行结果一致。已发布v2/v3按完整字节冻结。
 未知改写/重复块/异常标记拒绝，不得把运营后缀删掉来消除冲突。
 核对diff仅instruction一处，再按[现役发布手册](agent-conversation-qa.md#复现命令与迁移方法)
 试用、冻结正式版、原Dify/H5问答。恢复走原版本恢复API，不能直接改数据库行。
@@ -78,10 +78,21 @@ uv run python tools/content/upgrade_consumer_flow.py <原v6草稿.yml> \
 - 币种missing/invalid/conflicting：开头说明金额币种未提供，所有金额无元/人民币/美元/币种符号，不能靠末尾免责声明补救。
 - 费用明细：只列各分项、来源总额/支付；不自行合计或税基运算，不作“无异常/放心”等未核验承诺。
 - null占位费：未提供，不称未收费；零值可简洁列示。单项问题仅答该项。
+- v4逐字段存在性：`parkFee=0.00`与`occupyFee=null`必须分别说明停车费零值、占位费未提供；所有语言的金额或缺项断言均对照同名来源键，不能合并为两项缺失。
 - v3开头完整性：只概括已取得的具体分项，同时点出缺项；有missing/invalid/null、币种缺失或截断时，不能先称齐全再补限制，不能用“放心核对”保证完整性。
 - 分时与订单记录不同时：逐项保留来源值，不拼总计或编原因；分时电量不反算费用。
 - 用户要求加总或问是否收费正确：缺确定性核验时说明记录范围与限制，不自行运算下结论。
 
 只读语义复验不修改订单、公司App/H5、模型、工具、库或权限。发布前保留版本，发现语义失败走正常恢复API。
-本轮冻结v3后先在两份真实授权草稿仅更新instruction，正常预览、逐句核对后再推进代码发版；
+冻结当前规则后先在两份真实授权草稿仅更新instruction，正常预览、逐句核对后再推进代码发版；
 正式发布及原H5仍需父会话另行验收，不能把草稿结果视为已经上线。
+
+### 英文受管预览方法
+
+现有manage桥未转发`Accept-Language`，从该桥试用默认中文，不能用英文提问文本代替语言选择。
+英文核验直达已运行Gateway的受管`POST /v1/dify/management/trial`与`POST /v1/dify/management/trial/result`：复用正常Dify console session，
+通过`X-AIOps-Console-Session`传会话、`Authorization: Bearer <独立trial key>`传试用密钥，
+并设`Accept-Language: en`。请求仍按现有试用合同给授权app/order及问题，不换模型或绕过主体核验。
+读取结果时传同一`app_id`与返回的`trial_id`，继续使用相同受管凭据和语言头，核对实际正文而非只看completed。
+所有凭据由受控进程运行时从受控位置读取，不写命令行、证据、日志或仓库；只保留脱敏判据和结果。
+Bridge语言转发功能不在本任务范围内；此方法由父会话实测，作者不读取会话、密钥或真实订单。
