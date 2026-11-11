@@ -283,6 +283,7 @@ def order_composition(source):
     blocks = (
         flow.ORDER_COMPOSITION_INSTRUCTION_V1,
         flow.ORDER_COMPOSITION_INSTRUCTION_V2,
+        flow.ORDER_COMPOSITION_INSTRUCTION_V3,
         flow.ORDER_COMPOSITION_INSTRUCTION,
     )
     if sum(text.count(block) for block in blocks) > 1:
