@@ -50,7 +50,8 @@ def _amount(value):
     return format(number, "f")
 
 
-def _decimal(value):
+def decode_billing_number(value):
+    """账务JSON的parse_float回调：将Decimal构造异常映射为领域不可用。"""
     try:
         return Decimal(value)
     except InvalidOperation as exc:
@@ -75,7 +76,7 @@ def read_billing_record(base_url, order_no, *, tenant_id, user_id, include_compo
             invalid_envelope=_unavailable,
         ),
         envelope=parse_code_data_envelope,
-        parse_float=_decimal,
+        parse_float=decode_billing_number,
     )
     row = body.get("chOrderInfoModel") if isinstance(body, dict) else None
     if (

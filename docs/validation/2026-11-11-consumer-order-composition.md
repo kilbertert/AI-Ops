@@ -75,3 +75,14 @@ ruff、wheel/sdist、Gateway镜像重建与容器导入通过。未因文档/版
 仅更新consumer/common/gateway三篇llmdoc，以CLI刷新对应validatedRevision，未手改meta台账。
 原记录的`@tokenroll/llmdoc@3.6.1`在当前npm源不可用，本轮明确使用可用3.6.0；validate通过，
 四个源码/工具路径均有owner，概念“订单构成”首项命中consumer文档。
+
+## PR #1469 首轮CI与结构守卫修正
+
+CI运行`42971202094`在HEAD `969edbc3`得到4916通过、10跳过、2失败。
+仅失败于scalar结构守卫：CPMS时间解析未登记`_IOFORMAT_LEDGER`，账务JSON回调名`_decimal`
+命中通用标量解析器禁名。此结果与前述本地全量的取消测试失败分别记录，不能互相覆盖。
+修正仅登记`consumer/consumer_billing.py`的原始日期/分时时钟合同，保留offset/naive，不补UTC；
+JSON回调改名`decode_billing_number`并明确Decimal构造异常的入口映射职责，无业务语义变化。
+本轮只复跑scalar守卫及HTTP/billing/agent相关检查，完整CI由同PR的新push触发；未重复本地全量。
+定向结果172通过；ruff check/format通过，消费者llmdoc校验通过。证据为
+`scalar-fix-focused.log`、`scalar-fix-ruff.log`、`scalar-fix-format.log`、`scalar-fix-llmdoc.log`。

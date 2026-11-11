@@ -27,3 +27,7 @@ ruff、wheel/sdist、Gateway镜像/容器导入和临时根HTTP检查通过；�
 后续由父会话Devin闭环、标准CD及真实模型/双v6原入口验收；必须同时更新Gateway与
 现役消费者Agent图。无需公司App/H5、Java节点、DB schema或签名插件更新。
 current-delivery-state由父会话最后写。本轮未完成业务验收。
+
+PR #1469首轮CI仅两项scalar结构守卫失败（4916通过、10跳过）。已按ADR0246合同登记
+CPMS原始时间解析的单文件台账，并给账务JSON数字回调使用明确名称；行为不变。
+修正继续提交到同PR，Devin复审及后续标准交付仍由父会话负责。
