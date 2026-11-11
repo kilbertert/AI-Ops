@@ -41,6 +41,22 @@
 Gateway、通用/会话、工具与公司集成目录已分别通过#1181/#1182/#1184归位并上线；
 最终范围与独立复验见[目录收尾](docs/validation/2026-10-30-z20-layout-final-acceptance.md)。
 
+## Gateway 数据库升级
+
+阶段1（#1461）已随1.6.1上线。本轮1.7.0为交付候选，尚未上线。
+1.7.0 将28张Gateway表交给 `gateway.gateway_schema.py`，普通store构造只读版本；
+服务启动与运维完整检查，拒绝未知版本和结构漂移。独立 `mappings.db` 不纳入。
+
+```bash
+aiops-admin schema check --db /path/to/gateway.db
+aiops-admin schema migrate --db /path/to/gateway.db
+```
+
+`check` 不建库、不迁移，只报告版本与结构警告；版本0表示可升级旧库，版本1为当前合同。
+`migrate` 原子建立完整结构，只允许登记的历史补列，不重建表或猜测授权身份。
+部署前必须一致备份与副本演练；恢复代码不会自动恢复旧数据库覆盖新写入。
+方法见[升级手册](docs/agents/gateway-schema-runbook.md)，判据见[QA计划](docs/acceptance/gateway-schema/qa-plan.md)。
+
 ## 一、系统与入口
 
 ```mermaid
@@ -75,7 +91,7 @@ flowchart LR
 
 | 职责 | 当前模块 |
 |---|---|
-| 网关与服务 | `gateway.gateway_api.py`、`gateway.gateway_runtime.py`、`gateway_server.py`、`gateway.gateway_store.py`、`gateway.gateway_db.py`、`gateway.gateway_config.py`、`gateway.gateway_logging.py`、`gateway.public_openapi.py`、`gateway.request_observation.py`、`gateway.isolation_guard.py`、`gateway.deployment_environment.py` |
+| 网关与服务 | `gateway.gateway_api.py`、`gateway.gateway_runtime.py`、`gateway_server.py`、`gateway.gateway_store.py`、`gateway.gateway_db.py`、`gateway.gateway_schema.py`、`gateway.gateway_config.py`、`gateway.gateway_logging.py`、`gateway.public_openapi.py`、`gateway.request_observation.py`、`gateway.isolation_guard.py`、`gateway.deployment_environment.py` |
 | 身份与范围 | `identity.caller_auth.py`、`identity.company_token_auth.py`、`identity.company_permissions.py`、`identity.data_scope_rule.py`、`identity.third_session_auth.py`、`identity.scope_context.py`、`identity.query_scope.py`、`identity.order_visibility.py`、`identity.order_identity.py`、`common.http_auth.py` |
 | C端业务 | `consumer.consumer_agent.py`、`consumer.consumer_agent_flow.py`、`consumer.consumer_billing.py`、`consumer.consumer_facts.py`、`consumer.consumer_binding.py`、`consumer.consumer_chat_service.py`、`consumer.consumer_copy.py`、`consumer.consumer_documents.py`、`consumer.consumer_flow_contract.py`、`consumer.consumer_intent.py`、`consumer.consumer_knowledge.py`、`consumer.consumer_knowledge_selection.py`、`consumer.consumer_knowledge_grants.py`、`consumer.consumer_language.py`、`consumer.consumer_order_chat.py`、`consumer.consumer_photo.py`、`consumer.consumer_plain.py`、`consumer.consumer_reply.py`、`consumer.consumer_publication.py`、`consumer.consumer_sites.py`、`consumer.consumer_tool_grants.py`、`consumer.consumer_time.py`、`consumer.consumer_trial.py`、`consumer.business_environments.py`、`data.charging_status.py` |
 | 节点与试用 | `execution.agent_runs.py`、`execution.run_deliverability.py`、`execution.execution_manifest.py`、`execution.chat_execution.py`、`execution.chat_data_grant.py`、`execution.chat_route_bindings.py`、`execution.node_publication.py`、`operator.operator_cpms.py`、`operator.communication.py`、`operator.order_analysis.py`、`operator.order_pricing.py`、`operator.order_billing.py`、`operator.station_pricing.py`、`operator.station_tariff.py`、`operator.operator_tools.py`、`operator.operator_conversation.py`、`operator.operator_answer_review.py`、`dify.dify_trial.py`、`dify.dify_workflow_trial.py` |

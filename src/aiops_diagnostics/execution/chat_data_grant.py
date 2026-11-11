@@ -46,7 +46,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 #: 取数授权的有效期。与本项目既定的 run TTL 对齐，**不因为重试而续期**。
 GRANT_TTL_SECONDS = 180
@@ -96,31 +96,7 @@ class DataGrantStore:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        with gateway_db.initialize(self.path) as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS chat_data_grants (
-                    grant_id TEXT PRIMARY KEY,
-                    token_hash TEXT NOT NULL UNIQUE,
-                    scope_fingerprint TEXT NOT NULL,
-                    order_no TEXT NOT NULL,
-                    environment TEXT NOT NULL,
-                    tenant_id TEXT NOT NULL,
-                    qa_id TEXT NOT NULL,
-                    workflow_id TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    consumed_at TEXT
-                );
-                """
-            )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_chat_data_grants_qa
-                    ON chat_data_grants(qa_id);
-                """
-            )
+        gateway_schema.ensure(self.path)
 
     @contextmanager
     def _connection(self, *, write: bool = False):

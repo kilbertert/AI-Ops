@@ -46,7 +46,7 @@ from aiops_diagnostics.common.private_files import (
 )
 from aiops_diagnostics.dify.dify_chat_workflow import load_workflow_key
 from aiops_diagnostics.execution.chat_execution import key_file_for_app
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 from .self_service_identity import SetupRefused
 
@@ -105,18 +105,18 @@ class KeyOperations:
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with gateway_db.initialize(self.path) as db:
-            db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS service_key_ops (
-                    app_id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    before_json TEXT NOT NULL,
-                    stage TEXT NOT NULL,
-                    updated_at REAL NOT NULL
-                )
-                """
+        gateway_schema.ensure(self.path)
+        protect_private_file(self.path)
+
+    def clean_legacy(self) -> None:
+        """启动维护：先只读探测；旧程序可再次写旧格式，不能只看 schema 版本。"""
+        with self._connection() as db:
+            needed = any(
+                isinstance(json.loads(row[0]), dict)
+                for row in db.execute("SELECT before_json FROM service_key_ops")
             )
+        if not needed:
+            return
         # 旧版误存 token -> id，原位去掉token；历史备份由运维按凭据保留策略处理。
         with self._connection(write=True) as db:
             db.execute("PRAGMA secure_delete=ON")
@@ -127,7 +127,6 @@ class KeyOperations:
                         "UPDATE service_key_ops SET before_json=? WHERE app_id=?",
                         (json.dumps(sorted(old.values())), row["app_id"]),
                     )
-        protect_private_file(self.path)
 
     @contextmanager
     def _connection(self, *, write: bool = False):
@@ -138,7 +137,14 @@ class KeyOperations:
     def get(self, app_id: str) -> dict | None:
         with self._connection() as db:
             row = db.execute("SELECT * FROM service_key_ops WHERE app_id=?", (app_id,)).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        result = dict(row)
+        before = json.loads(result["before_json"])
+        if isinstance(before, dict):
+            # 独立调用也只暴露 ID；按 token 键做差集会错误领养别人的凭据。
+            result["before_json"] = json.dumps(sorted(before.values()))
+        return result
 
     def start(self, app_id: str, workspace_id: str, before: dict[str, str]) -> None:
         with self._connection(write=True) as db:

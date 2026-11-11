@@ -393,15 +393,23 @@ def test_evidence_write_cannot_bypass_final_authorization(provision, monkeypatch
     assert row["status"] == "failed" and row["result_json"] is None
 
 
-def test_new_turn_column_migrates_without_losing_existing_history(provision):
+def test_new_turn_column_migrates_without_losing_existing_history(tmp_path):
     import sqlite3
 
     from aiops_diagnostics.conversation.conversation_store import ConversationStore
 
-    p = provision
-    with sqlite3.connect(p.settings.database_file) as db:
-        db.execute("ALTER TABLE conversation_turns DROP COLUMN status_qa_id")
-    store = ConversationStore(p.settings.database_file)
+    # 旧版 conversation_turns 固定声明（引入 status_qa_id 前），版本 0。
+    path = tmp_path / "gateway.db"
+    with sqlite3.connect(path) as db:
+        db.execute("""
+            CREATE TABLE conversation_turns (
+                turn_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, turn_no INTEGER NOT NULL,
+                kind TEXT NOT NULL, question TEXT NOT NULL, answer_json TEXT,
+                token_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+                UNIQUE(conversation_id, turn_no)
+            )
+        """)
+    store = ConversationStore(path)
     scope = "test-scope"
     conv = store.create(
         scope_fingerprint=scope, business_entry="consumer", agent_version_key="agt_aaaaaaaa#v1"
@@ -409,7 +417,7 @@ def test_new_turn_column_migrates_without_losing_existing_history(provision):
     turn = store.begin_turn(conv["conversation_id"], scope, kind="qa", question="你好")
     answer = {"blocks": [{"kind": "text", "text": "你好"}], "retrieval_status": "not_found"}
     store.complete_turn(conv["conversation_id"], scope, turn, answer=answer)
-    again = ConversationStore(p.settings.database_file)
+    again = ConversationStore(path)
     assert again.context_turns(conv["conversation_id"], scope)[0]["answer"] == answer
 
 

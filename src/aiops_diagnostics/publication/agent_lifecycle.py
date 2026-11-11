@@ -19,7 +19,7 @@ from typing import Any, Protocol
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 AGENT_MANAGE_SCOPE = "aiops:agents:manage"
 AGENT_TYPES = frozenset({"customer", "operations"})
@@ -371,44 +371,7 @@ class AgentStore:
         raise AgentConflict(f"agent revision conflict: expected {revision}")
 
     def _initialize(self) -> None:
-        with gateway_db.initialize(self.path) as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS agents (
-                    agent_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    revision INTEGER NOT NULL,
-                    config_json TEXT NOT NULL,
-                    published_version INTEGER,
-                    created_by TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                """
-            )
-            connection.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_agents_tenant_created
-                    ON agents(tenant_id, created_at DESC);
-                """
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS agent_versions (
-                    agent_id TEXT NOT NULL,
-                    tenant_id TEXT NOT NULL,
-                    version_no INTEGER NOT NULL,
-                    snapshot_json TEXT NOT NULL,
-                    published_by TEXT NOT NULL,
-                    published_at TEXT NOT NULL,
-                    PRIMARY KEY(agent_id, version_no),
-                    FOREIGN KEY(agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE
-                );
-                """
-            )
+        gateway_schema.ensure(self.path)
         protect_private_file(self.path)
 
     @contextmanager

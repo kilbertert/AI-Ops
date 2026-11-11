@@ -100,6 +100,10 @@ Gateway解析公司个人Bearer与当前站点范围，冻结已发布SOP、模�
 | 发布与审计 | `agent_versions`保存版本，`chat_route_bindings`选择正式路线，`publish_audit_ledger`记录发布尝试；`standard_diagnoses`保留承载试用等内部记录，不意味着旧HTTP端点仍开放 |
 
 以上应用账本集中于Gateway的SQLite存储；连接事务由 `gateway.gateway_db` 的具名profile统一。
+1.7.0的28张表结构由 `gateway.gateway_schema` 单点声明，构造只读版本，启动完整检查。
+旧库在一个写事务内补齐结构、复核后写版本；切WAL的BUSY单独有界等待，业务事务不重试。
+独立登录映射 `mappings.db` 不合库；历史scope_json默认值差异保留，未知结构拒绝。
+决策与运行方法见[ADR0244](adr/0244-gateway-schema-authority.md)和[升级手册](agents/gateway-schema-runbook.md)。
 Dify、RAGFlow和业务CPMS各有自己的持久化与生命周期，不是一个数据库事务。身份/健康/聚合仍有
 受控数据库读取，不能把“模型只用受限工具”误写成“所有后端数据访问都只走CPMS HTTP”。
 

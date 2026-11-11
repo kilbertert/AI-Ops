@@ -34,6 +34,7 @@ Python sqlite3 的 legacy 事务控制下，``executescript`` 会先提交挂起
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -47,14 +48,19 @@ SINGLE_STATEMENT = "single_statement"
 
 
 @contextmanager
-def connection(path: Path, *, write: bool = False, profile: str = LEASE) -> Iterator[sqlite3.Connection]:
+def connection(
+    path: Path, *, write: bool = False, profile: str = LEASE, readonly: bool = False
+) -> Iterator[sqlite3.Connection]:
     """打开一条 ``gateway.db`` 连接。
 
     读路径两个 profile 一致；写路径由 ``profile`` 决定锁纪律（见模块
     docstring）。调用方不得再自行 ``sqlite3.connect`` 这个文件——那会把
     锁与等待的决定藏回各 store 的正文里。
     """
-    conn = sqlite3.connect(path, timeout=5, isolation_level=None)
+    if readonly and write:
+        raise ValueError("readonly connection cannot lease writes")
+    target = Path(path).resolve().as_uri() + "?mode=ro" if readonly else path
+    conn = sqlite3.connect(target, timeout=5, isolation_level=None, uri=readonly)
     leased = write and profile == LEASE
     try:
         conn.row_factory = sqlite3.Row
@@ -80,6 +86,22 @@ def connection(path: Path, *, write: bool = False, profile: str = LEASE) -> Iter
 def initialize(path: Path) -> Iterator[sqlite3.Connection]:
     """事务外设置 WAL，再用一次 LEASE 原子初始化；不回滚 WAL 文件属性。"""
     with connection(path) as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
+        # SQLite 切 journal mode 的 BUSY 可能绕过 busy_timeout 立即返回。
+        # 只重试这一步，共享五秒期限；业务写与迁移事务不重试。
+        deadline = time.monotonic() + 5
+        while True:
+            remaining = max(0, deadline - time.monotonic())
+            conn.execute(f"PRAGMA busy_timeout={int(remaining * 1000)}")
+            try:
+                mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                if str(mode).lower() != "wal":
+                    raise sqlite3.OperationalError("WAL mode unavailable")
+                break
+            except sqlite3.OperationalError as exc:
+                code = getattr(exc, "sqlite_errorcode", 0)
+                remaining = deadline - time.monotonic()
+                if code & 0xFF != sqlite3.SQLITE_BUSY or remaining <= 0:
+                    raise
+                time.sleep(min(0.01, remaining))
     with connection(path, write=True) as conn:
         yield conn

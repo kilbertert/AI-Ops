@@ -195,6 +195,9 @@ def test_open_preserves_existing_tables_and_records(tmp_path):
 
     connection = sqlite3.connect(database)
     try:
+        from gateway.test_database_initialization import LEGACY_DIFY
+
+        connection.execute(LEGACY_DIFY)
         connection.execute("CREATE TABLE unrelated (k TEXT PRIMARY KEY)")
         connection.execute("INSERT INTO unrelated VALUES ('keep-me')")
         connection.commit()

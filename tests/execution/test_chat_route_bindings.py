@@ -292,8 +292,11 @@ def test_reverse_saving_a_draft_never_moves_the_pointer(tmp_path):
     before = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
     # 保存草稿 = 改 `agents.config_json` / `revision`，与路由表无关。模拟那一步：
     connection = sqlite3.connect(tmp_path / "gateway.db")
-    connection.execute("CREATE TABLE IF NOT EXISTS agents (agent_id TEXT PRIMARY KEY, revision INTEGER)")
-    connection.execute("INSERT OR REPLACE INTO agents VALUES ('agt_1', 99)")
+    connection.execute(
+        "INSERT INTO agents(agent_id,tenant_id,name,description,status,revision,config_json,"
+        "created_by,created_at,updated_at) "
+        "VALUES ('agt_1','TENANT-A','draft','','draft',99,'{}','test','','')"
+    )
     connection.commit()
     connection.close()
     after = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)

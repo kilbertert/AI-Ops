@@ -175,6 +175,13 @@ def test_legacy_key_journal_is_migrated_to_ids_only(tmp_path):
         )
     ops = service_keys.KeyOperations(path)
     assert json.loads(ops.get("app")["before_json"]) == ["key-1"]
+    with sqlite3.connect(path) as db:
+        assert isinstance(
+            json.loads(db.execute("SELECT before_json FROM service_key_ops").fetchone()[0]), dict
+        )
+    ops.clean_legacy()
+    with sqlite3.connect(path) as db:
+        assert json.loads(db.execute("SELECT before_json FROM service_key_ops").fetchone()[0]) == ["key-1"]
 
 
 def test_only_explicit_grant_can_reenable_revoked_knowledge(tmp_path):

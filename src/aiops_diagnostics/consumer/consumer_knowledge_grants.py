@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 AUDIENCE_CUSTOMER = "customer"
 AUDIENCE_INTERNAL = "internal"
@@ -39,22 +39,7 @@ class KnowledgeGrants:
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with gateway_db.initialize(self.path) as db:
-            db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS consumer_knowledge_grants (
-                    tenant_id TEXT NOT NULL,
-                    environment TEXT NOT NULL,
-                    knowledge_base_id TEXT NOT NULL,
-                    granted_by TEXT NOT NULL,
-                    granted_at REAL NOT NULL,
-                    PRIMARY KEY (tenant_id, environment, knowledge_base_id)
-                )
-                """
-            )
-            columns = {r["name"] for r in db.execute("PRAGMA table_info(consumer_knowledge_grants)")}
-            if "revoked_at" not in columns:
-                db.execute("ALTER TABLE consumer_knowledge_grants ADD COLUMN revoked_at REAL")
+        gateway_schema.ensure(self.path)
         protect_private_file(self.path)
 
     @contextmanager
@@ -141,19 +126,7 @@ class ConsumerEndpoints:
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with gateway_db.initialize(self.path) as db:
-            db.execute(
-                """
-                CREATE TABLE IF NOT EXISTS consumer_endpoints (
-                    tenant_id TEXT NOT NULL,
-                    environment TEXT NOT NULL,
-                    base_url TEXT NOT NULL,
-                    registered_by TEXT NOT NULL,
-                    registered_at REAL NOT NULL,
-                    PRIMARY KEY (tenant_id, environment)
-                )
-                """
-            )
+        gateway_schema.ensure(self.path)
         protect_private_file(self.path)
 
     @contextmanager
