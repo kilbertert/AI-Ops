@@ -52,7 +52,7 @@ M2LIVE_GATEWAY_IMAGE=aiops-gateway:consumer-order-composition M2LIVE_DIST="$PWD/
 docker run --rm --network none --read-only --entrypoint python aiops-gateway:consumer-order-composition -c 'from aiops_diagnostics.gateway.gateway_api import create_gateway_app; print("Gateway import: passed")'
 ```
 
-父会话在获准发布流程中更新Gateway **1.7.4镜像**及执行离线迁移的同版本工具包；
+父会话在获准发布流程中更新Gateway **1.7.5镜像**及执行离线迁移的同版本工具包；
 不需要更新Java节点、消费者签名插件、公司App/H5或数据库schema。
 现役两张消费者Agent图均要更新已知指令块；仅换Gateway代码不会自动改已发布图。
 先保存原草稿、正式图和hash，再运行以下离线命令（只写新文件，不导入/发布）：
@@ -62,8 +62,8 @@ uv run python tools/content/upgrade_consumer_flow.py <原v6草稿.yml> \
   --gateway <原可信根地址> --order-composition --out <新草稿.yml>
 ```
 
-1.7.4迁移保留BASE与前后运营文本，只移除唯一完整已知v1/v2/v3/v4规则，并将v4追加到全文末尾。
-支持BASE、v1、已发布v2/v3、当前v4；重复运行结果一致。已发布v2/v3按完整字节冻结。
+1.7.5迁移保留BASE及未撤销的运营文本，移除唯一完整已知v1–v5规则，并将v5追加到全文末尾；
+同时精确撤销全部已知算术差额许可。支持BASE、v1–v4及当前v5，重复运行结果一致；已发布v2/v3/v4按完整字节冻结。
 未知改写/重复块/异常标记拒绝，不得把运营后缀删掉来消除冲突。
 核对diff仅instruction一处，再按[现役发布手册](agent-conversation-qa.md#复现命令与迁移方法)
 试用、冻结正式版、原Dify/H5问答。恢复走原版本恢复API，不能直接改数据库行。
@@ -96,3 +96,26 @@ uv run python tools/content/upgrade_consumer_flow.py <原v6草稿.yml> \
 读取结果时传同一`app_id`与返回的`trial_id`，继续使用相同受管凭据和语言头，核对实际正文而非只看completed。
 所有凭据由受控进程运行时从受控位置读取，不写命令行、证据、日志或仓库；只保留脱敏判据和结果。
 Bridge语言转发功能不在本任务范围内；此方法由父会话实测，作者不读取会话、密钥或真实订单。
+
+## 严格原值候选与事件取证
+
+v5候选验收来自产品“字段读取多少就展示多少”的要求，原金额数值本身保持原样。
+新增最小迁移检查拦截两处已知计算许可未移除；旧检查只保护运营文字不变，无法证明撤销许可。
+既有reader检查增加独立总额/支付断言：源总额与各分项和不一致时也必须原样保留，不做重算。
+
+| 用例 | 输入与独立判据 | 预期 |
+|---|---|---|
+| SV-01 来源追踪 | 同一Dify会话→message.workflow_run_id→Gateway run；同主体权限读取订单表和两个原页面接口 | 明确哪个字段首次出现该值，不能把“数值相加恰好等于它”当AI计算证据 |
+| SV-02 迁移 | BASE/v1–v4、原前后文本两处已知计算许可 | 仅撤销完整已知许可及替换当前规则；其他图字段与输入不变，二次幂等 |
+| SV-03 原问题 | 真实原问题及其已授权工具结果，同模型/参数、仅替换候选instruction | 费用/支付逐项列原值，无差额数字、无舍入；完成状态不推无异常 |
+| SV-04 主动要求运算 | 要求金额相减、分项合计、电量两位小数 | 说明只提供原值；不能把同值税费当作来源差额，不生成近似电量 |
+| SV-05 原入口 | 候选按正常预览/发布流程接入后同题重放 | 正常鉴权和工具闭环、正式版本可追踪；未执行前不能报通过 |
+
+现场读取按环境手册与公司只读源码规程。Dify PostgreSQL使用只读事务及精确会话谓词，
+只选必要message/workflow/node列；Gateway SQLite使用mode=ro及精确workflow_run_id关联。
+导出会包含grant/输入，原件必须私有，报告仅保留经筛选字段，不能打印整条agent_log。
+原App详情必须抓同一订单的实际请求和页面标签；公司缓存源码是解释线索，不冒充现役构建身份。
+
+离线真实模型回放只将已授权结果送回同应用原模型；用Dify PluginModelAssembly现有创建器，
+在受控进程运行时取模型连接，不输出凭据，不改应用/草稿/正式指针，不调用业务写接口。
+回放不执行工具、不写正式QA，因此与原入口端到端验收分别记录；保留每次失败，不做无界重试。
