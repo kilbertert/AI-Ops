@@ -86,10 +86,9 @@ class DifyWorkspaces:
         self._initialize()
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 -- 一个租户在一个环境里的 Dify workspace（ADR-0059 / #879）。
                 --
                 -- 唯一键是 (tenant_id, environment)：两套独立 UPMS 的 tenant_id 各自

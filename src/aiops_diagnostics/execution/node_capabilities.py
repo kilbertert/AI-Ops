@@ -16,11 +16,7 @@ MAX_AGE = 120
 def record(database, config, node, payload):
     # 建表 + upsert 是多语句写——LEASE（gateway_db，#573）。observed_at 是
     # epoch 秒列，不是 ISO 存储文本，不在 scalar_rules 的读取范围。
-    # WAL 只能在事务外设置（LEASE 入口已是 BEGIN IMMEDIATE），所以用
-    # 读连接声明文件属性，再进写租约。
-    with gateway_db.connection(database) as db:
-        db.execute("PRAGMA journal_mode=WAL")
-    with gateway_db.connection(database, write=True) as db:
+    with gateway_db.initialize(database) as db:
         db.execute("""CREATE TABLE IF NOT EXISTS execution_node_capabilities (
             environment TEXT NOT NULL,node_id TEXT NOT NULL,body TEXT NOT NULL,observed_at REAL NOT NULL,
             PRIMARY KEY(environment,node_id))""")

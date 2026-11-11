@@ -79,10 +79,9 @@ class DifyAppRegistry:
         self._initialize()
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS dify_app_registry (
                     tenant_id TEXT NOT NULL,
                     business_entry TEXT NOT NULL,

@@ -96,10 +96,9 @@ class DataGrantStore:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS chat_data_grants (
                     grant_id TEXT PRIMARY KEY,
                     token_hash TEXT NOT NULL UNIQUE,
@@ -114,6 +113,10 @@ class DataGrantStore:
                     expires_at TEXT NOT NULL,
                     consumed_at TEXT
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_chat_data_grants_qa
                     ON chat_data_grants(qa_id);
                 """

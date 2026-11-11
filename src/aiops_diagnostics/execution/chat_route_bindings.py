@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+from aiops_diagnostics.gateway import gateway_db
 
 #: 表只认这两个状态。没有 `deleted`：撤回不删行（见模块文档第 2 条）。
 STATE_ACTIVE = "active"
@@ -106,8 +107,8 @@ class ChatRouteBindingStore:
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS chat_route_bindings (
                     environment TEXT NOT NULL,
@@ -129,7 +130,6 @@ class ChatRouteBindingStore:
                 """
             )
 
-        with self._connection(write=True) as connection:
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(chat_route_bindings)")}
             if "node_config_file" not in columns:
                 connection.execute(

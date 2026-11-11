@@ -1186,10 +1186,9 @@ class GatewayStore:
     # oversight rather than a decision.
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS health_report_jobs (
                     job_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
@@ -1207,8 +1206,16 @@ class GatewayStore:
                     completed_at TEXT,
                     expires_at TEXT
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_health_jobs_reuse
                     ON health_report_jobs(scope_fingerprint, order_no, rule_version, created_at DESC);
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS standard_diagnoses (
                     diagnosis_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
@@ -1228,9 +1235,17 @@ class GatewayStore:
                     completed_at TEXT,
                     expires_at TEXT
                 );
+                """
+            )
+            connection.execute(
+                """
                 
                 CREATE INDEX IF NOT EXISTS idx_standard_diagnoses_scope_created
                     ON standard_diagnoses(scope_fingerprint, created_at DESC);
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS assistant_questions (
                     qa_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
@@ -1247,8 +1262,16 @@ class GatewayStore:
                     completed_at TEXT,
                     expires_at TEXT
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_assistant_questions_scope_created
                     ON assistant_questions(scope_fingerprint, created_at DESC);
+                """
+            )
+            connection.execute(
+                """
                 -- 发布审计账本（#772 D / #780）：**追加写**，一行一次发布尝试。
                 --
                 -- 它与 ``standard_diagnoses`` 是两件事：那张表记"一次智能体版本的
@@ -1271,10 +1294,22 @@ class GatewayStore:
                     action TEXT NOT NULL,
                     reason_code TEXT NOT NULL DEFAULT ''
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_publish_audit_at
                     ON publish_audit_ledger(at DESC);
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_publish_audit_app
                     ON publish_audit_ledger(app_id, at DESC);
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS consumer_copy_bundles (
                     tenant_id TEXT NOT NULL,
                     version INTEGER NOT NULL,
@@ -1283,6 +1318,10 @@ class GatewayStore:
                     published_by TEXT NOT NULL,
                     PRIMARY KEY (tenant_id, version)
                 );
+                """
+            )
+            connection.execute(
+                """
                 -- 知识库控制台的访问账本（#926 / PRD #923）。
                 --
                 -- **为什么需要它**：登录代理用「租户 owner」身份进 RAGFlow，所以 RAGFlow
@@ -1302,9 +1341,16 @@ class GatewayStore:
                     outcome TEXT NOT NULL,
                     reason_code TEXT NOT NULL DEFAULT ''
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_knowledge_access_tenant
                     ON knowledge_access_ledger(tenant_id, at DESC);
-
+                """
+            )
+            connection.execute(
+                """
                 -- 一次性跳转票（#985）。
                 --
                 -- **为什么需要它**：cookie 只能由它所属的域设置。桥在
@@ -1327,9 +1373,16 @@ class GatewayStore:
                     expires_at TEXT NOT NULL,
                     used_at TEXT
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_knowledge_hop_expiry
                     ON knowledge_hop_tickets(expires_at);
-
+                """
+            )
+            connection.execute(
+                """
                 -- 运营在界面上点的「知识源」：一条 = Dify 里一个外部知识库。
                 --
                 -- 为什么不是 env 里的 DIFY_KNOWLEDGE_BINDINGS：那是一行必须手写的
@@ -1350,9 +1403,16 @@ class GatewayStore:
                     created_by TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_dify_knowledge_tenant
                     ON dify_knowledge_bindings(tenant_id, created_at DESC);
-
+                """
+            )
+            connection.execute(
+                """
                 -- 一租户一 RAGFlow 租户（#924，PRD #923 的 1:1:1）。
                 --
                 -- 这里只存**我们这一侧**记的东西：RAGFlow 的登录邮箱、凭据（密文）、

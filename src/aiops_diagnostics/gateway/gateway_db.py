@@ -22,10 +22,13 @@ profile 之间选择。
     回滚（已提交的语句回不来）。它是「我的写恰好单语句」的显式声明，
     不是少写四行的省略。
 
-两个 profile 之外的位置：``dify_login_service.MappingStore`` 开自己的
-``mappings.db``，``ChatRouteBindingStore`` 开 ``chat_route_bindings_file``
-——不同的文件有自己的约定，不在本权威的队列里（台账见
-``tests/common/test_scalar_rules.py``）。
+初始化先在事务外设置 WAL，再用 LEASE 逐条 ``execute`` 建表、补列与建索引。
+Python sqlite3 的 legacy 事务控制下，``executescript`` 会先提交挂起事务；
+``isolation_level=None`` 不改变这点，不能靠外层事务让脚本失败时整批回滚。
+
+``ChatRouteBindingStore`` 也使用本连接约定，受管节点场景与 Gateway 同库。
+唯一独立约定是 ``dify_login_service.MappingStore`` 的 ``mappings.db``
+（台账见 ``tests/common/test_scalar_rules.py``）。
 """
 
 from __future__ import annotations
@@ -72,3 +75,12 @@ def connection(path: Path, *, write: bool = False, profile: str = LEASE) -> Iter
         raise
     finally:
         conn.close()
+
+
+@contextmanager
+def initialize(path: Path) -> Iterator[sqlite3.Connection]:
+    """事务外设置 WAL，再用一次 LEASE 原子初始化；不回滚 WAL 文件属性。"""
+    with connection(path) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+    with connection(path, write=True) as conn:
+        yield conn

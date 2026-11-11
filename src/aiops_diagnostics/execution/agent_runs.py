@@ -410,10 +410,9 @@ class AgentRunStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        with self._connection(write=True) as connection:
-            connection.executescript(
+        with gateway_db.initialize(self.path) as connection:
+            connection.execute(
                 """
-                PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS agent_runs (
                     run_id TEXT PRIMARY KEY,
                     scope_fingerprint TEXT NOT NULL,
@@ -443,6 +442,10 @@ class AgentRunStore:
                     chat_binding TEXT,
                     language TEXT
                 );
+                """
+            )
+            connection.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_agent_runs_scope
                     ON agent_runs(scope_fingerprint, created_at DESC);
                 """

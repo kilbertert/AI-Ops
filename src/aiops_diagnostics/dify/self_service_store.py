@@ -30,15 +30,19 @@ class SelfServiceStore:
     def __init__(self, path: Path):
         self.path = path.expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with self.connection() as db:
-            db.executescript("""
-                PRAGMA journal_mode=WAL;
+        with gateway_db.initialize(self.path) as db:
+            db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS operator_apps (
                     app_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
                     workspace_id TEXT NOT NULL, agent_name TEXT NOT NULL,
                     profile_id TEXT NOT NULL, created_by TEXT NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 1
                 );
+                """
+            )
+            db.execute(
+                """
                 CREATE TABLE IF NOT EXISTS operator_setup_jobs (
                     id TEXT PRIMARY KEY, actor TEXT NOT NULL, request_key TEXT NOT NULL,
                     request_json TEXT NOT NULL, state TEXT NOT NULL, step TEXT NOT NULL,
@@ -47,7 +51,8 @@ class SelfServiceStore:
                     lease_owner TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL,
                     UNIQUE(actor, request_key)
                 );
-            """)
+                """
+            )
             columns = {row["name"] for row in db.execute("PRAGMA table_info(operator_apps)")}
             for name, spec in (
                 ("entry", "TEXT NOT NULL DEFAULT 'operator'"),
