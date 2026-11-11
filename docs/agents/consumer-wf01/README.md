@@ -58,6 +58,9 @@ Gateway校验grant、主体、订单、图版本、取消及预算，取数前�
 [交付回执](../../validation/2026-11-11-consumer-composition-live-receipt.md)。最后一轮请求en但正文中文，
 语言跟随与全面语言质量未验收；本次不证明计费正确性或支付渠道到账。
 
+1.7.5严格原值v5候选另见[本轮调查](../../validation/2026-11-11-consumer-source-values.md)：
+区分totalAmount订单费用记录与payAmount支付记录，撤销旧计算许可；当前尚未发布，线上仍为上述v4。
+
 App的Accept-Language作为回答语言输入，即使提问是另一语言；语义质量需实际审校。
 首次POST返回Gateway conversation_id，后续普通问题原样携带；这不是Dify会话ID。
 已完成历史不因180秒取数凭据到期而消失；当前事实需重新读取。发布改变、撤权或失效历史
