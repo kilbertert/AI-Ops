@@ -65,7 +65,9 @@ code:
 `decode_billing_number`仅是账务JSON的`parse_float`异常映射回调。原始日期/分时时钟在scalar台账中单独登记，
 保留来源偏移或naive，不能用会补UTC的`parse_stored_time`替代；格式与日历校验仍由`_source_time`执行。
 币种缺失/冲突不猜；创建时间不是计费开始，分时电量可能费用反推，feeRate不保证每kWh，不能据此判断计费正确。
-现役v6图用`upgrade_consumer_flow.py --order-composition`精确替换唯一完整指令块，保留前后运营文本且幂等；
+现役v6图用`upgrade_consumer_flow.py --order-composition`仅移除唯一完整已知v1/v2订单规则，保留BASE及前后运营文本，
+再将v2放到全文末尾并保持幂等。事实约束优先于安抚：缺币种时开头说明且全文金额无币种单位，null不称未收费，
+只列来源记录，不自主合计/税基/差额归因或作未核验“无异常”结论；迁移测试不证明自然回答语义。
 未知/重复块拒绝，不能只部署Gateway却保留旧图提示。依据与细节见`docs/adr/0246-consumer-order-composition.md`
 及`docs/agents/consumer-wf01/order-composition-qa.md`。
 
