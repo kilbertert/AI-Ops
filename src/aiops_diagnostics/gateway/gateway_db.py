@@ -55,15 +55,14 @@ def connection(path: Path, *, write: bool = False, profile: str = LEASE) -> Iter
     锁与等待的决定藏回各 store 的正文里。
     """
     conn = sqlite3.connect(path, timeout=5, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")
-    if write and profile not in {LEASE, SINGLE_STATEMENT}:
-        # 拼错的 profile 不能静默退回自动提交——那等于把租约选择藏起来。
-        conn.close()
-        raise ValueError(f"unknown write profile: {profile!r}")
     leased = write and profile == LEASE
     try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
+        if write and profile not in {LEASE, SINGLE_STATEMENT}:
+            # 拼错的 profile 不能静默退回自动提交。
+            raise ValueError(f"unknown write profile: {profile!r}")
         if leased:
             conn.execute("BEGIN IMMEDIATE")
         yield conn
