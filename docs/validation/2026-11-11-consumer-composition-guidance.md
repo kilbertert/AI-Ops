@@ -43,3 +43,11 @@ wheel/sdist 1.7.2、Gateway镜像构建及无网络只读容器导入通过；�
 已有离线迁移与标准交付方法见[订单构成QA](../agents/consumer-wf01/order-composition-qa.md)。
 部署后必须正常试用、逐句验收再发布，不能以completed或本地测试替代语义判断。
 父会话负责Devin、合并、CD及真实入口；作者只提交候选PR。
+
+## Devin分时起止要求补回
+
+PR #1471评审指出v2分时行未明确保留v1已承诺的起止时间，采纳为明细回退风险。
+仅补明“按行展示来源起止时间及电费/服务费/小计”，保留不求和、不补差额和不编原因的限制。
+不新增长期字符串测试；复跑现有flow/migration及格式检查，真实语义仍由父会话验证。
+结果：现有flow/migration 23项通过，Ruff check/format通过；证据为
+`review-period-flow.log`、`review-period-ruff.log`、`review-period-format.log`。本轮不重复全量或构建。

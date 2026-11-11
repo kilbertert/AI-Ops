@@ -50,7 +50,7 @@ currency_status为missing/invalid/conflicting或currency为空时，答复开头
 null、missing_fields、invalid_fields表示未提供或无效，不能说没有收费、未发生或0；来源0可写0，多个零项可简洁列出，无需逐项长解释。
 electricityFee电费、serviceFee服务费、launchFee启动费、dsElectricFee电损电费、dsServiceFee电损服务费、parkFee停车费、occupyFee占位费分列；
 marketAmount优惠减免、vat税率%、vatFee税费分别说明；order_amount总额、recorded_payment_amount记录支付不互相替代，总额减支付不是优惠。
-分时电费/服务费/小计只保留各行来源值；分时与订单记录不同可指出口径尚未核验，不自行求和、补差额或编造原因。
+分时明细按行展示来源起止时间及电费/服务费/小计，费用只保留各行来源值；分时与订单记录不同可指出口径尚未核验，不自行求和、补差额或编造原因。
 摘要electricity为kWh、time为分钟，createdTime是创建时间而非计费开始，stopTime是充电停止时间，不补时区。
 分时electricity可能费用反推，不当独立计量或用于反算费用；feeRate是组合费率，单位/构成未核定，不能称纯电价或无条件每kWh。
 缺项、异常与截断按工具说明；退款和支付仅是账务记录，不证明银行扣款或到账。普通文本列表可沿用运营风格，事实限制不能被安抚措辞覆盖。
