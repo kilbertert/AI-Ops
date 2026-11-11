@@ -114,6 +114,7 @@ flowchart LR
 | `integrations/cpms-java/` | 公司Java受控接口补丁，独立于执行节点 |
 | `plugins/` | Dify 知识插件及其原生打包布局 |
 | `deploy/`、`ops/` | 部署制品、环境声明、代理配置与操作手册 |
+| `llmdoc/` | agent 检索面（`@tokenroll/llmdoc` 维护的稳定知识 `.mdx` 与台账），位置由工具契约固定 |
 | `tests/` | 现役功能回归及退役检查 |
 | `docs/` | 当前说明、ADR、操作手册和按日期留档的证据 |
 | `.spec/` | 受维护行为与规格映射 |
