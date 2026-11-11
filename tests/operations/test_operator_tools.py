@@ -36,12 +36,14 @@ def test_the_declaration_covers_the_live_tools():
         "cpms_order_amount_check",
         "cpms_order_process_stats",
         "cpms_charging_timeline",
+        "cpms_device_offline",
+        "cpms_order_communications",
     )
     assert tuple(t.name for t in tools) == expected
     assert all(
         t.model_inputs == ("order_no",)
         for t in tools
-        if t.name in {expected[0], expected[1], expected[3], expected[5], expected[8]}
+        if t.name in {expected[0], expected[1], expected[3], expected[5], expected[8], expected[10]}
     )
     # 无模型输入的是两个证据计算工具；按时序工具之后按名判，不再按尾部位置判。
     assert all(t.model_inputs == () for t in tools if t.name in {expected[6], expected[7]})

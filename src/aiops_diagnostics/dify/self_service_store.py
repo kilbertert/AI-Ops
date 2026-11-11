@@ -19,7 +19,7 @@ from pathlib import Path
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.dify import dual_entry
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 
 class SetupConflict(ValueError):
@@ -30,42 +30,13 @@ class SelfServiceStore:
     def __init__(self, path: Path):
         self.path = path.expanduser().absolute()
         ensure_private_directory(self.path.parent)
-        with self.connection() as db:
-            db.executescript("""
-                PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS operator_apps (
-                    app_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL, agent_name TEXT NOT NULL,
-                    profile_id TEXT NOT NULL, created_by TEXT NOT NULL,
-                    revision INTEGER NOT NULL DEFAULT 1
-                );
-                CREATE TABLE IF NOT EXISTS operator_setup_jobs (
-                    id TEXT PRIMARY KEY, actor TEXT NOT NULL, request_key TEXT NOT NULL,
-                    request_json TEXT NOT NULL, state TEXT NOT NULL, step TEXT NOT NULL,
-                    resources_json TEXT NOT NULL DEFAULT '{}',
-                    error_code TEXT NOT NULL DEFAULT '', lease_until REAL NOT NULL DEFAULT 0,
-                    lease_owner TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL,
-                    UNIQUE(actor, request_key)
-                );
-            """)
-            columns = {row["name"] for row in db.execute("PRAGMA table_info(operator_apps)")}
-            for name, spec in (
-                ("entry", "TEXT NOT NULL DEFAULT 'operator'"),
-                ("scenario", "TEXT NOT NULL DEFAULT 'operator_order_diagnosis'"),
-                ("environment", "TEXT NOT NULL DEFAULT ''"),
-                ("targets_json", "TEXT NOT NULL DEFAULT '{}'"),
-            ):
-                # 存量行按默认值补齐：它们全部是管家，与现状逐字一致，不需要数据回填。
-                if name not in columns:
-                    db.execute(f"ALTER TABLE operator_apps ADD COLUMN {name} {spec}")
+        gateway_schema.ensure(self.path)
         protect_private_file(self.path)
 
     @contextmanager
-    def connection(self):
-        # 本 store 每个方法都在写（含建表初始化），统一走 LEASE——连接与
-        # 锁纪律唯一渲染在 gateway_db（#573）。顺带修正一处泄漏：
-        # `with sqlite3.connect()` 提交/回滚但**不关闭**连接。
-        with gateway_db.connection(self.path, write=True) as connection:
+    def connection(self, *, write: bool = True):
+        # 默认写租约兼容外部写调用；纯 SELECT 显式选择读连接。
+        with gateway_db.connection(self.path, write=write) as connection:
             yield connection
 
     def recover(self):
@@ -114,7 +85,7 @@ class SelfServiceStore:
         return created
 
     def request(self, actor: str, request_key: str) -> dict | None:
-        with self.connection() as db:
+        with self.connection(write=False) as db:
             row = db.execute(
                 "SELECT * FROM operator_setup_jobs WHERE actor=? AND request_key=?", (actor, request_key)
             ).fetchone()
@@ -129,12 +100,12 @@ class SelfServiceStore:
             )
 
     def get(self, job_id: str) -> dict | None:
-        with self.connection() as db:
+        with self.connection(write=False) as db:
             row = db.execute("SELECT * FROM operator_setup_jobs WHERE id=?", (job_id,)).fetchone()
         return dict(row) if row else None
 
     def recent(self, actor: str) -> list[dict]:
-        with self.connection() as db:
+        with self.connection(write=False) as db:
             return [
                 dict(r)
                 for r in db.execute(
@@ -184,12 +155,12 @@ class SelfServiceStore:
                 raise SetupConflict("SETUP_LEASE_LOST")
 
     def app(self, app_id: str) -> dict | None:
-        with self.connection() as db:
+        with self.connection(write=False) as db:
             row = db.execute("SELECT * FROM operator_apps WHERE app_id=?", (app_id,)).fetchone()
         return dict(row) if row else None
 
     def apps(self, entry: str | None = None) -> list[dict]:
-        with self.connection() as db:
+        with self.connection(write=False) as db:
             if entry is None:
                 rows = db.execute("SELECT * FROM operator_apps ORDER BY app_id")
             else:
@@ -206,7 +177,7 @@ class SelfServiceStore:
         返回目录行本身；调用方从 ``targets_json`` 取可发布能力。``tenant_id`` 的比较留给
         调用方（`consumer_publication` 用与路由同一套 `tenant_matches`）。
         """
-        with self.connection() as db:
+        with self.connection(write=False) as db:
             row = db.execute(
                 "SELECT * FROM operator_apps"
                 " WHERE entry='consumer' AND environment=? AND tenant_id=? AND app_id=?",

@@ -45,6 +45,7 @@ def ops_narrative_schema() -> dict[str, Any]:
 #: rule produced the numbers it is describing.
 _PROMPT_FACT_KEYS = (
     "card",
+    "device_offline",
     "failure_rate",
     "risk",
     "counts",
@@ -89,6 +90,11 @@ def build_narrative_prompt(facts: dict[str, Any], *, language: str = DEFAULT_LAN
     lines = ["以下是一段区间聚合的**确定性结果**（已由后端算出，不需要你复核或重算）："]
     lines.extend(_fact_lines(facts))
     lines.append("")
+    if facts.get("card") == "offline":
+        lines.append(
+            "这里只能解释离线记录与时间重叠，不能断言断电、SIM卡或网络故障；"
+            "未记录恢复不是实时在线探测。main_cause写观察结论及原因缺证，不猜物理原因。"
+        )
     lines.append(
         "请只输出**一个 JSON 对象**，两个字段都是字符串："
         f"`main_cause` 解释这些数字最可能的成因（不要复述数字，也不要编造未给出的数据），"

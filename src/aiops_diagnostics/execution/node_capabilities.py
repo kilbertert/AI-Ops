@@ -8,24 +8,18 @@ from importlib.resources import files
 from pathlib import Path
 
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 MAX_AGE = 120
 
 
 def record(database, config, node, payload):
-    # 建表 + upsert 是多语句写——LEASE（gateway_db，#573）。observed_at 是
+    # 结构先 ensure；业务 upsert 保留 LEASE。observed_at 是
     # epoch 秒列，不是 ISO 存储文本，不在 scalar_rules 的读取范围。
-    # WAL 只能在事务外设置（LEASE 入口已是 BEGIN IMMEDIATE），所以用
-    # 读连接声明文件属性，再进写租约。
-    with gateway_db.connection(database) as db:
-        db.execute("PRAGMA journal_mode=WAL")
-    with gateway_db.connection(database, write=True) as db:
-        db.execute("""CREATE TABLE IF NOT EXISTS execution_node_capabilities (
-            environment TEXT NOT NULL,node_id TEXT NOT NULL,body TEXT NOT NULL,observed_at REAL NOT NULL,
-            PRIMARY KEY(environment,node_id))""")
+    gateway_schema.ensure(Path(database))
+    with gateway_db.connection(Path(database), write=True) as db:
         db.execute(
-            "INSERT INTO execution_node_capabilities VALUES(?,?,?,?) "
+            "INSERT INTO execution_node_capabilities(environment,node_id,body,observed_at) VALUES(?,?,?,?) "
             "ON CONFLICT(environment,node_id) DO UPDATE SET "
             "body=excluded.body,observed_at=excluded.observed_at",
             (config.environment, node.node_id, json.dumps(payload, sort_keys=True), time.time()),

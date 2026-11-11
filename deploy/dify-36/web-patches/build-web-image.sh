@@ -68,6 +68,7 @@ check_sha web/service/base.ts 25dd121901ade01cc075640b635157b463733a587e4ea75ae1
 check_sha web/app/components/app/configuration/debug/debug-with-single-model/index.tsx 3eb5d650e640d09c43f8600581bbd6ddf488844e1239c03a420e2003961890e4
 
 check_sha web/service/debug.ts 784cb898a48d0ed4aae6b875b1d844d1095363e1a9997627a3fef05a51255a8c
+check_sha 'web/app/(commonLayout)/app/(appDetailLayout)/[appId]/logs/page.tsx' 54587a4877be2c9bddfc9ec6a1865184664d7e0d842608e6cbee937eee2266b4
 
 check_sha web/vite.config.ts 2f38f98a582b64bd1bf6d73384d1e66ea3fe9b9790f1bb4f287e0c164d18c54e
 
@@ -116,6 +117,7 @@ echo "ok: 补丁已落进源（两个标记都在）"
 cp "$VERSION_DIR/aiops-management.tsx" "$WORK/web/app/components/aiops-management.tsx"
 cp "$VERSION_DIR/aiops-management.ts" "$WORK/web/service/aiops-management.ts"
 cp "$VERSION_DIR/aiops-workflow-managed.tsx" "$WORK/web/app/components/aiops-workflow-managed.tsx"
+cp "$VERSION_DIR/aiops-operator-run-logs.tsx" "$WORK/web/app/components/aiops-operator-run-logs.tsx"
 
 echo "== 3. 把构建命令换成 webpack"
 # 关键：**用 webpack 而不是 Turbopack**。实测 Turbopack（上游默认）在本机会在

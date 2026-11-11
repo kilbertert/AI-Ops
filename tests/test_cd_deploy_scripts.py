@@ -666,7 +666,7 @@ def test_the_gate_accepts_equal_or_newer_nodes_and_rejects_older_ones(tmp_path: 
 def test_console_preflight_stops_before_production_mutation(tmp_path, url, allowed):
     source = (DEPLOY_DIR / "deploy-41.sh").read_text()
     start = source.index("# 候选代码先验实际控制台配置")
-    end = source.index("rsync -a --delete /tmp/sync-check/aiops_diagnostics/", start)
+    end = source.index("# 一致备份与副本演练先于源码替换", start)
     block = source[start:end].replace("\\$", "$")
     config = tmp_path / "gateway.env"
     config.write_text(
@@ -677,7 +677,7 @@ def test_console_preflight_stops_before_production_mutation(tmp_path, url, allow
     # #973 起 from_env 对点名文件先过权限闸：0644 的桩文件会让预检因错误原因被拒。
     write_private_text(tmp_path / "production.env", "# synthetic\n")
     block = block.replace("/etc/aiops-41/gateway.env", str(config))
-    block = block.replace("chown -R aiops41:aiops41 /tmp/sync-check", ":")
+    block = block.replace('chown -R aiops41:aiops41 /tmp/sync-check || step_failed "chown-candidate"', ":")
     block = block.replace(
         "runuser -u aiops41 -- env PYTHONPATH=/tmp/sync-check /opt/aiops-41/.venv/bin/python",
         f"env PYTHONPATH={shlex.quote(str(REPO_ROOT / 'src'))} {shlex.quote(sys.executable)}",
@@ -695,3 +695,112 @@ def test_console_preflight_stops_before_production_mutation(tmp_path, url, allow
     assert (result.returncode == 0) is allowed, result.stderr
     assert marker.exists() is allowed
     assert ("console-preflight=refused" in result.stdout) is not allowed
+
+
+@pytest.mark.parametrize("failure", ["none", "wrong-file", "backup", "migrate", "integrity"])
+def test_schema_preflight_and_migration_gate_real_database(tmp_path, failure):
+    """执行真实远端片段和 SQLite；拒绝发生在源码替换前，原库不能被副本覆盖。"""
+    import sqlite3
+    from contextlib import closing
+
+    from gateway.test_database_initialization import LEGACY_DIFY
+    from gateway.test_gateway_schema import snapshot
+
+    source = (DEPLOY_DIR / "deploy-41.sh").read_text()
+    start = source.index("# 一致备份与副本演练先于源码替换")
+    end = source.index("rsync -a --delete /tmp/sync-check/aiops_diagnostics/", start)
+    block = source[start:end].replace("\\$", "$")
+    backup_root, data = tmp_path / "backup", tmp_path / "gateway.db"
+    with closing(sqlite3.connect(data)) as db:
+        db.execute("CREATE TABLE other (x)" if failure == "wrong-file" else LEGACY_DIFY)
+    before = snapshot(data)
+    config = tmp_path / "gateway.env"
+    config.write_text(
+        f"AIOPS_GATEWAY_DATABASE_FILE={data}\n"
+        f"AIOPS_GATEWAY_SERVER_CONFIG_FILE={tmp_path / 'production.env'}\n"
+    )
+    write_private_text(tmp_path / "production.env", "# synthetic\n")
+    block = block.replace("/etc/aiops-41/gateway.env", str(config))
+    block = block.replace(
+        "runuser -u aiops41 -- env PYTHONPATH=/tmp/sync-check /opt/aiops-41/.venv/bin/python",
+        f"env PYTHONPATH={shlex.quote(str(REPO_ROOT / 'src'))} {shlex.quote(sys.executable)}",
+    )
+    block = block.replace('chown aiops41:aiops41 "$B/schema"', ":")
+    block = block.replace("rm -rf /tmp/sync-check $REMOTE_TARBALL || true", ":")
+    if failure == "backup":
+        (backup_root / "schema").mkdir(parents=True)
+        (backup_root / "schema/gateway.db").write_text("existing backup")
+    if failure in {"migrate", "integrity"}:
+        needle = (
+            "gateway_schema.startup(settings.database_file)"
+            if failure == "migrate"
+            else "gateway_schema.integrity(settings.database_file)"
+        )
+        block = block.replace(needle, "raise RuntimeError('synthetic failure')")
+    marker = tmp_path / "production-mutated"
+    result = subprocess.run(
+        ["bash", "-eu"],
+        input=f"B={shlex.quote(str(backup_root))}\nmutate_rc=0\n"
+        "step_failed() { mutate_rc=1; }\n" + block + f"\ntouch {shlex.quote(str(marker))}\n",
+        env={k: v for k, v in os.environ.items() if not k.startswith("AIOPS_")},
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert (result.returncode == 0) == (failure == "none"), result.stdout + result.stderr
+    assert marker.exists() == (failure == "none")
+    if failure not in {"none", "integrity"}:
+        assert snapshot(data) == before
+    else:
+        # 真迁移已提交后，后续失败也不能把库自动退回旧备份。
+        assert snapshot(data)[1] == 1
+    if failure not in {"backup", "wrong-file"}:
+        assert snapshot(backup_root / "schema/gateway.db") == before
+
+
+@pytest.mark.parametrize("mask", ["027", "077"])
+def test_schema_backup_permissions_do_not_depend_on_umask(tmp_path, mask):
+    """执行真实权限片段；账号映射只用于无特权测试，不冒充跨账号访问验收。"""
+    source = (DEPLOY_DIR / "deploy-41.sh").read_text()
+    start = source.index('mkdir -p "\\$B/refs"')
+    end = source.index('cp -a $REMOTE_SRC "\\$B"/', start)
+    parent_block = source[start:end].replace("\\$", "$")
+    start = source.index('  mkdir -p "\\$B/schema"')
+    end = source.index('  if [ "\\$mutate_rc" = 0 ] && runuser', start)
+    schema_block = source[start:end].replace("\\$", "$")
+    ancestor = tmp_path / "backups"
+    ancestor.mkdir(mode=0o700)
+    backup = ancestor / "this-deployment"
+    calls = tmp_path / "ownership-calls"
+    # 权限命令真实执行；只把部署账户/组映射到当前账号，严格限制参数和目标。
+    shell = """
+chgrp() {
+  [ "$#" = 2 ] && [ "$1" = aiops41 ] && [ "$2" = "$B" ] || return 1
+  printf 'group\n' >> "$CALLS"
+  command chgrp "$(id -g)" "$2"
+}
+chown() {
+  [ "$#" = 2 ] && [ "$1" = aiops41:aiops41 ] && [ "$2" = "$B/schema" ] || return 1
+  printf 'owner\n' >> "$CALLS"
+  command chown "$(id -u):$(id -g)" "$2"
+}
+step_failed() { exit 1; }
+"""
+    result = subprocess.run(
+        ["bash", "-eu"],
+        input=f"umask {mask}\nB={shlex.quote(str(backup))}\nCALLS={shlex.quote(str(calls))}\n"
+        + shell
+        + parent_block
+        + schema_block,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert backup.stat().st_mode & 0o777 == 0o710
+    assert backup.stat().st_uid == os.getuid()
+    assert (backup / "schema").stat().st_mode & 0o777 == 0o700
+    assert (backup / "schema").stat().st_uid == os.getuid()
+    assert calls.read_text().splitlines() == ["group", "owner"]
+    assert ancestor.stat().st_mode & 0o777 == 0o700
+    assert (backup / "refs").stat().st_mode & 0o777 == 0o777 & ~int(mask, 8)

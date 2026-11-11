@@ -192,7 +192,7 @@ class MySQLSource:
         return self.scope is not None and self.scope.empty_site_scope
 
     @contextlib.contextmanager
-    def _cursor(self) -> Iterator[DictCursor]:
+    def _cursor(self, *, consistent_snapshot: bool = False) -> Iterator[DictCursor]:
         cfg = self.settings.mysql
         if not cfg.user or not cfg.password:
             raise SourceError("MySQL 只读账号未配置")
@@ -218,7 +218,13 @@ class MySQLSource:
                 cursor.execute(
                     f"SET SESSION MAX_EXECUTION_TIME={int(self.settings.safety.mysql_max_execution_ms)}"
                 )
-                cursor.execute("START TRANSACTION READ ONLY")
+                if consistent_snapshot:
+                    cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                cursor.execute(
+                    "START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY"
+                    if consistent_snapshot
+                    else "START TRANSACTION READ ONLY"
+                )
                 yield cursor
         except SourceError:
             raise

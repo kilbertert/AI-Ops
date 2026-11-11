@@ -26,7 +26,7 @@ from typing import Any
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.redaction import redact_text
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 from aiops_diagnostics.identity.order_identity import is_order_identifier
 
 CONVERSATION_RETENTION_DAYS = 30
@@ -69,71 +69,7 @@ class ConversationStore:
     # ------------------------------------------------------------------
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
-                """
-                PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS conversations (
-                    conversation_id TEXT PRIMARY KEY,
-                    scope_fingerprint TEXT NOT NULL,
-                    business_entry TEXT NOT NULL,
-                    agent_version_key TEXT NOT NULL,
-                    active_order_no TEXT,
-                    generating_since TEXT,
-                    generating_turn_no INTEGER,
-                    last_turn_no INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_conversations_scope_created
-                    ON conversations(scope_fingerprint, created_at DESC);
-                -- 旧诊断轮次没有订单绑定，仍保留 #497 的已知代价；
-                -- 本人状态查询新增 status_qa_id，回读重授权且不进入模型上下文。
-                -- 缺这条边 ⇒ 一行轮次说不出自己属于哪一单 ⇒ context_turns() 无法在
-                -- 「该单已离开调用者可见集合」时把这一轮排除掉，它只能按「最近 N 轮」取。
-                -- 于是：绑定失效（Route 1c 每轮重校验）与窗口排除是**两件事**，
-                -- 前者立刻生效，后者今天做不到。危险方向是把它读成「既然绑定了就一定有授权」。
-                -- 补这条边要改会话表结构，而 PRD #410 明示不改；本风险已由
-                -- tests/operations/test_operator_negative_acceptance.py 的
-                -- test_history_window_keeps_a_turn_whose_order_left_the_scope 钉住。
-                -- 边界：跨主体/跨范围的整个会话 404，那是另一道门，不在本注释范围内。
-                CREATE TABLE IF NOT EXISTS conversation_turns (
-                    turn_id TEXT PRIMARY KEY,
-                    conversation_id TEXT NOT NULL,
-                    turn_no INTEGER NOT NULL,
-                    kind TEXT NOT NULL,
-                    question TEXT NOT NULL,
-                    answer_json TEXT,
-                    token_count INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    UNIQUE (conversation_id, turn_no)
-                );
-                CREATE INDEX IF NOT EXISTS idx_conversation_turns_conversation
-                    ON conversation_turns(conversation_id, turn_no DESC);
-                """
-            )
-            # #357: which turn currently holds the generation slot, and the
-            # highest turn number this conversation has ever handed out. Both
-            # additive — a database written before them has no live generation
-            # to attribute (its empty lock self-expires on its own) and simply
-            # starts numbering from the highest row it still has.
-            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(conversations)")}
-            if "generating_turn_no" not in columns:
-                connection.execute("ALTER TABLE conversations ADD COLUMN generating_turn_no INTEGER")
-            if "last_turn_no" not in columns:
-                connection.execute(
-                    "ALTER TABLE conversations ADD COLUMN last_turn_no INTEGER NOT NULL DEFAULT 0"
-                )
-            if "operator_binding" not in columns:
-                connection.execute(
-                    "ALTER TABLE conversations ADD COLUMN operator_binding TEXT NOT NULL DEFAULT ''"
-                )
-            turn_columns = {
-                str(row[1]) for row in connection.execute("PRAGMA table_info(conversation_turns)")
-            }
-            if "status_qa_id" not in turn_columns:
-                connection.execute("ALTER TABLE conversation_turns ADD COLUMN status_qa_id TEXT")
+        gateway_schema.ensure(self.path)
         protect_private_file(self.path)
 
     @contextmanager

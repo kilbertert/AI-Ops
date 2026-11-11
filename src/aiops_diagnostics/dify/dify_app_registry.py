@@ -35,7 +35,7 @@ from pathlib import Path
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 #: The two business entries the platform rule already defines (``faq.PLATFORMS``).
 #: Restated rather than imported so this module stays a leaf: importing ``faq``
@@ -79,20 +79,7 @@ class DifyAppRegistry:
         self._initialize()
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
-                """
-                PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS dify_app_registry (
-                    tenant_id TEXT NOT NULL,
-                    business_entry TEXT NOT NULL,
-                    app_id TEXT NOT NULL,
-                    agent_name TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (tenant_id, business_entry)
-                );
-                """
-            )
+        gateway_schema.ensure(self.path)
         protect_private_file(self.path)
 
     @contextmanager

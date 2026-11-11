@@ -31,6 +31,8 @@
 | 平台客户与来源目录 | `/v1/dify/management/catalogue` | GET | 发布服务key＋正常Dify公司会话 | 平台权限与公司绑定客户目录交集，只返回可管理客户及来源 |
 | 管家管理状态 | `/v1/dify/management/status` | POST | 同上，校验app租户归属 | 返回实际模型和正式版本；非受管应用不启用 |
 | 当前账号可用性 | `/v1/dify/management/readiness` | POST | 同上，当前公司身份 | 返回自身站点范围是否可用，不读取订单 |
+| 管家运行日志列表 | `/v1/dify/management/run-logs` | POST | 发布服务key＋同源Dify会话与应用访问权＋当前公司本人权限 | 有界分页读取当前应用本人的Java运行元数据，刷新权限，不返回业务快照或答案 |
+| 管家运行日志详情 | `/v1/dify/management/run-logs/detail` | POST | 同列表，逐请求核对本人、租户、应用与当前范围 | 读取已持久化阶段及耗时；结果过期不恢复业务结果，响应no-store |
 | 客户端草稿预览 | `/v1/dify/management/trial` | POST | 试用服务key＋正常公司Dify会话 | 当前客户受管应用，真实公司数据范围，临时应用运行不发布 |
 | 客户端预览回读 | `/v1/dify/management/trial/result` | POST | 同上＋同主体与来源app | 重新核对公司范围、草稿归属及执行证据 |
 | 客户端预览停止 | `/v1/dify/management/trial/cancel` | POST | 同上＋同主体与来源app | 撤销本轮取数并落取消终态，不操作公司业务数据 |

@@ -45,11 +45,14 @@ ADR-0104 的「仍未做」一节点名了缺口：**SOP 发布绑定**。现状
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 #: 表只认这两个状态。没有 `deleted`：撤回不删行（见模块文档第 2 条）。
 STATE_ACTIVE = "active"
@@ -102,46 +105,16 @@ class RouteBinding:
 
 
 class ChatRouteBindingStore:
-    """`chat_route_bindings` 表。与网关共用同一个 SQLite 文件，各自建表。"""
+    """`chat_route_bindings` 表。与网关共用同一个 SQLite 文件，结构委托 gateway_schema。"""
 
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        with self._connection(write=True) as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS chat_route_bindings (
-                    environment TEXT NOT NULL,
-                    tenant_id TEXT NOT NULL,
-                    entry TEXT NOT NULL,
-                    scenario TEXT NOT NULL,
-                    engine TEXT NOT NULL,
-                    agent_id TEXT NOT NULL,
-                    agent_version_no INTEGER NOT NULL,
-                    app_id TEXT NOT NULL DEFAULT '',
-                    workflow_id TEXT NOT NULL DEFAULT '',
-                    workflow_key_ref TEXT NOT NULL DEFAULT '',
-                    state TEXT NOT NULL DEFAULT 'active',
-                    revision INTEGER NOT NULL DEFAULT 0,
-                    updated_by TEXT NOT NULL DEFAULT '',
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (environment, tenant_id, entry, scenario)
-                )
-                """
-            )
+        gateway_schema.ensure(self.path)
 
-        with self._connection(write=True) as connection:
-            columns = {row["name"] for row in connection.execute("PRAGMA table_info(chat_route_bindings)")}
-            if "node_config_file" not in columns:
-                connection.execute(
-                    "ALTER TABLE chat_route_bindings ADD COLUMN node_config_file TEXT NOT NULL DEFAULT ''"
-                )
-
-    def _connection(self, *, write: bool) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        if write:
-            connection.execute("PRAGMA journal_mode=WAL")
-        return connection
+    @contextmanager
+    def _connection(self, *, write: bool) -> Iterator[sqlite3.Connection]:
+        with gateway_db.connection(self.path, write=write) as connection:
+            yield connection
 
     # ------------------------------------------------------------------ 读
 
@@ -207,10 +180,7 @@ class ChatRouteBindingStore:
                 """,
                 (environment, tenant_id, entry, scenario),
             ).fetchone()
-            # **CAS 必须在写语句里完成**，不能"读一次、比一比、再写"：sqlite3 的默认
-            # 事务要等到第一条写语句才开始，所以上面那个 SELECT 并不持有写锁 ——
-            # 两个发布者可以同时读到同一个 revision 再各写一次（实测：都成功、都是 2）。
-            # 下面两种写法各自带 revision 谓词，写不中就是 rowcount 0 ⇒ 冲突。
+            # LEASE 已串行化读后写；仍保留 SQL 中的 CAS 谓词，写不中就是冲突。
             actual = int(current["revision"]) if current else 0
             if expected_revision is not None and actual != expected_revision:
                 raise RouteBindingError("ROUTE_BINDING_CONFLICT", "route binding moved")

@@ -207,6 +207,7 @@ _STORE_SPECS = [
     ("DataGrantStore", "aiops_diagnostics.execution.chat_data_grant", "DataGrantStore"),
     ("DifyWorkspaces", "aiops_diagnostics.dify.dify_workspaces", "DifyWorkspaces"),
     ("DifyAppRegistry", "aiops_diagnostics.dify.dify_app_registry", "DifyAppRegistry"),
+    ("ChatRouteBindingStore", "aiops_diagnostics.execution.chat_route_bindings", "ChatRouteBindingStore"),
     ("MetricsStore", "aiops_diagnostics.gateway.metrics_store", "MetricsStore"),
     ("SelfServiceStore", "aiops_diagnostics.dify.self_service_store", "SelfServiceStore"),
     ("KeyOperations", "aiops_diagnostics.dify.service_keys", "KeyOperations"),
@@ -233,11 +234,11 @@ def _cohort(db: Path) -> list[tuple[str, object]]:
 def _reader(store: object):
     """该 store 的读连接。"""
     helper = getattr(store, "_connection", None) or store.connection
-    return helper() if "write" in inspect.signature(helper).parameters else helper()
+    return helper(write=False)
 
 
 def _writer(store: object):
-    """该 store 的写连接（LEASE）。SelfServiceStore 恒写，没有 write 参数。"""
+    """该 store 的写连接（LEASE；metrics 单独声明 SINGLE_STATEMENT）。"""
     helper = getattr(store, "_connection", None) or store.connection
     return helper(write=True) if "write" in inspect.signature(helper).parameters else helper()
 
@@ -330,12 +331,10 @@ _IOFORMAT_LEDGER = {
 }
 
 #: `sqlite3.connect` 的合法居留点。gateway.db 的连接只有 gateway_db 一份；
-#: 另两行开的是**别的文件**（mappings.db / chat_route_bindings_file），
-#: 它们有自己的约定，不在本权威的队列里。
+#: MappingStore 开独立 mappings.db，保留原始 sqlite 约定。
 _CONNECT_LEDGER = {
     "gateway/gateway_db.py",
     "dify/dify_login_service.py",  # MappingStore → mappings.db
-    "execution/chat_route_bindings.py",  # ChatRouteBindingStore → chat_route_bindings_file
 }
 
 #: 「存储时间/数值读取」形态的函数名——曾经七种拼写各是一处语法。
@@ -433,6 +432,7 @@ _DELEGATED_STORE_FILES = {
     "dify/dify_run_store.py",
     "execution/agent_runs.py",
     "execution/chat_data_grant.py",
+    "execution/chat_route_bindings.py",
     "dify/dify_workspaces.py",
     "dify/dify_app_registry.py",
     "gateway/metrics_store.py",
@@ -459,14 +459,32 @@ def test_every_same_file_store_delegates_to_gateway_db() -> None:
     assert set(holders) == {"gateway/metrics_store.py", "gateway/gateway_db.py"}, holders
 
 
-def test_every_initializer_declares_wal() -> None:
-    """WAL 不再靠构造顺序：每个有 CREATE TABLE 的同库文件都自己声明。"""
-    missing = []
-    for rel in sorted(_DELEGATED_STORE_FILES):
-        source = (SOURCE_ROOT / rel).read_text(encoding="utf-8")
-        if "CREATE TABLE" in source and "journal_mode=WAL" not in source:
-            missing.append(rel)
-    assert missing == [], f"有建表语句的同库文件未声明 WAL：{missing}"
+def test_gateway_ddl_has_one_authority() -> None:
+    """持久结构只在 schema 模块声明；Mapping 是独立文件的具名例外。"""
+    offenders = []
+    for path in SOURCE_ROOT.rglob("*.py"):
+        rel = str(path.relative_to(SOURCE_ROOT))
+        if rel in {"gateway/gateway_schema.py", "dify/dify_login_service.py"}:
+            continue
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr == "executescript":
+                    offenders.append(f"{rel}:{node.lineno}")
+                if (
+                    node.func.attr == "execute"
+                    and node.args
+                    and any(
+                        isinstance(value, ast.Constant)
+                        and isinstance(value.value, str)
+                        and any(
+                            ddl in value.value.upper()
+                            for ddl in ("CREATE TABLE", "ALTER TABLE", "CREATE INDEX")
+                        )
+                        for value in ast.walk(node.args[0])
+                    )
+                ):
+                    offenders.append(f"{rel}:{node.lineno}")
+    assert offenders == [], f"Gateway DDL 必须委托唯一权威：{offenders}"
 
 
 # ---------------------------------------------------------------------------

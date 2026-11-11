@@ -26,7 +26,7 @@ from typing import Any
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
-from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
 METRICS_RETENTION_DAYS = 30
 
@@ -137,34 +137,7 @@ class MetricsStore:
         self._initialize()
 
     def _initialize(self) -> None:
-        with self._connection(write=True) as connection:
-            connection.executescript(
-                """
-                PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS agent_run_metrics (
-                    metric_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    route_type TEXT NOT NULL,
-                    outcome TEXT NOT NULL,
-                    agent_id TEXT,
-                    agent_version_key TEXT,
-                    conversation_id TEXT,
-                    retrieval_status TEXT NOT NULL DEFAULT '',
-                    searches INTEGER NOT NULL DEFAULT 0,
-                    media_count INTEGER NOT NULL DEFAULT 0,
-                    duration_ms INTEGER,
-                    token_count INTEGER NOT NULL DEFAULT 0,
-                    error_code TEXT,
-                    created_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_agent_metrics_tenant_created
-                    ON agent_run_metrics(tenant_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_agent_metrics_agent
-                    ON agent_run_metrics(agent_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_agent_metrics_created
-                    ON agent_run_metrics(created_at);
-                """
-            )
+        gateway_schema.ensure(self.path)
         protect_private_file(self.path)
 
     @contextmanager

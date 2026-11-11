@@ -17,6 +17,8 @@
 - C端聊天及订单检测快捷动作进入其 WF01 路线；订单检测使用本人订单状态分支，
   不再承诺旧 Python 的多源根因报告。独立状态查询和已有节点绑定保留。
 - 管家单订单请求与原生 Dify 试用走公司身份和 Java 节点；工具按已发布清单启用，覆盖订单、监测、历史模板、账务、核验与站点。
+  问答轮询返回真实执行阶段与耗时，原生预览单独显示进度；最终答复仍经授权和事实复核。
+  普通查单默认简短按需取证；[三个反馈的验收范围](docs/specs/order-feedback.md)区分遥测、通讯证据和执行日志。
 - 管家正式入口与Dify预览使用各自的会话ID，订单相关追问沿用成功确认的订单并重新授权；
   新会话、另一应用或另一主体不能继承，见[连续问答验收](docs/acceptance/operator-followup/qa-plan.md)。
 - 管家没有指定订单时可咨询操作、解释状态或搜索当前账号可见站点；需要查具体订单时才请求单号。
@@ -39,6 +41,22 @@
 Gateway、通用/会话、工具与公司集成目录已分别通过#1181/#1182/#1184归位并上线；
 最终范围与独立复验见[目录收尾](docs/validation/2026-10-30-z20-layout-final-acceptance.md)。
 
+## Gateway 数据库升级
+
+阶段1（#1461）已随1.6.1上线。本轮1.7.0为交付候选，尚未上线。
+1.7.0 将28张Gateway表交给 `gateway.gateway_schema.py`，普通store构造只读版本；
+服务启动与运维完整检查，拒绝未知版本和结构漂移。独立 `mappings.db` 不纳入。
+
+```bash
+aiops-admin schema check --db /path/to/gateway.db
+aiops-admin schema migrate --db /path/to/gateway.db
+```
+
+`check` 不建库、不迁移，只报告版本与结构警告；版本0表示可升级旧库，版本1为当前合同。
+`migrate` 原子建立完整结构，只允许登记的历史补列，不重建表或猜测授权身份。
+部署前必须一致备份与副本演练；恢复代码不会自动恢复旧数据库覆盖新写入。
+方法见[升级手册](docs/agents/gateway-schema-runbook.md)，判据见[QA计划](docs/acceptance/gateway-schema/qa-plan.md)。
+
 ## 一、系统与入口
 
 ```mermaid
@@ -60,6 +78,7 @@ flowchart LR
 
 业务只读；不执行退款、补发、重算、订单修改、消息重放或服务重启。业务范围来自已认证公司主体，
 不能由请求体中的 tenant/user/site 字段放宽。模型只有受限的业务接口，不接收数据库和登录凭据。
+订单通讯与充电事件的候选范围、源缺口及集成前置条件见[事件候选与通讯缺口](docs/agents/operator-cpms/communications.md)。
 订单可见性由 `identity.order_visibility.py` 与 `identity.query_scope.py` 共用规则，数据读取保留超时、行数和时间窗上限。
 
 历史数据库和证据目录不在退役时删除。新库不创建设备/注册码/run/event 表；
@@ -72,13 +91,13 @@ flowchart LR
 
 | 职责 | 当前模块 |
 |---|---|
-| 网关与服务 | `gateway.gateway_api.py`、`gateway.gateway_runtime.py`、`gateway_server.py`、`gateway.gateway_store.py`、`gateway.gateway_db.py`、`gateway.gateway_config.py`、`gateway.gateway_logging.py`、`gateway.public_openapi.py`、`gateway.request_observation.py`、`gateway.isolation_guard.py`、`gateway.deployment_environment.py` |
+| 网关与服务 | `gateway.gateway_api.py`、`gateway.gateway_runtime.py`、`gateway_server.py`、`gateway.gateway_store.py`、`gateway.gateway_db.py`、`gateway.gateway_schema.py`、`gateway.gateway_config.py`、`gateway.gateway_logging.py`、`gateway.public_openapi.py`、`gateway.request_observation.py`、`gateway.isolation_guard.py`、`gateway.deployment_environment.py` |
 | 身份与范围 | `identity.caller_auth.py`、`identity.company_token_auth.py`、`identity.company_permissions.py`、`identity.data_scope_rule.py`、`identity.third_session_auth.py`、`identity.scope_context.py`、`identity.query_scope.py`、`identity.order_visibility.py`、`identity.order_identity.py`、`common.http_auth.py` |
 | C端业务 | `consumer.consumer_agent.py`、`consumer.consumer_agent_flow.py`、`consumer.consumer_billing.py`、`consumer.consumer_facts.py`、`consumer.consumer_binding.py`、`consumer.consumer_chat_service.py`、`consumer.consumer_copy.py`、`consumer.consumer_documents.py`、`consumer.consumer_flow_contract.py`、`consumer.consumer_intent.py`、`consumer.consumer_knowledge.py`、`consumer.consumer_knowledge_selection.py`、`consumer.consumer_knowledge_grants.py`、`consumer.consumer_language.py`、`consumer.consumer_order_chat.py`、`consumer.consumer_photo.py`、`consumer.consumer_plain.py`、`consumer.consumer_reply.py`、`consumer.consumer_publication.py`、`consumer.consumer_sites.py`、`consumer.consumer_tool_grants.py`、`consumer.consumer_time.py`、`consumer.consumer_trial.py`、`consumer.business_environments.py`、`data.charging_status.py` |
-| 节点与试用 | `execution.agent_runs.py`、`execution.run_deliverability.py`、`execution.execution_manifest.py`、`execution.chat_execution.py`、`execution.chat_data_grant.py`、`execution.chat_route_bindings.py`、`execution.node_publication.py`、`operator.operator_cpms.py`、`operator.order_analysis.py`、`operator.order_pricing.py`、`operator.order_billing.py`、`operator.station_pricing.py`、`operator.station_tariff.py`、`operator.operator_tools.py`、`operator.operator_conversation.py`、`operator.operator_answer_review.py`、`dify.dify_trial.py`、`dify.dify_workflow_trial.py` |
+| 节点与试用 | `execution.agent_runs.py`、`execution.run_deliverability.py`、`execution.execution_manifest.py`、`execution.chat_execution.py`、`execution.chat_data_grant.py`、`execution.chat_route_bindings.py`、`execution.node_publication.py`、`operator.operator_cpms.py`、`operator.communication.py`、`operator.order_analysis.py`、`operator.order_pricing.py`、`operator.order_billing.py`、`operator.station_pricing.py`、`operator.station_tariff.py`、`operator.operator_tools.py`、`operator.operator_conversation.py`、`operator.operator_answer_review.py`、`dify.dify_trial.py`、`dify.dify_workflow_trial.py` |
 | 管理与发布 | `admin_cli.py`、`publication.agent_content.py`、`publication.agent_lifecycle.py`、`publication.agent_serviceability.py`、`publication.agent_manifest.py`、`publication.agent_debug.py`、`publication.shortcut_lifecycle.py`、`publication.shortcut_migration.py`、`operator.ops_provider.py`、`operator.operator_agent.py` |
 | 知识与会话 | `conversation.conversation_store.py`、`conversation.faq.py`、`publication.qa_rag.py`、`conversation.clarification.py`、`knowledge.knowledge_retrieval.py`、`knowledge.knowledge_sources.py`、`knowledge.knowledge_triple.py`、`knowledge.knowledge_dataset_sync_guard.py`、`knowledge.kb_onboarding.py`、`knowledge.ragflow_console.py` |
-| 健康与分析 | `health.health_curves.py`、`health.health_metrics.py`、`health.health_report.py`、`health.health_report_copy.py`、`operator.ops_analysis.py`、`operator.ops_analysis_narrative.py`、`data.order_status.py`、`health.rules.py`、`data.sources.py`、`tdengine_proxy.py` |
+| 健康与分析 | `health.health_curves.py`、`health.health_metrics.py`、`health.health_report.py`、`health.health_report_copy.py`、`operator.ops_analysis.py`、`operator.ops_analysis_narrative.py`、`data.offline_source.py`、`operator.device_offline.py`、`operator.offline_tool.py`、`data.order_status.py`、`health.rules.py`、`data.sources.py`、`tdengine_proxy.py` |
 | 通用能力 | `common.config.py`、`common.model_request.py`、`common.bounded_http.py`、`common.private_files.py`、`common.redaction.py`、`common.endpoint_policy.py`、`common.i18n.py`、`common.answer_language.py`、`common.platform_paths.py`、`common.console_encoding.py`、`common.async_job_lifecycle.py`、`common.order_reference.py`、`common.scalar_rules.py`、`gateway.metrics_store.py` |
 | Dify集成 | `dify.dify_app_registry.py`、`dify.dify_chat_workflow.py`、`dify.dify_chatflow.py`、`dify.dify_console_admin.py`、`dify.dify_console_publish.py`、`dify.dify_debug_identity.py`、`dify.dify_dsl_pull.py`、`dify.dify_ensure_workspace.py`、`dify.dify_inner_api.py`、`dify.dify_knowledge_api.py`、`dify.dify_knowledge_datasets.py`、`dify.dify_knowledge_migration.py`、`dify.dify_login_company.py`、`dify.dify_login_provision.py`、`dify.dify_login_proxy.py`、`dify.dify_login_server.py`、`dify.dify_login_service.py`、`dify.dify_run_store.py`、`dify.dify_tenant_access.py`、`dify.dify_tools_catalog.py`、`dify.dify_workspace_directory.py`、`dify.dify_workspace_ready.py`、`dify.dify_workspaces.py` |
 
@@ -122,6 +141,10 @@ Dify自助开通：`dify.self_service`组织双端业务流程，`dify.self_serv
 `dify.self_service_config`解析平台连接，`dify.self_service_prepare`准备依赖与应用，
 `dify.self_service_store`保存幂等任务与受管应用目录，`dify.dual_entry`定义端/场景与渠道口径，
 `dify.service_keys`申请、对账并落盘每应用的 Service 凭据；`dify.knowledge_connection`管理各工作区的知识连接。
+
+`dify.operator_run_logs`在原日志入口核对管家公司身份，`execution.operator_run_logs`只读既有运行账本。
+受管管家日志仅显示本人当前权限内的 Java 元数据，业务结果过期与执行状态分开；
+其他应用保留 Dify 原生日志。入口、字段及验证方法见[运行日志说明](docs/agents/operator-cpms/run-logs.md)。
 
 ## 五、本地运行与验证
 
@@ -183,3 +206,5 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 一键开通生成的应用凭据属于持久运行数据；目录迁移与沙箱内可写性验收见[开通手册](docs/agents/operator-cpms/self-service.md#运行凭据目录只读的恢复)。
 
 客服编辑与发布故障的字段核对、原页面恢复见[知识选择与发布手册](docs/agents/consumer-wf01/knowledge-picker-deploy.md#参数面板打开后发布失败)。
+
+设备离线分析以同一受控读面服务offline卡与管家Agent；新增业务时区配置和发布步骤见[离线手册](docs/agents/operator-cpms/device-offline.md)。

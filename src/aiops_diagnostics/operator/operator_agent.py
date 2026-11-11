@@ -18,8 +18,15 @@ INSTRUCTIONS = """你负责理解用户自然语言、上下文与业务SOP，�
 订单号可从用户本句或已选订单中提议；未明确对象时自然澄清，不能猜测。每轮只查一笔订单。
 order_no可省略以使用已选订单，但仅在用户确实指向该订单时调用订单工具；换话题不必读取订单。
 按工具结果决定下一步；未提供的字段是缺证，不是零，也不能断言没有故障。
+仅给订单号或说“查订单”时，先用订单详情简短回答状态、起止时间与记录的停止原因；
+未问费用核验或过程分析，不自动读取计费、监测、遥测及统计的全套工具。
+用户明确要求诊断或详细分析时按SOP取证；普通问题默认三至五句，不重复整单报告。
 旧回答可以解释上次的结论，不能作为当前状态的新证据；需要当前事实时重新调用工具。
 若仅解释上次结论，无需新取证，写“上次记录”，不可声称本轮调用了未执行的工具。
+设备离线使用cpms_device_offline；不需要订单号，可查授权站点或设备。默认近7天，指定时间用RFC3339偏移。
+先核离线排行/未记录恢复清单，再按用户需求读关联订单；2/3/5均为需关注的状态，重叠不能证明原因。
+可以用上轮真实返回的设备与订单引用继续查询，不能编造对象；未记录恢复不等于实时掉线。
+多笔关联订单而用户未明确单号时先列候选请确认单号，不任选一单；单一关联单可沿用。
 金额使用cpms_order_amount_check，过程统计使用cpms_order_process_stats，读取其依赖的证据后再调用；不要自行反推缺失单价或折扣。
 最终直接给自然语言答复，不输出JSON、字段名或技术协议。
 不罗列无关字段、不重复整份后台记录；只引用实际取得的证据。
@@ -85,6 +92,7 @@ def analysis(evidence, section):
 _SOURCE_LABELS = {
     "zh": {
         "heading": "【本轮数据来源】",
+        "cpms_device_offline": "设备离线记录与订单关联",
         "cpms_order_detail": "订单详情",
         "cpms_charging_samples": "充电监测样本",
         "cpms_order_tariff": "订单历史计费模板",
@@ -92,11 +100,13 @@ _SOURCE_LABELS = {
         "cpms_order_amount_check": "订单金额核验",
         "cpms_order_process_stats": "充电过程统计",
         "cpms_charging_timeline": "充电枪时序遥测",
+        "cpms_order_communications": "订单窗口事件候选与通讯源状态",
         "cpms_site_search": "可见站点查询",
         "cpms_station_plan": "未来充电费用方案",
     },
     "zh-Hant": {
         "heading": "【本輪資料來源】",
+        "cpms_order_communications": "訂單窗口事件候選與通訊來源狀態",
         "cpms_order_detail": "訂單詳情",
         "cpms_charging_samples": "充電監測樣本",
         "cpms_order_tariff": "訂單歷史計費模板",
@@ -108,6 +118,8 @@ _SOURCE_LABELS = {
     },
     "en": {
         "heading": "Sources used for this answer",
+        "cpms_order_communications": "Order-window event candidates and communication source status",
+        "cpms_device_offline": "Recorded device outages and overlapping orders",
         "cpms_order_detail": "Order details",
         "cpms_charging_samples": "Charging telemetry samples",
         "cpms_order_tariff": "Historical billing template",

@@ -202,8 +202,9 @@ _ALLOWED_ALPHABET_LITERALS = {
     "dify/dify_login_proxy.py": 2,  # 登录会话 id / token
     "dify/dify_login_server.py": 1,  # 登录 id
     "dify/dify_workspaces.py": 1,  # 应用 id
+    "dify/operator_run_logs.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
     "dify/self_service_api.py": 1,  # knowledge_base_id
-    "dify/self_service_bridge.py": 1,  # knowledge_base_id（order_no 已收口到权威）
+    "dify/self_service_bridge.py": 2,  # knowledge_base_id / run_id；app_id 为十六进制 UUID
     "dify/self_service_identity.py": 1,  # 租户 id
     "execution/chat_execution.py": 3,  # 智能体 id / libraries 键 ×2
     "gateway/gateway_api.py": 11,  # 拒绝码 / conv_ / code / app_id / knowledge / tenant /
@@ -213,6 +214,8 @@ _ALLOWED_ALPHABET_LITERALS = {
     "gateway/metrics_store.py": 2,  # 租户 id / 指标 id
     "identity/query_scope.py": 1,  # 路径段
     "identity/scope_context.py": 1,  # 路径段
+    "operator/communication.py": 2,  # deviceCode/childDeviceCode设备码、event/functionId事件名；非订单
+    "operator/offline_tool.py": 1,  # 离线工具设备/站点查询参数，不是订单语法
     "operator/operator_cpms.py": 3,  # 失败原因码 / 回调 siteId / 时序遥测 device
     "operator/operator_tools.py": 1,  # 工具参数名
     "operator/station_tariff.py": 1,  # 站点 id

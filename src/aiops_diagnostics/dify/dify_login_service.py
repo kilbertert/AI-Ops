@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -189,10 +191,15 @@ class MappingStore:
                 " ON dify_login_audit(company_user_id, at DESC)"
             )
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.path)
-        connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def get(self, company_user_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
