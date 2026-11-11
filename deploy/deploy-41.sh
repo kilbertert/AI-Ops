@@ -508,6 +508,9 @@ set -eu
 TS=\$(date +%Y%m%d-%H%M%S)
 B=/var/backups/aiops-41/backup-\$TS
 mkdir -p "\$B/refs"
+# 本次备份仍由 root 持有；服务组仅可穿过它到达私有 schema 目录。
+chgrp aiops41 "\$B"
+chmod 0710 "\$B"
 cp -a $REMOTE_SRC "\$B"/
 # 清理上一次被 kill 的部署留下的产物。正常路径与回滚路径都会删掉自己的 tar，
 # 但**被超时/断线 kill 的那次**删不了 —— 实测留下过 24MB 残留（2026-09-23 钻演）。
@@ -576,7 +579,8 @@ PY
 fi
 # 一致备份与副本演练先于源码替换；失败时旧服务继续运行。
 if [ "\$mutate_rc" = 0 ]; then
-  mkdir -p "\$B/schema" && chown aiops41:aiops41 "\$B/schema" || step_failed "schema-backup-dir"
+  mkdir -p "\$B/schema" && chmod 0700 "\$B/schema" && chown aiops41:aiops41 "\$B/schema" \
+    || step_failed "schema-backup-dir"
   if [ "\$mutate_rc" = 0 ] && runuser -u aiops41 -- env PYTHONPATH=/tmp/sync-check /opt/aiops-41/.venv/bin/python - "\$B/schema/gateway.db" <<'PYSCHEMA'
 import dataclasses
 import json

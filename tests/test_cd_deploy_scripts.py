@@ -756,3 +756,51 @@ def test_schema_preflight_and_migration_gate_real_database(tmp_path, failure):
         assert snapshot(data)[1] == 1
     if failure not in {"backup", "wrong-file"}:
         assert snapshot(backup_root / "schema/gateway.db") == before
+
+
+@pytest.mark.parametrize("mask", ["027", "077"])
+def test_schema_backup_permissions_do_not_depend_on_umask(tmp_path, mask):
+    """执行真实权限片段；账号映射只用于无特权测试，不冒充跨账号访问验收。"""
+    source = (DEPLOY_DIR / "deploy-41.sh").read_text()
+    start = source.index('mkdir -p "\\$B/refs"')
+    end = source.index('cp -a $REMOTE_SRC "\\$B"/', start)
+    parent_block = source[start:end].replace("\\$", "$")
+    start = source.index('  mkdir -p "\\$B/schema"')
+    end = source.index('  if [ "\\$mutate_rc" = 0 ] && runuser', start)
+    schema_block = source[start:end].replace("\\$", "$")
+    ancestor = tmp_path / "backups"
+    ancestor.mkdir(mode=0o700)
+    backup = ancestor / "this-deployment"
+    calls = tmp_path / "ownership-calls"
+    # 权限命令真实执行；只把部署账户/组映射到当前账号，严格限制参数和目标。
+    shell = """
+chgrp() {
+  [ "$#" = 2 ] && [ "$1" = aiops41 ] && [ "$2" = "$B" ] || return 1
+  printf 'group\n' >> "$CALLS"
+  command chgrp "$(id -g)" "$2"
+}
+chown() {
+  [ "$#" = 2 ] && [ "$1" = aiops41:aiops41 ] && [ "$2" = "$B/schema" ] || return 1
+  printf 'owner\n' >> "$CALLS"
+  command chown "$(id -u):$(id -g)" "$2"
+}
+step_failed() { exit 1; }
+"""
+    result = subprocess.run(
+        ["bash", "-eu"],
+        input=f"umask {mask}\nB={shlex.quote(str(backup))}\nCALLS={shlex.quote(str(calls))}\n"
+        + shell
+        + parent_block
+        + schema_block,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert backup.stat().st_mode & 0o777 == 0o710
+    assert backup.stat().st_uid == os.getuid()
+    assert (backup / "schema").stat().st_mode & 0o777 == 0o700
+    assert (backup / "schema").stat().st_uid == os.getuid()
+    assert calls.read_text().splitlines() == ["group", "owner"]
+    assert ancestor.stat().st_mode & 0o777 == 0o700
+    assert (backup / "refs").stat().st_mode & 0o777 == 0o777 & ~int(mask, 8)

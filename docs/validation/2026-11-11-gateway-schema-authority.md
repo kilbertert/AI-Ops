@@ -118,3 +118,10 @@ CLI综合轮使用SQLite3.51.2，另有SQLite3.45.1写锁下check；核心及sto
 | DB-07 | 独立 route publish(source_agent_name) / CAS / 异常 | registry 与 route 同事务、失败无部分提交 | 最终合同定向通过 |
 | DB-08/09 | Mapping/原 LEASE/TTL/权限回归与真实临时 Gateway | 不破坏原合同 | 全量4880通过及Gateway日志 |
 | DB-10 | 一致 backup / 副本 migrate-check / 旧程序 | 不覆盖源库，保留 WAL 行；旧程序兼容 | 独立合成库回放与交付会话一致副本摘要通过，见上文环境区分 |
+
+## PR审查补修：备份目录遍历权限
+
+PR #1466的Devin首轮提出1项有效部署缺陷：新建root备份目录的模式受umask影响，
+即使schema子目录转给服务身份，服务仍可能无法穿过父目录。此前副本与脚本替身检查
+未证明这个跨账号边界，历史目录755也不能代表新目录。补修与实测范围见
+[备份权限补修记录](2026-11-11-schema-backup-traversal.md)。schema定义和源码摘要未变化。
