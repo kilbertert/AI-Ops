@@ -260,6 +260,34 @@ def agent_conversation(source, plugin_identifier):
     return candidate
 
 
+def order_composition(source):
+    """现役v6仅替换唯一完整仓库指令块，运营前后文本逐字保留。"""
+    from aiops_diagnostics.consumer import consumer_agent_flow as flow
+
+    candidate = copy.deepcopy(source)
+    workflow = candidate["workflow"]
+    nodes = {n["id"]: n["data"] for n in workflow["graph"]["nodes"]}
+    if (
+        not flow.enabled(workflow)
+        or len(workflow["graph"]["nodes"]) != 3
+        or set(nodes) != {"start", "answer", "end"}
+        or nodes["answer"].get("type") != "agent"
+    ):
+        raise ValueError("订单构成更新仅接受现役v6三节点Agent图")
+    instruction = nodes["answer"]["agent_parameters"]["instruction"]
+    text = instruction.get("value")
+    if instruction.get("type") != "constant" or not isinstance(text, str):
+        raise ValueError("无法识别Agent指令")
+    old = flow.INSTRUCTION if flow.INSTRUCTION in text else flow.BASE_INSTRUCTION
+    if text.count(flow.BASE_INSTRUCTION) != 1:
+        raise ValueError("原Agent指令块不唯一或不匹配，需人工核对业务文本")
+    updated = text.replace(old, flow.INSTRUCTION, 1)
+    if "aiops-order-composition:" in text.replace(old, "", 1) or len(updated) > 16000:
+        raise ValueError("重复标记或指令超限，拒绝迁移")
+    instruction["value"] = updated
+    return candidate
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
@@ -270,6 +298,9 @@ def main():
     parser.add_argument("--live-documents", action="store_true")
     parser.add_argument("--agent-conversation", action="store_true")
     parser.add_argument(
+        "--order-composition", action="store_true", help="仅更新现役v6订单构成指令，保留原业务文本"
+    )
+    parser.add_argument(
         "--replace-system",
         action="store_true",
         help="连运营已编辑的 SYSTEM 一起换成仓库模板（会丢弃他们的改动）",
@@ -277,7 +308,17 @@ def main():
     args = parser.parse_args()
     os.umask(0o077)
     source = yaml.safe_load(args.source.read_text())
-    if args.agent_conversation:
+    if args.order_composition:
+        if (
+            args.agent_conversation
+            or args.live_documents
+            or args.knowledge_base
+            or args.knowledge_plugin
+            or args.replace_system
+        ):
+            parser.error("--order-composition不能与其他迁移选项组合")
+        result = order_composition(source)
+    elif args.agent_conversation:
         if not args.knowledge_plugin:
             parser.error("Agent迁移需要 --knowledge-plugin 新版完整标识")
         result = agent_conversation(source, args.knowledge_plugin)

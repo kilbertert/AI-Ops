@@ -4,6 +4,9 @@
 Gateway 负责身份、权限、预算与来源，最终回答自然表达。对应
 [可观察场景](agent-conversation.feature)。本计划不是通过回执。
 
+订单详情/费用构成修复另见[订单构成QA](order-composition-qa.md)，包括原HTTP reader组合验收、
+来源字段映射和现役v6指令块的幂等迁移；原`--agent-conversation`不用于覆盖现役三节点图。
+
 ## 范围及判据
 
 | 入口/场景 | 判据来源与可观察结果 | 环境 |

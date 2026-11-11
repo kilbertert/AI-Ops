@@ -13,6 +13,8 @@ code:
     - src/aiops_diagnostics/consumer/consumer_agent.py
     - src/aiops_diagnostics/consumer/consumer_chat_service.py
     - src/aiops_diagnostics/consumer/consumer_agent_flow.py
+    - src/aiops_diagnostics/consumer/consumer_billing.py
+    - tools/content/upgrade_consumer_flow.py
     - src/aiops_diagnostics/consumer/consumer_tool_grants.py
     - src/aiops_diagnostics/consumer/consumer_sites.py
     - src/aiops_diagnostics/consumer/consumer_knowledge_grants.py
@@ -54,6 +56,18 @@ code:
 - `succeeded` 过了窗口仍是 succeeded，`_expire_in` 只转 `running→expired`；能否交付由 `run_deliverability` 判。
 - 业务拒绝回喂模型作为工具结果（不是 run 失败）；预算耗尽、`CHATFLOW_EVIDENCE_UNAVAILABLE`（历史回合快照不再等于 qa.result）、SSE 身份不匹配、运行 180s 过期是终止路径。
 - 本链没有任何业务写工具可声明。
+
+## 本人订单构成
+
+`billing`复用同次订单详情GET：保留总额/支付/退款，并在v6增加摘要、费用构成、分时记录与缺项说明；
+旧callback1–5经`include_composition=False`保持七键投影。取数前后授权与8次预算不变。
+金额经账务专用Decimal解码后转字符串，非法时间只标无效，巨指数受控不可用；分时最多24行并报遗漏数。
+`decode_billing_number`仅是账务JSON的`parse_float`异常映射回调。原始日期/分时时钟在scalar台账中单独登记，
+保留来源偏移或naive，不能用会补UTC的`parse_stored_time`替代；格式与日历校验仍由`_source_time`执行。
+币种缺失/冲突不猜；创建时间不是计费开始，分时电量可能费用反推，feeRate不保证每kWh，不能据此判断计费正确。
+现役v6图用`upgrade_consumer_flow.py --order-composition`精确替换唯一完整指令块，保留前后运营文本且幂等；
+未知/重复块拒绝，不能只部署Gateway却保留旧图提示。依据与细节见`docs/adr/0246-consumer-order-composition.md`
+及`docs/agents/consumer-wf01/order-composition-qa.md`。
 
 ## Canonical anchors
 

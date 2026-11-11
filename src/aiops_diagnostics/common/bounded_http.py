@@ -313,10 +313,10 @@ def raise_transport_failure(exc: BaseException, *, mapping: ErrorMapping) -> NoR
     raise domain_error(classify_failure(exc, mapping=mapping), mapping) from exc
 
 
-def decode_json(body: bytes, *, mapping: ErrorMapping) -> Any:
+def decode_json(body: bytes, *, mapping: ErrorMapping, parse_float: Callable[[str], Any] = float) -> Any:
     """UTF-8 解码并解析 JSON；坏响应体是领域错误，不是裸异常。"""
     try:
-        return json.loads(body.decode("utf-8"))
+        return json.loads(body.decode("utf-8"), parse_float=parse_float)
     except DECODE_EXCEPTIONS as exc:
         failure = HttpFailure(INVALID_BODY, detail=exc.__class__.__name__, cause=exc)
         raise mapping.invalid_body(failure) from exc
@@ -444,6 +444,7 @@ def request_json(
     envelope: EnvelopeParser = parse_raw_envelope,
     retry: RetryPolicy = NO_RETRY,
     deadline: float | None = None,
+    parse_float: Callable[[str], Any] = float,
 ) -> Any:
     """执行一次有界请求并返回按信封解析后的 payload。
 
@@ -456,7 +457,7 @@ def request_json(
         try:
             with open_response(spec) as response:
                 body = read_body(response, max_read_bytes=spec.max_read_bytes)
-            return envelope(decode_json(body, mapping=mapping), mapping=mapping)
+            return envelope(decode_json(body, mapping=mapping, parse_float=parse_float), mapping=mapping)
         except TRANSPORT_EXCEPTIONS as exc:
             deliberate = isinstance(exc, urllib.error.HTTPError)
             if deliberate or not should_retry(attempt, policy=retry, method=spec.method, deadline=deadline):

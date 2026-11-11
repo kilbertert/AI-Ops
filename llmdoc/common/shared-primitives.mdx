@@ -30,6 +30,10 @@ code:
 - `endpoint_policy.py`：`is_loopback_host` = `{localhost, localhost.}` ∪ `ipaddress.is_loopback`——**唯一的回环规则**（ipaddress 单独看不出 `localhost`）；`require_secure_endpoint` = https 或回环 http，禁 userinfo/query/fragment。
 - `http_auth.py`：内部令牌 `hex(HMAC-SHA256(secret, "{ts}:{expire}"))`，走 `X-Internal-Token`+`X-Request-Timestamp`；支持多 secret 轮换；fail closed。
 
+`request_json`/`decode_json`的可选`parse_float`默认仍为float。消费者账务显式使用安全Decimal包装器，
+将构造异常映射为领域不可用，投影成金额字符串后再进入JSON响应；其他调用不变。
+`code:false`被当作成功是通用信封的既有行为，本次未修，不能声称非法信封类型全部拒绝（ADR0246验收记录）。
+
 ## 文件与配置
 
 - `private_files.py`：`validate_private_directory`/`validate_private_file`（0700/0600、属主、禁 symlink）；`write_private_text`/`append_private_text`（mkstemp+降权原子写）；`PrivatePathError`。含 Windows ACL 助手。
