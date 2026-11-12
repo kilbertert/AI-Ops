@@ -216,6 +216,31 @@ def test_pinned_history_preserves_data_and_default_contract(tmp_path):
             assert schema._indexes(a, table) == schema._indexes(b, table)
 
 
+def test_version_one_database_migrates_to_current_shape(tmp_path):
+    # 版本 1 是所有现网部署的真实版本（第一版发布），不是 0 那种版本化之前的形状。
+    # check 必须只读放行，ensure 补 LEGACY_COLUMNS 覆盖的新列并升到 VERSION，数据不动。
+    path = tmp_path / "gateway.db"
+    schema.ensure(path)
+    with closing(sqlite3.connect(path)) as db:
+        db.executescript(
+            "ALTER TABLE agent_runs DROP COLUMN tool_summaries_json; "
+            "INSERT INTO agent_runs(run_id,scope_fingerprint,scope_json,order_no,operation,"
+            "environment,app_id,agent_id,expected_node_id,state,gateway_version,created_at,expires_at) "
+            "VALUES('r1','fingerprint','{}','order','charging_status','env','app','agent','node',"
+            "'issued','1.0','2026-01-01','2026-01-02'); "
+            "PRAGMA user_version=1"
+        )
+    report = schema.check(path)
+    assert report["version"] == 1 and report["current_version"] == schema.VERSION
+    schema.ensure(path)
+    assert schema.check(path)["version"] == schema.VERSION
+    with gateway_db.connection(path) as db:
+        assert tuple(db.execute("SELECT run_id,tool_summaries_json FROM agent_runs").fetchone()) == (
+            "r1",
+            None,
+        )
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

@@ -22,8 +22,12 @@ consumer 与普通应用沿用原生日志。失败运行也在列表中，不�
 领取/完成/过期时间、观测版本与核对结论、结果指纹、试算标记（权威判据是
 `chat_binding` 的 `operator-trial:` 前缀，绑定串本身不投影）、历史上下文轮数、
 声明集内的证据工具名（不含 data，节点上报的未声明键不投影），以及 trace
-事件的 `detail` 机器码。
-仍无答案、快照、证据 data、工具参数、凭据、scope 指纹或自由文本失败原文。
+事件的 `detail` 机器码。[ADR-0251](../../adr/0251-run-log-tool-summaries-and-readable-trace.md)
+再扩入 `tool_summaries`：按工具名索引的行级显示摘要——入参的 `k=v` 截断串、
+`TOOL_SUMMARY_FIELDS` 白名单内的结果字段或拒绝码；写入侧有界（≤8 字段、
+值 ≤32 字、≤16 工具、同名覆盖），因此内容属于该工具最近一次调用，
+页面只把它挂在该工具最后一个完成事件下。
+仍无答案、快照、证据 data 原文、完整工具参数、凭据、scope 指纹或自由文本失败原文。
 问题经同一只读连接按 `qa_id + scope_fingerprint` 批量读，不走 `get_assistant_question`
 （它会做写入式过期收敛）。详情不是业务结果回读，不调用或绕过 `authorize_readback`；
 不修改账本状态。已到期的 `issued/running` 在响应中显示 `expired`，

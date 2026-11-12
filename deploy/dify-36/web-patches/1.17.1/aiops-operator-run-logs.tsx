@@ -169,11 +169,14 @@ const describe = (event: Event, callNo: number) => {
       return `${when}派发执行${event.detail ? `（${detailText(event.detail)}）` : ''}`
     case 'tool': {
       const name = toolName(event.tool)
-      if (event.status === 'running') return `${when}调用 ${name}…`
+      if (event.status === 'running')
+        return `${when}调用 ${name}… · 已进行 ${elapsed(event.elapsed_ms)}`
       const head = `${when}第 ${callNo} 次调用 ${name}：`
+      // 合同（run-logs.md）：工具条目同时显示本次耗时与 elapsed_ms 累计耗时；缺失标「未采集」。
+      const tail = ` · 耗时 ${elapsed(event.duration_ms ?? null)} · 累计 ${elapsed(event.elapsed_ms)}`
       if (event.status === 'refused')
-        return `${head}${event.detail ? detailText(event.detail) : '被拒绝'}`
-      return `${head}${labels[event.status || ''] || event.status || '成功'} · 耗时 ${elapsed(event.duration_ms ?? null)}`
+        return `${head}${event.detail ? detailText(event.detail) : '被拒绝'}${tail}`
+      return `${head}${labels[event.status || ''] || event.status || '成功'}${tail}`
     }
     case 'review':
       return `${when}事实复核：${event.detail ? detailText(event.detail) : '通过'} · 耗时 ${elapsed(event.duration_ms ?? null)}`
@@ -346,11 +349,21 @@ export function OperatorRunLogs({ appId }: { appId: string }) {
                 <ol>
                   {(() => {
                     let callNo = 0
-                    return run.trace.map((event) => {
+                    // 摘要按工具名覆盖保存（ADR-0251）：内容属于该工具最近一次调用，
+                    // 只挂到最后一个完成事件下，否则历史事件会背上后来才取得的结果。
+                    const lastToolEvent = new Map<string, number>()
+                    run.trace.forEach((event, index) => {
+                      if (event.phase === 'tool' && event.status && event.status !== 'running')
+                        lastToolEvent.set(event.tool || '', index)
+                    })
+                    return run.trace.map((event, index) => {
                       if (event.phase === 'tool' && event.status && event.status !== 'running')
                         callNo += 1
                       const summary =
-                        event.phase === 'tool' ? run.tool_summaries?.[event.tool || ''] : null
+                        event.phase === 'tool' &&
+                        lastToolEvent.get(event.tool || '') === index
+                          ? run.tool_summaries?.[event.tool || '']
+                          : null
                       return (
                         <li
                           key={`${event.at}:${event.phase}:${event.tool}:${event.status}:${event.elapsed_ms}`}
