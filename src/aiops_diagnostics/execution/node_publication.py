@@ -234,10 +234,11 @@ OPERATOR_OUTPUT_PREFIX = "仅诊断本次授权订单。先调用 cpms_order_det
 
 def business_prompt(text):
     """去除可识别的旧/新系统协议后缀，编辑器只展示业务SOP。"""
-    from aiops_diagnostics.operator.operator_agent import INSTRUCTIONS
+    from aiops_diagnostics.operator.operator_agent import INSTRUCTIONS, INSTRUCTIONS_WITH_CURRENCY_GUARD
 
-    if text.endswith("\n" + INSTRUCTIONS):
-        return text[: -(len(INSTRUCTIONS) + 1)]
+    for suffix in (INSTRUCTIONS, INSTRUCTIONS_WITH_CURRENCY_GUARD):
+        if text.endswith("\n" + suffix):
+            return text[: -(len(suffix) + 1)]
     prefix, separator, _ = text.rpartition("\n" + OPERATOR_OUTPUT_PREFIX)
     return prefix if separator else text
 
