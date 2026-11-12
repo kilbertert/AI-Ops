@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
@@ -320,3 +321,27 @@ def test_recommendations_answer_every_platform_language_value(
         # 让「九行各取各的」看起来在跑。
         for title in titles:
             assert not han.search(title), f"{served} 的题面里出现了汉字：{title}"
+
+
+def test_localized_copy_language_is_logged(tmp_path: Path, caplog) -> None:
+    """确定性文案面要留下「客户端发了什么头、解析成什么」的一行记录。
+
+    拦截的错误：日后重构丢掉这条 ``_LOGGER.info``、或把端点换回不记录的
+    ``request_language``——这几个面没有持久语言记录（chat 路径有 run 行），
+    日志是定位「客户端发错 Accept-Language」的唯一线索，静默丢失要等下次
+    排障才被发现。判据：一行记录、带原始头与解析值。
+    """
+    caplog.set_level(logging.INFO, logger="aiops.gateway")
+    headers = {"Authorization": "Bearer service", "X-Business-Entry": "consumer"}
+    with _client(tmp_path) as client:
+        client.get("/v1/faq/recommendations", headers={**headers, "Accept-Language": "en"})
+        client.get("/v1/faq/recommendations", headers=headers)
+    records = [
+        r.message
+        for r in caplog.records
+        if r.name == "aiops.gateway" and "localized_copy_language" in r.message
+    ]
+    assert len(records) == 2
+    assert "path=/v1/faq/recommendations" in records[0]
+    assert "accept_language='en'" in records[0] and "resolved=en" in records[0]
+    assert "accept_language=None" in records[1] and "resolved=zh" in records[1]
