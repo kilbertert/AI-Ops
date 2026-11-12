@@ -419,6 +419,9 @@ class ActiveTask:
     trace_failed: bool = False
     finished_elapsed_ms: int | None = None
     answer_review: dict = field(default_factory=dict)
+    #: `_complete` 里的终局闸拒原码。派发成功但 run 未推进时 worker 据此归码——
+    #: 授权/范围死了的同一 run 重派必撞同一道闸，不能再走「没交出答复」重采样。
+    completion_refusal: str | None = None
 
 
 class OperatorCpms:
@@ -1796,13 +1799,16 @@ class OperatorCpms:
             self._trace(
                 run_id,
                 "review",
-                "succeeded" if review["verdict"] == "allow" else "refused",
+                "succeeded" if review["verdict"] != "unavailable" else "refused",
                 duration_ms=(time.monotonic() - review_started) * 1000,
-                # 通过也落码：「复核通过」和「没复核」在行级日志里要能分开。
+                # verdict 只落码不拦截（ADR-0252）：allow/reject/uncertain 都是已评估，
+                # 只有 unavailable 才是复核这一步自己没跑成。
                 detail=review.get("reason") or ("allowed" if review["verdict"] == "allow" else None),
             )
         task.answer_review = review
-        if review["verdict"] != "allow":
+        # 语义复核暂降为观察（ADR-0252）：verdict 仍写入快照、轨迹与行级明细，但不再
+        # 拦截答复。只有模型根本没交出答复（model_failure）时才退回已授权证据。
+        if model_failure is not None:
             from aiops_diagnostics.operator.operator_evidence import render_evidence
 
             result = render_evidence(evidence, task.language, secrets=(task.bearer, task.grant))
@@ -1825,33 +1831,34 @@ class OperatorCpms:
                 task, run, config = self._authorize_execution(
                     run_id, run=run, config=config, node_token=token, manifest=manifest
                 )
+                if run.order_no:
+                    self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
+                if offline_tool.NAME in evidence:
+                    try:
+                        offline_tool.require_current(
+                            self, task, evidence[offline_tool.NAME]["offline_references"]
+                        )
+                    except SourceError as exc:
+                        raise OperatorRefused("OPERATOR_SCOPE_CHANGED") from exc
+                for previous_id in task.history_runs:
+                    previous = self.context.agent_run_store.peek(previous_id)
+                    if previous is None or not previous.snapshot:
+                        raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+                    self._authorize_snapshot(task, previous)
             except OperatorRefused as exc:
+                task.completion_refusal = str(exc)
                 self._stamp_gate_refusal(run_id, str(exc))
                 latest = store.get(run_id)
                 if latest is None or latest.state in {"issued", "running"}:
                     raise
                 return self._absorb_superseded(run_id, superseded)
-            if run.order_no:
-                self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
-            if offline_tool.NAME in evidence:
-                try:
-                    offline_tool.require_current(
-                        self, task, evidence[offline_tool.NAME]["offline_references"]
-                    )
-                except SourceError as exc:
-                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED") from exc
-            for previous_id in task.history_runs:
-                previous = self.context.agent_run_store.peek(previous_id)
-                if previous is None or not previous.snapshot:
-                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-                self._authorize_snapshot(task, previous)
             snapshot = {
                 "answer": answer,
                 "trial": task.trial,
                 "evidence": evidence,
                 "language": task.language,
                 "answer_review": review,
-                "delivery_mode": "diagnosis" if review["verdict"] == "allow" else "evidence_only",
+                "delivery_mode": "diagnosis" if answer is not None else "evidence_only",
                 "history_runs": task.history_runs,
                 "rendered_result": result,
                 "plan_arguments": task.arguments.get("cpms_station_plan", {}),
@@ -1932,8 +1939,6 @@ class OperatorCpms:
                     # 节点已回报模型失败并完成证据交付时，运输层错误不能撤销该交付。
                     if self.context.agent_run_store.get(run_id).state == "succeeded":
                         break
-                    if task.answer_review:
-                        raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED") from None
                     if not self._untouched(run_id, task):
                         raise
                     if task.resamples >= MAX_RESAMPLES:
@@ -1947,10 +1952,11 @@ class OperatorCpms:
                 self._raise_node_failure(run_id)
                 if not self._untouched(run_id, task):
                     break
-                # 复核已拒绝且无可交付证据，再跑相同输入不能修复这一轮。
-                if task.answer_review:
-                    raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
                 # 派发本身成功、回调也走完了，但 run 没被推进 —— 说明 `_complete` 拒了答案。
+                # 复核 verdict 不再拦截（ADR-0252）：闸拒在 task 上带原码，同一 run 重派必撞
+                # 同一道闸，直接归码；其余「没交出可接受答复」的才重采样，上限后判不稳定。
+                if task.completion_refusal:
+                    raise OperatorRefused(task.completion_refusal)
                 if task.resamples >= MAX_RESAMPLES:
                     raise OperatorRefused("OPERATOR_MODEL_OUTPUT_UNSTABLE")
                 task.resamples += 1

@@ -310,7 +310,11 @@ export function OperatorRunLogs({ appId }: { appId: string }) {
               </p>
               {run.reason && <p>终态原因：{label(run.reason)}（{run.reason}）</p>}
               {run.review_reason && run.review_reason !== 'allowed' && (
-                <p>诊断未完成原因：{label(run.review_reason)}</p>
+                <p>
+                  {/* ADR-0252：verdict 只观察不拦截——答复已交付时是复核记录，不是未完成原因 */}
+                  {run.delivery_mode === 'diagnosis' ? '复核观察（答复已交付）' : '诊断未完成原因'}：
+                  {label(run.review_reason)}
+                </p>
               )}
               {run.result_expired && <p>业务结果已过期，此处仅保留运行记录。</p>}
               <p>

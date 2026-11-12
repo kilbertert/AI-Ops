@@ -120,6 +120,8 @@ def review(reply, evidence, history, question, language, settings, history_evide
             "quota_exhausted": "review_quota_exhausted",
             "auth_rejected": "review_auth_rejected",
         }.get(exc.reason, "review_unavailable")
-    except (RuntimeError, ValueError, TypeError, KeyError, OSError):
+    except (RuntimeError, ValueError, TypeError, KeyError, OSError, AttributeError):
+        # 复核自身坏掉也不能拦交付（ADR-0252）：settings/provider 缺属性时同样
+        # 收敛成 unavailable，异常穿出会让整轮答复被丢弃。
         pass
     return result
