@@ -252,7 +252,7 @@ def answer_selection(raw, context, *, language="", contract="legacy"):
     return "knowledge", render_sources_answer(text, [sources[ref] for ref in references])
 
 
-def render_sources_answer(text, sources, *, preserve=()):
+def render_sources_answer(text, sources, *, preserve=(), support_urls=()):
     """来源链接和媒体由已取证资料决定，正文可以是自然语言。"""
     urls = []
     for match in ANSWER_URL.finditer(text):
@@ -272,6 +272,7 @@ def render_sources_answer(text, sources, *, preserve=()):
             url = url[:-1]
         urls.append(url)
     allowed = {url for source in sources for url in _URL_PATTERN.findall(source.get("content", ""))}
+    allowed.update(support_urls)
     if not text.strip() or len(text) > 8000:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "document answer must not generate links")
     for url in urls:

@@ -65,8 +65,8 @@ def test_natural_answer_keeps_knowledge_outage_distinct_from_empty_search(status
     assert final_answer("本次查到一份指南。", ctx)["retrieval_status"] == "found"
 
 
-def test_official_support_https_url_is_allowed_but_invented_url_is_not():
-    url = "https://help.example.com/contact"
+@pytest.mark.parametrize("url", ["https://help.example.com/contact", "https://help.example.com/contact(en)"])
+def test_official_support_https_url_is_allowed_but_invented_url_is_not(url):
     ctx = {
         "calls": [
             {
@@ -78,6 +78,8 @@ def test_official_support_https_url_is_allowed_but_invented_url_is_not():
             }
         ]
     }
-    assert url in final_answer("请使用官方入口 " + url, ctx)["blocks"][0]["text"]
+    result = final_answer("请使用官方入口 " + url, ctx)
+    assert url in result["blocks"][0]["text"]
+    assert not any(block.get("kind") == "reference" for block in result["blocks"])
     with pytest.raises(ChatRunUnavailable):
         final_answer("请使用 https://other.example.com/contact", ctx)
