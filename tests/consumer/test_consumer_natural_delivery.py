@@ -53,3 +53,31 @@ def test_existing_danger_guidance_and_official_contact_remain_available():
     result = final_answer("请联系官方客服，我没有代为转接。", context, language="zh")
     assert "tel:+8612345678901" in result["blocks"][-1]["text"]
     assert "+441234567890" not in str(result)
+
+
+@pytest.mark.parametrize("status", ["unavailable", "limited", "refused"])
+def test_natural_answer_keeps_knowledge_outage_distinct_from_empty_search(status):
+    ctx = {"calls": [{"tool": "knowledge", "result": {"status": status}}]}
+    answer = final_answer("资料暂时不可用，请稍后再试。", ctx)
+    assert answer["retrieval_status"] == "unavailable"
+    source = {"retrieved_reference_id": "r1", "title": "指南", "content": "查看订单。", "media": []}
+    ctx["calls"].append({"tool": "knowledge", "result": {"status": "found", "sources": [source]}})
+    assert final_answer("本次查到一份指南。", ctx)["retrieval_status"] == "found"
+
+
+def test_official_support_https_url_is_allowed_but_invented_url_is_not():
+    url = "https://help.example.com/contact"
+    ctx = {
+        "calls": [
+            {
+                "tool": "support",
+                "result": {
+                    "status": "found",
+                    "support": {"zh": {"label": "官方客服", "url": url}},
+                },
+            }
+        ]
+    }
+    assert url in final_answer("请使用官方入口 " + url, ctx)["blocks"][0]["text"]
+    with pytest.raises(ChatRunUnavailable):
+        final_answer("请使用 https://other.example.com/contact", ctx)

@@ -291,6 +291,7 @@ def final_answer(raw, context, *, language="zh", question=""):
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "客服未返回有效正文")
     sources = []
     support = []
+    support_sources = []
     seen = set()
     for call in calls:
         result = call.get("result") or {}
@@ -305,7 +306,22 @@ def final_answer(raw, context, *, language="zh", question=""):
             line = consumer_knowledge._support_line(language, result)
             if line:
                 support.append(line)
-    answer = render_sources_answer(raw, sources, preserve=order_ids(context))
+            for route in result.get("support", {}).values():
+                support_sources.append(
+                    {"retrieved_reference_id": "support", "title": route["label"], "content": route["url"]}
+                )
+    answer = render_sources_answer(raw, [*sources, *support_sources], preserve=order_ids(context))
+    answer["retrieval_status"] = (
+        "found"
+        if sources
+        else "unavailable"
+        if any(
+            call["tool"] == "knowledge"
+            and (call.get("result") or {}).get("status") in {"unavailable", "limited", "refused"}
+            for call in calls
+        )
+        else "not_found"
+    )
     if support:
         answer["blocks"].append({"kind": "text", "text": "\n".join(support)})
     return answer
