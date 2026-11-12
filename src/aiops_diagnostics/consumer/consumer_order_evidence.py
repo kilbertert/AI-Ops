@@ -56,7 +56,10 @@ LABELS = {
         "created_time": "创建时间",
         "station_name": "站点",
         "limit": "以上为查询记录，无法确认充电过程是否异常，也未核验收费是否正确或银行扣款、到账。",
-        "no_data": "本轮未取得可展示的订单记录，无法确认订单金额或状态。请确认订单后重新查询。",
+        "no_data": (
+            "本轮未取得可展示的订单记录，无法确认订单金额或状态。请确认订单后重新查询；"
+            "如需人工帮助，请使用当前App或站点告示中的官方客服入口。"
+        ),
         "no_status": "本轮未取得充电状态记录。",
         "currency_missing": "金额币种未提供或未能确认，以下金额不附币种单位。",
         "period_missing": "分时记录未提供或不完整。",
@@ -127,7 +130,8 @@ LABELS = {
             "debits or receipts have not been verified."
         ),
         "no_data": (
-            "No order records were retrieved for display in this turn. Confirm the order and try again."
+            "No order records were retrieved for display in this turn. Confirm the order and try again. "
+            "If you need human help, use the official support entry in the app or on-site notice."
         ),
         "no_status": "No charging status record was retrieved in this turn.",
         "currency_missing": "Currency is missing or unconfirmed; amounts below have no currency unit.",
