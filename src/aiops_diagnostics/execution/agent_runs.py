@@ -479,9 +479,15 @@ class AgentRunStore:
         return _run_from_row(row) if row else None
 
     def record_trace(self, run_id: str, event: dict[str, Any]) -> None:
-        """有界执行元数据；不修改运行状态或结果交付时效。"""
-        if set(event) - {"phase", "status", "at", "elapsed_ms", "duration_ms", "tool"}:
+        """有界执行元数据；不修改运行状态或结果交付时效。
+
+        ``detail`` 只承载机器码（拒绝码、复核原因、终止码），不是自由文本 ——
+        边界在这里兜底而不只靠 ``_trace``，因为本方法是公开 store API。
+        """
+        if set(event) - {"phase", "status", "at", "elapsed_ms", "duration_ms", "tool", "detail"}:
             raise ValueError("unexpected trace field")
+        if event.get("detail") is not None:
+            event = {**event, "detail": str(event["detail"])[:64]}
         with self._connection(write=True) as connection:
             row = connection.execute(
                 "SELECT trace_json FROM agent_runs WHERE run_id = ?", (run_id,)
