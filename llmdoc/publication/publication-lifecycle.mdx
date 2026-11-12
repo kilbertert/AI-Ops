@@ -17,6 +17,7 @@ code:
     - src/aiops_diagnostics/execution/chat_route_bindings.py
     - src/aiops_diagnostics/execution/node_publication.py
     - src/aiops_diagnostics/gateway/gateway_store.py
+    - src/aiops_diagnostics/gateway/gateway_schema.py
 ---
 
 # 发布生命周期
@@ -30,21 +31,22 @@ code:
 
 ## 路由绑定（CAS）
 
-- `chat_route_bindings` PK `(environment, tenant_id, entry, scenario)`，`engine ∈ {node,dify}`，发布/撤回都在 `revision` 上 CAS 原地改状态。**撤回留行**：幂等且 retracted 拒绝是 `CHAT_ROUTE_RETRACTED` 410，与从未配置的 404 可区分（见 [execution-delegation](../execution/execution-delegation.mdx)——删行会静默落回直读）。
+- `chat_route_bindings` PK `(environment, tenant_id, entry, scenario)`，`engine ∈ {node,dify}`，发布/撤回都在 `revision` 上 CAS 原地改状态——UPDATE 一次重写整行指针（engine/agent_id/version_no/app_id/workflow_id/workflow_key_ref/node_config_file/state）且 `AND revision=?` 谓词 + rowcount 检查，写不中即 `ROUTE_BINDING_CONFLICT`；`expected_revision` 可缺省（新绑定用 0 表达"我认为是空的"）。**撤回留行**：幂等且 retracted 拒绝是 `CHAT_ROUTE_RETRACTED` 410，与从未配置的 404 可区分（见 [execution-delegation](../execution/execution-delegation.mdx)——删行会静默落回直读）。
 - `by_key = "scenario:env:tenant"` 供 issue 时查寻。
 - **恢复 = 对路由绑定调 `publish()` 指向旧 version_no**——绝不回写版本行；恢复正式版与还原草稿是两步。
 
 ## 发布顺序与审计
 
-- 顺序（`gateway_api.py` publish 路由）：**Dify 发布 → 路由 CAS 推进 → 审计**；`_advance_route_binding` 分写 `app_id`/`workflow_id`/`version`。Node 路由走 `node_publication.advance`（route CAS + retracted guard + revision guard；冲突类刻意"保持当前已发布"）。
+- 顺序（`gateway_api.py` publish 路由）：**Dify 发布 → 路由 CAS 推进 → 审计**；`_advance_route_binding` 分写 `app_id`/`workflow_id`/`version` 三列身份，且只在 `outcome.workflow_id` 存在时推进——chat 应用无已发布 workflow，发布只冻结版本（bindings 文件/execution_environment 未配时整个 no-op）。Node 路由走 `node_publication.advance`（route CAS + retracted guard + revision guard；冲突类刻意"保持当前已发布"）。
 - `dify_app_registry` 在发布时 upsert `(tenant, entry)→(app_id, agent_name)`。
-- `publish_audit_ledger`（`gateway_store.py`）**append-only 且永不向发布路径抛错**；记录发起者身份（审计不是授权）。ADR-0188 的节点制品闸在工具合同变化时先挡 Gateway 部署（见 [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)）。
+- `publish_audit_ledger`（追加/读在 `gateway_store.py`，DDL 已并入 `gateway_schema.py`）**append-only 且永不向发布路径抛错**；记的是**尝试**不止成功——`refused`（带 `reason_code`：CONSUMER_FLOW_INVALID/Dify 码/`PUBLISH_GATE_*`）与 `unchanged` 同样入账；记录发起者身份（审计不是授权）。ADR-0188 的节点制品闸在工具合同变化时先挡 Gateway 部署（见 [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)）。
 
 ## 开场与快捷动作
 
 - `qa_rag.select_customer_agent`：**只服务开场消息/快捷动作路径**；只取 published（经 `live_version`）；被任何已发布快捷动作钉为目标的"推广"agent 被排除在普通 QA 之外（设计如此，静默排除）。`agent_name` 来自注册表把选择变成查表，`None` 保留注册表前的"最新发布"回落；store 失败 → None → 零阶路径。
 - `shortcut_lifecycle.py`：`(tenant, business_entry, code)` 身份；同 draft→published→disabled 生命周期；`BANNER_KIND="banner"` vs 动作类；**`jump_path` 跳转动作永远到不了助手入口**；prompt 动作才提交问题；`requires_order` → `CLARIFY_ORDER_REQUIRED`，入口错 → `CLARIFY_WRONG_ENTRY`；内部平台与租户范围分开；文案缺口是确定性 CI 闸。
 - `agent_debug.py`：发布前检查（知识绑定/解析/可用性）；`agent_manifest.py` `EnvironmentManifest` 装载+对账。
+- 表结构权威在 `gateway_schema.py`（ADR-0244）：本页全部表（agents/versions/shortcuts/bindings/audit）的 DDL 只在那里声明一次；构造任一 store 调 `ensure(path)` 物化全部 28 张表（`user_version` 记版，v0 库单事务原子升级），`startup()` 同版本也全检、漂移拒 boot。运维面 `aiops-admin schema check|migrate`、`rehearse()`；`MappingStore` 例外。
 
 ## Canonical anchors
 

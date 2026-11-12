@@ -1,5 +1,5 @@
 ---
-description: "gateway.db SQLite 纪律：gateway_db LEASE/SINGLE_STATEMENT profile、initialize 先 WAL 后单事务、迁移陷阱、recover_interrupted_jobs 只在 boot path、async_job_lifecycle 三终态、retention 永不撤销已交付结果、两本运行账词汇"
+description: "gateway.db SQLite 纪律：gateway_db LEASE/SINGLE_STATEMENT/readonly profile、initialize WAL 有界重试后单事务、gateway_schema 唯一结构权威（ADR-0244、user_version 记版）、recover_interrupted_jobs 只在 boot path、async_job_lifecycle 三终态、retention 永不撤销已交付结果、两本运行账词汇"
 kind: architecture
 relations:
   related:
@@ -9,6 +9,7 @@ relations:
 code:
   paths:
     - src/aiops_diagnostics/gateway/gateway_db.py
+    - src/aiops_diagnostics/gateway/gateway_schema.py
     - src/aiops_diagnostics/gateway/gateway_store.py
     - src/aiops_diagnostics/common/async_job_lifecycle.py
 ---
@@ -22,11 +23,12 @@ code:
 - `LEASE`：`BEGIN IMMEDIATE` 在进入块时拿写锁——一切读-改-写、多语句、DDL 都走它。
 - `SINGLE_STATEMENT`：autocommit，仅当块可证明只写一条语句且没有读-改-写时使用。
 - 未知 profile 直接抛错（无静默回退）；共享参数 `timeout=5`、`foreign_keys=ON`、`busy_timeout=5000`。
-- `initialize()`：先在事务外切 WAL，再一个 LEASE 完成全部建表。ADR-0243：`executescript` 会隐式 COMMIT（这是它取代逐条 execute 时的陷阱）；`MappingStore/mappings.db` 仍是唯一例外；统一 schema 权威未决（#1462）。
+- `initialize()`：先在事务外切 WAL——`journal_mode=WAL` 遇 SQLITE_BUSY 会绕过 busy_timeout 立即返回，故在共享 5s 期限内**只重试这一步**并校验返回值确为 `wal`——再一次 LEASE 完成全部建表。`connection(readonly=True)` 以 `?mode=ro` URI 开只读连接（readonly+write 抛 ValueError），`check`/`rehearse`/`clean_legacy` 探测走它。ADR-0243：`executescript` 会隐式 COMMIT（这是它取代逐条 execute 时的陷阱）；`MappingStore/mappings.db` 仍是唯一例外。
 
 ## 迁移与恢复
 
-- `gateway_store.py` (_initialize)：建表 + ALTER 迁移。**ALTER 绝不回填**；索引必须在 ALTER 之后建（顺序陷阱有注释钉住）。
+- `gateway_schema.py`（ADR-0244）是 28 张表的唯一结构权威：`TABLES`/`INDEXES`/`LEGACY_COLUMNS` 一份声明同时驱动 CREATE、白名单 `ADD COLUMN` 与结构校验，`PRAGMA user_version` 记版（0 = 前版本期 legacy，其它值 `SchemaError`）。`ensure()` 在**一次 `gateway_db.initialize` 写事务**内升级：锁内重读版本防多进程重复升级，校验失败整体回滚；补列全做完才建索引——「索引必须排在 ALTER 之后」的顺序陷阱改由内序结构性保证，不再靠注释钉住。**ALTER 绝不回填**。
+- `gateway_store.py` (_initialize)：只剩 `gateway_schema.ensure(self.path)` + 私文件保护；共用 gateway.db 的各 store 同样委托，per-store `_migrate_*` 已删净——结构变更唯一通道是改 `TABLES`/`LEGACY_COLUMNS` 并抬 `VERSION`。
 - `recover_interrupted_jobs`：把 queued/running 收敛到 `failed` + `*_INTERRUPTED_BY_RESTART`，**只走 boot path**（见 [gateway-runtime](gateway-runtime.mdx)）。每次写入仍走该表自己的更新路径，claim-guard 与 retention 照常生效；同时释放会话生成槽位（`ConversationStore.recover_interrupted_turns`）。
 
 ## 作业生命周期（async_job_lifecycle.py）
@@ -42,5 +44,6 @@ code:
 ## Canonical anchors
 
 - `src/aiops_diagnostics/gateway/gateway_db.py`（模块 docstring 即合同）
+- `src/aiops_diagnostics/gateway/gateway_schema.py`（ensure/startup/check、TABLES/LEGACY_COLUMNS）
 - `src/aiops_diagnostics/gateway/gateway_store.py` (_initialize, recover_interrupted_jobs)
 - `src/aiops_diagnostics/common/async_job_lifecycle.py` (JobProfile, expire_statements, converged)

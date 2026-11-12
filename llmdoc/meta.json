@@ -6,61 +6,61 @@
   },
   "documents": {
     "execution-model.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "gateway/gateway-runtime.mdx": {
-      "validatedRevision": "132e7ece681ce6e3cc09f3be1351dc95cedbbd3b"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "gateway/gateway-store.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "identity/identity-scope.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "execution/execution-delegation.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "execution/execution-node-contract.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "common/shared-primitives.mdx": {
-      "validatedRevision": "132e7ece681ce6e3cc09f3be1351dc95cedbbd3b"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "consumer/consumer-chat.mdx": {
-      "validatedRevision": "9ecd7bb5863fd4e3dff4c99685bf0352942bf251"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "operator/operator-chat.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "conversation/conversation-store.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "analytics/bounded-read-surfaces.mdx": {
       "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
     },
     "publication/publication-lifecycle.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "dify/dify-execution-publishing.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "dify/dify-console-access.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "dify/dify-self-service.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "knowledge/knowledge-plane.mdx": {
       "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
     },
     "deployment/delivery-and-hosts.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     },
     "governance/governance-afk.mdx": {
       "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
     },
     "governance/test-architecture.mdx": {
-      "validatedRevision": "e5e952e179b0b2049780853fccdc1e6507fd3914"
+      "validatedRevision": "ff3a355c660c45586408816141eb37576bdf872d"
     }
   },
   "convergence": {

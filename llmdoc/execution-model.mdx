@@ -7,6 +7,7 @@ code:
     - AGENTS.md
     - src/aiops_diagnostics/identity/data_scope_rule.py
     - src/aiops_diagnostics/execution/run_deliverability.py
+    - src/aiops_diagnostics/gateway/gateway_schema.py
     - src/aiops_diagnostics/operator/operator_tools.json
 ---
 
@@ -27,11 +28,13 @@ code:
 
 - **身份只来自凭据**：请求体和自报头永远不能扩大身份或范围；节点回调体是空 strict 模型，多一个字段即 422。凭据不进入 ScopeContext、指纹、审计摘要或报错。
 - **fail closed 有方向**：缺配置 → 组件不构造（不是放行）；授权源不可用 → 拒绝（不是 500 也不是绕过）；范围解析失败 → 空集，**绝不**回退到全租户或 self——同一笔订单上这两个答案相反。
-- **single-authority 惯用法**：每条跨域规则只存在一份实现（`entry_data_scope`、`is_operator_entry`、订单可见性、订单号语法、回环规则、存储时间、release 判定、deliverability）。要防的失效是两份副本漂移且漂移方向总是放宽。改任何一条先找它的唯一实现，不要在调用方复制。
+- **single-authority 惯用法**：每条跨域规则只存在一份实现（`entry_data_scope`、`is_operator_entry`、订单可见性、订单号语法、回环规则、存储时间、release 判定、deliverability、`gateway_schema` 受管表结构）。要防的失效是两份副本漂移且漂移方向总是放宽。改任何一条先找它的唯一实现，不要在调用方复制。
 - **180s**：`agent_runs`、`chat_dify_runs`、`chat_data_grants` 三本账共享同一寿命；`run_deliverability.deliverable()` 是"结果能否交付"的唯一判定（曾有两张表各自算 TTL 导致过期内容被交付）。
 - **失败用语义码不用字符串** 跨边界传递；404 同时覆盖"不存在"和"不是你的"，不泄漏存在性。
 - **交付前再验证**：任何交出业务数据的路径，在阻塞式外部授权之后、返回之前都要重读记录/绑定/范围/grant——包括缓存与快照回放（回放也是交数据）。撤回（retract）吊销凭据并把运行钉为终态，但绝不删行——"已停止"必须与"从未配置"可区分。
 - **配置即合同**：`SETTING_SOURCES` 是设置读取位置的唯一表；`validate()` 把所有半配置对挡在启动期；"看起来配置了但永远 401"在运维上与未配置无法区分。
+- **取到授权证据后失败 ≠ 拒付**（ADR-0248）：run 持有授权证据后，复核未过或模型再失败时交付 `evidence_only` 快照——本轮授权记录+「诊断未完成」，不盲重派；无证据、取消/撤权、取证据前的失败仍拒绝。
+- **存储结构单点声明**（ADR-0244）：`gateway.gateway_schema.TABLES` 声明全部 28 张受管表；`startup()`（ensure+check）从 `GatewayRuntime.__init__` 与 `GatewayStore.ensure` 两个入口都跑；旧库在一个写事务内迁移后复核，未知结构拒绝；登录映射 `mappings.db` 独立不合库。
 
 ## 叙述与决定权威
 
@@ -43,5 +46,6 @@ code:
 
 - `src/aiops_diagnostics/identity/data_scope_rule.py`（fail-closed 方向的样板实现）
 - `src/aiops_diagnostics/execution/run_deliverability.py`（唯一交付判定）
+- `src/aiops_diagnostics/gateway/gateway_schema.py`（28 张受管表的单点声明）
 - `src/aiops_diagnostics/operator/operator_tools.json`（只读边界的执行点：GET-only）
 - `docs/system-architecture.md`、`AGENTS.md`

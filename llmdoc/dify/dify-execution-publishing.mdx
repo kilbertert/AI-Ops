@@ -20,6 +20,7 @@ code:
     - src/aiops_diagnostics/dify/dify_chat_workflow.py
     - src/aiops_diagnostics/dify/dify_debug_identity.py
     - src/aiops_diagnostics/execution/chat_route_bindings.py
+    - src/aiops_diagnostics/gateway/gateway_schema.py
     - ops/dify-exposure-registry.md
 ---
 
@@ -29,7 +30,7 @@ code:
 
 ## 注册表（app_id 是我们的数据）
 
-- `dify_app_registry.py`：`(tenant, business_entry) → app_id`。Dify 没有租户概念，绑定是我们的数据；**一旦有任何行配置就 fail-closed**——未映射的 `(tenant,entry)` 选中为空（`is_configured`）。由 `aiops-admin reconcile` 按 `[[dify_apps]]` manifest 写入（声明+评审+收敛）。
+- `dify_app_registry.py`：`(tenant, business_entry) → app_id`。Dify 没有租户概念，绑定是我们的数据；**一旦有任何行配置就 fail-closed**——未映射的 `(tenant,entry)` 选中为空（`is_configured`）。由 `aiops-admin reconcile` 按 `[[dify_apps]]` manifest 写入（声明+评审+收敛），但 reconcile **不是唯一写入方**：`publish()` 在带 `source_agent_name` 时于同一事务 upsert（自 #1147）。
 - 请求只接受已注册 `app_id`；裸 prompt 和调用方给的工具白名单都不收——DSL 里工具条目带的是 provider UUID，只有网关的 `partition_aiops_tools` 能翻译（ADR-0027）；`prompt`(+`allowed_tools`) 与 `app_id` 必须恰好给一个，都给/都不给即拒绝。
 - `dify_debug_identity.py`：调试身份=固定测试租户+子集；未授权=404，与未注册同答（不泄漏存在性）。环境是部署身份，请求带 env = 400。
 
@@ -42,13 +43,15 @@ code:
 - 试用走**同一条执行路径**换草稿值，不是第二引擎（ADR-0022）；护栏（白名单 fail-closed、证据日志、`max_turns=8`/`max_tool_calls=16` 预算）是继承的不是重实现。
 - `dify_trial.py`：`build_trial_scope` 共享 Dify/Java 试用合同；`-1` 平台哨兵="没有可用身份"**不是**"看全部"；范围不可解析=空集 fail-closed，绝不回落 self；身份不成立时回落调试租户（ADR-0028）。
 - `dify_workflow_trial.py`：冻结候选试用——把冻结 DSL 导入为**临时 app**，发布其 workflow，重新导出并核对**内容哈希==冻结草稿**，签发一次性 grant，跑，`finally` 删临时 app。不产生 agent 版本、不写注册表、不动路由，只留 `kind='trial'` 作业行+证据。
+- bridge 侧渲染试用报告（`dify_console_publish.py::_trial_report_text`）对 `callback_version == 6` 的 summary **逐字透传**——绕过 root_cause 合并与 `MAX_TRIAL_RESULT_TEXT` 截断：该版事实已逐行有界，再合并/截断只会损坏它。
 
 ## 运行账与 SSE
 
-- `chat_dify_runs`（`dify_run_store.py`）是独立表——node 形状的列（`expected_node_id`、`exec_config_state`）会对没有节点的 run 说谎；Dify 运行保留 app/workflow/run/task 身份与 grant 哈希。成功要求**同轮次**取数快照存在（详见 [consumer-chat](../consumer/consumer-chat.mdx)）。
+- `chat_dify_runs`（`dify_run_store.py`）是独立表——node 形状的列（`expected_node_id`、`exec_config_state`）会对没有节点的 run 说谎；Dify 运行保留 app/workflow/run/task 身份与 grant id（`cdg_` 随机 id，引用 `chat_data_grants` 行；哈希 `token_hash` 只在 grants 表上）。成功要求**同轮次**取数快照存在（详见 [consumer-chat](../consumer/consumer-chat.mdx)）。
 - `dify_chat_workflow.py`/`dify_chatflow.py`：Service-API 执行 + SSE 身份连续性——每个事件的 `workflow_run_id/task_id/conversation_id/message_id` 必须匹配 `workflow_started`；`message_end`+`workflow_finished` 都要到；上游响应体**永不转发**（`DIFY_UNAVAILABLE`）——可能含内部地址/凭据片段。service key 从 0600 文件读；取消按 `task_id`。
 - **成功 = 三个事实同时成立**：跑的 workflow==注册 id、同轮取数快照存在、输出适配且 order_no 匹配——"Dify 返回 200"不是成功（ADR-0124 §3）。
 - `scope_fingerprint` 门控读：提交与回读必须用同一 scope 构造器，否则试用 id 永久不可读（真 bug，现有测试钉住异指纹上下文）。
+- 表结构权威在 `gateway_schema.py`（ADR-0244）：本页全部表（registry/runs/bindings/grants）的 DDL 只在那里声明一次；构造任一 store 调 `ensure(path)` 物化全部 28 张表并查漂移，`startup()` 同版本也全检、漂移拒 boot。运维面 `aiops-admin schema check|migrate`、`rehearse()`。
 
 ## 发布与路由
 

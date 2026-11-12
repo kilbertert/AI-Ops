@@ -19,6 +19,7 @@ code:
     - src/aiops_diagnostics/execution/run_deliverability.py
     - src/aiops_diagnostics/execution/operator_run_logs.py
     - src/aiops_diagnostics/gateway/gateway_api.py
+    - src/aiops_diagnostics/gateway/gateway_schema.py
 ---
 
 # 执行委派（agent_runs ↔ Java 节点）
@@ -30,11 +31,13 @@ code:
 
 ## 运行生命周期
 
-- `issue`：冻结 scope_json + environment + binding + expected_node + TTL（180s，`RUN_TTL_SECONDS`）。
+- `issue`：冻结 scope_json + environment + binding + expected_node + language + TTL（180s，`RUN_TTL_SECONDS`）。
+- `record_trace`：事件白名单 `{phase,status,at,elapsed_ms,duration_ms,tool,detail}`；`detail` 只承载机器码（拒绝码/复核 reason/终止码），存层截 64 字符。
 - `claim`：原子条件 UPDATE；`get` 在读事务内收敛过期。
 - `confirm_exec_config`：比较/记录/释放在一个写事务内；不一致 → failed + `exec_config_drift`。
 - `complete`/`complete_loop`：11 种终态判定；`fail()` 只能从 `issued|running`（首写获胜）；`refuse()` 只做 `succeeded→failed`（交付后复核失败用）；`absorb()` 把迟到交付深合并进 `snapshot_json` 并标 `superseded:true`——收到≠交付，不动 state/reason（ADR-0223）。
 - `run_deliverability.deliverable()`：`succeeded AND NOT expired` 是"结果能否交付"的唯一判定——两本账曾各自算 TTL 导致过期内容被交付（见 [execution-model](../execution-model.mdx)）。
+- schema 权威集中在 `gateway_schema.ensure()`（ADR-0244）：`agent_runs`/`chat_data_grants`/`chat_route_bindings`/`node_capabilities` 等 store 不再各自建表。
 
 ## 回调两级闸（ADR-0222/0223）
 
@@ -60,7 +63,7 @@ code:
 
 `/v1/internal/*`：capabilities 上报、delegated/claim charging-status（同一授权+同一读取）、release_candidate/deny_release、node_execution_config（发 manifest 前重验节点+env+可见性+授权后重读+身份匹配）、`operator_tool_authorization`（按 run 自己的 `operation` 分流 operator/consumer 授权，ADR-0185——节点分不清在取谁的数据）、`consumer_tool_proxy`/`operator_cpms_proxy`（节点拿网关签发的 grant 回调，公司令牌永不出网关，白名单=所授请求目标）、`consumer_knowledge_context`、`dify_chat_read`（回放缓存前先查 binding 仍有效——回放也是交数据）。`NO_STORE_PATH_PREFIXES`：按人授权的结果不可缓存，错误响应也一样（否则 403 体会被按订单号 URL 缓存）。`dify_workspace_credential` 走内部令牌闸，未配 secret 整路由 404，跨环境请求 400。
 
-`execution/operator_run_logs.py` 是**账本投影**（scope_fingerprint+caller+tenant+operation 过滤，永不复用含业务摘要的 receipt/snapshot）；同名的 `dify/operator_run_logs.py` 是管理面 FastAPI 入口，两层别混。
+`execution/operator_run_logs.py` 是**账本投影**：授权过滤不变（publication_app_id+scope_fingerprint+operation+caller.b_user_id+effective_tenant_id），ADR-0249 起 receipt/snapshot 的**白名单字段**参与投影——`environment`、双 node_id、`agent_version_observed`/`gap`、claim/complete/expires 时间、`result_sha256`（对账用，不还原结果）、`delivery_mode`、`answer_review.reason`（集合外回退 `review_not_accepted`）、`history_run_count`、`trial`（权威判据 = chat_binding 的 `operator-trial:` 前缀，绑定串本身不投影）、`evidence_tools`（只投声明集内工具名 ≤16——死 run 吸收路径的键名来自节点回调，非本进程校验常量）、`reason` ≤128 只机器码、`order_no`、`language`；`question` 用同一只读连接按 qa_id+scope_fingerprint join 同库 `assistant_questions`（不走 `get_assistant_question`——它顺带过期收敛，是写）。业务结果内容（答案正文、证据 data、工具参数、凭据、自由文本失败原文）仍不投影。同名的 `dify/operator_run_logs.py` 是管理面 FastAPI 入口，两层别混。
 
 ## Canonical anchors
 

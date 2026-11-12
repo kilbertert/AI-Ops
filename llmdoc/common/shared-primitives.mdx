@@ -1,5 +1,5 @@
 ---
-description: "共享原语速查：bounded_http 管线与拒绝分类、endpoint_policy 唯一回环规则、http_auth 内部 HMAC、private_files 0700/0600、scalar_rules 唯一时间权威、redaction 面、model_request 原因分类、order_reference 候选、i18n 清单与 answer_language 泄漏闸"
+description: "共享原语速查：bounded_http 管线与拒绝分类、endpoint_policy 唯一回环规则、http_auth 内部 HMAC、private_files 0700/0600、scalar_rules 唯一时间权威、redaction 面、model_request 原因分类、order_reference 候选、i18n 清单与 answer_language 泄漏闸、mall_database 跨库联读开关"
 kind: reference
 relations:
   related:
@@ -18,6 +18,7 @@ code:
     - src/aiops_diagnostics/common/answer_language.py
     - src/aiops_diagnostics/common/config.py
     - src/aiops_diagnostics/common/platform_paths.py
+    - src/aiops_diagnostics/data/sources.py
 ---
 
 # 共享原语速查
@@ -38,7 +39,7 @@ code:
 
 - `private_files.py`：`validate_private_directory`/`validate_private_file`（0700/0600、属主、禁 symlink）；`write_private_text`/`append_private_text`（mkstemp+降权原子写）；`PrivatePathError`。含 Windows ACL 助手。
 - `platform_paths.py`：`AIOPS_HOME`/`AIOPS_CONFIG_HOME`/`AIOPS_DATA_HOME` 覆盖；默认配置文件 = production.env。
-- `config.py`：`Settings.from_env/from_config`、providers registry（`_parse_providers`，含旧单 provider 回落）、`redacted()`（配置值的脱敏投影）、`selected_config_file`。
+- `config.py`：`Settings.from_env/from_config`、providers registry（`_parse_providers`，含旧单 provider 回落）、`redacted()`（配置值的脱敏投影）、`selected_config_file`。`MySQLSettings.mall_database`（`AIOPS_MYSQL_MALL_DATABASE`，默认 `qumall_mall`，空值=本环境无 mall 侧证据）：mall 是同实例独立 schema，`MySQLSource.mall_billing_records` 经它做租户+认领人绑定的跨库只读联查（联查合同归 [bounded-read-surfaces](../analytics/bounded-read-surfaces.mdx)）。
 
 ## 标量与时间
 
@@ -49,8 +50,8 @@ code:
 
 ## 语言
 
-- `i18n.py`：`LANGUAGES` 元组是语言清单的唯一权威；`LanguageSpec(tag,name,is_chinese,fallback)`——`is_chinese` 是语言的属性而非"是否默认"（zh-Hant 会打破这个等式）；`fallback` 是唯一复制表回退（中文脚本回 zh，其他回 en）。语言永远不扩大权限/路由/manifest。
-- `answer_language.py`：输出侧泄漏闸——能证"没漏中文"，证不了翻译正确；标题豁免只限媒体/参考块上名字形状的标题；输入合同是 `AnswerSurface` 或 `str`，其他类型 `TypeError`（形状错误不能静默换判定规则）。
+- `i18n.py`：`LANGUAGES` 元组是语言清单的唯一权威；`LanguageSpec(tag,name,is_chinese,fallback)`——`is_chinese` 是语言的属性而非"是否默认"（zh-Hant 会打破这个等式）；`fallback` 是每语言唯一声明的回退方向（zh-Hant 与 en 都回 zh，其余非中文语言回 en——链根是 zh 不是 en）。语言永远不扩大权限/路由/manifest。
+- `answer_language.py`：输出侧泄漏闸——能证"没漏中文"，证不了翻译正确；标题豁免按来源真相不看形状：传入 `retrieved_titles` 时，资产类标题要既像资源名又在集内、其他块标题在集内即豁免；仅当未传 provenance 才退回旧形状规则（空集=不豁免任何标题）；输入合同是 `AnswerSurface` 或 `str`，其他类型 `TypeError`（形状错误不能静默换判定规则）。
 
 ## Canonical anchors
 

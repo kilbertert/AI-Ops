@@ -1,5 +1,5 @@
 ---
-description: "消费者客服链（callback_version=6 硬闸）：Dify 官方 Agent 只提工具调用、五类资源+原子预算 8、grant 六元组复核+取数前后重验、SSE 身份四元组与最终回答抽取规则、发布顺序先撤 grant 后 completed、conversation_id 续会话、试用范围限制、旧 callback<6 冻结"
+description: "消费者客服链（callback_version=6 硬闸）：Dify 官方 Agent 只提工具调用、五类资源+原子预算 8、grant 六元组复核+取数前后重验、SSE 身份四元组与最终回答抽取规则、订单事实程序呈现（模型正文不交付）、发布顺序先撤 grant 后 completed、conversation_id 续会话、试用范围限制、旧 callback<6 冻结"
 kind: architecture
 relations:
   requires:
@@ -14,6 +14,8 @@ code:
     - src/aiops_diagnostics/consumer/consumer_chat_service.py
     - src/aiops_diagnostics/consumer/consumer_agent_flow.py
     - src/aiops_diagnostics/consumer/consumer_billing.py
+    - src/aiops_diagnostics/consumer/consumer_order_evidence.py
+    - src/aiops_diagnostics/consumer/consumer_mall_billing.py
     - tools/content/upgrade_consumer_flow.py
     - src/aiops_diagnostics/consumer/consumer_tool_grants.py
     - src/aiops_diagnostics/consumer/consumer_sites.py
@@ -46,7 +48,8 @@ code:
 
 - 身份四元组 `(workflow_run_id, task_id, conversation_id, message_id)` 在 `workflow_started` 绑死后每个事件必须匹配；`workflow_id` 必须等于请求的；`message_end` 与 `workflow_finished` 都要到齐（`dify_chatflow.py`）。任一漂移 → `DIFY_WORKFLOW_*`/`DIFY_CHATFLOW_INVALID`，半截正文绝不交付。
 - 最终回答抽取：最后一个 `node_id=="answer"` 且 `parent_id is None`、`status=="success"`、`tool_responses==[]`、`llm_response` 非空的 `agent_log` 事件；`node_id=="start"` 会重置候选。答案 ≤32,000 字符。
-- consumer `final_answer` ≤8,000；所有工具调用必须有结果；来源按 `retrieved_reference_id` 去重；订单号在脱敏中保留。
+- consumer `final_answer` 交付组装块而非模型正文（ADR-0247）：任一工具记录未完成 → `CHATFLOW_EVIDENCE_UNAVAILABLE`；`SAFETY`/`HUMAN` 正则（作用于 question）与知识 `unavailable/limited/refused`、`not_found/no_result` 各回落对应 `fallback()`；`retrieval_status="found"` 仅当存在 reference 块。
+- 块=订单事实+每来源摘录+support 标注块。事实块由 `consumer_order_evidence.render()` 程序生成：只渲染 `status=="found"`、按 `(tool, order_no)` 键去重（后写覆盖）、≤7,400 字符整行省略；订单号原样发出，仅 `station_name` 脱敏。知识来源按 `retrieved_reference_id` 去重（仅 found 调用），每段摘录 ≤7,600 字符按行/词截断加 `quote_omitted`，且不再 `preserve` 订单号——摘录内长数字号段会被脱敏；多来源合计可超 8,000。
 - Dify `user` = `sha256(scope_fingerprint:binding.key:workflow_id)`；`bind_workflow`/`bind_message` 拒绝身份漂移。多轮续聊用 **Gateway 自己的 `conversation_id`**，不是 Dify 的（旧链才用 `upstream_conversation_id`+绑定指纹相等）。
 
 ## 发布顺序与失败语义
@@ -61,25 +64,34 @@ code:
 
 `billing`复用同次订单详情GET：保留总额/支付/退款，并在v6增加摘要、费用构成、分时记录与缺项说明；
 旧callback1–5经`include_composition=False`保持七键投影。取数前后授权与8次预算不变。
+`mall_payment`是独立第二来源：`sources.MySQLSource.mall_billing_records`一致快照读商城父/子/明细/支付，
+`gateway_api._consumer_mall_payment`任何失败降级为`read_failed`证据而非打断账务；`consumer_mall_billing`
+只做同名读数相等判定（match/mismatch/unknown），不计算差额。
 金额经账务专用Decimal解码后转字符串，非法时间只标无效，巨指数受控不可用；分时最多24行并报遗漏数。
 `decode_billing_number`仅是账务JSON的`parse_float`异常映射回调。原始日期/分时时钟在scalar台账中单独登记，
 保留来源偏移或naive，不能用会补UTC的`parse_stored_time`替代；格式与日历校验仍由`_source_time`执行。
 币种缺失/冲突不猜；创建时间不是计费开始，分时电量可能费用反推，feeRate不保证每kWh，不能据此判断计费正确。
-v5候选的`upgrade_consumer_flow.py --order-composition`移除唯一完整已知v1–v5订单规则，保留BASE和运营文本，
-但精确撤销所有已知“只报告工具原值及可核对的算术差额”许可，再将v5放到全文末尾并保持幂等；已发布v2/v3/v4完整字节保留为迁移输入。事实约束优先于安抚：缺币种时开头说明且全文金额无币种单位，null不称未收费，
+现役块标记`aiops-order-composition:6`；`upgrade_consumer_flow.py --order-composition`只接受现役v6三节点图，
+剥除恰好一个已知V1–V6块（未知/重复即拒绝），并精确替换两条旧句——“只报告工具原值及可核对的算术差额”
+改为同名字段原值并列不计算差额，“安抚用户”句改为证据不足不得承诺正常——再将V6追加到全文末尾
+（≤16,000字符、幂等）；V1–V5常量仅作为迁移输入留在`consumer_agent_flow.py`。
+事实约束优先于安抚：缺币种时开头说明且全文金额无币种单位，null不称未收费，
 只列来源记录，不自主合计/税基/差额归因或作未核验“无异常”结论；迁移测试不证明自然回答语义。
 开头只概括已取得的分项并点出缺项；有null、非空missing/invalid、币种缺失或截断时不保证齐全或“放心核对”。
 规则先冻结并在授权草稿预览后再发版，草稿成功不代表正式发布或全面业务验收。
-v4要求各语言逐字段核对金额和缺项：0/0.00是已提供零收费，不能因occupyFee缺失把parkFee零值合并为缺失。
-1.7.5的v5候选不改金额reader：只列同名字段原值，禁止差额、合计和近似舍入；totalAmount是订单费用记录，payAmount是支付金额记录。
-状态完成只表示当前订单状态，未取得过程证据不等于无异常或后台没保存日志；候选尚未发布，模型回放不证明确定性语义保证。
+v4起要求各语言逐字段核对金额和缺项：0/0.00是已提供零收费，不能因occupyFee缺失把parkFee零值合并为缺失。
+金额reader只列同名字段原值，禁止差额、合计和近似舍入；totalAmount是订单费用记录，payAmount是支付金额记录。
+状态完成只表示当前订单状态，未取得过程证据不等于无异常或后台没保存日志；模型回放不证明确定性语义保证。
+V6起模型自由正文不作为订单事实交付——事实由`consumer_order_evidence.render()`生成，模型职责只剩选单与工具调用。
 manage桥不转发Accept-Language，英文预览用既有Gateway受管trial入口，方法见订单构成QA，凭据只在受控进程运行时读取。
-未知/重复块拒绝，不能只部署Gateway却保留旧图提示。依据与细节见`docs/adr/0246-consumer-order-composition.md`
-及`docs/agents/consumer-wf01/order-composition-qa.md`。
+未知/重复块拒绝，不能只部署Gateway却保留旧图提示。依据与细节见`docs/adr/0246-consumer-order-composition.md`、
+`docs/adr/0247-consumer-order-facts-rendered.md`及`docs/agents/consumer-wf01/order-composition-qa.md`。
 
 ## Canonical anchors
 
-- `src/aiops_diagnostics/consumer/consumer_agent.py`（callback 合同、历史组装、资源分派、final_answer 规则）
+- `src/aiops_diagnostics/consumer/consumer_agent.py`（callback 合同、历史组装、资源分派、final_answer 组装块）
+- `src/aiops_diagnostics/consumer/consumer_order_evidence.py`（订单事实块 render：程序呈现、7,400 界）
+- `src/aiops_diagnostics/consumer/consumer_mall_billing.py`（商城支付证据：读数相等判定）
 - `src/aiops_diagnostics/consumer/consumer_chat_service.py`（start/grant/吊销/发布顺序/读回）
 - `src/aiops_diagnostics/dify/dify_chatflow.py`（SSE 身份四元组 + agent_final_node 抽取）
 - `src/aiops_diagnostics/dify/dify_run_store.py`（运行账、180s、原子预算）
