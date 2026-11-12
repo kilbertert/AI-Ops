@@ -313,15 +313,6 @@ def final_answer(raw, context, *, language="zh", question=""):
         or order_ids(context)
         or any(c["tool"] in {"orders", "billing", "status"} for c in calls)
     )
-    if (
-        consumer_knowledge.HUMAN.search(question)
-        and not support
-        and not any(
-            c["tool"] in {"billing", "status", "orders"} and (c.get("result") or {}).get("status") == "found"
-            for c in calls
-        )
-    ):
-        return consumer_knowledge.fallback("human", language)
     answer = {
         "blocks": [{"kind": "text", "text": render(context, language)}] if order_context else [],
         "retrieval_status": "not_found",

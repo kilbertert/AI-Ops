@@ -307,4 +307,23 @@ def test_selected_order_does_not_hide_explicit_human_request_without_records():
     ctx = {"conversation": {"selected_order": "TEST-CHARGE-001"}, "calls": []}
     result = final_answer("wrong", ctx, question="请告诉我官方人工客服的联系入口，不要声称已经转接。")
     assert "官方客服入口" in result["blocks"][0]["text"]
-    assert "未取得可展示的订单记录" not in result["blocks"][0]["text"]
+    assert "未取得可展示的订单记录" in result["blocks"][0]["text"]
+    assert "如需人工帮助" in result["blocks"][0]["text"]
+
+
+def test_selected_order_support_does_not_override_outage_sources_or_negation():
+    c = context(("knowledge", {"status": "unavailable"}))
+    assert (
+        final_answer("", c, question="Please connect me to a human agent", language="en")["retrieval_status"]
+        == "unavailable"
+    )
+    source = {"retrieved_reference_id": "r", "title": "Help", "content": "操作说明", "media": []}
+    c = context(("knowledge", {"status": "found", "sources": [source]}))
+    c["conversation"] = {"selected_order": "TEST-CHARGE-001"}
+    assert "操作说明" in str(final_answer("", c, question="人工客服和操作说明"))
+    text = final_answer(
+        "",
+        {"conversation": {"selected_order": "TEST-CHARGE-001"}, "calls": []},
+        question="不要转人工，查这笔订单",
+    )["blocks"][0]["text"]
+    assert "未取得" in text and "如需人工帮助" in text
