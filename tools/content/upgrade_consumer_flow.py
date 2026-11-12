@@ -285,7 +285,7 @@ def order_composition(source):
         flow.ORDER_COMPOSITION_INSTRUCTION_V2,
         flow.ORDER_COMPOSITION_INSTRUCTION_V3,
         flow.ORDER_COMPOSITION_INSTRUCTION_V4,
-        flow.ORDER_COMPOSITION_INSTRUCTION_V5,
+        flow.ORDER_COMPOSITION_INSTRUCTION_V6,
         flow.ORDER_COMPOSITION_INSTRUCTION,
     )
     if sum(text.count(block) for block in blocks) > 1:

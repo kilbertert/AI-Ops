@@ -11,6 +11,9 @@ def test_published_prompt_strips_only_the_known_runtime_suffix():
     from aiops_diagnostics.operator.operator_agent import INSTRUCTIONS
 
     assert business_prompt("业务SOP\n" + INSTRUCTIONS) == "业务SOP"
+    from aiops_diagnostics.operator.operator_agent import INSTRUCTIONS_WITH_CURRENCY_GUARD
+
+    assert business_prompt("业务SOP\n" + INSTRUCTIONS_WITH_CURRENCY_GUARD) == "业务SOP"
     assert business_prompt("业务SOP") == "业务SOP"
 
 

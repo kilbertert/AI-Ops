@@ -84,7 +84,7 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
         )
         instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION_V5
     elif version == 6:
-        instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION
+        instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION_V6
     original = copy.deepcopy(source)
     updated = upgrade.order_composition(source)
     assert source == original
@@ -100,7 +100,7 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
     assert updated == expected
     assert updated["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"][
         "value"
-    ].endswith("<!-- /aiops-order-composition:6 -->\n")
+    ].endswith("<!-- /aiops-order-composition:5 -->\n")
     assert publish(updated["workflow"])["callback_version"] == 6
     for invalid in (
         flow.BASE_INSTRUCTION.replace("8次", "9次").replace("你是充电客服", "你是客服"),
@@ -111,6 +111,7 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V3 * 2,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V4 * 2,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V5 * 2,
+        flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V6 * 2,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V4 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V3 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V2 + flow.ORDER_COMPOSITION_INSTRUCTION,
