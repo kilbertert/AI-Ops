@@ -1,5 +1,5 @@
 ---
-description: "Gateway 启动装配与运行边界：serve() 启动顺序与隔离闸、SETTING_SOURCES 配置来源表与 missing-only-fallback、validate() 半配置对、部署身份不归一化、root-handler 日志修复、public_openapi 白名单、admin_cli、tdengine 只读代理边界"
+description: "Gateway 启动装配与运行边界：serve() 启动顺序与隔离闸、gateway_schema.startup 闸（同版漂移拒 boot）、SETTING_SOURCES 配置来源表与 missing-only-fallback、validate() 半配置对、部署身份不归一化、root-handler 日志修复、localized_copy_language 六端点语言日志、public_openapi 白名单、admin_cli、tdengine 只读代理边界"
 kind: architecture
 relations:
   related:
@@ -12,6 +12,7 @@ code:
     - src/aiops_diagnostics/gateway/isolation_guard.py
     - src/aiops_diagnostics/gateway/gateway_api.py
     - src/aiops_diagnostics/gateway/gateway_config.py
+    - src/aiops_diagnostics/gateway/gateway_schema.py
     - src/aiops_diagnostics/gateway/deployment_environment.py
     - src/aiops_diagnostics/gateway/gateway_logging.py
     - src/aiops_diagnostics/gateway/public_openapi.py
@@ -30,21 +31,22 @@ code:
 `src/aiops_diagnostics/gateway_server.py` (serve)：isolation_guard → `Settings.from_env()` → `validate()` → `require_deployment_identity` → `configure_gateway_logging` → `create_gateway_app` → uvicorn（`log_config=None`、`proxy_headers=False`、`server_header=False`）。
 
 - 隔离检查排第一且仅当 `M2LIVE_ISOLATION_ROOT` 设置时生效；拒绝即退出码 2。ADR-0039：隔离必须是产品启动路径内的闸——一个继承生产 `AIOPS_GATEWAY_DATABASE_FILE` 的试用实例会写穿生产 gateway.db，"业务只读"不等于"无副作用"。
-- `create_gateway_app` 内（`gateway/gateway_api.py`）：校验 → 建 store → **`recover_interrupted_jobs()` 必须在 serving 之前**（不能放 `__init__`：短寿命 CLI 也开同一个库，会把活任务杀掉）→ resolver/authorizer 装配，各处注入失败一律 empty/fail-closed，绝不让"可选增强"变成放行。
+- `create_gateway_app` 内（`gateway/gateway_api.py`）：校验 → 建 store → `gateway_schema.startup` + `KeyOperations.clean_legacy()`（旧格式误存 token 按数据探测原位剥除——老程序回滚会再写，schema 版本代替不了探测）→ **`recover_interrupted_jobs()` 必须在 serving 之前**（不能放 `__init__`：短寿命 CLI 也开同一个库，会把活任务杀掉）→ resolver/authorizer 装配，各处注入失败一律 empty/fail-closed，绝不让"可选增强"变成放行。非 HTTP 装配面 `GatewayRuntime.__init__` 同样先过 schema 闸。
 
 ## 配置合同
 
 - `gateway/gateway_config.py` (SETTING_SOURCES)：每个字段声明 env 名、是否可读文件、类型、默认——**"一个设置从哪里读"的唯一权威表**。`missing`-only-fallback：文件值仅在进程 env 缺省时补位；`KEY=`（空串）就是一个值；`file=False` 的字段永不读 production.env。显式点名却不存在的配置文件 = 启动失败。
-- `validate()` 是一列半配置对，每条都有理由注释：成对出现的 URL+key、互斥通道（`company_jwt_key` XOR `check_token_url`）、source_key 要求至少一条校验通道且 ≥16 字符、bindings/manifest 在启动期全量校验。理由：半配置在运维上的表现是"永远 401"，与未配置无法区分，所以挡在启动期。
+- `validate()` 最先是 schema 闸：对已存在的 `database_file`/`chat_route_bindings_file` 各跑 `gateway_schema.startup()`——**同版本漂移也拒绝启动**，bindings 独立成文件时受同一份结构合同管；随后才是一列半配置对，每条都有理由注释：成对出现的 URL+key、互斥通道（`company_jwt_key` XOR `check_token_url`）、source_key 要求至少一条校验通道且 ≥16 字符、bindings/manifest 在启动期全量校验。理由：半配置在运维上的表现是"永远 401"，与未配置无法区分，所以挡在启动期。
 - `deployment_environment.py`：`AIOPS_GATEWAY_ENVIRONMENT` 是部署身份，serve 时必填；只做合法性校验**不做归一化**（`prod.41`/`prod`/`41` 是三个不同身份）；workspace 查寻由部署身份派生环境，绝不从请求取（请求带 env = 400，跨环境查寻才是真正的越权路径）。ADR-0059。
-- `.env.example` 是 SETTING_SOURCES 合同面向运维的复述，逐键对应有测试钉住。
+- `.env.example` 是 SETTING_SOURCES 合同面向运维的复述，逐键对应有测试钉住（镜像测试只收 `AIOPS_GATEWAY_*` 前缀键；`AIOPS_MYSQL_MALL_DATABASE` 这类非前缀键只有文件内断言——置空 = 该环境无商城侧证据）。
 
 ## 运行边界与观测
 
 - 日志（`gateway/gateway_logging.py`）：uvicorn 的 dictConfig 只给 `uvicorn*` logger 挂 handler，root 无 handler——`aiops.*` 的 INFO 曾全部丢失。修复 = 装 root handler 并配 `log_config=None`，两者是配对，单独改一边都会复发。
 - `public_openapi.py`：公开规范由显式 `OPERATIONS` 白名单生成，新内部路由不会自动出现；方法是边界的一部分（GET /shortcuts 是用户面，POST 是管理面）。
 - `request_observation.py`：每个候选请求恰好一行 INFO、不落库（第二个分母会漂移）；身份解析之前绝不记录；上报永远不能让响应失败。`metrics_store.py` 的 `agent_run_metrics` 按构造脱敏。
-- `admin_cli.py`：reconcile/onboard-tenant/credential 轮换/ensure-workspace/pull-dify 等特权面；迁移类命令构造合成 ASSERTED ScopeContext，不走请求身份。
+- `localized_copy_language` 挂在恰好六个确定性文案出口（`/v1/faq/recommendations`、`/v1/faq/catalog`、`/v1/faq/answer`、`/v1/assistant/starters`、`/v1/shortcuts`、`/v1/banner`）：每请求一行 INFO 记 path + 逐字 `Accept-Language`（截 160 字符只为限长，运输层禁 CRLF 伪造不了额外行）+ resolved tag。刻意不并入 `request_language`——chat/trial/analysis 的语言已持久化，文案端点不留痕时客户端发错头无从定位。
+- `admin_cli.py`：reconcile/onboard-tenant/credential 轮换/ensure-workspace/pull-dify/`schema check|migrate --db`（check 只读报告、migrate 先 ensure 再 check；拒绝统一输出 `{"error":"SCHEMA_REFUSED","type":<类名>}`，不外泄可能携带用户 SQL 的原始错误）等特权面；迁移类命令构造合成 ASSERTED ScopeContext，不走请求身份。
 - `tdengine_proxy.py`：独立部署的只读遥测代理——监听和上游都限回环（`is_loopback_host` 唯一回环规则）、仅 `iot` 库、仅 POST `/rest/sql/iot`、SQL 白名单（`SHOW STABLES` 或精确 `GUN_QUERY`）、≤168h、≤2000 行、无日志。`GUN_COLUMNS` 与 `data/sources.py` 共享同一份字节——两个独立部署，漂移会被在线代理拒绝，所以共享不复制。
 
 消费者账务回调接线由`_authorized_consumer_snapshot`区分合同：仅v6 agent回调传
@@ -55,6 +57,7 @@ code:
 
 - `src/aiops_diagnostics/gateway_server.py` (serve)
 - `src/aiops_diagnostics/gateway/gateway_config.py` (SETTING_SOURCES, validate, _resolve_source)
+- `src/aiops_diagnostics/gateway/gateway_schema.py` (startup)
 - `src/aiops_diagnostics/gateway/isolation_guard.py` (assert_isolated)
 - `src/aiops_diagnostics/gateway/gateway_api.py` (create_gateway_app)
 - `src/aiops_diagnostics/tdengine_proxy.py`

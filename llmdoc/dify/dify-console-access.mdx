@@ -21,6 +21,7 @@ code:
     - src/aiops_diagnostics/dify/dify_workspace_directory.py
     - src/aiops_diagnostics/dify/dify_tenant_access.py
     - src/aiops_diagnostics/dify/dify_inner_api.py
+    - src/aiops_diagnostics/gateway/gateway_schema.py
     - ops/dify-console-bridge/README.md
     - ops/dify-login-proxy/README.md
     - ops/dify-inner-api/README.md
@@ -41,10 +42,11 @@ code:
 ## 工作区生命周期
 
 - 模型：`dify_workspaces(tenant_id, environment) → workspace_id + setup_state`——`(tenant,environment)` 二元组，因为两个 UPMS 能发出碰撞的 tenant_id（`environment` **不在**公司 JWT 里）。
-- `DifyWorkspaces.resolve` 返回 id 或**带码异常**（`UNRESOLVED`/`CREATING`/`FAILED`/`UNKNOWN`）——**绝不返回 `""`**：空 workspace_id = Dify 平台根 = 别人的工作区（ADR-0067）。码带下一步：UNRESOLVED→ensure-workspace；CREATING→重试；FAILED→重建；UNKNOWN→先对账别重建（Dify 没有删 workspace 的 API，重试会造永久孤儿，ADR-0068）。
+- `DifyWorkspaces.resolve` 返回 id 或**带码异常**（`UNRESOLVED`/`CREATING`/`FAILED`/`UNKNOWN`）——**绝不返回 `""`**：空 workspace_id = Dify 平台根 = 别人的工作区（ADR-0067）。码带下一步：UNRESOLVED→ensure-workspace；CREATING→重试；FAILED→重建；UNKNOWN→先对账别重建（Dify 没有删 workspace 的 API，重试会造永久孤儿，ADR-0068）。这四码是 `resolve` 的清单；第五码 `DIFY_WORKSPACE_AMBIGUOUS` 只在反向解析 `tenant_for_workspace` 多行命中与创建时名字对账抛出。
 - 创建 = 先认领后创建 + 租约 + 名字对账（0=安全、1=收养、>1=`AMBIGUOUS` 交人）；`ensure-workspace`（建壳）vs `ensure-ready`（插件+每工作区凭据+模板 DSL+**激活**它写的凭据——读回 `current_credential_name`，"凭据存在"≠"凭据激活"，ADR-0078 真事故）。模板 DSL 刻意不带 `model_config.model` 与 `dataset_configs`（每工作区的值还不存在）。
 - `inner_api`（`POST /inner/api/enterprise/workspace`+成员端点）是**唯一**建工作区路径——console API 没有；经逐连接 `docker inspect` 的回环转发器+SSH 隧道到达；隧道不是授权（`X-Inner-Api-Key` 仍必须）。`failed`（错误响应/拒连）与 `unknown`（超时/短读/200 无 id）按 `HttpFailure.cause` 类型分——重试 unknown 会造永久孤儿。
 - `dify_console_admin.py`：`ADMIN_API_KEY + X-WORKSPACE-ID` 以该工作区 owner 身份操作；插件安装是异步任务要轮询到 success；凭据由 Dify 实验（假 key → 400）；每工作区凭据（每租户 RSA key）必须分开。
+- 表结构权威在 `gateway_schema.py`（ADR-0244）：构造任一网关 store 调 `gateway_schema.ensure(path)` 一次物化全部 28 张表（`TABLES`/`INDEXES`/`LEGACY_COLUMNS`，`user_version` 记版），不再有 per-store 建表；`startup()` 同版本也全量校验、漂移即拒 boot。运维面 `aiops-admin schema check|migrate` 与 `rehearse()`；`MappingStore`（登录代理自己的库）例外。
 
 ## Bridge（BFF 人机分离）
 

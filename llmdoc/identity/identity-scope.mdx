@@ -54,7 +54,7 @@ code:
 ## 数据范围与可见性
 
 - `entry_data_scope`（`data_scope_rule.py`）四步是"入口+主体→数据范围"的唯一序列：(1) 仅 operator 入口否则 self；(2) 租户级账号 `type∈{-1,1}` → all；(3) `subject_unavailable` → self；(4) caller 供 site_ids → organ。任何不可用 → `organ` + `site_ids=()`——失败关闭到空集，**绝不**回落全租户或 self（两者对同一订单答案相反）。
-- `QueryScope`：tenant 恒定；`site_ids=None` = 租户内全部，`()` = 空集短路不打 SQL；`MAX_SCOPE_IDS=1000`。目录/配置任何失败在碰 MySQL 前抛 ScopeError。
+- `QueryScope`：tenant 恒定；`site_ids=None` = 租户内全部，`()` = 空集短路不打 SQL；`MAX_SCOPE_IDS=1000`。目录/配置任何失败在碰 MySQL 前抛 ScopeError。同一条下推已跨到第二个库——`_consumer_mall_payment` 对商城库复用 `resolve_query_scope(caller)`，但把 ScopeError 在内的全部异常渲染为 `read_failed` 缺证标注而非拒绝请求：「碰库前失败关闭」是不变量，拒绝请求只是出口形态之一（证据合同见 [consumer-chat](../consumer/consumer-chat.mdx)）。
 - **shop ≠ site**：`resolve_operator_site_scope` 必须经 `ch_site.shop_id` 映射（953/954 行相等仅一个例外）；两种空集原因分开记日志：`no_shop_binding`（登记缺口）vs `shop_without_site`（数据缺口）。
 - `order_visibility.py`：一条租户可见性规则三种渲染——`resolve_device_tenant`（入口）、`visible_orders`（行）、`scope_where_sql`（参数绑定 SQL）；UNKNOWN_TENANT fail closed。
 - `order_identity.py`：`ORDER_ID_ATOM` 是订单号语法的唯一权威；自由文本候选要求含数字且纯数字段 ≥15 字符（曾把 "Please" 当订单号）。

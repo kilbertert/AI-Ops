@@ -1,5 +1,5 @@
 ---
-description: "测试架构速查：conftest 双锁（checkout 锁+主机槽位 MAX=2、跨兄弟仓同名、/tmp 刻意、获取顺序）、xdist 钉在 uv.lock 外保 CD 漂移闸、CI 分层+通过数下限、布局/README/退役三个强制测试、bitter doubles ADR-0030、verify-aiops-gateway 能与不能证明的边界、探针退出码 0/1/2"
+description: "测试架构速查：conftest 双锁（checkout 锁+主机槽位 MAX=2、跨兄弟仓同名、/tmp 刻意、获取顺序）、xdist 入锁文件（#994 反转 ADR-0038）+`-n 4` 双轴限界、CI 分层+通过数下限、布局/README/退役三个强制测试、bitter doubles ADR-0030、verify-aiops-gateway 能与不能证明的边界、探针退出码 0/1/2"
 kind: reference
 relations:
   related:
@@ -39,9 +39,9 @@ code:
 - 锁在 conftest 不在 tools/test.sh，因为 CI/implement.md/review prompts 都直接拼 `uv run pytest`（首版 wrapper 锁被 AFK 闸实测绕过）。
 - `serve_forever` poll_interval 补丁：默认 0.5s→仅当调用方省略参数时改 0.01s（哨兵区分——`tdengine_proxy.py` 显式传 0.5 不得被覆盖）；最慢文件 96.73s→2.97s（ADR-0037）。
 
-## xdist 在锁文件外（ADR-0038）
+## xdist 入锁文件（#994 反转 ADR-0038）
 
-`pytest-xdist==3.8.0`+`execnet==2.1.2` 经 `uv run --with` 提供——**刻意不进 pyproject/uv.lock**：deploy-41.sh 漂移闸比对 uv.lock，进去会停掉所有 CD。确定性声明是"任意 -n 下测试集相同"，不是依赖图字节可复现。唯一共享可写状态文件（`test_merge_faq_i18n_tool.py`）已改私有 worktree fixture；AST 扫描确认零固定端口/零绝对路径写。
+`pytest-xdist>=3.6,<4` 是声明的 dev 依赖（pyproject.toml），execnet 随 uv.lock 锁定，`addopts="-q -n 4"` 无条件生效。ADR-0038 原决策是 `uv run --with` 临时装、刻意不进 pyproject/uv.lock 保 deploy-41.sh 漂移闸——2026-10-23 被反转：临时装意味着全新 worktree venv 上 `-n` 报 `unrecognized arguments` 静默回串行（实测 279s vs 55s），**并行必须是环境的属性，不是谁记得装**。漂移闸代价真实付过：这次 uv.lock 变更确实停了 41 CD，按 `docs/agents/env-41-dependency-update.md` 手工解。`-n 4` 刻意不是 `auto`（auto=cpu_count，与 conftest 主机槽分管两个轴，动一个就重现 79 事故）。确定性声明仍是"任意 -n 下测试集相同"，不是依赖图字节可复现。唯一共享可写状态文件（`test_merge_faq_i18n_tool.py`）已改私有 worktree fixture；AST 扫描确认零固定端口/零绝对路径写。
 
 ## CI 分层与下限（ADR-0215）
 
@@ -51,8 +51,9 @@ code:
 
 - `test_repository_layout.py`：白名单根文件+每层一级目录（签入与未忽略未跟踪都算；构建缓存排除）；新一级目录要同 PR 理由+清单同步。规则文档：`docs/architecture/repository-layout.md`。
 - `test_readme_architecture.py`：README 模块索引、链接解析、不许**新**import 环（现有 node-assembly 环冻结在具体边）。
-- `test_runtime_retirement.py`：已退役模块/import/路由保持缺席。
+- `test_runtime_retirement.py`：已退役模块/import/路由保持缺席；`test_opening_old_database_preserves_retired_data` 先铺 `LEGACY_DIFY` 基线再 `GatewayStore(path)`——store 构造即跑 `gateway_schema.ensure`，退役表断言走真实迁移路径。
 - 三个都在必需检查 `verify` 内跑——不靠人工纪律。
+- `test_cd_deploy_scripts.py` 在真 SQLite 上执行 deploy-41.sh 的 schema 预检+迁移闸片段（非替身）：错文件/备份冲突/迁移/完整性失败在替换源文件前拒绝且不覆盖原库，迁移后失败不自动回滚；备份目录 0710、schema 子目录 0700 不依赖 umask（027/077 均成立）。
 
 ## Bitter doubles（ADR-0030）
 
@@ -66,7 +67,7 @@ code:
 ## 探针与验证分工
 
 - 探针退出纪律：0 通过 / 1 有发现 / **2 未收集**（plan-only 不算过）——`tools/README.md`。
-- `tools/experiments/m2_close/`：隔离栈驱动（`run_ic.py`、`m3node/` 真 Java 链路 39 条 LINK 判据、`manifest_parity.py` 跨语言 manifest 检查）——证明装配/协议，**永不**证明业务验收。**这一类永远不能整体删**：它是唯一的真 Java 验证线束（tools/README.md）。
+- `tools/experiments/m2_close/`：隔离栈驱动（`run_ic.py`、`m3node/` 真 Java 链路 35 条 LINK 判据、`manifest_parity.py` 跨语言 manifest 检查）——证明装配/协议，**永不**证明业务验收。**这一类永远不能整体删**：它是唯一的真 Java 验证线束（tools/README.md）。
 - 验收判据陷阱：只查输出形状不查路由的判据会假 PASS——路由证明先于形状判定。
 - 分工（`docs/agents/verification-workflow.md`，ADR-0220/0034）：实现者从已确认需求写 oracle（绝不从自己的产出推）；迭代期跑最小证伪检查，收口时完整闸只跑一次；新长期检查需一句话"查什么错、oracle 哪来的、现有检查为何漏"。独立 Hacker=不同会话，自设计攻击输入，"没发现"要附试过的路径与输入才算数；改过候选就成其作者要重新交接。长期套件禁：凑覆盖用例、断言实现自身输出的测试、私有调用顺序锁、同形状冗余叠加。
 
