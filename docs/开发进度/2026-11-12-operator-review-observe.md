@@ -22,6 +22,20 @@
   新增终局闸拒不重派回归与复核异常收敛用例。
 - 文档：ADR-0252、`evidence-delivery.md`、`operator-cpms/README.md` 同步。
 
+## 分支与验证结果
+
+- 分支：`fix/operator-review-observe`（worktree `AI-Ops-operator-review-observe`），
+  主提交 `54dfb38e`（rebase 于 origin/main `25885d34`），Devin 复审补齐跟进于后续提交。
+- 验证结果（主补丁口径）：定向 pytest（operations/execution/dify）
+  1743 通过/1 跳过/0 失败；全套件 5033 通过/9 跳过/0 失败；
+  verify-aiops-gateway 通过；ruff check/format 干净。
+  PR #1494 CI（verify/policy/spec-tree/mirror）通过。
+- 独立 Hack（deepseek-v4.1-flash，148 轮）发现 4 项已全部修订并回归测试；
+  Devin 复审 2 项（派发异常分支闸拒兜底、里程碑记录字段）的提交在合并时
+  遗漏，由跟进补丁 `fix/operator-review-observe-followup`（PR #1495）补齐，
+  其进度与验收记录见 `2026-11-12-operator-review-observe-followup.md`。
+- 已知缺口：ED4 实机容器验证与 llmdoc 同步待合并后完成；生产复核后闸拒频率留观察。
+
 ## 交付与边界
 
 - 保留：复核调用本身（verdict 照常计算入快照/轨迹/行级日志）、`contains_secret`、
