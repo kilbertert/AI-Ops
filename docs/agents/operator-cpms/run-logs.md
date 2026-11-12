@@ -96,3 +96,12 @@ trace、累计耗时与工具耗时。只读检查用 SQLite authorizer 拒绝�
 不能以数据库文件字节相同为判据，WAL checkpoint 会刷新物理页而不改逻辑记录。
 两个日志 POST 入口登记在 `ops/dify-exposure-registry.md`；标识符语法台账只登记
 `run_id` 等真实非订单字段，订单语法仍由 `order_identity` 负责。
+
+## 无生产拒绝样本时核对观察标签
+
+先从原日志页打开一条已交付运行，确认真实详情请求与 QA 对应。若本轮没有自然触发的
+非 allow 样本，可仅在隔离浏览器拦截 `POST /__aiops/manage` 的 `run-log` **读取响应**，
+保留其余字段，将 `delivery_mode` 设为 `diagnosis`、`review_reason` 设为
+`unsupported_station`。已部署页面应显示“复核观察（答复已交付）”，不显示
+“诊断未完成原因”。不向服务端提交这些替换字段，不修改运行表，关闭浏览器即清理。
+该结果只证明前端渲染分支；后端不拦截仍需 ED1/ED4，不能计为生产拒绝样本。
