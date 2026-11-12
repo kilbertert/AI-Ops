@@ -276,6 +276,109 @@ class MySQLSource:
             cursor.execute(sql, [*params, page_size + 1, (page - 1) * page_size])
             return [_normalize_row(row) for row in cursor.fetchall()]
 
+    def mall_billing_records(self, order_no: str) -> dict[str, Any] | None:
+        """同一一致性快照内读出充电订单与已授权商城父/子单、税项、支付记录。
+
+        关联链只从订单本身推出：充电 ``out_trade_no`` → 商城父单 ``order_no`` →
+        子单 ``parent_id`` → 明细 ``order_id``；支付记录仅按已核实商城父单号匹配，
+        不按充电单号猜商城单号。商城行必须与本单同租户、且 ``user_id`` 等于
+        已授权订单消费者（工单用 ``consumer_id``），不满足就
+        宁可返回空证据，不为「可能关联」放宽身份谓词。
+
+        返回 ``None`` 表示范围内没有这张订单、scope 缺失或站点范围为空 ——
+        调用方按「证据不可得」处理；``{"disabled": True}`` 表示本环境未配商城库。
+        各行数上限多取一行判定截断，截断表名记入 ``truncated``。
+        """
+        if self.scope is None or self._scope_blocked():
+            return None
+        mall_database = self.settings.mysql.mall_database
+        if not mall_database:
+            return {"disabled": True}
+        mall_db = _safe_identifier(mall_database)
+        scope_where, params = self._scope_where(claim_column=ORDER_CLAIM_COLUMN)
+        with self._cursor(consistent_snapshot=True) as cursor:
+            cursor.execute(
+                "SELECT id, order_no, tenant_id, user_id, consumer_id, out_trade_no, "
+                "total_amount, pay_amount, "
+                "vat, vat_fee, is_pay, refund_status, sync_mall_order, market_amount, reduce_balance "
+                f"FROM `{self.database}`.`ch_order_info` "
+                f"WHERE order_no=%s AND {scope_where} LIMIT 2",
+                [order_no, *params],
+            )
+            orders = cursor.fetchall()
+            result: dict[str, Any] = {
+                "charging": _normalize_row(orders[0]) if len(orders) == 1 else None,
+                "charging_rows": len(orders),
+                "parents": [],
+                "orders": [],
+                "items": [],
+                "payments": [],
+                "truncated": [],
+            }
+            if len(orders) != 1:
+                return result
+            charging = result["charging"]
+            tenant_id, out_trade_no = charging.get("tenant_id"), charging.get("out_trade_no")
+            if not tenant_id or not out_trade_no:
+                return result
+            claimant = charging.get("user_id")
+            if str(claimant) == WORK_ORDER_USER:
+                claimant = charging.get("consumer_id")
+            if not claimant or str(claimant).strip() in {"", WORK_ORDER_USER}:
+                return result
+            cursor.execute(
+                "SELECT id, order_ids, order_no, sales_price, payment_price, paid_amount, "
+                "payment_time, status, create_time "
+                f"FROM `{mall_db}`.`order_info_parent` "
+                "WHERE tenant_id=%s AND user_id=%s AND order_no=%s LIMIT 2",
+                [tenant_id, claimant, out_trade_no],
+            )
+            parents = [_normalize_row(row) for row in cursor.fetchall()]
+            result["parents"] = parents
+            if len(parents) != 1:
+                return result
+            cursor.execute(
+                "SELECT id, parent_id, order_no, third_order_sn, order_type, order_tag, status, "
+                "sales_price, total_amount, payment_price, paid_amount, refund_amount, "
+                "payment_time, create_time "
+                f"FROM `{mall_db}`.`order_info` "
+                "WHERE tenant_id=%s AND user_id=%s AND parent_id=%s LIMIT 11",
+                [tenant_id, claimant, parents[0]["id"]],
+            )
+            children = [_normalize_row(row) for row in cursor.fetchall()]
+            if len(children) > 10:
+                result["truncated"].append("orders")
+            result["orders"] = children[:10]
+            ids = [row["id"] for row in children[:10]]
+            if ids:
+                cursor.execute(
+                    "SELECT i.order_id, i.sku_code, i.tax_rate, i.sales_price, i.payment_price, "
+                    "i.refund_amount, i.status "
+                    f"FROM `{mall_db}`.`order_item` i "
+                    f"JOIN `{mall_db}`.`order_info` o ON o.id=i.order_id AND o.tenant_id=i.tenant_id "
+                    f"WHERE o.tenant_id=%s AND o.user_id=%s AND o.id IN ({_placeholders(len(ids))}) "
+                    "ORDER BY i.sku_code LIMIT 31",
+                    [tenant_id, claimant, *ids],
+                )
+                items = [_normalize_row(row) for row in cursor.fetchall()]
+                if len(items) > 30:
+                    result["truncated"].append("items")
+                result["items"] = items[:30]
+            cursor.execute(
+                "SELECT id, order_no, out_trade_no, scene, state, "
+                "payment_type, amount, sub_amount, refund_amount, pay_time, create_time "
+                f"FROM `{mall_db}`.`pay_record_info` "
+                f"WHERE tenant_id=%s AND user_id=%s AND "
+                "(order_no=%s OR out_trade_no=%s) "
+                "ORDER BY create_time LIMIT 16",
+                [tenant_id, claimant, out_trade_no, out_trade_no],
+            )
+            payments = [_normalize_row(row) for row in cursor.fetchall()]
+            if len(payments) > 15:
+                result["truncated"].append("payments")
+            result["payments"] = payments[:15]
+            return result
+
     def aggregate_order_statuses(
         self,
         site_ids: tuple[str, ...] | None,
