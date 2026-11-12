@@ -279,3 +279,10 @@ def test_support_route_uses_requested_language_and_period_omission_is_explicit()
     b = billing()
     b["snapshot"]["periods"] = {"status": "partial", "records": [], "omitted_count": 6}
     assert "未展示分时行数: 6" in final_answer("wrong", context(("billing", b)))["blocks"][0]["text"]
+
+
+@pytest.mark.parametrize("status", ["unavailable", "limited"])
+def test_knowledge_outage_is_not_reported_as_missing_question(status):
+    answer = final_answer("wrong", context(("knowledge", {"status": status})), language="en")
+    assert answer["retrieval_status"] == "unavailable"
+    assert "specify" not in answer["blocks"][0]["text"]
