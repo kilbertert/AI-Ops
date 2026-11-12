@@ -6,7 +6,7 @@
   },
   "documents": {
     "execution-model.mdx": {
-      "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
+      "validatedRevision": "6042bb2555587f01d670a8100f798b18d33bfaf1"
     },
     "gateway/gateway-runtime.mdx": {
       "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
@@ -30,7 +30,7 @@
       "validatedRevision": "f99565f5e39a6b20aa4089478f690d5e28c2435a"
     },
     "operator/operator-chat.mdx": {
-      "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
+      "validatedRevision": "6042bb2555587f01d670a8100f798b18d33bfaf1"
     },
     "conversation/conversation-store.mdx": {
       "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
@@ -54,7 +54,7 @@
       "validatedRevision": "f99565f5e39a6b20aa4089478f690d5e28c2435a"
     },
     "deployment/delivery-and-hosts.mdx": {
-      "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
+      "validatedRevision": "6042bb2555587f01d670a8100f798b18d33bfaf1"
     },
     "governance/governance-afk.mdx": {
       "validatedRevision": "f99565f5e39a6b20aa4089478f690d5e28c2435a"
