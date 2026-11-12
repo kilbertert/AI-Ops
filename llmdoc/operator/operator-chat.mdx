@@ -58,7 +58,7 @@ code:
 
 ## 答案复核与确定性计算
 
-- `operator_answer_review.py`：模型只判**凭空断言**；它抽出的 `currencies[]`/`station_names[]` 由程序对照 `known_facts()` 核验——模型的 allow 不能覆盖程序检查（ADR-0225/0219）。verdict 之外带 `reason` 机器码：`allowed`/`unsupported_currency`/`unsupported_station`/`unsupported_claim`/`review_uncertain`/`review_unavailable`/`review_quota_exhausted`/`review_auth_rejected`（节点模型失败路径补 `model_failed`/`model_quota_exhausted`/`model_stream_incomplete`）。SYSTEM 把 status 码表限定在订单详情（不适用遥测 status），且"订单结束/NoError/空样本不能证明正常，肯定正常须独立过程依据否则 reject"。`REVIEW_VERSION=sha256(SYSTEM)`，1024 tokens，`reasoning_effort="none"`。站点说明复核按 run 判——同一问题不同 run 得不同结论合法。独立 `site_note_review.py` 已删（#1372），职责并入本层。
+- `operator_answer_review.py`：模型只判**凭空断言**；`station_names[]` 由程序对照 `known_facts()` 核验——模型的 allow 不能覆盖程序检查（ADR-0225/0219）；`currencies[]` 仅摘录观察，币种名称/符号/单位本身不作 reject/uncertain 依据（ADR-0250 更新 0219 币种部分），金额变造、换汇推算、字段冒充仍按凭空断言 reject。verdict 之外带 `reason` 机器码：`allowed`/`unsupported_station`/`unsupported_claim`/`review_uncertain`/`review_unavailable`/`review_quota_exhausted`/`review_auth_rejected`（节点模型失败路径补 `model_failed`/`model_quota_exhausted`/`model_stream_incomplete`；`unsupported_currency` 不再产生，历史行仍可在 run-log 白名单投影）。SYSTEM 把 status 码表限定在订单详情（不适用遥测 status），且"订单结束/NoError/空样本不能证明正常，肯定正常须独立过程依据否则 reject"。`REVIEW_VERSION=sha256(SYSTEM)`，1024 tokens，`reasoning_effort="none"`。站点说明复核按 run 判——同一问题不同 run 得不同结论合法。独立 `site_note_review.py` 已删（#1372），职责并入本层。
 - `analysis()` 只对已取证据计算；`order_billing/order_pricing/order_analysis` 用 `Decimal` 按历史费率核金额——`cpms_order_amount_check`/`cpms_order_process_stats` 的 `model_inputs=[]`，模型不能提交金额当核验事实。局部算术相符推不出优惠资格、原始计量、支付到账或整单无多收。
 - Java 侧预算：`GuardedChatModel` `modelCalls >= 12` → `MODEL_BUDGET`（见 [execution-node-contract](../execution/execution-node-contract.mdx)）。
 

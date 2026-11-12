@@ -1,5 +1,5 @@
 ---
-description: "消费者客服链（callback_version=6 硬闸）：Dify 官方 Agent 只提工具调用、五类资源+原子预算 8、grant 六元组复核+取数前后重验、SSE 身份四元组与最终回答抽取规则、订单事实程序呈现（模型正文不交付）、发布顺序先撤 grant 后 completed、conversation_id 续会话、试用范围限制、旧 callback<6 冻结"
+description: "消费者客服链（callback_version=6 硬闸）：Dify 官方 Agent 提议工具调用与正文、五类资源+原子预算 8、grant 六元组复核+取数前后重验、SSE 身份四元组与最终回答抽取规则、自然正文+程序附加来源/媒体与 URL 闸（ADR-0250）、发布顺序先撤 grant 后 completed、conversation_id 续会话、试用范围限制、旧 callback<6 冻结"
 kind: architecture
 relations:
   requires:
@@ -14,7 +14,7 @@ code:
     - src/aiops_diagnostics/consumer/consumer_chat_service.py
     - src/aiops_diagnostics/consumer/consumer_agent_flow.py
     - src/aiops_diagnostics/consumer/consumer_billing.py
-    - src/aiops_diagnostics/consumer/consumer_order_evidence.py
+    - src/aiops_diagnostics/consumer/consumer_documents.py
     - src/aiops_diagnostics/consumer/consumer_mall_billing.py
     - tools/content/upgrade_consumer_flow.py
     - src/aiops_diagnostics/consumer/consumer_tool_grants.py
@@ -48,8 +48,8 @@ code:
 
 - 身份四元组 `(workflow_run_id, task_id, conversation_id, message_id)` 在 `workflow_started` 绑死后每个事件必须匹配；`workflow_id` 必须等于请求的；`message_end` 与 `workflow_finished` 都要到齐（`dify_chatflow.py`）。任一漂移 → `DIFY_WORKFLOW_*`/`DIFY_CHATFLOW_INVALID`，半截正文绝不交付。
 - 最终回答抽取：最后一个 `node_id=="answer"` 且 `parent_id is None`、`status=="success"`、`tool_responses==[]`、`llm_response` 非空的 `agent_log` 事件；`node_id=="start"` 会重置候选。答案 ≤32,000 字符。
-- consumer `final_answer` 交付组装块而非模型正文（ADR-0247）：任一工具记录未完成 → `CHATFLOW_EVIDENCE_UNAVAILABLE`；`SAFETY`/`HUMAN` 正则（作用于 question）与知识 `unavailable/limited/refused`、`not_found/no_result` 各回落对应 `fallback()`；`retrieval_status="found"` 仅当存在 reference 块。
-- 块=订单事实+每来源摘录+support 标注块。事实块由 `consumer_order_evidence.render()` 程序生成：只渲染 `status=="found"`、按 `(tool, order_no)` 键去重（后写覆盖）、≤7,400 字符整行省略；订单号原样发出，仅 `station_name` 脱敏。知识来源按 `retrieved_reference_id` 去重（仅 found 调用），每段摘录 ≤7,600 字符按行/词截断加 `quote_omitted`，且不再 `preserve` 订单号——摘录内长数字号段会被脱敏；多来源合计可超 8,000。
+- consumer `final_answer` 交付 Agent 自然正文+程序附加来源/媒体（ADR-0250，回 ADR-0232 形态）：任一工具记录未完成 → `CHATFLOW_EVIDENCE_UNAVAILABLE`；`SAFETY` 正则（作用于 question）仍回落 `fallback("safety")`；`raw` 非 str/空/>8,000 → `CHATFLOW_ANSWER_INVALID`；`retrieval_status`：有来源=`found`、任一知识调用 `unavailable/limited/refused`=`unavailable`、否则 `not_found`。
+- 块=脱敏正文+每来源 `reference` 块+媒体块（按 url 去重 ≤4，仅 `status=="found"` 调用、按 `retrieved_reference_id` 去重的来源）+support 文本行（`final_answer` 追加）。`render_sources_answer`（`consumer_documents.py`）：正文经 `redact_text(preserve=订单号)`；URL 闸——正文每个 http(s)/www. 链接必须逐字见于所引来源 content 或 `support_urls`、仅 https、无 userinfo，紧邻配对括号剥外层，否则 `CHATFLOW_ANSWER_INVALID`。
 - Dify `user` = `sha256(scope_fingerprint:binding.key:workflow_id)`；`bind_workflow`/`bind_message` 拒绝身份漂移。多轮续聊用 **Gateway 自己的 `conversation_id`**，不是 Dify 的（旧链才用 `upstream_conversation_id`+绑定指纹相等）。
 
 ## 发布顺序与失败语义
@@ -82,15 +82,15 @@ code:
 v4起要求各语言逐字段核对金额和缺项：0/0.00是已提供零收费，不能因occupyFee缺失把parkFee零值合并为缺失。
 金额reader只列同名字段原值，禁止差额、合计和近似舍入；totalAmount是订单费用记录，payAmount是支付金额记录。
 状态完成只表示当前订单状态，未取得过程证据不等于无异常或后台没保存日志；模型回放不证明确定性语义保证。
-V6起模型自由正文不作为订单事实交付——事实由`consumer_order_evidence.render()`生成，模型职责只剩选单与工具调用。
+交付自ADR-0250恢复自然正文——`consumer_order_evidence`程序呈现器已删，来源/媒体由程序附加；V6构成块仍是现役取数形状标记，模型职责回到工具调用与正文表达。
 manage桥不转发Accept-Language，英文预览用既有Gateway受管trial入口，方法见订单构成QA，凭据只在受控进程运行时读取。
 未知/重复块拒绝，不能只部署Gateway却保留旧图提示。依据与细节见`docs/adr/0246-consumer-order-composition.md`、
-`docs/adr/0247-consumer-order-facts-rendered.md`及`docs/agents/consumer-wf01/order-composition-qa.md`。
+`docs/adr/0247-consumer-order-facts-rendered.md`（呈现取舍由ADR-0250更新）、`docs/adr/0250-natural-replies-and-nonblocking-currency.md`及`docs/agents/consumer-wf01/order-composition-qa.md`。
 
 ## Canonical anchors
 
-- `src/aiops_diagnostics/consumer/consumer_agent.py`（callback 合同、历史组装、资源分派、final_answer 组装块）
-- `src/aiops_diagnostics/consumer/consumer_order_evidence.py`（订单事实块 render：程序呈现、7,400 界）
+- `src/aiops_diagnostics/consumer/consumer_agent.py`（callback 合同、历史组装、资源分派、final_answer 正文+来源交付）
+- `src/aiops_diagnostics/consumer/consumer_documents.py`（render_sources_answer：正文脱敏+reference/media 块+URL 闸）
 - `src/aiops_diagnostics/consumer/consumer_mall_billing.py`（商城支付证据：读数相等判定）
 - `src/aiops_diagnostics/consumer/consumer_chat_service.py`（start/grant/吊销/发布顺序/读回）
 - `src/aiops_diagnostics/dify/dify_chatflow.py`（SSE 身份四元组 + agent_final_node 抽取）
