@@ -22,6 +22,7 @@ code:
     - src/aiops_diagnostics/dify/knowledge_connection.py
     - src/aiops_diagnostics/dify/operator_run_logs.py
     - src/aiops_diagnostics/dify/dify_workspace_template.dsl.yml
+    - docs/agents/operator-cpms/run-logs.md
 ---
 
 # 自助开通面（受管应用目录）
@@ -48,7 +49,7 @@ snapshot-先 → create → reconcile：Dify 只在创建时返回完整 token�
 - `self_service_bridge` 同源闸：Origin==console_origin **且** Referer 同源 **且** `Sec-Fetch-Site∈{∅,same-origin}` **且**有效 Dify 会话 **且**`角色∈{owner,admin,editor}` **且** `application/json`——之后只转发服务端验证过的浏览器会话；浏览器永远见不到内部令牌或平台 key。
 - `self_service_identity`：管理身份只经真 Dify 登录交换读，浏览器不提供任何身份声明。`self_service_config` = 平台维护的 profiles（JSON 0600）被应用引用；不接受浏览器给的路径/凭据/端点。
 - 草稿完整性：发布比对当前草稿指纹与创建时冻结值；并发发布或源版本变化 → `SETUP_DRAFT_CHANGED`/`SETUP_SOURCE_CHANGED`/`SETUP_ACTOR_CHANGED`——让运营刷新，不是系统猜。
-- `dify/operator_run_logs.py`（本包的 FastAPI 管理面）：Java run 元数据只读视图——`POST /v1/dify/management/run-logs` 列表 + `.../detail` 按 run_id 单条（缺则 `OPERATOR_RUN_NOT_FOUND`），逐请求重验公司身份+app 归属+租户；过期业务结果不恢复，但问题全文/订单号属输入标识仍投影（ADR-0249）；`no-store`。与 `execution/operator_run_logs.py`（账本投影白名单，列表与详情同一 `metadata()`）同名不同层，别混。
+- `dify/operator_run_logs.py`（本包的 FastAPI 管理面）：Java run 元数据只读视图——`POST /v1/dify/management/run-logs` 列表 + `.../detail` 按 run_id 单条（缺则 `OPERATOR_RUN_NOT_FOUND`），逐请求重验公司身份+app 归属+租户；过期业务结果不恢复，但问题全文/订单号属输入标识仍投影（ADR-0249），ADR-0251 起行级摘要（入参+白名单结果字段的 `tool_summaries`）也过同一 `qa_id + scope_fingerprint` 闸进 detail 响应，不投影面不变；`no-store`。与 `execution/operator_run_logs.py`（账本投影白名单，列表与详情同一 `metadata()`）同名不同层，别混。
 - `knowledge_connection.py`：`ExternalKnowledgeApis.tenant_id` 是**工作区级**的；只有平台端点/key 可作创建模板。
 
 ## 失败语义
@@ -62,4 +63,4 @@ snapshot-先 → create → reconcile：Dify 只在创建时返回完整 token�
 - `src/aiops_diagnostics/dify/service_keys.py`（快照→创建→对账、路径不发密钥）
 - `src/aiops_diagnostics/dify/self_service_bridge.py`（同源闸）
 - `src/aiops_diagnostics/dify/knowledge_connection.py`（工作区级知识连接）
-- `docs/agents/operator-cpms/self-service.md`（操作员视角流程）
+- `docs/agents/operator-cpms/self-service.md`（操作员视角流程）、`docs/agents/operator-cpms/run-logs.md`（运行日志合同）
