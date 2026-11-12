@@ -341,14 +341,14 @@ def final_answer(raw, context, *, language="zh", question=""):
         )
     if not answer["blocks"]:
         knowledge_states = [(c.get("result") or {}).get("status") for c in calls if c["tool"] == "knowledge"]
-        if any(state in {"unavailable", "limited"} for state in knowledge_states):
+        if any(state in {"unavailable", "limited", "refused"} for state in knowledge_states):
             answer = consumer_knowledge.fallback("unavailable", language)
             answer["retrieval_status"] = "unavailable"
             return answer
-        if knowledge_states:
-            return consumer_knowledge.fallback("not_found", language)
         if consumer_knowledge.HUMAN.search(question):
             return consumer_knowledge.fallback("human", language)
+        if any(state in {"not_found", "no_result"} for state in knowledge_states):
+            return consumer_knowledge.fallback("not_found", language)
         return render_sources_answer(words["no_answer"], [])
     answer["retrieval_status"] = (
         "found" if any(b.get("kind") == "reference" for b in answer["blocks"]) else "not_found"

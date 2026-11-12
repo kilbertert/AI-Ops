@@ -286,3 +286,18 @@ def test_knowledge_outage_is_not_reported_as_missing_question(status):
     answer = final_answer("wrong", context(("knowledge", {"status": status})), language="en")
     assert answer["retrieval_status"] == "unavailable"
     assert "specify" not in answer["blocks"][0]["text"]
+
+
+def test_human_request_takes_precedence_over_empty_search():
+    answer = final_answer(
+        "wrong",
+        context(("knowledge", {"status": "no_result"})),
+        language="en",
+        question="Please connect me to a human agent",
+    )
+    assert "official" in answer["blocks"][0]["text"]
+
+
+def test_refused_knowledge_is_not_reported_as_completed_empty_search():
+    answer = final_answer("wrong", context(("knowledge", {"status": "refused"})), language="en")
+    assert answer["retrieval_status"] == "unavailable"
