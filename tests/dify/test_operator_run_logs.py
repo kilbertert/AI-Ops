@@ -152,6 +152,7 @@ def test_list_is_bounded_scoped_and_metadata_only(logged):
         "trial",
         "history_run_count",
         "evidence_tools",
+        "tool_summaries",
     }
 
 
@@ -397,3 +398,24 @@ def test_persisted_run_trace_reaches_list_and_detail(logged, state):
     assert detail.json()["state"] == ("expired" if state == "running" else state)
     assert detail.json()["result_expired"] is True
     assert "PRIVATE" not in detail.text
+
+
+def test_detail_projects_tool_summaries_and_keeps_them_scope_bounded(logged):
+    """ADR-0251：行级摘要投影到 detail，仍走同一 scope 闸。"""
+    f = logged
+    run_id = f["issue_log"](state="succeeded")
+    foreign = f["issue_log"](caller=scope(user="OTHER"), state="succeeded")
+    f["ctx"].agent_run_store.record_tool_summary(
+        run_id,
+        "cpms_order_detail",
+        {"入参": "order_no=ORDER-FIXTURE-1", "状态": "已支付", "应付": "8.00"},
+    )
+    f["ctx"].agent_run_store.record_tool_summary(foreign, "cpms_order_detail", {"状态": "PRIVATE-AMOUNT"})
+    detail = post(f, {"app_id": APP, "run_id": run_id}, PATH + "/detail").json()
+    assert detail["tool_summaries"] == {
+        "cpms_order_detail": {"入参": "order_no=ORDER-FIXTURE-1", "状态": "已支付", "应付": "8.00"}
+    }
+    assert "PRIVATE" not in json.dumps(detail)
+    # 无摘要的 run 不给空对象冒充有内容。
+    empty = f["issue_log"](state="succeeded")
+    assert post(f, {"app_id": APP, "run_id": empty}, PATH + "/detail").json()["tool_summaries"] is None

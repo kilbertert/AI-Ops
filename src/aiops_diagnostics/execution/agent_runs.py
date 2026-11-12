@@ -23,7 +23,7 @@ import stat
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -279,6 +279,9 @@ class AgentRun:
 
     #: 执行元数据独立于业务快照，迟到证据和结果覆盖不能抹掉阶段记录。
     trace: tuple[dict[str, Any], ...] = ()
+    #: 面向运行日志的每工具展示摘要 ``{tool: {显示键: 值}}``——ADR-0251 的白名单
+    #: 字段，不是证据全文。读取与 trace 同闸。
+    tool_summaries: dict[str, dict[str, str]] = field(default_factory=dict)
 
     @property
     def exec_config_confirmed(self) -> bool:
@@ -501,6 +504,50 @@ class AgentRunStore:
             connection.execute(
                 "UPDATE agent_runs SET trace_json = ? WHERE run_id = ?",
                 (json.dumps(trace, ensure_ascii=False), run_id),
+            )
+
+    def record_tool_summary(self, run_id: str, tool: str, fields: dict[str, Any]) -> None:
+        """运行日志展示摘要；不修改运行状态或结果交付时效。
+
+        ADR-0251 的白名单边界在这里兜底而不只靠发射点：每工具 ≤8 个显示字段，
+        键 ≤12 字符，标量取 ``str()`` 截 32 字，列表记 ``N项``，字典取压缩
+        JSON 截 32 字；其余类型丢弃。全 run ≤16 个工具，同工具后写覆盖。
+        """
+        if not isinstance(tool, str) or not re.fullmatch(r"[a-z][a-z0-9_]{2,63}", tool):
+            raise ValueError("invalid tool name")
+        if not isinstance(fields, dict) or len(fields) > 8:
+            raise ValueError("tool summary needs <=8 fields")
+        clean: dict[str, str] = {}
+        for key, value in fields.items():
+            if not isinstance(key, str) or not (0 < len(key) <= 12) or key.strip() != key:
+                raise ValueError("invalid summary field")
+            if isinstance(value, bool):
+                clean[key] = "true" if value else "false"
+            elif value is None:
+                continue
+            elif isinstance(value, (int, float)):
+                clean[key] = str(value)[:32]
+            elif isinstance(value, str):
+                clean[key] = value[:32]
+            elif isinstance(value, list):
+                clean[key] = f"{len(value)}项"
+            elif isinstance(value, dict):
+                # default=str：CPMS 值里混入不可序列化成员时降格成字符串，
+                # 不把 TypeError 抛回业务路径。
+                clean[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)[:32]
+        with self._connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT tool_summaries_json FROM agent_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                return
+            summaries = _tool_summaries(row["tool_summaries_json"])
+            if tool not in summaries and len(summaries) >= 16:
+                return
+            summaries[tool] = clean
+            connection.execute(
+                "UPDATE agent_runs SET tool_summaries_json = ? WHERE run_id = ?",
+                (json.dumps(summaries, ensure_ascii=False), run_id),
             )
 
     def has_succeeded_for_tenant(self, tenant_id: str) -> bool:
@@ -962,7 +1009,17 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         # 迁移保证这一列一定存在；旧行是 NULL，读取时由调用方回落到默认语言。
         language=row["language"],
         trace=tuple(json.loads(row["trace_json"] or "[]")),
+        tool_summaries=_tool_summaries(row["tool_summaries_json"]),
     )
+
+
+def _tool_summaries(raw: str | None) -> dict[str, dict[str, str]]:
+    """读取摘要列：坏 JSON 或非对象形状一律当作没有摘要，不炸读路径。"""
+    try:
+        value = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 # --------------------------------------------------------------------------

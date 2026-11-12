@@ -38,6 +38,7 @@ type Run = {
   environment?: string | null
   expected_node_id?: string | null
   actual_node_id?: string | null
+  tool_summaries?: Record<string, Record<string, string>> | null
   agent_version_observed?: string | null
   agent_version_gap?: string | null
   claimed_at?: string | null
@@ -64,6 +65,7 @@ const labels: Record<string, string> = {
   cancelled: '已取消',
   queued: '排队中',
   generating: '生成中',
+  allowed: '复核通过',
   unsupported_currency: '答复添加了来源未提供的币种',
   unsupported_station: '答复使用了来源未提供的站名',
   unsupported_claim: '答复未通过事实一致性复核',
@@ -137,6 +139,60 @@ const label = (code?: string | null) => {
   if (!code) return '未记录'
   // 组合码（operator_node_failed: tool_refused:x）先整串再退前缀查表。
   return labels[code] || labels[code.split(': ')[0]] || code
+}
+// detail 机器码→整句说明：结构化码（tools=N）单独成句，其余查表。
+const detailText = (code: string) => {
+  const toolsMatch = code.match(/^tools=(\d+)$/)
+  if (toolsMatch) return `携带 ${toolsMatch[1]} 个工具`
+  return label(code)
+}
+// 工具名→业务语义（operator_tools.json 的全集；未知工具名原样显示）。
+const toolLabels: Record<string, string> = {
+  cpms_order_detail: '订单详情',
+  cpms_order_tariff: '计费模板',
+  cpms_order_billing: '计费明细',
+  cpms_charging_samples: '充电样本',
+  cpms_site_search: '站点搜索',
+  cpms_station_plan: '站点计划',
+  cpms_order_amount_check: '金额核对',
+  cpms_order_process_stats: '过程统计',
+  cpms_charging_timeline: '充电时序',
+  cpms_device_offline: '离线设备',
+  cpms_order_communications: '订单通信',
+}
+const toolName = (tool?: string) => (tool ? toolLabels[tool] || tool : '工具')
+// 每个 trace 事件翻成整句（ADR-0251 人话行）；callNo 是已完成的工具调用序号。
+const describe = (event: Event, callNo: number) => {
+  const when = `${event.at} · `
+  switch (event.phase) {
+    case 'dispatch':
+      return `${when}派发执行${event.detail ? `（${detailText(event.detail)}）` : ''}`
+    case 'tool': {
+      const name = toolName(event.tool)
+      if (event.status === 'running')
+        return `${when}调用 ${name}… · 已进行 ${elapsed(event.elapsed_ms)}`
+      const head = `${when}第 ${callNo} 次调用 ${name}：`
+      // 合同（run-logs.md）：工具条目同时显示本次耗时与 elapsed_ms 累计耗时；缺失标「未采集」。
+      const tail = ` · 耗时 ${elapsed(event.duration_ms ?? null)} · 累计 ${elapsed(event.elapsed_ms)}`
+      if (event.status === 'refused')
+        return `${head}${event.detail ? detailText(event.detail) : '被拒绝'}${tail}`
+      return `${head}${labels[event.status || ''] || event.status || '成功'}${tail}`
+    }
+    case 'review':
+      return `${when}事实复核：${event.detail ? detailText(event.detail) : '通过'} · 耗时 ${elapsed(event.duration_ms ?? null)}`
+    case 'resample':
+      return `${when}重新生成${event.detail ? `：${detailText(event.detail)}` : ''}`
+    case 'completed':
+      return `${when}运行完成 · 累计 ${elapsed(event.elapsed_ms)}`
+    case 'failed':
+      return `${when}运行失败${event.detail ? `：${detailText(event.detail)}` : ''} · 累计 ${elapsed(event.elapsed_ms)}`
+    case 'cancelled':
+      return `${when}运行取消${event.detail ? `：${detailText(event.detail)}` : ''} · 累计 ${elapsed(event.elapsed_ms)}`
+    case 'expired':
+      return `${when}运行过期${event.detail ? `：${detailText(event.detail)}` : ''}`
+    default:
+      return `${when}${labels[event.phase] || event.phase} ${event.tool || ''} · ${labels[event.status || ''] || event.status || ''} · 累计 ${elapsed(event.elapsed_ms)}${event.detail ? ` · ${detailText(event.detail)}` : ''}`
+  }
 }
 const stateLabel = (run: Run) =>
   run.state === 'succeeded' && run.delivery_mode === 'evidence_only'
@@ -291,16 +347,39 @@ export function OperatorRunLogs({ appId }: { appId: string }) {
                 <p>阶段耗时未采集</p>
               ) : (
                 <ol>
-                  {run.trace.map((event) => (
-                    <li
-                      key={`${event.at}:${event.phase}:${event.tool}:${event.status}:${event.elapsed_ms}`}
-                    >
-                      {event.at} · {labels[event.phase] || event.phase} {event.tool} ·{' '}
-                      {labels[event.status || ''] || event.status} · 累计 {elapsed(event.elapsed_ms)}
-                      {event.phase === 'tool' && <> · 工具耗时 {elapsed(event.duration_ms ?? null)}</>}
-                      {event.detail && <> · {label(event.detail)}</>}
-                    </li>
-                  ))}
+                  {(() => {
+                    let callNo = 0
+                    // 摘要按工具名覆盖保存（ADR-0251）：内容属于该工具最近一次调用，
+                    // 只挂到最后一个完成事件下，否则历史事件会背上后来才取得的结果。
+                    const lastToolEvent = new Map<string, number>()
+                    run.trace.forEach((event, index) => {
+                      if (event.phase === 'tool' && event.status && event.status !== 'running')
+                        lastToolEvent.set(event.tool || '', index)
+                    })
+                    return run.trace.map((event, index) => {
+                      if (event.phase === 'tool' && event.status && event.status !== 'running')
+                        callNo += 1
+                      const summary =
+                        event.phase === 'tool' &&
+                        lastToolEvent.get(event.tool || '') === index
+                          ? run.tool_summaries?.[event.tool || '']
+                          : null
+                      return (
+                        <li
+                          key={`${event.at}:${event.phase}:${event.tool}:${event.status}:${event.elapsed_ms}`}
+                        >
+                          {describe(event, callNo)}
+                          {summary && (
+                            <p className="ml-4 text-xs text-text-tertiary">
+                              {Object.entries(summary)
+                                .map(([key, value]) => `${key}=${value}`)
+                                .join(' · ')}
+                            </p>
+                          )}
+                        </li>
+                      )
+                    })
+                  })()}
                 </ol>
               )}
             </div>

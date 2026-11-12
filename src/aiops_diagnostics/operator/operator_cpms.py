@@ -99,6 +99,61 @@ SITE_MAX_SHOWN = operator_conversation.SITE_MAX_SHOWN
 #: 站点列表的 CPMS 路径。查询参数由 :class:`SiteKeywords` 组装，不由调用方拼接。
 SITE_PATH = "/chSite/page"
 
+#: 运行日志行级摘要的每工具显示字段（ADR-0251 白名单）：左是证据 ``data`` 字段名，
+#: 右是展示键。值形状由 store 的有界写入兜底；这里只决定「展示哪些」——
+#: 新增工具不加表就只少一段摘要，不会越界泄漏。
+TOOL_SUMMARY_FIELDS = {
+    "cpms_order_detail": [
+        ("status", "状态"),
+        ("totalAmount", "应付"),
+        ("payAmount", "实付"),
+        ("refundAmount", "退款"),
+        ("electricity", "电量"),
+        ("stationName", "站点"),
+    ],
+    "cpms_order_tariff": [("feeTemplate", "费率模板"), ("periodFeeDetail", "分时"), ("missing", "缺项")],
+    "cpms_order_billing": [
+        ("serviceFee", "服务费"),
+        ("electricityFee", "电费"),
+        ("totalAmount", "合计"),
+        ("payAmount", "实付"),
+        ("vatFee", "税费"),
+    ],
+    "cpms_charging_samples": [("total", "样本数"), ("count", "样本数")],
+    "cpms_site_search": [
+        ("total", "站点数"),
+        ("count", "站点数"),
+        ("shown_sites", "展示"),
+        ("limited", "超限"),
+    ],
+    "cpms_station_plan": [("name", "计划"), ("energy", "电量"), ("power", "功率"), ("date", "日期")],
+    "cpms_order_amount_check": [("conclusion", "结论"), ("checks", "检查"), ("limitations", "限制")],
+    "cpms_order_process_stats": [
+        ("sample_count", "样本数"),
+        ("average_power_kw", "平均功率"),
+        ("complete_timeline", "时序完整"),
+    ],
+    "cpms_charging_timeline": [("total", "记录数"), ("samples_returned", "返回"), ("truncated", "截断")],
+    "cpms_device_offline": [("summary", "摘要"), ("window", "窗口")],
+    "cpms_order_communications": [("association", "关联"), ("sources", "来源"), ("window_truncated", "截断")],
+}
+
+
+def _arg_summary(task, tool):
+    """工具调用入参的一行展示摘要：``k=v`` 拼接、标量截断、列表取前三个、字典跳过。"""
+    args = task.arguments.get(tool)
+    if not isinstance(args, dict) or not args:
+        return None
+    parts = []
+    for key, value in list(args.items())[:6]:
+        if value is None or isinstance(value, dict):
+            continue
+        if isinstance(value, list):
+            value = ",".join(str(v)[:12] for v in value[:3])
+        parts.append(f"{key}={str(value)[:24]}")
+    return "、".join(parts)[:48] or None
+
+
 #: 工具授权的**契约版本**。节点必须逐字声明它，否则在领取授权那一步就被拒。
 #:
 #: 这不是版本号装饰：授权载荷从「订单号」换成「这一次要发的请求」是破坏性变更，
@@ -401,6 +456,34 @@ class OperatorCpms:
                 # 观测失败不能打断业务收尾，尤其不能留下永久 running 的问题。
                 task.trace_failed = True
                 logging.getLogger("aiops.operator").warning("operator_trace_unavailable")
+
+    def _summarize_tool(self, run_id, task, tool, *, refusal=None):
+        """把该次工具调用的行级展示摘要写进运行记录（ADR-0251）。
+
+        观测失败不阻断业务——与 ``_trace`` 同一约定；摘要字段的白名单
+        （``TOOL_SUMMARY_FIELDS``）与有界写入（``record_tool_summary``）是两层闸。
+        """
+        if task is None or not tool:
+            return
+        try:
+            fields = {}
+            args = _arg_summary(task, tool)
+            if args:
+                fields["入参"] = args
+            if refusal:
+                # 拒绝码原文交给 store 的 32 字上界兜底，这里不再二次截断。
+                fields["拒绝"] = str(refusal)
+            data = (task.evidence.get(tool) or {}).get("data")
+            if isinstance(data, dict):
+                for source_key, label in TOOL_SUMMARY_FIELDS.get(tool, ()):
+                    if source_key in data:
+                        fields[label] = data[source_key]
+            elif isinstance(data, list):
+                fields["结果"] = f"{len(data)}项"
+            if fields:
+                self.context.agent_run_store.record_tool_summary(run_id, tool, fields)
+        except (sqlite3.Error, ValueError, TypeError):
+            logging.getLogger("aiops.operator").warning("operator_tool_summary_unavailable")
 
     def progress(self, caller, qa_id, qa=None):
         """只在调用方完成当前入口授权后读取；不包含业务对象或答案。"""
@@ -1253,6 +1336,7 @@ class OperatorCpms:
             self._trace(
                 run_id, "tool", "succeeded", tool=tool, duration_ms=(time.monotonic() - started) * 1000
             )
+            self._summarize_tool(run_id, task, tool)
             return result
         except OperatorRefused as exc:
             if task is not None:
@@ -1268,6 +1352,7 @@ class OperatorCpms:
                         duration_ms=(time.monotonic() - started) * 1000,
                         detail=str(exc),
                     )
+                    self._summarize_tool(run_id, task, tool, refusal=str(exc))
             raise
 
     def _proxy(self, run_id, grant, path, query, method):
@@ -1713,7 +1798,8 @@ class OperatorCpms:
                 "review",
                 "succeeded" if review["verdict"] == "allow" else "refused",
                 duration_ms=(time.monotonic() - review_started) * 1000,
-                detail=None if review["verdict"] == "allow" else review.get("reason"),
+                # 通过也落码：「复核通过」和「没复核」在行级日志里要能分开。
+                detail=review.get("reason") or ("allowed" if review["verdict"] == "allow" else None),
             )
         task.answer_review = review
         if review["verdict"] != "allow":
@@ -1822,14 +1908,24 @@ class OperatorCpms:
             if not store.update_assistant_question(qa_id, status="running"):
                 raise OperatorRefused("OPERATOR_RUN_INACTIVE")
             dispatcher = SnailDispatcher()
-            dispatcher.deadline_at = self.context.agent_run_store.get(run_id).expires_at
+            run = self.context.agent_run_store.get(run_id)
+            dispatcher.deadline_at = run.expires_at
+            try:
+                manifest = json.loads(run.execution_manifest or "{}")
+                manifest_tool_count = len(manifest.get("tools") or []) if isinstance(manifest, dict) else 0
+            except (TypeError, ValueError):
+                manifest_tool_count = 0
             task = self.tasks[run_id]
             task.messages = self._messages(task)
             dispatcher.question = task.question
             # 已有取证固定在本run，最多一次重派，持续失败明确终止。
             while True:
                 try:
-                    self._trace(run_id, "dispatch")
+                    self._trace(
+                        run_id,
+                        "dispatch",
+                        detail=f"tools={manifest_tool_count}" if manifest_tool_count else None,
+                    )
                     dispatcher.dispatch(config, run_id)
                 except AgentRunDispatchError:
                     self._raise_node_failure(run_id)

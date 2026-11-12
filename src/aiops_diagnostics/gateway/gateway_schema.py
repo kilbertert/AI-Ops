@@ -14,7 +14,7 @@ from pathlib import Path
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.gateway import gateway_db
 
-VERSION = 1
+VERSION = 2
 
 # 列声明同时驱动 CREATE、白名单 ADD 与结构判据；不维护第二套 schema。
 TABLES = {
@@ -79,6 +79,7 @@ TABLES = {
             "route_revision": "INTEGER NOT NULL DEFAULT 0",
             "publication_app_id": "TEXT NOT NULL DEFAULT ''",
             "trace_json": "TEXT",
+            "tool_summaries_json": "TEXT",
         },
         (),
     ),
@@ -536,6 +537,7 @@ LEGACY_COLUMNS = {
         "publication_app_id",
         "language",
         "trace_json",
+        "tool_summaries_json",
     ),
     "chat_dify_runs": (
         "snapshot_json",
@@ -585,7 +587,9 @@ class SchemaError(ValueError):
 
 def _version(conn: sqlite3.Connection) -> int:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (0, VERSION):
+    # 0 = 版本化之前的库，1..VERSION = 已知历史发布；缺的新列由 LEGACY_COLUMNS 放行、
+    # ensure 补齐。只有更晚版本写出的库（或手工改坏的值）才拒绝——旧代码开新库必须 fail closed。
+    if not 0 <= version <= VERSION:
         raise SchemaError(f"unsupported gateway schema version: {version}")
     return version
 
@@ -730,11 +734,11 @@ def _validate(conn: sqlite3.Connection, *, legacy: bool) -> list[str]:
 
 
 def check(path: Path) -> dict:
-    """只读检查现有库；版本 0 返回可迁移结构报告，不创建文件或执行迁移。"""
+    """只读检查现有库；版本低于当前的已知历史库返回可迁移结构报告，不创建文件或执行迁移。"""
     with gateway_db.connection(Path(path), readonly=True) as conn:
         conn.execute("BEGIN")
         version = _version(conn)
-        warnings = _validate(conn, legacy=version == 0)
+        warnings = _validate(conn, legacy=version < VERSION)
         return {
             "version": version,
             "current_version": VERSION,

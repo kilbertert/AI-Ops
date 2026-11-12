@@ -24,7 +24,19 @@ const run = {
   actual_node_id: 'node-a',
   expires_at: '2026-11-11T10:00:00Z',
   evidence_tools: ['cpms_order_detail'],
+  tool_summaries: {
+    cpms_order_detail: { 入参: 'order_no=ORDER-1', 状态: '已支付', 应付: '8.00' },
+  },
   trace: [
+    {
+      phase: 'tool',
+      tool: 'cpms_order_detail',
+      status: 'refused',
+      at: '2026-11-10T10:00:00Z',
+      elapsed_ms: 500,
+      duration_ms: 100,
+      detail: 'CPMS_SCOPE_MISMATCH',
+    },
     {
       phase: 'tool',
       tool: 'cpms_order_detail',
@@ -65,8 +77,21 @@ it('opens actual run metadata from the existing logs page and clears it on revoc
   await expect.element(screen.getByText('成功（结果已过期）')).toBeVisible()
   await screen.getByRole('button', { name: '查看运行' }).click()
   await expect.element(screen.getByText(/cpms_order_detail/)).toBeVisible()
-  await expect.element(screen.getByText(/工具耗时 0.25 秒/)).toBeVisible()
-  await expect.element(screen.getByText(/累计 1.00 秒/)).toBeVisible()
+  await expect
+    .element(
+      screen.getByText(
+        /第 1 次调用 订单详情：订单不在可见范围或不存在 · 耗时 0.10 秒 · 累计 0.50 秒/,
+      ),
+    )
+    .toBeVisible()
+  await expect
+    .element(
+      screen.getByText(/第 2 次调用 订单详情：成功 · 耗时 0.25 秒 · 累计 1.00 秒/),
+    )
+    .toBeVisible()
+  await expect.element(screen.getByText(/入参=order_no=ORDER-1 · 状态=已支付 · 应付=8.00/)).toBeVisible()
+  // 摘要按工具名覆盖保存，只属于最近一次调用：被拒绝的历史行不重复显示它。
+  expect(document.body.textContent?.match(/入参=order_no=ORDER-1/g)).toHaveLength(1)
   expect(requests).toContainEqual({ action: 'run-log', app_id: 'app-a', run_id: 'run-a' })
   revoked = true
   await screen.getByRole('button', { name: '刷新日志' }).click()
@@ -148,7 +173,7 @@ it('shows an expired inflight run and does not infer missing tool duration from 
   const screen = await render(<AppLogs />)
   await expect.element(screen.getByText('已过期（结果已过期）')).toBeVisible()
   await screen.getByRole('button', { name: '查看运行' }).click()
-  await expect.element(screen.getByText(/工具耗时 未采集/)).toBeVisible()
+  await expect.element(screen.getByText(/耗时 未采集/)).toBeVisible()
 })
 
 it.each([{ managed: false }, { managed: true, entry: 'consumer' }])(
