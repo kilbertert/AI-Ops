@@ -651,6 +651,29 @@ def request_language(
     return resolve_language(accept_language)
 
 
+def localized_copy_language(
+    request: Request,
+    accept_language: Annotated[str | None, Header(alias="Accept-Language")] = None,
+) -> str:
+    """``request_language`` 加一条日志，只挂在**确定性文案**出口。
+
+    chat、trial、analysis 这类路径的解析语言本来就有持久记录
+    (``chat_dify_runs.language`` 等),出问题时查库即可;而 faq、starters、
+    shortcuts、banner 只把语言用在**当场挑选文案**上,服务端不留任何痕迹——
+    客户端发错头时(实测:某 App 存储键空值默认 ``en``)没有日志就无从定位。
+    所以这是一个单独依赖而不是给 ``request_language`` 加日志:后者会把
+    已有持久记录的路径再记一遍,纯噪音。
+    """
+    language = resolve_language(accept_language)
+    _LOGGER.info(
+        "localized_copy_language path=%s accept_language=%r resolved=%s",
+        request.url.path,
+        accept_language,
+        language,
+    )
+    return language
+
+
 def _publish_initiator(
     company_user_id: str | None,
     company_username: str | None,
@@ -2749,7 +2772,7 @@ def create_gateway_app(
     @app.get("/v1/faq/recommendations")
     def faq_recommendations(
         identity: tuple[ScopeContext, Any] = Depends(faq_identity),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
+        language: str = Depends(localized_copy_language),  # noqa: B008
     ):
         _, decision = identity
         return {
@@ -2762,7 +2785,7 @@ def create_gateway_app(
     @app.get("/v1/faq/catalog")
     def faq_catalog(
         identity: tuple[ScopeContext, Any] = Depends(faq_identity),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
+        language: str = Depends(localized_copy_language),  # noqa: B008
     ):
         _, decision = identity
         return {
@@ -2776,7 +2799,7 @@ def create_gateway_app(
     def faq_answer(
         payload: FAQAnswerRequest,
         identity: tuple[ScopeContext, Any] = Depends(faq_identity),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
+        language: str = Depends(localized_copy_language),  # noqa: B008
     ):
         _, decision = identity
         try:
@@ -4738,7 +4761,7 @@ def create_gateway_app(
     @app.get("/v1/assistant/starters")
     def assistant_starters(
         identity: tuple[ScopeContext, PlatformDecision] = Depends(shortcut_identity),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
+        language: str = Depends(localized_copy_language),  # noqa: B008
         business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
     ) -> dict[str, Any]:
         """This assistant's opening line and suggested questions (#585 / PRD #577).
@@ -4776,7 +4799,7 @@ def create_gateway_app(
     @app.get("/v1/shortcuts")
     def list_shortcuts(
         identity: tuple[ScopeContext, PlatformDecision] = Depends(shortcut_identity),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
+        language: str = Depends(localized_copy_language),  # noqa: B008
     ) -> dict[str, Any]:
         """Published product-entry shortcuts for this caller's tenant+entry.
 
@@ -5459,7 +5482,7 @@ def create_gateway_app(
     @app.get("/v1/banner")
     def list_banners(
         identity: tuple[ScopeContext, PlatformDecision] = Depends(shortcut_identity),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
+        language: str = Depends(localized_copy_language),  # noqa: B008
     ) -> dict[str, Any]:
         """The chat-page banner for this caller's entry — static configuration.
 
