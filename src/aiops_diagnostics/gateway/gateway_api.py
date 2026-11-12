@@ -6784,7 +6784,12 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
             or latest is None
             or not deliverable(latest)
             or not snapshot
-            or report.get("summary") != snapshot["blocks"][0]["text"]
+            or report.get("summary")
+            != (
+                "\n\n".join(b["text"] for b in snapshot["blocks"] if b.get("kind") == "text")
+                if located.data_kind == "agent"
+                else snapshot["blocks"][0]["text"]
+            )
             or any(
                 report.get(k) != getattr(latest, k)
                 for k in ("workflow_run_id", "task_id", "workflow_id", "app_id")
@@ -7011,13 +7016,34 @@ def _authorized_consumer_snapshot(settings, caller, order_no, data_kind, *, incl
 
     if data_kind != "billing":
         raise ValueError("unsupported consumer data kind")
-    return read_billing_record(
+    snapshot = read_billing_record(
         consumer_endpoint(settings, caller.effective_tenant_id),
         order_no,
         tenant_id=caller.effective_tenant_id,
         user_id=caller.subject.c_user_id or "",
         include_composition=include_composition,
     )
+    if include_composition:
+        snapshot["mall_payment"] = _consumer_mall_payment(settings, caller, order_no, snapshot)
+    return snapshot
+
+
+def _consumer_mall_payment(settings, caller, order_no, snapshot):
+    """商城侧订单/税项/支付证据；任何缺口只降级为标注，不打断账务读取本身。
+
+    身份边界复用充电库同一条 scope 下推：商城行必须与已授权订单同租户、
+    同订单消费者，读不到就报缺证，不换一条更宽的路径去「试着关联」。
+    """
+    from aiops_diagnostics.consumer.consumer_mall_billing import mall_payment_evidence
+
+    try:
+        with scoped_mysql_source(
+            Settings.from_config(settings.server_config_file), resolve_query_scope(caller)
+        ) as source:
+            return mall_payment_evidence(source.mall_billing_records(order_no), snapshot)
+    except Exception as exc:  # noqa: BLE001 - 证据段是降级契约：任何意外都不能让账务答复 5xx
+        _LOGGER.warning("consumer_mall_payment degraded: %s", exc.__class__.__name__)
+        return mall_payment_evidence(None, snapshot)
 
 
 def _authorized_charging_snapshot(

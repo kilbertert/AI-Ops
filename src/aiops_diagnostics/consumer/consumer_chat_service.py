@@ -317,7 +317,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
 
             context = store.context(run_id)
             consumer_agent.require_evidence(runtime, caller, binding, context)
-            answer = consumer_agent.final_answer(reply.answer, context)
+            answer = consumer_agent.final_answer(reply.answer, context, language=language, question=question)
         elif binding.content_file or binding.content_snapshot is not None:
             from aiops_diagnostics.consumer.consumer_knowledge import binding_content, final_answer
 

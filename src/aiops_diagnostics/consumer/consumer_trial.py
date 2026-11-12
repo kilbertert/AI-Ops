@@ -252,7 +252,9 @@ class ConsumerTrial:
                     raise ValueError("trial has no matching live snapshot")
             if self.binding.callback_version == 6:
                 consumer_agent.require_evidence(runtime, scope, self.binding, context)
-                answer = consumer_agent.final_answer(reply.answer, context)
+                answer = consumer_agent.final_answer(
+                    reply.answer, context, language=language, question=self.question
+                )
             else:
                 answer = final_answer(reply.answer, context, language, self.content["content"])
             if not runs.store_snapshot(run_id, answer) or not runs.succeed(run_id):
@@ -260,7 +262,7 @@ class ConsumerTrial:
             return TrialResult(
                 "completed",
                 {
-                    "summary": answer["blocks"][0]["text"],
+                    "summary": "\n\n".join(b["text"] for b in answer["blocks"] if b.get("kind") == "text"),
                     "workflow_run_id": reply.workflow_run_id,
                     "task_id": reply.task_id,
                     "workflow_id": workflow_id,
