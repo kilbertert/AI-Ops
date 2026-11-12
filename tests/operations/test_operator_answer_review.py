@@ -225,6 +225,58 @@ def test_post_review_gate_refusal_is_terminal_not_resampled(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("dispatch_raises", [False, True])
+def test_post_review_refusal_survives_stamp_failure(tmp_path, monkeypatch, dispatch_raises):
+    """stamp 落账失败时也按 completion_refusal 原码终结（ADR-0252）：不重派。
+
+    dispatch_raises=True 覆盖派发运输层抛错分支：闸拒兜底在两条 worker 路径
+    （正常返回未推进 / AgentRunDispatchError）下都必须拦住重派。
+    """
+    with environment(tmp_path, monkeypatch) as f:
+        attempts, saved = [], []
+        monkeypatch.setattr(
+            operator_cpms.OperatorCpms, "_stamp_gate_refusal", lambda self, run_id, code: None
+        )
+
+        def dispatch(_, config, run):
+            attempts.append(run)
+            _, head, _ = call_tool(f, run, "cpms_order_detail")
+
+            def review(*a, **kw):
+                saved.append(f["resolver"].current)
+                from operations.test_operator_cpms import scope
+
+                f["resolver"].current = scope("OTHER")
+                return {"verdict": "allow"}
+
+            monkeypatch.setattr(operator_answer_review, "review", review)
+            f["client"].post(
+                f"/v1/internal/operator-runs/{run}/completions",
+                headers=head,
+                json={"status": "completed", "answer": "核对完毕"},
+            )
+            if dispatch_raises:
+                raise operator_cpms.AgentRunDispatchError("transport after refused completion")
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        response = f["client"].post(
+            "/v1/assistant/questions", headers=HEADERS, json={"question": "查询费用", "order_no": ORDER}
+        )
+        qa = response.json()["qa_id"]
+        future = f["ctx"].runtime._futures.get(qa)
+        if future:
+            future.result(timeout=10)
+        if saved:
+            f["resolver"].current = saved[0]
+        result = terminal(f, qa).json()
+        assert result["status"] == "failed"
+        assert result["error"]["code"] == "OPERATOR_DEPENDENCY_UNAVAILABLE"
+        assert len(attempts) == 1
+        run = f["ctx"].agent_run_store.by_qa(qa)
+        assert run.state == "failed"
+        assert not any(event["phase"] == "resample" for event in run.trace)
+
+
+@pytest.mark.parametrize("dispatch_raises", [False, True])
 def test_rejected_reply_without_evidence_is_delivered(tmp_path, monkeypatch, dispatch_raises):
     """复核拒绝不再拦截交付（ADR-0252）：回执收答复、判拒只记录，运输错误不撤销。"""
     from execution.test_m2_close_contract import NODE_A_TOKEN

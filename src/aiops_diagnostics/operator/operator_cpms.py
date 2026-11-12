@@ -1939,6 +1939,10 @@ class OperatorCpms:
                     # 节点已回报模型失败并完成证据交付时，运输层错误不能撤销该交付。
                     if self.context.agent_run_store.get(run_id).state == "succeeded":
                         break
+                    # `_complete` 的终局闸拒（码未落账、run 仍活动）也不能重派：
+                    # 同一 run 重派必撞同一道闸，直接归原码。
+                    if task.completion_refusal:
+                        raise OperatorRefused(task.completion_refusal) from None
                     if not self._untouched(run_id, task):
                         raise
                     if task.resamples >= MAX_RESAMPLES:
@@ -2254,6 +2258,7 @@ def _failure_code(exc: BaseException) -> str:
             "CPMS_UNAVAILABLE",
             "TSDATA_UNAVAILABLE",
             "OPERATOR_SCOPE_UNAVAILABLE",
+            "OPERATOR_SCOPE_CHANGED",
         }:
             return "OPERATOR_DEPENDENCY_UNAVAILABLE"
         if code in {"OPERATOR_RESULT_UNSTABLE", "OPERATOR_ANSWER_NOT_GROUNDED"}:
