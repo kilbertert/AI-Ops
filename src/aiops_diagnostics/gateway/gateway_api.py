@@ -668,7 +668,9 @@ def localized_copy_language(
     _LOGGER.info(
         "localized_copy_language path=%s accept_language=%r resolved=%s",
         request.url.path,
-        accept_language,
+        # 截断只为了让日志行有界：原始头是诊断对象本身，必须逐字记录才有用，
+        # 但客户端发多长不受我们控制（运输层已禁 CRLF，伪造不了额外行）。
+        accept_language[:160] if accept_language is not None else None,
         language,
     )
     return language
