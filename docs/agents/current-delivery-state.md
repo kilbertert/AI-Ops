@@ -1,5 +1,18 @@
 # 当前交付状态索引
 
+## 管家答复复核降为观察（2026-11-12）
+
+PR #1494已合并e9827d35、跟进PR #1495已合并fe4fd86a（ADR-0252）；标准CD
+43221145651与43223832344成功；Gateway为1.9.1+fe4fd86ad419，Dify web镜像
+review-observe-fe4fd86a已配套换发。语义复核verdict不再一票否决交付：
+reject/uncertain/unavailable只落快照/轨迹/行级review_reason观察，
+delivery_mode按有无答复给出diagnosis/evidence_only；复核后授权/范围闸拒并入
+stamp约定并以completion_refusal兜底，不再误走重采样。
+真实管家订单诊断在41实测succeeded+delivery_mode=diagnosis+verdict落快照
+（allow分支）；reject仍交付路径由参数化单测与独立Hack覆盖，生产拒绝频率列入观察。
+详见[双端上线回执](../validation/2026-11-12-operator-review-observe-deploy.md)。
+公司源码与业务数据未改。
+
 ## 管家运行日志明细 v2（2026-11-12）
 
 PR #1491已合并587af5d7（ADR-0251），标准CD43202127004成功；Gateway为1.9.1+587af5d75a1e，
