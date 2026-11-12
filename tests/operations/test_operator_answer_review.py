@@ -10,11 +10,13 @@ from operations.test_operator_cpms import HEADERS, ORDER, environment, terminal
 
 
 @pytest.mark.parametrize("verdict", ["reject", "uncertain", "unavailable"])
-def test_unverified_reply_is_not_delivered(tmp_path, monkeypatch, verdict):
+def test_unverified_reply_is_replaced_by_current_evidence(tmp_path, monkeypatch, verdict):
     with environment(tmp_path, monkeypatch) as f:
         monkeypatch.setattr(operator_answer_review, "review", lambda *args, **kwargs: {"verdict": verdict})
+        attempts = []
 
         def dispatch(_, config, run):
+            attempts.append(run)
             _, head, _ = call_tool(f, run, "cpms_order_detail")
             response = f["client"].post(
                 f"/v1/internal/operator-runs/{run}/completions",
@@ -24,27 +26,34 @@ def test_unverified_reply_is_not_delivered(tmp_path, monkeypatch, verdict):
                     "answer": "整单收费都正确",
                 },
             )
-            assert (
-                response.status_code == 403
-                and response.json()["error"]["code"] == "OPERATOR_ANSWER_NOT_GROUNDED"
-            )
+            assert response.status_code == 200
 
         monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
         response = f["client"].post(
             "/v1/assistant/questions", headers=HEADERS, json={"question": "查询费用", "order_no": ORDER}
         )
         result = terminal(f, response.json()["qa_id"]).json()
-        assert result["status"] == "failed" and result["result"] is None
+        assert result["status"] == "completed"
+        text = result["result"]["blocks"][0]["text"]
+        assert "诊断结论未完成" in text and "整单收费都正确" not in text
+        assert "27.36" in text and "0.00" in text and ORDER in text
+        assert len(attempts) == 1
+        run = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"])
+        assert run.snapshot["answer"] is None
+        assert run.snapshot["answer_review"]["verdict"] == verdict
+        assert run.snapshot["delivery_mode"] == "evidence_only"
+        assert not any(event["phase"] == "resample" for event in run.trace)
 
 
 @pytest.mark.parametrize("change", ["cancel", "revoke"])
-def test_review_cannot_resurrect_cancelled_or_revoked_run(tmp_path, monkeypatch, change):
+@pytest.mark.parametrize("verdict", ["allow", "reject"])
+def test_review_cannot_resurrect_cancelled_or_revoked_run(tmp_path, monkeypatch, change, verdict):
     with environment(tmp_path, monkeypatch) as f:
 
         def dispatch(_, config, run):
             _, head, _ = call_tool(f, run, "cpms_order_detail")
 
-            def review(*args):
+            def review(*args, **kwargs):
                 if change == "cancel":
                     qa = f["ctx"].agent_run_store.get(run).qa_id
                     f["client"].post("/v1/assistant/questions/" + qa + "/cancel", headers=HEADERS)
@@ -52,7 +61,7 @@ def test_review_cannot_resurrect_cancelled_or_revoked_run(tmp_path, monkeypatch,
                     from operations.test_operator_cpms import scope
 
                     f["resolver"].current = scope("OTHER")
-                return {"verdict": "allow"}
+                return {"verdict": verdict}
 
             monkeypatch.setattr(operator_answer_review, "review", review)
             response = f["client"].post(
@@ -138,3 +147,59 @@ def test_review_unavailable_does_not_deliver(monkeypatch):
     monkeypatch.setattr(operator_answer_review, "structured_request", failed)
     settings = SimpleNamespace(select_provider=lambda _: SimpleNamespace(model="test"))
     assert operator_answer_review.review("回答", {}, [], "问", "zh", settings)["verdict"] == "unavailable"
+
+
+@pytest.mark.parametrize(
+    "reason,expected",
+    [
+        ("quota_exhausted", "review_quota_exhausted"),
+        ("auth_rejected", "review_auth_rejected"),
+        ("rate_limited", "review_unavailable"),
+    ],
+)
+def test_review_dependency_failure_keeps_only_a_fixed_reason(monkeypatch, reason, expected):
+    from aiops_diagnostics.common.model_request import ModelRequestError
+
+    monkeypatch.setattr(operator_answer_review, "resolve_provider_api_key", lambda *a, **kw: "private-key")
+
+    def failed(**kwargs):
+        raise ModelRequestError(reason, 403)
+
+    monkeypatch.setattr(operator_answer_review, "structured_request", failed)
+    settings = SimpleNamespace(select_provider=lambda _: SimpleNamespace(model="test"))
+    result = operator_answer_review.review("回答", {}, [], "问", "zh", settings)
+    assert result["verdict"] == "unavailable" and result["reason"] == expected
+    assert "private-key" not in str(result)
+
+
+@pytest.mark.parametrize("dispatch_raises", [False, True])
+def test_rejected_reply_without_evidence_is_not_retried_or_delivered(tmp_path, monkeypatch, dispatch_raises):
+    from execution.test_m2_close_contract import NODE_A_TOKEN
+
+    with environment(tmp_path, monkeypatch) as f:
+        monkeypatch.setattr(operator_answer_review, "review", lambda *a, **kw: {"verdict": "reject"})
+        calls = []
+
+        def dispatch(_, config, run):
+            calls.append(run)
+            headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
+            published = (
+                f["client"]
+                .post("/v1/internal/charging-status/execution-config/" + run, headers=headers)
+                .json()
+            )
+            headers["X-AI-Ops-Exec-Config"] = published["sha256"]
+            response = f["client"].post(
+                f"/v1/internal/operator-runs/{run}/completions",
+                headers=headers,
+                json={"status": "completed", "answer": "已为你退款。"},
+            )
+            assert response.status_code == 403
+            if dispatch_raises:
+                raise operator_cpms.AgentRunDispatchError("completion refused")
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        response = f["client"].post("/v1/assistant/questions", headers=HEADERS, json={"question": "帮我退款"})
+        result = terminal(f, response.json()["qa_id"]).json()
+        assert result["status"] == "failed" and result["result"] is None
+        assert len(calls) == 1
