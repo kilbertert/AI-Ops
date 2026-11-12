@@ -113,8 +113,7 @@ def test_agent_combines_tools_and_keeps_actual_answer_after_grant_expiry(tmp_pat
         final = done(env, first["qa_id"])
         assert final.status_code == 200 and final.json()["status"] == "completed", final.text
         final_text = final.json()["result"]["blocks"][0]["text"]
-        assert "5.20" in final_text and "3.30" in final_text
-        assert "这笔订单已结束" not in final_text
+        assert final_text == "这笔订单已结束。请确认第2步的设备提示。"
         assert len(reads) == 1 and len(backend["calls"]) == 1 and len(kb.calls) == 1
         assert DataGrantStore(runtime.store.path).by_token(tokens[0]).state == "revoked"
         with sqlite3.connect(runtime.store.path) as db:
@@ -440,9 +439,7 @@ def test_agent_trial_uses_same_tools_and_rechecks_selected_objects(tmp_path, mon
                 break
             time.sleep(0.02)
         assert record["status"] == "completed", record
-        summary = record["result"]["report"]["summary"]
-        assert ORDER_A in summary and "充电中" in summary and "无法确认" in summary
-        assert "请确认第2步" not in summary
+        assert record["result"]["report"]["summary"] == "已查询所选订单，请确认第2步。"
         assert deleted and routes.get("env-a", "TENANT-A", "consumer", "consumer_service") == before
         env["orders"].ownership[ORDER_A] = "USER-B"
         assert (

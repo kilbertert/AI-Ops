@@ -121,7 +121,7 @@ order_amount对应来源totalAmount，称“订单费用记录”；recorded_pay
 缺项、异常与截断按工具说明；退款和支付仅是账务记录，不证明银行扣款或到账。普通文本列表可沿用运营风格，事实限制不能被安抚措辞覆盖。
 <!-- /aiops-order-composition:5 -->
 """
-ORDER_COMPOSITION_INSTRUCTION = """<!-- aiops-order-composition:6 -->
+ORDER_COMPOSITION_INSTRUCTION_V6 = """<!-- aiops-order-composition:6 -->
 本轮订单事实由系统按工具原字段呈现；你的职责是选对订单并按需查询。问状态/异常必须调用status，问费用/税费/详情调用billing；混合问题组合查询。
 涉及订单时你的自由正文不会作为事实交付；本轮成功的知识结果会附原文摘录，知识问答由你检索和选择依据，系统按来源原文摘录交付。禁止为了回避缺证省略所需工具。
 以下原值与证据范围约束优先于前文全部风格、安抚及计算要求；保持自然回答，未知就明确未知。
@@ -154,6 +154,7 @@ confirmed仅证明支付记录包含该税项，不证明两金额的差额等�
 缺项、异常与截断按工具说明；退款和支付仅是账务记录，不证明银行扣款或到账。普通文本列表可沿用运营风格，事实限制不能被安抚措辞覆盖。
 <!-- /aiops-order-composition:6 -->
 """
+ORDER_COMPOSITION_INSTRUCTION = ORDER_COMPOSITION_INSTRUCTION_V5
 INSTRUCTION = BASE_INSTRUCTION + ORDER_COMPOSITION_INSTRUCTION
 
 

@@ -154,7 +154,7 @@ Dify1.17.1更新载荷需要original_provider、credentials和icon；现役命�
 运行快照的`answer_review`分别记录模型判定和抽取的`currencies`/`station_names`。
 排查时按本次qa_id读取，不能取最新运行代替；只有已交付且当前仍授权的证据可支持实体。
 站点查询使用records.name，未来方案使用已解析rules.name，用户搜索参数不属于证据。
-现役工具未提供币种，金额仅展示记录数值；未来增加币种须同步工具投影及比对合同。
+用户确认币种标注本身不单独拒绝；currencies只记录观察。金额改写、换汇推算和其他无依据断言仍复核。
 
 真实页面验收除completed还需逐句核对：币种/站名/优惠/税额限定，不能把HTTP成功当业务通过。
 先保存SOP和provider备份，草稿预览通过再正常发布；系统提示变更需要重新发布快照。
