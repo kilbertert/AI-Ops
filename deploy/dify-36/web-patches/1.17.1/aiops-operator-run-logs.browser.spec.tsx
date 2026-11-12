@@ -15,6 +15,15 @@ const run = {
   gateway_version: '1.0',
   node_build: 'build-a',
   agent_version: null,
+  question: '这笔订单怎么没结算',
+  order_no: 'ORDER-1',
+  reason: null,
+  language: 'zh',
+  environment: 'prod',
+  expected_node_id: 'node-a',
+  actual_node_id: 'node-a',
+  expires_at: '2026-11-11T10:00:00Z',
+  evidence_tools: ['cpms_order_detail'],
   trace: [
     {
       phase: 'tool',
@@ -64,6 +73,43 @@ it('opens actual run metadata from the existing logs page and clears it on revoc
   await expect.element(screen.getByRole('alert')).toBeVisible()
   await expect.element(screen.getByText(/cpms_order_detail/)).not.toBeInTheDocument()
   await expect.element(screen.getByText('原生日志')).not.toBeInTheDocument()
+})
+
+it('shows question, order, terminal code and per-event refusal codes in detail', async () => {
+  const failed = {
+    ...run,
+    state: 'failed',
+    reason: 'scope_unreadable',
+    trace: [
+      {
+        phase: 'tool',
+        tool: 'cpms_order_detail',
+        status: 'refused',
+        at: '2026-11-10T10:00:01Z',
+        elapsed_ms: 900,
+        duration_ms: 200,
+        detail: 'CPMS_SCOPE_MISMATCH',
+      },
+      {
+        phase: 'failed',
+        status: 'failed',
+        at: '2026-11-10T10:00:02Z',
+        elapsed_ms: 1500,
+        detail: 'scope_unreadable',
+      },
+    ],
+  }
+  stub((body) =>
+    Response.json(body.action === 'run-log' ? failed : { items: [failed], has_more: false }),
+  )
+  const screen = await render(<AppLogs />)
+  await expect.element(screen.getByText('这笔订单怎么没结算')).toBeVisible()
+  await expect.element(screen.getByText('ORDER-1')).toBeVisible()
+  await screen.getByRole('button', { name: '查看运行' }).click()
+  await expect.element(screen.getByText('问题：这笔订单怎么没结算')).toBeVisible()
+  await expect.element(screen.getByText(/终态原因：权限范围读取失败/)).toBeVisible()
+  await expect.element(screen.getByText(/订单不在可见范围或不存在/)).toBeVisible()
+  await expect.element(screen.getByText(/执行节点：node-a → 实际 node-a/)).toBeVisible()
 })
 
 it('paginates and explicitly labels old runs without trace', async () => {

@@ -372,7 +372,7 @@ class OperatorCpms:
         self.tasks = {}
         self.lock = threading.RLock()
 
-    def _trace(self, run_id, phase, status="running", *, tool=None, duration_ms=None):
+    def _trace(self, run_id, phase, status="running", *, tool=None, duration_ms=None, detail=None):
         task = self.tasks.get(run_id)
         if task is None or task.trace_failed:
             return
@@ -392,6 +392,9 @@ class OperatorCpms:
                 event["tool"] = tool
             if duration_ms is not None:
                 event["duration_ms"] = max(0, int(duration_ms))
+            if detail:
+                # 只写机器码（拒绝码/复核原因/终止码），截断兜底防长文本进账本。
+                event["detail"] = str(detail)[:64]
             try:
                 self.context.agent_run_store.record_trace(run_id, event)
             except sqlite3.Error:
@@ -634,6 +637,7 @@ class OperatorCpms:
                 route_revision=binding.route_revision,
                 publication_app_id=binding.app_id,
                 operation="operator_agent",
+                language=language,
             )
             qa = self.context.store.create_assistant_question(
                 caller.scope_fingerprint,
@@ -1257,7 +1261,12 @@ class OperatorCpms:
                 self._note_refusal(task, tool, exc)
                 if tool and secrets.compare_digest(task.grant, grant):
                     self._trace(
-                        run_id, "tool", "refused", tool=tool, duration_ms=(time.monotonic() - started) * 1000
+                        run_id,
+                        "tool",
+                        "refused",
+                        tool=tool,
+                        duration_ms=(time.monotonic() - started) * 1000,
+                        detail=str(exc),
                     )
             raise
 
@@ -1704,6 +1713,7 @@ class OperatorCpms:
                 "review",
                 "succeeded" if review["verdict"] == "allow" else "refused",
                 duration_ms=(time.monotonic() - review_started) * 1000,
+                detail=None if review["verdict"] == "allow" else review.get("reason"),
             )
         task.answer_review = review
         if review["verdict"] != "allow":
@@ -1833,7 +1843,7 @@ class OperatorCpms:
                     if task.resamples >= MAX_RESAMPLES:
                         raise
                     task.resamples += 1
-                    self._trace(run_id, "resample")
+                    self._trace(run_id, "resample", detail="dispatch_refused")
                     logging.getLogger("aiops.operator").warning(
                         "operator_resample attempt=%d reason=dispatch_refused", task.resamples
                     )
@@ -1848,7 +1858,7 @@ class OperatorCpms:
                 if task.resamples >= MAX_RESAMPLES:
                     raise OperatorRefused("OPERATOR_MODEL_OUTPUT_UNSTABLE")
                 task.resamples += 1
-                self._trace(run_id, "resample")
+                self._trace(run_id, "resample", detail="no_answer_accepted")
                 logging.getLogger("aiops.operator").warning(
                     "operator_resample attempt=%d reason=no_answer_accepted", task.resamples
                 )
@@ -1865,9 +1875,9 @@ class OperatorCpms:
                     active_order_no=self.context.agent_run_store.get(run_id).order_no or None,
                 )
         except Exception as exc:  # noqa: BLE001 - 后台失败必须收敛，凭据及上游正文不进日志。
-            self._trace(run_id, "failed", "failed")
-            reason = _failure_reason(exc)
             failure_code = _failure_code(exc)
+            self._trace(run_id, "failed", "failed", detail=failure_code)
+            reason = _failure_reason(exc)
             if not self.context.agent_run_store.fail(run_id, failure_code):
                 self.context.agent_run_store.refuse(run_id, failure_code)
             store.update_assistant_question(qa_id, status="failed", error_code=_failure_code(exc))

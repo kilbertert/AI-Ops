@@ -3,10 +3,9 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import asdict, replace
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from operations.test_operator_cpms import APP, operator, scope  # noqa: F401
@@ -59,24 +58,36 @@ def logged(operator, monkeypatch):  # noqa: F811
         },
     )
 
-    def issue(*, caller=None, app=APP, state="succeeded", expired=False):
+    def issue(*, caller=None, app=APP, state="succeeded", expired=False, qa=None, binding=None):
         run = ctx.agent_run_store.issue(
             scope=caller or scope(),
-            order_no="PRIVATE-ORDER",
+            order_no="ORDER-FIXTURE-1",
             config=AgentRunConfig.load(Path(f["route"].config_file)),
             gateway_version="fixture-v1",
             publication_app_id=app,
             operation="operator_agent",
+            chat_binding=binding,
         )
-        ctx.agent_run_store.bind_qa(run.run_id, "qa_" + run.run_id)
+        ctx.agent_run_store.bind_qa(run.run_id, qa or "qa_" + run.run_id)
         with ctx.agent_run_store._connection(write=True) as connection:
             connection.execute(
                 "UPDATE agent_runs SET state=?, snapshot_json=?, reason=?, completed_at=?, expires_at=? "
                 "WHERE run_id=?",
                 (
                     state,
-                    json.dumps({"answer": "PRIVATE-ANSWER", "data": "PRIVATE-TOOL-DATA"}),
-                    "PRIVATE-FAILURE",
+                    json.dumps(
+                        {
+                            "answer": "PRIVATE-ANSWER",
+                            "data": "PRIVATE-TOOL-DATA",
+                            "evidence": {
+                                "cpms_order_detail": {"data": "PRIVATE-EVIDENCE"},
+                                "PRIVATE-INJECTED-KEY": {"data": "PRIVATE-X"},
+                            },
+                            "trial": True,
+                            "history_runs": ["run_hist_1", "run_hist_2"],
+                        }
+                    ),
+                    "fixture_terminal_reason",
                     None if state in {"issued", "running"} else datetime.now(UTC).isoformat(),
                     (datetime.now(UTC) + timedelta(days=-1 if expired else 1)).isoformat(),
                     run.run_id,
@@ -125,6 +136,22 @@ def test_list_is_bounded_scoped_and_metadata_only(logged):
         "gateway_version",
         "node_build",
         "agent_version",
+        "reason",
+        "question",
+        "order_no",
+        "language",
+        "environment",
+        "expected_node_id",
+        "actual_node_id",
+        "agent_version_observed",
+        "agent_version_gap",
+        "claimed_at",
+        "completed_at",
+        "expires_at",
+        "result_sha256",
+        "trial",
+        "history_run_count",
+        "evidence_tools",
     }
 
 
@@ -289,19 +316,54 @@ def test_trace_contract_keeps_actual_durations_and_prefers_last_event(logged, st
         "status": "succeeded",
         "data": "PRIVATE",
         "duration_ms": 25,
+        "detail": "OPERATOR_SCOPE_CHANGED",
     }
-    projected = logs.metadata(
-        SimpleNamespace(
-            **{**asdict(run), "trace": tuple([{**event, "elapsed_ms": 1}] * 149 + [event])},
-            exec_config_confirmed=False,
-        )
-    )
+    filler = {key: value for key, value in event.items() if key != "detail"}
+    projected = logs.metadata(replace(run, trace=tuple([{**filler, "elapsed_ms": 1}] * 149 + [event])))
     assert projected["elapsed_ms"] == 75
     assert projected["elapsed_source"] == "trace"
     assert projected["trace"][-1]["duration_ms"] == 25
+    assert projected["trace"][-1]["detail"] == "OPERATOR_SCOPE_CHANGED"
     assert len(projected["trace"]) == 128
     assert set(projected["trace"][0]) == {"phase", "elapsed_ms", "duration_ms", "at", "tool", "status"}
     assert "PRIVATE" not in json.dumps(projected)
+
+
+def test_detail_projects_question_order_terminal_code_and_scope_isolation(logged):
+    f = logged
+    qa = f["ctx"].store.create_assistant_question(
+        scope().scope_fingerprint, "这张订单怎么还没退费", tenant_id="TENANT-A"
+    )
+    foreign_qa = f["ctx"].store.create_assistant_question(
+        scope(site="SITE-2").scope_fingerprint, "PRIVATE-QUESTION"
+    )
+    own = f["issue_log"](qa=qa["qa_id"], state="failed")
+    foreign = f["issue_log"](qa=foreign_qa["qa_id"], state="failed")
+    detail = post(f, {"app_id": APP, "run_id": own}, PATH + "/detail").json()
+    assert detail["question"] == "这张订单怎么还没退费"
+    assert detail["order_no"] == "ORDER-FIXTURE-1"
+    assert detail["reason"] == "fixture_terminal_reason"
+    assert detail["evidence_tools"] == ["cpms_order_detail"]
+    assert detail["trial"] is True
+    assert detail["history_run_count"] == 2
+    # 死 run 取证可注入任意 evidence 键名；未声明的键不得进日志。
+    assert "PRIVATE-INJECTED-KEY" not in json.dumps(detail)
+    # 别的指纹下的问题就算被错绑到本 run，也不能经这条投影漏出来。
+    foreign_detail = post(f, {"app_id": APP, "run_id": foreign}, PATH + "/detail")
+    assert foreign_detail.json()["question"] is None
+    assert "PRIVATE" not in foreign_detail.text
+
+
+def test_trial_is_derived_from_chat_binding_when_snapshot_lacks_the_flag(logged):
+    f = logged
+    run = f["issue_log"](binding="operator-trial:app-trial", state="failed")
+    with f["ctx"].agent_run_store._connection(write=True) as connection:
+        connection.execute("UPDATE agent_runs SET snapshot_json=? WHERE run_id=?", ("{}", run))
+    detail = post(f, {"app_id": APP, "run_id": run}, PATH + "/detail").json()
+    # 绑定是内部标识（operator-trial:<app uuid>）——只用于派生 trial，不投影。
+    assert "chat_binding" not in detail
+    assert detail["trial"] is True
+    assert detail["history_run_count"] == 0 and detail["evidence_tools"] == []
 
 
 @pytest.mark.parametrize("state", ["succeeded", "failed", "running"])
@@ -314,14 +376,17 @@ def test_persisted_run_trace_reaches_list_and_detail(logged, state):
         {
             "phase": "tool",
             "tool": "cpms_order_detail",
-            "status": "succeeded",
+            "status": "refused",
             "at": "2026-11-10T00:00:01Z",
             "elapsed_ms": 1000,
             "duration_ms": 750,
+            "detail": "OPERATOR_SCOPE_CHANGED" + "X" * 64,
         },
     ]
     for event in events:
         store.record_trace(run_id, event)
+    # detail 是机器码字段：store 层截断兜底，不接受超长写入。
+    events[1]["detail"] = events[1]["detail"][:64]
     assert store.peek(run_id).trace == tuple(events)
     listing = post(f)
     detail = post(f, {"app_id": APP, "run_id": run_id}, PATH + "/detail")
