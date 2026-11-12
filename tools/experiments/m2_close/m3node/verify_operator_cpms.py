@@ -254,10 +254,12 @@ def main():
                 time.sleep(0.5)
             assert end.json()["status"] == "completed", end.text
             run = f["ctx"].agent_run_store.by_qa(qa)
-            assert run.snapshot["delivery_mode"] == "evidence_only" and run.snapshot["answer"] is None
-            assert "诊断结论未完成" in end.json()["result"]["blocks"][0]["text"]
+            # ADR-0252：复核 reject 只记原因不拦截——答复照常交付，快照仍留 verdict。
+            assert run.snapshot["delivery_mode"] == "diagnosis" and run.snapshot["answer"]
+            assert run.snapshot["answer_review"]["verdict"] == "reject"
+            assert "诊断结论未完成" not in end.json()["result"]["blocks"][0]["text"]
             assert not any(event["phase"] == "resample" for event in run.trace)
-            cases.append({"mode": "evidence_only", "qa": qa, "state": run.state, "resamples": 0})
+            cases.append({"mode": "reject_delivered", "qa": qa, "state": run.state, "resamples": 0})
             Model.mode = "model_failure"
             start = f["client"].post(
                 "/v1/assistant/questions", headers=HEADERS, json={"question": "查询订单" + ORDER}

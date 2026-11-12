@@ -10,7 +10,8 @@ from operations.test_operator_cpms import HEADERS, ORDER, environment, terminal
 
 
 @pytest.mark.parametrize("verdict", ["reject", "uncertain", "unavailable"])
-def test_unverified_reply_is_replaced_by_current_evidence(tmp_path, monkeypatch, verdict):
+def test_unverified_reply_is_delivered_with_verdict_recorded(tmp_path, monkeypatch, verdict):
+    """复核 verdict 降为观察（ADR-0252）：答复照常交付，判定落进快照与轨迹。"""
     with environment(tmp_path, monkeypatch) as f:
         monkeypatch.setattr(operator_answer_review, "review", lambda *args, **kwargs: {"verdict": verdict})
         attempts = []
@@ -35,15 +36,12 @@ def test_unverified_reply_is_replaced_by_current_evidence(tmp_path, monkeypatch,
         result = terminal(f, response.json()["qa_id"]).json()
         assert result["status"] == "completed"
         text = result["result"]["blocks"][0]["text"]
-        assert "诊断结论未完成" in text and "整单收费都正确" not in text
-        assert "27.36" in text and "0.00" in text and ORDER in text
-        assert '"gunPower": 23' in text
-        assert '"electricityFee": "13.68"' in text
+        assert "整单收费都正确" in text and "诊断结论未完成" not in text
         assert len(attempts) == 1
         run = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"])
-        assert run.snapshot["answer"] is None
+        assert run.snapshot["answer"] == "整单收费都正确"
         assert run.snapshot["answer_review"]["verdict"] == verdict
-        assert run.snapshot["delivery_mode"] == "evidence_only"
+        assert run.snapshot["delivery_mode"] == "diagnosis"
         assert not any(event["phase"] == "resample" for event in run.trace)
 
 
@@ -142,14 +140,21 @@ def test_site_names_must_come_from_delivered_current_or_authorized_history(monke
     assert operator_answer_review.known_facts([resolved]) == {"Central Charging Station"}
 
 
-def test_review_unavailable_does_not_deliver(monkeypatch):
+@pytest.mark.parametrize("exc", [ValueError("incomplete response"), AttributeError("no provider")])
+def test_review_unavailable_does_not_deliver(monkeypatch, exc):
     monkeypatch.setattr(operator_answer_review, "resolve_provider_api_key", lambda *a, **kw: "test")
 
     def failed(**kwargs):
-        raise ValueError("incomplete response")
+        raise exc
 
     monkeypatch.setattr(operator_answer_review, "structured_request", failed)
     settings = SimpleNamespace(select_provider=lambda _: SimpleNamespace(model="test"))
+    assert operator_answer_review.review("回答", {}, [], "问", "zh", settings)["verdict"] == "unavailable"
+
+
+def test_review_settings_without_provider_selection_is_unavailable(monkeypatch):
+    """settings/provider 缺属性同样是复核自身不可用（ADR-0252），不穿出异常。"""
+    settings = SimpleNamespace()  # 无 select_provider → AttributeError
     assert operator_answer_review.review("回答", {}, [], "问", "zh", settings)["verdict"] == "unavailable"
 
 
@@ -176,8 +181,52 @@ def test_review_dependency_failure_keeps_only_a_fixed_reason(monkeypatch, reason
     assert "private-key" not in str(result)
 
 
+def test_post_review_gate_refusal_is_terminal_not_resampled(tmp_path, monkeypatch):
+    """复核后的授权/范围闸拒仍是终局（ADR-0252）：原码落 run.reason，不按「没交出答复」重派。"""
+    with environment(tmp_path, monkeypatch) as f:
+        attempts, saved = [], {}
+
+        def dispatch(_, config, run):
+            attempts.append(run)
+            _, head, _ = call_tool(f, run, "cpms_order_detail")
+
+            def review(*a, **kw):
+                saved["current"] = f["resolver"].current
+                from operations.test_operator_cpms import scope
+
+                f["resolver"].current = scope("OTHER")
+                return {"verdict": "allow"}
+
+            monkeypatch.setattr(operator_answer_review, "review", review)
+            response = f["client"].post(
+                f"/v1/internal/operator-runs/{run}/completions",
+                headers=head,
+                json={"status": "completed", "answer": "核对完毕"},
+            )
+            assert response.status_code == 200 and response.json()["delivered"] is False
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        response = f["client"].post(
+            "/v1/assistant/questions", headers=HEADERS, json={"question": "查询费用", "order_no": ORDER}
+        )
+        qa = response.json()["qa_id"]
+        future = f["ctx"].runtime._futures.get(qa)
+        if future:
+            future.result(timeout=10)
+        f["resolver"].current = saved["current"]
+        result = terminal(f, qa).json()
+        assert result["status"] == "failed"
+        assert result["error"]["code"] == "OPERATOR_DEPENDENCY_UNAVAILABLE"
+        assert len(attempts) == 1
+        run = f["ctx"].agent_run_store.by_qa(qa)
+        assert run.state == "failed"
+        assert run.reason == "tool_refused:OPERATOR_SCOPE_CHANGED"
+        assert not any(event["phase"] == "resample" for event in run.trace)
+
+
 @pytest.mark.parametrize("dispatch_raises", [False, True])
-def test_rejected_reply_without_evidence_is_not_retried_or_delivered(tmp_path, monkeypatch, dispatch_raises):
+def test_rejected_reply_without_evidence_is_delivered(tmp_path, monkeypatch, dispatch_raises):
+    """复核拒绝不再拦截交付（ADR-0252）：回执收答复、判拒只记录，运输错误不撤销。"""
     from execution.test_m2_close_contract import NODE_A_TOKEN
 
     with environment(tmp_path, monkeypatch) as f:
@@ -198,12 +247,16 @@ def test_rejected_reply_without_evidence_is_not_retried_or_delivered(tmp_path, m
                 headers=headers,
                 json={"status": "completed", "answer": "已为你退款。"},
             )
-            assert response.status_code == 403
+            assert response.status_code == 200
             if dispatch_raises:
-                raise operator_cpms.AgentRunDispatchError("completion refused")
+                raise operator_cpms.AgentRunDispatchError("transport after accepted completion")
 
         monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
         response = f["client"].post("/v1/assistant/questions", headers=HEADERS, json={"question": "帮我退款"})
         result = terminal(f, response.json()["qa_id"]).json()
-        assert result["status"] == "failed" and result["result"] is None
+        assert result["status"] == "completed"
+        assert "已为你退款" in result["result"]["blocks"][0]["text"]
         assert len(calls) == 1
+        run = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"])
+        assert run.snapshot["answer_review"]["verdict"] == "reject"
+        assert run.snapshot["delivery_mode"] == "diagnosis"

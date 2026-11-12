@@ -165,6 +165,20 @@ it('distinguishes evidence delivery from a completed diagnosis and shows the bou
   await expect.element(screen.getByText('诊断未完成原因：答复添加了来源未提供的币种')).toBeVisible()
 })
 
+it('labels a delivered diagnosis review reason as observation, not incompletion', async () => {
+  // ADR-0252：verdict 只观察不拦截——delivery_mode=diagnosis 时复核原因不能再叫「诊断未完成」。
+  const delivered = { ...run, delivery_mode: 'diagnosis', review_reason: 'unsupported_claim' }
+  stub((body) =>
+    Response.json(body.action === 'run-log' ? delivered : { items: [delivered], has_more: false }),
+  )
+  const screen = await render(<AppLogs />)
+  await screen.getByRole('button', { name: '查看运行' }).click()
+  await expect
+    .element(screen.getByText('复核观察（答复已交付）：答复未通过事实一致性复核'))
+    .toBeVisible()
+  await expect.element(screen.getByText(/诊断未完成原因/)).not.toBeInTheDocument()
+})
+
 it('shows an expired inflight run and does not infer missing tool duration from elapsed time', async () => {
   const expired = { ...run, state: 'expired', trace: [{ ...run.trace[0], duration_ms: undefined }] }
   stub((body) =>
