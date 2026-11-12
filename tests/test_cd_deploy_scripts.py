@@ -706,6 +706,8 @@ def test_schema_preflight_and_migration_gate_real_database(tmp_path, failure):
     from gateway.test_database_initialization import LEGACY_DIFY
     from gateway.test_gateway_schema import snapshot
 
+    from aiops_diagnostics.gateway import gateway_schema as schema
+
     source = (DEPLOY_DIR / "deploy-41.sh").read_text()
     start = source.index("# 一致备份与副本演练先于源码替换")
     end = source.index("rsync -a --delete /tmp/sync-check/aiops_diagnostics/", start)
@@ -753,7 +755,7 @@ def test_schema_preflight_and_migration_gate_real_database(tmp_path, failure):
         assert snapshot(data) == before
     else:
         # 真迁移已提交后，后续失败也不能把库自动退回旧备份。
-        assert snapshot(data)[1] == 1
+        assert snapshot(data)[1] == schema.VERSION
     if failure not in {"backup", "wrong-file"}:
         assert snapshot(backup_root / "schema/gateway.db") == before
 
