@@ -532,14 +532,16 @@ class AgentRunStore:
             elif isinstance(value, list):
                 clean[key] = f"{len(value)}项"
             elif isinstance(value, dict):
-                clean[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))[:32]
+                # default=str：CPMS 值里混入不可序列化成员时降格成字符串，
+                # 不把 TypeError 抛回业务路径。
+                clean[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)[:32]
         with self._connection(write=True) as connection:
             row = connection.execute(
                 "SELECT tool_summaries_json FROM agent_runs WHERE run_id = ?", (run_id,)
             ).fetchone()
             if row is None:
                 return
-            summaries = json.loads(row["tool_summaries_json"] or "{}")
+            summaries = _tool_summaries(row["tool_summaries_json"])
             if tool not in summaries and len(summaries) >= 16:
                 return
             summaries[tool] = clean
@@ -1007,8 +1009,17 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         # 迁移保证这一列一定存在；旧行是 NULL，读取时由调用方回落到默认语言。
         language=row["language"],
         trace=tuple(json.loads(row["trace_json"] or "[]")),
-        tool_summaries=json.loads(row["tool_summaries_json"] or "{}"),
+        tool_summaries=_tool_summaries(row["tool_summaries_json"]),
     )
+
+
+def _tool_summaries(raw: str | None) -> dict[str, dict[str, str]]:
+    """读取摘要列：坏 JSON 或非对象形状一律当作没有摘要，不炸读路径。"""
+    try:
+        value = json.loads(raw or "{}")
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 # --------------------------------------------------------------------------

@@ -482,7 +482,7 @@ class OperatorCpms:
                 fields["结果"] = f"{len(data)}项"
             if fields:
                 self.context.agent_run_store.record_tool_summary(run_id, tool, fields)
-        except (sqlite3.Error, ValueError):
+        except (sqlite3.Error, ValueError, TypeError):
             logging.getLogger("aiops.operator").warning("operator_tool_summary_unavailable")
 
     def progress(self, caller, qa_id, qa=None):
@@ -1911,7 +1911,8 @@ class OperatorCpms:
             run = self.context.agent_run_store.get(run_id)
             dispatcher.deadline_at = run.expires_at
             try:
-                manifest_tool_count = len(json.loads(run.execution_manifest or "{}").get("tools") or [])
+                manifest = json.loads(run.execution_manifest or "{}")
+                manifest_tool_count = len(manifest.get("tools") or []) if isinstance(manifest, dict) else 0
             except (TypeError, ValueError):
                 manifest_tool_count = 0
             task = self.tasks[run_id]

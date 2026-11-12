@@ -395,3 +395,23 @@ def test_record_tool_summary_bounds_fields_and_overwrites(store, tmp_path):
 
 def test_record_tool_summary_missing_run_is_a_noop(store, tmp_path):
     store.record_tool_summary("run_absent", "cpms_order_detail", {"状态": "ok"})
+
+
+def test_record_tool_summary_coerces_and_survives_corrupt_column(store, tmp_path):
+    """观测写不能炸业务：不可序列化成员降格成字符串；被改坏的列按空摘要续写。"""
+    config = AgentRunConfig.load(_config(tmp_path))
+    run = store.issue(scope=_scope(), order_no="ORDER-A", config=config, gateway_version="t")
+
+    # 字典成员不可 JSON 序列化 → str() 降格，不抛 TypeError。
+    store.record_tool_summary(run.run_id, "cpms_order_detail", {"明细": {"when": datetime(2026, 11, 12)}})
+    assert store.get(run.run_id).tool_summaries["cpms_order_detail"]["明细"].startswith("{")
+
+    # 列被写成非对象形状：读回是空摘要而不是把垃圾投影出去。
+    with store._connection(write=True) as connection:
+        connection.execute(
+            "UPDATE agent_runs SET tool_summaries_json = ? WHERE run_id = ?",
+            ('["not","a","dict"]', run.run_id),
+        )
+    assert store.get(run.run_id).tool_summaries == {}
+    store.record_tool_summary(run.run_id, "cpms_order_detail", {"状态": "ok"})
+    assert store.get(run.run_id).tool_summaries == {"cpms_order_detail": {"状态": "ok"}}

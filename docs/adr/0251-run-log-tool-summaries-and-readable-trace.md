@@ -40,6 +40,10 @@ scope 指纹仍不投影。
   加表才出摘要，漏配只是「这行没摘要」不是泄漏。
 - 不投影：答复正文、证据全文 JSON、CPMS 原始响应、授权参数（token/grant）、
   scope_fingerprint、自由文本错误。`stoppedReasonContent` 等长文本按 32 字截断。
+- 读写降格不抛回业务面：字典值含不可序列化成员时 `str()` 降格（`default=str`），
+  列被写成非对象形状或坏 JSON 时读回空摘要、续写从空开始；`_summarize_tool`
+  的吞错面覆盖 `(sqlite3.Error, ValueError, TypeError)`，`execution_manifest`
+  非对象形状不再以 AttributeError 逃逸。
 
 ## 备选方案
 
