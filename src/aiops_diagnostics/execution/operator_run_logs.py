@@ -26,7 +26,7 @@ def read_runs(store, caller, app_id, *, page=1, limit=20, run_id=None):
 
 
 def metadata(run):
-    # 禁止复用 receipt()/snapshot：其中包含业务摘要、范围及内部执行目标。
+    # 只投影受限元数据；完整receipt/snapshot包含业务摘要、权限及内部目标。
     trace = [
         {
             key: event[key]
@@ -39,6 +39,28 @@ def metadata(run):
     if elapsed is None and run.completed_at is not None:
         elapsed = max(0, int((run.completed_at - run.created_at).total_seconds() * 1000))
     expired = run.expires_at <= datetime.now(UTC)
+    snapshot = run.snapshot or {}
+    mode = snapshot.get("delivery_mode")
+    review_reason = (snapshot.get("answer_review") or {}).get("reason")
+    if review_reason not in {
+        "allowed",
+        "unsupported_currency",
+        "unsupported_station",
+        "unsupported_claim",
+        "review_uncertain",
+        "review_unavailable",
+        "review_quota_exhausted",
+        "review_auth_rejected",
+        "model_failed",
+        "model_quota_exhausted",
+        "model_stream_incomplete",
+    }:
+        review_reason = (
+            "review_not_accepted"
+            if run.state == "failed"
+            and any(event.get("phase") == "review" and event.get("status") == "refused" for event in trace)
+            else None
+        )
     return {
         "run_id": run.run_id,
         "qa_id": run.qa_id,
@@ -47,6 +69,10 @@ def metadata(run):
         "elapsed_ms": elapsed,
         "elapsed_source": "trace" if trace else "recorded_timestamps",
         "result_expired": expired,
+        "delivery_mode": mode
+        if run.state == "succeeded" and mode in {"diagnosis", "evidence_only"}
+        else None,
+        "review_reason": review_reason,
         "trace": trace,
         "source": "java",
         "gateway_version": run.gateway_version,

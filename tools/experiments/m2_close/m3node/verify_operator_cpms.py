@@ -37,6 +37,12 @@ class Model(BaseHTTPRequestHandler):
         if self.mode == "site":
             sequence = ["cpms_site_search"]
         name = next((n for n in sequence if n not in seen), None)
+        if self.mode == "model_failure" and "cpms_order_detail" in seen:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":{"message":"synthetic model failed"}}')
+            return
         if name:
             args = (
                 {"order_no": ORDER}
@@ -180,7 +186,7 @@ def main():
                         "--run-id=" + run,
                         "--gateway=" + f["gateway_base"],
                         "--model=" + model_url,
-                        "--scenario=normal",
+                        "--scenario=round2-500" if Model.mode == "model_failure" else "--scenario=normal",
                         "--node-token=node-token-alpha-0123456789",
                         "--managed-publication",
                     ],
@@ -230,6 +236,44 @@ def main():
                         "has_history": len(messages) > 2,
                     }
                 )
+            from aiops_diagnostics.operator import operator_answer_review
+
+            patch.setattr(operator_answer_review, "review", lambda *a, **kw: {"verdict": "reject"})
+            Model.mode = "amount"
+            start = f["client"].post(
+                "/v1/assistant/questions",
+                headers=HEADERS,
+                json={"question": "查询订单" + ORDER},
+            )
+            assert start.status_code == 202, start.text
+            qa = start.json()["qa_id"]
+            for _ in range(280):
+                end = f["client"].get("/v1/assistant/questions/" + qa, headers=HEADERS)
+                if end.json().get("status") not in {"queued", "running"}:
+                    break
+                time.sleep(0.5)
+            assert end.json()["status"] == "completed", end.text
+            run = f["ctx"].agent_run_store.by_qa(qa)
+            assert run.snapshot["delivery_mode"] == "evidence_only" and run.snapshot["answer"] is None
+            assert "诊断结论未完成" in end.json()["result"]["blocks"][0]["text"]
+            assert not any(event["phase"] == "resample" for event in run.trace)
+            cases.append({"mode": "evidence_only", "qa": qa, "state": run.state, "resamples": 0})
+            Model.mode = "model_failure"
+            start = f["client"].post(
+                "/v1/assistant/questions", headers=HEADERS, json={"question": "查询订单" + ORDER}
+            )
+            assert start.status_code == 202, start.text
+            qa = start.json()["qa_id"]
+            for _ in range(280):
+                end = f["client"].get("/v1/assistant/questions/" + qa, headers=HEADERS)
+                if end.json().get("status") not in {"queued", "running"}:
+                    break
+                time.sleep(0.5)
+            assert end.json()["status"] == "completed", end.text
+            run = f["ctx"].agent_run_store.by_qa(qa)
+            assert run.snapshot["delivery_mode"] == "evidence_only"
+            assert run.snapshot["answer_review"]["reason"] == "model_failed"
+            cases.append({"mode": "model_failure_after_evidence", "qa": qa, "state": run.state})
             (out / "model-calls.json").write_text(json.dumps(Model.calls, ensure_ascii=False, indent=2))
             (out / "report.json").write_text(
                 json.dumps({"cases": cases, "all_passed": True}, ensure_ascii=False, indent=2)

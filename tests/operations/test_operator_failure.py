@@ -98,6 +98,38 @@ def test_node_failure_reaches_caller_without_readback(
         assert final.json()["error"]["retryable"] is False
 
 
+@pytest.mark.parametrize("reason", ["model_failed", "model_quota_exhausted", "model_stream_incomplete"])
+@pytest.mark.parametrize("dispatch_raises", [False, True])
+def test_model_failure_after_evidence_keeps_only_authorized_records(
+    operator, monkeypatch, reason, dispatch_raises
+):
+    from operations.test_operator_agent import call_tool
+
+    f = operator
+    calls = []
+
+    def dispatch(_, config, run):
+        calls.append(run)
+        _, headers, _ = call_tool(f, run, "cpms_order_detail")
+        response = f["client"].post(
+            "/v1/internal/charging-status/completions/" + run,
+            headers=headers,
+            json={"status": "failed", "reason": reason},
+        )
+        assert response.status_code == 200 and response.json()["state"] == "succeeded"
+        if dispatch_raises:
+            raise AgentRunDispatchError("node model failed")
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    response = request(f["client"])
+    result = terminal(f, response.json()["qa_id"]).json()
+    assert result["status"] == "completed" and len(calls) == 1
+    assert "诊断结论未完成" in result["result"]["blocks"][0]["text"]
+    run = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"])
+    assert run.snapshot["delivery_mode"] == "evidence_only"
+    assert run.snapshot["answer_review"]["reason"] == reason
+
+
 def test_gate_refusal_stamps_original_code(operator, monkeypatch, caplog):
     """授权闸拒把原始码写进 run.reason：上报被同一道闸反杀时归因仍在。"""
     f = operator

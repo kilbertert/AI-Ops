@@ -82,6 +82,18 @@ it('paginates and explicitly labels old runs without trace', async () => {
   await expect.element(screen.getByText('阶段耗时未采集')).toBeVisible()
 })
 
+it('distinguishes evidence delivery from a completed diagnosis and shows the bounded reason', async () => {
+  const partial = { ...run, delivery_mode: 'evidence_only', review_reason: 'unsupported_currency' }
+  stub((body) =>
+    Response.json(body.action === 'run-log' ? partial : { items: [partial], has_more: false }),
+  )
+  const screen = await render(<AppLogs />)
+  await expect.element(screen.getByText('仅交付证据（诊断未完成）（结果已过期）')).toBeVisible()
+  await expect.element(screen.getByText('成功（结果已过期）')).not.toBeInTheDocument()
+  await screen.getByRole('button', { name: '查看运行' }).click()
+  await expect.element(screen.getByText('诊断未完成原因：答复添加了来源未提供的币种')).toBeVisible()
+})
+
 it('shows an expired inflight run and does not infer missing tool duration from elapsed time', async () => {
   const expired = { ...run, state: 'expired', trace: [{ ...run.trace[0], duration_ms: undefined }] }
   stub((body) =>

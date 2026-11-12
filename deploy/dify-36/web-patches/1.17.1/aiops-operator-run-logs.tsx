@@ -23,6 +23,8 @@ type Run = {
   elapsed_ms: number | null
   elapsed_source: string
   result_expired: boolean
+  delivery_mode?: 'diagnosis' | 'evidence_only' | null
+  review_reason?: string | null
   trace: Event[]
   source: string
   agent_version: string | null
@@ -42,7 +44,22 @@ const labels: Record<string, string> = {
   review: '事实复核',
   resample: '重新生成',
   completed: '完成',
+  unsupported_currency: '答复添加了来源未提供的币种',
+  unsupported_station: '答复使用了来源未提供的站名',
+  unsupported_claim: '答复未通过事实一致性复核',
+  review_uncertain: '答复事实一致性未能确认',
+  review_unavailable: '事实复核服务未能完成',
+  review_quota_exhausted: '事实复核模型额度不足',
+  review_auth_rejected: '事实复核模型认证失败',
+  review_not_accepted: '历史答复未通过复核，未留存具体原因',
+  model_failed: '模型生成未完成',
+  model_quota_exhausted: '生成模型额度不足',
+  model_stream_incomplete: '模型回答传输不完整',
 }
+const stateLabel = (run: Run) =>
+  run.state === 'succeeded' && run.delivery_mode === 'evidence_only'
+    ? '仅交付证据（诊断未完成）'
+    : labels[run.state] || run.state
 const elapsed = (value: number | null) =>
   value === null ? '未采集' : `${(value / 1000).toFixed(2)} 秒`
 
@@ -103,7 +120,7 @@ export function OperatorRunLogs({ appId }: { appId: string }) {
                     <td>{run.created_at}</td>
                     <td>{run.qa_id || '未关联'}</td>
                     <td>
-                      {labels[run.state] || run.state}
+                      {stateLabel(run)}
                       {run.result_expired && '（结果已过期）'}
                     </td>
                     <td>{elapsed(run.elapsed_ms)}</td>
@@ -136,10 +153,12 @@ export function OperatorRunLogs({ appId }: { appId: string }) {
         result.items.map((run) => (
           <div key={run.run_id} className="flex flex-col gap-3">
             <p>
-              QA 引用：{run.qa_id || '未关联'} · {labels[run.state] || run.state} ·{' '}
-              {elapsed(run.elapsed_ms)}
+              QA 引用：{run.qa_id || '未关联'} · {stateLabel(run)} · {elapsed(run.elapsed_ms)}
             </p>
             <p>开始时间（UTC）：{run.created_at} · 来源：Java</p>
+            {run.review_reason && run.review_reason !== 'allowed' && (
+              <p>诊断未完成原因：{labels[run.review_reason] || '未能确认'}</p>
+            )}
             <p>
               版本：{run.agent_version || '未核对'} · Gateway：{run.gateway_version} · 节点构建：
               {run.node_build || '未回报'}

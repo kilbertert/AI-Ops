@@ -118,12 +118,45 @@ def test_list_is_bounded_scoped_and_metadata_only(logged):
         "elapsed_ms",
         "elapsed_source",
         "result_expired",
+        "delivery_mode",
+        "review_reason",
         "trace",
         "source",
         "gateway_version",
         "node_build",
         "agent_version",
     }
+
+
+def test_evidence_delivery_and_review_reason_are_metadata_not_private_content(logged):
+    run_id = logged["issue_log"]()
+    store = logged["ctx"].agent_run_store
+    with store._connection(write=True) as connection:
+        connection.execute(
+            "UPDATE agent_runs SET snapshot_json=? WHERE run_id=?",
+            (
+                json.dumps(
+                    {
+                        "delivery_mode": "evidence_only",
+                        "answer": "PRIVATE",
+                        "answer_review": {"reason": "unsupported_currency", "currencies": ["PRIVATE"]},
+                    }
+                ),
+                run_id,
+            ),
+        )
+    response = post(logged, {"app_id": APP, "run_id": run_id}, PATH + "/detail")
+    assert response.json()["delivery_mode"] == "evidence_only"
+    assert response.json()["review_reason"] == "unsupported_currency"
+    assert "PRIVATE" not in response.text
+    with store._connection(write=True) as connection:
+        connection.execute(
+            "UPDATE agent_runs SET snapshot_json=? WHERE run_id=?",
+            (json.dumps({"delivery_mode": "PRIVATE", "answer_review": {"reason": "PRIVATE"}}), run_id),
+        )
+    response = post(logged, {"app_id": APP, "run_id": run_id}, PATH + "/detail")
+    assert response.json()["delivery_mode"] is None and response.json()["review_reason"] is None
+    assert "PRIVATE" not in response.text
 
 
 @pytest.mark.parametrize(
