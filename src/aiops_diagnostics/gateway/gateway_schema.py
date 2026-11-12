@@ -14,7 +14,7 @@ from pathlib import Path
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.gateway import gateway_db
 
-VERSION = 1
+VERSION = 2
 
 # 列声明同时驱动 CREATE、白名单 ADD 与结构判据；不维护第二套 schema。
 TABLES = {
@@ -79,6 +79,7 @@ TABLES = {
             "route_revision": "INTEGER NOT NULL DEFAULT 0",
             "publication_app_id": "TEXT NOT NULL DEFAULT ''",
             "trace_json": "TEXT",
+            "tool_summaries_json": "TEXT",
         },
         (),
     ),
@@ -536,6 +537,7 @@ LEGACY_COLUMNS = {
         "publication_app_id",
         "language",
         "trace_json",
+        "tool_summaries_json",
     ),
     "chat_dify_runs": (
         "snapshot_json",

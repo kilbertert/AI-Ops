@@ -356,3 +356,42 @@ def test_has_succeeded_for_tenant_is_channel_evidence(store, tmp_path):
     assert store.complete(run.run_id, snapshot={"x": 1}, actual_node_id="node-a1", node_build="b") is True
     assert store.has_succeeded_for_tenant("TENANT-A") is True
     assert store.has_succeeded_for_tenant("TENANT-B") is False
+
+
+def test_record_tool_summary_bounds_fields_and_overwrites(store, tmp_path):
+    """ADR-0251 行级摘要：白名单形状写库，形状外输入直接拒。"""
+    config = AgentRunConfig.load(_config(tmp_path))
+    run = store.issue(scope=_scope(), order_no="ORDER-A", config=config, gateway_version="t")
+
+    store.record_tool_summary(
+        run.run_id,
+        "cpms_order_detail",
+        {"入参": "order_no=ORDER-A", "状态": "已支付", "明细": ["a", "b"], "嵌套": {"x": 1}},
+    )
+    stored = store.get(run.run_id)
+    summary = stored.tool_summaries["cpms_order_detail"]
+    assert summary["入参"] == "order_no=ORDER-A" and summary["状态"] == "已支付"
+    assert summary["明细"] == "2项"
+    assert summary["嵌套"].startswith("{")
+
+    # 同工具后写覆盖；值超界截断。
+    store.record_tool_summary(run.run_id, "cpms_order_detail", {"状态": "x" * 40})
+    assert store.get(run.run_id).tool_summaries["cpms_order_detail"] == {"状态": "x" * 32}
+
+    with pytest.raises(ValueError):
+        store.record_tool_summary(run.run_id, "BAD TOOL", {"a": 1})
+    with pytest.raises(ValueError):
+        store.record_tool_summary(run.run_id, "cpms_order_detail", {f"f{i}": i for i in range(9)})
+    with pytest.raises(ValueError):
+        store.record_tool_summary(run.run_id, "cpms_order_detail", {" padded": 1})
+
+    # 超 16 个工具名后新工具被忽略，已存在的仍可覆盖。
+    for index in range(16):
+        store.record_tool_summary(run.run_id, f"tool_{index:02d}", {"a": 1})
+    store.record_tool_summary(run.run_id, "tool_extra", {"a": 1})
+    summaries = store.get(run.run_id).tool_summaries
+    assert "tool_extra" not in summaries and "cpms_order_detail" in summaries
+
+
+def test_record_tool_summary_missing_run_is_a_noop(store, tmp_path):
+    store.record_tool_summary("run_absent", "cpms_order_detail", {"状态": "ok"})

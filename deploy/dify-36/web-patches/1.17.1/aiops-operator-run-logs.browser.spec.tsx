@@ -24,6 +24,9 @@ const run = {
   actual_node_id: 'node-a',
   expires_at: '2026-11-11T10:00:00Z',
   evidence_tools: ['cpms_order_detail'],
+  tool_summaries: {
+    cpms_order_detail: { 入参: 'order_no=ORDER-1', 状态: '已支付', 应付: '8.00' },
+  },
   trace: [
     {
       phase: 'tool',
@@ -65,8 +68,8 @@ it('opens actual run metadata from the existing logs page and clears it on revoc
   await expect.element(screen.getByText('成功（结果已过期）')).toBeVisible()
   await screen.getByRole('button', { name: '查看运行' }).click()
   await expect.element(screen.getByText(/cpms_order_detail/)).toBeVisible()
-  await expect.element(screen.getByText(/工具耗时 0.25 秒/)).toBeVisible()
-  await expect.element(screen.getByText(/累计 1.00 秒/)).toBeVisible()
+  await expect.element(screen.getByText(/第 1 次调用 订单详情：成功 · 耗时 0.25 秒/)).toBeVisible()
+  await expect.element(screen.getByText(/入参=order_no=ORDER-1 · 状态=已支付 · 应付=8.00/)).toBeVisible()
   expect(requests).toContainEqual({ action: 'run-log', app_id: 'app-a', run_id: 'run-a' })
   revoked = true
   await screen.getByRole('button', { name: '刷新日志' }).click()
@@ -148,7 +151,7 @@ it('shows an expired inflight run and does not infer missing tool duration from 
   const screen = await render(<AppLogs />)
   await expect.element(screen.getByText('已过期（结果已过期）')).toBeVisible()
   await screen.getByRole('button', { name: '查看运行' }).click()
-  await expect.element(screen.getByText(/工具耗时 未采集/)).toBeVisible()
+  await expect.element(screen.getByText(/耗时 未采集/)).toBeVisible()
 })
 
 it.each([{ managed: false }, { managed: true, entry: 'consumer' }])(

@@ -105,6 +105,8 @@ def metadata(run, *, question=None):
         "reason": str(run.reason)[:128] if run.reason else None,
         "question": question,
         "order_no": run.order_no or None,
+        # ADR-0251：行级展示摘要（入参 + 白名单结果字段），仍走同一 scope 闸。
+        "tool_summaries": run.tool_summaries or None,
         "language": run.language,
         "environment": receipt["expected_environment"],
         "expected_node_id": receipt["expected_node_id"],
