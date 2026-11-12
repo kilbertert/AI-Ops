@@ -298,11 +298,16 @@ weaviate 空闲 52.7 MiB。
   `/app/targets/next` **整棵成品树**（已含 `web/.next/static` 与 `web/public`），
   组装退化为单条 COPY，镜像内布局与三条 COPY 逐字一致：
   ```bash
-  # 开发机：从已构建镜像抽成品树
-  cid=$(docker create aiops/dify-web-patched:<tag>) && \
-    docker cp "$cid:/app/targets/next/." ctx/next/ && docker rm "$cid"
-  # 36：单 COPY 组装（Dockerfile 一行：COPY --chown=dify:dify next/ /app/targets/next/）
-  docker build -t aiops/dify-web-patched:<tag> ctx/
+  # 开发机：从已构建镜像抽成品树（ctx 必须先建；docker rm 不管成败都要跑）
+  mkdir -p ctx/next
+  cid=$(docker create aiops/dify-web-patched:<tag>)
+  docker cp "$cid:/app/targets/next/." ctx/next/; docker rm "$cid"
+  # 打包传输：tar 含 next/ 与下面这份 Dockerfile；36 上解到任意目录（如 deploy/<name>-ctx/）
+  printf 'FROM docker.1panel.live/langgenius/dify-web:1.17.1\nCOPY --chown=dify:dify next/ /app/targets/next/\n' > ctx/Dockerfile
+  tar -C ctx -czf web-next.tar.gz next Dockerfile
+  # 36：解包后单 COPY 组装
+  mkdir <name>-ctx && tar -xzf web-next.tar.gz -C <name>-ctx
+  docker build -t aiops/dify-web-patched:<tag> <name>-ctx/
   ```
   两种形式的产物等价；选哪种取决于 tar 里装的是原始输出还是成品树。
 - 上线：`deploy/.env` 里写 `DIFY_WEB_IMAGE=aiops/dify-web-patched:1.17.1`，然后
