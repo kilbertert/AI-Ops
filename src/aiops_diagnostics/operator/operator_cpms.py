@@ -363,6 +363,7 @@ class ActiveTask:
     started_at: float = field(default_factory=time.monotonic)
     trace_failed: bool = False
     finished_elapsed_ms: int | None = None
+    answer_review: dict = field(default_factory=dict)
 
 
 class OperatorCpms:
@@ -1603,22 +1604,32 @@ class OperatorCpms:
         store = self.context.agent_run_store
         if payload.get("status") not in {"completed", "failed"}:
             raise OperatorRefused("OPERATOR_INVALID_COMPLETION")
+        model_failure = None
         if payload["status"] == "failed":
-            # 失败上报永远照录：节点给的原因码进运行记录，不再统一糊成 `operator_node_failed`。
-            # 它只用于**归因**，不改变任何判决：这条 run 仍然失败。
+            # 节点失败照录；只有已取证后的模型失败可以交付证据，诊断仍标未完成。
             reason = payload.get("reason")
             if not isinstance(reason, str) or not (
                 reason in NODE_FAILURE_CODES
                 or re.fullmatch(TOOL_REFUSED_PREFIX + r"[A-Za-z0-9_]{1,80}", reason)
             ):
                 reason = "node_failed"
-            store.fail(run_id, "operator_node_failed: " + reason)
+            task = self.tasks.get(run_id)
+            if (
+                reason in {"model_failed", "model_quota_exhausted", "model_stream_incomplete"}
+                and run.state in {"issued", "running"}
+                and task is not None
+                and task.delivered
+            ):
+                model_failure = reason
+            else:
+                store.fail(run_id, "operator_node_failed: " + reason)
             logging.getLogger("aiops.operator").warning(
                 "operator_node_reported_failure reason=%s", reason or "-"
             )
-            return {"run_id": run_id, "state": "failed"}
-        raw = payload.get("answer", "")
-        if not isinstance(raw, str) or not 0 < len(raw.strip()) <= 12000:
+            if model_failure is None:
+                return {"run_id": run_id, "state": "failed"}
+        raw = payload.get("answer", "") if model_failure is None else None
+        if model_failure is None and (not isinstance(raw, str) or not 0 < len(raw.strip()) <= 12000):
             raise OperatorRefused("OPERATOR_INVALID_ANSWER")
         if run.state == "succeeded":
             # 幂等重放：成功已交付，再报一遍只回执。
@@ -1646,7 +1657,7 @@ class OperatorCpms:
         with task.lock:
             from aiops_diagnostics.common.redaction import contains_secret
 
-            if contains_secret(answer, (task.bearer, task.grant)):
+            if answer is not None and contains_secret(answer, (task.bearer, task.grant)):
                 _answer_refused("credential")
             if run.order_no:
                 self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
@@ -1664,7 +1675,7 @@ class OperatorCpms:
                     )
                 except SourceError as exc:
                     raise OperatorRefused("OPERATOR_SCOPE_CHANGED") from exc
-            result = operator_agent.render(answer, evidence, task.language)
+            result = operator_agent.render(answer, evidence, task.language) if answer is not None else None
 
         history_evidence = []
         for previous_id in task.history_runs:
@@ -1673,26 +1684,41 @@ class OperatorCpms:
                 raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
             self._authorize_snapshot(task, previous)
             history_evidence.append(previous.snapshot.get("evidence", {}))
-        self._trace(run_id, "review")
-        review_started = time.monotonic()
-        review = operator_answer_review.review(
-            result["blocks"][0]["text"],
-            evidence,
-            task.messages[:-1],
-            task.question,
-            task.language,
-            self.context.runtime.diagnostic_settings.agent,
-            history_evidence,
-            tool_refusals=list(task.refusals),
-        )
-        self._trace(
-            run_id,
-            "review",
-            "succeeded" if review["verdict"] == "allow" else "refused",
-            duration_ms=(time.monotonic() - review_started) * 1000,
-        )
+        if model_failure is not None:
+            review = {"verdict": "unavailable", "reason": model_failure}
+        else:
+            self._trace(run_id, "review")
+            review_started = time.monotonic()
+            review = operator_answer_review.review(
+                result["blocks"][0]["text"],
+                evidence,
+                task.messages[:-1],
+                task.question,
+                task.language,
+                self.context.runtime.diagnostic_settings.agent,
+                history_evidence,
+                tool_refusals=list(task.refusals),
+            )
+            self._trace(
+                run_id,
+                "review",
+                "succeeded" if review["verdict"] == "allow" else "refused",
+                duration_ms=(time.monotonic() - review_started) * 1000,
+            )
+        task.answer_review = review
         if review["verdict"] != "allow":
-            raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
+            from aiops_diagnostics.operator.operator_evidence import render_evidence
+
+            result = render_evidence(evidence, task.language, secrets=(task.bearer, task.grant))
+            if result is None:
+                store.complete(
+                    run_id,
+                    snapshot={"answer": None, "answer_review": review, "evidence": evidence},
+                    actual_node_id=run.expected_node_id,
+                    node_build=None,
+                )
+                raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
+            answer = None
         superseded = {
             "answer": answer,
             "answer_review": review,
@@ -1729,6 +1755,7 @@ class OperatorCpms:
                 "evidence": evidence,
                 "language": task.language,
                 "answer_review": review,
+                "delivery_mode": "diagnosis" if review["verdict"] == "allow" else "evidence_only",
                 "history_runs": task.history_runs,
                 "rendered_result": result,
                 "plan_arguments": task.arguments.get("cpms_station_plan", {}),
@@ -1796,6 +1823,11 @@ class OperatorCpms:
                     dispatcher.dispatch(config, run_id)
                 except AgentRunDispatchError:
                     self._raise_node_failure(run_id)
+                    # 节点已回报模型失败并完成证据交付时，运输层错误不能撤销该交付。
+                    if self.context.agent_run_store.get(run_id).state == "succeeded":
+                        break
+                    if task.answer_review:
+                        raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED") from None
                     if not self._untouched(run_id, task):
                         raise
                     if task.resamples >= MAX_RESAMPLES:
@@ -1809,6 +1841,9 @@ class OperatorCpms:
                 self._raise_node_failure(run_id)
                 if not self._untouched(run_id, task):
                     break
+                # 复核已拒绝且无可交付证据，再跑相同输入不能修复这一轮。
+                if task.answer_review:
+                    raise OperatorRefused("OPERATOR_ANSWER_NOT_GROUNDED")
                 # 派发本身成功、回调也走完了，但 run 没被推进 —— 说明 `_complete` 拒了答案。
                 if task.resamples >= MAX_RESAMPLES:
                     raise OperatorRefused("OPERATOR_MODEL_OUTPUT_UNSTABLE")
@@ -1832,8 +1867,9 @@ class OperatorCpms:
         except Exception as exc:  # noqa: BLE001 - 后台失败必须收敛，凭据及上游正文不进日志。
             self._trace(run_id, "failed", "failed")
             reason = _failure_reason(exc)
-            if not self.context.agent_run_store.fail(run_id, "operator_failed"):
-                self.context.agent_run_store.refuse(run_id, "operator_failed")
+            failure_code = _failure_code(exc)
+            if not self.context.agent_run_store.fail(run_id, failure_code):
+                self.context.agent_run_store.refuse(run_id, failure_code)
             store.update_assistant_question(qa_id, status="failed", error_code=_failure_code(exc))
             # 失败**原因**单独记一行，和上面按码写的日志分开：这条是给值班的人看的，
             # 而 `OPERATOR_DIAGNOSIS_FAILED` 一个码覆盖了「模型不吐 JSON」「上游没钱」

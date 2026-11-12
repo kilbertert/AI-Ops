@@ -80,6 +80,9 @@ Gateway解析公司个人Bearer与当前站点范围，冻结已发布SOP、模�
 可纠正的业务拒绝回喂模型；协议、撤权与发布改变仍终止运行并保留原始原因。
 失败/迟到上报经协议身份闸收存，执行和成功交付继续经过完整授权闸；收存证据不等于允许对用户交付。
 最终自然正文附本轮来源，事实复核包含受限模型检查及币种/站名抽取后的程序归属核对，不能保证任意语义正确。
+已取得证据后模型回答未通过或生成失败时，程序交付本轮授权记录并明确诊断未完成，
+不再盲重派；无证据或取消/撤权仍拒绝。运行日志单独标识仅交付证据，见
+[证据交付合同](agents/operator-cpms/evidence-delivery.md)。
 已修复的JSON/字段占位符协议不再约束新回答。
 
 实现：`operator_agent.py`、`operator_cpms.py`、`operator_answer_review.py`及Java `ReportingChatSessionRuntime`。
