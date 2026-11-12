@@ -360,3 +360,26 @@ def test_localized_copy_language_is_logged(tmp_path: Path, caplog, method: str, 
     assert f"path={path}" in records[0]
     assert "accept_language='en'" in records[0] and "resolved=en" in records[0]
     assert "accept_language=None" in records[1] and "resolved=zh" in records[1]
+
+
+def test_localized_copy_language_truncates_long_header(tmp_path: Path, caplog) -> None:
+    """超长 ``Accept-Language`` 只进 160 字符：日志行有界，原始值仍逐字。
+
+    拦截的错误：截断丢了（或阈值漂移）时日志行重新变成客户端控制长度。
+    判据与端点无关，任取一个面即可——180 字符的请求头在记录里只剩 160。
+    """
+    caplog.set_level(logging.INFO, logger="aiops.gateway")
+    with _client(tmp_path) as client:
+        client.get(
+            "/v1/faq/recommendations",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "consumer",
+                "Accept-Language": "x" * 180,
+            },
+        )
+    records = [r for r in caplog.records if "localized_copy_language" in r.message]
+    assert len(records) == 1
+    logged = records[0].message
+    assert "accept_language='" + "x" * 160 + "'" in logged
+    assert "x" * 161 not in logged
