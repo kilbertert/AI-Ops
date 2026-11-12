@@ -43,8 +43,7 @@ def test_progress_during_review_and_after_completion(operator, monkeypatch):  # 
     )
     # ADR-0251：派发携带工具数、复核通过也都落机器码（detail 只允许码，不是自由文本）。
     assert any(
-        item["phase"] == "dispatch" and str(item.get("detail", "")).startswith("tools=")
-        for item in run.trace
+        item["phase"] == "dispatch" and str(item.get("detail", "")).startswith("tools=") for item in run.trace
     )
     assert any(
         item["phase"] == "review" and item["status"] == "succeeded" and item.get("detail") == "allowed"

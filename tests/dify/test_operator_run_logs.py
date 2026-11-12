@@ -410,9 +410,7 @@ def test_detail_projects_tool_summaries_and_keeps_them_scope_bounded(logged):
         "cpms_order_detail",
         {"入参": "order_no=ORDER-FIXTURE-1", "状态": "已支付", "应付": "8.00"},
     )
-    f["ctx"].agent_run_store.record_tool_summary(
-        foreign, "cpms_order_detail", {"状态": "PRIVATE-AMOUNT"}
-    )
+    f["ctx"].agent_run_store.record_tool_summary(foreign, "cpms_order_detail", {"状态": "PRIVATE-AMOUNT"})
     detail = post(f, {"app_id": APP, "run_id": run_id}, PATH + "/detail").json()
     assert detail["tool_summaries"] == {
         "cpms_order_detail": {"入参": "order_no=ORDER-FIXTURE-1", "状态": "已支付", "应付": "8.00"}

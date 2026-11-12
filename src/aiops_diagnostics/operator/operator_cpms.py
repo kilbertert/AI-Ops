@@ -104,20 +104,34 @@ SITE_PATH = "/chSite/page"
 #: 新增工具不加表就只少一段摘要，不会越界泄漏。
 TOOL_SUMMARY_FIELDS = {
     "cpms_order_detail": [
-        ("status", "状态"), ("totalAmount", "应付"), ("payAmount", "实付"),
-        ("refundAmount", "退款"), ("electricity", "电量"), ("stationName", "站点"),
+        ("status", "状态"),
+        ("totalAmount", "应付"),
+        ("payAmount", "实付"),
+        ("refundAmount", "退款"),
+        ("electricity", "电量"),
+        ("stationName", "站点"),
     ],
     "cpms_order_tariff": [("feeTemplate", "费率模板"), ("periodFeeDetail", "分时"), ("missing", "缺项")],
     "cpms_order_billing": [
-        ("serviceFee", "服务费"), ("electricityFee", "电费"), ("totalAmount", "合计"),
-        ("payAmount", "实付"), ("vatFee", "税费"),
+        ("serviceFee", "服务费"),
+        ("electricityFee", "电费"),
+        ("totalAmount", "合计"),
+        ("payAmount", "实付"),
+        ("vatFee", "税费"),
     ],
     "cpms_charging_samples": [("total", "样本数"), ("count", "样本数")],
-    "cpms_site_search": [("total", "站点数"), ("count", "站点数"), ("shown_sites", "展示"), ("limited", "超限")],
+    "cpms_site_search": [
+        ("total", "站点数"),
+        ("count", "站点数"),
+        ("shown_sites", "展示"),
+        ("limited", "超限"),
+    ],
     "cpms_station_plan": [("name", "计划"), ("energy", "电量"), ("power", "功率"), ("date", "日期")],
     "cpms_order_amount_check": [("conclusion", "结论"), ("checks", "检查"), ("limitations", "限制")],
     "cpms_order_process_stats": [
-        ("sample_count", "样本数"), ("average_power_kw", "平均功率"), ("complete_timeline", "时序完整"),
+        ("sample_count", "样本数"),
+        ("average_power_kw", "平均功率"),
+        ("complete_timeline", "时序完整"),
     ],
     "cpms_charging_timeline": [("total", "记录数"), ("samples_returned", "返回"), ("truncated", "截断")],
     "cpms_device_offline": [("summary", "摘要"), ("window", "窗口")],
@@ -138,6 +152,7 @@ def _arg_summary(task, tool):
             value = ",".join(str(v)[:12] for v in value[:3])
         parts.append(f"{key}={str(value)[:24]}")
     return "、".join(parts)[:48] or None
+
 
 #: 工具授权的**契约版本**。节点必须逐字声明它，否则在领取授权那一步就被拒。
 #:
@@ -1896,9 +1911,7 @@ class OperatorCpms:
             run = self.context.agent_run_store.get(run_id)
             dispatcher.deadline_at = run.expires_at
             try:
-                manifest_tool_count = len(
-                    json.loads(run.execution_manifest or "{}").get("tools") or []
-                )
+                manifest_tool_count = len(json.loads(run.execution_manifest or "{}").get("tools") or [])
             except (TypeError, ValueError):
                 manifest_tool_count = 0
             task = self.tasks[run_id]
