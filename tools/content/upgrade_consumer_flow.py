@@ -285,6 +285,7 @@ def order_composition(source):
         flow.ORDER_COMPOSITION_INSTRUCTION_V2,
         flow.ORDER_COMPOSITION_INSTRUCTION_V3,
         flow.ORDER_COMPOSITION_INSTRUCTION_V4,
+        flow.ORDER_COMPOSITION_INSTRUCTION_V5,
         flow.ORDER_COMPOSITION_INSTRUCTION,
     )
     if sum(text.count(block) for block in blocks) > 1:
@@ -295,6 +296,11 @@ def order_composition(source):
     text = text.replace(
         "只报告工具原值及可核对的算术差额",
         "只报告同名字段原值；金额不同仅并列原值，不计算差额",
+    )
+    # 原入口回放证实这条安抚要求会诱发无依据结论，仅替换完整已知句子。
+    text = text.replace(
+        "核心结论：第一句给出对费用的解释结论，能够让消费者清楚知道订单是否有问题，并且简要概括问题来源，并作出说明，说明是用于安抚用户的话，不是站在用户角度批判金额核算内容。",
+        "核心结论：先说明本轮查到的事实与尚不能确认的部分；证据不足时明确无法判断订单是否异常，不能为了安抚而承诺正常或没有多扣款。",
     )
     updated = text + ("" if text.endswith("\n") else "\n") + flow.ORDER_COMPOSITION_INSTRUCTION
     if "aiops-order-composition:" in text or len(updated) > 16000:

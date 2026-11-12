@@ -278,19 +278,22 @@ def _query(runtime, caller, binding, run, resource, query, order, libraries, rea
     }
 
 
-def final_answer(raw, context):
-    """正文由 Agent 表达，来源与媒体由本轮工具记录附加。"""
+def final_answer(raw, context, *, language="zh", question=""):
+    """订单事实由程序交付，知识保留原文摘录及来源。"""
     from aiops_diagnostics.consumer.consumer_documents import render_sources_answer
 
-    if not isinstance(raw, str) or not raw.strip() or len(raw) > 8000:
-        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "客服未返回有效正文")
     calls = (context or {}).get("calls", [])
     if any(c.get("result") is None for c in calls):
         raise ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "工具记录尚未完成")
+    if consumer_knowledge.SAFETY.search(question):
+        return consumer_knowledge.fallback("safety", language)
     sources = []
+    support = []
     seen = set()
     for call in calls:
         result = call.get("result") or {}
+        if result.get("status") != "found":
+            continue
         for source in result.get("sources", []):
             identity = source["retrieved_reference_id"]
             if identity not in seen:
@@ -298,7 +301,48 @@ def final_answer(raw, context):
                 sources.append(source)
         if call["tool"] == "support":
             for route in result.get("support", {}).values():
-                sources.append(
-                    {"retrieved_reference_id": "support", "title": route["label"], "content": route["url"]}
-                )
-    return render_sources_answer(raw, sources, preserve=order_ids(context))
+                support.append(route)
+    from aiops_diagnostics.common.i18n import localized_pack
+    from aiops_diagnostics.common.order_reference import names_order
+    from aiops_diagnostics.consumer.consumer_order_evidence import LABELS, render
+
+    words = localized_pack(LABELS, language)
+    order_context = (
+        names_order(question)
+        or order_ids(context)
+        or any(c["tool"] in {"orders", "billing", "status"} for c in calls)
+    )
+    answer = {
+        "blocks": [{"kind": "text", "text": render(context, language)}] if order_context else [],
+        "retrieval_status": "not_found",
+    }
+    for source in sources[:3]:
+        content = source.get("content", "")
+        excerpt = content[:800]
+        if len(content) > 800 or len(excerpt) == 800:
+            # 只在完整换行处截断，避免切开URL或金额；没有完整行则仅提供来源。
+            excerpt = excerpt.rsplit("\n", 1)[0] if "\n" in excerpt else ""
+            excerpt += "\n" + words["quote_omitted"]
+        try:
+            quoted = render_sources_answer(words["knowledge"] + "\n" + excerpt, [source])
+        except ChatRunUnavailable:
+            quoted = render_sources_answer(words["quote_unavailable"], [])
+        answer["blocks"].extend(quoted["blocks"])
+    if support:
+        # support已在发布内容校验https/tel与权限；不可把官方电话当用户隐私长号删掉。
+        answer["blocks"].append(
+            {
+                "kind": "text",
+                "text": words["support"]
+                + "\n"
+                + "\n".join(route["label"] + ": " + route["url"] for route in support),
+            }
+        )
+    if not answer["blocks"]:
+        if consumer_knowledge.HUMAN.search(question):
+            return consumer_knowledge.fallback("human", language)
+        return render_sources_answer(words["no_answer"], [])
+    answer["retrieval_status"] = (
+        "found" if any(b.get("kind") == "reference" for b in answer["blocks"]) else "not_found"
+    )
+    return answer
