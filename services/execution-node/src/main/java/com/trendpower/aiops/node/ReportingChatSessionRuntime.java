@@ -236,8 +236,8 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         for (int depth = 0; error != null && depth < 16; depth++, error = error.getCause()) {
             if (error instanceof com.openai.errors.OpenAIServiceException service) {
                 var codes = java.util.Set.of("insufficient_quota", "insufficient_user_quota");
-                if (codes.contains(service.code().orElse(""))
-                        || codes.contains(service.type().orElse(""))
+                if (codes.contains(errorValue(service::code))
+                        || codes.contains(errorValue(service::type))
                         || (service.statusCode() == 403 && service.getMessage() != null
                             && service.getMessage().contains("用户额度不足"))) {
                     return "model_quota_exhausted";
@@ -253,6 +253,15 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
             }
         }
         return "model_failed";
+    }
+
+    private static String errorValue(java.util.function.Supplier<java.util.Optional<String>> field) {
+        try {
+            return field.get().orElse("");
+        } catch (com.openai.errors.OpenAIInvalidDataException ignored) {
+            // 兼容供应商的错误体可能缺type/code；归因失败不能吞掉原错误回调。
+            return "";
+        }
     }
 
     /** reason 只允许定长小写字母数字下划线；异常形状的码一律归 unknown。 */
