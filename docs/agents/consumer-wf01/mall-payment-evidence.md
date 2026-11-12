@@ -34,8 +34,8 @@
 ## 发布与回归
 
 1. 代码按正常PR/CI/合并/CD交付；本地测试不代表线上版本。
-2. 新版程序最终交付按[ADR0247](../../adr/0247-consumer-order-facts-rendered.md)呈现本轮授权字段，
-   模型正文不进订单答案，知识原文与来源保留；中文/英文文案，其他语言按既有fallback。
+2. 客服自然正文恢复按[ADR0249](../../adr/0249-natural-replies-and-nonblocking-currency.md)执行，
+   商城证据读取不回退，提示词要求原值；恢复方法见[操作手册](../response-policy-restore.md)。
    读取当前已发布客服图，通过`tools/content/upgrade_consumer_flow.py --order-composition`
    生成候选草稿，保留运营文字与模型；不可使用`--live-documents`替代本次迁移。
 3. 按[正常发布手册](live-release.md)预览，再发布并记录版本/revision。旧图不被代码部署自动替换。
@@ -59,7 +59,7 @@
 
 TAX-06需交付授权并实际执行，不能用TAX-05替代。Gherkin场景见[订单构成](order-composition.feature)。
 
-## 确定性事实交付验收
+## 历史确定性事实交付验收（ADR0249已更新表达方式）
 
 模型只负责选取工具与检索依据，最终不采用自由模型正文。已授权原值由程序呈现，知识原文
 不用于证明本单结论；没有当前订单证据时不复用历史数值。相同订单的后次读取失败不复用

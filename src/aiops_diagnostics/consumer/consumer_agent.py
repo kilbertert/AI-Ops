@@ -279,7 +279,7 @@ def _query(runtime, caller, binding, run, resource, query, order, libraries, rea
 
 
 def final_answer(raw, context, *, language="zh", question=""):
-    """订单事实由程序交付，知识保留原文摘录及来源。"""
+    """正文由 Agent 表达，来源与媒体由本轮工具记录附加。"""
     from aiops_diagnostics.consumer.consumer_documents import render_sources_answer
 
     calls = (context or {}).get("calls", [])
@@ -287,6 +287,8 @@ def final_answer(raw, context, *, language="zh", question=""):
         raise ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "工具记录尚未完成")
     if consumer_knowledge.SAFETY.search(question):
         return consumer_knowledge.fallback("safety", language)
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > 8000:
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "客服未返回有效正文")
     sources = []
     support = []
     seen = set()
@@ -303,54 +305,7 @@ def final_answer(raw, context, *, language="zh", question=""):
             line = consumer_knowledge._support_line(language, result)
             if line:
                 support.append(line)
-    from aiops_diagnostics.common.i18n import localized_pack
-    from aiops_diagnostics.common.order_reference import names_order
-    from aiops_diagnostics.consumer.consumer_order_evidence import LABELS, render
-
-    words = localized_pack(LABELS, language)
-    order_context = (
-        names_order(question)
-        or order_ids(context)
-        or any(c["tool"] in {"orders", "billing", "status"} for c in calls)
-    )
-    answer = {
-        "blocks": [{"kind": "text", "text": render(context, language)}] if order_context else [],
-        "retrieval_status": "not_found",
-    }
-    for source in sources:
-        content = source.get("content", "")
-        # 检索每段最多8000字，预留标题后按完整行/词截断，不吞掉单行段落。
-        excerpt = content
-        if len(excerpt) > 7600:
-            prefix = excerpt[:7600]
-            boundary = max(prefix.rfind("\n"), prefix.rfind(" "), prefix.rfind("。"))
-            excerpt = prefix[:boundary] if boundary >= 0 else ""
-            excerpt += "\n" + words["quote_omitted"]
-        try:
-            quoted = render_sources_answer(words["knowledge"] + "\n" + excerpt, [source])
-        except ChatRunUnavailable:
-            quoted = render_sources_answer(words["quote_unavailable"], [])
-        answer["blocks"].extend(quoted["blocks"])
+    answer = render_sources_answer(raw, sources, preserve=order_ids(context))
     if support:
-        # support已在发布内容校验https/tel与权限；不可把官方电话当用户隐私长号删掉。
-        answer["blocks"].append(
-            {
-                "kind": "text",
-                "text": words["support"] + "\n" + "\n".join(support),
-            }
-        )
-    if not answer["blocks"]:
-        knowledge_states = [(c.get("result") or {}).get("status") for c in calls if c["tool"] == "knowledge"]
-        if any(state in {"unavailable", "limited", "refused"} for state in knowledge_states):
-            answer = consumer_knowledge.fallback("unavailable", language)
-            answer["retrieval_status"] = "unavailable"
-            return answer
-        if consumer_knowledge.HUMAN.search(question):
-            return consumer_knowledge.fallback("human", language)
-        if any(state in {"not_found", "no_result"} for state in knowledge_states):
-            return consumer_knowledge.fallback("not_found", language)
-        return render_sources_answer(words["no_answer"], [])
-    answer["retrieval_status"] = (
-        "found" if any(b.get("kind") == "reference" for b in answer["blocks"]) else "not_found"
-    )
+        answer["blocks"].append({"kind": "text", "text": "\n".join(support)})
     return answer
