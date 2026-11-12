@@ -301,3 +301,10 @@ def test_human_request_takes_precedence_over_empty_search():
 def test_refused_knowledge_is_not_reported_as_completed_empty_search():
     answer = final_answer("wrong", context(("knowledge", {"status": "refused"})), language="en")
     assert answer["retrieval_status"] == "unavailable"
+
+
+def test_selected_order_does_not_hide_explicit_human_request_without_records():
+    ctx = {"conversation": {"selected_order": "TEST-CHARGE-001"}, "calls": []}
+    result = final_answer("wrong", ctx, question="请告诉我官方人工客服的联系入口，不要声称已经转接。")
+    assert "官方客服入口" in result["blocks"][0]["text"]
+    assert "未取得可展示的订单记录" not in result["blocks"][0]["text"]
