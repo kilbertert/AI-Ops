@@ -11,6 +11,8 @@
   存储层 `str(...)[:64]` 截断兜底。
 - `operator/operator_cpms._trace`：工具拒绝携带拒绝码、复核拒绝携带原因、
   重采样携带 dispatch_refused/no_answer_accepted、终态失败携带 `_failure_code`。
+- `operator/operator_cpms.start`：把本轮 `language` 传入 `AgentRunStore.issue`
+  （Devin Review 发现：此前该列恒 NULL，新字段永远显示「未记录」）。
 - `execution/operator_run_logs`：投影扩入 reason(≤128)/question/order_no/节点对/
   environment/language/观测版本与核对结论/领取·完成·过期时间/结果指纹/
   trial（服务端按 chat_binding `operator-trial:` 前缀派生，绑定串不投影）/
@@ -65,3 +67,5 @@
 前端 vitest/tsc 未在本机跑（dify web 构建环境在交付链路执行，且上游
 `typescript.ignoreBuildErrors`）；Hack 人工核对了缺字段兜底不崩。
 真实 Dify/Java 端到端（节点回调实际携带 detail 的事件流）由发布后验收。
+**未完成业务验收**：本记录只覆盖本地 API 合同与合成数据验证，真实业务运行
+（真实管家问答在新日志页呈现问题/订单号/节点明细）待发布后另行验收。

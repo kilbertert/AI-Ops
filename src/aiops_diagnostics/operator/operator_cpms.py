@@ -637,6 +637,7 @@ class OperatorCpms:
                 route_revision=binding.route_revision,
                 publication_app_id=binding.app_id,
                 operation="operator_agent",
+                language=language,
             )
             qa = self.context.store.create_assistant_question(
                 caller.scope_fingerprint,

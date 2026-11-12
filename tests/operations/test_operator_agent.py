@@ -77,6 +77,25 @@ def test_model_can_select_order_and_receive_calculation_before_answer(tmp_path, 
         assert f["ctx"].agent_run_store.by_qa(r.json()["qa_id"]).order_no == ORDER
 
 
+def test_start_records_the_request_language_on_the_run(tmp_path, monkeypatch):
+    """Devin #1486：start 收到 language 却从不传给 issue，日志里恒显示未记录。"""
+    with environment(tmp_path, monkeypatch) as f:
+
+        def dispatch(self, config, run):
+            evidence, headers, _ = call_tool(f, run, "cpms_order_detail", {"order_no": ORDER})
+            finish(f, run, headers, "正常。", ["cpms_order_detail"])
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        r = f["client"].post(
+            "/v1/assistant/questions",
+            headers={**HEADERS, "Accept-Language": "en"},
+            json={"question": "查一下" + ORDER + "为什么这么贵"},
+        )
+        assert r.status_code == 202, r.text
+        assert terminal(f, r.json()["qa_id"]).json()["status"] == "completed"
+        assert f["ctx"].agent_run_store.by_qa(r.json()["qa_id"]).language == "en"
+
+
 @pytest.mark.parametrize(
     "question", ["为什么这一项还是待验证？", "那优惠没算进去吗？", "这笔单在哪个站点充的？"]
 )
