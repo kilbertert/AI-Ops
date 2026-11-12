@@ -90,7 +90,7 @@ def render_evidence(evidence, language, *, secrets=()):
         data = bounded(sanitize_data(item["data"], preserve=(order,) if order else ()))
         if tool == "cpms_order_detail":
             lines.append("\n" + sources[tool])
-            for key in (
+            shown_fields = (
                 "orderNo",
                 "status",
                 "createdTime",
@@ -102,7 +102,8 @@ def render_evidence(evidence, language, *, secrets=()):
                 "payAmount",
                 "refundAmount",
                 "vatFee",
-            ):
+            )
+            for key in shown_fields:
                 value = data.get(key)
                 value = words["missing"] if value is None else str(value)
                 value = re.sub(r"([\\`*_{}\[\]()#!|>])", r"\\\1", escape(value))
@@ -112,7 +113,9 @@ def render_evidence(evidence, language, *, secrets=()):
                 else:
                     lines.append(line)
             lines.append(words["currency"])
-            continue
+            data = {key: value for key, value in data.items() if key not in shown_fields}
+            if not data:
+                continue
         excerpt = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
         excerpt = excerpt.replace("`", "\\u0060").replace("<", "\\u003c")
         if sum(map(len, lines)) + len(excerpt) > 9500:

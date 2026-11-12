@@ -37,6 +37,8 @@ def test_unverified_reply_is_replaced_by_current_evidence(tmp_path, monkeypatch,
         text = result["result"]["blocks"][0]["text"]
         assert "诊断结论未完成" in text and "整单收费都正确" not in text
         assert "27.36" in text and "0.00" in text and ORDER in text
+        assert '"gunPower": 23' in text
+        assert '"electricityFee": "13.68"' in text
         assert len(attempts) == 1
         run = f["ctx"].agent_run_store.by_qa(response.json()["qa_id"])
         assert run.snapshot["answer"] is None
