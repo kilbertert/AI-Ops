@@ -140,7 +140,7 @@ def provision(tmp_path, monkeypatch):
     @contextmanager
     def mysql(settings, scope):
         state.scopes.append(scope)
-        yield SimpleNamespace(list_orders=lambda **kwargs: state.rows)
+        yield SimpleNamespace(list_orders=lambda **kwargs: state.rows, mall_billing_records=lambda *_: None)
 
     monkeypatch.setattr(gateway_api, "scoped_mysql_source", mysql)
     config = tmp_path / "production.env"

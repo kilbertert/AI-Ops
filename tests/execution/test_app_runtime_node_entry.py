@@ -260,7 +260,9 @@ def _orders_source(_settings, scope):
     ]
     mine = [row for row in rows if owners[row["order_no"]] == getattr(scope, "user_id", None)]
     source = SimpleNamespace(
-        list_orders=lambda **_: mine, get_orders=lambda no: [row for row in mine if row["order_no"] == no]
+        list_orders=lambda **_: mine,
+        get_orders=lambda no: [row for row in mine if row["order_no"] == no],
+        mall_billing_records=lambda *_: None,
     )
     return _ctx.contextmanager(lambda: (yield source))()
 
