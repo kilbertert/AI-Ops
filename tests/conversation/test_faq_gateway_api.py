@@ -323,25 +323,63 @@ def test_recommendations_answer_every_platform_language_value(
             assert not han.search(title), f"{served} 的题面里出现了汉字：{title}"
 
 
-def test_localized_copy_language_is_logged(tmp_path: Path, caplog) -> None:
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/v1/faq/recommendations"),
+        ("GET", "/v1/faq/catalog"),
+        ("POST", "/v1/faq/answer"),
+        ("GET", "/v1/assistant/starters"),
+        ("GET", "/v1/shortcuts"),
+        ("GET", "/v1/banner"),
+    ],
+)
+def test_localized_copy_language_is_logged(tmp_path: Path, caplog, method: str, path: str) -> None:
     """确定性文案面要留下「客户端发了什么头、解析成什么」的一行记录。
 
-    拦截的错误：日后重构丢掉这条 ``_LOGGER.info``、或把端点换回不记录的
-    ``request_language``——这几个面没有持久语言记录（chat 路径有 run 行），
-    日志是定位「客户端发错 Accept-Language」的唯一线索，静默丢失要等下次
-    排障才被发现。判据：一行记录、带原始头与解析值。
+    拦截的错误：日后重构丢掉这条 ``_LOGGER.info``、或把**任何一个**端点换回
+    不记录的 ``request_language``——这几个面没有持久语言记录（chat 路径有
+    run 行），日志是定位「客户端发错 Accept-Language」的唯一线索，静默丢失
+    要等下次排障才被发现。六个面逐个断言：行存在、带原始头与解析值。
+    只断言日志不断言响应码：starters/shortcuts/banner 在这个最小夹具里可能
+    因缺下游件而 4xx/5xx，而依赖先于处理器执行，日志照样落地——本测试的
+    契约是「日志」，不是业务成功。
     """
     caplog.set_level(logging.INFO, logger="aiops.gateway")
     headers = {"Authorization": "Bearer service", "X-Business-Entry": "consumer"}
+    body = {"question_id": "consumer.faq.q001"} if method == "POST" else None
     with _client(tmp_path) as client:
-        client.get("/v1/faq/recommendations", headers={**headers, "Accept-Language": "en"})
-        client.get("/v1/faq/recommendations", headers=headers)
+        client.request(method, path, headers={**headers, "Accept-Language": "en"}, json=body)
+        client.request(method, path, headers=headers, json=body)
     records = [
         r.message
         for r in caplog.records
         if r.name == "aiops.gateway" and "localized_copy_language" in r.message
     ]
     assert len(records) == 2
-    assert "path=/v1/faq/recommendations" in records[0]
+    assert f"path={path}" in records[0]
     assert "accept_language='en'" in records[0] and "resolved=en" in records[0]
     assert "accept_language=None" in records[1] and "resolved=zh" in records[1]
+
+
+def test_localized_copy_language_truncates_long_header(tmp_path: Path, caplog) -> None:
+    """超长 ``Accept-Language`` 只进 160 字符：日志行有界，原始值仍逐字。
+
+    拦截的错误：截断丢了（或阈值漂移）时日志行重新变成客户端控制长度。
+    判据与端点无关，任取一个面即可——180 字符的请求头在记录里只剩 160。
+    """
+    caplog.set_level(logging.INFO, logger="aiops.gateway")
+    with _client(tmp_path) as client:
+        client.get(
+            "/v1/faq/recommendations",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "consumer",
+                "Accept-Language": "x" * 180,
+            },
+        )
+    records = [r for r in caplog.records if "localized_copy_language" in r.message]
+    assert len(records) == 1
+    logged = records[0].message
+    assert "accept_language='" + "x" * 160 + "'" in logged
+    assert "x" * 161 not in logged
