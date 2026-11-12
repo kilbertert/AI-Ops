@@ -1222,6 +1222,9 @@ def _trial_report_text(answer: Mapping[str, Any], status_text: str) -> str:
     if not isinstance(report, Mapping):
         return "试运行完成，但结果里没有可读的报告"
     summary = str(report.get("summary") or "").strip()
+    if report.get("callback_version") == 6 and summary:
+        # 客服事实已按整行限制长度，不能在这里截断金额或丢掉资料摘录。
+        return summary
     root_cause = str(report.get("root_cause") or "").strip()
     parts = [part for part in (summary, root_cause) if part]
     text = " ／ ".join(parts) or "试运行完成，报告为空"

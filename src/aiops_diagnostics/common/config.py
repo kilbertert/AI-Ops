@@ -121,6 +121,8 @@ class MySQLSettings:
     user: str = ""
     password: str = ""
     database: str = "cloud_charging_pile"
+    #: 商城库与充电库同实例不同 schema，跨库只读关联用；空值表示该环境没有商城侧证据。
+    mall_database: str = "qumall_mall"
     timezone: str = ""
 
 
@@ -371,6 +373,7 @@ class Settings:
                 user=env("AIOPS_MYSQL_USER"),
                 password=env("AIOPS_MYSQL_PASSWORD"),
                 database=env("AIOPS_MYSQL_DATABASE", "cloud_charging_pile"),
+                mall_database=env("AIOPS_MYSQL_MALL_DATABASE", "qumall_mall"),
                 timezone=env("AIOPS_MYSQL_TIMEZONE"),
             ),
             tdengine=TDengineSettings(

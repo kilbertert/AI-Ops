@@ -364,9 +364,14 @@ def test_chatflow_and_node_use_the_managed_tenant_endpoint(tmp_path, monkeypatch
     from aiops_diagnostics.consumer import consumer_billing
     from aiops_diagnostics.gateway import gateway_api as api
 
-    s = settings(tmp_path)
+    s = settings(tmp_path, server_config_file=tmp_path / "missing.env")
     ConsumerEndpoints(s.database_file).register("TENANT-B", "env-a", "https://b.example.test", "platform")
-    caller = SimpleNamespace(effective_tenant_id="TENANT-B", subject=SimpleNamespace(c_user_id="USER-B"))
+    caller = SimpleNamespace(
+        effective_tenant_id="TENANT-B",
+        subject=SimpleNamespace(c_user_id="USER-B"),
+        data_scope=SimpleNamespace(type="self", site_ids=(), shop_ids=()),
+        delegated=False,
+    )
     seen = []
 
     def read(base, order, *, tenant_id, user_id, include_composition=False):
@@ -375,7 +380,13 @@ def test_chatflow_and_node_use_the_managed_tenant_endpoint(tmp_path, monkeypatch
 
     monkeypatch.setattr(api, "read_charging_status", read)
     monkeypatch.setattr(consumer_billing, "read_billing_record", read)
-    assert api._authorized_consumer_snapshot(s, caller, "ORDER-B", kind) == {"order_no": "ORDER-B"}
+    snapshot = api._authorized_consumer_snapshot(s, caller, "ORDER-B", kind, include_composition=True)
+    assert snapshot["order_no"] == "ORDER-B"
+    if kind == "billing":
+        # 商城证据读不到只降级为标注，不打断账务读取。
+        assert snapshot["mall_payment"]["status"] == "unavailable"
+    else:
+        assert "mall_payment" not in snapshot
     assert seen == [("https://b.example.test", "ORDER-B", "TENANT-B", "USER-B")]
     assert ConsumerToolGrants(SimpleNamespace(), s)._cpms_base("TENANT-B") == "https://b.example.test"
     s.execution_environment = "other-env"

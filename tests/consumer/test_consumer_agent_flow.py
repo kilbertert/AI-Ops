@@ -48,7 +48,7 @@ def test_agent_migration_preserves_business_prompt_model_and_permission_ceiling(
 
 
 @pytest.mark.parametrize("suffix", ["", "\n运营要求：核心结论应安抚并说明有无问题；不用Markdown，末尾明细。"])
-@pytest.mark.parametrize("version", [0, 1, 2, 3, 4, 5])
+@pytest.mark.parametrize("version", [0, 1, 2, 3, 4, 5, 6])
 def test_order_composition_migration_is_exact_idempotent_and_preserves_business(suffix, version):
     from aiops_diagnostics.consumer import consumer_agent_flow as flow
 
@@ -78,6 +78,12 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
         )
         instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION_V4
     elif version == 5:
+        # 已发布1.7.5的完整v5字节合同，保留真实图升级输入。
+        assert hashlib.sha256(flow.ORDER_COMPOSITION_INSTRUCTION_V5.encode()).hexdigest() == (
+            "5289614b36a7eb83d22676a6a5e023a43c1e28c21458465a9e73e7996cbfc8ad"
+        )
+        instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION_V5
+    elif version == 6:
         instruction["value"] += ("\n" if suffix else "") + flow.ORDER_COMPOSITION_INSTRUCTION
     original = copy.deepcopy(source)
     updated = upgrade.order_composition(source)
@@ -94,7 +100,7 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
     assert updated == expected
     assert updated["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"][
         "value"
-    ].endswith("<!-- /aiops-order-composition:5 -->\n")
+    ].endswith("<!-- /aiops-order-composition:6 -->\n")
     assert publish(updated["workflow"])["callback_version"] == 6
     for invalid in (
         flow.BASE_INSTRUCTION.replace("8次", "9次").replace("你是充电客服", "你是客服"),
@@ -104,14 +110,17 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V2 * 2,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V3 * 2,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V4 * 2,
+        flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V5 * 2,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V4 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V3 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V2 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V1 + flow.ORDER_COMPOSITION_INSTRUCTION,
+        flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION_V5 + flow.ORDER_COMPOSITION_INSTRUCTION,
         flow.BASE_INSTRUCTION + flow.ORDER_COMPOSITION_INSTRUCTION.replace("币种", "单位", 1),
         flow.BASE_INSTRUCTION + "<!-- aiops-order-composition:3 -->",
         flow.BASE_INSTRUCTION + "<!-- aiops-order-composition:4 -->",
         flow.BASE_INSTRUCTION + "<!-- aiops-order-composition:5 -->",
+        flow.BASE_INSTRUCTION + "<!-- aiops-order-composition:6 -->",
         flow.BASE_INSTRUCTION + "运营文本" * 4000,
     ):
         instruction["value"] = business + invalid + suffix
@@ -258,3 +267,21 @@ def test_catalogue_failure_details_do_not_become_public_contract_errors(monkeypa
         publication_settings(candidate(), CEILING, BASE, owned_libraries=client.list_knowledge_bases)
     assert marker not in str(error.value)
     assert "知识库目录暂不可用" in str(error.value)
+
+
+def test_migration_replaces_known_reassurance_demand_without_losing_business_style():
+    from aiops_diagnostics.consumer import consumer_agent_flow as flow
+
+    source = {"workflow": candidate()}
+    instruction = source["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]
+    unsafe = (
+        "核心结论：第一句给出对费用的解释结论，能够让消费者清楚知道订单是否有问题，并且简要概括问题来源，"
+        "并作出说明，说明是用于安抚用户的话，不是站在用户角度批判金额核算内容。"
+    )
+    style = "不使用Markdown。简短依据、具体详情依次列出。"
+    instruction["value"] = flow.BASE_INSTRUCTION + unsafe + style
+    changed = upgrade.order_composition(source)
+    text = changed["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]["value"]
+    assert unsafe not in text
+    assert style in text and flow.BASE_INSTRUCTION in text
+    assert upgrade.order_composition(changed) == changed

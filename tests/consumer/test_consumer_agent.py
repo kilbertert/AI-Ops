@@ -112,6 +112,9 @@ def test_agent_combines_tools_and_keeps_actual_answer_after_grant_expiry(tmp_pat
         first = first.json()
         final = done(env, first["qa_id"])
         assert final.status_code == 200 and final.json()["status"] == "completed", final.text
+        final_text = final.json()["result"]["blocks"][0]["text"]
+        assert "5.20" in final_text and "3.30" in final_text
+        assert "这笔订单已结束" not in final_text
         assert len(reads) == 1 and len(backend["calls"]) == 1 and len(kb.calls) == 1
         assert DataGrantStore(runtime.store.path).by_token(tokens[0]).state == "revoked"
         with sqlite3.connect(runtime.store.path) as db:
@@ -437,7 +440,9 @@ def test_agent_trial_uses_same_tools_and_rechecks_selected_objects(tmp_path, mon
                 break
             time.sleep(0.02)
         assert record["status"] == "completed", record
-        assert record["result"]["report"]["summary"] == "已查询所选订单，请确认第2步。"
+        summary = record["result"]["report"]["summary"]
+        assert ORDER_A in summary and "充电中" in summary and "无法确认" in summary
+        assert "请确认第2步" not in summary
         assert deleted and routes.get("env-a", "TENANT-A", "consumer", "consumer_service") == before
         env["orders"].ownership[ORDER_A] = "USER-B"
         assert (
@@ -470,7 +475,24 @@ def test_natural_answer_retains_only_evidenced_order_identifiers():
     from aiops_diagnostics.consumer.consumer_agent import final_answer
 
     own, unverified = "2117784634192551937", "2117784634192551999"
-    context = {"calls": [{"tool": "status", "result": {"order_ids": [own], "status": "found"}}]}
+    context = {
+        "calls": [
+            {
+                "tool": "status",
+                "result": {
+                    "order_ids": [own],
+                    "status": "found",
+                    "snapshot": {
+                        "source": "cpms.chargingInfo",
+                        "order_no": own,
+                        "status_role": "finished",
+                        "status_code": 1,
+                        "observed_at": "2026-11-12T00:00:00Z",
+                    },
+                },
+            }
+        ]
+    }
     text = final_answer(f"订单{own}已结束；其他编号{unverified}，电话13800138000。", context)["blocks"][0][
         "text"
     ]
