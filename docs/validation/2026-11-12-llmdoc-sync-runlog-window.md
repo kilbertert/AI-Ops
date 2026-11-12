@@ -25,6 +25,8 @@ stable-knowledge gate 只写复核为真的修正。
 
 ## 未验边界
 
+- **未完成业务验收**：本记录只覆盖文档层校验（validate/指纹/模型逐条复核），
+  没有真实故障案例可跑；文档判言的业务正确性以对应 ADR 与确定性套件为准。
 - investigator/recorder 的「逐条复核」是模型核查而非确定性测试；关键新判言
   （schema ensure、evidence_only、投影白名单）均有对应源码行与 ADR/测试佐证，
   但 llmdoc 层没有可执行的文档-代码一致性断言。
