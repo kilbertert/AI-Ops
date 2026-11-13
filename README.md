@@ -3,6 +3,8 @@
 面向公司 C端与管家端的只读业务助手。公司 App/H5 是用户入口，Gateway 负责身份、范围、
 发布绑定、作业和交付；客服由 Dify 官方 Agent 执行，管家由 Java 节点执行；模型按SOP选择证据，系统负责授权与计算。
 
+跨服务器多租户接入正在分片实现：[可信环境入口](ops/nginx/business-environment-ingress.md)生成独立Gateway分流配置；真实双环境与控制台集中接入尚未启用。
+
 ## 当前交付与退役范围
 
 2026-11-05阶段整理：[系统架构](docs/system-architecture.md)、[当前交付](docs/agents/current-delivery-state.md)、

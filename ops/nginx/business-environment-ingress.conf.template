@@ -1,0 +1,49 @@
+# 放入现有 http 块；此接入面仅服务可信代理，不作为匿名公网入口。
+map $http_x_aiops_environment_key $aiops_environment {
+    default "";
+${ENVIRONMENT_KEYS}
+}
+map $aiops_environment $aiops_environment_upstream {
+    default "";
+${ENVIRONMENT_UPSTREAMS}
+}
+map $aiops_environment $aiops_environment_source_key {
+    default "";
+${ENVIRONMENT_SOURCE_KEYS}
+}
+map $aiops_environment $aiops_environment_host {
+    default "";
+${ENVIRONMENT_HOSTS}
+}
+${UPSTREAMS}
+server {
+    listen ${LISTEN};
+    server_name _;
+    access_log off;
+    # 错误日志可能带请求头，私有接入配置由服务账号管理。
+    client_max_body_size 1m;
+    location / { return 404; }
+    location /v1/ {
+        if ($aiops_environment = "") { return 403; }
+        proxy_pass $aiops_environment_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $aiops_environment_host;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-AIOps-Environment $aiops_environment;
+        proxy_set_header X-AIOps-Environment-Key "";
+        proxy_set_header X-AIOps-Source-Key $aiops_environment_source_key;
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header Connection "";
+        proxy_hide_header X-AIOps-Source-Key;
+        proxy_hide_header X-AIOps-Environment-Key;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 240s;
+        proxy_send_timeout 30s;
+        proxy_next_upstream off;
+        proxy_buffering off;
+        proxy_request_buffering off;
+${TLS}
+    }
+}

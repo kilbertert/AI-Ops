@@ -1,5 +1,17 @@
 # 当前交付状态索引
 
+## 跨服务器多租户第一片（2026-11-13）
+
+调查#1500已合并35a21b70，订正“JWT无domain就只能固定部署”的旧推断：公司应用市场已有
+platformCode/SaaS类型到domain/context的实际映射，但本环境目录为空且未证明CPMS含义。
+当前[可信环境入口](../../ops/nginx/business-environment-ingress.md)在#1503交付中：复用独立Gateway/登录代理/数据根，
+由可信代理来源分流，共享Dify和业务合同。真实nginx与双Gateway隔离验证通过，
+独立IP别名/TLS身份/端口反例已修复并复验；实际生产入口没有切换。
+
+公司目录自动接入、第二环境认证/CPMS/时序/离线源、集中控制台和真实App双环境验收仍未完成，
+不能由本机两个一次性Gateway推出跨服务器业务已上线。[实施顺序](../architecture/2026-11-13-cross-environment-tenancy.md)仍按T1～T4推进。
+
+
 ## 运行日志复核行渲染修正（2026-11-13）
 
 PR #1498已合并51a18b86；Dify Web镜像review-render-51a18b86已换发，
