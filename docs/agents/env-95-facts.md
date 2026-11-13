@@ -2,7 +2,7 @@
 
 > **用途**：回答「95 是什么、在哪、怎么连、里面有什么」—— 不依赖会话记忆，也不需要
 > 去别的文档里拼三处半句。
-> **最后核验**：2026-10-20（从开发机与 runner 主机两侧实测）。
+> **最后核验**：2026-11-13（受管 SSH、进程健康与配置位置）；旧入口与数据盘点注明原日期。
 >
 > **纪据纪律**：本文件只写方法与位置。地址、指纹、凭据的真值在库外主机清单
 > （`dev-host show 95`），不在这里；也不写任何口令/令牌/thirdSession 明文。
@@ -30,54 +30,62 @@
   并注入服务身份；该 `proxy_pass` 与 41 的反代是两个独立配置。
 - 95 本机 `aiops-gateway` active，绑 `127.0.0.1:8788`，`GET /health` = 200。
 
-## 2. 怎么连（以及为什么直连会失败）
+## 2. 怎么连（区分目标与中继故障）
 
 `dev-host read 95 <path>` / `dev-host ls 95 <path>` / `dev-host find 95 ...` 即可用；
 它是服务类主机，`exec` 需显式 `--allow-service-exec`，写入需产物身份。
 
-**网络事实**：开发机（`dev-us-01`）到 95 所在云厂商那一段地址的**入站**被网络侧丢弃，
-不是主机防火墙 —— 在 95 上抓包，从 `dev-us-01` 发起的 SYN **一个都没到**
-（`tcpdump` 0 packets；同一时刻对 41 抓也是 0）。41 早已是同一现象，并因此有了一条
-临时跳板（`FLEET.md` §7.9）。95 的 2134 端口同理，且 `known_hosts` 里此前根本没有它的记录。
+2026-11-13：开发机直连仍在 6 秒内超时，但**现有受管中继路径连续三次成功**，
+耗时 6.17 / 6.38 / 5.71 秒，使用原有公钥；没有使用口令、修改 SSH 配置或重启服务。
+同日较早失败的错误指向中继连接超时，不能据此判断 95 宕机或密码错误。
+中继后来在线这一事实不能确定历史故障由休眠、重启还是网络中断造成。
 
-三个反证，说明这不是"美国与该公司网络不通"：
-- 95 **自己**能主动连到开发机（反方向通）；
-- 同一云厂商的另一个地域主机（`svc-gz-117`）从 `dev-us-01` 可达；
-- 从 36 和 124 都能直连 95 的 2134。
+当前路径以库外主机清单和 SSH 配置为准，不再按旧 HK 中继记录推断。
+`dev-host` 到达前仍校验目标主机公钥；中继地址、密钥与历史操作记录保留在私有运维清单。
+2026-10-20 的直连抓包零 SYN 是当时的观测，不足以确定当前网络丢弃位置。
 
-现状：`dev-us-01` 的 `~/.ssh/config` 给 `prod-bugtrack-120` 加了 `ProxyCommand`，
-经 HK 开发机一条**受限通道**转发 —— 该 key 在 HK 的 `authorized_keys` 里绑定
-`command="nc <95 地址> <95 SSH 端口>"` + `restrict`，**开不了 shell，也只能连这一个
-地址端口**（实测：拿该 key 要 shell，拿回来的是 95 的 SSH banner）。
-`dev-host` 的主机公钥断言照样生效。改法与回滚见 `FLEET.md` §7.30。
+```bash
+# 原受管路径的最小复验：必须返回 SSH_OK，不能只用直连 TCP 判断主机状态。
+dev-host exec 95 --allow-service-exec --timeout 35 -- printf SSH_OK
+dev-host exec 95 --allow-service-exec -- systemctl is-active aiops-gateway.service
+dev-host exec 95 --allow-service-exec -- curl -fsS --max-time 5 http://127.0.0.1:8788/health
+```
+
+若超时，先在本机查看有效 SSH 路径并区分中继和目标；敏感输出只保存在私有证据目录。
+路径恢复后重新核对进程与健康，不以外部域名的重定向或 403 代替本机健康检查。
 
 ## 3. 95 上到底有什么
 
-| 项 | 值（2026-10-20 实测） |
+| 项 | 值（注明核验时点） |
 |---|---|
-| 服务单元 | `aiops-gateway.service`，`User=aiops`，enabled，自 2026-09-14 起常驻 |
-| 运行目录 | `/home/aiops/AI-Ops`（**无 `.git`**，不是 checkout） |
-| venv | `/home/aiops/AI-Ops/.venv`（`aiops` CLI 可用） |
-| 进程环境 | `/home/aiops/gateway.env`（`AIOPS_GATEWAY_BIND=127.0.0.1`、`PORT=8788`） |
-| 服务端配置 | `/home/aiops/.config/aiops-diagnostics/acceptance.env` |
-| Gateway DB | `/home/aiops/.local/share/aiops-diagnostics/gateway/gateway.db` |
-| 版本 | `/health` 报 `0.1.0` —— 纯版本号，**没有** 41 那种 `0.1.0+<sha>` 来源标记 |
+| 服务单元 | 2026-11-13：`aiops-gateway.service` active，`User=aiops` |
+| 运行目录 | 2026-11-13：`/home/aiops/AI-Ops`；2026-10-20 检查无 `.git` |
+| venv | 2026-10-20：`/home/aiops/AI-Ops/.venv`；旧 CLI 记录不是现行运维入口 |
+| 进程环境文件 | 2026-10-20：`/home/aiops/gateway.env`；本轮只读取进程配置项名称 |
+| 服务端配置 | 2026-11-13：`/home/aiops/.config/aiops-diagnostics/acceptance.env` 存在 |
+| Gateway DB | 2026-11-13：`/home/aiops/.local/share/aiops-diagnostics/gateway/gateway.db` 存在 |
+| 版本 | 2026-11-13：本机 `/health` 报 `0.1.0`、`business_mutations=disabled`，无提交来源标记 |
 
-**已知空白（如实记录，不是推测）**：
+**声明态与历史空白**：
 
-- **没有 `ops/environments/env-95.toml`，而且从来没有过** ——
-  `git log --all -- ops/environments/env-95.toml` 为空。41 那份之所以存在，是因为它要走
-  `aiops-admin reconcile`；95 上没有这条流程。
-- **95 上连 `ops/environments/` 目录都没有**，且 `/home/aiops/AI-Ops` 不是 git 仓库 ——
-  95 的 agent 清单**没有声明态**，只有库里的运行态。
-- **库是空的**：`agents` / `agent_versions` / `conversations` / `conversation_turns` /
-  `runs` / `devices` 六张表**各 0 行**（以 `aiops` 身份读）。
-- 带服务身份调 `GET /v1/faq/catalog` 返回 `401 INVALID_ACCESS_TOKEN` —— 与 41 相同的
-  认证合同，但对**这个**环境而言，此刻没有可用的会话世界。
+- 仓库已有 [`ops/environments/env-95.toml`](../../ops/environments/env-95.toml)，
+  是历史部署演练清单，**不是已部署生产配置**。旧“从来没有过”的描述已失效。
+- 2026-11-13：目标运行目录仍无 `ops/environments/`；不能因仓库有模板就断言生产已有声明态。
+- 2026-11-13：以 SQLite `mode=ro`、`query_only=ON` 重查，`agents` / `agent_versions` /
+  `conversations` / `conversation_turns` / `runs` / `devices` 六张表仍各 0 行，
+  `user_version=0`，没有 `dify_workspaces` 表；只证明旧 Gateway 库，不证明公司业务库为空。
+- 2026-11-13：服务端文件有 UPMS、Redis、MySQL、TDengine 非空配置项；文件和进程配置项
+  均无显式 CPMS、Dify、环境身份键。本轮只输出名称与计数，**未验证上游可达或配置有效**。
+- 2026-10-20：带服务身份的 `GET /v1/faq/catalog` 返回 `401 INVALID_ACCESS_TOKEN`。
+  本轮没有真实用户令牌验证，不能据此判定当前认证或业务链可用。
 
-所以：**95 是「入口与进程在跑、数据面为空」的状态**，不是 41 的镜像，也不是它的备份。
-把它当 41 的对等环境来读会得出错误结论；把它当"已退役"也是错的 —— 进程与入口都活着。
-它的真实归属（现在还被谁用、用来做什么）需要业务方给一句；在此之前按"在用"处理。
+当前可确认的是**受管 SSH 可用、旧版 Gateway 运行**。第二环境的认证、CPMS、时序与离线源、
+Dify 工作区和真实用户使用情况还需核对；管理访问成功不代表跨环境业务已接通。
+未观察到实际流量前继续按“在用”处理，不迁移入口或退役进程。
+
+后续盘点须在目标侧处理配置，只输出键名、是否非空和验证结果，不打印文件或进程环境全文。
+Gateway 数据库用 `file:<path>?mode=ro` 及 `PRAGMA query_only=ON`，仅查表结构与必要计数；
+不启动现行 store 构造器，以免自动迁移旧库。
 
 ## 4. 不要把 95 和 120 混为一谈的地方
 
