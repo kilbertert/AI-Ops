@@ -31,7 +31,7 @@ code:
 ## 注册表（app_id 是我们的数据）
 
 - `dify_app_registry.py`：`(tenant, business_entry) → app_id`。Dify 没有租户概念，绑定是我们的数据；**一旦有任何行配置就 fail-closed**——未映射的 `(tenant,entry)` 选中为空（`is_configured`）。由 `aiops-admin reconcile` 按 `[[dify_apps]]` manifest 写入（声明+评审+收敛），但 reconcile **不是唯一写入方**：`publish()` 在带 `source_agent_name` 时于同一事务 upsert（自 #1147）。
-- 请求只接受已注册 `app_id`；裸 prompt 和调用方给的工具白名单都不收——DSL 里工具条目带的是 provider UUID，只有网关的 `partition_aiops_tools` 能翻译（ADR-0027）；`prompt`(+`allowed_tools`) 与 `app_id` 必须恰好给一个，都给/都不给即拒绝。
+- 请求只接受已注册 `app_id`（必填）；裸 `prompt` 试用与调用方给的工具白名单都已退役——DSL 里工具条目带的是 provider UUID，只有网关的 `partition_aiops_tools` 能翻译（ADR-0027）。
 - `dify_debug_identity.py`：调试身份=固定测试租户+子集；未授权=404，与未注册同答（不泄漏存在性）。环境是部署身份，请求带 env = 400。
 
 ## DSL 拉取
