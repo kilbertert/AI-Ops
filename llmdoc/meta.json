@@ -9,52 +9,52 @@
       "validatedRevision": "6042bb2555587f01d670a8100f798b18d33bfaf1"
     },
     "gateway/gateway-runtime.mdx": {
-      "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "gateway/gateway-store.mdx": {
-      "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "identity/identity-scope.mdx": {
-      "validatedRevision": "f99565f5e39a6b20aa4089478f690d5e28c2435a"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "execution/execution-delegation.mdx": {
-      "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "execution/execution-node-contract.mdx": {
-      "validatedRevision": "f99565f5e39a6b20aa4089478f690d5e28c2435a"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "common/shared-primitives.mdx": {
-      "validatedRevision": "f99565f5e39a6b20aa4089478f690d5e28c2435a"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "consumer/consumer-chat.mdx": {
-      "validatedRevision": "f99565f5e39a6b20aa4089478f690d5e28c2435a"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "operator/operator-chat.mdx": {
-      "validatedRevision": "6042bb2555587f01d670a8100f798b18d33bfaf1"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "conversation/conversation-store.mdx": {
-      "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "analytics/bounded-read-surfaces.mdx": {
-      "validatedRevision": "f99565f5e39a6b20aa4089478f690d5e28c2435a"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "publication/publication-lifecycle.mdx": {
-      "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "dify/dify-execution-publishing.mdx": {
-      "validatedRevision": "56b5db6cb302fba6ba764c68d491b8c894c17897"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "dify/dify-console-access.mdx": {
-      "validatedRevision": "9c5184e74cc7cb6590a132631ce74cdd0fb3c0c5"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "dify/dify-self-service.mdx": {
-      "validatedRevision": "894892de2d822d4afef68878392140ccb1cedef2"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "knowledge/knowledge-plane.mdx": {
       "validatedRevision": "56b5db6cb302fba6ba764c68d491b8c894c17897"
     },
     "deployment/delivery-and-hosts.mdx": {
-      "validatedRevision": "894892de2d822d4afef68878392140ccb1cedef2"
+      "validatedRevision": "df9662bfaa542b8516c93e1366532ce590540203"
     },
     "governance/governance-afk.mdx": {
       "validatedRevision": "f99565f5e39a6b20aa4089478f690d5e28c2435a"

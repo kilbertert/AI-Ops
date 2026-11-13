@@ -1,5 +1,5 @@
 ---
-description: "身份解析与数据范围：resolver 装配与 source-key 闸顺序、四条凭据链、能力三档 ASSERTED/DERIVED/UNASSERTED、scope_fingerprint 计入与排除字段、entry_data_scope 四步失败关闭、QueryScope 语义、shop≠site、订单可见性三渲染、订单号语法"
+description: "身份解析与数据范围：resolver 装配与 source-key 闸顺序、四条凭据链、能力三档 ASSERTED/DERIVED/UNASSERTED、scope_fingerprint 计入与排除字段、entry_data_scope 四步失败关闭、QueryScope 语义、shop≠site、订单可见性两渲染、订单号语法"
 kind: architecture
 relations:
   related:
@@ -56,7 +56,7 @@ code:
 - `entry_data_scope`（`data_scope_rule.py`）四步是"入口+主体→数据范围"的唯一序列：(1) 仅 operator 入口否则 self；(2) 租户级账号 `type∈{-1,1}` → all；(3) `subject_unavailable` → self；(4) caller 供 site_ids → organ。任何不可用 → `organ` + `site_ids=()`——失败关闭到空集，**绝不**回落全租户或 self（两者对同一订单答案相反）。
 - `QueryScope`：tenant 恒定；`site_ids=None` = 租户内全部，`()` = 空集短路不打 SQL；`MAX_SCOPE_IDS=1000`。目录/配置任何失败在碰 MySQL 前抛 ScopeError。同一条下推已跨到第二个库——`_consumer_mall_payment` 对商城库复用 `resolve_query_scope(caller)`，但把 ScopeError 在内的全部异常渲染为 `read_failed` 缺证标注而非拒绝请求：「碰库前失败关闭」是不变量，拒绝请求只是出口形态之一（证据合同见 [consumer-chat](../consumer/consumer-chat.mdx)）。
 - **shop ≠ site**：`resolve_operator_site_scope` 必须经 `ch_site.shop_id` 映射（953/954 行相等仅一个例外）；两种空集原因分开记日志：`no_shop_binding`（登记缺口）vs `shop_without_site`（数据缺口）。
-- `order_visibility.py`：一条租户可见性规则三种渲染——`resolve_device_tenant`（入口）、`visible_orders`（行）、`scope_where_sql`（参数绑定 SQL）；UNKNOWN_TENANT fail closed。
+- `order_visibility.py`：一条租户可见性规则两种渲染——`visible_orders`（行内判定）、`scope_where_sql`（参数绑定 SQL 下推）；`TenantVisibility` 收窄为必填 `allowed`（空集=什么都不见，无"不受限"档）；`resolve_device_tenant`/DEVICE profile 已随设备入口 2026-10-29 退役删除；UNKNOWN_TENANT fail closed 保留。
 - `order_identity.py`：`ORDER_ID_ATOM` 是订单号语法的唯一权威；自由文本候选要求含数字且纯数字段 ≥15 字符（曾把 "Please" 当订单号）。
 - `ScopedOrderAuthorizer`：快照优先，`organ` 范围拒绝后经 `/shopuser/getShops` 拿第二意见（快照会陈旧）；兜底异常一律保持拒绝只记类型名——编程错误不得把 deny 变成 500。
 - 内部服务面用 `common/http_auth.py` 的 HMAC+时间戳令牌（`X-Internal-Token`），未配置 secret 的路由整体 404。
