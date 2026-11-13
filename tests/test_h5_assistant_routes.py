@@ -242,12 +242,18 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
                 continue
             result[(method, concrete)] = reached(method, concrete)
         media = "/v1/media/" + _IDS["{signed_id}"]
+        dx = _IDS["{diagnosis_id}"]
         for method, path in [
             ("POST", media),
             ("DELETE", media),
             ("GET", media[:-1]),
             ("GET", media + "a"),
             ("GET", "/v1/media/admin"),
+            # 已退役路由不在网关路由表里、也不在声明里：负向扫描探不到它们，
+            # 残留的 conf 正则臂不会被任何现有断言抓到 —— 显式探一遍。
+            ("POST", "/v1/standard/diagnoses"),
+            ("GET", f"/v1/standard/diagnoses/{dx}"),
+            ("POST", f"/v1/standard/diagnoses/{dx}/cancel"),
         ]:
             result[(method, path)] = reached(method, path)
         yield result
