@@ -1292,7 +1292,6 @@ def _tenant_in_scope(record_tenant: object, allowed_tenant: object) -> bool:
     """这一行的租户是否落在给定范围内 —— 用共享规则判，不就地写比较。"""
     from aiops_diagnostics.identity.order_visibility import (
         TenantVisibility,
-        VisibilityProfile,
         normalize_tenant,
         visible_orders,
     )
@@ -1300,7 +1299,7 @@ def _tenant_in_scope(record_tenant: object, allowed_tenant: object) -> bool:
     allowed = normalize_tenant(allowed_tenant)
     if allowed is None:
         return False
-    visibility = TenantVisibility(profile=VisibilityProfile.CALLER, allowed=frozenset({allowed}))
+    visibility = TenantVisibility(allowed=frozenset({allowed}))
     return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)
 
 
@@ -1825,10 +1824,9 @@ def create_gateway_app(
     #
     # * `faq_identity` — the pure-FAQ surface reads catalogue content.
     # * `assistant_identity` — the assistant can trigger a full order diagnosis
-    #   (a write action) on its order branch, so it authenticates with the same
-    #   scope as `/v1/standard/diagnoses` (aiops:diagnoses:write), NOT the
-    #   weaker faq:read. It then resolves the platform content domain for the
-    #   FAQ branch.
+    #   (a write action) on its order branch, so it authenticates with the
+    #   diagnoses write scope (aiops:diagnoses:write), NOT the weaker faq:read.
+    #   It then resolves the platform content domain for the FAQ branch.
     # * `shortcut_identity` — the shortcut listing renders the product home for
     #   every authenticated user, so it needs no admin role; tenant isolation
     #   is enforced inside the store by the caller's effective tenant.
@@ -3381,8 +3379,8 @@ def create_gateway_app(
     ) -> dict[str, Any]:
         """List this caller's general-question history (T5/#155).
 
-        Kept separate from /v1/standard/diagnoses (order diagnostics): the
-        QA history contains only zero-order answers, each typed `qa`.
+        Kept separate from order diagnostics: the QA history contains only
+        zero-order answers, each typed `qa`.
         """
         caller, _ = identity
         try:
@@ -6726,7 +6724,6 @@ def _same_tenant_as_grant(record_tenant: object, grant_tenant: object) -> bool:
     """
     from aiops_diagnostics.identity.order_visibility import (
         TenantVisibility,
-        VisibilityProfile,
         normalize_tenant,
         visible_orders,
     )
@@ -6734,7 +6731,7 @@ def _same_tenant_as_grant(record_tenant: object, grant_tenant: object) -> bool:
     allowed = normalize_tenant(grant_tenant)
     if allowed is None:
         return False
-    visibility = TenantVisibility(profile=VisibilityProfile.CALLER, allowed=frozenset({allowed}))
+    visibility = TenantVisibility(allowed=frozenset({allowed}))
     # 真值判断而不是 `len(...) == 1`：判据按 AST 认"含 tenant 的比较"，写成比较会让
     # 一次**合法的**共享规则调用被判成第二条规则。
     return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)

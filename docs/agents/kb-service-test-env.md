@@ -169,9 +169,9 @@ RAGFlow 走 QWenEmbed（factory=Tongyi-Qianwen）-> 401 InvalidApiKey
   "不存在"的 HTTP 200 + JSON 映射为 404）。已部署 36 并实测真实字节；120 侧未部署。
   kb-service 无独立 git 仓库：源码试验记录在 `~/Playground/experiments/kb-service-design/`
   （已提交），部署副本（36 `/opt/ragflow-kb/kb-service/`）以 md5 双副本纪律同步。
-- **部署代码版本**：36 网关当前为 #185 基线 + #186 answer 归一 hotfix；**#187/#188/#190
-  （媒体回源业务错误映射、Range 本地切片、瞬时 not found 重试）已合并 main 但待部署 36**，
-  部署后需重验 C4（视频整段/Range）。
+- **部署代码版本**（2026-09-11 时点，其后以 36 实际为准）：36 网关当时为 #185 基线
+  + #186 answer 归一 hotfix；**#187/#188/#190（媒体回源业务错误映射、Range 本地切片、
+  瞬时 not found 重试）当时已合并 main 但待部署 36**，部署后需重验 C4（视频整段/Range）。
 - **供应商 key 状态**（Codex agent 链）：alibaba-maas 被供应商封锁（API-key is blocked，
   需业务方轮换）；glm-ark 月配额 2026-09-21 重置；psydo 余额不足。41 当前以
   `canary-dashscope` provider（DashScope key + `qwen3.8-max-0902`，wire_api=responses）

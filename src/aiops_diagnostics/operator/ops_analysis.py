@@ -58,9 +58,8 @@ OPERATIONS_CARDS = frozenset(
 #:
 #: 口径（只计 5；状态 2/3 是另外两种状态）见 ``GLOSSARY.md`` 的「异常结束订单」，
 #: 而「5 是什么角色」的唯一落点是 ``order_status``。此前这里是一个数字常量，配着一段
-#: **人工复述证据链**的注释（引用 ``rules.ORDER_STATUS[5]``、``engine._analyze_status``、
-#: staged 的 ``AbnormalOrderTxDataHandler.java``）—— 那是一次重新推导，不是一次取用，
-#: 而 ``tests/`` 里没有任何一处能发现它漂移（PRD #732 的删除测试）。
+#: **人工复述证据链**的注释（散落引用各模块的状态表与上游 Java 类）—— 那是一次重新
+#: 推导，不是一次取用，而 ``tests/`` 里没有任何一处能发现它漂移（PRD #732 的删除测试）。
 #:
 #: **单元素解包**，不是 ``[0]``：多值时这里会**在导入期炸**，而不是静默丢掉第二个 code。
 #: 扩成多值要动的是**渲染**（`sources` 的两条 SQL 现在是 `status = %s` + 一个绑定值，
@@ -70,7 +69,7 @@ OPERATIONS_CARDS = frozenset(
 (NORMAL_STATUS,) = normal_end_codes()
 
 #: 风险等级的门限。**这不是本仓既有规则**——树里没有任何一处定义过失败率门限
-#: （``engine.py`` 只分类、``rules.py`` 只给标签、原型里那张「异常/失败率」卡没有公式）。
+#: （``rules.py`` 只给标签、原型里那张「异常/失败率」卡没有公式）。
 #: 因此这三个门限是本票选的，集中在一个函数里，好让一次标定是一行改动；它们与健康报告
 #: 的分级同一个心智模型（``normal / attention / abnormal``，外加 ``unavailable``）。
 RISK_ATTENTION_THRESHOLD = 0.02

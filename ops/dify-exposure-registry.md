@@ -19,7 +19,7 @@
 |---|---|---|---|---|
 | 知识检索适配 | `/v1/dify/retrieval` | POST | 共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY`） | Dify 的 External Knowledge API 目标。Dify 控制台里挂"外接知识库"时，运营填的 endpoint 加 `/retrieval` 就打到这里（#581）。租户与知识库集合由**我们的** `AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS` 决定，请求体里两者都没有 |
 | **知识源清单（只读）** | `/v1/dify/knowledge` | GET | 共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY`，与检索同一把） | 让 Dify 控制台的「连接外部知识库」对话框能把 `knowledge_id` 渲染成**下拉选择**而不是空白输入框（PRD「前端点击完成知识库配置」）。返回的正是**检索会接受的那组** `knowledge_id`：同一凭据、同一登记表，所以选项里出现的每一个都检索得到；不读取任何数据源、不执行检索、不写任何状态。调试身份只看到它自己的子集 —— 预览界面不得展示预览用不了的选项 |
-| **试运行（提交）** | `/v1/dify/trial` | POST | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`） | 拿一份**草稿**（方法论提示词 + 工具白名单）在一张订单上跑一次真实 harness（#772 F / #781）。范围**不来自请求**：订单可见性由服务端配置的 `dify_trial_debug_tenant` 决定，与 `/v1/standard/diagnoses` 同一条判据。**不产生智能体版本、不写注册表、不改任何生产路由**；超出预算时结果标为未完成。它触发一次真实模型执行，所以钥匙必须与其余每一把都不同 |
+| **试运行（提交）** | `/v1/dify/trial` | POST | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`） | 拿一份**草稿**（方法论提示词 + 工具白名单）在一张订单上跑一次真实 harness（#772 F / #781）。范围**不来自请求**：订单可见性由服务端配置的 `dify_trial_debug_tenant` 决定，判据是 `order_visibility` 的共享租户规则（与订单读取面同一条）。**不产生智能体版本、不写注册表、不改任何生产路由**；超出预算时结果标为未完成。它触发一次真实模型执行，所以钥匙必须与其余每一把都不同 |
 | **试运行（读结果）** | `/v1/dify/trial/{trial_id}` | GET | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`） | 读一次试运行的状态与结果：诊断报告、证据编号、被白名单挡掉的工具、数据源失败。只读；`trial_id` 不认识即 404 |
 | **管家试用（取消）** | `/v1/dify/trial/{trial_id}/cancel` | POST | 独立 trial 凭据 + 原公司登录会话 | 核对当前主体、范围、应用与 trial 标记后取消该任务；不可取消正式任务；不接受浏览器自报身份 |
 | **运营自助发布** | `/v1/dify/publish` | POST | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`） | 运营改完 Dify 正文之后**自己**触发的那一步（#577）：把这个 app 的**当前内容**过一遍我方发布门，冻结成新的已发布版本。请求体**只有一个 `app_id`**，租户/agent 名/类型/契约/知识库全部来自运行时注册表 ⇒ 能做的就是"重新发布一个**已声明**绑定的**当前**内容"。见下「**为什么这里有一个写端点**」 |
@@ -71,9 +71,9 @@
   `DIFY_CONSOLE_API_KEY` 同值会把服务端凭据交到触发方手里。
 
 **为什么不能用用户 JWT（哪怕是 operator 的）**：本部署是 company-parity 模式
-（`AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD` 未设 ⇒ 不验签）。41 实测：一个**用编造密钥
-签名**的令牌打 `/v1/standard/diagnoses` 得到的是 `404 ORDER_NOT_FOUND` —— 它**穿过了
-鉴权层**（不是 401）。拿这样的凭据当发布授权，等于没有授权。
+（`AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD` 未设 ⇒ 不验签）。41 实测（该路由退役前）：
+一个**用编造密钥签名**的令牌打 `/v1/standard/diagnoses` 得到的是 `404 ORDER_NOT_FOUND`
+—— 它**穿过了鉴权层**（不是 401）。拿这样的凭据当发布授权，等于没有授权。
 
 **这个例外的完整论证（含被否掉的四种替代形态）记在 ADR-0018**。
 

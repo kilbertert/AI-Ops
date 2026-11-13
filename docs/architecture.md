@@ -1,5 +1,11 @@
 # 系统架构
 
+> ⚠️ **已退役的历史参考。** 本文描述的是旧诊断系统（thin harness + 确定性引擎 +
+> TDengine + `/v1/runs` / `/diag/*` 设备路径），该架构已随运行时退役下线；
+> [目录 README](architecture/README.md) 亦将其标为旧参考。现役架构见
+> [system-architecture.md](system-architecture.md)。本文件保留作历史对照，
+> 其中的组件名、路由与数据流不代表当前实现。
+
 ## 确定性快速路径
 
 ```mermaid

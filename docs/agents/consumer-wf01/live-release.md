@@ -1,7 +1,7 @@
 # WF01原H5发布与恢复
 
 当前动态模式交付以原H5、Gateway管理路由、Dify发布版及节点所选库为准；某一侧部署成功不能替代页面验收。
-最新验收见[多语言正式交付](../../validation/2026-10-28-consumer-multilingual_02-production.md)。
+最新验收见[客服原值事实交付](../../validation/2026-11-12-consumer-support_02-live.md)，阶段索引见[当前交付状态](../current-delivery-state.md)。
 下方保留首次迁移手顺，审核包步骤仅适用旧版恢复；新版使用[动态资料迁移](live-knowledge-deploy.md)。照片输入默认不在这次上线范围。
 
 ## 公司完整H5构建

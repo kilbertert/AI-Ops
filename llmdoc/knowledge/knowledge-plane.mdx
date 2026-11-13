@@ -56,7 +56,7 @@ code:
 - 404 同一答案覆盖未注册/跨租户猜测/调试身份探测——403 会泄漏存在性。
 - 检索不可用 → 通用"暂时不可用"，上游细节不转发。
 - 媒体：签名 URL 带 `agent_version=f"dify:{knowledge_id}"` 跳过版本活性检查（没有 agent——活性 = 每检索重读注册行）；注销 → 立即 404，已签 URL 在 TTL≤600s 内活完是接受的代价（ADR-0077）。URL 必须绝对——相对地址会解析到 Dify 自己主机=404（实测）。
-- 欠费：provider 403 带配额消息是 `ProviderOutage`，按 `AIOPS_PROVIDERS` 顺序 failover（只接在所选 entry 之后；不开第二个配置键——第二份列表会悄悄漂移，ADR-0046）。
+- 欠费：provider 403 带配额消息直接是失败终态——failover 已退役（现役仅 baoyun 单上游）；`AIOPS_PROVIDERS` 是**注册表**不是优先级链，用哪个由 `AIOPS_DEFAULT_PROVIDER` 点名（ADR-0046）。
 - **`api_key_header_prefix` 坑**：Dify 工具提供方默认 `basic` → 把 key 拼成 `Basic Bearer <key>` → 注册看着成功、调用时才 401。判法：401=prefix 错，403=key 值错。
 - kb-service 租户是另一份 SQLite 映射（`ragflow_tenants`）——那里的 "tenant id" 既不是 RAGFlow 用户名也不是 UPMS tenant（ADR-0063）。
 

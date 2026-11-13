@@ -18,8 +18,9 @@ Codex 会话 `01a180d5` 在第三批推送时被中断（并发工作区锁定�
 | 5 执行器兼容 | `fix/dual-entry-runtime-compatibility` | #1239 | `5ab4e4cf` | 本会话 rebase + 合并；65 项用例；摘要重建 |
 | 6 真实工作流页 | `fix/dual-entry-workflow-ui` | #1240 | `79acaf4c` | 本会话 rebase + 合并；浏览器 15 项 |
 
-**仍未完成**：`aiops-41-platform-dify` 正常登录后的真实页面开通、真实消费者/员工原 H5
-会话、36 上的 web 镜像与桥/API 补丁同版部署。这些不是代码缺口，见 [BLOCKED.md](BLOCKED.md)。
+**当批仍未完成（10-31 时点；当日收尾结果见下节）**：`aiops-41-platform-dify` 正常登录后的
+真实页面开通、真实消费者/员工原 H5 会话、36 上的 web 镜像与桥/API 补丁同版部署。
+这些不是代码缺口，见 [BLOCKED.md](BLOCKED.md)。
 
 
 ## 收尾（2026-10-31 晚）

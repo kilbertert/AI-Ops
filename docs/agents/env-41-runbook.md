@@ -134,10 +134,10 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 
 | 文件 | 谁读它 | 放什么 |
 |---|---|---|
-| `/etc/aiops-41/gateway.env` | systemd 的 `EnvironmentFile` | **进程环境变量**。运行时从**进程 env** 构造的配置（如 Jev 客户端的 `AIOPS_GATEWAY_JEV_*`）必须放这里 |
+| `/etc/aiops-41/gateway.env` | systemd 的 `EnvironmentFile` | **进程环境变量**。运行时从**进程 env** 构造的配置（如 `AIOPS_GATEWAY_ENVIRONMENT` 这类部署身份变量）必须放这里 |
 | `/etc/aiops-41/production.env` | 由 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向，`Settings.from_config` 与 `GatewayServerSettings.from_env` 读取 | 服务端**配置项**（模型 provider、KB、Redis 凭据，以及 `SETTING_SOURCES` 里 `file=True` 的网关字段 —— 哪些字段读这份文件见 `gateway_config.SETTING_SOURCES`，`.env.example` 里行尾标 `# 仅进程环境` 的键不读它）|
 
-**实测教训**：把 `AIOPS_GATEWAY_JEV_*` 写进 `production.env` 后重启，进程 env 里**根本看不到这些变量**，路由静默退回原模型分类器 —— 没有任何报错。写入 `gateway.env` 才生效。**改配置后务必用 `tr '\0' '\n' < /proc/<MainPID>/environ` 确认变量真的进了进程**，不要只看文件写没写。
+**实测教训**：把一个本该在进程 env 的 `AIOPS_*` 变量写进 `production.env` 后重启，进程 env 里**根本看不到它**，对应功能静默不生效 —— 没有任何报错。写入 `gateway.env` 才生效。**改配置后务必用 `tr '\0' '\n' < /proc/<MainPID>/environ` 确认变量真的进了进程**，不要只看文件写没写。
 
 两文件均为 `0600 aiops41`；改后保持属主与权限。
 
@@ -739,12 +739,12 @@ ssh aiops-41 'python3 /tmp/d4-cutover.py rollback'    # 从最近一次 d4-cutov
 `status` 字段补全；它**不持有凭据**（客户端的 `Authorization` 原样透传，key 仍由
 Gateway 的 `key_slot` 文件提供），所以多起一个实例不需要多管一份秘密。
 
-当前两个实例：
+当前只有一个实例（commandcode 因 429/403 停用后没有 failover，`AIOPS_PROVIDERS`
+是**注册表**不是优先级链 —— 用哪个由 `AIOPS_DEFAULT_PROVIDER` 点名）：
 
 | 端口 | upstream | 用途 |
 |---|---|---|
 | 8799 | `https://ai-api.baoyun.com/v1` | baoyun |
-| 8800 | `https://api.commandcode.ai/provider/v1` | commandcode |
 
 ### 新起一个实例（照抄 8799 的单元，改 PORT/UPSTREAM）
 
@@ -754,12 +754,12 @@ ss -lntp | grep -w 8800 || echo "8800 free"
 
 # 2) 复制单元并改两行（Desc/Port/Upstream），不要改别的加固项
 cp /etc/systemd/system/aiops-responses-adapter.service \
-   /etc/systemd/system/aiops-responses-adapter-commandcode.service
+   /etc/systemd/system/aiops-responses-adapter-<name>.service
 #   Environment=AIOPS_RESPONSES_ADAPTER_PORT=8800
-#   Environment=AIOPS_RESPONSES_ADAPTER_UPSTREAM=https://api.commandcode.ai/provider/v1
+#   Environment=AIOPS_RESPONSES_ADAPTER_UPSTREAM=https://<upstream>/v1
 
 systemctl daemon-reload
-systemctl enable --now aiops-responses-adapter-commandcode.service
+systemctl enable --now aiops-responses-adapter-<name>.service
 ss -lntp | grep -w 8800        # 必须只监听 127.0.0.1
 
 # 3) 自检（不带凭据应被上游拒绝，带凭据应 200）—— 这一步只为证明实例活着：
@@ -768,38 +768,35 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8800/healthz   # 期�
 
 ### 把 Gateway 指过去
 
-`/etc/aiops-41/production.env`（**不是** `gateway.env`）：
+`/etc/aiops-41/production.env`（**不是** `gateway.env`），以新增一个名为 `upstream2`
+的 provider 为例：
 
 ```bash
-# 顺序即优先级：前面是主，后面是备用（ADR 0046）
-AIOPS_PROVIDERS=commandcode,baoyun
-AIOPS_DEFAULT_PROVIDER=commandcode
-AIOPS_PROVIDER_COMMANDCODE_BASE_URL=http://127.0.0.1:8800
-AIOPS_PROVIDER_COMMANDCODE_MODEL=deepseek/deepseek-v4.1-flash
-AIOPS_PROVIDER_COMMANDCODE_KEY_SLOT=commandcode
-AIOPS_PROVIDER_COMMANDCODE_WIRE_API=responses
+# 注册表只列可用 provider；实际用哪个由 AIOPS_DEFAULT_PROVIDER 点名
+AIOPS_PROVIDERS=baoyun,upstream2
+AIOPS_DEFAULT_PROVIDER=baoyun          # 要切换才改这一行
+AIOPS_PROVIDER_UPSTREAM2_BASE_URL=http://127.0.0.1:8800
+AIOPS_PROVIDER_UPSTREAM2_MODEL=<model>
+AIOPS_PROVIDER_UPSTREAM2_KEY_SLOT=upstream2
+AIOPS_PROVIDER_UPSTREAM2_WIRE_API=responses
 ```
 
-> **`deepseek-v4.1-flash` 只能走 commandcode**：实测 baoyun 对该模型返回 **503 不支持**
-> （它只提供 `deepseek-v4-flash`，上游实际返回 `deepseek-v4-flash-ga-260731`）。
-> 这不是配置偏好，是可用性事实。
-
-改完 `systemctl restart aiops-gateway-41`，然后**必须**核对落地的链：
+改完 `systemctl restart aiops-gateway-41`，然后**必须**核对落地的注册表与选中项：
 
 ```bash
 cd /opt/aiops-41 && MP=$(systemctl show -p MainPID --value aiops-gateway-41)
 runuser -u aiops41 -- env $(tr '\0' '\n' < /proc/$MP/environ | grep -E '^AIOPS_' | xargs -d'\n') \
   .venv/bin/python - <<'EOF'
-import pathlib
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 s = Settings.from_config(GatewayServerSettings.from_env().server_config_file)
-print([p.name for p in s.agent.provider_chain(None)])
+print([p.name for p in s.agent.providers], '->', s.agent.select_provider(None).name)
 EOF
 ```
 
-期望打印 `['commandcode', 'baoyun']`。**provider 配置来自 `production.env`，不是进程
-环境** —— 不要去 `/proc/<pid>/environ` 里找它们（见 §1.4 的踩坑记录）。
+期望打印 `['baoyun', 'upstream2'] -> baoyun`（选中项随 `AIOPS_DEFAULT_PROVIDER`）。
+**provider 配置来自 `production.env`，不是进程环境** —— 不要去 `/proc/<pid>/environ`
+里找它们（见 §1.4 的踩坑记录）。
 
 ## 2. 部署（源码同步到 41）
 

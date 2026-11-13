@@ -435,7 +435,7 @@ def test_a_company_login_yields_a_dify_session_cookie(stack) -> None:
 
 
 def test_the_session_cookies_carry_the_host_prefix_and_secure(stack) -> None:
-    """三枚 cookie 的名字必须带 `__Host-` 前缀，且带 `Secure`（#776 的 v2 待办）。
+    """三枚 cookie 的名字必须带 `__Host-` 前缀，且带 `Secure`（#776）。
 
     判据是**名字**，不是子串：`"access_token=" in cookies` 对
     `__Host-access_token=` 也为真，所以那条断言在前缀漏掉时**照样绿**。

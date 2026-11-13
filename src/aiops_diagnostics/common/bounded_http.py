@@ -379,9 +379,8 @@ EnvelopeParser = Callable[[Any, ErrorMapping], Any]
 class RetryPolicy:
     """显式声明的重试策略；默认一次尝试，不重试。
 
-    ``methods`` 限定哪些方法是幂等可重试的（默认只有 GET：POST enroll /
-    create_run 在服务端先生效后响应，重试可能重复兑换一次性注册码或重复创建
-    诊断运行）。
+    ``methods`` 限定哪些方法是幂等可重试的（默认只有 GET：POST 在服务端
+    先生效后响应，重试可能重复创建运行等一次性资源）。
     """
 
     max_retries: int = 0

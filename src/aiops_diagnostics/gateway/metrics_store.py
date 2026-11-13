@@ -1,7 +1,7 @@
 """Redacted agent-run metrics (T7/#174).
 
-One row per completed assistant-route interaction (faq / qa / diagnosis /
-debug-run), written at the same completion points that already persist job
+One row per completed assistant-route interaction (faq / qa / diagnosis),
+written at the same completion points that already persist job
 state. The row carries ONLY: tenant, route type, agent/version, conversation
 id, retrieval status, search and media counts, latency, tokens, and a failure
 code — never the question text, answer text, prompt, knowledge-base content,

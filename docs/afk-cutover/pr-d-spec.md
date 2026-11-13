@@ -30,4 +30,4 @@
 
 ## 验证记录
 
-自动化与离线等价验证写入 `docs/validation.md`；真实生产 `production.env` 的删除结果和真实 provider fixture 冒烟未在本仓执行时，必须明确标记为“未完成业务验收”。
+自动化与离线等价验证写入 `docs/validation/` 下按时点记录的验收文件；真实生产 `production.env` 的删除结果和真实 provider fixture 冒烟未在本仓执行时，必须明确标记为“未完成业务验收”。

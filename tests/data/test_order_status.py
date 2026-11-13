@@ -67,8 +67,8 @@ def test_role_of_covers_every_value_including_unknown(status: object, expected: 
     ("text", "expected"),
     [("5", StatusRole.CONTROLLED_ABNORMAL_END), ("5.0", StatusRole.CONTROLLED_ABNORMAL_END)],
 )
-def test_role_of_keeps_engine_s_coercion(text: str, expected: StatusRole) -> None:
-    """`"5.0"` 要读成 5 —— `engine._to_int` 一直用 `int(float(x))`，本模块是纯提取。
+def test_role_of_keeps_the_numeric_coercion(text: str, expected: StatusRole) -> None:
+    """`"5.0"` 要读成 5 —— 上游字段会以带小数的文本形态出现，本模块按 `int(float(x))` 语义接收。
 
     这条判据不显眼但必要：换成 `int(value)` 会让「恰好带小数的字符串状态」
     从异常结束**静默变成**未知，而失败率会因此变低 —— 一个没人看得见的数字变化。
