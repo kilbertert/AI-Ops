@@ -1,5 +1,16 @@
 # 当前交付状态索引
 
+## 运行日志复核行渲染修正（2026-11-13）
+
+PR #1498已合并51a18b86；Dify Web镜像review-render-51a18b86已换发，
+Gateway仍为1.9.1+fe4fd86ad419（纯前端改动）。修复复核开始事件误渲染为
+「通过·耗时未采集」——现按running语义显示「事实复核… · 已进行 X 秒」；
+succeeded且非allow的verdict改标「事实复核观察：<原因>」，refused保持失败措辞。
+已用真实控制台登录对同一条run在旧/新镜像下先后取证对照，页面渲染实测通过；
+问题列REDACTED为存储侧脱敏设计非缺陷。
+详见[上线与实测回执](../validation/2026-11-13-run-log-review-render-deploy.md)。
+非allow/refused行在生产尚无真实样本。
+
 ## 自然回复与 ADR-0252 最终复验（2026-11-12）
 
 当前 Gateway `1.9.1+fe4fd86ad419`、Dify Web `review-observe-fe4fd86a` 已现场核对；
