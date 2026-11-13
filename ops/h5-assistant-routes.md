@@ -4,7 +4,7 @@
 以及为什么是这些、不是别的。`tests/test_h5_assistant_routes.py` 断言两边逐条相等 ——
 只加一行正则而不动这里，CI 会红。
 
-## 一、事实：H5 聊天页调用的是这 9 条
+## 一、事实：H5 聊天页调用的是这 10 条
 
 从 41 上已部署的前端产物里读出来的，不是从公司仓库源码推测的
 （`/www/wwwroot/ulink.h5.mall.qushiyun.com/static/js/aiPackage-pages-chat-chat.*.js`）：
@@ -25,20 +25,18 @@ grep -oE 'p\("[^"]*"' aiPackage-pages-chat-chat.<hash>.js | sort -u
 | POST | `/v1/assistant/questions/{qa_id}/cancel` | 同左 | POST |
 | POST | `/v1/health-report-jobs` | `/v1/health-report-jobs` | POST |
 | GET | `/v1/health-report-jobs/{job_id}` | 同左 | GET |
-| POST | `/v1/standard/diagnoses` | `/v1/standard/diagnoses` | POST |
-| GET | `/v1/standard/diagnoses/{diagnosis_id}` | 同左 | GET |
-| POST | `/v1/standard/diagnoses/{diagnosis_id}/cancel` | 同左 | POST |
 
 ID 形状取自网关自己的生成处（`gateway_store.py`）：`qa_` + 32 位十六进制、
-`hrj_` + 32 位、`dx_` + 32 位。正则按这个形状限死，不写 `[^/]+` —— 后者会把
+`hrj_` + 32 位。正则按这个形状限死，不写 `[^/]+` —— 后者会把
 `/v1/assistant/questions/../../admin` 这类路径也放进来。
 
-> **2026-11-13 观测**：`/v1/standard/diagnoses*` 三条的上游路由已退役
-> （被 `/v1/standard/analyses` 取代），但声明**仍保留**：已部署 H5 产物仍可能发出
-> 这些调用，转发后由网关给诚实的 404/405 比静默落默认处理更可诊断。日志观测窗口内
-> ulink.h5 的 658 次 GET 全部是 10-25~28 的本机验证流量，退役后仅见 1 次外部 curl
-> 探测（`d_x`，不匹配声明形状）。**从声明集移除是一次独立的暴露面变更**——按共识先
-> 观测流量再决定，不在文档订正中顺手删。
+> **2026-11-13 移除记录**：`/v1/standard/diagnoses*` 三条曾在此声明（bundle 里
+> 仍有该调用，上游路由 2026-10-29 退役、被 `/v1/standard/analyses` 取代）。
+> 观测 `ulink.h5.mall.qushiyun.com.log`（6/17 起连续未轮转）：658 次命中全部
+> 落在 10/25~28 退役前验证窗口——460 次本机 HeadlessChrome 自验、198 次外部
+> 浏览器会话（referer=聊天页）；**退役后 16 天零命中**，`/v1/standard/analyses`
+> 零命中。按「暴露面变更由观测流量决定」移除声明与 conf 三条正则臂；若前端
+> 产物改调 `analyses`，需按本篇流程重新声明后再转发。
 
 WF01新增签名素材路径来自`MediaResourceSigner.issue`：`media_`+32个base64url字符+
 `.`+24位十六进制签名。只转GET，签名及当前QA/发布版本仍由网关验证；错误签名不能获得素材。
