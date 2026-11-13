@@ -210,8 +210,13 @@ def test_https_upstream_verifies_the_declared_ca(nginx, upstreams, tmp_path):
     start, seen = upstreams
     _, a = start("A", (trusted, key))
     c = catalogue(a.replace("127.0.0.1", "localhost"))
-    good = nginx(lambda p: render(c, f"127.0.0.1:{p}", trusted_ca=trusted))
-    bad = nginx(lambda p: render(c, f"127.0.0.1:{p}", trusted_ca=wrong))
+
+    def tls_config(port, ca):
+        # 合成服务仅绑IPv4；保持DNS名称的SNI/证书验证，不依赖runner的localhost解析顺序。
+        return render(c, f"127.0.0.1:{port}", trusted_ca=ca).replace("server localhost:", "server 127.0.0.1:")
+
+    good = nginx(lambda p: tls_config(p, trusted))
+    bad = nginx(lambda p: tls_config(p, wrong))
     assert request(good, "a" * 64) == (200, {"environment": "A"})
     assert request(bad, "a" * 64)[0] == 502
     assert len(seen) == 1

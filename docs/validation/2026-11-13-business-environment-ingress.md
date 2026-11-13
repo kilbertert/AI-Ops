@@ -33,3 +33,7 @@ HTTPS仅支持DNS名称、端口0拒绝；合法OWS兼容补齐，来源凭据�
 正确DNS SAN/CA通过，错误DNS SAN拒绝且零上游调用，SNI为声明名称；F1/F2/F3与OWS/重复头拒绝闭环。
 最终候选a875a8d5本地全量5057 passed/9 skipped（243.73秒），wheel/sdist与ruff通过；CI待结论。
 正文仍透明透传，不由本片承诺后端不会泄漏凭据；生产启用需可信Gateway自己的回归。
+
+CI43432386579首次失败于HTTPS合成服务：runner的localhost含IPv6，而替身仅IPv4；
+修正夹具固定连接到IPv4，保留DNS SNI与证书名称验证，不改TLS门禁/生产DNS。
+后继CI按最终提交重跑，不能用本地绿灯覆盖首次失败。
