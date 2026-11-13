@@ -8,6 +8,14 @@
 `src/aiops_diagnostics/gateway_api.py`（试运行的草稿来源）、
 网关新增 `dify_workspaces` 表与 `AIOPS_GATEWAY_ENVIRONMENT` 配置
 
+## 2026-11-13证据订正
+
+本ADR保留2026-10-20的隔离决策与历史部署形态；不能据此认定跨服务器租户已经交付。
+最新调查发现公司应用市场有`platformCode + saasType → domain/context`及实际调用者；
+JWT中未发现domain，不能推出公司不存在间接环境目录。`platformCode`不能因单环境同值被全局排除。
+当前环境目录表为空，CPMS映射与第二环境仍未实测；方案、代码缺口及边界见
+[跨环境调查](../architecture/2026-11-13-cross-environment-tenancy.md)。本次订正不改变现役路由。
+
 ## 背景
 
 ADR-0056 记录了 V1 的单工作区暂定，并写明触发条件是「出现第二个需要自行编辑智能体的租户」。
@@ -21,15 +29,15 @@ ADR-0056 记录了 V1 的单工作区暂定，并写明触发条件是「出现�
 
 用户最初转述后端同事的说法：JWT 里除 `tenant_id` 外还有一个 `domain`，据它能判断租户属于哪个区域。
 
-全量核实后否定：`cloud-upms:release` 的 `issueLoginToken` 写出的 claim 是
+2026-10-20在所查认证相关仓库中未发现：`cloud-upms:release` 的 `issueLoginToken` 写出的 claim 是
 `id, user_id, username, organ_id, type, tenant_id, system_id, shop_id, role_ids, tenant_ids, shop_ids`。
 `cloud-auth`（8 分支）、`cloud-gateway`（11 分支）、`qumall-common`（18 分支）同一集合，**没有 `domain`**。
-全仓 `grep domain` 的三个命中都与环境无关（Node 遗留 ORM、死配置 `DeviceProperties.domain`、
+当时所查认证相关仓库的 `domain` 命中与环境无关（Node 遗留 ORM、死配置 `DeviceProperties.domain`、
 `sys_organ.second_domains` 是"二级域名列表"且 Java 侧零引用）。
-也没有按区域选路的代码：动态数据源设施存在但零使用者；环境区分发生在部署层
+当时所查认证/网关代码未发现按区域选路：动态数据源设施存在但未找到使用者；已核环境区分发生在部署层
 （Nacos namespace、独立数据库、镜像 tag `dev/` vs `release/`）。
 
-⇒ **环境只能由我们的部署身份声明。**
+⇒ **当时采用部署身份声明环境；这不是排除可信中心目录的证明。**
 
 ## 决策
 
@@ -93,8 +101,7 @@ credit pool、一条 `current=false` 的 owner membership —— 没有 app / da
 
 ## 被否掉的替代形态
 
-- **等公司提供 `domain` claim / 从 `/upms/user/info` 读一个环境字段**。核实结果是公司侧
-  根本没有这个维度；把不存在的字段写进契约，只会让下一个人以为读不到是配错了。
+- **猜测JWT已经提供domain并直接据此选路**。已查签发器未提供该claim；2026-11-13发现用户/租户platformCode及应用市场映射，间接目录路线须继续验证。
 - **一个 workspace + 按租户分 app**。Dify 1.17.1 的 `App.tenant_id` 是 workspace 级，
   没有"app 属于哪个租户"的字段。靠命名约定做隔离 = 没有强制力的隔离。
 - **每个租户一个独立 Dify 实例**。运维成本与版本漂移放大一个数量级，而 workspace 模型够用。

@@ -1,5 +1,9 @@
 # Dify 多租户：grilling 结论
 
+> 2026-11-13订正：本页记录2026-10-20的方案，不代表跨服务器整链已经交付。
+> 新发现公司应用市场有platformCode到SaaS地址的实际映射，JWT无domain不等于无间接目录。
+> 最新范围与实施建议见[跨环境调查](../architecture/2026-11-13-cross-environment-tenancy.md)。
+
 > **状态**：grilling 已完成，用户已确认（2026-10-20）。设计已定型，**尚未实施**。
 > **读者**：要把它拆票或实施的人。本页是**决定**，不是实施计划。
 > 现状（为什么只有一个工作区）见 `dify-tenant-integration.md` 与 ADR-0056。
@@ -52,10 +56,10 @@ UPMS 里"决定 —— 41 的租户换不到 95 去登录，因为 95 的 UPMS �
 
 已写入 `GLOSSARY.md`。
 
-### 「环境」不是公司 JWT 的字段 —— 这是个被推翻的前提
+### 当时所查JWT未直接提供环境字段
 
 用户最初转述后端同事的说法：JWT 里除 `tenant_id` 外还有一个 `domain`，据它能判断租户属于哪个区域。
-**2026-10-20 全量核实后否定**：
+**2026-10-20在所查认证相关仓库中未发现该字段**：
 
 ```
 cloud-upms:release  TokenController.issueLoginToken 的完整 payload：
@@ -67,10 +71,10 @@ cloud-upms:release  TokenController.issueLoginToken 的完整 payload：
 **没有任何 `domain`**。`grep domain` 在三套 Tech stack 里的命中：Node 遗留 ORM 的 `blade_tenant.domain`（零引用）、
 `DeviceProperties.domain`（死配置）、`sys_organ.second_domains`（"二级域名列表"，Java 侧零引用）。
 
-也没有按区域选路的代码：网关不做环境路由，动态数据源设施存在但**零使用者**，
+当时所查网关未发现环境路由，动态数据源设施存在但**未找到使用者**，
 环境区分发生在部署层（Nacos namespace、独立数据库、镜像 tag `dev/` vs `release/`）。
 
-⇒ **"环境"必须由我们的部署身份声明，不能从令牌读。**
+⇒ **当时选择部署身份声明；新调查发现可信中心目录也是可行来源，但不能直接信任令牌自报地址。**
 
 ---
 
@@ -99,7 +103,7 @@ cloud-upms:release  TokenController.issueLoginToken 的完整 payload：
 | 13 | **95 与 41 是环境**（各一套 UPMS + 网关 + 登录代理）；**Dify 只有一套**（36），平台级共享 |
 | 13b | **登录代理按环境分开**：41 一个实例打 41 的 UPMS，95 一个实例打 95 的 UPMS。代理不按请求挑 UPMS |
 | 14 | 环境写在哪：**`AIOPS_GATEWAY_ENVIRONMENT` 部署身份**（每台机器一个值），并落进 `dify_workspaces.environment` |
-| 15 | `platform_code` **不能**当环境（默认值全局 `QUSHIYUN`，无区分度）；读不到就 fail-closed |
+| 15 | 历史结论已订正：本环境`platform_code`同值不证明全局无区分度；实际存在应用市场映射，接入仍需核唯一性、真实性和CPMS语义 |
 | 16 | 解析失败统一 **`DIFY_WORKSPACE_UNRESOLVED`**，三处（开户/发布/试运行）**共用同一个解析函数** |
 | 17 | 模板导入失败：**只记录状态**，不阻塞登录（登录仍成功，编辑面为空且明确告知） |
 | 18 | 迁移分两步：先建表+解析函数（行为不变），再切三条路径 |
