@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "ops/nginx/business-environment-ingress.conf.template"
 KEY = re.compile(r"[a-f0-9]{64}")
 SOURCE_KEY = re.compile(r"[A-Za-z0-9_-]{16,256}")
-HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]*")
+HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?")
 
 
 def render(catalogue, listen, *, trusted_ca=""):
@@ -70,6 +70,24 @@ def render(catalogue, listen, *, trusted_ca=""):
             or any(c in url for c in "\r\n\"'$;{}\\")
         ):
             raise ValueError("Gateway地址须为不带路径的受控地址")
+        if parsed.port is not None and parsed.port == 0:
+            raise ValueError("上游端口不能为0")
+        host = parsed.hostname
+        if re.fullmatch(r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*", host, re.IGNORECASE):
+            try:
+                address = ipaddress.IPv4Address(host)
+            except ValueError as exc:
+                raise ValueError("上游IP地址必须为完整规范IPv4") from exc
+            if str(address) != host:
+                raise ValueError("上游IP地址必须为完整规范IPv4")
+        else:
+            if any(
+                not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+                for label in host.split(".")
+            ):
+                raise ValueError("上游DNS名称不规范")
+        if parsed.scheme == "https" and re.fullmatch(r"[0-9.]+", host):
+            raise ValueError("HTTPS上游必须使用证书覆盖的DNS名称，不使用IP名称匹配")
         if parsed.scheme == "http":
             try:
                 loopback = ipaddress.ip_address(parsed.hostname).is_loopback
@@ -92,7 +110,7 @@ def render(catalogue, listen, *, trusted_ca=""):
         name = f"aiops_business_{index}"
         needs_tls |= parsed.scheme == "https"
         # nginx map字面量匹配不区分大小写；凭据必须用区分大小写的锚定正则。
-        output["ENVIRONMENT_KEYS"].append(f'    ~^{keys[0]}$ "{identifier}";')
+        output["ENVIRONMENT_KEYS"].append(f'    ~^[\\t\\x20]*{keys[0]}[\\t\\x20]*$ "{identifier}";')
         output["ENVIRONMENT_UPSTREAMS"].append(f'    "{identifier}" "{parsed.scheme}://{name}";')
         output["ENVIRONMENT_SOURCE_KEYS"].append(f'    "{identifier}" "{keys[1]}";')
         output["ENVIRONMENT_HOSTS"].append(f'    "{identifier}" "{parsed.hostname}";')

@@ -24,11 +24,12 @@ uv run python tools/content/render_business_ingress.py \
 ```
 
 片段放现有nginx的http块（包含maps、upstreams和server）；监听只能loopback。TLS/public入口仍归已批准反向代理，
-本次不开放公网端口。远端上游必须HTTPS，证书CA与主机名始终验证；HTTP仅允许回环IP。
+本次不开放公网端口。远端上游必须HTTPS，证书CA与主机名始终验证；HTTP仅允许规范回环IPv4。HTTPS上游必须为证书覆盖的DNS名称；当前nginx对IP名称匹配的语义与IP SAN验证不同，故拒绝HTTPS IP及缩写IP别名。
 启动前先确认上游health/部署身份和租户归属确实对应id；渲染器不能根据URL证明业务归属。
 
 可信公司入口必须覆盖客户端传入的`X-AIOps-Environment-Key`，注入该入口自己的凭据。
 不要把此密钥放App代码、URL、JWT或浏览器配置。接入面按凭据选择环境，并覆盖环境和上游source key，
+来源头允许HTTP两侧空白但不接受逗号合并的重复值，接入凭据相关响应头不透传。
 Authorization保持原样：**来源凭据只证明代理路径，用户身份仍由该环境Gateway验证**。
 客户端任意环境头/JWT claim不能改变上游。缺失、未知或重复凭据拒绝；没有默认目标。
 
@@ -49,3 +50,6 @@ Authorization保持原样：**来源凭据只证明代理路径，用户身份�
 
 [验收计划](../../docs/acceptance/business-environment-ingress-qa-plan.md)用真实nginx、临时服务与一次性Gateway。
 真实业务环境的CPMS/时序/离线源、中心目录有效记录、跨域控制台会话和原App问题仍待核实。
+
+透明入口不会扫描或改写上游正文；若上游把内部密钥放入响应正文，这层不能保证去除。
+因此只能登记可信且已经验过凭据屏蔽的Gateway；来源相关响应头被隐藏不代表正文或日志都已脱敏。

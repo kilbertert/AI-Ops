@@ -132,7 +132,8 @@ def test_real_nginx_routes_only_by_exact_trusted_key(nginx, upstreams):
     client.endheaders(b"{}")
     assert client.getresponse().status == 403
     client.close()
-    assert [s[0] for s in seen] == ["A", "B"]
+    assert request(port, "\ta" + "a" * 63 + " \t") == (200, {"environment": "A"})
+    assert [s[0] for s in seen] == ["A", "B", "A"]
     for name, headers, body in seen:
         assert headers["Authorization"] == "Bearer same-user-jwt" and body == b"{}"
         assert "X-AIOps-Environment-Key" not in headers
@@ -178,7 +179,7 @@ def test_unsafe_catalogue_is_rejected(change):
 
 
 def test_https_upstream_verifies_the_declared_ca(nginx, upstreams, tmp_path):
-    def cert(name):
+    def cert(name, dns="localhost"):
         key, crt = tmp_path / (name + ".key"), tmp_path / (name + ".crt")
         subprocess.run(
             [
@@ -191,9 +192,9 @@ def test_https_upstream_verifies_the_declared_ca(nginx, upstreams, tmp_path):
                 "-days",
                 "1",
                 "-subj",
-                "/CN=127.0.0.1",
+                "/CN=localhost",
                 "-addext",
-                "subjectAltName=IP:127.0.0.1",
+                "subjectAltName=DNS:" + dns,
                 "-keyout",
                 str(key),
                 "-out",
@@ -208,7 +209,7 @@ def test_https_upstream_verifies_the_declared_ca(nginx, upstreams, tmp_path):
     wrong, _ = cert("wrong")
     start, seen = upstreams
     _, a = start("A", (trusted, key))
-    c = catalogue(a)
+    c = catalogue(a.replace("127.0.0.1", "localhost"))
     good = nginx(lambda p: render(c, f"127.0.0.1:{p}", trusted_ca=trusted))
     bad = nginx(lambda p: render(c, f"127.0.0.1:{p}", trusted_ca=wrong))
     assert request(good, "a" * 64) == (200, {"environment": "A"})
@@ -226,3 +227,20 @@ def test_https_upstream_verifies_the_declared_ca(nginx, upstreams, tmp_path):
 def test_same_gateway_cannot_be_two_environments(pair):
     with pytest.raises(ValueError):
         render(catalogue(*pair), "127.0.0.1:9876", trusted_ca="/tmp/ca.crt")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.1:3",
+        "https://127.1:3",
+        "https://127.0.0.1:3",
+        "https://2130706433:3",
+        "https://0x7f000001:3",
+        "https://example..invalid:3",
+        "http://127.0.0.1:0",
+    ],
+)
+def test_unsafe_ip_or_dns_alias_is_rejected(url):
+    with pytest.raises(ValueError):
+        render(catalogue(url), "127.0.0.1:9876", trusted_ca="/tmp/ca.crt")
