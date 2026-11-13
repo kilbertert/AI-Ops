@@ -77,9 +77,14 @@ def render(catalogue, listen, *, trusted_ca=""):
                 loopback = False
             if not loopback:
                 raise ValueError("HTTP上游仅允许回环IP，远端须HTTPS")
-        if url in endpoints:
+        target = (
+            parsed.scheme,
+            parsed.hostname.lower(),
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+        )
+        if target in endpoints:
             raise ValueError("两个业务环境不能共用同一个Gateway入口")
-        endpoints.add(url)
+        endpoints.add(target)
         if parsed.netloc == listen:
             raise ValueError("上游不能指向接入面自身")
         identifiers.add(identifier)

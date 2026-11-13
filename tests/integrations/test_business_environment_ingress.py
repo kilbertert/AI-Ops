@@ -214,3 +214,15 @@ def test_https_upstream_verifies_the_declared_ca(nginx, upstreams, tmp_path):
     assert request(good, "a" * 64) == (200, {"environment": "A"})
     assert request(bad, "a" * 64)[0] == 502
     assert len(seen) == 1
+
+
+@pytest.mark.parametrize(
+    "pair",
+    [
+        ("https://example.invalid", "https://EXAMPLE.INVALID:443"),
+        ("http://127.0.0.1:1", "http://127.0.0.1:00001"),
+    ],
+)
+def test_same_gateway_cannot_be_two_environments(pair):
+    with pytest.raises(ValueError):
+        render(catalogue(*pair), "127.0.0.1:9876", trusted_ca="/tmp/ca.crt")
