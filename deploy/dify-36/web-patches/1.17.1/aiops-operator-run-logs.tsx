@@ -178,8 +178,19 @@ const describe = (event: Event, callNo: number) => {
         return `${head}${event.detail ? detailText(event.detail) : '被拒绝'}${tail}`
       return `${head}${labels[event.status || ''] || event.status || '成功'}${tail}`
     }
-    case 'review':
-      return `${when}事实复核：${event.detail ? detailText(event.detail) : '通过'} · 耗时 ${elapsed(event.duration_ms ?? null)}`
+    case 'review': {
+      // running 是复核开始事件，此前缺省回落「通过」会在评估完成前先宣布结论。
+      if (event.status === 'running')
+        return `${when}事实复核… · 已进行 ${elapsed(event.elapsed_ms)}`
+      const text = event.detail ? detailText(event.detail) : '复核通过'
+      // ADR-0252：已评估的 verdict（含 reject/uncertain）是观察记录不是拦截；
+      // status=refused 才是复核这一步自身没跑成，仍读作失败。
+      const prefix =
+        event.status === 'succeeded' && event.detail && event.detail !== 'allowed'
+          ? '事实复核观察：'
+          : '事实复核：'
+      return `${when}${prefix}${text} · 耗时 ${elapsed(event.duration_ms ?? null)}`
+    }
     case 'resample':
       return `${when}重新生成${event.detail ? `：${detailText(event.detail)}` : ''}`
     case 'completed':

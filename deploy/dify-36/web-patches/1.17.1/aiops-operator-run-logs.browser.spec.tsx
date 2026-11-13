@@ -179,6 +179,83 @@ it('labels a delivered diagnosis review reason as observation, not incompletion'
   await expect.element(screen.getByText(/诊断未完成原因/)).not.toBeInTheDocument()
 })
 
+it('renders the running review event as in-flight, not as an early pass', async () => {
+  // 复核开始事件 status=running、无 detail/duration——此前回落「通过·耗时 未采集」，
+  // 等于在评估完成前先宣布结论。
+  const withReview = {
+    ...run,
+    trace: [
+      ...run.trace,
+      { phase: 'review', status: 'running', at: '2026-11-10T10:00:02Z', elapsed_ms: 1200 },
+      {
+        phase: 'review',
+        status: 'succeeded',
+        at: '2026-11-10T10:00:03Z',
+        elapsed_ms: 1400,
+        duration_ms: 1530,
+        detail: 'allowed',
+      },
+    ],
+  }
+  stub((body) =>
+    Response.json(body.action === 'run-log' ? withReview : { items: [withReview], has_more: false }),
+  )
+  const screen = await render(<AppLogs />)
+  await screen.getByRole('button', { name: '查看运行' }).click()
+  await expect.element(screen.getByText(/事实复核… · 已进行 1.20 秒/)).toBeVisible()
+  await expect.element(screen.getByText(/事实复核：复核通过 · 耗时 1.53 秒/)).toBeVisible()
+  await expect.element(screen.getByText(/事实复核：通过/)).not.toBeInTheDocument()
+})
+
+it.each([
+  ['unsupported_station', '事实复核观察：答复使用了来源未提供的站名'],
+  ['review_uncertain', '事实复核观察：答复事实一致性未能确认'],
+])('labels an evaluated non-allow verdict as observation (%s)', async (detail, line) => {
+  // ADR-0252：status=succeeded 的非 allow verdict 是观察记录，不能读成拦截。
+  const observed = {
+    ...run,
+    trace: [
+      {
+        phase: 'review',
+        status: 'succeeded',
+        at: '2026-11-10T10:00:02Z',
+        elapsed_ms: 1400,
+        duration_ms: 900,
+        detail,
+      },
+    ],
+  }
+  stub((body) =>
+    Response.json(body.action === 'run-log' ? observed : { items: [observed], has_more: false }),
+  )
+  const screen = await render(<AppLogs />)
+  await screen.getByRole('button', { name: '查看运行' }).click()
+  await expect.element(screen.getByText(new RegExp(line))).toBeVisible()
+  await expect.element(screen.getByText(/事实复核：/)).not.toBeInTheDocument()
+})
+
+it('keeps review-step failure wording when the review itself is unavailable', async () => {
+  const failed = {
+    ...run,
+    trace: [
+      {
+        phase: 'review',
+        status: 'refused',
+        at: '2026-11-10T10:00:02Z',
+        elapsed_ms: 1400,
+        duration_ms: 320,
+        detail: 'review_unavailable',
+      },
+    ],
+  }
+  stub((body) =>
+    Response.json(body.action === 'run-log' ? failed : { items: [failed], has_more: false }),
+  )
+  const screen = await render(<AppLogs />)
+  await screen.getByRole('button', { name: '查看运行' }).click()
+  await expect.element(screen.getByText(/事实复核：事实复核服务未能完成/)).toBeVisible()
+})
+
 it('shows an expired inflight run and does not infer missing tool duration from elapsed time', async () => {
   const expired = { ...run, state: 'expired', trace: [{ ...run.trace[0], duration_ms: undefined }] }
   stub((body) =>
