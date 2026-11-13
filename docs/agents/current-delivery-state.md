@@ -4,9 +4,15 @@
 
 调查#1500已合并35a21b70，订正“JWT无domain就只能固定部署”的旧推断：公司应用市场已有
 platformCode/SaaS类型到domain/context的实际映射，但本环境目录为空且未证明CPMS含义。
-当前[可信环境入口](../../ops/nginx/business-environment-ingress.md)在#1503交付中：复用独立Gateway/登录代理/数据根，
+当前[可信环境入口](../../ops/nginx/business-environment-ingress.md)#1503已合并8f7ca1bd，最终CI5056通过/10跳过：复用独立Gateway/登录代理/数据根，
 由可信代理来源分流，共享Dify和业务合同。真实nginx与双Gateway隔离验证通过，
 独立IP别名/TLS身份/端口反例已修复并复验；实际生产入口没有切换。
+
+95的原受管SSH路径已连续3次成功，旧版Gateway本机健康为0.1.0、业务写操作禁用；
+此前失败定位到中继连接，历史触发原因未确定。没有使用口令或修改主机配置。
+这只关闭管理访问阻塞，不证明第二环境的用户认证和业务数据可用，见[95事实](env-95-facts.md)。
+只读盘点确认旧Gateway六表各0行、schema0，无Dify工作区表；已有身份/MySQL/时序配置项，
+但没有显式CPMS/Dify/环境身份配置，配置有效性尚未验证。
 
 公司目录自动接入、第二环境认证/CPMS/时序/离线源、集中控制台和真实App双环境验收仍未完成，
 不能由本机两个一次性Gateway推出跨服务器业务已上线。[实施顺序](../architecture/2026-11-13-cross-environment-tenancy.md)仍按T1～T4推进。
