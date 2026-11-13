@@ -390,8 +390,8 @@ REMOTE_TARBALL="/tmp/aiops-sync-${SHORT_SHA}.tar.gz"
 # 装依赖属于「改运行环境」，不是「传一次源码」，需要独立决定与独立验证（见本 PR 说明的
 # 「依赖漂移」一节）。宁可停止部署并说清楚，也不把生产交给一个可能起不来的进程。
 #
-# 注意 pyproject/uv.lock 目前不在 cd.yml 的触发路径里；若哪天它们变了，下面的检查会
-# 在这里拦下，而不是让部署"成功"后服务挂掉。
+# pyproject/uv.lock 就在 cd.yml 的触发路径里（paths: pyproject.toml、uv.lock），
+# 所以它们一变就会走到这里 —— 下面的检查会拦下不一致，而不是让部署"成功"后服务挂掉。
 step "依赖漂移检查"
 # **读的是 TARGET_COMMIT 的 manifest，不是当前 checkout。** 回滚场景下两者可能不同：
 # 若拿当前 checkout 去比，只能证明「操作者的工作区与主机一致」，证明不了「要部署的那个

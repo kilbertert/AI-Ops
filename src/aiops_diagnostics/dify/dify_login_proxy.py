@@ -229,7 +229,7 @@ def verify_console_jwt(token: str, secret_key: str) -> dict[str, Any] | None:
     return payload
 
 
-#: 控制台 cookie 的 `__Host-` 前缀（#776 / ADR-0026；本模块是它的 v2 待办）。
+#: 控制台 cookie 的 `__Host-` 前缀（#776 / ADR-0026）。
 #:
 #: Dify 在 **https 且 `COOKIE_DOMAIN` 为空**时给控制台 cookie 加这个前缀
 #: （`api/libs/token.py` 的 `is_secure() and _cookie_domain() is None`）。控制台入口

@@ -19,11 +19,11 @@ ROWS = [{"order_no": "O-1", "tenant_id": "tenant-a"}, {"order_no": "O-2", "tenan
 
 
 def test_caller_visible_treats_an_absent_tenant_as_the_discovery_mode() -> None:
-    """No tenant named is the unrestricted state, not an empty scope.
+    """No tenant named is the no-filter discovery mode, not an empty scope.
 
-    This is the DEVICE profile's unbound registration reaching a caller that
-    holds rows in memory: the tenant is discovered from the rows and nothing is
-    blocked. Only an explicitly supplied tenant constrains anything.
+    The fixture source's ``tenant_id=None`` bypass: the tenant is discovered
+    from the rows and nothing is blocked. Only an explicitly supplied tenant
+    constrains anything.
     """
     assert _caller_visible(ROWS, None) == ROWS
 
@@ -33,7 +33,7 @@ def test_caller_visible_fails_closed_on_a_tenant_it_cannot_normalize(unusable: o
     """A named-but-unusable tenant sees nothing, not everything (#325).
 
     ``_caller_visible`` answers two different questions and must not collapse
-    them. "No tenant named" is the unrestricted discovery mode; "a tenant named
+    them. "No tenant named" is the no-filter discovery mode; "a tenant named
     that cannot be normalized" is a caller whose identity is unusable, which is
     the *empty* scope — the same one ``caller_visibility`` builds and
     ``scope_where_sql`` renders as ``1=0``. Reading the first as the second is

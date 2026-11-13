@@ -8,7 +8,6 @@ from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.data.sources import SITE_SCOPE_MAX_ROWS, MySQLSource
 from aiops_diagnostics.identity.order_visibility import (
     TenantVisibility,
-    VisibilityProfile,
     normalize_tenant,
     visible_orders,
 )
@@ -190,10 +189,7 @@ def test_scope_where_selects_the_same_rows_as_the_shared_row_rule(scope: QuerySc
     where, params = source._scope_where()
 
     tenant = normalize_tenant(scope.tenant_id)
-    visibility = TenantVisibility(
-        profile=VisibilityProfile.CALLER,
-        allowed=frozenset({tenant}) if tenant else frozenset(),
-    )
+    visibility = TenantVisibility(allowed=frozenset({tenant}) if tenant else frozenset())
     via_sql = _rows_selected_by(rows, where, params)
     via_rule = list(visible_orders(rows, visibility).rows)
     assert [row["order_no"] for row in via_sql] == [row["order_no"] for row in via_rule]

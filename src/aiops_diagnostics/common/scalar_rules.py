@@ -102,10 +102,10 @@ def declared_timezone(value: object) -> tzinfo | None:
     """这段外部数据**自己声明**的时区；没声明或读不出 → ``None``。
 
     与 ``as_datetime`` 的分工：``as_datetime`` 给「没声明就当 UTC」的兜底
-    读数，本函数回答「它到底有没有声明、声明的是哪个」。当同一行里另一列
-    显式带偏移、需要按对方的区解释 naive 墙钟时（``order_window`` 的混区
-    列调和），需要的是后一个答案——naive 文本在 ``as_datetime`` 里已被
-    盖上 UTC，到那时再问就来不及了。
+    读数，本函数回答「它到底有没有声明、声明的是哪个」。当需要按数据自己
+    声明的区解释墙钟时（``device_offline`` 只接受显式带偏移的时间），需要的
+    是后一个答案——naive 文本在 ``as_datetime`` 里已被盖上 UTC，到那时再
+    问就来不及了。
     """
     if isinstance(value, datetime):
         return value.tzinfo

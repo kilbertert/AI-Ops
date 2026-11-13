@@ -1038,10 +1038,10 @@ class GatewayStore:
         the restart actually happened.
 
         **Not in `__init__`.** That is where the other two tables used to do it,
-        and it was wrong: construction happens on every short-lived CLI command
-        (`aiops-gateway devices`, `issue-enrollment`, `revoke-device`), so
-        listing devices ended a diagnosis that was still being worked on and the
-        caller read a result-less `expired`. The verdict here is the honest one
+        and it was wrong: construction happens on every short-lived command
+        (any `aiops-admin` invocation), so a maintenance command ended a job
+        that was still being worked on and the caller read a result-less
+        `expired`. The verdict here is the honest one
         — `failed` with a code saying the process holding it died — and it uses
         the same three-way distinction the question table already used:
         `expired` means the job outran its deadline, `cancelled` means the user

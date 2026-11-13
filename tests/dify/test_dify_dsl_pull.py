@@ -560,7 +560,7 @@ def test_a_declared_tool_is_refused_rather_than_silently_ignored() -> None:
 def test_a_pull_never_changes_the_live_model(monkeypatch, tmp_path: Path) -> None:
     """`model` 保持库中现值 —— 因为运行时**不读**它，而从 Dify 拉它会伤到发布。
 
-    实测：真实模型来自 provider 配置（``codex_runtime`` 读 ``provider.model``）；
+    实测：真实模型来自 provider 配置（``model_request`` 读 ``provider.model``）；
     `AgentConfig.model` 只有发布门与相等比较两处消费。所以从 Dify 覆盖它既不改变
     线上模型，又会在运营换了 Dify 侧模型名时让**整个发布失败**（不在 allowed_models
     里）或产生一次静默无效的改动。

@@ -627,8 +627,8 @@ def resolve_pulled_config(
         # **``model`` 保持库中现值，永不从 Dify 覆盖。**
         #
         # 实测：运行时**不读** ``AgentConfig.model`` —— 真实模型来自 provider 配置
-        # （``codex_runtime`` 读 ``provider.model``；全仓对 ``config.model`` 只有
-        # 发布门与相等比较两处消费）。所以从 Dify 拉它**不改变线上模型**，
+        # （``model_request`` / ``agent_lifecycle`` 读 ``provider.model``；全仓对
+        # ``config.model`` 只有发布门与相等比较两处消费）。所以从 Dify 拉它**不改变线上模型**，
         # 却会经发布门产生一个用户可见的后果：运营在 Dify 里换了模型名而它不在
         # ``allowed_models`` 里时，**整个发布失败**；在允许列表里时，则是一次
         # 静默无效的改动 —— 两种都不是运营想要的答案。

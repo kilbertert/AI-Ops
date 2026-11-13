@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
-from aiops_diagnostics.common.scalar_rules import as_datetime, declared_timezone
 from aiops_diagnostics.health.health_report_copy import stop_reason_fallback, ykc_stop_reason
 
 ORDER_STATUS = {
@@ -156,63 +154,6 @@ def classify_stop_reason(
 def is_server_billing(protocol: str | None) -> bool:
     normalized = (protocol or "").upper()
     return normalized.startswith("OCPP") or normalized.startswith("AYK")
-
-
-#: Context minutes padded onto each side of an order before querying time-series
-#: sources: the gun/comm evidence for an order begins just before `created_time`
-#: and ends just after `stop_time`, so the query window has to include both edges.
-ORDER_WINDOW_PADDING_MINUTES = 5
-
-
-def order_window(
-    created_time: object,
-    stop_time: object,
-    max_hours: int,
-) -> tuple[datetime, datetime, bool] | None:
-    """The one definition of the time range one diagnosis may read.
-
-    Both diagnosis paths call this and must agree: the deterministic engine and
-    the agent tool layer query the same TDengine tables for the same order, so a
-    different window in either would report a different slice of the same
-    evidence. It is also the enforcement point for the bounded-read safety rule
-    (ADR-0001): an order whose real span exceeds ``max_hours`` is **clamped**,
-    never queried unbounded, and the returned ``clamped`` flag is what lets a
-    caller say so in its report instead of silently returning a partial answer.
-
-    Returns ``(start, end, clamped)``, or ``None`` when the order carries no
-    usable ``created_time`` — a caller that cannot bound a window must not
-    invent one. Naive/aware datetimes are reconciled rather than rejected,
-    because the two columns arrive from different writers with different
-    tzinfo completeness; when one side is naive it adopts the other's zone, and
-    when both are aware the later one is converted to the earlier one's zone.
-    Both columns go through ``as_datetime`` + ``declared_timezone`` (#573):
-    the first gives the parse, the second preserves whether the text declared
-    an offset — the reconcile below is a rule about THESE TWO COLUMNS, not
-    about scalar reading, so it lives here on top of the authority, not
-    inside it.
-    """
-    created = as_datetime(created_time)
-    if not created:
-        return None
-    stopped = as_datetime(stop_time)
-    created_zone = declared_timezone(created_time)
-    stopped_zone = declared_timezone(stop_time) if stopped is not None else None
-    if stopped is None:
-        stopped = datetime.now(tz=created.tzinfo)
-    elif created_zone is None and stopped_zone is not None:
-        # naive 列认对方声明的区——``as_datetime`` 已经把墙钟盖上 UTC，
-        # 这里是把同一个墙钟改挂到对方声明的偏移上，还原真实跨度。
-        created = created.replace(tzinfo=stopped_zone)
-    elif created_zone is not None and stopped_zone is None:
-        stopped = stopped.replace(tzinfo=created_zone)
-    else:
-        stopped = stopped.astimezone(created.tzinfo)
-    padding = timedelta(minutes=ORDER_WINDOW_PADDING_MINUTES)
-    start = created - padding
-    end = stopped + padding
-    maximum_end = start + timedelta(hours=max_hours)
-    clamped = end > maximum_end
-    return start, min(end, maximum_end), clamped
 
 
 def _parse_stop_code(value: str) -> int | None:

@@ -100,7 +100,8 @@ def review(reply, evidence, history, question, language, settings, history_evide
                 or any(not isinstance(value, str) or not 0 < len(value) <= 1000 for value in values)
             ):
                 return result
-        # 币种标注仅作观察；站点归属和其他事实复核仍决定交付。
+        # 币种标注与站点归属都只是观察记录（ADR-0252）：verdict 不再决定交付，
+        # 这里仍判 unsupported 是为了让快照原因码区分「站点不匹配」与模型自评 reject。
         names = known_facts([evidence, *history_evidence])
         unsupported = not set(payload["station_names"]) <= names
         result.update(

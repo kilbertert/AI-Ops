@@ -16,7 +16,6 @@ from aiops_diagnostics.execution.agent_runs import AgentRunConfig
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore, RouteBindingError
 from aiops_diagnostics.identity.order_visibility import (
     TenantVisibility,
-    VisibilityProfile,
     normalize_tenant,
     visible_orders,
 )
@@ -129,9 +128,7 @@ def target_for(settings: Any, binding: Any) -> NodeTarget | None:
             if r.app_id == binding.app_id
             and visible_orders(
                 [{"tenant_id": r.tenant_id}],
-                TenantVisibility(
-                    profile=VisibilityProfile.CALLER, allowed=frozenset({normalize_tenant(binding.tenant_id)})
-                ),
+                TenantVisibility(allowed=frozenset({normalize_tenant(binding.tenant_id)})),
             ).rows
             and r.environment == settings.execution_environment
             and r.entry == binding.business_entry
