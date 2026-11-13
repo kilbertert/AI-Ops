@@ -1,7 +1,7 @@
 # 管家 CPMS 工具实施
 
-更新：2026-11-05。新合同及配套迁移以[系统架构的管家链](../../system-architecture.md#管家链sop决定取证步骤工具承担计算)为准；
-已部署与原页面结果见[本轮验收](../../validation/2026-11-05-operator-agent-live.md)。
+更新：2026-11-13。新合同及配套迁移以[系统架构的管家链](../../system-architecture.md#管家链sop决定取证步骤工具承担计算)为准；
+最新状态见[当前交付状态](../current-delivery-state.md)，首轮部署验收见[本轮验收](../../validation/2026-11-05-operator-agent-live.md)。
 以下首片和JSON合同描述保留历史取舍，不再指导新应用发布。
 节点、原管家H5与Dify原生预览已有真实链路证据，
 见[退役验收](../../validation/2026-10-29-runtime-retirement-live.md)及

@@ -133,15 +133,15 @@ flowchart LR
 4. Dify 官方：[Human Input](https://docs.dify.ai/en/cloud/use-dify/nodes/human-input)。官方说明邮件模式持链接者即可应答，因此不能将其天然视为公司审批身份。
 5. Dify 官方源码：[1.17.1 Human Input 模块](https://github.com/langgenius/dify/tree/1.17.1/api/core/workflow/nodes/human_input)。模块存在不等于本项目已完成接线。
 6. Spring AI 官方：[OpenAI Chat / Retry Properties](https://docs.spring.io/spring-ai/reference/api/chat/openai-chat.html)。这是客户端配置说明，不是本项目的实测总调用上限。
-7. 本仓：[GovernedToolRuntime.java](../../tools/m2_close/node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java)、[ControlledChargingStatusTool.java](../../tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java)。
+7. 本仓：[GovernedToolRuntime.java](../../services/execution-node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java)、[ControlledChargingStatusTool.java](../../services/execution-node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java)。
 8. 本仓：[M3-02 节点 SOP 发布与执行](../agents/m3-node-publication.md)。
-9. 本仓：[ReportingChatSessionRuntime.java](../../tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ReportingChatSessionRuntime.java)、[GatewayClient.java](../../tools/m2_close/node/src/main/java/com/trendpower/aiops/node/GatewayClient.java)、[节点 pom.xml](../../tools/m2_close/node/pom.xml)。
+9. 本仓：[ReportingChatSessionRuntime.java](../../services/execution-node/src/main/java/com/trendpower/aiops/node/ReportingChatSessionRuntime.java)、[GatewayClient.java](../../services/execution-node/src/main/java/com/trendpower/aiops/node/GatewayClient.java)、[节点 pom.xml](../../services/execution-node/pom.xml)。
 10. 本仓：[Dify 租户运维首批工具](../agents/dify-ops-first-slice/README.md)。
 11. OWASP 官方：[API1:2023 Broken Object Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/)。
-12. 本仓：[query_scope.py](../../src/aiops_diagnostics/query_scope.py)、[scope_context.py](../../src/aiops_diagnostics/scope_context.py)。
-13. 本仓：[ops_agents.py](../../src/aiops_diagnostics/ops_agents.py)、[gateway_runtime.py](../../src/aiops_diagnostics/gateway_runtime.py)。
-14. 本仓：[agent_contracts.py](../../src/aiops_diagnostics/agent_contracts.py)、[diagnostic_tools.py](../../src/aiops_diagnostics/diagnostic_tools.py)。
-15. 本仓：[ops_analysis.py](../../src/aiops_diagnostics/ops_analysis.py)。
-16. 本仓：[knowledge_retrieval.py](../../src/aiops_diagnostics/knowledge_retrieval.py)、[agent_validator.py](../../src/aiops_diagnostics/agent_validator.py)。
-17. 本仓：[旧 Dify 目录](../../src/aiops_diagnostics/dify_tools_catalog.py)、[DSL 工具映射](../../src/aiops_diagnostics/dify_dsl_pull.py)、[ADR-0019 历史白名单语义](../adr/0019-tool-allowlist-enforced-in-executor.md)。
-18. 本仓：[两工具实现](../../src/aiops_diagnostics/ops_tools.py)、[历史局部模型验收](../agents/dify-ops-first-slice/model-acceptance.md)。
+12. 本仓：[query_scope.py](../../src/aiops_diagnostics/identity/query_scope.py)、[scope_context.py](../../src/aiops_diagnostics/identity/scope_context.py)。
+13. 本仓：`ops_agents.py`（已随旧诊断引擎退役删除）、[gateway_runtime.py](../../src/aiops_diagnostics/gateway/gateway_runtime.py)。
+14. 本仓：`agent_contracts.py`、`diagnostic_tools.py`（均已随旧诊断引擎退役删除）。
+15. 本仓：[ops_analysis.py](../../src/aiops_diagnostics/operator/ops_analysis.py)。
+16. 本仓：[knowledge_retrieval.py](../../src/aiops_diagnostics/knowledge/knowledge_retrieval.py)、`agent_validator.py`（已退役删除）。
+17. 本仓：[旧 Dify 目录](../../src/aiops_diagnostics/dify/dify_tools_catalog.py)、[DSL 工具映射](../../src/aiops_diagnostics/dify/dify_dsl_pull.py)、[ADR-0019 历史白名单语义](../adr/0019-tool-allowlist-enforced-in-executor.md)。
+18. 本仓：[两工具实现](../../src/aiops_diagnostics/operator/operator_tools.py)、[历史局部模型验收](../agents/dify-ops-first-slice/model-acceptance.md)。
