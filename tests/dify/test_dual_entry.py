@@ -1236,3 +1236,89 @@ def test_consumer_contract_failure_is_a_safe_http_refusal(dual, monkeypatch):
     assert dual.service.route_for(TARGET, "consumer") == before
     audit = dual.context.store.publish_audit_entries(app_id=app)[0]
     assert (audit["action"], audit["reason_code"]) == ("refused", "CONSUMER_FLOW_INVALID")
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_first_publish_can_retry_current_prompt_and_library_after_failure(dual, legacy):
+    from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+
+    run(dual, request(dual, scope="consumer", key="first-published-app"))
+    result = run(dual, request(dual, scope="consumer", key="second-draft-app"))
+    app = result["entries"]["consumer"]["app_id"]
+    before = dual.service.route_for(TARGET, "consumer")
+    document = dual.console.apps[app]
+    row = dual.service.store.app(app)
+    manager = dual.context.agent_manager
+    if legacy:
+        manager.create(
+            admin_context(TARGET),
+            name=row["agent_name"],
+            description="",
+            config=AgentConfig(
+                **consumer_publication.bootstrap_config(
+                    json.loads(row["targets_json"])["knowledge_base_ids"], {}
+                )(document)
+            ),
+        )
+    dual.kb.rows = {"current": []}
+    with pytest.raises(ConsumerFlowError, match="所选知识库"):
+        dual.service.publish(dual.caller, app, before.revision)
+    drafts = [a for a in manager.list(admin_context(TARGET)) if a.name == row["agent_name"]]
+    assert len(drafts) == int(legacy)
+    assert dual.service.route_for(TARGET, "consumer") == before
+    kb = dual.kb.create_knowledge_base("replacement")["id"]
+    KnowledgeGrants(dual.settings.database_file).grant(TARGET, "env-a", kb, "fixture")
+    prepare.rebind_knowledge(document, [kb])
+    llm = next(n["data"] for n in document["workflow"]["graph"]["nodes"] if n["data"].get("type") == "llm")
+    llm["prompt_template"][0]["text"] += "\n请用新的客服称呼回答。"
+    result = dual.service.publish(dual.caller, app, before.revision)
+    route = dual.service.route_for(TARGET, "consumer")
+    assert route.app_id == app and result["version_no"] == 1
+    snapshot = manager.store.version(route.agent_id, TARGET, 1).snapshot
+    assert snapshot["consumer_service"]["knowledge_base_ids"] == [kb]
+    assert "新的客服称呼" in consumer_publication.answer_prompt({"workflow": snapshot["workflow"]})
+    if legacy:
+        assert route.agent_id == drafts[0].agent_id
+
+
+def test_consumer_status_reads_selection_from_draft_not_onboarding_targets(dual):
+    result = run(dual, request(dual, scope="consumer"))
+    app = result["entries"]["consumer"]["app_id"]
+    prepare.rebind_knowledge(dual.console.apps[app], ["new-draft-library"])
+    status = dual.service.status(dual.caller, app)
+    assert status["knowledge_base_ids"] == ["new-draft-library"]
+
+
+@pytest.mark.parametrize("change", ["edited", "creator", "workspace", "disabled"])
+def test_recovery_never_takes_over_unrelated_or_edited_agent(dual, change):
+    run(dual, request(dual, scope="consumer", key="published-existing"))
+    result = run(dual, request(dual, scope="consumer", key="new-unpublished-app"))
+    app = result["entries"]["consumer"]["app_id"]
+    row = dual.service.store.app(app)
+    manager = dual.context.agent_manager
+    document = dual.console.apps[app]
+    config = AgentConfig(
+        **consumer_publication.bootstrap_config(json.loads(row["targets_json"])["knowledge_base_ids"], {})(
+            document
+        )
+    )
+    draft = manager.create(admin_context(TARGET), name=row["agent_name"], description="", config=config)
+    with manager.store._connection(write=True) as db:
+        if change == "creator":
+            db.execute("UPDATE agents SET created_by='human' WHERE agent_id=?", (draft.agent_id,))
+        elif change == "edited":
+            db.execute("UPDATE agents SET revision=2 WHERE agent_id=?", (draft.agent_id,))
+        elif change == "disabled":
+            db.execute("UPDATE agents SET status='disabled' WHERE agent_id=?", (draft.agent_id,))
+    workspace = "different-workspace" if change == "workspace" else row["workspace_id"]
+    assert dual.service.store.recoverable_consumer_draft(app, TARGET, workspace, "env-a") is None
+    if change != "workspace":
+        llm = next(
+            n["data"] for n in document["workflow"]["graph"]["nodes"] if n["data"].get("type") == "llm"
+        )
+        llm["prompt_template"][0]["text"] += "\n本次已修改。"
+        before = dual.service.route_for(TARGET, "consumer")
+        with pytest.raises(auth.SetupRefused, match="SETUP_AGENT_UNAVAILABLE"):
+            dual.service.publish(dual.caller, app, before.revision)
+        assert dual.service.route_for(TARGET, "consumer") == before

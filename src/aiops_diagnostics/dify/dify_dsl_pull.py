@@ -968,6 +968,7 @@ def sync_workflow_from_dify(
     consumer_libraries=None,
     bootstrap: Callable[[dict], dict] | None = None,
     expected_workflow: dict | None = None,
+    bootstrap_agent_id: str | None = None,
 ) -> SyncOutcome:
     """把一个**workflow**应用的当前内容冻结成新的已发布版本。
 
@@ -996,8 +997,25 @@ def sync_workflow_from_dify(
     dsl_text = client.export_dsl()
     if expected_workflow is not None and workflow_content(dsl_text) != expected_workflow:
         raise DifyDslMalformed("workflow changed after confirmation")
-    previous: dict
-    if existing is None:
+    previous = (
+        manager.store.version(existing.agent_id, existing.tenant_id, existing.published_version).snapshot
+        if existing is not None and existing.status == "published" and existing.published_version is not None
+        else {}
+    )
+    candidate = workflow_content(dsl_text)
+    if consumer_settings is not None:
+        from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
+
+        # 先验证当前草稿；选库错误不能留下一个阻止后续改正的半成品 Agent。
+        consumer_settings = publication_settings(
+            candidate,
+            consumer_settings,
+            consumer_callback_base,
+            require_split=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 2,
+            require_picker=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 3,
+            owned_libraries=consumer_libraries,
+        )
+    if not previous:
         if bootstrap is None:
             return SyncOutcome(
                 binding.tenant_id,
@@ -1008,30 +1026,14 @@ def sync_workflow_from_dify(
                 note="agent has no published configuration",
             )
         config = AgentConfig(**bootstrap(yaml.safe_load(dsl_text)))
+        if consumer_settings is not None:
+            config = replace(config, knowledge_base_ids=tuple(consumer_settings["knowledge_base_ids"]))
         manager._validate_config(config, enforce_model=True)
-        existing = manager.create(
-            admin_context(binding.tenant_id), name=binding.agent_name, description="", config=config
-        )
-        previous = {"name": existing.name, "description": existing.description, **config.to_dict()}
-    elif existing.status != "published" or existing.published_version is None:
-        # 上一轮用 bootstrap 建了草稿、但随后的外部发布失败 ⇒ 库里留下一个**从未发布**的
-        # agent。重试如果一律拒绝，这条开通就永远修不好（只能人工删草稿），而那个草稿本来
-        # 就是我们自己上一步建的。
-        #
-        # 只接管"属于原操作"的那一个：配置必须与**这次**要建的配置逐项相同。不同就不动它 ——
-        # 人类的草稿不能因为"名字撞上"就被我们发布出去。
-        if bootstrap is None:
-            return SyncOutcome(
-                binding.tenant_id,
-                binding.business_entry,
-                binding.app_id,
-                binding.agent_name,
-                "refused",
-                note="agent has no published configuration",
+        if existing is None:
+            existing = manager.create(
+                admin_context(binding.tenant_id), name=binding.agent_name, description="", config=config
             )
-        wanted = AgentConfig(**bootstrap(yaml.safe_load(dsl_text)))
-        manager._validate_config(wanted, enforce_model=True)
-        if existing.config.to_dict() != wanted.to_dict():
+        elif existing.status != "draft" or existing.revision != 1 or existing.agent_id != bootstrap_agent_id:
             return SyncOutcome(
                 binding.tenant_id,
                 binding.business_entry,
@@ -1040,23 +1042,7 @@ def sync_workflow_from_dify(
                 "refused",
                 note="existing draft is not the one this operation created",
             )
-        previous = {"name": existing.name, "description": existing.description, **wanted.to_dict()}
-    else:
-        previous = manager.store.version(
-            existing.agent_id, existing.tenant_id, existing.published_version
-        ).snapshot
-    candidate = workflow_content(dsl_text)
-    if consumer_settings is not None:
-        from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
-
-        consumer_settings = publication_settings(
-            candidate,
-            consumer_settings,
-            consumer_callback_base,
-            require_split=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 2,
-            require_picker=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 3,
-            owned_libraries=consumer_libraries,
-        )
+        previous = {"name": existing.name, "description": existing.description, **config.to_dict()}
     previous_workflow = previous.get("workflow_id")
     # **只有同一应用的历史版本才能参与去重。** 快照里的 `workflow_id` 属于**当时那个
     # 应用**；注册表把 agent 改绑到复制出来的新 app 之后，拿旧 id 到新 app 上导出会失败，
