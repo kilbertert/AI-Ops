@@ -1,0 +1,17 @@
+[Unit]
+Description=AI-Ops environment 95 dedicated execution runtime
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/aiops-node-runtime/current
+ExecStart=/usr/bin/docker compose --env-file /etc/aiops-node-runtime/runtime.env -f deploy/node-runtime/compose.yaml -f ops/environments/env95/node-runtime.override.yaml up -d --pull never --wait --wait-timeout 180
+ExecStop=/usr/bin/docker compose --env-file /etc/aiops-node-runtime/runtime.env -f deploy/node-runtime/compose.yaml -f ops/environments/env95/node-runtime.override.yaml stop
+TimeoutStartSec=240
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

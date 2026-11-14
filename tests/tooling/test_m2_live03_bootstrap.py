@@ -205,3 +205,19 @@ def test_rebind_requires_all_written_fields_to_read_back(bootstrap, monkeypatch,
     monkeypatch.setattr(bootstrap, "call", fake_call)
     with pytest.raises(SystemExit):
         bootstrap.rebind_agent("tok", dict(_AGENT), "app-1", 42)
+
+
+def test_environment_node_and_private_bootstrap_directory_are_explicit(tmp_path, monkeypatch):
+    monkeypatch.setenv("M2LIVE_ENVIRONMENT", "95")
+    monkeypatch.setenv("M2LIVE_EXPECTED_NODE", "node-95")
+    monkeypatch.setenv("M2LIVE_BOOTSTRAP_ROOT", str(tmp_path))
+    spec = importlib.util.spec_from_file_location("env95_bootstrap", MODULE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    (tmp_path / "node_token").write_text("synthetic-node-token")
+    (tmp_path / "model_api_key").write_text("synthetic-model-token")
+    row = module.bind_expected_node({"nodes": []}, module.node_token())["nodes"][0]
+    assert row["environment"] == "95" and row["node_id"] == "node-95"
+    assert module.model_api_key() == "synthetic-model-token"
+    assert Path(module.ADMIN_FILE).parent == tmp_path
+    assert Path(module.BINDINGS_OUT).parent == tmp_path

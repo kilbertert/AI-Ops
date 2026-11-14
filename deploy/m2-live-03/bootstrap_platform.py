@@ -29,13 +29,14 @@ SERVICE = os.environ.get("M2LIVE_SERVICE", "aiops-m2live03")
 # 它不认识的模型标识。正式模式必须显式给出；合成模式由 bootstrap.sh 传桩模型名。
 MODEL_ID = os.environ.get("M2LIVE_MODEL_ID", "").strip()
 MODE = os.environ.get("M2LIVE_BOOTSTRAP_MODE", "apply")
-ADMIN_FILE = "/tmp/platform_admin"
-BINDINGS_IN = "/tmp/agent-runs.in.json"
-BINDINGS_OUT = "/tmp/agent-runs.out.json"
+BOOTSTRAP_ROOT = Path(os.environ.get("M2LIVE_BOOTSTRAP_ROOT", "/tmp"))
+ADMIN_FILE = str(BOOTSTRAP_ROOT / "platform_admin")
+BINDINGS_IN = str(BOOTSTRAP_ROOT / "agent-runs.in.json")
+BINDINGS_OUT = str(BOOTSTRAP_ROOT / "agent-runs.out.json")
 DEFAULT_PASSWORD = "admin123"
 DEMO_APP = "snail-ai-agent-demo"
-ENVIRONMENT = "live-trial-41"
-EXPECTED_NODE = "node-41"
+ENVIRONMENT = os.environ.get("M2LIVE_ENVIRONMENT", "live-trial-41")
+EXPECTED_NODE = os.environ.get("M2LIVE_EXPECTED_NODE", "node-41")
 
 
 def call(path, body=None, headers=None, method=None):
@@ -173,7 +174,7 @@ def ensure_app(token: str) -> tuple[str, dict]:
 
 def model_api_key() -> str:
     """模型凭据只从容器内的 0600 文件读 —— 不进命令行、不进日志、不进报错正文。"""
-    path = Path("/tmp/model_api_key")
+    path = BOOTSTRAP_ROOT / "model_api_key"
     if not path.is_file():
         fail("缺少 /tmp/model_api_key（bootstrap.sh 没有传入模型凭据）")
     key = path.read_text().strip()
@@ -297,9 +298,9 @@ AGENT_INSTRUCTION = "用 charging_status_snapshot 工具取一次快照，并原
 
 
 #: 节点的非凭据开关：bootstrap 只重写凭据那三行，这些行必须原样保留。
-NODE_ENV_PATH = "/tmp/node.env.in"
+NODE_ENV_PATH = str(BOOTSTRAP_ROOT / "node.env.in")
 #: 输出到容器的临时文件；bootstrap.sh 之后把它发布到宿主。
-NODE_ENV_OUT = "/tmp/node.env.out"
+NODE_ENV_OUT = str(BOOTSTRAP_ROOT / "node.env.out")
 
 
 def _node_env_path() -> str:
@@ -445,7 +446,7 @@ def ensure_openapi_user(app_id: str, app_token: str, agent_id: int) -> str:
 
 def node_token() -> str:
     """节点凭据由 bootstrap.sh 写进容器内的 0600 文件，不从命令行参数来。"""
-    path = Path("/tmp/node_token")
+    path = BOOTSTRAP_ROOT / "node_token"
     if not path.is_file():
         fail("缺少 /tmp/node_token（bootstrap.sh 没有传入节点凭据）")
     token = path.read_text().strip()

@@ -35,3 +35,24 @@ SQLite用备份中的gateway-consistent.db覆盖旧库，删除仅属于旧库�
 备份持有凭据必须root0700/0600，不向公开仓库或CI上传。
 
 每次失败尝试保留独立备份/制品目录，可重新执行同修订；首次安装成功后拒绝再次覆盖。实际恢复目录读取`/var/lib/aiops-95/installed-backup`。退休中断可重跑，只跳过已移动且原路径已不存在的项，有冲突即停止。
+
+## 95独立节点运行栈
+
+使用`deploy/node-runtime/compose.yaml`加本目录`node-runtime.override.yaml`，只在95首次创建独立
+平台、元数据库、节点和受控模型出口；节点名称node-95，环境95，合计容器内存上限1408MiB。
+源码/JAR/模型代理从合并制品来；node与platform的JAR摘要按`deploy/m2-live-03/images.lock.json`核对。
+制品目录另包含`services/model-proxy`、`deploy/m2-live-03/schema`和初始化脚本，不能复制其他环境运行数据。
+
+初始化沿用`bootstrap_platform.py`，显式给`M2LIVE_ENVIRONMENT=95`、`M2LIVE_EXPECTED_NODE=node-95`、
+`M2LIVE_SERVICE=aiops-env95`和`M2LIVE_BOOTSTRAP_ROOT=<本次0700私有临时目录>`；固定临时输入文件名保持原合同。
+模型出口/平台端点、CA和供应商型号运行时读取受控配置。默认管理员先轮换，禁用demo，再发独立应用与节点凭据。
+失败保留已持久目标口令以便幂等续跑；绝不使用另一环境的应用token。
+
+TLS回调按既有`render_node_callback.py`渲染，目标本机Gateway；CA只在服务宿主，节点只挂公开信任库。
+平台证书SAN同时覆盖platform及平台内部地址，回调证书覆盖实际网桥。先核Docker网段无重叠并记录分配，
+再安装本目录`node-runtime.service`/`node-callback.service`为aiops95-node-runtime/aiops95-node-callback。
+回调使用aiops身份，nginx二进制按现场核对；用`nginx -t`和节点网络内匿名请求拒绝共同验证。
+按已记录入口使用情况配置精确内网访问，不开放公网端口、不改变公司业务网站。
+
+启用前确认没有在飞；启用后检查节点在线、真实三业务、跨环境拒绝与内存峰值。失败停止仅本次新栈，
+保留原Gateway及公司服务。资源上限不是峰值验收，未跑真实请求前不能宣称部署容量合格。
