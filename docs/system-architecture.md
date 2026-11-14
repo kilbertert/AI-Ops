@@ -89,6 +89,16 @@ Gateway解析公司个人Bearer与当前站点范围，冻结已发布SOP、模�
 见[管家手册](agents/operator-cpms/README.md)、[原入口证据](validation/2026-11-05-operator-agent-live.md)、
 [第二租户恢复](validation/2026-11-05-secondary-operator-route-recovery.md)、[拒绝上报补验](validation/2026-11-05-split-callback-gate-f4a-replay-41.md)。
 
+## 跨服务器环境接入
+
+公司登录系统目前没有完整的用户→业务环境→服务地址发现合同；AI-Ops维护私有环境登记与开通租户清单。
+每环境独立Gateway、公司连接、发布/会话数据库和节点身份；共享Dify工作区及KB账号都带环境命名空间。
+模型接收已授权上下文，不能选择服务器URL；业务工具、SOP和模型循环复用现有实现。
+
+95已验证独立部署、真实准入、知识同号隔离及部分模型业务链。当前公司JWT无可信环境声明，
+不能用其tenant_id推断服务器或宣称任意环境令牌跨域拒绝；服务器来源凭据不进入浏览器。
+第二环境完整管理入口、原客户端和同号主体鉴权仍待闭环，见[当前结果](agents/current-delivery-state.md)。
+
 ## 共享身份、数据与持久化
 
 | 概念 | 权威与边界 |

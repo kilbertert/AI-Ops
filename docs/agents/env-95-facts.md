@@ -2,7 +2,7 @@
 
 > **用途**：回答「95 是什么、在哪、怎么连、里面有什么」—— 不依赖会话记忆，也不需要
 > 去别的文档里拼三处半句。
-> **最后核验**：2026-11-13（受管 SSH、进程健康与配置位置）；旧入口与数据盘点注明原日期。
+> **最后核验**：2026-11-14；新实例状态见第5、6节。前四节的旧路径/版本是重建前盘点，供恢复参考。
 >
 > **纪据纪律**：本文件只写方法与位置。地址、指纹、凭据的真值在库外主机清单
 > （`dev-host show 95`），不在这里；也不写任何口令/令牌/thirdSession 明文。
@@ -79,9 +79,8 @@ dev-host exec 95 --allow-service-exec -- curl -fsS --max-time 5 http://127.0.0.1
 - 2026-10-20：带服务身份的 `GET /v1/faq/catalog` 返回 `401 INVALID_ACCESS_TOKEN`。
   本轮没有真实用户令牌验证，不能据此判定当前认证或业务链可用。
 
-当前可确认的是**受管 SSH 可用、旧版 Gateway 运行**。第二环境的认证、CPMS、时序与离线源、
-Dify 工作区和真实用户使用情况还需核对；管理访问成功不代表跨环境业务已接通。
-未观察到实际流量前继续按“在用”处理，不迁移入口或退役进程。
+以上为2026-11-13重建前结论；2026-11-14已安装独立新实例，当前结果见第5节。
+历史访问资料仍保留；停止旧进程与退休旧文件是分开的步骤。
 
 后续盘点须在目标侧处理配置，只输出键名、是否非空和验证结果，不打印文件或进程环境全文。
 Gateway 数据库用 `file:<path>?mode=ro` 及 `PRAGMA query_only=ON`，仅查表结构与必要计数；
@@ -98,4 +97,43 @@ Gateway 数据库用 `file:<path>?mode=ro` 及 `PRAGMA query_only=ON`，仅查�
 
 用户已指定95清理旧AI-Ops并验证平台自维护环境登记。构建、安装、退休与恢复方法见[重建手册](../../ops/environments/env95/README.md)。状态以本轮验收记录为准，资产存在不表示已执行。
 
-2026-11-14：新Gateway已从合并制品重建为1.10.2+b1e509be1de7，旧服务停止但尚未退休；真实租户准入通过，完整业务仍待验。[本轮验收](../validation/2026-11-14-env95-live-acceptance.md)、[共享服务接入](env95-shared-services.md)。
+2026-11-14：首次重建1.10.2之后已升级到`1.10.3+ccd9d8a37c2c`；旧服务停止但尚未退休。
+独立节点部署资产为`6c06e0bd`，真实准入、知识与部分模型业务链通过；完整业务仍待验。
+[最新验证](../validation/2026-11-14-env95-business-acceptance.md)、[共享服务接入](env95-shared-services.md)。
+
+
+## 6. 新实例接入与复验方法
+
+实际版本及通过范围见[本轮业务验证](../validation/2026-11-14-env95-business-acceptance.md)，
+新路径/恢复方法见[重建与升级](../../ops/environments/env95/README.md)。不要复用第3节旧配置启动新代码。
+
+1. 先用`dev-host exec 95 --allow-service-exec`核对`aiops-gateway-95`、`aiops95-node-runtime`、
+   `aiops95-node-callback`、`aiops95-shared-services-tunnel`状态与本机`/health`版本。
+2. 正常管家手机登录采用公司当前`/token/loginByPhone`（配置的UPMS本机入口），随后`/user/info`核身份；
+   原商城消费者使用`/mallapi/userinfo/phone/login`取得thirdSession。凭据从加密资产清单运行时读取，
+   只经进程内存/标准输入传递，不记录完整令牌。正常登录不能证明原H5页已通过。
+3. 对同一消费者先直达Gateway再走原API域名：本机通过而公网401时，核对原代理注入的服务凭据是否与
+   `THIRD_SESSION_SERVICE_TOKEN`一致，只报告是否匹配。备份具体rewrite文件，修改原/v1块的该项值，
+   `nginx -t`通过后reload；失败恢复原文件。不得顺带开放管理路径。
+4. 订单过程工具需要`AIOPS_GATEWAY_OPERATOR_TSDATA_URL`指向本环境公司tsdata门面，代码追加
+   `/tdadmin/data/query`。先做有界只读查询核实际响应，再备份单项配置、零在飞检查、重启并复验。
+   无需为此修复旧TDengine用户或扩展数据库权限。
+5. 客服知识运行需KB地址和**本环境独立**`AIOPS_GATEWAY_MEDIA_SIGNING_SECRET`；开户、能列库不代表
+   运行时检索已装配。模型provider沿用已批准配置，按现役工作流关闭思考输出，正常保存/发布后验真实正文。
+6. 新工作区通过现有`self_service_prepare`准备模型、插件、工具及应用，`service_keys.ensure`持久化应用密钥，
+   `SelfServiceStore.register`登记目标。发布使用正式发布服务或同源`sync_workflow_from_dify`、版本与路由推进接口，
+   不直接改版本/路由SQL；不得在真实库构造一次性Gateway app来验收，因为启动会恢复未完成作业。
+7. 节点能力必须来自真实Java定时回调，读取`execution_node_capabilities`的环境、节点、摘要与更新时间；
+   不手工插入心跳。需先配置本环境profile和受管目标，单配agent_run_config_file不足以授权能力回报。
+8. 初装模型模板的model_options应与平台实际生效值一致。Dify编辑模型选项不自动改平台模型配置；
+   不能用临时猜测参数填清单。保存原模板、正常发布并重跑真实请求，不关闭节点校验。
+
+运行前后通过只读账本关联同一个QA/run和发布版本，分别记录订单取证、离线统计、客服知识与本人订单。
+上游接口系统错误不是模型不理解问题；先只读定位具体公司进程日志与内存限制，不通过替换身份或直读越权数据绕过。
+公司业务进程重启/参数变更需要该项授权；原AI-Ops重建授权不自动覆盖公司业务维护。
+
+## 7. 仍待验收的入口
+
+现有公网API知识问答通过，不代表管家H5、消费者H5或Dify管理页均已接通。
+已观察到原管家H5登录停在提示页；公司接口恢复后仍须从正常登录驱动原聊天页面。
+本环境登录代理和管理桥尚未完成原页面开通/发布/恢复验证。旧运行文件保持可恢复，待入口验收后再退休。

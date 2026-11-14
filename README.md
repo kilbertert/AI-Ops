@@ -229,3 +229,6 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 业务环境与租户登记由 `gateway.environment_registry` 管理，运维入口为 `aiops-admin environment-registry`；配置 `AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE` 后按当前环境检查租户准入。登记与启停方法见[环境接入手册](docs/agents/environment-registry.md)。
 
 共享知识服务的环境/租户命名空间由 `knowledge.tenant_scope` 统一计算；已启用环境登记的实例不与旧单环境租户头共用知识账号。
+
+第二业务环境已完成独立重建与部分真实问答；公司充电接口故障、原客户端和管理入口仍待闭环。
+验证边界见[95本轮记录](docs/validation/2026-11-14-env95-business-acceptance.md)，不能由部署成功推定全部业务验收。

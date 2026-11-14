@@ -14,7 +14,8 @@
    从合并修订安装`ops/environments/env95/shared-services-tunnel.service`为`aiops95-shared-services-tunnel.service`，daemon-reload并启用。
 4. 端口29508/29501/29580仅绑定95回环，安装前检查没有其他监听或预留用途并记录95主机端口分配。
    `/console/api/setup`通过证明传输，inner-api匿名拒绝及错误key拒绝证明接口鉴权仍生效；隧道不提供用户权限。
-5. Gateway使用29508访问Dify、29501访问inner-api、29580访问知识服务。共享服务管理key运行时从受控位置取得，
+5. 29508是Dify入口、29501是inner-api/管理适配入口、29580是知识服务。当前Gateway的Console/Inner/Chat配置使用29501；
+   现场须逐端点核对同一服务与鉴权，不按端口名称推断Service API可用。共享服务管理key运行时从受控位置取得，
    不复制其他环境的会话、工作区、订单或节点身份；95工作区按环境/租户独立创建。
 
 ## 恢复
