@@ -1,5 +1,5 @@
 ---
-description: "自助开通面：dual_entry 词表 entry/scenario/channel（声明优先+观测兜底）、operator_apps 双入口遗留命名、self_service 幂等作业 UNIQUE(actor,request_key)、service_keys 快照→创建→对账且只发路径不发密钥、knowledge_connection、开通装配清单、bridge 同源闸、SETUP_* 码命名失败步骤+下一步"
+description: "自助开通面：dual_entry 词表 entry/scenario/channel（声明优先+观测兜底）、operator_apps 双入口遗留命名、self_service 幂等作业 UNIQUE(actor,request_key)、service_keys 快照→创建→对账且只发路径不发密钥、knowledge_connection、开通装配清单、bridge 同源闸、consumer 选库按当前草稿投影+recoverable_consumer_draft 接管身份、SETUP_* 码命名失败步骤+下一步"
 kind: architecture
 relations:
   requires:
@@ -47,14 +47,15 @@ snapshot-先 → create → reconcile：Dify 只在创建时返回完整 token�
 ## 边界与守卫
 
 - `self_service_bridge` 同源闸：Origin==console_origin **且** Referer 同源 **且** `Sec-Fetch-Site∈{∅,same-origin}` **且**有效 Dify 会话 **且**`角色∈{owner,admin,editor}` **且** `application/json`——之后只转发服务端验证过的浏览器会话；浏览器永远见不到内部令牌或平台 key。
-- `self_service_identity`：管理身份只经真 Dify 登录交换读，浏览器不提供任何身份声明。`self_service_config` = 平台维护的 profiles（JSON 0600）被应用引用；不接受浏览器给的路径/凭据/端点。
+- `self_service_identity`：管理身份只经真 Dify 登录交换读，浏览器不提供任何身份声明。`identity()`/`require_target()` 在配 `environment_registry_file` 时先过 `for_settings(settings).require(tenant)` 登记准入——未开通/停用租户 → `SetupRefused("TENANT_ENVIRONMENT_NOT_ENABLED")`（非 `SETUP_` 前缀的共享拒码，ADR-0256）。`self_service_config` = 平台维护的 profiles（JSON 0600）被应用引用；不接受浏览器给的路径/凭据/端点。
 - 草稿完整性：发布比对当前草稿指纹与创建时冻结值；并发发布或源版本变化 → `SETUP_DRAFT_CHANGED`/`SETUP_SOURCE_CHANGED`/`SETUP_ACTOR_CHANGED`——让运营刷新，不是系统猜。
+- consumer 选库与草稿接管（ADR-0255）：detail 的 `knowledge_base_ids` 从**当前草稿导出的 workflow** 经 `consumer_source_ids` 投影（非开通时 targets 快照），并附 `live_app_id`/`live_version_no`——抽屉看/改的是应用真草稿的选库。拉 DSL 同步**先验证选库再建本地草稿**（坏选库不留半成品 Agent）；失败首次接管只认 `self_service_store.recoverable_consumer_draft` 身份（`entry=consumer`、`consumer-<app_id>` 名、`created_by=aiops-admin`、status=draft、revision=1、`published_version IS NULL`、无 agent_versions 行）——配置/提示词相等不再证明归属，不符 → refused `existing draft is not the one this operation created`；快照顶层 `knowledge_base_ids`（有 bootstrap 时连 `prompt`/`model`）由同一份冻结 workflow 投影，绝不继承上一版。
 - `dify/operator_run_logs.py`（本包的 FastAPI 管理面）：Java run 元数据只读视图——`POST /v1/dify/management/run-logs` 列表 + `.../detail` 按 run_id 单条（缺则 `OPERATOR_RUN_NOT_FOUND`），逐请求重验公司身份+app 归属+租户；过期业务结果不恢复，但问题全文/订单号属输入标识仍投影（ADR-0249），ADR-0251 起行级摘要（入参+白名单结果字段的 `tool_summaries`）也过同一 `qa_id + scope_fingerprint` 闸进 detail 响应，不投影面不变；`no-store`。与 `execution/operator_run_logs.py`（账本投影白名单，列表与详情同一 `metadata()`）同名不同层，别混。
 - `knowledge_connection.py`：`ExternalKnowledgeApis.tenant_id` 是**工作区级**的；只有平台端点/key 可作创建模板。
 
 ## 失败语义
 
-约 55 个稳定 `SETUP_*` 码——**每个码命名失败的步骤和下一步动作**（`SETUP_KEY_DIRECTORY_UNWRITABLE` → 修 systemd 保护目录；`SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS` → 标 `default:true`；`SETUP_APP_FORBIDDEN`/`SETUP_TENANT_FORBIDDEN`/`SETUP_IDENTITY_MISMATCH` → 授权问题不是配置）。拒绝 ≠ 冲突 ≠ 流程非法——三条不同的异常路径（`self_service_api.py`）。
+约 55 个稳定 `SETUP_*` 码——**每个码命名失败的步骤和下一步动作**（`SETUP_KEY_DIRECTORY_UNWRITABLE` → 修 systemd 保护目录；`SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS` → 标 `default:true`；`SETUP_APP_FORBIDDEN`/`SETUP_TENANT_FORBIDDEN`/`SETUP_IDENTITY_MISMATCH` → 授权问题不是配置）。`TENANT_ENVIRONMENT_NOT_ENABLED` 是唯一非 `SETUP_` 前缀成员——它来自登记准入闸，不是装配步骤。拒绝 ≠ 冲突 ≠ 流程非法——三条不同的异常路径（`self_service_api.py`）。
 
 ## Canonical anchors
 

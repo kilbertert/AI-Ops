@@ -1,5 +1,5 @@
 ---
-description: "知识平面（RAGFlow×Dify 外部知识）：检索权威在网关不在 Dify、knowledge_id 派生语法 tenant-<id>[:<dataset>]、来源优先级 manual>env>auto、dataset 创建后 PATCH 两步+幂等键、picker-open 触发同步且队列不丢、1:1:1 三元组、ragflow_console owner-hop 记台账、插件凭据分离、kb-service 租户与暴露登记"
+description: "知识平面（RAGFlow×Dify 外部知识）：检索权威在网关不在 Dify、knowledge_id 派生语法 tenant-<id>[:<dataset>]、来源优先级 manual>env>auto、dataset 创建后 PATCH 两步+幂等键、picker-open 触发同步且队列不丢、1:1:1 三元组、ragflow_console owner-hop 记台账、插件凭据分离、kb-service 租户按业务环境命名空间（tenant_scope）与暴露登记"
 kind: architecture
 relations:
   related:
@@ -14,6 +14,7 @@ code:
     - src/aiops_diagnostics/knowledge/knowledge_dataset_sync_guard.py
     - src/aiops_diagnostics/knowledge/kb_onboarding.py
     - src/aiops_diagnostics/knowledge/ragflow_console.py
+    - src/aiops_diagnostics/knowledge/tenant_scope.py
     - src/aiops_diagnostics/dify/dify_knowledge_api.py
     - src/aiops_diagnostics/dify/dify_knowledge_datasets.py
     - src/aiops_diagnostics/dify/dify_knowledge_migration.py
@@ -59,6 +60,7 @@ code:
 - 欠费：provider 403 带配额消息直接是失败终态——failover 已退役（现役仅 baoyun 单上游）；`AIOPS_PROVIDERS` 是**注册表**不是优先级链，用哪个由 `AIOPS_DEFAULT_PROVIDER` 点名（ADR-0046）。
 - **`api_key_header_prefix` 坑**：Dify 工具提供方默认 `basic` → 把 key 拼成 `Basic Bearer <key>` → 注册看着成功、调用时才 401。判法：401=prefix 错，403=key 值错。
 - kb-service 租户是另一份 SQLite 映射（`ragflow_tenants`）——那里的 "tenant id" 既不是 RAGFlow 用户名也不是 UPMS tenant（ADR-0063）。
+- **kb-service 身份按业务环境命名空间化**（ADR-0261，`knowledge/tenant_scope.py`）：`knowledge_tenant(tenant, env)` = `env_`+base64url(JSON `[env, tenant]`，无 padding；空 env 原样返回 tenant_id）。配 `environment_registry_file` 时**每个** kb-service `tenant_id` 头、租户创建 `biz_tenant_id`、`derive_email` 全打该串；本地台账 `record_ragflow_tenant` 与公司 API 仍记原 tenant_id，存量不迁移。`namespace_for` 只在登记文件配置时回 canonical env（registry 开而 env 空 = 拒装配）；runtime kb_client、发布期 KbBindingResolver、admin_cli 全部七条 knowledge 命令都穿它——"不能仅改 HTTP 入口"；未登记实例行为逐位不变。
 
 ## Canonical anchors
 

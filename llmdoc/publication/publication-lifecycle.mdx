@@ -43,8 +43,9 @@ code:
 
 ## 开场与快捷动作
 
-- `qa_rag.select_customer_agent`：**只服务开场消息/快捷动作路径**；只取 published（经 `live_version`）；被任何已发布快捷动作钉为目标的"推广"agent 被排除在普通 QA 之外（设计如此，静默排除）。`agent_name` 来自注册表把选择变成查表，`None` 保留注册表前的"最新发布"回落；store 失败 → None → 零阶路径。
+- `qa_rag.select_customer_agent`：**只服务开场消息/快捷动作路径**；只取 published（经 `live_version`）；被任何已发布快捷动作钉为目标的"推广"agent 被排除在普通 QA 之外——promo 路由已随 #1125 退役，但 `_pinned_promo_agents` 排除刻意保留（ADR-0259 dormant-but-armed：pin 住的 agent 仍是客服槽的错误答案，且管理面仍可发布 promo-intent 行）。`agent_name` 来自注册表把选择变成查表，`None` 保留注册表前的"最新发布"回落；store 失败 → None → 零阶路径。
 - `shortcut_lifecycle.py`：`(tenant, business_entry, code)` 身份；同 draft→published→disabled 生命周期；`BANNER_KIND="banner"` vs 动作类；**`jump_path` 跳转动作永远到不了助手入口**；prompt 动作才提交问题；`requires_order` → `CLARIFY_ORDER_REQUIRED`，入口错 → `CLARIFY_WRONG_ENTRY`；内部平台与租户范围分开；文案缺口是确定性 CI 闸。
+- 快捷动作退役语义（ADR-0254/0259）：种子清单现为 consumer `{smart_diagnosis, report_fault, battery_report}`（battery_report=横幅）、operator `{smart_diagnosis, operations_review}`——`case_exploration` 两入口都不播种；`SHORTCUT_INTENTS`/`STABLE_CODES` 与 `target_agent_version` 白名单仍收 `case_exploration`/`solution_discovery` 作行有效性闸——生命周期能力刻意不退役，管理 API 仍接受 promo-intent 行；陈旧 `shortcut_code` 提交经 `find_effective_by_code` 找不到有效行（disabled 不可见）→ shortcut=None → 落普通问题路径，不 404 不出卡；数据侧退役只用 `disable`（disabled 租户行同时是 `list_effective` 里压制平台默认的机制），从不物理删行。
 - `agent_debug.py`：发布前检查（知识绑定/解析/可用性）；`agent_manifest.py` `EnvironmentManifest` 装载+对账。
 - 表结构权威在 `gateway_schema.py`（ADR-0244）：本页全部表（agents/versions/shortcuts/bindings/audit）的 DDL 只在那里声明一次；构造任一 store 调 `ensure(path)` 物化全部 28 张表（`user_version` 记版，v0 库单事务原子升级），`startup()` 同版本也全检、漂移拒 boot。运维面 `aiops-admin schema check|migrate`、`rehearse()`；`MappingStore` 例外。
 

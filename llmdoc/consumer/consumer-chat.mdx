@@ -1,5 +1,5 @@
 ---
-description: "消费者客服链（callback_version=6 硬闸）：Dify 官方 Agent 提议工具调用与正文、五类资源+原子预算 8、grant 六元组复核+取数前后重验、SSE 身份四元组与最终回答抽取规则、自然正文+程序附加来源/媒体与 URL 闸（ADR-0250）、发布顺序先撤 grant 后 completed、conversation_id 续会话、试用范围限制、旧 callback<6 冻结"
+description: "消费者客服链（callback_version=6 硬闸）：Dify 官方 Agent 提议工具调用与正文、五类资源+原子预算 8、grant 六元组复核+取数前后重验、SSE 身份四元组与最终回答抽取规则、自然正文+程序附加来源/媒体与 URL 闸（ADR-0250）、发布顺序先撤 grant 后 completed、conversation_id 续会话、试用范围限制、旧 callback<6 冻结、登记准入 TENANT_ENVIRONMENT_NOT_ENABLED/CONSUMER_TARGET_CHANGED"
 kind: architecture
 relations:
   requires:
@@ -13,6 +13,7 @@ code:
     - src/aiops_diagnostics/consumer/consumer_agent.py
     - src/aiops_diagnostics/consumer/consumer_chat_service.py
     - src/aiops_diagnostics/consumer/consumer_agent_flow.py
+    - src/aiops_diagnostics/consumer/consumer_binding.py
     - src/aiops_diagnostics/consumer/consumer_billing.py
     - src/aiops_diagnostics/consumer/consumer_documents.py
     - src/aiops_diagnostics/consumer/consumer_mall_billing.py
@@ -38,11 +39,11 @@ code:
 
 - 固定 5 类资源 `{"knowledge","orders","status","billing","support"}`；每次调用消耗原子预算 **8**（`dify_run_store.py` 同一事务扣减）。
 - `status`/`billing` 还要求按绑定的 `live_order_status`/`live_billing_record` 开关。
-- grant = 能力令牌绑六元组 `(grant_id, scope_fingerprint, order_no, tenant_id, environment, workflow_id)`；`callback()` 重匹配全部六个，并在上游查询**前和后**各跑 `valid()`（180s TTL）。`kind=service` 另要求 `CONSUMER_SCOPE_REQUIRED`——consumer 范围只有 self。
+- grant = 能力令牌绑六元组 `(grant_id, scope_fingerprint, order_no, tenant_id, environment, workflow_id)`；`callback()` 重匹配全部六个，并在上游查询**前和后**各跑 `valid()`（180s TTL）——两趟都先跑 `require_registered` 登记准入（仅 `environment_registry_file` 配置时生效，ADR-0256）：登记环境/租户被禁 → `TENANT_ENVIRONMENT_NOT_ENABLED` 403，登记器缺失 → `ENVIRONMENT_REGISTRY_UNAVAILABLE`。`kind=service` 另要求 `CONSUMER_SCOPE_REQUIRED`——consumer 范围只有 self。
 - 试用/预览（`service_trial`）只许查明确选中的订单，orders 列表整体拒绝。
-- C 端 CPMS 授权（`consumer_tool_grants.py`）：只带 `tenant-id`+`user-id` 头、无 token；范围=本人订单站点；越界是**跳过**不是拒绝。
+- C 端 CPMS 授权（`consumer_tool_grants.py`）：只带 `tenant-id`+`user-id` 头、无 token；范围=本人订单站点；越界是**跳过**不是拒绝。登记器启用时 `_current` 对 grant 冻结 `base_url` 复核当前 `cpms_base(tenant)`，漂移 → `ConsumerToolRefused("CONSUMER_TARGET_CHANGED")`；`record` 写证据前重跑 `_current`（后台取数撤权校验）；`gateway_api` 把 `ConsumerToolRefused` 统一映射 403 `{code, "consumer tool request refused", retryable:false}` + `no-store`——与"越界跳过"不同轴（冻结目标变了而非范围越界）。
 - 本人站点面（`consumer_sites.py`）：`MAX_ORDER_PAGES=4`、页 50、`MAX_OWN_SITES=200`、恒发 `user-id`、展示上限 `SITE_MAX_SHOWN=10`。
-- 知识授权（`consumer_knowledge_grants.py`）：显式 `(tenant, env, library)` 行在发布和检索两处检查，吊销即时生效。
+- 知识授权（`consumer_knowledge_grants.py`）：显式 `(tenant, env, library)` 行在发布和检索两处检查，吊销即时生效；端点解析登记器优先——`consumer_endpoint`/`approved_business_endpoint` 在 `environment_registry_file` 配置时取登记行 `cpms_base_url`，未配才回落 `business_environments_file` manifest（两个文件不是同一件东西）。
 
 ## SSE 与最终回答（规则不是启发式）
 
@@ -55,7 +56,7 @@ code:
 ## 发布顺序与失败语义
 
 - 数据 grant **先于** run 置 `completed` 被吊销——completed 的运行不持有活凭据（`consumer_chat_service.py`）。
-- `require_result` 回读核对：绑定未变 + `require_evidence` + `deliverable()` + `snapshot == qa.result`。
+- `require_result` 回读核对：绑定未变 + `require_evidence` + `deliverable()` + `snapshot == qa.result`；交付闸 `consumer_binding.require_pinned`（stable-field/能力子集/知识子集/路由 revision/identity digest + `_route` 文件绑定）同样先跑 `require_registered`——被禁租户连交付也 403。
 - `succeeded` 过了窗口仍是 succeeded，`_expire_in` 只转 `running→expired`；能否交付由 `run_deliverability` 判。
 - 业务拒绝回喂模型作为工具结果（不是 run 失败）；预算耗尽、`CHATFLOW_EVIDENCE_UNAVAILABLE`（历史回合快照不再等于 qa.result）、SSE 身份不匹配、运行 180s 过期是终止路径。
 - 本链没有任何业务写工具可声明。
@@ -93,6 +94,7 @@ manage桥不转发Accept-Language，英文预览用既有Gateway受管trial入�
 - `src/aiops_diagnostics/consumer/consumer_documents.py`（render_sources_answer：正文脱敏+reference/media 块+URL 闸）
 - `src/aiops_diagnostics/consumer/consumer_mall_billing.py`（商城支付证据：读数相等判定）
 - `src/aiops_diagnostics/consumer/consumer_chat_service.py`（start/grant/吊销/发布顺序/读回）
+- `src/aiops_diagnostics/consumer/consumer_binding.py`（require_pinned 交付闸 + 登记准入）
 - `src/aiops_diagnostics/dify/dify_chatflow.py`（SSE 身份四元组 + agent_final_node 抽取）
 - `src/aiops_diagnostics/dify/dify_run_store.py`（运行账、180s、原子预算）
 - `src/aiops_diagnostics/consumer/consumer_tool_grants.py`（C 端授权形状）
