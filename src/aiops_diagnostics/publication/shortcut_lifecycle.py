@@ -177,13 +177,13 @@ class ShortcutError(RuntimeError):
 # invisibly (only the button copy differs between entries).
 #
 # `case_exploration`（「客户案例」）is seeded on NEITHER entry: the product
-# retired the button on both surfaces (2026-11-14, see ADR-0050's successor
-# record). Its `intent` stays in SHORTCUT_INTENTS/STABLE_CODES — removal is the
-# button only, and a free-text question carrying the case cue still routes to
-# the promotional path, which answers honestly when no tenant row binds an
-# agent (the same "只摘按钮" scope the user set in ADR-0031 and reconfirmed
-# here). Existing published rows keep serving until an operator disables them;
-# the live-side steps are in env-41-runbook §3.1-sexies.
+# retired the button on both surfaces (2026-11-14, ADR-0254). Its `intent`
+# stays in SHORTCUT_INTENTS/STABLE_CODES — removal is the button only, and a
+# free-text question carrying the case cue still routes to the promotional
+# path, which answers honestly when no tenant row binds an agent (the same
+# "只摘按钮" scope the user set in ADR-0031 and reconfirmed here). Existing
+# published rows keep serving until an operator disables them; the live-side
+# steps are in env-41-runbook §3.1-sexies.
 _SHARED_ACTION_FIELDS: dict[str, dict[str, Any]] = {
     "smart_diagnosis": {
         "intent": "order_issue",
