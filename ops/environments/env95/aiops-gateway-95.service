@@ -1,0 +1,23 @@
+[Unit]
+Description=AI-Ops environment 95 isolated Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aiops
+Group=aiops
+WorkingDirectory=/opt/aiops-95/current
+EnvironmentFile=/etc/aiops-95/gateway.env
+ExecStart=/opt/aiops-95/current/venv/bin/aiops-gateway serve
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/aiops-95
+
+[Install]
+WantedBy=multi-user.target
