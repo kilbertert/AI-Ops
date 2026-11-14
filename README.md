@@ -3,7 +3,7 @@
 面向公司 C端与管家端的只读业务助手。公司 App/H5 是用户入口，Gateway 负责身份、范围、
 发布绑定、作业和交付；客服由 Dify 官方 Agent 执行，管家由 Java 节点执行；模型按SOP选择证据，系统负责授权与计算。
 
-跨服务器多租户接入正在分片实现：[可信环境入口](ops/nginx/business-environment-ingress.md)生成独立Gateway分流配置；真实双环境与控制台集中接入尚未启用。
+跨服务器接入已完成95试验并撤回；后续按[公司网关接入与环境管理方案](docs/architecture/2026-11-14-company-gateway-onboarding.md)规划。专属SSH业务隧道不再作为新环境方案；集中管理页面与新接入合同尚未实现。
 
 ## 当前交付与退役范围
 
@@ -229,3 +229,6 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 业务环境与租户登记由 `gateway.environment_registry` 管理，运维入口为 `aiops-admin environment-registry`；配置 `AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE` 后按当前环境检查租户准入。登记与启停方法见[环境接入手册](docs/agents/environment-registry.md)。
 
 共享知识服务的环境/租户命名空间由 `knowledge.tenant_scope` 统一计算；已启用环境登记的实例不与旧单环境租户头共用知识账号。
+
+第二业务环境的独立重建与部分真实问答已归档，95的AI-Ops部署已按用户要求撤回。
+验证边界见[95本轮记录](docs/validation/2026-11-14-env95-business-acceptance.md)，不能由部署成功推定全部业务验收。

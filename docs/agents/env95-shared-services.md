@@ -1,5 +1,8 @@
 # 95共享模型与知识服务接入
 
+> 已撤回（2026-11-14）：本页仅保留95试验历史和恢复资料，不得作为新客户开通模板。
+> 用户否定专属SSH业务隧道；新目标见[公司网关方案](../architecture/2026-11-14-company-gateway-onboarding.md)。
+
 95的公网HTTPS到共享Dify实测被连接重置，既有知识SSH通道仅批准9380，不能借用其密钥扩大访问。
 使用95项目身份的独立密钥，复用已登记的共享服务宿主与现有受限SSH账户；不新增公网入口。
 
@@ -14,7 +17,8 @@
    从合并修订安装`ops/environments/env95/shared-services-tunnel.service`为`aiops95-shared-services-tunnel.service`，daemon-reload并启用。
 4. 端口29508/29501/29580仅绑定95回环，安装前检查没有其他监听或预留用途并记录95主机端口分配。
    `/console/api/setup`通过证明传输，inner-api匿名拒绝及错误key拒绝证明接口鉴权仍生效；隧道不提供用户权限。
-5. Gateway使用29508访问Dify、29501访问inner-api、29580访问知识服务。共享服务管理key运行时从受控位置取得，
+5. 29508是Dify入口、29501是inner-api/管理适配入口、29580是知识服务。当前Gateway的Console/Inner/Chat配置使用29501；
+   现场须逐端点核对同一服务与鉴权，不按端口名称推断Service API可用。共享服务管理key运行时从受控位置取得，
    不复制其他环境的会话、工作区、订单或节点身份；95工作区按环境/租户独立创建。
 
 ## 恢复
