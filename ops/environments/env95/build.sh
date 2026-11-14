@@ -19,6 +19,8 @@ p.write_text(s.replace(f'__version__ = "{version}"', f'__version__ = "{version}+
 PY
 mkdir "$work/bundle" "$work/bundle/wheelhouse"
 (cd "$work" && uv build --wheel --out-dir "$work/bundle/wheelhouse")
+# uv会在输出目录生成.gitignore；它不是交付依赖，不进入wheelhouse。
+rm -f "$work/bundle/wheelhouse/.gitignore"
 (cd "$work" && uv export --frozen --no-dev --no-editable --no-emit-project --output-file "$work/requirements.txt")
 python3 -m pip download --only-binary=:all: --python-version 313 \
   --platform manylinux2014_x86_64 --platform manylinux_2_28_x86_64 \
