@@ -31,7 +31,7 @@ def render(catalogue, listen, *, trusted_ca=""):
     if (
         catalogue["schema"] != "aiops-business-ingress/1"
         or not isinstance(rows, list)
-        or not 1 <= len(rows) <= 64
+        or not 0 <= len(rows) <= 64
     ):
         raise ValueError("环境接入清单版本或数量错误")
     output = {
@@ -130,9 +130,45 @@ def render(catalogue, listen, *, trusted_ca=""):
     return text
 
 
+def registered_catalogue(path, credentials):
+    """入口地址只来自平台登记；密钥文件只持有环境编号与凭据。"""
+    from aiops_diagnostics.gateway.environment_registry import load
+
+    if (
+        not isinstance(credentials, dict)
+        or set(credentials) != {"schema", "credentials"}
+        or credentials["schema"] != "aiops-ingress-credentials/1"
+    ):
+        raise ValueError("入口凭据清单形状错误")
+    rows = credentials["credentials"]
+    if not isinstance(rows, list):
+        raise ValueError("入口凭据清单缺少数组")
+    by_id = {}
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"id", "ingress_key", "company_source_key"}
+            or not isinstance(row["id"], str)
+            or row["id"] in by_id
+        ):
+            raise ValueError("入口凭据字段错误或重复")
+        by_id[row["id"]] = row
+    registered = load(path)["environments"]
+    if set(by_id) - {r["id"] for r in registered}:
+        raise ValueError("入口凭据引用未登记环境")
+    selected = []
+    for row in registered:
+        if row["enabled"]:
+            if row["id"] not in by_id:
+                raise ValueError("已启用环境缺少入口凭据")
+            selected.append({**by_id[row["id"]], "gateway_url": row["gateway_url"]})
+    return {"schema": "aiops-business-ingress/1", "environments": selected}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalogue", required=True, type=Path)
+    parser.add_argument("--registry", type=Path, help="平台登记；使用时catalogue只保存id与凭据")
     parser.add_argument("--listen", required=True)
     parser.add_argument("--trusted-ca", default="")
     parser.add_argument("--out", required=True, type=Path)
@@ -140,7 +176,10 @@ def main():
     validate_private_file(args.catalogue)
     if args.catalogue.stat().st_size > 65536:
         raise ValueError("环境接入清单过大")
-    text = render(json.loads(args.catalogue.read_text()), args.listen, trusted_ca=args.trusted_ca)
+    catalogue = json.loads(args.catalogue.read_text())
+    if args.registry:
+        catalogue = registered_catalogue(args.registry, catalogue)
+    text = render(catalogue, args.listen, trusted_ca=args.trusted_ca)
     write_private_text(args.out, text)
     print("环境接入配置已生成（私有文件）；安装前须以服务身份校验")
 
