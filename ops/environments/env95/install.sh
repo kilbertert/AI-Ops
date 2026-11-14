@@ -3,7 +3,7 @@
 set -euo pipefail
 umask 077
 [ "$(id -u)" = 0 ] || { echo '安装需要主机维护权限' >&2; exit 2; }
-[ "$#" = 1 ] || { echo '用法: install.sh <已展开的完整制品目录>' >&2; exit 2; }
+[[ "$#" = 1 || ( "$#" = 2 && "$2" = --verify-only ) ]] || { echo '用法: install.sh <完整制品目录> [--verify-only]' >&2; exit 2; }
 bundle=$(realpath -- "$1")
 revision=$(cat "$bundle/REVISION")
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 2
@@ -29,6 +29,7 @@ for value in ['/opt/aiops-95','/var/lib/aiops-95','/var/backups/aiops-95','/etc/
     p=pathlib.Path(value)
     assert not any(x.is_symlink() for x in [p,*p.parents]), 'installation path symlink refused'
 PYPREFLIGHT
+[ "${2:-}" != --verify-only ] || exit 0
 exec 9>/run/lock/aiops-95-install.lock
 flock -n 9 || { echo '另一个安装正在执行' >&2; exit 2; }
 [ -s /etc/aiops-95/gateway.env ] && [ -s /etc/aiops-95/server.env ] || {
