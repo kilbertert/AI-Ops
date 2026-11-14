@@ -380,7 +380,9 @@ class LoginService:
         #: 寿命（``dify.access_expire_minutes``）—— 见 :func:`operator_token_seconds` 的
         #: 理由：令牌不该比它所属的会话活得更久，也不该更短。
         operator_token_seconds: int | None = None,
+        environment_registry: Any = None,
     ) -> None:
+        self.environment_registry = environment_registry
         self.company = company
         self.dify = dify
         self.store = store
@@ -410,6 +412,16 @@ class LoginService:
         if self._operator_token_override is not None:
             return float(self._operator_token_override)
         return float(self.dify.access_expire_minutes * 60)
+
+    def require_registered_tenant(self, tenant_id: str) -> None:
+        if self.environment_registry is None:
+            return
+        from aiops_diagnostics.gateway.environment_registry import RegistryError
+
+        try:
+            self.environment_registry.require(tenant_id)
+        except RegistryError as exc:
+            raise PermissionDenied("TENANT_ENVIRONMENT_NOT_ENABLED", "当前环境未开通此租户或已停用") from exc
 
     def owner_session(self) -> ConsoleSession:
         return mint_console_session(
@@ -460,6 +472,7 @@ class LoginService:
             # 公司登录**失败**（密码错、账号停用/不存在）**绝不改变映射状态** —— 失败可能
             # 只是密码打错，据此封禁会把一次手误变成一次锁定（#779 的明确要求）。
             raise
+        self.require_registered_tenant(identity.tenant_id)
         permissions = read_permissions(self.company, identity)
         user_type = read_user_type(self.company, identity)
 
@@ -683,6 +696,10 @@ class LoginService:
         claims = verify_console_jwt(session, self.dify.secret_key)
         row = self.store.by_dify_account(str(claims.get("user_id", ""))) if claims else None
         if row is None or row.get("status") != STATUS_ACTIVE:
+            return None
+        try:
+            self.require_registered_tenant(row["tenant_id"])
+        except PermissionDenied:
             return None
         key = hashlib.sha256(session.encode()).hexdigest()
         with self._operator_token_lock:
