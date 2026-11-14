@@ -39,6 +39,7 @@ from pathlib import Path
 from dotenv import dotenv_values
 from aiops_diagnostics.gateway import gateway_schema
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway.gateway_store import JOB_TABLES
 os.environ.update({k:v for k,v in dotenv_values('/etc/aiops-95/gateway.env',interpolate=False).items() if v is not None})
 s=GatewayServerSettings.from_env()
 assert s.environment=='95' and s.database_file==Path('/var/lib/aiops-95/gateway/gateway.db')
@@ -46,7 +47,9 @@ assert not s.chat_route_bindings_file or Path(s.chat_route_bindings_file)==s.dat
 report=gateway_schema.check(s.database_file)
 assert report['version']==report['current_version'], 'schema migration requires separate plan'
 with sqlite3.connect(f'file:{s.database_file}?mode=ro',uri=True) as db:
-    for table,column,states in [('agent_runs','state',('issued','running')),('assistant_questions','status',('queued','running')),('operator_setup_jobs','state',('pending','running'))]:
+    checks=[(table,'status',('queued','running')) for table in JOB_TABLES]
+    checks.extend([('agent_runs','state',('issued','running')),('operator_setup_jobs','state',('pending','running'))])
+    for table,column,states in checks:
         marks=','.join('?' for _ in states)
         assert db.execute(f'SELECT count(*) FROM {table} WHERE {column} IN ({marks})',states).fetchone()[0]==0, f'inflight {table}'
 print('same-schema and zero-inflight passed')

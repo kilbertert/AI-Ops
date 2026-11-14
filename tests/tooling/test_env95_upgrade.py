@@ -88,11 +88,24 @@ def fixture_host(tmp_path):
     return bundle, database
 
 
-@pytest.mark.parametrize("failure", ["", "health", "schema", "symlink", "artifact", "inflight"])
+@pytest.mark.parametrize(
+    "failure", ["", "health", "schema", "symlink", "artifact", "inflight", "trial", "health-job"]
+)
 def test_upgrade_preserves_state_and_rolls_back_failed_candidate(tmp_path, failure):
     import sqlite3
 
     bundle, database = fixture_host(tmp_path)
+    if failure in {"trial", "health-job"}:
+        from aiops_diagnostics.gateway.gateway_store import GatewayStore
+
+        store = GatewayStore(database)
+        if failure == "trial":
+            row = store.create_trial_job(
+                "scope", order_no="synthetic", draft_fingerprint="fp", initiator="qa", workflow_trial=True
+            )
+            store.update_standard_diagnosis(row["diagnosis_id"], status="running")
+        else:
+            store.create_or_reuse_health_job("scope", "synthetic", "v1")
     if failure == "schema":
         with sqlite3.connect(database) as db:
             db.execute("PRAGMA user_version=999")
@@ -137,7 +150,7 @@ def test_upgrade_preserves_state_and_rolls_back_failed_candidate(tmp_path, failu
     if failure == "symlink":
         assert not list((tmp_path / "unrelated").iterdir())
     commands = (tmp_path / "commands").read_text()
-    if failure in {"schema", "symlink", "artifact", "inflight"}:
+    if failure in {"schema", "symlink", "artifact", "inflight", "trial", "health-job"}:
         assert '"systemctl", "stop"' not in commands
     if failure == "health":
         assert '"systemctl", "start"' in commands
