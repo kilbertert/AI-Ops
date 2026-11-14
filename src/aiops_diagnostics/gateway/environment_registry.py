@@ -18,6 +18,7 @@ from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, p
 from aiops_diagnostics.gateway.deployment_environment import canonical_environment
 
 SCHEMA = "aiops-environment-registry/1"
+MANAGED_SCHEMA = "aiops-environment-registry/2"
 MAX_BYTES = 8 * 1024 * 1024
 ACTOR_PATTERN = re.compile(r"[A-Za-z0-9_.@-]{1,128}")
 
@@ -26,19 +27,15 @@ class RegistryError(ValueError):
     pass
 
 
-def validate(rows: object) -> list[dict]:
+def validate(rows: object, *, managed: bool = False) -> list[dict]:
     if not isinstance(rows, list) or not 1 <= len(rows) <= 64:
         raise RegistryError("环境清单须包含1至64个环境")
     identifiers, endpoints = set(), set()
     for row in rows:
-        if not isinstance(row, dict) or set(row) != {
-            "id",
-            "enabled",
-            "gateway_url",
-            "cpms_base_url",
-            "config_ref",
-            "tenants",
-        }:
+        fields = {"id", "enabled", "gateway_url", "cpms_base_url", "config_ref", "tenants"}
+        if managed:
+            fields |= {"name", "company_gateway_url"}
+        if not isinstance(row, dict) or set(row) != fields:
             raise RegistryError("环境登记字段不完整或含未知字段")
         identifier = row["id"]
         if not isinstance(identifier, str) or canonical_environment(identifier) != identifier:
@@ -67,20 +64,78 @@ def validate(rows: object) -> list[dict]:
         endpoints.add(endpoint)
         if not isinstance(row["config_ref"], str) or not Path(row["config_ref"]).is_absolute():
             raise RegistryError("环境配置引用须为绝对路径")
+        if managed:
+            _display_name(row["name"])
+            endpoint = row["company_gateway_url"]
+            if endpoint:
+                from urllib.parse import urlsplit
+
+                if (
+                    not isinstance(endpoint, str)
+                    or urlsplit(endpoint).scheme != "https"
+                    or any(c.isspace() or ord(c) < 32 for c in endpoint)
+                    or require_secure_endpoint(endpoint, what="公司网关") != endpoint
+                ):
+                    raise RegistryError("公司网关须为规范HTTPS地址")
+            elif not isinstance(endpoint, str):
+                raise RegistryError("公司网关地址无效")
         tenants = row["tenants"]
         if not isinstance(tenants, list) or len(tenants) > 10000:
             raise RegistryError("租户清单无效")
         seen = set()
         for tenant in tenants:
-            if not isinstance(tenant, dict) or set(tenant) != {"id", "enabled"}:
+            tenant_fields = {"id", "enabled", "name"} if managed else {"id", "enabled"}
+            if not isinstance(tenant, dict) or set(tenant) != tenant_fields:
                 raise RegistryError("租户登记字段无效")
             tid = tenant["id"]
             if not isinstance(tid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tid):
                 raise RegistryError("租户编号无效")
             if tid in seen or type(tenant["enabled"]) is not bool:
                 raise RegistryError("租户编号重复或启用状态无效")
+            if managed:
+                _display_name(tenant["name"])
             seen.add(tid)
     return rows
+
+
+def _display_name(value):
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= 128
+        or value != value.strip()
+        or any(ord(c) < 32 or ord(c) == 127 for c in value)
+    ):
+        raise RegistryError("名称须为1至128个可显示字符")
+
+
+def validate_managers(managers, rows):
+    if not isinstance(managers, list) or len(managers) > 256:
+        raise RegistryError("环境管理授权无效")
+    environments, seen = {r["id"] for r in rows}, set()
+    for manager in managers:
+        if not isinstance(manager, dict) or set(manager) != {
+            "environment",
+            "tenant_id",
+            "user_id",
+            "environments",
+        }:
+            raise RegistryError("环境管理授权字段无效")
+        for key in ("environment", "tenant_id", "user_id"):
+            if not isinstance(manager[key], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", manager[key]):
+                raise RegistryError("环境管理主体无效")
+        scope = manager["environments"]
+        if (
+            manager["environment"] not in environments
+            or not isinstance(scope, list)
+            or not scope
+            or any(not isinstance(v, str) or v not in environments for v in scope)
+            or len(scope) != len(set(scope))
+        ):
+            raise RegistryError("环境管理范围无效")
+        identity = tuple(manager[k] for k in ("environment", "tenant_id", "user_id"))
+        if identity in seen:
+            raise RegistryError("环境管理主体重复")
+        seen.add(identity)
 
 
 def _unique_object(pairs):
@@ -102,9 +157,17 @@ def load(path: str | Path) -> dict:
         if path.stat().st_size > MAX_BYTES:
             raise RegistryError("登记文件超过大小上限")
         body = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
-        if not isinstance(body, dict) or set(body) != {"schema", "revision", "environments", "audit"}:
+        if not isinstance(body, dict):
             raise RegistryError("登记文件形状错误")
-        if body["schema"] != SCHEMA or type(body["revision"]) is not int or body["revision"] < 1:
+        managed = body.get("schema") == MANAGED_SCHEMA
+        fields = {"schema", "revision", "environments", "audit"} | ({"managers"} if managed else set())
+        if set(body) != fields:
+            raise RegistryError("登记文件形状错误")
+        if (
+            body["schema"] not in (SCHEMA, MANAGED_SCHEMA)
+            or type(body["revision"]) is not int
+            or body["revision"] < 1
+        ):
             raise RegistryError("登记版本无效")
         if not isinstance(body["audit"], list) or len(body["audit"]) != body["revision"]:
             raise RegistryError("登记审计不完整")
@@ -123,17 +186,21 @@ def load(path: str | Path) -> dict:
                 or format_stored_time(parse_stored_time(record["at"])) != record["at"]
             ):
                 raise RegistryError("登记审计时间错误")
-        validate(body["environments"])
+        validate(body["environments"], managed=managed)
+        if managed:
+            validate_managers(body["managers"], body["environments"])
         return body
     except (OSError, ValueError, TypeError, PrivatePathError) as exc:
         raise RegistryError("ENVIRONMENT_REGISTRY_UNAVAILABLE") from exc
 
 
-def apply(path: Path, rows: list[dict], *, expected_revision: int, actor: str) -> int:
+def apply(path: Path, rows: list[dict], *, expected_revision: int, actor: str, managers=None) -> int:
     import fcntl
     import os
 
-    validate(rows)
+    validate(rows, managed=managers is not None)
+    if managers is not None:
+        validate_managers(managers, rows)
     if type(expected_revision) is not int or expected_revision < 0:
         raise RegistryError("登记预期版本必须是非负整数")
     if not isinstance(actor, str) or not ACTOR_PATTERN.fullmatch(actor):
@@ -152,9 +219,11 @@ def apply(path: Path, rows: list[dict], *, expected_revision: int, actor: str) -
         old = load(path) if path.exists() or path.is_symlink() else {"revision": 0, "audit": []}
         if old["revision"] != expected_revision:
             raise RegistryError("ENVIRONMENT_REGISTRY_REVISION_CONFLICT")
+        if old.get("schema") == MANAGED_SCHEMA and managers is None:
+            raise RegistryError("ENVIRONMENT_REGISTRY_DOWNGRADE_REFUSED")
         revision = expected_revision + 1
         body = {
-            "schema": SCHEMA,
+            "schema": MANAGED_SCHEMA if managers is not None else SCHEMA,
             "revision": revision,
             "environments": rows,
             "audit": [
@@ -162,6 +231,8 @@ def apply(path: Path, rows: list[dict], *, expected_revision: int, actor: str) -
                 {"revision": revision, "actor": actor, "at": format_stored_time(now_utc())},
             ],
         }
+        if managers is not None:
+            body["managers"] = managers
         content = json.dumps(body, ensure_ascii=False, indent=2) + "\n"
         if len(content.encode()) > MAX_BYTES:
             raise RegistryError("登记文件超过大小上限")

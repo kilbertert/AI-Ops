@@ -32,7 +32,7 @@ def configure_admin(
 
 @admin_app.command("environment-registry")
 def environment_registry_command(
-    action: Annotated[str, typer.Argument(help="check（只读摘要）或 apply（发布登记）")],
+    action: Annotated[str, typer.Argument(help="check（摘要）、apply（发布）、migrate（升级管理目录）")],
     registry: Annotated[Path, typer.Option("--registry", help="独立私有目录内的登记JSON")],
     file: Annotated[Path | None, typer.Option("--file", help="环境数组JSON（0600）")] = None,
     expected_revision: Annotated[int, typer.Option("--expected-revision", help="预期版本，首次为0")] = 0,
@@ -49,11 +49,38 @@ def environment_registry_command(
             validate_private_file(file)
             if file.stat().st_size > environment_registry.MAX_BYTES:
                 raise ValueError("输入过大")
+            incoming = json.loads(file.read_text(), object_pairs_hook=environment_registry._unique_object)
+            managers = None
+            if isinstance(incoming, dict):
+                if set(incoming) != {"environments", "managers"}:
+                    raise ValueError("新版输入须含environments和managers")
+                managers, incoming = incoming["managers"], incoming["environments"]
+                if managers is None:
+                    raise ValueError("managers须为数组")
             environment_registry.apply(
-                registry, json.loads(file.read_text()), expected_revision=expected_revision, actor=actor
+                registry, incoming, expected_revision=expected_revision, actor=actor, managers=managers
+            )
+        elif action == "migrate":
+            from aiops_diagnostics.common.private_files import write_private_text
+
+            old = environment_registry.load(registry)
+            if old["schema"] == environment_registry.MANAGED_SCHEMA:
+                raise ValueError("目录已经升级")
+            if old["revision"] != expected_revision:
+                raise environment_registry.RegistryError("ENVIRONMENT_REGISTRY_REVISION_CONFLICT")
+            backup = registry.with_name(registry.name + f".v1-r{expected_revision}.backup")
+            if backup.exists() or backup.is_symlink():
+                raise ValueError("备份已存在，请核对后再迁移")
+            write_private_text(backup, json.dumps(old, ensure_ascii=False, indent=2) + "\n")
+            for row in old["environments"]:
+                row.update(name=row["id"], company_gateway_url="")
+                for tenant in row["tenants"]:
+                    tenant["name"] = tenant["id"]
+            environment_registry.apply(
+                registry, old["environments"], expected_revision=expected_revision, actor=actor, managers=[]
             )
         elif action != "check":
-            raise ValueError("action只能是check或apply")
+            raise ValueError("action只能是check、apply或migrate")
         body = environment_registry.load(registry)
     except (OSError, ValueError, RuntimeError) as exc:
         typer.echo(
