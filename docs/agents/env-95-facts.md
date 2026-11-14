@@ -97,3 +97,5 @@ Gateway 数据库用 `file:<path>?mode=ro` 及 `PRAGMA query_only=ON`，仅查�
 ## 5. 新实例重建
 
 用户已指定95清理旧AI-Ops并验证平台自维护环境登记。构建、安装、退休与恢复方法见[重建手册](../../ops/environments/env95/README.md)。状态以本轮验收记录为准，资产存在不表示已执行。
+
+2026-11-14：新Gateway已从合并制品重建为1.10.2+b1e509be1de7，旧服务停止但尚未退休；真实租户准入通过，完整业务仍待验。[本轮验收](../validation/2026-11-14-env95-live-acceptance.md)、[共享服务接入](env95-shared-services.md)。
