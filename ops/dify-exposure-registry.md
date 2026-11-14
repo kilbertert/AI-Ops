@@ -28,6 +28,8 @@
 | **撤回** | `/v1/dify/retract` | POST | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`，与发布同一把） | 运营撤回这一版：停止对**新请求**与**尚未放行结果**的交付。请求体同样只有一个 `app_id`。三件事必须同时成立：管理行改成 `retracted`（**不删行** —— 删行会让请求掉回直读，那是冒充停用）、在飞运行被收敛（本地终态 + 撤销取数凭据 + 请求 Dify stop）、历史与在飞正文不再交付（回读守卫发现当前绑定不再指向签发时那一版）。**不自动恢复任何旧版**：恢复是另一次显式发布。已发出的数据不承诺追回 |
 | **工作区查询（内部，非 Dify）** | `/v1/dify/workspace` | GET | **网关自己的内部令牌**（`X-Internal-Token` + `X-Request-Timestamp`，HMAC，`AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET`） | 回答"这个租户在本环境里的 workspace 是哪一个"（#879 / ADR-0059）。**调用方是我们自己的另外两个进程**（登录代理、发布桥），不是 Dify —— 它登记在这里，是因为 CI 的判据按 `/v1/dify/` 前缀取集合，不登记等于在这条判据里开一个洞。Dify 拿不到这把令牌，所以它**不**扩大 Dify 的可达面；输出也只有一个 UUID，拿到它还得有 `ADMIN_API_KEY` |
 
+| 业务环境目录 | `/v1/dify/management/environments` | GET | 发布服务key＋正常公司会话＋显式环境授权 | 仅返回获授权环境与已登记租户，不返回连接/配置/授权主体 |
+| 业务环境准入维护 | `/v1/dify/management/environments` | POST | 同上，预期目录版本 | 仅名称/准入更新；拒绝URL、路径、管理员和新租户注入 |
 | 平台客户与来源目录 | `/v1/dify/management/catalogue` | GET | 发布服务key＋正常Dify公司会话 | 平台权限与公司绑定客户目录交集，只返回可管理客户及来源 |
 | 管家管理状态 | `/v1/dify/management/status` | POST | 同上，校验app租户归属 | 返回实际模型和正式版本；非受管应用不启用 |
 | 当前账号可用性 | `/v1/dify/management/readiness` | POST | 同上，当前公司身份 | 返回自身站点范围是否可用，不读取订单 |

@@ -47,6 +47,8 @@ def handle(handler, bridge):
         frozenset(
             {
                 "action",
+                "environment",
+                "enabled",
                 "app_id",
                 "source_app_id",
                 "source_version",
@@ -77,6 +79,8 @@ def handle(handler, bridge):
     action = payload.pop("action", "")
     paths = {
         "catalogue": ("GET", "/catalogue"),
+        "environments": ("GET", "/environments"),
+        "environment-update": ("POST", "/environments"),
         "status": ("POST", "/status"),
         "readiness": ("POST", "/readiness"),
         "create": ("POST", "/operations"),
@@ -106,6 +110,26 @@ def handle(handler, bridge):
     else:
         raise _Rejected(400, "无效管理动作")
     if (method == "GET" or action == "retry") and payload:
+        raise _Rejected(400, "无效参数")
+    if action == "environment-update":
+        required = {"environment", "revision", "name", "enabled"}
+        if (
+            not required.issubset(payload)
+            or set(payload) - (required | {"tenant_id"})
+            or type(payload["enabled"]) is not bool
+            or type(payload["revision"]) is not int
+            or payload["revision"] < 1
+            or not isinstance(payload["name"], str)
+            or not 1 <= len(payload["name"]) <= 128
+            or any(
+                not isinstance(payload.get(key), str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", payload[key])
+                for key in ("environment", "tenant_id")
+                if key in payload
+            )
+        ):
+            raise _Rejected(400, "无效环境管理参数")
+    elif set(payload) & {"environment", "enabled"}:
         raise _Rejected(400, "无效参数")
     _validate_scope_and_sources(action, payload, _Rejected)
     if action in {"run-logs", "run-log"}:

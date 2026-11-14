@@ -32,7 +32,7 @@ def configure_admin(
 
 @admin_app.command("environment-registry")
 def environment_registry_command(
-    action: Annotated[str, typer.Argument(help="check（只读摘要）或 apply（发布登记）")],
+    action: Annotated[str, typer.Argument(help="check（摘要）、apply（发布）、migrate（升级管理目录）")],
     registry: Annotated[Path, typer.Option("--registry", help="独立私有目录内的登记JSON")],
     file: Annotated[Path | None, typer.Option("--file", help="环境数组JSON（0600）")] = None,
     expected_revision: Annotated[int, typer.Option("--expected-revision", help="预期版本，首次为0")] = 0,
@@ -49,11 +49,21 @@ def environment_registry_command(
             validate_private_file(file)
             if file.stat().st_size > environment_registry.MAX_BYTES:
                 raise ValueError("输入过大")
+            incoming = json.loads(file.read_text(), object_pairs_hook=environment_registry._unique_object)
+            managers = None
+            if isinstance(incoming, dict):
+                if set(incoming) != {"environments", "managers"}:
+                    raise ValueError("新版输入须含environments和managers")
+                managers, incoming = incoming["managers"], incoming["environments"]
+                if managers is None:
+                    raise ValueError("managers须为数组")
             environment_registry.apply(
-                registry, json.loads(file.read_text()), expected_revision=expected_revision, actor=actor
+                registry, incoming, expected_revision=expected_revision, actor=actor, managers=managers
             )
+        elif action == "migrate":
+            environment_registry.migrate(registry, expected_revision=expected_revision, actor=actor)
         elif action != "check":
-            raise ValueError("action只能是check或apply")
+            raise ValueError("action只能是check、apply或migrate")
         body = environment_registry.load(registry)
     except (OSError, ValueError, RuntimeError) as exc:
         typer.echo(
@@ -62,6 +72,8 @@ def environment_registry_command(
                     "error": "ENVIRONMENT_REGISTRY_REFUSED",
                     "reason": str(exc)
                     if isinstance(exc, environment_registry.RegistryError)
+                    else "ENVIRONMENT_REGISTRY_IO_FAILED"
+                    if isinstance(exc, OSError)
                     else "INVALID_INPUT",
                 }
             )

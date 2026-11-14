@@ -38,6 +38,7 @@ import {
 import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { useEffect, useState } from 'react'
 import { entryLabels, failureText, manage, messages, steps } from '@/service/aiops-management'
+import EnvironmentManagement from './aiops-environments'
 
 type Item = { id: string; name: string }
 type Operation = {
@@ -318,6 +319,15 @@ export function ManagedPublish({
 }
 
 export default function TenantSetup() {
+  return (
+    <>
+      <EnvironmentManagement />
+      <TenantServices />
+    </>
+  )
+}
+
+function TenantServices() {
   const [catalogue, setCatalogue] = useState<{
     platform: boolean
     tenants: Item[]
