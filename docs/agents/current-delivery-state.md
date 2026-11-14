@@ -1,5 +1,15 @@
 # 当前交付状态索引
 
+## 客服选库与提示词发布恢复（2026-11-14）
+
+PR #1514已合并abef9374，CI5053通过/10跳过，CD43553080222成功；
+Gateway 1.10.1修复已部署，Dify Web consumer-selection-abef9374已配套。
+优链充在原受管页面移除失效旧引用，保留新知识库与产品提示词，正式新应用V1/revision8；
+原Dify预览13.37秒成功，正式客户端API8.13秒成功，精确QA使用新版本且返回新库引用。
+提示词和选库在工作流/兼容快照一致，其他路由未被本次发布改变。
+后续#1510部署后Gateway为1.10.1+c9b311e9f680，包含本修复。
+原生App/H5屏幕及知识内容准确性未验收。详见[上线回执](../validation/2026-11-14-consumer-publication-selection-live.md)。
+
 ## 「客户案例」快捷指令整体退役（2026-11-14）
 
 `case_exploration` 从 `_BUNDLED_SHORTCUTS` 两个入口与 `_SHARED_ACTION_FIELDS` 摘除
