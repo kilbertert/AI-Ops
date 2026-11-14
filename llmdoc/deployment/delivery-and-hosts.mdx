@@ -12,13 +12,21 @@ code:
     - deploy/deploy-41.sh
     - deploy/classify-remote-result.sh
     - src/aiops_diagnostics/gateway/gateway_schema.py
+    - src/aiops_diagnostics/__init__.py
     - deploy/record-manual-deploy.sh
     - deploy/node-runtime/README.md
     - deploy/dify-36/README.md
     - deploy/dify-36/web-patches/1.17.1/aiops-operator-run-logs.tsx
     - deploy/dify-36/web-patches/1.17.1/aiops-operator-run-logs.browser.spec.tsx
+    - deploy/dify-36/web-patches/1.17.1/16-managed-knowledge-selection.patch
+    - deploy/dify-36/web-patches/1.17.1/aiops-management.ts
+    - deploy/dify-36/web-patches/1.17.1/aiops-management.tsx
+    - deploy/dify-36/web-patches/1.17.1/aiops-management.browser.spec.tsx
+    - deploy/dify-36/web-patches/1.17.1/aiops-workflow-managed.tsx
+    - deploy/dify-36/web-patches/1.17.1/aiops-workflow-managed.browser.spec.tsx
     - ops/README.md
     - ops/dify-exposure-registry.md
+    - ops/nginx/business-environment-ingress.md
     - ops/environments/env-41.toml
     - ops/environments/env-95.toml
     - ops/environments/env95/README.md
@@ -28,6 +36,12 @@ code:
     - ops/environments/env95/upgrade.sh
     - ops/environments/env95/retire.sh
     - ops/environments/env95/render-callbacks.py
+    - ops/environments/env95/aiops-gateway-95.service
+    - ops/environments/env95/node-callback.service
+    - ops/environments/env95/node-runtime.override.yaml
+    - ops/environments/env95/node-runtime.service
+    - ops/environments/env95/shared-services-tunnel.service
+    - ops/environments/env95/zz-init-complete.sql
     - tools/content/render_business_ingress.py
     - deploy/m2-live-03/bootstrap_platform.py
     - .dev-host.toml
@@ -39,6 +53,10 @@ code:
     - .github/workflows/gitlab-mirror.yml
     - .sandcastle/cd-watch.mjs
     - .sandcastle/deploy-state.mjs
+    - tests/integrations/test_business_environment_ingress.py
+    - tests/tooling/test_env95_node_runtime.py
+    - tests/tooling/test_env95_upgrade.py
+    - tests/tooling/test_m2_live03_bootstrap.py
 ---
 
 # 交付面与主机拓扑
