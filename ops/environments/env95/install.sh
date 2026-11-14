@@ -7,15 +7,40 @@ umask 077
 bundle=$(realpath -- "$1")
 revision=$(cat "$bundle/REVISION")
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 2
-(cd "$bundle" && sha256sum --check SHA256SUMS >/dev/null)
+python3 - "$bundle" <<'PYPREFLIGHT'
+import hashlib,pathlib,sys
+root=pathlib.Path(sys.argv[1])
+expected={}
+for line in (root/'SHA256SUMS').read_text().splitlines():
+    digest,name=line.split('  ',1)
+    p=pathlib.PurePosixPath(name)
+    assert not p.is_absolute() and '..' not in p.parts and name not in expected
+    expected[name.removeprefix('./')]=digest
+actual={str(p.relative_to(root)) for p in root.rglob('*') if p.is_file() and p.name!='SHA256SUMS'}
+assert actual==set(expected), 'artifact file set mismatch'
+assert {'REVISION','ops/environments/env95/aiops-gateway-95.service'} <= actual
+assert all(name=='REVISION' or name.startswith('ops/environments/env95/') or name.startswith('wheelhouse/') for name in actual)
+assert sum(name.startswith('wheelhouse/aiops_diagnostics-') and name.endswith('.whl') for name in actual)==1
+assert all(not name.startswith('wheelhouse/') or name.endswith('.whl') for name in actual)
+assert not any(p.is_symlink() for p in root.rglob('*')), 'artifact symlink refused'
+for name,digest in expected.items():
+    assert hashlib.sha256((root/name).read_bytes()).hexdigest()==digest, 'artifact digest mismatch'
+for value in ['/opt/aiops-95','/var/lib/aiops-95','/var/backups/aiops-95','/etc/aiops-95','/home/aiops/AI-Ops','/home/aiops/.local/share/aiops-diagnostics']:
+    p=pathlib.Path(value)
+    assert not any(x.is_symlink() for x in [p,*p.parents]), 'installation path symlink refused'
+PYPREFLIGHT
+exec 9>/run/lock/aiops-95-install.lock
+flock -n 9 || { echo '另一个安装正在执行' >&2; exit 2; }
 [ -s /etc/aiops-95/gateway.env ] && [ -s /etc/aiops-95/server.env ] || {
   echo '先按接入手册准备本环境私有配置，不能复制另一环境身份' >&2; exit 2;
 }
-release=/opt/aiops-95/releases/$revision
-backup=/var/backups/aiops-95/$revision
-[ ! -e "$release" ] && [ ! -e "$backup" ] || { echo '本修订已执行，先核对现状' >&2; exit 2; }
+attempt=$(date -u +%Y%m%dT%H%M%SZ)-$$
+release=/opt/aiops-95/releases/$revision-$attempt
+backup=/var/backups/aiops-95/$revision/$attempt
+[ ! -e "$release" ] && [ ! -e "$backup" ] || exit 2
+[ ! -e /var/lib/aiops-95/installed-revision ] || { echo '首次重建已完成，不能覆盖已运行实例' >&2; exit 2; }
 install -d -m 755 /opt/aiops-95 /opt/aiops-95/releases
-install -d -m 700 /var/backups/aiops-95 "$backup"
+install -d -m 700 /var/backups/aiops-95 "/var/backups/aiops-95/$revision" "$backup"
 install -d -m 700 -o aiops -g aiops /var/lib/aiops-95
 install -d -m 755 "$release"
 cp -a "$bundle/." "$release/"
@@ -68,6 +93,14 @@ rollback() {
   cleanup
   if [ "$rc" != 0 ] && [ "$cutover" = 1 ]; then
     systemctl stop aiops-gateway-95.service >/dev/null 2>&1 || true
+    if [ -n "$old_current" ]; then
+      ln -s "$old_current" /opt/aiops-95/current.rollback
+      mv -Tf /opt/aiops-95/current.rollback /opt/aiops-95/current
+    else
+      rm -f /opt/aiops-95/current
+    fi
+    rm -f /var/lib/aiops-95/installed-revision /var/lib/aiops-95/installed-backup
+    systemctl disable aiops-gateway-95.service >/dev/null 2>&1 || true
     systemctl start aiops-gateway.service
     echo '切换失败，旧服务已恢复；保留新现场' >&2
   fi
@@ -76,6 +109,14 @@ rollback() {
 trap rollback EXIT
 cutover=1
 systemctl stop aiops-gateway.service
+# 最后一次一致快照在旧服务停止后，包含候选预检期间可能完成的写入。
+python3 - "$backup/gateway-consistent.db" <<'PYFINALDB'
+import sqlite3,sys
+with sqlite3.connect('file:/home/aiops/.local/share/aiops-diagnostics/gateway/gateway.db?mode=ro',uri=True) as source:
+    with sqlite3.connect(sys.argv[1]) as target:
+        source.backup(target)
+        assert target.execute('PRAGMA quick_check').fetchone()[0]=='ok'
+PYFINALDB
 ln -s "$release" /opt/aiops-95/current.new
 mv -Tf /opt/aiops-95/current.new /opt/aiops-95/current
 install -m 644 "$bundle/ops/environments/env95/aiops-gateway-95.service" /etc/systemd/system/
@@ -99,6 +140,7 @@ assert body['ok'] and body['business_mutations']=='disabled'
 assert body['version'].endswith('+'+sys.argv[2])
 PYVERIFY
 systemctl enable aiops-gateway-95.service
+printf '%s\n' "$backup" > /var/lib/aiops-95/installed-backup
 printf '%s\n' "$revision" > /var/lib/aiops-95/installed-revision
 cutover=0
 printf '%s\n' '新服务已切换。先完成真实验收，再执行retire.sh清理旧路径。'

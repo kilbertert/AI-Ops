@@ -28,8 +28,10 @@ AIOPS_GATEWAY_DATA_HOME=/var/lib/aiops-95/gateway、AIOPS_GATEWAY_ENVIRONMENT_RE
 ## 3. 退休与恢复
 
 新实例达到本轮验收条件后才执行`retire.sh REV`，停止/禁用旧服务并把旧代码、配置、数据移出原运行路径。
-归档保留在`/var/backups/aiops-95/REV`，不删除恢复副本、公司数据库、Redis、TDengine或其他网站资源。
+归档保留在`/var/backups/aiops-95/REV/ATTEMPT`，不删除恢复副本、公司数据库、Redis、TDengine或其他网站资源。
 恢复先停新服务，确认旧路径未被占用后从retired目录按原路径移回；或用已校验legacy.tar还原。
 SQLite用备份中的gateway-consistent.db覆盖旧库，删除仅属于旧库的-wal/-shm后启动旧服务；此前须确认两服务均停止。
 `systemctl daemon-reload`，启动aiops-gateway，健康应回到原0.1.0；新目录保留用于排查。
 备份持有凭据必须root0700/0600，不向公开仓库或CI上传。
+
+每次失败尝试保留独立备份/制品目录，可重新执行同修订；首次安装成功后拒绝再次覆盖。实际恢复目录读取`/var/lib/aiops-95/installed-backup`。退休中断可重跑，只跳过已移动且原路径已不存在的项，有冲突即停止。
