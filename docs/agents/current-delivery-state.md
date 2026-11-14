@@ -8,7 +8,7 @@
 41 数据侧已于同日 disable 全部 5 行（2 平台 + 3 租户，备份
 `/var/backups/aiops-41/shortcuts-retire-20261114-104704/`），`list_effective`
 逐租户逐入口断言不含该 code；真实会话 HTTP 面标未验（自签身份过不了身份类别闸，
-见 validation.md 同日记录）。前端硬编码按钮的既有偏差仍在，界面可能仍渲染它。
+见 `../validation/2026-11-14-case-exploration-retired.md`）。前端硬编码按钮的既有偏差仍在，界面可能仍渲染它。
 
 ## 跨服务器多租户第一片（2026-11-13）
 
