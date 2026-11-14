@@ -1901,8 +1901,9 @@ class GatewayRuntime:
         同一个答案仍能从会话详情读到，还会被当模型上下文复用。
 
         The ONE implementation of "a job finished, so its turn can be closed":
-        both the qa/promo line and the diagnosis line call it, so the two can
-        no longer disagree about what a finished turn looks like.
+        both the qa line and the diagnosis line call it, so the two can
+        no longer disagree about what a finished turn looks like. (The promo
+        line once among them retired with the Python harness in #1125.)
 
         Cancelled/failed turns drop their row: an interrupted generation never
         survives as a complete reply (#172).
