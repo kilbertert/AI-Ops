@@ -12,9 +12,9 @@
    公钥唯一注释`aiops-env95-shared`，重复即核对不追加；旧key及权限不改。
 3. 95的`tunnel.env`（0600）只设置`AIOPS_SHARED_SSH_TARGET`为清单指定账号/主机；具体地址留私有记录。
    从合并修订安装`ops/environments/env95/shared-services-tunnel.service`为`aiops95-shared-services-tunnel.service`，daemon-reload并启用。
-4. 端口29408/29401/29380仅绑定95回环，安装前检查没有其他监听或预留用途并记录95主机端口分配。
+4. 端口29508/29501/29580仅绑定95回环，安装前检查没有其他监听或预留用途并记录95主机端口分配。
    `/console/api/setup`通过证明传输，inner-api匿名拒绝及错误key拒绝证明接口鉴权仍生效；隧道不提供用户权限。
-5. Gateway使用29408访问Dify、29401访问inner-api、29380访问知识服务。共享服务管理key运行时从受控位置取得，
+5. Gateway使用29508访问Dify、29501访问inner-api、29580访问知识服务。共享服务管理key运行时从受控位置取得，
    不复制其他环境的会话、工作区、订单或节点身份；95工作区按环境/租户独立创建。
 
 ## 恢复

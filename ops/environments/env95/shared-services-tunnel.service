@@ -8,7 +8,7 @@ Type=simple
 User=aiops
 Group=aiops
 EnvironmentFile=/etc/aiops-95/tunnel.env
-ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ExitOnForwardFailure=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/aiops-95/ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -i /etc/aiops-95/ssh/shared-services_ed25519 -L 127.0.0.1:29408:127.0.0.1:10008 -L 127.0.0.1:29401:127.0.0.1:15001 -L 127.0.0.1:29380:127.0.0.1:9380 ${AIOPS_SHARED_SSH_TARGET}
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ExitOnForwardFailure=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/aiops-95/ssh/known_hosts -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -i /etc/aiops-95/ssh/shared-services_ed25519 -L 127.0.0.1:29508:127.0.0.1:10008 -L 127.0.0.1:29501:127.0.0.1:15001 -L 127.0.0.1:29580:127.0.0.1:9380 ${AIOPS_SHARED_SSH_TARGET}
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
