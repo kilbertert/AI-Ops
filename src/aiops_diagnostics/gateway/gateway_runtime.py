@@ -1213,7 +1213,8 @@ class GatewayRuntime:
     ) -> dict[str, Any]:
         """APP-RUNTIME-01：把「本人订单状态」交给客户节点，**立即返回**。
 
-        与 `start_assistant_qa` 的分工：那一支是零阶知识问答，会起模型循环；这一支
+        与普通 QA 入口（`start_consumer_chatflow` / `start_operator_cpms`）的分工：
+        那两支是知识问答，会起模型循环；这一支
         **不起第二个模型循环** —— 网关只派发 run 并等结果，答案来自节点交回的快照。
 
         顺序是刻意的：先建 QA（`queued`）并立刻返回（App 的 POST 不能等节点整轮），
@@ -1901,8 +1902,9 @@ class GatewayRuntime:
         同一个答案仍能从会话详情读到，还会被当模型上下文复用。
 
         The ONE implementation of "a job finished, so its turn can be closed":
-        both the qa/promo line and the diagnosis line call it, so the two can
-        no longer disagree about what a finished turn looks like.
+        both the qa line and the diagnosis line call it, so the two can
+        no longer disagree about what a finished turn looks like. (The promo
+        line once among them retired with the Python harness in #1125.)
 
         Cancelled/failed turns drop their row: an interrupted generation never
         survives as a complete reply (#172).
@@ -2013,7 +2015,7 @@ class GatewayRuntime:
                 report["curves"] = build_curves(samples, job_language)
                 report = enrich_report(report, samples, order)
             # Every terminal write below is checked, and the refusal is the
-            # same quiet exit the qa line takes (`_execute_assistant_qa`, #355):
+            # same quiet exit the qa line takes (`_execute_chat_dify_qa`, #355):
             # a refused write means the row already ended — expired, or driven
             # terminal by another path — so this job's answer is not the answer
             # anyone is waiting for. Reporting success for it is how the metric

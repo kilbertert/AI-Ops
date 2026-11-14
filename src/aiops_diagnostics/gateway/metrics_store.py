@@ -56,7 +56,7 @@ ROUTE_TYPES = frozenset(
         "diagnosis",  # gateway_runtime / gateway_api: 标准诊断
         "debug",  # gateway_runtime: 调试运行
         "clarification",  # gateway_runtime: 澄清回合
-        "promo",  # gateway_runtime: 宣传卡片（route_tag = "promo"）
+        "promo",  # 历史词表：宣传卡片路由已随 #1125 退役，保留只为读存量行
         "routing",  # gateway_runtime: 分类器自身的判定路径 (#392)
         "order_auth",  # gateway_api: ORDER_AUTH_ROUTE
         "operations_analysis",  # gateway_runtime: 运维分析面 (#697)
