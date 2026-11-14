@@ -12,3 +12,4 @@ Status: Accepted
 
 MySQL官方镜像首次初始化使用无TCP的临时服务，socket ping不能证明平台可连。95健康检查改为带身份的TCP SELECT 1，
 并为小型内部元数据库限制buffer/cache/连接数，关闭performance_schema和未使用的命名时区装载；不影响公司业务库时区。
+初始化脚本全部完成后另写元库完成标记；健康经TCP查询该标记。半初始化卷重启虽能SELECT 1也不就绪。

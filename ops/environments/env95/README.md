@@ -49,7 +49,7 @@ SQLite用备份中的gateway-consistent.db覆盖旧库，删除仅属于旧库�
 使用`deploy/node-runtime/compose.yaml`加本目录`node-runtime.override.yaml`，只在95首次创建独立
 平台、元数据库、节点和受控模型出口；节点名称node-95，环境95，合计容器内存上限1408MiB。
 源码/JAR/模型代理从合并制品来；node与platform的JAR摘要按`deploy/m2-live-03/images.lock.json`核对。
-内部MySQL通过TCP SELECT 1才算就绪；首次临时socket实例不计通过。95小型元库不使用命名时区表，
+内部MySQL通过TCP读取最后初始化脚本写入的schema完成标记才算就绪；临时socket与SQL失败后的半库重启不计通过。95小型元库不使用命名时区表，
 关闭其初装与performance_schema并限制buffer/cache/连接数；公司业务数据库保持原配置。
 制品目录另包含`services/model-proxy`、`deploy/m2-live-03/schema`和初始化脚本，不能复制其他环境运行数据。
 
