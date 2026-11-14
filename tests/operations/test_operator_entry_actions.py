@@ -1,8 +1,8 @@
 """管家端入口的两个快捷动作与「订单检测」成功路径（#427，PRD #423）。
 
 断言的只有对外可观察行为：`X-Business-Entry: operator` 下列出哪两个动作、点击
-「订单检测」得到的是订单选择器澄清还是诊断响应、点击「客户案例」在知识库未就绪时
-拿到的是明确的不可用而不是空的「未检索到」，以及消费者侧的既有行为零回归。
+「订单检测」得到的是订单选择器澄清还是诊断响应，以及消费者侧的既有行为零回归。
+（「客户案例」`case_exploration` 2026-11-14 随指令整体退役摘除，ADR-0254。）
 
 交付形状沿用 PRD 的决定：两个动作复用既有 code、不新建执行路径；「按租户 + 入口
 发布」是运营动作（数据操作），因此用例先用发布动作的同一条生命周期把种子行发布掉，
@@ -44,10 +44,6 @@ from operator_support import (
 from aiops_diagnostics.publication.shortcut_lifecycle import (
     _BUNDLED_SHORTCUTS,
 )
-
-#: 「客户案例」的点击问句：故意不含任何宣传意图线索（「案例库」「标杆」等都没出现），
-#: 因此只有入口侧的动作行能把这次点击判成案例探索——若意图改由文案推导，本条会红。
-CASE_QUESTION = "推荐一些内容给我看看"
 
 
 def _app(
@@ -243,9 +239,6 @@ def test_the_clicked_order_diagnosis_shares_the_clarification_shape_across_entri
     assert operator_body["missing_fields"] == consumer_body["missing_fields"] == ["order_no"]
     assert operator_body["message"] == consumer_body["message"]
     assert runtime.diagnoses == []
-
-
-# --- 3. 「客户案例」在知识库未就绪时返回明确的不可用 --------------------------
 
 
 # --- 3. 「运维巡检」：点击 → 一张跨订单的运维卡（#721） -------------------------

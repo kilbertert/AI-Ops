@@ -1,5 +1,15 @@
 # 当前交付状态索引
 
+## 「客户案例」快捷指令整体退役（2026-11-14）
+
+`case_exploration` 从 `_BUNDLED_SHORTCUTS` 两个入口与 `_SHARED_ACTION_FIELDS` 摘除
+（PR #1510，ADR-0254）：consumer 剩 智能检测/故障上报/电池报告横幅，operator 剩
+订单检测/运维巡检。只摘按钮 —— 自由文本的案例线索仍走宣传面，意图与文案保留。
+41 数据侧已于同日 disable 全部 5 行（2 平台 + 3 租户，备份
+`/var/backups/aiops-41/shortcuts-retire-20261114-104704/`），`list_effective`
+逐租户逐入口断言不含该 code；真实会话 HTTP 面标未验（自签身份过不了身份类别闸，
+见 validation.md 同日记录）。前端硬编码按钮的既有偏差仍在，界面可能仍渲染它。
+
 ## 跨服务器多租户第一片（2026-11-13）
 
 调查#1500已合并35a21b70，订正“JWT无domain就只能固定部署”的旧推断：公司应用市场已有
