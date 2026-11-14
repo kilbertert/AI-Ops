@@ -72,6 +72,8 @@ def environment_registry_command(
                     "error": "ENVIRONMENT_REGISTRY_REFUSED",
                     "reason": str(exc)
                     if isinstance(exc, environment_registry.RegistryError)
+                    else "ENVIRONMENT_REGISTRY_IO_FAILED"
+                    if isinstance(exc, OSError)
                     else "INVALID_INPUT",
                 }
             )
