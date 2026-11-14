@@ -94,11 +94,12 @@ rollback() {
   if [ "$rc" != 0 ] && [ "$cutover" = 1 ]; then
     systemctl stop aiops-gateway-95.service >/dev/null 2>&1 || true
     if [ -n "$old_current" ]; then
-      ln -s "$old_current" /opt/aiops-95/current.rollback
-      mv -Tf /opt/aiops-95/current.rollback /opt/aiops-95/current
+      ln -s "$old_current" "/opt/aiops-95/current.rollback-$attempt"
+      mv -Tf "/opt/aiops-95/current.rollback-$attempt" /opt/aiops-95/current
     else
       rm -f /opt/aiops-95/current
     fi
+    rm -f "/opt/aiops-95/current.new-$attempt"
     rm -f /var/lib/aiops-95/installed-revision /var/lib/aiops-95/installed-backup
     systemctl disable aiops-gateway-95.service >/dev/null 2>&1 || true
     systemctl start aiops-gateway.service
@@ -117,8 +118,8 @@ with sqlite3.connect('file:/home/aiops/.local/share/aiops-diagnostics/gateway/ga
         source.backup(target)
         assert target.execute('PRAGMA quick_check').fetchone()[0]=='ok'
 PYFINALDB
-ln -s "$release" /opt/aiops-95/current.new
-mv -Tf /opt/aiops-95/current.new /opt/aiops-95/current
+ln -s "$release" "/opt/aiops-95/current.new-$attempt"
+mv -Tf "/opt/aiops-95/current.new-$attempt" /opt/aiops-95/current
 install -m 644 "$bundle/ops/environments/env95/aiops-gateway-95.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl start aiops-gateway-95.service
