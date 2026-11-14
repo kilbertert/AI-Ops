@@ -1,0 +1,19 @@
+# 与 deploy/node-runtime/compose.yaml 合并；95独立平台/数据库/节点，不复制公司数据。
+services:
+  model-proxy:
+    mem_limit: 64m
+    entrypoint: [python, /opt/model-proxy/model_proxy.py]
+    volumes:
+      - ${AIOPS_NODE_DIST:?}/services/model-proxy:/opt/model-proxy:ro
+  store:
+    mem_limit: 384m
+    volumes:
+      - ${AIOPS_NODE_DIST:?}/deploy/m2-live-03/schema:/docker-entrypoint-initdb.d:ro
+  platform:
+    mem_limit: 640m
+    command: [java, -Xmx448m, -jar, /opt/platform/snail-ai-server-exec.jar, --spring.config.additional-location=file:/etc/m2live/]
+  node:
+    mem_limit: 320m
+    environment:
+      AIOPS_NODE_NAME: node-95
+    command: [java, -Xmx192m, -Daiops.node.tools-file=/etc/m2live/operator-tools.json, -jar, /app/aiops-execution-node.jar, --aiops.node.managed-publication=true]

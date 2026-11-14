@@ -53,5 +53,8 @@ release = "/opt/aiops-95"
 new_config = "/etc/aiops-95"
 new_state = "/var/lib/aiops-95"
 backups = "/var/backups/aiops-95"
+node_artifacts = "/opt/aiops-node-runtime"
+node_config = "/etc/aiops-node-runtime"
+node_state = "/var/lib/aiops-node-runtime"
 
 # 95重建的项目制品与独立状态路径；旧路径在env-95-facts手册保留为恢复资料。
