@@ -249,3 +249,37 @@ def test_same_gateway_cannot_be_two_environments(pair):
 def test_unsafe_ip_or_dns_alias_is_rejected(url):
     with pytest.raises(ValueError):
         render(catalogue(url), "127.0.0.1:9876", trusted_ca="/tmp/ca.crt")
+
+
+def test_registry_is_the_only_upstream_authority(tmp_path, nginx):
+    from aiops_diagnostics.gateway.environment_registry import apply
+
+    project = runpy.run_path(str(ROOT / "tools/content/render_business_ingress.py"))
+    path = tmp_path / "registry" / "registry.json"
+    rows = [
+        {
+            "id": "env-a",
+            "enabled": True,
+            "gateway_url": "https://a.example.test",
+            "cpms_base_url": "https://cpms.example.test",
+            "config_ref": "/etc/example/server.env",
+            "tenants": [],
+        }
+    ]
+    apply(path, rows, expected_revision=0, actor="operator")
+    keys = {
+        "schema": "aiops-ingress-credentials/1",
+        "credentials": [{"id": "env-a", "ingress_key": "a" * 64, "company_source_key": "b" * 64}],
+    }
+    result = project["registered_catalogue"](path, keys)
+    assert result["environments"][0]["gateway_url"] == "https://a.example.test"
+    keys["credentials"][0]["gateway_url"] = "https://other.example.test"
+    with pytest.raises(ValueError):
+        project["registered_catalogue"](path, keys)
+    del keys["credentials"][0]["gateway_url"]
+    rows[0]["enabled"] = False
+    apply(path, rows, expected_revision=1, actor="operator")
+    result = project["registered_catalogue"](path, keys)
+    assert result["environments"] == []
+    port = nginx(lambda port: render(result, f"127.0.0.1:{port}"))
+    assert request(port, "a" * 64)[0] == 403

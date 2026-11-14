@@ -75,6 +75,7 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     ),
     "charging_status_base_url": SettingSource("AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
     "business_environments_file": SettingSource("AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE"),
+    "environment_registry_file": SettingSource("AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE"),
     "consumer_order_chat_enabled": SettingSource(
         "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED", kind="bool", default=False
     ),
@@ -167,9 +168,10 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     "log_level": SettingSource("AIOPS_GATEWAY_LOG_LEVEL", file=False, default=DEFAULT_LOG_LEVEL),
 }
 
-#: 不进 ``SETTING_SOURCES`` 的三个字段：值由其它键算出（data_home → database_file，
-#: SERVER_CONFIG_FILE → 私有配置本体），不是「env 或文件」的形状。
-DERIVED_SETTING_FIELDS = frozenset({"data_home", "database_file", "server_config_file"})
+#: 派生路径和运行时登记对象不从配置字符串表取值。
+DERIVED_SETTING_FIELDS = frozenset(
+    {"data_home", "database_file", "server_config_file", "_environment_registry"}
+)
 
 
 @dataclass(slots=True)
@@ -194,6 +196,8 @@ class GatewayServerSettings:
     #: `charging_status_base_url` 里登记过的租户能开通客户端。
     #: 环境变量仍优先：登记了某租户就用它的地址，清单只接住未登记的租户。
     business_environments_file: str = ""
+    environment_registry_file: str = ""
+    _environment_registry: object = field(default=None, init=False, repr=False)
     consumer_order_chat_enabled: bool = False
     execution_environment: str = ""
     #: M2-CLOSE-01：执行环境 → 编排平台应用/智能体/节点的**可信绑定**（契约 §3.1）。
@@ -485,6 +489,14 @@ class GatewayServerSettings:
             parse_charging_endpoints(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
                 raise ValueError("charging status requires a logical execution environment")
+        if self.environment_registry_file:
+            from aiops_diagnostics.gateway.environment_registry import for_settings
+
+            row = for_settings(self).entry()
+            if Path(row["config_ref"]).resolve() != Path(self.server_config_file).resolve():
+                raise ValueError("environment registry configuration does not match this Gateway")
+            if self.execution_environment and self.execution_environment != self.environment:
+                raise ValueError("execution environment does not match business environment")
         if self.business_environments_file:
             # 启动时整份校验：坏文件、重复 id、两个默认、非法 URL 都不许活到第一次开通 ——
             # 那些在开通时才暴露时，页面显示的是"这一端失败"，指向一个看不出是配置错的原因。

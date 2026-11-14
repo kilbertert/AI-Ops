@@ -572,8 +572,13 @@ class OperatorCpms:
     def refresh_scope(self, caller, *, allow_empty=False):
         from dataclasses import replace
 
+        from aiops_diagnostics.gateway.environment_registry import RegistryError, require_registered
         from aiops_diagnostics.identity.scope_context import DataScope
 
+        try:
+            require_registered(self.context.runtime, caller.effective_tenant_id)
+        except RegistryError as exc:
+            raise OperatorRefused("TENANT_ENVIRONMENT_NOT_ENABLED") from exc
         if operator_scope(caller, allow_empty=allow_empty).site_ids is None:
             return caller
         directory = getattr(self.context.runtime, "_trial_operator_scope", None)

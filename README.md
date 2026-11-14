@@ -224,3 +224,5 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 客服编辑与发布故障的字段核对、原页面恢复见[知识选择与发布手册](docs/agents/consumer-wf01/knowledge-picker-deploy.md#参数面板打开后发布失败)。
 
 设备离线分析以同一受控读面服务offline卡与管家Agent；新增业务时区配置和发布步骤见[离线手册](docs/agents/operator-cpms/device-offline.md)。
+
+业务环境与租户登记由 `gateway.environment_registry` 管理，运维入口为 `aiops-admin environment-registry`；配置 `AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE` 后按当前环境检查租户准入。登记与启停方法见[环境接入手册](docs/agents/environment-registry.md)。

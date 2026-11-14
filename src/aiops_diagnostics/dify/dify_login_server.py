@@ -142,9 +142,16 @@ class LoginProxySettings:
     #: 发布桥/Try-run 复用的公司令牌缓存寿命。``None`` ⇒ 跟随控制台会话。
     #: 配得比会话短会重新引入"页面还能开、试运行却 403"的错配，所以只允许显式配。
     operator_token_seconds: int | None = None
+    environment_registry_file: str = ""
 
     def __post_init__(self) -> None:
         assert_public_origin_is_https(self.public_origin)
+        if self.environment_registry_file:
+            from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry
+
+            row = EnvironmentRegistry(self.environment_registry_file, self.dify.environment).entry()
+            if self.gateway_url.rstrip("/") != row["gateway_url"]:
+                raise ValueError("login proxy Gateway does not match registered environment")
         if self.operator_trial_key and len(self.operator_trial_key) < 32:
             raise ValueError("operator trial key must contain at least 32 characters")
         if not self.edit_permission:
@@ -208,6 +215,7 @@ class LoginProxySettings:
             inner_api_key=os.environ.get("AIOPS_LOGIN_PROXY_INNER_API_KEY", "").strip(),
             operator_trial_key=os.environ.get("AIOPS_LOGIN_PROXY_OPERATOR_TRIAL_KEY", "").strip(),
             operator_token_seconds=_optional_int(os.environ.get("AIOPS_LOGIN_PROXY_OPERATOR_TOKEN_SECONDS")),
+            environment_registry_file=os.environ.get("AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE", ""),
         )
 
 
@@ -446,6 +454,11 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         if row.get("status") != STATUS_ACTIVE:
             self._json(200, {"allowed": False, "reason": "MAPPING_DISABLED"})
             return
+        try:
+            self.service.require_registered_tenant(str(row.get("tenant_id") or ""))
+        except PermissionDenied:
+            self._json(200, {"allowed": False, "reason": "TENANT_ENVIRONMENT_NOT_ENABLED"})
+            return
         permissions = self.service.store.permissions_of(row)
         # 发布权与准入**同一条边界**（ADR-0139）：租户账号在自己的 workspace 里发布 ——
         # ADR-0073 已把发布钉死在发起人所在的 workspace，跨租户在结构上发不出去。
@@ -598,6 +611,13 @@ def _public_reason(exc: Exception) -> str:
 
 
 def build_service(settings: LoginProxySettings) -> LoginService:
+    from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry
+
+    registry = (
+        EnvironmentRegistry(settings.environment_registry_file, settings.dify.environment)
+        if settings.environment_registry_file
+        else None
+    )
     store = MappingStore(Path(settings.data_dir) / "mappings.db")
     # 四键全配 ⇒ 按租户解析 + join；全空 ⇒ 保持单一固定工作区（ADR-0056 的 V1 暂定）。
     # 两半都由 `__post_init__` 保证成对，所以这里只需要判一次。
@@ -627,6 +647,7 @@ def build_service(settings: LoginProxySettings) -> LoginService:
         inner_api=inner,
         retain_operator_token=bool(settings.operator_trial_key),
         operator_token_seconds=settings.operator_token_seconds,
+        environment_registry=registry,
     )
 
 

@@ -129,6 +129,14 @@ def callback(runtime, token, body, *, read_snapshot, list_orders):
         raise ChatRunUnavailable("CHATFLOW_BINDING_CHANGED", "客服发布版本已失效", http_status=403)
 
     def valid():
+        from aiops_diagnostics.gateway.environment_registry import RegistryError, require_registered
+
+        try:
+            require_registered(runtime, caller.effective_tenant_id)
+        except RegistryError as exc:
+            raise ChatRunUnavailable(
+                "TENANT_ENVIRONMENT_NOT_ENABLED", "当前租户接入已停用或变化", http_status=403
+            ) from exc
         usable(grants.by_id(grant.grant_id))
         latest = runs.get(run.run_id)
         qa = (runtime.store.get_standard_diagnosis if trial else runtime.store.get_assistant_question)(
