@@ -49,6 +49,8 @@ SQLite用备份中的gateway-consistent.db覆盖旧库，删除仅属于旧库�
 使用`deploy/node-runtime/compose.yaml`加本目录`node-runtime.override.yaml`，只在95首次创建独立
 平台、元数据库、节点和受控模型出口；节点名称node-95，环境95，合计容器内存上限1408MiB。
 源码/JAR/模型代理从合并制品来；node与platform的JAR摘要按`deploy/m2-live-03/images.lock.json`核对。
+内部MySQL通过TCP SELECT 1才算就绪；首次临时socket实例不计通过。95小型元库不使用命名时区表，
+关闭其初装与performance_schema并限制buffer/cache/连接数；公司业务数据库保持原配置。
 制品目录另包含`services/model-proxy`、`deploy/m2-live-03/schema`和初始化脚本，不能复制其他环境运行数据。
 
 初始化沿用`bootstrap_platform.py`，显式给`M2LIVE_ENVIRONMENT=95`、`M2LIVE_EXPECTED_NODE=node-95`、
@@ -56,7 +58,9 @@ SQLite用备份中的gateway-consistent.db覆盖旧库，删除仅属于旧库�
 模型出口/平台端点、CA和供应商型号运行时读取受控配置。默认管理员先轮换，禁用demo，再发独立应用与节点凭据。
 失败保留已持久目标口令以便幂等续跑；绝不使用另一环境的应用token。
 
-TLS回调用包内`PYTHONPATH=<制品>/src python3 <制品>/tools/content/render_node_callback.py`渲染，目标本机Gateway；CA只在服务宿主，节点只挂公开信任库。
+TLS回调用包内`PYTHONPATH=<制品>/src /opt/aiops-95/current/venv/bin/python <制品>/tools/content/render_node_callback.py`渲染，目标本机Gateway；
+宿主系统Python可能低于工具支持版本，因此只借用已部署Python3.13解释器，模块与工具声明仍从同版节点包读取。
+CA使用显式openssl配置文件指定扩展，不叠加宿主默认扩展；必须经过节点镜像keytool解析，节点只挂公开信任库。
 平台证书SAN同时覆盖platform及平台内部地址，回调证书覆盖实际网桥。先核Docker网段无重叠并记录分配，
 再安装本目录`node-runtime.service`/`node-callback.service`为aiops95-node-runtime/aiops95-node-callback。
 回调使用aiops身份，nginx二进制按现场核对；用`nginx -t`和节点网络内匿名请求拒绝共同验证。
@@ -64,3 +68,12 @@ TLS回调用包内`PYTHONPATH=<制品>/src python3 <制品>/tools/content/render
 
 启用前确认没有在飞；启用后检查节点在线、真实三业务、跨环境拒绝与内存峰值。失败停止仅本次新栈，
 保留原Gateway及公司服务。资源上限不是峰值验收，未跑真实请求前不能宣称部署容量合格。
+
+### firewalld宿主的内部网桥
+
+Docker20.10在firewalld宿主可能仅把出站网桥加入docker zone，遗漏internal网桥。判据是节点网络内实际TCP，
+不是docker ps或宿主可达。用`docker network inspect`获取本栈桥名/子网，再核`firewall-cmd --get-zone-of-interface`。
+保存原规则；仅将本项目两个内部桥加入既有docker zone。该zone默认允许宿主访问，须同时加负优先级rich规则：
+先允许本栈trial子网到本栈桥地址TCP8788，再拒绝trial/modellink子网到宿主的其他输入。不要把整机zone改为可信。
+Docker自身internal/cross-network隔离链继续保留；确认filter_IN规则生效、容器间连接与宿主非回调端口拒绝，
+再把本次精确接口/rich规则写入permanent，不做全局reload或runtime-to-permanent。回退只移除本次新增项。
