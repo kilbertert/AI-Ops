@@ -27,6 +27,8 @@ check仅打印版本和计数，不打印地址、配置引用或秘密。备份
 Gateway配置AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE，登记config_ref必须与server_config_file一致，
 execution_environment与environment一致；登录代理配置AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE。
 95启用登记；未设置的新选项不改变旧41。首次启用需重启配套合并制品，后续租户启停无须重启。
+共享知识服务按环境和公司租户共同识别账号，贯穿开户、检索/媒体、发布检查及运维命令；
+本地账本与公司API仍使用原公司租户ID。旧实例启用登记前需显式迁移知识账号，不能只切开关。
 Gateway用户准入、控制台新登录/令牌获取/身份查询、自助开通目标与受控工具重新授权均校验登记。
 客户端业务端点由登记决定，不再使用旧CPMS默认清单推导未登记租户。
 

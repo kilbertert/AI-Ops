@@ -19,6 +19,7 @@ from aiops_diagnostics.common.endpoint_policy import require_secure_endpoint
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
 )
+from aiops_diagnostics.knowledge.tenant_scope import knowledge_tenant
 from aiops_diagnostics.publication.agent_lifecycle import (
     AgentPublishError,
     KnowledgeBindingResolver,
@@ -59,9 +60,10 @@ class KbServiceKnowledgeClient:
     ``GET /kb/knowledge-bases/{kb}`` and ``GET /kb/knowledge-bases/{kb}/documents``.
     """
 
-    def __init__(self, base_url: str, *, tenant_id: str, timeout: float = 10) -> None:
+    def __init__(self, base_url: str, *, tenant_id: str, timeout: float = 10, environment: str = "") -> None:
         self.base_url = require_secure_endpoint(base_url, what="kb-service base URL")
         self.tenant_id = tenant_id
+        self.environment = environment
         self.timeout = timeout
 
     def for_tenant(self, tenant_id: str) -> KbServiceKnowledgeClient:
@@ -71,7 +73,9 @@ class KbServiceKnowledgeClient:
         to the publishing tenant so RAGFlow's per-tenant dataset access check
         is meaningful.
         """
-        return KbServiceKnowledgeClient(self.base_url, tenant_id=tenant_id, timeout=self.timeout)
+        return KbServiceKnowledgeClient(
+            self.base_url, tenant_id=tenant_id, timeout=self.timeout, environment=self.environment
+        )
 
     def knowledge_base(self, kb_id: str) -> dict[str, Any]:
         return self._get(f"/kb/knowledge-bases/{urllib.parse.quote(kb_id, safe='')}")
@@ -100,7 +104,7 @@ class KbServiceKnowledgeClient:
             RequestSpec(
                 url=url,
                 method="GET",
-                headers=tenant_id_header(self.tenant_id),
+                headers=tenant_id_header(knowledge_tenant(self.tenant_id, self.environment)),
                 timeout=self.timeout,
             ),
             mapping=ErrorMapping(
