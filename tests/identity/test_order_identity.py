@@ -188,6 +188,7 @@ _ORDER_GRAMMAR_FILES = {"identity/order_identity.py", "common/order_reference.py
 #: 相对路径 → 允许的出现次数。每一行的身份：标识符种类 == 该字段自己，
 #: 不是订单号；订单号的唯一语法在 order_identity.py。
 _ALLOWED_ALPHABET_LITERALS = {
+    "identity/gateway_admission.py": 1,  # base64url编码字母表，不是订单号
     "identity/order_identity.py": 2,  # 权威语法 + 扫描启发式 token（比语法窄是设计）
     "common/order_reference.py": 4,  # 「消息点了哪几单」的判据，另一个问题
     "common/config.py": 3,  # 配置键名 / 密钥槽名

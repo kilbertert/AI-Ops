@@ -234,3 +234,5 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 验证边界见[95本轮记录](docs/validation/2026-11-14-env95-business-acceptance.md)，不能由部署成功推定全部业务验收。
 
 `dify.environment_management`提供正常公司会话后的环境目录管理，按显式环境授权读取与更新准入；不接受浏览器提供连接地址。
+
+`identity.gateway_admission`在显式启用的新环境入口校验公司网关请求签名及持久防重放，随后仍执行原用户和订单授权。
