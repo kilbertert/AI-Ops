@@ -68,11 +68,7 @@ class _Authorizer:
 class _Runtime:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
-        # Every entry point that STARTS a job. A boundary that leaked through
-        # the QA route would be invisible to a test watching only `calls`.
-        self.qa_calls: list[str] = []
         self._qa = {}  # qa_id -> record
-        self.skip_retrieval = False
         self.classify_calls = 0
 
     def shutdown(self) -> None:
@@ -126,26 +122,6 @@ class _Runtime:
         del question, language, tenant_id
         self.classify_calls += 1
         return self.classified
-
-    def start_assistant_qa(
-        self,
-        context: ScopeContext,
-        question: str,
-        *,
-        conversation=None,
-        conversation_turn_no=None,
-        language="zh",
-        promo_target=None,
-        promo_intent=None,
-        skip_retrieval=False,
-        business_entry="",
-    ):
-        del conversation, conversation_turn_no, promo_target, promo_intent, business_entry
-        self.qa_calls.append(question)
-        self.skip_retrieval = skip_retrieval
-        qa_id = "qa_test00000000000000000000000000000001"
-        self._qa[qa_id] = {"qa_id": qa_id, "question": question, "status": "queued", "result": None}
-        return self._qa[qa_id]
 
     def get_assistant_qa(self, context: ScopeContext, qa_id: str):
         del context
@@ -222,7 +198,10 @@ def test_order_bound_shortcut_requires_order_context(tmp_path: Path) -> None:
     body = resp.json()
     assert body["type"] == "clarification"
     assert body["missing_fields"] == ["order_no"]
-    assert runtime._qa == {}
+    # No job of either kind was created: the double implements no QA-start
+    # method (a wrongly routed request raises AttributeError → 500 → red), and
+    # `calls` below records diagnosis starts.
+    assert runtime.calls == []
 
 
 def test_assistant_qa_poll_unknown_is_404(tmp_path: Path) -> None:
@@ -349,7 +328,6 @@ def test_jump_shortcut_at_entry_returns_clarification_and_creates_no_job(tmp_pat
     assert body["type"] == "clarification"
     assert body["missing_fields"] == []
     # No job of either kind was created.
-    assert runtime._qa == {}
     assert runtime.calls == []
 
 
@@ -380,7 +358,6 @@ def test_jump_shortcut_creates_no_job_even_with_an_owned_order(tmp_path: Path) -
     assert resp.status_code == 200, resp.text
     assert resp.json()["type"] == "clarification"
     assert runtime.calls == []
-    assert runtime._qa == {}
 
 
 def test_clarification_message_follows_accept_language(tmp_path: Path) -> None:

@@ -1692,7 +1692,10 @@ s = manager.create(admin, {
     "labels": {"zh": "客户案例", "en": "Customer Cases"},
     "descriptions": {"zh": "...", "en": "..."},
     "question_templates": {"zh": "我想看看客户案例", "en": "..."},
-    "target_agent_version": "agt_xxx#v1",   # 宣传类才填，其余 None
+    "target_agent_version": "agt_xxx#v1",   # 仅宣传意图白名单可填，其余 None
+    # ⚠️ 2026-11-14 注：case_exploration 已整体退役（ADR-0254）、宣传路由已随
+    #    #1125 删除 —— 示例请换成在役 code；白名单只剩退役 intent，
+    #    target_agent_version 实际无可绑定对象，新行不要填。
 })
 manager.publish(admin, s.shortcut_id, expected_revision=s.revision)
 ```
@@ -2089,6 +2092,8 @@ PY'
 # ① 查该动作的版本历史（库无 sqlite3 CLI，用 python 只读查）。
 #    迁移新生成的版本号最大；挑选它之前的那一版。labels 的语言数一眼可辨
 #    （迁移前 6 语、迁移后 11 语）。
+#    ⚠️ 2026-11-14 注：示例行 case_exploration 已退役停用，而 rollback 只接受
+#       published 行 —— 真要用本配方时把示例 code 换成仍在发布的动作。
 ssh aiops-41 'V=/opt/aiops-41/.venv/bin/python; $V - <<PY
 import json, sqlite3
 c = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)

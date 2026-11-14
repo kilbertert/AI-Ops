@@ -124,29 +124,6 @@ class _Runtime:
         del context, diagnosis_id
         return None
 
-    def start_assistant_qa(
-        self,
-        context,
-        question: str,
-        *,
-        conversation=None,
-        conversation_turn_no=None,
-        language="zh",
-        skip_retrieval=False,
-        business_entry="",
-    ):
-        del skip_retrieval, business_entry
-        # Simulate the 409 surface: the API layer raises busy BEFORE us, so
-        # reaching here means the slot was claimable. Record and answer async.
-        del conversation, conversation_turn_no
-        self.calls.append(("qa", question))
-        return {
-            "qa_id": "qa_test00000000000000000000000000000001",
-            "question": question,
-            "status": "queued",
-            "result": None,
-        }
-
     def get_assistant_qa(self, context, qa_id):
         del context, qa_id
         return None

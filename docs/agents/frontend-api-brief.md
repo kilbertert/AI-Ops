@@ -698,7 +698,7 @@ GET https://api.qumall.qushiyun.com/v1/assistant/questions/{qa_id}
 - `media.url` 是**同域相对路径**（`/v1/media/...`）或**外部绝对地址**（见上节）——短时签名就在相对路径里，**不需要 Authorization 头**，有效期约 10 分钟；外部地址不过我们的代理。
 - 媒体块失效时 `media: null` 且带 `unavailable: true`：**保留文本与引用**，显示"资源不可用"，不要整条消息报错。
 - `retrieval_status`：`found`（命中知识库）/ `not_found`（无命中，通用回答）/ `unavailable`（检索依赖故障，文本仍可交付）/ `limited`（达检索上限）。
-- **`completed` 只有这一种 `result` 形状（重要）**：无论这次回答走的是知识库、宣传卡还是**零阶通用问答**，`completed` 的 `result` 恒为 `{"blocks": [...], "retrieval_status": ...}`，正文一定在某个 `kind="text"` 块里。前端**只解析 `blocks[]`**，不要去读 `result.text` / `result.reminder`——那个形状是零阶路径在 2026-10-19 前的历史写法（#708 起统一），且在网关里**已彻底移除**；曾按它取正文的客户端会对每一个零阶回答显示"未找到"（UlinkEV 1.2.14 实测，见 `docs/validation.md`）。
+- **`completed` 只有这一种 `result` 形状（重要）**：无论这次回答走的是知识库检索还是**零阶通用问答**（曾经的宣传卡路径已随 #1125 退役），`completed` 的 `result` 恒为 `{"blocks": [...], "retrieval_status": ...}`，正文一定在某个 `kind="text"` 块里。前端**只解析 `blocks[]`**，不要去读 `result.text` / `result.reminder`——那个形状是零阶路径在 2026-10-19 前的历史写法（#708 起统一），且在网关里**已彻底移除**；曾按它取正文的客户端会对每一个零阶回答显示"未找到"（UlinkEV 1.2.14 实测，见 `docs/validation.md`）。
   零阶回答的 `retrieval_status` 是 `not_found`（本次没有检索知识库），这不是错误。
 - **`status=failed` 处理（重要）**：failed 是**终态**——收到即**停止轮询该 `qa_id`**（failed 的作业永远不会变成 completed）。轮询响应此时带 `error: {code, message, retryable}`（与订单诊断线同形状，多为模型限流）：
 
@@ -822,7 +822,7 @@ Accept-Language: zh                              # 可选，影响 label/descrip
 | `requires_order` | `true` → 点击后先弹**订单选择器**（列表来源**必须与 AI-Ops 的可见范围同源**，**不是**任一个 BFF 订单列表端点 —— 见 §11「订单选择器」），选完再把 `order_no`+问题提交统一入口；`false` → 直接提交 |
 | `sort_order` | 按升序渲染按钮 |
 | `label` / `description` / `question_template` | 按 `Accept-Language` 本地化（缺失翻译回退中文）；`question_template` 可作为默认问题文案预填输入框 |
-| `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户）。与 `jump_path` **互斥**：跳转动作不会到达 agent，因此不允许同时绑定 |
+| `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（不要展示给用户）。⚠️ 宣传路由已随 #1125 退役（ADR-0254），**路由侧已无消费者**；但管理面校验仍消费该字段——与 `jump_path` **互斥**（跳转动作不会到达 agent，不允许同时绑定），且仅宣传意图白名单可填 |
 | `jump_path` | **跳转动作的唯一判别依据**，见 D.2a。**该字段恒存在**：非 `null` → 点击后导航到该路径；`null` → 走的提示动作流程（D.2）。不要区分"字段缺失"与"字段为空" |
 
 **两种动作形态**：每条动作要么是**提示动作**（`jump_path` 为 `null`，点击后把问题提交统一入口），
@@ -935,7 +935,7 @@ POST /v1/assistant/questions
 }
 ```
 
-- `shortcut_code` 可选字段（1-64 字符，`[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}`）；传了且命中已发布行 → 服务端执行该行的守卫（`jump_path` → 澄清不建作业；`requires_order` → 订单归属校验）。⚠️ **2026-11-14 订正**：曾有的「按行意图路由到独立宣传 agent」宣传路径已随 #1125 的 Python harness 退役删除，`case_exploration`（「客户案例」）快捷指令同日整体退役（ADR-0254），不再存在宣传卡产物。
+- `shortcut_code` 可选字段（1-64 字符，`[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}`）；传了且命中已发布行 → 服务端执行该行的守卫（`jump_path` → 澄清不建作业；`requires_order` → 订单归属校验）。⚠️ **2026-11-14 订正**：曾有的「按行意图路由到独立宣传 agent」宣传路径已随 #1125 的 Python harness 退役删除，`case_exploration`（「客户案例」）快捷指令于 2026-11-14 整体退役（ADR-0254），不再存在宣传卡产物。
 - **`requires_order=true` 的动作（如 smart_diagnosis）**：先弹订单选择器，`question` 里带订单或显式传 `order_no`（场景 C 合同），服务端做归属校验。
   - 两种传法等价，服务端都会提取并做归属校验：**①** `order_no` 字段单独传；**②** 订单号出现在 `question` 文本里（如「帮我检测（2099…）这个订单的充电异常」）。
   - 两处都没有订单号时，才同步返回 `type=clarification` + `missing_fields:["order_no"]`，**不创建作业**。
@@ -992,7 +992,7 @@ POST /v1/assistant/questions
 （D.2a），不调用统一入口，因此没有响应 `type`。
 
 > **行为变更（2026-09-30，#413）：一句话里带「案例」，或「场景词 + 方案」，会走宣传路由。**
-> ⚠️ **2026-11-14 注：宣传路由已随 #1125 退役，`case_exploration` 指令同日整体退役
+> ⚠️ **2026-11-14 注：宣传路由已随 #1125 退役，`case_exploration` 指令于当日整体退役
 > （ADR-0254）—— 本段及以下宣传意图判据均为历史记录，当前同类问句按普通问答处理。**
 > 此前只认「客户案例／案例库／行业解决方案…」这类**指名道姓**的说法，于是
 > `重卡充电案例` **不含「客户」两字就漏了** —— 用户想看案例，拿到的是

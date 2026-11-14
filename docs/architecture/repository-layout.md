@@ -201,7 +201,7 @@ src/aiops_diagnostics/
   operator/      # 管家 CPMS、运维聚合与说明
   knowledge/     # 检索、媒体、租户知识库配置与同步
   publication/   # Agent/快捷动作生命周期、内容与路由绑定
-  conversation/  # 会话存储、上下文、FAQ/宣传选择和澄清
+  conversation/  # 会话存储、上下文、FAQ 选择和澄清
   dify/          # 登录、workspace、控制台发布、DSL 和执行适配
   execution/     # Java 委派合同、任务账本、节点发布、执行配置
   diagnosis/     # 尚未退役的 Python 诊断，实现迁完后删除

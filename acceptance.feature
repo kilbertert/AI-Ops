@@ -197,12 +197,6 @@ Feature: 标准调用者认证与订单授权
       Then 返回统一未找到
       And 不产生授权故障告警或失败指标
 
-    Scenario: 创建提问与宣传卡提问的响应体逐字段相同
-      Given 同一个提问分别以普通创建与宣传卡方式发起
-      When 比较两个 202 响应体
-      Then 两者的字段集合与取值形状完全一致
-      And 两者都不由各自的分支自行拼装
-
     Scenario: 作业状态词汇只有一处定义
       Given 一个仍处于活动状态的作业
       When 读取其对外响应
@@ -1110,10 +1104,10 @@ Feature: 统一助手业务意图路由与产品快捷动作
   Rule: 产品快捷动作只声明入口，执行复用统一助手协议
 
     Scenario: 平台发布的动作对新租户默认可见
-      Given 平台管理员已在 consumer 入口发布全局快捷动作 case_exploration
+      Given 平台管理员已在 consumer 入口发布全局快捷动作 report_fault
       And 租户没有该 code 的本地覆盖
       When 该租户通过 GET /v1/shortcuts 读取快捷动作
-      Then 返回已发布的 case_exploration 稳定 code 和本地化文案
+      Then 返回已发布的 report_fault 稳定 code 和本地化文案
       And 结果不要求为该租户复制一条默认数据库记录
 
     Scenario: 全局动作仍按当前租户解析执行
@@ -1124,13 +1118,13 @@ Feature: 统一助手业务意图路由与产品快捷动作
       And 仍要求该用户提供并通过归属校验的订单上下文
 
     Scenario: 平台入口与租户入口隔离
-      Given 平台仅在 consumer 入口发布 case_exploration
+      Given 平台仅在 consumer 入口发布 report_fault
       When 用户从 operator 入口读取 GET /v1/shortcuts
-      Then case_exploration 不出现在 operator 有效动作列表
+      Then report_fault 不出现在 operator 有效动作列表
       And 修改 tenant-id 或入口请求头不能改变有效租户和入口
 
     Scenario: 租户覆盖优先于平台默认
-      Given 平台已发布 case_exploration 且租户尚无覆盖
+      Given 平台已发布 report_fault 且租户尚无覆盖
       When 租户管理员发布同 code 的本地文案覆盖
       Then 该租户读取列表返回本地覆盖
       And 其他租户仍返回平台默认文案
@@ -1159,28 +1153,12 @@ Feature: 统一助手业务意图路由与产品快捷动作
       Then 返回需要 fault_description 的 clarification
       And 不创建工单或其他业务写入
 
-  Rule: 宣传内容与客服 FAQ 隔离
+  Rule: 宣传内容与客服 FAQ 隔离（已于 #1125 退役）
 
-    Scenario: 客户案例走宣传知识库卡片
-      Given 已发布 case_exploration 快捷动作和宣传 Agent
-      When 用户点击案例入口或提交客户案例问题
-      Then 返回结构化案例卡片或可轮询的宣传 QA 结果
-      And 不进入客服 FAQ
-      And 结果不泄露知识库内部标识
-
-    Scenario: 全局宣传动作按租户绑定执行
-      Given 平台已发布 case_exploration 且租户 A 有自己的已发布宣传 Agent
-      And 租户 B 没有宣传绑定
-      When A 和 B 使用同一 shortcut_code 提交客户案例问题
-      Then A 只使用租户 A 的 Agent/知识库
-      And B 返回本地化诚实空卡片
-      And B 不回退到租户 A 的 Agent、知识库或媒体
-
-    Scenario: 错误宣传绑定不跨租户兜底
-      Given 租户 A 的覆盖引用了只属于租户 B 的 Agent/version
-      When 租户 A 执行全局 case_exploration
-      Then 服务端返回诚实空卡片或不可用结果
-      And 不返回租户 B 的内容、媒体、指标或内部标识
+    # 宣传路由（_promo_route / _start_promo_qa / promo_agents）已随 #1125 的
+    # Python harness 退役删除，本节三条宣传合同随之失效并于 2026-11-14 移除
+    # （ADR-0259）。钉住声明仍成立：宣传 pin 过的 Agent 不会被客服路由选中
+    # （qa_rag._pinned_promo_agents），但不再有宣传卡产物。
 
 Feature: 41 快捷动作数据迁移
   迁移将既有租户复制动作收敛为平台默认与租户覆盖，保留审计和回滚能力。
@@ -1195,7 +1173,7 @@ Feature: 41 快捷动作数据迁移
 
     Scenario: 已发布租户动作收敛为平台默认
       Given 两个租户均有同一 consumer code 的已发布复制动作
-      And 至少一个复制动作绑定了租户专属宣传 Agent/version
+      And 至少一个复制动作绑定了租户专属 Agent/version
       When 管理员运行 aiops admin migrate-shortcuts
       Then 创建一个已发布平台默认且平台版本不携带租户 Agent/version
       And 原租户动作及其历史发布版本保持不变
@@ -1214,9 +1192,9 @@ Feature: 41 快捷动作数据迁移
 
     Scenario: 41 双租户公网验收
       Given 迁移提交已部署到 41 且存在有覆盖与无覆盖的真实会话租户
-      When 分别读取 consumer/operator 快捷动作并执行宣传与 smart_diagnosis 入口
+      When 分别读取 consumer/operator 快捷动作并执行 smart_diagnosis 入口
       Then 无覆盖租户看到平台默认，有覆盖租户覆盖优先，停用只影响自身
-      And 宣传 Agent/知识库不跨租户，smart_diagnosis 仍执行订单归属校验
+      And 租户 Agent/知识库不跨租户，smart_diagnosis 仍执行订单归属校验
 
 Feature: 快捷动作跳转站内页面
   一条产品快捷动作可以携带可选的站内跳转路径。路径非空即跳转动作：由客户端导航到
@@ -1226,10 +1204,10 @@ Feature: 快捷动作跳转站内页面
 
     Scenario: 列表对跳转与提示动作返回同一形状
       Given 租户已发布一条带跳转路径的 report_fault 动作
-      And 租户已发布一条不带跳转路径的 case_exploration 动作
+      And 租户已发布一条不带跳转路径的 smart_diagnosis 动作
       When 客户端读取 GET /v1/shortcuts
       Then report_fault 的 jump_path 等于配置的站内路径
-      And case_exploration 的 jump_path 字段存在且为 null
+      And smart_diagnosis 的 jump_path 字段存在且为 null
       And 客户端无需区分“字段缺失”与“字段为空”
 
     Scenario: 既有动作不因新字段改变行为
@@ -1257,7 +1235,7 @@ Feature: 快捷动作跳转站内页面
       When 读取该动作
       Then jump_path 为 null 且该动作按提示动作工作
 
-    Scenario: 跳转路径与宣传绑定互斥
+    Scenario: 跳转路径与 target_agent_version 互斥
       Given 管理员在创建请求中同时提交 jump_path 与 target_agent_version
       When 调用创建快捷动作接口
       Then 请求被拒绝且错误码为 SHORTCUT_VALIDATION_FAILED
@@ -1374,14 +1352,6 @@ Feature: 回答面输出语言契约收口
 
   Rule: 泄漏的回答不交付，改发本地化兜底
 
-    Scenario: 英文请求的客户案例回答仍含中文
-      Given 一次英文请求命中客户案例路径
-      And 模型输出的卡片正文含中文小标题
-      When 该回答在定稿点被校验
-      Then 不交付该正文
-      And 返回英文的不可用文案
-      And 检索状态标记为 unavailable
-
     Scenario: 干净的非中文回答原样交付
       Given 一次英文请求
       And 模型输出的正文为纯英文
@@ -1451,12 +1421,6 @@ Feature: FAQ 关键词短路的歧义门
       Then 不返回 type=faq
       And 不向用户给出该 FAQ 条目的答案
 
-    Scenario: 案例类短问题不进入 FAQ
-      Given 宣传入口的关键词未覆盖"重卡充电案例"这一说法
-      And 该问题被判为 case_exploration 意图
-      When 用户通过统一助手入口提交该问题
-      Then 不返回 type=faq
-
     Scenario: 真业务问题仍然命中 FAQ
       Given 用户提交一条完整的中文业务问题
       When 该问题的措辞复述了某条目录标题
@@ -1473,7 +1437,7 @@ Feature: FAQ 关键词短路的歧义门
 
     Scenario: 目录标题的语言变体同样不被误伤
       Given 目录某条目有 en/de/fr/es/pt 标题变体
-      And 某个变体的措辞被判为宣传或方案类意图
+      And 某个变体的措辞被判为 casual 类意图
       When 用户提交该变体原文
       Then 仍返回该条目的 HTTP 200 type=faq
       And 全部 185 个标题变体均不查询路由意图

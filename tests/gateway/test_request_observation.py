@@ -189,18 +189,6 @@ def provision(tmp_path, monkeypatch):
                 raise state.unexpected
             raise AssertionError("status query must not diagnose")
 
-        def start_assistant_qa(self, *_args, **_kwargs):
-            # Reachable only on the "feature disabled" path, where the request is
-            # ordinary QA. This module's job there is to emit NOTHING; the job
-            # itself is out of scope for this test.
-            return {
-                "qa_id": "qa_" + "0" * 32,
-                "status": "queued",
-                "question": QUESTION,
-                "result": None,
-                "error_code": None,
-            }
-
         def classify_lightweight(self, *_args, **_kwargs):
             # None means "no routing decision", which the handler already treats
             # as a normal case. These tests never assert on the ordinary-QA

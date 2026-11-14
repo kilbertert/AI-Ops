@@ -1,8 +1,9 @@
 """Output-side language guard for the answer surfaces (#293).
 
-Answers reach users through several paths — the promotional card, customer QA,
-the zero-order answer, the lightweight casual answer, and the standard
-diagnosis. Before this module, only the diagnosis path checked the language it
+Answers reach users through several paths — customer QA, the zero-order
+answer, the lightweight casual answer, and the standard diagnosis (the
+promotional card once among them retired with the Python harness in #1125).
+Before this module, only the diagnosis path checked the language it
 actually produced, so a Chinese leak was found and fixed one surface at a time
 while its siblings stayed broken.
 

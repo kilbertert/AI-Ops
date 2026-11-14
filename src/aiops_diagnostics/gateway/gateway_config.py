@@ -271,8 +271,8 @@ class GatewayServerSettings:
     routing_risk_always_asks: bool = True
     kb_service_timeout_seconds: float = 10.0
     #: 每回合向知识库请求的 chunk 数上限 —— **两条检索路径共用的同一个口径**
-    #: （客户问答/宣传卡片的 ``KnowledgeSearchGuard.max_results``，以及 Dify 适配路由
-    #: 对 Dify 所发 ``top_k`` 的封顶值）。
+    #: （客户问答的 ``KnowledgeSearchGuard.max_results``，以及 Dify 适配路由
+    #: 对 Dify 所发 ``top_k`` 的封顶值；曾经的宣传卡片路径已随 #1125 退役）。
     #:
     #: 默认 10 而不是 5，是实测定的：`chunk_method=picture` 的知识库把图片块按相似度
     #: 排在中段（实测全部 chunk 挤在 0.185~0.201），k=5 时 16 种真实 query 形状里只有

@@ -70,7 +70,6 @@ class _Runtime:
         pass
 
     start_standard_diagnosis = staticmethod(_boom)
-    start_assistant_qa = staticmethod(_boom)
     start_health_report = staticmethod(_boom)
     create_conversation = staticmethod(_boom)
     list_conversations = staticmethod(_boom)

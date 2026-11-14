@@ -456,17 +456,6 @@ class Runtime:
         del question, language, tenant_id
         return self.classified
 
-    def start_assistant_qa(self, context: ScopeContext, question: str, **kwargs: Any):
-        del context, kwargs
-        record = {
-            "qa_id": "qa_test00000000000000000000000000000001",
-            "question": question,
-            "status": "queued",
-            "result": None,
-        }
-        self.questions.append(record)
-        return record
-
     def get_assistant_qa(self, context: ScopeContext, qa_id: str):
         del context
         return next((item for item in self.questions if item["qa_id"] == qa_id), None)
