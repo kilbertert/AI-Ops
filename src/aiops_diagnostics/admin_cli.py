@@ -263,7 +263,12 @@ def reconcile(
     knowledge_resolver = None
     if kb_url:
         knowledge_resolver = KbBindingResolver(
-            KbServiceKnowledgeClient(kb_url, tenant_id="aiops", timeout=10)
+            KbServiceKnowledgeClient(
+                kb_url,
+                tenant_id="aiops",
+                timeout=10,
+                environment=namespace_for(_settings_with_config_file(ctx)),
+            )
         )
     manager = AgentManager(
         AgentStore(database),
@@ -373,7 +378,12 @@ def pull_dify(
         from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
 
         knowledge_resolver = KbBindingResolver(
-            KbServiceKnowledgeClient(kb_url, tenant_id="aiops", timeout=10)
+            KbServiceKnowledgeClient(
+                kb_url,
+                tenant_id="aiops",
+                timeout=10,
+                environment=namespace_for(_settings_with_config_file(ctx)),
+            )
         )
     manager = AgentManager(
         AgentStore(database),
@@ -636,7 +646,12 @@ def sync_from_dify(
         from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
 
         knowledge_resolver = KbBindingResolver(
-            KbServiceKnowledgeClient(kb_url, tenant_id="aiops", timeout=10)
+            KbServiceKnowledgeClient(
+                kb_url,
+                tenant_id="aiops",
+                timeout=10,
+                environment=namespace_for(_settings_with_config_file(ctx)),
+            )
         )
     manager = AgentManager(
         AgentStore(database),

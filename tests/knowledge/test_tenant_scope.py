@@ -80,3 +80,54 @@ def test_real_http_reads_and_writes_share_scope_and_other_environment_is_separat
     assert len({calls[0][1], calls[4][1], calls[5][1]}) == 3
     assert calls[5][1] == "same"
     assert calls[6][1] == calls[7][1] == calls[0][1]
+
+
+@pytest.mark.parametrize("process_environment", [None, "env-b"])
+def test_reconcile_checks_knowledge_in_configured_environment(tmp_path, monkeypatch, process_environment):
+    import os
+
+    from typer.testing import CliRunner
+
+    from aiops_diagnostics.admin_cli import admin_app
+    from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
+    from aiops_diagnostics.publication import agent_debug
+
+    for key in os.environ:
+        if key.startswith("AIOPS_"):
+            monkeypatch.delenv(key)
+    config = tmp_path / "server.env"
+    config.write_text(
+        "AIOPS_GATEWAY_ENVIRONMENT=env-a\nAIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE=/fixture/catalogue.json\n"
+    )
+    config.chmod(0o600)
+    if process_environment:
+        monkeypatch.setenv("AIOPS_GATEWAY_ENVIRONMENT", process_environment)
+    manifest = tmp_path / "manifest.toml"
+    manifest.write_text(
+        '[[agents]]\ntenant_id="same"\nname="客服"\nagent_type="customer"\nprompt="当前租户知识"\n'
+        'knowledge_base_ids=["legacy-only"]\nmodel="aiops-api"\n'
+    )
+    headers = []
+
+    def read(spec, **_):
+        headers.append(spec.headers["tenant-id"])
+        if spec.headers["tenant-id"] != "same":
+            raise KnowledgeSearchUnavailable("not owned by scoped tenant")
+        return {"docs": []}
+
+    monkeypatch.setattr(agent_debug, "request_json", read)
+    result = CliRunner().invoke(
+        admin_app,
+        [
+            "--config",
+            str(config),
+            "reconcile",
+            str(manifest),
+            "--db",
+            str(tmp_path / "gateway.db"),
+            "--kb-url",
+            "http://127.0.0.1:1",
+        ],
+    )
+    assert headers == [knowledge_tenant("same", process_environment or "env-a")]
+    assert result.exit_code != 0
