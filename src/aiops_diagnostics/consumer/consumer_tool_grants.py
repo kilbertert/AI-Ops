@@ -71,6 +71,10 @@ class ConsumerToolGrants:
     def __init__(self, context, settings) -> None:
         self.context = context
         self.settings = settings
+        if getattr(settings, "environment_registry_file", ""):
+            from aiops_diagnostics.gateway.environment_registry import for_settings
+
+            for_settings(settings)
         self.grants: dict[str, _Grant] = {}
         self.lock = threading.RLock()
 
@@ -233,6 +237,11 @@ class ConsumerToolGrants:
         run = self.context.agent_run_store.get(run_id)
         if run is None or run.state not in {"issued", "running"}:
             raise ConsumerToolRefused("CONSUMER_RUN_INACTIVE", "consumer run is inactive")
+        if (
+            getattr(self.settings, "environment_registry_file", "")
+            and self._cpms_base(grant.tenant_id) != grant.base_url
+        ):
+            raise ConsumerToolRefused("CONSUMER_TARGET_CHANGED", "business target changed")
         return grant
 
     def proxy(self, run_id: str, token: str, path: str, query: str, method: str = "GET"):
@@ -276,6 +285,7 @@ class ConsumerToolGrants:
             grant = self.grants.get(run_id)
         if grant is None or grant.tool != tool:
             raise ConsumerToolRefused("CONSUMER_GRANT_REJECTED", "grant rejected")
+        self._current(run_id, grant.token)
         if set(payload) != {"authorization_id", "evidence"}:
             raise ConsumerToolRefused("CONSUMER_INVALID_BODY", "invalid body")
         if payload["authorization_id"] != _digest(grant.token):

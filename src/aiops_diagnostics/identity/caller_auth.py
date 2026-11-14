@@ -103,6 +103,29 @@ class CallerContextResolver(Protocol):
     ) -> ScopeContext: ...
 
 
+class RegisteredCallerResolver:
+    """先完成原公司身份验证，再按本环境登记检查有效租户。"""
+
+    def __init__(self, resolver: CallerContextResolver, registry) -> None:
+        self.resolver = resolver
+        self.registry = registry
+
+    def resolve(self, token: str, **kwargs) -> ScopeContext:
+        from aiops_diagnostics.gateway.environment_registry import RegistryError
+
+        context = self.resolver.resolve(token, **kwargs)
+        try:
+            self.registry.require(context.effective_tenant_id)
+        except RegistryError as exc:
+            unavailable = str(exc) == "ENVIRONMENT_REGISTRY_UNAVAILABLE"
+            raise CallerAuthError(
+                "business environment admission refused",
+                code=CALLER_AUTH_UNAVAILABLE if unavailable else CALLER_AUTH_FORBIDDEN,
+                retryable=unavailable,
+            ) from exc
+        return context
+
+
 class OrderAuthorizer(Protocol):
     def can_access(self, context: ScopeContext, order_no: str) -> bool: ...
 
