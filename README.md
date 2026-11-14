@@ -236,3 +236,5 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 `dify.environment_management`提供正常公司会话后的环境目录管理，按显式环境授权读取与更新准入；不接受浏览器提供连接地址。
 
 `identity.gateway_admission`在显式启用的新环境入口校验公司网关请求签名及持久防重放，随后仍执行原用户和订单授权。
+
+跨环境接入两片的上线/未启用边界见[交付回执](docs/validation/2026-11-14-z-environment-delivery-receipt.md)；公司正式发布入口核对遵循[只读手册](docs/agents/company-release-discovery.md)。
