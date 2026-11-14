@@ -1,5 +1,8 @@
 # 业务环境与租户接入登记
 
+> 下文是现有隔离实例的登记实现。95试验已撤回，新目标见[公司网关方案](../architecture/2026-11-14-company-gateway-onboarding.md)。
+> 现有JSON/CLI不是集中管理页面；每环境独立Gateway也不表示必须部署在客户服务器。
+
 公司认证负责用户/权限，AI-Ops维护环境与租户开通关系；采用每环境独立Gateway、登录代理、数据根。
 首轮由平台运维维护私有JSON，不逐个登记用户、不让客户端提交服务URL。决策见[ADR0256](../adr/0256-platform-environment-registry.md)。
 
@@ -26,7 +29,7 @@ check仅打印版本和计数，不打印地址、配置引用或秘密。备份
 
 Gateway配置AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE，登记config_ref必须与server_config_file一致，
 execution_environment与environment一致；登录代理配置AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE。
-95启用登记；未设置的新选项不改变旧41。首次启用需重启配套合并制品，后续租户启停无须重启。
+95试验期间启用登记，现已撤回；未设置的新选项不改变旧41。首次启用需重启配套合并制品，后续租户启停无须重启。
 共享知识服务按环境和公司租户共同识别账号，贯穿开户、检索/媒体、发布检查及运维命令；
 本地账本与公司API仍使用原公司租户ID。旧实例启用登记前需显式迁移知识账号，不能只切开关。
 Gateway用户准入、控制台新登录/令牌获取/身份查询、自助开通目标与受控工具重新授权均校验登记。

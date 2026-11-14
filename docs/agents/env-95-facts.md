@@ -2,7 +2,7 @@
 
 > **用途**：回答「95 是什么、在哪、怎么连、里面有什么」—— 不依赖会话记忆，也不需要
 > 去别的文档里拼三处半句。
-> **最后核验**：2026-11-14；新实例状态见第5、6节。前四节的旧路径/版本是重建前盘点，供恢复参考。
+> **当前状态**：2026-11-14已撤回AI-Ops部署，见第8节。前七节是试验与恢复资料，不代表当前在运行。
 >
 > **纪据纪律**：本文件只写方法与位置。地址、指纹、凭据的真值在库外主机清单
 > （`dev-host show 95`），不在这里；也不写任何口令/令牌/thirdSession 明文。
@@ -140,3 +140,25 @@ Gateway 数据库用 `file:<path>?mode=ro` 及 `PRAGMA query_only=ON`，仅查�
 
 节点资源验证使用容器统计与轻量TCP探针；不要在320MiB运行节点内另起Java源码编译/执行器。
 本轮此做法触发过OOM，节点自动重启不能把探针失败记为无影响；保留计数并复核能力回执恢复。
+
+## 8. 用户要求撤回后的状态与核对方法
+
+95不再是后续AI-Ops部署目标。新旧运行目录、配置、数据及systemd单元已移入私有归档；
+新增容器/网络/精确防火墙规则、AI代理块和共享宿主独立公钥已移除。公司业务库、既有索引、其他服务和共享镜像保留。
+共享Dify/知识资源保留为试验记录，不能因资源仍存在把95标成在线。
+
+撤回前核零在飞与原入口实际访问样本，备份确切配置；仅移除本次AI配置，nginx语法校验后生效。
+恢复是独立部署决定，不能直接照第6节重启。归档清单、摘要与授权记录在私有运维证据中。
+
+```bash
+# 只读复核；not-found/inactive是撤回后的预期，不据此启动服务。
+dev-host exec 95 --allow-service-exec --timeout 40 -- systemctl show aiops-gateway-95.service -p LoadState -p ActiveState
+dev-host exec 95 --allow-service-exec --timeout 40 -- 'docker ps -a --format "{{.Names}}"'
+dev-host exec 95 --allow-service-exec --timeout 40 -- 'ss -ltnH'
+dev-host exec 95 --allow-service-exec --timeout 40 -- 'free -m'
+```
+
+输出仅在私有证据目录保留；核对本轮AI容器/端口缺席与归档根，不把其他服务当清理对象。
+公司进程核对仅返回PID、启动时间与预先选定的JAR名称，不输出完整命令行或环境变量。
+2026-11-14 13:10–13:16 UTC再次访问受中继超时阻塞；早先公司PID已变化，当前健康和变更来源未知。
+内存与因果范围见[撤回验收](../validation/2026-11-14-z95-withdrawal-and-gateway-plan.md)。
