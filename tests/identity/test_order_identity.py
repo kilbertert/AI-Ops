@@ -204,12 +204,13 @@ _ALLOWED_ALPHABET_LITERALS = {
     "dify/dify_workspaces.py": 1,  # 应用 id
     "dify/operator_run_logs.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
     "dify/self_service_api.py": 1,  # knowledge_base_id
-    "dify/self_service_bridge.py": 2,  # knowledge_base_id / run_id；app_id 为十六进制 UUID
-    "dify/self_service_identity.py": 1,  # 租户 id
+    "dify/self_service_bridge.py": 3,  # knowledge_base_id、run_id和环境管理主体编号，非订单
+    "dify/self_service_identity.py": 1,
+    "dify/environment_management.py": 2,  # 环境与公司租户编号，无订单匹配
     "execution/chat_execution.py": 3,  # 智能体 id / libraries 键 ×2
     "gateway/gateway_api.py": 11,  # 拒绝码 / conv_ / code / app_id / knowledge / tenant /
     #                              kb_ids / agt_ 版本 ×2 / code —— 订单字段已收口
-    "gateway/environment_registry.py": 2,  # 租户编号与审计操作人，非订单语法。
+    "gateway/environment_registry.py": 3,  # 租户、管理员主体编号及审计操作人，非订单
     "gateway/gateway_config.py": 2,  # 主机名 / 端点名
     "gateway/gateway_store.py": 1,  # scope 指纹与其他 store 字段
     "gateway/metrics_store.py": 2,  # 租户 id / 指标 id

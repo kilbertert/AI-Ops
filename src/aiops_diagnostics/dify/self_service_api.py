@@ -122,6 +122,10 @@ def register(app, context):
             raise auth.SetupRefused("SETUP_CREDENTIAL_REQUIRED")
         return request.headers.get("X-AIOps-Console-Session", "")
 
+    from . import environment_management
+
+    environment_management.register(app, context, session)
+
     @app.exception_handler(auth.SetupRefused)
     async def refused(_request, exc):
         return JSONResponse(

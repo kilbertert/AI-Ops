@@ -47,7 +47,7 @@ def company_get(context, token, path):
     return body["data"]
 
 
-def identity(context, session):
+def identity(context, session, *, require_admission=True):
     exchanged = context.operator_cpms.console_identity(session)
     info = company_get(context, exchanged["token"], "/user/info")
     user = info.get("sysUser", {}) if isinstance(info, dict) else {}
@@ -55,7 +55,7 @@ def identity(context, session):
     if not uid or not tenant or uid != exchanged["user_id"] or tenant != exchanged["tenant_id"]:
         raise SetupRefused("SETUP_IDENTITY_MISMATCH")
     registry_file = getattr(getattr(context, "settings", None), "environment_registry_file", "")
-    if registry_file:
+    if registry_file and require_admission:
         from aiops_diagnostics.gateway.environment_registry import RegistryError, for_settings
 
         try:
