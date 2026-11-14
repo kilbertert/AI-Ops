@@ -150,7 +150,7 @@ function SearchSelect({
               <ComboboxInputGroup className="h-8 min-h-8 px-2">
                 <span
                   aria-hidden
-                  className="i-ri-search-line mr-0.5 size-4 shrink-0 text-components-input-text-placeholder"
+                  className="mr-0.5 i-ri-search-line size-4 shrink-0 text-components-input-text-placeholder"
                 />
                 <ComboboxInput
                   aria-label={`搜索${label}`}
@@ -223,12 +223,9 @@ export function ManagedPublish({
           : '输出上限：模型默认'}{' '}
         · {status.published ? `正式 V${status.version_no}` : '尚未发布'}
       </span>
-      {entry === 'consumer' && (
-        <span
-          data-aiops-knowledge="true"
-          className="system-xs-regular text-text-tertiary"
-        >
-          对客知识库 {status.knowledge_base_ids?.length || 0} 个
+      {entry === 'consumer' && !status.published && status.live_app_id && (
+        <span className="system-xs-regular text-text-warning">
+          当前客户端仍使用另一应用的正式 V{status.live_version_no}；发布成功后才切换到本应用。
         </span>
       )}
       {entry === 'consumer' && status.channel !== 'connected' && (
@@ -246,9 +243,11 @@ export function ManagedPublish({
           setMessage('')
           try {
             await save()
-            setMessage(`已发布到${entryLabels[entry]}`)
+            setMessage(`已发布到${entryLabels[entry]}，本次提示词与配置已生效`)
           } catch (e) {
-            setMessage(e instanceof Error ? e.message : '操作未完成')
+            setMessage(
+              `${e instanceof Error ? e.message : '操作未完成'}；发布未确认成功，请刷新核对正式版本`,
+            )
           } finally {
             setBusy(false)
           }
@@ -258,7 +257,11 @@ export function ManagedPublish({
       </Button>
       <Popover>
         <PopoverTrigger
-          render={<Button variant="secondary" size="small">版本操作</Button>}
+          render={
+            <Button variant="secondary" size="small">
+              版本操作
+            </Button>
+          }
         />
         <PopoverContent placement="bottom-end">
           <div className="flex w-56 flex-col gap-2">
@@ -385,7 +388,7 @@ export default function TenantSetup() {
   }, [open, catalogue])
   if (error && !catalogue)
     return (
-      <p role="alert" className="system-sm-regular px-6 py-2 text-text-warning">
+      <p role="alert" className="px-6 py-2 system-sm-regular text-text-warning">
         {error}
       </p>
     )
@@ -426,7 +429,7 @@ export default function TenantSetup() {
         </Button>
       </div>
       {!open && error && (
-        <p role="alert" className="system-sm-regular mt-2 text-text-destructive">
+        <p role="alert" className="mt-2 system-sm-regular text-text-destructive">
           {error}
         </p>
       )}
@@ -498,12 +501,7 @@ export default function TenantSetup() {
             </div>
             <div className="flex w-56 flex-col gap-1">
               <span className={fieldLabel}>应用名称</span>
-              <Input
-                aria-label="应用名称"
-                maxLength={128}
-                value={name}
-                onValueChange={setName}
-              />
+              <Input aria-label="应用名称" maxLength={128} value={name} onValueChange={setName} />
             </div>
             <Button
               variant="primary"
@@ -557,7 +555,7 @@ export default function TenantSetup() {
             </Button>
           </div>
           {error ? (
-            <p role="alert" className="system-sm-regular my-2 text-text-destructive">
+            <p role="alert" className="my-2 system-sm-regular text-text-destructive">
               {error}
             </p>
           ) : null}
@@ -565,9 +563,7 @@ export default function TenantSetup() {
             <div className="mt-3 flex flex-col gap-2">
               {catalogue.operations.map((op) => {
                 const progress = op.entries || {}
-                const anyEntryFailed = Object.values(progress).some(
-                  (v) => v?.state === 'failed',
-                )
+                const anyEntryFailed = Object.values(progress).some((v) => v?.state === 'failed')
                 return (
                   <div
                     key={op.id}
@@ -583,7 +579,7 @@ export default function TenantSetup() {
                       </span>
                     )}
                     {op.state === 'completed' && (
-                      <span className="system-xs-regular flex items-center gap-1.5 text-text-secondary">
+                      <span className="flex items-center gap-1.5 system-xs-regular text-text-secondary">
                         <StatusDot status="success" size="medium" />
                         已完成
                       </span>
@@ -592,14 +588,14 @@ export default function TenantSetup() {
                       <span
                         role="status"
                         data-aiops-partial="true"
-                        className="system-xs-regular flex items-center gap-1.5 text-text-warning"
+                        className="flex items-center gap-1.5 system-xs-regular text-text-warning"
                       >
                         <StatusDot status="warning" size="medium" />
                         {messages.SETUP_PARTIAL}
                       </span>
                     )}
                     {op.state === 'failed' && (
-                      <span className="system-xs-regular flex items-center gap-1.5 text-text-destructive">
+                      <span className="flex items-center gap-1.5 system-xs-regular text-text-destructive">
                         <StatusDot status="error" size="medium" />
                         未完成
                       </span>
@@ -608,7 +604,7 @@ export default function TenantSetup() {
                       <span
                         key={key}
                         data-aiops-progress={key}
-                        className="system-xs-regular flex items-center gap-1.5 text-text-secondary"
+                        className="flex items-center gap-1.5 system-xs-regular text-text-secondary"
                       >
                         <StatusDot status={entryTone(value)} size="medium" />
                         <span>
