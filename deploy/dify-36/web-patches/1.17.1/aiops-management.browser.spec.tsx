@@ -154,10 +154,7 @@ it('does not preselect an end without a published source', async () => {
     body.action === 'catalogue'
       ? Response.json({
           ...catalogue,
-          entries: [
-            { ...catalogue.entries[0], sources: [] },
-            catalogue.entries[1],
-          ],
+          entries: [{ ...catalogue.entries[0], sources: [] }, catalogue.entries[1]],
         })
       : Response.json({ id: 'operation' }),
   )
@@ -263,7 +260,6 @@ it('labels the consumer end and shows the pending channel beside it', async () =
     />,
   )
   await expect.element(screen.getByText('客户端客服', { exact: true })).toBeVisible()
-  await expect.element(screen.getByText('对客知识库 2 个')).toBeVisible()
   await expect.element(screen.getByText('AI 已准备，渠道待接入')).toBeVisible()
   await screen.getByRole('button', { name: '发布到客户端客服' }).click()
   await expect.element(screen.getByRole('status')).toHaveTextContent('已发布到客户端客服')
@@ -301,9 +297,7 @@ it('translates the retracted-version refusal instead of blaming the session', as
       ),
     ),
   )
-  await expect(publishManaged('app', { pre_prompt: 'SOP' }, 3)).rejects.toThrow(
-    '该版本已撤回',
-  )
+  await expect(publishManaged('app', { pre_prompt: 'SOP' }, 3)).rejects.toThrow('该版本已撤回')
 })
 
 it('shows the backend message with its code for codes without a translation', async () => {

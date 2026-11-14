@@ -37,6 +37,7 @@
 - Dify 试用只接受已登记 `app_id`，按绑定运行 Dify/Java 草稿；不接受裸 prompt/旧工具白名单。
 - 未配置业务路线时返回 `CHAT_ROUTE_UNAVAILABLE`，不回落 Python、通用问答或旧 FAQ 匹配。
 - 固定 FAQ API、健康报告、确定性聚合、知识库与发布管理继续保留。
+- 客服受管发布区可直接编辑本应用选库；租户对客授权独立显示。选库与提示词保存为草稿后，发布成功才切换正式版本，失败可修正后重试。见[选库与发布](docs/agents/consumer-wf01/knowledge-picker-deploy.md)。
 
 详细边界见[退役说明](docs/runtime-retirement.md)，阶段与线上最后证据见
 [交付状态](docs/agents/current-delivery-state.md)和[测试交接](docs/testing-handoff.md)。
