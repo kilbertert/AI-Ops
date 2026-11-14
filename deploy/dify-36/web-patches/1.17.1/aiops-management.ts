@@ -55,6 +55,11 @@ export const entryLabels: Record<EntryKey, string> = {
 }
 
 export const messages: Record<string, string> = {
+  ENVIRONMENT_MANAGEMENT_UNAVAILABLE: '环境目录尚未准备，请联系平台运维',
+  ENVIRONMENT_MANAGEMENT_FORBIDDEN: '当前账号没有环境管理授权',
+  ENVIRONMENT_REGISTRY_REVISION_CONFLICT: '目录已被更新，请刷新后重新确认修改',
+  ENVIRONMENT_REGISTRY_UPDATE_REFUSED: '目录更新被拒绝，请核对名称或联系平台运维',
+  ENVIRONMENT_TENANT_NOT_REGISTERED: '该租户尚未登记到此环境',
   SETUP_KEY_DIRECTORY_UNWRITABLE: '应用凭据存储不可写，请联系平台管理员修复后重试',
   SETUP_KNOWLEDGE_FAILED: '知识库准备或模型校验失败，请重试；持续失败请联系平台管理员',
   SETUP_KNOWLEDGE_REQUIRED: '请重试以补齐默认知识库空间',
