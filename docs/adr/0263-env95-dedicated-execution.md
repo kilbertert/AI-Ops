@@ -9,3 +9,8 @@ Status: Accepted
 本阶段保留独立栈，设置1408MiB总容器上限并验证真实请求峰值；内存不足即停止新栈，不能牺牲公司服务。
 
 节点包携带回调渲染器所需的最小operator_tools模块及同版JSON，渲染用包内PYTHONPATH；不依赖服务宿主已有Gateway版本。
+
+MySQL官方镜像首次初始化使用无TCP的临时服务，socket ping不能证明平台可连。95健康检查改为带身份的TCP SELECT 1，
+并为小型内部元数据库限制buffer/cache/连接数，关闭performance_schema和未使用的命名时区装载；不影响公司业务库时区。
+初始化脚本全部完成后另写元库完成标记；健康经TCP查询该标记。半初始化卷重启虽能SELECT 1也不就绪。
+两份初始化SQL逐文件只读挂载，避免在已只读挂载目录下再创建嵌套挂载点导致OCI启动失败。
