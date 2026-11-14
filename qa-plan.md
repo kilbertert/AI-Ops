@@ -1124,11 +1124,11 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | INTENT-03 | 本地 dev | FAQ fixture | 提交“充电枪拔不出来怎么办” | `200 type=faq`，不创建异步作业 | PASS：200 type=faq consumer.faq.q010 同步答案 |
 | INTENT-04 | 本地 dev | 已授权订单 123 | 提交“订单 123 为什么提前结束” | `202 type=diagnosis`，返回 diagnosis_id | PASS：内嵌真实归属订单 2099211664421249025 → 202 diagnosis，终态 completed/diagnosed/medium；非本人订单正确回落 |
 | INTENT-05 | 本地 dev | 无订单上下文 | 提交“是不是扣错钱了” | `200 type=clarification`，missing_fields 含 order_no | PASS：200 type=clarification missing_fields=[order_no] |
-| INTENT-06 | 本地 dev | 已发布 smart_diagnosis | 读取快捷动作并选择订单后提交统一入口 | 返回稳定 code/requires_order；执行走 assistant questions | PASS：GET /v1/shortcuts 4 条含 requires_order；case_exploration 带 target_agent_version |
+| INTENT-06 | 本地 dev | 已发布 smart_diagnosis | 读取快捷动作并选择订单后提交统一入口 | 返回稳定 code/requires_order；执行走 assistant questions | PASS：GET /v1/shortcuts 4 条含 requires_order；case_exploration 带 target_agent_version。（**2026-11-14 注**：`case_exploration` 已退役，列表现为两条；`target_agent_version` 成存量元数据） |
 | INTENT-07 | 本地 dev | 已发布 report_fault | 不提供故障描述触发动作 | clarification 要求 fault_description；不创建工单 | PASS（形态差异）：实际为 qa 完成态收集故障信息（类型/桩号/时间/安全），不建工单；clarification 形态待后续 |
 | INTENT-08 | 本地 dev | 已发布 case_exploration + 宣传 Agent | 点击案例入口并轮询 | 结构化宣传卡片；不进入 FAQ；不泄露内部标识 | PASS：新加坡无人巴士案例 found 四段卡片+video+reference；无料场景 not_found 诚实空卡片；solution_discovery 本地化空卡片；promo 指标桶正确归因。（**2026-11-14 注**：宣传路由已随 #1125 退役，本行所验合同已不存在，记录仅留作历史） |
 | INTENT-09 | 本地 dev | 已授权订单 2096164064667852801 | 提交英文内嵌订单号“Please check charging anomalies for order (2096164064667852801)” | `202 type=diagnosis`，order_no_extracted 为该订单号 | PASS：202 diagnosis，order_no_extracted 正确（修复前为 `qa`——英文取自句首单词 `Please`） |
-| INTENT-10 | 本地 dev | 无订单上下文 | 提交英文“Show me a customer case”等纯文本提问 | 不识别出订单号；不被路由为订单诊断 | PASS：文本内嵌识别返回 None，走宣传/问答路径 |
+| INTENT-10 | 本地 dev | 无订单上下文 | 提交英文“Show me a customer case”等纯文本提问 | 不识别出订单号；不被路由为订单诊断 | PASS：文本内嵌识别返回 None，走问答路径（**2026-11-14 注**：当时的「宣传」路由已随 #1125 退役） |
 | INTENT-11 | 本地 dev | 无订单上下文，Accept-Language=en | 提交“Was I overcharged for this charging session?” | `200 type=clarification`，missing_fields 含 order_no，message 为英文 | PASS：200 clarification，missing_fields=[order_no]，英文文案（修复前英文提问完全绕过该守卫，且文案恒为中文） |
 | INTENT-12 | 本地 dev | 无订单上下文 | 提交独立主题词“refund”/“Why did charging stop unexpectedly?” | 不返回 clarification；按 FAQ 或通用问答处理 | PASS：“refund”→“qa”（不误判为争议）；q011 走 FAQ |
 | INTENT-20 | 41 实机（真实 Jev） | #408 修复后 | 提交“今天天气怎么样” | 不返回 type=faq；不给出 q026 的答案 | PASS（2026-09-24，真实判定）：intent=casual → 短路被抑制 → qa。**这是 INTENT-02 原题首次真正通过** |
@@ -1165,7 +1165,7 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 
 > ⚠️ **本节全部失效（2026-11-14）**：宣传路由 `_promo_route`/`_start_promo_qa`/
 > `promo_agents.py` 已随 #1125 的 Python harness 退役删除，`case_exploration`
-> 指令同日整体退役（ADR-0254）。下列预期描述的是不再存在的合同，留作历史。
+> 指令于 2026-11-14 整体退役（ADR-0254）。下列预期描述的是不再存在的合同，留作历史。
 
 | ID | 环境 | 前置 | 操作 | 预期 | 清理 |
 |---|---|---|---|---|---|

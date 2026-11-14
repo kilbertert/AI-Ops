@@ -205,7 +205,8 @@ POST /v1/assistant/questions
 滞留客户端若仍发这个 code：`find_effective_by_code` 已查不到有效行，请求按
 普通问句处理（不返回 404）。自由文本写「我想看看客户案例」同样按普通问句走
 既有问答路径 —— 曾经的宣传路由已随 #1125 的 Python harness 退役一并移除，
-不再产出宣传卡或 `retrieval_status=unavailable`。
+不再产出宣传卡；普通问答自身的 `retrieval_status=unavailable`（检索依赖故障）
+仍可能出现，按既有「暂不可用」渲染，**不要**写成"没有案例"。
 
 ```http
 POST /v1/assistant/questions
@@ -270,7 +271,7 @@ POST /v1/assistant/questions
 - [ ] 显式带 `order_no` 得到 `404` 时，提示"订单不存在或无权查看"，**不重试**。
 - [ ] 客户案例：**指令已退役**（2026-11-14，§3.2），前端不要再渲染这颗按钮；
       自由文本写「客户案例」按**普通问答**处理 —— 宣传路由已随 #1125 删除，
-      不会再产出宣传卡或 `retrieval_status=unavailable`。
+      不再产出宣传卡；普通问答的 `unavailable`（检索依赖故障）仍按「暂不可用」渲染。
 - [ ] 不要保存、打印或打包 AI-Ops 服务令牌（它只在 BFF 与 Nginx 之间）。
 - [ ] 不要试图用 `client-type` 切换入口（见[另一篇](client-type-vs-business-entry.md)）。
 - [ ] **先把「AI-Ops 收谁的身份」定下来**：见
@@ -326,7 +327,7 @@ GET /charging-pile/chOrderInfo/getOrderUserPage?current=1&size=10&status=1
 ## 6. 已知边界（后端如实告知）
 
 - ~~**管家端**「客户案例」动作**已恢复**（2026-10-19，ADR-0050 反转 ADR-0031）~~ ——
-  **2026-11-14 注**：该指令已随同日整体退役（ADR-0254，见 §3.2），本条边界不再成立，
+  **2026-11-14 注**：该指令已于当日整体退役（ADR-0254，见 §3.2），本条边界不再成立，
   留作历史。
 - **入口头是调用方自报的**：41 的 Nginx 只做"没带就当 `consumer`"的兜底，
   不校验自报值。真实前端按入口发它即可；这不放大到"无范围"（管家端范围仍受运营商站点集合约束）。

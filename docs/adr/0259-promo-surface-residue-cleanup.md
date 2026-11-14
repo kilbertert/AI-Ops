@@ -2,9 +2,14 @@
 
 日期：2026-11-14
 状态：已采纳
-影响版本：`common/i18n.py`、`acceptance.feature`、`qa-plan.md`、
-`docs/agents/*`、`docs/architecture/repository-layout.md`、`docs/testing-api-guide.md`、
-`tests/common/test_i18n*.py`、`tests/gateway/test_assistant_api.py`
+影响版本：`common/i18n.py`、`common/answer_language.py`、
+`gateway/metrics_store.py`、`gateway/gateway_runtime.py`、`gateway/gateway_config.py`、
+`publication/qa_rag.py`、`tools/content/derive_zh_hant.py`、
+`acceptance.feature`、`qa-plan.md`、`docs/agents/*`、
+`docs/architecture/repository-layout.md`、`docs/testing-api-guide.md`、
+`tests/common/test_i18n*.py`、`tests/gateway/test_assistant_api.py`、
+`tests/operator_support.py`、`tests/conversation/test_conversation_api.py`、
+`tests/gateway/test_request_observation.py`、`tests/gateway/test_gateway_runtime_failures.py`
 
 ## 背景
 
@@ -20,14 +25,22 @@
 **把宣传面残留分三类处理：死代码删、死合同标记失效、活机制注释订正。**
 
 1. **删除（无消费者）**：`i18n.py` 的 `PROMO_EMPTY_MESSAGES` 与
-   `PROMO_UNAVAILABLE_MESSAGES` 两张全语言表（唯一消费者是 i18n 结构测试自身）；
-   `test_assistant_api.py` 里替身的 `start_assistant_qa` 死桩（src 侧同名方法
-   已不存在，无任何调用方）及随之死去的 `qa_calls`/`skip_retrieval` 属性。
-2. **标记失效（历史保留）**：`acceptance.feature` 的「宣传内容与客服 FAQ 隔离」
-   Rule 整段与其余案例场景改为墓碑注释/改写；`qa-plan.md` 中指向宣传路径的
-   PASS/PARTIAL/BLOCKED/待办各行加 2026-11-14 失效注（账本只标不删）；
+   `PROMO_UNAVAILABLE_MESSAGES` 两张全语言表（消费者只有两个 i18n 结构测试
+   与 `derive_zh_hant` 的登记表，同步摘除）；各测试替身里的
+   `start_assistant_qa` 死桩 —— src 侧同名方法已不存在、无任何调用方，
+   `test_assistant_api.py` / `test_request_observation.py` /
+   `test_conversation_api.py` / `test_gateway_runtime_failures.py` /
+   `operator_support.py` 各一处；及随之死去的 `qa_calls`/`skip_retrieval`
+   属性和三处恒真的 `_qa == {}` 断言（真正的守卫是替身不再实现 QA 启动
+   方法 —— 误走 QA 路由会 AttributeError → 500 → 红，外加
+   `runtime.calls == []` 覆盖诊断路）。
+2. **标记失效（历史保留）**：`acceptance.feature` 的「宣传内容与客服 FAQ
+   隔离」Rule 整段改为墓碑注释，其余案例场景改写为在役 code；另有三个
+   只属于死路径的场景**直接删除**（响应体逐字段相同 / 英文案例卡仍含中文 /
+   案例类短问题不进 FAQ —— 它们断言的是宣传路由独有的形状，改写无对象）。
+   `qa-plan.md` 中指向宣传路径的各行加 2026-11-14 失效注（账本只标不删）；
    `operator-authorization-questions.md`、`operator-repair-blueprint.md`、
-   `frontend-api-brief.md` 等活文档里的宣传活声明加同日订正。
+   `frontend-api-brief.md` 等活文档里的宣传活声明加 2026-11-14 订正。
 3. **保留并订正注释（活机制/历史词表）**：
    - `metrics_store` 的 `"promo"` 路由类型 —— `record()` 对未声明类型拒绝，
      存量行还要靠它读；注释标为历史词表。
@@ -53,7 +66,7 @@
 
 ## 后果
 
-- i18n 表从 5 张用户面表收敛为 3 张；11 语结构覆盖门禁不再守护死文案。
+- i18n 用户面表从 6 张收敛为 4 张；11 语结构覆盖门禁不再守护死文案。
 - 规格文本不再声称存在宣传卡合同；QA 账本里的历史 PASS 仍可读但明确失效。
 - 下一个把「客户案例」加回来的人不会再被 `promo_agents.py:80-108` 这类
   指向已删文件的证据引用骗到。

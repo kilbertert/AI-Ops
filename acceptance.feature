@@ -1235,7 +1235,7 @@ Feature: 快捷动作跳转站内页面
       When 读取该动作
       Then jump_path 为 null 且该动作按提示动作工作
 
-    Scenario: 跳转路径与 Agent 绑定互斥
+    Scenario: 跳转路径与 target_agent_version 互斥
       Given 管理员在创建请求中同时提交 jump_path 与 target_agent_version
       When 调用创建快捷动作接口
       Then 请求被拒绝且错误码为 SHORTCUT_VALIDATION_FAILED

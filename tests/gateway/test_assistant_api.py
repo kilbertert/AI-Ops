@@ -198,7 +198,10 @@ def test_order_bound_shortcut_requires_order_context(tmp_path: Path) -> None:
     body = resp.json()
     assert body["type"] == "clarification"
     assert body["missing_fields"] == ["order_no"]
-    assert runtime._qa == {}
+    # No job of either kind was created: the double implements no QA-start
+    # method (a wrongly routed request raises AttributeError → 500 → red), and
+    # `calls` below records diagnosis starts.
+    assert runtime.calls == []
 
 
 def test_assistant_qa_poll_unknown_is_404(tmp_path: Path) -> None:
@@ -325,7 +328,6 @@ def test_jump_shortcut_at_entry_returns_clarification_and_creates_no_job(tmp_pat
     assert body["type"] == "clarification"
     assert body["missing_fields"] == []
     # No job of either kind was created.
-    assert runtime._qa == {}
     assert runtime.calls == []
 
 
@@ -356,7 +358,6 @@ def test_jump_shortcut_creates_no_job_even_with_an_owned_order(tmp_path: Path) -
     assert resp.status_code == 200, resp.text
     assert resp.json()["type"] == "clarification"
     assert runtime.calls == []
-    assert runtime._qa == {}
 
 
 def test_clarification_message_follows_accept_language(tmp_path: Path) -> None:

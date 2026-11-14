@@ -1692,9 +1692,10 @@ s = manager.create(admin, {
     "labels": {"zh": "客户案例", "en": "Customer Cases"},
     "descriptions": {"zh": "...", "en": "..."},
     "question_templates": {"zh": "我想看看客户案例", "en": "..."},
-    "target_agent_version": "agt_xxx#v1",   # 宣传类才填，其余 None
+    "target_agent_version": "agt_xxx#v1",   # 仅宣传意图白名单可填，其余 None
     # ⚠️ 2026-11-14 注：case_exploration 已整体退役（ADR-0254）、宣传路由已随
-    #    #1125 删除 —— 示例请换成在役 code；target_agent_version 新行不要填。
+    #    #1125 删除 —— 示例请换成在役 code；白名单只剩退役 intent，
+    #    target_agent_version 实际无可绑定对象，新行不要填。
 })
 manager.publish(admin, s.shortcut_id, expected_revision=s.revision)
 ```
