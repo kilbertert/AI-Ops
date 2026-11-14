@@ -1,7 +1,7 @@
 # 公司网关来源校验第二片（进行中）
 
-基线a33863e7，分支feat/company-gateway-admission。用户已授权实施公司正式网关架构。
+基线a33863e7，原分支feat/company-gateway-admission；交付分支feat/gateway-admission-delivery。用户已授权实施公司正式网关架构。
 新增显式启用的RS256来源验证与持久重放拒绝，绑定环境及原HTTP请求后仍沿现有用户授权链。
-已完成17项本地ASGI反例，Java17→Python签发互通及一次性Gateway技能通过；尚未全量/独立Hack/PR/部署；公司签发适配和只读接口未完成。
+已完成17项本地ASGI反例，Java17→Python签发互通及一次性Gateway技能通过；本地全量5101通过/9跳过，定向最终36项；#1532等待CI/独立Hack，尚未部署；公司签发适配和只读接口未完成。
 本片不启用到现有客户，不把来源签名替代token级本环境登录确认。
 首片#1530已合并并完成Gateway/桥/网页配套，正常公司登录后原/apps可见新环境入口；41目录未启用，显示未准备。
