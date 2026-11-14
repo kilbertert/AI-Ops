@@ -1083,16 +1083,12 @@ def sync_workflow_from_dify(
         "workflow": frozen,
     }
     if consumer_settings is not None:
-        from aiops_diagnostics.consumer import consumer_publication
-
         snapshot_body["consumer_service"] = consumer_settings
         # 工作流与兼容读取投影必须来自同一份发布内容，不能沿用上版提示词/选库。
-        document = {"workflow": frozen}
-        snapshot_body.update(
-            knowledge_base_ids=list(consumer_settings["knowledge_base_ids"]),
-            prompt=consumer_publication.answer_prompt(document),
-            model=consumer_publication.answer_model(document),
-        )
+        snapshot_body["knowledge_base_ids"] = list(consumer_settings["knowledge_base_ids"])
+        if bootstrap is not None:
+            current = bootstrap({"workflow": frozen})
+            snapshot_body.update(prompt=current["prompt"], model=current["model"])
     agent = (
         manager.fork_draft(context, existing.agent_id, expected_revision=existing.revision)
         if existing.status == "published"

@@ -47,3 +47,7 @@ select_customer_agent返回新库且旧版本不变。其余阅读推断不计�
 正式路由不动。独立Codex会话publication_hack执行，未参与实现。
 风险检查：发布函数分支节点22、恢复查询1；定向覆盖数据已留存。未新增通用变异框架，
 通过旧版实测失败、快照旧值反例及人工revision竞争检验权限与持久化边界。
+
+CI 43552135979：5052通过、10跳过、1失败，新增循环依赖检查阻止了快照补修引入的
+consumer_publication→node_publication→dify_dsl_pull环。已改为复用调用方传入的bootstrap
+读取冻结工作流配置；选库/提示词回归及完整架构检查通过，待最终CI。
