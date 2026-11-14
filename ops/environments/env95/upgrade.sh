@@ -33,7 +33,7 @@ chmod -R a+rX "$release"
 # 升级不变更服务单元；不相容的服务/数据库迁移必须有单独变更流程。
 cmp "$bundle/ops/environments/env95/aiops-gateway-95.service" /etc/systemd/system/aiops-gateway-95.service
 check_state() {
-  "$release/venv/bin/python" - <<'PY'
+  runuser -u aiops -- "$release/venv/bin/python" - <<'PY'
 import os, sqlite3
 from pathlib import Path
 from dotenv import dotenv_values

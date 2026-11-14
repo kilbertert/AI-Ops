@@ -18,6 +18,9 @@ from pathlib import Path
 name=Path(sys.argv[0]).name; args=sys.argv[1:]; root=Path(os.environ['CASE_ROOT'])
 with (root/'commands').open('a') as log: log.write(json.dumps([name,*args])+'\n')
 if name=='id': print(0)
+elif name=='runuser':
+    assert args[:3]==['-u','aiops','--']
+    sys.exit(subprocess.run(args[3:]).returncode)
 elif name=='python3' and args[:2]==['-m','venv']:
     target=Path(args[2])/'bin'; target.mkdir(parents=True)
     import shlex
@@ -44,7 +47,7 @@ def fixture_host(tmp_path):
     bindir.mkdir()
     (bindir / "stub").write_text(STUB)
     (bindir / "stub").chmod(0o700)
-    for name in ("id", "python3", "systemctl", "curl", "sleep"):
+    for name in ("id", "runuser", "python3", "systemctl", "curl", "sleep"):
         (bindir / name).symlink_to("stub")
     for name in ("etc/aiops-95", "etc/systemd/system", "var/lib/aiops-95/gateway", "run/lock"):
         (root / name).mkdir(parents=True)
@@ -154,5 +157,7 @@ def test_upgrade_preserves_state_and_rolls_back_failed_candidate(tmp_path, failu
     commands = (tmp_path / "commands").read_text()
     if failure in {"schema", "symlink", "artifact", "inflight", "trial", "health-job"}:
         assert '"systemctl", "stop"' not in commands
+    if not failure:
+        assert commands.count('"runuser", "-u", "aiops", "--"') == 2
     if failure == "health":
         assert '"systemctl", "start"' in commands
