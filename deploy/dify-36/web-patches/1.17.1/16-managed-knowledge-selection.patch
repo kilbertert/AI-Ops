@@ -1,0 +1,27 @@
+--- a/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx
++++ b/web/app/components/workflow-app/components/workflow-header/features-trigger.tsx
+@@ -23,6 +23,7 @@
+   useChecklistBeforePublish,
+ } from '@/app/components/workflow/hooks/use-checklist'
+ import { useNodesSyncDraft } from '@/app/components/workflow/hooks/use-nodes-sync-draft'
++import { useNodeDataUpdate } from '@/app/components/workflow/hooks/use-node-data-update'
+ import { useIsChatMode, useNodesReadOnly } from '@/app/components/workflow/hooks/use-workflow'
+ import { isAgentV2NodeData } from '@/app/components/workflow/nodes/agent-v2/types'
+ import { useStore, useWorkflowStore } from '@/app/components/workflow/store'
+@@ -48,6 +49,7 @@
+   const { theme } = useTheme()
+   const isChatMode = useIsChatMode()
+   const workflowStore = useWorkflowStore()
++  const { handleNodeDataUpdate } = useNodeDataUpdate()
+   const queryClient = useQueryClient()
+   const appDetail = useAppStore((s) => s.appDetail)
+   const setAppDetail = useAppStore((s) => s.setAppDetail)
+@@ -302,6 +304,8 @@
+         <WorkflowManagedStrip
+           status={managedStatus}
+           save={() => onPublish()}
++          nodes={nodes}
++          updateNode={handleNodeDataUpdate}
+           sync={async () => handleSyncWorkflowDraft(true)}
+           disabled={nodesReadOnly || !canReleaseAndVersion}
+         />

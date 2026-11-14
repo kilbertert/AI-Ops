@@ -185,6 +185,20 @@ class SelfServiceStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def recoverable_consumer_draft(self, app_id, tenant_id, workspace_id, environment):
+        """只识别系统创建且从未更新/发布的受管应用半成品，不用提示词判归属。"""
+        with self.connection(write=False) as db:
+            rows = db.execute(
+                "SELECT a.agent_id FROM agents a JOIN operator_apps o "
+                "ON a.tenant_id=o.tenant_id AND a.name=o.agent_name "
+                "WHERE o.app_id=? AND o.tenant_id=? AND o.workspace_id=? AND o.environment=? "
+                "AND o.entry='consumer' AND o.agent_name=? AND a.created_by='aiops-admin' "
+                "AND a.status='draft' AND a.revision=1 AND a.published_version IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM agent_versions v WHERE v.agent_id=a.agent_id)",
+                (app_id, tenant_id, workspace_id, environment, "consumer-" + app_id),
+            ).fetchall()
+        return rows[0]["agent_id"] if len(rows) == 1 else None
+
     def repair_entry(self, app_id: str, *, tenant_id: str, entry: str) -> bool:
         """把一条端写错的旧登记改回注册表说的那一端；返回是否改动。
 

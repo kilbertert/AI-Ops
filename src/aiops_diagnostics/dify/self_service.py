@@ -313,6 +313,7 @@ class SelfService:
         route = self.route_for(row["tenant_id"], "consumer")
         model = ""
         draft_sha256 = ""
+        knowledge_base_ids = []
         try:
             doc = self.console._call(row["workspace_id"], "/console/api/apps/" + row["app_id"])
             if isinstance(doc, dict):
@@ -329,9 +330,9 @@ class SelfService:
                 self.settings.dify_console_api_key,
                 row["workspace_id"],
             )
-            draft_sha256 = consumer_publication.workflow_of(
-                workflow_content(DifyDslClient(source).export_dsl())
-            )
+            workflow = workflow_content(DifyDslClient(source).export_dsl())
+            draft_sha256 = consumer_publication.workflow_of(workflow)
+            knowledge_base_ids = list(prepare.consumer_source_ids({"workflow": workflow}))
         except Exception:  # noqa: BLE001 - 读不到草稿摘要只降级展示（发布时会拒绝缺摘要的客户端发布）
             draft_sha256 = ""
         channel = self._channel_state(row["tenant_id"], "consumer")
@@ -347,7 +348,9 @@ class SelfService:
             "version_no": route.agent_version_no if route and route.app_id == row["app_id"] else None,
             "route_revision": route.revision if route else 0,
             "profile": "",
-            "knowledge_base_ids": list(targets.get("knowledge_base_ids") or []),
+            "knowledge_base_ids": knowledge_base_ids,
+            "live_app_id": route.app_id if route and route.active else None,
+            "live_version_no": route.agent_version_no if route and route.active else None,
             "live_order_status": bool(targets.get("live_order_status")),
             "live_billing_record": bool(targets.get("live_billing_record")),
             "channel": channel["state"],
@@ -775,7 +778,7 @@ class SelfService:
 
                 try:
                     return self._publish_consumer(caller, row, revision, expected_draft)
-                except ConsumerFlowError:
+                except ConsumerFlowError as exc:
                     self.context.store.record_publish_audit(
                         app_id=app_id,
                         action="refused",
@@ -785,7 +788,9 @@ class SelfService:
                         agent_name=row["agent_name"],
                         company_user_id=caller.user_id,
                     )
-                    raise
+                    raise ConsumerFlowError(
+                        str(exc) + "；请核对当前应用草稿的选库，本次提示词与选库未发布"
+                    ) from exc
             doc = self.console._call(row["workspace_id"], "/console/api/apps/" + app_id)
             mc = doc["model_config"]
             if _declared_dataset_ids(mc):
@@ -897,6 +902,9 @@ class SelfService:
             consumer_libraries=lambda: owned_libraries(self.context.runtime, row["tenant_id"]),
             bootstrap=bootstrap,
             expected_workflow=workflow,
+            bootstrap_agent_id=self.store.recoverable_consumer_draft(
+                row["app_id"], row["tenant_id"], row["workspace_id"], self.settings.execution_environment
+            ),
         )
         if outcome.action == "refused":
             raise auth.SetupRefused("SETUP_AGENT_UNAVAILABLE")
