@@ -45,6 +45,7 @@ from aiops_diagnostics.common.bounded_http import (
 from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 from aiops_diagnostics.common.redaction import redact_text
 from aiops_diagnostics.common.scalar_rules import as_datetime, now_utc
+from aiops_diagnostics.knowledge.tenant_scope import knowledge_tenant
 
 KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
 ALLOWED_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
@@ -654,7 +655,15 @@ class KnowledgeSearchGuard:
 class KbServiceClient:
     """Small stdlib HTTP client for the existing kb-service search contract."""
 
-    def __init__(self, base_url: str, *, tenant_id: str, service_token: str = "", timeout: float = 10):
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        tenant_id: str,
+        service_token: str = "",
+        timeout: float = 10,
+        environment: str = "",
+    ):
         parsed = urllib.parse.urlsplit(base_url.strip())
         if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
             raise ValueError("kb-service base URL must be an absolute URL without query or fragment")
@@ -667,6 +676,7 @@ class KbServiceClient:
             raise ValueError("tenant_id is required")
         self.base_url = base_url.rstrip("/")
         self.tenant_id = tenant_id
+        self.environment = environment
         self.service_token = service_token.strip()
         self.timeout = timeout
 
@@ -679,6 +689,7 @@ class KbServiceClient:
         return KbServiceClient(
             self.base_url,
             tenant_id=tenant_id,
+            environment=self.environment,
             service_token=self.service_token,
             timeout=self.timeout,
         )
@@ -698,7 +709,7 @@ class KbServiceClient:
         someone decide whether to tick a box.
         """
         url = join_url(self.base_url, "/kb/knowledge-bases")
-        headers = {**tenant_id_header(self.tenant_id)}
+        headers = {**tenant_id_header(knowledge_tenant(self.tenant_id, self.environment))}
         if self.service_token:
             headers["Authorization"] = bearer_auth_header(self.service_token)
         payload = request_json(
@@ -738,7 +749,10 @@ class KbServiceClient:
         if not name.strip() or len(name) > 128:
             raise ValueError("knowledge base name is required")
         url = join_url(self.base_url, "/kb/knowledge-bases")
-        headers = {"Content-Type": JSON_CONTENT_TYPE, **tenant_id_header(self.tenant_id)}
+        headers = {
+            "Content-Type": JSON_CONTENT_TYPE,
+            **tenant_id_header(knowledge_tenant(self.tenant_id, self.environment)),
+        }
         if self.service_token:
             headers["Authorization"] = bearer_auth_header(self.service_token)
         payload = request_json(
@@ -761,7 +775,10 @@ class KbServiceClient:
         merged: list[dict[str, Any]] = []
         for kb_id in knowledge_base_ids:
             url = join_url(self.base_url, f"/kb/knowledge-bases/{quote_segment(kb_id)}/search")
-            headers = {"Content-Type": JSON_CONTENT_TYPE, **tenant_id_header(self.tenant_id)}
+            headers = {
+                "Content-Type": JSON_CONTENT_TYPE,
+                **tenant_id_header(knowledge_tenant(self.tenant_id, self.environment)),
+            }
             if self.service_token:
                 headers["Authorization"] = bearer_auth_header(self.service_token)
             payload = request_json(
@@ -807,7 +824,7 @@ class KbServiceClient:
                 f"/kb/knowledge-bases/{quote_segment(grant.knowledge_base_id)}"
                 f"/documents/{quote_segment(grant.document_id)}/download"
             )
-        headers = tenant_id_header(self.tenant_id)
+        headers = tenant_id_header(knowledge_tenant(self.tenant_id, self.environment))
         if range_header:
             # Single-range only; parse_byte_range rejects the multi-range form
             # before we reach here, so replaying the header upstream is safe.

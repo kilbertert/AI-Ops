@@ -13,6 +13,7 @@ import typer
 from aiops_diagnostics.common.config import Settings, selected_config_file
 from aiops_diagnostics.gateway import gateway_schema
 from aiops_diagnostics.gateway.gateway_config import SETTING_SOURCES, GatewayServerSettings
+from aiops_diagnostics.knowledge.tenant_scope import namespace_for
 
 admin_app = typer.Typer(name="admin", help="AI-Ops 网关管理操作（环境清单收敛）", no_args_is_help=True)
 
@@ -262,7 +263,12 @@ def reconcile(
     knowledge_resolver = None
     if kb_url:
         knowledge_resolver = KbBindingResolver(
-            KbServiceKnowledgeClient(kb_url, tenant_id="aiops", timeout=10)
+            KbServiceKnowledgeClient(
+                kb_url,
+                tenant_id="aiops",
+                timeout=10,
+                environment=namespace_for(_settings_with_config_file(ctx)),
+            )
         )
     manager = AgentManager(
         AgentStore(database),
@@ -372,7 +378,12 @@ def pull_dify(
         from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
 
         knowledge_resolver = KbBindingResolver(
-            KbServiceKnowledgeClient(kb_url, tenant_id="aiops", timeout=10)
+            KbServiceKnowledgeClient(
+                kb_url,
+                tenant_id="aiops",
+                timeout=10,
+                environment=namespace_for(_settings_with_config_file(ctx)),
+            )
         )
     manager = AgentManager(
         AgentStore(database),
@@ -635,7 +646,12 @@ def sync_from_dify(
         from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
 
         knowledge_resolver = KbBindingResolver(
-            KbServiceKnowledgeClient(kb_url, tenant_id="aiops", timeout=10)
+            KbServiceKnowledgeClient(
+                kb_url,
+                tenant_id="aiops",
+                timeout=10,
+                environment=namespace_for(_settings_with_config_file(ctx)),
+            )
         )
     manager = AgentManager(
         AgentStore(database),
@@ -1016,7 +1032,7 @@ def onboard_tenant_command(
             tenant_id=tenant,
             environment=settings.environment,
             store=GatewayStore(database),
-            kb=KbAdminClient(settings.kb_service_base_url),
+            kb=KbAdminClient(settings.kb_service_base_url, environment=namespace_for(settings)),
             credential_key=settings.ragflow_credential_key,
             embedding_base_url=settings.ragflow_embedding_base_url,
             embedding_api_key=settings.ragflow_embedding_api_key,
@@ -1078,7 +1094,7 @@ def adopt_ragflow_tenant_command(
             tenant_id=tenant,
             environment=settings.environment,
             store=GatewayStore(database),
-            kb=KbAdminClient(settings.kb_service_base_url),
+            kb=KbAdminClient(settings.kb_service_base_url, environment=namespace_for(settings)),
             credential_key=settings.ragflow_credential_key,
             password=password,
             log=lambda line: typer.secho(line, err=True),
@@ -1114,7 +1130,7 @@ def rotate_ragflow_credential_command(
             tenant_id=tenant,
             environment=settings.environment,
             store=GatewayStore(database),
-            kb=KbAdminClient(settings.kb_service_base_url),
+            kb=KbAdminClient(settings.kb_service_base_url, environment=namespace_for(settings)),
             credential_key=settings.ragflow_credential_key,
             log=lambda line: typer.secho(line, err=True),
         )
@@ -1524,7 +1540,9 @@ def sync_knowledge_datasets_command(
         raise typer.Exit(code=2)
 
     try:
-        rows = KbServiceClient(settings.kb_service_base_url, tenant_id=tenant).list_knowledge_bases()
+        rows = KbServiceClient(
+            settings.kb_service_base_url, tenant_id=tenant, environment=namespace_for(settings)
+        ).list_knowledge_bases()
     except KnowledgeSearchUnavailable as exc:
         typer.secho(
             f"读不到租户 {tenant} 在 RAGFlow 的库清单：{exc}。同步的前提是上游可达；"
