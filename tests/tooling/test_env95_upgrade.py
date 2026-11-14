@@ -20,7 +20,9 @@ with (root/'commands').open('a') as log: log.write(json.dumps([name,*args])+'\n'
 if name=='id': print(0)
 elif name=='python3' and args[:2]==['-m','venv']:
     target=Path(args[2])/'bin'; target.mkdir(parents=True)
-    (target/'python').symlink_to(os.environ['CASE_PYTHON'])
+    import shlex
+    (target/'python').write_text('#!/bin/sh\nexec '+shlex.quote(os.environ['CASE_PYTHON'])+' "$@"\n')
+    (target/'python').chmod(0o700)
     (target/'pip').write_text('#!/bin/sh\nexit 0\n'); (target/'pip').chmod(0o700)
 elif name=='python3':
     sys.exit(subprocess.run([os.environ['CASE_PYTHON'],*args]).returncode)
