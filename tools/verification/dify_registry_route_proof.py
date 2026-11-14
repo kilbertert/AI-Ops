@@ -78,8 +78,8 @@ def _customer_agents_with_kb(database: Path) -> dict[str, tuple[str, str]]:
     """`tenant → (agent 名, 一个知识库 id)`：最新发布的、带知识库的客服 agent。
 
     「是不是客服 agent」按运行时同一条口径判：已发布 + 带知识库 + 不是宣传钉选。
-    宣传 agent 被排除，是因为宣传路由跑在注册表那道门**之外**（它由快捷动作钉住，
-    不是默认映射）。
+    宣传路由本身已随 #1125 退役，但 `select_customer_agent` 的 pin 排除**仍在**
+    （钉住过的 agent 依旧不是客服槽的答案），所以本脚本照同一条口径排除。
     """
     with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
         rows = connection.execute(
@@ -101,8 +101,8 @@ def _promo_pinned_ids(database: Path, tenant_id: str) -> frozenset[str]:
     直接**复用运行时那个函数**（`qa_rag._pinned_promo_agents`）而不是自己抄一遍：
     这里的用途是"把观察不到的候选排除掉"，两份实现一旦漂移，排除的集合就会与运行时不同，
     于是脚本会开始对**运行时根本不会选**的 agent 做断言。宣传 agent 之所以要排除，是因为
-    它**永远**不会被 `select_customer_agent` 选中（那条路由在注册表这道门**之外**、
-    由快捷动作钉住），在副本里给它写登记是**合法配置**却观察不到。
+    它**永远**不会被 `select_customer_agent` 选中（pin 排除在宣传路由退役后仍保留，
+    见 `qa_rag` docstring），在副本里给它写登记是**合法配置**却观察不到。
 
     私有名在此处是刻意复用：这个脚本与本仓同一个进程里跑，而抄一份的代价是漂移。
     """
