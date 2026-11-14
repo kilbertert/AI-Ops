@@ -29,6 +29,54 @@ def configure_admin(
         context.obj["config_file"] = config_file
 
 
+@admin_app.command("environment-registry")
+def environment_registry_command(
+    action: Annotated[str, typer.Argument(help="check（只读摘要）或 apply（发布登记）")],
+    registry: Annotated[Path, typer.Option("--registry", help="独立私有目录内的登记JSON")],
+    file: Annotated[Path | None, typer.Option("--file", help="环境数组JSON（0600）")] = None,
+    expected_revision: Annotated[int, typer.Option("--expected-revision", help="预期版本，首次为0")] = 0,
+    actor: Annotated[str, typer.Option("--by", help="审计操作人")] = "aiops-admin",
+) -> None:
+    """维护平台环境与租户登记；输出版本/数量，不打印地址或配置引用。"""
+    from aiops_diagnostics.common.private_files import validate_private_file
+    from aiops_diagnostics.gateway import environment_registry
+
+    try:
+        if action == "apply":
+            if file is None:
+                raise ValueError("apply需要--file")
+            validate_private_file(file)
+            if file.stat().st_size > environment_registry.MAX_BYTES:
+                raise ValueError("输入过大")
+            environment_registry.apply(
+                registry, json.loads(file.read_text()), expected_revision=expected_revision, actor=actor
+            )
+        elif action != "check":
+            raise ValueError("action只能是check或apply")
+        body = environment_registry.load(registry)
+    except (OSError, ValueError, RuntimeError) as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "error": "ENVIRONMENT_REGISTRY_REFUSED",
+                    "reason": str(exc)
+                    if isinstance(exc, environment_registry.RegistryError)
+                    else "INVALID_INPUT",
+                }
+            )
+        )
+        raise typer.Exit(1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "revision": body["revision"],
+                "environments": len(body["environments"]),
+                "tenants": sum(len(r["tenants"]) for r in body["environments"]),
+            }
+        )
+    )
+
+
 @admin_app.command("schema")
 def schema_command(
     action: Annotated[str, typer.Argument(help="check（只读）或 migrate（原子升级）")],
