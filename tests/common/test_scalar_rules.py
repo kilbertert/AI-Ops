@@ -465,7 +465,11 @@ def test_gateway_ddl_has_one_authority() -> None:
     offenders = []
     for path in SOURCE_ROOT.rglob("*.py"):
         rel = str(path.relative_to(SOURCE_ROOT))
-        if rel in {"gateway/gateway_schema.py", "dify/dify_login_service.py"}:
+        if rel in {
+            "gateway/gateway_schema.py",
+            "dify/dify_login_service.py",
+            "identity/gateway_admission.py",  # ADR0265：独立短期nonce库，不写gateway.db
+        }:
             continue
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):

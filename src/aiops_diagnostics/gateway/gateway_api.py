@@ -1685,6 +1685,17 @@ def create_gateway_app(
     # sends; see `request_observation` for why this is a log line and not a
     # second metric table.
     app.add_middleware(request_observation.AssistantQuestionObservation)
+    if selected_settings.company_gateway_trust_file:
+        from aiops_diagnostics.identity.gateway_admission import Admission, GatewayAdmission
+
+        if not selected_settings.environment_registry_file:
+            raise ValueError("company gateway admission requires explicit environment registry")
+        admission = Admission(
+            selected_settings.company_gateway_trust_file,
+            selected_settings.environment,
+            selected_settings.data_home / "gateway-admission.db",
+        )
+        app.add_middleware(GatewayAdmission, admission=admission)
 
     @app.exception_handler(StandardAPIError)
     async def standard_api_error_handler(request: Request, exc: StandardAPIError) -> JSONResponse:

@@ -76,6 +76,7 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     "charging_status_base_url": SettingSource("AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
     "business_environments_file": SettingSource("AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE"),
     "environment_registry_file": SettingSource("AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE"),
+    "company_gateway_trust_file": SettingSource("AIOPS_GATEWAY_COMPANY_GATEWAY_TRUST_FILE"),
     "consumer_order_chat_enabled": SettingSource(
         "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED", kind="bool", default=False
     ),
@@ -197,6 +198,7 @@ class GatewayServerSettings:
     #: 环境变量仍优先：登记了某租户就用它的地址，清单只接住未登记的租户。
     business_environments_file: str = ""
     environment_registry_file: str = ""
+    company_gateway_trust_file: str = ""
     _environment_registry: object = field(default=None, init=False, repr=False)
     consumer_order_chat_enabled: bool = False
     execution_environment: str = ""
