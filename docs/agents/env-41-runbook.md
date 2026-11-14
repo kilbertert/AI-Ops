@@ -1243,8 +1243,8 @@ if row is not None and row.status != "disabled":
 ```python
 CODE = "case_exploration"
 targets = [
-    row for row in store.list_all(PLATFORM_TENANT_ID, "consumer")
-        + store.list_all(PLATFORM_TENANT_ID, "operator")
+    row
+    for row in store.list_all(PLATFORM_TENANT_ID, "consumer") + store.list_all(PLATFORM_TENANT_ID, "operator")
     if row.code == CODE and row.status != "disabled"
 ]
 # 租户行：逐租户 list_published_for_entry 查，或 sqlite 直查 shortcuts 表按 code 过滤；
