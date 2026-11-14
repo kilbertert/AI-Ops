@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 import yaml
 
 from aiops_diagnostics.common.private_files import validate_private_file
+from aiops_diagnostics.knowledge.tenant_scope import namespace_for
 from aiops_diagnostics.operator.ops_provider import ensure_node_provider
 
 from .dify_ensure_workspace import ensure_workspace
@@ -165,7 +166,7 @@ def knowledge(context, tenant_id):
     ):
         raise SetupRefused("SETUP_KNOWLEDGE_CONFIG_REQUIRED")
     try:
-        kb = KbAdminClient(settings.kb_service_base_url)
+        kb = KbAdminClient(settings.kb_service_base_url, environment=namespace_for(settings))
         outcome = onboard_tenant(
             tenant_id=tenant_id,
             environment=settings.environment,

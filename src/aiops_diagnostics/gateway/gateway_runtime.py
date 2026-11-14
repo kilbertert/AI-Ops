@@ -209,9 +209,12 @@ class GatewayRuntime:
         diagnostic_settings.ssh.validate()
         kb_client = None
         if gateway_settings.kb_service_base_url:
+            from aiops_diagnostics.knowledge.tenant_scope import namespace_for
+
             kb_client = KbServiceClient(
                 gateway_settings.kb_service_base_url,
                 tenant_id="aiops",  # per-request tenant is applied by the QA worker
+                environment=namespace_for(gateway_settings),
                 timeout=gateway_settings.kb_service_timeout_seconds,
             )
         media_signer = None

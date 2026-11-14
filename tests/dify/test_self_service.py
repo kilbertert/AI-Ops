@@ -776,7 +776,12 @@ def test_knowledge_step_creates_verified_tenant_with_persistent_credential(manag
         repair_models=lambda _: {},
         verify_login=lambda **_: None,
     )
-    monkeypatch.setattr(kb_onboarding, "KbAdminClient", lambda _: client)
+
+    def make_client(_, *, environment):
+        assert environment == ""
+        return client
+
+    monkeypatch.setattr(kb_onboarding, "KbAdminClient", make_client)
     monkeypatch.setattr(kb_onboarding, "verify_embedding", lambda **_: 3072)
     # fixture为其余流程隔离过knowledge，直接使用模块原始函数。
     REAL_KNOWLEDGE(service.context, "TENANT-B")

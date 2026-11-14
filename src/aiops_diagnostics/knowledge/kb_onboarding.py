@@ -51,6 +51,7 @@ from aiops_diagnostics.common.bounded_http import (
     tenant_id_header,
 )
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
+from aiops_diagnostics.knowledge.tenant_scope import knowledge_tenant
 
 #: kb-service 的租户头（与检索、媒体同一条）。
 CREDENTIAL_PREFIX = "enc:v1:"
@@ -171,15 +172,19 @@ class KbAdminClient:
     query path holds.
     """
 
-    def __init__(self, base_url: str, *, service_token: str = "", timeout: float = 30):
+    def __init__(self, base_url: str, *, service_token: str = "", timeout: float = 30, environment: str = ""):
         if not base_url.strip():
             raise ValueError("kb-service base URL is required")
+        self.environment = environment
         self.base_url = base_url.rstrip("/")
         self.service_token = service_token.strip()
         self.timeout = timeout
 
     def _headers(self, tenant_id: str) -> dict[str, str]:
-        headers = {"Content-Type": "application/json", **tenant_id_header(tenant_id)}
+        headers = {
+            "Content-Type": "application/json",
+            **tenant_id_header(knowledge_tenant(tenant_id, self.environment)),
+        }
         if self.service_token:
             headers["Authorization"] = f"Bearer {self.service_token}"
         return headers
@@ -246,7 +251,12 @@ class KbAdminClient:
         self._post(
             "/kb/tenants",
             tenant_id,
-            {"biz_tenant_id": tenant_id, "email": email, "password": password, "nickname": f"kb-{tenant_id}"},
+            {
+                "biz_tenant_id": knowledge_tenant(tenant_id, self.environment),
+                "email": email,
+                "password": password,
+                "nickname": f"kb-{tenant_id}",
+            },
             step="ragflow-tenant",
         )
 
@@ -380,7 +390,7 @@ def onboard_tenant(
     ``state`` / ``workspace_id`` / ``note``.
     """
     say = log or (lambda _line: None)
-    email = derive_email(tenant_id, domain=tenant_domain)
+    email = derive_email(knowledge_tenant(tenant_id, getattr(kb, "environment", "")), domain=tenant_domain)
     # 密钥长度错是**配置**错误：在任何上游写入之前就拒掉，而不是等到加密时才炸
     # （那时账号已经建好、密码已经丢了）。评审 P2。
     if len(credential_key.encode("utf-8")) not in (16, 24, 32):
@@ -598,7 +608,9 @@ def adopt_existing_account(
             "RAGFlow does not accept this password for the tenant; fix it upstream before adopting",
             step="adopt",
         )
-    email = derive_email(tenant_id, domain=DEFAULT_TENANT_DOMAIN)
+    email = derive_email(
+        knowledge_tenant(tenant_id, getattr(kb, "environment", "")), domain=DEFAULT_TENANT_DOMAIN
+    )
     store.record_ragflow_tenant(
         tenant_id,
         environment,

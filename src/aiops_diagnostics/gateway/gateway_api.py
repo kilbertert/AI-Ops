@@ -1584,12 +1584,14 @@ def create_gateway_app(
             # Real publish validation (T5/#171): bindings must resolve against
             # live kb-service. Without a kb URL the manager keeps the
             # fail-closed default (bindings never publish).
+            from aiops_diagnostics.knowledge.tenant_scope import namespace_for
             from aiops_diagnostics.publication.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
 
             knowledge_resolver = KbBindingResolver(
                 KbServiceKnowledgeClient(
                     selected_settings.kb_service_base_url,
                     tenant_id="aiops",  # rebound per publish by the manager caller's tenant
+                    environment=namespace_for(selected_settings),
                     timeout=selected_settings.kb_service_timeout_seconds,
                 )
             )
