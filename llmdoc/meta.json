@@ -1,66 +1,66 @@
 {
   "schema": "llmdoc.meta/v3",
   "baseline": {
-    "revision": "46df831ab11c2c083e313e60f5037f2e971ae292",
-    "verifiedAt": "2026-11-13T15:02:46.511Z"
+    "revision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78",
+    "verifiedAt": "2026-11-14T09:55:54.640Z"
   },
   "documents": {
     "execution-model.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "gateway/gateway-runtime.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "gateway/gateway-store.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "identity/identity-scope.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "execution/execution-delegation.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "execution/execution-node-contract.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "common/shared-primitives.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "consumer/consumer-chat.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "operator/operator-chat.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "conversation/conversation-store.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "analytics/bounded-read-surfaces.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "publication/publication-lifecycle.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "dify/dify-execution-publishing.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "dify/dify-console-access.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "dify/dify-self-service.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "knowledge/knowledge-plane.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "deployment/delivery-and-hosts.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "governance/governance-afk.mdx": {
-      "validatedRevision": "46df831ab11c2c083e313e60f5037f2e971ae292"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     },
     "governance/test-architecture.mdx": {
-      "validatedRevision": "13f6089ee0ca0e4dc863ad7e70202ad20b994fca"
+      "validatedRevision": "4c9fcdc79f2b380d8039405e4427863a6ffa6c78"
     }
   },
   "convergence": {

@@ -1,0 +1,24 @@
+# .llmdocignore — 过程/元数据面，变更不构成知识陈旧信号（intentional no-doc）。
+# 每行一个 minimatch pattern；目录写结尾斜杠（内部转 /**）。
+# 判定依据：这些文件本身就是记录，或由同一 PR 内的代码变更承载其语义，
+# llmdoc 不重复持有；路由需要时仍由文档 code.paths 精确映射可达。
+
+# 决策与流程档案（自含记录，新文件不代表既有知识失效）
+docs/adr/
+docs/validation/
+docs/开发进度/
+docs/acceptance/
+docs/agents/
+docs/testing-api-guide.md
+acceptance.feature
+qa-plan.md
+
+# 仓库元数据（版本/发布/索引/依赖声明，非架构知识面）
+GLOSSARY.md
+README.md
+RELEASE-NOTES.md
+VERSION
+pyproject.toml
+
+# 本文件自身的改动也不制造 unmapped 信号
+.llmdocignore
