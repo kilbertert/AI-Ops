@@ -21,7 +21,7 @@ services:
     healthcheck:
       test: [CMD-SHELL, 'MYSQL_PWD="$$(cat /run/secrets/mysql_root)" mysql --protocol=TCP -h127.0.0.1 -uroot -Nse "SELECT version FROM snail_ai.aiops_schema_ready WHERE version=1" | grep -qx 1']
     volumes:
-      - ${AIOPS_NODE_DIST:?}/deploy/m2-live-03/schema:/docker-entrypoint-initdb.d:ro
+      - ${AIOPS_NODE_DIST:?}/deploy/m2-live-03/schema/snail_ai_schema.sql:/docker-entrypoint-initdb.d/01-snail-ai.sql:ro
       - ${AIOPS_NODE_DIST:?}/ops/environments/env95/zz-init-complete.sql:/docker-entrypoint-initdb.d/zz-init-complete.sql:ro
   platform:
     mem_limit: 640m
