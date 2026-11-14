@@ -809,6 +809,10 @@ Accept-Language: zh                              # 可选，影响 label/descrip
 }
 ```
 
+> ⚠️ **2026-11-14**：`case_exploration`（「客户案例」）指令已整体退役（ADR-0254），
+> 当前 consumer 按钮集 = `smart_diagnosis` / `report_fault`（横幅另走 `/v1/banner`）。
+> 上面这段是**当时的真实抓包**，字段形状不变，动作集合以此注为准。
+
 **字段语义（前端怎么用）**：
 
 | 字段 | 用途 |
@@ -926,8 +930,8 @@ Accept-Language: zh
 ```http
 POST /v1/assistant/questions
 {
-  "question": "我想看看客户案例",
-  "shortcut_code": "case_exploration"
+  "question": "帮我检测这个订单的充电异常",
+  "shortcut_code": "smart_diagnosis"
 }
 ```
 

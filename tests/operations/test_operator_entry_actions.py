@@ -90,12 +90,15 @@ def test_the_two_entries_share_one_definition_of_the_execution_fields() -> None:
     这些字段来自 `shortcut_lifecycle._SHARED_ACTION_FIELDS` 这一个常量，两侧各写
     一份会各自漂移，而漂移是 invisible 的——只有按钮文案不同。这一条就是那个
     共享常量的回归：一旦某侧开始自带一份，这里转红。
+
+    `case_exploration` 已于 2026-11-14 从两个入口退役，共享定义只剩
+    `smart_diagnosis` 一条。
     """
     consumer = dict(_BUNDLED_SHORTCUTS)["consumer"]
     operator = dict(_BUNDLED_SHORTCUTS)["operator"]
     shared = ("intent", "requires_order", "sort_order", "question_templates")
 
-    for code in ("case_exploration", "smart_diagnosis"):
+    for code in ("smart_diagnosis",):
         for field in shared:
             assert consumer[code][field] == operator[code][field], f"{code}.{field}"
         # 展示字段各自定义（不共享）：两个入口的按钮叫法不同。
@@ -109,12 +112,13 @@ def test_the_two_entries_share_one_definition_of_the_execution_fields() -> None:
     assert operator["smart_diagnosis"]["labels"]["zh"] == "订单检测"
 
 
-def test_operator_entry_holds_the_three_actions_and_nothing_else() -> None:
-    """operator 内容域的动作复用既有 code，且只此三个（#427 的两个 + #721 的运维巡检）。
+def test_operator_entry_holds_the_two_actions_and_nothing_else() -> None:
+    """operator 内容域的动作复用既有 code，且只此两个（#427 的订单检测 + #721 的运维巡检）。
 
     「订单检测」是 `smart_diagnosis`：`requires_order` 为真（靠订单守卫弹澄清），
     **不能**绑智能体版本——生命周期校验只允许宣传类意图绑定，绑了连草稿都存不进去。
-    「客户案例」是 `case_exploration`。跳转动作不进助手入口。
+    跳转动作不进助手入口。「客户案例」（`case_exploration`）已于 2026-11-14 随
+    该指令在两个入口整体退役而摘除——这里是它不再回来的断言。
 
     「运维巡检」是 #721 新加的那一个：`requires_order` 为假（它问的是站点集合 + 时间窗，
     不是某一张单），`intent` 用 `knowledge` 而**不是**新意图——意图是分类器也能从自由文本
@@ -122,27 +126,22 @@ def test_operator_entry_holds_the_three_actions_and_nothing_else() -> None:
     """
     specs = dict(_BUNDLED_SHORTCUTS)["operator"]
 
-    assert set(specs) == {"smart_diagnosis", "case_exploration", "operations_review"}
+    assert set(specs) == {"smart_diagnosis", "operations_review"}
     order = specs["smart_diagnosis"]
     assert order["intent"] == "order_issue"
     assert order["requires_order"] is True
     assert order.get("target_agent_version") is None
     assert order.get("jump_path") is None
 
-    case = specs["case_exploration"]
-    assert case["intent"] == "case_exploration"
-    assert case["requires_order"] is False
-    assert case.get("target_agent_version") is None
-    assert case.get("jump_path") is None
 
-
-def test_operator_entry_lists_all_three_actions_after_the_publish(
+def test_operator_entry_lists_the_two_actions_after_the_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """发布后，`operator` 入口列出「客户案例」「订单检测」「运维巡检」。
+    """发布后，`operator` 入口列出「订单检测」「运维巡检」。
 
-    排序按 `sort_order`：案例 10 → 订单检测 20 → 运维巡检 30。第三条是 #721 加的，
-    它排最后是刻意的 —— 巡检是**周期性**动作，不像前两条是围绕当前这一单/这一次对话。
+    排序按 `sort_order`：订单检测 20 → 运维巡检 30。第二条是 #721 加的，
+    它排最后是刻意的 —— 巡检是**周期性**动作，不像前一条围绕当前这一单/这一次对话。
+    「客户案例」2026-11-14 退役后不再出现。
     """
     client, _ = _app(tmp_path, monkeypatch)
 
@@ -152,7 +151,6 @@ def test_operator_entry_lists_all_three_actions_after_the_publish(
     body = listed.json()
     assert body["type"] == "shortcut_list"
     assert [item["code"] for item in body["shortcuts"]] == [
-        "case_exploration",
         "smart_diagnosis",
         "operations_review",
     ]
@@ -162,7 +160,6 @@ def test_operator_entry_lists_all_three_actions_after_the_publish(
 
     # 按钮文案是产品内容：管家端叫「订单检测」，与消费者侧「智能检测」不同名。
     assert {item["code"]: item["label"] for item in body["shortcuts"]} == {
-        "case_exploration": "客户案例",
         "smart_diagnosis": "订单检测",
         "operations_review": "运维巡检",
     }
@@ -170,7 +167,6 @@ def test_operator_entry_lists_all_three_actions_after_the_publish(
     # 的语言缺口就是这样 invisible 的：请求照旧 200，只是按钮变成了中文）。
     english = client.get("/v1/shortcuts", headers={**_OPERATOR_HEADERS, "Accept-Language": "en"}).json()
     assert {item["code"]: item["label"] for item in english["shortcuts"]} == {
-        "case_exploration": "Customer Cases",
         "smart_diagnosis": "Order Diagnosis",
         "operations_review": "Operations Review",
     }

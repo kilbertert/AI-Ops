@@ -1195,8 +1195,9 @@ manager.disable(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLAT
 
 ### 3.1-sexies 从入口**移除**一个已发布动作：改种子 + `disable` 数据行（2026-10-16 新增）
 
-> ⚠️ **本节只作方法保留**：它记的那次实例（管家端移除「客户案例」）已于 **2026-10-19 反转**
-> —— 见下方 §3.1-septies。删动作的方法本身仍然可用，但**别再照它去动 `case_exploration`**。
+> **实例史**：2026-10-16 管家端移除「客户案例」（2026-10-19 反转，见 §3.1-septies）；
+> **2026-11-14「客户案例」指令整体退役**（`consumer` + `operator` 都摘，见 ADR-0254）——
+> 那就是本节方法按下方「全量停用」形态实做的那一次。
 
 **用途**：产品决定某个动作不该再出现在某个入口时。**2026-10-16 的实例**：管家端移除
 「客户案例」（`case_exploration`）—— 见 `frontend-operator-handoff.md` §3.2 与该日
@@ -1233,6 +1234,28 @@ ctx = ScopeContext.build(
 row = store.find_by_code(PLATFORM_TENANT_ID, "operator", "case_exploration")
 if row is not None and row.status != "disabled":
     manager.disable(ctx, row.shortcut_id, expected_revision=row.revision, scope="platform")
+```
+
+**全量停用某个 code（跨入口 × 跨租户，2026-11-14 实例的形状）**：指令整体退役时，
+要停的不只是平台行 —— `list_effective` 里已发布的**租户行**独立生效，
+平台行 `disabled` 挡不住它。先只读列出所有行，再逐行按归属 scope 停用：
+
+```python
+CODE = "case_exploration"
+targets = [
+    row for row in store.list_all(PLATFORM_TENANT_ID, "consumer")
+        + store.list_all(PLATFORM_TENANT_ID, "operator")
+    if row.code == CODE and row.status != "disabled"
+]
+# 租户行：逐租户 list_published_for_entry 查，或 sqlite 直查 shortcuts 表按 code 过滤；
+# 每行 disable 用的 ctx 要与行的归属匹配：平台行 PLATFORM_SCOPE + ROLE_PLATFORM_ADMIN，
+# 租户行 scope="tenant" + 该租户 id + ROLE_AGENT_ADMIN。
+for row in targets:
+    if row.tenant_id == PLATFORM_TENANT_ID:
+        manager.disable(ctx, row.shortcut_id, expected_revision=row.revision, scope="platform")
+    else:
+        tctx = _ctx_for(row.tenant_id)  # 同一构造，tenant_id 换成该租户
+        manager.disable(tctx, row.shortcut_id, expected_revision=row.revision, scope="tenant")
 ```
 
 🔴 **为什么不是 `rollback`**：判据与 §3.1-ter 撤回那节同一条 —— 该动作只有
@@ -1336,6 +1359,9 @@ workspace 卡片出现切换器，能切到 `aiops-41-1942105476598861824` 并�
 看 `dataset_configs.datasets` 里有没有它的 id**。runbook 的这一节就是那次遍历的结论。
 
 ### 3.1-septies 从入口**恢复**一个动作：种子已在代码里，**数据侧要补的是租户绑定**（2026-10-19 新增）
+
+> ⚠️ **实例已反转**：本节记的那次恢复（管家端「客户案例」）随 2026-11-14 该指令整体
+> 退役而撤销（ADR-0254）。方法本身仍适用于其他动作。
 
 **用途**：反转 §3.1-sexies 那次移除。**2026-10-19 的实例**：管家端恢复「客户案例」
 （`case_exploration`）—— 见 ADR-0050 与 `frontend-operator-handoff.md` §3.2。

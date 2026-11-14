@@ -1586,18 +1586,19 @@ Feature: 持续部署到服务主机
 
 Feature: 管家端入口与订单运营商级授权
   管家端（运营商员工、租户管理员、店铺管理员登录的 B 端入口）复用 consumer 之外的
-  operator 内容域：入口只发布「订单检测」与「客户案例」两个既有动作，订单可见范围由
+  operator 内容域：入口发布「订单检测」与「运维巡检」两个动作，订单可见范围由
   该会话唯一确定的 B 端主体名下的运营商站点集合定义——租户匹配且站点在该集合内才
   可见，空集合拒绝，无运营商身份者不回落为租户级放行。消费者端行为不因该维度改变。
 
   Rule: 管家端入口只发布两个提示动作
 
-    Scenario: 管家端入口列出订单检测与客户案例
+    Scenario: 管家端入口列出订单检测与运维巡检
       Given 运营方已在租户的 operator 入口发布两个动作
       When 管家端用户带 X-Business-Entry: operator 读取 GET /v1/shortcuts
-      Then 恰好返回 smart_diagnosis 与 case_exploration 两个已发布动作
+      Then 恰好返回 smart_diagnosis 与 operations_review 两个已发布动作
       And 两个动作都不带 target_agent_version 且都不是跳转动作
-      And 按钮文案按请求语言给出订单检测与客户案例
+      And 按钮文案按请求语言给出订单检测与运维巡检
+      And 已退役的 case_exploration 不在返回列表中
 
     Scenario: 管家端动作不出现在消费者入口
       Given 上述动作只发布在 operator 入口
@@ -1621,8 +1622,8 @@ Feature: 管家端入口与订单运营商级授权
       Then 返回统一 ORDER_NOT_FOUND
       And 不创建诊断或问答作业
 
-    Scenario: 案例库未就绪时返回明确的不可用
-      Given 管家端用户点击 case_exploration 且案例知识库尚未就绪
+    Scenario: 自由文本命中已退役的客户案例意图时返回明确的不可用
+      Given 管家端用户提交一条带客户案例线索的问句且未绑定宣传 Agent
       When 该问答作业到达终态
       Then 检索状态为不可用且文案说明不可用
       And 不把配置缺口表述成未检索到匹配的宣传资料

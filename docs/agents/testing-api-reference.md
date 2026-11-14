@@ -160,7 +160,7 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/assistant/questions' \
 | `question` | ✅ | 1–4000 字 |
 | `order_no` | ❌ | 带订单号的提问会走诊断 |
 | `conversation_id` | ❌ | 绑定多轮会话（`conv_` 开头） |
-| `shortcut_code` | ❌ | 点击快捷动作时带（如 `case_exploration`） |
+| `shortcut_code` | ❌ | 点击快捷动作时带（如 `smart_diagnosis`） |
 
 **轮询**：按响应里的 `retry_after_ms`（通常是 1000ms）节流。
 
@@ -246,10 +246,10 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/standard/analyses' \
 # 期望：202 + analysis_id
 ```
 
-### 3.3 「客户案例」在管家端**已恢复**（2026-10-19，可测）
+### 3.3 「客户案例」—— **2026-11-14 已整体退役**
 
-`case_exploration` 现在**在管家端正常可用**，绑定的宣传智能体版本与客户端不同
-（管家端 `#v3`、客户端 `#v2`——这是设计，两个入口各自冻结自己的版本）。
+`case_exploration` 快捷指令已从两个入口摘除（ADR-0254）；以下为退役前
+2026-10-19 恢复的实测记录，留作历史。自由文本带案例线索仍走宣传面。
 
 **已实测的三层证据：**
 

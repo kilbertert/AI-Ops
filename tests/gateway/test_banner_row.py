@@ -32,7 +32,7 @@ from aiops_diagnostics.publication.shortcut_lifecycle import (
     ShortcutValidationError,
 )
 
-_CONSUMER_BUTTON_CODES = ["case_exploration", "smart_diagnosis", "report_fault"]
+_CONSUMER_BUTTON_CODES = ["smart_diagnosis", "report_fault"]
 
 
 class _Ctx:
