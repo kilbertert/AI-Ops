@@ -44,9 +44,9 @@ code:
 
 - 日志（`gateway/gateway_logging.py`）：uvicorn 的 dictConfig 只给 `uvicorn*` logger 挂 handler，root 无 handler——`aiops.*` 的 INFO 曾全部丢失。修复 = 装 root handler 并配 `log_config=None`，两者是配对，单独改一边都会复发。
 - `public_openapi.py`：公开规范由显式 `OPERATIONS` 白名单生成，新内部路由不会自动出现；方法是边界的一部分（GET /shortcuts 是用户面，POST 是管理面）。
-- `request_observation.py`：每个候选请求恰好一行 INFO、不落库（第二个分母会漂移）；身份解析之前绝不记录；上报永远不能让响应失败。`metrics_store.py` 的 `agent_run_metrics` 按构造脱敏。
+- `request_observation.py`：每个候选请求恰好一行 INFO、不落库（第二个分母会漂移）；身份解析之前绝不记录；上报永远不能让响应失败。`metrics_store.py` 的 `agent_run_metrics` 按构造脱敏；`ROUTE_TYPES` 里的 `"promo"` 是历史只读词汇——`record()` 拒未声明类型，该成员只为读存量行保留（宣传路由随 #1125 退役），别当死配置删。
 - `localized_copy_language` 挂在恰好六个确定性文案出口（`/v1/faq/recommendations`、`/v1/faq/catalog`、`/v1/faq/answer`、`/v1/assistant/starters`、`/v1/shortcuts`、`/v1/banner`）：每请求一行 INFO 记 path + 逐字 `Accept-Language`（截 160 字符只为限长，运输层禁 CRLF 伪造不了额外行）+ resolved tag。刻意不并入 `request_language`——chat/trial/analysis 的语言已持久化，文案端点不留痕时客户端发错头无从定位。
-- `admin_cli.py`：reconcile/onboard-tenant/credential 轮换/ensure-workspace/pull-dify/`schema check|migrate --db`（check 只读报告、migrate 先 ensure 再 check；拒绝统一输出 `{"error":"SCHEMA_REFUSED","type":<类名>}`，不外泄可能携带用户 SQL 的原始错误）等特权面；迁移类命令构造合成 ASSERTED ScopeContext，不走请求身份。
+- `admin_cli.py`：reconcile/onboard-tenant/credential 轮换/ensure-workspace/pull-dify/`schema check|migrate --db`（check 只读报告、migrate 先 ensure 再 check；拒绝统一输出 `{"error":"SCHEMA_REFUSED","type":<类名>}`，不外泄可能携带用户 SQL 的原始错误）/`environment-registry check|apply`（按 revision 门控套用 `environment_registry_file` 指向的环境/租户登记册，ADR-0256；登记册只管机制面，准入语义归 [identity/identity-scope](../identity/identity-scope.mdx)）等特权面；迁移类命令构造合成 ASSERTED ScopeContext，不走请求身份。
 - `tdengine_proxy.py`：独立部署的只读遥测代理——监听和上游都限回环（`is_loopback_host` 唯一回环规则）、仅 `iot` 库、仅 POST `/rest/sql/iot`、SQL 白名单（`SHOW STABLES` 或精确 `GUN_QUERY`）、≤168h、≤2000 行、无日志。`GUN_COLUMNS` 与 `data/sources.py` 共享同一份字节——两个独立部署，漂移会被在线代理拒绝，所以共享不复制。
 
 消费者账务回调接线由`_authorized_consumer_snapshot`区分合同：仅v6 agent回调传

@@ -1,10 +1,11 @@
 ---
-description: "身份解析与数据范围：resolver 装配与 source-key 闸顺序、四条凭据链、能力三档 ASSERTED/DERIVED/UNASSERTED、scope_fingerprint 计入与排除字段、entry_data_scope 四步失败关闭、QueryScope 语义、shop≠site、订单可见性两渲染、订单号语法"
+description: "身份解析与数据范围：resolver 装配与 source-key 闸顺序、四条凭据链、能力三档 ASSERTED/DERIVED/UNASSERTED、scope_fingerprint 计入与排除字段、entry_data_scope 四步失败关闭、QueryScope 语义、shop≠site、订单可见性两渲染、订单号语法、RegisteredCallerResolver 环境登记准入（ADR-0256）"
 kind: architecture
 relations:
   related:
     - execution-model.mdx
     - common/shared-primitives.mdx
+    - gateway/gateway-runtime.mdx
 code:
   paths:
     - src/aiops_diagnostics/identity/caller_auth.py
@@ -17,6 +18,7 @@ code:
     - src/aiops_diagnostics/identity/query_scope.py
     - src/aiops_diagnostics/identity/order_visibility.py
     - src/aiops_diagnostics/identity/order_identity.py
+    - src/aiops_diagnostics/gateway/environment_registry.py
     - src/aiops_diagnostics/gateway/gateway_api.py
 ---
 
@@ -28,6 +30,8 @@ code:
 - `_company_token_resolver` 配置读取失败返回 None → 回落到旧链 → 带 key 的请求得到 401 而非放行。
 - `_fallback_caller_resolver` 逐字选择：`third_session_service_token` → RedisThirdSessionResolver；无 `introspection_url` → UpmsCallerResolver；否则 IntrospectionCallerResolver；配置错 → DisabledCallerResolver。
 - `_authenticate_caller` 是 CallerAuthError → 出口错误的**唯一**映射点（之前有三个漂移副本）；`platform_entry`/`source_key` 无条件传给每个 resolver，请求不能靠加头改变语义；`CONFIG_MISSING` → 503 `ACCESS_TOKEN_VALIDATION_UNAVAILABLE`（在此决定，不在抛出点）。
+- 登记准入包装（ADR-0256）：`environment_registry_file` 配置时 `create_gateway_app` 给选定 resolver 套 `RegisteredCallerResolver`——先正常认证再 `registry.require(effective_tenant_id)`；RegistryError 分两档：登记器不可读 → `CALLER_AUTH_UNAVAILABLE`（retryable），准入拒绝 → `CALLER_AUTH_FORBIDDEN`。
+- `environment_registry.py` 准入合同：`EnvironmentRegistry.require` = 环境 enabled + 租户 enabled，否则 `TENANT_ENVIRONMENT_NOT_ENABLED`（consumer/operator/self-service/login 共用的拒绝码）；`for_settings` 一 settings 一绑定；构造即冻结 `(gateway_url, cpms_base_url, config_ref)`，登记行中途变更 → `ENVIRONMENT_CONFIGURATION_CHANGED`——`require_registered` 让受控工具/后台交付复用同一冻结连接，不能重新选址。登记文件的发布/校验机制属 [gateway-runtime](../gateway/gateway-runtime.mdx)；`environment_registry_file`（平台环境+租户准入）与 `business_environments_file`（每租户 CPMS 端点 manifest）不是同一件东西。
 
 ## 四条凭据链与能力三档（ADR-0231）
 
@@ -67,4 +71,5 @@ code:
 - `src/aiops_diagnostics/identity/data_scope_rule.py` (entry_data_scope)
 - `src/aiops_diagnostics/identity/query_scope.py` (resolve_query_scope, operator_site_scope_from_shops)
 - `src/aiops_diagnostics/identity/caller_auth.py` (SourceKeyCallerResolver, ScopedOrderAuthorizer)
-- `src/aiops_diagnostics/gateway/gateway_api.py` (_caller_resolver, _authenticate_caller)
+- `src/aiops_diagnostics/gateway/environment_registry.py`（EnvironmentRegistry.require/require_registered/for_settings 登记准入合同）
+- `src/aiops_diagnostics/gateway/gateway_api.py` (_caller_resolver, _authenticate_caller, RegisteredCallerResolver 装配)

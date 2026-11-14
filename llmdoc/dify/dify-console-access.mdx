@@ -1,5 +1,5 @@
 ---
-description: "Dify 控制台准入：登录代理用 SECRET_KEY 自签 HS256 会话（Dify 无改密 API）、公司登录交换是唯一身份源、invite→activate 开通、逐请求 TLS 闸、bridge BFF 人机分离+LOGIN_PROXY_URL 三态、workspace 生命周期 claim→create→ready、resolve 码绝不返回空串、inner-api 转发器、按工作区准入"
+description: "Dify 控制台准入：登录代理用 SECRET_KEY 自签 HS256 会话（Dify 无改密 API）、公司登录交换是唯一身份源、environment_registry_file 钉 gateway_url+登录后准入闸、invite→activate 开通、逐请求 TLS 闸、bridge BFF 人机分离+LOGIN_PROXY_URL 三态、workspace 生命周期 claim→create→ready、resolve 码绝不返回空串、inner-api 转发器、按工作区准入"
 kind: architecture
 relations:
   related:
@@ -24,6 +24,7 @@ code:
     - src/aiops_diagnostics/gateway/gateway_schema.py
     - ops/dify-console-bridge/README.md
     - ops/dify-login-proxy/README.md
+    - ops/dify-login-proxy/login-proxy.env.example
     - ops/dify-inner-api/README.md
 ---
 
@@ -35,6 +36,7 @@ code:
 
 - 代理用 Dify `SECRET_KEY` **自签** HS256 会话 JWT `{user_id,exp,iss,sub}`——Dify 只验签名+查 user_id，不验密码不存会话。原因：Dify 1.17.1 **没有给既有账号设密码的 API**（ADR-0023）。接受的代价：持有 SECRET_KEY = 能给任何账号铸会话 + 保护全部存储凭据 → 代理只听回环、不落盘不落日志任何密码/令牌。
 - **公司登录交换是唯一身份源**：代理自己做真 `/upms/token/login`（密码 AES 表单；失败是 HTTP 200+`code:-1000` 只靠中文 msg 区分），再按固定 `client-type` 头读 `/upms/user/info`（未知 client-type → 空角色集=静默"无权限"）。浏览器带来的公司令牌从不被信任。
+- **环境登记准入**（ADR-0256）：配 `AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE` 时 `LoginProxySettings.__post_init__` 把 `gateway_url` 钉到登记行（不符 = 启动 ValueError）——代理不许指向登记外网关。`LoginService.require_registered_tenant` 在公司登录交换成功后、权限读取前跑（停用租户 `PermissionDenied("TENANT_ENVIRONMENT_NOT_ENABLED")`）；operator-token 会话交换同闸（停用 → 会话 resolve 为 None）；身份查询处理器在 STATUS_ACTIVE 检查后回 `{"allowed": false, "reason": "TENANT_ENVIRONMENT_NOT_ENABLED"}`（HTTP 200 信封，与 MAPPING_DISABLED 同形）。登记闸在身份交换**之后**——裁准入不裁身份；不配文件整条 no-op，旧 41 行为逐位不变。
 - 开通 = invite→activate→lookup，全走官方端点、无邮件（邀请 token 在响应里带回）；账号邮箱 = 确定性 `{environment}-{company_user_id}@aiops-login.invalid`——environment 是必填部署身份无默认（默认值会把 ADR-0061 修掉的跨环境账号碰撞悄悄引回来）。
 - TLS 是**逐请求**闸（`X-Forwarded-Proto==https`，缺=拒）不是配置串检查——明文 :10008 入口与 TLS 共用同一份 nginx conf，配置证明不了任何事（ADR-0055）。`X-Real-IP` 退避。
 - 已知接受项：refresh-token 恒 401——Dify refresh 是 Redis 一次性串，自签会话铸不出；前端不会把有效 access cookie 用户踢回，所以 `ACCESS_MINUTES` 是硬上限。`__Host-` 前缀恰好出现在 3 处（签发、登出清理、开通里硬编码的 csrf cookie 名）——漏第三处 = 新账号无法开通而老账号正常（ADR-0028）。

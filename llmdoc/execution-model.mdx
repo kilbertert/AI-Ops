@@ -34,7 +34,7 @@ code:
 - **交付前再验证**：任何交出业务数据的路径，在阻塞式外部授权之后、返回之前都要重读记录/绑定/范围/grant——包括缓存与快照回放（回放也是交数据）。撤回（retract）吊销凭据并把运行钉为终态，但绝不删行——"已停止"必须与"从未配置"可区分。
 - **配置即合同**：`SETTING_SOURCES` 是设置读取位置的唯一表；`validate()` 把所有半配置对挡在启动期；"看起来配置了但永远 401"在运维上与未配置无法区分。
 - **取到授权证据后失败 ≠ 拒付**（ADR-0248；交付闸 ADR-0252 修订）：run 持有授权证据后，节点报模型失败仍交付 `evidence_only` 快照——本轮授权记录+「诊断未完成」，不盲重派；复核 verdict 降为观察不再扣答复；无证据、取消/撤权、取证据前的失败仍拒绝。
-- **存储结构单点声明**（ADR-0244）：`gateway.gateway_schema.TABLES` 声明全部 28 张受管表；`startup()`（ensure+check）从 `GatewayRuntime.__init__` 与 `GatewayStore.ensure` 两个入口都跑；旧库在一个写事务内迁移后复核，未知结构拒绝；登录映射 `mappings.db` 独立不合库。
+- **存储结构单点声明**（ADR-0244）：`gateway.gateway_schema.TABLES` 声明全部 28 张受管表；`startup()`（ensure+check）从 `GatewayRuntime.__init__`、`create_gateway_app`、`validate()` 跑；`GatewayStore._initialize` 只调 `ensure()`（现版快返回，不跑全量结构校验）；旧库在一个写事务内迁移后复核，未知结构拒绝；登录映射 `mappings.db` 独立不合库。
 
 ## 叙述与决定权威
 

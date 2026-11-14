@@ -57,7 +57,7 @@ code:
 
 ## Bitter doubles（ADR-0030）
 
-替身必须复现上游**真实拒绝**，不是想象的宽容：`_FakeCompany` 过滤 Accept 头（非 `*/*`→404）、从 query string 解析登录参数；`_FakeDify` 返回 `invitation_results` 不是 `results`、带 Authorization 拒 `/activate`。三个部署日缺陷全是绿单测因为替身验证的是自洽不是可接受（54 测 3 漏）。每个依赖上游的修复要反向验证：回退实现 → 点名测试必须红。"意外上游形状"分支不许静默通过。
+替身必须复现上游**真实拒绝**，不是想象的宽容：`_FakeCompany` 过滤 Accept 头（非 `*/*`→404）、从 query string 解析登录参数；`_FakeDify` 返回 `invitation_results` 不是 `results`、带 Authorization 拒 `/activate`。三个部署日缺陷全是绿单测因为替身验证的是自洽不是可接受（54 测 3 漏）。每个依赖上游的修复要反向验证：回退实现 → 点名测试必须红。"意外上游形状"分支不许静默通过。退役路由的守卫是替身**不实现该方法**，不是断言空表：`start_assistant_qa` 随 ADR-0259 从五个替身删净（2026-11-14）——错路由请求撞 AttributeError → 500 → 红，诊断路径由 `runtime.calls == []` 断言未发起；`runtime._qa == {}` 是对无人写入字典的永真断言，同次变更已删。
 
 ## verify-aiops-gateway 边界（.claude/skills/verify-aiops-gateway/）
 

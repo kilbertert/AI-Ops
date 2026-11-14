@@ -1,11 +1,12 @@
 ---
-description: "交付面与主机拓扑：按组件制品表（Gateway src/ 是唯一 CD 制品、文件拷贝无 .git）、dev-host 角色断言+artifact-sha256、deploy-41.sh 各闸（陈旧审批/节点制品/依赖漂移/schema/健康+自动回滚）、images.lock 合同、暴露登记纪律、41/36 分工、手工部署台账、GitLab 镜像非运行源、CD 审批闸已永久移除"
+description: "交付面与主机拓扑：按组件制品表（Gateway src/ 是唯一 CD 制品、文件拷贝无 .git）、dev-host 角色断言+artifact-sha256、deploy-41.sh 各闸（陈旧审批/节点制品/依赖漂移/schema/健康+自动回滚）、images.lock 合同、暴露登记纪律、41/36/95 分工（95=离线包候选健康后切换）、环境登记表作入口地址权威、手工部署台账、GitLab 镜像非运行源、CD 审批闸已永久移除"
 kind: architecture
 relations:
   related:
     - execution-model.mdx
     - execution/execution-node-contract.mdx
     - governance/governance-afk.mdx
+    - identity/identity-scope.mdx
 code:
   paths:
     - deploy/deploy-41.sh
@@ -19,6 +20,17 @@ code:
     - ops/README.md
     - ops/dify-exposure-registry.md
     - ops/environments/env-41.toml
+    - ops/environments/env-95.toml
+    - ops/environments/env95/README.md
+    - ops/environments/env95/build.sh
+    - ops/environments/env95/build-node.sh
+    - ops/environments/env95/install.sh
+    - ops/environments/env95/upgrade.sh
+    - ops/environments/env95/retire.sh
+    - ops/environments/env95/render-callbacks.py
+    - tools/content/render_business_ingress.py
+    - deploy/m2-live-03/bootstrap_platform.py
+    - .dev-host.toml
     - docs/agents/actions-delivery.md
     - docs/agents/env-41-runbook.md
     - docs/agents/gateway-schema-runbook.md
@@ -45,11 +57,12 @@ code:
 | Dify 应用 DSL | Dify console | `deploy/dify-chat/*.dsl.yml` 版本化资产；改 prompt 要 `--live-documents` 迁移+`/v1/dify/publish` 才算生效 |
 | kb-service 补丁 | 36 | `deploy/kb-service/build.py`+`verify_defaults.py`；dev-host cp+原子替换+只重启适配器 |
 | 宿主机 nginx 片段 | 41/36 vhosts | `ops/nginx/*.conf` 作已识别制品安装（`--artifact-sha256`+`nginx -t`+reload）；**在 CD 之外**，记 `deploy/manual-deploys.md` |
+| Gateway+节点栈离线包（env95） | 95 `/opt/aiops-95` | `ops/environments/env95/`：dev-host 上 `build.sh`/`build-node.sh` 产 wheel+py313 wheelhouse+SHA256SUMS → `dev-host cp --artifact-sha256` → `install.sh`（临时候选 `/health` 版本==制品修订才切 :8788）/`upgrade.sh`（限同 schema+零在途）/`retire.sh`（move-only 可续跑）；**文件拷贝类——无 CD、95 上无 .git**；机制异于 41：venv+wheel、候选先健康后切换，不是 src rsync 原位替换 |
 | GitLab 镜像 | 公司 GitLab ai-products/ai-ops | `gitlab-mirror.yml` 镜像每个 push 的 ref。**镜像不是运行源**——镜像成功≠CI/合并/部署；其独立失败≠部署失败 |
 
 ## dev-host 传输合同
 
-统一主机访问：`dev-host show` 断言 role=service-host+status=active 否则停；`dev-host cp --artifact-sha256` 在上传时强制制品身份（不符 exit 77——策略闸不是自我声明）；`dev-host exec --allow-service-exec` 门控服务主机写。CD 用派生注册表视图，只换 `ssh_alias→aiops-41-cd`，与权威 `~/.config/dev-host/hosts.toml` 逐字段核对。
+统一主机访问：`dev-host show` 断言 role=service-host+status=active 否则停；`dev-host cp --artifact-sha256` 在上传时强制制品身份（不符 exit 77——策略闸不是自我声明）；`dev-host exec --allow-service-exec` 门控服务主机写。仓库 `.dev-host.toml` 声明本项目可达目标的逻辑名与路径键（95 的 `release/new_config/new_state/backups/node_*` 在此登记，旧 `/home/aiops/*` 仅留作恢复资料）。CD 用派生注册表视图，只换 `ssh_alias→aiops-41-cd`，与权威 `~/.config/dev-host/hosts.toml` 逐字段核对。
 
 ## deploy-41.sh 各闸
 
@@ -68,7 +81,8 @@ code:
 
 - `ops/dify-exposure-registry.md` 是 Dify 可达面的唯一声明；列序是合同（CI 按单元格位置解析）；`tests/dify/test_dify_exposure_registry.py` 断言声明==路由；表外必须不可达——**从 Dify 容器的 netns 验**（宿主机视角会撒谎）。新公网暴露从**观测流量**决定，不从监听端口。
 - `ops/nginx` 片段用方法分流 location 而非路径正则（一个 `location ~` 曾把 `POST /v1/shortcuts` 管理面打开）；`limit_except` 不够。
-- 主机：41=服务主机（Gateway+node-runtime+隔离 m2-live-03 栈）；36=移动云（Dify 1.17.1、kb-service、RAGFlow——Dify 栈刻意不加 docker 组不与兄弟共 DB/Redis/向量库）。**CD 只部署 41，不碰 36**——合并绿灯不等于两台都更新；36 资产是另一交付路径的手工检出。
+- 主机：41=服务主机（Gateway+node-runtime+隔离 m2-live-03 栈）；36=移动云（Dify 1.17.1、kb-service、RAGFlow——Dify 栈刻意不加 docker 组不与兄弟共 DB/Redis/向量库）；95=qy-gw-120（api.qumall.qushiyun.com，公司环境、未纳入本编队）——重建 Gateway :8788+独立节点栈 `aiops95-node-runtime`/`aiops95-node-callback`（容器内存合计 1408MiB 上限）+受限 SSH 隧道（回环 29508/29501/29580→Dify/inner-api/kb）。**CD 只部署 41，不碰 36/95**——合并绿灯不等于三台都更新；36/95 资产是另一交付路径的手工检出。
+- **环境登记表**（`environment_registry_file`，ADR-0256）：机群级「环境×租户」准入声明——`tools/content/render_business_ingress.py --registry` 以它为地址权威（catalogue 只存 id+凭据，gateway_url 取自登记行；未登记/停用环境拒产 upstream），登录代理启动也把 `gateway_url` 钉到登记行。准入语义（`require`/`TENANT_ENVIRONMENT_NOT_ENABLED`/`RegisteredCallerResolver`）归 [identity-scope](../identity/identity-scope.mdx)。
 - 手工部署台账 `deploy/manual-deploys.md`：任何绕 CD 上生产的动作必须**当日**经 `deploy/record-manual-deploy.sh` 追加——六次连续 CD 失败曾因手工 rsync 保持生产更新而无人察觉（#407）。台账 append-only，永不重写。
 - CD Watch（`.sandcastle/cd-watch.mjs`+`cd-watch.yml`）：每 5min 跑在 **GitHub-hosted** runner（看守者与被看守机器同死就没意义）；经 `pending_deployments` 判 deploy-41 结果（等待与没跑看起来一样）+最近完成 runs；开 `cd:needs-attention` issue 而非报错红——未关的 issue 本身就是警报。
 - **CD 审批闸已永久移除**（2026-09-30 明确决定）："能合并 main 的人"=="能改生产的人"；Ruleset（PR+必需检查+会话解决）是剩余闸门。回滚方法=给 `production-41` 环境重加 required_reviewers。
@@ -81,6 +95,7 @@ deploy-41 失败 → 生产未更新（远端自检回滚）；release-notes 失
 
 - `deploy/deploy-41.sh`（各闸）+ `deploy/classify-remote-result.sh`（失败分类法）
 - `deploy/node-runtime/README.md`（最承重的节点交付文档）
+- `ops/environments/env95/README.md`（95 离线包重建承重手册——该目录是首次重建资产非通用安装器）
 - `deploy/m2-live-03/images.lock.json`（制品身份合同）
 - `ops/dify-exposure-registry.md`（暴露唯一声明）
 - `docs/agents/actions-delivery.md`、`docs/agents/env-41-runbook.md`（交付手册+主机合同）、`docs/agents/gateway-schema-runbook.md`（schema 闸手册）
