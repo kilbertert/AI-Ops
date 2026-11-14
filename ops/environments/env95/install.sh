@@ -16,7 +16,7 @@ for line in (root/'SHA256SUMS').read_text().splitlines():
     p=pathlib.PurePosixPath(name)
     assert not p.is_absolute() and '..' not in p.parts and name not in expected
     expected[name.removeprefix('./')]=digest
-actual={str(p.relative_to(root)) for p in root.rglob('*') if p.is_file() and p.name!='SHA256SUMS'}
+actual={str(p.relative_to(root)) for p in root.rglob('*') if p.is_file() and p!=root/'SHA256SUMS'}
 assert actual==set(expected), 'artifact file set mismatch'
 assert {'REVISION','ops/environments/env95/aiops-gateway-95.service'} <= actual
 assert all(name=='REVISION' or name.startswith('ops/environments/env95/') or name.startswith('wheelhouse/') for name in actual)
