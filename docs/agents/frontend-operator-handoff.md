@@ -69,8 +69,8 @@ Content-Type: application/json
 >
 > ⚠️ **2026-11-14 起管家端回到「订单检测 + 运维巡检」两条** ——
 > 「客户案例」快捷指令整体退役（`consumer` + `operator` 都摘，见 ADR-0254 与 §3.2）。
-> `case_exploration` 的**自由文本**路径仍在：问句带案例线索时照旧走宣传面，
-> 未绑定时给诚实的「暂时不可用」。
+> `case_exploration` 的自由文本问句与滞留 code 均按普通问句进既有问答路径
+> （宣传路由已随 #1125 退役，不再产出宣传卡）。
 >
 > ⚠️ **2026-09-29 状态更正：上面这段是「客户端那条链路」的形状，不是管家端的目标形状。**
 > 管家端最终走的是**用户 JWT**（不是服务令牌 + 会话），由 41 的 nginx 按入口分流
@@ -202,11 +202,14 @@ POST /v1/assistant/questions
 
 **「客户案例」快捷指令已从 `consumer` 与 `operator` 两个入口摘除（ADR-0254）：
 不再渲染这颗按钮，也不再发 `shortcut_code=case_exploration`。**
-自由文本写「我想看看客户案例」仍由分类器路由到宣传面（意图保留），行为不变。
+滞留客户端若仍发这个 code：`find_effective_by_code` 已查不到有效行，请求按
+普通问句处理（不返回 404）。自由文本写「我想看看客户案例」同样按普通问句走
+既有问答路径 —— 曾经的宣传路由已随 #1125 的 Python harness 退役一并移除，
+不再产出宣传卡或 `retrieval_status=unavailable`。
 
 ```http
 POST /v1/assistant/questions
-{"question": "我想看看客户案例", "shortcut_code": "case_exploration"}
+{"question": "我想看看客户案例"}
 ```
 
 → `202` `type=qa` → 轮询至 `completed`。

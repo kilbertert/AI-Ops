@@ -1622,11 +1622,11 @@ Feature: 管家端入口与订单运营商级授权
       Then 返回统一 ORDER_NOT_FOUND
       And 不创建诊断或问答作业
 
-    Scenario: 自由文本命中已退役的客户案例意图时返回明确的不可用
-      Given 管家端用户提交一条带客户案例线索的问句且未绑定宣传 Agent
-      When 该问答作业到达终态
-      Then 检索状态为不可用且文案说明不可用
-      And 不把配置缺口表述成未检索到匹配的宣传资料
+    Scenario: 已退役的客户案例动作按普通问句处理
+      Given case_exploration 已从 consumer 与 operator 的动作集退役
+      When 管家端用户以滞留的 shortcut_code=case_exploration 或案例线索自由文本提交问题
+      Then 该请求按普通问句进入既有问答路径
+      And 不因退役 code 返回 404，也不产出宣传卡（宣传路由已随 #1125 退役）
 
   Rule: 运营商站点集合决定订单可见性
 

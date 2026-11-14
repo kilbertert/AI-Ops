@@ -23,11 +23,19 @@
 
 摘掉的只有**按钮**。「只摘按钮」是 ADR-0031 时用户明确划过的边界、本次沿用：
 
-- `case_exploration` 仍在 `SHORTCUT_INTENTS` 与 `STABLE_CODES` 中 —— 自由文本
-  带案例线索时分类器仍可判出该意图、走宣传面；没有租户行绑宣传智能体时照旧
-  返回那句诚实的「客户案例服务暂时不可用」。自由文本不是快捷指令，不在本次范围。
+- `case_exploration` 仍在 `SHORTCUT_INTENTS` 与 `STABLE_CODES` 中。要说明的是
+  保留它的理由已和 ADR-0031 时代不同：**宣传路由本身（`_promo_route` /
+  `_start_promo_qa` / `promo_agents.py`）已随 #1125 的 Python harness 退役
+  一并删除**，「自由文本 → 分类器判意图 → 宣传卡」这条链早已不存在 —— 带
+  案例线索的自由文本现在和任何普通问句一样走既有问答路径（consumer chatflow /
+  operator CPMS）。该意图现存的作用只剩：`SHORTCUT_INTENTS` 的行合法性门禁、
+  `target_agent_version` 可绑定的 intent 白名单（`{case_exploration,
+  solution_discovery}`）、i18n 宣传文案表（暂无运行消费者）与存量行的元数据。
 - 管理 API（创建/发布 `case_exploration` 行）不封堵 —— 生命周期能力本身不退役，
   谁也不能排除这条指令日后以某个受控形态回来；能重建是数据，不是产品承诺。
+- 滞留客户端仍发 `shortcut_code=case_exploration` 时：
+  `find_effective_by_code` 查不到有效行（disabled 行不生效），请求按普通问句
+  处理 —— 不返回 404，也不产出宣传卡。
 
 同 ADR-0031 记过的那条：**种子决定将来，数据行决定现在**。本次同样两条都做：
 
@@ -39,9 +47,12 @@
 
 - **(a) 只摘 `operator`，`consumer` 保留。** 否掉：用户口径是「这一个指令不要了」
   —— 指令本身退役，不是某个入口收窄。
-- **(b) 顺手把 `case_exploration` 意图也删了。** 否掉（沿用 ADR-0031 (b) 的结论）：
-  意图是分类器从自由文本产出的东西，删掉等于让一句「我想看看客户案例」掉到
-  普通问答或客服 FAQ —— 比「诚实的不可用」更糟，也超出「摘按钮」的范围。
+- **(b) 顺手把 `case_exploration` 意图也删了。** 否掉：ADR-0031 (b) 的理由
+  （保住自由文本的宣传路由）已随 #1125 失效 —— 那条路由不存在了，删掉意图
+  不再「让自由文本掉到普通问答」（它本就在普通问答里）。但意图仍被行合法性
+  门禁、`target_agent_version` 白名单与存量行元数据引用，物理删掉会把「摘
+  按钮」扩大成「删生命周期能力」，超出本次范围；残留的死引用面（i18n 宣传表、
+  `_pinned_promo_agents` 的 starters 排除语义）另起清理，不在本 PR。
 - **(c) 只改种子不停用数据行。** 否掉：`seed_bundled` 对已存在行是 no-op，
   已 `published` 的行照旧返回 —— 「代码里没了」≠「入口没了」。
 - **(d) 物理删除数据行。** 否掉：保留 `disabled` 行才有审计痕迹，且

@@ -4,11 +4,13 @@
 
 `case_exploration` 从 `_BUNDLED_SHORTCUTS` 两个入口与 `_SHARED_ACTION_FIELDS` 摘除
 （PR #1510，ADR-0254）：consumer 剩 智能检测/故障上报/电池报告横幅，operator 剩
-订单检测/运维巡检。只摘按钮 —— 自由文本的案例线索仍走宣传面，意图与文案保留。
+订单检测/运维巡检。只摘按钮 —— 意图与文案保留作门禁/存量行元数据，但宣传路由
+本身已随 #1125 退役：带案例线索的自由文本与滞留 code 都按普通问句走既有问答路径
+（`find_effective_by_code` 查不到行即回落，不返回 404、不产出宣传卡）。
 41 数据侧已于同日 disable 全部 5 行（2 平台 + 3 租户，备份
 `/var/backups/aiops-41/shortcuts-retire-20261114-104704/`），`list_effective`
 逐租户逐入口断言不含该 code；真实会话 HTTP 面标未验（自签身份过不了身份类别闸，
-见 `../validation/2026-11-14-case-exploration-retired.md`）。前端硬编码按钮的既有偏差仍在，界面可能仍渲染它。
+见 `../validation/2026-11-14-case-exploration-retired.md`）。前端硬编码按钮的既有偏差仍在，界面可能仍渲染它 —— 点击后按普通问句处理，不会 404。
 
 ## 平台维护环境登记与95验证（2026-11-14，实施中）
 
