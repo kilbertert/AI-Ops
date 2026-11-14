@@ -56,7 +56,7 @@ SQLite用备份中的gateway-consistent.db覆盖旧库，删除仅属于旧库�
 模型出口/平台端点、CA和供应商型号运行时读取受控配置。默认管理员先轮换，禁用demo，再发独立应用与节点凭据。
 失败保留已持久目标口令以便幂等续跑；绝不使用另一环境的应用token。
 
-TLS回调按既有`render_node_callback.py`渲染，目标本机Gateway；CA只在服务宿主，节点只挂公开信任库。
+TLS回调用包内`PYTHONPATH=<制品>/src python3 <制品>/tools/content/render_node_callback.py`渲染，目标本机Gateway；CA只在服务宿主，节点只挂公开信任库。
 平台证书SAN同时覆盖platform及平台内部地址，回调证书覆盖实际网桥。先核Docker网段无重叠并记录分配，
 再安装本目录`node-runtime.service`/`node-callback.service`为aiops95-node-runtime/aiops95-node-callback。
 回调使用aiops身份，nginx二进制按现场核对；用`nginx -t`和节点网络内匿名请求拒绝共同验证。

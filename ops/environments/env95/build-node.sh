@@ -9,7 +9,7 @@ out=$(realpath -m "$4")
 [ ! -e "$out" ] || exit 2
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-git archive "$revision" deploy/node-runtime deploy/m2-live-03 ops/environments/env95 services/model-proxy tools/content/render_node_callback.py src/aiops_diagnostics/operator/operator_tools.json | tar -xf - -C "$work"
+git archive "$revision" deploy/node-runtime deploy/m2-live-03 ops/environments/env95 services/model-proxy tools/content/render_node_callback.py src/aiops_diagnostics/__init__.py src/aiops_diagnostics/operator/__init__.py src/aiops_diagnostics/operator/operator_tools.py src/aiops_diagnostics/operator/operator_tools.json | tar -xf - -C "$work"
 python3 - "$work" "$2" "$3" <<'PY'
 import hashlib,json,pathlib,shutil,sys
 root=pathlib.Path(sys.argv[1]);lock=json.loads((root/'deploy/m2-live-03/images.lock.json').read_text())
