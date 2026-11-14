@@ -77,3 +77,12 @@ Docker20.10在firewalld宿主可能仅把出站网桥加入docker zone，遗漏i
 先允许本栈trial子网到本栈桥地址TCP8788，再拒绝trial/modellink子网到宿主的其他输入。不要把整机zone改为可信。
 Docker自身internal/cross-network隔离链继续保留；确认filter_IN规则生效、容器间连接与宿主非回调端口拒绝，
 再把本次精确接口/rich规则写入permanent，不做全局reload或runtime-to-permanent。回退只移除本次新增项。
+
+## 既有API域名的精确Dify回调
+
+从合并制品在开发机运行`python3 ops/environments/env95/render-callbacks.py --out <私有暂存>/callbacks.conf`，
+它复用现役`ops/nginx/dify-consumer-callback.conf`只改本环境回环上游。将结果作为具名制品传95，
+备份既有API vhost与rewrite片段，安装到`/etc/aiops-95/nginx-callbacks.conf`并在该vhost的server块include。
+原/v1路径服务身份覆盖不变；精确回调优先匹配，保留Authorization并清空业务身份头。
+`nginx -t`通过后只reload既有nginx；原域名错误方法405、无授权拒绝，最后验证真实Dify工具请求。
+回退仅移除此include恢复原vhost，检查后reload；不改同机其他网站。制品路径/摘要和原文件恢复点留私有记录。
