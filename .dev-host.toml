@@ -49,3 +49,9 @@ app  = "/home/aiops/AI-Ops"
 venv = "/home/aiops/AI-Ops/.venv"
 db   = "/home/aiops/.local/share/aiops-diagnostics/gateway/gateway.db"
 config = "/home/aiops/.config/aiops-diagnostics"
+release = "/opt/aiops-95"
+new_config = "/etc/aiops-95"
+new_state = "/var/lib/aiops-95"
+backups = "/var/backups/aiops-95"
+
+# 95重建的项目制品与独立状态路径；旧路径在env-95-facts手册保留为恢复资料。

@@ -93,3 +93,7 @@ Gateway 数据库用 `file:<path>?mode=ro` 及 `PRAGMA query_only=ON`，仅查�
   网关」在散文里的写法 —— **两者是同一台机**。`hosts.toml` 里 `qy-gw-120` 的 `aka`
   已同时登记 `["95", "120"]`。
 - 95 上的 `aiops-120-world-tunnels` 一类 tunnel 单元属于公司既有栈，不是我们的。
+
+## 5. 新实例重建
+
+用户已指定95清理旧AI-Ops并验证平台自维护环境登记。构建、安装、退休与恢复方法见[重建手册](../../ops/environments/env95/README.md)。状态以本轮验收记录为准，资产存在不表示已执行。
