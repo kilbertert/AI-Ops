@@ -1,0 +1,36 @@
+# 公司网关来源校验合同（开发中）
+
+本片是已确认正式网关接入的第一道门，不等价于完整身份/只读数据接入。
+新环境先登记，再配置AIOPS_GATEWAY_COMPANY_GATEWAY_TRUST_FILE；旧环境不配置时完全不启用。
+配置是0600 JSON：environment、issuer、keys（kid到RSA公钥PEM），最多4把RSA2048以上公钥供轮换；不存私钥。
+签发私钥只留公司正式网关，本环境真实登录/thirdSession必须校验成功后才签发，不用共享JWT密钥替代来源。
+
+凭据头X-AIOps-Gateway-Assertion是RS256 JWT：header只能为alg/typ/kid，typ固定aiops-gateway+jwt；
+claims固定iss/aud/environment/iat/exp/jti/request_sha256，aud为aiops-gateway，最长120秒，iat允许未来30秒。
+环境和签发者来自受管部署身份，jti为每请求唯一32位小写十六进制随机值；重试必须新签发并复用原业务幂等键。
+本片只绑定原用户凭据，不自行据此授予用户权限；随后仍走原用户认证与订单范围。公司会话绑定尚未实装时不得生产开启。
+
+request_sha256计算：对以下9个字符串构成的JSON数组做UTF-8 SHA256，小写hex。
+JSON紧凑无空格、ensure_ascii=true；公司侧需按同样转义规则或只允许身份头ASCII。
+
+1. 大写方法。
+2. AI入口看到的原始编码路径，不做decode/re-encode。
+3. 原始query字符串，不重排。
+4. 原始body字节的SHA256小写hex。
+5. Authorization原值。
+6. X-Third-Session原值。
+7. X-Business-Entry原值。
+8. X-AIOps-Source-Key原值。
+9. Content-Type原值，避免同一body被改为另一解析协议。
+
+缺失头按空串；重复身份头拒绝。公司网关应在路径/头最终改写之后签发，后续代理不能再改这些字段。
+清掉浏览器自带来源断言再签新值；原入口、轮询、媒体请求都必须按每个HTTP请求签发，不能重用聊天首包签名。
+正文最多8MiB（覆盖现有4MiB图片），15秒读体上限；不接受任意远端公钥URL。
+防重放库独立于业务账本，保存issuer/jti/到期时间；持久化后再进入用户认证，失败也不复用jti。
+同一隔离环境多进程共享该库；多个宿主不能各自复制防重放库，须单入口或后续统一nonce存储，当前不承诺跨宿主复用同身份。
+
+受保护范围为/v1用户API；/v1/internal/、/v1/dify/与公开openapi保留各自原鉴权，不作为用户入口绕过。
+Dify登录/预览的跨环境凭据属于后续配套，不能由本片推断整个控制面已完成新认证。
+签发、只读回调、token级环境会话是接下来的公司适配交付；当前没有公司网关部署和真实双环境验收。
+
+独立防重放库的生命周期见ADR0265；禁止用旧备份覆盖正在使用的nonce记录。丢失/重建后至少等待150秒（120秒寿命＋30秒时钟偏差）才恢复入口。
