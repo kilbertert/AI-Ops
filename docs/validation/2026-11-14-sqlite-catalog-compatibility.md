@@ -1,0 +1,5 @@
+# SQLite3.26兼容验证
+
+真实95Python3.13.5链接SQLite3.26.0。候选在gateway_schema._validate访问sqlite_schema失败，原服务仍active，未切换。
+改用官方兼容目录名sqlite_master；官方SQLite3.26编译为开发机临时动态库，LD_PRELOAD复现旧读取失败；修复后28表初始化到schema2成功，额外表仍被告警。现有42项数据库检查通过，目标SQLite下真实Gateway技能检查待结果。
+不升级系统SQLite或改业务数据，未完成业务验收。

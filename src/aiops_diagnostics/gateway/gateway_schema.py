@@ -675,7 +675,7 @@ def _definitions(sql: str) -> Counter:
 
 def _validate(conn: sqlite3.Connection, *, legacy: bool) -> list[str]:
     objects = conn.execute(
-        "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*'"
+        "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
     ).fetchall()
     actual = {r[1]: r[3] for r in objects if r[0] == "table"}
     if objects and not (actual.keys() & TABLES.keys()):

@@ -165,3 +165,9 @@ Dify1.17.1的Agent字符串query在保存时变constant，运行时仍展开模�
 发布失败时保留草稿和旧正式版；修正提示词或选库后重试。不删Agent行、不复制成第四个同名
 应用，也不手动推进路由。系统仅恢复自己创建、未人工修改且从未发布的应用半成品。
 恢复部署前备份最新草稿与正式路由，使用当次hash，不覆盖产品正在编辑的内容。
+
+
+正式HTTP复验须区分两跳：公司代理接收的third-session与直达Gateway的X-Third-Session
+不是同一请求头。直达时还需受控服务令牌；语言放Accept-Language，
+POST /v1/assistant/questions的body不接收language。使用同租户获准有效会话，只打印
+QA/状态/版本等脱敏结果；不要伪造账号或将凭据写入回执。
