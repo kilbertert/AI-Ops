@@ -50,7 +50,13 @@ def request_digest(scope, body):
     headers = {}
     for key, value in scope["headers"]:
         key = key.lower()
-        if key in (b"authorization", b"x-third-session", b"x-business-entry", b"x-aiops-source-key"):
+        if key in (
+            b"authorization",
+            b"x-third-session",
+            b"x-business-entry",
+            b"x-aiops-source-key",
+            b"content-type",
+        ):
             if key in headers:
                 raise ValueError("duplicate identity header")
             headers[key] = value.decode("latin1")
@@ -63,6 +69,7 @@ def request_digest(scope, body):
         headers.get(b"x-third-session", ""),
         headers.get(b"x-business-entry", ""),
         headers.get(b"x-aiops-source-key", ""),
+        headers.get(b"content-type", ""),
     ]
     return hashlib.sha256(json.dumps(fields, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
 

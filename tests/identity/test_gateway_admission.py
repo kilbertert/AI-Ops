@@ -113,7 +113,8 @@ def test_bad_claims_never_enter_business(fixture, claims):
 
 
 @pytest.mark.parametrize(
-    "change", ["body", "query", "bearer", "entry", "source", "duplicate", "signature", "missing"]
+    "change",
+    ["body", "query", "bearer", "entry", "source", "content-type", "duplicate", "signature", "missing"],
 )
 def test_request_tampering_rejected(fixture, change):
     client, _, sign, headers, body, seen, _ = fixture
@@ -127,6 +128,8 @@ def test_request_tampering_rejected(fixture, change):
         headers["Authorization"] = "Bearer foreign-user"
     if change == "entry":
         headers["X-Business-Entry"] = "consumer"
+    if change == "content-type":
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
     if change == "source":
         headers["X-AIOps-Source-Key"] = "different-path"
     if change == "signature":
@@ -262,3 +265,19 @@ def test_real_gateway_requires_assertion_before_existing_identity(tmp_path, monk
         assert calls == [True]
         assert client.get("/health").status_code == 200
         assert client.get("/v1/openapi.json").status_code == 200
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        {"alg": "none", "typ": "aiops-gateway+jwt", "kid": "key-1"},
+        {"alg": "RS256", "typ": "JWT", "kid": "key-1"},
+        {"alg": "RS256", "typ": "aiops-gateway+jwt", "kid": "unknown"},
+        {"alg": "RS256", "typ": "aiops-gateway+jwt", "kid": "key-1", "jku": "https://evil.test"},
+    ],
+)
+def test_algorithm_and_key_selection_are_fixed(fixture, header):
+    client, _, sign, headers, body, seen, _ = fixture
+    headers["X-AIOps-Gateway-Assertion"] = sign(header=header)
+    assert client.post("/v1/assistant/questions", headers=headers, content=body).status_code == 401
+    assert seen == []

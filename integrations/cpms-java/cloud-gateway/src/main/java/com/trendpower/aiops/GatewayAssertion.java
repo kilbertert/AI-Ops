@@ -17,7 +17,7 @@ public final class GatewayAssertion {
 
     public static String sign(PrivateKey key, String kid, String issuer, String environment,
             String method, String rawPath, String rawQuery, byte[] body,
-            String authorization, String thirdSession, String entry, String sourceKey, Clock clock)
+            String authorization, String thirdSession, String entry, String sourceKey, String contentType, Clock clock)
             throws GeneralSecurityException {
         if (!kid.matches("[a-z0-9-]{1,64}") || !method.matches("[A-Z]+")
                 || !rawPath.startsWith("/") || rawPath.contains("?")) {
@@ -25,7 +25,7 @@ public final class GatewayAssertion {
         }
         String request = "[" + String.join(",", List.of(
                 json(method), json(rawPath), json(rawQuery), json(hash(body)),
-                json(authorization), json(thirdSession), json(entry), json(sourceKey))) + "]";
+                json(authorization), json(thirdSession), json(entry), json(sourceKey), json(contentType))) + "]";
         long now = clock.instant().getEpochSecond();
         String header = "{\"alg\":\"RS256\",\"typ\":\"aiops-gateway+jwt\",\"kid\":" + json(kid) + "}";
         String claims = "{\"iss\":" + json(issuer) + ",\"aud\":\"aiops-gateway\",\"environment\":"
