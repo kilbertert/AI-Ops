@@ -68,11 +68,7 @@ class _Authorizer:
 class _Runtime:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
-        # Every entry point that STARTS a job. A boundary that leaked through
-        # the QA route would be invisible to a test watching only `calls`.
-        self.qa_calls: list[str] = []
         self._qa = {}  # qa_id -> record
-        self.skip_retrieval = False
         self.classify_calls = 0
 
     def shutdown(self) -> None:
@@ -126,26 +122,6 @@ class _Runtime:
         del question, language, tenant_id
         self.classify_calls += 1
         return self.classified
-
-    def start_assistant_qa(
-        self,
-        context: ScopeContext,
-        question: str,
-        *,
-        conversation=None,
-        conversation_turn_no=None,
-        language="zh",
-        promo_target=None,
-        promo_intent=None,
-        skip_retrieval=False,
-        business_entry="",
-    ):
-        del conversation, conversation_turn_no, promo_target, promo_intent, business_entry
-        self.qa_calls.append(question)
-        self.skip_retrieval = skip_retrieval
-        qa_id = "qa_test00000000000000000000000000000001"
-        self._qa[qa_id] = {"qa_id": qa_id, "question": question, "status": "queued", "result": None}
-        return self._qa[qa_id]
 
     def get_assistant_qa(self, context: ScopeContext, qa_id: str):
         del context

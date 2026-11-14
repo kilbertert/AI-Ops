@@ -1126,7 +1126,7 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | INTENT-05 | 本地 dev | 无订单上下文 | 提交“是不是扣错钱了” | `200 type=clarification`，missing_fields 含 order_no | PASS：200 type=clarification missing_fields=[order_no] |
 | INTENT-06 | 本地 dev | 已发布 smart_diagnosis | 读取快捷动作并选择订单后提交统一入口 | 返回稳定 code/requires_order；执行走 assistant questions | PASS：GET /v1/shortcuts 4 条含 requires_order；case_exploration 带 target_agent_version |
 | INTENT-07 | 本地 dev | 已发布 report_fault | 不提供故障描述触发动作 | clarification 要求 fault_description；不创建工单 | PASS（形态差异）：实际为 qa 完成态收集故障信息（类型/桩号/时间/安全），不建工单；clarification 形态待后续 |
-| INTENT-08 | 本地 dev | 已发布 case_exploration + 宣传 Agent | 点击案例入口并轮询 | 结构化宣传卡片；不进入 FAQ；不泄露内部标识 | PASS：新加坡无人巴士案例 found 四段卡片+video+reference；无料场景 not_found 诚实空卡片；solution_discovery 本地化空卡片；promo 指标桶正确归因 |
+| INTENT-08 | 本地 dev | 已发布 case_exploration + 宣传 Agent | 点击案例入口并轮询 | 结构化宣传卡片；不进入 FAQ；不泄露内部标识 | PASS：新加坡无人巴士案例 found 四段卡片+video+reference；无料场景 not_found 诚实空卡片；solution_discovery 本地化空卡片；promo 指标桶正确归因。（**2026-11-14 注**：宣传路由已随 #1125 退役，本行所验合同已不存在，记录仅留作历史） |
 | INTENT-09 | 本地 dev | 已授权订单 2096164064667852801 | 提交英文内嵌订单号“Please check charging anomalies for order (2096164064667852801)” | `202 type=diagnosis`，order_no_extracted 为该订单号 | PASS：202 diagnosis，order_no_extracted 正确（修复前为 `qa`——英文取自句首单词 `Please`） |
 | INTENT-10 | 本地 dev | 无订单上下文 | 提交英文“Show me a customer case”等纯文本提问 | 不识别出订单号；不被路由为订单诊断 | PASS：文本内嵌识别返回 None，走宣传/问答路径 |
 | INTENT-11 | 本地 dev | 无订单上下文，Accept-Language=en | 提交“Was I overcharged for this charging session?” | `200 type=clarification`，missing_fields 含 order_no，message 为英文 | PASS：200 clarification，missing_fields=[order_no]，英文文案（修复前英文提问完全绕过该守卫，且文案恒为中文） |
@@ -1163,6 +1163,10 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 
 ## 宣传动作租户绑定 QA（SHORTCUT-PROMO-TENANT）
 
+> ⚠️ **本节全部失效（2026-11-14）**：宣传路由 `_promo_route`/`_start_promo_qa`/
+> `promo_agents.py` 已随 #1125 的 Python harness 退役删除，`case_exploration`
+> 指令同日整体退役（ADR-0254）。下列预期描述的是不再存在的合同，留作历史。
+
 | ID | 环境 | 前置 | 操作 | 预期 | 清理 |
 |---|---|---|---|---|---|
 | SHORTCUT-PROMO-TENANT-01 | 本地 dev | 平台 case_exploration；租户 A 有已发布宣传 Agent，租户 B 无绑定 | 两个租户用同一 shortcut_code 提交案例问题 | A 使用本租户 Agent；B 返回诚实空卡片，不跨租户回退 | 临时 SQLite |
@@ -1177,7 +1181,7 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | SHORTCUT-MIGRATION-02 | 41 实机 | #251 `1f708888` 已部署 | 运行真实迁移并公网读取快捷动作 | PASS（迁移）：4 条 consumer 平台默认已发布，原租户行/版本保留；H5 consumer `200/type=shortcut_list/count=4`。无覆盖新租户待会话 | 保留迁移 JSON、提交和脱敏 HTTP 摘要 |
 | SHORTCUT-MIGRATION-03 | 41 实机 | SHORTCUT-MIGRATION-02 成功 | 再运行迁移并比较版本/行数 | PASS：4×`unchanged:published`，无重复有效 code/新版本 | 二次输出与只读对比已保留 |
 | SHORTCUT-MIGRATION-04 | 41 实机 | 精确备份已生成 | 在隔离副本恢复备份并做只读检查 | PASS：`integrity_check=ok`，恢复副本平台行数 0、两租户各 4 条 | 隔离副本已清理，生产备份保留 |
-| SHORTCUT-MIGRATION-05 | 41 实机 | 需要 operator B 端和无覆盖新租户会话 | consumer/operator 读取；停用；宣传与 smart_diagnosis 执行 | PARTIAL（2026-09-15）：Nginx 入口头透传后 consumer 200/4、operator 正确 503 `PLATFORM_UNAVAILABLE`、非法入口 403；smart_diagnosis 缺订单 clarification 通过；宣传 QA 被百炼 `Arrearage` 阻塞；operator 正向身份、无覆盖租户、停用/恢复、双租户宣传和有订单诊断待补 | 不把当前 partial 写成全量通过；Nginx 备份和脱敏响应已记录，不保存会话凭据 |
+| SHORTCUT-MIGRATION-05 | 41 实机 | 需要 operator B 端和无覆盖新租户会话 | consumer/operator 读取；停用；宣传与 smart_diagnosis 执行 | PARTIAL（2026-09-15）：Nginx 入口头透传后 consumer 200/4、operator 正确 503 `PLATFORM_UNAVAILABLE`、非法入口 403；smart_diagnosis 缺订单 clarification 通过；宣传 QA 被百炼 `Arrearage` 阻塞；operator 正向身份、无覆盖租户、停用/恢复、双租户宣传和有订单诊断待补。（**2026-11-14 注**：其中「双租户宣传」项因宣传路由退役永远无法执行，不再欠账） | 不把当前 partial 写成全量通过；Nginx 备份和脱敏响应已记录，不保存会话凭据 |
 
 ## 快捷动作跳转路径 QA（SHORTCUT-JUMP）
 
@@ -1246,7 +1250,7 @@ payload——非 OpenAI provider 从未遵守该 schema），故不是新增风�
 | AL-COV-07 | 本地 dev | 存量行缺 fr 文案 | 读列表并捕获告警 | 返回中文回退；逐字段告警；告警不含文案正文 | `tests/publication/test_shortcut_api.py::test_live_rows_report_missing_translations_instead_of_falling_back_silently` |
 | AL-COV-08 | 本地 dev | 缺语言的快捷动作 | 运行覆盖度检查 | 失败并列出字段×语言；zh 不算缺口 | `...::test_copy_gap_gate_names_every_missing_field_and_language` |
 | AL-COV-09 | 本地 dev | 英文请求草稿预览 | 调预览接口 | 以已解析语言运行 | `tests/publication/test_agent_debug.py::test_debug_run_endpoint_runs_draft_and_returns_preview` |
-| AL-COV-10 | 41 实机 | 修复已部署 | 公网英文请求客户案例与问答 | 正文无中文字符；标识符逐字保留；媒体标题原样 | **待部署后执行**，本 PR 不标记通过 |
+| AL-COV-10 | 41 实机 | 修复已部署 | 公网英文请求客户案例与问答 | 正文无中文字符；标识符逐字保留；媒体标题原样 | **失效（2026-11-14）**：客户案例路径已随宣传路由退役，无可执行面 |
 
 **边界声明（重要）**：AL-COV-01~09 证明的是**没漏中文**，**不是译得对**。译文
 语义质量无法用确定性断言衡量，验收记录不得把前者冒充为后者。
@@ -1329,7 +1333,7 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| OP-ACCEPT-01 | 本地 dev | 租户内已发布 operator 入口的两个动作；一个运营商会话身份（店铺 → 站点集合） | 带 `X-Business-Entry: operator` 调 `GET /v1/shortcuts` | PASS：恰好列出 `smart_diagnosis` 与 `case_exploration`；按钮文案按请求语言给出「订单检测」「客户案例」；两者都不带 `target_agent_version` | `tests/operations/test_operator_entry_actions.py::test_operator_entry_lists_both_actions_after_the_publish`（#427） |
+| OP-ACCEPT-01 | 本地 dev | 租户内已发布 operator 入口的两个动作；一个运营商会话身份（店铺 → 站点集合） | 带 `X-Business-Entry: operator` 调 `GET /v1/shortcuts` | PASS（当时）：恰好列出 `smart_diagnosis` 与 `case_exploration`；按钮文案按请求语言给出「订单检测」「客户案例」；两者都不带 `target_agent_version`。（**2026-11-14 注**：预期已变更为 `smart_diagnosis` + `operations_review`，见 ADR-0254） | `tests/operations/test_operator_entry_actions.py::test_operator_entry_lists_both_actions_after_the_publish`（#427，用例已更名/重写） |
 | OP-ACCEPT-02 | 本地 dev | 同上 | 点击「订单检测」且不带订单号，分别以 zh/en/de/fr/es/pt 提交 | PASS：`type=clarification`、`missing_fields=["order_no"]`、零作业；六种语言提示文案互不相同（静默回落会让两种语言拿到同一串） | `tests/operations/test_operator_negative_acceptance.py::test_the_order_picker_prompt_is_localized_on_the_operator_entry` |
 | OP-ACCEPT-03 | 本地 dev | 运营商会话 + 假 MySQL 行级镜像：集合内一单（挂在**别人**名下）、集合外一单；再取一个不存在的订单号 | 经入口显式指名集合外订单；再指名不存在的订单号 | PASS：两次都 404 `ORDER_NOT_FOUND` 且响应同形；无诊断、无问答作业；响应体不含订单字段，也不说明是无权 | `...::test_clicked_order_diagnosis_of_another_operators_order_is_refused` |
 | OP-ACCEPT-04 | 本地 dev | 同上，集合外那单只挂在**本人**名下 | 经入口显式指名该订单 | PASS：404。证明新维度是**替换** `self` 而非取并集（取并集则本人订单可查，PRD 要修掉的错位会复活） | `...::test_a_site_outside_the_scope_is_refused_even_when_the_order_is_the_callers_own` |
@@ -1346,7 +1350,7 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| OP-ACCEPT-POS-01 | 41 实机 | 业务方提供一个唯一可用的管家端会话（C 端身份在同租户内唯一映射到一个带管家端角色的 B 端主体） | 带 `X-Business-Entry: operator` 调 `GET /v1/shortcuts` | 预期：200，恰好返回「订单检测」与「客户案例」 | **BLOCKED（2026-09-24）**：该入口头在 41 上稳定返回 503 `PLATFORM_UNAVAILABLE`，取不到身份。**未执行**，不用消费者会话冒充 |
+| OP-ACCEPT-POS-01 | 41 实机 | 业务方提供一个唯一可用的管家端会话（C 端身份在同租户内唯一映射到一个带管家端角色的 B 端主体） | 带 `X-Business-Entry: operator` 调 `GET /v1/shortcuts` | 预期：200，恰好返回「订单检测」与「客户案例」 | **BLOCKED（2026-09-24）**：该入口头在 41 上稳定返回 503 `PLATFORM_UNAVAILABLE`，取不到身份。**未执行**，不用消费者会话冒充。（**2026-11-14 注**：预期集合已变 —— 现为「订单检测」与「运维巡检」，ADR-0254） |
 | OP-ACCEPT-POS-02 | 41 实机 | 同上 + 一个真实订单号（站点在该运营商名下、挂在**他人**名下） | 点击「订单检测」，从订单选择器选单 | 预期：202 `diagnosis`，可轮询到终态 | **BLOCKED（2026-09-24）**：同 POS-01；另需确认 `/shopuser/getShops` 的真实响应形状（沿用 2026-09-01 实测的解析，形状不符会失败关闭） |
 | OP-ACCEPT-POS-03 | 41 实机 | 同上 + 一个真实订单号（站点属**其他**运营商） | 经入口显式指名该订单号 | 预期：404 `ORDER_NOT_FOUND`，与不存在的订单号同形 | **BLOCKED（2026-09-24）**：同 POS-01。负向形态已在 OP-ACCEPT-03 用构造身份证明，真实身份上的复现待业务条件 |
 | OP-ACCEPT-POS-04 | 41 实机 | 一次真实运营商会话，或平台管理员 scope | 在租户（或平台）的 operator 入口执行 create + publish | 预期：两个动作进入已发布状态并对该租户可见 | **BLOCKED（2026-09-24）**：发布是运营动作，需真实身份；本轮只在测试里用生产同一条生命周期 `ShortcutManager.publish` 完成 |
@@ -1576,7 +1580,8 @@ uv run pytest tests/gateway/test_assistant_api.py tests/conversation/test_conver
 - **前置**：一次性数据根（`ShortcutStore(tmp_path / "gateway.db")`），种子草稿全部发布。
 - **测试数据**：`_BUNDLED_SHORTCUTS` 的 consumer 入口 —— 三条按钮 + 一条横幅。
 - **动作**：`uv run pytest tests/gateway/test_banner_row.py tests/operations/test_operator_negative_acceptance.py -q`
-- **预期**：按钮面仍是 `case_exploration / smart_diagnosis / report_fault` 三条；
+- **预期**：按钮面仍是 `case_exploration / smart_diagnosis / report_fault` 三条
+  （**2026-11-14 注**：`case_exploration` 已退役，现为 `smart_diagnosis / report_fault` 两条）；
   横幅面只有 `battery_report`；两面并集等于全部有效行且交集为空。
 - **结果：PASS** —— 25 条新增用例 + 既有护栏全绿；全量 `pytest` 通过。
 - **变异核对（四处，实跑各自转红）**：

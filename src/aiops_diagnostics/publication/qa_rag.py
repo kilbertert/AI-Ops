@@ -29,9 +29,11 @@ def select_customer_agent(
     indistinguishable (absent), so no existence is leaked. Disabled agents and
     drafts are never selected; agents without knowledge bases cannot serve
     the RAG path. Agents pinned as a published shortcut's promotional target
-    (#231) never serve plain customer QA — that path belongs to the
-    customer-service agent; a promotional agent answers only via the
-    promotional route.
+    (#231) never serve plain customer QA — the pin declares the agent was
+    built for promotion, not customer service. The promotional ROUTE itself
+    retired with the Python harness in #1125, so today the pin is dormant
+    metadata; the exclusion stays because a declared-promo agent is still the
+    wrong answer for the customer-service slot.
 
     ``agent_name`` (#584) is the runtime registry's answer to "which agent
     serves this ``(tenant, entry)``". When it is given, only that agent is
@@ -79,6 +81,9 @@ def _pinned_promo_agents(store: AgentStore, tenant_id: str) -> frozenset[str]:
     #231 follow-up: a promotional agent is distinguishable from the
     customer-service agent by its shortcut pin, so no extra agent field is
     needed. Store failures degrade to the empty set (old selection behavior).
+    The promotional route was removed with the Python harness in #1125 — the
+    pin is dormant metadata now, and the exclusion is kept for the day a
+    promo-intent row is published again (management API still accepts them).
     """
     from aiops_diagnostics.publication.shortcut_lifecycle import ShortcutStore
 

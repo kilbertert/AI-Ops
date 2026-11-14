@@ -39,7 +39,7 @@ BFF 保留 `/v1/*` 原样透传」只是**建议，不是保证**，所以以下
 
 | 入口响应 | HTTP | 等待态 | 前端动作 |
 |---|---:|---|---|
-| `type=qa`（自由提问 / 宣传卡片） | 202 | **是** | 整个输入区替换为等待态；按 `retry_after_ms` 轮询 `GET /v1/assistant/questions/{qa_id}`；**可取消** |
+| `type=qa`（自由提问；曾经的宣传卡片作业形态已随 #1125 退役） | 202 | **是** | 整个输入区替换为等待态；按 `retry_after_ms` 轮询 `GET /v1/assistant/questions/{qa_id}`；**可取消** |
 | `type=faq`（固定问答命中） | 200 | **否** | 直接渲染 `answer`，不锁、不轮询 |
 | `type=clarification`（缺关键信息） | 200 | **否** | 渲染 `message`，按 `missing_fields` 补信息后重新提交 |
 | 跳转类快捷动作 | **不请求** | **否** | 本地导航（`jump_path` 非 `null`），根本不进统一入口 |

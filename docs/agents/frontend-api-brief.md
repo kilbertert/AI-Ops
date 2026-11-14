@@ -698,7 +698,7 @@ GET https://api.qumall.qushiyun.com/v1/assistant/questions/{qa_id}
 - `media.url` 是**同域相对路径**（`/v1/media/...`）或**外部绝对地址**（见上节）——短时签名就在相对路径里，**不需要 Authorization 头**，有效期约 10 分钟；外部地址不过我们的代理。
 - 媒体块失效时 `media: null` 且带 `unavailable: true`：**保留文本与引用**，显示"资源不可用"，不要整条消息报错。
 - `retrieval_status`：`found`（命中知识库）/ `not_found`（无命中，通用回答）/ `unavailable`（检索依赖故障，文本仍可交付）/ `limited`（达检索上限）。
-- **`completed` 只有这一种 `result` 形状（重要）**：无论这次回答走的是知识库、宣传卡还是**零阶通用问答**，`completed` 的 `result` 恒为 `{"blocks": [...], "retrieval_status": ...}`，正文一定在某个 `kind="text"` 块里。前端**只解析 `blocks[]`**，不要去读 `result.text` / `result.reminder`——那个形状是零阶路径在 2026-10-19 前的历史写法（#708 起统一），且在网关里**已彻底移除**；曾按它取正文的客户端会对每一个零阶回答显示"未找到"（UlinkEV 1.2.14 实测，见 `docs/validation.md`）。
+- **`completed` 只有这一种 `result` 形状（重要）**：无论这次回答走的是知识库检索还是**零阶通用问答**（曾经的宣传卡路径已随 #1125 退役），`completed` 的 `result` 恒为 `{"blocks": [...], "retrieval_status": ...}`，正文一定在某个 `kind="text"` 块里。前端**只解析 `blocks[]`**，不要去读 `result.text` / `result.reminder`——那个形状是零阶路径在 2026-10-19 前的历史写法（#708 起统一），且在网关里**已彻底移除**；曾按它取正文的客户端会对每一个零阶回答显示"未找到"（UlinkEV 1.2.14 实测，见 `docs/validation.md`）。
   零阶回答的 `retrieval_status` 是 `not_found`（本次没有检索知识库），这不是错误。
 - **`status=failed` 处理（重要）**：failed 是**终态**——收到即**停止轮询该 `qa_id`**（failed 的作业永远不会变成 completed）。轮询响应此时带 `error: {code, message, retryable}`（与订单诊断线同形状，多为模型限流）：
 
@@ -822,7 +822,7 @@ Accept-Language: zh                              # 可选，影响 label/descrip
 | `requires_order` | `true` → 点击后先弹**订单选择器**（列表来源**必须与 AI-Ops 的可见范围同源**，**不是**任一个 BFF 订单列表端点 —— 见 §11「订单选择器」），选完再把 `order_no`+问题提交统一入口；`false` → 直接提交 |
 | `sort_order` | 按升序渲染按钮 |
 | `label` / `description` / `question_template` | 按 `Accept-Language` 本地化（缺失翻译回退中文）；`question_template` 可作为默认问题文案预填输入框 |
-| `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户）。与 `jump_path` **互斥**：跳转动作不会到达 agent，因此不允许同时绑定 |
+| `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（不要展示给用户）。⚠️ 宣传路由已随 #1125 退役（ADR-0254），该字段现为**无消费者的存量元数据**，新动作不再填。与 `jump_path` **互斥**：跳转动作不会到达 agent，因此不允许同时绑定 |
 | `jump_path` | **跳转动作的唯一判别依据**，见 D.2a。**该字段恒存在**：非 `null` → 点击后导航到该路径；`null` → 走的提示动作流程（D.2）。不要区分"字段缺失"与"字段为空" |
 
 **两种动作形态**：每条动作要么是**提示动作**（`jump_path` 为 `null`，点击后把问题提交统一入口），
