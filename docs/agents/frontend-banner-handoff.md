@@ -168,8 +168,8 @@ if (banner.jump_path) {
 选面在服务端按行自己的判别字段完成 —— **前端不要做任何过滤**，也不要用
 `image_url` 是否为空去猜（那是内部判别字段，不是给客户端用的）。
 
-两条线的行数互不影响：客端入口的按钮仍是**三条**（`case_exploration` /
-`smart_diagnosis` / `report_fault`），横幅是**另外**一条。
+两条线的行数互不影响：客端入口的按钮是**两条**（`smart_diagnosis` /
+`report_fault`；`case_exploration` 2026-11-14 退役），横幅是**另外**一条。
 
 ---
 

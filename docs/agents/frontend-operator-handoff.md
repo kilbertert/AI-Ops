@@ -67,9 +67,10 @@ Content-Type: application/json
 > ⇒ `200 clarification` + `missing_fields=["order_no"]`。**前端现在可以按这份文档联调。**
 > 仍缺一项（不由前端负责但会影响你看到的终态）：验收账号**无店铺绑定** ⇒ 带单号仍 `404`。
 >
-> ⚠️ **2026-10-19 起管家端回到「客户案例 + 订单检测 + 运维巡检」三条** ——
-> `case_exploration` 已在代码侧恢复（反转 ADR-0031，见 ADR-0050 与 §3.2）。
-> 2026-10-16 到 10-19 之间那版「两条」的文档已作废。
+> ⚠️ **2026-11-14 起管家端回到「订单检测 + 运维巡检」两条** ——
+> 「客户案例」快捷指令整体退役（`consumer` + `operator` 都摘，见 ADR-0254 与 §3.2）。
+> `case_exploration` 的自由文本问句与滞留 code 均按普通问句进既有问答路径
+> （宣传路由已随 #1125 退役，不再产出宣传卡）。
 >
 > ⚠️ **2026-09-29 状态更正：上面这段是「客户端那条链路」的形状，不是管家端的目标形状。**
 > 管家端最终走的是**用户 JWT**（不是服务令牌 + 会话），由 41 的 nginx 按入口分流
@@ -105,25 +106,14 @@ GET  https://api.mall.qushiyun.com/v1/shortcuts
 
 ## 2. 动作列表（直接照这个联调）
 
-`GET /v1/shortcuts`，`X-Business-Entry: operator` 下**三个**动作（下方后两个 `abridged`）：
+`GET /v1/shortcuts`，`X-Business-Entry: operator` 下**两个**动作（下方第二个 `abridged`）：
 
 ```json
 {
   "type": "shortcut_list",
   "language": "zh",
-  "count": 3,
+  "count": 2,
   "shortcuts": [
-    {
-      "code": "case_exploration",
-      "intent": "case_exploration",
-      "requires_order": false,
-      "sort_order": 10,
-      "label": "客户案例",
-      "description": "查看与充电运营相关的标杆案例",
-      "question_template": "我想看看客户案例",
-      "target_agent_version": null,
-      "jump_path": null
-    },
     {
       "code": "smart_diagnosis",
       "intent": "order_issue",
@@ -150,10 +140,9 @@ GET  https://api.mall.qushiyun.com/v1/shortcuts
 }
 ```
 
-> ⚠️ 上面 `case_exploration` 那行的 `target_agent_version: null` 是**平台默认行**的形状
-> —— 那一层**不允许**携带它。真正出卡靠该租户自己的**租户覆盖行**（`list_effective`
-> 里已发布的租户行覆盖同 code 的平台行），见 §3.2。列表以服务端返回为准，前端
-> **不要**写死 `code` 清单。
+> ⚠️ 列表以服务端返回为准，前端**不要**写死 `code` 清单（`case_exploration`
+> 2026-11-14 退役就是一次集合变化）。平台默认行上的 `target_agent_version: null`
+> 是平台行的固有形状 —— 那一层**不允许**携带它。
 
 **怎么渲染**（与客户端同样的规则）：
 
@@ -209,13 +198,18 @@ POST /v1/assistant/questions
   （用例 `tests/gateway/test_assistant_api.py::test_assistant_text_embedded_unowned_order_falls_through`）。
 - **会话里已确认的活跃订单**、追问时无权限：同样静默回落，并清掉该绑定。
 
-### 3.2 客户案例（`case_exploration`，`requires_order: false`）—— 2026-10-19 恢复
+### 3.2 客户案例（`case_exploration`）—— **2026-11-14 已整体退役**
 
-**管家端恢复渲染「客户案例」按钮，点击照常发 `shortcut_code=case_exploration`。**
+**「客户案例」快捷指令已从 `consumer` 与 `operator` 两个入口摘除（ADR-0254）：
+不再渲染这颗按钮，也不再发 `shortcut_code=case_exploration`。**
+滞留客户端若仍发这个 code：`find_effective_by_code` 已查不到有效行，请求按
+普通问句处理（不返回 404）。自由文本写「我想看看客户案例」同样按普通问句走
+既有问答路径 —— 曾经的宣传路由已随 #1125 的 Python harness 退役一并移除，
+不再产出宣传卡或 `retrieval_status=unavailable`。
 
 ```http
 POST /v1/assistant/questions
-{"question": "我想看看客户案例", "shortcut_code": "case_exploration"}
+{"question": "我想看看客户案例"}
 ```
 
 → `202` `type=qa` → 轮询至 `completed`。
@@ -237,6 +231,9 @@ POST /v1/assistant/questions
    后端刻意区分：前者是"没检索"，后者是"检索了但没命中"）。
 
 ### 3.2-bis 运营侧：让这张卡真的出内容（两步，缺一不可）
+
+> ⚠️ **已随指令退役失效**（2026-11-14，ADR-0254）：租户覆盖行已在停用清单里。
+> 本节留作历史记录 —— 若日后指令以受控形态回来，仍按这两步走。
 
 ⚠️ **光有种子不会 `found`**：运行时在解析不出动作绑定的宣传智能体时**直接返回
 `unavailable`**（`gateway_runtime.py` 的 `promo is None` 分支）。完整步骤：
@@ -271,10 +268,9 @@ POST /v1/assistant/questions
 - [ ] 订单检测：`requires_order: true` 时**点击即弹选择器**（主流程）；同时**处理**后端
       返回的 `clarification` + `missing_fields`（兜底）—— 两者共用同一个选择器组件。
 - [ ] 显式带 `order_no` 得到 `404` 时，提示"订单不存在或无权查看"，**不重试**。
-- [ ] 客户案例：**管家端有这个动作**（2026-10-19 恢复，§3.2），但**不要硬编码 `code`**
-      —— 照 §2「动作列表按服务端返回为准」那条走。
-      ⚠️ `retrieval_status=unavailable` 渲染成"暂不可用"，**不要**写成"没有案例"
-      （与 `not_found` 后端刻意区分）。
+- [ ] 客户案例：**指令已退役**（2026-11-14，§3.2），前端不要再渲染这颗按钮；
+      自由文本路径仍在，`retrieval_status=unavailable` 渲染成"暂不可用"，
+      **不要**写成"没有案例"（与 `not_found` 后端刻意区分）。
 - [ ] 不要保存、打印或打包 AI-Ops 服务令牌（它只在 BFF 与 Nginx 之间）。
 - [ ] 不要试图用 `client-type` 切换入口（见[另一篇](client-type-vs-business-entry.md)）。
 - [ ] **先把「AI-Ops 收谁的身份」定下来**：见

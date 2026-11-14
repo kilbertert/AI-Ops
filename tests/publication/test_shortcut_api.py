@@ -646,10 +646,8 @@ def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
     # operations-review card (#721), and no jump action.
     assert {(row.business_entry, row.code) for row in first} == {
         ("consumer", "battery_report"),
-        ("consumer", "case_exploration"),
         ("consumer", "report_fault"),
         ("consumer", "smart_diagnosis"),
-        ("operator", "case_exploration"),
         ("operator", "operations_review"),
         ("operator", "smart_diagnosis"),
     }
@@ -866,7 +864,6 @@ def test_bundled_seed_carries_the_product_fault_report_path(tmp_path: Path) -> N
     by_code = {s.code: s for s in seeded}
     assert by_code["report_fault"].jump_path == REPORT_FAULT_JUMP_PATH
     # The prompt actions stay prompt actions.
-    assert by_code["case_exploration"].jump_path is None
     assert by_code["smart_diagnosis"].jump_path is None
 
 
