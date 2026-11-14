@@ -16,6 +16,7 @@ LAYOUT = {
                 ".dev-host.toml",
                 ".env.example",
                 ".gitignore",
+                ".llmdocignore",
                 "AGENTS.md",
                 "CLAUDE.md",
                 "GLOSSARY.md",

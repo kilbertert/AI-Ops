@@ -20,7 +20,7 @@
 | `tools/content/`、`verification/`、`experiments/`、`inventory/` | 内容生成/迁移、验证探针、隔离实验、公司源码索引；tools根只留说明与统一测试命令 |
 | `services/`、`integrations/` | 独立运行服务源码、公司侧集成补丁；新增常驻服务不得放进tools |
 | `deploy/<服务>/`、`ops/`既有目录 | 成套部署资产、环境清单/代理配置和运行手册；Gateway根层交付脚本保持唯一实现 |
-| `llmdoc/` | `@tokenroll/llmdoc` 维护的 agent 检索面（`.mdx` 文档与 `meta.json` 台账）；位置与目录名由该工具契约固定，只能位于仓库根。临时调查材料放本机 `.llmdoc-tmp/`（已 gitignore），不进入检查清单 |
+| `llmdoc/` | `@tokenroll/llmdoc` 维护的 agent 检索面（`.mdx` 文档与 `meta.json` 台账）；位置与目录名由该工具契约固定，只能位于仓库根。临时调查材料放本机 `.llmdoc-tmp/`（已 gitignore），不进入检查清单。根层 `.llmdocignore` 同属该工具契约：逐行 minimatch 声明 intentional no-doc 面（过程档案/元数据），匹配路径不再产生 unmapped/dirty 信号 |
 
 未写全前缀的Python目录均位于`src/aiops_diagnostics/`。JSON、HTML、YAML等运行资源跟随使用者所在包，
 通过`importlib.resources`加载并验证wheel/服务bundle中的资源；测试夹具放对应测试目录或`tests/fixtures/`。
