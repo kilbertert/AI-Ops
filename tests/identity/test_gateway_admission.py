@@ -281,3 +281,21 @@ def test_algorithm_and_key_selection_are_fixed(fixture, header):
     headers["X-AIOps-Gateway-Assertion"] = sign(header=header)
     assert client.post("/v1/assistant/questions", headers=headers, content=body).status_code == 401
     assert seen == []
+
+
+def test_replay_store_unavailable_is_retryable_not_invalid_identity(fixture, monkeypatch):
+    from contextlib import contextmanager
+
+    client, admission, sign, headers, body, seen, _ = fixture
+
+    @contextmanager
+    def locked():
+        raise sqlite3.OperationalError("database is locked")
+        yield
+
+    monkeypatch.setattr(admission, "connection", locked)
+    headers["X-AIOps-Gateway-Assertion"] = sign()
+    response = client.post("/v1/assistant/questions", headers=headers, content=body)
+    assert response.status_code == 503
+    assert response.json()["error"] == {"code": "GATEWAY_ASSERTION_UNAVAILABLE", "retryable": True}
+    assert seen == []

@@ -27,6 +27,10 @@ HEADER = b"x-aiops-gateway-assertion"
 MAX_BODY = 8 * 1024 * 1024
 
 
+class AdmissionUnavailable(RuntimeError):
+    pass
+
+
 def _object(pairs):
     value = {}
     for key, item in pairs:
@@ -164,7 +168,7 @@ class Admission:
         with self.connection() as db:
             db.execute("DELETE FROM replays WHERE expires<=?", (now,))
             if db.execute("SELECT count(*) FROM replays").fetchone()[0] >= 100000:
-                raise ValueError("replay capacity exceeded")
+                raise AdmissionUnavailable("replay capacity exceeded")
             db.execute("INSERT INTO replays VALUES(?,?,?)", (self.issuer, claims["jti"], claims["exp"]))
 
 
@@ -206,6 +210,13 @@ class GatewayAdmission:
             await asyncio.to_thread(
                 self.admission.verify, values[0].decode("ascii"), request_digest(scope, body)
             )
+        except (sqlite3.OperationalError, AdmissionUnavailable):
+            response = JSONResponse(
+                {"error": {"code": "GATEWAY_ASSERTION_UNAVAILABLE", "retryable": True}},
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+            return await response(scope, receive, send)
         except (
             ValueError,
             TypeError,
