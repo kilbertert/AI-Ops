@@ -35,3 +35,11 @@ SQLite用备份中的gateway-consistent.db覆盖旧库，删除仅属于旧库�
 备份持有凭据必须root0700/0600，不向公开仓库或CI上传。
 
 每次失败尝试保留独立备份/制品目录，可重新执行同修订；首次安装成功后拒绝再次覆盖。实际恢复目录读取`/var/lib/aiops-95/installed-backup`。退休中断可重跑，只跳过已移动且原路径已不存在的项，有冲突即停止。
+
+## 4. 后续同schema升级
+
+完整合并制品上传并核对摘要后运行`bash <制品>/ops/environments/env95/upgrade.sh <制品>`。
+升级复用`install.sh --verify-only`校验文件集；要求服务单元不变、schema不变、没有在飞作业，
+停机后二次核对再备份状态并原子切换。首次installed-revision/installed-backup保持不变供旧资产退休。
+失败自动启动原制品，需轮询健康确认原构建身份；不自动恢复数据库，以免覆盖已经产生的数据。
+升级备份位于`/var/backups/aiops-95/upgrades/ATTEMPT`；成功以health构建身份及随后业务验收为准。
