@@ -182,6 +182,10 @@ def approved_business_endpoint(settings, tenant_id: str) -> str:
     """
     from aiops_diagnostics.consumer import business_environments
 
+    if getattr(settings, "environment_registry_file", ""):
+        from aiops_diagnostics.gateway.environment_registry import for_settings
+
+        return for_settings(settings).require(tenant_id)["cpms_base_url"]
     pinned = approved_endpoint(getattr(settings, "charging_status_base_url", ""), tenant_id)
     if pinned:
         return pinned
@@ -193,6 +197,8 @@ def consumer_endpoint(settings, tenant_id: str) -> str:
     """Java 和 Chatflow 共用已登记的租户/环境连接，兼容现役配置。"""
     from aiops_diagnostics.gateway.gateway_config import charging_endpoint
 
+    if getattr(settings, "environment_registry_file", ""):
+        return approved_business_endpoint(settings, tenant_id)
     database = getattr(settings, "database_file", "")
     managed = ConsumerEndpoints(database).get(tenant_id, settings.execution_environment) if database else ""
     return managed or charging_endpoint(settings.charging_status_base_url, tenant_id)

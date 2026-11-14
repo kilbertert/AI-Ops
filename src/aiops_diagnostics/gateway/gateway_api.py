@@ -1532,6 +1532,13 @@ def create_gateway_app(
         if hasattr(selected_runtime, "set_trial_operator_scope"):
             selected_runtime.set_trial_operator_scope(trial_scope)
     selected_resolver = caller_resolver or _caller_resolver(selected_settings)
+    if selected_settings.environment_registry_file:
+        from aiops_diagnostics.gateway.environment_registry import for_settings
+        from aiops_diagnostics.identity.caller_auth import RegisteredCallerResolver
+
+        registry = for_settings(selected_settings)
+        selected_runtime.environment_registry = registry
+        selected_resolver = RegisteredCallerResolver(selected_resolver, registry)
     diagnostic_settings = getattr(selected_runtime, "diagnostic_settings", None)
     selected_authorizer = order_authorizer or (
         # ``shop_directory`` 让「快照说不可见」时能向公司权威端点确认一次
@@ -1626,13 +1633,24 @@ def create_gateway_app(
     )
 
     context.operator_cpms = OperatorCpms(context)
-    from aiops_diagnostics.consumer.consumer_tool_grants import ConsumerToolGrants
+    from aiops_diagnostics.consumer.consumer_tool_grants import ConsumerToolGrants, ConsumerToolRefused
 
     context.consumer_tool_grants = ConsumerToolGrants(context, selected_settings)
     from aiops_diagnostics.dify.self_service_api import register as register_self_service
 
     context.self_service_operator_identity = lambda session: authenticated_operator_console(context, session)
     register_self_service(app, context)
+
+    @app.exception_handler(ConsumerToolRefused)
+    async def consumer_tool_refused_handler(request: Request, exc: ConsumerToolRefused):
+        del request
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": {"code": exc.code, "message": "consumer tool request refused", "retryable": False}
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.exception_handler(OperatorRefused)
     async def operator_refused_handler(request: Request, exc: OperatorRefused):

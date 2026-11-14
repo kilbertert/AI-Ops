@@ -59,6 +59,14 @@ def _route(runtime, binding):
 
 def require_pinned(runtime, caller, binding):
     """提示词版本可更新；当前身份、凭据和能力仍必须覆盖签发时的授权。"""
+    from aiops_diagnostics.gateway.environment_registry import RegistryError, require_registered
+
+    try:
+        require_registered(runtime, caller.effective_tenant_id)
+    except RegistryError as exc:
+        raise ChatRunUnavailable(
+            "TENANT_ENVIRONMENT_NOT_ENABLED", "当前租户接入已停用或变化", http_status=403
+        ) from exc
     if not runtime.gateway_settings.consumer_chatflow_enabled:
         raise ChatRunUnavailable("CHATFLOW_DISABLED", "chatflow disabled", http_status=404)
     selected = chat_execution.select_binding(

@@ -121,7 +121,7 @@ def all_targets(settings):
 
 
 def target_for(settings: Any, binding: Any) -> NodeTarget | None:
-    return next(
+    target = next(
         (
             r
             for r in all_targets(settings)
@@ -135,6 +135,16 @@ def target_for(settings: Any, binding: Any) -> NodeTarget | None:
         ),
         None,
     )
+
+    if target is not None and getattr(settings, "environment_registry_file", ""):
+        from aiops_diagnostics.gateway.environment_registry import for_settings
+
+        row = for_settings(settings).require(target.tenant_id)
+        if target.environment != settings.environment or (
+            target.entry == "operator" and target.cpms_base_url.rstrip("/") != row["cpms_base_url"]
+        ):
+            raise ValueError("node target conflicts with registered environment")
+    return target
 
 
 def candidate(source: Any, target: NodeTarget, *, operator_preview: dict | None = None) -> str:
