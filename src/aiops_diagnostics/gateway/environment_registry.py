@@ -195,12 +195,21 @@ def load(path: str | Path) -> dict:
 
 
 def apply(path: Path, rows: list[dict], *, expected_revision: int, actor: str, managers=None) -> int:
-    import fcntl
-    import os
-
     validate(rows, managed=managers is not None)
     if managers is not None:
         validate_managers(managers, rows)
+    return _write(path, rows, expected_revision=expected_revision, actor=actor, managers=managers)
+
+
+def migrate(path: Path, *, expected_revision: int, actor: str) -> int:
+    return _write(path, None, expected_revision=expected_revision, actor=actor, managers=[])
+
+
+def _write(path, rows, *, expected_revision, actor, managers):
+    import copy
+    import fcntl
+    import os
+
     if type(expected_revision) is not int or expected_revision < 0:
         raise RegistryError("登记预期版本必须是非负整数")
     if not isinstance(actor, str) or not ACTOR_PATTERN.fullmatch(actor):
@@ -219,6 +228,25 @@ def apply(path: Path, rows: list[dict], *, expected_revision: int, actor: str, m
         old = load(path) if path.exists() or path.is_symlink() else {"revision": 0, "audit": []}
         if old["revision"] != expected_revision:
             raise RegistryError("ENVIRONMENT_REGISTRY_REVISION_CONFLICT")
+        if rows is None:
+            if old.get("schema") != SCHEMA:
+                raise RegistryError("ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED")
+            backup = path.with_name(path.name + f".v1-r{expected_revision}.backup")
+            original = json.dumps(old, ensure_ascii=False, indent=2) + "\n"
+            if backup.exists() or backup.is_symlink():
+                validate_private_file(backup)
+                if backup.read_text() != original:
+                    raise RegistryError("ENVIRONMENT_REGISTRY_BACKUP_CONFLICT")
+            else:
+                write_private_text(backup, original)
+            rows = copy.deepcopy(old["environments"])
+            for row in rows:
+                row.update(name=row["id"], company_gateway_url="")
+                for tenant in row["tenants"]:
+                    tenant["name"] = tenant["id"]
+            validate(rows, managed=True)
+        elif old.get("schema") == SCHEMA and managers is not None:
+            raise RegistryError("ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED")
         if old.get("schema") == MANAGED_SCHEMA and managers is None:
             raise RegistryError("ENVIRONMENT_REGISTRY_DOWNGRADE_REFUSED")
         revision = expected_revision + 1

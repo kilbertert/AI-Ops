@@ -61,24 +61,7 @@ def environment_registry_command(
                 registry, incoming, expected_revision=expected_revision, actor=actor, managers=managers
             )
         elif action == "migrate":
-            from aiops_diagnostics.common.private_files import write_private_text
-
-            old = environment_registry.load(registry)
-            if old["schema"] == environment_registry.MANAGED_SCHEMA:
-                raise ValueError("目录已经升级")
-            if old["revision"] != expected_revision:
-                raise environment_registry.RegistryError("ENVIRONMENT_REGISTRY_REVISION_CONFLICT")
-            backup = registry.with_name(registry.name + f".v1-r{expected_revision}.backup")
-            if backup.exists() or backup.is_symlink():
-                raise ValueError("备份已存在，请核对后再迁移")
-            write_private_text(backup, json.dumps(old, ensure_ascii=False, indent=2) + "\n")
-            for row in old["environments"]:
-                row.update(name=row["id"], company_gateway_url="")
-                for tenant in row["tenants"]:
-                    tenant["name"] = tenant["id"]
-            environment_registry.apply(
-                registry, old["environments"], expected_revision=expected_revision, actor=actor, managers=[]
-            )
+            environment_registry.migrate(registry, expected_revision=expected_revision, actor=actor)
         elif action != "check":
             raise ValueError("action只能是check、apply或migrate")
         body = environment_registry.load(registry)

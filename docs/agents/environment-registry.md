@@ -52,7 +52,7 @@ Dify已签会话仍受原寿命约束；登记不声称全局清除共享Dify的
 ## 管理目录schema2与原Dify页面
 
 先部署兼容schema2的Gateway/管理桥，再迁移目录；旧运行程序不认识新格式，不能直接用旧制品恢复schema2。
-`migrate`显式备份schema1并递增版本，名称初值沿用编号，公司网关地址为空，管理员授权为空，不自动扩大权限。
+`migrate`在同一目录锁内显式备份schema1并递增版本，名称初值沿用编号，公司网关地址为空，管理员授权为空，不自动扩大权限。
 
 ```bash
 aiops-admin environment-registry migrate --registry /var/lib/aiops-registry/registry.json \
@@ -63,6 +63,7 @@ aiops-admin environment-registry migrate --registry /var/lib/aiops-registry/regi
 环境在旧字段之外必填`name`和`company_gateway_url`，后者为空表示尚未登记，非空须HTTPS，可含公司路径前缀。
 它不替代现有`gateway_url`（隔离AI入口）或`cpms_base_url`（现役工具入口），本片不据该新字段发请求。
 租户增加`name`。管理员记录为`environment/tenant_id/user_id/environments`，前三项是正常登录主体，最后是可管理环境ID数组。
+schema1不能直接apply新格式；必须migrate，迁移中断后可复用同内容且私有的备份重试，冲突备份明确拒绝。
 管理员列表只由受管CLI配置，不从公司type=-1自动推导，也不能从页面编辑。实际身份与地址保存在私有文件，不入仓。
 
 Dify原AI管理页增加“环境与租户管理”：读取获授权环境，修改环境或已有租户名称、准入开关；
@@ -75,3 +76,6 @@ API为`GET/POST /v1/dify/management/environments`，经现有同源桥的`enviro
 因此若当前登录环境也被停用且会话随后过期，需要受管CLI恢复；不要把唯一控制环境作为试验停用目标。
 新租户由公司目录核权后受管登记，真实发现及跨环境开通留后续片；不得把手工填写ID当业务授权。
 回退目录内容仍走递增版本发布；保留任务备份，不能用旧schema1数组静默丢掉新授权。
+
+目录修改使用全局revision，两个环境同时保存也可能冲突，需刷新；未将目录并发扩展为分环境版本。
+环境运维不要求公司智能体编辑/发布权限，但正常公司身份和显式范围授权缺一不可；应用内容权限不因此放宽。

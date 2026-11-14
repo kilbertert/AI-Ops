@@ -222,5 +222,35 @@ def test_management_auth_uses_live_company_identity_even_when_admission_disabled
         management.catalogue(context, "session")
     info["sysUser"]["tenantId"] = "same"
     info["permissions"] = []
+    # 环境运维授权独立于编辑内容权限，普通应用管理仍保持原权限检查。
+    assert management.catalogue(context, "session")["environments"][0]["id"] == "a"
     with pytest.raises(auth.SetupRefused, match="PERMISSION_REQUIRED"):
-        management.catalogue(context, "session")
+        auth.identity(context, "session", require_admission=False)
+
+
+def test_upgrade_requires_backup_and_retries_after_interrupted_publish(tmp_path, monkeypatch):
+    path = tmp_path / "registry" / "directory.json"
+    rows = environments(tmp_path)
+    registry.apply(path, rows, expected_revision=0, actor="operator")
+    old = registry.load(path)
+    for row in rows:
+        row.update(name=row["id"], company_gateway_url="")
+        row["tenants"][0]["name"] = "租户"
+    with pytest.raises(registry.RegistryError, match="MIGRATION_REQUIRED"):
+        registry.apply(path, rows, expected_revision=1, actor="operator", managers=[])
+    write = registry.write_private_text
+
+    def interrupted(target, content):
+        if target == path:
+            raise OSError("simulated publication interruption")
+        return write(target, content)
+
+    monkeypatch.setattr(registry, "write_private_text", interrupted)
+    with pytest.raises(OSError):
+        registry.migrate(path, expected_revision=1, actor="operator")
+    assert registry.load(path) == old
+    backup = path.with_name("directory.json.v1-r1.backup")
+    assert json.loads(backup.read_text()) == old
+    monkeypatch.setattr(registry, "write_private_text", write)
+    assert registry.migrate(path, expected_revision=1, actor="operator") == 2
+    assert registry.load(path)["managers"] == []

@@ -47,7 +47,7 @@ def company_get(context, token, path):
     return body["data"]
 
 
-def identity(context, session, *, require_admission=True):
+def identity(context, session, *, require_admission=True, require_platform_permissions=True):
     exchanged = context.operator_cpms.console_identity(session)
     info = company_get(context, exchanged["token"], "/user/info")
     user = info.get("sysUser", {}) if isinstance(info, dict) else {}
@@ -63,8 +63,10 @@ def identity(context, session, *, require_admission=True):
         except RegistryError as exc:
             raise SetupRefused("TENANT_ENVIRONMENT_NOT_ENABLED") from exc
     is_platform = str(user.get("type")) == "-1"
-    if is_platform and not {"aiops:agent:edit", "aiops:agent:publish"}.issubset(
-        info.get("permissions") or []
+    if (
+        require_platform_permissions
+        and is_platform
+        and not {"aiops:agent:edit", "aiops:agent:publish"}.issubset(info.get("permissions") or [])
     ):
         raise SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
     return ManagerIdentity(uid, tenant, is_platform, exchanged["token"])

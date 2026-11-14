@@ -23,7 +23,7 @@ class EnvironmentChange(BaseModel):
 
 def _access(context, session):
     # 目录管理员仍须正常公司登录；停用业务准入不能令目录管理员无法恢复。
-    caller = auth.identity(context, session, require_admission=False)
+    caller = auth.identity(context, session, require_admission=False, require_platform_permissions=False)
     path = getattr(context.settings, "environment_registry_file", "")
     if not path:
         raise auth.SetupRefused("ENVIRONMENT_MANAGEMENT_UNAVAILABLE")
@@ -31,6 +31,8 @@ def _access(context, session):
         body = registry.load(path)
     except registry.RegistryError as exc:
         raise auth.SetupRefused("ENVIRONMENT_MANAGEMENT_UNAVAILABLE") from exc
+    if body["schema"] != registry.MANAGED_SCHEMA:
+        raise auth.SetupRefused("ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED")
     allowed = set()
     for manager in body.get("managers", []):
         if (manager["environment"], manager["tenant_id"], manager["user_id"]) == (

@@ -55,6 +55,7 @@ export const entryLabels: Record<EntryKey, string> = {
 }
 
 export const messages: Record<string, string> = {
+  ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED: '环境目录尚未升级，请联系平台运维迁移',
   ENVIRONMENT_MANAGEMENT_UNAVAILABLE: '环境目录尚未准备，请联系平台运维',
   ENVIRONMENT_MANAGEMENT_FORBIDDEN: '当前账号没有环境管理授权',
   ENVIRONMENT_REGISTRY_REVISION_CONFLICT: '目录已被更新，请刷新后重新确认修改',
