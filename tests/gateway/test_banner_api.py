@@ -146,7 +146,6 @@ def test_the_banner_is_served_on_its_own_surface(tmp_path: Path) -> None:
     assert banner["count"] == 1
     assert [item["code"] for item in banner["banners"]] == ["battery_report"]
     assert [item["code"] for item in buttons["shortcuts"]] == [
-        "case_exploration",
         "smart_diagnosis",
         "report_fault",
     ]

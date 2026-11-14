@@ -308,7 +308,6 @@ def test_the_consumer_entry_keeps_its_own_actions(tmp_path: Path, monkeypatch: p
 
     assert listed.status_code == 200, listed.text
     assert sorted(item["code"] for item in listed.json()["shortcuts"]) == [
-        "case_exploration",
         "report_fault",
         "smart_diagnosis",
     ]

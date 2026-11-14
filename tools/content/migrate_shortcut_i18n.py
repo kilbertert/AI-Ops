@@ -25,7 +25,9 @@ value from the current seed.
   and user-visible. A disabled row serves nobody, so it has no language gap to
   close; the report keeps it visible instead of leaving it silently at 6 languages.
 - **Rows with no seed entry are reported, not invented.** `solution_discovery` is
-  an operator-created action with no seed.
+  an operator-created action with no seed; `case_exploration` joined that set on
+  2026-11-14 when the command was retired from both entries (ADR-0254), so its
+  surviving rows are reported rather than completed.
 
 ## Concurrency
 

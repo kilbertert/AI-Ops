@@ -66,7 +66,7 @@ def _six_lang(text: str) -> dict[str, str]:
     return {tag: f"{text}-{tag}" for tag in SIX}
 
 
-def _row(store: ShortcutStore, *, status: str, tenant: str = "T-1", code: str = "case_exploration"):
+def _row(store: ShortcutStore, *, status: str, tenant: str = "T-1", code: str = "smart_diagnosis"):
     """Create a row in the requested state, then force that state directly.
 
     The public API can only reach `published` (via publish) and `draft`; `disabled`
@@ -77,8 +77,8 @@ def _row(store: ShortcutStore, *, status: str, tenant: str = "T-1", code: str = 
         tenant,
         "consumer",
         code,
-        intent="case_exploration",
-        requires_order=False,
+        intent="order_issue",
+        requires_order=True,
         sort_order=10,
         labels=_six_lang("label"),
         descriptions=_six_lang("desc"),
@@ -185,8 +185,8 @@ def test_existing_values_are_never_rewritten(tmp_path: Path, tool) -> None:
         draft.shortcut_id,
         {
             "business_entry": "consumer",
-            "intent": "case_exploration",
-            "requires_order": False,
+            "intent": "order_issue",
+            "requires_order": True,
             "sort_order": 10,
             "labels": {**draft.labels, "zh": "运营自己写的标签"},
             "descriptions": draft.descriptions,
@@ -258,8 +258,8 @@ def test_a_concurrent_edit_survives_a_stale_snapshot(tmp_path: Path, tool) -> No
         draft.shortcut_id,
         {
             "business_entry": "consumer",
-            "intent": "case_exploration",
-            "requires_order": False,
+            "intent": "order_issue",
+            "requires_order": True,
             "sort_order": 10,
             "labels": {**draft.labels, "en": "OPERATOR-EDIT"},
             "descriptions": draft.descriptions,

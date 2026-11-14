@@ -1195,8 +1195,9 @@ manager.disable(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLAT
 
 ### 3.1-sexies 从入口**移除**一个已发布动作：改种子 + `disable` 数据行（2026-10-16 新增）
 
-> ⚠️ **本节只作方法保留**：它记的那次实例（管家端移除「客户案例」）已于 **2026-10-19 反转**
-> —— 见下方 §3.1-septies。删动作的方法本身仍然可用，但**别再照它去动 `case_exploration`**。
+> **实例史**：2026-10-16 管家端移除「客户案例」（2026-10-19 反转，见 §3.1-septies）；
+> **2026-11-14「客户案例」指令整体退役**（`consumer` + `operator` 都摘，见 ADR-0254）——
+> 那就是本节方法按下方「全量停用」形态实做的那一次。
 
 **用途**：产品决定某个动作不该再出现在某个入口时。**2026-10-16 的实例**：管家端移除
 「客户案例」（`case_exploration`）—— 见 `frontend-operator-handoff.md` §3.2 与该日
@@ -1233,6 +1234,37 @@ ctx = ScopeContext.build(
 row = store.find_by_code(PLATFORM_TENANT_ID, "operator", "case_exploration")
 if row is not None and row.status != "disabled":
     manager.disable(ctx, row.shortcut_id, expected_revision=row.revision, scope="platform")
+```
+
+**全量停用某个 code（跨入口 × 跨租户，2026-11-14 实例的形状）**：指令整体退役时，
+要停的不只是平台行 —— `list_effective` 里已发布的**租户行**独立生效，
+平台行 `disabled` 挡不住它。先只读列出所有行，再逐行按归属 scope 停用。
+注意 `list_all(tenant_id, entry)` 是按租户过滤的 —— 跨租户枚举必须直查表
+（2026-11-14 实例实际执行的形状）：
+
+```python
+import sqlite3
+
+CODE = "case_exploration"
+conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+conn.row_factory = sqlite3.Row
+targets = [
+    dict(r)
+    for r in conn.execute(
+        "SELECT tenant_id, business_entry, shortcut_id FROM shortcuts WHERE code=? AND status!='disabled'",
+        (CODE,),
+    )
+]
+conn.close()
+# 每行 disable 用的 ctx 要与行的归属匹配：平台行 PLATFORM_SCOPE + ROLE_PLATFORM_ADMIN，
+# 租户行 scope="tenant" + 该租户 id + ROLE_AGENT_ADMIN。
+for t in targets:
+    row = store.find_by_code(t["tenant_id"], t["business_entry"], CODE)
+    if t["tenant_id"] == PLATFORM_TENANT_ID:
+        manager.disable(ctx, row.shortcut_id, expected_revision=row.revision, scope="platform")
+    else:
+        tctx = _ctx_for(t["tenant_id"])  # 同一构造，tenant_id 换成该租户
+        manager.disable(tctx, row.shortcut_id, expected_revision=row.revision, scope="tenant")
 ```
 
 🔴 **为什么不是 `rollback`**：判据与 §3.1-ter 撤回那节同一条 —— 该动作只有
@@ -1336,6 +1368,11 @@ workspace 卡片出现切换器，能切到 `aiops-41-1942105476598861824` 并�
 看 `dataset_configs.datasets` 里有没有它的 id**。runbook 的这一节就是那次遍历的结论。
 
 ### 3.1-septies 从入口**恢复**一个动作：种子已在代码里，**数据侧要补的是租户绑定**（2026-10-19 新增）
+
+> ⚠️ **实例已反转**：本节记的那次恢复（管家端「客户案例」）随 2026-11-14 该指令整体
+> 退役而撤销（ADR-0254）。另注意：宣传路由 `_promo_route` / `select_promo_agent`
+> 已随 #1125 的 Python harness 退役删除 —— 本节方法只适用于走既有问答路径的动作，
+> 指望它恢复宣传卡是办不到的。
 
 **用途**：反转 §3.1-sexies 那次移除。**2026-10-19 的实例**：管家端恢复「客户案例」
 （`case_exploration`）—— 见 ADR-0050 与 `frontend-operator-handoff.md` §3.2。
@@ -2395,8 +2432,8 @@ PY
 ## 6. 真实验收边界（不得逾越）
 
 - 本地 fixture / 替身模型 / SQLite 直查 / 模型单次调用，**都不是**真实业务验收。
-- 宣传卡片需该租户有**已发布宣传 Agent + 绑定 KB + 至少一条素材**；无素材时
-  "无可用案例"是正确行为，不要宣称卡片验收通过。
+- ~~宣传卡片需该租户有已发布宣传 Agent + 绑定 KB + 至少一条素材~~ —— 宣传路由
+  已随 #1125 退役（ADR-0254 注记），不存在可验收的宣传卡。
 - 涉及写操作（工单/退款/配置）保持禁用；本手册所有步骤为只读或经生产代码路径
   的资源创建。
 - 报告状态只能用：`draft_ready` / `pr_open` / `merged_waiting_deploy` / `live` /

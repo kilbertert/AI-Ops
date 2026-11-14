@@ -160,7 +160,7 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/assistant/questions' \
 | `question` | ✅ | 1–4000 字 |
 | `order_no` | ❌ | 带订单号的提问会走诊断 |
 | `conversation_id` | ❌ | 绑定多轮会话（`conv_` 开头） |
-| `shortcut_code` | ❌ | 点击快捷动作时带（如 `case_exploration`） |
+| `shortcut_code` | ❌ | 点击快捷动作时带（如 `smart_diagnosis`） |
 
 **轮询**：按响应里的 `retry_after_ms`（通常是 1000ms）节流。
 
@@ -246,17 +246,19 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/standard/analyses' \
 # 期望：202 + analysis_id
 ```
 
-### 3.3 「客户案例」在管家端**已恢复**（2026-10-19，可测）
+### 3.3 「客户案例」—— **2026-11-14 已整体退役**
 
-`case_exploration` 现在**在管家端正常可用**，绑定的宣传智能体版本与客户端不同
-（管家端 `#v3`、客户端 `#v2`——这是设计，两个入口各自冻结自己的版本）。
+`case_exploration` 快捷指令已从两个入口摘除（ADR-0254）。注意本节实测的**宣传路由本身也已不存在**：`_promo_route` / `_start_promo_qa` / `promo_agents.py`
+随 #1125 的 Python harness 退役一并删除 —— 2026-10-19 的 `retrieval_status=found`
+证据只证明当时的形状。现在发这个 code 或自由文本带案例线索，都按普通问句走
+既有问答路径（`find_effective_by_code` 查不到行即回落），不产出宣传卡。
 
-**已实测的三层证据：**
+**2026-10-19 的三层实测证据（历史）：**
 
 | 层 | 证据 |
 |---|---|
 | 数据侧 | 41 上 `operator` 入口的有效动作 = **客户案例(10) / 订单检测(20) / 运维巡检(30)**，`case_exploration` 的 `target_agent_version` = `agt_ed443cae…#v3` |
-| 路由侧 | 线上代码实跑 `_promo_route(platform="operator")` → 解析出 `#v3`；`select_promo_agent` 也解析成功 |
+| 路由侧 | 当时线上代码实跑 `_promo_route(platform="operator")` → 解析出 `#v3`；`select_promo_agent` 也解析成功（两者已随 #1125 删除） |
 | 端到端 | 同机制的宣传作业经真实会话执行：**`completed` + `retrieval_status=found`**，产出 **12 个内容块（含 2 个 image + 6 个 reference）**，耗时 51s |
 
 **怎么测**（预期与客户端一致，但凭据是 JWT 不是会话）：
@@ -282,7 +284,7 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/assistant/questions' \
 | 现象 | 是 bug 吗 | 说明 |
 |---|---|---|
 | `/v1/banner` 返回 `count: 0` | ❌ 不是 | **当前生产上没有已发布的横幅行**，路由是好的。空态是 200，不是 404。运营发布横幅后即非空 |
-| 管家端「客户案例」返回 `unavailable` | ⚠️ 看会话形状 | 该动作**已恢复**（§3.3）。若仍 `unavailable`，先确认会话是 operator 形状 —— `self` 形状拿不到站点范围，宣传路由会 fail-closed |
+| 管家端「客户案例」返回 `unavailable` | ⚠️ 历史形状 | 该动作**已退役**（§3.3），宣传路由也随 #1125 移除；现在同类问题按普通问句处理，不会再出现宣传卡的 `unavailable` |
 | 泰语 / 高棉语提示不支持语言 | ⚠️ 按路线判断 | 当前WF01与明确订单诊断不应拒绝；仅无明确订单的旧关键词路线保留该边界 |
 | 订单不存在 vs 无权查看，都返回 **404** | ❌ 不是 | 刻意不区分，避免泄露「这单存在」 |
 | 字段写错返回 **422** 不是 400 | ❌ 不是 | **请求体**校验一律 422（`extra="forbid"`）。⚠️ **路径参数**例外：`/v1/orders/{no}/access` 与 charging-status 的订单号形状非法返回 **400 `INVALID_ORDER_NO`** |

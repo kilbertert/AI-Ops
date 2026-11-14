@@ -140,8 +140,8 @@ Nginx 缺省把入口补成 `consumer`，并**把 `Authorization` 换成 AI-Ops 
 **排查信号**：`GET /v1/shortcuts` 的响应**没有** `platform` 字段（别拿它自检）。用这两条：
 - **最可靠的是 `/v1/faq/recommendations` 的 `platform` 字段**（下面那条）；
 - **次选**：动作列表的 `count` 与内容 —— **但这只是当前发布状态**（动作是运营发布的，
-  数量会变）：现在管家端 `2` 条、客户端 `3` 条；`case_exploration` 在客户端带
-  `target_agent_version: "agt_…#vN"`、管家端为 `null`。**别把 `count` 写成硬断言**；
+  数量会变）：现在管家端 `2` 条（订单检测 + 运维巡检）、客户端 `2` 条按钮 + 1 条横幅；
+  `case_exploration` 已于 2026-11-14 整体退役（ADR-0254）。**别把 `count` 写成硬断言**；
 - **需要 `platform` 字段时改用 `GET /v1/faq/recommendations`** —— 它的响应里有
   `platform: operator` 与 `available_platforms`。
 
@@ -176,11 +176,11 @@ Nginx 缺省把入口补成 `consumer`，并**把 `Authorization` 换成 AI-Ops 
 {
   "type": "shortcut_list", "language": "zh", "count": 2,
   "shortcuts": [
-    {"code": "case_exploration", "intent": "case_exploration", "requires_order": false,
-     "label": "客户案例", "question_template": "有哪些充电运营的客户案例",
-     "target_agent_version": null, "jump_path": null},
     {"code": "smart_diagnosis", "intent": "order_issue", "requires_order": true,
      "label": "订单检测", "question_template": "帮我检测这个订单的充电异常",
+     "target_agent_version": null, "jump_path": null},
+    {"code": "operations_review", "intent": "knowledge", "requires_order": false,
+     "label": "运维巡检", "question_template": "帮我看一下最近的运维巡检",
      "target_agent_version": null, "jump_path": null}
   ]
 }
@@ -199,8 +199,8 @@ Nginx 缺省把入口补成 `consumer`，并**把 `Authorization` 换成 AI-Ops 
 // 订单检测（用户选完单 → 202 diagnosis）
 {"question": "帮我检测这个订单的充电异常", "shortcut_code": "smart_diagnosis", "order_no": "<订单号>"}
 
-// 客户案例（→ 202 qa）
-{"question": "有哪些充电运营的客户案例", "shortcut_code": "case_exploration"}
+// 运维巡检（→ 202 qa）
+{"question": "帮我看一下最近的运维巡检", "shortcut_code": "operations_review"}
 ```
 
 ### 4.1 订单检测（`smart_diagnosis`）
@@ -216,14 +216,16 @@ Nginx 缺省把入口补成 `consumer`，并**把 `Authorization` 换成 AI-Ops 
 > ⇒ **带单号也仍然是 `404`**。这是**数据没配**（产品/运营补绑定），不是接口问题 ——
 > 联调时用**已有店铺绑定的运营商账号**才能看到 `202`。
 
-### 4.2 客户案例（`case_exploration`）
+### 4.2 客户案例（`case_exploration`）—— **2026-11-14 已退役**
 
-`202` + `type: qa` → 轮询至 `completed`。**当前终态**：`retrieval_status: "unavailable"`，
-文案「客户案例服务暂时不可用」。
+**这条快捷指令已整体摘除（ADR-0254），列表不再返回它、前端不要再发
+`shortcut_code=case_exploration`。** 滞留客户端若仍发它：`find_effective_by_code`
+查不到有效行，请求按普通问句走既有问答路径（不返回 404，也不产出宣传卡 ——
+宣传路由本身已随 #1125 的 Python harness 退役移除，下面只是历史记录）。
 
-**这不是故障**：该动作的知识库素材与智能体绑定**尚未配置**（需要新建一个宣传类智能体、
-绑定知识库，并把它的版本绑到该动作的**租户行**上）。前端按「暂不可用」渲染即可，
-**不要**写成「没有找到案例」——后端刻意区分了 `unavailable` 与 `not_found`。
+退役前的行为记录：`202` + `type: qa` → 轮询至 `completed`。知识库未就绪时的终态：
+`retrieval_status: "unavailable"`，文案「客户案例服务暂时不可用」——这是宣传路由
+还存在时（2026-10-19 实测）的形状，随 #1125 一并消失，不要当作当前合同。
 
 ---
 
@@ -244,8 +246,8 @@ Nginx 缺省把入口补成 `consumer`，并**把 `Authorization` 换成 AI-Ops 
 
 1. **运营商账号的店铺绑定**（运营/产品）：没有绑定 ⇒ 站点范围为 Ø ⇒ 订单检测恒 `404`。
    补上之后**前端不用改任何代码**。
-2. **客户案例的素材 + 智能体绑定**（产品）：配好后同样的请求返回 `retrieval_status: "found"`，
-   前端也不用改代码。
+2. ~~客户案例的素材 + 智能体绑定~~（已随指令退役关闭，2026-11-14）：该动作已整体摘除，
+   且宣传路由在 #1125 后已不存在，不再有待补的绑定项。
 
 另：**本机制目前用公司源码里的默认签名密钥**（换钥匙是公司侧的事，已在跟踪），
 它不影响前端联调，但决定了这套机制在换钥匙前的安全边界。
