@@ -6,7 +6,7 @@ import { VarKindType } from '@/app/components/workflow/nodes/_base/types'
 import { BlockEnum } from '@/app/components/workflow/types'
 import { publishManagedWorkflow } from '@/service/aiops-management'
 
-const draft = vi.hoisted(() => ({ hash: 'saved-hash' }))
+const draft = vi.hoisted(() => ({ hash: 'saved-hash', graph: { nodes: [] as unknown[] } }))
 vi.mock('@/service/workflow', () => ({ fetchWorkflowDraft: async () => draft }))
 const status = {
   managed: true,
@@ -26,7 +26,7 @@ const status = {
   channel_note: 'AI 已准备，渠道待接入',
   draft_sha256: 'a'.repeat(64),
 }
-const fixtureNodes = (): ComponentProps<typeof WorkflowManagedStrip>['nodes'] => [
+const fixtureNodes = () => [
   {
     id: 'answer',
     position: { x: 0, y: 0 },
@@ -76,6 +76,7 @@ function Panel(props: Partial<ComponentProps<typeof WorkflowManagedStrip>>) {
           ),
         )
         editing.updateNode({ id, data })
+        draft.graph.nodes = [{ id, data }]
       }}
     />
   )
@@ -312,4 +313,30 @@ it('blocks publication after selection save failure and allows explicit retry', 
   fails = false
   await screen.getByRole('button', { name: '重试保存选库' }).click()
   await expect.element(screen.getByRole('button', { name: '发布到客户端客服' })).toBeEnabled()
+})
+
+it('does not claim selection saved when the server retains the old graph', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      Response.json({
+        libraries: [
+          { id: 'kb-1', name: '原资料', allowed: true },
+          { id: 'kb-new', name: '新资料', allowed: true },
+        ],
+      }),
+    ),
+  )
+  const screen = await render(
+    <Panel
+      sync={async () => {
+        draft.graph.nodes = fixtureNodes()
+        return true
+      }}
+    />,
+  )
+  await openStrip(screen)
+  await screen.getByRole('checkbox', { name: '本应用选用：新资料' }).click()
+  await expect.element(screen.getByText('选库未保存或已被其他操作修改，请刷新确认')).toBeVisible()
+  await expect.element(screen.getByRole('button', { name: '发布到客户端客服' })).toBeDisabled()
 })

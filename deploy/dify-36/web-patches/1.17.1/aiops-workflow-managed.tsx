@@ -22,13 +22,14 @@ import { Textarea } from '@langgenius/dify-ui/textarea'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ManagedPublish } from '@/app/components/aiops-management'
 import { manage } from '@/service/aiops-management'
+import { fetchWorkflowDraft } from '@/service/workflow'
 
 type Props = {
   status: Status
   save: () => Promise<unknown>
   sync: () => Promise<unknown>
   disabled?: boolean
-  nodes: Node<Partial<AgentNodeType & ToolNodeType>>[]
+  nodes: Node[]
   updateNode: (payload: { id: string; data: Record<string, unknown> }) => void
 }
 const finished = new Set(['completed', 'failed', 'cancelled', 'expired', 'inconclusive'])
@@ -226,7 +227,7 @@ function KnowledgeAccess({
 }: {
   appId: string
   disabled: boolean
-  nodes: Node<Partial<AgentNodeType & ToolNodeType>>[]
+  nodes: Node[]
   updateNode: Props['updateNode']
   sync: Props['sync']
   onBlocked: (blocked: boolean) => void
@@ -238,12 +239,18 @@ function KnowledgeAccess({
   const [saveFailed, setSaveFailed] = useState(false)
   const node =
     nodes.find((item) => item.id === 'answer' && item.data.type === 'agent') ??
-    nodes.find((item) => item.data.type === 'tool' && item.data.tool_name === 'consumer_knowledge')
-  const tools = node?.data.agent_parameters?.tools?.value
+    nodes.find(
+      (item) =>
+        item.data.type === 'tool' &&
+        'tool_name' in item.data &&
+        item.data.tool_name === 'consumer_knowledge',
+    )
+  const nodeData = node?.data as Partial<AgentNodeType & ToolNodeType> | undefined
+  const tools = nodeData?.agent_parameters?.tools?.value
   const tool = Array.isArray(tools)
     ? tools.find((item: { tool_name?: string }) => item.tool_name === 'consumer_knowledge')
     : undefined
-  const settings = tool?.settings ?? node?.data.tool_configurations
+  const settings = tool?.settings ?? nodeData?.tool_configurations
   const raw = settings?.knowledge_base_ids
   const config = raw?.type ? raw : raw?.value
   const selected: string[] =
@@ -284,9 +291,9 @@ function KnowledgeAccess({
     const data = tool
       ? {
           agent_parameters: {
-            ...node.data.agent_parameters,
+            ...nodeData?.agent_parameters,
             tools: {
-              ...node.data.agent_parameters?.tools,
+              ...nodeData?.agent_parameters?.tools,
               value: tools.map((item: { settings?: unknown }) =>
                 item === tool ? { ...item, settings: next } : item,
               ),
@@ -298,7 +305,20 @@ function KnowledgeAccess({
     setSaveFailed(true)
     try {
       updateNode({ id: node.id, data })
-      if (!(await sync())) throw new Error('草稿未保存，请重试；本次选库尚未发布')
+      const saved = await sync()
+      if (!saved) throw new Error('草稿未保存，请重试；本次选库尚未发布')
+      const current = await fetchWorkflowDraft(`/apps/${appId}/workflows/draft`)
+      const savedNode = current.graph.nodes.find((item) => item.id === node.id)
+      const savedData = savedNode?.data as Partial<AgentNodeType & ToolNodeType> | undefined
+      const savedSettings = tool
+        ? savedData?.agent_parameters?.tools?.value?.find(
+            (item: { tool_name?: string }) => item.tool_name === 'consumer_knowledge',
+          )?.settings
+        : savedData?.tool_configurations
+      const savedRaw = savedSettings?.knowledge_base_ids
+      const savedConfig = savedRaw?.type ? savedRaw : savedRaw?.value
+      if (JSON.stringify(savedConfig?.value) !== JSON.stringify(ids))
+        throw new Error('选库未保存或已被其他操作修改，请刷新确认')
       setSaveFailed(false)
       setMessage('本应用选库已保存为草稿，发布后才会生效')
     } catch (e) {
