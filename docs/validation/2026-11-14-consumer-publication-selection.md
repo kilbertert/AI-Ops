@@ -31,3 +31,12 @@
 复验待合并部署后执行。合成模型和组件测试不证明知识内容正确性或真实用户请求成功率。
 浏览器测试工具使用同仓锁定vitest及@vitest/browser-playwright运行，避免vite-plus与
 vitest-browser-react混载两个测试运行时；该配置只属于临时验证环境。
+
+## 独立反例补修
+
+DeepSeek独立会话实测二次换库发布：consumer_service选库更新，兼容顶层knowledge_base_ids
+仍为旧库。已复现红灯并修正发布快照的顶层选库、提示词、模型投影，回归同时验证现役
+select_customer_agent返回新库且旧版本不变。其余阅读推断不计通过；恢复并发另做独立实测。
+
+整合主线dde0ecfb后的首轮全量：5053通过、9跳过、2失败（测试数量以XML最终核对）；
+两项涉及既有runner脚本超时，正在复核；不能标全绿。版本1.10.1。

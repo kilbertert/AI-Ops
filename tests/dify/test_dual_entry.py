@@ -1322,3 +1322,28 @@ def test_recovery_never_takes_over_unrelated_or_edited_agent(dual, change):
         with pytest.raises(auth.SetupRefused, match="SETUP_AGENT_UNAVAILABLE"):
             dual.service.publish(dual.caller, app, before.revision)
         assert dual.service.route_for(TARGET, "consumer") == before
+
+
+def test_republish_updates_customer_projection_and_immutable_workflow_together(dual):
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+    from aiops_diagnostics.publication.qa_rag import select_customer_agent
+
+    result = run(dual, request(dual, scope="consumer"))
+    app = result["entries"]["consumer"]["app_id"]
+    before = dual.service.route_for(TARGET, "consumer")
+    store = dual.context.agent_manager.store
+    previous = store.version(before.agent_id, TARGET, before.agent_version_no).snapshot
+    kb = dual.kb.create_knowledge_base("changed-library")["id"]
+    KnowledgeGrants(dual.settings.database_file).grant(TARGET, "env-a", kb, "fixture")
+    document = dual.console.apps[app]
+    prepare.rebind_knowledge(document, [kb])
+    llm = next(n["data"] for n in document["workflow"]["graph"]["nodes"] if n["data"].get("type") == "llm")
+    llm["prompt_template"][0]["text"] += "\n已发布的新提示词。"
+    dual.service.publish(dual.caller, app, before.revision)
+    route = dual.service.route_for(TARGET, "consumer")
+    snapshot = store.version(route.agent_id, TARGET, route.agent_version_no).snapshot
+    assert snapshot["knowledge_base_ids"] == snapshot["consumer_service"]["knowledge_base_ids"] == [kb]
+    assert snapshot["prompt"] == consumer_publication.answer_prompt({"workflow": snapshot["workflow"]})
+    selected = select_customer_agent(store, TARGET, agent_name=dual.service.store.app(app)["agent_name"])
+    assert selected.knowledge_base_ids == (kb,)
+    assert store.version(before.agent_id, TARGET, before.agent_version_no).snapshot == previous
