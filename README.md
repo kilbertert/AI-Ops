@@ -1,5 +1,7 @@
 # AI-Ops
 
+共享服务原HTTPS不可用时的受限备用接入与恢复见[操作手册](docs/agents/shared-dify-https-fallback.md)，实际可用性以验收回执为准。
+
 面向公司 C端与管家端的只读业务助手。公司 App/H5 是用户入口，Gateway 负责身份、范围、
 发布绑定、作业和交付；客服由 Dify 官方 Agent 执行，管家由 Java 节点执行；模型按SOP选择证据，系统负责授权与计算。
 
