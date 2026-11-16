@@ -60,3 +60,11 @@ node_config = "/etc/aiops-node-runtime"
 node_state = "/var/lib/aiops-node-runtime"
 
 # 95重建的项目制品与独立状态路径；旧路径在env-95-facts手册保留为恢复资料。
+
+# 候选预演与后续开通使用已登记服务宿主；此声明不授权公网暴露或公司服务变更。
+[[targets]]
+name = "124"
+host = "singapore-server"
+description = "第二业务环境候选，仅自有模块预演"
+[targets.paths]
+candidate = "/opt/aiops-candidate"

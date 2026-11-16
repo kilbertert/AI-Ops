@@ -5,6 +5,7 @@
 
 | 任务 | 现役方法 |
 |---|---|
+| 新环境最小模块候选预演 | [制品与预演](environments/gateway/README.md)：按目标Python离线包、临时双实例；不切流量 |
 | Gateway部署、依赖升级、恢复、只读现场核对 | [环境手册](../docs/agents/env-41-runbook.md)、[依赖升级](../docs/agents/env-41-dependency-update.md) |
 | Dify控制台连接预检与预览恢复 | [连接手册](../docs/agents/operator-cpms/dify-console-preflight.md)：HTTPS或已登记隧道回环地址；部署与启动均校验 |
 | Dify/节点配套交付 | [Dify资产](../deploy/dify-36/README.md)、[节点资产](../deploy/node-runtime/README.md) |
