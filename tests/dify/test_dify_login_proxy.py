@@ -201,6 +201,10 @@ class _FakeDify(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         type(self).calls.append("POST " + self.path)
         self._read()
+        if self.path == "/console/api/logout":
+            type(self).logout_headers = dict(self.headers)
+            self._reply({"result": "success"})
+            return
         if self.path.endswith("/members/invite-email"):
             email = account_email_for(COMPANY_USER_ID, environment=ENVIRONMENT)
             if type(self).invite_returns_url:
@@ -1219,11 +1223,24 @@ def test_a_platform_account_still_needs_the_global_publish_code(stack) -> None:
 
     with sqlite3.connect(data_dir / "mappings.db") as connection:
         connection.execute(
-            "UPDATE dify_login_mappings SET tenant_id = ?, user_type = ?, workspace_joined = 1",
-            ("-1", "-1"),
+            "UPDATE dify_login_mappings SET user_type = ?, workspace_joined = 1",
+            ("-1",),
         )
     assert _check_publish(base, session)["allowed"] is False
     assert _check_publish(base, session)["reason"] == "MISSING_PUBLISH_PERMISSION"
+
+
+def test_publish_check_refuses_session_after_logout(stack) -> None:
+    base, _ = stack
+    session = _login_and_get_session(base)
+    assert _check_publish(base, session)["dify_account_id"]
+    status, _, _ = _call(
+        base,
+        LOGOUT_ROUTE,
+        headers={"Cookie": "__Host-access_token=" + session},
+    )
+    assert status == 200
+    assert _check_publish(base, session) == {"allowed": False, "reason": "SESSION_LOGIN_REQUIRED"}
 
 
 def test_operator_token_endpoint_requires_separate_key_and_real_session(tmp_path, monkeypatch):
@@ -1325,6 +1342,10 @@ def test_same_company_token_does_not_exchange_console_sessions_between_environme
             accounts[1], secret_key=SECRET_KEY, deployment_edition="COMMUNITY", access_expire_minutes=60
         ).access_token
         assert exchange(proxies[1][2], unbound)[0] == 403
+        assert _check_publish(proxies[1][2], unbound) == {
+            "allowed": False,
+            "reason": "SESSION_LOGIN_REQUIRED",
+        }
         sessions, tokens = [], []
         for _, _, base in proxies:
             status, body, headers = _login(base)
@@ -1344,6 +1365,8 @@ def test_same_company_token_does_not_exchange_console_sessions_between_environme
             assert exchange(base, sessions[1 - index])[0] == 403
             assert exchange(base, tokens[index])[0] == 403
             assert exchange(base, sessions[index])[0] == 200
+            assert "company_user_id" not in _check_publish(base, sessions[1 - index])
+            assert _check_publish(base, sessions[index])["company_user_id"] == COMPANY_USER_ID
         _call(
             proxies[0][2],
             LOGOUT_ROUTE,
@@ -1351,6 +1374,11 @@ def test_same_company_token_does_not_exchange_console_sessions_between_environme
         )
         assert exchange(proxies[0][2], sessions[0])[0] == 403
         assert exchange(proxies[1][2], sessions[1])[0] == 200
+        assert _check_publish(proxies[0][2], sessions[0]) == {
+            "allowed": False,
+            "reason": "SESSION_LOGIN_REQUIRED",
+        }
+        assert _check_publish(proxies[1][2], sessions[1])["company_user_id"] == COMPANY_USER_ID
     finally:
         for server, thread, _ in proxies:
             server.shutdown()
@@ -1358,3 +1386,64 @@ def test_same_company_token_does_not_exchange_console_sessions_between_environme
             thread.join(timeout=3)
         company.shutdown()
         company.server_close()
+
+
+@pytest.mark.parametrize("extra_cookie", ["", "broken; ", 'bad="unterminated; '])
+def test_native_logout_revokes_binding_and_forwards_only_current_session(stack, extra_cookie):
+    from http.cookies import SimpleCookie
+
+    base, _ = stack
+    _, _, headers = _login(base)
+    cookies = SimpleCookie()
+    cookies.load(headers["set-cookie-all"])
+    session = cookies["__Host-access_token"].value
+    csrf = cookies["__Host-csrf_token"].value
+    assert _check_publish(base, session)["company_user_id"] == COMPANY_USER_ID
+    status, _, _ = _call(
+        base, "/console/api/logout", {}, headers={"Cookie": "__Host-access_token=" + session}
+    )
+    assert status == 403
+    assert _check_publish(base, session)["company_user_id"] == COMPANY_USER_ID
+    status, body, headers = _call(
+        base,
+        "/console/api/logout",
+        {},
+        headers={
+            "Cookie": extra_cookie + f"__Host-access_token={session}; __Host-csrf_token={csrf}",
+            "X-CSRF-Token": csrf,
+        },
+    )
+    assert status == 200 and body == {"result": "success"}
+    assert "Max-Age=0" in headers["set-cookie-all"]
+    assert "POST /console/api/logout" in _FakeDify.calls
+    assert session in _FakeDify.logout_headers["Cookie"]
+    assert _check_publish(base, session) == {"allowed": False, "reason": "SESSION_LOGIN_REQUIRED"}
+
+
+def test_native_logout_failure_still_revokes_binding(stack, monkeypatch):
+    from http.cookies import SimpleCookie
+
+    from aiops_diagnostics.common import bounded_http
+
+    base, _ = stack
+    _, _, headers = _login(base)
+    cookies = SimpleCookie()
+    cookies.load(headers["set-cookie-all"])
+    session = cookies["__Host-access_token"].value
+    csrf = cookies["__Host-csrf_token"].value
+
+    def failed(*args, **kwargs):
+        raise ValueError("upstream-secret-must-not-leak")
+
+    monkeypatch.setattr(bounded_http, "request_json", failed)
+    status, body, _ = _call(
+        base,
+        "/console/api/logout",
+        {},
+        headers={
+            "Cookie": f"__Host-access_token={session}; __Host-csrf_token={csrf}",
+            "X-CSRF-Token": csrf,
+        },
+    )
+    assert status == 502 and "upstream-secret" not in json.dumps(body)
+    assert _check_publish(base, session) == {"allowed": False, "reason": "SESSION_LOGIN_REQUIRED"}

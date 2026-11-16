@@ -658,20 +658,19 @@ class LoginService:
             deployment_edition=self.dify.deployment_edition,
             access_expire_minutes=self.dify.access_expire_minutes,
         )
-        if self.retain_operator_token:
-            import hashlib
-            import time
+        import hashlib
+        import time
 
-            with self._operator_token_lock:
-                now = time.time()
-                self._operator_tokens = {k: v for k, v in self._operator_tokens.items() if v[0] > now}
-                # 成功登录必须保留授权；固定条数上限会让后续租户登录成功却无法使用管家。
-                self._operator_tokens[hashlib.sha256(session.access_token.encode()).hexdigest()] = (
-                    now + self.operator_token_seconds(),
-                    identity.token,
-                    identity.user_id,
-                    identity.tenant_id,
-                )
+        with self._operator_token_lock:
+            now = time.time()
+            self._operator_tokens = {k: v for k, v in self._operator_tokens.items() if v[0] > now}
+            # 发布身份也须绑定本次登录；未开启交换时不保留公司令牌。
+            self._operator_tokens[hashlib.sha256(session.access_token.encode()).hexdigest()] = (
+                now + min(self.operator_token_seconds(), self.dify.access_expire_minutes * 60),
+                identity.token if self.retain_operator_token else "",
+                identity.user_id,
+                identity.tenant_id,
+            )
         # 审计/日志只用**非敏感**摘要：没有公司密码、没有公司令牌、没有 Dify 会话。
         summary = {
             "company_user_id": identity.user_id,
@@ -687,20 +686,21 @@ class LoginService:
         )
         return session, summary
 
-    def operator_token(self, session: str):
+    def active_session(self, session: str):
         import hashlib
         import time
 
         from aiops_diagnostics.dify.dify_login_proxy import verify_console_jwt
 
-        claims = verify_console_jwt(session, self.dify.secret_key)
-        row = self.store.by_dify_account(str(claims.get("user_id", ""))) if claims else None
-        if row is None or row.get("status") != STATUS_ACTIVE:
-            return None
-        try:
-            self.require_registered_tenant(row["tenant_id"])
-        except PermissionDenied:
-            return None
+        claims = verify_console_jwt(session, self.dify.secret_key) if isinstance(session, str) else None
+        if claims is None:
+            raise PermissionDenied("SESSION_INVALID", "请重新登录")
+        row = self.store.by_dify_account(str(claims.get("user_id", "")))
+        if row is None:
+            raise PermissionDenied("NO_MAPPING", "请重新登录")
+        if row.get("status") != STATUS_ACTIVE:
+            raise PermissionDenied("MAPPING_DISABLED", "请重新登录")
+        self.require_registered_tenant(row["tenant_id"])
         key = hashlib.sha256(session.encode()).hexdigest()
         with self._operator_token_lock:
             now = time.time()
@@ -713,8 +713,17 @@ class LoginService:
                 or cached[3] != row["tenant_id"]
             ):
                 self._operator_tokens.pop(key, None)
-                return None
-            return {"token": cached[1], "user_id": cached[2], "tenant_id": cached[3]}
+                raise PermissionDenied("SESSION_LOGIN_REQUIRED", "请重新登录")
+            return row, cached
+
+    def operator_token(self, session: str):
+        try:
+            _, cached = self.active_session(session)
+        except PermissionDenied:
+            return None
+        if not cached[1]:
+            return None
+        return {"token": cached[1], "user_id": cached[2], "tenant_id": cached[3]}
 
     def forget_operator_token(self, session):
         import hashlib
