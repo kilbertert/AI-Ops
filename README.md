@@ -149,7 +149,7 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 管家开通/发布/恢复前核对清单schema和工具声明摘要，过旧执行器不会被启用。
 双端客户服务的开通、客户端工作流发布/预览和知识使用范围操作见
 [业务管理手册](docs/agents/operator-cpms/self-service.md)；
-当前实施与未验项见[双端进度](docs/acceptance/dual-entry/PROGRESS.md)。
+当前实施与未验项读[交付索引](docs/agents/current-delivery-state.md)及对应Issue；[旧双端进度](docs/acceptance/dual-entry/PROGRESS.md)仅作历史基线。
 
 站点清单通过权限与证据检查后独立交付；说明审核拒绝或不可用时隐藏说明，运营试用显示提示。审核复用网关配置的模型，无工具、无自动重试；历史回读不重审，权限撤回仍拒绝。见 [ADR-0195](docs/adr/0195-site-evidence-survives-note-refusal.md)。
 
