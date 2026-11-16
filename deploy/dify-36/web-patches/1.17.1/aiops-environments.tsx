@@ -13,6 +13,7 @@ import { Button } from '@langgenius/dify-ui/button'
 import { Checkbox } from '@langgenius/dify-ui/checkbox'
 import { Input } from '@langgenius/dify-ui/input'
 import { useEffect, useState } from 'react'
+import { useRouter } from '@/next/navigation'
 import { manage } from '@/service/aiops-management'
 
 type Tenant = { id: string; name: string; enabled: boolean }
@@ -65,6 +66,7 @@ const fields = [
 ] as const
 
 export default function EnvironmentManagement() {
+  const router = useRouter()
   const [data, setData] = useState<Catalogue | null>(null)
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -121,9 +123,29 @@ export default function EnvironmentManagement() {
       event.preventDefault()
       event.returnValue = ''
     }
+    const leave = (event: MouseEvent) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
+        return
+      const link = event.target instanceof Element ? event.target.closest('a[href]') : null
+      if (
+        !(link instanceof HTMLAnchorElement) ||
+        link.target === '_blank' ||
+        link.hasAttribute('download')
+      )
+        return
+      const target = new URL(link.href)
+      if (target.origin !== location.origin || target.pathname === location.pathname) return
+      event.preventDefault()
+      event.stopPropagation()
+      setPending(() => () => router.push(target.pathname + target.search + target.hash))
+    }
     window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [dirty])
+    document.addEventListener('click', leave, true)
+    return () => {
+      window.removeEventListener('beforeunload', warn)
+      document.removeEventListener('click', leave, true)
+    }
+  }, [dirty, router])
 
   async function save() {
     if (!data || !draft || busy) return

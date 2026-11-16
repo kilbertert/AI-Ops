@@ -2,6 +2,9 @@ import { afterEach, expect, it, vi } from 'vite-plus/test'
 import { render } from 'vitest-browser-react'
 import EnvironmentManagement from './aiops-environments'
 
+const push = vi.hoisted(() => vi.fn())
+vi.mock('@/next/navigation', () => ({ useRouter: () => ({ push }) }))
+
 const draft = {
   id: 'a',
   name: '环境甲',
@@ -151,4 +154,28 @@ it('preserves edits after a conflict, warns before switching, and clears data on
   await expect.element(screen.getByRole('alert')).toHaveTextContent('没有环境管理授权')
   expect(screen.getByRole('textbox').elements()).toHaveLength(0)
   expect(screen.getByRole('navigation', { name: '业务环境列表' }).elements()).toHaveLength(0)
+})
+
+it('confirms main-navigation departure before losing unsaved edits', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json(data)),
+  )
+  const screen = await render(
+    <>
+      <a href="/apps">工作室</a>
+      <EnvironmentManagement />
+    </>,
+  )
+  await screen.getByRole('textbox', { name: '环境名称', exact: true }).fill('未保存名称')
+  await screen.getByRole('link', { name: '工作室' }).click()
+  await expect.element(screen.getByRole('alertdialog')).toBeVisible()
+  expect(push).not.toHaveBeenCalled()
+  await screen.getByRole('button', { name: '继续编辑' }).click()
+  await expect
+    .element(screen.getByRole('textbox', { name: '环境名称', exact: true }))
+    .toHaveValue('未保存名称')
+  await screen.getByRole('link', { name: '工作室' }).click()
+  await screen.getByRole('button', { name: '放弃并继续' }).click()
+  expect(push).toHaveBeenCalledWith('/apps')
 })
