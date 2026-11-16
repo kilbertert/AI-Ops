@@ -1271,3 +1271,90 @@ def test_operator_token_endpoint_requires_separate_key_and_real_session(tmp_path
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_same_company_token_does_not_exchange_console_sessions_between_environments(tmp_path):
+    """共享公司签名与同号主体时，只有本环境亲自登录建立的会话可换取业务凭据。"""
+    from http.cookies import SimpleCookie
+
+    _FakeCompany.calls = []
+    _FakeCompany.permissions = [EDIT_PERMISSION]
+    _FakeCompany.fail_login = _FakeCompany.captcha_fail = _FakeCompany.gateway_reject = ""
+    company, company_url = _serve(_FakeCompany)
+    proxies = []
+    key = "isolated-login-exchange-" + "a" * 32
+    accounts = ["b647e9c0-1111-4222-8333-444455556666", "c758f0d1-2222-4333-8444-555566667777"]
+    try:
+        for environment, account in zip(("env-a", "env-b"), accounts, strict=True):
+            settings = LoginProxySettings(
+                listen_host="127.0.0.1",
+                listen_port=0,
+                public_origin="https://console.example",
+                company=CompanyAuthSettings(base_url=company_url, encode_key=AES_KEY),
+                dify=DifyConsoleSettings(
+                    base_url="http://127.0.0.1:1", secret_key=SECRET_KEY, environment=environment
+                ),
+                data_dir=str(tmp_path / environment),
+                edit_permission=EDIT_PERMISSION,
+                operator_trial_key=key,
+            )
+            server = make_server(settings)
+            # 已开户账号，Dify映射分别属于两个环境；公司用户/租户编号故意完全相同。
+            server.RequestHandlerClass.service.store.upsert(
+                company_user_id=COMPANY_USER_ID,
+                username="zhang",
+                tenant_id="T-1",
+                dify_account_id=account,
+                dify_email=account_email_for(COMPANY_USER_ID, environment=environment),
+                permissions=(EDIT_PERMISSION,),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            proxies.append((server, thread, f"http://127.0.0.1:{server.server_address[1]}"))
+
+        def exchange(base, session):
+            return _call(
+                base,
+                "/__aiops/internal/operator-token",
+                {"session": session},
+                headers={"Authorization": "Bearer " + key},
+            )
+
+        # 签名有效且账号已登记，也不等于该会话在这里完成过公司登录。
+        unbound = mint_console_session(
+            accounts[1], secret_key=SECRET_KEY, deployment_edition="COMMUNITY", access_expire_minutes=60
+        ).access_token
+        assert exchange(proxies[1][2], unbound)[0] == 403
+        sessions, tokens = [], []
+        for _, _, base in proxies:
+            status, body, headers = _login(base)
+            assert status == 200 and body["ok"] is True
+            cookies = SimpleCookie()
+            cookies.load(headers["set-cookie-all"])
+            session = cookies["__Host-access_token"].value
+            status, result, _ = exchange(base, session)
+            assert status == 200
+            assert result["user_id"] == COMPANY_USER_ID and result["tenant_id"] == "T-1"
+            sessions.append(session)
+            tokens.append(result["token"])
+
+        assert tokens[0] == tokens[1]  # 最弱的旧公司令牌条件，隔离不能靠令牌文本不同。
+        assert sessions[0] != sessions[1]
+        for index, (_, _, base) in enumerate(proxies):
+            assert exchange(base, sessions[1 - index])[0] == 403
+            assert exchange(base, tokens[index])[0] == 403
+            assert exchange(base, sessions[index])[0] == 200
+        _call(
+            proxies[0][2],
+            LOGOUT_ROUTE,
+            headers={"Cookie": "__Host-access_token=" + sessions[0]},
+        )
+        assert exchange(proxies[0][2], sessions[0])[0] == 403
+        assert exchange(proxies[1][2], sessions[1])[0] == 200
+    finally:
+        for server, thread, _ in proxies:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+        company.shutdown()
+        company.server_close()
