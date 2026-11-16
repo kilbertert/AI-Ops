@@ -11,7 +11,7 @@
    分支head、owner和保留原因；不移动用户工作来消除冲突。
 3. 用 `gh pr list --state open`、`gh issue list --state open` 读取正文、评论、验收条件与原生子任务。
    不能只按标题、年龄或CI绿灯判完成。
-4. 读取current-delivery-state及最新验收记录，分别核对合并、CD、health、正式绑定和业务证据。
+4. 读取current-delivery-state及本领域、组件和环境对应的验收记录，分别核对合并、CD、health、正式绑定和业务证据。
    真实环境按env-41-runbook只读取证；文档整理不自动授权生产改动。
 
 ## 文档同步

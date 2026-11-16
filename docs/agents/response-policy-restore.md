@@ -25,7 +25,7 @@ Feature: 自然答复与业务相关的事实复核
 
 ## 发布方法
 
-1. 先读current-delivery-state及最新验收记录。通过41手册的dev-host、服务身份、SQLite mode=ro
+1. 先读current-delivery-state及本领域、组件和环境对应的验收记录。通过41手册的dev-host、服务身份、SQLite mode=ro
    读取当前consumer路由及agent_versions。主租户V27、第二租户V5于11月11日发布；
    与当前V28/V6逐字段对比，已确认workflow仅instruction不同。原始提示词/环境/账号只保留私有证据。
 2. 从当前Dify工作流draft读取hash并备份，构造候选时只替换answer Agent的instruction，
