@@ -8,6 +8,6 @@
 原HTTPS多次握手失败；边缘代理试验出现403/525，DNS和新增规则已完整恢复。
 
 已准备受限备用HTTPS配置、合并制品构建、带备份安装/恢复入口和真实Nginx验证。
-仅固定服务API，来源白名单＋Dify原Bearer，管理端点拒绝；实际部署和模型流式验证待完成。
+仅现役客户端所需服务API，来源白名单＋Dify原Bearer，管理端点拒绝；实际部署和模型流式验证待完成。
 详见[操作手册](../agents/shared-dify-https-fallback.md)及[回执](../validation/2026-11-16-shared-dify-https-fallback.md)。
 **未完成业务验收**；P0仍需业务工具往返与容量证据。

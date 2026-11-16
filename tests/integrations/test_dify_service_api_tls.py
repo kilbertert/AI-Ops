@@ -57,6 +57,8 @@ def test_tls_source_scope_routes_and_streaming(tmp_path):
             self.end_headers()
             self.wfile.write(b'data: {"event":"message_end"}\n\n')
 
+        do_POST = do_GET
+
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
     processes = []
@@ -108,12 +110,19 @@ def test_tls_source_scope_routes_and_streaming(tmp_path):
         base = start("127.0.0.1")
         assert call(base, "/v1/info")[0] == 401
         assert b"message_end" in call(base, "/v1/chat-messages", "Bearer valid-fixture")[1]
+        for path in [
+            "/v1/files/upload",
+            "/v1/chat-messages/task-1/stop",
+            "/v1/workflows/version-1/run",
+            "/v1/workflows/tasks/task-1/stop",
+        ]:
+            assert call(base, path, "Bearer valid-fixture", method="POST")[0] == 200
         before = len(seen)
         for path in [
             "/apps",
             "/console/api/apps",
             "/inner/api/apps",
-            "/v1/files/upload",
+            "/v1/files/arbitrary",
             "/v1/chat-messages/extra",
         ]:
             assert call(base, path, "Bearer valid-fixture")[0] == 404
@@ -122,6 +131,9 @@ def test_tls_source_scope_routes_and_streaming(tmp_path):
         denied = start("192.0.2.1")
         assert call(denied, "/v1/info", "Bearer valid-fixture", **{"X-Forwarded-For": "192.0.2.1"})[0] == 403
         assert len(seen) == before
+        assert call(denied, "/v1/info?private_query_marker=secret", "Bearer valid-fixture")[0] == 403
+        for log in tmp_path.rglob("*.log"):
+            assert "private_query_marker" not in log.read_text()
     finally:
         for p in processes:
             p.terminate()

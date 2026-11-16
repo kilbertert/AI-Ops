@@ -26,7 +26,7 @@ bash <制品目录>/service-api-deploy.sh install <制品目录> <私有新备�
 
 ## 接口与验收
 
-仅`/v1/info`、`/v1/parameters`、`/v1/chat-messages`、`/v1/workflows/run`可转发GET/POST，
+仅现役客户端使用的info/parameters、图片上传、chat-messages/取消、工作流当前或固定版本运行/取消路径可转发GET/POST，
 其他路径404；允许路径的未授权来源403，匿名应用请求由Dify返回401。
 HTTPS主机名保持原证书名称，仅连接端口改变；客户端必须完整验证证书，不允许`-k`。
 应用API key运行时从受控位置读入内存，不进入命令行、访问日志或回执。
