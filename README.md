@@ -5,74 +5,9 @@
 面向公司 C端与管家端的只读业务助手。公司 App/H5 是用户入口，Gateway 负责身份、范围、
 发布绑定、作业和交付；客服由 Dify 官方 Agent 执行，管家由 Java 节点执行；模型按SOP选择证据，系统负责授权与计算。
 
-跨服务器接入已完成95试验并撤回。后续方向改为不修改公司仓库，由Dify管理Tab维护环境/租户映射并开通自有模块，见[新规划](docs/architecture/2026-11-16-manual-environment-onboarding.md)及[Snail-AI研究](docs/agents/snail-manual-onboarding-research.md)。目录草稿基础已部署；独立管理页通过 `/aiops/environments` 准备连接和租户草稿，不改变现役准入。配置方法见[管理手册](docs/agents/environment-registry.md)，一键开通尚未实现。
-
-## 当前交付与退役范围
-
-2026-11-05阶段整理：[系统架构](docs/system-architecture.md)、[当前交付](docs/agents/current-delivery-state.md)、
-[架构核对](docs/validation/2026-11-05-architecture-stage-closeout.md)、[任务台账](docs/reviews/2026-11-05-architecture-stage-closeout.md)。
-客服生产版1.2.5的原Dify/安卓复验已完成；H5连续问答与发布恢复另有同轮证据，旧APK连续会话仍待发包。
-
-已完成 Python Thin Harness 的代码退役：删除诊断/交互式/设备 CLI、Codex 子进程、
-工具循环、恢复工作区、旧诊断 HTTP 面和专属便携打包。运维入口保留为 `aiops-admin`。
-退役版本`1.0.0+fbab0f739322`已部署，C端/管家原H5及Dify原生预览链路已验收；
-详见[真实验收回执](docs/validation/2026-10-29-runtime-retirement-live.md)。历史故障准确率和长期稳定性仍未验收。
-
-- C端聊天及订单检测快捷动作进入其 WF01 路线；订单检测使用本人订单状态分支，
-  不再承诺旧 Python 的多源根因报告。独立状态查询和已有节点绑定保留。
-  1.7.1补齐本人账务中的摘要、费用构成与分时明细；1.7.5已部署，逐字段保留原值并撤销旧差额计算许可，事实约束保留在运营指令末尾，
-  [映射和迁移方法](docs/agents/consumer-wf01/order-composition-qa.md)列出缺项、币种及计量限制；
-  两图发布和原入口证据见[上线回执](docs/validation/2026-11-11-consumer-source-values_02-live.md)，产品业务复测待进行，主动诱导计算仍有已记录的漏网。
-- 管家单订单请求与原生 Dify 试用走公司身份和 Java 节点；工具按已发布清单启用，覆盖订单、监测、历史模板、账务、核验与站点。
-  问答轮询返回真实执行阶段与耗时，原生预览单独显示进度；最终答复仍经授权和事实复核。
-  模型答复未通过或取证后生成失败时，交付本轮记录并标明“诊断结论未完成”；无证据仍失败。
-  日志区分诊断与证据交付，参见[处理与验收范围](docs/agents/operator-cpms/evidence-delivery.md)。
-  普通查单默认简短按需取证；[三个反馈的验收范围](docs/specs/order-feedback.md)区分遥测、通讯证据和执行日志。
-- 管家正式入口与Dify预览使用各自的会话ID，订单相关追问沿用成功确认的订单并重新授权；
-  新会话、另一应用或另一主体不能继承，见[连续问答验收](docs/acceptance/operator-followup/qa-plan.md)。
-- 管家没有指定订单时可咨询操作、解释状态或搜索当前账号可见站点；需要查具体订单时才请求单号。
-  站点名称/地址来自CPMS，未定位时不按距离排序；见[无订单对话](docs/agents/operator-cpms/conversation-qa.md)。
-  无订单能力已上线并经ulink真实页面核验；[最新回执](docs/validation/2026-10-29-z14-operator-conversation-verified.md)
-  后续统一模型循环已删除最终JSON协议；事实复核与边界见当前交付索引，长期稳定性仍未验收。
-- 节点站点工具通过 Gateway 代理取数，代理保留租户身份与分页字段，模型证据只留声明字段。
-  管家与消费者按各自权限校验；节点、Gateway 和回调配置需配套交付，见[站点代理验证](docs/acceptance/site-tool-proxy/qa-plan.md)。
-- Dify 试用只接受已登记 `app_id`，按绑定运行 Dify/Java 草稿；不接受裸 prompt/旧工具白名单。
-- 未配置业务路线时返回 `CHAT_ROUTE_UNAVAILABLE`，不回落 Python、通用问答或旧 FAQ 匹配。
-- 固定 FAQ API、健康报告、确定性聚合、知识库与发布管理继续保留。
-- 客服受管发布区可直接编辑本应用选库；租户对客授权独立显示。选库与提示词保存为草稿后，发布成功才切换正式版本，失败可修正后重试。见[选库与发布](docs/agents/consumer-wf01/knowledge-picker-deploy.md)。
-
-详细边界见[退役说明](docs/runtime-retirement.md)，阶段与线上最后证据见
-[交付状态](docs/agents/current-delivery-state.md)和[测试交接](docs/testing-handoff.md)。
-目录迁移已完成Java节点、模型代理源码及consumer、knowledge、identity、publication、execution、dify、operator、health、data业务包。
-#1153退役残留和#1159领域迁移已合并，#1161补齐供应商单层围栏JSON解析；双端历史回归见
-[领域上线](docs/validation/2026-10-29-z15-domain-layout-live.md)与[围栏修复回归](docs/validation/2026-10-29-z16-operator-fenced-answer-live.md)。
-独立Dify桥与登录代理已随#1147更新包和模块入口；模型代理生产仍为旧发布包中的等字节实现。
-2026-10-30独立验收发现后续#1168两端未配套，补齐Java节点后原管家H5已独立复验通过；保留首次失败证据。
-Gateway、通用/会话、工具与公司集成目录已分别通过#1181/#1182/#1184归位并上线；
-最终范围与独立复验见[目录收尾](docs/validation/2026-10-30-z20-layout-final-acceptance.md)。
-
-本轮客服候选从同实例商城库读取已授权订单税项与支付记录；
-`AIOPS_MYSQL_MALL_DATABASE`默认`qumall_mall`，置空停止商城证据读取。
-客服按用户决定恢复自然语言正文与已确认历史提示词，系统保留工具原值、权限与来源/媒体校验；
-管家币种标注只作观察，不单独阻断分析，其他事实复核继续有效。
-只在已核实场景且当前详情逐项相等时解释税项关系，原金额不重算；商城读取失败保留充电详情并标缺证。
-上线前核实实际运行账号的四表只读权限及Dify指令发布，见[操作与边界](docs/agents/consumer-wf01/mall-payment-evidence.md)。
-
-## Gateway 数据库升级
-
-阶段1（#1461）已随1.6.1上线；阶段2（#1466）已随1.7.0上线，schema 升至版本 1。
-1.7.0 将28张Gateway表交给 `gateway.gateway_schema.py`，普通store构造只读版本；
-服务启动与运维完整检查，拒绝未知版本和结构漂移。独立 `mappings.db` 不纳入。
-
-```bash
-aiops-admin schema check --db /path/to/gateway.db
-aiops-admin schema migrate --db /path/to/gateway.db
-```
-
-`check` 不建库、不迁移，只报告版本与结构警告；版本0表示可升级旧库，版本1为当前合同。
-`migrate` 原子建立完整结构，只允许登记的历史补列，不重建表或猜测授权身份。
-部署前必须一致备份与副本演练；恢复代码不会自动恢复旧数据库覆盖新写入。
-方法见[升级手册](docs/agents/gateway-schema-runbook.md)，判据见[QA计划](docs/acceptance/gateway-schema/qa-plan.md)。
+需求范围与依赖见[环境开通规划](docs/architecture/2026-11-16-manual-environment-onboarding.md)，
+部分交付、启用与验收分别见[当前交付索引](docs/agents/current-delivery-state.md)。
+现行方法见[文档导航](docs/README.md)，不从README中的旧版本推断运行状态。
 
 ## 一、系统与入口
 
@@ -104,25 +39,25 @@ flowchart LR
 ## 三、系统模块与依赖关系
 
 以下是迁移后的现有文件职责。导入检查覆盖子包、延迟导入与包级导入；既有节点装配四模块循环按具体边冻结，`test_readme_architecture.py`
-核对模块索引与引用并拒绝新增循环；业务执行不得依赖已删除的 Python 运行器。
+核对职责入口与引用并拒绝新增循环；业务执行不得依赖已删除的 Python 运行器。
 
-| 职责 | 当前模块 |
+模块按职责查找，单个实现文件由源码树或 `node .sandcastle/repo-map.mjs --stdout` 按需枚举。
+新增同职责模块无需重写README；新职责目录必须补入口与目录规则。
+
+| 职责 | 源码入口 |
 |---|---|
-| 网关与服务 | `gateway.gateway_api.py`、`gateway.gateway_runtime.py`、`gateway_server.py`、`gateway.gateway_store.py`、`gateway.gateway_db.py`、`gateway.gateway_schema.py`、`gateway.gateway_config.py`、`gateway.gateway_logging.py`、`gateway.public_openapi.py`、`gateway.request_observation.py`、`gateway.isolation_guard.py`、`gateway.deployment_environment.py` |
-| 身份与范围 | `identity.caller_auth.py`、`identity.company_token_auth.py`、`identity.company_permissions.py`、`identity.data_scope_rule.py`、`identity.third_session_auth.py`、`identity.scope_context.py`、`identity.query_scope.py`、`identity.order_visibility.py`、`identity.order_identity.py`、`common.http_auth.py` |
-| C端业务 | `consumer.consumer_agent.py`、`consumer.consumer_agent_flow.py`、`consumer.consumer_billing.py`、`consumer.consumer_facts.py`、`consumer.consumer_binding.py`、`consumer.consumer_chat_service.py`、`consumer.consumer_copy.py`、`consumer.consumer_documents.py`、`consumer.consumer_flow_contract.py`、`consumer.consumer_intent.py`、`consumer.consumer_knowledge.py`、`consumer.consumer_knowledge_selection.py`、`consumer.consumer_knowledge_grants.py`、`consumer.consumer_language.py`、`consumer.consumer_mall_billing.py`、`consumer.consumer_order_chat.py`、`consumer.consumer_photo.py`、`consumer.consumer_plain.py`、`consumer.consumer_reply.py`、`consumer.consumer_publication.py`、`consumer.consumer_sites.py`、`consumer.consumer_tool_grants.py`、`consumer.consumer_time.py`、`consumer.consumer_trial.py`、`consumer.business_environments.py`、`data.charging_status.py` |
-| 节点与试用 | `execution.agent_runs.py`、`execution.run_deliverability.py`、`execution.execution_manifest.py`、`execution.chat_execution.py`、`execution.chat_data_grant.py`、`execution.chat_route_bindings.py`、`execution.node_publication.py`、`operator.operator_cpms.py`、`operator.communication.py`、`operator.order_analysis.py`、`operator.order_pricing.py`、`operator.order_billing.py`、`operator.station_pricing.py`、`operator.station_tariff.py`、`operator.operator_tools.py`、`operator.operator_conversation.py`、`operator.operator_answer_review.py`、`operator.operator_evidence.py`、`dify.dify_trial.py`、`dify.dify_workflow_trial.py` |
-| 管理与发布 | `admin_cli.py`、`publication.agent_content.py`、`publication.agent_lifecycle.py`、`publication.agent_serviceability.py`、`publication.agent_manifest.py`、`publication.agent_debug.py`、`publication.shortcut_lifecycle.py`、`publication.shortcut_migration.py`、`operator.ops_provider.py`、`operator.operator_agent.py` |
-| 知识与会话 | `conversation.conversation_store.py`、`conversation.faq.py`、`publication.qa_rag.py`、`conversation.clarification.py`、`knowledge.knowledge_retrieval.py`、`knowledge.knowledge_sources.py`、`knowledge.knowledge_triple.py`、`knowledge.knowledge_dataset_sync_guard.py`、`knowledge.kb_onboarding.py`、`knowledge.ragflow_console.py` |
-| 健康与分析 | `health.health_curves.py`、`health.health_metrics.py`、`health.health_report.py`、`health.health_report_copy.py`、`operator.ops_analysis.py`、`operator.ops_analysis_narrative.py`、`data.offline_source.py`、`operator.device_offline.py`、`operator.offline_tool.py`、`data.order_status.py`、`health.rules.py`、`data.sources.py`、`tdengine_proxy.py` |
-| 通用能力 | `common.config.py`、`common.model_request.py`、`common.bounded_http.py`、`common.private_files.py`、`common.redaction.py`、`common.endpoint_policy.py`、`common.i18n.py`、`common.answer_language.py`、`common.platform_paths.py`、`common.console_encoding.py`、`common.async_job_lifecycle.py`、`common.order_reference.py`、`common.scalar_rules.py`、`gateway.metrics_store.py` |
-| Dify集成 | `dify.dify_app_registry.py`、`dify.dify_chat_workflow.py`、`dify.dify_chatflow.py`、`dify.dify_console_admin.py`、`dify.dify_console_publish.py`、`dify.dify_debug_identity.py`、`dify.dify_dsl_pull.py`、`dify.dify_ensure_workspace.py`、`dify.dify_inner_api.py`、`dify.dify_knowledge_api.py`、`dify.dify_knowledge_datasets.py`、`dify.dify_knowledge_migration.py`、`dify.dify_login_company.py`、`dify.dify_login_provision.py`、`dify.dify_login_proxy.py`、`dify.dify_login_server.py`、`dify.dify_login_service.py`、`dify.dify_run_store.py`、`dify.dify_tenant_access.py`、`dify.dify_tools_catalog.py`、`dify.dify_workspace_directory.py`、`dify.dify_workspace_ready.py`、`dify.dify_workspaces.py` |
+| 网关装配、配置、存储与运行 | [gateway](src/aiops_diagnostics/gateway/) |
+| 身份、授权和数据范围 | [identity](src/aiops_diagnostics/identity/) |
+| 客服编排与事实交付 | [consumer](src/aiops_diagnostics/consumer/) |
+| 节点合同、委派和运行账本 | [execution](src/aiops_diagnostics/execution/) |
+| 管家编排与受控工具 | [operator](src/aiops_diagnostics/operator/) |
+| 发布、恢复与内容生命周期 | [publication](src/aiops_diagnostics/publication/) |
+| 知识与会话 | [knowledge](src/aiops_diagnostics/knowledge/)、[conversation](src/aiops_diagnostics/conversation/) |
+| 健康与只读取数 | [health](src/aiops_diagnostics/health/)、[data](src/aiops_diagnostics/data/) |
+| 通用原语与Dify适配 | [common](src/aiops_diagnostics/common/)、[dify](src/aiops_diagnostics/dify/) |
 
-`publication.agent_debug.py` 仅保留发布前的知识绑定校验；`publication.qa_rag.py` 仅保留已发布客服元数据选择。
-`common.model_request.py` 是一次性有界 HTTP 请求，供旧客服合同语义分类、聚合说明和事实审核使用，不含会话/工具循环。
-`operator.order_billing.py` 根据历史模板和订单优惠记录逐项核对折扣、充电费用、税费及实付款；
-依照[SOP金额验证流程](SOP.md#223-按订单历史计费模板检验金额产品测试补充)，区分算术相符与证据不足。
-`operator.ops_provider.py`、`operator.operator_agent.py` 只登记现役 `cpms-node`，旧 Python/共享租户 provider 已退出。
+金额判据见[SOP](SOP.md#223-按订单历史计费模板检验金额产品测试补充)；
+工具列表来自[唯一声明](src/aiops_diagnostics/operator/operator_tools.json)，声明存在不等于所有环境已启用。
 
 ## 四、仓库目录
 
@@ -200,7 +135,7 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 - [自由提问故障定位](docs/agents/consumer-wf01/free-question-failures.md)：区分固定FAQ、模型依赖失败和业务回答；额度故障需恢复服务，不要求用户改写问题。
 - [Dify客户管家自助开通](docs/agents/operator-cpms/self-service.md)：平台开通默认绑定Dify/RAGFlow空间，按授权进入客户空间；租户预览与发布。
 - [节点部署](deploy/node-runtime/README.md)、[Dify 部署](deploy/dify-36/README.md)、[运维说明](ops/README.md)。
-- [验收记录](docs/validation/)、[进度记录](docs/开发进度/)、[ADR](docs/adr/)、[术语](GLOSSARY.md)。
+- [验收记录](docs/validation/)、[历史进度](docs/开发进度/)、[ADR](docs/adr/)、[术语](GLOSSARY.md)。
 
 历史 SOP 和早期架构图仅作资料，不再随 Python 运行时制品打包或作为模型工作区输入。
 本地检查不证明远端 Dify/Java、真实故障准确率或正式页面交付。
@@ -232,11 +167,5 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 
 共享知识服务的环境/租户命名空间由 `knowledge.tenant_scope` 统一计算；已启用环境登记的实例不与旧单环境租户头共用知识账号。
 
-第二业务环境的独立重建与部分真实问答已归档，95的AI-Ops部署已按用户要求撤回。
-验证边界见[95本轮记录](docs/validation/2026-11-14-env95-business-acceptance.md)，不能由部署成功推定全部业务验收。
-
-`dify.environment_management`当前提供正常公司会话后的环境目录名称/启停管理，按显式环境授权读取与更新准入；尚不支持新增连接。新规划将允许平台管理员在独立Tab中编辑受校验的连接配置，普通用户和模型不能指定服务地址。
-
-`identity.gateway_admission`支持显式公司网关请求签名及持久防重放，随后仍执行原用户和订单授权；已交付但未启用，新规划不再以公司改码签发为前提。
-
-跨环境接入两片的上线/未启用边界见[交付回执](docs/validation/2026-11-14-z-environment-delivery-receipt.md)；公司正式发布入口核对遵循[只读手册](docs/agents/company-release-discovery.md)。
+环境目录的获批行为、后续开通规划与运行证据分别从[试点导航](docs/README.md#环境目录试点与验收)读取。
+目录页面保存草稿不改变现役连接；实际配置、启用与业务验收见对应领域的交付证据。

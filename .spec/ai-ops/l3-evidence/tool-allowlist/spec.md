@@ -11,7 +11,7 @@ related:
 
 ## raw source
 
-旧七工具及共享租户 provider 已退役；管家节点使用 CPMS 两工具，由任务绑定与发布清单共同约束。
+旧七工具及共享租户 provider 已退役；管家节点工具由 `src/aiops_diagnostics/operator/operator_tools.json` 唯一声明，由任务绑定与发布清单共同约束。
 
 ## 不变量
 

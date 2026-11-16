@@ -35,7 +35,7 @@
 它检查Git已跟踪及未忽略的新文件，允许在已有职责目录内增加文件；构建缓存不参与判断。
 因此新增文件即使被README列出，只要落回根层或新增未登记的一级目录，仍会失败。
 
-现有`test_readme_architecture.py`继续检查模块索引、文档链接和新增导入循环，
+现有`test_readme_architecture.py`继续检查职责目录入口、文档链接和新增导入循环，
 `test_runtime_retirement.py`继续检查旧模块缺失、退役导入和旧路由不可达。
 这三组测试由现有CI全量pytest执行，`verify`是保护主分支的必需检查，无需人工记得另跑。
 

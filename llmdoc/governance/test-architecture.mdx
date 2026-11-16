@@ -10,6 +10,8 @@ code:
     - tests/conftest.py
     - tests/test_repository_layout.py
     - tests/test_readme_architecture.py
+    - tests/tooling/test_doc_impact.py
+    - tools/verification/doc_impact.py
     - tests/test_runtime_retirement.py
     - tests/test_ci_test_tier.py
     - tests/test_cd_deploy_scripts.py
@@ -51,7 +53,7 @@ code:
 ## 强制测试三件套
 
 - `test_repository_layout.py`：白名单根文件+每层一级目录（签入与未忽略未跟踪都算；构建缓存排除）；新一级目录要同 PR 理由+清单同步。规则文档：`docs/architecture/repository-layout.md`。
-- `test_readme_architecture.py`：README 模块索引、链接解析、不许**新**import 环（现有 node-assembly 环冻结在具体边）。
+- `test_readme_architecture.py`：README职责入口、链接解析、不许**新**import 环（现有 node-assembly 环冻结在具体边）。
 - `test_runtime_retirement.py`：已退役模块/import/路由保持缺席；`test_opening_old_database_preserves_retired_data` 先铺 `LEGACY_DIFY` 基线再 `GatewayStore(path)`——store 构造即跑 `gateway_schema.ensure`，退役表断言走真实迁移路径。
 - 三个都在必需检查 `verify` 内跑——不靠人工纪律。
 - `test_cd_deploy_scripts.py` 在真 SQLite 上执行 deploy-41.sh 的 schema 预检+迁移闸片段（非替身）：错文件/备份冲突/迁移/完整性失败在替换源文件前拒绝且不覆盖原库，迁移后失败不自动回滚；备份目录 0710、schema 子目录 0700 不依赖 umask（027/077 均成立）。
