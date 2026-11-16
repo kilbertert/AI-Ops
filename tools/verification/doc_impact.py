@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import fnmatch
 import json
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -28,10 +27,10 @@ def report(root: Path, base: str) -> dict:
     if not documents:
         raise ValueError("llmdoc映射缺失，不能报告无影响")
     for doc in documents:
-        parts = doc.read_text(encoding="utf-8").split("---", 2)
-        if len(parts) != 3 or parts[0].strip():
+        lines = doc.read_text(encoding="utf-8").splitlines()
+        if not lines or lines[0].strip() != "---" or "---" not in lines[1:]:
             raise ValueError(f"缺少frontmatter: {doc.relative_to(root)}")
-        metadata = yaml.safe_load(parts[1])
+        metadata = yaml.safe_load("\n".join(lines[1 : lines.index("---", 1)]))
         patterns = metadata["code"]["paths"]
         if not isinstance(patterns, list) or not all(isinstance(p, str) and p for p in patterns):
             raise ValueError(f"无效code.paths: {doc.relative_to(root)}")
@@ -39,7 +38,7 @@ def report(root: Path, base: str) -> dict:
             path
             for path in changed
             for pattern in patterns
-            if fnmatch.fnmatchcase(path, pattern.split("#", 1)[0].rstrip("/"))
+            if PurePosixPath(path).full_match(pattern.split("#", 1)[0].rstrip("/"))
             or path.startswith(pattern.split("#", 1)[0].rstrip("/") + "/")
         }
         if matches:

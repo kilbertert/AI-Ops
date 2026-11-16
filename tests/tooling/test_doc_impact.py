@@ -93,3 +93,16 @@ def test_missing_mapping_is_not_a_clean_report(repository):
         path.unlink()
     with pytest.raises(ValueError, match="映射缺失"):
         report(repository, "HEAD")
+
+
+def test_frontmatter_delimiters_and_recursive_patterns(repository):
+    (repository / "llmdoc/area.mdx").write_text(
+        '---\ndescription: "before---after"\ncode:\n  paths: [src/**/*.py]\n---\nbody---text\n'
+    )
+    (repository / "src/old.py").write_text("changed\n")
+    (repository / "src/nested").mkdir()
+    (repository / "src/nested/new.py").write_text("new\n")
+    result = report(repository, "HEAD")
+    assert result["affected"] == [
+        {"document": "llmdoc/area.mdx", "changed_sources": ["src/nested/new.py", "src/old.py"]}
+    ]
