@@ -226,7 +226,7 @@ PY'
    经隧道接入时它是**回环地址**（既有 UPMS 隧道暴露 `127.0.0.1:25999`，
    见 `kb-service-test-env.md`）。
 
-**记录**：本次判别的结论与证据见 `../validation.md` 的
+**记录**：本次判别的结论与证据见对应 `docs/validation/` 回执的
 「管家端端到端验收：卡在 `AIOPS_UPMS_INSIDE_TOKEN`」一节。
 
 > **#444 起多了一条路径，它不依赖上面这两个端点**：公司 OAuth2 令牌那条（ADR-0009）直接用
@@ -439,7 +439,7 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
 
 ⇒ 运维口径随之改为：**换钥匙既不能救这条链（判据不看它），当前唯一的外部判据是
 来源密钥的注入主体** —— 那正是 D 批（`operator-repair-blueprint.md` §2）要施工的东西。
-在此之前**不对外宣称可用**。实测与判定过程见 `../validation.md` 与
+在此之前**不对外宣称可用**。实测与判定过程见 对应 `docs/validation/` 回执与
 `operator-repair-blueprint.md` §0.1。
 
 ### ✅ 2026-09-29：本节描述的配置**已在 41 落地并验收**
@@ -546,7 +546,7 @@ python3 /tmp/d4-cutover.py rollback   # 从最近一次备份恢复（**两处**
 > **顺带说明（评审指出，2026-10-01 修正；同日 #520 收窄 `paths` 后已闭合）**：
 > 本条原写「脚本放进 `deploy/` 会命中 `paths`，那是可接受的」——**已被 #405 的评估推翻**：
 > 不是幂等的问题，而是**重启会重置观察窗、并打断在飞诊断**。实测：只改只读脚本的 PR
-> 已这样重启过生产三次。见 `validation.md` 的「#405 到期评估」。
+> 已这样重启过生产三次。见 对应 `docs/validation/` 回执的「#405 到期评估」。
 >
 > **#520 已把 `push.paths` 从 `deploy/**` 收窄到 deploy-41.sh 真正执行的两个文件**
 > （`deploy-41.sh`、`classify-remote-result.sh`），所以现在改 `d4-cutover.py`、
@@ -1958,7 +1958,7 @@ curl -s -H "third-session: <会话>" -H "tenant-id: <会话租户>" \
 ```
 
 关键断言与对应契约见 `docs/agents/frontend-api-brief.md` 场景 D 与
-`qa-plan.md` 的 INTENT-01..08；完整可复跑步骤见 `docs/validation.md`。
+`qa-plan.md` 的 INTENT-01..08；完整可复跑步骤见 对应 `docs/validation/` 回执。
 
 ### 5.1 轮询纪律
 
