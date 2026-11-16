@@ -135,3 +135,20 @@ API为`GET/POST /v1/dify/management/environments`，经现有同源桥的`enviro
 
 目录修改使用全局revision，两个环境同时保存也可能冲突，需刷新；未将目录并发扩展为分环境版本。
 环境运维不要求公司智能体编辑/发布权限，但正常公司身份和显式范围授权缺一不可；应用内容权限不因此放宽。
+
+## Web发布后核验与镜像摘要
+
+按`ops/dify-console-bridge/README.md`完整配套管理桥；Gateway CD不会更新桥或Web。
+Web只从合并修订执行`build-web-image.sh`，为`DIFY_WEB_WORK`指定自有构建目录，归档SHA校验后在服务宿主加载。
+保存现役镜像、私有.env和其他容器ID；只改`DIFY_WEB_IMAGE`，用既有compose的`--no-deps --pull never --force-recreate web`切换。
+失败恢复原.env和原完整镜像，核登录页健康；其他容器ID不能改变。
+
+Docker镜像身份可能因存储后端不同而展示不同层级：开发端OCI index摘要不等于旧Docker的image config摘要。
+外层归档SHA先匹配；读取归档`manifest.json`中对应标签的`Config`，核该blob摘要，再与目标`docker image inspect`的Id比较。
+同时保留index/manifest/config与合并SHA，不能仅因标签相同就放行，也不能把层级差异当成内容篡改。
+规范依据：[OCI descriptor](https://github.com/opencontainers/image-spec/blob/v1.1.1/descriptor.md)和[manifest](https://github.com/opencontainers/image-spec/blob/v1.1.1/manifest.md)。
+
+上线后核镜像内`/app/targets/next/web/.next/server/app-paths-manifest.json`含环境页，
+再从正式TLS入口检查`/signin`及`/aiops/environments`、`/apps`、`/datasets`，保留证书校验。
+未登录307/登录页200只证明入口与登录重定向；`/__aiops/manage`匿名403只证明拒绝门。
+正常公司会话＋显式目录授权后的表单操作另行验收；无真实会话时不伪造身份或绕过验证码。
