@@ -1,6 +1,6 @@
 # 环境目录草稿与管理引导基础
 
-基线`158b9e58`，分支`feat/environment-draft-directory`，关联#1537，P1基础片。
+基线`158b9e58`，交付分支`feat/environment-draft-management`，关联#1537，P1基础片。
 已实现：同目录草稿SQLite账本、双revision并发检查、锁内重新核权、显式全局目录管理权限、空目录CLI引导，
 管理API/同源桥和管理准备配置；保存不改变现役JSON、连接或租户准入。
 依据：[ADR0267](../adr/0267-environment-drafts-before-admission.md)、[验收合同](../acceptance/environment-directory.feature)。
