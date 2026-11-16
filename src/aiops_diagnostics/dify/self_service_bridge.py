@@ -57,6 +57,7 @@ def handle(handler, bridge):
                 "request_key",
                 "id",
                 "revision",
+                "registry_revision",
                 "draft",
                 "version_no",
                 "workspace_id",
@@ -81,6 +82,8 @@ def handle(handler, bridge):
         "catalogue": ("GET", "/catalogue"),
         "environments": ("GET", "/environments"),
         "environment-update": ("POST", "/environments"),
+        "environment-drafts": ("GET", "/environment-drafts"),
+        "environment-draft-save": ("POST", "/environment-drafts"),
         "status": ("POST", "/status"),
         "readiness": ("POST", "/readiness"),
         "create": ("POST", "/operations"),
@@ -110,6 +113,52 @@ def handle(handler, bridge):
     else:
         raise _Rejected(400, "无效管理动作")
     if (method == "GET" or action == "retry") and payload:
+        raise _Rejected(400, "无效参数")
+    if action == "environment-draft-save":
+        if (
+            set(payload) != {"draft", "revision", "registry_revision"}
+            or not isinstance(payload["draft"], dict)
+            or type(payload["revision"]) is not int
+            or payload["revision"] < 0
+            or type(payload["registry_revision"]) is not int
+            or payload["registry_revision"] < 1
+        ):
+            raise _Rejected(400, "无效目录草稿参数")
+        candidate = payload["draft"]
+        fields = {
+            "id",
+            "name",
+            "enabled",
+            "gateway_url",
+            "cpms_base_url",
+            "company_gateway_url",
+            "deployment_target",
+            "credential_ref",
+            "timezone",
+            "tenants",
+        }
+        if set(candidate) != fields:
+            raise _Rejected(400, "无效目录草稿字段")
+        tenants = candidate["tenants"]
+        if (
+            type(candidate["enabled"]) is not bool
+            or not isinstance(tenants, list)
+            or len(tenants) > 10000
+            or any(
+                not isinstance(t, dict)
+                or set(t) != {"id", "name", "enabled"}
+                or type(t["enabled"]) is not bool
+                or not isinstance(t["id"], str)
+                or not isinstance(t["name"], str)
+                for t in tenants
+            )
+            or any(
+                not isinstance(candidate[k], str) or len(candidate[k]) > 2048
+                for k in fields - {"enabled", "tenants"}
+            )
+        ):
+            raise _Rejected(400, "无效目录草稿字段")
+    elif "registry_revision" in payload:
         raise _Rejected(400, "无效参数")
     if action == "environment-update":
         required = {"environment", "revision", "name", "enabled"}

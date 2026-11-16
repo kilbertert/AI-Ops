@@ -76,6 +76,9 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     "charging_status_base_url": SettingSource("AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
     "business_environments_file": SettingSource("AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE"),
     "environment_registry_file": SettingSource("AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE"),
+    "environment_management_registry_file": SettingSource(
+        "AIOPS_GATEWAY_ENVIRONMENT_MANAGEMENT_REGISTRY_FILE"
+    ),
     "company_gateway_trust_file": SettingSource("AIOPS_GATEWAY_COMPANY_GATEWAY_TRUST_FILE"),
     "consumer_order_chat_enabled": SettingSource(
         "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED", kind="bool", default=False
@@ -198,6 +201,7 @@ class GatewayServerSettings:
     #: 环境变量仍优先：登记了某租户就用它的地址，清单只接住未登记的租户。
     business_environments_file: str = ""
     environment_registry_file: str = ""
+    environment_management_registry_file: str = ""
     company_gateway_trust_file: str = ""
     _environment_registry: object = field(default=None, init=False, repr=False)
     consumer_order_chat_enabled: bool = False
@@ -491,6 +495,18 @@ class GatewayServerSettings:
             parse_charging_endpoints(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
                 raise ValueError("charging status requires a logical execution environment")
+        if self.environment_management_registry_file:
+            from aiops_diagnostics.gateway.environment_registry import MANAGED_SCHEMA, load
+
+            body = load(self.environment_management_registry_file)
+            if body["schema"] != MANAGED_SCHEMA:
+                raise ValueError("environment management requires managed registry")
+            if (
+                self.environment_registry_file
+                and Path(self.environment_registry_file).resolve()
+                != Path(self.environment_management_registry_file).resolve()
+            ):
+                raise ValueError("management and runtime must share the same environment registry")
         if self.environment_registry_file:
             from aiops_diagnostics.gateway.environment_registry import for_settings
 
