@@ -43,8 +43,13 @@ def load(path: Path) -> list[dict]:
         if not isinstance(url, str) or any(c.isspace() or ord(c) < 32 for c in url):
             raise ValueError("invalid endpoint")
         require_secure_endpoint(url, what="preflight")
-        if "json_equals" in row and not isinstance(row["json_equals"], dict):
-            raise ValueError("json_equals must be an object")
+        if "json_equals" in row and (
+            not isinstance(row["json_equals"], dict)
+            or any(type(value) not in (str, bool, int, type(None)) for value in row["json_equals"].values())
+        ):
+            raise ValueError("json_equals must contain scalar strings, booleans, integers or null")
+        if row["status"] < 300 and not row.get("json_equals"):
+            raise ValueError("successful responses require service identity fields")
     return rows
 
 
@@ -71,7 +76,7 @@ def probe(row: dict, timeout: float) -> dict:
                 )
             )
         return {"passed": passed, "http": status, "reason": "matched" if passed else "unexpected_response"}
-    except (OSError, ValueError, http.client.HTTPException) as exc:
+    except (OSError, ValueError, RecursionError, http.client.HTTPException) as exc:
         # 异常和正文可能带地址/敏感数据；只保留分类，不打印原文。
         return {"passed": False, "reason": type(exc).__name__}
 

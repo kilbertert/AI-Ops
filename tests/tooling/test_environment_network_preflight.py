@@ -30,7 +30,10 @@ def test_real_http_redirect_shape_and_intermittent_failure():
             if status == 302:
                 self.send_header("Location", "/destination")
             self.end_headers()
-            self.wfile.write(b'{"ok":true}' if self.path != "/wrong" else b"<html>wrong site</html>")
+            body = b'{"ok":true}' if self.path != "/wrong" else b"<html>wrong site</html>"
+            if self.path == "/deep":
+                body = b"[" * 20000 + b"0" + b"]" * 20000
+            self.wfile.write(body)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -44,7 +47,7 @@ def test_real_http_redirect_shape_and_intermittent_failure():
             )
 
         assert check("/ok")["passed"] is True
-        for path in ("/redirect", "/wrong", "/flaky"):
+        for path in ("/redirect", "/wrong", "/flaky", "/deep"):
             assert check(path)["passed"] is False
         assert "/destination" not in Handler.calls
         assert base not in json.dumps(check("/ok"))
@@ -86,3 +89,33 @@ def test_malformed_http_does_not_leak_upstream_status_line():
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_manifest_rejects_nested_expected_values(tmp_path):
+    path = tmp_path / "checks.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "nested",
+                    "url": "https://example.test",
+                    "status": 200,
+                    "json_equals": {"state": {"authorized": True}},
+                }
+            ]
+        )
+    )
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="scalar"):
+        probe["load"](path)
+
+
+@pytest.mark.parametrize("fields", [{}, {"json_equals": {}}])
+def test_success_status_requires_service_fields(tmp_path, fields):
+    path = tmp_path / "checks.json"
+    path.write_text(
+        json.dumps([{"id": "login-page", "url": "https://example.test", "status": 200, **fields}])
+    )
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="service identity"):
+        probe["load"](path)

@@ -45,6 +45,7 @@ uv run python tools/verification/business-environments/network_preflight.py \
 ```
 
 这是人工运维验证工具，不是面向用户的任意URL探测API；其输入须先经过目标审批。
+`json_equals`仅支持顶层字符串、布尔、整数及null字段，不接受嵌套结构或浮点近似比较。
 默认验证TLS、不跟随重定向；结果只含逻辑检查名、状态和异常类别，不带URL、响应正文或秘密。
 全部样本匹配才返回0；任一失败返回1；私有清单错误返回2。200必须结合服务响应字段判断，不能把登录页当目标API。
 `timeout`是单次socket操作超时，不是整个任务的绝对时限；受管远程运行同时设置`dev-host --timeout`总时限。
