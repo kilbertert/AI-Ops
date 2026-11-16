@@ -188,7 +188,7 @@ Java 节点仍在共享服务区，先保持现有每环境固定 Gateway/凭据
 
 | 改动范围 | 方向与调用方 |
 |---|---|
-| `gateway/environment_registry.py`、`cli_admin.py` | 唯一目录、草稿/生效/版本合同；管理 API、安装器、运行投影共用 |
+| `gateway/environment_registry.py`、`admin_cli.py` | 唯一目录、草稿/生效/版本合同；管理 API、安装器、运行投影共用 |
 | `dify/environment_management.py`、`self_service_bridge.py`、Dify Web 补丁 | 真 Tab、受权 CRUD、预检和任务；CLI 与页面不各自写配置 |
 | `dify/self_service*`、工作区映射 | 拆出可复用准备步骤，保留租约/未知结果对账；不改正式发布语义 |
 | `identity/`、`consumer/business_environments.py`、登录代理 | 固定环境后的认证、旧目录收敛；复查会话/账本隔离 |
