@@ -504,14 +504,17 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             if session is None:
                 self._json(403, {"result": "error", "message": "请重新登录后退出"})
                 return
-        cookies = SimpleCookie()
-        try:
-            cookies.load(self.headers.get("Cookie", ""))
-            for name in ("access_token", "__Host-access_token"):
-                if name in cookies:
-                    self.service.forget_operator_token(cookies[name].value)
-        except Exception:  # noqa: BLE001 - 畸形 cookie 不阻止退出。
-            pass
+        if session is not None:
+            self.service.forget_operator_token(session.access_token)
+        else:
+            cookies = SimpleCookie()
+            try:
+                cookies.load(self.headers.get("Cookie", ""))
+                for name in ("access_token", "__Host-access_token"):
+                    if name in cookies:
+                        self.service.forget_operator_token(cookies[name].value)
+            except Exception:  # noqa: BLE001 - 畸形 cookie 不阻止旧入口退出。
+                pass
         if native:
             from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, request_json
 

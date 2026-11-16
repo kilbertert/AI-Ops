@@ -1388,7 +1388,8 @@ def test_same_company_token_does_not_exchange_console_sessions_between_environme
         company.server_close()
 
 
-def test_native_logout_revokes_binding_and_forwards_only_current_session(stack):
+@pytest.mark.parametrize("extra_cookie", ["", "broken; ", 'bad="unterminated; '])
+def test_native_logout_revokes_binding_and_forwards_only_current_session(stack, extra_cookie):
     from http.cookies import SimpleCookie
 
     base, _ = stack
@@ -1408,7 +1409,7 @@ def test_native_logout_revokes_binding_and_forwards_only_current_session(stack):
         "/console/api/logout",
         {},
         headers={
-            "Cookie": f"__Host-access_token={session}; __Host-csrf_token={csrf}",
+            "Cookie": extra_cookie + f"__Host-access_token={session}; __Host-csrf_token={csrf}",
             "X-CSRF-Token": csrf,
         },
     )
