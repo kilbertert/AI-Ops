@@ -90,6 +90,45 @@ def environment_registry_command(
     )
 
 
+@admin_app.command("environment-draft")
+def environment_draft_command(
+    registry: Annotated[Path, typer.Option("--registry", help="私有生效目录JSON")],
+    file: Annotated[
+        Path, typer.Option("--file", help="含identity/draft/revision/registry_revision的私有JSON")
+    ],
+) -> None:
+    """受管恢复入口；与管理API共用草稿校验、显式授权和版本比较，不激活环境。"""
+    from aiops_diagnostics.common.private_files import validate_private_file
+    from aiops_diagnostics.gateway import environment_drafts
+    from aiops_diagnostics.gateway import environment_registry as directory
+
+    try:
+        validate_private_file(file)
+        if file.stat().st_size > 65536:
+            raise ValueError("input too large")
+        data = json.loads(file.read_text(), object_pairs_hook=directory._unique_object)
+        if not isinstance(data, dict) or set(data) != {"identity", "draft", "revision", "registry_revision"}:
+            raise ValueError("invalid input")
+        identity = data["identity"]
+        if (
+            not isinstance(identity, list)
+            or len(identity) != 3
+            or any(not isinstance(v, str) for v in identity)
+        ):
+            raise ValueError("invalid identity")
+        result = environment_drafts.save(
+            registry,
+            tuple(identity),
+            data["draft"],
+            expected_revision=data["revision"],
+            registry_revision=data["registry_revision"],
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        typer.echo(json.dumps({"error": "ENVIRONMENT_DRAFT_REFUSED"}))
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result))
+
+
 @admin_app.command("schema")
 def schema_command(
     action: Annotated[str, typer.Argument(help="check（只读）或 migrate（原子升级）")],

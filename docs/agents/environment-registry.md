@@ -1,5 +1,34 @@
 # 业务环境与租户接入登记
 
+## 草稿准备入口（P1基础片）
+
+`AIOPS_GATEWAY_ENVIRONMENT_MANAGEMENT_REGISTRY_FILE`仅为管理准备配置，不启用该目录的运行准入。
+`AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE`仍是业务准入开关；若两项同时设置，必须指向同一个JSON。
+目录授权、控制环境身份来自该JSON，草稿在同目录`<目录文件名>.drafts.db`；备份时两者一并保存。
+生效JSON和草稿账本的模式分别仍为0600，所在目录0700；数据根不从浏览器传入。
+
+空目录用原CLI引导：私有输入为`{"environments":[],"managers":[{"environment":"control","tenant_id":"platform","user_id":"operator","environments":["*"]}]}`。
+`control/platform/operator`必须替换成已经能正常登录控制环境的主体，不使用尚未开通的目标环境。
+用下方`apply --expected-revision 0`发布初始目录，再配置管理引用；`["*"]`显式授权管理全目录及新增环境。
+已有有限环境管理员不能新增或查看其他环境；公司type=-1不是自动管理授权。不能从页面授予`*`。
+
+正常控制台会话经过原同源桥/Origin/CSRF与后端活动令牌交换、公司身份交叉核对后，使用：
+
+- `GET /v1/dify/management/environment-drafts`：获授权生效摘要和草稿，不返回config_ref/管理员/凭据正文。
+- `POST`同路径：`{"revision":0,"registry_revision":1,"draft":{...}}`，首次草稿revision为0。
+- 同源桥动作分别为`environment-drafts`和`environment-draft-save`；服务鉴权仍必需。
+
+草稿字段：`id/name/enabled/gateway_url/cpms_base_url/company_gateway_url/deployment_target/credential_ref/timezone/tenants`；
+tenant字段仍为`id/name/enabled`。目标及凭据为1～64位字母数字下划线/短横线逻辑引用，时区使用IANA时区名。
+地址遵循现有端点规则，拒绝userinfo/query/fragment；草稿只保存，不访问填写的地址或凭据文件。
+`enabled`在草稿中只是期望状态；响应始终`state=draft/acceptance=unverified`，不启用新环境。
+草稿记录原目录版本和digest，之后目录变化时返回`registry_changed=true`，执行前需重新预检。
+旧`environment-update`仍是已有环境名称/准入启停，不能把它误称为草稿发布。
+新Tab、引用预检、安装和激活尚未由本片交付；当前接口为后续页面基础，不能向用户宣称一键开通。
+受管恢复命令`aiops-admin environment-draft --registry <目录> --file <私有输入>`调用同一保存函数；
+输入为`identity:[控制环境,租户,用户]`和API的三个字段。CLI本地身份由操作者选择，但仍需目录中已有显式授权；
+浏览器身份只能从正常会话取得。该命令不发布、不允许修改管理员，不打印连接或凭据引用。
+
 > 下文是现有隔离实例的登记实现。95试验已撤回，新目标见[手工目录与一键开通规划](../architecture/2026-11-16-manual-environment-onboarding.md)。
 > 现有JSON/CLI不是集中管理页面；每环境独立Gateway也不表示必须部署在客户服务器。
 > 新规划允许平台管理员通过受控表单编辑连接；下文“不让客户端提交URL”描述现有业务入口，不能作为禁止管理表单的理由。

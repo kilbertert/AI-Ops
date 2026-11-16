@@ -113,18 +113,21 @@ def register(app, context):
         # 已有库迁移需保持现役明确绑定）。只在没有授权行时补，不会覆盖后来的撤销。
         _backfill_knowledge_grants(context, service)
 
-    def session(request: Request, authorization: Annotated[str | None, Header()] = None):
+    def management_session(request: Request, authorization: Annotated[str | None, Header()] = None):
         expected = context.settings.dify_publish_api_key
         supplied = (authorization or "").removeprefix("Bearer ")
-        if not context.settings.operator_profiles_file:
-            raise auth.SetupRefused("SETUP_DISABLED")
         if not expected or not hmac.compare_digest(expected, supplied):
             raise auth.SetupRefused("SETUP_CREDENTIAL_REQUIRED")
         return request.headers.get("X-AIOps-Console-Session", "")
 
+    def session(request: Request, authorization: Annotated[str | None, Header()] = None):
+        if not context.settings.operator_profiles_file:
+            raise auth.SetupRefused("SETUP_DISABLED")
+        return management_session(request, authorization)
+
     from . import environment_management
 
-    environment_management.register(app, context, session)
+    environment_management.register(app, context, management_session)
 
     @app.exception_handler(auth.SetupRefused)
     async def refused(_request, exc):
