@@ -42,5 +42,5 @@ C端当前只读客服完成首轮开发并正式投入使用，进入提测与�
 后续优先处理已提测范围的缺陷、权限和证据问题。业务写操作、新场景、全量迁移单列目标，
 不以完成M系列所有未来工作作为本轮C端提测的前置；也不把它们写成已经完成。
 
-下一步按[交付索引的依赖顺序](agents/current-delivery-state.md#下一阶段顺序与依赖)推进；
+下一步按[交付索引的依赖顺序](agents/current-delivery-state.md#环境目录与开通试点)推进；
 开放issue逐项处置见[阶段台账](reviews/2026-11-05-architecture-stage-closeout.md)。

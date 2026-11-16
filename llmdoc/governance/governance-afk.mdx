@@ -1,5 +1,5 @@
 ---
-description: "AFK 治理机：阶段闸 grill→spec→tickets→implement 各需显式命令、必需检查 verify+Workflow policy 不可加 paths 过滤、ADR-0002 可信控制面、双轴对抗评审+容器内独立 git、runner 舰队标签隔离仅调度、ADR 约定+里程碑一文件一记录（冲突 PR 不派发 CI）、spec-tree 仅建议、sync-open-prs 纪律"
+description: "AFK 治理机：阶段闸 grill→spec→tickets→implement 各需显式命令、必需检查 verify+Workflow policy 不可加 paths 过滤、ADR-0002 可信控制面、双轴对抗评审+容器内独立 git、runner 舰队标签隔离仅调度、ADR约定+有界Doc-first与单份事件回执、spec-tree 仅建议、sync-open-prs 纪律"
 kind: architecture
 relations:
   related:
@@ -13,6 +13,9 @@ code:
     - docs/agents/reviewer-execution.md
     - docs/agents/runner-queue.md
     - AGENTS.md
+    - docs/README.md
+    - docs/agents/current-delivery-state.md
+    - tools/verification/doc_impact.py
     - .sandcastle/policy-check.mjs
     - .sandcastle/adr.check.mjs
     - .sandcastle/consensus-contract.json
@@ -55,7 +58,7 @@ GitHub-hosted 跑 CI/policy/探针/watch；原 agent runner 跑模型工作（�
 ## ADR 与里程碑纪律
 
 - `docs/agents/architecture-decisions.md`：行为、架构、跨文件合同、流程/工具、测试策略、持久化/网络/配置格式变化都欠一条记录；记录形态 = 读者可分支的状态 + 考虑过的备选 + 实际权衡。`No-ADR:` 在 commit body 是显式逃逸门——沉默永远不行。`adr.check.mjs` 对触及的记录查结构、`--base` 查覆盖；它**刻意不读**约定文档，测试的是 `feat:`/`fix:` 主题+路径形状+`No-ADR:` 行。**编号在并行分支上撞**：取号看 origin/main 最大号，多分支工作要预留。
-- 里程碑一文件一记录（AGENTS.md）：每个交付里程碑**新增不改** `docs/开发进度/<date>-<slug>.md`+`docs/validation/<date>-<slug>.md`。原因不是洁癖：追加式文件总在第 1 行插入 → 必冲突（~40 个合并 PR 里 23 个碰 validation.md）→ **冲突的 PR 根本不派发 pull_request 工作流** → "CI 卡住"其实是"CI 从没跑"。两份旧平文件是只读档案；最新验收=docs/validation/ 按名最新的文件。
+- 文档维护以 `docs/README.md#变更前与交付时` 为正文（ADR-0269）：原Issue记录进度，必要验收事件单份回执；按领域/组件/环境选证据。旧日志冻结保留，当前索引替换对应结论，不追加历史。llmdoc是检索投影，不能授权行为；源变化只触发复核。
 - `spec-tree.yml`（ADR-0032）：`.spec/` 是意图真相；lint 仅建议（不是必需检查）——主干检查保留正是为了暴露已合并的漂移。
 - `consensus-contract.json`：不可例外不变量 = account-boundary、default-branch-protection、pull-request-delivery、deterministic-ci、secret-isolation、runner-isolation；`.afk-exceptions.json` 条目需 invariant+reason+scope+compensating_control+owner+approved_at+expires_at，拒未知/不可例外/过期项。
 - `sync-open-prs.yml`：默认只报；手动 `gh workflow run -f pr_number=` 处理单个 PR；严格资格（OPEN、base=main、非 draft、同仓 owner-author、无 assignee、无 agent 标签、BEHIND）；update-branch API 带 `expected_head_sha`；DIRTY → 作者修，不派付费修复 agent；`allow_auto_merge=false` 刻意。

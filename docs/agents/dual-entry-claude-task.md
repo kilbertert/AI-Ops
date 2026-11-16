@@ -1,5 +1,5 @@
 你是本任务开发执行者，Codex负责独立验收。用户已同意按规划实施并让你承担开发、自验与交付；无需再次确认是否开工。目标是“平台为客户开通一套AI服务，客户自己管理，消费者和员工分别使用”。本任务书服从用户最新指令及仓库/服务器规则。
-中断后先读本任务PROGRESS.md再续做，不重复已有成果。正确授权与保住现役服务优先于进度。必须项不可缩减；建议可用更小方案替代并说明理由。
+中断后先读原Issue及其验收证据再续做，不重复已有成果。正确授权与保住现役服务优先于进度。必须项不可缩减；建议可用更小方案替代并说明理由。
 
 ## 1. 已确认与执行默认
 
@@ -14,7 +14,7 @@
 项目：/home/claude/Projects/AI-Ops。
 完整规格来源（同机可读）：/home/claude/Projects/.worktrees/AI-Ops-dual-entry-onboarding-plan/docs/agents/dual-entry-onboarding-plan.md。
 先取该规划及配套文档的已提交版本；若未进main，经文档PR纳入，不能重新丢弃规划。实现从最新origin/main建立自己的dev-worktree，不接管其他会话工作区。
-先读AGENTS.md、完整服务器共识、docs/afk-workflow.md、docs/agents/ticket-contract.md、current-delivery-state.md与最新验收记录。真实环境操作前读env-41-runbook.md、runtime-retirement-operations.md及两端手册。
+先读AGENTS.md、完整服务器共识、docs/afk-workflow.md、docs/agents/ticket-contract.md、current-delivery-state.md与本领域、组件和环境对应的验收记录。真实环境操作前读env-41-runbook.md、runtime-retirement-operations.md及两端手册。
 2026-10-30实测基线：4af09893；以下既有契约53 passed，1个依赖警告：
 uv run pytest -n 0 tests/execution/test_chat_route_bindings.py tests/consumer/test_consumer_publication.py tests/dify/test_dify_app_registry.py
 先复跑并记录当前全量基线；当前分支若更晚按差异核对，不倒退新改动。核验本机工具、Dify版本、原应用/渠道/密钥位置。事实不符先记录影响，解决相关前提，继续独立部分。任务0后给≤10行开工回执。
@@ -41,9 +41,9 @@ K 平台及租户运营均可按各自权限管理；改一端/一租户不改�
 ## 5. 交付纪律与回执
 
 允许新增必要回归；既有断言只有契约明确变化并有等强替代时才改。不得为过关删测试、加skip、降低断言、mock掉被测主路径或吞失败。现有跳过逐项解释，禁止新能力靠跳过达标。按改动运行格式/静态/全量/构建、相关真Gateway与Java验证；命令从当前仓库核实。
-进度统一docs/acceptance/dual-entry/PROGRESS.md；实质阻塞记BLOCKED.md，无则写“无”。同一验收连败3次换定位方法/独立任务，不盲重试。真实回归失败先恢复该次部署，保留证据与业务数据；不降标准报完成。
-每个里程碑新增中文开发进度/validation文件，更新相关操作手册与交付索引，按仓库要求记录ADR。权限/渠道缺条件时完成能做的部分，明确剩余条件，不停在方案或猜造通过。代码清理仅限自己的工作区。
-最终回执写docs/acceptance/dual-entry/EXECUTION-RECEIPT.md，包含：规格/子任务链接；base/head/PR/merge/制品/部署时间；A-L逐项PASS/FAIL/BLOCKED＋环境、命令、证据；原入口与新入口；失败/修复/恢复；遗留与清理。公开记录脱敏，原始证据私有保存。
+进度与实质阻塞统一记录原Issue；原PROGRESS/BLOCKED文件仅保留历史基线。同一验收连败3次换定位方法/独立任务，不盲重试。真实回归失败先恢复该次部署，保留证据与业务数据；不降标准报完成。
+进度复用原Issue；独立验收事件留一份validation回执，任务最终回执引用这些证据而不复制，更新相关手册和领域状态，按仓库要求记录ADR。权限/渠道缺条件时完成能做的部分，明确剩余条件，不停在方案或猜造通过。代码清理仅限自己的工作区。
+最终回执写docs/acceptance/dual-entry/EXECUTION-RECEIPT.md，作为汇总索引：规格/子任务链接、A-L逐项结论及对应事件回执、未通过项与清理结果；版本、环境、命令和失败过程引用事件原件，不另抄正文。公开记录脱敏，原始证据私有保存。
 聊天仅返回：一句结论＋回执绝对路径＋PR链接＋未通过项。标“待Codex独立验收”，不得代Codex签最终合格；用户会转交回执。
 
 ## 6. 完成条件

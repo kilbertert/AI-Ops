@@ -1,5 +1,9 @@
 # 业务环境与租户接入登记
 
+本文是操作方法；获批行为以[环境目录Feature](../acceptance/environment-directory.feature)为准，
+未来步骤见[开通规划](../architecture/2026-11-16-manual-environment-onboarding.md)，
+运行/启用/验收读[领域状态](current-delivery-state.md#环境目录与开通试点)。保存草稿不是启用。
+
 ## Dify独立管理页
 
 从主导航「环境与租户」进入`/aiops/environments`，可直接打开、刷新与返回。

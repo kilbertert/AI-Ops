@@ -1,23 +1,12 @@
-"""Shape guards for the architecture README.
-
-The README makes two checkable promises about this repository:
-
-1. it explains every module in the package (its stated purpose is to remove the
-   cognitive cost of onboarding), and
-2. it is a working map — its relative links resolve, and its claim that the
-   package is acyclic holds.
-
-These guards are deliberately about *shape*, not prose: they fail when the doc
-drifts from the code, which is the only failure mode a reviewer would otherwise
-have to notice by hand. They do not and cannot check whether the explanation is
-any good.
-"""
+"""职责入口、链接和导入边界检查；不把文档措辞或长度当作业务正确性。"""
 
 from __future__ import annotations
 
 import ast
 import re
 from pathlib import Path
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 README = PROJECT_ROOT / "README.md"
@@ -60,17 +49,28 @@ def _import_edges() -> dict[str, set[str]]:
     return edges
 
 
-def test_every_package_module_is_named_in_the_readme() -> None:
-    """A new module that nobody documents is exactly the onboarding cost this README exists to remove."""
-    readme = _readme()
-    undocumented = sorted(
-        module
-        for module in _package_modules()
-        if not (PACKAGE / module.replace(".", "/") / "__init__.py").exists()
-        and f"{module}.py" not in readme
-        and f"`{module}`" not in readme
-    )
-    assert undocumented == [], "README.md 未说明这些模块（请补进第三节的分层表）: " + ", ".join(undocumented)
+def test_every_package_area_has_a_readme_entry() -> None:
+    """新职责不能失去入口；同职责新增模块不要求手工更新共享README。"""
+    targets = set(re.findall(r"\[[^\]]*\]\((src/aiops_diagnostics/[^)#]+)\)", _readme()))
+    areas = {path.parent for path in PACKAGE.rglob("*.py") if path.parent != PACKAGE}
+    top_level = {path.relative_to(PACKAGE).parts[0] for path in areas}
+    missing = sorted(area for area in top_level if f"src/aiops_diagnostics/{area}/" not in targets)
+    assert not missing, "README缺少职责目录入口: " + ", ".join(missing)
+
+
+def test_new_area_requires_a_link_but_new_module_does_not(tmp_path, monkeypatch):
+    package = tmp_path / "src/aiops_diagnostics"
+    (package / "existing").mkdir(parents=True)
+    (package / "existing/new.py").write_text("")
+    readme = tmp_path / "README.md"
+    readme.write_text("[已有职责](src/aiops_diagnostics/existing/)\n")
+    monkeypatch.setitem(globals(), "PACKAGE", package)
+    monkeypatch.setitem(globals(), "README", readme)
+    test_every_package_area_has_a_readme_entry()
+    (package / "new_area").mkdir()
+    (package / "new_area/mod.py").write_text("")
+    with pytest.raises(AssertionError, match="new_area"):
+        test_every_package_area_has_a_readme_entry()
 
 
 def test_readme_module_references_point_at_real_files() -> None:
@@ -87,19 +87,31 @@ def test_readme_module_references_point_at_real_files() -> None:
     assert unknown == [], "README.md 引用了仓库中不存在的 .py 文件: " + ", ".join(unknown)
 
 
-def test_readme_relative_links_resolve() -> None:
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "README.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "docs/README.md",
+        "docs/agents/current-delivery-state.md",
+        "docs/agents/environment-registry.md",
+    ],
+)
+def test_readme_relative_links_resolve(relative) -> None:
     """The README is the documentation hub; a rotted link silently hides the authoritative doc."""
     broken: list[str] = []
-    for match in re.finditer(r"\[[^\]]*\]\(([^)]+)\)", _readme()):
+    document = PROJECT_ROOT / relative
+    for match in re.finditer(r"\[[^\]]*\]\(([^)]+)\)", document.read_text()):
         target = match.group(1).strip()
         if target.startswith(("http://", "https://", "mailto:", "#")):
             continue
         path = target.split("#", 1)[0]
         if not path:
             continue
-        if not (PROJECT_ROOT / path).exists():
+        if not (document.parent / path).exists():
             broken.append(target)
-    assert broken == [], "README.md 中的相对链接不可解析: " + ", ".join(sorted(set(broken)))
+    assert broken == [], f"{relative} 中的相对链接不可解析: " + ", ".join(sorted(set(broken)))
 
 
 def _github_anchor(heading: str) -> str:
@@ -168,7 +180,5 @@ def test_import_scan_includes_nested_modules_and_package_imports(tmp_path, monke
     edges = _import_edges()
     assert "area.two" in edges["area.one"]
     assert "area.one" in edges["area.two"]
-    import pytest
-
     with pytest.raises(AssertionError, match="新增包内循环边"):
         test_package_import_graph_has_no_new_cycles()

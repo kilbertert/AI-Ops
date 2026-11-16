@@ -147,7 +147,7 @@ GET /v1/agent-metrics/runs?route_type=qa
    惯例保留状态不可删；canary 智能体如无保留价值，停用即可）。
 3. 会话：删除本次创建的 conversation；监控行按 30 天保留自然过期。
 4. 证据：按 `~/Playground/experiments/kb-service-design/qa-evidence-*.md`
-   的"步骤/结果/根因/残留"表格式落到 `docs/validation.md` 引用位置，
+   的"步骤/结果/根因/残留"表格式写入 `docs/validation/` 的单份事件回执，
    并在 #173/#175 issue 回填结论。
 
 ## 5. 验收判定（对应 issue 勾选）

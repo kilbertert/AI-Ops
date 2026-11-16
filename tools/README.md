@@ -8,6 +8,7 @@
 
 | 工具 | 用途 | 何时跑 |
 |---|---|---|
+| `verification/doc_impact.py --base <revision>` | 复用llmdoc映射列本次文档影响与未映射路径，只读提示 | 文档/源码变更交付前；负责人核证后更新或说明无影响 |
 | `content/generate_faq_catalog.py` | 从本地业务 DOCX 生成 `faq_catalog.json` | 内容首次生成 |
 | `content/merge_faq_i18n.py` | 把宽表题面 + 答案 JSON 合并进目录 | 新增语言/内容后 |
 | `content/derive_zh_hant.py` | 由简体权威**派生** `zh-Hant`（opencc `s2twp`） | 改过任何简体文案后 |

@@ -1,5 +1,7 @@
 ## Verification
 
+重要变更与文档交付遵循 `AGENTS.md` 的 Doc-first 规则及其文档维护入口。
+
 实现、修复、独立 Hack 和交付前，读取并执行[验证分工](docs/agents/verification-workflow.md)。
 
 Project constraints live in `AGENTS.md`. For anything that changes the Gateway's
