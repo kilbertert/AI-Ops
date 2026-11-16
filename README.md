@@ -5,7 +5,7 @@
 面向公司 C端与管家端的只读业务助手。公司 App/H5 是用户入口，Gateway 负责身份、范围、
 发布绑定、作业和交付；客服由 Dify 官方 Agent 执行，管家由 Java 节点执行；模型按SOP选择证据，系统负责授权与计算。
 
-跨服务器接入已完成95试验并撤回。后续方向改为不修改公司仓库，由Dify管理Tab维护环境/租户映射并开通自有模块，见[新规划](docs/architecture/2026-11-16-manual-environment-onboarding.md)及[Snail-AI研究](docs/agents/snail-manual-onboarding-research.md)。本轮仅规划；现有目录首片见[管理手册](docs/agents/environment-registry.md)，一键开通尚未实现。
+跨服务器接入已完成95试验并撤回。后续方向改为不修改公司仓库，由Dify管理Tab维护环境/租户映射并开通自有模块，见[新规划](docs/architecture/2026-11-16-manual-environment-onboarding.md)及[Snail-AI研究](docs/agents/snail-manual-onboarding-research.md)。目录草稿基础已部署；独立管理页通过 `/aiops/environments` 准备连接和租户草稿，不改变现役准入。配置方法见[管理手册](docs/agents/environment-registry.md)，一键开通尚未实现。
 
 ## 当前交付与退役范围
 

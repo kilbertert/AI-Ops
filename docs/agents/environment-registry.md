@@ -1,5 +1,31 @@
 # 业务环境与租户接入登记
 
+## Dify独立管理页
+
+从主导航「环境与租户」进入`/aiops/environments`，可直接打开、刷新与返回。
+工作室/首页保留原客户AI开通区，环境目录不再混放其中。页面显示当前生效目录与配置草稿两种状态；
+保存只调用草稿接口，不能立即安装、激活或停用现役业务。旧准入API继续存在，但本页不调用它。
+
+全局目录管理员可新增环境；已有范围授权可编辑获授权环境。填写稳定环境编号、名称、公司网关、
+AI-Ops入口、CPMS地址、部署目标引用、凭据引用、IANA时区和租户编号/名称/期望准入。
+引用来自受控清单，不能填私钥、密码或配置文件路径。租户登记不代替公司权限验证；未填引用或时区时需补齐才可保存。
+已有环境/租户编号保持固定，跨环境迁移不是改编号；新环境和租户默认不勾选准入。
+版本冲突保留输入并要求刷新；切换/刷新未保存内容先确认；刷新失败清空已显示目录。后端始终重新核权。
+页面没有连接预检、安装或激活按钮，这些仍由后续里程碑实现；不能将草稿保存成功当业务验收。
+
+本地复验：在自有忽略构建目录解出固定Dify源码，`git init`建立独立Git根，安装锁定依赖，按
+`deploy/dify-36/web-patches/build-web-image.sh`顺序应用补丁并复制组件/service；不要清理他人的构建树。
+缺少独立Git根曾使Tailwind默认扫描node_modules中的图标示例并在页面载入前报错。
+复制`aiops-environments.browser.spec.tsx`和`aiops-management.browser.spec.tsx`到上游`web/app/components/`后执行：
+
+```bash
+pnpm --dir web exec vp test --project browser --run app/components/aiops-environments.browser.spec.tsx app/components/aiops-management.browser.spec.tsx
+pnpm --dir web exec vp test --project unit --run app/components/main-nav/__tests__/index.spec.tsx
+```
+
+Web必须完整webpack构建；合并后同修订镜像配套发布，独立URL200只证明路由存在。正常公司会话、
+目录授权及保存/刷新须另验；Gateway与管理桥已部署不意味着生产目录已配置。
+
 ## 草稿准备入口（P1基础片）
 
 `AIOPS_GATEWAY_ENVIRONMENT_MANAGEMENT_REGISTRY_FILE`仅为管理准备配置，不启用该目录的运行准入。
@@ -24,7 +50,7 @@ tenant字段仍为`id/name/enabled`。目标及凭据为1～64位字母数字下
 `enabled`在草稿中只是期望状态；响应始终`state=draft/acceptance=unverified`，不启用新环境。
 草稿记录原目录版本和digest，之后目录变化时返回`registry_changed=true`，执行前需重新预检。
 旧`environment-update`仍是已有环境名称/准入启停，不能把它误称为草稿发布。
-新Tab、引用预检、安装和激活尚未由本片交付；当前接口为后续页面基础，不能向用户宣称一键开通。
+引用预检、安装和激活尚未交付；独立管理页使用下述接口，不能向用户宣称一键开通。
 受管恢复命令`aiops-admin environment-draft --registry <目录> --file <私有输入>`调用同一保存函数；
 输入为`identity:[控制环境,租户,用户]`和API的三个字段。CLI本地身份由操作者选择，但仍需目录中已有显式授权；
 浏览器身份只能从正常会话取得。该命令不发布、不允许修改管理员，不打印连接或凭据引用。

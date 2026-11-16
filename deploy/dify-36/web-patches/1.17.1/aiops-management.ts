@@ -55,6 +55,13 @@ export const entryLabels: Record<EntryKey, string> = {
 }
 
 export const messages: Record<string, string> = {
+  ENVIRONMENT_DRAFT_REVISION_CONFLICT: '草稿已被其他管理员更新，请刷新后重新确认修改',
+  ENVIRONMENT_DRAFT_INVALID: '草稿格式无效，请核对编号、名称、地址和租户是否重复',
+  ENVIRONMENT_REFERENCE_INVALID: '部署目标与凭据须使用已登记的逻辑引用',
+  ENVIRONMENT_TIMEZONE_INVALID: '时区无效，请使用 Asia/Shanghai 等 IANA 时区名称',
+  ENVIRONMENT_DRAFT_UNAVAILABLE: '草稿服务暂时不可用，请稍后刷新核对',
+  ENVIRONMENT_DRAFT_LIMIT: '草稿数量已达上限，请联系平台运维',
+  ENVIRONMENT_DRAFT_TOO_LARGE: '草稿内容过大，请减少本次登记的租户数量',
   ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED: '环境目录尚未升级，请联系平台运维迁移',
   ENVIRONMENT_MANAGEMENT_UNAVAILABLE: '环境目录尚未准备，请联系平台运维',
   ENVIRONMENT_MANAGEMENT_FORBIDDEN: '当前账号没有环境管理授权',
