@@ -10,7 +10,7 @@
 
 | 能力/组件 | 已合并 | 已部署 | 已启用 | 已验收与缺口 | 证据 |
 |---|---|---|---|---|---|
-| 目录草稿/Gateway、管理桥 | #1548 `9c21d855` | 回执确认基础制品配套；Gateway由后续#1549更新 | 生产管理目录未配置；保存不改业务准入 | 隔离持久化/权限/CAS通过；真实租户开通未验 | [目录基础](../validation/2026-11-16-environment-directory-drafts.md) |
+| 目录草稿/Gateway、管理桥 | #1548 `9c21d855` | 回执确认基础制品配套；Gateway由后续#1549更新 | 生产管理目录未配置；保存不改业务准入 | 隔离持久化/权限/CAS通过；真实租户开通未验 | [基础验证](../validation/2026-11-16-environment-directory-drafts.md)、[配套部署](../validation/2026-11-16-z-environment-tab-delivery.md) |
 | 独立环境页/Dify Web | #1549 `d136bdb2` | 完整Web与Gateway 1.14.0已配套 | 路由存在；不代表目录或租户已激活 | 独立浏览器交互和匿名拒绝通过；正常账号真实管理、预检/安装/激活及三功能业务验收未完成 | [环境页回执](../validation/2026-11-16-z-environment-tab-delivery.md) |
 | 目标登录/共享服务临时网络 | #1544 `b1f8156a` | 备用入口按回执配套 | 仅获准来源，原入口保留 | 登录身份/授权单次读与SSE通过；正式网络稳定性、目标模块和容量未闭环；临时入口复查见#1546 | [网络回执](../validation/2026-11-16-z-shared-dify-recovery-live.md) |
 | 公司来源门 | #1532 `08d203f1` | 工件已交付 | 未配置、未启用 | 不证明双环境签发身份隔离；现规划不再以公司改码为前提 | [来源门回执](../validation/2026-11-14-z-environment-delivery-receipt.md) |
