@@ -94,9 +94,15 @@ def test_install_failure_cleans_only_own_root(tmp_path, monkeypatch):
     monkeypatch.setattr(
         probe.pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=995, pw_gid=995, pw_shell="/usr/sbin/nologin")
     )
-    monkeypatch.setattr(
-        probe, "command", lambda *args: (_ for _ in ()).throw(subprocess.CalledProcessError(1, args))
-    )
+    calls = []
+
+    def execute(*args):
+        calls.append(args)
+        if args[0] == "runuser":
+            return ""
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(probe, "command", execute)
     sentinel = tmp_path / "company-data"
     sentinel.write_text("unchanged")
     args = SimpleNamespace(
@@ -104,6 +110,7 @@ def test_install_failure_cleans_only_own_root(tmp_path, monkeypatch):
     )
     with pytest.raises(subprocess.CalledProcessError):
         probe.run(args, meta)
+    assert calls[0][0] == "runuser" and len(calls) == 2
     assert sentinel.read_text() == "unchanged"
     assert not list(tmp_path.glob("candidate-*"))
 
@@ -114,3 +121,40 @@ def test_reject_existing_symlink_archive(tmp_path):
     link.symlink_to(archive)
     with pytest.raises(ValueError, match="regular file"):
         probe.manifest(link, sha, "3.12")
+
+
+def test_inaccessible_parent_rejected_before_creating_candidate(tmp_path, monkeypatch):
+    original = Path.stat
+
+    def owned(path, *args, **kwargs):
+        data = original(path, *args, **kwargs)
+        return type(data)(
+            (
+                data.st_mode & ~0o022,
+                data.st_ino,
+                data.st_dev,
+                data.st_nlink,
+                0,
+                data.st_gid,
+                data.st_size,
+                data.st_atime,
+                data.st_mtime,
+                data.st_ctime,
+            )
+        )
+
+    monkeypatch.setattr(Path, "stat", owned)
+    monkeypatch.setattr(
+        probe.pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=995, pw_gid=995, pw_shell="/usr/sbin/nologin")
+    )
+    calls = []
+
+    def refused(*args):
+        calls.append(args)
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(probe, "command", refused)
+    with pytest.raises(subprocess.CalledProcessError):
+        probe.run(SimpleNamespace(user="aiops", root=tmp_path), {})
+    assert calls == [("runuser", "-u", "aiops", "--", "/usr/bin/test", "-x", str(tmp_path))]
+    assert not list(tmp_path.glob("candidate-*"))

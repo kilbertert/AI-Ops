@@ -148,6 +148,7 @@ def run(args, meta):
     for p in (parent, *parent.parents):
         if p.is_symlink() or not p.is_dir() or p.stat().st_uid != 0 or p.stat().st_mode & 0o022:
             raise ValueError("trusted root-owned parent required")
+    command("runuser", "-u", args.user, "--", "/usr/bin/test", "-x", str(parent))
     root = Path(tempfile.mkdtemp(prefix="candidate-", dir=parent))
     units = []
     result = {

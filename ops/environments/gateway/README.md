@@ -24,7 +24,7 @@ wheel里的health版本带合并提交。输出包括manifest.json、SHA256SUMS�
 
 从同一合并修订取probe.py并核SHA。主机已登记角色/所有者、SSH公钥身份及项目路径；
 先只读核Python、已有非登录服务身份、CPU/内存/磁盘、旧实例流量。对公司业务库不做DDL或压力测试。
-主机维护身份执行，应用仅使用已有项目服务账号；`--root`是新建且root所有、不可被其他用户写入的私有项目父目录：
+主机维护身份执行，应用仅使用已有项目服务账号；`--root`是新建且root所有、不可被其他用户写入的项目父目录（代码父目录0755，状态子目录0700）：
 
 ```bash
 python3 probe.py /private/gateway.tar.gz --sha256 <外层摘要> \
@@ -33,7 +33,7 @@ python3 probe.py /private/gateway.tar.gz --sha256 <外层摘要> \
 # 校验通过且本次预演获准后，去掉--verify-only。
 ```
 
-先对归档文件集、每个摘要及Python版本核验。运行时复制到新root并再次校验，离线安装、pip check，
+先对归档文件集、每个摘要及Python版本核验，再用真实服务账号执行父目录可穿越检查；不满足即拒绝，不自动改现有权限。运行时复制到新root并再次校验，离线安装、pip check，
 启动两个临时systemd服务，回环动态端口、不继承进程配置、状态根独立、无公司凭据。
 单实例MemoryMax384MiB、CPUQuota50%、RuntimeMaxSec180、TasksMax32，限制只访问回环网络。
 这些是保护上限，不是容量合格阈值；systemd必须支持相应属性，拒绝时不放宽后重试。

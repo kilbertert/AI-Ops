@@ -1,5 +1,5 @@
 ---
-description: "交付面与主机拓扑：按组件制品表（Gateway src/ 是唯一 CD 制品、文件拷贝无 .git）、dev-host 角色断言+artifact-sha256、deploy-41.sh 各闸（陈旧审批/节点制品/依赖漂移/schema/健康+自动回滚）、images.lock 合同、暴露登记纪律、41/36/95 分工（95=离线包候选健康后切换）、环境登记表作入口地址权威、手工部署台账、GitLab 镜像非运行源、CD 审批闸已永久移除"
+description: "交付面与主机拓扑：按组件制品表（Gateway src/ 是唯一 CD 制品、文件拷贝无 .git）、dev-host 角色断言+artifact-sha256、deploy-41.sh 各闸（陈旧审批/节点制品/依赖漂移/schema/健康+自动回滚）、images.lock 合同、暴露登记纪律、41/36/95 分工（95旧试验已撤回，新环境候选只测启动不切流量）、环境登记表作入口地址权威、手工部署台账、GitLab 镜像非运行源、CD 审批闸已永久移除"
 kind: architecture
 relations:
   related:
@@ -27,6 +27,9 @@ code:
     - ops/README.md
     - ops/dify-exposure-registry.md
     - ops/nginx/business-environment-ingress.md
+    - ops/environments/gateway/
+    - docs/agents/environment-onboarding-preflight.md
+    - tests/tooling/test_gateway_candidate.py
     - ops/environments/env-41.toml
     - ops/environments/env-95.toml
     - ops/environments/env95/README.md
@@ -63,6 +66,8 @@ code:
 
 核心事实：**制品按组件拆分、所有者各不相同。"合并绿灯"永远不等于"所有组件都新"。**
 
+95旧完整栈和专属业务隧道已撤回，不是新环境模板。当前采用共享平台与最小接入模块，状态以[交付索引](../../docs/agents/current-delivery-state.md)为准。
+
 ## 制品-组件表
 
 | 组件 | 目标 | 机制 |
@@ -75,7 +80,8 @@ code:
 | Dify 应用 DSL | Dify console | `deploy/dify-chat/*.dsl.yml` 版本化资产；改 prompt 要 `--live-documents` 迁移+`/v1/dify/publish` 才算生效 |
 | kb-service 补丁 | 36 | `deploy/kb-service/build.py`+`verify_defaults.py`；dev-host cp+原子替换+只重启适配器 |
 | 宿主机 nginx 片段 | 41/36 vhosts | `ops/nginx/*.conf` 作已识别制品安装（`--artifact-sha256`+`nginx -t`+reload）；**在 CD 之外**，记 `deploy/manual-deploys.md` |
-| Gateway+节点栈离线包（env95） | 95 `/opt/aiops-95` | `ops/environments/env95/`：dev-host 上 `build.sh`/`build-node.sh` 产 wheel+py313 wheelhouse+SHA256SUMS → `dev-host cp --artifact-sha256` → `install.sh`（临时候选 `/health` 版本==制品修订才切 :8788）/`upgrade.sh`（限同 schema+零在途）/`retire.sh`（move-only 可续跑）；**文件拷贝类——无 CD、95 上无 .git**；机制异于 41：venv+wheel、候选先健康后切换，不是 src rsync 原位替换 |
+| 最小Gateway候选预演 | 已登记目标服务宿主 | `ops/environments/gateway/build.sh`按目标Python生成合并离线制品，`probe.py`在独立根启动临时受限双实例并清理；不改旧服务或准入，健康负载不等于业务容量 |
+| Gateway+节点栈离线包（env95，已撤回的历史） | 95 `/opt/aiops-95` | `ops/environments/env95/`：dev-host 上 `build.sh`/`build-node.sh` 产 wheel+py313 wheelhouse+SHA256SUMS → `dev-host cp --artifact-sha256` → `install.sh`（临时候选 `/health` 版本==制品修订才切 :8788）/`upgrade.sh`（限同 schema+零在途）/`retire.sh`（move-only 可续跑）；**文件拷贝类——无 CD、95 上无 .git**；机制异于 41：venv+wheel、候选先健康后切换，不是 src rsync 原位替换 |
 | GitLab 镜像 | 公司 GitLab ai-products/ai-ops | `gitlab-mirror.yml` 镜像每个 push 的 ref。**镜像不是运行源**——镜像成功≠CI/合并/部署；其独立失败≠部署失败 |
 
 ## dev-host 传输合同
@@ -99,7 +105,7 @@ code:
 
 - `ops/dify-exposure-registry.md` 是 Dify 可达面的唯一声明；列序是合同（CI 按单元格位置解析）；`tests/dify/test_dify_exposure_registry.py` 断言声明==路由；表外必须不可达——**从 Dify 容器的 netns 验**（宿主机视角会撒谎）。新公网暴露从**观测流量**决定，不从监听端口。
 - `ops/nginx` 片段用方法分流 location 而非路径正则（一个 `location ~` 曾把 `POST /v1/shortcuts` 管理面打开）；`limit_except` 不够。
-- 主机：41=服务主机（Gateway+node-runtime+隔离 m2-live-03 栈）；36=移动云（Dify 1.17.1、kb-service、RAGFlow——Dify 栈刻意不加 docker 组不与兄弟共 DB/Redis/向量库）；95=qy-gw-120（api.qumall.qushiyun.com，公司环境、未纳入本编队）——重建 Gateway :8788+独立节点栈 `aiops95-node-runtime`/`aiops95-node-callback`（容器内存合计 1408MiB 上限）+受限 SSH 隧道（回环 29508/29501/29580→Dify/inner-api/kb）。**CD 只部署 41，不碰 36/95**——合并绿灯不等于三台都更新；36/95 资产是另一交付路径的手工检出。
+- 41/36按各自现役组件制品交付；95旧完整栈与专属业务隧道已撤回，不再作为新环境模板。候选目标按项目声明和私有清单解析，先通过`ops/environments/gateway/`预演，不自动切流量。**CD只部署41，其他组件须独立配套**。
 - **环境登记表**（`environment_registry_file`，ADR-0256）：机群级「环境×租户」准入声明——`tools/content/render_business_ingress.py --registry` 以它为地址权威（catalogue 只存 id+凭据，gateway_url 取自登记行；未登记/停用环境拒产 upstream），登录代理启动也把 `gateway_url` 钉到登记行。准入语义（`require`/`TENANT_ENVIRONMENT_NOT_ENABLED`/`RegisteredCallerResolver`）归 [identity-scope](../identity/identity-scope.mdx)。
 - 手工部署台账 `deploy/manual-deploys.md`：任何绕 CD 上生产的动作必须**当日**经 `deploy/record-manual-deploy.sh` 追加——六次连续 CD 失败曾因手工 rsync 保持生产更新而无人察觉（#407）。台账 append-only，永不重写。
 - CD Watch（`.sandcastle/cd-watch.mjs`+`cd-watch.yml`）：每 5min 跑在 **GitHub-hosted** runner（看守者与被看守机器同死就没意义）；经 `pending_deployments` 判 deploy-41 结果（等待与没跑看起来一样）+最近完成 runs；开 `cd:needs-attention` issue 而非报错红——未关的 issue 本身就是警报。
