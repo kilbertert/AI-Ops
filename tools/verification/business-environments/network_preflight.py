@@ -54,7 +54,7 @@ def load(path: Path) -> list[dict]:
 
 
 def probe(row: dict, timeout: float) -> dict:
-    opener = urllib.request.build_opener(NoRedirect)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
     try:
         try:
             response = opener.open(row["url"], timeout=timeout)

@@ -119,3 +119,47 @@ def test_success_status_requires_service_fields(tmp_path, fields):
     path.chmod(0o600)
     with pytest.raises(ValueError, match="service identity"):
         probe["load"](path)
+
+
+def test_ambient_proxy_cannot_turn_an_unreachable_target_green(monkeypatch):
+    import socket
+
+    class Proxy(BaseHTTPRequestHandler):
+        calls = 0
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):  # noqa: N802
+            type(self).calls += 1
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{server.server_port}")
+        monkeypatch.setenv("no_proxy", "")
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        with socket.socket() as target:
+            target.bind(("127.0.0.1", 0))  # 占住未监听端口，其他进程不能接管。
+            result = probe["run"](
+                [
+                    {
+                        "id": "unreachable",
+                        "url": f"http://127.0.0.1:{target.getsockname()[1]}",
+                        "status": 200,
+                        "json_equals": {"ok": True},
+                    }
+                ],
+                1,
+                1,
+            )
+        assert result["passed"] is False
+        assert Proxy.calls == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
