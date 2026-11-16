@@ -1,0 +1,45 @@
+--- a/web/app/components/main-nav/routes.ts
++++ b/web/app/components/main-nav/routes.ts
+@@ -75,6 +75,15 @@
+     active: (path: string) => isPathUnderRoute(path, '/datasets'),
+     icon: 'i-custom-vender-main-nav-knowledge-v2',
+     activeIcon: 'i-custom-vender-main-nav-knowledge-v2-active',
++    visibility: VISIBLE_TO_ALL,
++  },
++  {
++    key: 'environment-directory',
++    href: '/aiops/environments',
++    label: '环境与租户',
++    active: (path: string) => isPathUnderRoute(path, '/aiops/environments'),
++    icon: 'i-custom-vender-main-nav-integrations-v2',
++    activeIcon: 'i-custom-vender-main-nav-integrations-v2-active',
+     visibility: VISIBLE_TO_ALL,
+   },
+   {
+--- a/web/app/components/main-nav/__tests__/index.spec.tsx
++++ b/web/app/components/main-nav/__tests__/index.spec.tsx
+@@ -694,6 +694,8 @@
+     expect(agentsLink).toHaveAttribute('href', '/agents')
+     expect(screen.getByRole('link', { name: /Agents common.menus.status/ })).toBeInTheDocument()
+     expect(agentsLink.querySelector('.i-custom-vender-main-nav-agent')).toBeInTheDocument()
++    const environmentLink = screen.getByRole('link', { name: '环境与租户' })
++    expect(environmentLink).toHaveAttribute('href', '/aiops/environments')
+     const skillsLink = screen.getByRole('link', { name: /common.mainNav.skills/ })
+     expect(skillsLink).toHaveAttribute('href', '/skills')
+     expect(skillsLink.querySelector('.i-custom-vender-main-nav-skill')).toBeInTheDocument()
+@@ -721,6 +723,7 @@
+       '/apps',
+       '/agents',
+       '/datasets',
++      '/aiops/environments',
+       '/skills',
+       '/integrations/model-provider',
+       '/marketplace',
+--- /dev/null
++++ b/web/app/(commonLayout)/aiops/environments/page.tsx
+@@ -0,0 +1,5 @@
++import EnvironmentManagement from '@/app/components/aiops-environments'
++
++export default function EnvironmentDirectoryPage() {
++  return <EnvironmentManagement />
++}
