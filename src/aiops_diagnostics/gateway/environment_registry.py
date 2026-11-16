@@ -28,8 +28,8 @@ class RegistryError(ValueError):
 
 
 def validate(rows: object, *, managed: bool = False) -> list[dict]:
-    if not isinstance(rows, list) or not 1 <= len(rows) <= 64:
-        raise RegistryError("环境清单须包含1至64个环境")
+    if not isinstance(rows, list) or not (0 if managed else 1) <= len(rows) <= 64:
+        raise RegistryError("环境清单数量无效")
     identifiers, endpoints = set(), set()
     for row in rows:
         fields = {"id", "enabled", "gateway_url", "cpms_base_url", "config_ref", "tenants"}
@@ -125,10 +125,15 @@ def validate_managers(managers, rows):
                 raise RegistryError("环境管理主体无效")
         scope = manager["environments"]
         if (
-            manager["environment"] not in environments
-            or not isinstance(scope, list)
+            not isinstance(scope, list)
             or not scope
-            or any(not isinstance(v, str) or v not in environments for v in scope)
+            or (
+                scope != ["*"]
+                and (
+                    manager["environment"] not in environments
+                    or any(not isinstance(v, str) or v not in environments for v in scope)
+                )
+            )
             or len(scope) != len(set(scope))
         ):
             raise RegistryError("环境管理范围无效")
