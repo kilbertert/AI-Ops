@@ -183,6 +183,43 @@ def test_bridge_real_http_environment_contract(monkeypatch):
                 == 403
             )
             assert len(forwarded) == count
+            candidate = dict(
+                id="new",
+                name="新环境",
+                enabled=True,
+                gateway_url="https://new.example.test",
+                cpms_base_url="https://new.example.test/cpms",
+                company_gateway_url="https://new.example.test",
+                deployment_target="host",
+                credential_ref="credentials",
+                timezone="UTC",
+                tenants=[],
+            )
+            draft_payload = dict(
+                action="environment-draft-save", revision=0, registry_revision=1, draft=candidate
+            )
+            assert client.post(url, headers=headers, json=draft_payload).status_code == 200
+            assert forwarded[-1][0].endswith("/management/environment-drafts")
+            count = len(forwarded)
+            assert (
+                client.post(
+                    url, headers=headers, json={**draft_payload, "registry_revision": True}
+                ).status_code
+                == 400
+            )
+            assert (
+                client.post(
+                    url, headers={**headers, "Origin": "http://evil.test"}, json=draft_payload
+                ).status_code
+                == 403
+            )
+            assert len(forwarded) == count
+            assert (
+                client.post(
+                    url, headers=headers, json={**draft_payload, "draft": {**candidate, "secret": "bad"}}
+                ).status_code
+                == 400
+            )
     finally:
         server.shutdown()
         server.server_close()
@@ -254,3 +291,40 @@ def test_upgrade_requires_backup_and_retries_after_interrupted_publish(tmp_path,
     monkeypatch.setattr(registry, "write_private_text", write)
     assert registry.migrate(path, expected_revision=1, actor="operator") == 2
     assert registry.load(path)["managers"] == []
+
+
+def test_draft_api_saves_connection_without_publishing(managed):
+    _, path, client, _ = managed
+    original = path.read_bytes()
+    current = client.get("/v1/dify/management/environment-drafts")
+    assert current.status_code == 200 and not current.json()["can_create"]
+    row = current.json()["effective"][0]
+    assert "config_ref" not in row
+    row.update(deployment_target="host-a", credential_ref="env-a-secrets", timezone="Asia/Shanghai")
+    row["gateway_url"] = "https://new.example.test"
+    payload = dict(draft=row, revision=0, registry_revision=1)
+    saved = client.post("/v1/dify/management/environment-drafts", json=payload)
+    assert saved.status_code == 200 and saved.json()["state"] == "draft"
+    assert saved.headers["cache-control"] == "no-store"
+    assert path.read_bytes() == original
+    assert client.get("/v1/dify/management/environment-drafts").json()["drafts"][0]["draft"] == row
+    assert client.post("/v1/dify/management/environment-drafts", json=payload).status_code == 409
+    row["id"] = "b"
+    assert client.post("/v1/dify/management/environment-drafts", json=payload).status_code == 403
+
+
+def test_draft_api_rejects_secrets_and_expired_company_session(managed):
+    _, _, client, monkeypatch = managed
+    row = client.get("/v1/dify/management/environment-drafts").json()["effective"][0]
+    row.update(deployment_target="host-a", credential_ref="env-a-secrets", timezone="Asia/Shanghai")
+    row["gateway_url"] = "https://user:secret@example.test"
+    response = client.post(
+        "/v1/dify/management/environment-drafts", json=dict(draft=row, revision=0, registry_revision=1)
+    )
+    assert response.status_code == 403 and "secret" not in response.text
+
+    def expired(*a, **kw):
+        raise auth.SetupRefused("SETUP_IDENTITY_MISMATCH")
+
+    monkeypatch.setattr(auth, "identity", expired)
+    assert client.get("/v1/dify/management/environment-drafts").status_code == 403
