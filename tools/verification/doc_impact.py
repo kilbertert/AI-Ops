@@ -24,7 +24,10 @@ def report(root: Path, base: str) -> dict:
     changed.discard("")
     affected = []
     mapped = set()
-    for doc in sorted((root / "llmdoc").rglob("*.mdx")):
+    documents = sorted((root / "llmdoc").rglob("*.mdx"))
+    if not documents:
+        raise ValueError("llmdoc映射缺失，不能报告无影响")
+    for doc in documents:
         parts = doc.read_text(encoding="utf-8").split("---", 2)
         if len(parts) != 3 or parts[0].strip():
             raise ValueError(f"缺少frontmatter: {doc.relative_to(root)}")

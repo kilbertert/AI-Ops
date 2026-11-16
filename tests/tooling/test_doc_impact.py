@@ -69,3 +69,27 @@ def test_changed_document_source_is_included_even_if_llmdocignore_excludes_it(re
     result = report(repository, "HEAD")
     assert result["affected"] == [{"document": "llmdoc/area.mdx", "changed_sources": ["docs/current.md"]}]
     assert json.loads((repository / "llmdoc/meta.json").read_text())["validatedRevision"] == "unchanged"
+
+
+def test_base_advancing_does_not_report_other_tasks_changes(repository):
+    def run(*args):
+        return subprocess.check_output(["git", "-C", str(repository), *args], text=True).strip()
+
+    original = run("rev-parse", "HEAD")
+    run("checkout", "-b", "other-task")
+    (repository / "src/old.py").write_text("another task\n")
+    run("add", ".")
+    run("commit", "-m", "test: other task")
+    run("checkout", "-b", "our-task", original)
+    (repository / "our-file").write_text("ours\n")
+    result = report(repository, "other-task")
+    assert result["base_sha"] == original
+    assert result["affected"] == []
+    assert result["unmapped"] == ["our-file"]
+
+
+def test_missing_mapping_is_not_a_clean_report(repository):
+    for path in (repository / "llmdoc").glob("*.mdx"):
+        path.unlink()
+    with pytest.raises(ValueError, match="映射缺失"):
+        report(repository, "HEAD")
