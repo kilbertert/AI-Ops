@@ -29,6 +29,8 @@
 | **工作区查询（内部，非 Dify）** | `/v1/dify/workspace` | GET | **网关自己的内部令牌**（`X-Internal-Token` + `X-Request-Timestamp`，HMAC，`AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET`） | 回答"这个租户在本环境里的 workspace 是哪一个"（#879 / ADR-0059）。**调用方是我们自己的另外两个进程**（登录代理、发布桥），不是 Dify —— 它登记在这里，是因为 CI 的判据按 `/v1/dify/` 前缀取集合，不登记等于在这条判据里开一个洞。Dify 拿不到这把令牌，所以它**不**扩大 Dify 的可达面；输出也只有一个 UUID，拿到它还得有 `ADMIN_API_KEY` |
 
 | 业务环境目录 | `/v1/dify/management/environments` | GET | 发布服务key＋正常公司会话＋显式环境授权 | 仅返回获授权环境与已登记租户，不返回连接/配置/授权主体 |
+| 环境连接草稿目录 | `/v1/dify/management/environment-drafts` | GET | 发布服务key＋活动公司会话＋显式目录授权 | 返回获授权连接草稿和生效摘要，不返回配置路径/管理员/秘密正文 |
+| 环境连接草稿保存 | `/v1/dify/management/environment-drafts` | POST | 同上＋草稿/目录双版本 | 仅保存草稿，不发网络请求、不改变运行准入；拒绝凭据URL和额外字段 |
 | 业务环境准入维护 | `/v1/dify/management/environments` | POST | 同上，预期目录版本 | 仅名称/准入更新；拒绝URL、路径、管理员和新租户注入 |
 | 平台客户与来源目录 | `/v1/dify/management/catalogue` | GET | 发布服务key＋正常Dify公司会话 | 平台权限与公司绑定客户目录交集，只返回可管理客户及来源 |
 | 管家管理状态 | `/v1/dify/management/status` | POST | 同上，校验app租户归属 | 返回实际模型和正式版本；非受管应用不启用 |
