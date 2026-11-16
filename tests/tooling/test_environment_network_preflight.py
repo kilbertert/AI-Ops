@@ -2,6 +2,7 @@
 
 import json
 import runpy
+import socketserver
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -63,3 +64,25 @@ def test_private_manifest_refuses_unsafe_endpoints(tmp_path, url):
     path.chmod(0o600)
     with pytest.raises(ValueError):
         probe["load"](path)
+
+
+def test_malformed_http_does_not_leak_upstream_status_line():
+    class Broken(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.recv(2048)
+            self.request.sendall(b"INVALID STATUS private-upstream-marker\r\n\r\n")
+
+    server = socketserver.TCPServer(("127.0.0.1", 0), Broken)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = probe["run"](
+            [{"id": "broken", "url": f"http://127.0.0.1:{server.server_address[1]}", "status": 200}], 1, 2
+        )
+        assert result["passed"] is False
+        assert result["checks"][0]["samples"][0]["reason"] == "BadStatusLine"
+        assert "private-upstream-marker" not in json.dumps(result)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)

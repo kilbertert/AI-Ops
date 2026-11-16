@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import re
 import urllib.error
@@ -70,7 +71,7 @@ def probe(row: dict, timeout: float) -> dict:
                 )
             )
         return {"passed": passed, "http": status, "reason": "matched" if passed else "unexpected_response"}
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, http.client.HTTPException) as exc:
         # 异常和正文可能带地址/敏感数据；只保留分类，不打印原文。
         return {"passed": False, "reason": type(exc).__name__}
 
