@@ -1,11 +1,13 @@
-"""正常公司控制台会话后的环境管理；不向浏览器暴露连接或允许修改授权。"""
+"""正常公司会话后的显式目录授权；连接草稿不改变生效目录。"""
 
 import hashlib
+import sqlite3
 from pathlib import Path
 
 from fastapi import Depends, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from aiops_diagnostics.gateway import environment_drafts
 from aiops_diagnostics.gateway import environment_registry as registry
 
 from . import self_service_identity as auth
@@ -24,7 +26,7 @@ class EnvironmentChange(BaseModel):
 def _access(context, session):
     # 目录管理员仍须正常公司登录；停用业务准入不能令目录管理员无法恢复。
     caller = auth.identity(context, session, require_admission=False, require_platform_permissions=False)
-    path = getattr(context.settings, "environment_registry_file", "")
+    path = _path(context)
     if not path:
         raise auth.SetupRefused("ENVIRONMENT_MANAGEMENT_UNAVAILABLE")
     try:
@@ -33,17 +35,43 @@ def _access(context, session):
         raise auth.SetupRefused("ENVIRONMENT_MANAGEMENT_UNAVAILABLE") from exc
     if body["schema"] != registry.MANAGED_SCHEMA:
         raise auth.SetupRefused("ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED")
-    allowed = set()
-    for manager in body.get("managers", []):
-        if (manager["environment"], manager["tenant_id"], manager["user_id"]) == (
-            context.settings.environment,
-            caller.tenant_id,
-            caller.user_id,
-        ):
-            allowed.update(manager["environments"])
-    if not allowed:
-        raise auth.SetupRefused("ENVIRONMENT_MANAGEMENT_FORBIDDEN")
+    try:
+        allowed = environment_drafts.access(body, _identity(context, caller))
+    except registry.RegistryError as exc:
+        raise auth.SetupRefused(str(exc)) from exc
     return caller, body, allowed
+
+
+def _path(context):
+    return getattr(context.settings, "environment_management_registry_file", "") or getattr(
+        context.settings, "environment_registry_file", ""
+    )
+
+
+def _identity(context, caller):
+    return (context.settings.environment, caller.tenant_id, caller.user_id)
+
+
+def drafts(context, session, payload=None):
+    caller, _, _ = _access(context, session)
+    try:
+        if payload is None:
+            return environment_drafts.catalogue(_path(context), _identity(context, caller))
+        if set(payload) != {"draft", "revision", "registry_revision"}:
+            raise registry.RegistryError("ENVIRONMENT_DRAFT_INVALID")
+        return environment_drafts.save(
+            _path(context),
+            _identity(context, caller),
+            payload["draft"],
+            expected_revision=payload["revision"],
+            registry_revision=payload["registry_revision"],
+        )
+    except registry.RegistryError as exc:
+        if str(exc).endswith("REVISION_CONFLICT"):
+            raise SetupConflict(str(exc)) from exc
+        raise auth.SetupRefused(str(exc)) from exc
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise auth.SetupRefused("ENVIRONMENT_DRAFT_UNAVAILABLE") from exc
 
 
 def catalogue(context, session):
@@ -61,18 +89,20 @@ def catalogue(context, session):
                 "tenants": r["tenants"],
             }
             for r in body["environments"]
-            if r["id"] in allowed
+            if "*" in allowed or r["id"] in allowed
         ],
     }
 
 
 def change(context, session, payload):
     caller, body, allowed = _access(context, session)
-    if payload.environment not in allowed:
+    if "*" not in allowed and payload.environment not in allowed:
         raise auth.SetupRefused("ENVIRONMENT_MANAGEMENT_FORBIDDEN")
     if payload.revision != body["revision"]:
         raise SetupConflict("ENVIRONMENT_REGISTRY_REVISION_CONFLICT")
-    row = next(r for r in body["environments"] if r["id"] == payload.environment)
+    row = next((r for r in body["environments"] if r["id"] == payload.environment), None)
+    if row is None:
+        raise auth.SetupRefused("ENVIRONMENT_NOT_REGISTERED")
     target = row
     if payload.tenant_id is not None:
         target = next((t for t in row["tenants"] if t["id"] == payload.tenant_id), None)
@@ -88,7 +118,7 @@ def change(context, session, payload):
     )
     try:
         revision = registry.apply(
-            Path(context.settings.environment_registry_file),
+            Path(_path(context)),
             body["environments"],
             expected_revision=payload.revision,
             actor=actor,
@@ -102,6 +132,16 @@ def change(context, session, payload):
 
 
 def register(app, context, session_dependency):
+    @app.get("/v1/dify/management/environment-drafts")
+    def read_drafts(response: Response, session=Depends(session_dependency)):  # noqa: B008
+        response.headers["Cache-Control"] = "no-store"
+        return drafts(context, session)
+
+    @app.post("/v1/dify/management/environment-drafts")
+    def save_draft(payload: dict, response: Response, session=Depends(session_dependency)):  # noqa: B008
+        response.headers["Cache-Control"] = "no-store"
+        return drafts(context, session, payload)
+
     @app.get("/v1/dify/management/environments")
     def read(response: Response, session=Depends(session_dependency)):  # noqa: B008
         response.headers["Cache-Control"] = "no-store"
