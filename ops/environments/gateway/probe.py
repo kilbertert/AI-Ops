@@ -17,8 +17,6 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
-from urllib.error import HTTPError
-from urllib.request import ProxyHandler, Request, build_opener
 
 
 def regular(path):
@@ -106,18 +104,28 @@ def command(*args):
     return subprocess.check_output(args, stderr=subprocess.STDOUT, text=True, timeout=120).strip()
 
 
-def http(port, path, *, post=False):
-    request = Request(
-        f"http://127.0.0.1:{port}{path}",
-        data=b"{}" if post else None,
-        headers={"Content-Type": "application/json"},
+def isolated_http(pid, port, path, *, post=False):
+    script = """import json,urllib.request,urllib.error,sys
+r=urllib.request.Request(sys.argv[1],data=b'{}' if sys.argv[2]=='post' else None,headers={'Content-Type':'application/json'})
+try:
+ with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(r,timeout=5) as response:
+  print(json.dumps([response.status,json.load(response)]))
+except urllib.error.HTTPError as exc:print(json.dumps([exc.code,{}]))
+"""
+    return json.loads(
+        command(
+            "nsenter",
+            "-t",
+            str(pid),
+            "-n",
+            "/usr/bin/python3",
+            "-I",
+            "-c",
+            script,
+            f"http://127.0.0.1:{port}{path}",
+            "post" if post else "get",
+        )
     )
-    opener = build_opener(ProxyHandler({}))
-    try:
-        with opener.open(request, timeout=5) as response:
-            return response.status, json.load(response)
-    except HTTPError as exc:
-        return exc.code, {}
 
 
 def sample(unit):
@@ -157,6 +165,7 @@ def run(args, meta):
         "environment": args.environment,
         "scope": "startup-and-health-only",
         "business_acceptance": False,
+        "network": "private-namespace",
         "samples": {},
     }
     try:
@@ -224,8 +233,7 @@ def run(args, meta):
                 "--property=PrivateTmp=yes",
                 "--property=UMask=0077",
                 f"--property=ReadWritePaths={state}",
-                "--property=IPAddressDeny=any",
-                "--property=IPAddressAllow=localhost",
+                "--property=PrivateNetwork=yes",
                 "/usr/bin/env",
                 "-i",
                 "PATH=/usr/bin:/bin",
@@ -242,25 +250,30 @@ def run(args, meta):
                 "--port",
                 str(port),
             )
+            pid = int(command("systemctl", "show", unit, "-p", "MainPID", "--value"))
+            if not pid or os.readlink(f"/proc/{pid}/ns/net") == os.readlink("/proc/self/ns/net"):
+                raise RuntimeError("candidate network isolation missing")
             deadline = time.monotonic() + 45
             while True:
                 try:
-                    code, health = http(port, "/health")
+                    code, health = isolated_http(pid, port, "/health")
                     if code == 200:
                         break
-                except (OSError, ValueError):
+                except (OSError, ValueError, subprocess.SubprocessError):
                     pass
                 if time.monotonic() > deadline:
                     raise RuntimeError("candidate readiness failed")
                 time.sleep(0.5)
             if health.get("version") != meta["version"] or health.get("business_mutations") != "disabled":
                 raise RuntimeError("candidate identity mismatch")
-            if http(port, "/v1/assistant/questions", post=True)[0] not in (401, 403):
+            if isolated_http(pid, port, "/v1/assistant/questions", post=True)[0] not in (401, 403):
                 raise RuntimeError("anonymous access was not refused")
             result["samples"][f"instance_{index}_idle"] = sample(unit)
             start = time.monotonic()
             with ThreadPoolExecutor(max_workers=4) as pool:
-                responses = list(pool.map(lambda _, port=port: http(port, "/health")[0], range(40)))
+                responses = list(
+                    pool.map(lambda _, port=port, pid=pid: isolated_http(pid, port, "/health")[0], range(40))
+                )
             if responses != [200] * 40:
                 raise RuntimeError("health load failed")
             result["samples"][f"instance_{index}_health"] = {

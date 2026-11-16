@@ -35,8 +35,8 @@ python3 probe.py /private/gateway.tar.gz --sha256 <外层摘要> \
 
 先对归档文件集、每个摘要及Python版本核验，再用真实服务账号执行父目录可穿越检查；不满足即拒绝，不自动改现有权限。运行时复制到新root并再次校验，离线安装、pip check，
 启动两个临时systemd服务，回环动态端口、不继承进程配置、状态根独立、无公司凭据。
-单实例MemoryMax384MiB、CPUQuota50%、RuntimeMaxSec180、TasksMax32，限制只访问回环网络。
-这些是保护上限，不是容量合格阈值；systemd必须支持相应属性，拒绝时不放宽后重试。
+单实例MemoryMax384MiB、CPUQuota50%、RuntimeMaxSec180、TasksMax32，`PrivateNetwork=yes`独立网络命名空间仅有自己的回环；启动后核对namespace与宿主不同，探针用nsenter进入该网络验证HTTP。
+健康请求耗时包含nsenter/解释器启动开销，不代表业务请求延迟。这些是保护上限，不是容量合格阈值；systemd必须支持相应属性，拒绝时不放宽后重试。
 命令行环境、数据根与新进程不会读取旧业务配置，配置文件0600、目录0700。
 
 每实例记录空闲RSS/HWM、40个健康请求/4并发时的RSS与cgroup用量，以及双实例同时存在的RSS总和。
