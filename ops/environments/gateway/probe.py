@@ -106,7 +106,8 @@ def command(*args):
 
 def isolated_http(pid, port, path, *, post=False):
     script = """import json,urllib.request,urllib.error,sys
-r=urllib.request.Request(sys.argv[1],data=b'{}' if sys.argv[2]=='post' else None,headers={'Content-Type':'application/json'})
+r=urllib.request.Request(sys.argv[1],data=b'{}' if sys.argv[2]=='post' else None,
+ headers={'Content-Type':'application/json'})
 try:
  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(r,timeout=5) as response:
   print(json.dumps([response.status,json.load(response)]))
