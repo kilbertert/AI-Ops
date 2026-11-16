@@ -51,12 +51,7 @@ def report(root: Path, base: str) -> dict:
         patterns = metadata["code"]["paths"]
         if not isinstance(patterns, list) or not all(isinstance(p, str) and p for p in patterns):
             raise ValueError(f"无效code.paths: {doc.relative_to(root)}")
-        matches = {
-            path
-            for path in changed
-            for pattern in patterns
-            if path_matches(path, pattern)
-        }
+        matches = {path for path in changed for pattern in patterns if path_matches(path, pattern)}
         if matches:
             affected.append({"document": str(doc.relative_to(root)), "changed_sources": sorted(matches)})
             mapped.update(matches)
