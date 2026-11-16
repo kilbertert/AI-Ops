@@ -38,6 +38,8 @@ app  = "/opt/dify"           # compose、env、镜像内数据卷的根
 assets = "/opt/dify/deploy"  # 部署产物落点(compose + nginx/ssrf 资产)
 kb_service = "/opt/ragflow-kb/kb-service"
 kb_backups = "/opt/ragflow-kb/backups"
+service_api_config = "/etc/aiops-dify-api"
+service_api_nginx = "/www/server/panel/vhost/nginx/aiops-dify-service-api.conf"
 
 [[targets]]
 name        = "95"
