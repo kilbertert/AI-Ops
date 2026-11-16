@@ -3,7 +3,7 @@
 面向公司 C端与管家端的只读业务助手。公司 App/H5 是用户入口，Gateway 负责身份、范围、
 发布绑定、作业和交付；客服由 Dify 官方 Agent 执行，管家由 Java 节点执行；模型按SOP选择证据，系统负责授权与计算。
 
-跨服务器接入已完成95试验并撤回；后续按[公司网关接入与环境管理方案](docs/architecture/2026-11-14-company-gateway-onboarding.md)规划。专属SSH业务隧道不再作为新环境方案；环境目录管理首片见[管理手册](docs/agents/environment-registry.md)；正式网关接入及自动开通仍在实施。
+跨服务器接入已完成95试验并撤回。后续方向改为不修改公司仓库，由Dify管理Tab维护环境/租户映射并开通自有模块，见[新规划](docs/architecture/2026-11-16-manual-environment-onboarding.md)及[Snail-AI研究](docs/agents/snail-manual-onboarding-research.md)。本轮仅规划；现有目录首片见[管理手册](docs/agents/environment-registry.md)，一键开通尚未实现。
 
 ## 当前交付与退役范围
 
@@ -233,8 +233,8 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 第二业务环境的独立重建与部分真实问答已归档，95的AI-Ops部署已按用户要求撤回。
 验证边界见[95本轮记录](docs/validation/2026-11-14-env95-business-acceptance.md)，不能由部署成功推定全部业务验收。
 
-`dify.environment_management`提供正常公司会话后的环境目录管理，按显式环境授权读取与更新准入；不接受浏览器提供连接地址。
+`dify.environment_management`当前提供正常公司会话后的环境目录名称/启停管理，按显式环境授权读取与更新准入；尚不支持新增连接。新规划将允许平台管理员在独立Tab中编辑受校验的连接配置，普通用户和模型不能指定服务地址。
 
-`identity.gateway_admission`在显式启用的新环境入口校验公司网关请求签名及持久防重放，随后仍执行原用户和订单授权。
+`identity.gateway_admission`支持显式公司网关请求签名及持久防重放，随后仍执行原用户和订单授权；已交付但未启用，新规划不再以公司改码签发为前提。
 
 跨环境接入两片的上线/未启用边界见[交付回执](docs/validation/2026-11-14-z-environment-delivery-receipt.md)；公司正式发布入口核对遵循[只读手册](docs/agents/company-release-discovery.md)。

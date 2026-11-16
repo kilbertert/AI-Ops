@@ -1,7 +1,8 @@
 # 业务环境与租户接入登记
 
-> 下文是现有隔离实例的登记实现。95试验已撤回，新目标见[公司网关方案](../architecture/2026-11-14-company-gateway-onboarding.md)。
+> 下文是现有隔离实例的登记实现。95试验已撤回，新目标见[手工目录与一键开通规划](../architecture/2026-11-16-manual-environment-onboarding.md)。
 > 现有JSON/CLI不是集中管理页面；每环境独立Gateway也不表示必须部署在客户服务器。
+> 新规划允许平台管理员通过受控表单编辑连接；下文“不让客户端提交URL”描述现有业务入口，不能作为禁止管理表单的理由。
 
 公司认证负责用户/权限，AI-Ops维护环境与租户开通关系；采用每环境独立Gateway、登录代理、数据根。
 首轮由平台运维维护私有JSON，不逐个登记用户、不让客户端提交服务URL。决策见[ADR0256](../adr/0256-platform-environment-registry.md)。

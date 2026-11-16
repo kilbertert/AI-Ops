@@ -12,6 +12,7 @@
 | 产品、测试：交付什么、怎样反馈缺陷 | [测试交接](testing-handoff.md) |
 | 系统方向、M1–M4剩余范围 | [系统策略复核](system-strategy-audit.md) |
 | 工程：真实调用链与职责 | [系统架构](system-architecture.md)、[README模块索引](../README.md#三系统模块与依赖关系) |
+| 多环境与租户管理、后续一键开通 | [新规划](architecture/2026-11-16-manual-environment-onboarding.md)、[Snail-AI研究](agents/snail-manual-onboarding-research.md)；只规划，尚未实施 |
 | 仓库目录、旧执行器清理与迁移顺序 | [现行目录规则](architecture/repository-layout.md#现行目录规则)；迁移已完成，旧调查仅解释历史 |
 | 运行版本、启用状态和证据 | [当前交付状态](agents/current-delivery-state.md)；按证据区分已合并、已部署和已验收 |
 | C端：知识上传、选库、多语言、实时查询 | [WF01手册](agents/consumer-wf01/README.md) |
