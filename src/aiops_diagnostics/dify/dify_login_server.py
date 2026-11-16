@@ -46,11 +46,9 @@ from aiops_diagnostics.dify.dify_login_proxy import (
     CompanyUnreachable,
     DifyLoginError,
     PermissionDenied,
-    verify_console_jwt,
 )
 from aiops_diagnostics.dify.dify_login_service import (
     PLATFORM_USER_TYPE,
-    STATUS_ACTIVE,
     LoginPolicy,
     LoginService,
     MappingStore,
@@ -305,8 +303,8 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         if parsed.path == LOGIN_ROUTE:
             self._login()
             return
-        if parsed.path == LOGOUT_ROUTE:
-            self._logout()
+        if parsed.path in (LOGOUT_ROUTE, "/console/api/logout"):
+            self._logout(native=parsed.path == "/console/api/logout")
             return
         if parsed.path == PUBLISH_CHECK_ROUTE:
             self._publish_check()
@@ -427,7 +425,7 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
 
         ## 身份与放行是**两件事**
 
-        `allowed` 单独表达发布权；身份五字段只要映射存在且 active 就回，与 `allowed`
+        `allowed` 单独表达发布权；身份五字段只在正常登录绑定与映射均 active 时回，与 `allowed`
         无关。这个形状是刻意的：试运行与发布用**同一个**调用取身份，但它们要的不是
         同一种授权 —— 试运行只要"我是谁"来算订单范围（#782），发布还要"我能不能发"。
         所以**没有发布权的人仍然拿得到自己的身份**，桥那边不会因为
@@ -441,24 +439,12 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._json(400, {"allowed": False, "reason": str(exc)})
             return
-        session_token = str(payload.get("session", ""))
-        claims = verify_console_jwt(session_token, self.settings.dify.secret_key)
-        if claims is None:
-            self._json(200, {"allowed": False, "reason": "SESSION_INVALID"})
-            return
-        account_id = str(claims.get("user_id") or "")
-        row = self.service.store.by_dify_account(account_id) if account_id else None
-        if row is None:
-            self._json(200, {"allowed": False, "reason": "NO_MAPPING"})
-            return
-        if row.get("status") != STATUS_ACTIVE:
-            self._json(200, {"allowed": False, "reason": "MAPPING_DISABLED"})
-            return
         try:
-            self.service.require_registered_tenant(str(row.get("tenant_id") or ""))
-        except PermissionDenied:
-            self._json(200, {"allowed": False, "reason": "TENANT_ENVIRONMENT_NOT_ENABLED"})
+            row, _ = self.service.active_session(payload.get("session", ""))
+        except PermissionDenied as exc:
+            self._json(200, {"allowed": False, "reason": exc.code})
             return
+        account_id = str(row["dify_account_id"])
         permissions = self.service.store.permissions_of(row)
         # 发布权与准入**同一条边界**（ADR-0139）：租户账号在自己的 workspace 里发布 ——
         # ADR-0073 已把发布钉死在发起人所在的 workspace，跨租户在结构上发不出去。
@@ -505,28 +491,67 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             result = None
         self._json(200 if result else 403, result or {"error": "login_required"})
 
-    def _logout(self) -> None:
+    def _logout(self, *, native: bool = False) -> None:
         from http.cookies import SimpleCookie
 
-        cookies = SimpleCookie()
-        try:
-            cookies.load(self.headers.get("Cookie", ""))
-            for name in ("access_token", "__Host-access_token"):
-                if name in cookies:
-                    self.service.forget_operator_token(cookies[name].value)
-        except Exception:  # noqa: BLE001 - 畸形 cookie 不阻止退出。
-            pass
-        # Dify 原生登出由前端调它自己的 `/console/api/logout`；代理这里只负责清掉
-        # 我们下发的三枚 cookie，避免"退出后 cookie 还在"。
-        #
-        # 名字必须带 `__Host-`：清一枚**另一个名字**的 cookie 什么都不做，而"退出后
-        # 还能用"正是这一段要防的事（#776 把控制台收到 https 后名字就变了）。
-        # `Secure` 一并带上 —— 与登录时下发的属性一致，浏览器才会认成同一枚。
+        session = None
+        if native:
+            from aiops_diagnostics.dify.dify_console_publish import console_session_from_headers
+
+            session = console_session_from_headers(
+                self.headers.get("Cookie"), self.headers.get("X-CSRF-Token")
+            )
+            if session is None:
+                self._json(403, {"result": "error", "message": "请重新登录后退出"})
+                return
+        if session is not None:
+            self.service.forget_operator_token(session.access_token)
+        else:
+            cookies = SimpleCookie()
+            try:
+                cookies.load(self.headers.get("Cookie", ""))
+                for name in ("access_token", "__Host-access_token"):
+                    if name in cookies:
+                        self.service.forget_operator_token(cookies[name].value)
+            except Exception:  # noqa: BLE001 - 畸形 cookie 不阻止旧入口退出。
+                pass
+        if native:
+            from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, request_json
+
+            def failed(_):
+                return ValueError("native logout unavailable")
+
+            try:
+                result = request_json(
+                    RequestSpec(
+                        url=self.settings.dify.base_url.rstrip("/") + "/console/api/logout",
+                        method="POST",
+                        headers={**session.dify_headers(), "Content-Type": "application/json"},
+                        body=b"{}",
+                        timeout=self.settings.dify.timeout,
+                        max_read_bytes=65536,
+                        follow_redirects=False,
+                    ),
+                    mapping=ErrorMapping(
+                        auth_rejected=failed,
+                        http_error=failed,
+                        unavailable=failed,
+                        invalid_body=failed,
+                        invalid_envelope=failed,
+                    ),
+                )
+                if not isinstance(result, dict) or result.get("result") != "success":
+                    raise ValueError("native logout unconfirmed")
+            except ValueError:
+                self._json(502, {"result": "error", "message": "AI-Ops会话已退出，Dify退出未确认，请重试"})
+                return
+        # 无论上游是否可达，本地绑定都已撤销；成功后清理与登录同名的cookie。
         self.send_response(200)
         for name in CONSOLE_COOKIE_PREFIXED_NAMES:
             self.send_header("Set-Cookie", f"{name}=; Path=/; Secure; Max-Age=0")
-        body = b'{"ok": true}'
+        body = b'{"result": "success"}' if native else b'{"ok": true}'
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

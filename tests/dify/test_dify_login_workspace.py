@@ -534,3 +534,47 @@ def test_logout_then_same_second_login_does_not_reauthorize_old_session(tmp_path
     new, _ = service.login(username="zhang", password="pw", random_str="r", code="c")
     assert service.operator_token(old.access_token) is None
     assert service.operator_token(new.access_token) == {"token": "t", "user_id": "u-1", "tenant_id": TENANT}
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_active_login_binding_expires_without_changing_mapping(tmp_path, monkeypatch, retained):
+    import time
+
+    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied, mint_console_session
+
+    clock = [time.time()]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    _patch_company(monkeypatch, user_type="5")
+    service = _service(tmp_path, _Directory(WORKSPACE), _Inner())
+    service.retain_operator_token = retained
+    session, _ = service.login(username="zhang", password="pw", random_str="r", code="c")
+    mapping, binding = service.active_session(session.access_token)
+    assert mapping["company_user_id"] == "u-1"
+    assert bool(binding[1]) is retained
+    unbound = mint_console_session(
+        ACCOUNT, secret_key=service.dify.secret_key, deployment_edition="COMMUNITY", access_expire_minutes=60
+    )
+    with pytest.raises(PermissionDenied, match="请重新登录"):
+        service.active_session(unbound.access_token)
+    clock[0] += service.operator_token_seconds() + 1
+    with pytest.raises(PermissionDenied):
+        service.active_session(session.access_token)
+    assert service.operator_token(session.access_token) is None
+    assert service.store.get("u-1")["status"] == "active"
+
+
+def test_mapping_tenant_change_invalidates_bound_session(tmp_path, monkeypatch):
+    import sqlite3
+
+    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+
+    _patch_company(monkeypatch, user_type="5")
+    service = _service(tmp_path, _Directory(WORKSPACE), _Inner())
+    service.retain_operator_token = True
+    session, _ = service.login(username="zhang", password="pw", random_str="r", code="c")
+    with sqlite3.connect(service.store.path) as conn:
+        conn.execute("UPDATE dify_login_mappings SET tenant_id='other'")
+    with pytest.raises(PermissionDenied) as exc:
+        service.active_session(session.access_token)
+    assert exc.value.code == "SESSION_LOGIN_REQUIRED"
+    assert service.operator_token(session.access_token) is None

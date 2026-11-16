@@ -207,3 +207,9 @@ def test_the_closure_lives_on_the_shared_layer_not_the_tls_layer() -> None:
     """
     tls = (ROOT / "ops" / "dify-console-bridge" / "dify-console-TLS.conf").read_text(encoding="utf-8")
     assert "location = /console/api/login" not in tls, "收口写到了 TLS 层 —— 明文入口会绕过它"
+
+
+def test_native_logout_is_routed_to_login_binding_revocation():
+    conf = PROXY_CONF.read_text()
+    block = conf.split("location = /console/api/logout {", 1)[1].split("}", 1)[0]
+    assert "proxy_pass http://127.0.0.1:10119;" in block
