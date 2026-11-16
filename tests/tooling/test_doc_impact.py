@@ -106,3 +106,5 @@ def test_frontmatter_delimiters_and_recursive_patterns(repository):
     assert result["affected"] == [
         {"document": "llmdoc/area.mdx", "changed_sources": ["src/nested/new.py", "src/old.py"]}
     ]
+    assert module.path_matches("src/old.py", "src/**/*.py")
+    assert not module.path_matches("src/nested/new.py", "src/*.py")

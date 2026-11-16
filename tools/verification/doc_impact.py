@@ -3,16 +3,33 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import subprocess
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import yaml
 
 
 def git(root: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(root), *args], text=True)
+
+
+def path_matches(path: str, pattern: str) -> bool:
+    """目录前缀及逐段glob；**匹配零层或多层，兼容项目Python 3.11下限。"""
+    pattern = pattern.split("#", 1)[0].rstrip("/")
+    if path.startswith(pattern + "/"):
+        return True
+
+    def match(parts, rules):
+        if not rules:
+            return not parts
+        if rules[0] == "**":
+            return match(parts, rules[1:]) or bool(parts and match(parts[1:], rules))
+        return bool(parts and fnmatch.fnmatchcase(parts[0], rules[0]) and match(parts[1:], rules[1:]))
+
+    return match(path.split("/"), pattern.split("/"))
 
 
 def report(root: Path, base: str) -> dict:
@@ -38,8 +55,7 @@ def report(root: Path, base: str) -> dict:
             path
             for path in changed
             for pattern in patterns
-            if PurePosixPath(path).full_match(pattern.split("#", 1)[0].rstrip("/"))
-            or path.startswith(pattern.split("#", 1)[0].rstrip("/") + "/")
+            if path_matches(path, pattern)
         }
         if matches:
             affected.append({"document": str(doc.relative_to(root)), "changed_sources": sorted(matches)})
