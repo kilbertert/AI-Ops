@@ -20,7 +20,8 @@ python3 - "$work" "$2" <<'PY'
 import hashlib,json,pathlib,shutil,sys
 root=pathlib.Path(sys.argv[1]);source=pathlib.Path(sys.argv[2])
 node=json.loads((root/'deploy/m2-live-03/images.lock.json').read_text())['node']
-assert hashlib.sha256(source.read_bytes()).hexdigest()==node['sha256'], 'node artifact mismatch'
+if hashlib.sha256(source.read_bytes()).hexdigest()!=node['sha256']:
+    raise SystemExit('node artifact mismatch')
 (root/'node').mkdir()
 shutil.copyfile(source,root/'node'/node['artifact'])
 PY
