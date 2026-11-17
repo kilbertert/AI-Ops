@@ -298,6 +298,93 @@ def test_existing_backup_mount_is_rejected_before_cold_writes(host, monkeypatch)
     assert not any(c[0] == "systemd-run" for c in host[4])
 
 
+@pytest.mark.parametrize("failure", [None, "candidate", "installed"])
+def test_configuration_replacement_and_recovery(host, monkeypatch, failure):
+    apply(host)
+    inst, archive, sha, config, calls, active = host
+    old_config = config.read_bytes()
+    old_digest = install.digest(config)
+    old_release = (inst.root / "current").readlink()
+    replacement = config.with_name("new.env")
+    replacement.write_text("AIOPS_QUERY_TIMEOUT_SECONDS=8\n")
+    replacement.chmod(0o600)
+    health = inst.health
+    seen_configs = []
+
+    def inspect_health(version, **kw):
+        current = (inst.config / "production.env").read_bytes()
+        if kw.get("port"):
+            assert current == old_config
+            candidate = next(c for c in reversed(calls) if c[0] == "systemd-run")
+            path = Path(
+                next(
+                    x.split("=", 1)[1] for x in candidate if x.startswith("AIOPS_GATEWAY_SERVER_CONFIG_FILE=")
+                )
+            )
+            assert path.read_bytes() == replacement.read_bytes()
+            assert path.stat().st_mode & 0o077 == 0
+            if failure == "candidate":
+                raise RuntimeError("invalid candidate")
+        elif current != old_config:
+            seen_configs.append(current)
+            if failure == "installed":
+                raise RuntimeError("new configuration unhealthy")
+        return health(version, **kw)
+
+    monkeypatch.setattr(inst, "health", inspect_health)
+    args = (archive, sha, "/usr/bin/python3", replacement, install.digest(replacement), old_digest)
+    if failure:
+        with pytest.raises(RuntimeError):
+            inst.apply(*args)
+        assert (inst.config / "production.env").read_bytes() == old_config
+        assert (inst.root / "current").readlink() == old_release
+    else:
+        assert inst.apply(*args)["result"] == "installed"
+        assert seen_configs == [replacement.read_bytes()]
+        assert inst.apply(*args[:-1])["result"] == "unchanged"
+    assert inst.name in active and not (inst.root / "pending.json").exists()
+
+
+@pytest.mark.parametrize("expected", [None, "0" * 64])
+def test_configuration_change_requires_current_digest(host, expected):
+    apply(host)
+    inst, archive, sha, config, calls, _ = host
+    config.write_text("# changed\n")
+    before = len(calls)
+    with pytest.raises(ValueError):
+        inst.apply(archive, sha, "/usr/bin/python3", config, install.digest(config), expected)
+    assert not any(c[:2] == ("systemctl", "stop") for c in calls[before:])
+
+
+def test_interrupted_configuration_switch_restores_matching_pair(host, monkeypatch):
+    apply(host)
+    inst, archive, sha, config, *_ = host
+    old_digest, old_bytes = install.digest(config), config.read_bytes()
+    previous = (inst.root / "current").readlink()
+    replacement = config.with_name("replacement.env")
+    replacement.write_text("AIOPS_QUERY_TIMEOUT_SECONDS=9\n")
+    replacement.chmod(0o600)
+    health, recover = inst.health, inst.recover
+
+    def crash(version, **kw):
+        if not kw.get("port") and (inst.config / "production.env").read_bytes() != old_bytes:
+            raise RuntimeError("interrupted after configuration switch")
+        return health(version, **kw)
+
+    # 保存真实磁盘中间态；独立Hacker另用进程硬退出确认finally被跳过的路径。
+    monkeypatch.setattr(inst, "health", crash)
+    monkeypatch.setattr(inst, "recover", lambda: None)
+    with pytest.raises(RuntimeError):
+        inst.apply(archive, sha, "/usr/bin/python3", replacement, install.digest(replacement), old_digest)
+    assert inst.read_record("pending.json")["phase"] == "switching"
+    assert (inst.config / "production.env").read_bytes() == replacement.read_bytes()
+    monkeypatch.setattr(inst, "health", health)
+    monkeypatch.setattr(inst, "recover", recover)
+    assert inst.recover()["result"] == "restored"
+    assert (inst.config / "production.env").read_bytes() == old_bytes
+    assert (inst.root / "current").readlink() == previous
+
+
 @pytest.mark.parametrize("fault", ["closed_connection", "closed_listener", "permission", "wrong_version"])
 def test_readiness_tolerates_closed_connection_but_requires_listener(monkeypatch, fault):
     import threading
