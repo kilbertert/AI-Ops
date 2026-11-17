@@ -68,3 +68,7 @@ host = "singapore-server"
 description = "第二业务环境候选，仅自有模块预演"
 [targets.paths]
 candidate = "/opt/aiops-candidate"
+access = "/opt/aiops-access-124"
+access_config = "/etc/aiops-access-124"
+access_state = "/var/lib/aiops-access-124"
+access_backups = "/var/backups/aiops-access-124"
