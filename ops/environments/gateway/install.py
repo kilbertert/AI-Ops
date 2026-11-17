@@ -351,7 +351,12 @@ WantedBy=multi-user.target
         if available < 1024 * 1024:
             raise ValueError("insufficient memory headroom")
         if not old:
-            if len({p.parent.stat().st_dev for p in (self.root, self.state, self.config, self.backups)}) != 1:
+            if self.backups.exists() or self.backups.is_symlink():
+                trusted(self.backups, private=True)
+            devices = {p.parent.stat().st_dev for p in (self.root, self.state, self.config, self.backups)}
+            if self.backups.exists():
+                devices.add(self.backups.stat().st_dev)
+            if len(devices) != 1:
                 raise ValueError("cold recovery requires one filesystem")
             staged_root = Path(tempfile.mkdtemp(prefix=self.name + "-preparing-", dir=self.root.parent))
             try:

@@ -276,3 +276,23 @@ def test_wrong_config_digest_refused_before_writes(host):
     with pytest.raises(ValueError, match="configuration digest"):
         inst.apply(archive, sha, "/usr/bin/python3", config, "0" * 64)
     assert not inst.root.exists()
+
+
+def test_existing_backup_mount_is_rejected_before_cold_writes(host, monkeypatch):
+    inst = host[0]
+    inst.backups.mkdir(mode=0o700)
+    original = Path.stat
+
+    def mounted(path, *args, **kwargs):
+        result = original(path, *args, **kwargs)
+        if path == inst.backups:
+            fields = list(result)
+            fields[2] += 1
+            return os.stat_result(fields)
+        return result
+
+    monkeypatch.setattr(Path, "stat", mounted)
+    with pytest.raises(ValueError, match="one filesystem"):
+        apply(host)
+    assert not inst.root.exists()
+    assert not any(c[0] == "systemd-run" for c in host[4])
