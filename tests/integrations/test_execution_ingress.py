@@ -28,6 +28,8 @@ render, DISPATCH = module["render"], module["DISPATCH"]
         {"upstream": "https://127.0.0.1:8900/path"},
         {"upstream": "https://user@127.0.0.1:8900"},
         {"upstream": "https://8.8.8.8:443"},
+        {"upstream": "https://169.254.169.254:443"},
+        {"upstream": "https://240.0.0.1:443"},
         {"server_name": "platform;return 200"},
         {"ca_file": "/tmp/a;"},
         {"ca_file": "/tmp/../key"},

@@ -22,7 +22,9 @@ bash ops/environments/gateway/build-execution-ingress.sh <合并SHA> /private/ex
 
 开发机从合并修订归档源码生成包，拒绝覆盖已有输出；包内只有REVISION、SHA256SUMS和
 `aiops-execution-ingress.conf`。地址、来源与CA位置仅是私有部署参数，不进入仓库。
-上游不得是公网、HTTP、动态域名或带路径/凭据的URL；来源只接受1至8个不同的IPv4。
+上游只接受RFC1918或回环IPv4，拒绝链路本地/保留地址、公网、HTTP、动态域名及带路径/凭据的URL；
+回环用于平台有受管本机映射或隔离验证场景，具体端点必须对照主机清单，生成器不替代部署授权。
+来源只接受1至8个不同的IPv4。
 
 ## 安装与恢复
 

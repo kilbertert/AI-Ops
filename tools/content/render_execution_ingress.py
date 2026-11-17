@@ -14,13 +14,14 @@ def render(upstream: str, server_name: str, ca_file: str, sources: list[str]) ->
     parsed = urlsplit(upstream)
     address = ipaddress.IPv4Address(parsed.hostname or "")
     if (
-        not address.is_private
-        or address.is_unspecified
-        or address.is_multicast
+        not any(
+            address in ipaddress.IPv4Network(network)
+            for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8")
+        )
         or not parsed.port
         or upstream != f"https://{address}:{parsed.port}"
     ):
-        raise ValueError("上游须为已登记平台的固定私有IPv4 HTTPS端点")
+        raise ValueError("上游须为已登记平台的固定RFC1918或回环IPv4 HTTPS端点")
     if not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?", server_name):
         raise ValueError("需要平台证书的固定DNS名称")
     if not re.fullmatch(r"/[a-zA-Z0-9_./-]+", ca_file) or ".." in Path(ca_file).parts:
