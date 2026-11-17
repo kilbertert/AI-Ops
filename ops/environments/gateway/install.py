@@ -146,7 +146,13 @@ WantedBy=multi-user.target
                 else:
                     with opener.open(f"http://127.0.0.1:{self.port}/health", timeout=2) as response:
                         body = json.load(response)
-                owned = {p.readlink().name for p in Path(f"/proc/{pid}/fd").iterdir()}
+                owned = set()
+                for descriptor in Path(f"/proc/{pid}/fd").iterdir():
+                    try:
+                        owned.add(descriptor.readlink().name)
+                    except FileNotFoundError:
+                        # 枚举后普通连接可能关闭；仍须下面的监听socket归属匹配。
+                        continue
                 listeners = {
                     "socket:[" + row.split()[9] + "]"
                     for row in Path(f"/proc/{pid}/net/tcp").read_text().splitlines()[1:]

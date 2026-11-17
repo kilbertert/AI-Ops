@@ -73,3 +73,8 @@ uv run pytest tests/tooling/test_gateway_install.py tests/tooling/test_gateway_c
 恢复必须读回旧制品指针、health及自有状态标记，确认无候选/pending；备份和原始失败证据保留。
 同修订包重压缩可产生不同摘要来驱动安装事务，须核内部tar字节相同并注明不证明跨版本兼容。
 出现未解释失败时保留错误类别、时间和服务状态；重试成功不能抹掉原失败，也不能据此关闭稳定性缺口。
+
+就绪检查只要求主进程持有监听socket，不要求其所有连接在采样期间保持存在。
+Linux的`/proc/<pid>/fd`枚举后，HTTP连接可能关闭；忽略该单个链接的ENOENT后仍核监听归属。
+权限错误、进程消失、版本或监听不匹配继续拒绝。依据[proc_pid_fd](https://man7.org/linux/man-pages/man5/proc_pid_fd.5.html)
+与[readlink错误语义](https://man7.org/linux/man-pages/man2/readlink.2.html)，不能用增加等待时间代替该区分。
