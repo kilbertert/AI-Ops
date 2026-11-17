@@ -13,7 +13,9 @@ PYTHONPATH=<解包根>/src python3 <解包根>/tools/content/render_node_callbac
 ```
 
 包不含凭据、平台jar或数据库；固定REVISION和SHA256SUMS，节点jar必须匹配该修订的部署锁。
-固定Nginx镜像在Compose中按摘要声明，提前拉取/导入并核身份；正式启动用`--pull never`。
+固定Nginx镜像在Compose中按内容ID声明，提前拉取/导入并核身份；正式启动用`--pull never`。
+离线`docker save/load`可能只恢复内容ID而无RepoDigests，不因此重打标签或运行时拉取；
+外层tar及目标`docker image inspect sha256:<固定ID>`必须匹配，同一镜像的仓库引用缺失不代表内容变更。
 内部上游DNS在Nginx启动时解析；目标DNS更换后重新预检并定点重建出口，不能假设自动热更新。
 原始路径必须与Nginx规范化路径一致，否则400；百分号编码只允许出现在声明查询参数中，不能编码路径分隔或点段。
 
