@@ -179,3 +179,43 @@ it('confirms main-navigation departure before losing unsaved edits', async () =>
   await screen.getByRole('button', { name: '放弃并继续' }).click()
   expect(push).toHaveBeenCalledWith('/apps')
 })
+
+it('freezes saved inputs and shows blockers without offering activation', async () => {
+  const calls: { action: string; revision?: number; registry_revision?: number; id?: string }[] = []
+  const frozen = {
+    id: `plan_${'a'.repeat(32)}`,
+    state: 'blocked',
+    executable: false,
+    draft_revision: 2,
+    registry_revision: 4,
+    checks: [
+      { id: 'references', state: 'blocked' },
+      { id: 'network', state: 'pending' },
+    ],
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      return new Response(JSON.stringify(body.action === 'environment-plan' ? frozen : data), {
+        status: 200,
+      })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '配置与制品预检' }).click()
+  await expect.element(screen.getByRole('heading', { name: '开通计划' })).toBeVisible()
+  expect(calls.at(-1)).toEqual({
+    action: 'environment-plan',
+    environment: 'a',
+    revision: 2,
+    registry_revision: 4,
+  })
+  await expect.element(screen.getByText('部署与配置引用：阻塞')).toBeVisible()
+  await expect.element(screen.getByText('正式双向网络：未验证')).toBeVisible()
+  await screen.getByRole('button', { name: '重新核对计划' }).click()
+  expect(calls.at(-1)).toEqual({ action: 'environment-plan', id: frozen.id })
+  await screen.getByRole('textbox', { name: '环境名称', exact: true }).fill('尚未保存')
+  await expect.element(screen.getByRole('button', { name: '配置与制品预检' })).toBeDisabled()
+})

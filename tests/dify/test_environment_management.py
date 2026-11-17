@@ -328,3 +328,99 @@ def test_draft_api_rejects_secrets_and_expired_company_session(managed):
 
     monkeypatch.setattr(auth, "identity", expired)
     assert client.get("/v1/dify/management/environment-drafts").status_code == 403
+
+
+def test_plan_http_is_idempotent_and_refuses_stale_or_forged_inputs(managed):
+    _, path, client, _ = managed
+    row = client.get("/v1/dify/management/environment-drafts").json()["effective"][0]
+    row.update(deployment_target="host-a", credential_ref="config-a", timezone="Asia/Shanghai")
+    assert (
+        client.post(
+            "/v1/dify/management/environment-drafts",
+            json={"draft": row, "revision": 0, "registry_revision": 1},
+        ).status_code
+        == 200
+    )
+    payload = {"environment": "a", "revision": 1, "registry_revision": 1}
+    original = path.read_bytes()
+    first = client.post("/v1/dify/management/environment-plans", json=payload)
+    assert first.status_code == 200 and first.headers["cache-control"] == "no-store"
+    assert first.json()["state"] == "blocked" and first.json()["executable"] is False
+    assert (
+        client.post("/v1/dify/management/environment-plans", json=payload).json()["id"] == first.json()["id"]
+    )
+    assert (
+        client.post("/v1/dify/management/environment-plans", json={"id": first.json()["id"]}).status_code
+        == 200
+    )
+    assert (
+        client.post("/v1/dify/management/environment-plans", json={**payload, "revision": 2}).status_code
+        == 409
+    )
+    assert (
+        client.post("/v1/dify/management/environment-plans", json={**payload, "environment": "b"}).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/v1/dify/management/environment-plans",
+            json={**payload, "passed": True, "config_path": "/etc/passwd"},
+        ).status_code
+        == 403
+    )
+    assert path.read_bytes() == original
+
+
+def test_plan_bridge_forwards_only_fixed_request(monkeypatch):
+    import threading
+
+    import httpx
+
+    from aiops_diagnostics.dify import dify_console_publish as bridge
+
+    calls = []
+
+    def upstream(url, **kwargs):
+        if url.endswith("/summary"):
+            return 200, {"role": "editor"}
+        calls.append((url, kwargs.get("body")))
+        return 200, {"id": "plan_" + "a" * 32, "executable": False}
+
+    monkeypatch.setattr(bridge, "_request", upstream)
+    server = bridge.make_server(
+        bridge.BridgeSettings(
+            "127.0.0.1",
+            0,
+            "http://127.0.0.1:9",
+            "http://127.0.0.1:9",
+            "fixture",
+            "https://console.example",
+            "ws",
+        )
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    headers = {
+        "Cookie": "access_token=fixture; csrf_token=csrf",
+        "X-CSRF-Token": "csrf",
+        "Origin": "https://console.example",
+        "Referer": "https://console.example/aiops/environments",
+        "Sec-Fetch-Site": "same-origin",
+    }
+    payload = {"action": "environment-plan", "environment": "a", "revision": 1, "registry_revision": 1}
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/__aiops/manage"
+        response = httpx.post(url, json=payload, headers=headers)
+        assert response.status_code == 200
+        assert calls[-1] == (
+            "http://127.0.0.1:9/v1/dify/management/environment-plans",
+            {"environment": "a", "revision": 1, "registry_revision": 1},
+        )
+        before = len(calls)
+        assert (
+            httpx.post(url, json={**payload, "config_path": "/etc/passwd"}, headers=headers).status_code
+            == 400
+        )
+        assert len(calls) == before
+    finally:
+        server.shutdown()
+        server.server_close()
