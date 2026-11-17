@@ -175,8 +175,15 @@ def test_tls_gateway_egress_only_forwards_declared_tools(tmp_path):
                 route = route.replace("{" + name + "}", "fixture")
             assert call(base, prefix + "/cpms" + route + "?page=1", "GET") == 200
         before = len(seen)
-        for p in ("/admin", "/v1/internal/operator-runs/run_fixture/cpms/unknown", "/v1/internal/../admin"):
+        for p in ("/admin", "/v1/internal/operator-runs/run_fixture/cpms/unknown"):
             assert call(base, p) == 404
+        for p in (
+            "/v1/internal/../admin",
+            "/v1/internal/execution-node/capabilities/../capabilities",
+            "/v1/internal/operator-runs/run_fixture/cpms/chSite%2fpage",
+            "/v1/internal/operator-runs/run_fixture/cpms/chSite/page/../page",
+        ):
+            assert call(base, p, "GET") == 400
         assert call(base, path, "GET") == 405
         assert call(base, "/v1/internal/operator-runs/run_fixture/cpms/chSite/page", "HEAD") == 405
         assert call(start(True), path) == 502

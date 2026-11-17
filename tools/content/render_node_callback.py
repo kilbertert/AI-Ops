@@ -183,6 +183,10 @@ http {{
         ssl_certificate /etc/aiops-tls/server.crt;
         ssl_certificate_key /etc/aiops-tls/server.key;
         ssl_protocols TLSv1.2 TLSv1.3;
+        # location匹配的是解码/规范化URI；声明路径必须与原始路径相同。
+        set $aiops_callback_path $request_uri;
+        if ($request_uri ~ "^([^?]*)") {{ set $aiops_callback_path $1; }}
+        if ($aiops_callback_path != $uri) {{ return 400; }}
         client_max_body_size 256k;
         proxy_pass_request_headers off;
         proxy_http_version 1.1;

@@ -15,6 +15,7 @@ PYTHONPATH=<解包根>/src python3 <解包根>/tools/content/render_node_callbac
 包不含凭据、平台jar或数据库；固定REVISION和SHA256SUMS，节点jar必须匹配该修订的部署锁。
 固定Nginx镜像在Compose中按摘要声明，提前拉取/导入并核身份；正式启动用`--pull never`。
 内部上游DNS在Nginx启动时解析；目标DNS更换后重新预检并定点重建出口，不能假设自动热更新。
+原始路径必须与Nginx规范化路径一致，否则400；百分号编码只允许出现在声明查询参数中，不能编码路径分隔或点段。
 
 先核共享宿主角色/访问路径、资源及现役组件ID；两个external网络必须已存在且`Internal=true`。
 项目名、节点注册别名及Snail app ID全局唯一，不收养未知同名项目、不改现役node配置。
