@@ -181,6 +181,8 @@ def test_explicit_order_syntax_never_truncates(query, expected):
 @pytest.fixture
 def upstream():
     fixture = _Upstream()
+    # 正常预览以已绑定公司会话为前置；无映射由登录边界用例独立拒绝。
+    fixture.verdict_body = {"allowed": False, "company_user_id": "B-42", "company_tenant_id": "T-1"}
     server = _serve(fixture)
     yield fixture
     server.shutdown()
