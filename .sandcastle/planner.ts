@@ -15,6 +15,7 @@ import { withReviewSandbox } from "./review-sandbox.js";
 import { pathToFileURL } from "node:url";
 import { run, createSandbox, type RunResult } from "@ai-hero/sandcastle";
 import { claudeProfile } from "./profile.js";
+import { linkedIssues } from "./linked-issues.mjs";
 
 // Wall-clock guardrail: some model providers stall mid-stream and never yield.
 // Cap each agent run so a hung session aborts and is treated as an error the
@@ -51,9 +52,7 @@ export function parsePlanOutput(stdout: string): { number: number; title: string
 export function extractClaimedIssues(bodies: string[]): Set<number> {
   const numbers = new Set<number>();
   for (const body of bodies) {
-    for (const match of body.matchAll(/(?:closes|fixes|resolves)\s+#(\d+)/gi)) {
-      numbers.add(Number(match[1]));
-    }
+    for (const number of linkedIssues(body)) numbers.add(number);
   }
   return numbers;
 }
@@ -186,8 +185,10 @@ function openDeliveryPr(
     "",
     "- [ ] Required CI passes",
     "- [ ] Review findings are triaged",
+    "- [ ] Stage compatibility and recovery evidence checked (docs/agents/actions-delivery.md)",
+    "- [ ] Before merge, update this body with acceptance evidence; use Closes only for fully satisfied issues",
     "",
-    ...issues.map((issue) => `Closes #${issue.number}`),
+    ...issues.map((issue) => `Refs #${issue.number}`),
   ].join("\n");
   return execFileSync(
     "gh",

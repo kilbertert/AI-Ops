@@ -197,12 +197,17 @@ jobs:
             echo "refused=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Find open PRs whose body references "Closes #N" / "Fixes #N" / "Resolves #N".
+          # Refs claims the task too, without auto-closing unfinished acceptance.
           existing=$(gh pr list \
             --state open \
             --search "in:body \"#${ISSUE_NUMBER}\"" \
-            --json number,url,body \
-            --jq "[.[] | select(.body | test(\"(?i)(closes|fixes|resolves)\\\\s+#${ISSUE_NUMBER}\\\\b\"))]")
+            --json number,url,body | node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              import { linkedIssues } from "./.sandcastle/linked-issues.mjs";
+              const prs = JSON.parse(readFileSync(0, "utf8"));
+              console.log(JSON.stringify(prs.filter(pr =>
+                linkedIssues(pr.body ?? "").includes(Number(process.env.ISSUE_NUMBER)))));
+            ')
           count=$(echo "$existing" | jq 'length')
           if [ "$count" -gt 0 ]; then
             url=$(echo "$existing" | jq -r '.[0].url')

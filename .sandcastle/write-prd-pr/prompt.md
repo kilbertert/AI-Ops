@@ -17,6 +17,11 @@ gh api repos/$GH_REPO/issues/{{PRD_NUMBER}}/sub_issues
 ```
 
 Draft the title and description, framed around the whole PRD.
+Use `.github/pull_request_template.md` and the stage criteria in
+`docs/agents/actions-delivery.md`. Separate implemented, merged, deployed and accepted
+results. Classify missing results as pre-merge compatibility blockers or post-deployment acceptance.
+The delivery owner keeps or returns the PR to draft for missing pre-merge evidence.
+Recheck the body against current evidence before merge; the initial draft is not a result.
 
 # OUTPUT
 
@@ -25,7 +30,7 @@ Based on the PRD and sub-issues you just read, emit a single `<output>` block as
 <output>
 {
   "prTitle": "feat: short imperative summary of the PRD as a whole",
-  "prDescription": "## Summary\n\nWhat the PRD delivers, in 1–3 paragraphs framed around the whole effort.\n\n## Sub-issues\n\n- #N — title\n- #M — title\n\nCloses #{{PRD_NUMBER}}"
+  "prDescription": "## changes\n\nWhat the PRD delivers and what remains inactive.\n\n## Sub-issues\n\n- #N — title and evidence\n\n## tests\n\nVerified results and missing acceptance.\n\n## checklist\n\n- [ ] All PRD acceptance criteria evidenced\n- [ ] Independent deployment, compatibility and recovery checked\n\nRefs #{{PRD_NUMBER}}"
 }
 </output>
 
@@ -35,4 +40,5 @@ Rules:
 - `prDescription` must:
   - describe the PRD's overall intent (restate the goal from the PRD body),
   - list every sub-issue with its number and title,
-  - end with `Closes #{{PRD_NUMBER}}` so the PR auto-closes the PRD on merge.
+  - end with `Refs #{{PRD_NUMBER}}`; use `Closes` only after all PRD criteria have evidence
+    and merge completes it. Closed implementation sub-issues alone are insufficient.
