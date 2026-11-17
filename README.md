@@ -8,6 +8,7 @@
 需求范围与依赖见[环境开通规划](docs/architecture/2026-11-16-manual-environment-onboarding.md)，
 部分交付、启用与验收分别见[当前交付索引](docs/agents/current-delivery-state.md)。
 目标模块调用共享平台的受限HTTPS派发方法见[执行入口手册](ops/environments/gateway/execution-ingress.md)；安装不自动开通租户。
+共享服务区按环境隔离节点的配置与恢复见[独立环境节点](deploy/node-runtime/environment.md)。
 现行方法见[文档导航](docs/README.md)，不从README中的旧版本推断运行状态。
 
 ## 一、系统与入口

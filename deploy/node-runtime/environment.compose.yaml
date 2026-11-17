@@ -1,0 +1,60 @@
+# 一个独立环境执行组：只增节点与固定回调出口，共享平台/模型服务不在此项目中。
+services:
+  gateway-egress:
+    image: nginx@sha256:0dcc88822d45581e65ae329f8be769762bf628d3b2bb7d2a077d4aa5c98b30e3
+    user: ${AIOPS_NODE_UID:?}:${AIOPS_NODE_GID:?}
+    entrypoint: [nginx]
+    command: [-c, /etc/aiops/nginx.conf, -g, "daemon off;"]
+    networks: [callback, egress]
+    volumes:
+      - ${AIOPS_ENV_CONFIG:?}/callback.conf:/etc/aiops/nginx.conf:ro
+      - ${AIOPS_ENV_CONFIG:?}/tls/callback:/etc/aiops-tls:ro
+    read_only: true
+    tmpfs: ["/tmp:mode=1777,size=16m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    cpus: 0.1
+    restart: unless-stopped
+  environment-node:
+    image: ${AIOPS_NODE_JAVA_IMAGE:?}
+    user: ${AIOPS_NODE_UID:?}:${AIOPS_NODE_GID:?}
+    networks:
+      trial:
+        aliases: ["${AIOPS_ENV_NODE_HOST:?}"]
+      modellink: {}
+      callback: {}
+    environment:
+      AIOPS_NODE_NAME: ${AIOPS_ENV_NODE_NAME:?}
+      AIOPS_NODE_BUILD: ${AIOPS_NODE_BUILD:?}
+      AIOPS_NODE_GRPC_PORT: '18889'
+      AIOPS_NODE_HTTP_PORT: '8081'
+      AIOPS_NODE_HOST: ${AIOPS_ENV_NODE_HOST:?}
+      AIOPS_NODE_HOME: /home/node
+      SNAIL_SERVER_HOST: ${AIOPS_SHARED_PLATFORM_HOST:?}
+      SNAIL_SERVER_PORT: '18888'
+      AIOPS_GATEWAY_BASE_URL: https://gateway-egress:9443
+      JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/aiops-trust/truststore.p12 -Djavax.net.ssl.trustStorePassword=m2live-trust -Djavax.net.ssl.trustStoreType=PKCS12
+    env_file: ["${AIOPS_ENV_CONFIG:?}/node.env"]
+    command: [java, -Xmx320m, -Daiops.node.tools-file=/etc/aiops/operator-tools.json, -jar, /app/aiops-execution-node.jar, --aiops.node.managed-publication=true]
+    volumes:
+      - ${AIOPS_ENV_DIST:?}/node:/app:ro
+      - ${AIOPS_ENV_STATE:?}:/home/node
+      - ${AIOPS_ENV_CONFIG:?}/tls/public:/etc/aiops-trust:ro
+      - ${AIOPS_ENV_CONFIG:?}/exec-manifest.json:/etc/m2live/exec-manifest.json:ro
+      - ${AIOPS_ENV_DIST:?}/src/aiops_diagnostics/operator/operator_tools.json:/etc/aiops/operator-tools.json:ro
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 500m
+    cpus: 0.25
+    restart: unless-stopped
+networks:
+  trial:
+    external: true
+    name: ${AIOPS_SHARED_PLATFORM_NETWORK:?}
+  modellink:
+    external: true
+    name: ${AIOPS_SHARED_MODEL_NETWORK:?}
+  callback:
+    internal: true
+  egress: {}

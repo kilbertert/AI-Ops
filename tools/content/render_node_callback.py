@@ -33,6 +33,7 @@ import ipaddress
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "deploy/node-runtime/gateway-callback.conf.template"
@@ -141,6 +142,71 @@ def render_ingress(gateway: str, sources: list[str]) -> str:
     )
 
 
+def render_egress(gateway: str) -> str:
+    """共享节点的固定环境出口；只能代理声明工具，不提供CONNECT或任意URL。"""
+    origin = urlsplit(gateway)
+    host = origin.hostname or ""
+    if (
+        origin.scheme != "https"
+        or not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", host)
+        or not 1 <= (origin.port or 443) <= 65535
+        or gateway != f"https://{host}" + (f":{origin.port}" if origin.port else "")
+    ):
+        raise ValueError("环境出口须为固定HTTPS源，不含凭据、路径或query")
+    values = {
+        "AIOPS_PRODUCTION_GATEWAY": gateway,
+        "AIOPS_NODE_TOOL_NAMES": tool_names(),
+        "AIOPS_NODE_TOOL_PATHS": tool_paths(),
+    }
+    routes = PLACEHOLDER.sub(lambda m: values[m[1]], LOCATIONS.read_text())
+    routes = re.sub(
+        r"limit_except (GET|POST) \{ deny all; \}",
+        lambda m: f"if ($request_method != {m[1]}) {{ return 405; }}",
+        routes,
+    ).replace(
+        f"proxy_pass {gateway};",
+        f"proxy_pass {gateway};\n        proxy_set_header Host {origin.netloc};\n"
+        "        proxy_set_header X-AI-Ops-Node-Build $http_x_ai_ops_node_build;",
+    )
+    return f"""pid /tmp/nginx.pid;
+error_log /dev/null;
+events {{ worker_connections 128; }}
+http {{
+    access_log off;
+    client_body_temp_path /tmp/client;
+    proxy_temp_path /tmp/proxy;
+    fastcgi_temp_path /tmp/fastcgi;
+    uwsgi_temp_path /tmp/uwsgi;
+    scgi_temp_path /tmp/scgi;
+    server {{
+        listen 9443 ssl;
+        ssl_certificate /etc/aiops-tls/server.crt;
+        ssl_certificate_key /etc/aiops-tls/server.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        # location匹配的是解码/规范化URI；声明路径必须与原始路径相同。
+        set $aiops_callback_path $request_uri;
+        if ($request_uri ~ "^([^?]*)") {{ set $aiops_callback_path $1; }}
+        if ($aiops_callback_path != $uri) {{ return 400; }}
+        client_max_body_size 256k;
+        proxy_pass_request_headers off;
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        proxy_ssl_name {host};
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+        proxy_ssl_verify on;
+        proxy_ssl_verify_depth 3;
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 45s;
+        proxy_next_upstream off;
+        proxy_cache off;
+        proxy_buffering off;
+{routes}
+        location / {{ return 404; }}
+    }}
+}}
+"""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bridge", help="节点内部网桥地址，例如 172.30.41.1")
@@ -148,6 +214,7 @@ def main() -> int:
     parser.add_argument("--config", help="配置目录，例如 /etc/aiops-node-runtime")
     parser.add_argument("--gateway", required=True, help="生产网关回调地址")
     parser.add_argument("--ingress", action="store_true", help="生成既有HTTPS虚拟主机的扩展片段")
+    parser.add_argument("--environment-egress", action="store_true", help="生成共享节点固定环境回调出口")
     parser.add_argument("--allow-source", action="append", default=[], help="获准的实际连接来源IPv4")
     parser.add_argument(
         "--lua-directives",
@@ -156,7 +223,11 @@ def main() -> int:
     )
     parser.add_argument("--out", type=Path, help="写到哪里；省略则打印到 stdout")
     args = parser.parse_args()
-    if args.ingress:
+    if args.environment_egress:
+        if any((args.ingress, args.bridge, args.state, args.config, args.lua_directives, args.allow_source)):
+            parser.error("环境出口只接受gateway/out")
+        text = render_egress(args.gateway)
+    elif args.ingress:
         if any((args.bridge, args.state, args.config, args.lua_directives)):
             parser.error("扩展片段不接受独立server配置")
         text = render_ingress(args.gateway, args.allow_source)
