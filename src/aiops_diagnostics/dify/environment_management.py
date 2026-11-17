@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import Depends, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from aiops_diagnostics.gateway import environment_drafts
+from aiops_diagnostics.gateway import environment_drafts, environment_plans
 from aiops_diagnostics.gateway import environment_registry as registry
 
 from . import self_service_identity as auth
@@ -74,6 +74,32 @@ def drafts(context, session, payload=None):
         raise auth.SetupRefused("ENVIRONMENT_DRAFT_UNAVAILABLE") from exc
 
 
+def plan(context, session, payload):
+    caller, _, _ = _access(context, session)
+    try:
+        reference_file = getattr(context.settings, "environment_onboarding_file", "")
+        if set(payload) == {"id"}:
+            return environment_plans.read(
+                _path(context), _identity(context, caller), payload["id"], reference_file
+            )
+        if set(payload) != {"environment", "revision", "registry_revision"}:
+            raise environment_plans.PlanRefused("ENVIRONMENT_PLAN_INVALID")
+        return environment_plans.preflight(
+            _path(context),
+            _identity(context, caller),
+            payload["environment"],
+            payload["revision"],
+            payload["registry_revision"],
+            reference_file,
+        )
+    except environment_plans.PlanRefused as exc:
+        if str(exc).endswith("REVISION_CONFLICT"):
+            raise SetupConflict(str(exc)) from exc
+        raise auth.SetupRefused(str(exc)) from exc
+    except (registry.RegistryError, OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise auth.SetupRefused("ENVIRONMENT_PLAN_UNAVAILABLE") from exc
+
+
 def catalogue(context, session):
     _, body, allowed = _access(context, session)
     return {
@@ -132,6 +158,11 @@ def change(context, session, payload):
 
 
 def register(app, context, session_dependency):
+    @app.post("/v1/dify/management/environment-plans")
+    def check_plan(payload: dict, response: Response, session=Depends(session_dependency)):  # noqa: B008
+        response.headers["Cache-Control"] = "no-store"
+        return plan(context, session, payload)
+
     @app.get("/v1/dify/management/environment-drafts")
     def read_drafts(response: Response, session=Depends(session_dependency)):  # noqa: B008
         response.headers["Cache-Control"] = "no-store"

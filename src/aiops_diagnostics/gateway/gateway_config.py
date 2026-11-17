@@ -79,6 +79,7 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     "environment_management_registry_file": SettingSource(
         "AIOPS_GATEWAY_ENVIRONMENT_MANAGEMENT_REGISTRY_FILE"
     ),
+    "environment_onboarding_file": SettingSource("AIOPS_GATEWAY_ENVIRONMENT_ONBOARDING_FILE"),
     "company_gateway_trust_file": SettingSource("AIOPS_GATEWAY_COMPANY_GATEWAY_TRUST_FILE"),
     "consumer_order_chat_enabled": SettingSource(
         "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED", kind="bool", default=False
@@ -202,6 +203,7 @@ class GatewayServerSettings:
     business_environments_file: str = ""
     environment_registry_file: str = ""
     environment_management_registry_file: str = ""
+    environment_onboarding_file: str = ""
     company_gateway_trust_file: str = ""
     _environment_registry: object = field(default=None, init=False, repr=False)
     consumer_order_chat_enabled: bool = False

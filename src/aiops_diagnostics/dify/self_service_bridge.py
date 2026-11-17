@@ -83,6 +83,7 @@ def handle(handler, bridge):
         "environments": ("GET", "/environments"),
         "environment-update": ("POST", "/environments"),
         "environment-drafts": ("GET", "/environment-drafts"),
+        "environment-plan": ("POST", "/environment-plans"),
         "environment-draft-save": ("POST", "/environment-drafts"),
         "status": ("POST", "/status"),
         "readiness": ("POST", "/readiness"),
@@ -114,6 +115,16 @@ def handle(handler, bridge):
         raise _Rejected(400, "无效管理动作")
     if (method == "GET" or action == "retry") and payload:
         raise _Rejected(400, "无效参数")
+    if action == "environment-plan":
+        if set(payload) == {"id"}:
+            if not isinstance(payload["id"], str) or not re.fullmatch(r"plan_[0-9a-f]{32}", payload["id"]):
+                raise _Rejected(400, "无效开通计划")
+        elif set(payload) != {"environment", "revision", "registry_revision"} or (
+            not isinstance(payload["environment"], str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]|[a-z0-9]", payload["environment"])
+            or any(type(payload[k]) is not int or payload[k] < 1 for k in ("revision", "registry_revision"))
+        ):
+            raise _Rejected(400, "无效开通计划")
     if action == "environment-draft-save":
         if (
             set(payload) != {"draft", "revision", "registry_revision"}
@@ -158,7 +169,7 @@ def handle(handler, bridge):
             )
         ):
             raise _Rejected(400, "无效目录草稿字段")
-    elif "registry_revision" in payload:
+    elif action != "environment-plan" and "registry_revision" in payload:
         raise _Rejected(400, "无效参数")
     if action == "environment-update":
         required = {"environment", "revision", "name", "enabled"}
@@ -178,7 +189,7 @@ def handle(handler, bridge):
             )
         ):
             raise _Rejected(400, "无效环境管理参数")
-    elif set(payload) & {"environment", "enabled"}:
+    elif action != "environment-plan" and set(payload) & {"environment", "enabled"}:
         raise _Rejected(400, "无效参数")
     _validate_scope_and_sources(action, payload, _Rejected)
     if action in {"run-logs", "run-log"}:
