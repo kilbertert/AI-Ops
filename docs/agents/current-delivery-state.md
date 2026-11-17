@@ -17,6 +17,7 @@
 | 最小接入模块 | #1558安装；#1561 `bbb2caf5`就绪修复；#1562 `ba712a67`配置事务 | 第二环境独立实例1.14.1+ba712a67487c，仅回环，业务连接已配置 | MySQL/Redis及公司时序HTTPS连接可用；未接模型应用或激活租户 | 就绪竞态已复现修复，合并制品升级前后各100次现场检查通过；跨修订安装/配置切换/重跑通过；历史单次失败无堆栈，三功能与长期容量待验 | [业务连接回执](../validation/2026-11-17-business-connection-live.md)、[原安装回执](../validation/2026-11-17-gateway-install-live.md) |
 | 正式HTTPS工具扩展 | #1556 `981b6e09`，固定制品取#1562 | 已安装既有API域名工具扩展，仅共享宿主来源到新回环实例 | 工具传输路径已接通；原公司入口/旧Gateway保留，租户未激活 | 两共享宿主匿名/错凭据401、路径/方法/HTTP及伪造来源拒绝通过；合法run工具往返与业务问答待验 | [业务连接回执](../validation/2026-11-17-business-connection-live.md)、[入口合同验证](../validation/2026-11-17-environment-tool-ingress.md) |
 | 共享执行HTTPS派发 | #1564 `01f8af66`，固定上游/实际来源/单一路径 | 已安装既有HTTPS扩展，现役平台与节点保持 | 目标来源可到平台鉴权；未注册新节点或激活租户 | 目标六项、另一来源伪造头拒绝及真实应用鉴权层通过；原入口/四容器身份保持；独立环境节点与合法run仍待验 | [现场回执](../validation/2026-11-17-shared-execution-ingress-live.md)、[开发验证](../validation/2026-11-17-shared-execution-ingress.md)、[手册](../../ops/environments/gateway/execution-ingress.md) |
+| 第二环境独立共享节点 | #1566 `d9072f49`、#1567 `f47d1f42` | 独立两容器与systemd已部署，固定节点jar；原共享四容器保持 | 新执行组一个在线节点；目标应用与租户未开通 | 节点Java双TLS到目标拒绝、身份/网络/原资源保持通过；真实应用目标、能力授权、合法run和并发容量待验 | [现场回执](../validation/2026-11-17-shared-environment-node-live.md)、[手册](../../deploy/node-runtime/environment.md) |
 | 公司来源门 | #1532 `08d203f1` | 工件已交付 | 未配置、未启用 | 不证明双环境签发身份隔离；现规划不再以公司改码为前提 | [来源门回执](../validation/2026-11-14-z-environment-delivery-receipt.md) |
 | 旧第二环境试验 | 历史实现保留 | 旧试验运行资产已撤回 | 不恢复旧完整栈或专属业务隧道 | 公司当前健康未重新确认；历史部分成功不等于完整业务验收 | [撤回回执](../validation/2026-11-14-z95-withdrawal-and-gateway-plan.md) |
 
