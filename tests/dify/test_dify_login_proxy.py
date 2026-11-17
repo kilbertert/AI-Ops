@@ -16,13 +16,21 @@ from __future__ import annotations
 
 import http.client
 import json
+import ssl
+import subprocess
 import threading
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from aiops_diagnostics.common.private_files import write_private_text
+from aiops_diagnostics.dify import dify_console_publish as bridge
+from aiops_diagnostics.dify.console_environments import credentials
 from aiops_diagnostics.dify.dify_login_company import CompanyAuthSettings
 from aiops_diagnostics.dify.dify_login_provision import DifyConsoleSettings, account_email_for
 from aiops_diagnostics.dify.dify_login_proxy import (
@@ -41,6 +49,7 @@ from aiops_diagnostics.dify.dify_login_server import (
     make_server,
     safe_redirect_path,
 )
+from aiops_diagnostics.gateway.environment_registry import apply
 
 SECRET_KEY = "test-dify-secret-key-0123456789"
 AES_KEY = "0123456789abcdef"
@@ -1447,3 +1456,287 @@ def test_native_logout_failure_still_revokes_binding(stack, monkeypatch):
     )
     assert status == 502 and "upstream-secret" not in json.dumps(body)
     assert _check_publish(base, session) == {"allowed": False, "reason": "SESSION_LOGIN_REQUIRED"}
+
+
+# D19：同号主体跨环境隔离；真实HTTP替身，不代表生产业务验收。
+
+
+def get(base, path):
+    conn = http.client.HTTPConnection(base.removeprefix("http://"), timeout=5)
+    conn.request("GET", path)
+    response = conn.getresponse()
+    result = response.status, response.read()
+    conn.close()
+    return result
+
+
+@pytest.fixture
+def environments(tmp_path, monkeypatch):
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.setenv("SSL_CERT_FILE", str(cert))
+    monkeypatch.setattr(urllib.request, "_opener", None)
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(cert, key)
+    servers, companies, gateways, rows, login_keys, bridge_keys = [], {}, {}, [], [], []
+
+    def start(handler=None, *, secure=False, server=None):
+        server = server or ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        if secure:
+            server.socket = tls.wrap_socket(server.socket, server_side=True)
+        servers.append(server)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return f"{'https' if secure else 'http'}://127.0.0.1:{server.server_port}"
+
+    class Dify(_FakeDify):
+        accounts = {}
+
+        def do_POST(self):  # noqa: N802
+            body = self._read()
+            if self.path.endswith("/members/invite-email"):
+                email = body["emails"][0]
+                self.accounts[email] = "account-" + email.split("-")[1]
+                self._reply({"invitation_results": [{"status": "already_member", "email": email}]})
+            else:
+                self._reply({"result": "success"})
+
+        def do_GET(self):  # noqa: N802
+            if self.path.endswith("/members"):
+                self._reply(
+                    {
+                        "accounts": [
+                            {"id": account, "email": email, "role": "editor"}
+                            for email, account in self.accounts.items()
+                        ]
+                    }
+                )
+            else:
+                self._reply({"id": "ws", "role": "owner"})
+
+    dify_url = start(Dify)
+    for name in ("env-a", "env-b"):
+        company = type(
+            "Company",
+            (_FakeCompany,),
+            {
+                "calls": [],
+                "permissions": [EDIT_PERMISSION],
+                "fail_login": "",
+                "captcha_fail": "",
+                "gateway_reject": "",
+            },
+        )
+        companies[name] = company
+        company_url = start(company, secure=True)
+
+        class Gateway(_FakeDify):
+            calls = []
+
+            def do_GET(self):  # noqa: N802
+                type(self).calls.append((self.path, dict(self.headers)))
+                self._reply({"workspace_id": "ws", "environment": self.environment})
+
+            def do_POST(self):  # noqa: N802
+                type(self).calls.append((self.path, dict(self.headers)))
+                self._read()
+                self._reply({"environment": self.environment})
+
+        gateway = type("Gateway", (Gateway,), {"environment": name, "calls": []})
+        gateways[name] = gateway
+        gateway_url = start(gateway)
+        rows.append(
+            {
+                "id": name,
+                "name": name,
+                "enabled": True,
+                "gateway_url": gateway_url,
+                "cpms_base_url": company_url + "/charging-pile",
+                "company_gateway_url": company_url,
+                "config_ref": str(tmp_path / (name + ".env")),
+                "tenants": [{"id": "T-1", "name": "同号租户", "enabled": True}],
+            }
+        )
+        login_keys.append(
+            {
+                "id": name,
+                "encode_key": AES_KEY,
+                "basic_auth": "",
+                "client_type": "admin",
+                "info_client_type": "",
+                "gateway_internal_token": name * 8,
+                "operator_trial_key": name * 9,
+            }
+        )
+        bridge_keys.append(
+            {"id": name, "publish_key": name * 10, "trial_key": name * 11, "gateway_internal_token": name * 8}
+        )
+    registry = tmp_path / "registry" / "directory.json"
+    apply(registry, rows, expected_revision=0, actor="fixture", managers=[])
+    login_file, bridge_file = tmp_path / "login.json", tmp_path / "bridge.json"
+    for file, entries in ((login_file, login_keys), (bridge_file, bridge_keys)):
+        write_private_text(
+            file, json.dumps({"schema": "aiops-console-environments/1", "credentials": entries})
+        )
+    settings = LoginProxySettings(
+        listen_host="127.0.0.1",
+        listen_port=0,
+        public_origin="https://console.example",
+        data_dir=str(tmp_path / "data"),
+        company=CompanyAuthSettings(base_url=rows[0]["company_gateway_url"], encode_key=AES_KEY),
+        dify=DifyConsoleSettings(base_url=dify_url, secret_key=SECRET_KEY, environment="env-a"),
+        owner_user_id=OWNER_ACCOUNT_ID,
+        edit_permission=EDIT_PERMISSION,
+        gateway_url=rows[0]["gateway_url"],
+        gateway_internal_token="i" * 32,
+        inner_api_base_url=dify_url,
+        inner_api_key="i" * 32,
+        environment_registry_file=str(registry),
+        environment_credentials_file=str(login_file),
+        backoff_threshold=50,
+    )
+    login_server = make_server(settings)
+    login_url = start(server=login_server)
+    bridge_server = bridge.make_server(
+        bridge.BridgeSettings(
+            listen_host="127.0.0.1",
+            listen_port=0,
+            dify_base_url=dify_url,
+            gateway_base_url=rows[0]["gateway_url"],
+            publish_key="unused",
+            console_origin=settings.public_origin,
+            workspace_id="ws",
+            login_proxy_url=login_url,
+            environment_credentials_file=str(bridge_file),
+        )
+    )
+    bridge_url = start(server=bridge_server)
+    try:
+        yield locals()
+    finally:
+        for server in reversed(servers):
+            server.shutdown()
+            server.server_close()
+
+
+def login(stack, env, nonce):
+    assert get(stack["login_url"], f"/__aiops/login/captcha?randomStr={nonce}&environment={env}")[0] == 200
+    status, body, headers = _login(stack["login_url"], environment=env, randomStr=nonce)
+    assert status == 200, body
+    cookies = SimpleCookie(headers["set-cookie-all"])
+    return {
+        "Cookie": "; ".join(f"{k}={v.value}" for k, v in cookies.items()),
+        "X-CSRF-Token": cookies["__Host-csrf_token"].value,
+        "Origin": "https://console.example",
+        "Referer": "https://console.example/apps",
+        "X-Environment": "env-a",
+    }, cookies["__Host-access_token"].value
+
+
+def test_same_identity_routes_by_active_login_and_revocation(environments):
+    s = environments
+    catalogue = json.loads(get(s["login_url"], "/__aiops/login/environments")[1])
+    assert catalogue == {
+        "environments": [{"id": n, "name": n} for n in ("env-a", "env-b")],
+        "selection_required": True,
+    }
+    sessions = {n: login(s, n, "nonce" + n.replace("-", "")) for n in ("env-a", "env-b")}
+    for name, (_, token) in sessions.items():
+        verdict = _call(s["login_url"], PUBLISH_CHECK_ROUTE, {"session": token})[1]
+        assert verdict["environment"] == name and verdict["company_user_id"] == COMPANY_USER_ID
+        assert verdict["company_tenant_id"] == "T-1"
+        assert (
+            _call(
+                s["login_url"],
+                "/__aiops/internal/operator-token",
+                {"session": token},
+                headers={"Authorization": "Bearer " + name * 9},
+            )[0]
+            == 200
+        )
+    wrong = _call(
+        s["login_url"],
+        "/__aiops/internal/operator-token",
+        {"session": sessions["env-b"][1]},
+        headers={"Authorization": "Bearer " + "env-a" * 9},
+    )
+    assert wrong[0] == 403
+    for g in s["gateways"].values():
+        g.calls.clear()
+
+    def manage(name):
+        status, result, _ = _call(
+            s["bridge_url"], "/__aiops/manage", {"action": "environments"}, headers=sessions[name][0]
+        )
+        assert status == 200 and result["environment"] == name
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(manage, ["env-a", "env-b"] * 4))
+    for g in s["gateways"].values():
+        assert len(g.calls) == 4
+    a, b = [s["login_server"].RequestHandlerClass.environments.entries[n][1] for n in ("env-a", "env-b")]
+    assert a.store.get(COMPANY_USER_ID)["dify_account_id"] != b.store.get(COMPANY_USER_ID)["dify_account_id"]
+    assert a.store.path == s["tmp_path"] / "data/mappings.db"
+    assert b.store.path == s["tmp_path"] / "data/environments/env-b/mappings.db"
+    assert _call(s["login_url"], LOGOUT_ROUTE, headers=sessions["env-b"][0])[0] == 200
+    assert (
+        _call(s["bridge_url"], "/__aiops/manage", {"action": "environments"}, headers=sessions["env-b"][0])[0]
+        == 401
+    )
+    assert len(s["gateways"]["env-b"].calls) == 4
+    s["rows"][0]["enabled"] = False
+    apply(s["registry"], s["rows"], expected_revision=1, actor="fixture", managers=[])
+    assert (
+        _call(s["bridge_url"], "/__aiops/manage", {"action": "environments"}, headers=sessions["env-a"][0])[0]
+        == 401
+    )
+    assert len(s["gateways"]["env-a"].calls) == 4
+
+
+def test_captcha_cannot_change_environment_or_replay(environments):
+    s = environments
+    for suffix in ("", "&environment=unknown", "&environment=env-a&environment=env-b"):
+        assert get(s["login_url"], "/__aiops/login/captcha?randomStr=abc123" + suffix)[0] in (400, 403)
+    assert get(s["login_url"], "/__aiops/login/captcha?randomStr=abc123&environment=env-a")[0] == 200
+    assert _login(s["login_url"], environment="env-b")[0] == 403
+    assert _login(s["login_url"], environment="env-a")[0] == 403
+    assert all(not any(c.startswith("POST") for c in company.calls) for company in s["companies"].values())
+    s["rows"][0]["company_gateway_url"] = "https://changed.example"
+    apply(s["registry"], s["rows"], expected_revision=1, actor="fixture", managers=[])
+    assert get(s["login_url"], "/__aiops/login/captcha?randomStr=newnonce&environment=env-a")[0] == 403
+    s["registry"].unlink()
+    assert json.loads(get(s["login_url"], "/__aiops/login/environments")[1])["environments"] == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "[]",
+        '{"schema":1,"schema":2}',
+        '{"schema":"aiops-console-environments/1","credentials":[{"id":"../escape"}]}',
+    ],
+)
+def test_ambiguous_credentials_refused(tmp_path, raw):
+    path = write_private_text(tmp_path / "credentials.json", raw)
+    with pytest.raises(ValueError):
+        credentials(path)
