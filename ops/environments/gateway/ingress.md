@@ -39,6 +39,9 @@ bash ops/environments/gateway/build-ingress.sh <已合并SHA> /private/ingress.t
 这不是通用安装器已交付；未通过目标验证不激活目录。配置保留固定路径白名单，
 请求头只传运行Bearer、Content-Type及现有执行/工具合同头；片段不记录带订单参数的URL或上游错误正文。
 此边界依赖上述宿主日志前置条件，不承诺任意宿主解析阶段日志都被片段覆盖。
+例如TRACE在选择location前被Nginx拒绝，仍可能进入宿主原access log；任何调用均不得把
+Bearer或其他秘密放在URL。需要连畸形请求URL也不记录的环境，应另行审批虚拟主机日志策略，
+不能宣称此扩展片段完成了宿主级日志脱敏。
 新增工具后从同一工具声明重新构建片段，禁止手工加宽到任意`/v1/*`。
 
 ## 验证
