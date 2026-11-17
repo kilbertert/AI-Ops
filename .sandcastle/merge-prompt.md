@@ -27,7 +27,8 @@ branch is still `{{DELIVERY_BRANCH}}`.
 
 Do not push, open or merge a PR, close issues, or modify labels. The host
 wrapper will push `{{DELIVERY_BRANCH}}` and open one PR after you finish. The
-hosting service closes the referenced issues only when that PR is merged.
+delivery owner verifies acceptance before changing Refs to Closes; merge alone does not
+complete deployment or business acceptance.
 
 Once you have merged and verified everything, output
 `<promise>COMPLETE</promise>`. If a blocker needs a human decision, output

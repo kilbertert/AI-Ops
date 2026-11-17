@@ -15,6 +15,7 @@ import { withReviewSandbox } from "./review-sandbox.js";
 import { pathToFileURL } from "node:url";
 import { run, createSandbox, type RunResult } from "@ai-hero/sandcastle";
 import { claudeProfile } from "./profile.js";
+import { linkedIssues } from "./linked-issues.mjs";
 
 // Wall-clock guardrail: some model providers stall mid-stream and never yield.
 // Cap each agent run so a hung session aborts and is treated as an error the
@@ -51,9 +52,7 @@ export function parsePlanOutput(stdout: string): { number: number; title: string
 export function extractClaimedIssues(bodies: string[]): Set<number> {
   const numbers = new Set<number>();
   for (const body of bodies) {
-    for (const match of body.matchAll(/(?:closes|fixes|resolves)\s+#(\d+)/gi)) {
-      numbers.add(Number(match[1]));
-    }
+    for (const number of linkedIssues(body)) numbers.add(number);
   }
   return numbers;
 }
@@ -162,7 +161,7 @@ function profileConfig(includeGitHub = true) {
   return claudeProfile(PROFILE, { AFK_AGENT_GH_TOKEN: token });
 }
 
-function openDeliveryPr(
+export function openDeliveryPr(
   branch: string,
   issues: { number: number; title: string }[],
 ): string {
@@ -186,14 +185,22 @@ function openDeliveryPr(
     "",
     "- [ ] Required CI passes",
     "- [ ] Review findings are triaged",
+    "- [ ] Stage compatibility and recovery evidence checked (docs/agents/actions-delivery.md)",
+    "- [ ] Before merge, update this body with acceptance evidence; use Closes only for fully satisfied issues",
     "",
-    ...issues.map((issue) => `Closes #${issue.number}`),
+    ...issues.map((issue) => `Refs #${issue.number}`),
   ].join("\n");
-  return execFileSync(
+  const url = execFileSync(
     "gh",
     ["pr", "create", "--base", "main", "--head", branch, "--title", "chore(afk): integrate planner batch", "--body", body],
     { encoding: "utf8" },
   ).trim();
+  // Delivery owns the implementation now; keep acceptance open without rerunning it.
+  for (const issue of issues) {
+    execFileSync("gh", ["issue", "edit", String(issue.number), "--remove-label", "ready-for-agent"],
+      { stdio: "inherit" });
+  }
+  return url;
 }
 
 // --- planner loop ----------------------------------------------------------

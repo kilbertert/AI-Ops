@@ -197,12 +197,12 @@ jobs:
             echo "refused=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Find open PRs whose body references "Closes #N" / "Fixes #N" / "Resolves #N".
+          # Refs claims the task too, without auto-closing unfinished acceptance.
           existing=$(gh pr list \
             --state open \
             --search "in:body \"#${ISSUE_NUMBER}\"" \
             --json number,url,body \
-            --jq "[.[] | select(.body | test(\"(?i)(closes|fixes|resolves)\\\\s+#${ISSUE_NUMBER}\\\\b\"))]")
+            --jq "[.[] | select((.body // \"\") | test(\"(?i)\\\\b(closes|fixes|resolves|refs)\\\\s+#${ISSUE_NUMBER}\\\\b\"))]")
           count=$(echo "$existing" | jq 'length')
           if [ "$count" -gt 0 ]; then
             url=$(echo "$existing" | jq -r '.[0].url')
