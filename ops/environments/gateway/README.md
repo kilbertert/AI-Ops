@@ -5,6 +5,7 @@
 [预检手册](../../../docs/agents/environment-onboarding-preflight.md)。
 
 共享执行侧到目标环境的正式回调另见[既有HTTPS扩展入口](ingress.md)；本预演本身不开放该入口。
+目标模块向共享平台派发的反方向见[共享执行入口](execution-ingress.md)，与工具回调分别验证。
 持久独立实例的冷安装、重复执行与同schema恢复见[受管安装](install.md)，不从预演状态直接切业务流量。
 
 ## 制品
