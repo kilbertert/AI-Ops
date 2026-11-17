@@ -38,6 +38,13 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --locked --dev
 
+      - name: Install HTTPS integration prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nginx openssl
+          nginx -V
+          openssl version
+
       - name: Run static checks
         run: |
           uv run ruff check .

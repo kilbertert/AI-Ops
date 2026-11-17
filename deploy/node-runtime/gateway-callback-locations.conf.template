@@ -1,0 +1,41 @@
+    location ~ ^/v1/internal/charging-status/(execution-config|claims|completions)/run_[A-Za-z0-9_-]+$ {
+        limit_except POST { deny all; }
+        proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-AI-Ops-Exec-Config $http_x_ai_ops_exec_config;
+        proxy_set_header Content-Type $http_content_type;
+        proxy_read_timeout 45s;
+        proxy_buffering off;
+    }
+    location = /v1/internal/execution-node/capabilities {
+        limit_except POST { deny all; }
+        proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Content-Type $http_content_type;
+        proxy_read_timeout 15s;
+    }
+    location ~ "^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/(completions|tools/(${AIOPS_NODE_TOOL_NAMES})/(authorization|evidence))$" {
+        limit_except POST { deny all; }
+        client_max_body_size 256k;
+        proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-AI-Ops-Exec-Config $http_x_ai_ops_exec_config;
+        proxy_set_header X-AI-Ops-Tool-Contract $http_x_ai_ops_tool_contract;
+        proxy_set_header Content-Type $http_content_type;
+        proxy_read_timeout 45s;
+        proxy_buffering off;
+    }
+    location ~ "^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/cpms/(${AIOPS_NODE_TOOL_PATHS})$" {
+        limit_except GET { deny all; }
+        proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
+        proxy_set_header Authorization $http_authorization;
+        proxy_read_timeout 45s;
+        proxy_buffering off;
+    }
+    location ~ ^/v1/internal/consumer-tools/run_[A-Za-z0-9_-]+/chSite/page$ {
+        limit_except GET { deny all; }
+        proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
+        proxy_set_header Authorization $http_authorization;
+        proxy_read_timeout 45s;
+        proxy_buffering off;
+    }

@@ -29,12 +29,14 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE = ROOT / "deploy/node-runtime/gateway-callback.conf.template"
+LOCATIONS = TEMPLATE.with_name("gateway-callback-locations.conf.template")
 PLACEHOLDER = re.compile(r"\$\{(AIOPS_[A-Z0-9_]+)\}")
 
 
@@ -75,19 +77,78 @@ def render(bridge: str, state: str, config: str, gateway: str, lua_directives: s
         # （整行变成一个空行）。带 lua 模块的宿主把自己的两行参数传进来。
         "AIOPS_NODE_LUA_DIRECTIVES": lua_directives,
     }
-    text = TEMPLATE.read_text(encoding="utf-8")
+    text = TEMPLATE.read_text(encoding="utf-8").replace(
+        "${AIOPS_NODE_LOCATIONS}", LOCATIONS.read_text(encoding="utf-8")
+    )
     missing = {m.group(1) for m in PLACEHOLDER.finditer(text)} - set(values)
     if missing:
         raise SystemExit(f"模板里有未提供的占位符：{sorted(missing)}")
     return PLACEHOLDER.sub(lambda m: values[m.group(1)], text)
 
 
+def render_ingress(gateway: str, sources: list[str]) -> str:
+    """生成既有TLS虚拟主机的server扩展；部署授权仍由运维单独核对。"""
+    if not re.fullmatch(r"http://127\.0\.0\.1:[0-9]{1,5}", gateway):
+        raise ValueError("接入上游必须为本机固定IPv4回环端口")
+    if not 1 <= int(gateway.rsplit(":", 1)[1]) <= 65535:
+        raise ValueError("上游端口无效")
+    if not 1 <= len(sources) <= 8 or len(set(sources)) != len(sources):
+        raise ValueError("需要1至8个不重复的来源IP")
+    for source in sources:
+        if str(ipaddress.IPv4Address(source)) != source:
+            raise ValueError("来源必须为规范IPv4地址，不接受网段或转发头")
+    allowed = "|".join(source.replace(".", "[.]") for source in sources)
+    values = {
+        "AIOPS_PRODUCTION_GATEWAY": gateway,
+        "AIOPS_NODE_TOOL_NAMES": tool_names(),
+        "AIOPS_NODE_TOOL_PATHS": tool_paths(),
+    }
+    node = PLACEHOLDER.sub(lambda m: values[m.group(1)], LOCATIONS.read_text())
+    node = re.sub(
+        r"limit_except (GET|POST) \{ deny all; \}",
+        lambda m: f"if ($request_method != {m[1]}) {{ return 405; }}",
+        node,
+    )
+    consumer = (
+        (ROOT / "ops/nginx/dify-consumer-callback.conf")
+        .read_text()
+        .replace("http://172.18.0.1:8788", gateway)
+        .replace(
+            "proxy_set_header Authorization $http_authorization;",
+            "proxy_set_header Authorization $http_authorization;\n"
+            "    proxy_set_header Content-Type $http_content_type;",
+        )
+    )
+    # 旧订单状态DSL仍用独立回调，复用同一POST代理合同，避免新入口遮蔽它。
+    legacy = consumer[consumer.index("location = /v1/internal/consumer-data/agent {") :]
+    consumer += legacy.replace("/v1/internal/consumer-data/agent", "/v1/internal/charging-status/dify-read")
+    guard = (
+        '    if ($https != "on") { return 403; }\n'
+        f'    if ($realip_remote_addr !~ "^({allowed})$") {{ return 403; }}\n'
+    )
+    # 子location有自己的rewrite指令时不继承父层if，故每个允许路径独立校验。
+    routes = re.sub(r"(^\s*location [^\n]+\{\n)", lambda m: m[1] + guard, node + consumer, flags=re.M)
+    return (
+        "# AI-Ops工具入口；只安装于已批准的TLS虚拟主机，不修改公司应用。\n"
+        "location ^~ /v1/internal/ {\n"
+        "    access_log off;\n    error_log /dev/null;\n"
+        "    client_max_body_size 256k;\n    proxy_pass_request_headers off;\n"
+        "    proxy_next_upstream off;\n    proxy_cache off;\n"
+        "    proxy_buffering off;\n    proxy_connect_timeout 5s;\n"
+        "    proxy_send_timeout 60s;\n    proxy_read_timeout 60s;\n"
+        + routes
+        + "\n    location ~ ^/v1/internal/ { return 404; }\n}\n"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bridge", required=True, help="节点内部网桥地址，例如 172.30.41.1")
-    parser.add_argument("--state", required=True, help="状态目录，例如 /var/lib/aiops-node-runtime")
-    parser.add_argument("--config", required=True, help="配置目录，例如 /etc/aiops-node-runtime")
+    parser.add_argument("--bridge", help="节点内部网桥地址，例如 172.30.41.1")
+    parser.add_argument("--state", help="状态目录，例如 /var/lib/aiops-node-runtime")
+    parser.add_argument("--config", help="配置目录，例如 /etc/aiops-node-runtime")
     parser.add_argument("--gateway", required=True, help="生产网关回调地址")
+    parser.add_argument("--ingress", action="store_true", help="生成既有HTTPS虚拟主机的扩展片段")
+    parser.add_argument("--allow-source", action="append", default=[], help="获准的实际连接来源IPv4")
     parser.add_argument(
         "--lua-directives",
         default="",
@@ -95,7 +156,14 @@ def main() -> int:
     )
     parser.add_argument("--out", type=Path, help="写到哪里；省略则打印到 stdout")
     args = parser.parse_args()
-    text = render(args.bridge, args.state, args.config, args.gateway, args.lua_directives)
+    if args.ingress:
+        if any((args.bridge, args.state, args.config, args.lua_directives)):
+            parser.error("扩展片段不接受独立server配置")
+        text = render_ingress(args.gateway, args.allow_source)
+    else:
+        if not all((args.bridge, args.state, args.config)) or args.allow_source:
+            parser.error("独立server需要bridge/state/config且不接受allow-source")
+        text = render(args.bridge, args.state, args.config, args.gateway, args.lua_directives)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
         print(f"已写入 {args.out}")

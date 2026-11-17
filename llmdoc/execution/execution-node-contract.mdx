@@ -17,6 +17,7 @@ code:
     - services/execution-node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java
     - services/model-proxy/model_proxy.py
     - deploy/node-runtime/gateway-callback.conf.template
+    - deploy/node-runtime/gateway-callback-locations.conf.template
     - deploy/node-runtime/README.md
     - deploy/node-runtime/compose.yaml
     - deploy/node-runtime/source_digest.py
@@ -39,7 +40,7 @@ code:
 
 ## 回调白名单在宿主机 nginx，不在节点
 
-`deploy/node-runtime/gateway-callback.conf.template`：内网 bridge `:8788` TLS-only 独立 nginx，location 是精确正则——`/v1/internal/operator-runs/run_*/{completions,tools/(${AIOPS_NODE_TOOL_NAMES})/(authorization|evidence)}`、`cpms/(${AIOPS_NODE_TOOL_PATHS})`、capabilities、charging-status、consumer chSite/page。
+`deploy/node-runtime/gateway-callback.conf.template`：内网 bridge `:8788` TLS-only 独立 nginx；location 正文在同目录`gateway-callback-locations.conf.template`，与既有HTTPS扩展入口共享。精确正则包括`/v1/internal/operator-runs/run_*/{completions,tools/(${AIOPS_NODE_TOOL_NAMES})/(authorization|evidence)}`、`cpms/(${AIOPS_NODE_TOOL_PATHS})`、capabilities、charging-status、consumer chSite/page。
 
 - 由 `tools/content/render_node_callback.py` 从工具声明渲染——**新工具必须重渲染回调，否则在 nginx 层 404**（死在代理层，不是业务拒绝）。
 - 带 Lua 的宿主要传 `--lua-directives` 保住 `lua_package_*`；裸 envsubst 会擦掉 auth 头变量，禁用。
