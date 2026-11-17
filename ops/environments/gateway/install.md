@@ -1,0 +1,61 @@
+# 最小接入模块受管安装
+
+适用P3；[QA D12–D14](../../../docs/acceptance/environment-directory-qa-plan.md)与
+[ADR0272](../../../docs/adr/0272-managed-gateway-install.md)定义边界。只安装Gateway，不安装共享平台。
+`installed`只代表基础进程与版本就绪；网络、权限、索引及三功能未通过时不得激活租户。
+
+## 前置与制品
+
+目标须在私有主机清单登记并通过`dev-host`断言；已有项目非登录账号，Linux x86_64及系统Python3.11–3.13。
+已分配独立回环端口；安装器检查占用但不负责登记端口。至少1GiB可用内存及1GiB磁盘是保守预检下限，
+不是业务容量结论。旧Gateway和公司服务继续运行，新增自有单位须在当前任务授权内。
+
+```bash
+bash ops/environments/gateway/build.sh <已合并SHA> 3.12 /private/gateway.tar.gz
+bash ops/environments/gateway/build-installer.sh <同一SHA> /private/installer.tar.gz
+```
+
+两个固定包及受控配置分别通过`dev-host cp --artifact-sha256`传输；外层与包内摘要核对后解包到root控制的私有暂存区。
+`runtime_check.py`由安装器复制为无秘密代码供服务身份读取；不要给服务账号开放含配置秘密的暂存目录。
+配置是root所有0600普通文件，不允许符号链接。应用配置值不输出；摘要、版本与环境可入私有部署账本。
+配置不得覆盖安装器确定的环境/数据根/配置根/数据库/密钥路径；首次先用无业务连接的空配置验证安装生命周期。
+有效业务配置应来自管理目录的受控投影；此安装器不自行发现凭据、创建账号或修改公司索引。
+
+## 执行与重跑
+
+```bash
+python3 <已核验安装器>/install.py install --environment <环境> --user <服务账号> --port <登记端口> \
+  --python /usr/bin/python3.12 --archive /private/gateway.tar.gz --sha256 <应用包摘要> \
+  --config /private/input.env --config-sha256 <配置摘要>
+```
+
+固定单位`aiops-access-<环境>.service`，代码`/opt/aiops-access-<环境>`，配置`/etc/aiops-access-<环境>`，
+状态`/var/lib/aiops-access-<环境>`，冷失败资料`/var/backups/aiops-access-<环境>`。
+首次拒绝任何同名既有路径/单位；不猜测或收养历史实例。同计划重跑验证现役版本后返回unchanged，不重启。
+升级只允许相同配置摘要与Python小版本、同schema、零在飞任务；不自动迁移或修改配置。
+
+候选在私有网络命名空间、新状态根、MemoryMax384MiB/CPUQuota50%限制下启动并验证。
+正式自有服务只监听回环，状态根唯一可写，启动后核health版本及主进程实际监听socket。
+不安装Nginx、不切旧入口、不激活目录；服务有长期资源上限，不把短时健康检查当负载验收。
+
+## 失败与恢复
+
+安装按环境加锁，pending账本区分准备与切换；中断后install拒绝继续，先核现场再执行：
+
+```bash
+python3 <同版已核验安装器>/install.py recover --environment <环境> --user <服务账号> --port <登记端口>
+```
+
+准备失败时原实例继续；切换失败时仅停止本安装器的自有单位，恢复旧制品并读回旧版本。
+状态不被旧快照覆盖，备份保留；schema或配置漂移、停止未确认、旧版本不健康时保留pending并明确失败。
+冷失败将自有状态/配置/代码根移到新备份目录，不删业务证据；修复原因后可重新冷安装。
+已成功安装不提供隐式卸载；退役须先观察实际流量，按独立任务授权处理。
+
+## 验证与局限
+
+```bash
+uv run pytest tests/tooling/test_gateway_install.py tests/tooling/test_gateway_candidate.py
+```
+
+本地以真实文件与SQLite、主机命令替身证明恢复边界；systemd、权限、网络namespace与真实版本读回须目标现场验证。
+预检和安装器只处理自有资产，不承担公司API修复、业务网络开通、跨schema升级、凭据轮换或高可用切换。
