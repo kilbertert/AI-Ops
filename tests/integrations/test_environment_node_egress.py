@@ -67,7 +67,7 @@ def test_tls_gateway_egress_only_forwards_declared_tools(tmp_path):
             "-subj",
             "/CN=localhost",
             "-addext",
-            "subjectAltName=DNS:localhost",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1",
             "-keyout",
             str(key),
             "-out",
@@ -102,7 +102,9 @@ def test_tls_gateway_egress_only_forwards_declared_tools(tmp_path):
             port = sock.getsockname()[1]
         folder = tmp_path / str(port)
         folder.mkdir()
-        config = render(f"https://localhost:{upstream.server_port}")
+        config = render(f"https://localhost:{upstream.server_port}").replace(
+            "proxy_pass https://localhost:", "proxy_pass https://127.0.0.1:"
+        )
         config = config.replace("listen 9443 ssl", f"listen 127.0.0.1:{port} ssl").replace(
             "/tmp/", str(folder) + "/"
         )
