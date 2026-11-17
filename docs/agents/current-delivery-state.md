@@ -19,6 +19,7 @@
 | 共享执行HTTPS派发 | #1564 `01f8af66`，固定上游/实际来源/单一路径 | 已安装既有HTTPS扩展，现役平台保持 | 目标来源可到平台鉴权；新节点见下一行，租户未激活 | 目标六项、另一来源伪造头拒绝及真实应用鉴权层通过；合法run仍待验 | [现场回执](../validation/2026-11-17-shared-execution-ingress-live.md)、[开发验证](../validation/2026-11-17-shared-execution-ingress.md)、[手册](../../ops/environments/gateway/execution-ingress.md) |
 | 第二环境独立共享节点 | #1566 `d9072f49`、#1567 `f47d1f42` | 独立两容器与systemd已部署，固定节点jar；原共享四容器保持 | 新执行组一个在线节点；目标应用与租户未开通 | 节点Java双TLS到目标拒绝、身份/网络/原资源保持通过；真实应用目标、能力授权、合法run和并发容量待验 | [现场回执](../validation/2026-11-17-shared-environment-node-live.md)、[手册](../../deploy/node-runtime/environment.md) |
 | 客服连接唯一目录 | #1569 `c4836cfb` | 控制Gateway 1.14.2已标准CD部署；目标独立Gateway未随之升级 | 运行目录模式不写旧连接副本；现役仍管理准备模式 | 隔离58项、独立44+3及CI5232/10通过；原路由/目录/六容器保持，目录投影与真实双环境业务仍未验 | [开发回执](../validation/2026-11-17-registry-consumer-connections.md)、[部署回执](../validation/2026-11-17-registry-consumer-live.md) |
+| 共享登录选择环境 | 本地候选1.15.0，待合并 | 未部署 | 多环境默认关闭；生效目录未激活 | D19登录/并发路由与拒绝、浏览器替身通过；全量失败复验/独立Hack及真实业务待完成 | [开发验证](../validation/2026-11-17-console-environment-sessions.md) |
 | 公司来源门 | #1532 `08d203f1` | 工件已交付 | 未配置、未启用 | 不证明双环境签发身份隔离；现规划不再以公司改码为前提 | [来源门回执](../validation/2026-11-14-z-environment-delivery-receipt.md) |
 | 旧第二环境试验 | 历史实现保留 | 旧试验运行资产已撤回 | 不恢复旧完整栈或专属业务隧道 | 公司当前健康未重新确认；历史部分成功不等于完整业务验收 | [撤回回执](../validation/2026-11-14-z95-withdrawal-and-gateway-plan.md) |
 
