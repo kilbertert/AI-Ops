@@ -20,7 +20,8 @@ AI-Ops入口、CPMS地址、部署目标引用、凭据引用、IANA时区和租
 引用来自受控清单，不能填私钥、密码或配置文件路径。租户登记不代替公司权限验证；未填引用或时区时需补齐才可保存。
 已有环境/租户编号保持固定，跨环境迁移不是改编号；新环境和租户默认不勾选准入。
 版本冲突保留输入并要求刷新；切换/刷新未保存内容先确认；刷新失败清空已显示目录。后端始终重新核权。
-页面没有连接预检、安装或激活按钮，这些仍由后续里程碑实现；不能将草稿保存成功当业务验收。
+页面提供“配置与制品预检”和计划重新核对；当前只验证受控文件摘要，现场预检、安装与激活仍未开放。
+不能将草稿保存或文件摘要匹配当业务验收。
 
 本地复验：在自有忽略构建目录解出固定Dify源码，`git init`建立独立Git根，安装锁定依赖，按
 `deploy/dify-36/web-patches/build-web-image.sh`顺序应用补丁并复制组件/service；不要清理他人的构建树。
@@ -34,6 +35,38 @@ pnpm --dir web exec vp test --project unit --run app/components/main-nav/__tests
 
 Web必须完整webpack构建；合并后同修订镜像配套发布，独立URL200只证明路由存在。正常公司会话、
 目录授权及保存/刷新须另验；Gateway与管理桥已部署不意味着生产目录已配置。
+
+## 计划预检与读取（P4第一片）
+
+从已保存、无未提交修改的草稿点击“配置与制品预检”。同源动作 `environment-plan` 使用
+`{environment, revision, registry_revision}`，回读使用 `{id}`，均POST到 `/v1/dify/management/environment-plans`。
+当前授权、草稿和目录版本须匹配；相同输入15分钟内复用同一计划。刷新后可重新预检取得同编号；
+草稿/目录/受控文件变化或15分钟到期，旧计划显示expired。后续执行须重核，不能拿旧编号代替版本校验。
+
+`AIOPS_GATEWAY_ENVIRONMENT_ONBOARDING_FILE` 指向本服务身份拥有的0600受控引用JSON，不含另一份业务地址：
+
+```json
+{
+  "schema": "aiops-environment-onboarding/1",
+  "targets": [{
+    "id": "host-a", "host": "managed-host", "user": "aiops", "port": 18951, "python": "3.12",
+    "application": {"path": "/private/app.tar.gz", "sha256": "<64位摘要>", "revision": "<40位合并修订>"},
+    "installer": {"path": "/private/installer.tar.gz", "sha256": "<64位摘要>", "revision": "<同一合并修订>"},
+    "configurations": [{"id": "config-a", "path": "/private/input.env", "sha256": "<64位摘要>"}]
+  }]
+}
+```
+
+目标id匹配草稿deployment_target，配置id匹配credential_ref。上述占位值须替换，文件不允许符号链接，
+共享服务凭据不得放宽权限来满足读取。制品用原P3构建命令从合并修订生成；本片只核摘要与声明修订一致，
+**不验证tar内部制品身份、Git合并来源、主机指纹或配置里的业务地址**，这些继续作为执行前置。
+回执 `scope=local-file-integrity-only/executable=false`，所有计划仍blocked；缺引用或错摘要给分项阻塞。
+配置投影、主机、容量、双向网络和业务项均pending，不发SSH、HTTP探测或安装命令，不启用目录。
+秘密正文、主机/路径不入计划，公开字段仅编号/版本/摘要与分项；原始配置继续在受控位置。
+
+恢复CLI `aiops-admin environment-plan --registry <私有目录> --file <私有请求> --references <引用清单>`
+使用同一实现；文件字段为identity三元组加上述POST字段。CLI本地操作者仍须显式目录授权，
+不能借CLI生成被浏览器接受的身份；不安装、不激活。计划持久化到既有草稿SQLite，不更改正式业务库schema。
 
 ## 草稿准备入口（P1基础片）
 

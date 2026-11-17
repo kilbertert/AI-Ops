@@ -42,6 +42,28 @@ type Catalogue = {
   effective: Effective[]
   drafts: SavedDraft[]
 }
+type Plan = {
+  id: string
+  state: 'blocked' | 'expired'
+  executable: false
+  draft_revision: number
+  registry_revision: number
+  config_sha256?: string
+  source_revision?: string
+  checks: { id: string; state: 'passed' | 'blocked' | 'pending' }[]
+}
+const checkLabels: Record<string, string> = {
+  references: '部署与配置引用',
+  application: '应用制品摘要',
+  installer: '安装器摘要',
+  configuration: '配置文件摘要',
+  'declared-revision': '制品声明修订一致',
+  'config-projection': '配置与目录一致性',
+  'host-identity': '目标主机身份',
+  capacity: '现场容量',
+  network: '正式双向网络',
+  business: '业务能力验证',
+}
 const empty = (): Draft => ({
   id: '',
   name: '',
@@ -74,6 +96,7 @@ export default function EnvironmentManagement() {
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [plan, setPlan] = useState<Plan | null>(null)
   const [pending, setPending] = useState<(() => void) | null>(null)
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
@@ -83,6 +106,7 @@ export default function EnvironmentManagement() {
     const candidate = catalogue.drafts.find((item) => item.environment === id)
     const current = catalogue.effective.find((item) => item.id === id)
     const value = candidate?.draft ?? { ...empty(), ...current }
+    setPlan(null)
     setSelected(id)
     setDraft(value)
     setOriginal(JSON.stringify(value))
@@ -105,6 +129,7 @@ export default function EnvironmentManagement() {
       setData(catalogue)
       select(catalogue, ids.includes(preferred) ? preferred : ids[0] || '')
     } catch (e) {
+      setPlan(null)
       setData(null)
       setDraft(null)
       setOriginal('')
@@ -169,11 +194,35 @@ export default function EnvironmentManagement() {
         ...data,
         drafts: [...data.drafts.filter((item) => item.environment !== draft.id), row],
       })
+      setPlan(null)
       setSelected(draft.id)
       setOriginal(JSON.stringify(draft))
       setNotice('草稿已保存，当前生效设置未改变。')
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存未完成，请刷新核对')
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function preflight(readback = false) {
+    if (!data || !saved || busy || dirty) return
+    setBusy(true)
+    setError('')
+    try {
+      const result: Plan = await manage(
+        'environment-plan',
+        readback && plan
+          ? { id: plan.id }
+          : {
+              environment: selected,
+              revision: saved.revision,
+              registry_revision: data.registry_revision,
+            },
+      )
+      setPlan(result)
+    } catch (e) {
+      setPlan(null)
+      setError(e instanceof Error ? e.message : '计划核对未完成')
     } finally {
       setBusy(false)
     }
@@ -287,7 +336,12 @@ export default function EnvironmentManagement() {
                 : '此环境尚未生效'}
             </p>
             <p className="mb-4 system-sm-regular text-text-secondary">
-              配置草稿：{saved ? `V${saved.revision}` : '未保存'} · 未预检
+              配置草稿：{saved ? `V${saved.revision}` : '未保存'} ·{' '}
+              {plan && !dirty
+                ? plan.state === 'expired'
+                  ? '计划已过期'
+                  : '已有预检计划'
+                : '未预检'}
               {dirty ? ' · 有未保存修改' : ''}
             </p>
             {saved?.registry_changed && (
@@ -408,13 +462,59 @@ export default function EnvironmentManagement() {
               </section>
               <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
                 <p className="max-w-xl system-sm-regular text-text-secondary">
-                  保存只更新草稿。连接预检与自动开通尚未开放，当前服务继续使用生效设置。
+                  保存只更新草稿。预检核对受控文件与版本；现场验证、自动安装和激活尚未开放。
                 </p>
-                <Button type="submit" variant="primary">
-                  保存草稿
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={!saved || dirty || saved.registry_changed}
+                    onClick={() => void preflight()}
+                  >
+                    配置与制品预检
+                  </Button>
+                  <Button type="submit" variant="primary">
+                    保存草稿
+                  </Button>
+                </div>
               </footer>
             </fieldset>
+            {plan && !dirty && (
+              <section aria-label="开通计划" className="mt-5 space-y-2 border-t pt-4">
+                <h2 className="system-md-semibold">开通计划</h2>
+                <p className="system-xs-regular break-all">
+                  {plan.id} · 草稿V{plan.draft_revision} / 目录R{plan.registry_revision}
+                </p>
+                <p role="status">
+                  {plan.state === 'expired'
+                    ? '输入或有效期已变化，请重新预检。'
+                    : '计划已冻结；仍缺现场验证，不能执行安装或激活。'}
+                </p>
+                <ul className="space-y-1">
+                  {plan.checks.map((check) => (
+                    <li key={check.id}>
+                      {checkLabels[check.id] || check.id}：
+                      {check.state === 'passed'
+                        ? '通过'
+                        : check.state === 'blocked'
+                          ? '阻塞'
+                          : '未验证'}
+                    </li>
+                  ))}
+                </ul>
+                {plan.config_sha256 && (
+                  <p className="system-xs-regular break-all">配置摘要：{plan.config_sha256}</p>
+                )}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void preflight(true)}
+                >
+                  重新核对计划
+                </Button>
+              </section>
+            )}
           </form>
         </div>
       )}

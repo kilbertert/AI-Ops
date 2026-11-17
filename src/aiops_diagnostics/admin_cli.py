@@ -129,6 +129,49 @@ def environment_draft_command(
     typer.echo(json.dumps(result))
 
 
+@admin_app.command("environment-plan")
+def environment_plan_command(
+    registry: Annotated[Path, typer.Option("--registry", help="私有生效目录")],
+    file: Annotated[Path, typer.Option("--file", help="含identity和计划请求的私有JSON")],
+    references: Annotated[Path | None, typer.Option("--references", help="受控部署引用清单")] = None,
+) -> None:
+    """与管理API共用配置摘要预检或计划回读；不安装、不激活。"""
+    from aiops_diagnostics.common.private_files import validate_private_file
+    from aiops_diagnostics.gateway import environment_plans, environment_registry
+
+    try:
+        validate_private_file(file)
+        if file.stat().st_size > 65536:
+            raise ValueError("input too large")
+        data = json.loads(file.read_text(), object_pairs_hook=environment_registry._unique_object)
+        if not isinstance(data, dict):
+            raise ValueError("invalid input")
+        identity = data.pop("identity", None)
+        if (
+            not isinstance(identity, list)
+            or len(identity) != 3
+            or any(not isinstance(v, str) for v in identity)
+        ):
+            raise ValueError("invalid identity")
+        if set(data) == {"id"}:
+            result = environment_plans.read(registry, tuple(identity), data["id"], references)
+        elif set(data) == {"environment", "revision", "registry_revision"}:
+            result = environment_plans.preflight(
+                registry,
+                tuple(identity),
+                data["environment"],
+                data["revision"],
+                data["registry_revision"],
+                references,
+            )
+        else:
+            raise ValueError("invalid input")
+    except (OSError, ValueError, RuntimeError) as exc:
+        typer.echo(json.dumps({"error": "ENVIRONMENT_PLAN_REFUSED"}))
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
 @admin_app.command("schema")
 def schema_command(
     action: Annotated[str, typer.Argument(help="check（只读）或 migrate（原子升级）")],
