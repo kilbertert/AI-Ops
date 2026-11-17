@@ -1,0 +1,17 @@
+[Unit]
+Description=AI-Ops shared execution node for environment %i
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/aiops-node-runtime/environments/%i/current
+ExecStart=/usr/bin/docker compose -p aiops-environment-%i --env-file /etc/aiops-node-runtime/environments/%i/runtime.env -f deploy/node-runtime/environment.compose.yaml up -d --pull never
+ExecStop=/usr/bin/docker compose -p aiops-environment-%i --env-file /etc/aiops-node-runtime/environments/%i/runtime.env -f deploy/node-runtime/environment.compose.yaml stop
+TimeoutStartSec=120
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

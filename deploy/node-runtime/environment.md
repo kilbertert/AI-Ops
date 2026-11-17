@@ -41,6 +41,14 @@ docker compose -p <独立项目名> --env-file <私有运行env> \
   -f <固定制品>/deploy/node-runtime/environment.compose.yaml up -d --pull never
 ```
 
+正式宿主使用包内`aiops-environment-node@.service`作为服务管理入口：制品根为
+`/opt/aiops-node-runtime/environments/<环境>/current`，运行env为
+`/etc/aiops-node-runtime/environments/<环境>/runtime.env`，状态在现有node_state的对应环境子目录。
+核env中的制品路径与current一致，安装模板后`systemctl daemon-reload`，
+以`systemctl enable --now aiops-environment-node@<环境>.service`启动；应用容器仍用项目非登录身份。
+模板只管自己的Compose项目，不依赖或重启现役完整栈；共享Docker服务退出时所有容器的影响按宿主管理。
+恢复用`systemctl stop`停止本环境单元，升级失败恢复原env与current再启动并回读，不能用手动前台进程代替。
+
 检查容器服务身份、OOM/重启、网络无宿主ports；节点不能接egress，出口不接平台/模型网络。
 等待实际能力回调、工具声明摘要及平台注册一致；再用正常公司登录的候选业务请求核唯一run、节点、
 清单matched及授权数据，核原节点/平台/存储/模型容器ID保持。未完成这些前不启用租户目录。

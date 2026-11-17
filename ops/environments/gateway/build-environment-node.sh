@@ -10,6 +10,7 @@ out=$(realpath -m "$3")
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 git archive "$revision" deploy/node-runtime/environment.compose.yaml deploy/node-runtime/environment.md \
+  deploy/node-runtime/aiops-environment-node@.service \
   deploy/node-runtime/gateway-callback-locations.conf.template \
   deploy/node-runtime/gateway-callback.conf.template deploy/m2-live-03/images.lock.json \
   tools/content/render_node_callback.py src/aiops_diagnostics/__init__.py \
