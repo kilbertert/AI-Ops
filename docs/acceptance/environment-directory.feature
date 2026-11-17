@@ -43,3 +43,13 @@ Feature: 环境目录草稿与生效隔离
       Given 制品摘要、目标Python或文件集不符合声明
       When 请求运行候选预演
       Then 在安装运行前拒绝且不触碰已有业务目录
+  Rule: 共享工具经既有HTTPS入口访问本环境
+    Scenario: 获准调用方调用已声明工具
+      Given 既有HTTPS域名加载固定制品生成的回调片段且调用来源已获准
+      When 调用方携带运行凭据访问已声明路径与方法
+      Then 请求只到本机固定Gateway且仍由Gateway校验运行权限
+      And 公司原有路径不被改写
+    Scenario: 伪造来源或扩大访问面
+      Given 请求来自未获准连接或使用明文HTTP
+      When 请求携带伪造转发头或请求未声明工具与管理路径
+      Then 请求在到达Gateway前拒绝且不转发业务身份头
