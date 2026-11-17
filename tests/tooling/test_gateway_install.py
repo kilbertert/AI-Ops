@@ -296,3 +296,58 @@ def test_existing_backup_mount_is_rejected_before_cold_writes(host, monkeypatch)
         apply(host)
     assert not inst.root.exists()
     assert not any(c[0] == "systemd-run" for c in host[4])
+
+
+@pytest.mark.parametrize("fault", ["closed_connection", "closed_listener", "permission", "wrong_version"])
+def test_readiness_tolerates_closed_connection_but_requires_listener(monkeypatch, fault):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"version":"fixture","business_mutations":"disabled"}')
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    inst = install.Installer.__new__(install.Installer)
+    inst.name, inst.port = "fixture", server.server_port
+    inst.command = lambda *args: str(os.getpid()) if "MainPID" in args else ""
+    original_iter, original_link = Path.iterdir, Path.readlink
+    descriptors = Path(f"/proc/{os.getpid()}/fd")
+    absent = descriptors / "999999"
+    observed = []
+
+    def snapshot(path):
+        if path != descriptors:
+            return original_iter(path)
+        # 真实socket在目录已枚举后关闭；其他连接消失不改变监听socket的归属。
+        transient = socket.socket()
+        vanished = descriptors / str(transient.fileno())
+        transient.close()
+        observed.append(vanished)
+        return iter([vanished, absent if fault == "closed_listener" else descriptors / str(server.fileno())])
+
+    def readlink(path):
+        if fault == "permission" and path in observed:
+            raise PermissionError("proc access refused")
+        return original_link(path)
+
+    monkeypatch.setattr(Path, "iterdir", snapshot)
+    monkeypatch.setattr(Path, "readlink", readlink)
+    try:
+        if fault == "closed_connection":
+            inst.health("fixture", wait=0)
+        else:
+            with pytest.raises(RuntimeError, match="health identity"):
+                inst.health("different" if fault == "wrong_version" else "fixture", wait=0)
+        assert observed
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
