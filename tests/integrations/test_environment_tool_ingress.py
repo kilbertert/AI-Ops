@@ -1,5 +1,6 @@
 """真实HTTPS扩展入口：限定实际连接来源、声明工具和固定本机上游。"""
 
+import http.client
 import json
 import runpy
 import shutil
@@ -89,7 +90,7 @@ def test_tls_extension_preserves_company_routes_and_restricts_tools(tmp_path):
         content = render(f"http://127.0.0.1:{server.server_port}", [source])
         config = folder / "nginx.conf"
         config.write_text(
-            f"pid {folder}/pid; error_log {folder}/error.log; events {{}} http {{ access_log off; server {{\n"
+            f"pid {folder}/pid; error_log {folder}/error.log warn; events {{}} http {{ access_log off; server {{\n"
             f"listen 127.0.0.1:{port} {'ssl' if tls else ''};\n"
             f"ssl_certificate {cert}; ssl_certificate_key {key};\n"
             "set_real_ip_from 127.0.0.1; real_ip_header X-Forwarded-For;\n"
@@ -157,9 +158,26 @@ def test_tls_extension_preserves_company_routes_and_restricts_tools(tmp_path):
         for bad in (prefix + "/cpms/unknown", prefix + "/tools/not_declared/evidence", "/v1/internal/admin"):
             assert call(base, bad) == 404
         assert call(base, path, "GET") == 405
+        assert call(base, prefix + "/cpms/chSite/page", "HEAD") == 405
+        assert call(base, "/v1/internal/consumer-knowledge/catalogue", "HEAD") == 405
         assert call(base, "/v1/assistant/questions") == 418
         assert call(base, "/upms/user/info", "GET") == 418
         assert len(seen) == before
+        conn = http.client.HTTPSConnection(
+            "localhost", int(base.rsplit(":", 1)[1]), context=ssl.create_default_context(cafile=str(cert))
+        )
+        try:
+            conn.putrequest("POST", path)
+            conn.putheader("Authorization", "Bearer duplicate-secret-marker")
+            conn.putheader("Authorization", "Bearer another-secret-marker")
+            conn.putheader("Content-Length", "0")
+            conn.endheaders()
+            assert conn.getresponse().status == 400
+        finally:
+            conn.close()
+        assert len(seen) == before
+        for log in tmp_path.rglob("*.log"):
+            assert "secret-marker" not in log.read_text()
         denied = start("192.0.2.10")
         assert call(denied, path, **{"X-Forwarded-For": "192.0.2.10", "X-Real-IP": "192.0.2.10"}) == 403
         assert call(start("127.0.0.1", tls=False), path) == 403

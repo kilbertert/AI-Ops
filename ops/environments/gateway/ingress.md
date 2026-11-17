@@ -9,6 +9,9 @@
 先只读核对已有域名、TLS证书、server的include位置、`/v1/internal/`旧路径及实际访问，
 确认没有现用路径被遮蔽。目标必须有Real-IP模块，且来源是实际连接方；前置代理场景不能
 把伪造的X-Forwarded-For当来源，也不能仅把公共代理IP加入白名单。
+核HTTP/server/default-server的错误日志级别不得为`info`或`debug`，且没有debug_connection；
+请求头解析发生在location选择前，重复Authorization等畸形头可被这些级别记录，片段无法屏蔽。
+不符合时拒绝安装，另行评审日志配置，不能未经授权关闭公司日志。目标只读检查与原始摘要留私有记录。
 
 ```bash
 bash ops/environments/gateway/build-ingress.sh <已合并SHA> /private/ingress.tar.gz \
@@ -34,7 +37,8 @@ bash ops/environments/gateway/build-ingress.sh <已合并SHA> /private/ingress.t
 5. 任一步失败恢复本次片段，语法校验后reload并复验原入口；不停止公司业务服务、不删除共享配置。
 
 这不是通用安装器已交付；未通过目标验证不激活目录。配置保留固定路径白名单，
-请求头只传运行Bearer、Content-Type及现有执行/工具合同头；不记录带订单参数的URL或上游错误正文。
+请求头只传运行Bearer、Content-Type及现有执行/工具合同头；片段不记录带订单参数的URL或上游错误正文。
+此边界依赖上述宿主日志前置条件，不承诺任意宿主解析阶段日志都被片段覆盖。
 新增工具后从同一工具声明重新构建片段，禁止手工加宽到任意`/v1/*`。
 
 ## 验证

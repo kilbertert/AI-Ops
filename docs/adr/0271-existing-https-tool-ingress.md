@@ -27,5 +27,8 @@
 [Real-IP原始地址](https://nginx.org/en/docs/http/ngx_http_realip_module.html#var_realip_remote_addr)及
 [请求头转发](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_pass_request_headers)。
 要求Nginx带Real-IP模块；前置CDN/负载均衡只显露代理IP时不得把代理整个加入来源名单，需另定接入合同。
+正式片段严格核方法；Nginx原生`limit_except GET`隐含HEAD，不能作为只允许声明GET的检查。
+宿主错误日志须在warn或更高阈值且无debug_connection；info/debug可能在路径选择前记录重复Authorization。
+片段不能改变这个解析阶段，安装前拒绝不合格宿主，不越权修改公司日志。
 
 本片生成固定合并制品，不自动修改宿主。目标模块配置、正式入口安装/回退、授权工具往返和业务验收仍须逐项完成。

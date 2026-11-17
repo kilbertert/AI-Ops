@@ -104,6 +104,11 @@ def render_ingress(gateway: str, sources: list[str]) -> str:
         "AIOPS_NODE_TOOL_PATHS": tool_paths(),
     }
     node = PLACEHOLDER.sub(lambda m: values[m.group(1)], LOCATIONS.read_text())
+    node = re.sub(
+        r"limit_except (GET|POST) \{ deny all; \}",
+        lambda m: f"if ($request_method != {m[1]}) {{ return 405; }}",
+        node,
+    )
     consumer = (
         (ROOT / "ops/nginx/dify-consumer-callback.conf")
         .read_text()
