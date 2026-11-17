@@ -508,6 +508,8 @@ class GatewayServerSettings:
             ):
                 raise ValueError("management and runtime must share the same environment registry")
         if self.environment_registry_file:
+            if self.business_environments_file:
+                raise ValueError("runtime environment registry cannot use a separate business catalogue")
             from aiops_diagnostics.gateway.environment_registry import for_settings
 
             row = for_settings(self).entry()
