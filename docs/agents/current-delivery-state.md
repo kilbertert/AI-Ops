@@ -16,7 +16,7 @@
 | 活动登录/管理目录准备 | #1551 `9089bea9` | Gateway 1.14.1与登录代理完整包已配套 | 管理目录revision1、0个生效环境、1个显式管理员；运行准入未切换 | 正常登录/管理读取、退出撤销及重登恢复通过；日志正向受应用权限阻塞，发布权限、页面保存及非管理员现场仍未验 | [部署回执](../validation/2026-11-16-z-console-session-live.md)、[共享会话复验](../validation/2026-11-17-deployable-increments.md) |
 | 最小接入模块 | #1558安装；#1561 `bbb2caf5`就绪修复；#1562 `ba712a67`配置事务 | 第二环境独立实例1.14.1+ba712a67487c，仅回环，业务连接已配置 | MySQL/Redis及公司时序HTTPS连接可用；未接模型应用或激活租户 | 就绪竞态已复现修复，合并制品升级前后各100次现场检查通过；跨修订安装/配置切换/重跑通过；历史单次失败无堆栈，三功能与长期容量待验 | [业务连接回执](../validation/2026-11-17-business-connection-live.md)、[原安装回执](../validation/2026-11-17-gateway-install-live.md) |
 | 正式HTTPS工具扩展 | #1556 `981b6e09`，固定制品取#1562 | 已安装既有API域名工具扩展，仅共享宿主来源到新回环实例 | 工具传输路径已接通；原公司入口/旧Gateway保留，租户未激活 | 两共享宿主匿名/错凭据401、路径/方法/HTTP及伪造来源拒绝通过；合法run工具往返与业务问答待验 | [业务连接回执](../validation/2026-11-17-business-connection-live.md)、[入口合同验证](../validation/2026-11-17-environment-tool-ingress.md) |
-| 共享执行HTTPS派发 | #1564候选，固定上游/实际来源/单一路径 | 未安装，现役平台与节点保持 | 不注册节点、不激活租户 | 本地双段TLS合同与规范化反例修复通过；正式入口安装、独立环境节点和合法run仍待验 | [派发回执](../validation/2026-11-17-shared-execution-ingress.md)、[手册](../../ops/environments/gateway/execution-ingress.md) |
+| 共享执行HTTPS派发 | #1564交付片，固定上游/实际来源/单一路径；合并状态查PR | 未安装，现役平台与节点保持 | 不注册节点、不激活租户 | 双段TLS/规范化反例修复、独立24项回归及候选CI5221/10通过；正式入口、独立环境节点和合法run仍待验 | [派发回执](../validation/2026-11-17-shared-execution-ingress.md)、[手册](../../ops/environments/gateway/execution-ingress.md) |
 | 公司来源门 | #1532 `08d203f1` | 工件已交付 | 未配置、未启用 | 不证明双环境签发身份隔离；现规划不再以公司改码为前提 | [来源门回执](../validation/2026-11-14-z-environment-delivery-receipt.md) |
 | 旧第二环境试验 | 历史实现保留 | 旧试验运行资产已撤回 | 不恢复旧完整栈或专属业务隧道 | 公司当前健康未重新确认；历史部分成功不等于完整业务验收 | [撤回回执](../validation/2026-11-14-z95-withdrawal-and-gateway-plan.md) |
 
