@@ -316,11 +316,12 @@ def test_configuration_replacement_and_recovery(host, monkeypatch, failure):
         if kw.get("port"):
             assert current == old_config
             candidate = next(c for c in reversed(calls) if c[0] == "systemd-run")
-            path = Path(
-                next(
-                    x.split("=", 1)[1] for x in candidate if x.startswith("AIOPS_GATEWAY_SERVER_CONFIG_FILE=")
-                )
+            binding = next(
+                x.split("=", 2)[2] for x in candidate if x.startswith("--property=BindReadOnlyPaths=")
             )
+            source, target = binding.split(":")
+            assert target == str(inst.config / "production.env")
+            path = Path(source)
             assert path.read_bytes() == replacement.read_bytes()
             assert path.stat().st_mode & 0o077 == 0
             if failure == "candidate":
@@ -383,6 +384,72 @@ def test_interrupted_configuration_switch_restores_matching_pair(host, monkeypat
     assert inst.recover()["result"] == "restored"
     assert (inst.config / "production.env").read_bytes() == old_bytes
     assert (inst.root / "current").readlink() == previous
+
+
+@pytest.mark.parametrize("moment", ["candidate", "stopped"])
+def test_intervening_configuration_change_is_not_overwritten(host, monkeypatch, moment):
+    apply(host)
+    inst, archive, sha, config, calls, _ = host
+    before = len(calls)
+    expected = install.digest(config)
+    config.write_text("# desired\n")
+    external = b"# external edit\n"
+    health, check = inst.health, inst.check_database
+
+    def health_with_edit(version, **kw):
+        result = health(version, **kw)
+        if moment == "candidate" and kw.get("port"):
+            (inst.config / "production.env").write_bytes(external)
+        return result
+
+    def check_with_edit(release):
+        if moment == "stopped" and any(c == ("systemctl", "stop", inst.name) for c in calls[before:]):
+            (inst.config / "production.env").write_bytes(external)
+        return check(release)
+
+    monkeypatch.setattr(inst, "health", health_with_edit)
+    monkeypatch.setattr(inst, "check_database", check_with_edit)
+    with pytest.raises(ValueError, match="configuration drift"):
+        inst.apply(archive, sha, "/usr/bin/python3", config, install.digest(config), expected)
+    assert (inst.config / "production.env").read_bytes() == external
+    assert (inst.root / "pending.json").exists()
+    if moment == "candidate":
+        assert ("systemctl", "stop", inst.name) not in calls[before:]
+
+
+def test_registry_requires_logical_config_path_preserved_for_candidate(tmp_path, monkeypatch):
+    from aiops_diagnostics.gateway.environment_registry import apply as registry_apply
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+
+    registry = tmp_path / "registry/registry.json"
+    config = tmp_path / "production.env"
+    snapshot = tmp_path / "candidate-config.env"
+    row = {
+        "id": "test",
+        "enabled": False,
+        "gateway_url": "https://gateway.example",
+        "cpms_base_url": "https://cpms.example",
+        "config_ref": str(config),
+        "tenants": [],
+    }
+    registry_apply(registry, [row], expected_revision=0, actor="test")
+    config.write_text(f"AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE={registry}\n")
+    config.chmod(0o600)
+    snapshot.write_bytes(config.read_bytes())
+    snapshot.chmod(0o600)
+    monkeypatch.setattr(
+        install.os,
+        "environ",
+        {
+            "AIOPS_GATEWAY_ENVIRONMENT": "test",
+            "AIOPS_DATA_HOME": str(tmp_path / "state"),
+            "AIOPS_GATEWAY_SERVER_CONFIG_FILE": str(snapshot),
+        },
+    )
+    with pytest.raises(ValueError, match="configuration does not match"):
+        GatewayServerSettings.from_env().validate()
+    monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(config))
+    GatewayServerSettings.from_env().validate()
 
 
 @pytest.mark.parametrize("fault", ["closed_connection", "closed_listener", "permission", "wrong_version"])

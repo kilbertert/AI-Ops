@@ -513,7 +513,8 @@ WantedBy=multi-user.target
                 "--property=PrivateTmp=yes",
                 "--property=PrivateNetwork=yes",
                 "--property=ReadWritePaths=" + str(trial),
-                *self.environment_args(trial, candidate_config),
+                f"--property=BindReadOnlyPaths={candidate_config}:{self.config}/production.env",
+                *self.environment_args(trial),
                 str(release / "venv/bin/aiops-gateway"),
                 "serve",
                 "--host",
@@ -525,6 +526,8 @@ WantedBy=multi-user.target
         finally:
             self.stop(trial_unit)
             shutil.rmtree(trial)
+        if old and digest(self.config / "production.env") != old["config_sha256"]:
+            raise ValueError("configuration changed during candidate validation")
         self.record("pending.json", {**desired, "previous": old, "phase": "switching"})
         try:
             if old:
@@ -534,6 +537,8 @@ WantedBy=multi-user.target
                     raise ValueError("state symlink prevents backup")
                 shutil.copytree(self.state, release / "state-backup")
                 (release / "state-backup").chmod(0o700)
+                if digest(self.config / "production.env") != old["config_sha256"]:
+                    raise ValueError("configuration changed before replacement")
             write(self.unit, self.unit_text())
             self.unit.chmod(0o644)
             self.config_snapshot(candidate_config, self.config / "production.env", desired["config_sha256"])
