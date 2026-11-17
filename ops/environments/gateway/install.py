@@ -75,7 +75,7 @@ class Installer:
     def command(self, *args):
         return probe.command(*args)
 
-    def environment_args(self, state):
+    def environment_args(self, state, config=None):
         return [
             "/usr/bin/env",
             "-i",
@@ -90,7 +90,7 @@ class Installer:
             f"AIOPS_GATEWAY_DATABASE_FILE={state}/gateway/gateway.db",
             f"AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE={state}/gateway/gateway.db",
             f"AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR={state}/keys",
-            f"AIOPS_GATEWAY_SERVER_CONFIG_FILE={self.config}/production.env",
+            f"AIOPS_GATEWAY_SERVER_CONFIG_FILE={config or self.config / 'production.env'}",
             f"AIOPS_GATEWAY_ENVIRONMENT={self.environment}",
         ]
 
@@ -233,6 +233,23 @@ WantedBy=multi-user.target
     def record(self, name, value):
         write(self.root / name, json.dumps(value) + "\n")
 
+    def config_snapshot(self, source, target, expected):
+        body = probe.regular(source).read_bytes()
+        if hashlib.sha256(body).hexdigest() != expected:
+            raise ValueError("configuration snapshot mismatch")
+        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as out:
+            temporary = Path(out.name)
+            out.write(body)
+            out.flush()
+            os.fchown(out.fileno(), self.account.pw_uid, self.account.pw_gid)
+            os.fsync(out.fileno())
+        temporary.replace(target)
+        descriptor = os.open(target.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
     def check_database(self, release):
         self.command(
             "runuser",
@@ -254,8 +271,12 @@ WantedBy=multi-user.target
         if pending["phase"] not in ("preparing", "switching"):
             raise ValueError("unknown recovery phase")
         old = pending["previous"]
-        if old and digest(self.config / "production.env") != old["config_sha256"]:
-            raise ValueError("configuration drift prevents rollback")
+        if old:
+            allowed = {old["config_sha256"]}
+            if pending["phase"] == "switching":
+                allowed.add(pending["config_sha256"])
+            if digest(self.config / "production.env") not in allowed:
+                raise ValueError("configuration drift prevents rollback")
         self.stop(self.name + "-candidate")
         if pending.get("trial"):
             if not re.fullmatch(r"trial-[a-f0-9]{32}", pending["trial"]):
@@ -290,6 +311,9 @@ WantedBy=multi-user.target
         else:
             release = self.release(old)
             if pending["phase"] == "switching":
+                if old["config_sha256"] != pending["config_sha256"]:
+                    backup = self.release(pending) / "previous-config.env"
+                    self.config_snapshot(backup, self.config / "production.env", old["config_sha256"])
                 self.check_database(release)
                 self.switch(release)
                 self.command("systemctl", "daemon-reload")
@@ -300,7 +324,7 @@ WantedBy=multi-user.target
         (self.root / "pending.json").unlink()
         return {"result": "restored", "business_acceptance": False}
 
-    def apply(self, archive, sha, python, config, config_sha):
+    def apply(self, archive, sha, python, config, config_sha, expected_config_sha=None):
         if not re.fullmatch(r"/usr/bin/python3(?:\.(?:11|12|13))?", python):
             raise ValueError("only installed system Python is supported")
         minor = self.command(
@@ -331,11 +355,15 @@ WantedBy=multi-user.target
         if old:
             if (
                 self.unit.read_text() != self.unit_text()
-                or digest(self.config / "production.env") != config_sha
+                or digest(self.config / "production.env") != old["config_sha256"]
             ):
                 raise ValueError("unit or configuration drift")
-            if old["config_sha256"] != config_sha or old["python"] != minor:
-                raise ValueError("configuration or Python change needs separate delivery")
+            if expected_config_sha is not None and expected_config_sha != old["config_sha256"]:
+                raise ValueError("stale expected configuration")
+            if old["config_sha256"] != config_sha and expected_config_sha != old["config_sha256"]:
+                raise ValueError("configuration change requires expected current digest")
+            if old["python"] != minor:
+                raise ValueError("Python change needs separate delivery")
             previous = self.release(old)
             if (self.root / "current").resolve() != previous:
                 raise ValueError("current release drift")
@@ -345,6 +373,8 @@ WantedBy=multi-user.target
                 return {"result": "unchanged", "version": old["version"], "business_acceptance": False}
             self.check_database(previous)
         else:
+            if expected_config_sha is not None:
+                raise ValueError("cold installation has no previous configuration")
             if any(p.exists() or p.is_symlink() for p in (self.root, self.state, self.config, self.unit)):
                 raise ValueError("refuse to adopt existing paths")
             if self.command("systemctl", "show", self.name, "-p", "LoadState", "--value") != "not-found":
@@ -409,6 +439,12 @@ WantedBy=multi-user.target
         shutil.copyfile(archive, staged)
         probe.manifest(staged, sha, minor)
         probe.extract(staged, release)
+        candidate_config = release / "candidate-config.env"
+        self.config_snapshot(config, candidate_config, desired["config_sha256"])
+        if old:
+            self.config_snapshot(
+                self.config / "production.env", release / "previous-config.env", old["config_sha256"]
+            )
         shutil.copyfile(Path(__file__).with_name("runtime_check.py"), release / "runtime_check.py")
         (release / "runtime_check.py").chmod(0o644)
         self.command(
@@ -448,11 +484,11 @@ WantedBy=multi-user.target
                 "-u",
                 self.user,
                 "--",
-                *self.environment_args(trial),
+                *self.environment_args(trial, candidate_config),
                 str(release / "venv/bin/python"),
                 "-I",
                 str(release / "runtime_check.py"),
-                str(self.config / "production.env"),
+                str(candidate_config),
                 str(trial),
                 self.environment,
                 "trial",
@@ -477,6 +513,7 @@ WantedBy=multi-user.target
                 "--property=PrivateTmp=yes",
                 "--property=PrivateNetwork=yes",
                 "--property=ReadWritePaths=" + str(trial),
+                f"--property=BindReadOnlyPaths={candidate_config}:{self.config}/production.env",
                 *self.environment_args(trial),
                 str(release / "venv/bin/aiops-gateway"),
                 "serve",
@@ -489,6 +526,8 @@ WantedBy=multi-user.target
         finally:
             self.stop(trial_unit)
             shutil.rmtree(trial)
+        if old and digest(self.config / "production.env") != old["config_sha256"]:
+            raise ValueError("configuration changed during candidate validation")
         self.record("pending.json", {**desired, "previous": old, "phase": "switching"})
         try:
             if old:
@@ -498,8 +537,11 @@ WantedBy=multi-user.target
                     raise ValueError("state symlink prevents backup")
                 shutil.copytree(self.state, release / "state-backup")
                 (release / "state-backup").chmod(0o700)
+                if digest(self.config / "production.env") != old["config_sha256"]:
+                    raise ValueError("configuration changed before replacement")
             write(self.unit, self.unit_text())
             self.unit.chmod(0o644)
+            self.config_snapshot(candidate_config, self.config / "production.env", desired["config_sha256"])
             self.switch(release)
             self.command("systemctl", "daemon-reload")
             self.command("systemctl", "start", self.name)
@@ -522,6 +564,7 @@ def main():
     parser.add_argument("--sha256")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--config-sha256")
+    parser.add_argument("--expected-config-sha256", help="更换配置时必须匹配现役配置摘要")
     parser.add_argument("--python", default="/usr/bin/python3")
     args = parser.parse_args()
     os.umask(0o022)  # 代码与venv可穿越；配置/状态/账本另用0600/0700。
@@ -563,7 +606,14 @@ def main():
             else:
                 if not all((args.archive, args.sha256, args.config, args.config_sha256)):
                     raise ValueError("artifact and configuration identities required")
-                result = inst.apply(args.archive, args.sha256, args.python, args.config, args.config_sha256)
+                result = inst.apply(
+                    args.archive,
+                    args.sha256,
+                    args.python,
+                    args.config,
+                    args.config_sha256,
+                    args.expected_config_sha256,
+                )
         print(json.dumps(result))
         return 0
     except (

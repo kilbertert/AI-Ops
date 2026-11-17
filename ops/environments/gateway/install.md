@@ -34,7 +34,14 @@ python3 <已核验安装器>/install.py install --environment <环境> --user <�
 固定单位`aiops-access-<环境>.service`，代码`/opt/aiops-access-<环境>`，配置`/etc/aiops-access-<环境>`，
 状态`/var/lib/aiops-access-<环境>`，冷失败资料`/var/backups/aiops-access-<环境>`。
 首次拒绝任何同名既有路径/单位；不猜测或收养历史实例。同计划重跑验证现役版本后返回unchanged，不重启。
-升级只允许相同配置摘要与Python小版本、同schema、零在飞任务；不自动迁移或修改配置。
+升级要求相同Python小版本、同schema、零在飞任务；默认仍要求相同配置摘要。
+更换配置须显式传`--expected-config-sha256 <当前已安装配置摘要>`，与当前文件及账本同时核对。
+新配置先保存为本次制品的0600快照，候选只读新快照，现役文件在候选通过前保持不变。
+候选用systemd只读绑定挂载维持正式配置路径，支持登记表config_ref校验；仅候选命名空间看到新快照。
+切换前保存旧配置；失败与recover同时恢复旧配置及制品，任何第三方配置漂移都拒绝覆盖。
+停服务前/替换前各核一次旧摘要；所有配置写入须遵守安装器同环境锁，禁止并行手改现役文件。
+新配置事务的pending只用同版安装器恢复，不能交给不支持配置事务的旧脚本。
+配置引用的外部文件须为固定版本，不可原地改写；本片冻结env正文，不递归备份任意引用。
 
 候选在私有网络命名空间、新状态根、MemoryMax384MiB/CPUQuota50%限制下启动并验证。
 正式自有服务只监听回环，状态根唯一可写，启动后核health版本及主进程实际监听socket。
@@ -62,7 +69,7 @@ uv run pytest tests/tooling/test_gateway_install.py tests/tooling/test_gateway_c
 ```
 
 本地以真实文件与SQLite、主机命令替身证明恢复边界；systemd、权限、网络namespace与真实版本读回须目标现场验证。
-预检和安装器只处理自有资产，不承担公司API修复、业务网络开通、跨schema升级、凭据轮换或高可用切换。
+预检和安装器只处理自有资产，不承担公司API修复、业务网络开通、跨schema升级、上游凭据签发/撤销或高可用切换。
 
 基础现场演练只在本轮新建、空业务配置、没有接入流量的自有实例上执行。开始前保存旧Gateway的
 `MainPID`、启动时间、health及已有容器身份快照；结束逐项比较，不将其他并行变更归因于安装器。
