@@ -137,6 +137,7 @@ def test_tls_extension_preserves_company_routes_and_restricts_tools(tmp_path):
         assert seen[-1][1]["Content-Type"] == "application/json"
         assert not {"x-third-session", "x-aiops-source-key"} & {h.lower() for h in seen[-1][1]}
         assert call(base, "/v1/internal/execution-node/capabilities") == 200
+        assert call(base, "/v1/internal/charging-status/dify-read") == 200
         prefix = "/v1/internal/operator-runs/run_probe"
         from aiops_diagnostics.operator import operator_tools
 
@@ -159,6 +160,7 @@ def test_tls_extension_preserves_company_routes_and_restricts_tools(tmp_path):
         for bad in (prefix + "/cpms/unknown", prefix + "/tools/not_declared/evidence", "/v1/internal/admin"):
             assert call(base, bad) == 404
         assert call(base, path, "GET") == 405
+        assert call(base, "/v1/internal/charging-status/dify-read", "GET") == 405
         assert call(base, prefix + "/cpms/chSite/page", "HEAD") == 405
         assert call(base, "/v1/internal/consumer-knowledge/catalogue", "HEAD") == 405
         assert call(base, "/v1/assistant/questions") == 418

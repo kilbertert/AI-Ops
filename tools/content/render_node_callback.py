@@ -119,6 +119,9 @@ def render_ingress(gateway: str, sources: list[str]) -> str:
             "    proxy_set_header Content-Type $http_content_type;",
         )
     )
+    # 旧订单状态DSL仍用独立回调，复用同一POST代理合同，避免新入口遮蔽它。
+    legacy = consumer[consumer.index("location = /v1/internal/consumer-data/agent {") :]
+    consumer += legacy.replace("/v1/internal/consumer-data/agent", "/v1/internal/charging-status/dify-read")
     guard = (
         '    if ($https != "on") { return 403; }\n'
         f'    if ($realip_remote_addr !~ "^({allowed})$") {{ return 403; }}\n'
