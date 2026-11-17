@@ -10,19 +10,19 @@
 
 | 能力/组件 | 已合并 | 已部署 | 已启用 | 已验收与缺口 | 证据 |
 |---|---|---|---|---|---|
-| 目录草稿/Gateway、管理桥 | #1548 `9c21d855` | 基础制品已配套；Gateway后续至#1551的1.14.1 | 管理目录准备已配置、0个生效环境；保存不改业务准入 | 隔离持久化/权限/CAS通过；真实租户开通未验 | [基础验证](../validation/2026-11-16-environment-directory-drafts.md)、[配套部署](../validation/2026-11-16-z-environment-tab-delivery.md)、[准备配置](../validation/2026-11-16-z-console-session-live.md) |
+| 目录草稿/Gateway、管理桥 | #1548 `9c21d855` | 基础制品已配套；控制Gateway仍为#1551的1.14.1 | 生效目录revision1、0个环境；新增第二环境草稿revision1、两个租户均未启用 | 隔离持久化/权限/CAS及现场CLI保存回读通过；原页面保存、投影/激活与真实开通未验 | [基础验证](../validation/2026-11-16-environment-directory-drafts.md)、[业务连接回执](../validation/2026-11-17-business-connection-live.md) |
 | 独立环境页/Dify Web | #1549 `d136bdb2` | 完整Web已配套；当时Gateway 1.14.0，后续至1.14.1 | 路由存在；不代表目录或租户已激活 | 独立浏览器交互和匿名拒绝通过；正常账号真实管理、预检/安装/激活及三功能业务验收未完成 | [环境页回执](../validation/2026-11-16-z-environment-tab-delivery.md) |
 | 目标登录/共享服务临时网络 | #1544 `b1f8156a` | 备用入口按回执配套 | 仅获准来源，原入口保留 | 登录身份/授权单次读与SSE通过；正式网络稳定性、双向工具往返和业务容量未闭环；临时入口复查见#1546 | [网络回执](../validation/2026-11-16-z-shared-dify-recovery-live.md) |
 | 活动登录/管理目录准备 | #1551 `9089bea9` | Gateway 1.14.1与登录代理完整包已配套 | 管理目录revision1、0个生效环境、1个显式管理员；运行准入未切换 | 正常登录/管理读取、退出撤销及重登恢复通过；日志正向受应用权限阻塞，发布权限、页面保存及非管理员现场仍未验 | [部署回执](../validation/2026-11-16-z-console-session-live.md)、[共享会话复验](../validation/2026-11-17-deployable-increments.md) |
-| 最小接入模块 | #1554 `864896f0`预演；#1558 `f88f7b8f`安装器 | 第二候选环境独立实例1.14.1+f88f7b8f1c81，仅回环、空业务配置 | 基础服务运行；未切旧入口、未激活租户 | 冷安装、重复不重启、候选失败及切换中断恢复已实测；一次普通替换失败未定位，重试成功；跨修订升级、业务配置/网络/容量待验 | [安装现场回执](../validation/2026-11-17-gateway-install-live.md)、[先前预演](../validation/2026-11-16-gateway-candidate-live.md) |
-| 正式HTTPS工具扩展 | #1556 `981b6e09` | 尚未安装目标入口 | 未切流量、未启用租户 | 本地TLS/来源/路径/方法与独立复验通过；目标域名TLS可达但回调404；新实例基础安装另见上行，宿主日志前置、入口授权与真实工具往返仍待闭环 | [入口验证](../validation/2026-11-17-environment-tool-ingress.md) |
+| 最小接入模块 | #1558安装；#1561 `bbb2caf5`就绪修复；#1562 `ba712a67`配置事务 | 第二环境独立实例1.14.1+ba712a67487c，仅回环，业务连接已配置 | MySQL/Redis及公司时序HTTPS连接可用；未接模型应用或激活租户 | 就绪竞态已复现修复，合并制品升级前后各100次现场检查通过；跨修订安装/配置切换/重跑通过；历史单次失败无堆栈，三功能与长期容量待验 | [业务连接回执](../validation/2026-11-17-business-connection-live.md)、[原安装回执](../validation/2026-11-17-gateway-install-live.md) |
+| 正式HTTPS工具扩展 | #1556 `981b6e09`，固定制品取#1562 | 已安装既有API域名工具扩展，仅共享宿主来源到新回环实例 | 工具传输路径已接通；原公司入口/旧Gateway保留，租户未激活 | 两共享宿主匿名/错凭据401、路径/方法/HTTP及伪造来源拒绝通过；合法run工具往返与业务问答待验 | [业务连接回执](../validation/2026-11-17-business-connection-live.md)、[入口合同验证](../validation/2026-11-17-environment-tool-ingress.md) |
 | 公司来源门 | #1532 `08d203f1` | 工件已交付 | 未配置、未启用 | 不证明双环境签发身份隔离；现规划不再以公司改码为前提 | [来源门回执](../validation/2026-11-14-z-environment-delivery-receipt.md) |
 | 旧第二环境试验 | 历史实现保留 | 旧试验运行资产已撤回 | 不恢复旧完整栈或专属业务隧道 | 公司当前健康未重新确认；历史部分成功不等于完整业务验收 | [撤回回执](../validation/2026-11-14-z95-withdrawal-and-gateway-plan.md) |
 
 获批行为唯一正文在[环境目录Feature](../acceptance/environment-directory.feature)，
 [QA](../acceptance/environment-directory-qa-plan.md)给出场景步骤，[手册](environment-registry.md)讲操作。
 未来能力与依赖见[规划](../architecture/2026-11-16-manual-environment-onboarding.md)和主任务#1535/P0～P5原生子任务。
-页面已部署不关闭P0/P1/P2剩余条件；P3基础安装已有现场证据，失败定位、业务配置和跨修订升级未闭环；
+页面已部署不关闭P0/P1/P2剩余条件；P3基础安装、就绪修复和配置事务已有证据，完整业务配置与恢复矩阵仍待补齐；
 P4开通和P5双环境业务验收仍待完成。
 取证时按领域、组件、环境与适用主体选择回执，不选择全目录字典序最大文件。
 

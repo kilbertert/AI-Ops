@@ -80,6 +80,14 @@
 
 `cpms_charging_timeline` 另需 `AIOPS_GATEWAY_OPERATOR_TSDATA_URL` 指向公司 tsdata 查询门面（`/tdadmin/data/query` 前缀）；空值时该工具按依赖不可用拒绝，不静默退化。
 
+新环境先核该既有查询门面：从获准订单取设备与时间窗，限制字段、窗口和pageSize，
+以Gateway真实`tsdata_query`客户端核HTTP及业务code/records，不能只看200。
+历史TDengine配置提示Invalid user时，先在目标内存核现有服务配置、用户及权限元数据，不打印凭据。
+TDengine社区版版本的授权能力须按[官方规格](https://docs.tdengine.com/tdengine-sql/user-and-privilege/grant/)确认；
+没有只读授权证明时不复制公司写账号或管理员账号。现役工具已有tsdata路径时优先复用，
+通过受管安装器的配置事务设置该URL并移除无效直连凭据。方法不授权创建账号或修改公司服务。
+有限样本成功不代表所有时序表/通讯源或业务故障结论通过，数据范围仍由运行内的已授权订单限定。
+
 控制台试用额外配置：Gateway 的 `AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL` 与 `AIOPS_GATEWAY_OPERATOR_TRIAL_KEY`；登录代理的 `AIOPS_LOGIN_PROXY_OPERATOR_TRIAL_KEY` 使用同一把独立高熵密钥，至少32字符。该链只在配置后开启，登录代理最多在内存保留128个近期会话对应公司令牌，15分钟到期；到期访问时清理，重启后丢失。内部令牌交换路径仅供已认证 Gateway，经已批准 HTTPS 转发暴露，不向浏览器返回令牌。
 
 HTTPS server 可包含 [operator-token.conf.template](../../../ops/dify-login-proxy/operator-token.conf.template) 渲染件：仅替换 `AIOPS_OPERATOR_GATEWAY_SOURCE_IP` 为经私有主机记录核对的单一网关出口 IP，保留 nginx 自有变量；不要包含到明文控制台入口。按原始 TCP 对端限制来源，不采信 `X-Real-IP` / `X-Forwarded-For`；允许来源仍需代理核验独立密钥和真实会话。先 `nginx -t` 再 reload，并分别从网关、非网关来源验证。恢复删除本次精确 include、回滚配置键，不覆盖问答库。
