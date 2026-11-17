@@ -90,7 +90,8 @@ def test_tls_extension_preserves_company_routes_and_restricts_tools(tmp_path):
         content = render(f"http://127.0.0.1:{server.server_port}", [source])
         config = folder / "nginx.conf"
         config.write_text(
-            f"pid {folder}/pid; error_log {folder}/error.log warn; events {{}} http {{ access_log off; server {{\n"
+            f"pid {folder}/pid; error_log {folder}/error.log warn; events {{}} "
+            "http { access_log off; server {\n"
             f"listen 127.0.0.1:{port} {'ssl' if tls else ''};\n"
             f"ssl_certificate {cert}; ssl_certificate_key {key};\n"
             "set_real_ip_from 127.0.0.1; real_ip_header X-Forwarded-For;\n"
