@@ -173,3 +173,5 @@ Referer 只是请求上下文，用户能自行构造，不能代替授权。机
 从`aiops_diagnostics.dify_console_publish`改为`aiops_diagnostics.dify.dify_console_publish`，
 不覆盖User/Group和环境设置；代码与单元一起备份，失败一起恢复并daemon-reload。
 未升级的旧桥包与旧单元继续配套运行，Gateway CD不替它切换。
+
+共享多环境模式的凭据形状、成套启用与恢复步骤见[登录代理手册](../../docs/agents/dify-login-proxy-36-runbook.md#共享入口选择环境adr0276)。仅配置 `AIOPS_CONSOLE_BRIDGE_ENVIRONMENT_CREDENTIALS_FILE` 并不能开通环境；它还依赖同版本活动登录响应与目标真实工作区。
