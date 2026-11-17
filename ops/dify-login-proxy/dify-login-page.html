@@ -44,7 +44,7 @@
   p.sub { margin: 0 0 24px; font-size: 13px; color: #8a8f99; }
   label { display: block; margin-bottom: 6px; font-size: 13px; color: #4a4f57; }
   @media (prefers-color-scheme: dark) { label { color: #a8adb5; } }
-  input {
+  input, select {
     width: 100%; height: 38px; padding: 0 10px; margin-bottom: 16px;
     border: 1px solid #d8dbe0; border-radius: 6px; background: transparent;
     color: inherit; font-size: 14px;
@@ -78,6 +78,10 @@
   <div id="error" role="alert"></div>
 
   <form id="form" autocomplete="on">
+    <div id="environment-row" hidden>
+      <label for="environment">业务环境</label>
+      <select id="environment" name="environment" required></select>
+    </div>
     <label for="username">公司账号</label>
     <input id="username" name="username" type="text" autocomplete="username"
            autocapitalize="off" autocorrect="off" spellcheck="false" required>
@@ -105,6 +109,9 @@
   var captcha = document.getElementById("captcha");
   var button = document.getElementById("submit");
   var randomStr = "";
+  var environment = document.getElementById("environment");
+  var captchaRequest = 0;
+  var submitting = false;
 
   function showError(message) {
     errorBox.textContent = message;
@@ -119,19 +126,54 @@
   // 换一个 randomStr 再重设 src ⇒ 公司那边出一张新图。没有缓存参数的必要：
   // randomStr 本身就不同，URL 已经变了。
   function refreshCaptcha() {
+    if (submitting || !environment.value) return;
+    var request = ++captchaRequest;
+    var pending = new Image();
+    randomStr = "";
     var bytes = new Uint8Array(16);
     (window.crypto || window.msCrypto).getRandomValues(bytes);
-    randomStr = Array.prototype.map
+    var nonce = Array.prototype.map
       .call(bytes, function (b) { return ("0" + b.toString(16)).slice(-2); })
       .join("");
-    captcha.src = "/__aiops/login/captcha?randomStr=" + randomStr;
+    var selected = environment.value;
+    pending.onload = function () {
+      if (request !== captchaRequest) return;
+      pending.id = "captcha"; pending.alt = captcha.alt; pending.title = captcha.title;
+      pending.addEventListener("click", refreshCaptcha);
+      captcha.replaceWith(pending); captcha = pending;
+      randomStr = nonce; button.disabled = false;
+    };
+    pending.onerror = function () {
+      if (request === captchaRequest) showError("验证码加载失败，请重新获取");
+    };
+    button.disabled = true;
+    pending.src = "/__aiops/login/captcha?randomStr=" + nonce + "&environment=" + encodeURIComponent(selected);
   }
 
   captcha.addEventListener("click", refreshCaptcha);
-  refreshCaptcha();
+  environment.addEventListener("change", function () {
+    document.getElementById("code").value = "";
+    clearError();
+    refreshCaptcha();
+  });
+  button.disabled = true;
+  fetch("/__aiops/login/environments", { credentials: "same-origin" })
+    .then(function (response) { if (!response.ok) throw new Error(); return response.json(); })
+    .then(function (data) {
+      if (!data.environments || !data.environments.length) throw new Error();
+      data.environments.forEach(function (row) {
+        var option = document.createElement("option"); option.value = row.id; option.textContent = row.name;
+        environment.appendChild(option);
+      });
+      document.getElementById("environment-row").hidden = !data.selection_required;
+      refreshCaptcha();
+    }).catch(function () { showError("登录环境尚未准备好，请联系管理员"); });
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
+    if (submitting || !randomStr || button.disabled) return;
+    submitting = true;
+    environment.disabled = true;
     clearError();
     button.disabled = true;
     button.textContent = "登录中…";
@@ -142,12 +184,13 @@
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      // 只发这四个字段加一个 redirect —— 服务端不认的字段没有意义。
+      // 环境只在登录时选择；后续管理操作使用服务端活动会话。
       body: JSON.stringify({
         username: document.getElementById("username").value,
         password: document.getElementById("password").value,
         randomStr: randomStr,
         code: document.getElementById("code").value,
+        environment: environment.value,
         redirect: redirect
       })
     })
@@ -164,15 +207,15 @@
         }
         // 服务端给的是一句面向运营的中文原因；**不在这里拼装或翻译**。
         showError((result.data && result.data.reason) || "登录未完成，请稍后重试");
+        submitting = false; environment.disabled = false;
         refreshCaptcha();
         document.getElementById("code").value = "";
-        button.disabled = false;
         button.textContent = "登录";
       })
       .catch(function () {
         showError("无法连接登录服务，请稍后重试");
+        submitting = false; environment.disabled = false;
         refreshCaptcha();
-        button.disabled = false;
         button.textContent = "登录";
       });
   });
