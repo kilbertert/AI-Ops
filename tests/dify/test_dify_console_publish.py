@@ -1470,14 +1470,10 @@ def test_the_http_trial_refuses_when_environment_identity_cannot_be_checked(upst
     assert _paths(upstream, TRIAL_GATEWAY_PATH) == []
 
 
-def test_the_trial_falls_back_when_the_proxy_reports_no_mapping(
+def test_the_http_trial_refuses_when_the_proxy_reports_no_mapping(
     upstream: _Upstream,
 ) -> None:
-    """代理回"没有映射"（只有 reason、无身份字段）⇒ 同样退回调试租户。
-
-    租户为空是**必须**当作身份不全的：网关的 `TrialInitiator.from_headers` 在租户
-    为空时静默退回调试租户，那是一次范围放宽，不能由上游一个空字段触发。
-    """
+    """共享HTTP入口拒绝无活动映射，防止已退出另一环境会话回落默认目标。"""
     source = _PermissionSource(allowed=False, body={"allowed": False, "reason": "NO_MAPPING"})
     server = _identity_bridge(upstream, source)
     try:
@@ -1485,9 +1481,9 @@ def test_the_trial_falls_back_when_the_proxy_reports_no_mapping(
     finally:
         server.shutdown()
         server.server_close()
-    assert status == 202, body
+    assert status == 401, body
     calls = _paths(upstream, TRIAL_GATEWAY_PATH)
-    assert "x-aiops-initiator-tenant" not in calls[0]["headers"]
+    assert calls == []
 
 
 def test_the_trial_falls_back_when_the_tenant_field_is_empty(

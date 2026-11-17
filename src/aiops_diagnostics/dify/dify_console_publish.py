@@ -1464,7 +1464,9 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
                     body={"session": session.access_token},
                     timeout=self.settings.timeout,
                 )
-                if code == 200 and isinstance(identity, dict) and identity.get("environment"):
+                if code != 200 or not isinstance(identity, dict) or not identity.get("company_user_id"):
+                    raise _Rejected(401, "环境登录已失效，请重新登录")
+                if identity.get("environment"):
                     raise _Rejected(403, "当前环境管理连接尚未准备好")
             return
         origin = normalize_origin(self._single_header("Origin"))

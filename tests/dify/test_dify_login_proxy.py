@@ -1784,3 +1784,19 @@ def test_multi_login_with_legacy_bridge_never_falls_back(environments):
     status, _, _ = _call(s["bridge_url"], "/__aiops/manage", {"action": "environments"}, headers=headers)
     assert status == 403
     assert all(not gateway.calls for gateway in s["gateways"].values())
+
+
+def test_logged_out_multi_session_cannot_use_legacy_trial_fallback(environments):
+    from dataclasses import replace
+
+    s = environments
+    headers, _ = login(s, "env-b", "revoked123")
+    assert _call(s["login_url"], LOGOUT_ROUTE, headers=headers)[0] == 200
+    handler = s["bridge_server"].RequestHandlerClass
+    handler.settings = replace(handler.settings, environment_credentials_file="", trial_key="env-a" * 11)
+    headers["Referer"] = "https://console.example/app/12345678-1234-1234-1234-123456789012/workflow"
+    for gateway in s["gateways"].values():
+        gateway.calls.clear()
+    status, _, _ = _call(s["bridge_url"], "/__aiops/trial", {"order_no": "HACK-LOCAL-001"}, headers=headers)
+    assert status == 401
+    assert all(not gateway.calls for gateway in s["gateways"].values())
