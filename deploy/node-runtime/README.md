@@ -1,5 +1,7 @@
 # 正式节点运行配置
 
+新增业务环境复用共享平台时使用[独立环境节点](environment.md)，不重复安装下述完整共享栈。
+
 现役Java源码与构建入口位于[services/execution-node](../../services/execution-node/README.md)。
 仓内源码迁移不改变宿主jar安装目录、systemd和容器挂载。
 管家输出契约位于节点jar；新合同自然语言输出与迁移见本页末节，旧JSON规则仅供回退。
