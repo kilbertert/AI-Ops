@@ -4,6 +4,11 @@
 未来步骤见[开通规划](../architecture/2026-11-16-manual-environment-onboarding.md)，
 运行/启用/验收读[领域状态](current-delivery-state.md#环境目录与开通试点)。保存草稿不是启用。
 
+启用运行目录后，客服开户及取数直接读取该环境已准入租户的`cpms_base_url`，不再写旧
+`consumer_endpoints`地址副本；历史行保留作恢复，不参与该模式取址。运行目录与
+`AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE`互斥，管理目录准备模式不受影响。
+迁移先核旧地址与目录/主体环境，清空旧独立清单引用，再应用目录配置；旧部署未配运行目录时行为保持。
+
 ## Dify独立管理页
 
 从主导航「环境与租户」进入`/aiops/environments`，可直接打开、刷新与返回。

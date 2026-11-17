@@ -170,9 +170,9 @@ def approved_endpoint(value: str, tenant_id: str) -> str:
 
 
 def approved_business_endpoint(settings, tenant_id: str) -> str:
-    """开通时该用哪个业务环境：**环境变量优先，清单接住未登记的租户**。
+    """开通只使用已启用环境目录；未迁移部署保持旧地址/清单兼容。
 
-    两条来源的语义不同，所以顺序不能反：
+    未启用环境目录时，两条旧来源的语义不同，所以顺序不能反：
     - `AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 是运维**按租户钉死**的地址（权威覆盖）；
     - `AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE` 是平台**已批准的环境清单**，给还没有被
       钉死的新客户用 —— 这正是"一键开通"不再需要改服务器文件的那一步。

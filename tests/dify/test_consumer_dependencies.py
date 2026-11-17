@@ -49,6 +49,48 @@ def test_a_tenant_with_no_pinned_address_uses_the_approved_catalogue(tmp_path):
     assert ConsumerEndpoints(s.database_file).get("TENANT-NEW", "env-a") == "https://cpms.example.test"
 
 
+def test_registry_onboarding_does_not_copy_a_second_connection(tmp_path):
+    from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
+    from aiops_diagnostics.gateway.environment_registry import apply
+
+    path = tmp_path / "registry" / "directory.json"
+    row = {
+        "id": "env-a",
+        "enabled": True,
+        "gateway_url": "https://gateway.example.test",
+        "cpms_base_url": "https://cpms.example.test/charging-pile",
+        "config_ref": str(tmp_path / "production.env"),
+        "tenants": [{"id": "TENANT-A", "enabled": True}],
+    }
+    apply(path, [row], expected_revision=0, actor="operator")
+    s = settings(tmp_path, environment="env-a", environment_registry_file=str(path))
+    old = ConsumerEndpoints(s.database_file)
+    old.register("TENANT-A", "env-a", "https://obsolete.example.test", "legacy")
+    expected = row["cpms_base_url"]
+    assert prepare.consumer_endpoint(SimpleNamespace(settings=s), "TENANT-A") == expected
+    assert consumer_endpoint(s, "TENANT-A") == expected
+    assert old.get("TENANT-A", "env-a") == "https://obsolete.example.test"
+    row["tenants"][0]["enabled"] = False
+    apply(path, [row], expected_revision=1, actor="operator")
+    from aiops_diagnostics.gateway.environment_registry import RegistryError
+
+    with pytest.raises(RegistryError, match="TENANT_ENVIRONMENT_NOT_ENABLED"):
+        prepare.consumer_endpoint(SimpleNamespace(settings=s), "TENANT-A")
+
+
+def test_runtime_registry_rejects_separate_business_catalogue(tmp_path):
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+
+    s = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        environment_registry_file=str(tmp_path / "registry.json"),
+        business_environments_file=catalogue(tmp_path, {"id": "old", "base_url": "https://old.example.test"}),
+    )
+    with pytest.raises(ValueError, match="cannot use a separate business catalogue"):
+        s.validate()
+
+
 def test_a_pinned_tenant_keeps_its_own_address_even_when_a_catalogue_exists(tmp_path):
     """环境变量是权威覆盖：运维按租户钉死的地址优先于清单。"""
     s = settings(

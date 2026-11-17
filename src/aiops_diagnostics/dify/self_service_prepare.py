@@ -385,7 +385,7 @@ def copy_consumer_app(console, source, workspace_id, job_id, request, document):
 
 
 def consumer_endpoint(context, tenant_id: str) -> str:
-    """把**已批准的环境连接**登记成这个租户的受管业务地址，并返回它。
+    """已接目录直接使用唯一连接；旧部署继续登记已批准的租户地址。
 
     没有已批准连接就拒绝这一端（`SETUP_BUSINESS_CONNECTION_REQUIRED`）：
     开通不能靠"上次那个全局 URL"，因为那可能属于别的客户。
@@ -402,6 +402,8 @@ def consumer_endpoint(context, tenant_id: str) -> str:
 
     settings = context.settings
     base = approved_business_endpoint(settings, tenant_id)
+    if getattr(settings, "environment_registry_file", ""):
+        return base
     if not base:
         entries = business_environments.load(getattr(settings, "business_environments_file", ""))
         if business_environments.is_ambiguous(entries):
