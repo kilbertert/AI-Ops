@@ -1302,7 +1302,7 @@ class BridgeSettings:
     #: 3. **审计发起人**：配了 ⇒ 发布账本里记下是谁。
     #:
     #: "没配"与"配了但代理挂了"是两件不同的事：发布那条路后者 **fail-closed 拒**，
-    #: 试运行那条路后者**退回固定调试租户**（理由写在 :func:`submit_trial`）。
+    #: HTTP入口先核环境身份，代理不可达时拒绝；底层submit_trial保留旧独立调用合同。
     login_proxy_url: str = ""
     timeout: float = 15.0
     environment_credentials_file: str = ""
@@ -1456,6 +1456,16 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
     def _select_environment(self):
         """唯一选址点：活动登录响应给环境与目录地址，服务凭据只从本地取。"""
         if not self.settings.environment_credentials_file:
+            session = _console_access_token_from_cookie(self._single_header("Cookie"))
+            if self.settings.login_proxy_url and session:
+                code, identity = _request(
+                    self.settings.login_proxy_url + "/__aiops/publish/check",
+                    method="POST",
+                    body={"session": session.access_token},
+                    timeout=self.settings.timeout,
+                )
+                if code == 200 and isinstance(identity, dict) and identity.get("environment"):
+                    raise _Rejected(403, "当前环境管理连接尚未准备好")
             return
         origin = normalize_origin(self._single_header("Origin"))
         referer = _origin_and_path(self._single_header("Referer") or "")

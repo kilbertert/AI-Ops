@@ -1770,3 +1770,17 @@ def test_captcha_source_limit_and_failed_fetch_release(environments, monkeypatch
     before = len(s["companies"]["env-a"].calls)
     assert get(s["login_url"], "/__aiops/login/captcha?randomStr=blocked&environment=env-a")[0] == 429
     assert len(s["companies"]["env-a"].calls) == before
+
+
+def test_multi_login_with_legacy_bridge_never_falls_back(environments):
+    from dataclasses import replace
+
+    s = environments
+    headers, _ = login(s, "env-b", "legacy123")
+    handler = s["bridge_server"].RequestHandlerClass
+    handler.settings = replace(handler.settings, environment_credentials_file="")
+    for gateway in s["gateways"].values():
+        gateway.calls.clear()
+    status, _, _ = _call(s["bridge_url"], "/__aiops/manage", {"action": "environments"}, headers=headers)
+    assert status == 403
+    assert all(not gateway.calls for gateway in s["gateways"].values())
