@@ -39,6 +39,8 @@ bash ops/environments/gateway/build-execution-ingress.sh <合并SHA> /private/ex
 应用凭据只从受控文件在进程内读取，不进入命令行、URL、日志或回执。代理透传应用ID与token，
 不传Cookie/公司身份/平台管理员头；实际鉴权仍由平台执行。缺凭据401由入口拒绝，错凭据的
 具体HTTP/信封语义以真实平台为准，不把HTTP200单独作为成功。请求体上限64KiB，URI必须规范且无query。
+片段的server层规则在location选择前拒绝携Snail应用头的其他URI，避免点段穿越后把凭据送到公司路径；
+公司请求不得携Snail专属头。部署前核本虚拟主机没有其他Snail调用方，并检查现有server层rewrite无提前return/改写冲突。
 共享平台管理API通过受管内部操作使用，不因资源注册而扩大公网白名单。
 
 ```bash

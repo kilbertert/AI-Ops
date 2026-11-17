@@ -166,7 +166,17 @@ def test_real_tls_dispatch_boundary(tmp_path):
         ):
             assert call(base, path) == 404
         assert call(base, data=b"x" * 65537) == 413
-        assert call(base, "/upms/user/info") == 418
+        for path in (
+            "/snail-ai/../upms/user/info",
+            "/snail-ai/%2e%2e/upms/user/info",
+            "/%73nail-ai/%2e%2e/upms/user/info",
+            "/upms/user/info",
+        ):
+            assert call(base, path) == 404
+        request = urllib.request.Request(base + "/upms/user/info")
+        with pytest.raises(urllib.error.HTTPError) as error:
+            opener.open(request, timeout=4)
+        assert error.value.code == 418
         assert call(start(source="192.0.2.10"), **{"X-Forwarded-For": "192.0.2.10"}) == 403
         assert call(start(use_tls=False)) == 403
         assert call(start(tls_name="wrong.example")) == 502

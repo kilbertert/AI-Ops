@@ -32,6 +32,13 @@ def render(upstream: str, server_name: str, ca_file: str, sources: list[str]) ->
             raise ValueError("来源须为规范IPv4，不接受网段")
     allowed = "|".join(source.replace(".", "[.]") for source in sources)
     return f'''# AI-Ops共享执行入口；在获准的既有TLS虚拟主机内安装。
+# Nginx规范化路径后才选择location；带应用凭据的穿越必须在server层拒绝。
+set $aiops_dispatch_invalid 0;
+if ($http_snail_ai_app_id != "") {{ set $aiops_dispatch_invalid 1; }}
+if ($http_snail_ai_token != "") {{ set $aiops_dispatch_invalid 1; }}
+if ($request_uri ~ "^/snail-ai/") {{ set $aiops_dispatch_invalid 1; }}
+if ($request_uri = "{DISPATCH}") {{ set $aiops_dispatch_invalid 0; }}
+if ($aiops_dispatch_invalid = 1) {{ return 404; }}
 location ^~ /snail-ai/ {{
     access_log off;
     error_log /dev/null;
