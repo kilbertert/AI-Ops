@@ -132,11 +132,10 @@ AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL=http://127.0.0.1:10119
 |---|---|---|
 | **留空** | Dify owner/admin（过渡行为） | 固定调试租户 |
 | **配了，代理可达** | 公司 `aiops:agent:publish` 权限码 | **发起人的公司身份** |
-| **配了，代理查不通** | **拒**（fail-closed） | **退回固定调试租户** |
+| **配了，代理查不通** | **拒**（fail-closed） | **拒**（共享HTTP入口不能确认环境，不回落默认Gateway） |
 
-第三条两个方向的差别是**有意**的：发布退回旧规则等于放宽**授权**；试运行退回的是
-一个已经上线并验收过的既有行为（#781 的第一版），不是新的越权。理由与代价写在
-`submit_trial` 的 docstring 与 ADR-0028。
+共享HTTP入口依ADR0276统一拒绝代理不可达，避免无法确认环境时使用默认Gateway。
+`submit_trial` 独立调用仍保留ADR0028的旧调试回落；它不是当前HTTP入口的故障合同。
 
 ### 原来的两种含义（保留，仍未过时）
 
@@ -173,3 +172,5 @@ Referer 只是请求上下文，用户能自行构造，不能代替授权。机
 从`aiops_diagnostics.dify_console_publish`改为`aiops_diagnostics.dify.dify_console_publish`，
 不覆盖User/Group和环境设置；代码与单元一起备份，失败一起恢复并daemon-reload。
 未升级的旧桥包与旧单元继续配套运行，Gateway CD不替它切换。
+
+共享多环境模式的凭据形状、成套启用与恢复步骤见[登录代理手册](../../docs/agents/dify-login-proxy-36-runbook.md#共享入口选择环境adr0276)。仅配置 `AIOPS_CONSOLE_BRIDGE_ENVIRONMENT_CREDENTIALS_FILE` 并不能开通环境；它还依赖同版本活动登录响应与目标真实工作区。

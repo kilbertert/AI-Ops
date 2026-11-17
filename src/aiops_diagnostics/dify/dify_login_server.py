@@ -141,10 +141,11 @@ class LoginProxySettings:
     #: 配得比会话短会重新引入"页面还能开、试运行却 403"的错配，所以只允许显式配。
     operator_token_seconds: int | None = None
     environment_registry_file: str = ""
+    environment_credentials_file: str = ""
 
     def __post_init__(self) -> None:
         assert_public_origin_is_https(self.public_origin)
-        if self.environment_registry_file:
+        if self.environment_registry_file and not self.environment_credentials_file:
             from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry
 
             row = EnvironmentRegistry(self.environment_registry_file, self.dify.environment).entry()
@@ -214,6 +215,7 @@ class LoginProxySettings:
             operator_trial_key=os.environ.get("AIOPS_LOGIN_PROXY_OPERATOR_TRIAL_KEY", "").strip(),
             operator_token_seconds=_optional_int(os.environ.get("AIOPS_LOGIN_PROXY_OPERATOR_TOKEN_SECONDS")),
             environment_registry_file=os.environ.get("AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE", ""),
+            environment_credentials_file=os.environ.get("AIOPS_LOGIN_PROXY_ENVIRONMENT_CREDENTIALS_FILE", ""),
         )
 
 
@@ -293,6 +295,9 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler protocol
         parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path == "/__aiops/login/environments":
+            self._json(200, self.environments.catalogue())
+            return
         if parsed.path == CAPTCHA_ROUTE:
             self._captcha(parsed)
             return
@@ -319,13 +324,22 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
     def _captcha(self, parsed: Any) -> None:
         from urllib.parse import parse_qs
 
-        raw = (parse_qs(parsed.query).get("randomStr") or [""])[0]
-        if not _RANDOM_STR_RE.match(raw):
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        raw = (query.get("randomStr") or [""])[0]
+        if not _RANDOM_STR_RE.fullmatch(raw) or any(len(v) != 1 for v in query.values()):
             self._json(400, {"ok": False, "reason": "randomStr 不合法"})
             return
         try:
+            default = "" if self.environments.enabled else self.settings.dify.environment
+            identifier = (query.get("environment") or [default])[0]
+            self.settings, self.service = self.environments.select(identifier)
+            self.environments.challenge(raw, self.settings.dify.environment, source=self._client_source())
             body, content_type = fetch_captcha(self.settings.company, raw)
+        except PermissionDenied as exc:
+            self._json(429 if exc.code == "CAPTCHA_RATE_LIMIT" else 403, {"ok": False, "reason": str(exc)})
+            return
         except CompanyUnreachable:
+            self.environments.discard_challenge(raw)
             # 验证码取不到是**上游不可用**，不是"你输错了"。
             self._json(502, {"ok": False, "reason": "公司验证码服务暂时不可用"})
             return
@@ -382,6 +396,12 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             self._json(429, {"ok": False, "reason": "尝试过于频繁，请稍后再试"})
             return
         try:
+            self.settings, self.service = self.environments.select(
+                payload.get(
+                    "environment", "" if self.environments.enabled else self.settings.dify.environment
+                )
+            )
+            self.environments.challenge(random_str, self.settings.dify.environment, consume=True)
             session, _summary = self.service.login(
                 username=username, password=password, random_str=random_str, code=code
             )
@@ -440,6 +460,8 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             self._json(400, {"allowed": False, "reason": str(exc)})
             return
         try:
+            if self.environments.enabled:
+                self.settings, self.service = self.environments.session(payload.get("session", ""))
             row, _ = self.service.active_session(payload.get("session", ""))
         except PermissionDenied as exc:
             self._json(200, {"allowed": False, "reason": exc.code})
@@ -472,22 +494,35 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
                 # #782：试运行要按发起人的公司身份算范围，所以把这两个一起给桥。
                 "company_tenant_id": str(row.get("tenant_id") or ""),
                 "company_user_type": str(row.get("user_type") or ""),
+                **(
+                    {"environment": self.settings.dify.environment, "gateway_url": self.settings.gateway_url}
+                    if self.environments.enabled
+                    else {}
+                ),
             },
         )
 
     def _operator_token(self) -> None:
         import hmac
 
-        key = self.settings.operator_trial_key
         presented = self.headers.get("Authorization", "").removeprefix("Bearer ")
-        if not key or not hmac.compare_digest(key.encode(), presented.encode()):
+        keys = (
+            [s.operator_trial_key for s, _, _ in self.environments.entries.values()]
+            if self.settings.environment_credentials_file
+            else [self.settings.operator_trial_key]
+        )
+        if not any(k and hmac.compare_digest(k.encode(), presented.encode()) for k in keys):
             self._json(403, {"error": "refused"})
             return
         try:
             body = self._read_json()
             session = body.get("session", "")
+            if self.settings.environment_credentials_file:
+                self.settings, self.service = self.environments.session(session)
+            if not hmac.compare_digest(self.settings.operator_trial_key.encode(), presented.encode()):
+                raise ValueError("wrong environment exchange key")
             result = self.service.operator_token(session) if isinstance(session, str) else None
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, PermissionDenied):
             result = None
         self._json(200 if result else 403, result or {"error": "login_required"})
 
@@ -505,14 +540,16 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
                 self._json(403, {"result": "error", "message": "请重新登录后退出"})
                 return
         if session is not None:
-            self.service.forget_operator_token(session.access_token)
+            for _, service, _ in self.environments.entries.values():
+                service.forget_operator_token(session.access_token)
         else:
             cookies = SimpleCookie()
             try:
                 cookies.load(self.headers.get("Cookie", ""))
                 for name in ("access_token", "__Host-access_token"):
                     if name in cookies:
-                        self.service.forget_operator_token(cookies[name].value)
+                        for _, service, _ in self.environments.entries.values():
+                            service.forget_operator_token(cookies[name].value)
             except Exception:  # noqa: BLE001 - 畸形 cookie 不阻止旧入口退出。
                 pass
         if native:
@@ -677,13 +714,17 @@ def build_service(settings: LoginProxySettings) -> LoginService:
 
 
 def make_server(settings: LoginProxySettings) -> ThreadingHTTPServer:
-    service = build_service(settings)
+    from .console_environments import LoginEnvironments
+
+    environments = LoginEnvironments(settings, None, build_service)
+    service = environments.entries[settings.dify.environment][1]
     handler = type(
         "_BoundLoginProxyHandler",
         (LoginProxyHandler,),
         {
             "settings": settings,
             "service": service,
+            "environments": environments,
             "backoff": _Backoff(settings.backoff_threshold, settings.backoff_window_seconds),
         },
     )

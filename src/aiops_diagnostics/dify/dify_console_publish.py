@@ -1302,9 +1302,10 @@ class BridgeSettings:
     #: 3. **审计发起人**：配了 ⇒ 发布账本里记下是谁。
     #:
     #: "没配"与"配了但代理挂了"是两件不同的事：发布那条路后者 **fail-closed 拒**，
-    #: 试运行那条路后者**退回固定调试租户**（理由写在 :func:`submit_trial`）。
+    #: HTTP入口先核环境身份，代理不可达时拒绝；底层submit_trial保留旧独立调用合同。
     login_proxy_url: str = ""
     timeout: float = 15.0
+    environment_credentials_file: str = ""
 
     def __post_init__(self) -> None:
         if normalize_origin(self.console_origin) != self.console_origin:
@@ -1339,6 +1340,9 @@ class BridgeSettings:
             gateway_internal_token=os.environ.get("AIOPS_CONSOLE_BRIDGE_GATEWAY_INTERNAL_TOKEN", "").strip(),
             allowed_roles=parse_allowed_roles(os.environ.get("AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES")),
             login_proxy_url=os.environ.get("AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL", "").strip().rstrip("/"),
+            environment_credentials_file=os.environ.get(
+                "AIOPS_CONSOLE_BRIDGE_ENVIRONMENT_CREDENTIALS_FILE", ""
+            ),
         )
 
 
@@ -1365,6 +1369,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         try:
             if path != _KNOWLEDGE_OPEN_ROUTE:
                 raise _Rejected(404, "not found")
+            self._select_environment()
             self._get_knowledge_open()
         except _Rejected as exc:
             self._html(exc.status, exc.reason)
@@ -1377,6 +1382,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
         path = urllib.parse.urlsplit(self.path).path
         try:
+            self._select_environment()
             if path == "/__aiops/manage":
                 import sys
 
@@ -1446,6 +1452,72 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             self._json(502, {"published": False, "reason": "发布链路暂时不可用，请稍后再试", "action": ""})
             return
         self._json(result.status, result.public())
+
+    def _select_environment(self):
+        """唯一选址点：活动登录响应给环境与目录地址，服务凭据只从本地取。"""
+        if not self.settings.environment_credentials_file:
+            session = _console_access_token_from_cookie(self._single_header("Cookie"))
+            if self.settings.login_proxy_url and session:
+                code, identity = _request(
+                    self.settings.login_proxy_url + "/__aiops/publish/check",
+                    method="POST",
+                    body={"session": session.access_token},
+                    timeout=self.settings.timeout,
+                )
+                if code != 200 or not isinstance(identity, dict) or not identity.get("company_user_id"):
+                    raise _Rejected(401, "环境登录已失效，请重新登录")
+                if identity.get("environment"):
+                    raise _Rejected(403, "当前环境管理连接尚未准备好")
+            return
+        origin = normalize_origin(self._single_header("Origin"))
+        referer = _origin_and_path(self._single_header("Referer") or "")
+        if (
+            (self.command == "POST" and origin != self.settings.console_origin)
+            or (self.command == "POST" and not referer)
+            or (referer and referer[0] != self.settings.console_origin)
+            or self._single_header("Sec-Fetch-Site") not in (None, "same-origin")
+        ):
+            raise _Rejected(403, "请从Dify控制台操作")
+        path = urllib.parse.urlsplit(self.path).path
+        if self.command == "GET" or path == _KNOWLEDGE_SYNC_ROUTE:
+            # 原知识导航/同步仅带cookie；POST同源门仍阻止跨站写，后续照常核工作区。
+            session = _console_access_token_from_cookie(self._single_header("Cookie"))
+        else:
+            session = console_session_from_headers(
+                self._single_header("Cookie"), self._single_header(CONSOLE_CSRF_HEADER)
+            )
+        if session is None:
+            raise _Rejected(401, "请重新登录Dify")
+        code, identity = _request(
+            self.settings.login_proxy_url + "/__aiops/publish/check",
+            method="POST",
+            body={"session": session.access_token},
+            timeout=self.settings.timeout,
+        )
+        if code != 200 or not isinstance(identity, dict) or not identity.get("company_user_id"):
+            raise _Rejected(401, "环境登录已失效，请重新登录")
+        identifier = identity.get("environment")
+        row = self.environment_credentials.get(identifier) if isinstance(identifier, str) else None
+        if row is None:
+            raise _Rejected(403, "当前环境管理连接尚未准备好")
+        from dataclasses import replace
+
+        from aiops_diagnostics.common.endpoint_policy import require_secure_endpoint
+
+        try:
+            value = identity.get("gateway_url")
+            if not isinstance(value, str):
+                raise ValueError("missing environment endpoint")
+            gateway = require_secure_endpoint(value, what="环境Gateway")
+        except (TypeError, ValueError):
+            raise _Rejected(502, "环境连接不可用") from None
+        self.settings = replace(
+            self.settings,
+            gateway_base_url=gateway,
+            publish_key=row["publish_key"],
+            trial_key=row["trial_key"],
+            gateway_internal_token=row["gateway_internal_token"],
+        )
 
     def _post_knowledge_sync(self) -> None:
         """让网关把该租户的 RAGFlow 库收敛成 Dify dataset（ADR-0122 / #1056）。
@@ -2178,7 +2250,26 @@ def _native_cancel(handler):
 
 
 def make_server(settings: BridgeSettings) -> ThreadingHTTPServer:
-    handler = type("_BoundConsolePublishHandler", (ConsolePublishBridgeHandler,), {"settings": settings})
+    from .console_environments import credentials
+
+    rows = credentials(settings.environment_credentials_file) if settings.environment_credentials_file else {}
+    if rows and not settings.login_proxy_url:
+        raise ValueError("environment routing requires an active login proxy")
+    keys = set()
+    for row in rows.values():
+        if (
+            set(row) != {"id", "publish_key", "trial_key", "gateway_internal_token"}
+            or not all(isinstance(v, str) and len(v) >= 32 for k, v in row.items() if k != "id")
+            or row["publish_key"] == row["trial_key"]
+            or keys.intersection((row["publish_key"], row["trial_key"]))
+        ):
+            raise ValueError("invalid environment bridge credentials")
+        keys.update((row["publish_key"], row["trial_key"]))
+    handler = type(
+        "_BoundConsolePublishHandler",
+        (ConsolePublishBridgeHandler,),
+        {"settings": settings, "environment_credentials": rows},
+    )
     return ThreadingHTTPServer((settings.listen_host, settings.listen_port), handler)
 
 

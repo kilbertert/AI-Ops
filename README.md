@@ -165,7 +165,7 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 
 设备离线分析以同一受控读面服务offline卡与管家Agent；新增业务时区配置和发布步骤见[离线手册](docs/agents/operator-cpms/device-offline.md)。
 
-控制台发布与管理共用活动公司登录绑定，原生退出同步撤销；登录代理重启后需重新登录，见[登录代理手册](docs/agents/dify-login-proxy-36-runbook.md)。
+控制台发布与管理共用活动公司登录绑定，原生退出同步撤销；可成套配置共享登录入口的环境选择，后续操作由活动会话绑定环境，默认仍为原单环境；登录代理重启后需重新登录，见[登录代理手册](docs/agents/dify-login-proxy-36-runbook.md)。
 
 业务环境与租户登记由 `gateway.environment_registry` 管理，草稿由 `gateway.environment_drafts` 持久化，运维入口为 `aiops-admin environment-registry`；配置 `AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE` 后按当前环境检查租户准入。登记与启停方法见[环境接入手册](docs/agents/environment-registry.md)。
 

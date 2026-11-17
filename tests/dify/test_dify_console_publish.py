@@ -1456,17 +1456,9 @@ def test_the_publish_route_still_refuses_without_the_publish_permission(
     assert _paths(upstream, "/v1/dify/publish") == []
 
 
-def test_the_trial_falls_back_to_the_debug_tenant_when_the_proxy_is_down(
-    upstream: _Upstream,
-) -> None:
-    """代理不可达 ⇒ **不给身份**，网关退回固定调试租户（用户 2026-10-16 选定）。
-
-    与发布那条路的 fail-closed **方向不同**，理由写在 ``submit_trial``：试运行退回的
-    是"已经上线过的既有行为"，不是新的越权。这里钉住的是"取不到身份时照常提交"，
-    并断言**一个身份头都没有带**。
-    """
+def test_the_http_trial_refuses_when_environment_identity_cannot_be_checked(upstream: _Upstream) -> None:
+    """共享入口无法确认代理是否已多环境时，不向静态默认Gateway发送请求。"""
     source = _PermissionSource(allowed=True)
-    dead = source.base  # 拿到地址后立刻关掉，模拟代理挂掉
     server = _identity_bridge(upstream, source)
     source.shutdown()
     try:
@@ -1474,21 +1466,14 @@ def test_the_trial_falls_back_to_the_debug_tenant_when_the_proxy_is_down(
     finally:
         server.shutdown()
         server.server_close()
-    assert status == 202, f"{body} (probe url was {dead})"
-    calls = _paths(upstream, TRIAL_GATEWAY_PATH)
-    assert len(calls) == 1
-    for name in ("x-aiops-initiator", "x-aiops-initiator-tenant", "x-aiops-initiator-type"):
-        assert name not in calls[0]["headers"], name
+    assert status == 502, body
+    assert _paths(upstream, TRIAL_GATEWAY_PATH) == []
 
 
-def test_the_trial_falls_back_when_the_proxy_reports_no_mapping(
+def test_the_http_trial_refuses_when_the_proxy_reports_no_mapping(
     upstream: _Upstream,
 ) -> None:
-    """代理回"没有映射"（只有 reason、无身份字段）⇒ 同样退回调试租户。
-
-    租户为空是**必须**当作身份不全的：网关的 `TrialInitiator.from_headers` 在租户
-    为空时静默退回调试租户，那是一次范围放宽，不能由上游一个空字段触发。
-    """
+    """共享HTTP入口拒绝无活动映射，防止已退出另一环境会话回落默认目标。"""
     source = _PermissionSource(allowed=False, body={"allowed": False, "reason": "NO_MAPPING"})
     server = _identity_bridge(upstream, source)
     try:
@@ -1496,9 +1481,9 @@ def test_the_trial_falls_back_when_the_proxy_reports_no_mapping(
     finally:
         server.shutdown()
         server.server_close()
-    assert status == 202, body
+    assert status == 401, body
     calls = _paths(upstream, TRIAL_GATEWAY_PATH)
-    assert "x-aiops-initiator-tenant" not in calls[0]["headers"]
+    assert calls == []
 
 
 def test_the_trial_falls_back_when_the_tenant_field_is_empty(

@@ -4,6 +4,39 @@
 > **状态**：2026-11-11补齐完整代码升级、服务身份预检和SQLite副本回放；旧nginx专项步骤保留。
 > 决定的论证在 ADR-0023 / 0052 / 0053 / 0055；本页只讲**怎么做、怎么判、怎么回滚**。
 
+## 共享入口选择环境（ADR0276）
+
+两项配置均为空时保留原单环境协议和 `data_dir/mappings.db`。多环境由登录代理的
+`AIOPS_LOGIN_PROXY_ENVIRONMENT_CREDENTIALS_FILE` 与桥的
+`AIOPS_CONSOLE_BRIDGE_ENVIRONMENT_CREDENTIALS_FILE` 启用；必须成套配置，不能只换页面。
+登录代理另读 `AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE` 的生效v2目录，包含默认环境。
+公司网关/Gateway/名称只来自目录；凭据文件不保存地址，也不能把未激活草稿当生效目录。
+
+两份凭据JSON均为 `{"schema":"aiops-console-environments/1","credentials":[...]}`，由各服务身份持有、0600，
+禁止符号链接和重复字段；每行 `id` 是规范环境编号，其余值为字符串。只在受控位置生成，不提交秘密：
+
+| 使用者 | 每行除id之外的字段 |
+|---|---|
+| 登录代理 | `encode_key`（16字节AES）、`basic_auth`、`client_type`、`info_client_type`、`gateway_internal_token`、`operator_trial_key` |
+| 管理桥 | `publish_key`、`trial_key`、`gateway_internal_token` |
+
+`operator_trial_key` 至少32字符且各环境不同，对应目标Gateway令牌交换凭据；桥的三项密钥至少32字符，
+发布/试运行密钥不能相同或跨环境复用。默认环境继续原映射库，其他环境位于 `data_dir/environments/<id>/mappings.db`；
+共享Dify与inner-api配置沿原部署，Gateway解析真实工作区，缺行不创建假工作区。
+
+`GET /__aiops/login/environments` 只返回已配套且启用的环境编号、名称；选项不含地址/凭据。
+多环境登录必须明确选环境，先取该环境验证码再提交；验证码5分钟、提交即消费，切环境需刷新。
+管理/预览/发布/知识入口从活动会话选Gateway，浏览器环境头不能改目标。
+目录停用逐请求拒绝；地址变化拒绝，需更新受控部署并正常重登，不在运行时换址转发旧凭据。
+
+部署顺序：先完整登录代理和nginx snippet，再登录页面，最后完整桥制品；配置仍关闭时原用户继续单环境登录。
+新页面依赖新catalogue路由，不能部署到旧代理；旧页面配新版单环境代理仍兼容。
+代理先切多环境而桥未配套时明确拒绝；代理不可达的HTTP试运行也拒绝，不再回落调试环境。
+之后另行准备真实工作区、目标服务钥匙和正式HTTPS接线，验证目录投影后成套启用。
+部署前按下文SQLite一致副本预检；多环境候选改用 `LoginEnvironments(settings, None, build_service)` 构造，
+其 `data_dir` 必须先指向副本。重启清活动绑定，需重登。回退完整包/页面/snippet与原配置；不删除新映射数据根。
+验收执行 [D19](../acceptance/environment-directory-qa-plan.md)，真实环境还需正常登录、合法run和双端业务验收。
+
 ## 活动登录绑定（ADR0268）
 
 `publish/check`和`operator-token`都要求该实例亲自完成正常公司登录的活动会话；签名正确及映射存在不足以放行。
