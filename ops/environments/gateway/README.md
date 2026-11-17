@@ -4,6 +4,8 @@
 [环境目录Feature](../../../docs/acceptance/environment-directory.feature) D9/D10及
 [预检手册](../../../docs/agents/environment-onboarding-preflight.md)。
 
+共享执行侧到目标环境的正式回调另见[既有HTTPS扩展入口](ingress.md)；本预演本身不开放该入口。
+
 ## 制品
 
 在开发机从已合并修订执行：

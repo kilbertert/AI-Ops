@@ -29,6 +29,7 @@ uv run python .claude/skills/verify-aiops-gateway/scripts/observe.py --out dist/
 ## 2. 正式网络逐方向验证
 
 接入模块→共享执行服务、共享执行服务→接入工具、管理服务→工作区/知识接口分别核查。
+既有HTTPS虚拟主机的工具回调生成与安装边界见[扩展入口](../../ops/environments/gateway/ingress.md)。
 在实际调用方运行；开发机成功不代表目标服务器成功。SSH只用于受管管理，不充当线上业务通道。
 先匿名核TLS与拒绝响应，再用获准凭据做真实接口验证；后者的凭据不得交给下面的匿名探针。
 
