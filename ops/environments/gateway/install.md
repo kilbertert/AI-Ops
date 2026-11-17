@@ -9,6 +9,8 @@
 目标须在私有主机清单登记并通过`dev-host`断言；已有项目非登录账号，Linux x86_64及系统Python3.11–3.13。
 已分配独立回环端口；安装器检查占用但不负责登记端口。至少1GiB可用内存及1GiB磁盘是保守预检下限，
 不是业务容量结论。旧Gateway和公司服务继续运行，新增自有单位须在当前任务授权内。
+首版要求代码、配置、状态与备份父目录同文件系统，写入前核设备号；独立挂载布局明确拒绝，
+不在恢复途中发现EXDEV后留下半移动状态。安装器包与应用包必须同一合并修订。
 
 ```bash
 bash ops/environments/gateway/build.sh <已合并SHA> 3.12 /private/gateway.tar.gz
@@ -41,6 +43,8 @@ python3 <已核验安装器>/install.py install --environment <环境> --user <�
 ## 失败与恢复
 
 安装按环境加锁，pending账本区分准备与切换；中断后install拒绝继续，先核现场再执行：
+首次将已写pending的临时目录原子改名为正式根；更早中断只留下私有暂存目录，不占用安装根。
+临时目录精确名称记入pending，恢复只清本次路径，不按`trial-*`清理未知证据。
 
 ```bash
 python3 <同版已核验安装器>/install.py recover --environment <环境> --user <服务账号> --port <登记端口>

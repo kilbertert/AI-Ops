@@ -17,6 +17,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 import probe
@@ -250,10 +251,14 @@ WantedBy=multi-user.target
         if old and digest(self.config / "production.env") != old["config_sha256"]:
             raise ValueError("configuration drift prevents rollback")
         self.stop(self.name + "-candidate")
-        for trial in self.state.glob("trial-*"):
+        if pending.get("trial"):
+            if not re.fullmatch(r"trial-[a-f0-9]{32}", pending["trial"]):
+                raise ValueError("invalid recorded trial")
+            trial = self.state / pending["trial"]
             if trial.is_symlink():
                 raise ValueError("trial symlink refused")
-            shutil.rmtree(trial)
+            if trial.exists():
+                shutil.rmtree(trial)
         if pending["phase"] == "switching":
             self.stop(self.name)
         if old is None:
@@ -265,6 +270,11 @@ WantedBy=multi-user.target
             if backup.exists():
                 trusted(backup, private=True)
             backup.mkdir(mode=0o700, exist_ok=True)
+            if any(
+                p.exists() and p.stat().st_dev != backup.stat().st_dev
+                for p in (self.root, self.state, self.config)
+            ):
+                raise ValueError("cross-filesystem recovery requires separate plan")
             saved = Path(tempfile.mkdtemp(prefix="failed-", dir=backup))
             self.record("last-recovery.json", {**pending, "result": "cold-failure-retained"})
             for name, path in (("state", self.state), ("config", self.config), ("release-root", self.root)):
@@ -291,6 +301,8 @@ WantedBy=multi-user.target
             python, "-I", "-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"
         )
         meta = probe.manifest(archive, sha, minor)
+        if getattr(self, "revision", meta["revision"]) != meta["revision"]:
+            raise ValueError("installer and application revisions differ")
         trusted(config, private=True)
         if digest(config) != config_sha:
             raise ValueError("configuration digest mismatch")
@@ -339,8 +351,26 @@ WantedBy=multi-user.target
         if available < 1024 * 1024:
             raise ValueError("insufficient memory headroom")
         if not old:
-            self.root.mkdir(mode=0o755)
-        self.record("pending.json", {**desired, "previous": old, "phase": "preparing"})
+            if len({p.parent.stat().st_dev for p in (self.root, self.state, self.config, self.backups)}) != 1:
+                raise ValueError("cold recovery requires one filesystem")
+            staged_root = Path(tempfile.mkdtemp(prefix=self.name + "-preparing-", dir=self.root.parent))
+            try:
+                write(
+                    staged_root / "pending.json",
+                    json.dumps({**desired, "previous": None, "phase": "preparing"}) + "\n",
+                )
+                staged_root.chmod(0o755)
+                staged_root.rename(self.root)
+                descriptor = os.open(self.root.parent, os.O_DIRECTORY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            finally:
+                if staged_root.exists():
+                    shutil.rmtree(staged_root)
+        else:
+            self.record("pending.json", {**desired, "previous": old, "phase": "preparing"})
         try:
             return self.prepare(archive, sha, python, config, minor, meta, old, desired)
         except BaseException:
@@ -396,7 +426,9 @@ WantedBy=multi-user.target
         )
         if old:
             self.check_database(release)
-        trial = Path(tempfile.mkdtemp(prefix="trial-", dir=self.state))
+        trial = self.state / ("trial-" + uuid.uuid4().hex)
+        self.record("pending.json", {**desired, "previous": old, "phase": "preparing", "trial": trial.name})
+        trial.mkdir(mode=0o700)
         os.chown(trial, self.account.pw_uid, self.account.pw_gid)
         trial_unit = self.name + "-candidate"
         try:
@@ -413,6 +445,7 @@ WantedBy=multi-user.target
                 str(trial),
                 self.environment,
                 "trial",
+                str(self.state),
             )
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
@@ -486,7 +519,7 @@ def main():
         if os.geteuid() != 0 or platform.system() != "Linux" or platform.machine() != "x86_64":
             raise ValueError("Linux x86_64 host maintenance identity required")
         inst = Installer(args.environment, args.user, args.port)
-        if args.action == "install":
+        if args.action in ("install", "recover"):
             revision = Path(__file__).with_name("REVISION").read_text().strip()
             sums = Path(__file__).with_name("SHA256SUMS").read_text().splitlines()
             if not re.fullmatch(r"[a-f0-9]{40}", revision):
@@ -497,6 +530,7 @@ def main():
                 digest(Path(__file__).with_name(n)) != s for n, s in checks.items()
             ):
                 raise ValueError("installer bundle digest mismatch")
+            inst.revision = revision
         for p in (
             inst.root.parent,
             inst.state.parent,

@@ -14,7 +14,7 @@ from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import JOB_TABLES
 
 
-def check(config, state, environment, *, existing):
+def check(config, state, environment, *, existing, managed_state=None):
     values = dotenv_values(config, interpolate=False)
     forbidden = {
         "AIOPS_HOME",
@@ -32,7 +32,7 @@ def check(config, state, environment, *, existing):
         raise ValueError("deployment identity and writable paths belong to installer")
     database = state / "gateway/gateway.db"
     route = values.get("AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE")
-    if route and Path(route) != database:
+    if route and Path(route) != (managed_state or state) / "gateway/gateway.db":
         raise ValueError("route database must share managed database")
     if existing:
         report = gateway_schema.check(database)
@@ -72,7 +72,13 @@ if __name__ == "__main__":
     try:
         print(
             json.dumps(
-                check(Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3], existing=sys.argv[4] == "existing")
+                check(
+                    Path(sys.argv[1]),
+                    Path(sys.argv[2]),
+                    sys.argv[3],
+                    existing=sys.argv[4] == "existing",
+                    managed_state=Path(sys.argv[5]) if len(sys.argv) > 5 else None,
+                )
             )
         )
     except Exception as exc:

@@ -212,3 +212,67 @@ def test_failed_cold_install_retains_evidence_and_can_retry(host, monkeypatch):
     assert len(list(inst.backups.glob("failed-*/release-root/pending.json"))) == 1
     monkeypatch.setattr(inst, "health", health)
     assert apply(host)["result"] == "installed"
+
+
+def test_recovery_preserves_unowned_trial_named_evidence(host, monkeypatch):
+    apply(host)
+    inst = host[0]
+    unrelated = inst.state / "trial-business-evidence"
+    unrelated.mkdir()
+    (unrelated / "receipt").write_text("keep")
+    health = inst.health
+
+    def fail(version, **kw):
+        if kw.get("port"):
+            raise RuntimeError("candidate failed")
+        return health(version, **kw)
+
+    monkeypatch.setattr(inst, "health", fail)
+    with pytest.raises(RuntimeError):
+        apply(next_bundle(host))
+    assert (unrelated / "receipt").read_text() == "keep"
+
+
+def test_cold_root_is_published_only_with_recovery_record(host, monkeypatch):
+    inst = host[0]
+    original = install.write
+
+    def fail(path, body):
+        if path.name == "pending.json":
+            raise OSError("interrupted write")
+        original(path, body)
+
+    monkeypatch.setattr(install, "write", fail)
+    with pytest.raises(OSError):
+        apply(host)
+    assert not inst.root.exists()
+    monkeypatch.setattr(install, "write", original)
+    assert apply(host)["result"] == "installed"
+
+
+def test_trial_accepts_formal_managed_route_and_does_not_touch_it(tmp_path, monkeypatch):
+    check = runpy.run_path(str(ROOT / "ops/environments/gateway/runtime_check.py"))["check"]
+    root = tmp_path / "state"
+    root.mkdir()
+    config = tmp_path / "production.env"
+    config.write_text(f"AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE={root}/gateway/gateway.db\n")
+    config.chmod(0o600)
+    monkeypatch.setattr(install.os, "environ", {})
+    assert (
+        check(config, root / "trial", "test", existing=False, managed_state=root)["configuration"] == "valid"
+    )
+    assert not (root / "gateway/gateway.db").exists()
+
+
+def test_mismatched_installer_revision_is_refused(host):
+    host[0].revision = "f" * 40
+    with pytest.raises(ValueError, match="revisions differ"):
+        apply(host)
+    assert not host[0].root.exists()
+
+
+def test_wrong_config_digest_refused_before_writes(host):
+    inst, archive, sha, config, *_ = host
+    with pytest.raises(ValueError, match="configuration digest"):
+        inst.apply(archive, sha, "/usr/bin/python3", config, "0" * 64)
+    assert not inst.root.exists()
