@@ -159,7 +159,7 @@ class LoginEnvironments:
                 continue
         return {"environments": rows, "selection_required": self.enabled}
 
-    def challenge(self, random_str, environment, *, consume=False):
+    def challenge(self, random_str, environment, *, consume=False, source=""):
         if not self.enabled:
             return
         key = hashlib.sha256(random_str.encode()).hexdigest()
@@ -171,9 +171,16 @@ class LoginEnvironments:
                 if value is None or value[0] != environment:
                     raise refused("CAPTCHA_ENVIRONMENT_MISMATCH", "请为所选环境重新获取验证码")
             else:
+                source = hashlib.sha256(source.encode()).hexdigest()
+                if sum(v[2] == source for v in self.challenges.values()) >= 30:
+                    raise refused("CAPTCHA_RATE_LIMIT", "验证码获取过于频繁，请稍后再试")
                 if key in self.challenges or len(self.challenges) >= 4096:
                     raise refused("CAPTCHA_UNAVAILABLE", "请重新获取验证码")
-                self.challenges[key] = environment, now + 300
+                self.challenges[key] = environment, now + 300, source
+
+    def discard_challenge(self, random_str):
+        with self.lock:
+            self.challenges.pop(hashlib.sha256(random_str.encode()).hexdigest(), None)
 
     def session(self, token):
         from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied

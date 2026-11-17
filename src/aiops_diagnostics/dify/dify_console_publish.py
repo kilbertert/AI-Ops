@@ -1461,23 +1461,19 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         referer = _origin_and_path(self._single_header("Referer") or "")
         if (
             (self.command == "POST" and origin != self.settings.console_origin)
-            or not referer
-            or referer[0] != self.settings.console_origin
+            or (self.command == "POST" and not referer)
+            or (referer and referer[0] != self.settings.console_origin)
             or self._single_header("Sec-Fetch-Site") not in (None, "same-origin")
         ):
             raise _Rejected(403, "请从Dify控制台操作")
-        csrf = self._single_header(CONSOLE_CSRF_HEADER)
-        if self.command == "GET":
-            # 顶层知识导航没有自定义头，沿既有只读导航合同核同源及完整cookie。
-            from http.cookies import SimpleCookie
-
-            try:
-                cookies = SimpleCookie(self._single_header("Cookie") or "")
-                item = cookies.get("__Host-csrf_token") or cookies.get("csrf_token")
-                csrf = item.value if item else None
-            except Exception:
-                csrf = None
-        session = console_session_from_headers(self._single_header("Cookie"), csrf)
+        path = urllib.parse.urlsplit(self.path).path
+        if self.command == "GET" or path == _KNOWLEDGE_SYNC_ROUTE:
+            # 原知识导航/同步仅带cookie；POST同源门仍阻止跨站写，后续照常核工作区。
+            session = _console_access_token_from_cookie(self._single_header("Cookie"))
+        else:
+            session = console_session_from_headers(
+                self._single_header("Cookie"), self._single_header(CONSOLE_CSRF_HEADER)
+            )
         if session is None:
             raise _Rejected(401, "请重新登录Dify")
         code, identity = _request(

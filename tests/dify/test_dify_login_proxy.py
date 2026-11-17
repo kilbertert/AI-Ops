@@ -1690,6 +1690,15 @@ def test_same_identity_routes_by_active_login_and_revocation(environments):
         )
         assert status == 200 and result["environment"] == name
 
+    # 原知识选择器不发CSRF头，顶层新标签导航可能不发Referer。
+    headers = {k: v for k, v in sessions["env-b"][0].items() if k != "X-CSRF-Token"}
+    sync = _call(s["bridge_url"], "/__aiops/knowledge-sync", headers=headers)
+    assert sync[0] == 200 and sync[1] == {"changed": 0, "created": 0}
+    conn = http.client.HTTPConnection(s["bridge_url"].removeprefix("http://"))
+    conn.request("GET", "/__aiops/knowledge-open", headers={"Cookie": headers["Cookie"]})
+    response = conn.getresponse()
+    assert response.status == 400 and "缺少当前工作区" in response.read().decode()
+    conn.close()
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(manage, ["env-a", "env-b"] * 4))
     for g in s["gateways"].values():
@@ -1740,3 +1749,24 @@ def test_ambiguous_credentials_refused(tmp_path, raw):
     path = write_private_text(tmp_path / "credentials.json", raw)
     with pytest.raises(ValueError):
         credentials(path)
+
+
+def test_captcha_source_limit_and_failed_fetch_release(environments, monkeypatch):
+    from aiops_diagnostics.dify import dify_login_server as server
+
+    s = environments
+    original = server.fetch_captcha
+
+    def unavailable(*args):
+        raise server.CompanyUnreachable("fixture", "unavailable")
+
+    monkeypatch.setattr(server, "fetch_captcha", unavailable)
+    path = "/__aiops/login/captcha?randomStr=retry123&environment=env-a"
+    assert get(s["login_url"], path)[0] == 502
+    monkeypatch.setattr(server, "fetch_captcha", original)
+    assert get(s["login_url"], path)[0] == 200
+    for i in range(29):
+        assert get(s["login_url"], f"/__aiops/login/captcha?randomStr=nonce{i}&environment=env-a")[0] == 200
+    before = len(s["companies"]["env-a"].calls)
+    assert get(s["login_url"], "/__aiops/login/captcha?randomStr=blocked&environment=env-a")[0] == 429
+    assert len(s["companies"]["env-a"].calls) == before

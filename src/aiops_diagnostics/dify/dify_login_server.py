@@ -333,12 +333,13 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             default = "" if self.environments.enabled else self.settings.dify.environment
             identifier = (query.get("environment") or [default])[0]
             self.settings, self.service = self.environments.select(identifier)
-            self.environments.challenge(raw, self.settings.dify.environment)
+            self.environments.challenge(raw, self.settings.dify.environment, source=self._client_source())
             body, content_type = fetch_captcha(self.settings.company, raw)
         except PermissionDenied as exc:
-            self._json(403, {"ok": False, "reason": str(exc)})
+            self._json(429 if exc.code == "CAPTCHA_RATE_LIMIT" else 403, {"ok": False, "reason": str(exc)})
             return
         except CompanyUnreachable:
+            self.environments.discard_challenge(raw)
             # 验证码取不到是**上游不可用**，不是"你输错了"。
             self._json(502, {"ok": False, "reason": "公司验证码服务暂时不可用"})
             return
