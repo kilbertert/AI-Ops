@@ -390,6 +390,16 @@ E. `POST http://36.156.159.175:10008/__aiops/login` 带伪造头 `X-Forwarded-Pr
 上游声明的协议，所以伪造的 `https` 被抹空 ⇒ 判明文 ⇒ 400；旧配置原样透传 ⇒ 以为是 TLS
 ⇒ 403。**400 只可能是新配置。**
 
+### 真实浏览器验证码与CSP
+
+复验使用受控账号，验证码取新图后交给人读取；不能从公司缓存读取验证码或注入自签活动会话。
+等待图片就绪用Playwright locator断言 `expect(page.locator("#submit")).to_be_enabled()`；
+现役登录页CSP不允许unsafe-eval，字符串 `wait_for_function` 会因自动化求值被拒，不能据此判断页面失败或放宽CSP。
+验证码截图与账号只保留私有验收目录；本轮图与答复一一对应，过期需重新取图。
+临时管理访问复用 `tools/verification/consumer-status/status_probe.py` 的 `tunnel_argv/_wait_port/_terminate_tree`，
+端口动态回环、保留原TLS域名验证，结束清进程组；这是运维验收访问，不是租户线上业务通道。
+正常登录后读原管理页、不保存假环境；原生退出成功后重放本次会话，必须无公司身份并明确拒绝。
+
 ## 7. 回滚
 
 ### 7.1 仅代码升级失败

@@ -10,7 +10,7 @@
 
 | 能力/组件 | 已合并 | 已部署 | 已启用 | 已验收与缺口 | 证据 |
 |---|---|---|---|---|---|
-| 目录草稿/Gateway、管理桥 | #1548 `9c21d855` | 基础制品已配套；控制Gateway为#1569的1.14.2 | 生效目录revision1、0个环境；新增第二环境草稿revision1、两个租户均未启用 | 隔离持久化/权限/CAS及现场CLI保存回读通过；原页面保存、投影/激活与真实开通未验 | [基础验证](../validation/2026-11-16-environment-directory-drafts.md)、[业务连接回执](../validation/2026-11-17-business-connection-live.md)、[Gateway部署](../validation/2026-11-17-registry-consumer-live.md) |
+| 目录草稿/Gateway、管理桥 | #1548 `9c21d855` | 基础制品已配套；控制Gateway为#1572的1.15.0 | 生效目录revision1、0个环境；新增第二环境草稿revision1、两个租户均未启用 | 隔离持久化/权限/CAS及现场CLI保存回读通过；原页面保存、投影/激活与真实开通未验 | [基础验证](../validation/2026-11-16-environment-directory-drafts.md)、[业务连接回执](../validation/2026-11-17-business-connection-live.md)、[Gateway部署](../validation/2026-11-17-console-environment-deployed.md) |
 | 独立环境页/Dify Web | #1549 `d136bdb2` | 完整Web已配套；当时Gateway 1.14.0，后续至1.14.1 | 路由存在；不代表目录或租户已激活 | 独立浏览器交互和匿名拒绝通过；正常账号真实管理、预检/安装/激活及三功能业务验收未完成 | [环境页回执](../validation/2026-11-16-z-environment-tab-delivery.md) |
 | 目标登录/共享服务临时网络 | #1544 `b1f8156a` | 备用入口按回执配套 | 仅获准来源，原入口保留 | 登录身份/授权单次读与SSE通过；正式网络稳定性、双向工具往返和业务容量未闭环；临时入口复查见#1546 | [网络回执](../validation/2026-11-16-z-shared-dify-recovery-live.md) |
 | 活动登录/管理目录准备 | #1551 `9089bea9` | Gateway 1.14.1与登录代理完整包已配套 | 管理目录revision1、0个生效环境、1个显式管理员；运行准入未切换 | 正常登录/管理读取、退出撤销及重登恢复通过；日志正向受应用权限阻塞，发布权限、页面保存及非管理员现场仍未验 | [部署回执](../validation/2026-11-16-z-console-session-live.md)、[共享会话复验](../validation/2026-11-17-deployable-increments.md) |
@@ -18,8 +18,8 @@
 | 正式HTTPS工具扩展 | #1556 `981b6e09`，固定制品取#1562 | 已安装既有API域名工具扩展，仅共享宿主来源到新回环实例 | 工具传输路径已接通；原公司入口/旧Gateway保留，租户未激活 | 两共享宿主匿名/错凭据401、路径/方法/HTTP及伪造来源拒绝通过；合法run工具往返与业务问答待验 | [业务连接回执](../validation/2026-11-17-business-connection-live.md)、[入口合同验证](../validation/2026-11-17-environment-tool-ingress.md) |
 | 共享执行HTTPS派发 | #1564 `01f8af66`，固定上游/实际来源/单一路径 | 已安装既有HTTPS扩展，现役平台保持 | 目标来源可到平台鉴权；新节点见下一行，租户未激活 | 目标六项、另一来源伪造头拒绝及真实应用鉴权层通过；合法run仍待验 | [现场回执](../validation/2026-11-17-shared-execution-ingress-live.md)、[开发验证](../validation/2026-11-17-shared-execution-ingress.md)、[手册](../../ops/environments/gateway/execution-ingress.md) |
 | 第二环境独立共享节点 | #1566 `d9072f49`、#1567 `f47d1f42` | 独立两容器与systemd已部署，固定节点jar；原共享四容器保持 | 新执行组一个在线节点；目标应用与租户未开通 | 节点Java双TLS到目标拒绝、身份/网络/原资源保持通过；真实应用目标、能力授权、合法run和并发容量待验 | [现场回执](../validation/2026-11-17-shared-environment-node-live.md)、[手册](../../deploy/node-runtime/environment.md) |
-| 客服连接唯一目录 | #1569 `c4836cfb` | 控制Gateway 1.14.2已标准CD部署；目标独立Gateway未随之升级 | 运行目录模式不写旧连接副本；现役仍管理准备模式 | 隔离58项、独立44+3及CI5232/10通过；原路由/目录/六容器保持，目录投影与真实双环境业务仍未验 | [开发回执](../validation/2026-11-17-registry-consumer-connections.md)、[部署回执](../validation/2026-11-17-registry-consumer-live.md) |
-| 共享登录选择环境 | PR #1572候选1.15.0，待合并 | 未部署 | 多环境默认关闭；生效目录未激活 | D19登录/并发路由与拒绝、浏览器替身通过；全量初跑失败38项重放均通过；独立HTTP拒绝边界通过，真实业务待完成 | [开发验证](../validation/2026-11-17-console-environment-sessions.md) |
+| 客服连接唯一目录 | #1569 `c4836cfb` | 控制Gateway 1.15.0已标准CD部署；目标独立Gateway未随之升级 | 运行目录模式不写旧连接副本；现役仍管理准备模式 | 隔离58项、独立44+3及CI5232/10通过；原路由/目录/六容器保持，目录投影与真实双环境业务仍未验 | [开发回执](../validation/2026-11-17-registry-consumer-connections.md)、[原部署回执](../validation/2026-11-17-registry-consumer-live.md)、[当前部署](../validation/2026-11-17-console-environment-deployed.md) |
+| 共享登录选择环境 | #1572 `bfd14ad9` | 41 Gateway及36完整登录代理/页面/桥1.15.0已配套 | 多环境关闭；单环境41保持，生效目录0 | CI5240/10、独立反例修复/重放通过；正常公司登录→管理页读取→原生退出→旧会话拒绝通过；124及双环境业务未验 | [部署复验](../validation/2026-11-17-console-environment-deployed.md)、[开发验证](../validation/2026-11-17-console-environment-sessions.md) |
 | 公司来源门 | #1532 `08d203f1` | 工件已交付 | 未配置、未启用 | 不证明双环境签发身份隔离；现规划不再以公司改码为前提 | [来源门回执](../validation/2026-11-14-z-environment-delivery-receipt.md) |
 | 旧第二环境试验 | 历史实现保留 | 旧试验运行资产已撤回 | 不恢复旧完整栈或专属业务隧道 | 公司当前健康未重新确认；历史部分成功不等于完整业务验收 | [撤回回执](../validation/2026-11-14-z95-withdrawal-and-gateway-plan.md) |
 
