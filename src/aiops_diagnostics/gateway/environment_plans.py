@@ -58,7 +58,7 @@ def _references(path):
         }:
             raise ValueError("invalid target")
         for key in ("id", "host", "user"):
-            if not isinstance(row[key], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", row[key]):
+            if not isinstance(row[key], str) or not drafts.REFERENCE_PATTERN.fullmatch(row[key]):
                 raise ValueError("invalid target identity")
         if (
             row["id"] in seen
@@ -83,7 +83,7 @@ def _references(path):
                 not isinstance(value, dict)
                 or set(value) != {"id", "path", "sha256"}
                 or not isinstance(value["id"], str)
-                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", value["id"])
+                or not drafts.REFERENCE_PATTERN.fullmatch(value["id"])
                 or value["id"] in ids
             ):
                 raise ValueError("invalid configuration reference")
@@ -105,8 +105,7 @@ def _file_check(value, limit):
         raise ValueError("file too large")
     with path.open("rb") as stream:
         actual = hashlib.file_digest(stream, "sha256").hexdigest()
-    if actual != value["sha256"]:
-        raise ValueError("file changed")
+    return actual, actual == value["sha256"]
 
 
 def _inputs(path, identity, environment, revision, registry_revision, reference_file):
@@ -129,7 +128,7 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
     ):
         raise PlanRefused("ENVIRONMENT_PLAN_REVISION_CONFLICT")
     proposed = json.loads(row["body"])
-    checks, reference, facts = [], None, {}
+    checks, reference, facts, observed = [], None, {}, {}
     try:
         targets = _references(reference_file)
         target = next(t for t in targets if t["id"] == proposed["deployment_target"])
@@ -142,9 +141,10 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
             ("configuration", 1048576),
         ):
             try:
-                _file_check(reference[key], limit)
-                checks.append({"id": key, "state": "passed"})
-            except (ValueError, OSError, RuntimeError):
+                observed[key], matched = _file_check(reference[key], limit)
+                checks.append({"id": key, "state": "passed" if matched else "blocked"})
+            except (ValueError, OSError, RuntimeError) as exc:
+                observed[key] = type(exc).__name__
                 checks.append({"id": key, "state": "blocked"})
         same = target["application"]["revision"] == target["installer"]["revision"]
         checks.append({"id": "declared-revision", "state": "passed" if same else "blocked"})
@@ -168,7 +168,9 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
         "checks": checks,
         **facts,
     }
-    return _digest({"draft": row["digest"], "input": public, "reference": reference}), public
+    return _digest(
+        {"draft": row["digest"], "input": public, "reference": reference, "observed": observed}
+    ), public
 
 
 def preflight(path, identity, environment, revision, registry_revision, reference_file):
@@ -178,11 +180,7 @@ def preflight(path, identity, environment, revision, registry_revision, referenc
         db = drafts._database(path)
         now = time.time()
         with gateway_db.initialize(db) as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS environment_plans (id TEXT PRIMARY KEY, "
-                "environment TEXT NOT NULL, digest TEXT NOT NULL, inputs TEXT NOT NULL, "
-                "created_at REAL NOT NULL, expires_at REAL NOT NULL)"
-            )
+            drafts.initialize_plans(conn)
             found = conn.execute(
                 "SELECT * FROM environment_plans WHERE digest=? AND expires_at>? "
                 "ORDER BY created_at DESC LIMIT 1",

@@ -13,6 +13,8 @@ from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.gateway import environment_registry as registry
 from aiops_diagnostics.gateway import gateway_db
 
+REFERENCE_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
 
 def validate(body):
     fields = {
@@ -30,7 +32,7 @@ def validate(body):
     if not isinstance(body, dict) or set(body) != fields:
         raise registry.RegistryError("ENVIRONMENT_DRAFT_INVALID")
     for key in ("deployment_target", "credential_ref"):
-        if not isinstance(body[key], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", body[key]):
+        if not isinstance(body[key], str) or not REFERENCE_PATTERN.fullmatch(body[key]):
             raise registry.RegistryError("ENVIRONMENT_REFERENCE_INVALID")
     try:
         if not isinstance(body["timezone"], str) or len(body["timezone"]) > 64:
@@ -181,3 +183,12 @@ def save(path, identity, draft, *, expected_revision, registry_revision):
             "state": "draft",
             "acceptance": "unverified",
         }
+
+
+def initialize_plans(connection):
+    """同一独立草稿库的持久结构在此统一声明。"""
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS environment_plans (id TEXT PRIMARY KEY, "
+        "environment TEXT NOT NULL, digest TEXT NOT NULL, inputs TEXT NOT NULL, "
+        "created_at REAL NOT NULL, expires_at REAL NOT NULL)"
+    )

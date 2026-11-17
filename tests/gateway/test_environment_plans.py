@@ -125,3 +125,16 @@ def test_unknown_reference_is_visible_blocker_and_injection_never_read(prepared)
     assert plans.preflight(path, ADMIN, "a", 2, 1, "")["checks"][0]["state"] == "blocked"
     with pytest.raises(plans.PlanRefused):
         plans.read(path, ADMIN, "../../etc/passwd", ref)
+
+
+def test_already_blocked_file_drift_expires_frozen_plan(prepared):
+    path, _, reference, files = prepared
+    config = Path(files["configuration"]["path"])
+    write_private_text(config, "first-mismatched-config")
+    first = plans.preflight(path, ADMIN, "a", 1, 1, reference)
+    assert {"id": "configuration", "state": "blocked"} in first["checks"]
+    assert plans.read(path, ADMIN, first["id"], reference)["state"] == "blocked"
+    write_private_text(config, "second-mismatched-config")
+    assert plans.read(path, ADMIN, first["id"], reference)["state"] == "expired"
+    second = plans.preflight(path, ADMIN, "a", 1, 1, reference)
+    assert second["id"] != first["id"]
