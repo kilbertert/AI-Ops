@@ -9,7 +9,7 @@ import { ReviewOutput } from "./review-output";
 import { runWithExtraction } from "../run-with-extraction";
 import { cancellationSignal } from "../queue/cancellation.js";
 import { withReviewSandbox } from "../review-sandbox.js";
-import { linkedIssues } from "../linked-issues.mjs";
+import { primaryIssue } from "../linked-issues.mjs";
 
 const PR_NUMBER = required("PR_NUMBER");
 const BRANCH = required("BRANCH");
@@ -34,7 +34,7 @@ const prViewJson = sh(
 );
 const prView = PrView.parse(JSON.parse(prViewJson));
 
-const ISSUE_NUMBER = linkedIssues(prView.body ?? "")[0]?.toString() ?? "";
+const ISSUE_NUMBER = primaryIssue(prView.body ?? "")?.toString() ?? "";
 const ISSUE_TITLE = ISSUE_NUMBER
   ? safeSh(`gh issue view ${ISSUE_NUMBER} --json title --jq .title`).trim()
   : "";

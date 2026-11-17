@@ -7,7 +7,7 @@ import { claudeProfile } from "../profile.js";
 import { parseDiffLines } from "../review/parse-diff-lines";
 import { ImplementPrOutput } from "./implement-pr-output";
 import { runWithExtraction } from "../run-with-extraction";
-import { linkedIssues } from "../linked-issues.mjs";
+import { primaryIssue } from "../linked-issues.mjs";
 
 const PR_NUMBER = required("PR_NUMBER");
 const BRANCH = required("BRANCH");
@@ -32,7 +32,7 @@ const prViewJson = sh(
 );
 const prView = PrView.parse(JSON.parse(prViewJson));
 
-const ISSUE_NUMBER = linkedIssues(prView.body ?? "")[0]?.toString() ?? "";
+const ISSUE_NUMBER = primaryIssue(prView.body ?? "")?.toString() ?? "";
 const ISSUE_TITLE = ISSUE_NUMBER
   ? safeSh(`gh issue view ${ISSUE_NUMBER} --json title --jq .title`).trim()
   : "";

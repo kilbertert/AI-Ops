@@ -201,13 +201,8 @@ jobs:
           existing=$(gh pr list \
             --state open \
             --search "in:body \"#${ISSUE_NUMBER}\"" \
-            --json number,url,body | node --input-type=module -e '
-              import { readFileSync } from "node:fs";
-              import { linkedIssues } from "./.sandcastle/linked-issues.mjs";
-              const prs = JSON.parse(readFileSync(0, "utf8"));
-              console.log(JSON.stringify(prs.filter(pr =>
-                linkedIssues(pr.body ?? "").includes(Number(process.env.ISSUE_NUMBER)))));
-            ')
+            --json number,url,body \
+            --jq "[.[] | select((.body // \"\") | test(\"(?i)\\\\b(closes|fixes|resolves|refs)\\\\s+#${ISSUE_NUMBER}\\\\b\"))]")
           count=$(echo "$existing" | jq 'length')
           if [ "$count" -gt 0 ]; then
             url=$(echo "$existing" | jq -r '.[0].url')

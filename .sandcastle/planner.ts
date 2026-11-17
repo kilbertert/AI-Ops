@@ -161,7 +161,7 @@ function profileConfig(includeGitHub = true) {
   return claudeProfile(PROFILE, { AFK_AGENT_GH_TOKEN: token });
 }
 
-function openDeliveryPr(
+export function openDeliveryPr(
   branch: string,
   issues: { number: number; title: string }[],
 ): string {
@@ -190,11 +190,17 @@ function openDeliveryPr(
     "",
     ...issues.map((issue) => `Refs #${issue.number}`),
   ].join("\n");
-  return execFileSync(
+  const url = execFileSync(
     "gh",
     ["pr", "create", "--base", "main", "--head", branch, "--title", "chore(afk): integrate planner batch", "--body", body],
     { encoding: "utf8" },
   ).trim();
+  // Delivery owns the implementation now; keep acceptance open without rerunning it.
+  for (const issue of issues) {
+    execFileSync("gh", ["issue", "edit", String(issue.number), "--remove-label", "ready-for-agent"],
+      { stdio: "inherit" });
+  }
+  return url;
 }
 
 // --- planner loop ----------------------------------------------------------
