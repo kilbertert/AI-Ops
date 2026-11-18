@@ -43,8 +43,10 @@ def extract(archive, dest):
                 target.chmod(0o644)
 
 
-def command(*args):
-    return subprocess.check_output(args, stderr=subprocess.STDOUT, text=True, timeout=120).strip()
+def command(*args, pass_fds=()):
+    return subprocess.check_output(
+        args, stderr=subprocess.STDOUT, text=True, timeout=120, pass_fds=pass_fds
+    ).strip()
 
 
 def isolated_http(pid, port, path, *, post=False):

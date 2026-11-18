@@ -294,3 +294,102 @@ def export(settings, payload, node_file, output):
     return {k: v for k, v in result.items() if k != "files"} | {
         "archive_sha256": hashlib.sha256(output.read_bytes()).hexdigest()
     }
+
+
+def register_installed(settings, expected_sha256, receipt_fd):
+    """受管安装器以目标服务身份调用；只消费现役私有工件，不接共享管理凭据。"""
+    import fcntl
+    import stat
+
+    from aiops_diagnostics.gateway import gateway_schema
+    from aiops_diagnostics.gateway.environment_artifacts import runtime_files
+    from aiops_diagnostics.gateway.environment_projection import validate_candidate
+
+    from .self_service_config import profiles
+    from .self_service_store import SelfServiceStore
+
+    root = Path(f"/etc/aiops-access-{settings.environment}")
+    app = Path(f"/opt/aiops-access-{settings.environment}")
+    receipt_path = app / "installed.json"
+    observed = os.fstat(receipt_fd)
+    if (
+        observed.st_uid != 0
+        or observed.st_mode & 0o077
+        or observed.st_nlink != 1
+        or not stat.S_ISREG(observed.st_mode)
+        or observed.st_size > 65536
+        or fcntl.fcntl(receipt_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY
+        or receipt_path.is_symlink()
+        or (observed.st_dev, observed.st_ino) != (receipt_path.stat().st_dev, receipt_path.stat().st_ino)
+    ):
+        raise ValueError("root-owned installation receipt descriptor required")
+    with os.fdopen(os.dup(receipt_fd), "rb") as stream:
+        stream.seek(0)
+        installed = json.load(stream)
+    runtime = root / "runtime"
+    if (
+        settings.execution_environment != settings.environment
+        or not settings.server_config_file
+        or Path(settings.server_config_file) != root / "production.env"
+        or settings.environment_registry_file != str(root / "registry/environment.json")
+        or settings.operator_profiles_file != str(runtime / "operator-profiles.json")
+        or settings.consumer_publication_targets_file != str(runtime / "consumer-targets.json")
+        or str(settings.database_file) != f"/var/lib/aiops-access-{settings.environment}/gateway/gateway.db"
+    ):
+        raise ValueError("runtime registration must use installed environment paths")
+    validate_private_file(Path(settings.database_file))
+    report = gateway_schema.check(settings.database_file)
+    if report["version"] != report["current_version"]:
+        raise ValueError("runtime registration requires current schema")
+
+    def current():
+        latest = receipt_path.stat()
+        if receipt_path.is_symlink() or (latest.st_dev, latest.st_ino) != (observed.st_dev, observed.st_ino):
+            raise ValueError("installation receipt replaced during registration")
+        if (app / "pending.json").exists():
+            raise ValueError("unfinished installation prevents registration")
+        if (
+            installed["environment"] != settings.environment
+            or installed["runtime_sha256"] != expected_sha256
+            or (app / "current").resolve() != app / "releases" / installed["release"]
+            or runtime.resolve() != app / "releases" / installed["runtime_release"] / "runtime"
+            or json.loads((app / "current/manifest.json").read_text())["revision"] != installed["revision"]
+            or json.loads((app / "current/manifest.json").read_text())["version"] != installed["version"]
+            or hashlib.sha256((root / "production.env").read_bytes()).hexdigest()
+            != installed["config_sha256"]
+            or hashlib.sha256((root / "registry/environment.json").read_bytes()).hexdigest()
+            != installed["registry_sha256"]
+        ):
+            raise ValueError("installed runtime receipt mismatch")
+        validate_candidate(
+            root / "production.env", root / "registry/environment.json", settings.environment, runtime=runtime
+        )
+        files, manifest = runtime_files(runtime / "runtime.tar", expected_sha256, settings.environment)
+        if set(profiles(settings)) != {"operator-" + settings.environment}:
+            raise ValueError("runtime profile mismatch")
+        before = {
+            name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+            for name in ("production.env", "registry/environment.json")
+        }
+        return files, manifest, before, str(runtime.resolve())
+
+    files, manifest, config_hashes, pointer = current()
+    registration = json.loads(files["registrations.json"])
+    consumer = json.loads(files["consumer-targets.json"])["targets"][0]
+
+    def unchanged():
+        if current() != (files, manifest, config_hashes, pointer):
+            raise ValueError("runtime changed during registration")
+
+    changed = SelfServiceStore(settings.database_file).register_runtime(
+        registration, consumer, verify=unchanged
+    )
+    return {
+        "environment": settings.environment,
+        "tenant_id": manifest["tenant_id"],
+        "runtime_sha256": expected_sha256,
+        "result": "registered" if changed else "unchanged",
+        "scope": "inactive-runtime-registration-only",
+        "activated": False,
+        "business_acceptance": False,
+    }

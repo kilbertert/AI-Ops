@@ -74,8 +74,8 @@ class Installer:
         self.unit = Path("/etc/systemd/system") / (self.name + ".service")
         self.backups = Path("/var/backups") / self.name
 
-    def command(self, *args):
-        return probe.command(*args)
+    def command(self, *args, **kwargs):
+        return probe.command(*args, **kwargs)
 
     def environment_args(self, state, config=None):
         return [
@@ -503,6 +503,49 @@ WantedBy=multi-user.target
             json.dumps({"observed": observed, "public": public}, sort_keys=True).encode()
         ).hexdigest()
         return fingerprint, public, {"available_memory_bytes": available, "available_disk_bytes": free}
+
+    def register_runtime(self):
+        installed = self.read_record("installed.json")
+        if (self.root / "pending.json").exists() or not installed.get("runtime_sha256"):
+            raise ValueError("installed runtime required without pending change")
+        if installed["revision"] != self.revision:
+            raise ValueError("registration installer and application revisions differ")
+        self.check_registry(installed)
+        self.check_runtime(installed)
+        if digest(self.config / "production.env") != installed["config_sha256"]:
+            raise ValueError("configuration drift prevents registration")
+        release = self.release(installed)
+        if (self.root / "current").resolve() != release:
+            raise ValueError("current release drift prevents registration")
+        self.health(installed["version"], wait=0)
+        self.check_database(release)
+        with (self.root / "installed.json").open("rb") as receipt:
+            result = json.loads(
+                self.command(
+                    "runuser",
+                    "-u",
+                    self.user,
+                    "--",
+                    *self.environment_args(self.state),
+                    str(release / "venv/bin/aiops-admin"),
+                    "environment-runtime-register",
+                    "--sha256",
+                    installed["runtime_sha256"],
+                    "--receipt-fd",
+                    str(receipt.fileno()),
+                    pass_fds=(receipt.fileno(),),
+                )
+            )
+        if (
+            result.get("environment") != self.environment
+            or result.get("runtime_sha256") != installed["runtime_sha256"]
+            or result.get("result") not in {"registered", "unchanged"}
+            or result.get("scope") != "inactive-runtime-registration-only"
+            or result.get("activated") is not False
+            or result.get("business_acceptance") is not False
+        ):
+            raise ValueError("runtime registration receipt invalid")
+        return result
 
     def preflight(self, receipt=None):
         fingerprint, public, resources = self.site_observation()
@@ -1032,7 +1075,7 @@ WantedBy=multi-user.target
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("install", "recover", "preflight"))
+    parser.add_argument("action", choices=("install", "recover", "preflight", "register-runtime"))
     for name in ("environment", "user", "port"):
         parser.add_argument("--" + name, required=True, type=int if name == "port" else str)
     parser.add_argument("--archive", type=Path)
@@ -1055,7 +1098,7 @@ def main():
         if os.geteuid() != 0 or platform.system() != "Linux" or platform.machine() != "x86_64":
             raise ValueError("Linux x86_64 host maintenance identity required")
         inst = Installer(args.environment, args.user, args.port)
-        if args.action in ("install", "recover", "preflight"):
+        if args.action in ("install", "recover", "preflight", "register-runtime"):
             revision = Path(__file__).with_name("REVISION").read_text().strip()
             sums = Path(__file__).with_name("SHA256SUMS").read_text().splitlines()
             if not re.fullmatch(r"[a-f0-9]{40}", revision):
@@ -1085,7 +1128,7 @@ def main():
             if os.fstat(lock.fileno()).st_nlink != 1:
                 raise ValueError("lock hardlink refused")
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if args.action == "preflight":
+            if args.action in ("preflight", "register-runtime"):
                 if any(
                     (
                         args.archive,
@@ -1101,8 +1144,13 @@ def main():
                         args.expected_runtime_sha256,
                     )
                 ):
-                    raise ValueError("preflight accepts no deployment input")
-                result = inst.preflight(args.receipt)
+                    raise ValueError("observation and registration accept no deployment input")
+                if args.action == "register-runtime":
+                    if args.receipt is not None:
+                        raise ValueError("registration accepts no preflight receipt")
+                    result = inst.register_runtime()
+                else:
+                    result = inst.preflight(args.receipt)
             elif args.receipt is not None:
                 raise ValueError("receipt is only accepted by preflight")
             elif args.action == "recover":

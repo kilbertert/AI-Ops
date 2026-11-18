@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
@@ -245,6 +245,7 @@ class SelfServiceStore:
         scenario="",
         environment="",
         targets=None,
+        connection=None,
     ):
         scenario = scenario or dual_entry.scenario(entry)
         if scenario != dual_entry.scenario(entry):
@@ -255,7 +256,7 @@ class SelfServiceStore:
         #: 41 的 CD 自检就是这么红的（`SetupConflict: SETUP_APP_CONFLICT`，主机自动回滚）。
         identity = (app_id, tenant_id, workspace_id, agent_name, profile_id, entry, scenario)
         encoded = json.dumps(targets or {}, ensure_ascii=False, sort_keys=True)
-        with self.connection() as db:
+        with nullcontext(connection) if connection is not None else self.connection() as db:
             # 租约由 LEASE 在连接入口持有——这里不再需要手动 BEGIN。
             old = db.execute("SELECT * FROM operator_apps WHERE app_id=?", (app_id,)).fetchone()
             if old:
@@ -286,6 +287,117 @@ class SelfServiceStore:
                 "environment,targets_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (*identity[:5], actor, *identity[5:], environment, encoded),
             )
+
+    def register_runtime(self, registration, consumer, *, verify):
+        """只登记已核验的工作区/双端候选；不更新或收养已有不同归属。"""
+        from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+
+        environment, tenant, workspace = (
+            registration[k] for k in ("environment", "tenant_id", "workspace_id")
+        )
+        desired = [
+            dict(
+                app_id=registration["operator_app_id"],
+                tenant_id=tenant,
+                workspace_id=workspace,
+                agent_name="operator-" + registration["operator_app_id"],
+                profile_id="operator-" + environment,
+                entry="operator",
+                environment=environment,
+                targets={},
+            ),
+            dict(
+                app_id=registration["consumer_app_id"],
+                tenant_id=tenant,
+                workspace_id=workspace,
+                agent_name="consumer-" + registration["consumer_app_id"],
+                profile_id="",
+                entry="consumer",
+                environment=environment,
+                targets={
+                    k: consumer[k] for k in ("knowledge_base_ids", "live_order_status", "live_billing_record")
+                }
+                | {"photo_enabled": consumer.get("photo_enabled", False)},
+            ),
+        ]
+        with self.connection() as db:
+            verify()
+            from aiops_diagnostics.gateway.gateway_store import JOB_TABLES
+
+            active_rows = [(t, "status", ("queued", "running")) for t in JOB_TABLES]
+            active_rows += [
+                ("agent_runs", "state", ("issued", "running")),
+                ("chat_dify_runs", "state", ("running", "running")),
+                ("operator_setup_jobs", "state", ("pending", "running")),
+            ]
+            for table, column, active in active_rows:
+                if db.execute(f"SELECT 1 FROM {table} WHERE {column} IN (?,?) LIMIT 1", active).fetchone():
+                    raise SetupConflict("SETUP_INFLIGHT_WORK")
+            existing_workspace = db.execute(
+                "SELECT * FROM dify_workspaces WHERE tenant_id=? AND environment=?", (tenant, environment)
+            ).fetchone()
+            if (
+                db.execute(
+                    "SELECT 1 FROM dify_workspaces WHERE workspace_id=? "
+                    "AND NOT (tenant_id=? AND environment=?)",
+                    (workspace, tenant, environment),
+                ).fetchone()
+                or existing_workspace
+                and (
+                    existing_workspace["workspace_id"] != workspace
+                    or existing_workspace["setup_state"] != "created"
+                )
+            ):
+                raise SetupConflict("SETUP_WORKSPACE_CONFLICT")
+            if (
+                db.execute(
+                    "SELECT 1 FROM chat_route_bindings WHERE environment=? AND tenant_id=?",
+                    (environment, tenant),
+                ).fetchone()
+                or db.execute(
+                    "SELECT 1 FROM dify_app_registry WHERE tenant_id=? OR app_id IN (?,?)",
+                    (tenant, registration["operator_app_id"], registration["consumer_app_id"]),
+                ).fetchone()
+            ):
+                raise SetupConflict("SETUP_ROUTE_CONFLICT")
+            existing_apps = []
+            for app in desired:
+                row = db.execute("SELECT * FROM operator_apps WHERE app_id=?", (app["app_id"],)).fetchone()
+                if row and (
+                    any(
+                        row[k] != app[k]
+                        for k in (
+                            "app_id",
+                            "tenant_id",
+                            "workspace_id",
+                            "agent_name",
+                            "profile_id",
+                            "entry",
+                            "environment",
+                        )
+                    )
+                    or row["revision"] != 1
+                    or json.loads(row["targets_json"]) != app["targets"]
+                    or row["created_by"] != "environment-runtime"
+                    or row["scenario"] != dual_entry.scenario(app["entry"])
+                ):
+                    raise SetupConflict("SETUP_APP_CONFLICT")
+                existing_apps.append(row)
+            if any(existing_apps) != all(existing_apps) or bool(existing_workspace) != all(existing_apps):
+                raise SetupConflict("SETUP_PARTIAL_REGISTRATION")
+            if existing_workspace:
+                return False
+            now = format_stored_time(now_utc())
+            db.execute(
+                "INSERT INTO dify_workspaces(tenant_id,environment,workspace_id,setup_state,"
+                "created_at,updated_at) "
+                "VALUES(?,?,?,'created',?,?)",
+                (tenant, environment, workspace, now, now),
+            )
+            for app in desired:
+                self.register(**app, actor="environment-runtime", connection=db)
+            verify()
+            return True
 
 
 #: 逐端公开状态的字段白名单。多给字段就是把内部资源 ID 顺手交给页面；
