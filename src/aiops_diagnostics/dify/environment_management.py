@@ -206,7 +206,7 @@ def prepare_workspace(context, payload):
 
     from aiops_diagnostics.dify.dify_ensure_workspace import EnsureError, ensure_workspace, reconcile_by_name
     from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiSettings
-    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
 
     if set(payload) != {"id", "owner", "prepare"} or payload["prepare"] != "workspace":
         raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
@@ -220,6 +220,18 @@ def prepare_workspace(context, payload):
         existing = workspaces.row(tenant, environment)
         if request["cancel_requested"] and (existing is None or existing["setup_state"] == "failed"):
             raise EnsureError("ENVIRONMENT_TASK_CANCELLED", "创建前已取消")
+        try:
+            environment_tasks.workspace_request(
+                path,
+                reference,
+                payload["id"],
+                payload["owner"],
+                reconciling=existing is not None and existing["setup_state"] != "failed",
+            )
+        except environment_tasks.TaskRefused as exc:
+            if str(exc) != "ENVIRONMENT_TASK_PLAN_EXPIRED":
+                raise
+            raise EnsureError(str(exc), "首次创建前计划已过期") from exc
         outcome = ensure_workspace(
             tenant_id=tenant,
             environment=environment,
@@ -246,16 +258,20 @@ def prepare_workspace(context, payload):
             raise EnsureError("DIFY_WORKSPACE_AMBIGUOUS", "同名工作区不唯一，需人工核对")
         if len(matches) != 1 or matches[0].get("id") != outcome.workspace_id:
             raise EnsureError("DIFY_WORKSPACE_CREATE_UNCONFIRMED", "工作区归属未确认")
-        if workspaces.tenant_for_workspace(outcome.workspace_id, environment) != tenant:
+        if (
+            workspaces.tenant_for_workspace(outcome.workspace_id, environment, across_environments=True)
+            != tenant
+        ):
             raise EnsureError("DIFY_WORKSPACE_AMBIGUOUS", "工作区映射归属不唯一")
         workspace_id = outcome.workspace_id
-    except EnsureError as exc:
+    except (EnsureError, DifyWorkspaceError) as exc:
         row = workspaces.row(tenant, environment)
         if exc.code in {
             "DIFY_WORKSPACE_AMBIGUOUS",
             "DIFY_CONSOLE_KEY_REJECTED",
             "DIFY_RECONCILE_TOO_LARGE",
             "ENVIRONMENT_TASK_CANCELLED",
+            "ENVIRONMENT_TASK_PLAN_EXPIRED",
         } or (row and row["setup_state"] == "failed"):
             state, error = "blocked", exc.code
         else:

@@ -184,7 +184,9 @@ class DifyWorkspaces:
             ).fetchone()
         return dict(found) if found is not None else None
 
-    def tenant_for_workspace(self, workspace_id: str, environment: str) -> str:
+    def tenant_for_workspace(
+        self, workspace_id: str, environment: str, *, across_environments: bool = False
+    ) -> str:
         """``(workspace_id, environment)`` → 那个 workspace 的 ``tenant_id``（#982）。
 
         ``resolve`` 的反方向。Dify 的知识库入口只知道**当前 workspace**（它自己的会话
@@ -206,9 +208,9 @@ class DifyWorkspaces:
         environment = _identifier(environment, "environment")
         with self._connection() as connection:
             rows = connection.execute(
-                "SELECT tenant_id, setup_state FROM dify_workspaces"
-                " WHERE workspace_id = ? AND environment = ?",
-                (workspace_id, environment),
+                "SELECT tenant_id, setup_state, environment FROM dify_workspaces"
+                " WHERE workspace_id = ?" + ("" if across_environments else " AND environment = ?"),
+                (workspace_id,) if across_environments else (workspace_id, environment),
             ).fetchall()
         if not rows:
             raise DifyWorkspaceError(
@@ -216,7 +218,7 @@ class DifyWorkspaces:
                 f"环境 {environment} 里没有 workspace {workspace_id}",
                 http_status=404,
             )
-        if len(rows) > 1:
+        if len(rows) > 1 or rows[0]["environment"] != environment:
             raise DifyWorkspaceError(
                 DIFY_WORKSPACE_AMBIGUOUS,
                 f"workspace {workspace_id} 在环境 {environment} 里对应多个租户，拒绝选择",
@@ -329,7 +331,9 @@ class DifyWorkspaces:
             )
         return True
 
-    def mark_created(self, tenant_id: str, environment: str, workspace_id: str, *, name: str = "") -> None:
+    def mark_created(
+        self, tenant_id: str, environment: str, workspace_id: str, *, name: str = "", exclusive: bool = False
+    ) -> None:
         """建成之后**立刻**写回 id —— 这一行与 Dify 的现状之间不留空窗。
 
         ``name`` 是**这次建的时候用的派生名**。写进表里，以后对账按它查：公司改名之后
@@ -338,6 +342,17 @@ class DifyWorkspaces:
         tenant_id = _identifier(tenant_id, "tenant_id")
         environment = _identifier(environment, "environment")
         with self._connection(write=True) as connection:
+            if (
+                exclusive
+                and connection.execute(
+                    "SELECT 1 FROM dify_workspaces WHERE workspace_id=?"
+                    " AND NOT (tenant_id=? AND environment=?)",
+                    (workspace_id, tenant_id, environment),
+                ).fetchone()
+            ):
+                raise DifyWorkspaceError(
+                    DIFY_WORKSPACE_AMBIGUOUS, "工作区已绑定其他环境或租户", http_status=409
+                )
             connection.execute(
                 "UPDATE dify_workspaces SET workspace_id = ?, workspace_name = ?,"
                 " setup_state = 'created', last_error = '', lease_expires_at = NULL, updated_at = ?"

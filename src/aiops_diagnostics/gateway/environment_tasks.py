@@ -152,7 +152,7 @@ def submit_workspace(path, identity, identifier, tenant_id, reference):
             return _public(_row(conn, task_id))
 
 
-def workspace_request(path, reference, identifier, owner):
+def workspace_request(path, reference, identifier, owner, *, reconciling=True):
     with drafts._locked(path), gateway_db.connection(drafts._database(path), readonly=True) as conn:
         row = _row(conn, identifier)
         request = json.loads(row["request"])
@@ -164,7 +164,7 @@ def workspace_request(path, reference, identifier, owner):
         ):
             raise TaskRefused("ENVIRONMENT_TASK_LEASE_LOST")
         _authorize(path, tuple(request["identity"]), row["environment"])
-        _current(path, request, reference, reconciling=True)
+        _current(path, request, reference, reconciling=reconciling)
         return {**request, "cancel_requested": bool(row["cancel"])}
 
 

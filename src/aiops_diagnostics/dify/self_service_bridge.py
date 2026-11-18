@@ -13,6 +13,7 @@ def handle(handler, bridge):
     _request = bridge._request
     console_session_from_headers = bridge.console_session_from_headers
     normalize_origin = bridge.normalize_origin
+    tenant_reference = r"[A-Za-z0-9_-]{1,64}"
 
     origin = normalize_origin(handler._single_header("Origin"))
     referer = handler._single_header("Referer") or ""
@@ -129,7 +130,7 @@ def handle(handler, bridge):
                 isinstance(payload["site_task"], str)
                 and re.fullmatch(r"task_[0-9a-f]{32}", payload["site_task"])
                 and isinstance(payload["tenant_id"], str)
-                and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", payload["tenant_id"])
+                and re.fullmatch(tenant_reference, payload["tenant_id"])
             )
         elif set(payload) == {"environment"}:
             valid = isinstance(payload["environment"], str) and re.fullmatch(
@@ -214,7 +215,7 @@ def handle(handler, bridge):
             or not 1 <= len(payload["name"]) <= 128
             or any(
                 not isinstance(payload.get(key), str)
-                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", payload[key])
+                or not re.fullmatch(tenant_reference, payload[key])
                 for key in ("environment", "tenant_id")
                 if key in payload
             )

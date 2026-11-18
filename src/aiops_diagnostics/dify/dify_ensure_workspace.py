@@ -162,6 +162,9 @@ def ensure_workspace(
     # 公司名只影响**建的那一刻**取什么名字。发请求前写进表，以后对账按那一列 ——
     # 公司改名不会让对账失效（见 workspace_name 的 docstring）。
     name = workspace_name(environment, tenant_id, company=company or "")
+    if reconcile_unknown_only:
+        # 环境允许连字符，用长度前缀消除(a,b-c)/(a-b,c)的拼接歧义。
+        name = f"aiops-{len(environment)}-{environment}-{tenant_id}"
     lease_owner = owner or _lease_owner()
 
     row = workspaces.row(tenant_id, environment)
@@ -194,7 +197,9 @@ def ensure_workspace(
             if len(matches) == 1:
                 found = str(matches[0].get("id") or "")
                 # 对账补 UUID 时把**当时那个名字**一并落表 —— 它是这次对账的依据。
-                workspaces.mark_created(tenant_id, environment, found, name=stored_name)
+                workspaces.mark_created(
+                    tenant_id, environment, found, name=stored_name, exclusive=reconcile_unknown_only
+                )
                 return EnsureOutcome(
                     tenant_id, environment, "created", found, "对账命中 1 个：补写 UUID，未重建"
                 )
@@ -231,7 +236,9 @@ def ensure_workspace(
         workspaces.mark_failed(tenant_id, environment, error=f"{exc.code}: {exc.message}")
         raise EnsureError(exc.code, exc.message) from exc
 
-    workspaces.mark_created(tenant_id, environment, created.workspace_id, name=name)
+    workspaces.mark_created(
+        tenant_id, environment, created.workspace_id, name=name, exclusive=reconcile_unknown_only
+    )
     if log is not None:
         log(f"workspace created: {created.name} -> {created.workspace_id}")
     return EnsureOutcome(tenant_id, environment, "created", created.workspace_id, "新建")

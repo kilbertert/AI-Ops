@@ -250,8 +250,23 @@ def test_candidate_rejects_unobserved_wrong_tenant_forged_results_and_old_lease(
     assert workspace_upstream.posts() == []
 
 
+def test_candidate_first_create_checks_expiry_and_does_not_leave_running(prepared, workspace_upstream):  # noqa: F811
+    path, ref, _, _ = prepared
+    job, _ = workspace_job(prepared, workspace_upstream)
+    tasks.worker(path, ref, {"id": job["id"], "owner": "b" * 32})
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(
+            conn.execute("SELECT request FROM environment_tasks WHERE id=?", (job["id"],)).fetchone()[0]
+        )
+        request["plan"]["expires_at"] = time.time() - 1
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), job["id"]))
+    result = prepare_http(prepared, job).json()
+    assert result["state"] == "blocked" and result["error_code"] == "ENVIRONMENT_TASK_PLAN_EXPIRED"
+    assert workspace_upstream.posts() == []
+
+
 def test_cancelled_unknown_create_reconciles_and_ambiguity_blocks(prepared, workspace_upstream):  # noqa: F811
-    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces, workspace_name
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     path, ref, client, settings = prepared
     job, _ = workspace_job(prepared, workspace_upstream)
@@ -260,14 +275,14 @@ def test_cancelled_unknown_create_reconciles_and_ambiguity_blocks(prepared, work
     client.post("/v1/dify/management/environment-tasks", json={"id": job["id"], "cancel": True})
     assert prepare_http(prepared, job).json()["state"] == "reconcile"
     assert len(workspace_upstream.posts()) == 1
-    name = workspace_name("a", "same")
+    name = "aiops-1-a-same"
     workspace_upstream.workspaces.append({"id": "recovered", "name": name})
     recovered = prepare_http(prepared, job).json()
     assert recovered["state"] == "cancelled" and recovered["result"]["workspace_id"] == "recovered"
     assert len(workspace_upstream.posts()) == 1
     other, _ = workspace_job(prepared, workspace_upstream, "b")
     workspaces = DifyWorkspaces(settings.database_file)
-    name = workspace_name("b", "same")
+    name = "aiops-1-b-same"
     workspaces.claim("same", "b", owner="lost", lease_seconds=1, name=name)
     workspaces.mark_unknown("same", "b", error="timeout")
     workspace_upstream.workspaces.extend([{"id": "one", "name": name}, {"id": "two", "name": name}])
