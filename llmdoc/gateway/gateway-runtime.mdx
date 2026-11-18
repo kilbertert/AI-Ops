@@ -11,6 +11,8 @@ code:
     - docs/acceptance/environment-directory.feature
     - docs/acceptance/environment-directory-qa-plan.md
     - docs/agents/environment-registry.md
+    - src/aiops_diagnostics/gateway/environment_projection.py
+    - src/aiops_diagnostics/gateway/environment_plans.py
     - src/aiops_diagnostics/gateway_server.py
     - src/aiops_diagnostics/gateway/isolation_guard.py
     - src/aiops_diagnostics/gateway/gateway_api.py
@@ -59,7 +61,8 @@ code:
 字段与图迁移规则见[consumer/consumer-chat](../consumer/consumer-chat.mdx)，无新路由或权限扩张。
 
 开通预检的文件/归档合同见[环境目录手册](../../docs/agents/environment-registry.md#计划预检与读取（P4第一片）)：
-Gateway与P3安装器共用成员摘要/Python/内部修订校验，不执行归档代码；文件通过仍不证明Git来源、配置投影或现场可用。
+Gateway与P3安装器共用成员摘要/Python/内部修订校验，不执行归档代码。草稿与固定模板可生成停用候选并由原CLI导出；
+不返回秘密、不安装，文件通过仍不证明Git来源、全部配置可启动或现场可用。
 
 ## Canonical anchors
 
