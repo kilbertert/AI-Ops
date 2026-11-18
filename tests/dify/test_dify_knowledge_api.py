@@ -121,7 +121,7 @@ def _chunk(
 def _client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> TestClient:
     settings = GatewayServerSettings(
         data_home=tmp_path,
-        database_file=tmp_path / "gateway.db",
+        database_file=overrides.pop("database_file", tmp_path / "gateway.db"),
         server_config_file=tmp_path / "production.env",
         dify_knowledge_api_key=overrides.pop("dify_knowledge_api_key", DIFY_KEY),
         dify_knowledge_bindings=overrides.pop("dify_knowledge_bindings", BINDINGS),
