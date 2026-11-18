@@ -12,6 +12,8 @@ from models.account import Account, Tenant, TenantAccountRole
 from services.app_dsl_service import Import, ImportStatus
 from werkzeug.exceptions import HTTPException
 
+from services import app_dsl_service as service
+
 app = create_flask_app_with_configs()
 request_id = "11111111-1111-1111-1111-111111111111"
 namespace = UUID("6e5a60f0-9495-4c43-a714-d954c2609aeb")
@@ -65,7 +67,7 @@ def request(tenant_id, role="editor", extra=None, method="POST"):
 def main():
     a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-    assert request(a, method="GET") == (200, {"aiops_idempotent_import": 1})
+    assert request(a, method="GET") == (200, {"aiops_idempotent_import": 1, "aiops_candidate_import": 1})
     for role in ("normal", "dataset_operator"):
         assert request(a, role=role)[0] == 403
         assert request(a, role=role, method="GET")[0] == 403
@@ -82,6 +84,37 @@ def main():
     created[key] = SimpleNamespace(tenant_id=b)
     assert request(a)[0] == 403
     print("Dify idempotent import: role guards, retry, tenant isolation and conflict passed")
+    # 实际服务创建的第一批写入已停用，不能用创建后关入口模拟零暴露窗口。
+    account = Account(name="fixture", email="fixture@example.invalid")
+    account.id = "33333333-3333-3333-3333-333333333333"
+    account._current_tenant = Tenant(name="fixture")
+    account._current_tenant.id = a
+    for candidate in (False, True):
+        session = SimpleNamespace(add=lambda _: None, flush=lambda: None, get=lambda *args: None)
+        with (
+            patch.object(service, "is_valid_image_icon", return_value=True),
+            patch.object(service.app_was_created, "send"),
+            patch.object(service.app_model_config_was_updated, "send"),
+        ):
+            row = service.AppDslService(session)._create_or_update_app(
+                app=None,
+                data={
+                    "aiops_candidate": candidate,
+                    "app": {"mode": "agent-chat", "name": "fixture"},
+                    "model_config": {
+                        "model": {
+                            "provider": "fixture",
+                            "name": "fixture",
+                            "mode": "chat",
+                            "completion_params": {},
+                        }
+                    },
+                },
+                account=account,
+                import_app_id=str(uuid5(namespace, a + ":" + request_id)),
+            )
+            assert row.enable_api is (not candidate) and row.enable_site is (not candidate)
+    print("Dify candidate creation: disabled initial flags and unchanged default passed")
 
 
 if __name__ == "__main__":
