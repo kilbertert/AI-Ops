@@ -490,6 +490,8 @@ def _readable_company(company: str) -> str:
 
 def _identifier(value: str, name: str) -> str:
     candidate = (value or "").strip()
-    if not (REFERENCE_PATTERN.fullmatch(candidate) if name == "tenant_id" else _SAFE_ID.fullmatch(candidate)):
+    if not (
+        _SAFE_ID.fullmatch(candidate) or (name == "tenant_id" and REFERENCE_PATTERN.fullmatch(candidate))
+    ):
         raise ValueError(f"{name} contains unsupported characters")
     return candidate

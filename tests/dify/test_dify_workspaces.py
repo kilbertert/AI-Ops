@@ -44,7 +44,7 @@ OTHER_ENVIRONMENT = "95"
 TENANT = "1783000000000000001"
 
 
-@pytest.mark.parametrize("tenant", ["_tenant", "-tenant"])
+@pytest.mark.parametrize("tenant", ["_tenant", "-tenant", "company.east", "company:east", "a" * 100])
 def test_registered_tenant_reference_preserves_resource_id_validation(tmp_path, tenant):
     db = DifyWorkspaces(tmp_path / "gateway.db")
     assert db.claim(tenant, ENVIRONMENT, owner="fixture", lease_seconds=1)
