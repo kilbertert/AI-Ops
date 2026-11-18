@@ -1215,3 +1215,44 @@ def test_runtime_recovery_rechecks_application_pointer_after_stop(host, monkeypa
         inst.recover()
     assert (inst.root / "current").read_text() == "external-change-after-stop"
     assert (inst.root / "pending.json").exists()
+
+
+@pytest.mark.parametrize("refusal", [None, "pending", "drift", "revision"])
+def test_fixed_installer_registers_without_restart_or_deployment_input(host, monkeypatch, refusal):
+    inst = host[0]
+    apply_runtime(host, runtime_bundle(host))
+    old = inst.read_record("installed.json")
+    inst.revision = old["revision"]
+    if refusal == "pending":
+        inst.record("pending.json", {**old, "previous": old, "phase": "preparing"})
+    elif refusal == "drift":
+        (inst.config / "runtime/consumer-model.json").write_text("external")
+    elif refusal == "revision":
+        inst.revision = "b" * 40
+    original = inst.command
+    calls = []
+
+    def command(*args):
+        calls.append(args)
+        if "environment-runtime-register" in args:
+            assert args[:4] == ("runuser", "-u", inst.user, "--")
+            return json.dumps(
+                dict(
+                    environment="test",
+                    runtime_sha256=old["runtime_sha256"],
+                    result="registered",
+                    scope="inactive-runtime-registration-only",
+                    activated=False,
+                    business_acceptance=False,
+                )
+            )
+        return original(*args)
+
+    monkeypatch.setattr(inst, "command", command)
+    if refusal:
+        with pytest.raises(ValueError):
+            inst.register_runtime()
+        assert not any("environment-runtime-register" in c for c in calls)
+    else:
+        assert inst.register_runtime()["result"] == "registered"
+    assert not any(a[:2] in (("systemctl", "stop"), ("systemctl", "start")) for a in calls)

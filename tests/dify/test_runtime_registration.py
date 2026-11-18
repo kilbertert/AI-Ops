@@ -1,0 +1,142 @@
+"""D32：工作区/双端同事务登记；判据来自准备与准入分离和既有复合归属。"""
+
+import sqlite3
+
+import pytest
+
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+from aiops_diagnostics.dify.self_service_store import SelfServiceStore, SetupConflict
+from aiops_diagnostics.gateway import gateway_db
+
+
+@pytest.fixture
+def candidate(tmp_path):
+    store = SelfServiceStore(tmp_path / "gateway.db")
+    registration = dict(
+        environment="target",
+        tenant_id="same",
+        workspace_id="workspace-target",
+        operator_app_id="operator-target",
+        consumer_app_id="consumer-target",
+        enabled=False,
+    )
+    consumer = dict(knowledge_base_ids=["kb-target"], live_order_status=True, live_billing_record=True)
+    return store, registration, consumer
+
+
+def register(candidate, verify=lambda: None):
+    return candidate[0].register_runtime(candidate[1], candidate[2], verify=verify)
+
+
+def rows(candidate):
+    with gateway_db.connection(candidate[0].path, readonly=True) as db:
+        return {
+            t: [dict(r) for r in db.execute("SELECT * FROM " + t)]
+            for t in (
+                "dify_workspaces",
+                "operator_apps",
+                "chat_route_bindings",
+                "agent_versions",
+                "dify_app_registry",
+            )
+        }
+
+
+def test_same_resources_register_once_and_preserve_original_formal_state(candidate):
+    assert register(candidate) is True
+    before = rows(candidate)
+    assert register(candidate) is False and rows(candidate) == before
+    workspace = DifyWorkspaces(candidate[0].path)
+    assert workspace.resolve("same", "target") == "workspace-target"
+    assert workspace.row("same", "target")["setup_state"] == "created"
+    apps = candidate[0].apps()
+    assert {a["entry"] for a in apps} == {"operator", "consumer"}
+    assert {a["environment"] for a in apps} == {"target"}
+    assert before["chat_route_bindings"] == before["agent_versions"] == before["dify_app_registry"] == []
+
+
+@pytest.mark.parametrize("conflict", ["workspace-owner", "app-owner", "partial", "target-flags", "scenario"])
+def test_existing_conflict_never_creates_or_overwrites_partial_registration(candidate, conflict):
+    store, registration, _ = candidate
+    if conflict == "workspace-owner":
+        workspace = DifyWorkspaces(store.path)
+        workspace.claim("same", "other", owner="fixture", lease_seconds=60)
+        workspace.mark_created("same", "other", registration["workspace_id"])
+    elif conflict == "app-owner":
+        store.register(
+            app_id=registration["consumer_app_id"],
+            tenant_id="other",
+            workspace_id="other-workspace",
+            agent_name="other",
+            profile_id="",
+            actor="fixture",
+            entry="consumer",
+            environment="other",
+        )
+    else:
+        register(candidate)
+        with store.connection() as db:
+            if conflict == "partial":
+                db.execute("DELETE FROM operator_apps WHERE entry='consumer'")
+            elif conflict == "target-flags":
+                db.execute("UPDATE operator_apps SET targets_json='{}' WHERE entry='consumer'")
+            else:
+                db.execute("UPDATE operator_apps SET scenario='other' WHERE entry='operator'")
+    before = rows(candidate)
+    with pytest.raises(SetupConflict):
+        register(candidate)
+    assert rows(candidate) == before
+
+
+@pytest.mark.parametrize("failure", ["second-app", "inputs-changed", "constraint"])
+def test_mid_transaction_failure_keeps_latest_evidence_and_no_partial_resources(
+    candidate, monkeypatch, failure
+):
+    store = candidate[0]
+    with store.connection() as db:
+        db.execute("CREATE TABLE evidence(value TEXT)")
+        db.execute("INSERT INTO evidence VALUES('before')")
+    original = store.register
+    calls = []
+
+    def interrupted(**kw):
+        calls.append(kw["entry"])
+        original(**kw)
+        if failure == "second-app" and kw["entry"] == "consumer":
+            raise KeyboardInterrupt()
+        if failure == "constraint":
+            kw["connection"].execute("INSERT INTO operator_apps(app_id) VALUES(NULL)")
+
+    monkeypatch.setattr(store, "register", interrupted)
+    checks = []
+
+    def verify():
+        checks.append(1)
+        if failure == "inputs-changed" and len(checks) == 2:
+            raise ValueError("input drift")
+
+    with pytest.raises((KeyboardInterrupt, ValueError, sqlite3.IntegrityError)):
+        register(candidate, verify)
+    assert rows(candidate)["operator_apps"] == rows(candidate)["dify_workspaces"] == []
+    with gateway_db.connection(store.path, readonly=True) as db:
+        assert db.execute("SELECT value FROM evidence").fetchall()[0][0] == "before"
+
+
+def test_registration_rejects_formal_binding(candidate):
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
+
+    DifyAppRegistry(candidate[0].path).put(DifyAppBinding("same", "operator", "operator-existing", "old"))
+    before = rows(candidate)
+    with pytest.raises(SetupConflict):
+        register(candidate)
+    assert rows(candidate) == before
+
+
+def test_concurrent_registration_has_one_commit_and_one_unchanged_receipt(candidate):
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: register(candidate), range(2)))
+    assert sorted(results) == [False, True]
+    assert len(rows(candidate)["operator_apps"]) == 2
+    assert len(rows(candidate)["dify_workspaces"]) == 1
