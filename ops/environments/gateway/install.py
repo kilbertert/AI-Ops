@@ -217,6 +217,98 @@ WantedBy=multi-user.target
         path = self.config / "production.env"
         if path.exists() or path.is_symlink():
             trusted(path, owner=self.account.pw_uid, private=True)
+        directory = self.config / "registry"
+        if directory.exists() or directory.is_symlink():
+            trusted(directory, owner=self.account.pw_uid, private=True)
+            for member in directory.iterdir():
+                if member.name not in {"environment.json", "environment.json.lock"}:
+                    raise ValueError("unknown registry file")
+                trusted(member, owner=self.account.pw_uid, private=True)
+                if not member.is_file() or member.stat().st_nlink != 1:
+                    raise ValueError("registry file must be a regular single-link file")
+
+    def registry_digest(self):
+        self.check_paths()
+        path = self.config / "registry/environment.json"
+        return digest(path) if path.exists() else "absent"
+
+    def check_registry(self, old, pending=None):
+        allowed = {old.get("registry_sha256", "absent")}
+        if pending is not None:
+            allowed.add(pending.get("registry_sha256", "absent"))
+            if "recovery_registry_sha256" in pending:
+                allowed.add(pending["recovery_registry_sha256"])
+        if self.registry_digest() not in allowed:
+            raise ValueError("registry configuration drift")
+
+    def registry_snapshot(self, source, target, expected):
+        if not target.parent.exists():
+            target.parent.mkdir(mode=0o700)
+            os.chown(target.parent, self.account.pw_uid, self.account.pw_gid)
+        trusted(target.parent, owner=self.account.pw_uid, private=True)
+        self.config_snapshot(source, target, expected)
+
+    def recovery_registry(self, old, pending):
+        release = self.release(pending)
+        target = release / "recovery-registry/environment.json"
+        if "recovery_registry_sha256" in pending:
+            trusted(target, owner=self.account.pw_uid, private=True)
+            if digest(target) != pending["recovery_registry_sha256"]:
+                raise ValueError("recovery registry drift")
+        else:
+            original = release / "previous-registry/environment.json"
+            if digest(original) != old["registry_sha256"]:
+                raise ValueError("previous registry drift")
+            if digest(release / "candidate-registry/environment.json") != pending["registry_sha256"]:
+                raise ValueError("candidate registry drift prevents recovery")
+            body = json.loads(original.read_text())
+            observed = json.loads((release / "candidate-registry/environment.json").read_text())
+            body["audit"] = observed["audit"] + [
+                {
+                    "revision": observed["revision"] + 1,
+                    "actor": "installation-recovery",
+                    "at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                }
+            ]
+            body["revision"] = observed["revision"] + 1
+            raw = json.dumps(body, sort_keys=True).encode() + b"\n"
+            self.registry_snapshot_bytes(raw, target)
+            pending["recovery_registry_sha256"] = digest(target)
+            self.record("pending.json", pending)
+        self.registry_snapshot(
+            target, self.config / "registry/environment.json", pending["recovery_registry_sha256"]
+        )
+        return {**old, "registry_sha256": pending["recovery_registry_sha256"]}
+
+    def registry_snapshot_bytes(self, raw, target):
+        if not target.parent.exists():
+            target.parent.mkdir(mode=0o700)
+            os.chown(target.parent, self.account.pw_uid, self.account.pw_gid)
+        self.config_snapshot_bytes(raw, target)
+
+    def candidate_directory(self, incoming):
+        """草稿投影不是现役版本；安装本地版本递增，相同内容复用原字节。"""
+        body = json.loads(incoming)
+        if (self.root / "installed.json").exists():
+            old = self.read_record("installed.json")
+            self.check_registry(old)
+            if "registry_sha256" in old:
+                raw = (self.config / "registry/environment.json").read_bytes()
+                current = json.loads(raw)
+                if (
+                    body["environments"] == current["environments"]
+                    and body["managers"] == current["managers"]
+                ):
+                    return raw
+                body["revision"] = current["revision"] + 1
+                body["audit"] = current["audit"] + [
+                    {
+                        "revision": body["revision"],
+                        "actor": "candidate-installation",
+                        "at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+                    }
+                ]
+        return json.dumps(body, sort_keys=True).encode() + b"\n"
 
     def release(self, record):
         if not re.fullmatch(r"[a-f0-9]{12}-[a-z0-9_]+", record["release"]):
@@ -237,13 +329,24 @@ WantedBy=multi-user.target
         body = probe.regular(source).read_bytes()
         if hashlib.sha256(body).hexdigest() != expected:
             raise ValueError("configuration snapshot mismatch")
-        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as out:
+        self.config_snapshot_bytes(body, target)
+
+    def config_snapshot_bytes(self, body, target):
+        staging = self.root / "configuration-staging"
+        staging.mkdir(mode=0o700, exist_ok=True)
+        trusted(staging, private=True)
+        if staging.stat().st_dev != target.parent.stat().st_dev:
+            raise ValueError("configuration snapshot requires one filesystem")
+        with tempfile.NamedTemporaryFile(dir=staging, delete=False) as out:
             temporary = Path(out.name)
             out.write(body)
             out.flush()
             os.fchown(out.fileno(), self.account.pw_uid, self.account.pw_gid)
             os.fsync(out.fileno())
-        temporary.replace(target)
+        try:
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
         descriptor = os.open(target.parent, os.O_DIRECTORY)
         try:
             os.fsync(descriptor)
@@ -277,6 +380,7 @@ WantedBy=multi-user.target
                 allowed.add(pending["config_sha256"])
             if digest(self.config / "production.env") not in allowed:
                 raise ValueError("configuration drift prevents rollback")
+            self.check_registry(old, pending if pending["phase"] == "switching" else None)
         self.stop(self.name + "-candidate")
         if pending.get("trial"):
             if not re.fullmatch(r"trial-[a-f0-9]{32}", pending["trial"]):
@@ -314,17 +418,36 @@ WantedBy=multi-user.target
                 if old["config_sha256"] != pending["config_sha256"]:
                     backup = self.release(pending) / "previous-config.env"
                     self.config_snapshot(backup, self.config / "production.env", old["config_sha256"])
+                if old.get("registry_sha256") != pending.get("registry_sha256"):
+                    target = self.config / "registry/environment.json"
+                    if "registry_sha256" in old:
+                        old = self.recovery_registry(old, pending)
+                    else:
+                        target.unlink(missing_ok=True)
                 self.check_database(release)
                 self.switch(release)
                 self.command("systemctl", "daemon-reload")
                 self.command("systemctl", "start", self.name)
             self.health(old["version"])
             self.record("installed.json", old)
+            if "registry_sha256" not in old and (self.config / "registry").exists():
+                (self.config / "registry/environment.json.lock").unlink(missing_ok=True)
+                (self.config / "registry").rmdir()
         self.record("last-recovery.json", {**pending, "result": "restored"})
         (self.root / "pending.json").unlink()
         return {"result": "restored", "business_acceptance": False}
 
-    def apply(self, archive, sha, python, config, config_sha, expected_config_sha=None):
+    def apply(
+        self,
+        archive,
+        sha,
+        python,
+        config,
+        config_sha,
+        expected_config_sha=None,
+        registry_file=None,
+        expected_registry_sha=None,
+    ):
         if not re.fullmatch(r"/usr/bin/python3(?:\.(?:11|12|13))?", python):
             raise ValueError("only installed system Python is supported")
         minor = self.command(
@@ -336,6 +459,10 @@ WantedBy=multi-user.target
         trusted(config, private=True)
         if digest(config) != config_sha:
             raise ValueError("configuration digest mismatch")
+        registry_sha = None
+        if registry_file is not None:
+            trusted(registry_file, private=True)
+            registry_sha = digest(registry_file)
         if (self.root / "pending.json").exists():
             raise ValueError("unfinished change requires recover")
         if (
@@ -352,7 +479,34 @@ WantedBy=multi-user.target
             "artifact_sha256": sha,
             "config_sha256": config_sha,
         }
+        if registry_sha is not None:
+            desired["registry_sha256"] = registry_sha
         if old:
+            self.check_registry(old)
+            if "registry_sha256" not in old and (self.config / "registry").exists():
+                raise ValueError("refuse to adopt unrecorded registry directory")
+            if "registry_sha256" in old and registry_file is None:
+                raise ValueError("bundled configuration requires a registry")
+            if expected_registry_sha is not None and expected_registry_sha != old.get(
+                "registry_sha256", "absent"
+            ):
+                raise ValueError("stale expected registry")
+            if registry_sha != old.get("registry_sha256") and expected_registry_sha != old.get(
+                "registry_sha256", "absent"
+            ):
+                raise ValueError("registry change requires expected current digest")
+            if "registry_sha256" in old:
+                previous_registry = json.loads((self.config / "registry/environment.json").read_text())
+                if previous_registry["environments"][0]["enabled"] or any(
+                    t["enabled"] for t in previous_registry["environments"][0]["tenants"]
+                ):
+                    raise ValueError("active registry requires separate activation delivery")
+                incoming = json.loads(registry_file.read_text())
+                if (
+                    registry_sha != old["registry_sha256"]
+                    and incoming["revision"] <= previous_registry["revision"]
+                ):
+                    raise ValueError("registry revision must increase")
             if (
                 self.unit.read_text() != self.unit_text()
                 or digest(self.config / "production.env") != old["config_sha256"]
@@ -373,7 +527,7 @@ WantedBy=multi-user.target
                 return {"result": "unchanged", "version": old["version"], "business_acceptance": False}
             self.check_database(previous)
         else:
-            if expected_config_sha is not None:
+            if expected_config_sha is not None or expected_registry_sha is not None:
                 raise ValueError("cold installation has no previous configuration")
             if any(p.exists() or p.is_symlink() for p in (self.root, self.state, self.config, self.unit)):
                 raise ValueError("refuse to adopt existing paths")
@@ -413,13 +567,13 @@ WantedBy=multi-user.target
         else:
             self.record("pending.json", {**desired, "previous": old, "phase": "preparing"})
         try:
-            return self.prepare(archive, sha, python, config, minor, meta, old, desired)
+            return self.prepare(archive, sha, python, config, minor, meta, old, desired, registry_file)
         except BaseException:
             if (self.root / "pending.json").exists():
                 self.recover()
             raise
 
-    def prepare(self, archive, sha, python, config, minor, meta, old, desired):
+    def prepare(self, archive, sha, python, config, minor, meta, old, desired, registry_file=None):
         if not old:
             self.config.mkdir(mode=0o755)
             self.state.mkdir(mode=0o700)
@@ -429,6 +583,10 @@ WantedBy=multi-user.target
             os.chown(self.config / "production.env", self.account.pw_uid, self.account.pw_gid)
             if digest(self.config / "production.env") != desired["config_sha256"]:
                 raise ValueError("staged configuration mismatch")
+            if registry_file is not None:
+                self.registry_snapshot(
+                    registry_file, self.config / "registry/environment.json", desired["registry_sha256"]
+                )
         releases = self.root / "releases"
         releases.mkdir(mode=0o755, exist_ok=True)
         release = Path(tempfile.mkdtemp(prefix=sha[:12] + "-", dir=releases))
@@ -441,6 +599,19 @@ WantedBy=multi-user.target
         probe.extract(staged, release)
         candidate_config = release / "candidate-config.env"
         self.config_snapshot(config, candidate_config, desired["config_sha256"])
+        if registry_file is not None:
+            self.registry_snapshot(
+                registry_file, release / "candidate-registry/environment.json", desired["registry_sha256"]
+            )
+            if not (self.config / "registry").exists():
+                (self.config / "registry").mkdir(mode=0o700)
+                os.chown(self.config / "registry", self.account.pw_uid, self.account.pw_gid)
+        if old and "registry_sha256" in old:
+            self.registry_snapshot(
+                self.config / "registry/environment.json",
+                release / "previous-registry/environment.json",
+                old["registry_sha256"],
+            )
         if old:
             self.config_snapshot(
                 self.config / "production.env", release / "previous-config.env", old["config_sha256"]
@@ -493,6 +664,11 @@ WantedBy=multi-user.target
                 self.environment,
                 "trial",
                 str(self.state),
+                *(
+                    [str(release / "candidate-registry/environment.json")]
+                    if registry_file is not None
+                    else []
+                ),
             )
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
@@ -514,6 +690,11 @@ WantedBy=multi-user.target
                 "--property=PrivateNetwork=yes",
                 "--property=ReadWritePaths=" + str(trial),
                 f"--property=BindReadOnlyPaths={candidate_config}:{self.config}/production.env",
+                *(
+                    [f"--property=BindReadOnlyPaths={release}/candidate-registry:{self.config}/registry"]
+                    if registry_file is not None
+                    else []
+                ),
                 *self.environment_args(trial),
                 str(release / "venv/bin/aiops-gateway"),
                 "serve",
@@ -528,6 +709,8 @@ WantedBy=multi-user.target
             shutil.rmtree(trial)
         if old and digest(self.config / "production.env") != old["config_sha256"]:
             raise ValueError("configuration changed during candidate validation")
+        if old:
+            self.check_registry(old)
         self.record("pending.json", {**desired, "previous": old, "phase": "switching"})
         try:
             if old:
@@ -539,9 +722,16 @@ WantedBy=multi-user.target
                 (release / "state-backup").chmod(0o700)
                 if digest(self.config / "production.env") != old["config_sha256"]:
                     raise ValueError("configuration changed before replacement")
+                self.check_registry(old)
             write(self.unit, self.unit_text())
             self.unit.chmod(0o644)
             self.config_snapshot(candidate_config, self.config / "production.env", desired["config_sha256"])
+            if registry_file is not None:
+                self.registry_snapshot(
+                    release / "candidate-registry/environment.json",
+                    self.config / "registry/environment.json",
+                    desired["registry_sha256"],
+                )
             self.switch(release)
             self.command("systemctl", "daemon-reload")
             self.command("systemctl", "start", self.name)
@@ -565,6 +755,9 @@ def main():
     parser.add_argument("--config", type=Path)
     parser.add_argument("--config-sha256")
     parser.add_argument("--expected-config-sha256", help="更换配置时必须匹配现役配置摘要")
+    parser.add_argument("--candidate", type=Path, help="已冻结的三文件停用候选包，与--config互斥")
+    parser.add_argument("--candidate-sha256")
+    parser.add_argument("--expected-registry-sha256", help="目录变化必须匹配当前摘要，首次引入为absent")
     parser.add_argument("--python", default="/usr/bin/python3")
     args = parser.parse_args()
     os.umask(0o022)  # 代码与venv可穿越；配置/状态/账本另用0600/0700。
@@ -606,16 +799,45 @@ def main():
             if args.action == "recover":
                 result = inst.recover()
             else:
-                if not all((args.archive, args.sha256, args.config, args.config_sha256)):
+                if args.candidate is not None:
+                    if not args.candidate_sha256 or args.config is not None or args.config_sha256:
+                        raise ValueError("candidate and scalar configuration are mutually exclusive")
+                    trusted(args.candidate, private=True)
+                    files, _ = probe.candidate_files(args.candidate, args.candidate_sha256, args.environment)
+                    files["environment.json"] = inst.candidate_directory(files["environment.json"])
+                    if not args.archive or not args.sha256:
+                        raise ValueError("application artifact required")
+                    with tempfile.TemporaryDirectory(prefix="aiops-configuration-") as temporary:
+                        root = Path(temporary)
+                        for name in ("production.env", "environment.json"):
+                            write(root / name, files[name].decode())
+                        if any("${" in files[name].decode() for name in ("production.env",)):
+                            raise ValueError("candidate interpolation refused")
+                        result = inst.apply(
+                            args.archive,
+                            args.sha256,
+                            args.python,
+                            root / "production.env",
+                            hashlib.sha256(files["production.env"]).hexdigest(),
+                            args.expected_config_sha256,
+                            root / "environment.json",
+                            args.expected_registry_sha256,
+                        )
+                elif (
+                    not all((args.archive, args.sha256, args.config, args.config_sha256))
+                    or args.candidate_sha256
+                    or args.expected_registry_sha256
+                ):
                     raise ValueError("artifact and configuration identities required")
-                result = inst.apply(
-                    args.archive,
-                    args.sha256,
-                    args.python,
-                    args.config,
-                    args.config_sha256,
-                    args.expected_config_sha256,
-                )
+                else:
+                    result = inst.apply(
+                        args.archive,
+                        args.sha256,
+                        args.python,
+                        args.config,
+                        args.config_sha256,
+                        args.expected_config_sha256,
+                    )
         print(json.dumps(result))
         return 0
     except (

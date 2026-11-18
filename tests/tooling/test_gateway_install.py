@@ -89,7 +89,8 @@ def apply(host):
 
 
 @pytest.mark.parametrize("action", ["install", "recover"])
-def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeypatch, action):
+@pytest.mark.parametrize("mode", ["scalar", "candidate"])
+def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeypatch, action, mode):
     inst, archive, sha, config, *_ = host
     root = tmp_path / "installer"
     root.mkdir()
@@ -117,6 +118,35 @@ def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeyp
     calls = []
     monkeypatch.setattr(inst, "recover", lambda: calls.append(action) or {"result": "recovered"})
     monkeypatch.setattr(inst, "apply", lambda *a: calls.append(action) or {"result": "installed"})
+    options = ["--config", str(config), "--config-sha256", install.digest(config)]
+    if mode == "candidate":
+        import io
+        import tarfile
+
+        from aiops_diagnostics.gateway.environment_projection import summary
+
+        pair = candidate_config(host)
+        files = {"production.env": pair[0].read_bytes(), "environment.json": pair[1].read_bytes()}
+        manifest = dict(
+            schema="aiops-environment-candidate/1",
+            scope="bootstrap-configuration-only",
+            timezone="Asia/Shanghai",
+            plan_id="plan_" + "a" * 32,
+            plan_digest="b" * 64,
+            draft_revision=1,
+            registry_revision=1,
+            executable=False,
+            **summary(files),
+        )
+        files["manifest.json"] = json.dumps(manifest).encode()
+        candidate = tmp_path / "candidate.tar.gz"
+        with tarfile.open(candidate, "w:gz") as bundle:
+            for name, raw in files.items():
+                member = tarfile.TarInfo(name)
+                member.size = len(raw)
+                bundle.addfile(member, io.BytesIO(raw))
+        candidate.chmod(0o600)
+        options = ["--candidate", str(candidate), "--candidate-sha256", install.digest(candidate)]
     monkeypatch.setattr(
         sys,
         "argv",
@@ -133,10 +163,7 @@ def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeyp
             str(archive),
             "--sha256",
             sha,
-            "--config",
-            str(config),
-            "--config-sha256",
-            install.digest(config),
+            *options,
         ],
     )
     assert install.main() == 0 and calls == [action]
@@ -507,6 +534,217 @@ def test_registry_requires_logical_config_path_preserved_for_candidate(tmp_path,
         GatewayServerSettings.from_env().validate()
     monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(config))
     GatewayServerSettings.from_env().validate()
+
+
+def candidate_config(host, *, revision=1, name="候选", config_text=""):
+    from aiops_diagnostics.common.private_files import write_private_text
+    from aiops_diagnostics.gateway.environment_projection import render
+
+    inst = host[0]
+    draft = dict(
+        id="test",
+        name=name,
+        enabled=True,
+        gateway_url="https://target.example",
+        cpms_base_url="https://target.example/cpms",
+        company_gateway_url="https://target.example",
+        deployment_target="host",
+        credential_ref="config",
+        timezone="Asia/Shanghai",
+        tenants=[dict(id="same", name="合成租户", enabled=True)],
+    )
+    template = write_private_text(inst.root.parent / ("template-" + str(revision) + ".env"), config_text)
+    result = render(draft, template, install.digest(template), "2026-11-18T00:00:00+00:00")
+    config = write_private_text(
+        inst.root.parent / ("candidate-" + str(revision) + ".env"), result["production.env"].decode()
+    )
+    body = json.loads(result["environment.json"])
+    if revision > 1:
+        body["revision"] = revision
+        body["audit"] += [
+            dict(revision=i, actor="candidate-projection", at="2026-11-18T00:00:00+00:00")
+            for i in range(2, revision + 1)
+        ]
+    directory = write_private_text(
+        inst.root.parent / ("directory-" + str(revision) + ".json"), json.dumps(body)
+    )
+    return config, directory
+
+
+def apply_candidate(host, pair, *, expected=None):
+    inst, archive, sha, *_ = host
+    old = inst.read_record("installed.json") if (inst.root / "installed.json").exists() else None
+    return inst.apply(
+        archive,
+        sha,
+        "/usr/bin/python3",
+        pair[0],
+        install.digest(pair[0]),
+        old["config_sha256"] if old else None,
+        pair[1],
+        expected if expected is not None else old.get("registry_sha256", "absent") if old else None,
+    )
+
+
+def test_configuration_pair_cold_repeat_and_single_file_transition(host):
+    apply(host)
+    pair = candidate_config(host)
+    assert apply_candidate(host, pair)["result"] == "installed"
+    inst, *_, calls, active = host
+    assert install.digest(inst.config / "registry/environment.json") == install.digest(pair[1])
+    assert (inst.config / "registry").stat().st_mode & 0o077 == 0
+    bindings = [
+        a for c in calls if c[0] == "systemd-run" for a in c if a.startswith("--property=BindReadOnlyPaths=")
+    ]
+    assert any(a.endswith(":" + str(inst.config / "registry")) for a in bindings)
+    count = len(calls)
+    assert apply_candidate(host, pair)["result"] == "unchanged"
+    assert not any(c[:2] == ("systemctl", "stop") for c in calls[count:])
+    with pytest.raises(ValueError, match="requires a registry"):
+        apply(host)
+    assert inst.name in active
+
+
+@pytest.mark.parametrize("failure", ["candidate", "config-written", "directory-written"])
+def test_pair_interruption_restores_files_and_preserves_monotonic_revision(host, monkeypatch, failure):
+    first = candidate_config(host)
+    assert apply_candidate(host, first)["result"] == "installed"
+    inst = host[0]
+    previous = (inst.root / "current").readlink()
+    (inst.state / "evidence").write_text("keep")
+    second = candidate_config(host, revision=2, name="changed", config_text="AIOPS_MYSQL_PASSWORD=new\n")
+    original_snapshot, original_health, original_recover = inst.config_snapshot, inst.health, inst.recover
+
+    def snapshot(source, target, expected):
+        original_snapshot(source, target, expected)
+        if (failure == "config-written" and target == inst.config / "production.env") or (
+            failure == "directory-written" and target == inst.config / "registry/environment.json"
+        ):
+            raise RuntimeError("interrupted switch")
+
+    def health(*a, **kw):
+        if failure == "candidate" and kw.get("port"):
+            raise RuntimeError("candidate rejected")
+        return original_health(*a, **kw)
+
+    monkeypatch.setattr(inst, "config_snapshot", snapshot)
+    monkeypatch.setattr(inst, "health", health)
+    monkeypatch.setattr(inst, "recover", lambda: None)
+    with pytest.raises(RuntimeError):
+        apply_candidate(host, second)
+    assert (inst.root / "pending.json").exists()
+    monkeypatch.setattr(inst, "config_snapshot", original_snapshot)
+    monkeypatch.setattr(inst, "health", original_health)
+    monkeypatch.setattr(inst, "recover", original_recover)
+    assert inst.recover()["result"] == "restored"
+    assert (inst.config / "production.env").read_bytes() == first[0].read_bytes()
+    restored = json.loads((inst.config / "registry/environment.json").read_text())
+    assert restored["environments"] == json.loads(first[1].read_text())["environments"]
+    assert restored["revision"] == (1 if failure == "candidate" else 3)
+    assert (
+        install.digest(inst.config / "registry/environment.json")
+        == inst.read_record("installed.json")["registry_sha256"]
+    )
+    assert (inst.root / "current").readlink() == previous
+    assert (inst.state / "evidence").read_text() == "keep"
+
+
+def test_pair_drift_and_stale_digest_do_not_mutate_files(host):
+    first = candidate_config(host)
+    apply_candidate(host, first)
+    inst = host[0]
+    second = candidate_config(host, revision=2)
+    with pytest.raises(ValueError, match="stale expected registry"):
+        apply_candidate(host, second, expected="0" * 64)
+    old_config = (inst.config / "production.env").read_bytes()
+    (inst.config / "registry/environment.json").write_text("external")
+    with pytest.raises(ValueError, match="registry configuration drift"):
+        apply_candidate(host, second)
+    assert (inst.config / "registry/environment.json").read_text() == "external"
+    assert (inst.config / "production.env").read_bytes() == old_config
+
+
+def test_candidate_local_revision_preserves_repeat_after_recovery(host, monkeypatch):
+    first = candidate_config(host)
+    apply_candidate(host, first)
+    inst = host[0]
+    second = candidate_config(host, revision=2, name="new")
+    old = inst.health
+
+    def fail(version, **kw):
+        if (
+            not kw.get("port")
+            and json.loads((inst.config / "registry/environment.json").read_text())["environments"][0]["name"]
+            == "new"
+        ):
+            raise RuntimeError("new registry rejected")
+        return old(version, **kw)
+
+    monkeypatch.setattr(inst, "health", fail)
+    with pytest.raises(RuntimeError):
+        apply_candidate(host, second)
+    raw = inst.candidate_directory(first[1].read_bytes())
+    assert raw == (inst.config / "registry/environment.json").read_bytes()
+    incoming = json.loads(inst.candidate_directory(second[1].read_bytes()))
+    assert incoming["revision"] == 4 and len(incoming["audit"]) == 4
+
+
+def test_snapshot_interruption_does_not_pollute_private_registry(host, monkeypatch):
+    first = candidate_config(host)
+    apply_candidate(host, first)
+    inst = host[0]
+    old = inst.read_record("installed.json")
+    inst.record("pending.json", {**old, "previous": old, "phase": "switching"})
+    target = inst.config / "registry/environment.json"
+    original_replace = Path.replace
+
+    def interrupted(path, destination):
+        if destination == target:
+            raise OSError("interrupted before replacement")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", interrupted)
+    with pytest.raises(OSError):
+        inst.config_snapshot(first[1], target, install.digest(first[1]))
+    assert {p.name for p in target.parent.iterdir()} == {"environment.json"}
+    monkeypatch.setattr(Path, "replace", original_replace)
+    assert inst.recover()["result"] == "restored"
+
+
+def test_recovery_snapshot_ownership_is_set_before_publication(host, monkeypatch):
+    apply(host)
+    inst = host[0]
+    private = inst.root / "recovery"
+    private.mkdir(mode=0o700)
+    sentinel = inst.root.parent / "system-file"
+    sentinel.write_text("keep")
+    original_replace = Path.replace
+    target = private / "snapshot.json"
+    ownership = []
+
+    def replaced(path, destination):
+        result = original_replace(path, destination)
+        if destination == target:
+            target.unlink()
+            target.symlink_to(sentinel)
+        return result
+
+    monkeypatch.setattr(Path, "replace", replaced)
+    monkeypatch.setattr(install.os, "chown", lambda *a, **k: ownership.append(a))
+    inst.registry_snapshot_bytes(b"{}", target)
+    assert sentinel.read_text() == "keep" and ownership == []
+
+
+def test_registry_writer_lock_does_not_block_lifecycle(host):
+    first = candidate_config(host)
+    apply_candidate(host, first)
+    inst = host[0]
+    lock = inst.config / "registry/environment.json.lock"
+    lock.touch(mode=0o600)
+    assert apply_candidate(host, first)["result"] == "unchanged"
+    lock.chmod(0o644)
+    with pytest.raises(ValueError, match="mode"):
+        apply_candidate(host, first)
 
 
 @pytest.mark.parametrize("fault", ["closed_connection", "closed_listener", "permission", "wrong_version"])

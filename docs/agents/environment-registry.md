@@ -76,7 +76,7 @@ Web必须完整webpack构建；合并后同修订镜像配套发布，独立URL2
 
 受控configuration现在作为模板：保留凭据、本地SQL/Redis与已批准共享连接，地址/身份等生成字段须空或不出现。
 CPMS与公开入口直接来自草稿，公司UPMS地址使用既有网关合同`company_gateway_url + /upms`；
-运行目录为`/etc/aiops-access-<id>/environment.json`，config_ref为同目录production.env，执行环境为草稿id。
+运行目录为`/etc/aiops-access-<id>/registry/environment.json`，config_ref为配置根production.env，执行环境为草稿id。
 安装器负责进程AIOPS_GATEWAY_ENVIRONMENT和数据根，模板不能覆盖。候选环境/租户全停用，业务执行绑定和聊天开关关闭。
 本地SQL时区不从IANA时区反推；manifest记录草稿timezone，实际数据源口径另验。
 模板按既有dotenv格式读取；拒绝重复键、无值键、解析错误、`${...}`插值和声明数值类型错误，保留合法引号/换行/空值。
@@ -87,7 +87,9 @@ CPMS与公开入口直接来自草稿，公司UPMS地址使用既有网关合同
 导出production.env、environment.json和manifest.json；输出父目录须当前操作者独有0700，文件0600且必须不存在。
 重跑可选新的文件名，包摘要一致；既有输出/符号链接、到期/漂移/越权拒绝，不覆盖文件。
 候选manifest为aiops-environment-candidate/1、scope=bootstrap-configuration-only、executable=false。
-**现有P3单配置安装器尚不能成套安装该包**；本片仅导出核对，不自动传主机，不替换现役目录或启用租户。
+ADR0280安装器可按[成套配置手册](../../ops/environments/gateway/install.md#停用候选的成套配置)显式接收该包；
+目录放入服务身份持有的0700私有子目录。旧导出路径不自动改写，需重做预检；旧计划因投影摘要变化过期。
+导出仍不自动传主机或安装；安装权限、目标身份、实际配置验证和恢复回执独立核对，不启用租户。
 
 ## 草稿准备入口（P1基础片）
 

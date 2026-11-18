@@ -18,11 +18,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:
+    from artifact_checks import candidate_files as candidate_files
     from artifact_checks import manifest
     from artifact_checks import regular as regular
 except ModuleNotFoundError as exc:
     if exc.name != "artifact_checks":
         raise
+    from aiops_diagnostics.gateway.environment_artifacts import candidate_files as candidate_files
     from aiops_diagnostics.gateway.environment_artifacts import manifest
     from aiops_diagnostics.gateway.environment_artifacts import regular as regular
 
