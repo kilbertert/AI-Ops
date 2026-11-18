@@ -18,14 +18,17 @@ def binding(settings):
     return hashlib.sha256(
         json.dumps(
             {
-                key: getattr(settings, key, "")
-                for key in (
-                    "public_base_url",
-                    "dify_console_base_url",
-                    "dify_console_api_key",
-                    "internal_token_secret",
-                    "kb_service_base_url",
-                )
+                "connection_contract": 2,
+                **{
+                    key: getattr(settings, key, "")
+                    for key in (
+                        "public_base_url",
+                        "dify_console_base_url",
+                        "dify_console_api_key",
+                        "internal_token_secret",
+                        "kb_service_base_url",
+                    )
+                },
             },
             sort_keys=True,
         ).encode()
@@ -70,8 +73,12 @@ def run(context, path, reference, payload):
         scope_id = candidate.knowledge_id(scope)
         resources["binding"] = request["binding"]
         resources["name"] = (
-            resources.get("name") or "aiops-kb-" + hashlib.sha256(scope_id.encode()).hexdigest()[:32]
+            resources.get("name") or "aiops-kb-" + hashlib.sha256(scope_id.encode()).hexdigest()[:31]
         )
+        if resources["name"] == "aiops-kb-" + hashlib.sha256(scope_id.encode()).hexdigest()[:32]:
+            # Dify 1.17.1 在副作用前拒绝41字符名称；仅接续这一确定无创建的旧格式。
+            resources["name"] = resources["name"][:-1]
+            resources.pop("attempted", None)
         rows = reconcile_by_name(
             console_base_url=settings.dify_console_base_url,
             console_api_key=settings.dify_console_api_key,

@@ -77,6 +77,8 @@ def connected(knowledge, tmp_path):  # noqa: F811
                 )
             assert self.headers["X-WORKSPACE-ID"] == workspace
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if not 1 <= len(body["name"]) <= 40:
+                return self.reply({"error": "name must be at most 40 characters"}, 422)
             calls.append(("POST", self.path))
             apis.append({"id": "api-one", "tenant_id": workspace, **body})
             if lose[0] == "503":
@@ -340,3 +342,28 @@ def test_old_completion_cannot_restore_newer_cancelled_connection(connected):
         conn.execute("UPDATE environment_tasks SET updated_at=? WHERE id=?", (time.time() + 60, job["id"]))
     with pytest.raises(candidate.CandidateKnowledgeError):
         candidate.active(settings, scope)
+
+
+def test_schema_rejected_legacy_name_is_recovered_by_new_task(connected):
+    import hashlib
+
+    fixture, parent, _, apis, calls, _ = connected
+    job = request_job(connected)
+    scope = ("a", "same", parent["result"]["workspace_id"], parent["result"]["knowledge_base_id"])
+    old_name = "aiops-kb-" + hashlib.sha256(candidate.knowledge_id(scope).encode()).hexdigest()[:32]
+    assert len(old_name) == 41
+    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
+        conn.execute(
+            "UPDATE environment_tasks SET id=?,state='blocked',result=?,request=json_set(request,"
+            "'$.resources',json(?)) WHERE id=?",
+            (
+                "task_" + "e" * 32,
+                json.dumps({"expires_at": time.time() + 900}),
+                json.dumps({"name": old_name, "attempted": True}),
+                job["id"],
+            ),
+        )
+    new = request_job(connected)
+    assert prepare_connection(connected, new)["state"] == "observed"
+    assert apis[0]["name"] == old_name[:-1] and len(apis[0]["name"]) == 40
+    assert len([c for c in calls if c[0] == "POST"]) == 1
