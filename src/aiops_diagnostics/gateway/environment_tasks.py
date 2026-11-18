@@ -355,7 +355,7 @@ def _worker_write(path, payload, row, request, owner, drift):
             raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
         if drift:
             state, error = "expired", "ENVIRONMENT_TASK_PLAN_EXPIRED"
-        if row["cancel"]:
+        if row["cancel"] and result:
             state = "cancelled"
         conn.execute(
             "UPDATE environment_tasks SET state=?,owner='',lease_until=0,result=?,error=?,"

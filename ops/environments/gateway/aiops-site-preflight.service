@@ -4,6 +4,7 @@ Description=AI-Ops managed read-only site preflight worker
 [Service]
 Type=oneshot
 WorkingDirectory=/home/claude/Projects/AI-Ops
+Environment=PATH=/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/home/claude/Projects/AI-Ops/.venv/bin/aiops-admin environment-task-worker --central-target 41
 TimeoutStartSec=330
 UMask=0077

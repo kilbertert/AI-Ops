@@ -594,3 +594,19 @@ def test_central_dispatch_uses_fixed_service_identity_and_local_binding(tmp_path
         admin_app, ["--config", "/etc/aiops-41/gateway.env", "environment-task-dispatch"], input="{}"
     )
     assert refused.exit_code == 1 and len(calls) == 1
+
+
+def test_cancel_request_with_unknown_result_must_keep_automatic_reconciliation(prepared, monkeypatch):
+    path, ref, client, _ = prepared
+    job, _ = create(prepared)
+    tasks.worker(path, ref, {"owner": "a" * 32})
+    client.post("/v1/dify/management/environment-tasks", json={"id": job["id"], "cancel": True})
+    unknown = tasks.worker(
+        path, ref, {"id": job["id"], "owner": "a" * 32, "error": "ENVIRONMENT_TASK_TARGET_UNCONFIRMED"}
+    )
+    assert unknown["state"] == "reconcile" and unknown["cancel_requested"]
+    now = time.time()
+    monkeypatch.setattr(time, "time", lambda: now + 61)
+    assert tasks.worker(path, ref, {"owner": "b" * 32})["claimed"]
+    observed = tasks.worker(path, ref, {"id": job["id"], "owner": "b" * 32, "result": receipt("a")})
+    assert observed["state"] == "cancelled" and observed["result"]["state"] == "observed"
