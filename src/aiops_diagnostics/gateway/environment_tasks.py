@@ -165,6 +165,15 @@ def workspace_request(path, reference, identifier, owner, *, reconciling=True):
             raise TaskRefused("ENVIRONMENT_TASK_LEASE_LOST")
         _authorize(path, tuple(request["identity"]), row["environment"])
         _current(path, request, reference, reconciling=reconciling)
+        if not reconciling:
+            source = _row(conn, request["site_task"])
+            source_request = json.loads(source["request"])
+            if source["state"] != "observed" or source_request["plan"]["id"] != request["plan"]["id"]:
+                raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+            try:
+                validate_receipt(json.loads(source["result"]), row["environment"])
+            except TaskRefused as exc:
+                raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED") from exc
         return {**request, "cancel_requested": bool(row["cancel"])}
 
 

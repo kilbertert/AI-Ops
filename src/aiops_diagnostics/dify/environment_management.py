@@ -221,7 +221,7 @@ def prepare_workspace(context, payload):
         if request["cancel_requested"] and (existing is None or existing["setup_state"] == "failed"):
             raise EnsureError("ENVIRONMENT_TASK_CANCELLED", "创建前已取消")
         try:
-            environment_tasks.workspace_request(
+            request = environment_tasks.workspace_request(
                 path,
                 reference,
                 payload["id"],
@@ -229,9 +229,11 @@ def prepare_workspace(context, payload):
                 reconciling=existing is not None and existing["setup_state"] != "failed",
             )
         except environment_tasks.TaskRefused as exc:
-            if str(exc) != "ENVIRONMENT_TASK_PLAN_EXPIRED":
+            if str(exc) not in {"ENVIRONMENT_TASK_PLAN_EXPIRED", "ENVIRONMENT_TASK_OBSERVATION_REQUIRED"}:
                 raise
             raise EnsureError(str(exc), "首次创建前计划已过期") from exc
+        if request["cancel_requested"] and (existing is None or existing["setup_state"] == "failed"):
+            raise EnsureError("ENVIRONMENT_TASK_CANCELLED", "创建前已取消")
         outcome = ensure_workspace(
             tenant_id=tenant,
             environment=environment,
@@ -253,6 +255,7 @@ def prepare_workspace(context, payload):
             console_base_url=settings.dify_console_base_url,
             console_api_key=settings.dify_console_api_key,
             name=row["workspace_name"],
+            workspace_id=outcome.workspace_id if not row["workspace_name"] else "",
         )
         if len(matches) > 1:
             raise EnsureError("DIFY_WORKSPACE_AMBIGUOUS", "同名工作区不唯一，需人工核对")
@@ -263,6 +266,8 @@ def prepare_workspace(context, payload):
             != tenant
         ):
             raise EnsureError("DIFY_WORKSPACE_AMBIGUOUS", "工作区映射归属不唯一")
+        if not row["workspace_name"]:
+            workspaces.remember_name(tenant, environment, outcome.workspace_id, matches[0]["name"])
         workspace_id = outcome.workspace_id
     except (EnsureError, DifyWorkspaceError) as exc:
         row = workspaces.row(tenant, environment)
@@ -272,6 +277,7 @@ def prepare_workspace(context, payload):
             "DIFY_RECONCILE_TOO_LARGE",
             "ENVIRONMENT_TASK_CANCELLED",
             "ENVIRONMENT_TASK_PLAN_EXPIRED",
+            "ENVIRONMENT_TASK_OBSERVATION_REQUIRED",
         } or (row and row["setup_state"] == "failed"):
             state, error = "blocked", exc.code
         else:

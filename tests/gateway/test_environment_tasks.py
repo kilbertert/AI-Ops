@@ -265,6 +265,49 @@ def test_candidate_first_create_checks_expiry_and_does_not_leave_running(prepare
     assert workspace_upstream.posts() == []
 
 
+def test_candidate_checks_fresh_cancellation_and_site_receipt(prepared, workspace_upstream, monkeypatch):  # noqa: F811
+    path, ref, client, _ = prepared
+    job, _ = workspace_job(prepared, workspace_upstream)
+    original = tasks.workspace_request
+    calls = 0
+
+    def cancel_between_reads(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            tasks.inspect(path, ADMIN, identifier=job["id"], cancel=True, reference=ref)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(tasks, "workspace_request", cancel_between_reads)
+    assert prepare_http(prepared, job).json()["state"] == "cancelled"
+    monkeypatch.setattr(tasks, "workspace_request", original)
+    other, site = workspace_job(prepared, workspace_upstream, "b")
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        value = receipt("b")
+        value["created_at"] -= 901
+        value["expires_at"] -= 901
+        conn.execute("UPDATE environment_tasks SET result=? WHERE id=?", (json.dumps(value), site["id"]))
+    blocked = prepare_http(prepared, other).json()
+    assert blocked["state"] == "blocked" and blocked["error_code"] == "ENVIRONMENT_TASK_OBSERVATION_REQUIRED"
+    assert workspace_upstream.posts() == []
+
+
+def test_candidate_legacy_uuid_with_empty_name_is_verified_and_filled(prepared, workspace_upstream):  # noqa: F811
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+
+    path, ref, client, settings = prepared
+    job, site = workspace_job(prepared, workspace_upstream)
+    db = DifyWorkspaces(settings.database_file)
+    db.claim("same", "a", owner="old", lease_seconds=1)
+    db.mark_created("same", "a", "legacy")
+    db.mark_ready("same", "a")
+    workspace_upstream.workspaces.append({"id": "legacy", "name": "Original"})
+    assert prepare_http(prepared, job).json()["state"] == "observed"
+    assert db.row("same", "a")["workspace_name"] == "Original"
+    assert db.row("same", "a")["setup_state"] == "ready"
+    assert workspace_upstream.posts() == []
+
+
 def test_cancelled_unknown_create_reconciles_and_ambiguity_blocks(prepared, workspace_upstream):  # noqa: F811
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 

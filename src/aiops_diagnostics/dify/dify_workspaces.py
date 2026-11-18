@@ -44,6 +44,7 @@ from aiops_diagnostics.common.private_files import ensure_private_directory, pro
 from aiops_diagnostics.common.redaction import ERROR_TEXT_SHORT_LIMIT
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
 from aiops_diagnostics.gateway import gateway_db, gateway_schema
+from aiops_diagnostics.gateway.environment_drafts import REFERENCE_PATTERN
 
 #: 一张行可能处于的全部状态。``created`` 与 ``ready`` 的区别在于**后续步骤是否跑完**
 #: （插件、凭据、模板 DSL，#881）；对"这个租户的 workspace 是哪一个"这个问题，两者
@@ -366,6 +367,15 @@ class DifyWorkspaces:
                 ),
             )
 
+    def remember_name(self, tenant_id: str, environment: str, workspace_id: str, name: str) -> None:
+        """旧库空名字在UUID核验后补写，保持原就绪状态。"""
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "UPDATE dify_workspaces SET workspace_name=? WHERE tenant_id=? AND environment=?"
+                " AND workspace_id=? AND workspace_name=''",
+                (name, _identifier(tenant_id, "tenant_id"), environment, workspace_id),
+            )
+
     def mark_failed(self, tenant_id: str, environment: str, *, error: str) -> None:
         """**明确失败**：Dify 没有建出来。``workspace_id`` 保持空 ⇒ 下一次开户可以重建。"""
         tenant_id = _identifier(tenant_id, "tenant_id")
@@ -480,6 +490,6 @@ def _readable_company(company: str) -> str:
 
 def _identifier(value: str, name: str) -> str:
     candidate = (value or "").strip()
-    if not _SAFE_ID.fullmatch(candidate):
+    if not (REFERENCE_PATTERN.fullmatch(candidate) if name == "tenant_id" else _SAFE_ID.fullmatch(candidate)):
         raise ValueError(f"{name} contains unsupported characters")
     return candidate

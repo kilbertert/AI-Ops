@@ -87,7 +87,7 @@ def _lease_owner() -> str:
 
 
 def reconcile_by_name(
-    *, console_base_url: str, console_api_key: str, name: str, timeout: float = 15.0
+    *, console_base_url: str, console_api_key: str, name: str, timeout: float = 15.0, workspace_id: str = ""
 ) -> list[dict[str, Any]]:
     """用 admin key 查 ``all-workspaces``，按**派生名精确匹配**。
 
@@ -129,7 +129,11 @@ def reconcile_by_name(
         )
         rows = payload.get("data") if isinstance(payload, dict) else None
         for row in rows or []:
-            if isinstance(row, dict) and str(row.get("name") or "") == name:
+            if isinstance(row, dict) and (
+                str(row.get("id") or "") == workspace_id
+                if workspace_id
+                else str(row.get("name") or "") == name
+            ):
                 matches.append(row)
         if not (isinstance(payload, dict) and payload.get("has_more")):
             break
