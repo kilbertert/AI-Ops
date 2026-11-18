@@ -111,7 +111,13 @@ def submit(state, **extra):
     fixture, parent = state[0][0], state[1]
     return fixture[2].post(
         "/v1/dify/management/environment-tasks",
-        json={"connection_task": parent["id"], "tenant_id": "same", "source_app_id": "source-app", **extra},
+        json={
+            "connection_task": parent["id"],
+            "tenant_id": "same",
+            "source_app_id": "source-app",
+            "source_version": 7,
+            **extra,
+        },
     )
 
 
@@ -217,7 +223,8 @@ def test_sources_use_published_snapshot_and_require_visible_exact_app(tmp_path, 
         "workflow": candidate(),
     }
     agents.publish(agent.agent_id, "tenant", agent.revision, snapshot, "fixture")
-    routes = ChatRouteBindingStore(database)
+    route_database = tmp_path / "routes.db"
+    routes = ChatRouteBindingStore(route_database)
     routes.publish(
         environment="runtime",
         tenant_id="tenant",
@@ -234,7 +241,10 @@ def test_sources_use_published_snapshot_and_require_visible_exact_app(tmp_path, 
     workspaces.mark_created("tenant", "control", "ws-source")
     context = SimpleNamespace(
         settings=SimpleNamespace(
-            database_file=database, environment="control", execution_environment="runtime"
+            database_file=database,
+            chat_route_bindings_file=route_database,
+            environment="control",
+            execution_environment="runtime",
         ),
         agent_manager=SimpleNamespace(store=agents),
     )
@@ -250,3 +260,9 @@ def test_sources_use_published_snapshot_and_require_visible_exact_app(tmp_path, 
     assert consumer.sources(context, caller) == {"sources": []}
     with pytest.raises(auth.SetupRefused):
         consumer.sources(context, caller, "source-app")
+
+
+def test_selected_source_version_change_rejects_before_creating_task(consumer_app):
+    assert submit(consumer_app, source_version=6).status_code == 409
+    assert submit(consumer_app, source_version=True).status_code == 403
+    assert not consumer_app[3]

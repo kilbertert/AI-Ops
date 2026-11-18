@@ -53,6 +53,7 @@ def test_candidate_workspace_request_crosses_bridge_but_resource_claims_do_not(b
         "connection_task": body["site_task"],
         "tenant_id": "same",
         "source_app_id": CONSUMER,
+        "source_version": 7,
     }
     assert _manage(consumer, address=bridge)[0] != 400
     assert _manage({"action": "environment-task", "consumer_sources": True}, address=bridge)[0] != 400

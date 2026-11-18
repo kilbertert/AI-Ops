@@ -136,7 +136,7 @@ def handle(handler, bridge):
             {"workspace_task", "tenant_id"},
             {"knowledge_task", "tenant_id"},
             {"connection_task", "tenant_id"},
-            {"connection_task", "tenant_id", "source_app_id"},
+            {"connection_task", "tenant_id", "source_app_id", "source_version"},
         ):
             parent = next(
                 payload[k]
@@ -152,6 +152,8 @@ def handle(handler, bridge):
                     "source_app_id" not in payload
                     or isinstance(payload["source_app_id"], str)
                     and re.fullmatch(r"[a-f0-9-]{36}", payload["source_app_id"])
+                    and type(payload.get("source_version")) is int
+                    and payload["source_version"] >= 1
                 )
             )
         elif set(payload) == {"environment"}:

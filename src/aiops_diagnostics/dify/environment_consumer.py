@@ -24,7 +24,8 @@ def sources(context, caller, app_id=None):
         raise auth.SetupRefused("SETUP_SOURCE_NOT_AVAILABLE")
     allowed = {r["id"] for r in auth.tenants(context, caller)}
     result = []
-    for route in ChatRouteBindingStore(context.settings.database_file).all():
+    route_file = getattr(context.settings, "chat_route_bindings_file", "")
+    for route in ChatRouteBindingStore(route_file).all() if route_file else ():
         if (
             route.environment != context.settings.execution_environment
             or route.entry != "consumer"

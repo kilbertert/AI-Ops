@@ -699,6 +699,9 @@ export default function EnvironmentManagement() {
                                     connection_task: item.id,
                                     tenant_id: item.tenant_id,
                                     source_app_id: consumerSource,
+                                    source_version: consumerSources.find(
+                                      (source) => source.app_id === consumerSource,
+                                    )?.version_no,
                                   })
                                 }
                               >

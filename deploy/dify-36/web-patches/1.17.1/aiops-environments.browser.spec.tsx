@@ -211,6 +211,7 @@ it('prepares knowledge and its scoped connection from verified task cards', asyn
     connection_task: connection.id,
     tenant_id: 'same',
     source_app_id: 'source-a',
+    source_version: 7,
   })
   await expect
     .element(screen.getByText('候选消费者应用已准备（入口停用）', { exact: true }))
