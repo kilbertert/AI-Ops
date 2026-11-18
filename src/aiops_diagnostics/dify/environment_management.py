@@ -237,6 +237,20 @@ def task(context, session, payload):
                 connect=True,
                 binding=binding(context.settings),
             )
+        if set(payload) == {"connection_task", "tenant_id"}:
+            from .environment_operator import binding
+
+            if not getattr(context.settings, "operator_profiles_file", ""):
+                raise auth.SetupRefused("SETUP_MODEL_CONFLICT")
+            return environment_tasks.submit_workspace(
+                path,
+                identity,
+                payload["connection_task"],
+                payload["tenant_id"],
+                reference,
+                application=True,
+                binding=binding(context.settings),
+            )
         if set(payload) in ({"id"}, {"id", "cancel"}) and payload.get("cancel", True) is True:
             return environment_tasks.inspect(
                 path, identity, identifier=payload["id"], cancel="cancel" in payload, reference=reference
@@ -405,6 +419,10 @@ def register(app, context, session_dependency):
             if len(json.dumps(payload)) > 65536:
                 raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
             if "prepare" in payload:
+                if payload["prepare"] == "operator":
+                    from .environment_operator import run
+
+                    return run(context, _path(context), context.settings.environment_onboarding_file, payload)
                 if payload["prepare"] == "connection":
                     from .environment_knowledge_connection import run
 

@@ -91,11 +91,15 @@ def dependencies(console, workspace_id, profile, gateway_url):
     return matches[0]["id"]
 
 
-def create_app(console, workspace_id, job_id, request, profile, provider_id):
+def create_app(
+    console, workspace_id, job_id, request, profile, provider_id, *, candidate=False, before_create=None
+):
     from uuid import UUID, uuid5
 
     capability = console._call(workspace_id, "/console/api/apps/imports")
     if capability.get("aiops_idempotent_import") != 1:
+        raise SetupRefused("SETUP_IMPORT_UPGRADE_REQUIRED")
+    if candidate and capability.get("aiops_candidate_import") != 1:
         raise SetupRefused("SETUP_IMPORT_UPGRADE_REQUIRED")
 
     expected_id = str(uuid5(UUID("6e5a60f0-9495-4c43-a714-d954c2609aeb"), workspace_id + ":" + job_id))
@@ -103,6 +107,8 @@ def create_app(console, workspace_id, job_id, request, profile, provider_id):
         files("aiops_diagnostics.dify").joinpath("dify_workspace_template.dsl.yml").read_text()
     )
     doc["app"].update({"name": request["name"], "description": "管家订单诊断", "mode": "agent-chat"})
+    if candidate:
+        doc["aiops_candidate"] = True
     mc = doc["model_config"]
     model = profile["model"]
     mc["pre_prompt"] = request["prompt"]
@@ -128,13 +134,16 @@ def create_app(console, workspace_id, job_id, request, profile, provider_id):
             for name in request["tools"]
         ],
     }
+    document = yaml.safe_dump(doc, allow_unicode=True)
+    if before_create is not None:
+        before_create()
     result = console._call(
         workspace_id,
         "/console/api/apps/imports",
         method="POST",
         body={
             "mode": "yaml-content",
-            "yaml_content": yaml.safe_dump(doc, allow_unicode=True),
+            "yaml_content": document,
             "name": request["name"],
             "request_id": job_id,
         },

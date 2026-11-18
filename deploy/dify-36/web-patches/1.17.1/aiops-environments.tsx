@@ -65,6 +65,7 @@ type SiteTask = {
     workspace_id?: string
     knowledge_base_id?: string
     connection_id?: string
+    app_id?: string
     checks?: { id: string; state: string }[]
   }
 }
@@ -610,6 +611,7 @@ export default function EnvironmentManagement() {
                     {item.action === 'workspace-prepare' && <p>候选工作区 · {item.tenant_id}</p>}
                     {item.action === 'knowledge-prepare' && <p>候选知识资源 · {item.tenant_id}</p>}
                     {item.action === 'knowledge-connect' && <p>候选知识连接 · {item.tenant_id}</p>}
+                    {item.action === 'operator-prepare' && <p>候选管家应用 · {item.tenant_id}</p>}
                     <p>
                       {item.action === 'workspace-prepare' && item.state === 'observed'
                         ? '候选工作区已准备'
@@ -617,7 +619,9 @@ export default function EnvironmentManagement() {
                           ? '候选知识资源已准备'
                           : item.action === 'knowledge-connect' && item.state === 'observed'
                             ? '候选知识连接已准备'
-                            : taskLabels[item.state] || item.state}
+                            : item.action === 'operator-prepare' && item.state === 'observed'
+                              ? '候选管家应用已准备（入口停用）'
+                              : taskLabels[item.state] || item.state}
                       {item.cancel_requested && item.state === 'running' ? ' · 等待安全取消' : ''}
                     </p>
                     {item.error_code && <p>{item.error_code}</p>}
@@ -630,6 +634,24 @@ export default function EnvironmentManagement() {
                     {item.result.connection_id && (
                       <p className="break-all">连接编号：{item.result.connection_id}</p>
                     )}
+                    {item.result.app_id && (
+                      <p className="break-all">应用编号：{item.result.app_id}</p>
+                    )}
+                    {item.action === 'knowledge-connect' &&
+                      item.state === 'observed' &&
+                      !dirty &&
+                      !saved?.registry_changed && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={busy}
+                          onClick={() =>
+                            void siteTasks({ connection_task: item.id, tenant_id: item.tenant_id })
+                          }
+                        >
+                          准备候选管家应用：{item.tenant_id}
+                        </Button>
+                      )}
                     {item.action === 'knowledge-prepare' &&
                       item.state === 'observed' &&
                       !dirty &&
@@ -694,13 +716,15 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        {item.action === 'knowledge-connect'
-                          ? '取消知识连接准备'
-                          : item.action === 'knowledge-prepare'
-                            ? '取消知识准备'
-                            : item.action === 'workspace-prepare'
-                              ? '取消工作区准备'
-                              : '取消现场预检'}
+                        {item.action === 'operator-prepare'
+                          ? '取消管家准备'
+                          : item.action === 'knowledge-connect'
+                            ? '取消知识连接准备'
+                            : item.action === 'knowledge-prepare'
+                              ? '取消知识准备'
+                              : item.action === 'workspace-prepare'
+                                ? '取消工作区准备'
+                                : '取消现场预检'}
                       </Button>
                     )}
                   </article>

@@ -137,6 +137,11 @@ Docker Hub 在 36 **不可达**（`registry-1.docker.io` 连接被重置）。�
 
 ## 暴露与收口
 
+候选管家应用导入新增显式`aiops_candidate`合同；`/console/api/apps/imports`声明`aiops_candidate_import=1`。
+固定创建服务补丁令首次写入API/site均停用，原普通导入不变。须连同全部已挂载API补丁成套更新，
+先按固定镜像SHA重建只读挂载树、核其他组件，再重建API/worker；Gateway/桥/Web按环境手册接续。
+仅连接/应用准备不表示业务已激活，实际现场以验收回执为准。
+
 **这是已知的、临时的暴露，不是疏忽。**
 
 | 项 | 值 |

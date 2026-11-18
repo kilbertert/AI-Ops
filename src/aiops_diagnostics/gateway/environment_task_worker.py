@@ -223,6 +223,8 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
         return request({"id": identifier, "owner": owner, "prepare": "knowledge"})
     if claim.get("action") == "knowledge-connect":
         return request({"id": identifier, "owner": owner, "prepare": "connection"})
+    if claim.get("action") == "operator-prepare":
+        return request({"id": identifier, "owner": owner, "prepare": "operator"})
     try:
         result = execute(root, claim)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):

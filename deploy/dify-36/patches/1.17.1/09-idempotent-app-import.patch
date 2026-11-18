@@ -23,7 +23,7 @@
 +    @account_initialization_required
 +    @edit_permission_required
 +    def get(self):
-+        return {"aiops_idempotent_import": 1}, 200
++        return {"aiops_idempotent_import": 1, "aiops_candidate_import": 1}, 200
 +
      @console_ns.expect(console_ns.models[AppImportPayload.__name__])
      @console_ns.response(200, "Import completed", console_ns.models[Import.__name__])

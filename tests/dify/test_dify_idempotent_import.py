@@ -33,6 +33,23 @@ def test_idempotent_import_with_upstream_role_guards(tmp_path):
         check=True,
         capture_output=True,
     )
+    service_target = "/app/api/services/app_dsl_service.py"
+    service_source = subprocess.check_output(
+        ["docker", "run", "--rm", "--entrypoint", "cat", IMAGE, service_target]
+    )
+    assert (
+        hashlib.sha256(service_source).hexdigest()
+        == "f9642c8f740f9ca7b9f1453230622f8852608f1941b50335e78e7c382f38a680"
+    )
+    service_file = tmp_path / "services/app_dsl_service.py"
+    service_file.parent.mkdir()
+    service_file.write_bytes(service_source)
+    subprocess.run(
+        ["patch", "-p1", "--fuzz=0", "--batch", "-d", str(tmp_path)],
+        input=(ROOT / "deploy/dify-36/patches/1.17.1/10-candidate-app-disabled.patch").read_bytes(),
+        check=True,
+        capture_output=True,
+    )
     # stdin提供合成用例，挂载只读候选；不初始化生产配置或网络。
     result = subprocess.run(
         [
@@ -52,6 +69,8 @@ def test_idempotent_import_with_upstream_role_guards(tmp_path):
             "SECRET_KEY=synthetic-role-test-secret",
             "-v",
             f"{file}:{TARGET}:ro",
+            "-v",
+            f"{service_file}:{service_target}:ro",
             IMAGE,
             "-",
         ],
