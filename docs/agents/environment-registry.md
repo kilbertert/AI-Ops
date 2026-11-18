@@ -33,6 +33,9 @@ pnpm --dir web exec vp test --project browser --run app/components/aiops-environ
 pnpm --dir web exec vp test --project unit --run app/components/main-nav/__tests__/index.spec.tsx
 ```
 
+真实页面自动化读取任务结果时，先按任务编号限定对应`article`卡片，再找资源编号；历史任务可显示同一资源，不能全页断言只有一处UUID。
+等待人工验证码的浏览器须保留在可跨消息继续的临时会话，结束后正常退出并清理自己的浏览器和通道；不复用旧验证码。
+
 Web必须完整webpack构建；合并后同修订镜像配套发布，独立URL200只证明路由存在。正常公司会话、
 目录授权及保存/刷新须另验；Gateway与管理桥已部署不意味着生产目录已配置。
 
