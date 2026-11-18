@@ -610,3 +610,19 @@ def test_cancel_request_with_unknown_result_must_keep_automatic_reconciliation(p
     assert tasks.worker(path, ref, {"owner": "b" * 32})["claimed"]
     observed = tasks.worker(path, ref, {"id": job["id"], "owner": "b" * 32, "result": receipt("a")})
     assert observed["state"] == "cancelled" and observed["result"]["state"] == "observed"
+
+
+def test_busy_environment_does_not_fill_automatic_queue_window(prepared):
+    path, ref, _, _ = prepared
+    first, _ = create(prepared)
+    second, _ = create(prepared, "b")
+    tasks.worker(path, ref, {"id": first["id"], "owner": "a" * 32})
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        body = conn.execute("SELECT request FROM environment_tasks WHERE id=?", (first["id"],)).fetchone()[0]
+        conn.execute("UPDATE environment_tasks SET updated_at=? WHERE id=?", (time.time() + 20, second["id"]))
+        for index in range(64):
+            conn.execute(
+                "INSERT INTO environment_tasks(id,environment,request,state,updated_at) VALUES(?,?,?,'queued',?)",
+                ("task_" + f"{index + 1:032x}", "a", body, time.time() - 10),
+            )
+    assert tasks.worker(path, ref, {"owner": "b" * 32})["id"] == second["id"]
