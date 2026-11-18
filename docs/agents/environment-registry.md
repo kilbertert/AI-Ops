@@ -358,3 +358,24 @@ Dify能力需返回aiops_candidate_import=1；候选导入第一次写入即API/
 回读SOP、模型和工具选择吻合且入口停用才application passed，business pending；不登记或发布正式路由。
 部署先自有Dify API固定补丁全包→Gateway→规范执行端→桥/Web，原普通导入默认不变。
 回退保留停用候选应用和任务，不删资料；旧组件不处理新动作。消费者、知识dataset、目标profile登记和合法run为后继。
+
+### 候选运行接线工件
+
+已观察的双端应用与专属节点配置通过`aiops-admin environment-runtime`导出私有运行工件。
+这是配置准备，不安装、生成应用密钥、写正式route/grant或启用租户。消费者Agent直接选库，无需dataset。
+输入复用原目录管理员identity、有效plan_id、tenant_id、operator_task及consumer_task；不从名字猜应用。
+节点私有JSON明确environment、config_file、manifest_file和proxy_base_url，前两文件为当前环境
+AgentRunConfig及受控模型模板，proxy固定专属`https://gateway-egress:9443`；不能拿41节点配置给另一环境。
+
+```bash
+aiops-admin --config /private/control-production.env environment-runtime \
+  --file /private/runtime-request.json --node /private/environment-node.json \
+  --output /private/artifacts/runtime.tar
+```
+
+输出目录须当前身份所有且0700；已有输出拒绝。工件包含节点绑定、双端批准模型、管家SOP/工具清单、
+消费者目标与应用登记数据及摘要，秘密仅在0600成员中，公开回执只含摘要和边界。
+双端必须同环境租户/工作区/单库；任务取消/撤权/配置/应用漂移拒绝。Console全程仅GET，导出前后重核输入。
+双端任务必须来自同一有效计划且观察未过期；新计划可以复用资源，但须先重新完成观察，不借旧过期回执。
+回执明确installation、candidate-runtime、consumer-callback、knowledge-content、business、activation待验证；
+后继在受管安装事务接入工件再作正常目标登录/合法run验证，不手工逐字段改运行文件或直接激活。
