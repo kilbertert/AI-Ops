@@ -55,11 +55,13 @@ type Plan = {
 }
 type SiteTask = {
   id: string
+  action?: string
+  tenant_id?: string
   plan_id: string
   state: string
   cancel_requested: boolean
   error_code: string
-  result: { checks?: { id: string; state: string }[] }
+  result: { workspace_id?: string; checks?: { id: string; state: string }[] }
 }
 const taskLabels: Record<string, string> = {
   queued: '等待执行端',
@@ -71,6 +73,8 @@ const taskLabels: Record<string, string> = {
   expired: '已过期',
 }
 const checkLabels: Record<string, string> = {
+  workspace: '候选工作区',
+  knowledge: '知识资源',
   references: '部署与配置引用',
   application: '应用制品摘要',
   installer: '安装器摘要',
@@ -518,7 +522,7 @@ export default function EnvironmentManagement() {
               </section>
               <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
                 <p className="max-w-xl system-sm-regular text-text-secondary">
-                  保存只更新草稿。预检核对受控文件与版本；现场验证、自动安装和激活尚未开放。
+                  保存只更新草稿。现场预检通过后可准备候选工作区；应用、知识、业务验证和激活仍待完成。
                 </p>
                 <div className="flex gap-2">
                   <Button
@@ -586,9 +590,9 @@ export default function EnvironmentManagement() {
             )}
             {selected && (
               <section aria-label="现场预检任务" className="mt-5 space-y-2 border-t pt-4">
-                <h2 className="system-md-semibold">现场预检任务</h2>
+                <h2 className="system-md-semibold">环境准备任务</h2>
                 <p className="system-xs-regular text-text-tertiary">
-                  仅检查已安装的自有模块；不安装、不准备应用、不激活租户。结果待核对时请运行原任务的受管执行端。
+                  后台自动预检并准备所选租户的候选工作区。结果未知时先核对，不重复创建；准备完成不表示已开通业务。
                 </p>
                 {taskError && <p role="alert">{taskError}</p>}
                 <Button type="button" variant="secondary" onClick={() => void siteTasks()}>
@@ -597,11 +601,35 @@ export default function EnvironmentManagement() {
                 {tasks.map((item) => (
                   <article key={item.id} className="space-y-1 rounded border p-3">
                     <p className="system-xs-regular break-all">{item.id}</p>
+                    {item.action === 'workspace-prepare' && <p>候选工作区 · {item.tenant_id}</p>}
                     <p>
-                      {taskLabels[item.state] || item.state}
+                      {item.action === 'workspace-prepare' && item.state === 'observed'
+                        ? '候选工作区已准备'
+                        : taskLabels[item.state] || item.state}
                       {item.cancel_requested && item.state === 'running' ? ' · 等待安全取消' : ''}
                     </p>
                     {item.error_code && <p>{item.error_code}</p>}
+                    {item.result.workspace_id && (
+                      <p className="break-all">工作区编号：{item.result.workspace_id}</p>
+                    )}
+                    {item.state === 'observed' &&
+                      item.action !== 'workspace-prepare' &&
+                      saved &&
+                      !dirty &&
+                      !saved.registry_changed &&
+                      saved.draft.tenants.map((tenant) => (
+                        <Button
+                          key={tenant.id}
+                          type="button"
+                          variant="secondary"
+                          disabled={busy}
+                          onClick={() =>
+                            void siteTasks({ site_task: item.id, tenant_id: tenant.id })
+                          }
+                        >
+                          准备候选工作区：{tenant.name}（{tenant.id}）
+                        </Button>
+                      ))}
                     {item.result.checks?.map((check) => (
                       <p key={check.id} className="system-xs-regular">
                         {checkLabels[check.id] || check.id}：
@@ -618,7 +646,7 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        取消现场预检
+                        {item.action === 'workspace-prepare' ? '取消工作区准备' : '取消现场预检'}
                       </Button>
                     )}
                   </article>

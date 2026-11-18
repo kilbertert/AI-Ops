@@ -87,7 +87,7 @@ def _lease_owner() -> str:
 
 
 def reconcile_by_name(
-    *, console_base_url: str, console_api_key: str, name: str, timeout: float = 15.0
+    *, console_base_url: str, console_api_key: str, name: str, timeout: float = 15.0, workspace_id: str = ""
 ) -> list[dict[str, Any]]:
     """用 admin key 查 ``all-workspaces``，按**派生名精确匹配**。
 
@@ -129,7 +129,11 @@ def reconcile_by_name(
         )
         rows = payload.get("data") if isinstance(payload, dict) else None
         for row in rows or []:
-            if isinstance(row, dict) and str(row.get("name") or "") == name:
+            if isinstance(row, dict) and (
+                str(row.get("id") or "") == workspace_id
+                if workspace_id
+                else str(row.get("name") or "") == name
+            ):
                 matches.append(row)
         if not (isinstance(payload, dict) and payload.get("has_more")):
             break
@@ -151,6 +155,7 @@ def ensure_workspace(
     owner: str | None = None,
     company: str = "",
     log: Any = None,
+    reconcile_unknown_only: bool = False,
 ) -> EnsureOutcome:
     """幂等、可恢复地建出 ``(tenant_id, environment)`` 的 workspace。
 
@@ -158,9 +163,12 @@ def ensure_workspace(
     不会从 ``failed`` 里静默返回成功 —— 明确失败会被抛成异常，因为它需要人看见。
     """
     environment = canonical_environment(environment)
-    # 公司名只影响**建的那一刻**取什么名字。取到之后写进表，以后对账按那一列 ——
+    # 公司名只影响**建的那一刻**取什么名字。发请求前写进表，以后对账按那一列 ——
     # 公司改名不会让对账失效（见 workspace_name 的 docstring）。
     name = workspace_name(environment, tenant_id, company=company or "")
+    if reconcile_unknown_only:
+        # 环境允许连字符，用长度前缀消除(a,b-c)/(a-b,c)的拼接歧义。
+        name = f"aiops-{len(environment)}-{environment}-{tenant_id}"
     lease_owner = owner or _lease_owner()
 
     row = workspaces.row(tenant_id, environment)
@@ -193,10 +201,14 @@ def ensure_workspace(
             if len(matches) == 1:
                 found = str(matches[0].get("id") or "")
                 # 对账补 UUID 时把**当时那个名字**一并落表 —— 它是这次对账的依据。
-                workspaces.mark_created(tenant_id, environment, found, name=stored_name)
+                workspaces.mark_created(
+                    tenant_id, environment, found, name=stored_name, exclusive=reconcile_unknown_only
+                )
                 return EnsureOutcome(
                     tenant_id, environment, "created", found, "对账命中 1 个：补写 UUID，未重建"
                 )
+            if reconcile_unknown_only:
+                raise EnsureError("DIFY_WORKSPACE_CREATE_UNCONFIRMED", "已发出的创建未确认，继续对账，不重建")
             # 0 个 ⇒ 安全，接管并重建（下面继续）。
 
     # 走到这里只有三种起点：没有行 / failed / （creating 或 unknown 且对账命中 0 个）。
@@ -208,6 +220,7 @@ def ensure_workspace(
         owner=lease_owner,
         lease_seconds=lease_seconds,
         allow_unknown=reconciled_unknown,
+        name=name,
     ):
         latest = workspaces.row(tenant_id, environment) or {}
         return EnsureOutcome(
@@ -227,7 +240,9 @@ def ensure_workspace(
         workspaces.mark_failed(tenant_id, environment, error=f"{exc.code}: {exc.message}")
         raise EnsureError(exc.code, exc.message) from exc
 
-    workspaces.mark_created(tenant_id, environment, created.workspace_id, name=name)
+    workspaces.mark_created(
+        tenant_id, environment, created.workspace_id, name=name, exclusive=reconcile_unknown_only
+    )
     if log is not None:
         log(f"workspace created: {created.name} -> {created.workspace_id}")
     return EnsureOutcome(tenant_id, environment, "created", created.workspace_id, "新建")

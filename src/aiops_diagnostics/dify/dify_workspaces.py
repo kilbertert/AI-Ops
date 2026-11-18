@@ -44,6 +44,7 @@ from aiops_diagnostics.common.private_files import ensure_private_directory, pro
 from aiops_diagnostics.common.redaction import ERROR_TEXT_SHORT_LIMIT
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
 from aiops_diagnostics.gateway import gateway_db, gateway_schema
+from aiops_diagnostics.gateway.environment_drafts import REFERENCE_PATTERN
 
 #: 一张行可能处于的全部状态。``created`` 与 ``ready`` 的区别在于**后续步骤是否跑完**
 #: （插件、凭据、模板 DSL，#881）；对"这个租户的 workspace 是哪一个"这个问题，两者
@@ -184,7 +185,9 @@ class DifyWorkspaces:
             ).fetchone()
         return dict(found) if found is not None else None
 
-    def tenant_for_workspace(self, workspace_id: str, environment: str) -> str:
+    def tenant_for_workspace(
+        self, workspace_id: str, environment: str, *, across_environments: bool = False
+    ) -> str:
         """``(workspace_id, environment)`` → 那个 workspace 的 ``tenant_id``（#982）。
 
         ``resolve`` 的反方向。Dify 的知识库入口只知道**当前 workspace**（它自己的会话
@@ -206,9 +209,9 @@ class DifyWorkspaces:
         environment = _identifier(environment, "environment")
         with self._connection() as connection:
             rows = connection.execute(
-                "SELECT tenant_id, setup_state FROM dify_workspaces"
-                " WHERE workspace_id = ? AND environment = ?",
-                (workspace_id, environment),
+                "SELECT tenant_id, setup_state, environment FROM dify_workspaces"
+                " WHERE workspace_id = ?" + ("" if across_environments else " AND environment = ?"),
+                (workspace_id,) if across_environments else (workspace_id, environment),
             ).fetchall()
         if not rows:
             raise DifyWorkspaceError(
@@ -216,7 +219,7 @@ class DifyWorkspaces:
                 f"环境 {environment} 里没有 workspace {workspace_id}",
                 http_status=404,
             )
-        if len(rows) > 1:
+        if len(rows) > 1 or rows[0]["environment"] != environment:
             raise DifyWorkspaceError(
                 DIFY_WORKSPACE_AMBIGUOUS,
                 f"workspace {workspace_id} 在环境 {environment} 里对应多个租户，拒绝选择",
@@ -261,6 +264,7 @@ class DifyWorkspaces:
         owner: str,
         lease_seconds: float,
         allow_unknown: bool = False,
+        name: str = "",
     ) -> bool:
         """**先占位**：原子地拿到"由我来建"的权利，成功返回 True。
 
@@ -294,8 +298,8 @@ class DifyWorkspaces:
                 try:
                     connection.execute(
                         "INSERT INTO dify_workspaces (tenant_id, environment, workspace_id, setup_state,"
-                        " lease_owner, lease_expires_at, last_error, created_at, updated_at)"
-                        " VALUES (?, ?, '', 'creating', ?, ?, '', ?, ?)",
+                        " lease_owner, lease_expires_at, last_error, created_at, updated_at, workspace_name)"
+                        " VALUES (?, ?, '', 'creating', ?, ?, '', ?, ?, ?)",
                         (
                             tenant_id,
                             environment,
@@ -303,6 +307,7 @@ class DifyWorkspaces:
                             format_stored_time(expires),
                             format_stored_time(now),
                             format_stored_time(now),
+                            name,
                         ),
                     )
                 except sqlite3.IntegrityError:
@@ -321,12 +326,15 @@ class DifyWorkspaces:
             # 已过期的 creating 可能已经建成了，对账（调用方）来决定要不要补 UUID。
             connection.execute(
                 "UPDATE dify_workspaces SET setup_state = 'creating', lease_owner = ?,"
-                " lease_expires_at = ?, updated_at = ? WHERE tenant_id = ? AND environment = ?",
-                (owner, format_stored_time(expires), format_stored_time(now), tenant_id, environment),
+                " lease_expires_at = ?, updated_at = ?, workspace_name = ?"
+                " WHERE tenant_id = ? AND environment = ?",
+                (owner, format_stored_time(expires), format_stored_time(now), name, tenant_id, environment),
             )
         return True
 
-    def mark_created(self, tenant_id: str, environment: str, workspace_id: str, *, name: str = "") -> None:
+    def mark_created(
+        self, tenant_id: str, environment: str, workspace_id: str, *, name: str = "", exclusive: bool = False
+    ) -> None:
         """建成之后**立刻**写回 id —— 这一行与 Dify 的现状之间不留空窗。
 
         ``name`` 是**这次建的时候用的派生名**。写进表里，以后对账按它查：公司改名之后
@@ -335,6 +343,17 @@ class DifyWorkspaces:
         tenant_id = _identifier(tenant_id, "tenant_id")
         environment = _identifier(environment, "environment")
         with self._connection(write=True) as connection:
+            if (
+                exclusive
+                and connection.execute(
+                    "SELECT 1 FROM dify_workspaces WHERE workspace_id=?"
+                    " AND NOT (tenant_id=? AND environment=?)",
+                    (workspace_id, tenant_id, environment),
+                ).fetchone()
+            ):
+                raise DifyWorkspaceError(
+                    DIFY_WORKSPACE_AMBIGUOUS, "工作区已绑定其他环境或租户", http_status=409
+                )
             connection.execute(
                 "UPDATE dify_workspaces SET workspace_id = ?, workspace_name = ?,"
                 " setup_state = 'created', last_error = '', lease_expires_at = NULL, updated_at = ?"
@@ -346,6 +365,15 @@ class DifyWorkspaces:
                     tenant_id,
                     environment,
                 ),
+            )
+
+    def remember_name(self, tenant_id: str, environment: str, workspace_id: str, name: str) -> None:
+        """旧库空名字在UUID核验后补写，保持原就绪状态。"""
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "UPDATE dify_workspaces SET workspace_name=? WHERE tenant_id=? AND environment=?"
+                " AND workspace_id=? AND workspace_name=''",
+                (name, _identifier(tenant_id, "tenant_id"), environment, workspace_id),
             )
 
     def mark_failed(self, tenant_id: str, environment: str, *, error: str) -> None:
@@ -462,6 +490,8 @@ def _readable_company(company: str) -> str:
 
 def _identifier(value: str, name: str) -> str:
     candidate = (value or "").strip()
-    if not _SAFE_ID.fullmatch(candidate):
+    if not (
+        _SAFE_ID.fullmatch(candidate) or (name == "tenant_id" and REFERENCE_PATTERN.fullmatch(candidate))
+    ):
         raise ValueError(f"{name} contains unsupported characters")
     return candidate

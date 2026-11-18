@@ -119,3 +119,11 @@ D24自动预检：两中央HTTP替身/真实SQLite及受管命令替身，自动
 受管传输只发固定JSON，不用payload拼shell/不返回密钥；停用自动执行时原定编号worker及管理读取保持。
 真实验收从正常公司页提交已核计划，后台timer自动处理并回读，原路由/目录/目标PID保持；停止仅本任务timer。
 判据原规划§8后台持久任务和未知结果核对，D23只定编号手工执行未覆盖自动队列及中央管理通道。
+
+D25候选工作区：原管理HTTP/SQLite/HMAC及Dify固定接口替身；未过期同plan的site观察后明确选tenant，
+两个环境同tenant准备成不同workspace，重复/新plan复用同一映射，应用/知识/路由/准入不变。
+创建成功丢response→未知记录→对账单命中复用，多命中/零命中/读取失败不重建；取消未知保持待核对。
+错tenant/siteplan/越权/过期/伪造workspaceid拒绝不创建，原site-preflight自动执行保持。
+判据批准规划§8分离准备/激活及未知先对账；既有ensure-workspace默认重建合同不适合后台长任务，
+本片以显式保守选项复用，legacy默认行为与旧客户开通回归保留。真实正常页面准备一个目标候选workspace
+需核公司已登记tenant、实际名字与唯一UUID，原正式routes/目标PID/公司业务不变，保留新资源作恢复点。

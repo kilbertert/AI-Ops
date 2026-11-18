@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
+from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -166,6 +167,171 @@ def create(prepared, environment="a"):
     r = client.post("/v1/dify/management/environment-tasks", json={"plan_id": plan["id"]})
     assert r.status_code == 200, r.text
     return r.json(), plan
+
+
+def workspace_job(prepared, workspace_upstream, environment="a"):  # noqa: F811
+    path, ref, client, settings = prepared
+    settings.database_file = path.parent / "gateway.db"
+    settings.dify_inner_api_base_url = settings.dify_console_base_url = workspace_upstream.base
+    settings.dify_inner_api_key = settings.dify_console_api_key = "fixture-key"
+    site, _ = create(prepared, environment)
+    tasks.worker(path, ref, {"id": site["id"], "owner": "a" * 32})
+    tasks.worker(path, ref, {"id": site["id"], "owner": "a" * 32, "result": receipt(environment)})
+    response = client.post(
+        "/v1/dify/management/environment-tasks", json={"site_task": site["id"], "tenant_id": "same"}
+    )
+    assert response.status_code == 200, response.text
+    return response.json(), site
+
+
+def prepare_http(prepared, job):
+    path, ref, client, settings = prepared
+    payload = {"id": job["id"], "owner": "b" * 32, "prepare": "workspace"}
+    tasks.worker(path, ref, {"id": job["id"], "owner": payload["owner"]})
+    headers = build_internal_token_headers(settings.environment_task_key, 300, int(time.time()))
+    return client.post("/v1/internal/environment-tasks", json=payload, headers=headers)
+
+
+def test_candidate_workspaces_are_scoped_and_reused_without_activation(prepared, workspace_upstream):  # noqa: F811
+    path, ref, client, _ = prepared
+    original = path.read_bytes()
+    first, site = workspace_job(prepared, workspace_upstream)
+    again = client.post(
+        "/v1/dify/management/environment-tasks", json={"site_task": site["id"], "tenant_id": "same"}
+    ).json()
+    assert first["id"] == again["id"]
+    observed = prepare_http(prepared, first).json()
+    assert observed["state"] == "observed" and observed["executable"] is False
+    assert observed["result"]["checks"] == [
+        {"id": "workspace", "state": "passed"},
+        *[{"id": k, "state": "pending"} for k in ("application", "knowledge", "business")],
+    ]
+    second, _ = workspace_job(prepared, workspace_upstream, "b")
+    other = prepare_http(prepared, second).json()
+    assert other["result"]["workspace_id"] != observed["result"]["workspace_id"]
+    assert len(workspace_upstream.posts()) == 2 and path.read_bytes() == original
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        conn.execute("UPDATE environment_plans SET expires_at=0")
+    newer, _ = workspace_job(prepared, workspace_upstream)
+    assert newer["id"] != first["id"]
+    assert (
+        prepare_http(prepared, newer).json()["result"]["workspace_id"] == observed["result"]["workspace_id"]
+    )
+    assert len(workspace_upstream.posts()) == 2
+
+
+def test_candidate_rejects_unobserved_wrong_tenant_forged_results_and_old_lease(prepared, workspace_upstream):  # noqa: F811
+    path, ref, client, _ = prepared
+    job, site = workspace_job(prepared, workspace_upstream)
+    for tenant in ("missing", ""):
+        assert (
+            client.post(
+                "/v1/dify/management/environment-tasks", json={"site_task": site["id"], "tenant_id": tenant}
+            ).status_code
+            == 403
+        )
+    other, _ = create(prepared, "b")
+    assert (
+        client.post(
+            "/v1/dify/management/environment-tasks", json={"site_task": other["id"], "tenant_id": "same"}
+        ).status_code
+        == 403
+    )
+    tasks.worker(path, ref, {"id": job["id"], "owner": "b" * 32})
+    with pytest.raises(tasks.TaskRefused, match="RESULT_INVALID"):
+        tasks.worker(
+            path, ref, {"id": job["id"], "owner": "b" * 32, "result": {"scope": "candidate-workspace-only"}}
+        )
+    with pytest.raises(tasks.TaskRefused, match="LEASE_LOST"):
+        management.prepare_workspace(
+            SimpleNamespace(settings=prepared[3]),
+            {"id": job["id"], "owner": "c" * 32, "prepare": "workspace"},
+        )
+    assert workspace_upstream.posts() == []
+
+
+def test_candidate_first_create_checks_expiry_and_does_not_leave_running(prepared, workspace_upstream):  # noqa: F811
+    path, ref, _, _ = prepared
+    job, _ = workspace_job(prepared, workspace_upstream)
+    tasks.worker(path, ref, {"id": job["id"], "owner": "b" * 32})
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(
+            conn.execute("SELECT request FROM environment_tasks WHERE id=?", (job["id"],)).fetchone()[0]
+        )
+        request["plan"]["expires_at"] = time.time() - 1
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), job["id"]))
+    result = prepare_http(prepared, job).json()
+    assert result["state"] == "blocked" and result["error_code"] == "ENVIRONMENT_TASK_PLAN_EXPIRED"
+    assert workspace_upstream.posts() == []
+
+
+def test_candidate_checks_fresh_cancellation_and_site_receipt(prepared, workspace_upstream, monkeypatch):  # noqa: F811
+    path, ref, client, _ = prepared
+    job, _ = workspace_job(prepared, workspace_upstream)
+    original = tasks.workspace_request
+    calls = 0
+
+    def cancel_between_reads(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            tasks.inspect(path, ADMIN, identifier=job["id"], cancel=True, reference=ref)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(tasks, "workspace_request", cancel_between_reads)
+    assert prepare_http(prepared, job).json()["state"] == "cancelled"
+    monkeypatch.setattr(tasks, "workspace_request", original)
+    other, site = workspace_job(prepared, workspace_upstream, "b")
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        value = receipt("b")
+        value["created_at"] -= 901
+        value["expires_at"] -= 901
+        conn.execute("UPDATE environment_tasks SET result=? WHERE id=?", (json.dumps(value), site["id"]))
+    blocked = prepare_http(prepared, other).json()
+    assert blocked["state"] == "blocked" and blocked["error_code"] == "ENVIRONMENT_TASK_OBSERVATION_REQUIRED"
+    assert workspace_upstream.posts() == []
+
+
+def test_candidate_legacy_uuid_with_empty_name_is_verified_and_filled(prepared, workspace_upstream):  # noqa: F811
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+
+    path, ref, client, settings = prepared
+    job, site = workspace_job(prepared, workspace_upstream)
+    db = DifyWorkspaces(settings.database_file)
+    db.claim("same", "a", owner="old", lease_seconds=1)
+    db.mark_created("same", "a", "legacy")
+    db.mark_ready("same", "a")
+    workspace_upstream.workspaces.append({"id": "legacy", "name": "Original"})
+    assert prepare_http(prepared, job).json()["state"] == "observed"
+    assert db.row("same", "a")["workspace_name"] == "Original"
+    assert db.row("same", "a")["setup_state"] == "ready"
+    assert workspace_upstream.posts() == []
+
+
+def test_cancelled_unknown_create_reconciles_and_ambiguity_blocks(prepared, workspace_upstream):  # noqa: F811
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+
+    path, ref, client, settings = prepared
+    job, _ = workspace_job(prepared, workspace_upstream)
+    workspace_upstream.create_body = {"message": "ok"}
+    assert prepare_http(prepared, job).json()["state"] == "reconcile"
+    client.post("/v1/dify/management/environment-tasks", json={"id": job["id"], "cancel": True})
+    assert prepare_http(prepared, job).json()["state"] == "reconcile"
+    assert len(workspace_upstream.posts()) == 1
+    name = "aiops-1-a-same"
+    workspace_upstream.workspaces.append({"id": "recovered", "name": name})
+    recovered = prepare_http(prepared, job).json()
+    assert recovered["state"] == "cancelled" and recovered["result"]["workspace_id"] == "recovered"
+    assert len(workspace_upstream.posts()) == 1
+    other, _ = workspace_job(prepared, workspace_upstream, "b")
+    workspaces = DifyWorkspaces(settings.database_file)
+    name = "aiops-1-b-same"
+    workspaces.claim("same", "b", owner="lost", lease_seconds=1, name=name)
+    workspaces.mark_unknown("same", "b", error="timeout")
+    workspace_upstream.workspaces.extend([{"id": "one", "name": name}, {"id": "two", "name": name}])
+    blocked = prepare_http(prepared, other).json()
+    assert blocked["state"] == "blocked" and blocked["error_code"] == "DIFY_WORKSPACE_AMBIGUOUS"
+    assert len(workspace_upstream.posts()) == 1
 
 
 def test_parallel_requests_share_durable_task_across_managers(prepared):

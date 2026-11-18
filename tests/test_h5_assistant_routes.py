@@ -135,6 +135,12 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
         pytest.skip("环境里没有 nginx 二进制 —— 不伪造这条判据")
 
     root = tmp_path_factory.mktemp("ngx")
+    with socket.socket() as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        proxy_port = reserved.getsockname()[1]
+    with socket.socket() as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        stub_port = reserved.getsockname()[1]
     token_file = root / "token.conf"
     token_file.write_text(
         'set $aiops_service_authorization "Bearer test-token";\n'
@@ -145,13 +151,14 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
     inc = (SNIPPET.parent / "ulink-h5-assistant-proxy.inc").read_text("utf-8")
     inc = inc.replace("/etc/aiops-41/nginx-aiops-service-token.conf", str(token_file))
     # 上游换成一个本地 stub：命中 location 就会拿到 marker，没命中走静态根。
-    inc = inc.replace("http://172.18.0.1:8788", "http://127.0.0.1:18099")
+    inc = inc.replace("http://172.18.0.1:8788", f"http://127.0.0.1:{stub_port}")
     (root / "proxy.inc").write_text(inc, encoding="utf-8")
     site = SNIPPET.read_text("utf-8").replace("/etc/aiops-41/h5-assistant-proxy.inc", str(root / "proxy.inc"))
     (root / "root").mkdir()
     (root / "root" / "index.html").write_text("STATIC-FALLBACK", encoding="utf-8")
     (root / "site.conf").write_text(
-        f"server {{\n  listen 127.0.0.1:18098;\n  root {root / 'root'};\n  index index.html;\n{site}\n}}\n",
+        f"server {{\n  listen 127.0.0.1:{proxy_port};\n  root {root / 'root'};\n"
+        f"  index index.html;\n{site}\n}}\n",
         encoding="utf-8",
     )
     # 前台跑：nginx 默认 daemonize，Popen 的 pid 是启动器而不是 master，
@@ -179,8 +186,8 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
         pytest.fail(f"nginx 不认这个片段：\n{check.stderr}")
 
     # 端口被占 ⇒ 这次判据会打到**别人的** nginx 上，那不是证据。先探一下。
-    if _listening(18098):
-        pytest.fail("127.0.0.1:18098 已被占用 —— 判据会打到别人身上，先清掉再跑")
+    if _listening(proxy_port) or _listening(stub_port):
+        pytest.fail("临时端口已被占用，不能对其他实例取证")
 
     stub = subprocess.Popen(  # noqa: S603 - fixed argv, test-only stub
         [
@@ -196,7 +203,7 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
             "    do_GET = do_POST = _ok\n"
             "    def log_message(self, *a): pass\n"
             "socketserver.TCPServer.allow_reuse_address=True\n"
-            "socketserver.TCPServer(('127.0.0.1',18099),H).serve_forever()\n",
+            f"socketserver.TCPServer(('127.0.0.1',{stub_port}),H).serve_forever()\n",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -210,7 +217,7 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
     def reached(method: str, path: str) -> bool:
         for _ in range(50):
             try:
-                with socket.create_connection(("127.0.0.1", 18098), timeout=0.2) as sock:
+                with socket.create_connection(("127.0.0.1", proxy_port), timeout=0.2) as sock:
                     sock.sendall(
                         f"{method} {path} HTTP/1.1\r\nHost: h5.test\r\n"
                         "Content-Length: 0\r\nConnection: close\r\n\r\n".encode()
@@ -227,6 +234,14 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
         raise AssertionError(f"nginx 没起来（退出码 {nginx.poll()}），判断不了转发面")
 
     try:
+        for _ in range(50):
+            if stub.poll() is not None:
+                pytest.fail("上游替身启动失败")
+            if _listening(stub_port):
+                break
+            time.sleep(0.1)
+        else:
+            pytest.fail("上游替身未就绪，不能把启动时502当转发结果")
         # 键是 (方法, 路径)，**不是路径**：同一路径上不同方法转发与否是两个答案
         # （`GET /v1/agents` 泄漏了、`POST /v1/agents` 没有），只按路径存会让后一条
         # 覆盖前一条 —— 第一版就是 76 条网关路由被压成 56 个键，负向断言漏掉整组管理面。

@@ -294,6 +294,39 @@ def test_zero_matches_at_reconcile_means_a_rebuild_is_safe(tmp_path: Path, upstr
     assert len(upstream.posts()) == 1
 
 
+def test_candidate_unknown_never_recreates_and_keeps_original_name(tmp_path, upstream):
+    upstream.create_body = {"message": "ok"}
+    with pytest.raises(EnsureError):
+        _run(tmp_path, upstream, company="原名", reconcile_unknown_only=True)
+    workspaces = DifyWorkspaces(tmp_path / "gateway.db")
+    name = f"aiops-{len(ENVIRONMENT)}-{ENVIRONMENT}-{TENANT}"
+    assert workspaces.row(TENANT, ENVIRONMENT)["workspace_name"] == name
+    upstream.create_body = None
+    with pytest.raises(EnsureError, match="不重建"):
+        _run(tmp_path, upstream, company="新名", reconcile_unknown_only=True)
+    assert len(upstream.posts()) == 1
+    upstream.workspaces.append({"id": "recovered", "name": name})
+    outcome, _ = _run(tmp_path, upstream, company="新名", reconcile_unknown_only=True)
+    assert outcome.workspace_id == "recovered"
+    assert len(upstream.posts()) == 1
+
+
+def test_candidate_compound_names_and_unknown_adoption_are_exclusive(tmp_path, upstream):
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
+
+    first, db = _run(tmp_path, upstream, tenant_id="b-same", environment="a", reconcile_unknown_only=True)
+    second, _ = _run(tmp_path, upstream, tenant_id="same", environment="a-b", reconcile_unknown_only=True)
+    assert first.workspace_id != second.workspace_id
+    assert upstream.workspaces[0]["name"] != upstream.workspaces[1]["name"]
+    db.claim("third", "b", owner="lost", lease_seconds=1, name=upstream.workspaces[0]["name"])
+    db.mark_unknown("third", "b", error="lost")
+    with pytest.raises(DifyWorkspaceError) as caught:
+        _run(tmp_path, upstream, tenant_id="third", environment="b", reconcile_unknown_only=True)
+    assert caught.value.code == "DIFY_WORKSPACE_AMBIGUOUS"
+    assert db.row("third", "b")["workspace_id"] == ""
+    assert len(upstream.posts()) == 2
+
+
 def test_two_matches_at_reconcile_refuses_and_asks_a_human(tmp_path: Path, upstream: _Upstream) -> None:
     """命中 >1 个 ⇒ 拒绝。``tenants.name`` 没有唯一约束，自动选一个就是串租户。"""
     workspaces = DifyWorkspaces(tmp_path / "gateway.db")
