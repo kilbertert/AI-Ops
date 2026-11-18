@@ -1,13 +1,15 @@
 """外部知识API连接属于Dify工作区；仅平台端点和密钥可以作为创建模板。"""
 
+import hmac
+
 from .dify_console_admin import ConsoleApiError
 
 PATH = "/console/api/datasets/external-knowledge-api"
 
 
-def ensure(console, workspace_id, settings):
+def ensure(console, workspace_id, settings, *, pending=None, save=None, name=""):
     endpoint = settings.public_base_url.rstrip("/") + "/v1/dify"
-    name = "aiops-" + settings.environment + "-knowledge"
+    name = name or "aiops-" + settings.environment + "-knowledge"
     if settings.dify_external_knowledge_api_id:
         try:
             row = console._call(workspace_id, PATH + "/" + settings.dify_external_knowledge_api_id)
@@ -20,6 +22,10 @@ def ensure(console, workspace_id, settings):
                 or (row.get("settings") or {}).get("endpoint") != endpoint
             ):
                 raise ValueError("knowledge connection identity mismatch")
+            if pending is not None and not hmac.compare_digest(
+                str(row.get("settings", {}).get("api_key", "")), settings.dify_knowledge_api_key
+            ):
+                raise ValueError("knowledge connection credential mismatch")
             return row["id"]
     rows = []
     for page in range(1, 51):
@@ -36,9 +42,18 @@ def ensure(console, workspace_id, settings):
         row = matching[0]
         if row.get("tenant_id") != workspace_id or (row.get("settings") or {}).get("endpoint") != endpoint:
             raise ValueError("knowledge connection identity mismatch")
+        if pending is not None and not hmac.compare_digest(
+            str(row.get("settings", {}).get("api_key", "")), settings.dify_knowledge_api_key
+        ):
+            raise ValueError("knowledge connection credential mismatch")
         return row["id"]
     if not settings.dify_knowledge_api_key:
         raise ValueError("knowledge connection credential missing")
+    if pending is not None:
+        if pending.get("attempted"):
+            raise ConsoleApiError("DIFY_KNOWLEDGE_CONNECTION_UNCONFIRMED", "连接创建未确认，继续对账")
+        pending["attempted"] = True
+        save()
     result = console._call(
         workspace_id,
         PATH,
