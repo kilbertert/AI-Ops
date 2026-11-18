@@ -29,7 +29,7 @@ Devin初版无发现；已回复/解决后到线程并请求一次复审，最�
 环境和两个租户均停用，目录revision3。没有服务重启、公司服务/业务行改动、新暴露、业务SSH隧道或时序直连账号。
 本次容器ID相同不替代长期健康判断；前一事件的既有worker退出重启观察继续保留。
 
-操作复用[现场预检手册](../../ops/environments/gateway/install.md#只读现场预检与持久回执)、
+操作复用[现场预检手册](../../ops/environments/gateway/install.md#已安装实例现场预检)、
 [ADR0281](../adr/0281-installed-instance-preflight-receipts.md)及[前一安装事件](2026-11-18-paired-config-install-live.md)。
 原始文件、命令、主机快照、回执、摘要和部署恢复记录留私有任务artifact；本事件仅本份回执。
 临时HTTPS到期复查及续期记录在#1546，不把备用SSE成功计入本地预检的业务passed。
