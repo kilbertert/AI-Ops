@@ -14,7 +14,7 @@ from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import JOB_TABLES
 
 
-def check(config, state, environment, *, existing, managed_state=None):
+def check(config, state, environment, *, existing, managed_state=None, candidate_registry=None):
     values = dotenv_values(config, interpolate=False)
     forbidden = {
         "AIOPS_HOME",
@@ -30,6 +30,10 @@ def check(config, state, environment, *, existing, managed_state=None):
     }
     if {key for key in forbidden if values.get(key)}:
         raise ValueError("deployment identity and writable paths belong to installer")
+    if candidate_registry is not None:
+        from aiops_diagnostics.gateway.environment_projection import validate_candidate
+
+        validate_candidate(config, candidate_registry, environment)
     database = state / "gateway/gateway.db"
     route = values.get("AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE")
     if route and Path(route) != (managed_state or state) / "gateway/gateway.db":
@@ -78,6 +82,7 @@ if __name__ == "__main__":
                     sys.argv[3],
                     existing=sys.argv[4] == "existing",
                     managed_state=Path(sys.argv[5]) if len(sys.argv) > 5 else None,
+                    candidate_registry=Path(sys.argv[6]) if len(sys.argv) > 6 else None,
                 )
             )
         )
