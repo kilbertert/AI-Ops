@@ -3,13 +3,16 @@
 import hashlib
 import json
 import re
+import tarfile
 import time
+import zlib
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import validate_private_file
 from aiops_diagnostics.gateway import environment_drafts as drafts
 from aiops_diagnostics.gateway import environment_registry as registry
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.gateway.environment_artifacts import installer_manifest, manifest
 
 
 class PlanRefused(ValueError):
@@ -148,6 +151,33 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
                 checks.append({"id": key, "state": "blocked"})
         same = target["application"]["revision"] == target["installer"]["revision"]
         checks.append({"id": "declared-revision", "state": "passed" if same else "blocked"})
+        embedded = {}
+        for key in ("application", "installer"):
+            value = reference[key]
+            try:
+                if observed.get(key) != value["sha256"]:
+                    raise ValueError("file integrity not confirmed")
+                embedded[key] = (
+                    manifest(Path(value["path"]), value["sha256"], target["python"])["revision"]
+                    if key == "application"
+                    else installer_manifest(Path(value["path"]), value["sha256"])
+                )
+                checks.append({"id": key + "-contents", "state": "passed"})
+            except (
+                ValueError,
+                OSError,
+                RuntimeError,
+                tarfile.TarError,
+                EOFError,
+                zlib.error,
+                TypeError,
+                KeyError,
+            ):
+                checks.append({"id": key + "-contents", "state": "blocked"})
+        matches = same and all(
+            embedded.get(key) == reference[key]["revision"] for key in ("application", "installer")
+        )
+        checks.append({"id": "embedded-revision", "state": "passed" if matches else "blocked"})
         facts = {
             "artifact_sha256": target["application"]["sha256"],
             "source_revision": target["application"]["revision"],

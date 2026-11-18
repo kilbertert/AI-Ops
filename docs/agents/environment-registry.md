@@ -59,7 +59,10 @@ Web必须完整webpack构建；合并后同修订镜像配套发布，独立URL2
 
 目标id匹配草稿deployment_target，配置id匹配credential_ref。上述占位值须替换，文件不允许符号链接，
 共享服务凭据不得放宽权限来满足读取。制品用原P3构建命令从合并修订生成；本片只核摘要与声明修订一致，
-**不验证tar内部制品身份、Git合并来源、主机指纹或配置里的业务地址**，这些继续作为执行前置。
+应用归档复用P3成员/内部摘要清单及目标Python规则；安装器只接受固定普通文件及完整内部摘要清单，
+两包REVISION/manifest修订须与声明一致。不解压执行归档代码；允许已交付旧安装器缺少后继artifact_checks.py。
+新增application-contents、installer-contents和embedded-revision分项只证明归档完整性及声明一致，
+**不证明Git合并来源、wheel内部代码身份、主机指纹或配置里的业务地址**，这些继续作为执行前置。
 回执 `scope=local-file-integrity-only/executable=false`，所有计划仍blocked；缺引用或错摘要给分项阻塞。
 配置投影、主机、容量、双向网络和业务项均pending，不发SSH、HTTP探测或安装命令，不启用目录。
 秘密正文、主机/路径不入计划，公开字段仅编号/版本/摘要与分项；原始配置继续在受控位置。

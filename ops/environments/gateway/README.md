@@ -26,7 +26,8 @@ wheel里的health版本带合并提交。输出包括manifest.json、SHA256SUMS�
 
 ## 预演
 
-从同一合并修订取probe.py并核SHA。主机已登记角色/所有者、SSH公钥身份及项目路径；
+从同一合并修订用build-installer.sh取得完整安装器包，核SHA和SHA256SUMS；其中probe.py
+和artifact_checks.py须配套，不能只上传探针到无预装AI-Ops的主机。主机已登记角色/所有者、SSH公钥身份及项目路径；
 先只读核Python、已有非登录服务身份、CPU/内存/磁盘、旧实例流量。对公司业务库不做DDL或压力测试。
 主机维护身份执行，应用仅使用已有项目服务账号；`--root`是新建且root所有、不可被其他用户写入的项目父目录（代码父目录0755，状态子目录0700）：
 
@@ -49,6 +50,6 @@ health必须匹配制品修订、业务只读；匿名问答必须拒绝。正�
 按[systemd-run](https://www.freedesktop.org/software/systemd/man/latest/systemd-run.html)的临时单位和
 [资源控制](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html)映射上述上限。
 
-只部署已合并的固定制品；外层摘要、probe源码SHA、环境、时间及结果在私有运维账本记录。
+只部署已合并的固定制品；外层摘要、探针/校验模块SHA、环境、时间及结果在私有运维账本记录。
 通过仅说明基础冷启动/匿名拒绝和健康请求成本。真实订单、离线、知识、模型及共享节点成本、
 HTTPS两个方向工具往返、升级/回退和切流量仍须各自验收，不能据此激活目录。

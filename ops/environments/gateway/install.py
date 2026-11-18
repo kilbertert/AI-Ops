@@ -578,10 +578,12 @@ def main():
             sums = Path(__file__).with_name("SHA256SUMS").read_text().splitlines()
             if not re.fullmatch(r"[a-f0-9]{40}", revision):
                 raise ValueError("installer bundle identity required")
-            expected = {"REVISION", "install.py", "runtime_check.py", "probe.py"}
+            expected = {"REVISION", "install.py", "runtime_check.py", "probe.py", "artifact_checks.py"}
             checks = dict(line.split("  ", 1)[::-1] for line in sums)
-            if set(checks) != expected or any(
-                digest(Path(__file__).with_name(n)) != s for n, s in checks.items()
+            if (
+                len(checks) != len(sums)
+                or set(checks) != expected
+                or any(digest(Path(__file__).with_name(n)) != s for n, s in checks.items())
             ):
                 raise ValueError("installer bundle digest mismatch")
             inst.revision = revision
