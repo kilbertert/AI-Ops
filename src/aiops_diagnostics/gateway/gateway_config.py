@@ -80,6 +80,7 @@ SETTING_SOURCES: dict[str, SettingSource] = {
         "AIOPS_GATEWAY_ENVIRONMENT_MANAGEMENT_REGISTRY_FILE"
     ),
     "environment_onboarding_file": SettingSource("AIOPS_GATEWAY_ENVIRONMENT_ONBOARDING_FILE"),
+    "environment_task_key": SettingSource("AIOPS_GATEWAY_ENVIRONMENT_TASK_KEY"),
     "company_gateway_trust_file": SettingSource("AIOPS_GATEWAY_COMPANY_GATEWAY_TRUST_FILE"),
     "consumer_order_chat_enabled": SettingSource(
         "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED", kind="bool", default=False
@@ -204,6 +205,7 @@ class GatewayServerSettings:
     environment_registry_file: str = ""
     environment_management_registry_file: str = ""
     environment_onboarding_file: str = ""
+    environment_task_key: str = field(default="", repr=False)
     company_gateway_trust_file: str = ""
     _environment_registry: object = field(default=None, init=False, repr=False)
     consumer_order_chat_enabled: bool = False
@@ -493,6 +495,21 @@ class GatewayServerSettings:
             self.environment = canonical_environment(self.environment)
         if not 1 <= self.internal_token_expire_seconds <= 3600:
             raise ValueError("AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS must be between 1 and 3600")
+        if self.environment_task_key and (
+            len(self.environment_task_key) < 32
+            or any(
+                value and secrets.compare_digest(self.environment_task_key, value)
+                for value in (
+                    self.internal_token_secret,
+                    self.dify_publish_api_key,
+                    self.dify_trial_api_key,
+                    self.dify_knowledge_api_key,
+                    self.dify_debug_api_key,
+                    self.operator_trial_key,
+                )
+            )
+        ):
+            raise ValueError("environment task key must be independent and at least 32 characters")
         if self.charging_status_base_url:
             parse_charging_endpoints(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):

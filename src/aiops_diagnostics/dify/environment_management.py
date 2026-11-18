@@ -1,13 +1,16 @@
 """正常公司会话后的显式目录授权；连接草稿不改变生效目录。"""
 
 import hashlib
+import json
 import sqlite3
 from pathlib import Path
 
-from fastapi import Depends, Response
+from fastapi import Depends, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from aiops_diagnostics.gateway import environment_drafts, environment_plans
+from aiops_diagnostics.common.http_auth import validate_internal_token
+from aiops_diagnostics.gateway import environment_drafts, environment_plans, environment_tasks
 from aiops_diagnostics.gateway import environment_registry as registry
 
 from . import self_service_identity as auth
@@ -157,7 +160,72 @@ def change(context, session, payload):
     return {"revision": revision}
 
 
+def task(context, session, payload):
+    caller, _, _ = _access(context, session)
+    identity, path = _identity(context, caller), _path(context)
+    reference = getattr(context.settings, "environment_onboarding_file", "")
+    try:
+        if len(json.dumps(payload)) > 65536:
+            raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+        if set(payload) == {"plan_id"}:
+            if not getattr(context.settings, "environment_task_key", ""):
+                raise auth.SetupRefused("ENVIRONMENT_TASK_WORKER_UNAVAILABLE")
+            return environment_tasks.submit(path, identity, payload["plan_id"], reference)
+        if set(payload) == {"environment"}:
+            return environment_tasks.inspect(
+                path, identity, environment=payload["environment"], reference=reference
+            )
+        if set(payload) in ({"id"}, {"id", "cancel"}) and payload.get("cancel", True) is True:
+            return environment_tasks.inspect(
+                path, identity, identifier=payload["id"], cancel="cancel" in payload, reference=reference
+            )
+        raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+    except (environment_tasks.TaskRefused, environment_plans.PlanRefused) as exc:
+        if str(exc).endswith(("BLOCKED", "EXPIRED", "LEASE_LOST")):
+            raise SetupConflict(str(exc)) from exc
+        raise auth.SetupRefused(str(exc)) from exc
+    except (registry.RegistryError, OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise auth.SetupRefused("ENVIRONMENT_TASK_UNAVAILABLE") from exc
+
+
 def register(app, context, session_dependency):
+    @app.post("/v1/dify/management/environment-tasks")
+    def manage_task(payload: dict, response: Response, session=Depends(session_dependency)):  # noqa: B008
+        response.headers["Cache-Control"] = "no-store"
+        return task(context, session, payload)
+
+    @app.post("/v1/internal/environment-tasks")
+    def execute_task(payload: dict, request: Request, response: Response):
+        key = getattr(context.settings, "environment_task_key", "")
+        if not key or not _path(context):
+            return JSONResponse(
+                status_code=404, content={"error": {"code": "ENVIRONMENT_TASK_WORKER_UNAVAILABLE"}}
+            )
+        if not validate_internal_token(
+            request.headers.get("X-Internal-Token"), request.headers.get("X-Request-Timestamp"), key
+        ):
+            return JSONResponse(
+                status_code=401, content={"error": {"code": "ENVIRONMENT_TASK_WORKER_CREDENTIAL_REQUIRED"}}
+            )
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            if len(json.dumps(payload)) > 65536:
+                raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
+            return environment_tasks.worker(
+                _path(context), getattr(context.settings, "environment_onboarding_file", ""), payload
+            )
+        except environment_tasks.TaskRefused as exc:
+            raise SetupConflict(str(exc)) from exc
+        except (
+            registry.RegistryError,
+            environment_plans.PlanRefused,
+            OSError,
+            ValueError,
+            RuntimeError,
+            sqlite3.Error,
+        ) as exc:
+            raise auth.SetupRefused("ENVIRONMENT_TASK_UNAVAILABLE") from exc
+
     @app.post("/v1/dify/management/environment-plans")
     def check_plan(payload: dict, response: Response, session=Depends(session_dependency)):  # noqa: B008
         response.headers["Cache-Control"] = "no-store"

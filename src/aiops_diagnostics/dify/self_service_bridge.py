@@ -58,6 +58,8 @@ def handle(handler, bridge):
                 "id",
                 "revision",
                 "registry_revision",
+                "plan_id",
+                "cancel",
                 "draft",
                 "version_no",
                 "workspace_id",
@@ -84,6 +86,7 @@ def handle(handler, bridge):
         "environment-update": ("POST", "/environments"),
         "environment-drafts": ("GET", "/environment-drafts"),
         "environment-plan": ("POST", "/environment-plans"),
+        "environment-task": ("POST", "/environment-tasks"),
         "environment-draft-save": ("POST", "/environment-drafts"),
         "status": ("POST", "/status"),
         "readiness": ("POST", "/readiness"),
@@ -114,6 +117,26 @@ def handle(handler, bridge):
     else:
         raise _Rejected(400, "无效管理动作")
     if (method == "GET" or action == "retry") and payload:
+        raise _Rejected(400, "无效参数")
+    if action == "environment-task":
+        if set(payload) == {"plan_id"}:
+            valid = isinstance(payload["plan_id"], str) and re.fullmatch(
+                r"plan_[0-9a-f]{32}", payload["plan_id"]
+            )
+        elif set(payload) == {"environment"}:
+            valid = isinstance(payload["environment"], str) and re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?", payload["environment"]
+            )
+        else:
+            valid = (
+                set(payload) in ({"id"}, {"id", "cancel"})
+                and isinstance(payload.get("id"), str)
+                and re.fullmatch(r"task_[0-9a-f]{32}", payload["id"])
+                and payload.get("cancel", True) is True
+            )
+        if not valid:
+            raise _Rejected(400, "无效现场预检任务")
+    elif set(payload) & {"plan_id", "cancel"}:
         raise _Rejected(400, "无效参数")
     if action == "environment-plan":
         if set(payload) == {"id"}:
@@ -189,7 +212,7 @@ def handle(handler, bridge):
             )
         ):
             raise _Rejected(400, "无效环境管理参数")
-    elif action != "environment-plan" and set(payload) & {"environment", "enabled"}:
+    elif action not in {"environment-plan", "environment-task"} and set(payload) & {"environment", "enabled"}:
         raise _Rejected(400, "无效参数")
     _validate_scope_and_sources(action, payload, _Rejected)
     if action in {"run-logs", "run-log"}:

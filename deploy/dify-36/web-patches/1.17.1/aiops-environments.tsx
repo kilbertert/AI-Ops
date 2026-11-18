@@ -12,7 +12,7 @@ import {
 import { Button } from '@langgenius/dify-ui/button'
 import { Checkbox } from '@langgenius/dify-ui/checkbox'
 import { Input } from '@langgenius/dify-ui/input'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from '@/next/navigation'
 import { manage } from '@/service/aiops-management'
 
@@ -53,6 +53,23 @@ type Plan = {
   source_revision?: string
   checks: { id: string; state: 'passed' | 'blocked' | 'pending' }[]
 }
+type SiteTask = {
+  id: string
+  plan_id: string
+  state: string
+  cancel_requested: boolean
+  error_code: string
+  result: { checks?: { id: string; state: string }[] }
+}
+const taskLabels: Record<string, string> = {
+  queued: '等待执行端',
+  running: '正在取证',
+  reconcile: '结果待核对',
+  observed: '本地观察通过',
+  blocked: '现场检查阻塞',
+  cancelled: '已取消',
+  expired: '已过期',
+}
 const checkLabels: Record<string, string> = {
   references: '部署与配置引用',
   application: '应用制品摘要',
@@ -64,6 +81,15 @@ const checkLabels: Record<string, string> = {
   'embedded-revision': '包内修订与声明一致',
   'config-projection': '配置与目录一致性',
   'host-identity': '目标主机身份',
+  'local-path-identity': '本地安装归属',
+  'installed-artifact': '已安装制品',
+  registry: '目录一致性',
+  recovery: '待恢复状态',
+  'service-readiness': '服务版本与监听',
+  'schema-inflight': '数据库与在飞任务',
+  'resource-headroom': '启动资源余量',
+  'managed-host-identity': '独立主机身份验收',
+  'formal-network': '正式网络',
   capacity: '现场容量',
   network: '正式双向网络',
   business: '业务能力验证',
@@ -101,6 +127,10 @@ export default function EnvironmentManagement() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [plan, setPlan] = useState<Plan | null>(null)
+  const [tasks, setTasks] = useState<SiteTask[]>([])
+  const [taskError, setTaskError] = useState('')
+  const taskViewRef = useRef(0)
+  const [taskGeneration, setTaskGeneration] = useState(0)
   const [pending, setPending] = useState<(() => void) | null>(null)
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
@@ -111,6 +141,9 @@ export default function EnvironmentManagement() {
     const current = catalogue.effective.find((item) => item.id === id)
     const value = candidate?.draft ?? { ...empty(), ...current }
     setPlan(null)
+    setTasks([])
+    taskViewRef.current += 1
+    setTaskGeneration((value) => value + 1)
     setSelected(id)
     setDraft(value)
     setOriginal(JSON.stringify(value))
@@ -134,6 +167,8 @@ export default function EnvironmentManagement() {
       select(catalogue, ids.includes(preferred) ? preferred : ids[0] || '')
     } catch (e) {
       setPlan(null)
+      taskViewRef.current += 1
+      setTasks([])
       setData(null)
       setDraft(null)
       setOriginal('')
@@ -231,6 +266,23 @@ export default function EnvironmentManagement() {
       setBusy(false)
     }
   }
+  async function siteTasks(payload: Record<string, unknown> = { environment: selected }) {
+    setTaskError('')
+    const view = taskViewRef.current
+    try {
+      const result = await manage('environment-task', payload)
+      if (view !== taskViewRef.current) return
+      if ('tasks' in result) setTasks(result.tasks)
+      else setTasks((current) => [result, ...current.filter((item) => item.id !== result.id)])
+    } catch (e) {
+      if (view !== taskViewRef.current) return
+      setTasks([])
+      setTaskError(e instanceof Error ? e.message : '任务读取未完成，请刷新核对')
+    }
+  }
+  useEffect(() => {
+    if (selected) void siteTasks({ environment: selected })
+  }, [selected, taskGeneration])
   const rows = data
     ? [
         ...data.effective,
@@ -517,11 +569,60 @@ export default function EnvironmentManagement() {
                 <Button
                   type="button"
                   variant="secondary"
+                  disabled={busy || plan.state === 'expired'}
+                  onClick={() => void siteTasks({ plan_id: plan.id })}
+                >
+                  请求现场预检
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
                   disabled={busy}
                   onClick={() => void preflight(true)}
                 >
                   重新核对计划
                 </Button>
+              </section>
+            )}
+            {selected && (
+              <section aria-label="现场预检任务" className="mt-5 space-y-2 border-t pt-4">
+                <h2 className="system-md-semibold">现场预检任务</h2>
+                <p className="system-xs-regular text-text-tertiary">
+                  仅检查已安装的自有模块；不安装、不准备应用、不激活租户。结果待核对时请运行原任务的受管执行端。
+                </p>
+                {taskError && <p role="alert">{taskError}</p>}
+                <Button type="button" variant="secondary" onClick={() => void siteTasks()}>
+                  刷新任务
+                </Button>
+                {tasks.map((item) => (
+                  <article key={item.id} className="space-y-1 rounded border p-3">
+                    <p className="system-xs-regular break-all">{item.id}</p>
+                    <p>
+                      {taskLabels[item.state] || item.state}
+                      {item.cancel_requested && item.state === 'running' ? ' · 等待安全取消' : ''}
+                    </p>
+                    {item.error_code && <p>{item.error_code}</p>}
+                    {item.result.checks?.map((check) => (
+                      <p key={check.id} className="system-xs-regular">
+                        {checkLabels[check.id] || check.id}：
+                        {check.state === 'passed'
+                          ? '通过'
+                          : check.state === 'blocked'
+                            ? '阻塞'
+                            : '未验证'}
+                      </p>
+                    ))}
+                    {['queued', 'running', 'reconcile'].includes(item.state) && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => void siteTasks({ id: item.id, cancel: true })}
+                      >
+                        取消现场预检
+                      </Button>
+                    )}
+                  </article>
+                ))}
               </section>
             )}
           </form>
