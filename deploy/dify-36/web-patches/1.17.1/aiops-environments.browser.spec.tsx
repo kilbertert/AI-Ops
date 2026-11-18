@@ -254,6 +254,8 @@ it('persists site tasks across refresh and safely requests cancellation', async 
   await expect.element(screen.getByText('结果待核对', { exact: true })).toBeVisible()
   await screen.getByRole('button', { name: '刷新目录' }).click()
   await expect.element(screen.getByText(task.id, { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '环境甲（a）' }).click()
+  await expect.element(screen.getByText(task.id, { exact: true })).toBeVisible()
   await screen.getByRole('button', { name: '刷新任务' }).click()
   await expect.element(screen.getByText(task.id, { exact: true })).toBeVisible()
   await screen.getByRole('button', { name: '取消现场预检' }).click()

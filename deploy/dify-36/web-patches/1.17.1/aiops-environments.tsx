@@ -130,6 +130,7 @@ export default function EnvironmentManagement() {
   const [tasks, setTasks] = useState<SiteTask[]>([])
   const [taskError, setTaskError] = useState('')
   const taskViewRef = useRef(0)
+  const [taskGeneration, setTaskGeneration] = useState(0)
   const [pending, setPending] = useState<(() => void) | null>(null)
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
@@ -142,6 +143,7 @@ export default function EnvironmentManagement() {
     setPlan(null)
     setTasks([])
     taskViewRef.current += 1
+    setTaskGeneration((value) => value + 1)
     setSelected(id)
     setDraft(value)
     setOriginal(JSON.stringify(value))
@@ -280,7 +282,7 @@ export default function EnvironmentManagement() {
   }
   useEffect(() => {
     if (selected) void siteTasks({ environment: selected })
-  }, [selected, data])
+  }, [selected, taskGeneration])
   const rows = data
     ? [
         ...data.effective,

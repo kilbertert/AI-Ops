@@ -377,7 +377,13 @@ def test_worker_builds_merged_installer_and_only_invokes_preflight(prepared, tmp
 def test_worker_key_must_not_reuse_existing_service_secrets(tmp_path):
     from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
-    for key in ("internal_token_secret", "dify_publish_api_key", "dify_trial_api_key"):
+    for key in (
+        "internal_token_secret",
+        "dify_publish_api_key",
+        "dify_trial_api_key",
+        "dify_knowledge_api_key",
+        "dify_debug_api_key",
+    ):
         settings = GatewayServerSettings(
             data_home=tmp_path,
             database_file=tmp_path / "db",
@@ -440,3 +446,18 @@ def test_unknown_expired_lease_cannot_run_after_input_changes(prepared):
     write_private_text(ref, "changed")
     with pytest.raises((ValueError, tasks.TaskRefused)):
         tasks.worker(path, ref, dict(id=job["id"], owner="b" * 32))
+
+
+def test_cancelled_expired_lease_still_reconciles_and_keeps_result(prepared):
+    path, ref, client, _ = prepared
+    job, _ = create(prepared)
+    tasks.worker(path, ref, dict(id=job["id"], owner="a" * 32))
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        conn.execute("UPDATE environment_tasks SET lease_until=0 WHERE id=?", (job["id"],))
+    result = client.post(
+        "/v1/dify/management/environment-tasks", json={"id": job["id"], "cancel": True}
+    ).json()
+    assert result["state"] == "reconcile" and result["cancel_requested"]
+    assert tasks.worker(path, ref, dict(id=job["id"], owner="b" * 32))["claimed"]
+    result = tasks.worker(path, ref, dict(id=job["id"], owner="b" * 32, result=receipt("a")))
+    assert result["state"] == "cancelled" and result["result"]["state"] == "observed"

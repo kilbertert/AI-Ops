@@ -149,11 +149,7 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
             row = _row(conn, identifier)
             _authorize(path, identity, row["environment"])
             if cancel:
-                state = (
-                    "running"
-                    if row["state"] == "running" and row["lease_until"] > time.time()
-                    else "cancelled"
-                )
+                state = row["state"] if row["state"] in {"running", "reconcile"} else "cancelled"
                 conn.execute(
                     "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
                     (state, time.time(), identifier),
@@ -260,7 +256,7 @@ def worker(path, reference, payload):
         if (
             set(payload) == {"id", "owner"}
             and row["state"] in {"queued", "running", "reconcile"}
-            and not row["cancel"]
+            and (not row["cancel"] or row["state"] in {"running", "reconcile"})
         ):
             _current(path, request, reference, reconciling=row["state"] in {"running", "reconcile"})
         drift = False
@@ -276,7 +272,7 @@ def _worker_write(path, payload, row, request, owner, drift):
     with gateway_db.connection(drafts._database(path), write=True) as conn:
         now = time.time()
         if set(payload) == {"id", "owner"}:
-            if row["cancel"] or row["state"] in {"observed", "blocked", "cancelled", "expired"}:
+            if row["state"] in {"observed", "blocked", "cancelled", "expired"}:
                 return {"claimed": False, "task": _public(row)}
             if row["lease_until"] > now:
                 return {"claimed": False, "task": _public(row)}

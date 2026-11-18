@@ -499,7 +499,14 @@ class GatewayServerSettings:
             len(self.environment_task_key) < 32
             or any(
                 value and secrets.compare_digest(self.environment_task_key, value)
-                for value in (self.internal_token_secret, self.dify_publish_api_key, self.dify_trial_api_key)
+                for value in (
+                    self.internal_token_secret,
+                    self.dify_publish_api_key,
+                    self.dify_trial_api_key,
+                    self.dify_knowledge_api_key,
+                    self.dify_debug_api_key,
+                    self.operator_trial_key,
+                )
             )
         ):
             raise ValueError("environment task key must be independent and at least 32 characters")
