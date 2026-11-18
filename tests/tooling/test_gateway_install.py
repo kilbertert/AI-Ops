@@ -1195,3 +1195,23 @@ def test_pending_runtime_recovery_refuses_changed_application_pointer(host, monk
     assert not any(a[:2] == ("systemctl", "stop") for a in host[4][calls:])
     assert not pointer.exists()
     assert pointer.is_symlink() == (drift == "unowned")
+
+
+def test_runtime_recovery_rechecks_application_pointer_after_stop(host, monkeypatch):
+    inst = host[0]
+    apply_runtime(host, runtime_bundle(host))
+    record = inst.read_record("installed.json")
+    inst.record("pending.json", {**record, "previous": record, "phase": "switching"})
+    stop = inst.stop
+
+    def changed_after_stop(name):
+        stop(name)
+        if name == inst.name:
+            (inst.root / "current").unlink()
+            (inst.root / "current").write_text("external-change-after-stop")
+
+    monkeypatch.setattr(inst, "stop", changed_after_stop)
+    with pytest.raises(ValueError, match="current release drift"):
+        inst.recover()
+    assert (inst.root / "current").read_text() == "external-change-after-stop"
+    assert (inst.root / "pending.json").exists()

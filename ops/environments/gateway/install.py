@@ -194,6 +194,14 @@ WantedBy=multi-user.target
         finally:
             os.close(descriptor)
 
+    def check_current(self, old, pending):
+        records = [old, pending] if pending["phase"] == "switching" else [old]
+        current = self.root / "current"
+        if not current.is_symlink() or Path(os.readlink(current)) not in {
+            self.release(record) for record in records
+        }:
+            raise ValueError("current release drift prevents rollback")
+
     def read_record(self, name):
         self.check_paths()
         path = self.root / name
@@ -571,14 +579,7 @@ WantedBy=multi-user.target
             raise ValueError("unknown recovery phase")
         old = pending["previous"]
         if old:
-            current = self.root / "current"
-            allowed_releases = [old]
-            if pending["phase"] == "switching":
-                allowed_releases.append(pending)
-            if not current.is_symlink() or Path(os.readlink(current)) not in {
-                self.release(record) for record in allowed_releases
-            }:
-                raise ValueError("current release drift prevents rollback")
+            self.check_current(old, pending)
             allowed = {old["config_sha256"]}
             if pending["phase"] == "switching":
                 allowed.add(pending["config_sha256"])
@@ -620,6 +621,7 @@ WantedBy=multi-user.target
         else:
             release = self.release(old)
             if pending["phase"] == "switching":
+                self.check_current(old, pending)
                 if old["config_sha256"] != pending["config_sha256"]:
                     backup = self.release(pending) / "previous-config.env"
                     self.config_snapshot(backup, self.config / "production.env", old["config_sha256"])
@@ -631,6 +633,7 @@ WantedBy=multi-user.target
                         target.unlink(missing_ok=True)
                 self.switch_runtime(old)
                 self.check_database(release)
+                self.check_current(old, pending)
                 self.switch(release)
                 self.command("systemctl", "daemon-reload")
                 self.command("systemctl", "start", self.name)
