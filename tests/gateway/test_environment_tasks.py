@@ -461,3 +461,17 @@ def test_cancelled_expired_lease_still_reconciles_and_keeps_result(prepared):
     assert tasks.worker(path, ref, dict(id=job["id"], owner="b" * 32))["claimed"]
     result = tasks.worker(path, ref, dict(id=job["id"], owner="b" * 32, result=receipt("a")))
     assert result["state"] == "cancelled" and result["result"]["state"] == "observed"
+
+
+def test_terminal_worker_repeat_expires_after_input_drift(prepared):
+    path, ref, client, _ = prepared
+    job, _ = create(prepared)
+    tasks.worker(path, ref, dict(id=job["id"], owner="a" * 32))
+    tasks.worker(path, ref, dict(id=job["id"], owner="a" * 32, result=receipt("a")))
+    draft = json.loads(drafts._rows(drafts._database(path))[0]["body"])
+    draft["name"] = "new name after completion"
+    drafts.save(path, ADMIN, draft, expected_revision=1, registry_revision=1)
+    before = tasks.inspect(path, ADMIN, identifier=job["id"], reference=ref)
+    repeated = tasks.worker(path, ref, dict(id=job["id"], owner="b" * 32))
+    assert before["state"] == repeated["task"]["state"] == "expired"
+    assert repeated["claimed"] is False and repeated["task"]["result"]["id"].startswith("site_")

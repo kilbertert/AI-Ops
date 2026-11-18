@@ -265,7 +265,13 @@ def worker(path, reference, payload):
                 _current(path, request, reference, reconciling=True)
             except (ValueError, OSError, RuntimeError):
                 drift = True
-        return _worker_write(path, payload, row, request, owner, drift)
+        result = _worker_write(path, payload, row, request, owner, drift)
+        if result.get("claimed") is False and result["task"]["state"] in {"observed", "blocked"}:
+            try:
+                _current(path, request, reference, reconciling=True)
+            except (ValueError, OSError, RuntimeError):
+                result["task"]["state"] = "expired"
+        return result
 
 
 def _worker_write(path, payload, row, request, owner, drift):
