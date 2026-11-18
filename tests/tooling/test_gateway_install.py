@@ -689,6 +689,52 @@ def test_candidate_local_revision_preserves_repeat_after_recovery(host, monkeypa
     assert incoming["revision"] == 4 and len(incoming["audit"]) == 4
 
 
+def test_snapshot_interruption_does_not_pollute_private_registry(host, monkeypatch):
+    first = candidate_config(host)
+    apply_candidate(host, first)
+    inst = host[0]
+    old = inst.read_record("installed.json")
+    inst.record("pending.json", {**old, "previous": old, "phase": "switching"})
+    target = inst.config / "registry/environment.json"
+    original_replace = Path.replace
+
+    def interrupted(path, destination):
+        if destination == target:
+            raise OSError("interrupted before replacement")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", interrupted)
+    with pytest.raises(OSError):
+        inst.config_snapshot(first[1], target, install.digest(first[1]))
+    assert {p.name for p in target.parent.iterdir()} == {"environment.json"}
+    monkeypatch.setattr(Path, "replace", original_replace)
+    assert inst.recover()["result"] == "restored"
+
+
+def test_recovery_snapshot_ownership_is_set_before_publication(host, monkeypatch):
+    apply(host)
+    inst = host[0]
+    private = inst.root / "recovery"
+    private.mkdir(mode=0o700)
+    sentinel = inst.root.parent / "system-file"
+    sentinel.write_text("keep")
+    original_replace = Path.replace
+    target = private / "snapshot.json"
+    ownership = []
+
+    def replaced(path, destination):
+        result = original_replace(path, destination)
+        if destination == target:
+            target.unlink()
+            target.symlink_to(sentinel)
+        return result
+
+    monkeypatch.setattr(Path, "replace", replaced)
+    monkeypatch.setattr(install.os, "chown", lambda *a, **k: ownership.append(a))
+    inst.registry_snapshot_bytes(b"{}", target)
+    assert sentinel.read_text() == "keep" and ownership == []
+
+
 @pytest.mark.parametrize("fault", ["closed_connection", "closed_listener", "permission", "wrong_version"])
 def test_readiness_tolerates_closed_connection_but_requires_listener(monkeypatch, fault):
     import threading

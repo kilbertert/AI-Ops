@@ -282,8 +282,7 @@ WantedBy=multi-user.target
         if not target.parent.exists():
             target.parent.mkdir(mode=0o700)
             os.chown(target.parent, self.account.pw_uid, self.account.pw_gid)
-        write(target, raw.decode())
-        os.chown(target, self.account.pw_uid, self.account.pw_gid)
+        self.config_snapshot_bytes(raw, target)
 
     def candidate_directory(self, incoming):
         """草稿投影不是现役版本；安装本地版本递增，相同内容复用原字节。"""
@@ -328,13 +327,24 @@ WantedBy=multi-user.target
         body = probe.regular(source).read_bytes()
         if hashlib.sha256(body).hexdigest() != expected:
             raise ValueError("configuration snapshot mismatch")
-        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as out:
+        self.config_snapshot_bytes(body, target)
+
+    def config_snapshot_bytes(self, body, target):
+        staging = self.root / "configuration-staging"
+        staging.mkdir(mode=0o700, exist_ok=True)
+        trusted(staging, private=True)
+        if staging.stat().st_dev != target.parent.stat().st_dev:
+            raise ValueError("configuration snapshot requires one filesystem")
+        with tempfile.NamedTemporaryFile(dir=staging, delete=False) as out:
             temporary = Path(out.name)
             out.write(body)
             out.flush()
             os.fchown(out.fileno(), self.account.pw_uid, self.account.pw_gid)
             os.fsync(out.fileno())
-        temporary.replace(target)
+        try:
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
         descriptor = os.open(target.parent, os.O_DIRECTORY)
         try:
             os.fsync(descriptor)
