@@ -1,7 +1,6 @@
 """在自有临时根预演最小Gateway；不切换服务、不读取公司配置或激活租户。"""
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -16,76 +15,16 @@ import tarfile
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
-
-def regular(path):
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("regular file required")
-    return path
-
-
-def manifest(archive, digest, python_minor):
-    regular(archive)
-    if archive.stat().st_size > 512 * 1024 * 1024:
-        raise ValueError("archive too large")
-    with archive.open("rb") as stream:
-        if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
-            raise ValueError("archive digest mismatch")
-    with tarfile.open(archive) as bundle:
-        members = bundle.getmembers()
-        if len(members) > 101 or sum(m.size for m in members) > 512 * 1024 * 1024:
-            raise ValueError("artifact too large")
-        files = {}
-        for member in members:
-            name = PurePosixPath(member.name)
-            if (
-                name.is_absolute()
-                or ".." in name.parts
-                or str(name) != member.name
-                or member.issym()
-                or member.islnk()
-                or not (member.isdir() or member.isfile())
-                or (member.isdir() and member.name != "wheelhouse")
-            ):
-                raise ValueError("unsafe archive member")
-            if member.isfile():
-                if member.name in files or member.size > 128 * 1024 * 1024:
-                    raise ValueError("duplicate or oversized member")
-                if member.name not in {"manifest.json", "SHA256SUMS"} and not (
-                    name.parent == PurePosixPath("wheelhouse") and name.suffix == ".whl"
-                ):
-                    raise ValueError("unexpected artifact member")
-                files[member.name] = member
-        if not {"manifest.json", "SHA256SUMS"} <= files.keys() or len(files) > 100:
-            raise ValueError("artifact file set invalid")
-        checks = {}
-        for line in bundle.extractfile(files["SHA256SUMS"]).read().decode().splitlines():
-            sha, name = line.split("  ", 1)
-            if not re.fullmatch(r"[a-f0-9]{64}", sha) or name in checks:
-                raise ValueError("invalid digest manifest")
-            checks[name] = sha
-        if set(checks) != set(files) - {"SHA256SUMS"}:
-            raise ValueError("artifact file set mismatch")
-        for name, sha in checks.items():
-            with bundle.extractfile(files[name]) as stream:
-                if hashlib.file_digest(stream, "sha256").hexdigest() != sha:
-                    raise ValueError("artifact member mismatch")
-        body = json.load(bundle.extractfile(files["manifest.json"]))
-        if (
-            not isinstance(body, dict)
-            or set(body) != {"schema", "revision", "python", "platform", "version"}
-            or type(body["schema"]) is not int
-            or body["schema"] != 1
-            or not all(isinstance(body[k], str) for k in ("revision", "python", "platform", "version"))
-            or body["python"] != python_minor
-            or body["platform"] != "linux-x86_64"
-            or not re.fullmatch(r"[a-f0-9]{40}", body["revision"])
-            or not re.fullmatch(r"\d+\.\d+\.\d+\+" + body["revision"][:12], body["version"])
-            or sum(name.startswith("wheelhouse/aiops_diagnostics-") for name in files) != 1
-        ):
-            raise ValueError("incompatible artifact")
-        return body
+try:
+    from artifact_checks import manifest
+    from artifact_checks import regular as regular
+except ModuleNotFoundError as exc:
+    if exc.name != "artifact_checks":
+        raise
+    from aiops_diagnostics.gateway.environment_artifacts import manifest
+    from aiops_diagnostics.gateway.environment_artifacts import regular as regular
 
 
 def extract(archive, dest):
