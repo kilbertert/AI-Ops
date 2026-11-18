@@ -138,6 +138,26 @@ def test_matching_outer_hash_does_not_validate_non_archive_contents(prepared):
     assert checks["embedded-revision"] == "blocked" and result["executable"] is False
 
 
+@pytest.mark.parametrize("key", ["application", "installer"])
+def test_truncated_gzip_with_correct_outer_hash_is_blocked_and_readable(prepared, key):
+    import gzip
+
+    path, _, ref, files = prepared
+    old = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    file = Path(files[key]["path"])
+    write_private_text(file, "")
+    file.write_bytes(gzip.compress(b"archive" * 2000)[:15])
+    files[key]["sha256"] = hashlib.sha256(file.read_bytes()).hexdigest()
+    body = json.loads(ref.read_text())
+    body["targets"][0][key] = files[key]
+    write_private_text(ref, json.dumps(body))
+    result = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    assert {"id": key, "state": "passed"} in result["checks"]
+    assert {"id": key + "-contents", "state": "blocked"} in result["checks"]
+    assert plans.read(path, ADMIN, result["id"], ref)["state"] == "blocked"
+    assert plans.read(path, ADMIN, old["id"], ref)["state"] == "expired"
+
+
 def test_already_blocked_file_drift_expires_frozen_plan(prepared):
     path, _, reference, files = prepared
     config = Path(files["configuration"]["path"])

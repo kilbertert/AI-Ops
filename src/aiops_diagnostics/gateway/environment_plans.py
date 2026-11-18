@@ -162,7 +162,7 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
                     else installer_manifest(Path(value["path"]), value["sha256"])
                 )
                 checks.append({"id": key + "-contents", "state": "passed"})
-            except (ValueError, OSError, RuntimeError, tarfile.TarError, TypeError, KeyError):
+            except (ValueError, OSError, RuntimeError, tarfile.TarError, EOFError, TypeError, KeyError):
                 checks.append({"id": key + "-contents", "state": "blocked"})
         matches = same and all(
             embedded.get(key) == reference[key]["revision"] for key in ("application", "installer")
