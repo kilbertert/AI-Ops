@@ -44,7 +44,12 @@ def prepared(tmp_path):
     drafts.save(path, ADMIN, draft, expected_revision=0, registry_revision=1)
     files = {}
     for name in ("application", "installer", "configuration"):
-        file = write_private_text(tmp_path / name, "fixture-secret-" + name)
+        content = (
+            "AIOPS_MYSQL_PASSWORD='fixture-secret-configuration'\n"
+            if name == "configuration"
+            else "fixture-secret-" + name
+        )
+        file = write_private_text(tmp_path / name, content)
         files[name] = {"path": str(file), "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
         if name != "configuration":
             files[name]["revision"] = "a" * 40
@@ -86,7 +91,6 @@ def test_concurrent_same_plan_is_persistent_and_never_activates(prepared, tmp_pa
     result = plans.read(path, ADMIN, results[0]["id"], ref)
     assert result["state"] == "blocked" and result["executable"] is False
     assert {c["id"] for c in result["checks"] if c["state"] == "pending"} == {
-        "config-projection",
         "host-identity",
         "capacity",
         "network",
