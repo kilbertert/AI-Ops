@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import tomllib
 import uuid
 from pathlib import Path
 
@@ -32,6 +33,15 @@ def execute(root, claim):
         or not 1024 <= target["port"] <= 65535
     ):
         raise ValueError("invalid fixed target")
+    declaration = tomllib.loads((root / ".dev-host.toml").read_text())
+    matches = [
+        row["name"]
+        for row in declaration.get("targets", [])
+        if row.get("host") == target["host"] or row.get("name") == target["host"]
+    ]
+    if len(matches) != 1 or not REFERENCE_PATTERN.fullmatch(matches[0]) or matches[0].startswith("-"):
+        raise ValueError("target must resolve uniquely in project declaration")
+    host = matches[0]
     # 构建器从origin/main已合并修订取固定文件；远端从不执行工作树源码。
     subprocess.run(["git", "merge-base", "--is-ancestor", revision, "origin/main"], cwd=root, check=True)
     with tempfile.TemporaryDirectory() as directory:
@@ -49,7 +59,7 @@ def execute(root, claim):
         command = [
             "dev-host",
             "exec",
-            target["host"],
+            host,
             "--allow-service-exec",
             "--timeout",
             "45",
@@ -72,7 +82,7 @@ def execute(root, claim):
             [
                 "dev-host",
                 "cp",
-                target["host"],
+                host,
                 str(archive),
                 "--dest",
                 remote + ".tar.gz",
@@ -128,7 +138,7 @@ def execute(root, claim):
             [
                 "dev-host",
                 "exec",
-                target["host"],
+                host,
                 "--allow-service-exec",
                 "--timeout",
                 "60",
