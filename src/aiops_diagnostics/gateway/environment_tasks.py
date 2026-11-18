@@ -241,12 +241,17 @@ def validate_receipt(value, environment):
 
 
 def worker(path, reference, payload):
-    if set(payload) not in ({"id", "owner"}, {"id", "owner", "result"}, {"id", "owner", "error"}):
+    if set(payload) not in ({"owner"}, {"id", "owner"}, {"id", "owner", "result"}, {"id", "owner", "error"}):
         raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
     owner = payload["owner"]
     if not isinstance(owner, str) or not re.fullmatch(r"[0-9a-f]{32}", owner):
         raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
     with drafts._locked(path):
+        if set(payload) == {"owner"}:
+            selected = _next(path, reference)
+            if selected is None:
+                return {"claimed": False, "task": None}
+            payload = {**payload, "id": selected}
         with gateway_db.connection(drafts._database(path), readonly=True) as conn:
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='environment_tasks'").fetchone():
                 raise TaskRefused("ENVIRONMENT_TASK_UNAVAILABLE")
@@ -274,6 +279,46 @@ def worker(path, reference, payload):
         return result
 
 
+def _next(path, reference):
+    database = drafts._database(path)
+    if not database.exists():
+        return None
+    now = time.time()
+    with gateway_db.connection(database, readonly=True) as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='environment_tasks'").fetchone():
+            return None
+        candidates = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM environment_tasks WHERE state IN ('queued','running','reconcile') "
+                "AND lease_until<=? AND (state!='reconcile' OR updated_at<=?) ORDER BY updated_at LIMIT 64",
+                (now, now - 60),
+            )
+        ]
+    for row in candidates:
+        request = json.loads(row["request"])
+        try:
+            _authorize(path, tuple(request["identity"]), row["environment"])
+            _current(path, request, reference, reconciling=row["state"] != "queued")
+            with gateway_db.connection(database, readonly=True) as conn:
+                busy = conn.execute(
+                    "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
+                    "AND state='running' AND lease_until>? LIMIT 1",
+                    (row["environment"], row["id"], now),
+                ).fetchone()
+            if not busy:
+                return row["id"]
+        except (ValueError, OSError, RuntimeError):
+            # 失效队首须留下具名结论，不重复执行或饿死另一个环境。
+            with gateway_db.connection(database, write=True) as conn:
+                conn.execute(
+                    "UPDATE environment_tasks SET state='expired',error='ENVIRONMENT_TASK_PLAN_EXPIRED',"
+                    "owner='',lease_until=0,updated_at=? WHERE id=?",
+                    (now, row["id"]),
+                )
+    return None
+
+
 def _worker_write(path, payload, row, request, owner, drift):
     with gateway_db.connection(drafts._database(path), write=True) as conn:
         now = time.time()
@@ -294,6 +339,7 @@ def _worker_write(path, payload, row, request, owner, drift):
             )
             return {
                 "claimed": True,
+                "id": row["id"],
                 "environment": row["environment"],
                 "target": request["target"],
                 "installer": request["installer"],
