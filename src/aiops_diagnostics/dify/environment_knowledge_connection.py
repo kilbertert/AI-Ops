@@ -137,7 +137,8 @@ def run(context, path, reference, payload):
                 "DIFY_CONSOLE_UNREADABLE",
             }
             or isinstance(exc, KnowledgeSearchUnavailable)
-            or isinstance(exc, EnsureError) and code == "DIFY_RECONCILE_UNAVAILABLE"
+            or isinstance(exc, EnsureError)
+            and code == "DIFY_RECONCILE_UNAVAILABLE"
         ):
             return tasks.worker(
                 path,
