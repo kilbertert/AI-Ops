@@ -10,8 +10,9 @@
 
 | 能力/组件 | 已合并 | 已部署 | 已启用 | 已验收与缺口 | 证据 |
 |---|---|---|---|---|---|
-| 目录草稿/Gateway、管理桥 | #1548 `9c21d855` | 基础制品已配套；控制Gateway为#1572的1.15.0 | 生效目录revision1、0个环境；新增第二环境草稿revision1、两个租户均未启用 | 隔离持久化/权限/CAS及现场CLI保存回读通过；原页面保存、投影/激活与真实开通未验 | [基础验证](../validation/2026-11-16-environment-directory-drafts.md)、[业务连接回执](../validation/2026-11-17-business-connection-live.md)、[Gateway部署](../validation/2026-11-17-console-environment-deployed.md) |
-| 独立环境页/Dify Web | #1549 `d136bdb2` | 完整Web已配套；当时Gateway 1.14.0，后续至1.14.1 | 路由存在；不代表目录或租户已激活 | 独立浏览器交互和匿名拒绝通过；正常账号真实管理、预检/安装/激活及三功能业务验收未完成 | [环境页回执](../validation/2026-11-16-z-environment-tab-delivery.md) |
+| 目录草稿/Gateway、管理桥 | #1548基础；#1575 `f0b016ba`计划扩展 | 控制Gateway与管理桥1.16.0已配套 | 生效目录revision1、0个环境；第二环境草稿revision1、两个租户均未启用 | 隔离持久化/权限/CAS、现场CLI保存回读及正常管理读取通过；原页面保存、投影/激活与真实开通未验 | [基础验证](../validation/2026-11-16-environment-directory-drafts.md)、[业务连接回执](../validation/2026-11-17-business-connection-live.md)、[当前配套部署](../validation/2026-11-18-environment-plans-live.md) |
+| 独立环境页/Dify Web | #1549基础；#1575 `f0b016ba`计划扩展 | 同修订完整Web已配套 | 路由与文件预检计划可用；目录和租户未激活 | 独立浏览器交互、正常公司登录/页面读取、预检重复/回读及退出重放通过；原页面保存、远程安装/激活与三功能业务未验 | [当前页面回执](../validation/2026-11-18-environment-plans-live.md)、[基础环境页](../validation/2026-11-16-z-environment-tab-delivery.md) |
+| 配置/制品文件预检计划 | #1575 `f0b016ba` | Gateway、管理桥、完整Web1.16.0已配套 | 已存草稿生成持久计划；引用配置为空，计划blocked且executable=false | CI5249/10、独立漂移反例修复、现场同输入复用/页面回读通过；仅文件完整性，主机/来源/投影/容量/网络/业务及远程执行仍待验 | [现场回执](../validation/2026-11-18-environment-plans-live.md)、[开发验证](../validation/2026-11-17-environment-onboarding-plans.md) |
 | 目标登录/共享服务临时网络 | #1544 `b1f8156a` | 备用入口按回执配套 | 仅获准来源，原入口保留 | 登录身份/授权单次读与SSE通过；正式网络稳定性、双向工具往返和业务容量未闭环；临时入口复查见#1546 | [网络回执](../validation/2026-11-16-z-shared-dify-recovery-live.md) |
 | 活动登录/管理目录准备 | #1551 `9089bea9` | Gateway 1.14.1与登录代理完整包已配套 | 管理目录revision1、0个生效环境、1个显式管理员；运行准入未切换 | 正常登录/管理读取、退出撤销及重登恢复通过；日志正向受应用权限阻塞，发布权限、页面保存及非管理员现场仍未验 | [部署回执](../validation/2026-11-16-z-console-session-live.md)、[共享会话复验](../validation/2026-11-17-deployable-increments.md) |
 | 最小接入模块 | #1558安装；#1561 `bbb2caf5`就绪修复；#1562 `ba712a67`配置事务 | 第二环境独立实例1.14.1+ba712a67487c，仅回环，业务连接已配置 | MySQL/Redis及公司时序HTTPS连接可用；未接模型应用或激活租户 | 就绪竞态已复现修复，合并制品升级前后各100次现场检查通过；跨修订安装/配置切换/重跑通过；历史单次失败无堆栈，三功能与长期容量待验 | [业务连接回执](../validation/2026-11-17-business-connection-live.md)、[原安装回执](../validation/2026-11-17-gateway-install-live.md) |
@@ -27,7 +28,7 @@
 [QA](../acceptance/environment-directory-qa-plan.md)给出场景步骤，[手册](environment-registry.md)讲操作。
 未来能力与依赖见[规划](../architecture/2026-11-16-manual-environment-onboarding.md)和主任务#1535/P0～P5原生子任务。
 页面已部署不关闭P0/P1/P2剩余条件；P3基础安装、就绪修复和配置事务已有证据，完整业务配置与恢复矩阵仍待补齐；
-P4开通和P5双环境业务验收仍待完成。
+P4仅文件预检与冻结计划已配套，现场预检、可恢复执行、资源准备/激活和P5双环境业务验收仍待完成。
 取证时按领域、组件、环境与适用主体选择回执，不选择全目录字典序最大文件。
 
 ## 客服、管家与共享能力
