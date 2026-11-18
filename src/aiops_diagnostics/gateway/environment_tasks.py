@@ -246,6 +246,8 @@ def worker(path, reference, payload):
         raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
     with drafts._locked(path):
         with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='environment_tasks'").fetchone():
+                raise TaskRefused("ENVIRONMENT_TASK_UNAVAILABLE")
             row = _row(conn, payload["id"])
         request = json.loads(row["request"])
         _authorize(path, tuple(request["identity"]), row["environment"])

@@ -1,6 +1,7 @@
 """正常公司会话后的显式目录授权；连接草稿不改变生效目录。"""
 
 import hashlib
+import json
 import sqlite3
 from pathlib import Path
 
@@ -164,6 +165,8 @@ def task(context, session, payload):
     identity, path = _identity(context, caller), _path(context)
     reference = getattr(context.settings, "environment_onboarding_file", "")
     try:
+        if len(json.dumps(payload)) > 65536:
+            raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
         if set(payload) == {"plan_id"}:
             if not getattr(context.settings, "environment_task_key", ""):
                 raise auth.SetupRefused("ENVIRONMENT_TASK_WORKER_UNAVAILABLE")
@@ -204,6 +207,8 @@ def register(app, context, session_dependency):
             )
         response.headers["Cache-Control"] = "no-store"
         try:
+            if len(json.dumps(payload)) > 65536:
+                raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
             return environment_tasks.worker(
                 _path(context), getattr(context.settings, "environment_onboarding_file", ""), payload
             )
