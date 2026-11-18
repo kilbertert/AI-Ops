@@ -1,5 +1,6 @@
 """真实私有文件/SQLite配合主机命令替身，证明重复、失败与拒绝不丢状态。"""
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -85,6 +86,62 @@ def host(tmp_path, monkeypatch):
 def apply(host):
     i, archive, sha, config, *_ = host
     return i.apply(archive, sha, "/usr/bin/python3", config, install.digest(config))
+
+
+@pytest.mark.parametrize("action", ["install", "recover"])
+def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeypatch, action):
+    inst, archive, sha, config, *_ = host
+    root = tmp_path / "installer"
+    root.mkdir()
+    for name in ("install.py", "runtime_check.py", "probe.py"):
+        (root / name).write_bytes((ROOT / "ops/environments/gateway" / name).read_bytes())
+    (root / "artifact_checks.py").write_bytes(
+        (ROOT / "src/aiops_diagnostics/gateway/environment_artifacts.py").read_bytes()
+    )
+    (root / "REVISION").write_text("a" * 40)
+    (root / "SHA256SUMS").write_text(
+        "".join(hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.name + "\n" for p in root.iterdir())
+    )
+    monkeypatch.setattr(install, "__file__", str(root / "install.py"))
+    monkeypatch.setattr(install.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(install, "Installer", lambda *args: inst)
+    monkeypatch.setattr(install, "trusted", lambda *args, **kwargs: None)
+    original_open = os.open
+    monkeypatch.setattr(
+        install.os,
+        "open",
+        lambda p, *a, **kw: original_open(
+            tmp_path / "lock" if str(p).startswith("/run/lock/") else p, *a, **kw
+        ),
+    )
+    calls = []
+    monkeypatch.setattr(inst, "recover", lambda: calls.append(action) or {"result": "recovered"})
+    monkeypatch.setattr(inst, "apply", lambda *a: calls.append(action) or {"result": "installed"})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(root / "install.py"),
+            action,
+            "--environment",
+            "test",
+            "--user",
+            "aiops",
+            "--port",
+            "18951",
+            "--archive",
+            str(archive),
+            "--sha256",
+            sha,
+            "--config",
+            str(config),
+            "--config-sha256",
+            install.digest(config),
+        ],
+    )
+    assert install.main() == 0 and calls == [action]
+    (root / "artifact_checks.py").write_text("tampered")
+    assert install.main() == 1 and calls == [action]
 
 
 def next_bundle(host):

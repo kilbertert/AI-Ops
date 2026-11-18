@@ -1,7 +1,9 @@
 """P4/D20：重放同计划不重复，权限/配置漂移不得成为可执行计划。"""
 
 import hashlib
+import io
 import json
+import tarfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -127,6 +129,35 @@ def test_unknown_reference_is_visible_blocker_and_injection_never_read(prepared)
         plans.read(path, ADMIN, "../../etc/passwd", ref)
 
 
+def test_matching_outer_hash_does_not_validate_non_archive_contents(prepared):
+    path, _, ref, _ = prepared
+    result = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    checks = {c["id"]: c["state"] for c in result["checks"]}
+    assert checks["application"] == checks["installer"] == "passed"
+    assert checks["application-contents"] == checks["installer-contents"] == "blocked"
+    assert checks["embedded-revision"] == "blocked" and result["executable"] is False
+
+
+@pytest.mark.parametrize("key", ["application", "installer"])
+def test_truncated_gzip_with_correct_outer_hash_is_blocked_and_readable(prepared, key):
+    import gzip
+
+    path, _, ref, files = prepared
+    old = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    file = Path(files[key]["path"])
+    write_private_text(file, "")
+    file.write_bytes(gzip.compress(b"archive" * 2000)[:15])
+    files[key]["sha256"] = hashlib.sha256(file.read_bytes()).hexdigest()
+    body = json.loads(ref.read_text())
+    body["targets"][0][key] = files[key]
+    write_private_text(ref, json.dumps(body))
+    result = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    assert {"id": key, "state": "passed"} in result["checks"]
+    assert {"id": key + "-contents", "state": "blocked"} in result["checks"]
+    assert plans.read(path, ADMIN, result["id"], ref)["state"] == "blocked"
+    assert plans.read(path, ADMIN, old["id"], ref)["state"] == "expired"
+
+
 def test_already_blocked_file_drift_expires_frozen_plan(prepared):
     path, _, reference, files = prepared
     config = Path(files["configuration"]["path"])
@@ -138,3 +169,62 @@ def test_already_blocked_file_drift_expires_frozen_plan(prepared):
     assert plans.read(path, ADMIN, first["id"], reference)["state"] == "expired"
     second = plans.preflight(path, ADMIN, "a", 1, 1, reference)
     assert second["id"] != first["id"]
+
+
+def test_plan_checks_embedded_artifact_identity_without_executing_it(prepared, tmp_path):
+    path, _, ref, files = prepared
+    revision = "a" * 40
+    application = {
+        "manifest.json": json.dumps(
+            dict(
+                schema=1,
+                revision=revision,
+                python="3.12",
+                platform="linux-x86_64",
+                version="1.0.0+" + revision[:12],
+            )
+        ).encode(),
+        "wheelhouse/aiops_diagnostics-1.0.0-py3-none-any.whl": b"opaque wheel",
+    }
+    sentinel = tmp_path / "executed"
+    installer = {
+        "REVISION": revision.encode(),
+        **{
+            name: f"from pathlib import Path; Path({str(sentinel)!r}).touch()".encode()
+            for name in ("install.py", "runtime_check.py", "probe.py")
+        },
+    }
+
+    def pack(key, contents):
+        contents = {
+            **contents,
+            "SHA256SUMS": "".join(
+                hashlib.sha256(value).hexdigest() + "  " + name + "\n" for name, value in contents.items()
+            ).encode(),
+        }
+        with tarfile.open(files[key]["path"], "w:gz") as tar:
+            for name, value in contents.items():
+                member = tarfile.TarInfo(name)
+                member.size = len(value)
+                tar.addfile(member, io.BytesIO(value))
+        Path(files[key]["path"]).chmod(0o600)
+        files[key]["sha256"] = hashlib.sha256(Path(files[key]["path"]).read_bytes()).hexdigest()
+        body = json.loads(ref.read_text())
+        body["targets"][0][key] = files[key]
+        write_private_text(ref, json.dumps(body))
+
+    pack("application", application)
+    pack("installer", installer)
+    first = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    checks = {c["id"]: c["state"] for c in first["checks"]}
+    assert all(
+        checks[k] == "passed" for k in ("application-contents", "installer-contents", "embedded-revision")
+    )
+    assert first["executable"] is False and not sentinel.exists()
+    # An internally valid archive from a different revision must not satisfy the declared plan.
+    pack("installer", {**installer, "REVISION": ("b" * 40).encode()})
+    second = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    assert {"id": "installer-contents", "state": "passed"} in second["checks"]
+    assert {"id": "embedded-revision", "state": "blocked"} in second["checks"]
+    assert plans.read(path, ADMIN, first["id"], ref)["state"] == "expired"
+    assert second["executable"] is False and not sentinel.exists()
