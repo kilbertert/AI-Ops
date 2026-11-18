@@ -134,6 +134,9 @@ def environment_plan_command(
     registry: Annotated[Path, typer.Option("--registry", help="私有生效目录")],
     file: Annotated[Path, typer.Option("--file", help="含identity和计划请求的私有JSON")],
     references: Annotated[Path | None, typer.Option("--references", help="受控部署引用清单")] = None,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="仅编号回读时导出私有停用候选包；不安装")
+    ] = None,
 ) -> None:
     """与管理API共用配置摘要预检或计划回读；不安装、不激活。"""
     from aiops_diagnostics.common.private_files import validate_private_file
@@ -154,8 +157,14 @@ def environment_plan_command(
         ):
             raise ValueError("invalid identity")
         if set(data) == {"id"}:
-            result = environment_plans.read(registry, tuple(identity), data["id"], references)
+            result = (
+                environment_plans.export(registry, tuple(identity), data["id"], references, output)
+                if output is not None
+                else environment_plans.read(registry, tuple(identity), data["id"], references)
+            )
         elif set(data) == {"environment", "revision", "registry_revision"}:
+            if output is not None:
+                raise ValueError("export requires a frozen plan id")
             result = environment_plans.preflight(
                 registry,
                 tuple(identity),
