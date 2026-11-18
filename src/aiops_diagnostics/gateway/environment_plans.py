@@ -1,15 +1,20 @@
 """草稿版本＋受控引用构成冻结计划；文件校验不冒充主机/网络/业务验收。"""
 
+import gzip
 import hashlib
+import io
 import json
+import os
 import re
 import tarfile
+import tempfile
 import time
 import zlib
 from pathlib import Path
 
-from aiops_diagnostics.common.private_files import validate_private_file
+from aiops_diagnostics.common.private_files import validate_private_directory, validate_private_file
 from aiops_diagnostics.gateway import environment_drafts as drafts
+from aiops_diagnostics.gateway import environment_projection as projection
 from aiops_diagnostics.gateway import environment_registry as registry
 from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.gateway.environment_artifacts import installer_manifest, manifest
@@ -131,7 +136,7 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
     ):
         raise PlanRefused("ENVIRONMENT_PLAN_REVISION_CONFLICT")
     proposed = json.loads(row["body"])
-    checks, reference, facts, observed = [], None, {}, {}
+    checks, reference, facts, observed, files = [], None, {}, {}, None
     try:
         targets = _references(reference_file)
         target = next(t for t in targets if t["id"] == proposed["deployment_target"])
@@ -183,12 +188,21 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
             "source_revision": target["application"]["revision"],
             "config_sha256": config["sha256"],
         }
+        try:
+            files = projection.render(
+                proposed, config["path"], config["sha256"], effective["audit"][-1]["at"]
+            )
+            facts.update(projection.summary(files))
+            checks.append({"id": "config-projection", "state": "passed"})
+        except (OSError, ValueError, RuntimeError):
+            checks.append({"id": "config-projection", "state": "blocked"})
     except (ValueError, OSError, RuntimeError, StopIteration):
         checks.append({"id": "references", "state": "blocked"})
     # 现场验收由后继受限执行器实际取证，不接受表单传passed。
+    if not any(check["id"] == "config-projection" for check in checks):
+        checks.append({"id": "config-projection", "state": "pending"})
     checks += [
-        {"id": key, "state": "pending"}
-        for key in ("config-projection", "host-identity", "capacity", "network", "business")
+        {"id": key, "state": "pending"} for key in ("host-identity", "capacity", "network", "business")
     ]
     public = {
         "scope": "local-file-integrity-only",
@@ -198,15 +212,17 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
         "checks": checks,
         **facts,
     }
-    return _digest(
-        {"draft": row["digest"], "input": public, "reference": reference, "observed": observed}
-    ), public
+    return (
+        _digest({"draft": row["digest"], "input": public, "reference": reference, "observed": observed}),
+        public,
+        files,
+    )
 
 
 def preflight(path, identity, environment, revision, registry_revision, reference_file):
     # 复用目录锁，当前输入与持久化计划之间不允许草稿/目录更新。
     with drafts._locked(path):
-        digest, inputs = _inputs(path, identity, environment, revision, registry_revision, reference_file)
+        digest, inputs, _ = _inputs(path, identity, environment, revision, registry_revision, reference_file)
         db = drafts._database(path)
         now = time.time()
         with gateway_db.initialize(db) as conn:
@@ -247,7 +263,7 @@ def read(path, identity, identifier, reference_file):
         row = dict(row)
         inputs = json.loads(row["inputs"])
         try:
-            digest, _ = _inputs(
+            digest, _, _ = _inputs(
                 path,
                 identity,
                 row["environment"],
@@ -259,6 +275,95 @@ def read(path, identity, identifier, reference_file):
         except (PlanRefused, registry.RegistryError):
             current = False
         return _public(row, current=current)
+
+
+def export(path, identity, identifier, reference_file, output):
+    plan = read(path, identity, identifier, reference_file)
+    if plan["state"] == "expired" or any(
+        c["state"] != "passed"
+        for c in plan["checks"]
+        if c["id"] not in {"host-identity", "capacity", "network", "business"}
+    ):
+        raise PlanRefused("ENVIRONMENT_PROJECTION_UNAVAILABLE")
+    output = Path(output)
+    if not output.is_absolute() or any(p.is_symlink() for p in output.parents):
+        raise PlanRefused("ENVIRONMENT_PROJECTION_OUTPUT_INVALID")
+    validate_private_directory(output.parent)
+    with drafts._locked(path):
+        digest, _, files = _inputs(
+            path,
+            identity,
+            plan["environment"],
+            plan["draft_revision"],
+            plan["registry_revision"],
+            reference_file,
+        )
+        if digest != plan["digest"] or plan["expires_at"] <= time.time() or files is None:
+            raise PlanRefused("ENVIRONMENT_PLAN_EXPIRED")
+        files["manifest.json"] = (
+            json.dumps(
+                {
+                    "schema": "aiops-environment-candidate/1",
+                    "scope": "bootstrap-configuration-only",
+                    "timezone": json.loads(
+                        next(
+                            r
+                            for r in drafts._rows(drafts._database(path))
+                            if r["environment"] == plan["environment"]
+                        )["body"]
+                    )["timezone"],
+                    "plan_id": identifier,
+                    "plan_digest": digest,
+                    "draft_revision": plan["draft_revision"],
+                    "registry_revision": plan["registry_revision"],
+                    "executable": False,
+                    **projection.summary(files),
+                },
+                sort_keys=True,
+            ).encode()
+            + b"\n"
+        )
+        descriptor, name = tempfile.mkstemp(dir=output.parent)
+        temporary = Path(name)
+        try:
+            with os.fdopen(descriptor, "w+b") as stream:
+                with (
+                    gzip.GzipFile(fileobj=stream, filename="", mode="wb", mtime=0) as compressed,
+                    tarfile.open(fileobj=compressed, mode="w") as bundle,
+                ):
+                    for filename, body in sorted(files.items()):
+                        member = tarfile.TarInfo(filename)
+                        member.size, member.mode = len(body), 0o600
+                        bundle.addfile(member, io.BytesIO(body))
+                stream.flush()
+                os.fsync(stream.fileno())
+                stream.seek(0)
+                artifact = hashlib.file_digest(stream, "sha256").hexdigest()
+            current, _, _ = _inputs(
+                path,
+                identity,
+                plan["environment"],
+                plan["draft_revision"],
+                plan["registry_revision"],
+                reference_file,
+            )
+            if current != digest or plan["expires_at"] <= time.time():
+                raise PlanRefused("ENVIRONMENT_PLAN_EXPIRED")
+            os.link(temporary, output)
+            directory = os.open(output.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return {
+        "id": identifier,
+        "state": "candidate-exported",
+        "executable": False,
+        "archive_sha256": artifact,
+        **projection.summary({k: v for k, v in files.items() if k != "manifest.json"}),
+    }
 
 
 def _public(row, *, current):
