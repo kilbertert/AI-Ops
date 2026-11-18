@@ -204,9 +204,7 @@ def test_changed_shared_configuration_and_forged_resource_result_are_refused(kno
     assert calls == []
 
 
-def test_unknown_recovered_after_rotation_requires_current_model_verification(
-    knowledge, workspace_upstream, monkeypatch
-):  # noqa: F811
+def test_unknown_rotation_reverifies_model(knowledge, workspace_upstream, monkeypatch):  # noqa: F811
     from aiops_diagnostics.knowledge.kb_onboarding import OnboardError
 
     fixture, _, calls, libraries, lose, context = knowledge
