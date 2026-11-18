@@ -622,7 +622,8 @@ def test_busy_environment_does_not_fill_automatic_queue_window(prepared):
         conn.execute("UPDATE environment_tasks SET updated_at=? WHERE id=?", (time.time() + 20, second["id"]))
         for index in range(64):
             conn.execute(
-                "INSERT INTO environment_tasks(id,environment,request,state,updated_at) VALUES(?,?,?,'queued',?)",
+                "INSERT INTO environment_tasks(id,environment,request,state,updated_at) "
+                "VALUES(?,?,?,'queued',?)",
                 ("task_" + f"{index + 1:032x}", "a", body, time.time() - 10),
             )
     assert tasks.worker(path, ref, {"owner": "b" * 32})["id"] == second["id"]
