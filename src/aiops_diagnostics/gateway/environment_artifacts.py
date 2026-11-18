@@ -264,7 +264,7 @@ def runtime_files(archive, digest, environment):
         or body.get("environment") != environment
         or any(body.get(k) is not False for k in ("executable", "installed", "activated"))
         or not isinstance(body.get("tenant_id"), str)
-        or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", body["tenant_id"])
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", body["tenant_id"])
         or not re.fullmatch(r"plan_[0-9a-f]{32}", str(body.get("plan_id")))
         or not re.fullmatch(r"[0-9a-f]{64}", str(body.get("plan_digest")))
         or body.get("files") != {n: hashlib.sha256(files[n]).hexdigest() for n in required}
