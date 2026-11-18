@@ -19,6 +19,7 @@ code:
     - src/aiops_diagnostics/dify/self_service_prepare.py
     - src/aiops_diagnostics/dify/environment_operator.py
     - src/aiops_diagnostics/dify/environment_consumer.py
+    - src/aiops_diagnostics/dify/environment_runtime.py
     - src/aiops_diagnostics/dify/self_service_store.py
     - src/aiops_diagnostics/dify/service_keys.py
     - src/aiops_diagnostics/dify/knowledge_connection.py
@@ -66,6 +67,8 @@ snapshot-先 → create → reconcile：Dify 只在创建时返回完整 token�
 消费者consumer-prepare由平台管理员明确选正式Agent快照；冻结workflow与批准模型，替换目标单库。
 共用候选导入与资源恢复，advanced-chat创建时API/site停用；ckx只返回复合单库目录，不能业务取数。
 直接插件选库不另建dataset，不写正式grant；控制回调到目标环境的业务接线仍待后继验证。
+environment-runtime以有效计划/双端观察与明确专属节点导出私有运行工件，Console只读，不写准入/路由。
+同环境/工作区/单库、模板和取消边界重核，秘密仅在私有工件；导出不等于安装或真实业务验证。
 
 约 55 个稳定 `SETUP_*` 码——**每个码命名失败的步骤和下一步动作**（`SETUP_KEY_DIRECTORY_UNWRITABLE` → 修 systemd 保护目录；`SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS` → 标 `default:true`；`SETUP_APP_FORBIDDEN`/`SETUP_TENANT_FORBIDDEN`/`SETUP_IDENTITY_MISMATCH` → 授权问题不是配置）。`TENANT_ENVIRONMENT_NOT_ENABLED` 是唯一非 `SETUP_` 前缀成员——它来自登记准入闸，不是装配步骤。拒绝 ≠ 冲突 ≠ 流程非法——三条不同的异常路径（`self_service_api.py`）。
 

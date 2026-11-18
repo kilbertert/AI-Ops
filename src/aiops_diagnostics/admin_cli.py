@@ -181,6 +181,26 @@ def environment_plan_command(
     typer.echo(json.dumps(result, ensure_ascii=False))
 
 
+@admin_app.command("environment-runtime")
+def environment_runtime_command(
+    context: typer.Context,
+    file: Annotated[Path, typer.Option("--file", help="含identity、计划及双端任务编号的私有JSON")],
+    node: Annotated[Path, typer.Option("--node", help="目标环境专属节点配置引用，私有JSON")],
+    output: Annotated[Path, typer.Option("--output", help="全新私有运行工件；不安装或激活")],
+) -> None:
+    """将已观察候选资源接线为受控运行工件，秘密仅保存在工件。"""
+    from aiops_diagnostics.dify import environment_runtime
+
+    try:
+        validate = environment_runtime._private_json(file)[0]
+        settings = _settings_with_config_file(context)
+        result = environment_runtime.export(settings, validate, node, output)
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+        typer.echo(json.dumps({"error": "ENVIRONMENT_RUNTIME_REFUSED"}))
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
 @admin_app.command("environment-task-worker")
 def environment_task_worker(
     task_id: Annotated[str | None, typer.Option("--id", help="指定编号；省略自动领取一个待处理预检")] = None,
