@@ -26,6 +26,9 @@ code:
 
 ## 信任边界
 
+`operator-trial:<app_id>` 只解析同执行环境的operator登记；consumer行或错环境返回空绑定，
+不按空profile猜测。候选试运行复用此绑定和原节点回调合同，不写正式路由。
+
 - `AgentRunConfig`（`agent_runs.py`）：受信绑定，不接受任何 client/model/platform 可控字段；**`load()` 每次调用重读文件**——吊销节点 = 改文件，下一次 claim 即拒绝。文件权限与 production.env 同纪律；节点 token 只存 sha256 摘要；`expected_node_id` 必须是注册节点（同环境不能换节点 claim）。
 - `authenticate_node`：节点身份只来自凭据摘要 + active 标志，回调体为空 strict 模型，多字段即 422。
 
