@@ -5801,8 +5801,10 @@ def create_gateway_app(
             ) from exc
         return {"runs": runs}
 
+    from aiops_diagnostics.gateway.environment_trial import register as register_environment_trial
     from aiops_diagnostics.gateway.public_openapi import install_public_docs
 
+    register_environment_trial(app, context)
     install_public_docs(app)
     return app
 

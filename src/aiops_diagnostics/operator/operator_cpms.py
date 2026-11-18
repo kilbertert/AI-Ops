@@ -406,6 +406,7 @@ class ActiveTask:
     question: str = ""
     language: str = "zh"
     trial: bool = False
+    candidate: bool = False
     #: 本次运行可接受答复未完成时最多重派一次。
     #: 放在任务上而不是模块上：它属于这一次 run，跨 run 复用就没有"有界"可言了。
     resamples: int = 0
@@ -428,6 +429,7 @@ class OperatorCpms:
     def __init__(self, context):
         self.context = context
         self.tasks = {}
+        self.candidate_authorizations = {}
         self.lock = threading.RLock()
 
     def _trace(self, run_id, phase, status="running", *, tool=None, duration_ms=None, detail=None):
@@ -594,9 +596,17 @@ class OperatorCpms:
             caller, data_scope=DataScope(type="organ", site_ids=tuple(scope.site_ids)), scope_fingerprint=""
         )
 
-    def authorize_readback(self, caller, qa_id, bearer):
+    def authorize_readback(self, caller, qa_id, bearer, *, candidate_authorize=None):
         run = self.context.agent_run_store.by_qa(qa_id)
-        caller = self.refresh_scope(caller, allow_empty=bool(run and not diagnoses_an_order(run)))
+        if candidate_authorize is not None:
+            with self.lock:
+                self._prune()
+                lease = self.candidate_authorizations.get(run.run_id) if run else None
+            if lease is None or candidate_authorize is not lease[0]:
+                raise OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
+            caller = candidate_authorize()
+        else:
+            caller = self.refresh_scope(caller, allow_empty=bool(run and not diagnoses_an_order(run)))
         if run is None or run.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("QA_NOT_FOUND")
         if run.state != "succeeded" or not run.snapshot:
@@ -625,7 +635,7 @@ class OperatorCpms:
             task = ActiveTask(
                 caller,
                 binding,
-                lambda: self.refresh_scope(caller, allow_empty=True),
+                candidate_authorize or (lambda: self.refresh_scope(caller, allow_empty=True)),
                 bearer,
                 target.cpms_base_url,
                 target.proxy_base_url,
@@ -689,7 +699,10 @@ class OperatorCpms:
         registration,
         language="zh",
         trial_manifest=None,
+        candidate=False,
     ):
+        if candidate and trial_manifest is None:
+            raise OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
         conversation_turn = registration.conversation_turn
         if order and not is_order_identifier(order):
             raise OperatorRefused("ORDER_INVALID")
@@ -714,6 +727,8 @@ class OperatorCpms:
         with self.lock:
             self._prune()
             if len(self.tasks) >= 20:
+                raise OperatorRefused("OPERATOR_BUSY")
+            if candidate and len(self.candidate_authorizations) >= 20:
                 raise OperatorRefused("OPERATOR_BUSY")
             config = AgentRunConfig.load(Path(binding.config_file))
             store = self.context.agent_run_store
@@ -752,7 +767,13 @@ class OperatorCpms:
                 question=question,
                 language=language,
                 trial=trial_manifest is not None,
+                candidate=candidate,
             )
+            if candidate:
+                self.candidate_authorizations[run.run_id] = (authorize, bearer, time.monotonic() + 300)
+                expiry = threading.Timer(300, self._expire_candidate, args=(run.run_id,))
+                expiry.daemon = True
+                expiry.start()
         self.context.runtime._qa_registrations[qa["qa_id"]] = registration
         try:
             future = self.context.runtime._executor.submit(self._worker, run.run_id, qa["qa_id"], config)
@@ -762,6 +783,7 @@ class OperatorCpms:
             self.context.runtime._qa_registrations.pop(qa["qa_id"], None)
             with self.lock:
                 self.tasks.pop(run.run_id, None)
+                self.candidate_authorizations.pop(run.run_id, None)
             raise
         self.context.runtime._futures[qa["qa_id"]] = future
         future.add_done_callback(lambda _: self.context.runtime._futures.pop(qa["qa_id"], None))
@@ -817,6 +839,8 @@ class OperatorCpms:
                     task.caller.effective_tenant_id,
                 ):
                     raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+        if task.authorize().scope_fingerprint != task.caller.scope_fingerprint:
+            raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
 
     def _messages(self, task):
         messages = []
@@ -886,10 +910,17 @@ class OperatorCpms:
         return messages
 
     def _prune(self):
+        for key, (_, _, end) in list(self.candidate_authorizations.items()):
+            if time.monotonic() >= end:
+                del self.candidate_authorizations[key]
         for key in list(self.tasks):
             run = self.context.agent_run_store.get(key)
             if run is None or expired(run) or run.state in {"failed", "revoked", "expired"}:
                 del self.tasks[key]
+
+    def _expire_candidate(self, run_id):
+        with self.lock:
+            self.candidate_authorizations.pop(run_id, None)
 
     def authenticate(self, run_id, *, node_token=None, manifest=None):
         """协议级闸：run 存在、令牌属实为本 run 的期望节点、manifest 匹配。**所有**节点回调都过。"""
@@ -1975,7 +2006,9 @@ class OperatorCpms:
                 )
             task = self.tasks[run_id]
             current = task.authorize()
-            result = self.authorize_readback(current, qa_id, task.bearer)
+            result = self.authorize_readback(
+                current, qa_id, task.bearer, candidate_authorize=task.authorize if task.candidate else None
+            )
             if store.update_assistant_question(qa_id, status="completed", result=result):
                 self._trace(run_id, "completed", "succeeded")
                 self.context.runtime._complete_conversation_turn(

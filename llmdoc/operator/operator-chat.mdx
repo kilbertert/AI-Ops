@@ -44,6 +44,7 @@ code:
 
 - `order_candidate`：候选必须出现在问题文本或已选中/激活，否则 `OPERATOR_ORDER_REQUIRED`/`NOT_REFERENCED`/`CONFLICT`；`bind_operator_order` 绑且只绑一单并冻结 `order_site_id`。
 - `start()` 把解析语言同时冻结进 `store.issue(language=)`（`agent_runs.language` 列）与 `ActiveTask`——run-log 投影直接读列，不二次解析。
+- 停用候选入口仅以已装SOP清单和受管登录授权调用原start；candidate默认false。临时候选授权最多20项、5分钟释放，运行任务清理后仍可经同一授权回读；普通readback继续refresh_scope，任意另一授权函数拒绝。回读仍走原节点/范围/证据复核。
 - 两级闸（ADR-0223）：`authenticate` = 协议检查（run 存在、node token、manifest 匹配）；`authorize_execution` = 完整当前授权——task/qa 存活、still_authorized、targets 四元组、scope 指纹、工具 enabled+`allowed_in`、未过期、非 `RESULT_RETRACTED`。grant 合同检查 → `TOOL_CONTRACT="request-target/1"`/`OBJECT_CONTRACT="request-target/2"` 不匹配即 `OPERATOR_TOOL_CONTRACT_OUTDATED`。`refresh_scope`（start/派发/历史复用各路径）另跑 `require_registered` 登记准入——租户被禁 → `OperatorRefused("TENANT_ENVIRONMENT_NOT_ENABLED")`，与 consumer 同一道闸（ADR-0256）。
 
 ## 拒绝分流（ADR-0221/0222）

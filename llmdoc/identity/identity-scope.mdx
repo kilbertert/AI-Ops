@@ -67,6 +67,8 @@ code:
 - `order_identity.py`：`ORDER_ID_ATOM` 是订单号语法的唯一权威；自由文本候选要求含数字且纯数字段 ≥15 字符（曾把 "Please" 当订单号）。
 - `ScopedOrderAuthorizer`：快照优先，`organ` 范围拒绝后经 `/shopuser/getShops` 拿第二意见（快照会陈旧）；兜底异常一律保持拒绝只记类型名——编程错误不得把 deny 变成 500。
 - 内部服务面用 `common/http_auth.py` 的 HMAC+时间戳令牌（`X-Internal-Token`），未配置 secret 的路由整体 404。
+- 停用候选管家复用目标task-key HMAC且限定回环来源。管理交接的目标正常登录产物经user/info核范围，
+  不证明来源未知旧JWT的签发环境，不放开普通准入；限定本次工件和短时授权，重启/到期失效（ADR0291）。
 
 ## Canonical anchors
 
