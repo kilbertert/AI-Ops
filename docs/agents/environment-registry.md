@@ -41,6 +41,11 @@ Web必须完整webpack构建；合并后同修订镜像配套发布，独立URL2
 
 ## 计划预检与读取（P4第一片）
 
+候选知识连接观察后，平台环境管理员可读取可见正式消费者模板并显式选择来源准备客服。
+任务冻结已发布Agent版本，保留模型和业务指令，知识选择换为本环境租户的指定库；
+只创建停用的advanced-chat应用，不生成应用key、正式grant、目标登记或发布。失联按原ID对账，
+编辑漂移阻塞并保留草稿；正常页面的准备完成不表示124业务已启用。Agent插件直接选库，无需dataset。
+
 从已保存、无未提交修改的草稿点击“配置与制品预检”。同源动作 `environment-plan` 使用
 `{environment, revision, registry_revision}`，回读使用 `{id}`，均POST到 `/v1/dify/management/environment-plans`。
 当前授权、草稿和目录版本须匹配；相同输入15分钟内复用同一计划。刷新后可重新预检取得同编号；
