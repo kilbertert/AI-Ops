@@ -747,6 +747,76 @@ def test_registry_writer_lock_does_not_block_lifecycle(host):
         apply_candidate(host, first)
 
 
+def test_site_preflight_is_persistent_and_never_restarts(host, monkeypatch):
+    apply(host)
+    inst, *_, calls, _ = host
+    before = len(calls)
+    snapshot = (inst.root / "installed.json").read_bytes()
+    first = inst.preflight()
+    assert inst.preflight()["id"] == first["id"]
+    assert inst.preflight(first["id"])["state"] == "observed"
+    assert first["scope"] == "installed-instance-readiness-only" and first["executable"] is False
+    assert {c["id"] for c in first["checks"] if c["state"] == "pending"} == {
+        "managed-host-identity",
+        "formal-network",
+        "business",
+    }
+    assert str(inst.root) not in json.dumps(first) and "private" not in json.dumps(first)
+    assert (inst.root / "installed.json").read_bytes() == snapshot
+    assert not any(c[:2] in (("systemctl", "stop"), ("systemctl", "start")) for c in calls[before:])
+    monkeypatch.setattr(install.time, "time", lambda: first["expires_at"] + 1)
+    assert inst.preflight(first["id"])["state"] == "expired"
+
+
+def test_site_preflight_refuses_stale_readiness_and_reports_recovery(host, monkeypatch):
+    apply(host)
+    inst = host[0]
+    first = inst.preflight()
+    (inst.config / "production.env").write_text("changed")
+    assert inst.preflight(first["id"])["state"] == "expired"
+    changed = inst.preflight()
+    assert changed["id"] != first["id"] and changed["state"] == "blocked"
+    assert {"id": "configuration", "state": "blocked"} in changed["checks"]
+    old = inst.read_record("installed.json")
+    inst.record("pending.json", {**old, "previous": old, "phase": "switching"})
+    pending = inst.preflight()
+    assert pending["state"] == "blocked" and {"id": "recovery", "state": "blocked"} in pending["checks"]
+    assert (inst.root / "pending.json").exists()
+    with pytest.raises(ValueError):
+        inst.preflight("../installed")
+
+
+def test_site_receipt_cannot_cross_local_installation_identity(host):
+    apply(host)
+    inst = host[0]
+    receipt = inst.preflight()
+    path = inst.root / "site-preflight" / (receipt["id"] + ".json")
+    row = json.loads(path.read_text())
+    row["result"]["environment"] = "other"
+    path.write_text(json.dumps(row))
+    with pytest.raises(ValueError, match="identity"):
+        inst.preflight(receipt["id"])
+
+
+def test_site_preflight_rechecks_service_instance_and_recorded_results(host, monkeypatch):
+    apply(host)
+    inst = host[0]
+    receipt = inst.preflight()
+    record_path = inst.root / "site-preflight" / (receipt["id"] + ".json")
+    row = json.loads(record_path.read_text())
+    row["result"]["checks"][0]["state"] = "blocked"
+    record_path.write_text(json.dumps(row))
+    with pytest.raises(ValueError, match="observation mismatch"):
+        inst.preflight(receipt["id"])
+    row["result"]["checks"][0]["state"] = "passed"
+    record_path.write_text(json.dumps(row))
+    command = inst.command
+    monkeypatch.setattr(
+        inst, "command", lambda *a: "MainPID=changed" if "ActiveEnterTimestampMonotonic" in a else command(*a)
+    )
+    assert inst.preflight(receipt["id"])["state"] == "expired"
+
+
 @pytest.mark.parametrize("fault", ["closed_connection", "closed_listener", "permission", "wrong_version"])
 def test_readiness_tolerates_closed_connection_but_requires_listener(monkeypatch, fault):
     import threading
