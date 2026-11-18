@@ -685,6 +685,14 @@ def test_knowledge_list_returns_the_registry_not_ragflow(tmp_path: Path) -> None
     assert body["total"] == 2
 
 
+def test_legacy_opaque_credential_with_candidate_prefix_still_matches(tmp_path: Path) -> None:
+    key = "ckx_legacy-synthetic-key"
+    client = _client(tmp_path, _Runtime(), dify_knowledge_api_key=key)
+    response = client.get("/v1/dify/knowledge", headers={"Authorization": "Bearer " + key})
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+
+
 def test_knowledge_list_needs_the_same_credential_as_retrieval(tmp_path: Path) -> None:
     """No credential and a wrong one both stay closed."""
     client = _client(tmp_path, _Runtime())
