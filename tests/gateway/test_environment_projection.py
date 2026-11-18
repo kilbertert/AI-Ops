@@ -134,6 +134,20 @@ def test_projection_roundtrip_has_one_environment_and_never_activates(candidate)
     )
 
 
+@pytest.mark.parametrize("escaped", [r"left\rright", r"left\r\nright"])
+def test_projection_preserves_carriage_return_credentials_on_file_read(candidate, escaped):
+    path, draft, template, _, _ = candidate
+    write_private_text(template, 'AIOPS_MYSQL_PASSWORD="' + escaped + '"\n')
+    files = projection.render(
+        draft,
+        template,
+        hashlib.sha256(template.read_bytes()).hexdigest(),
+        registry.load(path)["audit"][-1]["at"],
+    )
+    output = write_private_text(template.with_name("projected.env"), files["production.env"].decode())
+    assert dotenv_values(output)["AIOPS_MYSQL_PASSWORD"] == dotenv_values(template)["AIOPS_MYSQL_PASSWORD"]
+
+
 @pytest.mark.parametrize(
     "text",
     [

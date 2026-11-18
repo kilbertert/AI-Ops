@@ -93,7 +93,10 @@ def render(draft, template, expected_sha256, at):
                 raise ValueError("process-only configuration belongs to installer")
             _parse_source_value(source, values[source.env])
     config = "".join(
-        key + "='" + value.replace("\\", "\\\\").replace("'", "\\'") + "'\n"
+        key
+        + '="'
+        + value.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "\\r").replace("\n", "\\n")
+        + '"\n'
         for key, value in sorted(values.items())
     ).encode()
     row = {
