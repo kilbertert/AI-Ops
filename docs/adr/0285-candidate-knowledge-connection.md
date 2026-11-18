@@ -22,4 +22,4 @@ POST前先保存原任务创建意图；已发出连接创建但结果未知时�
 任务及工作区映射共同控制凭据生命周期；修改目录后需重新准备验证，不能把缓存回执当永久许可。
 连接成功只证明单库接口接线；内容、应用、业务与完整双环境验收尚未完成。
 依据[RFC9110§9.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2)保持POST未知结果对账；
-Bearer交换遵循既有Dify External Knowledge API，凭据不写浏览器、任务正文或日志。
+同源管理页只交付连接编号；Bearer交换遵循既有Dify External Knowledge API，凭据不写浏览器、任务正文或日志。

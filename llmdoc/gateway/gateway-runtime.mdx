@@ -14,6 +14,7 @@ code:
     - src/aiops_diagnostics/gateway/environment_projection.py
     - src/aiops_diagnostics/gateway/environment_plans.py
     - src/aiops_diagnostics/gateway/environment_tasks.py
+    - src/aiops_diagnostics/dify/environment_knowledge_connection.py
     - src/aiops_diagnostics/gateway_server.py
     - src/aiops_diagnostics/gateway/isolation_guard.py
     - src/aiops_diagnostics/gateway/gateway_api.py
@@ -64,6 +65,8 @@ code:
 开通预检的文件/归档合同见[环境目录手册](../../docs/agents/environment-registry.md#计划预检与读取（P4第一片）)：
 Gateway与P3安装器共用成员摘要/Python/内部修订校验，不执行归档代码。草稿与固定模板可生成停用候选并由原CLI导出；
 不返回秘密、不安装，文件通过仍不证明Git来源、全部配置可启动或现场可用。
+同一任务账本可接续workspace-prepare、knowledge-prepare与knowledge-connect；后者只准备复合范围知识API连接。
+创建未知只对账，候选凭据不能放大到控制默认库或正式路由，细节见[知识平面](../knowledge/knowledge-plane.mdx)。
 
 ## Canonical anchors
 

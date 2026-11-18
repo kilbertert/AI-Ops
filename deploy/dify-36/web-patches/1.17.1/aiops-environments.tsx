@@ -64,6 +64,7 @@ type SiteTask = {
   result: {
     workspace_id?: string
     knowledge_base_id?: string
+    connection_id?: string
     checks?: { id: string; state: string }[]
   }
 }
@@ -79,6 +80,7 @@ const taskLabels: Record<string, string> = {
 const checkLabels: Record<string, string> = {
   workspace: '候选工作区',
   knowledge: '知识资源',
+  connection: '候选知识连接',
   references: '部署与配置引用',
   application: '应用制品摘要',
   installer: '安装器摘要',
@@ -607,12 +609,15 @@ export default function EnvironmentManagement() {
                     <p className="system-xs-regular break-all">{item.id}</p>
                     {item.action === 'workspace-prepare' && <p>候选工作区 · {item.tenant_id}</p>}
                     {item.action === 'knowledge-prepare' && <p>候选知识资源 · {item.tenant_id}</p>}
+                    {item.action === 'knowledge-connect' && <p>候选知识连接 · {item.tenant_id}</p>}
                     <p>
                       {item.action === 'workspace-prepare' && item.state === 'observed'
                         ? '候选工作区已准备'
                         : item.action === 'knowledge-prepare' && item.state === 'observed'
                           ? '候选知识资源已准备'
-                          : taskLabels[item.state] || item.state}
+                          : item.action === 'knowledge-connect' && item.state === 'observed'
+                            ? '候选知识连接已准备'
+                            : taskLabels[item.state] || item.state}
                       {item.cancel_requested && item.state === 'running' ? ' · 等待安全取消' : ''}
                     </p>
                     {item.error_code && <p>{item.error_code}</p>}
@@ -622,6 +627,24 @@ export default function EnvironmentManagement() {
                     {item.result.knowledge_base_id && (
                       <p className="break-all">知识库编号：{item.result.knowledge_base_id}</p>
                     )}
+                    {item.result.connection_id && (
+                      <p className="break-all">连接编号：{item.result.connection_id}</p>
+                    )}
+                    {item.action === 'knowledge-prepare' &&
+                      item.state === 'observed' &&
+                      !dirty &&
+                      !saved?.registry_changed && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={busy}
+                          onClick={() =>
+                            void siteTasks({ knowledge_task: item.id, tenant_id: item.tenant_id })
+                          }
+                        >
+                          准备候选知识连接：{item.tenant_id}
+                        </Button>
+                      )}
                     {item.action === 'workspace-prepare' &&
                       item.state === 'observed' &&
                       !dirty &&
@@ -671,11 +694,13 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        {item.action === 'knowledge-prepare'
-                          ? '取消知识准备'
-                          : item.action === 'workspace-prepare'
-                            ? '取消工作区准备'
-                            : '取消现场预检'}
+                        {item.action === 'knowledge-connect'
+                          ? '取消知识连接准备'
+                          : item.action === 'knowledge-prepare'
+                            ? '取消知识准备'
+                            : item.action === 'workspace-prepare'
+                              ? '取消工作区准备'
+                              : '取消现场预检'}
                       </Button>
                     )}
                   </article>
