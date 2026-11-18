@@ -5,6 +5,7 @@ import json
 import re
 import tarfile
 import time
+import zlib
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import validate_private_file
@@ -162,7 +163,16 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
                     else installer_manifest(Path(value["path"]), value["sha256"])
                 )
                 checks.append({"id": key + "-contents", "state": "passed"})
-            except (ValueError, OSError, RuntimeError, tarfile.TarError, EOFError, TypeError, KeyError):
+            except (
+                ValueError,
+                OSError,
+                RuntimeError,
+                tarfile.TarError,
+                EOFError,
+                zlib.error,
+                TypeError,
+                KeyError,
+            ):
                 checks.append({"id": key + "-contents", "state": "blocked"})
         matches = same and all(
             embedded.get(key) == reference[key]["revision"] for key in ("application", "installer")

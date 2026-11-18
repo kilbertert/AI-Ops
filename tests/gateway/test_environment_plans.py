@@ -158,6 +158,30 @@ def test_truncated_gzip_with_correct_outer_hash_is_blocked_and_readable(prepared
     assert plans.read(path, ADMIN, old["id"], ref)["state"] == "expired"
 
 
+@pytest.mark.parametrize("key", ["application", "installer"])
+def test_invalid_deflate_after_valid_member_header_is_blocked(prepared, key):
+    import zlib
+
+    path, _, ref, files = prepared
+    old = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    member = tarfile.TarInfo("manifest.json" if key == "application" else "install.py")
+    member.size = 32768
+    compressor = zlib.compressobj(wbits=-15)
+    partial = compressor.compress(member.tobuf() + b"x" * 16384) + compressor.flush(zlib.Z_FULL_FLUSH)
+    # gzip header, valid first block, then DEFLATE's reserved block type (RFC1951).
+    raw = b"\x1f\x8b\x08\x00" + b"\x00" * 6 + partial + b"\x07" + b"\x00" * 8
+    file = Path(files[key]["path"])
+    file.write_bytes(raw)
+    files[key]["sha256"] = hashlib.sha256(raw).hexdigest()
+    body = json.loads(ref.read_text())
+    body["targets"][0][key] = files[key]
+    write_private_text(ref, json.dumps(body))
+    result = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    assert {"id": key + "-contents", "state": "blocked"} in result["checks"]
+    assert plans.read(path, ADMIN, result["id"], ref)["state"] == "blocked"
+    assert plans.read(path, ADMIN, old["id"], ref)["state"] == "expired"
+
+
 def test_already_blocked_file_drift_expires_frozen_plan(prepared):
     path, _, reference, files = prepared
     config = Path(files["configuration"]["path"])
