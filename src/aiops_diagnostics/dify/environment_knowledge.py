@@ -42,15 +42,14 @@ def run(context, path, reference, payload):
     def binding():
         from .environment_management import knowledge_binding
 
-        if (
-            request["binding"] != knowledge_binding(settings)
-            or resources.get("binding", request["binding"]) != request["binding"]
+        if request["binding"] != knowledge_binding(settings) or request["target_binding"] != resources.get(
+            "target_binding", request["target_binding"]
         ):
             raise SetupRefused("SETUP_KNOWLEDGE_CONFIG_CHANGED")
 
     try:
         binding()
-        resources["binding"] = request["binding"]
+        resources["target_binding"] = request["target_binding"]
         workspaces = DifyWorkspaces(settings.database_file)
         workspace_id = workspaces.resolve(tenant, environment)
         if workspace_id != request["workspace_id"]:
@@ -67,10 +66,13 @@ def run(context, path, reference, payload):
             raise SetupRefused("SETUP_WORKSPACE_PENDING")
         pending = resources.get("knowledge_create", {})
         # 已发出的建库只对账，不因取消/证据到期重新注册、修模型或发POST。
-        if not pending.get("attempted"):
+        if not pending.get("attempted") or (
+            resources.get("knowledge_base_id") and resources.get("verified_binding") != request["binding"]
+        ):
             boundary()
             prepare.knowledge(context, tenant, environment=environment, before_step=boundary)
             resources["tenant_ready"] = True
+            resources["verified_binding"] = request["binding"]
             save("knowledge:tenant")
         else:
             stored = context.store.get_ragflow_tenant(tenant, environment)
@@ -79,12 +81,15 @@ def run(context, path, reference, payload):
             )
             if not stored or stored["ragflow_email"] != expected:
                 raise SetupRefused("SETUP_KNOWLEDGE_SCOPE_MISMATCH")
-        knowledge_id = prepare.customer_knowledge_base(
+        known_id = resources.get("knowledge_base_id", "")
+        knowledge_id = known_id or prepare.customer_knowledge_base(
             context, tenant, resources, save, environment=environment
         )
         client = KbServiceClient(settings.kb_service_base_url, tenant_id=tenant, environment=environment)
         matches = [r for r in client.list_knowledge_bases() if r["knowledge_base_id"] == knowledge_id]
-        if len(matches) != 1 or matches[0]["name"] != resources["knowledge_create"]["name"]:
+        if len(matches) != 1 or (
+            not known_id and matches[0]["name"] != resources["knowledge_create"]["name"]
+        ):
             raise SetupRefused("SETUP_KNOWLEDGE_CREATE_UNCONFIRMED")
         resources["knowledge_base_id"] = knowledge_id
         tasks.save_knowledge_progress(path, reference, identifier, owner, resources)

@@ -108,7 +108,9 @@ def submit(path, identity, identifier, reference):
             return _public(_row(conn, task_id))
 
 
-def submit_workspace(path, identity, identifier, tenant_id, reference, *, knowledge=False, binding=""):
+def submit_workspace(
+    path, identity, identifier, tenant_id, reference, *, knowledge=False, binding="", target_binding=""
+):
     if not isinstance(tenant_id, str) or not drafts.REFERENCE_PATTERN.fullmatch(tenant_id):
         raise TaskRefused("ENVIRONMENT_TASK_TENANT_INVALID")
     with drafts._locked(path):
@@ -144,6 +146,7 @@ def submit_workspace(path, identity, identifier, tenant_id, reference, *, knowle
                     "workspace_task": identifier,
                     "workspace_id": json.loads(source["result"])["workspace_id"],
                     "binding": binding,
+                    "target_binding": target_binding,
                 }
                 if knowledge
                 else {}

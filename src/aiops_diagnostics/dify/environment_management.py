@@ -207,6 +207,7 @@ def task(context, session, payload):
                 reference,
                 knowledge=True,
                 binding=knowledge_binding(context.settings),
+                target_binding=knowledge_binding(context.settings, target_only=True),
             )
         if set(payload) == {"environment"}:
             return environment_tasks.inspect(
@@ -225,7 +226,7 @@ def task(context, session, payload):
         raise auth.SetupRefused("ENVIRONMENT_TASK_UNAVAILABLE") from exc
 
 
-def knowledge_binding(settings):
+def knowledge_binding(settings, *, target_only=False):
     return hashlib.sha256(
         json.dumps(
             {
@@ -240,6 +241,8 @@ def knowledge_binding(settings):
                     "dify_console_base_url",
                     "dify_console_api_key",
                 )
+                if not target_only
+                or key in {"kb_service_base_url", "dify_console_base_url", "ragflow_tenant_domain"}
             },
             sort_keys=True,
         ).encode()

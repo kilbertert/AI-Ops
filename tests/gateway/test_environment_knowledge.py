@@ -131,6 +131,22 @@ def test_knowledge_is_scoped_and_new_plan_reuses_empty_library(knowledge, worksp
     assert len([c for c in calls if c[:2] == ("POST", "/kb/knowledge-bases")]) == 2
 
 
+def test_new_plan_after_key_rotation_and_rename_reuses_confirmed_library(knowledge, workspace_upstream):  # noqa: F811
+    fixture, _, calls, libraries, _, context = knowledge
+    first = execute(knowledge, submit(knowledge))
+    old = first["result"]["knowledge_base_id"]
+    libraries[knowledge_tenant("same", "a")][0]["name"] = "重命名资料"
+    context.settings.dify_console_api_key = "rotated"
+    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
+        conn.execute("UPDATE environment_plans SET expires_at=0")
+    newer, _ = workspace_job(fixture, workspace_upstream)
+    fixture[3].dify_console_api_key = "rotated"
+    assert prepare_http(fixture, newer).json()["state"] == "observed"
+    result = execute(knowledge, submit(knowledge, newer))
+    assert result["state"] == "observed" and result["result"]["knowledge_base_id"] == old
+    assert len([c for c in calls if c[:2] == ("POST", "/kb/knowledge-bases")]) == 1
+
+
 def test_unknown_creation_zero_then_unique_reconciles_without_recreation(knowledge):
     _, _, calls, libraries, lose, _ = knowledge
     lose[0] = True
