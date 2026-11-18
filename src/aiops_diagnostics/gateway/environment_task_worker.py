@@ -163,7 +163,7 @@ def call(gateway, key, payload):
         method="POST",
         body=json.dumps(payload).encode(),
         headers=headers,
-        timeout=30,
+        timeout=240 if payload.get("prepare") == "knowledge" else 30,
         follow_redirects=False,
     )
     with open_response(request) as response:
@@ -186,12 +186,13 @@ def central_call(root, target, payload):
     # 固定服务身份/路径只支持已声明控制Gateway档案；不接受任务中的shell或HTTP地址。
     if target != "41":
         raise ValueError("central deployment profile unavailable")
+    duration = 250 if payload.get("prepare") == "knowledge" else 45
     result = subprocess.check_output(
-        ["dev-host", "exec", target, "--allow-service-exec", "--timeout", "45", "--", command],
+        ["dev-host", "exec", target, "--allow-service-exec", "--timeout", str(duration), "--", command],
         cwd=root,
         input=json.dumps(payload),
         text=True,
-        timeout=50,
+        timeout=duration + 5,
     )
     if len(result) > 65536:
         raise ValueError("central response too large")
@@ -218,6 +219,8 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
     identifier = claim["id"] if identifier is None else identifier
     if claim.get("action", "site-preflight") == "workspace-prepare":
         return request({"id": identifier, "owner": owner, "prepare": "workspace"})
+    if claim.get("action") == "knowledge-prepare":
+        return request({"id": identifier, "owner": owner, "prepare": "knowledge"})
     try:
         result = execute(root, claim)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):

@@ -108,7 +108,7 @@ def submit(path, identity, identifier, reference):
             return _public(_row(conn, task_id))
 
 
-def submit_workspace(path, identity, identifier, tenant_id, reference):
+def submit_workspace(path, identity, identifier, tenant_id, reference, *, knowledge=False, binding=""):
     if not isinstance(tenant_id, str) or not drafts.REFERENCE_PATTERN.fullmatch(tenant_id):
         raise TaskRefused("ENVIRONMENT_TASK_TENANT_INVALID")
     with drafts._locked(path):
@@ -117,29 +117,45 @@ def submit_workspace(path, identity, identifier, tenant_id, reference):
         request = json.loads(source["request"])
         _authorize(path, identity, source["environment"])
         _current(path, request, reference)
-        if request.get("action", "site-preflight") != "site-preflight" or source["state"] != "observed":
+        parent_action = "workspace-prepare" if knowledge else "site-preflight"
+        if request.get("action", "site-preflight") != parent_action or source["state"] != "observed":
             raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
-        validate_receipt(json.loads(source["result"]), source["environment"])
+        if knowledge:
+            if request["tenant_id"] != tenant_id or _public(source)["state"] != "observed":
+                raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+        else:
+            validate_receipt(json.loads(source["result"]), source["environment"])
         proposed = next(
             r for r in drafts._rows(drafts._database(path)) if r["environment"] == source["environment"]
         )
         tenant = next((t for t in json.loads(proposed["body"])["tenants"] if t["id"] == tenant_id), None)
         if tenant is None:
             raise TaskRefused("ENVIRONMENT_TASK_TENANT_INVALID")
+        action = "knowledge-prepare" if knowledge else "workspace-prepare"
         request = {
             **request,
             "identity": identity,
-            "action": "workspace-prepare",
+            "action": action,
             "tenant_id": tenant_id,
             "tenant_name": tenant["name"],
-            "site_task": identifier,
+            "site_task": request["site_task"] if knowledge else identifier,
+            **(
+                {
+                    "workspace_task": identifier,
+                    "workspace_id": json.loads(source["result"])["workspace_id"],
+                    "binding": binding,
+                }
+                if knowledge
+                else {}
+            ),
         }
         digest = plans._digest(
             {
                 "plan": request["plan"]["id"],
                 "digest": request["plan"]["digest"],
-                "action": "workspace-prepare",
+                "action": action,
                 "tenant_id": tenant_id,
+                **({"binding": binding} if knowledge else {}),
             }
         )
         task_id = "task_" + digest[:32]
@@ -152,12 +168,12 @@ def submit_workspace(path, identity, identifier, tenant_id, reference):
             return _public(_row(conn, task_id))
 
 
-def workspace_request(path, reference, identifier, owner, *, reconciling=True):
+def workspace_request(path, reference, identifier, owner, *, reconciling=True, action="workspace-prepare"):
     with drafts._locked(path), gateway_db.connection(drafts._database(path), readonly=True) as conn:
         row = _row(conn, identifier)
         request = json.loads(row["request"])
         if (
-            request.get("action") != "workspace-prepare"
+            request.get("action") != action
             or row["owner"] != owner
             or row["state"] != "running"
             or row["lease_until"] <= time.time()
@@ -174,7 +190,47 @@ def workspace_request(path, reference, identifier, owner, *, reconciling=True):
                 validate_receipt(json.loads(source["result"]), row["environment"])
             except TaskRefused as exc:
                 raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED") from exc
+            if action == "knowledge-prepare":
+                parent = _row(conn, request["workspace_task"])
+                if _public(parent)["state"] != "observed":
+                    raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+        if action == "knowledge-prepare" and not request.get("resources"):
+            previous = conn.execute(
+                "SELECT request FROM environment_tasks WHERE environment=? AND id!=?"
+                " AND json_extract(request,'$.action')='knowledge-prepare'"
+                " AND json_extract(request,'$.tenant_id')=?"
+                " AND json_extract(request,'$.resources') IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
+                (row["environment"], identifier, request["tenant_id"]),
+            ).fetchone()
+            if previous:
+                request["resources"] = json.loads(previous["request"])["resources"]
         return {**request, "cancel_requested": bool(row["cancel"])}
+
+
+def save_knowledge_progress(path, reference, identifier, owner, resources):
+    request = workspace_request(path, reference, identifier, owner, action="knowledge-prepare")
+    with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
+        row = _row(conn, identifier)
+        if row["owner"] != owner or row["state"] != "running" or row["lease_until"] <= time.time():
+            raise TaskRefused("ENVIRONMENT_TASK_LEASE_LOST")
+        stored = json.loads(row["request"])
+        beginning = resources.get("knowledge_create", {}).get("attempted") and not stored.get(
+            "resources", {}
+        ).get("knowledge_create", {}).get("attempted")
+        if beginning:
+            _authorize(path, tuple(stored["identity"]), row["environment"])
+            _current(path, stored, reference)
+            if row["cancel"]:
+                raise TaskRefused("ENVIRONMENT_TASK_CANCELLED")
+        conn.execute(
+            "UPDATE environment_tasks SET request=? WHERE id=?",
+            (
+                json.dumps(
+                    {k: v for k, v in {**request, "resources": resources}.items() if k != "cancel_requested"}
+                ),
+                identifier,
+            ),
+        )
 
 
 def finish_workspace(path, reference, identifier, owner, result):
@@ -429,13 +485,18 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
         result, state, error = {}, "reconcile", "ENVIRONMENT_TASK_TARGET_UNCONFIRMED"
         if "result" in payload:
             result = payload["result"]
-            if request.get("action", "site-preflight") == "workspace-prepare":
+            if request.get("action", "site-preflight") in {"workspace-prepare", "knowledge-prepare"}:
                 if not internal_workspace:
                     raise TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
                 if (
                     not isinstance(result, dict)
                     or result.get("state") not in {"observed", "blocked"}
-                    or result.get("scope") != "candidate-workspace-only"
+                    or result.get("scope")
+                    != (
+                        "candidate-knowledge-only"
+                        if request["action"] == "knowledge-prepare"
+                        else "candidate-workspace-only"
+                    )
                     or result.get("environment") != row["environment"]
                     or result.get("tenant_id") != request["tenant_id"]
                     or result.get("executable") is not False
