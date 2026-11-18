@@ -380,6 +380,7 @@ def onboard_tenant(
     embedding_model: str = "text-embedding-3-large",
     tenant_domain: str = DEFAULT_TENANT_DOMAIN,
     ensure_workspace: Any = None,
+    before_step: Any = None,
     log: Any = None,
 ) -> OnboardOutcome:
     """Idempotently bring up the three objects for one tenant.
@@ -390,6 +391,7 @@ def onboard_tenant(
     ``state`` / ``workspace_id`` / ``note``.
     """
     say = log or (lambda _line: None)
+    boundary = before_step or (lambda: None)
     email = derive_email(knowledge_tenant(tenant_id, getattr(kb, "environment", "")), domain=tenant_domain)
     # 密钥长度错是**配置**错误：在任何上游写入之前就拒掉，而不是等到加密时才炸
     # （那时账号已经建好、密码已经丢了）。评审 P2。
@@ -401,6 +403,8 @@ def onboard_tenant(
         )
 
     existing = store.get_ragflow_tenant(tenant_id, environment)
+    if getattr(kb, "environment", "") and existing and existing.get("ragflow_email") != email:
+        raise OnboardError("RAGFLOW_EMAIL_MISMATCH", "existing tenant login differs", step="ragflow-tenant")
     already_checked = bool(existing and str(existing.get("model_checked_at") or ""))
 
     # 1) Dify workspace（空壳；内容属于别的票）
@@ -414,7 +418,8 @@ def onboard_tenant(
 
     # 2) RAGFlow 租户：已校验过就**不重发**，半成品则补齐
     password: str | None = None
-    if already_checked:
+    # 后台候选提供步骤边界时须重新验证当前模型，旧时间戳不证明本次配置。
+    if already_checked and before_step is None:
         say("ragflow tenant: already verified, no writes")
         return OnboardOutcome(
             tenant_id=tenant_id,
@@ -440,24 +445,29 @@ def onboard_tenant(
             ) from exc
         ciphertext = str(existing["credential_ciphertext"])
     else:
+        boundary()
         password = generate_password()
         ciphertext = encrypt_credential(password, credential_key)
         # 先保管同一凭据，再调用可重试注册；响应丢失后不能生成另一把密码。
         store.record_ragflow_tenant(
             tenant_id, environment, ragflow_email=email, credential_ciphertext=ciphertext, model_checked=False
         )
+    boundary()
     kb.register_tenant(tenant_id=tenant_id, email=email, password=password)
     kb.verify_login(tenant_id=tenant_id, password=password)
     say(f"ragflow tenant: registration confirmed {email}")
 
     # 3) 模型实例 + 一次真实校验
+    boundary()
     kb.repair_models(tenant_id)
+    boundary()
     dimension = verify_embedding(
         base_url=embedding_base_url, api_key=embedding_api_key, model=embedding_model
     )
     say(f"model: embedding ok, dim={dimension}")
 
     stored = store.get_ragflow_tenant(tenant_id, environment) or {}
+    boundary()
     store.record_ragflow_tenant(
         tenant_id,
         environment,

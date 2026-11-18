@@ -59,6 +59,8 @@ export const messages: Record<string, string> = {
   ENVIRONMENT_WORKSPACE_CONFIG_REQUIRED: '共享工作区连接尚未配置，暂不能准备候选工作区',
   ENVIRONMENT_TASK_OBSERVATION_REQUIRED: '请先完成同一有效计划的现场预检',
   ENVIRONMENT_TASK_TENANT_INVALID: '租户未登记在当前环境草稿，请核对编号',
+  SETUP_KNOWLEDGE_SCOPE_MISMATCH: '已有知识账户不属于该环境，需核对后再准备',
+  SETUP_KNOWLEDGE_AMBIGUOUS: '候选知识库不唯一，请联系管理员核对，不重复创建',
   ENVIRONMENT_TASK_UNAVAILABLE: '现场预检任务不可用或当前账号无权访问，请刷新核对',
   ENVIRONMENT_TASK_PLAN_BLOCKED: '文件或配置预检尚未通过，不能发起现场任务',
   ENVIRONMENT_TASK_PLAN_EXPIRED: '冻结计划已过期或输入改变，请重新预检',

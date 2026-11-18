@@ -184,6 +184,31 @@ def task(context, session, payload):
             return environment_tasks.submit_workspace(
                 path, identity, payload["site_task"], payload["tenant_id"], reference
             )
+        if set(payload) == {"workspace_task", "tenant_id"}:
+            if not getattr(context.settings, "environment_task_key", ""):
+                raise auth.SetupRefused("ENVIRONMENT_TASK_WORKER_UNAVAILABLE")
+            if not all(
+                getattr(context.settings, key, "")
+                for key in (
+                    "kb_service_base_url",
+                    "ragflow_credential_key",
+                    "ragflow_embedding_base_url",
+                    "ragflow_embedding_api_key",
+                    "dify_console_base_url",
+                    "dify_console_api_key",
+                )
+            ):
+                raise auth.SetupRefused("SETUP_KNOWLEDGE_CONFIG_REQUIRED")
+            return environment_tasks.submit_workspace(
+                path,
+                identity,
+                payload["workspace_task"],
+                payload["tenant_id"],
+                reference,
+                knowledge=True,
+                binding=knowledge_binding(context.settings),
+                target_binding=knowledge_binding(context.settings, target_only=True),
+            )
         if set(payload) == {"environment"}:
             return environment_tasks.inspect(
                 path, identity, environment=payload["environment"], reference=reference
@@ -199,6 +224,29 @@ def task(context, session, payload):
         raise auth.SetupRefused(str(exc)) from exc
     except (registry.RegistryError, OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         raise auth.SetupRefused("ENVIRONMENT_TASK_UNAVAILABLE") from exc
+
+
+def knowledge_binding(settings, *, target_only=False):
+    return hashlib.sha256(
+        json.dumps(
+            {
+                key: getattr(settings, key, "")
+                for key in (
+                    "kb_service_base_url",
+                    "ragflow_credential_key",
+                    "ragflow_embedding_base_url",
+                    "ragflow_embedding_api_key",
+                    "ragflow_embedding_model",
+                    "ragflow_tenant_domain",
+                    "dify_console_base_url",
+                    "dify_console_api_key",
+                )
+                if not target_only
+                or key in {"kb_service_base_url", "dify_console_base_url", "ragflow_tenant_domain"}
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
 
 
 def prepare_workspace(context, payload):
@@ -333,6 +381,10 @@ def register(app, context, session_dependency):
             if len(json.dumps(payload)) > 65536:
                 raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
             if "prepare" in payload:
+                if payload["prepare"] == "knowledge":
+                    from .environment_knowledge import run
+
+                    return run(context, _path(context), context.settings.environment_onboarding_file, payload)
                 return prepare_workspace(context, payload)
             return environment_tasks.worker(
                 _path(context), getattr(context.settings, "environment_onboarding_file", ""), payload

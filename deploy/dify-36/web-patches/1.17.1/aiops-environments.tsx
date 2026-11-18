@@ -61,7 +61,11 @@ type SiteTask = {
   state: string
   cancel_requested: boolean
   error_code: string
-  result: { workspace_id?: string; checks?: { id: string; state: string }[] }
+  result: {
+    workspace_id?: string
+    knowledge_base_id?: string
+    checks?: { id: string; state: string }[]
+  }
 }
 const taskLabels: Record<string, string> = {
   queued: '等待执行端',
@@ -602,18 +606,39 @@ export default function EnvironmentManagement() {
                   <article key={item.id} className="space-y-1 rounded border p-3">
                     <p className="system-xs-regular break-all">{item.id}</p>
                     {item.action === 'workspace-prepare' && <p>候选工作区 · {item.tenant_id}</p>}
+                    {item.action === 'knowledge-prepare' && <p>候选知识资源 · {item.tenant_id}</p>}
                     <p>
                       {item.action === 'workspace-prepare' && item.state === 'observed'
                         ? '候选工作区已准备'
-                        : taskLabels[item.state] || item.state}
+                        : item.action === 'knowledge-prepare' && item.state === 'observed'
+                          ? '候选知识资源已准备'
+                          : taskLabels[item.state] || item.state}
                       {item.cancel_requested && item.state === 'running' ? ' · 等待安全取消' : ''}
                     </p>
                     {item.error_code && <p>{item.error_code}</p>}
                     {item.result.workspace_id && (
                       <p className="break-all">工作区编号：{item.result.workspace_id}</p>
                     )}
+                    {item.result.knowledge_base_id && (
+                      <p className="break-all">知识库编号：{item.result.knowledge_base_id}</p>
+                    )}
+                    {item.action === 'workspace-prepare' &&
+                      item.state === 'observed' &&
+                      !dirty &&
+                      !saved?.registry_changed && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={busy}
+                          onClick={() =>
+                            void siteTasks({ workspace_task: item.id, tenant_id: item.tenant_id })
+                          }
+                        >
+                          准备候选知识资源：{item.tenant_id}
+                        </Button>
+                      )}
                     {item.state === 'observed' &&
-                      item.action !== 'workspace-prepare' &&
+                      (!item.action || item.action === 'site-preflight') &&
                       saved &&
                       !dirty &&
                       !saved.registry_changed &&
@@ -646,7 +671,11 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        {item.action === 'workspace-prepare' ? '取消工作区准备' : '取消现场预检'}
+                        {item.action === 'knowledge-prepare'
+                          ? '取消知识准备'
+                          : item.action === 'workspace-prepare'
+                            ? '取消工作区准备'
+                            : '取消现场预检'}
                       </Button>
                     )}
                   </article>

@@ -147,7 +147,7 @@ def create_app(console, workspace_id, job_id, request, profile, provider_id):
     return result["app_id"]
 
 
-def knowledge(context, tenant_id):
+def knowledge(context, tenant_id, *, environment="", before_step=None):
     from aiops_diagnostics.knowledge.kb_onboarding import (
         KbAdminClient,
         OnboardError,
@@ -166,10 +166,11 @@ def knowledge(context, tenant_id):
     ):
         raise SetupRefused("SETUP_KNOWLEDGE_CONFIG_REQUIRED")
     try:
-        kb = KbAdminClient(settings.kb_service_base_url, environment=namespace_for(settings))
+        target_environment = environment or settings.environment
+        kb = KbAdminClient(settings.kb_service_base_url, environment=environment or namespace_for(settings))
         outcome = onboard_tenant(
             tenant_id=tenant_id,
-            environment=settings.environment,
+            environment=target_environment,
             store=context.store,
             kb=kb,
             credential_key=settings.ragflow_credential_key,
@@ -177,8 +178,9 @@ def knowledge(context, tenant_id):
             embedding_api_key=settings.ragflow_embedding_api_key,
             embedding_model=settings.ragflow_embedding_model,
             tenant_domain=settings.ragflow_tenant_domain,
+            before_step=before_step,
         )
-        stored = context.store.get_ragflow_tenant(tenant_id, settings.environment)
+        stored = context.store.get_ragflow_tenant(tenant_id, target_environment)
         kb.verify_login(
             tenant_id=tenant_id,
             password=decrypt_credential(stored["credential_ciphertext"], settings.ragflow_credential_key),
@@ -186,6 +188,10 @@ def knowledge(context, tenant_id):
         if not outcome.model_verified:
             raise SetupRefused("SETUP_KNOWLEDGE_FAILED")
     except OnboardError as exc:
+        if environment and exc.code == "RAGFLOW_EMAIL_MISMATCH":
+            raise SetupRefused("SETUP_KNOWLEDGE_SCOPE_MISMATCH") from exc
+        if environment and exc.code == "KB_REGISTER_FAILED" and exc.step == "ragflow-tenant":
+            raise SetupRefused("SETUP_KNOWLEDGE_REGISTER_UNCONFIRMED") from exc
         raise SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc
 
 
@@ -211,14 +217,21 @@ def knowledge_connection(context, workspace_id, console):
 # 用模板生成一个客服应用等于重写一份编排，而运营已经调好的编排在现役应用里。
 
 
-def customer_knowledge_base(context, tenant_id: str, operation: dict, save) -> str:
+def customer_knowledge_base(context, tenant_id: str, operation: dict, save, *, environment="") -> str:
     """先持久化创建身份；结果不明时只对账，不再次POST或认领旧的同名库。"""
     import secrets
 
     client = getattr(context.runtime, "kb_search_client", None)
-    if client is None:
+    if client is None and not environment:
         raise SetupRefused("SETUP_KNOWLEDGE_CONFIG_REQUIRED")
-    tenant = client.for_tenant(tenant_id)
+    if environment:
+        from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
+
+        tenant = KbServiceClient(
+            context.settings.kb_service_base_url, tenant_id=tenant_id, environment=environment
+        )
+    else:
+        tenant = client.for_tenant(tenant_id)
     if "knowledge_create" not in operation:
         operation["knowledge_create"] = {
             "name": "对客知识库-" + secrets.token_hex(16),
@@ -233,6 +246,8 @@ def customer_knowledge_base(context, tenant_id: str, operation: dict, save) -> s
             for r in tenant.list_knowledge_bases()
             if r.get("name") == pending["name"] and r["knowledge_base_id"] not in pending["before"]
         ]
+        if len(candidates) > 1 and environment:
+            raise SetupRefused("SETUP_KNOWLEDGE_AMBIGUOUS")
         if len(candidates) != 1:
             raise SetupRefused("SETUP_KNOWLEDGE_CREATE_UNCONFIRMED")
         return candidates[0]
