@@ -735,6 +735,18 @@ def test_recovery_snapshot_ownership_is_set_before_publication(host, monkeypatch
     assert sentinel.read_text() == "keep" and ownership == []
 
 
+def test_registry_writer_lock_does_not_block_lifecycle(host):
+    first = candidate_config(host)
+    apply_candidate(host, first)
+    inst = host[0]
+    lock = inst.config / "registry/environment.json.lock"
+    lock.touch(mode=0o600)
+    assert apply_candidate(host, first)["result"] == "unchanged"
+    lock.chmod(0o644)
+    with pytest.raises(ValueError, match="mode"):
+        apply_candidate(host, first)
+
+
 @pytest.mark.parametrize("fault", ["closed_connection", "closed_listener", "permission", "wrong_version"])
 def test_readiness_tolerates_closed_connection_but_requires_listener(monkeypatch, fault):
     import threading

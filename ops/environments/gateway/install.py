@@ -221,9 +221,11 @@ WantedBy=multi-user.target
         if directory.exists() or directory.is_symlink():
             trusted(directory, owner=self.account.pw_uid, private=True)
             for member in directory.iterdir():
-                if member.name != "environment.json":
+                if member.name not in {"environment.json", "environment.json.lock"}:
                     raise ValueError("unknown registry file")
                 trusted(member, owner=self.account.pw_uid, private=True)
+                if not member.is_file() or member.stat().st_nlink != 1:
+                    raise ValueError("registry file must be a regular single-link file")
 
     def registry_digest(self):
         self.check_paths()
@@ -429,6 +431,7 @@ WantedBy=multi-user.target
             self.health(old["version"])
             self.record("installed.json", old)
             if "registry_sha256" not in old and (self.config / "registry").exists():
+                (self.config / "registry/environment.json.lock").unlink(missing_ok=True)
                 (self.config / "registry").rmdir()
         self.record("last-recovery.json", {**pending, "result": "restored"})
         (self.root / "pending.json").unlink()
