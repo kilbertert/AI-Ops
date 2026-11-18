@@ -66,9 +66,7 @@ def run(context, path, reference, payload):
             raise SetupRefused("SETUP_WORKSPACE_PENDING")
         pending = resources.get("knowledge_create", {})
         # 已发出的建库只对账，不因取消/证据到期重新注册、修模型或发POST。
-        if not pending.get("attempted") or (
-            resources.get("knowledge_base_id") and resources.get("verified_binding") != request["binding"]
-        ):
+        if not pending.get("attempted"):
             boundary()
             prepare.knowledge(context, tenant, environment=environment, before_step=boundary)
             resources["tenant_ready"] = True
@@ -93,6 +91,11 @@ def run(context, path, reference, payload):
             raise SetupRefused("SETUP_KNOWLEDGE_CREATE_UNCONFIRMED")
         resources["knowledge_base_id"] = knowledge_id
         tasks.save_knowledge_progress(path, reference, identifier, owner, resources)
+        if resources.get("verified_binding") != request["binding"]:
+            boundary()
+            prepare.knowledge(context, tenant, environment=environment, before_step=boundary)
+            resources["verified_binding"] = request["binding"]
+            tasks.save_knowledge_progress(path, reference, identifier, owner, resources)
     except (
         SetupRefused,
         EnsureError,

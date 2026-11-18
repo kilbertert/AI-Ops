@@ -202,3 +202,28 @@ def test_changed_shared_configuration_and_forged_resource_result_are_refused(kno
     result = execute(knowledge, job)
     assert result["state"] == "blocked" and result["error_code"] == "SETUP_KNOWLEDGE_CONFIG_CHANGED"
     assert calls == []
+
+
+def test_unknown_recovered_after_rotation_requires_current_model_verification(
+    knowledge, workspace_upstream, monkeypatch
+):  # noqa: F811
+    from aiops_diagnostics.knowledge.kb_onboarding import OnboardError
+
+    fixture, _, calls, libraries, lose, context = knowledge
+    lose[0] = True
+    job = submit(knowledge)
+    assert execute(knowledge, job)["state"] == "reconcile"
+    context.settings.ragflow_embedding_api_key = "rotated-invalid"
+    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
+        conn.execute("UPDATE environment_plans SET expires_at=0")
+    newer, _ = workspace_job(fixture, workspace_upstream)
+    assert prepare_http(fixture, newer).json()["state"] == "observed"
+
+    def rejected(**kwargs):
+        raise OnboardError("EMBEDDING_MODEL_REJECTED", "invalid credential", step="model-verify")
+
+    monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", rejected)
+    result = execute(knowledge, submit(knowledge, newer))
+    assert result["state"] == "blocked" and result["error_code"] == "SETUP_KNOWLEDGE_FAILED"
+    assert result["result"]["knowledge_base_id"] == libraries[knowledge_tenant("same", "a")][0]["id"]
+    assert len([c for c in calls if c[:2] == ("POST", "/kb/knowledge-bases")]) == 1
