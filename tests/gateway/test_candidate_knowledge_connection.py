@@ -49,7 +49,12 @@ def connected(knowledge, tmp_path):  # noqa: F811
             calls.append(("GET", self.path))
             if self.path.rsplit("/", 1)[-1] == "api-one":
                 return self.reply(apis[0])
-            return self.reply({"data": apis, "has_more": False})
+            return self.reply(
+                {
+                    "data": [{**r, "settings": {**r["settings"], "api_key": "[__HIDDEN__]"}} for r in apis],
+                    "has_more": False,
+                }
+            )
 
         def do_POST(self):
             if self.path.startswith("/kb/"):
@@ -74,6 +79,8 @@ def connected(knowledge, tmp_path):  # noqa: F811
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             calls.append(("POST", self.path))
             apis.append({"id": "api-one", "tenant_id": workspace, **body})
+            if lose[0] == "503":
+                return self.reply({"error": "upstream unavailable"}, 503)
             if lose[0]:
                 self.connection.shutdown(socket.SHUT_RDWR)
                 self.connection.close()
@@ -181,9 +188,10 @@ def test_real_gateway_single_scoped_library_and_cancelled_credential(connected, 
         assert client.get("/v1/dify/knowledge", headers=headers).status_code == 403
 
 
-def test_connection_response_lost_is_reconciled_without_new_post(connected):
+@pytest.mark.parametrize("failure", [True, "503"])
+def test_connection_response_lost_is_reconciled_without_new_post(connected, failure):
     _, _, _, _, calls, lose = connected
-    lose[0] = True
+    lose[0] = failure
     job = request_job(connected)
     first = prepare_connection(connected, job)
     assert first["state"] == "reconcile"

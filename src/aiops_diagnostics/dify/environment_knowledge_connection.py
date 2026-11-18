@@ -139,6 +139,9 @@ def run(context, path, reference, payload):
             or isinstance(exc, KnowledgeSearchUnavailable)
             or isinstance(exc, EnsureError)
             and code == "DIFY_RECONCILE_UNAVAILABLE"
+            or isinstance(exc, ConsoleApiError)
+            and exc.status is not None
+            and 500 <= exc.status < 600
         ):
             return tasks.worker(
                 path,

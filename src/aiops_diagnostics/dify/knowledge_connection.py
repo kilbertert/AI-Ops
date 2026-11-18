@@ -40,6 +40,8 @@ def ensure(console, workspace_id, settings, *, pending=None, save=None, name="")
         raise ValueError("ambiguous managed knowledge connection")
     if matching:
         row = matching[0]
+        if pending is not None:
+            row = console._call(workspace_id, PATH + "/" + row["id"])
         if row.get("tenant_id") != workspace_id or (row.get("settings") or {}).get("endpoint") != endpoint:
             raise ValueError("knowledge connection identity mismatch")
         if pending is not None and not hmac.compare_digest(
