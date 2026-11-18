@@ -338,7 +338,7 @@ def test_worker_builds_merged_installer_and_only_invokes_preflight(prepared, tmp
     from aiops_diagnostics.gateway import environment_task_worker as worker
 
     _, ref, _, _ = prepared
-    claim = {"target": dict(host="fixture-host", user="aiops", port=18951), "environment": "a"}
+    claim = {"target": dict(host="singapore-server", user="aiops", port=18951), "environment": "a"}
     root = Path(__file__).resolve().parents[2]
     revision = subprocess.check_output(["git", "rev-parse", "origin/main"], cwd=root, text=True).strip()
     archive = tmp_path / "actual-installer.tar.gz"
@@ -369,6 +369,7 @@ def test_worker_builds_merged_installer_and_only_invokes_preflight(prepared, tmp
     assert worker.execute(root, claim)["state"] == "observed"
     assert commands[-1][-1].endswith("preflight --environment a --user aiops --port 18951")
     assert all("systemctl" not in str(command) for command in commands)
+    assert all(command[2] == "124" for command in commands)
     bad = {**claim, "target": {**claim["target"], "host": "--project"}}
     with pytest.raises(ValueError, match="fixed target"):
         worker.execute(root, bad)

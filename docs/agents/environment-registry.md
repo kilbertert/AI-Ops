@@ -246,7 +246,7 @@ Gateway配置独立`AIOPS_GATEWAY_ENVIRONMENT_TASK_KEY`，为空拒绝新任务�
 aiops-admin environment-task-worker --id task_<编号> --gateway https://control.example   --key-file /private/environment-task.key
 ```
 
-命令只领取这个任务，校验冻结逻辑主机和安装器摘要，从origin/main已合并修订构建同一固定安装器，
+命令只领取这个任务，冻结host经原项目.dev-host.toml唯一解析为目标name（零个或多个匹配拒绝），校验安装器摘要，从origin/main已合并修订构建同一固定安装器，
 经dev-host传输与身份断言执行preflight，不install/recover。首片为单次运维执行入口，不声称后台无人值守队列已上线。
 中央`/v1/internal/environment-tasks`只接受独立HMAC；管理桥不能访问或提交结果。
 不让业务Gateway持有SSH私钥；若正式访问路径尚未允许内部worker接口，停止并按原入口交付，不能临时开放任意端点。
