@@ -45,6 +45,7 @@ it('saves only a draft with both revisions and preserves fields across reload', 
     'fetch',
     vi.fn(async (_url, options) => {
       const body = JSON.parse(options.body)
+      if (body.action === 'environment-task') return Response.json({ tasks: [] })
       if (body.action === 'environment-drafts') return Response.json(catalogue)
       writes.push(body)
       catalogue.drafts[0] = {
@@ -85,6 +86,7 @@ it('creates an environment and tenant without enabling either automatically', as
     'fetch',
     vi.fn(async (_url, options) => {
       const body = JSON.parse(options.body)
+      if (body.action === 'environment-task') return Response.json({ tasks: [] })
       if (body.action === 'environment-drafts')
         return Response.json({ registry_revision: 1, can_create: true, effective: [], drafts: [] })
       writes.push(body)
@@ -125,6 +127,7 @@ it('preserves edits after a conflict, warns before switching, and clears data on
     'fetch',
     vi.fn(async (_url, options) => {
       const body = JSON.parse(options.body)
+      if (body.action === 'environment-task') return Response.json({ tasks: [] })
       if (body.action === 'environment-drafts')
         return revoked
           ? Response.json({ error: { code: 'ENVIRONMENT_MANAGEMENT_FORBIDDEN' } }, { status: 403 })
@@ -159,7 +162,9 @@ it('preserves edits after a conflict, warns before switching, and clears data on
 it('confirms main-navigation departure before losing unsaved edits', async () => {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => Response.json(data)),
+    vi.fn(async (_url, options) =>
+      Response.json(JSON.parse(options.body).action === 'environment-task' ? { tasks: [] } : data),
+    ),
   )
   const screen = await render(
     <>
@@ -197,6 +202,7 @@ it('freezes saved inputs and shows blockers without offering activation', async 
     'fetch',
     vi.fn(async (_url, init) => {
       const body = JSON.parse(String(init?.body))
+      if (body.action === 'environment-task') return Response.json({ tasks: [] })
       calls.push(body)
       return new Response(JSON.stringify(body.action === 'environment-plan' ? frozen : data), {
         status: 200,
@@ -218,4 +224,37 @@ it('freezes saved inputs and shows blockers without offering activation', async 
   expect(calls.at(-1)).toEqual({ action: 'environment-plan', id: frozen.id })
   await screen.getByRole('textbox', { name: '环境名称', exact: true }).fill('尚未保存')
   await expect.element(screen.getByRole('button', { name: '配置与制品预检' })).toBeDisabled()
+})
+
+it('persists site tasks across refresh and safely requests cancellation', async () => {
+  const task = {
+    id: `task_${'b'.repeat(32)}`,
+    plan_id: `plan_${'a'.repeat(32)}`,
+    state: 'reconcile',
+    cancel_requested: false,
+    error_code: '',
+    result: {},
+  }
+  const calls: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      if (body.action === 'environment-drafts') return Response.json(data)
+      calls.push(body)
+      if (body.cancel) {
+        task.state = 'cancelled'
+        task.cancel_requested = true
+        return Response.json(task)
+      }
+      return Response.json({ tasks: [task] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await expect.element(screen.getByText('结果待核对', { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '刷新任务' }).click()
+  await expect.element(screen.getByText(task.id, { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '取消现场预检' }).click()
+  expect(calls.at(-1)).toEqual({ action: 'environment-task', id: task.id, cancel: true })
+  await expect.element(screen.getByText('已取消', { exact: true })).toBeVisible()
 })
