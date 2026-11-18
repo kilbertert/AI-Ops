@@ -624,7 +624,7 @@ def trial_binding(settings, app_id):
     if not getattr(settings, "operator_profiles_file", ""):
         return None
     row = SelfServiceStore(settings.database_file).app(app_id)
-    if not row:
+    if not row or row["entry"] != "operator" or row["environment"] != settings.execution_environment:
         return None
     from aiops_diagnostics.dify.self_service_config import profiles
 
