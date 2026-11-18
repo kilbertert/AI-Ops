@@ -794,7 +794,7 @@ def test_site_receipt_cannot_cross_local_installation_identity(host):
     row = json.loads(path.read_text())
     row["result"]["environment"] = "other"
     path.write_text(json.dumps(row))
-    with pytest.raises(ValueError, match="identity"):
+    with pytest.raises(ValueError, match="integrity"):
         inst.preflight(receipt["id"])
 
 
@@ -806,7 +806,7 @@ def test_site_preflight_rechecks_service_instance_and_recorded_results(host, mon
     row = json.loads(record_path.read_text())
     row["result"]["checks"][0]["state"] = "blocked"
     record_path.write_text(json.dumps(row))
-    with pytest.raises(ValueError, match="observation mismatch"):
+    with pytest.raises(ValueError, match="integrity"):
         inst.preflight(receipt["id"])
     row["result"]["checks"][0]["state"] = "passed"
     record_path.write_text(json.dumps(row))
@@ -815,6 +815,25 @@ def test_site_preflight_rechecks_service_instance_and_recorded_results(host, mon
         inst, "command", lambda *a: "MainPID=changed" if "ActiveEnterTimestampMonotonic" in a else command(*a)
     )
     assert inst.preflight(receipt["id"])["state"] == "expired"
+
+
+@pytest.mark.parametrize("field", ["state", "expires_at", "resources"])
+def test_site_receipt_rejects_modified_metadata(host, field):
+    apply(host)
+    inst = host[0]
+    receipt = inst.preflight()
+    path = inst.root / "site-preflight" / (receipt["id"] + ".json")
+    row = json.loads(path.read_text())
+    row["result"][field] = {
+        "state": "completed",
+        "expires_at": receipt["expires_at"] + 100000,
+        "resources": {"available_memory_bytes": 999999999999, "available_disk_bytes": 999999999999},
+    }[field]
+    path.write_text(json.dumps(row))
+    with pytest.raises(ValueError, match="integrity"):
+        inst.preflight()
+    with pytest.raises(ValueError, match="integrity"):
+        inst.preflight(receipt["id"])
 
 
 @pytest.mark.parametrize("fault", ["closed_connection", "closed_listener", "permission", "wrong_version"])

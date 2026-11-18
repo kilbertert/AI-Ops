@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 import platform
 import pwd
@@ -456,12 +457,22 @@ WantedBy=multi-user.target
             if not path.is_file() or path.stat().st_nlink != 1 or path.stat().st_size > 65536:
                 raise ValueError("invalid site receipt file")
             row = json.loads(path.read_text())
+            integrity = row.pop("integrity_sha256", "")
+            if hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest() != integrity:
+                raise ValueError("site receipt integrity mismatch")
             result = row["result"]
             if (
                 result["environment"] != self.environment
                 or result["id"] + ".json" != path.name
                 or result["executable"] is not False
                 or result["scope"] != "installed-instance-readiness-only"
+                or result["state"] not in {"observed", "blocked"}
+                or not all(
+                    type(result[key]) in (int, float) and math.isfinite(result[key])
+                    for key in ("created_at", "expires_at")
+                )
+                or result["expires_at"] != row["expires_at"]
+                or result["expires_at"] - result["created_at"] != 900
             ):
                 raise ValueError("site receipt identity mismatch")
             if row["fingerprint"] == fingerprint and any(
@@ -499,10 +510,9 @@ WantedBy=multi-user.target
             "expires_at": now + 900,
             "resources": resources,
         }
-        write(
-            directory / (identifier + ".json"),
-            json.dumps({"fingerprint": fingerprint, "expires_at": now + 900, "result": result}) + "\n",
-        )
+        row = {"fingerprint": fingerprint, "expires_at": now + 900, "result": result}
+        row["integrity_sha256"] = hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
+        write(directory / (identifier + ".json"), json.dumps(row) + "\n")
         return result
 
     def recover(self):
