@@ -214,8 +214,7 @@ def handle(handler, bridge):
             or not isinstance(payload["name"], str)
             or not 1 <= len(payload["name"]) <= 128
             or any(
-                not isinstance(payload.get(key), str)
-                or not re.fullmatch(tenant_reference, payload[key])
+                not isinstance(payload.get(key), str) or not re.fullmatch(tenant_reference, payload[key])
                 for key in ("environment", "tenant_id")
                 if key in payload
             )
