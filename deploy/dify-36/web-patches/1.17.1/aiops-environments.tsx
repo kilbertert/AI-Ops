@@ -510,7 +510,9 @@ export default function EnvironmentManagement() {
                   <p className="system-xs-regular break-all">配置摘要：{plan.config_sha256}</p>
                 )}
                 {plan.projection_sha256 && (
-                  <p className="system-xs-regular break-all">停用候选投影摘要：{plan.projection_sha256}</p>
+                  <p className="system-xs-regular break-all">
+                    停用候选投影摘要：{plan.projection_sha256}
+                  </p>
                 )}
                 <Button
                   type="button"
