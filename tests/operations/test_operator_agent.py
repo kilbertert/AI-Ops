@@ -140,6 +140,26 @@ def test_candidate_is_not_authorization_or_an_invented_order():
         operator_agent.order_candidate({"order_no": "B"}, "查B", "A", "")
 
 
+def test_site_readback_rechecks_authorization_after_the_final_cpms_request(tmp_path, monkeypatch):
+    from operations.test_operator_cpms import scope
+
+    with environment(tmp_path, monkeypatch) as f:
+
+        def dispatch(_, config, run):
+            _, headers, _ = call_tool(f, run, "cpms_site_search", {"address_terms": []})
+            finish(f, run, headers, "已读取可见站点，详细情况还需核对。", ["cpms_site_search"])
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        response = f["client"].post(
+            "/v1/assistant/questions", headers=HEADERS, json={"question": "查天河站点"}
+        )
+        qa = response.json()["qa_id"]
+        assert terminal(f, qa).json()["status"] == "completed"
+        f["state"]["hook"] = lambda: setattr(f["resolver"], "current", scope("OTHER"))
+        response = f["client"].get("/v1/assistant/questions/" + qa, headers=HEADERS)
+        assert response.status_code == 403 and "result" not in response.json()
+
+
 def test_revoked_history_is_omitted_without_blocking_a_new_general_question(tmp_path, monkeypatch):
     with environment(tmp_path, monkeypatch) as f:
         seen = []
