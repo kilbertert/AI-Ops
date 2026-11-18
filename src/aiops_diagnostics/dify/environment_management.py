@@ -167,6 +167,36 @@ def task(context, session, payload):
     try:
         if len(json.dumps(payload)) > 65536:
             raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+        if set(payload) in (
+            {"consumer_sources"},
+            {"connection_task", "tenant_id", "source_app_id", "source_version"},
+        ):
+            from . import environment_consumer
+
+            if not caller.platform:
+                raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
+            if set(payload) == {"consumer_sources"}:
+                if payload["consumer_sources"] is not True:
+                    raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+                return environment_consumer.sources(context, caller)
+            source = environment_consumer.sources(context, caller, payload["source_app_id"])
+            if type(payload["source_version"]) is not int or payload["source_version"] < 1:
+                raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+            if source["version_no"] != payload["source_version"]:
+                raise SetupConflict("SETUP_SOURCE_CHANGED")
+            # 校验模板后才入任务，不接受浏览器提交图、模型凭据或服务器地址。
+            environment_consumer.document(source, "candidate-validation")
+            return environment_tasks.submit_workspace(
+                path,
+                identity,
+                payload["connection_task"],
+                payload["tenant_id"],
+                reference,
+                application=True,
+                consumer=True,
+                consumer_source=source,
+                binding=environment_consumer.binding(context.settings, source),
+            )
         if set(payload) == {"plan_id"}:
             if not getattr(context.settings, "environment_task_key", ""):
                 raise auth.SetupRefused("ENVIRONMENT_TASK_WORKER_UNAVAILABLE")
@@ -256,6 +286,8 @@ def task(context, session, payload):
                 path, identity, identifier=payload["id"], cancel="cancel" in payload, reference=reference
             )
         raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+    except SetupConflict:
+        raise
     except (environment_tasks.TaskRefused, environment_plans.PlanRefused) as exc:
         if str(exc).endswith(("BLOCKED", "EXPIRED", "LEASE_LOST")):
             raise SetupConflict(str(exc)) from exc
@@ -419,7 +451,7 @@ def register(app, context, session_dependency):
             if len(json.dumps(payload)) > 65536:
                 raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
             if "prepare" in payload:
-                if payload["prepare"] == "operator":
+                if payload["prepare"] in {"operator", "consumer"}:
                     from .environment_operator import run
 
                     return run(context, _path(context), context.settings.environment_onboarding_file, payload)

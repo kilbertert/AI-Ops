@@ -4221,6 +4221,18 @@ def create_gateway_app(
         from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
 
         response.headers["Cache-Control"] = "no-store"
+        presented = (authorization or "").removeprefix("Bearer ")
+        from aiops_diagnostics.dify import candidate_knowledge
+
+        if presented.startswith(candidate_knowledge.PREFIX):
+            try:
+                scope = candidate_knowledge.parse_token(context.settings.internal_token_secret, presented)
+                result = candidate_knowledge.catalogue(context, scope)
+            except (ValueError, candidate_knowledge.CandidateKnowledgeError) as exc:
+                raise StandardAPIError(403, "KNOWLEDGE_CATALOGUE_FORBIDDEN", "知识目录凭据无效") from exc
+            return {
+                "libraries": [{"knowledge_base_id": scope[3], "name": result["knowledge_items"][0]["name"]}]
+            }
         try:
             workspace = catalogue_workspace(
                 (authorization or "").removeprefix("Bearer "),

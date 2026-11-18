@@ -377,7 +377,9 @@ def consumer_app_id(workspace_id, job_id):
     return str(uuid5(UUID(IMPORT_NAMESPACE), workspace_id + ":" + consumer_request_id(job_id)))
 
 
-def copy_consumer_app(console, source, workspace_id, job_id, request, document):
+def copy_consumer_app(
+    console, source, workspace_id, job_id, request, document, *, candidate=False, before_create=None
+):
     """把已重绑定的 Chatflow 文档导入目标工作区，返回应用 id。
 
     幂等靠与管家同一条机制：``request_id`` 参与派生应用 id，响应丢失后回读同一应用。
@@ -385,17 +387,23 @@ def copy_consumer_app(console, source, workspace_id, job_id, request, document):
     capability = console._call(workspace_id, "/console/api/apps/imports")
     if capability.get("aiops_idempotent_import") != 1:
         raise SetupRefused("SETUP_IMPORT_UPGRADE_REQUIRED")
+    if candidate and capability.get("aiops_candidate_chatflow_import") != 1:
+        raise SetupRefused("SETUP_IMPORT_UPGRADE_REQUIRED")
     expected_id = consumer_app_id(workspace_id, job_id)
+    document = {**document, **({"aiops_candidate": True} if candidate else {})}
+    body = {
+        "mode": "yaml-content",
+        "yaml_content": yaml.safe_dump(document, allow_unicode=True),
+        "name": request["name"],
+        "request_id": consumer_request_id(job_id),
+    }
+    if before_create:
+        before_create()
     result = console._call(
         workspace_id,
         "/console/api/apps/imports",
         method="POST",
-        body={
-            "mode": "yaml-content",
-            "yaml_content": yaml.safe_dump(document, allow_unicode=True),
-            "name": request["name"],
-            "request_id": consumer_request_id(job_id),
-        },
+        body=body,
     )
     if (
         result.get("status") not in {"completed", "completed-with-warnings"}

@@ -1,4 +1,4 @@
-"""候选管家应用准备：仅资源装配，不登记或发布正式路由。"""
+"""候选应用准备：共用资源/导入恢复，端内合同分别核验，不登记或发布。"""
 
 import hashlib
 import json
@@ -10,7 +10,7 @@ from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.operator import operator_agent, operator_tools
 from aiops_diagnostics.operator.ops_provider import ensure_node_provider
 
-from . import candidate_knowledge, self_service_config, self_service_prepare
+from . import candidate_knowledge, environment_consumer, self_service_config, self_service_prepare
 from .dify_console_admin import ConsoleApiError, ConsoleApiSettings, DifyConsoleAdmin
 from .dify_dsl_pull import _declared_dataset_ids
 from .environment_knowledge_connection import binding as connection_binding
@@ -45,13 +45,15 @@ def binding(settings):
 
 
 def run(context, path, reference, payload):
-    if set(payload) != {"id", "owner", "prepare"} or payload["prepare"] != "operator":
+    if set(payload) != {"id", "owner", "prepare"} or payload["prepare"] not in {"operator", "consumer"}:
         raise tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
     identifier, owner, settings = payload["id"], payload["owner"], context.settings
+    consumer = payload["prepare"] == "consumer"
+    action = "consumer-prepare" if consumer else "operator-prepare"
 
     def current(fresh=False):
         return tasks.workspace_request(
-            path, reference, identifier, owner, action="operator-prepare", reconciling=not fresh
+            path, reference, identifier, owner, action=action, reconciling=not fresh
         )
 
     request = current()
@@ -63,18 +65,23 @@ def run(context, path, reference, payload):
     )
     resources = request.get("resources", {})
 
+    def current_binding():
+        return (
+            environment_consumer.binding(settings, request["consumer_source"])
+            if consumer
+            else binding(settings)
+        )
+
     def boundary():
         latest = current(fresh=True)
         if latest["cancel_requested"]:
             raise tasks.TaskRefused("ENVIRONMENT_TASK_CANCELLED")
-        if request["binding"] != binding(settings):
+        if request["binding"] != current_binding():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
         candidate_knowledge.active(settings, scope)
 
     def save():
-        tasks.save_knowledge_progress(
-            path, reference, identifier, owner, resources, action="operator-prepare"
-        )
+        tasks.save_knowledge_progress(path, reference, identifier, owner, resources, action=action)
 
     class Console(DifyConsoleAdmin):
         def _call(self, *args, method="GET", **kwargs):
@@ -98,7 +105,7 @@ def run(context, path, reference, payload):
             != candidate_knowledge.token(settings.internal_token_secret, scope)
         ):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
-        if request["binding"] != binding(settings):
+        if request["binding"] != current_binding():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
         if resources and resources.get("binding") != request["binding"]:
             raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
@@ -107,9 +114,9 @@ def run(context, path, reference, payload):
             operation = str(uuid4())
             resources.update(
                 operation_id=operation,
-                expected_app_id=str(
-                    uuid5(UUID("6e5a60f0-9495-4c43-a714-d954c2609aeb"), scope[2] + ":" + operation)
-                ),
+                expected_app_id=self_service_prepare.consumer_app_id(scope[2], operation)
+                if consumer
+                else str(uuid5(UUID("6e5a60f0-9495-4c43-a714-d954c2609aeb"), scope[2] + ":" + operation)),
                 name="aiops-candidate-" + uuid4().hex,
                 binding=request["binding"],
             )
@@ -127,69 +134,95 @@ def run(context, path, reference, payload):
             capability = console._call(scope[2], "/console/api/apps/imports")
             if (
                 capability.get("aiops_idempotent_import") != 1
-                or capability.get("aiops_candidate_import") != 1
+                or capability.get("aiops_candidate_chatflow_import" if consumer else "aiops_candidate_import")
+                != 1
             ):
                 raise SetupRefused("SETUP_IMPORT_UPGRADE_REQUIRED")
-            template = model(settings)
-            self_service_prepare.model_credentials(console, scope[2], template)
-            ensure_node_provider(console, scope[2], request["gateway_url"], reconcile=True)
-            providers = console._call(scope[2], "/console/api/workspaces/current/tool-providers?type=api")
-            matches = [p for p in providers if p.get("name") == "cpms-node"]
-            if len(matches) != 1:
-                raise SetupRefused("SETUP_PROVIDER_UNAVAILABLE")
-            resources["provider_id"] = matches[0]["id"]
+            if consumer:
+                document = environment_consumer.dependencies(console, settings, request, scope)
+            else:
+                template = model(settings)
+                self_service_prepare.model_credentials(console, scope[2], template)
+                ensure_node_provider(console, scope[2], request["gateway_url"], reconcile=True)
+                providers = console._call(scope[2], "/console/api/workspaces/current/tool-providers?type=api")
+                matches = [p for p in providers if p.get("name") == "cpms-node"]
+                if len(matches) != 1:
+                    raise SetupRefused("SETUP_PROVIDER_UNAVAILABLE")
+                resources["provider_id"] = matches[0]["id"]
 
             def before_create():
                 boundary()
                 resources["attempted"] = True
                 save()
 
-            self_service_prepare.create_app(
-                console,
-                scope[2],
-                resources["operation_id"],
-                {
-                    "name": resources["name"],
-                    "prompt": operator_agent.sop(),
-                    "tools": [t.name for t in operator_tools.tools()],
-                },
-                {"model": template},
-                resources["provider_id"],
-                candidate=True,
-                before_create=before_create,
-            )
+            if consumer:
+                self_service_prepare.copy_consumer_app(
+                    console,
+                    request["consumer_source"],
+                    scope[2],
+                    resources["operation_id"],
+                    {"name": resources["name"]},
+                    document,
+                    candidate=True,
+                    before_create=before_create,
+                )
+            else:
+                self_service_prepare.create_app(
+                    console,
+                    scope[2],
+                    resources["operation_id"],
+                    {
+                        "name": resources["name"],
+                        "prompt": operator_agent.sop(),
+                        "tools": [t.name for t in operator_tools.tools()],
+                    },
+                    {"model": template},
+                    resources["provider_id"],
+                    candidate=True,
+                    before_create=before_create,
+                )
             app = console._call(scope[2], "/console/api/apps/" + app_id)
-        ensure_node_provider(console, scope[2], request["gateway_url"], verify_only=True)
+        if consumer:
+            environment_consumer.verify(console, settings, request, scope, app_id)
+            if app.get("workflow") or console._call(
+                scope[2], "/console/api/apps/" + app_id + "/api-keys"
+            ).get("data"):
+                raise SetupRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+        else:
+            ensure_node_provider(console, scope[2], request["gateway_url"], verify_only=True)
         mc = app.get("model_config") or {}
         expected_tools = {t.name for t in operator_tools.tools()}
         tools = mc.get("agent_mode", {}).get("tools", [])
-        template = model(settings)
+        template = {} if consumer else model(settings)
         if (
             app.get("id") != app_id
             or app.get("name") != resources["name"]
-            or app.get("mode") != "agent-chat"
+            or app.get("mode") != ("advanced-chat" if consumer else "agent-chat")
             or app.get("enable_api") is not False
             or app.get("enable_site") is not False
-            or mc.get("pre_prompt") != operator_agent.sop()
-            or {t.get("tool_name") for t in tools} != expected_tools
-            or len(tools) != len(expected_tools)
-            or any(
-                t.get("provider_id") != resources["provider_id"]
-                or t.get("provider_type") != "api"
-                or t.get("enabled") is not True
-                for t in tools
+            or not consumer
+            and (
+                mc.get("pre_prompt") != operator_agent.sop()
+                or {t.get("tool_name") for t in tools} != expected_tools
+                or len(tools) != len(expected_tools)
+                or any(
+                    t.get("provider_id") != resources["provider_id"]
+                    or t.get("provider_type") != "api"
+                    or t.get("enabled") is not True
+                    for t in tools
+                )
+                or mc.get("model", {}).get("name") != template["name"]
+                or mc.get("model", {}).get("provider") != template["provider"]
+                or mc.get("model", {}).get("completion_params") != template["completion_params"]
+                or mc.get("agent_mode", {}).get("enabled") is not True
+                or mc.get("agent_mode", {}).get("strategy") != "function_call"
+                or mc.get("agent_mode", {}).get("max_iteration") != 10
+                or _declared_dataset_ids(mc)
             )
-            or mc.get("model", {}).get("name") != template["name"]
-            or mc.get("model", {}).get("provider") != template["provider"]
-            or mc.get("model", {}).get("completion_params") != template["completion_params"]
-            or mc.get("agent_mode", {}).get("enabled") is not True
-            or mc.get("agent_mode", {}).get("strategy") != "function_call"
-            or mc.get("agent_mode", {}).get("max_iteration") != 10
-            or _declared_dataset_ids(mc)
         ):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
         candidate_knowledge.active(settings, scope)
-        if request["binding"] != binding(settings):
+        if request["binding"] != current_binding():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
         current()
         resources["app_id"] = app_id
@@ -221,7 +254,9 @@ def run(context, path, reference, payload):
         identifier,
         owner,
         {
-            "scope": "candidate-operator-application-only",
+            "scope": "candidate-consumer-application-only"
+            if consumer
+            else "candidate-operator-application-only",
             "environment": scope[0],
             "tenant_id": scope[1],
             "workspace_id": scope[2],

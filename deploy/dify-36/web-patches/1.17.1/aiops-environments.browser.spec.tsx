@@ -119,6 +119,7 @@ it('prepares knowledge and its scoped connection from verified task cards', asyn
   let prepared = false
   let connected = false
   let appPrepared = false
+  let consumerPrepared = false
   const connection = {
     ...knowledge,
     id: `task_${'c'.repeat(32)}`,
@@ -137,6 +138,8 @@ it('prepares knowledge and its scoped connection from verified task cards', asyn
       const body = JSON.parse(String(init?.body))
       if (body.action === 'environment-drafts') return Response.json(data)
       calls.push(body)
+      if (body.consumer_sources)
+        return Response.json({ sources: [{ app_id: 'source-a', name: '正式客服', version_no: 7 }] })
       if (body.workspace_task) {
         prepared = true
         return Response.json(knowledge)
@@ -145,18 +148,40 @@ it('prepares knowledge and its scoped connection from verified task cards', asyn
         connected = true
         return Response.json(connection)
       }
+      if (body.connection_task && body.source_app_id) {
+        consumerPrepared = true
+        return Response.json({
+          ...application,
+          id: `task_${'e'.repeat(32)}`,
+          action: 'consumer-prepare',
+          result: { ...application.result, app_id: 'consumer-a' },
+        })
+      }
       if (body.connection_task) {
         appPrepared = true
         return Response.json(application)
       }
       return Response.json({
-        tasks: appPrepared
-          ? [application, connection, knowledge, workspace]
-          : connected
-            ? [connection, knowledge, workspace]
-            : prepared
-              ? [knowledge, workspace]
-              : [workspace],
+        tasks: consumerPrepared
+          ? [
+              {
+                ...application,
+                id: `task_${'e'.repeat(32)}`,
+                action: 'consumer-prepare',
+                result: { ...application.result, app_id: 'consumer-a' },
+              },
+              application,
+              connection,
+              knowledge,
+              workspace,
+            ]
+          : appPrepared
+            ? [application, connection, knowledge, workspace]
+            : connected
+              ? [connection, knowledge, workspace]
+              : prepared
+                ? [knowledge, workspace]
+                : [workspace],
       })
     }),
   )
@@ -178,8 +203,21 @@ it('prepares knowledge and its scoped connection from verified task cards', asyn
     tenant_id: 'same',
   })
   await expect.element(screen.getByText('候选知识连接已准备', { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '读取正式消费者模板' }).click()
+  await screen.getByRole('combobox', { name: '消费者来源模板：same' }).selectOptions('source-a')
+  await screen.getByRole('button', { name: '准备候选消费者应用：same' }).click()
+  expect(calls.at(-1)).toEqual({
+    action: 'environment-task',
+    connection_task: connection.id,
+    tenant_id: 'same',
+    source_app_id: 'source-a',
+    source_version: 7,
+  })
+  await expect
+    .element(screen.getByText('候选消费者应用已准备（入口停用）', { exact: true }))
+    .toBeVisible()
   await screen.getByRole('button', { name: '刷新目录' }).click()
-  await expect.element(screen.getByText('连接编号：connection-a', { exact: true })).toBeVisible()
+  await expect.element(screen.getByText('应用编号：consumer-a', { exact: true })).toBeVisible()
   await screen.getByRole('button', { name: '准备候选管家应用：same' }).click()
   expect(calls.at(-1)).toEqual({
     action: 'environment-task',

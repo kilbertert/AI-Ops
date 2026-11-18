@@ -143,6 +143,7 @@ def test_real_gateway_single_scoped_library_and_cancelled_credential(connected, 
     assert key == candidate.token(settings.internal_token_secret, scope)
     assert "api_key" not in json.dumps(result)
     runtime = _Runtime(search=lambda *args: [], signer=MediaResourceSigner("signer"))
+    runtime.store = SimpleNamespace(path=settings.database_file)
     with _client(
         tmp_path,
         runtime,
@@ -162,6 +163,12 @@ def test_real_gateway_single_scoped_library_and_cancelled_credential(connected, 
         assert listed.status_code == 200, listed.text
         assert listed.json()["total"] == 1
         assert listed.json()["knowledge_items"][0]["knowledge_base_ids"] == [scope[3]]
+        consumer_catalogue = client.get("/v1/internal/consumer-knowledge/catalogue", headers=headers)
+        assert consumer_catalogue.status_code == 200, consumer_catalogue.text
+        assert [r["knowledge_base_id"] for r in consumer_catalogue.json()["libraries"]] == [scope[3]]
+        assert client.post(
+            "/v1/internal/consumer-data/agent", headers=headers, json={"resource": "orders"}
+        ).status_code in {401, 403}
         invalid = candidate.knowledge_id(scope) + "." + "0" * 64
         assert (
             client.get("/v1/dify/knowledge", headers={"Authorization": "Bearer " + invalid}).status_code

@@ -48,6 +48,21 @@ def test_candidate_workspace_request_crosses_bridge_but_resource_claims_do_not(b
     )
     for extra in ({"workspace_id": "forged"}, {"tenant_id": ""}, {"site_task": "other"}):
         assert _manage({**body, **extra}, address=bridge)[0] == 400
+    consumer = {
+        "action": "environment-task",
+        "connection_task": body["site_task"],
+        "tenant_id": "same",
+        "source_app_id": CONSUMER,
+        "source_version": 7,
+    }
+    assert _manage(consumer, address=bridge)[0] != 400
+    assert _manage({"action": "environment-task", "consumer_sources": True}, address=bridge)[0] != 400
+    for extra in (
+        {"source_app_id": "https://other.test"},
+        {"workflow": {}},
+        {"gateway_url": "https://other.test"},
+    ):
+        assert _manage({**consumer, **extra}, address=bridge)[0] == 400
 
 
 def test_dual_entry_payload_crosses_the_real_bridge(bridge, upstream):  # noqa: F811

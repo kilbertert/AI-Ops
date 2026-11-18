@@ -67,7 +67,14 @@ def request(tenant_id, role="editor", extra=None, method="POST"):
 def main():
     a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-    assert request(a, method="GET") == (200, {"aiops_idempotent_import": 1, "aiops_candidate_import": 1})
+    assert request(a, method="GET") == (
+        200,
+        {
+            "aiops_idempotent_import": 1,
+            "aiops_candidate_import": 1,
+            "aiops_candidate_chatflow_import": 1,
+        },
+    )
     for role in ("normal", "dataset_operator"):
         assert request(a, role=role)[0] == 403
         assert request(a, role=role, method="GET")[0] == 403
@@ -89,18 +96,27 @@ def main():
     account.id = "33333333-3333-3333-3333-333333333333"
     account._current_tenant = Tenant(name="fixture")
     account._current_tenant.id = a
-    for candidate in (False, True):
+    for mode, candidate in [(m, c) for m in ("agent-chat", "advanced-chat") for c in (False, True)]:
         session = SimpleNamespace(add=lambda _: None, flush=lambda: None, get=lambda *args: None)
         with (
             patch.object(service, "is_valid_image_icon", return_value=True),
             patch.object(service.app_was_created, "send"),
             patch.object(service.app_model_config_was_updated, "send"),
+            patch.object(
+                service,
+                "WorkflowService",
+                return_value=SimpleNamespace(
+                    get_draft_workflow=lambda **_: None,
+                    sync_draft_workflow=lambda **_: None,
+                ),
+            ),
         ):
             row = service.AppDslService(session)._create_or_update_app(
                 app=None,
                 data={
                     "aiops_candidate": candidate,
-                    "app": {"mode": "agent-chat", "name": "fixture"},
+                    "app": {"mode": mode, "name": "fixture"},
+                    "workflow": {"graph": {}},
                     "model_config": {
                         "model": {
                             "provider": "fixture",

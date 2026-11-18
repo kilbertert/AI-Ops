@@ -118,6 +118,8 @@ def submit_workspace(
     knowledge=False,
     connect=False,
     application=False,
+    consumer=False,
+    consumer_source=None,
     binding="",
     target_binding="",
 ):
@@ -152,7 +154,9 @@ def submit_workspace(
         if tenant is None:
             raise TaskRefused("ENVIRONMENT_TASK_TENANT_INVALID")
         action = (
-            "operator-prepare"
+            "consumer-prepare"
+            if consumer
+            else "operator-prepare"
             if application
             else "knowledge-connect"
             if connect
@@ -198,6 +202,8 @@ def submit_workspace(
             ),
         }
         request.pop("resources", None)
+        if consumer:
+            request["consumer_source"] = consumer_source
         digest = plans._digest(
             {
                 "plan": request["plan"]["id"],
@@ -205,6 +211,7 @@ def submit_workspace(
                 "action": action,
                 "tenant_id": tenant_id,
                 **({"binding": binding} if knowledge or connect or application else {}),
+                **({"source": consumer_source} if consumer else {}),
             }
         )
         task_id = "task_" + digest[:32]
@@ -239,23 +246,26 @@ def workspace_request(path, reference, identifier, owner, *, reconciling=True, a
                 validate_receipt(json.loads(source["result"]), row["environment"])
             except TaskRefused as exc:
                 raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED") from exc
-            if action in {"knowledge-prepare", "knowledge-connect", "operator-prepare"}:
+            if action in {"knowledge-prepare", "knowledge-connect", "operator-prepare", "consumer-prepare"}:
                 parent = _row(conn, request["workspace_task"])
                 if _public(parent)["state"] != "observed":
                     raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
                 if (
-                    action in {"knowledge-connect", "operator-prepare"}
+                    action in {"knowledge-connect", "operator-prepare", "consumer-prepare"}
                     and _public(_row(conn, request["knowledge_task"]))["state"] != "observed"
                 ):
                     raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
                 if (
-                    action == "operator-prepare"
+                    action in {"operator-prepare", "consumer-prepare"}
                     and _public(_row(conn, request["connection_task"]))["state"] != "observed"
                 ):
                     raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
-        if action in {"knowledge-prepare", "knowledge-connect", "operator-prepare"} and not request.get(
-            "resources"
-        ):
+        if action in {
+            "knowledge-prepare",
+            "knowledge-connect",
+            "operator-prepare",
+            "consumer-prepare",
+        } and not request.get("resources"):
             previous = conn.execute(
                 "SELECT request FROM environment_tasks WHERE environment=? AND id!=?"
                 " AND json_extract(request,'$.action')=?"
@@ -278,7 +288,7 @@ def save_knowledge_progress(path, reference, identifier, owner, resources, *, ac
         beginning = resources.get("knowledge_create", {}).get("attempted") and not stored.get(
             "resources", {}
         ).get("knowledge_create", {}).get("attempted")
-        if action in {"knowledge-connect", "operator-prepare"}:
+        if action in {"knowledge-connect", "operator-prepare", "consumer-prepare"}:
             beginning = resources.get("attempted") and not stored.get("resources", {}).get("attempted")
         if beginning:
             _authorize(path, tuple(stored["identity"]), row["environment"])
@@ -553,6 +563,7 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
                 "knowledge-prepare",
                 "knowledge-connect",
                 "operator-prepare",
+                "consumer-prepare",
             }:
                 if not internal_workspace:
                     raise TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
@@ -563,6 +574,7 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
                     != {
                         "knowledge-connect": "candidate-knowledge-connection-only",
                         "operator-prepare": "candidate-operator-application-only",
+                        "consumer-prepare": "candidate-consumer-application-only",
                         "knowledge-prepare": "candidate-knowledge-only",
                         "workspace-prepare": "candidate-workspace-only",
                     }[request["action"]]
