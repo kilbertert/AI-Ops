@@ -375,7 +375,9 @@ WantedBy=multi-user.target
         """仅检查本安装器自有实例；网络/业务验收不是本机就绪检查。"""
         installed = self.read_record("installed.json")
         checks, observed = [], {"installed": installed}
-        checks.append({"id": "local-path-identity", "state": "passed"})
+        unit_present = self.unit.is_file()
+        observed["unit"] = digest(self.unit) if unit_present else "absent"
+        checks.append({"id": "local-path-identity", "state": "passed" if unit_present else "blocked"})
         for key, operation in (
             ("installed-artifact", lambda: self.release(installed)),
             ("configuration", lambda: digest(self.config / "production.env")),

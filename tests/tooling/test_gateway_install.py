@@ -836,6 +836,16 @@ def test_site_receipt_rejects_modified_metadata(host, field):
         inst.preflight(receipt["id"])
 
 
+def test_site_preflight_requires_installed_unit_even_if_process_is_healthy(host):
+    apply(host)
+    inst = host[0]
+    receipt = inst.preflight()
+    inst.unit.unlink()
+    assert inst.preflight(receipt["id"])["state"] == "expired"
+    now = inst.preflight()
+    assert now["state"] == "blocked" and {"id": "local-path-identity", "state": "blocked"} in now["checks"]
+
+
 @pytest.mark.parametrize("fault", ["closed_connection", "closed_listener", "permission", "wrong_version"])
 def test_readiness_tolerates_closed_connection_but_requires_listener(monkeypatch, fault):
     import threading
