@@ -92,7 +92,7 @@ it('prepares the selected saved tenant and keeps business pending after reload',
   ).toHaveLength(0)
 })
 
-it('requests knowledge preparation from the verified workspace and reloads its library', async () => {
+it('prepares knowledge and its scoped connection from verified task cards', async () => {
   const workspace = {
     id: `task_${'a'.repeat(32)}`,
     action: 'workspace-prepare',
@@ -117,6 +117,13 @@ it('requests knowledge preparation from the verified workspace and reloads its l
   }
   const calls: Record<string, unknown>[] = []
   let prepared = false
+  let connected = false
+  const connection = {
+    ...knowledge,
+    id: `task_${'c'.repeat(32)}`,
+    action: 'knowledge-connect',
+    result: { ...knowledge.result, connection_id: 'connection-a' },
+  }
   vi.stubGlobal(
     'fetch',
     vi.fn(async (_url, init) => {
@@ -127,7 +134,17 @@ it('requests knowledge preparation from the verified workspace and reloads its l
         prepared = true
         return Response.json(knowledge)
       }
-      return Response.json({ tasks: prepared ? [knowledge, workspace] : [workspace] })
+      if (body.knowledge_task) {
+        connected = true
+        return Response.json(connection)
+      }
+      return Response.json({
+        tasks: connected
+          ? [connection, knowledge, workspace]
+          : prepared
+            ? [knowledge, workspace]
+            : [workspace],
+      })
     }),
   )
   const screen = await render(<EnvironmentManagement />)
@@ -141,6 +158,15 @@ it('requests knowledge preparation from the verified workspace and reloads its l
   await screen.getByRole('button', { name: '刷新目录' }).click()
   await expect.element(screen.getByText('知识库编号：kb-a', { exact: true })).toBeVisible()
   await expect.element(screen.getByText('业务能力验证：未验证', { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '准备候选知识连接：same' }).click()
+  expect(calls.at(-1)).toEqual({
+    action: 'environment-task',
+    knowledge_task: knowledge.id,
+    tenant_id: 'same',
+  })
+  await expect.element(screen.getByText('候选知识连接已准备', { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '刷新目录' }).click()
+  await expect.element(screen.getByText('连接编号：connection-a', { exact: true })).toBeVisible()
 })
 
 it('saves only a draft with both revisions and preserves fields across reload', async () => {

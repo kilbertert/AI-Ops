@@ -15,6 +15,10 @@
 
 ## 一、暴露给 Dify 的端点
 
+候选knowledge-connect复用知识清单/检索两条入口，另用绑定环境、租户、工作区和单库的`ckx_` Bearer。
+任务、当前授权、目录输入与工作区唯一归属控制准入；素材按同一范围复核。此身份不读默认来源，
+不授权应用发布或公司数据访问，不新增公网入口。原共享production/debug凭据合同保持。
+
 | 面 | 路径 | 方法 | 鉴权 | 为什么它在集合里 |
 |---|---|---|---|---|
 | 知识检索适配 | `/v1/dify/retrieval` | POST | 共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY`） | Dify 的 External Knowledge API 目标。Dify 控制台里挂"外接知识库"时，运营填的 endpoint 加 `/retrieval` 就打到这里（#581）。租户与知识库集合由**我们的** `AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS` 决定，请求体里两者都没有 |

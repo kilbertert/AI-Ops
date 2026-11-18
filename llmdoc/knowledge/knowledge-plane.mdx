@@ -16,6 +16,8 @@ code:
     - src/aiops_diagnostics/knowledge/ragflow_console.py
     - src/aiops_diagnostics/knowledge/tenant_scope.py
     - src/aiops_diagnostics/dify/dify_knowledge_api.py
+    - src/aiops_diagnostics/dify/candidate_knowledge.py
+    - src/aiops_diagnostics/dify/environment_knowledge_connection.py
     - src/aiops_diagnostics/dify/dify_knowledge_datasets.py
     - src/aiops_diagnostics/dify/dify_knowledge_migration.py
     - plugins/consumer_knowledge/manifest.yaml
@@ -36,6 +38,12 @@ code:
 - 按库形式要求 dataset 出现在**该租户自己的** RAGFlow 列表里，否则与未注册同答 404——不泄漏存在/归属（tenant id 本身是公开值）。
 
 ## 来源优先级与 dataset 生命周期
+
+候选环境准备复用同一API，但`ckx_`凭据和knowledge_id命名环境、租户、工作区及单库。
+准入由最新knowledge-connect任务、当前管理授权/冻结目录及工作区唯一映射共同决定，
+每次列表/检索和素材取回前后复核。证据TTL不自动撤销长期连接；取消或输入漂移则拒绝。
+任务先记创建意图再POST，未知结果只对账；这里只准备API连接，不创建external dataset或绑定应用。
+旧production/debug来源规则保持；候选不能扩展到默认空间。操作合同见[环境手册](../../docs/agents/environment-registry.md#候选知识连接准备)。
 
 - 优先级一处持有（`knowledge_sources.py`）：**手动 DB 行（`dify_knowledge_bindings`）> env 行 > 自动派生 1:1:1**——手动赢因为它是最新的人类决定；auto 只补缺；每次检索都读表（取消勾选下一问生效，无缓存）。
 - Dify dataset 两步（ADR-0096）：create 载荷没有 `permission` 字段（默认 `only_me`——这是"知识库未找到"的真因），必须建后 PATCH，且 PATCH 要两个 external 字段一起给否则 500。幂等键 `(workspace, external_knowledge_id)`——名字无唯一约束；名字上限 40 不是 100（create 宽 PATCH 严会产生看不见的孤儿行）。
