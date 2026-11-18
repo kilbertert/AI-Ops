@@ -839,6 +839,8 @@ class OperatorCpms:
                     task.caller.effective_tenant_id,
                 ):
                     raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+        if task.authorize().scope_fingerprint != task.caller.scope_fingerprint:
+            raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
 
     def _messages(self, task):
         messages = []

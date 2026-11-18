@@ -19,6 +19,7 @@ from aiops_diagnostics.common.bounded_http import (
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.http_auth import validate_internal_token
 from aiops_diagnostics.dify.dify_trial import TrialInitiator, build_trial_scope
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.node_capabilities import require_compatible
@@ -108,6 +109,26 @@ def target(context, app_id, expected_sha256):
         or row["created_by"] != "environment-runtime"
     ):
         raise TrialRefused("ENVIRONMENT_TRIAL_APP_MISMATCH")
+    workspace = DifyWorkspaces(settings.database_file).row(manifest["tenant_id"], settings.environment)
+    consumer = SelfServiceStore(settings.database_file).app(registration["consumer_app_id"])
+    if (
+        not workspace
+        or workspace["workspace_id"] != registration["workspace_id"]
+        or workspace["setup_state"] != "created"
+        or not consumer
+        or any(
+            consumer[k] != expected
+            for k, expected in {
+                "tenant_id": manifest["tenant_id"],
+                "environment": settings.environment,
+                "workspace_id": registration["workspace_id"],
+                "entry": "consumer",
+                "created_by": "environment-runtime",
+                "revision": 1,
+            }.items()
+        )
+    ):
+        raise TrialRefused("ENVIRONMENT_TRIAL_APP_MISMATCH")
     expected = next(
         (t for t in all_targets(settings) if t.app_id == app_id and t.environment == settings.environment),
         None,
@@ -124,7 +145,7 @@ def target(context, app_id, expected_sha256):
             installation / "current/manifest.json",
         )
     )
-    return expected, binding, files["operator-manifest.json"].decode(), row, fingerprint
+    return expected, binding, files["operator-manifest.json"].decode(), row, fingerprint, workspace, consumer
 
 
 def start(context, payload):
