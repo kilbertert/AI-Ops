@@ -51,6 +51,8 @@ def ensure(console, workspace_id, settings, *, pending=None, save=None, name="")
         return row["id"]
     if not settings.dify_knowledge_api_key:
         raise ValueError("knowledge connection credential missing")
+    if not 1 <= len(name) <= 40:
+        raise ValueError("knowledge connection name exceeds Dify's 40 character limit")
     if pending is not None:
         if pending.get("attempted"):
             raise ConsoleApiError("DIFY_KNOWLEDGE_CONNECTION_UNCONFIRMED", "连接创建未确认，继续对账")
