@@ -10,7 +10,7 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient, Kno
 
 from . import candidate_knowledge as candidate
 from .dify_console_admin import ConsoleApiError, ConsoleApiSettings, DifyConsoleAdmin
-from .dify_ensure_workspace import reconcile_by_name
+from .dify_ensure_workspace import EnsureError, reconcile_by_name
 from .knowledge_connection import PATH, ensure
 
 
@@ -89,7 +89,10 @@ def run(context, path, reference, payload):
         ):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
         libraries = KbServiceClient(
-            settings.kb_service_base_url, tenant_id=scope[1], environment=scope[0]
+            settings.kb_service_base_url,
+            tenant_id=scope[1],
+            environment=scope[0],
+            timeout=getattr(settings, "kb_service_timeout_seconds", 10),
         ).list_knowledge_bases()
         if sum(row["knowledge_base_id"] == scope[3] for row in libraries) != 1:
             raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
@@ -134,6 +137,7 @@ def run(context, path, reference, payload):
                 "DIFY_CONSOLE_UNREADABLE",
             }
             or isinstance(exc, KnowledgeSearchUnavailable)
+            or isinstance(exc, EnsureError) and code == "DIFY_RECONCILE_UNAVAILABLE"
         ):
             return tasks.worker(
                 path,

@@ -2123,7 +2123,11 @@ class GatewayRuntime:
             if grant.agent_version.startswith(MEDIA_PREFIX):
                 from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
 
-                bound = KbServiceClient(self.gateway_settings.kb_service_base_url, tenant_id=grant.tenant_id)
+                bound = KbServiceClient(
+                    self.gateway_settings.kb_service_base_url,
+                    tenant_id=grant.tenant_id,
+                    timeout=self.gateway_settings.kb_service_timeout_seconds,
+                )
             else:
                 bound = client.for_tenant(grant.tenant_id) if hasattr(client, "for_tenant") else client
             body = (

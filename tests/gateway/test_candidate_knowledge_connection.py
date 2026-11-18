@@ -30,6 +30,7 @@ def connected(knowledge, tmp_path):  # noqa: F811
     settings.public_base_url = "https://gateway.example"
     settings.internal_token_secret = "candidate-root-fixture"
     settings.dify_knowledge_api_key = "legacy-fixture"
+    settings.kb_service_timeout_seconds = 17
     apis, calls, lose = [], [], [False]
     workspace = parent["result"]["workspace_id"]
     library = parent["result"]["knowledge_base_id"]
@@ -142,6 +143,7 @@ def test_real_gateway_single_scoped_library_and_cancelled_credential(connected, 
         environment_management_registry_file=str(fixture[0]),
         environment_onboarding_file=str(fixture[1]),
         kb_service_base_url=settings.kb_service_base_url,
+        kb_service_timeout_seconds=settings.kb_service_timeout_seconds,
         dify_console_base_url=settings.dify_console_base_url,
         dify_console_api_key=settings.dify_console_api_key,
         database_file=settings.database_file,
@@ -208,6 +210,7 @@ def test_scoped_retrieval_media_and_revocation_during_fetch(connected, tmp_path,
         environment_management_registry_file=str(fixture[0]),
         environment_onboarding_file=str(fixture[1]),
         kb_service_base_url=settings.kb_service_base_url,
+        kb_service_timeout_seconds=settings.kb_service_timeout_seconds,
         dify_console_base_url=settings.dify_console_base_url,
         dify_console_api_key=settings.dify_console_api_key,
     ) as client:
@@ -254,6 +257,7 @@ def test_scoped_retrieval_media_and_revocation_during_fetch(connected, tmp_path,
         fetched = []
 
         def fetch(kb, grant, **kwargs):
+            assert kb.timeout == settings.kb_service_timeout_seconds
             fetched.append(kb.tenant_id)
             return b"PNGDATA"
 
@@ -294,3 +298,37 @@ def test_expired_observation_stays_active_but_grant_revocation_refuses(connected
 def test_malformed_candidate_credentials_are_rejected(presented):
     with pytest.raises(ValueError):
         candidate.parse_token("fixture", presented)
+
+
+def test_workspace_lookup_outage_recovers_same_connection_task(connected, monkeypatch):
+    from aiops_diagnostics.dify import environment_knowledge_connection as connection
+    from aiops_diagnostics.dify.dify_ensure_workspace import EnsureError
+
+    lookup = connection.reconcile_by_name
+    job = request_job(connected)
+    with monkeypatch.context() as patch:
+
+        def unavailable(**kwargs):
+            raise EnsureError("DIFY_RECONCILE_UNAVAILABLE", "synthetic outage")
+
+        patch.setattr(connection, "reconcile_by_name", unavailable)
+        assert prepare_connection(connected, job)["state"] == "reconcile"
+    assert connection.reconcile_by_name is lookup
+    assert prepare_connection(connected, job)["state"] == "observed"
+    assert len([c for c in connected[4] if c[0] == "POST"]) == 1
+
+
+def test_old_completion_cannot_restore_newer_cancelled_connection(connected):
+    fixture, parent, settings, *_ = connected
+    job = request_job(connected)
+    assert prepare_connection(connected, job)["state"] == "observed"
+    scope = ("a", "same", parent["result"]["workspace_id"], parent["result"]["knowledge_base_id"])
+    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,cancel,result,updated_at) "
+            "SELECT ?,environment,request,'cancelled',1,result,updated_at FROM environment_tasks WHERE id=?",
+            ("task_" + "9" * 32, job["id"]),
+        )
+        conn.execute("UPDATE environment_tasks SET updated_at=? WHERE id=?", (time.time() + 60, job["id"]))
+    with pytest.raises(candidate.CandidateKnowledgeError):
+        candidate.active(settings, scope)

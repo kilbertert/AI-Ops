@@ -102,7 +102,12 @@ def namespace(scope):
 def _owned(context, scope):
     from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient, KnowledgeSearchUnavailable
 
-    client = KbServiceClient(context.settings.kb_service_base_url, tenant_id=scope[1], environment=scope[0])
+    client = KbServiceClient(
+        context.settings.kb_service_base_url,
+        tenant_id=scope[1],
+        environment=scope[0],
+        timeout=context.settings.kb_service_timeout_seconds,
+    )
     try:
         rows = [r for r in client.list_knowledge_bases() if r["knowledge_base_id"] == scope[3]]
     except KnowledgeSearchUnavailable as exc:

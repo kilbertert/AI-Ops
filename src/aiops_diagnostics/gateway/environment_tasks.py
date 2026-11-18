@@ -560,7 +560,7 @@ def active_connection(path, reference, scope):
         row = conn.execute(
             "SELECT * FROM environment_tasks WHERE environment=?"
             " AND json_extract(request,'$.action')='knowledge-connect'"
-            " AND json_extract(request,'$.tenant_id')=? ORDER BY updated_at DESC LIMIT 1",
+            " AND json_extract(request,'$.tenant_id')=? ORDER BY rowid DESC LIMIT 1",
             (environment, tenant),
         ).fetchone()
         if row is None or row["state"] != "observed" or row["cancel"]:
