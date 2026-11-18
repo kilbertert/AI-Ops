@@ -118,11 +118,18 @@ it('prepares knowledge and its scoped connection from verified task cards', asyn
   const calls: Record<string, unknown>[] = []
   let prepared = false
   let connected = false
+  let appPrepared = false
   const connection = {
     ...knowledge,
     id: `task_${'c'.repeat(32)}`,
     action: 'knowledge-connect',
     result: { ...knowledge.result, connection_id: 'connection-a' },
+  }
+  const application = {
+    ...connection,
+    id: `task_${'d'.repeat(32)}`,
+    action: 'operator-prepare',
+    result: { ...connection.result, app_id: 'app-a' },
   }
   vi.stubGlobal(
     'fetch',
@@ -138,12 +145,18 @@ it('prepares knowledge and its scoped connection from verified task cards', asyn
         connected = true
         return Response.json(connection)
       }
+      if (body.connection_task) {
+        appPrepared = true
+        return Response.json(application)
+      }
       return Response.json({
-        tasks: connected
-          ? [connection, knowledge, workspace]
-          : prepared
-            ? [knowledge, workspace]
-            : [workspace],
+        tasks: appPrepared
+          ? [application, connection, knowledge, workspace]
+          : connected
+            ? [connection, knowledge, workspace]
+            : prepared
+              ? [knowledge, workspace]
+              : [workspace],
       })
     }),
   )
@@ -167,6 +180,17 @@ it('prepares knowledge and its scoped connection from verified task cards', asyn
   await expect.element(screen.getByText('候选知识连接已准备', { exact: true })).toBeVisible()
   await screen.getByRole('button', { name: '刷新目录' }).click()
   await expect.element(screen.getByText('连接编号：connection-a', { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '准备候选管家应用：same' }).click()
+  expect(calls.at(-1)).toEqual({
+    action: 'environment-task',
+    connection_task: connection.id,
+    tenant_id: 'same',
+  })
+  await expect
+    .element(screen.getByText('候选管家应用已准备（入口停用）', { exact: true }))
+    .toBeVisible()
+  await screen.getByRole('button', { name: '刷新目录' }).click()
+  await expect.element(screen.getByText('应用编号：app-a', { exact: true })).toBeVisible()
 })
 
 it('saves only a draft with both revisions and preserves fields across reload', async () => {

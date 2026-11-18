@@ -17,6 +17,7 @@ code:
     - src/aiops_diagnostics/dify/self_service_config.py
     - src/aiops_diagnostics/dify/self_service_identity.py
     - src/aiops_diagnostics/dify/self_service_prepare.py
+    - src/aiops_diagnostics/dify/environment_operator.py
     - src/aiops_diagnostics/dify/self_service_store.py
     - src/aiops_diagnostics/dify/service_keys.py
     - src/aiops_diagnostics/dify/knowledge_connection.py
@@ -57,6 +58,10 @@ snapshot-先 → create → reconcile：Dify 只在创建时返回完整 token�
   候选knowledge-connect另用复合范围凭据，先保存创建意图；未知结果只对账，不触发原首次开通发布流程。
 
 ## 失败语义
+
+环境页operator-prepare只创建停用候选：模型取唯一已批准模板，SOP/工具取当前仓内声明，工具地址取目标草稿。
+持久UUID导入未知后只回读原app；Dify候选能力在实际创建时API/site=false，普通导入默认保持。
+候选不注册正式路由或生成app key，执行profile/消费者/知识dataset及业务验证仍独立后继。
 
 约 55 个稳定 `SETUP_*` 码——**每个码命名失败的步骤和下一步动作**（`SETUP_KEY_DIRECTORY_UNWRITABLE` → 修 systemd 保护目录；`SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS` → 标 `default:true`；`SETUP_APP_FORBIDDEN`/`SETUP_TENANT_FORBIDDEN`/`SETUP_IDENTITY_MISMATCH` → 授权问题不是配置）。`TENANT_ENVIRONMENT_NOT_ENABLED` 是唯一非 `SETUP_` 前缀成员——它来自登记准入闸，不是装配步骤。拒绝 ≠ 冲突 ≠ 流程非法——三条不同的异常路径（`self_service_api.py`）。
 
