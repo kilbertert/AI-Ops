@@ -1901,6 +1901,14 @@ def create_gateway_app(
                 status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
             )
         presented = authorization.removeprefix("Bearer ").strip()
+        matches_production = secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8"))
+        matches_debug = bool(context.settings.dify_debug_api_key) and secrets.compare_digest(
+            context.settings.dify_debug_api_key.encode("utf-8"), presented.encode("utf-8")
+        )
+        if matches_debug:
+            return debug_dify_identity(context.settings)
+        if matches_production:
+            return PRODUCTION_IDENTITY
         from aiops_diagnostics.dify import candidate_knowledge
 
         if presented.startswith(candidate_knowledge.PREFIX):
@@ -1911,16 +1919,6 @@ def create_gateway_app(
                     status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected"
                 ) from exc
             return DifyIdentity(name="candidate", candidate_scope=scope)
-        # Which slot did it match? Both comparisons are constant-time and both
-        # run, so which one matched is not observable from timing.
-        matches_production = secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8"))
-        matches_debug = bool(context.settings.dify_debug_api_key) and secrets.compare_digest(
-            context.settings.dify_debug_api_key.encode("utf-8"), presented.encode("utf-8")
-        )
-        if matches_debug:
-            return debug_dify_identity(context.settings)
-        if matches_production:
-            return PRODUCTION_IDENTITY
         raise StandardAPIError(status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected")
 
     def _libraries_for_tenant(settings: GatewayServerSettings, runtime: GatewayRuntime) -> Any:
