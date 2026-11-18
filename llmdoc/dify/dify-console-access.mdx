@@ -43,6 +43,10 @@ code:
 
 ## 工作区生命周期
 
+新环境候选准备复用此映射与创建接口，规则见[候选准备手册](../../docs/agents/environment-registry.md#候选工作区准备)：
+完整环境/租户名字在创建前保存，未知结果零命中也不重建；原客户开通默认恢复策略保持。
+候选就绪不发布或激活，应用/知识/业务仍pending，中央亲自回读，不采信浏览器或执行宿主资源编号。
+
 - 模型：`dify_workspaces(tenant_id, environment) → workspace_id + setup_state`——`(tenant,environment)` 二元组，因为两个 UPMS 能发出碰撞的 tenant_id（`environment` **不在**公司 JWT 里）。
 - `DifyWorkspaces.resolve` 返回 id 或**带码异常**（`UNRESOLVED`/`CREATING`/`FAILED`/`UNKNOWN`）——**绝不返回 `""`**：空 workspace_id = Dify 平台根 = 别人的工作区（ADR-0067）。码带下一步：UNRESOLVED→ensure-workspace；CREATING→重试；FAILED→重建；UNKNOWN→先对账别重建（Dify 没有删 workspace 的 API，重试会造永久孤儿，ADR-0068）。这四码是 `resolve` 的清单；第五码 `DIFY_WORKSPACE_AMBIGUOUS` 只在反向解析 `tenant_for_workspace` 多行命中与创建时名字对账抛出。
 - 创建 = 先认领后创建 + 租约 + 名字对账（0=安全、1=收养、>1=`AMBIGUOUS` 交人）；`ensure-workspace`（建壳）vs `ensure-ready`（插件+每工作区凭据+模板 DSL+**激活**它写的凭据——读回 `current_credential_name`，"凭据存在"≠"凭据激活"，ADR-0078 真事故）。模板 DSL 刻意不带 `model_config.model` 与 `dataset_configs`（每工作区的值还不存在）。

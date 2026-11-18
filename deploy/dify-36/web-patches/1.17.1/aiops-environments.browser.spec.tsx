@@ -38,6 +38,60 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+it('prepares the selected saved tenant and keeps business pending after reload', async () => {
+  const site = {
+    id: `task_${'a'.repeat(32)}`,
+    action: 'site-preflight',
+    state: 'observed',
+    result: {},
+    cancel_requested: false,
+    error_code: '',
+  }
+  const workspace = {
+    ...site,
+    id: `task_${'b'.repeat(32)}`,
+    action: 'workspace-prepare',
+    tenant_id: 'same',
+    result: {
+      workspace_id: 'ws-a',
+      checks: [
+        { id: 'workspace', state: 'passed' },
+        { id: 'business', state: 'pending' },
+      ],
+    },
+  }
+  const calls: Record<string, unknown>[] = []
+  let prepared = false
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      if (body.action === 'environment-drafts') return Response.json(data)
+      calls.push(body)
+      if (body.site_task) {
+        prepared = true
+        return Response.json(workspace)
+      }
+      return Response.json({ tasks: prepared ? [workspace, site] : [site] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '准备候选工作区：甲租户（same）' }).click()
+  expect(calls.at(-1)).toEqual({
+    action: 'environment-task',
+    site_task: site.id,
+    tenant_id: 'same',
+  })
+  await expect.element(screen.getByText('候选工作区已准备', { exact: true })).toBeVisible()
+  await expect.element(screen.getByText('业务能力验证：未验证', { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '刷新目录' }).click()
+  await expect.element(screen.getByText('工作区编号：ws-a', { exact: true })).toBeVisible()
+  await screen.getByRole('textbox', { name: '环境名称', exact: true }).fill('未保存')
+  expect(
+    screen.getByRole('button', { name: '准备候选工作区：甲租户（same）' }).elements(),
+  ).toHaveLength(0)
+})
+
 it('saves only a draft with both revisions and preserves fields across reload', async () => {
   const writes: Record<string, unknown>[] = []
   const catalogue = structuredClone(data)
