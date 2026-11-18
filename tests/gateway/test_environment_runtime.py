@@ -233,3 +233,24 @@ def test_missing_key_list_cannot_prove_candidate_has_zero_keys(wiring, monkeypat
     with pytest.raises(ValueError, match="active entries"):
         runtime.export(settings, payload, node, output)
     assert not output.exists()
+
+
+@pytest.mark.parametrize("change", ["expired", "other-plan"])
+def test_task_observation_must_be_fresh_and_from_the_selected_plan(wiring, change):
+    settings, payload, node, output, fixture, *_ = wiring
+    with gateway_db.connection(drafts._database(fixture[0]), write=True) as db:
+        row = db.execute(
+            "SELECT request,result FROM environment_tasks WHERE id=?", (payload["operator_task"],)
+        ).fetchone()
+        request, result = json.loads(row[0]), json.loads(row[1])
+        if change == "expired":
+            result["expires_at"] = 0
+        else:
+            request["plan"]["id"] = "plan_" + "f" * 32
+        db.execute(
+            "UPDATE environment_tasks SET request=?,result=? WHERE id=?",
+            (json.dumps(request), json.dumps(result), payload["operator_task"]),
+        )
+    with pytest.raises(ValueError, match="observation required"):
+        runtime.export(settings, payload, node, output)
+    assert not output.exists()

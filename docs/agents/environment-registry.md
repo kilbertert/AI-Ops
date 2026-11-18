@@ -376,5 +376,6 @@ aiops-admin --config /private/control-production.env environment-runtime \
 输出目录须当前身份所有且0700；已有输出拒绝。工件包含节点绑定、双端批准模型、管家SOP/工具清单、
 消费者目标与应用登记数据及摘要，秘密仅在0600成员中，公开回执只含摘要和边界。
 双端必须同环境租户/工作区/单库；任务取消/撤权/配置/应用漂移拒绝。Console全程仅GET，导出前后重核输入。
+双端任务必须来自同一有效计划且观察未过期；新计划可以复用资源，但须先重新完成观察，不借旧过期回执。
 回执明确installation、candidate-runtime、consumer-callback、knowledge-content、business、activation待验证；
 后继在受管安装事务接入工件再作正常目标登录/合法run验证，不手工逐字段改运行文件或直接激活。

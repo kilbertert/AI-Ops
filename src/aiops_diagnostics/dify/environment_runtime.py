@@ -58,12 +58,13 @@ def _applications(settings, payload):
             tasks._authorize(path, tuple(request["identity"]), row["environment"])
             tasks._current(path, request, settings.environment_onboarding_file, reconciling=True)
             if (
-                row["state"] != "observed"
+                tasks._public(row)["state"] != "observed"
                 or row["cancel"]
                 or request.get("action") != entry + "-prepare"
                 or request.get("tenant_id") != payload["tenant_id"]
                 or request["plan"]["environment"] != plan["environment"]
                 or request["plan"]["digest"] != plan["digest"]
+                or request["plan"]["id"] != plan["id"]
                 or result.get("environment") != plan["environment"]
                 or result.get("tenant_id") != payload["tenant_id"]
                 or not result.get("app_id")
