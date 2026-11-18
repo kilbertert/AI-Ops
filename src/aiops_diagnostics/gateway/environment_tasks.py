@@ -15,15 +15,6 @@ class TaskRefused(ValueError):
     pass
 
 
-def _initialize(conn):
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS environment_tasks (id TEXT PRIMARY KEY, environment TEXT NOT NULL, "
-        "request TEXT NOT NULL, state TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', "
-        "lease_until REAL NOT NULL DEFAULT 0, cancel INTEGER NOT NULL DEFAULT 0, "
-        "result TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL)"
-    )
-
-
 def _row(conn, identifier):
     if not isinstance(identifier, str) or not re.fullmatch(r"task_[0-9a-f]{32}", identifier):
         raise TaskRefused("ENVIRONMENT_TASK_UNAVAILABLE")
@@ -107,7 +98,7 @@ def submit(path, identity, identifier, reference):
         )
         task_id = "task_" + key[:32]
         with gateway_db.initialize(drafts._database(path)) as conn:
-            _initialize(conn)
+            drafts.initialize_tasks(conn)
             conn.execute(
                 "INSERT OR IGNORE INTO environment_tasks(id,environment,request,state,updated_at) "
                 "VALUES(?,?,?,'queued',?)",

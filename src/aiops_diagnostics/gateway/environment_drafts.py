@@ -192,3 +192,12 @@ def initialize_plans(connection):
         "environment TEXT NOT NULL, digest TEXT NOT NULL, inputs TEXT NOT NULL, "
         "created_at REAL NOT NULL, expires_at REAL NOT NULL)"
     )
+
+
+def initialize_tasks(conn):
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS environment_tasks (id TEXT PRIMARY KEY, environment TEXT NOT NULL, "
+        "request TEXT NOT NULL, state TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '', "
+        "lease_until REAL NOT NULL DEFAULT 0, cancel INTEGER NOT NULL DEFAULT 0, "
+        "result TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL)"
+    )

@@ -129,7 +129,7 @@ export default function EnvironmentManagement() {
   const [plan, setPlan] = useState<Plan | null>(null)
   const [tasks, setTasks] = useState<SiteTask[]>([])
   const [taskError, setTaskError] = useState('')
-  const taskView = useRef(0)
+  const taskViewRef = useRef(0)
   const [pending, setPending] = useState<(() => void) | null>(null)
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
@@ -141,7 +141,7 @@ export default function EnvironmentManagement() {
     const value = candidate?.draft ?? { ...empty(), ...current }
     setPlan(null)
     setTasks([])
-    taskView.current += 1
+    taskViewRef.current += 1
     setSelected(id)
     setDraft(value)
     setOriginal(JSON.stringify(value))
@@ -165,7 +165,7 @@ export default function EnvironmentManagement() {
       select(catalogue, ids.includes(preferred) ? preferred : ids[0] || '')
     } catch (e) {
       setPlan(null)
-      taskView.current += 1
+      taskViewRef.current += 1
       setTasks([])
       setData(null)
       setDraft(null)
@@ -266,14 +266,14 @@ export default function EnvironmentManagement() {
   }
   async function siteTasks(payload: Record<string, unknown> = { environment: selected }) {
     setTaskError('')
-    const view = taskView.current
+    const view = taskViewRef.current
     try {
       const result = await manage('environment-task', payload)
-      if (view !== taskView.current) return
+      if (view !== taskViewRef.current) return
       if ('tasks' in result) setTasks(result.tasks)
       else setTasks((current) => [result, ...current.filter((item) => item.id !== result.id)])
     } catch (e) {
-      if (view !== taskView.current) return
+      if (view !== taskViewRef.current) return
       setTasks([])
       setTaskError(e instanceof Error ? e.message : '任务读取未完成，请刷新核对')
     }

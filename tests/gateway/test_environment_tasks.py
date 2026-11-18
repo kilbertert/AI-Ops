@@ -372,3 +372,29 @@ def test_worker_builds_merged_installer_and_only_invokes_preflight(prepared, tmp
     bad = {**claim, "target": {**claim["target"], "host": "--project"}}
     with pytest.raises(ValueError, match="fixed target"):
         worker.execute(root, bad)
+
+
+def test_worker_key_must_not_reuse_existing_service_secrets(tmp_path):
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+
+    for key in ("internal_token_secret", "dify_publish_api_key", "dify_trial_api_key"):
+        settings = GatewayServerSettings(
+            data_home=tmp_path,
+            database_file=tmp_path / "db",
+            environment_task_key="x" * 40,
+            **{key: "x" * 40},
+        )
+        with pytest.raises(ValueError, match="task key must be independent"):
+            settings.validate()
+
+
+def test_absent_queue_and_unknown_id_are_not_server_errors(prepared):
+    _, _, client, _ = prepared
+    assert client.post("/v1/dify/management/environment-tasks", json={"environment": "a"}).json() == {
+        "tasks": []
+    }
+    headers = build_internal_token_headers("worker-fixture", 300, int(time.time()))
+    response = client.post(
+        "/v1/internal/environment-tasks", json=dict(id="task_" + "f" * 32, owner="a" * 32), headers=headers
+    )
+    assert response.status_code in (403, 409)

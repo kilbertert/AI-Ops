@@ -14,6 +14,7 @@ from pathlib import Path
 from aiops_diagnostics.common.bounded_http import RequestSpec, open_response
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.gateway.environment_artifacts import installer_manifest
+from aiops_diagnostics.gateway.environment_drafts import REFERENCE_PATTERN
 from aiops_diagnostics.gateway.environment_tasks import validate_receipt
 
 
@@ -24,7 +25,8 @@ def execute(root, claim):
         not re.fullmatch(r"[0-9a-f]{40}", revision)
         or not re.fullmatch(r"[0-9a-f]{64}", expected)
         or not re.fullmatch(r"[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?", environment)
-        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", target["host"])
+        or not REFERENCE_PATTERN.fullmatch(target["host"])
+        or target["host"].startswith("-")
         or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", target["user"])
         or type(target["port"]) is not int
         or not 1024 <= target["port"] <= 65535

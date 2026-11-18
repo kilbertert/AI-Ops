@@ -495,6 +495,14 @@ class GatewayServerSettings:
             self.environment = canonical_environment(self.environment)
         if not 1 <= self.internal_token_expire_seconds <= 3600:
             raise ValueError("AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS must be between 1 and 3600")
+        if self.environment_task_key and (
+            len(self.environment_task_key) < 32
+            or any(
+                value and secrets.compare_digest(self.environment_task_key, value)
+                for value in (self.internal_token_secret, self.dify_publish_api_key, self.dify_trial_api_key)
+            )
+        ):
+            raise ValueError("environment task key must be independent and at least 32 characters")
         if self.charging_status_base_url:
             parse_charging_endpoints(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
