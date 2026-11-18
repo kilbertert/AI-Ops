@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 import platform
 import pwd
@@ -18,6 +19,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import zlib
 from pathlib import Path
 
 import probe
@@ -368,6 +370,152 @@ WantedBy=multi-user.target
             self.environment,
             "existing",
         )
+
+    def site_observation(self):
+        """仅检查本安装器自有实例；网络/业务验收不是本机就绪检查。"""
+        installed = self.read_record("installed.json")
+        checks, observed = [], {"installed": installed}
+        unit_present = self.unit.is_file()
+        observed["unit"] = digest(self.unit) if unit_present else "absent"
+        checks.append({"id": "local-path-identity", "state": "passed" if unit_present else "blocked"})
+        for key, operation in (
+            ("installed-artifact", lambda: self.release(installed)),
+            ("configuration", lambda: digest(self.config / "production.env")),
+            ("registry", self.registry_digest),
+        ):
+            try:
+                value = operation()
+                if key == "installed-artifact":
+                    matched = (self.root / "current").resolve() == value
+                    observed[key] = str(value)
+                else:
+                    expected = (
+                        installed["config_sha256"]
+                        if key == "configuration"
+                        else installed.get("registry_sha256", "absent")
+                    )
+                    matched = value == expected
+                    observed[key] = value
+                checks.append({"id": key, "state": "passed" if matched else "blocked"})
+            except (OSError, ValueError, RuntimeError, tarfile.TarError, EOFError, zlib.error):
+                observed[key] = "unavailable"
+                checks.append({"id": key, "state": "blocked"})
+        pending = self.root / "pending.json"
+        observed["recovery"] = digest(pending) if pending.exists() else "none"
+        checks.append({"id": "recovery", "state": "blocked" if pending.exists() else "passed"})
+        for key, operation in (
+            ("service-readiness", lambda: self.health(installed["version"], wait=0)),
+            ("schema-inflight", lambda: self.check_database(self.release(installed))),
+        ):
+            try:
+                operation()
+                checks.append({"id": key, "state": "passed"})
+            except (
+                OSError,
+                ValueError,
+                RuntimeError,
+                subprocess.SubprocessError,
+                tarfile.TarError,
+                EOFError,
+                zlib.error,
+            ):
+                checks.append({"id": key, "state": "blocked"})
+        observed["process"] = self.command(
+            "systemctl", "show", self.name, "-p", "MainPID", "-p", "ActiveEnterTimestampMonotonic"
+        )
+        available = int(re.search(r"MemAvailable:\s+(\d+)", Path("/proc/meminfo").read_text())[1]) * 1024
+        free = min(
+            shutil.disk_usage(p.parent).free for p in (self.root, self.state, self.config, self.backups)
+        )
+        checks.append(
+            {"id": "resource-headroom", "state": "passed" if min(available, free) >= 1024**3 else "blocked"}
+        )
+        checks += [
+            {"id": key, "state": "pending"} for key in ("managed-host-identity", "formal-network", "business")
+        ]
+        public = {
+            "scope": "installed-instance-readiness-only",
+            "environment": self.environment,
+            "version": installed["version"],
+            "source_revision": installed["revision"],
+            "artifact_sha256": installed["artifact_sha256"],
+            "config_sha256": installed["config_sha256"],
+            "registry_sha256": installed.get("registry_sha256", "absent"),
+            "checks": checks,
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps({"observed": observed, "public": public}, sort_keys=True).encode()
+        ).hexdigest()
+        return fingerprint, public, {"available_memory_bytes": available, "available_disk_bytes": free}
+
+    def preflight(self, receipt=None):
+        fingerprint, public, resources = self.site_observation()
+        directory = self.root / "site-preflight"
+        now = time.time()
+        state = "blocked" if any(c["state"] == "blocked" for c in public["checks"]) else "observed"
+
+        def stored(path):
+            trusted(path, private=True)
+            if not path.is_file() or path.stat().st_nlink != 1 or path.stat().st_size > 65536:
+                raise ValueError("invalid site receipt file")
+            row = json.loads(path.read_text())
+            integrity = row.pop("integrity_sha256", "")
+            if hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest() != integrity:
+                raise ValueError("site receipt integrity mismatch")
+            result = row["result"]
+            if (
+                result["environment"] != self.environment
+                or result["id"] + ".json" != path.name
+                or result["executable"] is not False
+                or result["scope"] != "installed-instance-readiness-only"
+                or result["state"] not in {"observed", "blocked"}
+                or not all(
+                    type(result[key]) in (int, float) and math.isfinite(result[key])
+                    for key in ("created_at", "expires_at")
+                )
+                or result["expires_at"] != row["expires_at"]
+                or result["expires_at"] - result["created_at"] != 900
+            ):
+                raise ValueError("site receipt identity mismatch")
+            if row["fingerprint"] == fingerprint and any(
+                result.get(key) != value for key, value in public.items()
+            ):
+                raise ValueError("site receipt observation mismatch")
+            return row
+
+        if receipt is not None:
+            if not re.fullmatch(r"site_[0-9a-f]{32}", receipt):
+                raise ValueError("invalid site receipt")
+            trusted(directory, private=True)
+            path = directory / (receipt + ".json")
+            row = stored(path)
+            current = row["fingerprint"] == fingerprint and row["expires_at"] > now
+            return {**row["result"], "state": state if current else "expired", "executable": False}
+        directory.mkdir(mode=0o700, exist_ok=True)
+        trusted(directory, private=True)
+        records = list(directory.glob("site_*.json"))
+        if len(records) > 4096:
+            raise ValueError("site receipt archive requires operator review")
+        for path in records:
+            if not re.fullmatch(r"site_[0-9a-f]{32}\.json", path.name):
+                raise ValueError("invalid site record filename")
+            row = stored(path)
+            if row["fingerprint"] == fingerprint and row["expires_at"] > now:
+                return row["result"]
+        identifier = "site_" + hashlib.sha256((fingerprint + str(now)).encode()).hexdigest()[:32]
+        result = {
+            "id": identifier,
+            **public,
+            "state": state,
+            "executable": False,
+            "created_at": now,
+            "expires_at": now + 900,
+            "resources": resources,
+        }
+        row = {"fingerprint": fingerprint, "expires_at": now + 900, "result": result}
+        row["integrity_sha256"] = hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest()
+        write(directory / (identifier + ".json"), json.dumps(row) + "\n")
+        return result
 
     def recover(self):
         pending = self.read_record("pending.json")
@@ -747,7 +895,7 @@ WantedBy=multi-user.target
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("install", "recover"))
+    parser.add_argument("action", choices=("install", "recover", "preflight"))
     for name in ("environment", "user", "port"):
         parser.add_argument("--" + name, required=True, type=int if name == "port" else str)
     parser.add_argument("--archive", type=Path)
@@ -759,6 +907,7 @@ def main():
     parser.add_argument("--candidate-sha256")
     parser.add_argument("--expected-registry-sha256", help="目录变化必须匹配当前摘要，首次引入为absent")
     parser.add_argument("--python", default="/usr/bin/python3")
+    parser.add_argument("--receipt", help="preflight回读持久现场回执；不安装或恢复")
     args = parser.parse_args()
     os.umask(0o022)  # 代码与venv可穿越；配置/状态/账本另用0600/0700。
     signal.signal(signal.SIGTERM, probe.interrupted)
@@ -766,7 +915,7 @@ def main():
         if os.geteuid() != 0 or platform.system() != "Linux" or platform.machine() != "x86_64":
             raise ValueError("Linux x86_64 host maintenance identity required")
         inst = Installer(args.environment, args.user, args.port)
-        if args.action in ("install", "recover"):
+        if args.action in ("install", "recover", "preflight"):
             revision = Path(__file__).with_name("REVISION").read_text().strip()
             sums = Path(__file__).with_name("SHA256SUMS").read_text().splitlines()
             if not re.fullmatch(r"[a-f0-9]{40}", revision):
@@ -796,7 +945,24 @@ def main():
             if os.fstat(lock.fileno()).st_nlink != 1:
                 raise ValueError("lock hardlink refused")
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            if args.action == "recover":
+            if args.action == "preflight":
+                if any(
+                    (
+                        args.archive,
+                        args.sha256,
+                        args.config,
+                        args.config_sha256,
+                        args.candidate,
+                        args.candidate_sha256,
+                        args.expected_config_sha256,
+                        args.expected_registry_sha256,
+                    )
+                ):
+                    raise ValueError("preflight accepts no deployment input")
+                result = inst.preflight(args.receipt)
+            elif args.receipt is not None:
+                raise ValueError("receipt is only accepted by preflight")
+            elif args.action == "recover":
                 result = inst.recover()
             else:
                 if args.candidate is not None:

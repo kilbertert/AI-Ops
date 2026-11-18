@@ -63,6 +63,26 @@ production.env仍在配置根。固定包仅三份普通文件，摘要/环境/�
 已启用目录不走本候选安装，须独立设计/授权激活或升级；本流程环境/租户仍停用，不开户或切入口。
 新pending只能同版安装器恢复，旧pending先用旧版recover；权限/只读挂载/实际启动恢复仍须现场验证。
 
+## 已安装实例现场预检
+
+使用已合并的固定安装器包，仍先核SHA256SUMS、目标dev-host身份与自有服务归属：
+
+```bash
+python3 <固定安装器>/install.py preflight --environment <环境> --user <自有服务账号> --port <已登记端口>
+python3 <固定安装器>/install.py preflight --environment <同环境> --user <同账号> --port <同端口> --receipt <site_编号>
+```
+
+命令与install/recover共用环境锁，拒绝archive/config/candidate等部署参数；只核已安装实例，不冷建、不停止/启动或恢复。
+分项为固定本地身份、应用制品/配置/目录、pending、服务实际版本/监听、schema/在飞及启动资源余量；
+pending和漂移给blocked。read_record发现身份/路径/权限错误仍拒绝，不为了给结果收养未知实例。
+回执位于自有安装根site-preflight，root所有0700、文件0600；15分钟同状态复用，读取重核。
+PID/启动时间、文件摘要、分项、pending变化或到期时expired，记录中的资源数字为创建时观察值。
+历史数量超过4096须操作者有界归档，预检不自动删记录。
+
+scope=installed-instance-readiness-only/executable=false，主机受管SSH身份、正式网络、业务三项pending。
+dev-host成功只证明另行的主机访问断言，不能由此填业务passed；中央计划未接这些回执，不自动变为可执行。
+通过不代表负载容量或任意业务连接有效；后继冻结任务需要重新核当前状态与专门的网络/业务证据。
+
 候选在私有网络命名空间、新状态根、MemoryMax384MiB/CPUQuota50%限制下启动并验证。
 正式自有服务只监听回环，状态根唯一可写，启动后核health版本及主进程实际监听socket。
 不安装Nginx、不切旧入口、不激活目录；服务有长期资源上限，不把短时健康检查当负载验收。
