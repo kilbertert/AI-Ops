@@ -154,16 +154,7 @@ def run(context, path, reference, payload):
                 candidate=True,
             )
             app = console._call(scope[2], "/console/api/apps/" + app_id)
-        # 已有应用也核当前提供方，不能用保存的provider_id当永久有效配置。
-        observed_provider = console._call(
-            scope[2], "/console/api/workspaces/current/tool-provider/api/get?provider=cpms-node"
-        )
-        schema = json.loads(observed_provider["schema"])
-        if (
-            schema.get("servers") != [{"url": request["gateway_url"].rstrip("/")}]
-            or observed_provider.get("credentials", {}).get("auth_type") != "none"
-        ):
-            raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+        ensure_node_provider(console, scope[2], request["gateway_url"], verify_only=True)
         mc = app.get("model_config") or {}
         expected_tools = {t.name for t in operator_tools.tools()}
         tools = mc.get("agent_mode", {}).get("tools", [])

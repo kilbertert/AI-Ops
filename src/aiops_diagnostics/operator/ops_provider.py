@@ -21,7 +21,9 @@ def _projection_digest(schema):
     ).hexdigest()
 
 
-def ensure_node_provider(console, workspace, gateway_url, manifest=None, *, migrate=False, reconcile=False):
+def ensure_node_provider(
+    console, workspace, gateway_url, manifest=None, *, migrate=False, reconcile=False, verify_only=False
+):
     """从**声明**登记 CPMS 工具；提供方不持公司或整租户凭据。
 
     工具名、描述与参数集合都来自 `operator_tools.json`，不再从节点清单模板里抄 ——
@@ -76,6 +78,8 @@ def ensure_node_provider(console, workspace, gateway_url, manifest=None, *, migr
     if any(p.get("name") == "cpms-node" for p in providers):
         existing = console._call(workspace, PROVIDER_PATH + "/get?provider=cpms-node", follow_redirects=False)
         observed = json.loads(existing["schema"])
+        if verify_only and (observed != schema or existing.get("credentials", {}).get("auth_type") != "none"):
+            raise ValueError("node provider no longer matches the managed declaration")
         stamped = observed.get("x-aiops-projection-sha256") == _projection_digest(observed)
         if reconcile and not (
             observed.get("openapi") == "3.0.3"
@@ -135,6 +139,8 @@ def ensure_node_provider(console, workspace, gateway_url, manifest=None, *, migr
                 raise ValueError("node provider migration not confirmed by readback")
             return {"action": "migrated", "provider": "cpms-node"}
         return {"action": "unchanged", "provider": "cpms-node"}
+    if verify_only:
+        raise ValueError("node provider is missing")
     result = console._call(
         workspace,
         PROVIDER_PATH + "/add",

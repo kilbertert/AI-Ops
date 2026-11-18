@@ -183,6 +183,17 @@ def test_reconcile_managed_provider_preserves_unowned_state_and_checks_readback(
             == "unchanged"
         )
         assert not any("/update" in p for p in console.calls)
+        assert (
+            ops_provider.ensure_node_provider(console, "ws", "https://gateway.example", verify_only=True)[
+                "action"
+            ]
+            == "unchanged"
+        )
+        console.current["servers"] = [{"url": "https://other.example"}]
+        console.calls.clear()
+        with pytest.raises(ValueError):
+            ops_provider.ensure_node_provider(console, "ws", "https://gateway.example", verify_only=True)
+        assert not any("/update" in p for p in console.calls)
 
 
 @pytest.mark.parametrize(
