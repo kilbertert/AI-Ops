@@ -78,7 +78,8 @@ def run(context, path, reference, payload):
 
     class Console(DifyConsoleAdmin):
         def _call(self, *args, method="GET", **kwargs):
-            if method != "GET":
+            # 导入POST在before_create已核边界并保存意图，不在其后再发可能失败的检查。
+            if method != "GET" and args[1] != "/console/api/apps/imports":
                 boundary()
             return super()._call(*args, method=method, **kwargs)
 
