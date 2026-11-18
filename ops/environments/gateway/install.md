@@ -125,3 +125,21 @@ uv run pytest tests/tooling/test_gateway_install.py tests/tooling/test_gateway_c
 Linux的`/proc/<pid>/fd`枚举后，HTTP连接可能关闭；忽略该单个链接的ENOENT后仍核监听归属。
 权限错误、进程消失、版本或监听不匹配继续拒绝。依据[proc_pid_fd](https://man7.org/linux/man-pages/man5/proc_pid_fd.5.html)
 与[readlink错误语义](https://man7.org/linux/man-pages/man2/readlink.2.html)，不能用增加等待时间代替该区分。
+
+## 停用运行工件安装
+
+ADR0289接续D30导出格式；在上述`--candidate`调用中加`--runtime /private/runtime.tar`
+和`--runtime-sha256 <外层摘要>`。两包必须同plan/digest，固定应用/安装器仍同一合并修订。
+已有实例首次引入运行包还须`--expected-runtime-sha256 absent`；以后更换用当前账本摘要。
+运行包必须与基础候选成套输入；已有运行工件的实例不能只传基础包将接线隐式删除。
+
+运行成员放在本次release/runtime私有快照，`/etc/aiops-access-<环境>/runtime`为受管指针。
+只增加operator-profiles与consumer-targets固定引用；节点凭据、模型和成员内容不得进入公开输出。
+候选完整配置根只读挂载到正式位置，其运行指针指向新快照；候选通过前现役配置/目录/运行指针保持。
+安装与recover核所有成员及指针，只接受账本旧/新版本，第三方漂移拒绝覆盖。
+失败恢复原运行指针、配置与制品，目录revision递增，当前数据库与证据不从备份覆盖。
+重复摘要返回unchanged；现场preflight也核运行工件漂移，但通过仍是本机就绪，不是业务验收。
+
+本片只安装停用运行接线，不登记应用、发布路由或创建密钥，不授予正常业务准入。
+后继须接消费者回调/知识内容、正常身份和专属节点能力，完成候选三业务后再激活；
+不以健康检查、成员摘要或进程在线代替业务结论。旧pending使用原同版安装器恢复。
