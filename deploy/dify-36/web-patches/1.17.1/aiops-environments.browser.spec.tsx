@@ -92,6 +92,57 @@ it('prepares the selected saved tenant and keeps business pending after reload',
   ).toHaveLength(0)
 })
 
+it('requests knowledge preparation from the verified workspace and reloads its library', async () => {
+  const workspace = {
+    id: `task_${'a'.repeat(32)}`,
+    action: 'workspace-prepare',
+    tenant_id: 'same',
+    state: 'observed',
+    cancel_requested: false,
+    error_code: '',
+    result: { workspace_id: 'ws-a' },
+  }
+  const knowledge = {
+    ...workspace,
+    id: `task_${'b'.repeat(32)}`,
+    action: 'knowledge-prepare',
+    result: {
+      workspace_id: 'ws-a',
+      knowledge_base_id: 'kb-a',
+      checks: [
+        { id: 'knowledge', state: 'passed' },
+        { id: 'business', state: 'pending' },
+      ],
+    },
+  }
+  const calls: Record<string, unknown>[] = []
+  let prepared = false
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      if (body.action === 'environment-drafts') return Response.json(data)
+      calls.push(body)
+      if (body.workspace_task) {
+        prepared = true
+        return Response.json(knowledge)
+      }
+      return Response.json({ tasks: prepared ? [knowledge, workspace] : [workspace] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '准备候选知识资源：same' }).click()
+  expect(calls.at(-1)).toEqual({
+    action: 'environment-task',
+    workspace_task: workspace.id,
+    tenant_id: 'same',
+  })
+  await expect.element(screen.getByText('候选知识资源已准备', { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '刷新目录' }).click()
+  await expect.element(screen.getByText('知识库编号：kb-a', { exact: true })).toBeVisible()
+  await expect.element(screen.getByText('业务能力验证：未验证', { exact: true })).toBeVisible()
+})
+
 it('saves only a draft with both revisions and preserves fields across reload', async () => {
   const writes: Record<string, unknown>[] = []
   const catalogue = structuredClone(data)
