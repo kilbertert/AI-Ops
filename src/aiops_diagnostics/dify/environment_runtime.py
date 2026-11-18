@@ -296,8 +296,11 @@ def export(settings, payload, node_file, output):
     }
 
 
-def register_installed(settings, expected_sha256):
+def register_installed(settings, expected_sha256, receipt_fd):
     """受管安装器以目标服务身份调用；只消费现役私有工件，不接共享管理凭据。"""
+    import fcntl
+    import stat
+
     from aiops_diagnostics.gateway import gateway_schema
     from aiops_diagnostics.gateway.environment_artifacts import runtime_files
     from aiops_diagnostics.gateway.environment_projection import validate_candidate
@@ -306,6 +309,23 @@ def register_installed(settings, expected_sha256):
     from .self_service_store import SelfServiceStore
 
     root = Path(f"/etc/aiops-access-{settings.environment}")
+    app = Path(f"/opt/aiops-access-{settings.environment}")
+    receipt_path = app / "installed.json"
+    observed = os.fstat(receipt_fd)
+    if (
+        observed.st_uid != 0
+        or observed.st_mode & 0o077
+        or observed.st_nlink != 1
+        or not stat.S_ISREG(observed.st_mode)
+        or observed.st_size > 65536
+        or fcntl.fcntl(receipt_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY
+        or receipt_path.is_symlink()
+        or (observed.st_dev, observed.st_ino) != (receipt_path.stat().st_dev, receipt_path.stat().st_ino)
+    ):
+        raise ValueError("root-owned installation receipt descriptor required")
+    with os.fdopen(os.dup(receipt_fd), "rb") as stream:
+        stream.seek(0)
+        installed = json.load(stream)
     runtime = root / "runtime"
     if (
         settings.execution_environment != settings.environment
@@ -323,6 +343,24 @@ def register_installed(settings, expected_sha256):
         raise ValueError("runtime registration requires current schema")
 
     def current():
+        latest = receipt_path.stat()
+        if receipt_path.is_symlink() or (latest.st_dev, latest.st_ino) != (observed.st_dev, observed.st_ino):
+            raise ValueError("installation receipt replaced during registration")
+        if (app / "pending.json").exists():
+            raise ValueError("unfinished installation prevents registration")
+        if (
+            installed["environment"] != settings.environment
+            or installed["runtime_sha256"] != expected_sha256
+            or (app / "current").resolve() != app / "releases" / installed["release"]
+            or runtime.resolve() != app / "releases" / installed["runtime_release"] / "runtime"
+            or json.loads((app / "current/manifest.json").read_text())["revision"] != installed["revision"]
+            or json.loads((app / "current/manifest.json").read_text())["version"] != installed["version"]
+            or hashlib.sha256((root / "production.env").read_bytes()).hexdigest()
+            != installed["config_sha256"]
+            or hashlib.sha256((root / "registry/environment.json").read_bytes()).hexdigest()
+            != installed["registry_sha256"]
+        ):
+            raise ValueError("installed runtime receipt mismatch")
         validate_candidate(
             root / "production.env", root / "registry/environment.json", settings.environment, runtime=runtime
         )

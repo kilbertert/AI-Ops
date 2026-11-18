@@ -1232,10 +1232,13 @@ def test_fixed_installer_registers_without_restart_or_deployment_input(host, mon
     original = inst.command
     calls = []
 
-    def command(*args):
+    def command(*args, **kwargs):
         calls.append(args)
         if "environment-runtime-register" in args:
             assert args[:4] == ("runuser", "-u", inst.user, "--")
+            descriptor = int(args[-1])
+            assert kwargs["pass_fds"] == (descriptor,)
+            assert args[-2] == "--receipt-fd"
             return json.dumps(
                 dict(
                     environment="test",

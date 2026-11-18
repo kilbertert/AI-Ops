@@ -74,8 +74,8 @@ class Installer:
         self.unit = Path("/etc/systemd/system") / (self.name + ".service")
         self.backups = Path("/var/backups") / self.name
 
-    def command(self, *args):
-        return probe.command(*args)
+    def command(self, *args, **kwargs):
+        return probe.command(*args, **kwargs)
 
     def environment_args(self, state, config=None):
         return [
@@ -519,19 +519,23 @@ WantedBy=multi-user.target
             raise ValueError("current release drift prevents registration")
         self.health(installed["version"], wait=0)
         self.check_database(release)
-        result = json.loads(
-            self.command(
-                "runuser",
-                "-u",
-                self.user,
-                "--",
-                *self.environment_args(self.state),
-                str(release / "venv/bin/aiops-admin"),
-                "environment-runtime-register",
-                "--sha256",
-                installed["runtime_sha256"],
+        with (self.root / "installed.json").open("rb") as receipt:
+            result = json.loads(
+                self.command(
+                    "runuser",
+                    "-u",
+                    self.user,
+                    "--",
+                    *self.environment_args(self.state),
+                    str(release / "venv/bin/aiops-admin"),
+                    "environment-runtime-register",
+                    "--sha256",
+                    installed["runtime_sha256"],
+                    "--receipt-fd",
+                    str(receipt.fileno()),
+                    pass_fds=(receipt.fileno(),),
+                )
             )
-        )
         if (
             result.get("environment") != self.environment
             or result.get("runtime_sha256") != installed["runtime_sha256"]

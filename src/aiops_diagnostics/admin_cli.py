@@ -205,12 +205,13 @@ def environment_runtime_command(
 def environment_runtime_register_command(
     context: typer.Context,
     sha256: Annotated[str, typer.Option("--sha256", help="现役运行工件的受管摘要")],
+    receipt_fd: Annotated[int, typer.Option("--receipt-fd", help="仅安装器传入的只读账本描述符")],
 ) -> None:
     """登记已安装的停用工作区与双端应用，不发布或启用。"""
     from aiops_diagnostics.dify.environment_runtime import register_installed
 
     try:
-        result = register_installed(_settings_with_config_file(context), sha256)
+        result = register_installed(_settings_with_config_file(context), sha256, receipt_fd)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
         typer.echo(json.dumps({"error": "ENVIRONMENT_RUNTIME_REGISTRATION_REFUSED"}))
         raise typer.Exit(1) from exc

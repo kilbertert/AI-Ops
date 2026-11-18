@@ -322,6 +322,17 @@ class SelfServiceStore:
         ]
         with self.connection() as db:
             verify()
+            from aiops_diagnostics.gateway.gateway_store import JOB_TABLES
+
+            active_rows = [(t, "status", ("queued", "running")) for t in JOB_TABLES]
+            active_rows += [
+                ("agent_runs", "state", ("issued", "running")),
+                ("chat_dify_runs", "state", ("running", "running")),
+                ("operator_setup_jobs", "state", ("pending", "running")),
+            ]
+            for table, column, active in active_rows:
+                if db.execute(f"SELECT 1 FROM {table} WHERE {column} IN (?,?) LIMIT 1", active).fetchone():
+                    raise SetupConflict("SETUP_INFLIGHT_WORK")
             existing_workspace = db.execute(
                 "SELECT * FROM dify_workspaces WHERE tenant_id=? AND environment=?", (tenant, environment)
             ).fetchone()

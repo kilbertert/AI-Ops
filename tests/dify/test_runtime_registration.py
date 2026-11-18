@@ -140,3 +140,28 @@ def test_concurrent_registration_has_one_commit_and_one_unchanged_receipt(candid
     assert sorted(results) == [False, True]
     assert len(rows(candidate)["operator_apps"]) == 2
     assert len(rows(candidate)["dify_workspaces"]) == 1
+
+
+def test_inflight_work_refuses_registration_before_any_write(candidate):
+    from aiops_diagnostics.gateway.gateway_store import GatewayStore
+
+    store = GatewayStore(candidate[0].path)
+    with store._connection(write=True) as db:
+        db.execute(
+            "INSERT INTO assistant_questions(qa_id,scope_fingerprint,question,status,"
+            "created_at,updated_at,deadline_at) "
+            "VALUES('q','s','q','running','n','n','n')"
+        )
+    before = rows(candidate)
+    with pytest.raises(SetupConflict, match="INFLIGHT"):
+        register(candidate)
+    assert rows(candidate) == before
+
+
+def test_direct_admin_without_managed_receipt_cannot_register(tmp_path):
+    from typer.testing import CliRunner
+
+    from aiops_diagnostics.admin_cli import admin_app
+
+    result = CliRunner().invoke(admin_app, ["environment-runtime-register", "--sha256", "a" * 64])
+    assert result.exit_code != 0
