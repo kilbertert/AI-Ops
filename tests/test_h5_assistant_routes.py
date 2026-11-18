@@ -157,7 +157,8 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
     (root / "root").mkdir()
     (root / "root" / "index.html").write_text("STATIC-FALLBACK", encoding="utf-8")
     (root / "site.conf").write_text(
-        f"server {{\n  listen 127.0.0.1:{proxy_port};\n  root {root / 'root'};\n  index index.html;\n{site}\n}}\n",
+        f"server {{\n  listen 127.0.0.1:{proxy_port};\n  root {root / 'root'};\n"
+        f"  index index.html;\n{site}\n}}\n",
         encoding="utf-8",
     )
     # 前台跑：nginx 默认 daemonize，Popen 的 pid 是启动器而不是 master，
