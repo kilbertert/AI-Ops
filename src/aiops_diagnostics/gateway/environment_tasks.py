@@ -117,6 +117,7 @@ def submit_workspace(
     *,
     knowledge=False,
     connect=False,
+    application=False,
     binding="",
     target_binding="",
 ):
@@ -129,11 +130,17 @@ def submit_workspace(
         _authorize(path, identity, source["environment"])
         _current(path, request, reference)
         parent_action = (
-            "knowledge-prepare" if connect else "workspace-prepare" if knowledge else "site-preflight"
+            "knowledge-connect"
+            if application
+            else "knowledge-prepare"
+            if connect
+            else "workspace-prepare"
+            if knowledge
+            else "site-preflight"
         )
         if request.get("action", "site-preflight") != parent_action or source["state"] != "observed":
             raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
-        if knowledge or connect:
+        if knowledge or connect or application:
             if request["tenant_id"] != tenant_id or _public(source)["state"] != "observed":
                 raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
         else:
@@ -144,14 +151,22 @@ def submit_workspace(
         tenant = next((t for t in json.loads(proposed["body"])["tenants"] if t["id"] == tenant_id), None)
         if tenant is None:
             raise TaskRefused("ENVIRONMENT_TASK_TENANT_INVALID")
-        action = "knowledge-connect" if connect else "knowledge-prepare" if knowledge else "workspace-prepare"
+        action = (
+            "operator-prepare"
+            if application
+            else "knowledge-connect"
+            if connect
+            else "knowledge-prepare"
+            if knowledge
+            else "workspace-prepare"
+        )
         request = {
             **request,
             "identity": identity,
             "action": action,
             "tenant_id": tenant_id,
             "tenant_name": tenant["name"],
-            "site_task": request["site_task"] if knowledge or connect else identifier,
+            "site_task": request["site_task"] if knowledge or connect or application else identifier,
             **(
                 {
                     "workspace_task": identifier,
@@ -160,6 +175,16 @@ def submit_workspace(
                     "target_binding": target_binding,
                 }
                 if knowledge
+                else {}
+            ),
+            **(
+                {
+                    "connection_task": identifier,
+                    "connection_id": json.loads(source["result"])["connection_id"],
+                    "binding": binding,
+                    "gateway_url": json.loads(proposed["body"])["gateway_url"],
+                }
+                if application
                 else {}
             ),
             **(
@@ -179,7 +204,7 @@ def submit_workspace(
                 "digest": request["plan"]["digest"],
                 "action": action,
                 "tenant_id": tenant_id,
-                **({"binding": binding} if knowledge or connect else {}),
+                **({"binding": binding} if knowledge or connect or application else {}),
             }
         )
         task_id = "task_" + digest[:32]
@@ -214,16 +239,23 @@ def workspace_request(path, reference, identifier, owner, *, reconciling=True, a
                 validate_receipt(json.loads(source["result"]), row["environment"])
             except TaskRefused as exc:
                 raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED") from exc
-            if action in {"knowledge-prepare", "knowledge-connect"}:
+            if action in {"knowledge-prepare", "knowledge-connect", "operator-prepare"}:
                 parent = _row(conn, request["workspace_task"])
                 if _public(parent)["state"] != "observed":
                     raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
                 if (
-                    action == "knowledge-connect"
+                    action in {"knowledge-connect", "operator-prepare"}
                     and _public(_row(conn, request["knowledge_task"]))["state"] != "observed"
                 ):
                     raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
-        if action in {"knowledge-prepare", "knowledge-connect"} and not request.get("resources"):
+                if (
+                    action == "operator-prepare"
+                    and _public(_row(conn, request["connection_task"]))["state"] != "observed"
+                ):
+                    raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+        if action in {"knowledge-prepare", "knowledge-connect", "operator-prepare"} and not request.get(
+            "resources"
+        ):
             previous = conn.execute(
                 "SELECT request FROM environment_tasks WHERE environment=? AND id!=?"
                 " AND json_extract(request,'$.action')=?"
@@ -246,7 +278,7 @@ def save_knowledge_progress(path, reference, identifier, owner, resources, *, ac
         beginning = resources.get("knowledge_create", {}).get("attempted") and not stored.get(
             "resources", {}
         ).get("knowledge_create", {}).get("attempted")
-        if action == "knowledge-connect":
+        if action in {"knowledge-connect", "operator-prepare"}:
             beginning = resources.get("attempted") and not stored.get("resources", {}).get("attempted")
         if beginning:
             _authorize(path, tuple(stored["identity"]), row["environment"])
@@ -520,6 +552,7 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
                 "workspace-prepare",
                 "knowledge-prepare",
                 "knowledge-connect",
+                "operator-prepare",
             }:
                 if not internal_workspace:
                     raise TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
@@ -529,6 +562,7 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
                     or result.get("scope")
                     != {
                         "knowledge-connect": "candidate-knowledge-connection-only",
+                        "operator-prepare": "candidate-operator-application-only",
                         "knowledge-prepare": "candidate-knowledge-only",
                         "workspace-prepare": "candidate-workspace-only",
                     }[request["action"]]
