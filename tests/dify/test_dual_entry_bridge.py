@@ -39,6 +39,13 @@ def test_candidate_workspace_request_crosses_bridge_but_resource_claims_do_not(b
     assert status != 400
     forwarded = [c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]
     assert forwarded[0]["body"] == {"site_task": body["site_task"], "tenant_id": "same"}
+    assert (
+        _manage(
+            {"action": "environment-task", "workspace_task": body["site_task"], "tenant_id": "same"},
+            address=bridge,
+        )[0]
+        != 400
+    )
     for extra in ({"workspace_id": "forged"}, {"tenant_id": ""}, {"site_task": "other"}):
         assert _manage({**body, **extra}, address=bridge)[0] == 400
 
