@@ -290,9 +290,12 @@ def _next(path, reference):
         candidates = [
             dict(row)
             for row in conn.execute(
-                "SELECT * FROM environment_tasks WHERE state IN ('queued','running','reconcile') "
-                "AND lease_until<=? AND (state!='reconcile' OR updated_at<=?) ORDER BY updated_at LIMIT 64",
-                (now, now - 60),
+                "SELECT * FROM environment_tasks AS task WHERE state IN ('queued','running','reconcile') "
+                "AND lease_until<=? AND (state!='reconcile' OR updated_at<=?) "
+                "AND NOT EXISTS (SELECT 1 FROM environment_tasks AS live "
+                "WHERE live.environment=task.environment AND live.id!=task.id "
+                "AND live.state='running' AND live.lease_until>?) ORDER BY updated_at LIMIT 64",
+                (now, now - 60, now),
             )
         ]
     for row in candidates:
