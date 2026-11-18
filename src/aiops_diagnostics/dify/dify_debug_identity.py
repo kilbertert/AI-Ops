@@ -54,6 +54,7 @@ class DifyIdentity:
     fixed_tenant: str | None = None
     #: 可用的 knowledge_id 子集；None = 不额外收窄。
     knowledge_ids: tuple[str, ...] | None = None
+    candidate_scope: tuple[str, str, str, str] | None = None
 
     @property
     def is_debug(self) -> bool:
