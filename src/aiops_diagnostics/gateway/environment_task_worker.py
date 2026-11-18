@@ -216,6 +216,8 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
     if not claim["claimed"]:
         return claim["task"]
     identifier = claim["id"] if identifier is None else identifier
+    if claim.get("action", "site-preflight") == "workspace-prepare":
+        return request({"id": identifier, "owner": owner, "prepare": "workspace"})
     try:
         result = execute(root, claim)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):
