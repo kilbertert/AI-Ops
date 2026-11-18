@@ -55,6 +55,12 @@ export const entryLabels: Record<EntryKey, string> = {
 }
 
 export const messages: Record<string, string> = {
+  ENVIRONMENT_TASK_WORKER_UNAVAILABLE: '现场预检执行端尚未配置；原草稿与文件预检仍可使用',
+  ENVIRONMENT_TASK_UNAVAILABLE: '现场预检任务不可用或当前账号无权访问，请刷新核对',
+  ENVIRONMENT_TASK_PLAN_BLOCKED: '文件或配置预检尚未通过，不能发起现场任务',
+  ENVIRONMENT_TASK_PLAN_EXPIRED: '冻结计划已过期或输入改变，请重新预检',
+  ENVIRONMENT_TASK_TARGET_UNCONFIRMED: '远端结果尚未确认，请核对原任务；不要重复安装或开户',
+
   ENVIRONMENT_DRAFT_REVISION_CONFLICT: '草稿已被其他管理员更新，请刷新后重新确认修改',
   ENVIRONMENT_DRAFT_INVALID: '草稿格式无效，请核对编号、名称、地址和租户是否重复',
   ENVIRONMENT_REFERENCE_INVALID: '部署目标与凭据须使用已登记的逻辑引用',

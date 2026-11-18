@@ -33,6 +33,7 @@ code:
     - ops/nginx/business-environment-ingress.md
     - ops/environments/gateway/
     - src/aiops_diagnostics/gateway/environment_artifacts.py
+    - src/aiops_diagnostics/gateway/environment_task_worker.py
     - docs/agents/environment-onboarding-preflight.md
     - tests/tooling/test_gateway_candidate.py
     - tests/tooling/test_gateway_install.py
@@ -87,7 +88,7 @@ code:
 | kb-service 补丁 | 36 | `deploy/kb-service/build.py`+`verify_defaults.py`；dev-host cp+原子替换+只重启适配器 |
 | 宿主机 nginx 片段 | 41/36 vhosts | `ops/nginx/*.conf` 作已识别制品安装（`--artifact-sha256`+`nginx -t`+reload）；**在 CD 之外**，记 `deploy/manual-deploys.md` |
 | 最小Gateway候选预演 | 已登记目标服务宿主 | `ops/environments/gateway/build.sh`按目标Python生成合并离线制品，`probe.py`在独立根启动临时受限双实例并清理；不改旧服务或准入，健康负载不等于业务容量 |
-| 最小Gateway独立安装 | 已登记目标服务宿主 | `build-installer.sh`携同修订artifact_checks.py，与应用包分别固定摘要；管理计划/P3共用只读成员校验，冷安装不依赖预装AI-Ops；`install.py`只管理`aiops-access-<环境>`，同计划不重启，同配置/同schema/零在飞升级，pending要求先恢复；支持固定停用候选的env/私有目录成套切换与递增恢复；preflight持久回读仅核已装实例就绪，网络/业务独立未验；不切旧入口或启用租户 |
+| 最小Gateway独立安装 | 已登记目标服务宿主 | `build-installer.sh`携同修订artifact_checks.py，与应用包分别固定摘要；管理计划/P3共用只读成员校验，冷安装不依赖预装AI-Ops；`install.py`只管理`aiops-access-<环境>`，同计划不重启，同配置/同schema/零在飞升级，pending要求先恢复；支持固定停用候选的env/私有目录成套切换与递增恢复；preflight持久回读仅核已装实例就绪；中央任务由独立HMAC运维worker领取，只读失联先核对，网络/业务独立未验；不切旧入口或启用租户 |
 | 环境工具HTTPS扩展 | 既有TLS虚拟主机 | `build-ingress.sh`从合并修订共享节点路由/客服片段，生成固定回环上游和实际连接来源限制；每路径校验TLS/来源，Gateway保留运行授权；安装需独立批准，不等于目标已开通 |
 | Gateway+节点栈离线包（env95，已撤回的历史） | 95 `/opt/aiops-95` | `ops/environments/env95/`：dev-host 上 `build.sh`/`build-node.sh` 产 wheel+py313 wheelhouse+SHA256SUMS → `dev-host cp --artifact-sha256` → `install.sh`（临时候选 `/health` 版本==制品修订才切 :8788）/`upgrade.sh`（限同 schema+零在途）/`retire.sh`（move-only 可续跑）；**文件拷贝类——无 CD、95 上无 .git**；机制异于 41：venv+wheel、候选先健康后切换，不是 src rsync 原位替换 |
 | GitLab 镜像 | 公司 GitLab ai-products/ai-ops | `gitlab-mirror.yml` 镜像每个 push 的 ref。**镜像不是运行源**——镜像成功≠CI/合并/部署；其独立失败≠部署失败 |
