@@ -261,6 +261,7 @@ class DifyWorkspaces:
         owner: str,
         lease_seconds: float,
         allow_unknown: bool = False,
+        name: str = "",
     ) -> bool:
         """**先占位**：原子地拿到"由我来建"的权利，成功返回 True。
 
@@ -294,8 +295,8 @@ class DifyWorkspaces:
                 try:
                     connection.execute(
                         "INSERT INTO dify_workspaces (tenant_id, environment, workspace_id, setup_state,"
-                        " lease_owner, lease_expires_at, last_error, created_at, updated_at)"
-                        " VALUES (?, ?, '', 'creating', ?, ?, '', ?, ?)",
+                        " lease_owner, lease_expires_at, last_error, created_at, updated_at, workspace_name)"
+                        " VALUES (?, ?, '', 'creating', ?, ?, '', ?, ?, ?)",
                         (
                             tenant_id,
                             environment,
@@ -303,6 +304,7 @@ class DifyWorkspaces:
                             format_stored_time(expires),
                             format_stored_time(now),
                             format_stored_time(now),
+                            name,
                         ),
                     )
                 except sqlite3.IntegrityError:
@@ -321,8 +323,9 @@ class DifyWorkspaces:
             # 已过期的 creating 可能已经建成了，对账（调用方）来决定要不要补 UUID。
             connection.execute(
                 "UPDATE dify_workspaces SET setup_state = 'creating', lease_owner = ?,"
-                " lease_expires_at = ?, updated_at = ? WHERE tenant_id = ? AND environment = ?",
-                (owner, format_stored_time(expires), format_stored_time(now), tenant_id, environment),
+                " lease_expires_at = ?, updated_at = ?, workspace_name = ?"
+                " WHERE tenant_id = ? AND environment = ?",
+                (owner, format_stored_time(expires), format_stored_time(now), name, tenant_id, environment),
             )
         return True
 

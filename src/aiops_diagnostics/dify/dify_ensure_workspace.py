@@ -151,6 +151,7 @@ def ensure_workspace(
     owner: str | None = None,
     company: str = "",
     log: Any = None,
+    reconcile_unknown_only: bool = False,
 ) -> EnsureOutcome:
     """幂等、可恢复地建出 ``(tenant_id, environment)`` 的 workspace。
 
@@ -158,7 +159,7 @@ def ensure_workspace(
     不会从 ``failed`` 里静默返回成功 —— 明确失败会被抛成异常，因为它需要人看见。
     """
     environment = canonical_environment(environment)
-    # 公司名只影响**建的那一刻**取什么名字。取到之后写进表，以后对账按那一列 ——
+    # 公司名只影响**建的那一刻**取什么名字。发请求前写进表，以后对账按那一列 ——
     # 公司改名不会让对账失效（见 workspace_name 的 docstring）。
     name = workspace_name(environment, tenant_id, company=company or "")
     lease_owner = owner or _lease_owner()
@@ -197,6 +198,8 @@ def ensure_workspace(
                 return EnsureOutcome(
                     tenant_id, environment, "created", found, "对账命中 1 个：补写 UUID，未重建"
                 )
+            if reconcile_unknown_only:
+                raise EnsureError("DIFY_WORKSPACE_CREATE_UNCONFIRMED", "已发出的创建未确认，继续对账，不重建")
             # 0 个 ⇒ 安全，接管并重建（下面继续）。
 
     # 走到这里只有三种起点：没有行 / failed / （creating 或 unknown 且对账命中 0 个）。
@@ -208,6 +211,7 @@ def ensure_workspace(
         owner=lease_owner,
         lease_seconds=lease_seconds,
         allow_unknown=reconciled_unknown,
+        name=name,
     ):
         latest = workspaces.row(tenant_id, environment) or {}
         return EnsureOutcome(

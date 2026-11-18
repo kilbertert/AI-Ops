@@ -33,6 +33,16 @@ def _manage(body, **overrides):
     )
 
 
+def test_candidate_workspace_request_crosses_bridge_but_resource_claims_do_not(bridge, upstream):  # noqa: F811
+    body = {"action": "environment-task", "site_task": "task_" + "a" * 32, "tenant_id": "same"}
+    status, _ = _manage(body, address=bridge)
+    assert status != 400
+    forwarded = [c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]
+    assert forwarded[0]["body"] == {"site_task": body["site_task"], "tenant_id": "same"}
+    for extra in ({"workspace_id": "forged"}, {"tenant_id": ""}, {"site_task": "other"}):
+        assert _manage({**body, **extra}, address=bridge)[0] == 400
+
+
 def test_dual_entry_payload_crosses_the_real_bridge(bridge, upstream):  # noqa: F811
     status, body = _manage(
         {
