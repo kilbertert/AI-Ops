@@ -1901,8 +1901,6 @@ def create_gateway_app(
                 status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
             )
         presented = authorization.removeprefix("Bearer ").strip()
-        # Which slot did it match? Both comparisons are constant-time and both
-        # run, so which one matched is not observable from timing.
         matches_production = secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8"))
         matches_debug = bool(context.settings.dify_debug_api_key) and secrets.compare_digest(
             context.settings.dify_debug_api_key.encode("utf-8"), presented.encode("utf-8")
@@ -1911,6 +1909,16 @@ def create_gateway_app(
             return debug_dify_identity(context.settings)
         if matches_production:
             return PRODUCTION_IDENTITY
+        from aiops_diagnostics.dify import candidate_knowledge
+
+        if presented.startswith(candidate_knowledge.PREFIX):
+            try:
+                scope = candidate_knowledge.parse_token(context.settings.internal_token_secret, presented)
+            except ValueError as exc:
+                raise StandardAPIError(
+                    status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected"
+                ) from exc
+            return DifyIdentity(name="candidate", candidate_scope=scope)
         raise StandardAPIError(status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected")
 
     def _libraries_for_tenant(settings: GatewayServerSettings, runtime: GatewayRuntime) -> Any:
@@ -1981,11 +1989,19 @@ def create_gateway_app(
         rather than a proxy. The debug identity narrows one step further: only
         the knowledge ids its tool plan names are reachable through it.
         """
-        sources = _knowledge_sources(context.settings, context.store)
         try:
             request = parse_dify_retrieval_request(payload, max_top_k=context.settings.kb_search_max_results)
         except DifyRequestError as exc:
             raise StandardAPIError(status.HTTP_400_BAD_REQUEST, exc.code, exc.message) from exc
+        if identity.candidate_scope:
+            from aiops_diagnostics.dify.candidate_knowledge import CandidateKnowledgeError, retrieve
+
+            try:
+                return retrieve(context, identity.candidate_scope, request)
+            except CandidateKnowledgeError as exc:
+                raise StandardAPIError(exc.status, exc.code, str(exc)) from exc
+
+        sources = _knowledge_sources(context.settings, context.store)
 
         binding = sources.resolve(
             request.knowledge_id, fetch_libraries=_libraries_for_tenant(settings, context.runtime)
@@ -2087,6 +2103,13 @@ def create_gateway_app(
         # ONE resolver for both routes (#925). Before this, retrieval and listing
         # each merged the same two tables themselves — two implementations of one
         # rule, which is the shape that drifts.
+        if identity.candidate_scope:
+            from aiops_diagnostics.dify.candidate_knowledge import CandidateKnowledgeError, catalogue
+
+            try:
+                return catalogue(context, identity.candidate_scope)
+            except CandidateKnowledgeError as exc:
+                raise StandardAPIError(exc.status, exc.code, str(exc)) from exc
         sources = _knowledge_sources(context.settings, context.store)
         items: list[dict[str, Any]] = []
         bindings = sources.visible(identity, fetch_libraries=_libraries_for_tenant(settings, context.runtime))

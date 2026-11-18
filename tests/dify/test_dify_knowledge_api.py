@@ -121,7 +121,7 @@ def _chunk(
 def _client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> TestClient:
     settings = GatewayServerSettings(
         data_home=tmp_path,
-        database_file=tmp_path / "gateway.db",
+        database_file=overrides.pop("database_file", tmp_path / "gateway.db"),
         server_config_file=tmp_path / "production.env",
         dify_knowledge_api_key=overrides.pop("dify_knowledge_api_key", DIFY_KEY),
         dify_knowledge_bindings=overrides.pop("dify_knowledge_bindings", BINDINGS),
@@ -683,6 +683,14 @@ def test_knowledge_list_returns_the_registry_not_ragflow(tmp_path: Path) -> None
     assert [item["knowledge_id"] for item in body["knowledge_items"]] == ["kb-customer", "kb-other"]
     assert body["knowledge_items"][0]["knowledge_base_ids"] == ["KB-A"]
     assert body["total"] == 2
+
+
+def test_legacy_opaque_credential_with_candidate_prefix_still_matches(tmp_path: Path) -> None:
+    key = "ckx_legacy-synthetic-key"
+    client = _client(tmp_path, _Runtime(), dify_knowledge_api_key=key)
+    response = client.get("/v1/dify/knowledge", headers={"Authorization": "Bearer " + key})
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
 
 
 def test_knowledge_list_needs_the_same_credential_as_retrieval(tmp_path: Path) -> None:

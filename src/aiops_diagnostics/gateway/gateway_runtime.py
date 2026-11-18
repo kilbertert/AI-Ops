@@ -2118,14 +2118,25 @@ class GatewayRuntime:
             # (code=102 document not found, observed as deterministic 404s in
             # the #175 C4 video canary on 2026-09-12).
             client = self.kb_search_client
-            bound = client.for_tenant(grant.tenant_id) if hasattr(client, "for_tenant") else client
+            from aiops_diagnostics.dify.candidate_knowledge import MEDIA_PREFIX
+
+            if grant.agent_version.startswith(MEDIA_PREFIX):
+                from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
+
+                bound = KbServiceClient(
+                    self.gateway_settings.kb_service_base_url,
+                    tenant_id=grant.tenant_id,
+                    timeout=self.gateway_settings.kb_service_timeout_seconds,
+                )
+            else:
+                bound = client.for_tenant(grant.tenant_id) if hasattr(client, "for_tenant") else client
             body = (
                 bound.fetch_media(grant)
                 if range_header is None
                 else bound.fetch_media(grant, range_header=range_header)
             )
             # WF01素材取回期间可能撤回或过期，读取前的检查不能覆盖这段等待。
-            if grant.agent_version.startswith("consumer:") and not _is_active(grant):
+            if grant.agent_version.startswith(("consumer:", MEDIA_PREFIX)) and not _is_active(grant):
                 raise MediaAccessDenied("consumer media is no longer active")
             return body
 
@@ -2208,6 +2219,20 @@ class GatewayRuntime:
                         for block in snapshot.get("blocks", [])
                     )
                 except Exception:
+                    return False
+            from aiops_diagnostics.dify import candidate_knowledge
+
+            if grant.agent_version.startswith(candidate_knowledge.MEDIA_PREFIX):
+                try:
+                    scope = candidate_knowledge.parse_id(
+                        grant.agent_version.removeprefix(candidate_knowledge.MEDIA_PREFIX)
+                    )
+                    candidate_knowledge.active(self.gateway_settings, scope)
+                    return (
+                        tenant_matches(grant.tenant_id, candidate_knowledge.namespace(scope))
+                        and grant.knowledge_base_id == scope[3]
+                    )
+                except (ValueError, OSError, RuntimeError):
                     return False
             if self.agent_store is None:
                 return False

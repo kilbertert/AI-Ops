@@ -213,6 +213,30 @@ def task(context, session, payload):
             return environment_tasks.inspect(
                 path, identity, environment=payload["environment"], reference=reference
             )
+        if set(payload) == {"knowledge_task", "tenant_id"}:
+            from .environment_knowledge_connection import binding
+
+            if not all(
+                getattr(context.settings, key, "")
+                for key in (
+                    "internal_token_secret",
+                    "dify_knowledge_api_key",
+                    "dify_console_base_url",
+                    "dify_console_api_key",
+                    "kb_service_base_url",
+                    "environment_task_key",
+                )
+            ):
+                raise auth.SetupRefused("SETUP_KNOWLEDGE_CONFIG_REQUIRED")
+            return environment_tasks.submit_workspace(
+                path,
+                identity,
+                payload["knowledge_task"],
+                payload["tenant_id"],
+                reference,
+                connect=True,
+                binding=binding(context.settings),
+            )
         if set(payload) in ({"id"}, {"id", "cancel"}) and payload.get("cancel", True) is True:
             return environment_tasks.inspect(
                 path, identity, identifier=payload["id"], cancel="cancel" in payload, reference=reference
@@ -381,6 +405,10 @@ def register(app, context, session_dependency):
             if len(json.dumps(payload)) > 65536:
                 raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
             if "prepare" in payload:
+                if payload["prepare"] == "connection":
+                    from .environment_knowledge_connection import run
+
+                    return run(context, _path(context), context.settings.environment_onboarding_file, payload)
                 if payload["prepare"] == "knowledge":
                     from .environment_knowledge import run
 

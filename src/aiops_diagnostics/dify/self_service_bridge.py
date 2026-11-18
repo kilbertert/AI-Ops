@@ -62,6 +62,7 @@ def handle(handler, bridge):
                 "plan_id",
                 "site_task",
                 "workspace_task",
+                "knowledge_task",
                 "cancel",
                 "draft",
                 "version_no",
@@ -126,8 +127,12 @@ def handle(handler, bridge):
             valid = isinstance(payload["plan_id"], str) and re.fullmatch(
                 r"plan_[0-9a-f]{32}", payload["plan_id"]
             )
-        elif set(payload) in ({"site_task", "tenant_id"}, {"workspace_task", "tenant_id"}):
-            parent = payload.get("site_task", payload.get("workspace_task"))
+        elif set(payload) in (
+            {"site_task", "tenant_id"},
+            {"workspace_task", "tenant_id"},
+            {"knowledge_task", "tenant_id"},
+        ):
+            parent = payload.get("site_task", payload.get("workspace_task", payload.get("knowledge_task")))
             valid = (
                 isinstance(parent, str)
                 and re.fullmatch(r"task_[0-9a-f]{32}", parent)
@@ -147,7 +152,7 @@ def handle(handler, bridge):
             )
         if not valid:
             raise _Rejected(400, "无效环境任务")
-    elif set(payload) & {"plan_id", "site_task", "workspace_task", "cancel"}:
+    elif set(payload) & {"plan_id", "site_task", "workspace_task", "knowledge_task", "cancel"}:
         raise _Rejected(400, "无效参数")
     if action == "environment-plan":
         if set(payload) == {"id"}:
