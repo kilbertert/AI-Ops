@@ -42,7 +42,9 @@ def render(draft, template, expected_sha256, at):
         "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": draft["id"],
         "AIOPS_GATEWAY_PUBLIC_BASE_URL": draft["gateway_url"],
         "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": draft["cpms_base_url"],
-        "AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE": f"/etc/aiops-access-{draft['id']}/environment.json",
+        "AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE": (
+            f"/etc/aiops-access-{draft['id']}/registry/environment.json"
+        ),
         "AIOPS_UPMS_BASE_URL": draft["company_gateway_url"] + "/upms",
     }
     reserved = {
@@ -127,3 +129,57 @@ def summary(files):
         "projected_config_sha256": checksums["production.env"],
         "projected_registry_sha256": checksums["environment.json"],
     }
+
+
+def validate_candidate(config, directory, environment):
+    """候选venv按实际配置/目录核对固定路径及停用范围，不调用外部服务。"""
+    from dotenv import dotenv_values
+
+    values = dotenv_values(config, interpolate=False)
+    keys = set()
+    for binding in parse_stream(io.StringIO(Path(config).read_text())):
+        if binding.error or (binding.key is not None and (binding.value is None or binding.key in keys)):
+            raise ValueError("invalid candidate config syntax")
+        if binding.key is not None:
+            keys.add(binding.key)
+    text = Path(config).read_text()
+    if "${" in text:
+        raise ValueError("candidate config interpolation refused")
+    for key in (
+        "AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE",
+        "AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE",
+        "AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE",
+        "AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE",
+        "AIOPS_GATEWAY_OPERATOR_PROFILES_FILE",
+        "AIOPS_GATEWAY_ENVIRONMENT_MANIFEST_FILE",
+        "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE",
+        "AIOPS_TDENGINE_URL",
+        "AIOPS_TDENGINE_USER",
+        "AIOPS_TDENGINE_PASSWORD",
+    ):
+        if values.get(key):
+            raise ValueError("candidate execution bindings must remain disabled")
+    body = registry.load(directory)
+    if body["schema"] != registry.MANAGED_SCHEMA or body["managers"] or len(body["environments"]) != 1:
+        raise ValueError("candidate directory is not an isolated environment")
+    row = body["environments"][0]
+    expected = {
+        "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": environment,
+        "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": row["cpms_base_url"],
+        "AIOPS_GATEWAY_PUBLIC_BASE_URL": row["gateway_url"],
+        "AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE": (
+            f"/etc/aiops-access-{environment}/registry/environment.json"
+        ),
+        "AIOPS_UPMS_BASE_URL": row["company_gateway_url"] + "/upms",
+        "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED": "false",
+        "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED": "false",
+        "AIOPS_SSH_ENABLED": "false",
+    }
+    if (
+        row["id"] != environment
+        or row["enabled"]
+        or any(tenant["enabled"] for tenant in row["tenants"])
+        or row["config_ref"] != f"/etc/aiops-access-{environment}/production.env"
+        or any(values.get(key) != value for key, value in expected.items())
+    ):
+        raise ValueError("candidate configuration and directory differ or grant admission")

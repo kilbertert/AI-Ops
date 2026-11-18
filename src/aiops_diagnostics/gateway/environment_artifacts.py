@@ -126,3 +126,88 @@ def installer_manifest(archive, digest):
         if not re.fullmatch(r"[a-f0-9]{40}", revision):
             raise ValueError("invalid installer revision")
         return revision
+
+
+def candidate_files(archive, digest, environment):
+    """读取三文件停用候选包；外层摘要由受管调用者明确提供。"""
+    import io
+    import zlib
+    from zoneinfo import ZoneInfo
+
+    regular(archive)
+    with archive.open("rb") as stream:
+        raw = stream.read(10 * 1024**2 + 1)
+    if len(raw) > 10 * 1024**2 or hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError("candidate archive digest mismatch")
+    files = {}
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw)) as bundle:
+            for index, member in enumerate(bundle):
+                if (
+                    index >= 3
+                    or member.name not in {"production.env", "environment.json", "manifest.json"}
+                    or not member.isfile()
+                    or member.name in files
+                    or member.size > (8 * 1024**2 if member.name == "environment.json" else 1048576)
+                ):
+                    raise ValueError("invalid candidate member")
+                files[member.name] = bundle.extractfile(member).read()
+        if set(files) != {"production.env", "environment.json", "manifest.json"}:
+            raise ValueError("candidate files missing")
+
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate candidate field")
+                result[key] = value
+            return result
+
+        body = json.loads(files["manifest.json"], object_pairs_hook=unique)
+        if (
+            set(body)
+            != {
+                "schema",
+                "scope",
+                "timezone",
+                "plan_id",
+                "plan_digest",
+                "draft_revision",
+                "registry_revision",
+                "executable",
+                "projection_sha256",
+                "projected_config_sha256",
+                "projected_registry_sha256",
+            }
+            or body["schema"] != "aiops-environment-candidate/1"
+            or body["scope"] != "bootstrap-configuration-only"
+            or body["executable"] is not False
+            or not re.fullmatch(r"plan_[0-9a-f]{32}", body["plan_id"])
+            or not re.fullmatch(r"[0-9a-f]{64}", body["plan_digest"])
+            or any(type(body[k]) is not int or body[k] < 1 for k in ("draft_revision", "registry_revision"))
+        ):
+            raise ValueError("invalid candidate manifest")
+        ZoneInfo(body["timezone"])
+        checks = {
+            name: hashlib.sha256(files[name]).hexdigest() for name in ("production.env", "environment.json")
+        }
+        if (
+            checks["production.env"] != body["projected_config_sha256"]
+            or checks["environment.json"] != body["projected_registry_sha256"]
+            or hashlib.sha256(json.dumps(checks, sort_keys=True).encode()).hexdigest()
+            != body["projection_sha256"]
+        ):
+            raise ValueError("candidate member digest mismatch")
+        directory = json.loads(files["environment.json"], object_pairs_hook=unique)
+        rows = directory["environments"]
+        if (
+            len(rows) != 1
+            or rows[0]["id"] != environment
+            or rows[0]["enabled"] is not False
+            or directory["managers"]
+            or any(t["enabled"] is not False for t in rows[0]["tenants"])
+        ):
+            raise ValueError("candidate environment mismatch or enabled")
+        return files, body
+    except (tarfile.TarError, EOFError, zlib.error, KeyError, TypeError) as exc:
+        raise ValueError("invalid candidate archive") from exc
