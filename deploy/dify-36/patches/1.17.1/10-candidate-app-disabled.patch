@@ -12,8 +12,8 @@
          if not app_mode:
              raise ValueError("loss app mode")
          app_mode = AppMode(app_mode)
-+        if candidate and app_mode != AppMode.AGENT_CHAT:
-+            raise ValueError("Candidate import requires agent-chat mode")
++        if candidate and app_mode not in {AppMode.AGENT_CHAT, AppMode.ADVANCED_CHAT}:
++            raise ValueError("Candidate import requires agent-chat or advanced-chat mode")
          if app_mode == AppMode.AGENT:
              self._ensure_agent_import_permission(account, app=app)
  

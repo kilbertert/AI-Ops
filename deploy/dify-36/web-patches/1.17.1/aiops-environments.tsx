@@ -139,6 +139,10 @@ export default function EnvironmentManagement() {
   const [notice, setNotice] = useState('')
   const [plan, setPlan] = useState<Plan | null>(null)
   const [tasks, setTasks] = useState<SiteTask[]>([])
+  const [consumerSources, setConsumerSources] = useState<
+    { app_id: string; name: string; version_no: number }[]
+  >([])
+  const [consumerSource, setConsumerSource] = useState('')
   const [taskError, setTaskError] = useState('')
   const taskViewRef = useRef(0)
   const [taskGeneration, setTaskGeneration] = useState(0)
@@ -284,6 +288,7 @@ export default function EnvironmentManagement() {
       const result = await manage('environment-task', payload)
       if (view !== taskViewRef.current) return
       if ('tasks' in result) setTasks(result.tasks)
+      else if ('sources' in result) setConsumerSources(result.sources)
       else setTasks((current) => [result, ...current.filter((item) => item.id !== result.id)])
     } catch (e) {
       if (view !== taskViewRef.current) return
@@ -612,6 +617,7 @@ export default function EnvironmentManagement() {
                     {item.action === 'knowledge-prepare' && <p>候选知识资源 · {item.tenant_id}</p>}
                     {item.action === 'knowledge-connect' && <p>候选知识连接 · {item.tenant_id}</p>}
                     {item.action === 'operator-prepare' && <p>候选管家应用 · {item.tenant_id}</p>}
+                    {item.action === 'consumer-prepare' && <p>候选消费者应用 · {item.tenant_id}</p>}
                     <p>
                       {item.action === 'workspace-prepare' && item.state === 'observed'
                         ? '候选工作区已准备'
@@ -621,7 +627,9 @@ export default function EnvironmentManagement() {
                             ? '候选知识连接已准备'
                             : item.action === 'operator-prepare' && item.state === 'observed'
                               ? '候选管家应用已准备（入口停用）'
-                              : taskLabels[item.state] || item.state}
+                              : item.action === 'consumer-prepare' && item.state === 'observed'
+                                ? '候选消费者应用已准备（入口停用）'
+                                : taskLabels[item.state] || item.state}
                       {item.cancel_requested && item.state === 'running' ? ' · 等待安全取消' : ''}
                     </p>
                     {item.error_code && <p>{item.error_code}</p>}
@@ -651,6 +659,54 @@ export default function EnvironmentManagement() {
                         >
                           准备候选管家应用：{item.tenant_id}
                         </Button>
+                      )}
+                    {item.action === 'knowledge-connect' &&
+                      item.state === 'observed' &&
+                      !dirty &&
+                      !saved?.registry_changed && (
+                        <div className="space-y-2">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => void siteTasks({ consumer_sources: true })}
+                          >
+                            读取正式消费者模板
+                          </Button>
+                          {consumerSources.length > 0 && (
+                            <>
+                              <label className="block">
+                                消费者来源模板：{item.tenant_id}
+                                <select
+                                  className="block w-full rounded border p-2"
+                                  aria-label={`消费者来源模板：${item.tenant_id}`}
+                                  value={consumerSource}
+                                  onChange={(event) => setConsumerSource(event.target.value)}
+                                >
+                                  <option value="">请选择已发布模板</option>
+                                  {consumerSources.map((source) => (
+                                    <option key={source.app_id} value={source.app_id}>
+                                      {source.name} · v{source.version_no}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                disabled={busy || !consumerSource}
+                                onClick={() =>
+                                  void siteTasks({
+                                    connection_task: item.id,
+                                    tenant_id: item.tenant_id,
+                                    source_app_id: consumerSource,
+                                  })
+                                }
+                              >
+                                准备候选消费者应用：{item.tenant_id}
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       )}
                     {item.action === 'knowledge-prepare' &&
                       item.state === 'observed' &&
@@ -716,15 +772,17 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        {item.action === 'operator-prepare'
-                          ? '取消管家准备'
-                          : item.action === 'knowledge-connect'
-                            ? '取消知识连接准备'
-                            : item.action === 'knowledge-prepare'
-                              ? '取消知识准备'
-                              : item.action === 'workspace-prepare'
-                                ? '取消工作区准备'
-                                : '取消现场预检'}
+                        {item.action === 'consumer-prepare'
+                          ? '取消消费者准备'
+                          : item.action === 'operator-prepare'
+                            ? '取消管家准备'
+                            : item.action === 'knowledge-connect'
+                              ? '取消知识连接准备'
+                              : item.action === 'knowledge-prepare'
+                                ? '取消知识准备'
+                                : item.action === 'workspace-prepare'
+                                  ? '取消工作区准备'
+                                  : '取消现场预检'}
                       </Button>
                     )}
                   </article>

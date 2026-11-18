@@ -64,6 +64,7 @@ def handle(handler, bridge):
                 "workspace_task",
                 "knowledge_task",
                 "connection_task",
+                "consumer_sources",
                 "cancel",
                 "draft",
                 "version_no",
@@ -124,7 +125,9 @@ def handle(handler, bridge):
     if (method == "GET" or action == "retry") and payload:
         raise _Rejected(400, "无效参数")
     if action == "environment-task":
-        if set(payload) == {"plan_id"}:
+        if set(payload) == {"consumer_sources"}:
+            valid = payload["consumer_sources"] is True
+        elif set(payload) == {"plan_id"}:
             valid = isinstance(payload["plan_id"], str) and re.fullmatch(
                 r"plan_[0-9a-f]{32}", payload["plan_id"]
             )
@@ -133,6 +136,7 @@ def handle(handler, bridge):
             {"workspace_task", "tenant_id"},
             {"knowledge_task", "tenant_id"},
             {"connection_task", "tenant_id"},
+            {"connection_task", "tenant_id", "source_app_id"},
         ):
             parent = next(
                 payload[k]
@@ -144,6 +148,11 @@ def handle(handler, bridge):
                 and re.fullmatch(r"task_[0-9a-f]{32}", parent)
                 and isinstance(payload["tenant_id"], str)
                 and re.fullmatch(tenant_reference, payload["tenant_id"])
+                and (
+                    "source_app_id" not in payload
+                    or isinstance(payload["source_app_id"], str)
+                    and re.fullmatch(r"[a-f0-9-]{36}", payload["source_app_id"])
+                )
             )
         elif set(payload) == {"environment"}:
             valid = isinstance(payload["environment"], str) and re.fullmatch(
