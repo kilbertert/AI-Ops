@@ -398,3 +398,45 @@ def test_absent_queue_and_unknown_id_are_not_server_errors(prepared):
         "/v1/internal/environment-tasks", json=dict(id="task_" + "f" * 32, owner="a" * 32), headers=headers
     )
     assert response.status_code in (403, 409)
+
+
+def test_listing_never_creates_missing_draft_database(prepared):
+    path, _, client, _ = prepared
+    db = drafts._database(path)
+    db.unlink()
+    for suffix in ("-wal", "-shm"):
+        db.with_name(db.name + suffix).unlink(missing_ok=True)
+    assert client.post("/v1/dify/management/environment-tasks", json={"environment": "a"}).json() == {
+        "tasks": []
+    }
+    assert not db.exists()
+
+
+def test_plan_drift_during_and_after_report_expires_preserved_receipt(prepared):
+    path, ref, client, _ = prepared
+    job, _ = create(prepared)
+    tasks.worker(path, ref, dict(id=job["id"], owner="a" * 32))
+    draft = json.loads(drafts._rows(drafts._database(path))[0]["body"])
+    draft["name"] = "changed during observation"
+    drafts.save(path, ADMIN, draft, expected_revision=1, registry_revision=1)
+    result = tasks.worker(path, ref, dict(id=job["id"], owner="a" * 32, result=receipt("a")))
+    assert result["state"] == "expired" and result["result"]["id"].startswith("site_")
+    other, _ = create(prepared, "b")
+    tasks.worker(path, ref, dict(id=other["id"], owner="b" * 32))
+    tasks.worker(path, ref, dict(id=other["id"], owner="b" * 32, result=receipt("b")))
+    write_private_text(ref, "changed after observation")
+    assert (
+        client.post("/v1/dify/management/environment-tasks", json={"id": other["id"]}).json()["state"]
+        == "expired"
+    )
+
+
+def test_unknown_expired_lease_cannot_run_after_input_changes(prepared):
+    path, ref, _, _ = prepared
+    job, _ = create(prepared)
+    tasks.worker(path, ref, dict(id=job["id"], owner="a" * 32))
+    tasks.worker(path, ref, dict(id=job["id"], owner="a" * 32, error="ENVIRONMENT_TASK_TARGET_UNCONFIRMED"))
+    assert tasks.inspect(path, ADMIN, identifier=job["id"], reference=ref)["state"] == "reconcile"
+    write_private_text(ref, "changed")
+    with pytest.raises((ValueError, tasks.TaskRefused)):
+        tasks.worker(path, ref, dict(id=job["id"], owner="b" * 32))

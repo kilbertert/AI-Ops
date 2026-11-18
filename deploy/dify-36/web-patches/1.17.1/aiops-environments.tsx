@@ -280,7 +280,7 @@ export default function EnvironmentManagement() {
   }
   useEffect(() => {
     if (selected) void siteTasks({ environment: selected })
-  }, [selected])
+  }, [selected, data])
   const rows = data
     ? [
         ...data.effective,

@@ -172,10 +172,12 @@ def task(context, session, payload):
                 raise auth.SetupRefused("ENVIRONMENT_TASK_WORKER_UNAVAILABLE")
             return environment_tasks.submit(path, identity, payload["plan_id"], reference)
         if set(payload) == {"environment"}:
-            return environment_tasks.inspect(path, identity, environment=payload["environment"])
+            return environment_tasks.inspect(
+                path, identity, environment=payload["environment"], reference=reference
+            )
         if set(payload) in ({"id"}, {"id", "cancel"}) and payload.get("cancel", True) is True:
             return environment_tasks.inspect(
-                path, identity, identifier=payload["id"], cancel="cancel" in payload
+                path, identity, identifier=payload["id"], cancel="cancel" in payload, reference=reference
             )
         raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
     except (environment_tasks.TaskRefused, environment_plans.PlanRefused) as exc:

@@ -107,7 +107,7 @@ def submit(path, identity, identifier, reference):
             return _public(_row(conn, task_id))
 
 
-def inspect(path, identity, *, identifier=None, environment=None, cancel=False):
+def inspect(path, identity, *, identifier=None, environment=None, cancel=False, reference=None):
     if environment is not None and (
         not isinstance(environment, str) or not drafts.REFERENCE_PATTERN.fullmatch(environment)
     ):
@@ -115,7 +115,22 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False):
     with drafts._locked(path):
         if environment is not None:
             _authorize(path, identity, environment)
-        with gateway_db.connection(drafts._database(path), write=cancel) as conn:
+        database = drafts._database(path)
+        if not database.exists():
+            if environment is not None:
+                return {"tasks": []}
+            raise TaskRefused("ENVIRONMENT_TASK_UNAVAILABLE")
+
+        def current_public(row):
+            result = _public(row)
+            if result["state"] in {"observed", "blocked"}:
+                try:
+                    _current(path, json.loads(row["request"]), reference, reconciling=True)
+                except (ValueError, OSError, RuntimeError):
+                    result["state"] = "expired"
+            return result
+
+        with gateway_db.connection(database, write=cancel, readonly=not cancel) as conn:
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='environment_tasks'").fetchone():
                 if environment is not None:
                     return {"tasks": []}
@@ -123,7 +138,7 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False):
             if environment is not None:
                 return {
                     "tasks": [
-                        _public(dict(r))
+                        current_public(dict(r))
                         for r in conn.execute(
                             "SELECT * FROM environment_tasks WHERE environment=? "
                             "ORDER BY updated_at DESC LIMIT 20",
@@ -144,7 +159,7 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False):
                     (state, time.time(), identifier),
                 )
                 row = _row(conn, identifier)
-            return _public(row)
+            return current_public(row)
 
 
 def validate_receipt(value, environment):
@@ -248,10 +263,16 @@ def worker(path, reference, payload):
             and not row["cancel"]
         ):
             _current(path, request, reference, reconciling=row["state"] in {"running", "reconcile"})
-        return _worker_write(path, payload, row, request, owner)
+        drift = False
+        if "result" in payload or "error" in payload:
+            try:
+                _current(path, request, reference, reconciling=True)
+            except (ValueError, OSError, RuntimeError):
+                drift = True
+        return _worker_write(path, payload, row, request, owner, drift)
 
 
-def _worker_write(path, payload, row, request, owner):
+def _worker_write(path, payload, row, request, owner, drift):
     with gateway_db.connection(drafts._database(path), write=True) as conn:
         now = time.time()
         if set(payload) == {"id", "owner"}:
@@ -284,6 +305,8 @@ def _worker_write(path, payload, row, request, owner):
             state, error = result["state"], ""
         elif payload["error"] != "ENVIRONMENT_TASK_TARGET_UNCONFIRMED":
             raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
+        if drift:
+            state, error = "expired", "ENVIRONMENT_TASK_PLAN_EXPIRED"
         if row["cancel"]:
             state = "cancelled"
         conn.execute(
