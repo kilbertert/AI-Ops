@@ -52,6 +52,8 @@ def application(connected, tmp_path, monkeypatch):  # noqa: F811
                 return connected[3][0]
             if path == "/console/api/apps/imports":
                 if method == "GET":
+                    if lose[0] == "capability" and calls.count(("GET", path)) == 2:
+                        raise ConsoleApiError("DIFY_CONSOLE_UNREACHABLE", "capability unavailable")
                     return {"aiops_idempotent_import": 1, "aiops_candidate_import": 1}
                 doc = yaml.safe_load(body["yaml_content"])
                 assert doc["aiops_candidate"] is True
@@ -165,3 +167,13 @@ def test_cancelled_parent_and_changed_model_never_create_application(application
         json={"connection_task": connection["id"], "tenant_id": "same"},
     )
     assert response.status_code == 403
+
+
+def test_second_capability_read_failure_does_not_record_create_attempt(application):
+    application[4][0] = "capability"
+    job = submit(application)
+    assert execute(application, job)["state"] == "reconcile"
+    assert not application[2]
+    application[4][0] = False
+    assert execute(application, job)["state"] == "observed"
+    assert application[3].count(("POST", "/console/api/apps/imports")) == 1

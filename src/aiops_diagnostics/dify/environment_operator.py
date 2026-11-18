@@ -137,9 +137,12 @@ def run(context, path, reference, payload):
             if len(matches) != 1:
                 raise SetupRefused("SETUP_PROVIDER_UNAVAILABLE")
             resources["provider_id"] = matches[0]["id"]
-            boundary()
-            resources["attempted"] = True
-            save()
+
+            def before_create():
+                boundary()
+                resources["attempted"] = True
+                save()
+
             self_service_prepare.create_app(
                 console,
                 scope[2],
@@ -152,6 +155,7 @@ def run(context, path, reference, payload):
                 {"model": template},
                 resources["provider_id"],
                 candidate=True,
+                before_create=before_create,
             )
             app = console._call(scope[2], "/console/api/apps/" + app_id)
         ensure_node_provider(console, scope[2], request["gateway_url"], verify_only=True)

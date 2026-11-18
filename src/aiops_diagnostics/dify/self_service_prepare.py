@@ -91,7 +91,9 @@ def dependencies(console, workspace_id, profile, gateway_url):
     return matches[0]["id"]
 
 
-def create_app(console, workspace_id, job_id, request, profile, provider_id, *, candidate=False):
+def create_app(
+    console, workspace_id, job_id, request, profile, provider_id, *, candidate=False, before_create=None
+):
     from uuid import UUID, uuid5
 
     capability = console._call(workspace_id, "/console/api/apps/imports")
@@ -132,13 +134,16 @@ def create_app(console, workspace_id, job_id, request, profile, provider_id, *, 
             for name in request["tools"]
         ],
     }
+    document = yaml.safe_dump(doc, allow_unicode=True)
+    if before_create is not None:
+        before_create()
     result = console._call(
         workspace_id,
         "/console/api/apps/imports",
         method="POST",
         body={
             "mode": "yaml-content",
-            "yaml_content": yaml.safe_dump(doc, allow_unicode=True),
+            "yaml_content": document,
             "name": request["name"],
             "request_id": job_id,
         },
