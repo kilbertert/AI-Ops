@@ -156,8 +156,50 @@ def execute(root, claim):
         return result
 
 
-def run(root, gateway, key, identifier):
-    if not re.fullmatch(r"task_[0-9a-f]{32}", identifier):
+def call(gateway, key, payload):
+    headers = {**build_internal_token_headers(key, 300, int(time.time())), "Content-Type": "application/json"}
+    request = RequestSpec(
+        gateway + "/v1/internal/environment-tasks",
+        method="POST",
+        body=json.dumps(payload).encode(),
+        headers=headers,
+        timeout=30,
+        follow_redirects=False,
+    )
+    with open_response(request) as response:
+        body = response.read(65537)
+    if len(body) > 65536:
+        raise ValueError("response too large")
+    return json.loads(body)
+
+
+def central_call(root, target, payload):
+    if not REFERENCE_PATTERN.fullmatch(target) or target.startswith("-"):
+        raise ValueError("invalid central target")
+    declaration = tomllib.loads((root / ".dev-host.toml").read_text())
+    if sum(row.get("name") == target for row in declaration.get("targets", [])) != 1:
+        raise ValueError("central target not declared")
+    command = (
+        "runuser -u aiops41 -- /opt/aiops-41/.venv/bin/aiops-admin "
+        "--config /etc/aiops-41/gateway.env environment-task-dispatch"
+    )
+    # 固定服务身份/路径只支持已声明控制Gateway档案；不接受任务中的shell或HTTP地址。
+    if target != "41":
+        raise ValueError("central deployment profile unavailable")
+    result = subprocess.check_output(
+        ["dev-host", "exec", target, "--allow-service-exec", "--timeout", "45", "--", command],
+        cwd=root,
+        input=json.dumps(payload),
+        text=True,
+        timeout=50,
+    )
+    if len(result) > 65536:
+        raise ValueError("central response too large")
+    return json.loads(result)
+
+
+def run(root, gateway, key, identifier=None, *, central_target=None):
+    if identifier is not None and not re.fullmatch(r"task_[0-9a-f]{32}", identifier):
         raise ValueError("invalid task identifier")
     # 操作者从规范checkout运行；已有本地未提交工作或非合并修订不能作为运维代码源。
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip():
@@ -165,31 +207,18 @@ def run(root, gateway, key, identifier):
     subprocess.run(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=root, check=True)
     owner = uuid.uuid4().hex
 
-    def call(payload):
-        headers = {
-            **build_internal_token_headers(key, 300, int(time.time())),
-            "Content-Type": "application/json",
-        }
-        request = RequestSpec(
-            gateway + "/v1/internal/environment-tasks",
-            method="POST",
-            body=json.dumps(payload).encode(),
-            headers=headers,
-            timeout=30,
-            follow_redirects=False,
-        )
-        with open_response(request) as response:
-            body = response.read(65537)
-        if len(body) > 65536:
-            raise ValueError("response too large")
-        return json.loads(body)
+    def request(payload):
+        return central_call(root, central_target, payload) if central_target else call(gateway, key, payload)
 
-    claim = call({"id": identifier, "owner": owner})
+    claim = request({"owner": owner, **({"id": identifier} if identifier else {})})
+    if not isinstance(claim, dict) or type(claim.get("claimed")) is not bool:
+        raise ValueError("central claim unavailable")
     if not claim["claimed"]:
         return claim["task"]
+    identifier = claim["id"] if identifier is None else identifier
     try:
         result = execute(root, claim)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):
         # 不知道远端是否完成；只读重查可恢复，不能据此重复安装/开户。
-        return call({"id": identifier, "owner": owner, "error": "ENVIRONMENT_TASK_TARGET_UNCONFIRMED"})
-    return call({"id": identifier, "owner": owner, "result": result})
+        return request({"id": identifier, "owner": owner, "error": "ENVIRONMENT_TASK_TARGET_UNCONFIRMED"})
+    return request({"id": identifier, "owner": owner, "result": result})

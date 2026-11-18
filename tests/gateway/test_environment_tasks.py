@@ -476,3 +476,154 @@ def test_terminal_worker_repeat_expires_after_input_drift(prepared):
     repeated = tasks.worker(path, ref, dict(id=job["id"], owner="b" * 32))
     assert before["state"] == repeated["task"]["state"] == "expired"
     assert repeated["claimed"] is False and repeated["task"]["result"]["id"].startswith("site_")
+
+
+def test_automatic_claim_skips_expired_head_and_leases_one_live_task(prepared, monkeypatch):
+    path, ref, _, _ = prepared
+    first, first_plan = create(prepared)
+    second, _ = create(prepared, "b")
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(
+            conn.execute("SELECT request FROM environment_tasks WHERE id=?", (first["id"],)).fetchone()[0]
+        )
+        request["plan"]["expires_at"] = time.time() - 1
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), first["id"]))
+    claimed = tasks.worker(path, ref, {"owner": "a" * 32})
+    assert claimed["claimed"] and claimed["id"] == second["id"]
+    assert tasks.inspect(path, ADMIN, identifier=first["id"], reference=ref)["state"] == "expired"
+    assert tasks.worker(path, ref, {"owner": "b" * 32}) == {"claimed": False, "task": None}
+    tasks.worker(path, ref, {"id": second["id"], "owner": "a" * 32, "result": receipt("b")})
+    assert tasks.worker(path, ref, {"owner": "c" * 32}) == {"claimed": False, "task": None}
+
+
+def test_automatic_unknown_retries_later_and_keeps_cancelled_reconciliation(prepared, monkeypatch):
+    path, ref, client, _ = prepared
+    job, _ = create(prepared)
+    assert tasks.worker(path, ref, {"owner": "a" * 32})["id"] == job["id"]
+    tasks.worker(
+        path, ref, {"id": job["id"], "owner": "a" * 32, "error": "ENVIRONMENT_TASK_TARGET_UNCONFIRMED"}
+    )
+    assert tasks.worker(path, ref, {"owner": "b" * 32})["claimed"] is False
+    client.post("/v1/dify/management/environment-tasks", json={"id": job["id"], "cancel": True})
+    now = time.time()
+    monkeypatch.setattr(time, "time", lambda: now + 61)
+    assert tasks.worker(path, ref, {"owner": "b" * 32})["claimed"]
+    result = tasks.worker(path, ref, {"id": job["id"], "owner": "b" * 32, "result": receipt("a")})
+    assert result["state"] == "cancelled" and result["result"]["state"] == "observed"
+
+
+def test_automatic_absent_database_is_read_only(prepared):
+    path, ref, _, _ = prepared
+    database = drafts._database(path)
+    database.unlink()
+    assert tasks.worker(path, ref, {"owner": "a" * 32}) == {"claimed": False, "task": None}
+    assert not database.exists()
+
+
+def test_central_transport_keeps_payload_out_of_shell_and_rejects_unknown_target(tmp_path, monkeypatch):
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="41"\nhost="known-central"\n')
+    calls = []
+
+    def capture(args, **kwargs):
+        calls.append((args, kwargs))
+        return '{"claimed":false,"task":null}'
+
+    monkeypatch.setattr(worker.subprocess, "check_output", capture)
+    payload = {"owner": "a" * 32, "result": {"name": "$(touch /tmp/do-not-create)"}}
+    assert worker.central_call(tmp_path, "41", payload) == {"claimed": False, "task": None}
+    assert "$(touch" not in calls[0][0][-1]
+    assert json.loads(calls[0][1]["input"]) == payload
+    with pytest.raises(ValueError):
+        worker.central_call(tmp_path, "--project", payload)
+    with pytest.raises(ValueError):
+        worker.central_call(tmp_path, "unknown", payload)
+    assert len(calls) == 1
+
+
+def test_automatic_worker_respects_task_selected_by_central(prepared, tmp_path, monkeypatch):
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    path, ref, _, _ = prepared
+    job, _ = create(prepared)
+    monkeypatch.setattr(worker.subprocess, "check_output", lambda *a, **kw: "")
+    monkeypatch.setattr(worker.subprocess, "run", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        worker, "central_call", lambda root, target, payload: tasks.worker(path, ref, payload)
+    )
+    monkeypatch.setattr(worker, "execute", lambda root, claim: receipt(claim["environment"]))
+    result = worker.run(tmp_path, "", "", central_target="41")
+    assert result["state"] == "observed" and result["id"] == job["id"]
+    assert worker.run(tmp_path, "", "", central_target="41") is None
+
+
+def test_central_dispatch_uses_fixed_service_identity_and_local_binding(tmp_path, monkeypatch):
+    import os
+    import pwd
+
+    from typer.testing import CliRunner
+
+    from aiops_diagnostics.admin_cli import admin_app
+    from aiops_diagnostics.common import private_files
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+
+    settings = SimpleNamespace(
+        environment="41", environment_task_key="private-central-only", bind_host="127.0.0.1", port=18959
+    )
+    monkeypatch.setattr(pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=os.getuid()))
+    monkeypatch.setattr(private_files, "validate_private_file", lambda _: None)
+    monkeypatch.setattr(GatewayServerSettings, "from_env", lambda: settings)
+    calls = []
+    monkeypatch.setattr(
+        worker,
+        "call",
+        lambda url, key, payload: calls.append((url, key, payload)) or {"claimed": False, "task": None},
+    )
+    result = CliRunner().invoke(
+        admin_app,
+        ["--config", "/etc/aiops-41/gateway.env", "environment-task-dispatch"],
+        input='{"owner":"' + "a" * 32 + '"}',
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == [("http://127.0.0.1:18959", "private-central-only", {"owner": "a" * 32})]
+    assert "private-central-only" not in result.output
+    settings.bind_host = "192.0.2.123"
+    refused = CliRunner().invoke(
+        admin_app, ["--config", "/etc/aiops-41/gateway.env", "environment-task-dispatch"], input="{}"
+    )
+    assert refused.exit_code == 1 and len(calls) == 1
+
+
+def test_cancel_request_with_unknown_result_must_keep_automatic_reconciliation(prepared, monkeypatch):
+    path, ref, client, _ = prepared
+    job, _ = create(prepared)
+    tasks.worker(path, ref, {"owner": "a" * 32})
+    client.post("/v1/dify/management/environment-tasks", json={"id": job["id"], "cancel": True})
+    unknown = tasks.worker(
+        path, ref, {"id": job["id"], "owner": "a" * 32, "error": "ENVIRONMENT_TASK_TARGET_UNCONFIRMED"}
+    )
+    assert unknown["state"] == "reconcile" and unknown["cancel_requested"]
+    now = time.time()
+    monkeypatch.setattr(time, "time", lambda: now + 61)
+    assert tasks.worker(path, ref, {"owner": "b" * 32})["claimed"]
+    observed = tasks.worker(path, ref, {"id": job["id"], "owner": "b" * 32, "result": receipt("a")})
+    assert observed["state"] == "cancelled" and observed["result"]["state"] == "observed"
+
+
+def test_busy_environment_does_not_fill_automatic_queue_window(prepared):
+    path, ref, _, _ = prepared
+    first, _ = create(prepared)
+    second, _ = create(prepared, "b")
+    tasks.worker(path, ref, {"id": first["id"], "owner": "a" * 32})
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        body = conn.execute("SELECT request FROM environment_tasks WHERE id=?", (first["id"],)).fetchone()[0]
+        conn.execute("UPDATE environment_tasks SET updated_at=? WHERE id=?", (time.time() + 20, second["id"]))
+        for index in range(64):
+            conn.execute(
+                "INSERT INTO environment_tasks(id,environment,request,state,updated_at) "
+                "VALUES(?,?,?,'queued',?)",
+                ("task_" + f"{index + 1:032x}", "a", body, time.time() - 10),
+            )
+    assert tasks.worker(path, ref, {"owner": "b" * 32})["id"] == second["id"]

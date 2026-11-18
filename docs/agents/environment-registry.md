@@ -247,7 +247,8 @@ aiops-admin environment-task-worker --id task_<编号> --gateway https://control
 ```
 
 命令只领取这个任务，冻结host经原项目.dev-host.toml唯一解析为目标name（零个或多个匹配拒绝），校验安装器摘要，从origin/main已合并修订构建同一固定安装器，
-经dev-host传输与身份断言执行preflight，不install/recover。首片为单次运维执行入口，不声称后台无人值守队列已上线。
+经dev-host传输与身份断言执行preflight，不install/recover。省略--id时自动选择一个待处理任务，queued过期/撤权明确结束，未知reconcile至少延后60秒重试；
+多个执行端仍以中央租约互斥。后台运维轮询见下方，文件计划通过不能代替现场业务验收。
 中央`/v1/internal/environment-tasks`只接受独立HMAC；管理桥不能访问或提交结果。
 不让业务Gateway持有SSH私钥；若正式访问路径尚未允许内部worker接口，停止并按原入口交付，不能临时开放任意端点。
 
@@ -257,3 +258,31 @@ queued表示等待执行端，running表示当前租约取证；失联/超时或
 observed仅本地观察通过，blocked保留失败项；受管身份/网络/业务pending不可冒充开通完成。
 回执到期显示expired；任务留在独立草稿库，旧版忽略该表，回退不删除记录或恢复业务库快照。
 本机替身检查证明状态/授权/并发与固定操作，不证明真实主机、网络、负载或业务。
+
+### 自动执行端配套
+
+中央为已有41控制Gateway档案，执行端仍在规范开发checkout，未配置新档案不能猜路径或主机。
+`aiops-admin environment-task-worker --central-target 41`经现有dev-host管理通道调用中央合并CLI，
+以Gateway服务身份读取自身私有配置、构造本机内部HMAC；请求JSON从stdin传入，不在shell拼接，
+密钥不返回执行宿主。此路径不新增公网接口/端口，不改变公司的网关或登录代码。
+原`--gateway/--key-file/--id`显式HTTP操作保持兼容，不能与central-target混用。
+
+先以合并制品准备受控引用文件与独立执行密钥，配置仅写本项目production.env，
+保留旧内容与0600权限；确认零在飞并重跑标准CD后，从服务身份回读文件/归档/投影分项。
+引用中的模板、主机和凭据必须已有授权，不能用空模板或其他环境秘密制造通过。
+回退只恢复本次配置和停止本任务timer，保留新任务/回执，业务数据库不被旧副本覆盖。
+
+在干净、已合并的规范checkout执行固定用户单位安装入口：
+
+```bash
+bash ops/environments/gateway/install-worker.sh install
+systemctl --user status aiops-site-preflight.timer
+bash ops/environments/gateway/install-worker.sh stop
+```
+
+timer每轮结束20秒后只处理一个任务；同一service不会叠加运行，不启动通用任务引擎。
+停止只禁用后续轮询，不终止在飞远端预检。开发checkout有未提交改动或未合并修订时worker拒绝执行，
+既有任务仍持久保存；由操作者恢复规范checkout后下一轮续接，不自动切分支或覆盖工作。
+中央refs/key与timer分别准备，最后在正常公司页面提交有效plan，刷新读相同任务/现场版本，
+再原生退出核旧会话拒绝；真实目标的PID/配置/目录/业务库和公司容器须前后比较。
+读旧回执或本机替身不能证明生产自动执行；结果仍仅本地就绪，网络/业务pending，不激活租户。

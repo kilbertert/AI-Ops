@@ -183,9 +183,12 @@ def environment_plan_command(
 
 @admin_app.command("environment-task-worker")
 def environment_task_worker(
-    task_id: Annotated[str, typer.Option("--id", help="中央已冻结现场预检任务编号")],
-    gateway: Annotated[str, typer.Option("--gateway", help="获准中央HTTPS或本机回环入口")],
-    key_file: Annotated[Path, typer.Option("--key-file", help="独立内部HMAC密钥文件0600")],
+    task_id: Annotated[str | None, typer.Option("--id", help="指定编号；省略自动领取一个待处理预检")] = None,
+    gateway: Annotated[str | None, typer.Option("--gateway", help="获准中央HTTPS或本机回环入口")] = None,
+    key_file: Annotated[Path | None, typer.Option("--key-file", help="独立内部HMAC密钥文件0600")] = None,
+    central_target: Annotated[
+        str | None, typer.Option("--central-target", help="受管中央档案；不传执行密钥")
+    ] = None,
 ) -> None:
     """受管运维主机单次核对现场；不在业务Gateway运行，不安装或激活。"""
     import subprocess
@@ -194,16 +197,69 @@ def environment_task_worker(
     from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
     try:
-        validate_private_file(key_file)
-        key = key_file.read_text().strip()
-        if not key or key_file.stat().st_size > 4096:
-            raise ValueError("invalid worker key")
+        key = ""
+        if central_target:
+            if gateway is not None or key_file is not None:
+                raise ValueError("central transport cannot carry a key or URL")
+        else:
+            if gateway is None or key_file is None:
+                raise ValueError("gateway and key required")
+            validate_private_file(key_file)
+            key = key_file.read_text().strip()
+            if not key or key_file.stat().st_size > 4096:
+                raise ValueError("invalid worker key")
         root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
         from aiops_diagnostics.gateway import environment_task_worker as worker
 
-        result = worker.run(root, canonical_gateway_url(gateway), key, task_id)
+        result = worker.run(
+            root,
+            canonical_gateway_url(gateway) if gateway else "",
+            key,
+            task_id,
+            central_target=central_target,
+        )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         typer.echo(json.dumps({"error": "ENVIRONMENT_TASK_WORKER_REFUSED"}))
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
+@admin_app.command("environment-task-dispatch")
+def environment_task_dispatch(context: typer.Context) -> None:
+    """中央固定身份接收stdin任务JSON；配置/密钥不返回运维宿主。"""
+    import pwd
+    import socket
+    import sys
+
+    from dotenv import dotenv_values
+
+    from aiops_diagnostics.common.private_files import validate_private_file
+    from aiops_diagnostics.gateway.environment_task_worker import call
+
+    try:
+        config = context.obj.get("config_file")
+        if os.getuid() != pwd.getpwnam("aiops41").pw_uid or config != Path("/etc/aiops-41/gateway.env"):
+            raise ValueError("central service identity and fixed configuration required")
+        validate_private_file(config)
+        os.environ.update(
+            {k: v for k, v in dotenv_values(config, interpolate=False).items() if v is not None}
+        )
+        settings = GatewayServerSettings.from_env()
+        if settings.environment != "41" or not settings.environment_task_key:
+            raise ValueError("central profile not configured")
+        # 目标只取本机配置；bind验证地址确实属于本机，不从stdin指定上游。
+        host = settings.bind_host if settings.bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
+        with socket.socket() as sock:
+            sock.bind((host, 0))
+        raw = sys.stdin.buffer.read(65537)
+        if len(raw) > 65536:
+            raise ValueError("input too large")
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid payload")
+        result = call(f"http://{host}:{settings.port}", settings.environment_task_key, payload)
+    except (OSError, ValueError, RuntimeError, KeyError) as exc:
+        typer.echo(json.dumps({"error": "ENVIRONMENT_TASK_DISPATCH_REFUSED"}))
         raise typer.Exit(1) from exc
     typer.echo(json.dumps(result, ensure_ascii=False))
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=AI-Ops read-only preflight task polling
+
+[Timer]
+OnBootSec=20
+OnUnitInactiveSec=20
+AccuracySec=1
+Unit=aiops-site-preflight.service
+
+[Install]
+WantedBy=timers.target
