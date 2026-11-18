@@ -181,6 +181,33 @@ def environment_plan_command(
     typer.echo(json.dumps(result, ensure_ascii=False))
 
 
+@admin_app.command("environment-task-worker")
+def environment_task_worker(
+    task_id: Annotated[str, typer.Option("--id", help="中央已冻结现场预检任务编号")],
+    gateway: Annotated[str, typer.Option("--gateway", help="获准中央HTTPS或本机回环入口")],
+    key_file: Annotated[Path, typer.Option("--key-file", help="独立内部HMAC密钥文件0600")],
+) -> None:
+    """受管运维主机单次核对现场；不在业务Gateway运行，不安装或激活。"""
+    import subprocess
+
+    from aiops_diagnostics.common.private_files import validate_private_file
+    from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
+
+    try:
+        validate_private_file(key_file)
+        key = key_file.read_text().strip()
+        if not key or key_file.stat().st_size > 4096:
+            raise ValueError("invalid worker key")
+        root = Path(subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip())
+        from aiops_diagnostics.gateway import environment_task_worker as worker
+
+        result = worker.run(root, canonical_gateway_url(gateway), key, task_id)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        typer.echo(json.dumps({"error": "ENVIRONMENT_TASK_WORKER_REFUSED"}))
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
 @admin_app.command("schema")
 def schema_command(
     action: Annotated[str, typer.Argument(help="check（只读）或 migrate（原子升级）")],

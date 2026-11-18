@@ -32,6 +32,7 @@
 | 环境连接草稿目录 | `/v1/dify/management/environment-drafts` | GET | 发布服务key＋活动公司会话＋显式目录授权 | 返回获授权连接草稿和生效摘要，不返回配置路径/管理员/秘密正文 |
 | 环境连接草稿保存 | `/v1/dify/management/environment-drafts` | POST | 同上＋草稿/目录双版本 | 仅保存草稿，不发网络请求、不改变运行准入；拒绝凭据URL和额外字段 |
 | 开通计划文件预检与回读 | `/v1/dify/management/environment-plans` | POST | 发布服务key＋活动公司会话＋显式目录授权＋草稿/目录版本 | 仅持久化冻结计划或回读，不执行安装、探测或激活；文件摘要不代表现场验收 |
+| 中央现场预检任务 | `/v1/dify/management/environment-tasks` | POST | 发布服务key＋活动公司会话＋显式环境授权 | 按冻结计划发起、按环境查看、回读/安全取消；只由独立受管执行端取证，不安装或激活；不接受浏览器提交结果 |
 | 业务环境准入维护 | `/v1/dify/management/environments` | POST | 同上，预期目录版本 | 仅名称/准入更新；拒绝URL、路径、管理员和新租户注入 |
 | 平台客户与来源目录 | `/v1/dify/management/catalogue` | GET | 发布服务key＋正常Dify公司会话 | 平台权限与公司绑定客户目录交集，只返回可管理客户及来源 |
 | 管家管理状态 | `/v1/dify/management/status` | POST | 同上，校验app租户归属 | 返回实际模型和正式版本；非受管应用不启用 |
