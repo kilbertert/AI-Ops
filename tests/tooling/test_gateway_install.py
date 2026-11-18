@@ -8,6 +8,7 @@ import runpy
 import socket
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -89,7 +90,7 @@ def apply(host):
 
 
 @pytest.mark.parametrize("action", ["install", "recover"])
-@pytest.mark.parametrize("mode", ["scalar", "candidate"])
+@pytest.mark.parametrize("mode", ["scalar", "candidate", "runtime"])
 def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeypatch, action, mode):
     inst, archive, sha, config, *_ = host
     root = tmp_path / "installer"
@@ -119,7 +120,7 @@ def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeyp
     monkeypatch.setattr(inst, "recover", lambda: calls.append(action) or {"result": "recovered"})
     monkeypatch.setattr(inst, "apply", lambda *a: calls.append(action) or {"result": "installed"})
     options = ["--config", str(config), "--config-sha256", install.digest(config)]
-    if mode == "candidate":
+    if mode in {"candidate", "runtime"}:
         import io
         import tarfile
 
@@ -147,6 +148,9 @@ def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeyp
                 bundle.addfile(member, io.BytesIO(raw))
         candidate.chmod(0o600)
         options = ["--candidate", str(candidate), "--candidate-sha256", install.digest(candidate)]
+        if mode == "runtime":
+            runtime = runtime_bundle(host)
+            options += ["--runtime", str(runtime), "--runtime-sha256", install.digest(runtime)]
     monkeypatch.setattr(
         sys,
         "argv",
@@ -899,3 +903,315 @@ def test_readiness_tolerates_closed_connection_but_requires_listener(monkeypatch
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def runtime_bundle(host, *, model="model-one"):
+    """按D30公开格式造合成工件，不读真实模型/节点凭据。"""
+    import io
+
+    from aiops_diagnostics.operator import operator_agent, operator_tools
+
+    inst = host[0]
+    root = "/etc/aiops-access-test/runtime"
+    credential = dict(api_key="synthetic", function_calling_type="tool_call", max_tokens_to_sample=4096)
+    approved = dict(
+        plugin="fixture",
+        provider="fixture",
+        name=model,
+        credential_file=root + "/operator-model.json",
+        completion_params={"max_tokens": 4096},
+    )
+    files = {
+        "agent-runs.json": dict(
+            environment="test",
+            snail_base_url="https://execution.example",
+            snail_app_id="test-app",
+            snail_app_token="synthetic",
+            snail_agent_id=2,
+            snail_open_id="test",
+            expected_node_id="test-node",
+            nodes=[dict(node_id="test-node", environment="test", token_sha256="a" * 64, active=True)],
+        ),
+        "operator-manifest.json": dict(
+            schema=operator_agent.SCHEMA,
+            name="test",
+            history_policy=operator_agent.HISTORY_POLICY,
+            model=dict(
+                provider_key="openai",
+                adapter_key="openai-compatible",
+                model_key=model,
+                endpoint="https://model-proxy:9101",
+            ),
+            model_options={},
+            system_messages=[operator_agent.sop() + "\n" + operator_agent.INSTRUCTIONS],
+            tools=[
+                dict(name=t.name, description=t.description, input_schema=t.input_schema())
+                for t in operator_tools.tools()
+            ],
+        ),
+        "operator-profiles.json": dict(
+            schema="operator-profiles/1",
+            profiles=[
+                dict(
+                    id="operator-test",
+                    model=approved,
+                    consumer_models=[],
+                    target=dict(
+                        environment="test",
+                        entry="operator",
+                        config_file=root + "/agent-runs.json",
+                        manifest_file=root + "/operator-manifest.json",
+                        cpms_base_url="https://target.example/cpms",
+                        proxy_base_url="https://gateway-egress:9443",
+                    ),
+                )
+            ],
+        ),
+        "consumer-targets.json": dict(
+            schema="aiops-consumer-targets/1",
+            targets=[
+                dict(
+                    environment="test",
+                    tenant_id="same",
+                    app_id="c" * 8 + "-" + "c" * 4 + "-" + "c" * 4 + "-" + "c" * 4 + "-" + "c" * 12,
+                    knowledge_base_ids=["test-kb"],
+                    live_order_status=True,
+                    live_billing_record=True,
+                )
+            ],
+        ),
+        "registrations.json": dict(
+            environment="test",
+            gateway_url="https://target.example",
+            tenant_id="same",
+            workspace_id="workspace",
+            operator_app_id="operator",
+            enabled=False,
+        ),
+        "operator-model.json": credential,
+        "consumer-model.json": credential,
+    }
+    files["registrations.json"]["consumer_app_id"] = files["consumer-targets.json"]["targets"][0]["app_id"]
+    raw = {name: json.dumps(value).encode() for name, value in files.items()}
+    body = dict(
+        schema="aiops-environment-runtime/1",
+        scope="runtime-wiring-only",
+        environment="test",
+        tenant_id="same",
+        plan_id="plan_" + "a" * 32,
+        plan_digest="b" * 64,
+        executable=False,
+        installed=False,
+        activated=False,
+        files={name: hashlib.sha256(value).hexdigest() for name, value in raw.items()},
+    )
+    raw["manifest.json"] = json.dumps(body).encode()
+    archive = inst.root.parent / (model + ".tar")
+    with tarfile.open(archive, "w") as bundle:
+        for name, value in raw.items():
+            member = tarfile.TarInfo(name)
+            member.size, member.mode = len(value), 0o600
+            bundle.addfile(member, io.BytesIO(value))
+    archive.chmod(0o600)
+    return archive
+
+
+def apply_runtime(host, archive):
+    inst, application, sha, *_ = host
+    pair = candidate_config(host)
+    with pair[0].open("a") as stream:
+        stream.write(
+            'AIOPS_GATEWAY_OPERATOR_PROFILES_FILE="/etc/aiops-access-test/runtime/operator-profiles.json"\n'
+            'AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE="/etc/aiops-access-test/runtime/consumer-targets.json"\n'
+        )
+    old = inst.read_record("installed.json") if (inst.root / "installed.json").exists() else None
+    return inst.apply(
+        application,
+        sha,
+        "/usr/bin/python3",
+        pair[0],
+        install.digest(pair[0]),
+        old["config_sha256"] if old else None,
+        pair[1],
+        old.get("registry_sha256", "absent") if old else None,
+        archive,
+        install.digest(archive),
+        old.get("runtime_sha256", "absent") if old else None,
+    )
+
+
+@pytest.mark.parametrize("failure", [None, "candidate", "runtime-written"])
+def test_runtime_install_repeat_and_restore_keep_database_and_old_snapshot(host, monkeypatch, failure):
+    inst = host[0]
+    first = runtime_bundle(host)
+    assert apply_runtime(host, first)["result"] == "installed"
+    old = inst.read_record("installed.json")
+    original = (inst.config / "runtime").resolve()
+    candidate = next(a for a in reversed(host[4]) if a[0] == "systemd-run")
+    assert f"--property=BindReadOnlyPaths={original.parent}/candidate-root:{inst.config}" in candidate
+    from aiops_diagnostics.gateway.environment_projection import validate_candidate
+
+    validate_candidate(
+        inst.config / "production.env", inst.config / "registry/environment.json", "test", runtime=original
+    )
+    marker = inst.state / "business-evidence"
+    marker.write_text("current-state")
+    calls = len(host[4])
+    assert apply_runtime(host, first)["result"] == "unchanged"
+    assert not any(a[0] == "systemd-run" or a[:2] == ("systemctl", "stop") for a in host[4][calls:])
+    second = runtime_bundle(host, model="model-two")
+    switch, health = inst.switch_runtime, inst.health
+
+    def fail_switch(record):
+        switch(record)
+        if failure == "runtime-written" and record.get("runtime_sha256") != old["runtime_sha256"]:
+            marker.write_text("new-evidence-after-switch")
+            raise KeyboardInterrupt()
+
+    def fail_health(version, **kwargs):
+        health(version, **kwargs)
+        if failure == "candidate" and kwargs.get("port"):
+            raise RuntimeError("candidate failure")
+
+    monkeypatch.setattr(inst, "switch_runtime", fail_switch)
+    monkeypatch.setattr(inst, "health", fail_health)
+    if failure:
+        with pytest.raises((RuntimeError, KeyboardInterrupt)):
+            apply_runtime(host, second)
+        assert (inst.config / "runtime").resolve() == original
+        assert inst.read_record("installed.json")["runtime_sha256"] == old["runtime_sha256"]
+    else:
+        assert apply_runtime(host, second)["result"] == "installed"
+        assert (inst.config / "runtime").resolve() != original
+    assert marker.read_text() == (
+        "new-evidence-after-switch" if failure == "runtime-written" else "current-state"
+    )
+    assert not (inst.root / "pending.json").exists()
+    assert original.is_dir()
+
+
+@pytest.mark.parametrize("drift", ["member", "pointer", "unrecorded"])
+def test_runtime_drift_refuses_without_overwriting_owned_or_unknown_files(host, drift):
+    inst = host[0]
+    archive = runtime_bundle(host)
+    apply_runtime(host, archive)
+    pointer = inst.config / "runtime"
+    if drift == "member":
+        (pointer / "consumer-model.json").write_text("external-change")
+    else:
+        pointer.unlink()
+        if drift == "pointer":
+            pointer.symlink_to(inst.root.parent / "unknown")
+        else:
+            pointer.mkdir()
+    with pytest.raises(ValueError):
+        apply_runtime(host, archive)
+    assert not (inst.root / "pending.json").exists()
+
+
+@pytest.mark.parametrize("invalid", ["digest", "environment", "member", "protocol", "profile", "consumer"])
+def test_runtime_archive_and_semantic_mismatch_refused(host, invalid):
+    import io
+
+    from aiops_diagnostics.gateway.environment_projection import validate_runtime
+
+    inst = host[0]
+    archive = runtime_bundle(host)
+    sha = install.digest(archive)
+    if invalid in {"digest", "environment"}:
+        with pytest.raises(ValueError):
+            probe.runtime_files(
+                archive,
+                "0" * 64 if invalid == "digest" else sha,
+                "other" if invalid == "environment" else "test",
+            )
+        return
+    files, body = probe.runtime_files(archive, sha, "test")
+    name = {
+        "member": "consumer-model.json",
+        "protocol": "operator-manifest.json",
+        "profile": "operator-profiles.json",
+        "consumer": "consumer-targets.json",
+    }[invalid]
+    changed = json.loads(files[name])
+    if invalid == "member":
+        changed["api_key"] = "different"
+    elif invalid == "protocol":
+        changed["system_messages"] = ["not approved SOP"]
+    elif invalid == "profile":
+        changed["profiles"][0]["target"]["environment"] = "other"
+    else:
+        changed["targets"][0]["tenant_id"] = "other"
+    files[name] = json.dumps(changed).encode()
+    if invalid != "member":
+        body["files"][name] = hashlib.sha256(files[name]).hexdigest()
+    files["manifest.json"] = json.dumps(body).encode()
+    with tarfile.open(archive, "w") as bundle:
+        for key, value in files.items():
+            member = tarfile.TarInfo(key)
+            member.size = len(value)
+            bundle.addfile(member, io.BytesIO(value))
+    if invalid == "member":
+        with pytest.raises(ValueError, match="member digest"):
+            probe.runtime_files(archive, install.digest(archive), "test")
+    else:
+        snapshot = inst.root.parent / "runtime"
+        snapshot.mkdir(mode=0o700)
+        for key, value in files.items():
+            (snapshot / key).write_bytes(value)
+            (snapshot / key).chmod(0o600)
+        (snapshot / "runtime.tar").write_bytes(archive.read_bytes())
+        (snapshot / "runtime.tar").chmod(0o600)
+        row = json.loads(candidate_config(host)[1].read_text())["environments"][0]
+        with pytest.raises(ValueError):
+            validate_runtime(snapshot, row)
+    assert not inst.root.exists()
+
+
+@pytest.mark.parametrize("drift", ["missing", "unowned"])
+def test_pending_runtime_recovery_refuses_changed_application_pointer(host, monkeypatch, drift):
+    inst = host[0]
+    apply_runtime(host, runtime_bundle(host))
+    second = runtime_bundle(host, model="model-two")
+    switch, recover = inst.switch_runtime, inst.recover
+
+    def crash(record):
+        switch(record)
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(inst, "switch_runtime", crash)
+    monkeypatch.setattr(inst, "recover", lambda: None)
+    with pytest.raises(KeyboardInterrupt):
+        apply_runtime(host, second)
+    monkeypatch.setattr(inst, "recover", recover)
+    pointer = inst.root / "current"
+    pointer.unlink()
+    if drift == "unowned":
+        pointer.symlink_to(inst.root.parent / "unknown-release")
+    calls = len(host[4])
+    with pytest.raises(ValueError, match="current release drift"):
+        inst.recover()
+    assert (inst.root / "pending.json").exists()
+    assert not any(a[:2] == ("systemctl", "stop") for a in host[4][calls:])
+    assert not pointer.exists()
+    assert pointer.is_symlink() == (drift == "unowned")
+
+
+def test_runtime_recovery_rechecks_application_pointer_after_stop(host, monkeypatch):
+    inst = host[0]
+    apply_runtime(host, runtime_bundle(host))
+    record = inst.read_record("installed.json")
+    inst.record("pending.json", {**record, "previous": record, "phase": "switching"})
+    stop = inst.stop
+
+    def changed_after_stop(name):
+        stop(name)
+        if name == inst.name:
+            (inst.root / "current").unlink()
+            (inst.root / "current").write_text("external-change-after-stop")
+
+    monkeypatch.setattr(inst, "stop", changed_after_stop)
+    with pytest.raises(ValueError, match="current release drift"):
+        inst.recover()
+    assert (inst.root / "current").read_text() == "external-change-after-stop"
+    assert (inst.root / "pending.json").exists()

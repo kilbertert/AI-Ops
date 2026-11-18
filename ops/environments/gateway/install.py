@@ -194,6 +194,14 @@ WantedBy=multi-user.target
         finally:
             os.close(descriptor)
 
+    def check_current(self, old, pending):
+        records = [old, pending] if pending["phase"] == "switching" else [old]
+        current = self.root / "current"
+        if not current.is_symlink() or Path(os.readlink(current)) not in {
+            self.release(record) for record in records
+        }:
+            raise ValueError("current release drift prevents rollback")
+
     def read_record(self, name):
         self.check_paths()
         path = self.root / name
@@ -242,6 +250,51 @@ WantedBy=multi-user.target
                 allowed.add(pending["recovery_registry_sha256"])
         if self.registry_digest() not in allowed:
             raise ValueError("registry configuration drift")
+
+    def runtime_path(self, record):
+        release = record["runtime_release"]
+        if not re.fullmatch(r"[a-f0-9]{12}-[a-z0-9_]+", release):
+            raise ValueError("invalid runtime release")
+        return self.root / "releases" / release / "runtime"
+
+    def check_runtime(self, old, pending=None):
+        pointer = self.config / "runtime"
+        allowed = [r for r in (old, pending) if r is not None]
+        paths = {self.runtime_path(r) for r in allowed if r.get("runtime_sha256")}
+        if pointer.is_symlink():
+            if Path(os.readlink(pointer)) not in paths:
+                raise ValueError("runtime pointer drift")
+        elif pointer.exists() or all(r.get("runtime_sha256") for r in allowed):
+            raise ValueError("runtime pointer missing or unowned")
+        for record in allowed:
+            if not record.get("runtime_sha256"):
+                continue
+            root = self.runtime_path(record)
+            trusted(root.parent)
+            trusted(root, owner=self.account.pw_uid, private=True)
+            trusted(root / "runtime.tar", owner=self.account.pw_uid, private=True)
+            files, _ = probe.runtime_files(root / "runtime.tar", record["runtime_sha256"], self.environment)
+            if {p.name for p in root.iterdir()} != set(files) | {"runtime.tar"}:
+                raise ValueError("runtime snapshot file set drift")
+            for name, raw in files.items():
+                trusted(root / name, owner=self.account.pw_uid, private=True)
+                if (root / name).stat().st_nlink != 1 or (root / name).read_bytes() != raw:
+                    raise ValueError("runtime snapshot drift")
+
+    def switch_runtime(self, record):
+        pointer = self.config / "runtime"
+        if record.get("runtime_sha256"):
+            temporary = self.config / "runtime.next"
+            temporary.unlink(missing_ok=True)
+            temporary.symlink_to(self.runtime_path(record))
+            temporary.replace(pointer)
+        else:
+            pointer.unlink(missing_ok=True)
+        descriptor = os.open(self.config, os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def registry_snapshot(self, source, target, expected):
         if not target.parent.exists():
@@ -389,6 +442,9 @@ WantedBy=multi-user.target
                     matched = (self.root / "current").resolve() == value
                     observed[key] = str(value)
                 else:
+                    if key == "configuration":
+                        self.check_runtime(installed)
+                        observed["runtime_sha256"] = installed.get("runtime_sha256", "absent")
                     expected = (
                         installed["config_sha256"]
                         if key == "configuration"
@@ -523,12 +579,14 @@ WantedBy=multi-user.target
             raise ValueError("unknown recovery phase")
         old = pending["previous"]
         if old:
+            self.check_current(old, pending)
             allowed = {old["config_sha256"]}
             if pending["phase"] == "switching":
                 allowed.add(pending["config_sha256"])
             if digest(self.config / "production.env") not in allowed:
                 raise ValueError("configuration drift prevents rollback")
             self.check_registry(old, pending if pending["phase"] == "switching" else None)
+            self.check_runtime(old, pending if pending["phase"] == "switching" else None)
         self.stop(self.name + "-candidate")
         if pending.get("trial"):
             if not re.fullmatch(r"trial-[a-f0-9]{32}", pending["trial"]):
@@ -563,6 +621,7 @@ WantedBy=multi-user.target
         else:
             release = self.release(old)
             if pending["phase"] == "switching":
+                self.check_current(old, pending)
                 if old["config_sha256"] != pending["config_sha256"]:
                     backup = self.release(pending) / "previous-config.env"
                     self.config_snapshot(backup, self.config / "production.env", old["config_sha256"])
@@ -572,7 +631,9 @@ WantedBy=multi-user.target
                         old = self.recovery_registry(old, pending)
                     else:
                         target.unlink(missing_ok=True)
+                self.switch_runtime(old)
                 self.check_database(release)
+                self.check_current(old, pending)
                 self.switch(release)
                 self.command("systemctl", "daemon-reload")
                 self.command("systemctl", "start", self.name)
@@ -595,6 +656,9 @@ WantedBy=multi-user.target
         expected_config_sha=None,
         registry_file=None,
         expected_registry_sha=None,
+        runtime_archive=None,
+        runtime_sha=None,
+        expected_runtime_sha=None,
     ):
         if not re.fullmatch(r"/usr/bin/python3(?:\.(?:11|12|13))?", python):
             raise ValueError("only installed system Python is supported")
@@ -611,6 +675,13 @@ WantedBy=multi-user.target
         if registry_file is not None:
             trusted(registry_file, private=True)
             registry_sha = digest(registry_file)
+        if runtime_archive is not None:
+            if registry_file is None or not runtime_sha:
+                raise ValueError("runtime requires bundled configuration and digest")
+            trusted(runtime_archive, private=True)
+            probe.runtime_files(runtime_archive, runtime_sha, self.environment)
+        elif runtime_sha or expected_runtime_sha:
+            raise ValueError("runtime artifact required")
         if (self.root / "pending.json").exists():
             raise ValueError("unfinished change requires recover")
         if (
@@ -629,8 +700,21 @@ WantedBy=multi-user.target
         }
         if registry_sha is not None:
             desired["registry_sha256"] = registry_sha
+        if runtime_archive is not None:
+            desired["runtime_sha256"] = runtime_sha
         if old:
             self.check_registry(old)
+            self.check_runtime(old)
+            if old.get("runtime_sha256") and runtime_archive is None:
+                raise ValueError("runtime configuration requires runtime artifact")
+            if expected_runtime_sha is not None and expected_runtime_sha != old.get(
+                "runtime_sha256", "absent"
+            ):
+                raise ValueError("stale expected runtime")
+            if runtime_sha != old.get("runtime_sha256") and expected_runtime_sha != old.get(
+                "runtime_sha256", "absent"
+            ):
+                raise ValueError("runtime change requires expected current digest")
             if "registry_sha256" not in old and (self.config / "registry").exists():
                 raise ValueError("refuse to adopt unrecorded registry directory")
             if "registry_sha256" in old and registry_file is None:
@@ -675,7 +759,11 @@ WantedBy=multi-user.target
                 return {"result": "unchanged", "version": old["version"], "business_acceptance": False}
             self.check_database(previous)
         else:
-            if expected_config_sha is not None or expected_registry_sha is not None:
+            if (
+                expected_config_sha is not None
+                or expected_registry_sha is not None
+                or expected_runtime_sha is not None
+            ):
                 raise ValueError("cold installation has no previous configuration")
             if any(p.exists() or p.is_symlink() for p in (self.root, self.state, self.config, self.unit)):
                 raise ValueError("refuse to adopt existing paths")
@@ -715,13 +803,27 @@ WantedBy=multi-user.target
         else:
             self.record("pending.json", {**desired, "previous": old, "phase": "preparing"})
         try:
-            return self.prepare(archive, sha, python, config, minor, meta, old, desired, registry_file)
+            return self.prepare(
+                archive, sha, python, config, minor, meta, old, desired, registry_file, runtime_archive
+            )
         except BaseException:
             if (self.root / "pending.json").exists():
                 self.recover()
             raise
 
-    def prepare(self, archive, sha, python, config, minor, meta, old, desired, registry_file=None):
+    def prepare(
+        self,
+        archive,
+        sha,
+        python,
+        config,
+        minor,
+        meta,
+        old,
+        desired,
+        registry_file=None,
+        runtime_archive=None,
+    ):
         if not old:
             self.config.mkdir(mode=0o755)
             self.state.mkdir(mode=0o700)
@@ -741,6 +843,17 @@ WantedBy=multi-user.target
         release.chmod(0o755)
         desired["release"] = release.name
         desired["installer_sha256"] = digest(Path(__file__))
+        if runtime_archive is not None:
+            runtime = release / "runtime"
+            runtime.mkdir(mode=0o700)
+            os.chown(runtime, self.account.pw_uid, self.account.pw_gid)
+            self.config_snapshot(runtime_archive, runtime / "runtime.tar", desired["runtime_sha256"])
+            files, _ = probe.runtime_files(
+                runtime / "runtime.tar", desired["runtime_sha256"], self.environment
+            )
+            for name, raw in files.items():
+                self.config_snapshot_bytes(raw, runtime / name)
+            desired["runtime_release"] = release.name
         staged = release / "artifact.tar.gz"
         shutil.copyfile(archive, staged)
         probe.manifest(staged, sha, minor)
@@ -764,6 +877,19 @@ WantedBy=multi-user.target
             self.config_snapshot(
                 self.config / "production.env", release / "previous-config.env", old["config_sha256"]
             )
+        if runtime_archive is not None:
+            candidate_root = release / "candidate-root"
+            candidate_root.mkdir(mode=0o700)
+            os.chown(candidate_root, self.account.pw_uid, self.account.pw_gid)
+            self.config_snapshot(
+                candidate_config, candidate_root / "production.env", desired["config_sha256"]
+            )
+            self.registry_snapshot(
+                release / "candidate-registry/environment.json",
+                candidate_root / "registry/environment.json",
+                desired["registry_sha256"],
+            )
+            (candidate_root / "runtime").symlink_to(runtime)
         shutil.copyfile(Path(__file__).with_name("runtime_check.py"), release / "runtime_check.py")
         (release / "runtime_check.py").chmod(0o644)
         self.command(
@@ -817,6 +943,7 @@ WantedBy=multi-user.target
                     if registry_file is not None
                     else []
                 ),
+                *([str(runtime)] if runtime_archive is not None else []),
             )
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
@@ -837,10 +964,14 @@ WantedBy=multi-user.target
                 "--property=PrivateTmp=yes",
                 "--property=PrivateNetwork=yes",
                 "--property=ReadWritePaths=" + str(trial),
-                f"--property=BindReadOnlyPaths={candidate_config}:{self.config}/production.env",
+                *(
+                    [f"--property=BindReadOnlyPaths={candidate_root}:{self.config}"]
+                    if runtime_archive is not None
+                    else [f"--property=BindReadOnlyPaths={candidate_config}:{self.config}/production.env"]
+                ),
                 *(
                     [f"--property=BindReadOnlyPaths={release}/candidate-registry:{self.config}/registry"]
-                    if registry_file is not None
+                    if registry_file is not None and runtime_archive is None
                     else []
                 ),
                 *self.environment_args(trial),
@@ -859,6 +990,9 @@ WantedBy=multi-user.target
             raise ValueError("configuration changed during candidate validation")
         if old:
             self.check_registry(old)
+            self.check_runtime(old)
+        if runtime_archive is not None:
+            self.check_runtime(old or {}, desired)
         self.record("pending.json", {**desired, "previous": old, "phase": "switching"})
         try:
             if old:
@@ -871,6 +1005,7 @@ WantedBy=multi-user.target
                 if digest(self.config / "production.env") != old["config_sha256"]:
                     raise ValueError("configuration changed before replacement")
                 self.check_registry(old)
+                self.check_runtime(old)
             write(self.unit, self.unit_text())
             self.unit.chmod(0o644)
             self.config_snapshot(candidate_config, self.config / "production.env", desired["config_sha256"])
@@ -880,6 +1015,8 @@ WantedBy=multi-user.target
                     self.config / "registry/environment.json",
                     desired["registry_sha256"],
                 )
+            if runtime_archive is not None:
+                self.switch_runtime(desired)
             self.switch(release)
             self.command("systemctl", "daemon-reload")
             self.command("systemctl", "start", self.name)
@@ -906,6 +1043,9 @@ def main():
     parser.add_argument("--candidate", type=Path, help="已冻结的三文件停用候选包，与--config互斥")
     parser.add_argument("--candidate-sha256")
     parser.add_argument("--expected-registry-sha256", help="目录变化必须匹配当前摘要，首次引入为absent")
+    parser.add_argument("--runtime", type=Path, help="同计划的私有运行工件，仅与--candidate成套使用")
+    parser.add_argument("--runtime-sha256")
+    parser.add_argument("--expected-runtime-sha256", help="运行工件变化匹配当前摘要，首次引入为absent")
     parser.add_argument("--python", default="/usr/bin/python3")
     parser.add_argument("--receipt", help="preflight回读持久现场回执；不安装或恢复")
     args = parser.parse_args()
@@ -956,6 +1096,9 @@ def main():
                         args.candidate_sha256,
                         args.expected_config_sha256,
                         args.expected_registry_sha256,
+                        args.runtime,
+                        args.runtime_sha256,
+                        args.expected_runtime_sha256,
                     )
                 ):
                     raise ValueError("preflight accepts no deployment input")
@@ -969,7 +1112,21 @@ def main():
                     if not args.candidate_sha256 or args.config is not None or args.config_sha256:
                         raise ValueError("candidate and scalar configuration are mutually exclusive")
                     trusted(args.candidate, private=True)
-                    files, _ = probe.candidate_files(args.candidate, args.candidate_sha256, args.environment)
+                    files, candidate = probe.candidate_files(
+                        args.candidate, args.candidate_sha256, args.environment
+                    )
+                    if args.runtime is not None:
+                        trusted(args.runtime, private=True)
+                        _, runtime = probe.runtime_files(args.runtime, args.runtime_sha256, args.environment)
+                        if any(runtime[key] != candidate[key] for key in ("plan_id", "plan_digest")):
+                            raise ValueError("runtime and configuration plan mismatch")
+                        base = f"/etc/aiops-access-{args.environment}/runtime/"
+                        files["production.env"] += (
+                            f'AIOPS_GATEWAY_OPERATOR_PROFILES_FILE="{base}operator-profiles.json"\n'
+                            f'AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE="{base}consumer-targets.json"\n'
+                        ).encode()
+                    elif args.runtime_sha256 or args.expected_runtime_sha256:
+                        raise ValueError("runtime artifact required")
                     files["environment.json"] = inst.candidate_directory(files["environment.json"])
                     if not args.archive or not args.sha256:
                         raise ValueError("application artifact required")
@@ -988,11 +1145,17 @@ def main():
                             args.expected_config_sha256,
                             root / "environment.json",
                             args.expected_registry_sha256,
+                            args.runtime,
+                            args.runtime_sha256,
+                            args.expected_runtime_sha256,
                         )
                 elif (
                     not all((args.archive, args.sha256, args.config, args.config_sha256))
                     or args.candidate_sha256
                     or args.expected_registry_sha256
+                    or args.runtime
+                    or args.runtime_sha256
+                    or args.expected_runtime_sha256
                 ):
                     raise ValueError("artifact and configuration identities required")
                 else:

@@ -213,6 +213,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     #                              kb_ids / agt_ 版本 ×2 / code —— 订单字段已收口
     "gateway/environment_registry.py": 3,  # 租户、管理员主体编号及审计操作人，非订单
     "gateway/environment_drafts.py": 1,  # 部署目标/凭据逻辑引用，不是订单号
+    "gateway/environment_artifacts.py": 1,  # 冷安装运行工件的租户id，与环境目录合同一致
     "gateway/gateway_config.py": 2,  # 主机名 / 端点名
     "gateway/gateway_store.py": 1,  # scope 指纹与其他 store 字段
     "gateway/metrics_store.py": 2,  # 租户 id / 指标 id

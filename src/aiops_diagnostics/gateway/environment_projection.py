@@ -131,7 +131,7 @@ def summary(files):
     }
 
 
-def validate_candidate(config, directory, environment):
+def validate_candidate(config, directory, environment, *, runtime=None):
     """候选venv按实际配置/目录核对固定路径及停用范围，不调用外部服务。"""
     from dotenv import dotenv_values
 
@@ -157,7 +157,14 @@ def validate_candidate(config, directory, environment):
         "AIOPS_TDENGINE_USER",
         "AIOPS_TDENGINE_PASSWORD",
     ):
-        if values.get(key):
+        if values.get(key) and not (
+            runtime is not None
+            and key
+            in {
+                "AIOPS_GATEWAY_OPERATOR_PROFILES_FILE",
+                "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE",
+            }
+        ):
             raise ValueError("candidate execution bindings must remain disabled")
     body = registry.load(directory)
     if body["schema"] != registry.MANAGED_SCHEMA or body["managers"] or len(body["environments"]) != 1:
@@ -175,6 +182,15 @@ def validate_candidate(config, directory, environment):
         "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED": "false",
         "AIOPS_SSH_ENABLED": "false",
     }
+    if runtime is not None:
+        root = f"/etc/aiops-access-{environment}/runtime"
+        expected.update(
+            {
+                "AIOPS_GATEWAY_OPERATOR_PROFILES_FILE": root + "/operator-profiles.json",
+                "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE": root + "/consumer-targets.json",
+            }
+        )
+        validate_runtime(runtime, row)
     if (
         row["id"] != environment
         or row["enabled"]
@@ -183,3 +199,100 @@ def validate_candidate(config, directory, environment):
         or any(values.get(key) != value for key, value in expected.items())
     ):
         raise ValueError("candidate configuration and directory differ or grant admission")
+
+
+def validate_runtime(path, row):
+    """核暂存字节与固定逻辑路径；完整profile加载由隔离候选启动核对。"""
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.consumer.consumer_publication import declared_rows
+    from aiops_diagnostics.execution.agent_runs import AgentRunConfig
+    from aiops_diagnostics.execution.execution_manifest import from_text
+    from aiops_diagnostics.gateway.environment_artifacts import runtime_files
+
+    path = Path(path)
+    validate_private_file(path / "runtime.tar")
+    sha = hashlib.sha256((path / "runtime.tar").read_bytes()).hexdigest()
+    files, body = runtime_files(path / "runtime.tar", sha, row["id"])
+    for name, raw in files.items():
+        validate_private_file(path / name)
+        if (path / name).read_bytes() != raw:
+            raise ValueError("runtime snapshot differs from archive")
+    if {p.name for p in path.iterdir()} != set(files) | {"runtime.tar"}:
+        raise ValueError("runtime snapshot contains unknown files")
+    registration = json.loads(files["registrations.json"])
+    if (
+        registration.get("environment") != row["id"]
+        or registration.get("enabled") is not False
+        or registration.get("gateway_url") != row["gateway_url"]
+        or registration.get("tenant_id") != body["tenant_id"]
+        or body["tenant_id"] not in {t["id"] for t in row["tenants"]}
+        or not all(
+            isinstance(registration.get(k), str) and registration[k]
+            for k in (
+                "workspace_id",
+                "operator_app_id",
+                "consumer_app_id",
+            )
+        )
+        or registration["operator_app_id"] == registration["consumer_app_id"]
+    ):
+        raise ValueError("runtime registration scope mismatch")
+    config = AgentRunConfig.load(path / "agent-runs.json")
+    if config.environment != row["id"] or any(
+        node.environment != row["id"] for node in config.node_token_hashes.values()
+    ):
+        raise ValueError("runtime node environment mismatch")
+    manifest = from_text(files["operator-manifest.json"].decode())
+    from aiops_diagnostics.operator import operator_agent, operator_tools
+
+    expected_manifest = json.loads(files["operator-manifest.json"])
+    if (
+        expected_manifest["schema"] != operator_agent.SCHEMA
+        or expected_manifest["system_messages"] != [operator_agent.sop() + "\n" + operator_agent.INSTRUCTIONS]
+        or expected_manifest["tools"]
+        != [
+            dict(name=t.name, description=t.description, input_schema=t.input_schema())
+            for t in operator_tools.tools()
+        ]
+    ):
+        raise ValueError("runtime operator protocol mismatch")
+    profile = json.loads(files["operator-profiles.json"])
+    root = f"/etc/aiops-access-{row['id']}/runtime"
+    if profile.get("schema") != "operator-profiles/1" or len(profile.get("profiles", [])) != 1:
+        raise ValueError("runtime profile shape mismatch")
+    profile = profile["profiles"][0]
+    target = profile["target"]
+    if (
+        profile["id"] != "operator-" + row["id"]
+        or target.get("environment") != row["id"]
+        or target.get("entry") != "operator"
+        or target.get("cpms_base_url") != row["cpms_base_url"]
+        or target.get("config_file") != root + "/agent-runs.json"
+        or target.get("manifest_file") != root + "/operator-manifest.json"
+        or profile["model"].get("credential_file") != root + "/operator-model.json"
+        or manifest.model_key != profile["model"]["name"]
+        or any(
+            m.get("credential_file") != root + "/consumer-model.json"
+            for m in profile.get("consumer_models", [])
+        )
+    ):
+        raise ValueError("runtime profile scope mismatch")
+    from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
+
+    canonical_gateway_url(target["proxy_base_url"])
+    consumers = declared_rows(
+        SimpleNamespace(consumer_publication_targets_file=str(path / "consumer-targets.json"))
+    )
+    if len(consumers) != 1:
+        raise ValueError("runtime consumer shape mismatch")
+    consumer = consumers[0]
+    if (
+        consumer.get("environment") != row["id"]
+        or consumer.get("tenant_id") != body["tenant_id"]
+        or consumer.get("app_id") != registration["consumer_app_id"]
+        or not isinstance(consumer.get("knowledge_base_ids"), list)
+        or len(consumer["knowledge_base_ids"]) != 1
+        or any(type(consumer.get(k)) is not bool for k in ("live_order_status", "live_billing_record"))
+    ):
+        raise ValueError("runtime consumer scope mismatch")

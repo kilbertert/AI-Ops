@@ -95,6 +95,10 @@ code:
 
 ## dev-host 传输合同
 
+运行接线安装沿[安装手册](../../ops/environments/gateway/install.md#停用运行工件安装)：
+同计划D30工件与停用配置成套校验，release私有快照和受管runtime指针一起恢复；
+数据库与证据不倒回旧备份，原三文件方式保持。安装不登记应用或激活租户，真实业务另验。
+
 统一主机访问：`dev-host show` 断言 role=service-host+status=active 否则停；`dev-host cp --artifact-sha256` 在上传时强制制品身份（不符 exit 77——策略闸不是自我声明）；`dev-host exec --allow-service-exec` 门控服务主机写。仓库 `.dev-host.toml` 声明本项目可达目标的逻辑名与路径键（95 的 `release/new_config/new_state/backups/node_*` 在此登记，旧 `/home/aiops/*` 仅留作恢复资料）。CD 用派生注册表视图，只换 `ssh_alias→aiops-41-cd`，与权威 `~/.config/dev-host/hosts.toml` 逐字段核对。
 
 ## deploy-41.sh 各闸

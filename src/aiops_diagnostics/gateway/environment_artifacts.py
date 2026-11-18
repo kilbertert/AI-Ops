@@ -211,3 +211,63 @@ def candidate_files(archive, digest, environment):
         return files, body
     except (tarfile.TarError, EOFError, zlib.error, KeyError, TypeError) as exc:
         raise ValueError("invalid candidate archive") from exc
+
+
+def runtime_files(archive, digest, environment):
+    """读取D30固定运行包；不执行内容，语义由候选venv继续验证。"""
+    regular(archive)
+    if archive.stat().st_size > 8 * 1024**2:
+        raise ValueError("runtime archive too large")
+    with archive.open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+            raise ValueError("runtime archive digest mismatch")
+    required = {
+        "agent-runs.json",
+        "operator-manifest.json",
+        "operator-profiles.json",
+        "consumer-targets.json",
+        "registrations.json",
+        "operator-model.json",
+        "consumer-model.json",
+    }
+    files = {}
+    with tarfile.open(archive) as bundle:
+        for index, member in enumerate(bundle):
+            if (
+                index >= 8
+                or member.name not in required | {"manifest.json"}
+                or not member.isfile()
+                or member.name in files
+                or member.size > 1048576
+            ):
+                raise ValueError("invalid runtime member")
+            files[member.name] = bundle.extractfile(member).read()
+    if set(files) != required | {"manifest.json"}:
+        raise ValueError("runtime files missing")
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate runtime field")
+            result[key] = value
+        return result
+
+    for raw in files.values():
+        if not isinstance(json.loads(raw, object_pairs_hook=unique), dict):
+            raise ValueError("runtime JSON object required")
+    body = json.loads(files["manifest.json"])
+    if (
+        not isinstance(body, dict)
+        or body.get("schema") != "aiops-environment-runtime/1"
+        or body.get("scope") != "runtime-wiring-only"
+        or body.get("environment") != environment
+        or any(body.get(k) is not False for k in ("executable", "installed", "activated"))
+        or not isinstance(body.get("tenant_id"), str)
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", body["tenant_id"])
+        or not re.fullmatch(r"plan_[0-9a-f]{32}", str(body.get("plan_id")))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(body.get("plan_digest")))
+        or body.get("files") != {n: hashlib.sha256(files[n]).hexdigest() for n in required}
+    ):
+        raise ValueError("invalid runtime manifest or member digest")
+    return files, body
