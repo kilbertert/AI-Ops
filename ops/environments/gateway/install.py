@@ -571,6 +571,14 @@ WantedBy=multi-user.target
             raise ValueError("unknown recovery phase")
         old = pending["previous"]
         if old:
+            current = self.root / "current"
+            allowed_releases = [old]
+            if pending["phase"] == "switching":
+                allowed_releases.append(pending)
+            if not current.is_symlink() or Path(os.readlink(current)) not in {
+                self.release(record) for record in allowed_releases
+            }:
+                raise ValueError("current release drift prevents rollback")
             allowed = {old["config_sha256"]}
             if pending["phase"] == "switching":
                 allowed.add(pending["config_sha256"])

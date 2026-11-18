@@ -1166,3 +1166,32 @@ def test_runtime_archive_and_semantic_mismatch_refused(host, invalid):
         with pytest.raises(ValueError):
             validate_runtime(snapshot, row)
     assert not inst.root.exists()
+
+
+@pytest.mark.parametrize("drift", ["missing", "unowned"])
+def test_pending_runtime_recovery_refuses_changed_application_pointer(host, monkeypatch, drift):
+    inst = host[0]
+    apply_runtime(host, runtime_bundle(host))
+    second = runtime_bundle(host, model="model-two")
+    switch, recover = inst.switch_runtime, inst.recover
+
+    def crash(record):
+        switch(record)
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(inst, "switch_runtime", crash)
+    monkeypatch.setattr(inst, "recover", lambda: None)
+    with pytest.raises(KeyboardInterrupt):
+        apply_runtime(host, second)
+    monkeypatch.setattr(inst, "recover", recover)
+    pointer = inst.root / "current"
+    pointer.unlink()
+    if drift == "unowned":
+        pointer.symlink_to(inst.root.parent / "unknown-release")
+    calls = len(host[4])
+    with pytest.raises(ValueError, match="current release drift"):
+        inst.recover()
+    assert (inst.root / "pending.json").exists()
+    assert not any(a[:2] == ("systemctl", "stop") for a in host[4][calls:])
+    assert not pointer.exists()
+    assert pointer.is_symlink() == (drift == "unowned")
