@@ -14,6 +14,8 @@ code:
     - src/aiops_diagnostics/gateway/environment_projection.py
     - src/aiops_diagnostics/gateway/environment_plans.py
     - src/aiops_diagnostics/gateway/environment_tasks.py
+    - src/aiops_diagnostics/gateway/environment_trial.py
+    - tests/gateway/test_environment_trial.py
     - src/aiops_diagnostics/dify/environment_knowledge_connection.py
     - src/aiops_diagnostics/gateway_server.py
     - src/aiops_diagnostics/gateway/isolation_guard.py
@@ -34,6 +36,11 @@ code:
 ---
 
 # Gateway 运行时：启动、配置与边界
+
+停用候选管家仅走本机 `/v1/internal/environment-trial` 管理入口：目标 task-key HMAC、明确已装运行包和
+受管目标正常登录交接；不放开普通目录准入。start/read 均核当前工件、目标user/info和范围，
+复用原OperatorCpms/Java/HTTPS工具。最多20个短时授权、5分钟自动释放，重启后失效；普通App/H5身份另验。
+操作与边界见 `ops/environments/gateway/install.md`，行为判据为环境Feature/QA D33。
 
 ## 启动顺序（serve()）
 
