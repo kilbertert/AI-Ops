@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import os
 import tarfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -256,3 +257,350 @@ def test_plan_checks_embedded_artifact_identity_without_executing_it(prepared, t
     assert {"id": "embedded-revision", "state": "blocked"} in second["checks"]
     assert plans.read(path, ADMIN, first["id"], ref)["state"] == "expired"
     assert second["executable"] is False and not sentinel.exists()
+
+
+def _reference_archive(tmp_path, name, members):
+    from aiops_diagnostics.gateway.environment_artifacts import installer_manifest, manifest
+
+    contents = dict(members)
+    contents["SHA256SUMS"] = "".join(
+        hashlib.sha256(value).hexdigest() + "  " + member + chr(10) for member, value in members.items()
+    ).encode()
+    path = tmp_path / name
+    with tarfile.open(path, "w:gz") as bundle:
+        for member, value in contents.items():
+            info = tarfile.TarInfo(member)
+            info.size = len(value)
+            bundle.addfile(info, io.BytesIO(value))
+    path.chmod(0o600)
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    revision = (
+        manifest(path, sha, "3.11" if "311" in name else "3.12")["revision"]
+        if name.startswith("app")
+        else installer_manifest(path, sha)
+    )
+    return {"path": str(path), "sha256": sha, "revision": revision}
+
+
+def test_artifact_reference_update_is_cas_atomic_and_preserves_config(prepared, tmp_path):
+    registry_path, _, reference, _ = prepared
+    revision = "a" * 40
+    asset_dir = tmp_path / "input"
+    asset_dir.mkdir(mode=0o700)
+    app = _reference_archive(
+        asset_dir,
+        "app.tar.gz",
+        {
+            "manifest.json": json.dumps(
+                dict(
+                    schema=1,
+                    revision=revision,
+                    python="3.12",
+                    platform="linux-x86_64",
+                    version="1.0.0+" + revision[:12],
+                )
+            ).encode(),
+            "wheelhouse/aiops_diagnostics-1.0.0-py3-none-any.whl": b"opaque wheel",
+        },
+    )
+    installer = _reference_archive(
+        asset_dir,
+        "installer.tar.gz",
+        {
+            "REVISION": revision.encode(),
+            "install.py": b"pass",
+            "runtime_check.py": b"pass",
+            "probe.py": b"pass",
+        },
+    )
+    reference_dir = tmp_path / "onboarding-assets"
+    reference_dir.mkdir(mode=0o700)
+    reference = reference_dir / "references.json"
+    reference.write_bytes(
+        json.dumps(
+            {
+                "schema": "aiops-environment-onboarding/1",
+                "targets": [
+                    {
+                        "id": "host-a",
+                        "host": "managed-host",
+                        "user": "aiops",
+                        "port": 18951,
+                        "python": "3.12",
+                        "application": {"path": "/old/app.tar.gz", "sha256": "b" * 64, "revision": "b" * 40},
+                        "installer": {
+                            "path": "/old/installer.tar.gz",
+                            "sha256": "b" * 64,
+                            "revision": "b" * 40,
+                        },
+                        "configurations": [
+                            {"id": "config-a", "path": "/private/config.env", "sha256": "c" * 64}
+                        ],
+                    }
+                ],
+            }
+        ).encode()
+    )
+    reference.chmod(0o600)
+    before = reference.read_bytes()
+    result = plans.update_artifact_references(
+        reference,
+        registry_path=registry_path,
+        identity=ADMIN,
+        environment="a",
+        expected_sha256=hashlib.sha256(before).hexdigest(),
+        application=app,
+        installer=installer,
+    )
+    updated = json.loads(reference.read_text())
+    assert result["environment"] == "a"
+    expected_application = reference.parent / revision / "application-3.12.tar.gz"
+    expected_installer = reference.parent / revision / "installer.tar.gz"
+    assert updated["targets"][0]["application"] == {**app, "path": str(expected_application)}
+    assert updated["targets"][0]["installer"] == {**installer, "path": str(expected_installer)}
+    assert expected_application.read_bytes() == Path(app["path"]).read_bytes()
+    assert expected_installer.read_bytes() == Path(installer["path"]).read_bytes()
+    assert updated["targets"][0]["configurations"] == json.loads(before)["targets"][0]["configurations"]
+    backup = reference.with_name(f"{reference.name}.{hashlib.sha256(before).hexdigest()}.bak")
+    assert backup.read_bytes() == before
+    assert result["backup_sha256"] == hashlib.sha256(before).hexdigest()
+    assert reference.stat().st_mode & 0o077 == backup.stat().st_mode & 0o077 == 0
+    application_311 = _reference_archive(
+        asset_dir,
+        "app-311.tar.gz",
+        {
+            "manifest.json": json.dumps(
+                dict(
+                    schema=1,
+                    revision=revision,
+                    python="3.11",
+                    platform="linux-x86_64",
+                    version="1.0.0+" + revision[:12],
+                )
+            ).encode(),
+            "wheelhouse/aiops_diagnostics-1.0.0-py3-none-any.whl": b"opaque wheel 311",
+        },
+    )
+    checked_311 = plans.manifest(Path(application_311["path"]), application_311["sha256"], "3.11")
+    checked_312 = plans.manifest(expected_application, updated["targets"][0]["application"]["sha256"], "3.12")
+    assert checked_311["revision"] == checked_312["revision"] == revision
+    assert expected_application != Path(application_311["path"])
+    with pytest.raises(plans.PlanRefused, match="ALREADY_CURRENT"):
+        plans.update_artifact_references(
+            reference,
+            registry_path=registry_path,
+            identity=ADMIN,
+            environment="a",
+            expected_sha256=result["references_sha256"],
+            application=app,
+            installer=installer,
+        )
+
+
+@pytest.mark.parametrize(
+    "failure", ["stale", "mixed-revision", "missing-target", "existing-backup", "unauthorized"]
+)
+def test_artifact_reference_update_rejects_invalid_changes_without_overwrite(prepared, tmp_path, failure):
+    registry_path, _, _, _ = prepared
+    revision = "a" * 40
+    source_dir = tmp_path / "input"
+    source_dir.mkdir(mode=0o700)
+    app = _reference_archive(
+        source_dir,
+        "app-" + failure + ".tar.gz",
+        {
+            "manifest.json": json.dumps(
+                dict(
+                    schema=1,
+                    revision=revision,
+                    python="3.12",
+                    platform="linux-x86_64",
+                    version="1.0.0+" + revision[:12],
+                )
+            ).encode(),
+            "wheelhouse/aiops_diagnostics-1.0.0-py3-none-any.whl": b"opaque wheel",
+        },
+    )
+    install_revision = "b" * 40 if failure == "mixed-revision" else revision
+    installer = _reference_archive(
+        source_dir,
+        "installer-" + failure + ".tar.gz",
+        {
+            "REVISION": install_revision.encode(),
+            "install.py": b"pass",
+            "runtime_check.py": b"pass",
+            "probe.py": b"pass",
+        },
+    )
+    reference_dir = tmp_path / "onboarding-assets"
+    reference_dir.mkdir(mode=0o700)
+    reference = reference_dir / "references.json"
+    original = json.dumps(
+        {
+            "schema": "aiops-environment-onboarding/1",
+            "targets": [
+                {
+                    "id": "host-a",
+                    "host": "managed-host",
+                    "user": "aiops",
+                    "port": 18951,
+                    "python": "3.12",
+                    "application": app,
+                    "installer": installer,
+                    "configurations": [{"id": "config-a", "path": "/private/config.env", "sha256": "c" * 64}],
+                }
+            ],
+        }
+    ).encode()
+    reference.write_bytes(original)
+    reference.chmod(0o600)
+    backup = reference.with_name(f"{reference.name}.{hashlib.sha256(original).hexdigest()}.bak")
+    if failure == "existing-backup":
+        backup.write_text("keep")
+    environment = "missing" if failure == "missing-target" else "a"
+    expected = "0" * 64 if failure == "stale" else hashlib.sha256(original).hexdigest()
+    expected_error = registry.RegistryError if failure == "unauthorized" else plans.PlanRefused
+    with pytest.raises(expected_error):
+        plans.update_artifact_references(
+            reference,
+            registry_path=registry_path,
+            identity=("other", "platform", "admin") if failure == "unauthorized" else ADMIN,
+            environment=environment,
+            expected_sha256=expected,
+            application=app,
+            installer=installer,
+        )
+    assert reference.read_bytes() == original
+    if failure == "existing-backup":
+        assert backup.read_text() == "keep"
+    assert not (reference_dir / revision).exists()
+
+
+def test_reference_update_cli_only_uses_configured_reference_path(prepared, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    registry_path, _, reference, _ = prepared
+    from aiops_diagnostics import admin_cli
+
+    monkeypatch.setattr(
+        admin_cli,
+        "_settings_with_config_file",
+        lambda _: SimpleNamespace(
+            environment_onboarding_file=str(reference),
+            environment_management_registry_file="",
+            environment_registry_file=str(registry_path),
+        ),
+    )
+    cli = CliRunner().invoke(
+        admin_app,
+        [
+            "environment-artifacts",
+            "--registry",
+            str(tmp_path / "other-registry.json"),
+            "--references",
+            str(tmp_path / "other.json"),
+            "--file",
+            str(reference),
+        ],
+    )
+    assert cli.exit_code == 1 and json.loads(cli.output)["error"] == "ENVIRONMENT_REFERENCES_UPDATE_REFUSED"
+    configured = CliRunner().invoke(
+        admin_app,
+        [
+            "environment-artifacts",
+            "--registry",
+            str(registry_path),
+            "--references",
+            str(reference),
+            "--file",
+            str(reference),
+        ],
+    )
+    assert (
+        configured.exit_code == 1
+        and json.loads(configured.output)["error"] == "ENVIRONMENT_REFERENCES_UPDATE_REFUSED"
+    )
+
+
+def test_reference_update_restores_old_file_when_directory_sync_fails(prepared, tmp_path, monkeypatch):
+    registry_path, _, _, _ = prepared
+    revision = "d" * 40
+    source_dir = tmp_path / "input"
+    source_dir.mkdir(mode=0o700)
+    application = _reference_archive(
+        source_dir,
+        "app.tar.gz",
+        {
+            "manifest.json": json.dumps(
+                dict(
+                    schema=1,
+                    revision=revision,
+                    python="3.12",
+                    platform="linux-x86_64",
+                    version="1.0.0+" + revision[:12],
+                )
+            ).encode(),
+            "wheelhouse/aiops_diagnostics-1.0.0-py3-none-any.whl": b"opaque wheel",
+        },
+    )
+    installer = _reference_archive(
+        source_dir,
+        "installer.tar.gz",
+        {
+            "REVISION": revision.encode(),
+            "install.py": b"pass",
+            "runtime_check.py": b"pass",
+            "probe.py": b"pass",
+        },
+    )
+    reference_dir = tmp_path / "onboarding-assets"
+    reference_dir.mkdir(mode=0o700)
+    reference = reference_dir / "references.json"
+    original = json.dumps(
+        {
+            "schema": "aiops-environment-onboarding/1",
+            "targets": [
+                {
+                    "id": "host-a",
+                    "host": "managed-host",
+                    "user": "aiops",
+                    "port": 18951,
+                    "python": "3.12",
+                    "application": {"path": "/old/app.tar.gz", "sha256": "b" * 64, "revision": "b" * 40},
+                    "installer": {"path": "/old/installer.tar.gz", "sha256": "b" * 64, "revision": "b" * 40},
+                    "configurations": [{"id": "config-a", "path": "/private/config.env", "sha256": "c" * 64}],
+                }
+            ],
+        }
+    ).encode()
+    reference.write_bytes(original)
+    reference.chmod(0o600)
+    original_fsync = os.fsync
+    failed = False
+
+    references_directory = str(reference_dir)
+
+    def fail_one_directory_sync(fd):
+        nonlocal failed
+        if (
+            not failed
+            and os.path.isdir(f"/proc/self/fd/{fd}")
+            and os.path.realpath(f"/proc/self/fd/{fd}") == references_directory
+        ):
+            failed = True
+            raise OSError("injected directory sync failure")
+        original_fsync(fd)
+
+    monkeypatch.setattr(plans.os, "fsync", fail_one_directory_sync)
+    with pytest.raises(OSError, match="directory sync failure"):
+        plans.update_artifact_references(
+            reference,
+            registry_path=registry_path,
+            identity=ADMIN,
+            environment="a",
+            expected_sha256=hashlib.sha256(original).hexdigest(),
+            application=application,
+            installer=installer,
+        )
+    assert failed and reference.read_bytes() == original
+    assert not reference.with_name(f"{reference.name}.{hashlib.sha256(original).hexdigest()}.bak").exists()

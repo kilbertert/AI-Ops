@@ -11,9 +11,11 @@ code:
     - docs/acceptance/environment-directory.feature
     - docs/acceptance/environment-directory-qa-plan.md
     - docs/agents/environment-registry.md
+    - docs/acceptance/environment-directory.feature
+    - docs/acceptance/environment-directory-qa-plan.md
     - src/aiops_diagnostics/gateway/environment_projection.py
-    - src/aiops_diagnostics/gateway/environment_plans.py
     - src/aiops_diagnostics/gateway/environment_tasks.py
+    - src/aiops_diagnostics/gateway/environment_plans.py
     - src/aiops_diagnostics/gateway/environment_trial.py
     - tests/gateway/test_environment_trial.py
     - src/aiops_diagnostics/dify/environment_knowledge_connection.py
@@ -28,6 +30,7 @@ code:
     - src/aiops_diagnostics/gateway/request_observation.py
     - src/aiops_diagnostics/gateway/metrics_store.py
     - src/aiops_diagnostics/admin_cli.py
+    - tests/gateway/test_environment_plans.py
     - src/aiops_diagnostics/tdengine_proxy.py
     - ops/aiops-tdengine-readonly-proxy.service
     - .env.example
@@ -43,6 +46,9 @@ code:
 操作与边界见 `ops/environments/gateway/install.md`，行为判据为环境Feature/QA D33。
 
 ## 启动顺序（serve()）
+
+aiops-admin environment-artifacts 通过显式环境、受控 references 路径与当前文件摘要 CAS 更新成套应用/安装器引用；
+只保留原配置引用，先备份原文件再原子替换。其后重做新计划，命令本身不安装或激活。
 
 `src/aiops_diagnostics/gateway_server.py` (serve)：isolation_guard → `Settings.from_env()` → `validate()` → `require_deployment_identity` → `configure_gateway_logging` → `create_gateway_app` → uvicorn（`log_config=None`、`proxy_headers=False`、`server_header=False`）。
 

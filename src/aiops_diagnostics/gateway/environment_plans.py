@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import shutil
 import tarfile
 import tempfile
 import time
@@ -22,6 +23,208 @@ from aiops_diagnostics.gateway.environment_artifacts import installer_manifest, 
 
 class PlanRefused(ValueError):
     pass
+
+
+def update_artifact_references(
+    path, *, registry_path, identity, environment, expected_sha256, application, installer
+):
+    """CAS-update one target under the environment draft/plan lock; retain a rollback copy."""
+    path, registry_path = Path(path).absolute(), Path(registry_path).absolute()
+    with drafts._locked(registry_path):
+        current = registry.load(registry_path)
+        allowed = drafts.access(current, identity)
+        if "*" not in allowed and environment not in allowed:
+            raise PlanRefused("ENVIRONMENT_MANAGEMENT_FORBIDDEN")
+        all_drafts = drafts._rows(drafts._database(registry_path))
+        draft = next((row for row in all_drafts if row["environment"] == environment), None)
+        if draft is None:
+            raise PlanRefused("ENVIRONMENT_DRAFT_UNAVAILABLE")
+        target_id = json.loads(draft["body"])["deployment_target"]
+        if "*" not in allowed:
+            shared_scopes = {
+                row["environment"]
+                for row in all_drafts
+                if json.loads(row["body"])["deployment_target"] == target_id
+            }
+            if not shared_scopes <= allowed:
+                raise PlanRefused("ENVIRONMENT_DEPLOYMENT_TARGET_SHARED")
+        result = _update_artifact_references_locked(path, target_id, expected_sha256, application, installer)
+        return {**result, "environment": environment}
+
+
+def _update_artifact_references_locked(path, environment, expected_sha256, application, installer):
+    path = Path(path).absolute()
+    if (
+        not isinstance(environment, str)
+        or not drafts.REFERENCE_PATTERN.fullmatch(environment)
+        or path.is_symlink()
+        or not isinstance(expected_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+        or path.parent.name != "onboarding-assets"
+    ):
+        raise PlanRefused("ENVIRONMENT_REFERENCES_INVALID")
+    validate_private_directory(path.parent)
+    _private(path)
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+        raise PlanRefused("ENVIRONMENT_REFERENCES_CHANGED")
+    backup = path.with_name(f"{path.name}.{expected_sha256}.bak")
+    if backup.exists() or backup.is_symlink():
+        raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS")
+    if (
+        not isinstance(application, dict)
+        or not isinstance(installer, dict)
+        or not isinstance(application.get("revision"), str)
+        or application.get("revision") != installer.get("revision")
+    ):
+        raise PlanRefused("ENVIRONMENT_REFERENCES_REVISION_MISMATCH")
+    body = json.loads(path.read_text(), object_pairs_hook=registry._unique_object)
+    _references(path)
+    target = next((row for row in body["targets"] if row["id"] == environment), None)
+    if target is None:
+        raise PlanRefused("ENVIRONMENT_REFERENCES_TARGET_MISSING")
+
+    def checked_artifact(value, kind):
+        if not isinstance(value, dict) or set(value) != {"path", "sha256", "revision"}:
+            raise PlanRefused("ENVIRONMENT_REFERENCES_INVALID")
+        source = _private(value["path"])
+        sha = value["sha256"]
+        revision = value["revision"]
+        if (
+            not isinstance(sha, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", sha)
+            or not isinstance(revision, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", revision)
+            or _file_check(value, 512 * 1024**2)[0] != sha
+        ):
+            raise PlanRefused("ENVIRONMENT_REFERENCES_INVALID")
+        actual = (
+            manifest(source, sha, target["python"])["revision"]
+            if kind == "application"
+            else installer_manifest(source, sha)
+        )
+        if actual != revision:
+            raise PlanRefused("ENVIRONMENT_REFERENCES_REVISION_MISMATCH")
+        return {"source": source, "sha256": sha, "revision": revision, "kind": kind}
+
+    def retain_artifact(value):
+        source = value["source"]
+        sha = value["sha256"]
+        revision = value["revision"]
+        kind = value["kind"]
+        artifact_directory = path.parent / revision
+        expected_name = (
+            f"application-{target['python']}.tar.gz" if kind == "application" else "installer.tar.gz"
+        )
+        artifact_directory.mkdir(mode=0o700, exist_ok=True)
+        validate_private_directory(artifact_directory)
+        artifact_path = artifact_directory / expected_name
+        if artifact_path.exists() or artifact_path.is_symlink():
+            _private(artifact_path)
+            if _file_check({"path": str(artifact_path), "sha256": sha}, 512 * 1024**2)[0] != sha:
+                raise PlanRefused("ENVIRONMENT_REFERENCES_ARTIFACT_CONFLICT")
+        else:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=expected_name + ".", suffix=".tmp", dir=artifact_directory
+            )
+            temporary_artifact = Path(temporary_name)
+            try:
+                with source.open("rb") as reader, os.fdopen(descriptor, "wb") as writer:
+                    shutil.copyfileobj(reader, writer)
+                    writer.flush()
+                    os.fsync(writer.fileno())
+                temporary_artifact.chmod(0o600)
+                try:
+                    os.link(temporary_artifact, artifact_path)
+                    directory = os.open(artifact_directory, os.O_DIRECTORY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                except FileExistsError:
+                    _private(artifact_path)
+                    if _file_check({"path": str(artifact_path), "sha256": sha}, 512 * 1024**2)[0] != sha:
+                        raise PlanRefused("ENVIRONMENT_REFERENCES_ARTIFACT_CONFLICT") from None
+            finally:
+                temporary_artifact.unlink(missing_ok=True)
+            _private(artifact_path)
+        if _file_check({"path": str(artifact_path), "sha256": sha}, 512 * 1024**2)[0] != sha:
+            raise PlanRefused("ENVIRONMENT_REFERENCES_ARTIFACT_CONFLICT")
+        return dict(path=str(artifact_path), sha256=sha, revision=revision)
+
+    checked_application = checked_artifact(application, "application")
+    checked_installer = checked_artifact(installer, "installer")
+    if checked_application["revision"] != checked_installer["revision"]:
+        raise PlanRefused("ENVIRONMENT_REFERENCES_REVISION_MISMATCH")
+    app = retain_artifact(checked_application)
+    package = retain_artifact(checked_installer)
+    if target["application"] == app and target["installer"] == package:
+        raise PlanRefused("ENVIRONMENT_REFERENCES_ALREADY_CURRENT")
+    original = path.read_bytes()
+    if hashlib.sha256(original).hexdigest() != expected_sha256:
+        raise PlanRefused("ENVIRONMENT_REFERENCES_CHANGED")
+    target["application"], target["installer"] = app, package
+    encoded = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    descriptor, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    temporary = Path(name)
+    backup_created = False
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o600)
+        # Keep the rollback copy private and complete before the atomic replacement.
+        descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        backup_created = True
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _private(backup)
+        if path.read_bytes() != original:
+            raise PlanRefused("ENVIRONMENT_REFERENCES_CHANGED")
+        temporary.replace(path)
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        if path.read_bytes() == original:
+            if backup_created:
+                backup.unlink(missing_ok=True)
+        elif path.read_bytes() == encoded.encode():
+            descriptor, restore_name = tempfile.mkstemp(
+                prefix=path.name + ".", suffix=".restore", dir=path.parent
+            )
+            restore = Path(restore_name)
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(original)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                restore.chmod(0o600)
+                restore.replace(path)
+                directory = os.open(path.parent, os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+                backup.unlink(missing_ok=True)
+            finally:
+                restore.unlink(missing_ok=True)
+        raise
+    return {
+        "environment": environment,
+        "revision": app["revision"],
+        "application_sha256": app["sha256"],
+        "installer_sha256": package["sha256"],
+        "previous_references_sha256": expected_sha256,
+        "references_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "backup_sha256": hashlib.sha256(backup.read_bytes()).hexdigest(),
+        "configuration_ids": [item["id"] for item in target["configurations"]],
+    }
 
 
 def _digest(value):
