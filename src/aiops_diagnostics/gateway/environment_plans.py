@@ -54,13 +54,16 @@ def update_artifact_references(
 
 def _update_artifact_references_locked(path, environment, expected_sha256, application, installer):
     path = Path(path).absolute()
+    asset_root = path.parent if path.parent.name == "onboarding-assets" else path.parent.parent
+    if path.parent.name != "onboarding-assets" and asset_root.name != "onboarding-assets":
+        raise PlanRefused("ENVIRONMENT_REFERENCES_INVALID")
+    validate_private_directory(asset_root)
     if (
         not isinstance(environment, str)
         or not drafts.REFERENCE_PATTERN.fullmatch(environment)
         or path.is_symlink()
         or not isinstance(expected_sha256, str)
         or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
-        or path.parent.name != "onboarding-assets"
     ):
         raise PlanRefused("ENVIRONMENT_REFERENCES_INVALID")
     validate_private_directory(path.parent)
@@ -111,7 +114,9 @@ def _update_artifact_references_locked(path, environment, expected_sha256, appli
         sha = value["sha256"]
         revision = value["revision"]
         kind = value["kind"]
-        artifact_directory = path.parent / revision
+        artifact_directory = asset_root / revision
+        if path.parent.name != "onboarding-assets":
+            artifact_directory = asset_root / f"runtime-install-{revision[:12]}"
         expected_name = (
             f"application-{target['python']}.tar.gz" if kind == "application" else "installer.tar.gz"
         )
