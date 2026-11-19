@@ -397,6 +397,75 @@ def test_artifact_reference_update_is_cas_atomic_and_preserves_config(prepared, 
         )
 
 
+def test_artifact_reference_update_supports_installed_runtime_directory(prepared, tmp_path):
+    registry_path, _, _, _ = prepared
+    revision = "f" * 40
+    source_dir = tmp_path / "input"
+    source_dir.mkdir(mode=0o700)
+    application = _reference_archive(
+        source_dir,
+        "app.tar.gz",
+        {
+            "manifest.json": json.dumps(
+                dict(
+                    schema=1,
+                    revision=revision,
+                    python="3.12",
+                    platform="linux-x86_64",
+                    version="1.0.0+" + revision[:12],
+                )
+            ).encode(),
+            "wheelhouse/aiops_diagnostics-1.0.0-py3-none-any.whl": b"runtime layout",
+        },
+    )
+    installer = _reference_archive(
+        source_dir,
+        "installer.tar.gz",
+        {
+            "REVISION": revision.encode(),
+            "install.py": b"pass",
+            "runtime_check.py": b"pass",
+            "probe.py": b"pass",
+        },
+    )
+    reference_dir = tmp_path / "onboarding-assets" / "runtime-install-aaaaaaaaaaaa"
+    reference_dir.mkdir(mode=0o700, parents=True)
+    reference = reference_dir / "references.json"
+    original = json.dumps(
+        {
+            "schema": "aiops-environment-onboarding/1",
+            "targets": [
+                {
+                    "id": "host-a",
+                    "host": "managed-host",
+                    "user": "aiops",
+                    "port": 18951,
+                    "python": "3.12",
+                    "application": {"path": "/old/app.tar.gz", "sha256": "b" * 64, "revision": "b" * 40},
+                    "installer": {"path": "/old/installer.tar.gz", "sha256": "b" * 64, "revision": "b" * 40},
+                    "configurations": [{"id": "config-a", "path": "/private/config.env", "sha256": "c" * 64}],
+                }
+            ],
+        }
+    ).encode()
+    reference.write_bytes(original)
+    reference.chmod(0o600)
+    result = plans.update_artifact_references(
+        reference,
+        registry_path=registry_path,
+        identity=ADMIN,
+        environment="a",
+        expected_sha256=hashlib.sha256(original).hexdigest(),
+        application=application,
+        installer=installer,
+    )
+    updated = json.loads(reference.read_text())["targets"][0]
+    expected_dir = reference_dir.parent / "runtime-install-ffffffffffff"
+    assert updated["application"]["path"] == str(expected_dir / "application-3.12.tar.gz")
+    assert updated["installer"]["path"] == str(expected_dir / "installer.tar.gz")
+    assert result["environment"] == "a"
+
+
 @pytest.mark.parametrize(
     "failure", ["stale", "mixed-revision", "missing-target", "existing-backup", "unauthorized"]
 )
