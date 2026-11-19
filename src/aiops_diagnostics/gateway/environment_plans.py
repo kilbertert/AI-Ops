@@ -218,7 +218,9 @@ def _update_artifact_references_locked(
         if (
             selected_configuration["sha256"] == sha
             and Path(selected_configuration["path"]).absolute() == retained.absolute()
-            and _file_check(selected_configuration, 1048576)[1]
+            and retained.is_file()
+            and not retained.is_symlink()
+            and _file_check({"path": str(retained), "sha256": sha}, 1048576)[1]
         ):
             retained_configuration = selected_configuration
         else:
