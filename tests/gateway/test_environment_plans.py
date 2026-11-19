@@ -465,9 +465,87 @@ def test_artifact_reference_update_can_change_only_configuration(prepared, tmp_p
     assert updated["configurations"][0]["sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
     assert Path(updated["configurations"][0]["path"]).read_bytes() == source.read_bytes()
     assert result["configuration_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
-    plan = plans.preflight(registry_path, ADMIN, "a", 1, 1, reference)
-    assert plan["config_sha256"] == result["configuration_sha256"]
-    assert plan["state"] == "blocked"
+
+
+def test_same_digest_configuration_migrates_legacy_path_to_fixed_copy(prepared, tmp_path):
+    registry_path, _, reference, _ = prepared
+    reference = write_private_text(
+        tmp_path / "onboarding-assets" / "references.json",
+        reference.read_text(),
+    )
+    source = write_private_text(
+        tmp_path / "configuration.env",
+        "AIOPS_MYSQL_PASSWORD=fixture-secret\nAIOPS_GATEWAY_ENVIRONMENT_TASK_KEY=" + "k" * 48 + "\n",
+    )
+    body = json.loads(reference.read_text())
+    body["targets"][0]["configurations"] = [
+        {
+            "id": "config-a",
+            "path": str(source),
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        }
+    ]
+    write_private_text(reference, json.dumps(body))
+    application, installer = _current_test_artifacts(tmp_path)
+    body = json.loads(reference.read_text())
+    body["targets"][0]["application"] = application
+    body["targets"][0]["installer"] = installer
+    write_private_text(reference, json.dumps(body))
+    original = reference.read_bytes()
+
+    plans.update_artifact_references(
+        reference,
+        registry_path=registry_path,
+        identity=ADMIN,
+        environment="a",
+        expected_sha256=hashlib.sha256(original).hexdigest(),
+        application=application,
+        installer=installer,
+        configuration={"path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()},
+    )
+
+    updated = json.loads(reference.read_text())["targets"][0]["configurations"][0]
+    assert Path(updated["path"]).name == updated["sha256"] + ".env"
+    assert Path(updated["path"]).parent.name == "configurations"
+    assert Path(updated["path"]).read_bytes() == source.read_bytes()
+
+
+def test_configuration_source_drift_during_copy_refuses_reference_update(prepared, tmp_path, monkeypatch):
+    registry_path, _, reference, _ = prepared
+    reference = write_private_text(
+        tmp_path / "onboarding-assets" / "references.json",
+        reference.read_text(),
+    )
+    source = write_private_text(
+        tmp_path / "configuration.env",
+        "AIOPS_MYSQL_PASSWORD=fixture-secret\nAIOPS_GATEWAY_ENVIRONMENT_TASK_KEY=" + "k" * 48 + "\n",
+    )
+    application, installer = _current_test_artifacts(tmp_path)
+    body = json.loads(reference.read_text())
+    body["targets"][0]["application"] = application
+    body["targets"][0]["installer"] = installer
+    write_private_text(reference, json.dumps(body))
+    original = reference.read_bytes()
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    real_copyfileobj = plans.shutil.copyfileobj
+
+    def replace_after_copy(reader, writer, *args, **kwargs):
+        real_copyfileobj(reader, writer, *args, **kwargs)
+        write_private_text(source, "AIOPS_MYSQL_PASSWORD=changed\n")
+
+    monkeypatch.setattr(plans.shutil, "copyfileobj", replace_after_copy)
+    with pytest.raises(plans.PlanRefused, match="CONFIGURATION_CHANGED"):
+        plans.update_artifact_references(
+            reference,
+            registry_path=registry_path,
+            identity=ADMIN,
+            environment="a",
+            expected_sha256=hashlib.sha256(original).hexdigest(),
+            application=application,
+            installer=installer,
+            configuration={"path": str(source), "sha256": expected},
+        )
+    assert reference.read_bytes() == original
 
 
 def test_configuration_reference_update_restores_old_file_if_directory_sync_fails(

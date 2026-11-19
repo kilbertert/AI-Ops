@@ -212,14 +212,18 @@ def _update_artifact_references_locked(
     retained_configuration = selected_configuration
     if configuration is not None:
         sha = configuration_sha
-        if selected_configuration["sha256"] == sha and _file_check(selected_configuration, 1048576)[1]:
+        asset_root = path.parent if path.parent.name == "onboarding-assets" else path.parent.parent
+        config_directory = asset_root / "configurations"
+        retained = config_directory / f"{sha}.env"
+        if (
+            selected_configuration["sha256"] == sha
+            and Path(selected_configuration["path"]).absolute() == retained.absolute()
+            and _file_check(selected_configuration, 1048576)[1]
+        ):
             retained_configuration = selected_configuration
         else:
-            asset_root = path.parent if path.parent.name == "onboarding-assets" else path.parent.parent
-            config_directory = asset_root / "configurations"
             config_directory.mkdir(mode=0o700, exist_ok=True)
             validate_private_directory(config_directory)
-            retained = config_directory / f"{sha}.env"
             if retained.exists() or retained.is_symlink():
                 _private(retained)
                 if _file_check({"path": str(retained), "sha256": sha}, 1048576)[0] != sha:
@@ -233,6 +237,8 @@ def _update_artifact_references_locked(
                         writer.flush()
                         os.fsync(writer.fileno())
                     temporary.chmod(0o600)
+                    if _file_check({"path": str(temporary), "sha256": sha}, 1048576)[0] != sha:
+                        raise PlanRefused("ENVIRONMENT_REFERENCES_CONFIGURATION_CHANGED")
                     try:
                         os.link(temporary, retained)
                         descriptor = os.open(config_directory, os.O_DIRECTORY)
@@ -247,6 +253,8 @@ def _update_artifact_references_locked(
                 finally:
                     temporary.unlink(missing_ok=True)
                 _private(retained)
+            if _file_check({"path": str(retained), "sha256": sha}, 1048576)[0] != sha:
+                raise PlanRefused("ENVIRONMENT_REFERENCES_CONFIGURATION_CHANGED")
             retained_configuration = {"id": configuration_id, "path": str(retained), "sha256": sha}
     desired_configurations = target["configurations"]
     if configuration is not None:
