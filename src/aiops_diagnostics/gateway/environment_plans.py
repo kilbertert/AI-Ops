@@ -328,17 +328,19 @@ def _update_artifact_references_locked(
             finally:
                 restore.unlink(missing_ok=True)
         raise
-    return {
+    result = {
         "environment": environment,
         "revision": app["revision"],
         "application_sha256": app["sha256"],
         "installer_sha256": package["sha256"],
-        "configuration_sha256": (retained_configuration["sha256"] if configuration is not None else None),
         "previous_references_sha256": expected_sha256,
         "references_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "backup_sha256": hashlib.sha256(backup.read_bytes()).hexdigest(),
         "configuration_ids": [item["id"] for item in target["configurations"]],
     }
+    if configuration is not None:
+        result["configuration_sha256"] = retained_configuration["sha256"]
+    return result
 
 
 def _digest(value):
