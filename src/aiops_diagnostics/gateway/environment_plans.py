@@ -35,17 +35,19 @@ def update_artifact_references(
         allowed = drafts.access(current, identity)
         if "*" not in allowed and environment not in allowed:
             raise PlanRefused("ENVIRONMENT_MANAGEMENT_FORBIDDEN")
-        draft = next(
-            (
-                row
-                for row in drafts._rows(drafts._database(registry_path))
-                if row["environment"] == environment
-            ),
-            None,
-        )
+        all_drafts = drafts._rows(drafts._database(registry_path))
+        draft = next((row for row in all_drafts if row["environment"] == environment), None)
         if draft is None:
             raise PlanRefused("ENVIRONMENT_DRAFT_UNAVAILABLE")
         target_id = json.loads(draft["body"])["deployment_target"]
+        if "*" not in allowed:
+            shared_scopes = {
+                row["environment"]
+                for row in all_drafts
+                if json.loads(row["body"])["deployment_target"] == target_id
+            }
+            if not shared_scopes <= allowed:
+                raise PlanRefused("ENVIRONMENT_DEPLOYMENT_TARGET_SHARED")
         return _update_artifact_references_locked(path, target_id, expected_sha256, application, installer)
 
 
