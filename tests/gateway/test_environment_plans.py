@@ -275,7 +275,9 @@ def _reference_archive(tmp_path, name, members):
     path.chmod(0o600)
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
     revision = (
-        manifest(path, sha, "3.12")["revision"] if name.startswith("app") else installer_manifest(path, sha)
+        manifest(path, sha, "3.11" if "311" in name else "3.12")["revision"]
+        if name.startswith("app")
+        else installer_manifest(path, sha)
     )
     return {"path": str(path), "sha256": sha, "revision": revision}
 
@@ -345,13 +347,13 @@ def test_artifact_reference_update_is_cas_atomic_and_preserves_config(prepared, 
         reference,
         registry_path=registry_path,
         identity=ADMIN,
-        environment="host-a",
+        environment="a",
         expected_sha256=hashlib.sha256(before).hexdigest(),
         application=app,
         installer=installer,
     )
     updated = json.loads(reference.read_text())
-    expected_application = reference.parent / revision / "application.tar.gz"
+    expected_application = reference.parent / revision / "application-3.12.tar.gz"
     expected_installer = reference.parent / revision / "installer.tar.gz"
     assert updated["targets"][0]["application"] == {**app, "path": str(expected_application)}
     assert updated["targets"][0]["installer"] == {**installer, "path": str(expected_installer)}
@@ -362,12 +364,32 @@ def test_artifact_reference_update_is_cas_atomic_and_preserves_config(prepared, 
     assert backup.read_bytes() == before
     assert result["backup_sha256"] == hashlib.sha256(before).hexdigest()
     assert reference.stat().st_mode & 0o077 == backup.stat().st_mode & 0o077 == 0
+    application_311 = _reference_archive(
+        asset_dir,
+        "app-311.tar.gz",
+        {
+            "manifest.json": json.dumps(
+                dict(
+                    schema=1,
+                    revision=revision,
+                    python="3.11",
+                    platform="linux-x86_64",
+                    version="1.0.0+" + revision[:12],
+                )
+            ).encode(),
+            "wheelhouse/aiops_diagnostics-1.0.0-py3-none-any.whl": b"opaque wheel 311",
+        },
+    )
+    checked_311 = plans.manifest(Path(application_311["path"]), application_311["sha256"], "3.11")
+    checked_312 = plans.manifest(expected_application, updated["targets"][0]["application"]["sha256"], "3.12")
+    assert checked_311["revision"] == checked_312["revision"] == revision
+    assert expected_application != Path(application_311["path"])
     with pytest.raises(plans.PlanRefused, match="ALREADY_CURRENT"):
         plans.update_artifact_references(
             reference,
             registry_path=registry_path,
             identity=ADMIN,
-            environment="host-a",
+            environment="a",
             expected_sha256=result["references_sha256"],
             application=app,
             installer=installer,
@@ -434,7 +456,7 @@ def test_artifact_reference_update_rejects_invalid_changes_without_overwrite(pre
     backup = reference.with_name(f"{reference.name}.{hashlib.sha256(original).hexdigest()}.bak")
     if failure == "existing-backup":
         backup.write_text("keep")
-    environment = "missing" if failure == "missing-target" else "host-a"
+    environment = "missing" if failure == "missing-target" else "a"
     expected = "0" * 64 if failure == "stale" else hashlib.sha256(original).hexdigest()
     expected_error = registry.RegistryError if failure == "unauthorized" else plans.PlanRefused
     with pytest.raises(expected_error):
@@ -464,7 +486,8 @@ def test_reference_update_cli_only_uses_configured_reference_path(prepared, tmp_
         "_settings_with_config_file",
         lambda _: SimpleNamespace(
             environment_onboarding_file=str(reference),
-            environment_management_registry_file=str(registry_path),
+            environment_management_registry_file="",
+            environment_registry_file=str(registry_path),
         ),
     )
     cli = CliRunner().invoke(
@@ -480,6 +503,22 @@ def test_reference_update_cli_only_uses_configured_reference_path(prepared, tmp_
         ],
     )
     assert cli.exit_code == 1 and json.loads(cli.output)["error"] == "ENVIRONMENT_REFERENCES_UPDATE_REFUSED"
+    configured = CliRunner().invoke(
+        admin_app,
+        [
+            "environment-artifacts",
+            "--registry",
+            str(registry_path),
+            "--references",
+            str(reference),
+            "--file",
+            str(reference),
+        ],
+    )
+    assert (
+        configured.exit_code == 1
+        and json.loads(configured.output)["error"] == "ENVIRONMENT_REFERENCES_UPDATE_REFUSED"
+    )
 
 
 def test_reference_update_restores_old_file_when_directory_sync_fails(prepared, tmp_path, monkeypatch):
@@ -538,9 +577,15 @@ def test_reference_update_restores_old_file_when_directory_sync_fails(prepared, 
     original_fsync = os.fsync
     failed = False
 
+    references_directory = str(reference_dir)
+
     def fail_one_directory_sync(fd):
         nonlocal failed
-        if not failed and os.path.isdir(f"/proc/self/fd/{fd}"):
+        if (
+            not failed
+            and os.path.isdir(f"/proc/self/fd/{fd}")
+            and os.path.realpath(f"/proc/self/fd/{fd}") == references_directory
+        ):
             failed = True
             raise OSError("injected directory sync failure")
         original_fsync(fd)
@@ -551,7 +596,7 @@ def test_reference_update_restores_old_file_when_directory_sync_fails(prepared, 
             reference,
             registry_path=registry_path,
             identity=ADMIN,
-            environment="host-a",
+            environment="a",
             expected_sha256=hashlib.sha256(original).hexdigest(),
             application=application,
             installer=installer,

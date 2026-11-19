@@ -31,10 +31,22 @@ def update_artifact_references(
     """CAS-update one target under the environment draft/plan lock; retain a rollback copy."""
     path, registry_path = Path(path).absolute(), Path(registry_path).absolute()
     with drafts._locked(registry_path):
-        allowed = drafts.access(registry.load(registry_path), identity)
+        current = registry.load(registry_path)
+        allowed = drafts.access(current, identity)
         if "*" not in allowed and environment not in allowed:
             raise PlanRefused("ENVIRONMENT_MANAGEMENT_FORBIDDEN")
-        return _update_artifact_references_locked(path, environment, expected_sha256, application, installer)
+        draft = next(
+            (
+                row
+                for row in drafts._rows(drafts._database(registry_path))
+                if row["environment"] == environment
+            ),
+            None,
+        )
+        if draft is None:
+            raise PlanRefused("ENVIRONMENT_DRAFT_UNAVAILABLE")
+        target_id = json.loads(draft["body"])["deployment_target"]
+        return _update_artifact_references_locked(path, target_id, expected_sha256, application, installer)
 
 
 def _update_artifact_references_locked(path, environment, expected_sha256, application, installer):
@@ -97,7 +109,9 @@ def _update_artifact_references_locked(path, environment, expected_sha256, appli
         revision = value["revision"]
         kind = value["kind"]
         artifact_directory = path.parent / revision
-        expected_name = "application.tar.gz" if kind == "application" else "installer.tar.gz"
+        expected_name = (
+            f"application-{target['python']}.tar.gz" if kind == "application" else "installer.tar.gz"
+        )
         artifact_directory.mkdir(mode=0o700, exist_ok=True)
         validate_private_directory(artifact_directory)
         artifact_path = artifact_directory / expected_name

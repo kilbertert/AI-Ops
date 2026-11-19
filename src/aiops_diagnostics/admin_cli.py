@@ -194,10 +194,10 @@ def environment_artifacts_command(
 
     try:
         settings = _settings_with_config_file(context)
-        if (
-            not settings.environment_management_registry_file
-            or Path(settings.environment_management_registry_file).absolute() != registry.absolute()
-        ):
+        configured_registry = getattr(settings, "environment_management_registry_file", "") or getattr(
+            settings, "environment_registry_file", ""
+        )
+        if not configured_registry or Path(configured_registry).absolute() != registry.absolute():
             raise ValueError("registry path must match the installed management registry")
         if (
             not settings.environment_onboarding_file
