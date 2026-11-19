@@ -57,6 +57,7 @@ def _update_artifact_references_locked(path, environment, expected_sha256, appli
     asset_root = path.parent if path.parent.name == "onboarding-assets" else path.parent.parent
     if path.parent.name != "onboarding-assets" and asset_root.name != "onboarding-assets":
         raise PlanRefused("ENVIRONMENT_REFERENCES_INVALID")
+    validate_private_directory(asset_root)
     if (
         not isinstance(environment, str)
         or not drafts.REFERENCE_PATTERN.fullmatch(environment)

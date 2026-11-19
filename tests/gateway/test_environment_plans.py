@@ -430,6 +430,7 @@ def test_artifact_reference_update_supports_installed_runtime_directory(prepared
     )
     reference_dir = tmp_path / "onboarding-assets" / "runtime-install-aaaaaaaaaaaa"
     reference_dir.mkdir(mode=0o700, parents=True)
+    reference_dir.parent.chmod(0o700)
     reference = reference_dir / "references.json"
     original = json.dumps(
         {
