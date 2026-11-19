@@ -353,6 +353,7 @@ def test_artifact_reference_update_is_cas_atomic_and_preserves_config(prepared, 
         installer=installer,
     )
     updated = json.loads(reference.read_text())
+    assert result["environment"] == "a"
     expected_application = reference.parent / revision / "application-3.12.tar.gz"
     expected_installer = reference.parent / revision / "installer.tar.gz"
     assert updated["targets"][0]["application"] == {**app, "path": str(expected_application)}

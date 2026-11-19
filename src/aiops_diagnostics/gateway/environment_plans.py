@@ -48,7 +48,8 @@ def update_artifact_references(
             }
             if not shared_scopes <= allowed:
                 raise PlanRefused("ENVIRONMENT_DEPLOYMENT_TARGET_SHARED")
-        return _update_artifact_references_locked(path, target_id, expected_sha256, application, installer)
+        result = _update_artifact_references_locked(path, target_id, expected_sha256, application, installer)
+        return {**result, "environment": environment}
 
 
 def _update_artifact_references_locked(path, environment, expected_sha256, application, installer):
