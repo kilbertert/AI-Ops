@@ -208,13 +208,10 @@ def environment_artifacts_command(
         if file.stat().st_size > 65536:
             raise ValueError("input too large")
         data = json.loads(file.read_text(), object_pairs_hook=environment_registry._unique_object)
-        if not isinstance(data, dict) or set(data) != {
-            "identity",
-            "environment",
-            "expected_sha256",
-            "application",
-            "installer",
-        }:
+        if not isinstance(data, dict) or set(data) not in (
+            {"identity", "environment", "expected_sha256", "application", "installer"},
+            {"identity", "environment", "expected_sha256", "application", "installer", "configuration"},
+        ):
             raise ValueError("invalid input")
         identity = data["identity"]
         if (
@@ -231,6 +228,7 @@ def environment_artifacts_command(
             expected_sha256=data["expected_sha256"],
             application=data["application"],
             installer=data["installer"],
+            configuration=data.get("configuration"),
         )
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
         typer.echo(json.dumps({"error": "ENVIRONMENT_REFERENCES_UPDATE_REFUSED"}))
