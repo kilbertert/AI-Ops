@@ -211,6 +211,8 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
     def request(payload):
         return central_call(root, central_target, payload) if central_target else call(gateway, key, payload)
 
+    if identifier is None:
+        request({"advance_candidates": True})
     claim = request({"owner": owner, **({"id": identifier} if identifier else {})})
     if not isinstance(claim, dict) or type(claim.get("claimed")) is not bool:
         raise ValueError("central claim unavailable")
