@@ -132,7 +132,9 @@ class RemoteCandidate:
             raise ValueError("candidate expired or changed")
         current = self.call("check")
         if (
-            current.get("candidate") != self.scope
+            self.cancelled
+            or time.monotonic() >= self.until
+            or current.get("candidate") != self.scope
             or scope_from_json(current["scope_json"]).scope_fingerprint != self.caller.scope_fingerprint
             or current.get("state") not in ({"claimed", "closed"} if allow_closed else {"claimed"})
         ):
@@ -279,6 +281,13 @@ class CandidateTrials:
         trial = self.context.runtime.get_trial(caller, grant.session_id)
         if trial is None or trial["status"] != "completed":
             raise ValueError("candidate media not deliverable")
+        with self.lock:
+            if (
+                self.leases.get(grant.session_id) is not adapter
+                or adapter.cancelled
+                or time.monotonic() >= adapter.until
+            ):
+                raise ValueError("candidate media revoked")
 
     def read(self, payload, *, cancel=False):
         if set(payload) != {"trial_id"} or payload["trial_id"] not in self.leases:

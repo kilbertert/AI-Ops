@@ -114,7 +114,8 @@ def test_exact_observation_and_drift_refusals(observed, change):  # noqa: F811
 
 
 @pytest.mark.parametrize(
-    "change", ["none", "cancel", "expired", "identity", "workflow", "failed", "missing", "scope"]
+    "change",
+    ["none", "cancel", "expired", "identity", "workflow", "failed", "missing", "scope", "final-cancel"],
 )
 @pytest.mark.parametrize("during_fetch", [False, True])
 def test_trial_media_rechecks_lease_before_and_after_fetch(observed, monkeypatch, change, during_fetch):  # noqa: F811
@@ -178,6 +179,13 @@ def test_trial_media_rechecks_lease_before_and_after_fetch(observed, monkeypatch
             manager.forget("trial-one")
         elif change == "scope":
             adapter.snapshot = (*snapshot[:4], (*scope[:3], "other-kb"))
+        elif change == "final-cancel":
+
+            def cancel_on_readback(*_):
+                adapter.cancelled = True
+                return {"status": "completed"}
+
+            runtime.get_trial = cancel_on_readback
 
     def fetch(*_, **kwargs):
         fetched.append(True)
