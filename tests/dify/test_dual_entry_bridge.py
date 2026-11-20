@@ -92,6 +92,31 @@ def test_dual_entry_payload_crosses_the_real_bridge(bridge, upstream):  # noqa: 
     assert sources["operator"]["app_id"] == OPERATOR
 
 
+def test_candidate_chain_crosses_bridge_and_rejects_forged_inputs(bridge, upstream):  # noqa: F811
+    payload = {
+        "action": "environment-task",
+        "candidate_plan": "plan_" + "b" * 32,
+        "tenant_id": "same",
+        "source_app_id": CONSUMER,
+        "source_version": 7,
+    }
+    assert _manage(payload, address=bridge)[0] != 400
+    forwarded = [c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]
+    assert forwarded[-1]["body"] == {k: v for k, v in payload.items() if k != "action"}
+    count = len(forwarded)
+    for extra in (
+        {"candidate_plan": "task_" + "b" * 32},
+        {"tenant_id": ""},
+        {"source_app_id": "https://other.test"},
+        {"source_version": True},
+        {"source_version": 0},
+        {"workspace_id": "forged"},
+        {"action": "status"},
+    ):
+        assert _manage({**payload, **extra}, address=bridge)[0] == 400
+    assert len([c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]) == count
+
+
 def test_single_entry_payload_crosses_with_matching_scope(bridge):  # noqa: F811
     status, body = _manage(
         {
