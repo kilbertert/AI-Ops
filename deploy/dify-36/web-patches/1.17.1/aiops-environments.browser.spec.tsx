@@ -521,12 +521,56 @@ it('submits one candidate preparation and restores durable child progress', asyn
   await expect
     .element(screen.getByText('安装未执行 · 业务未验收 · 正式入口未启用', { exact: true }))
     .toBeVisible()
-  await page
-    .getByRole('region', { name: '候选准备进度：same' })
+  await page.getByRole('region', { name: '候选准备进度：same' })
   await screen.getByRole('button', { name: '刷新目录', exact: true }).click()
   await expect.element(screen.getByText(task.result.steps[0].id, { exact: true })).toBeVisible()
   await screen.getByRole('textbox', { name: '环境名称', exact: true }).fill('未保存')
   expect(
     screen.getByRole('button', { name: '准备候选：甲租户（same）', exact: true }).elements(),
   ).toHaveLength(0)
+})
+
+it('submits an explicit inactive installation and keeps business activation separate', async () => {
+  const parent = {
+    id: `task_${'f'.repeat(32)}`,
+    action: 'candidate-prepare',
+    tenant_id: 'same',
+    plan_id: `plan_${'e'.repeat(32)}`,
+    state: 'observed',
+    cancel_requested: false,
+    error_code: '',
+    result: { scope: 'candidate-resources-only', steps: [] },
+  }
+  const calls: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json(data)
+      if (body.candidate_task)
+        return Response.json({
+          ...parent,
+          id: `task_${'a'.repeat(32)}`,
+          action: 'candidate-install',
+          state: 'queued',
+          result: { scope: 'candidate-installation-only', installation: 'not_executed' },
+        })
+      return Response.json({ tasks: [parent] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '安装停用候选：same', exact: true }).click()
+  expect(calls.find((body) => body.installation)).toEqual({
+    action: 'environment-task',
+    candidate_task: parent.id,
+    installation: true,
+  })
+  await expect
+    .element(screen.getByText('注册未执行 · 业务未验收 · 正式入口未启用', { exact: true }))
+    .toBeVisible()
 })

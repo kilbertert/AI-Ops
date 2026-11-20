@@ -222,6 +222,8 @@ def test_legacy_worker_without_candidates_keeps_working(prepared, tmp_path, monk
         lambda root, target, payload: (
             chain.advance(context, payload)
             if "advance_candidates" in payload
+            else {"claimed": False, "task": None}
+            if payload.get("installation_claim") is True
             else tasks.worker(path, ref, payload)
         ),
     )

@@ -55,6 +55,9 @@ export const entryLabels: Record<EntryKey, string> = {
 }
 
 export const messages: Record<string, string> = {
+  ENVIRONMENT_INSTALLATION_CONFIG_REQUIRED: '候选安装执行尚未配置，原候选准备仍可用',
+  ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED: '请重新观察目标安装状态后再提交',
+  ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED: '安装结果尚待核对，请由运维恢复原任务；不要重复安装',
   ENVIRONMENT_TASK_WORKER_UNAVAILABLE: '现场预检执行端尚未配置；原草稿与文件预检仍可使用',
   ENVIRONMENT_WORKSPACE_CONFIG_REQUIRED: '共享工作区连接尚未配置，暂不能准备候选工作区',
   ENVIRONMENT_TASK_OBSERVATION_REQUIRED: '请先完成同一有效计划的现场预检',

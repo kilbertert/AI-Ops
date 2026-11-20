@@ -497,6 +497,7 @@ WantedBy=multi-user.target
             "artifact_sha256": installed["artifact_sha256"],
             "config_sha256": installed["config_sha256"],
             "registry_sha256": installed.get("registry_sha256", "absent"),
+            "runtime_sha256": installed.get("runtime_sha256", "absent"),
             "checks": checks,
         }
         fingerprint = hashlib.sha256(
@@ -1105,6 +1106,8 @@ def main():
                 raise ValueError("installer bundle identity required")
             expected = {"REVISION", "install.py", "runtime_check.py", "probe.py", "artifact_checks.py"}
             checks = dict(line.split("  ", 1)[::-1] for line in sums)
+            if Path(__file__).with_name("task.py").is_file():
+                expected.add("task.py")
             if (
                 len(checks) != len(sums)
                 or set(checks) != expected

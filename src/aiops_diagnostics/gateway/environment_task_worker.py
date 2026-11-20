@@ -110,7 +110,7 @@ def execute(root, claim):
                 "  if m.name=='.' and m.isdir(): continue",
                 "  name=m.name.removeprefix('./')",
                 "  allowed={'REVISION','SHA256SUMS','install.py','runtime_check.py',"
-                "'probe.py','artifact_checks.py'}",
+                "'probe.py','artifact_checks.py','task.py'}",
                 "  assert m.isfile() and name in allowed",
                 "  q=d/name",
                 "  body=t.extractfile(m).read()",
@@ -163,7 +163,9 @@ def call(gateway, key, payload, *, trial=False):
         method="POST",
         body=json.dumps(payload).encode(),
         headers=headers,
-        timeout=240 if payload.get("prepare") == "knowledge" else 30,
+        timeout=240
+        if payload.get("prepare") == "knowledge" or payload.get("installation") == "stage"
+        else 30,
         follow_redirects=False,
     )
     with open_response(request) as response:
@@ -186,7 +188,7 @@ def central_call(root, target, payload):
     # 固定服务身份/路径只支持已声明控制Gateway档案；不接受任务中的shell或HTTP地址。
     if target != "41":
         raise ValueError("central deployment profile unavailable")
-    duration = 250 if payload.get("prepare") == "knowledge" else 45
+    duration = 250 if payload.get("prepare") == "knowledge" or payload.get("installation") == "stage" else 45
     result = subprocess.check_output(
         ["dev-host", "exec", target, "--allow-service-exec", "--timeout", str(duration), "--", command],
         cwd=root,
@@ -213,6 +215,9 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
 
     if identifier is None:
         request({"advance_candidates": True})
+        installation = request({"installation_claim": True, "owner": owner})
+        if installation.get("claimed") is True:
+            return installation_run(root, request, installation["id"], owner)
     claim = request({"owner": owner, **({"id": identifier} if identifier else {})})
     if not isinstance(claim, dict) or type(claim.get("claimed")) is not bool:
         raise ValueError("central claim unavailable")
@@ -235,3 +240,183 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
         # 不知道远端是否完成；只读重查可恢复，不能据此重复安装/开户。
         return request({"id": identifier, "owner": owner, "error": "ENVIRONMENT_TASK_TARGET_UNCONFIRMED"})
     return request({"id": identifier, "owner": owner, "result": result})
+
+
+def installation_run(root, request, identifier, owner):
+    """运维宿主搬运中央私有制品；未知结果只核对同一远端任务。"""
+    staged = request({"installation": "stage", "id": identifier, "owner": owner})
+    declared_host = staged["target"]["host"]
+    declaration = tomllib.loads((root / ".dev-host.toml").read_text())
+    matches = [
+        r["name"]
+        for r in declaration.get("targets", [])
+        if r.get("name") == declared_host or r.get("host") == declared_host
+    ]
+    if len(matches) != 1:
+        raise ValueError("installation target must resolve uniquely")
+    host = matches[0]
+    # 实际访问由dev-host断言；任务不能提供SSH参数或任意执行路径。
+    if (
+        not REFERENCE_PATTERN.fullmatch(host)
+        or host.startswith("-")
+        or not re.fullmatch(r"task_[a-f0-9]{32}", identifier)
+    ):
+        raise ValueError("installation identity invalid")
+    target = staged["target"]
+    if (
+        not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", target["user"])
+        or type(target["port"]) is not int
+        or not 1024 <= target["port"] <= 65535
+        or not re.fullmatch(r"[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?", staged["environment"])
+    ):
+        raise ValueError("installation profile invalid")
+    remote = "/var/backups/aiops-install-task-" + identifier
+    command = ["dev-host", "exec", host, "--allow-service-exec", "--timeout", "800", "--", "python3 -"]
+    result = {
+        "id": identifier,
+        "environment": staged["environment"],
+        "scope": "candidate-installation-only",
+        "state": "reconcile",
+        "executable": False,
+        "activation": "not_executed",
+        "registration": "not_executed",
+        "business": "unverified",
+        "error_code": "ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED",
+    }
+    try:
+        with tempfile.TemporaryDirectory(prefix="aiops-install-transfer-") as temporary:
+            directory = Path(temporary)
+            artifacts = staged["archives"] | {"installer": staged["installer"]}
+            spec_archives = {}
+            for name, source in artifacts.items():
+                local = directory / (name + ".tar.gz")
+                if name == "installer":
+                    subprocess.run(
+                        [
+                            "bash",
+                            "ops/environments/gateway/build-installer.sh",
+                            source["revision"],
+                            str(local),
+                        ],
+                        cwd=root,
+                        check=True,
+                        capture_output=True,
+                    )
+                else:
+                    # 仅受管服务身份读task目录中已冻结归档；原路径不通过shell拼接。
+                    script = (
+                        "import sys,hashlib\nfrom pathlib import Path\n"
+                        f"p=Path({source['path']!r})\n"
+                        "assert p.is_file() and not p.is_symlink() and p.stat().st_mode&0o077==0\n"
+                        "actual=hashlib.file_digest(p.open('rb'),'sha256').hexdigest()\n"
+                        f"assert actual=={source['sha256']!r}\n"
+                        "sys.stdout.buffer.write(p.read_bytes())\n"
+                    )
+                    with local.open("wb") as stream:
+                        subprocess.run(
+                            [
+                                "dev-host",
+                                "exec",
+                                "41",
+                                "--allow-service-exec",
+                                "--timeout",
+                                "60",
+                                "--",
+                                "runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -",
+                            ],
+                            cwd=root,
+                            input=script.encode(),
+                            stdout=stream,
+                            stderr=subprocess.PIPE,
+                            check=True,
+                            timeout=65,
+                        )
+                actual = hashlib.sha256(local.read_bytes()).hexdigest()
+                if actual != source["sha256"]:
+                    raise ValueError("installation artifact mismatch")
+                guard = (
+                    "from pathlib import Path\nimport hashlib,os\n"
+                    f"d=Path({remote!r});d.mkdir(mode=0o700,exist_ok=True)\n"
+                    "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0\n"
+                    f"p=d/{local.name!r}\n"
+                    "if p.exists() or p.is_symlink():\n"
+                    " assert p.is_file() and not p.is_symlink() and p.stat().st_uid==0\n"
+                    " assert p.stat().st_nlink==1\n"
+                    f" assert hashlib.file_digest(p.open('rb'),'sha256').hexdigest()=={actual!r}\n"
+                )
+                subprocess.run(
+                    command, cwd=root, input=guard, text=True, check=True, capture_output=True, timeout=65
+                )
+                subprocess.run(
+                    [
+                        "dev-host",
+                        "cp",
+                        host,
+                        str(local),
+                        "--dest",
+                        remote + "/" + local.name,
+                        "--artifact-sha256",
+                        actual,
+                    ],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    timeout=65,
+                )
+                if name != "installer":
+                    spec_archives[name] = {**source, "path": remote + "/" + local.name}
+            spec = {
+                "id": identifier,
+                "environment": staged["environment"],
+                "expires_at": staged["expires_at"],
+                "expected": staged["expected"],
+                "archives": spec_archives,
+            }
+            arguments = [
+                "/usr/bin/python3",
+                remote + "/installer/task.py",
+                "observe" if staged["observe_only"] else "run",
+                "--environment",
+                staged["environment"],
+                "--user",
+                target["user"],
+                "--port",
+                str(target["port"]),
+            ]
+            if not staged["observe_only"] and request(
+                {"installation": "authorize", "id": identifier, "owner": owner}
+            ) != {"authorized": True}:
+                raise ValueError("installation authorization changed")
+            # 核固定包身份后执行task.py；observe严格不再次apply，不向目标传共享凭据。
+            script = (
+                "import hashlib,json,subprocess,tarfile,sys\nfrom pathlib import Path\n"
+                f"archive=Path({(remote + '/installer.tar.gz')!r})\n"
+                "actual=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()\n"
+                f"assert actual=={staged['installer']['sha256']!r}\n"
+                f"d=Path({(remote + '/installer')!r});d.mkdir(mode=0o700,exist_ok=True)\n"
+                "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0\n"
+                "with tarfile.open(archive) as t:\n"
+                " for m in t:\n"
+                "  if m.name=='.' and m.isdir():continue\n"
+                "  n=m.name.removeprefix('./')\n"
+                "  assert m.isfile() and n in {'REVISION','SHA256SUMS','install.py','runtime_check.py',"
+                "'probe.py','artifact_checks.py','task.py'}\n"
+                "  q=d/n;body=t.extractfile(m).read()\n"
+                "  if q.exists() or q.is_symlink():\n"
+                "   assert q.is_file() and not q.is_symlink() and q.stat().st_uid==0\n"
+                "   assert q.read_bytes()==body\n"
+                "  else:\n"
+                "   with q.open('xb') as f:f.write(body)\n"
+                f"assert (d/'REVISION').read_text().strip()=={staged['installer']['revision']!r}\n"
+                "assert (d/'task.py').is_file()\n"
+                f"r=subprocess.run({arguments!r},"
+                f"input={json.dumps(spec)!r},text=True,capture_output=True)\n"
+                "sys.stdout.write(r.stdout);sys.exit(r.returncode)\n"
+            )
+            raw = subprocess.check_output(command, cwd=root, input=script, text=True, timeout=805)
+            if len(raw) > 65536:
+                raise ValueError("installation response too large")
+            result = json.loads(raw)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):
+        pass  # 远端可能已切换：记录未知，只允许本任务后续observe。
+    return request({"installation": "complete", "id": identifier, "owner": owner, "result": result})

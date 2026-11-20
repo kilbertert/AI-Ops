@@ -53,6 +53,7 @@ snapshot-先 → create → reconcile：Dify 只在创建时返回完整 token�
 
 - `self_service_bridge` 同源闸：Origin==console_origin **且** Referer 同源 **且** `Sec-Fetch-Site∈{∅,same-origin}` **且**有效 Dify 会话 **且**`角色∈{owner,admin,editor}` **且** `application/json`——之后只转发服务端验证过的浏览器会话；浏览器永远见不到内部令牌或平台 key。
   环境任务的`candidate_plan/tenant_id/source_app_id/source_version`是固定形状，不接受工作区ID、任意URL或执行参数；准备串联须Gateway与桥配套，旧单步骤保持。
+  D37安装只接`candidate_task/installation=true`确认，部署材料由控制端冻结、运维搬运；原平台/目录权限不变，浏览器不能提交制品路径或执行参数。
 - `self_service_identity`：管理身份只经真 Dify 登录交换读，浏览器不提供任何身份声明。`identity()`/`require_target()` 在配 `environment_registry_file` 时先过 `for_settings(settings).require(tenant)` 登记准入——未开通/停用租户 → `SetupRefused("TENANT_ENVIRONMENT_NOT_ENABLED")`（非 `SETUP_` 前缀的共享拒码，ADR-0256）。`self_service_config` = 平台维护的 profiles（JSON 0600）被应用引用；不接受浏览器给的路径/凭据/端点。
 - 草稿完整性：发布比对当前草稿指纹与创建时冻结值；并发发布或源版本变化 → `SETUP_DRAFT_CHANGED`/`SETUP_SOURCE_CHANGED`/`SETUP_ACTOR_CHANGED`——让运营刷新，不是系统猜。
 - consumer 选库与草稿接管（ADR-0255）：detail 的 `knowledge_base_ids` 从**当前草稿导出的 workflow** 经 `consumer_source_ids` 投影（非开通时 targets 快照），并附 `live_app_id`/`live_version_no`——抽屉看/改的是应用真草稿的选库。拉 DSL 同步**先验证选库再建本地草稿**（坏选库不留半成品 Agent）；失败首次接管只认 `self_service_store.recoverable_consumer_draft` 身份（`entry=consumer`、`consumer-<app_id>` 名、`created_by=aiops-admin`、status=draft、revision=1、`published_version IS NULL`、无 agent_versions 行）——配置/提示词相等不再证明归属，不符 → refused `existing draft is not the one this operation created`；快照顶层 `knowledge_base_ids`（有 bootstrap 时连 `prompt`/`model`）由同一份冻结 workflow 投影，绝不继承上一版。

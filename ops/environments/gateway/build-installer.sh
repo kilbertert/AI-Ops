@@ -9,11 +9,15 @@ out=$(realpath -m -- "$2")
 [[ ! -e $out ]] || exit 2
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
-for name in install.py runtime_check.py probe.py; do
+names=(install.py runtime_check.py probe.py)
+if git cat-file -e "$revision:ops/environments/gateway/task.py" 2>/dev/null; then
+  names+=(task.py)
+fi
+for name in "${names[@]}"; do
   git show "$revision:ops/environments/gateway/$name" > "$work/$name"
 done
 git show "$revision:src/aiops_diagnostics/gateway/environment_artifacts.py" > "$work/artifact_checks.py"
 printf '%s\n' "$revision" > "$work/REVISION"
-(cd "$work" && sha256sum REVISION install.py runtime_check.py probe.py artifact_checks.py > SHA256SUMS)
+(cd "$work" && sha256sum REVISION "${names[@]}" artifact_checks.py > SHA256SUMS)
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf "$out" -C "$work" .
 sha256sum "$out"

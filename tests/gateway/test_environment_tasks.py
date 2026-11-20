@@ -719,7 +719,11 @@ def test_automatic_worker_respects_task_selected_by_central(prepared, tmp_path, 
         worker,
         "central_call",
         lambda root, target, payload: (
-            {"advanced": 0} if payload == {"advance_candidates": True} else tasks.worker(path, ref, payload)
+            {"advanced": 0}
+            if payload == {"advance_candidates": True}
+            else {"claimed": False, "task": None}
+            if payload.get("installation_claim") is True
+            else tasks.worker(path, ref, payload)
         ),
     )
     monkeypatch.setattr(worker, "execute", lambda root, claim: receipt(claim["environment"]))

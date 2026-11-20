@@ -174,3 +174,14 @@ python3 <同修订固定安装器>/install.py register-runtime --environment <�
 
 这只证明受管候选运行，不证明来源未知旧 JWT 的环境归属，也不等同普通 App/H5 会话验收。
 新入口不写正式路由或业务密钥，不激活目录；失败原样保留，后续身份、客服、知识内容和三业务矩阵仍须验收。
+
+## 持久候选安装包装入口
+
+管理安装任务使用同合并包内task.py；单步install/recover合同不变。task.py从stdin读取固定任务与归档摘要，
+不接受shell、任意安装目录或业务操作。调用前沿dev-host身份断言和SHA256SUMS核固定包。
+先记录本任务意图，再复用Installer.apply；现役baseline必须匹配，配置/目录/运行仍原成套事务。
+重复run或observe只读本任务意图与实际installed，绝不再次apply；未知或pending不冒称成功，恢复仍由原recover单独操作。
+在飞取消不终止安装进程，中央租约到期后先观察；安全确定结果保留，不能重启另一个未知安装。
+
+本片新增现场回执runtime_sha256供安装baseline使用；旧回执仍可读，但新安装不能用旧回执猜运行工件不存在。
+不安装公司软件、不改变网络入口或登记/发布应用，scope为candidate-installation-only，业务/激活仍未执行。
