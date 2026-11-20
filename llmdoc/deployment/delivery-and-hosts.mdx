@@ -101,7 +101,9 @@ code:
 
 ## dev-host 传输合同
 
-环境引用更新使用 `aiops-admin environment-artifacts`，在41私有`onboarding_assets`下保留经核验的完整修订制品；目标只在标准部署/受管安装器步骤升级。
+环境引用更新使用 `aiops-admin environment-artifacts`，在41私有`onboarding_assets`下保留经核验的完整修订制品；
+同一命令可按已登记配置编号追加经过投影校验的0600配置模板引用，应用/安装器/配置保持同一目标绑定；
+目标只在标准部署/受管安装器步骤升级，配置引用变化必须重新预检。
 
 停用工件安装后，固定安装器register-runtime核现役身份/摘要和零在飞再以服务身份登记资源；
 登记不重启或发布，三行冲突整批回滚，操作见[登记手册](../../ops/environments/gateway/install.md#已安装运行资源登记)。

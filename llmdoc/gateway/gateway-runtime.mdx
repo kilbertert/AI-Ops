@@ -48,7 +48,8 @@ code:
 ## 启动顺序（serve()）
 
 aiops-admin environment-artifacts 通过显式环境、受控 references 路径与当前文件摘要 CAS 更新成套应用/安装器引用；
-只保留原配置引用，先备份原文件再原子替换。其后重做新计划，命令本身不安装或激活。
+可选地更新同一登记目标的配置模板引用；模板先按草稿投影校验，再以0600固定摘要副本和旧文件备份原子替换。
+其后重做新计划，命令本身不安装或激活；目标配置仍由安装器按 expected-config-sha256 事务切换。
 
 `src/aiops_diagnostics/gateway_server.py` (serve)：isolation_guard → `Settings.from_env()` → `validate()` → `require_deployment_identity` → `configure_gateway_logging` → `create_gateway_app` → uvicorn（`log_config=None`、`proxy_headers=False`、`server_header=False`）。
 
