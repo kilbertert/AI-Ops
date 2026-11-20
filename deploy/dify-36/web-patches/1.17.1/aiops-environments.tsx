@@ -66,6 +66,8 @@ type SiteTask = {
     knowledge_base_id?: string
     connection_id?: string
     app_id?: string
+    scope?: string
+    steps?: { id: string; action: string; state: string; error_code: string }[]
     checks?: { id: string; state: string }[]
   }
 }
@@ -77,6 +79,14 @@ const taskLabels: Record<string, string> = {
   blocked: '现场检查阻塞',
   cancelled: '已取消',
   expired: '已过期',
+}
+const preparationSteps: Record<string, string> = {
+  'site-preflight': '现场预检',
+  'workspace-prepare': '工作区',
+  'knowledge-prepare': '知识资源',
+  'knowledge-connect': '知识连接',
+  'operator-prepare': '管家候选',
+  'consumer-prepare': '客服候选',
 }
 const checkLabels: Record<string, string> = {
   workspace: '候选工作区',
@@ -156,6 +166,8 @@ export default function EnvironmentManagement() {
     const current = catalogue.effective.find((item) => item.id === id)
     const value = candidate?.draft ?? { ...empty(), ...current }
     setPlan(null)
+    setConsumerSources([])
+    setConsumerSource('')
     setTasks([])
     taskViewRef.current += 1
     setTaskGeneration((value) => value + 1)
@@ -299,6 +311,14 @@ export default function EnvironmentManagement() {
   useEffect(() => {
     if (selected) void siteTasks({ environment: selected })
   }, [selected, taskGeneration])
+  const preparing = tasks.some(
+    (item) => item.action === 'candidate-prepare' && item.state === 'queued',
+  )
+  useEffect(() => {
+    if (!selected || !preparing) return
+    const timer = setInterval(() => void siteTasks({ environment: selected }), 5000)
+    return () => clearInterval(timer)
+  }, [selected, preparing])
   const rows = data
     ? [
         ...data.effective,
@@ -590,6 +610,58 @@ export default function EnvironmentManagement() {
                 >
                   请求现场预检
                 </Button>
+                <section aria-label="一次准备候选" className="space-y-2 pt-3">
+                  <h3 className="system-sm-semibold">一次准备候选</h3>
+                  <p>自动串联现场预检、工作区、知识连接与双端应用；不安装或启用正式服务。</p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={busy || plan.state === 'expired'}
+                    onClick={() => void siteTasks({ consumer_sources: true })}
+                  >
+                    选择准备模板
+                  </Button>
+                  {consumerSources.length > 0 && (
+                    <>
+                      <label className="block">
+                        候选客服来源版本
+                        <select
+                          aria-label="候选客服来源版本"
+                          className="block w-full rounded border p-2"
+                          value={consumerSource}
+                          onChange={(event) => setConsumerSource(event.target.value)}
+                        >
+                          <option value="">请选择已发布模板</option>
+                          {consumerSources.map((source) => (
+                            <option key={source.app_id} value={source.app_id}>
+                              {source.name} · v{source.version_no}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {draft.tenants.map((tenant) => (
+                        <Button
+                          key={tenant.id}
+                          type="button"
+                          variant="secondary"
+                          disabled={busy || plan.state === 'expired' || !consumerSource}
+                          onClick={() =>
+                            void siteTasks({
+                              candidate_plan: plan.id,
+                              tenant_id: tenant.id,
+                              source_app_id: consumerSource,
+                              source_version: consumerSources.find(
+                                (source) => source.app_id === consumerSource,
+                              )?.version_no,
+                            })
+                          }
+                        >
+                          准备候选：{tenant.name}（{tenant.id}）
+                        </Button>
+                      ))}
+                    </>
+                  )}
+                </section>
                 <Button
                   type="button"
                   variant="secondary"
@@ -618,6 +690,27 @@ export default function EnvironmentManagement() {
                     {item.action === 'knowledge-connect' && <p>候选知识连接 · {item.tenant_id}</p>}
                     {item.action === 'operator-prepare' && <p>候选管家应用 · {item.tenant_id}</p>}
                     {item.action === 'consumer-prepare' && <p>候选消费者应用 · {item.tenant_id}</p>}
+                    {item.action === 'candidate-prepare' && (
+                      <section aria-label={`候选准备进度：${item.tenant_id}`}>
+                        <p>
+                          候选准备 · {item.tenant_id}：
+                          {item.state === 'observed'
+                            ? '资源已准备，尚未开通'
+                            : taskLabels[item.state] || item.state}
+                        </p>
+                        <ul>
+                          {(item.result.steps || []).map((step) => (
+                            <li key={step.action}>
+                              {preparationSteps[step.action] || step.action}：
+                              {taskLabels[step.state] || step.state}
+                              <span className="block break-all">{step.id}</span>
+                              {step.error_code && <span role="alert">{step.error_code}</span>}
+                            </li>
+                          ))}
+                        </ul>
+                        <p>安装未执行 · 业务未验收 · 正式入口未启用</p>
+                      </section>
+                    )}
                     <p>
                       {item.action === 'workspace-prepare' && item.state === 'observed'
                         ? '候选工作区已准备'

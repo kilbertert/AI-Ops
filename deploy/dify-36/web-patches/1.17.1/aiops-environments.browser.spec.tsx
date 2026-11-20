@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vite-plus/test'
 import { render } from 'vitest-browser-react'
+import { page } from 'vitest/browser'
 import EnvironmentManagement from './aiops-environments'
 
 const push = vi.hoisted(() => vi.fn())
@@ -454,4 +455,78 @@ it('persists site tasks across refresh and safely requests cancellation', async 
   await screen.getByRole('button', { name: '取消现场预检' }).click()
   expect(calls.at(-1)).toEqual({ action: 'environment-task', id: task.id, cancel: true })
   await expect.element(screen.getByText('已取消', { exact: true })).toBeVisible()
+})
+
+it('submits one candidate preparation and restores durable child progress', async () => {
+  const plan = {
+    id: `plan_${'e'.repeat(32)}`,
+    state: 'blocked',
+    executable: false,
+    draft_revision: 2,
+    registry_revision: 4,
+    checks: [],
+  }
+  const task = {
+    id: `task_${'f'.repeat(32)}`,
+    action: 'candidate-prepare',
+    tenant_id: 'same',
+    plan_id: plan.id,
+    state: 'queued',
+    cancel_requested: false,
+    error_code: '',
+    result: {
+      scope: 'candidate-resources-only',
+      steps: [
+        {
+          id: `task_${'a'.repeat(32)}`,
+          action: 'site-preflight',
+          state: 'observed',
+          error_code: '',
+        },
+      ],
+    },
+  }
+  const calls: Record<string, unknown>[] = []
+  let submitted = false
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json(data)
+      if (body.action === 'environment-plan') return Response.json(plan)
+      if (body.consumer_sources)
+        return Response.json({ sources: [{ app_id: 'source-a', name: '正式客服', version_no: 7 }] })
+      if (body.candidate_plan) {
+        submitted = true
+        return Response.json(task)
+      }
+      return Response.json({ tasks: submitted ? [task] : [] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
+  await screen
+    .getByRole('combobox', { name: '候选客服来源版本', exact: true })
+    .selectOptions('source-a')
+  await screen.getByRole('button', { name: '准备候选：甲租户（same）', exact: true }).click()
+  expect(calls.find((body) => body.candidate_plan)).toEqual({
+    action: 'environment-task',
+    candidate_plan: plan.id,
+    tenant_id: 'same',
+    source_app_id: 'source-a',
+    source_version: 7,
+  })
+  await expect
+    .element(screen.getByText('安装未执行 · 业务未验收 · 正式入口未启用', { exact: true }))
+    .toBeVisible()
+  await page
+    .getByRole('region', { name: '候选准备进度：same' })
+  await screen.getByRole('button', { name: '刷新目录', exact: true }).click()
+  await expect.element(screen.getByText(task.result.steps[0].id, { exact: true })).toBeVisible()
+  await screen.getByRole('textbox', { name: '环境名称', exact: true }).fill('未保存')
+  expect(
+    screen.getByRole('button', { name: '准备候选：甲租户（same）', exact: true }).elements(),
+  ).toHaveLength(0)
 })
