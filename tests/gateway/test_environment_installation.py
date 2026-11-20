@@ -253,3 +253,34 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     result = worker.installation_run(tmp_path, request, identifier, owner)
     assert result["state"] == "blocked"
     assert all(a[2] == "124" for a in commands if a[0] == "dev-host" and a[2] != "41")
+
+
+@pytest.mark.parametrize("phase", ["queued", "executing", "checking", "running"])
+def test_public_install_task_states_do_not_masquerade_as_site_preflight(prepared, tmp_path, phase):  # noqa: F811
+    from aiops_diagnostics.gateway.environment_tasks import _public
+
+    path, _, _, _ = prepared
+    now = time.time()
+    request = {"action": "candidate-install", "plan": {"id": "plan_" + "b" * 32, "expires_at": now + 60}}
+    with gateway_db.initialize(drafts._database(path)) as conn:
+        drafts.initialize_tasks(conn)
+        rowid = "task_" + "c" * 32
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,result,updated_at,owner,lease_until) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (
+                rowid,
+                "a",
+                json.dumps(request),
+                phase,
+                json.dumps({"expires_at": now + 60}),
+                now,
+                "d" * 32 if phase in {"executing", "running"} else "",
+                now + 60 if phase in {"executing", "running"} else 0,
+            ),
+        )
+        value = _public(tasks._row(conn, rowid))
+    expected = {"queued": "queued", "executing": "running", "checking": "reconcile", "running": "running"}[
+        phase
+    ]
+    assert value["action"] == "candidate-install" and value["state"] == expected
