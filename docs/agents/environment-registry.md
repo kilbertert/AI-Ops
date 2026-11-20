@@ -390,3 +390,26 @@ aiops-admin --config /private/control-production.env environment-runtime \
 双端任务必须来自同一有效计划且观察未过期；新计划可以复用资源，但须先重新完成观察，不借旧过期回执。
 回执明确installation、candidate-runtime、consumer-callback、knowledge-content、business、activation待验证；
 后继在受管安装事务接入工件再作正常目标登录/合法run验证，不手工逐字段改运行文件或直接激活。
+
+### 停用客服候选的受限试运行（D35）
+
+仅用于已批准的一次候选验证，不开放普通客服准入。控制Gateway持有Console/模型/知识配置，
+目标124只持有自己的公司会话与数据源；两端均须部署支持D35的合并制品。原管理桥/Web保持兼容，
+本片无新网页按钮。通过服务身份执行`aiops-admin --config <该服务配置> environment-trial-dispatch`，
+请求JSON走stdin；命令只到固定本机`/v1/internal/environment-trial`，独立任务HMAC不返回操作者。
+
+1. 控制端`consumer-describe`接收`task_id/order_no`，核新鲜observed客服准备任务、停用应用与精确workflow，
+   返回`candidate`描述。旧计划需重新观察，不能手改期限或取最新成功任务代替。
+2. 目标端`consumer-open`接收该描述与本次正常C端登录的`third_session`；原Redis解析器核本人及可选明确订单，
+   返回随机`ect_`能力。公司会话只在目标进程内存保留；不得用管家令牌或扫描现有会话替代。
+3. 控制端`consumer-start`接收`candidate/token/question`；核任务与目标绑定后原子领取一次，
+   复用ConsumerTrial导入唯一临时应用、关闭其site、发布临时workflow并生成本轮key；源候选仍停用。
+   Dify使用原插件回调控制端；控制端经目标已有HTTPS agent回调核会话与本人订单，知识只查候选单库。
+4. 控制端`consumer-read`或`consumer-cancel`仅接收`trial_id`；回读核当前任务/权限/目标身份及同轮证据。
+   取消先撤本轮grant并关闭目标读取；完成/失败同样关闭，临时应用及其key回收失败则trial为failed。
+
+能力最多5分钟、目标最多8次明确订单读取，不能列出运营账号最近订单；普通入口、旧回调均拒绝`ect_`。
+重启丢失内存能力，过期、取消、配置/安装/任务/知识归属漂移均拒绝，不写正式route/target/永久customer grant。
+目标源配置与数据保持不变；恢复代码前先结束本片任务，保留失败与临时应用ID供定点对账，不恢复整库。
+控制端可先部署，旧目标会明确拒绝新能力；目标可先部署，无本机HMAC开通不创建任何能力。
+技术试运行不是P5原App/H5或业务准确性验收；实际部署/试跑结果另从交付索引读取。

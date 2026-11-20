@@ -4266,6 +4266,14 @@ def create_gateway_app(
             raise StandardAPIError(404, "CONSUMER_CAPABILITY_UNKNOWN", "未知取数能力")
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(401, "GRANT_REQUIRED", "knowledge grant required")
+        from aiops_diagnostics.consumer.candidate_trial import PREFIX as CANDIDATE_PREFIX
+
+        if authorization[7:].startswith(CANDIDATE_PREFIX):
+            if capability != "agent":
+                raise StandardAPIError(403, "GRANT_CAPABILITY_MISMATCH", "candidate callback refused")
+            from aiops_diagnostics.consumer.candidate_trial import callback
+
+            return await callback(context, request, authorization[7:])
         try:
             raw = bytearray()
             async for part in request.stream():

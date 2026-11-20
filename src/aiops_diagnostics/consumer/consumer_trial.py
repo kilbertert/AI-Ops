@@ -32,6 +32,7 @@ class ConsumerTrial:
     #: 需要的是"这份草稿仍然属于这个客户"，那一条由 `require_current` 的草稿分支查目录。
     draft: bool = False
     authorize: object = None
+    candidate: object = None
 
     def fingerprint(self):
         return hashlib.sha256(
@@ -42,6 +43,9 @@ class ConsumerTrial:
         ).hexdigest()
 
     def require_current(self, settings):
+        if self.candidate is not None:
+            self.candidate.authorize()
+            return
         if self.authorize:
             self.authorize()
         if self.draft:
@@ -65,10 +69,15 @@ class ConsumerTrial:
         ):
             raise ValueError("trial source route changed")
 
+    def require_order(self, runtime, scope, order):
+        if self.candidate is not None:
+            self.candidate.require_order(order)
+        else:
+            runtime._require_chat_order_visible(scope, order)
+
     def execute(self, runtime, trial_id, scope, order, language):
         from aiops_diagnostics.gateway.gateway_runtime import JobRegistration
 
-        self.require_current(runtime.gateway_settings)
         admin = DifyConsoleAdmin(ConsoleApiSettings(self.source.base_url, self.source.api_key))
         grants = DataGrantStore(runtime.store.path)
         runs = runtime.dify_run_store
@@ -77,9 +86,41 @@ class ConsumerTrial:
         registration = JobRegistration(route_type="trial")
         runtime._qa_registrations[trial_id] = registration
         try:
-            app_id = admin.import_app_dsl(
-                self.source.workspace_id, yaml_content=self.dsl, name="WF01 trial " + trial_id
-            )
+            self.require_current(runtime.gateway_settings)
+            if self.candidate is not None:
+                from uuid import UUID, uuid5
+
+                from aiops_diagnostics.dify.self_service_prepare import IMPORT_NAMESPACE
+
+                # 先固定本轮唯一ID；创建响应丢失时仍可定点回收，不能留下未知临时应用。
+                request_id = str(UUID(trial_id.removeprefix("tr_")))
+                app_id = str(uuid5(UUID(IMPORT_NAMESPACE), self.source.workspace_id + ":" + request_id))
+                created = admin._call(
+                    self.source.workspace_id,
+                    "/console/api/apps/imports",
+                    method="POST",
+                    body={
+                        "mode": "yaml-content",
+                        "yaml_content": self.dsl,
+                        "name": "WF01 trial " + trial_id,
+                        "request_id": request_id,
+                    },
+                )
+                if created.get("app_id") != app_id or created.get("status") not in {
+                    "completed",
+                    "completed-with-warnings",
+                }:
+                    raise ValueError("candidate temporary application unconfirmed")
+                admin._call(
+                    self.source.workspace_id,
+                    "/console/api/apps/" + app_id + "/site-enable",
+                    method="POST",
+                    body={"enable_site": False},
+                )
+            else:
+                app_id = admin.import_app_dsl(
+                    self.source.workspace_id, yaml_content=self.dsl, name="WF01 trial " + trial_id
+                )
             client = DifyDslClient(replace(self.source, app_id=app_id))
             if not client.publish_workflow():
                 raise ValueError("temporary Chatflow publish failed")
@@ -111,7 +152,7 @@ class ConsumerTrial:
             if self.binding.callback_version == 6:
                 kind, live = "agent", bool(order)
                 if order:
-                    runtime._require_chat_order_visible(scope, order)
+                    self.require_order(runtime, scope, order)
             else:
                 decision = validate(
                     runtime.classify_consumer(self.question, language=language, selected_order=bool(order))
@@ -234,7 +275,7 @@ class ConsumerTrial:
             if not live and self.binding.callback_version != 6:
                 require_available(runtime, scope, self.binding)
             if order:
-                runtime._require_chat_order_visible(scope, order)
+                self.require_order(runtime, scope, order)
             self.require_current(runtime.gateway_settings)
             latest = runs.get(run_id)
             if (
@@ -251,7 +292,7 @@ class ConsumerTrial:
                 if snapshot.get("order_no") != order or snapshot.get("source") != expected_source:
                     raise ValueError("trial has no matching live snapshot")
             if self.binding.callback_version == 6:
-                consumer_agent.require_evidence(runtime, scope, self.binding, context)
+                consumer_agent.require_evidence(runtime, scope, self.binding, context, trial=self)
                 answer = consumer_agent.final_answer(
                     reply.answer, context, language=language, question=self.question
                 )
@@ -284,5 +325,9 @@ class ConsumerTrial:
         finally:
             grants.revoke_for_qa(trial_id)
             runtime._qa_registrations.pop(trial_id, None)
-            if app_id:
-                admin.delete_app(self.source.workspace_id, app_id)
+            try:
+                if app_id:
+                    admin.delete_app(self.source.workspace_id, app_id)
+            finally:
+                if self.candidate is not None:
+                    self.candidate.close()

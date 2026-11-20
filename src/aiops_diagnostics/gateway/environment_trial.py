@@ -230,10 +230,19 @@ def read(context, payload):
 
 
 def register(app, context):
+    from aiops_diagnostics.consumer.candidate_trial import CandidateLeases
+    from aiops_diagnostics.dify.environment_consumer_trial import CandidateTrials
+
+    context.consumer_candidate_leases = CandidateLeases(context)
+    context.consumer_candidate_trials = CandidateTrials(context)
+
     @app.post("/v1/internal/environment-trial")
     async def manage_trial(request: Request):
         key = context.settings.environment_task_key
-        if not key or not context.settings.environment_registry_file:
+        if not key or not (
+            context.settings.environment_registry_file
+            or getattr(context.settings, "environment_management_registry_file", "")
+        ):
             return JSONResponse(status_code=404, content={"error": {"code": "ENVIRONMENT_TRIAL_DISABLED"}})
         try:
             local = request.client and ipaddress.ip_address(request.client.host).is_loopback
@@ -260,6 +269,22 @@ def register(app, context):
             if not isinstance(payload, dict):
                 raise TrialRefused("ENVIRONMENT_TRIAL_INVALID")
             action = payload.pop("action")
+            if not isinstance(action, str):
+                raise TrialRefused("ENVIRONMENT_TRIAL_INVALID")
+            if action.startswith("consumer-"):
+                operations = {
+                    "consumer-describe": context.consumer_candidate_trials.describe,
+                    "consumer-open": context.consumer_candidate_leases.open,
+                    "consumer-start": context.consumer_candidate_trials.start,
+                    "consumer-read": context.consumer_candidate_trials.read,
+                    "consumer-cancel": lambda value: context.consumer_candidate_trials.read(
+                        value, cancel=True
+                    ),
+                }
+                if action not in operations:
+                    raise TrialRefused("ENVIRONMENT_TRIAL_INVALID")
+                result = await asyncio.to_thread(operations[action], payload)
+                return JSONResponse(result, headers={"Cache-Control": "no-store"})
             result = (
                 await asyncio.to_thread(start, context, payload)
                 if action == "start"

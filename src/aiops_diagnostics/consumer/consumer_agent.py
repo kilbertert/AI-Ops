@@ -37,13 +37,26 @@ def used_knowledge(context):
     ) or any(t.get("used_knowledge") for t in (context or {}).get("conversation", {}).get("history", []))
 
 
-def require_evidence(runtime, caller, binding, context):
+def require_evidence(runtime, caller, binding, context, *, trial=None):
     """历史和交付都重新核权，读取历史不重新冒充实时取数。"""
-    if not runtime.gateway_settings.consumer_chatflow_enabled:
+    candidate = trial.candidate if trial else None
+    if candidate is not None:
+        candidate.authorize()
+    elif not runtime.gateway_settings.consumer_chatflow_enabled:
         raise ChatRunUnavailable("CHATFLOW_DISABLED", "客服未启用", http_status=404)
     for order in order_ids(context):
-        runtime._require_chat_order_visible(caller, order)
+        if candidate is not None:
+            candidate.require_order(order)
+        else:
+            runtime._require_chat_order_visible(caller, order)
     if used_knowledge(context):
+        require_knowledge(runtime, caller, binding, trial)
+
+
+def require_knowledge(runtime, caller, binding, trial=None):
+    if trial is not None and trial.candidate is not None:
+        trial.candidate.require_knowledge()
+    else:
         require_available(runtime, caller, binding)
 
 
@@ -131,12 +144,13 @@ def callback(runtime, token, body, *, read_snapshot, list_orders):
     def valid():
         from aiops_diagnostics.gateway.environment_registry import RegistryError, require_registered
 
-        try:
-            require_registered(runtime, caller.effective_tenant_id)
-        except RegistryError as exc:
-            raise ChatRunUnavailable(
-                "TENANT_ENVIRONMENT_NOT_ENABLED", "当前租户接入已停用或变化", http_status=403
-            ) from exc
+        if trial is None or trial.candidate is None:
+            try:
+                require_registered(runtime, caller.effective_tenant_id)
+            except RegistryError as exc:
+                raise ChatRunUnavailable(
+                    "TENANT_ENVIRONMENT_NOT_ENABLED", "当前租户接入已停用或变化", http_status=403
+                ) from exc
         usable(grants.by_id(grant.grant_id))
         latest = runs.get(run.run_id)
         qa = (runtime.store.get_standard_diagnosis if trial else runtime.store.get_assistant_question)(
@@ -191,6 +205,7 @@ def callback(runtime, token, body, *, read_snapshot, list_orders):
             body.get("knowledge_base_ids"),
             read_snapshot,
             list_orders,
+            trial,
         )
     except ChargingStatusError:
         result = {
@@ -209,21 +224,28 @@ def callback(runtime, token, body, *, read_snapshot, list_orders):
         result = {"status": "refused", "code": exc.code, "message": str(exc)}
     valid()
     for order in result.get("order_ids", []):
-        runtime._require_chat_order_visible(caller, order)
+        if trial is not None and trial.candidate is not None:
+            trial.candidate.require_order(order)
+        else:
+            runtime._require_chat_order_visible(caller, order)
     if resource == "knowledge" and result.get("status") != "refused":
-        require_available(runtime, caller, binding)
+        require_knowledge(runtime, caller, binding, trial)
     if not runs.finish_consumer_tool(run.run_id, index, result):
         raise ChatRunUnavailable("CHATFLOW_NOT_ACTIVE", "客服执行已结束", http_status=403)
     return result
 
 
-def _query(runtime, caller, binding, run, resource, query, order, libraries, read_snapshot, list_orders):
+def _query(
+    runtime, caller, binding, run, resource, query, order, libraries, read_snapshot, list_orders, trial=None
+):
     if resource == "knowledge":
         if libraries != list(binding.knowledge_base_ids):
             raise ChatRunUnavailable("KNOWLEDGE_SELECTION_UNAVAILABLE", "知识库选择与发布版不一致")
-        require_available(runtime, caller, binding)
+        require_knowledge(runtime, caller, binding, trial)
         if not query.strip():
             return {"status": "refused", "message": "请提供需要检索的具体问题"}
+        if trial is not None and trial.candidate is not None:
+            return trial.candidate.knowledge(query, run.qa_id)
         return consumer_knowledge.select_context(runtime, caller, binding, query, run.language, run.qa_id)
     if resource == "support":
         content = consumer_knowledge.binding_content(binding, caller)
@@ -237,6 +259,10 @@ def _query(runtime, caller, binding, run, resource, query, order, libraries, rea
             return {"status": "refused", "message": "运营预览请在页面选择订单，不列出消费者订单"}
         if not run.order_no or order != run.order_no:
             raise ChatRunUnavailable("CONSUMER_ORDER_REQUIRED", "只能查询预览中明确选定的订单")
+    if trial is not None and trial.candidate is not None:
+        if not (binding.live_order_status if resource == "status" else binding.live_billing_record):
+            raise ChatRunUnavailable("CHATFLOW_LIVE_DISABLED", "候选未启用此查询")
+        return trial.candidate.read(resource, order)
     if not (
         binding.live_order_status
         if resource == "status"
