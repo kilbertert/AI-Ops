@@ -202,7 +202,10 @@ def test_candidate_evidence_uses_target_authorization_but_normal_stays_disabled(
     )
     runtime = SimpleNamespace(gateway_settings=SimpleNamespace(consumer_chatflow_enabled=False))
     binding = SimpleNamespace(callback_version=6)
-    evidence = {"conversation": {"selected_order": ORDER}}
+    evidence = {
+        "conversation": {"selected_order": ORDER},
+        "calls": [{"tool": "status", "result": {"status": "found", "order_ids": [ORDER]}}],
+    }
     consumer_agent.require_evidence(
         runtime, caller(), binding, evidence, trial=SimpleNamespace(candidate=adapter)
     )
