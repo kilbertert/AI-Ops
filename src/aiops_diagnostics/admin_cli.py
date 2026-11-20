@@ -331,6 +331,7 @@ def environment_trial_dispatch(context: typer.Context) -> None:
 
 
 def _environment_dispatch(context, *, trial=False):
+    import http.client
     import pwd
     import socket
     import sys
@@ -374,12 +375,34 @@ def _environment_dispatch(context, *, trial=False):
         if not isinstance(payload, dict):
             raise ValueError("invalid payload")
         port = 18951 if target_profile else settings.port
-        result = call(
-            f"http://{host}:{port}",
-            settings.environment_task_key,
-            payload,
-            **({"trial": True} if trial else {}),
-        )
+        if trial:
+            import time
+
+            from aiops_diagnostics.common.http_auth import build_internal_token_headers
+
+            # 本机Gateway可监听桥地址；管理请求来源仍须为回环，不能放宽入口门。
+            connection = http.client.HTTPConnection(
+                host, port, timeout=30, source_address=("::1" if ":" in host else "127.0.0.1", 0)
+            )
+            try:
+                connection.request(
+                    "POST",
+                    "/v1/internal/environment-trial",
+                    body=json.dumps(payload),
+                    headers={
+                        **build_internal_token_headers(settings.environment_task_key, 300, int(time.time())),
+                        "Content-Type": "application/json",
+                    },
+                )
+                response = connection.getresponse()
+                body = response.read(65537)
+                if response.status != 200 or len(body) > 65536:
+                    raise ValueError("local candidate trial refused")
+                result = json.loads(body)
+            finally:
+                connection.close()
+        else:
+            result = call(f"http://{host}:{port}", settings.environment_task_key, payload)
     except (OSError, ValueError, RuntimeError, KeyError) as exc:
         typer.echo(json.dumps({"error": "ENVIRONMENT_TASK_DISPATCH_REFUSED"}))
         raise typer.Exit(1) from exc
