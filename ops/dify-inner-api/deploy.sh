@@ -14,7 +14,10 @@ flock -n 9 || { echo '转发器正在变更'; exit 1; }
 (cd "$bundle" && sha256sum --strict -c SHA256SUMS)
 [[ $(cat "$bundle/REVISION") =~ ^[0-9a-f]{40}$ ]] || exit 1
 # 接受已有端口的使用事实；有在飞连接时拒绝重启，不自动断开。
-if ss -Hnt state established '( sport = :15001 )' | grep -q .; then
+connections=$(ss -Hnt state established '( sport = :15001 )') || {
+    echo '无法核对在飞连接，拒绝重启'; exit 1;
+}
+if [[ -n $connections ]]; then
     echo '转发器仍有在飞连接，先等待结束'; exit 1
 fi
 health() {

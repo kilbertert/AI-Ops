@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("mode", ["install", "busy", "failed"])
+@pytest.mark.parametrize("mode", ["install", "busy", "unknown", "failed"])
 def test_forwarder_install_keeps_connections_and_rolls_back(tmp_path, mode):
     bundle = tmp_path / "bundle"
     bundle.mkdir()
@@ -33,7 +33,10 @@ def test_forwarder_install_keeps_connections_and_rolls_back(tmp_path, mode):
     bin_dir.mkdir()
     log = tmp_path / "restarts"
     stubs = {
-        "ss": '#!/bin/sh\n[ "$MODE" != busy ] || echo existing-connection\nexit 0\n',
+        "ss": (
+            '#!/bin/sh\nif [ "$MODE" = unknown ]; then echo unavailable >&2; exit 1; fi\n'
+            '[ "$MODE" != busy ] || echo existing-connection\nexit 0\n'
+        ),
         "systemctl": f'#!/bin/sh\n[ "$1" != restart ] || echo restart >> {log}\nexit 0\n',
         "curl": (
             f'#!/bin/sh\nif [ "$MODE" = failed ] && grep -q new {target}; then\n'
@@ -61,7 +64,7 @@ def test_forwarder_install_keeps_connections_and_rolls_back(tmp_path, mode):
     else:
         assert result.returncode != 0
         assert target.read_bytes() == old
-    if mode == "busy":
+    if mode in {"busy", "unknown"}:
         assert not log.exists() and not backup.exists()
     else:
         assert log.read_text().count("restart") == 2
