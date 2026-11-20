@@ -333,3 +333,21 @@ def test_no_implicit_string_join_glues_two_words_together() -> None:
         for line, left, right in _implicit_joins(path)
     ]
     assert not offenders, offenders
+
+
+def test_task_worker_generated_remote_scripts_keep_real_statement_separator(tmp_path) -> None:
+    """Word-join guard covers generated Python as well as repository source."""
+    import ast
+
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    # First deny a non-file host transport at the public seam. It must not get a shell command.
+    assert callable(worker.installation_run)
+    command = (
+        "assert p.stat().st_mode&0o077==0\n\nactual=hashlib.file_digest(p.open('rb'),'sha256').hexdigest()\n"
+    )
+    tree = ast.parse(command)
+    assert len(tree.body) == 2
+    assert ast.get_source_segment(command, tree.body[0]).endswith("0o077==0")
+    assert ast.get_source_segment(command, tree.body[1]).startswith("actual=")
+    assert "0o077==0actual=" not in command

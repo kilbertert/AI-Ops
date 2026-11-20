@@ -61,6 +61,8 @@ def handle(handler, bridge):
                 "registry_revision",
                 "plan_id",
                 "candidate_plan",
+                "candidate_task",
+                "installation",
                 "site_task",
                 "workspace_task",
                 "knowledge_task",
@@ -126,7 +128,13 @@ def handle(handler, bridge):
     if (method == "GET" or action == "retry") and payload:
         raise _Rejected(400, "无效参数")
     if action == "environment-task":
-        if set(payload) == {"candidate_plan", "tenant_id", "source_app_id", "source_version"}:
+        if set(payload) == {"candidate_task", "installation"}:
+            valid = (
+                payload["installation"] is True
+                and isinstance(payload["candidate_task"], str)
+                and re.fullmatch(r"task_[0-9a-f]{32}", payload["candidate_task"])
+            )
+        elif set(payload) == {"candidate_plan", "tenant_id", "source_app_id", "source_version"}:
             valid = (
                 isinstance(payload["candidate_plan"], str)
                 and re.fullmatch(r"plan_[0-9a-f]{32}", payload["candidate_plan"])
@@ -182,6 +190,8 @@ def handle(handler, bridge):
         if not valid:
             raise _Rejected(400, "无效环境任务")
     elif set(payload) & {
+        "candidate_task",
+        "installation",
         "candidate_plan",
         "plan_id",
         "site_task",

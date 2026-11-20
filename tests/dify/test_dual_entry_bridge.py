@@ -195,3 +195,21 @@ def test_scope_and_sources_are_create_only(bridge):  # noqa: F811
         {"action": "status", "app_id": CONSUMER, "scope": "both", "sources": {}}, address=bridge
     )
     assert status == 400
+
+
+def test_candidate_installation_crosses_bridge_without_deployment_arguments(bridge, upstream):  # noqa: F811
+    payload = {"action": "environment-task", "candidate_task": "task_" + "a" * 32, "installation": True}
+    assert _manage(payload, address=bridge)[0] != 400
+    forwarded = [c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]
+    assert forwarded[-1]["body"] == {"candidate_task": payload["candidate_task"], "installation": True}
+    count = len(forwarded)
+    for extra in (
+        {"installation": 1},
+        {"installation": "install"},
+        {"candidate_task": "unknown"},
+        {"app_id": CONSUMER},
+        {"action": "status"},
+        {"gateway_url": "https://other.test"},
+    ):
+        assert _manage({**payload, **extra}, address=bridge)[0] == 400
+    assert len([c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]) == count

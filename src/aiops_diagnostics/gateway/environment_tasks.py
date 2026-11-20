@@ -49,8 +49,12 @@ def _current(path, request, reference, *, reconciling=False):
 def _public(row):
     request = json.loads(row["request"])
     state = row["state"]
-    if state == "waiting" and request.get("action") == "candidate-prepare":
+    if state == "waiting" and request.get("action") in {"candidate-prepare", "candidate-install"}:
         state = "queued"
+    if state == "executing":
+        state = "running" if row["lease_until"] > time.time() else "reconcile"
+    if state == "checking":
+        state = "reconcile"
     if state == "running" and row["lease_until"] <= time.time():
         state = "reconcile"
     if state == "queued" and request["plan"]["expires_at"] <= time.time():
@@ -400,7 +404,11 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
                                 "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
                                 (child_state, time.time(), child_id),
                             )
-                state = row["state"] if row["state"] in {"running", "reconcile"} else "cancelled"
+                state = (
+                    row["state"]
+                    if row["state"] in {"running", "reconcile", "executing", "checking"}
+                    else "cancelled"
+                )
                 conn.execute(
                     "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
                     (state, time.time(), identifier),
@@ -439,7 +447,13 @@ def validate_receipt(value, environment):
         "formal-network",
         "business",
     }
-    if not isinstance(value, dict) or set(value) != fields:
+    if not isinstance(value, dict) or set(value) not in (fields, fields | {"runtime_sha256"}):
+        raise TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
+    if "runtime_sha256" in value and (
+        not isinstance(value["runtime_sha256"], str)
+        or value["runtime_sha256"] != "absent"
+        and not re.fullmatch(r"[0-9a-f]{64}", value["runtime_sha256"])
+    ):
         raise TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
     valid = (
         value["environment"] == environment
@@ -508,7 +522,7 @@ def worker(path, reference, payload, *, internal_workspace=False):
                 raise TaskRefused("ENVIRONMENT_TASK_UNAVAILABLE")
             row = _row(conn, payload["id"])
         request = json.loads(row["request"])
-        if request.get("action") == "candidate-prepare":
+        if request.get("action") in {"candidate-prepare", "candidate-install"}:
             raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
         _authorize(path, tuple(request["identity"]), row["environment"])
         if (
@@ -545,10 +559,12 @@ def _next(path, reference):
             for row in conn.execute(
                 "SELECT * FROM environment_tasks AS task WHERE state IN ('queued','running','reconcile') "
                 "AND json_extract(request,'$.action') IS NOT 'candidate-prepare' "
+                "AND json_extract(request,'$.action') IS NOT 'candidate-install' "
                 "AND lease_until<=? AND (state!='reconcile' OR updated_at<=?) "
                 "AND NOT EXISTS (SELECT 1 FROM environment_tasks AS live "
                 "WHERE live.environment=task.environment AND live.id!=task.id "
-                "AND live.state='running' AND live.lease_until>?) ORDER BY updated_at LIMIT 64",
+                "AND live.state IN ('running','executing') AND live.lease_until>?) "
+                "ORDER BY updated_at LIMIT 64",
                 (now, now - 60, now),
             )
         ]
@@ -560,7 +576,7 @@ def _next(path, reference):
             with gateway_db.connection(database, readonly=True) as conn:
                 busy = conn.execute(
                     "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
-                    "AND state='running' AND lease_until>? LIMIT 1",
+                    "AND state IN ('running','executing') AND lease_until>? LIMIT 1",
                     (row["environment"], row["id"], now),
                 ).fetchone()
             if not busy:
@@ -586,7 +602,7 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
                 return {"claimed": False, "task": _public(row)}
             if conn.execute(
                 "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
-                "AND state='running' AND lease_until>? LIMIT 1",
+                "AND state IN ('running','executing') AND lease_until>? LIMIT 1",
                 (row["environment"], row["id"], now),
             ).fetchone():
                 raise TaskRefused("ENVIRONMENT_TASK_BUSY")

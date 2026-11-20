@@ -67,6 +67,8 @@ type SiteTask = {
     connection_id?: string
     app_id?: string
     scope?: string
+    installation?: string
+    version?: string
     steps?: { id: string; action: string; state: string; error_code: string }[]
     checks?: { id: string; state: string }[]
   }
@@ -312,7 +314,9 @@ export default function EnvironmentManagement() {
     if (selected) void siteTasks({ environment: selected })
   }, [selected, taskGeneration])
   const preparing = tasks.some(
-    (item) => item.action === 'candidate-prepare' && item.state === 'queued',
+    (item) =>
+      ['candidate-prepare', 'candidate-install'].includes(item.action || '') &&
+      ['queued', 'running', 'reconcile'].includes(item.state),
   )
   useEffect(() => {
     if (!selected || !preparing) return
@@ -690,6 +694,32 @@ export default function EnvironmentManagement() {
                     {item.action === 'knowledge-connect' && <p>候选知识连接 · {item.tenant_id}</p>}
                     {item.action === 'operator-prepare' && <p>候选管家应用 · {item.tenant_id}</p>}
                     {item.action === 'consumer-prepare' && <p>候选消费者应用 · {item.tenant_id}</p>}
+                    {item.action === 'candidate-install' && (
+                      <section aria-label={`候选安装进度：${item.tenant_id}`}>
+                        <p>
+                          停用候选安装 · {item.tenant_id}：{taskLabels[item.state] || item.state}
+                        </p>
+                        {item.result.version && <p>实际版本：{item.result.version}</p>}
+                        <p>注册未执行 · 业务未验收 · 正式入口未启用</p>
+                      </section>
+                    )}
+                    {item.action === 'candidate-prepare' && item.state === 'observed' && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={busy || dirty || saved?.registry_changed}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              '安装该停用候选的配置与运行接线？不会启用正式入口；在飞取消会等待安全结果。',
+                            )
+                          )
+                            void siteTasks({ candidate_task: item.id, installation: true })
+                        }}
+                      >
+                        安装停用候选：{item.tenant_id}
+                      </Button>
+                    )}
                     {item.action === 'candidate-prepare' && (
                       <section aria-label={`候选准备进度：${item.tenant_id}`}>
                         <p>
@@ -868,17 +898,19 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        {item.action === 'consumer-prepare'
-                          ? '取消消费者准备'
-                          : item.action === 'operator-prepare'
-                            ? '取消管家准备'
-                            : item.action === 'knowledge-connect'
-                              ? '取消知识连接准备'
-                              : item.action === 'knowledge-prepare'
-                                ? '取消知识准备'
-                                : item.action === 'workspace-prepare'
-                                  ? '取消工作区准备'
-                                  : '取消现场预检'}
+                        {item.action === 'candidate-install'
+                          ? '取消候选安装（等待安全结果）'
+                          : item.action === 'consumer-prepare'
+                            ? '取消消费者准备'
+                            : item.action === 'operator-prepare'
+                              ? '取消管家准备'
+                              : item.action === 'knowledge-connect'
+                                ? '取消知识连接准备'
+                                : item.action === 'knowledge-prepare'
+                                  ? '取消知识准备'
+                                  : item.action === 'workspace-prepare'
+                                    ? '取消工作区准备'
+                                    : '取消现场预检'}
                       </Button>
                     )}
                   </article>
