@@ -96,7 +96,7 @@ Web必须完整webpack构建；合并后同修订镜像配套发布，独立URL2
 受控configuration现在作为模板：保留凭据、本地SQL/Redis与已批准共享连接，地址/身份等生成字段须空或不出现。
 CPMS与公开入口直接来自草稿，公司UPMS地址使用既有网关合同`company_gateway_url + /upms`；
 运行目录为`/etc/aiops-access-<id>/registry/environment.json`，config_ref为配置根production.env，执行环境为草稿id。
-安装器负责进程AIOPS_GATEWAY_ENVIRONMENT和数据根，模板不能覆盖。候选环境/租户全停用，业务执行绑定和聊天开关关闭。
+安装器负责进程AIOPS_GATEWAY_ENVIRONMENT和数据根，模板不能覆盖。`AIOPS_GATEWAY_ENVIRONMENT_INSTALLATION_FILE`仅由控制面受管配置维护，租户模板声明该字段时拒绝投影，不能重定向中央节点安装目标。候选环境/租户全停用，业务执行绑定和聊天开关关闭。
 本地SQL时区不从IANA时区反推；manifest记录草稿timezone，实际数据源口径另验。
 模板按既有dotenv格式读取；拒绝重复键、无值键、解析错误、`${...}`插值和声明数值类型错误，保留合法引号/换行/空值。
 不把类型检查当完整Gateway启动验证；模板中的外部文件/共享地址权限由后继现场验证，秘密不回显。
