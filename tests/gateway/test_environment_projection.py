@@ -152,6 +152,7 @@ def test_projection_preserves_carriage_return_credentials_on_file_read(candidate
     "text",
     [
         "AIOPS_GATEWAY_ENVIRONMENT=b\n",
+        "AIOPS_GATEWAY_ENVIRONMENT_INSTALLATION_FILE=/private/control-install.json\n",
         "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL=https://b.test\n",
         "AIOPS_MYSQL_PASSWORD=x\nAIOPS_MYSQL_PASSWORD=y\n",
         "AIOPS_MYSQL_PASSWORD=${HOST_SECRET}\n",
