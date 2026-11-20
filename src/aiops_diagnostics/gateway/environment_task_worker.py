@@ -307,7 +307,8 @@ def installation_run(root, request, identifier, owner):
                     script = (
                         "import sys,hashlib\nfrom pathlib import Path\n"
                         f"p=Path({source['path']!r})\n"
-                        "assert p.is_file() and not p.is_symlink() and p.stat().st_mode&0o077==0\n\nactual=hashlib.file_digest(p.open('rb'),'sha256').hexdigest()\n"
+                        "assert p.is_file() and not p.is_symlink() and p.stat().st_mode&0o077==0\n\n"
+                        "actual=hashlib.file_digest(p.open('rb'),'sha256').hexdigest()\n"
                         f"assert actual=={source['sha256']!r}\n"
                         "sys.stdout.buffer.write(p.read_bytes())\n"
                     )
@@ -393,7 +394,8 @@ def installation_run(root, request, identifier, owner):
                 "actual=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()\n"
                 f"assert actual=={staged['installer']['sha256']!r}\n"
                 f"d=Path({(remote + '/installer')!r});d.mkdir(mode=0o700,exist_ok=True)\n"
-                "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0\n\nwith tarfile.open(archive) as t:\n"
+                "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0\n\n"
+                "with tarfile.open(archive) as t:\n"
                 " for m in t:\n"
                 "  if m.name=='.' and m.isdir():continue\n"
                 "  n=m.name.removeprefix('./')\n"
