@@ -304,13 +304,17 @@ def installation_run(root, request, identifier, owner):
                     )
                 else:
                     # 仅受管服务身份读task目录中已冻结归档；原路径不通过shell拼接。
-                    script = (
-                        "import sys,hashlib\nfrom pathlib import Path\n"
-                        f"p=Path({source['path']!r})\n"
-                        "assert p.is_file() and not p.is_symlink() and p.stat().st_mode&0o077==0\n\n"
-                        "actual=hashlib.file_digest(p.open('rb'),'sha256').hexdigest()\n"
-                        f"assert actual=={source['sha256']!r}\n"
-                        "sys.stdout.buffer.write(p.read_bytes())\n"
+                    script = "\n".join(
+                        [
+                            "import sys,hashlib",
+                            "from pathlib import Path",
+                            f"p=Path({source['path']!r})",
+                            "assert p.is_file() and not p.is_symlink() and p.stat().st_mode&0o077==0",
+                            "",
+                            "actual=hashlib.file_digest(p.open('rb'),'sha256').hexdigest()",
+                            f"assert actual=={source['sha256']!r}",
+                            "sys.stdout.buffer.write(p.read_bytes())",
+                        ]
                     )
                     with local.open("wb") as stream:
                         subprocess.run(
@@ -388,30 +392,32 @@ def installation_run(root, request, identifier, owner):
             ) != {"authorized": True}:
                 raise ValueError("installation authorization changed")
             # 核固定包身份后执行task.py；observe严格不再次apply，不向目标传共享凭据。
-            script = (
-                "import hashlib,json,subprocess,tarfile,sys\nfrom pathlib import Path\n"
-                f"archive=Path({(remote + '/installer.tar.gz')!r})\n"
-                "actual=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()\n"
-                f"assert actual=={staged['installer']['sha256']!r}\n"
-                f"d=Path({(remote + '/installer')!r});d.mkdir(mode=0o700,exist_ok=True)\n"
-                "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0\n\n"
-                "with tarfile.open(archive) as t:\n"
-                " for m in t:\n"
-                "  if m.name=='.' and m.isdir():continue\n"
-                "  n=m.name.removeprefix('./')\n"
-                "  assert m.isfile() and n in {'REVISION','SHA256SUMS','install.py','runtime_check.py',"
-                "'probe.py','artifact_checks.py','task.py'}\n"
-                "  q=d/n;body=t.extractfile(m).read()\n"
-                "  if q.exists() or q.is_symlink():\n"
-                "   assert q.is_file() and not q.is_symlink() and q.stat().st_uid==0\n"
-                "   assert q.read_bytes()==body\n"
-                "  else:\n"
-                "   with q.open('xb') as f:f.write(body)\n"
-                f"assert (d/'REVISION').read_text().strip()=={staged['installer']['revision']!r}\n"
-                "assert (d/'task.py').is_file()\n"
-                f"r=subprocess.run({arguments!r},"
-                f"input={json.dumps(spec)!r},text=True,capture_output=True)\n"
-                "sys.stdout.write(r.stdout);sys.exit(r.returncode)\n"
+            script = "\n".join(
+                [
+                    "import hashlib,json,subprocess,tarfile,sys",
+                    "from pathlib import Path",
+                    f"archive=Path({(remote + '/installer.tar.gz')!r})",
+                    "actual=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()",
+                    f"assert actual=={staged['installer']['sha256']!r}",
+                    f"d=Path({(remote + '/installer')!r});d.mkdir(mode=0o700,exist_ok=True)",
+                    "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0",
+                    "",
+                    "with tarfile.open(archive) as t:",
+                    " for m in t:",
+                    "  if m.name=='.' and m.isdir():continue",
+                    "  n=m.name.removeprefix('./')",
+                    "  assert m.isfile() and n in {'REVISION','SHA256SUMS','install.py','runtime_check.py','probe.py','artifact_checks.py','task.py'}",
+                    "  q=d/n;body=t.extractfile(m).read()",
+                    "  if q.exists() or q.is_symlink():",
+                    "   assert q.is_file() and not q.is_symlink() and q.stat().st_uid==0",
+                    "   assert q.read_bytes()==body",
+                    "  else:",
+                    "   with q.open('xb') as f:f.write(body)",
+                    f"assert (d/'REVISION').read_text().strip()=={staged['installer']['revision']!r}",
+                    "assert (d/'task.py').is_file()",
+                    f"r=subprocess.run({arguments!r},input={json.dumps(spec)!r},text=True,capture_output=True)",
+                    "sys.stdout.write(r.stdout);sys.exit(r.returncode)",
+                ]
             )
             raw = subprocess.check_output(command, cwd=root, input=script, text=True, timeout=805)
             if len(raw) > 65536:
