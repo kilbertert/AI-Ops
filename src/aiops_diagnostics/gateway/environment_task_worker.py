@@ -156,10 +156,10 @@ def execute(root, claim):
         return result
 
 
-def call(gateway, key, payload):
+def call(gateway, key, payload, *, trial=False):
     headers = {**build_internal_token_headers(key, 300, int(time.time())), "Content-Type": "application/json"}
     request = RequestSpec(
-        gateway + "/v1/internal/environment-tasks",
+        gateway + ("/v1/internal/environment-trial" if trial else "/v1/internal/environment-tasks"),
         method="POST",
         body=json.dumps(payload).encode(),
         headers=headers,

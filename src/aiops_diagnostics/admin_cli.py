@@ -321,6 +321,16 @@ def environment_task_worker(
 @admin_app.command("environment-task-dispatch")
 def environment_task_dispatch(context: typer.Context) -> None:
     """中央固定身份接收stdin任务JSON；配置/密钥不返回运维宿主。"""
+    _environment_dispatch(context)
+
+
+@admin_app.command("environment-trial-dispatch")
+def environment_trial_dispatch(context: typer.Context) -> None:
+    """受管服务身份向本机候选入口转交stdin；公司会话仅交目标。"""
+    _environment_dispatch(context, trial=True)
+
+
+def _environment_dispatch(context, *, trial=False):
     import pwd
     import socket
     import sys
@@ -332,14 +342,26 @@ def environment_task_dispatch(context: typer.Context) -> None:
 
     try:
         config = context.obj.get("config_file")
-        if os.getuid() != pwd.getpwnam("aiops41").pw_uid or config != Path("/etc/aiops-41/gateway.env"):
+        target_profile = trial and config == Path("/etc/aiops-access-124/production.env")
+        user = "aiops" if target_profile else "aiops41"
+        if os.getuid() != pwd.getpwnam(user).pw_uid or (
+            not target_profile and config != Path("/etc/aiops-41/gateway.env")
+        ):
             raise ValueError("central service identity and fixed configuration required")
         validate_private_file(config)
         os.environ.update(
             {k: v for k, v in dotenv_values(config, interpolate=False).items() if v is not None}
         )
+        if target_profile:
+            os.environ.update(
+                {
+                    "AIOPS_GATEWAY_ENVIRONMENT": "124",
+                    "AIOPS_GATEWAY_SERVER_CONFIG_FILE": str(config),
+                    "AIOPS_GATEWAY_DATABASE_FILE": "/var/lib/aiops-access-124/gateway/gateway.db",
+                }
+            )
         settings = GatewayServerSettings.from_env()
-        if settings.environment != "41" or not settings.environment_task_key:
+        if settings.environment != ("124" if target_profile else "41") or not settings.environment_task_key:
             raise ValueError("central profile not configured")
         # 目标只取本机配置；bind验证地址确实属于本机，不从stdin指定上游。
         host = settings.bind_host if settings.bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
@@ -351,7 +373,13 @@ def environment_task_dispatch(context: typer.Context) -> None:
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ValueError("invalid payload")
-        result = call(f"http://{host}:{settings.port}", settings.environment_task_key, payload)
+        port = 18951 if target_profile else settings.port
+        result = call(
+            f"http://{host}:{port}",
+            settings.environment_task_key,
+            payload,
+            **({"trial": True} if trial else {}),
+        )
     except (OSError, ValueError, RuntimeError, KeyError) as exc:
         typer.echo(json.dumps({"error": "ENVIRONMENT_TASK_DISPATCH_REFUSED"}))
         raise typer.Exit(1) from exc

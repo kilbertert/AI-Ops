@@ -2228,11 +2228,13 @@ class GatewayRuntime:
                         grant.agent_version.removeprefix(candidate_knowledge.MEDIA_PREFIX)
                     )
                     candidate_knowledge.active(self.gateway_settings, scope)
+                    if grant.session_id is not None:
+                        self.consumer_candidate_trials.authorize_media(grant, scope)
                     return (
                         tenant_matches(grant.tenant_id, candidate_knowledge.namespace(scope))
                         and grant.knowledge_base_id == scope[3]
                     )
-                except (ValueError, OSError, RuntimeError):
+                except (ValueError, OSError, RuntimeError, AttributeError, KeyError, TypeError):
                     return False
             if self.agent_store is None:
                 return False
