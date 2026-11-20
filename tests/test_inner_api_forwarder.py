@@ -225,3 +225,63 @@ def test_the_unit_files_keep_the_boundary() -> None:
     readme = (FORWARDER.parent / "README.md").read_text(encoding="utf-8")
     assert "这一层不是授权" in readme
     assert "5001" in readme and "永不 publish" in readme
+
+
+def test_an_open_connection_does_not_block_another_console_request(module):
+    import socketserver
+
+    class Echo(socketserver.BaseRequestHandler):
+        def handle(self):
+            while data := self.request.recv(65536):
+                self.request.sendall(data)
+
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Echo) as upstream:
+        upstream.daemon_threads = True
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        module.container_address = lambda *_: f"127.0.0.1:{upstream.server_address[1]}"
+        port = _free_port()
+        _serve_in_thread(module, port, "deploy-api-1", 5001)
+        with socket.create_connection(("127.0.0.1", port), timeout=1) as streaming:
+            streaming.sendall(b"stream-start")
+            assert streaming.recv(64) == b"stream-start"
+            with socket.create_connection(("127.0.0.1", port), timeout=1) as control:
+                control.sendall(b"console-authorization")
+                assert control.recv(64) == b"console-authorization"
+            streaming.sendall(b"stream-end")
+            assert streaming.recv(64) == b"stream-end"
+        upstream.shutdown()
+
+
+def test_connection_limit_refuses_excess_and_releases_capacity(module):
+    import socketserver
+    import time
+
+    class Echo(socketserver.BaseRequestHandler):
+        def handle(self):
+            while data := self.request.recv(65536):
+                self.request.sendall(data)
+
+    module.MAX_CONNECTIONS = 2
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Echo) as upstream:
+        upstream.daemon_threads = True
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        module.container_address = lambda *_: f"127.0.0.1:{upstream.server_address[1]}"
+        port = _free_port()
+        _serve_in_thread(module, port, "deploy-api-1", 5001)
+        # 等启动探针的连接释放额度，不把探针当业务占用。
+        time.sleep(0.05)
+        with (
+            socket.create_connection(("127.0.0.1", port), timeout=1) as first,
+            socket.create_connection(("127.0.0.1", port), timeout=1) as second,
+        ):
+            for client in (first, second):
+                client.sendall(b"held")
+                assert client.recv(64) == b"held"
+            with socket.create_connection(("127.0.0.1", port), timeout=1) as excess:
+                assert excess.recv(64) == b""
+            first.close()
+            time.sleep(0.05)
+            with socket.create_connection(("127.0.0.1", port), timeout=1) as next_client:
+                next_client.sendall(b"released")
+                assert next_client.recv(64) == b"released"
+        upstream.shutdown()

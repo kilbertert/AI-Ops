@@ -37,6 +37,7 @@ import selectors
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 #: 查不到地址时的重试次数与间隔。一次 ``docker inspect`` 偶发失败不该把连接直接掐掉，
@@ -50,6 +51,7 @@ CONNECT_TIMEOUT = 5.0
 IDLE_TIMEOUT = 120.0
 
 BUFFER = 65536
+MAX_CONNECTIONS = 32
 
 
 def container_address(container: str, container_port: int) -> str | None:
@@ -128,6 +130,18 @@ def handle(client: socket.socket, container: str, container_port: int) -> None:
 
 
 def serve(listen_host: str, listen_port: int, container: str, container_port: int) -> None:
+    capacity = threading.BoundedSemaphore(MAX_CONNECTIONS)
+
+    def relay(client):
+        try:
+            handle(client, container, container_port)
+        except Exception as exc:  # noqa: BLE001 - 一条坏连接不该带走监听
+            print(json.dumps({"connection_failed": type(exc).__name__}), file=sys.stderr)
+        finally:
+            with contextlib.suppress(OSError):
+                client.close()
+            capacity.release()
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind((listen_host, listen_port))
@@ -146,12 +160,16 @@ def serve(listen_host: str, listen_port: int, container: str, container_port: in
         )
         while True:
             client, _ = server.accept()
+            # 流式请求等待工具回调；串行搬运会堵住该回调的Console核权。
+            if not capacity.acquire(blocking=False):
+                client.close()
+                continue
             try:
-                handle(client, container, container_port)
-            except Exception as exc:  # noqa: BLE001 - 一条坏连接不该带走监听
-                print(json.dumps({"connection_failed": type(exc).__name__}), file=sys.stderr)
-                with contextlib.suppress(OSError):
-                    client.close()
+                threading.Thread(target=relay, args=(client,), daemon=True).start()
+            except Exception:
+                client.close()
+                capacity.release()
+                raise
 
 
 def _endpoint(value: str) -> tuple[str, int]:
