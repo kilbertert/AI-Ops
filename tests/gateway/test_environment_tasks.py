@@ -793,3 +793,76 @@ def test_busy_environment_does_not_fill_automatic_queue_window(prepared):
                 ("task_" + f"{index + 1:032x}", "a", body, time.time() - 10),
             )
     assert tasks.worker(path, ref, {"owner": "b" * 32})["id"] == second["id"]
+
+
+def test_local_trial_dispatch_pins_loopback_source(tmp_path, monkeypatch):
+    import http.client
+    import os
+    import pwd
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from typer.testing import CliRunner
+
+    from aiops_diagnostics.admin_cli import admin_app
+    from aiops_diagnostics.common import private_files
+    from aiops_diagnostics.common.http_auth import validate_internal_token
+    from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+
+    calls = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append((self.client_address[0], self.path, body))
+            assert validate_internal_token(
+                self.headers.get("X-Internal-Token"), self.headers.get("X-Request-Timestamp"), "synthetic-key"
+            )
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"candidate": {}, "activated": false}')
+
+    server = ThreadingHTTPServer(("127.0.0.2", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    settings = SimpleNamespace(
+        environment="41", environment_task_key="synthetic-key", bind_host="127.0.0.2", port=server.server_port
+    )
+    monkeypatch.setattr(pwd, "getpwnam", lambda _: SimpleNamespace(pw_uid=os.getuid()))
+    monkeypatch.setattr(private_files, "validate_private_file", lambda _: None)
+    monkeypatch.setattr(GatewayServerSettings, "from_env", lambda: settings)
+    original, addresses = http.client.HTTPConnection, []
+
+    def connect(*args, **kwargs):
+        addresses.append(kwargs["source_address"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(http.client, "HTTPConnection", connect)
+    try:
+        result = CliRunner().invoke(
+            admin_app,
+            ["--config", "/etc/aiops-41/gateway.env", "environment-trial-dispatch"],
+            input='{"action":"consumer-describe","task_id":"synthetic"}',
+        )
+        assert result.exit_code == 0, result.output
+        assert addresses == [("127.0.0.1", 0)]
+        assert calls == [
+            (
+                "127.0.0.1",
+                "/v1/internal/environment-trial",
+                {"action": "consumer-describe", "task_id": "synthetic"},
+            )
+        ]
+        assert "synthetic-key" not in result.output
+        settings.bind_host = "192.0.2.123"
+        refused = CliRunner().invoke(
+            admin_app, ["--config", "/etc/aiops-41/gateway.env", "environment-trial-dispatch"], input="{}"
+        )
+        assert refused.exit_code == 1 and len(calls) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
