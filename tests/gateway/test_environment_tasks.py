@@ -716,7 +716,11 @@ def test_automatic_worker_respects_task_selected_by_central(prepared, tmp_path, 
     monkeypatch.setattr(worker.subprocess, "check_output", lambda *a, **kw: "")
     monkeypatch.setattr(worker.subprocess, "run", lambda *a, **kw: None)
     monkeypatch.setattr(
-        worker, "central_call", lambda root, target, payload: tasks.worker(path, ref, payload)
+        worker,
+        "central_call",
+        lambda root, target, payload: (
+            {"advanced": 0} if payload == {"advance_candidates": True} else tasks.worker(path, ref, payload)
+        ),
     )
     monkeypatch.setattr(worker, "execute", lambda root, claim: receipt(claim["environment"]))
     result = worker.run(tmp_path, "", "", central_target="41")

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aiops_diagnostics.common.http_auth import validate_internal_token
-from aiops_diagnostics.gateway import environment_drafts, environment_plans, environment_tasks
+from aiops_diagnostics.gateway import environment_drafts, environment_plans, environment_tasks, gateway_db
 from aiops_diagnostics.gateway import environment_registry as registry
 
 from . import self_service_identity as auth
@@ -167,6 +167,19 @@ def task(context, session, payload):
     try:
         if len(json.dumps(payload)) > 65536:
             raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+        if set(payload) == {"candidate_plan", "tenant_id", "source_app_id", "source_version"}:
+            from . import environment_candidate_preparation, environment_consumer
+
+            if not caller.platform:
+                raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
+            source = environment_consumer.sources(context, caller, payload["source_app_id"])
+            if (
+                type(payload["source_version"]) is not int
+                or source["version_no"] != payload["source_version"]
+            ):
+                raise SetupConflict("SETUP_SOURCE_CHANGED")
+            environment_consumer.document(source, "candidate-validation")
+            return environment_candidate_preparation.submit(context, identity, payload, source)
         if set(payload) in (
             {"consumer_sources"},
             {"connection_task", "tenant_id", "source_app_id", "source_version"},
@@ -331,6 +344,13 @@ def prepare_workspace(context, payload):
     path, reference = _path(context), context.settings.environment_onboarding_file
     request = environment_tasks.workspace_request(path, reference, payload["id"], payload["owner"])
     settings = context.settings
+    if request.get("candidate_parent"):
+        from .environment_candidate_preparation import _bindings
+
+        with gateway_db.connection(environment_drafts._database(path), readonly=True) as conn:
+            parent = json.loads(environment_tasks._row(conn, request["candidate_parent"])["request"])
+        if parent["bindings"]["workspace"] != _bindings(settings, parent["consumer_source"])["workspace"]:
+            raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
     workspaces = DifyWorkspaces(settings.database_file)
     environment, tenant = request["plan"]["environment"], request["tenant_id"]
     workspace_id, state, error = "", "observed", ""
@@ -450,6 +470,10 @@ def register(app, context, session_dependency):
         try:
             if len(json.dumps(payload)) > 65536:
                 raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
+            if "advance_candidates" in payload:
+                from .environment_candidate_preparation import advance
+
+                return advance(context, payload)
             if "prepare" in payload:
                 if payload["prepare"] in {"operator", "consumer"}:
                     from .environment_operator import run

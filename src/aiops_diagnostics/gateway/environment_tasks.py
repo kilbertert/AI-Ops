@@ -10,6 +10,8 @@ from aiops_diagnostics.gateway import environment_plans as plans
 from aiops_diagnostics.gateway import environment_registry as registry
 from aiops_diagnostics.gateway import gateway_db
 
+FINISHED_STATES = frozenset({"observed", "blocked", "cancelled", "expired"})
+
 
 class TaskRefused(ValueError):
     pass
@@ -47,6 +49,8 @@ def _current(path, request, reference, *, reconciling=False):
 def _public(row):
     request = json.loads(row["request"])
     state = row["state"]
+    if state == "waiting" and request.get("action") == "candidate-prepare":
+        state = "queued"
     if state == "running" and row["lease_until"] <= time.time():
         state = "reconcile"
     if state == "queued" and request["plan"]["expires_at"] <= time.time():
@@ -122,6 +126,7 @@ def submit_workspace(
     consumer_source=None,
     binding="",
     target_binding="",
+    candidate_parent=None,
 ):
     if not isinstance(tenant_id, str) or not drafts.REFERENCE_PATTERN.fullmatch(tenant_id):
         raise TaskRefused("ENVIRONMENT_TASK_TENANT_INVALID")
@@ -202,6 +207,7 @@ def submit_workspace(
             ),
         }
         request.pop("resources", None)
+        request.pop("candidate_parent", None)
         if consumer:
             request["consumer_source"] = consumer_source
         digest = plans._digest(
@@ -216,11 +222,34 @@ def submit_workspace(
         )
         task_id = "task_" + digest[:32]
         with gateway_db.connection(drafts._database(path), write=True) as conn:
+            parent_request = None
+            if candidate_parent is not None:
+                parent_row = _row(conn, candidate_parent[0])
+                parent_request = json.loads(parent_row["request"])
+                _authorize(path, tuple(parent_request["identity"]), parent_row["environment"])
+                _current(path, parent_request, reference)
+                if (
+                    parent_request.get("action") != "candidate-prepare"
+                    or parent_row["state"] != "waiting"
+                    or parent_row["cancel"]
+                    or parent_request["bindings"] != candidate_parent[1]
+                    or parent_request["plan"]["id"] != request["plan"]["id"]
+                    or parent_request["tenant_id"] != tenant_id
+                    or parent_request["children"].get(parent_action) != identifier
+                ):
+                    raise TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+                request["candidate_parent"] = candidate_parent[0]
             conn.execute(
                 "INSERT OR IGNORE INTO environment_tasks(id,environment,request,state,updated_at) "
                 "VALUES(?,?,?,'queued',?)",
                 (task_id, source["environment"], json.dumps(request), time.time()),
             )
+            if parent_request is not None:
+                parent_request["children"][action] = task_id
+                conn.execute(
+                    "UPDATE environment_tasks SET request=?,updated_at=? WHERE id=?",
+                    (json.dumps(parent_request), time.time(), candidate_parent[0]),
+                )
             return _public(_row(conn, task_id))
 
 
@@ -238,6 +267,10 @@ def workspace_request(path, reference, identifier, owner, *, reconciling=True, a
         _authorize(path, tuple(request["identity"]), row["environment"])
         _current(path, request, reference, reconciling=reconciling)
         if not reconciling:
+            if request.get("candidate_parent"):
+                parent = _row(conn, request["candidate_parent"])
+                if parent["cancel"] or parent["state"] != "waiting":
+                    raise TaskRefused("ENVIRONMENT_TASK_CANCELLED")
             source = _row(conn, request["site_task"])
             source_request = json.loads(source["request"])
             if source["state"] != "observed" or source_request["plan"]["id"] != request["plan"]["id"]:
@@ -354,6 +387,19 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
             row = _row(conn, identifier)
             _authorize(path, identity, row["environment"])
             if cancel:
+                if json.loads(row["request"]).get("action") == "candidate-prepare":
+                    for child_id in json.loads(row["request"])["children"].values():
+                        child = _row(conn, child_id)
+                        if json.loads(child["request"]).get("candidate_parent") == identifier and child[
+                            "state"
+                        ] in {"queued", "running", "reconcile"}:
+                            child_state = (
+                                child["state"] if child["state"] in {"running", "reconcile"} else "cancelled"
+                            )
+                            conn.execute(
+                                "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
+                                (child_state, time.time(), child_id),
+                            )
                 state = row["state"] if row["state"] in {"running", "reconcile"} else "cancelled"
                 conn.execute(
                     "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
@@ -462,6 +508,8 @@ def worker(path, reference, payload, *, internal_workspace=False):
                 raise TaskRefused("ENVIRONMENT_TASK_UNAVAILABLE")
             row = _row(conn, payload["id"])
         request = json.loads(row["request"])
+        if request.get("action") == "candidate-prepare":
+            raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
         _authorize(path, tuple(request["identity"]), row["environment"])
         if (
             set(payload) == {"id", "owner"}
@@ -496,6 +544,7 @@ def _next(path, reference):
             dict(row)
             for row in conn.execute(
                 "SELECT * FROM environment_tasks AS task WHERE state IN ('queued','running','reconcile') "
+                "AND json_extract(request,'$.action') IS NOT 'candidate-prepare' "
                 "AND lease_until<=? AND (state!='reconcile' OR updated_at<=?) "
                 "AND NOT EXISTS (SELECT 1 FROM environment_tasks AS live "
                 "WHERE live.environment=task.environment AND live.id!=task.id "
@@ -531,7 +580,7 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
     with gateway_db.connection(drafts._database(path), write=True) as conn:
         now = time.time()
         if set(payload) == {"id", "owner"}:
-            if row["state"] in {"observed", "blocked", "cancelled", "expired"}:
+            if row["state"] in FINISHED_STATES:
                 return {"claimed": False, "task": _public(row)}
             if row["lease_until"] > now:
                 return {"claimed": False, "task": _public(row)}
