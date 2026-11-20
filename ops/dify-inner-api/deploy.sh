@@ -21,7 +21,7 @@ if [[ -n $connections ]]; then
     echo '转发器仍有在飞连接，先等待结束'; exit 1
 fi
 health() {
-    for attempt in {1..5}; do
+    for ((attempt=0; attempt<5; attempt++)); do
         if systemctl is-active --quiet "$unit" &&
             [[ $(curl --max-time 10 -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:15001/console/api/all-workspaces) == 401 ]]; then
             return 0
