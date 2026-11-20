@@ -397,6 +397,7 @@ aiops-admin --config /private/control-production.env environment-runtime \
 目标124只持有自己的公司会话与数据源；两端均须部署支持D35的合并制品。原管理桥/Web保持兼容，
 本片无新网页按钮。通过服务身份执行`aiops-admin --config <该服务配置> environment-trial-dispatch`，
 请求JSON走stdin；命令只到固定本机`/v1/internal/environment-trial`，独立任务HMAC不返回操作者。
+CLI以回环来源连接已配置本机监听地址，兼容仅监听Docker桥地址的控制Gateway；远端来源仍拒绝。
 
 1. 控制端`consumer-describe`接收`task_id/order_no`，核新鲜observed客服准备任务、停用应用与精确workflow，
    返回`candidate`描述。只忽略Dify导出补回的变量自身`selector`，变量值与行为字段仍严格核对。
