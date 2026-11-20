@@ -9,7 +9,7 @@ from aiops_diagnostics.consumer.candidate_trial import PREFIX, descriptor
 from aiops_diagnostics.consumer.consumer_publication import frozen_settings, workflow_of
 from aiops_diagnostics.consumer.consumer_trial import ConsumerTrial
 from aiops_diagnostics.dify import candidate_knowledge, environment_consumer
-from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError, ConsoleApiSettings, DifyConsoleAdmin
 from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource, workflow_content
 from aiops_diagnostics.execution.agent_runs import scope_from_json
 from aiops_diagnostics.execution.chat_route_bindings import RouteBinding
@@ -124,11 +124,19 @@ class RemoteCandidate:
         )
 
     def authorize(self, *, allow_closed=False):
-        if (
-            self.cancelled
-            or time.monotonic() >= self.until
-            or observed(self.context, self.scope) != self.snapshot
-        ):
+        from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
+
+        if self.cancelled or time.monotonic() >= self.until:
+            raise ValueError("candidate expired or cancelled")
+        try:
+            snapshot = observed(self.context, self.scope)
+        except ConsoleApiError as exc:
+            if exc.status is not None and exc.status < 500:
+                raise ValueError("candidate observation refused") from exc
+            raise ChatRunUnavailable(
+                "CANDIDATE_OBSERVATION_UNAVAILABLE", "候选权限来源暂不可用，请稍后再试", http_status=503
+            ) from exc
+        if self.cancelled or time.monotonic() >= self.until or snapshot != self.snapshot:
             raise ValueError("candidate expired or changed")
         current = self.call("check")
         if (

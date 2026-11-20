@@ -42,6 +42,8 @@ def require_evidence(runtime, caller, binding, context, *, trial=None):
     candidate = trial.candidate if trial else None
     if candidate is not None:
         candidate.authorize()
+        if not (context or {}).get("calls"):
+            raise ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "候选试运行缺少工具执行证据")
     elif not runtime.gateway_settings.consumer_chatflow_enabled:
         raise ChatRunUnavailable("CHATFLOW_DISABLED", "客服未启用", http_status=404)
     for order in order_ids(context):

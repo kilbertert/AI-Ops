@@ -19,7 +19,9 @@ from aiops_diagnostics.gateway import environment_registry, gateway_db
 from aiops_diagnostics.identity.caller_auth import RegisteredCallerResolver
 
 
-@pytest.mark.parametrize("failure", ["none", "model", "cleanup", "lost-create", "revoked"])
+@pytest.mark.parametrize(
+    "failure", ["none", "model", "cleanup", "lost-create", "revoked", "no-tools", "observation-timeout"]
+)
 def test_control_target_trial_and_callback_do_not_open_normal_admission(tmp_path, monkeypatch, failure):
     import httpx
 
@@ -124,6 +126,15 @@ def test_control_target_trial_and_callback_do_not_open_normal_admission(tmp_path
                 kwargs["on_started"](*ids)
                 token = kwargs["inputs"]["data_grant"]
                 tokens.append(token)
+                if failure == "no-tools":
+                    return ChatflowReply(*ids, "看起来没有资料。", {})
+                if failure == "observation-timeout":
+                    from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
+
+                    def timeout(*_):
+                        raise ConsoleApiError("DIFY_CONSOLE_UNAVAILABLE", "synthetic TimeoutError")
+
+                    monkeypatch.setattr(control, "observed", timeout)
                 response = central["client"].post(
                     "/v1/internal/consumer-data/agent",
                     headers={"Authorization": "Bearer " + token},
@@ -134,6 +145,11 @@ def test_control_target_trial_and_callback_do_not_open_normal_admission(tmp_path
                         "knowledge_base_ids": ["kb-own"],
                     },
                 )
+                if failure == "observation-timeout":
+                    assert response.status_code == 503, response.text
+                    assert response.json()["error"]["code"] == "CANDIDATE_OBSERVATION_UNAVAILABLE"
+                    monkeypatch.setattr(control, "observed", lambda *_: snapshot)
+                    return ChatflowReply(*ids, "知识检索暂时不可用。", {})
                 assert response.status_code == 200, response.text
                 assert response.json()["snapshot"]["status_code"] == 3
                 if failure == "revoked":
