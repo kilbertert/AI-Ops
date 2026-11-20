@@ -19,6 +19,15 @@ from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
 
 
+def candidate_workflow_sha(dsl):
+    content = workflow_content(dsl)
+    for variable in content.get("environment_variables", []):
+        # Dify导出补回变量自身的selector；只忽略这项已知的表示差异。
+        if variable.get("selector") == ["env", variable.get("name")]:
+            variable.pop("selector")
+    return workflow_of(content)
+
+
 def observed(context, value):
     scope, settings = descriptor(value), context.settings
     path = settings.environment_management_registry_file or settings.environment_registry_file
@@ -69,7 +78,7 @@ def observed(context, value):
         settings.dify_console_base_url, scope["app_id"], settings.dify_console_api_key, scope["workspace_id"]
     )
     dsl = DifyDslClient(source).export_dsl()
-    if workflow_of(workflow_content(dsl)) != scope["workflow_sha256"]:
+    if candidate_workflow_sha(dsl) != scope["workflow_sha256"]:
         raise ValueError("candidate workflow changed")
     return draft, request, source, dsl, knowledge_scope
 
@@ -79,6 +88,7 @@ class RemoteCandidate:
         if not isinstance(token, str) or not token.startswith(PREFIX) or len(token) > 128:
             raise ValueError("candidate token required")
         self.context, self.scope, self.token = context, descriptor(scope), token
+        self.cancelled = False
         self.until = time.monotonic() + 300
         self.snapshot = observed(context, scope)
         self.caller = scope_from_json(self.call("check")["scope_json"])
@@ -184,7 +194,7 @@ class CandidateTrials:
             task_id=payload["task_id"],
             plan_id=request["plan"]["id"],
             order_no=payload["order_no"],
-            workflow_sha256=workflow_of(workflow_content(__import__("yaml").safe_dump(workflow))),
+            workflow_sha256=candidate_workflow_sha(__import__("yaml").safe_dump(workflow)),
         )
         observed(self.context, scope)
         return {"candidate": descriptor(scope), "scope": "candidate-only", "activated": False}
@@ -256,11 +266,22 @@ class CandidateTrials:
         with self.lock:
             self.leases.pop(identifier, None)
 
+    def authorize_media(self, grant, knowledge_scope):
+        with self.lock:
+            adapter = self.leases.get(grant.session_id)
+        if adapter is None or adapter.cancelled or knowledge_scope != adapter.snapshot[4]:
+            raise ValueError("candidate media revoked")
+        caller = adapter.authorize(allow_closed=True)
+        trial = self.context.runtime.get_trial(caller, grant.session_id)
+        if trial is None or trial["status"] != "completed":
+            raise ValueError("candidate media not deliverable")
+
     def read(self, payload, *, cancel=False):
         if set(payload) != {"trial_id"} or payload["trial_id"] not in self.leases:
             raise ValueError("candidate trial not found")
         adapter = self.leases[payload["trial_id"]]
         if cancel:
+            adapter.cancelled = True
             try:
                 self.context.runtime.cancel_trial(adapter.caller, payload["trial_id"])
             finally:

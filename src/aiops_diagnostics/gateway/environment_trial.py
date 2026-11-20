@@ -235,6 +235,7 @@ def register(app, context):
 
     context.consumer_candidate_leases = CandidateLeases(context)
     context.consumer_candidate_trials = CandidateTrials(context)
+    context.runtime.consumer_candidate_trials = context.consumer_candidate_trials
 
     @app.post("/v1/internal/environment-trial")
     async def manage_trial(request: Request):

@@ -399,7 +399,8 @@ aiops-admin --config /private/control-production.env environment-runtime \
 请求JSON走stdin；命令只到固定本机`/v1/internal/environment-trial`，独立任务HMAC不返回操作者。
 
 1. 控制端`consumer-describe`接收`task_id/order_no`，核新鲜observed客服准备任务、停用应用与精确workflow，
-   返回`candidate`描述。旧计划需重新观察，不能手改期限或取最新成功任务代替。
+   返回`candidate`描述。只忽略Dify导出补回的变量自身`selector`，变量值与行为字段仍严格核对。
+   旧计划需重新观察，不能手改期限或取最新成功任务代替。
 2. 目标端`consumer-open`接收该描述与本次正常C端登录的`third_session`；原Redis解析器核本人及可选明确订单，
    返回随机`ect_`能力。公司会话只在目标进程内存保留；不得用管家令牌或扫描现有会话替代。
 3. 控制端`consumer-start`接收`candidate/token/question`；核任务与目标绑定后原子领取一次，
@@ -410,6 +411,7 @@ aiops-admin --config /private/control-production.env environment-runtime \
 
 能力最多5分钟、目标最多8次明确订单读取，不能列出运营账号最近订单；普通入口、旧回调均拒绝`ect_`。
 重启丢失内存能力，过期、取消、配置/安装/任务/知识归属漂移均拒绝，不写正式route/target/永久customer grant。
+本轮媒体只在成功完成且原授权窗口内可读，下载前后重核目标身份与候选；取消或期限届满立即拒绝。
 目标源配置与数据保持不变；恢复代码前先结束本片任务，保留失败与临时应用ID供定点对账，不恢复整库。
 控制端可先部署，旧目标会明确拒绝新能力；目标可先部署，无本机HMAC开通不创建任何能力。
 技术试运行不是P5原App/H5或业务准确性验收；实际部署/试跑结果另从交付索引读取。
