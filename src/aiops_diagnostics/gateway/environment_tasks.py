@@ -10,6 +10,8 @@ from aiops_diagnostics.gateway import environment_plans as plans
 from aiops_diagnostics.gateway import environment_registry as registry
 from aiops_diagnostics.gateway import gateway_db
 
+FINISHED_STATES = frozenset({"observed", "blocked", "cancelled", "expired"})
+
 
 class TaskRefused(ValueError):
     pass
@@ -578,7 +580,7 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
     with gateway_db.connection(drafts._database(path), write=True) as conn:
         now = time.time()
         if set(payload) == {"id", "owner"}:
-            if row["state"] in {"observed", "blocked", "cancelled", "expired"}:
+            if row["state"] in FINISHED_STATES:
                 return {"claimed": False, "task": _public(row)}
             if row["lease_until"] > now:
                 return {"claimed": False, "task": _public(row)}

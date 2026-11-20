@@ -184,7 +184,9 @@ def _advance_one(context, path, reference, identifier):
                     break
                 child = tasks._public(tasks._row(conn, request["children"][action]))
                 steps.append({k: child[k] for k in ("id", "action", "state", "error_code")})
-                if child["cancel_requested"] or child["state"] in {"blocked", "cancelled", "expired"}:
+                if child["cancel_requested"] or (
+                    child["state"] in tasks.FINISHED_STATES and child["state"] != "observed"
+                ):
                     state, error = "blocked", child["error_code"] or "ENVIRONMENT_TASK_OBSERVATION_REQUIRED"
                     break
                 if child["state"] != "observed":
