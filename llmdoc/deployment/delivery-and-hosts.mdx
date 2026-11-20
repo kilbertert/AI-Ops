@@ -143,6 +143,9 @@ deploy-41 失败 → 生产未更新（远端自检回滚）；release-notes 失
 
 ## Canonical anchors
 
+候选准备串联按控制Gateway→规范运维执行端→管理桥/Web交付；目标应用无需随中央调度升级。
+父任务不持原子执行租约，旧执行端不会领取父任务；回退保留任务和已准备资源，不自动安装或激活。操作与边界见环境目录手册D36。
+
 - `deploy/deploy-41.sh`（各闸）+ `deploy/classify-remote-result.sh`（失败分类法）
 - `deploy/node-runtime/README.md`（最承重的节点交付文档）
 - `ops/environments/env95/README.md`（95 离线包重建承重手册——该目录是首次重建资产非通用安装器）
