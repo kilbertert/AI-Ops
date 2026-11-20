@@ -406,7 +406,8 @@ def installation_run(root, request, identifier, owner):
                     " for m in t:",
                     "  if m.name=='.' and m.isdir():continue",
                     "  n=m.name.removeprefix('./')",
-                    "  assert m.isfile() and n in {'REVISION','SHA256SUMS','install.py','runtime_check.py','probe.py','artifact_checks.py','task.py'}",
+                    "  assert m.isfile() and n in {'REVISION','SHA256SUMS','install.py','runtime_check.py',"
+                    "'probe.py','artifact_checks.py','task.py'}",
                     "  q=d/n;body=t.extractfile(m).read()",
                     "  if q.exists() or q.is_symlink():",
                     "   assert q.is_file() and not q.is_symlink() and q.stat().st_uid==0",
