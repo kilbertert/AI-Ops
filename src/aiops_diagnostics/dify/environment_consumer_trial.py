@@ -15,6 +15,7 @@ from aiops_diagnostics.execution.agent_runs import scope_from_json
 from aiops_diagnostics.execution.chat_route_bindings import RouteBinding
 from aiops_diagnostics.execution.run_deliverability import deliverable
 from aiops_diagnostics.gateway import environment_drafts as drafts
+from aiops_diagnostics.gateway import environment_plans as plans
 from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
 
@@ -35,12 +36,17 @@ def observed(context, value):
         row = tasks._row(conn, scope["task_id"])
         request, result = json.loads(row["request"]), json.loads(row["result"])
         tasks._authorize(path, tuple(request["identity"]), scope["environment"])
-        tasks._current(path, request, settings.environment_onboarding_file)
+        renewal = scope["plan_id"] != request["plan"]["id"]
+        tasks._current(path, request, settings.environment_onboarding_file, reconciling=renewal)
+        plan = plans.read(
+            path, tuple(request["identity"]), scope["plan_id"], settings.environment_onboarding_file
+        )
         if (
-            tasks._public(row)["state"] != "observed"
+            plan["state"] == "expired"
+            or plan["digest"] != request["plan"]["digest"]
+            or (row["state"] if renewal else tasks._public(row)["state"]) != "observed"
             or row["cancel"]
             or request.get("action") != "consumer-prepare"
-            or request["plan"]["id"] != scope["plan_id"]
             or request["plan"]["environment"] != scope["environment"]
             or any(request[k] != scope[k] for k in ("tenant_id", "workspace_id", "knowledge_base_id"))
             or request.get("resources", {}).get("expected_app_id") != scope["app_id"]
@@ -336,3 +342,55 @@ class CandidateTrials:
             "scope": "candidate-only",
             "activated": False,
         }
+
+
+def validation_evidence(context, payload):
+    """只有原候选交付门通过后的真实工具/引用可成为业务技术验证证据。"""
+    if set(payload) != {"trial_id", "expected_reference", "expected_scope", "case_sha256"}:
+        raise ValueError("validation evidence request invalid")
+    result = context.consumer_candidate_trials.read({"trial_id": payload["trial_id"]})
+    if result["status"] != "completed":
+        return {"status": result["status"], "error_code": result.get("error_code")}
+    adapter = context.consumer_candidate_trials.leases[payload["trial_id"]]
+    if adapter.caller.scope_fingerprint != payload["expected_scope"]:
+        raise ValueError("validation consumer identity changed")
+    run = context.dify_run_store.by_qa(payload["trial_id"])
+    calls = (context.dify_run_store.context(run.run_id) or {}).get("calls", [])
+    order = adapter.scope["order_no"]
+    status = [
+        c
+        for c in calls
+        if c.get("tool") == "status"
+        and (c.get("result") or {}).get("status") == "found"
+        and order in c["result"].get("order_ids", [])
+    ]
+    sources = [
+        s
+        for c in calls
+        if c.get("tool") == "knowledge" and (c.get("result") or {}).get("status") == "found"
+        for s in c["result"].get("sources", [])
+    ]
+    references = {s.get("retrieved_reference_id") for s in sources}
+    snapshot = context.dify_run_store.snapshot(run.run_id) or {}
+    displayed = {b.get("reference_id") for b in snapshot.get("blocks", []) if b.get("kind") == "reference"}
+    if not order or not status or payload["expected_reference"] not in references & displayed:
+        from aiops_diagnostics.gateway.environment_business import ValidationRefused
+
+        raise ValidationRefused("ENVIRONMENT_VALIDATION_CONSUMER_EVIDENCE_REQUIRED")
+    return {
+        "status": "completed",
+        "capability": "consumer",
+        "state": "passed",
+        "business_accuracy": "unconfirmed",
+        "case_sha256": payload["case_sha256"],
+        "observed_at": time.time(),
+        "evidence": {
+            "trial_id": payload["trial_id"],
+            "run_id": run.run_id,
+            "tools": ["knowledge", "status"],
+            "objects": [order, payload["expected_reference"]],
+            "scope_fingerprint": run.scope_fingerprint,
+            "workflow_id": run.workflow_id,
+            "app_id": adapter.scope["app_id"],
+        },
+    }
