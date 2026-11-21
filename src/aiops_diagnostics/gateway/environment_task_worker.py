@@ -16,7 +16,7 @@ from aiops_diagnostics.common.bounded_http import RequestSpec, open_response
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.gateway.environment_artifacts import installer_manifest
 from aiops_diagnostics.gateway.environment_drafts import REFERENCE_PATTERN
-from aiops_diagnostics.gateway.environment_tasks import validate_receipt
+from aiops_diagnostics.gateway.environment_tasks import validate_receipt, validate_verify
 
 
 def execute(root, claim):
@@ -171,38 +171,57 @@ def verify(root, claim):
         raise ValueError("invalid fixed target")
     declaration = tomllib.loads((root / ".dev-host.toml").read_text())
     matches = [
-        row["name"]
+        row.get("name")
         for row in declaration.get("targets", [])
-        if row.get("host") == target["host"] or row.get("name") == target["host"]
+        if isinstance(row, dict) and (row.get("host") == target["host"] or row.get("name") == target["host"])
     ]
-    if len(matches) != 1 or not REFERENCE_PATTERN.fullmatch(matches[0]) or matches[0].startswith("-"):
-        raise ValueError("target must resolve uniquely in project declaration")
-    host = matches[0]
-    # 实际访问由dev-host断言；机器标识只在目标侧取摘要，不回传原始值。
-    script = "\n".join(
-        [
-            "import hashlib,json,pwd,socket",
-            "out={'hostname':socket.gethostname()}",
-            "for p in ('/etc/machine-id','/var/lib/dbus/machine-id'):",
-            " try:",
-            "  body=open(p,'rb').read().strip()",
-            "  if body:out['machine_id_sha256']=hashlib.sha256(body).hexdigest();break",
-            " except OSError:pass",
-            f"try:pwd.getpwnam({target['user']!r});out['service_user_present']=True",
-            "except KeyError:out['service_user_present']=False",
-            "print(json.dumps(out))",
-        ]
+    resolved = (
+        matches[0]
+        if len(matches) == 1
+        and isinstance(matches[0], str)
+        and REFERENCE_PATTERN.fullmatch(matches[0])
+        and not matches[0].startswith("-")
+        else ""
     )
-    output = subprocess.check_output(
-        ["dev-host", "exec", host, "--allow-service-exec", "--timeout", "30", "--", "python3 -"],
-        cwd=root,
-        input=script,
-        text=True,
-        timeout=35,
-    )
-    if len(output) > 4096:
-        raise ValueError("verification response too large")
-    facts = json.loads(output.strip().splitlines()[-1])
+    facts = {}
+    if resolved:
+        # 实际访问由dev-host断言；机器标识只在目标侧取摘要，不回传原始值。
+        script = "\n".join(
+            [
+                "import hashlib,json,pwd,socket",
+                "out={'hostname':socket.gethostname()}",
+                "for p in ('/etc/machine-id','/var/lib/dbus/machine-id'):",
+                " try:",
+                "  body=open(p,'rb').read().strip()",
+                "  if body:out['machine_id_sha256']=hashlib.sha256(body).hexdigest();break",
+                " except OSError:pass",
+                f"try:pwd.getpwnam({target['user']!r});out['service_user_present']=True",
+                "except KeyError:out['service_user_present']=False",
+                "print(json.dumps(out))",
+            ]
+        )
+        output = subprocess.check_output(
+            [
+                "dev-host",
+                "exec",
+                resolved,
+                "--allow-service-exec",
+                "--timeout",
+                "30",
+                "--",
+                "python3 -",
+            ],
+            cwd=root,
+            input=script,
+            text=True,
+            timeout=35,
+        )
+        if len(output) > 4096:
+            raise ValueError("verification response too large")
+        lines = output.strip().splitlines()
+        facts = json.loads(lines[-1]) if lines else None
+        if not isinstance(facts, dict):
+            raise ValueError("verification output malformed")
     hostname = facts.get("hostname")
     machine = facts.get("machine_id_sha256")
     present = facts.get("service_user_present") is True
@@ -214,16 +233,17 @@ def verify(root, claim):
         and present
     )
     now = time.time()
-    return {
+    result = {
         "id": "verify_" + uuid.uuid4().hex,
         "scope": "managed-host-verification-only",
         "environment": environment,
         "check": check,
+        # 声明解析歧义是确定性结论，写blocked；连接层失败在上层记待核对。
         "state": "observed" if complete else "blocked",
         "executable": False,
         "evidence": {
-            "declared_target": host,
-            "resolved_host": target["host"],
+            "declared_target": target["host"],
+            "resolved_host": resolved,
             "remote_hostname": hostname if isinstance(hostname, str) else "",
             "machine_id_sha256": machine if isinstance(machine, str) else "",
             "service_user_present": present,
@@ -231,6 +251,8 @@ def verify(root, claim):
         "created_at": now,
         "expires_at": now + 900,
     }
+    validate_verify(result, environment)
+    return result
 
 
 def call(gateway, key, payload, *, trial=False):
@@ -314,7 +336,15 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
     if claim.get("action") == "host-verify":
         try:
             result = verify(root, claim)
-        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            IndexError,
+            AttributeError,
+            TypeError,
+            subprocess.SubprocessError,
+        ):
             # 未接通目标不算「验过不通过」；只读重查可恢复，不写阻塞结论。
             return request({"id": identifier, "owner": owner, "error": "ENVIRONMENT_TASK_TARGET_UNCONFIRMED"})
         return request({"id": identifier, "owner": owner, "result": result})

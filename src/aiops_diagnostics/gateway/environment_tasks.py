@@ -126,7 +126,7 @@ def submit(path, identity, identifier, reference):
 
 def submit_verify(path, identity, identifier, check, reference):
     """冻结计划下的受管验收任务；跨主机检查由受管执行端实际取证，不接受表单结论。"""
-    if check not in VERIFY_CHECKS:
+    if not isinstance(check, str) or check not in VERIFY_CHECKS:
         raise TaskRefused("ENVIRONMENT_TASK_CHECK_INVALID")
     return _plan_task(path, identity, identifier, reference, {"action": "host-verify", "check": check})
 
@@ -561,10 +561,15 @@ def validate_verify(result, environment):
             "service_user_present",
         }
         and isinstance(evidence["declared_target"], str)
-        and re.fullmatch(r"[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?", evidence["declared_target"])
+        and drafts.REFERENCE_PATTERN.fullmatch(evidence["declared_target"])
         and isinstance(evidence["resolved_host"], str)
+        and (evidence["resolved_host"] == "" or drafts.REFERENCE_PATTERN.fullmatch(evidence["resolved_host"]))
         and isinstance(evidence["remote_hostname"], str)
         and len(evidence["remote_hostname"]) <= 253
+        and all(
+            not re.fullmatch(r"[0-9a-f]{32}", evidence[key])
+            for key in ("declared_target", "resolved_host", "remote_hostname")
+        )
         and isinstance(evidence["machine_id_sha256"], str)
         and (
             evidence["machine_id_sha256"] == ""

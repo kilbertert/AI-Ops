@@ -879,8 +879,8 @@ def test_local_trial_dispatch_pins_loopback_source(tmp_path, monkeypatch):
 def verdict(environment, *, blocked=False, **overrides):
     now = time.time()
     evidence = dict(
-        declared_target="124",
-        resolved_host="singapore-server",
+        declared_target="singapore-server",
+        resolved_host="124",
         remote_hostname="ecs-2c54",
         machine_id_sha256="d" * 64,
         service_user_present=True,
@@ -1035,8 +1035,8 @@ def test_host_verify_worker_collects_readonly_facts(monkeypatch):
     result = worker.verify(root, claim)
     assert result["state"] == "observed" and result["scope"] == "managed-host-verification-only"
     assert result["evidence"] == {
-        "declared_target": "124",
-        "resolved_host": "singapore-server",
+        "declared_target": "singapore-server",
+        "resolved_host": "124",
         "remote_hostname": "ecs-2c54",
         "machine_id_sha256": "e" * 64,
         "service_user_present": True,
@@ -1088,3 +1088,69 @@ def test_host_verify_run_dispatches_and_unreachable_reconciles(prepared, tmp_pat
     monkeypatch.setattr(worker, "verify", lambda root, claim: verdict(claim["environment"]))
     second = worker.run(tmp_path, "https://control.example", "worker-fixture", job["id"])
     assert second["id"] == first["id"] and second["state"] == "observed"
+
+
+def test_submit_verify_rejects_unhashable_check(prepared):
+    _, _, client, _ = prepared
+    plan = plans.preflight(*(prepared[0], ADMIN, "a", 1, 1, prepared[1]))
+    refused = client.post(
+        "/v1/dify/management/environment-tasks",
+        json={"verify_task": ["managed-host-identity"], "plan_id": plan["id"]},
+    )
+    assert refused.status_code in (403, 409), refused.text
+    assert "CHECK_INVALID" in refused.text
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("declared_target", "a" * 32),
+        ("resolved_host", "b" * 32),
+        ("remote_hostname", "c" * 32),
+    ],
+)
+def test_verify_schema_rejects_raw_machine_id_leak(key, value):
+    result = verdict("a", blocked=True)
+    result["evidence"][key] = value
+    with pytest.raises(tasks.TaskRefused, match="RESULT_INVALID"):
+        tasks.validate_verify(result, "a")
+
+
+def test_host_verify_worker_unresolved_declaration_is_blocked(tmp_path, monkeypatch):
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    claim = {
+        "target": dict(host="singapore-server", user="aiops", port=18951),
+        "environment": "a",
+        "check": "managed-host-identity",
+    }
+    (tmp_path / ".dev-host.toml").write_text(
+        '[[targets]]\nname="x"\nhost="singapore-server"\n[[targets]]\nname="y"\nhost="singapore-server"\n'
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("unresolved declaration must not reach the target")
+
+    monkeypatch.setattr(worker.subprocess, "check_output", forbidden)
+    result = worker.verify(tmp_path, claim)
+    assert result["state"] == "blocked"
+    assert result["evidence"]["declared_target"] == "singapore-server"
+    assert result["evidence"]["resolved_host"] == ""
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="other"\nhost="elsewhere"\n')
+    absent = worker.verify(tmp_path, claim)
+    assert absent["state"] == "blocked" and absent["evidence"]["resolved_host"] == ""
+
+
+def test_host_verify_worker_malformed_output_is_unconfirmed(tmp_path, monkeypatch):
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    claim = {
+        "target": dict(host="singapore-server", user="aiops", port=18951),
+        "environment": "a",
+        "check": "managed-host-identity",
+    }
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="124"\nhost="singapore-server"\n')
+    for output in ("", "   \n", "123", '"text"', "[1]", "noise\n42"):
+        monkeypatch.setattr(worker.subprocess, "check_output", lambda *a, _o=output, **kw: _o)
+        with pytest.raises(ValueError):
+            worker.verify(tmp_path, claim)

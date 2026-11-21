@@ -469,6 +469,8 @@ id匹配已有部署目标引用，node_file沿D30专属节点引用格式；秘
 
 回执`scope=managed-host-verification-only`、`check=managed-host-identity`、`executable=false`、
 created/expires沿用900秒；`observed`要求三项现场事实齐全，缺失写`blocked`，
+声明解析歧义（零/多命中或名字不合形）同样写`blocked`且`resolved_host`为空；
 目标不可达或断言失败仍记`ENVIRONMENT_TASK_TARGET_UNCONFIRMED`待核对，不判阻塞。
+执行端落回执前先过同一validate_verify自检，拒绝形状不外发。
 验证只证明任务落在已登记主机，不代替正式网络、容量与业务验收，计划级pending不变；
 替身无法证明真实dev-host指纹断言，合并后按既有worker合同现场复验并登记交付状态。
