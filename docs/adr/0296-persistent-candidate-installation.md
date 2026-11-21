@@ -8,6 +8,8 @@
 目录保持唯一来源；独立installation引用只补运行节点的受控位置，主机角色仍由dev-host断言。
 安装任务沿environment_tasks持久化；waiting/executing不进入旧原子执行端的领取集合。
 原timer新增专用领取；中央只导出受控私有包，执行宿主只搬运合并制品/固定配置，不持共享平台凭据。
+中央包存放于现有Gateway数据根的`installation-tasks/<任务编号>`，配置引用仍只读；
+按[systemd.exec](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#ProtectSystem=)的`ProtectSystem=full`语义，`/etc`在服务内只读，不能从宿主文件权限推导可写。
 远端固定task.py先保存操作意图，再调用原install事务；相同编号不再次apply。
 租约失联只观察原操作与installed，不自动安装或恢复。取消不杀远端切换，确定回执保留；未知或pending阻塞。
 同任务同计划重复回读，安装结果不把注册/业务/激活变为通过。旧单步install/recover与候选准备保持。

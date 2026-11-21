@@ -4,7 +4,6 @@ import hashlib
 import json
 import re
 import time
-from pathlib import Path
 
 from aiops_diagnostics.common.private_files import validate_private_directory
 from aiops_diagnostics.gateway import environment_drafts as drafts
@@ -269,7 +268,7 @@ def dispatch(context, payload):
     if not attempted:
         # HTTP/工件导出不占SQLite写事务；新写入前再次核冻结输入与取消。
         settings = context.settings
-        directory = Path(settings.environment_installation_file).parent / "installation-tasks" / row["id"]
+        directory = settings.data_home / "installation-tasks" / row["id"]
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         validate_private_directory(directory)
         files = {k: directory / (k + ".tar.gz") for k in ("candidate", "runtime")}

@@ -3,6 +3,7 @@
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
@@ -57,6 +58,8 @@ def installation_state(wiring, tmp_path):  # noqa: F811
             ),
         )
     )
+    settings.data_home = tmp_path / "data"
+    settings.data_home.mkdir(mode=0o700)
     return fixture, parent, settings
 
 
@@ -110,6 +113,42 @@ def test_persistent_installation_uses_original_export_and_old_worker_cannot_clai
         ).status_code
         == 409
     )
+
+
+def test_installation_staging_works_with_read_only_control_config(installation_state, tmp_path, monkeypatch):
+    import errno
+
+    state = installation_state
+    config = tmp_path / "read-only-config"
+    reference = write_private_text(
+        config / "installation.json", Path(state[2].environment_installation_file).read_text()
+    )
+    state[2].environment_installation_file = str(reference)
+    original = reference.read_bytes()
+    mkdir = Path.mkdir
+
+    def protected_mkdir(path, *args, **kwargs):
+        if path == config or config in path.parents:
+            raise OSError(errno.EROFS, "read-only control configuration")
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", protected_mkdir)
+    identifier = submit(state).json()["id"]
+    owner = "a" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    payload = {"installation": "stage", "id": identifier, "owner": owner}
+    response = internal(state, payload)
+    assert response.status_code == 200, response.text
+    staged = response.json()
+    directory = state[2].data_home / "installation-tasks" / identifier
+    for name in ("candidate", "runtime"):
+        archive = Path(staged["archives"][name]["path"])
+        assert archive.parent == directory and archive.is_file()
+        assert archive.stat().st_mode & 0o077 == 0
+    assert directory.stat().st_mode & 0o077 == 0
+    assert reference.read_bytes() == original and not (config / "installation-tasks").exists()
+    repeated = internal(state, payload).json()
+    assert repeated["observe_only"] is True and repeated["archives"] == staged["archives"]
 
 
 @pytest.mark.parametrize("change", ["cancel", "expired", "node", "unconfigured"])
