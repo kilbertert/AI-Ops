@@ -55,6 +55,8 @@ export const entryLabels: Record<EntryKey, string> = {
 }
 
 export const messages: Record<string, string> = {
+  ENVIRONMENT_VALIDATION_CASE_INVALID: '请选择有效业务范围并填写受控验收案例编号',
+  ENVIRONMENT_VALIDATION_UPGRADE_REQUIRED: '请先将目标升级到 1.36.0 或更高版本后再验证业务',
   ENVIRONMENT_REGISTRATION_UPGRADE_REQUIRED: '目标需先升级到 1.35.0 或更高版本，再登记已安装候选',
   ENVIRONMENT_INSTALLATION_CONFIG_REQUIRED: '候选安装执行尚未配置，原候选准备仍可用',
   ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED: '请重新观察目标安装状态后再提交',

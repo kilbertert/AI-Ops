@@ -77,7 +77,7 @@ type SiteTask = {
       service_user_present?: boolean
     }
     steps?: { id: string; action: string; state: string; error_code: string }[]
-    checks?: { id: string; state: string }[]
+    checks?: { id?: string; capability?: string; state: string; error_code?: string }[]
   }
 }
 const taskLabels: Record<string, string> = {
@@ -157,6 +157,8 @@ export default function EnvironmentManagement() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [plan, setPlan] = useState<Plan | null>(null)
+  const [caseRef, setCaseRef] = useState('')
+  const [capabilities, setCapabilities] = useState(['consumer', 'order', 'offline'])
   const [tasks, setTasks] = useState<SiteTask[]>([])
   const [consumerSources, setConsumerSources] = useState<
     { app_id: string; name: string; version_no: number }[]
@@ -322,9 +324,12 @@ export default function EnvironmentManagement() {
   }, [selected, taskGeneration])
   const preparing = tasks.some(
     (item) =>
-      ['candidate-prepare', 'candidate-install', 'candidate-register'].includes(
-        item.action || '',
-      ) && ['queued', 'running', 'reconcile'].includes(item.state),
+      [
+        'candidate-prepare',
+        'candidate-install',
+        'candidate-register',
+        'candidate-validate',
+      ].includes(item.action || '') && ['queued', 'running', 'reconcile'].includes(item.state),
   )
   useEffect(() => {
     if (!selected || !preparing) return
@@ -597,7 +602,16 @@ export default function EnvironmentManagement() {
                 <ul className="space-y-1">
                   {plan.checks.map((check) => (
                     <li key={check.id}>
-                      {checkLabels[check.id] || check.id}：
+                      {checkLabels[check.id || ''] ||
+                        (
+                          {
+                            consumer: '智能客服',
+                            order: '异常订单',
+                            offline: '离线分析',
+                          } as Record<string, string>
+                        )[check.capability || ''] ||
+                        check.id}
+                      ：
                       {check.state === 'passed'
                         ? '通过'
                         : check.state === 'blocked'
@@ -782,6 +796,76 @@ export default function EnvironmentManagement() {
                         </p>
                       </section>
                     )}
+                    {item.action === 'candidate-register' &&
+                      ['registered', 'unchanged'].includes(item.result.result || '') && (
+                        <section aria-label={`业务验证选择：${item.tenant_id}`}>
+                          <label htmlFor={`case-${item.id}`}>受控验收案例</label>
+                          <Input
+                            id={`case-${item.id}`}
+                            value={caseRef}
+                            onChange={(e) => setCaseRef(e.target.value)}
+                            placeholder="填写已登记案例编号"
+                          />
+                          <fieldset>
+                            <legend>本次验证范围</legend>
+                            {Object.entries({
+                              consumer: '智能客服（知识与本人订单）',
+                              order: '异常订单分析',
+                              offline: '离线分析',
+                            }).map(([key, label]) => (
+                              <label key={key}>
+                                <input
+                                  type="checkbox"
+                                  checked={capabilities.includes(key)}
+                                  onChange={(e) =>
+                                    setCapabilities((values) =>
+                                      e.target.checked
+                                        ? [...values, key]
+                                        : values.filter((value) => value !== key),
+                                    )
+                                  }
+                                />
+                                {label}
+                              </label>
+                            ))}
+                          </fieldset>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={
+                              busy ||
+                              dirty ||
+                              saved?.registry_changed ||
+                              !plan ||
+                              plan.state === 'expired' ||
+                              !/^[A-Za-z0-9_-]{1,64}$/.test(caseRef) ||
+                              !capabilities.length
+                            }
+                            onClick={() => {
+                              if (
+                                plan &&
+                                window.confirm(
+                                  '使用受控测试身份运行所选业务验证？不修改业务数据，不启用正式入口。',
+                                )
+                              )
+                                void siteTasks({
+                                  registration_task: item.id,
+                                  validation_plan: plan.id,
+                                  capabilities,
+                                  case_ref: caseRef,
+                                })
+                            }}
+                          >
+                            验证已登记业务：{item.tenant_id}
+                          </Button>
+                        </section>
+                      )}
+                    {item.action === 'candidate-validate' && (
+                      <p>
+                        业务技术验证 · {item.tenant_id}：{taskLabels[item.state] || item.state}
+                        ；业务准确性待确认，正式入口未启用
+                      </p>
+                    )}
                     {item.action === 'candidate-prepare' && item.state === 'observed' && (
                       <Button
                         type="button"
@@ -962,13 +1046,23 @@ export default function EnvironmentManagement() {
                         </Button>
                       ))}
                     {item.result.checks?.map((check) => (
-                      <p key={check.id} className="system-xs-regular">
-                        {checkLabels[check.id] || check.id}：
+                      <p key={check.id || check.capability} className="system-xs-regular">
+                        {checkLabels[check.id || ''] ||
+                          (
+                            {
+                              consumer: '智能客服',
+                              order: '异常订单',
+                              offline: '离线分析',
+                            } as Record<string, string>
+                          )[check.capability || ''] ||
+                          check.id}
+                        ：
                         {check.state === 'passed'
                           ? '通过'
                           : check.state === 'blocked'
                             ? '阻塞'
-                            : '未验证'}
+                            : '未验证'}{' '}
+                        {check.error_code || ''}
                       </p>
                     ))}
                     {['queued', 'running', 'reconcile'].includes(item.state) && (

@@ -571,7 +571,9 @@ it('submits an explicit inactive installation and keeps business activation sepa
     installation: true,
   })
   await expect
-    .element(screen.getByText('安装回执不含运行登记 · 业务未验收 · 正式入口未启用', { exact: true }))
+    .element(
+      screen.getByText('安装回执不含运行登记 · 业务未验收 · 正式入口未启用', { exact: true }),
+    )
     .toBeVisible()
 })
 
@@ -693,4 +695,66 @@ it('registers an installed candidate with a fresh plan without enabling the tena
   await expect
     .element(screen.getByText('运行资源已登记 · 业务未验收 · 正式入口未启用', { exact: true }))
     .toBeVisible()
+})
+
+it('starts explicit business validation from registration without accepting a verdict', async () => {
+  const registration = {
+    id: `task_${'a'.repeat(32)}`,
+    action: 'candidate-register',
+    tenant_id: 'same',
+    plan_id: `plan_${'b'.repeat(32)}`,
+    state: 'observed',
+    cancel_requested: false,
+    error_code: '',
+    result: { result: 'registered' },
+  }
+  const plan = {
+    id: `plan_${'c'.repeat(32)}`,
+    state: 'blocked',
+    executable: false,
+    draft_revision: 2,
+    registry_revision: 4,
+    checks: [],
+  }
+  const calls: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json(data)
+      if (body.action === 'environment-plan') return Response.json(plan)
+      if (body.registration_task)
+        return Response.json({
+          ...registration,
+          id: `task_${'d'.repeat(32)}`,
+          action: 'candidate-validate',
+          state: 'queued',
+          result: {
+            checks: [
+              { capability: 'consumer', state: 'pending' },
+              { capability: 'order', state: 'pending' },
+              { capability: 'offline', state: 'pending' },
+            ],
+          },
+        })
+      return Response.json({ tasks: [registration] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('textbox', { name: '受控验收案例', exact: true }).fill('approved-case')
+  await screen.getByRole('button', { name: '验证已登记业务：same', exact: true }).click()
+  expect(calls.find((body) => body.registration_task)).toEqual({
+    action: 'environment-task',
+    registration_task: registration.id,
+    validation_plan: plan.id,
+    capabilities: ['consumer', 'order', 'offline'],
+    case_ref: 'approved-case',
+  })
+  await expect.element(screen.getByText(/业务准确性待确认，正式入口未启用/)).toBeVisible()
 })
