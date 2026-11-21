@@ -213,3 +213,28 @@ def test_candidate_installation_crosses_bridge_without_deployment_arguments(brid
     ):
         assert _manage({**payload, **extra}, address=bridge)[0] == 400
     assert len([c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]) == count
+
+
+def test_host_verify_task_crosses_bridge_without_extra_arguments(bridge, upstream):  # noqa: F811
+    payload = {
+        "action": "environment-task",
+        "verify_task": "managed-host-identity",
+        "plan_id": "plan_" + "b" * 32,
+    }
+    assert _manage(payload, address=bridge)[0] != 400
+    forwarded = [c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]
+    assert forwarded[-1]["body"] == {
+        "verify_task": "managed-host-identity",
+        "plan_id": payload["plan_id"],
+    }
+    count = len(forwarded)
+    for extra in (
+        {"verify_task": 1},
+        {"verify_task": "with space"},
+        {"plan_id": "unknown"},
+        {"app_id": CONSUMER},
+        {"action": "status"},
+        {"gateway_url": "https://other.test"},
+    ):
+        assert _manage({**payload, **extra}, address=bridge)[0] == 400
+    assert len([c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]) == count
