@@ -117,3 +117,39 @@ def test_no_unapproved_reentry_or_baseline_write(task_state, monkeypatch, condit
         result = task.execute(inst, request, observe_only=condition == "observe")
         assert result["state"] in ("blocked", "reconcile")
     assert calls == []
+
+
+def test_registration_lost_receipt_reenters_as_observation_only(task_state, monkeypatch):
+    inst, previous, _ = task_state
+    installed = inst.read_record("installed.json")
+    registration = json.loads((inst.runtime_path(installed) / "registrations.json").read_text())
+    spec = {k: previous[k] for k in ("id", "environment", "expires_at")}
+    spec.update(
+        expected={"revision": installed["revision"], **previous["expected"]},
+        tenant_id=registration["tenant_id"],
+    )
+    calls = []
+
+    def register(*, observe_only=False):
+        calls.append(observe_only)
+        if not observe_only:
+            raise OSError("lost reply after commit")
+        return dict(
+            environment=inst.environment,
+            tenant_id=registration["tenant_id"],
+            runtime_sha256=installed["runtime_sha256"],
+            result="unchanged",
+            scope="inactive-runtime-registration-only",
+            activated=False,
+            business_acceptance=False,
+        )
+
+    monkeypatch.setattr(inst, "register_runtime", register)
+    with pytest.raises(OSError):
+        task.register(inst, spec)
+    assert task.register(inst, spec)["state"] == "observed"
+    assert calls == [False, True]
+    assert not (inst.root / "pending.json").exists()
+    with pytest.raises(ValueError, match="baseline changed"):
+        task.register(inst, {**spec, "expected": {**spec["expected"], "runtime_sha256": "f" * 64}})
+    assert calls == [False, True]

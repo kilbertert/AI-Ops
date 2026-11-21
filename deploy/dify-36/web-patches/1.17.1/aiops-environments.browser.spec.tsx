@@ -571,7 +571,7 @@ it('submits an explicit inactive installation and keeps business activation sepa
     installation: true,
   })
   await expect
-    .element(screen.getByText('注册未执行 · 业务未验收 · 正式入口未启用', { exact: true }))
+    .element(screen.getByText('安装回执不含运行登记 · 业务未验收 · 正式入口未启用', { exact: true }))
     .toBeVisible()
 })
 
@@ -634,5 +634,63 @@ it('requests managed-host verification and shows the collected evidence', async 
   await screen.getByRole('button', { name: '刷新目录', exact: true }).click()
   await expect
     .element(screen.getByText('主机身份验收 · a：本地观察通过', { exact: true }))
+    .toBeVisible()
+})
+
+it('registers an installed candidate with a fresh plan without enabling the tenant', async () => {
+  const installed = {
+    id: `task_${'d'.repeat(32)}`,
+    action: 'candidate-install',
+    tenant_id: 'same',
+    plan_id: `plan_${'a'.repeat(32)}`,
+    state: 'expired',
+    cancel_requested: false,
+    error_code: '',
+    result: { installation: 'installed', version: '1.35.0' },
+  }
+  const plan = {
+    id: `plan_${'e'.repeat(32)}`,
+    state: 'blocked',
+    executable: false,
+    draft_revision: 2,
+    registry_revision: 4,
+    checks: [],
+  }
+  const calls: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json(data)
+      if (body.action === 'environment-plan') return Response.json(plan)
+      if (body.installation_task)
+        return Response.json({
+          ...installed,
+          id: `task_${'f'.repeat(32)}`,
+          action: 'candidate-register',
+          state: 'observed',
+          result: { result: 'registered', activated: false, business_acceptance: false },
+        })
+      return Response.json({ tasks: [installed] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await expect
+    .element(screen.getByRole('button', { name: '登记已安装候选：same', exact: true }))
+    .toBeDisabled()
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '登记已安装候选：same', exact: true }).click()
+  expect(calls.find((body) => body.installation_task)).toEqual({
+    action: 'environment-task',
+    installation_task: installed.id,
+    registration_plan: plan.id,
+  })
+  await expect
+    .element(screen.getByText('运行资源已登记 · 业务未验收 · 正式入口未启用', { exact: true }))
     .toBeVisible()
 })

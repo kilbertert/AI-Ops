@@ -69,6 +69,7 @@ type SiteTask = {
     app_id?: string
     scope?: string
     installation?: string
+    result?: string
     version?: string
     evidence?: {
       remote_hostname?: string
@@ -321,8 +322,9 @@ export default function EnvironmentManagement() {
   }, [selected, taskGeneration])
   const preparing = tasks.some(
     (item) =>
-      ['candidate-prepare', 'candidate-install'].includes(item.action || '') &&
-      ['queued', 'running', 'reconcile'].includes(item.state),
+      ['candidate-prepare', 'candidate-install', 'candidate-register'].includes(
+        item.action || '',
+      ) && ['queued', 'running', 'reconcile'].includes(item.state),
   )
   useEffect(() => {
     if (!selected || !preparing) return
@@ -713,8 +715,7 @@ export default function EnvironmentManagement() {
                     {item.action === 'host-verify' && (
                       <section aria-label={`主机身份验收：${item.environment}`}>
                         <p>
-                          主机身份验收 · {item.environment}：
-                          {taskLabels[item.state] || item.state}
+                          主机身份验收 · {item.environment}：{taskLabels[item.state] || item.state}
                         </p>
                         {item.result.evidence && (
                           <>
@@ -736,7 +737,49 @@ export default function EnvironmentManagement() {
                           停用候选安装 · {item.tenant_id}：{taskLabels[item.state] || item.state}
                         </p>
                         {item.result.version && <p>实际版本：{item.result.version}</p>}
-                        <p>注册未执行 · 业务未验收 · 正式入口未启用</p>
+                        <p>安装回执不含运行登记 · 业务未验收 · 正式入口未启用</p>
+                      </section>
+                    )}
+                    {item.action === 'candidate-install' &&
+                      ['installed', 'unchanged'].includes(item.result.installation || '') &&
+                      !item.cancel_requested && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          disabled={
+                            busy ||
+                            dirty ||
+                            saved?.registry_changed ||
+                            !plan ||
+                            plan.state === 'expired'
+                          }
+                          onClick={() => {
+                            if (
+                              plan &&
+                              window.confirm(
+                                '登记该已安装候选的工作区与双端应用？不重启、不启用正式入口；失联后只核对。',
+                              )
+                            )
+                              void siteTasks({
+                                installation_task: item.id,
+                                registration_plan: plan.id,
+                              })
+                          }}
+                        >
+                          登记已安装候选：{item.tenant_id}
+                        </Button>
+                      )}
+                    {item.action === 'candidate-register' && (
+                      <section aria-label={`候选登记进度：${item.tenant_id}`}>
+                        <p>
+                          候选运行登记 · {item.tenant_id}：{taskLabels[item.state] || item.state}
+                        </p>
+                        <p>
+                          {['registered', 'unchanged'].includes(item.result.result || '')
+                            ? '运行资源已登记'
+                            : '运行登记尚未确认'}{' '}
+                          · 业务未验收 · 正式入口未启用
+                        </p>
                       </section>
                     )}
                     {item.action === 'candidate-prepare' && item.state === 'observed' && (
@@ -934,19 +977,21 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        {item.action === 'candidate-install'
-                          ? '取消候选安装（等待安全结果）'
-                          : item.action === 'consumer-prepare'
-                            ? '取消消费者准备'
-                            : item.action === 'operator-prepare'
-                              ? '取消管家准备'
-                              : item.action === 'knowledge-connect'
-                                ? '取消知识连接准备'
-                                : item.action === 'knowledge-prepare'
-                                  ? '取消知识准备'
-                                  : item.action === 'workspace-prepare'
-                                    ? '取消工作区准备'
-                                    : '取消现场预检'}
+                        {item.action === 'candidate-register'
+                          ? '取消运行登记（等待安全结果）'
+                          : item.action === 'candidate-install'
+                            ? '取消候选安装（等待安全结果）'
+                            : item.action === 'consumer-prepare'
+                              ? '取消消费者准备'
+                              : item.action === 'operator-prepare'
+                                ? '取消管家准备'
+                                : item.action === 'knowledge-connect'
+                                  ? '取消知识连接准备'
+                                  : item.action === 'knowledge-prepare'
+                                    ? '取消知识准备'
+                                    : item.action === 'workspace-prepare'
+                                      ? '取消工作区准备'
+                                      : '取消现场预检'}
                       </Button>
                     )}
                   </article>

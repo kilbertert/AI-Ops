@@ -17,7 +17,11 @@ import uuid
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
-from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.common.private_files import (
+    ensure_private_directory,
+    protect_private_file,
+    validate_private_file,
+)
 from aiops_diagnostics.dify import dual_entry
 from aiops_diagnostics.gateway import gateway_db, gateway_schema
 
@@ -27,8 +31,12 @@ class SetupConflict(ValueError):
 
 
 class SelfServiceStore:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, readonly: bool = False):
         self.path = path.expanduser().absolute()
+        if readonly:
+            validate_private_file(self.path)
+            gateway_schema.check(self.path)
+            return
         ensure_private_directory(self.path.parent)
         gateway_schema.ensure(self.path)
         protect_private_file(self.path)
@@ -288,7 +296,7 @@ class SelfServiceStore:
                 (*identity[:5], actor, *identity[5:], environment, encoded),
             )
 
-    def register_runtime(self, registration, consumer, *, verify):
+    def register_runtime(self, registration, consumer, *, verify, observe_only=False):
         """只登记已核验的工作区/双端候选；不更新或收养已有不同归属。"""
         from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 
@@ -320,7 +328,9 @@ class SelfServiceStore:
                 | {"photo_enabled": consumer.get("photo_enabled", False)},
             ),
         ]
-        with self.connection() as db:
+        with gateway_db.connection(self.path, write=not observe_only, readonly=observe_only) as db:
+            if observe_only:
+                db.execute("BEGIN")
             verify()
             from aiops_diagnostics.gateway.gateway_store import JOB_TABLES
 
@@ -386,7 +396,11 @@ class SelfServiceStore:
             if any(existing_apps) != all(existing_apps) or bool(existing_workspace) != all(existing_apps):
                 raise SetupConflict("SETUP_PARTIAL_REGISTRATION")
             if existing_workspace:
+                verify()
                 return False
+            if observe_only:
+                verify()
+                return None
             now = format_stored_time(now_utc())
             db.execute(
                 "INSERT INTO dify_workspaces(tenant_id,environment,workspace_id,setup_state,"

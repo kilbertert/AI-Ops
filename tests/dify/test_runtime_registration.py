@@ -165,3 +165,20 @@ def test_direct_admin_without_managed_receipt_cannot_register(tmp_path):
 
     result = CliRunner().invoke(admin_app, ["environment-runtime-register", "--sha256", "a" * 64])
     assert result.exit_code != 0
+
+
+def test_readonly_reconciliation_never_repairs_missing_or_partial_resources(candidate):
+    store, registration, consumer = candidate
+    before = rows(candidate)
+    assert store.register_runtime(registration, consumer, verify=lambda: None, observe_only=True) is None
+    assert rows(candidate) == before
+    register(candidate)
+    before = rows(candidate)
+    assert store.register_runtime(registration, consumer, verify=lambda: None, observe_only=True) is False
+    assert rows(candidate) == before
+    with store.connection() as db:
+        db.execute("DELETE FROM operator_apps WHERE entry='consumer'")
+    before = rows(candidate)
+    with pytest.raises(SetupConflict):
+        store.register_runtime(registration, consumer, verify=lambda: None, observe_only=True)
+    assert rows(candidate) == before

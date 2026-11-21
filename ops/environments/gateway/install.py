@@ -505,7 +505,7 @@ WantedBy=multi-user.target
         ).hexdigest()
         return fingerprint, public, {"available_memory_bytes": available, "available_disk_bytes": free}
 
-    def register_runtime(self):
+    def register_runtime(self, *, observe_only=False):
         installed = self.read_record("installed.json")
         if (self.root / "pending.json").exists() or not installed.get("runtime_sha256"):
             raise ValueError("installed runtime required without pending change")
@@ -534,13 +534,15 @@ WantedBy=multi-user.target
                     installed["runtime_sha256"],
                     "--receipt-fd",
                     str(receipt.fileno()),
+                    *(["--observe-only"] if observe_only else []),
                     pass_fds=(receipt.fileno(),),
                 )
             )
         if (
             result.get("environment") != self.environment
             or result.get("runtime_sha256") != installed["runtime_sha256"]
-            or result.get("result") not in {"registered", "unchanged"}
+            or result.get("result")
+            not in ({"unchanged", "absent"} if observe_only else {"registered", "unchanged"})
             or result.get("scope") != "inactive-runtime-registration-only"
             or result.get("activated") is not False
             or result.get("business_acceptance") is not False

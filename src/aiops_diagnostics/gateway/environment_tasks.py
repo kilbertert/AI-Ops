@@ -49,7 +49,11 @@ def _current(path, request, reference, *, reconciling=False):
 def _public(row):
     request = json.loads(row["request"])
     state = row["state"]
-    if state == "waiting" and request.get("action") in {"candidate-prepare", "candidate-install"}:
+    if state == "waiting" and request.get("action") in {
+        "candidate-prepare",
+        "candidate-install",
+        "candidate-register",
+    }:
         state = "queued"
     if state == "executing":
         state = "running" if row["lease_until"] > time.time() else "reconcile"
@@ -604,7 +608,7 @@ def worker(path, reference, payload, *, internal_workspace=False):
                 raise TaskRefused("ENVIRONMENT_TASK_UNAVAILABLE")
             row = _row(conn, payload["id"])
         request = json.loads(row["request"])
-        if request.get("action") in {"candidate-prepare", "candidate-install"}:
+        if request.get("action") in {"candidate-prepare", "candidate-install", "candidate-register"}:
             raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
         _authorize(path, tuple(request["identity"]), row["environment"])
         if (
@@ -642,6 +646,7 @@ def _next(path, reference):
                 "SELECT * FROM environment_tasks AS task WHERE state IN ('queued','running','reconcile') "
                 "AND json_extract(request,'$.action') IS NOT 'candidate-prepare' "
                 "AND json_extract(request,'$.action') IS NOT 'candidate-install' "
+                "AND json_extract(request,'$.action') IS NOT 'candidate-register' "
                 "AND lease_until<=? AND (state!='reconcile' OR updated_at<=?) "
                 "AND NOT EXISTS (SELECT 1 FROM environment_tasks AS live "
                 "WHERE live.environment=task.environment AND live.id!=task.id "

@@ -316,7 +316,13 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
         request({"advance_candidates": True})
         installation = request({"installation_claim": True, "owner": owner})
         if installation.get("claimed") is True:
-            return installation_run(root, request, installation["id"], owner)
+            return installation_run(
+                root,
+                request,
+                installation["id"],
+                owner,
+                registration=installation.get("action") == "candidate-register",
+            )
     claim = request({"owner": owner, **({"id": identifier} if identifier else {})})
     if not isinstance(claim, dict) or type(claim.get("claimed")) is not bool:
         raise ValueError("central claim unavailable")
@@ -356,9 +362,10 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
     return request({"id": identifier, "owner": owner, "result": result})
 
 
-def installation_run(root, request, identifier, owner):
+def installation_run(root, request, identifier, owner, *, registration=False):
     """运维宿主搬运中央私有制品；未知结果只核对同一远端任务。"""
-    staged = request({"installation": "stage", "id": identifier, "owner": owner})
+    action = "registration" if registration else "installation"
+    staged = request({action: "stage", "id": identifier, "owner": owner})
     declared_host = staged["target"]["host"]
     declaration = tomllib.loads((root / ".dev-host.toml").read_text())
     matches = [
@@ -397,10 +404,24 @@ def installation_run(root, request, identifier, owner):
         "business": "unverified",
         "error_code": "ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED",
     }
+    if registration:
+        result = {
+            "id": identifier,
+            "environment": staged["environment"],
+            "tenant_id": staged["tenant_id"],
+            "scope": "inactive-runtime-registration-only",
+            "state": "reconcile",
+            "result": "unconfirmed",
+            "executable": False,
+            "activated": False,
+            "business_acceptance": False,
+            "source_revision": staged["expected"]["revision"],
+            **{k: v for k, v in staged["expected"].items() if k != "revision"},
+        }
     try:
         with tempfile.TemporaryDirectory(prefix="aiops-install-transfer-") as temporary:
             directory = Path(temporary)
-            artifacts = staged["archives"] | {"installer": staged["installer"]}
+            artifacts = ({} if registration else staged["archives"]) | {"installer": staged["installer"]}
             spec_archives = {}
             for name, source in artifacts.items():
                 local = directory / (name + ".tar.gz")
@@ -490,10 +511,16 @@ def installation_run(root, request, identifier, owner):
                 "expected": staged["expected"],
                 "archives": spec_archives,
             }
+            if registration:
+                spec.pop("archives")
+                spec["tenant_id"] = staged["tenant_id"]
+            remote_action = "observe" if staged["observe_only"] else "run"
+            if registration:
+                remote_action = "observe-registration" if staged["observe_only"] else "register"
             arguments = [
                 "/usr/bin/python3",
                 remote + "/installer/task.py",
-                "observe" if staged["observe_only"] else "run",
+                remote_action,
                 "--environment",
                 staged["environment"],
                 "--user",
@@ -502,7 +529,7 @@ def installation_run(root, request, identifier, owner):
                 str(target["port"]),
             ]
             if not staged["observe_only"] and request(
-                {"installation": "authorize", "id": identifier, "owner": owner}
+                {action: "authorize", "id": identifier, "owner": owner}
             ) != {"authorized": True}:
                 raise ValueError("installation authorization changed")
             # 核固定包身份后执行task.py；observe严格不再次apply，不向目标传共享凭据。
@@ -540,4 +567,4 @@ def installation_run(root, request, identifier, owner):
             result = json.loads(raw)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):
         pass  # 远端可能已切换：记录未知，只允许本任务后续observe。
-    return request({"installation": "complete", "id": identifier, "owner": owner, "result": result})
+    return request({action: "complete", "id": identifier, "owner": owner, "result": result})

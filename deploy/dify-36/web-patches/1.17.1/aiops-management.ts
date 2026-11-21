@@ -55,6 +55,7 @@ export const entryLabels: Record<EntryKey, string> = {
 }
 
 export const messages: Record<string, string> = {
+  ENVIRONMENT_REGISTRATION_UPGRADE_REQUIRED: '目标需先升级到 1.35.0 或更高版本，再登记已安装候选',
   ENVIRONMENT_INSTALLATION_CONFIG_REQUIRED: '候选安装执行尚未配置，原候选准备仍可用',
   ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED: '请重新观察目标安装状态后再提交',
   ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED: '安装结果尚待核对，请由运维恢复原任务；不要重复安装',

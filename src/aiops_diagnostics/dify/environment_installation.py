@@ -97,8 +97,8 @@ def submit(context, identity, identifier):
         if conn.execute(
             "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
             "AND state IN ('waiting','executing','checking') "
-            "AND json_extract(request,'$.action')=?",
-            (parent["environment"], task_id, ACTION),
+            "AND json_extract(request,'$.action') IN ('candidate-install','candidate-register')",
+            (parent["environment"], task_id),
         ).fetchone():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
         request = {
@@ -147,19 +147,25 @@ def dispatch(context, payload):
             if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='environment_tasks'").fetchone():
                 return {"claimed": False, "task": None}
             rows = conn.execute(
-                "SELECT id FROM environment_tasks WHERE json_extract(request,'$.action')=? "
+                "SELECT id FROM environment_tasks WHERE json_extract(request,'$.action') "
+                "IN ('candidate-install','candidate-register') "
                 "AND state IN ('waiting','executing','checking') AND lease_until<=? "
                 "AND NOT EXISTS(SELECT 1 FROM environment_tasks live "
                 "WHERE live.environment=environment_tasks.environment AND live.id!=environment_tasks.id "
                 "AND live.state IN ('running','executing') AND live.lease_until>?) "
                 "ORDER BY updated_at LIMIT 20",
-                (ACTION, time.time(), time.time()),
+                (time.time(), time.time()),
             ).fetchall()
             for selected in rows:
                 row = tasks._row(conn, selected[0])
                 request = json.loads(row["request"])
                 try:
-                    current(context, conn, row["id"], fresh=not request["attempted"])
+                    if request["action"] == "candidate-register":
+                        from .environment_registration import current as registration_current
+
+                        registration_current(context, conn, row["id"], fresh=not request["attempted"])
+                    else:
+                        current(context, conn, row["id"], fresh=not request["attempted"])
                 except (ValueError, RuntimeError, OSError, KeyError, TypeError):
                     conn.execute(
                         "UPDATE environment_tasks SET state='blocked',error=?,updated_at=? WHERE id=?",
@@ -171,7 +177,7 @@ def dispatch(context, payload):
                     "WHERE id=?",
                     (owner, time.time() + 900, time.time(), row["id"]),
                 )
-                return {"claimed": True, "id": row["id"], "action": ACTION}
+                return {"claimed": True, "id": row["id"], "action": request["action"]}
             return {"claimed": False, "task": None}
     if payload.get("installation") not in {"stage", "authorize", "complete"} or set(payload) not in (
         {"installation", "id", "owner"},

@@ -151,9 +151,61 @@ def execute(inst, spec, *, observe_only=False):
     return observe(inst, spec, record)
 
 
+def register(inst, spec, *, observe_only=False):
+    """登记意图先持久；失联后只观察原同事务登记，不补写缺失资源。"""
+    if (
+        set(spec) != {"id", "environment", "expires_at", "expected", "tenant_id"}
+        or not isinstance(spec["id"], str)
+        or not re.fullmatch(r"task_[a-f0-9]{32}", spec["id"])
+        or spec["environment"] != inst.environment
+        or not isinstance(spec["tenant_id"], str)
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", spec["tenant_id"])
+        or type(spec["expires_at"]) not in (int, float)
+        or not math.isfinite(spec["expires_at"])
+        or set(spec["expected"])
+        != {"revision", "artifact_sha256", "config_sha256", "registry_sha256", "runtime_sha256"}
+    ):
+        raise ValueError("invalid registration task")
+    installed = inst.read_record("installed.json")
+    if any(installed.get(k) != v for k, v in spec["expected"].items()):
+        raise ValueError("registration baseline changed")
+    runtime = inst.runtime_path(installed)
+    registration = json.loads((runtime / "registrations.json").read_text())
+    if registration["tenant_id"] != spec["tenant_id"] or registration["environment"] != inst.environment:
+        raise ValueError("registration tenant mismatch")
+    directory = inst.root / "registration-tasks"
+    file = directory / (spec["id"] + ".json")
+    previous = None
+    if directory.exists():
+        install.trusted(directory, private=True)
+    if file.exists() or file.is_symlink():
+        install.trusted(file, private=True)
+        if file.stat().st_nlink != 1 or file.stat().st_size > 65536:
+            raise ValueError("invalid registration record")
+        previous = json.loads(file.read_text())
+        if previous != spec:
+            raise ValueError("registration intent changed")
+    observing = observe_only or previous is not None or spec["expires_at"] <= time.time()
+    if not observing:
+        directory.mkdir(mode=0o700, exist_ok=True)
+        install.trusted(directory, private=True)
+        install.write(file, json.dumps(spec))
+    result = inst.register_runtime(observe_only=observing)
+    if result["tenant_id"] != spec["tenant_id"]:
+        raise ValueError("registration receipt tenant mismatch")
+    return {
+        **result,
+        "id": spec["id"],
+        "state": "observed" if result["result"] in {"registered", "unchanged"} else "reconcile",
+        "executable": False,
+        "source_revision": installed["revision"],
+        **{k: installed[k] for k in ("artifact_sha256", "config_sha256", "registry_sha256")},
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("run", "observe"))
+    parser.add_argument("action", choices=("run", "observe", "register", "observe-registration"))
     for key in ("environment", "user", "port"):
         parser.add_argument("--" + key, required=True, type=int if key == "port" else str)
     args = parser.parse_args()
@@ -194,7 +246,11 @@ def main():
         if os.fstat(lock.fileno()).st_nlink != 1:
             raise ValueError("invalid installation lock")
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        result = execute(inst, spec, observe_only=args.action == "observe")
+        result = (
+            register(inst, spec, observe_only=args.action == "observe-registration")
+            if args.action in {"register", "observe-registration"}
+            else execute(inst, spec, observe_only=args.action == "observe")
+        )
     print(json.dumps(result))
 
 
