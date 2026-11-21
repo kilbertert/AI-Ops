@@ -66,6 +66,10 @@ def handle(handler, bridge):
                 "installation",
                 "installation_task",
                 "registration_plan",
+                "registration_task",
+                "validation_plan",
+                "capabilities",
+                "case_ref",
                 "site_task",
                 "workspace_task",
                 "knowledge_task",
@@ -131,7 +135,23 @@ def handle(handler, bridge):
     if (method == "GET" or action == "retry") and payload:
         raise _Rejected(400, "无效参数")
     if action == "environment-task":
-        if set(payload) == {"installation_task", "registration_plan"}:
+        if set(payload) == {"registration_task", "validation_plan", "capabilities", "case_ref"}:
+            valid = (
+                isinstance(payload["registration_task"], str)
+                and re.fullmatch(r"task_[0-9a-f]{32}", payload["registration_task"])
+                and isinstance(payload["validation_plan"], str)
+                and re.fullmatch(r"plan_[0-9a-f]{32}", payload["validation_plan"])
+                and isinstance(payload["case_ref"], str)
+                and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", payload["case_ref"])
+                and isinstance(payload["capabilities"], list)
+                and 1 <= len(payload["capabilities"]) <= 3
+                and all(
+                    isinstance(c, str) and c in {"consumer", "order", "offline"}
+                    for c in payload["capabilities"]
+                )
+                and len(set(payload["capabilities"])) == len(payload["capabilities"])
+            )
+        elif set(payload) == {"installation_task", "registration_plan"}:
             valid = (
                 isinstance(payload["installation_task"], str)
                 and re.fullmatch(r"task_[0-9a-f]{32}", payload["installation_task"])
@@ -211,6 +231,10 @@ def handle(handler, bridge):
         "installation",
         "installation_task",
         "registration_plan",
+        "registration_task",
+        "validation_plan",
+        "capabilities",
+        "case_ref",
         "candidate_plan",
         "verify_task",
         "plan_id",
