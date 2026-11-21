@@ -574,3 +574,65 @@ it('submits an explicit inactive installation and keeps business activation sepa
     .element(screen.getByText('注册未执行 · 业务未验收 · 正式入口未启用', { exact: true }))
     .toBeVisible()
 })
+
+it('requests managed-host verification and shows the collected evidence', async () => {
+  const plan = {
+    id: `plan_${'b'.repeat(32)}`,
+    state: 'blocked',
+    executable: false,
+    draft_revision: 2,
+    registry_revision: 4,
+    checks: [],
+  }
+  const task = {
+    id: `task_${'c'.repeat(32)}`,
+    action: 'host-verify',
+    environment: 'a',
+    plan_id: plan.id,
+    state: 'observed',
+    cancel_requested: false,
+    error_code: '',
+    result: {
+      scope: 'managed-host-verification-only',
+      evidence: { remote_hostname: 'ecs-2c54', service_user_present: true },
+    },
+  }
+  const calls: Record<string, unknown>[] = []
+  let submitted = false
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      if (body.action === 'environment-drafts') return Response.json(data)
+      calls.push(body)
+      if (body.action === 'environment-plan') return Response.json(plan)
+      if (body.verify_task) {
+        submitted = true
+        return Response.json(task)
+      }
+      return Response.json({ tasks: submitted ? [task] : [] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '主机身份验收', exact: true }).click()
+  expect(calls.at(-1)).toEqual({
+    action: 'environment-task',
+    verify_task: 'managed-host-identity',
+    plan_id: plan.id,
+  })
+  await expect
+    .element(screen.getByText('主机身份验收 · a：本地观察通过', { exact: true }))
+    .toBeVisible()
+  await expect.element(screen.getByText('现场主机：ecs-2c54', { exact: true })).toBeVisible()
+  await expect.element(screen.getByText('服务身份：存在', { exact: true })).toBeVisible()
+  await expect
+    .element(
+      screen.getByText('仅证明任务落在已登记主机，不代替正式网络、容量与业务验收', { exact: true }),
+    )
+    .toBeVisible()
+  await screen.getByRole('button', { name: '刷新目录', exact: true }).click()
+  await expect
+    .element(screen.getByText('主机身份验收 · a：本地观察通过', { exact: true }))
+    .toBeVisible()
+})

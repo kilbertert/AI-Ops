@@ -219,3 +219,9 @@ D37停用候选安装：有效observed候选父任务、平台权限和专属节
 失联/lease过期仅观察原意图与installed，已有意图不再次apply；在飞取消等安全结果，计划/凭据漂移不启动新写入。
 用临时真实SQLite/文件与原安装器fixture验证重复/响应丢失/取消/过期/错误目标/pending，原子任务入口独立回归。
 现片已安装目标的接续，首次冷装主链、公司身份/网络/三功能与生产恢复故障注入另验；不由健康或安装回执推导业务通过。
+
+D38主机身份验收：页面在有效冻结计划提交host-verify（verify_task=managed-host-identity），同plan重复/换会话返回同编号。
+受管执行端经dev-host指纹断言后在目标只读采集hostname、machine-id的SHA256与服务身份存在性；原始machine-id不出目标。
+回执scope=managed-host-verification-only、check、observed/blocked、executable=false、900秒到期；状态必须与已采证据一致，字段缺失写blocked。
+目标不可达/断言失败仍走TARGET_UNCONFIRMED记待核对，不判阻塞；声明解析歧义、错目标、漂移、取消、过期沿原子任务合同。
+判据规划§8三项pending与ADR0299；本片只验主机身份，正式网络/业务/容量与激活仍待；替身不证明真实dev-host指纹断言，现场另验。

@@ -77,7 +77,10 @@ def _public(row):
     }
 
 
-def submit(path, identity, identifier, reference):
+VERIFY_CHECKS = frozenset({"managed-host-identity"})
+
+
+def _plan_task(path, identity, identifier, reference, action_fields):
     plan = plans.read(path, identity, identifier, reference)
     if plan["state"] == "expired" or any(
         c["state"] != "passed"
@@ -99,11 +102,12 @@ def submit(path, identity, identifier, reference):
             "plan": plan,
             "target": {k: target[k] for k in ("id", "host", "user", "port")},
             "installer": {k: target["installer"][k] for k in ("sha256", "revision")},
+            **action_fields,
         }
         _current(path, request, reference)
         # 同一冻结计划永久复用；重新预检生成的新计划是另一次观察，不复用过期证据。
         key = plans._digest(
-            {"plan": identifier, "digest": plan["digest"], "target": target["id"], "action": "site-preflight"}
+            {"plan": identifier, "digest": plan["digest"], "target": target["id"], **action_fields}
         )
         task_id = "task_" + key[:32]
         with gateway_db.initialize(drafts._database(path)) as conn:
@@ -114,6 +118,17 @@ def submit(path, identity, identifier, reference):
                 (task_id, plan["environment"], json.dumps(request), time.time()),
             )
             return _public(_row(conn, task_id))
+
+
+def submit(path, identity, identifier, reference):
+    return _plan_task(path, identity, identifier, reference, {"action": "site-preflight"})
+
+
+def submit_verify(path, identity, identifier, check, reference):
+    """冻结计划下的受管验收任务；跨主机检查由受管执行端实际取证，不接受表单结论。"""
+    if not isinstance(check, str) or check not in VERIFY_CHECKS:
+        raise TaskRefused("ENVIRONMENT_TASK_CHECK_INVALID")
+    return _plan_task(path, identity, identifier, reference, {"action": "host-verify", "check": check})
 
 
 def submit_workspace(
@@ -505,6 +520,73 @@ def validate_receipt(value, environment):
         raise TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
 
 
+def validate_verify(result, environment):
+    """受管主机验收回执：只收执行端现场取证的结论形状，不代替网络/业务验收。"""
+    evidence = result.get("evidence") if isinstance(result, dict) else None
+    valid = (
+        isinstance(result, dict)
+        and set(result)
+        == {
+            "id",
+            "scope",
+            "environment",
+            "check",
+            "state",
+            "executable",
+            "evidence",
+            "created_at",
+            "expires_at",
+        }
+        and result["scope"] == "managed-host-verification-only"
+        and result["check"] == "managed-host-identity"
+        and result["environment"] == environment
+        and result["executable"] is False
+        and isinstance(result["id"], str)
+        and re.fullmatch(r"verify_[0-9a-f]{32}", result["id"])
+        and isinstance(result["state"], str)
+        and result["state"] in {"observed", "blocked"}
+        and all(
+            type(result[k]) in (int, float) and math.isfinite(result[k]) for k in ("created_at", "expires_at")
+        )
+        and result["expires_at"] - result["created_at"] == 900
+        and result["created_at"] <= time.time() + 30
+        and result["expires_at"] > time.time()
+        and isinstance(evidence, dict)
+        and set(evidence)
+        == {
+            "declared_target",
+            "resolved_host",
+            "remote_hostname",
+            "machine_id_sha256",
+            "service_user_present",
+        }
+        and isinstance(evidence["declared_target"], str)
+        and drafts.REFERENCE_PATTERN.fullmatch(evidence["declared_target"])
+        and isinstance(evidence["resolved_host"], str)
+        and (evidence["resolved_host"] == "" or drafts.REFERENCE_PATTERN.fullmatch(evidence["resolved_host"]))
+        and isinstance(evidence["remote_hostname"], str)
+        and len(evidence["remote_hostname"]) <= 253
+        and all(
+            not re.fullmatch(r"[0-9a-f]{32}", evidence[key])
+            for key in ("declared_target", "resolved_host", "remote_hostname")
+        )
+        and isinstance(evidence["machine_id_sha256"], str)
+        and (
+            evidence["machine_id_sha256"] == ""
+            or re.fullmatch(r"[0-9a-f]{64}", evidence["machine_id_sha256"])
+        )
+        and type(evidence["service_user_present"]) is bool
+        and (result["state"] == "observed")
+        == (
+            bool(evidence["remote_hostname"])
+            and bool(re.fullmatch(r"[0-9a-f]{64}", evidence["machine_id_sha256"]))
+            and evidence["service_user_present"]
+        )
+    )
+    if not valid:
+        raise TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
+
+
 def worker(path, reference, payload, *, internal_workspace=False):
     if set(payload) not in ({"owner"}, {"id", "owner"}, {"id", "owner", "result"}, {"id", "owner", "error"}):
         raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
@@ -614,6 +696,7 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
                 "claimed": True,
                 "id": row["id"],
                 "action": request.get("action", "site-preflight"),
+                "check": request.get("check"),
                 "environment": row["environment"],
                 "target": request["target"],
                 "installer": request["installer"],
@@ -648,6 +731,8 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
                     or result.get("executable") is not False
                 ):
                     raise TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
+            elif request.get("action") == "host-verify":
+                validate_verify(result, row["environment"])
             else:
                 validate_receipt(result, row["environment"])
             state, error = result["state"], result.get("error_code", "")
