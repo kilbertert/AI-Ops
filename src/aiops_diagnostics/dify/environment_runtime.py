@@ -296,7 +296,7 @@ def export(settings, payload, node_file, output):
     }
 
 
-def register_installed(settings, expected_sha256, receipt_fd):
+def register_installed(settings, expected_sha256, receipt_fd, *, observe_only=False):
     """受管安装器以目标服务身份调用；只消费现役私有工件，不接共享管理凭据。"""
     import fcntl
     import stat
@@ -381,14 +381,13 @@ def register_installed(settings, expected_sha256, receipt_fd):
         if current() != (files, manifest, config_hashes, pointer):
             raise ValueError("runtime changed during registration")
 
-    changed = SelfServiceStore(settings.database_file).register_runtime(
-        registration, consumer, verify=unchanged
-    )
+    store = SelfServiceStore(settings.database_file, readonly=observe_only)
+    changed = store.register_runtime(registration, consumer, verify=unchanged, observe_only=observe_only)
     return {
         "environment": settings.environment,
         "tenant_id": manifest["tenant_id"],
         "runtime_sha256": expected_sha256,
-        "result": "registered" if changed else "unchanged",
+        "result": "absent" if changed is None else "registered" if changed else "unchanged",
         "scope": "inactive-runtime-registration-only",
         "activated": False,
         "business_acceptance": False,
