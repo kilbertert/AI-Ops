@@ -506,6 +506,7 @@ def test_cancel_between_open_and_start_never_calls_consumer_model(registered, tm
 def test_target_http_preserves_original_refusal_code_instead_of_500(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from aiops_diagnostics.common.http_auth import build_internal_token_headers
     from aiops_diagnostics.gateway import environment_trial as trial
 
