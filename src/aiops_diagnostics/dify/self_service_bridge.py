@@ -142,7 +142,7 @@ def handle(handler, bridge):
                 and isinstance(payload["validation_plan"], str)
                 and re.fullmatch(r"plan_[0-9a-f]{32}", payload["validation_plan"])
                 and isinstance(payload["case_ref"], str)
-                and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", payload["case_ref"])
+                and re.fullmatch(tenant_reference, payload["case_ref"])
                 and isinstance(payload["capabilities"], list)
                 and 1 <= len(payload["capabilities"]) <= 3
                 and all(

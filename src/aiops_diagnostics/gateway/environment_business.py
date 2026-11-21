@@ -7,7 +7,6 @@ import math
 import os
 import re
 import time
-from datetime import datetime
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import (
@@ -15,6 +14,8 @@ from aiops_diagnostics.common.private_files import (
     validate_private_file,
     write_private_text,
 )
+from aiops_diagnostics.common.scalar_rules import declared_timezone, parse_stored_time
+from aiops_diagnostics.data.order_status import StatusRole, role_of
 from aiops_diagnostics.execution.agent_runs import scope_from_json
 from aiops_diagnostics.gateway import environment_registry
 from aiops_diagnostics.identity.order_identity import is_order_identifier
@@ -122,8 +123,11 @@ def load_case(context, spec, capability):
             or item["device_id"] not in item["question"]
         ):
             raise ValueError("explicit case device required")
-        begin, end = (datetime.fromisoformat(item[k]) for k in ("start", "end"))
-        if not begin.tzinfo or not end.tzinfo or not 0 < (end - begin).total_seconds() <= 31 * 86400:
+        begin, end = (parse_stored_time(item[k]) for k in ("start", "end"))
+        if (
+            any(declared_timezone(item[k]) is None for k in ("start", "end"))
+            or not 0 < (end - begin).total_seconds() <= 31 * 86400
+        ):
             raise ValueError("invalid case window")
     return case, hashlib.sha256(raw).hexdigest()
 
@@ -212,19 +216,32 @@ def operator_evidence(context, capability, trial_id, case, spec):
         if (
             run.order_no != case["order_no"]
             or str(detail.get("orderNo")) != case["order_no"]
-            or detail.get("status") not in (3, "3")
+            or role_of(detail.get("status"))
+            not in {
+                StatusRole.UNCONTROLLABLE_EXCEPTION,
+                StatusRole.EXCEPTION_ALREADY_HANDLED,
+                StatusRole.CONTROLLED_ABNORMAL_END,
+            }
         ):
             raise ValidationRefused("ENVIRONMENT_VALIDATION_ABNORMAL_ORDER_REQUIRED")
         expected = {"cpms_order_detail", "cpms_charging_samples", "cpms_order_process_stats"}
-        if not expected <= set(evidence):
+        samples = evidence.get("cpms_charging_samples", {}).get("data", {}).get("records", [])
+        stats = evidence.get("cpms_order_process_stats", {}).get("data", {})
+        if (
+            not expected <= set(evidence)
+            or not isinstance(samples, list)
+            or not samples
+            or stats.get("sample_count") != len(samples)
+            or not any(m.get("count", 0) > 0 for m in stats.get("metrics", []))
+            or any(str(r.get("orderNo")) != case["order_no"] for r in samples)
+        ):
             raise ValidationRefused("ENVIRONMENT_VALIDATION_PROCESS_EVIDENCE_REQUIRED")
         objects = [case["order_no"]]
     else:
         data = evidence.get("cpms_device_offline", {}).get("data", {})
         window = data.get("window", {})
         if data.get("scope", {}).get("device_id") != case["device_id"] or any(
-            datetime.fromisoformat(window.get(k, "")) != datetime.fromisoformat(case[k])
-            for k in ("start", "end")
+            parse_stored_time(window.get(k, "")) != parse_stored_time(case[k]) for k in ("start", "end")
         ):
             raise ValidationRefused("ENVIRONMENT_VALIDATION_OFFLINE_SCOPE_MISMATCH")
         if not any(
@@ -244,8 +261,7 @@ def operator_evidence(context, capability, trial_id, case, spec):
     }
 
 
-def step(context, payload):
-    from aiops_diagnostics.gateway import environment_trial as trial
+def step(context, payload, *, start_trial, read_trial, resolve_identity):
 
     if (
         set(payload) != {"spec", "capability", "observe_only"}
@@ -274,7 +290,13 @@ def step(context, payload):
             if record["spec"] != spec or record["case_sha256"] != case_digest:
                 raise ValueError("validation case changed")
             if "result" in record:
-                caller = trial.identity(context, case["operator_token"])
+                # 恢复必须经过原run交付授权，不能把持久成功变成新的有效期。
+                readback = read_trial(
+                    context, {"app_id": spec["operator_app"], "trial_id": record["trial_id"]}
+                )
+                if readback["status"] != "completed":
+                    raise ValidationRefused("ENVIRONMENT_VALIDATION_RESULT_EXPIRED")
+                caller = resolve_identity(context, case["operator_token"])
                 if caller.scope_fingerprint != record["result"]["evidence"]["scope_fingerprint"]:
                     raise ValueError("validation identity changed")
                 return record["result"]
@@ -302,7 +324,7 @@ def step(context, payload):
         if record is None:
             record = {"spec": spec, "case_sha256": case_digest}
             write_private_text(file, json.dumps(record))
-            started = trial.start(
+            started = start_trial(
                 context,
                 {
                     "app_id": spec["operator_app"],
@@ -315,7 +337,7 @@ def step(context, payload):
             write_private_text(file, json.dumps(record))
         deadline = time.monotonic() + 200
         while True:
-            result = trial.read(context, {"app_id": spec["operator_app"], "trial_id": record["trial_id"]})
+            result = read_trial(context, {"app_id": spec["operator_app"], "trial_id": record["trial_id"]})
             if result["status"] not in {"pending", "queued", "running"}:
                 break
             if time.monotonic() >= deadline:

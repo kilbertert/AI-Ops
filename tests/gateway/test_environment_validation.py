@@ -63,8 +63,8 @@ def submit(f, capabilities=None, **extra):
             validation_plan=f[2],
             capabilities=capabilities or ["consumer", "order", "offline"],
             case_ref="approved-case",
-            **extra,
-        ),
+        )
+        | extra,
     )
 
 
@@ -190,7 +190,8 @@ def test_worker_resume_does_not_repeat_unknown_consumer_start(tmp_path, monkeypa
     assert calls[1]["result"]["state"] == "blocked"
 
 
-def test_operator_evidence_requires_actual_object_process_and_node(monkeypatch):
+@pytest.mark.parametrize("order_status", [2, 3, 5])
+def test_operator_evidence_requires_actual_object_process_and_node(monkeypatch, order_status):
     from aiops_diagnostics.execution.agent_runs import scope_to_json
     from gateway.test_environment_trial import scope
 
@@ -203,9 +204,9 @@ def test_operator_evidence_requires_actual_object_process_and_node(monkeypatch):
         order_no="order-a",
         snapshot={
             "evidence": {
-                "cpms_order_detail": {"data": {"orderNo": "order-a", "status": 3}},
-                "cpms_charging_samples": {"data": {}},
-                "cpms_order_process_stats": {"data": {}},
+                "cpms_order_detail": {"data": {"orderNo": "order-a", "status": order_status}},
+                "cpms_charging_samples": {"data": {"records": [{"orderNo": "order-a", "voltage": 220}]}},
+                "cpms_order_process_stats": {"data": {"sample_count": 1, "metrics": [{"count": 1}]}},
             }
         },
         scope_fingerprint="f" * 64,
@@ -221,7 +222,9 @@ def test_operator_evidence_requires_actual_object_process_and_node(monkeypatch):
     run.snapshot["evidence"].pop("cpms_order_process_stats")
     with pytest.raises(ValueError, match="PROCESS"):
         business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
-    run.snapshot["evidence"]["cpms_order_process_stats"] = {"data": {}}
+    run.snapshot["evidence"]["cpms_order_process_stats"] = {
+        "data": {"sample_count": 1, "metrics": [{"count": 1}]}
+    }
     run.order_no = "other"
     with pytest.raises(ValueError, match="ORDER"):
         business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
@@ -256,9 +259,21 @@ def test_target_persists_intent_and_never_restarts_an_unknown_run(tmp_path, monk
 
     monkeypatch.setattr(trial, "start", lost)
     with pytest.raises(OSError):
-        business.step(context, {"spec": spec, "capability": "order", "observe_only": False})
+        business.step(
+            context,
+            {"spec": spec, "capability": "order", "observe_only": False},
+            start_trial=trial.start,
+            read_trial=trial.read,
+            resolve_identity=trial.identity,
+        )
     with pytest.raises(business.ValidationRefused, match="START_UNCONFIRMED"):
-        business.step(context, {"spec": spec, "capability": "order", "observe_only": False})
+        business.step(
+            context,
+            {"spec": spec, "capability": "order", "observe_only": False},
+            start_trial=trial.start,
+            read_trial=trial.read,
+            resolve_identity=trial.identity,
+        )
     assert attempts == [True]
     assert "synthetic-secret" not in next(tmp_path.rglob("order.json")).read_text()
 
@@ -291,9 +306,19 @@ def test_target_completed_run_is_checked_and_persisted_without_token(tmp_path, m
     evidence["scope_fingerprint"] = scope().scope_fingerprint
     monkeypatch.setattr(business, "operator_evidence", lambda *a: evidence)
     monkeypatch.setattr(trial, "identity", lambda *a: scope())
-    first = business.step(context, {"spec": spec, "capability": "order", "observe_only": False})
+    first = business.step(
+        context,
+        {"spec": spec, "capability": "order", "observe_only": False},
+        start_trial=trial.start,
+        read_trial=trial.read,
+        resolve_identity=trial.identity,
+    )
     assert business.step(
-        context, {"spec": spec, "capability": "order", "observe_only": False}
+        context,
+        {"spec": spec, "capability": "order", "observe_only": False},
+        start_trial=trial.start,
+        read_trial=trial.read,
+        resolve_identity=trial.identity,
     ) == first and calls == [True]
     assert first["business_accuracy"] == "unconfirmed"
     assert "synthetic-secret" not in next(tmp_path.rglob("order.json")).read_text()
@@ -353,7 +378,13 @@ def test_readonly_recovery_without_remote_intent_never_starts_a_run(tmp_path, mo
     monkeypatch.setattr(business, "load_case", lambda *a: (case, "c" * 64))
     monkeypatch.setattr(trial, "start", lambda *a: pytest.fail("recovery must not start"))
     with pytest.raises(business.ValidationRefused, match="START_UNCONFIRMED"):
-        business.step(context, {"spec": spec, "capability": "order", "observe_only": True})
+        business.step(
+            context,
+            {"spec": spec, "capability": "order", "observe_only": True},
+            start_trial=trial.start,
+            read_trial=trial.read,
+            resolve_identity=trial.identity,
+        )
 
 
 def test_case_is_private_bound_expiring_and_missing_scope_does_not_hide_other_cases(tmp_path, monkeypatch):
@@ -394,3 +425,79 @@ def test_case_is_private_bound_expiring_and_missing_scope_does_not_hide_other_ca
         business.load_case(context, spec, "order")
     with pytest.raises(ValueError):
         business.load_case(context, {**spec, "case_ref": "../untrusted"}, "order")
+
+
+def test_saved_success_cannot_bypass_expired_trial_authorization(tmp_path, monkeypatch):
+    from aiops_diagnostics.common.private_files import write_private_text
+    from aiops_diagnostics.gateway import environment_trial as trial
+
+    spec = dict(
+        id="task_" + "d" * 32,
+        environment="a",
+        tenant_id="same",
+        case_ref="case",
+        capabilities=["order"],
+        installed={"runtime_sha256": "a" * 64},
+        operator_app="app-a",
+        consumer={"app_id": "app-c"},
+    )
+    case = {
+        "operator_token": "synthetic-secret",
+        "cases": {"order": {"question": "分析order-a", "order_no": "order-a"}},
+    }
+    context = SimpleNamespace(settings=SimpleNamespace(data_home=tmp_path))
+    monkeypatch.setattr(business, "installation", lambda *a: None)
+    monkeypatch.setattr(business, "load_case", lambda *a: (case, "c" * 64))
+    write_private_text(
+        tmp_path / "business-validation" / spec["id"] / "order.json",
+        json.dumps({"spec": spec, "case_sha256": "c" * 64, "trial_id": "qa-old", "result": proof("order")}),
+    )
+
+    def expired(*a):
+        raise trial.TrialRefused("ENVIRONMENT_TRIAL_NOT_FOUND")
+
+    with pytest.raises(trial.TrialRefused):
+        business.step(
+            context,
+            {"spec": spec, "capability": "order", "observe_only": True},
+            start_trial=lambda *a: pytest.fail("must not restart"),
+            read_trial=expired,
+            resolve_identity=lambda *a: pytest.fail("readback must happen first"),
+        )
+
+
+def test_cancel_between_open_and_start_never_calls_consumer_model(registered, tmp_path, monkeypatch):
+    state = registered[0]
+    identifier = submit(registered, ["consumer"]).json()["id"]
+    owner = "c" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    calls = []
+
+    def remote(root, target, env, payload, control=False):
+        calls.append(payload["action"])
+        assert payload["action"] == "business-step"
+        assert (
+            state[0][2]
+            .post("/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True})
+            .status_code
+            == 200
+        )
+        return dict(
+            candidate={},
+            token="ect_synthetic",
+            question="read",
+            expected_reference="r",
+            scope_fingerprint="f" * 64,
+            case_sha256="c" * 64,
+        )
+
+    monkeypatch.setattr(worker, "local_trial", remote)
+
+    def request(payload):
+        response = internal(state, payload)
+        if response.status_code != 200:
+            raise ValueError("cancelled")
+        return response.json()
+
+    result = worker.execute(tmp_path, request, identifier, owner)
+    assert result["state"] == "cancelled" and calls == ["business-step"]

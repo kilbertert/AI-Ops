@@ -32,15 +32,18 @@ def candidate_workflow_sha(dsl):
 def observed(context, value):
     scope, settings = descriptor(value), context.settings
     path = settings.environment_management_registry_file or settings.environment_registry_file
+    # 计划read持同一个flock，必须在外层取得，再在临界区核当前摘要。
+    with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+        request = json.loads(tasks._row(conn, scope["task_id"])["request"])
+    plan = plans.read(
+        path, tuple(request["identity"]), scope["plan_id"], settings.environment_onboarding_file
+    )
     with drafts._locked(path), gateway_db.connection(drafts._database(path), readonly=True) as conn:
         row = tasks._row(conn, scope["task_id"])
         request, result = json.loads(row["request"]), json.loads(row["result"])
         tasks._authorize(path, tuple(request["identity"]), scope["environment"])
         renewal = scope["plan_id"] != request["plan"]["id"]
         tasks._current(path, request, settings.environment_onboarding_file, reconciling=renewal)
-        plan = plans.read(
-            path, tuple(request["identity"]), scope["plan_id"], settings.environment_onboarding_file
-        )
         if (
             plan["state"] == "expired"
             or plan["digest"] != request["plan"]["digest"]

@@ -200,3 +200,31 @@ def test_trial_media_rechecks_lease_before_and_after_fetch(observed, monkeypatch
     assert response.status_code == (200 if change == "none" else 403)
     assert response.body == (b"PNGDATA" if change == "none" else b"")
     assert len(fetched) == (1 if during_fetch or change == "none" else 0)
+
+
+def test_same_input_fresh_plan_can_validate_installed_candidate_without_reviving_old_plan(observed):  # noqa: F811
+    from aiops_diagnostics.gateway import environment_plans as plans
+    from gateway.test_environment_tasks import ADMIN
+
+    state, context, value, _ = observed
+    path, reference = state[0][0][:2]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        conn.execute("UPDATE environment_plans SET expires_at=0")
+        request = json.loads(_task_row(state, value["task_id"])["request"])
+        request["plan"]["expires_at"] = 0
+        conn.execute(
+            "UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), value["task_id"])
+        )
+    with pytest.raises((ValueError, RuntimeError)):
+        trial.observed(context, value)
+    plan = plans.preflight(
+        path,
+        ADMIN,
+        value["environment"],
+        request["plan"]["draft_revision"],
+        request["plan"]["registry_revision"],
+        reference,
+    )
+    updated = {**value, "plan_id": plan["id"]}
+    assert trial.observed(context, updated)[4][0] == value["environment"]
+    assert json.loads(_task_row(state, value["task_id"])["request"])["plan"]["expires_at"] == 0

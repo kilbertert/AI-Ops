@@ -110,7 +110,7 @@ def dispatch(context, payload):
         {"validation", "id", "owner"},
         {"validation", "id", "owner", "capability"},
         {"validation", "id", "owner", "capability", "result"},
-    ) or payload.get("validation") not in {"stage", "step", "complete"}:
+    ) or payload.get("validation") not in {"stage", "step", "complete", "continue"}:
         raise tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
     path = management._path(context)
     with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
@@ -123,6 +123,9 @@ def dispatch(context, payload):
             or row["lease_until"] <= time.time()
         ):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_LEASE_LOST")
+        if payload["validation"] == "continue":
+            current(context, conn, row["id"], fresh=True)
+            return {"authorized": True}
         if payload["validation"] == "complete":
             result = json.loads(row["result"])
             checks = result["checks"]

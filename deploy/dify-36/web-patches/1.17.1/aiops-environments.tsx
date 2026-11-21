@@ -1071,21 +1071,23 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        {item.action === 'candidate-register'
-                          ? '取消运行登记（等待安全结果）'
-                          : item.action === 'candidate-install'
-                            ? '取消候选安装（等待安全结果）'
-                            : item.action === 'consumer-prepare'
-                              ? '取消消费者准备'
-                              : item.action === 'operator-prepare'
-                                ? '取消管家准备'
-                                : item.action === 'knowledge-connect'
-                                  ? '取消知识连接准备'
-                                  : item.action === 'knowledge-prepare'
-                                    ? '取消知识准备'
-                                    : item.action === 'workspace-prepare'
-                                      ? '取消工作区准备'
-                                      : '取消现场预检'}
+                        {item.action === 'candidate-validate'
+                          ? '取消业务验证（等待本轮结束）'
+                          : item.action === 'candidate-register'
+                            ? '取消运行登记（等待安全结果）'
+                            : item.action === 'candidate-install'
+                              ? '取消候选安装（等待安全结果）'
+                              : item.action === 'consumer-prepare'
+                                ? '取消消费者准备'
+                                : item.action === 'operator-prepare'
+                                  ? '取消管家准备'
+                                  : item.action === 'knowledge-connect'
+                                    ? '取消知识连接准备'
+                                    : item.action === 'knowledge-prepare'
+                                      ? '取消知识准备'
+                                      : item.action === 'workspace-prepare'
+                                        ? '取消工作区准备'
+                                        : '取消现场预检'}
                       </Button>
                     )}
                   </article>

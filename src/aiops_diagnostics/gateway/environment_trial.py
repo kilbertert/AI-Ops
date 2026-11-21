@@ -276,7 +276,9 @@ def register(app, context):
                 from .environment_business import ValidationRefused, step
 
                 try:
-                    result = await asyncio.to_thread(step, context, payload)
+                    result = await asyncio.to_thread(
+                        step, context, payload, start_trial=start, read_trial=read, resolve_identity=identity
+                    )
                 except ValidationRefused as exc:
                     result = {
                         "capability": payload.get("capability"),

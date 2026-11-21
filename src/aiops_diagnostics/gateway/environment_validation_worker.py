@@ -68,6 +68,7 @@ def local_trial(root, target, environment, payload, *, control=False):
 def execute(root, request, identifier, owner):
     staged = request({"validation": "stage", "id": identifier, "owner": owner})
     spec = staged["spec"]
+    started_at = time.monotonic()
     if staged.get("cancelled"):
         return request({"validation": "complete", "id": identifier, "owner": owner})
     for capability in spec["capabilities"]:
@@ -80,6 +81,8 @@ def execute(root, request, identifier, owner):
             "error_code": "ENVIRONMENT_VALIDATION_UNCONFIRMED",
         }
         try:
+            if time.monotonic() - started_at > 560:
+                return request({"validation": "complete", "id": identifier, "owner": owner})
             if not previous:
                 try:
                     admitted = request(
@@ -106,6 +109,7 @@ def execute(root, request, identifier, owner):
             if capability != "consumer" or target.get("state") == "blocked":
                 result = target
             else:
+                request({"validation": "continue", "id": identifier, "owner": owner})
                 start = local_trial(
                     root,
                     {},
