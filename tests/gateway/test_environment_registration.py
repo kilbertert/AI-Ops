@@ -171,3 +171,50 @@ def test_cancelled_absent_registration_releases_scope_only_before_dispatch(insta
     plan = plans.preflight(path, ADMIN, "a", 1, 1, ref)
     retry = registration((state, source, plan["id"]))
     assert retry.status_code == (403 if dispatched else 200)
+
+
+@pytest.mark.parametrize("change", ["revoke", "draft"])
+def test_dispatched_registration_recovers_frozen_target_after_authority_changes(installed, change):
+    state = installed[0]
+    identifier = registration(installed).json()["id"]
+    owner = "b" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    payload = {"registration": "stage", "id": identifier, "owner": owner}
+    stage = internal(state, payload).json()
+    assert internal(state, {**payload, "registration": "authorize"}).status_code == 200
+    path = state[0][0]
+    if change == "revoke":
+        body = json.loads(path.read_text())
+        body["managers"] = []
+        path.write_text(json.dumps(body))
+    else:
+        with gateway_db.connection(drafts._database(path), write=True) as conn:
+            conn.execute("UPDATE environment_drafts SET digest=? WHERE environment='a'", ("f" * 64,))
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        conn.execute("UPDATE environment_tasks SET lease_until=0 WHERE id=?", (identifier,))
+    owner = "c" * 32
+    claim = internal(state, {"installation_claim": True, "owner": owner}).json()
+    assert claim["claimed"] is True and claim["id"] == identifier
+    observed = internal(state, {**payload, "owner": owner}).json()
+    assert observed["observe_only"] is True and observed["expected"] == stage["expected"]
+    assert internal(state, {**payload, "owner": owner, "registration": "authorize"}).status_code in {403, 409}
+    result = dict(
+        id=identifier,
+        environment="a",
+        tenant_id="same",
+        scope="inactive-runtime-registration-only",
+        state="observed",
+        result="unchanged",
+        executable=False,
+        activated=False,
+        business_acceptance=False,
+        source_revision=stage["expected"]["revision"],
+        **{k: v for k, v in stage["expected"].items() if k != "revision"},
+    )
+    final = internal(state, {**payload, "owner": owner, "registration": "complete", "result": result})
+    assert final.status_code == 200 and final.json()["state"] == "observed"
+    if change == "revoke":
+        assert (
+            state[0][2].post("/v1/dify/management/environment-tasks", json={"id": identifier}).status_code
+            == 403
+        )

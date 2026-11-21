@@ -18,6 +18,9 @@ ACTION = "candidate-register"
 def current(context, conn, identifier, *, fresh=False):
     row = tasks._row(conn, identifier)
     request = json.loads(row["request"])
+    # 已派发请求只用冻结目标对账，撤权/草稿变化不能把未知结果变成安全终态。
+    if not fresh and request.get("dispatched"):
+        return row, request
     path = management._path(context)
     tasks._authorize(path, tuple(request["identity"]), row["environment"])
     tasks._current(path, request, context.settings.environment_onboarding_file, reconciling=not fresh)
