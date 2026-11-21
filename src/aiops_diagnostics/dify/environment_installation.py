@@ -97,7 +97,8 @@ def submit(context, identity, identifier):
         if conn.execute(
             "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
             "AND state IN ('waiting','executing','checking') "
-            "AND json_extract(request,'$.action') IN ('candidate-install','candidate-register')",
+            "AND json_extract(request,'$.action') "
+            "IN ('candidate-install','candidate-register','candidate-validate')",
             (parent["environment"], task_id),
         ).fetchone():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
@@ -148,7 +149,7 @@ def dispatch(context, payload):
                 return {"claimed": False, "task": None}
             rows = conn.execute(
                 "SELECT id FROM environment_tasks WHERE json_extract(request,'$.action') "
-                "IN ('candidate-install','candidate-register') "
+                "IN ('candidate-install','candidate-register','candidate-validate') "
                 "AND state IN ('waiting','executing','checking') AND lease_until<=? "
                 "AND NOT EXISTS(SELECT 1 FROM environment_tasks live "
                 "WHERE live.environment=environment_tasks.environment AND live.id!=environment_tasks.id "
@@ -160,7 +161,11 @@ def dispatch(context, payload):
                 row = tasks._row(conn, selected[0])
                 request = json.loads(row["request"])
                 try:
-                    if request["action"] == "candidate-register":
+                    if request["action"] == "candidate-validate":
+                        from .environment_validation import current as validation_current
+
+                        validation_current(context, conn, row["id"], fresh=not request["attempted"])
+                    elif request["action"] == "candidate-register":
                         from .environment_registration import current as registration_current
 
                         registration_current(context, conn, row["id"], fresh=not request["attempted"])

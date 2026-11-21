@@ -167,6 +167,12 @@ def task(context, session, payload):
     try:
         if len(json.dumps(payload)) > 65536:
             raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+        if set(payload) == {"registration_task", "validation_plan", "capabilities", "case_ref"}:
+            from .environment_validation import submit
+
+            if not caller.platform:
+                raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
+            return submit(context, identity, payload)
         if set(payload) == {"installation_task", "registration_plan"}:
             from .environment_registration import submit
 
@@ -488,6 +494,10 @@ def register(app, context, session_dependency):
         try:
             if len(json.dumps(payload)) > 65536:
                 raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
+            if "validation" in payload:
+                from .environment_validation import dispatch
+
+                return dispatch(context, payload)
             if "registration" in payload:
                 from .environment_registration import dispatch
 
