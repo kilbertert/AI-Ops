@@ -62,6 +62,7 @@ def handle(handler, bridge):
                 "plan_id",
                 "candidate_plan",
                 "candidate_task",
+                "verify_task",
                 "installation",
                 "site_task",
                 "workspace_task",
@@ -147,6 +148,13 @@ def handle(handler, bridge):
             )
         elif set(payload) == {"consumer_sources"}:
             valid = payload["consumer_sources"] is True
+        elif set(payload) == {"verify_task", "plan_id"}:
+            valid = (
+                isinstance(payload["verify_task"], str)
+                and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", payload["verify_task"])
+                and isinstance(payload["plan_id"], str)
+                and re.fullmatch(r"plan_[0-9a-f]{32}", payload["plan_id"])
+            )
         elif set(payload) == {"plan_id"}:
             valid = isinstance(payload["plan_id"], str) and re.fullmatch(
                 r"plan_[0-9a-f]{32}", payload["plan_id"]
@@ -193,6 +201,7 @@ def handle(handler, bridge):
         "candidate_task",
         "installation",
         "candidate_plan",
+        "verify_task",
         "plan_id",
         "site_task",
         "workspace_task",
