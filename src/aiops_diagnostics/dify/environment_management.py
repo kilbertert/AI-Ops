@@ -220,6 +220,12 @@ def task(context, session, payload):
             if not getattr(context.settings, "environment_task_key", ""):
                 raise auth.SetupRefused("ENVIRONMENT_TASK_WORKER_UNAVAILABLE")
             return environment_tasks.submit(path, identity, payload["plan_id"], reference)
+        if set(payload) == {"verify_task", "plan_id"}:
+            if not getattr(context.settings, "environment_task_key", ""):
+                raise auth.SetupRefused("ENVIRONMENT_TASK_WORKER_UNAVAILABLE")
+            return environment_tasks.submit_verify(
+                path, identity, payload["plan_id"], payload["verify_task"], reference
+            )
         if set(payload) == {"site_task", "tenant_id"}:
             if not getattr(context.settings, "environment_task_key", ""):
                 raise auth.SetupRefused("ENVIRONMENT_TASK_WORKER_UNAVAILABLE")

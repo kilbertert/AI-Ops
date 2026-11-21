@@ -874,3 +874,217 @@ def test_local_trial_dispatch_pins_loopback_source(tmp_path, monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def verdict(environment, *, blocked=False, **overrides):
+    now = time.time()
+    evidence = dict(
+        declared_target="124",
+        resolved_host="singapore-server",
+        remote_hostname="ecs-2c54",
+        machine_id_sha256="d" * 64,
+        service_user_present=True,
+    )
+    if blocked:
+        evidence.update(remote_hostname="", machine_id_sha256="", service_user_present=False)
+    value = dict(
+        id="verify_" + "a" * 32,
+        scope="managed-host-verification-only",
+        environment=environment,
+        check="managed-host-identity",
+        state="blocked" if blocked else "observed",
+        executable=False,
+        evidence=evidence,
+        created_at=now,
+        expires_at=now + 900,
+    )
+    value.update(overrides)
+    return value
+
+
+def verify_job(prepared, environment="a"):
+    path, ref, client, _ = prepared
+    plan = plans.preflight(path, ADMIN, environment, 1, 1, ref)
+    response = client.post(
+        "/v1/dify/management/environment-tasks",
+        json={"verify_task": "managed-host-identity", "plan_id": plan["id"]},
+    )
+    assert response.status_code == 200, response.text
+    return response.json(), plan
+
+
+def test_host_verify_dedupes_per_plan_and_names_check(prepared):
+    path, _, client, _ = prepared
+    first, plan = verify_job(prepared)
+    again = client.post(
+        "/v1/dify/management/environment-tasks",
+        json={"verify_task": "managed-host-identity", "plan_id": plan["id"]},
+    )
+    assert again.status_code == 200 and again.json()["id"] == first["id"]
+    assert first["action"] == "host-verify" and first["executable"] is False
+    other, _ = verify_job(prepared, environment="b")
+    assert other["id"] != first["id"] and other["environment"] == "b"
+
+
+def test_host_verify_rejects_unknown_check_and_bad_payload(prepared):
+    _, _, client, _ = prepared
+    plan = plans.preflight(*(prepared[0], ADMIN, "a", 1, 1, prepared[1]))
+    refused = client.post(
+        "/v1/dify/management/environment-tasks",
+        json={"verify_task": "formal-network", "plan_id": plan["id"]},
+    )
+    assert refused.status_code in (403, 409), refused.text
+    extra = client.post(
+        "/v1/dify/management/environment-tasks",
+        json={"verify_task": "managed-host-identity", "plan_id": plan["id"], "evidence": {}},
+    )
+    assert extra.status_code in (403, 409, 422), extra.text
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"scope": "installed-instance-readiness-only"},
+        {"check": "formal-network"},
+        {"environment": "b"},
+        {"executable": True},
+        {"id": "site_" + "a" * 32},
+        {"state": "passed"},
+        {"created_at": float("nan")},
+        {"evidence": {}},
+        {"extra": "x"},
+    ],
+)
+def test_verify_schema_rejects_forged_or_alien_results(change):
+    value = {**verdict("a"), **change}
+    with pytest.raises(tasks.TaskRefused, match="RESULT_INVALID"):
+        tasks.validate_verify(value, "a")
+
+
+@pytest.mark.parametrize(
+    "state,evidence_change",
+    [
+        ("observed", {"remote_hostname": ""}),
+        ("observed", {"machine_id_sha256": "z" * 64}),
+        ("observed", {"machine_id_sha256": ""}),
+        ("observed", {"service_user_present": False}),
+        (
+            "blocked",
+            {"remote_hostname": "x", "machine_id_sha256": "d" * 64, "service_user_present": True},
+        ),
+    ],
+)
+def test_verify_state_must_match_captured_evidence(state, evidence_change):
+    value = verdict("a", blocked=True)
+    value["state"] = state
+    value["evidence"].update(evidence_change)
+    with pytest.raises(tasks.TaskRefused, match="RESULT_INVALID"):
+        tasks.validate_verify(value, "a")
+
+
+def test_verify_blocked_with_partial_evidence_is_honest(prepared):
+    path, ref, _, _ = prepared
+    job, _ = verify_job(prepared)
+    tasks.worker(path, ref, {"id": job["id"], "owner": "a" * 32})
+    value = verdict("a", blocked=True)
+    value["evidence"]["remote_hostname"] = "ecs-2c54"
+    done = tasks.worker(path, ref, {"id": job["id"], "owner": "a" * 32, "result": value})
+    assert done["state"] == "blocked" and done["result"]["evidence"]["remote_hostname"] == "ecs-2c54"
+
+
+def test_host_verify_claim_result_and_cancel(prepared):
+    path, ref, _, _ = prepared
+    job, _ = verify_job(prepared)
+    claim = tasks.worker(path, ref, {"id": job["id"], "owner": "a" * 32})
+    assert claim["claimed"] and claim["action"] == "host-verify"
+    assert claim["check"] == "managed-host-identity" and claim["target"]["host"] == "managed-a"
+    with pytest.raises(tasks.TaskRefused, match="RESULT_INVALID"):
+        tasks.worker(path, ref, {"id": job["id"], "owner": "a" * 32, "result": receipt("a")})
+    done = tasks.worker(path, ref, {"id": job["id"], "owner": "a" * 32, "result": verdict("a")})
+    assert done["state"] == "observed" and done["result"]["scope"] == "managed-host-verification-only"
+    blocked_job, _ = verify_job(prepared, environment="b")
+    tasks.worker(path, ref, {"id": blocked_job["id"], "owner": "b" * 32})
+    blocked = tasks.worker(
+        path, ref, {"id": blocked_job["id"], "owner": "b" * 32, "result": verdict("b", blocked=True)}
+    )
+    assert blocked["state"] == "blocked"
+
+
+def test_host_verify_worker_collects_readonly_facts(monkeypatch):
+    from pathlib import Path
+
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    claim = {
+        "target": dict(host="singapore-server", user="aiops", port=18951),
+        "environment": "a",
+        "check": "managed-host-identity",
+    }
+    root = Path(__file__).resolve().parents[2]
+    commands = []
+
+    def output_fake(args, **kwargs):
+        commands.append(args)
+        compile(kwargs["input"], "remote-verify", "exec")
+        assert "systemctl" not in kwargs["input"] and "curl" not in kwargs["input"]
+        return json.dumps(
+            {"hostname": "ecs-2c54", "machine_id_sha256": "e" * 64, "service_user_present": True}
+        )
+
+    monkeypatch.setattr(worker.subprocess, "check_output", output_fake)
+    result = worker.verify(root, claim)
+    assert result["state"] == "observed" and result["scope"] == "managed-host-verification-only"
+    assert result["evidence"] == {
+        "declared_target": "124",
+        "resolved_host": "singapore-server",
+        "remote_hostname": "ecs-2c54",
+        "machine_id_sha256": "e" * 64,
+        "service_user_present": True,
+    }
+    assert commands[0][1] == "exec" and commands[0][2] == "124" and "--allow-service-exec" in commands[0]
+    missing = dict(claim["target"], user="no-such-user-ok")
+    facts = json.dumps({"hostname": "ecs-2c54", "machine_id_sha256": "e" * 64, "service_user_present": False})
+    monkeypatch.setattr(worker.subprocess, "check_output", lambda *a, **kw: facts)
+    assert worker.verify(root, {**claim, "target": missing})["state"] == "blocked"
+    bad = {**claim, "target": {**claim["target"], "host": "--project"}}
+    with pytest.raises(ValueError, match="fixed target"):
+        worker.verify(root, bad)
+
+
+def test_host_verify_run_dispatches_and_unreachable_reconciles(prepared, tmp_path, monkeypatch):
+    import subprocess
+
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    path, ref, client, _ = prepared
+    job, _ = verify_job(prepared)
+
+    class Response:
+        def __init__(self, content):
+            self.content = content
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def read(self, _):
+            return self.content
+
+    def remote(spec):
+        response = client.post("/v1/internal/environment-tasks", content=spec.body, headers=spec.headers)
+        assert response.status_code == 200, response.text
+        return Response(response.content)
+
+    monkeypatch.setattr(worker, "open_response", remote)
+    monkeypatch.setattr(worker.subprocess, "check_output", lambda *a, **kw: "")
+    monkeypatch.setattr(worker.subprocess, "run", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        worker, "verify", lambda *a, **kw: (_ for _ in ()).throw(subprocess.TimeoutExpired("d", 30))
+    )
+    first = worker.run(tmp_path, "https://control.example", "worker-fixture", job["id"])
+    assert first["state"] == "reconcile"
+    monkeypatch.setattr(worker, "verify", lambda root, claim: verdict(claim["environment"]))
+    second = worker.run(tmp_path, "https://control.example", "worker-fixture", job["id"])
+    assert second["id"] == first["id"] and second["state"] == "observed"

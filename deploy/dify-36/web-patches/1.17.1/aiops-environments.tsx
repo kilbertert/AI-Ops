@@ -57,6 +57,7 @@ type SiteTask = {
   id: string
   action?: string
   tenant_id?: string
+  environment?: string
   plan_id: string
   state: string
   cancel_requested: boolean
@@ -69,6 +70,11 @@ type SiteTask = {
     scope?: string
     installation?: string
     version?: string
+    evidence?: {
+      remote_hostname?: string
+      machine_id_sha256?: string
+      service_user_present?: boolean
+    }
     steps?: { id: string; action: string; state: string; error_code: string }[]
     checks?: { id: string; state: string }[]
   }
@@ -614,6 +620,16 @@ export default function EnvironmentManagement() {
                 >
                   请求现场预检
                 </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy || plan.state === 'expired'}
+                  onClick={() =>
+                    void siteTasks({ verify_task: 'managed-host-identity', plan_id: plan.id })
+                  }
+                >
+                  主机身份验收
+                </Button>
                 <section aria-label="一次准备候选" className="space-y-2 pt-3">
                   <h3 className="system-sm-semibold">一次准备候选</h3>
                   <p>自动串联现场预检、工作区、知识连接与双端应用；不安装或启用正式服务。</p>
@@ -694,6 +710,26 @@ export default function EnvironmentManagement() {
                     {item.action === 'knowledge-connect' && <p>候选知识连接 · {item.tenant_id}</p>}
                     {item.action === 'operator-prepare' && <p>候选管家应用 · {item.tenant_id}</p>}
                     {item.action === 'consumer-prepare' && <p>候选消费者应用 · {item.tenant_id}</p>}
+                    {item.action === 'host-verify' && (
+                      <section aria-label={`主机身份验收：${item.environment}`}>
+                        <p>
+                          主机身份验收 · {item.environment}：
+                          {taskLabels[item.state] || item.state}
+                        </p>
+                        {item.result.evidence && (
+                          <>
+                            <p className="system-xs-regular break-all">
+                              现场主机：{item.result.evidence.remote_hostname || '未采集'}
+                            </p>
+                            <p className="system-xs-regular">
+                              服务身份：
+                              {item.result.evidence.service_user_present ? '存在' : '缺失'}
+                            </p>
+                          </>
+                        )}
+                        <p>仅证明任务落在已登记主机，不代替正式网络、容量与业务验收</p>
+                      </section>
+                    )}
                     {item.action === 'candidate-install' && (
                       <section aria-label={`候选安装进度：${item.tenant_id}`}>
                         <p>

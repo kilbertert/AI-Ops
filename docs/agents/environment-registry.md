@@ -458,3 +458,17 @@ id匹配已有部署目标引用，node_file沿D30专属节点引用格式；秘
 相同远端编号不再次apply；租约/响应失联只observe原意图与installed，有pending标待恢复，不自动recover未知任务。
 取消只阻止新安装，在飞等待安全结果，不杀切换；结果留原摘要与版本，业务/注册/激活分别未执行。
 此片只证明已安装实例接续；冷安装完整链、真正三功能/身份/网络/客户端与正式激活仍需后继。
+
+### 受管主机身份验收（D38）
+
+环境页在有效冻结计划下点“主机身份验收”，提交`{verify_task:'managed-host-identity', plan_id}`。
+同一计划重复或换会话提交返回同一任务编号；任务沿原子任务的租约/取消/漂移/失联合同，
+由开发宿主既有`aiops-site-preflight` timer 领取，`host-verify`动作经 dev-host 指纹断言
+实际访问目标，只读采集`hostname`、`/etc/machine-id`的SHA256与目标服务身份存在性。
+原始machine-id不出目标，回执只含声明名、解析目标名、远端hostname、标识摘要与身份布尔。
+
+回执`scope=managed-host-verification-only`、`check=managed-host-identity`、`executable=false`、
+created/expires沿用900秒；`observed`要求三项现场事实齐全，缺失写`blocked`，
+目标不可达或断言失败仍记`ENVIRONMENT_TASK_TARGET_UNCONFIRMED`待核对，不判阻塞。
+验证只证明任务落在已登记主机，不代替正式网络、容量与业务验收，计划级pending不变；
+替身无法证明真实dev-host指纹断言，合并后按既有worker合同现场复验并登记交付状态。

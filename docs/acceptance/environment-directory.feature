@@ -344,6 +344,17 @@ Feature: 环境目录草稿与生效隔离
       When 请求更新制品引用
       Then 请求被拒绝且references、配置引用和既有制品不被覆盖
 
+  Rule: 受管主机身份验收由受限执行端独立取证
+    Scenario: 同一计划重复请求主机身份验收
+      Given 冻结文件计划仍有效且受管执行端已配置
+      When 获授权管理员重复请求主机身份验收并重新进入环境页面
+      Then 返回同一任务编号与持久进度，执行端经已登记主机身份只读采集hostname、machine-id摘要与服务身份存在性
+      And 回执标managed-host-verification-only、check=managed-host-identity、executable=false，正式网络与业务仍未验证
+    Scenario: 目标失联或现场事实异常
+      Given 主机身份验收任务已发出
+      When 目标不可达、声明解析歧义、采集字段缺失或管理员取消
+      Then 不可达记待核对不判阻塞，连通后字段缺失写blocked，漂移、取消与过期沿原子任务合同
+
   Rule: 停用候选安装任务只修改已登记的自有实例
     Scenario: 一次提交安装与重复回读
       Given 管理员的候选准备已完成且计划有效，目标自有实例及运行节点引用已登记
