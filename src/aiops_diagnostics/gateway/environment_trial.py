@@ -289,7 +289,7 @@ def register(app, context):
                     result = {
                         "capability": payload.get("capability"),
                         "state": "blocked",
-                        "error_code": exc.code,
+                        "error_code": str(exc),
                     }
                 return JSONResponse(result, headers={"Cache-Control": "no-store"})
             if action == "consumer-validation-evidence":

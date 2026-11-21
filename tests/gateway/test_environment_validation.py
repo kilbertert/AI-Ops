@@ -501,3 +501,33 @@ def test_cancel_between_open_and_start_never_calls_consumer_model(registered, tm
 
     result = worker.execute(tmp_path, request, identifier, owner)
     assert result["state"] == "cancelled" and calls == ["business-step"]
+
+
+def test_target_http_preserves_original_refusal_code_instead_of_500(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from aiops_diagnostics.common.http_auth import build_internal_token_headers
+    from aiops_diagnostics.gateway import environment_trial as trial
+
+    context = SimpleNamespace(
+        settings=SimpleNamespace(environment_task_key="synthetic", environment_registry_file="fixture"),
+        runtime=SimpleNamespace(),
+    )
+
+    def refused(*args, **kwargs):
+        raise trial.TrialRefused("ENVIRONMENT_TRIAL_EXPIRED")
+
+    monkeypatch.setattr(business, "step", refused)
+    app = FastAPI()
+    trial.register(app, context)
+    with TestClient(app, client=("127.0.0.1", 1234)) as client:
+        response = client.post(
+            "/v1/internal/environment-trial",
+            headers=build_internal_token_headers("synthetic", 300, int(time.time())),
+            json={"action": "business-step", "spec": {}, "capability": "order", "observe_only": True},
+        )
+    assert response.status_code == 200 and response.json() == {
+        "capability": "order",
+        "state": "blocked",
+        "error_code": "ENVIRONMENT_TRIAL_EXPIRED",
+    }
