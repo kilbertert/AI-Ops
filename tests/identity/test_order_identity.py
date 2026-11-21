@@ -205,7 +205,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "dify/dify_workspaces.py": 1,  # 应用 id
     "dify/operator_run_logs.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
     "dify/self_service_api.py": 1,  # knowledge_base_id
-    "dify/self_service_bridge.py": 3,  # knowledge_base_id、run_id和环境管理主体编号，非订单
+    "dify/self_service_bridge.py": 4,  # kb_id/run_id/主体编号/verify_task引用名，非订单
     "dify/self_service_identity.py": 1,
     "dify/environment_management.py": 2,  # 环境与公司租户编号，无订单匹配
     "execution/chat_execution.py": 3,  # 智能体 id / libraries 键 ×2
