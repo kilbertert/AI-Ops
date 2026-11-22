@@ -1,7 +1,15 @@
-# 公司网关来源校验合同（开发中）
+# 公司网关来源校验合同（旧可选能力）
 
-本片是已确认正式网关接入的第一道门，不等价于完整身份/只读数据接入。
-新环境先登记，再配置AIOPS_GATEWAY_COMPANY_GATEWAY_TRUST_FILE；旧环境不配置时完全不启用。
+以下合同仅对仍主动选择旧可选来源断言协议的部署适用，描述其保留的验证侧合同；
+按[手工环境目录方案](../architecture/2026-11-16-manual-environment-onboarding.md)
+（已批准的「不改公司仓库」路线）接入的部署不需要此设置。
+配套 Java 签发器工件（原 `integrations/cpms-java/cloud-gateway/`）从未交付、无运行消费者，
+本轮已移除；`GatewayAdmission` 与 `AIOPS_GATEWAY_COMPANY_GATEWAY_TRUST_FILE` 仍是
+现役安全门（41/124 均未启用，`environment_projection` 已禁环境模板覆写该键），
+退役它们需要完整迁移合同。
+
+本协议是正式网关接入的第一道门，不等价于完整身份/只读数据接入。
+选择本协议的部署：环境先登记，再配置AIOPS_GATEWAY_COMPANY_GATEWAY_TRUST_FILE；不配置时完全不启用。
 配置是0600 JSON：environment、issuer、keys（kid到RSA公钥PEM），最多4把RSA2048以上公钥供轮换；不存私钥。
 签发私钥只留公司正式网关，本环境真实登录/thirdSession必须校验成功后才签发，不用共享JWT密钥替代来源。
 
@@ -31,7 +39,8 @@ JSON紧凑无空格、ensure_ascii=true；公司侧需按同样转义规则或�
 
 受保护范围为/v1用户API；/v1/internal/、/v1/dify/与公开openapi保留各自原鉴权，不作为用户入口绕过。
 Dify登录/预览的跨环境凭据属于后续配套，不能由本片推断整个控制面已完成新认证。
-签发、只读回调、token级环境会话是接下来的公司适配交付；当前没有公司网关部署和真实双环境验收。
+签发、只读回调、token级环境会话原为配套的公司适配交付，已随公司签发路线放弃而取消；
+后续环境接入走手工环境目录路线，不以公司改码为前提。当前没有公司网关部署和真实双环境验收。
 
 独立防重放库的生命周期见ADR0265；禁止用旧备份覆盖正在使用的nonce记录。丢失/重建后至少等待150秒（120秒寿命＋30秒时钟偏差）才恢复入口。
 
