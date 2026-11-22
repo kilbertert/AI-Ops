@@ -67,9 +67,10 @@
 - 已派发任务取消或父过期：claim 重领与登记同规，只对 `dispatched` 冻结输入
   `observe_only` 回收真实结果，父终态不复活不补建（cancelled/blocked 保持）；
   fresh authorize 仍硬拒。取消与过期两场景真实 claim→complete 已验。
-- checking 任务无租约立即优先重领会饿死独立环境现场队列：与 `_next` reconcile
-  同规 60 秒节奏；`cancel=1` 在飞任务保持立即可领排空（发布在飞取消回归保持），
-  另 env 预检两次领取内必被服务。
+- checking 任务无租约立即优先重领会饿死独立环境现场队列：节奏与 `_next` reconcile
+  同规 60 秒，但**只限 `site-install`**（含已取消 checking 行——executing 排空本
+  即领，已观察未知的 checking 行不设例外）；非 cold 检查任务沿原即领合同不变
+  （发布在飞取消回归保持），另 env 预检两次领取内必被服务。
 - 父任务 `installation:not_executed` 与 cold 已装矛盾：`result.initial_installation`
   独立记录基础初装结果，原 runtime 安装字段语义不变；页面「基础初装：…·运行安装
   未执行」显示；窄屏租户按钮行 `flex-wrap` 修复（cold-flexwrap.png，几何断言

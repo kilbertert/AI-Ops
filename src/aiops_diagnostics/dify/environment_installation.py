@@ -235,9 +235,10 @@ def dispatch(context, payload):
                 "IN ('site-install','candidate-install','candidate-register','candidate-validate',"
                 "'environment-publish') "
                 "AND state IN ('waiting','executing','checking') AND lease_until<=? "
-                # 与现场队列reconcile同规：checking观察间隔60秒，残迹任务不抢占认领面；
-                # 已取消的在飞任务保持立即可领，排空到终态不等待。
-                "AND (state!='checking' OR updated_at<=? OR cancel=1) "
+                # 冷任务checking与现场reconcile同规60秒节奏，含已取消行：残迹初装不抢占
+                # 认领面；节奏只限site-install，非cold检查任务沿原即领合同不变。
+                "AND (state!='checking' OR updated_at<=? "
+                "OR json_extract(request,'$.action')!='site-install') "
                 "AND NOT EXISTS(SELECT 1 FROM environment_tasks live "
                 "WHERE live.environment=environment_tasks.environment AND live.id!=environment_tasks.id "
                 "AND live.state IN ('running','executing') AND live.lease_until>?) "

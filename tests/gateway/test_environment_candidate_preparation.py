@@ -445,17 +445,59 @@ def test_checking_cold_paces_reclaim_and_yields_independent_site_queue(candidate
     other, _ = create(state[0], "b")
     claim = internal(state, {"installation_claim": True, "owner": "e" * 32})
     assert claim.status_code == 200 and claim.json()["claimed"] is False, claim.text
+    # root复验输入：取消级联后cold为checking+cancel=1，两轮认领仍不得抢占。
+    state[0][2].post("/v1/dify/management/environment-tasks", json={"id": parent, "cancel": True})
+    assert next(r for r in rows(state) if r["id"] == cold)["cancel"] == 1
+    for _ in range(2):
+        claim = internal(state, {"installation_claim": True, "owner": "e" * 32})
+        assert claim.status_code == 200 and claim.json()["claimed"] is False, claim.text
     seen = set()
     for _ in range(2):
         claimed = tasks.worker(state[0][0], state[0][1], {"owner": "e" * 32})
         if claimed.get("claimed"):
             seen.add(claimed["id"])
     assert other["id"] in seen
-    # 冷却结束仍恢复观察循环，不被永久饿死。
+    # 非cold检查任务沿原即领合同：被选中后按其自身门禁对账，不受新节奏限频。
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        for served in seen - {other["id"]}:
+            conn.execute(
+                "UPDATE environment_tasks SET state='queued',owner='',lease_until=0 WHERE id=?",
+                (served,),
+            )
+        source = conn.execute(
+            "SELECT id,request FROM environment_tasks WHERE state='observed' LIMIT 1"
+        ).fetchone()
+        victim_request = json.loads(source["request"])
+        victim_request["action"] = "candidate-validate"
+        conn.execute(
+            "UPDATE environment_tasks SET state='checking',request=?,owner='',lease_until=0 WHERE id=?",
+            (json.dumps(victim_request), source["id"]),
+        )
+    claim = internal(state, {"installation_claim": True, "owner": "e" * 32})
+    assert claim.status_code == 200 and claim.json()["claimed"] is False, claim.text
+    assert next(r for r in rows(state) if r["id"] == source["id"])["state"] == "blocked"
+    # 冷却结束仍恢复观察循环；取消任务observed回执照常收敛终态。
     with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
         conn.execute("UPDATE environment_tasks SET updated_at=? WHERE id=?", (time.time() - 61, cold))
     again = internal(state, {"installation_claim": True, "owner": "f" * 32})
     assert again.status_code == 200 and again.json()["id"] == cold
+    stage = internal(state, {"installation": "stage", "id": cold, "owner": "f" * 32})
+    assert stage.status_code == 200 and stage.json()["observe_only"] is True
+    result = {
+        "id": cold,
+        "environment": "a",
+        "scope": "site-cold-installation-only",
+        "state": "observed",
+        "installation": "installed",
+        "executable": False,
+        "version": "1.2.3",
+        "source_revision": stage.json()["archives"]["application"]["revision"],
+        "artifact_sha256": stage.json()["archives"]["application"]["sha256"],
+        "config_sha256": "c" * 64,
+        "registry_sha256": "d" * 64,
+    }
+    done = internal(state, {"installation": "complete", "id": cold, "owner": "f" * 32, "result": result})
+    assert done.status_code == 200 and done.json()["state"] == "cancelled", done.text
 
 
 def test_cold_complete_accepts_absent_registry_only_as_already_installed(candidate_chain, tmp_path):
