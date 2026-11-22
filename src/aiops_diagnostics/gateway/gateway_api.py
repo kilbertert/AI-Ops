@@ -1893,40 +1893,41 @@ def create_gateway_app(
         ignored on purpose, and ``plans_for`` takes no request-derived argument
         for that reason.
 
-        Unconfigured means the route is **not enabled at all** (404, see the
-        route below), never "no key needed". Half-configuration is a startup
-        error, enforced in ``GatewayServerSettings.validate``.
+        Shared credentials remain exact opaque matches. A delegated credential
+        instead requires the central signing secret and current explicit grant;
+        neither route admits an anonymous caller. Half-configuration of the
+        original shared key remains a startup error.
         """
-        from aiops_diagnostics.knowledge import knowledge_delegation
-
-        presented = (authorization or "").removeprefix("Bearer ").strip()
-        if (
-            authorization
-            and authorization.startswith("Bearer ")
-            and presented.startswith(knowledge_delegation.PREFIX)
-        ):
-            try:
-                scope = knowledge_delegation.parse_token(context.settings.internal_token_secret, presented)
-                knowledge_delegation.active(context.settings, scope)
-            except (ValueError, OSError, RuntimeError) as exc:
-                raise StandardAPIError(403, "DIFY_CREDENTIAL_REJECTED", "credential rejected") from exc
-            return DifyIdentity(name="delegated", delegated_scope=scope)
         configured = context.settings.dify_knowledge_api_key
-        if not configured:
-            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_RETRIEVAL_UNAVAILABLE", "route not found")
-        if not authorization or not authorization.startswith("Bearer "):
-            raise StandardAPIError(
-                status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
-            )
-        presented = authorization.removeprefix("Bearer ").strip()
-        matches_production = secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8"))
-        matches_debug = bool(context.settings.dify_debug_api_key) and secrets.compare_digest(
-            context.settings.dify_debug_api_key.encode("utf-8"), presented.encode("utf-8")
+        presented = (authorization or "").removeprefix("Bearer ").strip()
+        bearer = authorization and authorization.startswith("Bearer ")
+        matches_production = (
+            bool(configured) and bearer and secrets.compare_digest(configured.encode(), presented.encode())
         )
+        matches_debug = (
+            bool(context.settings.dify_debug_api_key)
+            and bearer
+            and secrets.compare_digest(context.settings.dify_debug_api_key.encode(), presented.encode())
+        )
+        # 原共享key是不透明字符串；精确匹配必须先于新能力前缀解析。
         if matches_debug:
             return debug_dify_identity(context.settings)
         if matches_production:
             return PRODUCTION_IDENTITY
+        from aiops_diagnostics.knowledge import knowledge_delegation
+
+        if bearer and presented.startswith(knowledge_delegation.PREFIX):
+            try:
+                scope = knowledge_delegation.authorize(context.settings, presented)
+            except ValueError as exc:
+                raise StandardAPIError(403, "DIFY_CREDENTIAL_REJECTED", "credential rejected") from exc
+            return DifyIdentity(name="delegated", delegated_scope=scope)
+        if not configured:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_RETRIEVAL_UNAVAILABLE", "route not found")
+        if not bearer:
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
+            )
         from aiops_diagnostics.dify import candidate_knowledge
 
         if presented.startswith(candidate_knowledge.PREFIX):

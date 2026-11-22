@@ -203,8 +203,8 @@ class DelegatedKnowledgeClient:
             raise MediaAccessDenied("delegated media path invalid")
         self.list_knowledge_bases()
         headers = {"Authorization": bearer_auth_header(self.token)}
-        if range_header:
-            headers["Range"] = range_header
+        # 原MediaProxy接收完整bytes后只切片一次；不能把中央206切片再次按原偏移解析。
+        # 读取保留32MiB上限，避免修seek时引入无界视频下载。
         try:
             with open_response(
                 RequestSpec(

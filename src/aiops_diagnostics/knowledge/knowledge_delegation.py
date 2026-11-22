@@ -98,6 +98,18 @@ def active(settings, scope):
         raise DelegationRefused("KNOWLEDGE_DELEGATION_REFUSED")
 
 
+def authorize(settings, presented):
+    """中央授权源不可读时失败关闭；仅对外呈现固定凭据拒绝。"""
+    import sqlite3
+
+    try:
+        scope = parse_token(settings.internal_token_secret, presented)
+        active(settings, scope)
+        return scope
+    except (ValueError, OSError, RuntimeError, sqlite3.Error) as exc:
+        raise DelegationRefused("KNOWLEDGE_DELEGATION_REFUSED") from exc
+
+
 def issue(settings, environment, tenant, app, library):
     row = SelfServiceStore(settings.database_file, readonly=True).app(app)
     if row is None:

@@ -20,6 +20,9 @@ Status: Accepted（2026-11-22，用户批准多环境主线，实施拆分由主
 其是资源Bearer用法，不声称实现OAuth授权服务器。Dify External Knowledge API定义检索请求与
 records，metadata可携来源与媒体；本仓现有dify_knowledge_api解析/呈现为唯一协议适配。
 HMAC能力沿现有候选实现的密钥隔离域，但正式能力使用独立版本前缀及应用/授权世代约束。
+原共享key是不透明字符串，精确匹配先于新前缀分流，不能为新能力禁止旧key的前缀。
+[RFC9110§14](https://www.rfc-editor.org/rfc/rfc9110#section-14)的字节范围在目标原MediaProxy处理一次；
+中央读完整媒体，目标按原范围响应，避免中央206切片被目标再切片。委派媒体读取上限32MiB，超限明确不可用。
 
 ## 备选方案
 

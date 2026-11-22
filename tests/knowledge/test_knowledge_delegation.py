@@ -204,7 +204,7 @@ def test_original_consumer_read_chain_and_media_use_exact_environment(central):
         grant = runtime.media_signer.verify_signed(movie["url"])
         assert (
             for_application(runtime, "same", "app-" + env).fetch_media(grant, range_header="bytes=0-3")
-            == c.video[:4]
+            == c.video
         )
         assert all(call[2] == knowledge_tenant("same", env) for call in c.calls)
         c.calls.clear()
@@ -423,7 +423,18 @@ def test_original_http_agent_answer_and_media_recheck_local_admission(central, t
         assert read.status_code == 200 and read.content == c.image
         movie = env["client"].get(media[1]["url"], headers={"Range": "bytes=0-3"})
         assert movie.status_code == 206 and movie.content == c.video[:4]
+        seek = env["client"].get(media[1]["url"], headers={"Range": "bytes=4-7"})
+        assert seek.status_code == 206 and seek.content == c.video[4:8]
+        suffix = env["client"].get(media[1]["url"], headers={"Range": "bytes=-4"})
+        assert suffix.status_code == 206 and suffix.content == c.video[-4:]
         runtime.gateway_settings.consumer_chatflow_enabled = False
         before = len(c.calls)
         assert env["client"].get(media[0]["url"]).status_code == 403
         assert len(c.calls) == before
+
+
+def test_old_opaque_shared_key_prefix_still_uses_exact_match(tmp_path):
+    key = "kdx_existing-opaque-secret-at-least-32chars"
+    client = _client(tmp_path, _Runtime(), dify_knowledge_api_key=key)
+    response = client.get("/v1/dify/knowledge", headers={"Authorization": "Bearer " + key})
+    assert response.status_code == 200 and response.json()["total"] == 2
