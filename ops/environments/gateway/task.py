@@ -225,7 +225,19 @@ def register(inst, spec, *, observe_only=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("run", "observe", "register", "observe-registration"))
+    parser.add_argument(
+        "action",
+        choices=(
+            "run",
+            "observe",
+            "register",
+            "observe-registration",
+            "publication-stage",
+            "publication-activate",
+            "publication-restore",
+            "publication-observe",
+        ),
+    )
     for key in ("environment", "user", "port"):
         parser.add_argument("--" + key, required=True, type=int if key == "port" else str)
     args = parser.parse_args()
@@ -235,14 +247,19 @@ def main():
     bundle = Path(__file__).parent
     revision = (bundle / "REVISION").read_text().strip()
     checks = dict(line.split("  ", 1)[::-1] for line in (bundle / "SHA256SUMS").read_text().splitlines())
-    if set(checks) != {
+    expected = {
         "REVISION",
         "install.py",
         "probe.py",
         "runtime_check.py",
         "artifact_checks.py",
         "task.py",
-    } or any(install.digest(bundle / name) != digest for name, digest in checks.items()):
+    }
+    if (bundle / "publication.py").exists():
+        expected.add("publication.py")
+    if set(checks) != expected or any(
+        install.digest(bundle / name) != digest for name, digest in checks.items()
+    ):
         raise ValueError("installer bundle mismatch")
     inst = install.Installer(args.environment, args.user, args.port)
     inst.revision = revision
@@ -266,6 +283,28 @@ def main():
         if os.fstat(lock.fileno()).st_nlink != 1:
             raise ValueError("invalid installation lock")
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if args.action.startswith("publication-"):
+            import publication
+
+            file = Path(spec["path"])
+            install.trusted(file, private=True)
+            if file.stat().st_size > 1048576 or install.digest(file) != spec["sha256"]:
+                raise ValueError("release artifact mismatch")
+            document = json.loads(file.read_text())
+            action = args.action.removeprefix("publication-")
+            result = (
+                publication.stage(inst, document, observe_only=spec["observe_only"])
+                if action == "stage"
+                else publication.activate(
+                    inst, document, spec["verification"], observe_only=spec["observe_only"]
+                )
+                if action == "activate"
+                else publication.recover(inst, document["id"])
+                if action == "restore"
+                else publication.observe(inst, document)
+            )
+            print(json.dumps(result))
+            return
         result = (
             register(inst, spec, observe_only=args.action == "observe-registration")
             if args.action in {"register", "observe-registration"}

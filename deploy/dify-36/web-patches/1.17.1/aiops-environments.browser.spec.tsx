@@ -758,3 +758,77 @@ it('starts explicit business validation from registration without accepting a ve
   })
   await expect.element(screen.getByText(/业务准确性待确认，正式入口未启用/)).toBeVisible()
 })
+
+it('publishes from verified business and restores the same operation with visible admission', async () => {
+  const validation = {
+    id: `task_${'a'.repeat(32)}`,
+    action: 'candidate-validate',
+    tenant_id: 'same',
+    state: 'observed',
+    cancel_requested: false,
+    error_code: '',
+    result: {},
+  }
+  const plan = {
+    id: `plan_${'b'.repeat(32)}`,
+    state: 'blocked',
+    executable: false,
+    draft_revision: 2,
+    registry_revision: 4,
+    checks: [],
+  }
+  let publication: Record<string, unknown> | null = null
+  const calls: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json(data)
+      if (body.action === 'environment-plan') return Response.json(plan)
+      if (body.validation_task) {
+        publication = {
+          ...validation,
+          id: `task_${'c'.repeat(32)}`,
+          action: 'environment-publish',
+          state: 'observed',
+          result: { phase: 'activated', activated: true, directory: 'synchronized' },
+        }
+        return Response.json(publication)
+      }
+      if (body.restore_publication) {
+        publication = {
+          ...publication,
+          state: 'cancelled',
+          result: { phase: 'restored', activated: false },
+        }
+        return Response.json(publication)
+      }
+      return Response.json({ tasks: publication ? [publication, validation] : [validation] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '发布并开通：same', exact: true }).click()
+  expect(calls.find((body) => body.validation_task)).toEqual({
+    action: 'environment-task',
+    validation_task: validation.id,
+    publication_plan: plan.id,
+    confirm_readonly: true,
+    confirm_customer_knowledge: true,
+    acceptance_ref: 'readonly-diagnosis',
+  })
+  await expect.element(screen.getByText(/正式开通.*准入 已启用/)).toBeVisible()
+  await screen.getByRole('button', { name: '刷新目录', exact: true }).click()
+  await screen.getByRole('button', { name: '恢复本次开通', exact: true }).click()
+  expect(calls.at(-1)).toEqual({
+    action: 'environment-task',
+    restore_publication: `task_${'c'.repeat(32)}`,
+  })
+  await expect.element(screen.getByText(/正式开通.*已恢复.*准入 未启用/)).toBeVisible()
+  await page.screenshot({ path: './.vitest-browser/publication-render.png' })
+})

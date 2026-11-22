@@ -68,6 +68,8 @@ type SiteTask = {
     connection_id?: string
     app_id?: string
     scope?: string
+    phase?: string
+    activated?: boolean
     installation?: string
     result?: string
     version?: string
@@ -80,6 +82,20 @@ type SiteTask = {
     checks?: { id?: string; capability?: string; state: string; error_code?: string }[]
   }
 }
+const publicationPhases: Record<string, string> = {
+  readiness: '核验前置',
+  capacity: '并发容量验证',
+  central: '共享应用发布',
+  target: '目标配置准备',
+  staged: '目标配置已准备',
+  verify: '正式接线验证',
+  source: '同步配置来源',
+  activate: '切换准入',
+  activated: '准入已启用',
+  restoring: '正在恢复',
+  restored: '已恢复',
+}
+
 const taskLabels: Record<string, string> = {
   queued: '等待执行端',
   running: '正在取证',
@@ -329,6 +345,7 @@ export default function EnvironmentManagement() {
         'candidate-install',
         'candidate-register',
         'candidate-validate',
+        'environment-publish',
       ].includes(item.action || '') && ['queued', 'running', 'reconcile'].includes(item.state),
   )
   useEffect(() => {
@@ -571,7 +588,7 @@ export default function EnvironmentManagement() {
               </section>
               <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
                 <p className="max-w-xl system-sm-regular text-text-secondary">
-                  保存只更新草稿。现场预检通过后可准备候选工作区；应用、知识、业务验证和激活仍待完成。
+                  保存只更新草稿；执行对应计划并通过各项核验后，才会改变资源和准入。
                 </p>
                 <div className="flex gap-2">
                   <Button
@@ -597,7 +614,7 @@ export default function EnvironmentManagement() {
                 <p role="status">
                   {plan.state === 'expired'
                     ? '输入或有效期已变化，请重新预检。'
-                    : '计划已冻结；仍缺现场验证，不能执行安装或激活。'}
+                    : '计划已冻结；执行前将核对各项条件，以对应任务结果为准。'}
                 </p>
                 <ul className="space-y-1">
                   {plan.checks.map((check) => (
@@ -860,6 +877,59 @@ export default function EnvironmentManagement() {
                           </Button>
                         </section>
                       )}
+                    {item.action === 'candidate-validate' && item.state === 'observed' && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        disabled={busy || dirty || !plan || plan.state === 'expired'}
+                        onClick={() => {
+                          if (
+                            plan &&
+                            window.confirm(
+                              '按只读诊断范围发布并开通，并授权本应用所选知识库对客使用？系统会重新核验三项业务、权限、网络和容量；缺项不会启用，业务准确性仍待人工确认。',
+                            )
+                          )
+                            void siteTasks({
+                              validation_task: item.id,
+                              publication_plan: plan.id,
+                              confirm_readonly: true,
+                              confirm_customer_knowledge: true,
+                              acceptance_ref: 'readonly-diagnosis',
+                            })
+                        }}
+                      >
+                        发布并开通：{item.tenant_id}
+                      </Button>
+                    )}
+                    {item.action === 'environment-publish' && (
+                      <section>
+                        <p>
+                          正式开通 · {item.tenant_id}：{taskLabels[item.state] || item.state}；阶段{' '}
+                          {publicationPhases[String(item.result?.phase || '')] ||
+                            String(item.result?.phase || '')}
+                          ，准入 {item.result?.activated ? '已启用' : '未启用'}
+                          ，业务准确性待人工确认
+                        </p>
+                        {['observed', 'reconcile', 'blocked'].includes(item.state) &&
+                          item.result?.phase !== 'restored' && (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              disabled={busy}
+                              onClick={() => {
+                                if (
+                                  window.confirm(
+                                    '关闭本次租户准入，按原记录恢复路由和配置？其他租户保持，恢复推进新修订，不删除运行历史。',
+                                  )
+                                )
+                                  void siteTasks({ restore_publication: item.id })
+                              }}
+                            >
+                              恢复本次开通
+                            </Button>
+                          )}
+                      </section>
+                    )}
                     {item.action === 'candidate-validate' && (
                       <p>
                         业务技术验证 · {item.tenant_id}：{taskLabels[item.state] || item.state}
@@ -1071,23 +1141,25 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        {item.action === 'candidate-validate'
-                          ? '取消业务验证（等待本轮结束）'
-                          : item.action === 'candidate-register'
-                            ? '取消运行登记（等待安全结果）'
-                            : item.action === 'candidate-install'
-                              ? '取消候选安装（等待安全结果）'
-                              : item.action === 'consumer-prepare'
-                                ? '取消消费者准备'
-                                : item.action === 'operator-prepare'
-                                  ? '取消管家准备'
-                                  : item.action === 'knowledge-connect'
-                                    ? '取消知识连接准备'
-                                    : item.action === 'knowledge-prepare'
-                                      ? '取消知识准备'
-                                      : item.action === 'workspace-prepare'
-                                        ? '取消工作区准备'
-                                        : '取消现场预检'}
+                        {item.action === 'environment-publish'
+                          ? '停止开通并恢复'
+                          : item.action === 'candidate-validate'
+                            ? '取消业务验证（等待本轮结束）'
+                            : item.action === 'candidate-register'
+                              ? '取消运行登记（等待安全结果）'
+                              : item.action === 'candidate-install'
+                                ? '取消候选安装（等待安全结果）'
+                                : item.action === 'consumer-prepare'
+                                  ? '取消消费者准备'
+                                  : item.action === 'operator-prepare'
+                                    ? '取消管家准备'
+                                    : item.action === 'knowledge-connect'
+                                      ? '取消知识连接准备'
+                                      : item.action === 'knowledge-prepare'
+                                        ? '取消知识准备'
+                                        : item.action === 'workspace-prepare'
+                                          ? '取消工作区准备'
+                                          : '取消现场预检'}
                       </Button>
                     )}
                   </article>

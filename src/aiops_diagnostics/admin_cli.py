@@ -1989,3 +1989,56 @@ def _name_overrides(value: str) -> dict[str, str]:
 #: 了「可读私有配置」的字段（``SETTING_SOURCES`` 里 ``file=True`` 的行），
 #: ``--config`` 里写到它就生效；判据仍是「进程 env 有没有这个键」（ADR-0069）。
 _SETTING_FOR = {source.env: name for name, source in SETTING_SOURCES.items() if source.file}
+
+
+@admin_app.command("environment-release")
+def environment_release_command(
+    context: typer.Context,
+    action: Annotated[str, typer.Argument(help="prepare/publish/observe/restore")],
+    file: Annotated[Path, typer.Option("--file", help="安装器准备的私有发布工件")],
+    receipt_fd: Annotated[int, typer.Option("--receipt-fd", help="root只读installed账本描述符")],
+    release_fd: Annotated[int, typer.Option("--release-fd", help="root只读已批准发布工件描述符")],
+) -> None:
+    """仅受管安装器消费冻结内容，不访问Console管理接口。"""
+    import fcntl
+    import stat
+
+    from aiops_diagnostics.common.private_files import validate_private_file
+    from aiops_diagnostics.publication.environment_release import context_for, operation
+
+    settings = _settings_with_config_file(context)
+    try:
+        receipt_path = Path("/opt/aiops-access-" + settings.environment + "/installed.json")
+        info = os.fstat(receipt_fd)
+        if (
+            info.st_uid != 0
+            or info.st_mode & 0o077
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or fcntl.fcntl(receipt_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY
+            or receipt_path.is_symlink()
+            or (info.st_dev, info.st_ino) != (receipt_path.stat().st_dev, receipt_path.stat().st_ino)
+        ):
+            raise ValueError("root installation receipt required")
+        validate_private_file(file)
+        if file.stat().st_size > 1048576 or action not in {"prepare", "publish", "observe", "restore"}:
+            raise ValueError("release request refused")
+        approval = os.fstat(release_fd)
+        if (
+            approval.st_uid != 0
+            or approval.st_mode & 0o077
+            or not stat.S_ISREG(approval.st_mode)
+            or approval.st_nlink != 1
+            or fcntl.fcntl(release_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY
+        ):
+            raise ValueError("root approved artifact required")
+        os.lseek(release_fd, 0, os.SEEK_SET)
+        approved = os.read(release_fd, 1048577)
+        if len(approved) > 1048576 or file.read_bytes() != approved:
+            raise ValueError("approved artifact changed")
+        document = json.loads(approved)
+        result = operation(context_for(settings), document, action)
+    except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
+        typer.echo(json.dumps({"error": "ENVIRONMENT_RELEASE_REFUSED"}))
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result))

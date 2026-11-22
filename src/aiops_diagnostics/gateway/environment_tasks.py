@@ -54,6 +54,7 @@ def _public(row):
         "candidate-install",
         "candidate-register",
         "candidate-validate",
+        "environment-publish",
     }:
         state = "queued"
     if state == "executing":
@@ -65,7 +66,11 @@ def _public(row):
     if state == "queued" and request["plan"]["expires_at"] <= time.time():
         state = "expired"
     result = json.loads(row["result"])
-    if state in {"observed", "blocked"} and result["expires_at"] <= time.time():
+    if (
+        state in {"observed", "blocked"}
+        and result["expires_at"] <= time.time()
+        and request.get("action") != "environment-publish"
+    ):
         state = "expired"
     return {
         "id": row["id"],
@@ -385,7 +390,7 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
 
         def current_public(row):
             result = _public(row)
-            if result["state"] in {"observed", "blocked"}:
+            if result["state"] in {"observed", "blocked"} and result["action"] != "environment-publish":
                 try:
                     _current(path, json.loads(row["request"]), reference, reconciling=True)
                 except (ValueError, OSError, RuntimeError):
@@ -424,9 +429,14 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
                                 "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
                                 (child_state, time.time(), child_id),
                             )
+                request = json.loads(row["request"])
                 state = (
                     row["state"]
                     if row["state"] in {"running", "reconcile", "executing", "checking"}
+                    else "checking"
+                    if row["state"] == "waiting"
+                    and request.get("action") == "environment-publish"
+                    and request.get("attempted")
                     else "cancelled"
                 )
                 conn.execute(

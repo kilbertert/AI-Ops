@@ -33,6 +33,7 @@ class ConsumerTrial:
     draft: bool = False
     authorize: object = None
     candidate: object = None
+    published: object = None
 
     def fingerprint(self):
         return hashlib.sha256(
@@ -78,7 +79,11 @@ class ConsumerTrial:
     def execute(self, runtime, trial_id, scope, order, language):
         from aiops_diagnostics.gateway.gateway_runtime import JobRegistration
 
-        admin = DifyConsoleAdmin(ConsoleApiSettings(self.source.base_url, self.source.api_key))
+        admin = (
+            DifyConsoleAdmin(ConsoleApiSettings(self.source.base_url, self.source.api_key))
+            if self.published is None
+            else None
+        )
         grants = DataGrantStore(runtime.store.path)
         runs = runtime.dify_run_store
         app_id = ""
@@ -87,47 +92,50 @@ class ConsumerTrial:
         runtime._qa_registrations[trial_id] = registration
         try:
             self.require_current(runtime.gateway_settings)
-            if self.candidate is not None:
-                from uuid import UUID, uuid5
-
-                from aiops_diagnostics.dify.self_service_prepare import IMPORT_NAMESPACE
-
-                # 先固定本轮唯一ID；创建响应丢失时仍可定点回收，不能留下未知临时应用。
-                request_id = str(UUID(trial_id.removeprefix("tr_")))
-                app_id = str(uuid5(UUID(IMPORT_NAMESPACE), self.source.workspace_id + ":" + request_id))
-                created = admin._call(
-                    self.source.workspace_id,
-                    "/console/api/apps/imports",
-                    method="POST",
-                    body={
-                        "mode": "yaml-content",
-                        "yaml_content": self.dsl,
-                        "name": "WF01 trial " + trial_id,
-                        "request_id": request_id,
-                    },
-                )
-                if created.get("app_id") != app_id or created.get("status") not in {
-                    "completed",
-                    "completed-with-warnings",
-                }:
-                    raise ValueError("candidate temporary application unconfirmed")
-                admin._call(
-                    self.source.workspace_id,
-                    "/console/api/apps/" + app_id + "/site-enable",
-                    method="POST",
-                    body={"enable_site": False},
-                )
+            if self.published is not None:
+                app_id, workflow_id, key = self.published()
             else:
-                app_id = admin.import_app_dsl(
-                    self.source.workspace_id, yaml_content=self.dsl, name="WF01 trial " + trial_id
-                )
-            client = DifyDslClient(replace(self.source, app_id=app_id))
-            if not client.publish_workflow():
-                raise ValueError("temporary Chatflow publish failed")
-            workflow_id = client.published_workflow_id()
-            if workflow_content(client.export_dsl(workflow_id=workflow_id)) != workflow_content(self.dsl):
-                raise ValueError("trial graph changed")
-            key = admin.app_service_key(self.source.workspace_id, app_id)
+                if self.candidate is not None:
+                    from uuid import UUID, uuid5
+
+                    from aiops_diagnostics.dify.self_service_prepare import IMPORT_NAMESPACE
+
+                    # 先固定本轮唯一ID；创建响应丢失时仍可定点回收，不能留下未知临时应用。
+                    request_id = str(UUID(trial_id.removeprefix("tr_")))
+                    app_id = str(uuid5(UUID(IMPORT_NAMESPACE), self.source.workspace_id + ":" + request_id))
+                    created = admin._call(
+                        self.source.workspace_id,
+                        "/console/api/apps/imports",
+                        method="POST",
+                        body={
+                            "mode": "yaml-content",
+                            "yaml_content": self.dsl,
+                            "name": "WF01 trial " + trial_id,
+                            "request_id": request_id,
+                        },
+                    )
+                    if created.get("app_id") != app_id or created.get("status") not in {
+                        "completed",
+                        "completed-with-warnings",
+                    }:
+                        raise ValueError("candidate temporary application unconfirmed")
+                    admin._call(
+                        self.source.workspace_id,
+                        "/console/api/apps/" + app_id + "/site-enable",
+                        method="POST",
+                        body={"enable_site": False},
+                    )
+                else:
+                    app_id = admin.import_app_dsl(
+                        self.source.workspace_id, yaml_content=self.dsl, name="WF01 trial " + trial_id
+                    )
+                client = DifyDslClient(replace(self.source, app_id=app_id))
+                if not client.publish_workflow():
+                    raise ValueError("temporary Chatflow publish failed")
+                workflow_id = client.published_workflow_id()
+                if workflow_content(client.export_dsl(workflow_id=workflow_id)) != workflow_content(self.dsl):
+                    raise ValueError("trial graph changed")
+                key = admin.app_service_key(self.source.workspace_id, app_id)
             self.binding = ChatBinding(
                 environment=self.route.environment,
                 tenant_id=self.route.tenant_id,
@@ -326,7 +334,7 @@ class ConsumerTrial:
             grants.revoke_for_qa(trial_id)
             runtime._qa_registrations.pop(trial_id, None)
             try:
-                if app_id:
+                if app_id and self.published is None:
                     admin.delete_app(self.source.workspace_id, app_id)
             finally:
                 if self.candidate is not None:

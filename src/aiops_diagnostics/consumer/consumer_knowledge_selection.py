@@ -108,3 +108,18 @@ def require_available(runtime, caller, binding):
         raise ChatRunUnavailable(
             "KNOWLEDGE_SELECTION_UNAVAILABLE", "所选知识库不可用，请重新选择并发布"
         ) from exc
+
+
+def workspace_libraries(runtime, tenant, workspace):
+    """目录能力只能读取本环境已登记应用的授权库，不扩为管理凭据。"""
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+    rows = [
+        row
+        for row in SelfServiceStore(runtime.gateway_settings.database_file).apps(entry="consumer")
+        if (row["workspace_id"], row["tenant_id"], row["environment"])
+        == (workspace, tenant, runtime.gateway_settings.environment)
+    ]
+    if len(rows) != 1:
+        raise ValueError("workspace application is ambiguous")
+    return owned_libraries(runtime, tenant, rows[0]["app_id"])

@@ -4284,7 +4284,12 @@ def create_gateway_app(
         except (ValueError, DifyWorkspaceError) as exc:
             raise StandardAPIError(403, "KNOWLEDGE_CATALOGUE_FORBIDDEN", "知识目录凭据无效") from exc
         try:
-            libraries = context.runtime.kb_search_client.for_tenant(tenant).list_knowledge_bases()
+            if context.settings.knowledge_delegation_file:
+                from aiops_diagnostics.consumer.consumer_knowledge_selection import workspace_libraries
+
+                libraries = workspace_libraries(context.runtime, tenant, workspace)
+            else:
+                libraries = context.runtime.kb_search_client.for_tenant(tenant).list_knowledge_bases()
         except (ValueError, RuntimeError, AttributeError) as exc:
             raise _runtime_unavailable("KNOWLEDGE_CATALOGUE_UNAVAILABLE", "知识库目录暂不可用", exc) from exc
         return {

@@ -132,7 +132,12 @@ def environment(tmp_path, monkeypatch):
                     "insuranceAmount": 0,
                 }
             elif "/getChargingMonitor/" in self.path:
-                data = {"records": [], "total": 0, "size": 50, "current": 1}
+                data = {
+                    "records": state.get("monitor_rows", []),
+                    "total": len(state.get("monitor_rows", [])),
+                    "size": 50,
+                    "current": 1,
+                }
             elif self.path.startswith("/chSite/") and not self.path.startswith("/chSite/page?"):
                 data = {
                     "id": state["site"],

@@ -26,7 +26,10 @@ def binding(settings, target):
     rows = body["targets"]
     if not isinstance(rows, list) or not 1 <= len(rows) <= 64:
         raise ValueError("installation targets invalid")
-    if any(not isinstance(r, dict) or set(r) != {"id", "node_file"} for r in rows):
+    if any(
+        not isinstance(r, dict) or set(r) not in ({"id", "node_file"}, {"id", "node_file", "capacity"})
+        for r in rows
+    ):
         raise ValueError("installation target invalid")
     if len({r["id"] for r in rows}) != len(rows):
         raise ValueError("duplicate installation targets")
@@ -98,7 +101,7 @@ def submit(context, identity, identifier):
             "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
             "AND state IN ('waiting','executing','checking') "
             "AND json_extract(request,'$.action') "
-            "IN ('candidate-install','candidate-register','candidate-validate')",
+            "IN ('candidate-install','candidate-register','candidate-validate','environment-publish')",
             (parent["environment"], task_id),
         ).fetchone():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
@@ -149,7 +152,7 @@ def dispatch(context, payload):
                 return {"claimed": False, "task": None}
             rows = conn.execute(
                 "SELECT id FROM environment_tasks WHERE json_extract(request,'$.action') "
-                "IN ('candidate-install','candidate-register','candidate-validate') "
+                "IN ('candidate-install','candidate-register','candidate-validate','environment-publish') "
                 "AND state IN ('waiting','executing','checking') AND lease_until<=? "
                 "AND NOT EXISTS(SELECT 1 FROM environment_tasks live "
                 "WHERE live.environment=environment_tasks.environment AND live.id!=environment_tasks.id "
@@ -161,7 +164,11 @@ def dispatch(context, payload):
                 row = tasks._row(conn, selected[0])
                 request = json.loads(row["request"])
                 try:
-                    if request["action"] == "candidate-validate":
+                    if request["action"] == "environment-publish":
+                        from .environment_publication import current as publication_current
+
+                        publication_current(context, conn, row["id"], fresh=not request["attempted"])
+                    elif request["action"] == "candidate-validate":
                         from .environment_validation import current as validation_current
 
                         validation_current(context, conn, row["id"], fresh=not request["attempted"])

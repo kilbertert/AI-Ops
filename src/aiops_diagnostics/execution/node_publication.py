@@ -256,17 +256,24 @@ def publish(
     from aiops_diagnostics.publication.agent_lifecycle import AgentConfig
 
     text = candidate(source, target, operator_preview=operator_preview)
-    agent = next((a for a in manager.list(admin) if a.name == binding.agent_name), None)
-    if agent is None:
+    config = None
+    if not any(a.name == binding.agent_name for a in manager.list(admin)):
         document = yaml.safe_load(DifyDslClient(source).export_dsl())
-        model = document["model_config"]["model"]["name"]
         config = AgentConfig(
             agent_type="operations" if target.entry == "operator" else "customer",
             prompt=(operator_preview or document["model_config"])["pre_prompt"],
             knowledge_base_ids=(),
-            model=model,
+            model=document["model_config"]["model"]["name"],
             output_contract="diagnosis-v1" if target.entry == "operator" else "blocks-v1",
         )
+    return publish_frozen(manager, admin, binding, source.workspace_id, text, config)
+
+
+def publish_frozen(manager, admin, binding, workspace_id, text, config):
+    """已核冻结manifest沿原不可变版本提交；不访问Console、不提前切route。"""
+    execution_manifest.from_text(text)
+    agent = next((a for a in manager.list(admin) if a.name == binding.agent_name), None)
+    if agent is None:
         manager._validate_config(config, enforce_model=True)
         agent = manager.create(admin, name=binding.agent_name, description="", config=config)
     if agent.status not in {"published", "draft"}:
@@ -279,7 +286,7 @@ def publish(
     if (
         previous.get("node_manifest") == text
         and previous.get("app_id") == binding.app_id
-        and previous.get("workspace_id") == source.workspace_id
+        and previous.get("workspace_id") == workspace_id
     ):
         return SyncOutcome(
             binding.tenant_id,
@@ -295,7 +302,7 @@ def publish(
         "kind": "node-sop",
         "node_manifest": text,
         "app_id": binding.app_id,
-        "workspace_id": source.workspace_id,
+        "workspace_id": workspace_id,
     }
     # 既有 AgentConfig 继续服务其他入口；节点 SOP 独立保存在同一不可变版本中。
     config_from_snapshot(snapshot)
