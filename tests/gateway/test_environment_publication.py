@@ -232,6 +232,7 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(
 
 
 def test_central_publication_freezes_real_template_and_reconciles_unique_key(validated, monkeypatch):
+    import copy
     from types import SimpleNamespace
 
     import yaml
@@ -257,6 +258,9 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
     context = SimpleNamespace(settings=settings)
     spec = publication.describe(context, request, identifier)["spec"]
     document = environment_consumer.document(child["consumer_source"], spec["consumer"]["knowledge_base_id"])
+    exported = copy.deepcopy(document)
+    for variable in exported["workflow"].get("environment_variables", []):
+        variable["selector"] = ["env", variable["name"]]
     published = []
     keys = []
     enabled = [False]
@@ -287,7 +291,8 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
             pass
 
         def export_dsl(self, *, workflow_id=None):
-            return yaml.safe_dump(document)
+            # Dify导出会补回变量自身的selector；草稿详情省略它，比对只许忽略这一项。
+            return yaml.safe_dump(exported)
 
         def publish_workflow(self):
             published.append(True)
@@ -316,6 +321,8 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
 
     private = json.loads(Path(result["path"]).read_text())
     assert private["apps"]["consumer"]["key"] == "synthetic-only-app-key"
+    frozen = private["apps"]["consumer"]["workflow"]["environment_variables"]
+    assert frozen and all(v.get("selector") == ["env", v["name"]] for v in frozen)
     assert "api_key" not in private
     assert DifyWorkspaces(settings.database_file).resolve("same", "a") == spec["consumer"]["workspace_id"]
     knowledge_delegation.active(
