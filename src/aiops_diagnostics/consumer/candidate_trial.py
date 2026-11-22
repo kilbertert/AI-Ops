@@ -97,7 +97,7 @@ def installed(context, scope):
     if tenant is None:
         raise ValueError("candidate tenant not registered")
     build = json.loads((application / "current/manifest.json").read_bytes())
-    if row["enabled"] or tenant["enabled"] or build["version"] != __import__("aiops_diagnostics").__version__:
+    if tenant["enabled"] or build["version"] != __import__("aiops_diagnostics").__version__:
         raise ValueError("candidate installation changed")
     return row["cpms_base_url"], tuple(
         hashlib.sha256(p.read_bytes()).hexdigest()

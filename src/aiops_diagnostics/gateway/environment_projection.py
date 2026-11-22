@@ -133,7 +133,9 @@ def summary(files):
     }
 
 
-def validate_candidate(config, directory, environment, *, runtime=None):
+def validate_candidate(
+    config, directory, environment, *, runtime=None, candidate_tenant=None, previous_directory=None
+):
     """候选venv按实际配置/目录核对固定路径及停用范围，不调用外部服务。"""
     from dotenv import dotenv_values
 
@@ -172,6 +174,24 @@ def validate_candidate(config, directory, environment, *, runtime=None):
     if body["schema"] != registry.MANAGED_SCHEMA or body["managers"] or len(body["environments"]) != 1:
         raise ValueError("candidate directory is not an isolated environment")
     row = body["environments"][0]
+    preserving = previous_directory is not None
+    if preserving:
+        previous = registry.load(previous_directory)
+        old = previous["environments"][0]
+        if len(previous["environments"]) != 1 or any(
+            row[k] != old[k]
+            for k in ("id", "enabled", "gateway_url", "cpms_base_url", "company_gateway_url", "config_ref")
+        ):
+            raise ValueError("existing environment identity or admission changed")
+        tenants = {t["id"]: t for t in row["tenants"]}
+        if any(tenants.get(t["id"]) != t for t in old["tenants"]) or any(
+            t["enabled"] for t in row["tenants"] if t["id"] not in {v["id"] for v in old["tenants"]}
+        ):
+            raise ValueError("existing tenant admission changed")
+    if candidate_tenant is not None and not any(
+        t["id"] == candidate_tenant and not t["enabled"] for t in row["tenants"]
+    ):
+        raise ValueError("candidate tenant must remain disabled")
     expected = {
         "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": environment,
         "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": row["cpms_base_url"],
@@ -193,10 +213,19 @@ def validate_candidate(config, directory, environment, *, runtime=None):
             }
         )
         validate_runtime(runtime, row)
+        if preserving:
+            candidate_id = json.loads((Path(runtime) / "manifest.json").read_text())["tenant_id"]
+            if any(t["id"] == candidate_id and t["enabled"] for t in row["tenants"]):
+                raise ValueError("candidate installation cannot replace an active tenant")
+    if preserving or candidate_tenant is not None:
+        for key in ("AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED", "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED"):
+            if values.get(key) not in {"false", "true"}:
+                raise ValueError("invalid retained consumer setting")
+            expected[key] = values[key]
     if (
         row["id"] != environment
-        or row["enabled"]
-        or any(tenant["enabled"] for tenant in row["tenants"])
+        or not (preserving or candidate_tenant is not None)
+        and (row["enabled"] or any(tenant["enabled"] for tenant in row["tenants"]))
         or row["config_ref"] != f"/etc/aiops-access-{environment}/production.env"
         or any(values.get(key) != value for key, value in expected.items())
     ):
@@ -286,9 +315,17 @@ def validate_runtime(path, row):
     consumers = declared_rows(
         SimpleNamespace(consumer_publication_targets_file=str(path / "consumer-targets.json"))
     )
-    if len(consumers) != 1:
+    if not consumers or body["schema"] == "aiops-environment-runtime/1" and len(consumers) != 1:
         raise ValueError("runtime consumer shape mismatch")
-    consumer = consumers[0]
+    if any(
+        c["environment"] != row["id"] or c["tenant_id"] not in {t["id"] for t in row["tenants"]}
+        for c in consumers
+    ):
+        raise ValueError("runtime retained target scope mismatch")
+    matches = [c for c in consumers if c["tenant_id"] == body["tenant_id"]]
+    if len(matches) != 1:
+        raise ValueError("runtime candidate target missing")
+    consumer = matches[0]
     if (
         consumer.get("environment") != row["id"]
         or consumer.get("tenant_id") != body["tenant_id"]

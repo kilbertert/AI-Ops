@@ -38,6 +38,21 @@ def observe(inst, spec, record):
     desired = record.get("desired", {})
     if not desired or any(installed.get(k) != v for k, v in desired.items()):
         return result
+    composed = {}
+    if installed["runtime_sha256"] != spec["archives"]["runtime"]["sha256"]:
+        _, manifest = probe.runtime_files(
+            inst.runtime_path(installed) / "runtime.tar", installed["runtime_sha256"], inst.environment
+        )
+        if (
+            manifest.get("source_runtime_sha256") != spec["archives"]["runtime"]["sha256"]
+            or installed["runtime_sha256"] != spec["expected"]["runtime_sha256"]
+            and manifest.get("previous_runtime_sha256") != spec["expected"]["runtime_sha256"]
+        ):
+            return result
+        composed = {
+            "source_runtime_sha256": manifest["source_runtime_sha256"],
+            "previous_runtime_sha256": spec["expected"]["runtime_sha256"],
+        }
     return {
         **result,
         "state": "observed",
@@ -45,6 +60,7 @@ def observe(inst, spec, record):
         "error_code": "",
         "version": installed["version"],
         "source_revision": installed["revision"],
+        **composed,
         **{
             k: installed[k] for k in ("artifact_sha256", "config_sha256", "registry_sha256", "runtime_sha256")
         },
@@ -113,17 +129,21 @@ def execute(inst, spec, *, observe_only=False):
         f'AIOPS_GATEWAY_OPERATOR_PROFILES_FILE="{base}operator-profiles.json"\n'
         f'AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE="{base}consumer-targets.json"\n'
     ).encode()
+    files["production.env"] = inst.candidate_configuration(files["production.env"])
     files["environment.json"] = inst.candidate_directory(files["environment.json"])
     with tempfile.TemporaryDirectory(prefix="aiops-install-task-") as temporary:
         root = Path(temporary)
         for name in ("production.env", "environment.json"):
             install.write(root / name, files[name].decode())
+        runtime_path, runtime_sha = inst.candidate_runtime(
+            Path(archives["runtime"]["path"]), archives["runtime"]["sha256"], root / "runtime.tar"
+        )
         desired = {
             "revision": meta["revision"],
             "artifact_sha256": archives["application"]["sha256"],
             "config_sha256": install.digest(root / "production.env"),
             "registry_sha256": install.digest(root / "environment.json"),
-            "runtime_sha256": archives["runtime"]["sha256"],
+            "runtime_sha256": runtime_sha,
         }
         # 持久意图先于apply；崩溃后相同编号只能observe，不能再次写配置。
         record = {"spec": spec, "desired": desired}
@@ -140,8 +160,8 @@ def execute(inst, spec, *, observe_only=False):
                 spec["expected"]["config_sha256"],
                 root / "environment.json",
                 spec["expected"]["registry_sha256"],
-                Path(archives["runtime"]["path"]),
-                archives["runtime"]["sha256"],
+                runtime_path,
+                runtime_sha,
                 spec["expected"]["runtime_sha256"],
             )
         finally:

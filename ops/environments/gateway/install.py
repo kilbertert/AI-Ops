@@ -350,6 +350,21 @@ WantedBy=multi-user.target
             if "registry_sha256" in old:
                 raw = (self.config / "registry/environment.json").read_bytes()
                 current = json.loads(raw)
+                active = current["environments"][0]
+                proposed = body["environments"][0]
+                if active["enabled"] or any(t["enabled"] for t in active["tenants"]):
+                    for key in ("id", "gateway_url", "cpms_base_url", "company_gateway_url", "config_ref"):
+                        if active[key] != proposed[key]:
+                            raise ValueError("active environment connection cannot change during onboarding")
+                retained = {t["id"]: t for t in active["tenants"]}
+                for tenant in proposed["tenants"]:
+                    if tenant["id"] not in retained:
+                        if tenant["enabled"]:
+                            raise ValueError("new candidate cannot grant admission")
+                        retained[tenant["id"]] = tenant
+                proposed["tenants"] = list(retained.values())
+                proposed["enabled"] = active["enabled"]
+                body["managers"] = current["managers"]
                 if (
                     body["environments"] == current["environments"]
                     and body["managers"] == current["managers"]
@@ -364,6 +379,62 @@ WantedBy=multi-user.target
                     }
                 ]
         return json.dumps(body, sort_keys=True).encode() + b"\n"
+
+    def candidate_configuration(self, incoming):
+        """在用环境保留现行开关；任何其他配置变化须独立维护窗口。"""
+        if not (self.root / "installed.json").exists():
+            return incoming
+        old = self.read_record("installed.json")
+        self.check_registry(old)
+        if not old.get("registry_sha256"):
+            return incoming
+        current = json.loads((self.config / "registry/environment.json").read_text())["environments"][0]
+        if not current["enabled"] and not any(t["enabled"] for t in current["tenants"]):
+            return incoming
+        actual = (self.config / "production.env").read_bytes()
+        if hashlib.sha256(actual).hexdigest() != old["config_sha256"]:
+            raise ValueError("active configuration drift")
+
+        # 投影是固定排序的env；只忽略由当前准入保留的两个运行开关。
+        def without_switches(raw):
+            return b"\n".join(
+                line
+                for line in raw.splitlines()
+                if not line.startswith(
+                    (
+                        b"AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED=",
+                        b"AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED=",
+                    )
+                )
+            )
+
+        if without_switches(incoming) != without_switches(actual):
+            raise ValueError("active configuration change requires separate window")
+        return actual
+
+    def candidate_runtime(self, incoming, incoming_sha, destination):
+        old = self.read_record("installed.json") if (self.root / "installed.json").exists() else None
+        if not old or not old.get("runtime_sha256"):
+            return incoming, incoming_sha
+        self.check_runtime(old)
+        _, before = probe.runtime_files(
+            self.runtime_path(old) / "runtime.tar", old["runtime_sha256"], self.environment
+        )
+        _, proposed = probe.runtime_files(incoming, incoming_sha, self.environment)
+        # 原单租户停用安装仍可更新自身配置；只给新增租户/已组合快照增加保留约束。
+        if before["schema"] == "aiops-environment-runtime/1" and before["tenant_id"] == proposed["tenant_id"]:
+            return incoming, incoming_sha
+        raw, sha = probe.compose_runtime(
+            self.runtime_path(old) / "runtime.tar",
+            old["runtime_sha256"],
+            incoming,
+            incoming_sha,
+            self.environment,
+        )
+        with destination.open("xb") as stream:
+            stream.write(raw)
+        destination.chmod(0o600)
+        return destination, sha
 
     def release(self, record):
         if not re.fullmatch(r"[a-f0-9]{12}-[a-z0-9_]+", record["release"]):
@@ -778,7 +849,39 @@ WantedBy=multi-user.target
                 if previous_registry["environments"][0]["enabled"] or any(
                     t["enabled"] for t in previous_registry["environments"][0]["tenants"]
                 ):
-                    raise ValueError("active registry requires separate activation delivery")
+                    if runtime_archive is None or config_sha != old["config_sha256"]:
+                        raise ValueError("active registry requires unchanged shared configuration")
+                    files, composed = probe.runtime_files(runtime_archive, runtime_sha, self.environment)
+                    if runtime_sha != old.get("runtime_sha256"):
+                        if (
+                            composed.get("schema") != "aiops-environment-runtime/2"
+                            or composed.get("previous_runtime_sha256") != old["runtime_sha256"]
+                        ):
+                            raise ValueError("active runtime requires recorded predecessor")
+                        prior, _ = probe.runtime_files(
+                            self.runtime_path(old) / "runtime.tar", old["runtime_sha256"], self.environment
+                        )
+                        shared = set(files) - {"manifest.json", "consumer-targets.json", "registrations.json"}
+                        if any(files[k] != prior[k] for k in shared):
+                            raise ValueError("active shared runtime changed")
+                        previous_targets = json.loads(prior["consumer-targets.json"])["targets"]
+                        next_targets = json.loads(files["consumer-targets.json"])["targets"]
+                        if any(t not in next_targets for t in previous_targets):
+                            raise ValueError("active tenant runtime removed or replaced")
+                    proposed = json.loads(registry_file.read_text())["environments"][0]
+                    old_row = previous_registry["environments"][0]
+                    if (
+                        any(proposed[k] != old_row[k] for k in old_row if k != "tenants")
+                        or any(t not in proposed["tenants"] for t in old_row["tenants"])
+                        or any(
+                            t["enabled"]
+                            for t in proposed["tenants"]
+                            if t["id"] not in {r["id"] for r in old_row["tenants"]}
+                        )
+                    ):
+                        raise ValueError("active admission changed during candidate installation")
+                    if any(t["id"] == composed["tenant_id"] and t["enabled"] for t in proposed["tenants"]):
+                        raise ValueError("candidate cannot replace active tenant")
                 incoming = json.loads(registry_file.read_text())
                 if (
                     registry_sha != old["registry_sha256"]
@@ -969,6 +1072,11 @@ WantedBy=multi-user.target
         trial.mkdir(mode=0o700)
         os.chown(trial, self.account.pw_uid, self.account.pw_gid)
         trial_unit = self.name + "-candidate"
+        previous_directory = None
+        if old and old.get("registry_sha256") and registry_file is not None and runtime_archive is not None:
+            row = json.loads((self.config / "registry/environment.json").read_text())["environments"][0]
+            if row["enabled"] or any(t["enabled"] for t in row["tenants"]):
+                previous_directory = str(self.config / "registry/environment.json")
         try:
             self.command(
                 "runuser",
@@ -990,6 +1098,7 @@ WantedBy=multi-user.target
                     else []
                 ),
                 *([str(runtime)] if runtime_archive is not None else []),
+                *([previous_directory] if previous_directory else []),
             )
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
@@ -1180,6 +1289,7 @@ def main():
                         ).encode()
                     elif args.runtime_sha256 or args.expected_runtime_sha256:
                         raise ValueError("runtime artifact required")
+                    files["production.env"] = inst.candidate_configuration(files["production.env"])
                     files["environment.json"] = inst.candidate_directory(files["environment.json"])
                     if not args.archive or not args.sha256:
                         raise ValueError("application artifact required")
@@ -1189,6 +1299,11 @@ def main():
                             write(root / name, files[name].decode())
                         if any("${" in files[name].decode() for name in ("production.env",)):
                             raise ValueError("candidate interpolation refused")
+                        runtime_path, runtime_sha = (
+                            inst.candidate_runtime(args.runtime, args.runtime_sha256, root / "runtime.tar")
+                            if args.runtime is not None
+                            else (None, None)
+                        )
                         result = inst.apply(
                             args.archive,
                             args.sha256,
@@ -1198,8 +1313,8 @@ def main():
                             args.expected_config_sha256,
                             root / "environment.json",
                             args.expected_registry_sha256,
-                            args.runtime,
-                            args.runtime_sha256,
+                            runtime_path,
+                            runtime_sha,
                             args.expected_runtime_sha256,
                         )
                 elif (

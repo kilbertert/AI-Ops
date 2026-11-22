@@ -323,3 +323,38 @@ def test_public_install_task_states_do_not_masquerade_as_site_preflight(prepared
         phase
     ]
     assert value["action"] == "candidate-install" and value["state"] == expected
+
+
+def test_composed_receipt_requires_source_and_predecessor_not_just_new_digest(installation_state):
+    state = installation_state
+    identifier = submit(state).json()["id"]
+    owner = "d" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    staged = internal(state, {"installation": "stage", "id": identifier, "owner": owner}).json()
+    result = dict(
+        id=identifier,
+        environment="a",
+        scope="candidate-installation-only",
+        state="observed",
+        executable=False,
+        activation="not_executed",
+        registration="not_executed",
+        business="unverified",
+        installation="installed",
+        version="1.38.0",
+        config_sha256="a" * 64,
+        registry_sha256="b" * 64,
+        artifact_sha256=staged["archives"]["application"]["sha256"],
+        runtime_sha256="e" * 64,
+        source_revision=staged["archives"]["application"]["revision"],
+        source_runtime_sha256=staged["archives"]["runtime"]["sha256"],
+    )
+    response = internal(
+        state, {"installation": "complete", "id": identifier, "owner": owner, "result": result}
+    )
+    assert response.status_code == 409
+    result["previous_runtime_sha256"] = staged["expected"]["runtime_sha256"]
+    response = internal(
+        state, {"installation": "complete", "id": identifier, "owner": owner, "result": result}
+    )
+    assert response.status_code == 200 and response.json()["result"]["runtime_sha256"] == "e" * 64
