@@ -667,7 +667,10 @@ export default function EnvironmentManagement() {
                 </Button>
                 <section aria-label="一次准备候选" className="space-y-2 pt-3">
                   <h3 className="system-sm-semibold">一次准备候选</h3>
-                  <p>自动串联现场预检、工作区、知识连接与双端应用；不安装或启用正式服务。</p>
+                  <p>
+                    自动串联现场预检、工作区、知识连接与双端应用；「准备候选」仅准备资源，
+                    「空机初装并准备」会在空机上安装停用模块；均不启用正式入口。
+                  </p>
                   <Button
                     type="button"
                     variant="secondary"

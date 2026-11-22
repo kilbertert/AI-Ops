@@ -62,6 +62,7 @@ def handle(handler, bridge):
                 "plan_id",
                 "candidate_plan",
                 "candidate_task",
+                "initial_installation",
                 "verify_task",
                 "installation",
                 "installation_task",
@@ -190,7 +191,11 @@ def handle(handler, bridge):
                 and isinstance(payload["candidate_task"], str)
                 and re.fullmatch(r"task_[0-9a-f]{32}", payload["candidate_task"])
             )
-        elif set(payload) == {"candidate_plan", "tenant_id", "source_app_id", "source_version"}:
+        elif set(payload) in (
+            {"candidate_plan", "tenant_id", "source_app_id", "source_version"},
+            {"candidate_plan", "tenant_id", "source_app_id", "source_version", "initial_installation"},
+        ):
+            # 「包含初装」桥与后端同判据：只允许显式true，缺省按不带该键处理。
             valid = (
                 isinstance(payload["candidate_plan"], str)
                 and re.fullmatch(r"plan_[0-9a-f]{32}", payload["candidate_plan"])
@@ -200,6 +205,7 @@ def handle(handler, bridge):
                 and re.fullmatch(r"[a-f0-9-]{36}", payload["source_app_id"])
                 and type(payload["source_version"]) is int
                 and payload["source_version"] >= 1
+                and payload.get("initial_installation", True) is True
             )
         elif set(payload) == {"consumer_sources"}:
             valid = payload["consumer_sources"] is True
