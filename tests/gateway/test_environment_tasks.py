@@ -623,7 +623,7 @@ def test_preflight_driver_executes_old_and_new_bundle_interpreter_contract(prepa
     spec = importlib.util.spec_from_file_location("bundle_probe", root / "ops/environments/gateway/probe.py")
     bundle_probe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bundle_probe)
-    selected = bundle_probe.managed_python()
+    selected = bundle_probe.system_python(bundle_probe.managed_python())[0]
     assert Path(proc.stdout.strip()).resolve() == Path(selected).resolve()
 
 

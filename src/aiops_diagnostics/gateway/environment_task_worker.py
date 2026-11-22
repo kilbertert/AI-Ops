@@ -133,13 +133,15 @@ def execute(root, claim):
             str(target["port"]),
         ]
         # 固定包自举受管解释器：目标的/usr/bin默认可能是平台Python3.6；
-        # 旧固定包probe无managed_python时沿用原worker合同PATH的python3。
+        # 旧固定包probe无managed_python时沿用原worker合同PATH的python3；
+        # 执行面只走system_python核验后的解析目标。
         script = "\n".join(
             [
                 "import subprocess,sys",
                 f"sys.path.insert(0,{remote!r})",
                 "import probe",
-                "py=probe.managed_python() if hasattr(probe,'managed_python') else 'python3'",
+                "py=probe.system_python(probe.managed_python())[0]"
+                " if hasattr(probe,'managed_python') else 'python3'",
                 f"r=subprocess.run([py]+{args!r},stdout=subprocess.PIPE,stderr=subprocess.PIPE,"
                 "universal_newlines=True)",
                 "sys.stdout.write(r.stdout);sys.exit(r.returncode)",
@@ -588,7 +590,8 @@ def installation_run(root, request, identifier, owner, *, registration=False):
                     "assert (d/'task.py').is_file()",
                     "sys.path.insert(0,str(d))",
                     "import probe",
-                    "py=probe.managed_python() if hasattr(probe,'managed_python') else '/usr/bin/python3'",
+                    "py=probe.system_python(probe.managed_python())[0]"
+                    " if hasattr(probe,'managed_python') else '/usr/bin/python3'",
                     f"r=subprocess.run([py]+{arguments!r},input={json.dumps(spec)!r},"
                     "stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)",
                     "sys.stdout.write(r.stdout);sys.exit(r.returncode)",

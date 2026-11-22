@@ -148,7 +148,8 @@ def target_task(root, staged, bundle, action, *, observe_only=False, verificatio
                 "  else:q.write_bytes(b)",
                 "sys.path.insert(0,str(d))",
                 "import probe",
-                "py=probe.managed_python() if hasattr(probe,'managed_python') else '/usr/bin/python3'",
+                "py=probe.system_python(probe.managed_python())[0]"
+                " if hasattr(probe,'managed_python') else '/usr/bin/python3'",
                 f"r=subprocess.run([py]+{arguments!r},input={json.dumps(payload)!r},"
                 "stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)",
                 "sys.stdout.write(r.stdout);sys.exit(r.returncode)",

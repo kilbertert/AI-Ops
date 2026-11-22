@@ -131,7 +131,8 @@ def test_execute_passes_managed_interpreter_and_apply_revalidates(task_state, mo
     count = len(fixture[4])
     assert task.execute(inst, request)["state"] == "observed"
     minor_probe = next(c for c in reversed(fixture[4][count:]) if "-c" in c)
-    assert selected in minor_probe
+    # 小版本探测只发向apply内system_python核验后的解析目标。
+    assert os.path.realpath(selected) in minor_probe
     forged = Path(inst.root.parent / "forged-python3.12")
     forged.write_text("#!/bin/sh\n")
     forged.chmod(0o755)

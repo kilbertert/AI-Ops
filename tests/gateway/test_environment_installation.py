@@ -385,7 +385,7 @@ def test_install_driver_tail_executes_old_and_new_bundle_interpreter_contract(
             )
             bundle_probe = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(bundle_probe)
-            expected = bundle_probe.managed_python()
+            expected = bundle_probe.system_python(bundle_probe.managed_python())[0]
         (directory / "task.py").write_text("import sys;print(sys.executable)")
         prologue = "import subprocess,sys\nfrom pathlib import Path\nd=Path(" + repr(str(directory)) + ")\n"
         proc = real(["python3", "-"], input=prologue + tail, text=True, capture_output=True)

@@ -68,10 +68,11 @@ def trusted_directory(path, owner):
 
 
 def system_python(path, *, roots=MANAGED_PYTHON_ROOTS, owner=0, run=command, check_dir=trusted_directory):
-    """受管解释器：受管bin目录内python3[.11|.12|.13]；解析后目标与父目录归属/权限必须受控。
+    """受管解释器：受管bin目录内python3[.11|.12|.13]；返回已核验的解析后绝对目标。
 
-    执行仍走候选路径，因此除解析目标外还逐hop核链上每个符号链接的祖先目录：
-    任一hop父链可被组/他人改写即拒绝，核验后换链无法重定向解释器。
+    小版本探测与调用方执行都只经过解析后目标，候选链路上的可写中间目录或
+    链接跳在核验后无法再重定向解释器；目标本身可落在受管根之外，按同一
+    归属/权限/父链合同核验。
     """
     candidate = Path(path)
     if (
@@ -86,20 +87,10 @@ def system_python(path, *, roots=MANAGED_PYTHON_ROOTS, owner=0, run=command, che
     mode = resolved.stat().st_mode
     if resolved.stat().st_uid != owner or mode & 0o022 or not mode & 0o111:
         raise ValueError("untrusted interpreter ownership or mode")
-    chain = {*candidate.parents, *resolved.parents}
-    link = candidate
-    for _ in range(64):
-        if not link.is_symlink():
-            break
-        chain.update(link.parents)
-        target = os.readlink(link)
-        link = Path(target) if os.path.isabs(target) else link.parent / target
-    else:
-        raise ValueError("interpreter link chain too deep")
-    for directory in chain:
+    for directory in {*candidate.parents, *resolved.parents}:
         check_dir(directory, owner)
     minor = run(
-        str(candidate),
+        str(resolved),
         "-I",
         "-c",
         "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
@@ -107,26 +98,30 @@ def system_python(path, *, roots=MANAGED_PYTHON_ROOTS, owner=0, run=command, che
     expected = candidate.name[7:]
     if expected and minor != "3" + expected or not expected and minor not in SUPPORTED_PYTHON_MINORS:
         raise ValueError("interpreter minor mismatch")
-    return str(candidate), minor
+    return str(resolved), minor
 
 
 def managed_python(
     minor=None, *, roots=MANAGED_PYTHON_ROOTS, owner=0, run=command, check_dir=trusted_directory
 ):
-    """/usr/bin先于/usr/local/bin、裸python3先于带小版本名；不匹配或不受管的候选跳过。"""
+    """/usr/bin先于/usr/local/bin、裸python3先于带小版本名；不匹配或不受管的候选跳过。
+
+    返回受管候选路径（供apply按同一合同复核）；执行面应取
+    `system_python(candidate)[0]`的解析后目标。
+    """
     for base in roots:
         for name in ("python3", "python3.11", "python3.12", "python3.13"):
             candidate = Path(base) / name
             if not candidate.exists() and not candidate.is_symlink():
                 continue
             try:
-                selected, actual = system_python(
+                _resolved, actual = system_python(
                     candidate, roots=roots, owner=owner, run=run, check_dir=check_dir
                 )
             except (OSError, ValueError, subprocess.SubprocessError):
                 continue
             if minor is None or actual == minor:
-                return selected
+                return str(candidate)
     raise ValueError("no managed interpreter for Python " + (minor or "3.11-3.13"))
 
 
