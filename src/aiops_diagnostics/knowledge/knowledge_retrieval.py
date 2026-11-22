@@ -396,6 +396,62 @@ class MediaResponse:
     body: bytes
 
 
+def read_media_response(response, *, max_bytes=None):
+    """保留上游范围语义；有界读取必须显式拒绝多读的溢出字节。"""
+    length = response.headers.get("Content-Length")
+    if max_bytes is not None and length is not None and int(length) > max_bytes:
+        raise KnowledgeSearchUnavailable("media response too large")
+    body = read_body(response, max_read_bytes=max_bytes)
+    if max_bytes is not None and len(body) > max_bytes:
+        raise KnowledgeSearchUnavailable("media response too large")
+    return MediaResponse(
+        response.status,
+        {
+            key: response.headers[key]
+            for key in ("Content-Range", "Content-Length")
+            if key in response.headers
+        },
+        body,
+    )
+
+
+def media_response(grant, fetched, requested):
+    """显式HTTP结果只切一次；旧bytes fetcher继续使用原MediaProxy合同。"""
+    body, code = fetched.body, fetched.status_code
+    if not isinstance(body, bytes):
+        raise KnowledgeSearchUnavailable("invalid media body")
+    if fetched.headers.get("Content-Length") not in (None, str(len(body))):
+        raise KnowledgeSearchUnavailable("incomplete media response")
+    if code == 200:
+        return MediaProxy._response_for(grant, body, requested)
+    content_range = fetched.headers.get("Content-Range", "")
+    partial = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", content_range)
+    if code == 206 and requested and partial:
+        start, end, total = map(int, partial.groups())
+        try:
+            if (start, end) != parse_byte_range(requested, total) or len(body) != end - start + 1:
+                raise ValueError()
+        except ValueError as exc:
+            raise KnowledgeSearchUnavailable("invalid partial media response") from exc
+        return MediaResponse(
+            206,
+            {
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "private, no-store",
+                "Content-Type": grant.mime_type,
+                "Content-Disposition": "inline",
+                "Content-Range": content_range,
+                "Content-Length": str(len(body)),
+            },
+            body,
+        )
+    if code == 416 and requested and not body and re.fullmatch(r"bytes \*/\d+", content_range):
+        return MediaResponse(
+            416, {"Cache-Control": "no-store", "Content-Range": content_range, "Content-Length": "0"}, b""
+        )
+    raise KnowledgeSearchUnavailable("invalid media response status")
+
+
 class MediaProxy:
     """Serve an authorized media blob with browser-compatible Range support.
 
@@ -408,7 +464,7 @@ class MediaProxy:
     version invalidates URLs before their TTL runs out.
     """
 
-    def __init__(self, signer: MediaResourceSigner, fetch: Callable[[MediaGrant], bytes]):
+    def __init__(self, signer: MediaResourceSigner, fetch: Callable[[MediaGrant], bytes | MediaResponse]):
         self.signer = signer
         self.fetch = fetch
 
@@ -467,8 +523,10 @@ class MediaProxy:
             return MediaResponse(403, {"Cache-Control": "no-store"}, b"")
         except (MediaNotFound, FileNotFoundError):
             return MediaResponse(404, {"Cache-Control": "no-store"}, b"")
+        if isinstance(body, MediaResponse):
+            return media_response(grant, body, range_header)
         if not isinstance(body, bytes):
-            raise TypeError("media fetcher must return bytes")
+            raise TypeError("media fetcher must return bytes or MediaResponse")
         return self._response_for(grant, body, range_header)
 
     def serve_signed(
@@ -498,8 +556,10 @@ class MediaProxy:
                 if _accepts_range(self.fetch)
                 else self.fetch(grant)
             )
+            if isinstance(fetched, MediaResponse):
+                return media_response(grant, fetched, range_header)
             if not isinstance(fetched, bytes):
-                raise TypeError("media fetcher must return bytes")
+                raise TypeError("media fetcher must return bytes or MediaResponse")
             if _accepts_range(self.fetch):
                 # Some kb-service versions ignore Range and return the full
                 # object. Detect that shape and slice locally; a range-aware
@@ -802,7 +862,9 @@ class KbServiceClient:
                     merged.append({**chunk, "knowledge_base_id": kb_id})
         return merged
 
-    def fetch_media(self, grant: MediaGrant, *, range_header: str | None = None) -> bytes:
+    def fetch_media(
+        self, grant: MediaGrant, *, range_header: str | None = None, include_response=False, max_bytes=None
+    ) -> bytes | MediaResponse:
         """Fetch the media bytes a signed grant refers to (#168 media plane).
 
         Image grants carry the RAGFlow ``image_id`` as ``backend_id`` and go
@@ -843,17 +905,23 @@ class KbServiceClient:
         # semantics (404 is a missing blob, not an auth/invalid-body case).
         # The capture set is the skeleton's shared one plus ValueError, which
         # the previous hand-rolled tuple also listed.
-        def fetch_once() -> bytes:
+        def fetch_once() -> bytes | MediaResponse:
             try:
                 with open_response(spec) as response:
                     if response.status == 404:
                         raise MediaNotFound(grant.backend_id)
+                    if include_response:
+                        received = read_media_response(response, max_bytes=max_bytes)
+                        _raise_for_media_error_body(received.body)
+                        return received
                     body = read_body(response)
                     _raise_for_media_error_body(body)
                     return body
             except MediaNotFound:
                 raise
             except urllib.error.HTTPError as exc:
+                if include_response and exc.code == 416:
+                    return MediaResponse(416, {"Content-Range": exc.headers.get("Content-Range", "")}, b"")
                 if exc.code == 404:
                     raise MediaNotFound(grant.backend_id) from exc
                 raise KnowledgeSearchUnavailable("kb-service media fetch failed") from exc

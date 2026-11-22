@@ -112,6 +112,7 @@ SETTING_SOURCES: dict[str, SettingSource] = {
         "AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", kind="bool_not_falsy", default=True
     ),
     "kb_service_base_url": SettingSource("AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
+    "knowledge_delegation_file": SettingSource("AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE"),
     "kb_service_timeout_seconds": SettingSource(
         "AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", file=False, kind="float", default=10.0
     ),
@@ -274,6 +275,7 @@ class GatewayServerSettings:
     #: 与本模块其余开关的取向一致：**默认值只有一个来源**。
     trust_company_payload: bool = True
     kb_service_base_url: str = ""
+    knowledge_delegation_file: str = ""
     #: Routing decision source (#392). Empty base URL or key leaves routing on
     #: the previous behaviour; the dependency is optional by configuration.
     routing_risk_at_least: float = 0.5
@@ -512,6 +514,8 @@ class GatewayServerSettings:
             )
         ):
             raise ValueError("environment task key must be independent and at least 32 characters")
+        if self.knowledge_delegation_file and self.kb_service_base_url:
+            raise ValueError("delegated knowledge cannot also expose shared kb-service")
         if self.charging_status_base_url:
             parse_charging_endpoints(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):

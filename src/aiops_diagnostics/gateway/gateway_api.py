@@ -819,7 +819,7 @@ def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
             ),
             consumer_callback_base=context.settings.public_base_url,
             consumer_libraries=lambda: consumer_knowledge_selection.owned_libraries(
-                context.runtime, binding.tenant_id
+                context.runtime, binding.tenant_id, binding.app_id
             ),
         )
     try:
@@ -1369,7 +1369,7 @@ def _workflow_trial_draft(
                 require_split=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 2,
                 require_picker=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 3,
                 owned_libraries=lambda: consumer_knowledge_selection.owned_libraries(
-                    context.runtime, row.tenant_id
+                    context.runtime, row.tenant_id, row.app_id
                 ),
             )
         except ValueError as exc:
@@ -1491,6 +1491,10 @@ def create_gateway_app(
 ) -> FastAPI:
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
+    if selected_settings.knowledge_delegation_file:
+        from aiops_diagnostics.knowledge.delegated_knowledge_client import load
+
+        load(selected_settings.knowledge_delegation_file, selected_settings.execution_environment)
     if selected_settings.operator_profiles_file:
         from aiops_diagnostics.dify.self_service_config import profiles
 
@@ -1889,26 +1893,41 @@ def create_gateway_app(
         ignored on purpose, and ``plans_for`` takes no request-derived argument
         for that reason.
 
-        Unconfigured means the route is **not enabled at all** (404, see the
-        route below), never "no key needed". Half-configuration is a startup
-        error, enforced in ``GatewayServerSettings.validate``.
+        Shared credentials remain exact opaque matches. A delegated credential
+        instead requires the central signing secret and current explicit grant;
+        neither route admits an anonymous caller. Half-configuration of the
+        original shared key remains a startup error.
         """
         configured = context.settings.dify_knowledge_api_key
-        if not configured:
-            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_RETRIEVAL_UNAVAILABLE", "route not found")
-        if not authorization or not authorization.startswith("Bearer "):
-            raise StandardAPIError(
-                status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
-            )
-        presented = authorization.removeprefix("Bearer ").strip()
-        matches_production = secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8"))
-        matches_debug = bool(context.settings.dify_debug_api_key) and secrets.compare_digest(
-            context.settings.dify_debug_api_key.encode("utf-8"), presented.encode("utf-8")
+        presented = (authorization or "").removeprefix("Bearer ").strip()
+        bearer = authorization and authorization.startswith("Bearer ")
+        matches_production = (
+            bool(configured) and bearer and secrets.compare_digest(configured.encode(), presented.encode())
         )
+        matches_debug = (
+            bool(context.settings.dify_debug_api_key)
+            and bearer
+            and secrets.compare_digest(context.settings.dify_debug_api_key.encode(), presented.encode())
+        )
+        # 原共享key是不透明字符串；精确匹配必须先于新能力前缀解析。
         if matches_debug:
             return debug_dify_identity(context.settings)
         if matches_production:
             return PRODUCTION_IDENTITY
+        from aiops_diagnostics.knowledge import knowledge_delegation
+
+        if bearer and presented.startswith(knowledge_delegation.PREFIX):
+            try:
+                scope = knowledge_delegation.authorize(context.settings, presented)
+            except ValueError as exc:
+                raise StandardAPIError(403, "DIFY_CREDENTIAL_REJECTED", "credential rejected") from exc
+            return DifyIdentity(name="delegated", delegated_scope=scope)
+        if not configured:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_RETRIEVAL_UNAVAILABLE", "route not found")
+        if not bearer:
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
+            )
         from aiops_diagnostics.dify import candidate_knowledge
 
         if presented.startswith(candidate_knowledge.PREFIX):
@@ -1993,6 +2012,17 @@ def create_gateway_app(
             request = parse_dify_retrieval_request(payload, max_top_k=context.settings.kb_search_max_results)
         except DifyRequestError as exc:
             raise StandardAPIError(status.HTTP_400_BAD_REQUEST, exc.code, exc.message) from exc
+        if identity.delegated_scope:
+            from aiops_diagnostics.knowledge import knowledge_delegation
+
+            try:
+                return knowledge_delegation.retrieve(context, identity.delegated_scope, request)
+            except ValueError as exc:
+                raise StandardAPIError(403, "DIFY_CREDENTIAL_REJECTED", "credential rejected") from exc
+            except KnowledgeSearchUnavailable as exc:
+                raise StandardAPIError(
+                    502, "DIFY_KNOWLEDGE_UNAVAILABLE", "knowledge unavailable", retryable=True
+                ) from exc
         if identity.candidate_scope:
             from aiops_diagnostics.dify.candidate_knowledge import CandidateKnowledgeError, retrieve
 
@@ -2103,6 +2133,17 @@ def create_gateway_app(
         # ONE resolver for both routes (#925). Before this, retrieval and listing
         # each merged the same two tables themselves — two implementations of one
         # rule, which is the shape that drifts.
+        if identity.delegated_scope:
+            from aiops_diagnostics.knowledge import knowledge_delegation
+
+            try:
+                return knowledge_delegation.catalogue(context, identity.delegated_scope)
+            except ValueError as exc:
+                raise StandardAPIError(403, "DIFY_CREDENTIAL_REJECTED", "credential rejected") from exc
+            except KnowledgeSearchUnavailable as exc:
+                raise StandardAPIError(
+                    502, "DIFY_KNOWLEDGE_UNAVAILABLE", "knowledge unavailable", retryable=True
+                ) from exc
         if identity.candidate_scope:
             from aiops_diagnostics.dify.candidate_knowledge import CandidateKnowledgeError, catalogue
 
@@ -6855,7 +6896,9 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
             try:
                 consumer_knowledge_selection.require_owned(
                     report.get("knowledge_base_ids", []),
-                    consumer_knowledge_selection.owned_libraries(context.runtime, caller.effective_tenant_id),
+                    consumer_knowledge_selection.owned_libraries(
+                        context.runtime, caller.effective_tenant_id, located.app_id
+                    ),
                 )
             except ValueError as exc:
                 raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "所选知识库授权已变化") from exc

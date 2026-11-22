@@ -533,3 +533,32 @@ passed仅表示这些实际技术证据齐备；`business_accuracy=unconfirmed`�
 固定worker将目标已登记端口交给本机CLI；CLI只接受原固定配置档案并强制回环来源，不能从页面改执行主机。
 
 缺本机任务HMAC的验证显示`ENVIRONMENT_VALIDATION_KEY_REQUIRED`，不发HTTP或模型；网络/未知失败仍需对账。
+
+
+## 正式受限知识读能力（D41）
+
+目标客服只需中央知识的单应用/单库读权限，不需要共享KB或Dify Console密钥。
+中央沿原KnowledgeGrants明确授权对客资料，并登记同一environment/tenant/workspace/app/library后，
+受管运维可导出能力；命令不会grant、注册、发布或启用：
+
+```bash
+aiops-admin --config <中央私有配置> knowledge-delegation \
+  --environment env-a --tenant TENANT-A --app <客服应用> --library <已授权库> \
+  --output <新建的私有绝对路径>
+```
+
+输出文件父目录0700、文件0600，终端只显示结果与逻辑对象。已有输出拒绝覆盖，秘密不进入任务JSON或浏览器。
+目标经标准配置部署设置`AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE`；文件只含固定中央HTTPS origin和
+该环境各应用的精确能力，不能与`AIOPS_GATEWAY_KB_SERVICE_BASE_URL`同时配置。每个应用只授权一个库，
+缺能力即拒绝，不能退回直接知识服务。动态文档客服callback>=4可消费，现役Agent callback6复用原工具链。
+原直连部署不新增配置要求；旧ckx候选与ckc目录能力不变。
+
+目录与检索每次重核中央原知识授权、工作区和应用归属。撤权后再授权推进同一授权行的世代，旧能力不能复活；
+需明确重新导出和标准配置部署。目标不另存一份grant真值。媒体先由中央限定本轮搜到的对象，目标再绑定原QA签名，
+中央撤权、目标租户/路由停用或QA不可交付时都拒绝；读取期间撤权同样不交付。
+委派媒体逐跳透传Range（含非零偏移与后缀），按实际HTTP状态/Content-Range只切片一次；大于32MiB对象的小片仍可读。
+单次响应体上限32MiB，无Range整段超限明确不可用；未知长度的响应也检查溢出，不返回截断成功。
+
+本片提供知识读链，不完成应用发布与租户激活。正式接入仍须确认目标不能绕过中央能力访问共享KB原入口；
+原共享服务网络暴露不由本功能自动收敛。安装账本目前记录停用目录摘要，后继激活须通过原安装器事务成套更新，
+不能直接编辑registry或installed.json。真实grant/配置/准入需单独现场批准。
