@@ -71,20 +71,43 @@ def submit(context, identity, payload, source):
     path, reference = environment_management._path(context), settings.environment_onboarding_file
     bindings = _bindings(settings, source)
     plan = plans.read(path, identity, payload["candidate_plan"], reference)
+    # 「包含初装」只能显式声明；此时首个子任务是受管冷装而非只读预检。
+    initial = payload.get("initial_installation") is True
     with drafts._locked(path):
         draft = next(
             r for r in drafts._rows(drafts._database(path)) if r["environment"] == plan["environment"]
         )
         if not any(t["id"] == payload["tenant_id"] for t in json.loads(draft["body"])["tenants"]):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_TENANT_INVALID")
-    site = tasks.submit(path, identity, payload["candidate_plan"], reference)
+    site = None if initial else tasks.submit(path, identity, payload["candidate_plan"], reference)
+    environment = plan["environment"]
     with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
-        request = json.loads(tasks._row(conn, site["id"])["request"])
-        tasks._authorize(path, identity, site["environment"])
+        if initial:
+            if plan["state"] == "expired" or any(
+                c["state"] != "passed"
+                for c in plan["checks"]
+                if c["id"] not in {"host-identity", "capacity", "network", "business"}
+            ):
+                raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_BLOCKED")
+            proposed = next(
+                r for r in drafts._rows(drafts._database(path)) if r["environment"] == environment
+            )
+            target = next(
+                t
+                for t in plans._references(reference)
+                if t["id"] == json.loads(proposed["body"])["deployment_target"]
+            )
+            request = {
+                "identity": identity,
+                "plan": plan,
+                "target": {k: target[k] for k in ("id", "host", "user", "port")},
+                "installer": {k: target["installer"][k] for k in ("sha256", "revision")},
+            }
+        else:
+            request = json.loads(tasks._row(conn, site["id"])["request"])
+        tasks._authorize(path, identity, environment)
         tasks._current(path, request, reference)
-        draft = next(
-            r for r in drafts._rows(drafts._database(path)) if r["environment"] == site["environment"]
-        )
+        draft = next(r for r in drafts._rows(drafts._database(path)) if r["environment"] == environment)
         tenants = json.loads(draft["body"])["tenants"]
         if not any(t["id"] == payload["tenant_id"] for t in tenants):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_TENANT_INVALID")
@@ -93,10 +116,11 @@ def submit(context, identity, payload, source):
             + plans._digest(
                 {
                     "action": ACTION,
-                    "plan": site["plan_id"],
+                    "plan": plan["id"],
                     "tenant": payload["tenant_id"],
                     "source": source,
                     "bindings": bindings,
+                    **({"initial_installation": True} if initial else {}),
                 }
             )[:32]
         )
@@ -104,7 +128,7 @@ def submit(context, identity, payload, source):
             "SELECT 1 FROM environment_tasks WHERE environment=? AND state='waiting' AND id!=? "
             "AND json_extract(request,'$.action')=? AND json_extract(request,'$.tenant_id')=? "
             "AND json_extract(request,'$.plan.id')=? LIMIT 1",
-            (site["environment"], identifier, ACTION, payload["tenant_id"], site["plan_id"]),
+            (environment, identifier, ACTION, payload["tenant_id"], plan["id"]),
         ).fetchone():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
         request.update(
@@ -113,14 +137,25 @@ def submit(context, identity, payload, source):
             tenant_id=payload["tenant_id"],
             consumer_source=source,
             bindings=bindings,
-            children={"site-preflight": site["id"]},
+            children={},
+            **({"initial_installation": True} if initial else {}),
         )
+        if initial:
+            from .environment_installation import submit_cold
+
+            # 初装可能是本环境首个任务行；表结构由这里兜底初始化。
+            drafts.initialize_tasks(conn)
+            request["children"]["site-install"] = submit_cold(
+                conn, environment, identity, identifier, request
+            )
+        else:
+            request["children"]["site-preflight"] = site["id"]
         conn.execute(
             "INSERT OR IGNORE INTO environment_tasks(id,environment,request,state,result,updated_at) "
             "VALUES(?,?,?,'waiting',?,?)",
             (
                 identifier,
-                site["environment"],
+                environment,
                 json.dumps(request),
                 json.dumps(
                     {
@@ -177,9 +212,12 @@ def _advance_one(context, path, reference, identifier):
     try:
         with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
             request = authorize_parent(conn, path, reference, identifier, context.settings)
+            sequence = (
+                ["site-install", *STEPS] if request.get("initial_installation") is True else list(STEPS)
+            )
             steps = []
             state, error = "waiting", ""
-            for action in STEPS:
+            for action in sequence:
                 if action not in request["children"]:
                     break
                 child = tasks._public(tasks._row(conn, request["children"][action]))
@@ -191,7 +229,7 @@ def _advance_one(context, path, reference, identifier):
                     break
                 if child["state"] != "observed":
                     break
-            if len(steps) == len(STEPS) and all(s["state"] == "observed" for s in steps):
+            if len(steps) == len(sequence) and all(s["state"] == "observed" for s in steps):
                 state = "observed"
             result = {
                 "scope": "candidate-resources-only",
@@ -209,11 +247,34 @@ def _advance_one(context, path, reference, identifier):
             ready = state == "waiting" and steps and all(s["state"] == "observed" for s in steps)
         if not ready:
             return
-        action = STEPS[len(steps)]
+        action = sequence[len(steps)]
+        if action == "site-preflight" and "site-preflight" not in request["children"]:
+            # 初装确认在场后才出现场预检；after绑定令同计划陈旧阻塞行不被复用。
+            site = tasks.submit(
+                path,
+                tuple(request["identity"]),
+                request["plan"]["id"],
+                reference,
+                after=request["children"]["site-install"],
+            )
+            with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
+                row = tasks._row(conn, identifier)
+                stored = json.loads(row["request"])
+                if (
+                    row["state"] == "waiting"
+                    and not row["cancel"]
+                    and "site-preflight" not in stored["children"]
+                ):
+                    stored["children"]["site-preflight"] = site["id"]
+                    conn.execute(
+                        "UPDATE environment_tasks SET request=?,updated_at=? WHERE id=?",
+                        (json.dumps(stored), time.time(), identifier),
+                    )
+            return
         parent = request["children"][
             "knowledge-connect"
             if action in {"operator-prepare", "consumer-prepare"}
-            else STEPS[len(steps) - 1]
+            else sequence[len(steps) - 1]
         ]
         bindings = request["bindings"]
         tasks.submit_workspace(

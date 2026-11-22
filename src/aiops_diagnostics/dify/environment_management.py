@@ -203,11 +203,17 @@ def task(context, session, payload):
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
             return submit(context, identity, payload["candidate_task"])
-        if set(payload) == {"candidate_plan", "tenant_id", "source_app_id", "source_version"}:
+        if set(payload) in (
+            {"candidate_plan", "tenant_id", "source_app_id", "source_version"},
+            {"candidate_plan", "tenant_id", "source_app_id", "source_version", "initial_installation"},
+        ):
             from . import environment_candidate_preparation, environment_consumer
 
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
+            # 「包含初装」只接受显式true确认；否则载荷里不得出现该键。
+            if "initial_installation" in payload and payload["initial_installation"] is not True:
+                raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
             source = environment_consumer.sources(context, caller, payload["source_app_id"])
             if (
                 type(payload["source_version"]) is not int

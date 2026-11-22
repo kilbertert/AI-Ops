@@ -327,6 +327,30 @@ timer每轮结束20秒后只处理一个任务；同一service不会叠加运行
 原单步骤入口不变，旧Web不提交此能力；部署顺序为控制Gateway→规范执行端→管理桥/Web，
 旧执行端可执行已生成的原子任务但不能推进父任务，未配共享依赖时新提交明确拒绝。
 
+### 空机初装（包含初装，ADR-0308）
+
+仅当目标主机确实为空时使用：同一“准备候选”区域另有点击“空机初装并准备”，浏览器显式确认后
+同源任务输入为`{candidate_plan, tenant_id, source_app_id, source_version, initial_installation:true}`；
+缺省或真值以外取值按无效载荷拒绝，原“准备候选”语义不变。父任务编号摘要计入该声明，
+含/不含初装的重复提交不是同一任务。
+
+首个子任务为安装面`site-install`：沿用同一SQLite行、`waiting/executing/checking`租约、
+`attempted/dispatched/authorize`授权闸与安装面互斥，stage只导出`application`与`candidate`
+（无runtime、无expected基线），`python`取计划部署目标声明。
+执行端`task.py cold-run`先在固定`root/state/config/unit`、`-preparing-*`残迹与
+systemd单位上证明「未安装」；声明`backups`根允许受管staging预建，仅可信私有空目录仍属真空，
+其中已有内容按旧业务资产对账。端口可临时绑定才视为真空；已安装目标只跳过不重放，
+未知资产/旧单位/占用端口/漂移/半失败落`reconcile`或`blocked`具名结论，不当空机。
+意图`cold-intent.json`先于`apply`首写持久在worker创建的受管staging根，不落在`inst.root`；
+冷投影仅停用目录与公司连接，不装runtime；事务仍归原`Installer.apply`与`pending.json`权威。
+`observed`仅当`installation∈{installed,already_installed}`；`not_installed`只能`blocked`。
+
+`site-install`确认在场后才出现场预检：`tasks.submit(after=<初装编号>)`延迟建行，
+同计划陈旧阻塞预检行不复用；此后走原STEPS与`{candidate_task, installation:true}`升级链，
+冷装账本即`installed.json`，升级按原expected基线加runtime指针接续。
+部署顺序与候选准备相同：控制Gateway、规范执行端、管理桥/Web；旧执行端不认识`site-install`
+动作时任务停`checking`，须先升级执行端。
+
 ### 候选工作区准备
 
 同一冻结计划的现场任务未过期且observed后，在已保存草稿租户对应按钮点击“准备候选工作区”。

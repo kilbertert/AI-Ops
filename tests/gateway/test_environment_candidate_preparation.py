@@ -65,6 +65,14 @@ def advance(state):
     )
 
 
+def internal(state, payload):
+    return state[0][2].post(
+        "/v1/internal/environment-tasks",
+        json=payload,
+        headers=build_internal_token_headers(state[0][3].environment_task_key, 300, int(time.time())),
+    )
+
+
 def rows(state):
     with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
         return [dict(r) for r in conn.execute("SELECT * FROM environment_tasks ORDER BY rowid")]
@@ -255,6 +263,85 @@ def test_response_loss_reconciles_same_child_before_next_step(candidate_chain):
     advance(state)
     final = state[0][2].post("/v1/dify/management/environment-tasks", json={"id": parent}).json()
     assert final["state"] == "observed" and len(state[4][3]) == 1
+
+
+def test_initial_installation_is_explicit_and_installs_before_preflight(candidate_chain, tmp_path):
+    state = candidate_chain
+    data_home = tmp_path / "cold-data"
+    data_home.mkdir(mode=0o700)
+    state[0][3].data_home = data_home
+    # 「包含初装」只认显式true；其他取值与默认提交一样按无效载荷拒绝。
+    for value in (False, "yes", 1):
+        state[2]["initial_installation"] = value
+        assert submit_http(state).status_code != 200
+    state[2]["initial_installation"] = True
+    parent = submit_http(state)
+    assert parent.status_code == 200, parent.text
+    identifier = parent.json()["id"]
+    again = submit_http(state)
+    assert again.status_code == 200 and again.json()["id"] == identifier
+    children = request_of(state, identifier)["children"]
+    assert set(children) == {"site-install"}
+    cold = children["site-install"]
+    owner = "c" * 32
+    # 初装属安装面租约；现场/旧worker路径不能认领或代写结果。
+    with pytest.raises(tasks.TaskRefused):
+        tasks.worker(state[0][0], state[0][1], {"id": cold, "owner": owner})
+    claim = internal(state, {"installation_claim": True, "owner": owner})
+    assert claim.status_code == 200 and claim.json()["id"] == cold
+    assert claim.json()["action"] == "site-install"
+    stage = internal(state, {"installation": "stage", "id": cold, "owner": owner})
+    assert stage.status_code == 200, stage.text
+    body = stage.json()
+    assert set(body["archives"]) == {"application", "candidate"}
+    assert "expected" not in body and body["observe_only"] is False
+    assert body["expires_at"] > time.time() and body["python"] in ("3.11", "3.12", "3.13")
+    # 初装未完成前父任务不创建现场预检，旧计划阻塞行也不可能被复用。
+    assert advance(state).status_code == 200
+    assert "site-preflight" not in request_of(state, identifier)["children"]
+    authorize = internal(state, {"installation": "authorize", "id": cold, "owner": owner})
+    assert authorize.json() == {"authorized": True}
+    result = {
+        "id": cold,
+        "environment": "a",
+        "scope": "site-cold-installation-only",
+        "state": "observed",
+        "installation": "installed",
+        "executable": False,
+        "version": "1.2.3",
+        "source_revision": body["archives"]["application"]["revision"],
+        "artifact_sha256": body["archives"]["application"]["sha256"],
+        "config_sha256": "c" * 64,
+        "registry_sha256": "d" * 64,
+    }
+    for malformed in (
+        {**result, "installation": "not_installed"},
+        {**result, "state": "observed", "installation": "installed", "artifact_sha256": "e" * 64},
+        {**result, "scope": "candidate-installation-only"},
+    ):
+        assert (
+            internal(
+                state, {"installation": "complete", "id": cold, "owner": owner, "result": malformed}
+            ).status_code
+            != 200
+        ), malformed
+    done = internal(state, {"installation": "complete", "id": cold, "owner": owner, "result": result})
+    assert done.status_code == 200 and done.json()["state"] == "observed", done.text
+    assert advance(state).status_code == 200
+    children = request_of(state, identifier)["children"]
+    site = children["site-preflight"]
+    assert request_of(state, site).get("after") == cold
+    finished = finish_child(state, "site-preflight", site)
+    assert finished["state"] == "observed", finished
+    assert advance(state).status_code == 200
+    workspace = request_of(state, identifier)["children"]["workspace-prepare"]
+    assert finish_child(state, "workspace-prepare", workspace)["state"] == "observed"
+    steps = (
+        state[0][2]
+        .post("/v1/dify/management/environment-tasks", json={"id": identifier})
+        .json()["result"]["steps"]
+    )
+    assert [s["action"] for s in steps][:2] == ["site-install", "site-preflight"]
 
 
 def test_cancel_completed_parent_keeps_observed_resource_tasks(candidate_chain):

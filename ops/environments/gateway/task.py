@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import socket
 import tempfile
 import time
 from pathlib import Path
@@ -171,6 +172,163 @@ def execute(inst, spec, *, observe_only=False):
     return observe(inst, spec, record)
 
 
+def execute_cold(inst, spec, *, staging, observe_only=False):
+    """真正空机的受管冷装：事实先分类，意图先于首写，事务仍归原apply。
+
+    「未安装」只能由固定路径/单位/端口全空证明；已安装直接跳过，未知资产、
+    半失败或旧单位按恢复/拒绝对账，绝不当空机重放。冷装意图放受管staging，
+    inst.root在apply原子接管前保持不存在，安装器自身pending仍权威。
+    """
+    if (
+        set(spec) != {"id", "environment", "expires_at", "python", "archives"}
+        or not re.fullmatch(r"task_[0-9a-f]{32}", spec["id"])
+        or spec["environment"] != inst.environment
+        or type(spec["expires_at"]) not in (int, float)
+        or not math.isfinite(spec["expires_at"])
+        or spec["python"] not in probe.SUPPORTED_PYTHON_MINORS
+        or set(spec["archives"]) != {"application", "candidate"}
+    ):
+        raise ValueError("invalid cold installation task")
+    for value in spec["archives"].values():
+        if set(value) not in ({"path", "sha256"}, {"path", "sha256", "revision"}):
+            raise ValueError("invalid task artifact")
+        if not re.fullmatch(r"[a-f0-9]{64}", value["sha256"]):
+            raise ValueError("invalid task artifact digest")
+        path = Path(value["path"])
+        if not path.is_absolute():
+            raise ValueError("invalid task artifact path")
+        install.trusted(path, private=True)
+        if path.stat().st_nlink != 1:
+            raise ValueError("artifact hardlink refused")
+    result = {
+        "id": spec["id"],
+        "environment": inst.environment,
+        "scope": "site-cold-installation-only",
+        "state": "blocked",
+        "installation": "unconfirmed",
+        "executable": False,
+        "error_code": "ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED",
+    }
+    install.trusted(staging, private=True)
+    intent = staging / "cold-intent.json"
+    record = None
+    if intent.exists() or intent.is_symlink():
+        install.trusted(intent, private=True)
+        if intent.stat().st_nlink != 1 or intent.stat().st_size > 65536:
+            raise ValueError("invalid cold installation record")
+        record = json.loads(intent.read_text())
+        if record.get("spec") != spec:
+            # 别的任务意图占用本staging：只对账不执行。
+            return result
+    residue = [p for p in inst.root.parent.glob(inst.name + "-preparing-*") if p.is_dir() or p.is_symlink()]
+    ledger = inst.root / "installed.json"
+    if ledger.exists() or ledger.is_symlink():
+        # 已有installed目标跳过冷装；账本身份或期望漂移都只观察对账不重放。
+        try:
+            installed = inst.read_record("installed.json")
+        except ValueError:
+            return {
+                **result,
+                "state": "reconcile",
+                "error_code": "ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED",
+            }
+        desired = (record or {}).get("desired", {})
+        if desired and any(installed.get(k) != v for k, v in desired.items()):
+            return result
+        return {
+            **result,
+            "state": "observed",
+            "installation": (record or {}).get(
+                "outcome", "installed" if record is not None else "already_installed"
+            ),
+            "error_code": "",
+            "version": installed["version"],
+            "source_revision": installed["revision"],
+            **{k: installed[k] for k in ("artifact_sha256", "config_sha256", "registry_sha256")},
+        }
+    occupied = any(p.exists() or p.is_symlink() for p in (inst.root, inst.state, inst.config, inst.unit))
+    if not occupied and (inst.backups.exists() or inst.backups.is_symlink()):
+        # 声明backups根允许受管staging预建；仅可信私有空目录仍属真空，内容即旧资产。
+        try:
+            install.trusted(inst.backups, private=True)
+            occupied = not inst.backups.is_dir() or any(inst.backups.iterdir())
+        except (OSError, ValueError):
+            occupied = True
+    if (
+        occupied
+        or residue
+        or inst.command("systemctl", "show", inst.name, "-p", "LoadState", "--value") != "not-found"
+    ):
+        # 半失败/未知资产/旧单位按恢复原语对账，不进入冷装。
+        return {
+            **result,
+            "state": "reconcile",
+            "error_code": "ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED",
+        }
+    if record is not None:
+        # 本任务意图在场而根从未接管：apply未越过首写，事实不明先对账。
+        return {**result, "state": "reconcile", "error_code": "ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED"}
+    if observe_only or spec["expires_at"] <= time.time():
+        # 空机事实可证，但安装目标未达：不算已安装，不推进后续预检。
+        return {**result, "installation": "not_installed"}
+    try:
+        with socket.socket() as sock:
+            # uvicorn同样允许TIME_WAIT复用；listen仍拒绝已有活动listener。
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", inst.port))
+            sock.listen(1)
+    except OSError:
+        return {**result, "error_code": "ENVIRONMENT_COLD_INSTALLATION_REFUSED"}
+    archives = spec["archives"]
+    files, _candidate = probe.candidate_files(
+        Path(archives["candidate"]["path"]), archives["candidate"]["sha256"], inst.environment
+    )
+    meta = probe.manifest(
+        Path(archives["application"]["path"]), archives["application"]["sha256"], spec["python"]
+    )
+    if meta["revision"] != inst.revision:
+        raise ValueError("installer and application revisions differ")
+    # 冷装仅投影停用目录与公司连接；运行工件指针与runtime不在本步。
+    files["production.env"] = inst.candidate_configuration(files["production.env"])
+    files["environment.json"] = inst.candidate_directory(files["environment.json"])
+    with tempfile.TemporaryDirectory(prefix="aiops-cold-task-") as temporary:
+        root = Path(temporary)
+        for name in ("production.env", "environment.json"):
+            install.write(root / name, files[name].decode())
+        desired = {
+            "revision": meta["revision"],
+            "artifact_sha256": archives["application"]["sha256"],
+            "config_sha256": install.digest(root / "production.env"),
+            "registry_sha256": install.digest(root / "environment.json"),
+        }
+        # 冷装意图先于apply首写持久到受管staging，inst.root仍不存在。
+        install.write(intent, json.dumps({"spec": spec, "desired": desired}))
+        # 原install CLI的代码/venv穿越权限仍需0022，秘密和账本由原写入器保持私有。
+        previous_umask = os.umask(0o022)
+        try:
+            outcome = inst.apply(
+                Path(archives["application"]["path"]),
+                archives["application"]["sha256"],
+                probe.managed_python(spec["python"], run=inst.command),
+                root / "production.env",
+                desired["config_sha256"],
+                registry_file=root / "environment.json",
+            )
+        finally:
+            os.umask(previous_umask)
+        record = {"spec": spec, "desired": desired, "outcome": outcome["result"]}
+        install.write(intent, json.dumps(record))
+    return {
+        **result,
+        "state": "observed",
+        "installation": outcome["result"],
+        "error_code": "",
+        "version": outcome["version"],
+        "source_revision": desired["revision"],
+        **{k: desired[k] for k in ("artifact_sha256", "config_sha256", "registry_sha256")},
+    }
+
+
 def register(inst, spec, *, observe_only=False):
     """登记意图先持久；失联后只观察原同事务登记，不补写缺失资源。"""
     if (
@@ -236,6 +394,8 @@ def main():
             "publication-activate",
             "publication-restore",
             "publication-observe",
+            "cold-run",
+            "cold-observe",
         ),
     )
     for key in ("environment", "user", "port"):
@@ -308,6 +468,8 @@ def main():
         result = (
             register(inst, spec, observe_only=args.action == "observe-registration")
             if args.action in {"register", "observe-registration"}
+            else execute_cold(inst, spec, staging=bundle.parent, observe_only=args.action == "cold-observe")
+            if args.action in {"cold-run", "cold-observe"}
             else execute(inst, spec, observe_only=args.action == "observe")
         )
     print(json.dumps(result))
