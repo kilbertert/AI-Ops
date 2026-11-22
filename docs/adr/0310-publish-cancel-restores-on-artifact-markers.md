@@ -21,6 +21,8 @@ BUSY 闸。env95 实测出现此形：selector 缺陷（ADR-0309）使任务死�
 `markers` 放在 `spec` 之外：spec 被 dispatch 逐字比对且喂给 `central_bundle`，
 不能混入随文件状态波动的字段。worker 复用每次 execute 已发出的 `describe` 响应，
 不新增一次跨端往返；标记由 `describe` 在管理面所在网关本地读取，不向执行端暴露路径。
+worker 从运维检出运行、可能先于网关升级：`markers` 键缺失（旧网关不支持）视同标记在场，
+维持核查 hold——判据缺席永远收敛到保守侧，不放行恢复。
 
 ## 替代方案
 

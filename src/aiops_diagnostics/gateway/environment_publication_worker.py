@@ -261,9 +261,9 @@ def execute(root, request, identifier, owner):
                 call("directory", result=result, restore=True)
             elif "central" in steps and not bundle:
                 # intent.json 是中央步首个落盘点；工件标记皆无证明未越过比对、无共享副作用，
-                # 可与未启动同案恢复；标记在场则可能存在未知共享副作用，不能报告为已恢复。
-                markers = described.get("markers", {})
-                if markers.get("intent") or markers.get("release"):
+                # 可与未启动同案恢复；标记在场或键缺失（旧网关不支持）都不能排除副作用，维持核查。
+                markers = described.get("markers")
+                if not markers or markers.get("intent") or markers.get("release"):
                     result.update(error_code="ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED")
                 else:
                     result.update(state="cancelled", phase="restored")
