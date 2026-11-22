@@ -25,6 +25,8 @@
 | 候选消费者应用准备 | #1602 `904472df` | 控制Gateway/桥/Web1.33.0，目标1.32.2；Dify原API保持 | 原测试租户及124/LTA-CSMS各有一个候选advanced-chat，均为入口停用；环境/租户未激活 | #1602的CI5375/10、Chromium8及独立取消/漂移/失联/分离路由库/所选版本反例通过；两次正常页面流程均完成候选准备与退出；124现场身份/容量/正式网络/业务pending，真实模型、知识内容/取数与激活未验 | [串联配套与页面验收](../validation/2026-11-20-candidate-preparation-live.md)、[124 LTA-CSMS事件](../validation/2026-11-19-lta-candidate-consumer-live.md)、[候选准备实现回执](../validation/2026-11-18-candidate-consumer-live.md)、[手册](environment-registry.md#计划预检与读取（P4第一片）) |
 | 一次候选准备持久任务 | #1631 `d211d184` | 控制Gateway/桥/Web1.33.0，原timer配套；124仍1.32.2 | 候选资源复用，环境/租户与正式入口仍关闭 | CI5513/10、独立并发/取消/撤权3项及修复重放通过；正常页一次提交→后台六步→重载/重复同父编号→退出拒绝通过；安装/激活未执行，业务unverified | [串联配套与页面验收](../validation/2026-11-20-candidate-preparation-live.md)、[D36手册](environment-registry.md#一次准备候选资源d36) |
 | 停用候选安装持久任务 | #1633 `b7dde17c`；#1635 `c05b3699`引用；#1636 `e790361f`暂存 | 控制Gateway1.34.1/桥1.34.0，目标实例1.34.0+c05b3699 | LTA-CSMS停用候选配置/运行工件已成套安装；注册/业务/激活均未执行，正式入口关闭 | 首任务stage因`/etc`只读沙箱失败并修复暂存路径；正常页提交→专用timer→远端意图+原安装器事务→本地观察通过；控制库持久、同计划重复同父、整页重载回读与退出拒绝通过 | [本次安装回执](../validation/2026-11-22-candidate-install-task-live.md)、[D37手册](environment-registry.md#停用候选安装任务d37) |
+| 跨环境正式知识受限读依赖 | #1645 `3253e6da`，1.37.0 | 41标准CD已部署；124未升级/未配新能力 | 未签发生产委派或grant，不启用租户 | CI5624/10、原客服HTTP/媒体及跨env/app/library/撤权重授权独立通过；非零Range/旧opaque key/大媒体截断均修复复验；真实共享服务与124正式路径仍未验 | [D41手册](environment-registry.md#正式受限知识读能力d41)、[ADR0302](../adr/0302-scoped-knowledge-delegation.md) |
+| 已登记租户三业务技术验证 | #1643 `a485af9c`；#1644 `9b5d3d01`配置引用修复 | 41/124已1.36.1，桥/Web1.36配套；D41后继控制版本另记 | 空案例全部三能力SAMPLE_REQUIRED，未模型运行、环境/租户/正式路由仍关闭 | 全量CI5594/10及修复5606/10、独立运行授权/取消/配置CAS反例通过；正常页升级登记、缺样例阻塞、重复同任务/重载/退出补验通过；此前36→41 HTTPS unavailable/502失败保留，真实业务正向与长期网络未验 | [本事件回执](../validation/2026-11-22-installed-business-validation-live.md)、[D40手册](environment-registry.md#已安装租户业务验证d40) |
 | 已安装候选运行登记续接 | #1641 `7f2e57c2`，1.35.0 | 控制41、124均1.35.0+7f2e57c2；管理桥/Web与worker已配套 | LTA工作区/双端运行资源已登记；环境/租户与正式路由仍关闭 | CI5577/10、独立取消与撤权恢复反例修复复验通过；正常页准备→升级→登记、重复/重载/退出拒绝通过；固定只读观察unchanged且登记不重启，业务未验 | [本次回执](../validation/2026-11-22-runtime-registration-task-live.md)、[D39手册](environment-registry.md#已安装候选运行登记d39) |
 | 受管主机身份验收 | #1638 `5751838b`；#1639 `b8f1b73a`桥放行补漏 | 控制Gateway与桥`b8f1b73a`；worker沿既有site-preflight timer | 仅证明任务落在已登记主机，不代替正式网络、容量与业务验收；环境/租户停用 | 首验暴露桥白名单未放verify_task（请求到不了41）已修复；正常页提交→timer领取→dev-host指纹断言后对124只读采集，回执scope=managed-host-verification-only、executable=false、三字段齐全（hostname/machine-id摘要/服务身份）；同计划重复同任务、刷新回读与退出拒绝通过 | [本次验收回执](../validation/2026-11-22-host-verify-live.md)、[D38手册](environment-registry.md#受管主机身份验收d38) |
 | 共享Dify流式并发转发 | #1627 `76b459dc` | 共享Dify原自有转发器已从合并固定包更新；Gateway保持1.32.2 | 原回环/鉴权与业务入口保持，第二环境仍停用 | CI5502/10及独立流式互等、32槽/异常释放与观察失败拒绝通过；真实41长连接期间Console200/70ms，单位/容器身份保持；完整模型工具业务后续单验 | [并发恢复事件](../validation/2026-11-20-dify-forward-concurrency-live.md)、[转发器手册](../../ops/dify-inner-api/README.md) |
@@ -43,8 +45,9 @@
 获批行为唯一正文在[环境目录Feature](../acceptance/environment-directory.feature)，
 [QA](../acceptance/environment-directory-qa-plan.md)给出场景步骤，[手册](environment-registry.md)讲操作。
 未来能力与依赖见[规划](../architecture/2026-11-16-manual-environment-onboarding.md)和主任务#1535/P0～P5原生子任务。
-截至2026-11-22的阶段核对：控制41为`1.35.0+7f2e57c26b4b`，管理桥与Web已同修订配套；
-124同为`1.35.0+7f2e57c26b4b`，本轮运行登记见[D39回执](../validation/2026-11-22-runtime-registration-task-live.md)。
+截至2026-11-22的阶段核对：124为`1.36.1+9b5d3d0183b8`，管理桥/Web为1.36配套；
+控制端为`1.37.0+3253e6dac587`，新委派配置未设置、未签发生产能力；124未随之升级。
+本轮[D40回执](../validation/2026-11-22-installed-business-validation-live.md)区分缺项拒绝与真实业务通过。
 各行旧版本是对应验收事件的版本，不是实例当前版本。124环境与两个租户均停用；
 LTA-CSMS运行工件已安装，目标工作区及双端应用已登记（原D32登记证据属于租户1）。
 
@@ -53,7 +56,7 @@ LTA-CSMS运行工件已安装，目标工作区及双端应用已登记（原D32
 | P0 | 最小模块、公司数据读面、有限HTTPS/模型工具链、受管主机身份 | 正式网络稳定性、环境身份隔离、并发与升级重叠容量 |
 | P1/P2 | 唯一目录草稿、管理Tab、冻结计划、任务与回读 | 完整新增/编辑/停用与权限页面验收、两环境生效目录 |
 | P3 | 通用安装核心、124停用候选成套安装/重复与部分恢复 | 完整冷装和故障恢复矩阵 |
-| P4 | 六步候选准备、真实知识链、页面安装、主机核验及LTA运行登记 | 同环境多租户接线共存、三业务/隔离/网络/容量汇总、正式激活与恢复 |
+| P4 | 六步准备、知识候选链、页面安装/登记；三业务技术验证已实现，空案例拒绝已现场观察 | 真正三业务正向/隔离/网络/容量汇总、正式发布/安装账本准入与恢复 |
 | P5 | 各单链路时点证据 | 两环境各至少两租户的三业务、追问/原客户端、隔离及升级回退联合验收 |
 
 下一依赖是多租户运行接线共存、业务验证和激活恢复，不重复建设候选准备或登记。
