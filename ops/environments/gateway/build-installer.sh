@@ -13,6 +13,9 @@ names=(install.py runtime_check.py probe.py)
 if git cat-file -e "$revision:ops/environments/gateway/task.py" 2>/dev/null; then
   names+=(task.py)
 fi
+if git cat-file -e "$revision:ops/environments/gateway/publication.py" 2>/dev/null; then
+  names+=(publication.py)
+fi
 for name in "${names[@]}"; do
   git show "$revision:ops/environments/gateway/$name" > "$work/$name"
 done

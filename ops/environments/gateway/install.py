@@ -408,7 +408,7 @@ WantedBy=multi-user.target
                 )
             )
 
-        if without_switches(incoming) != without_switches(actual):
+        if sorted(without_switches(incoming).splitlines()) != sorted(without_switches(actual).splitlines()):
             raise ValueError("active configuration change requires separate window")
         return actual
 
@@ -421,6 +421,8 @@ WantedBy=multi-user.target
             self.runtime_path(old) / "runtime.tar", old["runtime_sha256"], self.environment
         )
         _, proposed = probe.runtime_files(incoming, incoming_sha, self.environment)
+        if incoming_sha == old["runtime_sha256"]:
+            return incoming, incoming_sha
         # 原单租户停用安装仍可更新自身配置；只给新增租户/已组合快照增加保留约束。
         if before["schema"] == "aiops-environment-runtime/1" and before["tenant_id"] == proposed["tenant_id"]:
             return incoming, incoming_sha
@@ -692,6 +694,10 @@ WantedBy=multi-user.target
 
     def recover(self):
         pending = self.read_record("pending.json")
+        if pending.get("mode") == "publication":
+            import publication
+
+            return publication.recover(self, pending["operation"])
         if pending["phase"] not in ("preparing", "switching"):
             raise ValueError("unknown recovery phase")
         old = pending["previous"]
@@ -822,6 +828,10 @@ WantedBy=multi-user.target
         if old:
             self.check_registry(old)
             self.check_runtime(old)
+            if old.get("knowledge_sha256"):
+                if digest(self.config / "knowledge/knowledge-delegation.json") != old["knowledge_sha256"]:
+                    raise ValueError("delegated knowledge configuration drift")
+                desired["knowledge_sha256"] = old["knowledge_sha256"]
             if old.get("runtime_sha256") and runtime_archive is None:
                 raise ValueError("runtime configuration requires runtime artifact")
             if expected_runtime_sha is not None and expected_runtime_sha != old.get(
@@ -880,7 +890,9 @@ WantedBy=multi-user.target
                         )
                     ):
                         raise ValueError("active admission changed during candidate installation")
-                    if any(t["id"] == composed["tenant_id"] and t["enabled"] for t in proposed["tenants"]):
+                    if runtime_sha != old.get("runtime_sha256") and any(
+                        t["id"] == composed["tenant_id"] and t["enabled"] for t in proposed["tenants"]
+                    ):
                         raise ValueError("candidate cannot replace active tenant")
                 incoming = json.loads(registry_file.read_text())
                 if (
@@ -919,7 +931,10 @@ WantedBy=multi-user.target
             if self.command("systemctl", "show", self.name, "-p", "LoadState", "--value") != "not-found":
                 raise ValueError("refuse to adopt existing unit")
             with socket.socket() as sock:
+                # uvicorn同样允许TIME_WAIT复用；listen仍拒绝已有活动listener。
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind(("127.0.0.1", self.port))
+                sock.listen(1)
         if shutil.disk_usage("/opt").free < 1024**3:
             raise ValueError("insufficient disk headroom")
         available = int(re.search(r"MemAvailable:\s+(\d+)", Path("/proc/meminfo").read_text())[1])
@@ -1039,6 +1054,15 @@ WantedBy=multi-user.target
                 desired["registry_sha256"],
             )
             (candidate_root / "runtime").symlink_to(runtime)
+            if old and old.get("knowledge_sha256"):
+                # 候选mount覆盖/etc根，必须携带同一受限知识文件，不复制中央管理key。
+                (candidate_root / "knowledge").mkdir(mode=0o700)
+                os.chown(candidate_root / "knowledge", self.account.pw_uid, self.account.pw_gid)
+                self.config_snapshot(
+                    self.config / "knowledge/knowledge-delegation.json",
+                    candidate_root / "knowledge/knowledge-delegation.json",
+                    old["knowledge_sha256"],
+                )
         shutil.copyfile(Path(__file__).with_name("runtime_check.py"), release / "runtime_check.py")
         (release / "runtime_check.py").chmod(0o644)
         self.command(
@@ -1138,6 +1162,41 @@ WantedBy=multi-user.target
                 str(port),
             )
             self.health(meta["version"], port=port)
+            if old:
+                # 记录真实旧服务与候选共存的cgroup成本，供正式开通容量门消费。
+                try:
+                    samples = []
+                    for unit in (self.name, trial_unit):
+                        raw = self.command("systemctl", "show", unit, "-p", "MemoryCurrent", "-p", "MainPID")
+                        values = dict(line.split("=", 1) for line in raw.splitlines())
+                        samples.append(
+                            {
+                                "service": unit,
+                                "memory_bytes": int(values["MemoryCurrent"]),
+                                "pid": int(values["MainPID"]),
+                            }
+                        )
+                    if any(row["memory_bytes"] <= 0 or row["pid"] <= 0 for row in samples):
+                        raise ValueError("capacity sample unavailable")
+                    write(
+                        release / "capacity.json",
+                        json.dumps(
+                            {
+                                "environment": self.environment,
+                                "revision": desired["revision"],
+                                "previous_revision": old["revision"],
+                                "sampled_at": time.time(),
+                                "services": samples,
+                                "available_memory_bytes": int(
+                                    re.search(r"MemAvailable:\s+(\d+)", Path("/proc/meminfo").read_text())[1]
+                                )
+                                * 1024,
+                            }
+                        ),
+                    )
+                except (ValueError, KeyError, RuntimeError, OSError, subprocess.SubprocessError):
+                    # 安装合同不依赖容量采样；没有事实时后续发布必须明确拒绝。
+                    pass
         finally:
             self.stop(trial_unit)
             shutil.rmtree(trial)
@@ -1219,6 +1278,8 @@ def main():
             checks = dict(line.split("  ", 1)[::-1] for line in sums)
             if Path(__file__).with_name("task.py").is_file():
                 expected.add("task.py")
+            if Path(__file__).with_name("publication.py").is_file():
+                expected.add("publication.py")
             if (
                 len(checks) != len(sums)
                 or set(checks) != expected

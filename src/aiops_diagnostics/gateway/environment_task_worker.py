@@ -110,7 +110,7 @@ def execute(root, claim):
                 "  if m.name=='.' and m.isdir(): continue",
                 "  name=m.name.removeprefix('./')",
                 "  allowed={'REVISION','SHA256SUMS','install.py','runtime_check.py',"
-                "'probe.py','artifact_checks.py','task.py'}",
+                "'probe.py','artifact_checks.py','task.py','publication.py'}",
                 "  assert m.isfile() and name in allowed",
                 "  q=d/name",
                 "  body=t.extractfile(m).read()",
@@ -263,7 +263,9 @@ def call(gateway, key, payload, *, trial=False):
         body=json.dumps(payload).encode(),
         headers=headers,
         timeout=240
-        if payload.get("prepare") == "knowledge" or payload.get("installation") == "stage"
+        if payload.get("prepare") == "knowledge"
+        or payload.get("installation") == "stage"
+        or payload.get("publication") in {"central", "connect"}
         else 30,
         follow_redirects=False,
     )
@@ -287,7 +289,15 @@ def central_call(root, target, payload):
     # 固定服务身份/路径只支持已声明控制Gateway档案；不接受任务中的shell或HTTP地址。
     if target != "41":
         raise ValueError("central deployment profile unavailable")
-    duration = 250 if payload.get("prepare") == "knowledge" or payload.get("installation") == "stage" else 45
+    duration = (
+        250
+        if (
+            payload.get("prepare") == "knowledge"
+            or payload.get("installation") == "stage"
+            or payload.get("publication") in {"central", "connect"}
+        )
+        else 45
+    )
     result = subprocess.check_output(
         ["dev-host", "exec", target, "--allow-service-exec", "--timeout", str(duration), "--", command],
         cwd=root,
@@ -316,6 +326,10 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
         request({"advance_candidates": True})
         installation = request({"installation_claim": True, "owner": owner})
         if installation.get("claimed") is True:
+            if installation.get("action") == "environment-publish":
+                from .environment_publication_worker import execute as publish_environment
+
+                return publish_environment(root, request, installation["id"], owner)
             if installation.get("action") == "candidate-validate":
                 from .environment_validation_worker import execute as validate_business
 
@@ -552,7 +566,7 @@ def installation_run(root, request, identifier, owner, *, registration=False):
                     "  if m.name=='.' and m.isdir():continue",
                     "  n=m.name.removeprefix('./')",
                     "  assert m.isfile() and n in {'REVISION','SHA256SUMS','install.py','runtime_check.py',"
-                    "'probe.py','artifact_checks.py','task.py'}",
+                    "'probe.py','artifact_checks.py','task.py','publication.py'}",
                     "  q=d/n;body=t.extractfile(m).read()",
                     "  if q.exists() or q.is_symlink():",
                     "   assert q.is_file() and not q.is_symlink() and q.stat().st_uid==0",

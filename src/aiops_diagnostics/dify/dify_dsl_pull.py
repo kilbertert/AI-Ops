@@ -1089,6 +1089,22 @@ def sync_workflow_from_dify(
         if bootstrap is not None:
             current = bootstrap({"workflow": frozen})
             snapshot_body.update(prompt=current["prompt"], model=current["model"])
+    return commit_workflow_snapshot(
+        manager,
+        context,
+        binding,
+        existing,
+        previous,
+        snapshot_body,
+        workflow_id,
+        consumer_settings is not None,
+    )
+
+
+def commit_workflow_snapshot(
+    manager, context, binding, existing, previous, snapshot_body, workflow_id, consumer
+):
+    """冻结图的共同持久化步骤；来源验证留在原发布器/受管工件消费方。"""
     agent = (
         manager.fork_draft(context, existing.agent_id, expected_revision=existing.revision)
         if existing.status == "published"
@@ -1110,7 +1126,7 @@ def sync_workflow_from_dify(
         version.version_no,
         workflow_id=workflow_id,
         agent_id=agent.agent_id,
-        route_scenario="consumer_service" if consumer_settings is not None else "",
+        route_scenario="consumer_service" if consumer else "",
     )
 
 

@@ -278,3 +278,26 @@ def test_business_validation_crosses_bridge_without_credentials_or_verdict(bridg
         {"action": "status"},
     ):
         assert _manage({**body, **extra}, address=bridge)[0] == 400
+
+
+def test_environment_publication_and_restore_cross_actual_bridge_with_only_confirmed_scope(bridge, upstream):  # noqa: F811
+    publication = {
+        "action": "environment-task",
+        "validation_task": "task_" + "a" * 32,
+        "publication_plan": "plan_" + "b" * 32,
+        "confirm_readonly": True,
+        "confirm_customer_knowledge": True,
+        "acceptance_ref": "readonly-diagnosis",
+    }
+    for body in (publication, {"action": "environment-task", "restore_publication": "task_" + "c" * 32}):
+        assert _manage(body, address=bridge)[0] != 400
+        forwarded = [c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]
+        assert forwarded[-1]["body"] == {k: v for k, v in body.items() if k != "action"}
+    for extra in (
+        {"confirm_readonly": 1},
+        {"confirm_customer_knowledge": False},
+        {"passed": True},
+        {"app_id": CONSUMER},
+        {"action": "status"},
+    ):
+        assert _manage({**publication, **extra}, address=bridge)[0] == 400

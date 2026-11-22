@@ -273,6 +273,39 @@ def register(app, context):
             action = payload.pop("action")
             if not isinstance(action, str):
                 raise TrialRefused("ENVIRONMENT_TRIAL_INVALID")
+            if action in {
+                "publication-trial-start",
+                "publication-trial-read",
+                "publication-trial-complete",
+                "publication-operator-start",
+            }:
+                from . import environment_release_trial
+
+                if action == "publication-operator-start":
+                    result = await asyncio.to_thread(
+                        environment_release_trial.start_operator, context, payload
+                    )
+                    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+                result = await asyncio.to_thread(
+                    {
+                        "publication-trial-start": environment_release_trial.start,
+                        "publication-trial-read": environment_release_trial.read,
+                        "publication-trial-complete": environment_release_trial.complete,
+                    }[action],
+                    context,
+                    payload,
+                )
+                return JSONResponse(result, headers={"Cache-Control": "no-store"})
+            if action == "publication-run-window":
+                from .environment_capacity import run_window
+
+                result = await asyncio.to_thread(run_window, context, payload)
+                return JSONResponse(result, headers={"Cache-Control": "no-store"})
+            if action == "publication-readiness":
+                from .environment_readiness import check
+
+                result = await asyncio.to_thread(check, context, payload["spec"])
+                return JSONResponse(result, headers={"Cache-Control": "no-store"})
             if action == "business-step":
                 from .environment_business import ValidationRefused, step
 

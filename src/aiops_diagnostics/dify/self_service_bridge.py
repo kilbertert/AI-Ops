@@ -68,6 +68,12 @@ def handle(handler, bridge):
                 "registration_plan",
                 "registration_task",
                 "validation_plan",
+                "validation_task",
+                "publication_plan",
+                "confirm_readonly",
+                "confirm_customer_knowledge",
+                "acceptance_ref",
+                "restore_publication",
                 "capabilities",
                 "case_ref",
                 "site_task",
@@ -135,7 +141,27 @@ def handle(handler, bridge):
     if (method == "GET" or action == "retry") and payload:
         raise _Rejected(400, "无效参数")
     if action == "environment-task":
-        if set(payload) == {"registration_task", "validation_plan", "capabilities", "case_ref"}:
+        if set(payload) == {"restore_publication"}:
+            valid = isinstance(payload["restore_publication"], str) and re.fullmatch(
+                r"task_[0-9a-f]{32}", payload["restore_publication"]
+            )
+        elif set(payload) == {
+            "validation_task",
+            "publication_plan",
+            "confirm_readonly",
+            "confirm_customer_knowledge",
+            "acceptance_ref",
+        }:
+            valid = (
+                isinstance(payload["validation_task"], str)
+                and re.fullmatch(r"task_[0-9a-f]{32}", payload["validation_task"])
+                and isinstance(payload["publication_plan"], str)
+                and re.fullmatch(r"plan_[0-9a-f]{32}", payload["publication_plan"])
+                and payload["confirm_readonly"] is True
+                and payload["confirm_customer_knowledge"] is True
+                and payload["acceptance_ref"] == "readonly-diagnosis"
+            )
+        elif set(payload) == {"registration_task", "validation_plan", "capabilities", "case_ref"}:
             valid = (
                 isinstance(payload["registration_task"], str)
                 and re.fullmatch(r"task_[0-9a-f]{32}", payload["registration_task"])
@@ -233,6 +259,12 @@ def handle(handler, bridge):
         "registration_plan",
         "registration_task",
         "validation_plan",
+        "validation_task",
+        "publication_plan",
+        "confirm_readonly",
+        "confirm_customer_knowledge",
+        "acceptance_ref",
+        "restore_publication",
         "capabilities",
         "case_ref",
         "candidate_plan",

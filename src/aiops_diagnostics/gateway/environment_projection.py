@@ -216,7 +216,12 @@ def validate_candidate(
         if preserving:
             candidate_id = json.loads((Path(runtime) / "manifest.json").read_text())["tenant_id"]
             if any(t["id"] == candidate_id and t["enabled"] for t in row["tenants"]):
-                raise ValueError("candidate installation cannot replace an active tenant")
+                original = Path(previous_directory).parent.parent / "runtime/runtime.tar"
+                if (
+                    not original.is_file()
+                    or original.read_bytes() != (Path(runtime) / "runtime.tar").read_bytes()
+                ):
+                    raise ValueError("candidate installation cannot replace an active tenant")
     if preserving or candidate_tenant is not None:
         for key in ("AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED", "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED"):
             if values.get(key) not in {"false", "true"}:

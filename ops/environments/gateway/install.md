@@ -231,3 +231,24 @@ source_runtime_sha256是本次输入包，previous_runtime_sha256是本次安装
 失败后原recover恢复配置/runtime，目录采用更高修订并同步installed摘要，运行历史不覆盖。
 安装需要原零在飞检查和自有Gateway重启窗口；该过程保持旧租户配置和服务语义，但不承诺升级期间零中断。
 旧安装器不识别runtime/2；产生新pending后只能用同版安装器恢复，恢复旧代码应先还原支持的运行工件。
+
+## 正式发布事务与后续升级（D43）
+
+`publication.py`随同修订固定安装器打包，由原`task.py publication-*`入口执行，不从目标工作树导入代码。
+发布工件、root批准副本和原installed账本通过只读文件描述符交服务身份CLI核对；仅有服务身份的可写文件不足以授权发布。
+知识读配置位于`/etc/aiops-access-<环境>/knowledge/knowledge-delegation.json`，目录与文件分别0700/0600；
+应用key仍是原状态根`keys/<app_id>.key`。不改变root所有的配置根归属，不下发Console或公司账号凭据。
+
+首次客服配置转换先记录完整前后字节和`pending`，零在飞检查后只重启自有Gateway。
+目标准入最后切换；恢复原route/目录使用新revision，配置或账本发生第三方变更时拒绝覆盖。
+保留该版本安装器用于`install.py recover`，旧版安装器不能识别本发布pending。
+已经正式开通的环境，后续同内容runtime的应用升级保持准入、知识文件与账本摘要；候选隔离mount也携相同知识文件。
+新增租户继续沿D42累积原targets；共享模型/节点/配置变化仍须独立窗口。
+
+安装器在真实旧服务与候选共存阶段记录`current/capacity.json`；采样失败不影响原基础安装合同，但后续正式发布必须补齐事实。
+冷装端口探针使用与uvicorn相同的`SO_REUSEADDR`并执行`listen`：允许TIME_WAIT复用，仍拒绝已有listener，
+不会借`SO_REUSEPORT`争抢其他服务端口。
+
+发布文件与原Gateway数据根一致：原`AIOPS_DATA_HOME=<状态根>`仍不变，Gateway派生目录是
+`<状态根>/gateway`，因此release、verification及逐端操作记录放在其`environment-publications/`子目录。
+不要将它们手工移到状态根一级，或为迁就文件位置改变原环境变量/数据库合同。

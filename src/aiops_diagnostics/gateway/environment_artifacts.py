@@ -87,7 +87,7 @@ def installer_manifest(archive, digest):
         files = {}
         size = 0
         for index, member in enumerate(bundle):
-            if index >= 8:
+            if index >= 9:
                 raise ValueError("too many installer members")
             if member.name == "." and member.isdir():
                 continue
@@ -104,6 +104,7 @@ def installer_manifest(archive, digest):
                     "probe.py",
                     "artifact_checks.py",
                     "task.py",
+                    "publication.py",
                 }
                 or name in files
                 or size > 8 * 1024**2

@@ -1259,3 +1259,23 @@ def test_fixed_installer_registers_without_restart_or_deployment_input(host, mon
     else:
         assert inst.register_runtime()["result"] == "registered"
     assert not any(a[:2] in (("systemctl", "stop"), ("systemctl", "start")) for a in calls)
+
+
+def test_cold_probe_reuses_time_wait_but_refuses_live_listener(host):
+    inst, *_ = host
+    with socket.socket() as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        inst.port = listener.getsockname()[1]
+        with pytest.raises(OSError):
+            apply(host)
+        assert not (inst.root / "pending.json").exists() and not inst.root.exists()
+        with socket.socket() as client:
+            client.connect(("127.0.0.1", inst.port))
+            connection, _ = listener.accept()
+            with connection:
+                connection.shutdown(socket.SHUT_WR)
+                assert client.recv(1) == b""
+    # 服务端先FIN，原裸bind会被TIME_WAIT误拒；无需sleep或猜测端口释放时间。
+    assert apply(host)["result"] == "installed"
