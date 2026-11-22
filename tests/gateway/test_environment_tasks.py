@@ -554,6 +554,7 @@ def test_preflight_driver_executes_old_and_new_bundle_interpreter_contract(prepa
     直接managed_python()会在任何预检前AttributeError。本用例对生成的驱动
     脚本做真实`python3 -`执行，旧包证PATH回退、新包证受管枚举选中。
     """
+    import os
     import subprocess
     from pathlib import Path
     from shutil import which
@@ -603,7 +604,9 @@ def test_preflight_driver_executes_old_and_new_bundle_interpreter_contract(prepa
     assert proc.returncode == 0, proc.stderr
     assert "AttributeError" not in proc.stderr
     assert Path(proc.stdout.strip()).resolve() == Path(which("python3")).resolve()
-    # 新固定包：真实probe+artifact_checks，受管枚举选中解释器跑同一驱动。
+    # 新固定包：真实probe+artifact_checks。受管枚举用确定的合成解释器入口——
+    # 宿主/usr/bin/python3小版本在CI上可能不在3.11–3.13（实测无受管解释器）；
+    # shim对-I探针回报固定3.13、exec时打印标记后委托PATH的真实python3跑stub。
     new = tmp_path / "new-bundle"
     new.mkdir()
     (new / "probe.py").write_text((root / "ops/environments/gateway/probe.py").read_text())
@@ -611,20 +614,36 @@ def test_preflight_driver_executes_old_and_new_bundle_interpreter_contract(prepa
         (root / "src/aiops_diagnostics/gateway/environment_artifacts.py").read_text()
     )
     (new / "install.py").write_text("import sys;print(sys.executable)")
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    shim = tmp_path / "targets" / "python3.13"
+    shim.parent.mkdir()
+    shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-I" ]; then echo 3.13;'
+        ' else echo "synthetic-entry:$0"; exec python3 "$@"; fi\n'
+    )
+    shim.chmod(0o755)
+    (managed / "python3").symlink_to(shim)
+    resolved = os.path.realpath(managed / "python3")
+    # roots/owner/check_dir是受管合同自身参数：tmp祖先归属不受测试控制，
+    # 归属核验面由tests/tooling单测覆盖，本例只证驱动执行解析后目标。
+    contract = f"roots=({str(managed)!r},),owner={os.getuid()},check_dir=lambda _path,_owner:None"
     proc = run(
         ["python3", "-"],
-        input=inputs[-1].replace(remote, str(new)),
+        input=inputs[-1]
+        .replace(remote, str(new))
+        .replace(
+            "probe.system_python(probe.managed_python())",
+            f"probe.system_python(probe.managed_python({contract}),{contract})",
+        ),
         text=True,
         capture_output=True,
     )
     assert proc.returncode == 0, proc.stderr
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("bundle_probe", root / "ops/environments/gateway/probe.py")
-    bundle_probe = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(bundle_probe)
-    selected = bundle_probe.system_python(bundle_probe.managed_python())[0]
-    assert Path(proc.stdout.strip()).resolve() == Path(selected).resolve()
+    lines = proc.stdout.strip().splitlines()
+    assert lines[0] == "synthetic-entry:" + resolved
+    assert Path(lines[1]).resolve() == Path(which("python3")).resolve()
 
 
 def test_worker_key_must_not_reuse_existing_service_secrets(tmp_path):

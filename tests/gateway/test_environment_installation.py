@@ -304,7 +304,9 @@ def test_install_driver_tail_executes_old_and_new_bundle_interpreter_contract(
     `python3 -`，证回退与选择两端都真正执行而非只断言脚本形状。
     """
     import ast
+    import os
     import subprocess
+    from shutil import which
 
     from aiops_diagnostics.gateway import environment_task_worker as worker
 
@@ -366,32 +368,51 @@ def test_install_driver_tail_executes_old_and_new_bundle_interpreter_contract(
     tail = scripts[-1][scripts[-1].index("sys.path.insert(0,str(d))") :]
     tail = tail.replace(remote, str(tmp_path / "bundle"))
     # 逐字尾部只缺d与导入头；等价补齐后对替身安装目录真实执行。
+    # 新包受管枚举用确定的合成解释器入口：宿主/usr/bin/python3小版本在CI上
+    # 可能不在3.11–3.13；shim对-I探针回报固定3.13、exec时打印标记后委托
+    # PATH的真实python3跑stub。roots/owner/check_dir是受管合同自身参数——
+    # tmp祖先归属不受测试控制，归属核验面由tests/tooling单测覆盖。
+    managed = tmp_path / "bundle" / "managed"
+    managed.mkdir(parents=True)
+    shim = tmp_path / "bundle" / "targets" / "python3.13"
+    shim.parent.mkdir(parents=True)
+    shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-I" ]; then echo 3.13;'
+        ' else echo "synthetic-entry:$0"; exec python3 "$@"; fi\n'
+    )
+    shim.chmod(0o755)
+    (managed / "python3").symlink_to(shim)
+    resolved = os.path.realpath(managed / "python3")
+    tail = tail.replace(
+        "probe.system_python(probe.managed_python())",
+        "probe.system_python(probe.managed_python({0}),{0})".format(
+            f"roots=({str(managed)!r},),owner={os.getuid()},check_dir=lambda _path,_owner:None"
+        ),
+    )
     for bundle in ("old", "new"):
         directory = tmp_path / "bundle" / "installer"
         directory.mkdir(parents=True, exist_ok=True)
         if bundle == "old":
             (directory / "probe.py").write_text("# 旧固定包probe：无managed_python\n")
-            expected = "/usr/bin/python3"
         else:
             root = Path(__file__).resolve().parents[2]
             (directory / "probe.py").write_text((root / "ops/environments/gateway/probe.py").read_text())
             (directory / "artifact_checks.py").write_text(
                 (root / "src/aiops_diagnostics/gateway/environment_artifacts.py").read_text()
             )
-            import importlib.util
-
-            spec = importlib.util.spec_from_file_location(
-                "bundle_probe", root / "ops/environments/gateway/probe.py"
-            )
-            bundle_probe = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(bundle_probe)
-            expected = bundle_probe.system_python(bundle_probe.managed_python())[0]
         (directory / "task.py").write_text("import sys;print(sys.executable)")
         prologue = "import subprocess,sys\nfrom pathlib import Path\nd=Path(" + repr(str(directory)) + ")\n"
         proc = real(["python3", "-"], input=prologue + tail, text=True, capture_output=True)
         assert proc.returncode == 0, proc.stderr
         assert "AttributeError" not in proc.stderr
-        assert Path(proc.stdout.strip()).resolve() == Path(expected).resolve()
+        lines = proc.stdout.strip().splitlines()
+        if bundle == "old":
+            assert Path(lines[0]).resolve() == Path("/usr/bin/python3").resolve()
+        else:
+            # 驱动执行的是核验后的解析目标（shim），其打印标记后委托真实python3跑stub。
+            assert lines[0] == "synthetic-entry:" + resolved
+            assert Path(lines[1]).resolve() == Path(which("python3")).resolve()
 
 
 @pytest.mark.parametrize("phase", ["queued", "executing", "checking", "running"])

@@ -1354,11 +1354,18 @@ def test_managed_python_rejects_writable_mismatched_or_foreign_paths(tmp_path):
     assert probe.system_python(
         str(fake), roots=(str(root),), owner=os.getuid(), run=lambda *a: "3.13", check_dir=check
     ) == (os.path.realpath(fake), "3.13")
+    # 受管候选经符号链接→合成真实目标：返回的是解析后绝对目标而非候选路径。
+    # 不探测宿主/usr/bin/python3——其小版本在CI上可能不在受支持范围。
+    synthetic = tmp_path / "targets" / "python3.12"
+    synthetic.parent.mkdir()
+    synthetic.write_text("#!/bin/sh\n")
+    synthetic.chmod(0o755)
     link = root / "python3"
-    link.symlink_to("/usr/bin/python3")
-    path, minor = probe.system_python(str(link), roots=(str(root),), check_dir=check)
-    # 返回已核验的解析后绝对目标而非候选路径本身。
-    assert path == os.path.realpath("/usr/bin/python3") and minor in probe.SUPPORTED_PYTHON_MINORS
+    link.symlink_to(synthetic)
+    path, minor = probe.system_python(
+        str(link), roots=(str(root),), owner=os.getuid(), run=lambda *a: "3.12", check_dir=check
+    )
+    assert path == os.path.realpath(synthetic) and minor == "3.12"
     with pytest.raises(ValueError, match="system Python"):
         probe.system_python(
             str(tmp_path / "python3"),
