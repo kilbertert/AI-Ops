@@ -68,7 +68,11 @@ def trusted_directory(path, owner):
 
 
 def system_python(path, *, roots=MANAGED_PYTHON_ROOTS, owner=0, run=command, check_dir=trusted_directory):
-    """受管解释器：受管bin目录内python3[.11|.12|.13]；解析后目标与父目录归属/权限必须受控。"""
+    """受管解释器：受管bin目录内python3[.11|.12|.13]；解析后目标与父目录归属/权限必须受控。
+
+    执行仍走候选路径，因此除解析目标外还逐hop核链上每个符号链接的祖先目录：
+    任一hop父链可被组/他人改写即拒绝，核验后换链无法重定向解释器。
+    """
     candidate = Path(path)
     if (
         not candidate.is_absolute()
@@ -82,7 +86,17 @@ def system_python(path, *, roots=MANAGED_PYTHON_ROOTS, owner=0, run=command, che
     mode = resolved.stat().st_mode
     if resolved.stat().st_uid != owner or mode & 0o022 or not mode & 0o111:
         raise ValueError("untrusted interpreter ownership or mode")
-    for directory in {*candidate.parents, *resolved.parents}:
+    chain = {*candidate.parents, *resolved.parents}
+    link = candidate
+    for _ in range(64):
+        if not link.is_symlink():
+            break
+        chain.update(link.parents)
+        target = os.readlink(link)
+        link = Path(target) if os.path.isabs(target) else link.parent / target
+    else:
+        raise ValueError("interpreter link chain too deep")
+    for directory in chain:
         check_dir(directory, owner)
     minor = run(
         str(candidate),

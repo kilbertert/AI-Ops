@@ -17,7 +17,7 @@ bash ops/environments/gateway/build.sh origin/main 3.12 /private/gateway.tar.gz
 ```
 
 目标平台目前为Linux x86_64，解释器选择3.11/3.12/3.13；不下载或升级目标解释器。
-`--python`只接受`/usr/bin`或`/usr/local/bin`下受管的`python3[.11|.12|.13]`（符号链接解析目标与父目录须root拥有且组/他人不可写）；
+`--python`只接受`/usr/bin`或`/usr/local/bin`下受管的`python3[.11|.12|.13]`（符号链接解析目标与父目录须root拥有且组/他人不可写，核验后只执行解析后最终目标）；
 平台默认`python3`过旧的主机（如Alibaba Linux 8的3.6）应显式给出/usr/local下匹配的受管解释器。
 构建用相同小版本解析依赖标记，下载锁定版本及hash匹配的wheel，无源码包、配置或凭据；
 wheel里的health版本带合并提交。输出包括manifest.json、SHA256SUMS和wheelhouse，外层SHA由命令给出。

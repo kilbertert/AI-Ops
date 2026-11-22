@@ -1299,40 +1299,35 @@ def test_managed_python_selects_local_install_when_system_default_is_old(tmp_pat
     local_bin = tmp_path / "usr/local/bin"
     usr_bin.mkdir(parents=True)
     local_bin.mkdir(parents=True)
-    real = probe.command
-    real_minor = real(
-        "/usr/bin/python3",
-        "-I",
-        "-c",
-        "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
-    )
-    for base in (usr_bin, local_bin):
-        (base / "python3").symlink_to("/usr/bin/python3")
-    (local_bin / ("python" + real_minor)).symlink_to("/usr/bin/python3")
+    # 不同解析目标区分候选：旧平台链与root维护链各指自己的真实文件。
+    new_minor = probe.SUPPORTED_PYTHON_MINORS[-1]
+    old = tmp_path / "targets" / "platform-python3.6"
+    new = tmp_path / "targets" / "python3.13"
+    old.parent.mkdir()
+    for target in (old, new):
+        target.write_text("#!/bin/sh\n")
+        target.chmod(0o755)
+    (usr_bin / "python3").symlink_to(old)
+    (local_bin / "python3").symlink_to(new)
+    minors = {str(usr_bin / "python3"): "3.6", str(local_bin / "python3"): new_minor}
     roots = (str(usr_bin), str(local_bin))
-    checked = []
 
     def run(path, *args):
-        if str(path).startswith(str(usr_bin)):
-            return "3.6"  # 平台Python替身；其余候选真实执行读取小版本。
-        return real(path, *args)
+        return minors[path]
 
     def check_dir(path, owner):
         resolved = Path(os.path.realpath(path))
-        checked.append(resolved)
-        if str(tmp_path).startswith(str(resolved)) or str(resolved).startswith(str(tmp_path)):
-            return  # 合成容器及其祖先只模拟挂载点；真实目录仍核归属与权限。
-        probe.trusted_directory(resolved, owner)
+        if resolved == tmp_path or resolved in tmp_path.parents:
+            return  # 合成容器及其祖先（含1777的/tmp）只模拟挂载点；区内目录实核。
+        probe.trusted_directory(resolved, os.getuid())
 
-    assert probe.managed_python(real_minor, roots=roots, run=run, check_dir=check_dir) == str(
-        local_bin / "python3"
-    )
-    assert Path("/usr/bin") in checked
-    other = next(m for m in probe.SUPPORTED_PYTHON_MINORS if m != real_minor)
+    kwargs = dict(roots=roots, owner=os.getuid(), run=run, check_dir=check_dir)
+    assert probe.managed_python(new_minor, **kwargs) == str(local_bin / "python3")
+    other = next(m for m in probe.SUPPORTED_PYTHON_MINORS if m != new_minor)
     with pytest.raises(ValueError, match="no managed interpreter"):
-        probe.managed_python(other, roots=roots, run=run, check_dir=check_dir)
+        probe.managed_python(other, **kwargs)
     with pytest.raises(ValueError, match="system Python"):
-        probe.system_python(str(usr_bin / "python3.6"), roots=roots, run=run, check_dir=check_dir)
+        probe.system_python(str(usr_bin / "python3.6"), **kwargs)
 
 
 def test_managed_python_rejects_writable_mismatched_or_foreign_paths(tmp_path):
@@ -1368,6 +1363,68 @@ def test_managed_python_rejects_writable_mismatched_or_foreign_paths(tmp_path):
             owner=os.getuid(),
             run=lambda *a: "3.12",
             check_dir=check,
+        )
+
+
+def test_system_python_controls_every_symlink_hop(tmp_path):
+    """链上每个符号链接的祖先目录必须受控：可写中间跳拒绝，受控常规链接链接受。
+
+    评审反例：`bin/python3` → 可写中间目录/链接 → 受信最终目标。只核最终目标
+    会在核验后给换链留窗口，因此逐hop核祖先归属与权限。
+    """
+    root = tmp_path / "usr/bin"
+    root.mkdir(parents=True)
+    target = tmp_path / "targets" / "python3.13"
+    target.parent.mkdir()
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    hop_dir = tmp_path / "hop"
+    hop_dir.mkdir()
+    hop = hop_dir / "python3"
+    hop.symlink_to(target)
+    candidate = root / "python3"
+    candidate.symlink_to(hop)
+
+    def run(path, *args):
+        assert path == str(candidate)
+        return "3.13"
+
+    def check_dir(path, owner):
+        resolved = Path(os.path.realpath(path))
+        if resolved == tmp_path or resolved in tmp_path.parents:
+            return  # 合成容器祖先不属被测链；区内目录按自身归属实核。
+        probe.trusted_directory(resolved, os.getuid())
+
+    # 受控中间跳照常接受，执行/返回仍是候选路径本身。
+    assert probe.system_python(
+        str(candidate), roots=(str(root),), owner=os.getuid(), run=run, check_dir=check_dir
+    ) == (str(candidate), "3.13")
+    # 可写中间跳父目录：核验后可换链的重定向面存在即拒绝。
+    hop_dir.chmod(0o777)
+    with pytest.raises(ValueError, match="untrusted"):
+        probe.system_python(
+            str(candidate), roots=(str(root),), owner=os.getuid(), run=run, check_dir=check_dir
+        )
+    hop_dir.chmod(0o755)
+    # root常规安全链：managed bin内二级符号链接→同一受信目标照常接受。
+    inner = root / "python3.13"
+    inner.symlink_to(target)
+    candidate.unlink()
+    candidate.symlink_to(inner)
+    assert probe.system_python(
+        str(candidate), roots=(str(root),), owner=os.getuid(), run=run, check_dir=check_dir
+    ) == (str(candidate), "3.13")
+    # 中间跳指向不受管目标仍按目标本身拒绝，不因hop在受管名下放行。
+    evil = tmp_path / "targets" / "evil"
+    evil.write_text("#!/bin/sh\n")
+    evil.chmod(0o777)
+    hop.unlink()
+    hop.symlink_to(evil)
+    candidate.unlink()
+    candidate.symlink_to(hop)
+    with pytest.raises(ValueError, match="ownership or mode"):
+        probe.system_python(
+            str(candidate), roots=(str(root),), owner=os.getuid(), run=run, check_dir=check_dir
         )
     writable = tmp_path / "w/bin"
     writable.mkdir(parents=True)

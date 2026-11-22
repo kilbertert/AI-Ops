@@ -9,6 +9,7 @@
 目标须在私有主机清单登记并通过`dev-host`断言；已有项目非登录账号，Linux x86_64及系统Python3.11–3.13。
 解释器只取`/usr/bin`或`/usr/local/bin`下`python3[.11|.12|.13]`：符号链接解析后的目标必须root拥有、
 组/他人不可写且可执行，全部父目录同此要求；带小版本名须与实际小版本一致，裸`python3`允许任一受支持小版本。
+核验后小版本探测、venv创建与下游执行只使用解析后的最终绝对目标，候选链路上的中间目录或链接跳不被执行。
 系统默认`python3`是平台旧版（如3.6）时，用`--python`显式给出/usr/local下符合应用包小版本的受管解释器。
 已分配独立回环端口；安装器检查占用但不负责登记端口。至少1GiB可用内存及1GiB磁盘是保守预检下限，
 不是业务容量结论。旧Gateway和公司服务继续运行，新增自有单位须在当前任务授权内。
@@ -33,9 +34,10 @@ bash ops/environments/gateway/build-installer.sh <同一SHA> /private/installer.
 ```bash
 python3 <已核验安装器>/install.py install --environment <环境> --user <服务账号> --port <登记端口> \
   --python /usr/bin/python3.12 --archive /private/gateway.tar.gz --sha256 <应用包摘要> \
-  # 或平台Python过旧时 --python /usr/local/bin/python3.13；安装器入口自身也需3.11+解释器
   --config /private/input.env --config-sha256 <配置摘要>
 ```
+
+平台Python过旧时`--python`改用`/usr/local/bin/python3.13`；安装器入口自身也需3.11+解释器。
 
 固定单位`aiops-access-<环境>.service`，代码`/opt/aiops-access-<环境>`，配置`/etc/aiops-access-<环境>`，
 状态`/var/lib/aiops-access-<环境>`，冷失败资料`/var/backups/aiops-access-<环境>`。
