@@ -53,13 +53,27 @@ def local_trial(root, target, environment, payload, *, control=False):
             "environment-trial-dispatch",
         ]
     )
-    result = subprocess.check_output(
-        ["dev-host", "exec", host, "--allow-service-exec", "--timeout", "240", "--", command],
-        cwd=root,
-        input=json.dumps(payload),
-        text=True,
-        timeout=245,
-    )
+    try:
+        result = subprocess.check_output(
+            ["dev-host", "exec", host, "--allow-service-exec", "--timeout", "240", "--", command],
+            cwd=root,
+            input=json.dumps(payload),
+            text=True,
+            timeout=245,
+        )
+    except subprocess.CalledProcessError as exc:
+        if exc.output and len(exc.output) <= 1024:
+            try:
+                refused = json.loads(exc.output)
+            except ValueError:
+                refused = None
+            if refused == {"error": "ENVIRONMENT_VALIDATION_KEY_REQUIRED"}:
+                return {
+                    "capability": payload.get("capability"),
+                    "state": "blocked",
+                    "error_code": refused["error"],
+                }
+        raise
     if len(result) > 65536:
         raise ValueError("validation response too large")
     return json.loads(result)

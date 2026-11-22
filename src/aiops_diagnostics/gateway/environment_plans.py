@@ -26,7 +26,15 @@ class PlanRefused(ValueError):
 
 
 def update_artifact_references(
-    path, *, registry_path, identity, environment, expected_sha256, application, installer
+    path,
+    *,
+    registry_path,
+    identity,
+    environment,
+    expected_sha256,
+    application=None,
+    installer=None,
+    configuration=None,
 ):
     """CAS-update one target under the environment draft/plan lock; retain a rollback copy."""
     path, registry_path = Path(path).absolute(), Path(registry_path).absolute()
@@ -48,11 +56,26 @@ def update_artifact_references(
             }
             if not shared_scopes <= allowed:
                 raise PlanRefused("ENVIRONMENT_DEPLOYMENT_TARGET_SHARED")
-        result = _update_artifact_references_locked(path, target_id, expected_sha256, application, installer)
+        proposed = json.loads(draft["body"])
+        if configuration is not None and (
+            not isinstance(configuration, dict) or configuration.get("id") != proposed["credential_ref"]
+        ):
+            raise PlanRefused("ENVIRONMENT_CONFIGURATION_REFUSED")
+        result = _update_artifact_references_locked(
+            path,
+            target_id,
+            expected_sha256,
+            application,
+            installer,
+            configuration=configuration,
+            proposed=proposed,
+        )
         return {**result, "environment": environment}
 
 
-def _update_artifact_references_locked(path, environment, expected_sha256, application, installer):
+def _update_artifact_references_locked(
+    path, environment, expected_sha256, application, installer, *, configuration=None, proposed=None
+):
     path = Path(path).absolute()
     asset_root = path.parent if path.parent.name == "onboarding-assets" else path.parent.parent
     if path.parent.name != "onboarding-assets" and asset_root.name != "onboarding-assets":
@@ -73,7 +96,7 @@ def _update_artifact_references_locked(path, environment, expected_sha256, appli
     backup = path.with_name(f"{path.name}.{expected_sha256}.bak")
     if backup.exists() or backup.is_symlink():
         raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS")
-    if (
+    if configuration is None and (
         not isinstance(application, dict)
         or not isinstance(installer, dict)
         or not isinstance(application.get("revision"), str)
@@ -156,18 +179,23 @@ def _update_artifact_references_locked(path, environment, expected_sha256, appli
             raise PlanRefused("ENVIRONMENT_REFERENCES_ARTIFACT_CONFLICT")
         return dict(path=str(artifact_path), sha256=sha, revision=revision)
 
-    checked_application = checked_artifact(application, "application")
-    checked_installer = checked_artifact(installer, "installer")
-    if checked_application["revision"] != checked_installer["revision"]:
-        raise PlanRefused("ENVIRONMENT_REFERENCES_REVISION_MISMATCH")
-    app = retain_artifact(checked_application)
-    package = retain_artifact(checked_installer)
-    if target["application"] == app and target["installer"] == package:
-        raise PlanRefused("ENVIRONMENT_REFERENCES_ALREADY_CURRENT")
+    if configuration is not None:
+        if application is not None or installer is not None:
+            raise PlanRefused("ENVIRONMENT_CONFIGURATION_REFUSED")
+        _replace_configuration(asset_root, target, configuration, proposed)
+    else:
+        checked_application = checked_artifact(application, "application")
+        checked_installer = checked_artifact(installer, "installer")
+        if checked_application["revision"] != checked_installer["revision"]:
+            raise PlanRefused("ENVIRONMENT_REFERENCES_REVISION_MISMATCH")
+        app = retain_artifact(checked_application)
+        package = retain_artifact(checked_installer)
+        if target["application"] == app and target["installer"] == package:
+            raise PlanRefused("ENVIRONMENT_REFERENCES_ALREADY_CURRENT")
+        target["application"], target["installer"] = app, package
     original = path.read_bytes()
     if hashlib.sha256(original).hexdigest() != expected_sha256:
         raise PlanRefused("ENVIRONMENT_REFERENCES_CHANGED")
-    target["application"], target["installer"] = app, package
     encoded = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     descriptor, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     temporary = Path(name)
@@ -222,14 +250,64 @@ def _update_artifact_references_locked(path, environment, expected_sha256, appli
         raise
     return {
         "environment": environment,
-        "revision": app["revision"],
-        "application_sha256": app["sha256"],
-        "installer_sha256": package["sha256"],
+        "revision": target["application"]["revision"],
+        "application_sha256": target["application"]["sha256"],
+        "installer_sha256": target["installer"]["sha256"],
         "previous_references_sha256": expected_sha256,
         "references_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "backup_sha256": hashlib.sha256(backup.read_bytes()).hexdigest(),
         "configuration_ids": [item["id"] for item in target["configurations"]],
     }
+
+
+def _replace_configuration(asset_root, target, value, proposed):
+    if not isinstance(value, dict) or set(value) != {"id", "path", "sha256", "expected_sha256"}:
+        raise PlanRefused("ENVIRONMENT_CONFIGURATION_REFUSED")
+    current = next((c for c in target["configurations"] if c["id"] == value["id"]), None)
+    if current is None or current["sha256"] != value["expected_sha256"]:
+        raise PlanRefused("ENVIRONMENT_CONFIGURATION_CHANGED")
+    if _file_check(current, 1048576)[0] != value["expected_sha256"]:
+        raise PlanRefused("ENVIRONMENT_CONFIGURATION_CHANGED")
+    if not isinstance(value["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", value["sha256"]):
+        raise PlanRefused("ENVIRONMENT_CONFIGURATION_REFUSED")
+    source = _private(value["path"])
+    if _file_check(value, 1048576)[0] != value["sha256"]:
+        raise PlanRefused("ENVIRONMENT_CONFIGURATION_CHANGED")
+    # 只接受原停用候选模板；部署身份与地址继续由草稿投影决定。
+    from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+
+    projection.render(proposed, source, value["sha256"], format_stored_time(now_utc()))
+    if value["sha256"] == current["sha256"]:
+        raise PlanRefused("ENVIRONMENT_REFERENCES_ALREADY_CURRENT")
+    directory = asset_root / ("configuration-" + value["sha256"])
+    directory.mkdir(mode=0o700, exist_ok=True)
+    validate_private_directory(directory)
+    destination = directory / "template.env"
+    raw = source.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != value["sha256"]:
+        raise PlanRefused("ENVIRONMENT_CONFIGURATION_CHANGED")
+    if destination.exists() or destination.is_symlink():
+        _private(destination)
+        if destination.read_bytes() != raw:
+            raise PlanRefused("ENVIRONMENT_CONFIGURATION_CHANGED")
+    else:
+        fd, name = tempfile.mkstemp(prefix=".configuration-", dir=directory)
+        temporary = Path(name)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.link(temporary, destination)
+            fd = os.open(directory, os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        finally:
+            temporary.unlink(missing_ok=True)
+    _private(destination)
+    current.update(path=str(destination), sha256=value["sha256"])
 
 
 def _digest(value):

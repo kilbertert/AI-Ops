@@ -532,3 +532,39 @@ def test_target_http_preserves_original_refusal_code_instead_of_500(monkeypatch)
         "state": "blocked",
         "error_code": "ENVIRONMENT_TRIAL_EXPIRED",
     }
+
+
+def test_same_blocked_validation_resubmits_original_receipt(registered):
+    state = registered[0]
+    identifier = submit(registered).json()["id"]
+    owner = "b" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    for capability in ("consumer", "offline", "order"):
+        assert (
+            internal(
+                state, {"validation": "step", "id": identifier, "owner": owner, "capability": capability}
+            ).status_code
+            == 200
+        )
+        assert (
+            internal(
+                state,
+                {
+                    "validation": "step",
+                    "id": identifier,
+                    "owner": owner,
+                    "capability": capability,
+                    "result": {
+                        "capability": capability,
+                        "state": "blocked",
+                        "error_code": "ENVIRONMENT_VALIDATION_KEY_REQUIRED",
+                    },
+                },
+            ).status_code
+            == 200
+        )
+    final = internal(state, {"validation": "complete", "id": identifier, "owner": owner}).json()
+    assert final["state"] == "blocked"
+    repeated = submit(registered)
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["id"] == identifier and repeated.json()["result"] == final["result"]
