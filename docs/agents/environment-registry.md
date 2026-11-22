@@ -336,14 +336,24 @@ timer每轮结束20秒后只处理一个任务；同一service不会叠加运行
 
 首个子任务为安装面`site-install`：沿用同一SQLite行、`waiting/executing/checking`租约、
 `attempted/dispatched/authorize`授权闸与安装面互斥，stage只导出`application`与`candidate`
-（无runtime、无expected基线），`python`取计划部署目标声明。
+（无runtime、无expected基线），`python`取计划部署目标声明。首个控制任务可能就是本环境
+首行，任务表初始化先于任何任务表查询；父任务`result.initial_installation`独立记录基础
+初装结果，原`installation`字段仍只表示运行安装。
 执行端`task.py cold-run`先在固定`root/state/config/unit`、`-preparing-*`残迹与
 systemd单位上证明「未安装」；声明`backups`根允许受管staging预建，仅可信私有空目录仍属真空，
 其中已有内容按旧业务资产对账。端口可临时绑定才视为真空；已安装目标只跳过不重放，
 未知资产/旧单位/占用端口/漂移/半失败落`reconcile`或`blocked`具名结论，不当空机。
+`installed.json`与`pending.json`双账并存是同一安装器切换断点的真实形状，先恢复原语对账，
+不收养也不补写；旧config-only账本没有`registry_sha256`，按`already_installed`收养并以
+`absent`哨兵对账（与site_observation同约定），中央只对该形状接受absent，本任务新装仍须
+完整摘要。
 意图`cold-intent.json`先于`apply`首写持久在worker创建的受管staging根，不落在`inst.root`；
 冷投影仅停用目录与公司连接，不装runtime；事务仍归原`Installer.apply`与`pending.json`权威。
 `observed`仅当`installation∈{installed,already_installed}`；`not_installed`只能`blocked`。
+已派发（dispatched）任务取消或父过期后，租约到期重领与登记同规：只用冻结输入
+`observe_only`回收真实结果，父终态不复活也不补建资源；未派发请求在取消或过期时仍拒绝。
+`checking`任务与现场队列reconcile同规按60秒节奏重领，残迹初装不抢占其他环境独立现场队列；
+已取消的在飞任务保持立即可领，排空到终态不等待。
 
 `site-install`确认在场后才出现场预检：`tasks.submit(after=<初装编号>)`延迟建行，
 同计划陈旧阻塞预检行不复用；此后走原STEPS与`{candidate_task, installation:true}`升级链，

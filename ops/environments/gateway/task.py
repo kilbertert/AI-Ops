@@ -223,6 +223,14 @@ def execute_cold(inst, spec, *, staging, observe_only=False):
     residue = [p for p in inst.root.parent.glob(inst.name + "-preparing-*") if p.is_dir() or p.is_symlink()]
     ledger = inst.root / "installed.json"
     if ledger.exists() or ledger.is_symlink():
+        # 同一安装器切换断点：pending与installed并存是中断事实，先恢复再谈收养。
+        pending = inst.root / "pending.json"
+        if pending.exists() or pending.is_symlink():
+            return {
+                **result,
+                "state": "reconcile",
+                "error_code": "ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED",
+            }
         # 已有installed目标跳过冷装；账本身份或期望漂移都只观察对账不重放。
         try:
             installed = inst.read_record("installed.json")
@@ -244,7 +252,9 @@ def execute_cold(inst, spec, *, staging, observe_only=False):
             "error_code": "",
             "version": installed["version"],
             "source_revision": installed["revision"],
-            **{k: installed[k] for k in ("artifact_sha256", "config_sha256", "registry_sha256")},
+            **{k: installed[k] for k in ("artifact_sha256", "config_sha256")},
+            # 旧config-only账本没有registry_sha256；与site_observation同一absent哨兵。
+            "registry_sha256": installed.get("registry_sha256", "absent"),
         }
     occupied = any(p.exists() or p.is_symlink() for p in (inst.root, inst.state, inst.config, inst.unit))
     if not occupied and (inst.backups.exists() or inst.backups.is_symlink()):

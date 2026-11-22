@@ -333,6 +333,33 @@ def test_cold_install_requires_declared_minor(cold_state):
     assert not (staging / "cold-intent.json").exists()
 
 
+def test_cold_pending_ledger_pair_is_recovery_not_observed(cold_state):
+    inst, spec, staging, _ = cold_state
+    assert task.execute_cold(inst, spec, staging=staging)["installation"] == "installed"
+    # 同一安装器切换断点的真实形状：pending先于installed写，中断则两账并存。
+    inst.record(
+        "pending.json",
+        {**inst.read_record("installed.json"), "previous": {"revision": "b" * 40}, "phase": "switching"},
+    )
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "reconcile"
+    assert result["error_code"] == "ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED"
+
+
+def test_cold_config_only_ledger_reports_absent_registry(cold_state):
+    inst, spec, staging, fixture = cold_state
+    archive, sha, config = fixture[1], fixture[2], fixture[3]
+    # 旧合法安装形状：config-only apply（无registry_file）写出的账本没有registry_sha256。
+    inst.apply(archive, sha, "/usr/bin/python3", config, task.install.digest(config))
+    ledger = inst.read_record("installed.json")
+    assert "registry_sha256" not in ledger
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "observed" and result["installation"] == "already_installed"
+    assert result["registry_sha256"] == "absent"
+    # 收养旧安装只读账本，不替本任务落冷装意图。
+    assert not (staging / "cold-intent.json").exists()
+
+
 def test_registration_lost_receipt_reenters_as_observation_only(task_state, monkeypatch):
     inst, previous, _ = task_state
     installed = inst.read_record("installed.json")

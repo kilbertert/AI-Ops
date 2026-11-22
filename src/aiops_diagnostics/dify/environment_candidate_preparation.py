@@ -82,6 +82,8 @@ def submit(context, identity, payload, source):
     site = None if initial else tasks.submit(path, identity, payload["candidate_plan"], reference)
     environment = plan["environment"]
     with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
+        # 首个控制任务可能就是本环境首行；原初始化必须先于任何任务表查询。
+        drafts.initialize_tasks(conn)
         if initial:
             if plan["state"] == "expired" or any(
                 c["state"] != "passed"
@@ -143,8 +145,6 @@ def submit(context, identity, payload, source):
         if initial:
             from .environment_installation import submit_cold
 
-            # 初装可能是本环境首个任务行；表结构由这里兜底初始化。
-            drafts.initialize_tasks(conn)
             request["children"]["site-install"] = submit_cold(
                 conn, environment, identity, identifier, request
             )
@@ -163,6 +163,7 @@ def submit(context, identity, payload, source):
                         "expires_at": request["plan"]["expires_at"],
                         "steps": [],
                         "installation": "not_executed",
+                        **({"initial_installation": "not_executed"} if initial else {}),
                         "business": "unverified",
                         "activation": "not_executed",
                     }
@@ -217,11 +218,14 @@ def _advance_one(context, path, reference, identifier):
             )
             steps = []
             state, error = "waiting", ""
+            initial_installation = None
             for action in sequence:
                 if action not in request["children"]:
                     break
                 child = tasks._public(tasks._row(conn, request["children"][action]))
                 steps.append({k: child[k] for k in ("id", "action", "state", "error_code")})
+                if action == "site-install":
+                    initial_installation = child["result"].get("installation", "not_executed")
                 if child["cancel_requested"] or (
                     child["state"] in tasks.FINISHED_STATES and child["state"] != "observed"
                 ):
@@ -240,6 +244,9 @@ def _advance_one(context, path, reference, identifier):
                 "business": "unverified",
                 "activation": "not_executed",
             }
+            # 基础初装结果独立成字段；父任务自身 runtime 安装字段保持原语义。
+            if initial_installation is not None:
+                result["initial_installation"] = initial_installation
             conn.execute(
                 "UPDATE environment_tasks SET state=?,result=?,error=?,updated_at=? WHERE id=?",
                 (state, json.dumps(result), error, time.time(), identifier),

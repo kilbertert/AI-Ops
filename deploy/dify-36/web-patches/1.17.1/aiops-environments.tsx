@@ -114,6 +114,13 @@ const preparationSteps: Record<string, string> = {
   'operator-prepare': '管家候选',
   'consumer-prepare': '客服候选',
 }
+const initialInstallationLabels: Record<string, string> = {
+  installed: '已装',
+  already_installed: '已装（原安装保留）',
+  not_installed: '未安装',
+  unconfirmed: '待核对',
+  not_executed: '未执行',
+}
 const checkLabels: Record<string, string> = {
   workspace: '候选工作区',
   knowledge: '知识资源',
@@ -698,7 +705,7 @@ export default function EnvironmentManagement() {
                         </select>
                       </label>
                       {draft.tenants.map((tenant) => (
-                        <div key={tenant.id} className="flex gap-2">
+                        <div key={tenant.id} className="flex flex-wrap gap-2">
                           <Button
                             type="button"
                             variant="secondary"
@@ -1016,7 +1023,14 @@ export default function EnvironmentManagement() {
                             </li>
                           ))}
                         </ul>
-                        <p>安装未执行 · 业务未验收 · 正式入口未启用</p>
+                        <p>
+                          {item.result.initial_installation != null
+                            ? `基础初装：${
+                                initialInstallationLabels[item.result.initial_installation] ||
+                                item.result.initial_installation
+                              } · 运行安装未执行 · 业务未验收 · 正式入口未启用`
+                            : '安装未执行 · 业务未验收 · 正式入口未启用'}
+                        </p>
                       </section>
                     )}
                     <p>

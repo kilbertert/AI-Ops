@@ -51,6 +51,32 @@
 - root 裁决：worker 持内部 token 可伪造 already_installed 的「建议 attempted」暂不加守卫——
   原信任 worker 的边界不变，后继真实 site 仍核，独立未给普通身份越权后果，不扩猜测守卫。
 
+## PR#1661 评审发现与修复
+
+七项同合同缺陷先复现原输入/原结果再最小修，修前红/后绿证据在私有 `review-fix/`
+（red/green-targeted/green-suites 三个 20261122 记录）：
+
+- 新库首个控制任务跳过 `tasks.submit` 时先查任务表→OperationalError：原
+  `initialize_tasks` 移至事务开头无条件执行（幂等 DDL），DROP TABLE 真实新库
+  HTTP 提交 200。
+- `pending.json`+`installed.json` 双账并存（同一安装器切换断点真实形状）：远端
+  先查 pending→`reconcile` RECOVERY_REQUIRED，不再误读账本报 observed。
+- config-only 旧账本缺 `registry_sha256`：远端按 `already_installed`+`absent`
+  哨兵收养（与 site_observation 同约定）；中央只对该形状接受 absent，
+  新装与缺键仍须完整摘要。
+- 已派发任务取消或父过期：claim 重领与登记同规，只对 `dispatched` 冻结输入
+  `observe_only` 回收真实结果，父终态不复活不补建（cancelled/blocked 保持）；
+  fresh authorize 仍硬拒。取消与过期两场景真实 claim→complete 已验。
+- checking 任务无租约立即优先重领会饿死独立环境现场队列：与 `_next` reconcile
+  同规 60 秒节奏；`cancel=1` 在飞任务保持立即可领排空（发布在飞取消回归保持），
+  另 env 预检两次领取内必被服务。
+- 父任务 `installation:not_executed` 与 cold 已装矛盾：`result.initial_installation`
+  独立记录基础初装结果，原 runtime 安装字段语义不变；页面「基础初装：…·运行安装
+  未执行」显示；窄屏租户按钮行 `flex-wrap` 修复（cold-flexwrap.png，几何断言
+  第二钮折到下一行）。
+- 验收合同补 cold 本体：Feature 新增冷 Rule 三 Scenario（正向初装链/占用半安装
+  取消过期对账/旧兼容收养），QA 新增 D44 并修订 223 行过期「另验」正文。
+
 ## 检查与证据范围
 
 - ruff check/format 触及文件全绿；ADR 结构检查绿（`14d06009` 以 No-ADR 声明豁免，
@@ -58,9 +84,13 @@
 - 定点：install task 103、installation 16（含冷装 worker spec 回归）、candidate_
   preparation、registration/validation/publication 91、`test_dual_entry_bridge` 16
   （含初装用例）、tests/dify 全目录 991 通过。
+- 评审修复轮定点：candidate_preparation+installation+registration+validation+
+  publication+tasks+install_task 七文件 165 过（含新库建行/双账对账/absent 收养/
+  取消过期只观察/checking 节奏/字段断言），tests/dify 991 保持。
 - 真实 Chromium（`.scratch/dify-1.17.1` 构建树复制组件）15/15：实际点击「空机初装并
   准备」、取消确认零 POST、确认载荷含 `initial_installation:true`、待安装/正在取证/
   结果待核对/已取消/已装/已装（原安装保留）标签读回；旧「准备候选」四字段用例不变。
+  另证「基础初装：…·运行安装未执行」字段显示与窄屏 flex-wrap 折行（几何断言+截图）。
 - `uv build`：`dist/aiops_diagnostics-1.40.0` wheel+sdist。
 - 原 `verify-aiops-gateway` skill：真实 `aiops-gateway serve` 启动，/health 200 且
   `"version":"1.40.0"`、管理/问答匿名 401、openapi 200、旧端点 404 全过；

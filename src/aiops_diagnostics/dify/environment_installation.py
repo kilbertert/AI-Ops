@@ -128,6 +128,9 @@ def current_cold(context, conn, identifier, *, fresh=False):
     request = json.loads(row["request"])
     if request.get("action") != COLD_ACTION:
         raise tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
+    # 已派发请求只用冻结输入回收真实结果；撤权、取消或父终态不能再把它变成拒绝。
+    if not fresh and request.get("dispatched"):
+        return row, request
     tasks._authorize(path, tuple(request["identity"]), row["environment"])
     tasks._current(path, request, reference, reconciling=not fresh)
     parent = tasks._row(conn, request["preparation"])
@@ -232,11 +235,14 @@ def dispatch(context, payload):
                 "IN ('site-install','candidate-install','candidate-register','candidate-validate',"
                 "'environment-publish') "
                 "AND state IN ('waiting','executing','checking') AND lease_until<=? "
+                # 与现场队列reconcile同规：checking观察间隔60秒，残迹任务不抢占认领面；
+                # 已取消的在飞任务保持立即可领，排空到终态不等待。
+                "AND (state!='checking' OR updated_at<=? OR cancel=1) "
                 "AND NOT EXISTS(SELECT 1 FROM environment_tasks live "
                 "WHERE live.environment=environment_tasks.environment AND live.id!=environment_tasks.id "
                 "AND live.state IN ('running','executing') AND live.lease_until>?) "
                 "ORDER BY updated_at LIMIT 20",
-                (time.time(), time.time()),
+                (time.time(), time.time() - 60, time.time()),
             ).fetchall()
             for selected in rows:
                 row = tasks._row(conn, selected[0])
@@ -332,7 +338,19 @@ def dispatch(context, payload):
                         or not re.fullmatch(r"[0-9a-f]{40}", result["source_revision"])
                         or any(
                             not isinstance(result.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", result[k])
-                            for k in installed_fields
+                            for k in installed_fields[:2]
+                        )
+                        or (
+                            not isinstance(result.get("registry_sha256"), str)
+                            or (
+                                result["registry_sha256"] != "absent"
+                                and not re.fullmatch(r"[a-f0-9]{64}", result["registry_sha256"])
+                            )
+                            # 无摘要只属旧config-only账本；本任务新装仍要强摘要。
+                            or (
+                                result["registry_sha256"] == "absent"
+                                and result["installation"] != "already_installed"
+                            )
                         )
                         or result["installation"] == "installed"
                         and (

@@ -620,6 +620,10 @@ it('submits cold initial installation only after explicit confirm and reads back
   await expect
     .element(screen.getByText('空机初装 · same：待安装', { exact: true }))
     .toBeVisible()
+  // 初装结果未回写前父任务仍显示原运行安装文案。
+  await expect
+    .element(screen.getByText('安装未执行 · 业务未验收 · 正式入口未启用', { exact: true }))
+    .toBeVisible()
   cold.state = 'running'
   await refresh()
   await expect
@@ -646,6 +650,21 @@ it('submits cold initial installation only after explicit confirm and reads back
   await refresh()
   await expect
     .element(screen.getByText('空机初装 · same：已装（原安装保留）', { exact: true }))
+    .toBeVisible()
+  // 基础初装结果独立成字段显示；父任务自身运行安装字段仍保持原语义。
+  parent.result = {
+    ...parent.result,
+    initial_installation: 'already_installed',
+    installation: 'not_executed',
+  }
+  await refresh()
+  await expect
+    .element(
+      screen.getByText(
+        '基础初装：已装（原安装保留） · 运行安装未执行 · 业务未验收 · 正式入口未启用',
+        { exact: true },
+      ),
+    )
     .toBeVisible()
 })
 

@@ -342,6 +342,163 @@ def test_initial_installation_is_explicit_and_installs_before_preflight(candidat
         .json()["result"]["steps"]
     )
     assert [s["action"] for s in steps][:2] == ["site-install", "site-preflight"]
+    # 基础初装结果独立成字段；父任务自身 runtime 安装字段仍保持原语义。
+    parent_result = (
+        state[0][2].post("/v1/dify/management/environment-tasks", json={"id": identifier}).json()["result"]
+    )
+    assert parent_result["initial_installation"] == "installed"
+    assert parent_result["installation"] == "not_executed"
+
+
+def test_cold_submission_initializes_task_store_on_fresh_database(candidate_chain):
+    state = candidate_chain
+    # 真实新库：草稿与计划表在场而任务表从未创建；预建任务fixture覆盖不了此缺口。
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        conn.execute("DROP TABLE environment_tasks")
+    state[2]["initial_installation"] = True
+    response = submit_http(state)
+    assert response.status_code == 200, response.text
+    children = request_of(state, response.json()["id"])["children"]
+    assert set(children) == {"site-install"}
+
+
+@pytest.mark.parametrize("terminal", ["cancel", "expired"])
+def test_dispatched_cold_only_observes_frozen_result_without_reviving_parent(
+    candidate_chain, terminal, tmp_path
+):
+    state = candidate_chain
+    data_home = tmp_path / "cold-data"
+    data_home.mkdir(mode=0o700)
+    state[0][3].data_home = data_home
+    state[2]["initial_installation"] = True
+    parent = submit_http(state).json()["id"]
+    cold = request_of(state, parent)["children"]["site-install"]
+    owner = "c" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == cold
+    stage = internal(state, {"installation": "stage", "id": cold, "owner": owner})
+    assert stage.status_code == 200 and stage.json()["observe_only"] is False
+    assert internal(state, {"installation": "authorize", "id": cold, "owner": owner}).json() == {
+        "authorized": True
+    }
+    if terminal == "cancel":
+        state[0][2].post("/v1/dify/management/environment-tasks", json={"id": parent, "cancel": True})
+    else:
+        with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+            request = request_of(state, parent)
+            request["plan"]["expires_at"] = 0
+            conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), parent))
+        assert advance(state).status_code == 200
+        assert next(r for r in rows(state) if r["id"] == parent)["state"] == "blocked"
+    # fresh授权对取消/过期仍硬拒；已派发任务租约到期重领只能观察。
+    assert internal(state, {"installation": "authorize", "id": cold, "owner": owner}).status_code != 200
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        conn.execute("UPDATE environment_tasks SET lease_until=0 WHERE id=?", (cold,))
+    claim = internal(state, {"installation_claim": True, "owner": owner})
+    assert claim.status_code == 200 and claim.json()["id"] == cold, claim.text
+    stage = internal(state, {"installation": "stage", "id": cold, "owner": owner})
+    assert stage.status_code == 200 and stage.json()["observe_only"] is True
+    result = {
+        "id": cold,
+        "environment": "a",
+        "scope": "site-cold-installation-only",
+        "state": "observed",
+        "installation": "installed",
+        "executable": False,
+        "version": "1.2.3",
+        "source_revision": stage.json()["archives"]["application"]["revision"],
+        "artifact_sha256": stage.json()["archives"]["application"]["sha256"],
+        "config_sha256": "c" * 64,
+        "registry_sha256": "d" * 64,
+    }
+    done = internal(state, {"installation": "complete", "id": cold, "owner": owner, "result": result})
+    assert done.status_code == 200, done.text
+    assert done.json()["state"] == ("cancelled" if terminal == "cancel" else "observed")
+    row = next(r for r in rows(state) if r["id"] == parent)
+    assert row["state"] == ("cancelled" if terminal == "cancel" else "blocked")
+    assert "site-preflight" not in request_of(state, parent)["children"]
+
+
+def test_checking_cold_paces_reclaim_and_yields_independent_site_queue(candidate_chain, tmp_path):
+    state = candidate_chain
+    data_home = tmp_path / "cold-data"
+    data_home.mkdir(mode=0o700)
+    state[0][3].data_home = data_home
+    state[2]["initial_installation"] = True
+    parent = submit_http(state).json()["id"]
+    cold = request_of(state, parent)["children"]["site-install"]
+    owner = "c" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == cold
+    assert internal(state, {"installation": "stage", "id": cold, "owner": owner}).status_code == 200
+    assert internal(state, {"installation": "authorize", "id": cold, "owner": owner}).status_code == 200
+    reconcile = {
+        "id": cold,
+        "environment": "a",
+        "scope": "site-cold-installation-only",
+        "state": "reconcile",
+        "installation": "unconfirmed",
+        "executable": False,
+        "error_code": "ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED",
+    }
+    done = internal(state, {"installation": "complete", "id": cold, "owner": owner, "result": reconcile})
+    assert done.status_code == 200 and done.json()["state"] == "reconcile", done.text
+    # 另一环境普通现场预检排队；残迹cold冷却内不能立即重领占住安装认领面。
+    other, _ = create(state[0], "b")
+    claim = internal(state, {"installation_claim": True, "owner": "e" * 32})
+    assert claim.status_code == 200 and claim.json()["claimed"] is False, claim.text
+    seen = set()
+    for _ in range(2):
+        claimed = tasks.worker(state[0][0], state[0][1], {"owner": "e" * 32})
+        if claimed.get("claimed"):
+            seen.add(claimed["id"])
+    assert other["id"] in seen
+    # 冷却结束仍恢复观察循环，不被永久饿死。
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        conn.execute("UPDATE environment_tasks SET updated_at=? WHERE id=?", (time.time() - 61, cold))
+    again = internal(state, {"installation_claim": True, "owner": "f" * 32})
+    assert again.status_code == 200 and again.json()["id"] == cold
+
+
+def test_cold_complete_accepts_absent_registry_only_as_already_installed(candidate_chain, tmp_path):
+    state = candidate_chain
+    data_home = tmp_path / "cold-data"
+    data_home.mkdir(mode=0o700)
+    state[0][3].data_home = data_home
+    state[2]["initial_installation"] = True
+    parent = submit_http(state).json()["id"]
+    cold = request_of(state, parent)["children"]["site-install"]
+    owner = "c" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == cold
+    stage = internal(state, {"installation": "stage", "id": cold, "owner": owner})
+    assert stage.status_code == 200
+    archives = stage.json()["archives"]
+    assert internal(state, {"installation": "authorize", "id": cold, "owner": owner}).status_code == 200
+    result = {
+        "id": cold,
+        "environment": "a",
+        "scope": "site-cold-installation-only",
+        "state": "observed",
+        "installation": "already_installed",
+        "executable": False,
+        "version": "1.2.3",
+        "source_revision": archives["application"]["revision"],
+        "artifact_sha256": archives["application"]["sha256"],
+        "config_sha256": "c" * 64,
+        "registry_sha256": "absent",
+    }
+    # absent只属于旧config-only合法安装；新装形状与缺键仍须强摘要。
+    missing = {k: v for k, v in result.items() if k != "registry_sha256"}
+    for malformed in (missing, {**result, "installation": "installed"}):
+        assert (
+            internal(
+                state,
+                {"installation": "complete", "id": cold, "owner": owner, "result": malformed},
+            ).status_code
+            != 200
+        ), malformed
+    done = internal(state, {"installation": "complete", "id": cold, "owner": owner, "result": result})
+    assert done.status_code == 200 and done.json()["state"] == "observed", done.text
+    stored = json.loads(next(r["result"] for r in rows(state) if r["id"] == cold))
+    assert stored["registry_sha256"] == "absent" and stored["installation"] == "already_installed"
 
 
 def test_cancel_completed_parent_keeps_observed_resource_tasks(candidate_chain):
