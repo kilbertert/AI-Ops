@@ -176,3 +176,7 @@ dev-host exec 95 --allow-service-exec --timeout 40 -- 'free -m'
 目标地址/公钥/密钥和生产SSH配置保持；切换后由原`dev-host exec 95`严格核目标公钥，失败恢复本机旧块。
 不复制目标私钥到Windows，不启用agent forwarding，不开新公网监听，不经此中继承载对话或取数流量。
 本声明与管理链恢复不授权安装服务；95内存/公司健康、正式业务HTTPS和正常身份满足后再确定部署窗口。
+
+本轮管理中继恢复及平高正常身份/本人订单/索引结果见[当前候选复核](../validation/2026-11-22-pinggao-candidate-readiness.md)。
+旧AI运行资产保持撤回；已有业务索引只需复验。新的轻量部署仍须修解释器路径兼容、
+满足正式HTTPS来源与冷开通条件，不照第6节恢复旧完整栈。
