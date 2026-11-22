@@ -104,6 +104,7 @@ def submit(context, identity, payload, source):
                 "plan": plan,
                 "target": {k: target[k] for k in ("id", "host", "user", "port")},
                 "installer": {k: target["installer"][k] for k in ("sha256", "revision")},
+                "python": target["python"],
             }
         else:
             request = json.loads(tasks._row(conn, site["id"])["request"])

@@ -104,6 +104,7 @@ def submit_cold(conn, environment, identity, parent_id, request):
                     "plan": request["plan"],
                     "target": request["target"],
                     "installer": request["installer"],
+                    "python": request["python"],
                     "attempted": False,
                 }
             ),
@@ -133,11 +134,17 @@ def current_cold(context, conn, identifier, *, fresh=False):
         return row, request
     tasks._authorize(path, tuple(request["identity"]), row["environment"])
     tasks._current(path, request, reference, reconciling=not fresh)
+    target_ref = next(
+        (t for t in plans._references(reference) if t["id"] == request["target"]["id"]),
+        None,
+    )
     parent = tasks._row(conn, request["preparation"])
     parent_request = json.loads(parent["request"])
     if (
         parent["cancel"]
         or row["cancel"]
+        or target_ref is None
+        or target_ref["python"] != request.get("python")
         or parent["state"] != "waiting"
         or parent_request.get("action") != preparation.ACTION
         or parent_request.get("initial_installation") is not True
@@ -441,7 +448,25 @@ def dispatch(context, payload):
                     row["id"],
                 ),
             )
-            return tasks._public(tasks._row(conn, row["id"]))
+            public = tasks._public(tasks._row(conn, row["id"]))
+            if request["action"] == COLD_ACTION:
+                # 父终态后advance不再选中它；已验证cold回执同事务回写父摘要，
+                # 不复活终态、不改取消/children、不创建后继。
+                parent = tasks._row(conn, request["preparation"])
+                bound = json.loads(parent["request"]).get("children", {}).get(COLD_ACTION)
+                if bound == row["id"]:
+                    parent_result = json.loads(parent["result"])
+                    parent_result["initial_installation"] = result.get("installation", "not_executed")
+                    step = {k: public[k] for k in ("id", "action", "state", "error_code")}
+                    steps = [step if s.get("id") == row["id"] else s for s in parent_result.get("steps", [])]
+                    if not any(s.get("id") == row["id"] for s in steps):
+                        steps.insert(0, step)
+                    parent_result["steps"] = steps
+                    conn.execute(
+                        "UPDATE environment_tasks SET result=?,updated_at=? WHERE id=?",
+                        (json.dumps(parent_result), time.time(), parent["id"]),
+                    )
+            return public
         (current_cold if request["action"] == COLD_ACTION else current)(
             context, conn, payload["id"], fresh=not request["attempted"]
         )
@@ -517,7 +542,9 @@ def dispatch(context, payload):
         "environment": row["environment"],
         "target": request["target"],
         "installer": request["installer"],
-        "python": next(
+        "python": request["python"]
+        if request["action"] == COLD_ACTION
+        else next(
             t["python"]
             for t in plans._references(context.settings.environment_onboarding_file)
             if t["id"] == request["target"]["id"]

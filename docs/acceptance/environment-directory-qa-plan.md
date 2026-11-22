@@ -295,10 +295,10 @@ D38主机身份验收：页面在有效冻结计划提交host-verify（verify_ta
 ## D44：真空机一键冷开通（含初装）
 
 - 判据：Feature「真空机一键冷开通先证明空机再经原安装器初装」、ADR-0308 与本片已批准冷路径验收合同。
-- 环境/数据：隔离Gateway与真实SQLite、原安装器临时实例、合成管理身份与原候选包；真实95初装窗口由root批准后独立执行，不在本片。
+- 环境/数据：隔离Gateway与真实SQLite、原安装器临时实例、合成管理身份与原候选包；真实95初装窗口由用户批准后独立执行，不在本片。
 - 前置：有效passed计划与候选模板来源；目标经固定路径/单位/端口/残迹全空证明真空；页面显式window.confirm确认。
 - 正向：显式确认提交→父任务首个子任务site-install沿原安装面租约claim/stage/authorize→原execute_cold先落意图再经原Installer.apply写停用目录与公司连接→complete回执→父推进后才创建原site-preflight；同plan重提交回同任务；尚未建任务表的新库首个控制任务照常受理；父任务initial_installation字段独立显示，installation/business/activation原字段语义不变。
-- 反例：缺省或非true的initial_installation按无效载荷拒绝；占用/半失败残迹/旧单位/pending与installed双账一律RECOVERY_REQUIRED不收养不补写；未派发请求取消或父过期拒绝；持续checking任务按60秒节奏重领，不抢占其他环境独立现场队列。
+- 反例：缺省initial_installation沿用原非初装准备路径、显式非true才按无效载荷拒绝；占用/半失败残迹/旧单位/pending与installed双账一律RECOVERY_REQUIRED不收养不补写；未派发请求取消或父过期拒绝；持续checking任务按60秒节奏重领，不抢占其他环境独立现场队列。
 - 取消/丢回执：已派发任务取消或父过期后租约到期重领只能observe_only回收冻结结果，父终态不复活不补建资源；冷意图在场而根未接管时对账不重放。
 - 旧兼容：config-only旧账本以registry absent按already_installed收养；本任务新装与already_installed形状不符一律拒绝。
 - 清理：隔离根与临时SQLite删除；生产初装窗口、worker→dev-host→真机整链与业务开通另验。

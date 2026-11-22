@@ -9,6 +9,7 @@ import pytest
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
+from aiops_diagnostics.common.private_files import write_private_text
 from aiops_diagnostics.dify import environment_candidate_preparation as chain
 from aiops_diagnostics.dify import environment_operator
 from aiops_diagnostics.gateway import environment_drafts as drafts
@@ -415,7 +416,81 @@ def test_dispatched_cold_only_observes_frozen_result_without_reviving_parent(
     assert done.json()["state"] == ("cancelled" if terminal == "cancel" else "observed")
     row = next(r for r in rows(state) if r["id"] == parent)
     assert row["state"] == ("cancelled" if terminal == "cancel" else "blocked")
+    # 已验证cold回执同事务回写父摘要：advance不再选中终态父，initial_installation
+    # 与site-install步状态仍须读出真实安装结果；终态/children/后继不动。
+    view = state[0][2].post("/v1/dify/management/environment-tasks", json={"id": parent}).json()
+    assert view["result"]["initial_installation"] == "installed"
+    step = next(s for s in view["result"]["steps"] if s["id"] == cold)
+    assert step["action"] == "site-install" and step["state"] == done.json()["state"]
     assert "site-preflight" not in request_of(state, parent)["children"]
+
+
+@pytest.mark.parametrize("mutation", ["python", "target"])
+def test_dispatched_cold_observe_reclaims_with_frozen_python(candidate_chain, mutation, tmp_path):
+    state = candidate_chain
+    data_home = tmp_path / "cold-data"
+    data_home.mkdir(mode=0o700)
+    state[0][3].data_home = data_home
+    state[2]["initial_installation"] = True
+    parent = submit_http(state).json()["id"]
+    cold = request_of(state, parent)["children"]["site-install"]
+    owner = "c" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == cold
+    stage = internal(state, {"installation": "stage", "id": cold, "owner": owner})
+    assert stage.status_code == 200 and stage.json()["python"] == "3.12", stage.text
+    assert internal(state, {"installation": "authorize", "id": cold, "owner": owner}).json() == {
+        "authorized": True
+    }
+    # 已派发后现场引用漂移/移除：观察回收只能使用提交时冻结的python。
+    ref = json.loads(state[0][1].read_text())
+    if mutation == "python":
+        next(t for t in ref["targets"] if t["id"] == "host-a")["python"] = "3.13"
+    else:
+        ref["targets"] = [t for t in ref["targets"] if t["id"] != "host-a"]
+    write_private_text(state[0][1], json.dumps(ref))
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        conn.execute("UPDATE environment_tasks SET lease_until=0 WHERE id=?", (cold,))
+    claim = internal(state, {"installation_claim": True, "owner": owner})
+    assert claim.status_code == 200 and claim.json()["id"] == cold, claim.text
+    stage = internal(state, {"installation": "stage", "id": cold, "owner": owner})
+    assert stage.status_code == 200 and stage.json()["observe_only"] is True, stage.text
+    assert stage.json()["python"] == "3.12"
+    result = {
+        "id": cold,
+        "environment": "a",
+        "scope": "site-cold-installation-only",
+        "state": "observed",
+        "installation": "installed",
+        "executable": False,
+        "version": "1.2.3",
+        "source_revision": stage.json()["archives"]["application"]["revision"],
+        "artifact_sha256": stage.json()["archives"]["application"]["sha256"],
+        "config_sha256": "c" * 64,
+        "registry_sha256": "d" * 64,
+    }
+    done = internal(state, {"installation": "complete", "id": cold, "owner": owner, "result": result})
+    assert done.status_code == 200 and done.json()["state"] == "observed", done.text
+
+
+@pytest.mark.parametrize("mutation", ["python", "target"])
+def test_fresh_cold_claim_rejects_reference_drift(candidate_chain, mutation, tmp_path):
+    state = candidate_chain
+    data_home = tmp_path / "cold-data"
+    data_home.mkdir(mode=0o700)
+    state[0][3].data_home = data_home
+    state[2]["initial_installation"] = True
+    parent = submit_http(state).json()["id"]
+    cold = request_of(state, parent)["children"]["site-install"]
+    ref = json.loads(state[0][1].read_text())
+    if mutation == "python":
+        next(t for t in ref["targets"] if t["id"] == "host-a")["python"] = "3.13"
+    else:
+        ref["targets"] = [t for t in ref["targets"] if t["id"] != "host-a"]
+    write_private_text(state[0][1], json.dumps(ref))
+    claim = internal(state, {"installation_claim": True, "owner": "c" * 32})
+    assert claim.status_code == 200 and claim.json()["claimed"] is False, claim.text
+    row = next(r for r in rows(state) if r["id"] == cold)
+    assert row["state"] == "blocked" and row["error"] == "ENVIRONMENT_TASK_OBSERVATION_REQUIRED"
 
 
 def test_checking_cold_paces_reclaim_and_yields_independent_site_queue(candidate_chain, tmp_path):

@@ -557,6 +557,8 @@ it('submits cold initial installation only after explicit confirm and reads back
           error_code: '',
         },
       ],
+      // 真实提交落库即带该字段；queued父摘要据此显示初装未执行而非纯运行安装。
+      initial_installation: 'not_executed',
     },
   }
   const cold = {
@@ -620,9 +622,13 @@ it('submits cold initial installation only after explicit confirm and reads back
   await expect
     .element(screen.getByText('空机初装 · same：待安装', { exact: true }))
     .toBeVisible()
-  // 初装结果未回写前父任务仍显示原运行安装文案。
+  // 初装结果未回写前父任务按真实queued摘要显示基础初装未执行。
   await expect
-    .element(screen.getByText('安装未执行 · 业务未验收 · 正式入口未启用', { exact: true }))
+    .element(
+      screen.getByText('基础初装：未执行 · 运行安装未执行 · 业务未验收 · 正式入口未启用', {
+        exact: true,
+      }),
+    )
     .toBeVisible()
   cold.state = 'running'
   await refresh()
