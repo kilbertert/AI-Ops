@@ -154,7 +154,7 @@ def execute(inst, spec, *, observe_only=False):
             outcome = inst.apply(
                 Path(archives["application"]["path"]),
                 archives["application"]["sha256"],
-                "/usr/bin/python3",
+                probe.managed_python(previous["python"], run=inst.command),
                 root / "production.env",
                 desired["config_sha256"],
                 spec["expected"]["config_sha256"],

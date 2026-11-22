@@ -783,11 +783,7 @@ WantedBy=multi-user.target
         runtime_sha=None,
         expected_runtime_sha=None,
     ):
-        if not re.fullmatch(r"/usr/bin/python3(?:\.(?:11|12|13))?", python):
-            raise ValueError("only installed system Python is supported")
-        minor = self.command(
-            python, "-I", "-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-        )
+        python, minor = probe.system_python(python, run=self.command)
         meta = probe.manifest(archive, sha, minor)
         if getattr(self, "revision", meta["revision"]) != meta["revision"]:
             raise ValueError("installer and application revisions differ")

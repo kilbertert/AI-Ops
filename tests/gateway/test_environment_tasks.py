@@ -513,6 +513,7 @@ def test_worker_builds_merged_installer_and_only_invokes_preflight(prepared, tmp
     )
     claim["installer"] = dict(revision=revision, sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
     commands = []
+    inputs = []
     run = subprocess.run
     output = subprocess.check_output
 
@@ -528,17 +529,121 @@ def test_worker_builds_merged_installer_and_only_invokes_preflight(prepared, tmp
         if args[0] != "dev-host":
             return output(args, **kwargs)
         commands.append(args)
+        inputs.append(kwargs.get("input", ""))
         return json.dumps(receipt("a"))
 
     monkeypatch.setattr(worker.subprocess, "run", run_fake)
     monkeypatch.setattr(worker.subprocess, "check_output", output_fake)
     assert worker.execute(root, claim)["state"] == "observed"
-    assert commands[-1][-1].endswith("preflight --environment a --user aiops --port 18951")
+    assert commands[-1][-1] == "python3 -"
+    assert "managed_python()" in inputs[-1]
+    assert (
+        "install.py', 'preflight', '--environment', 'a', '--user', 'aiops', '--port', '18951'" in inputs[-1]
+    )
     assert all("systemctl" not in str(command) for command in commands)
     assert all(command[2] == "124" for command in commands)
     bad = {**claim, "target": {**claim["target"], "host": "--project"}}
     with pytest.raises(ValueError, match="fixed target"):
         worker.execute(root, bad)
+
+
+def test_preflight_driver_executes_old_and_new_bundle_interpreter_contract(prepared, tmp_path, monkeypatch):
+    """旧固定包probe无managed_python时生成的preflight驱动真实执行回退PATH的python3。
+
+    目标refs可冻结旧installer（如124仍1.36.1），其probe无新函数；新worker
+    直接managed_python()会在任何预检前AttributeError。本用例对生成的驱动
+    脚本做真实`python3 -`执行，旧包证PATH回退、新包证受管枚举选中。
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+    from shutil import which
+
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    _, ref, _, _ = prepared
+    claim = {"target": dict(host="singapore-server", user="aiops", port=18951), "environment": "a"}
+    root = Path(__file__).resolve().parents[2]
+    revision = subprocess.check_output(["git", "rev-parse", "origin/main"], cwd=root, text=True).strip()
+    archive = tmp_path / "actual-installer.tar.gz"
+    subprocess.run(
+        ["bash", "ops/environments/gateway/build-installer.sh", revision, str(archive)], cwd=root, check=True
+    )
+    expected = hashlib.sha256(archive.read_bytes()).hexdigest()
+    claim["installer"] = dict(revision=revision, sha256=expected)
+    inputs = []
+    run = subprocess.run
+    output = subprocess.check_output
+
+    def run_fake(args, **kwargs):
+        if args[0] != "dev-host":
+            return run(args, **kwargs)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def output_fake(args, **kwargs):
+        if args[0] != "dev-host":
+            return output(args, **kwargs)
+        inputs.append(kwargs.get("input", ""))
+        return json.dumps(receipt("a"))
+
+    monkeypatch.setattr(worker.subprocess, "run", run_fake)
+    monkeypatch.setattr(worker.subprocess, "check_output", output_fake)
+    assert worker.execute(root, claim)["state"] == "observed"
+    remote = "/var/backups/aiops-site-task-" + expected
+    # 旧固定包形状：probe可import但无managed_python；install.py回显运行它的解释器。
+    old = tmp_path / "old-bundle"
+    old.mkdir()
+    (old / "probe.py").write_text("# 旧固定包probe：无managed_python/system_python\n")
+    (old / "install.py").write_text("import sys;print(sys.executable)")
+    proc = run(
+        ["python3", "-"],
+        input=inputs[-1].replace(remote, str(old)),
+        text=True,
+        capture_output=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "AttributeError" not in proc.stderr
+    assert Path(proc.stdout.strip()).resolve() == Path(which("python3")).resolve()
+    # 新固定包：真实probe+artifact_checks。受管枚举用确定的合成解释器入口——
+    # 宿主/usr/bin/python3小版本在CI上可能不在3.11–3.13（实测无受管解释器）；
+    # shim对-I探针回报固定3.13、exec时打印标记后委托PATH的真实python3跑stub。
+    new = tmp_path / "new-bundle"
+    new.mkdir()
+    (new / "probe.py").write_text((root / "ops/environments/gateway/probe.py").read_text())
+    (new / "artifact_checks.py").write_text(
+        (root / "src/aiops_diagnostics/gateway/environment_artifacts.py").read_text()
+    )
+    (new / "install.py").write_text("import sys;print(sys.executable)")
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    shim = tmp_path / "targets" / "python3.13"
+    shim.parent.mkdir()
+    shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-I" ]; then echo 3.13;'
+        ' else echo "synthetic-entry:$0"; exec python3 "$@"; fi\n'
+    )
+    shim.chmod(0o755)
+    (managed / "python3").symlink_to(shim)
+    resolved = os.path.realpath(managed / "python3")
+    # roots/owner/check_dir是受管合同自身参数：tmp祖先归属不受测试控制，
+    # 归属核验面由tests/tooling单测覆盖，本例只证驱动执行解析后目标。
+    contract = f"roots=({str(managed)!r},),owner={os.getuid()},check_dir=lambda _path,_owner:None"
+    proc = run(
+        ["python3", "-"],
+        input=inputs[-1]
+        .replace(remote, str(new))
+        .replace(
+            "probe.system_python(probe.managed_python())",
+            f"probe.system_python(probe.managed_python({contract}),{contract})",
+        ),
+        text=True,
+        capture_output=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.strip().splitlines()
+    assert lines[0] == "synthetic-entry:" + resolved
+    assert Path(lines[1]).resolve() == Path(which("python3")).resolve()
 
 
 def test_worker_key_must_not_reuse_existing_service_secrets(tmp_path):

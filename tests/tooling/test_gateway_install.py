@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import runpy
 import socket
 import subprocess
@@ -1279,3 +1280,182 @@ def test_cold_probe_reuses_time_wait_but_refuses_live_listener(host):
                 assert client.recv(1) == b""
     # 服务端先FIN，原裸bind会被TIME_WAIT误拒；无需sleep或猜测端口释放时间。
     assert apply(host)["result"] == "installed"
+
+
+def test_apply_flows_selected_interpreter_into_venv(host):
+    inst, archive, sha, config, *_ = host
+    selected = "/usr/bin/python3"
+    resolved = os.path.realpath(selected)
+    if re.fullmatch(r"python3(?:\.(?:11|12|13))?", os.path.basename(resolved)):
+        selected = resolved
+    assert inst.apply(archive, sha, selected, config, install.digest(config))["result"] == "installed"
+    venv = next(c for c in reversed(host[4]) if "venv" in c)
+    # venv创建只走system_python核验后的解析目标。
+    assert venv[venv.index("-i") + 2] == os.path.realpath(selected)
+
+
+def test_managed_python_selects_local_install_when_system_default_is_old(tmp_path):
+    """95形状：/usr/bin/python3是平台旧版，/usr/local/bin的受管安装被选中。"""
+    usr_bin = tmp_path / "usr/bin"
+    local_bin = tmp_path / "usr/local/bin"
+    usr_bin.mkdir(parents=True)
+    local_bin.mkdir(parents=True)
+    # 不同解析目标区分候选：旧平台链与root维护链各指自己的真实文件。
+    new_minor = probe.SUPPORTED_PYTHON_MINORS[-1]
+    old = tmp_path / "targets" / "platform-python3.6"
+    new = tmp_path / "targets" / "python3.13"
+    old.parent.mkdir()
+    for target in (old, new):
+        target.write_text("#!/bin/sh\n")
+        target.chmod(0o755)
+    (usr_bin / "python3").symlink_to(old)
+    (local_bin / "python3").symlink_to(new)
+    # 小版本探测只发向解析后目标，不是候选路径。
+    minors = {os.path.realpath(old): "3.6", os.path.realpath(new): new_minor}
+    roots = (str(usr_bin), str(local_bin))
+
+    def run(path, *args):
+        return minors[path]
+
+    def check_dir(path, owner):
+        resolved = Path(os.path.realpath(path))
+        if resolved == tmp_path or resolved in tmp_path.parents:
+            return  # 合成容器及其祖先（含1777的/tmp）只模拟挂载点；区内目录实核。
+        probe.trusted_directory(resolved, os.getuid())
+
+    kwargs = dict(roots=roots, owner=os.getuid(), run=run, check_dir=check_dir)
+    assert probe.managed_python(new_minor, **kwargs) == str(local_bin / "python3")
+    other = next(m for m in probe.SUPPORTED_PYTHON_MINORS if m != new_minor)
+    with pytest.raises(ValueError, match="no managed interpreter"):
+        probe.managed_python(other, **kwargs)
+    with pytest.raises(ValueError, match="system Python"):
+        probe.system_python(str(usr_bin / "python3.6"), **kwargs)
+
+
+def test_managed_python_rejects_writable_mismatched_or_foreign_paths(tmp_path):
+    root = tmp_path / "usr/local/bin"
+    root.mkdir(parents=True)
+    fake = root / "python3.13"
+    fake.write_text("#!/bin/sh\n")
+
+    def check(_path, _owner):
+        return None
+
+    fake.chmod(0o777)
+    with pytest.raises(ValueError, match="ownership or mode"):
+        probe.system_python(
+            str(fake), roots=(str(root),), owner=os.getuid(), run=lambda *a: "3.13", check_dir=check
+        )
+    fake.chmod(0o755)
+    with pytest.raises(ValueError, match="minor mismatch"):
+        probe.system_python(
+            str(fake), roots=(str(root),), owner=os.getuid(), run=lambda *a: "3.12", check_dir=check
+        )
+    assert probe.system_python(
+        str(fake), roots=(str(root),), owner=os.getuid(), run=lambda *a: "3.13", check_dir=check
+    ) == (os.path.realpath(fake), "3.13")
+    # 受管候选经符号链接→合成真实目标：返回的是解析后绝对目标而非候选路径。
+    # 不探测宿主/usr/bin/python3——其小版本在CI上可能不在受支持范围。
+    synthetic = tmp_path / "targets" / "python3.12"
+    synthetic.parent.mkdir()
+    synthetic.write_text("#!/bin/sh\n")
+    synthetic.chmod(0o755)
+    link = root / "python3"
+    link.symlink_to(synthetic)
+    path, minor = probe.system_python(
+        str(link), roots=(str(root),), owner=os.getuid(), run=lambda *a: "3.12", check_dir=check
+    )
+    assert path == os.path.realpath(synthetic) and minor == "3.12"
+    with pytest.raises(ValueError, match="system Python"):
+        probe.system_python(
+            str(tmp_path / "python3"),
+            roots=(str(root),),
+            owner=os.getuid(),
+            run=lambda *a: "3.12",
+            check_dir=check,
+        )
+
+
+def test_system_python_executes_only_the_verified_resolved_target(tmp_path):
+    """核验后只执行解析后绝对目标：候选链路的可写中间目录不构成重定向面。
+
+    评审反例（parent-hop）：`managed/python3` → `alias/python3`，`alias`本身
+    是指向0777的`writable/hop`的目录级符号链接，`hop`再指向受信`final`目录。
+    逐hop文本枚举看不到路径组件级链接；改为探测+返回+执行解析后目标后，
+    中间跳在核验后无法重定向解释器——但解析目标自身的祖先仍须全部受控。
+    """
+    root = tmp_path / "managed"
+    root.mkdir()
+    final = tmp_path / "final"
+    final.mkdir()
+    target = final / "python3"
+    target.write_text("#!/bin/sh\n")
+    target.chmod(0o755)
+    writable = tmp_path / "writable"
+    writable.mkdir()
+    writable.chmod(0o777)
+    # root反例形状：managed/python3 → alias/python3 → writable/hop/python3 → final/python3。
+    (writable / "hop").symlink_to(final)
+    alias = tmp_path / "alias"
+    alias.symlink_to(writable / "hop")
+    candidate = root / "python3"
+    candidate.symlink_to(alias / "python3")
+    resolved = os.path.realpath(candidate)
+    assert resolved == os.path.realpath(target)
+    probed = []
+
+    def run(path, *args):
+        probed.append(path)
+        return "3.13"
+
+    def check_dir(path, owner):
+        resolved_dir = Path(os.path.realpath(path))
+        if resolved_dir == tmp_path or resolved_dir in tmp_path.parents:
+            return  # 合成容器祖先不属被测链；区内目录按自身归属实核。
+        probe.trusted_directory(resolved_dir, os.getuid())
+
+    # 0777中间跳不再否决：小版本探测与执行都只经过解析后目标，hop不可重定向。
+    assert probe.system_python(
+        str(candidate), roots=(str(root),), owner=os.getuid(), run=run, check_dir=check_dir
+    ) == (resolved, "3.13")
+    assert probed == [resolved]
+    # 解析目标自身落在可写父目录下仍拒：resolved的全部父目录受核。
+    direct = tmp_path / "w" / "bin"
+    direct.mkdir(parents=True)
+    direct.chmod(0o777)
+    exposed = direct / "python3.13"
+    exposed.write_text("x")
+    exposed.chmod(0o755)
+    named = root / "python3.13"
+    named.symlink_to(exposed)
+    with pytest.raises(ValueError, match="untrusted"):
+        probe.system_python(str(named), roots=(str(root),), owner=os.getuid(), run=run, check_dir=check_dir)
+    named.unlink()
+    # root常规安全链：managed bin内二级符号链接→同一受信目标照常接受。
+    named.symlink_to(target)
+    candidate.unlink()
+    candidate.symlink_to(named)
+    probed.clear()
+    inner_resolved = os.path.realpath(candidate)
+    assert probe.system_python(
+        str(candidate), roots=(str(root),), owner=os.getuid(), run=run, check_dir=check_dir
+    ) == (inner_resolved, "3.13")
+    assert probed == [inner_resolved]
+    # 中间跳指向不受管目标仍按目标本身拒绝，不因hop在受管名下放行。
+    evil = tmp_path / "evil-bin"
+    evil.write_text("#!/bin/sh\n")
+    evil.chmod(0o777)
+    named.unlink()
+    named.symlink_to(evil)
+    with pytest.raises(ValueError, match="ownership or mode"):
+        probe.system_python(
+            str(candidate), roots=(str(root),), owner=os.getuid(), run=run, check_dir=check_dir
+        )
+    writable_bin = tmp_path / "w2" / "bin"
+    writable_bin.mkdir(parents=True)
+    writable_bin.chmod(0o777)
+    owned = writable_bin / "python3"
+    owned.write_text("x")
+    owned.chmod(0o755)
+    with pytest.raises(ValueError, match="interpreter location"):
+        probe.system_python(str(owned), roots=(str(writable_bin),), owner=os.getuid(), run=lambda *a: "3.12")
