@@ -375,6 +375,7 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
     from aiops_diagnostics.knowledge import knowledge_delegation
 
     from . import environment_consumer, service_keys
+    from .environment_consumer_trial import candidate_workflow_sha
 
     settings = context.settings
 
@@ -437,8 +438,10 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
         settings.dify_console_base_url, spec["consumer"]["app_id"], settings.dify_console_api_key, workspace
     )
     client = DifyDslClient(source)
-    workflow = workflow_content(client.export_dsl())
-    if workflow != workflow_content(yaml.safe_dump(document)):
+    exported = client.export_dsl()
+    workflow = workflow_content(exported)
+    # Dify导出补回变量自身selector；比对沿用候选摘要的规范化口径，冻结体仍按导出原样保存。
+    if candidate_workflow_sha(exported) != candidate_workflow_sha(yaml.safe_dump(document)):
         raise ValueError("publication draft differs from validated source")
     snapshot = {
         "environment": env,
