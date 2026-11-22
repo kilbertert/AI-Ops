@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tarfile
 import time
@@ -117,6 +118,27 @@ def test_no_unapproved_reentry_or_baseline_write(task_state, monkeypatch, condit
         result = task.execute(inst, request, observe_only=condition == "observe")
         assert result["state"] in ("blocked", "reconcile")
     assert calls == []
+
+
+def test_execute_passes_managed_interpreter_and_apply_revalidates(task_state, monkeypatch):
+    inst, request, fixture = task_state
+    minor = inst.read_record("installed.json")["python"]
+    selected = task.probe.managed_python(minor, run=inst.command)
+    resolved = os.path.realpath(selected)
+    if task.probe.re.fullmatch(r"python3(?:\.(?:11|12|13))?", os.path.basename(resolved)):
+        selected = resolved
+    monkeypatch.setattr(task.probe, "managed_python", lambda *a, **kw: selected)
+    count = len(fixture[4])
+    assert task.execute(inst, request)["state"] == "observed"
+    minor_probe = next(c for c in reversed(fixture[4][count:]) if "-c" in c)
+    # 小版本探测只发向apply内system_python核验后的解析目标。
+    assert os.path.realpath(selected) in minor_probe
+    forged = Path(inst.root.parent / "forged-python3.12")
+    forged.write_text("#!/bin/sh\n")
+    forged.chmod(0o755)
+    monkeypatch.setattr(task.probe, "managed_python", lambda *a, **kw: str(forged))
+    with pytest.raises(ValueError, match="system Python"):
+        task.execute(inst, {**request, "id": "task_" + "b" * 32})
 
 
 def test_registration_lost_receipt_reenters_as_observation_only(task_state, monkeypatch):

@@ -3,7 +3,6 @@
 import hashlib
 import json
 import re
-import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -108,7 +107,7 @@ def execute(root, claim):
                 "with tarfile.open(p) as t:",
                 " for m in t:",
                 "  if m.name=='.' and m.isdir(): continue",
-                "  name=m.name.removeprefix('./')",
+                "  name=m.name[2:] if m.name.startswith('./') else m.name",
                 "  allowed={'REVISION','SHA256SUMS','install.py','runtime_check.py',"
                 "'probe.py','artifact_checks.py','task.py','publication.py'}",
                 "  assert m.isfile() and name in allowed",
@@ -124,7 +123,6 @@ def execute(root, claim):
             command, cwd=root, input=script, text=True, check=True, capture_output=True, timeout=50
         )
         args = [
-            "python3",
             remote + "/install.py",
             "preflight",
             "--environment",
@@ -134,6 +132,21 @@ def execute(root, claim):
             "--port",
             str(target["port"]),
         ]
+        # 固定包自举受管解释器：目标的/usr/bin默认可能是平台Python3.6；
+        # 旧固定包probe无managed_python时沿用原worker合同PATH的python3；
+        # 执行面只走system_python核验后的解析目标。
+        script = "\n".join(
+            [
+                "import subprocess,sys",
+                f"sys.path.insert(0,{remote!r})",
+                "import probe",
+                "py=probe.system_python(probe.managed_python())[0]"
+                " if hasattr(probe,'managed_python') else 'python3'",
+                f"r=subprocess.run([py]+{args!r},stdout=subprocess.PIPE,stderr=subprocess.PIPE,"
+                "universal_newlines=True)",
+                "sys.stdout.write(r.stdout);sys.exit(r.returncode)",
+            ]
+        )
         output = subprocess.check_output(
             [
                 "dev-host",
@@ -143,9 +156,10 @@ def execute(root, claim):
                 "--timeout",
                 "60",
                 "--",
-                shlex.join(args),
+                "python3 -",
             ],
             cwd=root,
+            input=script,
             text=True,
             timeout=65,
         )
@@ -499,7 +513,7 @@ def installation_run(root, request, identifier, owner, *, registration=False):
                     "if p.exists() or p.is_symlink():\n"
                     " assert p.is_file() and not p.is_symlink() and p.stat().st_uid==0\n"
                     " assert p.stat().st_nlink==1\n"
-                    f" assert hashlib.file_digest(p.open('rb'),'sha256').hexdigest()=={actual!r}\n"
+                    f" assert hashlib.sha256(p.read_bytes()).hexdigest()=={actual!r}\n"
                 )
                 subprocess.run(
                     command, cwd=root, input=guard, text=True, check=True, capture_output=True, timeout=65
@@ -536,7 +550,6 @@ def installation_run(root, request, identifier, owner, *, registration=False):
             if registration:
                 remote_action = "observe-registration" if staged["observe_only"] else "register"
             arguments = [
-                "/usr/bin/python3",
                 remote + "/installer/task.py",
                 remote_action,
                 "--environment",
@@ -556,7 +569,7 @@ def installation_run(root, request, identifier, owner, *, registration=False):
                     "import hashlib,json,subprocess,tarfile,sys",
                     "from pathlib import Path",
                     f"archive=Path({(remote + '/installer.tar.gz')!r})",
-                    "actual=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()",
+                    "actual=hashlib.sha256(archive.read_bytes()).hexdigest()",
                     f"assert actual=={staged['installer']['sha256']!r}",
                     f"d=Path({(remote + '/installer')!r});d.mkdir(mode=0o700,exist_ok=True)",
                     "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0",
@@ -564,7 +577,7 @@ def installation_run(root, request, identifier, owner, *, registration=False):
                     "with tarfile.open(archive) as t:",
                     " for m in t:",
                     "  if m.name=='.' and m.isdir():continue",
-                    "  n=m.name.removeprefix('./')",
+                    "  n=m.name[2:] if m.name.startswith('./') else m.name",
                     "  assert m.isfile() and n in {'REVISION','SHA256SUMS','install.py','runtime_check.py',"
                     "'probe.py','artifact_checks.py','task.py','publication.py'}",
                     "  q=d/n;body=t.extractfile(m).read()",
@@ -575,7 +588,12 @@ def installation_run(root, request, identifier, owner, *, registration=False):
                     "   with q.open('xb') as f:f.write(body)",
                     f"assert (d/'REVISION').read_text().strip()=={staged['installer']['revision']!r}",
                     "assert (d/'task.py').is_file()",
-                    f"r=subprocess.run({arguments!r},input={json.dumps(spec)!r},text=True,capture_output=True)",
+                    "sys.path.insert(0,str(d))",
+                    "import probe",
+                    "py=probe.system_python(probe.managed_python())[0]"
+                    " if hasattr(probe,'managed_python') else '/usr/bin/python3'",
+                    f"r=subprocess.run([py]+{arguments!r},input={json.dumps(spec)!r},"
+                    "stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)",
                     "sys.stdout.write(r.stdout);sys.exit(r.returncode)",
                 ]
             )

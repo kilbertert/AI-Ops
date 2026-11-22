@@ -265,7 +265,7 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     def output(args, **kwargs):
         commands.append(args)
         ast.parse(kwargs["input"])
-        assert "'run'" in kwargs["input"] and "'/usr/bin/python3'" in kwargs["input"]
+        assert "'run'" in kwargs["input"] and "managed_python()" in kwargs["input"]
         return __import__("json").dumps(
             {
                 "id": identifier,
@@ -292,6 +292,106 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     result = worker.installation_run(tmp_path, request, identifier, owner)
     assert result["state"] == "blocked"
     assert all(a[2] == "124" for a in commands if a[0] == "dev-host" and a[2] != "41")
+
+
+def test_install_driver_tail_executes_old_and_new_bundle_interpreter_contract(
+    installation_state, tmp_path, monkeypatch
+):
+    """installation_run生成的task驱动尾部真实执行：旧包回退/usr/bin/python3，新包受管选择。
+
+    目标refs可冻结旧installer（其probe无managed_python）；uid断言之上的
+    选择/执行行按生成原文逐字抽取，配合等价导入头对替身安装目录实际跑
+    `python3 -`，证回退与选择两端都真正执行而非只断言脚本形状。
+    """
+    import ast
+    import subprocess
+
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    state = installation_state
+    identifier = submit(state).json()["id"]
+    owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    stage = internal(state, {"installation": "stage", "id": identifier, "owner": owner}).json()
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="124"\nhost="managed-a"\n')
+    installer_bytes = b"fixed installer"
+    stage["installer"]["sha256"] = __import__("hashlib").sha256(installer_bytes).hexdigest()
+    scripts = []
+    real = subprocess.run
+    real_output = subprocess.check_output
+
+    def run(args, **kwargs):
+        # dev-host/bash/git留替身；其余（解释器探针、check_output内部委托）真执行。
+        if args[0] not in ("dev-host", "bash", "git"):
+            return real(args, **kwargs)
+        if args[0] == "bash":
+            Path(args[-1]).write_bytes(installer_bytes)
+        elif args[0] == "dev-host" and args[-1].endswith("python -"):
+            ast.parse(kwargs["input"].decode())
+            script = kwargs["input"].decode()
+            source = next(v for v in stage["archives"].values() if repr(v["path"]) in script)
+            kwargs["stdout"].write(Path(source["path"]).read_bytes())
+        elif "input" in kwargs:
+            ast.parse(kwargs["input"])
+        return subprocess.CompletedProcess(args, 0)
+
+    def output(args, **kwargs):
+        if args[0] != "dev-host":
+            return real_output(args, **kwargs)
+        scripts.append(kwargs["input"])
+        return __import__("json").dumps(
+            {
+                "id": identifier,
+                "environment": "a",
+                "scope": "candidate-installation-only",
+                "state": "blocked",
+                "executable": False,
+                "activation": "not_executed",
+                "registration": "not_executed",
+                "business": "unverified",
+            }
+        )
+
+    def request(payload):
+        if payload["installation"] == "stage":
+            return stage
+        if payload["installation"] == "authorize":
+            return {"authorized": True}
+        return internal(state, payload).json()
+
+    monkeypatch.setattr(worker.subprocess, "run", run)
+    monkeypatch.setattr(worker.subprocess, "check_output", output)
+    assert worker.installation_run(tmp_path, request, identifier, owner)["state"] == "blocked"
+    remote = "/var/backups/aiops-install-task-" + identifier
+    tail = scripts[-1][scripts[-1].index("sys.path.insert(0,str(d))") :]
+    tail = tail.replace(remote, str(tmp_path / "bundle"))
+    # 逐字尾部只缺d与导入头；等价补齐后对替身安装目录真实执行。
+    for bundle in ("old", "new"):
+        directory = tmp_path / "bundle" / "installer"
+        directory.mkdir(parents=True, exist_ok=True)
+        if bundle == "old":
+            (directory / "probe.py").write_text("# 旧固定包probe：无managed_python\n")
+            expected = "/usr/bin/python3"
+        else:
+            root = Path(__file__).resolve().parents[2]
+            (directory / "probe.py").write_text((root / "ops/environments/gateway/probe.py").read_text())
+            (directory / "artifact_checks.py").write_text(
+                (root / "src/aiops_diagnostics/gateway/environment_artifacts.py").read_text()
+            )
+            import importlib.util
+
+            spec = importlib.util.spec_from_file_location(
+                "bundle_probe", root / "ops/environments/gateway/probe.py"
+            )
+            bundle_probe = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(bundle_probe)
+            expected = bundle_probe.system_python(bundle_probe.managed_python())[0]
+        (directory / "task.py").write_text("import sys;print(sys.executable)")
+        prologue = "import subprocess,sys\nfrom pathlib import Path\nd=Path(" + repr(str(directory)) + ")\n"
+        proc = real(["python3", "-"], input=prologue + tail, text=True, capture_output=True)
+        assert proc.returncode == 0, proc.stderr
+        assert "AttributeError" not in proc.stderr
+        assert Path(proc.stdout.strip()).resolve() == Path(expected).resolve()
 
 
 @pytest.mark.parametrize("phase", ["queued", "executing", "checking", "running"])
