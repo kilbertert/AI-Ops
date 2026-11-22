@@ -241,6 +241,41 @@ def verify(root, source, spec, identifier):
     )
 
 
+def target_staged(root, staged, identifier):
+    """目标宿主本任务的 staged 目录是否在场；宿主不可定位或探测失败按在场处理。"""
+    target = staged["request"]["target"]
+    declared = tomllib.loads((root / ".dev-host.toml").read_text())["targets"]
+    matches = [r for r in declared if r.get("name") == target["host"] or r.get("host") == target["host"]]
+    if len(matches) != 1 or not REFERENCE_PATTERN.fullmatch(matches[0]["name"]):
+        return True
+    access = (
+        matches[0]
+        .get("paths", {})
+        .get("access", "/opt/aiops-access-" + staged["request"]["plan"]["environment"])
+    )
+    # 远端以 7 报告「缺席」：dev-host 自身失败（传输/权限）通常落在 1/255，
+    # 只有远端脚本真实回答 absent 才判不在场，其余一切码都收敛到保守的在场侧。
+    probe = subprocess.run(
+        [
+            "dev-host",
+            "exec",
+            matches[0]["name"],
+            "--allow-service-exec",
+            "--",
+            "python3",
+            "-B",
+            "-",
+        ],
+        cwd=root,
+        input="import sys\nfrom pathlib import Path\n"
+        f"sys.exit(0 if Path({access + '/publication-tasks/' + identifier!r}).is_dir() else 7)\n",
+        text=True,
+        capture_output=True,
+        timeout=70,
+    )
+    return probe.returncode != 7
+
+
 def execute(root, request, identifier, owner):
     def call(action, **data):
         return request({"publication": action, "id": identifier, "owner": owner, **data})
@@ -253,7 +288,17 @@ def execute(root, request, identifier, owner):
     bundle = steps.get("central", {}).get("bundle")
     try:
         if staged["cancelled"]:
-            if bundle and "target" in steps:
+            if (
+                bundle
+                and "target" in steps
+                and steps["target"].get("state") == "started"
+                and not target_staged(root, staged, identifier)
+            ):
+                # 目标步只消费了 intent 且远端 staged 目录不在场：publication-tasks/<id>
+                # 是 setup() 首个落盘写，缺席证明目标侧零副作用，与未启动同案恢复；
+                # 在场或探测失败都不能排除副作用，仍走原受管恢复。
+                result.update(state="cancelled", phase="restored")
+            elif bundle and "target" in steps:
                 result = target_task(root, staged, bundle, "restore")
                 if result.get("phase") != "restored":
                     raise ValueError("target restoration unconfirmed")
