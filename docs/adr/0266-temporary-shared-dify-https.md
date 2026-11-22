@@ -1,6 +1,6 @@
 # 266. 共享Dify备用HTTPS只承载受限服务API
 
-Status: Accepted（用户2026-11-16授权临时恢复接入并继续开发）
+Status: Superseded in part by [0306](0306-formal-scoped-dify-service-ingress.md)（第二环境入口的临时生命周期被替代；原受限传输边界保留）
 
 目标环境到共享Dify原HTTPS多次在握手阶段被重置。临时边缘代理试验出现403/525，已完整回退。
 选择在共享服务宿主的已分配端口池中增加备用TLS入口，保留原域名证书和应用Bearer，只允许已批准来源。
