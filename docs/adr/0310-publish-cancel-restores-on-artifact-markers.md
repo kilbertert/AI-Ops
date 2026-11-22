@@ -46,3 +46,8 @@ worker 从运维检出运行、可能先于网关升级：`markers` 键缺失（
 env95 上 selector 缺陷留下的死任务（bundle 目录为空属实测证据）在部署后下一个
 重领周期即按 restored 收口，无需任何账本改写。
 `describe` 返回值多一个键：页面与 spec 比对面均不读它，无兼容影响。
+标记 stat 读失败（权限/挂载异常）时 `describe` 回 `markers: null`，worker 视同键缺失维持
+核查 hold——失败面收敛到终态化 hold，而不是让任务停在 `executing` 里无限重领。
+标记的证据力是文件存在位：人工删除 `publication-bundles/` 会把「未知副作用」判成
+「可恢复」，这是以落盘次序为证据这一方案的内生限制——bundle 目录按证据保管，
+与账本同级，不接受外部清理。

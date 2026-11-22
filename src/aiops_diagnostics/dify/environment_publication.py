@@ -622,12 +622,18 @@ def describe(context, request, identifier):
         ),
     )
     directory = Path(context.settings.data_home) / "publication-bundles" / identifier
-    return {
+    try:
         # 中央步工件标记：intent.json 是首个落盘点，两者皆无证明未越过比对、无共享副作用。
-        "markers": {
+        markers = {
             "intent": (directory / "intent.json").exists(),
             "release": (directory / "release.json").exists(),
-        },
+        }
+    except OSError:
+        # stat 读失败（权限/挂载异常）回空标记：worker 视同键缺失/标记在场维持核查，
+        # 否则 describe 500 会让任务停在 executing 无限重领——与本修复消除的 hold 同类。
+        markers = None
+    return {
+        "markers": markers,
         "spec": {
             "id": identifier,
             "environment": request["plan"]["environment"],
