@@ -239,6 +239,8 @@ def dispatch(context, payload):
                     "config_sha256",
                     "registry_sha256",
                     "runtime_sha256",
+                    "source_runtime_sha256",
+                    "previous_runtime_sha256",
                 }
             ):
                 raise tasks.TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
@@ -247,7 +249,17 @@ def dispatch(context, payload):
                 or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\+[a-f0-9]{12})?", result["version"])
                 or result.get("installation") not in {"installed", "unchanged"}
                 or result.get("artifact_sha256") != request["archives"]["application"]["sha256"]
-                or result.get("runtime_sha256") != request["archives"]["runtime"]["sha256"]
+                or result.get("source_runtime_sha256", result.get("runtime_sha256"))
+                != request["archives"]["runtime"]["sha256"]
+                or not isinstance(result.get("runtime_sha256"), str)
+                or not re.fullmatch(r"[a-f0-9]{64}", result["runtime_sha256"])
+                or (
+                    result.get("runtime_sha256") != request["archives"]["runtime"]["sha256"]
+                    and (
+                        result.get("previous_runtime_sha256") != request["expected"]["runtime_sha256"]
+                        or result.get("source_runtime_sha256") != request["archives"]["runtime"]["sha256"]
+                    )
+                )
                 or result.get("source_revision") != request["archives"]["application"]["revision"]
                 or any(
                     not isinstance(result.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", result[k])

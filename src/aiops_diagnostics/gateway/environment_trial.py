@@ -87,13 +87,14 @@ def target(context, app_id, expected_sha256):
     build = json.loads((installation / "current/manifest.json").read_text())
     if build["version"] != __import__("aiops_diagnostics").__version__:
         raise TrialRefused("ENVIRONMENT_TRIAL_NOT_INSTALLED")
+    files, manifest = runtime_files(root / "runtime/runtime.tar", expected_sha256, settings.environment)
     validate_candidate(
         root / "production.env",
         root / "registry/environment.json",
         settings.environment,
         runtime=root / "runtime",
+        candidate_tenant=manifest["tenant_id"],
     )
-    files, manifest = runtime_files(root / "runtime/runtime.tar", expected_sha256, settings.environment)
     registration = json.loads(files["registrations.json"])
     if registration["operator_app_id"] != app_id:
         raise TrialRefused("ENVIRONMENT_TRIAL_APP_MISMATCH")

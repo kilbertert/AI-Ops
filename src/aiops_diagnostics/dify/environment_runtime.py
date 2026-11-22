@@ -361,10 +361,14 @@ def register_installed(settings, expected_sha256, receipt_fd, *, observe_only=Fa
             != installed["registry_sha256"]
         ):
             raise ValueError("installed runtime receipt mismatch")
-        validate_candidate(
-            root / "production.env", root / "registry/environment.json", settings.environment, runtime=runtime
-        )
         files, manifest = runtime_files(runtime / "runtime.tar", expected_sha256, settings.environment)
+        validate_candidate(
+            root / "production.env",
+            root / "registry/environment.json",
+            settings.environment,
+            runtime=runtime,
+            candidate_tenant=manifest["tenant_id"],
+        )
         if set(profiles(settings)) != {"operator-" + settings.environment}:
             raise ValueError("runtime profile mismatch")
         before = {
@@ -375,7 +379,11 @@ def register_installed(settings, expected_sha256, receipt_fd, *, observe_only=Fa
 
     files, manifest, config_hashes, pointer = current()
     registration = json.loads(files["registrations.json"])
-    consumer = json.loads(files["consumer-targets.json"])["targets"][0]
+    consumer = next(
+        c
+        for c in json.loads(files["consumer-targets.json"])["targets"]
+        if c["tenant_id"] == manifest["tenant_id"]
+    )
 
     def unchanged():
         if current() != (files, manifest, config_hashes, pointer):

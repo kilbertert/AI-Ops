@@ -160,6 +160,7 @@ def installation(context, spec):
         root / "registry/environment.json",
         settings.environment,
         runtime=root / "runtime",
+        candidate_tenant=spec["tenant_id"],
     )
     files, manifest = runtime_files(
         root / "runtime/runtime.tar", expected["runtime_sha256"], settings.environment
@@ -193,7 +194,11 @@ def installation(context, spec):
     if (
         spec["consumer"]["workspace_id"] != registration["workspace_id"]
         or spec["consumer"]["knowledge_base_id"]
-        not in json.loads(files["consumer-targets.json"])["targets"][0]["knowledge_base_ids"]
+        not in next(
+            c
+            for c in json.loads(files["consumer-targets.json"])["targets"]
+            if c["tenant_id"] == spec["tenant_id"]
+        )["knowledge_base_ids"]
     ):
         raise ValidationRefused("ENVIRONMENT_VALIDATION_RESOURCE_CHANGED")
     return build

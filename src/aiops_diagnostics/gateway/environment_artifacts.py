@@ -260,7 +260,7 @@ def runtime_files(archive, digest, environment):
     body = json.loads(files["manifest.json"])
     if (
         not isinstance(body, dict)
-        or body.get("schema") != "aiops-environment-runtime/1"
+        or body.get("schema") not in {"aiops-environment-runtime/1", "aiops-environment-runtime/2"}
         or body.get("scope") != "runtime-wiring-only"
         or body.get("environment") != environment
         or any(body.get(k) is not False for k in ("executable", "installed", "activated"))
@@ -271,4 +271,66 @@ def runtime_files(archive, digest, environment):
         or body.get("files") != {n: hashlib.sha256(files[n]).hexdigest() for n in required}
     ):
         raise ValueError("invalid runtime manifest or member digest")
+    if body["schema"] == "aiops-environment-runtime/2" and any(
+        not isinstance(body.get(key), str) or not re.fullmatch(r"[a-f0-9]{64}", body[key])
+        for key in ("source_runtime_sha256", "previous_runtime_sha256")
+    ):
+        raise ValueError("runtime composition provenance missing")
     return files, body
+
+
+def compose_runtime(previous, previous_sha, incoming, incoming_sha, environment):
+    """只累积同环境新租户的运行目标；共享执行资源不得顺带变化。"""
+    import io
+
+    before, previous_manifest = runtime_files(previous, previous_sha, environment)
+    after, manifest = runtime_files(incoming, incoming_sha, environment)
+    if manifest["schema"] != "aiops-environment-runtime/1":
+        raise ValueError("incoming runtime must be original candidate")
+    shared = set(after) - {"manifest.json", "registrations.json", "consumer-targets.json"}
+    if any(before[name] != after[name] for name in shared):
+        raise ValueError("shared runtime change requires separate configuration window")
+    existing = json.loads(before["consumer-targets.json"])["targets"]
+    proposed = json.loads(after["consumer-targets.json"])["targets"]
+    if len(proposed) != 1:
+        raise ValueError("one candidate tenant required")
+    candidate = proposed[0]
+    if candidate.get("tenant_id") != manifest["tenant_id"] or candidate.get("environment") != environment:
+        raise ValueError("candidate target scope mismatch")
+    same = [row for row in existing if row.get("tenant_id") == candidate["tenant_id"]]
+    if same and same != [candidate]:
+        raise ValueError("existing tenant runtime cannot be replaced by candidate")
+    if any(
+        row.get("app_id") == candidate["app_id"] and row.get("tenant_id") != candidate["tenant_id"]
+        for row in existing
+    ):
+        raise ValueError("runtime application already owned")
+    if before == after or (
+        previous_manifest.get("source_runtime_sha256") == incoming_sha
+        and before["registrations.json"] == after["registrations.json"]
+        and same == [candidate]
+    ):
+        return previous.read_bytes(), previous_sha
+    if not same:
+        existing.append(candidate)
+    after["consumer-targets.json"] = (
+        json.dumps({"schema": "aiops-consumer-targets/1", "targets": existing}, sort_keys=True).encode()
+        + b"\n"
+    )
+    manifest.update(
+        schema="aiops-environment-runtime/2",
+        source_runtime_sha256=incoming_sha,
+        previous_runtime_sha256=previous_sha,
+        files={
+            name: hashlib.sha256(raw).hexdigest() for name, raw in after.items() if name != "manifest.json"
+        },
+    )
+    after["manifest.json"] = json.dumps(manifest, sort_keys=True).encode() + b"\n"
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as bundle:
+        for name, raw in sorted(after.items()):
+            member = tarfile.TarInfo(name)
+            member.mode, member.size = 0o600, len(raw)
+            bundle.addfile(member, io.BytesIO(raw))
+    raw = output.getvalue()
+    return raw, hashlib.sha256(raw).hexdigest()
