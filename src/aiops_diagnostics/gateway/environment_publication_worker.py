@@ -247,7 +247,8 @@ def execute(root, request, identifier, owner):
 
     staged = call("stage")
     source, steps = staged["request"], staged["request"]["steps"]
-    spec = call("describe")["spec"]
+    described = call("describe")
+    spec = described["spec"]
     result = {"state": "reconcile", "activated": False, "business_accuracy": "unconfirmed"}
     bundle = steps.get("central", {}).get("bundle")
     try:
@@ -259,8 +260,13 @@ def execute(root, request, identifier, owner):
                 call("source-configuration", restore=True)
                 call("directory", result=result, restore=True)
             elif "central" in steps and not bundle:
-                # 已记发布意图但未收到工件，不能把未知共享副作用报告为已恢复。
-                result.update(error_code="ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED")
+                # intent.json 是中央步首个落盘点；工件标记皆无证明未越过比对、无共享副作用，
+                # 可与未启动同案恢复；标记在场则可能存在未知共享副作用，不能报告为已恢复。
+                markers = described.get("markers", {})
+                if markers.get("intent") or markers.get("release"):
+                    result.update(error_code="ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED")
+                else:
+                    result.update(state="cancelled", phase="restored")
             else:
                 result.update(state="cancelled", phase="restored")
             return call("complete", result=result)

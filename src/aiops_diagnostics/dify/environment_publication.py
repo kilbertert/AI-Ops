@@ -621,7 +621,13 @@ def describe(context, request, identifier):
             yaml.safe_dump(document(cr["consumer_source"], scope["knowledge_base_id"]))
         ),
     )
+    directory = Path(context.settings.data_home) / "publication-bundles" / identifier
     return {
+        # 中央步工件标记：intent.json 是首个落盘点，两者皆无证明未越过比对、无共享副作用。
+        "markers": {
+            "intent": (directory / "intent.json").exists(),
+            "release": (directory / "release.json").exists(),
+        },
         "spec": {
             "id": identifier,
             "environment": request["plan"]["environment"],
@@ -631,7 +637,7 @@ def describe(context, request, identifier):
             "installed": request["installed"],
             "operator_app": json.loads(operator["result"])["app_id"],
             "consumer": scope,
-        }
+        },
     }
 
 
