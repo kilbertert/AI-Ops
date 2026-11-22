@@ -443,9 +443,7 @@ def test_second_tenant_directory_sync_adds_only_approved_tenant_without_reentran
     ]
 
 
-@pytest.mark.parametrize(
-    "artifact", [None, "intent.json", "release.json", "older-gateway", "markers-null"]
-)
+@pytest.mark.parametrize("artifact", [None, "intent.json", "release.json", "older-gateway", "markers-null"])
 def test_cancel_with_unknown_central_publication_remains_reconcilable_without_replay(
     validated, tmp_path, monkeypatch, artifact
 ):
