@@ -212,6 +212,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "gateway/gateway_api.py": 11,  # 拒绝码 / conv_ / code / app_id / knowledge / tenant /
     #                              kb_ids / agt_ 版本 ×2 / code —— 订单字段已收口
     "gateway/environment_registry.py": 3,  # 租户、管理员主体编号及审计操作人，非订单
+    "gateway/environment_business.py": 4,  # case_ref/设备id/run证据id/节点id；订单字段调用is_order_identifier
     "gateway/environment_drafts.py": 1,  # 部署目标/凭据逻辑引用，不是订单号
     "gateway/environment_artifacts.py": 1,  # 冷安装运行工件的租户id，与环境目录合同一致
     "gateway/gateway_config.py": 2,  # 主机名 / 端点名

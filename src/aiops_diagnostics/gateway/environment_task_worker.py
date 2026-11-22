@@ -316,6 +316,10 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
         request({"advance_candidates": True})
         installation = request({"installation_claim": True, "owner": owner})
         if installation.get("claimed") is True:
+            if installation.get("action") == "candidate-validate":
+                from .environment_validation_worker import execute as validate_business
+
+                return validate_business(root, request, installation["id"], owner)
             return installation_run(
                 root,
                 request,

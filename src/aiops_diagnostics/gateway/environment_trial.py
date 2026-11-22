@@ -272,6 +272,41 @@ def register(app, context):
             action = payload.pop("action")
             if not isinstance(action, str):
                 raise TrialRefused("ENVIRONMENT_TRIAL_INVALID")
+            if action == "business-step":
+                from .environment_business import ValidationRefused, step
+
+                try:
+                    result = await asyncio.to_thread(
+                        step, context, payload, start_trial=start, read_trial=read, resolve_identity=identity
+                    )
+                except ValidationRefused as exc:
+                    result = {
+                        "capability": payload.get("capability"),
+                        "state": "blocked",
+                        "error_code": exc.code,
+                    }
+                except OperatorRefused as exc:
+                    result = {
+                        "capability": payload.get("capability"),
+                        "state": "blocked",
+                        "error_code": str(exc),
+                    }
+                return JSONResponse(result, headers={"Cache-Control": "no-store"})
+            if action == "consumer-validation-evidence":
+                from aiops_diagnostics.dify.environment_consumer_trial import validation_evidence
+
+                from .environment_business import ValidationRefused
+
+                try:
+                    result = await asyncio.to_thread(validation_evidence, context, payload)
+                except ValidationRefused as exc:
+                    result = {
+                        "status": "failed",
+                        "capability": "consumer",
+                        "state": "blocked",
+                        "error_code": exc.code,
+                    }
+                return JSONResponse(result, headers={"Cache-Control": "no-store"})
             if action.startswith("consumer-"):
                 operations = {
                     "consumer-describe": context.consumer_candidate_trials.describe,

@@ -257,3 +257,24 @@ def test_registration_task_crosses_bridge_without_target_arguments(bridge, upstr
         {"gateway_url": "https://other.test"},
     ):
         assert _manage({**payload, **extra}, address=bridge)[0] == 400
+
+
+def test_business_validation_crosses_bridge_without_credentials_or_verdict(bridge, upstream):  # noqa: F811
+    body = {
+        "action": "environment-task",
+        "registration_task": "task_" + "a" * 32,
+        "validation_plan": "plan_" + "b" * 32,
+        "capabilities": ["consumer", "order", "offline"],
+        "case_ref": "approved",
+    }
+    assert _manage(body, address=bridge)[0] != 400
+    forwarded = [c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]
+    assert forwarded[-1]["body"] == {k: v for k, v in body.items() if k != "action"}
+    for extra in (
+        {"passed": True},
+        {"token": "secret"},
+        {"case_ref": "../secret"},
+        {"capabilities": ["order", "order"]},
+        {"action": "status"},
+    ):
+        assert _manage({**body, **extra}, address=bridge)[0] == 400

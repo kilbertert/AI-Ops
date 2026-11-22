@@ -69,7 +69,8 @@ def submit(context, identity, identifier, plan_id):
         if conn.execute(
             "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
             "AND state IN ('waiting','executing','checking') "
-            "AND json_extract(request,'$.action') IN ('candidate-install','candidate-register')",
+            "AND json_extract(request,'$.action') "
+            "IN ('candidate-install','candidate-register','candidate-validate')",
             (source["environment"], task_id),
         ).fetchone():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")

@@ -346,8 +346,13 @@ def _environment_dispatch(context, *, trial=False):
 
     try:
         config = context.obj.get("config_file")
-        target_profile = trial and config == Path("/etc/aiops-access-124/production.env")
-        user = "aiops" if target_profile else "aiops41"
+        import re
+
+        match = re.fullmatch(r"/etc/aiops-access-([a-z0-9][a-z0-9_-]{0,31})/production.env", str(config))
+        target_profile = bool(trial and match)
+        environment = match[1] if target_profile else "41"
+        # 目标配置由既有服务身份所有，不能让调用者指定另一身份或路径。
+        user = pwd.getpwuid(config.stat().st_uid).pw_name if target_profile else "aiops41"
         if os.getuid() != pwd.getpwnam(user).pw_uid or (
             not target_profile and config != Path("/etc/aiops-41/gateway.env")
         ):
@@ -359,13 +364,13 @@ def _environment_dispatch(context, *, trial=False):
         if target_profile:
             os.environ.update(
                 {
-                    "AIOPS_GATEWAY_ENVIRONMENT": "124",
+                    "AIOPS_GATEWAY_ENVIRONMENT": environment,
                     "AIOPS_GATEWAY_SERVER_CONFIG_FILE": str(config),
-                    "AIOPS_GATEWAY_DATABASE_FILE": "/var/lib/aiops-access-124/gateway/gateway.db",
+                    "AIOPS_GATEWAY_DATABASE_FILE": f"/var/lib/aiops-access-{environment}/gateway/gateway.db",
                 }
             )
         settings = GatewayServerSettings.from_env()
-        if settings.environment != ("124" if target_profile else "41") or not settings.environment_task_key:
+        if settings.environment != environment or not settings.environment_task_key:
             raise ValueError("central profile not configured")
         # 目标只取本机配置；bind验证地址确实属于本机，不从stdin指定上游。
         host = settings.bind_host if settings.bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
@@ -377,7 +382,7 @@ def _environment_dispatch(context, *, trial=False):
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ValueError("invalid payload")
-        port = 18951 if target_profile else settings.port
+        port = int(os.environ.get("AIOPS_GATEWAY_PORT", "18951")) if target_profile else settings.port
         if trial:
             import time
 
@@ -385,7 +390,10 @@ def _environment_dispatch(context, *, trial=False):
 
             # 本机Gateway可监听桥地址；管理请求来源仍须为回环，不能放宽入口门。
             connection = http.client.HTTPConnection(
-                host, port, timeout=30, source_address=("::1" if ":" in host else "127.0.0.1", 0)
+                host,
+                port,
+                timeout=220 if payload.get("action") == "business-step" else 30,
+                source_address=("::1" if ":" in host else "127.0.0.1", 0),
             )
             try:
                 connection.request(

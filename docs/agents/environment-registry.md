@@ -499,3 +499,31 @@ claim本身字段不合形（如端口/用户名不合规）同样走UNCONFIRMED
 新执行端沿旧installation_claim合同兼容旧控制端；旧执行端误领新动作时stage被拒绝，
 升级后按租约重新领取。代码回退保留候选登记；现役准入与业务入口不依赖此新增任务。
 现场开通与三业务结论仍须分别验收，`registered`仅表示本地运行目录成套登记。
+
+### 已安装租户业务验证（D40）
+
+在成功登记卡片填写`case_ref`，明确选择智能客服、异常订单、离线分析，再用同输入的新鲜计划提交。
+输入仅`{registration_task, validation_plan, capabilities, case_ref}`，不接受URL、token或passed。
+任务持久复用同编号，后台沿原installation_claim取得环境租约，调用目标原本机HMAC试运行；
+客服仍用原consumer-open短时能力到中央执行，目标正常消费者会话不离开目标。
+
+案例由运维在目标`/etc/aiops-access-<环境>/validation-cases/<case_ref>.json`准备，目录0700、文件0600、
+归目标非登录服务身份；有效期最多一小时，仅保存本轮正常认证产物，不从公司缓存扫描会话或代用户开户。
+字段为environment、tenant_id、expires_at（Unix秒）、operator_token、consumer_session和cases。
+每个已选案例须完整；缺某项只阻塞该能力，不删除已选范围或把别项冒充通过：
+
+- consumer：question、明确本人order_no、预期知识分段reference_id。问题应同时请求知识和该订单状态。
+- order：question、order_no。问题应明确异常原因与充电过程；判据是异常状态、同单详情、监测样本及过程统计实际入证。
+- offline：question、device_id、带偏移的start/end，最长31天。问题明确对象与窗口；判据是同设备/窗口实际离线事件。
+
+回执逐能力给出工具、对象、trial/run及范围指纹，另绑定已安装build/config/runtime；不包含原问答、令牌或连接地址。
+passed仅表示这些实际技术证据齐备；`business_accuracy=unconfirmed`、`activated=false`保持，
+不等于工程师确认故障原因、正式网络/身份隔离/容量通过或可以自动激活。
+只读恢复核原意图及run，不再次调用模型；目标/中央重启使原短时授权失效时留下阻塞，需新计划显式重验。
+取消不杀正在执行的模型，阻止后继步骤；原消费者运行结束仍按原清理/撤权规则处理临时资源。
+
+部署顺序：控制Gateway→规范worker→目标同版Gateway→管理桥/Web。目标至少1.36.0；
+原worker用户unit须同版配套TimeoutStartSec=880（短于900秒租约）；单次试跑最多200秒，
+一轮已消耗560秒时不再启动下一能力，保留未验证而不冒险跨租约新派发。
+未配置案例、未登记目标、过期身份或缺实际工具证据明确阻塞，原准备/安装/登记及业务入口保持。
+固定worker将目标已登记端口交给本机CLI；CLI只接受原固定配置档案并强制回环来源，不能从页面改执行主机。
