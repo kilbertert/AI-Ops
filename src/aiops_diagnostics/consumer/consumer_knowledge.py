@@ -302,6 +302,31 @@ def followup_context(runtime, caller, question, conversation_id, *, require_resu
 
 def select_context(runtime, caller, binding, query, language, qa_id):
     content = binding_content(binding, caller)
+    from aiops_diagnostics.knowledge.delegated_knowledge_client import for_application
+    from aiops_diagnostics.knowledge.knowledge_retrieval import (
+        KnowledgeSearchResult,
+        KnowledgeSearchUnavailable,
+        RetrievalStatus,
+    )
+
+    if getattr(getattr(runtime, "gateway_settings", None), "knowledge_delegation_file", ""):
+        from aiops_diagnostics.consumer.consumer_documents import context_from_chunks
+
+        if binding.callback_version < 4 or runtime.media_signer is None:
+            return {"status": "unavailable", "candidates": []}
+        try:
+            delegated = for_application(runtime, caller.effective_tenant_id, binding.app_id)
+            result = delegated.search(
+                binding.knowledge_base_ids,
+                query,
+                5,
+                media_signer=runtime.media_signer,
+                agent_version=f"consumer:{binding.agent_id}#v{binding.agent_version_no}",
+                session_id=qa_id,
+            )
+        except KnowledgeSearchUnavailable:
+            result = KnowledgeSearchResult(RetrievalStatus.UNAVAILABLE, (), 1)
+        return context_from_chunks(result)
     if runtime.kb_search_client is None or runtime.media_signer is None or not binding.knowledge_base_ids:
         return {"status": "unavailable", "candidates": []}
     guard = KnowledgeSearchGuard(

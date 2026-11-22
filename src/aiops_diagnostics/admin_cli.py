@@ -30,6 +30,41 @@ def configure_admin(
         context.obj["config_file"] = config_file
 
 
+@admin_app.command("knowledge-delegation")
+def knowledge_delegation_command(
+    context: typer.Context,
+    environment: Annotated[str, typer.Option("--environment", help="目标环境")],
+    tenant: Annotated[str, typer.Option("--tenant", help="公司租户编号")],
+    app: Annotated[str, typer.Option("--app", help="已登记的客服应用")],
+    library: Annotated[str, typer.Option("--library", help="已明确授权的单库")],
+    output: Annotated[Path, typer.Option("--output", help="新的0600私有能力文件")],
+) -> None:
+    """只导出现有知识授权，不授予新权限、不发布或启用。秘密不输出到终端。"""
+    from aiops_diagnostics.common.private_files import write_private_text
+    from aiops_diagnostics.knowledge import knowledge_delegation as delegation
+
+    try:
+        if output.exists() or output.is_symlink() or not output.is_absolute():
+            raise ValueError("new private output required")
+        settings = _settings_with_config_file(context)
+        capability = delegation.issue(settings, environment, tenant, app, library)
+        from aiops_diagnostics.common.endpoint_policy import require_secure_endpoint
+
+        base = require_secure_endpoint(settings.public_base_url, what="knowledge origin")
+        from urllib.parse import urlsplit
+
+        if urlsplit(base).path or any(p.is_symlink() for p in output.parents):
+            raise ValueError("fixed origin and private output required")
+        body = {"schema": "aiops-knowledge-delegation/1", "base_url": base, "capabilities": [capability]}
+        write_private_text(output, json.dumps(body) + "\n")
+    except (ValueError, RuntimeError, OSError) as exc:
+        typer.echo(json.dumps({"error": "KNOWLEDGE_DELEGATION_REFUSED"}))
+        raise typer.Exit(1) from exc
+    typer.echo(
+        json.dumps({"result": "exported", "environment": environment, "tenant_id": tenant, "app_id": app})
+    )
+
+
 @admin_app.command("environment-registry")
 def environment_registry_command(
     action: Annotated[str, typer.Argument(help="check（摘要）、apply（发布）、migrate（升级管理目录）")],

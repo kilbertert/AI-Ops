@@ -75,11 +75,15 @@ def require_owned(selected, rows):
         raise ValueError("所选知识库未授权给客户端使用（内部资料不能交给消费者），请重新选择")
 
 
-def owned_libraries(runtime, tenant):
+def owned_libraries(runtime, tenant, app_id=""):
     from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants, audience
     from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
 
     try:
+        from aiops_diagnostics.knowledge.delegated_knowledge_client import for_application
+
+        if getattr(getattr(runtime, "gateway_settings", None), "knowledge_delegation_file", ""):
+            return for_application(runtime, tenant, app_id).list_knowledge_bases()
         if runtime.kb_search_client is None:
             raise KnowledgeSearchUnavailable("catalogue unavailable")
         rows = runtime.kb_search_client.for_tenant(tenant).list_knowledge_bases()
@@ -98,7 +102,7 @@ def require_available(runtime, caller, binding):
     try:
         require_owned(
             binding.knowledge_base_ids,
-            owned_libraries(runtime, caller.effective_tenant_id),
+            owned_libraries(runtime, caller.effective_tenant_id, binding.app_id),
         )
     except ValueError as exc:
         raise ChatRunUnavailable(

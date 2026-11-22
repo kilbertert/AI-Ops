@@ -55,6 +55,7 @@ class DifyIdentity:
     #: 可用的 knowledge_id 子集；None = 不额外收窄。
     knowledge_ids: tuple[str, ...] | None = None
     candidate_scope: tuple[str, str, str, str] | None = None
+    delegated_scope: tuple | None = None
 
     @property
     def is_debug(self) -> bool:

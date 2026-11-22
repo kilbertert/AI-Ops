@@ -899,7 +899,7 @@ class SelfService:
             source,
             consumer_settings=settings,
             consumer_callback_base=self.settings.public_base_url,
-            consumer_libraries=lambda: owned_libraries(self.context.runtime, row["tenant_id"]),
+            consumer_libraries=lambda: owned_libraries(self.context.runtime, row["tenant_id"], row["app_id"]),
             bootstrap=bootstrap,
             expected_workflow=workflow,
             bootstrap_agent_id=self.store.recoverable_consumer_draft(

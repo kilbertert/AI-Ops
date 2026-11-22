@@ -57,6 +57,16 @@ class KnowledgeGrants:
             ).fetchall()
         return {row["knowledge_base_id"] for row in rows}
 
+    def generation(self, tenant_id: str, environment: str, knowledge_base_id: str) -> float | None:
+        """当前显式授权世代；撤权后旧凭据不能因再次授权而复活。"""
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT granted_at FROM consumer_knowledge_grants WHERE tenant_id=? "
+                "AND environment=? AND knowledge_base_id=? AND revoked_at IS NULL",
+                (tenant_id, environment, knowledge_base_id),
+            ).fetchone()
+        return float(row["granted_at"]) if row else None
+
     def grant(
         self,
         tenant_id: str,
@@ -72,7 +82,7 @@ class KnowledgeGrants:
             if backfill
             else (
                 "DO UPDATE SET revoked_at=NULL, granted_by=excluded.granted_by, "
-                "granted_at=excluded.granted_at"
+                "granted_at=MAX(excluded.granted_at,consumer_knowledge_grants.granted_at+0.000001)"
             )
         )
         with self._connection(write=True) as db:

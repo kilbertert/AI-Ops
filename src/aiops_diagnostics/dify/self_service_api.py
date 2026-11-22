@@ -299,7 +299,7 @@ def register(app, context):
         if row["entry"] != "consumer":
             raise auth.SetupRefused("SETUP_SOURCE_NOT_CONSUMER")
         try:
-            libraries = owned_libraries(context.runtime, row["tenant_id"])
+            libraries = owned_libraries(context.runtime, row["tenant_id"], row["app_id"])
         except ValueError as exc:
             raise auth.SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc
         return {

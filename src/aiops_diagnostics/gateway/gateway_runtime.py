@@ -2108,7 +2108,10 @@ class GatewayRuntime:
         bound to the knowledge base the grant cites — so a disabled segment,
         an unpublished agent, or an unbound KB invalidates URLs immediately.
         """
-        if self.media_signer is None or self.kb_search_client is None:
+        if self.media_signer is None or (
+            self.kb_search_client is None
+            and not getattr(self.gateway_settings, "knowledge_delegation_file", "")
+        ):
             return None
 
         def _fetch_for_tenant(grant: MediaGrant, *, range_header: str | None = None) -> bytes:
@@ -2119,7 +2122,29 @@ class GatewayRuntime:
             # the #175 C4 video canary on 2026-09-12).
             client = self.kb_search_client
             from aiops_diagnostics.dify.candidate_knowledge import MEDIA_PREFIX
+            from aiops_diagnostics.knowledge import knowledge_delegation
 
+            if getattr(self.gateway_settings, "knowledge_delegation_file", ""):
+                from aiops_diagnostics.knowledge.delegated_knowledge_client import for_application
+
+                run = self.dify_run_store.by_qa(grant.session_id or "")
+                if run is None or not grant.agent_version.startswith("consumer:"):
+                    raise MediaAccessDenied("delegated media requires current consumer run")
+                bound = for_application(self, grant.tenant_id, run.app_id)
+                body = bound.fetch_media(grant, range_header=range_header)
+                if not _is_active(grant):
+                    raise MediaAccessDenied("consumer media is no longer active")
+                return body
+            if grant.agent_version.startswith(knowledge_delegation.MEDIA_PREFIX):
+                try:
+                    scope = knowledge_delegation.media_active(self.gateway_settings, grant)
+                    body = knowledge_delegation._client(self.gateway_settings, scope).fetch_media(
+                        grant, range_header=range_header
+                    )
+                    knowledge_delegation.media_active(self.gateway_settings, grant)
+                    return body
+                except knowledge_delegation.DelegationRefused as exc:
+                    raise MediaAccessDenied("knowledge delegation revoked") from exc
             if grant.agent_version.startswith(MEDIA_PREFIX):
                 from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
 
@@ -2196,6 +2221,14 @@ class GatewayRuntime:
             that 403'd on the very next request, so every image and video in a
             Dify record was undisplayable (found on 41, 2026-10-21).
             """
+            from aiops_diagnostics.knowledge import knowledge_delegation
+
+            if grant.agent_version.startswith(knowledge_delegation.MEDIA_PREFIX):
+                try:
+                    knowledge_delegation.media_active(self.gateway_settings, grant)
+                    return True
+                except (ValueError, OSError, RuntimeError):
+                    return False
             if grant.agent_version.startswith("consumer:"):
                 run = self.dify_run_store.by_qa(grant.session_id or "")
                 if run is None or run.kind != "service":
