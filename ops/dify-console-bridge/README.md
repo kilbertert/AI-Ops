@@ -1,6 +1,6 @@
 # Dify 控制台里的「发布到 AI-Ops」按钮（#577 的最后一跳）
 
-原HTTPS不稳定时的受限备用服务API入口、合并制品安装与恢复见[操作手册](../../docs/agents/shared-dify-https-fallback.md)。
+受限Dify服务API入口、正式用途及合并制品安装与恢复见[操作手册](../../docs/agents/shared-dify-https-fallback.md)。
 它不提供控制台或内部管理服务；是否已部署以交付回执为准。
 
 **这是什么**：在 Dify 控制台的编排页注入一颗按钮，运营点它就把**当前改好的内容**
