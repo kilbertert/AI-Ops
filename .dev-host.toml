@@ -79,3 +79,9 @@ acceptance_config = "/etc/aiops-access-p3-acceptance"
 acceptance_state = "/var/lib/aiops-access-p3-acceptance"
 acceptance_backups = "/var/backups/aiops-access-p3-acceptance"
 acceptance_staging = "/var/backups/aiops-p3-acceptance-staging"
+
+# 仅作既有95受管SSH的维护中继；不承载AI-Ops业务或保存目标凭据。
+[[targets]]
+name = "management-relay"
+host = "node"
+description = "已登记Windows设备：95管理链只读预检及获准转发；非业务部署目标"
