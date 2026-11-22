@@ -188,7 +188,7 @@ def environment_artifacts_command(
     references: Annotated[Path, typer.Option("--references", help="0600受控部署引用文件")],
     file: Annotated[Path, typer.Option("--file", help="0600身份、CAS摘要和制品输入JSON")],
 ) -> None:
-    """CAS更新一个环境的固定应用/安装器引用；配置引用保持不变，不安装或激活。"""
+    """CAS更新应用/安装器或既有配置版本；不安装或激活。"""
     from aiops_diagnostics.common.private_files import validate_private_file
     from aiops_diagnostics.gateway import environment_plans, environment_registry
 
@@ -208,13 +208,10 @@ def environment_artifacts_command(
         if file.stat().st_size > 65536:
             raise ValueError("input too large")
         data = json.loads(file.read_text(), object_pairs_hook=environment_registry._unique_object)
-        if not isinstance(data, dict) or set(data) != {
-            "identity",
-            "environment",
-            "expected_sha256",
-            "application",
-            "installer",
-        }:
+        if not isinstance(data, dict) or set(data) not in (
+            {"identity", "environment", "expected_sha256", "application", "installer"},
+            {"identity", "environment", "expected_sha256", "configuration"},
+        ):
             raise ValueError("invalid input")
         identity = data["identity"]
         if (
@@ -229,8 +226,9 @@ def environment_artifacts_command(
             identity=tuple(identity),
             environment=data["environment"],
             expected_sha256=data["expected_sha256"],
-            application=data["application"],
-            installer=data["installer"],
+            application=data.get("application"),
+            installer=data.get("installer"),
+            configuration=data.get("configuration"),
         )
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
         typer.echo(json.dumps({"error": "ENVIRONMENT_REFERENCES_UPDATE_REFUSED"}))
@@ -370,8 +368,10 @@ def _environment_dispatch(context, *, trial=False):
                 }
             )
         settings = GatewayServerSettings.from_env()
-        if settings.environment != environment or not settings.environment_task_key:
+        if settings.environment != environment:
             raise ValueError("central profile not configured")
+        if not settings.environment_task_key:
+            raise ValueError("ENVIRONMENT_VALIDATION_KEY_REQUIRED")
         # 目标只取本机配置；bind验证地址确实属于本机，不从stdin指定上游。
         host = settings.bind_host if settings.bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
         with socket.socket() as sock:
@@ -415,7 +415,12 @@ def _environment_dispatch(context, *, trial=False):
         else:
             result = call(f"http://{host}:{port}", settings.environment_task_key, payload)
     except (OSError, ValueError, RuntimeError, KeyError) as exc:
-        typer.echo(json.dumps({"error": "ENVIRONMENT_TASK_DISPATCH_REFUSED"}))
+        code = (
+            "ENVIRONMENT_VALIDATION_KEY_REQUIRED"
+            if str(exc) == "ENVIRONMENT_VALIDATION_KEY_REQUIRED"
+            else "ENVIRONMENT_TASK_DISPATCH_REFUSED"
+        )
+        typer.echo(json.dumps({"error": code}))
         raise typer.Exit(1) from exc
     typer.echo(json.dumps(result, ensure_ascii=False))
 
