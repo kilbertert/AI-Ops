@@ -443,8 +443,9 @@ def test_second_tenant_directory_sync_adds_only_approved_tenant_without_reentran
     ]
 
 
+@pytest.mark.parametrize("artifact", [None, "intent.json", "release.json", "older-gateway", "markers-null"])
 def test_cancel_with_unknown_central_publication_remains_reconcilable_without_replay(
-    validated, tmp_path, monkeypatch
+    validated, tmp_path, monkeypatch, artifact
 ):
     from aiops_diagnostics.gateway import environment_publication_worker as worker
 
@@ -464,12 +465,31 @@ def test_cancel_with_unknown_central_publication_remains_reconcilable_without_re
     monkeypatch.setattr(worker, "target_task", lambda *a, **kw: remote.append("target"))
     monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: remote.append("model"))
 
+    if artifact and artifact not in ("older-gateway", "markers-null"):
+        from pathlib import Path
+
+        directory = Path(state[2].data_home) / "publication-bundles" / identifier
+        directory.mkdir(parents=True)
+        (directory / artifact).write_text("{}")
+
     def request(payload):
         response = internal(state, payload)
         assert response.status_code == 200, response.text
-        return response.json()
+        out = response.json()
+        # 旧网关不回 markers 键 / 标记 stat 失败回 null：判据缺失时恢复结论不得放行。
+        if payload.get("publication") == "describe":
+            if artifact == "older-gateway":
+                out.pop("markers", None)
+            elif artifact == "markers-null":
+                out["markers"] = None
+        return out
 
     assert request({"installation_claim": True, "owner": owner})["id"] == identifier
     observed = worker.execute(tmp_path, request, identifier, owner)
-    assert observed["state"] == "reconcile" and not observed["result"]["activated"]
-    assert observed["result"].get("phase") != "restored" and remote == []
+    if artifact:
+        assert observed["state"] == "reconcile" and not observed["result"]["activated"]
+        assert observed["result"].get("phase") != "restored" and remote == []
+    else:
+        # 中央步从未落盘工件：无任何共享副作用，恢复结论与未启动相同。
+        assert observed["state"] == "cancelled" and observed["result"]["phase"] == "restored"
+        assert remote == []
