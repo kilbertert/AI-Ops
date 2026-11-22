@@ -130,7 +130,10 @@ def test_missing_capacity_is_safe_before_central_publication(validated, monkeypa
     assert "CAPACITY" in response.text
 
 
-def test_worker_yields_phases_and_restores_same_task_without_second_models(validated, tmp_path, monkeypatch):
+@pytest.mark.parametrize("completed_stages", [0, 1, 2, 3, 4])
+def test_worker_yields_phases_and_restores_same_task_without_second_models(
+    validated, tmp_path, monkeypatch, completed_stages
+):
     from aiops_diagnostics.dify import environment_publication as publication
     from aiops_diagnostics.gateway import environment_capacity
     from aiops_diagnostics.gateway import environment_publication_worker as worker
@@ -138,6 +141,7 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(valid
     state = validated[0][0]
     identifier = publish(validated).json()["id"]
     calls = []
+    target_config = ["original"]
     bundle = {"path": "/private/release.json", "sha256": "a" * 64}
     monkeypatch.setattr(publication, "central_bundle", lambda *a, **kw: bundle)
     monkeypatch.setattr(publication, "connect", lambda *a: {"connected": True})
@@ -168,6 +172,7 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(valid
     def target(*args, **kwargs):
         action = args[3]
         calls.append(action)
+        target_config[0] = "original" if action == "restore" else "formal"
         phase = {"stage": "staged", "activate": "activated", "restore": "restored"}[action]
         return {
             "state": "observed",
@@ -194,23 +199,36 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(valid
         assert response.status_code == 200, response.text
         return response.json()
 
-    for index in range(4):
+    for index in range(completed_stages):
         owner = f"{index + 1:032x}"
         assert request({"installation_claim": True, "owner": owner})["id"] == identifier
         result = worker.execute(tmp_path, request, identifier, owner)
-    assert result["state"] == "observed", result
-    assert result["result"]["activated"] and result["result"]["directory"] == "synchronized"
-    assert calls == ["capacity", "stage", "models", "activate"]
-    assert "/private/" not in json.dumps(result)
+    if completed_stages == 4:
+        assert result["state"] == "observed", result
+        assert result["result"]["activated"] and result["result"]["directory"] == "synchronized"
+        assert calls == ["capacity", "stage", "models", "activate"]
+        assert "/private/" not in json.dumps(result)
+    elif completed_stages:
+        assert result["state"] == "queued"
+    prior_calls = list(calls)
     response = state[0][2].post(
-        "/v1/dify/management/environment-tasks", json={"restore_publication": identifier}
+        "/v1/dify/management/environment-tasks",
+        json={"restore_publication": identifier}
+        if completed_stages == 4
+        else {"id": identifier, "cancel": True},
     )
     assert response.status_code == 200, response.text
     owner = "a" * 32
-    assert request({"installation_claim": True, "owner": owner})["id"] == identifier
+    claimed = request({"installation_claim": True, "owner": owner})
+    if completed_stages == 0:
+        assert response.json()["state"] == "cancelled" and not claimed["claimed"]
+        assert calls == [] and target_config[0] == "original"
+        return
+    assert claimed["claimed"] is True and claimed["id"] == identifier, response.text
     restored = worker.execute(tmp_path, request, identifier, owner)
     assert restored["state"] == "cancelled" and restored["result"]["phase"] == "restored"
-    assert calls[-1] == "restore" and calls.count("models") == 1
+    assert target_config[0] == "original"
+    assert calls == prior_calls + (["restore"] if completed_stages >= 2 else [])
 
 
 def test_central_publication_freezes_real_template_and_reconciles_unique_key(validated, monkeypatch):
@@ -402,3 +420,35 @@ def test_second_tenant_directory_sync_adds_only_approved_tenant_without_reentran
         {"id": "old", "name": "existing", "enabled": True},
         {"id": "same", "name": "同号", "enabled": True},
     ]
+
+
+def test_cancel_with_unknown_central_publication_remains_reconcilable_without_replay(
+    validated, tmp_path, monkeypatch
+):
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "d" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    assert internal(
+        state, {"publication": "intent", "id": identifier, "owner": owner, "step": "central"}
+    ).json()["execute"]
+    internal(state, {"publication": "yield", "id": identifier, "owner": owner})
+    cancelled = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True}
+    )
+    assert cancelled.json()["state"] == "reconcile"
+    remote = []
+    monkeypatch.setattr(worker, "target_task", lambda *a, **kw: remote.append("target"))
+    monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: remote.append("model"))
+
+    def request(payload):
+        response = internal(state, payload)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert request({"installation_claim": True, "owner": owner})["id"] == identifier
+    observed = worker.execute(tmp_path, request, identifier, owner)
+    assert observed["state"] == "reconcile" and not observed["result"]["activated"]
+    assert observed["result"].get("phase") != "restored" and remote == []

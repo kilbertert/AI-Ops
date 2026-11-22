@@ -254,6 +254,9 @@ def execute(root, request, identifier, owner):
                     raise ValueError("target restoration unconfirmed")
                 call("source-configuration", restore=True)
                 call("directory", result=result, restore=True)
+            elif "central" in steps and not bundle:
+                # 已记发布意图但未收到工件，不能把未知共享副作用报告为已恢复。
+                result.update(error_code="ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED")
             else:
                 result.update(state="cancelled", phase="restored")
             return call("complete", result=result)

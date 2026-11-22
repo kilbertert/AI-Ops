@@ -429,9 +429,14 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
                                 "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
                                 (child_state, time.time(), child_id),
                             )
+                request = json.loads(row["request"])
                 state = (
                     row["state"]
                     if row["state"] in {"running", "reconcile", "executing", "checking"}
+                    else "checking"
+                    if row["state"] == "waiting"
+                    and request.get("action") == "environment-publish"
+                    and request.get("attempted")
                     else "cancelled"
                 )
                 conn.execute(
