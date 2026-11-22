@@ -232,6 +232,7 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(
 
 
 def test_central_publication_freezes_real_template_and_reconciles_unique_key(validated, monkeypatch):
+    import copy
     from types import SimpleNamespace
 
     import yaml
@@ -257,6 +258,9 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
     context = SimpleNamespace(settings=settings)
     spec = publication.describe(context, request, identifier)["spec"]
     document = environment_consumer.document(child["consumer_source"], spec["consumer"]["knowledge_base_id"])
+    exported = copy.deepcopy(document)
+    for variable in exported["workflow"].get("environment_variables", []):
+        variable["selector"] = ["env", variable["name"]]
     published = []
     keys = []
     enabled = [False]
@@ -283,11 +287,14 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
             }
 
     class Dsl:
+        current = [exported]
+
         def __init__(self, source):
             pass
 
         def export_dsl(self, *, workflow_id=None):
-            return yaml.safe_dump(document)
+            # Dify导出会补回变量自身的selector；草稿详情省略它，比对只许忽略这一项。
+            return yaml.safe_dump(self.current[0])
 
         def publish_workflow(self):
             published.append(True)
@@ -306,6 +313,18 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
         "catalogue_token": "ckc_synthetic",
         "dify_chat_base_url": "https://dify.example.test/v1",
     }
+    # 比对仍要拒绝被改动的导出：归一化只豁免已知表示差异，不是放宽判据。
+    for tamper in (
+        lambda d: d["workflow"]["environment_variables"][0].update(value="tampered"),
+        lambda d: d["workflow"]["environment_variables"][0].update(selector=["env", "other"]),
+    ):
+        drifted = copy.deepcopy(exported)
+        tamper(drifted)
+        Dsl.current[0] = drifted
+        with pytest.raises(ValueError, match="differs"):
+            publication.central_bundle(context, request, spec, readiness, identifier)
+    Dsl.current[0] = exported
+    assert not published and not keys
     result = publication.central_bundle(context, request, spec, readiness, identifier)
     assert len(keys) == len(published) == 1 and enabled[0]
     assert (
@@ -316,6 +335,8 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
 
     private = json.loads(Path(result["path"]).read_text())
     assert private["apps"]["consumer"]["key"] == "synthetic-only-app-key"
+    frozen = private["apps"]["consumer"]["workflow"]["environment_variables"]
+    assert frozen and all(v.get("selector") == ["env", v["name"]] for v in frozen)
     assert "api_key" not in private
     assert DifyWorkspaces(settings.database_file).resolve("same", "a") == spec["consumer"]["workspace_id"]
     knowledge_delegation.active(
