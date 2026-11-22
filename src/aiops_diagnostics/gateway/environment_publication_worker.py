@@ -86,7 +86,7 @@ def target_task(root, staged, bundle, action, *, observe_only=False, verificatio
                     " assert q.is_file() and not q.is_symlink() and q.stat().st_uid==0",
                     " assert q.stat().st_nlink==1",
                     " import hashlib",
-                    f" assert hashlib.file_digest(q.open('rb'),'sha256').hexdigest()=={sha!r}",
+                    f" assert hashlib.sha256(q.read_bytes()).hexdigest()=={sha!r}",
                 ]
             )
             subprocess.run(
@@ -113,7 +113,6 @@ def target_task(root, staged, bundle, action, *, observe_only=False, verificatio
                 capture_output=True,
             )
         arguments = [
-            "/usr/bin/python3",
             remote + "/installer/task.py",
             "publication-" + action,
             "--environment",
@@ -134,20 +133,24 @@ def target_task(root, staged, bundle, action, *, observe_only=False, verificatio
                 "import tarfile,hashlib,subprocess,sys",
                 "from pathlib import Path",
                 f"p=Path({remote!r})",
-                'sha=hashlib.file_digest((p/"installer.tar.gz").open("rb"),"sha256").hexdigest()',
+                'sha=hashlib.sha256((p/"installer.tar.gz").read_bytes()).hexdigest()',
                 f"assert sha=={installer['sha256']!r}",
                 'd=p/"installer";d.mkdir(mode=0o700,exist_ok=True)',
                 "assert not d.is_symlink() and d.stat().st_uid==0",
                 'with tarfile.open(p/"installer.tar.gz") as tar:',
                 " for m in tar:",
                 "  if m.name=='.' and m.isdir():continue",
-                "  n=m.name.removeprefix('./')",
+                "  n=m.name[2:] if m.name.startswith('./') else m.name",
                 "  assert m.isfile() and n in {'REVISION','SHA256SUMS','install.py','runtime_check.py',"
                 "'probe.py','artifact_checks.py','task.py','publication.py'}",
                 "  b=tar.extractfile(m).read();q=d/n",
                 "  if q.exists():assert q.is_file() and not q.is_symlink() and q.read_bytes()==b",
                 "  else:q.write_bytes(b)",
-                f"r=subprocess.run({arguments!r},input={json.dumps(payload)!r},text=True,capture_output=True)",
+                "sys.path.insert(0,str(d))",
+                "import probe",
+                "py=probe.managed_python()",
+                f"r=subprocess.run([py]+{arguments!r},input={json.dumps(payload)!r},"
+                "stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)",
                 "sys.stdout.write(r.stdout);sys.exit(r.returncode)",
             ]
         )

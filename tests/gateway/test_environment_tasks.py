@@ -513,6 +513,7 @@ def test_worker_builds_merged_installer_and_only_invokes_preflight(prepared, tmp
     )
     claim["installer"] = dict(revision=revision, sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
     commands = []
+    inputs = []
     run = subprocess.run
     output = subprocess.check_output
 
@@ -528,12 +529,17 @@ def test_worker_builds_merged_installer_and_only_invokes_preflight(prepared, tmp
         if args[0] != "dev-host":
             return output(args, **kwargs)
         commands.append(args)
+        inputs.append(kwargs.get("input", ""))
         return json.dumps(receipt("a"))
 
     monkeypatch.setattr(worker.subprocess, "run", run_fake)
     monkeypatch.setattr(worker.subprocess, "check_output", output_fake)
     assert worker.execute(root, claim)["state"] == "observed"
-    assert commands[-1][-1].endswith("preflight --environment a --user aiops --port 18951")
+    assert commands[-1][-1] == "python3 -"
+    assert "managed_python()" in inputs[-1]
+    assert (
+        "install.py', 'preflight', '--environment', 'a', '--user', 'aiops', '--port', '18951'" in inputs[-1]
+    )
     assert all("systemctl" not in str(command) for command in commands)
     assert all(command[2] == "124" for command in commands)
     bad = {**claim, "target": {**claim["target"], "host": "--project"}}

@@ -47,8 +47,73 @@ def extract(archive, dest):
 
 def command(*args, pass_fds=(), input=None):
     return subprocess.check_output(
-        args, stderr=subprocess.STDOUT, text=True, timeout=120, pass_fds=pass_fds, input=input
+        args,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+        timeout=120,
+        pass_fds=pass_fds,
+        input=input,
     ).strip()
+
+
+SUPPORTED_PYTHON_MINORS = ("3.11", "3.12", "3.13")
+MANAGED_PYTHON_ROOTS = ("/usr/bin", "/usr/local/bin")
+
+
+def trusted_directory(path, owner):
+    # /usr与/usr/local允许符号链接；解析后必须root拥有且组/他人不可写。
+    path = Path(os.path.realpath(path))
+    if not path.is_dir() or path.stat().st_uid != owner or path.stat().st_mode & 0o022:
+        raise ValueError("untrusted interpreter location")
+
+
+def system_python(path, *, roots=MANAGED_PYTHON_ROOTS, owner=0, run=command, check_dir=trusted_directory):
+    """受管解释器：受管bin目录内python3[.11|.12|.13]；解析后目标与父目录归属/权限必须受控。"""
+    candidate = Path(path)
+    if (
+        not candidate.is_absolute()
+        or str(candidate.parent) not in roots
+        or not re.fullmatch(r"python3(?:\.(?:11|12|13))?", candidate.name)
+    ):
+        raise ValueError("only installed system Python is supported")
+    resolved = Path(os.path.realpath(candidate))
+    if not resolved.is_file():
+        raise ValueError("trusted interpreter required")
+    mode = resolved.stat().st_mode
+    if resolved.stat().st_uid != owner or mode & 0o022 or not mode & 0o111:
+        raise ValueError("untrusted interpreter ownership or mode")
+    for directory in {*candidate.parents, *resolved.parents}:
+        check_dir(directory, owner)
+    minor = run(
+        str(candidate),
+        "-I",
+        "-c",
+        "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+    )
+    expected = candidate.name[7:]
+    if expected and minor != "3" + expected or not expected and minor not in SUPPORTED_PYTHON_MINORS:
+        raise ValueError("interpreter minor mismatch")
+    return str(candidate), minor
+
+
+def managed_python(
+    minor=None, *, roots=MANAGED_PYTHON_ROOTS, owner=0, run=command, check_dir=trusted_directory
+):
+    """/usr/bin先于/usr/local/bin、裸python3先于带小版本名；不匹配或不受管的候选跳过。"""
+    for base in roots:
+        for name in ("python3", "python3.11", "python3.12", "python3.13"):
+            candidate = Path(base) / name
+            if not candidate.exists() and not candidate.is_symlink():
+                continue
+            try:
+                selected, actual = system_python(
+                    candidate, roots=roots, owner=owner, run=run, check_dir=check_dir
+                )
+            except (OSError, ValueError, subprocess.SubprocessError):
+                continue
+            if minor is None or actual == minor:
+                return selected
+    raise ValueError("no managed interpreter for Python " + (minor or "3.11-3.13"))
 
 
 def isolated_http(pid, port, path, *, post=False):
@@ -273,9 +338,7 @@ def main():
             raise ValueError("invalid environment")
         if platform.system() != "Linux" or platform.machine() != "x86_64":
             raise ValueError("unsupported platform")
-        minor = command(
-            args.python, "-I", "-c", "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-        )
+        args.python, minor = system_python(args.python)
         meta = manifest(args.archive, args.sha256, minor)
         if args.verify_only:
             result = {"result": "verified", **meta}

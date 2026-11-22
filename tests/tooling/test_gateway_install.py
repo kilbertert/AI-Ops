@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import runpy
 import socket
 import subprocess
@@ -1279,3 +1280,100 @@ def test_cold_probe_reuses_time_wait_but_refuses_live_listener(host):
                 assert client.recv(1) == b""
     # 服务端先FIN，原裸bind会被TIME_WAIT误拒；无需sleep或猜测端口释放时间。
     assert apply(host)["result"] == "installed"
+
+
+def test_apply_flows_selected_interpreter_into_venv(host):
+    inst, archive, sha, config, *_ = host
+    selected = "/usr/bin/python3"
+    resolved = os.path.realpath(selected)
+    if re.fullmatch(r"python3(?:\.(?:11|12|13))?", os.path.basename(resolved)):
+        selected = resolved
+    assert inst.apply(archive, sha, selected, config, install.digest(config))["result"] == "installed"
+    venv = next(c for c in reversed(host[4]) if "venv" in c)
+    assert venv[venv.index("-i") + 2] == selected
+
+
+def test_managed_python_selects_local_install_when_system_default_is_old(tmp_path):
+    """95形状：/usr/bin/python3是平台旧版，/usr/local/bin的受管安装被选中。"""
+    usr_bin = tmp_path / "usr/bin"
+    local_bin = tmp_path / "usr/local/bin"
+    usr_bin.mkdir(parents=True)
+    local_bin.mkdir(parents=True)
+    real = probe.command
+    real_minor = real(
+        "/usr/bin/python3",
+        "-I",
+        "-c",
+        "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+    )
+    for base in (usr_bin, local_bin):
+        (base / "python3").symlink_to("/usr/bin/python3")
+    (local_bin / ("python" + real_minor)).symlink_to("/usr/bin/python3")
+    roots = (str(usr_bin), str(local_bin))
+    checked = []
+
+    def run(path, *args):
+        if str(path).startswith(str(usr_bin)):
+            return "3.6"  # 平台Python替身；其余候选真实执行读取小版本。
+        return real(path, *args)
+
+    def check_dir(path, owner):
+        resolved = Path(os.path.realpath(path))
+        checked.append(resolved)
+        if str(tmp_path).startswith(str(resolved)) or str(resolved).startswith(str(tmp_path)):
+            return  # 合成容器及其祖先只模拟挂载点；真实目录仍核归属与权限。
+        probe.trusted_directory(resolved, owner)
+
+    assert probe.managed_python(real_minor, roots=roots, run=run, check_dir=check_dir) == str(
+        local_bin / "python3"
+    )
+    assert Path("/usr/bin") in checked
+    other = next(m for m in probe.SUPPORTED_PYTHON_MINORS if m != real_minor)
+    with pytest.raises(ValueError, match="no managed interpreter"):
+        probe.managed_python(other, roots=roots, run=run, check_dir=check_dir)
+    with pytest.raises(ValueError, match="system Python"):
+        probe.system_python(str(usr_bin / "python3.6"), roots=roots, run=run, check_dir=check_dir)
+
+
+def test_managed_python_rejects_writable_mismatched_or_foreign_paths(tmp_path):
+    root = tmp_path / "usr/local/bin"
+    root.mkdir(parents=True)
+    fake = root / "python3.13"
+    fake.write_text("#!/bin/sh\n")
+
+    def check(_path, _owner):
+        return None
+
+    fake.chmod(0o777)
+    with pytest.raises(ValueError, match="ownership or mode"):
+        probe.system_python(
+            str(fake), roots=(str(root),), owner=os.getuid(), run=lambda *a: "3.13", check_dir=check
+        )
+    fake.chmod(0o755)
+    with pytest.raises(ValueError, match="minor mismatch"):
+        probe.system_python(
+            str(fake), roots=(str(root),), owner=os.getuid(), run=lambda *a: "3.12", check_dir=check
+        )
+    assert probe.system_python(
+        str(fake), roots=(str(root),), owner=os.getuid(), run=lambda *a: "3.13", check_dir=check
+    ) == (str(fake), "3.13")
+    link = root / "python3"
+    link.symlink_to("/usr/bin/python3")
+    path, minor = probe.system_python(str(link), roots=(str(root),), check_dir=check)
+    assert path == str(link) and minor in probe.SUPPORTED_PYTHON_MINORS
+    with pytest.raises(ValueError, match="system Python"):
+        probe.system_python(
+            str(tmp_path / "python3"),
+            roots=(str(root),),
+            owner=os.getuid(),
+            run=lambda *a: "3.12",
+            check_dir=check,
+        )
+    writable = tmp_path / "w/bin"
+    writable.mkdir(parents=True)
+    writable.chmod(0o777)
+    owned = writable / "python3"
+    owned.write_text("x")
+    owned.chmod(0o755)
+    with pytest.raises(ValueError, match="interpreter location"):
+        probe.system_python(str(owned), roots=(str(writable),), owner=os.getuid(), run=lambda *a: "3.12")

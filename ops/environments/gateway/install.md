@@ -7,6 +7,9 @@
 ## 前置与制品
 
 目标须在私有主机清单登记并通过`dev-host`断言；已有项目非登录账号，Linux x86_64及系统Python3.11–3.13。
+解释器只取`/usr/bin`或`/usr/local/bin`下`python3[.11|.12|.13]`：符号链接解析后的目标必须root拥有、
+组/他人不可写且可执行，全部父目录同此要求；带小版本名须与实际小版本一致，裸`python3`允许任一受支持小版本。
+系统默认`python3`是平台旧版（如3.6）时，用`--python`显式给出/usr/local下符合应用包小版本的受管解释器。
 已分配独立回环端口；安装器检查占用但不负责登记端口。至少1GiB可用内存及1GiB磁盘是保守预检下限，
 不是业务容量结论。旧Gateway和公司服务继续运行，新增自有单位须在当前任务授权内。
 首版要求代码、配置、状态与备份父目录同文件系统，写入前核设备号；独立挂载布局明确拒绝，
@@ -30,6 +33,7 @@ bash ops/environments/gateway/build-installer.sh <同一SHA> /private/installer.
 ```bash
 python3 <已核验安装器>/install.py install --environment <环境> --user <服务账号> --port <登记端口> \
   --python /usr/bin/python3.12 --archive /private/gateway.tar.gz --sha256 <应用包摘要> \
+  # 或平台Python过旧时 --python /usr/local/bin/python3.13；安装器入口自身也需3.11+解释器
   --config /private/input.env --config-sha256 <配置摘要>
 ```
 
@@ -197,6 +201,7 @@ python3 <同修订固定安装器>/install.py register-runtime --environment <�
 ## 持久候选安装包装入口
 
 管理安装任务使用同合并包内task.py；单步install/recover合同不变。task.py从stdin读取固定任务与归档摘要，
+按现役小版本自举同一受管解释器枚举；远端驱动只把固定包解开后交给包内选择，不再固定`/usr/bin/python3`。
 不接受shell、任意安装目录或业务操作。调用前沿dev-host身份断言和SHA256SUMS核固定包。
 先记录本任务意图，再复用Installer.apply；现役baseline必须匹配，配置/目录/运行仍原成套事务。
 重复run或observe只读本任务意图与实际installed，绝不再次apply；未知或pending不冒称成功，恢复仍由原recover单独操作。

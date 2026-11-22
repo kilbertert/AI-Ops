@@ -265,7 +265,7 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     def output(args, **kwargs):
         commands.append(args)
         ast.parse(kwargs["input"])
-        assert "'run'" in kwargs["input"] and "'/usr/bin/python3'" in kwargs["input"]
+        assert "'run'" in kwargs["input"] and "managed_python()" in kwargs["input"]
         return __import__("json").dumps(
             {
                 "id": identifier,
