@@ -5,6 +5,11 @@
 > 合并」的状态不再适用；除非出现新的消费方，这批工件与 `docs/diag-query-api-plan.md`
 > 的落地计划视为暂停。契约测试保留，防的是未来复用时形状漂移。
 
+> **本轮已移除（2026-11-22）**：`cloud-gateway/` 曾放公司正式网关来源凭据的原创
+> JDK17 签发器工件（`GatewayAssertion`），从未交付、无运行消费者；随「不改公司仓库，
+> 唯一自维护环境目录」决定（`docs/architecture/2026-11-16-manual-environment-onboarding.md`）
+> 删除。运行期来源校验合同保留在 `docs/agents/company-gateway-admission.md`（旧可选能力）。
+
 本目录承载由 AI-Ops 团队仓库保管的充电桩 Java 服务源码工件。生产 Java 仓库在远端
 （`124.243.178.156`），本地不复制完整工程；这些文件原本用于落地
 `docs/diag-query-api-plan.md` 定义的受控只读查询接口。
