@@ -2114,7 +2114,7 @@ class GatewayRuntime:
         ):
             return None
 
-        def _fetch_for_tenant(grant: MediaGrant, *, range_header: str | None = None) -> bytes:
+        def _fetch_for_tenant(grant: MediaGrant, *, range_header: str | None = None) -> bytes | MediaResponse:
             # The process-level client is bound to the neutral "aiops" tenant;
             # the media document belongs to the grant's tenant, so kb-service
             # must see that tenant's header/token or the download misses
@@ -2139,7 +2139,7 @@ class GatewayRuntime:
                 try:
                     scope = knowledge_delegation.media_active(self.gateway_settings, grant)
                     body = knowledge_delegation._client(self.gateway_settings, scope).fetch_media(
-                        grant, range_header=range_header
+                        grant, range_header=range_header, include_response=True, max_bytes=32 * 1024 * 1024
                     )
                     knowledge_delegation.media_active(self.gateway_settings, grant)
                     return body
@@ -2155,8 +2155,12 @@ class GatewayRuntime:
                 )
             else:
                 bound = client.for_tenant(grant.tenant_id) if hasattr(client, "for_tenant") else client
+            from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
+
             body = (
-                bound.fetch_media(grant)
+                bound.fetch_media(grant, range_header=range_header, include_response=True)
+                if isinstance(bound, KbServiceClient)
+                else bound.fetch_media(grant)
                 if range_header is None
                 else bound.fetch_media(grant, range_header=range_header)
             )

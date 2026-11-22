@@ -12,7 +12,6 @@ from aiops_diagnostics.common.bounded_http import (
     bearer_auth_header,
     json_body,
     open_response,
-    read_body,
     request_json,
 )
 from aiops_diagnostics.common.endpoint_policy import require_secure_endpoint
@@ -203,8 +202,12 @@ class DelegatedKnowledgeClient:
             raise MediaAccessDenied("delegated media path invalid")
         self.list_knowledge_bases()
         headers = {"Authorization": bearer_auth_header(self.token)}
-        # 原MediaProxy接收完整bytes后只切片一次；不能把中央206切片再次按原偏移解析。
-        # 读取保留32MiB上限，避免修seek时引入无界视频下载。
+        if range_header:
+            headers["Range"] = range_header
+        from urllib.error import HTTPError
+
+        from aiops_diagnostics.knowledge.knowledge_retrieval import MediaResponse, read_media_response
+
         try:
             with open_response(
                 RequestSpec(
@@ -215,8 +218,12 @@ class DelegatedKnowledgeClient:
                     follow_redirects=False,
                 )
             ) as response:
-                body = read_body(response, max_read_bytes=32 * 1024 * 1024)
-        except TRANSPORT_FAILURES as exc:
+                body = read_media_response(response, max_bytes=32 * 1024 * 1024)
+        except HTTPError as exc:
+            if exc.code != 416:
+                raise KnowledgeSearchUnavailable("delegated media unavailable") from exc
+            body = MediaResponse(416, {"Content-Range": exc.headers.get("Content-Range", "")}, b"")
+        except TRANSPORT_FAILURES + (ValueError,) as exc:
             raise KnowledgeSearchUnavailable("delegated media unavailable") from exc
         self.list_knowledge_bases()
         return body

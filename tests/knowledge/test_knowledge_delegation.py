@@ -44,6 +44,31 @@ def central(tmp_path):
                 body = image if "images" in self.path else video
                 if hooks.get("media"):
                     hooks["media"]()
+                total = hooks.get("large", len(body))
+                request_range = self.headers.get("Range")
+                hooks["last_range"] = request_range
+                if request_range:
+                    from aiops_diagnostics.knowledge.knowledge_retrieval import parse_byte_range
+
+                    try:
+                        begin, end = parse_byte_range(request_range, total)
+                    except ValueError:
+                        self.send_response(416)
+                        self.send_header("Content-Range", f"bytes */{total}")
+                        self.end_headers()
+                        return
+                    body = b"z" * (end - begin + 1) if hooks.get("large") else body[begin : end + 1]
+                    self.send_response(206)
+                    self.send_header("Content-Range", f"bytes {begin}-{end}/{total}")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if hooks.get("large"):
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(total))
+                    self.end_headers()
+                    return  # client must reject headers before attempting to download the large body.
             self.send_response(200)
             self.end_headers()
             self.wfile.write(body)
@@ -199,12 +224,12 @@ def test_original_consumer_read_chain_and_media_use_exact_environment(central):
         media = result["sources"][0]["media"][0]
         grant = runtime.media_signer.verify_signed(media["url"])
         assert grant.session_id == "qa-local" and grant.agent_version == "consumer:agent-a#v1"
-        assert for_application(runtime, "same", "app-" + env).fetch_media(grant) == c.image
+        assert for_application(runtime, "same", "app-" + env).fetch_media(grant).body == c.image
         movie = result["sources"][1]["media"][0]
         grant = runtime.media_signer.verify_signed(movie["url"])
         assert (
-            for_application(runtime, "same", "app-" + env).fetch_media(grant, range_header="bytes=0-3")
-            == c.video
+            for_application(runtime, "same", "app-" + env).fetch_media(grant, range_header="bytes=0-3").body
+            == c.video[:4]
         )
         assert all(call[2] == knowledge_tenant("same", env) for call in c.calls)
         c.calls.clear()
@@ -427,6 +452,17 @@ def test_original_http_agent_answer_and_media_recheck_local_admission(central, t
         assert seek.status_code == 206 and seek.content == c.video[4:8]
         suffix = env["client"].get(media[1]["url"], headers={"Range": "bytes=-4"})
         assert suffix.status_code == 206 and suffix.content == c.video[-4:]
+        c.hooks["large"] = 40 * 1024 * 1024
+        large = env["client"].get(media[1]["url"], headers={"Range": "bytes=33554440-33554443"})
+        assert large.status_code == 206 and large.content == b"zzzz"
+        assert large.headers["Content-Range"] == "bytes 33554440-33554443/41943040"
+        assert c.hooks["last_range"] == "bytes=33554440-33554443"
+        end = env["client"].get(media[1]["url"], headers={"Range": "bytes=-7"})
+        assert end.status_code == 206 and end.content == b"z" * 7
+        assert end.headers["Content-Range"] == "bytes 41943033-41943039/41943040"
+        full_large = env["client"].get(media[1]["url"])
+        assert full_large.status_code == 503 and full_large.content == b""
+        c.hooks.pop("large")
         runtime.gateway_settings.consumer_chatflow_enabled = False
         before = len(c.calls)
         assert env["client"].get(media[0]["url"]).status_code == 403
@@ -438,3 +474,27 @@ def test_old_opaque_shared_key_prefix_still_uses_exact_match(tmp_path):
     client = _client(tmp_path, _Runtime(), dify_knowledge_api_key=key)
     response = client.get("/v1/dify/knowledge", headers={"Authorization": "Bearer " + key})
     assert response.status_code == 200 and response.json()["total"] == 2
+
+
+def test_unknown_length_oversize_body_is_rejected_not_truncated():
+    from io import BytesIO
+
+    from aiops_diagnostics.knowledge.knowledge_retrieval import read_media_response
+
+    response = BytesIO(b"0123456789")
+    response.status = 200
+    response.headers = {}
+    with pytest.raises(KnowledgeSearchUnavailable, match="too large"):
+        read_media_response(response, max_bytes=8)
+
+
+@pytest.mark.parametrize(
+    "status,content_range,body",
+    [(206, "bytes 4-7/100", b"xx"), (206, "bytes 3-6/100", b"xxxx"), (206, "", b"xxxx"), (201, "", b"xxxx")],
+)
+def test_explicit_partial_response_must_match_request(status, content_range, body):
+    from aiops_diagnostics.knowledge.knowledge_retrieval import MediaResponse, media_response
+
+    grant = SimpleNamespace(mime_type="video/mp4")
+    with pytest.raises(KnowledgeSearchUnavailable):
+        media_response(grant, MediaResponse(status, {"Content-Range": content_range}, body), "bytes=4-7")

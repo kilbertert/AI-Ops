@@ -21,8 +21,9 @@ Status: Accepted（2026-11-22，用户批准多环境主线，实施拆分由主
 records，metadata可携来源与媒体；本仓现有dify_knowledge_api解析/呈现为唯一协议适配。
 HMAC能力沿现有候选实现的密钥隔离域，但正式能力使用独立版本前缀及应用/授权世代约束。
 原共享key是不透明字符串，精确匹配先于新前缀分流，不能为新能力禁止旧key的前缀。
-[RFC9110§14](https://www.rfc-editor.org/rfc/rfc9110#section-14)的字节范围在目标原MediaProxy处理一次；
-中央读完整媒体，目标按原范围响应，避免中央206切片被目标再切片。委派媒体读取上限32MiB，超限明确不可用。
+[RFC9110§14](https://www.rfc-editor.org/rfc/rfc9110#section-14)的字节范围逐跳保留HTTP状态与Content-Range，
+原MediaResponse携带实际片段与总长，MediaProxy核片段与请求一致而不二次切片；旧bytes读取器仍按原合同处理。
+大对象的小范围可用，委派单次响应体超过32MiB时明确不可用；Content-Length及无长度响应的多读溢出都检查，不能交付截断200。
 
 ## 备选方案
 
