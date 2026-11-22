@@ -106,12 +106,20 @@ const taskLabels: Record<string, string> = {
   expired: '已过期',
 }
 const preparationSteps: Record<string, string> = {
+  'site-install': '空机初装',
   'site-preflight': '现场预检',
   'workspace-prepare': '工作区',
   'knowledge-prepare': '知识资源',
   'knowledge-connect': '知识连接',
   'operator-prepare': '管家候选',
   'consumer-prepare': '客服候选',
+}
+const initialInstallationLabels: Record<string, string> = {
+  installed: '已装',
+  already_installed: '已装（原安装保留）',
+  not_installed: '未安装',
+  unconfirmed: '待核对',
+  not_executed: '未执行',
 }
 const checkLabels: Record<string, string> = {
   workspace: '候选工作区',
@@ -342,6 +350,7 @@ export default function EnvironmentManagement() {
     (item) =>
       [
         'candidate-prepare',
+        'site-install',
         'candidate-install',
         'candidate-register',
         'candidate-validate',
@@ -665,7 +674,10 @@ export default function EnvironmentManagement() {
                 </Button>
                 <section aria-label="一次准备候选" className="space-y-2 pt-3">
                   <h3 className="system-sm-semibold">一次准备候选</h3>
-                  <p>自动串联现场预检、工作区、知识连接与双端应用；不安装或启用正式服务。</p>
+                  <p>
+                    自动串联现场预检、工作区、知识连接与双端应用；「准备候选」仅准备资源，
+                    「空机初装并准备」会在空机上安装停用模块；均不启用正式入口。
+                  </p>
                   <Button
                     type="button"
                     variant="secondary"
@@ -693,24 +705,48 @@ export default function EnvironmentManagement() {
                         </select>
                       </label>
                       {draft.tenants.map((tenant) => (
-                        <Button
-                          key={tenant.id}
-                          type="button"
-                          variant="secondary"
-                          disabled={busy || plan.state === 'expired' || !consumerSource}
-                          onClick={() =>
-                            void siteTasks({
-                              candidate_plan: plan.id,
-                              tenant_id: tenant.id,
-                              source_app_id: consumerSource,
-                              source_version: consumerSources.find(
-                                (source) => source.app_id === consumerSource,
-                              )?.version_no,
-                            })
-                          }
-                        >
-                          准备候选：{tenant.name}（{tenant.id}）
-                        </Button>
+                        <div key={tenant.id} className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={busy || plan.state === 'expired' || !consumerSource}
+                            onClick={() =>
+                              void siteTasks({
+                                candidate_plan: plan.id,
+                                tenant_id: tenant.id,
+                                source_app_id: consumerSource,
+                                source_version: consumerSources.find(
+                                  (source) => source.app_id === consumerSource,
+                                )?.version_no,
+                              })
+                            }
+                          >
+                            准备候选：{tenant.name}（{tenant.id}）
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={busy || plan.state === 'expired' || !consumerSource}
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  '仅当目标主机为空时使用：将在固定路径完成首次安装（停用目录），占用、半安装或旧单位会被拒绝对账，不会启用正式入口。确认包含初装？',
+                                )
+                              )
+                                void siteTasks({
+                                  candidate_plan: plan.id,
+                                  tenant_id: tenant.id,
+                                  source_app_id: consumerSource,
+                                  source_version: consumerSources.find(
+                                    (source) => source.app_id === consumerSource,
+                                  )?.version_no,
+                                  initial_installation: true,
+                                })
+                            }}
+                          >
+                            空机初装并准备：{tenant.name}（{tenant.id}）
+                          </Button>
+                        </div>
                       ))}
                     </>
                   )}
@@ -760,6 +796,22 @@ export default function EnvironmentManagement() {
                           </>
                         )}
                         <p>仅证明任务落在已登记主机，不代替正式网络、容量与业务验收</p>
+                      </section>
+                    )}
+                    {item.action === 'site-install' && (
+                      <section aria-label={`空机初装进度：${item.tenant_id}`}>
+                        <p>
+                          空机初装 · {item.tenant_id}：
+                          {item.state === 'observed'
+                            ? item.result.installation === 'already_installed'
+                              ? '已装（原安装保留）'
+                              : '已装'
+                            : item.state === 'queued'
+                              ? '待安装'
+                              : taskLabels[item.state] || item.state}
+                        </p>
+                        {item.result.version && <p>实际版本：{item.result.version}</p>}
+                        <p>仅停用目录与公司连接 · 业务未验收 · 正式入口未启用</p>
                       </section>
                     )}
                     {item.action === 'candidate-install' && (
@@ -971,7 +1023,14 @@ export default function EnvironmentManagement() {
                             </li>
                           ))}
                         </ul>
-                        <p>安装未执行 · 业务未验收 · 正式入口未启用</p>
+                        <p>
+                          {item.result.initial_installation != null
+                            ? `基础初装：${
+                                initialInstallationLabels[item.result.initial_installation] ||
+                                item.result.initial_installation
+                              } · 运行安装未执行 · 业务未验收 · 正式入口未启用`
+                            : '安装未执行 · 业务未验收 · 正式入口未启用'}
+                        </p>
                       </section>
                     )}
                     <p>

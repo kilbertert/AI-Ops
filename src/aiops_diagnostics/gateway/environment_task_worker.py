@@ -354,6 +354,7 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
                 installation["id"],
                 owner,
                 registration=installation.get("action") == "candidate-register",
+                cold=installation.get("action") == "site-install",
             )
     claim = request({"owner": owner, **({"id": identifier} if identifier else {})})
     if not isinstance(claim, dict) or type(claim.get("claimed")) is not bool:
@@ -394,7 +395,7 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
     return request({"id": identifier, "owner": owner, "result": result})
 
 
-def installation_run(root, request, identifier, owner, *, registration=False):
+def installation_run(root, request, identifier, owner, *, registration=False, cold=False):
     """运维宿主搬运中央私有制品；未知结果只核对同一远端任务。"""
     action = "registration" if registration else "installation"
     staged = request({action: "stage", "id": identifier, "owner": owner})
@@ -449,6 +450,16 @@ def installation_run(root, request, identifier, owner, *, registration=False):
             "business_acceptance": False,
             "source_revision": staged["expected"]["revision"],
             **{k: v for k, v in staged["expected"].items() if k != "revision"},
+        }
+    if cold:
+        result = {
+            "id": identifier,
+            "environment": staged["environment"],
+            "scope": "site-cold-installation-only",
+            "state": "reconcile",
+            "executable": False,
+            "installation": "unconfirmed",
+            "error_code": "ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED",
         }
     try:
         with tempfile.TemporaryDirectory(prefix="aiops-install-transfer-") as temporary:
@@ -540,13 +551,18 @@ def installation_run(root, request, identifier, owner, *, registration=False):
                 "id": identifier,
                 "environment": staged["environment"],
                 "expires_at": staged["expires_at"],
-                "expected": staged["expected"],
                 "archives": spec_archives,
             }
+            if cold:
+                spec["python"] = staged["python"]
+            else:
+                spec["expected"] = staged["expected"]
             if registration:
                 spec.pop("archives")
                 spec["tenant_id"] = staged["tenant_id"]
             remote_action = "observe" if staged["observe_only"] else "run"
+            if cold:
+                remote_action = "cold-observe" if staged["observe_only"] else "cold-run"
             if registration:
                 remote_action = "observe-registration" if staged["observe_only"] else "register"
             arguments = [

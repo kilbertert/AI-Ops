@@ -17,6 +17,7 @@ from . import environment_management as management
 from . import environment_runtime as runtime
 
 ACTION = "candidate-install"
+COLD_ACTION = "site-install"
 
 
 def binding(settings, target):
@@ -71,6 +72,91 @@ def current(context, conn, identifier, *, fresh=False):
     return row, request
 
 
+def submit_cold(conn, environment, identity, parent_id, request):
+    """真空目标的初装子任务；与安装面互斥，目标与制品引用随父冻结。"""
+    task_id = (
+        "task_"
+        + plans._digest({"action": COLD_ACTION, "preparation": parent_id, "tenant": request["tenant_id"]})[
+            :32
+        ]
+    )
+    if conn.execute(
+        "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
+        "AND state IN ('waiting','executing','checking') "
+        "AND json_extract(request,'$.action') IN "
+        "('site-install','candidate-install','candidate-register','candidate-validate',"
+        "'environment-publish') LIMIT 1",
+        (environment, task_id),
+    ).fetchone():
+        raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
+    conn.execute(
+        "INSERT OR IGNORE INTO environment_tasks(id,environment,request,state,result,updated_at) "
+        "VALUES(?,?,?,'waiting',?,?)",
+        (
+            task_id,
+            environment,
+            json.dumps(
+                {
+                    "identity": list(identity),
+                    "action": COLD_ACTION,
+                    "preparation": parent_id,
+                    "tenant_id": request["tenant_id"],
+                    "plan": request["plan"],
+                    "target": request["target"],
+                    "installer": request["installer"],
+                    "python": request["python"],
+                    "attempted": False,
+                }
+            ),
+            json.dumps(
+                {
+                    "scope": "site-cold-installation-only",
+                    "expires_at": request["plan"]["expires_at"],
+                    "installation": "not_executed",
+                }
+            ),
+            time.time(),
+        ),
+    )
+    return task_id
+
+
+def current_cold(context, conn, identifier, *, fresh=False):
+    """初装任务门禁：父任务仍在等待首步、包含初装已声明，取消即拒。"""
+    settings = context.settings
+    path, reference = management._path(context), settings.environment_onboarding_file
+    row = tasks._row(conn, identifier)
+    request = json.loads(row["request"])
+    if request.get("action") != COLD_ACTION:
+        raise tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
+    # 已派发请求只用冻结输入回收真实结果；撤权、取消或父终态不能再把它变成拒绝。
+    if not fresh and request.get("dispatched"):
+        return row, request
+    tasks._authorize(path, tuple(request["identity"]), row["environment"])
+    tasks._current(path, request, reference, reconciling=not fresh)
+    target_ref = next(
+        (t for t in plans._references(reference) if t["id"] == request["target"]["id"]),
+        None,
+    )
+    parent = tasks._row(conn, request["preparation"])
+    parent_request = json.loads(parent["request"])
+    if (
+        parent["cancel"]
+        or row["cancel"]
+        or target_ref is None
+        or target_ref["python"] != request.get("python")
+        or parent["state"] != "waiting"
+        or parent_request.get("action") != preparation.ACTION
+        or parent_request.get("initial_installation") is not True
+        or parent_request["children"].get(COLD_ACTION) != row["id"]
+        or parent_request["bindings"] != preparation._bindings(settings, parent_request["consumer_source"])
+        or fresh
+        and parent_request["plan"]["expires_at"] <= time.time()
+    ):
+        raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+    return row, request
+
+
 def submit(context, identity, identifier):
     settings, path = context.settings, management._path(context)
     if not settings.environment_installation_file:
@@ -101,7 +187,8 @@ def submit(context, identity, identifier):
             "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
             "AND state IN ('waiting','executing','checking') "
             "AND json_extract(request,'$.action') "
-            "IN ('candidate-install','candidate-register','candidate-validate','environment-publish')",
+            "IN ('site-install','candidate-install','candidate-register','candidate-validate',"
+            "'environment-publish')",
             (parent["environment"], task_id),
         ).fetchone():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
@@ -152,13 +239,18 @@ def dispatch(context, payload):
                 return {"claimed": False, "task": None}
             rows = conn.execute(
                 "SELECT id FROM environment_tasks WHERE json_extract(request,'$.action') "
-                "IN ('candidate-install','candidate-register','candidate-validate','environment-publish') "
+                "IN ('site-install','candidate-install','candidate-register','candidate-validate',"
+                "'environment-publish') "
                 "AND state IN ('waiting','executing','checking') AND lease_until<=? "
+                # 冷任务checking与现场reconcile同规60秒节奏，含已取消行：残迹初装不抢占
+                # 认领面；节奏只限site-install，非cold检查任务沿原即领合同不变。
+                "AND (state!='checking' OR updated_at<=? "
+                "OR json_extract(request,'$.action')!='site-install') "
                 "AND NOT EXISTS(SELECT 1 FROM environment_tasks live "
                 "WHERE live.environment=environment_tasks.environment AND live.id!=environment_tasks.id "
                 "AND live.state IN ('running','executing') AND live.lease_until>?) "
                 "ORDER BY updated_at LIMIT 20",
-                (time.time(), time.time()),
+                (time.time(), time.time() - 60, time.time()),
             ).fetchall()
             for selected in rows:
                 row = tasks._row(conn, selected[0])
@@ -176,6 +268,8 @@ def dispatch(context, payload):
                         from .environment_registration import current as registration_current
 
                         registration_current(context, conn, row["id"], fresh=not request["attempted"])
+                    elif request["action"] == COLD_ACTION:
+                        current_cold(context, conn, row["id"], fresh=not request["attempted"])
                     else:
                         current(context, conn, row["id"], fresh=not request["attempted"])
                 except (ValueError, RuntimeError, OSError, KeyError, TypeError):
@@ -199,7 +293,7 @@ def dispatch(context, payload):
     with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
         row = tasks._row(conn, payload["id"])
         request = json.loads(row["request"])
-        if request.get("action") != ACTION:
+        if request.get("action") not in {ACTION, COLD_ACTION}:
             raise tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
         if (
             row["state"] != "executing"
@@ -208,7 +302,9 @@ def dispatch(context, payload):
         ):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_LEASE_LOST")
         if payload["installation"] == "authorize":
-            current(context, conn, payload["id"], fresh=True)
+            (current_cold if request["action"] == COLD_ACTION else current)(
+                context, conn, payload["id"], fresh=True
+            )
             if not request["attempted"] or request.get("dispatched"):
                 raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
             request["dispatched"] = True
@@ -218,7 +314,63 @@ def dispatch(context, payload):
             return {"authorized": True}
         if payload["installation"] == "complete":
             result = payload.get("result")
-            if (
+            if request["action"] == COLD_ACTION:
+                # 已装/初装成功才算observed；外来占机只信installed.json账本形状。
+                installed_fields = ("artifact_sha256", "config_sha256", "registry_sha256")
+                if (
+                    not isinstance(result, dict)
+                    or result.get("id") != row["id"]
+                    or result.get("environment") != row["environment"]
+                    or result.get("scope") != "site-cold-installation-only"
+                    or result.get("executable") is not False
+                    or result.get("state") not in {"observed", "blocked", "reconcile"}
+                    or set(result)
+                    - {
+                        "id",
+                        "environment",
+                        "scope",
+                        "state",
+                        "installation",
+                        "executable",
+                        "error_code",
+                        "version",
+                        "source_revision",
+                        *installed_fields,
+                    }
+                    or result["state"] == "observed"
+                    and (
+                        result.get("installation") not in {"installed", "already_installed"}
+                        or not isinstance(result.get("version"), str)
+                        or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\+[a-f0-9]{12})?", result["version"])
+                        or not isinstance(result.get("source_revision"), str)
+                        or not re.fullmatch(r"[0-9a-f]{40}", result["source_revision"])
+                        or any(
+                            not isinstance(result.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", result[k])
+                            for k in installed_fields[:2]
+                        )
+                        or (
+                            not isinstance(result.get("registry_sha256"), str)
+                            or (
+                                result["registry_sha256"] != "absent"
+                                and not re.fullmatch(r"[a-f0-9]{64}", result["registry_sha256"])
+                            )
+                            # 无摘要只属旧config-only账本；本任务新装仍要强摘要。
+                            or (
+                                result["registry_sha256"] == "absent"
+                                and result["installation"] != "already_installed"
+                            )
+                        )
+                        or result["installation"] == "installed"
+                        and (
+                            result["artifact_sha256"]
+                            != request.get("archives", {}).get("application", {}).get("sha256")
+                            or result["source_revision"]
+                            != request.get("archives", {}).get("application", {}).get("revision")
+                        )
+                    )
+                ):
+                    raise tasks.TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
+            elif (
                 not isinstance(result, dict)
                 or result.get("id") != row["id"]
                 or result.get("environment") != row["environment"]
@@ -251,26 +403,30 @@ def dispatch(context, payload):
                 }
             ):
                 raise tasks.TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
-            if result["state"] == "observed" and (
-                not isinstance(result.get("version"), str)
-                or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\+[a-f0-9]{12})?", result["version"])
-                or result.get("installation") not in {"installed", "unchanged"}
-                or result.get("artifact_sha256") != request["archives"]["application"]["sha256"]
-                or result.get("source_runtime_sha256", result.get("runtime_sha256"))
-                != request["archives"]["runtime"]["sha256"]
-                or not isinstance(result.get("runtime_sha256"), str)
-                or not re.fullmatch(r"[a-f0-9]{64}", result["runtime_sha256"])
-                or (
-                    result.get("runtime_sha256") != request["archives"]["runtime"]["sha256"]
-                    and (
-                        result.get("previous_runtime_sha256") != request["expected"]["runtime_sha256"]
-                        or result.get("source_runtime_sha256") != request["archives"]["runtime"]["sha256"]
+            if (
+                request["action"] != COLD_ACTION
+                and result["state"] == "observed"
+                and (
+                    not isinstance(result.get("version"), str)
+                    or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\+[a-f0-9]{12})?", result["version"])
+                    or result.get("installation") not in {"installed", "unchanged"}
+                    or result.get("artifact_sha256") != request["archives"]["application"]["sha256"]
+                    or result.get("source_runtime_sha256", result.get("runtime_sha256"))
+                    != request["archives"]["runtime"]["sha256"]
+                    or not isinstance(result.get("runtime_sha256"), str)
+                    or not re.fullmatch(r"[a-f0-9]{64}", result["runtime_sha256"])
+                    or (
+                        result.get("runtime_sha256") != request["archives"]["runtime"]["sha256"]
+                        and (
+                            result.get("previous_runtime_sha256") != request["expected"]["runtime_sha256"]
+                            or result.get("source_runtime_sha256") != request["archives"]["runtime"]["sha256"]
+                        )
                     )
-                )
-                or result.get("source_revision") != request["archives"]["application"]["revision"]
-                or any(
-                    not isinstance(result.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", result[k])
-                    for k in ("config_sha256", "registry_sha256")
+                    or result.get("source_revision") != request["archives"]["application"]["revision"]
+                    or any(
+                        not isinstance(result.get(k), str) or not re.fullmatch(r"[a-f0-9]{64}", result[k])
+                        for k in ("config_sha256", "registry_sha256")
+                    )
                 )
             ):
                 raise tasks.TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
@@ -292,8 +448,28 @@ def dispatch(context, payload):
                     row["id"],
                 ),
             )
-            return tasks._public(tasks._row(conn, row["id"]))
-        current(context, conn, payload["id"], fresh=not request["attempted"])
+            public = tasks._public(tasks._row(conn, row["id"]))
+            if request["action"] == COLD_ACTION:
+                # 父终态后advance不再选中它；已验证cold回执同事务回写父摘要，
+                # 不复活终态、不改取消/children、不创建后继。
+                parent = tasks._row(conn, request["preparation"])
+                bound = json.loads(parent["request"]).get("children", {}).get(COLD_ACTION)
+                if bound == row["id"]:
+                    parent_result = json.loads(parent["result"])
+                    parent_result["initial_installation"] = result.get("installation", "not_executed")
+                    step = {k: public[k] for k in ("id", "action", "state", "error_code")}
+                    steps = [step if s.get("id") == row["id"] else s for s in parent_result.get("steps", [])]
+                    if not any(s.get("id") == row["id"] for s in steps):
+                        steps.insert(0, step)
+                    parent_result["steps"] = steps
+                    conn.execute(
+                        "UPDATE environment_tasks SET result=?,updated_at=? WHERE id=?",
+                        (json.dumps(parent_result), time.time(), parent["id"]),
+                    )
+            return public
+        (current_cold if request["action"] == COLD_ACTION else current)(
+            context, conn, payload["id"], fresh=not request["attempted"]
+        )
         attempted = request["attempted"]
     if not attempted:
         # HTTP/工件导出不占SQLite写事务；新写入前再次核冻结输入与取消。
@@ -301,7 +477,10 @@ def dispatch(context, payload):
         directory = settings.data_home / "installation-tasks" / row["id"]
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         validate_private_directory(directory)
-        files = {k: directory / (k + ".tar.gz") for k in ("candidate", "runtime")}
+        cold = request["action"] == COLD_ACTION
+        files = {
+            k: directory / (k + ".tar.gz") for k in (("candidate",) if cold else ("candidate", "runtime"))
+        }
         if not files["candidate"].exists():
             plans.export(
                 path,
@@ -310,22 +489,23 @@ def dispatch(context, payload):
                 settings.environment_onboarding_file,
                 files["candidate"],
             )
-        parent = request["children"]
-        runtime_payload = {
-            "identity": list(request["identity"]),
-            "plan_id": request["plan"]["id"],
-            "tenant_id": request["tenant_id"],
-            "operator_task": parent["operator-prepare"],
-            "consumer_task": parent["consumer-prepare"],
-        }
-        if not files["runtime"].exists():
-            runtime.export(settings, runtime_payload, request["node_file"], files["runtime"])
-        # 原运行导出与模板指纹再次复核，已存在文件不得被重写。
-        rendered, _ = runtime.render(settings, runtime_payload, request["node_file"])
-        runtime_sha = hashlib.file_digest(files["runtime"].open("rb"), "sha256").hexdigest()
-        stored, _ = runtime_files(files["runtime"], runtime_sha, row["environment"])
-        if stored != rendered:
-            raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+        if not cold:
+            parent = request["children"]
+            runtime_payload = {
+                "identity": list(request["identity"]),
+                "plan_id": request["plan"]["id"],
+                "tenant_id": request["tenant_id"],
+                "operator_task": parent["operator-prepare"],
+                "consumer_task": parent["consumer-prepare"],
+            }
+            if not files["runtime"].exists():
+                runtime.export(settings, runtime_payload, request["node_file"], files["runtime"])
+            # 原运行导出与模板指纹再次复核，已存在文件不得被重写。
+            rendered, _ = runtime.render(settings, runtime_payload, request["node_file"])
+            runtime_sha = hashlib.file_digest(files["runtime"].open("rb"), "sha256").hexdigest()
+            stored, _ = runtime_files(files["runtime"], runtime_sha, row["environment"])
+            if stored != rendered:
+                raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
         candidate_sha = hashlib.file_digest(files["candidate"].open("rb"), "sha256").hexdigest()
         _, candidate = candidate_files(files["candidate"], candidate_sha, row["environment"])
         if (
@@ -349,7 +529,9 @@ def dispatch(context, payload):
             },
         }
         with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
-            current(context, conn, row["id"], fresh=True)
+            (current_cold if request["action"] == COLD_ACTION else current)(
+                context, conn, row["id"], fresh=True
+            )
             request["archives"] = archives
             request["attempted"] = True
             conn.execute(
@@ -360,13 +542,15 @@ def dispatch(context, payload):
         "environment": row["environment"],
         "target": request["target"],
         "installer": request["installer"],
-        "python": next(
+        "python": request["python"]
+        if request["action"] == COLD_ACTION
+        else next(
             t["python"]
             for t in plans._references(context.settings.environment_onboarding_file)
             if t["id"] == request["target"]["id"]
         ),
         "expires_at": request["plan"]["expires_at"],
-        "expected": request["expected"],
+        **({} if request["action"] == COLD_ACTION else {"expected": request["expected"]}),
         "archives": request["archives"],
         "observe_only": attempted,
     }

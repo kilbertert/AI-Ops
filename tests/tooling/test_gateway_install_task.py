@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import socket
 import sys
 import tarfile
 import time
@@ -139,6 +140,224 @@ def test_execute_passes_managed_interpreter_and_apply_revalidates(task_state, mo
     monkeypatch.setattr(task.probe, "managed_python", lambda *a, **kw: str(forged))
     with pytest.raises(ValueError, match="system Python"):
         task.execute(inst, {**request, "id": "task_" + "b" * 32})
+
+
+@pytest.fixture
+def cold_state(host, tmp_path):  # noqa: F811
+    inst, application, sha, _config, _calls, _active = host
+    application.chmod(0o600)
+    pair = candidate_config(host)
+    files = {"production.env": pair[0].read_bytes(), "environment.json": pair[1].read_bytes()}
+    files["manifest.json"] = json.dumps(
+        {
+            "schema": "aiops-environment-candidate/1",
+            "scope": "bootstrap-configuration-only",
+            "timezone": "Asia/Shanghai",
+            "plan_id": "plan_" + "a" * 32,
+            "plan_digest": "b" * 64,
+            "draft_revision": 1,
+            "registry_revision": 1,
+            "executable": False,
+            "projection_sha256": hashlib.sha256(
+                json.dumps(
+                    {k: hashlib.sha256(v).hexdigest() for k, v in files.items()}, sort_keys=True
+                ).encode()
+            ).hexdigest(),
+            "projected_config_sha256": hashlib.sha256(files["production.env"]).hexdigest(),
+            "projected_registry_sha256": hashlib.sha256(files["environment.json"]).hexdigest(),
+        }
+    ).encode()
+    candidate = inst.root.parent / "cold-candidate.tar"
+    with tarfile.open(candidate, "w") as bundle:
+        for name, body in files.items():
+            m = tarfile.TarInfo(name)
+            m.size = len(body)
+            m.mode = 0o600
+            bundle.addfile(m, io.BytesIO(body))
+    candidate.chmod(0o600)
+    inst.revision = "a" * 40
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    spec = {
+        "id": "task_" + "c" * 32,
+        "environment": "test",
+        "expires_at": time.time() + 900,
+        "python": "3.12",
+        "archives": {
+            "application": {"path": str(application), "sha256": task.install.digest(application)},
+            "candidate": {"path": str(candidate), "sha256": task.install.digest(candidate)},
+        },
+    }
+    return inst, spec, staging, host
+
+
+def test_cold_install_records_intent_then_installs_via_original_apply(cold_state):
+    inst, spec, staging, _ = cold_state
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "observed" and result["installation"] == "installed"
+    assert result["scope"] == "site-cold-installation-only" and result["executable"] is False
+    record = json.loads((staging / "cold-intent.json").read_text())
+    assert record["spec"] == spec and record["outcome"] == "installed"
+    installed = inst.read_record("installed.json")
+    assert installed["config_sha256"] == result["config_sha256"]
+    assert installed["registry_sha256"] == result["registry_sha256"]
+    # 冷装只装停用目录与公司连接：账本没有运行工件摘要，env也没有运行指针。
+    assert "runtime_sha256" not in installed
+    assert "OPERATOR_PROFILES_FILE" not in (inst.config / "production.env").read_text()
+
+
+def test_cold_install_never_repeats_apply_on_same_task(cold_state, monkeypatch):
+    inst, spec, staging, _ = cold_state
+    assert task.execute_cold(inst, spec, staging=staging)["installation"] == "installed"
+    calls = []
+    monkeypatch.setattr(inst, "apply", lambda *a, **kw: calls.append(a))
+    again = task.execute_cold(inst, spec, staging=staging)
+    assert again["state"] == "observed" and again["installation"] == "installed"
+    assert calls == []
+
+
+def test_cold_install_without_intent_skips_existing_ledger(cold_state, monkeypatch):
+    inst, spec, staging, _ = cold_state
+    task.execute_cold(inst, spec, staging=staging)
+    (staging / "cold-intent.json").unlink()
+    calls = []
+    monkeypatch.setattr(inst, "apply", lambda *a, **kw: calls.append(a))
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "observed" and result["installation"] == "already_installed"
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "obstacle",
+    ["state", "config", "backups", "backups-dir", "unit", "unit-loaded", "residue", "root-without-ledger"],
+)
+def test_cold_install_reconciles_unknown_assets(cold_state, obstacle, monkeypatch):
+    inst, spec, staging, fixture = cold_state
+    if obstacle == "unit-loaded":
+        fixture[5].add(inst.name)
+    elif obstacle == "residue":
+        (inst.root.parent / (inst.name + "-preparing-zz")).mkdir()
+    elif obstacle == "root-without-ledger":
+        inst.root.mkdir()
+    elif obstacle == "backups-dir":
+        # 声明backups根里已有内容=旧业务资产，不当空机也不收养。
+        inst.backups.mkdir(mode=0o700)
+        (inst.backups / "foreign.dump").write_text("foreign")
+    else:
+        getattr(inst, obstacle).parent.mkdir(parents=True, exist_ok=True)
+        getattr(inst, obstacle).write_text("foreign")
+    calls = []
+    monkeypatch.setattr(inst, "apply", lambda *a, **kw: calls.append(a))
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "reconcile"
+    assert result["error_code"] == "ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED"
+    assert calls == [] and not (staging / "cold-intent.json").exists()
+
+
+def test_cold_install_tolerates_declared_empty_backups_root(cold_state):
+    inst, spec, staging, _ = cold_state
+    # 受管staging可预建声明backups根；可信私有空目录不改变真空事实。
+    inst.backups.mkdir(mode=0o700)
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "observed" and result["installation"] == "installed"
+    assert inst.backups.is_dir() and not any(inst.backups.iterdir())
+
+
+def test_cold_install_refuses_occupied_port(cold_state, monkeypatch):
+    inst, spec, staging, _ = cold_state
+    calls = []
+    monkeypatch.setattr(inst, "apply", lambda *a, **kw: calls.append(a))
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", inst.port))
+        sock.listen(1)
+        result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "blocked"
+    assert result["error_code"] == "ENVIRONMENT_COLD_INSTALLATION_REFUSED"
+    assert calls == []
+
+
+@pytest.mark.parametrize("mode", ["expired", "observe"])
+def test_cold_install_unattempted_empty_host_is_not_installed(cold_state, mode, monkeypatch):
+    inst, spec, staging, _ = cold_state
+    calls = []
+    monkeypatch.setattr(inst, "apply", lambda *a, **kw: calls.append(a))
+    if mode == "expired":
+        spec["expires_at"] = 0
+    result = task.execute_cold(inst, spec, staging=staging, observe_only=mode == "observe")
+    assert result["state"] == "blocked" and result["installation"] == "not_installed"
+    assert result["error_code"] == "ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED"
+    assert calls == []
+
+
+def test_cold_lost_reply_reenters_as_observation_only(cold_state, monkeypatch):
+    inst, spec, staging, _ = cold_state
+    original = inst.apply
+
+    def lost(*args, **kwargs):
+        original(*args, **kwargs)
+        raise OSError("reply lost")
+
+    monkeypatch.setattr(inst, "apply", lost)
+    with pytest.raises(OSError, match="reply lost"):
+        task.execute_cold(inst, spec, staging=staging)
+    result = task.execute_cold(inst, spec, staging=staging, observe_only=True)
+    assert result["state"] == "observed" and result["installation"] == "installed"
+
+
+def test_cold_intent_without_takeover_reconciles(cold_state):
+    inst, spec, staging, _ = cold_state
+    intent = staging / "cold-intent.json"
+    intent.write_text(json.dumps({"spec": spec, "desired": {"config_sha256": "x" * 64}}))
+    intent.chmod(0o600)
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "reconcile"
+    assert result["error_code"] == "ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED"
+
+
+def test_cold_foreign_intent_is_unconfirmed(cold_state):
+    inst, spec, staging, _ = cold_state
+    intent = staging / "cold-intent.json"
+    intent.write_text(json.dumps({"spec": {**spec, "id": "task_" + "d" * 32}}))
+    intent.chmod(0o600)
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "blocked" and result["installation"] == "unconfirmed"
+
+
+def test_cold_install_requires_declared_minor(cold_state):
+    inst, spec, staging, _ = cold_state
+    with pytest.raises(ValueError):
+        task.execute_cold(inst, {**spec, "python": "3.9"}, staging=staging)
+    # 声明3.13而目标只有3.12：包manifest先拒绝，意图不落盘。
+    with pytest.raises(ValueError):
+        task.execute_cold(inst, {**spec, "python": "3.13"}, staging=staging)
+    assert not (staging / "cold-intent.json").exists()
+
+
+def test_cold_pending_ledger_pair_is_recovery_not_observed(cold_state):
+    inst, spec, staging, _ = cold_state
+    assert task.execute_cold(inst, spec, staging=staging)["installation"] == "installed"
+    # 同一安装器切换断点的真实形状：pending先于installed写，中断则两账并存。
+    inst.record(
+        "pending.json",
+        {**inst.read_record("installed.json"), "previous": {"revision": "b" * 40}, "phase": "switching"},
+    )
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "reconcile"
+    assert result["error_code"] == "ENVIRONMENT_INSTALLATION_RECOVERY_REQUIRED"
+
+
+def test_cold_config_only_ledger_reports_absent_registry(cold_state):
+    inst, spec, staging, fixture = cold_state
+    archive, sha, config = fixture[1], fixture[2], fixture[3]
+    # 旧合法安装形状：config-only apply（无registry_file）写出的账本没有registry_sha256。
+    inst.apply(archive, sha, "/usr/bin/python3", config, task.install.digest(config))
+    ledger = inst.read_record("installed.json")
+    assert "registry_sha256" not in ledger
+    result = task.execute_cold(inst, spec, staging=staging)
+    assert result["state"] == "observed" and result["installation"] == "already_installed"
+    assert result["registry_sha256"] == "absent"
+    # 收养旧安装只读账本，不替本任务落冷装意图。
+    assert not (staging / "cold-intent.json").exists()
 
 
 def test_registration_lost_receipt_reenters_as_observation_only(task_state, monkeypatch):

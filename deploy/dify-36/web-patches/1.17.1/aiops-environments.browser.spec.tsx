@@ -530,6 +530,150 @@ it('submits one candidate preparation and restores durable child progress', asyn
   ).toHaveLength(0)
 })
 
+it('submits cold initial installation only after explicit confirm and reads back its states', async () => {
+  const plan = {
+    id: `plan_${'e'.repeat(32)}`,
+    state: 'passed',
+    executable: false,
+    draft_revision: 2,
+    registry_revision: 4,
+    checks: [],
+  }
+  const parent = {
+    id: `task_${'f'.repeat(32)}`,
+    action: 'candidate-prepare',
+    tenant_id: 'same',
+    plan_id: plan.id,
+    state: 'queued',
+    cancel_requested: false,
+    error_code: '',
+    result: {
+      scope: 'candidate-resources-only',
+      steps: [
+        {
+          id: `task_${'a'.repeat(32)}`,
+          action: 'site-install',
+          state: 'queued',
+          error_code: '',
+        },
+      ],
+      // 真实提交落库即带该字段；queued父摘要据此显示初装未执行而非纯运行安装。
+      initial_installation: 'not_executed',
+    },
+  }
+  const cold = {
+    id: `task_${'a'.repeat(32)}`,
+    action: 'site-install',
+    tenant_id: 'same',
+    plan_id: plan.id,
+    state: 'queued',
+    cancel_requested: false,
+    error_code: '',
+    result: { scope: 'site-cold-installation-only', installation: 'not_executed' },
+  }
+  const calls: Record<string, unknown>[] = []
+  const confirm = vi.fn(() => false)
+  vi.stubGlobal('confirm', confirm)
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json(data)
+      if (body.action === 'environment-plan') return Response.json(plan)
+      if (body.consumer_sources)
+        return Response.json({ sources: [{ app_id: 'source-a', name: '正式客服', version_no: 7 }] })
+      if (body.candidate_plan) return Response.json(parent)
+      return Response.json({
+        tasks: calls.some((entry) => entry.candidate_plan) ? [parent, cold] : [],
+      })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
+  await screen
+    .getByRole('combobox', { name: '候选客服来源版本', exact: true })
+    .selectOptions('source-a')
+  const button = screen.getByRole('button', {
+    name: '空机初装并准备：甲租户（same）',
+    exact: true,
+  })
+  // 取消确认：一次同源POST都不发出。
+  await button.click()
+  expect(confirm).toHaveBeenCalled()
+  expect(calls.some((body) => body.candidate_plan)).toBe(false)
+  // 显式确认后同源载荷带上初装声明；缺省旧「准备」路径的四字段用例保持不变。
+  confirm.mockReturnValue(true)
+  await button.click()
+  expect(calls.find((body) => body.candidate_plan)).toEqual({
+    action: 'environment-task',
+    candidate_plan: plan.id,
+    tenant_id: 'same',
+    source_app_id: 'source-a',
+    source_version: 7,
+    initial_installation: true,
+  })
+  // 提交回执只有父任务；初装子任务经「刷新任务」同列表读回。
+  const refresh = () => screen.getByRole('button', { name: '刷新任务', exact: true }).click()
+  await refresh()
+  const region = '空机初装进度：same'
+  await expect.element(page.getByRole('region', { name: region })).toBeVisible()
+  await expect
+    .element(screen.getByText('空机初装 · same：待安装', { exact: true }))
+    .toBeVisible()
+  // 初装结果未回写前父任务按真实queued摘要显示基础初装未执行。
+  await expect
+    .element(
+      screen.getByText('基础初装：未执行 · 运行安装未执行 · 业务未验收 · 正式入口未启用', {
+        exact: true,
+      }),
+    )
+    .toBeVisible()
+  cold.state = 'running'
+  await refresh()
+  await expect
+    .element(screen.getByText('空机初装 · same：正在取证', { exact: true }))
+    .toBeVisible()
+  cold.state = 'reconcile'
+  await refresh()
+  await expect
+    .element(screen.getByText('空机初装 · same：结果待核对', { exact: true }))
+    .toBeVisible()
+  cold.state = 'cancelled'
+  await refresh()
+  await expect
+    .element(screen.getByText('空机初装 · same：已取消', { exact: true }))
+    .toBeVisible()
+  cold.state = 'observed'
+  cold.result = { ...cold.result, installation: 'installed', version: '1.40.0' }
+  await refresh()
+  await expect
+    .element(screen.getByText('空机初装 · same：已装', { exact: true }))
+    .toBeVisible()
+  await expect.element(screen.getByText('实际版本：1.40.0', { exact: true })).toBeVisible()
+  cold.result = { ...cold.result, installation: 'already_installed' }
+  await refresh()
+  await expect
+    .element(screen.getByText('空机初装 · same：已装（原安装保留）', { exact: true }))
+    .toBeVisible()
+  // 基础初装结果独立成字段显示；父任务自身运行安装字段仍保持原语义。
+  parent.result = {
+    ...parent.result,
+    initial_installation: 'already_installed',
+    installation: 'not_executed',
+  }
+  await refresh()
+  await expect
+    .element(
+      screen.getByText(
+        '基础初装：已装（原安装保留） · 运行安装未执行 · 业务未验收 · 正式入口未启用',
+        { exact: true },
+      ),
+    )
+    .toBeVisible()
+})
+
 it('submits an explicit inactive installation and keeps business activation separate', async () => {
   const parent = {
     id: `task_${'f'.repeat(32)}`,

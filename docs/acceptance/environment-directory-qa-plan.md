@@ -220,7 +220,7 @@ D37停用候选安装：有效observed候选父任务、平台权限和专属节
 控制配置目录只读时，真实内部stage请求在现有data_home/installation-tasks准备0600安装包，重复stage复用同一包并只观察；原引用字节保持，拒绝写配置目录。
 失联/lease过期仅观察原意图与installed，已有意图不再次apply；在飞取消等安全结果，计划/凭据漂移不启动新写入。
 用临时真实SQLite/文件与原安装器fixture验证重复/响应丢失/取消/过期/错误目标/pending，原子任务入口独立回归。
-现片已安装目标的接续，首次冷装主链、公司身份/网络/三功能与生产恢复故障注入另验；不由健康或安装回执推导业务通过。
+现片已安装目标的接续，冷装主链见D44；公司身份/网络/三功能与生产恢复故障注入另验；不由健康或安装回执推导业务通过。
 
 D38主机身份验收：页面在有效冻结计划提交host-verify（verify_task=managed-host-identity），同plan重复/换会话返回同编号。
 受管执行端经dev-host指纹断言后在目标只读采集hostname、machine-id的SHA256与服务身份存在性；原始machine-id不出目标。
@@ -291,3 +291,14 @@ D38主机身份验收：页面在有效冻结计划提交host-verify（verify_ta
 已有配置确实恢复，模型/发布不重放，中央未知结果保持待对账而非伪报已恢复。
 重复提交或换设备只回同任务；恢复目录/route单调且撤权不复活，旧租户问答和已存业务历史保持。
 实际systemd/共享服务/124公司数据与正式资料仍需独立现场授权；模型completed不证明业务准确率。
+
+## D44：真空机一键冷开通（含初装）
+
+- 判据：Feature「真空机一键冷开通先证明空机再经原安装器初装」、ADR-0308 与本片已批准冷路径验收合同。
+- 环境/数据：隔离Gateway与真实SQLite、原安装器临时实例、合成管理身份与原候选包；真实95初装窗口由用户批准后独立执行，不在本片。
+- 前置：有效passed计划与候选模板来源；目标经固定路径/单位/端口/残迹全空证明真空；页面显式window.confirm确认。
+- 正向：显式确认提交→父任务首个子任务site-install沿原安装面租约claim/stage/authorize→原execute_cold先落意图再经原Installer.apply写停用目录与公司连接→complete回执→父推进后才创建原site-preflight；同plan重提交回同任务；尚未建任务表的新库首个控制任务照常受理；父任务initial_installation字段独立显示，installation/business/activation原字段语义不变。
+- 反例：缺省initial_installation沿用原非初装准备路径、显式非true才按无效载荷拒绝；占用/半失败残迹/旧单位/pending与installed双账一律RECOVERY_REQUIRED不收养不补写；未派发请求取消或父过期拒绝；持续checking任务按60秒节奏重领，不抢占其他环境独立现场队列。
+- 取消/丢回执：已派发任务取消或父过期后租约到期重领只能observe_only回收冻结结果，父终态不复活不补建资源；冷意图在场而根未接管时对账不重放。
+- 旧兼容：config-only旧账本以registry absent按already_installed收养；本任务新装与already_installed形状不符一律拒绝。
+- 清理：隔离根与临时SQLite删除；生产初装窗口、worker→dev-host→真机整链与业务开通另验。

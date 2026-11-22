@@ -70,7 +70,8 @@ def submit(context, identity, identifier, plan_id):
             "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
             "AND state IN ('waiting','executing','checking') "
             "AND json_extract(request,'$.action') "
-            "IN ('candidate-install','candidate-register','candidate-validate','environment-publish')",
+            "IN ('site-install','candidate-install','candidate-register',"
+            "'candidate-validate','environment-publish')",
             (source["environment"], task_id),
         ).fetchone():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")

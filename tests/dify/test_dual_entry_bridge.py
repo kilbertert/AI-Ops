@@ -117,6 +117,25 @@ def test_candidate_chain_crosses_bridge_and_rejects_forged_inputs(bridge, upstre
     assert len([c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]) == count
 
 
+def test_initial_installation_crosses_bridge_only_as_explicit_true(bridge, upstream):  # noqa: F811
+    # 「包含初装」字段必须穿过真实桥白名单且原样转发；非true取值在桥层即拒。
+    payload = {
+        "action": "environment-task",
+        "candidate_plan": "plan_" + "c" * 32,
+        "tenant_id": "same",
+        "source_app_id": CONSUMER,
+        "source_version": 7,
+        "initial_installation": True,
+    }
+    assert _manage(payload, address=bridge)[0] != 400
+    forwarded = [c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]
+    assert forwarded[-1]["body"] == {k: v for k, v in payload.items() if k != "action"}
+    count = len(forwarded)
+    for value in (False, "yes", 1, None):
+        assert _manage({**payload, "initial_installation": value}, address=bridge)[0] == 400
+    assert len([c for c in upstream.calls if c["path"] == "/v1/dify/management/environment-tasks"]) == count
+
+
 def test_single_entry_payload_crosses_with_matching_scope(bridge):  # noqa: F811
     status, body = _manage(
         {

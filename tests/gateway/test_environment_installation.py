@@ -294,6 +294,91 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     assert all(a[2] == "124" for a in commands if a[0] == "dev-host" and a[2] != "41")
 
 
+def test_worker_cold_stage_builds_spec_without_expected_and_selects_cold_action(tmp_path, monkeypatch):
+    """冷装stage无expected：spec不能先构造再覆盖，动作必须是cold-run。"""
+    import ast
+    import hashlib
+    import subprocess
+
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    identifier = "task_" + "b" * 32
+    owner = "a" * 32
+    installer_bytes = b"fixed installer"
+    archive_bytes = {"application": b"app", "candidate": b"cand"}
+    archives = {}
+    for name, body in archive_bytes.items():
+        path = tmp_path / (name + ".tar.gz")
+        path.write_bytes(body)
+        path.chmod(0o600)
+        archives[name] = {"path": str(path), "sha256": hashlib.sha256(body).hexdigest()}
+    archives["application"]["revision"] = "a" * 40
+    stage = {
+        "environment": "a",
+        "expires_at": time.time() + 900,
+        "observe_only": False,
+        "python": "3.12",
+        "target": {"host": "managed-a", "user": "aiops", "port": 2222},
+        "installer": {
+            "revision": "f" * 40,
+            "sha256": hashlib.sha256(installer_bytes).hexdigest(),
+        },
+        "archives": archives,
+    }
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="124"\nhost="managed-a"\n')
+    scripts = []
+    completed = []
+    result_body = {
+        "id": identifier,
+        "environment": "a",
+        "scope": "site-cold-installation-only",
+        "state": "observed",
+        "executable": False,
+        "installation": "installed",
+        "version": "1.40.0",
+        "source_revision": archives["application"]["revision"],
+        "artifact_sha256": archives["application"]["sha256"],
+        "config_sha256": "c" * 64,
+        "registry_sha256": "d" * 64,
+    }
+
+    def run(args, **kwargs):
+        if args[0] == "bash":
+            Path(args[-1]).write_bytes(installer_bytes)
+        elif args[0] == "dev-host" and args[-1].endswith(
+            "runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -"
+        ):
+            script = kwargs["input"].decode()
+            source = next(v for v in stage["archives"].values() if repr(v["path"]) in script)
+            kwargs["stdout"].write(Path(source["path"]).read_bytes())
+        return subprocess.CompletedProcess(args, 0)
+
+    def output(args, **kwargs):
+        scripts.append(kwargs["input"])
+        return json.dumps(result_body)
+
+    def request(payload):
+        if payload["installation"] == "stage":
+            return stage
+        if payload["installation"] == "authorize":
+            return {"authorized": True}
+        if payload["installation"] == "complete":
+            completed.append(payload["result"])
+            return payload["result"]
+        raise AssertionError(payload)
+
+    monkeypatch.setattr(worker.subprocess, "run", run)
+    monkeypatch.setattr(worker.subprocess, "check_output", output)
+    result = worker.installation_run(tmp_path, request, identifier, owner, cold=True)
+    # 远端结果原样回传：若spec构造KeyError被吞，这里只会是reconcile骨架。
+    assert result["state"] == "observed" and result["installation"] == "installed"
+    assert completed == [result_body]
+    assert len(scripts) == 1 and "'cold-run'" in scripts[0]
+    spec = json.loads(ast.literal_eval(scripts[0].split(",input=", 1)[1].split(",stdout=", 1)[0]))
+    assert "expected" not in spec
+    assert spec["python"] == "3.12" and set(spec["archives"]) == {"application", "candidate"}
+
+
 def test_install_driver_tail_executes_old_and_new_bundle_interpreter_contract(
     installation_state, tmp_path, monkeypatch
 ):

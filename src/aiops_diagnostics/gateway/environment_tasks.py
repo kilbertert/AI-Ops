@@ -55,6 +55,7 @@ def _public(row):
         "candidate-register",
         "candidate-validate",
         "environment-publish",
+        "site-install",
     }:
         state = "queued"
     if state == "executing":
@@ -130,8 +131,14 @@ def _plan_task(path, identity, identifier, reference, action_fields):
             return _public(_row(conn, task_id))
 
 
-def submit(path, identity, identifier, reference):
-    return _plan_task(path, identity, identifier, reference, {"action": "site-preflight"})
+def submit(path, identity, identifier, reference, *, after=None):
+    fields = {"action": "site-preflight"}
+    if after is not None:
+        if not isinstance(after, str) or not re.fullmatch(r"task_[0-9a-f]{32}", after):
+            raise TaskRefused("ENVIRONMENT_TASK_INVALID")
+        # 初装后重建的预检不复用同计划旧行；after只改变确定性编号。
+        fields["after"] = after
+    return _plan_task(path, identity, identifier, reference, fields)
 
 
 def submit_verify(path, identity, identifier, check, reference):
@@ -419,11 +426,23 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
                 if json.loads(row["request"]).get("action") == "candidate-prepare":
                     for child_id in json.loads(row["request"])["children"].values():
                         child = _row(conn, child_id)
-                        if json.loads(child["request"]).get("candidate_parent") == identifier and child[
-                            "state"
-                        ] in {"queued", "running", "reconcile"}:
+                        child_request = json.loads(child["request"])
+                        bound = child_request.get("candidate_parent") == identifier or (
+                            child_request.get("action") == "site-install"
+                            and child_request.get("preparation") == identifier
+                        )
+                        if bound and child["state"] in {
+                            "queued",
+                            "running",
+                            "reconcile",
+                            "waiting",
+                            "executing",
+                            "checking",
+                        }:
                             child_state = (
-                                child["state"] if child["state"] in {"running", "reconcile"} else "cancelled"
+                                child["state"]
+                                if child["state"] in {"running", "reconcile", "executing", "checking"}
+                                else "cancelled"
                             )
                             conn.execute(
                                 "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
@@ -624,6 +643,7 @@ def worker(path, reference, payload, *, internal_workspace=False):
             "candidate-install",
             "candidate-register",
             "candidate-validate",
+            "site-install",
         }:
             raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
         _authorize(path, tuple(request["identity"]), row["environment"])
@@ -664,6 +684,7 @@ def _next(path, reference):
                 "AND json_extract(request,'$.action') IS NOT 'candidate-install' "
                 "AND json_extract(request,'$.action') IS NOT 'candidate-register' "
                 "AND json_extract(request,'$.action') IS NOT 'candidate-validate' "
+                "AND json_extract(request,'$.action') IS NOT 'site-install' "
                 "AND lease_until<=? AND (state!='reconcile' OR updated_at<=?) "
                 "AND NOT EXISTS (SELECT 1 FROM environment_tasks AS live "
                 "WHERE live.environment=task.environment AND live.id!=task.id "
