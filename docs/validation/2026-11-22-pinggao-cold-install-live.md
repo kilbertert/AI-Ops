@@ -47,13 +47,15 @@ error_log均为默认级别、无`debug_connection`。
 
 95专属共享节点（41上`aiops-environment-95-*`两容器）的`CapabilityReporter`每30秒
 经egress:9443→本片段→目标Gateway发起真实POST。从节点容器内重放同一形状与真实凭据，
-链路贯通至鉴权层，返回`403 NODE_NOT_AUTHORIZED`：停用环境尚无运行配置目标
-（`operator_apps`空、无targets文件），这是停用语义本身——能力登记须待激活渲染运行配置，
-不属于本窗口，且未按合同手工伪造。
+链路贯通至鉴权层，返回`403 NODE_NOT_AUTHORIZED`：当前尚无运行目标
+（`operator_apps`空、无targets文件）。按既有合同，能力回报的前置是
+`candidate-register`写入运行目标而非正式激活——停用环境登记后亦可上报
+（见124登记回执）；本窗口止于此，未按合同手工伪造。
 
 ## 结束状态
 
 - 目标注册表`environment.json`：环境`enabled:false`、租户`enabled:false`，revision 1。
 - 正式路由0条；未创建模型问答、grant、发布或准入；公司服务未动。
 - 旧会话已退出且拒绝复放；页面草稿与生效目录保持停用。
-- 遗留接受项：能力回报INSERT与正式业务矩阵待激活窗口；第二真实租户仍缺。
+- 遗留接受项：能力回报INSERT待运行登记（candidate-register）；正式业务矩阵待开通窗口；
+  第二真实租户仍缺。
