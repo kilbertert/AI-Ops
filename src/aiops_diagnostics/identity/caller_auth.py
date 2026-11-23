@@ -301,6 +301,13 @@ class EntryCallerResolver:
         ``all``/``self`` 与接缝未注入（服务侧内部凭据未配）时原样透传：前者由
         ``refresh_scope`` 同样放行，后者按复核既有 fail closed 处理。
         目录答复跨租户或不可达：不落回会话链，按本链真实分类拒绝。
+
+        ``/user/ds`` 断言的 ``siteIds``（直授站点）**不并入**授权集合：本条链上
+        站点权威只有实时店铺→站点映射一份，并集等于拿登录快照给自己加授权。
+        仅持有直授站点、映射为空者在此被收窄为空集合——这与 ``refresh_scope``
+        对同一账号本就会做的事相同（复核/回读同样替换），是把既有拒绝**提前**
+        到首鉴并保持三段口径一致，不是本接缝新增的收窄；下游 ``operator_scope``
+        按既有 OPERATOR_SITE_SCOPE 判拒。
         """
         scope = context.data_scope
         if self._site_scope is None or scope.type != SCOPE_TYPE_ORGAN:
