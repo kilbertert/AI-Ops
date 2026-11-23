@@ -142,7 +142,11 @@ def current(context, conn, identifier, *, fresh=False):
                 Path(context.settings.environment_onboarding_file).read_bytes()
             ).hexdigest() not in {change.get("references_after"), change["references_before"]}:
                 raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
-    if fresh and (row["cancel"] or request["plan"]["expires_at"] <= time.time()):
+    # attempted 即 committed：计划窗只约束启动，不再约束在飞链路——与登记任务
+    # dispatched 后只按冻结账本对账同规；取消行与漂移检查（上方分支）仍然硬拒。
+    if fresh and (
+        row["cancel"] or not request.get("attempted") and request["plan"]["expires_at"] <= time.time()
+    ):
         raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
     return row, request
 
@@ -565,7 +569,9 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
                 "prompt": readiness["operator_prompt"],
             },
         },
-        "expires_at": request["plan"]["expires_at"],
+        # 发行期限按签发时刻计：attempted 链已不受计划窗约束（ADR-0315），
+        # 远端 stage/verify/activate 与 trial 加载都复核此值，须覆盖链尾余量。
+        "expires_at": time.time() + 3600,
         "gateway_url": readiness["gateway_url"],
         "catalogue_token": readiness["catalogue_token"],
         "case_ref": request["case_ref"],
