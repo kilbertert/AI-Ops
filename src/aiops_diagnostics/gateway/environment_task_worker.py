@@ -395,6 +395,44 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
     return request({"id": identifier, "owner": owner, "result": result})
 
 
+def registration_intent_absent(root, host, environment, identifier):
+    """远端登记意图缺席才证明登记步从未越过首写；不可核验一律按在场处理。
+
+    registration-tasks/<id>.json 是 register() 在写任何 store 行之前的唯一
+    落盘意图：确定缺席即证明该次派发零副作用。与 target_staged 同契约——
+    远端脚本以 7 回答「缺席」；dev-host 自身失败（传输/权限落在 1/255）
+    与环境锁被占（9，远端 task.py 可能在飞）都收敛到在场侧。
+    """
+    lockpath = "/run/lock/aiops-access-" + environment + ".lock"
+    marker = "/opt/aiops-access-" + environment + "/registration-tasks/" + identifier + ".json"
+    script = "\n".join(
+        [
+            "import fcntl,os,sys",
+            "from pathlib import Path",
+            f"fd=os.open({lockpath!r},os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW,0o600)",
+            "lock=os.fdopen(fd,'w')",
+            "st=os.fstat(lock.fileno())",
+            "if st.st_uid!=0 or st.st_mode&0o077 or st.st_nlink!=1:sys.exit(9)",
+            "try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)",
+            "except BlockingIOError:sys.exit(9)",
+            f"sys.exit(0 if Path({marker!r}).is_file() else 7)",
+            "",
+        ]
+    )
+    try:
+        probe = subprocess.run(
+            ["dev-host", "exec", host, "--allow-service-exec", "--", "python3", "-B", "-"],
+            cwd=root,
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=70,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 7
+
+
 def installation_run(root, request, identifier, owner, *, registration=False, cold=False):
     """运维宿主搬运中央私有制品；未知结果只核对同一远端任务。"""
     action = "registration" if registration else "installation"
@@ -618,5 +656,9 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                 raise ValueError("installation response too large")
             result = json.loads(raw)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):
-        pass  # 远端可能已切换：记录未知，只允许本任务后续observe。
+        # 登记意图缺席证明登记步从未越过首写：已派发任务凭此安全终态化，
+        # 否则 observe-only 无法重放登记、reconcile 会永远占住互斥。
+        if registration and registration_intent_absent(root, host, staged["environment"], identifier):
+            result["result"] = "absent"
+            result["remote_intent"] = "absent"
     return request({action: "complete", "id": identifier, "owner": owner, "result": result})
