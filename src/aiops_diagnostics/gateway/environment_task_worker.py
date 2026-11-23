@@ -1,7 +1,8 @@
 """单次受管现场预检：中央任务HMAC与dev-host；不安装/恢复或激活。
 
-「worker」指 ``aiops-admin`` 命令经 SSH 在受管主机上执行的远程半边，
-不是本机常驻守护进程（同名约定见 ``gateway/__init__.py``）。
+「worker」指发起机上的单次执行体（``aiops-admin environment-task-worker``），
+它经 ``dev-host exec``（SSH）访问受管目标与中央网关；真正在受管主机上
+跑的是对应的 ``environment-task-dispatch``。不是常驻守护进程。
 """
 
 import hashlib

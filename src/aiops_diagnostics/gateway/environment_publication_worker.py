@@ -1,7 +1,7 @@
 """原受管worker执行发布步骤；进程消失后只有同operation对账。
 
-「worker」指 ``aiops-admin`` 命令经 SSH 在受管主机上执行的远程半边，
-不是本机常驻守护进程（同名约定见 ``gateway/__init__.py``）。
+「worker」指发起机上的单次执行体，经 ``dev-host exec``（SSH）访问
+受管目标；不是常驻守护进程。
 """
 
 import hashlib
