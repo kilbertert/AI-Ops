@@ -367,12 +367,8 @@ def _entry_app(tmp_path, monkeypatch, *, transport, redis_store, tenants=None, e
         environment_registry_file=str(registry),
         third_session_service_token=SERVICE_TOKEN,
     )
-    monkeypatch.setattr(
-        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen", transport
-    )
-    monkeypatch.setattr(
-        "aiops_diagnostics.identity.third_session_auth.redis.Redis", lambda **_: redis_store
-    )
+    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.identity.third_session_auth.redis.Redis", lambda **_: redis_store)
     app = create_gateway_app(
         settings=settings,
         store=GatewayStore(settings.database_file),
@@ -430,9 +426,7 @@ def test_registered_operator_disabled_or_foreign_tenant_forbidden(tmp_path, monk
         ([{"id": "same-tenant", "enabled": False}], "same-tenant"),
         ([{"id": "same-tenant", "enabled": True}], "other-tenant"),
     ):
-        transport = _FakeUpmsTransport(
-            user_info=_operator_info(tenant_id), data_scope={"type": 4}
-        )
+        transport = _FakeUpmsTransport(user_info=_operator_info(tenant_id), data_scope={"type": 4})
         app = _entry_app(
             tmp_path,
             monkeypatch,
@@ -457,9 +451,7 @@ def test_upms_rejection_never_falls_back_to_session(tmp_path, monkeypatch):
         return _FakeUpmsResponse({"code": 403, "msg": "denied", "data": None})
 
     redis_store = _RedisStore(_session_payload())
-    app = _entry_app(
-        tmp_path, monkeypatch, transport=rejected, redis_store=redis_store
-    )
+    app = _entry_app(tmp_path, monkeypatch, transport=rejected, redis_store=redis_store)
     with TestClient(app) as client:
         response = client.get(
             "/v1/orders/order/access",
@@ -478,9 +470,7 @@ def test_upms_unavailable_keeps_chain_classification(tmp_path, monkeypatch):
         raise urllib.error.URLError("connection refused")
 
     redis_store = _RedisStore(_session_payload())
-    app = _entry_app(
-        tmp_path, monkeypatch, transport=unavailable, redis_store=redis_store
-    )
+    app = _entry_app(tmp_path, monkeypatch, transport=unavailable, redis_store=redis_store)
     with TestClient(app) as client:
         response = client.get(
             "/v1/orders/order/access",
@@ -564,4 +554,3 @@ def test_upms_operator_scope_uses_ds_and_shop_mapping(tmp_path, monkeypatch):
     # /user/ds 断言的两个来源都不能丢：siteIds 原样 + shopIds 经归属映射换算。
     assert query_scope.site_ids == ("SITE-DS-1", "SITE-SHOP-1")
     assert query_scope.user_id is None and query_scope.tenant_id == "same-tenant"
-
