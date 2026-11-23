@@ -151,7 +151,11 @@ def dispatch(context, payload):
             }
             if (
                 not isinstance(result, dict)
-                or set(result) != set(expected) | {"state", "result"}
+                or set(result)
+                not in (
+                    set(expected) | {"state", "result"},
+                    set(expected) | {"state", "result", "remote_intent"},
+                )
                 or any(type(result[k]) is not type(v) or result[k] != v for k, v in expected.items())
                 or result["state"] not in {"observed", "reconcile"}
                 or result["result"]
@@ -160,13 +164,19 @@ def dispatch(context, payload):
                     if result["state"] == "observed"
                     else {"absent", "unconfirmed"}
                 )
+                or result.get("remote_intent", "absent") != "absent"
+                or "remote_intent" in result
+                and result["result"] != "absent"
             ):
                 raise tasks.TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
             state = (
                 "checking" if result["state"] == "reconcile" else "cancelled" if row["cancel"] else "observed"
             )
-            # 未派发且只读确认不存在，安全结束；已派发的未知请求不能提前释放互斥。
-            if result["result"] == "absent" and not request.get("dispatched"):
+            # 未派发且只读确认不存在，安全结束；已派发且远端意图被证明缺席
+            # （意图是登记首个落盘写，缺席即零副作用），同样安全结束。
+            if result["result"] == "absent" and (
+                not request.get("dispatched") or result.get("remote_intent") == "absent"
+            ):
                 state = "cancelled" if row["cancel"] else "blocked"
             conn.execute(
                 "UPDATE environment_tasks SET state=?,result=?,owner='',lease_until=0,updated_at=? "
