@@ -89,17 +89,11 @@ def ingress(tmp_path_factory: pytest.TempPathFactory):
         f'set $aiops_user_operator_source_key "{OPERATOR_SOURCE_KEY}";\n',
         encoding="utf-8",
     )
-    inc = INC.read_text("utf-8").replace(
-        "http://127.0.0.1:8788", f"http://127.0.0.1:{upstream_port}"
-    )
+    inc = INC.read_text("utf-8").replace("http://127.0.0.1:8788", f"http://127.0.0.1:{upstream_port}")
     (root / "proxy.inc").write_text(inc, encoding="utf-8")
     site = CONF.read_text("utf-8").replace("__ENV__", "testenv")
-    site = site.replace(
-        "/etc/aiops-testenv/nginx-user-ingress-auth.conf", str(root / "auth.conf")
-    )
-    site = site.replace(
-        "/etc/aiops-testenv/environment-user-ingress-proxy.inc", str(root / "proxy.inc")
-    )
+    site = site.replace("/etc/aiops-testenv/nginx-user-ingress-auth.conf", str(root / "auth.conf"))
+    site = site.replace("/etc/aiops-testenv/environment-user-ingress-proxy.inc", str(root / "proxy.inc"))
 
     echo = (
         f"location / {{ return 200 '{MARKER}|$request_method|$request_uri|"
