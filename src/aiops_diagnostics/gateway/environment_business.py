@@ -29,6 +29,10 @@ class ValidationRefused(ValueError):
         super().__init__(code)
 
 
+class CaseExpired(ValidationRefused):
+    """案例窗口真实闭合的细分信号：对外error_code不变，复验方据此分终态。"""
+
+
 def valid_spec(spec):
     if (
         not isinstance(spec, dict)
@@ -84,7 +88,6 @@ def load_case(context, spec, capability):
         or (case["environment"], case["tenant_id"]) != (spec["environment"], spec["tenant_id"])
         or type(case["expires_at"]) not in (int, float)
         or not math.isfinite(case["expires_at"])
-        or not time.time() < case["expires_at"] <= time.time() + 3600
         or not isinstance(case["cases"], dict)
         or set(case["cases"]) - set(CAPABILITIES)
         or any(
@@ -92,6 +95,13 @@ def load_case(context, spec, capability):
             for k in ("operator_token", "consumer_session")
         )
     ):
+        raise ValidationRefused("ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID")
+    # 窗口闭合与内容无效分开：只有实际越过的期限是可判终态；超出允许上限的
+    # 未来期限属无效输入（修正后可重核），与篡改/异形同按拒绝处理。
+    now = time.time()
+    if case["expires_at"] <= now:
+        raise CaseExpired("ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID")
+    if case["expires_at"] > now + 3600:
         raise ValidationRefused("ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID")
     item = case["cases"].get(capability)
     required = (
