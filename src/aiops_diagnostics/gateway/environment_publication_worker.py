@@ -388,12 +388,10 @@ def execute(root, request, identifier, owner):
             call("record", step="verify", result=verification)
             return call("yield")
         verification = steps["verify"]
-        call("intent", step="source")
-        updated = call("source-configuration")
-        call("record", step="source", result=updated)
-        if verification.get("state") == "passed" and time.time() - verification.get("observed_at", 0) > 300:
-            # 距上次完整复验已逾准入窗：准入前在同operation上重核身份/案例/原run/
-            # 配置/知识，取回新确认时刻的proof。只复验已有证据面，不重放模型。
+        if verification.get("state") == "passed":
+            # 准入前在同operation上按发行文档重核同一证据面、取回新确认时刻的
+            # proof：不只在proof逾300s时复核——发行物/案例到期、上次activate
+            # 失败后的重领，都由目标verdict给确定终态，本端不猜钟也不重放模型。
             verification = local_trial(
                 root,
                 source["target"],
@@ -407,13 +405,16 @@ def execute(root, request, identifier, owner):
             )
             call("record", step="verify", result=verification)
         if verification.get("state") != "passed":
-            # 发行物/案例期限已尽属终态而非待对账：落blocked，原页面取消→恢复，
-            # 不再持同一过期proof无限重领activate。
+            # 发行物/案例期限已尽属终态而非待对账：先于source写落blocked，
+            # 原页面取消→恢复照旧，不再持同一过期proof无限重领activate。
             result.update(
                 state="expired",
                 error_code=verification.get("error_code") or "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED",
             )
             return call("complete", result=result)
+        call("intent", step="source")
+        updated = call("source-configuration")
+        call("record", step="source", result=updated)
         intent = call("intent", step="activate")
         result = target_task(
             root,

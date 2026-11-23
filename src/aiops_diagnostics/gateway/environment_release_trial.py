@@ -9,10 +9,14 @@ from aiops_diagnostics.common.private_files import validate_private_file, write_
 from aiops_diagnostics.consumer.candidate_trial import consumer_identity
 from aiops_diagnostics.consumer.consumer_trial import ConsumerTrial
 from aiops_diagnostics.execution.chat_route_bindings import RouteBinding
-from aiops_diagnostics.execution.run_deliverability import SUCCEEDED
+from aiops_diagnostics.execution.run_deliverability import SUCCEEDED, deliverable
 from aiops_diagnostics.gateway import environment_business as business
 from aiops_diagnostics.gateway import environment_registry
 from aiops_diagnostics.publication.environment_release import read_record
+
+
+class ReleaseExpired(ValueError):
+    """发行物期限真实已尽的细分信号：域不符/篡改仍是普通拒绝，由调用方分终态。"""
 
 
 def document(context, identifier):
@@ -23,12 +27,10 @@ def document(context, identifier):
     path = context.settings.data_home / "environment-publications" / (identifier + ".release.json")
     validate_private_file(path)
     result = json.loads(path.read_text())
-    if (
-        result["environment"] != context.settings.environment
-        or result["id"] != identifier
-        or result["expires_at"] <= time.time()
-    ):
+    if result["environment"] != context.settings.environment or result["id"] != identifier:
         raise ValueError("release scope changed")
+    if result["expires_at"] <= time.time():
+        raise ReleaseExpired("release expired")
     return result
 
 
@@ -291,6 +293,7 @@ def read(context, payload):
     trial_id = payload["trial_id"]
     adapter = context.consumer_candidate_trials.leases.get(trial_id)
     order_no = expected_reference = None
+    live = False
     if adapter is not None and isinstance(adapter, LocalConsumer) and adapter.doc["id"] == doc["id"]:
         try:
             # 原ConsumerTrial会在结束关闭数据能力；完成读回核原scope/现行知识/原run。
@@ -299,6 +302,7 @@ def read(context, payload):
                 adapter.scope["order_no"],
                 adapter.case["cases"]["consumer"]["reference_id"],
             )
+            live = True
         except ValueError:
             # 租约自身的300s窗关闭不吞错也不放大：交给持久锚点重核同一证据面。
             order_no = None
@@ -319,7 +323,9 @@ def read(context, payload):
         or run.app_id != doc["apps"]["consumer"]["app_id"]
         or run.workflow_id != doc["apps"]["consumer"]["workflow_id"]
         or run.scope_fingerprint != caller.scope_fingerprint
-        or run.state != SUCCEEDED
+        # 活租约路径保持deliverable（180s交付窗）；锚点复验只核「同一成功run曾完成」
+        # 的历史事实，不把交付TTL伪装成证据存在性。
+        or (not deliverable(run) if live else run.state != SUCCEEDED)
     ):
         raise ValueError("release run identity mismatch")
     calls = (context.dify_run_store.context(run.run_id) or {}).get("calls", [])
@@ -359,60 +365,79 @@ def read(context, payload):
 
 
 def complete(context, payload):
+    from aiops_diagnostics.gateway import environment_trial
+
     try:
         doc = document(context, payload["operation"])
         require_spec(doc, payload["spec"])
         case, _ = business.load_case(context, payload["spec"], "consumer")
-    except ValueError:
-        # 发行物/案例期限已尽属终态而非待对账：上游据此落可恢复态而非无限重领。
+        path = (
+            context.settings.data_home
+            / "environment-publications"
+            / (doc["id"] + ".consumer-verification.json")
+        )
+        validate_private_file(path)
+        stored = json.loads(path.read_text())
+        result = read(
+            context,
+            {
+                "operation": doc["id"],
+                "trial_id": stored["trial_id"],
+                "expected_reference": case["cases"]["consumer"]["reference_id"],
+            },
+        )
+        if result["state"] != "passed":
+            raise ValueError("formal consumer evidence unavailable")
+        proofs = []
+        for capability in ("order", "offline"):
+            spec = payload["spec"]
+            case, digest = business.load_case(context, spec, capability)
+            trial_id = payload["trials"][capability]
+            file = trial_path(context, doc["id"], capability)
+            validate_private_file(file)
+            intent = json.loads(file.read_text())
+            if (
+                intent["spec"] != spec
+                or intent["case_sha256"] != digest
+                or intent["result"]["trial_id"] != trial_id
+            ):
+                raise ValueError("operator run belongs to another operation")
+            # 租约失活不抹除已落账事实：完成度读持久QA/run，授权本身按同一
+            # case/runtime重核现行公司身份与发布目标；scope指纹须等于原run。
+            run = context.agent_run_store.by_qa(trial_id)
+            qa = context.store.get_assistant_question(trial_id, run.scope_fingerprint) if run else None
+            if run is None or qa is None or qa["status"] != "completed":
+                raise ValueError("formal operator evidence incomplete")
+            caller = environment_trial.identity(context, case["operator_token"])
+            environment_trial.target(context, spec["operator_app"], doc["installed"]["runtime_sha256"])
+            if (
+                caller.scope_fingerprint != run.scope_fingerprint
+                or caller.effective_tenant_id != spec["tenant_id"]
+            ):
+                raise ValueError("formal operator identity changed")
+            proofs.append(
+                business.operator_evidence(context, capability, trial_id, case["cases"][capability], spec)
+            )
+        result.update(
+            operator_runs=[p["run_id"] for p in proofs],
+            spec=payload["spec"],
+            trials=payload["trials"],
+            # 确认时刻=最后一次全部核对完成的墙钟；消费者read开始时刻不算数。
+            observed_at=time.time(),
+        )
+        write_private_text(
+            context.settings.data_home / "environment-publications" / (doc["id"] + ".verification.json"),
+            json.dumps(result),
+        )
+        return result
+    except (ReleaseExpired, business.CaseExpired):
+        # 只有发行物/案例期限真实已尽才判终态：spec不符、身份撤权、锚点缺席、
+        # 内容篡改一律按原拒绝上抛，不吞成时间过期。
         return {
             "operation": payload["operation"],
             "state": "expired",
             "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED",
         }
-    path = (
-        context.settings.data_home / "environment-publications" / (doc["id"] + ".consumer-verification.json")
-    )
-    validate_private_file(path)
-    stored = json.loads(path.read_text())
-    result = read(
-        context,
-        {
-            "operation": doc["id"],
-            "trial_id": stored["trial_id"],
-            "expected_reference": case["cases"]["consumer"]["reference_id"],
-        },
-    )
-    if result["state"] != "passed":
-        raise ValueError("formal consumer evidence unavailable")
-    proofs = []
-    for capability in ("order", "offline"):
-        spec = payload["spec"]
-        case, _ = business.load_case(context, spec, capability)
-        trial_id = payload["trials"][capability]
-        file = trial_path(context, doc["id"], capability)
-        validate_private_file(file)
-        intent = json.loads(file.read_text())
-        if intent["spec"] != spec or intent["result"]["trial_id"] != trial_id:
-            raise ValueError("operator run belongs to another operation")
-        # 租约失活不抹除已落账事实：完成度读持久QA/run，证据仍由operator_evidence核。
-        run = context.agent_run_store.by_qa(trial_id)
-        qa = context.store.get_assistant_question(trial_id, run.scope_fingerprint) if run else None
-        if run is None or qa is None or qa["status"] != "completed":
-            raise ValueError("formal operator evidence incomplete")
-        proofs.append(
-            business.operator_evidence(context, capability, trial_id, case["cases"][capability], spec)
-        )
-    result.update(
-        operator_runs=[p["run_id"] for p in proofs],
-        spec=payload["spec"],
-        trials=payload["trials"],
-    )
-    write_private_text(
-        context.settings.data_home / "environment-publications" / (doc["id"] + ".verification.json"),
-        json.dumps(result),
-    )
-    return result
 
 
 def start_operator(context, payload):

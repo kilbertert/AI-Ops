@@ -13,6 +13,7 @@ from aiops_diagnostics.common.private_files import write_private_text
 from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
 from aiops_diagnostics.gateway import environment_registry
 from aiops_diagnostics.gateway import environment_release_trial as trial
+from aiops_diagnostics.gateway.environment_business import load_case as REAL_LOAD_CASE
 from aiops_diagnostics.knowledge import delegated_knowledge_client
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchResult,
@@ -267,10 +268,19 @@ def test_three_formal_runs_complete_from_real_tool_evidence(target, dual, monkey
     row = SelfServiceStore(ctx.settings.database_file).app(app)
     expected = node_publication.managed_target(ctx.settings, row["profile_id"], app, doc["tenant_id"])
     binding = chat_execution.trial_binding(ctx.settings, app)
-    monkeypatch.setattr(
-        environment_trial, "target", lambda *a: (expected, binding, doc["apps"]["operator"]["manifest"], row)
-    )
-    monkeypatch.setattr(environment_trial, "identity", lambda *a: scope(tenant="TENANT-B"))
+    targets = []
+    identities = []
+
+    def target_stub(*a):
+        targets.append(time.time())
+        return (expected, binding, doc["apps"]["operator"]["manifest"], row)
+
+    def identity_stub(*a):
+        identities.append(time.time())
+        return scope(tenant="TENANT-B")
+
+    monkeypatch.setattr(environment_trial, "target", target_stub)
+    monkeypatch.setattr(environment_trial, "identity", identity_stub)
     dual.f["state"].update(
         tenant="TENANT-B",
         monitor_rows=[
@@ -334,13 +344,26 @@ def test_three_formal_runs_complete_from_real_tool_evidence(target, dual, monkey
                 break
             time.sleep(0.01)
         assert read["status"] == "completed", (read, errors)
+    checks = len(identities)
     verified = trial.complete(ctx, {"operation": doc["id"], "spec": spec, "trials": trials})
     assert verified["state"] == "passed" and len(verified["operator_runs"]) == 2
     assert set(verified["operator_runs"]) == set(dispatches)
     assert verified["run_id"] == ctx.dify_run_store.by_qa(consumer["trial_id"]).run_id
+    # complete对每个operator能力重核现行公司身份与发布目标：同一case token再解、
+    # 同一runtime sha再比对，而非沿用start时的一次授权或租约。
+    assert len(identities) == checks + 2 and len(targets) == checks + 2
+    # 确认时刻=最后一次全部核对完成的墙钟：不得早于任何一次operator重核，
+    # 也不得沿用消费者read的确认时刻。
+    stored = json.loads(
+        (
+            ctx.settings.data_home / "environment-publications" / (doc["id"] + ".consumer-verification.json")
+        ).read_text()
+    )
+    assert verified["observed_at"] >= max(identities + targets) >= stored["observed_at"] - 1
     # 进程租约失活（重启或300s数据能力窗关闭）后，complete按持久锚点重核同一
     # 证据面并写回新的observed_at；run/operator_runs不变，模型不重放。
     first = verified["observed_at"]
+    checks = len(identities)
     ctx.consumer_candidate_trials.leases.clear()
     ctx.operator_cpms.candidate_authorizations.clear()
     time.sleep(0.01)
@@ -350,7 +373,25 @@ def test_three_formal_runs_complete_from_real_tool_evidence(target, dual, monkey
         verified["run_id"],
         verified["operator_runs"],
     )
-    assert len(dispatches) == 2 and len(requests) == 1
+    assert len(dispatches) == 2 and len(requests) == 1 and len(identities) == checks + 2
+    # 撤权的公司token在原run仍completed时也不得激活；身份/案例漂移是拒绝不是过期。
+    monkeypatch.setattr(
+        environment_trial,
+        "identity",
+        lambda *a: (_ for _ in ()).throw(environment_trial.TrialRefused("REVOKED")),
+    )
+    with pytest.raises(RuntimeError):
+        trial.complete(ctx, {"operation": doc["id"], "spec": spec, "trials": trials})
+    monkeypatch.setattr(environment_trial, "identity", lambda *a: scope(tenant="TENANT-A"))
+    with pytest.raises(ValueError, match="identity changed"):
+        trial.complete(ctx, {"operation": doc["id"], "spec": spec, "trials": trials})
+    monkeypatch.setattr(environment_trial, "identity", identity_stub)
+    file = ctx.settings.data_home / "environment-publications" / (doc["id"] + ".order.trial.json")
+    intent = json.loads(file.read_text())
+    intent["case_sha256"] = "0" * 64
+    write_private_text(file, json.dumps(intent))
+    with pytest.raises(ValueError, match="another operation"):
+        trial.complete(ctx, {"operation": doc["id"], "spec": spec, "trials": trials})
 
 
 def test_reconfirm_uses_persisted_anchors_after_lease_loss_without_replay(target):
@@ -398,33 +439,81 @@ def test_reconfirm_uses_persisted_anchors_after_lease_loss_without_replay(target
         )
 
 
-def test_complete_returns_expired_verdict_when_release_or_case_window_closed(target, monkeypatch):
-    from aiops_diagnostics.gateway.environment_business import ValidationRefused
-
-    ctx, doc, spec, _, _, _ = target
+def test_complete_returns_expired_verdict_when_release_or_case_window_closed(target, monkeypatch, tmp_path):
+    ctx, doc, spec, case, _, _ = target
     finish(target)
     payload = {"operation": doc["id"], "spec": spec, "trials": {}}
+    release_file = ctx.settings.data_home / "environment-publications" / (doc["id"] + ".release.json")
+    original = release_file.read_text()
     doc["expires_at"] = time.time() - 1
-    write_private_text(
-        ctx.settings.data_home / "environment-publications" / (doc["id"] + ".release.json"),
-        json.dumps(doc),
-    )
+    write_private_text(release_file, json.dumps(doc))
     assert trial.complete(ctx, payload) == {
         "operation": doc["id"],
         "state": "expired",
         "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED",
     }
-    doc["expires_at"] = time.time() + 900
-    write_private_text(
-        ctx.settings.data_home / "environment-publications" / (doc["id"] + ".release.json"),
-        json.dumps(doc),
-    )
-
-    def expired_case(*args):
-        raise ValidationRefused("ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID")
-
-    monkeypatch.setattr(trial.business, "load_case", expired_case)
+    # 写回原字节：doc指纹是锚点一部分，重算时间会把它变成另一份发行物。
+    write_private_text(release_file, original)
+    # 真实load_case按窗口判定分终态：expires_at越过只有CaseExpired入verdict；
+    # 形状无效/篡改（同一公开error_code）仍是拒绝，不吞成时间过期。
+    file = tmp_path / "validation-cases" / (spec["case_ref"] + ".json")
+    file.parent.mkdir(mode=0o700)
+    monkeypatch.setattr(trial.business, "case_file", lambda *a: file)
+    monkeypatch.setattr(trial.business, "load_case", REAL_LOAD_CASE)
+    body = {
+        "environment": spec["environment"],
+        "tenant_id": spec["tenant_id"],
+        "expires_at": time.time() - 1,
+        "operator_token": case.get("operator_token", "synthetic"),
+        "consumer_session": case["consumer_session"],
+        "cases": case["cases"],
+    }
+    write_private_text(file, json.dumps(body))
     assert trial.complete(ctx, payload)["state"] == "expired"
+    body["expires_at"] = time.time() + 600
+    del body["consumer_session"]
+    write_private_text(file, json.dumps(body))
+    with pytest.raises(trial.business.ValidationRefused):
+        trial.complete(ctx, payload)
+    body["consumer_session"] = case["consumer_session"]
+    body["cases"] = {"consumer": dict(case["cases"]["consumer"], reference_id="ref-other")}
+    write_private_text(file, json.dumps(body))
+    with pytest.raises(ValueError):
+        trial.complete(ctx, payload)
+
+
+def test_legacy_live_path_without_anchors_still_reads_and_upgrades_receipt(target):
+    ctx, doc, _, _, _, _ = target
+    started, result = finish(target)
+    assert result["state"] == "passed"
+    receipt = (
+        ctx.settings.data_home / "environment-publications" / (doc["id"] + ".consumer-verification.json")
+    )
+    legacy = json.loads(receipt.read_text())
+    del legacy["anchors"]
+    write_private_text(receipt, json.dumps(legacy))
+    # 活租约内的旧格式回执照常沿live路径读回；通过即升级写入真实锚点。
+    again = trial.read(
+        ctx,
+        {
+            "operation": doc["id"],
+            "trial_id": started["trial_id"],
+            "expected_reference": "ref-real",
+        },
+    )
+    assert again["state"] == "passed" and again["anchors"]["doc"]
+    # 租约失活后无首证锚点一律拒绝：旧任务走页面恢复，不迁移伪锚点。
+    ctx.consumer_candidate_trials.leases.clear()
+    write_private_text(receipt, json.dumps(legacy))
+    with pytest.raises(ValueError, match="unavailable"):
+        trial.read(
+            ctx,
+            {
+                "operation": doc["id"],
+                "trial_id": started["trial_id"],
+                "expected_reference": "ref-real",
+            },
+        )
 
 
 def test_same_conversation_followup_after_publication_uses_original_scope(target, dual, monkeypatch):

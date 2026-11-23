@@ -146,7 +146,22 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(
     monkeypatch.setattr(publication, "central_bundle", lambda *a, **kw: bundle)
     monkeypatch.setattr(publication, "connect", lambda *a: {"connected": True})
     monkeypatch.setattr(publication, "activate_directory", lambda *a: {"revision": 2})
-    monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        worker,
+        "local_trial",
+        lambda *a, **kw: (
+            {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "observed_at": time.time(),
+                "trials": a[3]["trials"],
+            }
+            if a[3].get("action") == "publication-trial-complete"
+            else {}
+        ),
+    )
     monkeypatch.setattr(
         environment_capacity,
         "run",
@@ -165,6 +180,7 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(
                 "operation": identifier,
                 "operator_runs": ["o", "f"],
                 "observed_at": time.time(),
+                "trials": {"order": "t1", "offline": "t2"},
             }
         ),
     )
@@ -295,8 +311,8 @@ def _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, observed_at
 
 
 def test_worker_reconfirms_stale_proof_on_target_before_activate(validated, tmp_path, monkeypatch):
-    # 距上次完整复验逾300s时activate不持旧proof：先在同operation上重核取回
-    # 新确认时刻，再把新鲜proof交给远端activate；全程不重放模型。
+    # 每次activate前都在同operation上重核取回新确认时刻的proof：不只在proof
+    # 逾300s时——发行物到期、activate失败重领都由目标verdict给终态；不重放模型。
     state = validated[0][0]
     identifier = publish(validated).json()["id"]
     worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time() - 400)
@@ -339,9 +355,38 @@ def test_worker_reconfirms_stale_proof_on_target_before_activate(validated, tmp_
     assert activated and 0 <= time.time() - activated[0]["observed_at"] < 300
 
 
+def test_worker_reconfirms_fresh_proof_before_every_activate(validated, tmp_path, monkeypatch):
+    # proof刚签发也要先复核再activate：新鲜度只是复验结果不是跳过理由。
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time())
+    refreshes = []
+
+    def trial(root, target, environment, payload, **kwargs):
+        if payload.get("action") == "publication-trial-complete":
+            refreshes.append(payload)
+            return {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "scope_fingerprint": "fp",
+                "observed_at": time.time(),
+                "trials": payload["trials"],
+            }
+        return {}
+
+    monkeypatch.setattr(worker, "local_trial", trial)
+    owner = "d" * 32
+    request({"installation_claim": True, "owner": owner})
+    result = worker.execute(tmp_path, request, identifier, owner)
+    assert result["result"]["activated"] is True, result
+    assert [p["action"] for p in refreshes] == ["publication-trial-complete"]
+
+
 def test_worker_lands_expired_blocked_and_restores_via_page(validated, tmp_path, monkeypatch):
     # 复验判终态（发行物/案例期限已尽）：任务落blocked而非无限重领过期activate；
-    # 原页面恢复入口照旧走取消→恢复，不要求新鲜证据。
+    # 且先于source配置写就终局，原页面恢复入口照旧走取消→恢复，不要求新鲜证据。
     state = validated[0][0]
     identifier = publish(validated).json()["id"]
     worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time() - 400)
@@ -357,11 +402,18 @@ def test_worker_lands_expired_blocked_and_restores_via_page(validated, tmp_path,
             else {}
         ),
     )
+    calls = []
+
+    def spy(payload):
+        calls.append(payload.get("publication"))
+        return request(payload)
+
     owner = "d" * 32
     request({"installation_claim": True, "owner": owner})
-    result = worker.execute(tmp_path, request, identifier, owner)
+    result = worker.execute(tmp_path, spy, identifier, owner)
     assert result["state"] == "blocked", result
     assert result["result"]["error_code"] == "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"
+    assert "source-configuration" not in calls
     assert request({"installation_claim": True, "owner": "e" * 32}).get("claimed") is not True
     response = state[0][2].post(
         "/v1/dify/management/environment-tasks", json={"restore_publication": identifier}

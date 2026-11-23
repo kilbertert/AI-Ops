@@ -36,18 +36,26 @@
   `run.state=="succeeded"` 的历史事实——交付 TTL 不伪装成证据存在性，
   与 operator 侧 `operator_evidence` 同语义。全部通过才回写新 `observed_at`
   与同一 anchors；任一不符按 changed 拒绝，锚点缺席按 unavailable 拒绝。
-- `release_trial.complete`：删 300s 早退与 `original_time` 回写；`document/
-  require_spec/load_case` 的拒绝归入终态，返回
+- `release_trial.complete`：删 300s 早退与 `original_time` 回写；只有发行物
+  `expires_at` 真实越过（`ReleaseExpired`）或案例窗口闭合（`CaseExpired`，
+  对外仍 `ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID`）才返回终态
   `{"state":"expired","error_code":"ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"}`；
-  operator 完成度改读持久 `agent_run_store`+QA 状态，不再要求进程租约。
+  spec 不符、案例形状无效、锚点缺席、身份撤权、内容篡改一律按原拒绝上抛，
+  不吞成时间过期。operator 完成度读持久 `agent_run_store`+QA，并在租约
+  消亡后按同一 case token 与 runtime sha 重新调用 `environment_trial.
+  identity`/`target` 重核现行公司身份与发布目标——scope 指纹须等于原
+  run、生效租户须等于 spec 租户、intent 的 `case_sha256` 须与现行案例
+  一致；`observed_at` 取最后一次全部核对完成后的墙钟。
 - `ops publication.activate`：receipt 按「除 `observed_at` 外逐项相等」核
   同一份证据身份；随后 `refresh_verification` 的结果被**消费**——300s
   新鲜度闸落在复验返回的确认时刻上，`state` 非 passed 或身份漂移仍拒。
-- `environment_publication_worker.execute`：`steps.verify.state` 为
-  passed 而 `observed_at` 逾 300s 时，先在目标经 `publication-trial-complete`
-  重核取回新 proof 并 `record` 覆盖 verify 步，再领 activate；verdict 为
-  expired（或 verify 步已记 expired）时以 `state="expired"` 完成——任务落
+- `environment_publication_worker.execute`：verify 步 passed 后，每次进入
+  activate 前（不止 proof 逾 300s）先经 `publication-trial-complete` 在
+  目标按发行文档重核取回新 proof 并 `record` 覆盖 verify 步，再写
+  source 配置、再领 activate；verdict 为 expired（或 verify 步已记
+  expired）时以 `state="expired"` 完成且先于 source 写——任务落
   blocked 不被 60s 节奏重领，原页面取消→恢复照旧不要求新鲜证据。
+  发行物到期、activate 失败重领的循环因此在下一轮复核拿到确定终态。
 
 ## 替代方案
 
