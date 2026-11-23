@@ -1,4 +1,9 @@
-"""单次受管现场预检：中央任务HMAC与dev-host；不安装/恢复或激活。"""
+"""单次受管现场预检：中央任务HMAC与dev-host；不安装/恢复或激活。
+
+「worker」指发起机上的单次执行体（``aiops-admin environment-task-worker``），
+它经 ``dev-host exec``（SSH）访问受管目标与中央网关；真正在受管主机上
+跑的是对应的 ``environment-task-dispatch``。不是常驻守护进程。
+"""
 
 import hashlib
 import json
