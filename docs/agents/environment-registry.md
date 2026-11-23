@@ -641,6 +641,11 @@ aiops-admin --config <中央私有配置> knowledge-delegation \
 已知续跑边界：消费者试用已开未收的容量死亡、远端 configuring/activating 相位死亡仍收敛核查；
 后者走取消→远端 restore 的设计出口。
 
+中央步发行前的工作区占用闸只判外来占用（ADR-0317）：同一 `(environment, tenant_id)` 下
+其他 app 的既有 consumer 登记是本发布自身的血统残留——提升孤儿（ADR-0312）或既有正式版——
+续发按取代放行，旧登记行与凭据原样保留；他租户或他环境占用同一 workspace 仍按
+「显式凭据迁移」拒绝。
+
 取消发生在证明副作用之前时不再跑回滚、直接按restored终态（ADR-0310/0311）：中央侧中央步只记意图未落bundle、
 且intent/release两个工件标记皆无；目标侧目标步只记意图、且任务环境锁下远端`publication-tasks/<任务>`不在场。
 两种情形共享应用或bundle工件作为证据级留档保留，不做清理；标记在场、锁被占或探测失败仍维持待核对，

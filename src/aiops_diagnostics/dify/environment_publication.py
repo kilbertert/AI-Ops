@@ -466,10 +466,14 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
     else:
         write_private_text(intent, json.dumps(snapshot, sort_keys=True))
     # 仅候选workspace默认凭据可切换；一个已有正式消费者占用此工作区时不能静默覆盖。
+    # 同(environment,tenant)的既有登记不算外来占用：提升孤儿(ADR-0312)与既有正式版
+    # 都是本租户自己的血统,续发即取代——他租户或他环境的占用仍拒绝(ADR-0317)。
     active_apps = [
         r
         for r in SelfServiceStore(settings.database_file).apps(entry="consumer")
-        if r["workspace_id"] == workspace and r["app_id"] != source.app_id
+        if r["workspace_id"] == workspace
+        and r["app_id"] != source.app_id
+        and (r["environment"], r["tenant_id"]) != (env, tenant)
     ]
     if active_apps:
         raise ValueError("workspace has another consumer; explicit credential migration required")

@@ -950,3 +950,203 @@ def test_stale_capacity_gates_first_mint_but_intent_marker_allows_resume(validat
     assert len(keys) == len(published) == 1 and enabled[0]
     private = json.loads(Path(result["path"]).read_text())
     assert private["capacity"]["observed_at"] == stale
+
+
+def test_same_tenant_consumer_residue_in_workspace_does_not_block_publish(validated, monkeypatch):
+    """同(environment,tenant)的既有登记是本发布自身的血统残留，不挡续发。
+
+    env95 实测（task_8fe0bcdc）：候选 081be053 发布提升后被 remint 成
+    a9624b48（ADR-0312），孤儿登记行仍占同一 workspace；旧闸把它判成外来
+    消费者，"workspace has another consumer" 每轮重抛、任务永挂
+    （ADR-0317）。同一工作区由他租户或他环境占用仍属外来冲突。
+    """
+    import copy
+    from types import SimpleNamespace
+
+    import yaml
+
+    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, environment_consumer
+    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+    original, _ = validated
+    state = original[0]
+    settings = state[2]
+    settings.chat_dify_key_dir = str(settings.data_home / "keys")
+    identifier = publish(validated).json()["id"]
+    owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    staged = internal(state, {"publication": "stage", "id": identifier, "owner": owner}).json()
+    request = staged["request"]
+    with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
+        child = json.loads(tasks._row(conn, request["children"]["consumer-prepare"])["request"])
+    context = SimpleNamespace(settings=settings)
+    spec = publication.describe(context, request, identifier)["spec"]
+    document = environment_consumer.document(child["consumer_source"], spec["consumer"]["knowledge_base_id"])
+    exported = copy.deepcopy(document)
+    for variable in exported["workflow"].get("environment_variables", []):
+        variable["selector"] = ["env", variable["name"]]
+    published = []
+    keys = []
+    enabled = [False]
+
+    class Console:
+        def __init__(self, *a):
+            pass
+
+        def _call(self, workspace, path, *, method="GET", body=None, **kwargs):
+            if path.endswith("/api-keys"):
+                if method == "POST":
+                    keys.append({"token": "synthetic-only-app-key", "id": "key-one"})
+                    return keys[0]
+                return {"data": keys}
+            if path.endswith("/api-enable"):
+                enabled[0] = body["enable_api"]
+                return {}
+            return {
+                "id": spec["consumer"]["app_id"],
+                "workflow": {"id": "fixed-workflow"} if published else None,
+                "enable_api": enabled[0],
+                "enable_site": False,
+            }
+
+    class Dsl:
+        def __init__(self, source):
+            pass
+
+        def export_dsl(self, *, workflow_id=None):
+            return yaml.safe_dump(exported)
+
+        def publish_workflow(self):
+            published.append(True)
+            return True
+
+        def published_workflow_id(self):
+            return "fixed-workflow"
+
+    monkeypatch.setattr(dify_console_admin, "DifyConsoleAdmin", Console)
+    monkeypatch.setattr(dify_dsl_pull, "DifyDslClient", Dsl)
+    request["steps"]["capacity"] = {"state": "passed", "observed_at": time.time(), "runs": ["c", "o", "f"]}
+    readiness = {
+        "operator_manifest": "frozen",
+        "operator_prompt": "sop",
+        "gateway_url": "https://a.example.test",
+        "catalogue_token": "ckc_synthetic",
+        "dify_chat_base_url": "https://dify.example.test/v1",
+    }
+    store = SelfServiceStore(settings.database_file)
+    # 同(environment,tenant)孤儿行：前一候选提升后留下的登记，续发即取代。
+    store.register(
+        app_id="081be053-orphan",
+        tenant_id=spec["tenant_id"],
+        workspace_id=spec["consumer"]["workspace_id"],
+        agent_name="consumer-081be053-orphan",
+        profile_id="",
+        actor="acceptance",
+        entry="consumer",
+        environment=spec["environment"],
+        targets={},
+    )
+    publication.central_bundle(context, request, spec, readiness, identifier)
+    assert len(keys) == len(published) == 1 and enabled[0]
+    # 取代是发行物指向新应用，不是删旧登记——孤儿行仍在册。
+    assert store.app("081be053-orphan") is not None
+
+
+def test_foreign_consumer_in_workspace_still_blocks_publish(validated, monkeypatch):
+    """他租户或他环境占用同一 workspace 仍是外来冲突：豁免只放同血统。"""
+    import copy
+    import sqlite3
+    from types import SimpleNamespace
+
+    import yaml
+
+    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, environment_consumer
+    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+    original, _ = validated
+    state = original[0]
+    settings = state[2]
+    settings.chat_dify_key_dir = str(settings.data_home / "keys")
+    identifier = publish(validated).json()["id"]
+    owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    staged = internal(state, {"publication": "stage", "id": identifier, "owner": owner}).json()
+    request = staged["request"]
+    with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
+        child = json.loads(tasks._row(conn, request["children"]["consumer-prepare"])["request"])
+    context = SimpleNamespace(settings=settings)
+    spec = publication.describe(context, request, identifier)["spec"]
+    document = environment_consumer.document(child["consumer_source"], spec["consumer"]["knowledge_base_id"])
+    exported = copy.deepcopy(document)
+    for variable in exported["workflow"].get("environment_variables", []):
+        variable["selector"] = ["env", variable["name"]]
+    published = []
+    keys = []
+
+    class Console:
+        def __init__(self, *a):
+            pass
+
+        def _call(self, workspace, path, *, method="GET", body=None, **kwargs):
+            if path.endswith("/api-keys"):
+                if method == "POST":
+                    keys.append({"token": "synthetic-only-app-key", "id": "key-one"})
+                    return keys[0]
+                return {"data": keys}
+            return {
+                "id": spec["consumer"]["app_id"],
+                "workflow": None,
+                "enable_api": False,
+                "enable_site": False,
+            }
+
+    class Dsl:
+        def __init__(self, source):
+            pass
+
+        def export_dsl(self, *, workflow_id=None):
+            return yaml.safe_dump(exported)
+
+        def publish_workflow(self):
+            published.append(True)
+            return True
+
+        def published_workflow_id(self):
+            return "fixed-workflow"
+
+    monkeypatch.setattr(dify_console_admin, "DifyConsoleAdmin", Console)
+    monkeypatch.setattr(dify_dsl_pull, "DifyDslClient", Dsl)
+    request["steps"]["capacity"] = {"state": "passed", "observed_at": time.time(), "runs": ["c", "o", "f"]}
+    readiness = {
+        "operator_manifest": "frozen",
+        "operator_prompt": "sop",
+        "gateway_url": "https://a.example.test",
+        "catalogue_token": "ckc_synthetic",
+        "dify_chat_base_url": "https://dify.example.test/v1",
+    }
+    store = SelfServiceStore(settings.database_file)
+    for index, occupant in enumerate(
+        (
+            {"tenant_id": "other-tenant", "environment": spec["environment"]},
+            {"tenant_id": spec["tenant_id"], "environment": "other-env"},
+        )
+    ):
+        store.register(
+            app_id=f"foreign-{index}",
+            tenant_id=occupant["tenant_id"],
+            workspace_id=spec["consumer"]["workspace_id"],
+            agent_name=f"consumer-foreign-{index}",
+            profile_id="",
+            actor="acceptance",
+            entry="consumer",
+            environment=occupant["environment"],
+            targets={},
+        )
+        with pytest.raises(ValueError, match="another consumer"):
+            publication.central_bundle(context, request, spec, readiness, identifier)
+        assert not keys and not published
+        # 上例外来行不留给下例：每例须单独被自己的占用判拒，残留会掩盖误放行。
+        with sqlite3.connect(settings.database_file) as db:
+            db.execute("DELETE FROM operator_apps WHERE app_id=?", (f"foreign-{index}",))
