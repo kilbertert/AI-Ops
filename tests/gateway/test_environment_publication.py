@@ -1056,6 +1056,7 @@ def test_same_tenant_consumer_residue_in_workspace_does_not_block_publish(valida
 def test_foreign_consumer_in_workspace_still_blocks_publish(validated, monkeypatch):
     """他租户或他环境占用同一 workspace 仍是外来冲突：豁免只放同血统。"""
     import copy
+    import sqlite3
     from types import SimpleNamespace
 
     import yaml
@@ -1146,3 +1147,6 @@ def test_foreign_consumer_in_workspace_still_blocks_publish(validated, monkeypat
         with pytest.raises(ValueError, match="another consumer"):
             publication.central_bundle(context, request, spec, readiness, identifier)
         assert not keys and not published
+        # 上例外来行不留给下例：每例须单独被自己的占用判拒，残留会掩盖误放行。
+        with sqlite3.connect(settings.database_file) as db:
+            db.execute("DELETE FROM operator_apps WHERE app_id=?", (f"foreign-{index}",))
