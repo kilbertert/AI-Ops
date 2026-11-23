@@ -68,8 +68,10 @@ code:
   与安装、登记、验证各步分开，绝不在同一动作里暗合。
 - **执行端在 dev-host，不在目标**。`environment_task_worker`/`environment_validation_worker`/
   `environment_publication_worker` 是发起主机上的 oneshot 执行器（dev-host 用户 timer
-  `aiops-site-preflight` 定期拉起），经 `dev-host exec`（SSH）到达受管主机；受管主机侧只跑
-  `environment-task-dispatch`/`environment-trial-dispatch` 内部领取。没有远程常驻 daemon。
+  `aiops-site-preflight` 定期拉起），经 `dev-host exec`（SSH）发出；`environment-task-dispatch`
+  是中央半边、固定在 41 以 `aiops41` 身份跑，目标主机上的任务执行体是安装包内的
+  `installer/task.py`；`environment-trial-dispatch` 跑在目标机（control 形态在 41）。
+  没有远程常驻 daemon。
 - **执行端重核安装器身份**：worker 先查任务修订是 `origin/main` 祖先（merge-base），再用
   `ops/environments/gateway/build-installer.sh` 重建安装器、sha256 比对一致才搬运
   （`dev-host cp`）；tar 成员白名单 `{REVISION,SHA256SUMS,install.py,runtime_check.py,
@@ -103,7 +105,7 @@ code:
   production.env+environment.json+两 manifest 的 sha256 快照），公司会话只存目标进程内存，
   `close` 不依赖正向授权。`ect_` 只在 `POST /v1/internal/consumer-data/agent` 放通
   （capability 必须 `agent`），消费侧规则见 [consumer-chat](../consumer/consumer-chat.mdx)。
-  停用候选管家试运行（D35）复用 `/v1/internal/environment-trial`：目标 task-key HMAC +
+  停用客服候选试运行（D35）复用 `/v1/internal/environment-trial`：目标 task-key HMAC +
   受管目标正常登录交接，≤20 个 5 分钟授权、重启失效，不放开普通目录准入、不写正式
   route/grant。已发布应用的沿原试跑由 `environment_release_trial`（只消费已发布 app 级
   key，`ConsumerTrial.published` 三元组，不建临时 app）承担。

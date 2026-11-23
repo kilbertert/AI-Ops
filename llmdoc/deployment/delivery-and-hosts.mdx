@@ -156,7 +156,7 @@ deploy-41 失败 → 生产未更新（远端自检回滚）；release-notes 失
 
 ## Canonical anchors
 
-安装手册阶段已延伸到 D39（register-runtime）/D40（业务验证）/D42（同环境追加租户，`runtime/2` 安装件）/D43（`publication.py` 正式发布，`environment-publications/` 私有目录+`current/capacity.json`+`knowledge-delegation.json`）；dev-host 侧由 `aiops-site-preflight.{service,timer}` 用户级 oneshot timer 定期拉起 `environment-task-worker` 领取只读任务（执行端模型与阶段合同见 [environment-onboarding](../gateway/environment-onboarding.mdx)）。
+安装手册阶段已延伸到 D39（register-runtime）/D40（业务验证）/D42（同环境追加租户，`runtime/2` 安装件）/D43（`publication.py` 正式发布，`environment-publications/` 私有目录+`current/capacity.json`+`knowledge-delegation.json`）；dev-host 侧由 `aiops-site-preflight.{service,timer}` 用户级 oneshot timer 定期拉起 `environment-task-worker`：无任务参数时先推进候选队列、再 claim 已授权的安装/注册/验证/发布任务（执行端模型与阶段合同见 [environment-onboarding](../gateway/environment-onboarding.mdx)）。
 
 - `deploy/README.md`（部署索引：尾号=主机逻辑名、`mN-*`=里程碑试验码非主机）
 - `deploy/deploy-41.sh`（各闸）+ `deploy/classify-remote-result.sh`（失败分类法）
