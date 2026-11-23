@@ -73,20 +73,26 @@ uv run pytest tests/integrations/test_environment_tool_ingress.py tests/test_nod
 
 入口分流在 server 上下文 `set`/`if` 完成（不新增 `map`，location 内 `if` 只有
 `return`，无写语句），依据是客户端 `X-Business-Entry`——它只决定用哪套凭据
-处理，不是身份本身：
+处理，不是身份本身。入口值按上游同款规范化（去空白+小写）识别，缺失按
+consumer 处理（41 公开入口实测契约：缺头旧客户端=consumer 链）：
 
 | 申报入口 | Authorization | 会话头 | X-AIOps-Source-Key |
 |---|---|---|---|
-| `consumer` | 换成本环境服务 Bearer（凭据片值） | `third-session`→`X-Third-Session` | 清空（走会话解析链） |
-| `operator` | 透传个人 Bearer | 两种会话头都清空（不混 consumer 会话） | 本环境独立值（走公司令牌链，凭据不与其他环境共享） |
-| 其他/缺失 | 不转发 | — | location 内 403 |
+| `consumer` 或缺失 | 换成本环境服务 Bearer（凭据片值） | `third-session`→`X-Third-Session` | 清空（走会话解析链） |
+| `operator`（规范化后） | 透传个人 Bearer | 两种会话头都清空（不混 consumer 会话） | 本环境独立值（走公司令牌链，凭据不与其他环境共享） |
+| 其他非空值 | 不转发 | — | location 内 403 |
 
 客户端自报的 `X-Third-Session`、`X-AIOps-Source-Key`、`X-AIOps-Environment(-Key)`、
-`X-AIOps-Gateway-Assertion` 一律覆盖或清空，到不了上游。身份仍由 Gateway 全量验证；
+`X-AIOps-Gateway-Assertion`、`Cookie` 一律覆盖或清空，到不了上游（95 宿主
+access_log 记 Cookie 字段，身份走自定义头不走 Cookie）。身份仍由 Gateway 全量验证；
 环境目录停用该环境时 Gateway 继续拒绝——本片不授予、不切换任何路由。
 operator 走公司令牌链是本环境的真实 resolver 需要来源密钥分派（`SourceKeyCallerResolver`
 把密钥验过的请求交给 `CompanyTokenCallerResolver`，即公司体系身份契约 D5）；
 环境未配来源门时凭据片留空值，operator 请求落到既有链被拒——这是 fail closed，不是放行。
+
+`/v1/media/` 例外：**签名即授权**，不看 `X-Business-Entry`、不透传任何身份头——
+该 location 内联 `proxy_pass`，Authorization/入口/会话/来源/环境断言/Cookie 全清空，
+只认 `media_<32>.<24>` 形状与 Gateway 签名校验（上游实测无 Authorization 即服务字节）。
 
 ### 生成固定制品
 
@@ -96,11 +102,11 @@ bash ops/environments/gateway/build-user-ingress.sh <已合并SHA> /private/user
 
 在开发机运行，包内只有 `REVISION`、`SHA256SUMS`、渲染环境号后的 conf/inc 与路由声明；
 **不含任何凭据值**。源代码/片段声明来自同一合并修订，不能用未合并工作树生成生产配置。
-制品及其摘要留私有运维账本，环境号只决定 `/etc/aiops-<环境号>/` 受控路径。
+制品及其摘要留私有运维账本，环境号只决定 `/etc/aiops-access-<环境号>/` 受控路径。
 
 ### 凭据片（root 现场生成，0600，不入制品）
 
-安装机创建 `/etc/aiops-<环境号>/nginx-user-ingress-auth.conf`，0600、属主同服务账号，
+安装机创建 `/etc/aiops-access-<环境号>/nginx-user-ingress-auth.conf`，0600、属主同服务账号，
 内容仅两行 `set`（无其他指令）：
 
 ```nginx
@@ -132,7 +138,10 @@ access_log 格式不含 Authorization/Cookie 等秘密字段、无 debug_connect
    覆盖安装则恢复备份中的旧版三件文件再校验 reload。均不改回调片、不动公司其他
    配置、不停止公司业务。
 
-本地验证：`uv run pytest tests/operations/test_environment_user_ingress.py`——真实 nginx +
-回显上游，覆盖声明路由全转发、consumer 凭据注入与会话转换、operator 透传与
-伪造头清空、非法入口/错误方法拒绝、管理面与声明外 `/v1/` 路由不转发。
-测试上游是替身，不证明真实公司数据或业务结论。
+本地验证：`uv run pytest tests/operations/test_environment_user_ingress.py`——两层：
+真 nginx + 回显上游覆盖声明路由全转发、consumer（含缺头）凭据注入与会话转换、
+operator 规范化透传与伪造头/Cookie 清空、非法入口/错误方法拒绝、管理面与声明外
+`/v1/` 路由不转发；真 nginx + **真 Gateway 进程**（一次性数据根，verify-aiops-gateway
+接缝层）覆盖匿名真实 401、合成会话真解析、operator 真实 schema 替身经来源密钥分派、
+登记目录停用真实 403、签名媒体真出字节、伪造来源密钥换不到公司身份。
+回显层上游是替身、seam 层 resolver 是契约形状替身，均不证明真实公司数据或业务结论。

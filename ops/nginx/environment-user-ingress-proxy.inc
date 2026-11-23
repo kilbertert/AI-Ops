@@ -17,6 +17,8 @@ proxy_set_header X-AIOps-Environment-Key  "";
 proxy_set_header X-AIOps-Gateway-Assertion "";
 proxy_set_header X-Forwarded-Host         "";
 proxy_set_header X-Forwarded-Proto        "";
+# 95 宿主 access_log 记 Cookie 字段；客户端身份走自定义头不走 Cookie，清空不透传。
+proxy_set_header Cookie                   "";
 proxy_set_header Host                     $host;
 proxy_set_header X-Real-IP                $remote_addr;
 proxy_set_header X-Forwarded-For          $proxy_add_x_forwarded_for;

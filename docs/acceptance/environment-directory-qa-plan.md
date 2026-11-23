@@ -292,6 +292,22 @@ D38主机身份验收：页面在有效冻结计划提交host-verify（verify_ta
 重复提交或换设备只回同任务；恢复目录/route单调且撤权不复活，旧租户问答和已存业务历史保持。
 实际systemd/共享服务/124公司数据与正式资料仍需独立现场授权；模型completed不证明业务准确率。
 
+## 环境用户助手入口（有限入口，P5 前置片）
+
+- 判据：`ops/nginx/environment-user-ingress-routes.txt` 唯一声明转发面；ADR-0319。
+- 可观察 HTTP（`tests/operations/test_environment_user_ingress.py`，真 nginx + 回显上游
+  与真 nginx + 真 Gateway 两层）：声明 11 条全转发；consumer（含缺头旧客户端，
+  41 实测契约）换服务 Bearer、third-session 转 X-Third-Session、来源密钥清空；
+  operator（规范化后）透传 Bearer、会话头清空、注入本环境来源密钥；非白名单入口
+  403；未声明方法 405；管理面与 `/v1/internal/*` 及声明外 `/v1/` 路由一律不转发；
+  Cookie/伪造 X-AIOps-* 一律不到上游；`/v1/media/` 只认签名 URL，不透传任何身份头。
+- 真 Gateway 缝（同一文件 seam 层，一次性数据根）：匿名真实 401、合成会话真解析、
+  operator 真实 schema 替身经来源密钥分派、登记目录停用真实 403、签名媒体真出字节、
+  伪造来源密钥换不到公司身份。
+- 现场验收（安装后，root 执行）：本环境正常会话/JWT 逐条复核上表；宿主日志前置
+  核查与回退按 `ops/environments/gateway/ingress.md`「环境用户助手入口」。
+- 不证明：真实公司数据、远端 Dify/会话存储活性、业务结论准确率。
+
 ## D44：真空机一键冷开通（含初装）
 
 - 判据：Feature「真空机一键冷开通先证明空机再经原安装器初装」、ADR-0308 与本片已批准冷路径验收合同。

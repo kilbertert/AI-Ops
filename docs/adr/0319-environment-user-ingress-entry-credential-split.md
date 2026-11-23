@@ -22,14 +22,21 @@ consumer 反过来必须看不到来源密钥（密钥验过会把它错分派�
   管理面、agent 注册、`/v1/internal/*` 不进本片。`=`/`^~` + `$uri` 形状闸，
   不依赖宿主原 location 写法、不被 `^~ /v1/` 遮蔽；测试断言网关其余 `/v1/` 路由不进。
 - 入口分流在 server 上下文 `set`/`if` 完成（不新增 `map`，location 内 `if` 只 `return`）：
-  `X-Business-Entry: consumer` 换环境服务 Bearer 并转换会话头；`operator` 透传
-  Bearer、清两种会话头、注入本环境来源密钥；其他/缺失入口 403。
-  入口头只选凭据处理方式，身份仍由 Gateway 全量验证；环境目录停用照常拒绝。
+  `X-Business-Entry: consumer` 或**缺失**换环境服务 Bearer 并转换会话头（缺头按
+  consumer 是 41 公开入口实测契约——旧客户端不发此头，默认 operator 或绕身份都
+  不允许，consumer 链是最窄且不绕身份的兼容位）；`operator`（按上游同款规范化
+  去空白+小写识别）透传 Bearer、清两种会话头、注入本环境来源密钥；其他非空入口
+  值 403。入口头只选凭据处理方式，身份仍由 Gateway 全量验证；环境目录停用照常拒绝。
 - 凭据片（服务 Bearer + operator 来源密钥）由 root 现场 0600 生成在
-  `/etc/aiops-<环境>/`，制品只带渲染环境号的模板——不进仓库、构建默认或日志；
-  缺失凭据片 `nginx -t` 失败，没有"先放行"窗口。各环境凭据独立，不共享。
+  `/etc/aiops-access-<环境>/`（环境访问面统一配置根），制品只带渲染环境号的
+  模板——不进仓库、构建默认或日志；缺失凭据片 `nginx -t` 失败，没有"先放行"窗口。
+  各环境凭据独立，不共享。
 - 客户端自报的 `X-Third-Session`、原始 `third-session`、`X-AIOps-Source-Key`、
-  `X-AIOps-Environment(-Key)`、`X-AIOps-Gateway-Assertion` 一律覆盖或清空。
+  `X-AIOps-Environment(-Key)`、`X-AIOps-Gateway-Assertion`、`Cookie` 一律覆盖或
+  清空（宿主 access_log 记 Cookie 字段；客户端身份走自定义头不走 Cookie）。
+- `/v1/media/` 是**签名即授权**的独立姿势：不看入口头、不走共用 `.inc`，
+  内联 `proxy_pass` 且全部身份/会话/来源/转发头清空——上游实测无 Authorization
+  即按签名服务字节，媒体 URL 出现在问答正文中时客户端本就不会带业务头。
 
 ## 替代方案
 
@@ -47,8 +54,9 @@ operator 也走公司网关那一跳（41 的 30899 链）：本环境没有可�
 ## 后果
 
 - 用户入口与回调片在同一 vhost 共存、各自独立安装与回退；本片回退不动公司配置。
-- `X-Business-Entry` 成为本环境客户端必须发送的契约头（与现有客户端一致）；
-  未发送或非白名单值收到 403 而不是被默认成某入口——不引入静默归类。
+- `X-Business-Entry` 缺失按 consumer 处理（41 实测契约，缺头旧客户端仍可用）；
+  非白名单非空值收到 403 而不是被默认成某入口——不引入静默归类；缺头 operator
+  客户端无法声明 operator 入口（与 41 相同，无新限制）。
 - operator 可用性依赖本环境 `company_source_key` + 公司令牌验证已配置；
   未配置时凭据片留空、operator 请求被既有链拒绝——这是设计内的 fail closed。
 - 宿主日志前置仍是边界：access_log 含 Authorization 或错误日志 info/debug 时拒绝安装，
