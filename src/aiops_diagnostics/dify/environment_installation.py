@@ -65,7 +65,10 @@ def current(context, conn, identifier, *, fresh=False):
         or parent["state"] != "observed"
         or parent_request["bindings"] != preparation._bindings(settings, parent_request["consumer_source"])
         or binding(settings, request["target"]["id"])[1] != request["node_binding"]
-        or fresh
+        # attempted 只证导出落盘；dispatched 才是远端可能 apply 的分界（authorize 翻转
+        # 先于远端执行）。未派发即远端零副作用，过期/取消必须终态化而非永远观察；
+        # 已派发保留冻结对账豁免（fresh=False 不查窗口/取消）。
+        or (fresh or not request.get("dispatched"))
         and (row["cancel"] or parent_request["plan"]["expires_at"] <= time.time())
     ):
         raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
@@ -274,8 +277,17 @@ def dispatch(context, payload):
                         current(context, conn, row["id"], fresh=not request["attempted"])
                 except (ValueError, RuntimeError, OSError, KeyError, TypeError):
                     conn.execute(
-                        "UPDATE environment_tasks SET state='blocked',error=?,updated_at=? WHERE id=?",
-                        ("ENVIRONMENT_TASK_OBSERVATION_REQUIRED", time.time(), row["id"]),
+                        "UPDATE environment_tasks SET state=?,error=?,updated_at=? WHERE id=?",
+                        (
+                            # cancelled 只给未派发任务（远端零副作用可证）；已派发
+                            # 行取消后仍落 blocked，未知副作用不释放互斥。
+                            "cancelled"
+                            if row["cancel"] and request["action"] == ACTION and not request.get("dispatched")
+                            else "blocked",
+                            "ENVIRONMENT_TASK_OBSERVATION_REQUIRED",
+                            time.time(),
+                            row["id"],
+                        ),
                     )
                     continue
                 conn.execute(
@@ -552,5 +564,7 @@ def dispatch(context, payload):
         "expires_at": request["plan"]["expires_at"],
         **({} if request["action"] == COLD_ACTION else {"expected": request["expected"]}),
         "archives": request["archives"],
-        "observe_only": attempted,
+        # 导出幂等（attempted）与执行幂等（dispatched）分开：未派发允许窗口内
+        # 重试 run，已派发只能观察回收；site-install 沿用 attempted 语义不变。
+        "observe_only": attempted if request["action"] == COLD_ACTION else bool(request.get("dispatched")),
     }
