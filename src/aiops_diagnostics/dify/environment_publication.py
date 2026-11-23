@@ -267,7 +267,11 @@ def dispatch(context, payload):
                 raise tasks.TaskRefused("ENVIRONMENT_PUBLICATION_STEP_INVALID")
             current(context, conn, row["id"], fresh=step != "restore")
             existing = request["steps"].get(step)
-            if existing:
+            # {"state":"started"} 只是授权标记而非执行结果：它分不清「授权后未跑」与
+            # 「副作用已落但未 record」。各步分发按重领可重入设计（中央步每个写动作都有
+            # 确认读守卫、远端脚本是标记幂等、容量是重测），重授 execute 是续跑不是重放；
+            # 只有已 record 的结果才把 intent 消费成 observed。
+            if existing and existing.get("state") != "started":
                 return {"execute": False, "observed": existing}
             request["attempted"] = True
             request["steps"][step] = {"state": "started"}
@@ -387,14 +391,16 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
         with gateway_db.connection(drafts._database(management._path(context)), readonly=True) as connection:
             current(context, connection, identifier, fresh=True)
 
+    directory = Path(settings.data_home) / "publication-bundles" / identifier
     capacity = request["steps"].get("capacity", {})
-    if not (Path(settings.data_home) / "publication-bundles" / identifier / "release.json").exists() and (
+    # intent.json 在场证明本步授权已在容量新鲜时铸成；续跑执行同一授权，不再按墙钟
+    # 复核——发行物仍如实携带测量时刻。无标记的首跑仍受 900s 新鲜度约束（ADR-0316）。
+    if not (directory / "release.json").exists() and (
         capacity.get("state") != "passed"
-        or time.time() - capacity.get("observed_at", 0) > 900
+        or (time.time() - capacity.get("observed_at", 0) > 900 and not (directory / "intent.json").exists())
         or len(capacity.get("runs", [])) != 3
     ):
         raise tasks.TaskRefused("ENVIRONMENT_PUBLICATION_CAPACITY_REQUIRED")
-    directory = Path(settings.data_home) / "publication-bundles" / identifier
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     from aiops_diagnostics.common.private_files import validate_private_directory
 

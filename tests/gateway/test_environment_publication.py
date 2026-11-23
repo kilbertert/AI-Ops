@@ -708,3 +708,245 @@ def test_publication_plan_window_gates_first_intent_after_claim(validated):
         state, {"publication": "intent", "id": identifier, "owner": owner, "step": "readiness"}
     )
     assert response.status_code in {403, 409}
+
+
+def test_started_step_reauthorizes_execute_but_recorded_result_still_consumes(validated):
+    """started 只是授权标记而非执行结果：重领必须重授 execute 让可重入步骤续跑。
+
+    env95 实测（task_8fe0bcdc）：worker 死在 intent 已消费、record 未落账之间，
+    账本只剩 {"state":"started"}；旧 one-shot 门把它判成已消费，observe_only
+    又无法替未落账的副作用作保，任务在核查 hold 里永挂并占死 BUSY 闸。
+    只有 record 落账的结果才把 intent 消费成 observed。
+    """
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "a" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    intent = {"publication": "intent", "id": identifier, "owner": owner}
+    assert internal(state, {**intent, "step": "central"}).json() == {"execute": True}
+    assert internal(state, {**intent, "step": "central"}).json() == {"execute": True}
+    recorded = {"state": "prepared", "bundle": {"path": "/x/release.json", "sha256": "0" * 64}}
+    assert (
+        internal(
+            state,
+            {
+                "publication": "record",
+                "id": identifier,
+                "owner": owner,
+                "step": "central",
+                "result": recorded,
+            },
+        ).json()["recorded"]
+        is True
+    )
+    observed = internal(state, {**intent, "step": "central"}).json()
+    assert observed["execute"] is False and observed["observed"] == recorded
+
+
+def test_started_central_step_resumes_execution_on_next_claim(validated, tmp_path, monkeypatch):
+    """env95 事故形复现：central 只消费 intent 未 record，重领按可重入续跑。
+
+    旧门下 intent 重返 execute=False → observe_only → 未落账副作用无法作保
+    → ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED 永挂。started 重授
+    execute 后 central_bundle 的确认读守卫让续跑收敛到同一 bundle。
+    """
+    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "d" * 32
+    path = state[0][0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        request["attempted"] = True
+        request["steps"] = {
+            "readiness": {"state": "passed"},
+            "capacity": {"state": "passed", "observed_at": time.time()},
+            "central": {"state": "started"},
+        }
+        request["phase"] = "central"
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), identifier))
+
+    seen = []
+    bundle = {"path": "/private/release.json", "sha256": "a" * 64}
+    monkeypatch.setattr(
+        publication, "central_bundle", lambda *a, **kw: seen.append(kw["observe_only"]) or bundle
+    )
+    monkeypatch.setattr(publication, "connect", lambda *a: {"connected": True})
+    monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: {})
+    monkeypatch.setattr(worker, "target_task", lambda *a, **kw: {"state": "observed", "phase": "staged"})
+
+    def request_(payload):
+        response = internal(state, payload)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert request_({"installation_claim": True, "owner": owner})["id"] == identifier
+    result = worker.execute(tmp_path, request_, identifier, owner)
+    assert seen == [False]
+    assert result["state"] == "queued"
+    with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+        steps = json.loads(tasks._row(conn, identifier)["request"])["steps"]
+    assert steps["central"]["bundle"] == bundle and steps["target"]["phase"] == "staged"
+
+
+def test_started_capacity_step_remeasures_instead_of_reconcile_hold(validated, tmp_path, monkeypatch):
+    """capacity 的 started 形同样续跑：重测产出从未落账的结果，不是重放。
+
+    「do not replay models」防的是用新测量顶替已记录结果；started 下没有已记录
+    结果，核查 hold 没有任何出口。record 落账的非 passed 结果仍经同一闸拒绝。
+    """
+    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.gateway import environment_capacity
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "d" * 32
+    path = state[0][0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        request["attempted"] = True
+        request["steps"] = {
+            "readiness": {"state": "passed"},
+            "capacity": {"state": "started"},
+        }
+        request["phase"] = "capacity"
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), identifier))
+
+    calls = []
+    monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        environment_capacity,
+        "run",
+        lambda *a: calls.append("capacity") or {"state": "passed", "observed_at": time.time()},
+    )
+    original = publication.dispatch
+
+    def dispatch(context, payload):
+        if payload.get("publication") == "capacity-reference":
+            return {"shared": []}
+        return original(context, payload)
+
+    monkeypatch.setattr(publication, "dispatch", dispatch)
+
+    def request_(payload):
+        response = internal(state, payload)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert request_({"installation_claim": True, "owner": owner})["id"] == identifier
+    result = worker.execute(tmp_path, request_, identifier, owner)
+    assert calls == ["capacity"] and result["state"] == "queued"
+    with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+        steps = json.loads(tasks._row(conn, identifier)["request"])["steps"]
+    assert steps["capacity"]["state"] == "passed"
+
+
+def test_stale_capacity_gates_first_mint_but_intent_marker_allows_resume(validated, monkeypatch):
+    """容量 900s 新鲜度闸只约束首跑：intent.json 在场的续跑按既有授权收口。
+
+    env95 在挂任务的 capacity 证据已越过 900s——若续跑仍按墙钟复核，
+    started 重授只是换死在下一道闸。发行物照样携带原测量时刻，过期
+    证据不作假；无 intent.json 的首跑仍被同闸拒绝。
+    """
+    import copy
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import yaml
+
+    from aiops_diagnostics.common.private_files import write_private_text
+    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, environment_consumer
+    from aiops_diagnostics.dify import environment_publication as publication
+
+    original, _ = validated
+    state = original[0]
+    settings = state[2]
+    settings.chat_dify_key_dir = str(settings.data_home / "keys")
+    identifier = publish(validated).json()["id"]
+    owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    staged = internal(state, {"publication": "stage", "id": identifier, "owner": owner}).json()
+    request = staged["request"]
+    with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
+        child = json.loads(tasks._row(conn, request["children"]["consumer-prepare"])["request"])
+    context = SimpleNamespace(settings=settings)
+    spec = publication.describe(context, request, identifier)["spec"]
+    document = environment_consumer.document(child["consumer_source"], spec["consumer"]["knowledge_base_id"])
+    exported = copy.deepcopy(document)
+    for variable in exported["workflow"].get("environment_variables", []):
+        variable["selector"] = ["env", variable["name"]]
+    published = []
+    keys = []
+    enabled = [False]
+
+    class Console:
+        def __init__(self, *a):
+            pass
+
+        def _call(self, workspace, path, *, method="GET", body=None, **kwargs):
+            if path.endswith("/api-keys"):
+                if method == "POST":
+                    keys.append({"token": "synthetic-only-app-key", "id": "key-one"})
+                    return keys[0]
+                return {"data": keys}
+            if path.endswith("/api-enable"):
+                enabled[0] = body["enable_api"]
+                return {}
+            return {
+                "id": spec["consumer"]["app_id"],
+                "workflow": {"id": "fixed-workflow"} if published else None,
+                "enable_api": enabled[0],
+                "enable_site": False,
+            }
+
+    class Dsl:
+        def __init__(self, source):
+            pass
+
+        def export_dsl(self, *, workflow_id=None):
+            return yaml.safe_dump(exported)
+
+        def publish_workflow(self):
+            published.append(True)
+            return True
+
+        def published_workflow_id(self):
+            return "fixed-workflow"
+
+    monkeypatch.setattr(dify_console_admin, "DifyConsoleAdmin", Console)
+    monkeypatch.setattr(dify_dsl_pull, "DifyDslClient", Dsl)
+    stale = time.time() - 3600
+    request["steps"]["capacity"] = {"state": "passed", "observed_at": stale, "runs": ["c", "o", "f"]}
+    readiness = {
+        "operator_manifest": "frozen",
+        "operator_prompt": "sop",
+        "gateway_url": "https://a.example.test",
+        "catalogue_token": "ckc_synthetic",
+        "dify_chat_base_url": "https://dify.example.test/v1",
+    }
+    # 首跑无 intent 标记：过期容量证据仍被 900s 闸拒。
+    with pytest.raises(tasks.TaskRefused, match="CAPACITY"):
+        publication.central_bundle(context, request, spec, readiness, identifier)
+    # 续跑：intent.json 证明授权已在容量新鲜时铸成，不再按墙钟复核。
+    directory = Path(settings.data_home) / "publication-bundles" / identifier
+    directory.mkdir(mode=0o700, parents=True)
+    write_private_text(
+        directory / "intent.json",
+        json.dumps(
+            {
+                "environment": spec["environment"],
+                "tenant_id": spec["tenant_id"],
+                "workspace_id": spec["consumer"]["workspace_id"],
+                "app_id": spec["consumer"]["app_id"],
+                "workflow": dify_dsl_pull.workflow_content(yaml.safe_dump(exported)),
+            },
+            sort_keys=True,
+        ),
+    )
+    result = publication.central_bundle(context, request, spec, readiness, identifier)
+    assert len(keys) == len(published) == 1 and enabled[0]
+    private = json.loads(Path(result["path"]).read_text())
+    assert private["capacity"]["observed_at"] == stale
