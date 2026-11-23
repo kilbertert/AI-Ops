@@ -45,6 +45,7 @@ code:
     - tests/gateway/test_environment_tasks.py
     - tests/gateway/test_environment_installation.py
     - tests/gateway/test_environment_candidate_preparation.py
+    - tests/gateway/test_environment_publication.py
     - tests/dify/test_environment_management.py
     - tests/publication/test_environment_release.py
     - tests/publication/test_environment_release_trial.py
@@ -79,6 +80,10 @@ code:
 - **任务账本是唯一状态真值**：waiting→queued→executing/running(lease)→checking→
   observed/blocked/expired/reconcile；安装专用 waiting/executing/checking 不被旧 worker 领取。
   失联只 observe 不重复 apply；取消等安全结果。
+- **计划墙钟只约束启动，不约束在飞链路**（发布任务，ADR-0315）：首个 intent 消费后
+  `attempted` 即 committed——计划过期不再拒在飞前向调用（草稿 revision /
+  references sha / 取消行复核保留），发行物期限按签发时刻铸 `now+3600` 覆盖
+  链尾，queued 卡面对 attempted 豁免 expired 降格；未 attempted 的 queued 照常降格。
 - **目标管理入口走 task-key HMAC**：`POST /v1/internal/environment-tasks` 与
   `/v1/internal/environment-trial` 仅回环、`AIOPS_GATEWAY_ENVIRONMENT_TASK_KEY` HMAC 门控，
   未配 task-key/登记文件 → 404 `ENVIRONMENT_TRIAL_DISABLED`。
