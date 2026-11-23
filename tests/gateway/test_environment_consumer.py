@@ -18,7 +18,9 @@ from aiops_diagnostics.dify import self_service_identity as auth
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
+from aiops_diagnostics.gateway import environment_drafts as drafts
 from aiops_diagnostics.gateway import environment_tasks as tasks
+from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentStore
 from gateway.test_candidate_knowledge_connection import (  # noqa: F401
     connected,
@@ -180,6 +182,61 @@ def test_configuration_drift_and_unknown_absence_do_not_create_again(consumer_ap
     assert execute(state, job)["state"] == "reconcile"
     Path(state[7]["credential_file"]).write_text('{"api_key":"changed"}')
     assert execute(state, job)["state"] == "blocked"
+    assert state[4].count(("POST", "/console/api/apps/imports")) == 1
+
+
+def test_promoted_adopted_candidate_is_abandoned_and_reminted(consumer_app):
+    state = consumer_app
+    job = submit(state).json()["id"]
+    assert execute(state, job)["state"] == "observed"
+    first = next(iter(state[3].values()))
+    # 一次越过中央步的发布把候选提升为正式应用（api-enable + 已发布 workflow）；
+    # Dify 不提供降级，下一个 prepare 任务经资源继承仍领回这份候选。
+    first["enable_api"] = True
+    first["workflow"] = {"id": "published"}
+    fixture = state[0][0]
+    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
+        row = conn.execute(
+            "SELECT request,environment FROM environment_tasks WHERE id=?", (job,)
+        ).fetchone()
+        request = json.loads(row[0])
+        request.pop("resources", None)
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,updated_at) "
+            "VALUES(?,?,?,'queued',?)",
+            ("task_" + "1" * 32, row[1], json.dumps(request), time.time()),
+        )
+    result = execute(state, "task_" + "1" * 32)
+    assert result["state"] == "observed"
+    assert result["result"]["app_id"] != first["id"]
+    assert len(state[3]) == 2
+    reminted = state[3][result["result"]["app_id"]]
+    assert reminted["enable_api"] is False and "workflow" not in reminted
+    assert first["enable_api"] is True and first["workflow"] == {"id": "published"}
+    assert state[4].count(("POST", "/console/api/apps/imports")) == 2
+
+
+def test_unpromoted_adopted_candidate_is_still_reused(consumer_app):
+    state = consumer_app
+    job = submit(state).json()["id"]
+    assert execute(state, job)["state"] == "observed"
+    first = next(iter(state[3].values()))
+    fixture = state[0][0]
+    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
+        row = conn.execute(
+            "SELECT request,environment FROM environment_tasks WHERE id=?", (job,)
+        ).fetchone()
+        request = json.loads(row[0])
+        request.pop("resources", None)
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,updated_at) "
+            "VALUES(?,?,?,'queued',?)",
+            ("task_" + "2" * 32, row[1], json.dumps(request), time.time()),
+        )
+    result = execute(state, "task_" + "2" * 32)
+    assert result["state"] == "observed"
+    assert result["result"]["app_id"] == first["id"]
+    assert len(state[3]) == 1
     assert state[4].count(("POST", "/console/api/apps/imports")) == 1
 
 
