@@ -16,18 +16,29 @@ task.py 起跑之前（目标侧零副作用）还是 staged 中途（有副作�
 ## 决定
 
 worker 新增 `target_staged()` 探测：经 `dev-host exec` 在目标宿主检查
-`<access>/publication-tasks/<task_id>` 是否为目录。该目录是远端 `setup()`
-的**首个**落盘写——它不存在，证明钉死版本的远端 task.py 从未进入 staging，
-目标侧不可能有已应用的副作用，取消结论与「从未启动」相同：
-`state=cancelled, phase=restored`。目录在场则维持原受管恢复：
-可能存在未知目标侧副作用，恢复结论必须由 `recover()` 给出。
+`/opt/aiops-access-<environment>/publication-tasks/<task_id>` 是否为目录。
+路径按安装器的推导（`Installer.root = /opt/aiops-access-<environment>`），
+与宿主注册的 `paths.access` 无关——environment 是发布请求里传给
+`task.py --environment` 的同一值，二者永远同源。该目录是远端 `setup()`
+越过基线校验后的**首个**落盘写（`publication.py:101`）：它不存在且无任何
+远端 task.py 在飞，证明钉死版本的远端从未进入 staging，目标侧不可能有
+已应用的副作用，取消结论与「从未启动」相同：`state=cancelled, phase=restored`。
+目录在场则维持原受管恢复：可能存在未知目标侧副作用，恢复结论必须由
+`recover()` 给出。
 
-证据语义按「能给出确定回答」对齐：远端脚本以**退出码 7** 回答「缺席」——
-dev-host 自身的传输/权限失败落在 1/255 等普通码上，永远不能被误读成缺席；
-探测超时、宿主在 `.dev-host.toml` 不可定位（零或二义匹配）、名称不过引用白名单，
+「无标记」必须先收紧成「不会再来」才算证据：SSH 掉线不证明远端进程已死，
+而 `setup()` 的标记 mkdir 排在基线校验（注册表/运行时/数据库比对）之后，
+存活进程可以在探测后补写标记。探测因此先非阻塞夺取 task.py 同一把
+`/run/lock/aiops-access-<env>.lock`（O_NOFOLLOW + uid0/0600/nlink1 与
+`install.trusted` 同口径）：拿到锁即证明没有任何远端 task.py 在飞，
+此刻的标记缺席才收敛；锁被占 = 远端命令可能在飞 = 未知，按在场处理。
+
+证据语义按「能给出确定回答」对齐：远端脚本以**退出码 7** 回答「缺席」、
+以 9 回答「锁被占或锁文件不可信」——dev-host 自身的传输/权限失败落在
+1/255 等普通码上，永远不能被误读成缺席；探测超时、宿主在
+`.dev-host.toml` 不可定位（零或二义匹配）、名称不过引用白名单，
 一律视同在场，收敛到保守的受管恢复侧。宿主定位复用 `target_task` 的
-name-or-host 匹配规则；access 根取目标 `paths.access`，缺省回退
-`/opt/aiops-access-<environment>`。
+name-or-host 匹配规则。
 
 ## 替代方案
 
@@ -46,6 +57,18 @@ worker 传输 guard 先于 task.py 创建，里面是 installer.tar.gz 与 relea
 已经把它造出来了，探它等于永久 hold。`publication-tasks/<id>` 才是「远端开始
 动作」的最早证据点。
 
+探测路径取宿主注册的 `paths.access`：`paths.access` 是 dev-host 到达语义的
+属性，跟安装器按 environment 推导的 `inst.root` 是两份契约；host 与环境
+不同名时探错目录会把「有副作用」误读成「零副作用」直接放行——路径必须由
+`plan.environment` 推导，与远端安装器同源。
+
+不持锁直接 `is_dir`：标记缺席有两种成因——「远端从未写」与「远端还在
+校验、稍后写」。SSH 掉线后远端进程可能继续活着（非交互会话的孤儿化不保证
+进程退出），裸 is_dir 把后者误判成前者。必须复用 task.py 那把环境锁把
+「无标记」收紧成「不可能再有标记」，残余窗口只剩 wrapper 进程存活但
+task.py 尚未取锁的子秒段——它要求进程熬过 SSH 会话拆除，且探测量级在
+重领周期（分钟）之外，记为可接受残余。
+
 账本侧补记「远端 staging 开始」步骤：与 ADR-0310 同论——intent 账本只写到
 `{"state":"started"}` 进程即死，账本无法自证死在哪一侧；文件系统落盘次序是
 唯一的外部证据。
@@ -54,9 +77,14 @@ worker 传输 guard 先于 task.py 创建，里面是 installer.tar.gz 与 relea
 
 `steps.target` 只消费了 intent、远端从未留下 staged 目录的任务，取消后按
 restored 终态化、释放 BUSY 闸；env95 上楔死的任务在部署后下一个重领周期即
-自收口，无需账本改写。目录在场、探测失败或宿主不可定位的任务行为不变，
-仍走受管恢复或维持核查 hold。
+自收口，无需账本改写。目录在场、锁被占、探测失败或宿主不可定位的任务
+行为不变，仍走受管恢复或维持核查 hold；锁被占时下一个重领周期自然复探，
+不引入新等待面。
 `/var/backups` 下可能残留惰性传输件（per-task 命名空间、root 所有 0700），
-与中央侧 bundle 工件同属证据级留档，不视为需要清理的副作用。
-标记的证据力仍是目录存在位：人工删除 `publication-tasks/<id>` 会把「未知
-副作用」误判成「可恢复」——与 ADR-0310 同一内生限制，该目录按证据保管。
+与中央侧 bundle 工件同属证据级留档，不视为需要清理的副作用；探测可能在
+`/run/lock` 留下空锁文件（root 0600，与 task.py 自建的形状一致），tmpfs
+随重启消失，无害。
+标记的证据力是「持锁下的目录存在位」：人工删除 `publication-tasks/<id>`，
+或外部进程先于探针抢锁并在持锁期写入标记，都会改变判读——前者与
+ADR-0310 同一内生限制（目录按证据保管），后者要求已持有环境锁的在飞
+进程，本身即属于「目标侧有动作」的保守侧。

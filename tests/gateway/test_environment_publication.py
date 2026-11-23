@@ -549,23 +549,28 @@ def test_cancel_with_only_target_intent_restores_by_remote_staging_marker(
         assert remote == []
 
 
-@pytest.mark.parametrize("returncode,expected", [(7, False), (0, True), (1, True), (255, True)])
+@pytest.mark.parametrize("returncode,expected", [(7, False), (0, True), (1, True), (9, True), (255, True)])
 def test_target_staged_only_remote_absence_answer_disarms(tmp_path, monkeypatch, returncode, expected):
-    # 远端脚本以 7 回答「缺席」；dev-host 自身失败（1/255 等）必须按在场处理，
-    # 否则传输故障会被当成零副作用证据放行恢复。
+    # 远端脚本以 7 回答「缺席」；dev-host 自身失败（1/255 等）与环境锁被占（9，
+    # 远端 task.py 可能在飞）都必须按在场处理，否则传输故障或竞态会被当成
+    # 零副作用证据放行恢复。
     from types import SimpleNamespace
 
     from aiops_diagnostics.gateway import environment_publication_worker as worker
 
-    (tmp_path / ".dev-host.toml").write_text(
-        '[[targets]]\nname = "95"\nhost = "qy-gw-120"\n[targets.paths]\naccess = "/opt/aiops-access-95"\n'
-    )
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname = "95"\nhost = "qy-gw-120"\n')
     staged = {
         "request": {"target": {"host": "qy-gw-120"}, "plan": {"environment": "95"}},
     }
-    monkeypatch.setattr(
-        worker,
-        "subprocess",
-        SimpleNamespace(run=lambda *a, **kw: SimpleNamespace(returncode=returncode)),
-    )
+    sent = {}
+
+    def run(*a, **kw):
+        sent.update(kw)
+        return SimpleNamespace(returncode=returncode)
+
+    monkeypatch.setattr(worker, "subprocess", SimpleNamespace(run=run))
     assert worker.target_staged(tmp_path, staged, "task_" + "0" * 32) is expected
+    # 探测路径与锁都按安装器 environment 推导，不走宿主注册的 paths.access。
+    assert "/run/lock/aiops-access-95.lock" in sent["input"]
+    assert "/opt/aiops-access-95/publication-tasks/" in sent["input"]
+    assert "flock" in sent["input"]
