@@ -31,8 +31,11 @@ request 字段），中间隔着 worker 的传输、文件复制与 authorize �
 - 未派发任务（无 `dispatched`）无论是否 attempted，过期或取消一律拒
   绝——认领循环将其终态化（取消且未派发落 `cancelled`，其余落
   `blocked`，与 ADR-0314 登记 absent 出口的 cancelled/blocked 配对
-  同规），BUSY 释放。已派发行即使带取消也只落 `blocked`：cancelled
-  终态需要「远端零副作用」证明，dispatched 已翻转后不再具备。
+  同规），BUSY 释放。已派发漂移拒绝沿原 `blocked` 合同，不改判 `cancelled`；
+  `blocked` 不在中央安装互斥集合内，因此不代表恢复或保留 BUSY。
+  真正未完成事务仍由目标环境锁与 pending／漂移校验阻止新安装覆盖，
+  后续写入前必须按原安装器核对／恢复。中央对已派发漂移保留互斥是既有独立缺口，
+  本片不借未派发过期修复重定义它。
 - 已派发任务保留冻结对账豁免：`fresh=False` 时仍跳过窗口/取消检查，
   只对账远端真实状态，绝不因权威不新鲜而重放 apply。
 - 父终态、bindings、node_binding 等漂移检查对两类任务一律保留。

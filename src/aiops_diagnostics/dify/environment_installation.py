@@ -279,8 +279,8 @@ def dispatch(context, payload):
                     conn.execute(
                         "UPDATE environment_tasks SET state=?,error=?,updated_at=? WHERE id=?",
                         (
-                            # cancelled 只给未派发任务（远端零副作用可证）；已派发
-                            # 行取消后仍落 blocked，未知副作用不释放互斥。
+                            # cancelled 只给未派发任务（远端零副作用可证）；
+                            # 已派发漂移拒绝保持原 blocked 合同，不表示恢复已完成。
                             "cancelled"
                             if row["cancel"] and request["action"] == ACTION and not request.get("dispatched")
                             else "blocked",
