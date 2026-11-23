@@ -314,6 +314,83 @@ def test_original_single_inactive_tenant_can_still_change_own_runtime(task_state
     assert not (tmp_path / "merged.tar").exists()
 
 
+def retarget_runtime(source, sha, dest, tenant, app_id):
+    """把既有候选运行档重铸为同租户新身份；登记面与共享文件保持不变。"""
+    files, manifest = artifacts.runtime_files(source, sha, "test")
+    registration = json.loads(files["registrations.json"])
+    registration.update(tenant_id=tenant, consumer_app_id=app_id)
+    files["registrations.json"] = json.dumps(registration).encode()
+    targets = json.loads(files["consumer-targets.json"])
+    targets["targets"][0].update(tenant_id=tenant, app_id=app_id)
+    files["consumer-targets.json"] = json.dumps(targets).encode()
+    manifest.update(
+        tenant_id=tenant,
+        files={n: hashlib.sha256(raw).hexdigest() for n, raw in files.items() if n != "manifest.json"},
+    )
+    files["manifest.json"] = json.dumps(manifest).encode()
+    return archive(dest, files)
+
+
+def test_inactive_tenant_runtime_row_replaced_by_fresh_candidate(task_state, tmp_path):
+    """被取消候选留下的未开通租户行可由重铸候选原位替换；已开通租户行不变。"""
+    from pathlib import Path
+
+    inst, _, _ = task_state
+    spec, old = second_tenant(task_state)
+    assert task.execute(inst, spec)["state"] == "observed"
+    current = inst.read_record("installed.json")
+    before, _ = artifacts.runtime_files(
+        inst.runtime_path(current) / "runtime.tar", current["runtime_sha256"], "test"
+    )
+    recandidate = retarget_runtime(
+        Path(spec["archives"]["runtime"]["path"]),
+        spec["archives"]["runtime"]["sha256"],
+        inst.root.parent / "recandidate-runtime.tar",
+        "new",
+        "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+    )
+    again = copy.deepcopy(spec)
+    again["id"] = "task_" + "d" * 32
+    again["expected"] = {k: current[k] for k in again["expected"]}
+    again["archives"]["runtime"] = recandidate
+    result = task.execute(inst, again)
+    assert result["state"] == "observed", result
+    now = inst.read_record("installed.json")
+    files, manifest = artifacts.runtime_files(
+        inst.runtime_path(now) / "runtime.tar", now["runtime_sha256"], "test"
+    )
+    targets = json.loads(files["consumer-targets.json"])["targets"]
+    assert [t["tenant_id"] for t in targets] == ["same", "new"]
+    assert targets[0] == json.loads(before["consumer-targets.json"])["targets"][0]
+    assert targets[1]["app_id"] == "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    assert manifest["source_runtime_sha256"] == recandidate["sha256"]
+    assert manifest["previous_runtime_sha256"] == current["runtime_sha256"]
+    assert old["runtime_sha256"] != current["runtime_sha256"]
+    # 替换结果可幂等重放：同一候选再次组合收敛为无操作。
+    assert task.execute(inst, again)["state"] == "observed"
+    assert inst.read_record("installed.json") == now
+
+
+def test_enabled_tenant_runtime_row_still_refuses_candidate_replacement(task_state, tmp_path):
+    from pathlib import Path
+
+    inst, _, _ = task_state
+    spec, old = second_tenant(task_state)
+    assert task.execute(inst, spec)["state"] == "observed"
+    recandidate = retarget_runtime(
+        inst.runtime_path(old) / "runtime.tar",
+        old["runtime_sha256"],
+        tmp_path / "recandidate-same.tar",
+        "same",
+        "ffffffff-ffff-ffff-ffff-ffffffffffff",
+    )
+    with pytest.raises(ValueError, match="cannot be replaced by candidate"):
+        inst.candidate_runtime(
+            Path(recandidate["path"]), recandidate["sha256"], tmp_path / "merged.tar"
+        )
+    assert not (tmp_path / "merged.tar").exists()
+
+
 def test_consumer_candidate_can_open_while_other_tenant_is_enabled(task_state, tmp_path, monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace

@@ -426,12 +426,20 @@ WantedBy=multi-user.target
         # 原单租户停用安装仍可更新自身配置；只给新增租户/已组合快照增加保留约束。
         if before["schema"] == "aiops-environment-runtime/1" and before["tenant_id"] == proposed["tenant_id"]:
             return incoming, incoming_sha
+        # 已开通租户的运行行不得被候选顶替；未开通行是已消费的候选身份，允许重铸替换。
+        # 目录不可核验时置空集合，退回全量拒绝。
+        self.check_registry(old)
+        replaceable = set()
+        if old.get("registry_sha256"):
+            current = json.loads((self.config / "registry/environment.json").read_text())["environments"][0]
+            replaceable = {row["id"] for row in current["tenants"] if row.get("enabled") is False}
         raw, sha = probe.compose_runtime(
             self.runtime_path(old) / "runtime.tar",
             old["runtime_sha256"],
             incoming,
             incoming_sha,
             self.environment,
+            replaceable_tenants=replaceable,
         )
         with destination.open("xb") as stream:
             stream.write(raw)
@@ -872,7 +880,16 @@ WantedBy=multi-user.target
                             raise ValueError("active shared runtime changed")
                         previous_targets = json.loads(prior["consumer-targets.json"])["targets"]
                         next_targets = json.loads(files["consumer-targets.json"])["targets"]
-                        if any(t not in next_targets for t in previous_targets):
+                        inactive = {
+                            t["id"]
+                            for t in previous_registry["environments"][0]["tenants"]
+                            if t.get("enabled") is False
+                        }
+                        if any(
+                            t not in next_targets
+                            for t in previous_targets
+                            if t.get("tenant_id") not in inactive
+                        ):
                             raise ValueError("active tenant runtime removed or replaced")
                     proposed = json.loads(registry_file.read_text())["environments"][0]
                     old_row = previous_registry["environments"][0]
