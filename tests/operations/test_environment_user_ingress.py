@@ -40,6 +40,7 @@ _spec.loader.exec_module(_h5)
 _IDS = {
     "{qa_id}": "qa_0123456789abcdef0123456789abcdef",
     "{conversation_id}": "conv_0123456789abcdef0123456789abcdef",
+    "{signed_id}": "media_Abcdefghijklmnopqrstuvwxyz012_-9.0123456789abcdef01234567",
 }
 
 _LINE = re.compile(r"^(?P<method>[A-Z]+)\s+(?P<path>/\S+)$", re.MULTILINE)
@@ -256,6 +257,9 @@ def test_invalid_or_missing_entry_is_rejected(ingress, entry: str) -> None:
         ("GET", "/v1/faq/answer"),
         ("GET", "/v1/assistant/questions"),  # 列表未开放
         ("POST", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef"),
+        ("GET", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/cancel"),
+        ("PUT", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/cancel"),
+        ("POST", "/v1/media/media_Abcdefghijklmnopqrstuvwxyz012_-9.0123456789abcdef01234567"),
         ("DELETE", "/v1/conversations"),
         ("PUT", "/v1/conversations/conv_0123456789abcdef0123456789abcdef"),
         ("POST", "/v1/conversations/conv_0123456789abcdef0123456789abcdef"),
@@ -277,12 +281,33 @@ def test_management_and_internal_paths_never_forwarded(ingress) -> None:
         ("POST", "/v1/internal/consumer-data/status"),
         ("GET", "/v1/assistant/starters"),
         ("GET", "/v1/shortcuts"),
-        ("POST", "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/cancel"),
         ("POST", "/v1/conversations/conv_0123456789abcdef0123456789abcdef/active-order"),
         ("GET", "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef"),
     ]:
         status, body = ingress(method, path, CONSUMER)
         assert status in (404, 405), f"{method} {path} 泄漏到上游：{status}"
+        assert MARKER not in body
+
+
+def test_id_prefix_shape_guard_rejects_malformed_and_suffixed(ingress) -> None:
+    """^~ 前缀内的 $uri 形状闸：同前缀但非白名单形状一律 404，不转发。"""
+    for path in [
+        "/v1/assistant/questions/",
+        "/v1/assistant/questions/qa_0123",
+        "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/",
+        "/v1/assistant/questions/qa_0123456789abcdef0123456789abcdef/cancel/extra",
+        "/v1/assistant/questions/notqa_0123456789abcdef0123456789abcdef",
+        "/v1/media/",
+        "/v1/media/media_tooshort.0123456789abcdef01234567",
+        "/v1/media/media_Abcdefghijklmnopqrstuvwxyz012_-9.0123456789abcdef01234567x",
+        "/v1/media/media_Abcdefghijklmnopqrstuvwxyz012_-9.0123456789abcdef01234567/path",
+        "/v1/media/admin",
+        "/v1/conversations/",
+        "/v1/conversations/conv_0123456789abcdef0123456789abcde",
+        "/v1/conversations/conv_0123456789abcdef0123456789abcdef/",
+    ]:
+        status, body = ingress("GET", path, CONSUMER)
+        assert status == 404, f"{path} 应被形状闸 404，得到 {status}"
         assert MARKER not in body
 
 

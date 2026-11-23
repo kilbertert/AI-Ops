@@ -66,7 +66,8 @@ uv run pytest tests/integrations/test_environment_tool_ingress.py tests/test_nod
 ### 开放面与凭据分流
 
 转发面唯一声明处是 `ops/nginx/environment-user-ingress-routes.txt`：FAQ 三件套、
-`POST /v1/assistant/questions`、问答详情、`/v1/conversations` 的读取/新建/删除。
+`POST /v1/assistant/questions`、问答详情与取消、`/v1/media/{signed_id}` 签名媒体读取、
+`/v1/conversations` 的读取/新建/删除。
 管理面（`/v1/dify/*`、`/v1/agents`、`/v1/operator-*`）、`/v1/internal/*` 不进本片，
 客户端也拿不到任意 URL——上游固定本机 `127.0.0.1:8788`（本环境登记端口）。
 
@@ -127,10 +128,11 @@ access_log 格式不含 Authorization/Cookie 等秘密字段、无 debug_connect
 4. 用**本环境**正常会话/JWT 验收：consumer 会话问题到本环境数据、operator Bearer
    走通、非法入口 403、未声明方法 405、管理面与 `/v1/internal/*` 404；
    环境目录停用侧仍拒绝。不能用匿名 health 代替真实身份验收。
-5. 回退只移除本次 conf/inc/凭据片并 reload，不改回调片、不动公司其他配置、
-   不停止公司业务。
+5. 回退按安装前备份形状分两种：初装仅移除本次 conf/inc/凭据片再 `nginx -t`+reload；
+   覆盖安装则恢复备份中的旧版三件文件再校验 reload。均不改回调片、不动公司其他
+   配置、不停止公司业务。
 
-本地验证：`uv run pytest tests/test_environment_user_ingress.py`——真实 nginx +
+本地验证：`uv run pytest tests/operations/test_environment_user_ingress.py`——真实 nginx +
 回显上游，覆盖声明路由全转发、consumer 凭据注入与会话转换、operator 透传与
 伪造头清空、非法入口/错误方法拒绝、管理面与声明外 `/v1/` 路由不转发。
 测试上游是替身，不证明真实公司数据或业务结论。

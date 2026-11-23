@@ -14,6 +14,8 @@ GET    /v1/faq/catalog
 POST   /v1/faq/answer
 POST   /v1/assistant/questions
 GET    /v1/assistant/questions/{qa_id}
+POST   /v1/assistant/questions/{qa_id}/cancel
+GET    /v1/media/{signed_id}
 GET    /v1/conversations
 POST   /v1/conversations
 GET    /v1/conversations/{conversation_id}

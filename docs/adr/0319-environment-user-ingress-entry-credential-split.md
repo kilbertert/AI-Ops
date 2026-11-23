@@ -17,7 +17,8 @@ consumer 反过来必须看不到来源密钥（密钥验过会把它错分派�
 ## 决定
 
 - 路径是精确白名单（`environment-user-ingress-routes.txt` 唯一声明）：FAQ 三件套、
-  `POST /v1/assistant/questions`、问答详情、`/v1/conversations` 的读取/新建/删除。
+  `POST /v1/assistant/questions`、问答详情与取消、`/v1/media/{signed_id}` 签名媒体、
+  `/v1/conversations` 的读取/新建/删除。
   管理面、agent 注册、`/v1/internal/*` 不进本片。`=`/`^~` + `$uri` 形状闸，
   不依赖宿主原 location 写法、不被 `^~ /v1/` 遮蔽；测试断言网关其余 `/v1/` 路由不进。
 - 入口分流在 server 上下文 `set`/`if` 完成（不新增 `map`，location 内 `if` 只 `return`）：
