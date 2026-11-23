@@ -1,3 +1,10 @@
+"""受限只读数据源适配。
+
+注意：``scoped_*_source`` 上下文管理器不止「打开连接」——它们会以
+``ssh -N -L`` 拉起端口转发子进程并把 ``Settings`` 中的主机改写为
+回环地址，退出时回收。「数据源」在本模块含进程管理语义。
+"""
+
 from __future__ import annotations
 
 import contextlib

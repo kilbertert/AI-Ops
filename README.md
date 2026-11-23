@@ -11,6 +11,16 @@
 共享服务区按环境隔离节点的配置与恢复见[独立环境节点](deploy/node-runtime/environment.md)。
 现行方法见[文档导航](docs/README.md)，不从README中的旧版本推断运行状态。
 
+## 新加入工程师读法
+
+按以下顺序建立心智模型；**不要**先读 `docs/architecture.md`——它描述已退役的旧架构，现役架构是 `docs/system-architecture.md`。
+
+1. 架构与术语：[系统架构](docs/system-architecture.md) → [词汇表](GLOSSARY.md)。注意 `environment` 一词在代码里有四种含义（部署环境/执行环境/业务环境/接入候选），读代码前先读词汇表对应条目。
+2. 交付现状：[当前交付索引](docs/agents/current-delivery-state.md)——合并 ≠ 部署 ≠ 验收，状态以此为准。
+3. 主机与部署面：[.dev-host.toml](.dev-host.toml) 是主机唯一名册（`41`=生产网关，`36`=Dify 主机，`95`=第二环境）；部署有多条路径，CD 只覆盖 `deploy/deploy-41.sh` 的源码同步，其余手工部署见[部署索引](deploy/README.md)与[手工部署台账](deploy/manual-deploys.md)。
+4. 变更规则：本仓 `AGENTS.md`、[验证分工](docs/agents/verification-workflow.md)。测试红常意味着文件放错目录而非行为损坏（`tests/test_repository_layout.py` 是根层白名单）。
+5. 代码惯例：`gateway/` 持环境接入账本与 HTTP 装配，`dify/` 持 Dify 侧供给与适配，同一「环境接入」流程横跨两包，分侧规则见各自包 `__init__.py` 说明。
+
 ## 一、系统与入口
 
 ```mermaid

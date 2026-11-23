@@ -146,6 +146,7 @@ LAYOUT = {
                 "deploy-41.sh",
                 "manual-deploys.md",
                 "operator-h5.py",
+                "README.md",
                 "record-manual-deploy.sh",
                 "routing-window.sh",
                 "test-rollback-classifier.sh",
