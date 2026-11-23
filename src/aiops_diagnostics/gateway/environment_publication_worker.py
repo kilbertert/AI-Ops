@@ -246,6 +246,8 @@ def target_staged(root, staged, identifier):
     target = staged["request"]["target"]
     declared = tomllib.loads((root / ".dev-host.toml").read_text())["targets"]
     matches = [r for r in declared if r.get("name") == target["host"] or r.get("host") == target["host"]]
+    # startswith("-") 与 central_call 同口径的防御性拒绝：REFERENCE_PATTERN
+    # 放行前导 '-'，dev-host resolve 本身会拒（exit 65），这里先收敛到在场侧。
     if (
         len(matches) != 1
         or not REFERENCE_PATTERN.fullmatch(matches[0]["name"])
@@ -397,6 +399,14 @@ def execute(root, request, identifier, owner):
         if result.get("activated"):
             call("directory", result=result)
             result["directory"] = "synchronized"
-    except (ValueError, TypeError, OSError, RuntimeError, KeyError, subprocess.SubprocessError):
+    except (
+        ValueError,
+        TypeError,
+        AttributeError,
+        OSError,
+        RuntimeError,
+        KeyError,
+        subprocess.SubprocessError,
+    ):
         result.update(state="reconcile", error_code="ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED")
     return call("complete", result=result)
