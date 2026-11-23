@@ -246,7 +246,11 @@ def target_staged(root, staged, identifier):
     target = staged["request"]["target"]
     declared = tomllib.loads((root / ".dev-host.toml").read_text())["targets"]
     matches = [r for r in declared if r.get("name") == target["host"] or r.get("host") == target["host"]]
-    if len(matches) != 1 or not REFERENCE_PATTERN.fullmatch(matches[0]["name"]):
+    if (
+        len(matches) != 1
+        or not REFERENCE_PATTERN.fullmatch(matches[0]["name"])
+        or matches[0]["name"].startswith("-")
+    ):
         return True
     environment = staged["request"]["plan"]["environment"]
     # 标记目录与锁都按安装器的推导（environment → aiops-access-<env>），
@@ -393,6 +397,6 @@ def execute(root, request, identifier, owner):
         if result.get("activated"):
             call("directory", result=result)
             result["directory"] = "synchronized"
-    except (ValueError, OSError, RuntimeError, KeyError, subprocess.SubprocessError):
+    except (ValueError, TypeError, OSError, RuntimeError, KeyError, subprocess.SubprocessError):
         result.update(state="reconcile", error_code="ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED")
     return call("complete", result=result)

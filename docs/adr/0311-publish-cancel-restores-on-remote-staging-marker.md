@@ -52,10 +52,10 @@ name-or-host 匹配规则。
 问题，证据粒度反而更粗。
 
 探测 `/var/backups/aiops-access-<env>/publication-<task>` 传输目录：该目录由
-worker 传输 guard 先于 task.py 创建，里面是 installer.tar.gz 与 release.json 等
-**惰性输入件**，不算已应用副作用；更实际的反证是——本任务的历次失败 restore
-已经把它造出来了，探它等于永久 hold。`publication-tasks/<id>` 才是「远端开始
-动作」的最早证据点。
+worker 传输 guard 先于 task.py 创建，里面是 installer.tar.gz 与 release.json——
+**可重放的受管输入**，不触及服务状态，不算已应用副作用；更实际的反证是——
+本任务的历次失败 restore 已经把它造出来了，探它等于永久 hold。
+`publication-tasks/<id>` 才是「远端开始动作」的最早证据点。
 
 探测路径取宿主注册的 `paths.access`：`paths.access` 是 dev-host 到达语义的
 属性，跟安装器按 environment 推导的 `inst.root` 是两份契约；host 与环境
@@ -80,7 +80,7 @@ restored 终态化、释放 BUSY 闸；env95 上楔死的任务在部署后下�
 自收口，无需账本改写。目录在场、锁被占、探测失败或宿主不可定位的任务
 行为不变，仍走受管恢复或维持核查 hold；锁被占时下一个重领周期自然复探，
 不引入新等待面。
-`/var/backups` 下可能残留惰性传输件（per-task 命名空间、root 所有 0700），
+`/var/backups` 下可能残留可重放的受管输入件（per-task 命名空间、root 所有 0700），
 与中央侧 bundle 工件同属证据级留档，不视为需要清理的副作用；探测可能在
 `/run/lock` 留下空锁文件（root 0600，与 task.py 自建的形状一致），tmpfs
 随重启消失，无害。

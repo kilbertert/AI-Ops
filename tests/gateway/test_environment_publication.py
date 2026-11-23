@@ -574,3 +574,15 @@ def test_target_staged_only_remote_absence_answer_disarms(tmp_path, monkeypatch,
     assert "/run/lock/aiops-access-95.lock" in sent["input"]
     assert "/opt/aiops-access-95/publication-tasks/" in sent["input"]
     assert "flock" in sent["input"]
+
+
+def test_target_staged_rejects_dash_prefixed_host_name(tmp_path):
+    # REFERENCE_PATTERN 允许前导 '-'；若照进 dev-host exec argv 会被当选项解析。
+    # 守卫必须先于探测返回保守的在场侧（不发任何 subprocess）。
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname = "-rf"\nhost = "qy-gw-120"\n')
+    staged = {
+        "request": {"target": {"host": "qy-gw-120"}, "plan": {"environment": "95"}},
+    }
+    assert worker.target_staged(tmp_path, staged, "task_" + "0" * 32) is True
