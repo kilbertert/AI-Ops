@@ -138,6 +138,47 @@ def test_partial_side_effects_recover_without_overwriting_unknown_changes(staged
     assert not (inst.root / "pending.json").exists()
 
 
+def test_activate_consumes_refresh_result_for_stale_but_identical_evidence(staged_host, monkeypatch):
+    inst, doc, calls = staged_host
+    publication.stage(inst, doc)
+    proof = verification(inst, doc)
+    proof["observed_at"] = time.time() - 400
+    seen = []
+
+    def refresh(inst_, doc_, value):
+        seen.append(value)
+        return {**value, "observed_at": time.time()}
+
+    monkeypatch.setattr(publication, "refresh_verification", refresh)
+    assert publication.activate(inst, doc, proof)["activated"]
+    assert seen == [proof]
+
+
+def test_activate_rejects_unconfirmed_refresh_or_evidence_drift(staged_host, monkeypatch):
+    inst, doc, calls = staged_host
+    publication.stage(inst, doc)
+    proof = verification(inst, doc)
+    monkeypatch.setattr(publication, "refresh_verification", lambda *a: {**a[-1], "state": "expired"})
+    with pytest.raises(ValueError, match="verification required"):
+        publication.activate(inst, doc, proof)
+    monkeypatch.setattr(publication, "refresh_verification", lambda *a: a[-1])
+    with pytest.raises(ValueError, match="receipt differs"):
+        publication.activate(inst, doc, {**proof, "run_id": "other-run"})
+
+
+def test_activate_rejects_expired_document_before_refresh(staged_host, monkeypatch):
+    inst, doc, calls = staged_host
+    doc["expires_at"] = time.time() + 0.2
+    publication.stage(inst, doc)
+    proof = verification(inst, doc)
+    time.sleep(0.3)
+    fired = []
+    monkeypatch.setattr(publication, "refresh_verification", lambda *a: fired.append(a) or a[-1])
+    with pytest.raises(ValueError, match="verification required"):
+        publication.activate(inst, doc, proof)
+    assert not fired
+
+
 def test_recovery_refuses_third_party_file_or_directory_change(staged_host):
     inst, doc, _ = staged_host
     publication.stage(inst, doc)
