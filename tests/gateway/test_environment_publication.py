@@ -146,7 +146,22 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(
     monkeypatch.setattr(publication, "central_bundle", lambda *a, **kw: bundle)
     monkeypatch.setattr(publication, "connect", lambda *a: {"connected": True})
     monkeypatch.setattr(publication, "activate_directory", lambda *a: {"revision": 2})
-    monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        worker,
+        "local_trial",
+        lambda *a, **kw: (
+            {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "observed_at": time.time(),
+                "trials": a[3]["trials"],
+            }
+            if a[3].get("action") == "publication-trial-complete"
+            else {}
+        ),
+    )
     monkeypatch.setattr(
         environment_capacity,
         "run",
@@ -165,6 +180,7 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(
                 "operation": identifier,
                 "operator_runs": ["o", "f"],
                 "observed_at": time.time(),
+                "trials": {"order": "t1", "offline": "t2"},
             }
         ),
     )
@@ -229,6 +245,320 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(
     assert restored["state"] == "cancelled" and restored["result"]["phase"] == "restored"
     assert target_config[0] == "original"
     assert calls == prior_calls + (["restore"] if completed_stages >= 2 else [])
+
+
+def _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, observed_at):
+    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.gateway import environment_capacity
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    monkeypatch.setattr(
+        publication,
+        "central_bundle",
+        lambda *a, **kw: {"path": "/private/release.json", "sha256": "a" * 64},
+    )
+    monkeypatch.setattr(publication, "connect", lambda *a: {"connected": True})
+    monkeypatch.setattr(publication, "activate_directory", lambda *a: {"revision": 2})
+    monkeypatch.setattr(
+        environment_capacity,
+        "run",
+        lambda *a: {"state": "passed", "observed_at": time.time(), "runs": ["c", "o", "f"]},
+    )
+    monkeypatch.setattr(
+        worker,
+        "verify",
+        lambda *a: {
+            "state": "passed",
+            "operation": identifier,
+            "operator_runs": ["o", "f"],
+            "observed_at": observed_at,
+            "trials": {"order": "t1", "offline": "t2"},
+        },
+    )
+
+    def target(*args, **kwargs):
+        phase = {"stage": "staged", "activate": "activated", "restore": "restored"}[args[3]]
+        return {
+            "state": "observed",
+            "phase": phase,
+            "activated": phase == "activated",
+            "installed": {"private-path": "/private/target"},
+        }
+
+    monkeypatch.setattr(worker, "target_task", target)
+    monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: {})
+    original = publication.dispatch
+    monkeypatch.setattr(
+        publication,
+        "dispatch",
+        lambda context, payload: (
+            {"shared": []}
+            if payload.get("publication") == "capacity-reference"
+            else original(context, payload)
+        ),
+    )
+
+    def request(payload):
+        response = internal(state, payload)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    for index in range(3):
+        owner = f"{index + 1:032x}"
+        request({"installation_claim": True, "owner": owner})
+        worker.execute(tmp_path, request, identifier, owner)
+    return worker, request
+
+
+def test_worker_reconfirms_stale_proof_on_target_before_activate(validated, tmp_path, monkeypatch):
+    # 每次activate前都在同operation上重核取回新确认时刻的proof：不只在proof
+    # 逾300s时——发行物到期、activate失败重领都由目标verdict给终态；不重放模型。
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time() - 400)
+    refreshes, activated = [], []
+
+    def trial(root, target, environment, payload, **kwargs):
+        if payload.get("action") == "publication-trial-complete":
+            refreshes.append(payload)
+            return {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "scope_fingerprint": "fp",
+                "observed_at": time.time(),
+                "trials": payload["trials"],
+            }
+        return {}
+
+    monkeypatch.setattr(worker, "local_trial", trial)
+    monkeypatch.setattr(
+        worker,
+        "target_task",
+        lambda *a, **kw: (
+            activated.append(kw.get("verification"))
+            or {
+                "state": "observed",
+                "phase": "activated",
+                "activated": True,
+                "installed": {"private-path": "/private/target"},
+            }
+        ),
+    )
+    owner = "d" * 32
+    request({"installation_claim": True, "owner": owner})
+    result = worker.execute(tmp_path, request, identifier, owner)
+    assert result["result"]["activated"] is True, result
+    assert [p["action"] for p in refreshes] == ["publication-trial-complete"]
+    assert refreshes[0]["trials"] == {"order": "t1", "offline": "t2"}
+    assert activated and 0 <= time.time() - activated[0]["observed_at"] < 300
+
+
+def test_worker_reconfirms_fresh_proof_before_every_activate(validated, tmp_path, monkeypatch):
+    # proof刚签发也要先复核再activate：新鲜度只是复验结果不是跳过理由。
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time())
+    refreshes = []
+
+    def trial(root, target, environment, payload, **kwargs):
+        if payload.get("action") == "publication-trial-complete":
+            refreshes.append(payload)
+            return {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "scope_fingerprint": "fp",
+                "observed_at": time.time(),
+                "trials": payload["trials"],
+            }
+        return {}
+
+    monkeypatch.setattr(worker, "local_trial", trial)
+    owner = "d" * 32
+    request({"installation_claim": True, "owner": owner})
+    result = worker.execute(tmp_path, request, identifier, owner)
+    assert result["result"]["activated"] is True, result
+    assert [p["action"] for p in refreshes] == ["publication-trial-complete"]
+
+
+def test_worker_lands_expired_blocked_and_restores_via_page(validated, tmp_path, monkeypatch):
+    # 复验判终态（发行物/案例期限已尽）：任务落blocked而非无限重领过期activate；
+    # 且先于source配置写就终局，原页面恢复入口照旧走取消→恢复，不要求新鲜证据。
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time() - 400)
+    monkeypatch.setattr(
+        worker,
+        "local_trial",
+        lambda *a, **kw: (
+            {
+                "state": "expired",
+                "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED",
+            }
+            if a[3].get("action") == "publication-trial-complete"
+            else {}
+        ),
+    )
+    calls = []
+
+    def spy(payload):
+        calls.append(payload.get("publication"))
+        return request(payload)
+
+    owner = "d" * 32
+    request({"installation_claim": True, "owner": owner})
+    result = worker.execute(tmp_path, spy, identifier, owner)
+    assert result["state"] == "blocked", result
+    assert result["result"]["error_code"] == "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"
+    assert "source-configuration" not in calls
+    assert request({"installation_claim": True, "owner": "e" * 32}).get("claimed") is not True
+    response = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"restore_publication": identifier}
+    )
+    assert response.status_code == 200, response.text
+    owner = "f" * 32
+    assert request({"installation_claim": True, "owner": owner})["claimed"] is True
+    restored = worker.execute(tmp_path, request, identifier, owner)
+    assert restored["result"]["phase"] == "restored", restored
+
+
+def test_worker_resumes_activated_target_and_finishes_directory_without_recheck(
+    validated, tmp_path, monkeypatch
+):
+    # activate真实返回activated并已记账、directory同步前中断：重领时目标准入
+    # 已放开，closed-admission复核必永拒——observe到activated即按真实回执
+    # 完成directory；不重核proof、不重放模型、不看发行物/案例期限。
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time() - 400)
+    refreshes = []
+    answers = iter(
+        [
+            {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "scope_fingerprint": "fp",
+                "observed_at": time.time(),
+                "trials": {"order": "t1", "offline": "t2"},
+            },
+            {"state": "expired", "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"},
+        ]
+    )
+
+    def trial(root, target, environment, payload, **kwargs):
+        if payload.get("action") == "publication-trial-complete":
+            refreshes.append(payload)
+            return next(answers)
+        return {}
+
+    monkeypatch.setattr(worker, "local_trial", trial)
+
+    def target(*args, **kwargs):
+        if kwargs.get("observe_only"):
+            return {
+                "state": "observed",
+                "phase": "activated",
+                "activated": True,
+                "installed": {"private-path": "/private/target"},
+                "routes": {"operator": 1, "consumer": 1},
+            }
+        return {
+            "state": "observed",
+            "phase": "activated",
+            "activated": True,
+            "installed": {"private-path": "/private/target"},
+            "routes": {"operator": 1, "consumer": 1},
+        }
+
+    monkeypatch.setattr(worker, "target_task", target)
+    interrupted = []
+
+    def request_or_fail(payload):
+        if payload.get("publication") == "directory" and not interrupted:
+            interrupted.append(payload)
+            raise RuntimeError("directory interrupted")
+        return request(payload)
+
+    owner = "d" * 32
+    request({"installation_claim": True, "owner": owner})
+    first = worker.execute(tmp_path, request_or_fail, identifier, owner)
+    assert first["state"] == "reconcile", first
+    # 第二段：此时发行物/案例期限已尽（complete只会回expired）——若走到复核
+    # 必落blocked；正确路径是observe到已activated直接完成directory同步。
+    owner = "e" * 32
+    request({"installation_claim": True, "owner": owner})
+    result = worker.execute(tmp_path, request, identifier, owner)
+    assert result["state"] == "observed", result
+    assert result["result"]["activated"] and result["result"]["directory"] == "synchronized"
+    assert interrupted and len(refreshes) == 1
+
+
+def test_worker_rechecks_staged_target_after_interrupted_activate_intent(validated, tmp_path, monkeypatch):
+    # activate intent已授权但远端从未越过准入（仍staged）：重领照常走精确复核；
+    # expired → 先于source配置写落blocked。
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time() - 400)
+    refreshes = []
+    answers = iter(
+        [
+            {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "scope_fingerprint": "fp",
+                "observed_at": time.time(),
+                "trials": {"order": "t1", "offline": "t2"},
+            },
+            {"state": "expired", "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"},
+        ]
+    )
+
+    def trial(root, target, environment, payload, **kwargs):
+        if payload.get("action") == "publication-trial-complete":
+            refreshes.append(payload)
+            return next(answers)
+        return {}
+
+    monkeypatch.setattr(worker, "local_trial", trial)
+    attempts = []
+
+    def target(*args, **kwargs):
+        if kwargs.get("observe_only"):
+            return {
+                "state": "reconcile",
+                "phase": "staged",
+                "activated": False,
+                "installed": {"private-path": "/private/target"},
+            }
+        attempts.append(args[3])
+        raise RuntimeError("activate transport lost")
+
+    monkeypatch.setattr(worker, "target_task", target)
+    calls = []
+
+    def spy(payload):
+        calls.append(payload.get("publication"))
+        return request(payload)
+
+    owner = "d" * 32
+    request({"installation_claim": True, "owner": owner})
+    first = worker.execute(tmp_path, spy, identifier, owner)
+    assert first["state"] == "reconcile" and attempts == ["activate"]
+    owner = "e" * 32
+    request({"installation_claim": True, "owner": owner})
+    calls.clear()
+    result = worker.execute(tmp_path, spy, identifier, owner)
+    assert result["state"] == "blocked", result
+    assert result["result"]["error_code"] == "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"
+    assert attempts == ["activate"] and "source-configuration" not in calls
+    assert len(refreshes) == 2
 
 
 def test_central_publication_freezes_real_template_and_reconciles_unique_key(validated, monkeypatch):

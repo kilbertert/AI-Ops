@@ -341,7 +341,9 @@ def refresh_verification(inst, document, proof):
         ),
     )
     refreshed = json.loads(raw)
-    if any(refreshed[k] != proof[k] for k in ("operation", "run_id", "operator_runs", "scope_fingerprint")):
+    if refreshed.get("state") != "passed" or any(
+        refreshed.get(k) != proof[k] for k in ("operation", "run_id", "operator_runs", "scope_fingerprint")
+    ):
         raise ValueError("formal verification changed")
     return refreshed
 
@@ -357,15 +359,27 @@ def activate(inst, document, verification, *, observe_only=False):
         or verification.get("state") != "passed"
         or verification.get("operation") != document["id"]
         or len(verification.get("operator_runs", [])) != 2
-        or not 0 <= time.time() - verification.get("observed_at", 0) < 300
         or document["expires_at"] <= time.time()
     ):
         raise ValueError("formal configuration verification required")
     receipt = inst.state / "gateway/environment-publications" / (document["id"] + ".verification.json")
     install.trusted(receipt, owner=inst.account.pw_uid, private=True)
-    if json.loads(receipt.read_text()) != verification:
+
+    # receipt核同一份证据身份而非字节：observed_at随每次复验刷新，proof携带的
+    # 旧确认时刻不构成另一份proof；证据面任一项不同才是receipt differs。
+    def evidence(proof):
+        return {k: v for k, v in proof.items() if k != "observed_at"}
+
+    if evidence(json.loads(receipt.read_text())) != evidence(verification):
         raise ValueError("verification receipt differs")
-    refresh_verification(inst, document, verification)
+    # 准入新鲜度只信本次重核：refresh在运行Gateway上按持久锚点重核身份/案例/
+    # 原run/配置/知识并回写新确认时刻；过期proof由其复验结果替换而非照收。
+    verification = refresh_verification(inst, document, verification)
+    if (
+        verification.get("state") != "passed"
+        or not 0 <= time.time() - verification.get("observed_at", 0) < 300
+    ):
+        raise ValueError("formal configuration verification required")
     check_files(inst, state)
     state["activated_registry"] = revised_registry(
         (inst.config / "registry/environment.json").read_text(), document, enable=True

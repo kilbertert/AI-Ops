@@ -629,6 +629,13 @@ aiops-admin --config <中央私有配置> knowledge-delegation \
 `current/capacity.json`读取两个真实进程/cgroup观测；没有该事实则拒绝发布，不接人工填通过的回执。
 三项run没有实际重叠也拒绝，不能以发起三个线程冒充并发容量完成。资源采样不是模型业务准确率证明。
 
+验证回执的`observed_at`是「最后一次全部核对通过」的确认时刻，不是首次完成时刻（ADR-0318）：
+activate前距上次复验逾300s时，worker先经`publication-trial-complete`在目标按持久锚点重核
+身份/案例/原run/配置/知识取回新proof，远端activate再经`refresh_verification`准入前复验——
+两次都只刷新确认时刻，不重放模型、不续命过期证据。发行物或案例期限已尽属终态：
+任务落`blocked`并标`ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED`，原页面取消→恢复照旧可用；
+恢复链不读verification。进程内300s租约只约束试跑数据能力窗，不是复验窗口。
+
 “恢复本次开通”复用同一任务：先关闭本次准入，再用原route CAS推进新修订，恢复本操作拥有的
 配置及源引用，保留运行历史。任何第三方配置/route变化、已撤权能力或未知模型启动都不会被自动覆盖/重发。
 源引用或中央目录恢复失败仍保留待对账，不能删除资源掩盖部分状态。正常发布首次绑定与已有租户维护发布分开；
