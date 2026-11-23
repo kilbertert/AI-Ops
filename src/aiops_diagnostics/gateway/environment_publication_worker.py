@@ -1,4 +1,8 @@
-"""原受管worker执行发布步骤；进程消失后只有同operation对账。"""
+"""原受管worker执行发布步骤；进程消失后只有同operation对账。
+
+「worker」指发起机上的单次执行体，经 ``dev-host exec``（SSH）访问
+受管目标；不是常驻守护进程。
+"""
 
 import hashlib
 import json

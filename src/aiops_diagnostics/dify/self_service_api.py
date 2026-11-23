@@ -370,7 +370,7 @@ def register(app, context):
             auth.identity(context, session), payload.app_id, payload.revision, payload.version_no
         )
 
-    from .operator_run_logs import register as register_run_logs
+    from .operator_run_logs_api import register as register_run_logs
 
     register_run_logs(app, context, service, session)
 

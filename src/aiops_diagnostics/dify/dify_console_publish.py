@@ -1388,6 +1388,13 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
 
                 from .self_service_bridge import handle
 
+                # 必须传「当前正在运行的这个模块对象」，不能在本函数里
+                # ``import aiops_diagnostics.dify.dify_console_publish``：
+                # 以 ``python -m`` 启动时本模块名是 ``__main__``，再 import 一次
+                # 会得到第二个模块实例——bridge 抛的 ``bridge._Rejected`` 与下面
+                # ``except _Rejected`` 抓的不是同一个类，拒绝不会被转成响应，
+                # 请求将得不到回复直接挂死。同理 bridge 读取的
+                # CONSOLE_CSRF_HEADER/_request 等成员以本实例为准。
                 handle(self, sys.modules[__name__])
                 return
             if path == NATIVE_PREVIEW_ROUTE:

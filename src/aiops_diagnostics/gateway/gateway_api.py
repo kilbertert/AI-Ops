@@ -1642,6 +1642,13 @@ def create_gateway_app(
     from aiops_diagnostics.consumer.consumer_tool_grants import ConsumerToolGrants, ConsumerToolRefused
 
     context.consumer_tool_grants = ConsumerToolGrants(context, selected_settings)
+    # 路由全表 = 本文件的 @app.* + 以下四处 register() 挂载；
+    # grep '@app.' 找不到后四处。
+    #   dify.self_service_api.register         → /v1/dify/management/*（内部再挂两行）
+    #     dify.environment_management.register  → /v1/dify/management/environment{s,-*}
+    #                                             + /v1/internal/environment-tasks
+    #     dify.operator_run_logs_api.register   → /v1/dify/management/run-logs{,/detail}
+    #   gateway.environment_trial.register     → /v1/internal/environment-trial（本文件末尾）
     from aiops_diagnostics.dify.self_service_api import register as register_self_service
 
     context.self_service_operator_identity = lambda session: authenticated_operator_console(context, session)

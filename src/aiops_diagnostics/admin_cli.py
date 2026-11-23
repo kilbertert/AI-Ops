@@ -1158,29 +1158,6 @@ def _workspace_for(workspaces: Any, tenant_id: str, environment: str) -> str:
         ) from exc
 
 
-def _workspace_for(workspaces: Any, tenant_id: str, environment: str) -> str:
-    """这个租户的 workspace —— 解析失败就**抛**，调用方不许跳过（#886）。
-
-    与 ``admin sync-from-dify`` 的旧行为相反：旧代码把一个固定常量套到 N 个租户上，
-    多 workspace 之后那等于"把 A 的正文发进 B 的 workspace"。而跳过也不行 ——
-    一次 sync 漏掉半个租户却退 0，是最难发现的一种。
-
-    解析函数的四个码（``UNRESOLVED`` / ``CREATING`` / ``FAILED`` / ``UNKNOWN``）在这里
-    全部原样上抛：它们各自对应不同的下一步，合成一句话就把那个区别丢了。
-    """
-    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
-
-    try:
-        return workspaces.resolve(tenant_id, environment)
-    except DifyWorkspaceError as exc:
-        raise DifyWorkspaceError(
-            exc.code,
-            f"[租户 {tenant_id}] {exc.message}",
-            http_status=exc.http_status,
-            retryable=exc.retryable,
-        ) from exc
-
-
 def _deployment_environment_or_exit() -> str:
     """CLI 的部署身份 —— 与 `ensure-workspace` 同一条守卫，缺了就退非零。"""
     environment = GatewayServerSettings.from_env().environment

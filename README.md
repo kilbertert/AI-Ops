@@ -106,7 +106,7 @@ Dify自助开通：`dify.self_service`组织双端业务流程，`dify.self_serv
 `dify.self_service_store`保存幂等任务与受管应用目录，`dify.dual_entry`定义端/场景与渠道口径，
 `dify.service_keys`申请、对账并落盘每应用的 Service 凭据；`dify.knowledge_connection`管理各工作区的知识连接。
 
-`dify.operator_run_logs`在原日志入口核对管家公司身份，`execution.operator_run_logs`只读既有运行账本。
+`dify.operator_run_logs_api`在原日志入口核对管家公司身份，`execution.operator_run_logs`只读既有运行账本。
 受管管家日志显示本人当前权限内的 Java 运行：问题、订单号、终态原因码、执行节点、
 版本核对、阶段耗时与逐事件拒绝码（ADR-0249 白名单）；业务结果过期与执行状态分开，
 答案与证据 data 不投影。其他应用保留 Dify 原生日志。
