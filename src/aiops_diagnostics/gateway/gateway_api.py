@@ -1642,8 +1642,9 @@ def create_gateway_app(
     from aiops_diagnostics.consumer.consumer_tool_grants import ConsumerToolGrants, ConsumerToolRefused
 
     context.consumer_tool_grants = ConsumerToolGrants(context, selected_settings)
-    # 路由全表 = 本文件的 @app.* + 以下四处 register() 挂载；
-    # grep '@app.' 找不到后四处。
+    # 路由全表 = 本文件的 @app.* + 以下四处 register() 挂载 + 本函数末尾的
+    # install_public_docs（/v1/docs、/v1/openapi.json，两个 @app.get 住在
+    # public_openapi.py）；grep '@app.' 找不到后五处。
     #   dify.self_service_api.register         → /v1/dify/management/*（内部再挂两行）
     #     dify.environment_management.register  → /v1/dify/management/environment{s,-*}
     #                                             + /v1/internal/environment-tasks
