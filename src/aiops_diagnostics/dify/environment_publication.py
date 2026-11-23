@@ -569,7 +569,9 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
                 "prompt": readiness["operator_prompt"],
             },
         },
-        "expires_at": request["plan"]["expires_at"],
+        # 发行期限按签发时刻计：attempted 链已不受计划窗约束（ADR-0315），
+        # 远端 stage/verify/activate 与 trial 加载都复核此值，须覆盖链尾余量。
+        "expires_at": time.time() + 3600,
         "gateway_url": readiness["gateway_url"],
         "catalogue_token": readiness["catalogue_token"],
         "case_ref": request["case_ref"],
