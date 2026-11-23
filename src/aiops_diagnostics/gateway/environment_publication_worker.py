@@ -380,7 +380,7 @@ def execute(root, request, identifier, owner):
             call("record", step="target", result=result)
             call("connect", bundle=bundle)
             return call("yield")
-        if "verify" not in steps or steps["verify"].get("state") != "passed":
+        if "verify" not in steps or steps["verify"].get("state") not in {"passed", "expired"}:
             # 每种模型启动在目标先记同operation意图，重入只读已有trial而不重跑。
             call("intent", step="verify")
             call("connect", bundle=bundle)
@@ -391,6 +391,29 @@ def execute(root, request, identifier, owner):
         call("intent", step="source")
         updated = call("source-configuration")
         call("record", step="source", result=updated)
+        if verification.get("state") == "passed" and time.time() - verification.get("observed_at", 0) > 300:
+            # 距上次完整复验已逾准入窗：准入前在同operation上重核身份/案例/原run/
+            # 配置/知识，取回新确认时刻的proof。只复验已有证据面，不重放模型。
+            verification = local_trial(
+                root,
+                source["target"],
+                spec["environment"],
+                {
+                    "action": "publication-trial-complete",
+                    "operation": identifier,
+                    "spec": spec,
+                    "trials": verification["trials"],
+                },
+            )
+            call("record", step="verify", result=verification)
+        if verification.get("state") != "passed":
+            # 发行物/案例期限已尽属终态而非待对账：落blocked，原页面取消→恢复，
+            # 不再持同一过期proof无限重领activate。
+            result.update(
+                state="expired",
+                error_code=verification.get("error_code") or "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED",
+            )
+            return call("complete", result=result)
         intent = call("intent", step="activate")
         result = target_task(
             root,

@@ -234,7 +234,7 @@ def test_three_formal_runs_complete_from_real_tool_evidence(target, dual, monkey
     from aiops_diagnostics.gateway import environment_trial
     from aiops_diagnostics.operator import offline_tool, operator_cpms
 
-    ctx, doc, spec, case, _, _ = target
+    ctx, doc, spec, case, _, requests = target
     doc["installed"]["runtime_sha256"] = "a" * 64
     spec["installed"] = dict(doc["installed"])
     manifest = json.loads(doc["apps"]["operator"]["manifest"])
@@ -338,6 +338,93 @@ def test_three_formal_runs_complete_from_real_tool_evidence(target, dual, monkey
     assert verified["state"] == "passed" and len(verified["operator_runs"]) == 2
     assert set(verified["operator_runs"]) == set(dispatches)
     assert verified["run_id"] == ctx.dify_run_store.by_qa(consumer["trial_id"]).run_id
+    # 进程租约失活（重启或300s数据能力窗关闭）后，complete按持久锚点重核同一
+    # 证据面并写回新的observed_at；run/operator_runs不变，模型不重放。
+    first = verified["observed_at"]
+    ctx.consumer_candidate_trials.leases.clear()
+    ctx.operator_cpms.candidate_authorizations.clear()
+    time.sleep(0.01)
+    again = trial.complete(ctx, {"operation": doc["id"], "spec": spec, "trials": trials})
+    assert again["state"] == "passed" and again["observed_at"] > first
+    assert (again["run_id"], again["operator_runs"]) == (
+        verified["run_id"],
+        verified["operator_runs"],
+    )
+    assert len(dispatches) == 2 and len(requests) == 1
+
+
+def test_reconfirm_uses_persisted_anchors_after_lease_loss_without_replay(target):
+    ctx, doc, _, _, caller, requests = target
+    started, result = finish(target)
+    assert result["state"] == "passed" and result["anchors"]["doc"]
+    first = result["observed_at"]
+    ctx.consumer_candidate_trials.leases.clear()
+    time.sleep(0.01)
+    again = trial.read(
+        ctx,
+        {
+            "operation": doc["id"],
+            "trial_id": started["trial_id"],
+            "expected_reference": "ref-real",
+        },
+    )
+    assert again["state"] == "passed" and again["observed_at"] > first
+    assert again["run_id"] == result["run_id"] and again["anchors"] == result["anchors"]
+    assert len(requests) == 1
+    # 撤权身份与锚点缺失各自拒绝；复验不把「查不到证据」当通过。
+    caller[0] = _Resolver().resolve("token-a", required_scope="aiops:orders:read")
+    with pytest.raises(ValueError, match="identity changed"):
+        trial.read(
+            ctx,
+            {
+                "operation": doc["id"],
+                "trial_id": started["trial_id"],
+                "expected_reference": "ref-real",
+            },
+        )
+    caller[0] = _Resolver().resolve("token-b", required_scope="aiops:orders:read")
+    receipt = (
+        ctx.settings.data_home / "environment-publications" / (doc["id"] + ".consumer-verification.json")
+    )
+    receipt.unlink()
+    with pytest.raises(ValueError, match="unavailable"):
+        trial.read(
+            ctx,
+            {
+                "operation": doc["id"],
+                "trial_id": started["trial_id"],
+                "expected_reference": "ref-real",
+            },
+        )
+
+
+def test_complete_returns_expired_verdict_when_release_or_case_window_closed(target, monkeypatch):
+    from aiops_diagnostics.gateway.environment_business import ValidationRefused
+
+    ctx, doc, spec, _, _, _ = target
+    finish(target)
+    payload = {"operation": doc["id"], "spec": spec, "trials": {}}
+    doc["expires_at"] = time.time() - 1
+    write_private_text(
+        ctx.settings.data_home / "environment-publications" / (doc["id"] + ".release.json"),
+        json.dumps(doc),
+    )
+    assert trial.complete(ctx, payload) == {
+        "operation": doc["id"],
+        "state": "expired",
+        "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED",
+    }
+    doc["expires_at"] = time.time() + 900
+    write_private_text(
+        ctx.settings.data_home / "environment-publications" / (doc["id"] + ".release.json"),
+        json.dumps(doc),
+    )
+
+    def expired_case(*args):
+        raise ValidationRefused("ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID")
+
+    monkeypatch.setattr(trial.business, "load_case", expired_case)
+    assert trial.complete(ctx, payload)["state"] == "expired"
 
 
 def test_same_conversation_followup_after_publication_uses_original_scope(target, dual, monkeypatch):

@@ -1,5 +1,6 @@
 """正式配置启用前沿原试跑执行；只消费目标已发布app级key。"""
 
+import hashlib
 import json
 import time
 from types import SimpleNamespace
@@ -8,7 +9,7 @@ from aiops_diagnostics.common.private_files import validate_private_file, write_
 from aiops_diagnostics.consumer.candidate_trial import consumer_identity
 from aiops_diagnostics.consumer.consumer_trial import ConsumerTrial
 from aiops_diagnostics.execution.chat_route_bindings import RouteBinding
-from aiops_diagnostics.execution.run_deliverability import deliverable
+from aiops_diagnostics.execution.run_deliverability import SUCCEEDED
 from aiops_diagnostics.gateway import environment_business as business
 from aiops_diagnostics.gateway import environment_registry
 from aiops_diagnostics.publication.environment_release import read_record
@@ -49,6 +50,80 @@ def trial_path(context, identifier, capability):
     )
 
 
+def _configuration(context, app_id):
+    from pathlib import Path
+
+    files = [
+        Path(context.settings.server_config_file),
+        Path(context.settings.environment_registry_file),
+        Path(context.settings.chat_dify_key_dir) / (app_id + ".key"),
+    ]
+    if context.settings.knowledge_delegation_file:
+        files.append(Path(context.settings.knowledge_delegation_file))
+    return tuple(hashlib.sha256(path.read_bytes()).hexdigest() for path in files)
+
+
+def _anchors(context, doc):
+    # 持久锚点只记「复验时刻的环境事实」：发行文档、release记录与配置指纹。
+    return {
+        "doc": hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest(),
+        "record": read_record(context.settings, doc["id"]),
+        "configuration": list(_configuration(context, doc["apps"]["consumer"]["app_id"])),
+    }
+
+
+def _reconfirm(context, doc, trial_id):
+    """进程内租约失活后的同一operation重核：持久锚点对活状态，不重放模型。
+
+    与 ``LocalConsumer.current()`` 同一证据面，唯一不复核的是租约自身的
+    300s 数据能力窗——复验只重建核对，不再开放试跑读能力。任一项对不上
+    都按 changed 拒绝，不把「查不到锚点」当通过。
+    """
+    path = (
+        context.settings.data_home / "environment-publications" / (doc["id"] + ".consumer-verification.json")
+    )
+    file = trial_path(context, doc["id"], "consumer")
+    if not path.exists() or not file.exists():
+        raise ValueError("release trial unavailable")
+    validate_private_file(path)
+    validate_private_file(file)
+    stored, intent = json.loads(path.read_text()), json.loads(file.read_text())
+    anchors = stored.get("anchors") or {}
+    if (
+        stored.get("operation") != doc["id"]
+        or stored.get("trial_id") != trial_id
+        or stored.get("state") != "passed"
+        or (intent.get("result") or {}).get("trial_id") != trial_id
+        or set(anchors) != {"doc", "record", "configuration"}
+    ):
+        raise ValueError("release trial unavailable")
+    spec = intent["spec"]
+    require_spec(doc, spec)
+    if (
+        hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest() != anchors["doc"]
+        or read_record(context.settings, doc["id"]) != anchors["record"]
+        or list(_configuration(context, doc["apps"]["consumer"]["app_id"])) != anchors["configuration"]
+    ):
+        raise ValueError("release trial changed")
+    case, digest = business.load_case(context, spec, "consumer")
+    if digest != intent["case_sha256"]:
+        raise ValueError("release case changed")
+    caller = consumer_identity(context, case["consumer_session"])
+    if (
+        caller.delegated
+        or caller.data_scope.type != "self"
+        or not caller.subject.c_user_id
+        or caller.scope_fingerprint != stored["scope_fingerprint"]
+        or caller.effective_tenant_id != doc["tenant_id"]
+    ):
+        raise ValueError("release consumer identity changed")
+    body = environment_registry.load(context.settings.environment_registry_file)
+    row = next(r for r in body["environments"] if r["id"] == doc["environment"])
+    if any(t["id"] == doc["tenant_id"] and t["enabled"] for t in row["tenants"]):
+        raise ValueError("release validation requires closed admission")
+    return caller, case["cases"]["consumer"]
+
+
 class LocalConsumer:
     def __init__(self, context, doc, spec, case):
         self.context, self.doc, self.spec, self.case = context, doc, spec, case
@@ -69,17 +144,7 @@ class LocalConsumer:
         self.configuration = self.current_configuration()
 
     def current_configuration(self):
-        import hashlib
-        from pathlib import Path
-
-        files = [
-            Path(self.context.settings.server_config_file),
-            Path(self.context.settings.environment_registry_file),
-            Path(self.context.settings.chat_dify_key_dir) / (self.scope["app_id"] + ".key"),
-        ]
-        if self.context.settings.knowledge_delegation_file:
-            files.append(Path(self.context.settings.knowledge_delegation_file))
-        return tuple(hashlib.sha256(path.read_bytes()).hexdigest() for path in files)
+        return _configuration(self.context, self.scope["app_id"])
 
     def authorize(self, *, allow_closed=False):
         if self.closed and not allow_closed:
@@ -225,12 +290,22 @@ def read(context, payload):
     doc = document(context, payload["operation"])
     trial_id = payload["trial_id"]
     adapter = context.consumer_candidate_trials.leases.get(trial_id)
-    if adapter is None or not isinstance(adapter, LocalConsumer) or adapter.doc["id"] != doc["id"]:
-        raise ValueError("release trial unavailable")
-    # 原ConsumerTrial会在结束关闭数据能力；完成读回核原scope/现行知识/原run。
-    caller = adapter.current()
-    context.runtime._require_chat_order_visible(caller, adapter.scope["order_no"])
-    expected_reference = adapter.case["cases"]["consumer"]["reference_id"]
+    order_no = expected_reference = None
+    if adapter is not None and isinstance(adapter, LocalConsumer) and adapter.doc["id"] == doc["id"]:
+        try:
+            # 原ConsumerTrial会在结束关闭数据能力；完成读回核原scope/现行知识/原run。
+            caller = adapter.current()
+            order_no, expected_reference = (
+                adapter.scope["order_no"],
+                adapter.case["cases"]["consumer"]["reference_id"],
+            )
+        except ValueError:
+            # 租约自身的300s窗关闭不吞错也不放大：交给持久锚点重核同一证据面。
+            order_no = None
+    if order_no is None:
+        caller, item = _reconfirm(context, doc, trial_id)
+        order_no, expected_reference = item["order_no"], item["reference_id"]
+    context.runtime._require_chat_order_visible(caller, order_no)
     if payload["expected_reference"] != expected_reference:
         raise ValueError("release reference changed")
     trial = context.runtime.get_trial(caller, trial_id)
@@ -244,7 +319,7 @@ def read(context, payload):
         or run.app_id != doc["apps"]["consumer"]["app_id"]
         or run.workflow_id != doc["apps"]["consumer"]["workflow_id"]
         or run.scope_fingerprint != caller.scope_fingerprint
-        or not deliverable(run)
+        or run.state != SUCCEEDED
     ):
         raise ValueError("release run identity mismatch")
     calls = (context.dify_run_store.context(run.run_id) or {}).get("calls", [])
@@ -254,11 +329,10 @@ def read(context, payload):
         if c["tool"] == "knowledge" and (c.get("result") or {}).get("status") == "found"
         for s in c["result"].get("sources", [])
     }
-    order = adapter.scope["order_no"]
     snapshot = context.dify_run_store.snapshot(run.run_id) or {}
     displayed = {b.get("reference_id") for b in snapshot.get("blocks", []) if b.get("kind") == "reference"}
     if expected_reference not in sources & displayed or not any(
-        c["tool"] == "status" and order in (c.get("result") or {}).get("order_ids", []) for c in calls
+        c["tool"] == "status" and order_no in (c.get("result") or {}).get("order_ids", []) for c in calls
     ):
         raise ValueError("formal business proof missing")
     from aiops_diagnostics.knowledge.delegated_knowledge_client import for_application
@@ -275,6 +349,7 @@ def read(context, payload):
         "app_id": run.app_id,
         "observed_at": time.time(),
         "scope_fingerprint": run.scope_fingerprint,
+        "anchors": _anchors(context, doc),
     }
     write_private_text(
         context.settings.data_home / "environment-publications" / (doc["id"] + ".consumer-verification.json"),
@@ -284,24 +359,27 @@ def read(context, payload):
 
 
 def complete(context, payload):
-    from aiops_diagnostics.gateway.environment_trial import read as read_operator
-
-    doc = document(context, payload["operation"])
-    require_spec(doc, payload["spec"])
+    try:
+        doc = document(context, payload["operation"])
+        require_spec(doc, payload["spec"])
+        case, _ = business.load_case(context, payload["spec"], "consumer")
+    except ValueError:
+        # 发行物/案例期限已尽属终态而非待对账：上游据此落可恢复态而非无限重领。
+        return {
+            "operation": payload["operation"],
+            "state": "expired",
+            "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED",
+        }
     path = (
         context.settings.data_home / "environment-publications" / (doc["id"] + ".consumer-verification.json")
     )
     validate_private_file(path)
-    result = json.loads(path.read_text())
-    if time.time() - result["observed_at"] > 300:
-        raise ValueError("formal consumer evidence expired")
-    original_time = result["observed_at"]
-    case, _ = business.load_case(context, payload["spec"], "consumer")
+    stored = json.loads(path.read_text())
     result = read(
         context,
         {
             "operation": doc["id"],
-            "trial_id": result["trial_id"],
+            "trial_id": stored["trial_id"],
             "expected_reference": case["cases"]["consumer"]["reference_id"],
         },
     )
@@ -317,19 +395,16 @@ def complete(context, payload):
         intent = json.loads(file.read_text())
         if intent["spec"] != spec or intent["result"]["trial_id"] != trial_id:
             raise ValueError("operator run belongs to another operation")
-        if (
-            read_operator(context, {"app_id": doc["apps"]["operator"]["app_id"], "trial_id": trial_id})[
-                "status"
-            ]
-            != "completed"
-        ):
+        # 租约失活不抹除已落账事实：完成度读持久QA/run，证据仍由operator_evidence核。
+        run = context.agent_run_store.by_qa(trial_id)
+        qa = context.store.get_assistant_question(trial_id, run.scope_fingerprint) if run else None
+        if run is None or qa is None or qa["status"] != "completed":
             raise ValueError("formal operator evidence incomplete")
         proofs.append(
             business.operator_evidence(context, capability, trial_id, case["cases"][capability], spec)
         )
     result.update(
         operator_runs=[p["run_id"] for p in proofs],
-        observed_at=original_time,
         spec=payload["spec"],
         trials=payload["trials"],
     )
