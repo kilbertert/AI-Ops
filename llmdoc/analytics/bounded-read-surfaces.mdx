@@ -35,7 +35,7 @@ code:
 
 ## 数据读取层（data/）
 
-- `sources.py`：pymysql 只读层。`SITE_SCOPE_MAX_ROWS=1000`（+1 行探测截断 → `ScopeError SCOPE_ERROR_SCOPE_TOO_LARGE`）；`FAULT_CODE_RANK_LIMIT=7`；`MAX_EXECUTION_TIME` hint；latest-3-orders 助手。
+- `sources.py`：pymysql 只读层。`SITE_SCOPE_MAX_ROWS=1000`（+1 行探测截断 → `ScopeError SCOPE_ERROR_SCOPE_TOO_LARGE`）；`FAULT_CODE_RANK_LIMIT=7`；`MAX_EXECUTION_TIME` hint；latest-3-orders 助手。`scoped_*_source` 在 `settings.ssh.enabled` 时起 `ssh -N -L` 转发子进程并改写 Settings 副本 host——本模块不只是读层（详见 [shared-primitives](../common/shared-primitives.mdx)）。
 - `offline_source.py`：REPEATABLE-READ 强制，`MAX_ROWS=5000`、`MAX_DEVICES=1000`，必须带 tenant+site 范围。
 - `charging_status.py`：`/chOrderInfo/chargingInfo/{order}` 带 `tenant-id`+`user-id` 头、无 token（consumer 凭据形状）；`ChargingStatusError` 统一。
 

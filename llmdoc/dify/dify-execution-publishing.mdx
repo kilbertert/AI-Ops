@@ -36,7 +36,7 @@ code:
 
 ## DSL 拉取
 
-- `dify_dsl_pull.py` (resolve_pulled_config, sync_binding_from_dify)：只拉不推，落草稿不落发布；`partition_aiops_tools` 的 UUID→名映射只存在这里；`knowledge_base_ids` 是运营输入，**不从 DSL 取**（Dify dataset UUID ≠ 我们的 kb id）；agent 已存在后 `model` 永不被 DSL 覆盖。dry-run 与真拉调用同一个函数所以不会不一致——bridge 侧解析被否（bridge 跑系统 python 无 pydantic）。
+- `dify_dsl_pull.py` (resolve_pulled_config, sync_binding_from_dify)：只拉不推，落草稿不落发布；`partition_aiops_tools` 的 UUID→名映射只存在这里；`knowledge_base_ids` 是运营输入，**不从 DSL 取**（Dify dataset UUID ≠ 我们的 kb id）；agent 已存在后 `model` 永不被 DSL 覆盖。dry-run 与真拉调用同一个函数所以不会不一致——bridge 侧解析被否（bridge 跑系统 python 无 pydantic）。`commit_workflow_snapshot` 已抽成独立步骤——冻结图持久化可被拉取路径以外的生产方调用（环境候选准备消费它）。
 
 ## 试用 = 同路径 + 冻结候选
 
@@ -59,7 +59,7 @@ code:
 - `chat_route_bindings` 是路由指针表：发布推进、撤回置 `retracted` **留行**（ADR-0127）、恢复是另一次显式发布（细节见 [publication-lifecycle](../publication/publication-lifecycle.mdx) 与 [execution-delegation](../execution/execution-delegation.mdx)）。
 - 状态位置：草稿只在 Dify（chat app 无草稿区，保存即覆盖单一指针）；试用=临时 app+trial 作业；已发布=不可变 `agent_versions` 行+路由指针；运行时逐请求读指针。
 - `DIFY_APP_NOT_BOUND`(404) 与 `ORDER_NOT_FOUND`(404) 是不同消息；不认识的 404 报 "unconfirmed" 为 502，绝不猜（ADR-0064）。
-- `ops/dify-exposure-registry.md` 是 Dify 可达面的唯一枚举（CI 断言声明==路由）；`/v1/dify/` nginx 前缀是登记的例外（保留 `Authorization`，不注入会话）。
+- `ops/dify-exposure-registry.md` 是 Dify 可达面的唯一枚举（CI 断言声明==路由）；`/v1/dify/` nginx 前缀是登记的例外（保留 `Authorization`，不注入会话）。枚举面已扩：`/v1/dify/management/environment*`（发布 key+活跃公司会话+显式环境授权）与 `ckx_` 候选知识连接 Bearer（工作区级、无默认来源回落）——登记是唯一声明，新增面先入表再可达。
 
 ## Canonical anchors
 

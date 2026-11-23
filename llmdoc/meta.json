@@ -61,6 +61,9 @@
     },
     "governance/test-architecture.mdx": {
       "validatedRevision": "c5e2f06645277d98af99e463d8d04955afe7d44f"
+    },
+    "gateway/environment-onboarding.mdx": {
+      "validatedRevision": null
     }
   },
   "convergence": {

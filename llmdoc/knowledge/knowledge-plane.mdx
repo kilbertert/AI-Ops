@@ -15,6 +15,8 @@ code:
     - src/aiops_diagnostics/knowledge/kb_onboarding.py
     - src/aiops_diagnostics/knowledge/ragflow_console.py
     - src/aiops_diagnostics/knowledge/tenant_scope.py
+    - src/aiops_diagnostics/knowledge/knowledge_delegation.py
+    - src/aiops_diagnostics/knowledge/delegated_knowledge_client.py
     - src/aiops_diagnostics/dify/dify_knowledge_api.py
     - src/aiops_diagnostics/dify/candidate_knowledge.py
     - src/aiops_diagnostics/dify/environment_knowledge_connection.py
@@ -24,6 +26,8 @@ code:
     - plugins/consumer_knowledge/client.py
     - ops/knowledge-console/kb-mall-hop.conf
     - tests/knowledge/test_tenant_scope.py
+    - tests/knowledge/test_knowledge_delegation.py
+    - tests/gateway/test_candidate_knowledge_connection.py
 ---
 
 # 知识平面（RAGFlow × Dify 外部知识）
@@ -43,12 +47,22 @@ code:
 准入由最新knowledge-connect任务、当前管理授权/冻结目录及工作区唯一映射共同决定，
 每次列表/检索和素材取回前后复核。证据TTL不自动撤销长期连接；取消或输入漂移则拒绝。
 任务先记创建意图再POST，未知结果只对账；这里只准备API连接，不创建external dataset或绑定应用。
-旧production/debug来源规则保持；候选不能扩展到默认空间。操作合同见[环境手册](../../docs/agents/environment-registry.md#候选知识连接准备)。
+旧production/debug来源规则保持；候选不能扩展到默认空间。操作合同见`docs/agents/environment-registry.md` 的候选知识连接准备节。
 
 - 优先级一处持有（`knowledge_sources.py`）：**手动 DB 行（`dify_knowledge_bindings`）> env 行 > 自动派生 1:1:1**——手动赢因为它是最新的人类决定；auto 只补缺；每次检索都读表（取消勾选下一问生效，无缓存）。
 - Dify dataset 两步（ADR-0096）：create 载荷没有 `permission` 字段（默认 `only_me`——这是"知识库未找到"的真因），必须建后 PATCH，且 PATCH 要两个 external 字段一起给否则 500。幂等键 `(workspace, external_knowledge_id)`——名字无唯一约束；名字上限 40 不是 100（create 宽 PATCH 严会产生看不见的孤儿行）。
 - **同步触发 = picker 打开**（ADR-0122）：`POST /v1/internal/knowledge/sync` 由 Dify web patch 在"添加知识"对话框触发（不是我们列表路由——最初的猜测是错的）。同步失败永不改变列表响应；孤儿只记日志不自动删，除非 `retire_orphans`（4 重保护：默认关、只动派生 `tenant-X:Y` 形状、上游读失败不得调 `run()`、dry-run 不写）。
 - **同步闸排队不丢**（`knowledge_dataset_sync_guard.py`）：两遍同步 → 第二遍等第一遍完成后跑全新一轮——时间下限版曾把用户 9 秒前刚建的库吞掉（41 真事故）。
+
+## 跨环境知识委派（delegation）
+
+`knowledge_delegation.py` 导出 `aiops-knowledge-delegation/1` 能力文件（中央侧正式读能力；
+授权真值仍是原 `KnowledgeGrants`+应用归属，复核 grant 代数单调——吊销→重授不能复活旧代凭据，
+代数机制见 [consumer-chat](../consumer/consumer-chat.mdx)）。`delegated_knowledge_client.py`
+是目标侧消费者：配 `knowledge_delegation_file` 后检索走委派客户端，**配置后不回退共享 KB 直连**；
+`consumer_knowledge.select_context` 按 `for_application(runtime, tenant, app_id)` 逐应用调用，
+`agent_version=f"consumer:{agent_id}#v{version}"`；委派不可用 → `KnowledgeSearchResult(UNAVAILABLE)`
+不是异常上抛。
 
 ## 1:1:1 三元组与凭据保管
 
@@ -82,4 +96,4 @@ code:
 - `ops/dify-exposure-registry.md`（知识跳的暴露登记）
 
 候选知识准备按明确环境与租户复用原开户和空库接口；未知创建进度在环境任务账本保留，新计划先核原资源。
-现行合同见[候选知识手册](../../docs/agents/environment-registry.md#候选知识资源准备)；旧默认知识空间不被新准备路径收养。
+现行合同见`docs/agents/environment-registry.md` 的候选知识资源准备节；旧默认知识空间不被新准备路径收养。

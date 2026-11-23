@@ -54,7 +54,7 @@ code:
 ## 路由绑定与 exec 配置
 
 - `chat_route_bindings`：PK `(environment, tenant_id, entry, scenario)`，只有 `active`/`retracted`；publish/retract 是 `revision` 上的 CAS。**撤回留行**（ADR-0127）：retracted → 410 `CHAT_ROUTE_RETRACTED`，与"从未配置"的 404/`CHARGING_STATUS_DISABLED` 可区分——删行会让 select_binding 落回直读，那等于冒充"仍在服役"。撤回的 revision 不可再发布（`NodeRouteConflict`）。
-- `execution_manifest.py`：manifest 身份 = **原始字节 sha256**（重序列化会制造漂移）；schemas `m3-exec-config/1|operator-exec-config/1|operator-agent/1|gateway-conversation/1`；已配置但非法 → 启动失败；拒 symlink/非常规文件/组可读；manifest 不含凭据。
+- `execution_manifest.py`：manifest 身份 = **原始字节 sha256**（重序列化会制造漂移）；接受的 schemas = `m3-exec-config/1|operator-exec-config/1|operator-conversation/1|operator-agent/1`（Python/Java 两侧同一集合）；`gateway-conversation/1` **不是 schema**，是 `schema==operator-agent/1` 时 `history_policy` 的必填值（其余 schema 必须 `none`）——schema/策略错配拒整份清单。已配置但非法 → 启动失败；拒 symlink/非常规文件/组可读；manifest 不含凭据。
 - `node_capabilities.require_compatible`：注册+active+心跳 ≤120s+schema+tool_contract+`tools_sha256`（对 operator_tools.json）→ `SETUP_EXECUTOR_UNAVAILABLE/INCOMPATIBLE`。后台检查**不自动撤**现役路由。
 - `node_publication.advance`：route CAS + retracted guard + revision guard；冲突类是刻意的"保持当前已发布状态"，不是错误。
 

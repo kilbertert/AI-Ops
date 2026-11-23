@@ -1,0 +1,149 @@
+---
+description: "环境开通流水线：草稿→计划→任务账本→受管安装→登记→验证→发布的阶段合同、候选停用不变量、dev-host oneshot worker 与目标 dispatch 分工、task-key HMAC 目标管理入口、CAS 制品身份、发布与安装分离"
+kind: architecture
+relations:
+  requires:
+    - identity/identity-scope.mdx
+  related:
+    - execution-model.mdx
+    - gateway/gateway-runtime.mdx
+    - deployment/delivery-and-hosts.mdx
+    - dify/dify-self-service.mdx
+    - knowledge/knowledge-plane.mdx
+code:
+  paths:
+    - src/aiops_diagnostics/gateway/environment_drafts.py
+    - src/aiops_diagnostics/gateway/environment_plans.py
+    - src/aiops_diagnostics/gateway/environment_tasks.py
+    - src/aiops_diagnostics/gateway/environment_projection.py
+    - src/aiops_diagnostics/gateway/environment_artifacts.py
+    - src/aiops_diagnostics/gateway/environment_task_worker.py
+    - src/aiops_diagnostics/gateway/environment_validation_worker.py
+    - src/aiops_diagnostics/gateway/environment_publication_worker.py
+    - src/aiops_diagnostics/gateway/environment_business.py
+    - src/aiops_diagnostics/gateway/environment_capacity.py
+    - src/aiops_diagnostics/gateway/environment_readiness.py
+    - src/aiops_diagnostics/gateway/environment_trial.py
+    - src/aiops_diagnostics/gateway/environment_release_trial.py
+    - src/aiops_diagnostics/dify/environment_candidate_preparation.py
+    - src/aiops_diagnostics/dify/environment_installation.py
+    - src/aiops_diagnostics/dify/environment_management.py
+    - src/aiops_diagnostics/dify/environment_registration.py
+    - src/aiops_diagnostics/dify/environment_validation.py
+    - src/aiops_diagnostics/dify/environment_publication.py
+    - src/aiops_diagnostics/dify/environment_consumer_trial.py
+    - src/aiops_diagnostics/dify/environment_knowledge.py
+    - src/aiops_diagnostics/publication/environment_release.py
+    - src/aiops_diagnostics/consumer/candidate_trial.py
+    - src/aiops_diagnostics/admin_cli.py
+    - docs/agents/environment-registry.md
+    - docs/acceptance/environment-directory.feature
+    - docs/acceptance/environment-directory-qa-plan.md
+    - tools/verification/business-environments/network_preflight.py
+    - tests/gateway/test_environment_plans.py
+    - tests/gateway/test_environment_trial.py
+    - tests/gateway/test_environment_tasks.py
+    - tests/gateway/test_environment_installation.py
+    - tests/gateway/test_environment_candidate_preparation.py
+    - tests/dify/test_environment_management.py
+    - tests/publication/test_environment_release.py
+    - tests/publication/test_environment_release_trial.py
+    - tests/consumer/test_candidate_trial.py
+    - tests/gateway/test_consumer_candidate_trial.py
+    - tests/tooling/test_environment_network_preflight.py
+---
+
+# 环境开通流水线
+
+问题：一个新业务环境如何从「登记草稿」走到「正式服务客户」。控制端是 41 上的中央 Gateway
+（任务账本 + admin `environment-*` 命令族 + `/v1/dify/management/environment*` 管理面），
+目标端是受管主机上的独立最小安装（`aiops-access-<环境>`）。阶段合同分散在
+`docs/agents/environment-registry.md`（D 编号阶段）与 `ops/environments/gateway/install.md`
+（安装侧 D30→D43），本页只记跨阶段不变量与各域分工——逐字段输入形状以源码与手册为准。
+
+## 核心不变量
+
+- **候选 ≠ 现役**。候选安装/登记/验证全程停用在独立根，正式目录的准入、路由、凭据一个不动；
+  「安装过」不证明「可服务」。发布（D43）是把已验证冻结内容推成现役的独立决定，
+  与安装、登记、验证各步分开，绝不在同一动作里暗合。
+- **执行端在 dev-host，不在目标**。`environment_task_worker`/`environment_validation_worker`/
+  `environment_publication_worker` 是发起主机上的 oneshot 执行器（dev-host 用户 timer
+  `aiops-site-preflight` 定期拉起），经 `dev-host exec`（SSH）到达受管主机；受管主机侧只跑
+  `environment-task-dispatch`/`environment-trial-dispatch` 内部领取。没有远程常驻 daemon。
+- **执行端重核安装器身份**：worker 先查任务修订是 `origin/main` 祖先（merge-base），再用
+  `ops/environments/gateway/build-installer.sh` 重建安装器、sha256 比对一致才搬运
+  （`dev-host cp`）；tar 成员白名单 `{REVISION,SHA256SUMS,install.py,runtime_check.py,
+  probe.py,artifact_checks.py,task.py,publication.py}`——包外文件不执行。
+- **任务账本是唯一状态真值**：waiting→queued→executing/running(lease)→checking→
+  observed/blocked/expired/reconcile；安装专用 waiting/executing/checking 不被旧 worker 领取。
+  失联只 observe 不重复 apply；取消等安全结果。
+- **目标管理入口走 task-key HMAC**：`POST /v1/internal/environment-tasks` 与
+  `/v1/internal/environment-trial` 仅回环、`AIOPS_GATEWAY_ENVIRONMENT_TASK_KEY` HMAC 门控，
+  未配 task-key/登记文件 → 404 `ENVIRONMENT_TRIAL_DISABLED`。
+- **制品身份 CAS**：`environment-artifacts` 命令按显式环境 + 受控 references 路径 +
+  当前文件摘要做 CAS 更新（identity 三元组 + environment + expected_sha256，
+  ≤65536，`validate_private_file`）；只改原配置引用、先备份再原子替换，不安装不激活。
+  计划预检（P4）的归档成员摘要/Python/内部修订校验 Gateway 与 P3 安装器共用；
+  文件通过不证明 Git 来源、全部配置可启动或现场可用。
+
+## 阶段分工（谁拥有哪一段）
+
+- **目录草稿与计划**（gateway 侧）：`environment_drafts` 草稿账本（保存 ≠ 发布）、
+  `environment_plans`/`environment_projection` 计划与投影、`environment_tasks` 任务账本；
+  `environment_registry` 的准入语义归 [identity-scope](../identity/identity-scope.mdx)。
+- **管理面**（dify 侧）：`environment_management.register` 挂在 `self_service_api` 的
+  `management_session`（仅发布 key Bearer，不吃 operator-profiles 闸）之下，外加
+  `/v1/internal/environment-tasks`（task-key HMAC）；「正常公司会话 + 显式目录授权」
+  才动目录，连接草稿不改变生效目录。`environment_registration`（已安装候选接入登记：
+  未知结果只读观察不重造）、`environment_validation`（已登记候选三业务验证）、
+  `environment_publication`（正式发布协调，沿原任务账本）同层。
+- **候选试运行**：控制端 `dify/environment_consumer_trial` 构造 `ConsumerTrial(draft,
+  candidate=adapter)`；目标端 `consumer/candidate_trial.py` 发 `ect_` 租约——300s、≤20 并发、
+  open→claimed→closed、`installed()` 每次调用重核安装血统（环境行/租户停用态/构建版本/
+  production.env+environment.json+两 manifest 的 sha256 快照），公司会话只存目标进程内存，
+  `close` 不依赖正向授权。`ect_` 只在 `POST /v1/internal/consumer-data/agent` 放通
+  （capability 必须 `agent`），消费侧规则见 [consumer-chat](../consumer/consumer-chat.mdx)。
+  停用候选管家试运行（D35）复用 `/v1/internal/environment-trial`：目标 task-key HMAC +
+  受管目标正常登录交接，≤20 个 5 分钟授权、重启失效，不放开普通目录准入、不写正式
+  route/grant。已发布应用的沿原试跑由 `environment_release_trial`（只消费已发布 app 级
+  key，`ConsumerTrial.published` 三元组，不建临时 app）承担。
+- **目标侧验收**：`environment_readiness` 发布前目标事实检查（不接表单 passed）、
+  `environment_business` 目标本机业务验证（案例只留本环境）、`environment_capacity`
+  三能力运行期采样；`tools/verification/business-environments/network_preflight.py`
+  是调用方侧正式网络预检。
+- **发布**：`publication/environment_release.py` 目标消费已核冻结内容——原 Agent 版本与
+  route CAS 仍是唯一发布真值（路由 CAS 合同见
+  [publication-lifecycle](../publication/publication-lifecycle.mdx)）。
+- **逐入口资源准备**（每入口 workspace/knowledge/app 草稿）在受管目录的自助面实现，
+  归 [dify-self-service](../dify/dify-self-service.mdx)；候选知识连接（ckx）归
+  [knowledge-plane](../knowledge/knowledge-plane.mdx)；安装器资产与制品交付归
+  [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)。
+
+## admin `environment-*` 命令族
+
+`admin_cli.py` 的环境命令族是本流水线的操作面：`environment-registry check|apply|migrate`
+（check 摘要、apply 按 expected_revision CAS 发布登记册——新版输入须 `{environments,
+managers}` 结构、migrate 升级管理目录，ADR-0256）、`environment-draft`/`environment-plan`/
+`environment-artifacts`/`environment-runtime`/`environment-runtime-register`/
+`environment-task-worker`/`environment-task-dispatch`/`environment-trial-dispatch`/
+`environment-release`。`--central-target` 模式不携带 key/URL（身份由 dev-host 记录承担）。
+迁移类命令构造合成 ASSERTED ScopeContext，不走请求身份；其余特权命令面见
+[gateway-runtime](gateway-runtime.mdx)。
+
+## 失败语义速查
+
+- 登记/验证的「未知」结果只回读观察，绝不重建资源（重试会造孤儿）。
+- 安装任务失联：只 observe 同操作与 installed，不重复 apply；恢复经原锁重入。
+- 候选凭据不能放大到控制默认库或正式路由——准备串联须 Gateway 与桥配套，旧单步骤保持。
+- 安装通过仍不注册、不跑模型、不激活租户；真实业务验证是独立后继。
+
+## Canonical anchors
+
+- `src/aiops_diagnostics/gateway/environment_tasks.py`（任务账本状态机）
+- `src/aiops_diagnostics/gateway/environment_task_worker.py`（dev-host 执行端：merge-base + sha256 + tar 白名单 + dev-host cp）
+- `src/aiops_diagnostics/dify/environment_management.py`（`/v1/dify/management/environment*` + `/v1/internal/environment-tasks` 挂载）
+- `src/aiops_diagnostics/dify/environment_{registration,validation,publication}.py`（登记/验证/发布协调）
+- `src/aiops_diagnostics/consumer/candidate_trial.py`（`ect_` 目标租约）
+- `src/aiops_diagnostics/publication/environment_release.py`（发布真值 = 原 Agent 版本 + route CAS）
+- `src/aiops_diagnostics/admin_cli.py`（`environment-*` 命令族）
+- `ops/environments/gateway/install.md`（安装侧阶段手册，D30→D43）、`docs/agents/environment-registry.md`（D 阶段合同）
