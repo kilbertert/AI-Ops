@@ -223,3 +223,21 @@ _Avoid_: 与「公司租户」混称（租户是公司体系里的实体，工�
 **平台工作区**：平台账号（`sys_user.type = -1`）自己的那个 workspace。平台账号**不**获得别的租户的工作区访问权——它的"看全部"体现在试运行的订单范围与发布审计上，不体现在能进别人的编辑面。
 _Avoid_: 把「平台能看全部订单」推成「平台能改所有租户的智能体」
 
+**接入候选（candidate）**：环境接入流程中已按草稿准备、尚未激活为现役的对象——可以是候选应用、候选运行时或候选环境本身。代码前缀 `candidate_*` 与 `environment_candidate_*`（如 `dify/environment_candidate_preparation.py`、`consumer/candidate_trial.py`）。它与「试运行」分属两件事：试运行是用一份草稿跑一次，候选是被准备出来的实体；候选经发布与准入复验后才启用（顺序见[环境接入手册](docs/agents/environment-registry.md)）。
+_Avoid_: 已发布版本、现役环境、把「candidate」当成试验性代码（trial 才是试验动作）
+
+**执行环境（execution environment）**：节点绑定用的逻辑环境标识（`AIOPS_GATEWAY_EXECUTION_ENVIRONMENT`/`gateway_config.py` 的 `execution_environment`），决定充电状态等请求派给哪套节点；与「部署环境」是两个字段——后者是实例身份（如 `41`），本词不表示部署在哪台机器。
+_Avoid_: 部署环境、业务环境、接入候选
+
+**`environment_*` 代码前缀（命名约定）**：源码里约 30 个模块共用此前缀，但分属三种不同词义——部署环境（`gateway/deployment_environment.py`）、业务环境（`consumer/business_environments.py`）、接入候选（`gateway/`、`dify/` 下的大多数 `environment_*`）。读代码时先按本表上面三义定位；约定：`gateway/environment_*` 是接入账本与编排侧，`dify/environment_*` 是 Dify 供给侧，两侧各管流程的一段。新代码命名优先写全词义（如 `business_environment_*`、`candidate_*`），不再新增裸 `environment_*`。
+_Avoid_: 把任一 `environment` 变量直接当部署身份或业务环境、跨包按前缀猜职责
+
+**WF01**：C端智能客服主工作流的内部代号，代码与文档中作为稳定标识使用（如 `consumer/consumer_publication.py`、`dify/dify_chatflow.py`）；它不是一个对外的产品名。
+_Avoid_: 把 WF01 当版本号、把代号写进用户可见文案
+
+**`ect_` 前缀**：`consumer/candidate_trial.py` 签发的候选试用令牌前缀（environment candidate trial）；在日志与回调中出现时按该模块的语义解释。
+_Avoid_: 把它当成通用试用令牌（其他 trial 模块各有自己的令牌语义）
+
+**`__aiops/*` 路径**：`dify/dify_console_publish.py` 内面向浏览器的管理与发布回调路由前缀（如 `__aiops/manage`、`__aiops/publish`），经同源桥校验后转交网关；不是公开 API，也不是 `/v1/` 契约。
+_Avoid_: 把它当对外接口约定、在外部客户端里引用
+

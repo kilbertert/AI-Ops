@@ -1,3 +1,12 @@
+"""受限只读数据源适配。
+
+注意：``scoped_*_source`` 上下文管理器不止「打开连接」——当
+``settings.ssh.enabled`` 为真时，它们经 ``_ssh_tunnel`` 以
+``ssh -N -L`` 拉起端口转发子进程，并把 ``Settings`` **副本**中的主机
+改写为回环地址，退出时回收；直连模式既不拉子进程也不改写配置。
+「数据源」在本模块含进程管理语义。
+"""
+
 from __future__ import annotations
 
 import contextlib
