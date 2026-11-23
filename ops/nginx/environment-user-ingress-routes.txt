@@ -1,0 +1,20 @@
+# 环境用户助手入口实际转发的网关路径 —— 唯一声明处。
+#
+# 每条都是现有正常客户端会发出的调用（端点清单见 docs/testing-api-guide.md §3；
+# 管理面、发布面、Dify 运维面、/v1/internal/* 不在此列）。nginx 只转这一组，
+# `tests/test_environment_user_ingress.py` 断言：
+#   1) 这里每一条都被转发到本环境 Gateway；
+#   2) 网关 /v1/ 下**其余**路由一条都不进。
+# 新增一行而不同步 nginx 片段、或放进来不属于用户面的路径，CI 都会红。
+#
+# 形状：<方法> <路径模板>；{qa_id}/{conversation_id} 是 32 位十六进制。
+
+GET    /v1/faq/recommendations
+GET    /v1/faq/catalog
+POST   /v1/faq/answer
+POST   /v1/assistant/questions
+GET    /v1/assistant/questions/{qa_id}
+GET    /v1/conversations
+POST   /v1/conversations
+GET    /v1/conversations/{conversation_id}
+DELETE /v1/conversations/{conversation_id}

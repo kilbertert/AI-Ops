@@ -56,3 +56,81 @@ uv run pytest tests/integrations/test_environment_tool_ingress.py tests/test_nod
 真实Nginx与测试证书覆盖原公司路径、声明工具、身份头隔离、匿名拒绝、错误方法、未知路径、
 伪造Real-IP及HTTP拒绝。最初仅在父location写来源if，被子路径的rewrite指令遮蔽；
 检查现位于每个允许路径，保留原反例。测试上游是替身，不能证明真实公司数据或业务结论。
+
+## 环境用户助手入口
+
+同一台宿主、同一个公司既有 HTTPS vhost 上的第二类扩展片：只装回调片时正常用户
+`/v1/` 一律 404（客户端 FAQ/问答/会话从未到过本环境 Gateway）。本片在同一 server 块
+补开**用户助手精确入口**，与回调片互不修改、各自独立回退。信任边界见 ADR-0319。
+
+### 开放面与凭据分流
+
+转发面唯一声明处是 `ops/nginx/environment-user-ingress-routes.txt`：FAQ 三件套、
+`POST /v1/assistant/questions`、问答详情、`/v1/conversations` 的读取/新建/删除。
+管理面（`/v1/dify/*`、`/v1/agents`、`/v1/operator-*`）、`/v1/internal/*` 不进本片，
+客户端也拿不到任意 URL——上游固定本机 `127.0.0.1:8788`（本环境登记端口）。
+
+入口分流在 server 上下文 `set`/`if` 完成（不新增 `map`，location 内 `if` 只有
+`return`，无写语句），依据是客户端 `X-Business-Entry`——它只决定用哪套凭据
+处理，不是身份本身：
+
+| 申报入口 | Authorization | 会话头 | X-AIOps-Source-Key |
+|---|---|---|---|
+| `consumer` | 换成本环境服务 Bearer（凭据片值） | `third-session`→`X-Third-Session` | 清空（走会话解析链） |
+| `operator` | 透传个人 Bearer | 两种会话头都清空（不混 consumer 会话） | 本环境独立值（走公司令牌链，凭据不与其他环境共享） |
+| 其他/缺失 | 不转发 | — | location 内 403 |
+
+客户端自报的 `X-Third-Session`、`X-AIOps-Source-Key`、`X-AIOps-Environment(-Key)`、
+`X-AIOps-Gateway-Assertion` 一律覆盖或清空，到不了上游。身份仍由 Gateway 全量验证；
+环境目录停用该环境时 Gateway 继续拒绝——本片不授予、不切换任何路由。
+operator 走公司令牌链是本环境的真实 resolver 需要来源密钥分派（`SourceKeyCallerResolver`
+把密钥验过的请求交给 `CompanyTokenCallerResolver`，即公司体系身份契约 D5）；
+环境未配来源门时凭据片留空值，operator 请求落到既有链被拒——这是 fail closed，不是放行。
+
+### 生成固定制品
+
+```bash
+bash ops/environments/gateway/build-user-ingress.sh <已合并SHA> /private/user-ingress.tar.gz <环境号>
+```
+
+在开发机运行，包内只有 `REVISION`、`SHA256SUMS`、渲染环境号后的 conf/inc 与路由声明；
+**不含任何凭据值**。源代码/片段声明来自同一合并修订，不能用未合并工作树生成生产配置。
+制品及其摘要留私有运维账本，环境号只决定 `/etc/aiops-<环境号>/` 受控路径。
+
+### 凭据片（root 现场生成，0600，不入制品）
+
+安装机创建 `/etc/aiops-<环境号>/nginx-user-ingress-auth.conf`，0600、属主同服务账号，
+内容仅两行 `set`（无其他指令）：
+
+```nginx
+set $aiops_user_service_authorization "Bearer <本环境服务凭据>";
+set $aiops_user_operator_source_key "<本环境来源密钥，未配来源门则空串>";
+```
+
+服务凭据与环境 Gateway `third_session_service_token` 同源同值，来源密钥与该环境
+Gateway `company_source_key` 同源同值——两处值都只从运行时受控位置取，
+不进仓库、制品默认值或日志；**不复用其他环境的同名凭据**。
+缺失此文件 `nginx -t` 直接失败（未知变量），即不存在"没带凭据先放行"的窗口。
+
+### 安装前置、验证与回退
+
+前置核查与上方工具入口同一套纪律：只读核对 vhost include 位置、没有
+`location ^~ /v1/` 或更长 `^~` 前缀遮蔽本片路径、错误日志级别非 info/debug、
+access_log 格式不含 Authorization/Cookie 等秘密字段、无 debug_connection。
+本片在共享公司 server 内——**不得**用 `access_log off` 或改写宿主日志来"达标"，
+格式不合即拒绝安装另行评审，不未经授权动公司日志。
+
+1. `dev-host cp --artifact-sha256` 上传制品；核外层与包内摘要。
+2. 备份目标位置（初次不存在也记账）；先 `nginx -t` 确认原配置正常。
+3. 安装 conf/inc/凭据片（凭据 0600，conf/inc root 所有不可组写），再 `nginx -t`；
+   失败恢复原文件不 reload，成功才 reload。
+4. 用**本环境**正常会话/JWT 验收：consumer 会话问题到本环境数据、operator Bearer
+   走通、非法入口 403、未声明方法 405、管理面与 `/v1/internal/*` 404；
+   环境目录停用侧仍拒绝。不能用匿名 health 代替真实身份验收。
+5. 回退只移除本次 conf/inc/凭据片并 reload，不改回调片、不动公司其他配置、
+   不停止公司业务。
+
+本地验证：`uv run pytest tests/test_environment_user_ingress.py`——真实 nginx +
+回显上游，覆盖声明路由全转发、consumer 凭据注入与会话转换、operator 透传与
+伪造头清空、非法入口/错误方法拒绝、管理面与声明外 `/v1/` 路由不转发。
+测试上游是替身，不证明真实公司数据或业务结论。
