@@ -280,7 +280,7 @@ def runtime_files(archive, digest, environment):
     return files, body
 
 
-def compose_runtime(previous, previous_sha, incoming, incoming_sha, environment):
+def compose_runtime(previous, previous_sha, incoming, incoming_sha, environment, replaceable_tenants=()):
     """只累积同环境新租户的运行目标；共享执行资源不得顺带变化。"""
     import io
 
@@ -300,7 +300,11 @@ def compose_runtime(previous, previous_sha, incoming, incoming_sha, environment)
         raise ValueError("candidate target scope mismatch")
     same = [row for row in existing if row.get("tenant_id") == candidate["tenant_id"]]
     if same and same != [candidate]:
-        raise ValueError("existing tenant runtime cannot be replaced by candidate")
+        # 未开通租户的既有行是被消费的候选身份；重铸候选可原位替换。已开通租户仍拒绝。
+        if candidate["tenant_id"] not in replaceable_tenants:
+            raise ValueError("existing tenant runtime cannot be replaced by candidate")
+        existing = [row for row in existing if row.get("tenant_id") != candidate["tenant_id"]]
+        same = []
     if any(
         row.get("app_id") == candidate["app_id"] and row.get("tenant_id") != candidate["tenant_id"]
         for row in existing
