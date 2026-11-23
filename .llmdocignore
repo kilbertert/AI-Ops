@@ -20,5 +20,17 @@ RELEASE-NOTES.md
 VERSION
 pyproject.toml
 
+# 过程/规划自含记录（文件本身就是记录，同 docs/adr/ 类）
+.spec/
+docs/architecture/
+docs/system-strategy-audit.md
+SOP.md
+充电桩问题排查SOP.md
+integrations/cpms-java/README.md
+
+# 包缝合文件（barrel，无独立决策面；src/aiops_diagnostics/__init__.py 例外——版本合同已映射）
+src/aiops_diagnostics/dify/__init__.py
+src/aiops_diagnostics/gateway/__init__.py
+
 # 本文件自身的改动也不制造 unmapped 信号
 .llmdocignore
