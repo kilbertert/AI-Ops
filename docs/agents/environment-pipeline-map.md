@@ -26,8 +26,9 @@
 
 - 找"这一步在哪"：先按阶段定行，再看职责在两侧哪一栏；同名前缀的另一半
   在另一包里。
-- 「worker」是 `aiops-admin` 命令经 SSH 在受管主机上的远程执行半边，不是常驻
-  daemon；远端固定以 `/opt/aiops-41/` 为部署根（见 `environment_task_worker.py`）。
+- 「worker」是发起机上的单次执行体，经 `dev-host exec`（SSH）访问受管目标，
+  不是常驻 daemon；真正在受管主机上跑的是对应的 `*-dispatch` 命令
+  （受管侧固定以 `/opt/aiops-41/` 为部署根，见 `environment_task_worker.py`）。
 - 「trial/试运行」是用草稿或停用候选跑一次；「candidate/候选」是被准备出来
   尚未激活的对象。同名 `*_trial` 文件分处三包是因为它们各是该流程一段的
   端侧，不是重复实现。
