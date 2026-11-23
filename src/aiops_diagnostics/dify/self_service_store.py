@@ -370,9 +370,41 @@ class SelfServiceStore:
                 ).fetchone()
             ):
                 raise SetupConflict("SETUP_ROUTE_CONFLICT")
+            replaced = False
             existing_apps = []
             for app in desired:
                 row = db.execute("SELECT * FROM operator_apps WHERE app_id=?", (app["app_id"],)).fetchone()
+                if row is None and not observe_only:
+                    # 候选被一次越过中央的发布消费后由准备对账重铸：同租户同端同工作区
+                    # 的既有登记是本血统的上一任候选，原位换成新应用；任何其它不一致
+                    # 仍是归属冲突，不收养、不静默覆盖。
+                    prior = db.execute(
+                        "SELECT * FROM operator_apps WHERE tenant_id=? AND environment=? AND entry=?",
+                        (tenant, environment, app["entry"]),
+                    ).fetchone()
+                    if prior is not None and (
+                        prior["created_by"] != "environment-runtime"
+                        or prior["revision"] != 1
+                        or prior["workspace_id"] != workspace
+                        or prior["agent_name"] != app["entry"] + "-" + prior["app_id"]
+                        or prior["profile_id"] != app["profile_id"]
+                        or prior["scenario"] != dual_entry.scenario(app["entry"])
+                    ):
+                        raise SetupConflict("SETUP_APP_CONFLICT")
+                    if prior is not None:
+                        db.execute(
+                            "UPDATE operator_apps SET app_id=?,agent_name=?,targets_json=? WHERE app_id=?",
+                            (
+                                app["app_id"],
+                                app["agent_name"],
+                                json.dumps(app["targets"], ensure_ascii=False, sort_keys=True),
+                                prior["app_id"],
+                            ),
+                        )
+                        replaced = True
+                        row = db.execute(
+                            "SELECT * FROM operator_apps WHERE app_id=?", (app["app_id"],)
+                        ).fetchone()
                 if row and (
                     any(
                         row[k] != app[k]
@@ -397,7 +429,7 @@ class SelfServiceStore:
                 raise SetupConflict("SETUP_PARTIAL_REGISTRATION")
             if existing_workspace:
                 verify()
-                return False
+                return bool(replaced)
             if observe_only:
                 verify()
                 return None

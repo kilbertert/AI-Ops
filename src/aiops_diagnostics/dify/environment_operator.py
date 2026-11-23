@@ -109,7 +109,8 @@ def run(context, path, reference, payload):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
         if resources and resources.get("binding") != request["binding"]:
             raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
-        if not resources:
+
+        def mint():
             boundary()
             operation = str(uuid4())
             resources.update(
@@ -121,12 +122,31 @@ def run(context, path, reference, payload):
                 binding=request["binding"],
             )
             save()
+
+        if not resources:
+            mint()
         app_id = resources["expected_app_id"]
         try:
             app = console._call(scope[2], "/console/api/apps/" + app_id)
         except ConsoleApiError as exc:
             if exc.status != 404:
                 raise
+            app = None
+        if (
+            consumer
+            and app is not None
+            and not (
+                app.get("enable_api") is False
+                and app.get("enable_site") is False
+                and not app.get("workflow")
+                and not console._call(scope[2], "/console/api/apps/" + app_id + "/api-keys").get("data")
+            )
+        ):
+            # 越过中央步的发布已把继承的候选提升为正式应用，Dify 不提供降级路径；
+            # 对账放弃这份资源并重铸候选，否则该租户的消费者候选永远无法再验证。
+            resources.clear()
+            mint()
+            app_id = resources["expected_app_id"]
             app = None
         if app is None:
             if resources.get("attempted"):

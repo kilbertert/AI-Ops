@@ -122,6 +122,54 @@ def test_mid_transaction_failure_keeps_latest_evidence_and_no_partial_resources(
         assert db.execute("SELECT value FROM evidence").fetchall()[0][0] == "before"
 
 
+def test_consumed_candidate_reregisters_with_reminted_app(candidate):
+    store, registration, _ = candidate
+    assert register(candidate) is True
+    # 发布消费了原候选（应用已提升不可降级），准备对账重铸出新的 app_id；
+    # 重新登记应原位替换同租户同端的旧行，而不是按缺登记拒绝。
+    registration["consumer_app_id"] = "consumer-reminted"
+    assert register(candidate) is True
+    apps = {r["entry"]: r for r in rows(candidate)["operator_apps"]}
+    assert set(apps) == {"operator", "consumer"}
+    assert apps["consumer"]["app_id"] == "consumer-reminted"
+    assert apps["consumer"]["agent_name"] == "consumer-consumer-reminted"
+    assert apps["consumer"]["revision"] == 1
+    assert apps["operator"]["app_id"] == "operator-target"
+    assert all(r["app_id"] != "consumer-target" for r in apps.values())
+    assert register(candidate) is False
+
+
+@pytest.mark.parametrize("drift", ["actor", "workspace", "name", "profile", "scenario", "revision"])
+def test_replaced_app_row_must_share_registration_lineage(candidate, drift):
+    store, registration, _ = candidate
+    register(candidate)
+    registration["consumer_app_id"] = "consumer-reminted"
+    column, value = {
+        "actor": ("created_by", "'other'"),
+        "workspace": ("workspace_id", "'other-workspace'"),
+        "name": ("agent_name", "'renamed'"),
+        "profile": ("profile_id", "'other-profile'"),
+        "scenario": ("scenario", "'other'"),
+        "revision": ("revision", "2"),
+    }[drift]
+    with store.connection() as db:
+        db.execute(f"UPDATE operator_apps SET {column}={value} WHERE entry='consumer'")
+    before = rows(candidate)
+    with pytest.raises(SetupConflict):
+        register(candidate)
+    assert rows(candidate) == before
+
+
+def test_readonly_observe_does_not_replace_consumed_row(candidate):
+    store, registration, consumer = candidate
+    register(candidate)
+    registration["consumer_app_id"] = "consumer-reminted"
+    before = rows(candidate)
+    with pytest.raises(SetupConflict):
+        store.register_runtime(registration, consumer, verify=lambda: None, observe_only=True)
+    assert rows(candidate) == before
+
+
 def test_registration_rejects_formal_binding(candidate):
     from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
 
