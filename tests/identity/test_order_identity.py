@@ -203,7 +203,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "dify/dify_login_proxy.py": 2,  # 登录会话 id / token
     "dify/dify_login_server.py": 1,  # 登录 id
     "dify/dify_workspaces.py": 1,  # 应用 id
-    "dify/operator_run_logs.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
+    "dify/operator_run_logs_api.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
     "dify/self_service_api.py": 1,  # knowledge_base_id
     "dify/self_service_bridge.py": 4,  # kb_id/run_id/主体编号/verify_task引用名，非订单
     "dify/self_service_identity.py": 1,
