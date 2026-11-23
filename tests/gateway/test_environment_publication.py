@@ -306,6 +306,10 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
     monkeypatch.setattr(dify_console_admin, "DifyConsoleAdmin", Console)
     monkeypatch.setattr(dify_dsl_pull, "DifyDslClient", Dsl)
     request["steps"]["capacity"] = {"state": "passed", "observed_at": time.time(), "runs": ["c", "o", "f"]}
+    # 计划窗不得传进发行物：发行期限按签发时刻给链尾余量（ADR-0315），
+    # 远端 stage/verify/activate 与 trial 加载都复核它——继承计划窗会把它
+    # 冻成一个已经到期的值，链尾所有远端闸门必拒。
+    request["plan"]["expires_at"] = 0
     readiness = {
         "operator_manifest": "frozen",
         "operator_prompt": "sop",
@@ -334,6 +338,7 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
     from pathlib import Path
 
     private = json.loads(Path(result["path"]).read_text())
+    assert 3000 < private["expires_at"] - time.time() <= 3600
     assert private["apps"]["consumer"]["key"] == "synthetic-only-app-key"
     frozen = private["apps"]["consumer"]["workflow"]["environment_variables"]
     assert frozen and all(v.get("selector") == ["env", v["name"]] for v in frozen)
@@ -631,3 +636,75 @@ def test_target_staged_rejects_dash_prefixed_host_name(tmp_path):
         "request": {"target": {"host": "qy-gw-120"}, "plan": {"environment": "95"}},
     }
     assert worker.target_staged(tmp_path, staged, "task_" + "0" * 32) is True
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_attempted_publication_outlives_plan_window_but_cancel_still_refuses(validated, cancelled):
+    """attempted 发布的存续由账本与取消/漂移闸治理，不再受计划墙钟约束。
+
+    真实链路（readiness/capacity/central/target/verify/activate）超过计划 900s
+    窗时，在飞发布的每个前向 fresh 调用都被冻结计划墙钟拒死——任务停在
+    checking 可认领却永远走不出下一步，等同登记任务的 dispatched 无出口。
+    attempted（首个 intent 已消费）后窗只约束启动：取消行仍硬拒。
+    """
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "a" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    intent = {"publication": "intent", "id": identifier, "owner": owner}
+    assert internal(state, {**intent, "step": "readiness"}).json() == {"execute": True}
+    path = state[0][0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        assert request["attempted"] is True
+        request["plan"]["expires_at"] = 0
+        conn.execute(
+            "UPDATE environment_tasks SET request=?,cancel=? WHERE id=?",
+            (json.dumps(request), 1 if cancelled else 0, identifier),
+        )
+    response = internal(state, {**intent, "step": "capacity"})
+    if cancelled:
+        assert response.status_code in {403, 409}
+    else:
+        assert response.status_code == 200, response.text
+        assert response.json() == {"execute": True}
+        # 周期间让出回到 waiting：计划已死但链合法在飞，卡面须保持 queued
+        # ——谎报 expired 会让页面停止轮询并藏起「恢复本次开通」这个设计出口。
+        yielded = internal(state, {"publication": "yield", "id": identifier, "owner": owner})
+        assert yielded.status_code == 200, yielded.text
+        with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+            assert tasks._public(tasks._row(conn, identifier))["state"] == "queued"
+
+
+def test_publication_plan_window_still_gates_first_intent(validated):
+    """计划窗仍约束启动：未消费首个 intent 的发布在计划到期后不得认领。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    path = state[0][0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        request["plan"]["expires_at"] = 0
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), identifier))
+    claim = internal(state, {"installation_claim": True, "owner": "b" * 32})
+    assert claim.status_code == 200 and claim.json()["claimed"] is False
+    with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+        row = tasks._row(conn, identifier)
+        assert row["state"] == "blocked"
+        assert row["error"] == "ENVIRONMENT_TASK_OBSERVATION_REQUIRED"
+
+
+def test_publication_plan_window_gates_first_intent_after_claim(validated):
+    """认领成功不等于启动完成：认领后计划到期，首个 intent 仍被拒绝。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "c" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    path = state[0][0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        request["plan"]["expires_at"] = 0
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), identifier))
+    response = internal(
+        state, {"publication": "intent", "id": identifier, "owner": owner, "step": "readiness"}
+    )
+    assert response.status_code in {403, 409}

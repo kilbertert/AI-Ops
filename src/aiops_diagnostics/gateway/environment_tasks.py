@@ -64,7 +64,9 @@ def _public(row):
         state = "reconcile"
     if state == "running" and row["lease_until"] <= time.time():
         state = "reconcile"
-    if state == "queued" and request["plan"]["expires_at"] <= time.time():
+    # attempted 发布在周期间让出等待时计划可能已到期：链仍合法在飞，
+    # 卡面须保持 queued（页面继续轮询、取消可达），不能谎报 expired。
+    if state == "queued" and not request.get("attempted") and request["plan"]["expires_at"] <= time.time():
         state = "expired"
     result = json.loads(row["result"])
     if (
