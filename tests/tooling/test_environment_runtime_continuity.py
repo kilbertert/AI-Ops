@@ -366,9 +366,13 @@ def test_inactive_tenant_runtime_row_replaced_by_fresh_candidate(task_state, tmp
     assert manifest["source_runtime_sha256"] == recandidate["sha256"]
     assert manifest["previous_runtime_sha256"] == current["runtime_sha256"]
     assert old["runtime_sha256"] != current["runtime_sha256"]
-    # 替换结果可幂等重放：同一候选再次组合收敛为无操作。
-    assert task.execute(inst, again)["state"] == "observed"
-    assert inst.read_record("installed.json") == now
+    # 同一候选走全新任务重放：组合按血统收敛为无操作而非再次替换。
+    fresh = copy.deepcopy(again)
+    fresh["id"] = "task_" + "e" * 32
+    fresh["expected"] = {k: now[k] for k in fresh["expected"]}
+    repeated = task.execute(inst, fresh)
+    assert repeated["state"] == "observed" and repeated["installation"] == "unchanged"
+    assert repeated["runtime_sha256"] == now["runtime_sha256"]
 
 
 def test_enabled_tenant_runtime_row_still_refuses_candidate_replacement(task_state, tmp_path):
