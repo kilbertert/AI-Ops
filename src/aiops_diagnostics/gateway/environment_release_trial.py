@@ -288,13 +288,20 @@ def _start(context, payload):
     return outcome
 
 
-def read(context, payload):
+def read(context, payload, *, reconfirm=False):
     doc = document(context, payload["operation"])
     trial_id = payload["trial_id"]
     adapter = context.consumer_candidate_trials.leases.get(trial_id)
     order_no = expected_reference = None
     live = False
-    if adapter is not None and isinstance(adapter, LocalConsumer) and adapter.doc["id"] == doc["id"]:
+    # reconfirm=True 时跳过live快路：复证只核持久锚点的历史事实，180s交付窗
+    # 不借进来；普通read维持deliverable语义（结果此刻还能不能交付）。
+    if (
+        not reconfirm
+        and adapter is not None
+        and isinstance(adapter, LocalConsumer)
+        and adapter.doc["id"] == doc["id"]
+    ):
         try:
             # 原ConsumerTrial会在结束关闭数据能力；完成读回核原scope/现行知识/原run。
             caller = adapter.current()
@@ -378,6 +385,9 @@ def complete(context, payload):
         )
         validate_private_file(path)
         stored = json.loads(path.read_text())
+        # 复证不是交付：即使租约仍活也显式走持久锚点重核同一证据面——交付窗
+        # 已关闭而租约未满时，live路径会用deliverable拒掉已证明的run。
+        # 锚点缺席仍拒unavailable：首次complete前的锚点只由通过的普通read签下。
         result = read(
             context,
             {
@@ -385,6 +395,7 @@ def complete(context, payload):
                 "trial_id": stored["trial_id"],
                 "expected_reference": case["cases"]["consumer"]["reference_id"],
             },
+            reconfirm=True,
         )
         if result["state"] != "passed":
             raise ValueError("formal consumer evidence unavailable")

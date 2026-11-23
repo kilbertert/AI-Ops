@@ -36,16 +36,22 @@
   `run.state=="succeeded"` 的历史事实——交付 TTL 不伪装成证据存在性，
   与 operator 侧 `operator_evidence` 同语义。全部通过才回写新 `observed_at`
   与同一 anchors；任一不符按 changed 拒绝，锚点缺席按 unavailable 拒绝。
-- `release_trial.complete`：删 300s 早退与 `original_time` 回写；只有发行物
-  `expires_at` 真实越过（`ReleaseExpired`）或案例窗口闭合（`CaseExpired`，
-  对外仍 `ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID`）才返回终态
-  `{"state":"expired","error_code":"ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"}`；
-  spec 不符、案例形状无效、锚点缺席、身份撤权、内容篡改一律按原拒绝上抛，
-  不吞成时间过期。operator 完成度读持久 `agent_run_store`+QA，并在租约
-  消亡后按同一 case token 与 runtime sha 重新调用 `environment_trial.
-  identity`/`target` 重核现行公司身份与发布目标——scope 指纹须等于原
-  run、生效租户须等于 spec 租户、intent 的 `case_sha256` 须与现行案例
-  一致；`observed_at` 取最后一次全部核对完成后的墙钟。
+- `release_trial.complete`：删 300s 早退与 `original_time` 回写；complete
+  是**复证**不是交付——即使进程租约仍活也显式走 `read(..., reconfirm=True)`
+  的持久锚点重核，180s `deliverable` 交付窗只约束普通
+  `publication-trial-read`，不借进复证（否则交付窗关闭而租约未满的区间里，
+  已证明的 run 会被误拒；锚点仍只由通过的普通 read 签下）。只有发行物
+  `expires_at` 真实越过（`ReleaseExpired`）或案例窗口真实闭合
+  （`CaseExpired`，对外仍 `ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID`）
+  才返回终态 `{"state":"expired","error_code":"ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"}`；
+  案例 `expires_at` 超出 `now+3600` 上限属**无效输入**而非已过期，与
+  spec 不符、案例形状无效、锚点缺席、身份撤权、内容篡改一律按原拒绝
+  上抛，以便修正输入后重核，不落不可逆终态。operator 完成度读持久
+  `agent_run_store`+QA，并在租约消亡后按同一 case token 与 runtime sha
+  重新调用 `environment_trial.identity`/`target` 重核现行公司身份与发布
+  目标——scope 指纹须等于原 run、生效租户须等于 spec 租户、intent 的
+  `case_sha256` 须与现行案例一致；`observed_at` 取最后一次全部核对完成
+  后的墙钟。
 - `ops publication.activate`：receipt 按「除 `observed_at` 外逐项相等」核
   同一份证据身份；随后 `refresh_verification` 的结果被**消费**——300s
   新鲜度闸落在复验返回的确认时刻上，`state` 非 passed 或身份漂移仍拒。
@@ -56,6 +62,11 @@
   expired）时以 `state="expired"` 完成且先于 source 写——任务落
   blocked 不被 60s 节奏重领，原页面取消→恢复照旧不要求新鲜证据。
   发行物到期、activate 失败重领的循环因此在下一轮复核拿到确定终态。
+  与 installer 侧 `activate` 消费 `refresh_verification` 合计每次激活共
+  两次复核——这是刻意的两个信任/时间界面（中央 worker 判 expired 终态；
+  installer 传输后、准入放开前目标再核），非 stale-only 优化：fresh
+  proof 也重核，每次激活多一轮 operator 身份/目标核对的代价已接受，
+  不引入重设计签票或网络缓存。
   **已越过准入的中断除外**：activate 步已起步（intent started 或已记
   result）时先以 `target_task(observe_only)` 对账目标真实 phase——目标
   已 activated 则租户准入已放开，closed-admission 复核必永拒，此时按

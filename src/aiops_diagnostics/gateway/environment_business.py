@@ -96,9 +96,13 @@ def load_case(context, spec, capability):
         )
     ):
         raise ValidationRefused("ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID")
-    # 窗口闭合与内容无效分开：只有前者是可判终态的期限终态，篡改/异形仍属拒绝。
-    if not time.time() < case["expires_at"] <= time.time() + 3600:
+    # 窗口闭合与内容无效分开：只有实际越过的期限是可判终态；超出允许上限的
+    # 未来期限属无效输入（修正后可重核），与篡改/异形同按拒绝处理。
+    now = time.time()
+    if case["expires_at"] <= now:
         raise CaseExpired("ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID")
+    if case["expires_at"] > now + 3600:
+        raise ValidationRefused("ENVIRONMENT_VALIDATION_CASE_EXPIRED_OR_INVALID")
     item = case["cases"].get(capability)
     required = (
         {"question", "order_no", "reference_id"}

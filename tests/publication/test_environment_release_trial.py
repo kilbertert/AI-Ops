@@ -360,6 +360,35 @@ def test_three_formal_runs_complete_from_real_tool_evidence(target, dual, monkey
         ).read_text()
     )
     assert verified["observed_at"] >= max(identities + targets) >= stored["observed_at"] - 1
+    # 交付窗（run.expires_at 180s）已过而300s数据能力租约仍活：complete是复证
+    # 不是交付，显式经持久锚点重核「同一成功run曾完成」的历史事实；普通read
+    # 仍受交付窗约束。场景等价于receipt 170s已过、190s交付期尽、lease 300s
+    # 仍在、case 260s闭合——租约存活本身不许把交付TTL借进复证。
+    import sqlite3
+
+    with sqlite3.connect(ctx.dify_run_store.path) as db:
+        db.execute(
+            "UPDATE chat_dify_runs SET expires_at='2000-01-01T00:00:00+00:00' WHERE qa_id=?",
+            (consumer["trial_id"],),
+        )
+    with pytest.raises(ValueError, match="run identity mismatch"):
+        trial.read(
+            ctx,
+            {
+                "operation": doc["id"],
+                "trial_id": consumer["trial_id"],
+                "expected_reference": "ref-real",
+            },
+        )
+    checks = len(identities)
+    proven = trial.complete(ctx, {"operation": doc["id"], "spec": spec, "trials": trials})
+    assert proven["state"] == "passed" and proven["observed_at"] >= verified["observed_at"]
+    assert (proven["run_id"], proven["scope_fingerprint"], proven["operator_runs"]) == (
+        verified["run_id"],
+        verified["scope_fingerprint"],
+        verified["operator_runs"],
+    )
+    assert len(identities) == checks + 2 and len(dispatches) == 2 and len(requests) == 1
     # 进程租约失活（重启或300s数据能力窗关闭）后，complete按持久锚点重核同一
     # 证据面并写回新的observed_at；run/operator_runs不变，模型不重放。
     first = verified["observed_at"]
@@ -470,6 +499,12 @@ def test_complete_returns_expired_verdict_when_release_or_case_window_closed(tar
     }
     write_private_text(file, json.dumps(body))
     assert trial.complete(ctx, payload)["state"] == "expired"
+    # 超出允许上限的未来期限属无效输入而非已过期：拒绝以便修正输入后重核，
+    # 不落不可逆终态。
+    body["expires_at"] = time.time() + 7200
+    write_private_text(file, json.dumps(body))
+    with pytest.raises(trial.business.ValidationRefused):
+        trial.complete(ctx, payload)
     body["expires_at"] = time.time() + 600
     del body["consumer_session"]
     write_private_text(file, json.dumps(body))
