@@ -389,6 +389,54 @@ def test_enabled_tenant_runtime_row_still_refuses_candidate_replacement(task_sta
     assert not (tmp_path / "merged.tar").exists()
 
 
+def test_tenant_row_without_enabled_key_still_refuses_replacement(task_state, tmp_path):
+    """目录行缺 enabled 键按保护处理（fail-closed），不得当成未开通放行。"""
+    from pathlib import Path
+
+    inst, _, _ = task_state
+    spec, _ = second_tenant(task_state)
+    assert task.execute(inst, spec)["state"] == "observed"
+    directory = inst.config / "registry/environment.json"
+    body = json.loads(directory.read_text())
+    del body["environments"][0]["tenants"][1]["enabled"]
+    directory.write_text(json.dumps(body))
+    record = inst.read_record("installed.json")
+    record["registry_sha256"] = install.digest(directory)
+    inst.record("installed.json", record)
+    recandidate = retarget_runtime(
+        Path(spec["archives"]["runtime"]["path"]),
+        spec["archives"]["runtime"]["sha256"],
+        tmp_path / "recandidate.tar",
+        "new",
+        "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+    )
+    with pytest.raises(ValueError, match="cannot be replaced by candidate"):
+        inst.candidate_runtime(Path(recandidate["path"]), recandidate["sha256"], tmp_path / "merged.tar")
+    assert not (tmp_path / "merged.tar").exists()
+
+
+def test_unverifiable_registry_still_refuses_replacement(task_state, tmp_path):
+    """安装记录缺 registry_sha256 时判据集合为空——check_registry 先行拒绝。"""
+    from pathlib import Path
+
+    inst, _, _ = task_state
+    spec, _ = second_tenant(task_state)
+    assert task.execute(inst, spec)["state"] == "observed"
+    record = inst.read_record("installed.json")
+    record.pop("registry_sha256")
+    inst.record("installed.json", record)
+    recandidate = retarget_runtime(
+        Path(spec["archives"]["runtime"]["path"]),
+        spec["archives"]["runtime"]["sha256"],
+        tmp_path / "recandidate.tar",
+        "new",
+        "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+    )
+    with pytest.raises(ValueError, match="registry configuration drift"):
+        inst.candidate_runtime(Path(recandidate["path"]), recandidate["sha256"], tmp_path / "merged.tar")
+    assert not (tmp_path / "merged.tar").exists()
+
+
 def test_consumer_candidate_can_open_while_other_tenant_is_enabled(task_state, tmp_path, monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
