@@ -196,14 +196,11 @@ def test_promoted_adopted_candidate_is_abandoned_and_reminted(consumer_app):
     first["workflow"] = {"id": "published"}
     fixture = state[0][0]
     with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
-        row = conn.execute(
-            "SELECT request,environment FROM environment_tasks WHERE id=?", (job,)
-        ).fetchone()
+        row = conn.execute("SELECT request,environment FROM environment_tasks WHERE id=?", (job,)).fetchone()
         request = json.loads(row[0])
         request.pop("resources", None)
         conn.execute(
-            "INSERT INTO environment_tasks(id,environment,request,state,updated_at) "
-            "VALUES(?,?,?,'queued',?)",
+            "INSERT INTO environment_tasks(id,environment,request,state,updated_at) VALUES(?,?,?,'queued',?)",
             ("task_" + "1" * 32, row[1], json.dumps(request), time.time()),
         )
     result = execute(state, "task_" + "1" * 32)
@@ -223,14 +220,11 @@ def test_unpromoted_adopted_candidate_is_still_reused(consumer_app):
     first = next(iter(state[3].values()))
     fixture = state[0][0]
     with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
-        row = conn.execute(
-            "SELECT request,environment FROM environment_tasks WHERE id=?", (job,)
-        ).fetchone()
+        row = conn.execute("SELECT request,environment FROM environment_tasks WHERE id=?", (job,)).fetchone()
         request = json.loads(row[0])
         request.pop("resources", None)
         conn.execute(
-            "INSERT INTO environment_tasks(id,environment,request,state,updated_at) "
-            "VALUES(?,?,?,'queued',?)",
+            "INSERT INTO environment_tasks(id,environment,request,state,updated_at) VALUES(?,?,?,'queued',?)",
             ("task_" + "2" * 32, row[1], json.dumps(request), time.time()),
         )
     result = execute(state, "task_" + "2" * 32)

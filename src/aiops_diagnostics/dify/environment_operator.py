@@ -109,6 +109,7 @@ def run(context, path, reference, payload):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
         if resources and resources.get("binding") != request["binding"]:
             raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
+
         def mint():
             boundary()
             operation = str(uuid4())
