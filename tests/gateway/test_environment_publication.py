@@ -708,3 +708,138 @@ def test_publication_plan_window_gates_first_intent_after_claim(validated):
         state, {"publication": "intent", "id": identifier, "owner": owner, "step": "readiness"}
     )
     assert response.status_code in {403, 409}
+
+
+def test_started_step_reauthorizes_execute_but_recorded_result_still_consumes(validated):
+    """started 只是授权标记而非执行结果：重领必须重授 execute 让可重入步骤续跑。
+
+    env95 实测（task_8fe0bcdc）：worker 死在 intent 已消费、record 未落账之间，
+    账本只剩 {"state":"started"}；旧 one-shot 门把它判成已消费，observe_only
+    又无法替未落账的副作用作保，任务在核查 hold 里永挂并占死 BUSY 闸。
+    只有 record 落账的结果才把 intent 消费成 observed。
+    """
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "a" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    intent = {"publication": "intent", "id": identifier, "owner": owner}
+    assert internal(state, {**intent, "step": "central"}).json() == {"execute": True}
+    assert internal(state, {**intent, "step": "central"}).json() == {"execute": True}
+    recorded = {"state": "prepared", "bundle": {"path": "/x/release.json", "sha256": "0" * 64}}
+    assert internal(
+        state,
+        {
+            "publication": "record",
+            "id": identifier,
+            "owner": owner,
+            "step": "central",
+            "result": recorded,
+        },
+    ).json()["recorded"] is True
+    observed = internal(state, {**intent, "step": "central"}).json()
+    assert observed["execute"] is False and observed["observed"] == recorded
+
+
+def test_started_central_step_resumes_execution_on_next_claim(validated, tmp_path, monkeypatch):
+    """env95 事故形复现：central 只消费 intent 未 record，重领按可重入续跑。
+
+    旧门下 intent 重返 execute=False → observe_only → 未落账副作用无法作保
+    → ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED 永挂。started 重授
+    execute 后 central_bundle 的确认读守卫让续跑收敛到同一 bundle。
+    """
+    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "d" * 32
+    path = state[0][0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        request["attempted"] = True
+        request["steps"] = {
+            "readiness": {"state": "passed"},
+            "capacity": {"state": "passed", "observed_at": time.time()},
+            "central": {"state": "started"},
+        }
+        request["phase"] = "central"
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), identifier))
+
+    seen = []
+    bundle = {"path": "/private/release.json", "sha256": "a" * 64}
+    monkeypatch.setattr(
+        publication, "central_bundle", lambda *a, **kw: seen.append(kw["observe_only"]) or bundle
+    )
+    monkeypatch.setattr(publication, "connect", lambda *a: {"connected": True})
+    monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        worker, "target_task", lambda *a, **kw: {"state": "observed", "phase": "staged"}
+    )
+
+    def request_(payload):
+        response = internal(state, payload)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert request_({"installation_claim": True, "owner": owner})["id"] == identifier
+    result = worker.execute(tmp_path, request_, identifier, owner)
+    assert seen == [False]
+    assert result["state"] == "queued"
+    with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+        steps = json.loads(tasks._row(conn, identifier)["request"])["steps"]
+    assert steps["central"]["bundle"] == bundle and steps["target"]["phase"] == "staged"
+
+
+def test_started_capacity_step_remeasures_instead_of_reconcile_hold(
+    validated, tmp_path, monkeypatch
+):
+    """capacity 的 started 形同样续跑：重测产出从未落账的结果，不是重放。
+
+    「do not replay models」防的是用新测量顶替已记录结果；started 下没有已记录
+    结果，核查 hold 没有任何出口。record 落账的非 passed 结果仍经同一闸拒绝。
+    """
+    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.gateway import environment_capacity
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "d" * 32
+    path = state[0][0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        request["attempted"] = True
+        request["steps"] = {
+            "readiness": {"state": "passed"},
+            "capacity": {"state": "started"},
+        }
+        request["phase"] = "capacity"
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), identifier))
+
+    calls = []
+    monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        environment_capacity,
+        "run",
+        lambda *a: calls.append("capacity") or {"state": "passed", "observed_at": time.time()},
+    )
+    original = publication.dispatch
+
+    def dispatch(context, payload):
+        if payload.get("publication") == "capacity-reference":
+            return {"shared": []}
+        return original(context, payload)
+
+    monkeypatch.setattr(publication, "dispatch", dispatch)
+
+    def request_(payload):
+        response = internal(state, payload)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert request_({"installation_claim": True, "owner": owner})["id"] == identifier
+    result = worker.execute(tmp_path, request_, identifier, owner)
+    assert calls == ["capacity"] and result["state"] == "queued"
+    with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+        steps = json.loads(tasks._row(conn, identifier)["request"])["steps"]
+    assert steps["capacity"]["state"] == "passed"

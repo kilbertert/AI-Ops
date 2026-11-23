@@ -267,7 +267,11 @@ def dispatch(context, payload):
                 raise tasks.TaskRefused("ENVIRONMENT_PUBLICATION_STEP_INVALID")
             current(context, conn, row["id"], fresh=step != "restore")
             existing = request["steps"].get(step)
-            if existing:
+            # {"state":"started"} 只是授权标记而非执行结果：它分不清「授权后未跑」与
+            # 「副作用已落但未 record」。各步分发按重领可重入设计（中央步每个写动作都有
+            # 确认读守卫、远端脚本是标记幂等、容量是重测），重授 execute 是续跑不是重放；
+            # 只有已 record 的结果才把 intent 消费成 observed。
+            if existing and existing.get("state") != "started":
                 return {"execute": False, "observed": existing}
             request["attempted"] = True
             request["steps"][step] = {"state": "started"}
