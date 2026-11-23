@@ -46,6 +46,7 @@ from aiops_diagnostics.identity.scope_context import (
     ScopeResolver,
     SubjectRecord,
     UpmsDirectory,
+    is_operator_entry,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -224,6 +225,57 @@ class SourceKeyCallerResolver:
             # 不传 ``third_session``：这条路径的凭据是公司令牌，会话值对它没有意义
             # （``CompanyTokenCallerResolver`` 也是 ``del third_session``）。
             return self._company.resolve(token, required_scope=required_scope, platform_entry=platform_entry)
+        return self._fallback.resolve(
+            token,
+            required_scope=required_scope,
+            third_session=third_session,
+            platform_entry=platform_entry,
+        )
+
+
+class EntryCallerResolver:
+    """按申报入口在本环境两条凭据链之间分派（登记表部署，ADR-0320）。
+
+    与 ``SourceKeyCallerResolver`` 同一形状、不同判据：来源密钥证明的是「这一跳
+    可信」，``X-Business-Entry`` 只回答「这个请求落在哪个内容域」。同一个入口上
+    并存的两条本环境链——``operator`` 入口的个人 Bearer 走 ``UpmsCallerResolver``
+    （``GET /user/info`` 上游验证），其余入口（``consumer``、缺失、非法值）原样
+    落到既有链——分派只决定**谁来解析**，两条链各自全量验证身份。
+
+    三条边界：
+
+    1. 入口判据复用 ``is_operator_entry``（strip+lower，与上游入口的规范化
+       ``~* ^\\s*operator\\s*$`` 同口径）——入口怎么判只有一份实现，漂移的方向
+       就是某条链收不到请求。
+    2. **UPMS 的拒绝不落回会话链**：入口声明 operator 就是把凭据交给 UPMS 验证，
+       被拒后改试会话链等于「同一份凭据换一条链再猜一遍」——两条链的身份来源
+       不同，错投的落点无法预期（密钥门 docstring 里写明的同一种错）。
+    3. ``third_session`` 不越过入口：operator 链只收到令牌（``UpmsCallerResolver``
+       本来就不读会话/入口参数），会话值只在落到既有链时透传——一个请求不能
+       同时是两种凭据。
+
+    本类只在装配层判定「登记表 + 会话链 + 本环境 UPMS」三者都成立时构造；不满足
+    时构造方返回既有链——未配登记表（旧 41 形状）的行为逐字不变。
+    """
+
+    def __init__(self, upms: CallerContextResolver, fallback: CallerContextResolver) -> None:
+        self._upms = upms
+        self._fallback = fallback
+
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+        source_key: str | None = None,
+    ) -> ScopeContext:
+        # 来源密钥决定的是「密钥门要不要拦在更前面」——走到这里说明那一级已经分派
+        # 完成；本层不再读它（``del`` 与两条链上的同款写法一致）。
+        del source_key
+        if is_operator_entry(platform_entry):
+            return self._upms.resolve(token, required_scope=required_scope)
         return self._fallback.resolve(
             token,
             required_scope=required_scope,
