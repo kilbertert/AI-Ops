@@ -385,9 +385,7 @@ def test_enabled_tenant_runtime_row_still_refuses_candidate_replacement(task_sta
         "ffffffff-ffff-ffff-ffff-ffffffffffff",
     )
     with pytest.raises(ValueError, match="cannot be replaced by candidate"):
-        inst.candidate_runtime(
-            Path(recandidate["path"]), recandidate["sha256"], tmp_path / "merged.tar"
-        )
+        inst.candidate_runtime(Path(recandidate["path"]), recandidate["sha256"], tmp_path / "merged.tar")
     assert not (tmp_path / "merged.tar").exists()
 
 
