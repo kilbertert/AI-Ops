@@ -19,7 +19,7 @@
 2. 交付现状：[当前交付索引](docs/agents/current-delivery-state.md)——合并 ≠ 部署 ≠ 验收，状态以此为准。
 3. 主机与部署面：[.dev-host.toml](.dev-host.toml) 是主机唯一名册（`41`=生产网关，`36`=Dify 主机，`95`=第二环境）；部署有多条路径，CD 只覆盖 `deploy/deploy-41.sh` 的源码同步，其余手工部署见[部署索引](deploy/README.md)与[手工部署台账](deploy/manual-deploys.md)。
 4. 变更规则：本仓 `AGENTS.md`、[验证分工](docs/agents/verification-workflow.md)。测试红常意味着文件放错目录而非行为损坏（`tests/test_repository_layout.py` 是根层白名单）。
-5. 代码惯例：`gateway/` 持环境接入账本与 HTTP 装配，`dify/` 持 Dify 侧供给与适配，同一「环境接入」流程横跨两包，分侧规则见各自包 `__init__.py` 说明。
+5. 代码惯例：`gateway/` 持环境接入账本与 HTTP 装配，`dify/` 持 Dify 侧供给与适配，同一「环境接入」流程横跨两包，分侧规则见各自包 `__init__.py` 说明，阶段→文件定位用[流水线索引](docs/agents/environment-pipeline-map.md)；环境变量归属查[配置参考](docs/agents/config-reference.md)。
 
 ## 一、系统与入口
 
