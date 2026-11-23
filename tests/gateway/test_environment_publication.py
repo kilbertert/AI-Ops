@@ -425,6 +425,142 @@ def test_worker_lands_expired_blocked_and_restores_via_page(validated, tmp_path,
     assert restored["result"]["phase"] == "restored", restored
 
 
+def test_worker_resumes_activated_target_and_finishes_directory_without_recheck(
+    validated, tmp_path, monkeypatch
+):
+    # activate真实返回activated并已记账、directory同步前中断：重领时目标准入
+    # 已放开，closed-admission复核必永拒——observe到activated即按真实回执
+    # 完成directory；不重核proof、不重放模型、不看发行物/案例期限。
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time() - 400)
+    refreshes = []
+    answers = iter(
+        [
+            {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "scope_fingerprint": "fp",
+                "observed_at": time.time(),
+                "trials": {"order": "t1", "offline": "t2"},
+            },
+            {"state": "expired", "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"},
+        ]
+    )
+
+    def trial(root, target, environment, payload, **kwargs):
+        if payload.get("action") == "publication-trial-complete":
+            refreshes.append(payload)
+            return next(answers)
+        return {}
+
+    monkeypatch.setattr(worker, "local_trial", trial)
+
+    def target(*args, **kwargs):
+        if kwargs.get("observe_only"):
+            return {
+                "state": "observed",
+                "phase": "activated",
+                "activated": True,
+                "installed": {"private-path": "/private/target"},
+                "routes": {"operator": 1, "consumer": 1},
+            }
+        return {
+            "state": "observed",
+            "phase": "activated",
+            "activated": True,
+            "installed": {"private-path": "/private/target"},
+            "routes": {"operator": 1, "consumer": 1},
+        }
+
+    monkeypatch.setattr(worker, "target_task", target)
+    interrupted = []
+
+    def request_or_fail(payload):
+        if payload.get("publication") == "directory" and not interrupted:
+            interrupted.append(payload)
+            raise RuntimeError("directory interrupted")
+        return request(payload)
+
+    owner = "d" * 32
+    request({"installation_claim": True, "owner": owner})
+    first = worker.execute(tmp_path, request_or_fail, identifier, owner)
+    assert first["state"] == "reconcile", first
+    # 第二段：此时发行物/案例期限已尽（complete只会回expired）——若走到复核
+    # 必落blocked；正确路径是observe到已activated直接完成directory同步。
+    owner = "e" * 32
+    request({"installation_claim": True, "owner": owner})
+    result = worker.execute(tmp_path, request, identifier, owner)
+    assert result["state"] == "observed", result
+    assert result["result"]["activated"] and result["result"]["directory"] == "synchronized"
+    assert interrupted and len(refreshes) == 1
+
+
+def test_worker_rechecks_staged_target_after_interrupted_activate_intent(validated, tmp_path, monkeypatch):
+    # activate intent已授权但远端从未越过准入（仍staged）：重领照常走精确复核；
+    # expired → 先于source配置写落blocked。
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    worker, request = _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, time.time() - 400)
+    refreshes = []
+    answers = iter(
+        [
+            {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "scope_fingerprint": "fp",
+                "observed_at": time.time(),
+                "trials": {"order": "t1", "offline": "t2"},
+            },
+            {"state": "expired", "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"},
+        ]
+    )
+
+    def trial(root, target, environment, payload, **kwargs):
+        if payload.get("action") == "publication-trial-complete":
+            refreshes.append(payload)
+            return next(answers)
+        return {}
+
+    monkeypatch.setattr(worker, "local_trial", trial)
+    attempts = []
+
+    def target(*args, **kwargs):
+        if kwargs.get("observe_only"):
+            return {
+                "state": "reconcile",
+                "phase": "staged",
+                "activated": False,
+                "installed": {"private-path": "/private/target"},
+            }
+        attempts.append(args[3])
+        raise RuntimeError("activate transport lost")
+
+    monkeypatch.setattr(worker, "target_task", target)
+    calls = []
+
+    def spy(payload):
+        calls.append(payload.get("publication"))
+        return request(payload)
+
+    owner = "d" * 32
+    request({"installation_claim": True, "owner": owner})
+    first = worker.execute(tmp_path, spy, identifier, owner)
+    assert first["state"] == "reconcile" and attempts == ["activate"]
+    owner = "e" * 32
+    request({"installation_claim": True, "owner": owner})
+    calls.clear()
+    result = worker.execute(tmp_path, spy, identifier, owner)
+    assert result["state"] == "blocked", result
+    assert result["result"]["error_code"] == "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED"
+    assert attempts == ["activate"] and "source-configuration" not in calls
+    assert len(refreshes) == 2
+
+
 def test_central_publication_freezes_real_template_and_reconciles_unique_key(validated, monkeypatch):
     import copy
     from types import SimpleNamespace

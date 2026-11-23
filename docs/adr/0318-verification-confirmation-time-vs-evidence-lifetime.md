@@ -56,6 +56,12 @@
   expired）时以 `state="expired"` 完成且先于 source 写——任务落
   blocked 不被 60s 节奏重领，原页面取消→恢复照旧不要求新鲜证据。
   发行物到期、activate 失败重领的循环因此在下一轮复核拿到确定终态。
+  **已越过准入的中断除外**：activate 步已起步（intent started 或已记
+  result）时先以 `target_task(observe_only)` 对账目标真实 phase——目标
+  已 activated 则租户准入已放开，closed-admission 复核必永拒，此时按
+  目标回执完成 directory 同步（不重核 proof、不重放模型、不看发行物/
+  案例期限）；仍 staged 说明从未越过准入，才走上述复核→source→activate；
+  activating/restoring 等 partial 相位对账为 reconcile 交受管恢复。
 
 ## 替代方案
 

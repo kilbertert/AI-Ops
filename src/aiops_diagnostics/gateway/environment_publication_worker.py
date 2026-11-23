@@ -388,6 +388,28 @@ def execute(root, request, identifier, owner):
             call("record", step="verify", result=verification)
             return call("yield")
         verification = steps["verify"]
+        if "activate" in steps:
+            # activate已起步（intent started或已记result）：先对账目标真实phase。
+            # 已activated则租户准入已放开，closed-admission复核必永拒——按目标
+            # 回执完成directory收尾，不重核proof、不重放模型、不看发行物/案例期限。
+            observed = target_task(
+                root,
+                staged,
+                bundle,
+                "activate",
+                observe_only=True,
+                verification=verification,
+            )
+            if observed.get("activated") or observed.get("phase") == "activated":
+                result = observed
+                call("record", step="activate", result=result)
+                call("directory", result=result)
+                result["directory"] = "synchronized"
+                return call("complete", result=result)
+            if observed.get("phase") != "staged":
+                # activating/restoring等partial相位只能对账，交受管恢复路径。
+                raise ValueError("target activation phase unresolved")
+            # 仍staged：从未越过准入，继续下方精确复核→source→activate。
         if verification.get("state") == "passed":
             # 准入前在同operation上按发行文档重核同一证据面、取回新确认时刻的
             # proof：不只在proof逾300s时复核——发行物/案例到期、上次activate
