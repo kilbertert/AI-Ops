@@ -209,6 +209,8 @@ python3 <同修订固定安装器>/install.py register-runtime --environment <�
 不接受shell、任意安装目录或业务操作。调用前沿dev-host身份断言和SHA256SUMS核固定包。
 先记录本任务意图，再复用Installer.apply；现役baseline必须匹配，配置/目录/运行仍原成套事务。
 重复run或observe只读本任务意图与实际installed，绝不再次apply；未知或pending不冒称成功，恢复仍由原recover单独操作。
+导出/attempted只证制品冻结，不等于派发（ADR-0289/0290授权链沿继承；ADR-0321）：`dispatched`翻转先于远端执行，
+未派发任务过期或取消即safe终态（blocked/cancelled并释放互斥），已派发丢回执仍按原冻结observe回收。
 在飞取消不终止安装进程，中央租约到期后先观察；安全确定结果保留，不能重启另一个未知安装。
 
 本片新增现场回执runtime_sha256供安装baseline使用；旧回执仍可读，但新安装不能用旧回执猜运行工件不存在。

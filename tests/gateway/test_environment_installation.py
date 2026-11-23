@@ -96,7 +96,11 @@ def test_persistent_installation_uses_original_export_and_old_worker_cannot_clai
     assert body["observe_only"] is False and set(body["archives"]) == {"application", "candidate", "runtime"}
     assert "synthetic-node-secret" not in json.dumps(body)
     repeated_stage = internal(state, {"installation": "stage", "id": identifier, "owner": owner})
-    assert repeated_stage.json()["observe_only"] is True
+    # 未派发重复 stage 允许 run 重试（归档冻结不变）——观察界是 dispatched。
+    assert (
+        repeated_stage.json()["observe_only"] is False
+        and repeated_stage.json()["archives"] == body["archives"]
+    )
     fake = {
         "id": identifier,
         "environment": "a",
@@ -148,7 +152,7 @@ def test_installation_staging_works_with_read_only_control_config(installation_s
     assert directory.stat().st_mode & 0o077 == 0
     assert reference.read_bytes() == original and not (config / "installation-tasks").exists()
     repeated = internal(state, payload).json()
-    assert repeated["observe_only"] is True and repeated["archives"] == staged["archives"]
+    assert repeated["observe_only"] is False and repeated["archives"] == staged["archives"]
 
 
 @pytest.mark.parametrize("change", ["cancel", "expired", "node", "unconfigured"])
@@ -177,7 +181,7 @@ def test_changed_installation_premise_does_not_start_a_write(installation_state,
     assert response.status_code == 200 and response.json()["claimed"] is False
 
 
-def test_inflight_cancellation_keeps_outcome_and_lost_lease_only_observes(installation_state):
+def test_inflight_cancellation_keeps_outcome_and_lost_lease_retries_undispatched(installation_state):
     state = installation_state
     identifier = submit(state).json()["id"]
     owner = "d" * 32
@@ -188,9 +192,10 @@ def test_inflight_cancellation_keeps_outcome_and_lost_lease_only_observes(instal
     owner = "e" * 32
     claim = internal(state, {"installation_claim": True, "owner": owner})
     assert claim.json()["id"] == identifier
+    # 租约丢失后重领：未派发任务允许 run 重试（远端零 apply 可由 dispatched 未翻转证明）。
     assert (
         internal(state, {"installation": "stage", "id": identifier, "owner": owner}).json()["observe_only"]
-        is True
+        is False
     )
     state[0][2].post("/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True})
     result = {
@@ -227,6 +232,114 @@ def test_cancel_after_artifact_transfer_refuses_final_authorization(installation
     state[0][2].post("/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True})
     response = internal(state, {"installation": "authorize", "id": identifier, "owner": owner})
     assert response.status_code == 409
+
+
+def test_attempted_but_undispatched_install_expires_to_terminal(installation_state):
+    """真实事故形：租约自然到期（now 至 lease 末端）时计划窗口必然已过期——
+    attempted+无 dispatched 认领必须终态化 blocked，无 execution。"""
+    state = installation_state
+    identifier = submit(state).json()["id"]
+    owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    assert internal(state, {"installation": "stage", "id": identifier, "owner": owner}).status_code == 200
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        assert request["attempted"] is True and "dispatched" not in request
+        for task_id in (identifier, state[1]):
+            stored = json.loads(tasks._row(conn, task_id)["request"])
+            stored["plan"]["expires_at"] = 0
+            conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(stored), task_id))
+        conn.execute("UPDATE environment_tasks SET lease_until=0 WHERE id=?", (identifier,))
+    for next_owner in ("b" * 32, "c" * 32):
+        claim = internal(state, {"installation_claim": True, "owner": next_owner})
+        assert claim.status_code == 200 and claim.json()["claimed"] is False
+    with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
+        row = tasks._row(conn, identifier)
+    assert row["state"] == "blocked" and row["error"] == "ENVIRONMENT_TASK_OBSERVATION_REQUIRED"
+
+
+def test_attempted_but_undispatched_install_cancel_is_terminal(installation_state):
+    """未派发任务取消后下次认领落 cancelled，不再回 executing/checking 环。"""
+    state = installation_state
+    identifier = submit(state).json()["id"]
+    owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    assert internal(state, {"installation": "stage", "id": identifier, "owner": owner}).status_code == 200
+    state[0][2].post("/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True})
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        row = tasks._row(conn, identifier)
+        assert row["cancel"] and row["state"] == "executing"
+        conn.execute("UPDATE environment_tasks SET lease_until=0 WHERE id=?", (identifier,))
+    claim = internal(state, {"installation_claim": True, "owner": "b" * 32})
+    assert claim.status_code == 200 and claim.json()["claimed"] is False
+    with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
+        assert tasks._row(conn, identifier)["state"] == "cancelled"
+
+
+def test_undispatched_attempted_install_retries_run_with_frozen_archives(installation_state):
+    """主动让出/完成回收的协议能力：窗口内未派发任务可重领 run+authorize。
+
+    首个 worker 以 reconcile 完成自然让出租约（传输失败形→checking 可即领），
+    非「crash→等 900s→窗口仍在」的天然续跑——租约自然到期时刻计划必然已
+    过期，该形见过期终态测试。
+    """
+    state = installation_state
+    identifier = submit(state).json()["id"]
+    first_owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": first_owner})
+    staged = internal(state, {"installation": "stage", "id": identifier, "owner": first_owner}).json()
+    reconcile = {
+        "id": identifier,
+        "environment": "a",
+        "scope": "candidate-installation-only",
+        "state": "reconcile",
+        "executable": False,
+        "activation": "not_executed",
+        "registration": "not_executed",
+        "business": "unverified",
+    }
+    done = internal(
+        state, {"installation": "complete", "id": identifier, "owner": first_owner, "result": reconcile}
+    )
+    assert done.status_code == 200 and done.json()["state"] == "reconcile"
+    owner = "b" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    retry = internal(state, {"installation": "stage", "id": identifier, "owner": owner}).json()
+    assert retry["observe_only"] is False and retry["archives"] == staged["archives"]
+    authorize = internal(state, {"installation": "authorize", "id": identifier, "owner": owner})
+    assert authorize.status_code == 200 and authorize.json() == {"authorized": True}
+    # dispatched 已持久化：再次让出后只能观察回收，绝不重放 apply。
+    done = internal(
+        state, {"installation": "complete", "id": identifier, "owner": owner, "result": reconcile}
+    )
+    assert done.json()["state"] == "reconcile"
+    owner = "c" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    observed = internal(state, {"installation": "stage", "id": identifier, "owner": owner}).json()
+    assert observed["observe_only"] is True and observed["archives"] == staged["archives"]
+
+
+def test_dispatched_cancelled_install_keeps_blocked_not_cancelled(installation_state):
+    """已派发+取消+闸失败落 blocked 不落 cancelled：未知远端副作用不释放互斥。"""
+    state = installation_state
+    identifier = submit(state).json()["id"]
+    owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    internal(state, {"installation": "stage", "id": identifier, "owner": owner})
+    authorize = internal(state, {"installation": "authorize", "id": identifier, "owner": owner})
+    assert authorize.json() == {"authorized": True}
+    state[0][2].post("/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True})
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        assert request["dispatched"] is True
+        # 父任务取消：已派发任务的无条件漂移检查让闸失败。
+        conn.execute("UPDATE environment_tasks SET cancel=1 WHERE id=?", (state[1],))
+        conn.execute("UPDATE environment_tasks SET lease_until=0 WHERE id=?", (identifier,))
+    claim = internal(state, {"installation_claim": True, "owner": "b" * 32})
+    assert claim.status_code == 200 and claim.json()["claimed"] is False
+    with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
+        row = tasks._row(conn, identifier)
+    assert row["cancel"] and row["state"] == "blocked"
 
 
 def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
