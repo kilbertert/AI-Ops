@@ -301,12 +301,14 @@ def execute(root, request, identifier, owner):
         return request({"publication": action, "id": identifier, "owner": owner, **data})
 
     staged = call("stage")
-    source, steps = staged["request"], staged["request"]["steps"]
     described = call("describe")
     spec = described["spec"]
     result = {"state": "reconcile", "activated": False, "business_accuracy": "unconfirmed"}
-    bundle = steps.get("central", {}).get("bundle")
     try:
+        # 账本形状读全部收在 try 内：request/steps 是持久账本，异形（非 dict、
+        # 键缺失）必须收敛到核查 hold，而不是在收敛点之前崩成无限重领。
+        source, steps = staged["request"], staged["request"]["steps"]
+        bundle = steps.get("central", {}).get("bundle")
         if staged["cancelled"]:
             if (
                 bundle

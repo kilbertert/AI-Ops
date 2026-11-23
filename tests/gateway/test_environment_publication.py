@@ -551,6 +551,48 @@ def test_cancel_with_only_target_intent_restores_by_remote_staging_marker(
         assert remote == []
 
 
+@pytest.mark.parametrize("corrupt_key", ["central", "target"])
+def test_cancel_with_malformed_step_shape_holds_reconcile(validated, tmp_path, corrupt_key):
+    # 持久账本出现代码没写过的形状（steps.* 非 dict）时，读取必须收敛到
+    # 核查 hold 而不是把 worker 崩成同形的无限重领。
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "d" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    internal(state, {"publication": "intent", "id": identifier, "owner": owner, "step": "central"})
+    internal(
+        state,
+        {
+            "publication": "record",
+            "id": identifier,
+            "owner": owner,
+            "step": "central",
+            "result": {"state": "prepared", "bundle": {"path": "/x/release.json", "sha256": "0" * 64}},
+        },
+    )
+    internal(state, {"publication": "intent", "id": identifier, "owner": owner, "step": "target"})
+    internal(state, {"publication": "yield", "id": identifier, "owner": owner})
+    cancelled = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True}
+    )
+    assert cancelled.json()["state"] == "reconcile"
+
+    def request(payload):
+        response = internal(state, payload)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        if payload.get("publication") == "stage":
+            body["request"]["steps"][corrupt_key] = ["not-a-dict"]
+        return body
+
+    assert request({"installation_claim": True, "owner": owner})["id"] == identifier
+    observed = worker.execute(tmp_path, request, identifier, owner)
+    assert observed["state"] == "reconcile"
+    assert observed["result"]["error_code"] == "ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED"
+
+
 @pytest.mark.parametrize("returncode,expected", [(7, False), (0, True), (1, True), (9, True), (255, True)])
 def test_target_staged_only_remote_absence_answer_disarms(tmp_path, monkeypatch, returncode, expected):
     # 远端脚本以 7 回答「缺席」；dev-host 自身失败（1/255 等）与环境锁被占（9，

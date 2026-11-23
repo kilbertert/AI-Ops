@@ -89,6 +89,7 @@ restored 终态化、释放 BUSY 闸；env95 上楔死的任务在部署后下�
 ADR-0310 同一内生限制（目录按证据保管），后者要求已持有环境锁的在飞
 进程，本身即属于「目标侧有动作」的保守侧。
 探测与恢复分支读到的异形账本（键缺失、非 dict、宿主名前导 '-' 等）一律
-收敛到核查 hold：`execute` 的 except 收敛 TypeError/AttributeError 等形状
-异常为 reconcile，宿主名前导 '-' 按与 central_call 同口径的防御拒绝直接
-判在场——账本写坏时任务停在可核对态，而不是把 worker 崩成同形的无限重领。
+收敛到核查 hold：账本形状读（`request`/`steps`/bundle 提取）全部收在
+`execute` 的 try 内，except 收敛 TypeError/AttributeError 等形状异常为
+reconcile；宿主名前导 '-' 按与 central_call 同口径的防御拒绝直接判在场——
+账本写坏时任务停在可核对态，而不是在收敛点之前把 worker 崩成同形的无限重领。
