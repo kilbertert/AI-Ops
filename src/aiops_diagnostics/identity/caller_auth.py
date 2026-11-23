@@ -258,9 +258,16 @@ class EntryCallerResolver:
     时构造方返回既有链——未配登记表（旧 41 形状）的行为逐字不变。
     """
 
-    def __init__(self, upms: CallerContextResolver, fallback: CallerContextResolver) -> None:
+    def __init__(
+        self,
+        upms: CallerContextResolver,
+        fallback: CallerContextResolver,
+        *,
+        site_scope: Callable[[str, str], QueryScope] | None = None,
+    ) -> None:
         self._upms = upms
         self._fallback = fallback
+        self._site_scope = site_scope
 
     def resolve(
         self,
@@ -275,12 +282,43 @@ class EntryCallerResolver:
         # 完成；本层不再读它（``del`` 与两条链上的同款写法一致）。
         del source_key
         if is_operator_entry(platform_entry):
-            return self._upms.resolve(token, required_scope=required_scope)
+            context = self._upms.resolve(token, required_scope=required_scope)
+            return self._normalize_operator_scope(context)
         return self._fallback.resolve(
             token,
             required_scope=required_scope,
             third_session=third_session,
             platform_entry=platform_entry,
+        )
+
+    def _normalize_operator_scope(self, context: ScopeContext) -> ScopeContext:
+        """UPMS 混合断言（org/shop/site）规范化到**实时站点集合**（ADR-0320 后续）。
+
+        与 ``OperatorCpms.refresh_scope`` 同一种权威口径：账号的站点集合由 UPMS
+        店铺归属 + 充电库站点映射**此刻**给出。不规范化时，首次鉴权的范围指纹带
+        ``/user/ds`` 断言的 organ/shop ID，复核/回读换成纯站点集合——同一组站点
+        被指纹判成「权限已变」而误拒；纯店铺断言更会在复核前就被当成空站点拒绝。
+        ``all``/``self`` 与接缝未注入（服务侧内部凭据未配）时原样透传：前者由
+        ``refresh_scope`` 同样放行，后者按复核既有 fail closed 处理。
+        目录答复跨租户或不可达：不落回会话链，按本链真实分类拒绝。
+        """
+        scope = context.data_scope
+        if self._site_scope is None or scope.type != SCOPE_TYPE_ORGAN:
+            return context
+        try:
+            resolved = self._site_scope(context.subject.b_user_id, context.effective_tenant_id)
+        except Exception as exc:
+            raise CallerAuthError(
+                "operator site scope is unavailable",
+                code=CALLER_AUTH_UNAVAILABLE,
+                retryable=True,
+            ) from exc
+        if resolved.tenant_id != context.effective_tenant_id:
+            raise CallerAuthError("operator site scope tenant mismatch", code=CALLER_AUTH_INVALID)
+        return replace(
+            context,
+            data_scope=DataScope(type=SCOPE_TYPE_ORGAN, site_ids=tuple(resolved.site_ids or ())),
+            scope_fingerprint="",
         )
 
 

@@ -6008,7 +6008,15 @@ def _fallback_caller_resolver(settings: GatewayServerSettings) -> CallerContextR
         except (ValueError, OSError):
             return DisabledCallerResolver()
         if settings.environment_registry_file and (runtime.upms.base_url or "").strip():
-            resolver = EntryCallerResolver(UpmsCallerResolver(runtime), resolver)
+            # 与 ``OperatorCpms.refresh_scope`` 同一个实时站点目录：首次鉴权就把
+            # UPMS 的混合断言规范化到站点集合，初/复核/回读比较同一口径的范围指纹；
+            # 服务侧内部凭据未配时注入 None——分派原样透传，复核按既有 fail closed。
+            directory = _operator_site_scope(runtime)
+            resolver = EntryCallerResolver(
+                UpmsCallerResolver(runtime),
+                resolver,
+                site_scope=None if directory is None else directory.site_scope_by_b_user_id,
+            )
         return resolver
     # #444 起，公司令牌路径**不再出现在这条链里**：它由上面的来源密钥门分派，只有密钥验过的
     # 请求才走得到。把这四种选择结果写清楚，是为了让「带错密钥」的行为可预期 —— 它会落到这里，
