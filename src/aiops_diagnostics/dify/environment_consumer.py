@@ -127,26 +127,21 @@ def binding(settings, source):
 
 
 def dependencies(console, settings, request, scope):
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER
-
     from .self_service_prepare import consumer_models, consumer_plugin
 
     doc = document(request["consumer_source"], scope[3])
     consumer_models(console, scope[2], doc, profile(settings, request["consumer_source"]))
     console.install_plugins(scope[2], self_service_prepare.consumer_plugins(doc))
-    existing = console._call(
-        scope[2], "/console/api/workspaces/current/tool-provider/builtin/" + PROVIDER + "/credentials"
+    # 凭据恒按候选形状收敛而非只读校验：被取消的发布若在 connect 后死，
+    # 受管凭据已被回指到目标网关——不先回指候选就永远无法重建。
+    consumer_plugin(
+        console,
+        scope[2],
+        SimpleNamespace(public_base_url=settings.public_base_url),
+        candidate_knowledge.token(settings.internal_token_secret, scope),
+        doc,
     )
-    if existing:
-        verify_credential(console, settings, scope)
-    else:
-        consumer_plugin(
-            console,
-            scope[2],
-            SimpleNamespace(public_base_url=settings.public_base_url),
-            candidate_knowledge.token(settings.internal_token_secret, scope),
-            doc,
-        )
+    verify_credential(console, settings, scope)
     return doc
 
 

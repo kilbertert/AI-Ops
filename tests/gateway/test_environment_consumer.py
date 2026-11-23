@@ -101,6 +101,12 @@ def consumer_app(connected, tmp_path, monkeypatch):  # noqa: F811
             if path.endswith("/add"):
                 credentials.append({"id": "credential", "is_default": True, **body})
                 return {}
+            if path.endswith("/update"):
+                credentials[0]["credentials"].update(body["credentials"])
+                return {}
+            if path.endswith("/default-credential"):
+                credentials[0]["is_default"] = True
+                return {}
             if "/dynamic-options?" in path:
                 return {"options": [{"value": library}]}
             raise AssertionError((method, path))
@@ -185,6 +191,20 @@ def test_configuration_drift_and_unknown_absence_do_not_create_again(consumer_ap
     assert state[4].count(("POST", "/console/api/apps/imports")) == 1
 
 
+def _sibling_task(state, job, task_id):
+    """同租户同动作的第二个任务行（无 resources）——资源继承使其领回上一任务的
+    resources；真实链路里它来自新计划下重跑 candidate-prepare。"""
+    fixture = state[0][0]
+    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
+        row = conn.execute("SELECT request,environment FROM environment_tasks WHERE id=?", (job,)).fetchone()
+        request = json.loads(row[0])
+        request.pop("resources", None)
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,updated_at) VALUES(?,?,?,'queued',?)",
+            (task_id, row[1], json.dumps(request), time.time()),
+        )
+
+
 def test_promoted_adopted_candidate_is_abandoned_and_reminted(consumer_app):
     state = consumer_app
     job = submit(state).json()["id"]
@@ -194,15 +214,7 @@ def test_promoted_adopted_candidate_is_abandoned_and_reminted(consumer_app):
     # Dify 不提供降级，下一个 prepare 任务经资源继承仍领回这份候选。
     first["enable_api"] = True
     first["workflow"] = {"id": "published"}
-    fixture = state[0][0]
-    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
-        row = conn.execute("SELECT request,environment FROM environment_tasks WHERE id=?", (job,)).fetchone()
-        request = json.loads(row[0])
-        request.pop("resources", None)
-        conn.execute(
-            "INSERT INTO environment_tasks(id,environment,request,state,updated_at) VALUES(?,?,?,'queued',?)",
-            ("task_" + "1" * 32, row[1], json.dumps(request), time.time()),
-        )
+    _sibling_task(state, job, "task_" + "1" * 32)
     result = execute(state, "task_" + "1" * 32)
     assert result["state"] == "observed"
     assert result["result"]["app_id"] != first["id"]
@@ -218,20 +230,29 @@ def test_unpromoted_adopted_candidate_is_still_reused(consumer_app):
     job = submit(state).json()["id"]
     assert execute(state, job)["state"] == "observed"
     first = next(iter(state[3].values()))
-    fixture = state[0][0]
-    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
-        row = conn.execute("SELECT request,environment FROM environment_tasks WHERE id=?", (job,)).fetchone()
-        request = json.loads(row[0])
-        request.pop("resources", None)
-        conn.execute(
-            "INSERT INTO environment_tasks(id,environment,request,state,updated_at) VALUES(?,?,?,'queued',?)",
-            ("task_" + "2" * 32, row[1], json.dumps(request), time.time()),
-        )
+    _sibling_task(state, job, "task_" + "2" * 32)
     result = execute(state, "task_" + "2" * 32)
     assert result["state"] == "observed"
     assert result["result"]["app_id"] == first["id"]
     assert len(state[3]) == 1
     assert state[4].count(("POST", "/console/api/apps/imports")) == 1
+
+
+def test_rebound_credential_is_repointed_while_reminting(consumer_app):
+    state = consumer_app
+    job = submit(state).json()["id"]
+    assert execute(state, job)["state"] == "observed"
+    first = next(iter(state[3].values()))
+    # connect 步已把受管凭据回指目标网关且候选已提升——connect 之后才被取消
+    # 的发布留下的残态；凭据必须随重建回指候选形状。
+    state[5][0]["credentials"]["gateway_url"] = "https://target-gateway.example"
+    first["enable_api"] = True
+    first["workflow"] = {"id": "published"}
+    _sibling_task(state, job, "task_" + "3" * 32)
+    result = execute(state, "task_" + "3" * 32)
+    assert result["state"] == "observed"
+    saved = state[5][0]
+    assert saved["credentials"]["gateway_url"] == state[0][2].public_base_url.rstrip("/")
 
 
 def test_wrong_target_unapproved_source_and_nonplatform_never_create(consumer_app, monkeypatch):
