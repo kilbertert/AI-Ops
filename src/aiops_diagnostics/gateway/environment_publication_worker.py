@@ -241,6 +241,59 @@ def verify(root, source, spec, identifier):
     )
 
 
+def target_staged(root, staged, identifier):
+    """目标宿主本任务的 staged 目录是否在场；宿主不可定位或探测失败按在场处理。"""
+    target = staged["request"]["target"]
+    declared = tomllib.loads((root / ".dev-host.toml").read_text())["targets"]
+    matches = [r for r in declared if r.get("name") == target["host"] or r.get("host") == target["host"]]
+    if (
+        len(matches) != 1
+        or not REFERENCE_PATTERN.fullmatch(matches[0]["name"])
+        or matches[0]["name"].startswith("-")
+    ):
+        return True
+    environment = staged["request"]["plan"]["environment"]
+    # 标记目录与锁都按安装器的推导（environment → aiops-access-<env>），
+    # 与宿主注册的 paths.access 无关：标记在 inst.root 下，锁在 /run/lock 下。
+    lockpath = "/run/lock/aiops-access-" + environment + ".lock"
+    marker = "/opt/aiops-access-" + environment + "/publication-tasks/" + identifier
+    # 远端以 7 报告「缺席」：dev-host 自身失败（传输/权限）落在 1/255 等普通码，
+    # 只有远端脚本真实回答缺席才判不在场。9 = 环境锁被占（远端 task.py 可能在飞，
+    # SSH 掉线不等于进程已死）或锁文件不可信，一律按在场收敛到受管恢复侧。
+    script = "\n".join(
+        [
+            "import fcntl,os,sys",
+            "from pathlib import Path",
+            f"fd=os.open({lockpath!r},os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW,0o600)",
+            "lock=os.fdopen(fd,'w')",
+            "st=os.fstat(lock.fileno())",
+            "if st.st_uid!=0 or st.st_mode&0o077 or st.st_nlink!=1:sys.exit(9)",
+            "try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)",
+            "except BlockingIOError:sys.exit(9)",
+            f"sys.exit(0 if Path({marker!r}).is_dir() else 7)",
+            "",
+        ]
+    )
+    probe = subprocess.run(
+        [
+            "dev-host",
+            "exec",
+            matches[0]["name"],
+            "--allow-service-exec",
+            "--",
+            "python3",
+            "-B",
+            "-",
+        ],
+        cwd=root,
+        input=script,
+        text=True,
+        capture_output=True,
+        timeout=70,
+    )
+    return probe.returncode != 7
+
+
 def execute(root, request, identifier, owner):
     def call(action, **data):
         return request({"publication": action, "id": identifier, "owner": owner, **data})
@@ -253,7 +306,17 @@ def execute(root, request, identifier, owner):
     bundle = steps.get("central", {}).get("bundle")
     try:
         if staged["cancelled"]:
-            if bundle and "target" in steps:
+            if (
+                bundle
+                and "target" in steps
+                and steps["target"].get("state") == "started"
+                and not target_staged(root, staged, identifier)
+            ):
+                # 目标步只消费了 intent 且远端 staged 目录不在场：publication-tasks/<id>
+                # 是 setup() 首个落盘写，缺席证明目标侧零副作用，与未启动同案恢复；
+                # 在场或探测失败都不能排除副作用，仍走原受管恢复。
+                result.update(state="cancelled", phase="restored")
+            elif bundle and "target" in steps:
                 result = target_task(root, staged, bundle, "restore")
                 if result.get("phase") != "restored":
                     raise ValueError("target restoration unconfirmed")
@@ -334,6 +397,6 @@ def execute(root, request, identifier, owner):
         if result.get("activated"):
             call("directory", result=result)
             result["directory"] = "synchronized"
-    except (ValueError, OSError, RuntimeError, KeyError, subprocess.SubprocessError):
+    except (ValueError, TypeError, OSError, RuntimeError, KeyError, subprocess.SubprocessError):
         result.update(state="reconcile", error_code="ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED")
     return call("complete", result=result)

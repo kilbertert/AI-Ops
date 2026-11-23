@@ -493,3 +493,96 @@ def test_cancel_with_unknown_central_publication_remains_reconcilable_without_re
         # 中央步从未落盘工件：无任何共享副作用，恢复结论与未启动相同。
         assert observed["state"] == "cancelled" and observed["result"]["phase"] == "restored"
         assert remote == []
+
+
+@pytest.mark.parametrize("remote_staged", [False, True])
+def test_cancel_with_only_target_intent_restores_by_remote_staging_marker(
+    validated, tmp_path, monkeypatch, remote_staged
+):
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "d" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    assert internal(
+        state, {"publication": "intent", "id": identifier, "owner": owner, "step": "central"}
+    ).json()["execute"]
+    # 中央步已落账 bundle；目标步只消费 intent 即崩溃——账本无法区分远端是否已 staged。
+    internal(
+        state,
+        {
+            "publication": "record",
+            "id": identifier,
+            "owner": owner,
+            "step": "central",
+            "result": {"state": "prepared", "bundle": {"path": "/x/release.json", "sha256": "0" * 64}},
+        },
+    )
+    assert internal(
+        state, {"publication": "intent", "id": identifier, "owner": owner, "step": "target"}
+    ).json()["execute"]
+    internal(state, {"publication": "yield", "id": identifier, "owner": owner})
+    cancelled = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True}
+    )
+    assert cancelled.json()["state"] == "reconcile"
+    remote = []
+    monkeypatch.setattr(
+        worker, "target_task", lambda *a, **kw: remote.append("target") or {"phase": "restored"}
+    )
+    monkeypatch.setattr(worker, "target_staged", lambda *a, **kw: remote_staged)
+
+    def request(payload):
+        response = internal(state, payload)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert request({"installation_claim": True, "owner": owner})["id"] == identifier
+    observed = worker.execute(tmp_path, request, identifier, owner)
+    if remote_staged:
+        # 远端 publication-tasks 在场：可能有未知目标侧副作用，必须走受管恢复。
+        assert remote == ["target"]
+    else:
+        # 远端从未留下 staged 目录：目标侧零副作用，恢复结论与未启动相同。
+        assert observed["state"] == "cancelled" and observed["result"]["phase"] == "restored"
+        assert remote == []
+
+
+@pytest.mark.parametrize("returncode,expected", [(7, False), (0, True), (1, True), (9, True), (255, True)])
+def test_target_staged_only_remote_absence_answer_disarms(tmp_path, monkeypatch, returncode, expected):
+    # 远端脚本以 7 回答「缺席」；dev-host 自身失败（1/255 等）与环境锁被占（9，
+    # 远端 task.py 可能在飞）都必须按在场处理，否则传输故障或竞态会被当成
+    # 零副作用证据放行恢复。
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname = "95"\nhost = "qy-gw-120"\n')
+    staged = {
+        "request": {"target": {"host": "qy-gw-120"}, "plan": {"environment": "95"}},
+    }
+    sent = {}
+
+    def run(*a, **kw):
+        sent.update(kw)
+        return SimpleNamespace(returncode=returncode)
+
+    monkeypatch.setattr(worker, "subprocess", SimpleNamespace(run=run))
+    assert worker.target_staged(tmp_path, staged, "task_" + "0" * 32) is expected
+    # 探测路径与锁都按安装器 environment 推导，不走宿主注册的 paths.access。
+    assert "/run/lock/aiops-access-95.lock" in sent["input"]
+    assert "/opt/aiops-access-95/publication-tasks/" in sent["input"]
+    assert "flock" in sent["input"]
+
+
+def test_target_staged_rejects_dash_prefixed_host_name(tmp_path):
+    # REFERENCE_PATTERN 允许前导 '-'；若照进 dev-host exec argv 会被当选项解析。
+    # 守卫必须先于探测返回保守的在场侧（不发任何 subprocess）。
+    from aiops_diagnostics.gateway import environment_publication_worker as worker
+
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname = "-rf"\nhost = "qy-gw-120"\n')
+    staged = {
+        "request": {"target": {"host": "qy-gw-120"}, "plan": {"environment": "95"}},
+    }
+    assert worker.target_staged(tmp_path, staged, "task_" + "0" * 32) is True
