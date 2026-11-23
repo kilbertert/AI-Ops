@@ -37,6 +37,11 @@ consumer 反过来必须看不到来源密钥（密钥验过会把它错分派�
 - `/v1/media/` 是**签名即授权**的独立姿势：不看入口头、不走共用 `.inc`，
   内联 `proxy_pass` 且全部身份/会话/来源/转发头清空——上游实测无 Authorization
   即按签名服务字节，媒体 URL 出现在问答正文中时客户端本就不会带业务头。
+- 本片全部 location 逐条 `access_log off`：签名 media URL 与带 ID 的会话/问答
+  URI 本身就是凭据载体，宿主 access_log 会原样记 URI。旧 internal 片在自有
+  server 块 server 级关；本片在公司 server 内只能逐 location 关、只管本片，
+  公司其他 location 日志不动；error_log 按旧 internal 模式不在片内配置。
+  这是 URI 凭据豁免，不声称宿主日志隐私整体已解决。
 
 ## 替代方案
 
@@ -59,6 +64,9 @@ operator 也走公司网关那一跳（41 的 30899 链）：本环境没有可�
   客户端无法声明 operator 入口（与 41 相同，无新限制）。
 - operator 可用性依赖本环境 `company_source_key` + 公司令牌验证已配置；
   未配置时凭据片留空、operator 请求被既有链拒绝——这是设计内的 fail closed。
+  本片只是头/schema 门，不代表普通 operator 入口在该环境已正式可用；
+  95 现无公司来源/JWT 配置时 fallback 会话链照常阻断 operator——来源认证
+  配置由运维单独确认，不随本片迁移旧 payload-trust 路径。
 - 宿主日志前置仍是边界：access_log 含 Authorization 或错误日志 info/debug 时拒绝安装，
   本片不声称覆盖了宿主解析阶段的日志形态。
 - 共享 vhost 内无法在本片内关闭 access_log（那会动公司日志）——凭据不落 URL、

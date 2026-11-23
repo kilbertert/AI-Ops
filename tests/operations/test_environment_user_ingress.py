@@ -135,7 +135,8 @@ def ingress(tmp_path_factory: pytest.TempPathFactory):
         f"  client_body_temp_path {root / 'body'};\n"
         f"  proxy_temp_path {root / 'proxy'};\n"
         f"  server {{\n    listen 127.0.0.1:{upstream_port};\n    {echo}\n  }}\n"
-        f"  server {{\n    listen 127.0.0.1:{proxy_port};\n{site}\n"
+        f"  server {{\n    listen 127.0.0.1:{proxy_port};\n"
+        f"    access_log {root / 'access.log'};\n{site}\n"
         "    location / { return 404; }\n  }\n"
         "}\n",
         encoding="utf-8",
@@ -175,6 +176,8 @@ def ingress(tmp_path_factory: pytest.TempPathFactory):
                     break
                 time.sleep(0.1)
         raise AssertionError(f"nginx 没起来（退出码 {nginx.poll()}）")
+
+    request.access_log = root / "access.log"  # type: ignore[attr-defined]
 
     try:
         for _ in range(50):
@@ -322,6 +325,20 @@ def test_media_needs_no_entry_and_leaks_no_identity_headers(ingress) -> None:
     assert f[3] == "" and f[4] == "", "Authorization/入口头不透传给 media 上游"
     assert f[5] == "" and f[6] == "" and f[7] == "", "会话/来源头全空"
     assert f[8] == "" and f[9] == "" and f[10] == "" and f[11] == "", "环境/断言/Cookie 全空"
+
+
+def test_piece_paths_never_reach_access_log_but_company_paths_do(ingress) -> None:
+    """签名 URL/会话 URI 是凭据载体：本片 location 的 access_log 全关；
+    同 server 内公司其他路径（catch-all 替身）照常记录。"""
+    ingress("GET", MEDIA)
+    ingress("GET", "/v1/faq/catalog", CONSUMER)
+    ingress("POST", "/v1/assistant/questions", OPERATOR)
+    ingress("GET", "/company-legacy-path")  # catch-all —— 公司路径替身
+    time.sleep(0.2)  # access_log 在请求结束时落盘
+    log = ingress.access_log.read_text("utf-8")
+    assert "media_" not in log, f"签名 ID 进了 access_log：{log!r}"
+    assert "faq" not in log and "assistant" not in log, "本片路径进了 access_log"
+    assert "/company-legacy-path" in log, "公司路径应照常记录（片内关日志只关本片）"
 
 
 @pytest.mark.parametrize(

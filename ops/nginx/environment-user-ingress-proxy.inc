@@ -30,3 +30,8 @@ proxy_next_upstream off;
 proxy_buffering off;
 proxy_cache off;
 add_header Cache-Control "no-store" always;
+# 本片路径的请求 URI 是凭据载体（media 签名、会话/问答 ID），宿主 access_log
+# 会原样记 URI——逐 location 关，只管本片，不碰公司其他 location 的日志
+# （旧 internal 片在自有 server 块 server 级关；本片在公司 server 内只能逐
+# location）。error_log 按旧 internal 模式不在片内配置。
+access_log off;
