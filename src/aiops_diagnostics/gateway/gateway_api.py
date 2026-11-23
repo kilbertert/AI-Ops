@@ -128,6 +128,7 @@ from aiops_diagnostics.identity.caller_auth import (
     CallerContextResolver,
     DisabledCallerResolver,
     DisabledOrderAuthorizer,
+    EntryCallerResolver,
     IntrospectionCallerResolver,
     IntrospectionSettings,
     OrderAuthorizer,
@@ -5980,11 +5981,18 @@ def _permission_source(runtime: Settings) -> PermissionSource | None:
 
 
 def _fallback_caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
-    """既有链：会话 → UPMS 兜底 → introspection。选择结果与新增本票之前逐字一致。"""
+    """既有链：会话 → UPMS 兜底 → introspection。选择结果与新增本票之前逐字一致。
+
+    唯一的例外在会话那一级（ADR-0320）：登记表（``environment_registry_file``）部署
+    且本环境 UPMS 可用时，operator 入口的个人 Bearer 由 ``EntryCallerResolver`` 改走
+    本环境 UPMS 验证，其余入口逐字落到会话链。登记表未配置时返回值与分派引入之前
+    逐字一致——旧 41 的合同不变；本环境 UPMS 不可配时保持纯会话链（fail closed，
+    不把 operator 悄悄放行到一条验证不了它的链上）。
+    """
     if settings.third_session_service_token:
         try:
             runtime = Settings.from_config(settings.server_config_file)
-            return RedisThirdSessionResolver(
+            resolver: CallerContextResolver = RedisThirdSessionResolver(
                 ThirdSessionSettings(
                     host=runtime.redis.host,
                     port=runtime.redis.port,
@@ -5999,6 +6007,17 @@ def _fallback_caller_resolver(settings: GatewayServerSettings) -> CallerContextR
             )
         except (ValueError, OSError):
             return DisabledCallerResolver()
+        if settings.environment_registry_file and (runtime.upms.base_url or "").strip():
+            # 与 ``OperatorCpms.refresh_scope`` 同一个实时站点目录：首次鉴权就把
+            # UPMS 的混合断言规范化到站点集合，初/复核/回读比较同一口径的范围指纹；
+            # 服务侧内部凭据未配时注入 None——分派原样透传，复核按既有 fail closed。
+            directory = _operator_site_scope(runtime)
+            resolver = EntryCallerResolver(
+                UpmsCallerResolver(runtime),
+                resolver,
+                site_scope=None if directory is None else directory.site_scope_by_b_user_id,
+            )
+        return resolver
     # #444 起，公司令牌路径**不再出现在这条链里**：它由上面的来源密钥门分派，只有密钥验过的
     # 请求才走得到。把这四种选择结果写清楚，是为了让「带错密钥」的行为可预期 —— 它会落到这里，
     # 按会话/introspection/UPMS 处理公司令牌，结果是被拒绝（401），而不是被放行。

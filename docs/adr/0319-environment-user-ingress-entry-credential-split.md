@@ -67,6 +67,10 @@ operator 也走公司网关那一跳（41 的 30899 链）：本环境没有可�
   本片只是头/schema 门，不代表普通 operator 入口在该环境已正式可用；
   95 现无公司来源/JWT 配置时 fallback 会话链照常阻断 operator——来源认证
   配置由运维单独确认，不随本片迁移旧 payload-trust 路径。
+  （例外：ADR-0320 起，**登记表部署**上的普通 operator 入口不再需要来源
+  密钥——`EntryCallerResolver` 按申报入口把个人 Bearer 交给本环境 UPMS
+  验证，租户准入由登记表 `require()` 收口。本条款仅描述未启用该分派的
+  旧模式部署，来源密钥注入路径本身不变。）
 - 宿主日志前置仍是边界：access_log 含 Authorization 或错误日志 info/debug 时拒绝安装，
   本片不声称覆盖了宿主解析阶段的日志形态。
 - 共享 vhost 内无法在本片内关闭 access_log（那会动公司日志）——凭据不落 URL、

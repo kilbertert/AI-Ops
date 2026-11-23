@@ -86,12 +86,13 @@ consumer 处理（41 公开入口实测契约：缺头旧客户端=consumer 链�
 `X-AIOps-Gateway-Assertion`、`Cookie` 一律覆盖或清空，到不了上游（95 宿主
 access_log 记 Cookie 字段，身份走自定义头不走 Cookie）。身份仍由 Gateway 全量验证；
 环境目录停用该环境时 Gateway 继续拒绝——本片不授予、不切换任何路由。
-operator 走公司令牌链是本环境的真实 resolver 需要来源密钥分派（`SourceKeyCallerResolver`
-把密钥验过的请求交给 `CompanyTokenCallerResolver`，即公司体系身份契约 D5）；
-环境未配来源门时凭据片留空值，operator 请求落到既有链被拒——这是 fail closed，不是放行。
-**本片只是头/schema 门**：95 当前配置没有 `company_source_key`/公司 JWT，普通
-operator 请求在 fallback 会话链上仍被拒——operator 正式可用以 root 单独确认的
-来源认证配置为准，本片不迁移旧 payload-trust 路径、不改公司配置或运行时。
+operator 的凭据链按部署形状分派（ADR-0320）：配了 `environment_registry_file` 且本环境
+UPMS 可用时，Gateway 按入口把 operator 的个人 Bearer 交给 `UpmsCallerResolver`
+（`GET /user/info` 上游验证，租户准入由登记表 `require()` 收口）；配了 `company_source_key`
+时来源密钥门仍在前，密钥验过的请求走 `CompanyTokenCallerResolver`（公司体系身份契约 D5）。
+环境未配来源门时凭据片留空值，未登记表的部署上 operator 请求落到既有链被拒——这是
+fail closed，不是放行。**本片只是头/schema 门**：不迁移旧 payload-trust 路径、不改公司
+配置或运行时。
 
 `/v1/media/` 例外：**签名即授权**，不看 `X-Business-Entry`、不透传任何身份头——
 该 location 内联 `proxy_pass`，Authorization/入口/会话/来源/环境断言/Cookie 全清空，

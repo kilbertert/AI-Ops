@@ -383,12 +383,16 @@ def test_the_introspection_path_returns_the_same_context_for_every_entry(
 #:   （非管家端入口/顶层账号不打 ``/shopuser/getShops``，与规则里同一判据）；
 #: - ``operator_publish``：发布面是**另一条**规则（入口必须显式为 operator 才能发），
 #:   判「能不能发」而非「数据范围取哪种口径」；
+#: - ``EntryCallerResolver.resolve``：又一条规则（ADR-0320）——登记表部署上入口
+#:   决定**谁来解析**（operator → 本环境 UPMS，其余 → 既有链），身份仍由所选链
+#:   全量验证，不读入口做范围；
 #: - ``build_trial_scope`` / ``operator_scope``：试用与管理面各自的「顶层账号不受
 #:   站点维度约束」判定，语义同样是「层级」而非「范围分派」。
 _CRITERION_LEDGER: dict[str, set[tuple[str, str]]] = {
     "is_operator_entry": {
         ("identity/data_scope_rule.py", "entry_data_scope"),
         ("identity/company_token_auth.py", "resolve"),
+        ("identity/caller_auth.py", "resolve"),
         ("gateway/gateway_api.py", "operator_publish"),
     },
     "is_tenant_level_account": {
