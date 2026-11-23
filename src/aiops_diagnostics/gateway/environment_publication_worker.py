@@ -256,15 +256,19 @@ def target_staged(root, staged, identifier):
     # 远端以 7 报告「缺席」：dev-host 自身失败（传输/权限）落在 1/255 等普通码，
     # 只有远端脚本真实回答缺席才判不在场。9 = 环境锁被占（远端 task.py 可能在飞，
     # SSH 掉线不等于进程已死）或锁文件不可信，一律按在场收敛到受管恢复侧。
-    script = (
-        "import fcntl,os,sys\nfrom pathlib import Path\n"
-        f"fd=os.open({lockpath!r},os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW,0o600)\n"
-        "lock=os.fdopen(fd,'w')\n"
-        "st=os.fstat(lock.fileno())\n"
-        "if st.st_uid!=0 or st.st_mode&0o077 or st.st_nlink!=1:sys.exit(9)\n"
-        "try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)\n"
-        "except BlockingIOError:sys.exit(9)\n"
-        f"sys.exit(0 if Path({marker!r}).is_dir() else 7)\n"
+    script = "\n".join(
+        [
+            "import fcntl,os,sys",
+            "from pathlib import Path",
+            f"fd=os.open({lockpath!r},os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW,0o600)",
+            "lock=os.fdopen(fd,'w')",
+            "st=os.fstat(lock.fileno())",
+            "if st.st_uid!=0 or st.st_mode&0o077 or st.st_nlink!=1:sys.exit(9)",
+            "try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)",
+            "except BlockingIOError:sys.exit(9)",
+            f"sys.exit(0 if Path({marker!r}).is_dir() else 7)",
+            "",
+        ]
     )
     probe = subprocess.run(
         [
