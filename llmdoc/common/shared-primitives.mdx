@@ -23,6 +23,7 @@ code:
     - tools/content/migrate_shortcut_i18n.py
     - tests/common/test_i18n.py
     - tests/common/test_i18n_acceptance_11_languages.py
+    - tests/common/test_scalar_rules.py
 ---
 
 # 共享原语速查
@@ -44,6 +45,7 @@ code:
 - `private_files.py`：`validate_private_directory`/`validate_private_file`（0700/0600、属主、禁 symlink）；`write_private_text`/`append_private_text`（mkstemp+降权原子写）；`PrivatePathError`。含 Windows ACL 助手。
 - `platform_paths.py`：`AIOPS_HOME`/`AIOPS_CONFIG_HOME`/`AIOPS_DATA_HOME` 覆盖；默认配置文件 = production.env。
 - `config.py`：`Settings.from_env/from_config`、providers registry（`_parse_providers`，含旧单 provider 回落）、`redacted()`（配置值的脱敏投影）、`selected_config_file`。`MySQLSettings.mall_database`（`AIOPS_MYSQL_MALL_DATABASE`，默认 `qumall_mall`，空值=本环境无 mall 侧证据）：mall 是同实例独立 schema，`MySQLSource.mall_billing_records` 经它做租户+认领人绑定的跨库只读联查（联查合同归 [bounded-read-surfaces](../analytics/bounded-read-surfaces.mdx)）。
+- `data/sources.py` 含进程管理语义：`scoped_*_source` 上下文在 `settings.ssh.enabled` 时起 `ssh -N -L` 端口转发子进程并把 Settings **副本**的 host 改回环；直连模式不起子进程不改写——数据源模块不只是读层。
 
 ## 标量与时间
 
