@@ -35,6 +35,12 @@ intent 门把 `{"state":"started"}` 从「已消费」改判为「可续跑授�
 
 只有 record 落账的结果才把 intent 消费成 `{"execute":False,"observed":...}`。
 
+配套的第二处修订：central_bundle 的容量 900s 新鲜度闸在 `intent.json` 在场时
+不再按墙钟复核（`state/runs` 形状检查保留）。intent.json 是中央步授权已铸成的
+落盘证据——授权在容量新鲜时给出，续跑执行的是同一授权，重复复核只会让
+started 换死在下一道闸（env95 在挂任务的 capacity 已越过 900s）。发行物照样
+携带原测量时刻，过期证据不作假；无 intent.json 的首跑仍受新鲜度约束。
+
 ## 替代方案
 
 worker 侧识别 started 形并直接以 execute 语义调用：授权决定挪出账本门，「步骤是否
@@ -46,6 +52,10 @@ authorize 与远端写之间是同根死法；重入性是整条重领模型的�
 账本标记都同样有盲区；副作用收敛只能由确认读守卫给出，不靠账本自证，排除。
 取消分支放松标记 hold：违反 ADR-0310——`phase=restored` 是对「无未观测共享副作用」
 的安全断言，中途死亡的中央步副作用集合未知，不能自动给恢复结论，排除。
+续跑时让 worker 先重测过期容量再调 central：record 落账的 passed 结果被同一
+one-shot 门消费成 observed（execute=False 即 hold）；且重测要重开消费者试用——
+`business-validation/<id>/consumer.json` 有 trial_id 无 result 的半成品会被
+`consumer opening already attempted` 硬拒，容量重开面比授权豁免复杂得多，排除。
 
 ## 后果
 
@@ -54,3 +64,15 @@ started 形的前向死锁消除：部署后下一个认领周期即续跑收口
 换来无人工干预的收敛。已 record 的非 passed 结果仍被 one-shot 消费，测量失败语义
 不变。取消分支维持 ADR-0310：started 且工件标记在场的取消仍核查 hold——`cancel`
 单向不可清，该 hold 的出口仍是带外人工核查，本次修订既不扩大也不缩小此面。
+
+续跑的已知边界（同族残余，不属本修订面）：
+
+- capacity 死在消费者试用已开、result 未收之间：business step 按 `(spec.id,
+  capability)` 的半成品标记硬拒二次开试，重测在开门点失败仍收敛核查——
+  「已开试用结果不可知」与 started 同族，但其续跑需要 business-step 的
+  trial 读回续接设计，另属独立修订；
+- target/activate 死在远端 `configuring`/`activating` 检查点之间：远端
+  publication-task 的内部相位只能 observe 到终态相位，部分相位既不 execute
+  也不 observe——安装侧代码的断点续传是另一个修订面；其设计出口是
+  取消→远端 restore（回滚半成品），前向续跑不覆盖；
+- 以上残余都收敛到既有核查 hold，不产生新失败面。

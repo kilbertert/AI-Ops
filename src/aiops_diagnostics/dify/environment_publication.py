@@ -391,14 +391,16 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
         with gateway_db.connection(drafts._database(management._path(context)), readonly=True) as connection:
             current(context, connection, identifier, fresh=True)
 
+    directory = Path(settings.data_home) / "publication-bundles" / identifier
     capacity = request["steps"].get("capacity", {})
-    if not (Path(settings.data_home) / "publication-bundles" / identifier / "release.json").exists() and (
+    # intent.json 在场证明本步授权已在容量新鲜时铸成；续跑执行同一授权，不再按墙钟
+    # 复核——发行物仍如实携带测量时刻。无标记的首跑仍受 900s 新鲜度约束（ADR-0316）。
+    if not (directory / "release.json").exists() and (
         capacity.get("state") != "passed"
-        or time.time() - capacity.get("observed_at", 0) > 900
+        or (time.time() - capacity.get("observed_at", 0) > 900 and not (directory / "intent.json").exists())
         or len(capacity.get("runs", [])) != 3
     ):
         raise tasks.TaskRefused("ENVIRONMENT_PUBLICATION_CAPACITY_REQUIRED")
-    directory = Path(settings.data_home) / "publication-bundles" / identifier
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     from aiops_diagnostics.common.private_files import validate_private_directory
 

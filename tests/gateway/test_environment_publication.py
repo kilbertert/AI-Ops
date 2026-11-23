@@ -842,3 +842,111 @@ def test_started_capacity_step_remeasures_instead_of_reconcile_hold(validated, t
     with gateway_db.connection(drafts._database(path), readonly=True) as conn:
         steps = json.loads(tasks._row(conn, identifier)["request"])["steps"]
     assert steps["capacity"]["state"] == "passed"
+
+
+def test_stale_capacity_gates_first_mint_but_intent_marker_allows_resume(validated, monkeypatch):
+    """容量 900s 新鲜度闸只约束首跑：intent.json 在场的续跑按既有授权收口。
+
+    env95 在挂任务的 capacity 证据已越过 900s——若续跑仍按墙钟复核，
+    started 重授只是换死在下一道闸。发行物照样携带原测量时刻，过期
+    证据不作假；无 intent.json 的首跑仍被同闸拒绝。
+    """
+    import copy
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import yaml
+
+    from aiops_diagnostics.common.private_files import write_private_text
+    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, environment_consumer
+    from aiops_diagnostics.dify import environment_publication as publication
+
+    original, _ = validated
+    state = original[0]
+    settings = state[2]
+    settings.chat_dify_key_dir = str(settings.data_home / "keys")
+    identifier = publish(validated).json()["id"]
+    owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    staged = internal(state, {"publication": "stage", "id": identifier, "owner": owner}).json()
+    request = staged["request"]
+    with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
+        child = json.loads(tasks._row(conn, request["children"]["consumer-prepare"])["request"])
+    context = SimpleNamespace(settings=settings)
+    spec = publication.describe(context, request, identifier)["spec"]
+    document = environment_consumer.document(child["consumer_source"], spec["consumer"]["knowledge_base_id"])
+    exported = copy.deepcopy(document)
+    for variable in exported["workflow"].get("environment_variables", []):
+        variable["selector"] = ["env", variable["name"]]
+    published = []
+    keys = []
+    enabled = [False]
+
+    class Console:
+        def __init__(self, *a):
+            pass
+
+        def _call(self, workspace, path, *, method="GET", body=None, **kwargs):
+            if path.endswith("/api-keys"):
+                if method == "POST":
+                    keys.append({"token": "synthetic-only-app-key", "id": "key-one"})
+                    return keys[0]
+                return {"data": keys}
+            if path.endswith("/api-enable"):
+                enabled[0] = body["enable_api"]
+                return {}
+            return {
+                "id": spec["consumer"]["app_id"],
+                "workflow": {"id": "fixed-workflow"} if published else None,
+                "enable_api": enabled[0],
+                "enable_site": False,
+            }
+
+    class Dsl:
+        def __init__(self, source):
+            pass
+
+        def export_dsl(self, *, workflow_id=None):
+            return yaml.safe_dump(exported)
+
+        def publish_workflow(self):
+            published.append(True)
+            return True
+
+        def published_workflow_id(self):
+            return "fixed-workflow"
+
+    monkeypatch.setattr(dify_console_admin, "DifyConsoleAdmin", Console)
+    monkeypatch.setattr(dify_dsl_pull, "DifyDslClient", Dsl)
+    stale = time.time() - 3600
+    request["steps"]["capacity"] = {"state": "passed", "observed_at": stale, "runs": ["c", "o", "f"]}
+    readiness = {
+        "operator_manifest": "frozen",
+        "operator_prompt": "sop",
+        "gateway_url": "https://a.example.test",
+        "catalogue_token": "ckc_synthetic",
+        "dify_chat_base_url": "https://dify.example.test/v1",
+    }
+    # 首跑无 intent 标记：过期容量证据仍被 900s 闸拒。
+    with pytest.raises(tasks.TaskRefused, match="CAPACITY"):
+        publication.central_bundle(context, request, spec, readiness, identifier)
+    # 续跑：intent.json 证明授权已在容量新鲜时铸成，不再按墙钟复核。
+    directory = Path(settings.data_home) / "publication-bundles" / identifier
+    directory.mkdir(mode=0o700, parents=True)
+    write_private_text(
+        directory / "intent.json",
+        json.dumps(
+            {
+                "environment": spec["environment"],
+                "tenant_id": spec["tenant_id"],
+                "workspace_id": spec["consumer"]["workspace_id"],
+                "app_id": spec["consumer"]["app_id"],
+                "workflow": dify_dsl_pull.workflow_content(yaml.safe_dump(exported)),
+            },
+            sort_keys=True,
+        ),
+    )
+    result = publication.central_bundle(context, request, spec, readiness, identifier)
+    assert len(keys) == len(published) == 1 and enabled[0]
+    private = json.loads(Path(result["path"]).read_text())
+    assert private["capacity"]["observed_at"] == stale
