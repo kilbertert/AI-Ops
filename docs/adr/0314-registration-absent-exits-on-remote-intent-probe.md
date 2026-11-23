@@ -17,8 +17,10 @@ store 形状变合法（self_service_store 的 PARTIAL/冲突判定按运行时�
 
 ## 决定
 
-worker 在登记远端动作失败（任何 `installation_run` 捕获的传输/远端异常）
-时探测 `/opt/aiops-access-<environment>/registration-tasks/<task_id>.json`：
+worker 在两种情形下探 `/opt/aiops-access-<environment>/registration-tasks/<task_id>.json`：
+远端动作抛出任何 `installation_run` 捕获的异常，或远端正常返回
+`result=absent`（store 为空本身不证明登记步零副作用——意图在而
+store 空的形状真实存在，须由意图文件缺席收紧成「从未越过首写」）。
 该文件是远端 `register()` 在任何 store 写之前的**首个**落盘意图
 （`task.py` register 中 `install.write(file, spec)` 先于
 `register_runtime`），它不存在且持锁下无远端 task.py 在飞，即证明该次

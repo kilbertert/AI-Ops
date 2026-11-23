@@ -655,6 +655,13 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
             if len(raw) > 65536:
                 raise ValueError("installation response too large")
             result = json.loads(raw)
+            # 远端自报 absent 只证 store 为空：意图文件同缺才证明登记步零副作用。
+            if (
+                registration
+                and result.get("result") == "absent"
+                and registration_intent_absent(root, host, staged["environment"], identifier)
+            ):
+                result["remote_intent"] = "absent"
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):
         # 登记意图缺席证明登记步从未越过首写：已派发任务凭此安全终态化，
         # 否则 observe-only 无法重放登记、reconcile 会永远占住互斥。

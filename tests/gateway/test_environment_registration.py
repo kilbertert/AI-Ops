@@ -359,3 +359,79 @@ def test_worker_registration_remote_failure_reports_absent_only_on_intent_probe(
     monkeypatch.setattr(worker, "registration_intent_absent", lambda *a, **kw: False)
     result = worker.installation_run(tmp_path, request, identifier, owner, registration=True)
     assert result["result"] == "unconfirmed" and "remote_intent" not in result
+
+
+@pytest.mark.parametrize("intent_absent", [True, False])
+def test_worker_registration_remote_absent_gains_evidence_only_on_intent_probe(
+    tmp_path, monkeypatch, intent_absent
+):
+    """远端正常回报 absent 时同样要凭意图探针补证据，否则 dispatched 维持核查。
+
+    首派死于意图落盘前后续观察可无异常地回报 store-absent：store 为空本身
+    不证明登记步零副作用，意图文件同缺才放行终态。
+    """
+    import hashlib
+    import subprocess
+    import time
+
+    from aiops_diagnostics.gateway import environment_task_worker as worker
+
+    identifier = "task_" + "d" * 32
+    owner = "a" * 32
+    installer_bytes = b"fixed installer"
+    staged = {
+        "id": identifier,
+        "environment": "a",
+        "tenant_id": "same",
+        "expires_at": time.time() + 900,
+        "observe_only": True,
+        "target": {"host": "managed-a", "user": "aiops", "port": 2222},
+        "installer": {
+            "revision": "f" * 40,
+            "sha256": hashlib.sha256(installer_bytes).hexdigest(),
+        },
+        "expected": {
+            "revision": "f" * 40,
+            "artifact_sha256": "a" * 64,
+            "config_sha256": "b" * 64,
+            "registry_sha256": "c" * 64,
+            "runtime_sha256": "d" * 64,
+        },
+    }
+    absent_result = {
+        "id": identifier,
+        "environment": "a",
+        "tenant_id": "same",
+        "scope": "inactive-runtime-registration-only",
+        "state": "reconcile",
+        "result": "absent",
+        "executable": False,
+        "activated": False,
+        "business_acceptance": False,
+        "source_revision": staged["expected"]["revision"],
+        **{k: v for k, v in staged["expected"].items() if k != "revision"},
+    }
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="124"\nhost="managed-a"\n')
+    completed = []
+
+    def run(args, **kwargs):
+        if args[0] == "bash":
+            __import__("pathlib").Path(args[-1]).write_bytes(installer_bytes)
+        return subprocess.CompletedProcess(args, 0)
+
+    def output(args, **kwargs):
+        return json.dumps(absent_result)
+
+    def request(payload):
+        if payload["registration"] == "stage":
+            return staged
+        completed.append(payload["result"])
+        return payload["result"]
+
+    monkeypatch.setattr(worker.subprocess, "run", run)
+    monkeypatch.setattr(worker.subprocess, "check_output", output)
+    monkeypatch.setattr(worker, "registration_intent_absent", lambda *a, **kw: intent_absent)
+    result = worker.installation_run(tmp_path, request, identifier, owner, registration=True)
+    assert result["result"] == "absent"
+    assert ("remote_intent" in result) is intent_absent
+    assert completed and ("remote_intent" in completed[0]) is intent_absent
