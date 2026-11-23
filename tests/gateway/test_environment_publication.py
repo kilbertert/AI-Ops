@@ -726,16 +726,19 @@ def test_started_step_reauthorizes_execute_but_recorded_result_still_consumes(va
     assert internal(state, {**intent, "step": "central"}).json() == {"execute": True}
     assert internal(state, {**intent, "step": "central"}).json() == {"execute": True}
     recorded = {"state": "prepared", "bundle": {"path": "/x/release.json", "sha256": "0" * 64}}
-    assert internal(
-        state,
-        {
-            "publication": "record",
-            "id": identifier,
-            "owner": owner,
-            "step": "central",
-            "result": recorded,
-        },
-    ).json()["recorded"] is True
+    assert (
+        internal(
+            state,
+            {
+                "publication": "record",
+                "id": identifier,
+                "owner": owner,
+                "step": "central",
+                "result": recorded,
+            },
+        ).json()["recorded"]
+        is True
+    )
     observed = internal(state, {**intent, "step": "central"}).json()
     assert observed["execute"] is False and observed["observed"] == recorded
 
@@ -772,9 +775,7 @@ def test_started_central_step_resumes_execution_on_next_claim(validated, tmp_pat
     )
     monkeypatch.setattr(publication, "connect", lambda *a: {"connected": True})
     monkeypatch.setattr(worker, "local_trial", lambda *a, **kw: {})
-    monkeypatch.setattr(
-        worker, "target_task", lambda *a, **kw: {"state": "observed", "phase": "staged"}
-    )
+    monkeypatch.setattr(worker, "target_task", lambda *a, **kw: {"state": "observed", "phase": "staged"})
 
     def request_(payload):
         response = internal(state, payload)
@@ -790,9 +791,7 @@ def test_started_central_step_resumes_execution_on_next_claim(validated, tmp_pat
     assert steps["central"]["bundle"] == bundle and steps["target"]["phase"] == "staged"
 
 
-def test_started_capacity_step_remeasures_instead_of_reconcile_hold(
-    validated, tmp_path, monkeypatch
-):
+def test_started_capacity_step_remeasures_instead_of_reconcile_hold(validated, tmp_path, monkeypatch):
     """capacity 的 started 形同样续跑：重测产出从未落账的结果，不是重放。
 
     「do not replay models」防的是用新测量顶替已记录结果；started 下没有已记录
