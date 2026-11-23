@@ -631,3 +631,52 @@ def test_target_staged_rejects_dash_prefixed_host_name(tmp_path):
         "request": {"target": {"host": "qy-gw-120"}, "plan": {"environment": "95"}},
     }
     assert worker.target_staged(tmp_path, staged, "task_" + "0" * 32) is True
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_attempted_publication_outlives_plan_window_but_cancel_still_refuses(validated, cancelled):
+    """attempted 发布的存续由账本与取消/漂移闸治理，不再受计划墙钟约束。
+
+    真实链路（readiness/capacity/central/target/verify/activate）超过计划 900s
+    窗时，在飞发布的每个前向 fresh 调用都被冻结计划墙钟拒死——任务停在
+    checking 可认领却永远走不出下一步，等同登记任务的 dispatched 无出口。
+    attempted（首个 intent 已消费）后窗只约束启动：取消行仍硬拒。
+    """
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "a" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    intent = {"publication": "intent", "id": identifier, "owner": owner}
+    assert internal(state, {**intent, "step": "readiness"}).json() == {"execute": True}
+    path = state[0][0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        assert request["attempted"] is True
+        request["plan"]["expires_at"] = 0
+        conn.execute(
+            "UPDATE environment_tasks SET request=?,cancel=? WHERE id=?",
+            (json.dumps(request), 1 if cancelled else 0, identifier),
+        )
+    response = internal(state, {**intent, "step": "capacity"})
+    if cancelled:
+        assert response.status_code in {403, 409}
+    else:
+        assert response.status_code == 200, response.text
+        assert response.json() == {"execute": True}
+
+
+def test_publication_plan_window_still_gates_first_intent(validated):
+    """计划窗仍约束启动：未消费首个 intent 的发布在计划到期后不得认领。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    path = state[0][0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        request = json.loads(tasks._row(conn, identifier)["request"])
+        request["plan"]["expires_at"] = 0
+        conn.execute("UPDATE environment_tasks SET request=? WHERE id=?", (json.dumps(request), identifier))
+    claim = internal(state, {"installation_claim": True, "owner": "b" * 32})
+    assert claim.status_code == 200 and claim.json()["claimed"] is False
+    with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+        row = tasks._row(conn, identifier)
+        assert row["state"] == "blocked"
+        assert row["error"] == "ENVIRONMENT_TASK_OBSERVATION_REQUIRED"

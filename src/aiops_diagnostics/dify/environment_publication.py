@@ -142,7 +142,11 @@ def current(context, conn, identifier, *, fresh=False):
                 Path(context.settings.environment_onboarding_file).read_bytes()
             ).hexdigest() not in {change.get("references_after"), change["references_before"]}:
                 raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
-    if fresh and (row["cancel"] or request["plan"]["expires_at"] <= time.time()):
+    # attempted 即 committed：计划窗只约束启动，不再约束在飞链路——与登记任务
+    # dispatched 后只按冻结账本对账同规；取消行与漂移检查（上方分支）仍然硬拒。
+    if fresh and (
+        row["cancel"] or not request.get("attempted") and request["plan"]["expires_at"] <= time.time()
+    ):
         raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
     return row, request
 
