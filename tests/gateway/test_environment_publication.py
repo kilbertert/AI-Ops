@@ -1,6 +1,7 @@
 """D43原管理任务入口；真实账本、真实已核内容与拒绝，不接受网页passed。"""
 
 import json
+import threading
 import time
 
 import pytest
@@ -718,13 +719,14 @@ def test_capacity_requires_overlapping_real_run_windows_before_publish(monkeypat
         "services": [{"pid": 1, "memory_bytes": 200_000_000}, {"pid": 2, "memory_bytes": 150_000_000}],
     }
     monkeypatch.setattr(capacity.subprocess, "check_output", lambda *a, **kw: json.dumps(overlap))
-    from threading import Barrier
-
     concurrent = [True]
-    barrier = Barrier(3)
 
-    def run(root, staged, spec, cap):
-        barrier.wait(timeout=5)
+    def run(root, staged, spec, cap, consumer_running=None):
+        if cap != "consumer":
+            # 真实链同序：短腿等慢预热腿的 run 落库后才发令；consumer 自身立即就绪。
+            consumer_running.wait(timeout=5)
+        else:
+            consumer_running.set()
         time.sleep(0.02)
         start = {"consumer": 1, "offline": 2, "order": 3}[cap]
         return {
@@ -739,6 +741,83 @@ def test_capacity_requires_overlapping_real_run_windows_before_publish(monkeypat
     concurrent[0] = False
     with pytest.raises(ValueError, match="concurrent"):
         capacity.run(tmp_path, staged, spec, reference)
+
+
+def test_capacity_short_leg_blocks_until_consumer_run_starts(monkeypatch):
+    """business_run 本体：consumer 之外的腿必须等 consumer 的 run 落库信号。"""
+    from aiops_diagnostics.gateway import environment_capacity as capacity
+
+    calls = []
+
+    def trial(root, target, environment, payload, *, control=False):
+        capability = payload.get("capability")
+        calls.append((payload["action"], capability, control))
+        if payload["action"] == "business-step" and capability == "consumer":
+            return {"candidate": {}, "token": "t", "question": "q"}
+        if payload["action"] == "consumer-start":
+            return {"trial_id": "tr"}
+        if payload["action"] == "business-step":
+            return {"state": "passed", "evidence": {"trial_id": "qa"}}
+        if payload["action"] == "publication-run-window":
+            return {"started_at": 1, "completed_at": 2}
+        raise AssertionError(payload["action"])
+
+    monkeypatch.setattr(capacity, "local_trial", trial)
+    ready = threading.Event()
+    assert not ready.is_set()
+    outcome = {}
+
+    def short_leg():
+        outcome["x"] = capacity.business_run(
+            None,
+            {"request": {"target": {}}},
+            {"environment": "a", "operator_app": "op"},
+            "offline",
+            consumer_running=ready,
+        )
+
+    worker = threading.Thread(target=short_leg, daemon=True)
+    worker.start()
+    worker.join(timeout=0.3)
+    assert worker.is_alive() and "x" not in outcome, "short leg must wait for the consumer run"
+    ready.set()
+    worker.join(timeout=5)
+    assert outcome["x"]["state"] == "passed"
+    assert [c[0] for c in calls] == ["business-step", "publication-run-window"]
+
+
+def test_capacity_short_leg_proceeds_when_consumer_leg_fails(monkeypatch):
+    """consumer 失败不空转：run 循环置位事件后短腿照常返回，错误由 futures 收敛。"""
+    from aiops_diagnostics.gateway import environment_capacity as capacity
+
+    def trial(root, target, environment, payload, *, control=False):
+        if payload["action"] == "business-step" and payload.get("capability") == "consumer":
+            raise ValueError("candidate target refused or unavailable")
+        if payload["action"] == "business-step":
+            return {"state": "passed", "evidence": {"trial_id": "qa"}}
+        return {"started_at": 1, "completed_at": 2}
+
+    monkeypatch.setattr(capacity, "local_trial", trial)
+    ready = threading.Event()
+    result = {}
+    worker = threading.Thread(
+        target=lambda: result.update(
+            x=capacity.business_run(
+                None,
+                {"request": {"target": {}}},
+                {"environment": "a", "operator_app": "op"},
+                "offline",
+                consumer_running=ready,
+            )
+        ),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout=0.3)
+    assert worker.is_alive()
+    ready.set()
+    worker.join(timeout=5)
+    assert result["x"]["state"] == "passed"
 
 
 def test_second_tenant_directory_sync_adds_only_approved_tenant_without_reentrant_lock(validated):

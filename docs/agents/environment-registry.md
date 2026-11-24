@@ -631,6 +631,9 @@ aiops-admin --config <中央私有配置> knowledge-delegation \
 实际服务有上限时要求使用率低于80%，宿主可用内存至少1GiB。升级重叠从同修订原安装器
 `current/capacity.json`读取两个真实进程/cgroup观测；没有该事实则拒绝发布，不接人工填通过的回执。
 三项run没有实际重叠也拒绝，不能以发起三个线程冒充并发容量完成。资源采样不是模型业务准确率证明。
+发令按窗口起点而非同刻抛三腿：consumer 腿在 run 落库前有十余秒串行准备（候选租约、
+会话解析、DSL 快照与 claim），被测窗口从 run 创建起算，故先起 consumer，其 run 确认在飞后
+再放行 order/offline（ADR-0325）。重叠判据、采样频率与全部余量阈值不因此放宽。
 
 验证回执的`observed_at`是「最后一次全部核对通过」的确认时刻，不是首次完成时刻（ADR-0318）：
 activate前距上次复验逾300s时，worker先经`publication-trial-complete`在目标按持久锚点重核

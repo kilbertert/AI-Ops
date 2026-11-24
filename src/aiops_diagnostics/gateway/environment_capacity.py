@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+import threading
 import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
@@ -71,7 +72,12 @@ def sample(root, hosts):
     return result
 
 
-def business_run(root, staged, spec, capability):
+def business_run(root, staged, spec, capability, *, consumer_running=None):
+    # consumer 腿在 run 落库前有约十余秒的串行准备（租约、会话解析、候选快照与
+    # claim），被测窗口从 run 创建才起算；短腿若同时发令会先跑完，测出的是两段
+    # 错开的时间而非并发。故 consumer 先起跑，run 已创建后再放行其余两腿。
+    if capability != "consumer" and consumer_running is not None and not consumer_running.wait(timeout=150):
+        raise ValueError("consumer capacity run did not start")
     target = local_trial(
         root,
         staged["request"]["target"],
@@ -105,6 +111,9 @@ def business_run(root, staged, spec, capability):
         },
         control=True,
     )
+    if consumer_running is not None:
+        # consumer-start 返回即 run 已落库，窗口起点确定，其余两腿可放行。
+        consumer_running.set()
     end = time.monotonic() + 200
     while True:
         result = local_trial(
@@ -193,11 +202,19 @@ def run(root, staged, spec, reference):
     ):
         raise ValueError("matching actual upgrade overlap evidence required")
     samples = []
+    consumer_running = threading.Event()
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = [
-            pool.submit(business_run, root, staged, spec, cap) for cap in ("consumer", "offline", "order")
+        consumer_future = pool.submit(
+            business_run, root, staged, spec, "consumer", consumer_running=consumer_running
+        )
+        futures = [consumer_future] + [
+            pool.submit(business_run, root, staged, spec, cap, consumer_running=consumer_running)
+            for cap in ("offline", "order")
         ]
         while not all(f.done() for f in futures):
+            # consumer 在 set 之前失败时不能让其余两腿空等；失败经 f.result() 上抛。
+            if consumer_future.done() and not consumer_running.is_set():
+                consumer_running.set()
             samples.append(sample(root, hosts))
             time.sleep(2)
         outcomes = [f.result() for f in futures]
