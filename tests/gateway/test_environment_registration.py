@@ -1,12 +1,15 @@
 """D39：原管理HTTP续接安装结果；只读对账、过期/撤权、桥和互斥。"""
 
 import json
+import time
 
 import pytest
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 
+from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.gateway import environment_drafts as drafts
 from aiops_diagnostics.gateway import environment_plans as plans
+from aiops_diagnostics.gateway import environment_task_worker as worker
 from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
 from gateway.test_candidate_knowledge_connection import connected  # noqa: F401
@@ -14,7 +17,7 @@ from gateway.test_environment_consumer import consumer_app  # noqa: F401
 from gateway.test_environment_installation import installation_state, internal, submit  # noqa: F401
 from gateway.test_environment_knowledge import knowledge  # noqa: F401
 from gateway.test_environment_runtime import wiring  # noqa: F401
-from gateway.test_environment_tasks import ADMIN, prepared  # noqa: F401
+from gateway.test_environment_tasks import ADMIN, create, prepared, receipt  # noqa: F401
 
 
 @pytest.fixture
@@ -252,9 +255,21 @@ def test_dispatched_absent_registration_exits_only_with_remote_intent_evidence(i
     )
 
     def complete_with(body, status=200):
-        # complete 后任务回到 checking；每个核查周期先重领再补结果。
-        internal(state, {"installation_claim": True, "owner": owner})
-        response = internal(state, {**payload, "registration": "complete", "result": body})
+        # complete 后任务回到 checking；checking 按 60 秒节奏让位，故先推过节奏再重领。
+        with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+            checking = tasks._row(conn, identifier)["state"] == "checking"
+            if checking:
+                conn.execute(
+                    "UPDATE environment_tasks SET updated_at=? WHERE id=?",
+                    (time.time() - 61, identifier),
+                )
+        current_owner = owner
+        if checking:
+            claimed = internal(state, {"installation_claim": True, "owner": owner}).json()
+            assert claimed["claimed"] and claimed["id"] == identifier, claimed
+        response = internal(
+            state, {**payload, "owner": current_owner, "registration": "complete", "result": body}
+        )
         assert response.status_code == status, response.text
         return response
 
@@ -272,6 +287,148 @@ def test_dispatched_absent_registration_exits_only_with_remote_intent_evidence(i
         conn.execute("UPDATE environment_plans SET expires_at=0")
     plan = plans.preflight(path, ADMIN, "a", 1, 1, ref)
     assert registration((state, source, plan["id"])).status_code == 200
+
+
+def _unknown_registration(installed, *, cancelled=False):  # noqa: F811
+    """把登记任务推进到 checking 的未知结果形，返回 (state, identifier, stage)。"""
+    state, _, _ = installed
+    path = state[0][0]
+    identifier = registration(installed).json()["id"]
+    owner = "e" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    payload = {"registration": "stage", "id": identifier, "owner": owner}
+    stage = internal(state, payload).json()
+    assert internal(state, {**payload, "registration": "authorize"}).status_code == 200
+    result = dict(
+        id=identifier,
+        environment="a",
+        tenant_id="same",
+        scope="inactive-runtime-registration-only",
+        state="reconcile",
+        result="unconfirmed",
+        executable=False,
+        activated=False,
+        business_acceptance=False,
+        source_revision=stage["expected"]["revision"],
+        **{k: v for k, v in stage["expected"].items() if k != "revision"},
+    )
+    assert internal(state, {**payload, "registration": "complete", "result": result}).status_code == 200
+    if cancelled:
+        state[0][2].post("/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True})
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        row = tasks._row(conn, identifier)
+        assert row["state"] == "checking" and row["cancel"] == (1 if cancelled else 0)
+        conn.execute("UPDATE environment_tasks SET lease_until=0 WHERE id=?", (identifier,))
+    return state, identifier, stage
+
+
+def _worker_round(state, tmp_path, monkeypatch):
+    """一次真实 worker.run（installation_claim 优先，未领到才落现场预检）。
+
+    远端登记一轮复现真实回执：stage 后 complete 仍报 unconfirmed，于是该行在
+    下一轮又回到 checking 并刷新 updated_at——这正是毒丸每周期抢到名额的机制。
+    返回 (worker.run 结果, 本轮发往中央的载荷列表)。
+    """
+    client, settings = state[0][2], state[0][3]
+    sent = []
+
+    def central(root, target, payload):
+        sent.append(dict(payload))
+        headers = build_internal_token_headers(settings.environment_task_key, 300, int(time.time()))
+        response = client.post("/v1/internal/environment-tasks", json=payload, headers=headers)
+        assert response.status_code == 200, (payload, response.text)
+        return response.json()
+
+    def installation_run(root, request, identifier, owner, **kwargs):
+        staged = request({"registration": "stage", "id": identifier, "owner": owner})
+        assert staged["observe_only"] is True  # 已派发：只读回读，不重写
+        request(
+            {
+                "registration": "complete",
+                "id": identifier,
+                "owner": owner,
+                "result": dict(
+                    id=identifier,
+                    environment=staged["environment"],
+                    tenant_id=staged["tenant_id"],
+                    scope="inactive-runtime-registration-only",
+                    state="reconcile",
+                    result="unconfirmed",
+                    executable=False,
+                    activated=False,
+                    business_acceptance=False,
+                    source_revision=staged["expected"]["revision"],
+                    **{k: v for k, v in staged["expected"].items() if k != "revision"},
+                ),
+            }
+        )
+        return {"id": identifier}
+
+    monkeypatch.setattr(worker, "central_call", central)
+    monkeypatch.setattr(worker.subprocess, "check_output", lambda *a, **kw: "")
+    monkeypatch.setattr(worker.subprocess, "run", lambda *a, **kw: None)
+    monkeypatch.setattr(worker, "installation_run", installation_run)
+    monkeypatch.setattr(worker, "execute", lambda root, claim: receipt(claim["environment"]))
+    return worker.run(tmp_path, "", "", central_target="41"), sent
+
+
+def test_unknown_registration_yields_slot_so_queued_preflight_runs(installed, tmp_path, monkeypatch):  # noqa: F811
+    """checking 登记按节奏让位；同环境排队的只读预检在有限轮次内被真实领到。
+
+    事故形：登记回报 reconcile/unconfirmed → 落 checking；worker 每周期先
+    installation_claim 并立即 return，同一条每轮抢到名额（每轮 stage+complete
+    还刷新 updated_at），于是与它无关的独立环境现场预检（env b，queued、
+    lease=0、完全可领）无人处理——单个 worker 是全局的，一个毒丸就饿死整条
+    队列。让位与保护必须同时成立：节奏到期后 checking 行重新可领，互斥仍在。
+    """
+    state, identifier, _ = _unknown_registration(installed)
+    queued, _ = create(state[0], "b")
+    served = []
+    base = time.time()
+    for round_ in range(6):
+        # 30 秒唤醒一次（timer 实际 20s；60 秒节奏跨两轮才到期）。
+        monkeypatch.setattr(time, "time", lambda offset=round_ * 30: base + offset)
+        outcome, _ = _worker_round(state, tmp_path, monkeypatch)
+        if outcome is not None and outcome.get("id") == queued["id"]:
+            served.append(outcome)
+            break
+    assert served, "queued site-preflight was never dispatched by the real worker"
+    with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
+        row = tasks._row(conn, identifier)
+    # 让位不等于终态化：未知登记仍待核对，未被伪造成成功、取消或过期。
+    assert row["state"] == "checking" and row["cancel"] == 0
+
+
+def test_unknown_registration_keeps_environment_mutex_against_new_conflicts(installed):  # noqa: F811
+    """让位不得解除保护：未知登记的 checking 行仍拒绝同环境新的冲突安装。"""
+    from aiops_diagnostics.dify import environment_installation as installation
+
+    state, _, _ = _unknown_registration(installed)
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        parent = state[1]
+        parent_request = json.loads(tasks._row(conn, parent)["request"])
+        # 同一 BUSY 断言面（submit_cold / submit / validation 共用该查询形状）。
+        with pytest.raises(tasks.TaskRefused, match="ENVIRONMENT_TASK_BUSY"):
+            installation.submit_cold(conn, "a", ["control", "platform", "admin"], parent, parent_request)
+
+
+def test_cancelled_dispatched_registration_reads_back_without_authorizing(installed, tmp_path, monkeypatch):  # noqa: F811
+    """已取消且已派发的登记只走冻结目标 observe-only，绝不再次 authorize 写权限。
+
+    只要 dispatched 已翻转，远端就可能已越过首写：读回只能用 observe-only，
+    结论仍由意图探针给（有证据才闭环，网络不确定维持待核）。这条路径此前被
+    怀疑是 absent 读不回的真因，这里以真实 worker.run 钉住它的形状。
+    """
+    state, identifier, _ = _unknown_registration(installed, cancelled=True)
+    # 让 60 秒节奏到期，checking 登记才重新可领（让位不解除保护，见上一测试）。
+    base = time.time()
+    monkeypatch.setattr(time, "time", lambda: base + 61)
+    _, sent = _worker_round(state, tmp_path, monkeypatch)
+    # stage 的 observe_only=True 是「已派发」的既有分界；worker 因此跳过 authorize。
+    assert not any(payload.get("registration") == "authorize" for payload in sent)
+    assert any(payload.get("registration") == "stage" for payload in sent)
+    with gateway_db.connection(drafts._database(state[0][0]), readonly=True) as conn:
+        assert tasks._row(conn, identifier)["state"] == "checking"
 
 
 @pytest.mark.parametrize("returncode,expected", [(7, True), (0, False), (1, False), (9, False), (255, False)])

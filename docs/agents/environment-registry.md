@@ -352,9 +352,11 @@ systemd单位上证明「未安装」；声明`backups`根允许受管staging预
 `observed`仅当`installation∈{installed,already_installed}`；`not_installed`只能`blocked`。
 已派发（dispatched）任务取消或父过期后，租约到期重领与登记同规：只用冻结输入
 `observe_only`回收真实结果，父终态不复活也不补建资源；未派发请求在取消或过期时仍拒绝。
-`site-install`的`checking`行与现场队列reconcile同规按60秒节奏重领（含已取消行——
-取消的排空对`executing`行本就即时，已观察仍未知的checking行不设例外），残迹初装不
-抢占其他环境独立现场队列；该节奏只限`site-install`，非cold检查任务沿原即领合同不变。
+`site-install`与`candidate-register`的`checking`行按60秒节奏重领（含已取消行——
+取消的排空对`executing`行本就即时，已观察仍未知的checking行不设例外）：worker是
+全局单循环，未知登记每轮原地重领会占满名额，任何排队的现场预检因而无人处理
+（ADR-0326）。节奏只降重领频率——行仍在`checking`，冲突安装/登记/激活照旧被BUSY
+拒绝（让位≠放行）；非cold、非登记的检查任务沿原即领合同不变。
 
 `site-install`确认在场后才出现场预检：`tasks.submit(after=<初装编号>)`延迟建行，
 同计划陈旧阻塞预检行不复用；此后走原STEPS与`{candidate_task, installation:true}`升级链，
