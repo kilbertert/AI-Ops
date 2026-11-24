@@ -363,7 +363,7 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="124"\nhost="managed-a"\n')
     commands = []
     authorized = []
-    clock = [time.monotonic()]
+    clock = [1000.0]
     started = clock[0]
     monkeypatch.setattr(worker.time, "monotonic", lambda: clock[0])
     # 传输替身只提供现有已验证的归档字节；不执行真实SSH或生产写入。
