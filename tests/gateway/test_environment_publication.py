@@ -743,81 +743,106 @@ def test_capacity_requires_overlapping_real_run_windows_before_publish(monkeypat
         capacity.run(tmp_path, staged, spec, reference)
 
 
-def test_capacity_short_leg_blocks_until_consumer_run_starts(monkeypatch):
-    """business_run 本体：consumer 之外的腿必须等 consumer 的 run 落库信号。"""
+def _capacity_fixture(monkeypatch, tmp_path):
     from aiops_diagnostics.gateway import environment_capacity as capacity
 
-    calls = []
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="target"\nhost="managed"\n')
+    staged = {"request": {"target": {"host": "managed"}}}
+    spec = {
+        "environment": "a",
+        "installed": {"source_revision": "a" * 40},
+        "operator_app": "op",
+        "consumer": {"app_id": "cons"},
+    }
+    reference = {"shared": [{"host": "managed", "service": "m2live03-node", "kind": "docker"}]}
+    sample = {
+        "memory_bytes": 200_000_000,
+        "peak_bytes": 200_000_000,
+        "limit_bytes": 1_000_000_000,
+        "available_bytes": 4_000_000_000,
+    }
+    monkeypatch.setattr(capacity, "sample", lambda root, hosts: [dict(sample) for _ in hosts])
+    overlap = {
+        "environment": "a",
+        "revision": "a" * 40,
+        "sampled_at": time.time(),
+        "services": [{"pid": 1, "memory_bytes": 200_000_000}, {"pid": 2, "memory_bytes": 150_000_000}],
+    }
+    monkeypatch.setattr(capacity.subprocess, "check_output", lambda *a, **kw: json.dumps(overlap))
+    return capacity, staged, spec, reference
+
+
+def test_capacity_short_legs_gated_on_the_measured_window(monkeypatch, tmp_path):
+    """run 级：短腿的 business-step 必须晚于 consumer 的 run 落库（探针为真）。"""
+    capacity, staged, spec, reference = _capacity_fixture(monkeypatch, tmp_path)
+    order = []
+    run_exists = threading.Event()
 
     def trial(root, target, environment, payload, *, control=False):
-        capability = payload.get("capability")
-        calls.append((payload["action"], capability, control))
-        if payload["action"] == "business-step" and capability == "consumer":
-            return {"candidate": {}, "token": "t", "question": "q"}
-        if payload["action"] == "consumer-start":
-            return {"trial_id": "tr"}
-        if payload["action"] == "business-step":
-            return {"state": "passed", "evidence": {"trial_id": "qa"}}
-        if payload["action"] == "publication-run-window":
-            return {"started_at": 1, "completed_at": 2}
-        raise AssertionError(payload["action"])
-
-    monkeypatch.setattr(capacity, "local_trial", trial)
-    ready = threading.Event()
-    assert not ready.is_set()
-    outcome = {}
-
-    def short_leg():
-        outcome["x"] = capacity.business_run(
-            None,
-            {"request": {"target": {}}},
-            {"environment": "a", "operator_app": "op"},
-            "offline",
-            consumer_running=ready,
-        )
-
-    worker = threading.Thread(target=short_leg, daemon=True)
-    worker.start()
-    worker.join(timeout=0.3)
-    assert worker.is_alive() and "x" not in outcome, "short leg must wait for the consumer run"
-    ready.set()
-    worker.join(timeout=5)
-    assert outcome["x"]["state"] == "passed"
-    assert [c[0] for c in calls] == ["business-step", "publication-run-window"]
-
-
-def test_capacity_short_leg_proceeds_when_consumer_leg_fails(monkeypatch):
-    """consumer 失败不空转：run 循环置位事件后短腿照常返回，错误由 futures 收敛。"""
-    from aiops_diagnostics.gateway import environment_capacity as capacity
-
-    def trial(root, target, environment, payload, *, control=False):
-        if payload["action"] == "business-step" and payload.get("capability") == "consumer":
-            raise ValueError("candidate target refused or unavailable")
-        if payload["action"] == "business-step":
-            return {"state": "passed", "evidence": {"trial_id": "qa"}}
-        return {"started_at": 1, "completed_at": 2}
-
-    monkeypatch.setattr(capacity, "local_trial", trial)
-    ready = threading.Event()
-    result = {}
-    worker = threading.Thread(
-        target=lambda: result.update(
-            x=capacity.business_run(
-                None,
-                {"request": {"target": {}}},
-                {"environment": "a", "operator_app": "op"},
-                "offline",
-                consumer_running=ready,
+        action = payload["action"]
+        if action == "consumer-run-started":
+            order.append("probe")
+            return {"run_started": run_exists.is_set()}
+        if action == "business-step":
+            cap = payload["capability"]
+            order.append("step:" + cap)
+            if cap != "consumer":
+                assert run_exists.is_set(), "short leg fired before the consumer window existed"
+            return (
+                {
+                    "candidate": {},
+                    "token": "t",
+                    "question": "q",
+                    "expected_reference": "ref",
+                    "scope_fingerprint": "fp",
+                    "case_sha256": "0" * 64,
+                }
+                if cap == "consumer"
+                else {"state": "passed", "evidence": {"trial_id": "qa-" + cap, "run_id": "run-" + cap}}
             )
-        ),
-        daemon=True,
-    )
-    worker.start()
-    worker.join(timeout=0.3)
-    assert worker.is_alive()
-    ready.set()
-    worker.join(timeout=5)
-    assert result["x"]["state"] == "passed"
+        if action == "consumer-start":
+            order.append("consumer-start")
+            threading.Timer(0.2, run_exists.set).start()
+            return {"trial_id": "tr"}
+        if action == "consumer-validation-evidence":
+            return {
+                "status": "completed",
+                "state": "passed",
+                "run_id": "run-c",
+                "evidence": {"run_id": "run-c"},
+            }
+        return {"started_at": 10, "completed_at": 20}
+
+    monkeypatch.setattr(capacity, "local_trial", trial)
+    result = capacity.run(tmp_path, staged, spec, reference)
+    assert result["state"] == "passed"
+    assert order.index("consumer-start") < order.index("step:offline")
+    assert order.index("consumer-start") < order.index("step:order")
+
+
+def test_capacity_short_legs_released_when_consumer_leg_fails(monkeypatch, tmp_path):
+    """run 级：consumer 腿在窗口前失败，短腿必须被采样循环放行而不是空等。"""
+    capacity, staged, spec, reference = _capacity_fixture(monkeypatch, tmp_path)
+    released = []
+
+    def trial(root, target, environment, payload, *, control=False):
+        action = payload["action"]
+        if action == "consumer-run-started":
+            return {"run_started": False}
+        if action == "business-step" and payload.get("capability") == "consumer":
+            raise ValueError("candidate target refused or unavailable")
+        if action == "business-step":
+            released.append(payload["capability"])
+            return {"state": "passed", "evidence": {"trial_id": "qa"}}
+        return {"started_at": 10, "completed_at": 20}
+
+    monkeypatch.setattr(capacity, "local_trial", trial)
+    # 收紧等待上限：若采样循环不再放行失败腿，测试会以超时红掉而不是挂死。
+    monkeypatch.setattr(capacity, "consumer_wait_seconds", lambda: 2)
+    with pytest.raises(ValueError, match="refused"):
+        capacity.run(tmp_path, staged, spec, reference)
+    # 缴获失败后两条短腿都被放行（而非卡死到 150s 超时）。
+    assert sorted(released) == ["offline", "order"]
 
 
 def test_second_tenant_directory_sync_adds_only_approved_tenant_without_reentrant_lock(validated):

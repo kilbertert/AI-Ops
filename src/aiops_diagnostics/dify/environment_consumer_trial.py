@@ -347,6 +347,13 @@ class CandidateTrials:
         }
 
 
+def run_started(context, payload):
+    """窗口起点探针：被测 run 行是否已落库。只读，不做过期收敛，不触发任何授权。"""
+    if set(payload) != {"trial_id"} or not isinstance(payload["trial_id"], str):
+        raise ValueError("candidate run probe invalid")
+    return {"run_started": context.dify_run_store.by_qa(payload["trial_id"]) is not None}
+
+
 def validation_evidence(context, payload):
     """只有原候选交付门通过后的真实工具/引用可成为业务技术验证证据。"""
     if set(payload) != {"trial_id", "expected_reference", "expected_scope", "case_sha256"}:

@@ -18,12 +18,19 @@ incomplete`。三腿各自真实 passed，失败只在窗口错开；offline 的
 xiaoqu 历史里同一形状还出现过一次（order 10.6s 在 consumer run 创建前 8s 结束），
 也侥幸过一次——按同刻发令，这条闸是掷硬币。
 
-修复只改发令顺序：consumer 先起跑，`consumer-start` 返回（run 已落库）后置位
-一个事件，order/offline 两腿在各自 `business-step` 之前等待该事件（上限 150s，
-consumer 腿失败时由采样循环放行，让各自的失败照常经 futures 收敛）。窗口判据
-仍是 `max(started) < min(completed)`，采样频率、80% 占用上限、1GiB 宿余量、
+修复只改发令顺序：consumer 先起跑，order/offline 两腿在各自 `business-step`
+之前等待一个「窗口起点已出现」的事件（上限 150s，consumer 腿失败时由采样循环
+放行，让各自的失败照常经 futures 收敛）。窗口判据仍是
+`max(started) < min(completed)`，采样频率、80% 占用上限、1GiB 宿余量、
 900s 容量新鲜度闸一律不变——三 run 依然必须真实重叠，只是不让「慢预热」冒充
 「不同时」。
+
+**放行信号必须取自窗口本身，不能取自 `consumer-start` 返回**：`consumer-start`
+只把作业排进执行器，`ConsumerTrial.execute` 还要导入并发布临时应用、取意图
+（其中含一次分类模型调用），被测 run 行才由 `runs.issue()` 写入
+`chat_dify_runs`；`run_window` 取的正是该行的 `created_at`。故 consumer 腿用
+只读探针 `consumer-run-started`（`dify_run_store.by_qa` 非空即窗口起点已出现）
+轮询，探针为真才置位；探针不授权、不收敛过期、无副作用。
 
 ## 替代方案
 
@@ -40,9 +47,10 @@ consumer 腿失败时由采样循环放行，让各自的失败照常经 futures
 
 ## 后果
 
-- 容量链在慢预热腿真实起跑后才让短腿发令，重叠证明变成「确定性成立」而不是
-  「碰运气成立」；总时长上限增加一次 `consumer-start` 的等待（实测 ~15s），
-  远小于 300s 任务租约与 900s 计划窗。
+- 容量链在慢预热腿的 run 真正落库后才让短腿发令，重叠证明变成「确定性成立」
+  而不是「碰运气成立」；总时长上限增加一次预热探针等待（实测十余秒），
+  远小于发布任务的 900s 租约（`installation_claim` 认领处 `time.time() + 900`）
+  与 900s 计划窗。
 - consumer 腿起跑即失败时不再空等 150s：采样循环在其 future 落定后立即放行，
   异常照原路经 `f.result()` 抛出，worker 的既有收敛（reconcile/核查）不变。
 - 未改窗口起止取数：operator 腿仍用 `claimed_at`，consumer 腿仍用
