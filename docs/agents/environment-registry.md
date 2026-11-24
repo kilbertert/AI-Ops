@@ -499,6 +499,9 @@ id匹配已有部署目标引用，node_file沿D30专属节点引用格式；秘
 控制端暂存包位于`AIOPS_GATEWAY_DATA_HOME/installation-tasks/<任务编号>/`，目录0700、文件0600；
 安装引用只读，配置目录不承担任务写入。`ProtectSystem=full`保持，不能为了导出包放开`/etc`。
 传输后、远端动作前重新核取消/计划，远端固定task.py持原环境锁，先记意图再调用原安装器事务。
+制品搬运共享400秒预算，单次上传最多300秒；新执行还受冻结计划余量限制并留60秒复核，
+远端动作与搬运共用840秒执行预算（[ADR0329](../adr/0329-bounded-install-transfer-budget.md)）。
+慢链路超时仍先对账，不手工预装，不扩大计划或在派发后推断零副作用。
 相同远端编号不再次apply；租约/响应失联只observe原意图与installed，有pending标待恢复，不自动recover未知任务。
 导出与`attempted`只证制品冻结，不等于派发（ADR-0289/0290沿继承的授权链；ADR-0321）：`dispatched`翻转先于远端执行，
 未派发任务过期或取消即safe终态（blocked/cancelled，释放互斥），已派发丢回执仍按原冻结观察回收。
