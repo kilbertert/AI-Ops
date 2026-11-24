@@ -300,6 +300,60 @@ def test_operator_evidence_accepts_authorized_timeline_series(monkeypatch, order
     with pytest.raises(ValueError, match="PROCESS"):
         business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
 
+    # 终止态订单缺 stopTime 是数据损坏：不按运行中语义放行 now 窗口。
+    run = _timeline_run(order_status, {k: v for k, v in detail.items() if k != "stopTime"}, timeline)
+    context = SimpleNamespace(agent_run_store=SimpleNamespace(by_qa=lambda _: run))
+    with pytest.raises(ValueError, match="PROCESS"):
+        business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
+
+
+def test_operator_evidence_credits_each_series_against_its_own_binding(monkeypatch):
+    """两序列同在场且各自合格：回执记两者；监测表行数顶替不了时序的绑定检查。"""
+    detail = {
+        "childDeviceCode": "DEV-1",
+        "createdTime": "2026-11-20 17:13:29",
+        "stopTime": "2026-11-21 03:02:22",
+    }
+    timeline = {
+        "records": [{"txSerialNo": "17", "outputVoltage": "220"}],
+        "device": "DEV-1",
+        "window_start": "2026-11-20 17:13:29",
+        "window_end": "2026-11-21 03:02:22",
+    }
+    run = _timeline_run(3, detail, timeline)
+    run.snapshot["evidence"]["cpms_charging_samples"] = {
+        "data": {"records": [{"orderNo": "order-a", "voltage": 220}]}
+    }
+    context = SimpleNamespace(agent_run_store=SimpleNamespace(by_qa=lambda _: run))
+    spec = {"environment": "a", "tenant_id": "same", "operator_app": "operator-a"}
+    result = business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
+    assert result["tools"] == [
+        "cpms_charging_samples",
+        "cpms_charging_timeline",
+        "cpms_order_detail",
+        "cpms_order_process_stats",
+    ]
+    business.validate_result(
+        {
+            "capability": "order",
+            "state": "passed",
+            "evidence": result,
+            "case_sha256": "a" * 64,
+            "observed_at": time.time(),
+            "business_accuracy": "unconfirmed",
+        },
+        "order",
+    )
+
+    # 时序绑定被篡改而监测表合格：只记监测表，照样过——它独立满足判据。
+    run.snapshot["evidence"]["cpms_charging_timeline"]["data"]["device"] = "DEV-9"
+    result = business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
+    assert result["tools"] == [
+        "cpms_charging_samples",
+        "cpms_order_detail",
+        "cpms_order_process_stats",
+    ]
+
 
 def test_operator_evidence_timeline_path_rejects_count_and_metric_gaps(monkeypatch):
     """有时序行不等于通过：样本数与统计消费行数不一致、统计无有效指标都拒。"""

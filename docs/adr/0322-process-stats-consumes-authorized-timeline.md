@@ -1,6 +1,6 @@
 # 322. 过程统计与开通验收消费同一授权时序证据而非仅监测表
 
-状态：已采纳；平高实测（订单 2123706282732900353，launch_type=admin）暴露的
+状态：已采纳；平高实测（一 launch_type=admin 终止单，单号见私有验收记录）暴露的
 结构性错配修复。
 
 SOP §2.2 早已写明：`cpms_charging_samples` 监测表视图只覆盖运营商启动单
@@ -31,12 +31,15 @@ SOP §2.2 早已写明：`cpms_charging_samples` 监测表视图只覆盖运营�
   统计同样不跨流水合并：metrics 留空并在 limitations 说明，不猜哪一段
   属于本单（详情证据里没有可绑定的流水号）。
 - 验收门：`cpms_order_detail` + `cpms_order_process_stats` 必备不变，
-  过程证据改为「监测表路径**或**时序路径」择一满足。时序路径额外核验
-  证据构造绑定：`device` 逐字等于详情 childDeviceCode/deviceCode、
-  `window_start` 等于详情 createdTime、已完成订单的 `window_end`
-  等于 stopTime（未完成订单按运行中语义不比对上界）、
+  过程证据认「监测表路径**或**时序路径」——每个在场的序列独立核验，
+  通过者都记名，不能拿另一序列的行数巧合顶替本序列的绑定检查。
+  时序路径额外核验证据构造绑定：`device` 逐字等于详情
+  childDeviceCode/deviceCode、`window_start` 等于详情 createdTime、
+  `window_end` 等于详情 stopTime（验收只收 2/3/5 终止态订单，stopTime
+  缺失即拒，不按运行中语义放行 now 窗口）、
   `stats.sample_count == len(timeline.records)`、统计至少一项指标非空。
   只凭「时序有行」不通过：设备/窗口/行数任一不符照样拒。
+  公开回执同步认监测表、时序或两序列并存的工具清单。
 
 ## 被否方案
 

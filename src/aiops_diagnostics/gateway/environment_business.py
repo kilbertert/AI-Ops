@@ -241,10 +241,12 @@ def operator_evidence(context, capability, trial_id, case, spec):
             raise ValidationRefused("ENVIRONMENT_VALIDATION_ABNORMAL_ORDER_REQUIRED")
         expected = {"cpms_order_detail", "cpms_order_process_stats"}
         stats = evidence.get("cpms_order_process_stats", {}).get("data", {})
-        # 过程证据二选一（ADR-0322）：监测表有行认监测表；结构性空行（远程/普通
-        # 启动单、汽车桩）退到时序证据——它由详情授权构造，设备与窗口必须逐字
-        # 等于该单详情，行数必须与统计消费的行数一致，不能只凭「有时序行」通过。
-        series = ""
+        # 过程证据（ADR-0322）：监测表有行认监测表；结构性空行（远程/普通
+        # 启动单、汽车桩）退到时序证据。每个在场的序列各自独立核验，凡通过者都记名——
+        # 行数与统计消费一致、序列各行属本单（监测表），或设备与窗口逐字等于
+        # 详情（时序由详情授权构造）。不能只凭「有时序行」通过，也不能拿另一个
+        # 序列的行数巧合顶替本序列自己的绑定检查。
+        series = set()
         samples = evidence.get("cpms_charging_samples", {}).get("data", {}).get("records", [])
         if (
             isinstance(samples, list)
@@ -252,31 +254,32 @@ def operator_evidence(context, capability, trial_id, case, spec):
             and stats.get("sample_count") == len(samples)
             and not any(str(r.get("orderNo")) != case["order_no"] for r in samples)
         ):
-            series = "cpms_charging_samples"
-        else:
-            timeline = evidence.get("cpms_charging_timeline", {}).get("data", {})
-            rows = timeline.get("records")
-            if isinstance(rows, list) and rows and stats.get("sample_count") == len(rows):
-                device = str(detail.get("childDeviceCode") or detail.get("deviceCode") or "")
-                stop = detail.get("stopTime")
-                try:
-                    window_same = parse_stored_time(timeline.get("window_start", "")) == parse_stored_time(
-                        str(detail.get("createdTime") or "")
-                    ) and (
-                        not stop
-                        or parse_stored_time(timeline.get("window_end", "")) == parse_stored_time(str(stop))
-                    )
-                except ValueError:
-                    window_same = False
-                if str(timeline.get("device")) == device and window_same:
-                    series = "cpms_charging_timeline"
+            series.add("cpms_charging_samples")
+        timeline = evidence.get("cpms_charging_timeline", {}).get("data", {})
+        rows = timeline.get("records")
+        if isinstance(rows, list) and rows and stats.get("sample_count") == len(rows):
+            device = str(detail.get("childDeviceCode") or detail.get("deviceCode") or "")
+            # 通过验收的订单状态都是终止态（2/3/5），必须有 stopTime 可比对上界；
+            # 缺上界的「终止单」是数据损坏，不能按运行中语义放行 now 窗口。
+            stop = str(detail.get("stopTime") or "").strip()
+            try:
+                window_same = bool(stop) and (
+                    parse_stored_time(str(timeline.get("window_start") or "").strip())
+                    == parse_stored_time(str(detail.get("createdTime") or "").strip())
+                    and parse_stored_time(str(timeline.get("window_end") or "").strip())
+                    == parse_stored_time(stop)
+                )
+            except ValueError:
+                window_same = False
+            if str(timeline.get("device")) == device and window_same:
+                series.add("cpms_charging_timeline")
         if (
             not expected <= set(evidence)
             or not series
             or not any(m.get("count", 0) > 0 for m in stats.get("metrics", []))
         ):
             raise ValidationRefused("ENVIRONMENT_VALIDATION_PROCESS_EVIDENCE_REQUIRED")
-        expected = expected | {series}
+        expected = expected | series
         objects = [case["order_no"]]
     else:
         data = evidence.get("cpms_device_offline", {}).get("data", {})
@@ -430,6 +433,12 @@ def validate_result(result, capability):
         "order": [
             ["cpms_charging_samples", "cpms_order_detail", "cpms_order_process_stats"],
             ["cpms_charging_timeline", "cpms_order_detail", "cpms_order_process_stats"],
+            [
+                "cpms_charging_samples",
+                "cpms_charging_timeline",
+                "cpms_order_detail",
+                "cpms_order_process_stats",
+            ],
         ],
         "offline": [["cpms_device_offline"]],
     }[capability]

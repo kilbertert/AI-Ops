@@ -568,7 +568,7 @@
     },
     {
       "name": "cpms_order_process_stats",
-      "description": "Compute charging process ranges and average power from the current order detail and the charging samples — or the raw gun telemetry timeline when the monitor table has no rows (remote or normal-launch orders, car piles). Read the order detail plus one series source first. Limited samples are not a complete timeline or fault verdict.",
+      "description": "Compute charging sample ranges and average power from current order detail and charging samples. Read both first. Limited samples are not a complete timeline or fault verdict.",
       "inputs": [
         "order_no"
       ],
