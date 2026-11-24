@@ -150,6 +150,100 @@ def test_shared_model_conflict_refuses_before_installation(task_state):
     assert not (inst.root / "pending.json").exists()
 
 
+def window_candidate(source, sha, dest, tenant, app_id, shared_files):
+    """重铸同租户候选运行档并替换指定共享成员。"""
+    patched = retarget_runtime(source, sha, dest, tenant, app_id)
+    files, manifest = artifacts.runtime_files(dest, patched["sha256"], "test")
+    files.update(shared_files)
+    manifest["files"].update({n: hashlib.sha256(raw).hexdigest() for n, raw in shared_files.items()})
+    files["manifest.json"] = json.dumps(manifest).encode()
+    return archive(dest, files)
+
+
+def disable_all(inst):
+    """把现役目录翻为环境与全部租户停用，并同步账本目录摘要。"""
+    directory = inst.config / "registry/environment.json"
+    body = registry.load(directory)
+    rows = body["environments"]
+    rows[0]["enabled"] = False
+    for tenant in rows[0]["tenants"]:
+        tenant["enabled"] = False
+    registry.apply(directory, rows, expected_revision=body["revision"], actor="fixture-disable", managers=[])
+    record = inst.read_record("installed.json")
+    record["registry_sha256"] = install.digest(directory)
+    inst.record("installed.json", record)
+    return record
+
+
+def test_disabled_environment_install_is_the_shared_maintenance_window(task_state, tmp_path):
+    """环境与全部既有租户停用时，本次安装即共享接线的配置维护窗口（ADR-0324）。
+
+    共享字节允许随候选更新；其他既有租户行仍逐字节保留，谱系摘要照记。
+    """
+    from pathlib import Path
+
+    inst, _, _ = task_state
+    spec, _ = second_tenant(task_state)
+    assert task.execute(inst, spec)["state"] == "observed"
+    current = inst.read_record("installed.json")
+    before, _ = artifacts.runtime_files(
+        inst.runtime_path(current) / "runtime.tar", current["runtime_sha256"], "test"
+    )
+    record = disable_all(inst)
+    again = copy.deepcopy(spec)
+    again["id"] = "task_" + "f" * 32
+    again["expected"] = {k: record[k] for k in again["expected"]}
+    again["archives"]["runtime"] = window_candidate(
+        Path(spec["archives"]["runtime"]["path"]),
+        spec["archives"]["runtime"]["sha256"],
+        tmp_path / "window-runtime.tar",
+        "new",
+        "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        {"consumer-model.json": b'{"api_key":"window-approved"}'},
+    )
+    result = task.execute(inst, again)
+    assert result["state"] == "observed", result
+    now = inst.read_record("installed.json")
+    files, manifest = artifacts.runtime_files(
+        inst.runtime_path(now) / "runtime.tar", now["runtime_sha256"], "test"
+    )
+    assert files["consumer-model.json"] == b'{"api_key":"window-approved"}'
+    targets = json.loads(files["consumer-targets.json"])["targets"]
+    assert [t["tenant_id"] for t in targets] == ["same", "new"]
+    assert targets[0] == json.loads(before["consumer-targets.json"])["targets"][0]
+    assert targets[1]["app_id"] == "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    assert manifest["schema"] == "aiops-environment-runtime/2"
+    assert manifest["source_runtime_sha256"] == again["archives"]["runtime"]["sha256"]
+    assert manifest["previous_runtime_sha256"] == current["runtime_sha256"]
+
+
+def test_shared_update_fail_closed_when_enabled_key_missing(task_state, tmp_path):
+    """目录行缺 enabled 键按在用处理：停用窗口不成立，共享变化仍拒绝。"""
+    from pathlib import Path
+
+    inst, _, _ = task_state
+    spec, _ = second_tenant(task_state)
+    assert task.execute(inst, spec)["state"] == "observed"
+    record = disable_all(inst)
+    directory = inst.config / "registry/environment.json"
+    body = json.loads(directory.read_text())
+    del body["environments"][0]["tenants"][1]["enabled"]
+    directory.write_text(json.dumps(body))
+    record["registry_sha256"] = install.digest(directory)
+    inst.record("installed.json", record)
+    patched = window_candidate(
+        Path(spec["archives"]["runtime"]["path"]),
+        spec["archives"]["runtime"]["sha256"],
+        tmp_path / "window-runtime.tar",
+        "new",
+        "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        {"consumer-model.json": b'{"api_key":"window-approved"}'},
+    )
+    with pytest.raises(ValueError, match="shared runtime change"):
+        inst.candidate_runtime(Path(patched["path"]), patched["sha256"], tmp_path / "merged.tar")
+    assert not (tmp_path / "merged.tar").exists()
+
+
 @pytest.mark.parametrize("cut", ["directory", "runtime"])
 def test_failed_addition_recovers_old_runtime_and_monotonic_admission(task_state, monkeypatch, cut):
     inst, _, _ = task_state

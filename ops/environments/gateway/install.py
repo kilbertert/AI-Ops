@@ -430,9 +430,15 @@ WantedBy=multi-user.target
         # 目录不可核验时置空集合，退回全量拒绝。
         self.check_registry(old)
         replaceable = set()
+        shared_update = False
         if old.get("registry_sha256"):
             current = json.loads((self.config / "registry/environment.json").read_text())["environments"][0]
             replaceable = {row["id"] for row in current["tenants"] if row.get("enabled") is False}
+            # 与candidate_configuration同一停用判据：环境与全部既有租户停用时，
+            # 本次安装即共享接线的配置维护窗口；键缺失按在用处理（fail-closed）。
+            shared_update = current.get("enabled") is False and all(
+                row.get("enabled") is False for row in current["tenants"]
+            )
         raw, sha = probe.compose_runtime(
             self.runtime_path(old) / "runtime.tar",
             old["runtime_sha256"],
@@ -440,6 +446,7 @@ WantedBy=multi-user.target
             incoming_sha,
             self.environment,
             replaceable_tenants=replaceable,
+            shared_update=shared_update,
         )
         with destination.open("xb") as stream:
             stream.write(raw)
