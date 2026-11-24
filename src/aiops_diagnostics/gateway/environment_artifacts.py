@@ -280,8 +280,20 @@ def runtime_files(archive, digest, environment):
     return files, body
 
 
-def compose_runtime(previous, previous_sha, incoming, incoming_sha, environment, replaceable_tenants=()):
-    """只累积同环境新租户的运行目标；共享执行资源不得顺带变化。"""
+def compose_runtime(
+    previous,
+    previous_sha,
+    incoming,
+    incoming_sha,
+    environment,
+    replaceable_tenants=(),
+    shared_update=False,
+):
+    """只累积同环境新租户的运行目标；共享执行资源不得顺带变化。
+
+    共享成员只保护在用租户：调用方以目录证明环境与全部既有租户停用时
+    （shared_update），本次安装即配置维护窗口，共享字节允许随候选更新。
+    """
     import io
 
     before, previous_manifest = runtime_files(previous, previous_sha, environment)
@@ -289,7 +301,7 @@ def compose_runtime(previous, previous_sha, incoming, incoming_sha, environment,
     if manifest["schema"] != "aiops-environment-runtime/1":
         raise ValueError("incoming runtime must be original candidate")
     shared = set(after) - {"manifest.json", "registrations.json", "consumer-targets.json"}
-    if any(before[name] != after[name] for name in shared):
+    if not shared_update and any(before[name] != after[name] for name in shared):
         raise ValueError("shared runtime change requires separate configuration window")
     existing = json.loads(before["consumer-targets.json"])["targets"]
     proposed = json.loads(after["consumer-targets.json"])["targets"]
