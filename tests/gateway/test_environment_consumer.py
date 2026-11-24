@@ -255,6 +255,20 @@ def test_rebound_credential_is_repointed_while_reminting(consumer_app):
     assert saved["credentials"]["gateway_url"] == state[0][2].public_base_url.rstrip("/")
 
 
+def test_stale_inherited_candidate_is_reminted_under_current_binding(consumer_app, monkeypatch):
+    state = consumer_app
+    job_a = submit(state).json()
+    assert execute(state, job_a["id"])["state"] == "observed"
+    assert len(state[3]) == 1
+    monkeypatch.setattr(consumer, "binding", lambda *_: "next-binding")
+    job_b = submit(state).json()
+    assert job_b["id"] != job_a["id"]
+    result = execute(state, job_b["id"])
+    assert result["state"] == "observed"
+    assert len(state[3]) == 2
+    assert state[4].count(("POST", "/console/api/apps/imports")) == 2
+
+
 def test_wrong_target_unapproved_source_and_nonplatform_never_create(consumer_app, monkeypatch):
     for payload in (
         {"tenant_id": "other"},
