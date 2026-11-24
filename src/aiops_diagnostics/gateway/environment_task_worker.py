@@ -329,6 +329,33 @@ def central_call(root, target, payload):
     return json.loads(result)
 
 
+#: 安装面本次无可领（区别于「已领到并处理完毕」的返回值）。
+_NOTHING = object()
+
+
+def _installation_once(root, request, owner):
+    """领一条安装面任务并处理；无可领返回 ``_NOTHING``，否则返回处理结果。"""
+    claimed = request({"installation_claim": True, "owner": owner})
+    if not (isinstance(claimed, dict) and claimed.get("claimed") is True):
+        return _NOTHING
+    if claimed.get("action") == "environment-publish":
+        from .environment_publication_worker import execute as publish_environment
+
+        return publish_environment(root, request, claimed["id"], owner)
+    if claimed.get("action") == "candidate-validate":
+        from .environment_validation_worker import execute as validate_business
+
+        return validate_business(root, request, claimed["id"], owner)
+    return installation_run(
+        root,
+        request,
+        claimed["id"],
+        owner,
+        registration=claimed.get("action") == "candidate-register",
+        cold=claimed.get("action") == "site-install",
+    )
+
+
 def run(root, gateway, key, identifier=None, *, central_target=None):
     if identifier is not None and not re.fullmatch(r"task_[0-9a-f]{32}", identifier):
         raise ValueError("invalid task identifier")
@@ -342,26 +369,26 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
         return central_call(root, central_target, payload) if central_target else call(gateway, key, payload)
 
     if identifier is None:
-        request({"advance_candidates": True})
-        installation = request({"installation_claim": True, "owner": owner})
-        if installation.get("claimed") is True:
-            if installation.get("action") == "environment-publish":
-                from .environment_publication_worker import execute as publish_environment
-
-                return publish_environment(root, request, installation["id"], owner)
-            if installation.get("action") == "candidate-validate":
-                from .environment_validation_worker import execute as validate_business
-
-                return validate_business(root, request, installation["id"], owner)
-            return installation_run(
-                root,
-                request,
-                installation["id"],
-                owner,
-                registration=installation.get("action") == "candidate-register",
-                cold=installation.get("action") == "site-install",
-            )
-    claim = request({"owner": owner, **({"id": identifier} if identifier else {})})
+        advanced = request({"advance_candidates": True})
+        # 两条认领面严格交替（ADR-0326）：两侧都可能长期不还名额——未知登记
+        # checking 已派发即跳过计划窗/取消闸、永不终态；现场 reconcile 同样跳过
+        # 计划窗。任一侧长期先手都会把另一侧饿死（单毒丸、跨环境多毒丸均已实测）。
+        # 轮转游标在一次唤醒内固定本次先领哪一侧，该侧无可领时才退回另一侧。
+        site_first = not (isinstance(advanced, dict) and advanced.get("turn") == "installation")
+        claim = None
+        for side in ("site", "installation") if site_first else ("installation", "site"):
+            if side == "site":
+                candidate = request({"owner": owner})
+                if isinstance(candidate, dict) and candidate.get("claimed") is True:
+                    claim = candidate
+                    break
+                claim = claim or candidate  # 未领到时留作「都空闲」的最终返回
+                continue
+            handled = _installation_once(root, request, owner)
+            if handled is not _NOTHING:
+                return handled
+    else:
+        claim = request({"owner": owner, "id": identifier})
     if not isinstance(claim, dict) or type(claim.get("claimed")) is not bool:
         raise ValueError("central claim unavailable")
     if not claim["claimed"]:

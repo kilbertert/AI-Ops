@@ -272,7 +272,9 @@ aiops-admin environment-task-worker --id task_<编号> --gateway https://control
 
 命令只领取这个任务，冻结host经原项目.dev-host.toml唯一解析为目标name（零个或多个匹配拒绝），校验安装器摘要，从origin/main已合并修订构建同一固定安装器，
 经dev-host传输与身份断言执行preflight，不install/recover。省略--id时自动选择一个待处理任务，queued过期/撤权明确结束，未知reconcile至少延后60秒重试；
-多个执行端仍以中央租约互斥。后台运维轮询见下方，文件计划通过不能代替现场业务验收。
+多个执行端仍以中央租约互斥。省略--id的每次唤醒还在「现场预检」与「安装面」两条认领面间严格交替（中央账本持久轮转游标，ADR-0326）：
+两侧都可能长期不还名额（已派发检查登记永不终态、现场reconcile同样跳过计划窗），定序会让一侧永久遮住另一侧；交替保证每侧至多被跳过一轮。
+后台运维轮询见下方，文件计划通过不能代替现场业务验收。
 中央`/v1/internal/environment-tasks`只接受独立HMAC；管理桥不能访问或提交结果。
 不让业务Gateway持有SSH私钥；若正式访问路径尚未允许内部worker接口，停止并按原入口交付，不能临时开放任意端点。
 

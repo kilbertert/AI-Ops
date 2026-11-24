@@ -795,6 +795,34 @@ def _worker_write(path, payload, row, request, owner, drift, internal_workspace)
         return _public(_row(conn, row["id"]))
 
 
+def advance_turn(path):
+    """翻转并返回本次唤醒先领的认领面：'site' 或 'installation'（ADR-0326）。
+
+    worker 每次唤醒在两条认领面间严格交替。两侧都可能长期不还名额（未知登记
+    checking 永不终态；现场 reconcile 也会跳过计划窗），任一侧长期先手都会饿死
+    另一侧——「installation 面每 N 轮最多占 N-1 轮」即本游标。游标持久在中央
+    账本，进程重启/多 worker 都不重置；缺行以 site 起手（先让有限只读的一侧）。
+    """
+    database = drafts._database(path)
+    if not database.exists():
+        return "site"
+    with drafts._locked(path), gateway_db.connection(database, write=True) as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='environment_tasks'").fetchone():
+            return "site"
+        # 旧账本在本表引入前建库：就地补建（幂等），不因缺表退回固定优先级。
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='environment_task_turn'").fetchone():
+            drafts.initialize_tasks(conn)
+        row = conn.execute("SELECT next FROM environment_task_turn WHERE only_row=1").fetchone()
+        current = row["next"] if row is not None else "site"
+        following = "installation" if current == "site" else "site"
+        conn.execute(
+            "INSERT INTO environment_task_turn(only_row,next) VALUES(1,?) "
+            "ON CONFLICT(only_row) DO UPDATE SET next=excluded.next",
+            (following,),
+        )
+        return current
+
+
 def active_connection(path, reference, scope):
     environment, tenant, workspace, library = scope
     with drafts._locked(path), gateway_db.connection(drafts._database(path), readonly=True) as conn:

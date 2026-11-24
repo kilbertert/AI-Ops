@@ -245,11 +245,10 @@ def dispatch(context, payload):
                 "IN ('site-install','candidate-install','candidate-register','candidate-validate',"
                 "'environment-publish') "
                 "AND state IN ('waiting','executing','checking') AND lease_until<=? "
-                # checking 行按 60 秒节奏让位：冷装与登记每轮都原地重领会占满同一
-                # worker 的名额，同环境排队的现场预检永远轮不到。节奏只降重领频率，
-                # 行仍在 checking，冲突安装/登记/激活照旧被 BUSY 拒绝（让位≠放行）。
+                # 冷任务checking与现场reconcile同规60秒节奏，含已取消行：残迹初装不抢占
+                # 认领面；节奏只限site-install，非cold检查任务沿原即领合同不变。
                 "AND (state!='checking' OR updated_at<=? "
-                "OR json_extract(request,'$.action') NOT IN ('site-install','candidate-register')) "
+                "OR json_extract(request,'$.action')!='site-install') "
                 "AND NOT EXISTS(SELECT 1 FROM environment_tasks live "
                 "WHERE live.environment=environment_tasks.environment AND live.id!=environment_tasks.id "
                 "AND live.state IN ('running','executing') AND live.lease_until>?) "

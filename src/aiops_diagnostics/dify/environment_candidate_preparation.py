@@ -193,10 +193,13 @@ def advance(context, payload):
     path = environment_management._path(context)
     reference = context.settings.environment_onboarding_file
     if not drafts._database(path).exists():
-        return {"advanced": 0}
+        return {"advanced": 0, "turn": "site"}
+    # 每次唤醒翻一次轮转游标：本次先领哪条认领面（ADR-0326）。worker 据此在
+    # 现场预检与安装面之间严格交替，任一侧长期不还名额都不会饿死另一侧。
+    turn = tasks.advance_turn(path)
     with drafts._locked(path), gateway_db.connection(drafts._database(path), readonly=True) as conn:
         if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='environment_tasks'").fetchone():
-            return {"advanced": 0}
+            return {"advanced": 0, "turn": turn}
         identifiers = [
             r[0]
             for r in conn.execute(
@@ -207,7 +210,7 @@ def advance(context, payload):
         ]
     for identifier in identifiers:
         _advance_one(context, path, reference, identifier)
-    return {"advanced": len(identifiers)}
+    return {"advanced": len(identifiers), "turn": turn}
 
 
 def _advance_one(context, path, reference, identifier):
