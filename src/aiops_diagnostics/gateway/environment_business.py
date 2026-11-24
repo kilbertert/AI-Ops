@@ -239,18 +239,44 @@ def operator_evidence(context, capability, trial_id, case, spec):
             }
         ):
             raise ValidationRefused("ENVIRONMENT_VALIDATION_ABNORMAL_ORDER_REQUIRED")
-        expected = {"cpms_order_detail", "cpms_charging_samples", "cpms_order_process_stats"}
-        samples = evidence.get("cpms_charging_samples", {}).get("data", {}).get("records", [])
+        expected = {"cpms_order_detail", "cpms_order_process_stats"}
         stats = evidence.get("cpms_order_process_stats", {}).get("data", {})
+        # 过程证据二选一（ADR-0322）：监测表有行认监测表；结构性空行（远程/普通
+        # 启动单、汽车桩）退到时序证据——它由详情授权构造，设备与窗口必须逐字
+        # 等于该单详情，行数必须与统计消费的行数一致，不能只凭「有时序行」通过。
+        series = ""
+        samples = evidence.get("cpms_charging_samples", {}).get("data", {}).get("records", [])
+        if (
+            isinstance(samples, list)
+            and samples
+            and stats.get("sample_count") == len(samples)
+            and not any(str(r.get("orderNo")) != case["order_no"] for r in samples)
+        ):
+            series = "cpms_charging_samples"
+        else:
+            timeline = evidence.get("cpms_charging_timeline", {}).get("data", {})
+            rows = timeline.get("records")
+            if isinstance(rows, list) and rows and stats.get("sample_count") == len(rows):
+                device = str(detail.get("childDeviceCode") or detail.get("deviceCode") or "")
+                stop = detail.get("stopTime")
+                try:
+                    window_same = parse_stored_time(timeline.get("window_start", "")) == parse_stored_time(
+                        str(detail.get("createdTime") or "")
+                    ) and (
+                        not stop
+                        or parse_stored_time(timeline.get("window_end", "")) == parse_stored_time(str(stop))
+                    )
+                except ValueError:
+                    window_same = False
+                if str(timeline.get("device")) == device and window_same:
+                    series = "cpms_charging_timeline"
         if (
             not expected <= set(evidence)
-            or not isinstance(samples, list)
-            or not samples
-            or stats.get("sample_count") != len(samples)
+            or not series
             or not any(m.get("count", 0) > 0 for m in stats.get("metrics", []))
-            or any(str(r.get("orderNo")) != case["order_no"] for r in samples)
         ):
             raise ValidationRefused("ENVIRONMENT_VALIDATION_PROCESS_EVIDENCE_REQUIRED")
+        expected = expected | {series}
         objects = [case["order_no"]]
     else:
         data = evidence.get("cpms_device_offline", {}).get("data", {})
@@ -399,14 +425,18 @@ def validate_result(result, capability):
         {"workflow_id", "app_id"} if capability == "consumer" else {"node", "gateway_version"}
     )
     expected = {
-        "consumer": ["knowledge", "status"],
-        "order": ["cpms_charging_samples", "cpms_order_detail", "cpms_order_process_stats"],
-        "offline": ["cpms_device_offline"],
+        "consumer": [["knowledge", "status"]],
+        # ADR-0322：过程证据是监测表或授权时序二选一，回执按实际走的序列核。
+        "order": [
+            ["cpms_charging_samples", "cpms_order_detail", "cpms_order_process_stats"],
+            ["cpms_charging_timeline", "cpms_order_detail", "cpms_order_process_stats"],
+        ],
+        "offline": [["cpms_device_offline"]],
     }[capability]
     if (
         not isinstance(proof, dict)
         or set(proof) != fields
-        or proof["tools"] != expected
+        or proof["tools"] not in expected
         or not isinstance(proof["objects"], list)
         or len(proof["objects"]) != (2 if capability == "consumer" else 1)
     ):

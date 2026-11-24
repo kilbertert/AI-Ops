@@ -6,7 +6,7 @@ import pytest
 from execution.test_m2_close_contract import NODE_A_TOKEN
 
 from aiops_diagnostics.operator import operator_agent, operator_cpms
-from operations.test_operator_cpms import HEADERS, ORDER, environment, terminal
+from operations.test_operator_cpms import HEADERS, ORDER, TIMELINE_ROW, environment, terminal
 
 
 def call_tool(f, run_id, tool, arguments=None):
@@ -294,13 +294,36 @@ def test_absent_order_and_unknown_analysis_fail_closed():
 
 def test_process_statistics_tool_requires_only_current_detail_and_samples(tmp_path, monkeypatch):
     with environment(tmp_path, monkeypatch) as f:
+        f["state"]["monitor_rows"] = [
+            {
+                "orderNo": ORDER,
+                "tenantId": f["state"]["tenant"],
+                "siteId": f["state"]["site"],
+                "voltage": "220",
+                "current": "10",
+                "power": "2.2",
+            },
+            {
+                "orderNo": ORDER,
+                "tenantId": f["state"]["tenant"],
+                "siteId": f["state"]["site"],
+                "voltage": "221",
+                "current": "9",
+                "power": "2.1",
+            },
+        ]
 
         def dispatch(_, config, run):
             call_tool(f, run, "cpms_order_detail")
             call_tool(f, run, "cpms_charging_samples")
             evidence, head, _ = call_tool(f, run, "cpms_order_process_stats")
-            assert evidence["data"]["sample_count"] == 0
+            assert evidence["data"]["sample_count"] == 2
             assert evidence["data"]["average_power_kw"] == "91.20"
+            assert {m["name"] for m in evidence["data"]["metrics"]} == {
+                "voltage",
+                "current",
+                "power",
+            }
             finish(f, run, head, "平均功率91.20 kW。", [])
 
         monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
@@ -312,3 +335,157 @@ def test_process_statistics_tool_requires_only_current_detail_and_samples(tmp_pa
             .json()
         )
         assert terminal(f, result["qa_id"]).json()["status"] == "completed"
+
+
+def test_process_statistics_falls_back_to_authorized_timeline(tmp_path, monkeypatch):
+    """监测表结构性空行（远程/普通启动单、汽车桩）：过程统计吃同一授权订单、
+    同一设备与窗口的时序证据（SOP §2.2），字段口径按时序列名。"""
+    with environment(tmp_path, monkeypatch) as f:
+        f["state"]["tsdata_rows"] = [
+            dict(TIMELINE_ROW, txSerialNo="17", outputVoltage="220", outputCurrent="10", power="2.2"),
+            dict(
+                TIMELINE_ROW,
+                _ts="2026-11-05T06:30:41.000Z",
+                txSerialNo="17",
+                outputVoltage="221",
+                outputCurrent="9",
+                power="2.1",
+            ),
+        ]
+
+        def dispatch(_, config, run):
+            call_tool(f, run, "cpms_order_detail")
+            call_tool(f, run, "cpms_charging_samples")
+            call_tool(f, run, "cpms_charging_timeline", {"order_no": ORDER})
+            evidence, head, _ = call_tool(f, run, "cpms_order_process_stats")
+            assert evidence["data"]["sample_count"] == 2
+            assert evidence["data"]["complete_timeline"] is True
+            assert {m["name"] for m in evidence["data"]["metrics"]} == {
+                "outputVoltage",
+                "outputCurrent",
+                "power",
+            }
+            voltage = next(m for m in evidence["data"]["metrics"] if m["name"] == "outputVoltage")
+            assert str(voltage["minimum"]) == "220" and str(voltage["maximum"]) == "221"
+            finish(f, run, head, "过程统计按枪时序给出。", [])
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        result = (
+            f["client"]
+            .post(
+                "/v1/assistant/questions", headers=HEADERS, json={"question": "看看功率", "order_no": ORDER}
+            )
+            .json()
+        )
+        assert terminal(f, result["qa_id"]).json()["status"] == "completed"
+
+
+def test_process_statistics_prefers_monitor_when_it_has_rows(tmp_path, monkeypatch):
+    """监测表有行的订单不因同时取了时序而改口径：统计仍吃监测样本。"""
+    with environment(tmp_path, monkeypatch) as f:
+        f["state"]["monitor_rows"] = [
+            {
+                "orderNo": ORDER,
+                "tenantId": f["state"]["tenant"],
+                "siteId": f["state"]["site"],
+                "voltage": "220",
+            }
+        ]
+        f["state"]["tsdata_rows"] = [dict(TIMELINE_ROW, outputVoltage="380")]
+
+        def dispatch(_, config, run):
+            call_tool(f, run, "cpms_order_detail")
+            call_tool(f, run, "cpms_charging_samples")
+            call_tool(f, run, "cpms_charging_timeline", {"order_no": ORDER})
+            evidence, head, _ = call_tool(f, run, "cpms_order_process_stats")
+            assert evidence["data"]["sample_count"] == 1
+            assert {m["name"] for m in evidence["data"]["metrics"]} == {
+                "voltage",
+                "current",
+                "power",
+            }
+            finish(f, run, head, "监测样本统计。", [])
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        result = (
+            f["client"]
+            .post(
+                "/v1/assistant/questions", headers=HEADERS, json={"question": "看看功率", "order_no": ORDER}
+            )
+            .json()
+        )
+        assert terminal(f, result["qa_id"]).json()["status"] == "completed"
+
+
+def test_process_statistics_does_not_merge_mixed_transaction_serials(tmp_path, monkeypatch):
+    """时序窗口混入相邻交易流水：不跨流水合并（SOP 分段叙述不合并）。"""
+    with environment(tmp_path, monkeypatch) as f:
+        f["state"]["tsdata_rows"] = [
+            dict(TIMELINE_ROW, txSerialNo="17", outputVoltage="220", power="2.2"),
+            dict(
+                TIMELINE_ROW,
+                _ts="2026-11-05T06:30:41.000Z",
+                txSerialNo="18",
+                outputVoltage="380",
+                power="9.9",
+            ),
+        ]
+
+        def dispatch(_, config, run):
+            call_tool(f, run, "cpms_order_detail")
+            call_tool(f, run, "cpms_charging_timeline", {"order_no": ORDER})
+            evidence, head, _ = call_tool(f, run, "cpms_order_process_stats")
+            assert evidence["data"]["sample_count"] == 2
+            assert evidence["data"]["metrics"] == []
+            assert "流水" in evidence["data"]["limitations"]
+            finish(f, run, head, "窗口混入多笔流水，统计未合并。", [])
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        result = (
+            f["client"]
+            .post(
+                "/v1/assistant/questions", headers=HEADERS, json={"question": "看看功率", "order_no": ORDER}
+            )
+            .json()
+        )
+        assert terminal(f, result["qa_id"]).json()["status"] == "completed"
+
+
+def test_process_statistics_refuses_when_no_series_has_rows(tmp_path, monkeypatch):
+    """监测表与时序都拿不到行：拒绝，不落一个零样本统计对象。"""
+    with environment(tmp_path, monkeypatch) as f:
+        observed = {}
+
+        def dispatch(_, config, run):
+            call_tool(f, run, "cpms_order_detail")
+            call_tool(f, run, "cpms_charging_samples")
+            client = f["client"]
+            headers = {"Authorization": "Bearer " + NODE_A_TOKEN}
+            publication = client.post("/v1/internal/charging-status/execution-config/" + run, headers=headers)
+            headers["X-AI-Ops-Exec-Config"] = publication.json()["sha256"]
+            headers["X-AI-Ops-Tool-Contract"] = "request-target/2"
+            grant = client.post(
+                f"/v1/internal/operator-runs/{run}/tools/cpms_order_process_stats/authorization",
+                headers=headers,
+                json={"arguments": {}},
+            )
+            assert grant.status_code == 200, grant.text
+            body = grant.json()
+            refused = client.get(
+                body["base_url"] + body["request"]["path"],
+                headers={"Authorization": "Bearer " + body["bearer"]},
+            )
+            observed["status"] = refused.status_code
+            observed["code"] = refused.json()["error"]["code"]
+            finish(f, run, headers, "两源都没有过程样本。", [])
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        result = (
+            f["client"]
+            .post(
+                "/v1/assistant/questions", headers=HEADERS, json={"question": "看看功率", "order_no": ORDER}
+            )
+            .json()
+        )
+        assert terminal(f, result["qa_id"]).json()["status"] == "completed"
+        assert observed == {"status": 403, "code": "OPERATOR_EVIDENCE_MISSING"}

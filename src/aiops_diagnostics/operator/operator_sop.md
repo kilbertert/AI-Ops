@@ -13,7 +13,7 @@
    起止时间、停机编码与说明、费用分项、分时电量、SOC、退款）；`cpms_order_tariff`
    取该订单历史计费模板，`cpms_order_billing` 取账务与优惠记录，
    `cpms_order_amount_check` 在已取证据上核验金额，`cpms_order_process_stats`
-   在已取样本上算过程统计。
+   在已取样本上算过程统计；监测表无行时，过程统计以同一授权订单的已取时序行为样本源。
 2. 充电过程时序：`cpms_charging_timeline` 读 TDengine 枪级遥测，设备与时间窗口由
    已交付订单证据决定，结果按上报时间升序。`cpms_charging_samples` 是监测表视图：
    只覆盖运营商启动单且仅保留约7天；远程或普通启动单拿到0行是结构性结果，

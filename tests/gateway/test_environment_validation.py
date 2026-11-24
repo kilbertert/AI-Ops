@@ -230,6 +230,110 @@ def test_operator_evidence_requires_actual_object_process_and_node(monkeypatch, 
         business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
 
 
+def _timeline_run(order_status, detail_extra=None, timeline=None, stats=None):
+    from aiops_diagnostics.execution.agent_runs import scope_to_json
+    from gateway.test_environment_trial import scope
+
+    detail = {"orderNo": "order-a", "status": order_status, **(detail_extra or {})}
+    evidence = {
+        "cpms_order_detail": {"data": detail},
+        "cpms_order_process_stats": {"data": stats or {"sample_count": 1, "metrics": [{"count": 1}]}},
+    }
+    if timeline is not None:
+        evidence["cpms_charging_timeline"] = {"data": timeline}
+    return SimpleNamespace(
+        run_id="run-a",
+        environment="a",
+        scope_json=scope_to_json(scope()),
+        publication_app_id="operator-a",
+        exec_config_confirmed=True,
+        order_no="order-a",
+        snapshot={"evidence": evidence},
+        scope_fingerprint="f" * 64,
+        actual_node_id="node-a",
+        gateway_version="1.36.0",
+    )
+
+
+@pytest.mark.parametrize("order_status", [2, 3, 5])
+def test_operator_evidence_accepts_authorized_timeline_series(monkeypatch, order_status):
+    """监测表结构性空行：验收认同一授权单的时序证据——设备与窗口逐字等于详情。"""
+    detail = {
+        "childDeviceCode": "DEV-1",
+        "deviceCode": "DEV-0",
+        "createdTime": "2026-11-20 17:13:29",
+        "stopTime": "2026-11-21 03:02:22",
+    }
+    timeline = {
+        "records": [{"txSerialNo": "17", "outputVoltage": "220"}],
+        "device": "DEV-1",
+        "window_start": "2026-11-20 17:13:29",
+        "window_end": "2026-11-21 03:02:22",
+    }
+    run = _timeline_run(order_status, detail, timeline)
+    context = SimpleNamespace(agent_run_store=SimpleNamespace(by_qa=lambda _: run))
+    spec = {"environment": "a", "tenant_id": "same", "operator_app": "operator-a"}
+    result = business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
+    assert result["tools"] == [
+        "cpms_charging_timeline",
+        "cpms_order_detail",
+        "cpms_order_process_stats",
+    ]
+    # 公开回执同样认时序序列：记录与发布两道 validate_result 不得再按监测表拒。
+    business.validate_result(
+        {
+            "capability": "order",
+            "state": "passed",
+            "evidence": result,
+            "case_sha256": "a" * 64,
+            "observed_at": time.time(),
+            "business_accuracy": "unconfirmed",
+        },
+        "order",
+    )
+
+    run.snapshot["evidence"]["cpms_charging_timeline"]["data"]["device"] = "DEV-9"
+    with pytest.raises(ValueError, match="PROCESS"):
+        business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
+    run.snapshot["evidence"]["cpms_charging_timeline"]["data"]["device"] = "DEV-1"
+    run.snapshot["evidence"]["cpms_charging_timeline"]["data"]["window_end"] = "2026-11-21 04:02:22"
+    with pytest.raises(ValueError, match="PROCESS"):
+        business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
+
+
+def test_operator_evidence_timeline_path_rejects_count_and_metric_gaps(monkeypatch):
+    """有时序行不等于通过：样本数与统计消费行数不一致、统计无有效指标都拒。"""
+    detail = {
+        "childDeviceCode": "DEV-1",
+        "createdTime": "2026-11-20 17:13:29",
+        "stopTime": "2026-11-21 03:02:22",
+    }
+    timeline = {
+        "records": [{"txSerialNo": "17", "outputVoltage": "220"}],
+        "device": "DEV-1",
+        "window_start": "2026-11-20 17:13:29",
+        "window_end": "2026-11-21 03:02:22",
+    }
+    spec = {"environment": "a", "tenant_id": "same", "operator_app": "operator-a"}
+
+    run = _timeline_run(3, detail, timeline, stats={"sample_count": 2, "metrics": [{"count": 1}]})
+    context = SimpleNamespace(agent_run_store=SimpleNamespace(by_qa=lambda _: run))
+    with pytest.raises(ValueError, match="PROCESS"):
+        business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
+
+    # 多流水未合并时统计 metrics 为空：拒，不把「窗口有行」当通过。
+    run = _timeline_run(3, detail, timeline, stats={"sample_count": 1, "metrics": []})
+    context = SimpleNamespace(agent_run_store=SimpleNamespace(by_qa=lambda _: run))
+    with pytest.raises(ValueError, match="PROCESS"):
+        business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
+
+    # 两源均空（监测表无行、时序未交付）照旧拒。
+    run = _timeline_run(3, detail, None, stats={"sample_count": 0, "metrics": []})
+    context = SimpleNamespace(agent_run_store=SimpleNamespace(by_qa=lambda _: run))
+    with pytest.raises(ValueError, match="PROCESS"):
+        business.operator_evidence(context, "order", "qa-a", {"order_no": "order-a"}, spec)
+
+
 def test_target_persists_intent_and_never_restarts_an_unknown_run(tmp_path, monkeypatch):
 
     spec = dict(
