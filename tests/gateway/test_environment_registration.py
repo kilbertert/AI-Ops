@@ -774,4 +774,179 @@ def test_worker_registration_remote_absent_gains_evidence_only_on_intent_probe(
     result = worker.installation_run(tmp_path, request, identifier, owner, registration=True)
     assert result["result"] == "absent"
     assert ("remote_intent" in result) is intent_absent
+    # 意图未证缺席时补核登记资产（替身 run 返回退出码 0=在场）。
+    assert ("remote_assets" in result) is not intent_absent
     assert completed and ("remote_intent" in completed[0]) is intent_absent
+    assert ("remote_assets" in completed[0]) is not intent_absent
+
+
+@pytest.mark.parametrize("assets", ["present", "absent"])
+@pytest.mark.parametrize("verdict", ["unconfirmed", "absent"])
+def test_cancelled_unknown_registration_exits_on_remote_asset_evidence(installed, assets, verdict):
+    """已取消的未知登记凭远端资产事实终态化。
+
+    登记资产（工作区与双端应用）在同一事务落盘：在场=原登记已提交，
+    缺席=除意图文件外零写。两方向对已取消任务都是可证有界的副作用，
+    不再为无法判决的远端观察永占互斥。意图在场时正常回报的 absent
+    走同一条证据出口。
+    """
+    state, source, _ = installed
+    _, identifier, stage = _unknown_registration(installed, cancelled=True)
+    owner = "e" * 32
+    result = dict(
+        id=identifier,
+        environment="a",
+        tenant_id="same",
+        scope="inactive-runtime-registration-only",
+        state="reconcile",
+        result=verdict,
+        executable=False,
+        activated=False,
+        business_acceptance=False,
+        source_revision=stage["expected"]["revision"],
+        remote_assets=assets,
+        **{k: v for k, v in stage["expected"].items() if k != "revision"},
+    )
+
+    def complete(body, status=200):
+        with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+            checking = tasks._row(conn, identifier)["state"] == "checking"
+            if checking:
+                conn.execute(
+                    "UPDATE environment_tasks SET updated_at=? WHERE id=?",
+                    (time.time() - 61, identifier),
+                )
+        if checking:
+            internal(state, {"installation_claim": True, "owner": owner})
+        response = internal(
+            state,
+            {"registration": "complete", "id": identifier, "owner": owner, "result": body},
+        )
+        assert response.status_code == status, response.text
+        return response
+
+    # 无资产证据不终态化；remote_assets 只允许与不可判结果同现且取值封闭。
+    without = {k: v for k, v in result.items() if k != "remote_assets"}
+    assert complete(without).json()["state"] == "reconcile"
+    complete({**result, "remote_assets": "unknown"}, status=409)
+    complete({**result, "state": "observed", "result": "unchanged"}, status=409)
+    assert complete(result).json()["state"] == "cancelled"
+    # 终态化释放互斥：新计划可重交同一登记。
+    path, ref, *_ = state[0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        conn.execute("UPDATE environment_plans SET expires_at=0")
+    plan = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    assert registration((state, source, plan["id"])).status_code == 200
+
+
+def test_uncancelled_unknown_registration_holds_scope_despite_asset_evidence(installed):
+    """未取消的未知登记不因资产证据放行：资产在场只证「原登记已提交」，
+    不证本冻结目标登记的 verdict——互斥继续保持，证据随结果存档。"""
+    state, source, _ = installed
+    _, identifier, stage = _unknown_registration(installed)
+    owner = "e" * 32
+    result = dict(
+        id=identifier,
+        environment="a",
+        tenant_id="same",
+        scope="inactive-runtime-registration-only",
+        state="reconcile",
+        result="unconfirmed",
+        executable=False,
+        activated=False,
+        business_acceptance=False,
+        source_revision=stage["expected"]["revision"],
+        remote_assets="present",
+        **{k: v for k, v in stage["expected"].items() if k != "revision"},
+    )
+    with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
+        conn.execute(
+            "UPDATE environment_tasks SET updated_at=? WHERE id=?",
+            (time.time() - 61, identifier),
+        )
+    internal(state, {"installation_claim": True, "owner": owner})
+    response = internal(
+        state, {"registration": "complete", "id": identifier, "owner": owner, "result": result}
+    )
+    assert response.status_code == 200 and response.json()["state"] == "reconcile"
+    path, ref, *_ = state[0]
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        conn.execute("UPDATE environment_plans SET expires_at=0")
+    plan = plans.preflight(path, ADMIN, "a", 1, 1, ref)
+    assert registration((state, source, plan["id"])).status_code == 403
+
+
+@pytest.mark.parametrize("returncode,expected", [(7, False), (0, True), (1, None), (9, None), (255, None)])
+def test_registration_assets_present_only_remote_answer_counts(tmp_path, monkeypatch, returncode, expected):
+    """登记资产探针只信远端脚本退出码：0=在场、7=缺席，其余一律未知。"""
+    from types import SimpleNamespace
+
+    sent = {}
+
+    def run(*a, **kw):
+        sent.update(kw)
+        return SimpleNamespace(returncode=returncode)
+
+    monkeypatch.setattr(worker, "subprocess", SimpleNamespace(run=run))
+    assert worker.registration_assets_present(tmp_path, "95", "95", "same") is expected
+    # 先持安装锁再读库：锁占期间远端登记事务可能在飞，不能当缺席。
+    assert "/run/lock/aiops-access-95.lock" in sent["input"]
+    assert "/var/lib/aiops-access-95/gateway/gateway.db" in sent["input"]
+    assert sent["input"].index("flock") < sent["input"].index("is_file")
+
+
+@pytest.mark.parametrize("assets,expected", [(True, "present"), (False, "absent"), (None, None)])
+def test_worker_registration_remote_failure_reports_assets_only_when_probed(
+    tmp_path, monkeypatch, assets, expected
+):
+    """意图在场（或探不出）时补报登记资产证据；资产探针读不出则不带字段。"""
+    import hashlib
+    import subprocess
+    import time
+
+    identifier = "task_" + "e" * 32
+    owner = "a" * 32
+    installer_bytes = b"fixed installer"
+    staged = {
+        "id": identifier,
+        "environment": "a",
+        "tenant_id": "same",
+        "expires_at": time.time() + 900,
+        "observe_only": True,
+        "target": {"host": "managed-a", "user": "aiops", "port": 2222},
+        "installer": {
+            "revision": "f" * 40,
+            "sha256": hashlib.sha256(installer_bytes).hexdigest(),
+        },
+        "expected": {
+            "revision": "f" * 40,
+            "artifact_sha256": "a" * 64,
+            "config_sha256": "b" * 64,
+            "registry_sha256": "c" * 64,
+            "runtime_sha256": "d" * 64,
+        },
+    }
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="124"\nhost="managed-a"\n')
+
+    def run(args, **kwargs):
+        if args[0] == "bash":
+            __import__("pathlib").Path(args[-1]).write_bytes(installer_bytes)
+        return subprocess.CompletedProcess(args, 0)
+
+    def output(args, **kwargs):
+        raise subprocess.CalledProcessError(1, args)
+
+    def request(payload):
+        if payload["registration"] == "stage":
+            return staged
+        return payload["result"]
+
+    monkeypatch.setattr(worker.subprocess, "run", run)
+    monkeypatch.setattr(worker.subprocess, "check_output", output)
+    monkeypatch.setattr(worker, "registration_intent_absent", lambda *a, **kw: False)
+    monkeypatch.setattr(worker, "registration_assets_present", lambda *a, **kw: assets)
+    result = worker.installation_run(tmp_path, request, identifier, owner, registration=True)
+    assert result["result"] == "unconfirmed"
+    assert ("remote_assets" in result) is (expected is not None)
+    if expected:
+        assert result["remote_assets"] == expected

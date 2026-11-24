@@ -151,11 +151,8 @@ def dispatch(context, payload):
             }
             if (
                 not isinstance(result, dict)
-                or set(result)
-                not in (
-                    set(expected) | {"state", "result"},
-                    set(expected) | {"state", "result", "remote_intent"},
-                )
+                or not (set(expected) | {"state", "result"}) <= set(result)
+                or not set(result) - set(expected) - {"state", "result"} <= {"remote_intent", "remote_assets"}
                 or any(type(result[k]) is not type(v) or result[k] != v for k, v in expected.items())
                 or result["state"] not in {"observed", "reconcile"}
                 or result["result"]
@@ -167,14 +164,26 @@ def dispatch(context, payload):
                 or result.get("remote_intent", "absent") != "absent"
                 or "remote_intent" in result
                 and result["result"] != "absent"
+                # remote_assets 是登记资产的远端只读证据，只随「不可判」结果
+                # （absent/unconfirmed）同现：可判结果不需要它，它也不假装成结果。
+                or "remote_assets" in result
+                and (
+                    result["result"] not in ("unconfirmed", "absent")
+                    or result["remote_assets"] not in {"present", "absent"}
+                )
             ):
                 raise tasks.TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
             state = (
                 "checking" if result["state"] == "reconcile" else "cancelled" if row["cancel"] else "observed"
             )
+            # 已取消任务的「未知」由远端资产证据收束：在场=原登记已提交；
+            # 缺席=登记单事务整体未写、远端写仅意图文件。两向均为有界副作用，
+            # 闭环为 cancelled。
+            if row["cancel"] and result.get("remote_assets") in {"present", "absent"}:
+                state = "cancelled"
             # 未派发且只读确认不存在，安全结束；已派发且远端意图被证明缺席
             # （意图是登记首个落盘写，缺席即零副作用），同样安全结束。
-            if result["result"] == "absent" and (
+            elif result["result"] == "absent" and (
                 not request.get("dispatched") or result.get("remote_intent") == "absent"
             ):
                 state = "cancelled" if row["cancel"] else "blocked"

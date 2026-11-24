@@ -465,6 +465,59 @@ def registration_intent_absent(root, host, environment, identifier):
     return probe.returncode == 7
 
 
+def registration_assets_present(root, host, environment, tenant):
+    """远端登记资产是否已提交（只读核对）；None=读不出，按未知处理。
+
+    register_runtime 在单事务里写工作区与双端应用，部分登记先被拒
+    （SETUP_PARTIAL_REGISTRATION）再整体回滚——任一资产行在场即「某次
+    登记已成套提交」，全缺即「提交未发生」；已派发登记任务的远端副作用
+    只剩意图文件本身。与 registration_intent_absent 同契约：环境锁内
+    只读，7=缺席、0=在场，其余（含传输失败、锁占）一律收敛到未知。
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tenant):
+        return None
+    lockpath = "/run/lock/aiops-access-" + environment + ".lock"
+    database = "/var/lib/aiops-access-" + environment + "/gateway/gateway.db"
+    script = "\n".join(
+        [
+            "import fcntl,os,sqlite3,sys",
+            "from pathlib import Path",
+            f"fd=os.open({lockpath!r},os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW,0o600)",
+            "lock=os.fdopen(fd,'w')",
+            "st=os.fstat(lock.fileno())",
+            "if st.st_uid!=0 or st.st_mode&0o077 or st.st_nlink!=1:sys.exit(9)",
+            "try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)",
+            "except BlockingIOError:sys.exit(9)",
+            f"p=Path({database!r})",
+            "if not p.is_file():sys.exit(7)",
+            "con=sqlite3.connect('file:'+str(p)+'?mode=ro',uri=True)",
+            "q=('SELECT count(*) FROM dify_workspaces WHERE tenant_id=? AND environment=? '",
+            "   'UNION ALL SELECT count(*) FROM operator_apps WHERE tenant_id=? AND environment=?')",
+            f"n=sum(r[0] for r in con.execute(q,({tenant!r},{environment!r},{tenant!r},{environment!r})))",
+            "sys.exit(0 if n else 7)",
+            "",
+        ]
+    )
+    try:
+        probe = subprocess.run(
+            ["dev-host", "exec", host, "--allow-service-exec", "--", "python3", "-B", "-"],
+            cwd=root,
+            input=script,
+            text=True,
+            capture_output=True,
+            timeout=70,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if probe is None:
+        return None
+    if probe.returncode == 7:
+        return False
+    if probe.returncode == 0:
+        return True
+    return None
+
+
 def installation_run(root, request, identifier, owner, *, registration=False, cold=False):
     """运维宿主搬运中央私有制品；未知结果只核对同一远端任务。"""
     action = "registration" if registration else "installation"
@@ -694,10 +747,24 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                 and registration_intent_absent(root, host, staged["environment"], identifier)
             ):
                 result["remote_intent"] = "absent"
+            elif registration and result.get("result") == "absent":
+                # 意图在场（含探针读不出时收敛到在场）时，正常回报的 absent
+                # 同样核登记资产：单事务原子落盘，缺席即除意图文件外零写。
+                assets = registration_assets_present(root, host, staged["environment"], staged["tenant_id"])
+                if assets is not None:
+                    result["remote_assets"] = "present" if assets else "absent"
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):
         # 登记意图缺席证明登记步从未越过首写：已派发任务凭此安全终态化，
         # 否则 observe-only 无法重放登记、reconcile 会永远占住互斥。
         if registration and registration_intent_absent(root, host, staged["environment"], identifier):
             result["result"] = "absent"
             result["remote_intent"] = "absent"
+        elif registration:
+            # 意图在场（含探针读不出时收敛到在场）后，再核登记资产是否已提交：
+            # 工作区与双端应用属同一事务，原子落盘——在场即「原登记已完成」，
+            # 缺席即「除意图文件外零写」。中央凭此对已取消任务诚实终态化；
+            # 资产探针读不出则不带字段，任务维持 checking 待核。
+            assets = registration_assets_present(root, host, staged["environment"], staged["tenant_id"])
+            if assets is not None:
+                result["remote_assets"] = "present" if assets else "absent"
     return request({action: "complete", "id": identifier, "owner": owner, "result": result})
