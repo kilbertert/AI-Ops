@@ -1437,12 +1437,16 @@ class OperatorCpms:
                 raise OperatorRefused("OPERATOR_TARIFF_REQUIRED")
 
             if tool in {"cpms_order_amount_check", "cpms_order_process_stats"}:
-                required = {"cpms_order_detail"} | (
-                    {"cpms_order_tariff", "cpms_order_billing"}
-                    if tool == "cpms_order_amount_check"
-                    else {"cpms_charging_samples"}
-                )
-                if not required <= task.delivered:
+                if tool == "cpms_order_amount_check":
+                    required = {"cpms_order_detail", "cpms_order_tariff", "cpms_order_billing"}
+                else:
+                    # 过程证据二选一即可：监测表有行走它，无行走时序（SOP §2.2）。
+                    # 行内容是否真的非空由 analysis 再判——delivered 只证调过。
+                    required = {"cpms_order_detail"}
+                if not required <= task.delivered or (
+                    tool == "cpms_order_process_stats"
+                    and not ({"cpms_charging_samples", "cpms_charging_timeline"} & task.delivered)
+                ):
                     raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
                 self._authorized_order(task, run.order_no, expected_site=task.order_site_id)
                 data = operator_agent.analysis(

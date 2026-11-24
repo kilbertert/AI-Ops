@@ -84,7 +84,16 @@ def analysis(evidence, section):
             evidence["cpms_order_tariff"]["data"], detail, "zh"
         ).splitlines()
     elif section == "process":
-        result = order_analysis.metrics(detail, evidence["cpms_charging_samples"]["data"])
+        samples = (evidence.get("cpms_charging_samples") or {}).get("data") or {}
+        if samples.get("records"):
+            result = order_analysis.metrics(detail, samples)
+        else:
+            # SOP §2.2：监测表只覆盖运营商启动单，空行是结构性结果——
+            # 过程统计改吃同一授权订单+设备+窗口的时序证据。
+            timeline = (evidence.get("cpms_charging_timeline") or {}).get("data") or {}
+            if not isinstance(timeline.get("records"), list) or not timeline["records"]:
+                raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
+            result = order_analysis.timeline_metrics(detail, timeline)
     else:
         raise OperatorRefused("OPERATOR_ANALYSIS_INVALID")
     return json.loads(
