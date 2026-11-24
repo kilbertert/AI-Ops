@@ -31,8 +31,18 @@ mint 出来的 `resources["binding"]` 在写入时恒等于 `request["binding"]`
 
 ## 被否方案
 
-- 继承面按 `request["binding"]` 过滤、只继承同合同资源：否决。旧行仍在
-  库里且无清理通道，过滤只是把拒收换成慢死；弃用重铸一行收敛。
+- 继承面按 `request["binding"]` 过滤、只继承同合同资源：否决，但理由
+  不是不可行——过滤后 resources 为空同样落入 mint()，功能等价。否决的
+  理由是作用面：过滤改在 `workspace_request` 的通用继承查询上，会把
+  knowledge-prepare/knowledge-connect/consumer-prepare 的旧合同拒收
+  一并静默改为重铸，超出本次实测故障的范围；继承保持合同无关、由任务
+  实现层自己判 binding 也更贴合现有分层。
+- 保留未决导入先对账原 operation、确认旧候选存在后再重铸：否决。合同
+  变更后旧候选本就无法再用（其内嵌 SOP/工具与现模板比对必在观察步
+  被拒）；导入若未落库则「保留对账」永远零命中，任务以 reconcile 形态
+  继续死锁并把同一份未决 resources 传给后继任务；若已落库，孤儿残留
+  与已完成任务留下的残留同类，合同本就要求「保留已创建应用与失败
+  历史」。三种结局下重铸都是最优且唯一可推进的选择。
 - 让 blocked 任务也回写 resources 或加 GC 清扫旧 binding 行：否决。给
   失败任务加写路径扩大副作用面，清道夫是新机制，两者都不及就地重铸小。
 - 把 `request["binding"] != current_binding()` 也放宽：否决。那才是
@@ -42,6 +52,12 @@ mint 出来的 `resources["binding"]` 在写入时恒等于 `request["binding"]`
 
 - 合同变更（sop/tools/模型模板/凭据文件任一变化）后首个 operator-prepare
   自动弃旧铸新，不再需要人工清库；旧候选应用在 Dify 侧残留但不绑定新
-  operation，与已提升候选的处理口径一致。
+  operation，与已提升候选的处理口径一致。继承到带 `attempted` 而未确认
+  `app_id` 的未决资源时同样弃用（见被否方案二）。
+- consumer-prepare 共用同一代码段：批准来源版本切换改变消费者 binding 时
+  同样弃旧铸新，行为一致；两侧各有替身测试固定。
+- 同计划同租户同 binding 的重投仍返回原 blocked 行（确定性摘要即任务
+  身份）；恢复单位本来就是新计划——blocked 子任务已把 candidate-prepare
+  父任务标 blocked，旧计划无论如何都已终结。
 - 测试固定：同租户第二个任务在 binding 变更后 observed 且新建应用，
   防回归。
