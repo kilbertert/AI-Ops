@@ -108,7 +108,10 @@ def run(context, path, reference, payload):
         if request["binding"] != current_binding():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
         if resources and resources.get("binding") != request["binding"]:
-            raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
+            # 带旧合同的 resources 只能继承自既往任务（本任务铸成的恒等于
+            # request["binding"]）：弃用并按当前合同重铸候选，否则首个过期
+            # 行永远最新、后续任务被永久拒收。在飞漂移由上面的比对拒绝。
+            resources.clear()
 
         def mint():
             boundary()

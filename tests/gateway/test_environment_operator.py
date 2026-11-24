@@ -177,3 +177,17 @@ def test_second_capability_read_failure_does_not_record_create_attempt(applicati
     application[4][0] = False
     assert execute(application, job)["state"] == "observed"
     assert application[3].count(("POST", "/console/api/apps/imports")) == 1
+
+
+def test_stale_inherited_candidate_is_reminted_under_current_binding(application, monkeypatch):
+    _, _, apps, calls, _ = application
+    job_a = submit(application)
+    assert execute(application, job_a)["state"] == "observed"
+    assert len(apps) == 1
+    monkeypatch.setattr(operator, "binding", lambda _: "next-binding")
+    job_b = submit(application)
+    assert job_b["id"] != job_a["id"]
+    result = execute(application, job_b)
+    assert result["state"] == "observed"
+    assert len(apps) == 2
+    assert calls.count(("POST", "/console/api/apps/imports")) == 2
