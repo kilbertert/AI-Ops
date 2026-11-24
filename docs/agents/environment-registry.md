@@ -272,7 +272,9 @@ aiops-admin environment-task-worker --id task_<编号> --gateway https://control
 
 命令只领取这个任务，冻结host经原项目.dev-host.toml唯一解析为目标name（零个或多个匹配拒绝），校验安装器摘要，从origin/main已合并修订构建同一固定安装器，
 经dev-host传输与身份断言执行preflight，不install/recover。省略--id时自动选择一个待处理任务，queued过期/撤权明确结束，未知reconcile至少延后60秒重试；
-多个执行端仍以中央租约互斥。后台运维轮询见下方，文件计划通过不能代替现场业务验收。
+多个执行端仍以中央租约互斥。省略--id的每次唤醒还在「现场预检」与「安装面」两条认领面间严格交替（中央账本持久轮转游标，ADR-0326）：
+两侧都可能长期不还名额（已派发检查登记永不终态、现场reconcile同样跳过计划窗），定序会让一侧永久遮住另一侧；交替保证每侧至多被跳过一轮。
+后台运维轮询见下方，文件计划通过不能代替现场业务验收。
 中央`/v1/internal/environment-tasks`只接受独立HMAC；管理桥不能访问或提交结果。
 不让业务Gateway持有SSH私钥；若正式访问路径尚未允许内部worker接口，停止并按原入口交付，不能临时开放任意端点。
 
@@ -352,9 +354,11 @@ systemd单位上证明「未安装」；声明`backups`根允许受管staging预
 `observed`仅当`installation∈{installed,already_installed}`；`not_installed`只能`blocked`。
 已派发（dispatched）任务取消或父过期后，租约到期重领与登记同规：只用冻结输入
 `observe_only`回收真实结果，父终态不复活也不补建资源；未派发请求在取消或过期时仍拒绝。
-`site-install`的`checking`行与现场队列reconcile同规按60秒节奏重领（含已取消行——
-取消的排空对`executing`行本就即时，已观察仍未知的checking行不设例外），残迹初装不
-抢占其他环境独立现场队列；该节奏只限`site-install`，非cold检查任务沿原即领合同不变。
+`site-install`与`candidate-register`的`checking`行按60秒节奏重领（含已取消行——
+取消的排空对`executing`行本就即时，已观察仍未知的checking行不设例外）：worker是
+全局单循环，未知登记每轮原地重领会占满名额，任何排队的现场预检因而无人处理
+（ADR-0326）。节奏只降重领频率——行仍在`checking`，冲突安装/登记/激活照旧被BUSY
+拒绝（让位≠放行）；非cold、非登记的检查任务沿原即领合同不变。
 
 `site-install`确认在场后才出现场预检：`tasks.submit(after=<初装编号>)`延迟建行，
 同计划陈旧阻塞预检行不复用；此后走原STEPS与`{candidate_task, installation:true}`升级链，

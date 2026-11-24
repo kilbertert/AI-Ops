@@ -201,3 +201,9 @@ def initialize_tasks(conn):
         "lease_until REAL NOT NULL DEFAULT 0, cancel INTEGER NOT NULL DEFAULT 0, "
         "result TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '', updated_at REAL NOT NULL)"
     )
+    # 单行轮转游标：worker 每次唤醒在两条认领面间严格交替（ADR-0326）。持久化在
+    # 中央账本，进程重启/多 worker 都不会重置；缺行按 site 起手。
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS environment_task_turn (only_row INTEGER PRIMARY KEY CHECK(only_row=1), "
+        "next TEXT NOT NULL)"
+    )
