@@ -175,7 +175,8 @@ cpms_device_offline 在工具层被拒（trace显式记录refused），答覆明
 ### 容量失败的真实根因：发令顺序，不是配置
 
 上一轮发布在容量步确定性失败（三业务各自 passed，却报 `concurrent business capacity proof incomplete`）。
-事实链：三项 run 的**实际窗口**取自各自的 run 落库时刻，而 consumer 腿在 run 落库前有约 15 秒串行准备
+事实链：三项 run 的**实际窗口**起点按腿不同——order/offline 取各自 run 的 `claimed_at`，
+只有 consumer 取 `created_at`（`run_window` 的 operator/consumer 两支）；而 consumer 腿在 run 落库前有约 15 秒串行准备
 （候选租约、third-session 解析、installed 校验、CPMS 可见性；41 侧候选快照/DSL 导出/claim）。
 实测三窗：order `06:36:05.209→06:37:00.812`、offline `06:36:05.328→06:36:17.601`、
 consumer `06:36:19.595→06:37:25.430`；`max(started)` 比 `min(completed)` 晚 **2.0 秒**。
@@ -195,8 +196,9 @@ Devin 复审指出初版放行信号取自 `consumer-start` 返回仍早于窗�
 
 ### 另一个产品缺陷：未知登记反复领取饿死同环境队列
 
-发布后，一条因计划窗口过期而在写入点被判只读的登记任务长期滞留：持久 `state=reconcile`（公开投影
-`checking`）、`cancel=1`、`dispatched=true`。worker 每轮把它选为候选并立即 return，处理后又落回同一状态；
+发布后，一条因计划窗口过期而在写入点被判只读的登记任务长期滞留：持久 `state=checking`
+（公开投影 `reconcile`，见 `environment_registration.dispatch` 的 `checking` 落库与
+`tasks._public` 的映射）、`cancel=1`、`dispatched=true`。worker 每轮把它选为候选并立即 return，处理后又落回同一状态；
 实测 11 分钟零推进，同环境 `queued` 的只读预检无人认领。
 
 **不得用超时释放**：时间流逝不证明远端零副作用，`blocked` 又不保留互斥，会让新的冲突安装覆盖未知登记结果。
@@ -215,7 +217,10 @@ Devin 复审指出初版放行信号取自 `consumer-start` 返回仍早于窗�
   order 需 `order_detail`/`charging_timeline`/`process_stats` 至少两项，offline 需 `cpms_device_offline`
   且对象匹配。
 
-`post` 分支已实测（非激活窗口）：consumer 401 `INVALID_ACCESS_TOKEN`（撤销成立）。
+`post` 分支已实测（非激活窗口）：consumer 返回 401 `INVALID_ACCESS_TOKEN`。
+**注意该码不足以单独证明撤销**——网关用同一码覆盖多种认证失败。撤销成立的独立证据是
+`consumer_identity` 解析器对同一会话返回 `caller_auth.invalid`（查的是会话解析层，
+不是入口的粗粒度错误码）。本回执按这两条分开记，不把入口 401 当撤销证明。
 
 ### 旧测试令牌撤销的精确状态
 
