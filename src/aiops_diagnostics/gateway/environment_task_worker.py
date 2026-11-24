@@ -521,6 +521,7 @@ def registration_assets_present(root, host, environment, tenant):
 def installation_run(root, request, identifier, owner, *, registration=False, cold=False):
     """运维宿主搬运中央私有制品；未知结果只核对同一远端任务。"""
     deadline = time.monotonic() + 840
+    report_seconds = 210 if registration else 70
     action = "registration" if registration else "installation"
     staged = request({action: "stage", "id": identifier, "owner": owner})
     declared_host = staged["target"]["host"]
@@ -716,7 +717,7 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                 "--port",
                 str(target["port"]),
             ]
-            if deadline - time.monotonic() <= 20:
+            if deadline - time.monotonic() <= report_seconds:
                 raise subprocess.TimeoutExpired("installation action budget", 0)
             if not staged["observe_only"] and request(
                 {action: "authorize", "id": identifier, "owner": owner}
@@ -756,7 +757,7 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                     "sys.stdout.write(r.stdout);sys.exit(r.returncode)",
                 ]
             )
-            action_seconds = min(800, deadline - time.monotonic() - 20)
+            action_seconds = min(800, deadline - time.monotonic() - report_seconds)
             if action_seconds <= 0:
                 raise subprocess.TimeoutExpired("installation action budget", 0)
             command[command.index("--timeout") + 1] = str(max(1, int(action_seconds)))

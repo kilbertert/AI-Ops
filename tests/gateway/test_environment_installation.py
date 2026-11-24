@@ -392,7 +392,7 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     def output(args, **kwargs):
         commands.append(args)
         ast.parse(kwargs["input"])
-        assert kwargs["timeout"] <= 825 - (clock[0] - started)
+        assert kwargs["timeout"] <= 775 - (clock[0] - started)
         assert "'run'" in kwargs["input"] and "managed_python()" in kwargs["input"]
         return __import__("json").dumps(
             {
