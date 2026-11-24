@@ -161,11 +161,68 @@ cpms_device_offline 在工具层被拒（trace显式记录refused），答覆明
 
 - 原客户端完整矩阵：最后一次真机记录为1.2.15/code24，本轮设备不可达，未核当前安装版本；连续会话复验依赖公司发包和设备恢复，
   不以H5或后台API替代APK验收。
-- 平高三业务取证及发布恢复已通过；95两租户激活期间普通用户入口/追问仍需独立证据，平高旧测试令牌有效撤销和登记循环修复是当前前置。
+- 平高三业务取证及发布恢复已通过（容量步含真实 23 样本/1.895s 重叠）；95两租户激活期间普通用户入口/追问仍需独立证据。
+  入口采证脚本已就绪并实测 `post` 分支，但 `pre` 分支尚未在激活窗口执行。
+- 平高旧测试令牌：消费者撤销成立；operator 在公司 UPMS 仍有效（仅 AI-Ops 入口 403 无 scope），
+  **不得记为已撤销**，须后端精确撤销后再激活。登记循环修复是另一前置。
 - 跨环境、同租户跨用户、知识、会话、撤权/停用重放按原QA逐项核销；41有限跨租户反例不代替全矩阵。
 - 指定平高样例的三业务并发和升级重叠已读回；长期稳定性与其他共享服务成本仍未整体验收。
 - P3已存在[独立空实例冷装和跨修订恢复](2026-11-22-isolated-install-recovery-live.md)，
   不能误标为从未演练；保留该事件的前置OSError未确因及版本边界，不新增41生产故障注入要求。
+
+## 2026-11-24 容量根因修复与入口采证准备
+
+### 容量失败的真实根因：发令顺序，不是配置
+
+上一轮发布在容量步确定性失败（三业务各自 passed，却报 `concurrent business capacity proof incomplete`）。
+事实链：三项 run 的**实际窗口**取自各自的 run 落库时刻，而 consumer 腿在 run 落库前有约 15 秒串行准备
+（候选租约、third-session 解析、installed 校验、CPMS 可见性；41 侧候选快照/DSL 导出/claim）。
+实测三窗：order `06:36:05.209→06:37:00.812`、offline `06:36:05.328→06:36:17.601`、
+consumer `06:36:19.595→06:37:25.430`；`max(started)` 比 `min(completed)` 晚 **2.0 秒**。
+三腿同刻发令，短腿（offline 真实 run 仅 12.3 秒）必然跑在 consumer 起跑之前。
+
+修复（#1687 / `3276303a`，ADR-0325）：consumer 腿先起跑，短腿等只读探针
+`consumer-run-started`（`dify_run_store.by_qa` 非空，即窗口起点已出现）为真后再发令。
+**重叠判据、采样频率、80% 占用、1GiB 宿余量、900s 新鲜度闸全部未改**；三 run 仍必须真实重叠。
+失败腿不空等：采样循环在 consumer future 落定后立即放行。
+
+真实验证：发布 `task_0072f944` 容量步 passed，23 次采样，三 run 重叠 **1.895 秒**，
+峰值目标 193789952B / 中央 116207616B，升级共存 78819328B；随后 activated 并在原页面恢复。
+
+Devin 复审指出初版放行信号取自 `consumer-start` 返回仍早于窗口（临时应用导入/发布与意图分类发生在
+`runs.issue()` 之前），已改为探针判定；另修正 ADR 中租约秒数（`installation_claim` 为 900s 非 300s）。
+两条新测试驱动 `run` 全链路，变异自检双向红绿。
+
+### 另一个产品缺陷：未知登记反复领取饿死同环境队列
+
+发布后，一条因计划窗口过期而在写入点被判只读的登记任务长期滞留：持久 `state=reconcile`（公开投影
+`checking`）、`cancel=1`、`dispatched=true`。worker 每轮把它选为候选并立即 return，处理后又落回同一状态；
+实测 11 分钟零推进，同环境 `queued` 的只读预检无人认领。
+
+**不得用超时释放**：时间流逝不证明远端零副作用，`blocked` 又不保留互斥，会让新的冲突安装覆盖未知登记结果。
+修复须在保留冲突保护的前提下让该记录公平让位，并让已取消/已派发的登记沿冻结目标进入只读对账。
+该缺陷由独立代理实现、Codex 集成，本回执只记录事实与边界。
+
+### 入口采证脚本已就绪（尚未在激活窗口使用）
+
+开发机对 `api.qumall.qushiyun.com`（`120.55.45.59`）TCP 不可达，而 41 可达（匿名 401 JSON、TLS 0.21s）。
+故采证在 41 侧执行，脚本经受管 `dev-host write` 以 0600 放置、按路径调用，凭据不经 shell 参数或回显：
+
+- `entry-evidence-full.py`：正式 HTTPS 入口全量采证，`--phase pre` 采三业务 + 两处同会话追问 + 匿名负向；
+  `--phase post` 验恢复后旧会话失去准入。
+- `verify-tool-evidence.py`：从 41 run 记录核**实际工具/对象/窗口**，补上旧脚本只判
+  `transport_pass`（200+completed+有文本）的缺口——consumer 需 `status`/`knowledge` 命中本人订单，
+  order 需 `order_detail`/`charging_timeline`/`process_stats` 至少两项，offline 需 `cpms_device_offline`
+  且对象匹配。
+
+`post` 分支已实测（非激活窗口）：consumer 401 `INVALID_ACCESS_TOKEN`（撤销成立）。
+
+### 旧测试令牌撤销的精确状态
+
+误回显的平高 operator 令牌：AI-Ops 入口 `/v1/assistant/questions` 返回 403 `INSUFFICIENT_SCOPE`，
+但公司 UPMS `/upms/user/info` **仍返回 sysUser**——令牌本身未被作废，只是当前没有 AI-Ops 业务 scope。
+**不得把 403 记为已撤销**；停用态提供的是准入保护而非凭据作废，激活后 scope 若恢复，该令牌可能重新可用。
+消费者侧撤销成立；operator 侧仍需后端精确撤销，是下次激活前的硬前置。
 
 ## 下一步与证据保管
 
