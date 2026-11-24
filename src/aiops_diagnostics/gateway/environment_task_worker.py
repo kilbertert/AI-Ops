@@ -520,6 +520,8 @@ def registration_assets_present(root, host, environment, tenant):
 
 def installation_run(root, request, identifier, owner, *, registration=False, cold=False):
     """运维宿主搬运中央私有制品；未知结果只核对同一远端任务。"""
+    deadline = time.monotonic() + 840
+    report_seconds = 210 if registration else 70
     action = "registration" if registration else "installation"
     staged = request({action: "stage", "id": identifier, "owner": owner})
     declared_host = staged["target"]["host"]
@@ -585,6 +587,16 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
             "error_code": "ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED",
         }
     try:
+        # 慢链路共享有限传输预算；为派发前复核留时，观察回收不续签原计划。
+        seconds = 400 if staged["observe_only"] else min(400, staged["expires_at"] - time.time() - 60)
+        transfer_deadline = time.monotonic() + seconds
+
+        def transfer_timeout(maximum):
+            remaining = transfer_deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired("installation artifact transfer", 0)
+            return min(maximum, remaining)
+
         with tempfile.TemporaryDirectory(prefix="aiops-install-transfer-") as temporary:
             directory = Path(temporary)
             artifacts = ({} if registration else staged["archives"]) | {"installer": staged["installer"]}
@@ -602,6 +614,7 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                         cwd=root,
                         check=True,
                         capture_output=True,
+                        timeout=transfer_timeout(65),
                     )
                 else:
                     # 仅受管服务身份读task目录中已冻结归档；原路径不通过shell拼接。
@@ -634,7 +647,7 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                             stdout=stream,
                             stderr=subprocess.PIPE,
                             check=True,
-                            timeout=65,
+                            timeout=transfer_timeout(65),
                         )
                 actual = hashlib.sha256(local.read_bytes()).hexdigest()
                 if actual != source["sha256"]:
@@ -650,7 +663,13 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                     f" assert hashlib.sha256(p.read_bytes()).hexdigest()=={actual!r}\n"
                 )
                 subprocess.run(
-                    command, cwd=root, input=guard, text=True, check=True, capture_output=True, timeout=65
+                    command,
+                    cwd=root,
+                    input=guard,
+                    text=True,
+                    check=True,
+                    capture_output=True,
+                    timeout=transfer_timeout(65),
                 )
                 subprocess.run(
                     [
@@ -666,7 +685,7 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                     cwd=root,
                     check=True,
                     capture_output=True,
-                    timeout=65,
+                    timeout=transfer_timeout(300),
                 )
                 if name != "installer":
                     spec_archives[name] = {**source, "path": remote + "/" + local.name}
@@ -698,6 +717,8 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                 "--port",
                 str(target["port"]),
             ]
+            if deadline - time.monotonic() <= report_seconds:
+                raise subprocess.TimeoutExpired("installation action budget", 0)
             if not staged["observe_only"] and request(
                 {action: "authorize", "id": identifier, "owner": owner}
             ) != {"authorized": True}:
@@ -736,7 +757,13 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                     "sys.stdout.write(r.stdout);sys.exit(r.returncode)",
                 ]
             )
-            raw = subprocess.check_output(command, cwd=root, input=script, text=True, timeout=805)
+            action_seconds = min(800, deadline - time.monotonic() - report_seconds)
+            if action_seconds <= 0:
+                raise subprocess.TimeoutExpired("installation action budget", 0)
+            command[command.index("--timeout") + 1] = str(max(1, int(action_seconds)))
+            raw = subprocess.check_output(
+                command, cwd=root, input=script, text=True, timeout=action_seconds + 5
+            )
             if len(raw) > 65536:
                 raise ValueError("installation response too large")
             result = json.loads(raw)

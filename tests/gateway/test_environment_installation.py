@@ -342,8 +342,12 @@ def test_dispatched_cancelled_install_keeps_blocked_not_cancelled(installation_s
     assert row["cancel"] and row["state"] == "blocked"
 
 
+@pytest.mark.parametrize(
+    "copy_seconds,window_seconds,other_copy_seconds",
+    [(0, 900, 5), (250, 900, 5), (350, 900, 5), (80, 90, 5), (10, 30, 5), (250, 900, 80)],
+)
 def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
-    installation_state, tmp_path, monkeypatch
+    installation_state, tmp_path, monkeypatch, copy_seconds, window_seconds, other_copy_seconds
 ):
     import ast
     import subprocess
@@ -355,14 +359,24 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     owner = "a" * 32
     internal(state, {"installation_claim": True, "owner": owner})
     stage = internal(state, {"installation": "stage", "id": identifier, "owner": owner}).json()
+    stage["expires_at"] = time.time() + window_seconds
     (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="124"\nhost="managed-a"\n')
     commands = []
+    authorized = []
+    clock = [1000.0]
+    started = clock[0]
+    monkeypatch.setattr(worker.time, "monotonic", lambda: clock[0])
     # 传输替身只提供现有已验证的归档字节；不执行真实SSH或生产写入。
     installer_bytes = b"fixed installer"
     stage["installer"]["sha256"] = __import__("hashlib").sha256(installer_bytes).hexdigest()
 
     def run(args, **kwargs):
         commands.append(args)
+        if args[:2] == ["dev-host", "cp"]:
+            duration = copy_seconds if args[3].endswith("application.tar.gz") else other_copy_seconds
+            if kwargs["timeout"] < duration:
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+            clock[0] += duration
         if args[0] == "bash":
             __import__("pathlib").Path(args[-1]).write_bytes(installer_bytes)
         elif args[0] == "dev-host" and args[-1].endswith("python -"):
@@ -378,6 +392,7 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     def output(args, **kwargs):
         commands.append(args)
         ast.parse(kwargs["input"])
+        assert kwargs["timeout"] <= 775 - (clock[0] - started)
         assert "'run'" in kwargs["input"] and "managed_python()" in kwargs["input"]
         return __import__("json").dumps(
             {
@@ -396,6 +411,7 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
         if payload["installation"] == "stage":
             return stage
         if payload["installation"] == "authorize":
+            authorized.append(True)
             assert any(a[:3] == ["dev-host", "cp", "124"] for a in commands)
             return {"authorized": True}
         return internal(state, payload).json()
@@ -403,7 +419,15 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     monkeypatch.setattr(worker.subprocess, "run", run)
     monkeypatch.setattr(worker.subprocess, "check_output", output)
     result = worker.installation_run(tmp_path, request, identifier, owner)
-    assert result["state"] == "blocked"
+    expected = (
+        "reconcile"
+        if copy_seconds > 300 or window_seconds < copy_seconds + 60 or other_copy_seconds == 80
+        else "blocked"
+    )
+    assert result["state"] == expected
+    assert bool(authorized) is (expected == "blocked")
+    if expected == "reconcile":
+        assert not any("managed_python()" in str(a) for a in commands)
     assert all(a[2] == "124" for a in commands if a[0] == "dev-host" and a[2] != "41")
 
 
