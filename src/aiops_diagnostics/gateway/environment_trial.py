@@ -341,6 +341,11 @@ def register(app, context):
                         "error_code": exc.code,
                     }
                 return JSONResponse(result, headers={"Cache-Control": "no-store"})
+            if action == "consumer-run-started":
+                from aiops_diagnostics.dify.environment_consumer_trial import run_started
+
+                result = await asyncio.to_thread(run_started, context, payload)
+                return JSONResponse(result, headers={"Cache-Control": "no-store"})
             if action.startswith("consumer-"):
                 operations = {
                     "consumer-describe": context.consumer_candidate_trials.describe,

@@ -3,6 +3,7 @@
 import json
 import re
 import subprocess
+import threading
 import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
@@ -71,7 +72,31 @@ def sample(root, hosts):
     return result
 
 
-def business_run(root, staged, spec, capability):
+def consumer_wait_seconds():
+    """短腿等待窗口起点信号的上限。consumer 腿起跑失败时由采样循环提前放行，
+    正常情形下探针在预热结束后数秒内为真，故 150s 远足；模块级函数便于测试收紧。"""
+    return 150
+
+
+def consumer_probe(root, trial_id):
+    """窗口起点探针：被测 run 行是否已落库（只读，不触发授权或副作用）。"""
+    return bool(
+        local_trial(root, {}, "", {"action": "consumer-run-started", "trial_id": trial_id}, control=True).get(
+            "run_started"
+        )
+    )
+
+
+def business_run(root, staged, spec, capability, *, consumer_running=None):
+    # consumer 腿在 run 落库前有约十余秒的串行准备（租约、会话解析、候选快照与
+    # claim），被测窗口从 run 创建才起算；短腿若同时发令会先跑完，测出的是两段
+    # 错开的时间而非并发。故 consumer 先起跑，run 已创建后再放行其余两腿。
+    if (
+        capability != "consumer"
+        and consumer_running is not None
+        and not consumer_running.wait(timeout=consumer_wait_seconds())
+    ):
+        raise ValueError("consumer capacity run did not start")
     target = local_trial(
         root,
         staged["request"]["target"],
@@ -105,6 +130,16 @@ def business_run(root, staged, spec, capability):
         },
         control=True,
     )
+    # consumer-start 只把作业排进执行器；临时应用导入/发布与意图分类都发生在
+    # 被测 run 落库之前（ConsumerTrial.execute）。窗口起点是那个 run 的创建时刻，
+    # 所以放行信号必须取自窗口本身，不能取自 consumer-start 返回。
+    if consumer_running is not None:
+        window_end = time.monotonic() + 150
+        while not consumer_probe(root, started["trial_id"]):
+            if time.monotonic() > window_end:
+                raise ValueError("consumer capacity run did not start")
+            time.sleep(2)
+        consumer_running.set()
     end = time.monotonic() + 200
     while True:
         result = local_trial(
@@ -193,11 +228,19 @@ def run(root, staged, spec, reference):
     ):
         raise ValueError("matching actual upgrade overlap evidence required")
     samples = []
+    consumer_running = threading.Event()
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = [
-            pool.submit(business_run, root, staged, spec, cap) for cap in ("consumer", "offline", "order")
+        consumer_future = pool.submit(
+            business_run, root, staged, spec, "consumer", consumer_running=consumer_running
+        )
+        futures = [consumer_future] + [
+            pool.submit(business_run, root, staged, spec, cap, consumer_running=consumer_running)
+            for cap in ("offline", "order")
         ]
         while not all(f.done() for f in futures):
+            # consumer 在 set 之前失败时不能让其余两腿空等；失败经 f.result() 上抛。
+            if consumer_future.done() and not consumer_running.is_set():
+                consumer_running.set()
             samples.append(sample(root, hosts))
             time.sleep(2)
         outcomes = [f.result() for f in futures]
