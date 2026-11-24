@@ -774,16 +774,21 @@ def test_worker_registration_remote_absent_gains_evidence_only_on_intent_probe(
     result = worker.installation_run(tmp_path, request, identifier, owner, registration=True)
     assert result["result"] == "absent"
     assert ("remote_intent" in result) is intent_absent
+    # 意图未证缺席时补核登记资产（替身 run 返回退出码 0=在场）。
+    assert ("remote_assets" in result) is not intent_absent
     assert completed and ("remote_intent" in completed[0]) is intent_absent
+    assert ("remote_assets" in completed[0]) is not intent_absent
 
 
 @pytest.mark.parametrize("assets", ["present", "absent"])
-def test_cancelled_unknown_registration_exits_on_remote_asset_evidence(installed, assets):
+@pytest.mark.parametrize("verdict", ["unconfirmed", "absent"])
+def test_cancelled_unknown_registration_exits_on_remote_asset_evidence(installed, assets, verdict):
     """已取消的未知登记凭远端资产事实终态化。
 
     登记资产（工作区与双端应用）在同一事务落盘：在场=原登记已提交，
     缺席=除意图文件外零写。两方向对已取消任务都是可证有界的副作用，
-    不再为无法判决的远端观察永占互斥。
+    不再为无法判决的远端观察永占互斥。意图在场时正常回报的 absent
+    走同一条证据出口。
     """
     state, source, _ = installed
     _, identifier, stage = _unknown_registration(installed, cancelled=True)
@@ -794,7 +799,7 @@ def test_cancelled_unknown_registration_exits_on_remote_asset_evidence(installed
         tenant_id="same",
         scope="inactive-runtime-registration-only",
         state="reconcile",
-        result="unconfirmed",
+        result=verdict,
         executable=False,
         activated=False,
         business_acceptance=False,
@@ -820,11 +825,10 @@ def test_cancelled_unknown_registration_exits_on_remote_asset_evidence(installed
         assert response.status_code == status, response.text
         return response
 
-    # 无资产证据不终态化；remote_assets 只允许与 unconfirmed 同现且取值封闭。
+    # 无资产证据不终态化；remote_assets 只允许与不可判结果同现且取值封闭。
     without = {k: v for k, v in result.items() if k != "remote_assets"}
     assert complete(without).json()["state"] == "reconcile"
     complete({**result, "remote_assets": "unknown"}, status=409)
-    complete({**result, "result": "absent"}, status=409)
     complete({**result, "state": "observed", "result": "unchanged"}, status=409)
     assert complete(result).json()["state"] == "cancelled"
     # 终态化释放互斥：新计划可重交同一登记。

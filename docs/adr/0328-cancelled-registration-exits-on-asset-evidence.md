@@ -29,11 +29,12 @@
   `registration_assets_present` 只读探针（与 `registration_intent_absent`
   同契约：dev-host exec、环境锁内只读、退出码协议 0=在场/7=缺席/其余未知），
   探针答出时在 `unconfirmed` 结果上附 `remote_assets: present|absent`；
-  答不出则不带字段——未知不假装成缺席。
-- 中央 `complete` 形状闸放行 `remote_assets`（仅允许与 `unconfirmed`
-  同现、取值封闭）；终态规则新增一条：`cancel=1` 且 `remote_assets`
-  已知 → `cancelled`。未取消任务不因此放行——资产在场只证「原登记已
-  提交」，不证本冻结目标登记的 verdict，互斥继续保持。
+  答不出则不带字段——未知不假装成缺席。正常回报 `absent` 而意图缺席
+  不可证的路径同样先核资产再回报。
+- 中央 `complete` 形状闸放行 `remote_assets`（仅允许与
+  `absent`/`unconfirmed` 同现、取值封闭）；终态规则新增一条：`cancel=1`
+  且 `remote_assets` 已知 → `cancelled`。未取消任务不因此放行——资产
+  在场只证「原登记已提交」，不证本冻结目标登记的 verdict，互斥继续保持。
 
 被否方案：给 checking 加时间窗自动终态化——时间流逝不证明远端零副作用
 （COORDINATION-REGISTRATION 明确拒绝）；转发远端 stderr 判失败类型——

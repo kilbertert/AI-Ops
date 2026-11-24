@@ -468,9 +468,10 @@ def registration_intent_absent(root, host, environment, identifier):
 def registration_assets_present(root, host, environment, tenant):
     """远端登记资产是否已提交（只读核对）；None=读不出，按未知处理。
 
-    register_runtime 在同一事务里写工作区与双端应用，原子落盘：任一资产行
-    在场即「原登记已提交」，全缺即「提交未发生」——已派发登记任务的远端
-    副作用只剩意图文件本身。与 registration_intent_absent 同契约：环境锁内
+    register_runtime 在单事务里写工作区与双端应用，部分登记先被拒
+    （SETUP_PARTIAL_REGISTRATION）再整体回滚——任一资产行在场即「某次
+    登记已成套提交」，全缺即「提交未发生」；已派发登记任务的远端副作用
+    只剩意图文件本身。与 registration_intent_absent 同契约：环境锁内
     只读，7=缺席、0=在场，其余（含传输失败、锁占）一律收敛到未知。
     """
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", tenant):
@@ -746,6 +747,12 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                 and registration_intent_absent(root, host, staged["environment"], identifier)
             ):
                 result["remote_intent"] = "absent"
+            elif registration and result.get("result") == "absent":
+                # 意图在场（含探针读不出时收敛到在场）时，正常回报的 absent
+                # 同样核登记资产：单事务原子落盘，缺席即除意图文件外零写。
+                assets = registration_assets_present(root, host, staged["environment"], staged["tenant_id"])
+                if assets is not None:
+                    result["remote_assets"] = "present" if assets else "absent"
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tarfile.TarError):
         # 登记意图缺席证明登记步从未越过首写：已派发任务凭此安全终态化，
         # 否则 observe-only 无法重放登记、reconcile 会永远占住互斥。

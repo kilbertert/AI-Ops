@@ -164,11 +164,12 @@ def dispatch(context, payload):
                 or result.get("remote_intent", "absent") != "absent"
                 or "remote_intent" in result
                 and result["result"] != "absent"
-                # remote_assets 是登记资产的远端只读证据，只允许与
-                # unconfirmed 同现：可判结果不需要它，它也不假装成结果。
+                # remote_assets 是登记资产的远端只读证据，只随「不可判」结果
+                # （absent/unconfirmed）同现：可判结果不需要它，它也不假装成结果。
                 or "remote_assets" in result
                 and (
-                    result["result"] != "unconfirmed" or result["remote_assets"] not in {"present", "absent"}
+                    result["result"] not in ("unconfirmed", "absent")
+                    or result["remote_assets"] not in {"present", "absent"}
                 )
             ):
                 raise tasks.TaskRefused("ENVIRONMENT_TASK_RESULT_INVALID")
