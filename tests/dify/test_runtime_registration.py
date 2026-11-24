@@ -180,6 +180,52 @@ def test_registration_rejects_formal_binding(candidate):
     assert rows(candidate) == before
 
 
+def _bind(candidate, state):
+    with candidate[0].connection() as db:
+        db.execute(
+            "INSERT INTO chat_route_bindings(environment,tenant_id,entry,scenario,engine,"
+            "agent_id,agent_version_no,app_id,workflow_id,workflow_key_ref,state,revision,"
+            "updated_by,updated_at,node_config_file) "
+            "VALUES('target','same','operator','operator_order_diagnosis','node','agt_x',1,"
+            "'operator-target','','',?,2,'fixture','2026-01-01T00:00:00Z','')",
+            (state,),
+        )
+
+
+def test_retracted_binding_and_own_registry_row_are_own_lineage_not_conflict(candidate):
+    # 发布血统留下的两行都不算占用：撤回绑定按设计留行，注册表行是发布激活写的
+    # 本租户同应用绑定。已发布租户必须还能再登记/再观察。
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
+
+    store, registration, consumer = candidate
+    register(candidate)
+    _bind(candidate, "retracted")
+    DifyAppRegistry(store.path).put(
+        DifyAppBinding("same", "operator", registration["operator_app_id"], "old")
+    )
+    assert register(candidate) is False
+    assert store.register_runtime(registration, consumer, verify=lambda: None, observe_only=True) is False
+
+
+def test_active_binding_and_foreign_registry_claim_still_conflict(candidate):
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
+
+    store, registration, _ = candidate
+    register(candidate)
+    _bind(candidate, "active")
+    with pytest.raises(SetupConflict):
+        register(candidate)
+    with store.connection() as db:
+        db.execute("DELETE FROM chat_route_bindings")
+    DifyAppRegistry(store.path).put(
+        DifyAppBinding("other", "operator", registration["consumer_app_id"], "old")
+    )
+    before = rows(candidate)
+    with pytest.raises(SetupConflict):
+        register(candidate)
+    assert rows(candidate) == before
+
+
 def test_concurrent_registration_has_one_commit_and_one_unchanged_receipt(candidate):
     from concurrent.futures import ThreadPoolExecutor
 

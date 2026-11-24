@@ -360,13 +360,25 @@ class SelfServiceStore:
             ):
                 raise SetupConflict("SETUP_WORKSPACE_CONFLICT")
             if (
+                # 撤回的绑定按设计留行，不算占用；只看仍生效的绑定。
                 db.execute(
-                    "SELECT 1 FROM chat_route_bindings WHERE environment=? AND tenant_id=?",
+                    "SELECT 1 FROM chat_route_bindings WHERE environment=? AND tenant_id=? "
+                    "AND state != 'retracted'",
                     (environment, tenant),
                 ).fetchone()
+                # 本租户已正式绑定其它应用、或本候选应用被外租户占用才是冲突；
+                # 同租户同应用（发布血统自留行）不算冲突。
                 or db.execute(
-                    "SELECT 1 FROM dify_app_registry WHERE tenant_id=? OR app_id IN (?,?)",
-                    (tenant, registration["operator_app_id"], registration["consumer_app_id"]),
+                    "SELECT 1 FROM dify_app_registry WHERE "
+                    "(tenant_id=? AND app_id NOT IN (?,?)) OR (tenant_id!=? AND app_id IN (?,?))",
+                    (
+                        tenant,
+                        registration["operator_app_id"],
+                        registration["consumer_app_id"],
+                        tenant,
+                        registration["operator_app_id"],
+                        registration["consumer_app_id"],
+                    ),
                 ).fetchone()
             ):
                 raise SetupConflict("SETUP_ROUTE_CONFLICT")
