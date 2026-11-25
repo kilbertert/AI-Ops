@@ -31,9 +31,11 @@ from aiops_diagnostics.gateway.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, T
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 RUNTIME = "gateway/gateway_runtime.py"
+CHAT_RUNNER = "gateway/chat_job_runner.py"
+TRIAL_RUNNER = "gateway/trial_job_runner.py"
 HEALTH_RUNNER = "health/health_job_runner.py"
 OPS_RUNNER = "operator/ops_analysis_runner.py"
-WORKER_MODULES = (RUNTIME, HEALTH_RUNNER, OPS_RUNNER)
+WORKER_MODULES = (RUNTIME, CHAT_RUNNER, TRIAL_RUNNER, HEALTH_RUNNER, OPS_RUNNER)
 #: The two update paths that end a job, and the claim their guards enforce.
 TERMINAL_UPDATES = ("update_health_job", "update_standard_diagnosis")
 #: Statuses that end a job: a write with one of these closes the row.

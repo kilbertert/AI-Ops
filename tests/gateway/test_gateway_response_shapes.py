@@ -52,6 +52,17 @@ def _dict_literals(function: ast.AST) -> list[ast.Dict]:
     return [node for node in ast.walk(function) if isinstance(node, ast.Dict)]
 
 
+def _has_qa_type_entry(body: ast.Dict) -> bool:
+    """用 AST 键值常量判定字典字面量是否包含 `type="qa"`，不依赖引号样式。"""
+    return any(
+        isinstance(key, ast.Constant)
+        and key.value == "type"
+        and isinstance(value, ast.Constant)
+        and value.value == "qa"
+        for key, value in zip(body.keys, body.values, strict=True)
+    )
+
+
 def test_the_202_body_is_built_through_the_one_helper() -> None:
     """No handler writes an assistant-question 202 body by hand.
 
@@ -70,7 +81,7 @@ def test_the_202_body_is_built_through_the_one_helper() -> None:
                 continue
             for body in _dict_literals(node):
                 keys = {key.value for key in body.keys if isinstance(key, ast.Constant)}
-                if '"type": "qa"' in ast.unparse(body) and "qa_id" in keys:
+                if _has_qa_type_entry(body) and "qa_id" in keys:
                     offenders.append(f"{rel}:{body.lineno} {node.name} hand-builds a qa body")
     assert offenders == [], "; ".join(offenders)
 
@@ -81,7 +92,12 @@ def test_the_helper_is_the_only_place_that_names_the_qa_kind() -> None:
     The string is the wire contract's discriminator; a second literal is how a
     branch starts growing its own idea of what the body is.
     """
-    count = sum(path.read_text(encoding="utf-8").count(INLINE_QA_SHAPE_MARKER) for path in _api_paths())
+    count = sum(
+        1
+        for path in _api_paths()
+        for body in _dict_literals(ast.parse(path.read_text(encoding="utf-8")))
+        if _has_qa_type_entry(body)
+    )
     assert count == 1, (
         f"{INLINE_QA_SHAPE_MARKER} appears {count} times across gateway API and routers;"
         " the qa body is being written out by hand again"
