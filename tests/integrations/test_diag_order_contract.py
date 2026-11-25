@@ -6,7 +6,7 @@ observable contract of the checked-in Java source artifact that lands in the
 team repository: routing, header self-validation, response envelope, query
 bounds, fee-template fields and audit behaviour. They are static contract
 guards, not a substitute for deploying the service and running the Gherkin
-acceptance scenarios in `docs/archive/diag-query-api-plan.md`.
+acceptance scenarios in Git `57c1d788:docs/archive/diag-query-api-plan.md`.
 """
 
 from __future__ import annotations

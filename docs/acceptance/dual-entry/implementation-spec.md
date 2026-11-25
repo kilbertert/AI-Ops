@@ -1,8 +1,7 @@
 # 客户双端 AI 服务开通与自主管理：实施规格
 
 日期：2026-10-30。状态：实施规格（不是已上线声明）。
-来源规划：[docs/agents/dual-entry-onboarding-plan.md](../../agents/dual-entry-onboarding-plan.md)（只读追溯，不改写）。
-任务书：[docs/agents/dual-entry-claude-task.md](../../agents/dual-entry-claude-task.md)。
+来源规划与早期任务书已由本规格与 `docs/adr/0189-dual-entry-onboarding-is-a-managed-catalogue.md` 定型承接（历史原稿见 Git `57c1d788:docs/agents/dual-entry-{onboarding-plan,claude-task}.md`）。
 验收合同：[acceptance.feature](acceptance.feature)；执行映射：[qa-plan.md](qa-plan.md)；
 子任务与依赖：[tasks.md](tasks.md)。
 
