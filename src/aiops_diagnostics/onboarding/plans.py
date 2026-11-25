@@ -17,7 +17,12 @@ from pathlib import Path
 from aiops_diagnostics.common.private_files import validate_private_directory, validate_private_file
 from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.onboarding import drafts, projection, registry
-from aiops_diagnostics.onboarding.artifacts import installer_manifest, manifest
+from aiops_diagnostics.onboarding.artifacts import (
+    _installer_manifest_from_verified_stream,
+    _manifest_from_verified_stream,
+    installer_manifest,
+    manifest,
+)
 
 
 class PlanRefused(ValueError):
@@ -428,42 +433,56 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
         config = next(c for c in target["configurations"] if c["id"] == proposed["credential_ref"])
         reference = {**{k: v for k, v in target.items() if k != "configurations"}, "configuration": config}
         checks.append({"id": "references", "state": "passed"})
+        embedded = {}
+        content_checks = {}
         for key, limit in (
             ("application", 512 * 1024**2),
             ("installer", 8 * 1024**2),
             ("configuration", 1048576),
         ):
+            value = reference[key]
             try:
-                observed[key], matched = _file_check(reference[key], limit)
-                checks.append({"id": key, "state": "passed" if matched else "blocked"})
+                checked_path = _private(value["path"])
+                with checked_path.open("rb") as stream:
+                    if os.fstat(stream.fileno()).st_size > limit:
+                        raise ValueError("file too large")
+                    actual = hashlib.file_digest(stream, "sha256").hexdigest()
+                    observed[key] = actual
+                    matched = actual == value["sha256"]
+                    checks.append({"id": key, "state": "passed" if matched else "blocked"})
+                    if key in ("application", "installer"):
+                        if not matched:
+                            content_checks[key] = "blocked"
+                        else:
+                            try:
+                                embedded[key] = (
+                                    _manifest_from_verified_stream(stream, actual, target["python"])[
+                                        "revision"
+                                    ]
+                                    if key == "application"
+                                    else _installer_manifest_from_verified_stream(stream, actual)
+                                )
+                                content_checks[key] = "passed"
+                            except (
+                                ValueError,
+                                OSError,
+                                RuntimeError,
+                                tarfile.TarError,
+                                EOFError,
+                                zlib.error,
+                                TypeError,
+                                KeyError,
+                            ):
+                                content_checks[key] = "blocked"
             except (ValueError, OSError, RuntimeError) as exc:
                 observed[key] = type(exc).__name__
                 checks.append({"id": key, "state": "blocked"})
+                if key in ("application", "installer"):
+                    content_checks[key] = "blocked"
         same = target["application"]["revision"] == target["installer"]["revision"]
         checks.append({"id": "declared-revision", "state": "passed" if same else "blocked"})
-        embedded = {}
         for key in ("application", "installer"):
-            value = reference[key]
-            try:
-                if observed.get(key) != value["sha256"]:
-                    raise ValueError("file integrity not confirmed")
-                embedded[key] = (
-                    manifest(Path(value["path"]), value["sha256"], target["python"])["revision"]
-                    if key == "application"
-                    else installer_manifest(Path(value["path"]), value["sha256"])
-                )
-                checks.append({"id": key + "-contents", "state": "passed"})
-            except (
-                ValueError,
-                OSError,
-                RuntimeError,
-                tarfile.TarError,
-                EOFError,
-                zlib.error,
-                TypeError,
-                KeyError,
-            ):
-                checks.append({"id": key + "-contents", "state": "blocked"})
+            checks.append({"id": key + "-contents", "state": content_checks.get(key, "blocked")})
         matches = same and all(
             embedded.get(key) == reference[key]["revision"] for key in ("application", "installer")
         )

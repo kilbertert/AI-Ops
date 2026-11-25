@@ -402,18 +402,25 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
             result = _public(row)
             if result["state"] in {"observed", "blocked"} and result["action"] != "environment-publish":
                 request = json.loads(row["request"])
-                try:
-                    plan = request["plan"]
+                cache_key = None
+                plan = request.get("plan") if isinstance(request, dict) else None
+                raw_identity = request.get("identity") if isinstance(request, dict) else None
+                if (
+                    isinstance(plan, dict)
+                    and isinstance(raw_identity, (list, tuple))
+                    and all(isinstance(part, str) for part in raw_identity)
+                    and isinstance(plan.get("environment"), str)
+                    and type(plan.get("draft_revision")) is int
+                    and type(plan.get("registry_revision")) is int
+                    and isinstance(plan.get("digest"), str)
+                ):
                     cache_key = (
-                        tuple(request["identity"]),
+                        tuple(raw_identity),
                         plan["environment"],
                         plan["draft_revision"],
                         plan["registry_revision"],
                         plan["digest"],
                     )
-                    hash(cache_key)
-                except (KeyError, TypeError, ValueError):
-                    cache_key = None
                 if cache_key is not None and cache_key in current_cache:
                     if not current_cache[cache_key]:
                         result["state"] = "expired"

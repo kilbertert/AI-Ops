@@ -36,24 +36,13 @@ def regular(path):
     return path
 
 
-def manifest(archive, digest, python_minor):
-    regular(archive)
-    if archive.stat().st_size > 512 * 1024 * 1024:
-        raise ValueError("archive too large")
-    if (
-        not isinstance(digest, str)
-        or not re.fullmatch(r"[a-f0-9]{64}", digest)
-        or not isinstance(python_minor, str)
-    ):
-        raise ValueError("archive digest mismatch")
-    with archive.open("rb") as stream:
-        if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
-            raise ValueError("archive digest mismatch")
+def _manifest_from_verified_stream(stream, digest, python_minor):
     cache_key = (digest, python_minor)
     cached = _cache_get(_MANIFEST_CACHE, cache_key)
     if cached is not None:
         return dict(cached)
-    with tarfile.open(archive) as bundle:
+    stream.seek(0)
+    with tarfile.open(fileobj=stream) as bundle:
         members = bundle.getmembers()
         if len(members) > 101 or sum(m.size for m in members) > 512 * 1024 * 1024:
             raise ValueError("artifact too large")
@@ -89,8 +78,8 @@ def manifest(archive, digest, python_minor):
         if set(checks) != set(files) - {"SHA256SUMS"}:
             raise ValueError("artifact file set mismatch")
         for name, sha in checks.items():
-            with bundle.extractfile(files[name]) as stream:
-                if hashlib.file_digest(stream, "sha256").hexdigest() != sha:
+            with bundle.extractfile(files[name]) as member_stream:
+                if hashlib.file_digest(member_stream, "sha256").hexdigest() != sha:
                     raise ValueError("artifact member mismatch")
         body = json.load(bundle.extractfile(files["manifest.json"]))
         if (
@@ -110,19 +99,28 @@ def manifest(archive, digest, python_minor):
         return dict(body)
 
 
-def installer_manifest(archive, digest):
+def manifest(archive, digest, python_minor):
     regular(archive)
-    if archive.stat().st_size > 8 * 1024**2:
-        raise ValueError("installer too large")
-    if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
-        raise ValueError("installer digest mismatch")
+    if archive.stat().st_size > 512 * 1024 * 1024:
+        raise ValueError("archive too large")
+    if (
+        not isinstance(digest, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        or not isinstance(python_minor, str)
+    ):
+        raise ValueError("archive digest mismatch")
     with archive.open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
-            raise ValueError("installer digest mismatch")
+            raise ValueError("archive digest mismatch")
+        return _manifest_from_verified_stream(stream, digest, python_minor)
+
+
+def _installer_manifest_from_verified_stream(stream, digest):
     cached = _cache_get(_INSTALLER_CACHE, digest)
     if cached is not None:
         return cached
-    with tarfile.open(archive) as bundle:
+    stream.seek(0)
+    with tarfile.open(fileobj=stream) as bundle:
         files = {}
         size = 0
         for index, member in enumerate(bundle):
@@ -168,6 +166,18 @@ def installer_manifest(archive, digest):
             raise ValueError("invalid installer revision")
         _cache_put(_INSTALLER_CACHE, digest, revision)
         return revision
+
+
+def installer_manifest(archive, digest):
+    regular(archive)
+    if archive.stat().st_size > 8 * 1024**2:
+        raise ValueError("installer too large")
+    if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ValueError("installer digest mismatch")
+    with archive.open("rb") as stream:
+        if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+            raise ValueError("installer digest mismatch")
+        return _installer_manifest_from_verified_stream(stream, digest)
 
 
 def candidate_files(archive, digest, environment):
