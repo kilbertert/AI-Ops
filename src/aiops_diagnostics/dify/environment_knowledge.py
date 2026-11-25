@@ -71,7 +71,12 @@ def run(context, path, reference, payload):
             raise SetupRefused("SETUP_WORKSPACE_PENDING")
         stored = context.store.get_ragflow_tenant(tenant, environment)
         expected = derive_email(knowledge_tenant(tenant, environment), domain=settings.ragflow_tenant_domain)
-        if stored and stored["ragflow_email"] != expected and not resources.get("knowledge_base_id"):
+        if (
+            stored
+            and stored["ragflow_email"] != expected
+            and not resources.get("knowledge_base_id")
+            and not resources.get("knowledge_create", {}).get("attempted")
+        ):
             # 旧owner的库须由受控迁移明确登记，不能以新空库替代旧业务资料。
             raise SetupRefused("SETUP_KNOWLEDGE_SCOPE_MISMATCH")
         pending = resources.get("knowledge_create", {})
