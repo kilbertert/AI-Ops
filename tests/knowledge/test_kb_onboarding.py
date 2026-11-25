@@ -815,7 +815,6 @@ def test_migrated_owner_can_finish_preparation_without_new_account(tmp_path, kb_
         store.get_ragflow_tenant(TENANT, ENVIRONMENT)["credential_ciphertext"]
         == before["credential_ciphertext"]
     )
-    registration = next(c for c in kb_service.calls if c["path"] == "/kb/tenants")
-    assert registration["body"]["email"] == before["ragflow_email"]
-    assert registration["body"]["biz_tenant_id"] == knowledge_tenant(TENANT, ENVIRONMENT)
+    assert "/kb/tenants" not in kb_service.paths(), "migrated account must not re-register"
+    assert all(c["tenant"] == knowledge_tenant(TENANT, ENVIRONMENT) for c in kb_service.calls)
     assert "/kb/tenants/rotate" not in kb_service.paths()
