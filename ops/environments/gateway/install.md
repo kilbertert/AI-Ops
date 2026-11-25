@@ -42,7 +42,7 @@ python3 <已核验安装器>/install.py install --environment <环境> --user <�
 固定单位`aiops-access-<环境>.service`，代码`/opt/aiops-access-<环境>`，配置`/etc/aiops-access-<环境>`，
 状态`/var/lib/aiops-access-<环境>`，冷失败资料`/var/backups/aiops-access-<环境>`。
 首次拒绝任何同名既有路径/单位；不猜测或收养历史实例。同计划重跑验证现役版本后返回unchanged，不重启。
-升级要求相同Python小版本、同schema、零在飞任务；默认仍要求相同配置摘要。
+升级要求相同Python小版本、零在飞任务；同schema升级直接复核现役库，若新制品版本高于现役已知旧schema（`gateway_schema.VERSION` 前向升级），安装器先在独立候选目录用 `.backup()` 副本完成演练，停服后落地由 root 持有的校验备份并记录进 `pending.json`，再以服务身份单事务迁移；降级与未知漂移一律拒绝。默认仍要求相同配置摘要。
 更换配置须显式传`--expected-config-sha256 <当前已安装配置摘要>`，与当前文件及账本同时核对。
 新配置先保存为本次制品的0600快照，候选只读新快照，现役文件在候选通过前保持不变。
 候选用systemd只读绑定挂载维持正式配置路径，支持登记表config_ref校验；仅候选命名空间看到新快照。
@@ -107,7 +107,9 @@ python3 <同版已核验安装器>/install.py recover --environment <环境> --u
 ```
 
 准备失败时原实例继续；切换失败时仅停止本安装器的自有单位，恢复旧制品并读回旧版本。
-状态不被旧快照覆盖，备份保留；schema或配置漂移、停止未确认、旧版本不健康时保留pending并明确失败。
+同schema升级的状态不被旧快照覆盖，备份保留；前向schema升级失败回滚时先留存失败库副本，
+仅当 `pre-schema-gateway.db` 摘要与 `pending.json` 一致且版本匹配时恢复停服备份并复核旧版schema；
+schema或配置漂移、停止未确认、旧版本不健康时保留pending并明确失败。
 冷失败将自有状态/配置/代码根移到新备份目录，不删业务证据；修复原因后可重新冷安装。
 已成功安装不提供隐式卸载；退役须先观察实际流量，按独立任务授权处理。
 
@@ -131,7 +133,7 @@ uv run pytest tests/tooling/test_gateway_install.py tests/tooling/test_gateway_c
 ```
 
 本地以真实文件与SQLite、主机命令替身证明恢复边界；systemd、权限、网络namespace与真实版本读回须目标现场验证。
-预检和安装器只处理自有资产，不承担公司API修复、业务网络开通、跨schema升级、上游凭据签发/撤销或高可用切换。
+预检和安装器只处理自有资产，不承担公司API修复、业务网络开通、跨schema降级或未知漂移修复、上游凭据签发/撤销或高可用切换。
 
 基础现场演练只在本轮新建、空业务配置、没有接入流量的自有实例上执行。开始前保存旧Gateway的
 `MainPID`、启动时间、health及已有容器身份快照；结束逐项比较，不将其他并行变更归因于安装器。

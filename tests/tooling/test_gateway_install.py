@@ -1459,3 +1459,186 @@ def test_system_python_executes_only_the_verified_resolved_target(tmp_path):
     owned.chmod(0o755)
     with pytest.raises(ValueError, match="interpreter location"):
         probe.system_python(str(owned), roots=(str(writable_bin),), owner=os.getuid(), run=lambda *a: "3.12")
+
+
+def _seed_legacy_v2_database(db_path: Path) -> None:
+    """Create a real migratable v2 Gateway SQLite database with one existing row."""
+    import sqlite3
+
+    from aiops_diagnostics.gateway import gateway_schema
+
+    gateway_schema.startup(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO conversations "
+            "(conversation_id, scope_fingerprint, business_entry, agent_version_key, "
+            "created_at, updated_at, expires_at) "
+            "VALUES ('conv_legacy_1', 'fp_1', 'operator', 'v1', "
+            "'2026-11-25T00:00:00Z', '2026-11-25T00:00:00Z', '2026-11-26T00:00:00Z')"
+        )
+        for table in ("assistant_files", "assistant_qa_events", "assistant_feedback"):
+            conn.execute(f'DROP TABLE "{table}"')
+        conn.execute("PRAGMA user_version = 2")
+
+
+def test_runtime_check_rehearses_backups_and_migrates_forward_schema(tmp_path):
+    import sqlite3
+
+    from aiops_diagnostics.gateway import gateway_schema
+
+    ns = runpy.run_path(str(ROOT / "ops/environments/gateway/runtime_check.py"))
+    cfg = tmp_path / "input.env"
+    cfg.write_text("# empty\n")
+    db = tmp_path / "gateway/gateway.db"
+    _seed_legacy_v2_database(db)
+    before = db.read_bytes()
+
+    with pytest.raises(ValueError, match="schema migration requires separate delivery"):
+        ns["check"](cfg, tmp_path, "test", existing=True)
+
+    report = ns["check"](cfg, tmp_path, "test", existing=True, allow_schema_upgrade=True)
+    assert report["version"] == 2 and report["current_version"] == gateway_schema.VERSION
+
+    rehearsal_backup = tmp_path / "trial/rehearsal.db"
+    rehearsal_backup.parent.mkdir(mode=0o700)
+    rehearsed = ns["rehearse_upgrade"](cfg, tmp_path, "test", rehearsal_backup)
+    assert rehearsed["rehearsed"] is True and rehearsed["to_version"] == gateway_schema.VERSION
+    assert db.read_bytes() == before
+
+    snap = tmp_path / "snap/pre-schema-gateway.db"
+    snap.parent.mkdir(mode=0o700)
+    backed = ns["backup_database"](cfg, tmp_path, "test", snap)
+    assert backed["version"] == 2 and backed["backup_sha256"] == install.digest(snap)
+
+    migrated = ns["migrate_database"](cfg, tmp_path, "test")
+    assert migrated["migrated"] is True and migrated["to_version"] == gateway_schema.VERSION
+    assert ns["read_database_version"](tmp_path) == {"version": gateway_schema.VERSION}
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT conversation_id FROM conversations").fetchall() == [("conv_legacy_1",)]
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='assistant_files'"
+        ).fetchone() == ("assistant_files",)
+
+
+def test_forward_schema_upgrade_succeeds_and_rolls_back_on_health_failure(host, monkeypatch):
+    import sqlite3
+
+    from aiops_diagnostics.gateway import gateway_schema
+
+    ns = runpy.run_path(str(ROOT / "ops/environments/gateway/runtime_check.py"))
+    apply(host)
+    inst, _, _, _, _, active = host
+    old_link = (inst.root / "current").readlink()
+    db = inst.state / "gateway/gateway.db"
+    _seed_legacy_v2_database(db)
+
+    events = []
+    inject_stale_wal = [True]
+
+    def real_runtime_check(release, mode, *extra):
+        events.append((release.name, mode))
+        cfg = inst.config / "production.env"
+        if mode == "existing":
+            # Old release strictly expects v2 when invoked during preflight or recover()
+            if release.name == old_link.name:
+                if any(m == "migrate" for _, m in events):
+                    assert not (inst.state / "gateway/gateway.db-wal").exists()
+                    assert not (inst.state / "gateway/gateway.db-shm").exists()
+                ver = ns["read_database_version"](inst.state)["version"]
+                if ver != 2:
+                    raise ValueError(f"old release expects v2, got {ver}")
+                return {"version": 2, "current_version": 2}
+            return ns["check"](cfg, inst.state, inst.environment, existing=True)
+        if mode == "upgrade-check":
+            return ns["check"](cfg, inst.state, inst.environment, existing=True, allow_schema_upgrade=True)
+        if mode == "rehearse":
+            return ns["rehearse_upgrade"](cfg, inst.state, inst.environment, Path(extra[0]))
+        if mode == "backup":
+            return ns["backup_database"](cfg, inst.state, inst.environment, Path(extra[0]))
+        if mode == "migrate":
+            res = ns["migrate_database"](cfg, inst.state, inst.environment)
+            # Simulate WAL/SHM sidecars written before injected failure in rollback subtest
+            if inject_stale_wal[0]:
+                (inst.state / "gateway/gateway.db-wal").write_bytes(b"stale-wal")
+                (inst.state / "gateway/gateway.db-shm").write_bytes(b"stale-shm")
+            return res
+        if mode == "version":
+            return ns["read_database_version"](inst.state)
+        raise AssertionError(f"unexpected mode: {mode}")
+
+    monkeypatch.setattr(inst, "_run_runtime_check", real_runtime_check)
+    monkeypatch.setattr(
+        inst, "check_database", install.Installer.check_database.__get__(inst, install.Installer)
+    )
+
+    real_health = inst.health
+
+    def fail_after_switch(version, **kw):
+        if version.startswith("1.0.1") and not kw.get("port"):
+            raise RuntimeError("injected post-migration start failure")
+        return real_health(version, **kw)
+
+    monkeypatch.setattr(inst, "health", fail_after_switch)
+    with pytest.raises(RuntimeError, match="post-migration"):
+        apply(next_bundle(host))
+
+    # Rolled back cleanly to old v2 DB + old release + archived failed v3 DB
+    assert (inst.root / "current").readlink() == old_link
+    assert inst.name in active
+    assert not (inst.root / "pending.json").exists()
+    archived_wal = list((inst.root / "releases").glob("*/failed-schema-*/gateway.db-wal"))
+    assert len(archived_wal) == 1 and archived_wal[0].read_bytes() == b"stale-wal"
+    assert len(list((inst.root / "releases").glob("*/failed-schema-*/gateway.db"))) == 1
+    assert ns["read_database_version"](inst.state) == {"version": 2}
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT conversation_id FROM conversations").fetchall() == [("conv_legacy_1",)]
+
+    # Clear injected failure and perform clean forward upgrade v2 -> v3
+    inject_stale_wal[0] = False
+    monkeypatch.setattr(inst, "health", real_health)
+    events.clear()
+    res = apply(next_bundle(host))
+    assert res["result"] == "installed" and res["version"] == "1.0.1+" + "b" * 12
+    assert not (inst.root / "pending.json").exists()
+    assert ns["read_database_version"](inst.state) == {"version": gateway_schema.VERSION}
+    modes = [m for _, m in events]
+    assert modes == ["existing", "upgrade-check", "rehearse", "upgrade-check", "backup", "migrate"]
+    assert (inst.root / "current/pre-schema-gateway.db").is_file()
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT conversation_id FROM conversations").fetchall() == [("conv_legacy_1",)]
+
+
+def test_schema_rollback_refuses_tampered_backup_and_preserves_pending(host, monkeypatch):
+    from aiops_diagnostics.gateway import gateway_schema
+
+    ns = runpy.run_path(str(ROOT / "ops/environments/gateway/runtime_check.py"))
+    apply(host)
+    inst, *_ = host
+    old = inst.read_record("installed.json")
+    db = inst.state / "gateway/gateway.db"
+    gateway_schema.startup(db)
+    pending_rel = inst.root / "releases" / old["release"]
+    backup = pending_rel / "pre-schema-gateway.db"
+    backup.write_bytes(b"tampered")
+    backup.chmod(0o600)
+    inst.record(
+        "pending.json",
+        {
+            **old,
+            "previous": old,
+            "phase": "switching",
+            "schema_upgrade": {
+                "from_version": 2,
+                "to_version": gateway_schema.VERSION,
+                "backup_sha256": "0" * 64,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        inst,
+        "_run_runtime_check",
+        lambda release, mode, *extra: ns["read_database_version"](inst.state) if mode == "version" else None,
+    )
+    with pytest.raises(ValueError, match="backup digest mismatch"):
+        inst.recover()
+    assert (inst.root / "pending.json").exists()

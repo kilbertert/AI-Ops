@@ -496,8 +496,8 @@ WantedBy=multi-user.target
         finally:
             os.close(descriptor)
 
-    def check_database(self, release):
-        self.command(
+    def _run_runtime_check(self, release, mode, *extra):
+        raw = self.command(
             "runuser",
             "-u",
             self.user,
@@ -509,8 +509,142 @@ WantedBy=multi-user.target
             str(self.config / "production.env"),
             str(self.state),
             self.environment,
-            "existing",
+            mode,
+            *extra,
         )
+        text = (raw or "").strip()
+        if not text:
+            return None
+        return json.loads(text)
+
+    def check_database(self, release):
+        mode = getattr(self, "_database_check_mode", "existing")
+        return self._run_runtime_check(release, mode)
+
+    def _check_database_for_upgrade(self, release):
+        previous = getattr(self, "_database_check_mode", "existing")
+        self._database_check_mode = "upgrade-check"
+        try:
+            return self.check_database(release)
+        finally:
+            self._database_check_mode = previous
+
+    def rehearse_schema_upgrade(self, release, trial):
+        backup = trial / "pre-schema-rehearsal.db"
+        result = self._run_runtime_check(release, "rehearse", str(backup))
+        if not isinstance(result, dict) or not result.get("rehearsed"):
+            raise ValueError("schema upgrade rehearsal failed")
+        return result
+
+    def backup_schema_database(self, release):
+        staging = release / "schema-staging"
+        if staging.exists() or staging.is_symlink():
+            raise ValueError("schema staging already exists")
+        staging.mkdir(mode=0o700)
+        os.chown(staging, self.account.pw_uid, self.account.pw_gid)
+        staged = staging / "pre-schema-gateway.db"
+        try:
+            result = self._run_runtime_check(release, "backup", str(staged))
+            if not isinstance(result, dict) or not isinstance(result.get("backup_sha256"), str):
+                raise ValueError("schema backup failed")
+            expected_sha = result["backup_sha256"]
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+                raise ValueError("invalid schema backup digest")
+            trusted(staged, owner=self.account.pw_uid, private=True)
+            if digest(staged) != expected_sha:
+                raise ValueError("schema backup digest mismatch")
+            target = release / "pre-schema-gateway.db"
+            if target.exists() or target.is_symlink():
+                raise ValueError("schema backup target already exists")
+            with tempfile.NamedTemporaryFile(dir=release, delete=False) as out:
+                temporary = Path(out.name)
+                with staged.open("rb") as src:
+                    shutil.copyfileobj(src, out)
+                out.flush()
+                os.fsync(out.fileno())
+            temporary.chmod(0o600)
+            temporary.replace(target)
+            descriptor = os.open(release, os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            trusted(target, private=True)
+            if digest(target) != expected_sha:
+                raise ValueError("retained schema backup digest mismatch")
+            return expected_sha
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+
+    def migrate_schema_database(self, release, expected_to_version):
+        result = self._run_runtime_check(release, "migrate")
+        if not isinstance(result, dict) or result.get("to_version") != expected_to_version:
+            raise ValueError("schema migration did not reach expected version")
+        return result
+
+    def restore_schema_database(self, pending):
+        info = pending.get("schema_upgrade")
+        if info is None:
+            return
+        if (
+            not isinstance(info, dict)
+            or set(info) != {"from_version", "to_version", "backup_sha256"}
+            or type(info["from_version"]) is not int
+            or type(info["to_version"]) is not int
+            or not (0 <= info["from_version"] < info["to_version"])
+            or not isinstance(info["backup_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", info["backup_sha256"])
+        ):
+            raise ValueError("invalid pending schema upgrade record")
+        pending_release = self.release(pending)
+        observed = self._run_runtime_check(pending_release, "version")
+        if not isinstance(observed, dict) or type(observed.get("version")) is not int:
+            raise ValueError("unable to observe database schema version for rollback")
+        actual_version = observed["version"]
+        if actual_version == info["from_version"]:
+            return
+        if actual_version != info["to_version"]:
+            raise ValueError("schema drift prevents rollback")
+        backup = pending_release / "pre-schema-gateway.db"
+        trusted(backup, private=True)
+        if digest(backup) != info["backup_sha256"]:
+            raise ValueError("schema rollback backup digest mismatch")
+        db_dir = self.state / "gateway"
+        database = db_dir / "gateway.db"
+        if db_dir.is_symlink() or not db_dir.is_dir():
+            raise ValueError("invalid gateway database directory")
+        probe.regular(database)
+        failed_dir = pending_release / f"failed-schema-{uuid.uuid4().hex[:8]}"
+        failed_dir.mkdir(mode=0o700)
+        for suffix in ("", "-wal", "-shm"):
+            sidecar = db_dir / ("gateway.db" + suffix)
+            if sidecar.is_symlink():
+                raise ValueError("database sidecar symlink refused")
+            if sidecar.exists():
+                shutil.copy2(sidecar, failed_dir / sidecar.name)
+                (failed_dir / sidecar.name).chmod(0o600)
+        with tempfile.NamedTemporaryFile(dir=db_dir, delete=False) as out:
+            temporary = Path(out.name)
+            with backup.open("rb") as src:
+                shutil.copyfileobj(src, out)
+            out.flush()
+            os.fchown(out.fileno(), self.account.pw_uid, self.account.pw_gid)
+            os.fchmod(out.fileno(), 0o600)
+            os.fsync(out.fileno())
+        try:
+            temporary.replace(database)
+        finally:
+            temporary.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            sidecar = db_dir / ("gateway.db" + suffix)
+            if sidecar.exists():
+                sidecar.unlink()
+        descriptor = os.open(db_dir, os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def site_observation(self):
         """仅检查本安装器自有实例；网络/业务验收不是本机就绪检查。"""
@@ -770,6 +904,7 @@ WantedBy=multi-user.target
                     else:
                         target.unlink(missing_ok=True)
                 self.switch_runtime(old)
+                self.restore_schema_database(pending)
                 self.check_database(release)
                 self.check_current(old, pending)
                 self.switch(release)
@@ -1109,8 +1244,9 @@ WantedBy=multi-user.target
             str(release / "venv/bin/pip"),
             "check",
         )
+        db_report = None
         if old:
-            self.check_database(release)
+            db_report = self._check_database_for_upgrade(release)
         trial = self.state / ("trial-" + uuid.uuid4().hex)
         self.record("pending.json", {**desired, "previous": old, "phase": "preparing", "trial": trial.name})
         trial.mkdir(mode=0o700)
@@ -1122,6 +1258,8 @@ WantedBy=multi-user.target
             if row["enabled"] or any(t["enabled"] for t in row["tenants"]):
                 previous_directory = str(self.config / "registry/environment.json")
         try:
+            if old and isinstance(db_report, dict) and db_report["version"] < db_report["current_version"]:
+                self.rehearse_schema_upgrade(release, trial)
             self.command(
                 "runuser",
                 "-u",
@@ -1231,7 +1369,7 @@ WantedBy=multi-user.target
         try:
             if old:
                 self.stop(self.name)
-                self.check_database(release)
+                upgrade_report = self._check_database_for_upgrade(release)
                 if any(p.is_symlink() for p in self.state.rglob("*")):
                     raise ValueError("state symlink prevents backup")
                 shutil.copytree(self.state, release / "state-backup")
@@ -1240,6 +1378,26 @@ WantedBy=multi-user.target
                     raise ValueError("configuration changed before replacement")
                 self.check_registry(old)
                 self.check_runtime(old)
+                if (
+                    isinstance(upgrade_report, dict)
+                    and upgrade_report["version"] < upgrade_report["current_version"]
+                ):
+                    backup_sha = self.backup_schema_database(release)
+                    schema_upgrade = {
+                        "from_version": upgrade_report["version"],
+                        "to_version": upgrade_report["current_version"],
+                        "backup_sha256": backup_sha,
+                    }
+                    self.record(
+                        "pending.json",
+                        {
+                            **desired,
+                            "previous": old,
+                            "phase": "switching",
+                            "schema_upgrade": schema_upgrade,
+                        },
+                    )
+                    self.migrate_schema_database(release, upgrade_report["current_version"])
             write(self.unit, self.unit_text())
             self.unit.chmod(0o644)
             self.config_snapshot(candidate_config, self.config / "production.env", desired["config_sha256"])
