@@ -908,9 +908,9 @@ class SelfService:
         )
         if outcome.action == "refused":
             raise auth.SetupRefused("SETUP_AGENT_UNAVAILABLE")
-        from aiops_diagnostics.gateway import gateway_api
+        from aiops_diagnostics.publication.route_advancement import advance_route_binding
 
-        gateway_api._advance_route_binding(  # noqa: SLF001 - 复用同一条推进路径
+        advance_route_binding(
             self.context,
             outcome,
             binding,
@@ -1014,9 +1014,9 @@ class SelfService:
                     )
                 else:
                     from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
-                    from aiops_diagnostics.gateway import gateway_api
+                    from aiops_diagnostics.publication.route_advancement import advance_route_binding
 
-                    gateway_api._advance_route_binding(  # noqa: SLF001
+                    advance_route_binding(
                         self.context,
                         outcome,
                         DifyAppBinding(row["tenant_id"], "consumer", app_id, row["agent_name"]),

@@ -272,7 +272,7 @@ def test_the_two_readers_give_the_same_answer_on_empty_and_on_unreadable(
 def test_the_admin_config_merge_vocabulary_is_derived_not_handwritten() -> None:
     """``--config`` 能合并哪些键，词表由表派生 —— 手抄一份就是「同一条规则
     两份实现」的起点（上一次就是 10 行手抄词表漏掉新字段）。"""
-    from aiops_diagnostics.admin_cli import _SETTING_FOR
+    from aiops_diagnostics.admin.common import _SETTING_FOR
 
     assert {s.env: n for n, s in SETTING_SOURCES.items() if s.file} == _SETTING_FOR
 
@@ -282,7 +282,7 @@ def test_the_admin_config_merge_honours_presence_and_kinds(
 ) -> None:
     """合并的判据是「进程 env 有没有这个键」：``KEY=`` 的空串也是一个值、不输；
     合并进来的值按字段的 ``kind`` 解析，不写裸字符串进 int 字段。"""
-    from aiops_diagnostics.admin_cli import _settings_with_config_file
+    from aiops_diagnostics.admin.common import _settings_with_config_file
 
     _server_config(tmp_path, monkeypatch, "# empty\n")
     merge = tmp_path / "merge.env"
@@ -304,7 +304,7 @@ def test_the_admin_config_merge_refuses_a_missing_named_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """``--config`` 是显式点名：不存在的路径按 Option A 拒掉，不静默合个空表。"""
-    from aiops_diagnostics.admin_cli import _settings_with_config_file
+    from aiops_diagnostics.admin.common import _settings_with_config_file
 
     _server_config(tmp_path, monkeypatch, "# empty\n")
     ctx = SimpleNamespace(obj={"config_file": tmp_path / "typo.env"})

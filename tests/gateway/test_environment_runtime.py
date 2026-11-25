@@ -12,9 +12,8 @@ from typer.testing import CliRunner
 
 from aiops_diagnostics.admin_cli import admin_app
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.dify import environment_runtime as runtime
-from aiops_diagnostics.gateway import environment_drafts as drafts
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import drafts, runtime
 from aiops_diagnostics.operator import operator_agent, operator_tools
 from gateway.test_candidate_knowledge_connection import connected  # noqa: F401
 from gateway.test_environment_consumer import consumer_app, execute, submit  # noqa: F401
@@ -210,7 +209,7 @@ def test_invalid_wiring_never_leaves_half_artifact(wiring, change):
 
 def test_admin_runtime_entry_uses_same_export_without_secret_output(wiring, monkeypatch):
     settings, payload, node, output, *_ = wiring
-    monkeypatch.setattr("aiops_diagnostics.admin_cli._settings_with_config_file", lambda _: settings)
+    monkeypatch.setattr("aiops_diagnostics.admin.common._settings_with_config_file", lambda _: settings)
     request = write_private_text(output.parent / "request.json", json.dumps(payload))
     result = CliRunner().invoke(
         admin_app,

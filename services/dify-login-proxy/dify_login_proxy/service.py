@@ -419,7 +419,7 @@ class LoginService:
     ) -> None:
         if self.environment_registry is None:
             return
-        from aiops_diagnostics.gateway.environment_registry import RegistryError
+        from aiops_diagnostics.onboarding.registry import RegistryError
 
         try:
             if allow_manager and user_id and self.environment_registry.is_manager(tenant_id, user_id):

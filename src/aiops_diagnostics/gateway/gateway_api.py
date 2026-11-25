@@ -403,44 +403,15 @@ def _record_publish_audit(
         )
 
 
-def _declared_in_file(settings: Any, environment: str, tenant_id: str, entry: str, scenario: str) -> bool:
-    """这条 key 是不是仍由**文件登记**声明。
-
-    启动期查过一次冲突，但那之后文件可能被重新配上；而发布是唯一会把冲突**写进去**
-    的动作，所以它也要查一次 —— 写进去之后再发现，故障是整表加载失败，波及所有租户。
-    """
-    from aiops_diagnostics.execution import chat_execution
-
-    try:
-        bindings = chat_execution.load_bindings(
-            str(getattr(settings, "chat_execution_bindings_file", "") or "")
-        )
-    except chat_execution.ChatBindingError as exc:
-        raise StandardAPIError(503, "EXEC_CONFIG_UNAVAILABLE", "bindings unavailable") from exc
-    key = f"{scenario}:{environment}:{tenant_id}"
-    return any(item.key == key for item in bindings)
-
-
-def _key_ref_for(key_dir: str, app_id: str) -> str:
-    """这个 app 的 Service API 凭据路径，且**必须可读**。
-
-    发布只推路径、不读密钥；但一条指向不存在文件的路径等于"发布了也跑不起来"。
-    """
-    from aiops_diagnostics.dify.dify_chat_workflow import load_workflow_key
-    from aiops_diagnostics.execution import chat_execution
-
-    if not key_dir:
-        return ""
-    path = chat_execution.key_file_for_app(key_dir, app_id)
-    try:
-        load_workflow_key(path)
-    except ValueError as exc:
-        raise StandardAPIError(
-            status.HTTP_409_CONFLICT,
-            "DIFY_KEY_MISSING",
-            "the app service key is not provisioned on this server",
-        ) from exc
-    return path
+from aiops_diagnostics.publication.route_advancement import (  # noqa: E402
+    _declared_in_file as _declared_in_file,
+)
+from aiops_diagnostics.publication.route_advancement import (  # noqa: E402
+    _key_ref_for as _key_ref_for,
+)
+from aiops_diagnostics.publication.route_advancement import (  # noqa: E402
+    advance_route_binding as _advance_route_binding,
+)
 
 
 def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
@@ -753,156 +724,6 @@ def _current_route_revision(context: Any, binding: Any, environment: str) -> int
     except Exception as exc:  # noqa: BLE001 - 没有初始 CAS 证据，发布必须拒绝。
         raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable") from exc
     return row.revision if row is not None else 0
-
-
-def _advance_route_binding(
-    context: Any,
-    outcome: Any,
-    binding: Any,
-    *,
-    initiator: tuple[str, str, str],
-    expected_revision: int | None = None,
-) -> None:
-    """发布成功之后，把（环境，租户，入口，场景）的正式指针推到这一版。
-
-    **拒绝的三种情况**，都不写指针、并如实报未完成：
-
-    * 没有配 `AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE`：这个环境还没接管管理指针，
-      发布只冻结版本（与今天逐字一致）；
-    * `version_no` 缺失或 `workflow_id` 取不到：拿不到"哪一版、哪张图"就没有可切的东西；
-    * 已有发布者在本轮期间改过指针（`revision` 变化）：CAS 失败，不覆盖别人的发布。
-
-    成功时写入的身份是**三列分开**的：`app_id` 是应用、`workflow_id` 是图、
-    版本是本地那一条快照。把同一个值填进多列，等于三列都在撒谎。
-    """
-    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
-    environment = str(getattr(context.settings, "execution_environment", "") or "")
-    if not database or not environment:
-        return
-    # **只有 workflow 应用才走"推进路由指针"这一步。** 同一个网关还可以挂着
-    # chat/completion 应用（`dify_workspace_template.dsl.yml` 里就有 `mode: chat`），
-    # 它们没有已发布 workflow，`sync_binding_from_dify` 本来就能正常冻结 Agent 版本。
-    # 无条件要求 workflow 身份会让那些应用**发布失败**，而它们的版本其实已经变了 ——
-    # 调用方看到的是失败，库里却已经改过，那比不发布更糟。
-    #
-    # 判据落在**这次同步实际冻结了什么**上：workflow 应用才带 `workflow_id`。
-    if not getattr(outcome, "workflow_id", ""):
-        return
-    version_no = outcome.version_no
-    if not isinstance(version_no, int):
-        raise StandardAPIError(
-            status.HTTP_409_CONFLICT,
-            "DIFY_ROUTE_NOT_ADVANCED",
-            "the published version has no workflow identity to bind",
-        )
-    from pathlib import Path
-
-    from aiops_diagnostics.execution.chat_route_bindings import (
-        ChatRouteBindingStore,
-        RouteBindingError,
-    )
-
-    key_dir = str(getattr(context.settings, "chat_dify_key_dir", "") or "")
-    entry = str(getattr(binding, "business_entry", "") or "consumer")
-    from aiops_diagnostics.consumer.consumer_publication import route_scenario
-
-    scenario = getattr(outcome, "route_scenario", "") or route_scenario(context.settings, binding)
-    # **两个前置必须在写指针之前拒绝**，理由相同：写进去之后才发现，故障会扩散到
-    # 别人身上 —— 这两条都会让整张管理表加载失败，而 `_bindings` 在读租户之前
-    # 就检查整表，所以一个租户的坏行会让**所有**租户的聊天路线一起不可用。
-    #
-    #   1. 没配凭据目录 ⇒ 写进去一条空引用，下次加载 `load_workflow_key("")` 抛错；
-    #   2. 文件登记里仍有同一个 key ⇒ 判重复声明，同样整表不可用。
-    if not key_dir:
-        raise StandardAPIError(
-            status.HTTP_409_CONFLICT,
-            "DIFY_KEY_DIR_UNSET",
-            "the app service key directory is not configured on this server",
-        )
-    # 执行地址同理：控制台拉取用的是 `dify_console_base_url`，所以**发布能成功**，
-    # 而之后每个聊天任务都会在空地址上失败；重启还会被"已有活动 Dify 行"的启动校验
-    # 拒掉 —— 等于把自己锁在门外。写第一条活动指针之前就要拒绝。
-    if not str(getattr(context.settings, "dify_chat_base_url", "") or ""):
-        raise StandardAPIError(
-            status.HTTP_409_CONFLICT,
-            "DIFY_CHAT_BASE_URL_UNSET",
-            "the dify chat base url is not configured on this server",
-        )
-    if _declared_in_file(context.settings, environment, binding.tenant_id, entry, scenario):
-        raise StandardAPIError(
-            status.HTTP_409_CONFLICT,
-            "CHAT_ROUTE_BINDING_COLLIDES_WITH_FILE",
-            "this route is still declared in the bindings file",
-        )
-    if scenario == chat_execution.SCENARIO_CONSUMER_SERVICE and getattr(context, "agent_manager", None):
-        from aiops_diagnostics.publication.agent_lifecycle import AgentError
-
-        try:
-            snapshot = context.agent_manager.store.version(
-                outcome.agent_id, binding.tenant_id, version_no
-            ).snapshot
-        except AgentError as exc:
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT,
-                "CONSUMER_VERSION_UNAVAILABLE",
-                "selected consumer version is unavailable",
-            ) from exc
-        frozen = snapshot.get("consumer_service") if isinstance(snapshot, dict) else None
-        content = frozen.get("content") if isinstance(frozen, dict) else None
-        if isinstance(content, dict) and content.get("environment") not in (None, environment):
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT,
-                "CONSUMER_VERSION_ENVIRONMENT_MISMATCH",
-                "selected version belongs to another execution environment",
-            )
-
-    store = ChatRouteBindingStore(Path(database).expanduser().absolute())
-    existing = store.get(environment, binding.tenant_id, entry, scenario)
-    if (
-        outcome.action == "unchanged"
-        and existing is not None
-        and existing.agent_id == outcome.agent_id
-        and existing.agent_version_no == version_no
-        and existing.workflow_id == outcome.workflow_id
-    ):
-        if expected_revision is not None and existing.revision != expected_revision:
-            raise StandardAPIError(409, "ROUTE_BINDING_CONFLICT", "route binding moved")
-        # **已撤回的版本不能被"再发一次"复活**（与 `node_publication.advance` 同一条）。
-        # 撤回是显式决定，恢复也是显式动作；内容没变只说明不必冻结新版本，不说明操作者
-        # 想让它重新上线。2026-11-01 在 41 上实测：撤回后再点发布，这里返回 unchanged
-        # 之后仍会走到底下的 `store.publish()`，把刚撤回的版本推回 active。
-        if existing.active:
-            return
-        raise StandardAPIError(
-            status.HTTP_409_CONFLICT,
-            "ROUTE_BINDING_RETRACTED",
-            "该版本已撤回；要重新上线请用「恢复历史版本」",
-        )
-    if expected_revision is None:
-        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "initial route revision unavailable")
-    try:
-        store.publish(
-            environment=environment,
-            tenant_id=binding.tenant_id,
-            entry=entry,
-            scenario=scenario,
-            engine="dify",
-            agent_id=outcome.agent_id,
-            agent_version_no=version_no,
-            app_id=binding.app_id,
-            workflow_id=outcome.workflow_id,
-            # 凭据只存**引用**：`<key_dir>/<app_id>.key`，由运维预置。发布只推路径，
-            # 全程不读密钥 —— 于是它也没有机会出现在表里。
-            #
-            # **但路径必须已存在**：发布成功却指向一个不存在的凭据文件，下一次请求
-            # 必然 `DIFY_UNAVAILABLE` —— 而那个症状离发布这一步很远，没人会想到是它。
-            # 宁可让发布失败并说清楚，也不要留下一条"看起来发布了"的绑定。
-            workflow_key_ref=_key_ref_for(key_dir, binding.app_id),
-            expected_revision=expected_revision,
-            updated_by=initiator[0] or initiator[1] or "",
-        )
-    except RouteBindingError as exc:
-        raise StandardAPIError(status.HTTP_409_CONFLICT, exc.code, "route binding was not advanced") from exc
 
 
 def _managed_app_route(context: Any, app_id: str):
@@ -1230,8 +1051,8 @@ def create_gateway_app(
     _inject_runtime_hook(selected_runtime, "set_trial_operator_scope", trial_scope)
     selected_resolver = caller_resolver or _caller_resolver(selected_settings)
     if selected_settings.environment_registry_file:
-        from aiops_diagnostics.gateway.environment_registry import for_settings
         from aiops_diagnostics.identity.caller_auth import RegisteredCallerResolver
+        from aiops_diagnostics.onboarding.registry import for_settings
 
         registry = for_settings(selected_settings)
         selected_runtime.environment_registry = registry
@@ -1360,8 +1181,8 @@ def create_gateway_app(
         router_module.register(app, context, deps, api_module)
 
     # 3) 受管环境试运行路由与公开 OpenAPI 文档
-    from aiops_diagnostics.gateway.environment_trial import register as register_environment_trial
     from aiops_diagnostics.gateway.public_openapi import install_public_docs
+    from aiops_diagnostics.onboarding.trial import register as register_environment_trial
 
     register_environment_trial(app, context)
     install_public_docs(app)

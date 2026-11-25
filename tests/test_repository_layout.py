@@ -62,6 +62,7 @@ LAYOUT = {
         frozenset(["__init__.py", "admin_cli.py", "gateway_server.py", "tdengine_proxy.py"]),
         frozenset(
             [
+                "admin",
                 "common",
                 "consumer",
                 "conversation",
@@ -72,6 +73,7 @@ LAYOUT = {
                 "health",
                 "identity",
                 "knowledge",
+                "onboarding",
                 "operator",
                 "publication",
             ]

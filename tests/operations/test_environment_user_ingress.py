@@ -29,8 +29,6 @@ from types import SimpleNamespace
 import pytest
 
 from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway.environment_registry import apply as registry_apply
-from aiops_diagnostics.gateway.environment_registry import load as registry_load
 from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
@@ -38,6 +36,8 @@ from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_INVALID, CallerAu
 from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.knowledge.knowledge_retrieval import MediaProxy, MediaResourceSigner
+from aiops_diagnostics.onboarding.registry import apply as registry_apply
+from aiops_diagnostics.onboarding.registry import load as registry_load
 
 ROOT = Path(__file__).parents[2]
 CONF = ROOT / "ops" / "nginx" / "environment-user-ingress.conf"

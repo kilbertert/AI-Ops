@@ -12,11 +12,10 @@ from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # no
 from dify.test_dify_knowledge_api import _client, _Runtime
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
-from aiops_diagnostics.dify import candidate_knowledge as candidate
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient, MediaResourceSigner
+from aiops_diagnostics.onboarding import candidate_knowledge as candidate
+from aiops_diagnostics.onboarding import drafts, tasks
 from gateway.test_environment_knowledge import execute, knowledge, submit  # noqa: F401
 from gateway.test_environment_tasks import prepared  # noqa: F401
 
@@ -318,8 +317,8 @@ def test_malformed_candidate_credentials_are_rejected(presented):
 
 
 def test_workspace_lookup_outage_recovers_same_connection_task(connected, monkeypatch):
-    from aiops_diagnostics.dify import environment_knowledge_connection as connection
     from aiops_diagnostics.dify.dify_ensure_workspace import EnsureError
+    from aiops_diagnostics.onboarding import knowledge_connection as connection
 
     lookup = connection.reconcile_by_name
     job = request_job(connected)

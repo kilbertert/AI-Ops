@@ -146,7 +146,7 @@ class LoginProxySettings:
     def __post_init__(self) -> None:
         assert_public_origin_is_https(self.public_origin)
         if self.environment_registry_file and not self.environment_credentials_file:
-            from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry
+            from aiops_diagnostics.onboarding.registry import EnvironmentRegistry
 
             row = EnvironmentRegistry(self.environment_registry_file, self.dify.environment).entry()
             if self.gateway_url.rstrip("/") != row["gateway_url"]:
@@ -688,7 +688,7 @@ def _public_reason(exc: Exception) -> str:
 
 
 def build_service(settings: LoginProxySettings) -> LoginService:
-    from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry
+    from aiops_diagnostics.onboarding.registry import EnvironmentRegistry
 
     registry = (
         EnvironmentRegistry(settings.environment_registry_file, settings.dify.environment)

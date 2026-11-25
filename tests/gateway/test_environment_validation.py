@@ -7,11 +7,9 @@ from types import SimpleNamespace
 import pytest
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 
-from aiops_diagnostics.gateway import environment_business as business
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_tasks as tasks
-from aiops_diagnostics.gateway import environment_validation_worker as worker
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import business, drafts, tasks
+from aiops_diagnostics.onboarding import validation_ssh_runner as worker
 from gateway.test_candidate_knowledge_connection import connected  # noqa: F401
 from gateway.test_environment_consumer import consumer_app  # noqa: F401
 from gateway.test_environment_installation import installation_state, internal  # noqa: F401
@@ -407,7 +405,7 @@ def test_target_persists_intent_and_never_restarts_an_unknown_run(tmp_path, monk
     context = SimpleNamespace(settings=SimpleNamespace(data_home=tmp_path))
     monkeypatch.setattr(business, "installation", lambda *a: None)
     monkeypatch.setattr(business, "load_case", lambda *a: (case, "c" * 64))
-    from aiops_diagnostics.gateway import environment_trial as trial
+    from aiops_diagnostics.onboarding import trial
 
     attempts = []
 
@@ -437,7 +435,7 @@ def test_target_persists_intent_and_never_restarts_an_unknown_run(tmp_path, monk
 
 
 def test_target_completed_run_is_checked_and_persisted_without_token(tmp_path, monkeypatch):
-    from aiops_diagnostics.gateway import environment_trial as trial
+    from aiops_diagnostics.onboarding import trial
     from gateway.test_environment_trial import scope
 
     spec = dict(
@@ -483,7 +481,7 @@ def test_target_completed_run_is_checked_and_persisted_without_token(tmp_path, m
 
 
 def test_consumer_validation_checks_tools_and_reference_not_completed_alone():
-    from aiops_diagnostics.dify.environment_consumer_trial import validation_evidence
+    from aiops_diagnostics.onboarding.consumer_trial import validation_evidence
 
     calls = [
         {"tool": "status", "result": {"status": "found", "order_ids": ["order-a"]}},
@@ -515,7 +513,7 @@ def test_consumer_validation_checks_tools_and_reference_not_completed_alone():
 
 
 def test_readonly_recovery_without_remote_intent_never_starts_a_run(tmp_path, monkeypatch):
-    from aiops_diagnostics.gateway import environment_trial as trial
+    from aiops_diagnostics.onboarding import trial
 
     spec = dict(
         id="task_" + "b" * 32,
@@ -587,7 +585,7 @@ def test_case_is_private_bound_expiring_and_missing_scope_does_not_hide_other_ca
 
 def test_saved_success_cannot_bypass_expired_trial_authorization(tmp_path, monkeypatch):
     from aiops_diagnostics.common.private_files import write_private_text
-    from aiops_diagnostics.gateway import environment_trial as trial
+    from aiops_diagnostics.onboarding import trial
 
     spec = dict(
         id="task_" + "d" * 32,
@@ -666,7 +664,7 @@ def test_target_http_preserves_original_refusal_code_instead_of_500(monkeypatch)
     from fastapi.testclient import TestClient
 
     from aiops_diagnostics.common.http_auth import build_internal_token_headers
-    from aiops_diagnostics.gateway import environment_trial as trial
+    from aiops_diagnostics.onboarding import trial
 
     context = SimpleNamespace(
         settings=SimpleNamespace(environment_task_key="synthetic", environment_registry_file="fixture"),

@@ -1,10 +1,6 @@
 """HTTP装配、作业调度、配置、存储和可观测性。
 
-「环境接入」生命周期在本包与 ``dify/`` 之间分侧：本包的 ``environment_*``
-模块是账本与编排侧（登记、草稿、计划、任务、容量、试运行判定），
-``dify/environment_*`` 是 Dify 供给侧（应用、工作区、安装的落地动作）。
-``*_worker.py`` 不是常驻守护进程：它们是发起机上的单次执行体
-（入口如本机 ``ops/environments/gateway/aiops-site-preflight.service``
-调起的 ``aiops-admin`` 命令），经 ``dev-host exec``（SSH）访问受管目标；
-真正在受管主机上跑的是对应的 ``*-dispatch`` 命令。
+环境接入全流程（登记、草稿、计划、任务状态机、SSH 执行器 ``*_ssh_runner.py``、
+候选试跑与正式发布）已垂直收敛至 ``aiops_diagnostics.onboarding``（ADR-0339）；
+本包仅保留 Gateway HTTP 装配、路由、配置、持久化存储、异步调度与可观测性。
 """

@@ -10,9 +10,9 @@ import yaml
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
-from aiops_diagnostics.dify import environment_operator as operator
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
-from aiops_diagnostics.gateway import environment_tasks as tasks
+from aiops_diagnostics.onboarding import operator_prep as operator
+from aiops_diagnostics.onboarding import tasks
 from gateway.test_candidate_knowledge_connection import (  # noqa: F401
     connected,
     prepare_connection,

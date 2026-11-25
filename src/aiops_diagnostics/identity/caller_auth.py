@@ -114,7 +114,7 @@ class RegisteredCallerResolver:
         self.registry = registry
 
     def resolve(self, token: str, **kwargs) -> ScopeContext:
-        from aiops_diagnostics.gateway.environment_registry import RegistryError
+        from aiops_diagnostics.onboarding.registry import RegistryError
 
         context = self.resolver.resolve(token, **kwargs)
         try:

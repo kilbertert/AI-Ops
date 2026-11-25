@@ -9,9 +9,8 @@ from typer.testing import CliRunner
 
 from aiops_diagnostics import admin_cli
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.gateway import environment_plans as plans
-from aiops_diagnostics.gateway import environment_projection as projection
-from aiops_diagnostics.gateway import environment_validation_worker as worker
+from aiops_diagnostics.onboarding import plans, projection
+from aiops_diagnostics.onboarding import validation_ssh_runner as worker
 from gateway.test_environment_plans import ADMIN, prepared  # noqa: F401
 
 
@@ -94,8 +93,10 @@ def test_configuration_update_uses_original_cli_and_configured_paths(configurati
     from types import SimpleNamespace
 
     reference, _, _, request, key = configuration
+    from aiops_diagnostics.admin import common as admin_common
+
     monkeypatch.setattr(
-        admin_cli,
+        admin_common,
         "_settings_with_config_file",
         lambda _: SimpleNamespace(
             environment_onboarding_file=str(reference),

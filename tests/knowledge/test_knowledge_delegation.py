@@ -312,7 +312,9 @@ def test_export_command_only_writes_new_private_capability(central, monkeypatch)
     from aiops_diagnostics import admin_cli
 
     c = central
-    monkeypatch.setattr(admin_cli, "_settings_with_config_file", lambda _: c.settings)
+    from aiops_diagnostics.admin import common as admin_common
+
+    monkeypatch.setattr(admin_common, "_settings_with_config_file", lambda _: c.settings)
     file = c.path / "export" / "capability.json"
     args = [
         "knowledge-delegation",

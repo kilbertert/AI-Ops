@@ -18,7 +18,7 @@ code:
     - src/aiops_diagnostics/identity/query_scope.py
     - src/aiops_diagnostics/identity/order_visibility.py
     - src/aiops_diagnostics/identity/order_identity.py
-    - src/aiops_diagnostics/gateway/environment_registry.py
+    - src/aiops_diagnostics/onboarding/registry.py
     - src/aiops_diagnostics/gateway/gateway_api.py
     - src/aiops_diagnostics/identity/gateway_admission.py
     - tests/gateway/test_environment_registry.py
@@ -81,5 +81,5 @@ code:
 - `src/aiops_diagnostics/identity/data_scope_rule.py` (entry_data_scope)
 - `src/aiops_diagnostics/identity/query_scope.py` (resolve_query_scope, operator_site_scope_from_shops)
 - `src/aiops_diagnostics/identity/caller_auth.py` (SourceKeyCallerResolver, ScopedOrderAuthorizer)
-- `src/aiops_diagnostics/gateway/environment_registry.py`（EnvironmentRegistry.require/require_registered/for_settings 登记准入合同）
+- `src/aiops_diagnostics/onboarding/registry.py`（EnvironmentRegistry.require/require_registered/for_settings 登记准入合同）
 - `src/aiops_diagnostics/gateway/gateway_api.py` (_caller_resolver, _authenticate_caller, RegisteredCallerResolver 装配)

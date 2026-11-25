@@ -7,11 +7,9 @@ import pytest
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_plans as plans
-from aiops_diagnostics.gateway import environment_task_worker as worker
-from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import drafts, plans, tasks
+from aiops_diagnostics.onboarding import task_ssh_runner as worker
 from gateway.test_candidate_knowledge_connection import connected  # noqa: F401
 from gateway.test_environment_consumer import consumer_app  # noqa: F401
 from gateway.test_environment_installation import installation_state, internal, submit  # noqa: F401
@@ -543,7 +541,7 @@ def test_turn_alternates_so_perpetual_reconcile_never_starves_installation(insta
 
 def test_unknown_registration_keeps_environment_mutex_against_new_conflicts(installed):  # noqa: F811
     """让位不得解除保护：未知登记的 checking 行仍拒绝同环境新的冲突安装。"""
-    from aiops_diagnostics.dify import environment_installation as installation
+    from aiops_diagnostics.onboarding import context as onboarding_context
 
     state, _, _ = _unknown_registration(installed)
     with gateway_db.connection(drafts._database(state[0][0]), write=True) as conn:
@@ -551,7 +549,9 @@ def test_unknown_registration_keeps_environment_mutex_against_new_conflicts(inst
         parent_request = json.loads(tasks._row(conn, parent)["request"])
         # 同一 BUSY 断言面（submit_cold / submit / validation 共用该查询形状）。
         with pytest.raises(tasks.TaskRefused, match="ENVIRONMENT_TASK_BUSY"):
-            installation.submit_cold(conn, "a", ["control", "platform", "admin"], parent, parent_request)
+            onboarding_context.submit_cold(
+                conn, "a", ["control", "platform", "admin"], parent, parent_request
+            )
 
 
 @pytest.mark.parametrize("observe_only", [True, False])
@@ -565,7 +565,7 @@ def test_installation_run_authorizes_only_when_stage_is_not_observe_only(tmp_pat
     import hashlib
     import subprocess
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     identifier = "task_" + "e" * 32
     owner = "a" * 32
@@ -619,7 +619,7 @@ def test_registration_intent_absent_only_remote_answer_disarms(tmp_path, monkeyp
     """登记意图探针只信远端脚本的 7=缺席；传输失败与锁占一律按在场收敛。"""
     from types import SimpleNamespace
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     sent = {}
 
@@ -645,7 +645,7 @@ def test_worker_registration_remote_failure_reports_absent_only_on_intent_probe(
     import subprocess
     import time
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     identifier = "task_" + "c" * 32
     owner = "a" * 32
@@ -714,7 +714,7 @@ def test_worker_registration_remote_absent_gains_evidence_only_on_intent_probe(
     import subprocess
     import time
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     identifier = "task_" + "d" * 32
     owner = "a" * 32

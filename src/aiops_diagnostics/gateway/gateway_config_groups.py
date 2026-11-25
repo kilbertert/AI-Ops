@@ -314,7 +314,7 @@ class OnboardingConfig:
             if not safe_profile_name.fullmatch(self.execution_environment):
                 raise ValueError("charging status requires a logical execution environment")
         if self.environment_management_registry_file:
-            from aiops_diagnostics.gateway.environment_registry import MANAGED_SCHEMA, load
+            from aiops_diagnostics.onboarding.registry import MANAGED_SCHEMA, load
 
             body = load(self.environment_management_registry_file)
             if body["schema"] != MANAGED_SCHEMA:
@@ -328,7 +328,7 @@ class OnboardingConfig:
         if self.environment_registry_file:
             if self.business_environments_file:
                 raise ValueError("runtime environment registry cannot use a separate business catalogue")
-            from aiops_diagnostics.gateway.environment_registry import for_settings
+            from aiops_diagnostics.onboarding.registry import for_settings
 
             row = for_settings(settings).entry()
             if Path(row["config_ref"]).resolve() != Path(settings.server_config_file).resolve():
@@ -336,7 +336,7 @@ class OnboardingConfig:
             if self.execution_environment and self.execution_environment != normalized_env:
                 raise ValueError("execution environment does not match business environment")
         if self.business_environments_file:
-            from aiops_diagnostics.consumer import business_environments
+            from aiops_diagnostics.onboarding import business_environments
 
             try:
                 for entry in business_environments.load(self.business_environments_file):

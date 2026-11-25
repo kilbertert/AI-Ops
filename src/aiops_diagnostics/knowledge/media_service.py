@@ -62,7 +62,7 @@ def _is_consumer_media_active(runtime: Any, grant: MediaGrant) -> bool:
 
 
 def _is_candidate_media_active(runtime: Any, grant: MediaGrant) -> bool:
-    from aiops_diagnostics.dify import candidate_knowledge
+    from aiops_diagnostics.onboarding import candidate_knowledge
 
     try:
         scope = candidate_knowledge.parse_id(
@@ -100,8 +100,8 @@ def _is_published_agent_media_active(runtime: Any, grant: MediaGrant) -> bool:
 
 def is_media_grant_active(runtime: Any, grant: MediaGrant) -> bool:
     """复核签发媒体链接的代理/委派/试运行在读取时刻是否仍然有效。"""
-    from aiops_diagnostics.dify import candidate_knowledge
     from aiops_diagnostics.knowledge import knowledge_delegation
+    from aiops_diagnostics.onboarding import candidate_knowledge
 
     if grant.agent_version.startswith(knowledge_delegation.MEDIA_PREFIX):
         return _is_delegation_media_active(runtime, grant)
@@ -119,8 +119,8 @@ def fetch_media_for_tenant(
     range_header: str | None = None,
 ) -> bytes | MediaResponse:
     """按 grant 所属租户与来源路径拉取媒体字节，并在拉取后复核活性。"""
-    from aiops_diagnostics.dify.candidate_knowledge import MEDIA_PREFIX
     from aiops_diagnostics.knowledge import knowledge_delegation
+    from aiops_diagnostics.onboarding.candidate_knowledge import MEDIA_PREFIX
 
     if getattr(runtime.gateway_settings, "knowledge_delegation_file", ""):
         from aiops_diagnostics.knowledge.delegated_knowledge_client import for_application

@@ -19,7 +19,7 @@
 2. 交付现状：[当前交付索引](docs/agents/current-delivery-state.md)——合并 ≠ 部署 ≠ 验收，状态以此为准。
 3. 主机与部署面：[.dev-host.toml](.dev-host.toml) 是主机唯一名册（`41`=生产网关，`36`=Dify 主机，`95`=第二环境）；部署有多条路径，CD 只覆盖 `deploy/deploy-41.sh` 的源码同步，其余手工部署见[部署索引](deploy/README.md)与[手工部署台账](deploy/manual-deploys.md)。
 4. 变更规则：本仓 `AGENTS.md`、[验证分工](docs/agents/verification-workflow.md)。测试红常意味着文件放错目录而非行为损坏（`tests/test_repository_layout.py` 是根层白名单）。
-5. 代码惯例：`gateway/` 持环境接入账本与 HTTP 装配，`dify/` 持 Dify 侧供给与适配，同一「环境接入」流程横跨两包，分侧规则见各自包 `__init__.py` 说明，阶段→文件定位用[流水线索引](docs/agents/environment-pipeline-map.md)；环境变量归属查[配置参考](docs/agents/config-reference.md)。
+5. 代码惯例：环境接入全流程已垂直收敛至 [onboarding](src/aiops_diagnostics/onboarding/)（目录登记/草稿/计划/任务/SSH 执行器/候选试跑/正式发布），运维 CLI 子命令位于 [admin](src/aiops_diagnostics/admin/)，阶段→文件定位见[流水线索引](docs/agents/environment-pipeline-map.md)；环境变量归属查[配置参考](docs/agents/config-reference.md)。
 
 ## 一、系统与入口
 
@@ -50,8 +50,8 @@ flowchart LR
 
 ## 三、系统模块与依赖关系
 
-以下是迁移后的现有文件职责。导入检查覆盖子包、延迟导入与包级绝对导入；原有节点装配四模块 6 边冻结循环已消除，
-`test_readme_architecture.py` 核对职责入口与引用并拒绝任何绝对导入循环（既有 `environment_*` 间相对导入环留待后续环境接入收敛阶段治理）；业务执行不得依赖已删除的 Python 运行器。
+以下是迁移后的现有文件职责。导入检查覆盖子包、绝对导入、相对导入与函数内延迟导入；
+`test_readme_architecture.py` 核对职责入口与引用并强制全包零循环依赖（ADR-0339）；业务执行不得依赖已删除的 Python 运行器。
 
 网关 HTTP 路由按领域拆分在 `gateway/routers/`（共享鉴权依赖与异常处理见 `gateway/dependencies.py`，
 请求模型见 `gateway/schemas.py`，主装配入口仍为 `gateway/gateway_api.py`）；运维分析、健康报告与签名媒体
@@ -63,6 +63,8 @@ flowchart LR
 | 职责 | 源码入口 |
 |---|---|
 | 网关装配、配置、存储与运行 | [gateway](src/aiops_diagnostics/gateway/) |
+| 环境接入、候选验证与正式发布 | [onboarding](src/aiops_diagnostics/onboarding/) |
+| 运维命令行子命令分组 | [admin](src/aiops_diagnostics/admin/) |
 | 身份、授权和数据范围 | [identity](src/aiops_diagnostics/identity/) |
 | 客服编排与事实交付 | [consumer](src/aiops_diagnostics/consumer/) |
 | 节点合同、委派和运行账本 | [execution](src/aiops_diagnostics/execution/) |
@@ -96,6 +98,8 @@ flowchart LR
 | `src/aiops_diagnostics/{operator,health,data}/` | 管家分析、健康报告、共享只读数据 |
 | `src/aiops_diagnostics/{common,conversation}/` | 通用原语、会话存储、澄清与固定FAQ资源 |
 | `src/aiops_diagnostics/gateway/`、`tests/gateway/` | HTTP装配、网关配置、存储、调度与观测 |
+| `src/aiops_diagnostics/onboarding/` | 环境目录登记、草稿计划、任务状态机、SSH 执行器、候选试跑与发布协调 |
+| `src/aiops_diagnostics/admin/` | `aiops-admin` 运维子命令分组（`onboarding`、`dify`、`knowledge`、`maintenance`） |
 | `tools/{content,verification,experiments,inventory}/` | 内容工具、业务验证、隔离实验与公司源码索引 |
 | `integrations/cpms-java/` | 公司Java受控接口补丁，独立于执行节点 |
 | `plugins/` | Dify 知识插件及其原生打包布局 |
@@ -183,7 +187,7 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 
 控制台发布与管理共用活动公司登录绑定，原生退出同步撤销；可成套配置共享登录入口的环境选择，后续操作由活动会话绑定环境，默认仍为原单环境；登录代理重启后需重新登录，见[登录代理手册](docs/agents/dify-login-proxy-36-runbook.md)。
 
-业务环境与租户登记由 `gateway.environment_registry` 管理，草稿由 `gateway.environment_drafts` 持久化，运维入口为 `aiops-admin environment-registry`；配置 `AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE` 后按当前环境检查租户准入。登记与启停方法见[环境接入手册](docs/agents/environment-registry.md)。
+业务环境与租户登记由 `onboarding.registry` 管理，草稿由 `onboarding.drafts` 持久化，运维入口为 `aiops-admin environment-registry`；配置 `AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE` 后按当前环境检查租户准入。登记与启停方法见[环境接入手册](docs/agents/environment-registry.md)。
 
 共享知识服务的环境/租户命名空间由 `knowledge.tenant_scope` 统一计算；已启用环境登记的实例不与旧单环境租户头共用知识账号。
 

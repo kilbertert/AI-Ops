@@ -10,12 +10,11 @@ import pytest
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.knowledge.kb_onboarding import derive_email, encrypt_credential
 from aiops_diagnostics.knowledge.tenant_scope import knowledge_tenant
+from aiops_diagnostics.onboarding import drafts, tasks
 from gateway.test_environment_tasks import prepare_http, prepared, workspace_job  # noqa: F401
 
 
@@ -70,7 +69,7 @@ def knowledge(prepared, workspace_upstream, monkeypatch):  # noqa: F811
     )
     monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", lambda **_: 3)
     # HTTP routes close over the original context; provide its store/runtime just as Gateway does.
-    from aiops_diagnostics.dify import environment_knowledge
+    from aiops_diagnostics.onboarding import knowledge as environment_knowledge
 
     real = environment_knowledge.run
     monkeypatch.setattr(environment_knowledge, "run", lambda _, *args: real(context, *args))

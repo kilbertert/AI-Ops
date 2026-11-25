@@ -59,7 +59,7 @@ def _route(runtime, binding):
 
 def require_pinned(runtime, caller, binding):
     """提示词版本可更新；当前身份、凭据和能力仍必须覆盖签发时的授权。"""
-    from aiops_diagnostics.gateway.environment_registry import RegistryError, require_registered
+    from aiops_diagnostics.onboarding.registry import RegistryError, require_registered
 
     try:
         require_registered(runtime, caller.effective_tenant_id)

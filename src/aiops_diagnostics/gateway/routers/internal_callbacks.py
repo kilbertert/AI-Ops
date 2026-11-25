@@ -398,8 +398,8 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, Any]:
         from aiops_diagnostics.consumer.knowledge_access import catalogue_workspace
-        from aiops_diagnostics.dify import candidate_knowledge
         from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
+        from aiops_diagnostics.onboarding import candidate_knowledge
 
         response.headers["Cache-Control"] = "no-store"
         presented = (authorization or "").removeprefix("Bearer ")
@@ -446,8 +446,8 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         from starlette.concurrency import run_in_threadpool
 
         from aiops_diagnostics.consumer import consumer_chat_service
-        from aiops_diagnostics.consumer.candidate_trial import PREFIX as CANDIDATE_PREFIX
         from aiops_diagnostics.execution import chat_data_grant
+        from aiops_diagnostics.onboarding.candidate_trial import PREFIX as CANDIDATE_PREFIX
 
         response.headers["Cache-Control"] = "no-store"
         capability = request.path_params.get("capability")
@@ -458,7 +458,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         if authorization[7:].startswith(CANDIDATE_PREFIX):
             if capability != "agent":
                 raise StandardAPIError(403, "GRANT_CAPABILITY_MISMATCH", "candidate callback refused")
-            from aiops_diagnostics.consumer.candidate_trial import callback
+            from aiops_diagnostics.onboarding.candidate_trial import callback
 
             return await callback(context, request, authorization[7:])
         try:

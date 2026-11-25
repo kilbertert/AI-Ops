@@ -35,7 +35,7 @@ def load(path, environment):
     validate_private_file(path)
     if path.stat().st_size > 262144:
         raise ValueError("delegated knowledge configuration too large")
-    from aiops_diagnostics.gateway.environment_registry import _unique_object
+    from aiops_diagnostics.onboarding.registry import _unique_object
 
     body = json.loads(path.read_text(), object_pairs_hook=_unique_object)
     if (

@@ -11,16 +11,16 @@ from execution.test_app_runtime_node_entry import _Resolver
 
 from aiops_diagnostics.common.private_files import write_private_text
 from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
-from aiops_diagnostics.gateway import environment_registry
-from aiops_diagnostics.gateway import environment_release_trial as trial
-from aiops_diagnostics.gateway.environment_business import load_case as REAL_LOAD_CASE
 from aiops_diagnostics.knowledge import delegated_knowledge_client
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchResult,
     RetrievalStatus,
     RetrievedChunk,
 )
-from aiops_diagnostics.publication import environment_release as release
+from aiops_diagnostics.onboarding import registry as environment_registry
+from aiops_diagnostics.onboarding import release
+from aiops_diagnostics.onboarding import release_trial as trial
+from aiops_diagnostics.onboarding.business import load_case as REAL_LOAD_CASE
 from publication.test_environment_release import dual, operator, prepared  # noqa: F401
 
 
@@ -143,7 +143,7 @@ def test_published_consumer_original_http_path_and_restore_keep_old_operator(tar
     import httpx
     from operations.test_operator_cpms import node, request, terminal
 
-    from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry
+    from aiops_diagnostics.onboarding.registry import EnvironmentRegistry
     from aiops_diagnostics.operator import operator_cpms
 
     ctx, doc, _, _, caller, requests_seen = target
@@ -232,7 +232,7 @@ def test_three_formal_runs_complete_from_real_tool_evidence(target, dual, monkey
     from aiops_diagnostics.common.private_files import write_private_text
     from aiops_diagnostics.dify.self_service_store import SelfServiceStore
     from aiops_diagnostics.execution import chat_execution, node_publication
-    from aiops_diagnostics.gateway import environment_trial
+    from aiops_diagnostics.onboarding import trial_runtime as environment_trial
     from aiops_diagnostics.operator import offline_tool, operator_cpms
 
     ctx, doc, spec, case, _, requests = target
@@ -247,7 +247,7 @@ def test_three_formal_runs_complete_from_real_tool_evidence(target, dual, monkey
     )
     doc["apps"]["operator"]["manifest"] = json.dumps(manifest)
     # 原prepare尚未正式publish，重新fixture本次冻结内容；不直接改版本/run证据。
-    from aiops_diagnostics.publication.environment_release import record_path
+    from aiops_diagnostics.onboarding.release import record_path
 
     record_path(ctx.settings, doc["id"]).unlink()
     release.operation(ctx, doc, "prepare")
@@ -557,8 +557,8 @@ def test_same_conversation_followup_after_publication_uses_original_scope(target
 
     from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
     from aiops_diagnostics.gateway import gateway_api
-    from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry
     from aiops_diagnostics.identity.caller_auth import RegisteredCallerResolver
+    from aiops_diagnostics.onboarding.registry import EnvironmentRegistry
 
     ctx, doc, _, _, _, observed = target
     registry = EnvironmentRegistry(ctx.settings.environment_registry_file, "env-a")
@@ -798,7 +798,7 @@ command()
                 sys.executable,
                 "-c",
                 "import json;from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings;"
-                "from aiops_diagnostics.gateway.environment_release_trial import document;"
+                "from aiops_diagnostics.onboarding.release_trial import document;"
                 "from types import SimpleNamespace;s=GatewayServerSettings.from_env();"
                 f"d=document(SimpleNamespace(settings=s),{doc['id']!r});"
                 "print(json.dumps({'id':d['id'],'data_home':str(s.data_home)}))",

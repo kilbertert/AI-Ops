@@ -19,7 +19,11 @@ fi
 for name in "${names[@]}"; do
   git show "$revision:ops/environments/gateway/$name" > "$work/$name"
 done
-git show "$revision:src/aiops_diagnostics/gateway/environment_artifacts.py" > "$work/artifact_checks.py"
+if git cat-file -e "$revision:src/aiops_diagnostics/onboarding/artifacts.py" 2>/dev/null; then
+  git show "$revision:src/aiops_diagnostics/onboarding/artifacts.py" > "$work/artifact_checks.py"
+else
+  git show "$revision:src/aiops_diagnostics/gateway/environment_artifacts.py" > "$work/artifact_checks.py"
+fi
 printf '%s\n' "$revision" > "$work/REVISION"
 (cd "$work" && sha256sum REVISION "${names[@]}" artifact_checks.py > SHA256SUMS)
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -czf "$out" -C "$work" .

@@ -14,8 +14,8 @@ from aiops_diagnostics.consumer.agent_contract import agent_publication_settings
 from aiops_diagnostics.consumer.consumer_publication import frozen_settings
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-from aiops_diagnostics.gateway.environment_registry import apply
-from aiops_diagnostics.publication import environment_release as release
+from aiops_diagnostics.onboarding import release
+from aiops_diagnostics.onboarding.registry import apply
 
 
 @pytest.fixture

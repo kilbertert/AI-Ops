@@ -339,7 +339,7 @@ def test_task_worker_generated_remote_scripts_keep_real_statement_separator(tmp_
     """Word-join guard covers generated Python as well as repository source."""
     import ast
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     # First deny a non-file host transport at the public seam. It must not get a shell command.
     assert callable(worker.installation_run)

@@ -10,10 +10,9 @@ from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # no
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.dify import environment_candidate_preparation as preparation
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import candidate_preparation as preparation
+from aiops_diagnostics.onboarding import drafts, tasks
 from gateway.test_candidate_knowledge_connection import connected  # noqa: F401
 from gateway.test_environment_consumer import consumer_app  # noqa: F401
 from gateway.test_environment_knowledge import knowledge  # noqa: F401
@@ -352,7 +351,7 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     import ast
     import subprocess
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     state = installation_state
     identifier = submit(state).json()["id"]
@@ -437,7 +436,7 @@ def test_worker_cold_stage_builds_spec_without_expected_and_selects_cold_action(
     import hashlib
     import subprocess
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     identifier = "task_" + "b" * 32
     owner = "a" * 32
@@ -530,7 +529,7 @@ def test_install_driver_tail_executes_old_and_new_bundle_interpreter_contract(
     import subprocess
     from shutil import which
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     state = installation_state
     identifier = submit(state).json()["id"]
@@ -621,7 +620,7 @@ def test_install_driver_tail_executes_old_and_new_bundle_interpreter_contract(
             root = Path(__file__).resolve().parents[2]
             (directory / "probe.py").write_text((root / "ops/environments/gateway/probe.py").read_text())
             (directory / "artifact_checks.py").write_text(
-                (root / "src/aiops_diagnostics/gateway/environment_artifacts.py").read_text()
+                (root / "src/aiops_diagnostics/onboarding/artifacts.py").read_text()
             )
         (directory / "task.py").write_text("import sys;print(sys.executable)")
         prologue = "import subprocess,sys\nfrom pathlib import Path\nd=Path(" + repr(str(directory)) + ")\n"
@@ -639,7 +638,7 @@ def test_install_driver_tail_executes_old_and_new_bundle_interpreter_contract(
 
 @pytest.mark.parametrize("phase", ["queued", "executing", "checking", "running"])
 def test_public_install_task_states_do_not_masquerade_as_site_preflight(prepared, tmp_path, phase):  # noqa: F811
-    from aiops_diagnostics.gateway.environment_tasks import _public
+    from aiops_diagnostics.onboarding.tasks import _public
 
     path, _, _, _ = prepared
     now = time.time()

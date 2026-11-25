@@ -22,7 +22,7 @@ bash ops/environments/gateway/build-installer.sh <同一SHA> /private/installer.
 ```
 
 两个固定包及受控配置分别通过`dev-host cp --artifact-sha256`传输；外层与包内摘要核对后解包到root控制的私有暂存区。
-应用成员校验与管理页预检共用`gateway.environment_artifacts`；安装器包携同修订的artifact_checks.py，
+应用成员校验与管理页预检共用`onboarding.artifacts`；安装器包携同修订的artifact_checks.py，
 冷安装先加载该固定副本，不依赖目标预装AI-Ops或从归档执行任意探针。旧安装器制品仍按其原合同恢复。
 `runtime_check.py`由安装器复制为无秘密代码供服务身份读取；不要给服务账号开放含配置秘密的暂存目录。
 配置是root所有0600普通文件，不允许符号链接。应用配置值不输出；摘要、版本与环境可入私有部署账本。

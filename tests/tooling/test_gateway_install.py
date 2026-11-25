@@ -99,7 +99,7 @@ def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeyp
     for name in ("install.py", "runtime_check.py", "probe.py"):
         (root / name).write_bytes((ROOT / "ops/environments/gateway" / name).read_bytes())
     (root / "artifact_checks.py").write_bytes(
-        (ROOT / "src/aiops_diagnostics/gateway/environment_artifacts.py").read_bytes()
+        (ROOT / "src/aiops_diagnostics/onboarding/artifacts.py").read_bytes()
     )
     (root / "REVISION").write_text("a" * 40)
     (root / "SHA256SUMS").write_text(
@@ -125,7 +125,7 @@ def test_packaged_cli_checks_pinned_module_before_action(host, tmp_path, monkeyp
         import io
         import tarfile
 
-        from aiops_diagnostics.gateway.environment_projection import summary
+        from aiops_diagnostics.onboarding.projection import summary
 
         pair = candidate_config(host)
         files = {"production.env": pair[0].read_bytes(), "environment.json": pair[1].read_bytes()}
@@ -507,8 +507,8 @@ def test_intervening_configuration_change_is_not_overwritten(host, monkeypatch, 
 
 
 def test_registry_requires_logical_config_path_preserved_for_candidate(tmp_path, monkeypatch):
-    from aiops_diagnostics.gateway.environment_registry import apply as registry_apply
     from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.onboarding.registry import apply as registry_apply
 
     registry = tmp_path / "registry/registry.json"
     config = tmp_path / "production.env"
@@ -543,7 +543,7 @@ def test_registry_requires_logical_config_path_preserved_for_candidate(tmp_path,
 
 def candidate_config(host, *, revision=1, name="候选", config_text=""):
     from aiops_diagnostics.common.private_files import write_private_text
-    from aiops_diagnostics.gateway.environment_projection import render
+    from aiops_diagnostics.onboarding.projection import render
 
     inst = host[0]
     draft = dict(
@@ -1050,7 +1050,7 @@ def test_runtime_install_repeat_and_restore_keep_database_and_old_snapshot(host,
     original = (inst.config / "runtime").resolve()
     candidate = next(a for a in reversed(host[4]) if a[0] == "systemd-run")
     assert f"--property=BindReadOnlyPaths={original.parent}/candidate-root:{inst.config}" in candidate
-    from aiops_diagnostics.gateway.environment_projection import validate_candidate
+    from aiops_diagnostics.onboarding.projection import validate_candidate
 
     validate_candidate(
         inst.config / "production.env", inst.config / "registry/environment.json", "test", runtime=original
@@ -1114,7 +1114,7 @@ def test_runtime_drift_refuses_without_overwriting_owned_or_unknown_files(host, 
 def test_runtime_archive_and_semantic_mismatch_refused(host, invalid):
     import io
 
-    from aiops_diagnostics.gateway.environment_projection import validate_runtime
+    from aiops_diagnostics.onboarding.projection import validate_runtime
 
     inst = host[0]
     archive = runtime_bundle(host)

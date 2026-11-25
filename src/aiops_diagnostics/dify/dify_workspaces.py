@@ -47,7 +47,7 @@ from aiops_diagnostics.common.private_files import ensure_private_directory, pro
 from aiops_diagnostics.common.redaction import ERROR_TEXT_SHORT_LIMIT
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
 from aiops_diagnostics.gateway import gateway_db, gateway_schema
-from aiops_diagnostics.gateway.environment_drafts import REFERENCE_PATTERN
+from aiops_diagnostics.onboarding.drafts import REFERENCE_PATTERN
 
 #: 一张行可能处于的全部状态。``created`` 与 ``ready`` 的区别在于**后续步骤是否跑完**
 #: （插件、凭据、模板 DSL，#881）；对"这个租户的 workspace 是哪一个"这个问题，两者

@@ -10,9 +10,8 @@ import tarfile
 
 import pytest
 
-from aiops_diagnostics.gateway import environment_artifacts as artifacts
-from aiops_diagnostics.gateway import environment_registry as registry
-from aiops_diagnostics.gateway.environment_projection import validate_candidate
+from aiops_diagnostics.onboarding import artifacts, registry
+from aiops_diagnostics.onboarding.projection import validate_candidate
 from tooling.test_gateway_install import host, install  # noqa: F401
 from tooling.test_gateway_install_task import task, task_state  # noqa: F401
 
@@ -75,7 +74,7 @@ def second_tenant(state):
     body = json.loads(candidate["environment.json"])
     body["environments"][0]["tenants"].append({"id": "new", "name": "新租户", "enabled": False})
     candidate["environment.json"] = json.dumps(body).encode()
-    from aiops_diagnostics.gateway.environment_projection import summary
+    from aiops_diagnostics.onboarding.projection import summary
 
     cm.update(summary({k: v for k, v in candidate.items() if k != "manifest.json"}))
     candidate["manifest.json"] = json.dumps(cm).encode()
@@ -287,7 +286,7 @@ def test_old_customer_http_still_answers_after_new_tenant_install_and_registrati
     from execution.test_app_runtime_dify_entry import dify_chat
 
     from aiops_diagnostics.dify.self_service_store import SelfServiceStore
-    from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry
+    from aiops_diagnostics.onboarding.registry import EnvironmentRegistry
 
     inst, _, _ = task_state
     spec, _ = second_tenant(task_state)
@@ -540,7 +539,7 @@ def test_consumer_candidate_can_open_while_other_tenant_is_enabled(task_state, t
     from types import SimpleNamespace
 
     from aiops_diagnostics import __version__
-    from aiops_diagnostics.consumer import candidate_trial
+    from aiops_diagnostics.onboarding import candidate_trial
 
     inst, _, _ = task_state
     spec, _ = second_tenant(task_state)

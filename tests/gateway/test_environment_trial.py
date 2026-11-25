@@ -9,8 +9,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
-from aiops_diagnostics.gateway import environment_trial as trial
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.onboarding import trial as trial_router
+from aiops_diagnostics.onboarding import trial_runtime as trial
 
 
 def scope(tenant="same"):
@@ -48,7 +49,7 @@ def environment(monkeypatch):
 
     context.operator_cpms.start = start
     app = FastAPI()
-    trial.register(app, context)
+    trial_router.register(app, context)
     return context, current, attempts, app
 
 
@@ -149,7 +150,7 @@ def test_candidate_tool_roundtrip_and_completed_readback_keep_normal_admission_c
     from aiops_diagnostics.dify import self_service_config
     from aiops_diagnostics.dify.self_service_store import SelfServiceStore
     from aiops_diagnostics.gateway import gateway_db
-    from aiops_diagnostics.gateway.environment_registry import RegistryError
+    from aiops_diagnostics.onboarding.registry import RegistryError
     from aiops_diagnostics.operator import operator_cpms
 
     with operator_environment(tmp_path, monkeypatch) as f:

@@ -15,22 +15,13 @@ import pytest
 from dify_console_bridge import bridge
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.dify import environment_management as management
 from aiops_diagnostics.dify import self_service_identity as auth
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
-from aiops_diagnostics.gateway import (
-    environment_drafts as drafts,
-)
-from aiops_diagnostics.gateway import (
-    environment_registry as registry,
-)
-from aiops_diagnostics.gateway import (
-    environment_tasks,
-    gateway_db,
-    gateway_schema,
-)
+from aiops_diagnostics.gateway import gateway_db, gateway_schema
 from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.onboarding import drafts, management, registry
+from aiops_diagnostics.onboarding import tasks as environment_tasks
 
 
 def _tools_digest() -> str:
