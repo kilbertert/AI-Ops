@@ -1,0 +1,25 @@
+--- a/app.py
++++ b/app.py
+@@ -259,0 +260,22 @@
++
++
++@router.get("/tenants/current", tags=["tenant"])
++def current_tenant_account(tenant_id: str = Header(..., alias=TENANT_HEADER)):
++    """只读精确命名空间归属；不开户、不返回API令牌。"""
++    import sqlite3
++    from contextlib import closing
++    from pathlib import Path
++
++    try:
++        with closing(sqlite3.connect(Path(tenancy.DB_PATH).absolute().as_uri() + "?mode=ro", uri=True)) as conn:
++            row = conn.execute(
++                "SELECT biz_tenant_id, ragflow_email FROM tenants WHERE biz_tenant_id=?",
++                (tenant_id,),
++            ).fetchone()
++    except sqlite3.Error as exc:
++        raise HTTPException(503, "tenant account registry unavailable") from exc
++    if row is None:
++        raise HTTPException(404, "tenant account not registered")
++    return {"data": {"biz_tenant_id": row[0], "ragflow_email": row[1]}}
++
++

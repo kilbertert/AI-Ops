@@ -170,7 +170,7 @@ def test_verified_legacy_account_is_not_reused_as_environment_scope(knowledge):
     )
     result = execute(knowledge, submit(knowledge))
     assert result["state"] == "blocked" and result["error_code"] == "SETUP_KNOWLEDGE_SCOPE_MISMATCH"
-    assert calls == []
+    assert calls == [], "without an explicit original library, migrated-owner preparation must not start"
 
 
 def test_unknown_cancel_keeps_reconciling_and_ambiguous_library_blocks(knowledge):
@@ -225,3 +225,47 @@ def test_unknown_rotation_reverifies_model(knowledge, workspace_upstream, monkey
     assert result["state"] == "blocked" and result["error_code"] == "SETUP_KNOWLEDGE_FAILED"
     assert result["result"]["knowledge_base_id"] == libraries[knowledge_tenant("same", "a")][0]["id"]
     assert len([c for c in calls if c[:2] == ("POST", "/kb/knowledge-bases")]) == 1
+
+
+def test_migrated_owner_reconciliation_checks_current_password_without_side_effects(
+    knowledge,
+    monkeypatch,
+    workspace_upstream,  # noqa: F811
+):
+    _, _, calls, _, _, context = knowledge
+    first = execute(knowledge, submit(knowledge))
+    assert first["state"] == "observed"
+    context.store.record_ragflow_tenant(
+        "same",
+        "a",
+        ragflow_email=derive_email("same"),
+        credential_ciphertext=encrypt_credential("stale", context.settings.ragflow_credential_key),
+        model_checked=True,
+    )
+    calls.clear()
+    checked = []
+    from aiops_diagnostics.knowledge.kb_onboarding import KbAdminClient, OnboardError
+
+    monkeypatch.setattr(
+        KbAdminClient,
+        "require_account",
+        lambda self, tenant, email: checked.append((self.environment, tenant, email)),
+    )
+
+    def reject_password(self, **kwargs):
+        checked.append(kwargs)
+        raise OnboardError("KB_REGISTER_FAILED", "password rejected", step="credential-verify")
+
+    monkeypatch.setattr(KbAdminClient, "verify_login", reject_password)
+    fixture = knowledge[0]
+    with gateway_db.connection(drafts._database(fixture[0]), write=True) as conn:
+        conn.execute("UPDATE environment_plans SET expires_at=0")
+    from gateway.test_environment_tasks import workspace_job
+
+    newer, _ = workspace_job(fixture, workspace_upstream)
+    assert prepare_http(fixture, newer).json()["state"] == "observed"
+    result = execute(knowledge, submit(knowledge, newer))
+    assert result["state"] == "blocked" and result["error_code"] == "SETUP_KNOWLEDGE_SCOPE_MISMATCH"
+    assert checked[0] == ("a", "same", derive_email("same"))
+    assert checked[1]["password"] == "stale"
+    assert all(c[0] == "GET" for c in calls)
