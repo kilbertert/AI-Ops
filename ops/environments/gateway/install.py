@@ -587,14 +587,23 @@ WantedBy=multi-user.target
         info = pending.get("schema_upgrade")
         if info is None:
             return
+        required_keys = {"from_version", "to_version", "backup_sha256"}
+        allowed_keys = required_keys | {"migrated_sha256"}
         if (
             not isinstance(info, dict)
-            or set(info) != {"from_version", "to_version", "backup_sha256"}
+            or not required_keys <= set(info) <= allowed_keys
             or type(info["from_version"]) is not int
             or type(info["to_version"]) is not int
             or not (0 <= info["from_version"] < info["to_version"])
             or not isinstance(info["backup_sha256"], str)
             or not re.fullmatch(r"[0-9a-f]{64}", info["backup_sha256"])
+            or (
+                "migrated_sha256" in info
+                and (
+                    not isinstance(info["migrated_sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", info["migrated_sha256"])
+                )
+            )
         ):
             raise ValueError("invalid pending schema upgrade record")
         pending_release = self.release(pending)
@@ -615,6 +624,13 @@ WantedBy=multi-user.target
         if db_dir.is_symlink() or not db_dir.is_dir():
             raise ValueError("invalid gateway database directory")
         probe.regular(database)
+        wal_sidecar = db_dir / "gateway.db-wal"
+        if wal_sidecar.is_symlink():
+            raise ValueError("database sidecar symlink refused")
+        if wal_sidecar.exists() and wal_sidecar.stat().st_size > 0:
+            raise ValueError("post-migration database writes prevent automatic schema rollback")
+        if "migrated_sha256" in info and digest(database) != info["migrated_sha256"]:
+            raise ValueError("post-migration database writes prevent automatic schema rollback")
         failed_dir = pending_release / f"failed-schema-{uuid.uuid4().hex[:8]}"
         failed_dir.mkdir(mode=0o700)
         for suffix in ("", "-wal", "-shm"):
@@ -622,8 +638,18 @@ WantedBy=multi-user.target
             if sidecar.is_symlink():
                 raise ValueError("database sidecar symlink refused")
             if sidecar.exists():
-                shutil.copy2(sidecar, failed_dir / sidecar.name)
-                (failed_dir / sidecar.name).chmod(0o600)
+                archived = failed_dir / sidecar.name
+                with sidecar.open("rb") as src, archived.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                    dst.flush()
+                    os.fchmod(dst.fileno(), 0o600)
+                    os.fsync(dst.fileno())
+        for directory in (failed_dir, pending_release):
+            fd = os.open(directory, os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         with tempfile.NamedTemporaryFile(dir=db_dir, delete=False) as out:
             temporary = Path(out.name)
             with backup.open("rb") as src:
@@ -1398,6 +1424,23 @@ WantedBy=multi-user.target
                         },
                     )
                     self.migrate_schema_database(release, upgrade_report["current_version"])
+                    migrated_db = self.state / "gateway/gateway.db"
+                    migrated_wal = self.state / "gateway/gateway.db-wal"
+                    if migrated_wal.exists() and migrated_wal.stat().st_size > 0:
+                        raise ValueError("uncheckpointed WAL remains after schema migration")
+                    schema_upgrade = {
+                        **schema_upgrade,
+                        "migrated_sha256": digest(migrated_db),
+                    }
+                    self.record(
+                        "pending.json",
+                        {
+                            **desired,
+                            "previous": old,
+                            "phase": "switching",
+                            "schema_upgrade": schema_upgrade,
+                        },
+                    )
             write(self.unit, self.unit_text())
             self.unit.chmod(0o644)
             self.config_snapshot(candidate_config, self.config / "production.env", desired["config_sha256"])

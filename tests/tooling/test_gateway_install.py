@@ -1557,10 +1557,10 @@ def test_forward_schema_upgrade_succeeds_and_rolls_back_on_health_failure(host, 
             return ns["backup_database"](cfg, inst.state, inst.environment, Path(extra[0]))
         if mode == "migrate":
             res = ns["migrate_database"](cfg, inst.state, inst.environment)
-            # Simulate WAL/SHM sidecars written before injected failure in rollback subtest
+            # Simulate empty WAL/SHM sidecars touched on startup without acknowledged writes
             if inject_stale_wal[0]:
-                (inst.state / "gateway/gateway.db-wal").write_bytes(b"stale-wal")
-                (inst.state / "gateway/gateway.db-shm").write_bytes(b"stale-shm")
+                (inst.state / "gateway/gateway.db-wal").write_bytes(b"")
+                (inst.state / "gateway/gateway.db-shm").write_bytes(b"shm-header")
             return res
         if mode == "version":
             return ns["read_database_version"](inst.state)
@@ -1586,9 +1586,12 @@ def test_forward_schema_upgrade_succeeds_and_rolls_back_on_health_failure(host, 
     assert (inst.root / "current").readlink() == old_link
     assert inst.name in active
     assert not (inst.root / "pending.json").exists()
-    archived_wal = list((inst.root / "releases").glob("*/failed-schema-*/gateway.db-wal"))
-    assert len(archived_wal) == 1 and archived_wal[0].read_bytes() == b"stale-wal"
-    assert len(list((inst.root / "releases").glob("*/failed-schema-*/gateway.db"))) == 1
+    archived_shm = list((inst.root / "releases").glob("*/failed-schema-*/gateway.db-shm"))
+    assert len(archived_shm) == 1 and archived_shm[0].stat().st_size > 0
+    archived_dbs = list((inst.root / "releases").glob("*/failed-schema-*/gateway.db"))
+    assert len(archived_dbs) == 1
+    with sqlite3.connect(archived_dbs[0]) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == gateway_schema.VERSION
     assert ns["read_database_version"](inst.state) == {"version": 2}
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT conversation_id FROM conversations").fetchall() == [("conv_legacy_1",)]
@@ -1642,3 +1645,99 @@ def test_schema_rollback_refuses_tampered_backup_and_preserves_pending(host, mon
     with pytest.raises(ValueError, match="backup digest mismatch"):
         inst.recover()
     assert (inst.root / "pending.json").exists()
+
+
+def test_schema_rollback_refuses_acknowledged_post_migration_writes(host, monkeypatch):
+    import sqlite3
+
+    from aiops_diagnostics.gateway import gateway_db, gateway_schema
+
+    ns = runpy.run_path(str(ROOT / "ops/environments/gateway/runtime_check.py"))
+    apply(host)
+    inst, *_ = host
+    old = inst.read_record("installed.json")
+    db = inst.state / "gateway/gateway.db"
+    _seed_legacy_v2_database(db)
+    pending_rel = inst.root / "releases" / old["release"]
+    backup = pending_rel / "pre-schema-gateway.db"
+    backup.write_bytes(db.read_bytes())
+    backup.chmod(0o600)
+    backup_sha = install.digest(backup)
+
+    # Migrate v2 -> v3 and record migrated_sha256 before simulating an acknowledged write
+    ns["migrate_database"](inst.config / "production.env", inst.state, inst.environment)
+    migrated_sha = install.digest(db)
+    inst.record(
+        "pending.json",
+        {
+            **old,
+            "previous": old,
+            "phase": "switching",
+            "schema_upgrade": {
+                "from_version": 2,
+                "to_version": gateway_schema.VERSION,
+                "backup_sha256": backup_sha,
+                "migrated_sha256": migrated_sha,
+            },
+        },
+    )
+    # Simulate an acknowledged write (e.g., conversation rename) after v3 Gateway started
+    with gateway_db.connection(db, write=True) as conn:
+        conn.execute(
+            "UPDATE conversations SET title = 'renamed-after-start' WHERE conversation_id = 'conv_legacy_1'"
+        )
+
+    monkeypatch.setattr(
+        inst,
+        "_run_runtime_check",
+        lambda release, mode, *extra: ns["read_database_version"](inst.state) if mode == "version" else None,
+    )
+    with pytest.raises(ValueError, match="post-migration database writes"):
+        inst.recover()
+    assert (inst.root / "pending.json").exists()
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT title FROM conversations WHERE conversation_id = 'conv_legacy_1'"
+        ).fetchone() == ("renamed-after-start",)
+
+
+def test_runtime_check_cli_subprocess_boundary(tmp_path):
+    from aiops_diagnostics.gateway import gateway_schema
+
+    script = ROOT / "ops/environments/gateway/runtime_check.py"
+    cfg = tmp_path / "input.env"
+    cfg.write_text("# empty\n")
+    db = tmp_path / "gateway/gateway.db"
+    _seed_legacy_v2_database(db)
+
+    def run_cli(*args, check=True):
+        return subprocess.run(
+            [sys.executable, "-I", str(script), str(cfg), str(tmp_path), "test", *args],
+            capture_output=True,
+            text=True,
+            check=check,
+        )
+
+    # Strict existing refuses v2 != v3 over CLI boundary
+    refused = run_cli("existing", check=False)
+    assert refused.returncode == 1 and json.loads(refused.stdout)["result"] == "refused"
+
+    # upgrade-check accepts v2 -> v3
+    checked = json.loads(run_cli("upgrade-check").stdout)
+    assert checked["version"] == 2 and checked["current_version"] == gateway_schema.VERSION
+
+    # rehearse runs on isolated copy without mutating live DB
+    rehearsal_path = tmp_path / "trial/rehearsal.db"
+    rehearsal_path.parent.mkdir(mode=0o700)
+    rehearsed = json.loads(run_cli("rehearse", str(rehearsal_path)).stdout)
+    assert rehearsed["rehearsed"] is True and json.loads(run_cli("version").stdout) == {"version": 2}
+
+    # backup + migrate + strict existing pass
+    backup_path = tmp_path / "snap/pre.db"
+    backup_path.parent.mkdir(mode=0o700)
+    backed = json.loads(run_cli("backup", str(backup_path)).stdout)
+    assert backed["backup_sha256"] == install.digest(backup_path)
+    migrated = json.loads(run_cli("migrate").stdout)
+    assert migrated["migrated"] is True and migrated["to_version"] == gateway_schema.VERSION
+    assert json.loads(run_cli("version").stdout) == {"version": gateway_schema.VERSION}
+    assert json.loads(run_cli("existing").stdout)["version"] == gateway_schema.VERSION
