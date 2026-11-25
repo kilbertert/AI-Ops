@@ -13,7 +13,7 @@
 
 | 改了什么 | 要去哪里装 |
 |---|---|
-| `src/aiops_diagnostics/dify/dify_console_publish.py` | 36 `/opt/aiops-console-bridge/` |
+| `services/dify-console-bridge/dify_console_bridge/*.py` | 36 `/opt/aiops-console-bridge/`（由 `ops/dify-console-bridge/build-bundle.sh` 打包，`deploy.sh` 原子切换） |
 | `ops/dify-console-bridge/*.js`（注入脚本） | 36 `/srv/aiops-console-assets/` |
 | `ops/dify-console-bridge/dify-console-publish.conf` | 36 `snippets/dify-console-publish.conf`（`nginx -T` 里看到的是这个路径，不是 vhost 主文件） |
 | `deploy/dify-36/web-patches/` | 重建 web 镜像（见下） |
@@ -24,8 +24,8 @@
 
 ```bash
 # 桥代码：比对 md5，不看时间戳
-md5sum /opt/aiops-console-bridge/aiops_diagnostics/dify/dify_console_publish.py
-md5sum ~/Projects/AI-Ops/src/aiops_diagnostics/dify/dify_console_publish.py
+md5sum /opt/aiops-console-bridge/dify_console_bridge/bridge.py
+md5sum ~/Projects/AI-Ops/services/dify-console-bridge/dify_console_bridge/bridge.py
 
 # nginx：改完必须 nginx -T 里能看到，而且 reload 过
 sudo nginx -T | grep -c "你的新路由"
@@ -49,6 +49,6 @@ sudo journalctl -u aiops-dify-console-bridge -f
 
 ## 回滚
 
-桥：`/opt/aiops-console-bridge/aiops_diagnostics.bak-<时间戳>/`，整目录换回后重启。
+桥：按 `ops/dify-console-bridge/README.md` 同步恢复 `aiops_diagnostics/`、`dify_console_bridge/`（若回退旧版则移除 `dify_console_bridge/`）与对应 systemd 单元 `/etc/systemd/system/aiops-dify-console-bridge.service`，随后执行 `systemctl daemon-reload && systemctl restart aiops-dify-console-bridge`（不要只换回 `aiops_diagnostics/`，否则 `ExecStart` 仍指向 `dify_console_bridge`）。
 nginx：`snippets/dify-console-publish.conf.bak-<时间戳>`，`nginx -t` 后 reload。
 web 镜像：`DIFY_WEB_IMAGE=aiops/dify-web-patched:rollback-<日期>` + `--force-recreate`。

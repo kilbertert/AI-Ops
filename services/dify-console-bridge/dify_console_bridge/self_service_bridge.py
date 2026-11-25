@@ -6,6 +6,8 @@ import re
 
 from aiops_diagnostics.identity.order_identity import is_order_identifier
 
+from . import bridge
+
 _SCOPES = frozenset({"both", "consumer", "operator"})
 _ENTRIES = frozenset({"consumer", "operator"})
 _CAPABILITIES = frozenset({"consumer", "order", "offline"})
@@ -152,7 +154,7 @@ def _pos_int(value: object) -> bool:
     return type(value) is int and value >= 1
 
 
-def _verify_browser_session(handler, bridge):
+def _verify_browser_session(handler):
     """核验浏览器同源头、JSON 内容类型、Dify 控制台会话及管理角色。"""
     rejected = bridge._Rejected
     origin = bridge.normalize_origin(handler._single_header("Origin"))
@@ -433,7 +435,7 @@ def _validate_payload(action: str, payload: dict, settings, rejected) -> None:
         raise rejected(400, "无效参数")
 
 
-def _verify_app_access(handler, bridge, session, app_id: object) -> None:
+def _verify_app_access(handler, session, app_id: object) -> None:
     """确认当前 Dify 工作区能读取目标 app（防止跨工作区越权管理）。"""
     rejected = bridge._Rejected
     if not _matches(_APP_ID, app_id):
@@ -447,7 +449,7 @@ def _verify_app_access(handler, bridge, session, app_id: object) -> None:
         raise rejected(403, "无权管理此应用")
 
 
-def _switch_workspace(handler, bridge, session, result: dict) -> None:
+def _switch_workspace(handler, session, result: dict) -> None:
     """切换浏览器当前 Dify 工作区；平台账号未加入目标空间时先走网关受控加成员。"""
     rejected = bridge._Rejected
     workspace_id = result.get("workspace_id", "")
@@ -498,16 +500,16 @@ def _switch_workspace(handler, bridge, session, result: dict) -> None:
         raise rejected(502, "工作区切换失败，请重试")
 
 
-def handle(handler, bridge):
+def handle(handler):
     """固定管理动作入口：验会话 → 解析路由 → 校验载荷 → 转发网关 → 可选切工作区。"""
-    session = _verify_browser_session(handler, bridge)
+    session = _verify_browser_session(handler)
     payload = handler._read_bounded_json(65536, _ALLOWED_PAYLOAD_KEYS)
     action = payload.pop("action", "")
     method, path = _resolve_action_route(action, payload, bridge._Rejected)
     _validate_payload(action, payload, handler.settings, bridge._Rejected)
 
     if action in _APP_SCOPED_ACTIONS:
-        _verify_app_access(handler, bridge, session, payload.get("app_id", ""))
+        _verify_app_access(handler, session, payload.get("app_id", ""))
 
     key = handler.settings.trial_key if action.startswith("trial") else handler.settings.publish_key
     code, result = bridge._request(
@@ -529,11 +531,11 @@ def handle(handler, bridge):
         handler._json(200, {"managed": False})
         return
     if action == "workspace" and code == 200 and isinstance(result, dict):
-        _switch_workspace(handler, bridge, session, result)
+        _switch_workspace(handler, session, result)
     handler._json(code, result if isinstance(result, dict) else {"error": {"code": "SETUP_UNAVAILABLE"}})
 
 
-def authorize_workspace(handler, bridge, session, workspace_id):
+def authorize_workspace(handler, session, workspace_id):
     code, result = bridge._request(
         handler.settings.gateway_base_url + "/v1/dify/management/workspace",
         method="POST",

@@ -7,6 +7,7 @@ umask 077
 bundle=$(realpath -- "$1")
 backup=$(realpath -m -- "$2")
 code=/opt/aiops-console-bridge/aiops_diagnostics
+bridge_code=/opt/aiops-console-bridge/dify_console_bridge
 js=/srv/aiops-console-assets/dify-publish-button.js
 snippet=/www/server/panel/vhost/nginx/snippets/dify-console-publish.conf
 service=aiops-dify-console-bridge.service
@@ -15,19 +16,21 @@ unit=/etc/systemd/system/aiops-dify-console-bridge.service
 test ! -e "$backup"
 (cd "$bundle" && sha256sum --strict -c SHA256SUMS)
 # 只带标准库依赖；隔离宿主 site-packages，证明不会偶然借用旧模块。
-(cd "$bundle" && PYTHONDONTWRITEBYTECODE=1 python3 -S -c 'import aiops_diagnostics.dify.dify_console_publish')
+(cd "$bundle" && PYTHONDONTWRITEBYTECODE=1 python3 -S -c 'import dify_console_bridge.bridge')
 "$nginx" -t
 systemctl is-active --quiet "$service"
 mkdir -m 700 "$backup"
 cp -a "$code" "$backup/aiops_diagnostics"
+if [ -e "$bridge_code" ]; then cp -a "$bridge_code" "$backup/dify_console_bridge"; fi
 cp -a "$js" "$backup/dify-publish-button.js"
 cp -a "$snippet" "$backup/dify-console-publish.conf"
 cp -a "$unit" "$backup/bridge.service"
 cp "$bundle/REVISION" "$backup/NEW_REVISION"
 restore() {
   systemctl stop "$service"
-  rm -rf -- "$code"
+  rm -rf -- "$code" "$bridge_code"
   cp -a "$backup/aiops_diagnostics" "$code"
+  if [ -e "$backup/dify_console_bridge" ]; then cp -a "$backup/dify_console_bridge" "$bridge_code"; fi
   cp -a "$backup/dify-publish-button.js" "$js"
   cp -a "$backup/dify-console-publish.conf" "$snippet"
   cp -a "$backup/bridge.service" "$unit"
@@ -47,19 +50,25 @@ python3 - "$unit" <<'PY_UNIT'
 from pathlib import Path
 import sys
 p = Path(sys.argv[1]); text = p.read_text()
-old = "-m aiops_diagnostics.dify_console_publish"
-new = "-m aiops_diagnostics.dify.dify_console_publish"
-if text.count(old) + text.count(new) != 1:
+old_choices = (
+    "-m aiops_diagnostics.dify_console_publish",
+    "-m aiops_diagnostics.dify.dify_console_publish",
+)
+new = "-m dify_console_bridge"
+if sum(text.count(c) for c in (*old_choices, new)) != 1:
     raise SystemExit("bridge ExecStart module missing or ambiguous")
-p.write_text(text.replace(old, new))
+for old in old_choices:
+    text = text.replace(old, new)
+p.write_text(text)
 PY_UNIT
 systemctl daemon-reload
-rm -rf -- "$code"
+rm -rf -- "$code" "$bridge_code"
 cp -a "$bundle/aiops_diagnostics" "$code"
+cp -a "$bundle/dify_console_bridge" "$bridge_code"
 # Python 忽略旧字节码的时间戳碰撞；仅清理本服务的缓存。
-find "$code" -type d -name __pycache__ -exec rm -rf -- {} +
-find "$code" -type d -exec chmod 755 {} +
-find "$code" -type f -exec chmod 644 {} +
+find "$code" "$bridge_code" -type d -name __pycache__ -exec rm -rf -- {} +
+find "$code" "$bridge_code" -type d -exec chmod 755 {} +
+find "$code" "$bridge_code" -type f -exec chmod 644 {} +
 install -m 644 "$bundle/dify-publish-button.js" "$js"
 install -m 644 "$bundle/dify-console-publish.conf" "$snippet"
 "$nginx" -t

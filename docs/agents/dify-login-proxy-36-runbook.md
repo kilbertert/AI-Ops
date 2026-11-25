@@ -57,30 +57,35 @@
 
 1. 登录代理复用人工升级手顺，接收已合并修订的完整代码制品；Gateway标准CD成功不代表它已同步。
 2. **解包后必须核对属主** —— `tar` 会把归档里的属主/权限一起带过去，而服务身份是
-   `aiopslogin`。这一步漏掉的表现是 `No module named aiops_diagnostics.dify.dify_login_server`
+   `aiopslogin`。这一步漏掉的表现是 `No module named dify_login_proxy`
    （**报错说模块不存在，实际是读不到文件**）。
 3. **判断入口是否生效看端口与 `nginx -T`，不看 `systemctl is-active nginx`** ——
    那个单元从 2026-09-11 起就是 failed（既有债，报 "already running"）。
 
-## 0.1 模块归位后的代码/服务单元配套
+## 0.1 独立服务化后的代码/服务单元配套（ADR-0338）
 
-新合并源码使用`aiops_diagnostics.dify.dify_login_server`。先按§1–3准备完整候选并通过预检，
-备份代码、环境文件与单元，再按§5停止并完整切换。仅当旧单元仍引用旧模块时才需要下列改写：
+新合并源码使用 `python -m dify_login_proxy`（源码目录 `services/dify-login-proxy/`）。先按 §1–3 准备包含 `dify_login_proxy/` 与 `aiops_diagnostics/` 的完整候选并通过预检，
+备份代码、环境文件与单元，再按 §5 停止并完整切换。当旧单元仍引用两代旧模块之一时，用下列脚本统一迁移：
 
 ```python
 from pathlib import Path
 
 unit = Path("/etc/systemd/system/aiops-dify-login-proxy.service")
 text = unit.read_text()
-old = "-m aiops_diagnostics.dify_login_server"
-new = "-m aiops_diagnostics.dify.dify_login_server"
-assert text.count(old) + text.count(new) == 1
-unit.write_text(text.replace(old, new))
+old_choices = (
+    "-m aiops_diagnostics.dify_login_server",
+    "-m aiops_diagnostics.dify.dify_login_server",
+)
+new = "-m dify_login_proxy"
+assert sum(text.count(c) for c in (*old_choices, new)) == 1
+for old in old_choices:
+    text = text.replace(old, new)
+unit.write_text(text)
 ```
 
-执行`systemctl daemon-reload`后按后文启动和验证。失败恢复代码及原单元、daemon-reload再启动，
-不倒回映射数据库。原服务User/Group和环境项保持不变。重启会清空近期公司令牌缓存，须正常重登。
-以下取制品命令里的完整包已经包含新dify子目录；不使用旧模块名探测新包。
+执行 `systemctl daemon-reload` 后按后文启动和验证。失败恢复代码及原单元、`daemon-reload` 再启动，
+不倒回映射数据库。原服务 User/Group 和环境项保持不变。重启会清空近期公司令牌缓存，须正常重登。
+以下取制品命令将 `dify_login_proxy/` 与其依赖的 `aiops_diagnostics/` 一起展平到归档根目录；不使用旧模块名探测新包。
 
 ## 1. 从合并修订取完整制品
 
@@ -101,17 +106,27 @@ LOGIN_RELEASE_SHA=$(git rev-parse --verify "${LOGIN_RELEASE_SHA}^{commit}")
 git merge-base --is-ancestor "$LOGIN_RELEASE_SHA" origin/main
 mkdir -p dist/login-proxy
 LOGIN_ARTIFACT="dist/login-proxy/${LOGIN_RELEASE_SHA}.tar"
-git archive --format=tar --output="$LOGIN_ARTIFACT" "$LOGIN_RELEASE_SHA" src
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+git archive --format=tar "$LOGIN_RELEASE_SHA" \
+  src/aiops_diagnostics \
+  services/dify-login-proxy/dify_login_proxy \
+  | tar -xf - -C "$STAGE"
+mkdir "$STAGE/root"
+mv "$STAGE/services/dify-login-proxy/dify_login_proxy" "$STAGE/root/"
+mv "$STAGE/src/aiops_diagnostics" "$STAGE/root/"
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+  -cf "$LOGIN_ARTIFACT" -C "$STAGE/root" .
 LOGIN_ARTIFACT_SHA=$(sha256sum "$LOGIN_ARTIFACT" | cut -d ' ' -f1)
 dev-host cp "$LOGIN_TARGET" "$LOGIN_ARTIFACT" --dest "$LOGIN_ARTIFACT_DEST" \
   --artifact-sha256 "$LOGIN_ARTIFACT_SHA"
 ```
 
-本制品包含`src/aiops_diagnostics/`。在确认候选目录是本次新建的空目录后，
-以`tar -xf "$LOGIN_ARTIFACT_DEST" -C "$LOGIN_CANDIDATE_ROOT" --strip-components=1`解包：
-候选根直接包含`aiops_diagnostics/`，导入与切换沿用现役包根布局，不额外嵌套一层`src`。
-旧精简包可能缺少后来拆出的`common`等模块，必须交付完整包，不能只替换一个store或工具文件。
-传输后复核制品摘要和关键模块SHA256；摘要只标识字节，合并来源仍须单独核对。
+本制品在归档根直接包含 `dify_login_proxy/` 与依赖的 `aiops_diagnostics/`。在确认候选目录是本次新建的空目录后，
+以 `tar -xf "$LOGIN_ARTIFACT_DEST" -C "$LOGIN_CANDIDATE_ROOT"` 解包：
+候选根同时存在 `dify_login_proxy/` 与 `aiops_diagnostics/`（即 `PYTHONPATH="$LOGIN_CANDIDATE_ROOT"` 可直接执行 `python3 -m dify_login_proxy`），不额外嵌套一层 `src` 或 `services`。
+旧精简包可能缺少后来拆出的 `common` 等模块，必须交付完整包，不能只替换单个 store 或工具文件。
+传输后复核制品摘要和关键模块 SHA256；摘要只标识字节，合并来源仍须单独核对。
 
 ## 2. 路径权限与备份前置
 
@@ -134,9 +149,9 @@ dev-host cp "$LOGIN_TARGET" "$LOGIN_ARTIFACT" --dest "$LOGIN_ARTIFACT_DEST" \
 远端命令须按`dev-host`的shell引用规则传递；Python短探针走stdin，不落到共享临时脚本路径。
 以下步骤任一失败即停止，旧服务继续运行，不提前切换：
 
-1. 使用现役Python与真实服务身份，从候选包根导入`LoginProxySettings`和`build_service`，
-   确认模块`__file__`指向候选。现役环境由获准的本地读取器仅在内存获取，沿用§3.5按数据解析的原则；
-   不source环境文件、不打印settings或`/proc/.../environ`，不把凭据放进命令参数或证据。
+1. 使用现役 Python 与真实服务身份，以 `PYTHONPATH="$LOGIN_CANDIDATE_ROOT"` 从候选包根导入 `dify_login_proxy.server`（`LoginProxySettings`、`build_service`）与 `dify_login_proxy.__main__`，
+   确认模块 `__file__` 指向候选。现役环境由获准的本地读取器仅在内存获取，沿用 §3.5 按数据解析的原则；
+   不 source 环境文件、不打印 settings 或 `/proc/.../environ`，不把凭据放进命令参数或证据。
 2. 用`LoginProxySettings.from_env()`校验现役配置。执行`build_service`**之前**，必须用
    `dataclasses.replace(settings, data_dir=临时副本目录)`替换数据根；否则构造会打开正式mappings.db。
 3. 对正式mappings.db只读连接使用`sqlite3.Connection.backup()`生成临时一致副本，
@@ -170,7 +185,7 @@ ssh yidong-36 'sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-pro
 ssh yidong-36 "sudo -n -u aiopslogin /usr/bin/python3 - <<'PY'
 import os, sys
 sys.path.insert(0, '/opt/aiops-login-proxy')
-from aiops_diagnostics.dify.dify_login_server import LoginProxySettings
+from dify_login_proxy.server import LoginProxySettings
 
 env = {}
 for line in open('/etc/aiops-login-proxy/login-proxy.env', encoding='utf-8'):
@@ -207,7 +222,7 @@ PY"
 ssh yidong-36 'sudo -n -u aiopslogin /usr/bin/python3 - <<PY
 import sys
 sys.path.insert(0, "/opt/aiops-login-proxy")
-from aiops_diagnostics.dify.dify_login_provision import DifyConsoleSettings
+from dify_login_proxy.provision import DifyConsoleSettings
 for v in ("", "prod.41"):
     try:
         DifyConsoleSettings(base_url="http://x", secret_key="x", environment=v)
@@ -513,7 +528,7 @@ systemctl is-active --quiet "$LOGIN_SERVICE"
 
 | 现象 | 真因 |
 |---|---|
-| `No module named aiops_diagnostics.dify.dify_login_server` | 属主/权限不对（见 §3），不是文件缺失 |
+| `No module named dify_login_proxy`（或旧入口 `aiops_diagnostics.dify.dify_login_server`） | 属主/权限不对或未解包独立旁路包（见 §1/§3），不是文件缺失 |
 | `systemctl is-active nginx` = failed | 既有失效单元，端口才是判据 |
 | 所有登录都 400「明文 HTTP」 | 10008 那一层的 realip/map 没装或没 reload |
 | 登录后立刻弹回 `/signin` | 走了明文入口；会话 cookie 是 `Secure` + `__Host-`，http 源上被丢弃 |

@@ -12,9 +12,9 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from dify_console_bridge import bridge
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.dify import dify_console_publish as bridge
 from aiops_diagnostics.dify import environment_management as management
 from aiops_diagnostics.dify import self_service_identity as auth
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces

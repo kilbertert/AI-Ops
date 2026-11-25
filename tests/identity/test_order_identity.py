@@ -156,10 +156,10 @@ def test_candidates_preserve_order_and_dedupe() -> None:
 
 
 def test_native_preview_accepts_the_contract_shape() -> None:
-    """`dify_console_publish._native_order` 曾用 `[A-Za-z0-9_-]{1,64}` 复查
+    """`dify_console_bridge.bridge._native_order` 曾用 `[A-Za-z0-9_-]{1,64}` 复查
     order_reference 抽出的候选——`订单 ORD-2026.10:01` 会被判成「不支持
     的字符」。收口后合同承诺的形状直接通过。"""
-    from aiops_diagnostics.dify.dify_console_publish import _native_order
+    from dify_console_bridge.bridge import _native_order
 
     assert _native_order("帮我看看订单 ORD-2026.10:01 的情况") == "ORD-2026.10:01"
 
@@ -200,12 +200,9 @@ _ALLOWED_ALPHABET_LITERALS = {
     "data/sources.py": 4,  # 传输层白名单 ×2 + SQL 标识符 + MySQL 账户形状
     "dify/dify_app_registry.py": 1,  # 应用 id
     "dify/dify_dsl_pull.py": 1,  # 应用 id
-    "dify/dify_login_proxy.py": 2,  # 登录会话 id / token
-    "dify/dify_login_server.py": 1,  # 登录 id
     "dify/dify_workspaces.py": 1,  # 应用 id
     "dify/operator_run_logs_api.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
     "dify/self_service_api.py": 1,  # knowledge_base_id
-    "dify/self_service_bridge.py": 3,  # kb_id/run_id/主体编号(共用)，非订单
     "dify/self_service_identity.py": 1,
     "dify/environment_management.py": 2,  # 环境与公司租户编号，无订单匹配
     "execution/chat_execution.py": 3,  # 智能体 id / libraries 键 ×2

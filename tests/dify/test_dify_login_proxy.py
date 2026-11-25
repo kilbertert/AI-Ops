@@ -27,13 +27,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.dify import dify_console_publish as bridge
-from aiops_diagnostics.dify.console_environments import credentials
-from aiops_diagnostics.dify.dify_login_company import CompanyAuthSettings
-from aiops_diagnostics.dify.dify_login_provision import DifyConsoleSettings, account_email_for
-from aiops_diagnostics.dify.dify_login_proxy import (
+from dify_console_bridge import bridge
+from dify_login_proxy.company import CompanyAuthSettings
+from dify_login_proxy.core import (
     CAPTCHA_ROUTE,
     LOGIN_ROUTE,
     LOGOUT_ROUTE,
@@ -42,13 +38,17 @@ from aiops_diagnostics.dify.dify_login_proxy import (
     mint_console_session,
     sign_console_jwt,
 )
-from aiops_diagnostics.dify.dify_login_server import (
+from dify_login_proxy.environments import credentials
+from dify_login_proxy.provision import DifyConsoleSettings, account_email_for
+from dify_login_proxy.server import (
     LoginProxySettings,
     NotReady,
     assert_public_origin_is_https,
     make_server,
     safe_redirect_path,
 )
+
+from aiops_diagnostics.common.private_files import write_private_text
 from aiops_diagnostics.gateway.environment_registry import apply
 
 SECRET_KEY = "test-dify-secret-key-0123456789"
@@ -581,7 +581,7 @@ def test_two_environment_labels_cannot_normalize_into_the_same_prefix() -> None:
 
     判据：任何含非规范字符的环境**直接报错**，不替换、不猜。
     """
-    from aiops_diagnostics.dify.dify_login_provision import DifyProvisionError
+    from dify_login_proxy.provision import DifyProvisionError
 
     for bad in ("prod.41", "prod/41", "prod 41", "Prod-41", "-41", "41-", "a" * 40):
         with pytest.raises(DifyProvisionError):
@@ -604,7 +604,7 @@ def test_an_empty_environment_is_a_configuration_error_not_a_silent_fallback() -
 
     两个入口都要拒：派生函数本身，以及构造 settings 的时候（后者更早、更容易被发现）。
     """
-    from aiops_diagnostics.dify.dify_login_provision import DifyProvisionError
+    from dify_login_proxy.provision import DifyProvisionError
 
     for empty in ("", "   ", "-"):
         with pytest.raises(DifyProvisionError):
@@ -620,7 +620,7 @@ def test_settings_reject_a_non_canonical_environment_at_construction() -> None:
     `DifyProvisionError` —— 那表现成"登录服务坏了"，不是"配置写错了"。
     一个配置错误必须在启动时报。
     """
-    from aiops_diagnostics.dify.dify_login_provision import DifyProvisionError
+    from dify_login_proxy.provision import DifyProvisionError
 
     with pytest.raises(DifyProvisionError):
         DifyConsoleSettings(base_url="http://dify.invalid", secret_key=SECRET_KEY, environment="prod.41")
@@ -655,7 +655,7 @@ def test_the_captcha_request_does_not_pin_an_accept_type(stack) -> None:
     `_FakeCompany` 的地址从它自己的 `_serve` 拿不到（fixture 只 yield 了代理），
     所以直接复用 fixture 里那个假公司的 URL —— 见 fixture 顶部。
     """
-    from aiops_diagnostics.dify.dify_login_company import CompanyAuthSettings, fetch_captcha
+    from dify_login_proxy.company import CompanyAuthSettings, fetch_captcha
 
     settings = CompanyAuthSettings(base_url=_FAKE_COMPANY_URL, client_type="admin")
     body, content_type = fetch_captcha(settings, "abc123")
@@ -1161,7 +1161,7 @@ def test_settings_reject_a_session_lifetime_outside_the_allowed_range() -> None:
     （一年），下界也存在（1 分钟，否则等于每次请求后立刻失效）。一个配置失误必须在
     启动时报，不能表现成"登录服务坏了"——与上面 environment 那条判据同一形状。
     """
-    from aiops_diagnostics.dify.dify_login_provision import DifyProvisionError
+    from dify_login_proxy.provision import DifyProvisionError
 
     for bad in (0, -1, 366 * 24 * 60 + 1):
         with pytest.raises(DifyProvisionError):
@@ -1179,7 +1179,7 @@ def test_a_long_lived_session_is_signed_and_its_cookie_has_no_expiry_cap_below_i
     这是运营报的那个缺陷的判据：登录状态维持不了很久。`refresh` 与 `access` 同值、
     代理没有刷新端点，所以 `exp` 与 `Max-Age` **就是**两次登录之间能待多久。
     """
-    from aiops_diagnostics.dify.dify_login_proxy import mint_console_session
+    from dify_login_proxy.core import mint_console_session
 
     thirty_days = 30 * 24 * 60
     session = mint_console_session(
@@ -1195,7 +1195,7 @@ def test_a_long_lived_session_is_signed_and_its_cookie_has_no_expiry_cap_below_i
     # 令牌本身也远未过期：解出来核 exp。
     import time as _time
 
-    from aiops_diagnostics.dify.dify_login_proxy import verify_console_jwt
+    from dify_login_proxy.core import verify_console_jwt
 
     claims = verify_console_jwt(session.access_token, SECRET_KEY)
     assert claims is not None
@@ -1262,7 +1262,7 @@ def test_operator_token_endpoint_requires_separate_key_and_real_session(tmp_path
     from dataclasses import replace
     from types import SimpleNamespace
 
-    from aiops_diagnostics.dify.dify_login_server import LoginProxyHandler
+    from dify_login_proxy.server import LoginProxyHandler
 
     key = "separate-operator-trial-key-" + "a" * 32
     settings = LoginProxySettings(
@@ -1758,7 +1758,7 @@ def test_ambiguous_credentials_refused(tmp_path, raw):
 
 
 def test_captcha_source_limit_and_failed_fetch_release(environments, monkeypatch):
-    from aiops_diagnostics.dify import dify_login_server as server
+    from dify_login_proxy import server
 
     s = environments
     original = server.fetch_captcha

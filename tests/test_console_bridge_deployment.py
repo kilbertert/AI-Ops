@@ -13,47 +13,47 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _bundled_bridge_modules() -> set[str]:
-    """解析 build-bundle.sh 实际打包进发布桥的 aiops_diagnostics 模块集合。"""
+def _bundled_bridge_modules() -> dict[str, Path]:
+    """解析 build-bundle.sh 实际打包进发布桥的全部模块（独立桥包 + 最小 aiops_diagnostics 原语）。"""
     script = (ROOT / "ops/dify-console-bridge/build-bundle.sh").read_text(encoding="utf-8")
-    modules: set[str] = set()
+    modules: dict[str, Path] = {}
+    roots = (
+        ("services/dify-console-bridge/dify_console_bridge/", "dify_console_bridge"),
+        ("src/aiops_diagnostics/", "aiops_diagnostics"),
+    )
     for line in script.splitlines():
         token = line.strip().rstrip("\\").strip()
-        if not token.startswith("src/aiops_diagnostics/"):
-            continue
-        rel = token.removeprefix("src/aiops_diagnostics/")
-        match = re.fullmatch(r"(.*/)?\{([^}]+)\}\.py", rel)
-        if match:
-            prefix = (match.group(1) or "").replace("/", ".")
-            for item in match.group(2).split(","):
-                name = item.strip()
-                modules.add(prefix.rstrip(".") if name == "__init__" else prefix + name)
-        elif rel.endswith(".py"):
-            stem = rel.removesuffix(".py").replace("/", ".")
-            modules.add("" if stem == "__init__" else stem)
-    return {f"aiops_diagnostics.{m}" if m else "aiops_diagnostics" for m in modules}
-
-
-_LOGIN_PROXY_ONLY_DEFS: dict[str, set[str]] = {
-    # console_environments.py 与 dify-login-proxy 共用；发布桥只调用顶层 credentials()，
-    # LoginEnvironments / refused 仅在完整 wheel 的登录代理进程内运行。
-    "aiops_diagnostics.dify.console_environments": {"LoginEnvironments", "refused"},
-}
-
-
-def _iter_bundle_checked_nodes(module: str, tree: ast.Module):
-    """遍历发布桥实际会执行的 AST 节点（排除共用模块里仅供登录代理使用的定义）。"""
-    skip = _LOGIN_PROXY_ONLY_DEFS.get(module, set())
-    for stmt in tree.body:
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and stmt.name in skip:
-            continue
-        yield from ast.walk(stmt)
+        for prefix_dir, pkg_name in roots:
+            if not token.startswith(prefix_dir):
+                continue
+            rel = token.removeprefix(prefix_dir)
+            base_dir = ROOT / prefix_dir
+            match = re.fullmatch(r"(.*/)?\{([^}]+)\}\.py", rel)
+            if match:
+                sub_dir = match.group(1) or ""
+                dot_prefix = sub_dir.replace("/", ".")
+                for item in match.group(2).split(","):
+                    name = item.strip()
+                    mod = (
+                        f"{pkg_name}.{dot_prefix.rstrip('.')}"
+                        if name == "__init__" and dot_prefix
+                        else (pkg_name if name == "__init__" else f"{pkg_name}.{dot_prefix}{name}")
+                    )
+                    modules[mod] = base_dir / sub_dir / f"{name}.py"
+            elif rel.endswith(".py"):
+                stem = rel.removesuffix(".py").replace("/", ".")
+                mod = pkg_name if stem == "__init__" else f"{pkg_name}.{stem}"
+                modules[mod] = base_dir / rel
+    return modules
 
 
 def _is_package_member(qualified: str) -> bool:
-    """判断全限定模块名是否指向 src/ 下的真实模块文件或子包目录。"""
-    base = ROOT / "src" / qualified.replace(".", "/")
-    return base.with_suffix(".py").is_file() or (base / "__init__.py").is_file()
+    """判断全限定模块名是否指向 src/ 或 dify-console-bridge 下的真实模块文件或子包目录。"""
+    for root in (ROOT / "src", ROOT / "services/dify-console-bridge"):
+        base = root / qualified.replace(".", "/")
+        if base.with_suffix(".py").is_file() or (base / "__init__.py").is_file():
+            return True
+    return False
 
 
 def _resolve_import_from(module: str, is_package: bool, node: ast.ImportFrom) -> str | None:
@@ -74,25 +74,22 @@ def _resolve_import_from(module: str, is_package: bool, node: ast.ImportFrom) ->
 def test_console_bridge_bundle_imports_are_self_contained() -> None:
     """拦截桥模块新增未打包的包内导入（含延迟、相对与子包导入），防线上 ModuleNotFoundError。"""
     bundled = _bundled_bridge_modules()
-    assert "aiops_diagnostics.dify.dify_console_publish" in bundled
-    assert "aiops_diagnostics.dify.self_service_bridge" in bundled
+    assert "dify_console_bridge.bridge" in bundled
+    assert "dify_console_bridge.self_service_bridge" in bundled
+    assert "dify_console_bridge.environments" in bundled
+    assert not any(mod.startswith("aiops_diagnostics.dify") for mod in bundled)
 
     offenders: list[str] = []
-    for module in sorted(bundled):
-        rel = module.removeprefix("aiops_diagnostics").lstrip(".")
-        if not rel:
-            path = ROOT / "src/aiops_diagnostics/__init__.py"
-        else:
-            candidate = ROOT / "src/aiops_diagnostics" / (rel.replace(".", "/") + ".py")
-            path = candidate if candidate.is_file() else candidate.with_suffix("") / "__init__.py"
+    for module, path in sorted(bundled.items()):
         is_package = path.name == "__init__.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in _iter_bundle_checked_nodes(module, tree):
+        for node in ast.walk(tree):
             targets: list[str] = []
             if isinstance(node, ast.ImportFrom):
                 resolved = _resolve_import_from(module, is_package, node)
                 if resolved and (
-                    resolved == "aiops_diagnostics" or resolved.startswith("aiops_diagnostics.")
+                    resolved in {"aiops_diagnostics", "dify_console_bridge"}
+                    or resolved.startswith(("aiops_diagnostics.", "dify_console_bridge."))
                 ):
                     targets.append(resolved)
                     for alias in node.names:
@@ -105,7 +102,8 @@ def test_console_bridge_bundle_imports_are_self_contained() -> None:
                 targets.extend(
                     alias.name
                     for alias in node.names
-                    if alias.name == "aiops_diagnostics" or alias.name.startswith("aiops_diagnostics.")
+                    if alias.name in {"aiops_diagnostics", "dify_console_bridge"}
+                    or alias.name.startswith(("aiops_diagnostics.", "dify_console_bridge."))
                 )
             for target in targets:
                 if target not in bundled:
@@ -122,18 +120,28 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
     package.mkdir()
     for name in (
         "__init__",
-        "dify/__init__",
-        "dify/dify_console_publish",
         "common/__init__",
         "common/async_job_lifecycle",
         "common/bounded_http",
         "common/http_auth",
         "common/order_reference",
+        "common/platform_constants",
+        "common/private_files",
+        "common/endpoint_policy",
+        "gateway/__init__",
+        "gateway/deployment_environment",
         "identity/__init__",
         "identity/order_identity",
     ):
         (package / f"{name}.py").parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "src/aiops_diagnostics" / f"{name}.py", package / f"{name}.py")
+    bridge_pkg = bundle / "dify_console_bridge"
+    bridge_pkg.mkdir()
+    for name in ("__init__", "__main__", "bridge", "self_service_bridge", "environments"):
+        shutil.copyfile(
+            ROOT / "services/dify-console-bridge/dify_console_bridge" / f"{name}.py",
+            bridge_pkg / f"{name}.py",
+        )
     for name in ("dify-publish-button.js", "dify-console-publish.conf"):
         shutil.copyfile(ROOT / "ops/dify-console-bridge" / name, bundle / name)
     (bundle / "REVISION").write_text("test-revision\n")
@@ -145,10 +153,11 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
         )
     )
     unit = tmp_path / "bridge.service"
-    unit.write_text("ExecStart=python -m aiops_diagnostics.dify_console_publish\n")
-    code = tmp_path / "installed"
+    unit.write_text("ExecStart=python -m aiops_diagnostics.dify.dify_console_publish\n")
+    code = tmp_path / "installed_aiops"
     code.mkdir()
     (code / "old.py").write_text("old package\n")
+    bridge_installed = tmp_path / "installed_bridge"
     js, snippet, nginx = (tmp_path / n for n in ("button.js", "snippet.conf", "nginx"))
     js.write_text("old js\n")
     snippet.write_text("old snippet\n")
@@ -178,6 +187,7 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
     script = (ROOT / "ops/dify-console-bridge/deploy.sh").read_text()
     for before, after in {
         "/opt/aiops-console-bridge/aiops_diagnostics": code,
+        "/opt/aiops-console-bridge/dify_console_bridge": bridge_installed,
         "/srv/aiops-console-assets/dify-publish-button.js": js,
         "/www/server/panel/vhost/nginx/snippets/dify-console-publish.conf": snippet,
         "/www/server/nginx/sbin/nginx": nginx,
@@ -198,15 +208,14 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
     )
     assert (result.returncode != 0) == fail_reload, result.stdout + result.stderr
     if fail_reload:
-        assert unit.read_text() == "ExecStart=python -m aiops_diagnostics.dify_console_publish\n"
+        assert unit.read_text() == "ExecStart=python -m aiops_diagnostics.dify.dify_console_publish\n"
         assert list(code.iterdir()) == [code / "old.py"]
+        assert not bridge_installed.exists()
         assert js.read_text() == "old js\n"
         assert snippet.read_text() == "old snippet\n"
     else:
-        assert "aiops_diagnostics.dify.dify_console_publish" in unit.read_text()
-        assert (code / "dify/dify_console_publish.py").read_bytes() == (
-            package / "dify/dify_console_publish.py"
-        ).read_bytes()
+        assert " -m dify_console_bridge\n" in unit.read_text()
+        assert (bridge_installed / "bridge.py").read_bytes() == (bridge_pkg / "bridge.py").read_bytes()
         assert js.read_bytes() == (bundle / "dify-publish-button.js").read_bytes()
         assert snippet.read_bytes() == (bundle / "dify-console-publish.conf").read_bytes()
     assert (tmp_path / "backup/aiops_diagnostics/old.py").read_text() == "old package\n"

@@ -80,38 +80,25 @@ from aiops_diagnostics.common.bounded_http import (
     json_body,
     request_json,
 )
+from aiops_diagnostics.common.http_auth import (
+    CONSOLE_ACCESS_TOKEN_COOKIE,
+    CONSOLE_CSRF_COOKIE,
+    CONSOLE_CSRF_HEADER,
+    ConsoleSession,
+    console_session_from_headers,
+)
+from aiops_diagnostics.common.http_auth import (
+    is_console_token as _is_token,
+)
+from aiops_diagnostics.common.platform_constants import (
+    DIFY_PLATFORM_WORKSPACE_ID,
+    PLATFORM_USER_TYPE,
+)
 from aiops_diagnostics.identity.order_identity import is_order_identifier
 
 _LOGGER = logging.getLogger("aiops.dify_console_publish")
 
-#: Dify 1.17.1 的控制台凭据名（``api/constants/__init__.py``）。都是**运营自己的**登录态。
-#: https 且未设 COOKIE_DOMAIN 时 Dify 加 __Host- 前缀；解析时保留实际凭据名。
-CONSOLE_ACCESS_TOKEN_COOKIE = "access_token"
-CONSOLE_CSRF_COOKIE = "csrf_token"
-CONSOLE_CSRF_HEADER = "X-CSRF-Token"
-
 #: 桥只打这三跳，都是相对路径 —— "打到谁"由部署配置决定。
-# 平台账号的两个哨兵值。
-#
-# ⚠️ **不 import 它们的原始出处**：发布桥的部署制品只含
-# `common/{__init__, async_job_lifecycle, bounded_http, http_auth, order_reference}.py`、
-# `dify/{__init__, dify_console_publish, self_service_bridge}.py` 与
-# `identity/{__init__, order_identity}.py`
-# （`ops/dify-console-bridge/build-bundle.sh`）。从 `dify_login_service` 或
-# `dify_workspaces` 导入会让桥在服务宿主上 `ModuleNotFoundError` —— 实测 2026-10-25：
-# 五个部署测试立刻转红，而它们在本地全绿。这是本模块唯一允许"重写一个常量"的地方，
-# 代价由 `tests/dify/test_dify_console_publish.py` 的两条对照用例钉住。
-#
-# 值与出处必须一致：
-#   - `PLATFORM_USER_TYPE = "-1"` ← `dify_login_service.py:66`
-#   - `PLATFORM_TENANT_ID = "platform"` ← `dify_workspaces.py:448`（workspace 目录的
-#     平台键，即 `dify_workspaces` 表里 `tenant_id='platform'` 那一行）
-#
-# 另注：`shortcut_lifecycle.py` 有同名的 `PLATFORM_TENANT_ID = "__platform__"`，那是
-# **快捷动作**命名空间，与 workspace 无关（ADR-0008 记的「同名不同物」）。
-PLATFORM_USER_TYPE = "-1"
-PLATFORM_TENANT_ID = "platform"
-
 DIFY_WORKSPACE_SUMMARY_PATH = "/console/api/workspaces/current/summary"
 DIFY_APP_PATH = "/console/api/apps/{app_id}"
 #: 机器门（共享密钥）。**不是** ``/v1/operator/publish``：那条要运营的网关会话。
@@ -132,13 +119,7 @@ _REFUSED_ACTIONS = frozenset({"refused", "failed"})
 MAX_REQUEST_BODY_BYTES = 256
 #: 上游响应体上限。超限即截断 → JSON 解码失败 → 按"这一步没做成"处置（失败关闭）。
 MAX_UPSTREAM_RESPONSE_BYTES = 1024 * 1024
-#: 单个 cookie / CSRF 值的长度上限（JWT 远小于它）。
-MAX_TOKEN_CHARS = 8192
 
-#: RFC 6265 §4.1.1 的 cookie-octet（不含引号、逗号、分号、反斜杠、空白与控制字符）。
-#: CSRF 头的值就是 csrf_token cookie 的副本，用同一字符集。值会被拼进转发出去的头，
-#: 所以这一条同时是**头注入**的防线。
-_TOKEN_RE = re.compile(r"[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+")
 _CONTENT_LENGTH_RE = re.compile(r"[0-9]{1,6}")
 
 _PUBLISH_ROUTE = "/__aiops/publish"
@@ -305,72 +286,6 @@ class ConsolePublishResult:
             "action": self.action,
             **({"versions": list(self.versions)} if self.versions else {}),
         }
-
-
-@dataclass(frozen=True, slots=True)
-class ConsoleSession:
-    """运营的 Dify 控制台凭据：两枚 cookie（CSRF 头就是 ``csrf_token`` 的副本）。"""
-
-    access_token: str = field(repr=False)
-    csrf_token: str = field(repr=False)
-    cookie_prefix: str = ""
-
-    def cookie_header(self) -> str:
-        return (
-            f"{self.cookie_prefix}{CONSOLE_ACCESS_TOKEN_COOKIE}={self.access_token}; "
-            f"{self.cookie_prefix}{CONSOLE_CSRF_COOKIE}={self.csrf_token}"
-        )
-
-    def dify_headers(self) -> dict[str, str]:
-        """发往 Dify 的**全部**头 —— 除此之外浏览器带来的什么都不转。"""
-        return {
-            "Cookie": self.cookie_header(),
-            CONSOLE_CSRF_HEADER: self.csrf_token,
-            "Accept": "application/json",
-        }
-
-
-def _is_token(value: str) -> bool:
-    return 0 < len(value) <= MAX_TOKEN_CHARS and _TOKEN_RE.fullmatch(value) is not None
-
-
-def console_session_from_headers(cookie_header: str | None, csrf_header: str | None) -> ConsoleSession | None:
-    """从 ``Cookie:`` 与 ``X-CSRF-Token:`` 取出完整的控制台凭据；不完整就是 ``None``。
-
-    规则（任一不满足 ⇒ ``None`` ⇒ 拒绝，而不是抛异常）：
-
-    * ``access_token`` 与 ``csrf_token`` 两枚 cookie **各恰好一次**（同名出现两次时
-      不知道 Dify 会取哪一个，桥不替它猜）；
-    * 值是合法 cookie-octet（它们会被原样拼进转发的 ``Cookie`` 头）；
-    * ``X-CSRF-Token`` 与 ``csrf_token`` cookie 逐字相同（Dify 的双提交规则，桥先在本地判，
-      不合规的请求不去打扰 Dify）。
-
-    不用 ``http.cookies``：它对畸形输入会抛异常或静默跳过，这里两者都不是想要的。
-    """
-    if not cookie_header or not csrf_header:
-        return None
-    found: dict[str, list[str]] = {
-        prefix + name: []
-        for prefix in ("", "__Host-")
-        for name in (CONSOLE_ACCESS_TOKEN_COOKIE, CONSOLE_CSRF_COOKIE)
-    }
-    for chunk in cookie_header.split(";"):
-        name, sep, value = chunk.strip().partition("=")
-        if name in found:
-            found[name].append(value if sep else "")
-    plain = bool(found[CONSOLE_ACCESS_TOKEN_COOKIE] or found[CONSOLE_CSRF_COOKIE])
-    prefixed = bool(found["__Host-access_token"] or found["__Host-csrf_token"])
-    if plain and prefixed:
-        return None
-    prefix = "__Host-" if prefixed else ""
-    access, csrf = found[prefix + CONSOLE_ACCESS_TOKEN_COOKIE], found[prefix + CONSOLE_CSRF_COOKIE]
-    if len(access) != 1 or len(csrf) != 1:
-        return None
-    if not (_is_token(access[0]) and _is_token(csrf[0]) and _is_token(csrf_header)):
-        return None
-    if not hmac.compare_digest(csrf[0].encode("ascii"), csrf_header.encode("ascii")):
-        return None
-    return ConsoleSession(access_token=access[0], csrf_token=csrf[0], cookie_prefix=prefix)
 
 
 # ── 来源与 app_id ───────────────────────────────────────────────────────────
@@ -695,7 +610,7 @@ def publish_current_app(
             # #882 明写平台账号的「可见全部」不通过进别人的 workspace 体现（ADR-0059 §4）：
             # 编辑面只在它自己的平台 workspace。这里照同一条口径。
             if initiator_headers.get("X-AIOps-Initiator-Type", "").strip() == PLATFORM_USER_TYPE:
-                tenant_id = PLATFORM_TENANT_ID
+                tenant_id = DIFY_PLATFORM_WORKSPACE_ID
             resolved = _workspace_for(
                 gateway_base_url,
                 gateway_internal_token,
@@ -1397,18 +1312,9 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         try:
             self._select_environment()
             if path == "/__aiops/manage":
-                import sys
-
                 from .self_service_bridge import handle
 
-                # 必须传「当前正在运行的这个模块对象」，不能在本函数里
-                # ``import aiops_diagnostics.dify.dify_console_publish``：
-                # 以 ``python -m`` 启动时本模块名是 ``__main__``，再 import 一次
-                # 会得到第二个模块实例——bridge 抛的 ``bridge._Rejected`` 与下面
-                # ``except _Rejected`` 抓的不是同一个类，拒绝不会被转成响应，
-                # 请求将得不到回复直接挂死。同理 bridge 读取的
-                # CONSOLE_CSRF_HEADER/_request 等成员以本实例为准。
-                handle(self, sys.modules[__name__])
+                handle(self)
                 return
             if path == NATIVE_PREVIEW_ROUTE:
                 _native_preview(self)
@@ -1593,11 +1499,9 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             self._json(200, {"changed": 0, "created": 0})
             return
         try:
-            import sys
-
             from .self_service_bridge import authorize_workspace
 
-            authorize_workspace(self, sys.modules[__name__], session, workspace_id)
+            authorize_workspace(self, session, workspace_id)
             changed = _knowledge_sync_payload(
                 self.settings.gateway_base_url,
                 self.settings.gateway_internal_token,
@@ -1759,11 +1663,9 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         workspace_id = (query.get("workspace") or [""])[0].strip() if query else ""
         if not workspace_id:
             raise _Rejected(400, "缺少当前工作区，请刷新 Dify 页面后重试")
-        import sys
-
         from .self_service_bridge import authorize_workspace
 
-        authorize_workspace(self, sys.modules[__name__], session, workspace_id)
+        authorize_workspace(self, session, workspace_id)
         opened = _knowledge_open_payload(
             self.settings.gateway_base_url,
             self.settings.gateway_internal_token,
@@ -2274,7 +2176,7 @@ def _native_cancel(handler):
 
 
 def make_server(settings: BridgeSettings) -> ThreadingHTTPServer:
-    from .console_environments import credentials
+    from .environments import credentials
 
     rows = credentials(settings.environment_credentials_file) if settings.environment_credentials_file else {}
     if rows and not settings.login_proxy_url:
@@ -2302,7 +2204,3 @@ def main() -> None:
     server = make_server(BridgeSettings.from_env())
     _LOGGER.info("console publish bridge listening on %s:%s", *server.server_address)
     server.serve_forever()
-
-
-if __name__ == "__main__":  # pragma: no cover - 进程入口
-    main()

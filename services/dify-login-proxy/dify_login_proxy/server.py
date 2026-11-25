@@ -34,9 +34,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.dify.dify_login_company import CompanyAuthSettings, fetch_captcha
-from aiops_diagnostics.dify.dify_login_provision import DifyConsoleSettings
-from aiops_diagnostics.dify.dify_login_proxy import (
+from .company import CompanyAuthSettings, fetch_captcha
+from .core import (
     CAPTCHA_ROUTE,
     CONSOLE_COOKIE_PREFIXED_NAMES,
     LOGIN_ROUTE,
@@ -47,7 +46,8 @@ from aiops_diagnostics.dify.dify_login_proxy import (
     DifyLoginError,
     PermissionDenied,
 )
-from aiops_diagnostics.dify.dify_login_service import (
+from .provision import DifyConsoleSettings
+from .service import (
     PLATFORM_USER_TYPE,
     LoginPolicy,
     LoginService,
@@ -546,7 +546,7 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
 
         session = None
         if native:
-            from aiops_diagnostics.dify.dify_console_publish import console_session_from_headers
+            from aiops_diagnostics.common.http_auth import console_session_from_headers
 
             session = console_session_from_headers(
                 self.headers.get("Cookie"), self.headers.get("X-CSRF-Token")
@@ -729,7 +729,7 @@ def build_service(settings: LoginProxySettings) -> LoginService:
 
 
 def make_server(settings: LoginProxySettings) -> ThreadingHTTPServer:
-    from .console_environments import LoginEnvironments
+    from .environments import LoginEnvironments
 
     environments = LoginEnvironments(settings, None, build_service)
     service = environments.entries[settings.dify.environment][1]
@@ -757,10 +757,6 @@ def main() -> None:
     server = make_server(settings)
     _LOGGER.info("dify login proxy listening on %s:%s", *server.server_address)
     server.serve_forever()
-
-
-if __name__ == "__main__":  # pragma: no cover - process entry
-    main()
 
 
 __all__ = [
