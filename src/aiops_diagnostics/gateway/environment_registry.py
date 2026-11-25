@@ -279,23 +279,52 @@ class EnvironmentRegistry:
         self.environment = canonical_environment(environment)
         self._configuration = None
         row = self.entry()
-        self._configuration = (row["gateway_url"], row["cpms_base_url"], row["config_ref"])
+        self._configuration = (
+            row["gateway_url"],
+            row["cpms_base_url"],
+            row["config_ref"],
+            row.get("company_gateway_url", ""),
+        )
 
-    def entry(self) -> dict:
-        row = next((r for r in load(self.path)["environments"] if r["id"] == self.environment), None)
+    def _load_entry(self) -> tuple[dict, dict]:
+        body = load(self.path)
+        row = next((r for r in body["environments"] if r["id"] == self.environment), None)
         if row is None:
             raise RegistryError("ENVIRONMENT_NOT_REGISTERED")
         if self._configuration is not None and self._configuration != (
             row["gateway_url"],
             row["cpms_base_url"],
             row["config_ref"],
+            row.get("company_gateway_url", ""),
         ):
             raise RegistryError("ENVIRONMENT_CONFIGURATION_CHANGED")
+        return body, row
+
+    def entry(self) -> dict:
+        return self._load_entry()[1]
+
+    def require_enabled(self) -> dict:
+        row = self.entry()
+        if not row["enabled"]:
+            raise RegistryError("TENANT_ENVIRONMENT_NOT_ENABLED")
         return row
 
+    def enabled_tenant_ids(self) -> frozenset[str]:
+        row = self.require_enabled()
+        return frozenset(t["id"] for t in row["tenants"] if t["enabled"])
+
+    def is_manager(self, tenant_id: str, user_id: str) -> bool:
+        body, _ = self._load_entry()
+        if body.get("schema") != MANAGED_SCHEMA or not tenant_id or not user_id:
+            return False
+        return any(
+            m["environment"] == self.environment and m["tenant_id"] == tenant_id and m["user_id"] == user_id
+            for m in body["managers"]
+        )
+
     def require(self, tenant_id: str) -> dict:
-        row = self.entry()
-        if not row["enabled"] or not any(t["id"] == tenant_id and t["enabled"] for t in row["tenants"]):
+        row = self.require_enabled()
+        if not any(t["id"] == tenant_id and t["enabled"] for t in row["tenants"]):
             raise RegistryError("TENANT_ENVIRONMENT_NOT_ENABLED")
         return row
 

@@ -476,8 +476,14 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         # 它是一次快照，但会话寿命（ADR-0136）给出了同一个窗口：这枚会话最长活多久，
         # 这条快照就最多旧多久。
         row_type = str(row.get("user_type") or "")
-        tenant_account = bool(str(row.get("tenant_id") or "")) and row_type != PLATFORM_USER_TYPE
-        allowed = self.service.policy.may_publish(
+        row_tenant = str(row.get("tenant_id") or "")
+        tenant_account = bool(row_tenant) and row_type != PLATFORM_USER_TYPE
+        business_admitted = True
+        try:
+            self.service.require_registered_tenant(row_tenant, user_type=row_type, allow_manager=False)
+        except PermissionDenied:
+            business_admitted = False
+        allowed = business_admitted and self.service.policy.may_publish(
             permissions,
             tenant_account=tenant_account,
             has_own_workspace=tenant_account and bool(row.get("workspace_joined")),
@@ -486,7 +492,16 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             200,
             {
                 "allowed": allowed,
-                "reason": "" if allowed else "MISSING_PUBLISH_PERMISSION",
+                "reason": (
+                    ""
+                    if allowed
+                    else (
+                        "TENANT_ENVIRONMENT_NOT_ENABLED"
+                        if not business_admitted
+                        else "MISSING_PUBLISH_PERMISSION"
+                    )
+                ),
+                "business_admitted": business_admitted,
                 # 审计用：桥把这些原样转给网关的发布请求头。
                 "company_user_id": str(row.get("company_user_id") or ""),
                 "company_username": str(row.get("company_username") or ""),

@@ -424,3 +424,69 @@ def test_plan_bridge_forwards_only_fixed_request(monkeypatch):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_self_service_identity_admits_platform_sentinel_only_when_env_enabled(tmp_path, monkeypatch):
+    """ADR-0332：自助管理身份对平台哨兵（type=-1 且 tenantId=-1）按环境启用准入，目标租户仍逐租户核验。"""
+    path = tmp_path / "registry" / "directory.json"
+    rows = environments(tmp_path)
+    for row in rows:
+        row.update(name=row["id"], company_gateway_url="")
+        row["tenants"][0].update(name="同号租户", enabled=False)
+    registry.apply(
+        path,
+        rows,
+        expected_revision=0,
+        actor="operator",
+        managers=[dict(environment="a", tenant_id="-1", user_id="admin", environments=["a"])],
+    )
+    context = SimpleNamespace(
+        settings=SimpleNamespace(environment="a", environment_registry_file=str(path)),
+        operator_cpms=SimpleNamespace(
+            console_identity=lambda session: {"token": "live-token", "user_id": "admin", "tenant_id": "-1"}
+        ),
+    )
+    info = {
+        "sysUser": {"id": "admin", "tenantId": "-1", "type": -1},
+        "permissions": ["aiops:agent:edit", "aiops:agent:publish"],
+    }
+
+    def fake_company_get(_context, _token, req_path):
+        if req_path == "/tenant/list/my":
+            return [{"id": "same", "name": "同号租户"}]
+        return info
+
+    monkeypatch.setattr(auth, "company_get", fake_company_get)
+
+    # 启用环境：平台哨兵通过 identity，但 require_target 对停用业务租户仍拒绝。
+    caller = auth.identity(context, "session")
+    assert caller.platform is True and caller.tenant_id == "-1"
+    with pytest.raises(auth.SetupRefused, match="NOT_ENABLED"):
+        auth.require_target(context, caller, "same")
+
+    # 非平台类型伪造 tenantId=-1 在启用环境也必须拒绝。
+    info["sysUser"]["type"] = 1
+    with pytest.raises(auth.SetupRefused, match="NOT_ENABLED"):
+        auth.identity(context, "session")
+    info["sysUser"]["type"] = -1
+
+    # 停用环境：即使在 managers 中，普通自助 identity(require_admission=True) 仍拒绝，仅目录管理可用。
+    rows[0]["enabled"] = False
+    registry.apply(
+        path,
+        rows,
+        expected_revision=1,
+        actor="operator",
+        managers=[dict(environment="a", tenant_id="-1", user_id="admin", environments=["a"])],
+    )
+    assert management.catalogue(context, "session")["environments"][0]["enabled"] is False
+    with pytest.raises(auth.SetupRefused, match="NOT_ENABLED"):
+        auth.identity(context, "session")
+
+    # 同一目录管理员会话可直接通过目录恢复接口重新启用环境，恢复后普通自助身份立即恢复。
+    assert management.change(
+        context,
+        "session",
+        management.EnvironmentChange(environment="a", revision=2, name="a", enabled=True),
+    ) == {"revision": 3}
+    assert auth.identity(context, "session").tenant_id == "-1"

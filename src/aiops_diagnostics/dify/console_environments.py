@@ -130,7 +130,7 @@ class LoginEnvironments:
     def enabled(self):
         return bool(self.settings.environment_credentials_file)
 
-    def select(self, identifier):
+    def select(self, identifier, *, allow_disabled=False):
         from aiops_diagnostics.gateway.environment_registry import RegistryError
 
         entry = self.entries.get(identifier) if isinstance(identifier, str) else None
@@ -140,7 +140,9 @@ class LoginEnvironments:
         if registry is not None:
             try:
                 row = registry.entry()
-                if not row["enabled"] or row["company_gateway_url"] != settings.company.base_url:
+                if (not allow_disabled and not row["enabled"]) or row[
+                    "company_gateway_url"
+                ] != settings.company.base_url:
                     raise RegistryError("ENVIRONMENT_UNAVAILABLE")
             except RegistryError as exc:
                 raise refused("ENVIRONMENT_UNAVAILABLE", "所选环境已停用或配置已更新，请重新登录") from exc
@@ -197,4 +199,4 @@ class LoginEnvironments:
                 continue
         if len(found) != 1:
             raise refused("SESSION_LOGIN_REQUIRED", "请重新登录")
-        return self.select(found[0])
+        return self.select(found[0], allow_disabled=True)

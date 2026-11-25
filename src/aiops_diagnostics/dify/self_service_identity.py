@@ -54,15 +54,19 @@ def identity(context, session, *, require_admission=True, require_platform_permi
     uid, tenant = str(user.get("id") or ""), str(user.get("tenantId") or "")
     if not uid or not tenant or uid != exchanged["user_id"] or tenant != exchanged["tenant_id"]:
         raise SetupRefused("SETUP_IDENTITY_MISMATCH")
+    is_platform = str(user.get("type")) == "-1"
     registry_file = getattr(getattr(context, "settings", None), "environment_registry_file", "")
     if registry_file and require_admission:
         from aiops_diagnostics.gateway.environment_registry import RegistryError, for_settings
 
         try:
-            for_settings(context.settings).require(tenant)
+            reg = for_settings(context.settings)
+            if is_platform and tenant == "-1":
+                reg.require_enabled()
+            else:
+                reg.require(tenant)
         except RegistryError as exc:
             raise SetupRefused("TENANT_ENVIRONMENT_NOT_ENABLED") from exc
-    is_platform = str(user.get("type")) == "-1"
     if (
         require_platform_permissions
         and is_platform
