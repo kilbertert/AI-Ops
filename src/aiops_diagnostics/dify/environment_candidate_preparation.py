@@ -44,7 +44,7 @@ def _bindings(settings, source):
     }
 
 
-def submit(context, identity, payload, source):
+def submit(context, identity, payload, source, *, onboard_parent=None):
     settings = context.settings
     if not isinstance(payload["tenant_id"], str) or not drafts.REFERENCE_PATTERN.fullmatch(
         payload["tenant_id"]
@@ -127,6 +127,16 @@ def submit(context, identity, payload, source):
                 }
             )[:32]
         )
+        if (
+            onboard_parent is not None
+            and conn.execute(
+                "SELECT 1 FROM environment_tasks WHERE environment=? AND state IN ('waiting','checking') "
+                "AND id!=? AND json_extract(request,'$.action')='tenant-onboard' "
+                "AND json_extract(request,'$.tenant_id')=? LIMIT 1",
+                (environment, onboard_parent, payload["tenant_id"]),
+            ).fetchone()
+        ):
+            raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
         if conn.execute(
             "SELECT 1 FROM environment_tasks WHERE environment=? AND state='waiting' AND id!=? "
             "AND json_extract(request,'$.action')=? AND json_extract(request,'$.tenant_id')=? "
@@ -142,6 +152,7 @@ def submit(context, identity, payload, source):
             bindings=bindings,
             children={},
             **({"initial_installation": True} if initial else {}),
+            **({"onboard_parent": onboard_parent} if onboard_parent is not None else {}),
         )
         if initial:
             from .environment_installation import submit_cold

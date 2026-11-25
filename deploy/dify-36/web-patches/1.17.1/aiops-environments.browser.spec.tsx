@@ -1149,3 +1149,129 @@ it('renders environment overview, tenant capability matrix, live vs receipt node
   expect(screen.getByRole('region', { name: '环境总览' }).elements()).toHaveLength(0)
   await expect.element(screen.getByRole('button', { name: '重试读取运行状态' })).toBeVisible()
 })
+
+it('submits one-click tenant onboarding with validation and keeps explicit human publish confirmation', async () => {
+  const plan = {
+    id: `plan_${'e'.repeat(32)}`,
+    state: 'blocked',
+    executable: false,
+    draft_revision: 2,
+    registry_revision: 4,
+    checks: [],
+  }
+  const validationId = `task_${'9'.repeat(32)}`
+  const onboardTask = {
+    id: `task_${'8'.repeat(32)}`,
+    action: 'tenant-onboard',
+    tenant_id: 'same',
+    plan_id: plan.id,
+    state: 'queued',
+    cancel_requested: false,
+    error_code: '',
+    result: {
+      scope: 'tenant-one-click-onboarding',
+      ready_to_publish: false,
+      validation_task_id: '',
+      stages: [
+        {
+          id: `task_${'1'.repeat(32)}`,
+          action: 'candidate-prepare',
+          state: 'queued',
+          error_code: '',
+        },
+      ],
+    },
+  }
+  const calls: Record<string, unknown>[] = []
+  let submitted = false
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json(data)
+      if (body.action === 'environment-plan') return Response.json(plan)
+      if (body.consumer_sources)
+        return Response.json({ sources: [{ app_id: 'source-a', name: '正式客服', version_no: 7 }] })
+      if (body.onboard_plan) {
+        submitted = true
+        return Response.json(onboardTask)
+      }
+      if (body.validation_task) {
+        return Response.json({
+          id: `task_${'7'.repeat(32)}`,
+          action: 'environment-publish',
+          tenant_id: 'same',
+          state: 'observed',
+          cancel_requested: false,
+          error_code: '',
+          result: { phase: 'activated', activated: true, directory: 'synchronized' },
+        })
+      }
+      return Response.json({ tasks: submitted ? [onboardTask] : [] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
+  await screen
+    .getByRole('combobox', { name: '候选客服来源版本', exact: true })
+    .selectOptions('source-a')
+  await screen.getByRole('textbox', { name: '一键开通验收案例', exact: true }).fill('case-01')
+  await screen.getByRole('button', { name: '一键开通：甲租户（same）', exact: true }).click()
+  expect(calls.find((body) => body.onboard_plan)).toEqual({
+    action: 'environment-task',
+    onboard_plan: plan.id,
+    tenant_id: 'same',
+    source_app_id: 'source-a',
+    source_version: 7,
+    case_ref: 'case-01',
+    capabilities: ['consumer', 'order', 'offline'],
+  })
+  await expect.element(screen.getByRole('region', { name: '一键开通进度：same' })).toBeVisible()
+  await expect.element(screen.getByRole('button', { name: '取消一键开通', exact: true })).toBeVisible()
+
+  const renewedPlanId = `plan_${'f'.repeat(32)}`
+  onboardTask.plan_id = renewedPlanId
+  onboardTask.state = 'observed'
+  onboardTask.result = {
+    scope: 'tenant-one-click-onboarding',
+    ready_to_publish: true,
+    validation_task_id: validationId,
+    stages: [
+      { id: `task_${'1'.repeat(32)}`, action: 'candidate-prepare', state: 'observed', error_code: '' },
+      { id: `task_${'2'.repeat(32)}`, action: 'candidate-install', state: 'observed', error_code: '', version: '1.40.4' },
+      { id: `task_${'3'.repeat(32)}`, action: 'candidate-register', state: 'observed', error_code: '' },
+      { id: validationId, action: 'candidate-validate', state: 'observed', error_code: '' },
+    ],
+  }
+  await screen.getByRole('button', { name: '刷新任务', exact: true }).click()
+  await expect.element(screen.getByText(/技术验收已就绪，待人工确认发布/)).toBeVisible()
+  // 切到环境乙再切回环境甲（清空本地 plan state + 重置冷装/案例输入，模拟刷新恢复）
+  await screen.getByRole('checkbox', { name: /包含空机初装/ }).click()
+  await screen.getByRole('button', { name: '环境乙（b）' }).click()
+  await screen.getByRole('button', { name: '环境甲（a）' }).click()
+  // 即使页面未重新预检（本地 plan=null），依然用续签后的 item.plan_id 发起显式人工发布确认
+  await screen.getByRole('button', { name: '确认发布并开通：same', exact: true }).click()
+  expect(calls.find((body) => body.validation_task)).toEqual({
+    action: 'environment-task',
+    validation_task: validationId,
+    publication_plan: renewedPlanId,
+    confirm_readonly: true,
+    confirm_customer_knowledge: true,
+    acceptance_ref: 'readonly-diagnosis',
+  })
+  // 重新预检并拉取准备模板后确认冷装与案例输入已随切环境重置，不跨环境泄漏
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
+  await expect
+    .element(screen.getByRole('textbox', { name: '一键开通验收案例', exact: true }))
+    .toHaveValue('')
+  await expect
+    .element(screen.getByRole('checkbox', { name: /包含空机初装/ }))
+    .not.toBeChecked()
+})
