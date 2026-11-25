@@ -192,35 +192,36 @@ def test_a_release_path_survives_on_every_claiming_branch() -> None:
     assert offenders == [], "; ".join(offenders)
 
 
-def _api_tree() -> ast.Module:
-    return ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+def _assistant_tree() -> ast.Module:
+    return ast.parse((SOURCE_ROOT / "gateway/routers/assistant.py").read_text(encoding="utf-8"))
 
 
 def _accepting_branches(tree: ast.Module) -> list[ast.Return]:
-    """Every `return JSONResponse(status_code=202, ...)` inside the handler."""
-    handler = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "assistant_questions"
-    )
+    """Every `return JSONResponse(status_code=202, ...)` inside the assistant router."""
+    targets = {
+        "assistant_questions",
+        "_try_operator_cpms_route",
+        "_try_consumer_chatflow_route",
+    }
+    handlers = [node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name in targets]
+    assert handlers, "assistant_questions handlers not found"
     found: list[ast.Return] = []
-    for node in ast.walk(handler):
-        if not isinstance(node, ast.Return) or not isinstance(node.value, ast.Call):
-            continue
-        call = node.value
-        name = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", "")
-        if name != "JSONResponse":
-            continue
-        status = next((kw.value for kw in call.keywords if kw.arg == "status_code"), None)
-        # `status.HTTP_202_ACCEPTED` reads as an attribute, not a constant; both
-        # spellings name the same code and both appear in this file.
-        if (
-            isinstance(status, ast.Constant)
-            and status.value == 202
-            or isinstance(status, ast.Attribute)
-            and status.attr.endswith("202_ACCEPTED")
-        ):
-            found.append(node)
+    for handler in handlers:
+        for node in ast.walk(handler):
+            if not isinstance(node, ast.Return) or not isinstance(node.value, ast.Call):
+                continue
+            call = node.value
+            name = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", "")
+            if name != "JSONResponse":
+                continue
+            status = next((kw.value for kw in call.keywords if kw.arg == "status_code"), None)
+            if (
+                isinstance(status, ast.Constant)
+                and status.value == 202
+                or isinstance(status, ast.Attribute)
+                and status.attr.endswith("202_ACCEPTED")
+            ):
+                found.append(node)
     return found
 
 
@@ -296,14 +297,18 @@ def test_every_accepting_branch_that_claims_a_turn_can_be_cancelled() -> None:
     withholds the number leaves the user with a generation they cannot stop and
     a conversation they cannot ask into.
     """
-    tree = _api_tree()
+    tree = _assistant_tree()
     offenders: list[str] = []
     for branch in _accepting_branches(tree):
         fields = _response_fields(tree, branch)
         if fields is None:
             continue
         if "turn_no" not in fields:
-            offenders.append(f"{API_FILE}:{branch.lineno} claims a turn but returns no turn_no")
+            offenders.append(
+                f"gateway/routers/assistant.py:{branch.lineno} claims a turn but returns no turn_no"
+            )
         elif "conversation_id" not in fields:
-            offenders.append(f"{API_FILE}:{branch.lineno} returns a turn_no without its conversation_id")
+            offenders.append(
+                f"gateway/routers/assistant.py:{branch.lineno} returns a turn_no without its conversation_id"
+            )
     assert offenders == [], "; ".join(offenders)

@@ -42,6 +42,7 @@ from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, Su
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 API_FILE = "gateway/gateway_api.py"
+DEPS_FILE = "gateway/dependencies.py"
 #: The shared entry point. One definition, and every dependency delegates to it.
 SHARED = "_authenticate_caller"
 #: Naming convention for dependencies that authenticate a caller. Used to CHECK
@@ -104,37 +105,25 @@ def _client(tmp_path: Path, resolver: _Resolver) -> TestClient:
     )
 
 
-def _api_tree() -> ast.Module:
-    return ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+def _deps_tree() -> ast.Module:
+    return ast.parse((SOURCE_ROOT / DEPS_FILE).read_text(encoding="utf-8"))
+
+
+def _calls_shared(func: ast.expr) -> bool:
+    return (isinstance(func, ast.Attribute) and func.attr == SHARED) or getattr(func, "id", "") == SHARED
 
 
 def _parents_of(tree: ast.Module) -> dict[ast.AST, ast.AST]:
-    """Child -> parent for every node in ``tree``.
-
-    Built once per tree rather than once per function. The mapping is a property
-    of the tree, so rebuilding it inside ``_delegates`` made the walk O(functions
-    x nodes): measured on this module, 169 functions x 22,636 nodes = 3.8 million
-    parent lookups, 5.06 s each time `_caller_dependencies` ran — and that runs
-    once per parametrised case, so the suite paid it six times.
-    """
     return {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
 
 
 def _delegates(
     tree: ast.Module, function: ast.FunctionDef, parents: dict[ast.AST, ast.AST] | None = None
 ) -> bool:
-    """Whether ``function`` itself calls the shared mapping.
-
-    "Itself" is the point: the dependencies are nested inside
-    ``create_gateway_app``, so crediting a call to whichever function encloses
-    it would put the app factory in the set and make the naming check report it
-    as an unnamed dependency. The call must sit in this function's body without
-    another function definition in between.
-    """
     if parents is None:
         parents = _parents_of(tree)
     for node in ast.walk(function):
-        if not isinstance(node, ast.Call) or getattr(node.func, "id", "") != SHARED:
+        if not isinstance(node, ast.Call) or not _calls_shared(node.func):
             continue
         owner = node
         while owner in parents:
@@ -203,7 +192,7 @@ def _routes_using_caller_resolver(
     and doing that once per route turns a fast check into a minutes-long one.
     """
     if dependencies is None:
-        dependencies = _caller_dependencies(_api_tree())
+        dependencies = _caller_dependencies(_deps_tree())
     routes: list[tuple[str, str]] = []
     for route in client.app.routes:  # type: ignore[attr-defined]
         dependant = getattr(route, "dependant", None)
@@ -250,7 +239,7 @@ def test_every_authenticated_route_maps_a_resolver_failure_the_same_way(
     client = _client(tmp_path, resolver)
     headers = {"Authorization": "Bearer token"}
     mismatches: list[str] = []
-    for method, path in _routes_using_caller_resolver(client, _caller_dependencies(_api_tree())):
+    for method, path in _routes_using_caller_resolver(client, _caller_dependencies(_deps_tree())):
         request_path = path.replace("{qa_id}", "qa_x").replace("{diagnosis_id}", "dx_x")
         request_path = request_path.replace("{question_id}", "q1").replace("{job_id}", "job1")
         request_path = request_path.replace("{order_no}", "O-1").replace("{code}", "c1")
@@ -295,27 +284,23 @@ def test_the_mapping_exists_in_exactly_one_place() -> None:
         node.lineno for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == SHARED
     ]
     assert len(copies) == 1, f"{SHARED} is defined {len(copies)} times: {copies}"
-    tree = _api_tree()
+    tree = _deps_tree()
     derived = _caller_dependencies(tree)
     named = _named_caller_dependencies(tree)
-    # The convention check: every caller-authenticating dependency delegates,
-    # and nothing that delegates is outside the naming convention (which is what
-    # the derivation above keys on).
     offenders: list[str] = []
     for name in sorted(named - derived):
-        offenders.append(f"{API_FILE} {name} looks like caller authentication but does not delegate")
+        offenders.append(f"{DEPS_FILE} {name} looks like caller authentication but does not delegate")
     for name in sorted(derived - named):
-        offenders.append(f"{API_FILE} {name} delegates but is not named {CALLER_DEPENDENCY_PREFIX}*")
+        offenders.append(f"{DEPS_FILE} {name} delegates but is not named {CALLER_DEPENDENCY_PREFIX}*")
     for name in sorted(named):
         function = next(
             node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == name
         )
         delegates = any(
-            isinstance(node, ast.Call) and getattr(node.func, "id", "") == SHARED
-            for node in ast.walk(function)
+            isinstance(node, ast.Call) and _calls_shared(node.func) for node in ast.walk(function)
         )
         if not delegates:
-            offenders.append(f"{API_FILE}:{function.lineno} {name} does not delegate to {SHARED}")
+            offenders.append(f"{DEPS_FILE}:{function.lineno} {name} does not delegate to {SHARED}")
         if "CallerAuthError" in ast.unparse(function):
-            offenders.append(f"{API_FILE}:{function.lineno} {name} maps CallerAuthError itself")
+            offenders.append(f"{DEPS_FILE}:{function.lineno} {name} maps CallerAuthError itself")
     assert offenders == [], "; ".join(offenders)

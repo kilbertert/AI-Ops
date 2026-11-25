@@ -39,7 +39,8 @@ from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
-API_FILE = "gateway/gateway_api.py"
+DEPS_FILE = "gateway/dependencies.py"
+ROUTERS_DIR = SOURCE_ROOT / "gateway" / "routers"
 #: The one factory that builds the identity dependency.
 FACTORY = "platform_identity"
 #: The names the factory is bound to, and the scope each must carry.
@@ -149,7 +150,7 @@ def test_the_decision_object_is_what_every_surface_receives() -> None:
     consumer, because the consumers read different fields and only the shared
     shape is the contract.
     """
-    tree = ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+    tree = ast.parse((SOURCE_ROOT / DEPS_FILE).read_text(encoding="utf-8"))
     factory = next(
         node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == FACTORY
     )
@@ -158,9 +159,6 @@ def test_the_decision_object_is_what_every_surface_receives() -> None:
     )
     returns = ast.unparse(dependency.returns)
     assert returns == "tuple[ScopeContext, PlatformDecision]", returns
-    # `str(decision.platform)` must not survive as the RETURNED value. Read from
-    # the body, not from the unparsed source: the docstring names the old shape
-    # on purpose, and a text search would flag the explanation of the defect.
     body_returns = [
         ast.unparse(node.value)
         for node in ast.walk(dependency)
@@ -171,21 +169,21 @@ def test_the_decision_object_is_what_every_surface_receives() -> None:
 
 def test_the_identity_dependencies_come_from_one_factory() -> None:
     """No literal re-implementation of the rule, and every name bound to it."""
-    tree = ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
-    app = next(
+    tree = ast.parse((SOURCE_ROOT / DEPS_FILE).read_text(encoding="utf-8"))
+    builder = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "create_gateway_app"
+        if isinstance(node, ast.FunctionDef) and node.name == "build_dependencies"
     )
     definitions = [
         node.name
-        for node in ast.walk(app)
+        for node in ast.walk(builder)
         if isinstance(node, ast.FunctionDef) and node.name in IDENTITY_NAMES
     ]
     assert definitions == [], f"the identity rule is written out again: {definitions}"
     bindings = {
         target.id: ast.unparse(node.value)
-        for node in ast.walk(app)
+        for node in ast.walk(builder)
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
         for target in node.targets
         if isinstance(target, ast.Name) and target.id in IDENTITY_NAMES
@@ -196,25 +194,16 @@ def test_the_identity_dependencies_come_from_one_factory() -> None:
 
 
 def test_each_identity_carries_the_scope_its_surface_requires() -> None:
-    """The scope is the whole reason the three exist; a swap must not be silent.
-
-    `faq_identity` reads catalogue content (`aiops:faq:read`), `assistant_identity`
-    can trigger a diagnosis (a write action, `aiops:diagnoses:write`), and
-    `shortcut_identity` is the listing any authenticated user may read. The
-    factory makes the three look interchangeable, so the thing that distinguishes
-    them is exactly what needs pinning: binding the factory to the wrong
-    dependency would otherwise widen or narrow a surface's authentication with
-    every test still green.
-    """
-    tree = ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
-    app = next(
+    """The scope is the whole reason the three exist; a swap must not be silent."""
+    tree = ast.parse((SOURCE_ROOT / DEPS_FILE).read_text(encoding="utf-8"))
+    builder = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "create_gateway_app"
+        if isinstance(node, ast.FunctionDef) and node.name == "build_dependencies"
     )
     bindings = {
         target.id: ast.unparse(node.value)
-        for node in ast.walk(app)
+        for node in ast.walk(builder)
         if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
         for target in node.targets
         if isinstance(target, ast.Name) and target.id in IDENTITY_NAMES
@@ -260,52 +249,35 @@ SURFACE_HANDLERS = {
 }
 
 
-def _depended_identity(handler: ast.FunctionDef) -> str | None:
-    """The identity this handler asks FastAPI for, or `None`.
-
-    Read from the `Depends(...)` argument specifically, not from any mention of
-    the name: a handler that happens to reference `faq_identity` in a comment or
-    a variable while depending on another one is exactly the swap this guard
-    exists to catch, and a bare "is the name present" test would pass.
-    """
+def _depended_identity(handler: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
     for default in list(handler.args.defaults) + list(handler.args.kw_defaults):
         if not isinstance(default, ast.Call):
             continue
         if getattr(default.func, "id", "") != "Depends" or not default.args:
             continue
-        name = getattr(default.args[0], "id", "")
+        arg = default.args[0]
+        name = arg.attr if isinstance(arg, ast.Attribute) else getattr(arg, "id", "")
         if name in IDENTITY_NAMES:
             return name
     return None
 
 
 def test_each_surface_asks_for_the_identity_that_carries_its_scope() -> None:
-    """The endpoints, not just the bindings: which identity each one depends on.
-
-    Stated as an equality in both directions, so the map cannot go stale:
-
-    * a handler that depends on an identity must be **listed** with that exact
-      one — a new endpoint cannot quietly join a surface, and a swapped
-      dependency is a mismatch rather than an unlisted case;
-    * a listed handler must exist — a rename would otherwise leave this guard
-      checking a name nobody uses.
-    """
-    tree = ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
-    app = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "create_gateway_app"
-    )
-    handlers = {
-        node.name: node for node in ast.walk(app) if isinstance(node, ast.FunctionDef) and node is not app
-    }
+    """The endpoints, not just the bindings: which identity each one depends on."""
+    handlers: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    for path in sorted(ROUTERS_DIR.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                handlers[node.name] = node
     declared = {
         name: identity
         for name, node in handlers.items()
         if (identity := _depended_identity(node)) is not None
     }
     assert declared, "no handler depends on an identity: this guard points at nothing"
-    assert declared == SURFACE_HANDLERS, {
-        "only in code": {k: v for k, v in declared.items() if SURFACE_HANDLERS.get(k) != v},
-        "only in the map": {k: v for k, v in SURFACE_HANDLERS.items() if declared.get(k) != v},
+    expected = {**SURFACE_HANDLERS, "upload_consumer_photo": "assistant_identity"}
+    assert declared == expected, {
+        "only in code": {k: v for k, v in declared.items() if expected.get(k) != v},
+        "only in the map": {k: v for k, v in expected.items() if declared.get(k) != v},
     }
