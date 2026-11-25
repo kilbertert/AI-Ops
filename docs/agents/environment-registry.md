@@ -179,6 +179,16 @@ check仅打印版本和计数，不打印地址、配置引用或秘密。备份
 
 Gateway配置AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE，登记config_ref必须与server_config_file一致，
 execution_environment与environment一致；登录代理配置AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE。
+旧实例若此前使用独立执行环境名（如 `production-41`），启用运行目录前须通过一次性受控入口
+`aiops-admin environment-adopt-execution --database <私有库> --from <旧值> --to <目标环境>`（默认只读预演，
+带 `--backup` 执行单事务迁移，带 `--restore --backup` 执行逐项 CAS 恢复，均支持 `--verify-bindings` 提交前核验与可选 `--bindings-file` 静态路由冲突核验）
+完成路由复制、旧环境路由单调撤回、消费者新版本冻结、`operator_apps` 与现役管家正式会话归属迁移及
+`consumer_knowledge_grants` 保撤复制（ADR-0333），不得在运行时增加环境别名或双读回落。
+批准切换窗口的标准顺序：（1）停机排空 Gateway 并确认 `gateway.db` 与控制端草稿库 `environment_tasks` 零在飞、留存私有冷备；
+（2）不带 `--backup` 只读预演核对冻结清单；（3）将配套 `agent-runs.json`、节点与目录配置切换至目标环境（并与 KB 命名空间重键成套就位）；
+（4）带不存在的 `0600` 独占 `--backup` 与 `--verify-bindings` 执行单事务迁移（前置校验失败自动回滚不留孤儿备份）；
+（5）拉起服务复核 `/health`、**新开消费者会话**（旧版本消费者历史会话按既有合同返回 `409 CHATFLOW_NEW_CONVERSATION_REQUIRED`）与现役管家既有正式会话追问；
+（6）未开放业务前若需回退，先切回 `agent-runs.json` 至源环境再执行 `--restore --backup <原备份> --verify-bindings`（开放后有漂移则拒覆，严禁整库回滚）。
 95试验期间启用登记，现已撤回；未设置的新选项不改变旧41。首次启用需重启配套合并制品，后续租户启停无须重启。
 共享知识服务按环境和公司租户共同识别账号，贯穿开户、检索/媒体、发布检查及运维命令；
 本地账本与公司API仍使用原公司租户ID。旧实例启用登记前需显式迁移知识账号，不能只切开关。

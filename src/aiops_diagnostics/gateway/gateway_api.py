@@ -821,6 +821,27 @@ def _advance_route_binding(
             "CHAT_ROUTE_BINDING_COLLIDES_WITH_FILE",
             "this route is still declared in the bindings file",
         )
+    if scenario == chat_execution.SCENARIO_CONSUMER_SERVICE and getattr(context, "agent_manager", None):
+        from aiops_diagnostics.publication.agent_lifecycle import AgentError
+
+        try:
+            snapshot = context.agent_manager.store.version(
+                outcome.agent_id, binding.tenant_id, version_no
+            ).snapshot
+        except AgentError as exc:
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT,
+                "CONSUMER_VERSION_UNAVAILABLE",
+                "selected consumer version is unavailable",
+            ) from exc
+        frozen = snapshot.get("consumer_service") if isinstance(snapshot, dict) else None
+        content = frozen.get("content") if isinstance(frozen, dict) else None
+        if isinstance(content, dict) and content.get("environment") not in (None, environment):
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT,
+                "CONSUMER_VERSION_ENVIRONMENT_MISMATCH",
+                "selected version belongs to another execution environment",
+            )
 
     store = ChatRouteBindingStore(Path(database).expanduser().absolute())
     existing = store.get(environment, binding.tenant_id, entry, scenario)
