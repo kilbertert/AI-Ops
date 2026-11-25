@@ -1,6 +1,6 @@
 # ADR-0340: 将 `standard_diagnoses` 原子迁移为 `async_jobs`（Schema v4）并精简新人文档入口
 
-Status: Accepted
+Status: Accepted（第 2 条中工作树保留 `docs/archive/` 的部分已由 [ADR-0343](0343-prune-redundant-drafts-and-obsolete-archives.md) 替代；第 1 条 Schema v4 迁移仍现行）
 Date: 2026-11-25
 
 ## 背景

@@ -2,6 +2,7 @@
 
 - 日期：2026-11-25
 - 状态：已采纳
+- 部分替代：[ADR-0340](0340-async-jobs-schema-v4-and-docs-archival.md)（仅替代其工作树保留 `docs/archive/` 的条款；ADR-0340 的 Schema v4 `async_jobs` 迁移条款继续现行）
 - 范围：文档工作树与无引用旧夹具（不触碰受 `AGENTS.md` / `ADR-0097` 保护的 `docs/validation*`、`docs/开发进度*`、`docs/adr/`、`deploy/manual-deploys.md`）
 
 ## 背景
@@ -25,7 +26,7 @@
 ## 决定
 
 1. 从工作树移除上述 37 个已替代草稿、过程日志、旧归档与零引用夹具，历史追溯统一指向 Git 提交 `57c1d788`。
-2. 同步更新 `README.md`、`docs/README.md`、`docs/architecture/README.md`、`docs/architecture/repository-layout.md`、`deploy/dify-36/{README.md,env.example}`、`integrations/cpms-java/README.md` 及相关手册与测试注释，确保全仓零断链、零悬浮路径引用。
+2. 同步更新 `README.md`、`docs/README.md`、`docs/architecture/README.md`、`docs/architecture/repository-layout.md`、`deploy/dify-36/{README.md,env.example}`、`integrations/cpms-java/README.md` 及相关手册与测试注释，确保**所有现役非冻结文档**零断链、零悬浮路径引用（受 `AGENTS.md` / `ADR-0097` 保护的 `docs/validation/`、`docs/开发进度/`、`docs/adr/` 历史回执保持只读不改写，其指向被清理旧草稿的历史链接可通过 Git 提交 `57c1d788` 追溯）。
 3. 保留仍被现役手册或测试直接引用的运行事实与合同文档（例如 `docs/agents/kb-service-test-env.md`、`docs/agents/operator-cpms/sop-followup.md`、`docs/agents/env-95-facts.md`），以及受 `AGENTS.md` / `ADR-0097` 与 `test_milestone_archive_is_frozen.py` 保护的历史回执和 ADR 目录。
 
 ## 备选方案
