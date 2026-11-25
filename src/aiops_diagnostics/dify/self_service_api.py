@@ -166,6 +166,17 @@ def register(app, context):
         caller = auth.identity(context, session)
         choices = auth.tenants(context, caller) if caller.platform else []
         allowed = {x["id"] for x in choices} | {caller.tenant_id}
+        if getattr(getattr(context, "settings", None), "environment_registry_file", ""):
+            from aiops_diagnostics.gateway.environment_registry import RegistryError, for_settings
+
+            try:
+                enabled_tenants = for_settings(context.settings).enabled_tenant_ids()
+            except RegistryError as exc:
+                raise auth.SetupRefused("TENANT_ENVIRONMENT_NOT_ENABLED") from exc
+            choices = [x for x in choices if x["id"] in enabled_tenants]
+            allowed = {x["id"] for x in choices} | (
+                {caller.tenant_id} if caller.tenant_id in enabled_tenants else set()
+            )
         tenant_names = {row["id"]: row["name"] for row in choices}
 
         def sources_for(entry):

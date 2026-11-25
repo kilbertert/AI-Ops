@@ -1462,6 +1462,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
 
     def _select_environment(self):
         """唯一选址点：活动登录响应给环境与目录地址，服务凭据只从本地取。"""
+        path = urllib.parse.urlsplit(self.path).path
         if not self.settings.environment_credentials_file:
             session = _console_access_token_from_cookie(self._single_header("Cookie"))
             if self.settings.login_proxy_url and session:
@@ -1475,6 +1476,8 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
                     raise _Rejected(401, "环境登录已失效，请重新登录")
                 if identity.get("environment"):
                     raise _Rejected(403, "当前环境管理连接尚未准备好")
+                if identity.get("business_admitted") is False and path != "/__aiops/manage":
+                    raise _Rejected(403, "当前环境未开通或已停用，仅允许环境目录管理")
             return
         origin = normalize_origin(self._single_header("Origin"))
         referer = _origin_and_path(self._single_header("Referer") or "")
@@ -1485,7 +1488,6 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             or self._single_header("Sec-Fetch-Site") not in (None, "same-origin")
         ):
             raise _Rejected(403, "请从Dify控制台操作")
-        path = urllib.parse.urlsplit(self.path).path
         if self.command == "GET" or path == _KNOWLEDGE_SYNC_ROUTE:
             # 原知识导航/同步仅带cookie；POST同源门仍阻止跨站写，后续照常核工作区。
             session = _console_access_token_from_cookie(self._single_header("Cookie"))
@@ -1503,6 +1505,8 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         )
         if code != 200 or not isinstance(identity, dict) or not identity.get("company_user_id"):
             raise _Rejected(401, "环境登录已失效，请重新登录")
+        if identity.get("business_admitted") is False and path != "/__aiops/manage":
+            raise _Rejected(403, "当前环境未开通或已停用，仅允许环境目录管理")
         identifier = identity.get("environment")
         row = self.environment_credentials.get(identifier) if isinstance(identifier, str) else None
         if row is None:

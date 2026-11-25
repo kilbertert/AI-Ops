@@ -370,6 +370,74 @@ def test_catalogue_falls_back_to_agent_name_when_dify_is_unreadable(managed):
     assert source["name"] == "客户A / operator-node"
 
 
+def test_catalogue_filters_disabled_and_unregistered_tenants_under_registry(managed, tmp_path):
+    """ADR-0332：启用运行目录后，自助 catalogue 的租户、工作区与来源列表与本环境已启用租户求交集。"""
+    from aiops_diagnostics.gateway.environment_registry import apply
+
+    f, _, _, _, _ = managed
+    reg_path = tmp_path / "registry" / "directory.json"
+    env = f["target"].environment
+    if f["settings"].environment != env:
+        f["settings"].environment = env
+        f["ctx"].dify_workspaces.claim("TENANT-A", env, owner="fixture", lease_seconds=60)
+        f["ctx"].dify_workspaces.mark_created("TENANT-A", env, "workspace-a")
+    cpms_url = f["target"].cpms_base_url.rstrip("/")
+    cfg = tmp_path / "server.env"
+    cfg.write_text("", encoding="utf-8")
+    cfg.chmod(0o600)
+    # TENANT-A 停用、TENANT-B 启用，模拟公司目录列出两租户但当前环境仅启用 TENANT-B。
+    apply(
+        reg_path,
+        [
+            {
+                "id": env,
+                "enabled": True,
+                "gateway_url": "https://gw.example.test",
+                "cpms_base_url": cpms_url,
+                "config_ref": str(cfg),
+                "tenants": [
+                    {"id": "TENANT-A", "enabled": False},
+                    {"id": "TENANT-B", "enabled": True},
+                ],
+            }
+        ],
+        expected_revision=0,
+        actor="fixture",
+    )
+    f["settings"].environment_registry_file = str(reg_path)
+    f["settings"].dify_publish_api_key = "management-key"
+    headers = {"Authorization": "Bearer management-key", "X-AIOps-Console-Session": "session"}
+
+    body = f["client"].get("/v1/dify/management/catalogue", headers=headers).json()
+    assert [t["id"] for t in body["tenants"]] == ["TENANT-B"]
+    assert body["sources"] == []
+    assert body["workspaces"] == []
+
+    # 启用 TENANT-A 后，其租户选项、工作区与来源应用重新出现。
+    apply(
+        reg_path,
+        [
+            {
+                "id": env,
+                "enabled": True,
+                "gateway_url": "https://gw.example.test",
+                "cpms_base_url": cpms_url,
+                "config_ref": str(cfg),
+                "tenants": [
+                    {"id": "TENANT-A", "enabled": True},
+                    {"id": "TENANT-B", "enabled": True},
+                ],
+            }
+        ],
+        expected_revision=1,
+        actor="fixture",
+    )
+    body = f["client"].get("/v1/dify/management/catalogue", headers=headers).json()
+    assert [t["id"] for t in body["tenants"]] == ["TENANT-A", "TENANT-B"]
+    assert [s["app_id"] for s in body["sources"]] == [APP]
+    assert [w["tenant_id"] for w in body["workspaces"]] == ["TENANT-A"]
+
+
 def test_http_management_rejects_injected_fields_and_missing_key(managed):
     f, _, _, _, _ = managed
     client = f["client"]
