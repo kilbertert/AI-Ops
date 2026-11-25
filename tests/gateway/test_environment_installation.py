@@ -343,7 +343,7 @@ def test_dispatched_cancelled_install_keeps_blocked_not_cancelled(installation_s
 
 @pytest.mark.parametrize(
     "copy_seconds,window_seconds,other_copy_seconds",
-    [(0, 900, 5), (250, 900, 5), (350, 900, 5), (80, 90, 5), (10, 30, 5), (250, 900, 80)],
+    [(0, 900, 5), (400, 900, 5), (520, 900, 5), (80, 90, 5), (10, 30, 5), (400, 900, 120)],
 )
 def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     installation_state, tmp_path, monkeypatch, copy_seconds, window_seconds, other_copy_seconds
@@ -420,7 +420,7 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     result = worker.installation_run(tmp_path, request, identifier, owner)
     expected = (
         "reconcile"
-        if copy_seconds > 300 or window_seconds < copy_seconds + 60 or other_copy_seconds == 80
+        if copy_seconds > 480 or window_seconds < copy_seconds + 60 or other_copy_seconds == 120
         else "blocked"
     )
     assert result["state"] == expected
@@ -428,6 +428,135 @@ def test_worker_transfer_resolves_logical_target_and_authorizes_after_copy(
     if expected == "reconcile":
         assert not any("managed_python()" in str(a) for a in commands)
     assert all(a[2] == "124" for a in commands if a[0] == "dev-host" and a[2] != "41")
+
+
+def test_worker_skips_reupload_when_target_already_has_verified_archive(
+    installation_state, tmp_path, monkeypatch
+):
+    """目标暂存目录已存在同摘要归档时，跳过 41 读取与重复 dev-host cp 传输。"""
+    import hashlib
+    import subprocess
+
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
+
+    state = installation_state
+    identifier = submit(state).json()["id"]
+    owner = "a" * 32
+    internal(state, {"installation_claim": True, "owner": owner})
+    stage = internal(state, {"installation": "stage", "id": identifier, "owner": owner}).json()
+    stage["expires_at"] = time.time() + 900
+    (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="124"\nhost="managed-a"\n')
+    installer_bytes = b"fixed installer"
+    stage["installer"]["sha256"] = hashlib.sha256(installer_bytes).hexdigest()
+
+    central_reads = []
+    target_copies = []
+
+    def run(args, **kwargs):
+        if args[0] == "bash":
+            Path(args[-1]).write_bytes(installer_bytes)
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:3] == ["dev-host", "exec", "41"]:
+            script = kwargs["input"].decode()
+            source = next(v for v in stage["archives"].values() if repr(v["path"]) in script)
+            central_reads.append(source["path"])
+            kwargs["stdout"].write(Path(source["path"]).read_bytes())
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if args[:2] == ["dev-host", "cp"]:
+            target_copies.append(args[5])
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        if "input" in kwargs and isinstance(kwargs["input"], str):
+            # Simulate application.tar.gz already verified present on target; others absent
+            out = "present\n" if "'application.tar.gz'" in kwargs["input"] else "absent\n"
+            return subprocess.CompletedProcess(args, 0, stdout=out, stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    def output(args, **kwargs):
+        assert "/application.tar.gz" in kwargs["input"]
+        return json.dumps(
+            {
+                "id": identifier,
+                "environment": "a",
+                "scope": "candidate-installation-only",
+                "state": "blocked",
+                "executable": False,
+                "activation": "not_executed",
+                "registration": "not_executed",
+                "business": "unverified",
+            }
+        )
+
+    def request(payload):
+        if payload["installation"] == "stage":
+            return stage
+        if payload["installation"] == "authorize":
+            return {"authorized": True}
+        return internal(state, payload).json()
+
+    monkeypatch.setattr(worker.subprocess, "run", run)
+    monkeypatch.setattr(worker.subprocess, "check_output", output)
+    result = worker.installation_run(tmp_path, request, identifier, owner)
+    assert result["state"] == "blocked"
+    # application.tar.gz was NOT re-downloaded from 41 or re-uploaded to 124
+    assert stage["archives"]["application"]["path"] not in central_reads
+    assert not any(dest.endswith("/application.tar.gz") for dest in target_copies)
+    assert any(dest.endswith("/candidate.tar.gz") for dest in target_copies)
+    assert any(dest.endswith("/installer.tar.gz") for dest in target_copies)
+
+
+def test_guard_staged_archive_script_emits_present_absent_and_rejects_bad_archive(tmp_path):
+    """真实执行 guard_staged_archive 生成脚本：覆盖 absent、present、错误摘要、越权模式与符号链接拒绝。"""
+    import hashlib
+    import os
+    import subprocess
+    import sys
+
+    from aiops_diagnostics.onboarding import remote_scripts
+
+    remote_dir = tmp_path / "staged"
+    payload = b"verified-archive-bytes"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    def run_guard(expected_sha: str):
+        # 在非 root 单测中仅把脚本里的 st_uid == 0 替换为当前测试用户 uid，其余断言全真执行。
+        script = remote_scripts.guard_staged_archive(str(remote_dir), "application.tar.gz", expected_sha)
+        adapted = script.replace("st_uid == 0", f"st_uid == {os.getuid()}")
+        return subprocess.run(
+            [sys.executable, "-I", "-"],
+            input=adapted,
+            text=True,
+            capture_output=True,
+        )
+
+    # 1. 不存在 -> 创建 0700 目录并输出 absent
+    r1 = run_guard(digest)
+    assert r1.returncode == 0 and r1.stdout.strip() == "absent"
+    assert remote_dir.is_dir() and (remote_dir.stat().st_mode & 0o077) == 0
+
+    # 2. 存在同摘要 0600 常规文件 -> 输出 present
+    archive = remote_dir / "application.tar.gz"
+    archive.write_bytes(payload)
+    archive.chmod(0o600)
+    r2 = run_guard(digest)
+    assert r2.returncode == 0 and r2.stdout.strip() == "present"
+
+    # 3. 摘要不匹配 -> 失败关闭
+    r3 = run_guard("0" * 64)
+    assert r3.returncode != 0
+
+    # 4. 权限过宽（0644）-> 失败关闭
+    archive.chmod(0o644)
+    r4 = run_guard(digest)
+    assert r4.returncode != 0
+
+    # 5. 符号链接 -> 失败关闭
+    archive.unlink()
+    other = tmp_path / "other.tar.gz"
+    other.write_bytes(payload)
+    other.chmod(0o600)
+    archive.symlink_to(other)
+    r5 = run_guard(digest)
+    assert r5.returncode != 0
 
 
 def test_worker_cold_stage_builds_spec_without_expected_and_selects_cold_action(tmp_path, monkeypatch):
