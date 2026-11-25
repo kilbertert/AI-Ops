@@ -21,7 +21,9 @@ AI-Ops入口、CPMS地址、部署目标引用、凭据引用、IANA时区和租
 已有环境/租户编号保持固定，跨环境迁移不是改编号；新环境和租户默认不勾选准入。
 版本冲突保留输入并要求刷新；切换/刷新未保存内容先确认；刷新失败清空已显示目录。后端始终重新核权。
 页面提供“配置与制品预检”和计划重新核对；后台现场预检后可逐步准备、安装和验证已保存的明确租户，
-满足D43全部前置后才可正式发布。各步当前部署与现场验收见领域状态。
+也可通过「一键开通」（`tenant-onboard`，ADR-0336）沿既有 `advance_candidates` 后台自动串联
+`candidate-prepare → candidate-install → candidate-register → [可选 candidate-validate]`（输入与授权未漂移时自动续签同摘要计划窗），
+满足D43全部前置并经人工二次确认后才可正式发布。各步当前部署与现场验收见领域状态。
 不能将草稿保存或文件摘要匹配当业务验收。
 
 本地复验：在自有忽略构建目录解出固定Dify源码，`git init`建立独立Git根，安装锁定依赖，按
@@ -129,9 +131,10 @@ ADR0280安装器可按[成套配置手册](../../ops/environments/gateway/instal
 
 正常控制台会话经过原同源桥/Origin/CSRF与后端活动令牌交换、公司身份交叉核对后，使用：
 
-- `GET /v1/dify/management/environment-drafts`：获授权生效摘要和草稿，不返回config_ref/管理员/凭据正文。
+- `GET /v1/dify/management/environment-drafts`：获授权生效摘要、草稿与附带的只读总览（`overview`），不返回config_ref/管理员/凭据正文。
+- `GET /v1/dify/management/environment-overview`：获授权环境的只读运行总览（租户工作区/双端应用/知识授权/三项能力技术验证与节点状态），经同源桥 `environment-overview` 动作转发；控制环境读取 `execution_node_capabilities` 实时心跳与工具摘要兼容，远端环境仅展示受管任务点时回执（非实时心跳），不发起远端探测也不泄密（ADR-0335）。
 - `POST`同路径：`{"revision":0,"registry_revision":1,"draft":{...}}`，首次草稿revision为0。
-- 同源桥动作分别为`environment-drafts`和`environment-draft-save`；服务鉴权仍必需。
+- 同源桥动作分别为`environment-drafts`、`environment-overview`和`environment-draft-save`；服务鉴权仍必需。
 
 草稿字段：`id/name/enabled/gateway_url/cpms_base_url/company_gateway_url/deployment_target/credential_ref/timezone/tenants`；
 tenant字段仍为`id/name/enabled`。目标及凭据为1～64位字母数字下划线/短横线逻辑引用，时区使用IANA时区名。

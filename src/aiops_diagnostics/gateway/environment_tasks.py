@@ -56,6 +56,7 @@ def _public(row):
         "candidate-validate",
         "environment-publish",
         "site-install",
+        "tenant-onboard",
     }:
         state = "queued"
     if state == "executing":
@@ -425,39 +426,63 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
             row = _row(conn, identifier)
             _authorize(path, identity, row["environment"])
             if cancel:
-                if json.loads(row["request"]).get("action") == "candidate-prepare":
-                    for child_id in json.loads(row["request"])["children"].values():
+
+                def _cancel_prepare_children(parent_id: str, parent_req: dict) -> bool:
+                    any_inflight = False
+                    for child_id in parent_req.get("children", {}).values():
                         child = _row(conn, child_id)
                         child_request = json.loads(child["request"])
-                        bound = child_request.get("candidate_parent") == identifier or (
+                        bound = child_request.get("candidate_parent") == parent_id or (
                             child_request.get("action") == "site-install"
-                            and child_request.get("preparation") == identifier
+                            and child_request.get("preparation") == parent_id
                         )
-                        if bound and child["state"] in {
-                            "queued",
-                            "running",
-                            "reconcile",
-                            "waiting",
-                            "executing",
-                            "checking",
-                        }:
-                            child_state = (
-                                child["state"]
-                                if child["state"] in {"running", "reconcile", "executing", "checking"}
-                                else "cancelled"
-                            )
+                        if bound and _is_active_state(child["state"]):
+                            inflight = _is_inflight_state(child["state"])
+                            if inflight:
+                                any_inflight = True
+                            child_state = child["state"] if inflight else "cancelled"
                             conn.execute(
                                 "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
                                 (child_state, time.time(), child_id),
                             )
+                    return any_inflight
+
                 request = json.loads(row["request"])
+                onboard_inflight = False
+                if request.get("action") == "candidate-prepare":
+                    _cancel_prepare_children(identifier, request)
+                elif request.get("action") == "tenant-onboard":
+                    for child_id in request.get("children", {}).values():
+                        child = _row(conn, child_id)
+                        child_req = json.loads(child["request"])
+                        if child_req.get("onboard_parent") != identifier:
+                            continue
+                        if child_req.get("action") == "candidate-prepare" and _cancel_prepare_children(
+                            child_id, child_req
+                        ):
+                            onboard_inflight = True
+                        if not _is_active_state(child["state"]):
+                            continue
+                        inflight = _is_inflight_state(child["state"])
+                        if inflight:
+                            onboard_inflight = True
+                        child_state = child["state"] if inflight else "cancelled"
+                        conn.execute(
+                            "UPDATE environment_tasks SET cancel=1,state=?,updated_at=? WHERE id=?",
+                            (child_state, time.time(), child_id),
+                        )
                 state = (
                     row["state"]
-                    if row["state"] in {"running", "reconcile", "executing", "checking"}
+                    if _is_inflight_state(row["state"])
                     else "checking"
-                    if row["state"] == "waiting"
-                    and request.get("action") == "environment-publish"
-                    and request.get("attempted")
+                    if (
+                        (
+                            row["state"] == "waiting"
+                            and request.get("action") == "environment-publish"
+                            and request.get("attempted")
+                        )
+                        or (request.get("action") == "tenant-onboard" and onboard_inflight)
+                    )
                     else "cancelled"
                 )
                 conn.execute(
@@ -466,6 +491,65 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
                 )
                 row = _row(conn, identifier)
             return current_public(row)
+
+
+def _is_inflight_state(state: str) -> bool:
+    return state in ("running", "reconcile", "executing", "checking")
+
+
+def _is_active_state(state: str) -> bool:
+    return state in ("queued", "waiting") or _is_inflight_state(state)
+
+
+def _check_onboard_parent_open(conn, onboard_parent: str, stage: str) -> bool:
+    parent = _row(conn, onboard_parent)
+    parent_req = json.loads(parent["request"])
+    return (
+        parent_req.get("action") == "tenant-onboard"
+        and parent["state"] == "waiting"
+        and not parent["cancel"]
+        and stage not in parent_req.get("children", {})
+    )
+
+
+def _bind_onboard_parent(conn, onboard_parent: str, stage: str, child_id: str, fresh_plan=None) -> bool:
+    parent = _row(conn, onboard_parent)
+    parent_req = json.loads(parent["request"])
+    if (
+        parent_req.get("action") != "tenant-onboard"
+        or parent["state"] != "waiting"
+        or parent["cancel"]
+        or stage in parent_req.get("children", {})
+    ):
+        return False
+    parent_req.setdefault("children", {})[stage] = child_id
+    if fresh_plan is not None:
+        parent_req["plan"] = fresh_plan
+    conn.execute(
+        "UPDATE environment_tasks SET request=?,updated_at=? WHERE id=?",
+        (json.dumps(parent_req), time.time(), onboard_parent),
+    )
+    return True
+
+
+def _has_active_onboard_children(conn, parent_id: str, parent_req: dict) -> bool:
+    for child_id in parent_req.get("children", {}).values():
+        child = _row(conn, child_id)
+        child_req = json.loads(child["request"])
+        if child_req.get("onboard_parent") != parent_id:
+            continue
+        if child_req.get("action") == "candidate-prepare":
+            for nested_id in child_req.get("children", {}).values():
+                nested = _row(conn, nested_id)
+                nested_req = json.loads(nested["request"])
+                bound = nested_req.get("candidate_parent") == child_id or (
+                    nested_req.get("action") == "site-install" and nested_req.get("preparation") == child_id
+                )
+                if bound and _is_active_state(nested["state"]):
+                    return True
+        if _is_active_state(child["state"]):
+            return True
+    return False
 
 
 def validate_receipt(value, environment):
@@ -646,6 +730,7 @@ def worker(path, reference, payload, *, internal_workspace=False):
             "candidate-register",
             "candidate-validate",
             "site-install",
+            "tenant-onboard",
         }:
             raise TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
         _authorize(path, tuple(request["identity"]), row["environment"])

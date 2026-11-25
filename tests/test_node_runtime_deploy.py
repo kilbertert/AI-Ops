@@ -179,7 +179,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
         root = "/v1/internal/operator-runs/run_test"
         from aiops_diagnostics.operator import operator_tools
 
-        tails = ["completions"] + [
+        tails = ["completions", "stream-chunks"] + [
             f"tools/{tool.name}/{action}"
             for tool in operator_tools.tools()
             for action in ("authorization", "evidence")

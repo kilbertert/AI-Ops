@@ -18,10 +18,48 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import ALLOWED_MEDIA_TYPES
 OPERATIONS = {
     ("post", "/v1/assistant/questions"): ("客服问答", "提交问题或管家单订单任务", "Assistant"),
     ("get", "/v1/assistant/questions/{qa_id}"): ("客服问答", "查询问答结果", "QA"),
+    ("get", "/v1/assistant/questions/{qa_id}/events"): (
+        "客服问答",
+        "订阅问答SSE实时事件流（执行路径+正文流式增量）",
+        "QAEventStream",
+    ),
     ("post", "/v1/assistant/questions/{qa_id}/cancel"): ("客服问答", "取消问答任务（无请求体）", "QA"),
+    ("post", "/v1/assistant/questions/{qa_id}/regenerate"): (
+        "后台AI抽屉",
+        "原地重新生成会话最后一轮排查问答",
+        "QA",
+    ),
+    ("post", "/v1/assistant/questions/{qa_id}/feedback"): (
+        "客服问答",
+        "提交或取消回答点赞/点踩反馈",
+        "QAFeedback",
+    ),
+    ("post", "/v1/assistant/questions/{qa_id}/export"): (
+        "后台AI抽屉",
+        "导出排查报告至公司下载中心",
+        "DownloadCenterTask",
+    ),
     ("get", "/v1/assistant/questions"): ("客服问答", "查询本人问答历史", "QAList"),
+    ("get", "/v1/assistant/agents"): ("后台AI抽屉", "读取可用后台智能体列表", "AssistantAgents"),
+    ("post", "/v1/assistant/files"): (
+        "后台AI抽屉",
+        "上传排查附件（图片/PDF/Word）并登记下载中心",
+        "AssistantFile",
+    ),
+    ("get", "/v1/assistant/files/{file_id}"): ("后台AI抽屉", "查询附件解析状态与元信息", "AssistantFile"),
+    ("get", "/v1/assistant/files/{file_id}/preview"): (
+        "后台AI抽屉",
+        "读取图片附件缩略图预览",
+        "FilePreview",
+    ),
+    ("post", "/v1/assistant/files/{file_id}/download-task"): (
+        "后台AI抽屉",
+        "登记附件下载任务至公司下载中心",
+        "DownloadCenterTask",
+    ),
     ("get", "/v1/conversations"): ("会话", "查询本人会话", "ConversationList"),
     ("get", "/v1/conversations/{conversation_id}"): ("会话", "查询会话轮次", "Conversation"),
+    ("patch", "/v1/conversations/{conversation_id}"): ("会话", "重命名本人会话标题", "Conversation"),
     ("delete", "/v1/conversations/{conversation_id}"): ("会话", "删除本人测试会话", "Deleted"),
     ("get", "/v1/faq/catalog"): ("FAQ与入口", "读取固定FAQ目录", "Catalog"),
     ("get", "/v1/faq/recommendations"): ("FAQ与入口", "读取推荐问法", "Recommendations"),
@@ -37,6 +75,16 @@ OPERATIONS = {
     ("get", "/v1/health-report-jobs/{job_id}"): ("健康报告", "查询健康报告", "Health"),
     ("post", "/v1/standard/analyses"): ("管家分析", "创建站点时间窗分析", "Analysis"),
     ("get", "/v1/standard/analyses/{analysis_id}"): ("管家分析", "查询站点分析报告", "Analysis"),
+}
+
+OPERATOR_ONLY_PATHS = {
+    "/v1/assistant/agents",
+    "/v1/assistant/files",
+    "/v1/assistant/files/{file_id}",
+    "/v1/assistant/files/{file_id}/preview",
+    "/v1/assistant/files/{file_id}/download-task",
+    "/v1/assistant/questions/{qa_id}/regenerate",
+    "/v1/assistant/questions/{qa_id}/export",
 }
 
 DESCRIPTION = """用户接口测试规范。C端：third-session + X-Business-Entry: consumer；
@@ -78,6 +126,12 @@ def _schemas() -> dict[str, Any]:
         type={"const": "qa", "type": "string"},
         qa_id=string,
         question=string,
+        attempt_no={"type": "integer"},
+        parent_qa_id={"type": ["string", "null"]},
+        stream_url=string,
+        agent=_ref("AssistantAgentBrief"),
+        attachments={"type": "array", "items": _ref("AssistantFile")},
+        feedback={"anyOf": [_ref("QAFeedback"), {"type": "null"}]},
         conversation_id=string,
         turn_no={"type": "integer"},
     )
@@ -95,6 +149,9 @@ def _schemas() -> dict[str, Any]:
     conversation = _object(
         conversation_id=string,
         business_entry=string,
+        agent_id=string,
+        title=string,
+        turn_count={"type": "integer"},
         agent_version_key=string,
         active_order_no={"type": ["string", "null"]},
         is_generating={"type": "boolean"},
@@ -103,9 +160,62 @@ def _schemas() -> dict[str, Any]:
         updated_at=string,
         expires_at=string,
     )
+    citation = _object(
+        citation_id=string,
+        source_type={"type": "string", "enum": ["cpms_tool", "attachment", "knowledge"]},
+        title=string,
+        snippet=string,
+        observed_at=string,
+        file_id={"type": ["string", "null"]},
+        page={"type": ["integer", "null"]},
+        downloadable={"type": "boolean"},
+    )
+    assistant_file = _object(
+        file_id=string,
+        file_name=string,
+        category={"type": "string", "enum": ["image", "document"]},
+        extension=string,
+        mime_type=string,
+        size_bytes={"type": "integer"},
+        upload_status=string,
+        parse_status=string,
+        parse_error={"type": ["string", "null"]},
+        page_count={"type": ["integer", "null"]},
+        truncated={"type": "boolean"},
+        preview_url={"type": ["string", "null"]},
+        download_center_record_id={"type": ["string", "null"]},
+        created_at=string,
+        expires_at=string,
+    )
+    download_task = _object(
+        download_center_record_id=string,
+        direction={"type": "integer", "enum": [-1]},
+        status=string,
+        file_name=string,
+        format=string,
+        notify_file_center={"type": "boolean"},
+    )
+    qa_feedback = _object(
+        qa_id=string,
+        rating={"type": ["string", "null"], "enum": ["up", "down", None]},
+        reasons={"type": "array", "items": string},
+        comment={"type": ["string", "null"]},
+        updated_at=string,
+    )
+    agent_brief = _object(agent_id=string, name=string, subtitle=string)
     return {
         "APIError": error,
         "ErrorEnvelope": _object(error=_ref("APIError")),
+        "Citation": citation,
+        "AssistantAgentBrief": agent_brief,
+        "AssistantAgents": _object(
+            default_agent_id=string,
+            language=string,
+            agents=objects,
+        ),
+        "AssistantFile": assistant_file,
+        "DownloadCenterTask": download_task,
+        "QAFeedback": qa_feedback,
         "Answer": _object(
             blocks={
                 "type": "array",
@@ -119,6 +229,7 @@ def _schemas() -> dict[str, Any]:
                     unavailable={"type": "boolean"},
                 ),
             },
+            citations={"type": "array", "items": _ref("Citation")},
             retrieval_status={"type": "string", "enum": ["found", "not_found", "unavailable", "limited"]},
         ),
         "QA": qa,
@@ -154,12 +265,29 @@ def _schemas() -> dict[str, Any]:
         "Recommendations": _object(recommendations=objects),
         "Shortcuts": _object(count={"type": "integer"}, shortcuts=objects),
         "Banners": _object(count={"type": "integer"}, banners=objects),
-        "Starters": _object(
-            opening=string,
-            suggested_questions={"type": "array", "items": string},
-            opening_source=string,
-            suggested_source=string,
-        ),
+        "Starters": {
+            **_object(
+                agent_id=string,
+                language=string,
+                starters_version=string,
+                greeting=string,
+                supporting_text=string,
+                opening=string,
+                suggested_questions={
+                    "type": "array",
+                    "items": {
+                        "anyOf": [
+                            string,
+                            {**_object(id=string, text=string), "required": ["id", "text"]},
+                        ]
+                    },
+                },
+                disclaimer=string,
+                opening_source=string,
+                suggested_source=string,
+            ),
+            "required": ["opening", "suggested_questions"],
+        },
         "OrderAccess": _object(
             order_no=string, accessible={"type": "boolean", "const": True}, scope_fingerprint=string
         ),
@@ -227,7 +355,9 @@ def public_schema(app: FastAPI) -> dict[str, Any]:
         operation.update(summary=summary, description=summary, tags=[tag])
         # 公网代理翻译会话/来源字段，不能把内部依赖的Header原样交给测试同事。
         operation["parameters"] = [
-            p for p in operation.get("parameters", []) if p["in"] != "header" or p["name"].lower() == "range"
+            p
+            for p in operation.get("parameters", [])
+            if p["in"] != "header" or p["name"].lower() in {"range", "last-event-id"}
         ]
         operation["security"] = [] if name == "Media" else [{"ConsumerSession": []}, {"OperatorBearer": []}]
         if name != "Media":
@@ -238,7 +368,7 @@ def public_schema(app: FastAPI) -> dict[str, Any]:
                         "in": "header",
                         "required": True,
                         "schema": {"type": "string", "enum": ["consumer", "operator"]},
-                        "description": "与所选身份一致；站点分析仅支持operator",
+                        "description": "与所选身份一致；后台AI抽屉与站点分析仅支持operator",
                     },
                     {
                         "name": "Accept-Language",
@@ -272,17 +402,31 @@ def public_schema(app: FastAPI) -> dict[str, Any]:
                     "404": {"description": "资源不存在或媒体未配置；可能为空正文或JSON错误信封"},
                 }
             )
+        elif name == "QAEventStream":
+            responses["200"] = {
+                "description": (
+                    "SSE实时事件流（run_started/step_started/step_finished/message_delta/"
+                    "message_replace/citations/message_done/run_failed/run_cancelled/ping）"
+                ),
+                "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            }
+        elif name == "FilePreview":
+            responses["200"] = {
+                "description": "规范化后的图片缩略图（JPEG 二进制流）",
+                "content": {"image/jpeg": {"schema": {"type": "string", "format": "binary"}}},
+            }
         elif name == "Assistant":
             responses["200"] = {
                 "description": "同步答案/补充信息，不轮询",
                 "content": {"application/json": {"schema": {"anyOf": [_ref("FAQ"), _ref("Clarification")]}}},
             }
             responses["202"] = {
-                "description": "已受理；按type和对应ID轮询；不等于完成",
+                "description": "已受理；按type和对应ID轮询或订阅stream_url；不等于完成",
                 "content": {"application/json": {"schema": {"anyOf": [_ref("QA"), _ref("Analysis")]}}},
             }
             operation["description"] = (
-                "普通WF01不带shortcut_code。管家Java提交question+order_no，返回type=qa/qa_id；旧诊断为type=diagnosis/diagnosis_id；分析为type=analysis/analysis_id。缺订单可200澄清。图片输入当前未开放。"
+                "普通WF01不带shortcut_code。管家Java提交question（可选order_no/attachment_ids/agent_id），"
+                "返回type=qa/qa_id/stream_url；分析为type=analysis/analysis_id。缺订单可200澄清。"
             )
             operation["requestBody"]["content"]["application/json"]["examples"] = {
                 "knowledge": {"summary": "C端知识问答", "value": {"question": "怎么开始充电？"}},
@@ -293,11 +437,15 @@ def public_schema(app: FastAPI) -> dict[str, Any]:
                 },
             }
         else:
-            code = (
-                "202"
-                if method == "post" and name in {"Health", "Analysis"} and not path.endswith("/cancel")
-                else "200"
-            )
+            if method == "post" and path == "/v1/assistant/files":
+                code = "201"
+            elif method == "post" and (
+                (name in {"Health", "Analysis"} and not path.endswith("/cancel"))
+                or path.endswith("/regenerate")
+            ):
+                code = "202"
+            else:
+                code = "200"
             responses[code] = _response(
                 name,
                 "读取status判断是否终态；completed/inconclusive后核正文"
@@ -305,7 +453,7 @@ def public_schema(app: FastAPI) -> dict[str, Any]:
                 else "成功响应",
             )
         operation["responses"] = responses
-        if path.startswith("/v1/standard/analyses"):
+        if path.startswith("/v1/standard/analyses") or path in OPERATOR_ONLY_PATHS:
             operation["security"] = [{"OperatorBearer": []}]
             operation["parameters"][-2]["schema"]["enum"] = ["operator"]
     # FastAPI附带默认422模型；本服务统一错误信封不用它，避免导入器显示错误形状。

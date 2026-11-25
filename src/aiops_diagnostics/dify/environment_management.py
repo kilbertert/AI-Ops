@@ -13,6 +13,7 @@ from aiops_diagnostics.common.http_auth import validate_internal_token
 from aiops_diagnostics.gateway import environment_drafts, environment_plans, environment_tasks, gateway_db
 from aiops_diagnostics.gateway import environment_registry as registry
 
+from . import environment_overview
 from . import self_service_identity as auth
 from .self_service_store import SetupConflict
 
@@ -59,7 +60,9 @@ def drafts(context, session, payload=None):
     caller, _, _ = _access(context, session)
     try:
         if payload is None:
-            return environment_drafts.catalogue(_path(context), _identity(context, caller))
+            return environment_overview.catalogue_with_overview(
+                context, _path(context), _identity(context, caller)
+            )
         if set(payload) != {"draft", "revision", "registry_revision"}:
             raise registry.RegistryError("ENVIRONMENT_DRAFT_INVALID")
         return environment_drafts.save(
@@ -75,6 +78,16 @@ def drafts(context, session, payload=None):
         raise auth.SetupRefused(str(exc)) from exc
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         raise auth.SetupRefused("ENVIRONMENT_DRAFT_UNAVAILABLE") from exc
+
+
+def overview(context, session):
+    caller, _, _ = _access(context, session)
+    try:
+        return environment_overview.build_overview_locked(context, _path(context), _identity(context, caller))
+    except registry.RegistryError as exc:
+        raise auth.SetupRefused(str(exc)) from exc
+    except (OSError, ValueError, RuntimeError, sqlite3.Error, TypeError, KeyError, AttributeError) as exc:
+        raise auth.SetupRefused("ENVIRONMENT_OVERVIEW_UNAVAILABLE") from exc
 
 
 def plan(context, session, payload):
@@ -203,6 +216,33 @@ def task(context, session, payload):
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
             return submit(context, identity, payload["candidate_task"])
+        if "onboard_plan" in payload:
+            from . import environment_consumer, environment_onboarding
+
+            if not caller.platform:
+                raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
+            allowed_keys = {
+                "onboard_plan",
+                "tenant_id",
+                "source_app_id",
+                "source_version",
+                "initial_installation",
+                "case_ref",
+                "capabilities",
+            }
+            required_keys = {"onboard_plan", "tenant_id", "source_app_id", "source_version"}
+            if not required_keys <= set(payload) or not set(payload) <= allowed_keys:
+                raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+            if "initial_installation" in payload and payload["initial_installation"] is not True:
+                raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
+            source = environment_consumer.sources(context, caller, payload["source_app_id"])
+            if (
+                type(payload["source_version"]) is not int
+                or source["version_no"] != payload["source_version"]
+            ):
+                raise SetupConflict("SETUP_SOURCE_CHANGED")
+            environment_consumer.document(source, "candidate-validation")
+            return environment_onboarding.submit(context, identity, payload, source)
         if set(payload) in (
             {"candidate_plan", "tenant_id", "source_app_id", "source_version"},
             {"candidate_plan", "tenant_id", "source_app_id", "source_version", "initial_installation"},
@@ -535,9 +575,14 @@ def register(app, context, session_dependency):
 
                 return dispatch(context, payload)
             if "advance_candidates" in payload:
-                from .environment_candidate_preparation import advance
+                from . import environment_candidate_preparation, environment_onboarding
 
-                return advance(context, payload)
+                prep_res = environment_candidate_preparation.advance(context, payload)
+                onboard_res = environment_onboarding.advance(context)
+                return {
+                    "advanced": prep_res["advanced"] + onboard_res["advanced"],
+                    "turn": prep_res["turn"],
+                }
             if "prepare" in payload:
                 if payload["prepare"] in {"operator", "consumer"}:
                     from .environment_operator import run
@@ -571,6 +616,11 @@ def register(app, context, session_dependency):
     def check_plan(payload: dict, response: Response, session=Depends(session_dependency)):  # noqa: B008
         response.headers["Cache-Control"] = "no-store"
         return plan(context, session, payload)
+
+    @app.get("/v1/dify/management/environment-overview")
+    def read_overview(response: Response, session=Depends(session_dependency)):  # noqa: B008
+        response.headers["Cache-Control"] = "no-store"
+        return overview(context, session)
 
     @app.get("/v1/dify/management/environment-drafts")
     def read_drafts(response: Response, session=Depends(session_dependency)):  # noqa: B008
