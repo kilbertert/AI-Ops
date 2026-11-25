@@ -52,7 +52,7 @@
 获批行为唯一正文在[环境目录Feature](../acceptance/environment-directory.feature)，
 [QA](../acceptance/environment-directory-qa-plan.md)给出场景步骤，[手册](environment-registry.md)讲操作。
 未来能力与依赖见[规划](../architecture/2026-11-16-manual-environment-onboarding.md)和主任务#1535/P0～P5原生子任务。
-截至2026-11-25（`d871c40c` 配套上线与 41 唯一运行目录切换后复核），41 实际为 `1.40.4+d871c40cfe7e`（已切为唯一运行目录 `execution_environment=41`、`registry revision: 7`、`node-41` 实时心跳在线）；
+截至2026-11-25（`af3f6bfe` 充电桩后台 AI 抽屉后端上线后复核），41 实际为 `1.40.4+af3f6bfef98e`（`PRAGMA user_version=3`，唯一运行目录 `execution_environment=41`、`registry revision: 7`、`node-41` 升级至 `af3f6bfef98e-276dac2d851b` 实时心跳在线）；
 36 配套 `kb-service --scoped-account`（两 41 租户 `tenancy.db` 已重键为规范作用域命名空间）、`aiops-dify-login-proxy`（挂接只读目录副本）、`aiops-dify-console-bridge` 与 `deploy-web-1`（`aiops/dify-web-patched:onboarding-d871c40c`）已统一升级至 `d871c40c`；
 95 保持 `enabled: false`、双租户停用、路由 0（待后端精确撤销有效回执），不因此发布启用；124 保持 `draft_only` 未动，原回执保留。
 95普通用户精确HTTPS入口已沿#1680合并工件安装：匿名问答401、管理404、原公司路径200；
@@ -91,13 +91,14 @@ LTA-CSMS运行工件已安装，目标工作区及双端应用已登记（原D32
 | 客服正式问答与选库 | 原Dify/客户端API的选库、提示词和新发布版本已有回执；App/H5屏幕与知识准确性未验收 | [选库恢复](../validation/2026-11-14-consumer-publication-selection-live.md)、[手册](consumer-wf01/knowledge-picker-deploy.md) |
 | 自然回复与金额事实 | 11月12日复验保留主客户端V35/revision43；有限原Dify/H5场景通过，业务准确性与任意计算诱导仍未证明 | [最终回执](../validation/2026-11-12-response-policy-final-acceptance.md)、[事实规则](consumer-wf01/order-composition-qa.md) |
 | 管家问答/证据交付 | 正常答复与仅证据交付均有原入口记录；语义复核为观察，授权/完整性仍是拒绝闸；复杂问句耗时和准确性仍有边界 | [复核调整](../validation/2026-11-12-operator-review-observe-deploy.md)、[证据交付](../validation/2026-11-12-operator-evidence_02-live.md) |
+| 充电桩后台 AI 抽屉后端（#1704 / ADR-0337） | #1716 `af3f6bfe` 已部署 41（Gateway `1.40.4+af3f6bfef98e` + 节点 `af3f6bfef98e-276dac2d851b` + 回调 `stream-chunks` + 5 项锁定依赖 + 下载中心直连配置 + H5 Nginx 白名单）；41 真实联调通过：智能体/预设、5 格式附件上传与 OSS 零水印（`3101/direction=1`）、实时 SSE 与 14 帧 Java `message_delta`、`Last-Event-ID` 续传、取消、下载任务与 `.docx`/`.md` 导出（`10086/direction=-1`）、重命名/反馈/原地重生成、双租户 7 路 404 隔离与现役路由不变；**未宣称**：前端抽屉 UI 与 `notifyAndOpenFileCenter(-1)` 浏览器弹窗、同租户员工范围实测与工程师故障准确率验收（仍由 #1714 跟踪） | [本次上线与联调回执](../validation/2026-11-25-operator-ai-drawer-live.md)、[ADR0337](../adr/0337-operator-ai-drawer-architecture.md)、[前端交接](frontend-operator-handoff.md) |
 | 管家运行日志 | 事件明细与复核行渲染有制品及页面证据；生产非allow/refused缺自然样本 | [渲染回执](../validation/2026-11-13-run-log-review-render-deploy.md)、[日志手册](operator-cpms/run-logs.md) |
 | 设备离线/统计 | 指定设备的区间计算与独立记录一致，原Dify/H5追问有限通过；无工程师确认的物理故障结论、无全量准确率 | [离线回执](../validation/2026-11-10-device-offline-live-acceptance.md)、[方法](operator-cpms/device-offline.md) |
 | 站点/费用/发布恢复 | 指定原入口场景有证据；独立服务费折扣、优惠资格、结算状态、关联占枪费、非零退款及完整双租户矩阵仍有缺口 | [反馈验收](../validation/2026-11-04-tester-feedback-production.md)、[站点验收](../validation/2026-11-04-site-query-real-path-deployed.md) |
 | 客户AI开通与知识 | 既有客户失败续跑、凭据持久化与隔离有证据；不是新环境自动开通或任意租户资料质量验收 | [开通回执](../validation/2026-11-06-onboarding-deployed-receipt.md)、[知识验收](../validation/2026-10-29-dify-knowledge-live.md)、[手册](operator-cpms/self-service.md) |
 | 手机/页面入口 | 原APK自由单轮有证据；#1353连续会话与#1422Markdown呈现仍待新版包。管家首页入口已撤回，聊天路由保留 | [客服回执](../validation/2026-11-05-consumer-agent-production-closeout.md)、[入口撤回](../validation/2026-11-03-operator-h5-entry-withdrawal.md) |
 | 退役与历史数据 | 旧Python运行时、诊断/设备CLI与宣传路径已退役；客户案例数据行停用，前端硬编码仍有偏差；不恢复旧入口 | [运行时回执](../validation/2026-10-29-runtime-retirement-live.md)、[案例回执](../validation/2026-11-14-case-exploration-retired.md)、[退役边界](../runtime-retirement.md) |
-| 持久化与交付 | schema阶段2及运行日志后继迁移有各自版本证据；不把旧schema数字当当前生产值，不把CI/镜像同步当运行验收 | [schema回执](../validation/2026-11-11-gateway-schema-live-receipt.md)、[日志迁移](../validation/2026-11-12-runlog-detail-v2-deploy.md)、[Actions手册](actions-delivery.md) |
+| 持久化与交付 | schema 已随 #1716 `af3f6bfe` 升级至 `VERSION=3`（41 `1.40.4+af3f6bfef98e`，含升级前 `.backup()` 快照与 `integrity` 复核）；历史阶段2及运行日志迁移回执保留；不把CI/镜像同步当运行验收 | [抽屉上线回执](../validation/2026-11-25-operator-ai-drawer-live.md)、[schema阶段2回执](../validation/2026-11-11-gateway-schema-live-receipt.md)、[Actions手册](actions-delivery.md) |
 
 人工语义准确率、长期稳定性、生产在途发布竞争、原生APK/IPA和全面多语言质量仍未整体验收。
 产品样例、双租户权限/发布矩阵和费用语义继续在对应Issue中跟踪，不以关闭票据代替验收。
