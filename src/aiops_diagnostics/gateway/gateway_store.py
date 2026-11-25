@@ -394,8 +394,8 @@ class GatewayStore:
         * 兑换成功后立即把它标记为已用（同一条 UPDATE 里带 ``used_at IS NULL``），
           所以并发两次只有一次成功。
 
-        过期的行不在这里删；``prune_hop_tickets`` 由调用方按需调用。删除不是正确性
-        的一部分（查询已经按过期判断），放在这里只会让一次失败把"能不能进"变成 500。
+        过期的行不在这里删；删除不是正确性的一部分（查询已经按过期判断），
+        放在这里只会让一次失败把"能不能进"变成 500。
         """
         if not ticket:
             return None
@@ -420,13 +420,6 @@ class GatewayStore:
             "tenant_id": str(row["tenant_id"]),
             "workspace_id": str(row["workspace_id"] or ""),
         }
-
-    def prune_hop_tickets(self, *, older_than_seconds: float = 600.0) -> int:
-        """删掉很久以前的行。票只在秒级有用，留一天的行只是垃圾。"""
-        cutoff = format_stored_time(now_utc() - timedelta(seconds=older_than_seconds))
-        with self._connection(write=True) as connection:
-            deleted = connection.execute("DELETE FROM knowledge_hop_tickets WHERE expires_at < ?", (cutoff,))
-        return int(deleted.rowcount or 0)
 
     def record_knowledge_access(
         self,
@@ -1186,15 +1179,6 @@ class GatewayStore:
                 key = str(row["tenant_id"]) if row["tenant_id"] else ""
                 counts[key] = counts.get(key, 0) + int(row["n"])
         return counts
-
-    # NOTE (#492): `runs` is deliberately absent from `recover_interrupted_jobs`.
-    # The device path is scheduled for retirement and this table has no deadline
-    # column, so giving it a convergence rule is a product decision that nobody
-    # has made — PRD #410 left it explicit. Today a `queued`/`running` run whose
-    # process died stays that way until `update_run` is called with a terminal
-    # status; it is never swept. Recorded here because "the other three are
-    # converged at boot" is the shape that makes an omission look like an
-    # oversight rather than a decision.
 
     def _initialize(self) -> None:
         gateway_schema.ensure(self.path)

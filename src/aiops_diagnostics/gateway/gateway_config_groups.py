@@ -43,22 +43,18 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class HttpServerConfig:
-    """网关进程基础运行参数、监听地址、路由阈值与进程间内部令牌。"""
+    """网关进程基础运行参数、监听地址与进程间内部令牌。"""
 
     data_home: Path
     database_file: Path
     server_config_file: Path | None = None
     bind_host: str = "127.0.0.1"
     port: int = 8787
-    allow_fixtures: bool = False
     max_workers: int = 2
     public_base_url: str = ""
     log_level: str = DEFAULT_LOG_LEVEL
     internal_token_secret: str = field(repr=False, default="")
     internal_token_expire_seconds: int = 300
-    routing_risk_at_least: float = 0.5
-    routing_confidence_at_least: float = 0.8
-    routing_risk_always_asks: bool = True
     download_center_upms_base_url: str = ""
     download_center_mall_base_url: str = ""
     download_center_upload_export_type: int = 3101
@@ -75,12 +71,6 @@ class HttpServerConfig:
             raise ValueError("AIOPS_GATEWAY_MAX_WORKERS must be between 1 and 16")
         if not 1 <= self.internal_token_expire_seconds <= 3600:
             raise ValueError("AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS must be between 1 and 3600")
-        for name, value in (
-            ("AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", self.routing_risk_at_least),
-            ("AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", self.routing_confidence_at_least),
-        ):
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(f"{name} must be between 0 and 1")
         if require_server_config_file and (
             self.server_config_file is None or not self.server_config_file.is_file()
         ):
