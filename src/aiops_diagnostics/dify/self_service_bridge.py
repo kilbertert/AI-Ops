@@ -53,6 +53,7 @@ _ENV_TASK_ONLY_KEYS = frozenset(
         "capabilities",
         "case_ref",
         "candidate_plan",
+        "onboard_plan",
         "verify_task",
         "plan_id",
         "site_task",
@@ -235,6 +236,31 @@ def _is_valid_environment_task(payload: dict) -> bool:
         )
     if keys == {"candidate_task", "installation"}:
         return payload["installation"] is True and _matches(_TASK_ID, payload["candidate_task"])
+    if "onboard_plan" in keys:
+        required = {"onboard_plan", "tenant_id", "source_app_id", "source_version"}
+        allowed = required | {"initial_installation", "case_ref", "capabilities"}
+        if not required <= keys or not keys <= allowed:
+            return False
+        if not (
+            _matches(_PLAN_ID, payload["onboard_plan"])
+            and _matches(_TENANT_REF, payload["tenant_id"])
+            and _matches(_APP_ID, payload["source_app_id"])
+            and _pos_int(payload["source_version"])
+            and payload.get("initial_installation", True) is True
+        ):
+            return False
+        if "case_ref" in keys or "capabilities" in keys:
+            if not ("case_ref" in keys and "capabilities" in keys):
+                return False
+            caps = payload["capabilities"]
+            return (
+                _matches(_TENANT_REF, payload["case_ref"])
+                and isinstance(caps, list)
+                and 1 <= len(caps) <= 3
+                and all(isinstance(c, str) and c in _CAPABILITIES for c in caps)
+                and len(set(caps)) == len(caps)
+            )
+        return True
     if keys in (
         {"candidate_plan", "tenant_id", "source_app_id", "source_version"},
         {"candidate_plan", "tenant_id", "source_app_id", "source_version", "initial_installation"},

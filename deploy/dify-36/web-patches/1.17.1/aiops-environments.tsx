@@ -178,6 +178,20 @@ type SiteTask = {
       service_user_present?: boolean
     }
     steps?: { id: string; action: string; state: string; error_code: string }[]
+    stages?: {
+      id: string
+      action: string
+      state: string
+      error_code: string
+      version?: string
+      installation?: string
+      checks?: { id?: string; capability?: string; state: string; error_code?: string }[]
+    }[]
+    ready_to_publish?: boolean
+    validation_task_id?: string
+    registration_task_id?: string
+    installation_task_id?: string
+    preparation_task_id?: string
     checks?: { id?: string; capability?: string; state: string; error_code?: string }[]
   }
 }
@@ -212,6 +226,12 @@ const preparationSteps: Record<string, string> = {
   'knowledge-connect': '知识连接',
   'operator-prepare': '管家候选',
   'consumer-prepare': '客服候选',
+}
+const onboardingStageLabels: Record<string, string> = {
+  'candidate-prepare': '资源准备',
+  'candidate-install': '停用安装',
+  'candidate-register': '运行登记',
+  'candidate-validate': '业务技术验证',
 }
 const initialInstallationLabels: Record<string, string> = {
   installed: '已装',
@@ -347,6 +367,8 @@ export default function EnvironmentManagement() {
   const [plan, setPlan] = useState<Plan | null>(null)
   const [caseRef, setCaseRef] = useState('')
   const [capabilities, setCapabilities] = useState(['consumer', 'order', 'offline'])
+  const [onboardCaseRef, setOnboardCaseRef] = useState('')
+  const [onboardInitial, setOnboardInitial] = useState(false)
   const [tasks, setTasks] = useState<SiteTask[]>([])
   const [consumerSources, setConsumerSources] = useState<
     { app_id: string; name: string; version_no: number }[]
@@ -367,6 +389,8 @@ export default function EnvironmentManagement() {
     setPlan(null)
     setConsumerSources([])
     setConsumerSource('')
+    setOnboardInitial(false)
+    setOnboardCaseRef('')
     setTasks([])
     taskViewRef.current += 1
     setTaskGeneration((value) => value + 1)
@@ -488,6 +512,7 @@ export default function EnvironmentManagement() {
       setSelected(draft.id)
       setOriginal(JSON.stringify(draft))
       setNotice('草稿已保存，当前生效设置未改变。')
+      setTaskGeneration((value) => value + 1)
       if (overview !== null) void refreshOverview()
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存未完成，请刷新核对')
@@ -529,7 +554,8 @@ export default function EnvironmentManagement() {
       else setTasks((current) => [result, ...current.filter((item) => item.id !== result.id)])
     } catch (e) {
       if (view !== taskViewRef.current) return
-      setTasks([])
+      const isListLoad = 'environment' in payload && Object.keys(payload).length === 1
+      if (isListLoad) setTasks([])
       setTaskError(e instanceof Error ? e.message : '任务读取未完成，请刷新核对')
     }
   }
@@ -539,6 +565,7 @@ export default function EnvironmentManagement() {
   const preparing = tasks.some(
     (item) =>
       [
+        'tenant-onboard',
         'candidate-prepare',
         'site-install',
         'candidate-install',
@@ -979,6 +1006,69 @@ export default function EnvironmentManagement() {
                           ))}
                         </select>
                       </label>
+                      <div className="space-y-2 rounded border p-3">
+                        <h4 className="system-xs-semibold text-text-primary">
+                          一键开通（准备 → 安装 → 登记 → 可选技术验证）
+                        </h4>
+                        <p className="system-xs-regular text-text-tertiary">
+                          由受管执行链自动串起准备、停用安装、运行登记与可选业务验证，并在输入未变时自动续签同摘要计划窗；正式启用仍需人工复核验收结果后显式确认。
+                        </p>
+                        <label className="flex items-center gap-2 system-xs-regular">
+                          <input
+                            type="checkbox"
+                            aria-label="一键开通包含空机初装"
+                            checked={onboardInitial}
+                            onChange={(event) => setOnboardInitial(event.target.checked)}
+                          />
+                          包含空机初装（仅首次空白目标主机勾选）
+                        </label>
+                        <label className="block system-xs-regular">
+                          一键开通验收案例（选填，填写后自动串联三业务技术验证）
+                          <Input
+                            aria-label="一键开通验收案例"
+                            value={onboardCaseRef}
+                            onChange={(event) => setOnboardCaseRef(event.target.value)}
+                            placeholder="选填已登记受控案例编号"
+                          />
+                        </label>
+                        {draft.tenants.map((tenant) => (
+                          <div key={`onboard-${tenant.id}`} className="flex flex-wrap gap-2">
+                            <Button
+                              type="button"
+                              variant="primary"
+                              disabled={
+                                busy ||
+                                plan.state === 'expired' ||
+                                !consumerSource ||
+                                (Boolean(onboardCaseRef) &&
+                                  !/^[A-Za-z0-9_-]{1,64}$/.test(onboardCaseRef))
+                              }
+                              onClick={() => {
+                                const msg = onboardInitial
+                                  ? '将自动执行空机初装、资源准备、停用安装与运行登记（填写案例时同步执行只读业务技术验证）。不会自动启用正式入口，确认启动一键开通？'
+                                  : '将自动执行资源准备、停用安装与运行登记（填写案例时同步执行只读业务技术验证）。不会自动启用正式入口，确认启动一键开通？'
+                                if (!window.confirm(msg)) return
+                                const payload: Record<string, unknown> = {
+                                  onboard_plan: plan.id,
+                                  tenant_id: tenant.id,
+                                  source_app_id: consumerSource,
+                                  source_version: consumerSources.find(
+                                    (source) => source.app_id === consumerSource,
+                                  )?.version_no,
+                                }
+                                if (onboardInitial) payload.initial_installation = true
+                                if (onboardCaseRef) {
+                                  payload.case_ref = onboardCaseRef
+                                  payload.capabilities = ['consumer', 'order', 'offline']
+                                }
+                                void siteTasks(payload)
+                              }}
+                            >
+                              一键开通：{tenant.name}（{tenant.id}）
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
                       {draft.tenants.map((tenant) => (
                         <div key={tenant.id} className="flex flex-wrap gap-2">
                           <Button
@@ -1253,6 +1343,70 @@ export default function EnvironmentManagement() {
                 {tasks.map((item) => (
                   <article key={item.id} className="space-y-1 rounded border p-3">
                     <p className="system-xs-regular break-all">{item.id}</p>
+                    {item.action === 'tenant-onboard' && (
+                      <section aria-label={`一键开通进度：${item.tenant_id}`} className="space-y-1">
+                        <p className="font-medium text-text-primary">
+                          一键开通 · {item.tenant_id}：
+                          {item.state === 'observed'
+                            ? item.result.ready_to_publish
+                              ? '技术验收已就绪，待人工确认发布'
+                              : '运行登记已完成，尚未启用正式入口'
+                            : taskLabels[item.state] || item.state}
+                        </p>
+                        <ul className="space-y-1">
+                          {(item.result.stages || []).map((stage) => (
+                            <li key={stage.action} className="system-xs-regular">
+                              {onboardingStageLabels[stage.action] || stage.action}：
+                              {taskLabels[stage.state] || stage.state}
+                              {stage.version ? ` · v${stage.version}` : ''}
+                              <span className="block break-all text-text-tertiary">{stage.id}</span>
+                              {stage.error_code && <span role="alert">{stage.error_code}</span>}
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="system-xs-regular text-text-tertiary">
+                          正式入口未启用 · 业务准确性待人工确认
+                        </p>
+                        {item.state === 'observed' &&
+                          item.result.ready_to_publish &&
+                          item.result.validation_task_id && (() => {
+                            const publishPlanId =
+                              item.plan_id || (plan && plan.state !== 'expired' ? plan.id : '')
+                            const publishExpired =
+                              plan !== null && plan.id === publishPlanId && plan.state === 'expired'
+                            return (
+                              <Button
+                                type="button"
+                                variant="primary"
+                                disabled={
+                                  busy ||
+                                  dirty ||
+                                  saved?.registry_changed ||
+                                  !publishPlanId ||
+                                  publishExpired
+                                }
+                                onClick={() => {
+                                  if (
+                                    publishPlanId &&
+                                    window.confirm(
+                                      '按只读诊断范围发布并开通，并授权本应用所选知识库对客使用？系统会重新核验三项业务、权限、网络和容量；缺项不会启用，业务准确性仍待人工确认。',
+                                    )
+                                  )
+                                    void siteTasks({
+                                      validation_task: item.result.validation_task_id,
+                                      publication_plan: publishPlanId,
+                                      confirm_readonly: true,
+                                      confirm_customer_knowledge: true,
+                                      acceptance_ref: 'readonly-diagnosis',
+                                    })
+                                }}
+                              >
+                                确认发布并开通：{item.tenant_id}
+                              </Button>
+                            )
+                          })()}
+                      </section>
+                    )}
                     {item.action === 'workspace-prepare' && <p>候选工作区 · {item.tenant_id}</p>}
                     {item.action === 'knowledge-prepare' && <p>候选知识资源 · {item.tenant_id}</p>}
                     {item.action === 'knowledge-connect' && <p>候选知识连接 · {item.tenant_id}</p>}
@@ -1679,8 +1833,10 @@ export default function EnvironmentManagement() {
                         variant="secondary"
                         onClick={() => void siteTasks({ id: item.id, cancel: true })}
                       >
-                        {item.action === 'environment-publish'
-                          ? '停止开通并恢复'
+                        {item.action === 'tenant-onboard'
+                          ? '取消一键开通'
+                          : item.action === 'environment-publish'
+                            ? '停止开通并恢复'
                           : item.action === 'candidate-validate'
                             ? '取消业务验证（等待本轮结束）'
                             : item.action === 'candidate-register'
