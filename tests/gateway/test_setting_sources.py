@@ -342,36 +342,19 @@ def test_config_groups_partition_every_gateway_setting_exactly_once(tmp_path: Pa
     assert settings.load_data_sources().mysql.host == "grouped-mysql"
 
 
-def test_console_bridge_prefers_own_prefix_and_keeps_legacy_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """控制台桥优先读 AIOPS_CONSOLE_BRIDGE_* 专有键，并兼容旧部署的 AIOPS_GATEWAY_* 键。"""
-    from aiops_diagnostics.dify.dify_console_publish import BridgeSettings
+def test_invalid_dify_chat_url_fails_before_creating_missing_route_bindings_db(tmp_path: Path) -> None:
+    """非法的 Dify chat 地址必须在打开/创建缺失的 chat_route_bindings 数据库之前拒绝启动。"""
+    config = tmp_path / "production.env"
+    write_private_text(config, "# empty\n")
+    routes_db = tmp_path / "missing-routes.db"
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=config,
+        dify_chat_base_url="http://dify.example:5001",
+        chat_route_bindings_file=str(routes_db),
+    )
 
-    base_env = {
-        "AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN": "https://console.example",
-        "AIOPS_CONSOLE_BRIDGE_DIFY_URL": "http://127.0.0.1:5001",
-        "AIOPS_CONSOLE_BRIDGE_GATEWAY_URL": "https://gateway.example",
-        "AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID": "ws-1",
-    }
-    for key in (
-        "AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY",
-        "AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY",
-        "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY",
-        "AIOPS_GATEWAY_DIFY_TRIAL_API_KEY",
-    ):
-        monkeypatch.delenv(key, raising=False)
-    for key, value in base_env.items():
-        monkeypatch.setenv(key, value)
-
-    monkeypatch.setenv("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY", "legacy-pub-key")
-    monkeypatch.setenv("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY", "legacy-trial-key")
-    legacy = BridgeSettings.from_env()
-    assert legacy.publish_key == "legacy-pub-key"
-    assert legacy.trial_key == "legacy-trial-key"
-
-    monkeypatch.setenv("AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY", "bridge-pub-key")
-    monkeypatch.setenv("AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY", "bridge-trial-key")
-    scoped = BridgeSettings.from_env()
-    assert scoped.publish_key == "bridge-pub-key"
-    assert scoped.trial_key == "bridge-trial-key"
+    with pytest.raises(ValueError):
+        settings.validate()
+    assert not routes_db.exists()

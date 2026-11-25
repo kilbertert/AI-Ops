@@ -512,8 +512,12 @@ class GatewayServerSettings:
         return DataSourcesConfig.from_config(self.server_config_file)
 
     def validate(self) -> None:
-        """启动前全量配置自检：委托五组强类型子配置逐段校验，拒绝半配置与跨权限复用。"""
+        """启动前全量配置自检：先完成无副作用的纯字段与 URL/凭据校验，再核验外部目录与路由库。"""
         self._validate_schema()
+        self.http.validate(require_server_config_file=False)
+        self.knowledge.validate()
+        self.caller_auth.validate(min_source_key_length=MIN_SOURCE_KEY_LENGTH)
+        self.dify.validate(parse_knowledge_bindings=parse_dify_knowledge_bindings)
         self.environment = self.onboarding.validate(
             settings=self,
             safe_profile_name=SAFE_PROFILE_NAME,
@@ -527,10 +531,6 @@ class GatewayServerSettings:
                 self.operator_trial_key,
             ),
         )
-        self.knowledge.validate()
-        self.http.validate(require_server_config_file=False)
-        self.caller_auth.validate(min_source_key_length=MIN_SOURCE_KEY_LENGTH)
-        self.dify.validate(parse_knowledge_bindings=parse_dify_knowledge_bindings)
         if self.server_config_file is None or not self.server_config_file.is_file():
             raise ValueError("gateway server production.env does not exist")
 

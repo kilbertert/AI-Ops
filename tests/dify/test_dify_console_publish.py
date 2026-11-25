@@ -1864,3 +1864,36 @@ def test_the_inlined_platform_constants_match_their_sources() -> None:
     from aiops_diagnostics.publication import shortcut_lifecycle
 
     assert shortcut_lifecycle.SHORTCUT_PLATFORM_SCOPE != BRIDGE_WORKSPACE
+
+
+def test_console_bridge_prefers_own_prefix_and_keeps_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """console-bridge 优先读专属 AIOPS_CONSOLE_BRIDGE_* 键，未设时兼容旧 Gateway 键。"""
+    base_env = {
+        "AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN": "https://console.example",
+        "AIOPS_CONSOLE_BRIDGE_DIFY_URL": "http://127.0.0.1:5001",
+        "AIOPS_CONSOLE_BRIDGE_GATEWAY_URL": "https://gateway.example",
+        "AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID": "ws-1",
+    }
+    for key in (
+        "AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY",
+        "AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY",
+        "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY",
+        "AIOPS_GATEWAY_DIFY_TRIAL_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in base_env.items():
+        monkeypatch.setenv(key, value)
+
+    monkeypatch.setenv("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY", "legacy-pub-key")
+    monkeypatch.setenv("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY", "legacy-trial-key")
+    legacy = BridgeSettings.from_env()
+    assert legacy.publish_key == "legacy-pub-key"
+    assert legacy.trial_key == "legacy-trial-key"
+
+    monkeypatch.setenv("AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY", "bridge-pub-key")
+    monkeypatch.setenv("AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY", "bridge-trial-key")
+    scoped = BridgeSettings.from_env()
+    assert scoped.publish_key == "bridge-pub-key"
+    assert scoped.trial_key == "bridge-trial-key"

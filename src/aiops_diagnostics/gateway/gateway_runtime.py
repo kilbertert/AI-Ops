@@ -154,7 +154,7 @@ class GatewayRuntime:
         from aiops_diagnostics.knowledge.knowledge_dataset_sync_guard import KnowledgeDatasetSyncGuard
         from aiops_diagnostics.publication.agent_lifecycle import AgentStore
 
-        diagnostic_settings = Settings.from_config(gateway_settings.server_config_file)
+        diagnostic_settings = gateway_settings.load_data_sources()
         diagnostic_settings.agent.validate()
         diagnostic_settings.ssh.validate()
         kb_client = None
