@@ -1,12 +1,10 @@
-# 架构规划与历史快照
+# 架构规划与现行规范
 
-- [手工环境目录与一键开通规划](2026-11-16-manual-environment-onboarding.md)：不改公司仓库的新方向、Dify管理Tab、实施顺序与验收合同；用户已确认，目标按P0～P5执行；现役行为与阶段证据从[试点导航](../README.md#环境目录试点与验收)读取。
-- [Snail-AI专项研究](../agents/snail-manual-onboarding-research.md)：固定上游源码事实与复用边界。
-- [跨服务器业务环境与多租户调查](2026-11-13-cross-environment-tenancy.md)：JWT、平台目录及现役隔离缺口，状态为方案建议。
+本目录仅保留已定稿的架构规划、目录规范与核心运行设计；早期方案草稿与退役架构图已按 [ADR-0343](../adr/0343-prune-redundant-drafts-and-obsolete-archives.md) 移出工作树（历史追溯见 Git 提交 `57c1d788`）。
 
-本目录ai-ops-architecture.json/html/svg/png描述早期确定性诊断与Codex内核，
-不包含现役WF01、Java节点及完整SOP发布路由。四件原制品保留，不修改图内历史断言。
-当前系统职责图与阶段状态见[系统架构](../system-architecture.md)和[系统策略](../system-strategy-audit.md)。
-不要将此目录PNG嵌作当前产品全景，或据它推断所有请求仍走旧诊断。
+- [手工环境目录与一键开通规划](2026-11-16-manual-environment-onboarding.md)：不改公司仓库的现行方向、Dify 管理 Tab、实施顺序与验收合同；现役行为与阶段证据从 [试点导航](../README.md#环境目录试点与验收) 与 [当前交付状态](../agents/current-delivery-state.md) 读取。
+- [仓库目录规范](repository-layout.md#现行目录规则)：仓库源码、测试、部署与工具的一级归属约束（由 `tests/test_repository_layout.py` 门禁守护）。
+- [执行节点队列与调度设计](2026-11-05-runner-queue-design.md)：异步作业调度与队列隔离设计。
+- [Snail-AI 专项研究](../agents/snail-manual-onboarding-research.md)：固定上游源码事实与复用边界。
 
-旧../architecture.md属于诊断运行时参考，本文档导航不表示该文件已被本轮改写。
+当前系统全景与阶段策略见 [系统架构](../system-architecture.md) 与 [系统策略复核](../system-strategy-audit.md)。

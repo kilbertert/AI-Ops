@@ -100,7 +100,7 @@ Gateway 数据库用 `file:<path>?mode=ro` 及 `PRAGMA query_only=ON`，仅查�
 
 2026-11-14：首次重建1.10.2之后已升级到`1.10.3+ccd9d8a37c2c`；旧服务停止但尚未退休。
 独立节点部署资产为`6c06e0bd`，真实准入、知识与部分模型业务链通过；完整业务仍待验。
-[最新验证](../validation/2026-11-14-env95-business-acceptance.md)、[共享服务接入](env95-shared-services.md)。
+[最新验证](../validation/2026-11-14-env95-business-acceptance.md)（历史共享服务接入草稿见 Git `57c1d788:docs/agents/env95-shared-services.md` 及 [ADR-0260](../adr/0260-env95-restricted-shared-services.md)）。
 
 
 ## 6. 新实例接入与复验方法

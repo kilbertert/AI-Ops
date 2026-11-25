@@ -23,7 +23,7 @@ Snail 已有 App 管理、节点发现、模型/MCP 资源配置与请求分发�
 | [官方文档][quickstart] | 取得快速开始、App、节点、客户端配置、生产部署、分布式架构与管理 API 页面 | 文档与源码存在差异，涉及行为时以固定源码为准 |
 | [官方独立管理端仓库][admin-repo] | API 取得 master=`3b2db48d7849554631f7b6f726c41b99af7c3462` 和 `src/views/app` 目录存在性 | 该修订 Vue 文件获取超时；页面行为改由后端仓库自带的固定 JS 制品交叉核对 |
 
-此前对 AI-Ops 所用上游版本的核查见[2026-10-29 研究](snail-ai-publication-research.md)。
+此前对 AI-Ops 所用上游版本的早期核查已并入本文并归档于 Git 历史（`57c1d788:docs/agents/snail-ai-publication-research.md`）。
 本轮没有运行 Snail 演示站、登录后台、启动上游服务或评估其企业版；没有用宣传文案推断企业版能力。
 
 ## 1. App 管理最值得借鉴，但 App 不是公司租户

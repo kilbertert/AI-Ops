@@ -6,7 +6,7 @@
 
 ## 30 分钟新工程师必读路线
 
-1. **系统架构与术语**：先读 [系统架构](docs/system-architecture.md) 与 [词汇表](GLOSSARY.md)（不要读已归档的旧架构稿 `docs/archive/architecture.md`）。重点区分 `environment` 四义（部署环境 / 执行环境 / 业务环境 / 接入候选）。
+1. **系统架构与术语**：先读 [系统架构](docs/system-architecture.md) 与 [词汇表](GLOSSARY.md)。重点区分 `environment` 四义（部署环境 / 执行环境 / 业务环境 / 接入候选）。
 2. **交付现状与主机名册**：查 [当前交付索引](docs/agents/current-delivery-state.md) 与 [.dev-host.toml](.dev-host.toml)（`41` 网关、`36` Dify 与旁路、`95` 第二环境）；CD 仅覆盖 `deploy/deploy-41.sh`，其余组件手工交付见 [部署索引](deploy/README.md) 与 [手工部署台账](deploy/manual-deploys.md)。
 3. **变更与验证规范**：读 [AGENTS.md](AGENTS.md)、[目录规范](docs/architecture/repository-layout.md#现行目录规则) 与 [验证分工](docs/agents/verification-workflow.md)。
 4. **快速定位代码与配置**：环境接入全流程查 [流水线索引](docs/agents/environment-pipeline-map.md)，环境变量与进程归属查 [配置参考](docs/agents/config-reference.md)。
@@ -75,7 +75,7 @@ flowchart LR
 | `deploy/`、`ops/` | 成套部署制品、主机脚本、Nginx 模板与旁路打包/部署脚本 |
 | `tools/` | `content/` 内容工具、`verification/` 探针、`experiments/` 隔离实验、`inventory/` 索引 |
 | `tests/` | 按职责分类的行为测试、结构/零环/退役/部署门禁 |
-| `docs/` | 现役文档、`adr/` 架构决策、`agents/` 操作手册、`validation/` 与 `开发进度/` 按日回执、`archive/` 只读归档 |
+| `docs/` | 现役文档、`adr/` 架构决策、`agents/` 操作手册、`validation/` 与 `开发进度/` 按日回执 |
 | `.spec/`、`llmdoc/` | 行为规格树与 agent 文档索引 |
 | `.github/`、`.sandcastle/` | CI/CD 与自动化交付治理 |
 
@@ -99,4 +99,4 @@ uv build
 - **总索引与上手**：[文档导航](docs/README.md)、[Gateway 运维](docs/gateway.md)、[快速上手](docs/快速上手.md)、[配置参考](docs/agents/config-reference.md)、[流水线索引](docs/agents/environment-pipeline-map.md)
 - **业务端手册**：[C 端 WF01](docs/agents/consumer-wf01/README.md)、[管家 CPMS](docs/agents/operator-cpms/README.md)、[自助开通](docs/agents/operator-cpms/self-service.md)、[环境接入手册](docs/agents/environment-registry.md)
 - **交付与运维**：[当前交付索引](docs/agents/current-delivery-state.md)、[Actions 交付手册](docs/agents/actions-delivery.md)、[部署索引](deploy/README.md)、[运维说明](ops/README.md)
-- **决策、证据与归档**：[ADR 目录](docs/adr/)、[验收回执](docs/validation/)、[开发进度](docs/开发进度/)、[历史只读归档](docs/archive/README.md)
+- **决策与证据**：[ADR 目录](docs/adr/)、[验收回执](docs/validation/)、[开发进度](docs/开发进度/)

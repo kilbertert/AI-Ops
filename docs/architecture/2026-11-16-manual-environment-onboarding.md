@@ -7,7 +7,7 @@
 日期：2026-11-16。状态：**用户已确认并授权按 P0～P5 执行；本文件记录实施合同，不表示功能已完成**。
 核查基线：`a9427e70`。用户已确定：不改公司仓库；在 Dify 增加环境与租户管理 Tab；
 映射由我们维护；自动部署自己的模块；不恢复95，不建立客户专属 SSH 业务隧道。
-本规划替代[11月14日方案](2026-11-14-company-gateway-onboarding.md)中要求公司改码的后续路线，
+本规划替代 2026-11-14 方案（历史原稿见 Git `57c1d788:docs/architecture/2026-11-14-company-gateway-onboarding.md`）中要求公司改码的后续路线，
 不改写已交付事实。上游依据见[Snail-AI 专项研究](../agents/snail-manual-onboarding-research.md)。
 
 ## 1. 要交付的业务效果

@@ -224,8 +224,8 @@ SSH 隧道（`127.0.0.1:15001` → 36 的 `127.0.0.1:15001` → api 容器）调
 建完**就地写本机库**。隧道的 SSH 账号用 `restrict,permitopen="127.0.0.1:15001"`，
 外加 `X-Inner-Api-Key` 两层。
 
-完整形态（含 `setup_state` 分支、租约对账、容器名解析的坑）见
-`docs/agents/dify-multitenant-design.md` 的 §8「−0」。
+完整实现（含 `setup_state` 分支与租约状态机）见 `src/aiops_diagnostics/dify/dify_workspaces.py`
+与 `docs/adr/0059-one-workspace-per-tenant-per-environment.md`（早期多租户设计原稿见 Git `57c1d788:docs/agents/dify-multitenant-design.md` §8「−0」）。
 
 **回滚**：恢复 `.env.bak-innerapi-<ts>` → `docker compose up -d api worker`。
 只重启 api/worker，不动数据库与 nginx。

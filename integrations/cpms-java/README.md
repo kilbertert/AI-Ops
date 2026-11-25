@@ -2,7 +2,7 @@
 
 > **已搁置（2026-11-13 起标注）**：这批工件的唯一消费方——本仓的 `/diag/*` 设备诊断
 > 通道——已随运行时退役下线（2026-10-29）。它们从未合并进公司 Java 仓库，「待平台侧
-> 合并」的状态不再适用；除非出现新的消费方，这批工件与 `docs/diag-query-api-plan.md`
+> 合并」的状态不再适用；除非出现新的消费方，这批工件与原诊断查询计划（Git `57c1d788:docs/archive/diag-query-api-plan.md`）
 > 的落地计划视为暂停。契约测试保留，防的是未来复用时形状漂移。
 
 > **本轮已移除（2026-11-22）**：`cloud-gateway/` 曾放公司正式网关来源凭据的原创
@@ -12,7 +12,7 @@
 
 本目录承载由 AI-Ops 团队仓库保管的充电桩 Java 服务源码工件。生产 Java 仓库在远端
 （`124.243.178.156`），本地不复制完整工程；这些文件原本用于落地
-`docs/diag-query-api-plan.md` 定义的受控只读查询接口。
+原诊断查询计划（Git `57c1d788:docs/archive/diag-query-api-plan.md`）定义的受控只读查询接口。
 
 ## 文件
 
@@ -35,4 +35,4 @@
   `tests/integrations/test_diag_order_contract.py`、`tests/integrations/test_diag_occupy_order_contract.py`、
   `tests/integrations/test_diag_redis_stream_contract.py` 与 `tests/integrations/test_diag_device_contract.py`
   守护工件中的外部契约关键点，不等价于真实环境验收。
-- 真实环境验收按 `docs/diag-query-api-plan.md` §11 的 Gherkin 场景执行，当前状态为“待验证”。
+- 真实环境验收按原计划（Git `57c1d788:docs/archive/diag-query-api-plan.md` §11）的 Gherkin 场景执行，当前状态为“待验证”。

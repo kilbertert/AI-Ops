@@ -6,7 +6,7 @@ contract of the checked-in Java artifact instead: routing, token rejection,
 Stream whitelist enforcement, the server-side `max_messages` cap, the bounded
 reverse-range query and the response shape. They are static guards, not a
 substitute for deploying the service and running the Gherkin acceptance tests in
-`docs/archive/diag-query-api-plan.md`.
+Git `57c1d788:docs/archive/diag-query-api-plan.md`.
 """
 
 from __future__ import annotations
