@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, Query, status
+from fastapi import Depends, FastAPI, Header, Query, Response, status
 
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.conversation.faq import PlatformDecision
@@ -17,7 +17,13 @@ from aiops_diagnostics.gateway.schemas import (
     ShortcutUpdateRequest,
 )
 from aiops_diagnostics.identity.scope_context import ScopeContext
-from aiops_diagnostics.publication.agent_content import AGENT_STARTERS
+from aiops_diagnostics.publication.agent_content import (
+    AGENT_STARTERS,
+    OPERATOR_STARTERS,
+    UnknownAssistantAgentError,
+    list_operator_agents,
+    resolve_operator_agent_id,
+)
 from aiops_diagnostics.publication.shortcut_lifecycle import (
     BANNER_KIND,
     BUTTON_KIND,
@@ -81,14 +87,59 @@ def _dify_starters(
 
 def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
 
+    @app.get("/v1/assistant/agents")
+    def assistant_agents(
+        response: Response,
+        identity: tuple[ScopeContext, PlatformDecision] = Depends(deps.shortcut_identity),  # noqa: B008
+        language: str = Depends(localized_copy_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        """返回后台管理端（operator）可用智能体清单与能力上限（首期固定主智能体）。"""
+        _, decision = identity
+        if str(decision.platform) != "operator":
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN,
+                "PLATFORM_FORBIDDEN",
+                "operator entry is required",
+            )
+        response.headers["Cache-Control"] = "no-store"
+        return list_operator_agents(language)
+
     @app.get("/v1/assistant/starters")
     def assistant_starters(
+        response: Response,
         identity: tuple[ScopeContext, PlatformDecision] = Depends(deps.shortcut_identity),  # noqa: B008
         language: str = Depends(localized_copy_language),  # noqa: B008
         business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+        agent_id: Annotated[str | None, Query(max_length=64)] = None,
     ) -> dict[str, Any]:
-        """中文母版来自 Dify 已发布快照，其余语言回退至制品文案。"""
-        caller, _ = identity
+        """后台管理端返回专属欢迎语与结构化预设问题；C 端中文母版来自 Dify，其余回退制品。"""
+        caller, decision = identity
+        if str(decision.platform) == "operator":
+            try:
+                resolved_agent_id = resolve_operator_agent_id(agent_id)
+            except UnknownAssistantAgentError as exc:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND,
+                    "AGENT_NOT_FOUND",
+                    "assistant agent not found",
+                ) from exc
+            payload = OPERATOR_STARTERS.public(language, agent_id=resolved_agent_id)
+            opening, _ = _dify_starters(context, caller, "operator", language)
+            if opening is not None:
+                payload["greeting"] = opening
+                payload["opening"] = opening
+                payload["opening_source"] = "dify"
+            else:
+                payload["opening_source"] = "artifact"
+            payload["suggested_source"] = "artifact"
+            response.headers["Cache-Control"] = "no-store"
+            return {"type": "assistant_starters", **payload}
+        if agent_id is not None and agent_id.strip():
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "AGENT_NOT_FOUND",
+                "assistant agent not found",
+            )
         payload = AGENT_STARTERS.public(language)
         opening, suggested = _dify_starters(context, caller, business_entry or "", language)
         if opening is not None:

@@ -29,6 +29,7 @@ from aiops_diagnostics.gateway.schemas import (
     NodeCapabilitiesRequest,
     NodeClaimRequest,
     NodeLoopCompletionRequest,
+    OperatorStreamChunkRequest,
     OperatorToolAuthorizationRequest,
 )
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
@@ -358,6 +359,23 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             request.headers.get("Authorization", "").removeprefix("Bearer "),
             "/" + path,
             request.url.query,
+        )
+
+    @app.post("/v1/internal/operator-runs/{run_id}/stream-chunks")
+    def operator_stream_chunk(
+        run_id: str,
+        payload: OperatorStreamChunkRequest,
+        request: Request,
+        response: Response,
+    ) -> dict[str, Any]:
+        """接收 Java 执行节点推送的最终答复阶段增量文本分片并写入 SSE 事件流。"""
+        response.headers["Cache-Control"] = "no-store"
+        return context.operator_cpms.stream_chunk(
+            run_id,
+            request.headers.get("Authorization", "").removeprefix("Bearer "),
+            request.headers.get("X-AI-Ops-Exec-Config", ""),
+            payload.delta,
+            chunk_index=payload.chunk_index,
         )
 
     @app.post("/v1/internal/operator-runs/{run_id}/completions")

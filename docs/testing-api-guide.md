@@ -110,18 +110,28 @@ curl -i --max-time 30 "$BASE_URL/v1/assistant/questions/$QA_ID" \
 | 编号 | 方法及路径 | 用途 | 成功响应 |
 |---|---|---|---|
 | A01 | `POST /v1/assistant/questions` | C端客服、快捷动作、管家节点入口 | 202异步或200同步；见第4节 |
-| A02 | `GET /v1/assistant/questions/{qa_id}` | 读本次问答/管家节点结果 | 200，检查status |
+| A02 | `GET /v1/assistant/questions/{qa_id}` | 读本次问答/管家节点结果 | 200，检查status、result、attachments、feedback、progress |
 | A03 | `POST /v1/assistant/questions/{qa_id}/cancel` | 取消该问答/节点任务 | 200，返回当前任务状态；无请求体 |
 | A04 | `GET /v1/assistant/questions?limit=50` | 当前主体问答历史索引 | 200，type=qa_list、count、questions |
-| C01 | `GET /v1/conversations?limit=50` | 当前主体会话列表 | 200，count、conversations |
-| C02 | `GET /v1/conversations/{conversation_id}` | 会话轮次 | 200，turns含问题与已完成答案；失效可拒绝 |
+| A05 | `GET /v1/assistant/questions/{qa_id}/events` | 订阅问答 SSE 实时事件流（节点路径+流式正文） | 200 `text/event-stream`，支持 `Last-Event-ID`/`after_seq` 断线续传 |
+| A06 | `POST /v1/assistant/questions/{qa_id}/regenerate` | 原地重新生成会话最后一轮排查问答（仅 operator） | 202，返回新 `qa_id`、`attempt_no`、`parent_qa_id`、`stream_url` |
+| A07 | `POST /v1/assistant/questions/{qa_id}/feedback` | 提交或撤销回答点赞/点踩反馈 | 200，幂等返回 `rating/reasons/comment` |
+| A08 | `POST /v1/assistant/questions/{qa_id}/export` | 导出排查报告（docx/md）至公司下载中心（仅 operator） | 200，`download_center_record_id`、`direction=-1`、`notify_file_center=true` |
+| C01 | `GET /v1/conversations?limit=50` | 当前主体会话列表（支持 `agent_id` 过滤） | 200，count、conversations（含 `title/turn_count/agent_id`） |
+| C02 | `GET /v1/conversations/{conversation_id}` | 会话轮次完整卡片回读 | 200，turns含附件、步骤、引用、反馈与已完成答案；失效可拒绝 |
 | C03 | `DELETE /v1/conversations/{conversation_id}` | 删除本账号测试会话 | 200，type=conversation_deleted |
+| C04 | `PATCH /v1/conversations/{conversation_id}` | 重命名本人会话标题（1–80 字符） | 200，返回更新后的会话对象 |
+| D01 | `POST /v1/assistant/files` | 上传图片/PDF/Word排查附件并登记公司下载中心（仅 operator） | 201，返回 `file_id/parse_status/preview_url`（不暴露直链） |
+| D02 | `GET /v1/assistant/files/{file_id}` | 查询附件解析状态与元信息（仅 operator） | 200，返回附件卡片元信息 |
+| D03 | `GET /v1/assistant/files/{file_id}/preview` | 读取图片附件缩略图预览（仅 operator） | 200 `image/jpeg` 二进制流 |
+| D04 | `POST /v1/assistant/files/{file_id}/download-task` | 登记附件下载任务至公司下载中心导出列表（仅 operator） | 200，`download_center_record_id`、`direction=-1`、`notify_file_center=true` |
 | F01 | `GET /v1/faq/catalog` | 固定FAQ目录 | 200，entries |
 | F02 | `GET /v1/faq/recommendations` | 推荐问法 | 200，recommendations，含question_id/title/sort |
 | F03 | `POST /v1/faq/answer` | 固定FAQ同步取答 | 200，question/answer/format；无需轮询 |
 | U01 | `GET /v1/shortcuts` | 当前入口已发布快捷动作 | 200，type=shortcut_list、shortcuts |
-| U02 | `GET /v1/assistant/starters` | 开场白与推荐语 | 200，opening、suggested_questions及来源标记 |
+| U02 | `GET /v1/assistant/starters` | 开场白与推荐语（operator 支持 `agent_id` 参数） | 200，opening、suggested_questions及来源标记 |
 | U03 | `GET /v1/banner` | 入口横幅配置 | 200，type=banner、banners；空数组可合法 |
+| U04 | `GET /v1/assistant/agents` | 读取可用后台智能体声明列表（仅 operator） | 200，default_agent_id、agents（首期固定 `operator_main`） |
 | M01 | `GET /v1/media/{signed_id}` | 读取本轮返回的签名媒体 | 200媒体字节；Range可206，失效403/404；非法Range为416 |
 | O01 | `GET /v1/orders/{order_no}/access` | 订单授权探针，不读正文 | 200，accessible=true；不可见/不存在404 |
 | O02 | `GET /v1/sites?name=&address=&limit=10` | C端可查站点：只含本人订单里出现过的站点 | 200，sites/shown/scope/empty；total恒为null（上游计数是租户口径） |

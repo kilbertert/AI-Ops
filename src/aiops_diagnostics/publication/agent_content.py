@@ -167,3 +167,300 @@ def starter_gaps(starters: AgentStarters = AGENT_STARTERS) -> tuple[str, ...]:
     （``resolve_language`` 接受所有已声明语言，取不到就回退）。这是缺陷不是进度。
     """
     return tuple(language for language in SUPPORTED_LANGUAGES if starters.missing_translations(language))
+
+
+OPERATOR_MAIN_AGENT_ID = "operator_main"
+OPERATOR_STARTERS_VERSION = "2026.11.25"
+OPERATOR_ALLOWED_EXTENSIONS: tuple[str, ...] = ("jpg", "jpeg", "png", "webp", "pdf", "doc", "docx")
+OPERATOR_MAX_ATTACHMENTS = 5
+OPERATOR_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+OPERATOR_MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
+
+
+class UnknownAssistantAgentError(KeyError):
+    """请求传入了未注册或未启用的智能体标识。"""
+
+
+_OPERATOR_AGENT_NAMES: dict[str, str] = {
+    "zh": "充电运营智能助手",
+    "zh-Hant": "充電營運智慧助手",
+    "en": "Charging Ops Assistant",
+    "de": "Ladebetriebs-Assistent",
+    "fr": "Assistant d'exploitation de recharge",
+    "es": "Asistente de operación de carga",
+    "pt": "Assistente de operação de recarga",
+    "vi": "Trợ lý vận hành sạc",
+    "mn": "Цэнэглэлтийн ашиглалтын туслах",
+    "th": "ผู้ช่วยปฏิบัติการชาร์จ",
+    "km": "ជំនួយការប្រតិបត្តិការសាក",
+}
+
+_OPERATOR_AGENT_DESCRIPTIONS: dict[str, str] = {
+    "zh": "面向充电桩后台的只读运营与故障排查主智能体，支持订单核验、设备离线分析及工单资料上下文。",
+    "zh-Hant": "面向充電樁後台的唯讀營運與故障排查主智能體，支援訂單核驗、設備離線分析及工單資料上下文。",
+    "en": (
+        "Read-only charging operations assistant for order checks, device outage analysis, "
+        "and troubleshooting attachments."
+    ),
+    "de": "Schreibgeschützter Betriebsassistent für Bestellprüfung, Geräteausfälle und Anhänge.",
+    "fr": "Assistant en lecture seule pour la vérification des commandes, pannes et pièces jointes.",
+    "es": "Asistente de solo lectura para pedidos, fallos de equipos y documentos adjuntos.",
+    "pt": "Assistente somente leitura para pedidos, falhas de equipamentos e anexos.",
+    "vi": "Trợ lý chỉ đọc hỗ trợ kiểm tra đơn hàng, thiết bị ngoại tuyến và tài liệu sự cố.",
+    "mn": "Захиалга, төхөөрөмжийн саатал болон хавсралт шинжлэх зөвхөн унших туслах.",
+    "th": "ผู้ช่วยแบบอ่านอย่างเดียวสำหรับตรวจสอบคำสั่งซื้อ อุปกรณ์ออฟไลน์ และเอกสารประกอบ",
+    "km": "ជំនួយការអានតែប៉ុណ្ណោះសម្រាប់ពិនិត្យការបញ្ជាទិញ ឧបករណ៍អុហ្វឡាញ និងឯកសារភ្ជាប់។",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorStarters:
+    """后台管理端（``operator``）AI 抽屉的欢迎语、预设问题与免责声明制品。"""
+
+    version: str
+    greeting: dict[str, str]
+    supporting_text: dict[str, str]
+    suggested: dict[str, tuple[tuple[str, str], ...]]
+    disclaimer: dict[str, str]
+
+    def greeting_for(self, language: str) -> str:
+        return self.greeting.get(language) or self.greeting[DEFAULT_LANGUAGE]
+
+    def supporting_text_for(self, language: str) -> str:
+        return self.supporting_text.get(language) or self.supporting_text[DEFAULT_LANGUAGE]
+
+    def suggested_for(self, language: str) -> tuple[tuple[str, str], ...]:
+        return self.suggested.get(language) or self.suggested[DEFAULT_LANGUAGE]
+
+    def disclaimer_for(self, language: str) -> str:
+        return self.disclaimer.get(language) or self.disclaimer[DEFAULT_LANGUAGE]
+
+    def public(self, language: str, *, agent_id: str = OPERATOR_MAIN_AGENT_ID) -> dict[str, Any]:
+        greeting = self.greeting_for(language)
+        return {
+            "agent_id": agent_id,
+            "language": language,
+            "starters_version": self.version,
+            "greeting": greeting,
+            "supporting_text": self.supporting_text_for(language),
+            "opening": greeting,
+            "suggested_questions": [
+                {"id": item_id, "text": text} for item_id, text in self.suggested_for(language)
+            ],
+            "disclaimer": self.disclaimer_for(language),
+        }
+
+    def missing_translations(self, language: str) -> tuple[str, ...]:
+        gaps: list[str] = []
+        if not self.greeting.get(language):
+            gaps.append("greeting")
+        if not self.supporting_text.get(language):
+            gaps.append("supporting_text")
+        if not self.suggested.get(language):
+            gaps.append("suggested_questions")
+        if not self.disclaimer.get(language):
+            gaps.append("disclaimer")
+        return tuple(gaps)
+
+
+OPERATOR_STARTERS = OperatorStarters(
+    version=OPERATOR_STARTERS_VERSION,
+    greeting={
+        "zh": "你好，有什么可以帮你？",
+        "zh-Hant": "你好，有什麼可以幫你？",
+        "en": "Hi, how can I help you today?",
+        "de": "Hallo, wie kann ich Ihnen heute helfen?",
+        "fr": "Bonjour, comment puis-je vous aider ?",
+        "es": "Hola, ¿en qué puedo ayudarte hoy?",
+        "pt": "Olá, como posso ajudar hoje?",
+        "vi": "Xin chào, tôi có thể hỗ trợ gì cho bạn?",
+        "mn": "Сайн байна уу, танд юугаар туслах вэ?",
+        "th": "สวัสดี มีอะไรให้ช่วยตรวจสอบไหม?",
+        "km": "សួស្តី តើខ្ញុំអាចជួយអ្វីបានខ្លះ?",
+    },
+    supporting_text={
+        "zh": "你可以直接描述订单、设备或站点问题，上传照片/PDF/Word 排查资料，或点选下方预设问题开始。",
+        "zh-Hant": "你可以直接描述訂單、設備或站點問題，上傳照片/PDF/Word 排查資料，或點選下方預設問題開始。",
+        "en": (
+            "Describe an order, charger, or station issue, upload photos/PDF/Word files, "
+            "or choose a suggested question below."
+        ),
+        "de": (
+            "Beschreiben Sie ein Bestell-, Geräte- oder Stationsproblem, laden Sie Dateien hoch "
+            "oder wählen Sie eine Frage unten."
+        ),
+        "fr": (
+            "Décrivez un problème de commande, borne ou station, importez des fichiers "
+            "ou choisissez une question ci-dessous."
+        ),
+        "es": (
+            "Describe un problema de pedido, cargador o estación, sube archivos "
+            "o elige una pregunta sugerida abajo."
+        ),
+        "pt": (
+            "Descreva um problema de pedido, carregador ou estação, envie arquivos "
+            "ou escolha uma pergunta abaixo."
+        ),
+        "vi": (
+            "Mô tả sự cố đơn hàng, trụ sạc hoặc trạm, tải lên ảnh/PDF/Word "
+            "hoặc chọn một câu hỏi gợi ý bên dưới."
+        ),
+        "mn": (
+            "Захиалга, цэнэглэгч эсвэл станцын асуудлыг бичиж, зураг/PDF/Word хавсаргах "
+            "эсвэл доорх асуултаас сонгоно уу."
+        ),
+        "th": "อธิบายปัญหาคำสั่งซื้อ อุปกรณ์ หรือสถานี อัปโหลดรูป/PDF/Word หรือเลือกคำถามแนะนำด้านล่าง",
+        "km": ("ពិពណ៌នាបញ្ហាការបញ្ជាទិញ ឧបករណ៍ ឬស្ថានីយ ផ្ទុកឡើងរូបភាព/PDF/Word ឬជ្រើសរើសសំណួរខាងក្រោម។"),
+    },
+    suggested={
+        "zh": (
+            ("op_q_01", "帮我排查近 7 天离线最频繁的充电桩"),
+            ("op_q_02", "如何核验一笔充电订单是否存在费用异常？"),
+            ("op_q_03", "列出我当前权限下可查看的充电站点"),
+            ("op_q_04", "结合我上传的现场资料分析这笔异常订单的停止原因"),
+        ),
+        "zh-Hant": (
+            ("op_q_01", "幫我排查近 7 天離線最頻繁的充電樁"),
+            ("op_q_02", "如何核驗一筆充電訂單是否存在費用異常？"),
+            ("op_q_03", "列出我目前權限下可查看的充電站點"),
+            ("op_q_04", "結合我上傳的現場資料分析這筆異常訂單的停止原因"),
+        ),
+        "en": (
+            ("op_q_01", "Find chargers with the most offline events in the past 7 days"),
+            ("op_q_02", "How do I verify whether a charging order has a billing discrepancy?"),
+            ("op_q_03", "List charging stations visible to my current account"),
+            ("op_q_04", "Analyze why this abnormal order stopped using my uploaded files"),
+        ),
+        "de": (
+            ("op_q_01", "Ladestationen mit den häufigsten Ausfällen in den letzten 7 Tagen prüfen"),
+            ("op_q_02", "Wie prüfe ich eine Ladebestellung auf Abrechnungsabweichungen?"),
+            ("op_q_03", "Alle für mein Konto sichtbaren Ladestationen auflisten"),
+            ("op_q_04", "Stoppgrund dieser auffälligen Bestellung anhand hochgeladener Dateien analysieren"),
+        ),
+        "fr": (
+            ("op_q_01", "Identifier les bornes les plus souvent hors ligne sur les 7 derniers jours"),
+            ("op_q_02", "Comment vérifier une anomalie de facturation sur une commande ?"),
+            ("op_q_03", "Lister les stations visibles pour mon compte"),
+            ("op_q_04", "Analyser la cause d'arrêt de cette commande avec mes fichiers joints"),
+        ),
+        "es": (
+            ("op_q_01", "Revisar los cargadores con más desconexiones en los últimos 7 días"),
+            ("op_q_02", "¿Cómo verificar si un pedido de carga tiene anomalías de cobro?"),
+            ("op_q_03", "Listar las estaciones de carga visibles para mi cuenta"),
+            ("op_q_04", "Analizar la causa de detención del pedido con los archivos subidos"),
+        ),
+        "pt": (
+            ("op_q_01", "Verificar carregadores com mais quedas nos últimos 7 dias"),
+            ("op_q_02", "Como verificar se um pedido de recarga tem divergência de valor?"),
+            ("op_q_03", "Listar estações de recarga visíveis para minha conta"),
+            ("op_q_04", "Analisar o motivo da parada do pedido usando os arquivos enviados"),
+        ),
+        "vi": (
+            ("op_q_01", "Kiểm tra các trụ sạc ngoại tuyến nhiều nhất trong 7 ngày qua"),
+            ("op_q_02", "Làm sao đối chiếu bất thường chi phí của một đơn sạc?"),
+            ("op_q_03", "Liệt kê các trạm sạc thuộc phạm vi tài khoản hiện tại"),
+            ("op_q_04", "Phân tích nguyên nhân dừng đơn sạc bất thường dựa trên tài liệu đã tải lên"),
+        ),
+        "mn": (
+            ("op_q_01", "Сүүлийн 7 хоногт хамгийн их салсан цэнэглэгчийг шалгах"),
+            ("op_q_02", "Цэнэглэлтийн захиалгын төлбөрийн зөрүүг хэрхэн шалгах вэ?"),
+            ("op_q_03", "Миний эрхэд харагдах цэнэглэх станцуудыг жагсаах"),
+            ("op_q_04", "Хавсаргасан баримтад тулгуурлан захиалга зогссон шалтгааныг шинжлэх"),
+        ),
+        "th": (
+            ("op_q_01", "ตรวจสอบแท่นชาร์จที่ออฟไลน์บ่อยที่สุดใน 7 วันที่ผ่านมา"),
+            ("op_q_02", "จะตรวจสอบความผิดปกติของค่าบริการคำสั่งซื้อชาร์จได้อย่างไร?"),
+            ("op_q_03", "แสดงรายการสถานีชาร์จที่บัญชีของฉันมองเห็น"),
+            ("op_q_04", "วิเคราะห์สาเหตุการหยุดชาร์จผิดปกติจากเอกสารที่อัปโหลด"),
+        ),
+        "km": (
+            ("op_q_01", "ពិនិត្យឧបករណ៍សាកដែលអុហ្វឡាញញឹកញាប់បំផុតក្នុង 7 ថ្ងៃចុងក្រោយ"),
+            ("op_q_02", "តើផ្ទៀងផ្ទាត់ភាពខុសប្រក្រតីនៃថ្លៃការបញ្ជាទិញសាកដោយរបៀបណា?"),
+            ("op_q_03", "បង្ហាញបញ្ជីស្ថានីយសាកដែលគណនីខ្ញុំអាចមើលឃើញ"),
+            ("op_q_04", "វិភាគមូលហេតុឈប់ខុសប្រក្រតីដោយផ្អែកលើឯកសារដែលបានផ្ទុកឡើង"),
+        ),
+    },
+    disclaimer={
+        "zh": "AI 生成内容仅供参考，关键业务与财务结论请以原始记录为准。",
+        "zh-Hant": "AI 生成內容僅供參考，關鍵業務與財務結論請以原始記錄為準。",
+        "en": (
+            "AI-generated responses are for reference only. "
+            "Verify critical operational and billing records directly."
+        ),
+        "de": (
+            "KI-generierte Antworten dienen nur zur Orientierung. "
+            "Kritische Daten bitte anhand der Originaldaten prüfen."
+        ),
+        "fr": (
+            "Les réponses générées par l'IA sont fournies à titre indicatif. "
+            "Vérifiez les données critiques à la source."
+        ),
+        "es": (
+            "Las respuestas de IA son solo de referencia. "
+            "Verifica los registros críticos en la fuente original."
+        ),
+        "pt": "As respostas de IA são apenas referência. Verifique registros críticos na fonte original.",
+        "vi": (
+            "Nội dung do AI tạo chỉ mang tính tham khảo. "
+            "Vui lòng đối chiếu dữ liệu gốc cho kết luận quan trọng."
+        ),
+        "mn": (
+            "AI-ийн хариулт нь зөвхөн лавлагааны зориулалттай. "
+            "Чухал дүгнэлтийг эх бүртгэлээр баталгаажуулна уу."
+        ),
+        "th": "คำตอบจาก AI ใช้เพื่ออ้างอิงเท่านั้น โปรดตรวจสอบบันทึกต้นฉบับสำหรับข้อสรุปสำคัญ",
+        "km": "ចម្លើយដែលបង្កើតដោយ AI គ្រាន់តែជាឯកសារយោងប៉ុណ្ណោះ សូមផ្ទៀងផ្ទាត់ជាមួយកំណត់ត្រាដើម។",
+    },
+)
+
+
+def resolve_operator_agent_id(agent_id: str | None) -> str:
+    """校验后台主智能体标识；省略返回默认 ``operator_main``，未知值抛错。"""
+    candidate = (agent_id or "").strip()
+    if not candidate:
+        return OPERATOR_MAIN_AGENT_ID
+    if candidate != OPERATOR_MAIN_AGENT_ID:
+        raise UnknownAssistantAgentError(candidate)
+    return candidate
+
+
+def operator_agent_brief(language: str, agent_id: str = OPERATOR_MAIN_AGENT_ID) -> dict[str, str]:
+    resolved = agent_id if agent_id == OPERATOR_MAIN_AGENT_ID else OPERATOR_MAIN_AGENT_ID
+    name = _OPERATOR_AGENT_NAMES.get(language) or _OPERATOR_AGENT_NAMES[DEFAULT_LANGUAGE]
+    return {
+        "agent_id": resolved,
+        "name": name,
+        "subtitle": "Main Agent",
+    }
+
+
+def operator_agent_summary(language: str, agent_id: str = OPERATOR_MAIN_AGENT_ID) -> dict[str, Any]:
+    resolved = resolve_operator_agent_id(agent_id)
+    brief = operator_agent_brief(language, resolved)
+    description = _OPERATOR_AGENT_DESCRIPTIONS.get(language) or _OPERATOR_AGENT_DESCRIPTIONS[DEFAULT_LANGUAGE]
+    return {
+        **brief,
+        "description": description,
+        "avatar_url": None,
+        "is_default": True,
+        "capabilities": {
+            "streaming": True,
+            "node_path": True,
+            "max_attachments": OPERATOR_MAX_ATTACHMENTS,
+            "max_image_bytes": OPERATOR_MAX_IMAGE_BYTES,
+            "max_document_bytes": OPERATOR_MAX_DOCUMENT_BYTES,
+            "allowed_extensions": list(OPERATOR_ALLOWED_EXTENSIONS),
+        },
+    }
+
+
+def list_operator_agents(language: str) -> dict[str, Any]:
+    return {
+        "type": "assistant_agent_list",
+        "default_agent_id": OPERATOR_MAIN_AGENT_ID,
+        "agents": [operator_agent_summary(language, OPERATOR_MAIN_AGENT_ID)],
+    }
+
+
+def operator_starter_gaps(starters: OperatorStarters = OPERATOR_STARTERS) -> tuple[str, ...]:
+    return tuple(language for language in SUPPORTED_LANGUAGES if starters.missing_translations(language))

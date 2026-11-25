@@ -721,10 +721,16 @@ class GatewayStore:
         *,
         internal_run_id: str | None = None,
         tenant_id: str | None = None,
+        agent_id: str = "operator_main",
+        attachment_ids: list[str] | None = None,
+        attempt_no: int = 1,
+        parent_qa_id: str | None = None,
     ) -> dict[str, Any]:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         question = _question(question, "question")
         tenant_id = _optional_scope(tenant_id, "tenant_id")
+        resolved_agent_id = (agent_id or "operator_main").strip() or "operator_main"
+        attachments_payload = json.dumps(list(attachment_ids), ensure_ascii=False) if attachment_ids else None
         now = now_utc()
         qa_id = "qa_" + uuid.uuid4().hex
         with self._connection(write=True) as connection:
@@ -733,8 +739,9 @@ class GatewayStore:
                 """
                 INSERT INTO assistant_questions (
                     qa_id, scope_fingerprint, question, internal_run_id,
-                    status, created_at, updated_at, deadline_at, tenant_id
-                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+                    status, created_at, updated_at, deadline_at, tenant_id,
+                    agent_id, attachment_ids_json, attempt_no, parent_qa_id
+                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     qa_id,
@@ -745,6 +752,10 @@ class GatewayStore:
                     format_stored_time(now),
                     format_stored_time(now + DIAGNOSIS_DEADLINE),
                     tenant_id,
+                    resolved_agent_id,
+                    attachments_payload,
+                    max(1, int(attempt_no)),
+                    parent_qa_id,
                 ),
             )
             row = connection.execute(
@@ -1222,6 +1233,10 @@ def _assistant_question_from_row(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     raw_result = result.pop("result_json", None)
     result["result"] = json.loads(raw_result) if raw_result else None
+    raw_attachments = result.pop("attachment_ids_json", None)
+    result["attachment_ids"] = json.loads(raw_attachments) if raw_attachments else []
+    result["attempt_no"] = int(result.get("attempt_no") or 1)
+    result["parent_qa_id"] = result.get("parent_qa_id")
     return result
 
 

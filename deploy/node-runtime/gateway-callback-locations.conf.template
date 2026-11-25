@@ -14,7 +14,7 @@
         proxy_set_header Content-Type $http_content_type;
         proxy_read_timeout 15s;
     }
-    location ~ "^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/(completions|tools/(${AIOPS_NODE_TOOL_NAMES})/(authorization|evidence))$" {
+    location ~ "^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/(completions|stream-chunks|tools/(${AIOPS_NODE_TOOL_NAMES})/(authorization|evidence))$" {
         limit_except POST { deny all; }
         client_max_body_size 256k;
         proxy_pass ${AIOPS_PRODUCTION_GATEWAY};

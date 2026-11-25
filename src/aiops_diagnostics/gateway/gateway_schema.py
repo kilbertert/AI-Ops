@@ -14,7 +14,7 @@ from pathlib import Path
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.gateway import gateway_db
 
-VERSION = 2
+VERSION = 3
 
 # 列声明同时驱动 CREATE、白名单 ADD 与结构判据；不维护第二套 schema。
 TABLES = {
@@ -210,6 +210,10 @@ TABLES = {
             "completed_at": "TEXT",
             "expires_at": "TEXT",
             "tenant_id": "TEXT",
+            "agent_id": "TEXT NOT NULL DEFAULT 'operator_main'",
+            "attachment_ids_json": "TEXT",
+            "attempt_no": "INTEGER NOT NULL DEFAULT 1",
+            "parent_qa_id": "TEXT",
         },
         (),
     ),
@@ -362,11 +366,14 @@ TABLES = {
             "active_order_no": "TEXT",
             "generating_since": "TEXT",
             "generating_turn_no": "INTEGER",
+            "generating_claim_id": "TEXT",
             "last_turn_no": "INTEGER NOT NULL DEFAULT 0",
             "created_at": "TEXT NOT NULL",
             "updated_at": "TEXT NOT NULL",
             "expires_at": "TEXT NOT NULL",
             "operator_binding": "TEXT NOT NULL DEFAULT ''",
+            "agent_id": "TEXT NOT NULL DEFAULT 'operator_main'",
+            "title": "TEXT NOT NULL DEFAULT ''",
         },
         (),
     ),
@@ -381,6 +388,13 @@ TABLES = {
             "token_count": "INTEGER NOT NULL DEFAULT 0",
             "created_at": "TEXT NOT NULL",
             "status_qa_id": "TEXT",
+            "attempt_no": "INTEGER NOT NULL DEFAULT 1",
+            "parent_qa_id": "TEXT",
+            "attachment_ids_json": "TEXT",
+            "citations_json": "TEXT",
+            "steps_json": "TEXT",
+            "elapsed_ms": "INTEGER",
+            "delivery_mode": "TEXT",
         },
         ("UNIQUE (conversation_id, turn_no)",),
     ),
@@ -488,6 +502,59 @@ TABLES = {
         },
         ("PRIMARY KEY (tenant_id, environment)",),
     ),
+    "assistant_files": (
+        {
+            "file_id": "TEXT PRIMARY KEY",
+            "scope_fingerprint": "TEXT NOT NULL",
+            "tenant_id": "TEXT NOT NULL",
+            "user_id": "TEXT NOT NULL DEFAULT ''",
+            "business_entry": "TEXT NOT NULL",
+            "conversation_id": "TEXT",
+            "agent_id": "TEXT NOT NULL DEFAULT 'operator_main'",
+            "file_name": "TEXT NOT NULL",
+            "category": "TEXT NOT NULL",
+            "extension": "TEXT NOT NULL",
+            "mime_type": "TEXT NOT NULL",
+            "size_bytes": "INTEGER NOT NULL",
+            "sha256": "TEXT NOT NULL",
+            "storage_url": "TEXT NOT NULL",
+            "download_center_record_id": "TEXT",
+            "upload_status": "TEXT NOT NULL",
+            "parse_status": "TEXT NOT NULL",
+            "parse_error": "TEXT",
+            "page_count": "INTEGER",
+            "truncated": "INTEGER NOT NULL DEFAULT 0",
+            "extracted_text": "TEXT",
+            "normalized_image_blob": "BLOB",
+            "thumbnail_blob": "BLOB",
+            "thumbnail_mime_type": "TEXT",
+            "created_at": "TEXT NOT NULL",
+            "expires_at": "TEXT NOT NULL",
+        },
+        (),
+    ),
+    "assistant_qa_events": (
+        {
+            "qa_id": "TEXT NOT NULL",
+            "seq": "INTEGER NOT NULL",
+            "event_type": "TEXT NOT NULL",
+            "payload_json": "TEXT NOT NULL",
+            "created_at": "TEXT NOT NULL",
+        },
+        ("PRIMARY KEY (qa_id, seq)",),
+    ),
+    "assistant_feedback": (
+        {
+            "qa_id": "TEXT PRIMARY KEY",
+            "scope_fingerprint": "TEXT NOT NULL",
+            "rating": "TEXT",
+            "reasons_json": "TEXT NOT NULL DEFAULT '[]'",
+            "comment": "TEXT",
+            "created_at": "TEXT NOT NULL",
+            "updated_at": "TEXT NOT NULL",
+        },
+        (),
+    ),
 }
 
 INDEXES = {
@@ -521,6 +588,10 @@ INDEXES = {
     "idx_conversations_scope_created": ("conversations", "scope_fingerprint, created_at DESC"),
     "idx_conversation_turns_conversation": ("conversation_turns", "conversation_id, turn_no DESC"),
     "idx_chat_dify_runs_qa": ("chat_dify_runs", "qa_id"),
+    "idx_assistant_files_scope": ("assistant_files", "scope_fingerprint, created_at DESC"),
+    "idx_assistant_files_expiry": ("assistant_files", "expires_at"),
+    "idx_assistant_qa_events_created": ("assistant_qa_events", "created_at"),
+    "idx_assistant_feedback_scope": ("assistant_feedback", "scope_fingerprint, updated_at DESC"),
 }
 
 LEGACY_COLUMNS = {
@@ -572,10 +643,26 @@ LEGACY_COLUMNS = {
         "trial_managed_draft",
         "tenant_id",
     ),
-    "assistant_questions": ("tenant_id",),
+    "assistant_questions": ("tenant_id", "agent_id", "attachment_ids_json", "attempt_no", "parent_qa_id"),
     "shortcuts": ("kind", "image_url"),
-    "conversations": ("generating_turn_no", "last_turn_no", "operator_binding"),
-    "conversation_turns": ("status_qa_id",),
+    "conversations": (
+        "generating_turn_no",
+        "generating_claim_id",
+        "last_turn_no",
+        "operator_binding",
+        "agent_id",
+        "title",
+    ),
+    "conversation_turns": (
+        "status_qa_id",
+        "attempt_no",
+        "parent_qa_id",
+        "attachment_ids_json",
+        "citations_json",
+        "steps_json",
+        "elapsed_ms",
+        "delivery_mode",
+    ),
     "operator_apps": ("entry", "scenario", "environment", "targets_json"),
     "dify_workspaces": ("workspace_name",),
 }

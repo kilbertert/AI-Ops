@@ -64,22 +64,45 @@ def test_real_nginx_preserves_bearer_and_restricts_routes(tmp_path):
         else:
             pytest.fail("nginx not listening")
         qa = "qa_" + "a" * 32
+        file_id = "file_" + "b" * 32
+        conv_id = "conv_" + "c" * 32
         allowed = [
             ("GET", "/v1/faq/recommendations"),
             ("GET", "/v1/faq/catalog"),
             ("GET", "/v1/shortcuts"),
+            ("GET", "/v1/assistant/agents"),
+            ("GET", "/v1/assistant/starters"),
             ("POST", "/v1/faq/answer"),
             ("POST", "/v1/assistant/questions"),
             ("GET", f"/v1/assistant/questions/{qa}"),
+            ("GET", f"/v1/assistant/questions/{qa}/events"),
             ("POST", f"/v1/assistant/questions/{qa}/cancel"),
+            ("POST", f"/v1/assistant/questions/{qa}/regenerate"),
+            ("POST", f"/v1/assistant/questions/{qa}/feedback"),
+            ("POST", f"/v1/assistant/questions/{qa}/export"),
+            ("POST", "/v1/assistant/files"),
+            ("GET", f"/v1/assistant/files/{file_id}"),
+            ("GET", f"/v1/assistant/files/{file_id}/preview"),
+            ("POST", f"/v1/assistant/files/{file_id}/download-task"),
+            ("GET", "/v1/conversations"),
+            ("GET", f"/v1/conversations/{conv_id}"),
+            ("PATCH", f"/v1/conversations/{conv_id}"),
+            ("DELETE", f"/v1/conversations/{conv_id}"),
         ]
         denied = [
             ("POST", "/v1/shortcuts"),
+            ("POST", "/v1/assistant/agents"),
             ("GET", "/v1/assistant/questions"),
             ("POST", f"/v1/assistant/questions/{qa}"),
+            ("POST", f"/v1/assistant/questions/{qa}/events"),
+            ("GET", f"/v1/assistant/questions/{qa}/export"),
+            ("DELETE", f"/v1/assistant/files/{file_id}"),
+            ("POST", "/v1/conversations"),
+            ("POST", f"/v1/conversations/{conv_id}"),
             ("GET", "/v1/agents"),
             ("POST", "/v1/dify/publish"),
             ("POST", "/v1/standard/diagnoses"),
+            ("POST", "/v1/internal/operator-runs/run_12345678901234567890/stream-chunks"),
             ("DELETE", f"/v1/assistant/questions/{qa}"),
         ]
         for method, path in allowed + denied:

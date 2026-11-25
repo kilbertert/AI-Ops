@@ -23,7 +23,7 @@ def test_public_operations_match_testing_guide_and_exclude_management(tmp_path):
     guide = (Path(__file__).parents[2] / "docs/testing-api-guide.md").read_text()
     documented = {
         (m.lower(), p.split("?")[0])
-        for m, p in re.findall(r"\| [A-Z]\d{2} \| `(GET|POST|DELETE) ([^`]+)`", guide)
+        for m, p in re.findall(r"\| [A-Z]\d{2} \| `(GET|POST|PATCH|DELETE) ([^`]+)`", guide)
     }
     actual = {(method, path) for path, item in spec["paths"].items() for method in item}
     # 双向相等：多出来的操作（管理面被打开）与少掉的（文档说公开却不可达）都红。
@@ -70,13 +70,15 @@ def test_external_auth_media_and_analysis_are_described_separately(tmp_path):
     schemes = spec["components"]["securitySchemes"]
     assert schemes["ConsumerSession"]["name"] == "third-session"
     assert schemes["OperatorBearer"]["scheme"] == "bearer"
+    from aiops_diagnostics.gateway.public_openapi import OPERATOR_ONLY_PATHS
+
     for path, item in spec["paths"].items():
         for operation in item.values():
             if path == "/v1/media/{signed_id}":
                 assert operation["security"] == []
                 assert [p["name"] for p in operation["parameters"]] == ["signed_id", "Range"]
                 assert "206" in operation["responses"]
-            elif path.startswith("/v1/standard/analyses"):
+            elif path.startswith("/v1/standard/analyses") or path in OPERATOR_ONLY_PATHS:
                 assert operation["security"] == [{"OperatorBearer": []}]
             else:
                 assert operation["security"] == [{"ConsumerSession": []}, {"OperatorBearer": []}]

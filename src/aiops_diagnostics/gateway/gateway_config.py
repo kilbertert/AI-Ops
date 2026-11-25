@@ -175,6 +175,17 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     "routing_risk_always_asks": SettingSource(
         "AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS", file=False, kind="bool", default=True
     ),
+    "download_center_upms_base_url": SettingSource("AIOPS_GATEWAY_DOWNLOAD_CENTER_UPMS_BASE_URL"),
+    "download_center_mall_base_url": SettingSource("AIOPS_GATEWAY_DOWNLOAD_CENTER_MALL_BASE_URL"),
+    "download_center_upload_export_type": SettingSource(
+        "AIOPS_GATEWAY_DOWNLOAD_CENTER_UPLOAD_EXPORT_TYPE", kind="int", default=3101
+    ),
+    "download_center_download_export_type": SettingSource(
+        "AIOPS_GATEWAY_DOWNLOAD_CENTER_DOWNLOAD_EXPORT_TYPE", kind="int", default=10086
+    ),
+    "download_center_timeout_seconds": SettingSource(
+        "AIOPS_GATEWAY_DOWNLOAD_CENTER_TIMEOUT_SECONDS", kind="float", default=15.0
+    ),
     "log_level": SettingSource("AIOPS_GATEWAY_LOG_LEVEL", file=False, default=DEFAULT_LOG_LEVEL),
 }
 
@@ -447,6 +458,13 @@ class GatewayServerSettings:
     #: 一次性跳转票的有效秒数（#985）。票只在"两次导航之间"有用，60 秒足够一个
     #: 正常的点击-跳转，又不至于让一张被记下来的票活很久。
     knowledge_hop_ttl_seconds: float = 60.0
+    #: 公司下载中心（对象存储 + 文件中心台账）零改码适配配置（#1704 / #1707）。
+    #: 留空 ⇒ 附件上传与导出默认 fail-closed 返回 502 DOWNLOAD_CENTER_UNAVAILABLE，不影响旧路由。
+    download_center_upms_base_url: str = ""
+    download_center_mall_base_url: str = ""
+    download_center_upload_export_type: int = 3101
+    download_center_download_export_type: int = 10086
+    download_center_timeout_seconds: float = 15.0
     #: 网关自身日志的最低级别（#636）。**默认是代码一直假定的那一级**：`INFO`。
     #: 在这一项存在之前，网关根本没配过 logging —— uvicorn 只给 `uvicorn*` 挂 handler，
     #: root 停在 WARNING 且无 handler，于是 `aiops.*` 的 INFO 行**一行都没出去过**

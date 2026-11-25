@@ -9,7 +9,6 @@ proxy_set_header third-session "";
 proxy_set_header Host $host;
 proxy_connect_timeout 15s;
 proxy_send_timeout 120s;
-proxy_read_timeout 120s;
 proxy_next_upstream off;
 proxy_buffering off;
 proxy_cache off;

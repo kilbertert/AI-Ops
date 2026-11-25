@@ -63,7 +63,7 @@ COPY = {
 }
 
 
-def render_evidence(evidence, language, *, secrets=()):
+def render_evidence(evidence, language, *, secrets=(), attachments=None):
     if not evidence:
         return None
     words, sources = localized_pack(COPY, language), localized_pack(_SOURCE_LABELS, language)
@@ -134,4 +134,4 @@ def render_evidence(evidence, language, *, secrets=()):
     if omitted:
         lines.append(words["omitted"])
     answer = "\n".join(lines)
-    return render(answer, evidence, language)
+    return render(answer, evidence, language, attachments=attachments)

@@ -64,9 +64,14 @@ public class GatewayClient {
      * 声明，旧 Gateway 与旧节点就各自在可预期的位置被拒。
      */
     public JsonNode post(String path, String body, String execConfig, String toolContract) {
+        return post(path, body, execConfig, toolContract, timeout);
+    }
+
+    public JsonNode post(String path, String body, String execConfig, String toolContract, Duration requestTimeout) {
+        Duration effectiveTimeout = requestTimeout == null ? timeout : requestTimeout;
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + path))
-                .timeout(timeout)
+                .timeout(effectiveTimeout)
                 .header("Authorization", "Bearer " + nodeToken)
                 .header("X-AI-Ops-Node-Build", nodeBuild)
                 .header("Content-Type", "application/json")

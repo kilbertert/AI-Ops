@@ -1,12 +1,26 @@
 # 管家端前端与测试交接
 
-更新：2026-11-05。原管家H5与Java节点已经部署并有真实链路验收；
+更新：2026-11-25（新增充电桩后台 AI 抽屉后端接口契约，见 PRD #1704 / ADR-0337）。原管家H5与Java节点已经部署并有真实链路验收；
 后来首页新增入口撤回，已有聊天页仍可由URL访问。见
 [退役与页面验收](../validation/2026-10-29-runtime-retirement-live.md)、
 [入口撤回](../validation/2026-11-03-operator-h5-entry-withdrawal.md)及
 [当前范围](current-delivery-state.md)。原生安装包与完整业务准确率不在通过结论内。
 
 部署方法见[管家 H5 部署与恢复](operator-h5-deployment.md)。
+
+## 充电桩后台 AI 抽屉对接要点（#1704）
+
+后台右侧 AI 抽屉与原管家 H5 共用同一套公司个人 Bearer + `X-Business-Entry: operator` 鉴权模型，并严格保持只读排查边界（不执行退款/重算/改配置/写业务工单/重启设备）：
+
+1. **首屏与智能体预留**：先调用 `GET /v1/assistant/agents`（首期固定返回 `operator_main`）和 `GET /v1/assistant/starters?agent_id=operator_main`，渲染欢迎语、能力副标题、结构化推荐问题与免责声明；提问与会话列表预留可选 `agent_id` 字段。
+2. **附件上传与预览**：`POST /v1/assistant/files`（`multipart/form-data`，支持 JPG/PNG/WEBP ≤ 10MB、PDF/DOCX/DOC ≤ 20MB，单轮最多 5 个、总计 ≤ 50MB）同步完成纯 Python 有界解析并向公司下载中心导入列表（`exportType=3101`, `direction=1`, `fileType=doc`）登记台账；图片缩略图走 `GET /v1/assistant/files/{file_id}/preview`，响应绝不暴露 OSS 直链。
+3. **实时路径 + 流式正文（SSE）**：`POST /v1/assistant/questions` 返回 `202` + `stream_url`，前端订阅 `GET /v1/assistant/questions/{qa_id}/events`（支持 `Last-Event-ID` / `after_seq` 断线续传与 15 秒 `ping` 心跳）。事件顺序为 `run_started` → `step_started`/`step_finished` → `message_delta` →（如需复核替换或仅证据交付）`message_replace` → `citations` → `message_done`/`run_failed`/`run_cancelled`。收到 `message_replace` 时须整段替换已渲染草稿正文；若网络不支持 SSE，可无缝退回 `GET /v1/assistant/questions/{qa_id}` 轮询 `progress.steps`。
+4. **下载中心联动（零公司代码改造）**：点击引用附件下载或导出排查报告时，分别调用 `POST /v1/assistant/files/{file_id}/download-task` 或 `POST /v1/assistant/questions/{qa_id}/export`（`{"format":"docx"|"md"}`），后端写入公司文件中心导出列表（`exportType=10086`, `direction=-1`）并返回 `notify_file_center: true`；前端只需触发既有后台通知 `notifyAndOpenFileCenter(-1)` 引导用户前往下载中心下载。
+5. **反馈、历史重命名与原地重生成**：
+   - 点赞/点踩/撤销：`POST /v1/assistant/questions/{qa_id}/feedback`（幂等 upsert）。
+   - 历史列表/回读/重命名/删除：`GET /v1/conversations`、`GET/PATCH/DELETE /v1/conversations/{conversation_id}`。
+   - 重新生成：仅允许对会话最后一轮已完成回答调用 `POST /v1/assistant/questions/{qa_id}/regenerate`（非最后一轮返回 `409 REGENERATE_NOT_ALLOWED`，并发生成返回 `409 CONVERSATION_BUSY`）。
+6. **验证边界声明**：本地自动化与 `verify-aiops-gateway` 已验证 API 契约、鉴权隔离、附件解析、SSE/断线续传/复核替换、下载中心零改码协议与 Nginx 白名单；真实公司网关 JWT、Nacos `file.upload.allowed` 后缀白名单、UPMS 无水印 OSS 落盘、真实 `notifyAndOpenFileCenter(-1)` 弹窗及真实模型业务准确率须在真实环境通过 #1714 完成人工验收。
 
 ## 身份与请求
 
