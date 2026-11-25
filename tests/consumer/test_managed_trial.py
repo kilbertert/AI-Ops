@@ -282,7 +282,7 @@ def test_preview_readback_refuses_revoked_knowledge(managed_trial, monkeypatch):
             "UPDATE standard_diagnoses SET result_json=? WHERE diagnosis_id=?", (json.dumps(result), tid)
         )
     monkeypatch.setattr(
-        api.consumer_knowledge_selection,
+        api.consumer_knowledge,
         "owned_libraries",
         lambda *a: [{"knowledge_base_id": "revoked-library", "audience": "internal"}],
     )

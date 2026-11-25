@@ -7,7 +7,7 @@ from importlib.resources import files
 
 from aiops_diagnostics.common.i18n import localized_pack
 from aiops_diagnostics.common.redaction import redact_text, sanitize_data
-from aiops_diagnostics.consumer.consumer_time import readable_time
+from aiops_diagnostics.consumer.presentation import readable_time
 from aiops_diagnostics.identity.order_identity import is_order_identifier
 from aiops_diagnostics.operator import order_analysis, order_billing, order_pricing
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused

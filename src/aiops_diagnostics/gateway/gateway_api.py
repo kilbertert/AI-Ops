@@ -30,9 +30,10 @@ from aiops_diagnostics.common.i18n import (
 )
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.common.scalar_rules import format_stored_time
-from aiops_diagnostics.consumer import consumer_knowledge_selection
-from aiops_diagnostics.consumer.consumer_copy import COMPOSED_LANGUAGES
-from aiops_diagnostics.consumer.consumer_order_chat import (
+from aiops_diagnostics.consumer import consumer_knowledge
+from aiops_diagnostics.consumer import knowledge_access as consumer_knowledge_selection
+from aiops_diagnostics.consumer.presentation import (
+    COMPOSED_LANGUAGES,
     asks_latest_order,
     status_answer,
 )
@@ -473,7 +474,7 @@ def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
                 documents=consumer_documents.enabled(pull.workflow_content(dsl)),
             ),
             consumer_callback_base=context.settings.public_base_url,
-            consumer_libraries=lambda: consumer_knowledge_selection.owned_libraries(
+            consumer_libraries=lambda: consumer_knowledge.owned_libraries(
                 context.runtime, binding.tenant_id, binding.app_id
             ),
         )
@@ -568,7 +569,7 @@ def _publish_bound_app(
         raise StandardAPIError(
             status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
         )
-    from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
+    from aiops_diagnostics.consumer.agent_contract import ConsumerFlowError
     from aiops_diagnostics.dify.dify_dsl_pull import DifyDslError, DifyDslSource
     from aiops_diagnostics.publication.agent_manifest import admin_context
 
@@ -1025,7 +1026,7 @@ def _workflow_trial_draft(
         target = target_for(context.settings, binding)
         if target is None:
             raise StandardAPIError(409, "CONSUMER_TARGET_MISSING", "consumer trial target missing")
-        from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
+        from aiops_diagnostics.consumer.agent_contract import publication_settings
         from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
 
         candidates = set(order_identifier_candidates(question))
@@ -1043,7 +1044,7 @@ def _workflow_trial_draft(
                 context.settings.public_base_url,
                 require_split=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 2,
                 require_picker=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 3,
-                owned_libraries=lambda: consumer_knowledge_selection.owned_libraries(
+                owned_libraries=lambda: consumer_knowledge.owned_libraries(
                     context.runtime, row.tenant_id, row.app_id
                 ),
             )
@@ -2445,7 +2446,7 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
             try:
                 consumer_knowledge_selection.require_owned(
                     report.get("knowledge_base_ids", []),
-                    consumer_knowledge_selection.owned_libraries(
+                    consumer_knowledge.owned_libraries(
                         context.runtime, caller.effective_tenant_id, located.app_id
                     ),
                 )
@@ -2499,7 +2500,7 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
     snapshot = context.dify_run_store.snapshot(latest.run_id)
     if not snapshot or snapshot.get("order_no") != latest.order_no:
         raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial snapshot unavailable")
-    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.presentation import status_answer
 
     expected = status_answer(snapshot, result.get("language", "zh"))["blocks"][0]["text"]
     if report.get("summary") != expected or any(
@@ -2701,8 +2702,8 @@ def _require_visible_order(context: Any, caller: ScopeContext, order_no: str) ->
 def _authorized_consumer_snapshot(settings, caller, order_no, data_kind, *, include_composition=False):
     if data_kind == "status":
         return _authorized_charging_snapshot(settings, caller, order_no)
-    from aiops_diagnostics.consumer.consumer_billing import read_billing_record
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
+    from aiops_diagnostics.consumer.billing import read_billing_record
+    from aiops_diagnostics.consumer.knowledge_access import consumer_endpoint
 
     if data_kind != "billing":
         raise ValueError("unsupported consumer data kind")
@@ -2724,7 +2725,7 @@ def _consumer_mall_payment(settings, caller, order_no, snapshot):
     身份边界复用充电库同一条 scope 下推：商城行必须与已授权订单同租户、
     同订单消费者，读不到就报缺证，不换一条更宽的路径去「试着关联」。
     """
-    from aiops_diagnostics.consumer.consumer_mall_billing import mall_payment_evidence
+    from aiops_diagnostics.consumer.billing import mall_payment_evidence
 
     try:
         with scoped_mysql_source(
@@ -2744,7 +2745,7 @@ def _authorized_charging_snapshot(
     直读入口与节点回呼入口都走这里 —— 契约 §3.6 要求两个入口共用同一份授权读取规则，
     不能在内部端点上另造一条更宽松的。身份取自已验证的 ScopeContext，不取请求头。
     """
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
+    from aiops_diagnostics.consumer.knowledge_access import consumer_endpoint
 
     try:
         endpoint = consumer_endpoint(settings, caller.effective_tenant_id)

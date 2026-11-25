@@ -12,15 +12,23 @@ import pytest
 from execution.test_app_runtime_dify_entry import dify_chat
 from execution.test_app_runtime_node_entry import ORDER_A
 
-from aiops_diagnostics.consumer.consumer_billing import billing_answer
-from aiops_diagnostics.consumer.consumer_copy import (
+from aiops_diagnostics.consumer.billing import billing_answer
+from aiops_diagnostics.consumer.presentation import (
     CopyBundleInvalid,
-    bundled,
-    pack,
-    resolve,
-    validate,
+    status_answer,
 )
-from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+from aiops_diagnostics.consumer.presentation import (
+    bundled_copy as bundled,
+)
+from aiops_diagnostics.consumer.presentation import (
+    copy_pack as pack,
+)
+from aiops_diagnostics.consumer.presentation import (
+    resolve_copy_pack as resolve,
+)
+from aiops_diagnostics.consumer.presentation import (
+    validate_copy_bundle as validate,
+)
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
 TENANT = "TENANT-A"
@@ -106,7 +114,7 @@ def test_localized_languages_are_never_rendered_from_the_english_fallback(store,
     这些语种的来源标签与整段模板就会被换成英文 —— 一个只改中文的发布动作
     会让德语用户看到英文。返回 `None` 才是"一行都不改"。
     """
-    from aiops_diagnostics.consumer.consumer_copy import COMPOSED_LANGUAGES
+    from aiops_diagnostics.consumer.presentation import COMPOSED_LANGUAGES
 
     assert language not in COMPOSED_LANGUAGES
     store.publish_consumer_copy(

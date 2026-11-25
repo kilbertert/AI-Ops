@@ -14,9 +14,8 @@ from __future__ import annotations
 import pytest
 
 from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES
-from aiops_diagnostics.consumer.consumer_billing import billing_answer
-from aiops_diagnostics.consumer.consumer_order_chat import status_answer
-from aiops_diagnostics.consumer.consumer_plain import SOURCE_KEYS, WORDS
+from aiops_diagnostics.consumer.billing import billing_answer
+from aiops_diagnostics.consumer.presentation import SOURCE_KEYS, WORDS, status_answer
 
 ISO = "2026-10-29T12:34:45.123456+00:00"
 

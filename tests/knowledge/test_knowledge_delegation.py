@@ -12,8 +12,8 @@ import uvicorn
 from dify.test_dify_knowledge_api import _client, _Runtime
 
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.consumer import consumer_knowledge, consumer_knowledge_selection
-from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+from aiops_diagnostics.consumer import consumer_knowledge
+from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
@@ -196,7 +196,7 @@ def test_original_consumer_read_chain_and_media_use_exact_environment(central):
     c = central
     for env in ("a", "b"):
         runtime, _ = target(c, env)
-        rows = consumer_knowledge_selection.owned_libraries(runtime, "same", "app-" + env)
+        rows = consumer_knowledge.owned_libraries(runtime, "same", "app-" + env)
         assert rows == [
             {"knowledge_base_id": "library", "name": knowledge_tenant("same", env), "audience": "customer"}
         ]
@@ -343,7 +343,7 @@ def test_export_command_only_writes_new_private_capability(central, monkeypatch)
 
 
 def test_generation_cannot_reuse_old_epoch_when_clock_moves_back(central, monkeypatch):
-    from aiops_diagnostics.consumer import consumer_knowledge_grants
+    from aiops_diagnostics.consumer import knowledge_access as consumer_knowledge_grants
 
     c = central
     old = delegation.issue(c.settings, "a", "same", "app-a", "library")

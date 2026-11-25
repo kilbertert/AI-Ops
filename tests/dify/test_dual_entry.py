@@ -687,7 +687,7 @@ def test_consumer_copy_rebinds_knowledge_and_never_carries_source_ids(dual):
     # 名字不再固定、更不按名字复用：每次开通都新建一个库，避免把同名内部库当对客库。
     assert len(dual.kb.created) == 1 and dual.kb.created[0].startswith("对客知识库-")
     # 新建的库被显式登记为"允许对客"
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 
     assert KnowledgeGrants(dual.settings.database_file).granted(TARGET, "env-a") == set(selected)
 
@@ -1142,7 +1142,7 @@ def test_onboarding_uses_source_plugin_before_any_model_preparation(dual, monkey
     """事故判据：官方发布图固定0.0.2，旧默认0.0.1不存在；真实开通不可先安装旧包。"""
     import sys
 
-    from aiops_diagnostics.consumer import consumer_agent_flow
+    from aiops_diagnostics.consumer import agent_contract as consumer_agent_flow
     from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
 
     original = source_document
@@ -1240,8 +1240,8 @@ def test_consumer_contract_failure_is_a_safe_http_refusal(dual, monkeypatch):
 
 @pytest.mark.parametrize("legacy", [False, True])
 def test_first_publish_can_retry_current_prompt_and_library_after_failure(dual, legacy):
-    from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+    from aiops_diagnostics.consumer.agent_contract import ConsumerFlowError
+    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 
     run(dual, request(dual, scope="consumer", key="first-published-app"))
     result = run(dual, request(dual, scope="consumer", key="second-draft-app"))
@@ -1325,7 +1325,7 @@ def test_recovery_never_takes_over_unrelated_or_edited_agent(dual, change):
 
 
 def test_republish_updates_customer_projection_and_immutable_workflow_together(dual):
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
     from aiops_diagnostics.publication.qa_rag import select_customer_agent
 
     result = run(dual, request(dual, scope="consumer"))

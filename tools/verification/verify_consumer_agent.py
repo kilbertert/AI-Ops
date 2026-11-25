@@ -9,10 +9,8 @@ from http.server import ThreadingHTTPServer
 
 import yaml
 
-from aiops_diagnostics.consumer.consumer_agent_flow import AGENT_PLUGIN
-from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
-from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
-from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, catalogue_token
+from aiops_diagnostics.consumer.agent_contract import AGENT_PLUGIN, publication_settings
+from aiops_diagnostics.consumer.knowledge_access import PROVIDER, KnowledgeGrants, catalogue_token
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
 

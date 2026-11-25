@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_knowledge_grants import ConsumerEndpoints, approved_endpoint
 from aiops_diagnostics.consumer.consumer_tool_grants import ConsumerToolGrants, ConsumerToolRefused
+from aiops_diagnostics.consumer.knowledge_access import ConsumerEndpoints, approved_endpoint
 from aiops_diagnostics.dify import self_service_prepare as prepare
 from aiops_diagnostics.dify.self_service_identity import SetupRefused
 
@@ -50,7 +50,7 @@ def test_a_tenant_with_no_pinned_address_uses_the_approved_catalogue(tmp_path):
 
 
 def test_registry_onboarding_does_not_copy_a_second_connection(tmp_path):
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
+    from aiops_diagnostics.consumer.knowledge_access import consumer_endpoint
     from aiops_diagnostics.gateway.environment_registry import apply
 
     path = tmp_path / "registry" / "directory.json"
@@ -403,7 +403,7 @@ def test_same_provider_does_not_authorize_a_different_model(tmp_path):
 
 @pytest.mark.parametrize("kind", ["billing", "status"])
 def test_chatflow_and_node_use_the_managed_tenant_endpoint(tmp_path, monkeypatch, kind):
-    from aiops_diagnostics.consumer import consumer_billing
+    from aiops_diagnostics.consumer import billing as consumer_billing
     from aiops_diagnostics.gateway import gateway_api as api
 
     s = settings(tmp_path, server_config_file=tmp_path / "missing.env")

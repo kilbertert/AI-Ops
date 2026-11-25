@@ -193,7 +193,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "common/order_reference.py": 4,  # 「消息点了哪几单」的判据，另一个问题
     "common/config.py": 3,  # 配置键名 / 密钥槽名
     "common/redaction.py": 5,  # 脱敏模式（口令、Bearer、sk-、手机号……）
-    "consumer/consumer_knowledge_selection.py": 2,  # 目录 token / libraries 键
+    "consumer/knowledge_access.py": 2,  # 目录 token / libraries 键
     "consumer/consumer_publication.py": 2,  # tenant_id / 行键白名单
     "conversation/conversation_store.py": 2,  # scope 指纹 / 智能体版本
     "conversation/faq.py": 1,  # faq 标识符

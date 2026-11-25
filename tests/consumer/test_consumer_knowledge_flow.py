@@ -5,7 +5,7 @@ import json
 import pytest
 from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
-from aiops_diagnostics.consumer import consumer_knowledge
+from aiops_diagnostics.consumer import legacy_callbacks
 from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
 from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
@@ -73,7 +73,7 @@ def setup(env, monkeypatch, tmp_path):
     # 这个库是"已经发布给消费者用"的那一个：按新契约它必须有显式的对客授权行，
     # 否则发布契约与检索都会把它当内部资料（`tests/consumer/test_consumer_knowledge_grants.py`
     # 覆盖内部库被拒的负例）。
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 
     settings = env["app"].state.gateway.settings
     KnowledgeGrants(settings.database_file).grant(
@@ -217,7 +217,7 @@ def test_unretrieved_faq_and_extra_model_claims_are_rejected():
         {"kind": "stop_session", "faq_id": ""},
     ]:
         with pytest.raises(ChatRunUnavailable):
-            consumer_knowledge.final_answer(json.dumps(raw), context, "zh", {})
+            legacy_callbacks.final_answer(json.dumps(raw), context, "zh", {})
 
 
 def test_other_grant_kind_cannot_read_knowledge_and_no_grant_is_rejected(tmp_path, monkeypatch):

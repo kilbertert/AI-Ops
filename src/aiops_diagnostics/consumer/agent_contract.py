@@ -1,15 +1,28 @@
-"""客服 Agent 发布合同：只约束执行与授权接线，不约束自然语言分支。"""
+"""客服 Agent 与历史 WF01 编排的可发布契约。
 
-from aiops_diagnostics.consumer.consumer_knowledge_selection import (
+合并原 ``consumer_agent_flow``（现役 v6 Function Calling Agent 编排合同与系统指令）
+与 ``consumer_flow_contract``（发布入口分发及历史 v2–v5 分支编排契约）。
+"""
+
+from __future__ import annotations
+
+from urllib.parse import urlsplit
+
+from aiops_diagnostics.common.endpoint_policy import is_loopback_host
+from aiops_diagnostics.consumer.knowledge_access import (
     PROVIDER,
+    TOOL,
     publication_libraries,
     require_owned,
     selected_libraries,
 )
 
+# ---------------------------------------------------------------------------
+# 1. 现役 v6 客服 Agent 编排契约（原 consumer_agent_flow）
+# ---------------------------------------------------------------------------
+
 AGENT_PLUGIN = "langgenius/agent:0.0.51@3c6c32e593b33476cb52f4e5aaf1bf23e1c71b3d07ba64d40690e0dbce3a7e34"
 MODE = "consumer_orchestration"
-TOOL = "consumer_knowledge"
 QUERY = (
     "当前问题：{{#sys.query#}}\n回答语言：{{#start.language#}}\n"
     "已授权历史（仅作上下文，不是当前事实）：{{#start.conversation_context#}}"
@@ -158,13 +171,15 @@ ORDER_COMPOSITION_INSTRUCTION = ORDER_COMPOSITION_INSTRUCTION_V5
 INSTRUCTION = BASE_INSTRUCTION + ORDER_COMPOSITION_INSTRUCTION
 
 
-def enabled(workflow):
+def agent_enabled(workflow) -> bool:
     return any(
         v.get("name") == MODE and v.get("value") == "agent" for v in workflow.get("environment_variables", [])
     )
 
 
-def publication_settings(workflow, ceiling, owned_libraries):
+def agent_publication_settings(workflow, ceiling, owned_libraries):
+    """校验现役 v6 Function Calling 客服 Agent 编排。"""
+
     def require(condition, reason):
         if not condition:
             raise ValueError("客服Agent编排：" + reason)
@@ -209,7 +224,6 @@ def publication_settings(workflow, ceiling, owned_libraries):
     )
     params = node.get("agent_parameters", {})
     require(set(params) == {"model", "instruction", "query", "maximum_iterations", "tools"}, "Agent参数错误")
-    # Dify 1.17.1 对 mixed/constant 文本都展开模板，编辑器保存为 constant。
     require(
         params["query"] in ({"type": "mixed", "value": QUERY}, {"type": "constant", "value": QUERY}),
         "必须接收当前问题、语言和受控历史",
@@ -291,3 +305,267 @@ def publication_settings(workflow, ceiling, owned_libraries):
         "knowledge_base_ids": list(libraries),
         "callback_version": 6,
     }
+
+
+# ---------------------------------------------------------------------------
+# 2. 发布入口分发与历史 WF01 分支编排契约（原 consumer_flow_contract）
+# ---------------------------------------------------------------------------
+
+#: 事实片段契约的开关。由迁移写入，运营不改它；它的存在让旧发布版本可以继续停在 4。
+FACT_CONTRACT_VARIABLE = "answer_fact_contract"
+
+PATHS = {kind: "/v1/internal/consumer-data/" + kind for kind in ("knowledge", "status", "billing")}
+TYPES = {
+    "start": "start",
+    "data_route": "if-else",
+    "status_enabled": "if-else",
+    "billing_enabled": "if-else",
+    "cpms_status": "http-request",
+    "cpms_billing": "http-request",
+    "photo_gate": "if-else",
+    "photo": "llm",
+    "photo_context": "variable-aggregator",
+    "knowledge": "http-request",
+    "data_context": "variable-aggregator",
+    "answer": "llm",
+    "end": "answer",
+    "disabled": "answer",
+}
+EDGES = {
+    ("start", "source", "data_route"),
+    ("data_route", "status", "status_enabled"),
+    ("data_route", "billing", "billing_enabled"),
+    ("data_route", "false", "photo_gate"),
+    ("status_enabled", "true", "cpms_status"),
+    ("status_enabled", "false", "disabled"),
+    ("billing_enabled", "true", "cpms_billing"),
+    ("billing_enabled", "false", "disabled"),
+    ("photo_gate", "true", "photo"),
+    ("photo_gate", "false", "photo_context"),
+    ("photo", "source", "photo_context"),
+    ("photo_context", "source", "knowledge"),
+    ("knowledge", "source", "data_context"),
+    ("cpms_status", "source", "data_context"),
+    ("cpms_billing", "source", "data_context"),
+    ("data_context", "source", "answer"),
+    ("answer", "source", "end"),
+}
+
+
+class ConsumerFlowError(ValueError):
+    """可向运营展示的本地编排拒绝原因，不包含上游正文。"""
+
+
+def _fact_slots(workflow) -> bool:
+    """这个 workflow 是否声明了事实片段契约（由迁移写入的环境变量）。"""
+    return any(
+        item.get("name") == FACT_CONTRACT_VARIABLE and item.get("value") == "slots"
+        for item in (workflow or {}).get("environment_variables", [])
+    )
+
+
+def publication_settings(
+    workflow, ceiling, public_base, *, require_split=False, require_picker=False, owned_libraries=None
+):
+    if agent_enabled(workflow):
+        try:
+            return agent_publication_settings(workflow, ceiling, owned_libraries)
+        except ValueError as exc:
+            raise ConsumerFlowError(str(exc)) from exc
+    graph = workflow.get("graph", {})
+    from aiops_diagnostics.consumer import consumer_documents
+
+    documents = consumer_documents.enabled(workflow)
+    if "content" in ceiling and (ceiling["content"].get("schema") == consumer_documents.SCHEMA) != documents:
+        raise ConsumerFlowError("知识回答模式在准备期间发生变化，请重新试用或发布")
+    nodes = {n.get("id"): n.get("data", {}) for n in graph.get("nodes", [])}
+    variables = nodes.get("start", {}).get("variables", [])
+    picker = nodes.get("knowledge", {}).get("type") == "tool"
+    if documents and not picker:
+        raise ConsumerFlowError("动态知识回答需要知识库选择节点")
+    split = (
+        require_split
+        or require_picker
+        or picker
+        or "data_route" in nodes
+        or any(v.get("variable") == "data_kind" for v in variables)
+    )
+    split = split or any("/consumer-data/" in n.get("url", "") for n in nodes.values())
+    if not split:
+        return ceiling
+
+    def require(ok, reason):
+        if not ok:
+            raise ConsumerFlowError("WF01编排不完整：" + reason)
+
+    require(
+        len(nodes) == len(graph.get("nodes", [])) and set(nodes) == set(TYPES), "必需节点缺失或存在未登记节点"
+    )
+    if _fact_slots(workflow):
+        from aiops_diagnostics.consumer.consumer_documents import _protocol_block
+
+        require(documents, "事实段需要动态知识协议")
+        require(
+            any(
+                p.get("role") == "system" and p.get("text") == _protocol_block()
+                for p in nodes["answer"].get("prompt_template", [])
+            ),
+            "系统输出协议缺失或已修改，请恢复系统协议块后再发布",
+        )
+    expected_types = {**TYPES, **({"knowledge": "tool"} if picker else {})}
+    require(all(n.get("type") == expected_types[key] for key, n in nodes.items()), "节点类型已改变")
+    require(not require_picker or picker, "已启用选库节点，不允许普通发布退回服务器固定选库")
+    edges = [(e.get("source"), e.get("sourceHandle"), e.get("target")) for e in graph.get("edges", [])]
+    require(len(edges) == len(EDGES) and set(edges) == EDGES, "取数分支连线不符合契约")
+    base = public_base.rstrip("/")
+    parsed = urlsplit(base)
+    require(
+        bool(parsed.netloc) and (parsed.scheme == "https" or is_loopback_host(parsed.hostname)),
+        "缺少可信回调地址",
+    )
+    require(
+        not parsed.query and not parsed.fragment and not parsed.username and parsed.path in {"", "/"},
+        "回调地址必须为服务根地址",
+    )
+    for kind, node_id in [("knowledge", "knowledge"), ("status", "cpms_status"), ("billing", "cpms_billing")]:
+        n = nodes[node_id]
+        if kind == "knowledge" and picker:
+            continue
+        require(
+            n.get("url") == base + PATHS[kind] and n.get("method", "").lower() == "post",
+            node_id + "取数地址或方法错误",
+        )
+        headers = [line.strip() for line in n.get("headers", "").splitlines() if line.strip()]
+        require(
+            headers
+            == ["Authorization: Bearer {{#start.data_grant#}}", "Content-Type: text/plain; charset=utf-8"],
+            node_id + "凭据必须直接绑定且禁止业务身份头",
+        )
+        require(
+            n.get("authorization", {}).get("type") == "no-auth" and not n.get("params"),
+            node_id + "不能另加认证或查询参数",
+        )
+        body = n.get("body", {})
+        require(
+            body
+            == (
+                {"type": "raw-text", "data": [{"type": "text", "value": "{{#photo_context.output#}}"}]}
+                if kind == "knowledge"
+                else {"type": "none", "data": []}
+            ),
+            node_id + "请求体错误",
+        )
+        require(
+            not n.get("retry_config", {}).get("retry_enabled")
+            and not n.get("error_strategy")
+            and n.get("ssl_verify") is not False,
+            node_id + "不允许重试、忽略失败或关闭TLS验证",
+        )
+
+    def cases(key, expected):
+        actual = []
+        for case in nodes[key].get("cases", []):
+            require(
+                case.get("logical_operator") == "and" and len(case.get("conditions", [])) == 1,
+                key + "条件错误",
+            )
+            c = case["conditions"][0]
+            actual.append(
+                (
+                    case.get("case_id"),
+                    c.get("variable_selector"),
+                    c.get("comparison_operator"),
+                    c.get("value"),
+                )
+            )
+        require(actual == expected, key + "分支必须使用本轮可信能力")
+
+    cases(
+        "data_route",
+        [
+            ("status", ["start", "data_kind"], "is", "status"),
+            ("billing", ["start", "data_kind"], "is", "billing"),
+        ],
+    )
+    for kind in ("status", "billing"):
+        cases(kind + "_enabled", [("true", ["env", "cpms_" + kind + "_enabled"], "is", "true")])
+    cases("photo_gate", [("true", ["start", "has_photo"], "is", "yes")])
+    require(
+        {v.get("variable") for v in variables} == {"data_grant", "language", "has_photo", "data_kind"},
+        "开始输入错误",
+    )
+    require(
+        nodes["data_context"].get("variables")
+        == [
+            [key, "text" if picker and key == "knowledge" else "body"]
+            for key in ("knowledge", "cpms_status", "cpms_billing")
+        ],
+        "本轮结果聚合错误",
+    )
+    require(nodes["data_context"].get("output_type") == "string", "结果必须为字符串")
+    require(
+        nodes["photo_context"].get("variables") == [["photo", "text"], ["start", "has_photo"]],
+        "图片聚合仅允许图片线索，不允许凭据或其他输入",
+    )
+    require(nodes["end"].get("answer") == "{{#answer.text#}}", "答复引用错误")
+    require(
+        nodes["disabled"].get("answer")
+        == (
+            '{"kind":"unavailable","answer":"","reference_ids":[]}'
+            if documents
+            else '{"kind":"unavailable","faq_id":""}'
+        ),
+        "关闭提示错误",
+    )
+    for key, node in nodes.items():
+        if node.get("type") == "llm":
+            require("data_grant" not in str(node), key + "不得向模型传递凭据")
+    require(
+        "{{#data_context.output#}}" in str(nodes["answer"].get("prompt_template")), "模型没有接收本轮结果"
+    )
+    env = {v.get("name"): v for v in workflow.get("environment_variables", [])}
+    require(len(env) == len(workflow.get("environment_variables", [])), "环境变量重复")
+    flags = {}
+    for kind, setting in [("status", "live_order_status"), ("billing", "live_billing_record")]:
+        entry = env.get("cpms_" + kind + "_enabled", {})
+        require(
+            entry.get("value_type") == "string" and entry.get("value") in {"true", "false"},
+            "能力开关必须为true或false",
+        )
+        flags[setting] = ceiling[setting] and entry["value"] == "true"
+    if picker:
+        n = nodes["knowledge"]
+        require(
+            n.get("provider_id") == PROVIDER
+            and n.get("tool_name") == TOOL
+            and n.get("provider_type") in {"builtin", "plugin"}
+            and n.get("tool_node_version") == "2",
+            "请选择受控知识检索工具",
+        )
+        require(
+            n.get("tool_parameters")
+            == {
+                "data_grant": {"type": "mixed", "value": "{{#start.data_grant#}}"},
+                "image_text": {"type": "mixed", "value": "{{#photo_context.output#}}"},
+            },
+            "工具仅接受本轮授权与图片线索",
+        )
+        require(set(n.get("tool_configurations", {})) == {"knowledge_base_ids"}, "工具配置仅允许知识库选择")
+        require(
+            not n.get("retry_config", {}).get("retry_enabled") and not n.get("error_strategy"),
+            "检索不允许自动重试或忽略失败",
+        )
+        try:
+            selected = selected_libraries(n)
+            if owned_libraries is None:
+                raise ValueError("无法核验租户知识库目录，请稍后再试")
+            require_owned(selected, publication_libraries(owned_libraries))
+        except ValueError as exc:
+            raise ConsumerFlowError(str(exc)) from exc
+        return {
+            **ceiling,
+            **flags,
+            "knowledge_base_ids": list(selected),
+            "callback_version": 5 if _fact_slots(workflow) else 4 if documents else 3,
+        }
+    return {**ceiling, **flags, "callback_version": 2}

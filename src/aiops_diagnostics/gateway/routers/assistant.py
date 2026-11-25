@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from aiops_diagnostics import __version__
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.private_files import PrivatePathError
-from aiops_diagnostics.consumer.consumer_order_chat import is_order_status_question
+from aiops_diagnostics.consumer.presentation import is_order_status_question
 from aiops_diagnostics.conversation.clarification import (
     CLARIFY_ORDER_REQUIRED,
     CLARIFY_WRONG_ENTRY,

@@ -5,7 +5,7 @@ from contextlib import closing
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 from aiops_diagnostics.dify.dify_run_store import DifyRunStore
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.gateway.gateway_store import GatewayStore

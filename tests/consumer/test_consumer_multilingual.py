@@ -30,7 +30,7 @@ def test_fixed_copy_preserves_placeholders_and_covers_all_other_languages():
 
     from aiops_diagnostics.consumer.consumer_intent import message
     from aiops_diagnostics.consumer.consumer_knowledge import MESSAGES, text_for
-    from aiops_diagnostics.consumer.consumer_language import COPY
+    from aiops_diagnostics.consumer.presentation import COPY
 
     assert set(COPY) == set(SUPPORTED_LANGUAGES) - {"zh", "en"}
     expected = {
@@ -70,9 +70,8 @@ def test_fixed_copy_preserves_placeholders_and_covers_all_other_languages():
 
 @pytest.mark.parametrize("language", SUPPORTED_LANGUAGES)
 def test_fact_rendering_keeps_zero_amounts_unknown_status_and_identifiers(language):
-    from aiops_diagnostics.consumer.consumer_billing import billing_answer
-    from aiops_diagnostics.consumer.consumer_language import COPY
-    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.billing import billing_answer
+    from aiops_diagnostics.consumer.presentation import COPY, status_answer
 
     snapshot = {
         "order_no": "2096164064667852801",
@@ -90,7 +89,7 @@ def test_fact_rendering_keeps_zero_amounts_unknown_status_and_identifiers(langua
         # 订单号原样保留；来源**换成人话**（ADR-0181）——所以这里断言的是
         # 「读者还能认出这段数据来自哪条记录」，而不是内部标识字面值。
         # 时间改成人读格式（2026-10-28 00:00:00 UTC），比较的是可核对的时刻而不是原始 ISO 串。
-        from aiops_diagnostics.consumer.consumer_plain import source_label
+        from aiops_diagnostics.consumer.presentation import source_label
 
         # 走 JSON 模板的语种，标签在**该语种的语言包**里；zh/zh-Hant/en 走代码词表。
         expected_label = (

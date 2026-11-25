@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_reply import MAX_REPLY_CHARS, validate_reply
+from aiops_diagnostics.consumer.consumer_facts import MAX_REPLY_CHARS, validate_reply
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
 SNAPSHOT = {
@@ -188,7 +188,7 @@ def test_reply_without_live_data_is_refused():
     否则一段无取数依据的话会被当成知识库回答交付。澄清／无结果／转人工是例外：那三类
     本来就没有证据可引，判据换成「一个数字都不许出现」（`test_notice_is_written_by_the_prompt`）。
     """
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     with pytest.raises(ChatRunUnavailable) as excinfo:
         final_answer(
@@ -202,7 +202,7 @@ def test_reply_without_live_data_is_refused():
 
 def test_legacy_two_field_answer_still_works():
     """老应用只回 `{kind, faq_id}` 时行为不变 —— 这次改动不能要求所有人重发应用。"""
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     answer = final_answer(
         json.dumps({"kind": "realtime", "faq_id": ""}),
@@ -256,7 +256,7 @@ def test_observation_time_cannot_authorize_an_invented_amount(observed):
 
 
 def test_exact_observation_timestamp_can_be_quoted_without_authorizing_its_digits():
-    from aiops_diagnostics.consumer.consumer_time import readable_time
+    from aiops_diagnostics.consumer.presentation import readable_time
 
     text = GOOD + " 查询时间 " + readable_time(SNAPSHOT["observed_at"])
     assert validate_reply(text, SNAPSHOT, language="zh") == text

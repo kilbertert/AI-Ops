@@ -1,31 +1,24 @@
-"""对客知识的分发授权：**显式登记**，不按名字、不按"属于这个租户"推导。
+"""对客知识库授权、节点选库、目录凭据与租户业务连接登记。
 
-## 为什么需要这一层
-
-规划要求的判据是四条同时成立：库属于目标租户、**允许对客**、在该应用的发布选择内、当前仍
-可用。前三条里的"属于租户"由 kb-service 的租户目录回答，第四条由检索时的可用性回答；
-唯独"允许对客"没有任何上游字段承载 —— RAGFlow 的 dataset 没有"可对外"这个属性，而
-**名字**不是判据：一个叫"对客知识库"的库完全可能是内部资料。
-
-于是把它做成**服务端登记**：一条 `(租户, 环境, 库)` 的授权行。没有这一行，这个库就是
-内部库，发布契约和实际检索都会拒绝它 —— 隐藏下拉项不算隔离。
-
-## 三个刻意的决定
-
-1. **只能显式授予。** 开通时如果客户没有指定库，我们**新建**一个库并授予它；不会按名字
-   复用同名库（复用可能挑中一个内部资料库）。
-2. **发布与检索都查。** 只在发布时查，撤回授权之后已经在跑的版本仍然能检索 —— 那不是隔离。
-3. **撤销即时生效。** 检索路径每次重新读授权，所以撤销之后下一次提问就会被拒。
+合并原 ``consumer_knowledge_grants`` 与 ``consumer_knowledge_selection``：
+知识库是否允许对客分发（显式授权台账）与发布/运行时选库校验始终配套生效，收拢在单一模块内。
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
 
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.gateway import gateway_db, gateway_schema
+
+PROVIDER = "trendpower/consumer_knowledge/consumer_knowledge"
+TOOL = "consumer_knowledge"
 
 AUDIENCE_CUSTOMER = "customer"
 AUDIENCE_INTERNAL = "internal"
@@ -36,6 +29,8 @@ class KnowledgeGrantError(ValueError):
 
 
 class KnowledgeGrants:
+    """对客知识的分发授权台账：显式登记 `(tenant_id, environment, knowledge_base_id)`。"""
+
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
         ensure_private_directory(self.path.parent)
@@ -44,7 +39,6 @@ class KnowledgeGrants:
 
     @contextmanager
     def _connection(self, *, write: bool = False):
-        # 连接与锁纪律唯一渲染在 gateway_db（#573）。
         with gateway_db.connection(self.path, write=write) as connection:
             yield connection
 
@@ -76,7 +70,6 @@ class KnowledgeGrants:
         *,
         backfill: bool = False,
     ) -> None:
-        # 纳管只补从未登记的库；显式授权才允许覆盖撤销记录。
         conflict = (
             "DO NOTHING"
             if backfill
@@ -106,11 +99,7 @@ class KnowledgeGrants:
 
 
 def audience(rows, granted: set[str]):
-    """把 kb-service 的目录行标上可分发属性。
-
-    **没有授权行就是内部库**（fail closed）。上游行里若有 `audience` 字段也不采信：
-    那个字段不是我们维护的，采信它等于把判据交给一个没有被授权的地方。
-    """
+    """把 kb-service 的目录行标上可分发属性；无授权行一律按内部库处理（fail closed）。"""
     return [
         {
             **row,
@@ -121,17 +110,7 @@ def audience(rows, granted: set[str]):
 
 
 class ConsumerEndpoints:
-    """每租户的 CPMS 连接：**从已批准的环境连接登记**，不做全租户兜底。
-
-    为什么需要它：`charging_endpoint` 只读一个环境变量（`tenant:url,...`）。新客户开通时
-    没人会去改那个环境变量 —— 于是新客户"开通成功、发布成功"，而第一次查订单就
-    `TENANT_ENDPOINT_UNRESOLVED`。反过来"没有登记就回退到某个全局 URL"则是另一种错：
-    那等于把某个客户的业务连接发给所有客户。
-
-    所以登记行是明确的：`(租户, 环境) -> base_url`，来源是**已批准的环境连接**
-    （`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 的裸 URL 形式，或它的按租户映射里属于
-    这个租户的那一条）。两者都拿不到就拒绝开通这一端，并给出可操作的码。
-    """
+    """每租户的 CPMS 连接登记（从已批准的环境连接写入，不做全租户兜底）。"""
 
     def __init__(self, path):
         self.path = Path(path).expanduser().absolute()
@@ -141,7 +120,6 @@ class ConsumerEndpoints:
 
     @contextmanager
     def _connection(self, *, write: bool = False):
-        # 连接与锁纪律唯一渲染在 gateway_db（#573）。
         with gateway_db.connection(self.path, write=write) as connection:
             yield connection
 
@@ -166,11 +144,7 @@ class ConsumerEndpoints:
 
 
 def approved_endpoint(value: str, tenant_id: str) -> str:
-    """从已批准的环境连接里取出**这个租户**的地址；取不到返回空串。
-
-    裸 URL 表示"本环境所有租户走同一个 CPMS"（这是一个**已批准的连接**，不是兜底猜测）；
-    带 `tenant:url` 映射时只认这个租户那一条，不拿别人的地址顶替。
-    """
+    """从已批准的环境连接里取出这个租户的地址；取不到返回空串。"""
     from aiops_diagnostics.gateway.gateway_config import parse_charging_endpoints
 
     legacy, endpoints = parse_charging_endpoints(value or "")
@@ -180,16 +154,7 @@ def approved_endpoint(value: str, tenant_id: str) -> str:
 
 
 def approved_business_endpoint(settings, tenant_id: str) -> str:
-    """开通只使用已启用环境目录；未迁移部署保持旧地址/清单兼容。
-
-    未启用环境目录时，两条旧来源的语义不同，所以顺序不能反：
-    - `AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 是运维**按租户钉死**的地址（权威覆盖）；
-    - `AIOPS_GATEWAY_BUSINESS_ENVIRONMENTS_FILE` 是平台**已批准的环境清单**，给还没有被
-      钉死的新客户用 —— 这正是"一键开通"不再需要改服务器文件的那一步。
-
-    清单里有多项却没声明默认 ⇒ 无法唯一确定，调用方据此给出
-    `SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS` 而不是替客户挑一个。
-    """
+    """开通只使用已启用环境目录；未迁移部署保持旧地址/清单兼容。"""
     from aiops_diagnostics.consumer import business_environments
 
     if getattr(settings, "environment_registry_file", ""):
@@ -212,3 +177,66 @@ def consumer_endpoint(settings, tenant_id: str) -> str:
     database = getattr(settings, "database_file", "")
     managed = ConsumerEndpoints(database).get(tenant_id, settings.execution_environment) if database else ""
     return managed or charging_endpoint(settings.charging_status_base_url, tenant_id)
+
+
+# ---------------------------------------------------------------------------
+# 节点选库与只读目录凭据（原 consumer_knowledge_selection）
+# ---------------------------------------------------------------------------
+
+
+def catalogue_token(secret, environment, workspace):
+    if not secret or not environment or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", workspace):
+        raise ValueError("catalogue credential configuration unavailable")
+    encoded = base64.urlsafe_b64encode(workspace.encode()).decode().rstrip("=")
+    digest = hmac.new(
+        secret.encode(), f"consumer-kb-catalogue:1:{environment}:{workspace}".encode(), hashlib.sha256
+    ).hexdigest()
+    return f"ckc_{encoded}.{digest}"
+
+
+def catalogue_workspace(token, secret, environment):
+    try:
+        encoded, _ = token.removeprefix("ckc_").split(".")
+        workspace = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode()
+        expected = catalogue_token(secret, environment, workspace)
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError("catalogue credential refused") from exc
+    if not hmac.compare_digest(expected.encode(), token.encode()):
+        raise ValueError("catalogue credential refused")
+    return workspace
+
+
+def selected_libraries(node):
+    config = node.get("tool_configurations", {}).get("knowledge_base_ids", {})
+    if not isinstance(config, dict):
+        raise ValueError("知识库选择必须是节点配置常量")
+    values = config.get("value")
+    if (
+        config.get("type") != "constant"
+        or not isinstance(values, list)
+        or not 1 <= len(values) <= 20
+        or any(not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", v) for v in values)
+        or len(set(values)) != len(values)
+    ):
+        raise ValueError("请选择一个或多个知识库；库列表必须是节点配置常量")
+    return tuple(values)
+
+
+def publication_libraries(source):
+    """目录故障不是可展示的合同正文，只公开固定原因。"""
+    from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
+
+    try:
+        return source() if callable(source) else source
+    except (ValueError, TypeError, KnowledgeSearchUnavailable) as exc:
+        raise ValueError("知识库目录暂不可用，请稍后重试") from exc
+
+
+def require_owned(selected, rows):
+    """选中的库必须属于本租户且允许对客（fail closed）。"""
+    owned = {row["knowledge_base_id"] for row in rows}
+    if not set(selected) <= owned:
+        raise ValueError("所选知识库已删除或不属于当前租户，请重新选择")
+    customer = {row["knowledge_base_id"] for row in rows if row.get("audience") == AUDIENCE_CUSTOMER}
+    if not set(selected) <= customer:
+        raise ValueError("所选知识库未授权给客户端使用（内部资料不能交给消费者），请重新选择")

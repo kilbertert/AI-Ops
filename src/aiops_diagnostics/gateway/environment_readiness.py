@@ -46,7 +46,7 @@ def check(context, spec):
     urls = [row["gateway_url"], row["company_gateway_url"], row["cpms_base_url"], settings.dify_chat_base_url]
     if any(urlsplit(url).scheme != "https" for url in urls):
         raise ValueError("formal endpoints require TLS")
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import catalogue_token
+    from aiops_diagnostics.consumer.knowledge_access import catalogue_token
 
     root = Path(f"/etc/aiops-access-{settings.environment}/runtime")
     import json

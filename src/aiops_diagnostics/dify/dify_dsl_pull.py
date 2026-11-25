@@ -1004,7 +1004,7 @@ def sync_workflow_from_dify(
     )
     candidate = workflow_content(dsl_text)
     if consumer_settings is not None:
-        from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
+        from aiops_diagnostics.consumer.agent_contract import publication_settings
 
         # 先验证当前草稿；选库错误不能留下一个阻止后续改正的半成品 Agent。
         consumer_settings = publication_settings(

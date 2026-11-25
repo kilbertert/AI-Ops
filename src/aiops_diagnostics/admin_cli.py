@@ -590,7 +590,8 @@ def consumer_copy(
     文案包只能覆盖**内置文案里已有的键**，且占位符必须与内置一致 —— 少了 `{order_no}`
     就等于把订单号从答复里删掉，那种"改措辞"是破坏可核对性（ADR-0183）。
     """
-    from aiops_diagnostics.consumer.consumer_copy import CopyBundleInvalid, validate
+    from aiops_diagnostics.consumer.presentation import CopyBundleInvalid
+    from aiops_diagnostics.consumer.presentation import validate_copy_bundle as validate
     from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
     gateway_schema.startup(db)

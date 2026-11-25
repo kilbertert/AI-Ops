@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from aiops_diagnostics.common.config import Settings
-from aiops_diagnostics.consumer.consumer_mall_billing import mall_payment_evidence
+from aiops_diagnostics.consumer.billing import mall_payment_evidence
 from aiops_diagnostics.data.sources import MySQLSource
 from aiops_diagnostics.identity.query_scope import QueryScope
 
@@ -438,8 +438,8 @@ def test_mall_records_flags_truncated_tables(monkeypatch):
 def test_gateway_attaches_mall_payment_to_billing_snapshot(tmp_path, monkeypatch):
     from dify.test_consumer_dependencies import settings as gateway_settings
 
-    from aiops_diagnostics.consumer import consumer_billing
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import ConsumerEndpoints
+    from aiops_diagnostics.consumer import billing as consumer_billing
+    from aiops_diagnostics.consumer.knowledge_access import ConsumerEndpoints
     from aiops_diagnostics.gateway import gateway_api as api
 
     settings = gateway_settings(tmp_path, server_config_file=tmp_path / "production.env")
@@ -542,8 +542,8 @@ def test_authorized_preview_and_work_order_keep_mall_claimant(monkeypatch, query
 def test_legacy_callback_does_not_read_mall(tmp_path, monkeypatch):
     from dify.test_consumer_dependencies import settings as gateway_settings
 
-    from aiops_diagnostics.consumer import consumer_billing
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import ConsumerEndpoints
+    from aiops_diagnostics.consumer import billing as consumer_billing
+    from aiops_diagnostics.consumer.knowledge_access import ConsumerEndpoints
     from aiops_diagnostics.gateway import gateway_api as api
 
     settings = gateway_settings(tmp_path)

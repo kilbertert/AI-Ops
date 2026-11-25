@@ -6,7 +6,7 @@ import hmac
 import json
 import math
 
-from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces, _identifier
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.gateway.deployment_environment import canonical_environment

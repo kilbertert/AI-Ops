@@ -244,7 +244,9 @@ class CandidateTrials:
                 "live_order_status": True,
                 "live_billing_record": True,
             }
-            from aiops_diagnostics.consumer.consumer_agent_flow import publication_settings
+            from aiops_diagnostics.consumer.agent_contract import (
+                agent_publication_settings as publication_settings,
+            )
 
             content = publication_settings(
                 workflow_content(dsl),

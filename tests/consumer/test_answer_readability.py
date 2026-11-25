@@ -15,9 +15,8 @@ from __future__ import annotations
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_billing import billing_answer
-from aiops_diagnostics.consumer.consumer_order_chat import status_answer
-from aiops_diagnostics.consumer.consumer_time import readable_time
+from aiops_diagnostics.consumer.billing import billing_answer
+from aiops_diagnostics.consumer.presentation import readable_time, status_answer
 
 ISO = "2026-10-29T12:34:45.123456+00:00"
 

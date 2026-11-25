@@ -7,14 +7,14 @@
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
-from aiops_diagnostics.consumer.consumer_knowledge_grants import (
+from aiops_diagnostics.consumer.agent_contract import publication_settings
+from aiops_diagnostics.consumer.knowledge_access import (
     AUDIENCE_CUSTOMER,
     AUDIENCE_INTERNAL,
     KnowledgeGrants,
     audience,
+    require_owned,
 )
-from aiops_diagnostics.consumer.consumer_knowledge_selection import require_owned
 from consumer.test_consumer_flow_contract import BASE, CEILING
 from consumer.test_consumer_knowledge_picker import picker_graph
 
@@ -69,7 +69,6 @@ def test_revoked_grant_stops_an_already_published_version(tmp_path, monkeypatch)
 
     from execution.test_app_runtime_dify_entry import dify_chat
 
-    from aiops_diagnostics.consumer import consumer_knowledge_selection as selection
     from aiops_diagnostics.execution.chat_execution import ChatBinding
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
@@ -100,7 +99,9 @@ def test_revoked_grant_stops_an_already_published_version(tmp_path, monkeypatch)
             callback_version=3,
         )
         caller = SimpleNamespace(effective_tenant_id="TENANT-A")
-        selection.require_available(runtime, caller, binding)
+        from aiops_diagnostics.consumer import consumer_knowledge as _ck
+
+        _ck.require_available(runtime, caller, binding)
         grants.revoke("TENANT-A", settings.execution_environment, "kb-own")
         with pytest.raises(Exception, match="知识库不可用|未授权"):
-            selection.require_available(runtime, caller, binding)
+            _ck.require_available(runtime, caller, binding)

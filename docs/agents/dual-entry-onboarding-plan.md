@@ -208,7 +208,7 @@ A/B属于首个可用交付，不先把“只显示客户端名字”当作完�
 - [应用key申请](../../src/aiops_diagnostics/dify/dify_console_admin.py)、
   [文件权限/原子写入](../../src/aiops_diagnostics/common/private_files.py)、
   [业务连接解析](../../src/aiops_diagnostics/gateway/gateway_config.py)、
-  [知识归属检查](../../src/aiops_diagnostics/consumer/consumer_knowledge_selection.py)。
+  [知识归属检查](../../src/aiops_diagnostics/consumer/knowledge_access.py)。
 - [H5固定入口代理](../../ops/nginx/ulink-h5-assistant-proxy.inc)、[客户端现役接线](consumer-wf01/app-handoff.md)、
   [首次H5发布手册](consumer-wf01/live-release.md)。这些只证明已有渠道形态，不证明所有客户渠道已就绪。
 - [Dify官方导入边界](https://docs.dify.ai/en/cloud/use-dify/workspace/export-import-apps)：模型/工具凭据、

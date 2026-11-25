@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 from aiops_diagnostics.consumer import consumer_knowledge
 from aiops_diagnostics.consumer.consumer_binding import deliverable_binding, identity, require_pinned
-from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
+from aiops_diagnostics.consumer.consumer_knowledge import require_available
 from aiops_diagnostics.dify.dify_run_store import DifyRunError, still_valid
 from aiops_diagnostics.execution.agent_runs import scope_from_json
 from aiops_diagnostics.execution.chat_data_grant import DataGrantStore, usable

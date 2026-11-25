@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "content"))
 
-from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, catalogue_token
+from aiops_diagnostics.consumer.knowledge_access import PROVIDER, catalogue_token
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
 
@@ -108,7 +108,7 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
         check("node selection saved", code == 200)
 
     pub_headers = {"Authorization": "Bearer " + stack.PUBLISH_KEY}
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 
     grants = KnowledgeGrants(database)
     for library in ("kb-own", "kb-b"):

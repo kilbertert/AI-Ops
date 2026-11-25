@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError, publication_settings
+from aiops_diagnostics.consumer.agent_contract import ConsumerFlowError, publication_settings
 from consumer.test_consumer_flow_contract import BASE, CEILING
 from consumer.test_consumer_knowledge_picker import picker_graph
 
@@ -50,7 +50,7 @@ def test_agent_migration_preserves_business_prompt_model_and_permission_ceiling(
 @pytest.mark.parametrize("suffix", ["", "\n运营要求：核心结论应安抚并说明有无问题；不用Markdown，末尾明细。"])
 @pytest.mark.parametrize("version", [0, 1, 2, 3, 4, 5, 6])
 def test_order_composition_migration_is_exact_idempotent_and_preserves_business(suffix, version):
-    from aiops_diagnostics.consumer import consumer_agent_flow as flow
+    from aiops_diagnostics.consumer import agent_contract as flow
 
     source = {"workflow": candidate(), "dependencies": [{"unchanged": True}]}
     instruction = source["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]
@@ -132,7 +132,7 @@ def test_order_composition_migration_is_exact_idempotent_and_preserves_business(
 
 
 def test_migration_removes_known_arithmetic_permission_without_replacing_business_text():
-    from aiops_diagnostics.consumer import consumer_agent_flow as flow
+    from aiops_diagnostics.consumer import agent_contract as flow
 
     source = {"workflow": candidate()}
     instruction = source["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]
@@ -225,7 +225,7 @@ def test_legacy_protocol_is_not_silently_retained_by_agent_migration():
 
 
 def test_new_tenant_installs_source_agent_and_tool_versions():
-    from aiops_diagnostics.consumer.consumer_agent_flow import AGENT_PLUGIN
+    from aiops_diagnostics.consumer.agent_contract import AGENT_PLUGIN
     from aiops_diagnostics.dify.self_service_prepare import consumer_models, consumer_plugins
 
     flow = candidate()
@@ -271,7 +271,7 @@ def test_catalogue_failure_details_do_not_become_public_contract_errors(monkeypa
 
 
 def test_migration_replaces_known_reassurance_demand_without_losing_business_style():
-    from aiops_diagnostics.consumer import consumer_agent_flow as flow
+    from aiops_diagnostics.consumer import agent_contract as flow
 
     source = {"workflow": candidate()}
     instruction = source["workflow"]["graph"]["nodes"][1]["data"]["agent_parameters"]["instruction"]

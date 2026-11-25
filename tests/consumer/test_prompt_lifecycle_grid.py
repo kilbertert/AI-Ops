@@ -114,7 +114,7 @@ def test_grid_client_billing(style):
 
 @pytest.mark.parametrize("style", STYLES)
 def test_grid_client_clarify(style):
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     answer = final_answer(
         json.dumps({"kind": "clarify", "faq_id": "", "reply": CLARIFY[style]}),
@@ -127,7 +127,7 @@ def test_grid_client_clarify(style):
 
 @pytest.mark.parametrize("style", STYLES)
 def test_grid_client_not_found(style):
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     answer = final_answer(
         json.dumps({"kind": "not_found", "faq_id": "", "reply": NOT_FOUND[style]}),

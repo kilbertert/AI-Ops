@@ -374,9 +374,9 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
     """中央只冻结共享应用；私有包不出管理面，不触目标准入。"""
     import yaml
 
-    from aiops_diagnostics.consumer.consumer_agent_flow import publication_settings
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+    from aiops_diagnostics.consumer.agent_contract import agent_publication_settings as publication_settings
     from aiops_diagnostics.consumer.consumer_publication import flags_of, frozen_settings
+    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
     from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
     from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource, workflow_content
     from aiops_diagnostics.dify.self_service_store import SelfServiceStore
