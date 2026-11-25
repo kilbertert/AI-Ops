@@ -1255,3 +1255,53 @@ def test_host_verify_worker_malformed_output_is_unconfirmed(tmp_path, monkeypatc
         monkeypatch.setattr(worker.subprocess, "check_output", lambda *a, _o=output, **kw: _o)
         with pytest.raises(ValueError):
             worker.verify(tmp_path, claim)
+
+
+def test_inspect_deduplicates_current_checks_within_lock(prepared, monkeypatch):
+    path, ref, _, _ = prepared
+    job1, plan = create(prepared)
+    tasks.worker(path, ref, dict(id=job1["id"], owner="a" * 32))
+    tasks.worker(path, ref, dict(id=job1["id"], owner="a" * 32, result=receipt("a")))
+    job2 = tasks.submit_verify(path, ADMIN, plan["id"], "managed-host-identity", ref)
+    tasks.worker(path, ref, dict(id=job2["id"], owner="b" * 32))
+    tasks.worker(path, ref, dict(id=job2["id"], owner="b" * 32, result=verdict("a")))
+
+    calls = 0
+    real_current = tasks._current
+
+    def counting_current(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_current(*args, **kwargs)
+
+    monkeypatch.setattr(tasks, "_current", counting_current)
+    listed = tasks.inspect(path, ADMIN, environment="a", reference=ref)
+    assert len(listed["tasks"]) == 2
+    assert all(item["state"] == "observed" for item in listed["tasks"])
+    assert calls == 1
+
+    # 畸形修订类型（True/1.0）不得与合法 int 修订（1）共享缓存命中。
+    calls = 0
+    with gateway_db.connection(drafts._database(path), write=True) as conn:
+        malformed_req = json.loads(
+            conn.execute("SELECT request FROM environment_tasks WHERE id=?", (job2["id"],)).fetchone()[0]
+        )
+        malformed_req["plan"]["draft_revision"] = True
+        conn.execute(
+            "UPDATE environment_tasks SET request=? WHERE id=?",
+            (json.dumps(malformed_req), job2["id"]),
+        )
+    mixed = {
+        item["id"]: item["state"]
+        for item in tasks.inspect(path, ADMIN, environment="a", reference=ref)["tasks"]
+    }
+    assert mixed[job1["id"]] == "observed"
+    assert mixed[job2["id"]] == "expired"
+    assert calls == 2
+
+    # 漂移后同批任务全部收敛为 expired，且仍只校验一次合法计划输入。
+    calls = 0
+    write_private_text(ref, "drifted")
+    expired = tasks.inspect(path, ADMIN, environment="a", reference=ref)
+    assert all(item["state"] == "expired" for item in expired["tasks"])
+    assert calls == 2

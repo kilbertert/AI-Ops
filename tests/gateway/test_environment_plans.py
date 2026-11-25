@@ -672,3 +672,67 @@ def test_reference_update_restores_old_file_when_directory_sync_fails(prepared, 
         )
     assert failed and reference.read_bytes() == original
     assert not reference.with_name(f"{reference.name}.{hashlib.sha256(original).hexdigest()}.bak").exists()
+
+
+def test_verified_manifest_cache_skips_redundant_tar_scan_and_rejects_tamper(tmp_path, monkeypatch):
+    import tarfile
+
+    from aiops_diagnostics.onboarding import artifacts
+
+    revision = "e" * 40
+    app = _reference_archive(
+        tmp_path,
+        "app-cached.tar.gz",
+        {
+            "manifest.json": json.dumps(
+                dict(
+                    schema=1,
+                    revision=revision,
+                    python="3.12",
+                    platform="linux-x86_64",
+                    version="1.40.4+" + revision[:12],
+                )
+            ).encode(),
+            "wheelhouse/aiops_diagnostics-1.40.4-py3-none-any.whl": b"wheel payload",
+        },
+    )
+    installer = _reference_archive(
+        tmp_path,
+        "installer-cached.tar.gz",
+        {
+            "REVISION": revision.encode(),
+            "install.py": b"pass",
+            "runtime_check.py": b"pass",
+            "probe.py": b"pass",
+        },
+    )
+    app_path, inst_path = Path(app["path"]), Path(installer["path"])
+    with artifacts._CACHE_LOCK:
+        artifacts._MANIFEST_CACHE.clear()
+        artifacts._INSTALLER_CACHE.clear()
+    tar_opens = 0
+    real_open = tarfile.open
+
+    def counting_open(*args, **kwargs):
+        nonlocal tar_opens
+        tar_opens += 1
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(artifacts.tarfile, "open", counting_open)
+    first = artifacts.manifest(app_path, app["sha256"], "3.12")
+    first["revision"] = "mutated-by-caller"
+    second = artifacts.manifest(app_path, app["sha256"], "3.12")
+    assert second["revision"] == revision
+    assert tar_opens == 1
+
+    assert artifacts.installer_manifest(inst_path, installer["sha256"]) == revision
+    assert artifacts.installer_manifest(inst_path, installer["sha256"]) == revision
+    assert tar_opens == 2
+
+    # 盘面字节被篡改 1 字节后，即使摘要已在缓存中仍必须拒绝。
+    app_path.write_bytes(app_path.read_bytes() + b"\x00")
+    with pytest.raises(ValueError, match="digest mismatch"):
+        artifacts.manifest(app_path, app["sha256"], "3.12")
+    inst_path.write_bytes(inst_path.read_bytes() + b"\x00")
+    with pytest.raises(ValueError, match="digest mismatch"):
+        artifacts.installer_manifest(inst_path, installer["sha256"])

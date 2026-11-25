@@ -396,13 +396,44 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
                 return {"tasks": []}
             raise TaskRefused("ENVIRONMENT_TASK_UNAVAILABLE")
 
+        current_cache: dict[tuple, bool] = {}
+
         def current_public(row):
             result = _public(row)
             if result["state"] in {"observed", "blocked"} and result["action"] != "environment-publish":
-                try:
-                    _current(path, json.loads(row["request"]), reference, reconciling=True)
-                except (ValueError, OSError, RuntimeError):
-                    result["state"] = "expired"
+                request = json.loads(row["request"])
+                cache_key = None
+                plan = request.get("plan") if isinstance(request, dict) else None
+                raw_identity = request.get("identity") if isinstance(request, dict) else None
+                if (
+                    isinstance(plan, dict)
+                    and isinstance(raw_identity, (list, tuple))
+                    and all(isinstance(part, str) for part in raw_identity)
+                    and isinstance(plan.get("environment"), str)
+                    and type(plan.get("draft_revision")) is int
+                    and type(plan.get("registry_revision")) is int
+                    and isinstance(plan.get("digest"), str)
+                ):
+                    cache_key = (
+                        tuple(raw_identity),
+                        plan["environment"],
+                        plan["draft_revision"],
+                        plan["registry_revision"],
+                        plan["digest"],
+                    )
+                if cache_key is not None and cache_key in current_cache:
+                    if not current_cache[cache_key]:
+                        result["state"] = "expired"
+                else:
+                    try:
+                        _current(path, request, reference, reconciling=True)
+                    except (ValueError, OSError, RuntimeError):
+                        if cache_key is not None:
+                            current_cache[cache_key] = False
+                        result["state"] = "expired"
+                    else:
+                        if cache_key is not None:
+                            current_cache[cache_key] = True
             return result
 
         with gateway_db.connection(database, write=cancel, readonly=not cancel) as conn:
