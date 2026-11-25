@@ -68,7 +68,11 @@ def _upms_transport(state):
         if url.path == "/user/info":
             return _UpmsResponse({"code": 0, "msg": "ok", "data": state["user_info"]})
         if url.path == "/user/ds":
+            if state.get("ds_error"):
+                return _UpmsResponse({"code": 1, "msg": "系统错误！", "data": None, "ok": False})
             return _UpmsResponse({"code": 0, "msg": "ok", "data": state["data_scope"]})
+        if url.path == "/role/list":
+            return _UpmsResponse(state.get("role_list", []))
         if url.path == "/shopuser/getShops":
             # 后端权威授权（@ShopDataScope）同一个端点的合同形状：ID 数组。
             return _UpmsResponse({"code": 0, "msg": "ok", "data": state["shops"]})
@@ -306,3 +310,81 @@ def test_upms_rejection_never_falls_back_on_qa_path(operator, monkeypatch):
     response = request(f["client"])
     assert response.status_code == 401, response.text
     assert state["redis_store"].gets == []
+
+
+def test_tenant_level_operator_with_upms_ds_fallback_succeeds_without_site_scope(operator, monkeypatch):
+    """95 正式入口实证回归：租户顶层主账号（type=1）在 /user/ds 报错降级为 organ+空店铺时，
+    即便未注入 _site_scope，仍按单一顶层口径归一为 SCOPE_TYPE_ALL 并完整走通 start+read。"""
+    f = operator
+    state = _entry_state(f, monkeypatch, data_scope=None, shops=(), site_rows=[], normalize=False)
+    state["ds_error"] = True
+    state["user_info"] = {
+        "sysUser": {
+            "id": "OPERATOR-TOP",
+            "userId": "C-OPERATOR-TOP",
+            "username": "ops.top",
+            "tenantId": "TENANT-A",
+            "organId": "TENANT-A",
+            "type": "1",
+            "roleIds": ["ROLE-ID-1"],
+        },
+        "roles": [{"roleCode": "ROLE_TENANT_ADMIN"}],
+        "permissions": ["order:diag:view"],
+    }
+    state["role_list"] = [{"id": "ROLE-ID-1", "dsType": "2", "dsScope": ""}]
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
+    response = request(f["client"])
+    assert response.status_code == 202, response.text
+    final = terminal(f, response.json()["qa_id"])
+    assert final.status_code == 200 and final.json()["status"] == "completed", final.text
+    assert state["redis_store"].gets == []
+
+
+def test_regular_operator_with_upms_ds_fallback_empty_shops_still_refused(operator, monkeypatch):
+    """负向对照：普通/代理商账号（type=5）在同一 /user/ds 降级+空店铺形状下绝不放宽，仍 403 拒。"""
+    f = operator
+    state = _entry_state(f, monkeypatch, data_scope=None, shops=(), site_rows=[], normalize=False)
+    state["ds_error"] = True
+    state["user_info"] = {
+        "sysUser": {
+            "id": "OPERATOR-REG",
+            "userId": "C-OPERATOR-REG",
+            "username": "ops.reg",
+            "tenantId": "TENANT-A",
+            "organId": "TENANT-A",
+            "type": "5",
+            "roleIds": ["ROLE-ID-1"],
+        },
+        "roles": [{"roleCode": "ROLE_OPERATOR"}],
+        "permissions": ["order:diag:view"],
+    }
+    state["role_list"] = [{"id": "ROLE-ID-1", "dsType": "2", "dsScope": ""}]
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
+    response = request(f["client"])
+    assert response.status_code == 403, response.text
+    assert "OPERATOR_SITE_SCOPE_REQUIRED" in response.text
+
+
+def test_delegated_tenant_level_context_is_not_promoted_to_all():
+    """代查（delegated=True）即使主体 type=1 也不得被规范化提升为 SCOPE_TYPE_ALL。"""
+    from aiops_diagnostics.identity.scope_context import (
+        SCOPE_TYPE_ORGAN,
+        DataScope,
+        ScopeContext,
+        SubjectRecord,
+    )
+
+    resolver = EntryCallerResolver(SimpleNamespace(), SimpleNamespace(), site_scope=None)
+    subject = SubjectRecord(b_user_id="U1", tenant_id="T1", user_type="1")
+    ctx = ScopeContext.build(
+        caller=SubjectRecord(b_user_id="ADMIN", tenant_id="T1", user_type="-1"),
+        subject=subject,
+        delegated=True,
+        effective_tenant_id="T1",
+        data_scope=DataScope(type=SCOPE_TYPE_ORGAN, organ_ids=("T1",)),
+        roles=frozenset(),
+        permissions=frozenset(),
+    )
+    normalized = resolver._normalize_operator_scope(ctx)
+    assert normalized.data_scope.type == SCOPE_TYPE_ORGAN
+    assert normalized is ctx

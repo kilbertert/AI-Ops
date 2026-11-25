@@ -386,6 +386,9 @@ def test_the_introspection_path_returns_the_same_context_for_every_entry(
 #: - ``EntryCallerResolver.resolve``：又一条规则（ADR-0320）——登记表部署上入口
 #:   决定**谁来解析**（operator → 本环境 UPMS，其余 → 既有链），身份仍由所选链
 #:   全量验证，不读入口做范围；
+#: - ``EntryCallerResolver._normalize_operator_scope``：ADR-0320 登记表 UPMS 管家链上
+#:   租户顶层主账号（非代查）在 ``/user/ds`` 降级返回 ``organ`` + 空店铺时按同一顶层
+#:   口径归一为 ``SCOPE_TYPE_ALL``，避免与 41/试跑链路口径分叉；
 #: - ``build_trial_scope`` / ``operator_scope``：试用与管理面各自的「顶层账号不受
 #:   站点维度约束」判定，语义同样是「层级」而非「范围分派」。
 _CRITERION_LEDGER: dict[str, set[tuple[str, str]]] = {
@@ -398,6 +401,7 @@ _CRITERION_LEDGER: dict[str, set[tuple[str, str]]] = {
     "is_tenant_level_account": {
         ("identity/data_scope_rule.py", "entry_data_scope"),
         ("identity/company_token_auth.py", "resolve"),
+        ("identity/caller_auth.py", "_normalize_operator_scope"),
         ("dify/dify_trial.py", "build_trial_scope"),
         ("operator/cpms_evidence.py", "operator_scope"),
     },
