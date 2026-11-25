@@ -4,69 +4,48 @@ import contextlib
 import json
 import logging
 import secrets
+import sys
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import UTC
 from typing import Any
 
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.i18n import (
     DEFAULT_LANGUAGE,
 )
-from aiops_diagnostics.common.redaction import ERROR_TEXT_LIMIT, redact_text
-from aiops_diagnostics.common.scalar_rules import as_datetime, format_stored_time, now_utc, parse_stored_time
+from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.conversation.conversation_store import BUSY_LOCK_SECONDS
-from aiops_diagnostics.data.sources import SourceError, scoped_live_sources
-from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_from_json, scope_to_json
+from aiops_diagnostics.data.sources import (
+    scoped_live_sources,  # noqa: F401 - 由领域 runner 经 runtime_mod 读取，保留测试 monkeypatch 入口
+)
+from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_to_json
 from aiops_diagnostics.gateway import metrics_store as metrics_dims
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
-from aiops_diagnostics.health.health_curves import build_curves
-from aiops_diagnostics.health.health_metrics import enrich_report
-from aiops_diagnostics.health.health_report import (
-    HEALTH_RULE_VERSION,
-    HealthReportError,
-    build_minimal_health_report,
-)
+from aiops_diagnostics.health import health_job_runner
+from aiops_diagnostics.health.health_report import HEALTH_RULE_VERSION
 from aiops_diagnostics.identity.capability import CAPABILITY_ASSERTED
-from aiops_diagnostics.identity.order_visibility import tenant_matches
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import SCOPE_TYPE_ALL, DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.knowledge import media_service
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchClient,
-    KnowledgeSearchUnavailable,
-    MediaAccessDenied,
-    MediaGrant,
     MediaProxy,
     MediaResourceSigner,
     MediaResponse,
 )
+from aiops_diagnostics.operator import ops_analysis_runner
 from aiops_diagnostics.operator.ops_analysis import (
     OPERATIONS_CARD_FAILURE_RATE,
-    OPERATIONS_CARD_OFFLINE,
-    OPERATIONS_CARD_PAYMENT,
     OPERATIONS_CARDS,
-    REASON_NO_FAULTS,
-    REASON_NO_INCIDENTS,
-    REASON_NO_ORDERS,
-    REASON_SCOPE_EMPTY,
-    AnalysisAggregate,
-    FaultCodeAggregate,
-    OfflineAggregate,
-    PaymentAggregate,
-    build_failure_rate_contract,
-    build_fault_code_contract,
-    build_offline_contract,
-    build_payment_contract,
 )
 from aiops_diagnostics.operator.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
-from aiops_diagnostics.publication.agent_serviceability import live_version
 
 _LOGGER = logging.getLogger("aiops.gateway_runtime")
 
@@ -375,50 +354,46 @@ class GatewayRuntime:
         error_code: str | None = None,
         error_message: str = "",
     ) -> None:
-        """End one operations-analysis job, and never let that write escape.
-
-        The shape this exists for (#700, seen on 41): the terminal write sits
-        *after* the worker's ``except`` block, so an exception raised by the
-        write itself — a locked database, a disk error — escaped the worker with
-        no handler reached: no terminal row, no metric, no log line, and the job
-        sat on ``running`` until the 15-minute deadline expired. Enumerating
-        exception classes cannot cover a write that happens outside their
-        ``try``; the only shape that can is "try to end the job, and if even
-        that fails, end it anyway".
-
-        Both workers share this so the two cannot drift: the failure-rate path
-        and the card path had byte-identical terminal blocks before, which is
-        exactly how one of them would have kept the hole.
-        """
-        status = "failed" if error_code else "completed"
-        try:
-            stored = self.store.update_standard_diagnosis(
-                analysis_id,
-                status=status,
-                result=result,
-                error_code=error_code,
-                error_message=error_message or None,
-            )
-        except Exception:  # noqa: BLE001 - the whole point is that this cannot escape
-            stored = False
-        if not stored:
-            # Either the write failed or the row was already terminal. One more
-            # attempt, terminal regardless: a row nothing will ever terminate is
-            # worse than one that reports it could not record its outcome.
-            with contextlib.suppress(Exception):
-                self.store.update_standard_diagnosis(
-                    analysis_id,
-                    status="failed",
-                    error_code=error_code or "ANALYSIS_FAILED",
-                    error_message=error_message or "analysis job could not record its outcome",
-                )
-            return
-        self._record_metric(
-            tenant_id=tenant_id,
-            route_type=metrics_dims.ROUTE_OPERATIONS_ANALYSIS,
-            outcome="completed" if status == "completed" else "failed",
+        """委托 `ops_analysis_runner.end_analysis_job` 收敛运维分析作业终态。"""
+        ops_analysis_runner.end_analysis_job(
+            self,
+            analysis_id,
+            tenant_id,
+            result=result,
+            started_ms=started_ms,
             error_code=error_code,
-            duration_ms=int((time.monotonic() - started_ms) * 1000),
+            error_message=error_message,
+        )
+
+    def _narrative_for(self, card: str, aggregate: Any, window: dict[str, Any]) -> Any:
+        return ops_analysis_runner.narrative_for(
+            self,
+            card,
+            aggregate,
+            window,
+            runtime_mod=sys.modules[__name__],
+        )
+
+    def _compute_card(
+        self,
+        card: str,
+        sources: Any,
+        effective_sites: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+        language: str,
+        site_ids: tuple[str, ...] | None,
+    ) -> dict[str, Any]:
+        return ops_analysis_runner.compute_card(
+            self,
+            card,
+            sources,
+            effective_sites,
+            window_start,
+            window_end,
+            language,
+            site_ids,
+            runtime_mod=sys.modules[__name__],
         )
 
     def _execute_operations_card(
@@ -431,247 +406,16 @@ class GatewayRuntime:
         window_end: str,
         language: str,
     ) -> None:
-        """Compute the card's aggregate, let the model explain it, and store both."""
-        if not self.store.update_standard_diagnosis(analysis_id, status="running"):
-            return  # 行已终态：没有生成任何东西，直接退出
-        started_ms = time.monotonic()
-        try:
-            scope = resolve_query_scope(context)
-            effective_sites = _intersect_sites(site_ids, scope.site_ids)
-            if effective_sites == ():
-                result = self._empty_card_result(card, language, site_ids, window_start, window_end)
-            else:
-                from types import SimpleNamespace
-
-                from aiops_diagnostics.data.sources import scoped_mysql_source
-
-                if card == OPERATIONS_CARD_OFFLINE and self.diagnostic_settings.mysql.timezone:
-                    with scoped_mysql_source(self.diagnostic_settings, scope) as mysql:
-                        result = self._compute_card(
-                            card,
-                            SimpleNamespace(mysql=mysql),
-                            effective_sites,
-                            window_start,
-                            window_end,
-                            language,
-                            site_ids,
-                        )
-                else:
-                    with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
-                        result = self._compute_card(
-                            card,
-                            sources,
-                            effective_sites,
-                            window_start,
-                            window_end,
-                            language,
-                            site_ids,
-                        )
-        # `except Exception`, not an enumerated tuple, and that is the whole point
-        # (#700 → #721). Three separate passes added one class each time —
-        # `AgentRuntimeError` (a `RuntimeError`), then `TypeError` — and each fix
-        # left the next class still escaping, because the failure mode is not
-        # "which exceptions can be raised" but "a worker that raises anything
-        # unlisted writes no terminal row at all". The row then sits on `running`
-        # until the deadline expires, and the caller cannot tell it apart from
-        # work still in progress.
-        #
-        # The fourth instance is why the shape changed rather than the tuple
-        # growing again: `resolve_query_scope` (called inside this `try`) raises
-        # `ScopeError`, a `RuntimeError` that was in **neither** list — so an
-        # oversized data scope, a `self` range with no bound C-end user, or a
-        # missing Dis directory hung the job exactly like the three before it.
-        # Enumerating classes cannot converge; ending the job can.
-        #
-        # `except Exception` does not swallow `KeyboardInterrupt`/`SystemExit`
-        # (not `Exception` subclasses), and it matches what `_end_analysis_job`
-        # already does for the terminal write — "a row nothing will ever
-        # terminate is worse than one that reports it could not record its
-        # outcome" applies to the computation too. A genuine bug now shows up as
-        # a failed job carrying its message, instead of a silent hang.
-        except Exception as exc:  # noqa: BLE001 - see above: escaping here means no terminal row
-            ok = self.store.update_standard_diagnosis(
-                analysis_id,
-                status="failed",
-                error_code="ANALYSIS_FAILED",
-                error_message=_internal_error_message(exc, ""),
-            )
-            if ok:
-                self._record_metric(
-                    tenant_id=context.effective_tenant_id,
-                    route_type=metrics_dims.ROUTE_OPERATIONS_ANALYSIS,
-                    outcome="failed",
-                    error_code="ANALYSIS_FAILED",
-                    duration_ms=int((time.monotonic() - started_ms) * 1000),
-                )
-            return
-        self._end_analysis_job(
+        ops_analysis_runner.execute_operations_card(
+            self,
             analysis_id,
-            context.effective_tenant_id,
-            result=result,
-            started_ms=started_ms,
-        )
-
-    def _empty_card_result(
-        self,
-        card: str,
-        language: str,
-        site_ids: tuple[str, ...] | None,
-        window_start: str,
-        window_end: str,
-    ) -> dict[str, Any]:
-        """The honest empty for a card whose scope resolved to nothing.
-
-        Which reason code it carries depends on the card, because they空的是不同的表:
-        an operator reading `NO_INCIDENTS` looks at the offline monitor, while
-        `SCOPE_EMPTY` means their own account resolved to no sites.
-        """
-        kwargs = dict(
-            language=language,
-            site_ids=site_ids,
-            window_start=parse_stored_time(window_start),
-            window_end=parse_stored_time(window_end),
-            reason_code=REASON_SCOPE_EMPTY,
-        )
-        if card == OPERATIONS_CARD_OFFLINE:
-            return build_offline_contract(OfflineAggregate(0, 0, 0, 0), None, **kwargs)
-        if card == OPERATIONS_CARD_PAYMENT:
-            return build_payment_contract(PaymentAggregate(0, 0, 0, 0, 0), None, **kwargs)
-        return build_fault_code_contract(FaultCodeAggregate(0, 0, ()), None, **kwargs)
-
-    def _compute_card(
-        self,
-        card: str,
-        sources: Any,
-        effective_sites: tuple[str, ...] | None,
-        window_start: str,
-        window_end: str,
-        language: str,
-        site_ids: tuple[str, ...] | None,
-    ) -> dict[str, Any]:
-        """One card end to end: aggregate → optional model turn → assembled contract."""
-        db_start, db_end = _db_window_bound(window_start), _db_window_bound(window_end)
-        offline_details_available = False
-        if card == OPERATIONS_CARD_OFFLINE and self.diagnostic_settings.mysql.timezone:
-            from aiops_diagnostics.operator import device_offline
-
-            try:
-                device_offline.window(
-                    window_start, window_end, now_utc(), self.diagnostic_settings.mysql.timezone
-                )
-                offline_details_available = True
-            except ValueError:
-                pass  # 旧卡仍支持原窗口，新明细单独声明不可用。
-        devices_total = (
-            None
-            if card == OPERATIONS_CARD_OFFLINE and self.diagnostic_settings.mysql.timezone
-            else sources.mysql.count_devices(effective_sites)
-        )
-        window = dict(
-            language=language,
-            site_ids=site_ids,
-            window_start=parse_stored_time(window_start),
-            window_end=parse_stored_time(window_end),
-        )
-        if card == OPERATIONS_CARD_OFFLINE:
-            details, references = None, None
-            if self.diagnostic_settings.mysql.timezone:
-                from aiops_diagnostics.data import offline_source
-
-                raw, details = offline_source.read(
-                    sources.mysql,
-                    effective_sites,
-                    window_start,
-                    window_end,
-                    now_utc(),
-                    include_legacy=True,
-                    summary_only=not offline_details_available,
-                )
-                devices_total = raw.pop("devices_total")
-                references = details.pop("references")
-                offline_source.require_references(sources.mysql, references)
-            else:
-                raw = sources.mysql.aggregate_offline_incidents(effective_sites, db_start, db_end)
-            if raw is None:
-                return self._empty_card_result(card, language, site_ids, window_start, window_end)
-            aggregate = OfflineAggregate(
-                incidents=int(raw["incidents"]),
-                offline_devices=int(raw["offline_devices"]),
-                open_incidents=int(raw["open_incidents"]),
-                offline_minutes=int(raw["offline_minutes"]),
-                devices_total=devices_total,
-                details=details,
-            )
-            if aggregate.incidents == 0:
-                result = build_offline_contract(aggregate, None, reason_code=REASON_NO_INCIDENTS, **window)
-            else:
-                payload = self._narrative_for(card, aggregate, window)
-                result = build_offline_contract(aggregate, payload, **window)
-            if references is not None:
-                result["_offline_references"] = references
-            elif self.diagnostic_settings.mysql.timezone:
-                result["device_offline"] = {"status": "unavailable", "reason": "DETAIL_WINDOW_UNSUPPORTED"}
-            return result
-        if card == OPERATIONS_CARD_PAYMENT:
-            raw_payment = sources.mysql.aggregate_payment_split(effective_sites, db_start, db_end)
-            if raw_payment is None:
-                return self._empty_card_result(card, language, site_ids, window_start, window_end)
-            payment = PaymentAggregate(
-                total=int(raw_payment["total"]),
-                paid=int(raw_payment["paid"]),
-                paid_refunded=int(raw_payment["paid_refunded"]),
-                paid_net=int(raw_payment["paid_net"]),
-                unpaid=int(raw_payment["unpaid"]),
-            )
-            if payment.total == 0:
-                return build_payment_contract(payment, None, reason_code=REASON_NO_ORDERS, **window)
-            payload = self._narrative_for(card, payment, window)
-            return build_payment_contract(payment, payload, **window)
-        raw = sources.mysql.aggregate_fault_codes(effective_sites, db_start, db_end)
-        if raw is None:
-            return self._empty_card_result(card, language, site_ids, window_start, window_end)
-        aggregate = FaultCodeAggregate(
-            total_faults=int(raw["total_faults"]),
-            faulty_devices=int(raw["faulty_devices"]),
-            top_codes=tuple(raw.get("top_codes") or ()),
-            devices_total=devices_total,
-        )
-        if aggregate.total_faults == 0:
-            return build_fault_code_contract(aggregate, None, reason_code=REASON_NO_FAULTS, **window)
-        # #700: this call lost its `card` argument when ``_narrative_for`` gained
-        # one (#698) — so every fault-code card with data raised `TypeError` here,
-        # inside the worker, where no handler catches it: no terminal write, and
-        # the job sat on `running` until it expired. It survived two review passes
-        # and the local suite because the local double never reaches this line
-        # (the aggregate is non-empty only against real data).
-        payload = self._narrative_for(card, aggregate, window)
-        return build_fault_code_contract(aggregate, payload, **window)
-
-    def _narrative_for(self, card: str, aggregate: Any, window: dict[str, Any]) -> Any:
-        """The model's two prose fields for a card (never its numbers).
-
-        The prompt carries the **already-computed** contract — built with ``payload=None``,
-        which yields every number and no prose — so the model explains a settled result
-        rather than producing one. A failure here raises and fails the job: delivering
-        numbers with an empty explanation reads as "the aggregate had nothing to say",
-        which is a different and false claim.
-        """
-        from aiops_diagnostics.operator.ops_analysis_narrative import run_narrative_turn
-
-        if card == OPERATIONS_CARD_OFFLINE:
-            facts = build_offline_contract(aggregate, None, **window)
-        elif card == OPERATIONS_CARD_PAYMENT:
-            facts = build_payment_contract(aggregate, None, **window)
-        else:
-            facts = build_fault_code_contract(aggregate, None, **window)
-        settings = Settings.from_config(self.gateway_settings.server_config_file)
-        selected = self.diagnostic_settings.agent.select_provider(None)
-        return run_narrative_turn(
-            facts,
-            settings.agent,
-            provider=selected,
-            key_slot=selected.resolved_key_slot(),
-            language=str(window["language"]),
+            context,
+            card,
+            site_ids,
+            window_start,
+            window_end,
+            language,
+            runtime_mod=sys.modules[__name__],
         )
 
     def _execute_operations_analysis(
@@ -683,143 +427,15 @@ class GatewayRuntime:
         window_end: str,
         language: str,
     ) -> None:
-        """Compute the aggregate, let the model explain it, and store both.
-
-        The numbers are computed first and the narrative second, but the two are
-        independent: a narrative failure ends the job as failed rather than
-        delivering numbers with an empty explanation — that shape reads as "the
-        aggregate had nothing to say", which is a different and false claim.
-        """
-        if not self.store.update_standard_diagnosis(analysis_id, status="running"):
-            return  # 行已终态（过期/被另一条路径收敛）：没有生成任何东西，直接退出
-        started_ms = time.monotonic()
-        try:
-            scope = resolve_query_scope(context)
-            # The job's own site set is the SUBSET the caller asked for; the
-            # scope's is the superset they may see. Empty after the intersection
-            # means the request was wider than the scope in the narrowing
-            # direction, so nothing is computed — the same honest empty the
-            # empty-scope short-circuit gives.
-            effective_sites = _intersect_sites(site_ids, scope.site_ids)
-            if effective_sites == ():
-                result = build_failure_rate_contract(
-                    AnalysisAggregate(0, 0, 0, ()),
-                    None,
-                    language=language,
-                    site_ids=site_ids,
-                    window_start=parse_stored_time(window_start),
-                    window_end=parse_stored_time(window_end),
-                    reason_code=REASON_SCOPE_EMPTY,
-                )
-            else:
-                with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
-                    raw = sources.mysql.aggregate_order_statuses(
-                        effective_sites,
-                        _db_window_bound(window_start),
-                        _db_window_bound(window_end),
-                    )
-                if raw is None:
-                    result = build_failure_rate_contract(
-                        AnalysisAggregate(0, 0, 0, ()),
-                        None,
-                        language=language,
-                        site_ids=site_ids,
-                        window_start=parse_stored_time(window_start),
-                        window_end=parse_stored_time(window_end),
-                        reason_code=REASON_SCOPE_EMPTY,
-                    )
-                else:
-                    aggregate = AnalysisAggregate(
-                        total=int(raw["total"]),
-                        abnormal_ended=int(raw["abnormal_ended"]),
-                        normal_ended=int(raw["normal_ended"]),
-                        top_sites=tuple(raw.get("top_sites") or ()),
-                    )
-                    if aggregate.total == 0:
-                        result = build_failure_rate_contract(
-                            aggregate,
-                            None,
-                            language=language,
-                            site_ids=site_ids,
-                            window_start=parse_stored_time(window_start),
-                            window_end=parse_stored_time(window_end),
-                            reason_code=REASON_NO_ORDERS,
-                        )
-                    else:
-                        result = self._analyze_with_narrative(
-                            aggregate, context, site_ids, window_start, window_end, language
-                        )
-        # #700: 叙述轮在模型回散文/供应商失败时抛 ``AgentRuntimeError``（一个
-        # ``RuntimeError``），而这里只接了源与取值两类 —— 于是那次运行**没有写任何
-        # 终态**，作业停在 ``running`` 直到过期。
-        #
-        # 这已经是**第四次**同一个缺口，所以改的是**形状**而不是再往元组里塞一个名字：
-        # 第一版只接 ``SourceError``/``ValueError``，#700 补了 ``TypeError``，而
-        # ``resolve_query_scope`` 在上面那个 ``try`` 里抛的 ``ScopeError`` 同样是个
-        # ``RuntimeError``，**两个版本都没接** —— 范围超限 / ``self`` 范围但主体没绑
-        # C 端用户 / 代查缺 Dis 配置，都会让作业停在 ``running``。
-        # 在一个不断增长的名单上收敛不了；把作业终结掉可以。
-        # 与 ``_end_analysis_job`` 同一条理由：一个永远不会终结的行比一行「报了它记不下结果」
-        # 更糟。``except Exception`` 不会吞 ``KeyboardInterrupt``/``SystemExit``。
-        except Exception as exc:  # noqa: BLE001 - 见上：从这里逃出去就是没有终态行
-            ok = self.store.update_standard_diagnosis(
-                analysis_id,
-                status="failed",
-                error_code="ANALYSIS_FAILED",
-                error_message=_internal_error_message(exc, ""),
-            )
-            if ok:
-                self._record_metric(
-                    tenant_id=context.effective_tenant_id,
-                    route_type=metrics_dims.ROUTE_OPERATIONS_ANALYSIS,
-                    outcome="failed",
-                    error_code="ANALYSIS_FAILED",
-                    duration_ms=int((time.monotonic() - started_ms) * 1000),
-                )
-            return
-        self._end_analysis_job(
+        ops_analysis_runner.execute_operations_analysis(
+            self,
             analysis_id,
-            context.effective_tenant_id,
-            result=result,
-            started_ms=started_ms,
-        )
-
-    def _analyze_with_narrative(
-        self,
-        aggregate: Any,
-        context: ScopeContext,
-        site_ids: tuple[str, ...] | None,
-        window_start: str,
-        window_end: str,
-        language: str,
-    ) -> dict[str, Any]:
-        """The narrative turn, then assembly. Split out so the job-end writes above stay readable."""
-        from aiops_diagnostics.operator.ops_analysis_narrative import run_narrative_turn
-
-        selected_provider = self.diagnostic_settings.agent.select_provider(None)
-        settings = Settings.from_config(self.gateway_settings.server_config_file)
-        facts = build_failure_rate_contract(
-            aggregate,
-            None,
-            language=language,
-            site_ids=site_ids,
-            window_start=parse_stored_time(window_start),
-            window_end=parse_stored_time(window_end),
-        )
-        payload = run_narrative_turn(
-            facts,
-            settings.agent,
-            provider=selected_provider,
-            key_slot=selected_provider.resolved_key_slot(),
-            language=language,
-        )
-        return build_failure_rate_contract(
-            aggregate,
-            payload,
-            language=language,
-            site_ids=site_ids,
-            window_start=parse_stored_time(window_start),
-            window_end=parse_stored_time(window_end),
+            context,
+            site_ids,
+            window_start,
+            window_end,
+            language,
+            runtime_mod=sys.modules[__name__],
         )
 
     def get_health_report(self, context: ScopeContext, job_id: str) -> dict[str, Any] | None:
@@ -1942,32 +1558,8 @@ class GatewayRuntime:
             )
 
     def _finish_health_job(self, job_id: str, **fields: Any) -> bool:
-        """Write a health job's terminal state, and say whether it landed.
-
-        The one place this line decides what "the job is over" means, so the
-        four call sites cannot answer that question differently — which is what
-        they did when one of them was checked and three were not.
-
-        A refused write is not an error to raise: the row was already terminal,
-        which is a state other paths reach on purpose (the deadline sweep, the
-        restart hook). Unlike the diagnosis line there is **no metric on this
-        path at all**, so a refusal does not make two surfaces disagree — it
-        had no observable consequence, which is exactly why it went unnoticed.
-        What it left behind was a worker doing work whose result nobody would
-        read, with nothing anywhere to say so.
-
-        So the refusal is **logged**: one line naming the code the job would
-        have recorded. That is the observable this path can have today, and it
-        is what makes "the result is checked" true here rather than nominal.
-        """
-        if not self.store.update_health_job(job_id, **fields):
-            _LOGGER.warning(
-                "health job terminal write refused: job=%s status=%s",
-                job_id,
-                fields.get("status"),
-            )
-            return False
-        return True
+        """委托 `health_job_runner.finish_health_job` 统一收敛健康报告终态。"""
+        return health_job_runner.finish_health_job(self, job_id, **fields)
 
     def _execute_health_report(
         self,
@@ -1975,103 +1567,13 @@ class GatewayRuntime:
         context: ScopeContext,
         order_no: str,
     ) -> None:
-        if not self.store.update_health_job(job_id, status="running"):
-            return
-        started = time.monotonic()
-        try:
-            scope = resolve_query_scope(context)
-            with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
-                # The report's prose is generated ONCE and stored, like a
-                # diagnosis result — so it is written in the language the job
-                # was CREATED in, read back from the row, not from whatever
-                # Accept-Language a later poll happens to carry. Rendering the
-                # summary per-poll would also mean the stored report's language
-                # changed under a reader who already saw it.
-                job_language = str(
-                    self.store.get_health_job(job_id, context.scope_fingerprint).get("language")
-                    or DEFAULT_LANGUAGE
-                )
-                report = build_minimal_health_report(
-                    sources,
-                    order_no,
-                    self.diagnostic_settings.safety,
-                    language=job_language,
-                )
-                order = sources.get_orders(order_no)[0]
-                device = str(order.get("child_device_code") or order.get("device_code"))
-                try:
-                    # 缺失或坏掉的时间戳不是「数据源不可用」——as_datetime 给
-                    # None，在这里就地转成 SourceError，让报告以
-                    # telemetry=unavailable 完成而不是整单 SOURCE_UNAVAILABLE
-                    # 可重试（#573 行为变更：曾经 _as_datetime 抛 ValueError，
-                    # 落到外层通用异常归一类）。
-                    created_at = as_datetime(order.get("created_time"))
-                    stopped_at = as_datetime(order.get("stop_time"))
-                    if created_at is None or stopped_at is None:
-                        raise SourceError("order timestamps unavailable")
-                    samples = sources.get_gun_samples(device, created_at, stopped_at, None)
-                except SourceError:
-                    samples = []
-                    report["source_summary"]["telemetry"] = "unavailable"
-                else:
-                    report["source_summary"]["telemetry"] = "available" if samples else "unavailable"
-                report["curves"] = build_curves(samples, job_language)
-                report = enrich_report(report, samples, order)
-            # Every terminal write below is checked, and the refusal is the
-            # same quiet exit the qa line takes (`_execute_chat_dify_qa`, #355):
-            # a refused write means the row already ended — expired, or driven
-            # terminal by another path — so this job's answer is not the answer
-            # anyone is waiting for. Reporting success for it is how the metric
-            # and the row disagree.
-            if time.monotonic() - started > 30:
-                self._finish_health_job(
-                    job_id,
-                    status="failed",
-                    error_code="REPORT_TIMEOUT",
-                    error_message="health report timed out",
-                )
-                return
-            self._finish_health_job(job_id, status="completed", report=report)
-        except HealthReportError as exc:
-            self._finish_health_job(
-                job_id,
-                status="failed",
-                error_code=exc.code,
-                error_message=str(exc),
-            )
-        # `except Exception`, for the reason written out in `_execute_operations_card`
-        # (#700 → #721 → #725): an escaping exception means no terminal row at all,
-        # so the job sits on `running` until the deadline. Three passes adding one
-        # class at a time left `ScopeError` (a `RuntimeError`, raised by
-        # `resolve_query_scope` inside this very `try`) in neither list.
-        #
-        # The message must be safe to RETURN, not merely redacted. This surface
-        # hands the stored `error_message` to the caller verbatim
-        # (`_health_job_response`), so "redacted" is not enough — `redact_text`
-        # removes PII and leaves internal diagnostics in place, which is the
-        # right trade for a record an engineer reads and the wrong one for a
-        # response body. The two original classes therefore keep their existing
-        # "Class: message" shape (unchanged behaviour), and a newly-caught one
-        # contributes its CLASS NAME only — no upstream SDK text, no socket
-        # error, no internal wording. The code stays `SOURCE_UNAVAILABLE` so an
-        # engineer can still tell which failure it was, and the specific text is
-        # still in the worker's log.
-        #
-        # (Pre-existing and NOT made worse here: a source failure that carries
-        # detail in `str(exc)` was returned verbatim before this change too.
-        # Fixing that means changing this surface's message contract for an
-        # already-shipped code, which is a separate decision.)
-        except Exception as exc:  # noqa: BLE001 - see above: escaping here means no terminal row
-            self._finish_health_job(
-                job_id,
-                status="failed",
-                error_code="SOURCE_UNAVAILABLE",
-                error_message=(
-                    f"{exc.__class__.__name__}: {exc}"
-                    if isinstance(exc, (SourceError, ValueError))
-                    else exc.__class__.__name__
-                ),
-            )
+        health_job_runner.execute_health_report(
+            self,
+            job_id,
+            context,
+            order_no,
+            runtime_mod=sys.modules[__name__],
+        )
 
     def _registered_agent(self, tenant_id: str, business_entry: str) -> tuple[str | None, bool]:
         """The runtime registry's answer for this pair: ``(agent_name, configured)``.
@@ -2097,206 +1599,8 @@ class GatewayRuntime:
         *,
         range_header: str | None = None,
     ) -> MediaResponse | None:
-        """Serve a signed media URL (#168 media protocol, /v1/media route).
-
-        Returns None when the media plane is not configured (no kb-service or
-        no signing secret) so the API layer can answer a uniform 404. The
-        URL's HMAC authenticates the request (browsers cannot attach Bearer
-        headers to <img>/<video>); the grant's own tenant scope plus the
-        ``is_active`` liveness check below re-verify that the tenant's
-        customer agent is still published at the same version and still
-        bound to the knowledge base the grant cites — so a disabled segment,
-        an unpublished agent, or an unbound KB invalidates URLs immediately.
-        """
-        if self.media_signer is None or (
-            self.kb_search_client is None
-            and not getattr(self.gateway_settings, "knowledge_delegation_file", "")
-        ):
-            return None
-
-        def _fetch_for_tenant(grant: MediaGrant, *, range_header: str | None = None) -> bytes | MediaResponse:
-            # The process-level client is bound to the neutral "aiops" tenant;
-            # the media document belongs to the grant's tenant, so kb-service
-            # must see that tenant's header/token or the download misses
-            # (code=102 document not found, observed as deterministic 404s in
-            # the #175 C4 video canary on 2026-09-12).
-            client = self.kb_search_client
-            from aiops_diagnostics.dify.candidate_knowledge import MEDIA_PREFIX
-            from aiops_diagnostics.knowledge import knowledge_delegation
-
-            if getattr(self.gateway_settings, "knowledge_delegation_file", ""):
-                from aiops_diagnostics.knowledge.delegated_knowledge_client import for_application
-
-                run = self.dify_run_store.by_qa(grant.session_id or "")
-                if run is None or not grant.agent_version.startswith("consumer:"):
-                    raise MediaAccessDenied("delegated media requires current consumer run")
-                bound = for_application(self, grant.tenant_id, run.app_id)
-                body = bound.fetch_media(grant, range_header=range_header)
-                if not _is_active(grant):
-                    raise MediaAccessDenied("consumer media is no longer active")
-                return body
-            if grant.agent_version.startswith(knowledge_delegation.MEDIA_PREFIX):
-                try:
-                    scope = knowledge_delegation.media_active(self.gateway_settings, grant)
-                    body = knowledge_delegation._client(self.gateway_settings, scope).fetch_media(
-                        grant, range_header=range_header, include_response=True, max_bytes=32 * 1024 * 1024
-                    )
-                    knowledge_delegation.media_active(self.gateway_settings, grant)
-                    return body
-                except knowledge_delegation.DelegationRefused as exc:
-                    raise MediaAccessDenied("knowledge delegation revoked") from exc
-            if grant.agent_version.startswith(MEDIA_PREFIX):
-                from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
-
-                bound = KbServiceClient(
-                    self.gateway_settings.kb_service_base_url,
-                    tenant_id=grant.tenant_id,
-                    timeout=self.gateway_settings.kb_service_timeout_seconds,
-                )
-            else:
-                bound = client.for_tenant(grant.tenant_id) if hasattr(client, "for_tenant") else client
-            from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
-
-            body = (
-                bound.fetch_media(grant, range_header=range_header, include_response=True)
-                if isinstance(bound, KbServiceClient)
-                else bound.fetch_media(grant)
-                if range_header is None
-                else bound.fetch_media(grant, range_header=range_header)
-            )
-            # WF01素材取回期间可能撤回或过期，读取前的检查不能覆盖这段等待。
-            if grant.agent_version.startswith(("consumer:", MEDIA_PREFIX)) and not _is_active(grant):
-                raise MediaAccessDenied("consumer media is no longer active")
-            return body
-
-        if self._media_proxy is None:
-            self._media_proxy = MediaProxy(self.media_signer, _fetch_for_tenant)
-
-        def _is_active(grant: MediaGrant) -> bool:
-            """Is the agent version that SIGNED this grant still live?
-
-            Validate the grant against its own agent, not the customer-service
-            agent. Asserting `select_customer_agent(...) == grant.agent_version`
-            could never hold for a promotional grant: that selector deliberately
-            SKIPS promo-pinned agents (#231), so every image and video URL a
-            promotional card produced was rejected with 403 — media was
-            retrievable but never displayable (41 live, 2026-09-18).
-
-            The rule is about the AGENT, not about which version is newest:
-
-              * the agent is still published (a disabled agent invalidates its
-                URLs immediately), and
-              * the version that signed the grant still exists and is bound to
-                the knowledge base the grant cites.
-
-            It deliberately does NOT require the signing version to still be the
-            agent's CURRENT ``published_version``. That extra condition was here
-            and it broke every promotional image and video on 41 from
-            2026-09-20 onward: the shortcut pins `canary-宣传案例#v2`, the agent
-            was republished as v3 that day, and `3 != 2` made every URL a 403 —
-            so media was produced and never once displayable. Publishing a
-            TUNED prompt must not 403 the images the previous version already
-            produced; nothing about that republish makes those bytes wrong.
-
-            The cost of dropping it is explicit: an image or video signed by an
-            older-but-still-present version keeps working for the rest of its
-            short TTL (~10 minutes) even after a newer version is published.
-            That is the correct trade — the URL expires on its own, and the
-            alternative is a product surface that silently shows nothing.
-            Disabling the agent still cuts URLs off immediately, which is the
-            revocation the acceptance criterion actually asked for.
-
-            The knowledge-base binding is checked against BOTH the signing
-            version and the agent's CURRENT published version. Checking only the
-            historical snapshot would keep serving media after a republish that
-            REMOVED that knowledge base — the bytes would stay reachable for the
-            rest of the TTL even though the operator just took that library away
-            from this agent. Requiring the current binding too keeps "the agent
-            may still serve this library" true at the moment of the fetch, while
-            still allowing a plain prompt/keyword republish (which is what broke
-            on 41) because that leaves the binding intact.
-
-            A grant signed by an **agent-less** caller (``agent_version`` that is
-            not ``<agent_id>#v<n>``, which is what the Dify knowledge adapter
-            issues) has no agent to be live or dead. Its liveness is the
-            registry row it was signed from, which the retrieval route already
-            resolved and which is re-read on every retrieval — treating "no
-            agent" as "not live" made /v1/dify/retrieval hand Dify a signed URL
-            that 403'd on the very next request, so every image and video in a
-            Dify record was undisplayable (found on 41, 2026-10-21).
-            """
-            from aiops_diagnostics.knowledge import knowledge_delegation
-
-            if grant.agent_version.startswith(knowledge_delegation.MEDIA_PREFIX):
-                try:
-                    knowledge_delegation.media_active(self.gateway_settings, grant)
-                    return True
-                except (ValueError, OSError, RuntimeError):
-                    return False
-            if grant.agent_version.startswith("consumer:"):
-                run = self.dify_run_store.by_qa(grant.session_id or "")
-                if run is None or run.kind != "service":
-                    return False
-                from aiops_diagnostics.consumer.consumer_chat_service import require_result
-
-                try:
-                    caller = scope_from_json(run.scope_json)
-                    qa = self.store.get_assistant_question(run.qa_id, run.scope_fingerprint)
-                    if (
-                        qa is None
-                        or qa["status"] != "completed"
-                        or run.order_no
-                        or not tenant_matches(grant.tenant_id, run.tenant_id)
-                    ):
-                        return False
-                    require_result(self, caller, qa)
-                    snapshot = self.dify_run_store.snapshot(run.run_id) or {}
-                    return any(
-                        block.get("media", {}).get("resource_id") == grant.resource_id
-                        for block in snapshot.get("blocks", [])
-                    )
-                except Exception:
-                    return False
-            from aiops_diagnostics.dify import candidate_knowledge
-
-            if grant.agent_version.startswith(candidate_knowledge.MEDIA_PREFIX):
-                try:
-                    scope = candidate_knowledge.parse_id(
-                        grant.agent_version.removeprefix(candidate_knowledge.MEDIA_PREFIX)
-                    )
-                    candidate_knowledge.active(self.gateway_settings, scope)
-                    if grant.session_id is not None:
-                        self.consumer_candidate_trials.authorize_media(grant, scope)
-                    return (
-                        tenant_matches(grant.tenant_id, candidate_knowledge.namespace(scope))
-                        and grant.knowledge_base_id == scope[3]
-                    )
-                except (ValueError, OSError, RuntimeError, AttributeError, KeyError, TypeError):
-                    return False
-            if self.agent_store is None:
-                return False
-            agent_id, _, version_part = str(grant.agent_version).partition("#v")
-            if not agent_id or not version_part.isdigit():
-                return str(grant.agent_version).startswith("dify:")
-            try:
-                published = self.agent_store.get(agent_id, grant.tenant_id)
-                version = self.agent_store.version(agent_id, grant.tenant_id, int(version_part))
-                current = self.agent_store.version(agent_id, grant.tenant_id, published.published_version)
-            except Exception:
-                return False
-            # 未停用且有已发布指针 ⇒ 这个 agent 还活着（#922）。媒体刻意允许
-            # 「更旧但仍绑该知识库」的版本活在剩余 TTL 内（ADR-0046 决策二），
-            # 所以这里只问 live_version，不问它是否就是 latest。
-            if live_version(published) is None:
-                return False
-            signed_kbs = tuple(version.snapshot.get("knowledge_base_ids") or ())
-            current_kbs = tuple(current.snapshot.get("knowledge_base_ids") or ())
-            return grant.knowledge_base_id in signed_kbs and grant.knowledge_base_id in current_kbs
-
-        try:
-            return self._media_proxy.serve_signed(signed_id, range_header=range_header, is_active=_is_active)
-        except KnowledgeSearchUnavailable:
-            return MediaResponse(503, {"Cache-Control": "no-store"}, b"")
+        """委托 `media_service.serve_media` 提供签名媒体代理与活性复核。"""
+        return media_service.serve_media(self, signed_id, range_header=range_header)
 
 
 #: How often a running diagnosis says its conversation claim is still alive.
@@ -2323,64 +1627,9 @@ def _estimate_turn_tokens(question: str, answer: dict[str, Any] | None) -> int:
     return max(1, len(text) * 2 // 3)
 
 
-def _intersect_sites(
-    requested: tuple[str, ...] | None,
-    allowed: tuple[str, ...] | None,
-) -> tuple[str, ...] | None:
-    """The site set the job actually reads: what was asked for ∩ what is visible.
-
-    The three-valued convention is ``sources._bounded_sites``'s, because that is
-    what the aggregate layer downstream actually consumes: ``site_ids is None``
-    means "a site predicate is not needed here" (the tenant predicate still
-    narrows), while ``()`` means "the intersection was empty, read nothing".
-    ``None`` on either side means "no narrowing at that layer", so:
-
-    * both ``None`` → ``None``; a tenant-wide account asks for nothing narrower
-      than its whole tenant. Returning ``()`` here instead turned every
-      whole-tenant run into a ``SCOPE_EMPTY`` card that counted no orders at
-      all — the account the feature is *for* was the one account it never
-      answered (found in the review of #721).
-    * either side ``None``, the other a tuple → that tuple (the ``None`` side
-      narrows nothing).
-    * both tuples → the intersection, which may be legitimately empty.
-
-    The intersection is computed here as well as ANDed into the SQL on purpose
-    (defence in depth, matching how the diagnosis line carries one range
-    object): a mistranslated scope must not be the only thing keeping a request
-    inside its tenant.
-    """
-    if requested is None:
-        return None if allowed is None else tuple(allowed)
-    if allowed is None:
-        return tuple(requested)
-    return tuple(sorted(set(requested) & set(allowed)))
-
-
-def _db_window_bound(value: str) -> str:
-    """The timestamp string the SQL compares against, normalised to UTC.
-
-    The store already parsed and validated it; normalising again here keeps the
-    string the database sees independent of the offset a caller happened to
-    write (``+08:00`` and the equivalent ``Z`` must select the same rows).
-    """
-    return parse_stored_time(value).astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _internal_error_message(error: Exception, order_no: str | None) -> str:
-    """The redacted reason, for the RECORD only — never for the response.
-
-    ``str(exc)`` is whatever the failing layer raised: an upstream SDK message,
-    a socket error, a parser's complaint. The contract already promised this
-    surface never carries internal run information (`standard-api-contract.md`
-    §error.message), and the promise was not kept: the raw string was returned
-    verbatim as the user-facing `message`, so a 管家端 user could read the
-    harness's internals in whatever language that layer happened to use.
-
-    The caller stores this in the job row, where an engineer reads it; the
-    response gets the bounded, coded copy instead (``DIAGNOSIS_ERROR_MESSAGES``).
-    """
-    message = redact_text(str(error), preserve=(order_no or "",))
-    return message[:ERROR_TEXT_LIMIT] if message else error.__class__.__name__
+_intersect_sites = ops_analysis_runner.intersect_sites
+_db_window_bound = ops_analysis_runner.db_window_bound
+_internal_error_message = ops_analysis_runner._internal_error_message
 
 
 def close_gateway_runtime(runtime: GatewayRuntime) -> None:

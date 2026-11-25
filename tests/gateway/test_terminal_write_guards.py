@@ -31,6 +31,9 @@ from aiops_diagnostics.gateway.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, T
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 RUNTIME = "gateway/gateway_runtime.py"
+HEALTH_RUNNER = "health/health_job_runner.py"
+OPS_RUNNER = "operator/ops_analysis_runner.py"
+WORKER_MODULES = (RUNTIME, HEALTH_RUNNER, OPS_RUNNER)
 #: The two update paths that end a job, and the claim their guards enforce.
 TERMINAL_UPDATES = ("update_health_job", "update_standard_diagnosis")
 #: Statuses that end a job: a write with one of these closes the row.
@@ -41,6 +44,10 @@ CLAIM = ACTIVE_DIAGNOSIS_STATUSES
 
 def _runtime_tree() -> ast.Module:
     return ast.parse((SOURCE_ROOT / RUNTIME).read_text(encoding="utf-8"))
+
+
+def _worker_trees() -> list[tuple[str, ast.Module]]:
+    return [(rel, ast.parse((SOURCE_ROOT / rel).read_text(encoding="utf-8"))) for rel in WORKER_MODULES]
 
 
 def _job_updates(function: ast.FunctionDef) -> list[ast.Call]:
@@ -63,16 +70,15 @@ def _status_argument(call: ast.Call) -> str | None:
 def test_the_enumeration_finds_the_job_updates() -> None:
     """The guard's own foundation: an empty list makes every assertion vacuous.
 
-    Five direct calls: the health worker's claim write (its four terminal writes
-    go through `_finish_health_job`, asserted separately) and the diagnosis
-    worker's claim plus three terminal writes.
+    Health worker's claim write (its four terminal writes go through
+    `finish_health_job`, asserted separately).
     """
-    tree = _runtime_tree()
     found = sum(
         len(_job_updates(node))
+        for _, tree in _worker_trees()
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
-        and node.name in {"_execute_health_report", "_execute_standard_diagnosis"}
+        and node.name in {"execute_health_report", "_execute_health_report", "_execute_standard_diagnosis"}
     )
     assert found == 1, f"the health worker makes {found} direct job updates, expected 1"
 
@@ -82,30 +88,22 @@ def test_a_health_job_terminal_write_goes_through_the_one_helper() -> None:
 
     They are the same line four times (timeout, completed, report error, source
     error) — the shape that let three of them be unchecked while the fourth was
-    not, and the reason `_finish_health_job` exists.
+    not, and the reason `finish_health_job` exists.
     """
-    tree = _runtime_tree()
+    tree = ast.parse((SOURCE_ROOT / HEALTH_RUNNER).read_text(encoding="utf-8"))
     worker = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_execute_health_report"
+        if isinstance(node, ast.FunctionDef) and node.name == "execute_health_report"
     )
     direct = [node for node in _job_updates(worker) if _status_argument(node) in TERMINAL]
-    assert direct == [], f"{RUNTIME} writes a health job terminal state without the helper"
+    assert direct == [], f"{HEALTH_RUNNER} writes a health job terminal state without the helper"
     helper = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_finish_health_job"
+        if isinstance(node, ast.FunctionDef) and node.name == "finish_health_job"
     )
     assert len(_job_updates(worker)) == 1, "the claim write is checked on its own"
-    # The helper is the one place the health terminal write happens, and it
-    # answers its caller: the store's value, and — on a refusal — a log line,
-    # because this path has no metric for the refusal to show up in.
-    helper = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_finish_health_job"
-    )
     source = ast.unparse(helper)
     assert "update_health_job" in source, "the helper no longer writes the job"
     assert "return True" in source and "return False" in source, source
@@ -121,17 +119,21 @@ def test_every_job_write_in_the_two_workers_is_answered() -> None:
     covers the claim writes too, because those had the check while the terminal
     writes beside them did not.
     """
-    tree = _runtime_tree()
     offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        if node.name not in {"_execute_health_report", "_execute_standard_diagnosis"}:
-            continue
-        answered = _answered_writes(tree, node)
-        for call in _job_updates(node):
-            if call not in answered:
-                offenders.append(f"{RUNTIME}:{call.lineno} {node.name} ignores the result")
+    for rel, tree in _worker_trees():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            if node.name not in {
+                "execute_health_report",
+                "_execute_health_report",
+                "_execute_standard_diagnosis",
+            }:
+                continue
+            answered = _answered_writes(tree, node)
+            for call in _job_updates(node):
+                if call not in answered:
+                    offenders.append(f"{rel}:{call.lineno} {node.name} ignores the result")
     assert offenders == [], "; ".join(offenders)
 
 
@@ -235,16 +237,41 @@ def test_every_async_worker_converges_on_any_exception() -> None:
     tree = _runtime_tree()
     workers = _submitted_workers(tree)
     assert workers, "found no submitted workers — the discovery rule is broken, not the code"
+    runner_defs: dict[str, ast.FunctionDef] = {}
+    for _, mod_tree in _worker_trees()[1:]:
+        for node in ast.walk(mod_tree):
+            if isinstance(node, ast.FunctionDef):
+                runner_defs[node.name] = node
     seen: dict[str, list[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef) or node.name not in workers:
             continue
+        target = node
         handlers = [
             handler
-            for try_node in ast.walk(node)
+            for try_node in ast.walk(target)
             if isinstance(try_node, ast.Try)
             for handler in try_node.handlers
         ]
+        if not handlers:
+            # 委托给领域执行模块时，核对实际执行体而非薄壳本身。
+            delegated = next(
+                (
+                    runner_defs[call.func.attr]
+                    for call in ast.walk(node)
+                    if isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and call.func.attr in runner_defs
+                ),
+                None,
+            )
+            if delegated is not None:
+                handlers = [
+                    handler
+                    for try_node in ast.walk(delegated)
+                    if isinstance(try_node, ast.Try)
+                    for handler in try_node.handlers
+                ]
         seen[node.name] = [
             ast.unparse(handler.type) if handler.type is not None else "bare except" for handler in handlers
         ]

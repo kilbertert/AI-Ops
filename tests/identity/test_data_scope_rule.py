@@ -393,13 +393,13 @@ _CRITERION_LEDGER: dict[str, set[tuple[str, str]]] = {
         ("identity/data_scope_rule.py", "entry_data_scope"),
         ("identity/company_token_auth.py", "resolve"),
         ("identity/caller_auth.py", "resolve"),
-        ("gateway/gateway_api.py", "operator_publish"),
+        ("gateway/routers/dify_console.py", "operator_publish"),
     },
     "is_tenant_level_account": {
         ("identity/data_scope_rule.py", "entry_data_scope"),
         ("identity/company_token_auth.py", "resolve"),
         ("dify/dify_trial.py", "build_trial_scope"),
-        ("operator/operator_cpms.py", "operator_scope"),
+        ("operator/cpms_evidence.py", "operator_scope"),
     },
 }
 _CRITERIA = frozenset(_CRITERION_LEDGER)
