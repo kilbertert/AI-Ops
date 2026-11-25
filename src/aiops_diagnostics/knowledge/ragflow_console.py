@@ -242,12 +242,3 @@ def record(
         ragflow_email=ragflow_email,
         reason_code=reason_code,
     )
-
-
-def describe_failure(error: RAGFlowLoginError) -> dict[str, Any]:
-    """A refusal the operator can act on — never a bare 403.
-
-    ``not onboarded`` says to run onboarding; ``forbidden`` says the caller may not
-    enter this tenant. Collapsing them would make the operator guess which one it is.
-    """
-    return {"event": "ragflow_console_access_refused", "code": error.code, "message": error.message}

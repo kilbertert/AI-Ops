@@ -65,10 +65,6 @@ def scenario(entry: str) -> str:
     return SCENARIOS[entry]
 
 
-def entry_for_scenario(name: str) -> str | None:
-    return next((entry for entry, value in SCENARIOS.items() if value == name), None)
-
-
 def entries_for_scope(scope: str) -> tuple[str, ...]:
     if scope not in SCOPES:
         raise DualEntryError("SETUP_SCOPE_UNKNOWN")

@@ -75,6 +75,9 @@ def test_console_bridge_bundle_imports_are_self_contained() -> None:
     """拦截桥模块新增未打包的包内导入（含延迟、相对与子包导入），防线上 ModuleNotFoundError。"""
     bundled = _bundled_bridge_modules()
     assert "dify_console_bridge.bridge" in bundled
+    assert "dify_console_bridge.config" in bundled
+    assert "dify_console_bridge.client" in bundled
+    assert "dify_console_bridge.workflows" in bundled
     assert "dify_console_bridge.self_service_bridge" in bundled
     assert "dify_console_bridge.environments" in bundled
     assert not any(mod.startswith("aiops_diagnostics.dify") for mod in bundled)
@@ -137,7 +140,16 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
         shutil.copyfile(ROOT / "src/aiops_diagnostics" / f"{name}.py", package / f"{name}.py")
     bridge_pkg = bundle / "dify_console_bridge"
     bridge_pkg.mkdir()
-    for name in ("__init__", "__main__", "bridge", "self_service_bridge", "environments"):
+    for name in (
+        "__init__",
+        "__main__",
+        "bridge",
+        "config",
+        "client",
+        "workflows",
+        "self_service_bridge",
+        "environments",
+    ):
         shutil.copyfile(
             ROOT / "services/dify-console-bridge/dify_console_bridge" / f"{name}.py",
             bridge_pkg / f"{name}.py",

@@ -71,14 +71,6 @@ _STATE_NOUNS = (
 _A_NOT_A = re.compile(r"(?:有没有|是不是|能不能|会不会|可不可以|要不要|对不对|行不行|有没有什么|是否)")
 
 
-def _state_term_hit(clause: str, terms: tuple[str, ...]) -> bool:
-    """子句里是否有**状态**词——名词化的场所/设备词先剥掉，剩下的命中才算状态。"""
-    stripped = clause
-    for noun in _STATE_NOUNS:
-        stripped = stripped.replace(noun, "　")
-    return any(term in stripped for term in terms)
-
-
 #: 否定词与状态词之间允许出现的成分。它们不改变「否定的是状态」这个判断：
 #: `还没结束`、`一直没充电完成`、`没有在充电`、`尚未开始充电` 都必须仍然算改写状态。
 #:

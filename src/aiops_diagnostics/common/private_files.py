@@ -75,16 +75,6 @@ def write_private_text(path: Path, content: str) -> Path:
             temporary.unlink()
 
 
-def append_private_text(path: Path, content: str) -> None:
-    ensure_private_directory(path.parent)
-    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-    try:
-        os.write(descriptor, content.encode("utf-8"))
-    finally:
-        os.close(descriptor)
-    _restrict_private_file(path)
-
-
 def _restrict_private_file(path: Path) -> None:
     if os.name == "nt":
         _restrict_windows_acl(path, directory=False)

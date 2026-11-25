@@ -147,19 +147,6 @@ def _workspace_for(workspaces: Any, tenant_id: str, environment: str) -> str:
         ) from exc
 
 
-def _deployment_environment_or_exit() -> str:
-    """CLI 的部署身份 —— 与 `ensure-workspace` 同一条守卫，缺了就退非零。"""
-    environment = GatewayServerSettings.from_env().environment
-    if not environment:
-        typer.secho(
-            "缺少 AIOPS_GATEWAY_ENVIRONMENT：workspace 按 (租户, 环境) 解析，环境取本机部署身份",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=2)
-    return environment
-
-
 def _settings_with_config_file(ctx: typer.Context) -> GatewayServerSettings:
     """进程 env 优先、`--config` 按**单个键**补齐。
 

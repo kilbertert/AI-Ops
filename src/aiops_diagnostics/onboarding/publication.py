@@ -712,26 +712,6 @@ def activate_directory(context, request, result):
     return {"revision": revision}
 
 
-def recover_source_reference(context, request, state):
-    import copy
-
-    refs = Path(context.settings.environment_onboarding_file)
-    actual = json.loads(refs.read_text())
-    previous = copy.deepcopy(state["reference_document"])
-    selected = next(r for r in actual["targets"] if r["id"] == request["target"]["id"])
-    config = next(c for c in selected["configurations"] if c["id"] == state["after"]["id"])
-    if (
-        config["sha256"] != state["after"]["sha256"]
-        or hashlib.sha256(plans._private(config["path"]).read_bytes()).hexdigest() != config["sha256"]
-    ):
-        raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
-    original = next(r for r in previous["targets"] if r["id"] == request["target"]["id"])
-    original_config = next(c for c in original["configurations"] if c["id"] == config["id"])
-    original_config.update(config)
-    if actual != previous:
-        raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
-
-
 def source_configuration(context, request, identifier, *, restore=False):
     """源引用和目标事务分别CAS；原不可变模板留存，失败只核对本次转换。"""
     from dotenv import dotenv_values

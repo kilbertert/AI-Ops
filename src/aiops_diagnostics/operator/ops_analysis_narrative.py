@@ -30,10 +30,6 @@ OPS_NARRATIVE_SCHEMA: dict[str, Any] = {
 _NARRATIVE_OPENINGS = ("{",)
 
 
-def ops_narrative_schema() -> dict[str, Any]:
-    return OPS_NARRATIVE_SCHEMA
-
-
 #: Facts the prompt shows the model. A **name list**, not "whatever is in the
 #: dict": it was the latter's failure mode that #700's review caught — every
 #: card explains its *own* numbers, and the offline / fault-code / payment

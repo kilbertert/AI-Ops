@@ -5,7 +5,6 @@ import contextlib
 import hashlib
 import json
 import logging
-import sqlite3
 import sys
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -26,20 +25,12 @@ from aiops_diagnostics.common.i18n import (
     effective_language,
     free_text_unavailable_message,
     localized_pack,
-    rendering_language,
 )
-from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file, write_private_text
+from aiops_diagnostics.common.private_files import write_private_text
 from aiops_diagnostics.common.scalar_rules import format_stored_time
-from aiops_diagnostics.consumer import consumer_knowledge
-from aiops_diagnostics.consumer import knowledge_access as consumer_knowledge_selection
-from aiops_diagnostics.consumer.presentation import (
-    COMPOSED_LANGUAGES,
-    asks_latest_order,
-    status_answer,
-)
+from aiops_diagnostics.consumer import consumer_knowledge as consumer_knowledge
 from aiops_diagnostics.conversation.clarification import (
     CLARIFY_LANGUAGE_UNROUTABLE,
-    CLARIFY_ORDER_REQUIRED,
     MESSAGE_KEY_BY_CODE,
     missing_fields_for,
 )
@@ -57,23 +48,75 @@ from aiops_diagnostics.conversation.faq import (
     MySQLPlatformDirectory,
     PlatformIdentityResolver,
 )
-from aiops_diagnostics.data.charging_status import ChargingStatusError, read_charging_status
+from aiops_diagnostics.data.charging_status import read_charging_status
 from aiops_diagnostics.data.sources import SourceError, scoped_mysql_source
 from aiops_diagnostics.dify.dify_run_store import DifyRunStore
-from aiops_diagnostics.dify.dify_trial import TrialInitiator
-from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
-from aiops_diagnostics.execution import chat_execution, execution_manifest
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.execution.agent_runs import (
     AgentRun,
     AgentRunStore,
-    scope_from_json,
 )
 from aiops_diagnostics.execution.agent_runs import (
     SnailDispatcher as SnailDispatcher,
 )
-from aiops_diagnostics.execution.run_deliverability import deliverable
+from aiops_diagnostics.gateway import consumer_chat_dispatch as _chat_dispatch
+from aiops_diagnostics.gateway import dify_publish_ops as _publish_ops
 from aiops_diagnostics.gateway import metrics_store as metrics_dims
 from aiops_diagnostics.gateway import request_observation
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    NOT_OWNED as NOT_OWNED,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    ORDER_AUTH_ROUTE as ORDER_AUTH_ROUTE,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    ORDER_AUTHENTICATION_UNAVAILABLE as ORDER_AUTHENTICATION_UNAVAILABLE,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    OWNED as OWNED,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    UNAVAILABLE as UNAVAILABLE,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    ChatDispatchHooks,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _claim_payload as _claim_payload,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _consumer_intent_clarification as _consumer_intent_clarification,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _is_consumer_run as _is_consumer_run,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _is_node_chat_qa as _is_node_chat_qa,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _require_consumer_self as _require_consumer_self,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _require_consumer_self_order as _require_consumer_self_order,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _require_dify_binding_current as _require_dify_binding_current,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _require_matching_exec_config as _require_matching_exec_config,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _require_trial_source_route as _require_trial_source_route,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _route_binding_state as _route_binding_state,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _same_tenant_as_grant as _same_tenant_as_grant,
+)
+from aiops_diagnostics.gateway.consumer_chat_dispatch import (
+    _version_moved as _version_moved,
+)
 from aiops_diagnostics.gateway.dependencies import (
     STANDARD_DIAGNOSIS_SCOPE as STANDARD_DIAGNOSIS_SCOPE,
 )
@@ -93,10 +136,57 @@ from aiops_diagnostics.gateway.dependencies import (
 from aiops_diagnostics.gateway.dependencies import (
     request_language as request_language,
 )
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _advance_route_binding as _advance_route_binding,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _current_route_revision as _current_route_revision,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _declared_in_file as _declared_in_file,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _key_ref_for as _key_ref_for,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _managed_app_draft as _managed_app_draft,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _managed_app_route as _managed_app_route,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _publish_allowlist as _publish_allowlist,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _publish_initiator as _publish_initiator,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _record_publish_audit as _record_publish_audit,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _restore_bound_app as _restore_bound_app,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _sync_bound_app as _sync_bound_app,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _tenant_in_scope as _tenant_in_scope,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _TenantOnly as _TenantOnly,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _trial_run_context as _trial_run_context,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _workflow_trial_draft as _workflow_trial_draft,
+)
+from aiops_diagnostics.gateway.dify_publish_ops import (
+    _workspace_for_tenant as _workspace_for_tenant,
+)
 from aiops_diagnostics.gateway.errors import StandardAPIError as StandardAPIError
 from aiops_diagnostics.gateway.gateway_config import (
     GatewayServerSettings,
-    parse_dify_knowledge_bindings,
 )
 from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway.gateway_store import (
@@ -228,7 +318,6 @@ from aiops_diagnostics.gateway.schemas import (
 from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
     CALLER_AUTH_FORBIDDEN,
-    SOURCE_KEY_HEADER,
     CallerAuthError,
     CallerContextResolver,
     DisabledCallerResolver,
@@ -246,18 +335,11 @@ from aiops_diagnostics.identity.company_token_auth import (
     CompanyTokenSettings,
     PermissionSource,
 )
-from aiops_diagnostics.identity.order_identity import (
-    extract_order_identifier,
-    is_order_identifier,
-    order_identifier_candidates,
-)
 from aiops_diagnostics.identity.query_scope import (
     ShopDirectory,
     UpmsShopDirectory,
-    resolve_query_scope,
 )
 from aiops_diagnostics.identity.scope_context import (
-    SCOPE_TYPE_SELF,
     ScopeContext,
     ScopeError,
 )
@@ -332,646 +414,18 @@ class GatewayAPI:
         self.assistant_feedback = AssistantFeedbackStore(store.path)
 
 
-def _publish_initiator(
-    company_user_id: str | None,
-    company_username: str | None,
-    dify_account_id: str | None,
-) -> tuple[str, str, str]:
-    """Normalise the initiator headers (#780) — trimmed，never an authorization input.
-
-    Empty means "unknown" and is recorded as such. The values are redacted to the
-    store's own scope charset by the caller's ``_scope`` guard, so a malformed
-    header cannot smuggle anything into the ledger.
-    """
-    return (
-        (company_user_id or "").strip()[:128],
-        (company_username or "").strip()[:128],
-        (dify_account_id or "").strip()[:128],
-    )
-
-
-def _trial_run_context(context: Any, initiator: TrialInitiator | None) -> Any:
-    """试运行的范围：**提交与读取都走这里**，因为两者必须算出同一个指纹。
-
-    作业行按 ``scope_fingerprint`` 隔离（`gateway_store.get_standard_diagnosis`），
-    而那个哈希含数据范围与主体类型 —— 提交用 A 范围、读取用 B 范围时，返回的
-    ``trial_id`` 会**永远读不回来**，且表现与"这个 id 不存在"完全一样。所以
-    "读结果"这条路由一开始就漏传发起人头是个真缺陷（#782 留下的 v2 地雷），
-    只有把选择收成一处才不会重演。
-
-    ``initiator is None``（桥没给全身份，或本来就没走公司身份）⇒ 固定调试租户，
-    即 #781 的第一版行为，逐字不变。
-    """
-    if initiator is None:
-        return context.runtime.trial_run_context()
-    return context.runtime.trial_context_for(initiator)
-
-
-def _record_publish_audit(
-    context: Any,
-    *,
-    app_id: str,
-    action: str,
-    reason_code: str,
-    initiator: tuple[str, str, str],
-    binding: Any = None,
-    version_no: int | None = None,
-) -> None:
-    """Write one ledger row, best-effort. **Never raises into the publish path.**
-
-    The ledger is observability: a disk problem must not turn a legitimate
-    publish into a failure, and a missing initiator must not either (it is
-    recorded as empty, not refused). Values are trimmed and length-capped so a
-    caller-supplied header cannot bloat a row.
-    """
-    company_user_id, company_username, dify_account_id = initiator
-    store = getattr(context, "store", None)
-    if store is None or not hasattr(store, "record_publish_audit"):  # pragma: no cover
-        return
-    with contextlib.suppress(Exception):
-        store.record_publish_audit(
-            app_id=app_id[:128],
-            action=action,
-            reason_code=reason_code[:64],
-            tenant_id=str(getattr(binding, "tenant_id", "") or "")[:128],
-            business_entry=str(getattr(binding, "business_entry", "") or "")[:64],
-            agent_name=str(getattr(binding, "agent_name", "") or "")[:128],
-            company_user_id=company_user_id,
-            company_username=company_username,
-            dify_account_id=dify_account_id,
-            version_no=version_no,
-        )
-
-
-from aiops_diagnostics.publication.route_advancement import (  # noqa: E402
-    _declared_in_file as _declared_in_file,
-)
-from aiops_diagnostics.publication.route_advancement import (  # noqa: E402
-    _key_ref_for as _key_ref_for,
-)
-from aiops_diagnostics.publication.route_advancement import (  # noqa: E402
-    advance_route_binding as _advance_route_binding,
-)
-
-
-def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
-    """按 **DSL 自己声明的应用类型** 选映射。
-
-    workflow 应用没有 `model_config`，把它送进 chat 那条映射会得到
-    `DSL has no model_config object` —— 那看起来像"DSL 坏了"，其实是"这是另一种应用"。
-
-    分流放在这里、而不是入口多调一次导出：`sync_binding_from_dify` 自己本来就要导，
-    在入口再加一次导出会多一跳外部调用（测试的假上游也会因此被打中）。
-    所以这里先按 chat 走；只有它明确报"没有 model_config"时才改走 workflow ——
-    **用结果判种类，不用猜测**。
-    """
-    from aiops_diagnostics.consumer import consumer_documents, consumer_publication
-    from aiops_diagnostics.dify import dify_dsl_pull as pull
-
-    target = consumer_publication.target_for(context.settings, binding)
-    if not target and consumer_publication.route_scenario(context.settings, binding) == "consumer_service":
-        raise ValueError("consumer publication target removed")
-    if target:
-        dsl = pull.DifyDslClient(source).export_dsl()
-        if pull._dsl_kind(dsl) != "advanced-chat":
-            raise ValueError("consumer publication requires Chatflow")
-        return pull.sync_workflow_from_dify(
-            context.agent_manager,
-            admin,
-            binding,
-            source,
-            consumer_settings=consumer_publication.frozen_settings(
-                target,
-                documents=consumer_documents.enabled(pull.workflow_content(dsl)),
-            ),
-            consumer_callback_base=context.settings.public_base_url,
-            consumer_libraries=lambda: consumer_knowledge.owned_libraries(
-                context.runtime, binding.tenant_id, binding.app_id
-            ),
-        )
-    try:
-        return pull.sync_binding_from_dify(
-            context.agent_manager,
-            admin,
-            binding,
-            source,
-            knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
-        )
-    except pull.DifyDslMalformed as exc:
-        if "model_config" not in str(exc):
-            raise
-        return pull.sync_workflow_from_dify(context.agent_manager, admin, binding, source)
-
-
-def _workspace_for_tenant(
-    context: Any, tenant_id: str, *, initiator: tuple[str, str, str] = ("", "", "")
-) -> str:
-    """拿到**这个租户**的 workspace，或拒绝（#884 发布 / #885 试运行）。
-
-    失败时把 ``resolve`` 的四个码原样转成 HTTP：``UNRESOLVED``(404) / ``CREATING``(409,
-    可重试) / ``FAILED``(409) / ``UNKNOWN``(409)。合成一句话就把"去开户 / 稍后重试 /
-    先对账"这三种下一步抹平了 —— 而发布这条路**必须**让人知道该做哪一件。
-
-    审计账本也记一笔：被拒的发布尝试要能回答"谁试图把哪一版发进哪个租户"。
-    """
-
-    try:
-        return context.dify_workspaces.resolve(tenant_id, context.settings.environment)
-    except DifyWorkspaceError as exc:
-        _record_publish_audit(
-            context,
-            app_id="",
-            action="refused",
-            reason_code=exc.code,
-            initiator=initiator,
-            binding=_TenantOnly(tenant_id),
-        )
-        raise StandardAPIError(exc.http_status, exc.code, exc.message, retryable=exc.retryable) from exc
-
-
-class _TenantOnly:
-    """只带租户的审计条目：解析失败时绑定还没查到，但"哪个租户"已经知道。"""
-
-    tenant_id: str
-    business_entry = ""
-    agent_name = ""
-
-    def __init__(self, tenant_id: str) -> None:
-        self.tenant_id = tenant_id
-
-
 def _publish_bound_app(
     context: Any,
     app_id: str,
     *,
     initiator: tuple[str, str, str] = ("", "", ""),
 ) -> dict[str, Any]:
-    """把一个**已绑定**的 Dify app 的当前内容冻结成新的已发布版本。
-
-    **两条路共用的唯一实现**（共享密钥路由与 operator 会话身份路由）：一处实现，
-    两条路就不可能漂。谁能调到这一层由各自的**门**决定 —— 这里只做「点名一个
-    已声明的绑定，把它现在的内容过一遍发布门」。
-
-    爆炸半径是设计出来的：请求只带 ``app_id``，租户/agent 名/类型/契约/知识库
-    全部来自 ``dify_app_registry``。最坏情况因此是**重新冻结一个已声明绑定的当前
-    内容**；重复发布未变内容按构造是 no-op（先与已发布快照逐字比较）。
-
-    ``initiator``（#780）是**审计元数据**：``(company_user_id, company_username,
-    dify_account_id)``。它**不是**授权依据 —— 授权在桥那一侧（公司发布权限码）
-    已经完成；这里把它记进审计账本，好回答"谁在何时把哪一版发上了生产"。三个字段
-    都可能是空串（调用方没带），那记成未知，发布照常。
-    """
-    company_user_id, company_username, dify_account_id = initiator
-    binding = next(
-        (item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id),
-        None,
-    )
-    if binding is None:
-        # 与未登记的知识句柄同形：404 说"不在这里"，不透露有哪些绑定。
-        # **被拒的尝试也入账**（#780）：未绑定的 app_id 是"有人试图发布一个没登记的东西"，
-        # 正是审计要看见的；它没有任何租户可归，所以租户留空。
-        _record_publish_audit(
-            context,
-            app_id=app_id,
-            action="refused",
-            reason_code="DIFY_APP_NOT_BOUND",
-            initiator=initiator,
-        )
-        raise StandardAPIError(
-            status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
-        )
-    from aiops_diagnostics.consumer.agent_contract import ConsumerFlowError
-    from aiops_diagnostics.dify.dify_dsl_pull import DifyDslError, DifyDslSource
-    from aiops_diagnostics.publication.agent_manifest import admin_context
-
-    console = context.settings
-    if not console.dify_console_base_url or not console.dify_console_api_key:
-        raise StandardAPIError(
-            status.HTTP_502_BAD_GATEWAY,
-            "DIFY_CONSOLE_UNAVAILABLE",
-            "the Dify console credential is not configured on this server",
-        )
-    # **按绑定的租户解析 workspace**（#884 / ADR-0059 §5.2）。`_publish_bound_app` 是两条
-    # 路共用的唯一实现，所以这一处一改，共享密钥路由与 operator 会话路由同时生效。
-    #
-    # 为什么不能再用 `dify_console_workspace_id` 那个常量：多 workspace 之后它是"某一个人
-    # 的工作区"，而这里要的是**这个 app 所属租户**的工作区。用常量意味着 A 租户的发布
-    # 会跑在 B 的工作区上 —— 设计里点名这是最容易漏掉的越权口。
-    #
-    # 解析失败 ⇒ **拒绝，不回落任何默认 workspace**：回落等于把"这个租户还没开户"悄悄
-    # 变成"发布进别人的工作区"，而后者看起来是成功的。
-    workspace_id = _workspace_for_tenant(context, binding.tenant_id, initiator=initiator)
-    source = DifyDslSource(
-        base_url=console.dify_console_base_url,
-        app_id=binding.app_id,
-        api_key=console.dify_console_api_key,
-        workspace_id=workspace_id,
-    )
-    # **revision 必须在外部同步之前快照。** 同步期间可能有人撤回或另发一版；
-    # 等同步回来再读，读到的是**对方之后的** revision，于是这次发布仍会 CAS 通过，
-    # 把一次已经成功的撤回重新置为 active —— 实测复现过（V1 → 撤回 → 延迟发布
-    # 推进，最终 active / revision 3 / V2）。用快照值推进，期间有变动就冲突。
-    from aiops_diagnostics.consumer import consumer_publication
-
-    consumer_target = consumer_publication.target_for(context.settings, binding)
-    if consumer_target and console.chat_route_bindings_file:
-        from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-
-        other = ChatRouteBindingStore(console.chat_route_bindings_file).get(
-            console.execution_environment,
-            binding.tenant_id,
-            binding.business_entry,
-            chat_execution.SCENARIO_OWN_ORDER_STATUS,
-        )
-        if other is not None and other.app_id == binding.app_id:
-            raise StandardAPIError(409, "CONSUMER_ROUTE_MIGRATION_REQUIRED", "app already owns another route")
-    expected_revision = _current_route_revision(
+    return _publish_ops._publish_bound_app(
         context,
-        binding,
-        str(getattr(context.settings, "execution_environment", "") or ""),
-    )
-    from aiops_diagnostics.execution import node_publication
-
-    node_target = node_publication.target_for(context.settings, binding)
-    if node_target and consumer_target:
-        raise StandardAPIError(409, "CONSUMER_TARGET_CONFLICT", "app has two execution targets")
-    if console.chat_route_bindings_file and not node_target and not consumer_target:
-        from aiops_diagnostics.consumer.consumer_publication import route_scenario
-        from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-
-        managed = ChatRouteBindingStore(Path(console.chat_route_bindings_file)).get(
-            console.execution_environment,
-            binding.tenant_id,
-            binding.business_entry,
-            route_scenario(context.settings, binding),
-        )
-        if managed and managed.engine == "node":
-            raise StandardAPIError(409, "NODE_TARGET_MISSING", "node target unavailable")
-    if node_target and (not console.chat_route_bindings_file or binding.business_entry != node_target.entry):
-        raise StandardAPIError(409, "NODE_ROUTE_UNAVAILABLE", "node route is not configured")
-    if node_target and _declared_in_file(
-        console,
-        node_target.environment,
-        binding.tenant_id,
-        node_target.entry,
-        node_target.scenario,
-    ):
-        raise StandardAPIError(409, "NODE_ROUTE_COLLISION", "node route is declared in both places")
-    try:
-        outcome = (
-            node_publication.publish(
-                context.agent_manager, admin_context(binding.tenant_id), binding, source, node_target
-            )
-            if node_target
-            else _sync_bound_app(context, binding, source, admin_context(binding.tenant_id))
-        )
-    except ConsumerFlowError as exc:
-        _record_publish_audit(
-            context,
-            app_id=app_id,
-            action="refused",
-            reason_code="CONSUMER_FLOW_INVALID",
-            binding=binding,
-            initiator=initiator,
-        )
-        raise StandardAPIError(409, "CONSUMER_FLOW_INVALID", str(exc)) from exc
-    except DifyDslError as exc:
-        # Dify 自己拒绝或不可达：带它自己的码转达，调用方要能区分「凭据被拒」与「服务挂了」。
-        # 被拒的**尝试**一样入账；租户与 agent 名此刻是知道的（绑定查到了）。
-        _record_publish_audit(
-            context,
-            app_id=app_id,
-            action="refused",
-            reason_code=exc.code,
-            binding=binding,
-            initiator=initiator,
-        )
-        # 响应只说稳定码（上游正文可能带内部地址）；**日志**要留原因，
-        # 否则"拉取失败"在运维眼里是一句没有下一步的话。
-        _LOGGER.warning("dify pull failed: %s: %s", exc.code, exc)
-        raise StandardAPIError(status.HTTP_502_BAD_GATEWAY, exc.code, "dify pull failed") from exc
-    except Exception as exc:  # noqa: BLE001 - 发布门自己的规则，原样转达
-        _record_publish_audit(
-            context,
-            app_id=app_id,
-            action="refused",
-            reason_code=f"PUBLISH_GATE_{type(exc).__name__}",
-            binding=binding,
-            initiator=initiator,
-        )
-        raise StandardAPIError(
-            status.HTTP_409_CONFLICT, "DIFY_PUBLISH_REJECTED", f"publish rejected: {type(exc).__name__}"
-        ) from exc
-    # **推进正式指针**：这一步才是"运营点了发布，App 真的切了版"。它必须在
-    # `_record_publish_audit` 之前 —— 审计要记的是已经成立的事实，不是待办。
-    #
-    # 跨系统没有事务：Dify 那边已经发布了，本地这一步仍可能失败。失败时**保留旧正式版**
-    # 并如实抛错（不伪称成功），任务书对这条的要求是"报未完成"，不是"补一个异步重试"。
-    if outcome.action not in {"synced", "unchanged"}:
-        raise StandardAPIError(409, "DIFY_PUBLISH_REJECTED", "publish was not completed")
-    if node_target:
-        try:
-            node_publication.advance(context, outcome, binding, node_target, expected_revision)
-        except node_publication.NodeRouteConflict as exc:
-            raise StandardAPIError(409, "NODE_ROUTE_NOT_ADVANCED", "node route was not advanced") from exc
-    else:
-        _advance_route_binding(
-            context, outcome, binding, initiator=initiator, expected_revision=expected_revision
-        )
-
-    # 成功：记版本号与动作（``synced`` / ``unchanged``）。``unchanged`` 也是"成功的一次
-    # 发布尝试"，只是内容没变 —— 审计要能分辨它，否则"某人点了一百次但什么都没发"与
-    # "发了 0 次"看起来一样。
-    _record_publish_audit(
-        context,
-        app_id=outcome.app_id,
-        action="published" if outcome.action == "synced" else "unchanged",
-        reason_code="",
-        binding=binding,
-        initiator=initiator,
-        version_no=outcome.version_no if isinstance(outcome.version_no, int) else None,
-    )
-    return {
-        "app_id": outcome.app_id,
-        "tenant_id": outcome.tenant_id,
-        "business_entry": outcome.business_entry,
-        "agent_name": outcome.agent_name,
-        "action": outcome.action,
-        "version_no": outcome.version_no,
-        "note": outcome.note,
-    }
-
-
-def _current_route_revision(context: Any, binding: Any, environment: str) -> int | None:
-    """外部同步**之前**这条路由的 revision；没有行时 0。
-
-    同步可能耗时几十秒，期间别人可以撤回或另发一版。推进指针要用这个快照值做 CAS，
-    而不是同步回来之后才读 —— 否则这次发布会把别人的撤回覆盖掉。
-    """
-    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
-    if not database:
-        return None
-    from pathlib import Path
-
-    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-
-    try:
-        store = ChatRouteBindingStore(Path(database).expanduser().absolute())
-        entry = str(getattr(binding, "business_entry", "") or "consumer")
-        from aiops_diagnostics.consumer.consumer_publication import route_scenario
-
-        row = store.get(environment, binding.tenant_id, entry, route_scenario(context.settings, binding))
-    except Exception as exc:  # noqa: BLE001 - 没有初始 CAS 证据，发布必须拒绝。
-        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable") from exc
-    return row.revision if row is not None else 0
-
-
-def _managed_app_route(context: Any, app_id: str):
-    from pathlib import Path
-
-    from aiops_diagnostics.consumer.consumer_publication import route_scenario
-    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-
-    binding = next((item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id), None)
-    if binding is None:
-        raise StandardAPIError(404, "DIFY_APP_NOT_BOUND", "app not bound")
-    if not context.settings.chat_route_bindings_file or not context.settings.execution_environment:
-        raise StandardAPIError(404, "CHAT_ROUTE_BINDINGS_DISABLED", "managed routes disabled")
-    store = ChatRouteBindingStore(Path(context.settings.chat_route_bindings_file))
-    row = store.get(
-        context.settings.execution_environment,
-        binding.tenant_id,
-        binding.business_entry,
-        route_scenario(context.settings, binding),
-    )
-    if row is None or row.app_id != app_id:
-        raise StandardAPIError(409, "CHAT_ROUTE_BINDING_MISMATCH", "app route not found")
-    workspace = _workspace_for_tenant(context, binding.tenant_id)
-    return binding, row, workspace
-
-
-def _managed_app_draft(context: Any, app_id: str):
-    """受管但还没成为正式版的副本：给试用一条**合成**路由，不写任何指针。
-
-    `state="draft"` 与 `revision=0` 是有意的：它们让任何"按正式版解释这次试用"的代码
-    当场失败，而不是悄悄把草稿当成正式版。真正需要成立的事实只有两条 ——
-    这个应用属于这个客户，且它的工作区可解析。
-    """
-    from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
-    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
-    from aiops_diagnostics.execution.chat_route_bindings import RouteBinding
-
-    row = SelfServiceStore(context.settings.database_file).app(app_id)
-    if row is None:
-        raise StandardAPIError(404, "DIFY_APP_NOT_BOUND", "app not bound")
-    if row["entry"] != "consumer":
-        raise StandardAPIError(409, "DIFY_APP_NOT_CONSUMER", "draft preview is for consumer apps")
-    if not context.settings.chat_route_bindings_file or not context.settings.execution_environment:
-        raise StandardAPIError(404, "CHAT_ROUTE_BINDINGS_DISABLED", "managed routes disabled")
-    workspace = _workspace_for_tenant(context, row["tenant_id"])
-    binding = DifyAppBinding(row["tenant_id"], "consumer", app_id, row["agent_name"])
-    route = RouteBinding(
-        environment=context.settings.execution_environment,
-        tenant_id=row["tenant_id"],
-        entry="consumer",
-        scenario="consumer_service",
-        engine="dify",
-        agent_id="",
-        agent_version_no=0,
-        app_id=app_id,
-        state="draft",
-        revision=0,
-    )
-    return binding, route, workspace
-
-
-def _tenant_in_scope(record_tenant: object, allowed_tenant: object) -> bool:
-    """这一行的租户是否落在给定范围内 —— 用共享规则判，不就地写比较。"""
-    from aiops_diagnostics.identity.order_visibility import (
-        TenantVisibility,
-        normalize_tenant,
-        visible_orders,
-    )
-
-    allowed = normalize_tenant(allowed_tenant)
-    if allowed is None:
-        return False
-    visibility = TenantVisibility(allowed=frozenset({allowed}))
-    return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)
-
-
-def _workflow_trial_draft(
-    context: Any, app_id: str, run_context: ScopeContext, question="check order status", selected_order=""
-):
-    from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource
-    from aiops_diagnostics.dify.dify_workflow_trial import WorkflowTrial
-
-    try:
-        binding, row, workspace = _managed_app_route(context, app_id)
-        draft = False
-    except StandardAPIError:
-        # 受管但**尚未发布**的副本：试用按它当前的内容跑。发布前先试是产品要求
-        # （"未发布副本可先预览，不要求先有正式版"），所以这里不能沿用"必须有正式路由"。
-        binding, row, workspace = _managed_app_draft(context, app_id)
-        draft = True
-    # 试用的范围必须落在**绑定所属租户**上。租户那一维走共享规则
-    # （`order_visibility.visible_orders`）："这一行属于哪个租户、在不在范围内"
-    # 在这个仓只有一处定义，不在这里手写比较。
-    # 草稿（`state="draft"`）**不是**正式路线，但它仍然要能试用：那正是"先试再发"的顺序。
-    # 所以这里只对**正式**路线要求 active；草稿要求的是"这个副本仍属于这个客户"，
-    # 那一条由 `ConsumerTrial.require_current` 的草稿分支查目录来保证。
-    if (not draft and not row.active) or not _tenant_in_scope(
-        binding.tenant_id, run_context.effective_tenant_id
-    ):
-        raise StandardAPIError(403, "TRIAL_SCOPE_MISMATCH", "trial scope does not match the bound app")
-    source = DifyDslSource(
-        context.settings.dify_console_base_url, app_id, context.settings.dify_console_api_key, workspace
-    )
-    if row.engine == "node":
-        from aiops_diagnostics.execution.node_publication import NodeTrial, candidate, target_for
-
-        target = target_for(context.settings, binding)
-        if target is None:
-            raise StandardAPIError(409, "NODE_TARGET_MISSING", "node target unavailable")
-        if target.entry == "operator":
-            raise StandardAPIError(
-                409, "OPERATOR_TRIAL_IDENTITY_REQUIRED", "operator trial requires company authorization"
-            )
-        return NodeTrial(candidate(source, target), row)
-    dsl = DifyDslClient(source).export_dsl()
-    if row.scenario == chat_execution.SCENARIO_CONSUMER_SERVICE:
-        from aiops_diagnostics.consumer import consumer_documents
-        from aiops_diagnostics.consumer.consumer_publication import frozen_settings, target_for
-        from aiops_diagnostics.consumer.consumer_trial import ConsumerTrial
-
-        target = target_for(context.settings, binding)
-        if target is None:
-            raise StandardAPIError(409, "CONSUMER_TARGET_MISSING", "consumer trial target missing")
-        from aiops_diagnostics.consumer.agent_contract import publication_settings
-        from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
-
-        candidates = set(order_identifier_candidates(question))
-        if candidates and candidates != {selected_order}:
-            raise StandardAPIError(400, "TRIAL_ORDER_MISMATCH", "试用问题与选定订单不一致")
-        previous = (
-            context.agent_manager.store.version(row.agent_id, row.tenant_id, row.agent_version_no).snapshot
-            if row.agent_id and row.agent_version_no
-            else {}
-        )
-        try:
-            frozen = publication_settings(
-                workflow_content(dsl),
-                frozen_settings(target, documents=consumer_documents.enabled(workflow_content(dsl))),
-                context.settings.public_base_url,
-                require_split=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 2,
-                require_picker=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 3,
-                owned_libraries=lambda: consumer_knowledge.owned_libraries(
-                    context.runtime, row.tenant_id, row.app_id
-                ),
-            )
-        except ValueError as exc:
-            raise StandardAPIError(409, "CONSUMER_FLOW_INVALID", str(exc)) from exc
-        return ConsumerTrial(dsl, source, row, frozen, question, draft=draft)
-    return WorkflowTrial(dsl, source, row)
-
-
-def _restore_bound_app(context: Any, app_id: str, version_no: int, initiator: tuple[str, str, str]):
-    from aiops_diagnostics.dify.dify_dsl_pull import (
-        DifyDslClient,
-        DifyDslSource,
-        SyncOutcome,
-        workflow_content,
-    )
-
-    binding, row, workspace = _managed_app_route(context, app_id)
-    version = context.agent_manager.store.version(row.agent_id, binding.tenant_id, version_no)
-    snapshot = version.snapshot
-    if row.engine == "node":
-        from aiops_diagnostics.execution import node_publication
-
-        target = node_publication.target_for(context.settings, binding)
-        if (
-            target is None
-            or snapshot.get("kind") != "node-sop"
-            or snapshot.get("app_id") != app_id
-            or snapshot.get("workspace_id") != workspace
-        ):
-            raise StandardAPIError(409, "NODE_VERSION_MISMATCH", "node version unavailable")
-        execution_manifest.from_text(snapshot["node_manifest"])
-        outcome = SyncOutcome(
-            binding.tenant_id,
-            binding.business_entry,
-            app_id,
-            binding.agent_name,
-            "synced",
-            version_no,
-            agent_id=row.agent_id,
-        )
-        node_publication.advance(context, outcome, binding, target, row.revision)
-        _record_publish_audit(
-            context,
-            app_id=app_id,
-            action="restored",
-            reason_code="",
-            binding=binding,
-            initiator=initiator,
-            version_no=version_no,
-        )
-        return {"app_id": app_id, "action": "synced", "version_no": version_no}
-    workflow_id = snapshot.get("workflow_id")
-    if (
-        snapshot.get("kind") != "dify-workflow"
-        or snapshot.get("app_id") != app_id
-        or snapshot.get("workspace_id") != workspace
-        or not workflow_id
-    ):
-        raise StandardAPIError(409, "DIFY_VERSION_MISMATCH", "version is not a verified app workflow")
-    source = DifyDslSource(
-        context.settings.dify_console_base_url, app_id, context.settings.dify_console_api_key, workspace
-    )
-    if workflow_content(DifyDslClient(source).export_dsl(workflow_id=workflow_id)) != snapshot.get(
-        "workflow"
-    ):
-        raise StandardAPIError(409, "DIFY_VERSION_MISMATCH", "published workflow differs from its snapshot")
-    outcome = SyncOutcome(
-        binding.tenant_id,
-        binding.business_entry,
         app_id,
-        binding.agent_name,
-        "synced",
-        version_no,
-        workflow_id=workflow_id,
-        agent_id=row.agent_id,
-        route_scenario=row.scenario,
-    )
-    _advance_route_binding(context, outcome, binding, initiator=initiator, expected_revision=row.revision)
-    _record_publish_audit(
-        context,
-        app_id=app_id,
-        action="restored",
-        reason_code="",
-        binding=binding,
         initiator=initiator,
-        version_no=version_no,
+        sync_bound_app_fn=_sync_bound_app,
     )
-    return {"app_id": app_id, "action": "synced", "version_no": version_no}
-
-
-def _publish_allowlist(configured: tuple[str, ...], settings: Any) -> tuple[str, ...]:
-    """发布门的模型白名单 = 平台注册表的模型 + 各 profile 已批准的端模型。
-
-    受管客户端的模型**不在**平台 provider 注册表里：现役两端本来就用不同模型
-    （`self-service.md`：客户端一个、管家一个，不能互相覆盖），注册表只写管家那个。
-    只按注册表判白名单，会让"开通客户端后发布"必然失败 —— 2026-10-31 在 41 实测：
-    客户端草稿发布报 `model is not allowlisted`，而 profile 的 `consumer_models`
-    早已批准了它。profile 就是端模型的批准清单，与 `consumer_models()` 用同一份数据。
-    """
-    profiles_file = getattr(settings, "operator_profiles_file", "")
-    if not profiles_file:
-        return configured
-    from aiops_diagnostics.dify.self_service_config import approved_model_names
-
-    return tuple(dict.fromkeys([*configured, *approved_model_names(settings)]))
 
 
 def _inject_runtime_hook(runtime: Any, method_name: str, dependency: Any) -> None:
@@ -1647,27 +1101,6 @@ def _resolve_conversation(
     return conversation
 
 
-#: The three answers an order authorization check can give. Explicit rather
-#: than a `bool`, because two of them are *not* "no": a check that could not be
-#: made is a different fact from a check that said no, and five surfaces must
-#: refuse while two must fall back silently. A `bool` erases the difference at
-#: the one place that can still tell them apart.
-OWNED = "owned"
-NOT_OWNED = "not_owned"
-UNAVAILABLE = "unavailable"
-
-
-#: The metric dimension an authorization precheck is recorded under. Its own
-#: bucket, excluded from the interaction totals: a precheck is component health,
-#: not a run. Recording it as `diagnosis` counted a failed lookup on the access
-#: probe, the report start and the question fallback as diagnosis runs that
-#: never happened.
-ORDER_AUTH_ROUTE = "order_auth"
-#: The code the warning and the metric row both carry, so an operator can grep
-#: for one string and find both.
-ORDER_AUTHENTICATION_UNAVAILABLE = "ORDER_AUTHORIZATION_UNAVAILABLE"
-
-
 #: 只有本切片的三个端点拒绝中间层缓存：它们是**按人**的授权结果，不是公共资源。
 NO_STORE_PATH_PREFIXES = (
     "/v1/conversations",
@@ -1681,254 +1114,57 @@ NO_STORE_PATH_PREFIXES = (
 
 
 def _no_store_headers(request: Request) -> dict[str, str]:
-    """错误响应也带 ``Cache-Control: no-store``，但**只**对充电状态那一组路径。
-
-    成功响应在各自的路由里显式设置；错误响应走统一处理器，所以判定放在这里 ——
-    否则一次 403 的响应体（含错误码）会被中间层按 URL 缓存，而 URL 里带着订单号。
-    只按路径前缀放行，避免把整份 API 的缓存语义一起改掉。
-    """
+    """错误响应也带 ``Cache-Control: no-store``，但**只**对充电状态那一组路径。"""
     if request.url.path.startswith(NO_STORE_PATH_PREFIXES):
         return {"Cache-Control": "no-store"}
     return {}
 
 
-def _require_matching_exec_config(
-    context: Any, run: AgentRun, observed: str | None, *, actual_node_id: str | None = None
-) -> AgentRun:
-    """领取时对照执行配置身份。**签发时固定、领取时对照、并把实际值落库。**
-
-    三件事刻意分开：
-    - 记录里**没有**期望（清单未启用）⇒ 什么都不做，行为与今天逐字一致；
-    - 有期望而节点回传缺失或不等 ⇒ 记录落终态（``failed`` + ``reason=exec_config_drift``），
-      **不返回快照**；
-    - 相等 ⇒ 把实际值写进记录，再放行。
-
-    关键点：**比较用什么、写什么、放行依据什么、以及此刻是否过期，是同一个写事务里的
-    同一份记录**。早先这里是「读一次记录 → 无条件 UPDATE → 返回早先读到的成功对象」，
-    于是另一个请求的拒绝提交进来之后，本请求仍会返回快照，并且把 ``matched`` 写在一条
-    终态记录上；而且只查 ``state`` 不查 ``expires_at``，过期后三条放行路径都还能交出正文。
-    现在交给 :meth:`AgentRunStore.confirm_exec_config`，它返回的是写入（含过期收敛）之后
-    读到的记录；终态记录原样返回，由调用方按既有语义拒绝。
-
-    调用点在 ``claim_charging_status`` 里共有两处（首次领取、以及 ``release_candidate``
-    的最后一次放行），重试路径与它共用同一段 —— R1-1 的教训是放行路径各有一次机会，
-    只覆盖其中一条会让另一条漏掉。
-    """
-    expected = run.expected_agent_version
-    if expected is None:
-        return run
-    confirmed = context.agent_run_store.confirm_exec_config(
-        run.run_id, observed, actual_node_id=actual_node_id
+def _chat_dispatch_hooks() -> ChatDispatchHooks:
+    return ChatDispatchHooks(
+        authenticate_caller=_authenticate_caller,
+        order_authorization=_order_authorization,
+        begin_conversation_turn=_begin_conversation_turn,
+        release_conversation_turn=_release_conversation_turn,
+        assistant_question_response=_assistant_question_response,
+        clarification=_clarification,
+        record_route_metric=_record_route_metric,
+        require_operator_company_token=_require_operator_company_token,
+        scoped_mysql_source_fn=scoped_mysql_source,
+        write_private_text_fn=write_private_text,
+        read_charging_status_fn=read_charging_status,
+        authorized_charging_snapshot_fn=_authorized_charging_snapshot,
+        consumer_mall_payment_fn=_consumer_mall_payment,
     )
-    if confirmed is None:
-        # 身份不一致（记录已被钉成 failed + exec_config_drift）或记录不存在。
-        raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_EXEC_CONFIG_DRIFT", "agent run refused")
-    return confirmed
 
 
 def _consumer_order_chat_via_node(
     context, caller, decision, payload, conversation, language, order_no, binding
 ):
-    """聊天入口的节点路线：**只做授权与建 QA，然后把等待搬到后台**。
-
-    这里刻意不做三件事：
-
-    * 不读业务（SQL/CPMS）—— 那是节点的活，网关替它读一次就等于「直读+节点」两套答案；
-    * 不等节点 —— App 的 POST 必须快速返回，否则前端超时；
-    * 失败不回落 —— 任何失败都落 QA 终态，绝不改走直读或旧模型分支。
-
-    授权仍然是**网关**做的：最新单要按原本人 SQL 范围选出来，指定单要核可见性。
-    选出来之后才派发，所以「选哪一单」不会变成节点或客户端的决定。
-    `binding` 是**这一条请求**选中的绑定（按租户登记），随请求冻结进 run。
-    """
-    if order_no is None:
-        request_observation.mark_stage(None, request_observation.STAGE_ORDER_CHAT_LOOKUP)
-        try:
-            scope = resolve_query_scope(caller)
-            with scoped_mysql_source(
-                Settings.from_config(context.settings.server_config_file), scope
-            ) as source:
-                rows = source.list_orders(page=1, page_size=1)
-        except (SourceError, ScopeError, ValueError) as exc:
-            raise StandardAPIError(
-                503, "ORDER_AUTHORIZATION_UNAVAILABLE", "order lookup unavailable", retryable=True
-            ) from exc
-        if not rows:
-            raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
-        order_no = str(rows[0]["order_no"])
-    _require_consumer_self_order(caller, str(decision.platform), order_no)
-    _require_visible_order(context, caller, order_no)
-
-    turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
-    try:
-        qa = context.runtime.start_chat_order_qa(
-            caller,
-            payload.question,
-            order_no=order_no,
-            language=language,
-            conversation=conversation,
-            conversation_turn_no=turn_no,
-            binding=binding,
-        )
-    except Exception:
-        _release_conversation_turn(context, conversation, turn_no)
-        raise
-    return JSONResponse(
-        status_code=status.HTTP_202_ACCEPTED,
-        headers={"Cache-Control": "no-store"},
-        content={
-            **_assistant_question_response(qa, language),
-            **(
-                {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
-                if conversation
-                else {}
-            ),
-        },
-    )
-
-
-def _consumer_intent_clarification(code, language):
-    from aiops_diagnostics.consumer.consumer_intent import message
-
-    return JSONResponse(
-        status_code=200,
-        headers={"Cache-Control": "no-store"},
-        content={
-            "type": "clarification",
-            "code": "CONSUMER_" + code.upper(),
-            "missing_fields": ["order_no"] if code == "order" else [],
-            "message": message(code, language),
-            "language": language,
-        },
+    return _chat_dispatch._consumer_order_chat_via_node(
+        context,
+        caller,
+        decision,
+        payload,
+        conversation,
+        language,
+        order_no,
+        binding,
+        hooks=_chat_dispatch_hooks(),
     )
 
 
 def _consumer_order_chat(context, caller, decision, payload, conversation, language, request):
-    order_no = payload.order_no or extract_order_identifier(payload.question)
-    authenticated_chat_order_reader(context, caller, request)
-    if order_no is None and not asks_latest_order(payload.question):
-        return _clarification(
-            context,
-            caller,
-            decision,
-            code=CLARIFY_ORDER_REQUIRED,
-            question=payload.question,
-            language=language,
-        )
-    # APP-RUNTIME-01：命中服务端绑定 ⇒ 交给客户节点跑，POST **立即**返回。
-    # 绑定按（环境，租户，consumer 入口，本场景）**显式登记**：没有这一条就走下面的原分支。
-    # 「全局配了一个文件」不算命中 —— 那等于任何能通过本人授权的租户都派到同一个节点，
-    # 而本任务要求的执行位置隔离恰好就是这件事（Codex 复核必修 1）。
-    try:
-        binding = chat_execution.select_binding(context.settings, caller)
-    except chat_execution.ChatRunUnavailable as exc:
-        # 绑定表在运行期读不出来：拒绝，而不是"当作没配"悄悄回落到直读。
-        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-    if binding is not None:
-        return _consumer_order_chat_via_node(
-            context, caller, decision, payload, conversation, language, order_no, binding
-        )
-
-    turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
-    qa = None
-    try:
-        if order_no is None:
-            request_observation.mark_stage(request, request_observation.STAGE_ORDER_CHAT_LOOKUP)
-            try:
-                scope = resolve_query_scope(caller)
-                with scoped_mysql_source(
-                    Settings.from_config(context.settings.server_config_file), scope
-                ) as source:
-                    rows = source.list_orders(page=1, page_size=1)
-            except (SourceError, ScopeError, ValueError) as exc:
-                raise StandardAPIError(
-                    503, "ORDER_AUTHORIZATION_UNAVAILABLE", "order lookup unavailable", retryable=True
-                ) from exc
-            if not rows:
-                raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
-            order_no = str(rows[0]["order_no"])
-        _require_consumer_self_order(caller, str(decision.platform), order_no)
-        request_observation.mark_stage(request, request_observation.STAGE_ORDER_CHAT_AUTH)
-        _require_visible_order(context, caller, order_no)
-        request_observation.mark_stage(request, request_observation.STAGE_ORDER_CHAT_CPMS)
-        try:
-            snapshot = _authorized_charging_snapshot(context.settings, caller, order_no)
-        except ChargingStatusError as exc:
-            raise StandardAPIError(
-                502, "CHARGING_STATUS_UNAVAILABLE", "charging status unavailable", retryable=True
-            ) from exc
-        _require_visible_order(context, caller, order_no)
-        answer = status_answer(snapshot, language)
-        qa = context.store.create_assistant_question(
-            caller.scope_fingerprint,
-            payload.question,
-            tenant_id=caller.effective_tenant_id,
-            internal_run_id="consumer-order-chat:" + order_no,
-        )
-        evidence = {
-            "call_id": qa["qa_id"],
-            "scope_fingerprint": caller.scope_fingerprint,
-            "source": snapshot["source"],
-            "answer_sha256": hashlib.sha256(json.dumps(answer, sort_keys=True).encode()).hexdigest(),
-            "snapshot": snapshot,
-            "result_sha256": hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(),
-        }
-        # The one id that joins this log line to the job and to the private
-        # evidence file. Recorded as soon as the row exists, so even a later
-        # evidence failure still names the QA it failed to complete.
-        request_observation.mark_qa(request, qa["qa_id"])
-        request_observation.mark_stage(request, request_observation.STAGE_ORDER_CHAT_EVIDENCE)
-        try:
-            write_private_text(
-                Path(context.settings.data_home) / "consumer-order-chat" / (qa["qa_id"] + ".json"),
-                json.dumps(evidence, ensure_ascii=False),
-            )
-            _require_visible_order(context, caller, order_no)
-            if conversation is not None:
-                context.conversation_store.complete_turn(
-                    conversation["conversation_id"],
-                    caller.scope_fingerprint,
-                    turn_no,
-                    answer=answer,
-                    status_qa_id=qa["qa_id"],
-                )
-            if not context.store.update_assistant_question(qa["qa_id"], status="completed", result=answer):
-                raise OSError("chat result write refused")
-        except (OSError, PrivatePathError, sqlite3.Error, ConversationError) as exc:
-            raise StandardAPIError(
-                503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable", retryable=True
-            ) from exc
-        _record_route_metric(
-            context,
-            caller,
-            route_type="qa",
-            outcome="completed",
-            conversation_id=conversation.get("conversation_id") if conversation else None,
-        )
-        qa.update(status="completed", result=answer)
-        return JSONResponse(
-            status_code=202,
-            headers={"Cache-Control": "no-store"},
-            content={
-                **_assistant_question_response(qa, language),
-                **(
-                    {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
-                    if conversation
-                    else {}
-                ),
-            },
-        )
-    except Exception as exc:
-        if qa is not None:
-            with contextlib.suppress(Exception):
-                context.store.update_assistant_question(qa["qa_id"], status="failed", error_code="QA_FAILED")
-        with contextlib.suppress(Exception):
-            _release_conversation_turn(context, conversation, turn_no)
-        if isinstance(exc, (OSError, PrivatePathError, sqlite3.Error, ConversationError)):
-            raise StandardAPIError(
-                503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable", retryable=True
-            ) from exc
-        raise
+    return _chat_dispatch._consumer_order_chat(
+        context,
+        caller,
+        decision,
+        payload,
+        conversation,
+        language,
+        request,
+        hooks=_chat_dispatch_hooks(),
+    )
 
 
 def authenticated_operator_console(context, session):
@@ -1979,534 +1215,37 @@ async def _operator_json(request):
 
 
 def authenticated_chat_order_reader(context, caller, request):
-    _require_consumer_self_order(caller, request.headers.get("X-Business-Entry"), "pending")
-    reader = _authenticate_caller(
-        context.caller_resolver,
-        request.headers.get("Authorization"),
-        request.headers.get("X-Third-Session"),
-        platform_entry="consumer",
-        source_key=request.headers.get(SOURCE_KEY_HEADER),
-        required_scope=STANDARD_ORDER_READ_SCOPE,
+    return _chat_dispatch.authenticated_chat_order_reader(
+        context, caller, request, authenticate_caller_fn=_authenticate_caller
     )
-    if reader.scope_fingerprint != caller.scope_fingerprint:
-        raise StandardAPIError(403, "CONSUMER_SCOPE_REQUIRED", "order read identity changed")
 
 
 def _require_current_chat_order(context, caller, qa, request):
-    from aiops_diagnostics.operator import operator_cpms
-
-    if str(qa.get("internal_run_id") or "").startswith(operator_cpms.PREFIX):
-        if qa["status"] == "completed":
-            _require_operator_company_token(request)
-            expected = context.operator_cpms.authorize_readback(
-                caller, qa["qa_id"], request.headers.get("Authorization", "").removeprefix("Bearer ")
-            )
-            if expected != qa.get("result"):
-                raise operator_cpms.OperatorRefused("OPERATOR_RESULT_MISMATCH")
-        return
-    from aiops_diagnostics.consumer import consumer_chat_service
-
-    if str(qa.get("internal_run_id") or "").startswith(consumer_chat_service.PREFIX):
-        run = context.dify_run_store.by_qa(qa["qa_id"])
-        if run and run.scope_fingerprint == caller.scope_fingerprint:
-            qa["language"] = run.language
-            result = qa.get("result") or {}
-            evidence = context.dify_run_store.context(run.run_id) or {}
-            # 旧审核FAQ原文只存中英文；新文档与本地化快照才使用所选语言。
-            if qa["status"] == "completed" and (
-                (
-                    evidence.get("candidates")
-                    and evidence.get("mode") != "documents"
-                    and result.get("retrieval_status") == "found"
-                    and not evidence.get("live_snapshot")
-                )
-                or (evidence.get("live_snapshot") and evidence.get("answer_language_version") != 2)
-            ):
-                qa["language"] = rendering_language(COMPOSED_LANGUAGES, run.language)
-                if run.language == "zh-Hant" and run.data_kind == "status" and evidence.get("live_snapshot"):
-                    qa["language"] = "zh-Hant"
-        if run and (run.order_no or run.data_kind == "agent"):
-            authenticated_chat_order_reader(context, caller, request)
-        try:
-            return consumer_chat_service.require_result(context.runtime, caller, qa)
-        except chat_execution.ChatRunUnavailable as exc:
-            raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-    if _is_node_chat_qa(qa):
-        return _require_current_chat_node_order(context, caller, qa, request)
-    internal = str(qa.get("internal_run_id") or "")
-    if internal.startswith(chat_execution.DIFY_RUN_PREFIX):
-        return _require_current_chat_dify_order(context, caller, qa, request)
-    if internal.startswith("consumer-order-chat:"):
-        authenticated_chat_order_reader(context, caller, request)
-        order_no = internal.removeprefix("consumer-order-chat:")
-        _require_consumer_self_order(caller, "consumer", order_no)
-        _require_visible_order(context, caller, order_no)
-        if not context.settings.consumer_order_chat_enabled:
-            raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
-        try:
-            path = Path(context.settings.data_home) / "consumer-order-chat" / (qa["qa_id"] + ".json")
-            validate_private_file(path)
-            evidence = json.loads(path.read_text())
-            snapshot = evidence["snapshot"]
-            if (
-                qa["status"] != "completed"
-                or evidence["scope_fingerprint"] != caller.scope_fingerprint
-                or evidence["call_id"] != qa["qa_id"]
-                or snapshot["order_no"] != order_no
-                or snapshot["source"] != "cpms.chargingInfo"
-                or evidence["result_sha256"]
-                != hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
-                or evidence["answer_sha256"]
-                != hashlib.sha256(json.dumps(qa["result"], sort_keys=True).encode()).hexdigest()
-            ):
-                raise ValueError("evidence differs")
-        except (OSError, PrivatePathError, ValueError, KeyError, TypeError) as exc:
-            raise StandardAPIError(
-                503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable"
-            ) from exc
+    return _chat_dispatch._require_current_chat_order(
+        context, caller, qa, request, hooks=_chat_dispatch_hooks()
+    )
 
 
 def _require_current_chat_node_order(context, caller, qa, request):
-    """节点路线的读取守卫：**按存储关联**找回那条 run，再复用它自己的放行判据。
-
-    两条路线的共同点不能省：入口仍是 consumer、订单仍需此刻可见、绑定仍需有效、
-    正文仍需是该 run 的 succeeded 快照。
-
-    判据本身只有一份：`chat_execution.final_release`。这里**不再**自己写一遍
-    —— 复核实测表明，手写的第二遍漏了四项（环境、actual==expected、节点登记环境、
-    执行配置核对），而且漏得很安静：GET 仍返回 200 + 正文。
-
-    停用之后**只**拒绝正文：`queued/running/failed/cancelled/expired` 仍按原协议可读。
-    否则用户看得到「取消返回 404」却看不到「其实已经取消成功」，前端无从显示。
-    """
-    internal = str(qa.get("internal_run_id") or "")
-    authenticated_chat_order_reader(context, caller, request)
-    order_no = internal.removeprefix(chat_execution.CHAT_RUN_PREFIX)
-    if not order_no:
-        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
-    _require_consumer_self_order(caller, "consumer", order_no)
-    # 无正文的状态：与绑定是否启用无关，本人仍要能读到它自己的作业状态。
-    if qa["status"] in {"queued", "running", "failed", "cancelled", "expired"}:
-        return
-    if qa["status"] != "completed":
-        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
-    store = context.agent_run_store
-    located = store.by_qa(qa["qa_id"]) if store is not None else None
-    if located is None:
-        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
-    if located.scope_fingerprint != caller.scope_fingerprint:
-        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
-    try:
-        # 绑定必须**此刻**仍成立，而且是**签发时那一条**：配置被换掉、节点被停用、
-        # 登记被拿掉，都不再交付正文。换一份"现在看起来像"的配置来背书同一段是错的。
-        binding = chat_execution.binding_for_key(context.settings, located.chat_binding)
-    except chat_execution.ChatRunUnavailable as exc:
-        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-    if binding is None:
-        if _route_binding_state(context, located.chat_binding) == "retracted":
-            raise StandardAPIError(410, "CHAT_ROUTE_RETRACTED", "this version was retracted")
-        raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
-
-    # 与委派入口同一条纪律：**先用可能阻塞的授权，再读记录做本地判定**。
-    _require_visible_order(context, caller, order_no)
-    try:
-        released = chat_execution.final_release(
-            store=store,
-            settings=context.settings,
-            caller=caller,
-            run_id=located.run_id,
-        )
-    except chat_execution.ChatRunUnavailable as exc:
-        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-    # 缓存的正文必须**就是这条快照的渲染**：被改过、或写着另一条 run 的结果，都不能交出去。
-    if not chat_execution.answer_matches_snapshot(
-        qa.get("result"),
-        released.snapshot or {},
-        language=released.language or DEFAULT_LANGUAGE,
-    ):
-        store.refuse(located.run_id, "qa_answer_mismatch")
-        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
-
-
-def _version_moved(binding: Any, run: Any) -> bool:
-    """这条绑定是不是已经指向**另一版**了。
-
-    只看 `workflow_id` 不够：`sync_workflow_from_dify` 在"导出的图变了、但 workflow
-    身份没变"时就会生成这种组合（Dify 的保存不换 workflow id）。那时旧版本的缓存正文
-    仍然会对得上 workflow，于是被放出去 —— 而它代表的是上一版的内容。
-
-    文件登记没有版本概念（两边都是 0），不受这条约束。
-    """
-    frozen = int(getattr(run, "agent_version_no", 0) or 0)
-    current = int(getattr(binding, "agent_version_no", 0) or 0)
-    revision = int(getattr(run, "route_revision", 0) or 0)
-    return (bool(frozen) and frozen != current) or (
-        bool(revision) and revision != int(getattr(binding, "route_revision", 0) or 0)
+    return _chat_dispatch._require_current_chat_node_order(
+        context, caller, qa, request, hooks=_chat_dispatch_hooks()
     )
-
-
-def _route_binding_state(context: Any, key: str | None) -> str:
-    """这条 key 在管理表里的状态（`active` / `retracted`），没有管理行时返回空串。
-
-    只用于**把错误码说清楚**：路由语义仍然只由 `binding_for_key` 一个地方决定。
-    """
-    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
-    if not database or not key:
-        return ""
-    from pathlib import Path
-
-    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-
-    try:
-        row = ChatRouteBindingStore(Path(database).expanduser().absolute()).by_key(key)
-    except Exception:  # noqa: BLE001 - 诊断用途，不能把回读搞崩
-        return ""
-    return row.state if row is not None else ""
-
-
-def _require_dify_binding_current(context: Any, run) -> None:
-    """那条 Dify 绑定**此刻**仍然成立，且仍是签发时那一条。
-
-    只看 run 与 grant 里冻结的值不够 —— 那两份都是签发那一刻的快照，它们彼此一致
-    完全说明不了"现在还能不能走 Dify"。运维把登记删掉、把 engine 改成 node、
-    或者换了一个 workflow，冻结值都不会变，而旧凭据在剩余有效期内仍然可用。
-
-    判据与回读守卫同一条：「按 `binding_key` 找回签发时那一条，并逐字比 `workflow_id`」。
-    """
-    from aiops_diagnostics.execution import chat_execution
-
-    # **试用**：它的执行身份是**临时的** workflow，不是正式那一条。要求两者相等会
-    # 让真实取数被拒（`CHARGING_STATUS_DISABLED`），试用永远完不成。
-    # 试用该核的是**源路由没被换掉**：按 `binding_key` 找到那条管理行，状态仍 active、
-    # revision 仍是签发时冻结的那个。临时 workflow 本身另由 `workflow_id` 与
-    # `studio` 快照在试用侧核对。
-    if getattr(run, "kind", "chat") == "trial":
-        _require_trial_source_route(context, run)
-        return
-
-    try:
-        binding = chat_execution.binding_for_key(context.settings, run.binding_key)
-    except chat_execution.ChatRunUnavailable as exc:
-        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-    if (
-        binding is None
-        or binding.engine != chat_execution.ENGINE_DIFY
-        or binding.workflow_id != run.workflow_id
-    ):
-        raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "dify binding is no longer active")
-    # 管理绑定的**版本**也必须还是签发时那一版：重新发布别的版本之后，旧 run 的结果
-    # 不再代表"现在对外的那一版"。文件登记没有版本概念（两边都是 0），不受这条约束。
-    if _version_moved(binding, run):
-        raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "dify binding moved to another version")
-
-
-def _same_tenant_as_grant(record_tenant: object, grant_tenant: object) -> bool:
-    """记录上的租户与凭据上的租户是不是同一个 —— 用共享规则判，不就地写比较。
-
-    "哪一行属于哪个租户、在不在允许范围内"在这个仓只有一处定义
-    （`order_visibility`）。这里的做法是：以**凭据的租户**为允许集合，把**记录那一行**
-    交给同一个行级渲染，看它是否被判为可见。相等当且仅当那一行落在集合内。
-
-    写成 `record_tenant == grant_tenant` 也能得到同一个答案，但那是第二条租户规则 ——
-    那条架构判据挡的正是"多一条规则"，不是这一次的写法对不对。
-    """
-    from aiops_diagnostics.identity.order_visibility import (
-        TenantVisibility,
-        normalize_tenant,
-        visible_orders,
-    )
-
-    allowed = normalize_tenant(grant_tenant)
-    if allowed is None:
-        return False
-    visibility = TenantVisibility(allowed=frozenset({allowed}))
-    # 真值判断而不是 `len(...) == 1`：判据按 AST 认"含 tenant 的比较"，写成比较会让
-    # 一次**合法的**共享规则调用被判成第二条规则。
-    return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)
 
 
 def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: dict) -> None:
-    """管理 Workflow 试用的缓存正文与执行时采用同一授权/路由/有效期边界。"""
-    result = trial.get("result") or {}
-    report = result.get("report") or {}
-    if trial.get("internal_run_id") == "node-sop-trial":
-        run = context.agent_run_store.by_qa(trial["diagnosis_id"])
-        if run is None or run.order_no != trial["order_no"]:
-            raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "node trial evidence unavailable")
-        _require_visible_order(context, caller, run.order_no)
-        try:
-            released = chat_execution.final_release(
-                store=context.agent_run_store, settings=context.settings, caller=caller, run_id=run.run_id
-            )
-        except chat_execution.ChatRunUnavailable as exc:
-            raise StandardAPIError(exc.http_status, exc.code, str(exc)) from exc
-        expected = chat_execution.answer_from_run(released, language=result.get("language", "zh"))
-        if (
-            report.get("summary") != expected["blocks"][0]["text"]
-            or report.get("node_run_id") != released.run_id
-            or report.get("manifest_sha256") != released.observed_agent_version
-        ):
-            raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "node trial evidence differs")
-        return
-    located = context.dify_run_store.by_qa(trial["diagnosis_id"])
-    if (
-        trial.get("internal_run_id") != "dify-workflow-trial"
-        and not (located is not None and located.kind == "trial")
-        and not report.get("workflow_run_id")
-    ):
-        return  # 旧诊断试用继续按原契约读取。
-    if located is not None and located.kind == "service_trial":
-        if located.data_kind == "agent":
-            from aiops_diagnostics.consumer.consumer_agent import order_ids
-
-            for order in order_ids(context.dify_run_store.context(located.run_id)):
-                _require_visible_order(context, caller, order)
-        if trial["order_no"]:
-            _require_visible_order(context, caller, trial["order_no"])
-        if not located.order_no and report.get("callback_version", 1) >= 3:
-            try:
-                consumer_knowledge_selection.require_owned(
-                    report.get("knowledge_base_ids", []),
-                    consumer_knowledge.owned_libraries(
-                        context.runtime, caller.effective_tenant_id, located.app_id
-                    ),
-                )
-            except ValueError as exc:
-                raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "所选知识库授权已变化") from exc
-        if trial.get("trial_managed_draft"):
-            from aiops_diagnostics.dify.self_service_store import SelfServiceStore
-
-            source = SelfServiceStore(context.settings.database_file).app(
-                trial.get("trial_source_app_id", "")
-            )
-            if (
-                not source
-                or not _tenant_in_scope(source["tenant_id"], located.tenant_id)
-                or source["entry"] != "consumer"
-                or source["environment"] != located.environment
-                or trial.get("trial_source_app_id") != source["app_id"]
-            ):
-                raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "trial source unavailable")
-        else:
-            _require_trial_source_route(context, located)
-        latest = context.dify_run_store.get(located.run_id)
-        snapshot = context.dify_run_store.snapshot(located.run_id)
-        if (
-            located.scope_fingerprint != caller.scope_fingerprint
-            or latest is None
-            or not deliverable(latest)
-            or not snapshot
-            or report.get("summary")
-            != (
-                "\n\n".join(b["text"] for b in snapshot["blocks"] if b.get("kind") == "text")
-                if located.data_kind == "agent"
-                else snapshot["blocks"][0]["text"]
-            )
-            or any(
-                report.get(k) != getattr(latest, k)
-                for k in ("workflow_run_id", "task_id", "workflow_id", "app_id")
-            )
-        ):
-            raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "trial result unavailable")
-        return
-    if located is None or located.kind != "trial" or located.scope_fingerprint != caller.scope_fingerprint:
-        raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial evidence unavailable")
-    if located.order_no != trial.get("order_no"):
-        raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial order evidence mismatch")
-    _require_visible_order(context, caller, located.order_no)
-    _require_trial_source_route(context, located)
-    latest = context.dify_run_store.get(located.run_id)
-    if latest is None or not deliverable(latest):
-        raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "trial result unavailable")
-    snapshot = context.dify_run_store.snapshot(latest.run_id)
-    if not snapshot or snapshot.get("order_no") != latest.order_no:
-        raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial snapshot unavailable")
-    from aiops_diagnostics.consumer.presentation import status_answer
-
-    expected = status_answer(snapshot, result.get("language", "zh"))["blocks"][0]["text"]
-    if report.get("summary") != expected or any(
-        report.get(field) != getattr(latest, field)
-        for field in ("workflow_run_id", "task_id", "workflow_id", "app_id")
-    ):
-        raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial result evidence mismatch")
-
-
-def _require_trial_source_route(context: Any, run) -> None:
-    """试用的源路由是否仍是签发时那一条。
-
-    试用跑在**临时应用**里，所以它的 `workflow_id` 与正式绑定天然不同 —— 拿正式
-    workflow 身份去比会把每一次真实试用都拒掉。这里只核两件试用真正依赖的事：
-    那条路由仍存在且 active，并且没有被别人重新发布/撤回（revision 未变）。
-    """
-    from pathlib import Path
-
-    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-
-    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
-    if not database:
-        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable")
-    try:
-        current = ChatRouteBindingStore(Path(database).expanduser().absolute()).by_key(run.binding_key)
-    except Exception as exc:  # noqa: BLE001 - 读不出来就不能放行
-        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable") from exc
-    if current is None or not current.active:
-        raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "trial source route is gone")
-    frozen = int(getattr(run, "route_revision", 0) or 0)
-    if frozen and current.revision != frozen:
-        raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "trial source route changed")
+    _chat_dispatch._require_workflow_trial_result(
+        context, caller, trial, order_authorization_fn=_order_authorization
+    )
 
 
 def _require_dify_grant_visible(context: Any, run) -> None:
-    """Dify 取数回调的**当前**本人授权判定。
-
-    与节点回调同一条纪律：用记录里**冻结**的身份去问授权器，而不是问 token 或请求体
-    自称的身份。三种结局都是拒绝，且原因分得开：
-
-    * 看得到 ⇒ 继续；
-    * 看不到 ⇒ 404 `ORDER_NOT_FOUND`（与直读路线同形，不泄露"这单存在但不属于你"）；
-    * 授权源不可用 ⇒ 503 `ORDER_AUTHORIZATION_UNAVAILABLE`（判不出来就是不交付，
-      不能把故障当默认可见）。
-
-    这个函数**只**回答"此刻能不能看这张单"。TTL、取消、绑定一致性由调用方在读记录时判 ——
-    两件事分开，才不会在一处把另一处漏掉。
-    """
-    try:
-        frozen = scope_from_json(run.scope_json)
-    except (ValueError, TypeError) as exc:
-        raise StandardAPIError(403, "AGENT_RUN_SCOPE_INVALID", "agent run refused") from exc
-    verdict = _order_authorization(context, frozen, run.order_no)
-    if verdict == UNAVAILABLE:
-        raise StandardAPIError(
-            503, "ORDER_AUTHORIZATION_UNAVAILABLE", "order authorization unavailable", retryable=True
-        )
-    if verdict == NOT_OWNED:
-        raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
+    _chat_dispatch._require_dify_grant_visible(context, run, order_authorization_fn=_order_authorization)
 
 
 def _require_current_chat_dify_order(context, caller, qa, request):
-    """Dify 路线的读取守卫。判据与节点路线同形，证据来源不同。
-
-    无正文的终态（queued/running/failed/cancelled/expired）与绑定是否启用无关，
-    本人始终读得到；**成功正文**必须过：
-
-    * 当前本人授权（与写结果前那一次同一个授权器）；
-    * 绑定此刻仍成立，且是**签发时那一条**（`workflow_id` 逐字相等）；
-    * 执行记录是 succeeded，且**有同一轮取数写下的快照**；
-    * 缓存正文就是该快照的渲染。
-
-    停用之后拒绝正文，与节点路线停用后的纪律一致。
-    """
-    internal = str(qa.get("internal_run_id") or "")
-    authenticated_chat_order_reader(context, caller, request)
-    order_no = internal.removeprefix(chat_execution.DIFY_RUN_PREFIX)
-    if not order_no:
-        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
-    _require_consumer_self_order(caller, "consumer", order_no)
-    if qa["status"] in {"queued", "running", "failed", "cancelled", "expired"}:
-        return
-    if qa["status"] != "completed":
-        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
-    runs = context.dify_run_store
-    located = runs.by_qa(qa["qa_id"])
-    if located is None:
-        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
-    if located.scope_fingerprint != caller.scope_fingerprint or located.order_no != order_no:
-        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
-    try:
-        binding = chat_execution.binding_for_key(context.settings, located.binding_key)
-    except chat_execution.ChatRunUnavailable as exc:
-        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-    if binding is None or binding.workflow_id != located.workflow_id or (_version_moved(binding, located)):
-        # `None` 有两种来源，且**必须**在错误码上分开：
-        #   * 绑定被拿掉 / 引擎改成 node —— 与停用同形；
-        #   * 这一版被**撤回** —— 行还在（`retracted`），只是不再参与路由。
-        # 合成一个码会让"被撤回"在运维眼里看起来像"没配过"。
-        if _route_binding_state(context, located.binding_key) == "retracted":
-            raise StandardAPIError(410, "CHAT_ROUTE_RETRACTED", "this version was retracted")
-        raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
-    # 先用可能阻塞的授权，再读记录做本地判定 —— 与另外两条路线同一条顺序。
-    _require_visible_order(context, caller, order_no)
-    # 外部授权回来之后**再核一次绑定**：运维可能就在这一次等待期间删掉登记、
-    # 改成 node 引擎或换掉 workflow。上面那次检查在授权之前，挡不住这段窗口。
-    try:
-        binding_after = chat_execution.binding_for_key(context.settings, located.binding_key)
-    except chat_execution.ChatRunUnavailable as exc:
-        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-    if (
-        binding_after is None
-        or binding_after.engine != chat_execution.ENGINE_DIFY
-        or binding_after.workflow_id != located.workflow_id
-        or _version_moved(binding_after, located)
-    ):
-        raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
-    latest = runs.get(located.run_id)
-    if latest is None or latest.state != "succeeded":
-        raise StandardAPIError(404, "AGENT_RUN_NO_RESULT", "dify run produced no result")
-    # 交付判据只有一条：`deliverable()`（成功态 + 180 秒窗口）。`get()` 的过期收敛只处理
-    # `running`，一条 succeeded 的记录过了 180 秒仍然是 succeeded —— 不判这里，
-    # "回读必须看 TTL"在成功路径上从未生效。
-    if not deliverable(latest):
-        raise StandardAPIError(410, "AGENT_RUN_EXPIRED", "dify run has expired")
-    snapshot = runs.snapshot(latest.run_id)
-    if snapshot is None or snapshot.get("order_no") != order_no:
-        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
-    if not chat_execution.answer_matches_snapshot(
-        qa.get("result"), snapshot, language=latest.language or DEFAULT_LANGUAGE
-    ):
-        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
-
-
-def _is_node_chat_qa(qa) -> bool:
-    return str(qa.get("internal_run_id") or "").startswith(chat_execution.CHAT_RUN_PREFIX)
-
-
-def _is_consumer_run(context: Any, run_id: str) -> bool:
-    """这条 run 是 C 端运行还是管家运行。
-
-    判据是 run 自己的 operation —— 同一个端点服务两类运行，不能靠调用方自报。
-    """
-    run = context.agent_run_store.peek(run_id)
-    return run is not None and run.operation not in {
-        "operator_order_diagnosis",
-        "operator_conversation",
-        "operator_agent",
-    }
-
-
-def _require_consumer_self_order(caller: ScopeContext, business_entry: str | None, order_no: str) -> None:
-    """两个充电状态入口共用的入口判据与订单号形状。
-
-    入口判据复用 ``is_operator_entry`` 的规范化（strip + lower）：上游会把
-    ``OPERATOR`` / `` consumer `` 当成入口，严格相等会让同一个请求在这一层被判成
-    「未知入口」。但**规范化之后仍要求恰好是 consumer**，缺头**拒绝**而不是默认成本人 ——
-    这个头当前由前端自报（见 `scope_context.is_operator_entry` 的说明），
-    「缺省即本人」等于让一个漏发的头静默换成本人范围。
-    C 端 App 走的是 `X-Business-Entry: consumer`，它本来就发。
-    """
-    if (
-        (business_entry or "").strip().lower() != "consumer"
-        or caller.delegated
-        or caller.data_scope.type != SCOPE_TYPE_SELF
-        or not caller.subject.c_user_id
-    ):
-        raise StandardAPIError(403, "CONSUMER_SCOPE_REQUIRED", "consumer self scope required")
-    if not is_order_identifier(order_no):
-        raise StandardAPIError(400, "INVALID_ORDER_NO", "invalid order number")
-
-
-def _require_consumer_self(caller: ScopeContext, business_entry: str | None) -> None:
-    """C 端本人入口判据，**与订单无关**的那一半。
-
-    订单入口在此之上再加订单号形状；站点接口不需要订单，但入口判据必须逐字相同 ——
-    否则同一个 `third-session` 会在两条路上得到不同的口径。
-    """
-    if (
-        (business_entry or "").strip().lower() != "consumer"
-        or caller.delegated
-        or caller.data_scope.type != SCOPE_TYPE_SELF
-        or not caller.subject.c_user_id
-    ):
-        raise StandardAPIError(403, "CONSUMER_SCOPE_REQUIRED", "consumer self scope required")
+    return _chat_dispatch._require_current_chat_dify_order(
+        context, caller, qa, request, hooks=_chat_dispatch_hooks()
+    )
 
 
 def _require_visible_order(context: Any, caller: ScopeContext, order_no: str) -> None:
@@ -2521,79 +1260,41 @@ def _require_visible_order(context: Any, caller: ScopeContext, order_no: str) ->
 
 
 def _authorized_consumer_snapshot(settings, caller, order_no, data_kind, *, include_composition=False):
-    if data_kind == "status":
-        return _authorized_charging_snapshot(settings, caller, order_no)
-    from aiops_diagnostics.consumer.billing import read_billing_record
-    from aiops_diagnostics.consumer.knowledge_access import consumer_endpoint
-
-    if data_kind != "billing":
-        raise ValueError("unsupported consumer data kind")
-    snapshot = read_billing_record(
-        consumer_endpoint(settings, caller.effective_tenant_id),
+    return _chat_dispatch._authorized_consumer_snapshot(
+        settings,
+        caller,
         order_no,
-        tenant_id=caller.effective_tenant_id,
-        user_id=caller.subject.c_user_id or "",
+        data_kind,
         include_composition=include_composition,
+        authorized_charging_snapshot_fn=_authorized_charging_snapshot,
+        consumer_mall_payment_fn=_consumer_mall_payment,
     )
-    if include_composition:
-        snapshot["mall_payment"] = _consumer_mall_payment(settings, caller, order_no, snapshot)
-    return snapshot
 
 
 def _consumer_mall_payment(settings, caller, order_no, snapshot):
-    """商城侧订单/税项/支付证据；任何缺口只降级为标注，不打断账务读取本身。
-
-    身份边界复用充电库同一条 scope 下推：商城行必须与已授权订单同租户、
-    同订单消费者，读不到就报缺证，不换一条更宽的路径去「试着关联」。
-    """
-    from aiops_diagnostics.consumer.billing import mall_payment_evidence
-
-    try:
-        with scoped_mysql_source(
-            Settings.from_config(settings.server_config_file), resolve_query_scope(caller)
-        ) as source:
-            return mall_payment_evidence(source.mall_billing_records(order_no), snapshot)
-    except Exception as exc:  # noqa: BLE001 - 证据段是降级契约：任何意外都不能让账务答复 5xx
-        _LOGGER.warning("consumer_mall_payment degraded: %s", exc.__class__.__name__)
-        return mall_payment_evidence(None, snapshot)
+    return _chat_dispatch._consumer_mall_payment(
+        settings, caller, order_no, snapshot, scoped_mysql_source_fn=scoped_mysql_source
+    )
 
 
 def _authorized_charging_snapshot(
     settings: GatewayServerSettings, caller: ScopeContext, order_no: str
 ) -> dict[str, Any]:
-    """读业务：**只**在有授权保证的路径上调用 ``read_charging_status``。
-
-    直读入口与节点回呼入口都走这里 —— 契约 §3.6 要求两个入口共用同一份授权读取规则，
-    不能在内部端点上另造一条更宽松的。身份取自已验证的 ScopeContext，不取请求头。
-    """
-    from aiops_diagnostics.consumer.knowledge_access import consumer_endpoint
-
-    try:
-        endpoint = consumer_endpoint(settings, caller.effective_tenant_id)
-    except ValueError as exc:
-        raise StandardAPIError(
-            404, "TENANT_ENDPOINT_UNRESOLVED", "business endpoint is not registered"
-        ) from exc
-    return read_charging_status(
-        endpoint,
-        order_no,
-        tenant_id=caller.effective_tenant_id,
-        user_id=caller.subject.c_user_id or "",
+    return _chat_dispatch._authorized_charging_snapshot(
+        settings, caller, order_no, read_charging_status_fn=read_charging_status
     )
 
 
 def _charged_snapshot_response(
     settings: GatewayServerSettings, context: Any, caller: ScopeContext, order_no: str
 ) -> dict[str, Any]:
-    try:
-        snapshot = _authorized_charging_snapshot(settings, caller, order_no)
-    except ChargingStatusError as exc:
-        raise StandardAPIError(502, "CHARGING_STATUS_UNAVAILABLE", "charging status unavailable") from exc
-    return {
-        **snapshot,
-        "environment": settings.execution_environment,
-        "gateway_version": __version__,
-    }
+    return _chat_dispatch._charged_snapshot_response(
+        settings,
+        context,
+        caller,
+        order_no,
+        authorized_charging_snapshot_fn=_authorized_charging_snapshot,
+    )
 
 
 def _consumer_charging_result(
@@ -2602,45 +1303,9 @@ def _consumer_charging_result(
     caller: ScopeContext,
     issued: AgentRun,
 ) -> dict[str, Any]:
-    """委派入口的回执：**授权 → 复用共享放行判据 → 回执 + 同一快照**。
-
-    授权必须在最后一次本地读取之前完成（R2-1）：反过来的话，授权器返回时手里握着的
-    仍是授权**之前**读到的那份快照，授权期间发生的撤销/到期/停用都会漏掉。
-    放行判据本身只有一份（`chat_execution.final_release`），聊天 worker 与聊天回读
-    走的是同一段 —— 这里不再自带第二套 if。
-    """
-    try:
-        _require_visible_order(context, caller, issued.order_no)
-    except StandardAPIError as exc:
-        context.agent_run_store.refuse(
-            issued.run_id, "order_not_visible" if exc.status_code == 404 else "authorization_unavailable"
-        )
-        raise
-    try:
-        released = chat_execution.final_release(
-            store=context.agent_run_store,
-            settings=settings,
-            caller=caller,
-            run_id=issued.run_id,
-        )
-    except chat_execution.ChatRunUnavailable as exc:
-        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-    return {**released.receipt(), "charging_status": released.snapshot}
-
-
-def _claim_payload(run: AgentRun) -> dict[str, Any]:
-    """回给执行节点的**唯一合法载荷**：7 字段快照 + 服务端观察到的执行位置。
-
-    ``actual_node_id`` 来自节点认证结果，不是节点自报的头，也不是模型文本。
-    """
-    snapshot = run.snapshot or {}
-    return {
-        **snapshot,
-        "environment": run.environment,
-        "gateway_version": run.gateway_version,
-        "actual_node_id": run.actual_node_id,
-        "run_state": run.state,
-    }
+    return _chat_dispatch._consumer_charging_result(
+        settings, context, caller, issued, order_authorization_fn=_order_authorization
+    )
 
 
 def _order_authorization(

@@ -24,10 +24,6 @@ AUDIENCE_CUSTOMER = "customer"
 AUDIENCE_INTERNAL = "internal"
 
 
-class KnowledgeGrantError(ValueError):
-    """可向页面展示的稳定拒绝。"""
-
-
 class KnowledgeGrants:
     """对客知识的分发授权台账：显式登记 `(tenant_id, environment, knowledge_base_id)`。"""
 

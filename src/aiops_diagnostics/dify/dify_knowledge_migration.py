@@ -22,7 +22,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 #: 搬完之后给重复模板加的前缀。保留可回溯，不删除。
@@ -34,28 +33,6 @@ class MigrationError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.message = message
-
-
-@dataclass(frozen=True, slots=True)
-class MigrationReport:
-    tenant_id: str
-    workspace_id: str
-    moved_datasets: tuple[str, ...]
-    moved_apis: tuple[str, ...]
-    archived_apis: tuple[str, ...]
-    rebound: tuple[str, ...]
-    already_correct: bool
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "tenant_id": self.tenant_id,
-            "workspace_id": self.workspace_id,
-            "moved_datasets": list(self.moved_datasets),
-            "moved_apis": list(self.moved_apis),
-            "archived_apis": list(self.archived_apis),
-            "rebound": list(self.rebound),
-            "already_correct": self.already_correct,
-        }
 
 
 def plan(datasets: list[dict[str, Any]], apis: list[dict[str, Any]], *, workspace_id: str) -> dict[str, Any]:
