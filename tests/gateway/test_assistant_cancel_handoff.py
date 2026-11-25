@@ -165,7 +165,9 @@ def test_every_evidence_entry_file_is_covered() -> None:
     keep both tests green while every dated milestone record went unread.
     """
     names = [name for name, _ in _attribution_documents()]
-    assert any(name.startswith("docs/validation/") and not name.endswith("/README.md") for name in names), names
+    assert any(name.startswith("docs/validation/") and not name.endswith("/README.md") for name in names), (
+        names
+    )
 
 
 def test_no_document_still_blames_173_for_the_stop_link() -> None:
