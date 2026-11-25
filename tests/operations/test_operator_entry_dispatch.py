@@ -117,9 +117,6 @@ class _SiteRows:
             if row["shop"] in shop_ids and row["tenant"] == tenant_id
         )
 
-    def site_ids_by_points(self, point_ids, tenant_id):
-        return ()
-
 
 def _entry_state(f, monkeypatch, *, data_scope, shops=("SHOP-9",), site_rows=None, normalize=True):
     """真实分派器 + 真实 ``UpmsOperatorSiteScope`` 装进已装配的应用（Devin 8AU）。

@@ -762,12 +762,6 @@ class MySQLSource:
             return ()
         return self._site_ids_by_column("shop_id", shop_ids, tenant_id)
 
-    def site_ids_by_points(self, point_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
-        """站点归属解析：``ch_site.dis_point_id`` → 站点 ID（Dis 点位归属）。"""
-        if not point_ids:
-            return ()
-        return self._site_ids_by_column("dis_point_id", point_ids, tenant_id)
-
     def _site_ids_by_column(self, column: str, values: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
         if not all(SAFE_VALUE.fullmatch(value) for value in values):
             raise ValueError("范围 ID 包含不允许的字符")

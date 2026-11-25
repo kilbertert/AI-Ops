@@ -68,9 +68,6 @@ class _Runtime:
     def get_standard_diagnosis(self, context, diagnosis_id):
         return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
 
-    def list_standard_diagnoses(self, context, *, limit):
-        return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
-
     def shutdown(self) -> None:
         pass
 

@@ -41,6 +41,7 @@ def test_env_example_has_no_retired_runtime_configuration() -> None:
     retired = (
         "AIOPS_HTTP_",
         "AIOPS_DIAG_API_",
+        "AIOPS_DIS_",
         "AIOPS_CODEX_BIN=",
         "AIOPS_CODEX_RUNTIME_HOME=",
         "AIOPS_AGENT_MAX_",
@@ -94,15 +95,6 @@ def test_env_example_documents_the_company_source_key_gate() -> None:
     # fail closed 那句与「覆盖式注入」的要求都写在说明里（被换行拆开，逐段断言）。
     assert "fail closed" in text and "不是放行" in text
     assert "覆盖式注入" in text
-
-
-def test_env_example_documents_dis_point_scope_boundary() -> None:
-    text = _template()
-
-    assert "AIOPS_DIS_BASE_URL=" in text
-    assert "AIOPS_DIS_TOKEN=" in text
-    assert "AIOPS_DIS_TIMEOUT_SECONDS=" in text
-    assert "服务侧静态令牌" in text
 
 
 def test_env_example_mirrors_the_setting_source_table() -> None:

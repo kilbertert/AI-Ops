@@ -676,33 +676,6 @@ class GatewayStore:
             ).fetchone()
         return _standard_diagnosis_from_row(row) if row is not None else None
 
-    def list_standard_diagnoses(
-        self,
-        scope_fingerprint: str,
-        *,
-        limit: int = 50,
-    ) -> list[dict[str, Any]]:
-        if not 1 <= limit <= 200:
-            raise ValueError("limit must be between 1 and 200")
-        with self._connection(write=True) as connection:
-            self._expire_diagnoses(connection, now_utc())
-            rows = connection.execute(
-                """
-                SELECT diagnosis_id, order_no, question, indicator_code, status,
-                       created_at, updated_at
-                FROM async_jobs
-                WHERE scope_fingerprint = ? AND kind = 'order'
-                ORDER BY created_at DESC LIMIT ?
-                """,
-                (scope_fingerprint, limit),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def count_standard_diagnoses(self) -> int:
-        with self._connection() as connection:
-            row = connection.execute("SELECT COUNT(*) AS count FROM async_jobs").fetchone()
-        return int(row["count"])
-
     # ------------------------------------------------------------------
     # assistant_questions (general-question jobs, T3/#153)
     # ------------------------------------------------------------------

@@ -1,20 +1,12 @@
 from __future__ import annotations
 
-import urllib.error
 from dataclasses import FrozenInstanceError
 from typing import Any
-from urllib.parse import urlsplit
 
 import pytest
 
-from aiops_diagnostics.common.config import DisSettings
 from aiops_diagnostics.identity.query_scope import (
-    DIS_POINT_BY_USER_PATH,
-    SCOPE_ERROR_DIS_AUTH_FAILED,
-    SCOPE_ERROR_DIS_CONFIG_MISSING,
-    SCOPE_ERROR_DIS_UNAVAILABLE,
     SCOPE_ERROR_SCOPE_TOO_LARGE,
-    DisHttpDirectory,
     QueryScope,
     ScopeError,
     operator_site_scope_from_shops,
@@ -22,6 +14,7 @@ from aiops_diagnostics.identity.query_scope import (
     static_site_mapper,
 )
 from aiops_diagnostics.identity.scope_context import (
+    SCOPE_ERROR_EMPTY_SCOPE,
     SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,
@@ -128,16 +121,6 @@ def _context(
     )
 
 
-class _FakeDis:
-    def __init__(self, point_ids: tuple[str, ...] = ()) -> None:
-        self.point_ids = point_ids
-        self.calls: list[tuple[str, str]] = []
-
-    def point_ids_for_user(self, c_user_id: str, tenant_id: str) -> tuple[str, ...]:
-        self.calls.append((c_user_id, tenant_id))
-        return self.point_ids
-
-
 def test_query_scope_resolves_plain_organ_scope() -> None:
     context = _context()
     scope = resolve_query_scope(context)
@@ -164,20 +147,6 @@ def test_query_scope_all_scope_leaves_sites_unrestricted() -> None:
     assert not scope.empty_site_scope
 
 
-def test_query_scope_all_scope_with_delegation_applies_dis_intersection() -> None:
-    context = _context(
-        data_scope=_scope(type_=SCOPE_TYPE_ALL),
-        target_b_user_id="B-TARGET-2",
-        delegated_permissions=True,
-    )
-    dis = _FakeDis(point_ids=("P-1", "P-2"))
-    mapper = static_site_mapper(sites_by_point={"P-1": ("SITE-9",), "P-2": ("SITE-8",)})
-    scope = resolve_query_scope(context, dis=dis, mapper=mapper)
-
-    assert scope.site_ids == ("SITE-8", "SITE-9")
-    assert dis.calls == [("C-TARGET-2", TENANT)]
-
-
 def test_query_scope_self_scope_carries_target_user_id() -> None:
     context = _context(
         data_scope=_scope(type_=SCOPE_TYPE_SELF, site_ids=()),
@@ -196,7 +165,8 @@ def test_query_scope_empty_site_scope_is_marked_for_short_circuit() -> None:
     assert scope.empty_site_scope
 
 
-def test_query_scope_fails_closed_when_delegation_needs_dis_but_none_configured() -> None:
+def test_query_scope_fails_closed_when_delegation_is_requested() -> None:
+    """历史 Dis 点位代查已退役（ADR-0342）：无论目标是否绑定 C 端 ID，非 self 代查一律 fail closed。"""
     context = _context(
         target_b_user_id="B-TARGET-2",
         delegated_permissions=True,
@@ -205,16 +175,21 @@ def test_query_scope_fails_closed_when_delegation_needs_dis_but_none_configured(
     with pytest.raises(ScopeError) as excinfo:
         resolve_query_scope(context)
 
-    assert excinfo.value.code == SCOPE_ERROR_DIS_CONFIG_MISSING
+    assert excinfo.value.code == SCOPE_ERROR_EMPTY_SCOPE
 
+    without_c_user = ScopeContext(
+        caller=context.caller,
+        subject=SubjectRecord(b_user_id="B-TARGET-3", c_user_id=None, username="b.only", tenant_id=TENANT),
+        delegated=True,
+        effective_tenant_id=TENANT,
+        data_scope=context.data_scope,
+        roles=context.roles,
+        permissions=context.permissions,
+    )
+    with pytest.raises(ScopeError) as excinfo_no_c:
+        resolve_query_scope(without_c_user)
 
-def test_query_scope_merges_dis_target_sites_with_caller_scope() -> None:
-    context = _context(target_b_user_id="B-TARGET-2", delegated_permissions=True)
-    dis = _FakeDis(point_ids=("P-1",))
-    mapper = static_site_mapper(sites_by_point={"P-1": ("SITE-A-1", "SITE-X")})
-    scope = resolve_query_scope(context, dis=dis, mapper=mapper)
-
-    assert scope.site_ids == ("SITE-A-1",)  # 交集去掉 SITE-X
+    assert excinfo_no_c.value.code == SCOPE_ERROR_EMPTY_SCOPE
 
 
 def test_query_scope_intercept_keeps_the_immutable_contract() -> None:
@@ -227,17 +202,6 @@ def test_query_scope_intercept_keeps_the_immutable_contract() -> None:
         scope.site_ids = ("SITE-Y",)  # type: ignore[misc]
 
 
-def test_query_scope_fails_closed_on_oversized_dis_point_set() -> None:
-    context = _context(target_b_user_id="B-TARGET-2", delegated_permissions=True)
-    dis = _FakeDis(point_ids=tuple(f"P-{i}" for i in range(1001)))
-    mapper = static_site_mapper(sites_by_point={f"P-{i}": (f"S-{i}",) for i in range(1001)})
-
-    with pytest.raises(ScopeError) as excinfo:
-        resolve_query_scope(context, dis=dis, mapper=mapper)
-
-    assert excinfo.value.code == SCOPE_ERROR_SCOPE_TOO_LARGE
-
-
 def test_query_scope_audit_summary_has_no_credentials() -> None:
     context = _context()
     scope = resolve_query_scope(context)
@@ -245,98 +209,6 @@ def test_query_scope_audit_summary_has_no_credentials() -> None:
     payload = scope.audit_summary()
     assert payload["tenant_id"] == TENANT
     assert "token" not in str(payload).lower() or "platform-token" not in str(payload)
-
-
-class _FakeResponse:
-    def __init__(self, payload: Any) -> None:
-        self._body = payload
-        self.status = 200
-
-    def __enter__(self) -> _FakeResponse:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
-        return False
-
-    def read(self) -> bytes:
-        return self._body
-
-
-class _FakeDisTransport:
-    def __init__(self, payload: Any) -> None:
-        self.payload = payload
-        self.requests: list[tuple[str, dict[str, str]]] = []
-
-    def __call__(self, request: Any, timeout: int | None = None) -> _FakeResponse:
-        split = urlsplit(request.full_url)
-        self.requests.append((split.path, {name: value for name, value in request.header_items()}))
-        return _FakeResponse(self.payload if not isinstance(self.payload, bytes) else self.payload)
-
-
-def _dis_directory() -> DisHttpDirectory:
-    return DisHttpDirectory(
-        DisSettings(base_url="https://dis.example.test", token="dis-service-token", timeout_seconds=5)
-    )
-
-
-def test_dis_http_directory_forwards_token_and_tenant_headers(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = _FakeDisTransport(b'{"code":0,"msg":"ok","data":[{"pointId":"P-1"},{"pointId":"P-2"}]}')
-    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", transport)
-    directory = _dis_directory()
-
-    point_ids = directory.point_ids_for_user("C-TARGET-2", TENANT)
-
-    assert point_ids == ("P-1", "P-2")
-    path, headers = transport.requests[0]
-    assert path == DIS_POINT_BY_USER_PATH.format(user_id="C-TARGET-2")
-    folded = {key.casefold(): value for key, value in headers.items()}
-    assert folded["authorization"] == "dis-service-token"
-    assert folded["tenantid"] == TENANT
-    assert folded["site"] == TENANT
-    assert folded["saastype"] == "STANDARD"
-
-
-def test_dis_http_directory_fails_closed_on_http_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def forbidden(request: Any, timeout: int | None = None) -> _FakeResponse:
-        raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", hdrs=None, fp=None)  # type: ignore[arg-type]
-
-    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", forbidden)
-
-    with pytest.raises(ScopeError) as excinfo:
-        _dis_directory().point_ids_for_user("C-TARGET-2", TENANT)
-
-    assert excinfo.value.code == SCOPE_ERROR_DIS_AUTH_FAILED
-
-
-def test_dis_http_directory_fails_closed_on_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    def unreachable(request: Any, timeout: int | None = None) -> _FakeResponse:
-        raise urllib.error.URLError("connection refused")
-
-    monkeypatch.setattr("aiops_diagnostics.common.bounded_http.urllib.request.urlopen", unreachable)
-
-    with pytest.raises(ScopeError) as excinfo:
-        _dis_directory().point_ids_for_user("C-TARGET-2", TENANT)
-
-    assert excinfo.value.code == SCOPE_ERROR_DIS_UNAVAILABLE
-
-
-def test_dis_http_directory_fails_closed_without_config() -> None:
-    directory = DisHttpDirectory(DisSettings())
-
-    with pytest.raises(ScopeError) as excinfo:
-        directory.point_ids_for_user("C-TARGET-2", TENANT)
-
-    assert excinfo.value.code == SCOPE_ERROR_DIS_CONFIG_MISSING
-
-
-def test_dis_http_directory_rejects_path_injection_in_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "aiops_diagnostics.common.bounded_http.urllib.request.urlopen",
-        _FakeDisTransport(b"{}"),
-    )
-
-    with pytest.raises(ValueError):
-        _dis_directory().point_ids_for_user("../user/info", TENANT)
 
 
 def test_query_scope_rejects_oversized_business_scope_ids() -> None:

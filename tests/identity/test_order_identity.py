@@ -217,7 +217,6 @@ _ALLOWED_ALPHABET_LITERALS = {
     "gateway/gateway_config.py": 2,  # 主机名 / 端点名
     "gateway/gateway_store.py": 1,  # scope 指纹与其他 store 字段
     "gateway/metrics_store.py": 2,  # 租户 id / 指标 id
-    "identity/query_scope.py": 1,  # 路径段
     "identity/scope_context.py": 1,  # 路径段
     "operator/attachments.py": 1,  # 附件 file_id 格式校验，非订单号
     "operator/communication.py": 2,  # deviceCode/childDeviceCode设备码、event/functionId事件名；非订单

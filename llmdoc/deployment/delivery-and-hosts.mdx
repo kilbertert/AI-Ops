@@ -62,19 +62,6 @@ code:
     - tests/dify/test_dify_idempotent_import.py
     - ops/environments/env-41.toml
     - ops/environments/env-95.toml
-    - ops/environments/env95/README.md
-    - ops/environments/env95/build.sh
-    - ops/environments/env95/build-node.sh
-    - ops/environments/env95/install.sh
-    - ops/environments/env95/upgrade.sh
-    - ops/environments/env95/retire.sh
-    - ops/environments/env95/render-callbacks.py
-    - ops/environments/env95/aiops-gateway-95.service
-    - ops/environments/env95/node-callback.service
-    - ops/environments/env95/node-runtime.override.yaml
-    - ops/environments/env95/node-runtime.service
-    - ops/environments/env95/shared-services-tunnel.service
-    - ops/environments/env95/zz-init-complete.sql
     - tools/content/render_business_ingress.py
     - deploy/m2-live-03/bootstrap_platform.py
     - .dev-host.toml
@@ -87,8 +74,6 @@ code:
     - .sandcastle/cd-watch.mjs
     - .sandcastle/deploy-state.mjs
     - tests/integrations/test_business_environment_ingress.py
-    - tests/tooling/test_env95_node_runtime.py
-    - tests/tooling/test_env95_upgrade.py
     - tests/tooling/test_m2_live03_bootstrap.py
 ---
 
@@ -161,7 +146,7 @@ deploy-41 失败 → 生产未更新（远端自检回滚）；release-notes 失
 - `deploy/README.md`（部署索引：尾号=主机逻辑名、`mN-*`=里程碑试验码非主机）
 - `deploy/deploy-41.sh`（各闸）+ `deploy/classify-remote-result.sh`（失败分类法）
 - `deploy/node-runtime/README.md`（最承重的节点交付文档）
-- `ops/environments/env95/README.md`（95 离线包重建承重手册——该目录是首次重建资产非通用安装器）
+- `ops/environments/gateway/README.md`（正式受管最小 Gateway 预演与安装手册；已撤回的 `ops/environments/env95/` 随 ADR-0342 退役，历史文本保留于 Git `a4cf295e`）
 - `deploy/m2-live-03/images.lock.json`（制品身份合同）
 - `ops/dify-exposure-registry.md`（暴露唯一声明）
 - `docs/agents/actions-delivery.md`、`docs/agents/env-41-runbook.md`（交付手册+主机合同）、`docs/agents/gateway-schema-runbook.md`（schema 闸手册）

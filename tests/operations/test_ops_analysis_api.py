@@ -109,11 +109,14 @@ class _Runtime:
             card=card,
         )
 
-    def list_standard_diagnoses(self, context: ScopeContext, *, limit: int = 50):
-        return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
-
     def shutdown(self) -> None:
         return None
+
+
+def _count_async_jobs(store: GatewayStore) -> int:
+    with store._connection() as connection:
+        row = connection.execute("SELECT COUNT(*) AS count FROM async_jobs").fetchone()
+    return int(row["count"])
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, GatewayStore, _Runtime]:
@@ -237,7 +240,7 @@ def test_an_inverted_window_is_refused_before_a_job_exists(tmp_path: Path) -> No
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "ANALYSIS_UNAVAILABLE"
-    assert store.count_standard_diagnoses() == 0
+    assert _count_async_jobs(store) == 0
 
 
 def test_an_explicit_empty_site_list_is_refused(tmp_path: Path) -> None:
@@ -247,7 +250,7 @@ def test_an_explicit_empty_site_list_is_refused(tmp_path: Path) -> None:
         response = client.post("/v1/standard/analyses", headers=_headers(), json={"site_ids": [], **WINDOW})
 
     assert response.status_code == 503
-    assert store.count_standard_diagnoses() == 0
+    assert _count_async_jobs(store) == 0
 
 
 @pytest.mark.parametrize("field", ["order_no", "question"])
@@ -302,7 +305,7 @@ def test_an_unknown_card_is_refused_by_the_schema(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 422
-    assert store.count_standard_diagnoses() == 0
+    assert _count_async_jobs(store) == 0
 
 
 def test_the_payment_card_joins_the_same_surface(tmp_path: Path) -> None:

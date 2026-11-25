@@ -144,7 +144,6 @@ LAYOUT = {
                 "check-41-editable.sh",
                 "classify-remote-result.sh",
                 "company-gitlab-api.sh",
-                "d4-cutover.py",
                 "deploy-41.sh",
                 "manual-deploys.md",
                 "operator-h5.py",

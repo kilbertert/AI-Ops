@@ -96,7 +96,7 @@ Gateway 数据库用 `file:<path>?mode=ro` 及 `PRAGMA query_only=ON`，仅查�
 
 ## 5. 新实例重建
 
-用户已指定95清理旧AI-Ops并验证平台自维护环境登记。构建、安装、退休与恢复方法见[重建手册](../../ops/environments/env95/README.md)。状态以本轮验收记录为准，资产存在不表示已执行。
+用户已指定95清理旧AI-Ops并验证平台自维护环境登记。原 95 试验重建手册已随 2026-11-14 撤回在 [ADR-0342](../adr/0342-retire-tier2-dis-scope-env95-and-legacy-cutover-scripts.md) 移出工作树（历史复查见 Git 修订 `a4cf295e:ops/environments/env95/README.md` 与 [ADR-0260](../adr/0260-env95-restricted-shared-services.md)）。状态以本轮验收记录为准，资产存在不表示已执行。
 
 2026-11-14：首次重建1.10.2之后已升级到`1.10.3+ccd9d8a37c2c`；旧服务停止但尚未退休。
 独立节点部署资产为`6c06e0bd`，真实准入、知识与部分模型业务链通过；完整业务仍待验。
@@ -106,7 +106,7 @@ Gateway 数据库用 `file:<path>?mode=ro` 及 `PRAGMA query_only=ON`，仅查�
 ## 6. 新实例接入与复验方法
 
 实际版本及通过范围见[本轮业务验证](../validation/2026-11-14-env95-business-acceptance.md)，
-新路径/恢复方法见[重建与升级](../../ops/environments/env95/README.md)。不要复用第3节旧配置启动新代码。
+原试验重建/恢复资料保留在 Git 历史 `a4cf295e:ops/environments/env95/README.md`（现役最小安装流程见[受管安装手册](../../ops/environments/gateway/README.md)）。不要复用第3节旧配置启动新代码。
 
 1. 先用`dev-host exec 95 --allow-service-exec`核对`aiops-gateway-95`、`aiops95-node-runtime`、
    `aiops95-node-callback`、`aiops95-shared-services-tunnel`状态与本机`/health`版本。

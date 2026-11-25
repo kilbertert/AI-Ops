@@ -191,9 +191,6 @@ class _UnexpectedMapper:
     def site_ids_by_shops(self, shop_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
         raise AssertionError("店铺数量超界时必须先失败关闭，不得进入站点归属映射")
 
-    def site_ids_by_points(self, point_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
-        raise AssertionError("运营商范围不走 Dis 点位归属")
-
 
 def test_shop_count_over_limit_fails_closed_before_the_site_mapping() -> None:
     shops = FakeShops(tuple(f"SHOP-{index}" for index in range(MAX_SCOPE_IDS + 1)))

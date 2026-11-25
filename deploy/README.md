@@ -17,7 +17,7 @@
 | `deploy-41.sh` | 41 `/opt/aiops-41/src` | `dev-host` CLI rsync `src/`；CI 在 `.github/workflows/cd.yml` | 生产 | 唯一 CD 入口；`dev-host` 命令不在本仓，测试用 `tests/fixtures/dev-host-stub/` 顶替 |
 | `manual-deploys.md` + `record-manual-deploy.sh` | 41 | 手工动作 + 台账登记 | 生产 | CD 之外到达生产的一切变更必须留痕 |
 | `check-41-editable.sh` | 41 | 部署前置检查 | 生产 | 防 `uv sync` 静默替换 editable 安装 |
-| `d4-cutover.py`、`routing-window.sh`、`classify-remote-result.sh`、`test-rollback-classifier.sh` | 41 | 切流/回滚辅助 | 生产 | 见各文件头注释 |
+| `routing-window.sh`、`classify-remote-result.sh`、`test-rollback-classifier.sh` | 41 | 观察/回滚分类辅助 | 生产 | 见各文件头注释（`routing-window.sh` 待 `tests/test_cd_deploy_scripts.py` 并发分支释放后退役；已完成的 2026-10-10 `d4-cutover.py` 已随 ADR-0342 退役，历史脚本见 Git `a4cf295e:deploy/d4-cutover.py`） |
 | `operator-h5.py`、`company-gitlab-api.sh` | 41 / 公司 GitLab | 专项部署辅助 | 生产 | 见各文件头注释 |
 | `node-runtime/` | 41 及各环境 | compose + systemd 单元 | 生产 | Java 执行节点栈；`environment.md` 记独立环境节点配置 |
 | `m2-live-03/` | 41（隔离网络与数据目录） | 固定镜像容器栈 | 试验 | 受控试运行栈，**运行栈不是生产的一部分**；但其中的 `build-image.sh` 同时是 `node-runtime/` 生产镜像的构建入口（见节点部署手册），生产对应物是 `node-runtime/` |

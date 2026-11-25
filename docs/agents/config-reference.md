@@ -12,7 +12,7 @@
 | `aiops-tdengine-proxy` | `ProxySettings`（`tdengine_proxy.py`） | `AIOPS_TD_PROXY_*` | 独立 `ThreadingHTTPServer` 只读 TDengine 代理；该进程键**不在 `.env.example`**，按其 systemd 单元与本表管理 |
 | 登录代理（`services/dify-login-proxy/dify_login_proxy/server.py`，经 `ops/dify-login-proxy` 部署） | `LoginProxySettings`（同文件） | `AIOPS_LOGIN_PROXY_*` | 公司账号进 Dify 控制台的唯一入口；另读 `AIOPS_LOGIN_PROXY_ENVIRONMENT*` |
 | 控制台桥（`services/dify-console-bridge/dify_console_bridge/bridge.py`，经 `ops/dify-console-bridge` 部署） | `BridgeSettings`（同文件） | `AIOPS_CONSOLE_BRIDGE_*`（优先读 `AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY`/`AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY`，兼容旧部署的 `AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`/`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`） | `__aiops/*` 浏览器回调，转发网关；新部署统一使用 `AIOPS_CONSOLE_BRIDGE_*` 前缀，过渡/回滚窗口内须在 `bridge.env` 保留旧 `AIOPS_GATEWAY_DIFY_*` 键直至不再回退旧版桥制品 |
-| `aiops-admin` 及诊断/数据路径 | `Settings` / `DataSourcesConfig`（`common/config.py`，组合 `MySQLSettings`/`TDengineSettings`/`RedisSettings`/`UpmsSettings`/`DisSettings`/`SSHSettings`/`SafetySettings`/`AgentSettings`） | `AIOPS_*`（无前缀层） | `AIOPS_CONFIG_FILE`/`AIOPS_CONFIG_HOME`/`AIOPS_HOME` 定位配置与数据根；网关内可通过 `GatewayServerSettings.load_data_sources()` 读取 |
+| `aiops-admin` 及诊断/数据路径 | `Settings` / `DataSourcesConfig`（`common/config.py`，组合 `MySQLSettings`/`TDengineSettings`/`RedisSettings`/`UpmsSettings`/`SSHSettings`/`SafetySettings`/`AgentSettings`） | `AIOPS_*`（无前缀层） | `AIOPS_CONFIG_FILE`/`AIOPS_CONFIG_HOME`/`AIOPS_HOME` 定位配置与数据根；网关内可通过 `GatewayServerSettings.load_data_sources()` 读取 |
 
 ## 嵌套 Settings：不直接读环境变量
 

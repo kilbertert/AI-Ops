@@ -274,17 +274,6 @@ def test_site_ids_by_shops_resolves_sites_bound_and_read_only() -> None:
     assert params == [TENANT, "SHOP-B-1", "SHOP-B-2"]
 
 
-def test_site_ids_by_points_resolves_sites_bound_and_read_only() -> None:
-    connection = _ScopedConnection(sites=[{"id": "SITE-C-1"}])
-    source, conn = _source(connection)
-
-    site_ids = source.site_ids_by_points(("P-1",), TENANT)
-
-    assert site_ids == ("SITE-C-1",)
-    sql, _ = conn.executed[-1]
-    assert "dis_point_id IN (%s)" in sql
-
-
 def test_site_ids_by_shops_rejects_unbounded_input_value() -> None:
     source, _ = _source(_ScopedConnection())
 
