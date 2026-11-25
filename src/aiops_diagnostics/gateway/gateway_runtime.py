@@ -75,6 +75,10 @@ class JobRegistration:
     route_type: str = "qa"
     #: 由停止请求设置；覆盖 worker 在停止之后才开始登记句柄的交错窗口。
     cancelled: bool = False
+    #: 原地重生成失败/取消时为 True，释放槽位但不删已有已完成答复。
+    preserve_completed: bool = False
+    #: 每次生成认领的唯一持有标识，防旧重生成任务延迟收尾误解新认领锁。
+    claim_id: str | None = None
 
 
 class GatewayRuntime:
@@ -614,6 +618,11 @@ class GatewayRuntime:
         conversation_turn,
         language="zh",
         trial_manifest=None,
+        agent_id="operator_main",
+        attachments=None,
+        attempt_no=1,
+        parent_qa_id=None,
+        claim_id=None,
     ):
         return service.start(
             caller,
@@ -624,9 +633,18 @@ class GatewayRuntime:
             authorize=authorize,
             base=base,
             proxy=proxy,
-            registration=JobRegistration(conversation_turn=conversation_turn, route_type="qa"),
+            registration=JobRegistration(
+                conversation_turn=conversation_turn,
+                route_type="qa",
+                preserve_completed=int(attempt_no) > 1,
+                claim_id=claim_id,
+            ),
             language=language,
             trial_manifest=trial_manifest,
+            agent_id=agent_id,
+            attachments=attachments,
+            attempt_no=attempt_no,
+            parent_qa_id=parent_qa_id,
         )
 
     def start_chat_order_qa(
@@ -825,7 +843,11 @@ class GatewayRuntime:
                 registration.cancelled = True
                 self._interrupt_registered_turn(registration)
                 if accepted:
-                    self._release_conversation_turn(registration.conversation_turn)
+                    self._release_conversation_turn(
+                        registration.conversation_turn,
+                        preserve_completed=registration.preserve_completed,
+                        claim_id=registration.claim_id,
+                    )
             if accepted:
                 self._record_cancelled_job_metric(context, registration)
             return self.store.get_assistant_question(qa_id, context.scope_fingerprint)
@@ -857,14 +879,26 @@ class GatewayRuntime:
         except Exception as exc:
             _LOGGER.warning("assistant question interrupt failed: %s", exc)
 
-    def _release_conversation_turn(self, conversation_turn: tuple[str, str, int] | None) -> None:
+    def _release_conversation_turn(
+        self,
+        conversation_turn: tuple[str, str, int] | None,
+        *,
+        preserve_completed: bool = False,
+        claim_id: str | None = None,
+    ) -> None:
         if conversation_turn is None:
             return
         from aiops_diagnostics.conversation.conversation_store import ConversationError
 
         conversation_id, scope_fingerprint, turn_no = conversation_turn
         with contextlib.suppress(ConversationError):
-            self.conversation_store.release_turn(conversation_id, scope_fingerprint, turn_no)
+            self.conversation_store.release_turn(
+                conversation_id,
+                scope_fingerprint,
+                turn_no,
+                preserve_completed=preserve_completed,
+                claim_id=claim_id,
+            )
 
     def _complete_conversation_turn(
         self,
@@ -877,6 +911,15 @@ class GatewayRuntime:
         stop_renewer: threading.Event | None = None,
         status_qa_id: str | None = None,
         active_order_no: str | None = None,
+        attempt_no: int | None = None,
+        parent_qa_id: str | None = None,
+        attachment_ids: list[str] | None = None,
+        citations: list[dict[str, Any]] | None = None,
+        steps: list[dict[str, Any]] | None = None,
+        elapsed_ms: int | None = None,
+        delivery_mode: str | None = None,
+        preserve_completed: bool = False,
+        claim_id: str | None = None,
     ) -> None:
         if guarded:
             cancelled = True
@@ -897,6 +940,15 @@ class GatewayRuntime:
                 cancelled=cancelled or answer is None,
                 status_qa_id=status_qa_id,
                 active_order_no=active_order_no,
+                attempt_no=attempt_no,
+                parent_qa_id=parent_qa_id,
+                attachment_ids=attachment_ids,
+                citations=citations,
+                steps=steps,
+                elapsed_ms=elapsed_ms,
+                delivery_mode=delivery_mode,
+                preserve_completed=preserve_completed,
+                claim_id=claim_id,
             )
 
     def _registered_agent(self, tenant_id: str, business_entry: str) -> tuple[str | None, bool]:

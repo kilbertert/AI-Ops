@@ -118,6 +118,9 @@ from aiops_diagnostics.gateway.routers import (
     dify_console as dify_console_router,
 )
 from aiops_diagnostics.gateway.routers import (
+    files as files_router,
+)
+from aiops_diagnostics.gateway.routers import (
     health_analysis as health_analysis_router,
 )
 from aiops_diagnostics.gateway.routers import (
@@ -318,6 +321,15 @@ class GatewayAPI:
         # APP-RUNTIME-02：Dify 路线的执行记录。同一个库文件、自己的表；
         # **不**复用 `agent_runs` 的节点列（那会把"这次没有节点"写成"节点核对过了"）。
         self.dify_run_store = DifyRunStore(store.path)
+        from aiops_diagnostics.operator.attachments import AssistantFileStore
+        from aiops_diagnostics.operator.download_center import DownloadCenterClient
+        from aiops_diagnostics.operator.feedback import AssistantFeedbackStore
+        from aiops_diagnostics.operator.qa_events import QAEventStore
+
+        self.assistant_files = AssistantFileStore(store.path)
+        self.download_center = DownloadCenterClient.from_settings(settings)
+        self.qa_events = QAEventStore(store.path)
+        self.assistant_feedback = AssistantFeedbackStore(store.path)
 
 
 def _publish_initiator(
@@ -1337,6 +1349,7 @@ def create_gateway_app(
         dify_console_router,
         assistant_router,
         conversations_router,
+        files_router,
         orders_sites_router,
         internal_callbacks_router,
         health_analysis_router,
@@ -1652,17 +1665,27 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
     Chinese-speaking user was shown "customer QA turn returned invalid JSON",
     which names neither the problem nor an action.
     """
+    from aiops_diagnostics.publication.agent_content import (
+        OPERATOR_MAIN_AGENT_ID,
+        operator_agent_brief,
+    )
+
     status_value = str(qa["status"])
+    effective_lang = qa.get("language") or effective_language(language)
     return {
         "type": "qa",
         # The EFFECTIVE language: a non-promptable request is answered in the
         # default, so reporting the raw request tag would describe text the
         # answer does not contain (#541 review).
-        "language": qa.get("language") or effective_language(language),
+        "language": effective_lang,
         "qa_id": qa["qa_id"],
         "question": qa["question"],
         "status": status_value,
+        "attempt_no": int(qa.get("attempt_no") or 1),
+        "parent_qa_id": qa.get("parent_qa_id"),
         "retry_after_ms": 1000 if status_value in ACTIVE_DIAGNOSIS_STATUSES else None,
+        "stream_url": f"/v1/assistant/questions/{qa['qa_id']}/events",
+        "agent": operator_agent_brief(effective_lang, str(qa.get("agent_id") or OPERATOR_MAIN_AGENT_ID)),
         "result": qa.get("result"),
         "error": (
             {
@@ -1735,25 +1758,37 @@ def _conversation_response(conversation: dict[str, Any]) -> dict[str, Any]:
     return {
         "conversation_id": conversation["conversation_id"],
         "business_entry": conversation["business_entry"],
+        "agent_id": conversation.get("agent_id") or "operator_main",
         "agent_version_key": conversation["agent_version_key"],
+        "title": str(conversation.get("title") or ""),
         "active_order_no": conversation["active_order_no"],
         "is_generating": conversation["is_generating"],
+        "turn_count": int(conversation.get("turn_count") or 0),
         "created_at": conversation["created_at"],
         "updated_at": conversation["updated_at"],
         "expires_at": conversation["expires_at"],
     }
 
 
-def _operator_conversation(context, caller, binding, conversation, *, trial):
+def _operator_conversation(
+    context,
+    caller,
+    binding,
+    conversation,
+    *,
+    trial,
+    agent_id: str = "operator_main",
+):
     key = f"{binding.key}:{binding.app_id}:{'preview' if trial else 'formal'}"
-    agent_id = binding.agent_id or "agt_" + hashlib.sha256(key.encode()).hexdigest()[:32]
-    version = f"{agent_id}#v{binding.agent_version_no}"
+    resolved_version_agent = binding.agent_id or "agt_" + hashlib.sha256(key.encode()).hexdigest()[:32]
+    version = f"{resolved_version_agent}#v{binding.agent_version_no}"
     if conversation is None:
         return context.conversation_store.create(
             scope_fingerprint=caller.scope_fingerprint,
             business_entry="operator",
             agent_version_key=version,
             operator_binding=key,
+            agent_id=agent_id,
         )
     if conversation.get("operator_binding") != key:
         raise StandardAPIError(404, "CONVERSATION_NOT_FOUND", "conversation not found")
@@ -2919,6 +2954,9 @@ def _begin_conversation_turn(
     conversation: dict[str, Any] | None,
     kind: str,
     question: str,
+    *,
+    attachment_ids: list[str] | None = None,
+    claim_id: str | None = None,
 ) -> int | None:
     """Claim the conversation's generation slot; 409 when busy."""
     if conversation is None:
@@ -2929,6 +2967,8 @@ def _begin_conversation_turn(
             conversation["scope_fingerprint"],
             kind=kind,
             question=question,
+            attachment_ids=attachment_ids,
+            claim_id=claim_id,
         )
     except ConversationBusy as exc:
         _record_route_metric(
@@ -3010,13 +3050,20 @@ def _release_conversation_turn(
     context: Any,
     conversation: dict[str, Any] | None,
     turn_no: int | None,
+    *,
+    preserve_completed: bool = False,
+    claim_id: str | None = None,
 ) -> None:
     """Drop an unfinished turn row and free the slot (best effort)."""
     if conversation is None or turn_no is None:
         return
     with contextlib.suppress(ConversationError):
         context.conversation_store.release_turn(
-            conversation["conversation_id"], conversation["scope_fingerprint"], turn_no
+            conversation["conversation_id"],
+            conversation["scope_fingerprint"],
+            turn_no,
+            preserve_completed=preserve_completed,
+            claim_id=claim_id,
         )
 
 

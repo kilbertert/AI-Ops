@@ -33,7 +33,7 @@ def current(context, conn, identifier, *, fresh=False):
     return row, request
 
 
-def submit(context, identity, payload):
+def submit(context, identity, payload, *, onboard_parent=None):
     capabilities, reference = payload["capabilities"], payload["case_ref"]
     if (
         not isinstance(capabilities, list)
@@ -52,6 +52,8 @@ def submit(context, identity, payload):
     if plan["state"] == "expired":
         raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
     with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
+        if onboard_parent is not None and not tasks._check_onboard_parent_open(conn, onboard_parent, ACTION):
+            return None
         source = tasks._row(conn, payload["registration_task"])
         original = json.loads(source["request"])
         tasks._authorize(path, identity, source["environment"])
@@ -71,6 +73,7 @@ def submit(context, identity, payload):
         )
         request = {
             **{k: original[k] for k in ("target", "installer", "tenant_id", "installed")},
+            **({"onboard_parent": onboard_parent} if onboard_parent is not None else {}),
             "registration_task": source["id"],
             "plan": plan,
             "identity": identity,
@@ -103,6 +106,8 @@ def submit(context, identity, payload):
             (identifier, source["environment"], json.dumps(request), json.dumps(result), time.time()),
         )
         current(context, conn, identifier, fresh=True)
+        if onboard_parent is not None:
+            tasks._bind_onboard_parent(conn, onboard_parent, ACTION, identifier, plan)
         return tasks._public(tasks._row(conn, identifier))
 
 

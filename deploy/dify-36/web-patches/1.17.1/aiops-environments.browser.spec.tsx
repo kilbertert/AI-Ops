@@ -976,3 +976,302 @@ it('publishes from verified business and restores the same operation with visibl
   await expect.element(screen.getByText(/正式开通.*已恢复.*准入 未启用/)).toBeVisible()
   await page.screenshot({ path: './.vitest-browser/publication-render.png' })
 })
+
+it('renders environment overview, tenant capability matrix, live vs receipt nodes, and clears on revoked overview refresh', async () => {
+  const overview = {
+    schema: 'aiops-environment-overview/1',
+    control_environment: 'a',
+    control_execution_environment: 'a',
+    control_version: '1.40.4',
+    generated_at: 1795597500,
+    registry_revision: 4,
+    environments: [
+      {
+        id: 'a',
+        name: '环境甲',
+        is_control: true,
+        status: 'active',
+        enabled: true,
+        draft_revision: 2,
+        registry_changed: false,
+        tenant_count: 1,
+        enabled_tenant_count: 1,
+        active_route_count: 2,
+        nodes: [
+          {
+            source: 'heartbeat',
+            node_id: 'node-41',
+            status: 'online',
+            observed_at: 1795597490,
+            age_seconds: 10,
+            version: '1.40.4',
+            tool_contract: 'request-target/2',
+            schemas: ['operator-agent/1'],
+            tools_compatible: true,
+            available_tools: ['query_order_detail', 'query_station_health'],
+          },
+        ],
+        tenants: [
+          {
+            id: 'same',
+            name: '甲租户',
+            admission: 'enabled',
+            effective_enabled: true,
+            draft_enabled: true,
+            workspace: { id: 'ws-a-1', state: 'ready', source: 'runtime' },
+            knowledge: {
+              knowledge_base_id: '',
+              connection_id: '',
+              active_grants: 2,
+              state: 'ready',
+            },
+            apps: {
+              operator: {
+                app_id: '11111111-1111-1111-1111-111111111111',
+                version_no: 36,
+                state: 'active',
+                source: 'runtime',
+              },
+              consumer: {
+                app_id: '22222222-2222-2222-2222-222222222222',
+                version_no: 35,
+                state: 'active',
+                source: 'runtime',
+              },
+            },
+            capabilities: {
+              consumer: { state: 'passed', error_code: '', observed_at: 1795597400, task_id: 't1' },
+              order: { state: 'blocked', error_code: 'ORDER_MISSING', observed_at: 1795597400, task_id: 't1' },
+              offline: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
+            },
+            accuracy_confirmed: false,
+            latest_task: null,
+          },
+        ],
+        latest_task: null,
+      },
+      {
+        id: 'b',
+        name: '环境乙',
+        is_control: false,
+        status: 'disabled',
+        enabled: false,
+        draft_revision: null,
+        registry_changed: false,
+        tenant_count: 1,
+        enabled_tenant_count: 0,
+        active_route_count: 0,
+        nodes: [
+          {
+            source: 'task_receipt',
+            node_id: 'ecs-95',
+            status: 'observed',
+            observed_at: 1795597450,
+            version: '1.40.4',
+            remote_hostname: 'ecs-95',
+            service_user_present: true,
+            installation: 'installed',
+            task_id: `task_${'1'.repeat(32)}`,
+            task_action: 'host-verify',
+          },
+        ],
+        tenants: [
+          {
+            id: 'same',
+            name: '乙租户',
+            admission: 'disabled',
+            effective_enabled: false,
+            draft_enabled: null,
+            workspace: { id: 'ws-b-1', state: 'created', source: 'runtime' },
+            knowledge: {
+              knowledge_base_id: 'kb-b-12345678',
+              connection_id: 'conn-b-1',
+              active_grants: 0,
+              state: 'ready',
+            },
+            apps: {
+              operator: { app_id: '33333333-3333-3333-3333-333333333333', version_no: null, state: 'candidate', source: 'task_receipt' },
+              consumer: { app_id: '', version_no: null, state: 'unprepared', source: 'none' },
+            },
+            capabilities: {
+              consumer: { state: 'expired', error_code: '', observed_at: 1795590000, task_id: 't2' },
+              order: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
+              offline: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
+            },
+            accuracy_confirmed: false,
+            latest_task: null,
+          },
+        ],
+        latest_task: null,
+      },
+    ],
+  }
+  const calls: Record<string, unknown>[] = []
+  let overviewRevoked = false
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json({ ...data, overview })
+      if (body.action === 'environment-overview') {
+        if (overviewRevoked) {
+          return Response.json({ error: { code: 'ENVIRONMENT_MANAGEMENT_FORBIDDEN' } }, { status: 403 })
+        }
+        return Response.json(overview)
+      }
+      return Response.json({ tasks: [] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await expect.element(screen.getByRole('region', { name: '环境总览' })).toBeVisible()
+  await expect.element(screen.getByRole('region', { name: '租户与能力总览' })).toBeVisible()
+  await expect.element(screen.getByRole('region', { name: '运行节点与工具' })).toBeVisible()
+  await expect.element(screen.getByText(/节点 node-41 · 在线（实时心跳）/)).toBeVisible()
+  await expect.element(screen.getByText(/query_order_detail、query_station_health/)).toBeVisible()
+  await expect.element(screen.getByText(/管家：运行中 · v36/)).toBeVisible()
+  await expect.element(screen.getByText(/活跃授权 2/)).toBeVisible()
+  await expect.element(screen.getByText(/智能客服：技术通过/)).toBeVisible()
+  await expect.element(screen.getByText(/异常订单：阻塞（ORDER_MISSING）/)).toBeVisible()
+  await expect.element(screen.getByText(/业务准确性：待人工确认/)).toBeVisible()
+
+  await screen.getByRole('button', { name: '环境乙（b）' }).click()
+  await expect.element(screen.getByText(/远端节点 ecs-95 · 已观察（受管任务点时回执，非实时心跳）/)).toBeVisible()
+  await expect.element(screen.getByText(/最近安装回执：已装/)).toBeVisible()
+  await expect.element(screen.getByText(/智能客服：回执过期/)).toBeVisible()
+
+  await screen.getByRole('button', { name: '刷新节点状态' }).click()
+  expect(calls.at(-1)).toEqual({ action: 'environment-overview' })
+
+  overviewRevoked = true
+  await screen.getByRole('button', { name: '刷新运行状态' }).click()
+  await expect.element(screen.getByRole('alert')).toHaveTextContent('当前账号没有环境管理授权')
+  expect(screen.getByRole('region', { name: '环境总览' }).elements()).toHaveLength(0)
+  await expect.element(screen.getByRole('button', { name: '重试读取运行状态' })).toBeVisible()
+})
+
+it('submits one-click tenant onboarding with validation and keeps explicit human publish confirmation', async () => {
+  const plan = {
+    id: `plan_${'e'.repeat(32)}`,
+    state: 'blocked',
+    executable: false,
+    draft_revision: 2,
+    registry_revision: 4,
+    checks: [],
+  }
+  const validationId = `task_${'9'.repeat(32)}`
+  const onboardTask = {
+    id: `task_${'8'.repeat(32)}`,
+    action: 'tenant-onboard',
+    tenant_id: 'same',
+    plan_id: plan.id,
+    state: 'queued',
+    cancel_requested: false,
+    error_code: '',
+    result: {
+      scope: 'tenant-one-click-onboarding',
+      ready_to_publish: false,
+      validation_task_id: '',
+      stages: [
+        {
+          id: `task_${'1'.repeat(32)}`,
+          action: 'candidate-prepare',
+          state: 'queued',
+          error_code: '',
+        },
+      ],
+    },
+  }
+  const calls: Record<string, unknown>[] = []
+  let submitted = false
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json(data)
+      if (body.action === 'environment-plan') return Response.json(plan)
+      if (body.consumer_sources)
+        return Response.json({ sources: [{ app_id: 'source-a', name: '正式客服', version_no: 7 }] })
+      if (body.onboard_plan) {
+        submitted = true
+        return Response.json(onboardTask)
+      }
+      if (body.validation_task) {
+        return Response.json({
+          id: `task_${'7'.repeat(32)}`,
+          action: 'environment-publish',
+          tenant_id: 'same',
+          state: 'observed',
+          cancel_requested: false,
+          error_code: '',
+          result: { phase: 'activated', activated: true, directory: 'synchronized' },
+        })
+      }
+      return Response.json({ tasks: submitted ? [onboardTask] : [] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
+  await screen
+    .getByRole('combobox', { name: '候选客服来源版本', exact: true })
+    .selectOptions('source-a')
+  await screen.getByRole('textbox', { name: '一键开通验收案例', exact: true }).fill('case-01')
+  await screen.getByRole('button', { name: '一键开通：甲租户（same）', exact: true }).click()
+  expect(calls.find((body) => body.onboard_plan)).toEqual({
+    action: 'environment-task',
+    onboard_plan: plan.id,
+    tenant_id: 'same',
+    source_app_id: 'source-a',
+    source_version: 7,
+    case_ref: 'case-01',
+    capabilities: ['consumer', 'order', 'offline'],
+  })
+  await expect.element(screen.getByRole('region', { name: '一键开通进度：same' })).toBeVisible()
+  await expect.element(screen.getByRole('button', { name: '取消一键开通', exact: true })).toBeVisible()
+
+  const renewedPlanId = `plan_${'f'.repeat(32)}`
+  onboardTask.plan_id = renewedPlanId
+  onboardTask.state = 'observed'
+  onboardTask.result = {
+    scope: 'tenant-one-click-onboarding',
+    ready_to_publish: true,
+    validation_task_id: validationId,
+    stages: [
+      { id: `task_${'1'.repeat(32)}`, action: 'candidate-prepare', state: 'observed', error_code: '' },
+      { id: `task_${'2'.repeat(32)}`, action: 'candidate-install', state: 'observed', error_code: '', version: '1.40.4' },
+      { id: `task_${'3'.repeat(32)}`, action: 'candidate-register', state: 'observed', error_code: '' },
+      { id: validationId, action: 'candidate-validate', state: 'observed', error_code: '' },
+    ],
+  }
+  await screen.getByRole('button', { name: '刷新任务', exact: true }).click()
+  await expect.element(screen.getByText(/技术验收已就绪，待人工确认发布/)).toBeVisible()
+  // 切到环境乙再切回环境甲（清空本地 plan state + 重置冷装/案例输入，模拟刷新恢复）
+  await screen.getByRole('checkbox', { name: /包含空机初装/ }).click()
+  await screen.getByRole('button', { name: '环境乙（b）' }).click()
+  await screen.getByRole('button', { name: '环境甲（a）' }).click()
+  // 即使页面未重新预检（本地 plan=null），依然用续签后的 item.plan_id 发起显式人工发布确认
+  await screen.getByRole('button', { name: '确认发布并开通：same', exact: true }).click()
+  expect(calls.find((body) => body.validation_task)).toEqual({
+    action: 'environment-task',
+    validation_task: validationId,
+    publication_plan: renewedPlanId,
+    confirm_readonly: true,
+    confirm_customer_knowledge: true,
+    acceptance_ref: 'readonly-diagnosis',
+  })
+  // 重新预检并拉取准备模板后确认冷装与案例输入已随切环境重置，不跨环境泄漏
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
+  await expect
+    .element(screen.getByRole('textbox', { name: '一键开通验收案例', exact: true }))
+    .toHaveValue('')
+  await expect
+    .element(screen.getByRole('checkbox', { name: /包含空机初装/ }))
+    .not.toBeChecked()
+})

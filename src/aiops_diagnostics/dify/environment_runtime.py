@@ -35,7 +35,7 @@ def _private_json(path):
     return json.loads(raw, object_pairs_hook=registry._unique_object), hashlib.sha256(raw).hexdigest()
 
 
-def _applications(settings, payload):
+def _applications(settings, payload, *, allow_renewal=False):
     if set(payload) != {"identity", "plan_id", "tenant_id", "operator_task", "consumer_task"}:
         raise ValueError("runtime request invalid")
     identity = payload["identity"]
@@ -50,6 +50,7 @@ def _applications(settings, payload):
     ):
         raise ValueError("runtime plan expired")
     resources = {}
+    source_plan_ids: set[str] = set()
     with drafts._locked(path), gateway_db.connection(drafts._database(path), readonly=True) as conn:
         for entry in ("operator", "consumer"):
             row = tasks._row(conn, payload[entry + "_task"])
@@ -57,14 +58,27 @@ def _applications(settings, payload):
             tasks._authorize(path, tuple(identity), row["environment"])
             tasks._authorize(path, tuple(request["identity"]), row["environment"])
             tasks._current(path, request, settings.environment_onboarding_file, reconciling=True)
+            renewal = allow_renewal and plan["id"] != request["plan"]["id"]
+            if renewal:
+                source_plan = conn.execute(
+                    "SELECT environment,digest FROM environment_plans WHERE id=?",
+                    (request["plan"]["id"],),
+                ).fetchone()
+                if (
+                    source_plan is None
+                    or source_plan["environment"] != plan["environment"]
+                    or source_plan["digest"] != plan["digest"]
+                ):
+                    raise ValueError("runtime application observation required")
+            observed_state = row["state"] if renewal else tasks._public(row)["state"]
             if (
-                tasks._public(row)["state"] != "observed"
+                observed_state != "observed"
                 or row["cancel"]
                 or request.get("action") != entry + "-prepare"
                 or request.get("tenant_id") != payload["tenant_id"]
                 or request["plan"]["environment"] != plan["environment"]
                 or request["plan"]["digest"] != plan["digest"]
-                or request["plan"]["id"] != plan["id"]
+                or (not renewal and request["plan"]["id"] != plan["id"])
                 or result.get("environment") != plan["environment"]
                 or result.get("tenant_id") != payload["tenant_id"]
                 or not result.get("app_id")
@@ -72,7 +86,10 @@ def _applications(settings, payload):
                 or not request.get("resources", {}).get("attempted")
             ):
                 raise ValueError("runtime application observation required")
+            source_plan_ids.add(request["plan"]["id"])
             resources[entry] = {"request": request, "result": result}
+        if len(source_plan_ids) != 1:
+            raise ValueError("runtime application observation required")
         draft = json.loads(
             next(r for r in drafts._rows(drafts._database(path)) if r["environment"] == plan["environment"])[
                 "body"
@@ -86,8 +103,8 @@ def _applications(settings, payload):
     return plan, draft, resources
 
 
-def render(settings, payload, node_file):
-    plan, draft, apps = _applications(settings, payload)
+def render(settings, payload, node_file, *, allow_renewal=False):
+    plan, draft, apps = _applications(settings, payload, allow_renewal=allow_renewal)
     node, node_digest = _private_json(node_file)
     if (
         set(node) != {"environment", "config_file", "manifest_file", "proxy_base_url"}
@@ -258,7 +275,7 @@ def render(settings, payload, node_file):
     return files, result
 
 
-def export(settings, payload, node_file, output):
+def export(settings, payload, node_file, output, *, allow_renewal=False):
     output = Path(output)
     if (
         not output.is_absolute()
@@ -268,7 +285,7 @@ def export(settings, payload, node_file, output):
     ):
         raise ValueError("runtime output must be new and private")
     validate_private_directory(output.parent)
-    files, result = render(settings, payload, node_file)
+    files, result = render(settings, payload, node_file, allow_renewal=allow_renewal)
     descriptor, filename = tempfile.mkstemp(dir=output.parent)
     temporary = Path(filename)
     try:
@@ -280,7 +297,7 @@ def export(settings, payload, node_file, output):
                     bundle.addfile(member, io.BytesIO(raw))
             stream.flush()
             os.fsync(stream.fileno())
-        latest, _ = render(settings, payload, node_file)
+        latest, _ = render(settings, payload, node_file, allow_renewal=allow_renewal)
         if latest != files:
             raise ValueError("runtime inputs changed during export")
         os.link(temporary, output)

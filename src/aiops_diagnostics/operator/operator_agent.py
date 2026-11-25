@@ -6,6 +6,7 @@ from decimal import Decimal
 from importlib.resources import files
 
 from aiops_diagnostics.common.i18n import localized_pack
+from aiops_diagnostics.common.redaction import redact_text, sanitize_data
 from aiops_diagnostics.consumer.presentation import readable_time
 from aiops_diagnostics.identity.order_identity import is_order_identifier
 from aiops_diagnostics.operator import order_analysis, order_billing, order_pricing
@@ -147,7 +148,101 @@ _SOURCE_LABELS = {
 }
 
 
-def render(answer, evidence, language="zh"):
+def _truncate_snippet(text: str, limit: int = 160) -> str:
+    cleaned = " ".join(redact_text(text).split()).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip() + "…"
+
+
+def _cpms_citation_snippet(tool: str, data: object) -> str:
+    safe = sanitize_data(data)
+    if not isinstance(safe, dict):
+        return _truncate_snippet(str(safe or ""))
+    if tool == "cpms_order_detail":
+        parts = []
+        for label, key in (
+            ("订单", "orderNo"),
+            ("状态", "status"),
+            ("电量", "electricity"),
+            ("金额", "totalAmount"),
+            ("停充原因", "stoppedReasonContent"),
+        ):
+            value = safe.get(key)
+            if value not in (None, ""):
+                parts.append(f"{label}={value}")
+        if parts:
+            return _truncate_snippet("；".join(parts))
+    if tool == "cpms_order_amount_check":
+        conclusion = safe.get("conclusion")
+        if conclusion:
+            return _truncate_snippet(str(conclusion))
+    records = safe.get("records")
+    if isinstance(records, list):
+        return _truncate_snippet(f"共返回 {len(records)} 条记录")
+    for key in ("conclusion", "summary", "status", "name"):
+        if safe.get(key) not in (None, ""):
+            return _truncate_snippet(f"{key}={safe[key]}")
+    return _truncate_snippet(json.dumps(safe, ensure_ascii=False, separators=(",", ":")))
+
+
+def _attachment_citation_snippet(attachment: dict) -> str:
+    category = str(attachment.get("category") or "")
+    if category == "image":
+        width = attachment.get("width")
+        height = attachment.get("height")
+        dims = f"{width}x{height}" if width and height else "图片"
+        return _truncate_snippet(f"图片附件（{dims}）")
+    extracted = str(attachment.get("extracted_text") or "").strip()
+    if extracted:
+        return _truncate_snippet(extracted)
+    pages = attachment.get("page_count")
+    if pages:
+        return _truncate_snippet(f"文档附件（共 {pages} 页）")
+    return "上传文档附件"
+
+
+def build_citations(evidence, attachments=None, language="zh"):
+    """按本轮真实取证工具与已绑定附件生成结构化引用来源列表。"""
+    pack = localized_pack(_SOURCE_LABELS, language)
+    citations = []
+    idx = 1
+    for tool_name, item in (evidence or {}).items():
+        if not isinstance(item, dict):
+            continue
+        citations.append(
+            {
+                "citation_id": f"cit_{idx}",
+                "source_type": "cpms_tool",
+                "title": pack.get(tool_name, tool_name),
+                "snippet": _cpms_citation_snippet(tool_name, item.get("data")),
+                "observed_at": str(item.get("observed_at") or ""),
+                "file_id": None,
+                "page": None,
+                "downloadable": False,
+            }
+        )
+        idx += 1
+    for att in attachments or ():
+        if not isinstance(att, dict) or not att.get("file_id"):
+            continue
+        citations.append(
+            {
+                "citation_id": f"cit_{idx}",
+                "source_type": "attachment",
+                "title": str(att.get("file_name") or att["file_id"]),
+                "snippet": _attachment_citation_snippet(att),
+                "observed_at": str(att.get("created_at") or ""),
+                "file_id": str(att["file_id"]),
+                "page": att.get("page_count"),
+                "downloadable": True,
+            }
+        )
+        idx += 1
+    return citations
+
+
+def render(answer, evidence, language="zh", *, attachments=None):
     if not isinstance(answer, str) or not 0 < len(answer.strip()) <= 12000:
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
 
@@ -156,4 +251,8 @@ def render(answer, evidence, language="zh"):
     sources = [f"- {pack.get(t, t)} · {readable_time(evidence[t]['observed_at'])}" for t in evidence]
     if sources:
         text += "\n\n" + pack["heading"] + "\n" + "\n".join(sources)
-    return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "unavailable"}
+    return {
+        "blocks": [{"kind": "text", "text": text}],
+        "citations": build_citations(evidence, attachments=attachments, language=language),
+        "retrieval_status": "unavailable",
+    }

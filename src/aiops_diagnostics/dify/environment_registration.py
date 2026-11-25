@@ -39,12 +39,14 @@ def current(context, conn, identifier, *, fresh=False):
     return row, request
 
 
-def submit(context, identity, identifier, plan_id):
+def submit(context, identity, identifier, plan_id, *, onboard_parent=None):
     path, settings = management._path(context), context.settings
     plan = plans.read(path, identity, plan_id, settings.environment_onboarding_file)
     if plan["state"] == "expired":
         raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
     with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
+        if onboard_parent is not None and not tasks._check_onboard_parent_open(conn, onboard_parent, ACTION):
+            return None
         source = tasks._row(conn, identifier)
         tasks._authorize(path, identity, source["environment"])
         original = json.loads(source["request"])
@@ -77,6 +79,7 @@ def submit(context, identity, identifier, plan_id):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
         request = {
             **{k: original[k] for k in ("target", "installer", "tenant_id")},
+            **({"onboard_parent": onboard_parent} if onboard_parent is not None else {}),
             "identity": identity,
             "plan": plan,
             "action": ACTION,
@@ -104,6 +107,8 @@ def submit(context, identity, identifier, plan_id):
             ),
         )
         current(context, conn, task_id, fresh=True)
+        if onboard_parent is not None:
+            tasks._bind_onboard_parent(conn, onboard_parent, ACTION, task_id, plan)
         return tasks._public(tasks._row(conn, task_id))
 
 

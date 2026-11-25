@@ -47,6 +47,15 @@ class NodeLoopCompletionRequest(BaseModel):
     )
 
 
+class OperatorStreamChunkRequest(BaseModel):
+    """执行节点推送最终答复阶段增量文本分片的内部受控请求体。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    delta: str = Field(min_length=1, max_length=2000)
+    chunk_index: int | None = Field(default=None, ge=0)
+
+
 class HealthReportJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -78,6 +87,49 @@ class AssistantQuestionRequest(BaseModel):
         max_length=64,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
     )
+    agent_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+    )
+    attachment_ids: list[str] | None = Field(default=None)
+
+
+class AssistantQuestionExportRequest(BaseModel):
+    """将已完成排查轮次导出为报告并写入公司下载中心的请求体。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    format: Literal["docx", "md"] = "docx"
+
+
+class AssistantQuestionFeedbackRequest(BaseModel):
+    """回答点赞/点踩反馈请求体；``rating=None`` 表示取消已有评价。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rating: Literal["up", "down"] | None = None
+    reasons: list[str] = Field(default_factory=list, max_length=5)
+    comment: str | None = Field(default=None, max_length=500)
+
+    @field_validator("reasons")
+    @classmethod
+    def _clean_reasons(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for item in values:
+            text = " ".join(str(item).split()).strip()
+            if not text or len(text) > 64:
+                raise ValueError("each reason must be 1..64 non-blank characters")
+            if text not in cleaned:
+                cleaned.append(text)
+        return cleaned
+
+
+class AssistantQuestionRegenerateRequest(BaseModel):
+    """最后一轮原地重新生成请求体（空对象，拒绝未声明字段）。"""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class OperationsAnalysisRequest(BaseModel):
@@ -256,6 +308,22 @@ class ConversationCreateRequest(BaseModel):
         max_length=80,
         pattern=r"^agt_[A-Za-z0-9]{8,64}#v\d{1,6}$",
     )
+
+
+class ConversationRenameRequest(BaseModel):
+    """修改会话标题请求体（1–80 字符，禁止空白串）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=80)
+
+    @field_validator("title")
+    @classmethod
+    def _non_blank_title(cls, value: str) -> str:
+        cleaned = " ".join(value.split()).strip()
+        if not cleaned or len(cleaned) > 80:
+            raise ValueError("title must be 1..80 non-blank characters")
+        return cleaned
 
 
 class ShortcutFieldsRequest(BaseModel):

@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -505,7 +506,20 @@ def _inputs(path, identity, environment, revision, registry_revision, reference_
     )
 
 
-def preflight(path, identity, environment, revision, registry_revision, reference_file):
+def preflight(
+    path,
+    identity,
+    environment,
+    revision,
+    registry_revision,
+    reference_file,
+    *,
+    min_remaining_seconds=0,
+    force_new=False,
+):
+    min_remaining = float(min_remaining_seconds)
+    if not math.isfinite(min_remaining) or min_remaining < 0.0 or min_remaining >= 900.0:
+        raise ValueError("invalid min_remaining_seconds")
     # 复用目录锁，当前输入与持久化计划之间不允许草稿/目录更新。
     with drafts._locked(path):
         digest, inputs, _ = _inputs(path, identity, environment, revision, registry_revision, reference_file)
@@ -513,15 +527,20 @@ def preflight(path, identity, environment, revision, registry_revision, referenc
         now = time.time()
         with gateway_db.initialize(db) as conn:
             drafts.initialize_plans(conn)
-            found = conn.execute(
-                "SELECT * FROM environment_plans WHERE digest=? AND expires_at>? "
-                "ORDER BY created_at DESC LIMIT 1",
-                (digest, now),
-            ).fetchone()
+            found = (
+                None
+                if force_new
+                else conn.execute(
+                    "SELECT * FROM environment_plans WHERE digest=? AND expires_at>? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (digest, now + min_remaining),
+                ).fetchone()
+            )
             if found is None:
-                identifier = "plan_" + hashlib.sha256((digest + str(now)).encode()).hexdigest()[:32]
+                salt = f"{now}:{time.monotonic_ns()}" if (force_new or min_remaining > 0.0) else str(now)
+                identifier = "plan_" + hashlib.sha256((digest + salt).encode()).hexdigest()[:32]
                 conn.execute(
-                    "INSERT INTO environment_plans VALUES(?,?,?,?,?,?)",
+                    "INSERT OR IGNORE INTO environment_plans VALUES(?,?,?,?,?,?)",
                     (identifier, environment, digest, json.dumps(inputs), now, now + 900),
                 )
                 found = conn.execute("SELECT * FROM environment_plans WHERE id=?", (identifier,)).fetchone()

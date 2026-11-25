@@ -209,7 +209,8 @@ _ALLOWED_ALPHABET_LITERALS = {
     "dify/self_service_identity.py": 1,
     "dify/environment_management.py": 2,  # 环境与公司租户编号，无订单匹配
     "execution/chat_execution.py": 3,  # 智能体 id / libraries 键 ×2
-    "gateway/schemas.py": 11,  # 拒绝码 / conv_ / code / app_id / knowledge / tenant /
+    "gateway/routers/files.py": 1,  # 附件上传表单中的 conversation_id 格式白名单，非订单号
+    "gateway/schemas.py": 12,  # 拒绝码 / conv_ / code / agent_id / app_id / knowledge / tenant /
     #                          kb_ids / agt_ 版本 ×2 / code —— 订单字段已收口
     "gateway/environment_registry.py": 3,  # 租户、管理员主体编号及审计操作人，非订单
     "gateway/environment_business.py": 4,  # case_ref/设备id/run证据id/节点id；订单字段调用is_order_identifier
@@ -221,6 +222,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "gateway/metrics_store.py": 2,  # 租户 id / 指标 id
     "identity/query_scope.py": 1,  # 路径段
     "identity/scope_context.py": 1,  # 路径段
+    "operator/attachments.py": 1,  # 附件 file_id 格式校验，非订单号
     "operator/communication.py": 2,  # deviceCode/childDeviceCode设备码、event/functionId事件名；非订单
     "operator/cpms_evidence.py": 2,  # 回调 siteId / 时序遥测 device
     "operator/offline_tool.py": 1,  # 离线工具设备/站点查询参数，不是订单语法

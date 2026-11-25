@@ -68,8 +68,8 @@ def current(context, conn, identifier, *, fresh=False):
         # attempted 只证导出落盘；dispatched 才是远端可能 apply 的分界（authorize 翻转
         # 先于远端执行）。未派发即远端零副作用，过期/取消必须终态化而非永远观察；
         # 已派发保留冻结对账豁免（fresh=False 不查窗口/取消）。
-        or (fresh or not request.get("dispatched"))
-        and (row["cancel"] or parent_request["plan"]["expires_at"] <= time.time())
+        or (fresh or (not request.get("dispatched") and row["state"] != "observed"))
+        and (row["cancel"] or request["plan"]["expires_at"] <= time.time())
     ):
         raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
     return row, request
@@ -160,32 +160,84 @@ def current_cold(context, conn, identifier, *, fresh=False):
     return row, request
 
 
-def submit(context, identity, identifier):
+def submit(context, identity, identifier, *, plan_id=None, onboard_parent=None, site_preflight_id=None):
     settings, path = context.settings, management._path(context)
     if not settings.environment_installation_file:
         raise tasks.TaskRefused("ENVIRONMENT_INSTALLATION_CONFIG_REQUIRED")
+    renewed_plan = None
+    if plan_id is not None:
+        renewed_plan = plans.read(path, identity, plan_id, settings.environment_onboarding_file)
+        if renewed_plan["state"] == "expired":
+            raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
     with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
+        if onboard_parent is not None and not tasks._check_onboard_parent_open(conn, onboard_parent, ACTION):
+            return None
         parent = tasks._row(conn, identifier)
         request = json.loads(parent["request"])
         tasks._authorize(path, identity, parent["environment"])
-        tasks._current(path, request, settings.environment_onboarding_file)
-        if (
-            request.get("action") != preparation.ACTION
-            or parent["cancel"]
-            or tasks._public(parent)["state"] != "observed"
-        ):
-            raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+        if renewed_plan is not None:
+            tasks._current(path, request, settings.environment_onboarding_file, reconciling=True)
+            if (
+                request.get("action") != preparation.ACTION
+                or parent["cancel"]
+                or parent["state"] != "observed"
+                or renewed_plan["environment"] != parent["environment"]
+                or renewed_plan["digest"] != request["plan"]["digest"]
+            ):
+                raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
+        else:
+            tasks._current(path, request, settings.environment_onboarding_file)
+            if (
+                request.get("action") != preparation.ACTION
+                or parent["cancel"]
+                or tasks._public(parent)["state"] != "observed"
+            ):
+                raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
         node_file, node_binding = binding(settings, request["target"]["id"])
-        site = tasks._row(conn, request["children"]["site-preflight"])
+        site_id = site_preflight_id or request["children"]["site-preflight"]
+        site = tasks._row(conn, site_id)
+        site_req = json.loads(site["request"])
         observed = json.loads(site["result"])
-        if site["state"] != "observed" or observed["state"] != "observed":
+        if (
+            site["environment"] != parent["environment"]
+            or site["cancel"]
+            or site_req.get("action", "site-preflight") != "site-preflight"
+            or site_req["plan"]["digest"] != request["plan"]["digest"]
+            or site["state"] != "observed"
+            or observed["state"] != "observed"
+        ):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
         expected = {k: observed[k] for k in ("artifact_sha256", "config_sha256", "registry_sha256")}
         # 旧现场回执没有运行摘要；只允许显式新回执，不猜现场是否已有运行工件。
         if "runtime_sha256" not in observed:
             raise tasks.TaskRefused("ENVIRONMENT_INSTALLATION_OBSERVATION_REQUIRED")
         expected["runtime_sha256"] = observed["runtime_sha256"]
-        task_id = "task_" + plans._digest([ACTION, identifier, expected, node_binding])[:32]
+        base_task_id = "task_" + plans._digest([ACTION, identifier, expected, node_binding])[:32]
+        existing = conn.execute("SELECT * FROM environment_tasks WHERE id=?", (base_task_id,)).fetchone()
+        if existing is not None:
+            existing_dict = dict(existing)
+            existing_req = json.loads(existing_dict["request"])
+            if (
+                renewed_plan is not None
+                and existing_dict["state"] == "observed"
+                and not existing_dict["cancel"]
+                and existing_req["plan"]["digest"] == renewed_plan["digest"]
+            ):
+                current(context, conn, base_task_id, fresh=False)
+                if onboard_parent is not None:
+                    tasks._bind_onboard_parent(conn, onboard_parent, ACTION, base_task_id, renewed_plan)
+                return tasks._public(tasks._row(conn, base_task_id))
+        if (
+            existing is not None
+            and renewed_plan is not None
+            and (existing["state"] in ("cancelled", "blocked") or existing["cancel"])
+            and json.loads(existing["request"])["plan"]["id"] != renewed_plan["id"]
+        ):
+            task_id = (
+                "task_" + plans._digest([ACTION, identifier, expected, node_binding, renewed_plan["id"]])[:32]
+            )
+        else:
+            task_id = base_task_id
         if conn.execute(
             "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
             "AND state IN ('waiting','executing','checking') "
@@ -197,6 +249,8 @@ def submit(context, identity, identifier):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
         request = {
             **request,
+            **({"plan": renewed_plan} if renewed_plan is not None else {}),
+            **({"onboard_parent": onboard_parent} if onboard_parent is not None else {}),
             "action": ACTION,
             "identity": identity,
             "preparation": identifier,
@@ -226,6 +280,8 @@ def submit(context, identity, identifier):
             ),
         )
         current(context, conn, task_id, fresh=True)
+        if onboard_parent is not None:
+            tasks._bind_onboard_parent(conn, onboard_parent, ACTION, task_id, request["plan"])
         return tasks._public(tasks._row(conn, task_id))
 
 
@@ -511,9 +567,11 @@ def dispatch(context, payload):
                 "consumer_task": parent["consumer-prepare"],
             }
             if not files["runtime"].exists():
-                runtime.export(settings, runtime_payload, request["node_file"], files["runtime"])
+                runtime.export(
+                    settings, runtime_payload, request["node_file"], files["runtime"], allow_renewal=True
+                )
             # 原运行导出与模板指纹再次复核，已存在文件不得被重写。
-            rendered, _ = runtime.render(settings, runtime_payload, request["node_file"])
+            rendered, _ = runtime.render(settings, runtime_payload, request["node_file"], allow_renewal=True)
             runtime_sha = hashlib.file_digest(files["runtime"].open("rb"), "sha256").hexdigest()
             stored, _ = runtime_files(files["runtime"], runtime_sha, row["environment"])
             if stored != rendered:
