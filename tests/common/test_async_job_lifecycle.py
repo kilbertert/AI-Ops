@@ -285,7 +285,7 @@ def test_one_rendering_covers_every_table() -> None:
     """The statement text differs between tables only by the table name.
 
     This is what "five copies became one" means concretely: the sweep SQL for
-    `standard_diagnoses` and for `assistant_questions` is byte-identical once
+    `async_jobs` and for `assistant_questions` is byte-identical once
     the table name is substituted, and their parameters differ only in the
     status lists their profiles declare.
     """
@@ -294,7 +294,7 @@ def test_one_rendering_covers_every_table() -> None:
     now = "2026-09-30T12:00:00+00:00"
     shapes = []
     for table, profile in (
-        ("standard_diagnoses", DIAGNOSIS),
+        ("async_jobs", DIAGNOSIS),
         ("assistant_questions", QUESTION),
     ):
         statements = expire_statements(table, profile, now)
@@ -322,7 +322,7 @@ def test_the_health_table_sweeps_a_different_status_set() -> None:
     from aiops_diagnostics.common.async_job_lifecycle import expire_statements
 
     health = expire_statements("health_report_jobs", HEALTH_JOB, "NOW")
-    diagnosis = expire_statements("standard_diagnoses", DIAGNOSIS, "NOW")
+    diagnosis = expire_statements("async_jobs", DIAGNOSIS, "NOW")
     assert "cancelled" in diagnosis.sweep[1]
     assert "cancelled" not in health.sweep[1]
     # 已交付的行不在 sweep 的集合里 —— 这是这次改动的全部意义。
@@ -354,10 +354,10 @@ def test_a_profile_with_no_interrupted_tier_still_renders_an_executable_sweep() 
         completed_retention=timedelta(minutes=1),
         interrupted_retention=timedelta(minutes=1),
     )
-    statements = expire_statements("standard_diagnoses", profile, datetime.now(UTC))
+    statements = expire_statements("async_jobs", profile, datetime.now(UTC))
 
     connection = sqlite3.connect(":memory:")
-    connection.execute("CREATE TABLE standard_diagnoses (status TEXT, expires_at TEXT, updated_at TEXT)")
+    connection.execute("CREATE TABLE async_jobs (status TEXT, expires_at TEXT, updated_at TEXT)")
     connection.execute(*statements.sweep)  # 参数个数与占位符不匹配会在这里抛
     assert connection.total_changes == 0
 
@@ -373,8 +373,8 @@ def test_the_startup_shape_is_the_sweep_without_a_deadline_clause() -> None:
     from aiops_diagnostics.common.async_job_lifecycle import expire_statements
 
     now = "NOW"
-    startup = expire_statements("standard_diagnoses", DIAGNOSIS, now, require_deadline=False)
-    sweep = expire_statements("standard_diagnoses", DIAGNOSIS, now)
+    startup = expire_statements("async_jobs", DIAGNOSIS, now, require_deadline=False)
+    sweep = expire_statements("async_jobs", DIAGNOSIS, now)
     assert "deadline_at" not in startup.claim[0]
     assert "deadline_at" in sweep.claim[0]
     assert startup.claim[1] == sweep.claim[1][:-1]
@@ -470,7 +470,7 @@ def _boot_hook_pairs() -> dict[str, str]:
         # `for job_id in jobs["<table>"]:` — unparsed, so the quotes are single.
         source = ast.unparse(loop.iter)
         table = source.split("[", 1)[-1].strip("]").strip("\"'") if "[" in source else ""
-        if table not in {"health_report_jobs", "standard_diagnoses"}:
+        if table not in {"health_report_jobs", "async_jobs"}:
             continue
         for inner in ast.walk(loop):
             if isinstance(inner, ast.Call) and getattr(inner.func, "attr", "").startswith("update_"):
@@ -488,7 +488,7 @@ def test_each_table_is_converged_through_its_own_path() -> None:
     """
     assert _boot_hook_pairs() == {
         "health_report_jobs": "update_health_job",
-        "standard_diagnoses": "update_standard_diagnosis",
+        "async_jobs": "update_standard_diagnosis",
     }, _boot_hook_pairs()
 
 
@@ -507,7 +507,7 @@ def test_each_sweep_names_the_profile_of_its_own_table() -> None:
     """
     expected = {
         "health_report_jobs": "HEALTH_JOB",
-        "standard_diagnoses": "DIAGNOSIS",
+        "async_jobs": "DIAGNOSIS",
         "assistant_questions": "QUESTION",
     }
     methods = _method_pairs()

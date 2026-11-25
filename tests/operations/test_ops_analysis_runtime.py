@@ -387,7 +387,7 @@ def test_a_locked_database_ends_the_job_instead_of_leaving_it_running(tmp_path: 
             time.sleep(0.01)
             with sqlite3.connect(store.path) as connection:
                 row = connection.execute(
-                    "SELECT status FROM standard_diagnoses WHERE diagnosis_id = ?", (aid,)
+                    "SELECT status FROM async_jobs WHERE diagnosis_id = ?", (aid,)
                 ).fetchone()
             status = row[0] if row else "missing"
             if status in {"completed", "failed", "inconclusive"}:
@@ -560,7 +560,7 @@ def test_a_job_that_ran_out_its_deadline_is_visible_per_tenant(tmp_path: Path) -
     assert row is not None
     with store._connection() as connection:  # noqa: SLF001 - the column is what is under test
         raw = connection.execute(
-            "SELECT tenant_id FROM standard_diagnoses WHERE diagnosis_id = ?",
+            "SELECT tenant_id FROM async_jobs WHERE diagnosis_id = ?",
             (job["diagnosis_id"],),
         ).fetchone()
     assert raw["tenant_id"] == TENANT, dict(raw)
@@ -568,8 +568,7 @@ def test_a_job_that_ran_out_its_deadline_is_visible_per_tenant(tmp_path: Path) -
     # Force it past its deadline and sweep, exactly like the store's own path does.
     with store._connection(write=True) as connection:
         connection.execute(
-            "UPDATE standard_diagnoses SET status='running', deadline_at=?, expires_at=? "
-            "WHERE diagnosis_id = ?",
+            "UPDATE async_jobs SET status='running', deadline_at=?, expires_at=? WHERE diagnosis_id = ?",
             ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00", job["diagnosis_id"]),
         )
         store._expire_diagnoses(connection, datetime.now(UTC))  # noqa: SLF001
@@ -618,8 +617,7 @@ def test_a_job_that_ran_out_its_deadline_is_visible_per_tenant(tmp_path: Path) -
     with store._connection(write=True) as connection:  # noqa: SLF001
         for job_id in (other["diagnosis_id"], unattributed["diagnosis_id"]):
             connection.execute(
-                "UPDATE standard_diagnoses SET status='running', deadline_at=?, expires_at=? "
-                "WHERE diagnosis_id = ?",
+                "UPDATE async_jobs SET status='running', deadline_at=?, expires_at=? WHERE diagnosis_id = ?",
                 ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00", job_id),
             )
         store._expire_diagnoses(connection, datetime.now(UTC))  # noqa: SLF001

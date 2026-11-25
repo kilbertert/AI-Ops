@@ -6,7 +6,7 @@ observable contract of the checked-in Java source artifact that lands in the
 team repository: routing, self-validation, lookup-key semantics, response
 envelope, query bounds and the full `ch_occupy_order_info` column list. They
 are static contract guards, not a substitute for the Gherkin acceptance
-scenarios in `docs/diag-query-api-plan.md`.
+scenarios in `docs/archive/diag-query-api-plan.md`.
 """
 
 from __future__ import annotations

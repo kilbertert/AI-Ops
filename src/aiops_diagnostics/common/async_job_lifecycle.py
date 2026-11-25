@@ -1,7 +1,7 @@
 """One definition of an asynchronous job's lifecycle (#430).
 
 Four tables implement this rule today (`health_report_jobs`,
-`standard_diagnoses`, `assistant_questions`, `runs`) and give three and a half
+`async_jobs`, `assistant_questions`, `runs`) and give three and a half
 answers: five hand-written copies of the same expire statement, two polarity
 spellings of the same claim guard, two constant families with the question table
 borrowing the diagnosis one, and a startup sweep that the repository itself
@@ -173,7 +173,7 @@ def claim_guard(profile: JobProfile) -> tuple[str, tuple[str, ...]]:
 #: free-form name: the renderer interpolates the table into the statement, and a
 #: name that came from anywhere else would be an injection surface. Every caller
 #: today passes a literal, and this keeps it that way.
-_TABLES = frozenset({"health_report_jobs", "standard_diagnoses", "assistant_questions"})
+_TABLES = frozenset({"health_report_jobs", "async_jobs", "assistant_questions"})
 
 
 @dataclass(frozen=True, slots=True)

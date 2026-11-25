@@ -76,7 +76,7 @@ ASSISTANT_QUESTION_RESTART_ERROR_MESSAGE = (
 #: The three asynchronous job tables, in the order their deadlines run. Named
 #: here rather than imported from `async_job_lifecycle` so the sweep helper and
 #: the counting helper cannot drift over which tables are "jobs".
-JOB_TABLES = ("health_report_jobs", "standard_diagnoses", "assistant_questions")
+JOB_TABLES = ("health_report_jobs", "async_jobs", "assistant_questions")
 
 
 class GatewayStore:
@@ -228,7 +228,7 @@ class GatewayStore:
     ) -> dict[str, Any]:
         """Create an operations-analysis job (#697/#698) on the diagnosis job table.
 
-        It shares ``standard_diagnoses`` deliberately: the status vocabulary, the
+        It shares ``async_jobs`` deliberately: the status vocabulary, the
         claim guard, the expiry sweep and restart convergence are already right
         for this job, and a second table would be a second copy of them. What
         differs is one discriminator column (``kind``) plus the scope fields.
@@ -271,7 +271,7 @@ class GatewayStore:
             self._expire_diagnoses(connection, now)
             connection.execute(
                 """
-                INSERT INTO standard_diagnoses (
+                INSERT INTO async_jobs (
                     diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
                     internal_run_id, status, created_at, updated_at, deadline_at,
                     kind, site_ids_json, window_start, window_end, rule_version, card, tenant_id
@@ -293,7 +293,7 @@ class GatewayStore:
                 ),
             )
             row = connection.execute(
-                "SELECT * FROM standard_diagnoses WHERE diagnosis_id = ?",
+                "SELECT * FROM async_jobs WHERE diagnosis_id = ?",
                 (analysis_id,),
             ).fetchone()
         return _standard_diagnosis_from_row(row)
@@ -560,7 +560,7 @@ class GatewayStore:
         source_app_id: str = "",
         managed_draft: bool = False,
     ) -> dict[str, Any]:
-        """Create a **试运行** job (#772 F / #781). Shares ``standard_diagnoses``.
+        """Create a **试运行** job (#772 F / #781). Shares ``async_jobs``.
 
         Same reasoning as ``create_analysis_job``: the status vocabulary, the
         claim guard, the expiry sweep and restart convergence are already right,
@@ -585,7 +585,7 @@ class GatewayStore:
             self._expire_diagnoses(connection, now)
             connection.execute(
                 """
-                INSERT INTO standard_diagnoses (
+                INSERT INTO async_jobs (
                     diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
                     internal_run_id, status, created_at, updated_at, deadline_at,
                     kind, trial_draft_fingerprint, trial_initiator, tenant_id,
@@ -610,7 +610,7 @@ class GatewayStore:
                 ),
             )
             row = connection.execute(
-                "SELECT * FROM standard_diagnoses WHERE diagnosis_id = ?",
+                "SELECT * FROM async_jobs WHERE diagnosis_id = ?",
                 (trial_id,),
             ).fetchone()
         return _standard_diagnosis_from_row(row)
@@ -641,7 +641,7 @@ class GatewayStore:
             self._expire_diagnoses(connection, now)
             updated = connection.execute(
                 """
-                UPDATE standard_diagnoses SET
+                UPDATE async_jobs SET
                     status = ?, result_json = COALESCE(?, result_json),
                     error_code = COALESCE(?, error_code),
                     error_message = COALESCE(?, error_message),
@@ -676,7 +676,7 @@ class GatewayStore:
             self._expire_diagnoses(connection, now_utc())
             row = connection.execute(
                 """
-                SELECT * FROM standard_diagnoses
+                SELECT * FROM async_jobs
                 WHERE diagnosis_id = ? AND scope_fingerprint = ?
                 """,
                 (diagnosis_id, scope_fingerprint),
@@ -697,7 +697,7 @@ class GatewayStore:
                 """
                 SELECT diagnosis_id, order_no, question, indicator_code, status,
                        created_at, updated_at
-                FROM standard_diagnoses
+                FROM async_jobs
                 WHERE scope_fingerprint = ? AND kind = 'order'
                 ORDER BY created_at DESC LIMIT ?
                 """,
@@ -707,7 +707,7 @@ class GatewayStore:
 
     def count_standard_diagnoses(self) -> int:
         with self._connection() as connection:
-            row = connection.execute("SELECT COUNT(*) AS count FROM standard_diagnoses").fetchone()
+            row = connection.execute("SELECT COUNT(*) AS count FROM async_jobs").fetchone()
         return int(row["count"])
 
     # ------------------------------------------------------------------
@@ -1071,10 +1071,10 @@ class GatewayStore:
                         "SELECT job_id FROM health_report_jobs WHERE status IN ('queued', 'running')"
                     ).fetchall()
                 ],
-                "standard_diagnoses": [
+                "async_jobs": [
                     str(row["diagnosis_id"])
                     for row in connection.execute(
-                        "SELECT diagnosis_id FROM standard_diagnoses WHERE status IN ('queued', 'running')"
+                        "SELECT diagnosis_id FROM async_jobs WHERE status IN ('queued', 'running')"
                     ).fetchall()
                 ],
             }
@@ -1085,7 +1085,7 @@ class GatewayStore:
                 error_code=HEALTH_JOB_RESTART_ERROR_CODE,
                 error_message=HEALTH_JOB_RESTART_ERROR_MESSAGE,
             )
-        for diagnosis_id in jobs["standard_diagnoses"]:
+        for diagnosis_id in jobs["async_jobs"]:
             self.update_standard_diagnosis(
                 diagnosis_id,
                 status="failed",
@@ -1147,7 +1147,7 @@ class GatewayStore:
 
     @staticmethod
     def _expire_diagnoses(connection: sqlite3.Connection, now: datetime) -> None:
-        statements = expire_statements("standard_diagnoses", DIAGNOSIS, format_stored_time(now))
+        statements = expire_statements("async_jobs", DIAGNOSIS, format_stored_time(now))
         connection.execute(*statements.claim)
         connection.execute(*statements.sweep)
 

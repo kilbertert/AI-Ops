@@ -573,3 +573,94 @@ def test_legacy_cleanup_rechecks_after_downgrade_and_clean_startup_is_readonly(t
         assert "PRAGMA secure_delete=ON" in traces
         with gateway_db.connection(path) as db:
             assert json.loads(db.execute("SELECT before_json FROM service_key_ops").fetchone()[0]) == ["id"]
+
+
+def test_v3_standard_diagnoses_migrates_to_v4_async_jobs_without_data_loss(tmp_path, monkeypatch):
+    """ADR-0340：v3 含数据的 standard_diagnoses 库应零丢失原子迁移为 v4 async_jobs，失败可整事务回滚。"""
+    path = tmp_path / "gateway.db"
+    schema.ensure(path)
+    # 构造真实 v3 形态：表名为 standard_diagnoses，索引名为 idx_standard_diagnoses_*，user_version=3。
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("DROP INDEX idx_async_jobs_scope_created")
+        db.execute("DROP INDEX idx_async_jobs_scope_kind_created")
+        db.execute('ALTER TABLE "async_jobs" RENAME TO "standard_diagnoses"')
+        db.execute(
+            'CREATE INDEX "idx_standard_diagnoses_scope_created" '
+            'ON "standard_diagnoses" (scope_fingerprint, created_at DESC)'
+        )
+        db.execute(
+            'CREATE INDEX "idx_standard_diagnoses_scope_kind_created" '
+            'ON "standard_diagnoses" (scope_fingerprint, kind, created_at DESC)'
+        )
+        db.execute(
+            "INSERT INTO standard_diagnoses("
+            "diagnosis_id, scope_fingerprint, order_no, question, language, status, "
+            "created_at, updated_at, deadline_at, kind, tenant_id"
+            ") VALUES("
+            "'diag_v3_keep', 'fp_1', 'ORD-001', 'q1', 'zh', 'completed', "
+            "'2026-11-25T00:00:00Z', '2026-11-25T00:01:00Z', '2026-11-25T00:15:00Z', 'analysis', 'TENANT-A'"
+            ")"
+        )
+        db.execute("PRAGMA user_version=3")
+
+    before = snapshot(path)
+    report = schema.check(path)
+    assert report["version"] == 3
+    assert report["current_version"] == 4
+    assert report["warnings"] == []
+    assert snapshot(path) == before
+
+    # 演练只读源库且在副本上完整升级通过。
+    backup = tmp_path / "v3-backup.db"
+    rehearsal = schema.rehearse(path, backup)
+    assert rehearsal["version"] == 4
+    assert snapshot(path) == before
+
+    # 在 RENAME TO 之后注入异常必须整事务回滚回 v3 原貌。
+    original = sqlite3.connect
+
+    class FailAfterRename(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            res = super().execute(sql, parameters)
+            if self.in_transaction and "RENAME TO" in sql:
+                raise RuntimeError("injected after rename")
+            return res
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3, "connect", lambda *a, **kw: original(*a, factory=FailAfterRename, **kw))
+        with pytest.raises(RuntimeError, match="injected after rename"):
+            schema.ensure(path)
+    assert snapshot(path) == before
+
+    # 正式升级到 v4：零数据丢失、旧表与旧索引消失、新索引就绪、完整性通过。
+    schema.startup(path)
+    schema.integrity(path)
+    assert schema.check(path)["version"] == 4
+    with gateway_db.connection(path) as db:
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        indexes = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert "async_jobs" in tables and "standard_diagnoses" not in tables
+        assert "idx_async_jobs_scope_created" in indexes
+        assert "idx_async_jobs_scope_kind_created" in indexes
+        assert "idx_standard_diagnoses_scope_created" not in indexes
+        assert "idx_standard_diagnoses_scope_kind_created" not in indexes
+        row = db.execute(
+            "SELECT diagnosis_id, scope_fingerprint, order_no, status, kind, tenant_id "
+            "FROM async_jobs WHERE diagnosis_id='diag_v3_keep'"
+        ).fetchone()
+        assert tuple(row) == ("diag_v3_keep", "fp_1", "ORD-001", "completed", "analysis", "TENANT-A")
+
+
+def test_ambiguous_standard_diagnoses_and_async_jobs_both_present_is_refused(tmp_path):
+    """若旧表 standard_diagnoses 与新表 async_jobs 同时存在，必须 fail-closed 拒绝而不猜真值。"""
+    path = tmp_path / "ambiguous.db"
+    schema.ensure(path)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("CREATE TABLE standard_diagnoses (diagnosis_id TEXT PRIMARY KEY)")
+        db.execute("PRAGMA user_version=3")
+    before = snapshot(path)
+    with pytest.raises(schema.SchemaError, match="ambiguous legacy table rename"):
+        schema.check(path)
+    with pytest.raises(schema.SchemaError, match="ambiguous legacy table rename"):
+        schema.ensure(path)
+    assert snapshot(path) == before

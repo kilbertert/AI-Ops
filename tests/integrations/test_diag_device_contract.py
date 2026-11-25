@@ -6,7 +6,7 @@ contract of the checked-in Java source artifact that lands in the team
 repository: routing, header self-validation, response envelope, query bounds,
 device lookup fields and audit-safety properties. They are static contract
 guards, not a substitute for deploying the service and running the Gherkin
-acceptance scenarios in `docs/diag-query-api-plan.md`.
+acceptance scenarios in `docs/archive/diag-query-api-plan.md`.
 """
 
 from __future__ import annotations

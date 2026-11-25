@@ -14,7 +14,17 @@ from pathlib import Path
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.gateway import gateway_db
 
-VERSION = 3
+VERSION = 4
+
+# 历史表与索引更名映射（ADR-0340）：旧版库在只读 check 时按目标结构核对，
+# ensure() 在单事务内先重命名表并清理旧索引，再补缺失列与新索引，零数据丢失。
+LEGACY_TABLE_RENAMES: dict[str, str] = {
+    "standard_diagnoses": "async_jobs",
+}
+LEGACY_INDEX_RENAMES: dict[str, str] = {
+    "idx_standard_diagnoses_scope_created": "idx_async_jobs_scope_created",
+    "idx_standard_diagnoses_scope_kind_created": "idx_async_jobs_scope_kind_created",
+}
 
 # 列声明同时驱动 CREATE、白名单 ADD 与结构判据；不维护第二套 schema。
 TABLES = {
@@ -160,7 +170,7 @@ TABLES = {
         },
         (),
     ),
-    "standard_diagnoses": (
+    "async_jobs": (
         {
             "diagnosis_id": "TEXT PRIMARY KEY",
             "scope_fingerprint": "TEXT NOT NULL",
@@ -568,15 +578,15 @@ INDEXES = {
         "health_report_jobs",
         "scope_fingerprint, order_no, rule_version, created_at DESC",
     ),
-    "idx_standard_diagnoses_scope_created": ("standard_diagnoses", "scope_fingerprint, created_at DESC"),
+    "idx_async_jobs_scope_created": ("async_jobs", "scope_fingerprint, created_at DESC"),
     "idx_assistant_questions_scope_created": ("assistant_questions", "scope_fingerprint, created_at DESC"),
     "idx_publish_audit_at": ("publish_audit_ledger", "at DESC"),
     "idx_publish_audit_app": ("publish_audit_ledger", "app_id, at DESC"),
     "idx_knowledge_access_tenant": ("knowledge_access_ledger", "tenant_id, at DESC"),
     "idx_knowledge_hop_expiry": ("knowledge_hop_tickets", "expires_at"),
     "idx_dify_knowledge_tenant": ("dify_knowledge_bindings", "tenant_id, created_at DESC"),
-    "idx_standard_diagnoses_scope_kind_created": (
-        "standard_diagnoses",
+    "idx_async_jobs_scope_kind_created": (
+        "async_jobs",
         "scope_fingerprint, kind, created_at DESC",
     ),
     "idx_health_jobs_reuse_language": (
@@ -629,7 +639,7 @@ LEGACY_COLUMNS = {
         "agent_version_no",
     ),
     "health_report_jobs": ("language", "tenant_id"),
-    "standard_diagnoses": (
+    "async_jobs": (
         "language",
         "kind",
         "site_ids_json",
@@ -681,10 +691,10 @@ def _version(conn: sqlite3.Connection) -> int:
     return version
 
 
-def _create(table: str, columns: dict[str, str]) -> str:
+def _create(table: str, columns: dict[str, str], *, sql_name: str | None = None) -> str:
     definitions = [f"{name} {spec}" for name, spec in columns.items()]
     definitions.extend(TABLES[table][1])
-    return f'CREATE TABLE "{table}" (' + ", ".join(definitions) + ")"
+    return f'CREATE TABLE "{sql_name or table}" (' + ", ".join(definitions) + ")"
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> dict:
@@ -765,24 +775,48 @@ def _validate(conn: sqlite3.Connection, *, legacy: bool) -> list[str]:
         "SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
     ).fetchall()
     actual = {r[1]: r[3] for r in objects if r[0] == "table"}
-    if objects and not (actual.keys() & TABLES.keys()):
+    # 旧版库可能仍保留更名前的表名（如 standard_diagnoses -> async_jobs）。
+    # 若新旧表同时存在，则无法判定哪张是真值，必须拒绝迁移。
+    phys_for_logical: dict[str, str] = {}
+    mapped_legacy_tables: set[str] = set()
+    if legacy:
+        for old_name, new_name in LEGACY_TABLE_RENAMES.items():
+            if old_name in actual and new_name in actual:
+                raise SchemaError(f"ambiguous legacy table rename: {old_name} -> {new_name}")
+            if old_name in actual:
+                phys_for_logical[new_name] = old_name
+                mapped_legacy_tables.add(old_name)
+    known_tables = TABLES.keys() | (mapped_legacy_tables if legacy else set())
+    if objects and not (actual.keys() & known_tables):
         raise SchemaError("not a gateway database")
-    warnings = [f"extra table: {name}" for name in sorted(actual.keys() - TABLES.keys())]
+    warnings = [f"extra table: {name}" for name in sorted(actual.keys() - known_tables)]
+    managed_names = set(TABLES) | mapped_legacy_tables
+    legacy_idx_to_phys: dict[str, str] = {}
+    if legacy:
+        for old_idx, new_idx in LEGACY_INDEX_RENAMES.items():
+            target_table = INDEXES[new_idx][0]
+            legacy_idx_to_phys[old_idx] = phys_for_logical.get(target_table, target_table)
     for kind, name, table, _ in objects:
-        if name in TABLES and kind != "table":
+        if name in managed_names and kind != "table":
             raise SchemaError(f"managed name collision: {name}")
-        if name in INDEXES and (kind != "index" or table != INDEXES[name][0]):
+        if name in INDEXES and (
+            kind != "index" or table != phys_for_logical.get(INDEXES[name][0], INDEXES[name][0])
+        ):
             raise SchemaError(f"index name collision: {name}")
-    if any(r[0] in ("trigger", "view") and (r[2] in TABLES or r[1] in TABLES) for r in objects):
+        if legacy and name in legacy_idx_to_phys and (kind != "index" or table != legacy_idx_to_phys[name]):
+            raise SchemaError(f"index name collision: {name}")
+    if any(r[0] in ("trigger", "view") and (r[2] in managed_names or r[1] in managed_names) for r in objects):
         raise SchemaError("unexpected managed trigger or view")
     # SQLite itself interprets types, constraints and indexes; no second hand-written shape.
+    actual_index_names = {r[1] for r in objects if r[0] == "index"}
     with gateway_db.connection(Path(":memory:")) as expected:
         for table, (declared, _) in TABLES.items():
-            if table not in actual:
+            phys = phys_for_logical.get(table, table)
+            if phys not in actual:
                 if legacy:
                     continue
                 raise SchemaError(f"missing table: {table}")
-            columns = _columns(conn, table)
+            columns = _columns(conn, phys)
             missing = declared.keys() - columns.keys()
             if columns.keys() - declared.keys() or (
                 missing and (not legacy or missing - set(LEGACY_COLUMNS.get(table, ())))
@@ -792,27 +826,35 @@ def _validate(conn: sqlite3.Connection, *, legacy: bool) -> list[str]:
             if table == "chat_dify_runs" and "scope_json" in columns and columns["scope_json"][2] == "''":
                 selected["scope_json"] += " DEFAULT ''"
                 warnings.append("legacy default: chat_dify_runs.scope_json = ''")
-            sql = _create(table, selected)
+            sql = _create(table, selected, sql_name=phys)
             expected.execute(sql)
-            if _columns(expected, table) != columns or _definitions(actual[table]) != _definitions(sql):
+            if _columns(expected, phys) != columns or _definitions(actual[phys]) != _definitions(sql):
                 raise SchemaError(f"column or constraint drift: {table}")
 
-            def fk(db, table=table):
-                return sorted(tuple(r) for r in db.execute(f'PRAGMA foreign_key_list("{table}")'))
+            def fk(db, phys_table=phys):
+                return sorted(tuple(r) for r in db.execute(f'PRAGMA foreign_key_list("{phys_table}")'))
 
             if fk(conn) != fk(expected):
                 raise SchemaError(f"foreign key drift: {table}")
+        reverse_idx_renames = {new_idx: old_idx for old_idx, new_idx in LEGACY_INDEX_RENAMES.items()}
         for name, (table, fields) in INDEXES.items():
-            sql = f'CREATE INDEX "{name}" ON "{table}" ({fields})'
-            if table in actual:
+            phys = phys_for_logical.get(table, table)
+            if phys in actual:
+                idx_name = name
+                if legacy and name in reverse_idx_renames and reverse_idx_renames[name] in actual_index_names:
+                    idx_name = reverse_idx_renames[name]
+                sql = f'CREATE INDEX "{idx_name}" ON "{phys}" ({fields})'
                 # A historical missing column may also make its index absent.
                 try:
                     expected.execute(sql)
                 except sqlite3.OperationalError:
                     if not legacy:
                         raise
-        for table in actual.keys() & TABLES.keys():
-            found, wanted = _indexes(conn, table), _indexes(expected, table)
+        for table in TABLES:
+            phys = phys_for_logical.get(table, table)
+            if phys not in actual:
+                continue
+            found, wanted = _indexes(conn, phys), _indexes(expected, phys)
             if any(key not in wanted or wanted[key] != value for key, value in found.items()) or (
                 not legacy and found != wanted
             ):
@@ -847,6 +889,11 @@ def ensure(path: Path) -> None:
         if _version(conn) == VERSION:
             return  # 另一个进程已完成；必须在拿锁后重读。
         _validate(conn, legacy=True)
+        for old_name, new_name in LEGACY_TABLE_RENAMES.items():
+            if _columns(conn, old_name) and not _columns(conn, new_name):
+                conn.execute(f'ALTER TABLE "{old_name}" RENAME TO "{new_name}"')
+        for old_idx in LEGACY_INDEX_RENAMES:
+            conn.execute(f'DROP INDEX IF EXISTS "{old_idx}"')
         for table, (columns, _) in TABLES.items():
             present = _columns(conn, table)
             if not present:
