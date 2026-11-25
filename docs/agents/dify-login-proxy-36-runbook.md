@@ -185,7 +185,7 @@ ssh yidong-36 'sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-pro
 ssh yidong-36 "sudo -n -u aiopslogin /usr/bin/python3 - <<'PY'
 import os, sys
 sys.path.insert(0, '/opt/aiops-login-proxy')
-from aiops_diagnostics.dify.dify_login_server import LoginProxySettings
+from dify_login_proxy.server import LoginProxySettings
 
 env = {}
 for line in open('/etc/aiops-login-proxy/login-proxy.env', encoding='utf-8'):
@@ -222,7 +222,7 @@ PY"
 ssh yidong-36 'sudo -n -u aiopslogin /usr/bin/python3 - <<PY
 import sys
 sys.path.insert(0, "/opt/aiops-login-proxy")
-from aiops_diagnostics.dify.dify_login_provision import DifyConsoleSettings
+from dify_login_proxy.provision import DifyConsoleSettings
 for v in ("", "prod.41"):
     try:
         DifyConsoleSettings(base_url="http://x", secret_key="x", environment=v)
@@ -528,7 +528,7 @@ systemctl is-active --quiet "$LOGIN_SERVICE"
 
 | 现象 | 真因 |
 |---|---|
-| `No module named aiops_diagnostics.dify.dify_login_server` | 属主/权限不对（见 §3），不是文件缺失 |
+| `No module named dify_login_proxy`（或旧入口 `aiops_diagnostics.dify.dify_login_server`） | 属主/权限不对或未解包独立旁路包（见 §1/§3），不是文件缺失 |
 | `systemctl is-active nginx` = failed | 既有失效单元，端口才是判据 |
 | 所有登录都 400「明文 HTTP」 | 10008 那一层的 realip/map 没装或没 reload |
 | 登录后立刻弹回 `/signin` | 走了明文入口；会话 cookie 是 `Secure` + `__Host-`，http 源上被丢弃 |
