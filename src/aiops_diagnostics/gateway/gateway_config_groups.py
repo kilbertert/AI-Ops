@@ -59,6 +59,11 @@ class HttpServerConfig:
     routing_risk_at_least: float = 0.5
     routing_confidence_at_least: float = 0.8
     routing_risk_always_asks: bool = True
+    download_center_upms_base_url: str = ""
+    download_center_mall_base_url: str = ""
+    download_center_upload_export_type: int = 3101
+    download_center_download_export_type: int = 10086
+    download_center_timeout_seconds: float = 15.0
 
     def validate(self, *, require_server_config_file: bool = True) -> None:
         if not self.bind_host or any(character.isspace() for character in self.bind_host):
