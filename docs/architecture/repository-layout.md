@@ -18,7 +18,7 @@
 | `tests/<职责>/` | 对应职责的行为测试；管家使用`tests/operations/`，避免与Python标准库`operator`冲突 |
 | `tests/`根 | 现有跨服务部署、仓库规则、退役检查与共享夹具；新增业务测试进入职责目录 |
 | `tools/content/`、`verification/`、`experiments/`、`inventory/` | 内容生成/迁移、验证探针、隔离实验、公司源码索引；tools根只留说明与统一测试命令 |
-| `services/`、`integrations/` | 独立运行服务源码、公司侧集成补丁；新增常驻服务不得放进tools |
+| `services/`、`integrations/` | 独立运行服务源码（`execution-node/`、`model-proxy/`、`dify-console-bridge/`、`dify-login-proxy/`）、公司侧集成补丁；新增常驻服务不得放进 `src/aiops_diagnostics/` 或 `tools/` |
 | `deploy/<服务>/`、`ops/`既有目录 | 成套部署资产、环境清单/代理配置和运行手册；Gateway根层交付脚本保持唯一实现；各部署面归属索引见`deploy/README.md` |
 | `llmdoc/` | `@tokenroll/llmdoc` 维护的 agent 检索面（`.mdx` 文档与 `meta.json` 台账）；位置与目录名由该工具契约固定，只能位于仓库根。临时调查材料放本机 `.llmdoc-tmp/`（已 gitignore），不进入检查清单。根层 `.llmdocignore` 同属该工具契约：逐行 minimatch 声明 intentional no-doc 面（过程档案/元数据），匹配路径不再产生 unmapped/dirty 信号 |
 

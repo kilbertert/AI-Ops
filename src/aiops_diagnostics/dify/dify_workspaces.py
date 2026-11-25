@@ -40,6 +40,9 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from aiops_diagnostics.common.platform_constants import (
+    DIFY_PLATFORM_WORKSPACE_ID as DIFY_PLATFORM_WORKSPACE_ID,
+)
 from aiops_diagnostics.common.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.common.redaction import ERROR_TEXT_SHORT_LIMIT
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
@@ -439,12 +442,8 @@ class DifyWorkspaces:
             )
 
 
-#: 平台账号在 Dify workspace 目录里的哨兵租户键（#882）。公司 `sys_user.type == -1`
-#: 的账号不属于任何 `sys_organ`，用该值在 `dify_workspaces` 表里占一行。
+#: 平台账号在 Dify workspace 目录里的哨兵租户键（#882，唯一权威在 common.platform_constants）。
 #: 注意与快捷动作平台命名空间 `SHORTCUT_PLATFORM_SCOPE = "__platform__"` 严格区分。
-DIFY_PLATFORM_WORKSPACE_ID = "platform"
-#: 过渡兼容别名：待并行的登录代理/发布桥分支合入后统一收敛至 `DIFY_PLATFORM_WORKSPACE_ID`。
-PLATFORM_TENANT_ID = DIFY_PLATFORM_WORKSPACE_ID
 
 
 def workspace_name(environment: str, tenant_id: str, *, company: str = "") -> str:

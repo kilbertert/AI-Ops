@@ -25,26 +25,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from aiops_diagnostics.common.platform_constants import (
+    DIFY_PLATFORM_WORKSPACE_ID,
+    PLATFORM_USER_TYPE,
+)
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
-from aiops_diagnostics.dify.dify_login_company import (
+
+from .company import (
     CompanyAuthSettings,
     CompanyIdentity,
     company_login,
     read_permissions,
     read_user_type,
 )
-from aiops_diagnostics.dify.dify_login_provision import (
-    DifyConsoleSettings,
-    account_email_for,
-    provision_editor,
-)
-from aiops_diagnostics.dify.dify_login_proxy import (
+from .core import (
     CompanyLoginRejected,
     ConsoleSession,
     PermissionDenied,
     mint_console_session,
 )
-from aiops_diagnostics.dify.dify_workspaces import PLATFORM_TENANT_ID
+from .provision import (
+    DifyConsoleSettings,
+    account_email_for,
+    provision_editor,
+)
 
 _LOGGER = logging.getLogger("aiops.dify_login_proxy.service")
 
@@ -60,14 +64,6 @@ _LOGGER = logging.getLogger("aiops.dify_login_proxy.service")
 #:    成员且悄悄改掉归属。
 #: ⇒ 封禁落在**我们自己的映射**上，而"活着的会话随之失效"由令牌寿命界定（见
 #:    :data:`SESSION_MAX_MINUTES_NOTE`）—— 代理不在请求路径上时，这是能诚实给出的边界。
-#: 公司 `sys_user.type` 里**平台账号**的取值（`-1`）。与 `scope_context.py` 的
-#: `TENANT_LEVEL_USER_TYPES` 不是同一件事：那个集合是"可见范围是整租户"（`-1` 与 `1`），
-#: 而这里只认 `-1` —— **平台**账号不属于任何租户，租户主账号（`1`）属于。
-#:
-#: 为什么在代理这一层还要单独判一次：这里回答的是"它该进哪个 workspace"，不是"它能看多大
-#: 范围"。后者在网关注册表里判，两处判据各自只有一个问题要答。
-PLATFORM_USER_TYPE = "-1"
-
 STATUS_ACTIVE = "active"
 STATUS_DISABLED = "disabled"
 
@@ -506,7 +502,7 @@ class LoginService:
         # 账号会拿到"缺权限"这句错，而真正的原因是他该进的那个工作区没建 —— 两种下一步
         # 完全不同（一个去找公司管理员，一个去跑 `ensure-workspace`）。
         is_platform_account = user_type == PLATFORM_USER_TYPE
-        workspace_tenant = PLATFORM_TENANT_ID if is_platform_account else identity.tenant_id
+        workspace_tenant = DIFY_PLATFORM_WORKSPACE_ID if is_platform_account else identity.tenant_id
         workspace_id = ""
         workspace_lookup_error: Exception | None = None
         if self.workspace_directory is not None:
@@ -711,7 +707,7 @@ class LoginService:
         import hashlib
         import time
 
-        from aiops_diagnostics.dify.dify_login_proxy import verify_console_jwt
+        from .core import verify_console_jwt
 
         claims = verify_console_jwt(session, self.dify.secret_key) if isinstance(session, str) else None
         if claims is None:

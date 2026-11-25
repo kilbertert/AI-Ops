@@ -450,7 +450,7 @@ def test_settings_validate_rejects_drift_before_route_construction(tmp_path):
 
 
 def test_mapping_is_independent(tmp_path):
-    from aiops_diagnostics.dify.dify_login_service import MappingStore
+    from dify_login_proxy.service import MappingStore
 
     path = tmp_path / "mappings.db"
     MappingStore(path)

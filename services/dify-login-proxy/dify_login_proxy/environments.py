@@ -12,7 +12,7 @@ from aiops_diagnostics.gateway.deployment_environment import canonical_environme
 
 
 def refused(code, message):
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from .core import PermissionDenied
 
     return PermissionDenied(code, message)
 
@@ -149,8 +149,9 @@ class LoginEnvironments:
         return settings, service
 
     def catalogue(self):
-        from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
         from aiops_diagnostics.gateway.environment_registry import RegistryError
+
+        from .core import PermissionDenied
 
         rows = []
         for identifier, (_, _, registry) in self.entries.items():
@@ -185,8 +186,9 @@ class LoginEnvironments:
             self.challenges.pop(hashlib.sha256(random_str.encode()).hexdigest(), None)
 
     def session(self, token):
-        from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
         from aiops_diagnostics.gateway.environment_registry import RegistryError
+
+        from .core import PermissionDenied
 
         if not isinstance(token, str) or not token or len(token) > 16384:
             raise refused("SESSION_LOGIN_REQUIRED", "请重新登录")

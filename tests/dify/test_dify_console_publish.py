@@ -23,8 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
-
-from aiops_diagnostics.dify.dify_console_publish import (
+from dify_console_bridge.bridge import (
     DEFAULT_ALLOWED_ROLES,
     BridgeSettings,
     ConsolePublishError,
@@ -1694,7 +1693,7 @@ def test_knowledge_sync_prefers_changed_over_created(_sync_upstream: _Upstream) 
     页面就不刷新 —— 卡片留在原地，点进去 404。这是本轮第三次踩同一个错
     （网关、前端各一次），所以判据钉在桥这一层。
     """
-    from aiops_diagnostics.dify.dify_console_publish import _knowledge_sync_payload
+    from dify_console_bridge.bridge import _knowledge_sync_payload
 
     _sync_upstream.knowledge_sync_body = {"changed": 3, "created": 1}
 
@@ -1705,7 +1704,7 @@ def test_knowledge_sync_prefers_changed_over_created(_sync_upstream: _Upstream) 
 
 def test_knowledge_sync_falls_back_to_created_for_an_old_gateway(_sync_upstream: _Upstream) -> None:
     """旧网关只回 `created` —— 桥不能因此读到 0 而永不刷新。"""
-    from aiops_diagnostics.dify.dify_console_publish import _knowledge_sync_payload
+    from dify_console_bridge.bridge import _knowledge_sync_payload
 
     _sync_upstream.knowledge_sync_body = {"created": 2}
 
@@ -1840,27 +1839,20 @@ def test_a_tenant_account_still_resolves_its_own_tenant(upstream) -> None:
 
 
 def test_the_inlined_platform_constants_match_their_sources() -> None:
-    """桥里重写的两个常量必须与出处一致。
+    """平台哨兵常量由 `common.platform_constants` 唯一声明，被桥、登录代理与 Gateway 共享（ADR-0338）。"""
+    from dify_console_bridge import bridge
+    from dify_login_proxy import service
 
-    发布桥的部署制品只含五个模块（`ops/dify-console-bridge/build-bundle.sh:13`），
-    所以 `dify_console_publish.py` **不能** import `dify_login_service` 或
-    `dify_workspaces` —— 实测 2026-10-25：那样写让桥在服务宿主上
-    `ModuleNotFoundError`，五个部署测试转红，而它们在本地全绿。
-
-    代价是这两个值在本模块重写了一份。本用例就是那份代价的守卫：出处改了而这里
-    没跟上，立刻红。
-    """
-    from aiops_diagnostics.dify import dify_login_service, dify_workspaces
-    from aiops_diagnostics.dify.dify_console_publish import PLATFORM_TENANT_ID as BRIDGE_WORKSPACE
-    from aiops_diagnostics.dify.dify_console_publish import PLATFORM_USER_TYPE as BRIDGE_TYPE
-
-    assert BRIDGE_TYPE == dify_login_service.PLATFORM_USER_TYPE, (
-        "桥里的 PLATFORM_USER_TYPE 与 dify_login_service 不一致"
-    )
-    assert BRIDGE_WORKSPACE == dify_workspaces.DIFY_PLATFORM_WORKSPACE_ID, (
-        "桥里的平台工作区哨兵与 dify_workspaces.DIFY_PLATFORM_WORKSPACE_ID 不一致"
-    )
-    # 快捷动作的平台命名空间属于不同领域，值本就不同；钉住这一点避免混用。
+    from aiops_diagnostics.common import platform_constants
+    from aiops_diagnostics.dify import dify_workspaces
     from aiops_diagnostics.publication import shortcut_lifecycle
 
-    assert shortcut_lifecycle.SHORTCUT_PLATFORM_SCOPE != BRIDGE_WORKSPACE
+    assert bridge.PLATFORM_USER_TYPE is platform_constants.PLATFORM_USER_TYPE
+    assert service.PLATFORM_USER_TYPE is platform_constants.PLATFORM_USER_TYPE
+    assert bridge.DIFY_PLATFORM_WORKSPACE_ID is platform_constants.DIFY_PLATFORM_WORKSPACE_ID
+    assert dify_workspaces.DIFY_PLATFORM_WORKSPACE_ID is platform_constants.DIFY_PLATFORM_WORKSPACE_ID
+    assert not hasattr(bridge, "PLATFORM_TENANT_ID")
+    assert not hasattr(dify_workspaces, "PLATFORM_TENANT_ID")
+    assert not hasattr(shortcut_lifecycle, "PLATFORM_TENANT_ID")
+    # 快捷动作的平台命名空间属于不同领域，值本就不同；钉住这一点避免混用。
+    assert shortcut_lifecycle.SHORTCUT_PLATFORM_SCOPE != bridge.DIFY_PLATFORM_WORKSPACE_ID

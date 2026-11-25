@@ -21,8 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
-
-from aiops_diagnostics.dify.dify_console_publish import BridgeSettings, make_server
+from dify_console_bridge.bridge import BridgeSettings, make_server
 
 PUBLISH_KEY = "p" * 40
 INTERNAL_TOKEN = "i" * 40

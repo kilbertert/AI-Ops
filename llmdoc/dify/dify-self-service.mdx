@@ -14,7 +14,7 @@ code:
     - src/aiops_diagnostics/dify/dual_entry.py
     - src/aiops_diagnostics/dify/self_service.py
     - src/aiops_diagnostics/dify/self_service_api.py
-    - src/aiops_diagnostics/dify/self_service_bridge.py
+    - services/dify-console-bridge/dify_console_bridge/self_service_bridge.py
     - src/aiops_diagnostics/dify/self_service_config.py
     - src/aiops_diagnostics/dify/self_service_identity.py
     - src/aiops_diagnostics/dify/self_service_prepare.py
@@ -90,6 +90,6 @@ revision 1、同 workspace、`agent_name==entry-app_id`、同 profile/scenario�
 - `src/aiops_diagnostics/dify/dual_entry.py`（entry/scenario/channel 词表+channel 语义）
 - `src/aiops_diagnostics/dify/self_service.py` + `self_service_store.py`（幂等作业、partial 状态）
 - `src/aiops_diagnostics/dify/service_keys.py`（快照→创建→对账、路径不发密钥）
-- `src/aiops_diagnostics/dify/self_service_bridge.py`（同源闸）
+- `services/dify-console-bridge/dify_console_bridge/self_service_bridge.py`（同源闸）
 - `src/aiops_diagnostics/dify/knowledge_connection.py`（工作区级知识连接）
 - `docs/agents/operator-cpms/self-service.md`（操作员视角流程）、`docs/agents/operator-cpms/run-logs.md`（运行日志合同）

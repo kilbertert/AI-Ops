@@ -332,10 +332,9 @@ _IOFORMAT_LEDGER = {
 }
 
 #: `sqlite3.connect` 的合法居留点。gateway.db 的连接只有 gateway_db 一份；
-#: MappingStore 开独立 mappings.db，保留原始 sqlite 约定。
+#: 登录代理的 MappingStore 已独立迁至 `services/dify-login-proxy/`，不再位于 Gateway 包内。
 _CONNECT_LEDGER = {
     "gateway/gateway_db.py",
-    "dify/dify_login_service.py",  # MappingStore → mappings.db
 }
 
 #: 「存储时间/数值读取」形态的函数名——曾经七种拼写各是一处语法。
@@ -467,7 +466,6 @@ def test_gateway_ddl_has_one_authority() -> None:
         rel = str(path.relative_to(SOURCE_ROOT))
         if rel in {
             "gateway/gateway_schema.py",
-            "dify/dify_login_service.py",
             "identity/gateway_admission.py",  # ADR0265：独立短期nonce库，不写gateway.db
             "gateway/environment_drafts.py",  # ADR0267：目录旁独立草稿库，不写gateway.db
         }:

@@ -34,7 +34,8 @@ from aiops_diagnostics.common.bounded_http import (
     RequestSpec,
     request_json,
 )
-from aiops_diagnostics.dify.dify_login_proxy import (
+
+from .core import (
     _COMPANY_SUCCESS_CODE,
     COMPANY_CAPTCHA_PATH,
     COMPANY_LOGIN_PATH,

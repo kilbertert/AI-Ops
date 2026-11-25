@@ -325,7 +325,8 @@ def test_feedback_refusal_does_not_end_the_run(operator, monkeypatch):
 def test_trial_quota_failure_has_actionable_message(operator, monkeypatch, native):
     import time
 
-    from aiops_diagnostics.dify.dify_console_publish import _trial_report_text
+    from dify_console_bridge.bridge import _trial_report_text
+
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
     f = operator

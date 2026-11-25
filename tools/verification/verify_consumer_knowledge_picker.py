@@ -341,7 +341,7 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
         import subprocess
         import threading
 
-        from aiops_diagnostics.dify.dify_console_publish import BridgeSettings, make_server
+        from dify_console_bridge.bridge import BridgeSettings, make_server
 
         namespace = env["DIFY_TEST_NAMESPACE"]
         origin = "http://" + subprocess.check_output(["docker", "port", namespace, "3000"], text=True).strip()

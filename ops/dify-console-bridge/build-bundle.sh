@@ -10,14 +10,15 @@ out=$(realpath -m -- "$2")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git -C "$repo" archive "$revision" \
+  services/dify-console-bridge/dify_console_bridge/{__init__,__main__,bridge,self_service_bridge,environments}.py \
   src/aiops_diagnostics/__init__.py \
-  src/aiops_diagnostics/common/{__init__,async_job_lifecycle,bounded_http,http_auth,order_reference,private_files,endpoint_policy}.py \
-  src/aiops_diagnostics/dify/{__init__,dify_console_publish,self_service_bridge,console_environments}.py \
+  src/aiops_diagnostics/common/{__init__,async_job_lifecycle,bounded_http,http_auth,order_reference,platform_constants,private_files,endpoint_policy}.py \
   src/aiops_diagnostics/gateway/{__init__,deployment_environment}.py \
   src/aiops_diagnostics/identity/{__init__,order_identity}.py \
   ops/dify-console-bridge/{dify-publish-button.js,operator-native-preview.js,dify-console-publish.conf,deploy.sh,aiops-dify-console-bridge.service} \
   | tar -xf - -C "$work"
 mkdir "$work/bundle"
+mv "$work/services/dify-console-bridge/dify_console_bridge" "$work/bundle/"
 mv "$work/src/aiops_diagnostics" "$work/bundle/"
 mv "$work/ops/dify-console-bridge/"* "$work/bundle/"
 cat "$work/bundle/operator-native-preview.js" >> "$work/bundle/dify-publish-button.js"

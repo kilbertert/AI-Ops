@@ -934,7 +934,7 @@ def test_operator_trial_uses_draft_without_changing_publication(operator, monkey
             break
         time.sleep(0.01)
     assert result.json()["status"] == "completed", result.text
-    from aiops_diagnostics.dify.dify_console_publish import _trial_report_text
+    from dify_console_bridge.bridge import _trial_report_text
 
     panel = _trial_report_text(result.json(), "completed")
     snapshot = f["ctx"].agent_run_store.by_qa(trial).snapshot

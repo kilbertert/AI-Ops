@@ -43,7 +43,7 @@ code:
 - 试用走**同一条执行路径**换草稿值，不是第二引擎（ADR-0022）；护栏（白名单 fail-closed、证据日志、`max_turns=8`/`max_tool_calls=16` 预算）是继承的不是重实现。
 - `dify_trial.py`：`build_trial_scope` 共享 Dify/Java 试用合同；`-1` 平台哨兵="没有可用身份"**不是**"看全部"；范围不可解析=空集 fail-closed，绝不回落 self；身份不成立时回落调试租户（ADR-0028）。
 - `dify_workflow_trial.py`：冻结候选试用——把冻结 DSL 导入为**临时 app**，发布其 workflow，重新导出并核对**内容哈希==冻结草稿**，签发一次性 grant，跑，`finally` 删临时 app。不产生 agent 版本、不写注册表、不动路由，只留 `kind='trial'` 作业行+证据。
-- bridge 侧渲染试用报告（`dify_console_publish.py::_trial_report_text`）对 `callback_version == 6` 的 summary **逐字透传**——绕过 root_cause 合并与 `MAX_TRIAL_RESULT_TEXT` 截断：该版事实已逐行有界，再合并/截断只会损坏它。
+- bridge 侧渲染试用报告（`dify_console_bridge/bridge.py::_trial_report_text`）对 `callback_version == 6` 的 summary **逐字透传**——绕过 root_cause 合并与 `MAX_TRIAL_RESULT_TEXT` 截断：该版事实已逐行有界，再合并/截断只会损坏它。
 
 ## 运行账与 SSE
 

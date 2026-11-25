@@ -213,8 +213,7 @@ def test_trial_bridge_preserves_session_uses_trial_key_and_rejects_injected_scop
     import threading
 
     import httpx
-
-    from aiops_diagnostics.dify import dify_console_publish as bridge
+    from dify_console_bridge import bridge
 
     seen = []
 

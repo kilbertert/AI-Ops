@@ -180,9 +180,9 @@ def test_configuration_change_requires_rebind_not_silent_retarget(tmp_path):
 
 
 def test_login_refuses_before_workspace_or_account_side_effects(tmp_path, monkeypatch):
-    from aiops_diagnostics.dify import dify_login_service as login
-    from aiops_diagnostics.dify.dify_login_company import CompanyIdentity
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from dify_login_proxy import service as login
+    from dify_login_proxy.company import CompanyIdentity
+    from dify_login_proxy.core import PermissionDenied
 
     path = tmp_path / "registry" / "directory.json"
     data = rows(tmp_path)

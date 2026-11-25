@@ -17,14 +17,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
-
-from aiops_diagnostics.common.http_auth import build_internal_token_headers
-from aiops_diagnostics.dify.dify_login_provision import (
+from dify_login_proxy.provision import (
     DifyConsoleSettings,
     DifyProvisionError,
     account_email_for,
 )
+from fastapi.testclient import TestClient
+
+from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.dify.dify_workspaces import (
     DIFY_WORKSPACE_CREATING,
     DIFY_WORKSPACE_FAILED,
