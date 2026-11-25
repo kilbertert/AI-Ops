@@ -310,7 +310,7 @@ def build_dependencies(context: Any, api: Any) -> GatewayDeps:
             raise StandardAPIError(
                 status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
             )
-        from aiops_diagnostics.dify import candidate_knowledge
+        from aiops_diagnostics.onboarding import candidate_knowledge
 
         if presented.startswith(candidate_knowledge.PREFIX):
             try:

@@ -10,7 +10,9 @@
 | `identity/` | 公司主体、调用者范围与共享授权规则 |
 | `data/`、`health/` | 共享只读数据访问与状态、健康指标/报告 |
 | `knowledge/`、`conversation/` | 知识检索/媒体/开户、会话/澄清/固定FAQ |
-| `publication/`、`execution/` | 内容发布生命周期、节点委派合同/运行账本 |
+| `publication/`、`execution/` | 内容发布生命周期（含路由指针推进 `route_advancement.py`）、节点委派合同/运行账本 |
+| `onboarding/` | 环境目录登记、草稿/冻结计划、任务状态机、SSH 远程执行器（`*_ssh_runner.py`）、候选试跑与环境正式发布（收敛原横跨 `gateway/`、`dify/`、`publication/`、`consumer/` 的 34 个环境接入模块，保持严格无环分层） |
+| `admin/` | `aiops-admin` 运维子命令按域拆分（`onboarding`、`dify`、`knowledge`、`maintenance` 与共用 `common`），根层 `admin_cli.py` 仅做薄 Typer 根应用装配 |
 | `dify/`、`gateway/` | Dify协议适配、HTTP装配/配置/调度/存储/观测 |
 | `common/` | 已有的跨领域HTTP、文件、配置、语言与生命周期原语；不吸收业务编排 |
 | 仓库根 | 已登记的构建、项目指令与交付入口；业务代码、工具和新文档进入对应目录 |

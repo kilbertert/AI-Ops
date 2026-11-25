@@ -11,12 +11,13 @@ from consumer.test_consumer_agent_flow import candidate
 from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
-from aiops_diagnostics.consumer import candidate_trial as target
-from aiops_diagnostics.dify import environment_consumer_trial as control
 from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
 from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
-from aiops_diagnostics.gateway import environment_registry, gateway_db
+from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.identity.caller_auth import RegisteredCallerResolver
+from aiops_diagnostics.onboarding import candidate_trial as target
+from aiops_diagnostics.onboarding import consumer_trial as control
+from aiops_diagnostics.onboarding import registry as environment_registry
 
 
 @pytest.mark.parametrize(

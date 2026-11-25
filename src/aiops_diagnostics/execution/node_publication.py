@@ -137,7 +137,7 @@ def target_for(settings: Any, binding: Any) -> NodeTarget | None:
     )
 
     if target is not None and getattr(settings, "environment_registry_file", ""):
-        from aiops_diagnostics.gateway.environment_registry import for_settings
+        from aiops_diagnostics.onboarding.registry import for_settings
 
         row = for_settings(settings).require(target.tenant_id)
         if target.environment != settings.environment or (

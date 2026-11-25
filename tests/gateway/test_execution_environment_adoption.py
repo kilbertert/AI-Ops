@@ -16,9 +16,9 @@ from aiops_diagnostics.conversation.conversation_store import ConversationStore
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-from aiops_diagnostics.gateway import execution_environment_adoption as adoption
 from aiops_diagnostics.gateway import gateway_schema
 from aiops_diagnostics.gateway.gateway_api import StandardAPIError, _operator_conversation
+from aiops_diagnostics.onboarding import execution_adoption as adoption
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentStore
 
 

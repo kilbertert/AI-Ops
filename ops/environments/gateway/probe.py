@@ -26,11 +26,11 @@ try:
 except ModuleNotFoundError as exc:
     if exc.name != "artifact_checks":
         raise
-    from aiops_diagnostics.gateway.environment_artifacts import candidate_files as candidate_files
-    from aiops_diagnostics.gateway.environment_artifacts import compose_runtime as compose_runtime
-    from aiops_diagnostics.gateway.environment_artifacts import manifest
-    from aiops_diagnostics.gateway.environment_artifacts import regular as regular
-    from aiops_diagnostics.gateway.environment_artifacts import runtime_files as runtime_files
+    from aiops_diagnostics.onboarding.artifacts import candidate_files as candidate_files
+    from aiops_diagnostics.onboarding.artifacts import compose_runtime as compose_runtime
+    from aiops_diagnostics.onboarding.artifacts import manifest
+    from aiops_diagnostics.onboarding.artifacts import regular as regular
+    from aiops_diagnostics.onboarding.artifacts import runtime_files as runtime_files
 
 
 def extract(archive, dest):

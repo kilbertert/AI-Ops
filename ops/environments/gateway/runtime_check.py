@@ -41,7 +41,7 @@ def check(
     if {key for key in forbidden if values.get(key)}:
         raise ValueError("deployment identity and writable paths belong to installer")
     if candidate_registry is not None:
-        from aiops_diagnostics.gateway.environment_projection import validate_candidate
+        from aiops_diagnostics.onboarding.projection import validate_candidate
 
         validate_candidate(
             config, candidate_registry, environment, runtime=runtime, previous_directory=previous_directory

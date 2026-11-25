@@ -132,7 +132,7 @@ def render(catalogue, listen, *, trusted_ca=""):
 
 def registered_catalogue(path, credentials):
     """入口地址只来自平台登记；密钥文件只持有环境编号与凭据。"""
-    from aiops_diagnostics.gateway.environment_registry import load
+    from aiops_diagnostics.onboarding.registry import load
 
     if (
         not isinstance(credentials, dict)

@@ -12,11 +12,11 @@ from typer.testing import CliRunner
 
 from aiops_diagnostics.admin_cli import admin_app
 from aiops_diagnostics.consumer.knowledge_access import approved_business_endpoint
-from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry, RegistryError, apply, load
 from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.onboarding.registry import EnvironmentRegistry, RegistryError, apply, load
 
 
 def rows(tmp_path):

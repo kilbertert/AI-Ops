@@ -125,7 +125,7 @@ def register(app, context):
             raise auth.SetupRefused("SETUP_DISABLED")
         return management_session(request, authorization)
 
-    from . import environment_management
+    from aiops_diagnostics.onboarding import management as environment_management
 
     environment_management.register(app, context, management_session)
 
@@ -167,7 +167,7 @@ def register(app, context):
         choices = auth.tenants(context, caller) if caller.platform else []
         allowed = {x["id"] for x in choices} | {caller.tenant_id}
         if getattr(getattr(context, "settings", None), "environment_registry_file", ""):
-            from aiops_diagnostics.gateway.environment_registry import RegistryError, for_settings
+            from aiops_diagnostics.onboarding.registry import RegistryError, for_settings
 
             try:
                 enabled_tenants = for_settings(context.settings).enabled_tenant_ids()

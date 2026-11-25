@@ -467,7 +467,7 @@ def test_gateway_ddl_has_one_authority() -> None:
         if rel in {
             "gateway/gateway_schema.py",
             "identity/gateway_admission.py",  # ADR0265：独立短期nonce库，不写gateway.db
-            "gateway/environment_drafts.py",  # ADR0267：目录旁独立草稿库，不写gateway.db
+            "onboarding/drafts.py",  # ADR0267：目录旁独立草稿库，不写gateway.db
         }:
             continue
         for node in ast.walk(ast.parse(path.read_text())):

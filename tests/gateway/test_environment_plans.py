@@ -13,9 +13,7 @@ from typer.testing import CliRunner
 
 from aiops_diagnostics.admin_cli import admin_app
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_plans as plans
-from aiops_diagnostics.gateway import environment_registry as registry
+from aiops_diagnostics.onboarding import drafts, plans, registry
 
 ADMIN = ("control", "platform", "admin")
 
@@ -260,7 +258,7 @@ def test_plan_checks_embedded_artifact_identity_without_executing_it(prepared, t
 
 
 def _reference_archive(tmp_path, name, members):
-    from aiops_diagnostics.gateway.environment_artifacts import installer_manifest, manifest
+    from aiops_diagnostics.onboarding.artifacts import installer_manifest, manifest
 
     contents = dict(members)
     contents["SHA256SUMS"] = "".join(
@@ -550,10 +548,10 @@ def test_reference_update_cli_only_uses_configured_reference_path(prepared, tmp_
     from types import SimpleNamespace
 
     registry_path, _, reference, _ = prepared
-    from aiops_diagnostics import admin_cli
+    from aiops_diagnostics.admin import common as admin_common
 
     monkeypatch.setattr(
-        admin_cli,
+        admin_common,
         "_settings_with_config_file",
         lambda _: SimpleNamespace(
             environment_onboarding_file=str(reference),

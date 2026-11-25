@@ -155,10 +155,10 @@ def approved_endpoint(value: str, tenant_id: str) -> str:
 
 def approved_business_endpoint(settings, tenant_id: str) -> str:
     """开通只使用已启用环境目录；未迁移部署保持旧地址/清单兼容。"""
-    from aiops_diagnostics.consumer import business_environments
+    from aiops_diagnostics.onboarding import business_environments
 
     if getattr(settings, "environment_registry_file", ""):
-        from aiops_diagnostics.gateway.environment_registry import for_settings
+        from aiops_diagnostics.onboarding.registry import for_settings
 
         return for_settings(settings).require(tenant_id)["cpms_base_url"]
     pinned = approved_endpoint(getattr(settings, "charging_status_base_url", ""), tenant_id)

@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from aiops_diagnostics.consumer import candidate_trial as target
 from aiops_diagnostics.execution.agent_runs import scope_to_json
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.onboarding import candidate_trial as target
 
 ORDER = "2117453316060192769"
 
@@ -158,7 +158,7 @@ def test_operator_or_wrong_tenant_cannot_open_consumer_candidate(leases):
 
 
 def test_remote_adapter_rechecks_candidate_and_closes_without_moving_session(leases, monkeypatch):
-    from aiops_diagnostics.dify import environment_consumer_trial as control
+    from aiops_diagnostics.onboarding import consumer_trial as control
 
     manager, _, reads = leases
     token = open_lease(manager)

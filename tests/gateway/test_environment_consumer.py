@@ -12,15 +12,14 @@ from consumer.test_consumer_agent_flow import candidate
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
-from aiops_diagnostics.dify import environment_consumer as consumer
-from aiops_diagnostics.dify import environment_operator as applications
 from aiops_diagnostics.dify import self_service_identity as auth
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import consumer_prep as consumer
+from aiops_diagnostics.onboarding import drafts, tasks
+from aiops_diagnostics.onboarding import operator_prep as applications
 from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentStore
 from gateway.test_candidate_knowledge_connection import (  # noqa: F401
     connected,

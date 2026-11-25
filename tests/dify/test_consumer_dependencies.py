@@ -51,7 +51,7 @@ def test_a_tenant_with_no_pinned_address_uses_the_approved_catalogue(tmp_path):
 
 def test_registry_onboarding_does_not_copy_a_second_connection(tmp_path):
     from aiops_diagnostics.consumer.knowledge_access import consumer_endpoint
-    from aiops_diagnostics.gateway.environment_registry import apply
+    from aiops_diagnostics.onboarding.registry import apply
 
     path = tmp_path / "registry" / "directory.json"
     row = {
@@ -72,7 +72,7 @@ def test_registry_onboarding_does_not_copy_a_second_connection(tmp_path):
     assert old.get("TENANT-A", "env-a") == "https://obsolete.example.test"
     row["tenants"][0]["enabled"] = False
     apply(path, [row], expected_revision=1, actor="operator")
-    from aiops_diagnostics.gateway.environment_registry import RegistryError
+    from aiops_diagnostics.onboarding.registry import RegistryError
 
     with pytest.raises(RegistryError, match="TENANT_ENVIRONMENT_NOT_ENABLED"):
         prepare.consumer_endpoint(SimpleNamespace(settings=s), "TENANT-A")

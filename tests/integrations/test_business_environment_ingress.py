@@ -252,7 +252,7 @@ def test_unsafe_ip_or_dns_alias_is_rejected(url):
 
 
 def test_registry_is_the_only_upstream_authority(tmp_path, nginx):
-    from aiops_diagnostics.gateway.environment_registry import apply
+    from aiops_diagnostics.onboarding.registry import apply
 
     project = runpy.run_path(str(ROOT / "tools/content/render_business_ingress.py"))
     path = tmp_path / "registry" / "registry.json"

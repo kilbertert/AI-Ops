@@ -11,10 +11,7 @@ from typer.testing import CliRunner
 
 from aiops_diagnostics.admin_cli import admin_app
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_plans as plans
-from aiops_diagnostics.gateway import environment_projection as projection
-from aiops_diagnostics.gateway import environment_registry as registry
+from aiops_diagnostics.onboarding import drafts, plans, projection, registry
 
 ADMIN = ("control", "platform", "admin")
 

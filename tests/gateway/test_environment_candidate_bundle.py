@@ -8,9 +8,9 @@ import tarfile
 import pytest
 
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.gateway.environment_artifacts import candidate_files
-from aiops_diagnostics.gateway.environment_projection import render, summary, validate_candidate
-from aiops_diagnostics.gateway.environment_registry import load
+from aiops_diagnostics.onboarding.artifacts import candidate_files
+from aiops_diagnostics.onboarding.projection import render, summary, validate_candidate
+from aiops_diagnostics.onboarding.registry import load
 
 
 def candidate(tmp_path):

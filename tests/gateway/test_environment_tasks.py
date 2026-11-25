@@ -16,14 +16,10 @@ from fastapi.testclient import TestClient
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.dify import environment_management as management
 from aiops_diagnostics.dify import self_service_identity as auth
 from aiops_diagnostics.dify.self_service_store import SetupConflict
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_plans as plans
-from aiops_diagnostics.gateway import environment_registry as registry
-from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import drafts, management, plans, registry, tasks
 
 ADMIN = ("control", "platform", "admin")
 
@@ -425,7 +421,7 @@ def test_revocation_and_drift_prevent_new_execution(prepared):
 def test_worker_reconciles_transport_loss_and_uses_one_task(prepared, tmp_path, monkeypatch):
     import subprocess
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     path, ref, client, _ = prepared
     job, _ = create(prepared)
@@ -501,7 +497,7 @@ def test_worker_builds_merged_installer_and_only_invokes_preflight(prepared, tmp
     import subprocess
     from pathlib import Path
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     _, ref, _, _ = prepared
     claim = {"target": dict(host="singapore-server", user="aiops", port=18951), "environment": "a"}
@@ -559,7 +555,7 @@ def test_preflight_driver_executes_old_and_new_bundle_interpreter_contract(prepa
     from pathlib import Path
     from shutil import which
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     _, ref, _, _ = prepared
     claim = {"target": dict(host="singapore-server", user="aiops", port=18951), "environment": "a"}
@@ -611,7 +607,7 @@ def test_preflight_driver_executes_old_and_new_bundle_interpreter_contract(prepa
     new.mkdir()
     (new / "probe.py").write_text((root / "ops/environments/gateway/probe.py").read_text())
     (new / "artifact_checks.py").write_text(
-        (root / "src/aiops_diagnostics/gateway/environment_artifacts.py").read_text()
+        (root / "src/aiops_diagnostics/onboarding/artifacts.py").read_text()
     )
     (new / "install.py").write_text("import sys;print(sys.executable)")
     managed = tmp_path / "managed"
@@ -792,7 +788,7 @@ def test_automatic_absent_database_is_read_only(prepared):
 
 
 def test_central_transport_keeps_payload_out_of_shell_and_rejects_unknown_target(tmp_path, monkeypatch):
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="41"\nhost="known-central"\n')
     calls = []
@@ -814,7 +810,7 @@ def test_central_transport_keeps_payload_out_of_shell_and_rejects_unknown_target
 
 
 def test_automatic_worker_respects_task_selected_by_central(prepared, tmp_path, monkeypatch):
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     path, ref, _, _ = prepared
     job, _ = create(prepared)
@@ -845,8 +841,8 @@ def test_central_dispatch_uses_fixed_service_identity_and_local_binding(tmp_path
 
     from aiops_diagnostics.admin_cli import admin_app
     from aiops_diagnostics.common import private_files
-    from aiops_diagnostics.gateway import environment_task_worker as worker
     from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     settings = SimpleNamespace(
         environment="41", environment_task_key="private-central-only", bind_host="127.0.0.1", port=18959
@@ -1118,7 +1114,7 @@ def test_host_verify_claim_result_and_cancel(prepared):
 def test_host_verify_worker_collects_readonly_facts(monkeypatch):
     from pathlib import Path
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     claim = {
         "target": dict(host="singapore-server", user="aiops", port=18951),
@@ -1159,7 +1155,7 @@ def test_host_verify_worker_collects_readonly_facts(monkeypatch):
 def test_host_verify_run_dispatches_and_unreachable_reconciles(prepared, tmp_path, monkeypatch):
     import subprocess
 
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     path, ref, client, _ = prepared
     job, _ = verify_job(prepared)
@@ -1222,7 +1218,7 @@ def test_verify_schema_rejects_raw_machine_id_leak(key, value):
 
 
 def test_host_verify_worker_unresolved_declaration_is_blocked(tmp_path, monkeypatch):
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     claim = {
         "target": dict(host="singapore-server", user="aiops", port=18951),
@@ -1247,7 +1243,7 @@ def test_host_verify_worker_unresolved_declaration_is_blocked(tmp_path, monkeypa
 
 
 def test_host_verify_worker_malformed_output_is_unconfirmed(tmp_path, monkeypatch):
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     claim = {
         "target": dict(host="singapore-server", user="aiops", port=18951),

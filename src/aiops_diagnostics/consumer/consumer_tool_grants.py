@@ -72,7 +72,7 @@ class ConsumerToolGrants:
         self.context = context
         self.settings = settings
         if getattr(settings, "environment_registry_file", ""):
-            from aiops_diagnostics.gateway.environment_registry import for_settings
+            from aiops_diagnostics.onboarding.registry import for_settings
 
             for_settings(settings)
         self.grants: dict[str, _Grant] = {}

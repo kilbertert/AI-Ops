@@ -58,7 +58,7 @@ def credentials(path):
 
 class LoginEnvironments:
     def __init__(self, settings, default_service, build):
-        from aiops_diagnostics.gateway.environment_registry import EnvironmentRegistry
+        from aiops_diagnostics.onboarding.registry import EnvironmentRegistry
 
         self.settings = settings
         self.entries = {}
@@ -131,7 +131,7 @@ class LoginEnvironments:
         return bool(self.settings.environment_credentials_file)
 
     def select(self, identifier, *, allow_disabled=False):
-        from aiops_diagnostics.gateway.environment_registry import RegistryError
+        from aiops_diagnostics.onboarding.registry import RegistryError
 
         entry = self.entries.get(identifier) if isinstance(identifier, str) else None
         if entry is None:
@@ -149,7 +149,7 @@ class LoginEnvironments:
         return settings, service
 
     def catalogue(self):
-        from aiops_diagnostics.gateway.environment_registry import RegistryError
+        from aiops_diagnostics.onboarding.registry import RegistryError
 
         from .core import PermissionDenied
 
@@ -186,7 +186,7 @@ class LoginEnvironments:
             self.challenges.pop(hashlib.sha256(random_str.encode()).hexdigest(), None)
 
     def session(self, token):
-        from aiops_diagnostics.gateway.environment_registry import RegistryError
+        from aiops_diagnostics.onboarding.registry import RegistryError
 
         from .core import PermissionDenied
 

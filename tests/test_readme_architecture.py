@@ -28,7 +28,7 @@ def _package_modules() -> set[str]:
 
 
 def _import_edges() -> dict[str, set[str]]:
-    """包括函数内延迟导入和from包import模块，不遗漏子包。"""
+    """包括函数内延迟导入、from包import模块与相对导入，覆盖整个包依赖图。"""
     modules = _package_modules()
     edges: dict[str, set[str]] = {module: set() for module in modules}
     prefix = PACKAGE_NAME + "."
@@ -36,16 +36,30 @@ def _import_edges() -> dict[str, set[str]]:
         source = _module_name(path)
         if source not in edges:
             continue
+        is_pkg = path.name == "__init__.py"
+        pkg_parts = source.split(".") if is_pkg else source.split(".")[:-1]
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             candidates = []
-            if isinstance(node, ast.ImportFrom) and node.module:
-                candidates.append(node.module)
-                candidates.extend(node.module + "." + alias.name for alias in node.names)
+            if isinstance(node, ast.ImportFrom):
+                if node.level > 0:
+                    up = node.level - 1
+                    base_parts = pkg_parts[: len(pkg_parts) - up] if up else list(pkg_parts)
+                    base = ".".join(base_parts + ([node.module] if node.module else []))
+                    if base:
+                        candidates.append(prefix + base)
+                        candidates.extend(prefix + base + "." + alias.name for alias in node.names)
+                    else:
+                        candidates.extend(prefix + alias.name for alias in node.names)
+                elif node.module:
+                    candidates.append(node.module)
+                    candidates.extend(node.module + "." + alias.name for alias in node.names)
             elif isinstance(node, ast.Import):
                 candidates.extend(alias.name for alias in node.names)
             for target in candidates:
-                if target.startswith(prefix) and target[len(prefix) :] in modules:
-                    edges[source].add(target[len(prefix) :])
+                if target.startswith(prefix):
+                    target_mod = target[len(prefix) :]
+                    if target_mod in modules and target_mod != source:
+                        edges[source].add(target_mod)
     return edges
 
 
@@ -145,11 +159,7 @@ def test_readme_toc_anchors_resolve() -> None:
 
 
 def test_package_import_graph_has_no_new_cycles() -> None:
-    """包内绝对导入图（含函数内延迟绝对导入）必须保持无环；原有 4 模块 6 边冻结环已消除。
-
-    注：`_import_edges()` 沿用既有口径仅解析 `aiops_diagnostics.*` 绝对导入；
-    既有 `environment_*` / `self_service*` 之间的相对导入环待后续 `onboarding/` 收敛阶段治理。
-    """
+    """全包导入图（含绝对导入、相对导入与函数内延迟导入）必须保持严格无环（ADR-0339）。"""
     edges = _import_edges()
 
     def reachable(start):
@@ -172,6 +182,20 @@ def test_import_scan_includes_nested_modules_and_package_imports(tmp_path, monke
     (package / "area/__init__.py").write_text("")
     (package / "area/one.py").write_text("from aiops_diagnostics.area import two\n")
     (package / "area/two.py").write_text("import aiops_diagnostics.area.one\n")
+    monkeypatch.setitem(globals(), "PACKAGE", package)
+    edges = _import_edges()
+    assert "area.two" in edges["area.one"]
+    assert "area.one" in edges["area.two"]
+    with pytest.raises(AssertionError, match="新增包内循环边"):
+        test_package_import_graph_has_no_new_cycles()
+
+
+def test_import_scan_catches_relative_import_cycles(tmp_path, monkeypatch):
+    package = tmp_path / "sample"
+    (package / "area").mkdir(parents=True)
+    (package / "area/__init__.py").write_text("")
+    (package / "area/one.py").write_text("from . import two\n")
+    (package / "area/two.py").write_text("from .one import something\n")
     monkeypatch.setitem(globals(), "PACKAGE", package)
     edges = _import_edges()
     assert "area.two" in edges["area.one"]

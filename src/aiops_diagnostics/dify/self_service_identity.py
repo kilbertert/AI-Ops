@@ -57,7 +57,7 @@ def identity(context, session, *, require_admission=True, require_platform_permi
     is_platform = str(user.get("type")) == "-1"
     registry_file = getattr(getattr(context, "settings", None), "environment_registry_file", "")
     if registry_file and require_admission:
-        from aiops_diagnostics.gateway.environment_registry import RegistryError, for_settings
+        from aiops_diagnostics.onboarding.registry import RegistryError, for_settings
 
         try:
             reg = for_settings(context.settings)
@@ -104,7 +104,7 @@ def require_target(context, caller, tenant_id):
         raise SetupRefused("SETUP_TENANT_FORBIDDEN")
     registry_file = getattr(getattr(context, "settings", None), "environment_registry_file", "")
     if registry_file:
-        from aiops_diagnostics.gateway.environment_registry import RegistryError, for_settings
+        from aiops_diagnostics.onboarding.registry import RegistryError, for_settings
 
         try:
             for_settings(context.settings).require(tenant_id)

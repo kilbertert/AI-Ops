@@ -49,7 +49,7 @@ from dify_login_proxy.server import (
 )
 
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.gateway.environment_registry import apply
+from aiops_diagnostics.onboarding.registry import apply
 
 SECRET_KEY = "test-dify-secret-key-0123456789"
 AES_KEY = "0123456789abcdef"

@@ -10,13 +10,13 @@ from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces, _identifier
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.gateway.deployment_environment import canonical_environment
-from aiops_diagnostics.gateway.environment_drafts import REFERENCE_PATTERN
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchUnavailable,
     normalize_search_response,
 )
 from aiops_diagnostics.knowledge.tenant_scope import knowledge_tenant
+from aiops_diagnostics.onboarding.drafts import REFERENCE_PATTERN
 
 PREFIX = "kdx_"
 MEDIA_PREFIX = "dify-delegated:"

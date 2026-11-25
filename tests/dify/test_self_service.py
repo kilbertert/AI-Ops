@@ -372,7 +372,7 @@ def test_catalogue_falls_back_to_agent_name_when_dify_is_unreadable(managed):
 
 def test_catalogue_filters_disabled_and_unregistered_tenants_under_registry(managed, tmp_path):
     """ADR-0332：启用运行目录后，自助 catalogue 的租户、工作区与来源列表与本环境已启用租户求交集。"""
-    from aiops_diagnostics.gateway.environment_registry import apply
+    from aiops_diagnostics.onboarding.registry import apply
 
     f, _, _, _, _ = managed
     reg_path = tmp_path / "registry" / "directory.json"

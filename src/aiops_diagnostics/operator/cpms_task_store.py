@@ -314,8 +314,8 @@ def console_identity(service: Any, session: str) -> dict[str, Any]:
 
 
 def refresh_scope(service: Any, caller: Any, *, allow_empty: bool = False) -> Any:
-    from aiops_diagnostics.gateway.environment_registry import RegistryError, require_registered
     from aiops_diagnostics.identity.scope_context import DataScope
+    from aiops_diagnostics.onboarding.registry import RegistryError, require_registered
 
     try:
         require_registered(service.context.runtime, caller.effective_tenant_id)

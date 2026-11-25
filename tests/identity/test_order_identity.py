@@ -204,16 +204,16 @@ _ALLOWED_ALPHABET_LITERALS = {
     "dify/operator_run_logs_api.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
     "dify/self_service_api.py": 1,  # knowledge_base_id
     "dify/self_service_identity.py": 1,
-    "dify/environment_management.py": 2,  # 环境与公司租户编号，无订单匹配
+    "onboarding/management.py": 2,  # 环境与公司租户编号，无订单匹配
     "execution/chat_execution.py": 3,  # 智能体 id / libraries 键 ×2
     "gateway/routers/files.py": 1,  # 附件上传表单中的 conversation_id 格式白名单，非订单号
     "gateway/schemas.py": 12,  # 拒绝码 / conv_ / code / agent_id / app_id / knowledge / tenant /
     #                          kb_ids / agt_ 版本 ×2 / code —— 订单字段已收口
-    "gateway/environment_registry.py": 3,  # 租户、管理员主体编号及审计操作人，非订单
-    "gateway/environment_business.py": 4,  # case_ref/设备id/run证据id/节点id；订单字段调用is_order_identifier
-    "gateway/environment_drafts.py": 1,  # 部署目标/凭据逻辑引用，不是订单号
-    "gateway/environment_artifacts.py": 1,  # 冷安装运行工件的租户id，与环境目录合同一致
-    "gateway/environment_task_worker.py": 1,  # 登记资产只读探针的租户编号，与环境目录合同一致
+    "onboarding/registry.py": 3,  # 租户、管理员主体编号及审计操作人，非订单
+    "onboarding/business.py": 4,  # case_ref/设备id/run证据id/节点id；订单字段调用is_order_identifier
+    "onboarding/drafts.py": 1,  # 部署目标/凭据逻辑引用，不是订单号
+    "onboarding/artifacts.py": 1,  # 冷安装运行工件的租户id，与环境目录合同一致
+    "onboarding/task_ssh_runner.py": 1,  # 登记资产只读探针的租户编号，与环境目录合同一致
     "gateway/gateway_config.py": 2,  # 主机名 / 端点名
     "gateway/gateway_store.py": 1,  # scope 指纹与其他 store 字段
     "gateway/metrics_store.py": 2,  # 租户 id / 指标 id

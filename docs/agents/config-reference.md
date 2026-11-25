@@ -25,7 +25,7 @@
 | `InnerApiSettings` | `dify/dify_inner_api.py` | 网关字段 `dify_inner_api_*`；登录代理字段 `inner_api_*` |
 | `CompanyAuthSettings` | `services/dify-login-proxy/dify_login_proxy/company.py` | `LoginProxySettings`（`AIOPS_LOGIN_PROXY_COMPANY_*`） |
 | `DifyConsoleSettings` | `services/dify-login-proxy/dify_login_proxy/provision.py` | `LoginProxySettings`（`AIOPS_LOGIN_PROXY_DIFY_*`） |
-| `ThirdSessionSettings` | `identity/third_session_auth.py` | `consumer/candidate_trial.py` 等（网关字段 `third_session_*`） |
+| `ThirdSessionSettings` | `identity/third_session_auth.py` | `onboarding/candidate_trial.py` 等（网关字段 `third_session_*`） |
 | `CompanyTokenSettings` | `identity/company_token_auth.py` | 网关字段 `company_token_*` |
 | `IntrospectionSettings` | `identity/caller_auth.py` | 网关字段 `introspection_*` |
 | `ReadySettings` | `dify/dify_workspace_ready.py` | 网关字段 `dify_console_*`/`dify_workspace_*` |

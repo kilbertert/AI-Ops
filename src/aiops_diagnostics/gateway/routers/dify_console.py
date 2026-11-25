@@ -187,7 +187,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                     502, "DIFY_KNOWLEDGE_UNAVAILABLE", "knowledge unavailable", retryable=True
                 ) from exc
         if identity.candidate_scope:
-            from aiops_diagnostics.dify.candidate_knowledge import CandidateKnowledgeError, retrieve
+            from aiops_diagnostics.onboarding.candidate_knowledge import CandidateKnowledgeError, retrieve
 
             try:
                 return retrieve(context, identity.candidate_scope, request)
@@ -257,7 +257,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                     502, "DIFY_KNOWLEDGE_UNAVAILABLE", "knowledge unavailable", retryable=True
                 ) from exc
         if identity.candidate_scope:
-            from aiops_diagnostics.dify.candidate_knowledge import CandidateKnowledgeError, catalogue
+            from aiops_diagnostics.onboarding.candidate_knowledge import CandidateKnowledgeError, catalogue
 
             try:
                 return catalogue(context, identity.candidate_scope)

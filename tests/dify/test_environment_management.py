@@ -10,10 +10,9 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from aiops_diagnostics.admin_cli import admin_app
-from aiops_diagnostics.dify import environment_management as management
 from aiops_diagnostics.dify import self_service_identity as auth
 from aiops_diagnostics.dify.self_service_store import SetupConflict
-from aiops_diagnostics.gateway import environment_registry as registry
+from aiops_diagnostics.onboarding import management, registry
 
 
 def environments(tmp_path):

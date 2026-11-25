@@ -9,12 +9,12 @@ import pytest
 import yaml
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 
-from aiops_diagnostics.dify import environment_consumer_trial as trial
-from aiops_diagnostics.dify import environment_operator
-from aiops_diagnostics.gateway import environment_drafts as drafts
 from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
 from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient, MediaResourceSigner
+from aiops_diagnostics.onboarding import consumer_trial as trial
+from aiops_diagnostics.onboarding import drafts
+from aiops_diagnostics.onboarding import operator_prep as environment_operator
 from gateway.test_candidate_knowledge_connection import connected  # noqa: F401
 from gateway.test_environment_consumer import consumer_app, execute, submit  # noqa: F401
 from gateway.test_environment_knowledge import knowledge  # noqa: F401
@@ -121,8 +121,8 @@ def test_exact_observation_and_drift_refusals(observed, change):  # noqa: F811
 def test_trial_media_rechecks_lease_before_and_after_fetch(observed, monkeypatch, change, during_fetch):  # noqa: F811
     from consumer.test_candidate_trial import caller
 
-    from aiops_diagnostics.dify import candidate_knowledge
     from aiops_diagnostics.execution.agent_runs import scope_to_json
+    from aiops_diagnostics.onboarding import candidate_knowledge
 
     _, context, value, app = observed
     snapshot = trial.observed(context, value)
@@ -203,7 +203,7 @@ def test_trial_media_rechecks_lease_before_and_after_fetch(observed, monkeypatch
 
 
 def test_same_input_fresh_plan_can_validate_installed_candidate_without_reviving_old_plan(observed):  # noqa: F811
-    from aiops_diagnostics.gateway import environment_plans as plans
+    from aiops_diagnostics.onboarding import plans
     from gateway.test_environment_tasks import ADMIN
 
     state, context, value, _ = observed

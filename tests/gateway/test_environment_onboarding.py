@@ -12,15 +12,10 @@ import pytest
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
 from dify_console_bridge import bridge
 
-from aiops_diagnostics.dify import environment_candidate_preparation as prep
-from aiops_diagnostics.dify import environment_installation as installation
-from aiops_diagnostics.dify import environment_onboarding as onboarding
-from aiops_diagnostics.dify import environment_runtime as runtime
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_plans as plans
-from aiops_diagnostics.gateway import environment_registry as registry
-from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import candidate_preparation as prep
+from aiops_diagnostics.onboarding import drafts, installation, plans, registry, runtime, tasks
+from aiops_diagnostics.onboarding import orchestration as onboarding
 from gateway.test_candidate_knowledge_connection import connected  # noqa: F401
 from gateway.test_environment_candidate_preparation import (
     advance,

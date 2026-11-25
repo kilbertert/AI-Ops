@@ -10,11 +10,10 @@ from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # no
 
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.dify import environment_candidate_preparation as chain
-from aiops_diagnostics.dify import environment_operator
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import candidate_preparation as chain
+from aiops_diagnostics.onboarding import drafts, tasks
+from aiops_diagnostics.onboarding import operator_prep as environment_operator
 from gateway.test_candidate_knowledge_connection import connected  # noqa: F401
 from gateway.test_environment_consumer import consumer_app  # noqa: F401
 from gateway.test_environment_knowledge import knowledge  # noqa: F401
@@ -218,7 +217,7 @@ def test_parent_never_takes_worker_lease_and_cancel_stops_owned_resources(candid
 
 
 def test_legacy_worker_without_candidates_keeps_working(prepared, tmp_path, monkeypatch):  # noqa: F811
-    from aiops_diagnostics.gateway import environment_task_worker as worker
+    from aiops_diagnostics.onboarding import task_ssh_runner as worker
 
     path, ref, client, settings = prepared
     context = SimpleNamespace(settings=settings)

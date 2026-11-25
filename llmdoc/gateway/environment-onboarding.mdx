@@ -12,29 +12,29 @@ relations:
     - knowledge/knowledge-plane.mdx
 code:
   paths:
-    - src/aiops_diagnostics/gateway/environment_drafts.py
-    - src/aiops_diagnostics/gateway/environment_plans.py
-    - src/aiops_diagnostics/gateway/environment_tasks.py
-    - src/aiops_diagnostics/gateway/environment_projection.py
-    - src/aiops_diagnostics/gateway/environment_artifacts.py
-    - src/aiops_diagnostics/gateway/environment_task_worker.py
-    - src/aiops_diagnostics/gateway/environment_validation_worker.py
-    - src/aiops_diagnostics/gateway/environment_publication_worker.py
-    - src/aiops_diagnostics/gateway/environment_business.py
-    - src/aiops_diagnostics/gateway/environment_capacity.py
-    - src/aiops_diagnostics/gateway/environment_readiness.py
-    - src/aiops_diagnostics/gateway/environment_trial.py
-    - src/aiops_diagnostics/gateway/environment_release_trial.py
-    - src/aiops_diagnostics/dify/environment_candidate_preparation.py
-    - src/aiops_diagnostics/dify/environment_installation.py
-    - src/aiops_diagnostics/dify/environment_management.py
-    - src/aiops_diagnostics/dify/environment_registration.py
-    - src/aiops_diagnostics/dify/environment_validation.py
-    - src/aiops_diagnostics/dify/environment_publication.py
-    - src/aiops_diagnostics/dify/environment_consumer_trial.py
-    - src/aiops_diagnostics/dify/environment_knowledge.py
-    - src/aiops_diagnostics/publication/environment_release.py
-    - src/aiops_diagnostics/consumer/candidate_trial.py
+    - src/aiops_diagnostics/onboarding/drafts.py
+    - src/aiops_diagnostics/onboarding/plans.py
+    - src/aiops_diagnostics/onboarding/tasks.py
+    - src/aiops_diagnostics/onboarding/projection.py
+    - src/aiops_diagnostics/onboarding/artifacts.py
+    - src/aiops_diagnostics/onboarding/task_ssh_runner.py
+    - src/aiops_diagnostics/onboarding/validation_ssh_runner.py
+    - src/aiops_diagnostics/onboarding/publication_ssh_runner.py
+    - src/aiops_diagnostics/onboarding/business.py
+    - src/aiops_diagnostics/onboarding/capacity.py
+    - src/aiops_diagnostics/onboarding/readiness.py
+    - src/aiops_diagnostics/onboarding/trial.py
+    - src/aiops_diagnostics/onboarding/release_trial.py
+    - src/aiops_diagnostics/onboarding/candidate_preparation.py
+    - src/aiops_diagnostics/onboarding/installation.py
+    - src/aiops_diagnostics/onboarding/management.py
+    - src/aiops_diagnostics/onboarding/registration.py
+    - src/aiops_diagnostics/onboarding/validation.py
+    - src/aiops_diagnostics/onboarding/publication.py
+    - src/aiops_diagnostics/onboarding/consumer_trial.py
+    - src/aiops_diagnostics/onboarding/knowledge.py
+    - src/aiops_diagnostics/onboarding/release.py
+    - src/aiops_diagnostics/onboarding/candidate_trial.py
     - src/aiops_diagnostics/admin_cli.py
     - docs/agents/environment-registry.md
     - docs/acceptance/environment-directory.feature
@@ -105,7 +105,7 @@ code:
   未知结果只读观察不重造）、`environment_validation`（已登记候选三业务验证）、
   `environment_publication`（正式发布协调，沿原任务账本）同层。
 - **候选试运行**：控制端 `dify/environment_consumer_trial` 构造 `ConsumerTrial(draft,
-  candidate=adapter)`；目标端 `consumer/candidate_trial.py` 发 `ect_` 租约——300s、≤20 并发、
+  candidate=adapter)`；目标端 `onboarding/candidate_trial.py` 发 `ect_` 租约——300s、≤20 并发、
   open→claimed→closed、`installed()` 每次调用重核安装血统（环境行/租户停用态/构建版本/
   production.env+environment.json+两 manifest 的 sha256 快照），公司会话只存目标进程内存，
   `close` 不依赖正向授权。`ect_` 只在 `POST /v1/internal/consumer-data/agent` 放通
@@ -118,7 +118,7 @@ code:
   `environment_business` 目标本机业务验证（案例只留本环境）、`environment_capacity`
   三能力运行期采样；`tools/verification/business-environments/network_preflight.py`
   是调用方侧正式网络预检。
-- **发布**：`publication/environment_release.py` 目标消费已核冻结内容——原 Agent 版本与
+- **发布**：`onboarding/release.py` 目标消费已核冻结内容——原 Agent 版本与
   route CAS 仍是唯一发布真值（路由 CAS 合同见
   [publication-lifecycle](../publication/publication-lifecycle.mdx)）。
 - **逐入口资源准备**（每入口 workspace/knowledge/app 草稿）在受管目录的自助面实现，
@@ -146,11 +146,11 @@ managers}` 结构、migrate 升级管理目录，ADR-0256）、`environment-draf
 
 ## Canonical anchors
 
-- `src/aiops_diagnostics/gateway/environment_tasks.py`（任务账本状态机）
-- `src/aiops_diagnostics/gateway/environment_task_worker.py`（dev-host 执行端：merge-base + sha256 + tar 白名单 + dev-host cp）
-- `src/aiops_diagnostics/dify/environment_management.py`（`/v1/dify/management/environment*` + `/v1/internal/environment-tasks` 挂载）
-- `src/aiops_diagnostics/dify/environment_{registration,validation,publication}.py`（登记/验证/发布协调）
-- `src/aiops_diagnostics/consumer/candidate_trial.py`（`ect_` 目标租约）
-- `src/aiops_diagnostics/publication/environment_release.py`（发布真值 = 原 Agent 版本 + route CAS）
+- `src/aiops_diagnostics/onboarding/tasks.py`（任务账本状态机）
+- `src/aiops_diagnostics/onboarding/task_ssh_runner.py`（dev-host 执行端：merge-base + sha256 + tar 白名单 + dev-host cp）
+- `src/aiops_diagnostics/onboarding/management.py`（`/v1/dify/management/environment*` + `/v1/internal/environment-tasks` 挂载）
+- `src/aiops_diagnostics/onboarding/{registration,validation,publication}.py`（登记/验证/发布协调）
+- `src/aiops_diagnostics/onboarding/candidate_trial.py`（`ect_` 目标租约）
+- `src/aiops_diagnostics/onboarding/release.py`（发布真值 = 原 Agent 版本 + route CAS）
 - `src/aiops_diagnostics/admin_cli.py`（`environment-*` 命令族）
 - `ops/environments/gateway/install.md`（安装侧阶段手册，D30→D43）、`docs/agents/environment-registry.md`（D 阶段合同）

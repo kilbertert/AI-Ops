@@ -589,7 +589,7 @@ def test_the_endpoint_from_the_config_file_is_not_silently_replaced(tmp_path: Pa
     """
     import os
 
-    from aiops_diagnostics.admin_cli import _settings_with_config_file
+    from aiops_diagnostics.admin.common import _settings_with_config_file
 
     config = tmp_path / "production.env"
     config.write_text(

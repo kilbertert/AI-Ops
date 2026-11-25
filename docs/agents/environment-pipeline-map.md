@@ -18,8 +18,8 @@
 | 安装 | `environment_artifacts.py`：应用包与安装器的只读成员校验 | `environment_installation.py`：停用候选的持久安装协调 |
 | 登记 | `environment_registry.py`：环境/租户登记 | `environment_registration.py`：已安装候选接入登记事务 |
 | 验证 | `environment_validation_worker.py`（SSH 远程执行端）、`environment_capacity.py`（运行采样）、`environment_business.py`（目标本机业务验证）、`environment_readiness.py`（发布前事实检查） | `environment_validation.py`：已登记候选的实际三业务验证 |
-| 试运行 | `environment_trial.py`（受管管家试运行路由）、`environment_release_trial.py`（启用前试跑） | `environment_consumer_trial.py`（控制端执行）、`consumer/candidate_trial.py`（候选回调，`ect_` 令牌）、`consumer/consumer_trial.py`（临时 Chatflow 草稿试跑） |
-| 发布 | `environment_publication_worker.py`（SSH 远程执行端） | `dify/environment_publication.py`（发布协调）、`publication/environment_release.py`（发布记录，真值在 Agent 版本与 route CAS）、`consumer/consumer_publication.py`（WF01 发布目标）、`execution/node_publication.py`（节点 SOP→执行清单） |
+| 试运行 | `environment_trial.py`（受管管家试运行路由）、`environment_release_trial.py`（启用前试跑） | `environment_consumer_trial.py`（控制端执行）、`onboarding/candidate_trial.py`（候选回调，`ect_` 令牌）、`consumer/consumer_trial.py`（临时 Chatflow 草稿试跑） |
+| 发布 | `environment_publication_worker.py`（SSH 远程执行端） | `onboarding/publication.py`（发布协调）、`onboarding/release.py`（发布记录，真值在 Agent 版本与 route CAS）、`consumer/consumer_publication.py`（WF01 发布目标）、`execution/node_publication.py`（节点 SOP→执行清单） |
 | 管理面路由 | — | `environment_management.py`：`/v1/dify/management/environment-*` 路由，经 `self_service_api.register` 挂载 |
 
 ## 读法

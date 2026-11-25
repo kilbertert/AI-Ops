@@ -162,11 +162,11 @@ def test_concurrent_replay_has_one_winner(fixture):
 def test_real_gateway_requires_assertion_before_existing_identity(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from aiops_diagnostics.gateway.environment_registry import apply
     from aiops_diagnostics.gateway.gateway_api import create_gateway_app
     from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
     from aiops_diagnostics.gateway.gateway_store import GatewayStore
     from aiops_diagnostics.identity.caller_auth import CallerAuthError
+    from aiops_diagnostics.onboarding.registry import apply
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     config = tmp_path / "server.env"

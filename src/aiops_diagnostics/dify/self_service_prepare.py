@@ -426,11 +426,11 @@ def consumer_endpoint(context, tenant_id: str) -> str:
     以及平台已批准的环境清单。清单让新客户开通不需要改服务器文件 —— 那是"一键"能否成立的
     分界；但清单有多项却没声明默认时拒绝，不替客户挑一个。
     """
-    from aiops_diagnostics.consumer import business_environments
     from aiops_diagnostics.consumer.knowledge_access import (
         ConsumerEndpoints,
         approved_business_endpoint,
     )
+    from aiops_diagnostics.onboarding import business_environments
 
     settings = context.settings
     base = approved_business_endpoint(settings, tenant_id)

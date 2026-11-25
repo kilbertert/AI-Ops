@@ -144,7 +144,7 @@ def callback(runtime, token, body, *, read_snapshot, list_orders):
         raise ChatRunUnavailable("CHATFLOW_BINDING_CHANGED", "客服发布版本已失效", http_status=403)
 
     def valid():
-        from aiops_diagnostics.gateway.environment_registry import RegistryError, require_registered
+        from aiops_diagnostics.onboarding.registry import RegistryError, require_registered
 
         if trial is None or trial.candidate is None:
             try:

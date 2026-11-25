@@ -6,10 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_registry as registry
 from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
+from aiops_diagnostics.onboarding import drafts, registry
 
 ADMIN = ("control", "platform", "admin")
 

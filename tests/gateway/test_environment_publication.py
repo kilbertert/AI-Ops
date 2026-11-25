@@ -6,9 +6,8 @@ import time
 
 import pytest
 
-from aiops_diagnostics.gateway import environment_drafts as drafts
-from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import drafts, tasks
 from gateway.test_environment_tasks import prepared as base_prepared  # noqa: F401
 from gateway.test_environment_validation import (  # noqa: F401
     connected,
@@ -135,9 +134,9 @@ def test_missing_capacity_is_safe_before_central_publication(validated, monkeypa
 def test_worker_yields_phases_and_restores_same_task_without_second_models(
     validated, tmp_path, monkeypatch, completed_stages
 ):
-    from aiops_diagnostics.dify import environment_publication as publication
-    from aiops_diagnostics.gateway import environment_capacity
-    from aiops_diagnostics.gateway import environment_publication_worker as worker
+    from aiops_diagnostics.onboarding import capacity as environment_capacity
+    from aiops_diagnostics.onboarding import publication
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
 
     state = validated[0][0]
     identifier = publish(validated).json()["id"]
@@ -249,9 +248,9 @@ def test_worker_yields_phases_and_restores_same_task_without_second_models(
 
 
 def _drive_to_stale_verify(identifier, state, tmp_path, monkeypatch, observed_at):
-    from aiops_diagnostics.dify import environment_publication as publication
-    from aiops_diagnostics.gateway import environment_capacity
-    from aiops_diagnostics.gateway import environment_publication_worker as worker
+    from aiops_diagnostics.onboarding import capacity as environment_capacity
+    from aiops_diagnostics.onboarding import publication
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
 
     monkeypatch.setattr(
         publication,
@@ -569,10 +568,11 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
     import yaml
 
     from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
-    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, environment_consumer
-    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
     from aiops_diagnostics.knowledge import knowledge_delegation
+    from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
+    from aiops_diagnostics.onboarding import publication
 
     original, _ = validated
     state = original[0]
@@ -699,7 +699,7 @@ def test_cancel_before_target_dispatch_refuses_even_existing_step_and_never_rest
 
 
 def test_capacity_requires_overlapping_real_run_windows_before_publish(monkeypatch, tmp_path):
-    from aiops_diagnostics.gateway import environment_capacity as capacity
+    from aiops_diagnostics.onboarding import capacity
 
     (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="target"\nhost="managed"\n')
     staged = {"request": {"target": {"host": "managed"}}}
@@ -744,7 +744,7 @@ def test_capacity_requires_overlapping_real_run_windows_before_publish(monkeypat
 
 
 def _capacity_fixture(monkeypatch, tmp_path):
-    from aiops_diagnostics.gateway import environment_capacity as capacity
+    from aiops_diagnostics.onboarding import capacity
 
     (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname="target"\nhost="managed"\n')
     staged = {"request": {"target": {"host": "managed"}}}
@@ -848,8 +848,7 @@ def test_capacity_short_legs_released_when_consumer_leg_fails(monkeypatch, tmp_p
 def test_second_tenant_directory_sync_adds_only_approved_tenant_without_reentrant_lock(validated):
     from types import SimpleNamespace
 
-    from aiops_diagnostics.dify import environment_publication as publication
-    from aiops_diagnostics.gateway import environment_registry as registry
+    from aiops_diagnostics.onboarding import publication, registry
 
     state = validated[0][0]
     path, _, _, settings = state[0]
@@ -886,7 +885,7 @@ def test_second_tenant_directory_sync_adds_only_approved_tenant_without_reentran
 def test_cancel_with_unknown_central_publication_remains_reconcilable_without_replay(
     validated, tmp_path, monkeypatch, artifact
 ):
-    from aiops_diagnostics.gateway import environment_publication_worker as worker
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
 
     state = validated[0][0]
     identifier = publish(validated).json()["id"]
@@ -938,7 +937,7 @@ def test_cancel_with_unknown_central_publication_remains_reconcilable_without_re
 def test_cancel_with_only_target_intent_restores_by_remote_staging_marker(
     validated, tmp_path, monkeypatch, remote_staged
 ):
-    from aiops_diagnostics.gateway import environment_publication_worker as worker
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
 
     state = validated[0][0]
     identifier = publish(validated).json()["id"]
@@ -994,7 +993,7 @@ def test_cancel_with_only_target_intent_restores_by_remote_staging_marker(
 def test_cancel_with_malformed_step_shape_holds_reconcile(validated, tmp_path, corrupt_key):
     # 持久账本出现代码没写过的形状（steps.* 非 dict）时，读取必须收敛到
     # 核查 hold 而不是把 worker 崩成同形的无限重领。
-    from aiops_diagnostics.gateway import environment_publication_worker as worker
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
 
     state = validated[0][0]
     identifier = publish(validated).json()["id"]
@@ -1039,7 +1038,7 @@ def test_target_staged_only_remote_absence_answer_disarms(tmp_path, monkeypatch,
     # 零副作用证据放行恢复。
     from types import SimpleNamespace
 
-    from aiops_diagnostics.gateway import environment_publication_worker as worker
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
 
     (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname = "95"\nhost = "qy-gw-120"\n')
     staged = {
@@ -1063,7 +1062,7 @@ def test_target_staged_only_remote_absence_answer_disarms(tmp_path, monkeypatch,
 def test_target_staged_rejects_dash_prefixed_host_name(tmp_path):
     # REFERENCE_PATTERN 放行前导 '-'；与 central_call 同口径的防御性拒绝，
     # 必须先于探测返回保守的在场侧（不发任何 subprocess）。
-    from aiops_diagnostics.gateway import environment_publication_worker as worker
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
 
     (tmp_path / ".dev-host.toml").write_text('[[targets]]\nname = "-rf"\nhost = "qy-gw-120"\n')
     staged = {
@@ -1184,8 +1183,8 @@ def test_started_central_step_resumes_execution_on_next_claim(validated, tmp_pat
     → ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED 永挂。started 重授
     execute 后 central_bundle 的确认读守卫让续跑收敛到同一 bundle。
     """
-    from aiops_diagnostics.dify import environment_publication as publication
-    from aiops_diagnostics.gateway import environment_publication_worker as worker
+    from aiops_diagnostics.onboarding import publication
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
 
     state = validated[0][0]
     identifier = publish(validated).json()["id"]
@@ -1231,9 +1230,9 @@ def test_started_capacity_step_remeasures_instead_of_reconcile_hold(validated, t
     「do not replay models」防的是用新测量顶替已记录结果；started 下没有已记录
     结果，核查 hold 没有任何出口。record 落账的非 passed 结果仍经同一闸拒绝。
     """
-    from aiops_diagnostics.dify import environment_publication as publication
-    from aiops_diagnostics.gateway import environment_capacity
-    from aiops_diagnostics.gateway import environment_publication_worker as worker
+    from aiops_diagnostics.onboarding import capacity as environment_capacity
+    from aiops_diagnostics.onboarding import publication
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
 
     state = validated[0][0]
     identifier = publish(validated).json()["id"]
@@ -1292,8 +1291,9 @@ def test_stale_capacity_gates_first_mint_but_intent_marker_allows_resume(validat
     import yaml
 
     from aiops_diagnostics.common.private_files import write_private_text
-    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, environment_consumer
-    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull
+    from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
+    from aiops_diagnostics.onboarding import publication
 
     original, _ = validated
     state = original[0]
@@ -1399,9 +1399,10 @@ def test_same_tenant_consumer_residue_in_workspace_does_not_block_publish(valida
 
     import yaml
 
-    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, environment_consumer
-    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull
     from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+    from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
+    from aiops_diagnostics.onboarding import publication
 
     original, _ = validated
     state = original[0]
@@ -1495,9 +1496,10 @@ def test_foreign_consumer_in_workspace_still_blocks_publish(validated, monkeypat
 
     import yaml
 
-    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, environment_consumer
-    from aiops_diagnostics.dify import environment_publication as publication
+    from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull
     from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+    from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
+    from aiops_diagnostics.onboarding import publication
 
     original, _ = validated
     state = original[0]
