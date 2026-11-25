@@ -371,4 +371,4 @@ PRD #346 与本文。
 - 统一助手入口完整契约（FAQ / QA / 诊断 / 澄清 / 快捷动作）：[frontend-api-brief.md](./frontend-api-brief.md) §2.3（状态值）与 §10.8（调用示例）。
 - 跳转类动作不锁输入框的交接：[frontend-jump-path-handoff.md](./frontend-jump-path-handoff.md)。
 - 后端实现取舍：PRD #346；取消端点在 #357，`cancelled` 终态在 #354，重启收敛在 #356。
-- 验证记录与已知缺口：[`../validation.md`](../validation.md)。
+- 验证记录与已知缺口：[现役验收回执目录](../validation/README.md)（历史单体归档已按 ADR-0345 迁出至 `kilbertert/AI-Ops-history-archive`）。

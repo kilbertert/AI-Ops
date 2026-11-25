@@ -107,5 +107,4 @@ LTA-CSMS运行工件已安装，目标工作区及双端应用已登记（原D32
 
 - 回执是时点证据；若目标版本、环境、权限或依赖已变，重新取证并更新相应行，保留此前失败。
 - [系统架构](../system-architecture.md)、[测试交接](../testing-handoff.md)、[阶段台账](../reviews/2026-11-05-architecture-stage-closeout.md)分别回答职责、验收交接和旧任务处置。
-- 历史过程从[验收目录](../validation/)、[旧进度](../开发进度/)按任务查；旧完整索引可从Git修订`734f0201`读取。
-  本次不搬运或删除历史回执，`docs/validation.md`和`docs/开发进度.md`仍为只读归档。
+- 现役验收回执在 [验收目录](../validation/README.md) 按领域与事件查阅；依据 [ADR-0345](../adr/0345-offload-legacy-receipts-to-archive-repo.md)，原单体归档 `docs/validation.md`、`docs/开发进度.md`、全部 378 份历史按日进度与 358 份历史回执已完整迁出至私有归档仓库 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive)（提交 `759e45e8`，源修订 `de34dfa5`）。

@@ -183,42 +183,6 @@ def test_it_states_what_it_did_not_do() -> None:
     )
 
 
-def test_the_delivery_records_agree_on_who_carries_the_pending_item() -> None:
-    """`validation.md` and `开发进度.md` must not point back at D batch.
-
-    The correction landed in the baseline first; these two were the places a
-    reader goes for "what happens next", and they still said D batch.
-    """
-    for name in ("validation.md", "开发进度.md"):
-        text = (PROJECT_ROOT / "docs" / name).read_text(encoding="utf-8")
-        # Only the #479 milestone block matters here.
-        if "#479" not in text:
-            pytest.skip(f"{name} 里没有 #479 条目")
-        # Anchor on the *milestone heading*, not the first `#479` mention: any
-        # earlier section that references the ticket would otherwise become the
-        # block under test. (That is exactly what happened when a later closeout
-        # entry cited `#479` above its own milestone.)
-        # Both documents have a `#479` milestone, but they head it differently
-        # (`## #479 …` vs `## 2026-10-01 · #479 …`). Anchor on a heading line
-        # that contains the ticket, not on the bare number.
-        m = re.search(r"^## [^\n]*#479", text, re.MULTILINE)
-        assert m, f"{name} 里找不到 #479 的里程碑标题"
-        start = m.start()
-        # End at the *next* milestone heading: a fixed-width window reaches into
-        # whatever entry follows, so a later milestone could satisfy these
-        # checks while #479 itself lost them.
-        rest = text[start:]
-        nxt = re.search(r"\n## ", rest)
-        block = rest[: nxt.start()] if nxt else rest
-        assert "后续票" in block, f"{name} 的 #479 条目没写清待收敛项由谁承接"
-        assert "指向 D 批" not in block and "留给 D 批" not in block, (
-            f"{name} 的 #479 条目仍把待收敛项指向已完成的 D 批"
-        )
-        assert "未完成业务验收" in block, (
-            f"{name} 的 #479 条目没写明「未完成业务验收」—— AGENTS.md 要求这一状态必须写出来"
-        )
-
-
 def test_it_records_where_the_baseline_fell_short() -> None:
     """The section's own rule: a gap gets backfilled, not routed around."""
     l4 = _section("L4")

@@ -66,14 +66,9 @@ UNKNOWN_JOB_ID = "qa_nonexistent000000000000000000000001"
 #: is committed, without anyone remembering to add its name here.
 ATTRIBUTION_DOCS = (
     "qa-plan.md",
-    "docs/validation.md",
-    "docs/开发进度.md",
     "docs/agents/p0-media-canary.md",
 )
-ATTRIBUTION_DIRS = (
-    PROJECT_ROOT / "docs" / "validation",
-    PROJECT_ROOT / "docs" / "开发进度",
-)
+ATTRIBUTION_DIRS = (PROJECT_ROOT / "docs" / "validation",)
 
 #: Words that mark a line as being about the user-stop chain.
 _STOP_WORDS = ("停止生成", "用户停止", "取消/超时", "停止按钮", "取消链路")
@@ -170,7 +165,6 @@ def test_every_evidence_entry_file_is_covered() -> None:
     """
     names = [name for name, _ in _attribution_documents()]
     assert any(name.startswith("docs/validation/") for name in names), names
-    assert any(name.startswith("docs/开发进度/") for name in names), names
 
 
 def test_no_document_still_blames_173_for_the_stop_link() -> None:

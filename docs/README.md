@@ -30,10 +30,9 @@
 | current-delivery-state | 只保留当前状态、证据与下一步；旧快照从Git历史读取，不继续无限追加 |
 | acceptance、specs、QA计划 | 每个行为只有一份获批正文；Feature承载可观察规则，QA链接判据并给步骤；提案和历史结果不冒充现行合同 |
 | gateway、ops、deploy及agents操作手册 | 保存可复用方法；主机与凭据从受控记录读取，不能照历史命令恢复已退役能力 |
-| validation、开发进度 | 必要验收事件一份回执；普通进度留原Issue，不再强制双记录；既有历史保留。**两目录是现役回执流，不是归档**：ADR-0097 起新记录只进 `docs/validation/<日期>-<短名>.md` 等独立文件（`test_milestone_archive_is_frozen`/`test_assistant_cancel_handoff` 强制） |
+| validation、开发进度 | 必要验收事件在 `docs/validation/<日期>-<短名>.md` 留一份现役回执；普通进度留原 Issue。依据 [ADR-0345](adr/0345-offload-legacy-receipts-to-archive-repo.md)，旧单体归档（原 `docs/validation.md`、`docs/开发进度.md`）、全部历史 `docs/开发进度/*.md` 及未再引用的旧回执已迁出至独立私有归档仓库 [`kilbertert/AI-Ops-history-archive`](https://github.com/kilbertert/AI-Ops-history-archive) |
 | reviews | 阶段复核与任务处置；PRD和执行依赖仍以GitHub原生issue关系为准 |
 | ADR、GLOSSARY | 决定与术语；新决定由后继ADR说明，不借整理改业务合同 |
-| validation.md、开发进度.md | ADR-0097只读归档；不追加、不移动 |
 | 本机未跟踪素材 | `原型/`、`知识库材料/` 两目录在 `.gitignore` 中，是本机素材不进版本控制——克隆后不存在，别按它们评估仓库规模 |
 | 原始日志、主机快照、会话、工作区清理清单 | 私有归档；仓库只留经过选择和脱敏的结论与方法 |
 
@@ -68,8 +67,8 @@
 - 文档流程验收见[Feature](acceptance/doc-first.feature)：独立新会话从AGENTS出发回答草稿是否启用、
   真实管理是否验收、回执适用哪个版本/环境、退役CLI是否可用，以及工具声明是否等于生产全启用。
   每个回答须有明确来源；不访问生产、不凭文件名排序、不从历史恢复旧行为。
-- 确定性检查：`uv run pytest tests/test_readme_architecture.py tests/test_milestone_archive_is_frozen.py tests/tooling/test_doc_impact.py`。
-  前者检查职责入口与导航链接，中者保留旧归档，后者用独立Git夹具验证映射/改名/未映射路径及无写入。
+- 确定性检查：`uv run pytest tests/test_readme_architecture.py tests/gateway/test_assistant_cancel_handoff.py tests/tooling/test_doc_impact.py`。
+  前者检查职责入口与导航链接，中者守护现役回执与取消契约，后者用独立Git夹具验证映射/改名/未映射路径及无写入。
 - 后续10个相关任务在各自PR记录新增brief/重复回执数、入口改动、检索误用与实际冲突。
   低风险独立brief和重复进度回执目标均为0；样本不足如实说明，不为凑数造任务。
   这不是已证明的节时收益；跨领域推广等试点复核后决定。依据见[ADR 0269](adr/0269-bounded-doc-first.md)。
