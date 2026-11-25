@@ -229,7 +229,7 @@ def test_unknown_rotation_reverifies_model(knowledge, workspace_upstream, monkey
 
 def test_migrated_owner_reconciliation_checks_current_password_without_side_effects(
     knowledge, monkeypatch, workspace_upstream
-):
+):  # noqa: F811
     _, _, calls, _, _, context = knowledge
     first = execute(knowledge, submit(knowledge))
     assert first["state"] == "observed"
