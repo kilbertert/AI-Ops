@@ -170,7 +170,7 @@ def test_verified_legacy_account_is_not_reused_as_environment_scope(knowledge):
     )
     result = execute(knowledge, submit(knowledge))
     assert result["state"] == "blocked" and result["error_code"] == "SETUP_KNOWLEDGE_SCOPE_MISMATCH"
-    assert calls == []
+    assert calls == [("GET", "/kb/tenants/current", knowledge_tenant("same", "a"), None)]
 
 
 def test_unknown_cancel_keeps_reconciling_and_ambiguous_library_blocks(knowledge):

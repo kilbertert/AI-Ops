@@ -53,11 +53,22 @@ class _KbService:
         self.rotate_body: Any = None
         self.verify_matches = True
         self.base = ""
+        self.account = None
 
     def handler(self) -> type[BaseHTTPRequestHandler]:
         upstream = self
 
         class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                upstream.calls.append(
+                    {"path": self.path, "tenant": self.headers.get("tenant-id"), "body": {}}
+                )
+                payload = json.dumps({"data": upstream.account}).encode()
+                self.send_response(200 if upstream.account else 404)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length) if length else b""
@@ -725,4 +736,86 @@ def test_registration_response_loss_reuses_persisted_password(tmp_path, kb_servi
         store.get_ragflow_tenant(TENANT, ENVIRONMENT)["credential_ciphertext"]
         == first["credential_ciphertext"]
     )
+    assert "/kb/tenants/rotate" not in kb_service.paths()
+
+
+@pytest.mark.parametrize("account_state", ["migrated", "unmigrated", "foreign", "bad-password"])
+def test_existing_owner_requires_exact_migrated_scope_and_password(
+    tmp_path, kb_service, monkeypatch, account_state
+):
+    from aiops_diagnostics.knowledge.tenant_scope import knowledge_tenant
+
+    store = _store(tmp_path)
+    store.record_ragflow_tenant(
+        TENANT,
+        ENVIRONMENT,
+        ragflow_email=derive_email(TENANT),
+        credential_ciphertext=encrypt_credential("original-owner-password", CREDENTIAL_KEY),
+        model_checked=True,
+    )
+    before = store.get_ragflow_tenant(TENANT, ENVIRONMENT)
+    expected = knowledge_tenant(TENANT, ENVIRONMENT)
+    kb_service.account = {"biz_tenant_id": expected, "ragflow_email": derive_email(TENANT)}
+    if account_state == "unmigrated":
+        kb_service.account = None
+    elif account_state == "foreign":
+        kb_service.account["biz_tenant_id"] = knowledge_tenant(TENANT, "other")
+    elif account_state == "bad-password":
+        kb_service.verify_matches = False
+    kwargs = dict(
+        tenant_id=TENANT,
+        environment=ENVIRONMENT,
+        store=store,
+        kb=KbAdminClient(kb_service.base, environment=ENVIRONMENT),
+        credential_key=CREDENTIAL_KEY,
+        embedding_base_url="https://embedding.example",
+        embedding_api_key="synthetic",
+    )
+    if account_state == "migrated":
+        outcome = onboard_tenant(**kwargs)
+        assert outcome.ragflow_email == derive_email(TENANT) and outcome.model_verified
+        assert kb_service.paths() == ["/kb/tenants/current", "/kb/tenants/verify-password"]
+    else:
+        with pytest.raises(OnboardError):
+            onboard_tenant(**kwargs)
+    assert store.get_ragflow_tenant(TENANT, ENVIRONMENT) == before
+    assert "/kb/tenants" not in kb_service.paths() and "/kb/tenants/repair" not in kb_service.paths()
+    assert all(c["tenant"] == expected for c in kb_service.calls)
+
+
+def test_migrated_owner_can_finish_preparation_without_new_account(tmp_path, kb_service, monkeypatch):
+    from aiops_diagnostics.knowledge.tenant_scope import knowledge_tenant
+
+    monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", lambda **_: 3072)
+    store = _store(tmp_path)
+    store.record_ragflow_tenant(
+        TENANT,
+        ENVIRONMENT,
+        ragflow_email=derive_email(TENANT),
+        credential_ciphertext=encrypt_credential("original-owner-password", CREDENTIAL_KEY),
+        model_checked=True,
+    )
+    before = store.get_ragflow_tenant(TENANT, ENVIRONMENT)
+    kb_service.account = {
+        "biz_tenant_id": knowledge_tenant(TENANT, ENVIRONMENT),
+        "ragflow_email": derive_email(TENANT),
+    }
+    outcome = onboard_tenant(
+        tenant_id=TENANT,
+        environment=ENVIRONMENT,
+        store=store,
+        kb=KbAdminClient(kb_service.base, environment=ENVIRONMENT),
+        credential_key=CREDENTIAL_KEY,
+        embedding_base_url="https://embed.example",
+        embedding_api_key="synthetic",
+        before_step=lambda: None,
+    )
+    assert outcome.ragflow_email == before["ragflow_email"]
+    assert (
+        store.get_ragflow_tenant(TENANT, ENVIRONMENT)["credential_ciphertext"]
+        == before["credential_ciphertext"]
+    )
+    registration = next(c for c in kb_service.calls if c["path"] == "/kb/tenants")
+    assert registration["body"]["email"] == before["ragflow_email"]
+    assert registration["body"]["biz_tenant_id"] == knowledge_tenant(TENANT, ENVIRONMENT)
     assert "/kb/tenants/rotate" not in kb_service.paths()

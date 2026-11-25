@@ -3,7 +3,7 @@
 import time
 
 from aiops_diagnostics.gateway import environment_tasks as tasks
-from aiops_diagnostics.knowledge.kb_onboarding import derive_email
+from aiops_diagnostics.knowledge.kb_onboarding import KbAdminClient, OnboardError, derive_email
 from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient, KnowledgeSearchUnavailable
 from aiops_diagnostics.knowledge.tenant_scope import knowledge_tenant
 
@@ -77,8 +77,15 @@ def run(context, path, reference, payload):
             expected = derive_email(
                 knowledge_tenant(tenant, environment), domain=settings.ragflow_tenant_domain
             )
-            if not stored or stored["ragflow_email"] != expected:
+            if not stored:
                 raise SetupRefused("SETUP_KNOWLEDGE_SCOPE_MISMATCH")
+            if stored["ragflow_email"] != expected:
+                try:
+                    KbAdminClient(settings.kb_service_base_url, environment=environment).require_account(
+                        tenant, stored["ragflow_email"]
+                    )
+                except OnboardError as exc:
+                    raise SetupRefused("SETUP_KNOWLEDGE_SCOPE_MISMATCH") from exc
         known_id = resources.get("knowledge_base_id", "")
         knowledge_id = known_id or prepare.customer_knowledge_base(
             context, tenant, resources, save, environment=environment
