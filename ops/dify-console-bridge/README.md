@@ -107,7 +107,8 @@ systemctl start aiops-dify-console-bridge.service
 `/etc/aiops-console-bridge/bridge.env`（**0600 root**）：
 
 ```
-AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY=…    # 服务端持有；**不进浏览器**
+AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY=…  # 服务端持有；**不进浏览器**（旧键 AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY 仅过渡兜底，若需回滚旧版本桥，bridge.env 仍须保留旧键）
+AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY=…    # 可选；旧键 AIOPS_GATEWAY_DIFY_TRIAL_API_KEY 仅过渡兜底
 AIOPS_CONSOLE_BRIDGE_DIFY_URL=http://127.0.0.1:10018
 AIOPS_CONSOLE_BRIDGE_GATEWAY_URL=https://api.mall.qushiyun.com
 AIOPS_CONSOLE_BRIDGE_HOST=127.0.0.1
