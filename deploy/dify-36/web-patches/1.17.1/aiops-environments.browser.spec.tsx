@@ -976,3 +976,176 @@ it('publishes from verified business and restores the same operation with visibl
   await expect.element(screen.getByText(/正式开通.*已恢复.*准入 未启用/)).toBeVisible()
   await page.screenshot({ path: './.vitest-browser/publication-render.png' })
 })
+
+it('renders environment overview, tenant capability matrix, live vs receipt nodes, and clears on revoked overview refresh', async () => {
+  const overview = {
+    schema: 'aiops-environment-overview/1',
+    control_environment: 'a',
+    control_execution_environment: 'a',
+    control_version: '1.40.4',
+    generated_at: 1795597500,
+    registry_revision: 4,
+    environments: [
+      {
+        id: 'a',
+        name: '环境甲',
+        is_control: true,
+        status: 'active',
+        enabled: true,
+        draft_revision: 2,
+        registry_changed: false,
+        tenant_count: 1,
+        enabled_tenant_count: 1,
+        active_route_count: 2,
+        nodes: [
+          {
+            source: 'heartbeat',
+            node_id: 'node-41',
+            status: 'online',
+            observed_at: 1795597490,
+            age_seconds: 10,
+            version: '1.40.4',
+            tool_contract: 'request-target/2',
+            schemas: ['operator-agent/1'],
+            tools_compatible: true,
+            available_tools: ['query_order_detail', 'query_station_health'],
+          },
+        ],
+        tenants: [
+          {
+            id: 'same',
+            name: '甲租户',
+            admission: 'enabled',
+            effective_enabled: true,
+            draft_enabled: true,
+            workspace: { id: 'ws-a-1', state: 'ready', source: 'runtime' },
+            knowledge: {
+              knowledge_base_id: '',
+              connection_id: '',
+              active_grants: 2,
+              state: 'ready',
+            },
+            apps: {
+              operator: {
+                app_id: '11111111-1111-1111-1111-111111111111',
+                version_no: 36,
+                state: 'active',
+                source: 'runtime',
+              },
+              consumer: {
+                app_id: '22222222-2222-2222-2222-222222222222',
+                version_no: 35,
+                state: 'active',
+                source: 'runtime',
+              },
+            },
+            capabilities: {
+              consumer: { state: 'passed', error_code: '', observed_at: 1795597400, task_id: 't1' },
+              order: { state: 'blocked', error_code: 'ORDER_MISSING', observed_at: 1795597400, task_id: 't1' },
+              offline: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
+            },
+            accuracy_confirmed: false,
+            latest_task: null,
+          },
+        ],
+        latest_task: null,
+      },
+      {
+        id: 'b',
+        name: '环境乙',
+        is_control: false,
+        status: 'disabled',
+        enabled: false,
+        draft_revision: null,
+        registry_changed: false,
+        tenant_count: 1,
+        enabled_tenant_count: 0,
+        active_route_count: 0,
+        nodes: [
+          {
+            source: 'task_receipt',
+            node_id: 'ecs-95',
+            status: 'observed',
+            observed_at: 1795597450,
+            version: '1.40.4',
+            remote_hostname: 'ecs-95',
+            service_user_present: true,
+            installation: 'installed',
+            task_id: `task_${'1'.repeat(32)}`,
+            task_action: 'host-verify',
+          },
+        ],
+        tenants: [
+          {
+            id: 'same',
+            name: '乙租户',
+            admission: 'disabled',
+            effective_enabled: false,
+            draft_enabled: null,
+            workspace: { id: 'ws-b-1', state: 'created', source: 'runtime' },
+            knowledge: {
+              knowledge_base_id: 'kb-b-12345678',
+              connection_id: 'conn-b-1',
+              active_grants: 0,
+              state: 'ready',
+            },
+            apps: {
+              operator: { app_id: '33333333-3333-3333-3333-333333333333', version_no: null, state: 'candidate', source: 'task_receipt' },
+              consumer: { app_id: '', version_no: null, state: 'unprepared', source: 'none' },
+            },
+            capabilities: {
+              consumer: { state: 'expired', error_code: '', observed_at: 1795590000, task_id: 't2' },
+              order: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
+              offline: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
+            },
+            accuracy_confirmed: false,
+            latest_task: null,
+          },
+        ],
+        latest_task: null,
+      },
+    ],
+  }
+  const calls: Record<string, unknown>[] = []
+  let overviewRevoked = false
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      calls.push(body)
+      if (body.action === 'environment-drafts') return Response.json({ ...data, overview })
+      if (body.action === 'environment-overview') {
+        if (overviewRevoked) {
+          return Response.json({ error: { code: 'ENVIRONMENT_MANAGEMENT_FORBIDDEN' } }, { status: 403 })
+        }
+        return Response.json(overview)
+      }
+      return Response.json({ tasks: [] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await expect.element(screen.getByRole('region', { name: '环境总览' })).toBeVisible()
+  await expect.element(screen.getByRole('region', { name: '租户与能力总览' })).toBeVisible()
+  await expect.element(screen.getByRole('region', { name: '运行节点与工具' })).toBeVisible()
+  await expect.element(screen.getByText(/节点 node-41 · 在线（实时心跳）/)).toBeVisible()
+  await expect.element(screen.getByText(/query_order_detail、query_station_health/)).toBeVisible()
+  await expect.element(screen.getByText(/管家：运行中 · v36/)).toBeVisible()
+  await expect.element(screen.getByText(/活跃授权 2/)).toBeVisible()
+  await expect.element(screen.getByText(/智能客服：技术通过/)).toBeVisible()
+  await expect.element(screen.getByText(/异常订单：阻塞（ORDER_MISSING）/)).toBeVisible()
+  await expect.element(screen.getByText(/业务准确性：待人工确认/)).toBeVisible()
+
+  await screen.getByRole('button', { name: '环境乙（b）' }).click()
+  await expect.element(screen.getByText(/远端节点 ecs-95 · 已观察（受管任务点时回执，非实时心跳）/)).toBeVisible()
+  await expect.element(screen.getByText(/最近安装回执：已装/)).toBeVisible()
+  await expect.element(screen.getByText(/智能客服：回执过期/)).toBeVisible()
+
+  await screen.getByRole('button', { name: '刷新节点状态' }).click()
+  expect(calls.at(-1)).toEqual({ action: 'environment-overview' })
+
+  overviewRevoked = true
+  await screen.getByRole('button', { name: '刷新运行状态' }).click()
+  await expect.element(screen.getByRole('alert')).toHaveTextContent('当前账号没有环境管理授权')
+  expect(screen.getByRole('region', { name: '环境总览' }).elements()).toHaveLength(0)
+  await expect.element(screen.getByRole('button', { name: '重试读取运行状态' })).toBeVisible()
+})

@@ -103,6 +103,7 @@ _ACTION_ROUTES: dict[str, tuple[str, str]] = {
     "environments": ("GET", "/environments"),
     "environment-update": ("POST", "/environments"),
     "environment-drafts": ("GET", "/environment-drafts"),
+    "environment-overview": ("GET", "/environment-overview"),
     "environment-plan": ("POST", "/environment-plans"),
     "environment-task": ("POST", "/environment-tasks"),
     "environment-draft-save": ("POST", "/environment-drafts"),

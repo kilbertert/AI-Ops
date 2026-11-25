@@ -36,11 +36,110 @@ type SavedDraft = {
   draft: Draft
   registry_changed: boolean
 }
+type OverviewCapability = {
+  state: 'passed' | 'blocked' | 'pending' | 'expired' | 'unverified'
+  error_code: string
+  observed_at: number | null
+  task_id: string
+}
+type OverviewApp = {
+  app_id: string
+  version_no: number | null
+  state: 'active' | 'disabled' | 'candidate' | 'unprepared'
+  source: 'runtime' | 'task_receipt' | 'none'
+}
+type OverviewTenant = {
+  id: string
+  name: string
+  admission: 'enabled' | 'disabled' | 'draft_only'
+  effective_enabled: boolean
+  draft_enabled: boolean | null
+  workspace: { id: string; state: string; source: string }
+  knowledge: {
+    knowledge_base_id: string
+    connection_id: string
+    active_grants: number
+    state: string
+  }
+  apps: { operator: OverviewApp; consumer: OverviewApp }
+  capabilities: {
+    consumer: OverviewCapability
+    order: OverviewCapability
+    offline: OverviewCapability
+  }
+  accuracy_confirmed: boolean
+  latest_task: {
+    id: string
+    action: string
+    state: string
+    phase: string
+    error_code: string
+    updated_at: number
+  } | null
+}
+type OverviewNode =
+  | {
+      source: 'heartbeat'
+      node_id: string
+      status: 'online' | 'stale'
+      observed_at: number
+      age_seconds: number
+      version: string
+      tool_contract: string
+      schemas: string[]
+      tools_compatible: boolean
+      available_tools: string[]
+    }
+  | {
+      source: 'task_receipt'
+      node_id: string
+      status: 'observed' | 'reconcile' | 'blocked' | 'expired' | 'unobserved'
+      observed_at: number | null
+      version: string
+      remote_hostname: string
+      service_user_present: boolean | null
+      installation: string
+      task_id: string
+      task_action: string
+    }
+type OverviewEnvironment = {
+  id: string
+  name: string
+  is_control: boolean
+  status: 'active' | 'disabled' | 'draft_only'
+  enabled: boolean
+  draft_revision: number | null
+  registry_changed: boolean
+  tenant_count: number
+  enabled_tenant_count: number
+  active_route_count: number
+  nodes: OverviewNode[]
+  tenants: OverviewTenant[]
+  latest_task: {
+    id: string
+    action: string
+    tenant_id: string
+    state: string
+    phase: string
+    error_code: string
+    updated_at: number
+  } | null
+}
+type EnvironmentOverview = {
+  schema: string
+  control_environment: string
+  control_execution_environment: string
+  control_version: string
+  generated_at: number
+  registry_revision: number
+  environments: OverviewEnvironment[]
+}
 type Catalogue = {
   registry_revision: number
   can_create: boolean
   effective: Effective[]
   drafts: SavedDraft[]
+  overview?: EnvironmentOverview
 }
 type Plan = {
   id: string
@@ -116,6 +215,7 @@ const preparationSteps: Record<string, string> = {
 }
 const initialInstallationLabels: Record<string, string> = {
   installed: '已装',
+  unchanged: '无变更（已装）',
   already_installed: '已装（原安装保留）',
   not_installed: '未安装',
   unconfirmed: '待核对',
@@ -171,9 +271,73 @@ const fields = [
   ['timezone', '时区', 64],
 ] as const
 
+const environmentStatusLabels: Record<string, string> = {
+  active: '已启用',
+  disabled: '已停用',
+  draft_only: '仅草稿',
+}
+const tenantAdmissionLabels: Record<string, string> = {
+  enabled: '已启用',
+  disabled: '已停用',
+  draft_only: '仅草稿',
+}
+const workspaceStateLabels: Record<string, string> = {
+  ready: '就绪',
+  created: '已创建',
+  creating: '创建中',
+  pending: '准备中',
+  unknown: '待核对',
+  failed: '异常',
+  unprepared: '未准备',
+}
+const appStateLabels: Record<string, string> = {
+  active: '运行中',
+  disabled: '已停用（路由保留）',
+  candidate: '候选停用',
+  unprepared: '未准备',
+}
+const capabilityStateLabels: Record<string, string> = {
+  passed: '技术通过',
+  blocked: '阻塞',
+  pending: '待验证',
+  expired: '回执过期',
+  unverified: '未验证',
+}
+const nodeStatusLabels: Record<string, string> = {
+  online: '在线',
+  stale: '心跳超时',
+  observed: '已观察',
+  reconcile: '待核对',
+  blocked: '受阻',
+  expired: '回执过期',
+  unobserved: '未观察',
+}
+function formatTimestamp(ts: number | null | undefined): string {
+  if (!ts || !Number.isFinite(ts)) return '—'
+  const date = new Date(ts * 1000)
+  return Number.isNaN(date.getTime()) ? '—' : date.toISOString().replace('T', ' ').slice(0, 19) + 'Z'
+}
+function summarizeNodeCell(env: OverviewEnvironment): string {
+  if (!env.nodes.length) return env.is_control ? '无在线心跳' : '待受管观察'
+  const primary =
+    env.nodes.find((node) => node.source === 'heartbeat' && node.status === 'online') ??
+    env.nodes[0]
+  if (primary.source === 'heartbeat') {
+    const state = nodeStatusLabels[primary.status] || primary.status
+    const compat = primary.tools_compatible ? ` · ${primary.available_tools.length} 工具` : ' · 工具待升级'
+    return `${primary.node_id}（${state}${compat}）`
+  }
+  const state = nodeStatusLabels[primary.status] || primary.status
+  return primary.version ? `v${primary.version} · ${state}（回执）` : `${state}（回执）`
+}
+
 export default function EnvironmentManagement() {
   const router = useRouter()
   const [data, setData] = useState<Catalogue | null>(null)
+  const [overview, setOverview] = useState<EnvironmentOverview | null>(null)
+  const [overviewBusy, setOverviewBusy] = useState(false)
+  const [overviewError, setOverviewError] = useState('')
+  const overviewViewRef = useRef(0)
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
   const [original, setOriginal] = useState('')
@@ -218,26 +382,51 @@ export default function EnvironmentManagement() {
   }
   async function load(preferred: string) {
     setBusy(true)
+    setOverviewBusy(false)
     setError('')
+    const view = ++overviewViewRef.current
     try {
       const catalogue: Catalogue = await manage('environment-drafts')
+      if (view !== overviewViewRef.current) return
       const ids = [
         ...catalogue.effective.map((item) => item.id),
         ...catalogue.drafts.map((item) => item.environment),
       ]
       setData(catalogue)
+      setOverview(catalogue.overview ?? null)
+      setOverviewError('')
       select(catalogue, ids.includes(preferred) ? preferred : ids[0] || '')
     } catch (e) {
+      if (view !== overviewViewRef.current) return
       setPlan(null)
       taskViewRef.current += 1
       setTasks([])
       setData(null)
+      setOverview(null)
+      setOverviewError('')
       setDraft(null)
       setOriginal('')
       setNotice('')
       setError(e instanceof Error ? e.message : '读取环境目录失败')
     } finally {
       setBusy(false)
+    }
+  }
+  async function refreshOverview() {
+    if (overviewBusy) return
+    setOverviewBusy(true)
+    setOverviewError('')
+    const view = ++overviewViewRef.current
+    try {
+      const result: EnvironmentOverview = await manage('environment-overview')
+      if (view !== overviewViewRef.current) return
+      setOverview(result)
+    } catch (e) {
+      if (view !== overviewViewRef.current) return
+      setOverview(null)
+      setOverviewError(e instanceof Error ? e.message : '读取运行状态失败，请稍后重试')
+    } finally {
+      if (view === overviewViewRef.current) setOverviewBusy(false)
     }
   }
   useEffect(() => {
@@ -299,6 +488,7 @@ export default function EnvironmentManagement() {
       setSelected(draft.id)
       setOriginal(JSON.stringify(draft))
       setNotice('草稿已保存，当前生效设置未改变。')
+      if (overview !== null) void refreshOverview()
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存未完成，请刷新核对')
     } finally {
@@ -370,6 +560,7 @@ export default function EnvironmentManagement() {
           .map((item) => item.draft),
       ]
     : []
+  const selectedOverview = overview?.environments.find((item) => item.id === selected) ?? null
 
   return (
     <section aria-label="环境与租户管理" className="h-full overflow-y-auto px-8 py-6">
@@ -439,23 +630,107 @@ export default function EnvironmentManagement() {
         </p>
       )}
       {!data && !error && <p role="status">正在读取环境目录…</p>}
+      {data && overviewError && (
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <p role="alert" className="system-sm-regular text-text-destructive">
+            {overviewError}
+          </p>
+          {!overview && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy || overviewBusy}
+              onClick={() => void refreshOverview()}
+            >
+              重试读取运行状态
+            </Button>
+          )}
+        </div>
+      )}
+      {data && overview && overview.environments.length > 0 && (
+        <section
+          aria-label="环境总览"
+          className="mb-5 rounded border border-divider-subtle bg-components-panel-bg p-4"
+        >
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="system-md-semibold text-text-primary">环境总览</h2>
+              <p className="system-xs-regular text-text-tertiary">
+                唯一生效目录 R{overview.registry_revision}
+                {overview.control_version ? ` · 控制端版本 ${overview.control_version}` : ''}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy || overviewBusy}
+              onClick={() => void refreshOverview()}
+            >
+              刷新运行状态
+            </Button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left system-xs-regular">
+              <thead>
+                <tr className="border-b text-text-tertiary">
+                  <th className="py-2 pr-3 font-medium">环境</th>
+                  <th className="py-2 pr-3 font-medium">准入状态</th>
+                  <th className="py-2 pr-3 font-medium">租户（启用/总数）</th>
+                  <th className="py-2 pr-3 font-medium">节点与版本</th>
+                  <th className="py-2 font-medium">草稿版本</th>
+                </tr>
+              </thead>
+              <tbody>
+                {overview.environments.map((env) => (
+                  <tr key={env.id} className="border-b last:border-b-0">
+                    <td className="py-2 pr-3 text-text-primary">
+                      {env.name}（{env.id}）{env.is_control ? ' · 控制环境' : ''}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {environmentStatusLabels[env.status] || env.status}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {env.enabled_tenant_count}/{env.tenant_count}
+                    </td>
+                    <td className="py-2 pr-3">{summarizeNodeCell(env)}</td>
+                    <td className="py-2">
+                      {env.draft_revision != null ? `V${env.draft_revision}` : '无草稿'}
+                      {env.registry_changed ? '（目录已变更）' : ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
       {data && draft && (
         <div className="grid gap-6 lg:grid-cols-[14rem_minmax(0,1fr)]">
           <nav aria-label="业务环境列表" className="space-y-2">
-            {rows.map((row) => (
-              <Button
-                key={row.id}
-                variant="secondary"
-                className="w-full justify-start"
-                disabled={busy}
-                aria-current={selected === row.id ? 'true' : undefined}
-                onClick={() => {
-                  navigate(() => select(data, row.id))
-                }}
-              >
-                {row.name}（{row.id}）
-              </Button>
-            ))}
+            {rows.map((row) => {
+              const envSummary = overview?.environments.find((item) => item.id === row.id)
+              return (
+                <div key={row.id} className="space-y-0.5">
+                  <Button
+                    variant="secondary"
+                    className="w-full justify-start"
+                    disabled={busy}
+                    aria-current={selected === row.id ? 'true' : undefined}
+                    onClick={() => {
+                      navigate(() => select(data, row.id))
+                    }}
+                  >
+                    {row.name}（{row.id}）
+                  </Button>
+                  {envSummary && (
+                    <p className="px-2 system-xs-regular text-text-tertiary">
+                      {environmentStatusLabels[envSummary.status] || envSummary.status} ·{' '}
+                      {envSummary.enabled_tenant_count}/{envSummary.tenant_count} 租户
+                    </p>
+                  )}
+                </div>
+              )
+            })}
             {!rows.length && <p className="system-sm-regular text-text-secondary">尚未登记环境</p>}
           </nav>
           <form
@@ -760,6 +1035,210 @@ export default function EnvironmentManagement() {
                   重新核对计划
                 </Button>
               </section>
+            )}
+            {selected && selectedOverview && (
+              <>
+                <section
+                  aria-label="租户与能力总览"
+                  className="mt-5 space-y-3 border-t pt-4"
+                >
+                  <div>
+                    <h2 className="system-md-semibold">租户与能力总览</h2>
+                    <p className="system-xs-regular text-text-tertiary">
+                      展示已登记租户的工作区、双端应用、知识空间与三项能力技术验证结果；技术通过不等于业务准确性人工确认。
+                    </p>
+                  </div>
+                  {selectedOverview.tenants.length === 0 ? (
+                    <p className="system-sm-regular text-text-secondary">该环境尚未登记租户</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left system-xs-regular">
+                        <thead>
+                          <tr className="border-b text-text-tertiary">
+                            <th className="py-2 pr-3 font-medium">租户</th>
+                            <th className="py-2 pr-3 font-medium">准入</th>
+                            <th className="py-2 pr-3 font-medium">工作区</th>
+                            <th className="py-2 pr-3 font-medium">管家 / 客服应用</th>
+                            <th className="py-2 pr-3 font-medium">知识空间</th>
+                            <th className="py-2 font-medium">三项能力技术验证</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedOverview.tenants.map((tenant) => (
+                            <tr key={tenant.id} className="border-b align-top last:border-b-0">
+                              <td className="py-2 pr-3">
+                                <div className="font-medium text-text-primary">{tenant.name}</div>
+                                <div className="text-text-tertiary">{tenant.id}</div>
+                              </td>
+                              <td className="py-2 pr-3">
+                                {tenantAdmissionLabels[tenant.admission] || tenant.admission}
+                              </td>
+                              <td className="py-2 pr-3">
+                                <div>
+                                  {workspaceStateLabels[tenant.workspace.state] ||
+                                    tenant.workspace.state}
+                                </div>
+                                {tenant.workspace.id && (
+                                  <div className="break-all text-text-tertiary">
+                                    {tenant.workspace.id}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="space-y-1 py-2 pr-3">
+                                <div>
+                                  管家：
+                                  {appStateLabels[tenant.apps.operator.state] ||
+                                    tenant.apps.operator.state}
+                                  {tenant.apps.operator.version_no != null
+                                    ? ` · v${tenant.apps.operator.version_no}`
+                                    : ''}
+                                  {tenant.apps.operator.app_id
+                                    ? `（${tenant.apps.operator.app_id.slice(0, 8)}）`
+                                    : ''}
+                                </div>
+                                <div>
+                                  客服：
+                                  {appStateLabels[tenant.apps.consumer.state] ||
+                                    tenant.apps.consumer.state}
+                                  {tenant.apps.consumer.version_no != null
+                                    ? ` · v${tenant.apps.consumer.version_no}`
+                                    : ''}
+                                  {tenant.apps.consumer.app_id
+                                    ? `（${tenant.apps.consumer.app_id.slice(0, 8)}）`
+                                    : ''}
+                                </div>
+                              </td>
+                              <td className="py-2 pr-3">
+                                {tenant.knowledge.active_grants > 0
+                                  ? `活跃授权 ${tenant.knowledge.active_grants}`
+                                  : tenant.knowledge.knowledge_base_id
+                                    ? `候选库 ${tenant.knowledge.knowledge_base_id.slice(0, 8)}`
+                                    : '未准备'}
+                              </td>
+                              <td className="space-y-0.5 py-2">
+                                <div>
+                                  智能客服：
+                                  {capabilityStateLabels[tenant.capabilities.consumer.state] ||
+                                    tenant.capabilities.consumer.state}
+                                  {tenant.capabilities.consumer.error_code
+                                    ? `（${tenant.capabilities.consumer.error_code}）`
+                                    : ''}
+                                </div>
+                                <div>
+                                  异常订单：
+                                  {capabilityStateLabels[tenant.capabilities.order.state] ||
+                                    tenant.capabilities.order.state}
+                                  {tenant.capabilities.order.error_code
+                                    ? `（${tenant.capabilities.order.error_code}）`
+                                    : ''}
+                                </div>
+                                <div>
+                                  离线分析：
+                                  {capabilityStateLabels[tenant.capabilities.offline.state] ||
+                                    tenant.capabilities.offline.state}
+                                  {tenant.capabilities.offline.error_code
+                                    ? `（${tenant.capabilities.offline.error_code}）`
+                                    : ''}
+                                </div>
+                                <div className="text-text-tertiary">业务准确性：待人工确认</div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+                <section
+                  aria-label="运行节点与工具"
+                  className="mt-5 space-y-3 border-t pt-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h2 className="system-md-semibold">运行节点与工具</h2>
+                      <p className="system-xs-regular text-text-tertiary">
+                        {selectedOverview.is_control
+                          ? '控制环境展示执行节点实时心跳与工具目录兼容状态。'
+                          : '远端环境展示受管任务点时回执（非实时心跳），以受控安装与观察证据为准。'}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={busy || overviewBusy}
+                      onClick={() => void refreshOverview()}
+                    >
+                      刷新节点状态
+                    </Button>
+                  </div>
+                  {selectedOverview.nodes.length === 0 ? (
+                    <p className="system-sm-regular text-text-secondary">
+                      {selectedOverview.is_control
+                        ? '暂无在线节点心跳记录'
+                        : '暂无受管任务节点回执，请先执行主机身份验收或现场预检'}
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {selectedOverview.nodes.map((node) => (
+                        <div
+                          key={`${node.source}-${node.node_id}`}
+                          className="space-y-1 rounded border p-3 system-xs-regular"
+                        >
+                          {node.source === 'heartbeat' ? (
+                            <>
+                              <p className="font-medium text-text-primary">
+                                节点 {node.node_id} · {nodeStatusLabels[node.status] || node.status}
+                                （实时心跳）
+                              </p>
+                              <p>
+                                网关版本：{node.version || '未知'} · 最近心跳：
+                                {formatTimestamp(node.observed_at)} · 工具协议：
+                                {node.tool_contract || '未上报'}
+                              </p>
+                              <p>
+                                工具目录：
+                                {node.tools_compatible
+                                  ? `与网关一致（可用工具 ${node.available_tools.length} 项）`
+                                  : '与网关版本不兼容（暂不列出可用工具）'}
+                              </p>
+                              {node.available_tools.length > 0 && (
+                                <p className="break-all text-text-tertiary">
+                                  可用工具：{node.available_tools.join('、')}
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <p className="font-medium text-text-primary">
+                                远端节点 {node.node_id} ·{' '}
+                                {nodeStatusLabels[node.status] || node.status}
+                                （受管任务点时回执，非实时心跳）
+                              </p>
+                              <p>
+                                观测版本：{node.version || '未上报'} · 最近观测：
+                                {formatTimestamp(node.observed_at)} · 主机名：
+                                {node.remote_hostname || '未采集'} · 服务身份：
+                                {node.service_user_present === true
+                                  ? '已确认'
+                                  : node.service_user_present === false
+                                    ? '缺失'
+                                    : '未采集'}
+                              </p>
+                              {node.installation && (
+                                <p className="text-text-tertiary">
+                                  最近安装回执：
+                                  {initialInstallationLabels[node.installation] ||
+                                    node.installation}
+                                </p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </>
             )}
             {selected && (
               <section aria-label="现场预检任务" className="mt-5 space-y-2 border-t pt-4">
