@@ -90,8 +90,6 @@ const EXPLAINED_SHARED = new Map([
       why: "reviewed base-image inputs and platform/node artifact pins; Gateway build outputs travel in identity.json outside Git (ADR-0208)",
     },
   ],
-  ["docs/validation.md", { why: "frozen archive; no new entries are written to it since 2026-10-23" }],
-  ["docs/开发进度.md", { why: "frozen archive; no new entries are written to it since 2026-10-23" }],
   [
     "docs/agents/current-delivery-state.md",
     {

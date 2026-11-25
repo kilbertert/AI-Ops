@@ -18,7 +18,7 @@
 上一轮把两类资产混成"只有消费者账号"，于是把一次**本可执行**的验收记成了缺条件。
 
 同名的 `ulink` 账号在 2026-10-22 就在 `ulinkmanage.h5.mall.qushiyun.com` 上走过真实账号密码
-登录（[`docs/validation.md`](../validation.md) §"第 1 项闭环"）。凭据一直都在。
+登录（[`docs/validation.md`（已归档）](https://github.com/kilbertert/AI-Ops-history-archive/blob/759e45e85b9731a4b44ac85c5d1a491d829f498e/docs/validation.md) §"第 1 项闭环"）。凭据一直都在。
 
 ## 二、真实登录（页面，非注入）
 

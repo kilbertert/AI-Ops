@@ -75,7 +75,7 @@ flowchart LR
 | `deploy/`、`ops/` | 成套部署制品、主机脚本、Nginx 模板与旁路打包/部署脚本 |
 | `tools/` | `content/` 内容工具、`verification/` 探针、`experiments/` 隔离实验、`inventory/` 索引 |
 | `tests/` | 按职责分类的行为测试、结构/零环/退役/部署门禁 |
-| `docs/` | 现役文档、`adr/` 架构决策、`agents/` 操作手册、`validation/` 与 `开发进度/` 按日回执 |
+| `docs/` | 现役文档、`adr/` 架构决策、`agents/` 操作手册、`validation/` 现役验收回执（历史老回执与旧进度已迁至独立归档仓库，见 ADR-0345） |
 | `.spec/`、`llmdoc/` | 行为规格树与 agent 文档索引 |
 | `.github/`、`.sandcastle/` | CI/CD 与自动化交付治理 |
 
@@ -99,4 +99,4 @@ uv build
 - **总索引与上手**：[文档导航](docs/README.md)、[Gateway 运维](docs/gateway.md)、[快速上手](docs/快速上手.md)、[配置参考](docs/agents/config-reference.md)、[流水线索引](docs/agents/environment-pipeline-map.md)
 - **业务端手册**：[C 端 WF01](docs/agents/consumer-wf01/README.md)、[管家 CPMS](docs/agents/operator-cpms/README.md)、[自助开通](docs/agents/operator-cpms/self-service.md)、[环境接入手册](docs/agents/environment-registry.md)
 - **交付与运维**：[当前交付索引](docs/agents/current-delivery-state.md)、[Actions 交付手册](docs/agents/actions-delivery.md)、[部署索引](deploy/README.md)、[运维说明](ops/README.md)
-- **决策与证据**：[ADR 目录](docs/adr/)、[验收回执](docs/validation/)、[开发进度](docs/开发进度/)
+- **决策与证据**：[ADR 目录](docs/adr/)、[现役验收回执目录](docs/validation/)（[归档说明](docs/validation/README.md)）、[历史进度归档说明](docs/开发进度/README.md)

@@ -2,8 +2,9 @@
 
 **为什么有这个文件**：一次 CD 故障（连续 6 次 src 合并都没成功部署）之所以拖了很久没人
 发现，是因为**同一时期有人在手工 rsync** —— 生产确实更新了，于是没有任何理由去看 CD。
-**不可见的人工动作会连带隐藏本应被发现的异常**（记录见
-[`docs/validation.md`](../docs/validation.md) 的「部署方式偏离了既有 CD」一节）。
+**不可见的人工动作会连带隐藏本应被发现的异常**（历史记录见独立归档仓库
+[`docs/validation.md`](https://github.com/kilbertert/AI-Ops-history-archive/blob/759e45e85b9731a4b44ac85c5d1a491d829f498e/docs/validation.md)
+的「部署方式偏离了既有 CD」一节，详见 [ADR-0345](../docs/adr/0345-offload-legacy-receipts-to-archive-repo.md)）。
 
 不是说手工部署本身有问题：它是 CD 不可用时的**应急路径**，`deploy-41.sh` 就是为它留的。
 问题是**它不留痕**。所以：**任何绕过 CD 到达生产的变更，事后必须在这里追加一行。**

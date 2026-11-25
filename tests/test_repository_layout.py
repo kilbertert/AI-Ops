@@ -87,7 +87,6 @@ LAYOUT = {
         frozenset(
             [
                 "conftest.py",
-                "milestone_archive_headings.json",
                 "operator_native_preview.mjs",
                 "operator_support.py",
                 "test_bridge_knowledge_open.py",
@@ -98,7 +97,6 @@ LAYOUT = {
                 "test_env_example.py",
                 "test_h5_assistant_routes.py",
                 "test_inner_api_forwarder.py",
-                "test_milestone_archive_is_frozen.py",
                 "test_node_runtime_deploy.py",
                 "test_parallel_setup.py",
                 "test_readme_architecture.py",

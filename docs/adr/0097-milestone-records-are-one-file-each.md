@@ -1,7 +1,7 @@
 # 97. 里程碑记录一条一个文件，落后与冲突由工作流自动派发
 
 日期：2026-10-23
-状态：部分被 [ADR-0269](0269-bounded-doc-first.md) 替代；双记录义务已取消，独立回执与旧日志冻结保留
+状态：部分被 [ADR-0269](0269-bounded-doc-first.md) 与 [ADR-0345](0345-offload-legacy-receipts-to-archive-repo.md) 替代；双记录义务已取消，原单体只读归档与老历史回执已迁出至独立私有归档仓库，新验收回执仍沿用单事件独立文件约定
 影响版本：`AGENTS.md`（里程碑同步）、`README.md`（文档与证据纪律）、
 `tests/test_assistant_cancel_handoff.py`（`ATTRIBUTION_DIRS`）、
 `.github/workflows/sync-open-prs.yml`（新增）

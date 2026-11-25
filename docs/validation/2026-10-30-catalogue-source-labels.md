@@ -1,6 +1,6 @@
 # 来源版本标签：本地验证
 
-对应[开发进度](../开发进度/2026-10-30-catalogue-source-labels.md)。分支`fix/catalogue-source-labels`，
+对应[开发进度（已归档）](https://github.com/kilbertert/AI-Ops-history-archive/blob/759e45e85b9731a4b44ac85c5d1a491d829f498e/docs/%E5%BC%80%E5%8F%91%E8%BF%9B%E5%BA%A6/2026-10-30-catalogue-source-labels.md)。分支`fix/catalogue-source-labels`，
 基线`7b5d62f3`（起草`83ba786a`，期间基线前移六次：`#1184`/`#1185`/`#1186`/`#1195`/`#1196`/`#1197`；每次改动 `src/` 的都要重建锁）。本页只记本轮实际跑过的检查。
 
 ## 自动化检查（全部本地，未上生产）

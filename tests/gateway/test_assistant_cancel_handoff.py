@@ -66,14 +66,9 @@ UNKNOWN_JOB_ID = "qa_nonexistent000000000000000000000001"
 #: is committed, without anyone remembering to add its name here.
 ATTRIBUTION_DOCS = (
     "qa-plan.md",
-    "docs/validation.md",
-    "docs/开发进度.md",
     "docs/agents/p0-media-canary.md",
 )
-ATTRIBUTION_DIRS = (
-    PROJECT_ROOT / "docs" / "validation",
-    PROJECT_ROOT / "docs" / "开发进度",
-)
+ATTRIBUTION_DIRS = (PROJECT_ROOT / "docs" / "validation",)
 
 #: Words that mark a line as being about the user-stop chain.
 _STOP_WORDS = ("停止生成", "用户停止", "取消/超时", "停止按钮", "取消链路")
@@ -157,6 +152,8 @@ def _attribution_documents() -> list[tuple[str, str]]:
     documents = [(name, (PROJECT_ROOT / name).read_text(encoding="utf-8")) for name in ATTRIBUTION_DOCS]
     for directory in ATTRIBUTION_DIRS:
         for path in sorted(directory.rglob("*.md")):
+            if path.name == "README.md":
+                continue
             documents.append((path.relative_to(PROJECT_ROOT).as_posix(), path.read_text(encoding="utf-8")))
     return documents
 
@@ -164,13 +161,13 @@ def _attribution_documents() -> list[tuple[str, str]]:
 def test_every_evidence_entry_file_is_covered() -> None:
     """The scan must actually reach the entry files, or the rewrite silently checks nothing.
 
-    A helper that returns only the four archive documents would keep both tests
-    green while every new milestone record — the place the attribution drifted
-    last time — went unread.
+    A helper that returns only the named files or directory README pointers would
+    keep both tests green while every dated milestone record went unread.
     """
     names = [name for name, _ in _attribution_documents()]
-    assert any(name.startswith("docs/validation/") for name in names), names
-    assert any(name.startswith("docs/开发进度/") for name in names), names
+    assert any(name.startswith("docs/validation/") and not name.endswith("/README.md") for name in names), (
+        names
+    )
 
 
 def test_no_document_still_blames_173_for_the_stop_link() -> None:
