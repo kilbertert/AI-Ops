@@ -66,3 +66,11 @@ UPMS 不可用时硬编码回退会话链：把「验证不了」伪装成「换
   错误分类互相独立、互不抹平。
 - 管理面（不传入口头的 `authenticated_agent_caller`/`shortcut_caller`）落到既有链，
   行为不变——用户入口白名单本来就不含这些路径。
+- 租户顶层主账号（`is_tenant_level_account(user_type)` 即 `type ∈ {-1, 1}` 且非代查、
+  持有真实 `b_user_id`）在 `EntryCallerResolver._normalize_operator_scope` 中按既有
+  `data_scope_rule.py` / `build_trial_scope` 单一口径归一为 `SCOPE_TYPE_ALL`（2026-11-25
+  95 正式 HTTPS 窗口实证：公司 UPMS `/user/ds` 返回 `code=1` 降级到角色 `dsType=2` 后，
+  顶层账号因无门店绑定得到 `organ` + 空 `site_ids`，导致正式入口误报
+  `OPERATOR_SITE_SCOPE_REQUIRED`）。普通/代理商账号（`type ∉ {-1, 1}`）与代查上下文
+  不进入此分支，继续按实时店铺→站点映射 fail closed；跨租户隔离仍由 `effective_tenant_id`
+  与 `RegisteredCallerResolver` 强制兜底。

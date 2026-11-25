@@ -38,6 +38,7 @@ from aiops_diagnostics.identity.query_scope import (
     resolve_query_scope,
 )
 from aiops_diagnostics.identity.scope_context import (
+    SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
     DataScope,
     ScopeContext,
@@ -47,6 +48,7 @@ from aiops_diagnostics.identity.scope_context import (
     SubjectRecord,
     UpmsDirectory,
     is_operator_entry,
+    is_tenant_level_account,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -308,8 +310,29 @@ class EntryCallerResolver:
         对同一账号本就会做的事相同（复核/回读同样替换），是把既有拒绝**提前**
         到首鉴并保持三段口径一致，不是本接缝新增的收窄；下游 ``operator_scope``
         按既有 OPERATOR_SITE_SCOPE 判拒。
+
+        租户顶层主账号（``is_tenant_level_account(user_type)`` 且非代查）不受公司
+        店铺隔离门约束（与 ``data_scope_rule.py`` / ``build_trial_scope`` 同口径）：
+        当公司 UPMS ``/user/ds`` 故障降级到角色 ``dsType`` 推导并返回 ``organ`` +
+        空店铺集合时，若不按租户顶层归一到 ``SCOPE_TYPE_ALL``，本链会在首鉴或
+        ``operator_scope`` 误报 ``OPERATOR_SITE_SCOPE_REQUIRED``（2026-11-25
+        95 正式 HTTPS 窗口实证）。归一化后租户边界仍由 ``effective_tenant_id`` 与
+        ``RegisteredCallerResolver`` 强制收口，不会跨租户。
         """
         scope = context.data_scope
+        if (
+            context.subject.b_user_id
+            and not context.delegated
+            and is_tenant_level_account(context.subject.user_type)
+        ):
+            target_scope = DataScope(type=SCOPE_TYPE_ALL)
+            if scope == target_scope:
+                return context
+            return replace(
+                context,
+                data_scope=target_scope,
+                scope_fingerprint="",
+            )
         if self._site_scope is None or scope.type != SCOPE_TYPE_ORGAN:
             return context
         try:
