@@ -816,7 +816,7 @@ UNTRUSTED_ATTACHMENT_POLICY = (
 )
 
 
-def _preserved_order_candidates(text: str) -> tuple[str, ...]:
+def _preserved_redaction_tokens(text: str) -> tuple[str, ...]:
     """保留附件中可信订单号候选（含 19 位纯数字订单号），但绝不放行显式 PII/VIN/手机号/车牌。"""
     if not text:
         return ()
@@ -836,7 +836,7 @@ def _preserved_order_candidates(text: str) -> tuple[str, ...]:
 
 
 def _redact_attachment_text(text: str) -> str:
-    return redact_text(text, preserve=_preserved_order_candidates(text))
+    return redact_text(text, preserve=_preserved_redaction_tokens(text))
 
 
 def _reencode_jpeg_to_base64_budget(blob: bytes, max_b64_chars: int) -> str | None:
