@@ -260,7 +260,22 @@ def test_operator_citations_sse_readback_and_report_export(tmp_path, monkeypatch
             assert stub.updated[0]["sussessCount"] == 1
             assert stub.updated[0]["resultDetail"].startswith("https://")
 
-            # Export .md report as well and verify content includes citations & disclaimer without URLs.
+            # Verify real step titles render in .docx (BUG_0008) & dispatch finishes (ANALYSIS_0003).
+            assert stub.uploads
+            raw_multipart = stub.uploads[0]["body"]
+            pk_start = raw_multipart.find(b"PK\x03\x04")
+            assert pk_start >= 0
+            # Extract docx bytes up to the closing multipart boundary.
+            boundary_end = raw_multipart.rfind(b"\r\n--")
+            docx_bytes = raw_multipart[pk_start:boundary_end]
+            exported_doc = Document(io.BytesIO(docx_bytes))
+            docx_text = "\n".join(p.text for p in exported_doc.paragraphs)
+            assert "核验账号权限与场站范围" in docx_text
+            assert "订单详情" in docx_text
+            assert "调度运维排查智能体" in docx_text
+            assert "[running]" not in docx_text
+
+            # Export .md report and verify citations, step titles & disclaimer without URLs.
             stub.uploads.clear()
             exp_md = env["client"].post(
                 f"/v1/assistant/questions/{qa_id}/export",
@@ -272,6 +287,9 @@ def test_operator_citations_sse_readback_and_report_export(tmp_path, monkeypatch
             uploaded_md_body = stub.uploads[0]["body"].decode("utf-8", errors="replace")
             assert "充电桩后台排查报告" in uploaded_md_body
             assert "现场工单.docx" in uploaded_md_body
+            assert "核验账号权限与场站范围" in uploaded_md_body
+            assert "订单详情" in uploaded_md_body
+            assert "[running]" not in uploaded_md_body
             assert "未对订单、计费、设备或业务工单执行任何变更操作" in uploaded_md_body
 
             # Non-completed QA cannot be exported (409 REPORT_NOT_READY).

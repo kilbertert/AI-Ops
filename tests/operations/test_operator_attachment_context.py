@@ -174,3 +174,121 @@ def test_untrusted_attachment_context_isolation_and_order_authorization(tmp_path
                 assert str(exc) == "OPERATOR_ORDER_NOT_REFERENCED"
     finally:
         company.close()
+
+
+def test_numeric_19_digit_order_preserved_while_pii_redacted_and_multi_photo_budget_bounded(
+    tmp_path: Path,
+) -> None:
+    """回归 BUG_0001/BUG_0003：19 位订单号保留且 PII 脱敏；多图不超 48,000 UTF-16 且 JPEG 完整。"""
+    import base64
+    import io
+    import random
+
+    from PIL import Image
+
+    def _noisy_jpeg(width: int, height: int, seed: int) -> bytes:
+        rng = random.Random(seed)
+        raw_rgb = bytes(rng.randrange(256) for _ in range(width * height * 3))
+        img = Image.frombytes("RGB", (width, height), raw_rgb)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=92)
+        return buf.getvalue()
+
+    company = _FakeCompanyServer()
+    try:
+        with _make_client(tmp_path, upms_base=company.upms_base, mall_base=company.mall_base) as client:
+            # BUG_0003: 19-digit numeric order survives while phone/VIN/card/token are redacted
+            workorder = _make_docx(
+                "工单排查记录\n"
+                "订单号：2115000000000000001\n"
+                "手机号：13800138000\n"
+                "VIN：LSVAA2182E2100001\n"
+                "卡号：6222021001112223456\n"
+                "Bearer sk-secret-token-1234567890"
+            )
+            r_doc = client.post(
+                "/v1/assistant/files",
+                headers=_OP_A,
+                files={
+                    "file": (
+                        "numeric_order.docx",
+                        workorder,
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    )
+                },
+            )
+            assert r_doc.status_code == 201, r_doc.text
+
+            # BUG_0001: 2 heavy field photos (>25KB each) + docx stay under Java 48,000 UTF-16 limit
+            photo1 = _noisy_jpeg(420, 420, seed=11)
+            photo2 = _noisy_jpeg(420, 420, seed=22)
+            assert len(photo1) > 25_000 and len(photo2) > 25_000
+            r_p1 = client.post(
+                "/v1/assistant/files",
+                headers=_OP_A,
+                files={"file": ("site1.jpg", photo1, "image/jpeg")},
+            )
+            r_p2 = client.post(
+                "/v1/assistant/files",
+                headers=_OP_A,
+                files={"file": ("site2.jpg", photo2, "image/jpeg")},
+            )
+            assert r_p1.status_code == r_p2.status_code == 201
+
+            scope_fp = (
+                _MultiUserCaller().resolve("user-a", required_scope="aiops:diagnoses:write").scope_fingerprint
+            )
+            rows = client.app.state.gateway.assistant_files.get_many(
+                [r_doc.json()["file_id"], r_p1.json()["file_id"], r_p2.json()["file_id"]],
+                scope_fp,
+            )
+            ref_text = attachment_reference_text(rows)
+            assert "2115000000000000001" in ref_text
+            assert "13800138000" not in ref_text
+            assert "LSVAA2182E2100001" not in ref_text
+            assert "6222021001112223456" not in ref_text
+            assert "sk-secret-token-1234567890" not in ref_text
+            assert (
+                operator_agent.order_candidate(
+                    {"order_no": "2115000000000000001"}, "分析附件里的订单\n" + ref_text, "", ""
+                )
+                == "2115000000000000001"
+            )
+
+            fake_service = SimpleNamespace(
+                context=SimpleNamespace(
+                    runtime=SimpleNamespace(
+                        diagnostic_settings=SimpleNamespace(mysql=SimpleNamespace(timezone="Asia/Shanghai"))
+                    )
+                )
+            )
+            task = ActiveTask(
+                caller=None,
+                binding=None,
+                authorize=lambda: None,
+                bearer="",
+                base_url="",
+                proxy_url="",
+                order_site_id="",
+                attachments=rows,
+                question="请结合两张现场照片和工单排查异常订单",
+                language="zh",
+            )
+            messages = build_messages(fake_service, task)
+            content = messages[-1]["content"]
+            utf16_len = len(content.encode("utf-16-le")) // 2
+            assert utf16_len <= 44_000, f"expected <= 44000 UTF-16 chars, got {utf16_len}"
+
+            payload = json.loads(content)
+            img_entries = [
+                item for item in payload["untrusted_user_attachments"] if item["category"] == "image"
+            ]
+            assert len(img_entries) == 2
+            for entry in img_entries:
+                b64 = entry.get("image_base64_jpeg")
+                assert b64, "re-encoded JPEG must be present"
+                decoded = base64.b64decode(b64, validate=True)
+                with Image.open(io.BytesIO(decoded)) as verified:
+                    verified.verify()
+    finally:
+        company.close()

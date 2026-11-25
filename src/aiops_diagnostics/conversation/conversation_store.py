@@ -302,6 +302,7 @@ class ConversationStore:
         kind: str,
         question: str,
         attachment_ids: list[str] | None = None,
+        claim_id: str | None = None,
     ) -> int:
         """Claim the conversation's generation slot; returns the new turn_no.
 
@@ -366,16 +367,18 @@ class ConversationStore:
                 ),
             )
             new_title = str(row["title"] or "").strip() or auto_conversation_title(question)
+            active_claim = claim_id or ("clm_" + uuid.uuid4().hex)
             connection.execute(
                 """
                 UPDATE conversations
-                SET generating_since = ?, generating_turn_no = ?, last_turn_no = ?,
-                    title = ?, updated_at = ?
+                SET generating_since = ?, generating_turn_no = ?, generating_claim_id = ?,
+                    last_turn_no = ?, title = ?, updated_at = ?
                 WHERE conversation_id = ?
                 """,
                 (
                     format_stored_time(now),
                     next_no,
+                    active_claim,
                     next_no,
                     new_title,
                     format_stored_time(now),
@@ -450,15 +453,17 @@ class ConversationStore:
             next_attempt_no = int(latest["attempt_no"] or 1) + 1
             raw_attachments = latest["attachment_ids_json"]
             attachment_ids = json.loads(raw_attachments) if raw_attachments else []
+            claim_id = "clm_" + uuid.uuid4().hex
             connection.execute(
                 """
                 UPDATE conversations
-                SET generating_since = ?, generating_turn_no = ?, updated_at = ?
+                SET generating_since = ?, generating_turn_no = ?, generating_claim_id = ?, updated_at = ?
                 WHERE conversation_id = ? AND scope_fingerprint = ?
                 """,
                 (
                     format_stored_time(now),
                     turn_no,
+                    claim_id,
                     format_stored_time(now),
                     conversation_id,
                     scope,
@@ -467,6 +472,7 @@ class ConversationStore:
             return {
                 "conversation_id": conversation_id,
                 "turn_no": turn_no,
+                "claim_id": claim_id,
                 "next_attempt_no": next_attempt_no,
                 "question": str(latest["question"]),
                 "attachment_ids": attachment_ids,
@@ -494,17 +500,17 @@ class ConversationStore:
         elapsed_ms: int | None = None,
         delivery_mode: str | None = None,
         preserve_completed: bool = False,
+        claim_id: str | None = None,
     ) -> None:
         """Persist a finished turn and release the generation slot.
 
         A cancelled turn keeps its question row (audit) but never stores an
         answer — an interrupted generation must not survive as a complete one.
 
-        The slot is released only while THIS turn still holds it. A turn whose
-        claim already lapsed (crash fallback) can find a newer turn generating:
-        writing its own row is still correct, but clearing the slot would
-        unlock the input while that newer generation is still running. The
-        claim is matched on the turn number, which is never reused.
+        The slot is released only while THIS claim still holds it. For in-place
+        regeneration (which reuses ``turn_no``), ``claim_id`` uniquely identifies
+        each generation attempt so a stale worker finishing late can neither
+        overwrite a newer attempt's answer nor unlock a newer attempt's slot.
         """
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
@@ -523,6 +529,21 @@ class ConversationStore:
             ).fetchone()
             if row is None:
                 raise ConversationNotFound("turn not found")
+            if claim_id is not None:
+                holder = connection.execute(
+                    """
+                    SELECT generating_turn_no, generating_claim_id FROM conversations
+                    WHERE conversation_id = ? AND scope_fingerprint = ?
+                    """,
+                    (conversation_id, scope),
+                ).fetchone()
+                holds_slot = (
+                    holder is not None
+                    and holder["generating_turn_no"] == turn_no
+                    and holder["generating_claim_id"] == claim_id
+                )
+                if not holds_slot and (preserve_completed or cancelled):
+                    return
             if cancelled:
                 if preserve_completed:
                     # 原地重生成失败/取消时保留原已完成答复，仅释放槽位。
@@ -571,18 +592,20 @@ class ConversationStore:
                         turn_no,
                     ),
                 )
+            claim_clause = " AND generating_claim_id = ?" if claim_id is not None else ""
+            claim_args: tuple[Any, ...] = (claim_id,) if claim_id is not None else ()
             if active_order_no is not None and not cancelled:
                 connection.execute(
                     "UPDATE conversations SET active_order_no=? WHERE conversation_id=? "
-                    "AND scope_fingerprint=? AND generating_turn_no=?",
-                    (active_order_no, conversation_id, scope, turn_no),
+                    f"AND scope_fingerprint=? AND generating_turn_no=?{claim_clause}",
+                    (active_order_no, conversation_id, scope, turn_no, *claim_args),
                 )
             connection.execute(
-                """
+                f"""
                 UPDATE conversations
-                SET generating_since = NULL, generating_turn_no = NULL, updated_at = ?,
-                    expires_at = MAX(expires_at, ?)
-                WHERE conversation_id = ? AND scope_fingerprint = ? AND generating_turn_no = ?
+                SET generating_since = NULL, generating_turn_no = NULL, generating_claim_id = NULL,
+                    updated_at = ?, expires_at = MAX(expires_at, ?)
+                WHERE conversation_id = ? AND scope_fingerprint = ? AND generating_turn_no = ?{claim_clause}
                 """,
                 (
                     format_stored_time(now),
@@ -590,32 +613,31 @@ class ConversationStore:
                     conversation_id,
                     scope,
                     turn_no,
+                    *claim_args,
                 ),
             )
 
-    def renew_turn_claim(self, conversation_id: str, scope_fingerprint: str, turn_no: int) -> bool:
-        """Push this turn's claim back to now, if it still holds the slot.
-
-        The busy check treats a claim older than ``BUSY_LOCK_SECONDS`` as a
-        crashed worker's. That window is shorter than some generations (a
-        diagnosis runs for minutes), so a worker still running must say so, or
-        its own conversation stops being busy mid-generation and a second turn
-        starts over it. Renewing is the worker proving it is alive; the window
-        keeps meaning "time since the last proof", which is the only reading
-        under which the crash fallback still works.
-
-        Returns whether the claim was this turn's to renew: a worker that
-        outlived its own claim must not extend a newer turn's slot.
-        """
+    def renew_turn_claim(
+        self,
+        conversation_id: str,
+        scope_fingerprint: str,
+        turn_no: int,
+        *,
+        claim_id: str | None = None,
+    ) -> bool:
+        """Push this turn's claim back to now, if it still holds the slot."""
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
         if not isinstance(turn_no, int) or turn_no < 1:
             raise ConversationError("turn number is invalid")
+        claim_clause = " AND generating_claim_id = ?" if claim_id is not None else ""
+        claim_args: tuple[Any, ...] = (claim_id,) if claim_id is not None else ()
         with self._connection(write=True) as connection:
             cursor = connection.execute(
                 "UPDATE conversations SET generating_since = ?"
-                " WHERE conversation_id = ? AND scope_fingerprint = ? AND generating_turn_no = ?",
-                (format_stored_time(now_utc()), conversation_id, scope, turn_no),
+                " WHERE conversation_id = ? AND scope_fingerprint = ?"
+                f" AND generating_turn_no = ?{claim_clause}",
+                (format_stored_time(now_utc()), conversation_id, scope, turn_no, *claim_args),
             )
             return cursor.rowcount > 0
 
@@ -659,8 +681,8 @@ class ConversationStore:
                     (conversation_id, turn_no),
                 )
             cursor = connection.execute(
-                "UPDATE conversations SET generating_since = NULL, generating_turn_no = NULL"
-                " WHERE generating_since IS NOT NULL"
+                "UPDATE conversations SET generating_since = NULL, generating_turn_no = NULL,"
+                " generating_claim_id = NULL WHERE generating_since IS NOT NULL"
             )
             return cursor.rowcount
 
@@ -671,6 +693,7 @@ class ConversationStore:
         turn_no: int,
         *,
         preserve_completed: bool = False,
+        claim_id: str | None = None,
     ) -> None:
         """Drop an unfinished/cancelled turn row and release the slot."""
         self.complete_turn(
@@ -680,6 +703,7 @@ class ConversationStore:
             answer=None,
             cancelled=True,
             preserve_completed=preserve_completed,
+            claim_id=claim_id,
         )
 
     # ------------------------------------------------------------------

@@ -87,6 +87,7 @@ class ActiveTask:
     agent_id: str = "operator_main"
     attempt_no: int = 1
     parent_qa_id: str | None = None
+    claim_id: str | None = None
     step_counter: int = 0
     open_steps: dict = field(default_factory=dict)
 
@@ -548,6 +549,15 @@ def authorize_snapshot(
         raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
 
 
+_MAX_SINGLE_USER_MESSAGE_UTF16 = 44_000
+_MAX_TOTAL_MESSAGES_UTF16 = 48_000
+
+
+def _utf16_len(text: str) -> int:
+    """精确度量 Java `String.length()` 对应的 UTF-16 代码单元数。"""
+    return len(text.encode("utf-16-le")) // 2
+
+
 def build_messages(service: Any, task: ActiveTask) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     task.history_runs = []
@@ -605,19 +615,41 @@ def build_messages(service: Any, task: ActiveTask) -> list[dict[str, str]]:
     }
     if task.attachments:
         from aiops_diagnostics.operator.attachments import (
+            MAX_TURN_ATTACHMENT_CONTEXT_CHARS,
             UNTRUSTED_ATTACHMENT_POLICY,
             build_untrusted_attachment_context,
         )
 
         user_payload["untrusted_attachment_policy"] = UNTRUSTED_ATTACHMENT_POLICY
-        user_payload["untrusted_user_attachments"] = build_untrusted_attachment_context(task.attachments)
+        envelope_overhead = _utf16_len(json.dumps(user_payload, ensure_ascii=False))
+        available = max(
+            2_000,
+            min(
+                MAX_TURN_ATTACHMENT_CONTEXT_CHARS, _MAX_SINGLE_USER_MESSAGE_UTF16 - envelope_overhead - 1_024
+            ),
+        )
+        user_payload["untrusted_user_attachments"] = build_untrusted_attachment_context(
+            task.attachments, max_total_chars=available
+        )
+        serialized_user = json.dumps(user_payload, ensure_ascii=False)
+        if _utf16_len(serialized_user) > _MAX_SINGLE_USER_MESSAGE_UTF16:
+            overflow = _utf16_len(serialized_user) - _MAX_SINGLE_USER_MESSAGE_UTF16 + 1_024
+            shrunk = max(0, available - overflow)
+            user_payload["untrusted_user_attachments"] = build_untrusted_attachment_context(
+                task.attachments, max_total_chars=shrunk
+            )
+            serialized_user = json.dumps(user_payload, ensure_ascii=False)
+    else:
+        serialized_user = json.dumps(user_payload, ensure_ascii=False)
     messages.append(
         {
             "role": "user",
-            "content": json.dumps(user_payload, ensure_ascii=False),
+            "content": serialized_user,
         }
     )
-    while len(json.dumps(messages, ensure_ascii=False)) > 48000 and len(messages) > 1:
+    while (
+        _utf16_len(json.dumps(messages, ensure_ascii=False)) > _MAX_TOTAL_MESSAGES_UTF16 and len(messages) > 1
+    ):
         del messages[:2]
     return messages
 
@@ -710,6 +742,99 @@ def authorize_readback(
     if refreshed.scope_fingerprint != caller.scope_fingerprint:
         raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
     return service.result(caller, qa_id)
+
+
+def verify_live_stream_access(
+    service: Any,
+    caller: Any,
+    qa_id: str,
+    bearer: str,
+    *,
+    cpms_get_fn: Callable[..., Any],
+) -> None:
+    """对运行中/失败/取消态的管家问答 SSE 实时复核当前账号范围与已触及订单/站点权限。"""
+    run = service.context.agent_run_store.by_qa(qa_id)
+    if run is None:
+        raise OperatorRefused("QA_NOT_FOUND")
+    task = service.tasks.get(run.run_id)
+    needs_order = bool(run.order_no or (task is not None and task.order_site_id))
+    current = service.refresh_scope(caller, allow_empty=not needs_order)
+    if run.scope_fingerprint != current.scope_fingerprint:
+        raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+    binding = chat_execution.binding_for_key(service.context.settings, run.chat_binding)
+    trial = bool((run.snapshot or {}).get("trial")) or bool(task and task.trial)
+    if not still_authorized(binding, run, trial=trial):
+        raise OperatorRefused("OPERATOR_RESULT_RETRACTED")
+    from aiops_diagnostics.execution.node_publication import all_targets
+
+    target = next(
+        (
+            t
+            for t in all_targets(service.context.settings)
+            if t.entry == "operator"
+            and t.app_id == binding.app_id
+            and t.tenant_id == current.effective_tenant_id
+            and t.environment == run.environment
+        ),
+        None,
+    )
+    if target is None:
+        raise OperatorRefused("OPERATOR_TARGET_MISSING")
+
+    check_task = ActiveTask(
+        current,
+        binding,
+        lambda: service.refresh_scope(current, allow_empty=not needs_order),
+        bearer,
+        target.cpms_base_url,
+        target.proxy_base_url,
+        task.order_site_id if task is not None else "",
+    )
+    snapshot_evidence = (run.snapshot or {}).get("evidence") or {}
+    if run.order_no:
+        expected_site = (task.order_site_id if task is not None else "") or str(
+            snapshot_evidence.get(TOOL_NAMES[0], {}).get("data", {}).get("siteId") or ""
+        )
+        service._authorized_order(check_task, run.order_no, expected_site=expected_site)
+    if run.snapshot and snapshot_evidence:
+        service._authorize_snapshot(check_task, run)
+    if task is not None:
+        for previous_id in list(task.history_runs):
+            previous = service.context.agent_run_store.peek(previous_id)
+            if (
+                previous is None
+                or previous.scope_fingerprint != current.scope_fingerprint
+                or not previous.snapshot
+            ):
+                raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+            service._authorize_snapshot(check_task, previous)
+    if task is not None and task.evidence:
+        scope = operator_scope(current, allow_empty=True)
+        with task.lock:
+            live_items = list(task.evidence.items())
+        for name, item in live_items:
+            data = (item or {}).get("data") if isinstance(item, dict) else None
+            if not isinstance(data, dict):
+                continue
+            sites = (
+                [row["id"] for row in data.get("records", []) if isinstance(row, dict) and row.get("id")]
+                if name == SITE_TOOL
+                else []
+            )
+            if data.get("site_id"):
+                sites.append(data["site_id"])
+            for site in sites:
+                if scope.site_ids is not None and site not in scope.site_ids:
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
+                body = cpms_get_fn(
+                    target.cpms_base_url + "/chSite/" + site, bearer, current.effective_tenant_id
+                )
+                row = body.get("data") if isinstance(body, dict) and body.get("code") == 0 else None
+                if not isinstance(row, dict) or (row.get("id"), row.get("tenantId")) != (
+                    site,
+                    current.effective_tenant_id,
+                ):
+                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
 
 
 def previous_plan(service: Any, task: ActiveTask) -> dict[str, Any]:

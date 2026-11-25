@@ -43,6 +43,32 @@ def _safe_short_id(qa_id: str) -> str:
     return cleaned[:20] or "report"
 
 
+def _format_step_line(idx: int, step: dict[str, Any]) -> str:
+    """统一格式化执行步骤行，供 Markdown 与 Word 报告复用。"""
+    title = _clean_text(
+        str(
+            step.get("title")
+            or step.get("label")
+            or step.get("node_code")
+            or step.get("step_id")
+            or f"步骤 {idx}"
+        )
+    )
+    st = _clean_text(str(step.get("status") or ""))
+    details: list[str] = []
+    input_summary = _clean_text(str(step.get("input_summary") or ""))
+    output_summary = _clean_text(str(step.get("output_summary") or ""))
+    legacy_summary = _clean_text(str(step.get("summary") or ""))
+    if input_summary:
+        details.append(f"入参：{input_summary}")
+    if output_summary:
+        details.append(f"结果：{output_summary}")
+    elif not details and legacy_summary:
+        details.append(legacy_summary)
+    suffix = f"（{'；'.join(details)}）" if details else ""
+    return f"{idx}. [{st}] {title}{suffix}"
+
+
 def render_diagnosis_report(
     *,
     qa: dict[str, Any],
@@ -80,11 +106,7 @@ def render_diagnosis_report(
         if resolved_steps:
             lines.extend(["## 执行路径摘要", ""])
             for idx, step in enumerate(resolved_steps, start=1):
-                label = _clean_text(str(step.get("label") or step.get("step_id") or f"步骤 {idx}"))
-                st = _clean_text(str(step.get("status") or ""))
-                summary = _clean_text(str(step.get("summary") or ""))
-                suffix = f"：{summary}" if summary else ""
-                lines.append(f"{idx}. [{st}] {label}{suffix}")
+                lines.append(_format_step_line(idx, step))
             lines.append("")
         lines.extend(["## 排查结论与证据正文", "", answer_text, ""])
         if resolved_citations:
@@ -117,11 +139,7 @@ def render_diagnosis_report(
     if resolved_steps:
         doc.add_heading("执行路径摘要", level=2)
         for idx, step in enumerate(resolved_steps, start=1):
-            label = _clean_text(str(step.get("label") or step.get("step_id") or f"步骤 {idx}"))
-            st = _clean_text(str(step.get("status") or ""))
-            summary = _clean_text(str(step.get("summary") or ""))
-            suffix = f"：{summary}" if summary else ""
-            doc.add_paragraph(f"{idx}. [{st}] {label}{suffix}")
+            doc.add_paragraph(_format_step_line(idx, step))
 
     doc.add_heading("排查结论与证据正文", level=2)
     for paragraph in answer_text.splitlines():

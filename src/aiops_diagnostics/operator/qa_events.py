@@ -7,6 +7,7 @@ import json
 import re
 import sqlite3
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -121,6 +122,16 @@ def project_steps_from_trace(trace: list[dict[str, Any]], *, language: str = "zh
     counter = 0
     for item in trace or []:
         phase = str(item.get("phase") or "")
+        if phase in {"completed", "failed", "cancelled", "expired"}:
+            terminal_status = "succeeded" if phase == "completed" else "failed"
+            elapsed_ms = max(0, int(item.get("elapsed_ms") or 0))
+            for pending in open_by_key.values():
+                pending["status"] = terminal_status
+                if pending.get("duration_ms") is None:
+                    pending["duration_ms"] = max(0, elapsed_ms - int(pending.get("elapsed_ms") or 0))
+                pending["elapsed_ms"] = max(int(pending.get("elapsed_ms") or 0), elapsed_ms)
+            open_by_key.clear()
+            continue
         tool = item.get("tool")
         desc = step_descriptor(phase, str(tool) if tool else None, language)
         if desc is None:
@@ -180,6 +191,8 @@ def format_sse_frame(event_type: str, payload: dict[str, Any], *, event_id: int 
 class QAEventStore:
     """短期有序问答事件流存储（支持断线续传与零轮询异步唤醒）。"""
 
+    _CLEANUP_INTERVAL_SECONDS = 300.0
+
     def __init__(self, path: Path) -> None:
         self.path = path.expanduser().resolve()
         ensure_private_directory(self.path.parent)
@@ -187,48 +200,77 @@ class QAEventStore:
         protect_private_file(self.path)
         self._lock = threading.Lock()
         self._waiters: dict[str, list[tuple[asyncio.AbstractEventLoop, asyncio.Event]]] = {}
+        self._last_cleanup_monotonic = 0.0
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
         with gateway_db.connection(self.path, write=write) as conn:
             yield conn
 
+    @staticmethod
+    def _retention_cutoff(now: datetime | None = None) -> str:
+        return format_stored_time((now or now_utc()) - timedelta(days=EVENT_RETENTION_DAYS))
+
+    def _maybe_expire(self, conn: sqlite3.Connection, now: datetime, *, force: bool = False) -> None:
+        monotonic_now = time.monotonic()
+        if not force and (monotonic_now - self._last_cleanup_monotonic) < self._CLEANUP_INTERVAL_SECONDS:
+            return
+        conn.execute(
+            "DELETE FROM assistant_qa_events WHERE created_at <= ?",
+            (self._retention_cutoff(now),),
+        )
+        self._last_cleanup_monotonic = monotonic_now
+
     def append(self, qa_id: str, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.append_many(qa_id, [(event_type, payload)])[0]
+
+    def append_many(self, qa_id: str, events: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+        """在单个写事务内按序写入多帧事件并统一唤醒订阅者（避免终局复核替换竞态）。"""
+        if not events:
+            return []
         now = now_utc()
+        now_text = format_stored_time(now)
+        force_cleanup = any(et == "run_started" for et, _ in events)
+        created: list[dict[str, Any]] = []
         with self._connection(write=True) as conn:
+            self._maybe_expire(conn, now, force=force_cleanup)
             row = conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM assistant_qa_events WHERE qa_id = ?",
+                "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM assistant_qa_events WHERE qa_id = ?",
                 (qa_id,),
             ).fetchone()
-            seq = int(row["next_seq"])
-            body = {"seq": seq, **payload}
-            conn.execute(
-                """
-                INSERT INTO assistant_qa_events (qa_id, seq, event_type, payload_json, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    qa_id,
-                    seq,
-                    event_type,
-                    json.dumps(body, ensure_ascii=False),
-                    format_stored_time(now),
-                ),
-            )
+            next_seq = int(row["max_seq"])
+            for event_type, payload in events:
+                next_seq += 1
+                body = {"seq": next_seq, **payload}
+                conn.execute(
+                    """
+                    INSERT INTO assistant_qa_events (qa_id, seq, event_type, payload_json, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        qa_id,
+                        next_seq,
+                        event_type,
+                        json.dumps(body, ensure_ascii=False),
+                        now_text,
+                    ),
+                )
+                created.append({"seq": next_seq, "event": event_type, "data": body})
         self._notify(qa_id)
-        return {"seq": seq, "event": event_type, "data": body}
+        return created
 
     def list_after(self, qa_id: str, after_seq: int = 0, *, limit: int = 500) -> list[dict[str, Any]]:
+        cutoff = self._retention_cutoff()
         with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT seq, event_type, payload_json
                 FROM assistant_qa_events
-                WHERE qa_id = ? AND seq > ?
+                WHERE qa_id = ? AND seq > ? AND created_at > ?
                 ORDER BY seq ASC
                 LIMIT ?
                 """,
-                (qa_id, max(0, int(after_seq)), limit),
+                (qa_id, max(0, int(after_seq)), cutoff, limit),
             ).fetchall()
         return [
             {
@@ -239,45 +281,61 @@ class QAEventStore:
             for r in rows
         ]
 
-    def has_delta_events(self, qa_id: str) -> bool:
+    def has_any_events(self, qa_id: str) -> bool:
+        cutoff = self._retention_cutoff()
         with self._connection() as conn:
             row = conn.execute(
-                "SELECT 1 FROM assistant_qa_events WHERE qa_id = ? AND event_type = 'message_delta' LIMIT 1",
-                (qa_id,),
+                "SELECT 1 FROM assistant_qa_events WHERE qa_id = ? AND created_at > ? LIMIT 1",
+                (qa_id, cutoff),
+            ).fetchone()
+        return row is not None
+
+    def has_delta_events(self, qa_id: str) -> bool:
+        cutoff = self._retention_cutoff()
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM assistant_qa_events
+                WHERE qa_id = ? AND event_type = 'message_delta' AND created_at > ?
+                LIMIT 1
+                """,
+                (qa_id, cutoff),
             ).fetchone()
         return row is not None
 
     def streamed_text(self, qa_id: str) -> str:
+        cutoff = self._retention_cutoff()
         with self._connection() as conn:
             rows = conn.execute(
                 """
                 SELECT payload_json FROM assistant_qa_events
-                WHERE qa_id = ? AND event_type = 'message_delta'
+                WHERE qa_id = ? AND event_type = 'message_delta' AND created_at > ?
                 ORDER BY seq ASC
                 """,
-                (qa_id,),
+                (qa_id, cutoff),
             ).fetchall()
         return "".join(str(json.loads(str(r["payload_json"])).get("delta") or "") for r in rows)
 
     def has_terminal_event(self, qa_id: str) -> bool:
         placeholders = ",".join("?" for _ in TERMINAL_EVENT_TYPES)
+        cutoff = self._retention_cutoff()
         with self._connection() as conn:
             row = conn.execute(
                 f"""
                 SELECT 1 FROM assistant_qa_events
-                WHERE qa_id = ? AND event_type IN ({placeholders})
+                WHERE qa_id = ? AND event_type IN ({placeholders}) AND created_at > ?
                 LIMIT 1
                 """,
-                (qa_id, *sorted(TERMINAL_EVENT_TYPES)),
+                (qa_id, *sorted(TERMINAL_EVENT_TYPES), cutoff),
             ).fetchone()
         return row is not None
 
     def expire_now(self, *, at: datetime | None = None) -> int:
-        cutoff = (at or now_utc()) - timedelta(days=EVENT_RETENTION_DAYS)
+        cutoff = self._retention_cutoff(at)
         with self._connection(write=True) as conn:
             cursor = conn.execute(
                 "DELETE FROM assistant_qa_events WHERE created_at <= ?",
-                (format_stored_time(cutoff),),
+                (cutoff,),
             )
             return cursor.rowcount
 

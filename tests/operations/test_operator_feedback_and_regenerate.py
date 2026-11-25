@@ -224,3 +224,72 @@ def test_regenerate_failure_preserves_existing_turn_and_releases_busy_lock(tmp_p
         assert conv["turn_count"] == 1
         assert conv["turns"][0]["qa_id"] == qa1
         assert "首版稳定结论" in conv["turns"][0]["answer"]["blocks"][0]["text"]
+
+
+def test_stale_cancelled_regenerate_cannot_unlock_or_overwrite_newer_regenerate(tmp_path, monkeypatch):
+    """回归测试 BUG_0005：取消重生成 A 并立刻启动重生成 B 后，A 延迟收尾不得解锁 B 或覆写答复。"""
+    import threading
+
+    with environment(tmp_path, monkeypatch) as env:
+        release_a = threading.Event()
+        release_b = threading.Event()
+        a_entered = threading.Event()
+        b_entered = threading.Event()
+        call_no = {"n": 0}
+
+        def _dispatch(self, _cfg, run_id):
+            call_no["n"] += 1
+            n = call_no["n"]
+            if n == 1:
+                node(env, run_id, tools=("cpms_order_detail",), answer="首版结论。")
+                return
+            if n == 2:
+                a_entered.set()
+                release_a.wait(timeout=5)
+                raise RuntimeError("stale regen A delayed failure")
+            b_entered.set()
+            release_b.wait(timeout=5)
+            node(env, run_id, tools=("cpms_order_detail",), answer="新重生成 B 结论。")
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", _dispatch)
+
+        # Turn 1 initial completion
+        t1 = env["client"].post(
+            "/v1/assistant/questions",
+            headers=HEADERS,
+            json={"question": f"排查订单 {ORDER}", "order_no": ORDER},
+        )
+        assert t1.status_code == 202
+        qa1 = t1.json()["qa_id"]
+        conv_id = t1.json()["conversation_id"]
+        assert _wait_completed(env["client"], qa1)["status"] == "completed"
+
+        # Start Regen A, cancel it while still running in worker
+        r_a = env["client"].post(f"/v1/assistant/questions/{qa1}/regenerate", headers=HEADERS)
+        assert r_a.status_code == 202
+        qa_a = r_a.json()["qa_id"]
+        assert a_entered.wait(timeout=5)
+        cancel_a = env["client"].post(f"/v1/assistant/questions/{qa_a}/cancel", headers=HEADERS)
+        assert cancel_a.status_code == 200
+
+        # Immediately start Regen B (reuses turn_no=1 with a new claim_id)
+        r_b = env["client"].post(f"/v1/assistant/questions/{qa1}/regenerate", headers=HEADERS)
+        assert r_b.status_code == 202
+        qa_b = r_b.json()["qa_id"]
+        assert b_entered.wait(timeout=5)
+
+        # Let stale worker A finish & fail -> MUST NOT unlock B's conversation slot!
+        release_a.set()
+        time.sleep(0.15)
+        r_c = env["client"].post(f"/v1/assistant/questions/{qa1}/regenerate", headers=HEADERS)
+        assert r_c.status_code == 409
+        assert r_c.json()["error"]["code"] == "CONVERSATION_BUSY"
+
+        # Let B finish cleanly -> B persists and unlocks cleanly
+        release_b.set()
+        done_b = _wait_completed(env["client"], qa_b)
+        assert done_b["status"] == "completed"
+        conv = env["client"].get(f"/v1/conversations/{conv_id}", headers=HEADERS).json()
+        assert conv["is_generating"] is False
+        assert conv["turns"][0]["qa_id"] == qa_b
+        assert "新重生成 B 结论" in conv["turns"][0]["answer"]["blocks"][0]["text"]

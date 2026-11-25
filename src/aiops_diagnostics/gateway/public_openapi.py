@@ -265,12 +265,29 @@ def _schemas() -> dict[str, Any]:
         "Recommendations": _object(recommendations=objects),
         "Shortcuts": _object(count={"type": "integer"}, shortcuts=objects),
         "Banners": _object(count={"type": "integer"}, banners=objects),
-        "Starters": _object(
-            opening=string,
-            suggested_questions={"type": "array", "items": string},
-            opening_source=string,
-            suggested_source=string,
-        ),
+        "Starters": {
+            **_object(
+                agent_id=string,
+                language=string,
+                starters_version=string,
+                greeting=string,
+                supporting_text=string,
+                opening=string,
+                suggested_questions={
+                    "type": "array",
+                    "items": {
+                        "anyOf": [
+                            string,
+                            {**_object(id=string, text=string), "required": ["id", "text"]},
+                        ]
+                    },
+                },
+                disclaimer=string,
+                opening_source=string,
+                suggested_source=string,
+            ),
+            "required": ["opening", "suggested_questions"],
+        },
         "OrderAccess": _object(
             order_no=string, accessible={"type": "boolean", "const": True}, scope_fingerprint=string
         ),

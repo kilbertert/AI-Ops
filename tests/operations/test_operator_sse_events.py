@@ -252,3 +252,148 @@ def test_sse_stream_replay_resume_replace_cancel_and_isolation(tmp_path: Path) -
             json={"delta": "hi"},
         )
         assert unauth.status_code == 403
+
+
+def test_qa_events_seven_day_retention_enforced_on_read_and_write(tmp_path: Path) -> None:
+    """回归测试 BUG_0007：无需手工调用 expire_now，7 天外事件在回放中立即过滤并在新事件写入时清扫。"""
+    import sqlite3
+    from contextlib import closing
+    from datetime import timedelta
+
+    from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
+
+    client, store = _client(tmp_path)
+    scope_a = _MultiUserCaller().resolve("user-a", required_scope="aiops:diagnoses:write").scope_fingerprint
+    with client:
+        qa_old = store.create_assistant_question(scope_a, "旧问答", tenant_id="T-A")
+        qa_new = store.create_assistant_question(scope_a, "新问答", tenant_id="T-A")
+        events = client.app.state.gateway.qa_events
+        events.append(qa_old["qa_id"], "message_delta", {"delta": "8天前草稿"})
+        eight_days_ago = format_stored_time(now_utc() - timedelta(days=8))
+        with closing(sqlite3.connect(tmp_path / "gateway.db")) as conn, conn:
+            conn.execute(
+                "UPDATE assistant_qa_events SET created_at = ? WHERE qa_id = ?",
+                (eight_days_ago, qa_old["qa_id"]),
+            )
+        # Replay immediately excludes expired rows without calling expire_now().
+        assert events.list_after(qa_old["qa_id"], after_seq=0) == []
+        # Writing a new run_started triggers automatic sweep of expired rows.
+        events.append(qa_new["qa_id"], "run_started", {"qa_id": qa_new["qa_id"]})
+        with closing(sqlite3.connect(tmp_path / "gateway.db")) as conn:
+            remaining_old = conn.execute(
+                "SELECT COUNT(*) FROM assistant_qa_events WHERE qa_id = ?",
+                (qa_old["qa_id"],),
+            ).fetchone()[0]
+        assert remaining_old == 0
+
+
+def test_sse_live_order_reauthorization_and_nonblocking_event_loop(tmp_path: Path, monkeypatch) -> None:
+    """回归测试 SEC_0001 与 BUG_0004：
+    1. 运行中/失败态订单问答在订单改归不可见站点后，SSE 立即拒绝并绝不回放草稿正文；
+    2. SSE 复核 CPMS 权限阻塞期间，同进程事件循环仍能立即响应其他请求。
+    """
+    import asyncio
+    import threading
+    import time
+
+    import httpx
+
+    from aiops_diagnostics.operator import operator_cpms
+    from operations.test_operator_cpms import HEADERS, NODE_A_TOKEN, ORDER, environment
+
+    with environment(tmp_path, monkeypatch) as env:
+        order_bound = threading.Event()
+        release_worker = threading.Event()
+
+        def _dispatch(self, _cfg, run_id):
+            # Grant order tool so run.order_no & task.order_site_id are bound, then push a draft delta
+            from aiops_diagnostics.operator import operator_tools
+
+            run = env["ctx"].agent_run_store.get(run_id)
+            contract = (
+                operator_cpms.OBJECT_CONTRACT
+                if operator_tools.tool("cpms_order_detail").kind == "object"
+                else operator_cpms.TOOL_CONTRACT
+            )
+            env["ctx"].operator_cpms.grant(
+                run_id,
+                NODE_A_TOKEN,
+                run.expected_agent_version,
+                "cpms_order_detail",
+                contract,
+                {"order_no": ORDER},
+            )
+            env["ctx"].operator_cpms.stream_chunk(
+                run_id,
+                NODE_A_TOKEN,
+                run.expected_agent_version,
+                "绝密订单草稿片段",
+                chunk_index=0,
+            )
+            order_bound.set()
+            release_worker.wait(timeout=5)
+            raise RuntimeError("stop test worker")
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", _dispatch)
+
+        ask = env["client"].post(
+            "/v1/assistant/questions",
+            headers=HEADERS,
+            json={"question": f"核对订单 {ORDER}", "order_no": ORDER},
+        )
+        assert ask.status_code == 202, ask.text
+        qa_id = ask.json()["qa_id"]
+        assert order_bound.wait(timeout=5)
+
+        # SEC_0001: Move order to an invisible site -> SSE on running QA MUST refuse and leak zero draft!
+        original_site = env["state"]["site"]
+        env["state"]["site"] = "site-moved-out"
+        blocked_running = env["client"].get(f"/v1/assistant/questions/{qa_id}/events", headers=HEADERS)
+        assert blocked_running.status_code in {403, 404}
+        assert "绝密订单草稿片段" not in blocked_running.text
+
+        # Let worker fail -> SSE on failed QA MUST ALSO refuse and leak zero draft!
+        release_worker.set()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            st = env["client"].get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS).json()["status"]
+            if st == "failed":
+                break
+            time.sleep(0.02)
+        blocked_failed = env["client"].get(f"/v1/assistant/questions/{qa_id}/events", headers=HEADERS)
+        assert blocked_failed.status_code in {403, 404}
+        assert "绝密订单草稿片段" not in blocked_failed.text
+
+        # BUG_0004: Slow down CPMS check by 0.35s, prove /health still completes concurrently
+        env["state"]["site"] = original_site
+        real_cpms_get = operator_cpms.cpms_get
+        entered_cpms = threading.Event()
+
+        def _slow_cpms_get(*args, **kwargs):
+            entered_cpms.set()
+            time.sleep(0.35)
+            return real_cpms_get(*args, **kwargs)
+
+        monkeypatch.setattr(operator_cpms, "cpms_get", _slow_cpms_get)
+
+        async def _verify_concurrent() -> float:
+            transport = httpx.ASGITransport(app=env["app"])
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+                sse_task = asyncio.create_task(
+                    ac.get(f"/v1/assistant/questions/{qa_id}/events", headers=HEADERS)
+                )
+                for _ in range(50):
+                    if entered_cpms.is_set():
+                        break
+                    await asyncio.sleep(0.01)
+                assert entered_cpms.is_set(), "expected SSE auth to enter CPMS check"
+                t0 = time.monotonic()
+                health = await ac.get("/health")
+                health_elapsed = time.monotonic() - t0
+                assert health.status_code == 200
+                sse_resp = await sse_task
+                assert sse_resp.status_code == 200
+                return health_elapsed
+
+        health_elapsed = asyncio.run(_verify_concurrent())
+        assert health_elapsed < 0.25, f"event loop blocked during CPMS check ({health_elapsed:.3f}s)"

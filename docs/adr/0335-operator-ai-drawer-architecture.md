@@ -42,5 +42,5 @@
 
 - 数据库架构版本升级至 `VERSION = 3`（新增 `assistant_files`、`assistant_qa_events`、`assistant_feedback` 三张表及向后兼容扩展列，所有旧表新增列均登记于 `LEGACY_COLUMNS`，可从历史版本原位迁移）。
 - 新增运行依赖 `python-multipart`、`pypdf`、`python-docx`、`olefile`，并同步更新 `uv.lock` 与 `deploy/m2-live-03/gateway-requirements.txt`；Java 节点产物同步更新 `deploy/m2-live-03/images.lock.json` 与 `HOST-CHANGE.md`。
-- 若上线后需回退：Gateway 新路由均位于独立新增端点与兼容扩展字段，不影响现有 C 端与管家 H5 既有接口；Java 节点的 `StreamDeltaPusher` 对旧版 Gateway 404 自动降级，因此支持按标准流程独立回滚 Gateway 或节点 JAR 而不阻断主排查链路。
+- **回滚约束（显式前置条件）**：升级启动后 `gateway_schema.ensure` 会将共享 SQLite 库的 `PRAGMA user_version` 写入 `3`；由于旧版 Gateway 的 `_version()` 对高于 `2` 的架构版本执行 fail-closed 拒绝启动，**上线前必须先对 `gateway.db` 做一致性 SQLite 快照备份（`.backup()`）**。若确需回退至 `VERSION = 2` 的旧版 Gateway，须停机并恢复升级前的 `VERSION = 2` 数据库备份后启动旧版（禁止就地手工改低 `PRAGMA user_version`，以免与旧版表结构校验冲突）。Gateway 新路由位于独立新增端点与兼容扩展字段，不影响现有 C 端与管家 H5 既有接口；Java 执行节点的 `StreamDeltaPusher` 对旧版 Gateway `404` 自动静默降级，仍支持独立回滚节点 JAR。
 - 真实公司环境下的 UPMS/Mall 联调、Nacos 上传白名单确认及真实模型业务准确率尚未通过本地测试证明，须通过 #1714 完成真实环境人工验收。

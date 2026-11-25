@@ -6,10 +6,12 @@ import asyncio
 import contextlib
 import platform
 import sqlite3
+import uuid
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, Query, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from aiops_diagnostics import __version__
 from aiops_diagnostics.common.config import Settings
@@ -164,8 +166,15 @@ def _try_operator_cpms_route(
 
     resolved_attachments = list(attachments or [])
     attachment_ids = [str(item["file_id"]) for item in resolved_attachments]
+    claim_id = "clm_" + uuid.uuid4().hex if conversation is not None else None
     turn_no = api._begin_conversation_turn(
-        context, caller, conversation, "qa", payload.question, attachment_ids=attachment_ids or None
+        context,
+        caller,
+        conversation,
+        "qa",
+        payload.question,
+        attachment_ids=attachment_ids or None,
+        claim_id=claim_id,
     )
     try:
         qa = context.runtime.start_operator_cpms(
@@ -184,9 +193,10 @@ def _try_operator_cpms_route(
             conversation_turn=(conversation["conversation_id"], caller.scope_fingerprint, turn_no)
             if conversation is not None and turn_no is not None
             else None,
+            claim_id=claim_id,
         )
     except Exception:
-        api._release_conversation_turn(context, conversation, turn_no)
+        api._release_conversation_turn(context, conversation, turn_no, claim_id=claim_id)
         raise
     from aiops_diagnostics.operator.attachments import public_file_dict
 
@@ -770,14 +780,29 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                     "Last-Event-ID must be a non-negative integer",
                 ) from exc
 
-        qa = context.runtime.get_assistant_qa(caller, qa_id)
+        def _authorize_stream_access(target_qa: dict[str, Any]) -> None:
+            from aiops_diagnostics.operator import operator_cpms
+
+            api._require_current_chat_order(context, caller, target_qa, request)
+            if (
+                str(target_qa.get("internal_run_id") or "").startswith(operator_cpms.PREFIX)
+                and target_qa.get("status") != "completed"
+            ):
+                api._require_operator_company_token(request)
+                context.operator_cpms.verify_live_stream_access(
+                    caller,
+                    target_qa["qa_id"],
+                    request.headers.get("Authorization", "").removeprefix("Bearer "),
+                )
+
+        qa = await run_in_threadpool(context.runtime.get_assistant_qa, caller, qa_id)
         if qa is None:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND,
                 "QA_NOT_FOUND",
                 "assistant question not found",
             )
-        api._require_current_chat_order(context, caller, qa, request)
+        await run_in_threadpool(_authorize_stream_access, qa)
         heartbeat = float(getattr(context, "sse_heartbeat_seconds", SSE_HEARTBEAT_SECONDS))
 
         def _synthesize_terminal(current_qa: dict[str, Any], seq_num: int) -> str:
@@ -820,8 +845,20 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         async def _event_stream():
             nonlocal cursor
             saw_terminal = False
+            first_iteration = True
             while True:
-                batch = context.qa_events.list_after(qa_id, after_seq=cursor)
+                if not first_iteration:
+                    current_qa = await run_in_threadpool(context.runtime.get_assistant_qa, caller, qa_id)
+                    if current_qa is None:
+                        return
+                    try:
+                        await run_in_threadpool(_authorize_stream_access, current_qa)
+                    except Exception:  # noqa: BLE001 - 权限撤回立即终止流，绝不继续吐草稿
+                        return
+                else:
+                    current_qa = qa
+                    first_iteration = False
+                batch = await run_in_threadpool(context.qa_events.list_after, qa_id, after_seq=cursor)
                 for item in batch:
                     cursor = item["seq"]
                     yield format_sse_frame(item["event"], item["data"], event_id=item["seq"])
@@ -829,21 +866,31 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                         saw_terminal = True
                 if saw_terminal:
                     return
-                current_qa = context.runtime.get_assistant_qa(caller, qa_id)
+                current_qa = await run_in_threadpool(context.runtime.get_assistant_qa, caller, qa_id)
                 if current_qa is None:
                     return
                 try:
-                    api._require_current_chat_order(context, caller, current_qa, request)
+                    await run_in_threadpool(_authorize_stream_access, current_qa)
                 except Exception:  # noqa: BLE001 - 权限撤回立即终止流
                     return
                 if str(current_qa["status"]) not in QUESTION.active:
-                    # 补发最新落库事件（避免竞态窗口漏帧）
-                    tail = context.qa_events.list_after(qa_id, after_seq=cursor)
+                    # 补发最新落库事件；若已有事件流，短暂等待终局复核帧原子落库
+                    tail = await run_in_threadpool(context.qa_events.list_after, qa_id, after_seq=cursor)
                     for item in tail:
                         cursor = item["seq"]
                         yield format_sse_frame(item["event"], item["data"], event_id=item["seq"])
                         if item["event"] in TERMINAL_EVENT_TYPES:
                             return
+                    if await run_in_threadpool(context.qa_events.has_any_events, qa_id):
+                        await context.qa_events.wait_for_update(qa_id, timeout=1.0)
+                        tail_after_wait = await run_in_threadpool(
+                            context.qa_events.list_after, qa_id, after_seq=cursor
+                        )
+                        for item in tail_after_wait:
+                            cursor = item["seq"]
+                            yield format_sse_frame(item["event"], item["data"], event_id=item["seq"])
+                            if item["event"] in TERMINAL_EVENT_TYPES:
+                                return
                     yield _synthesize_terminal(current_qa, cursor + 1)
                     return
                 if await request.is_disconnected():
@@ -1095,6 +1142,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             ) from exc
 
         turn_no = int(regen["turn_no"])
+        claim_id = str(regen["claim_id"])
         conv_ref = {"conversation_id": conversation_id, "scope_fingerprint": caller.scope_fingerprint}
         try:
             attachment_ids = list(regen.get("attachment_ids") or [])
@@ -1109,7 +1157,9 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 else []
             )
         except AttachmentError as exc:
-            api._release_conversation_turn(context, conv_ref, turn_no, preserve_completed=True)
+            api._release_conversation_turn(
+                context, conv_ref, turn_no, preserve_completed=True, claim_id=claim_id
+            )
             raise StandardAPIError(exc.http_status, exc.code, exc.message, retryable=exc.retryable) from exc
 
         internal_run_id = str(qa.get("internal_run_id") or "")
@@ -1149,9 +1199,12 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 conversation_turn=(conversation_id, caller.scope_fingerprint, turn_no),
                 attempt_no=int(regen["next_attempt_no"]),
                 parent_qa_id=qa_id,
+                claim_id=claim_id,
             )
         except Exception:
-            api._release_conversation_turn(context, conv_ref, turn_no, preserve_completed=True)
+            api._release_conversation_turn(
+                context, conv_ref, turn_no, preserve_completed=True, claim_id=claim_id
+            )
             raise
 
         return JSONResponse(

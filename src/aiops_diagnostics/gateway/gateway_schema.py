@@ -366,6 +366,7 @@ TABLES = {
             "active_order_no": "TEXT",
             "generating_since": "TEXT",
             "generating_turn_no": "INTEGER",
+            "generating_claim_id": "TEXT",
             "last_turn_no": "INTEGER NOT NULL DEFAULT 0",
             "created_at": "TEXT NOT NULL",
             "updated_at": "TEXT NOT NULL",
@@ -644,7 +645,14 @@ LEGACY_COLUMNS = {
     ),
     "assistant_questions": ("tenant_id", "agent_id", "attachment_ids_json", "attempt_no", "parent_qa_id"),
     "shortcuts": ("kind", "image_url"),
-    "conversations": ("generating_turn_no", "last_turn_no", "operator_binding", "agent_id", "title"),
+    "conversations": (
+        "generating_turn_no",
+        "generating_claim_id",
+        "last_turn_no",
+        "operator_binding",
+        "agent_id",
+        "title",
+    ),
     "conversation_turns": (
         "status_qa_id",
         "attempt_no",

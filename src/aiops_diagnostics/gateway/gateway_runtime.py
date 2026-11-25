@@ -77,6 +77,8 @@ class JobRegistration:
     cancelled: bool = False
     #: 原地重生成失败/取消时为 True，释放槽位但不删已有已完成答复。
     preserve_completed: bool = False
+    #: 每次生成认领的唯一持有标识，防旧重生成任务延迟收尾误解新认领锁。
+    claim_id: str | None = None
 
 
 class GatewayRuntime:
@@ -620,6 +622,7 @@ class GatewayRuntime:
         attachments=None,
         attempt_no=1,
         parent_qa_id=None,
+        claim_id=None,
     ):
         return service.start(
             caller,
@@ -634,6 +637,7 @@ class GatewayRuntime:
                 conversation_turn=conversation_turn,
                 route_type="qa",
                 preserve_completed=int(attempt_no) > 1,
+                claim_id=claim_id,
             ),
             language=language,
             trial_manifest=trial_manifest,
@@ -842,6 +846,7 @@ class GatewayRuntime:
                     self._release_conversation_turn(
                         registration.conversation_turn,
                         preserve_completed=registration.preserve_completed,
+                        claim_id=registration.claim_id,
                     )
             if accepted:
                 self._record_cancelled_job_metric(context, registration)
@@ -879,6 +884,7 @@ class GatewayRuntime:
         conversation_turn: tuple[str, str, int] | None,
         *,
         preserve_completed: bool = False,
+        claim_id: str | None = None,
     ) -> None:
         if conversation_turn is None:
             return
@@ -891,6 +897,7 @@ class GatewayRuntime:
                 scope_fingerprint,
                 turn_no,
                 preserve_completed=preserve_completed,
+                claim_id=claim_id,
             )
 
     def _complete_conversation_turn(
@@ -911,6 +918,8 @@ class GatewayRuntime:
         steps: list[dict[str, Any]] | None = None,
         elapsed_ms: int | None = None,
         delivery_mode: str | None = None,
+        preserve_completed: bool = False,
+        claim_id: str | None = None,
     ) -> None:
         if guarded:
             cancelled = True
@@ -938,6 +947,8 @@ class GatewayRuntime:
                 steps=steps,
                 elapsed_ms=elapsed_ms,
                 delivery_mode=delivery_mode,
+                preserve_completed=preserve_completed,
+                claim_id=claim_id,
             )
 
     def _registered_agent(self, tenant_id: str, business_entry: str) -> tuple[str | None, bool]:

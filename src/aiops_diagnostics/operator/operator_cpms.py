@@ -214,6 +214,9 @@ class OperatorCpms:
     def retract(self, route):
         cpms_task_store.retract_tasks(self, route)
 
+    def verify_live_stream_access(self, caller, qa_id, bearer):
+        return cpms_task_store.verify_live_stream_access(self, caller, qa_id, bearer, cpms_get_fn=cpms_get)
+
     # ------------------------------------------------------------------
     # CPMS 代理转发与计算工具（委托 cpms_proxy）
     # ------------------------------------------------------------------
@@ -350,6 +353,7 @@ class OperatorCpms:
                 agent_id=agent_id,
                 attempt_no=max(1, int(attempt_no)),
                 parent_qa_id=parent_qa_id,
+                claim_id=getattr(registration, "claim_id", None),
             )
             qa_events = getattr(self.context, "qa_events", None)
             if qa_events is not None:
@@ -829,8 +833,10 @@ class OperatorCpms:
             task.messages = self._messages(task)
             self._trace(run_id, "authorize", "succeeded", duration_ms=0)
             dispatcher.question = task.question
+            dispatch_started_at = time.monotonic()
             while True:
                 try:
+                    dispatch_started_at = time.monotonic()
                     self._trace(
                         run_id,
                         "dispatch",
@@ -865,6 +871,12 @@ class OperatorCpms:
                 logging.getLogger("aiops.operator").warning(
                     "operator_resample attempt=%d reason=no_answer_accepted", task.resamples
                 )
+            self._trace(
+                run_id,
+                "dispatch",
+                "succeeded",
+                duration_ms=max(0, int((time.monotonic() - dispatch_started_at) * 1000)),
+            )
             task = self.tasks[run_id]
             current = task.authorize()
             result = self.authorize_readback(
@@ -897,33 +909,37 @@ class OperatorCpms:
                         qa_events.has_delta_events(qa_id)
                         and qa_events.streamed_text(qa_id).strip() != final_text.strip()
                     )
+                    closing_events: list[tuple[str, dict]] = []
                     if needs_replace:
-                        qa_events.append(
-                            qa_id,
-                            "message_replace",
-                            {
-                                "delivery_mode": delivery_mode,
-                                "blocks": list((result or {}).get("blocks") or []),
-                                "notice": replace_notice(
-                                    task.language, evidence_only=delivery_mode == "evidence_only"
-                                ),
-                            },
+                        closing_events.append(
+                            (
+                                "message_replace",
+                                {
+                                    "delivery_mode": delivery_mode,
+                                    "blocks": list((result or {}).get("blocks") or []),
+                                    "notice": replace_notice(
+                                        task.language, evidence_only=delivery_mode == "evidence_only"
+                                    ),
+                                },
+                            )
                         )
                     if citations:
-                        qa_events.append(qa_id, "citations", {"citations": citations})
-                    qa_events.append(
-                        qa_id,
-                        "message_done",
-                        {
-                            "status": "completed",
-                            "elapsed_ms": elapsed_ms,
-                            "delivery_mode": delivery_mode,
-                            "reasoning_duration_ms": elapsed_ms,
-                            "step_count": len(steps),
-                            "citation_count": len(citations),
-                            "result": result,
-                        },
+                        closing_events.append(("citations", {"citations": citations}))
+                    closing_events.append(
+                        (
+                            "message_done",
+                            {
+                                "status": "completed",
+                                "elapsed_ms": elapsed_ms,
+                                "delivery_mode": delivery_mode,
+                                "reasoning_duration_ms": elapsed_ms,
+                                "step_count": len(steps),
+                                "citation_count": len(citations),
+                                "result": result,
+                            },
+                        )
                     )
+                    qa_events.append_many(qa_id, closing_events)
                 active_order_no = completed_run.order_no if completed_run and completed_run.order_no else None
                 self.context.runtime._complete_conversation_turn(
                     task.conversation_turn,
@@ -940,9 +956,14 @@ class OperatorCpms:
                     steps=steps,
                     elapsed_ms=elapsed_ms,
                     delivery_mode=delivery_mode,
+                    preserve_completed=task.attempt_no > 1,
+                    claim_id=task.claim_id,
                 )
         except Exception as exc:  # noqa: BLE001 - 后台失败必须收敛，凭据及上游正文不进日志。
             failure_code = _failure_code(exc)
+            failed_task = self.tasks.get(run_id)
+            if failed_task is not None and ("route", "dispatch_agent") in failed_task.open_steps:
+                self._trace(run_id, "dispatch", "failed")
             self._trace(run_id, "failed", "failed", detail=failure_code)
             reason = _failure_reason(exc)
             if not self.context.agent_run_store.fail(run_id, failure_code):
@@ -972,7 +993,9 @@ class OperatorCpms:
             )
             if task is not None:
                 self.context.runtime._release_conversation_turn(
-                    task.conversation_turn, preserve_completed=task.attempt_no > 1
+                    task.conversation_turn,
+                    preserve_completed=task.attempt_no > 1,
+                    claim_id=task.claim_id,
                 )
         finally:
             with self.lock:

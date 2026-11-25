@@ -2955,6 +2955,7 @@ def _begin_conversation_turn(
     question: str,
     *,
     attachment_ids: list[str] | None = None,
+    claim_id: str | None = None,
 ) -> int | None:
     """Claim the conversation's generation slot; 409 when busy."""
     if conversation is None:
@@ -2966,6 +2967,7 @@ def _begin_conversation_turn(
             kind=kind,
             question=question,
             attachment_ids=attachment_ids,
+            claim_id=claim_id,
         )
     except ConversationBusy as exc:
         _record_route_metric(
@@ -3049,6 +3051,7 @@ def _release_conversation_turn(
     turn_no: int | None,
     *,
     preserve_completed: bool = False,
+    claim_id: str | None = None,
 ) -> None:
     """Drop an unfinished turn row and free the slot (best effort)."""
     if conversation is None or turn_no is None:
@@ -3059,6 +3062,7 @@ def _release_conversation_turn(
             conversation["scope_fingerprint"],
             turn_no,
             preserve_completed=preserve_completed,
+            claim_id=claim_id,
         )
 
 
