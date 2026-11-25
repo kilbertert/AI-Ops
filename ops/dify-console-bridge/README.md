@@ -34,14 +34,17 @@ bash <暂存目录>/deploy.sh <暂存目录> <新的私有备份目录>
 超时或安装失败自动恢复原包、JS、snippet 并重启桥。
 成功后还须用登录运营账号做发布/试用/撤回/恢复验收；无会话 403 只证明路由和拒绝门。
 
-成功部署后若要人工恢复，使用本次备份（不恢复配置或数据库）：
+成功部署后若要人工恢复，使用本次备份（与 `deploy.sh` 自动恢复步骤一致，同步还原两个代码目录与 `bridge.service` 单元，不恢复配置或数据库）：
 
 ```bash
 systemctl stop aiops-dify-console-bridge.service
-rm -rf /opt/aiops-console-bridge/aiops_diagnostics
+rm -rf /opt/aiops-console-bridge/aiops_diagnostics /opt/aiops-console-bridge/dify_console_bridge
 cp -a <备份>/aiops_diagnostics /opt/aiops-console-bridge/aiops_diagnostics
+if [ -e <备份>/dify_console_bridge ]; then cp -a <备份>/dify_console_bridge /opt/aiops-console-bridge/dify_console_bridge; fi
 cp -a <备份>/dify-publish-button.js /srv/aiops-console-assets/dify-publish-button.js
 cp -a <备份>/dify-console-publish.conf /www/server/panel/vhost/nginx/snippets/dify-console-publish.conf
+cp -a <备份>/bridge.service /etc/systemd/system/aiops-dify-console-bridge.service
+systemctl daemon-reload
 /www/server/nginx/sbin/nginx -t && /www/server/nginx/sbin/nginx -s reload
 systemctl start aiops-dify-console-bridge.service
 ```

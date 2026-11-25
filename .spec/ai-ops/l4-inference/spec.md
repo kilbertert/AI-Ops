@@ -16,7 +16,7 @@ related:
   - src/aiops_diagnostics/publication/agent_manifest.py
   - src/aiops_diagnostics/conversation/clarification.py
   - src/aiops_diagnostics/dify/dify_tools_catalog.py
-  - src/aiops_diagnostics/dify/dify_console_publish.py
+  - services/dify-console-bridge/dify_console_bridge/bridge.py
   - src/aiops_diagnostics/dify/dify_knowledge_api.py
   - src/aiops_diagnostics/publication/agent_content.py
   - src/aiops_diagnostics/dify/dify_debug_identity.py

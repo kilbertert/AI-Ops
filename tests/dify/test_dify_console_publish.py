@@ -1853,7 +1853,6 @@ def test_the_inlined_platform_constants_match_their_sources() -> None:
     assert dify_workspaces.DIFY_PLATFORM_WORKSPACE_ID is platform_constants.DIFY_PLATFORM_WORKSPACE_ID
     assert not hasattr(bridge, "PLATFORM_TENANT_ID")
     assert not hasattr(dify_workspaces, "PLATFORM_TENANT_ID")
-    assert not hasattr(shortcut_lifecycle, "PLATFORM_TENANT_ID")
     # 快捷动作的平台命名空间属于不同领域，值本就不同；钉住这一点避免混用。
     assert shortcut_lifecycle.SHORTCUT_PLATFORM_SCOPE != bridge.DIFY_PLATFORM_WORKSPACE_ID
 

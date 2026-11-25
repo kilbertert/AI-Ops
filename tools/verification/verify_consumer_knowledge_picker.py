@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "content"))
 from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, catalogue_token
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services/dify-console-bridge"))
+
 
 def install_signed_plugin(root, base, headers, workspace, check):
     import verify_dify_chat_entry as stack

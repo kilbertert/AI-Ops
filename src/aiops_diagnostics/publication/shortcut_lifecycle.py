@@ -112,6 +112,9 @@ PLATFORM_SCOPE = "platform"
 TENANT_SCOPE = "tenant"
 #: 快捷动作表里平台默认记录的哨兵 tenant_id；与 Dify 工作区的 `DIFY_PLATFORM_WORKSPACE_ID` 无关。
 SHORTCUT_PLATFORM_SCOPE = "__platform__"
+#: 兼容 41 环境应急手册（`docs/agents/env-41-runbook.md`）中的主机旁路脚本导入；
+#: 新代码一律使用 `SHORTCUT_PLATFORM_SCOPE`。
+PLATFORM_TENANT_ID = SHORTCUT_PLATFORM_SCOPE
 SHORTCUT_SCOPES = frozenset({PLATFORM_SCOPE, TENANT_SCOPE})
 PLATFORM_ROLES = frozenset({"ROLE_PLATFORM_ADMIN"})
 # Stable codes the frontend may hard-wire behavior to (order picker etc.).

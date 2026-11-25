@@ -14,6 +14,7 @@ import yaml
 from pytest import MonkeyPatch
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "services/dify-console-bridge"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 
