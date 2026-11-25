@@ -20,7 +20,9 @@
    - 点赞/点踩/撤销：`POST /v1/assistant/questions/{qa_id}/feedback`（幂等 upsert）。
    - 历史列表/回读/重命名/删除：`GET /v1/conversations`、`GET/PATCH/DELETE /v1/conversations/{conversation_id}`。
    - 重新生成：仅允许对会话最后一轮已完成回答调用 `POST /v1/assistant/questions/{qa_id}/regenerate`（非最后一轮返回 `409 REGENERATE_NOT_ALLOWED`，并发生成返回 `409 CONVERSATION_BUSY`）。
-6. **验证边界声明**：本地自动化与 `verify-aiops-gateway` 已验证 API 契约、鉴权隔离、附件解析、SSE/断线续传/复核替换、下载中心零改码协议与 Nginx 白名单；真实公司网关 JWT、Nacos `file.upload.allowed` 后缀白名单、UPMS 无水印 OSS 落盘、真实 `notifyAndOpenFileCenter(-1)` 弹窗及真实模型业务准确率须在真实环境通过 #1714 完成人工验收。
+6. **验证边界声明**：
+   - **已实证通过（本地 + 41 生产后端全链路）**：本地自动化与 `verify-aiops-gateway` 已验证 API 契约、鉴权隔离、附件解析、SSE/断线续传/复核替换、下载中心零改码协议与 Nginx 白名单；2026-11-25 41 宿主机真实联调（见[抽屉后端上线与联调回执](../validation/2026-11-25-operator-ai-drawer-live.md)）已验证公司管家个人密码登录（`tenant-app` Bearer）、Nacos/UPMS 上传配置、5 格式附件上传与 `fileType=doc` 零水印 OSS 落盘（SHA-256 逐字节一致）、实时 SSE 与 Java 节点增量流/`Last-Event-ID` 续传/取消、下载中心导单（`3101/direction=1` 与 `10086/direction=-1`）及 `.docx`/`.md` 导出、重命名/反馈/原地重生成与双租户 7 路 404 隔离。
+   - **仍待人工/前端联调验收（由 #1714 跟踪）**：前端抽屉 UI 落地后的浏览器端联调（含打字机渲染、调用公司前端既有 `notifyAndOpenFileCenter(-1)` 触发「导出中心」弹窗并人工点击下载）、同租户普通员工站点权限变更撤权实测、20MB 边界压测，以及工程师独立确认的真实故障业务准确率。
 
 ## 身份与请求
 
