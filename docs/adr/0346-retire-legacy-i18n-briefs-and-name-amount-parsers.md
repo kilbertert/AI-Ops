@@ -5,7 +5,7 @@
 
 ## 背景
 
-在完成 [ADR-0343](0343-prune-redundant-drafts-and-obsolete-archives.md)、[ADR-0344](0344-remove-dead-code-and-split-gateway-bridge-modules.md) 与 [ADR-0345](0345-offload-legacy-receipts-to-archive-repo.md) 之后，全仓仍遗留四项经人工审查并确认取舍的结构性债务：
+在完成 [ADR-0343](0343-prune-redundant-drafts-and-obsolete-archives.md)、[ADR-0344](0344-remove-dead-symbols-and-split-gateway-bridge-srp.md) 与 [ADR-0345](0345-offload-legacy-receipts-to-archive-repo.md) 之后，全仓仍遗留四项经人工审查并确认取舍的结构性债务：
 
 1. **四份早期历史联调大文档及其测试锚定**：
    - `docs/agents/frontend-api-brief.md`（约 68 KB，已被 [public-openapi.md](../agents/public-openapi.md) 替代）
