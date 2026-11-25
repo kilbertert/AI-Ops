@@ -109,9 +109,18 @@ class OperatorCpms:
     # 任务状态、追踪与授权闸门（委托 cpms_task_store）
     # ------------------------------------------------------------------
 
-    def _trace(self, run_id, phase, status="running", *, tool=None, duration_ms=None, detail=None):
+    def _trace(
+        self, run_id, phase, status="running", *, tool=None, duration_ms=None, detail=None, summary=None
+    ):
         cpms_task_store.trace_event(
-            self, run_id, phase, status, tool=tool, duration_ms=duration_ms, detail=detail
+            self,
+            run_id,
+            phase,
+            status,
+            tool=tool,
+            duration_ms=duration_ms,
+            detail=detail,
+            summary=summary,
         )
 
     def _summarize_tool(self, run_id, task, tool, *, refusal=None):
@@ -261,6 +270,10 @@ class OperatorCpms:
         language="zh",
         trial_manifest=None,
         candidate=False,
+        agent_id="operator_main",
+        attachments=None,
+        attempt_no=1,
+        parent_qa_id=None,
     ):
         if candidate and trial_manifest is None:
             raise OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
@@ -304,11 +317,16 @@ class OperatorCpms:
                 operation="operator_agent",
                 language=language,
             )
+            attachment_rows = list(attachments or [])
             qa = self.context.store.create_assistant_question(
                 caller.scope_fingerprint,
                 question,
                 internal_run_id=PREFIX + order,
                 tenant_id=caller.effective_tenant_id,
+                agent_id=agent_id,
+                attachment_ids=[str(item["file_id"]) for item in attachment_rows],
+                attempt_no=attempt_no,
+                parent_qa_id=parent_qa_id,
             )
             if not store.bind_qa(run.run_id, qa["qa_id"]):
                 store.fail(run.run_id, "qa_binding_failed")
@@ -323,11 +341,42 @@ class OperatorCpms:
                 order_site_id,
                 conversation_turn=conversation_turn,
                 selected_order=order,
+                attachments=attachment_rows,
                 question=question,
                 language=language,
                 trial=trial_manifest is not None,
                 candidate=candidate,
+                qa_id=qa["qa_id"],
+                agent_id=agent_id,
+                attempt_no=max(1, int(attempt_no)),
+                parent_qa_id=parent_qa_id,
             )
+            qa_events = getattr(self.context, "qa_events", None)
+            if qa_events is not None:
+                from aiops_diagnostics.publication.agent_content import operator_agent_brief
+
+                qa_events.append(
+                    qa["qa_id"],
+                    "run_started",
+                    {
+                        "qa_id": qa["qa_id"],
+                        "conversation_id": conversation_turn[0] if conversation_turn else None,
+                        "turn_no": conversation_turn[2] if conversation_turn else None,
+                        "attempt_no": max(1, int(attempt_no)),
+                        "agent": operator_agent_brief(language, agent_id),
+                        "started_at": qa["created_at"],
+                    },
+                )
+                if attachment_rows:
+                    names = ", ".join(str(item["file_name"]) for item in attachment_rows[:3])
+                    self._trace(run.run_id, "attachment_parse", "running", summary=names)
+                    self._trace(
+                        run.run_id,
+                        "attachment_parse",
+                        "succeeded",
+                        duration_ms=0,
+                        summary=f"已加载 {len(attachment_rows)} 份附件上下文",
+                    )
             if candidate:
                 self.candidate_authorizations[run.run_id] = (authorize, bearer, time.monotonic() + 300)
                 expiry = threading.Timer(300, self._expire_candidate, args=(run.run_id,))
@@ -390,9 +439,16 @@ class OperatorCpms:
                 raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
             _, _, observed_orders = offline_tool.selectors(offline_tool.prior_data(self, task))
             requested_order = arguments.get("order_no")
+            reference_text = task.question
+            if task.attachments:
+                from aiops_diagnostics.operator.attachments import attachment_reference_text
+
+                extra_text = attachment_reference_text(task.attachments)
+                if extra_text:
+                    reference_text = reference_text + "\n" + extra_text
             candidate = operator_agent.order_candidate(
                 arguments,
-                task.question,
+                reference_text,
                 task.selected_order,
                 requested_order
                 if len(observed_orders) == 1 and requested_order in observed_orders
@@ -534,6 +590,26 @@ class OperatorCpms:
                 "accepted": True,
             }
 
+    def stream_chunk(self, run_id, token, manifest, delta, *, chunk_index=None):
+        """接收执行节点推送的最终答复阶段增量文本分片并写入短期事件流。"""
+        task, run, _ = self.authorize_execution(run_id, node_token=token, manifest=manifest)
+        if not isinstance(delta, str) or not delta:
+            raise OperatorRefused("OPERATOR_INVALID_BODY")
+        from aiops_diagnostics.common.redaction import contains_secret
+
+        if contains_secret(delta, (task.bearer, task.grant)):
+            raise OperatorRefused("OPERATOR_SECRET_IN_STREAM")
+        elapsed_ms = max(0, int((time.monotonic() - task.started_at) * 1000))
+        qa_events = getattr(self.context, "qa_events", None)
+        seq = None
+        if qa_events is not None and run.qa_id:
+            payload: dict = {"delta": delta, "elapsed_ms": elapsed_ms}
+            if chunk_index is not None:
+                payload["chunk_index"] = int(chunk_index)
+            event = qa_events.append(run.qa_id, "message_delta", payload)
+            seq = event["seq"]
+        return {"run_id": run_id, "accepted": True, "seq": seq}
+
     def complete(self, run_id, token, manifest, payload):
         task = self.tasks.get(run_id)
         with task.completion_lock if task is not None else threading.Lock():
@@ -613,7 +689,11 @@ class OperatorCpms:
                     )
                 except SourceError as exc:
                     raise OperatorRefused("OPERATOR_SCOPE_CHANGED") from exc
-            result = operator_agent.render(answer, evidence, task.language) if answer is not None else None
+            result = (
+                operator_agent.render(answer, evidence, task.language, attachments=task.attachments)
+                if answer is not None
+                else None
+            )
 
         history_evidence = []
         for previous_id in task.history_runs:
@@ -648,7 +728,9 @@ class OperatorCpms:
         if model_failure is not None:
             from aiops_diagnostics.operator.operator_evidence import render_evidence
 
-            result = render_evidence(evidence, task.language, secrets=(task.bearer, task.grant))
+            result = render_evidence(
+                evidence, task.language, secrets=(task.bearer, task.grant), attachments=task.attachments
+            )
             if result is None:
                 store.complete(
                     run_id,
@@ -743,7 +825,9 @@ class OperatorCpms:
             except (TypeError, ValueError):
                 manifest_tool_count = 0
             task = self.tasks[run_id]
+            self._trace(run_id, "authorize", "running")
             task.messages = self._messages(task)
+            self._trace(run_id, "authorize", "succeeded", duration_ms=0)
             dispatcher.question = task.question
             while True:
                 try:
@@ -788,12 +872,74 @@ class OperatorCpms:
             )
             if store.update_assistant_question(qa_id, status="completed", result=result):
                 self._trace(run_id, "completed", "succeeded")
+                completed_run = self.context.agent_run_store.get(run_id)
+                snapshot = (completed_run.snapshot or {}) if completed_run else {}
+                delivery_mode = str(snapshot.get("delivery_mode") or "diagnosis")
+                from aiops_diagnostics.operator.qa_events import project_steps_from_trace, replace_notice
+
+                steps = project_steps_from_trace(
+                    completed_run.trace if completed_run else [], language=task.language
+                )
+                elapsed_ms = (
+                    task.finished_elapsed_ms
+                    if task.finished_elapsed_ms is not None
+                    else max(0, int((time.monotonic() - task.started_at) * 1000))
+                )
+                citations = list((result or {}).get("citations") or [])
+                qa_events = getattr(self.context, "qa_events", None)
+                if qa_events is not None:
+                    final_text = "\n\n".join(
+                        str(b.get("text") or "")
+                        for b in (result or {}).get("blocks", [])
+                        if b.get("kind") == "text"
+                    )
+                    needs_replace = delivery_mode == "evidence_only" or (
+                        qa_events.has_delta_events(qa_id)
+                        and qa_events.streamed_text(qa_id).strip() != final_text.strip()
+                    )
+                    if needs_replace:
+                        qa_events.append(
+                            qa_id,
+                            "message_replace",
+                            {
+                                "delivery_mode": delivery_mode,
+                                "blocks": list((result or {}).get("blocks") or []),
+                                "notice": replace_notice(
+                                    task.language, evidence_only=delivery_mode == "evidence_only"
+                                ),
+                            },
+                        )
+                    if citations:
+                        qa_events.append(qa_id, "citations", {"citations": citations})
+                    qa_events.append(
+                        qa_id,
+                        "message_done",
+                        {
+                            "status": "completed",
+                            "elapsed_ms": elapsed_ms,
+                            "delivery_mode": delivery_mode,
+                            "reasoning_duration_ms": elapsed_ms,
+                            "step_count": len(steps),
+                            "citation_count": len(citations),
+                            "result": result,
+                        },
+                    )
+                active_order_no = completed_run.order_no if completed_run and completed_run.order_no else None
                 self.context.runtime._complete_conversation_turn(
                     task.conversation_turn,
                     task.question,
                     result,
                     status_qa_id=qa_id,
-                    active_order_no=self.context.agent_run_store.get(run_id).order_no or None,
+                    active_order_no=active_order_no,
+                    attempt_no=task.attempt_no,
+                    parent_qa_id=task.parent_qa_id,
+                    attachment_ids=[str(item["file_id"]) for item in task.attachments]
+                    if task.attachments
+                    else None,
+                    citations=citations,
+                    steps=steps,
+                    elapsed_ms=elapsed_ms,
+                    delivery_mode=delivery_mode,
                 )
         except Exception as exc:  # noqa: BLE001 - 后台失败必须收敛，凭据及上游正文不进日志。
             failure_code = _failure_code(exc)
@@ -802,12 +948,32 @@ class OperatorCpms:
             if not self.context.agent_run_store.fail(run_id, failure_code):
                 self.context.agent_run_store.refuse(run_id, failure_code)
             store.update_assistant_question(qa_id, status="failed", error_code=_failure_code(exc))
+            qa_events = getattr(self.context, "qa_events", None)
+            task = self.tasks.get(run_id)
+            if qa_events is not None and not qa_events.has_terminal_event(qa_id):
+                elapsed_ms = (
+                    max(0, int((time.monotonic() - task.started_at) * 1000)) if task is not None else 0
+                )
+                qa_events.append(
+                    qa_id,
+                    "run_failed",
+                    {
+                        "status": "failed",
+                        "elapsed_ms": elapsed_ms,
+                        "error": {
+                            "code": failure_code,
+                            "message": failure_code,
+                            "retryable": failure_code != "OPERATOR_MODEL_QUOTA_EXHAUSTED",
+                        },
+                    },
+                )
             logging.getLogger("aiops.operator").warning(
                 "operator_run_failed reason=%s code=%s", reason, _failure_code(exc)
             )
-            task = self.tasks.get(run_id)
             if task is not None:
-                self.context.runtime._release_conversation_turn(task.conversation_turn)
+                self.context.runtime._release_conversation_turn(
+                    task.conversation_turn, preserve_completed=task.attempt_no > 1
+                )
         finally:
             with self.lock:
                 self.tasks.pop(run_id, None)

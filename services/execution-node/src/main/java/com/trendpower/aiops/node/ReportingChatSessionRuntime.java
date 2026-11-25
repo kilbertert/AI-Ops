@@ -88,6 +88,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         String manifestId = null;
         boolean publicationInstalled = false;
         var previousMessages = modelFactory.messages();
+        StreamDeltaPusher deltaPusher = null;
         try {
             if (managedPublication) {
                 JsonNode publication = gateway.post(
@@ -113,7 +114,8 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                     for (var row : rows) {
                         String role = row.path("role").asText();
                         String content = row.path("content").asText();
-                        if (!role.equals(index % 2 == 0 ? "user" : "assistant") || content.length() > 14000)
+                        int maxLen = index == rows.size() - 1 ? 48000 : 14000;
+                        if (!role.equals(index % 2 == 0 ? "user" : "assistant") || content.length() > maxLen)
                             throw new IllegalStateException("invalid gateway conversation message");
                         messages.add(role.equals("user") ? new org.springframework.ai.chat.messages.UserMessage(content)
                                 : new org.springframework.ai.chat.messages.AssistantMessage(content));
@@ -140,11 +142,20 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
             }
             manifestId = manifestId();
             boolean operator = modelFactory.manifest().operatorOutput();
-            if (operator) execution.guard().captureAnswer();
-            super.execute(wrap(request, execution, manifestId, operator));
+            if (operator) {
+                execution.guard().captureAnswer();
+                if ("operator-agent/1".equals(modelFactory.manifest().schema())) {
+                    deltaPusher = new StreamDeltaPusher(gateway, runId, manifestId, execution.settled);
+                    execution.guard().streamDeltasTo(deltaPusher);
+                }
+            }
+            super.execute(wrap(request, execution, manifestId, operator, deltaPusher));
         } catch (RuntimeException | Error failure) {
             // 构造期/派发期失败（含清单/工具漂移）：这是**本次执行**的终局失败，
             // 必须从 issued/running 落 failed，而不是留在 issued。
+            if (deltaPusher != null) {
+                deltaPusher.stop();
+            }
             String failedManifest = manifestId;
             finishOnce(execution, request, () -> {
                 reportFailed(runId, "node_failed", failedManifest);
@@ -159,7 +170,11 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         }
     }
 
-    private ChatSessionRequest wrap(ChatSessionRequest request, RunExecution execution, String manifestId, boolean operator) {
+    private ChatSessionRequest wrap(ChatSessionRequest request,
+                                    RunExecution execution,
+                                    String manifestId,
+                                    boolean operator,
+                                    StreamDeltaPusher deltaPusher) {
         String runId = execution.runId();
         return ChatSessionRequest.builder()
                 .dispatchRequest(request.getDispatchRequest())
@@ -168,10 +183,14 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                 .completionConsumer(result -> finishOnce(execution, request, () -> {
                     if (!execution.guard().finishedCleanly()) {
                         // 循环"结束"了，但最后一轮没有正常说完整（截断/长度/内容过滤/缺失）。
+                        if (deltaPusher != null) deltaPusher.stop();
                         reportFailed(runId, "model_stream_incomplete", manifestId);
                         forwardError(request, new LoopIncomplete(
                                 "model stream did not finish cleanly"));
                         return;
+                    }
+                    if (deltaPusher != null) {
+                        deltaPusher.flushAndClose();
                     }
                     if (!reportCompleted(runId, manifestId, operator ? execution.guard().lastAnswer() : null)) {
                         // Gateway 未确认：**不能**把这次 run 报成成功。
@@ -182,6 +201,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                     request.acceptCompletion(result);
                 }))
                 .errorConsumer(error -> finishOnce(execution, request, () -> {
+                    if (deltaPusher != null) deltaPusher.stop();
                     reportFailed(runId, modelFailureReason(error), manifestId);
                     forwardError(request, error);
                 }))

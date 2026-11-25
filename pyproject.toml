@@ -19,6 +19,10 @@ dependencies = [
   "uvicorn>=0.34,<1",
   "pyyaml>=6,<7",
   "pillow>=12,<13",
+  "python-multipart>=0.0.20,<1",
+  "pypdf>=6,<8",
+  "python-docx>=1.2,<2",
+  "olefile>=0.47,<1",
 ]
 
 [project.scripts]

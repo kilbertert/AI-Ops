@@ -29,9 +29,14 @@ public final class LoopTerminationGuard implements BaseAdvisor {
     private final AtomicReference<String> lastAnswer = new AtomicReference<>("");
     private final AtomicReference<Integer> rounds = new AtomicReference<>(0);
     private boolean captureAnswer;
+    private volatile StreamDeltaPusher deltaPusher;
 
     public void captureAnswer() {
         captureAnswer = true;
+    }
+
+    void streamDeltasTo(StreamDeltaPusher pusher) {
+        this.deltaPusher = pusher;
     }
 
     @Override
@@ -48,6 +53,10 @@ public final class LoopTerminationGuard implements BaseAdvisor {
     public ChatClientRequest before(ChatClientRequest request, AdvisorChain chain) {
         lastAnswer.set("");
         lastFinishReason.set(null);
+        StreamDeltaPusher pusher = this.deltaPusher;
+        if (pusher != null) {
+            pusher.discardPending();
+        }
         return request;
     }
 
@@ -55,12 +64,20 @@ public final class LoopTerminationGuard implements BaseAdvisor {
     public ChatClientResponse after(ChatClientResponse response, AdvisorChain chain) {
         String reason = null;
         String answer = "";
+        boolean hasToolCalls = false;
         if (response != null && response.chatResponse() != null
                 && response.chatResponse().getResult() != null
                 && response.chatResponse().getResult().getMetadata() != null) {
             reason = response.chatResponse().getResult().getMetadata().getFinishReason();
             var output = response.chatResponse().getResult().getOutput();
-            if (output != null && output.getText() != null) answer = output.getText();
+            if (output != null) {
+                hasToolCalls = output.hasToolCalls();
+                if (output.getText() != null) answer = output.getText();
+            }
+        }
+        StreamDeltaPusher pusher = this.deltaPusher;
+        if (hasToolCalls && pusher != null) {
+            pusher.discardPending();
         }
         if (captureAnswer) {
             String chunk = answer;
@@ -70,6 +87,9 @@ public final class LoopTerminationGuard implements BaseAdvisor {
                 }
                 return previous + chunk;
             });
+            if (pusher != null && !hasToolCalls && !chunk.isEmpty()) {
+                pusher.offer(chunk);
+            }
         }
         lastFinishReason.set(reason);
         rounds.updateAndGet(n -> n == null ? 1 : n + 1);

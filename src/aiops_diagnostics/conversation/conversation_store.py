@@ -33,6 +33,17 @@ CONVERSATION_RETENTION_DAYS = 30
 CONTEXT_MAX_TURNS = 8
 CONTEXT_MAX_TOKENS = 8000
 BUSY_LOCK_SECONDS = 120  # a crashed worker's generating flag self-expires
+AUTO_TITLE_MAX_CHARS = 40
+TITLE_MAX_CHARS = 80
+
+
+def auto_conversation_title(question: str) -> str:
+    """基于首轮提问生成清洗截断后的简短标题（<= 40 字符）。"""
+    cleaned = " ".join(redact_text(question or "").split()).strip()
+    if len(cleaned) <= AUTO_TITLE_MAX_CHARS:
+        return cleaned
+    return cleaned[: AUTO_TITLE_MAX_CHARS - 1].rstrip() + "…"
+
 
 _SAFE_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SAFE_ENTRY = re.compile(r"^(consumer|operator)$")
@@ -49,6 +60,10 @@ class ConversationNotFound(ConversationError):
 
 class ConversationBusy(ConversationError):
     """The conversation already has a generating turn."""
+
+
+class RegenerateNotAllowed(ConversationError):
+    """Only the latest completed turn of a conversation can be regenerated."""
 
 
 class ConversationStore:
@@ -91,11 +106,15 @@ class ConversationStore:
         business_entry: str,
         agent_version_key: str,
         operator_binding: str = "",
+        agent_id: str = "operator_main",
+        title: str = "",
     ) -> dict[str, Any]:
         scope = self._validate_scope(scope_fingerprint)
         if not _SAFE_ENTRY.fullmatch(business_entry or ""):
             raise ConversationError("business entry is invalid")
         agent_version_key = self._validate_agent_version(agent_version_key)
+        resolved_agent_id = (agent_id or "operator_main").strip() or "operator_main"
+        resolved_title = " ".join((title or "").split()).strip()[:TITLE_MAX_CHARS]
         now = now_utc()
         conversation_id = "conv_" + uuid.uuid4().hex
         expires_at = now + timedelta(days=CONVERSATION_RETENTION_DAYS)
@@ -106,8 +125,8 @@ class ConversationStore:
                 INSERT INTO conversations (
                     conversation_id, scope_fingerprint, business_entry,
                     agent_version_key, active_order_no, generating_since,
-                    created_at, updated_at, expires_at, operator_binding
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
+                    created_at, updated_at, expires_at, operator_binding, agent_id, title
+                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     conversation_id,
@@ -118,6 +137,8 @@ class ConversationStore:
                     format_stored_time(now),
                     format_stored_time(expires_at),
                     operator_binding,
+                    resolved_agent_id,
+                    resolved_title,
                 ),
             )
         return self.get(conversation_id, scope_fingerprint)
@@ -128,28 +149,70 @@ class ConversationStore:
         with self._connection(write=True) as connection:
             self._expire_conversations(connection, now_utc())
             row = connection.execute(
-                "SELECT * FROM conversations WHERE conversation_id = ? AND scope_fingerprint = ?",
+                """
+                SELECT c.*,
+                       (SELECT COUNT(*) FROM conversation_turns t
+                        WHERE t.conversation_id = c.conversation_id) AS turn_count
+                FROM conversations c
+                WHERE c.conversation_id = ? AND c.scope_fingerprint = ?
+                """,
                 (conversation_id, scope),
             ).fetchone()
         if row is None:
             raise ConversationNotFound("conversation not found")
         return _conversation_from_row(row)
 
-    def list(self, scope_fingerprint: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    def list(
+        self,
+        scope_fingerprint: str,
+        *,
+        limit: int = 50,
+        agent_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         scope = self._validate_scope(scope_fingerprint)
         if not 1 <= limit <= 200:
             raise ConversationError("limit must be between 1 and 200")
+        clauses = ["c.scope_fingerprint = ?", "c.operator_binding NOT LIKE '%:preview'"]
+        params: list[Any] = [scope]
+        if agent_id is not None and agent_id.strip():
+            clauses.append("c.agent_id = ?")
+            params.append(agent_id.strip())
+        params.append(limit)
         with self._connection(write=True) as connection:
             self._expire_conversations(connection, now_utc())
             rows = connection.execute(
-                """
-                SELECT * FROM conversations
-                WHERE scope_fingerprint = ? AND operator_binding NOT LIKE '%:preview'
-                ORDER BY updated_at DESC LIMIT ?
+                f"""
+                SELECT c.*,
+                       (SELECT COUNT(*) FROM conversation_turns t
+                        WHERE t.conversation_id = c.conversation_id) AS turn_count
+                FROM conversations c
+                WHERE {" AND ".join(clauses)}
+                ORDER BY c.updated_at DESC LIMIT ?
                 """,
-                (scope, limit),
+                tuple(params),
             ).fetchall()
         return [_conversation_from_row(row) for row in rows]
+
+    def rename(self, conversation_id: str, scope_fingerprint: str, title: str) -> dict[str, Any]:
+        self._validate_conversation_id(conversation_id)
+        scope = self._validate_scope(scope_fingerprint)
+        cleaned = " ".join(redact_text(title or "").split()).strip()
+        if not cleaned or len(cleaned) > TITLE_MAX_CHARS:
+            raise ConversationError("conversation title is invalid")
+        now = now_utc()
+        with self._connection(write=True) as connection:
+            self._expire_conversations(connection, now)
+            updated = connection.execute(
+                """
+                UPDATE conversations
+                SET title = ?, updated_at = ?
+                WHERE conversation_id = ? AND scope_fingerprint = ?
+                """,
+                (cleaned, format_stored_time(now), conversation_id, scope),
+            ).rowcount
+            if not updated:
+                raise ConversationNotFound("conversation not found")
+        return self.get(conversation_id, scope_fingerprint)
 
     def delete(self, conversation_id: str, scope_fingerprint: str) -> None:
         self._validate_conversation_id(conversation_id)
@@ -238,6 +301,7 @@ class ConversationStore:
         *,
         kind: str,
         question: str,
+        attachment_ids: list[str] | None = None,
     ) -> int:
         """Claim the conversation's generation slot; returns the new turn_no.
 
@@ -259,11 +323,12 @@ class ConversationStore:
         question = self._validate_question(question)
         now = now_utc()
         lock_expiry = now - timedelta(seconds=BUSY_LOCK_SECONDS)
+        attachments_payload = json.dumps(list(attachment_ids), ensure_ascii=False) if attachment_ids else None
         with self._connection(write=True) as connection:
             self._expire_conversations(connection, now)
             row = connection.execute(
                 """
-                SELECT generating_since, last_turn_no FROM conversations
+                SELECT generating_since, last_turn_no, title FROM conversations
                 WHERE conversation_id = ? AND scope_fingerprint = ?
                 """,
                 (conversation_id, scope),
@@ -286,8 +351,9 @@ class ConversationStore:
             connection.execute(
                 """
                 INSERT INTO conversation_turns
-                    (turn_id, conversation_id, turn_no, kind, question, token_count, created_at)
-                VALUES (?, ?, ?, ?, ?, 0, ?)
+                    (turn_id, conversation_id, turn_no, kind, question, token_count,
+                     created_at, attachment_ids_json)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
                 """,
                 (
                     "turn_" + uuid.uuid4().hex,
@@ -296,18 +362,118 @@ class ConversationStore:
                     kind,
                     question,
                     format_stored_time(now),
+                    attachments_payload,
                 ),
             )
+            new_title = str(row["title"] or "").strip() or auto_conversation_title(question)
             connection.execute(
                 """
                 UPDATE conversations
                 SET generating_since = ?, generating_turn_no = ?, last_turn_no = ?,
-                    updated_at = ?
+                    title = ?, updated_at = ?
                 WHERE conversation_id = ?
                 """,
-                (format_stored_time(now), next_no, next_no, format_stored_time(now), conversation_id),
+                (
+                    format_stored_time(now),
+                    next_no,
+                    next_no,
+                    new_title,
+                    format_stored_time(now),
+                    conversation_id,
+                ),
             )
             return int(next_no)
+
+    def find_turn_by_qa_id(self, qa_id: str, scope_fingerprint: str) -> dict[str, Any] | None:
+        """按 ``status_qa_id`` 反查所属会话与轮次记录（强制按主体隔离）。"""
+        scope = self._validate_scope(scope_fingerprint)
+        with self._connection(write=True) as connection:
+            self._expire_conversations(connection, now_utc())
+            row = connection.execute(
+                """
+                SELECT t.*, c.business_entry, c.agent_id, c.active_order_no
+                FROM conversation_turns t
+                JOIN conversations c USING(conversation_id)
+                WHERE t.status_qa_id = ? AND c.scope_fingerprint = ?
+                LIMIT 1
+                """,
+                (qa_id, scope),
+            ).fetchone()
+        if row is None:
+            return None
+        turn = _turn_from_row(row)
+        turn["business_entry"] = str(row["business_entry"])
+        turn["agent_id"] = str(row["agent_id"] or "operator_main")
+        turn["active_order_no"] = row["active_order_no"]
+        return turn
+
+    def begin_regenerate_turn(
+        self,
+        conversation_id: str,
+        scope_fingerprint: str,
+        *,
+        expected_qa_id: str,
+    ) -> dict[str, Any]:
+        """原子校验“仅最后一轮可原地重生成”并占用生成槽位（不新增重复轮次）。"""
+        self._validate_conversation_id(conversation_id)
+        scope = self._validate_scope(scope_fingerprint)
+        now = now_utc()
+        lock_expiry = now - timedelta(seconds=BUSY_LOCK_SECONDS)
+        with self._connection(write=True) as connection:
+            self._expire_conversations(connection, now)
+            conv = connection.execute(
+                """
+                SELECT generating_since, business_entry, agent_id, active_order_no
+                FROM conversations
+                WHERE conversation_id = ? AND scope_fingerprint = ?
+                """,
+                (conversation_id, scope),
+            ).fetchone()
+            if conv is None:
+                raise ConversationNotFound("conversation not found")
+            generating_since = (
+                parse_stored_time(conv["generating_since"]) if conv["generating_since"] else None
+            )
+            if generating_since is not None and generating_since > lock_expiry:
+                raise ConversationBusy("conversation already has a generating turn")
+            latest = connection.execute(
+                """
+                SELECT * FROM conversation_turns
+                WHERE conversation_id = ?
+                ORDER BY turn_no DESC LIMIT 1
+                """,
+                (conversation_id,),
+            ).fetchone()
+            if latest is None or latest["status_qa_id"] != expected_qa_id or latest["answer_json"] is None:
+                raise RegenerateNotAllowed("only the latest completed turn can be regenerated")
+            turn_no = int(latest["turn_no"])
+            next_attempt_no = int(latest["attempt_no"] or 1) + 1
+            raw_attachments = latest["attachment_ids_json"]
+            attachment_ids = json.loads(raw_attachments) if raw_attachments else []
+            connection.execute(
+                """
+                UPDATE conversations
+                SET generating_since = ?, generating_turn_no = ?, updated_at = ?
+                WHERE conversation_id = ? AND scope_fingerprint = ?
+                """,
+                (
+                    format_stored_time(now),
+                    turn_no,
+                    format_stored_time(now),
+                    conversation_id,
+                    scope,
+                ),
+            )
+            return {
+                "conversation_id": conversation_id,
+                "turn_no": turn_no,
+                "next_attempt_no": next_attempt_no,
+                "question": str(latest["question"]),
+                "attachment_ids": attachment_ids,
+                "agent_id": str(conv["agent_id"] or "operator_main"),
+                "active_order_no": conv["active_order_no"],
+                "business_entry": str(conv["business_entry"]),
+            }
 
     def complete_turn(
         self,
@@ -320,6 +486,14 @@ class ConversationStore:
         cancelled: bool = False,
         status_qa_id: str | None = None,
         active_order_no: str | None = None,
+        attempt_no: int | None = None,
+        parent_qa_id: str | None = None,
+        attachment_ids: list[str] | None = None,
+        citations: list[dict[str, Any]] | None = None,
+        steps: list[dict[str, Any]] | None = None,
+        elapsed_ms: int | None = None,
+        delivery_mode: str | None = None,
+        preserve_completed: bool = False,
     ) -> None:
         """Persist a finished turn and release the generation slot.
 
@@ -336,6 +510,8 @@ class ConversationStore:
         scope = self._validate_scope(scope_fingerprint)
         if status_qa_id is not None and not re.fullmatch(r"qa_[a-f0-9]{32}", status_qa_id):
             raise ConversationError("status question id is invalid")
+        if parent_qa_id is not None and not re.fullmatch(r"qa_[a-f0-9]{32}", parent_qa_id):
+            raise ConversationError("parent question id is invalid")
         if active_order_no is not None and not is_order_identifier(active_order_no):
             raise ConversationError("order number is invalid")
         now = now_utc()
@@ -348,20 +524,49 @@ class ConversationStore:
             if row is None:
                 raise ConversationNotFound("turn not found")
             if cancelled:
-                connection.execute(
-                    "DELETE FROM conversation_turns WHERE conversation_id = ? AND turn_no = ?",
-                    (conversation_id, turn_no),
-                )
+                if preserve_completed:
+                    # 原地重生成失败/取消时保留原已完成答复，仅释放槽位。
+                    connection.execute(
+                        "DELETE FROM conversation_turns WHERE conversation_id = ? AND turn_no = ? "
+                        "AND answer_json IS NULL",
+                        (conversation_id, turn_no),
+                    )
+                else:
+                    connection.execute(
+                        "DELETE FROM conversation_turns WHERE conversation_id = ? AND turn_no = ?",
+                        (conversation_id, turn_no),
+                    )
             else:
                 connection.execute(
-                    "UPDATE conversation_turns SET answer_json = ?, token_count = ?, created_at = ?,"
-                    " status_qa_id = ?"
-                    " WHERE conversation_id = ? AND turn_no = ?",
+                    """
+                    UPDATE conversation_turns
+                    SET answer_json = ?,
+                        token_count = ?,
+                        created_at = ?,
+                        status_qa_id = ?,
+                        attempt_no = COALESCE(?, attempt_no),
+                        parent_qa_id = COALESCE(?, parent_qa_id),
+                        attachment_ids_json = COALESCE(?, attachment_ids_json),
+                        citations_json = COALESCE(?, citations_json),
+                        steps_json = COALESCE(?, steps_json),
+                        elapsed_ms = COALESCE(?, elapsed_ms),
+                        delivery_mode = COALESCE(?, delivery_mode)
+                    WHERE conversation_id = ? AND turn_no = ?
+                    """,
                     (
                         json.dumps(answer, ensure_ascii=False) if answer else None,
                         max(0, int(token_count)),
                         format_stored_time(now),
                         status_qa_id,
+                        int(attempt_no) if attempt_no is not None else None,
+                        parent_qa_id,
+                        json.dumps(list(attachment_ids), ensure_ascii=False)
+                        if attachment_ids is not None
+                        else None,
+                        json.dumps(list(citations), ensure_ascii=False) if citations is not None else None,
+                        json.dumps(list(steps), ensure_ascii=False) if steps is not None else None,
+                        max(0, int(elapsed_ms)) if elapsed_ms is not None else None,
+                        delivery_mode,
                         conversation_id,
                         turn_no,
                     ),
@@ -449,7 +654,8 @@ class ConversationStore:
             ]
             for conversation_id, turn_no in held:
                 connection.execute(
-                    "DELETE FROM conversation_turns WHERE conversation_id = ? AND turn_no = ?",
+                    "DELETE FROM conversation_turns WHERE conversation_id = ? AND turn_no = ? "
+                    "AND answer_json IS NULL",
                     (conversation_id, turn_no),
                 )
             cursor = connection.execute(
@@ -463,9 +669,18 @@ class ConversationStore:
         conversation_id: str,
         scope_fingerprint: str,
         turn_no: int,
+        *,
+        preserve_completed: bool = False,
     ) -> None:
         """Drop an unfinished/cancelled turn row and release the slot."""
-        self.complete_turn(conversation_id, scope_fingerprint, turn_no, answer=None, cancelled=True)
+        self.complete_turn(
+            conversation_id,
+            scope_fingerprint,
+            turn_no,
+            answer=None,
+            cancelled=True,
+            preserve_completed=preserve_completed,
+        )
 
     # ------------------------------------------------------------------
     # bounded history
@@ -632,6 +847,9 @@ class ConversationStore:
 def _conversation_from_row(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     result["is_generating"] = bool(result.pop("generating_since"))
+    result["title"] = str(result.get("title") or "")
+    result["agent_id"] = str(result.get("agent_id") or "operator_main")
+    result["turn_count"] = int(result.get("turn_count") or 0)
     # Internal claim bookkeeping: never part of the conversation's shape.
     result.pop("generating_turn_no", None)
     result.pop("last_turn_no", None)
@@ -642,4 +860,12 @@ def _turn_from_row(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     raw = result.pop("answer_json", None)
     result["answer"] = json.loads(raw) if raw else None
+    raw_attachments = result.pop("attachment_ids_json", None)
+    result["attachment_ids"] = json.loads(raw_attachments) if raw_attachments else []
+    raw_citations = result.pop("citations_json", None)
+    result["citations"] = json.loads(raw_citations) if raw_citations else []
+    raw_steps = result.pop("steps_json", None)
+    result["steps"] = json.loads(raw_steps) if raw_steps else []
+    result["attempt_no"] = int(result.get("attempt_no") or 1)
+    result["qa_id"] = result.get("status_qa_id")
     return result

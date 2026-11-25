@@ -9,9 +9,13 @@ from fastapi.responses import JSONResponse
 
 from aiops_diagnostics.gateway.dependencies import GatewayDeps
 from aiops_diagnostics.gateway.errors import StandardAPIError
-from aiops_diagnostics.gateway.schemas import ConversationCreateRequest
+from aiops_diagnostics.gateway.schemas import ConversationCreateRequest, ConversationRenameRequest
 from aiops_diagnostics.identity.order_identity import is_order_identifier
 from aiops_diagnostics.identity.scope_context import ScopeContext
+from aiops_diagnostics.publication.agent_content import (
+    UnknownAssistantAgentError,
+    resolve_operator_agent_id,
+)
 
 
 def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
@@ -37,9 +41,29 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
     def list_conversations(
         identity: tuple[ScopeContext, Any] = Depends(deps.assistant_identity),  # noqa: B008
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        agent_id: Annotated[str | None, Query(max_length=64)] = None,
     ) -> dict[str, Any]:
-        caller, _ = identity
-        conversations = context.conversation_store.list(caller.scope_fingerprint, limit=limit)
+        caller, decision = identity
+        resolved_agent_id: str | None = None
+        if agent_id is not None and agent_id.strip():
+            if str(decision.platform) == "operator":
+                try:
+                    resolved_agent_id = resolve_operator_agent_id(agent_id)
+                except UnknownAssistantAgentError as exc:
+                    raise StandardAPIError(
+                        status.HTTP_404_NOT_FOUND,
+                        "AGENT_NOT_FOUND",
+                        "assistant agent not found",
+                    ) from exc
+            else:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND,
+                    "AGENT_NOT_FOUND",
+                    "assistant agent not found",
+                )
+        conversations = context.conversation_store.list(
+            caller.scope_fingerprint, limit=limit, agent_id=resolved_agent_id
+        )
         return {
             "type": "conversation_list",
             "count": len(conversations),
@@ -70,20 +94,63 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 api._require_current_chat_order(context, caller, qa, request)
                 if item["answer"] != qa["result"]:
                     raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
+        from aiops_diagnostics.operator.attachments import public_file_dict
+
         response.headers["Cache-Control"] = "no-store"
-        return {
-            **api._conversation_response(conversation),
-            "turns": [
+        qa_ids = [str(item["qa_id"]) for item in history if item.get("qa_id")]
+        feedback_map = context.assistant_feedback.get_many(qa_ids, caller.scope_fingerprint) if qa_ids else {}
+        turns_out = []
+        for item in history:
+            att_ids = list(item.get("attachment_ids") or [])
+            att_cards = (
+                [
+                    public_file_dict(row)
+                    for row in context.assistant_files.get_many(
+                        att_ids, caller.scope_fingerprint, business_entry=str(decision.platform)
+                    )
+                ]
+                if att_ids
+                else []
+            )
+            turns_out.append(
                 {
                     "turn_no": item["turn_no"],
+                    "qa_id": item.get("qa_id"),
+                    "attempt_no": int(item.get("attempt_no") or 1),
+                    "parent_qa_id": item.get("parent_qa_id"),
                     "kind": item["kind"],
                     "question": item["question"],
+                    "attachments": att_cards,
                     "answer": item["answer"],
+                    "delivery_mode": item.get("delivery_mode"),
+                    "elapsed_ms": item.get("elapsed_ms"),
+                    "steps": item.get("steps") or [],
+                    "citations": item.get("citations") or [],
+                    "feedback": feedback_map.get(str(item.get("qa_id") or "")),
                     "created_at": item["created_at"],
                 }
-                for item in history
-            ],
+            )
+        return {
+            **api._conversation_response(conversation),
+            "turns": turns_out,
         }
+
+    @app.patch("/v1/conversations/{conversation_id}")
+    def rename_conversation(
+        conversation_id: str,
+        payload: ConversationRenameRequest,
+        identity: tuple[ScopeContext, Any] = Depends(deps.assistant_identity),  # noqa: B008
+    ) -> dict[str, Any]:
+        caller, decision = identity
+        conversation = api._require_conversation(context, caller, conversation_id)
+        if conversation.get("business_entry") != str(decision.platform):
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "CONVERSATION_NOT_FOUND",
+                "conversation not found",
+            )
+        updated = context.conversation_store.rename(conversation_id, caller.scope_fingerprint, payload.title)
+        return api._conversation_response(updated)
 
     @app.delete("/v1/conversations/{conversation_id}")
     def delete_conversation(

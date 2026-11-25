@@ -230,11 +230,20 @@ SURFACE_HANDLERS = {
     "faq_answer": "faq_identity",
     "assistant_questions": "assistant_identity",
     "get_assistant_question": "assistant_identity",
+    "stream_assistant_question_events": "assistant_identity",
     "cancel_assistant_question": "assistant_identity",
+    "export_assistant_question_report": "assistant_identity",
+    "submit_assistant_question_feedback": "assistant_identity",
+    "regenerate_assistant_question": "assistant_identity",
     "list_assistant_questions": "assistant_identity",
+    "upload_assistant_file": "assistant_identity",
+    "get_assistant_file": "assistant_identity",
+    "get_assistant_file_preview": "assistant_identity",
+    "create_file_download_task": "assistant_identity",
     "create_conversation": "assistant_identity",
     "list_conversations": "assistant_identity",
     "get_conversation": "assistant_identity",
+    "rename_conversation": "assistant_identity",
     "delete_conversation": "assistant_identity",
     "set_conversation_active_order": "assistant_identity",
     "list_shortcuts": "shortcut_identity",
@@ -243,6 +252,8 @@ SURFACE_HANDLERS = {
     # identity. Registering it here is the map's job — the guard exists so a new
     # surface cannot pick an identity nobody looked at.
     "assistant_starters": "shortcut_identity",
+    # 后台主智能体列表与 starters/shortcuts 共用同一抽屉初始化身份（#1705）。
+    "assistant_agents": "shortcut_identity",
     # The banner is a product surface on the same entry, so it reads the same
     # identity: anything the shortcut listing may show, the banner may too.
     "list_banners": "shortcut_identity",
