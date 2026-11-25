@@ -45,7 +45,7 @@ type OverviewCapability = {
 type OverviewApp = {
   app_id: string
   version_no: number | null
-  state: 'active' | 'candidate' | 'unprepared'
+  state: 'active' | 'disabled' | 'candidate' | 'unprepared'
   source: 'runtime' | 'task_receipt' | 'none'
 }
 type OverviewTenant = {
@@ -292,6 +292,7 @@ const workspaceStateLabels: Record<string, string> = {
 }
 const appStateLabels: Record<string, string> = {
   active: '运行中',
+  disabled: '已停用（路由保留）',
   candidate: '候选停用',
   unprepared: '未准备',
 }

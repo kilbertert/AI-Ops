@@ -25,6 +25,9 @@ _CAPABILITY_KEYS = ("consumer", "order", "offline")
 _VALID_TOOL_CONTRACTS = frozenset({TOOL_CONTRACT, OBJECT_CONTRACT})
 _OPERATOR_SCENARIO = "operator_order_diagnosis"
 _CONSUMER_SCENARIO = "consumer_service"
+# 同源管理桥响应上限 1 MiB；总览与附带目录均严守安全预算，绝不因大目录锁死草稿编辑。
+_MAX_EMBEDDED_CATALOGUE_BYTES = 768 * 1024
+_MAX_OVERVIEW_BYTES = 768 * 1024
 
 
 def _control_version() -> str:
@@ -74,55 +77,87 @@ def _is_sqlite_file(path: Path) -> bool:
     return header == b"SQLite format 3\x00"
 
 
-def _normalize_task(row: dict[str, Any], registry_path: str, reference: str) -> dict[str, Any] | None:
-    """与 environment_tasks.inspect() 保持同一状态口径：含时间过期与输入/授权漂移复核。"""
-    try:
-        public = environment_tasks._public(row)
-        raw_req = json.loads(row["request"])
-    except (KeyError, ValueError, TypeError):
+def _drift_key(raw_req: dict[str, Any]) -> tuple[Any, ...] | None:
+    identity = raw_req.get("identity")
+    plan = raw_req.get("plan")
+    if not isinstance(identity, (list, tuple)) or not isinstance(plan, dict):
         return None
-    if not isinstance(raw_req, dict):
-        return None
-    if public["state"] in {"observed", "blocked"} and public["action"] != "environment-publish":
+    return (
+        tuple(identity),
+        str(plan.get("environment") or ""),
+        plan.get("draft_revision"),
+        plan.get("registry_revision"),
+        str(plan.get("digest") or ""),
+    )
+
+
+def _normalize_tasks(
+    raw_task_rows: list[dict[str, Any]], registry_path: str, reference: str
+) -> dict[str, list[dict[str, Any]]]:
+    """在目录锁外按请求内记忆化复核任务漂移，避免重算同一冻结计划并阻断保存/回调锁。"""
+    drift_cache: dict[tuple[Any, ...], bool] = {}
+    task_map: dict[str, list[dict[str, Any]]] = {}
+    for row in raw_task_rows:
+        env_id = str(row["environment"])
         try:
-            environment_tasks._current(registry_path, raw_req, reference, reconciling=True)
-        except (ValueError, OSError, RuntimeError, KeyError, TypeError):
-            public["state"] = "expired"
-    return public
+            public = environment_tasks._public(row)
+            raw_req = json.loads(row["request"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if not isinstance(raw_req, dict):
+            continue
+        if public["state"] in {"observed", "blocked"} and public["action"] != "environment-publish":
+            cache_key = _drift_key(raw_req)
+            if cache_key is not None and cache_key in drift_cache:
+                is_current = drift_cache[cache_key]
+            else:
+                try:
+                    environment_tasks._current(registry_path, raw_req, reference, reconciling=True)
+                    is_current = True
+                except (ValueError, OSError, RuntimeError, KeyError, TypeError):
+                    is_current = False
+                if cache_key is not None:
+                    drift_cache[cache_key] = is_current
+            if not is_current:
+                public["state"] = "expired"
+        task_map.setdefault(env_id, []).append(public)
+    return task_map
 
 
-def _load_locked_drafts_and_tasks(
+def _read_locked_snapshot(
     registry_path: str,
     allowed: set[str],
-    reference: str,
-) -> tuple[list[str], dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
-    """在同一目录锁与单只读连接内加载全部获授权草稿与任务，杜绝跨锁分脑。"""
+) -> tuple[list[dict[str, Any]], list[str], dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    """在目录锁内仅做轻量 SQLite 只读快照，不执行重哈希校验。"""
+    raw_draft_rows: list[dict[str, Any]] = []
     draft_only_ids: list[str] = []
     draft_map: dict[str, dict[str, Any]] = {}
-    task_map: dict[str, list[dict[str, Any]]] = {}
+    raw_task_rows: list[dict[str, Any]] = []
     db_path = drafts._database(registry_path)
     if not db_path.is_file():
-        return draft_only_ids, draft_map, task_map
+        return raw_draft_rows, draft_only_ids, draft_map, raw_task_rows
     with gateway_db.connection(db_path, readonly=True) as conn:
         for row in _safe_query(
             conn,
             "environment_drafts",
-            "SELECT environment, revision, registry_revision, body "
+            "SELECT environment, revision, registry_revision, body, digest, updated_at "
             "FROM environment_drafts ORDER BY environment",
         ):
             env_id = str(row["environment"])
             if "*" not in allowed and env_id not in allowed:
                 continue
+            item = dict(row)
+            raw_draft_rows.append(item)
             draft_only_ids.append(env_id)
             try:
-                parsed = json.loads(row["body"])
+                parsed = json.loads(item["body"])
             except (ValueError, TypeError):
                 continue
             if not isinstance(parsed, dict):
                 continue
             draft_map[env_id] = {
-                "revision": int(row["revision"]),
-                "registry_revision": int(row["registry_revision"]),
+                "revision": int(item["revision"]),
+                "registry_revision": int(item["registry_revision"]),
                 "draft": parsed,
             }
         for row in _safe_query(
@@ -133,10 +168,8 @@ def _load_locked_drafts_and_tasks(
             env_id = str(row["environment"])
             if "*" not in allowed and env_id not in allowed:
                 continue
-            public = _normalize_task(dict(row), registry_path, reference)
-            if public is not None:
-                task_map.setdefault(env_id, []).append(public)
-    return draft_only_ids, draft_map, task_map
+            raw_task_rows.append(dict(row))
+    return raw_draft_rows, draft_only_ids, draft_map, raw_task_rows
 
 
 def _load_routes_from_db(
@@ -189,15 +222,19 @@ def _load_runtime_tables(
 ) -> tuple[
     dict[tuple[str, str], dict[str, str]],
     dict[tuple[str, str], dict[str, Any]],
-    dict[str, int],
+    dict[tuple[str, str], int],
     list[dict[str, Any]],
     int,
 ]:
     workspaces: dict[tuple[str, str], dict[str, str]] = {}
     routes: dict[tuple[str, str], dict[str, Any]] = {}
-    grants: dict[str, int] = {}
+    grants: dict[tuple[str, str], int] = {}
     node_rows: list[dict[str, Any]] = []
     active_route_count = 0
+
+    grant_env_map = {
+        (control_exec_env if env_id == control_env else env_id): env_id for env_id in allowed_env_ids
+    }
 
     if database_file:
         db_path = Path(database_file)
@@ -218,19 +255,23 @@ def _load_runtime_tables(
                         "state": str(row["setup_state"] or "pending"),
                         "source": "runtime",
                     }
+                # 正式对客知识授权在控制面 gateway.db 中同时覆盖控制环境与远端正式发布环境。
+                for row in _safe_query(
+                    conn,
+                    "consumer_knowledge_grants",
+                    """
+                    SELECT environment, tenant_id, COUNT(*) AS cnt
+                      FROM consumer_knowledge_grants
+                     WHERE revoked_at IS NULL
+                     GROUP BY environment, tenant_id
+                    """,
+                ):
+                    stored_env = str(row["environment"])
+                    mapped_env = grant_env_map.get(stored_env)
+                    if mapped_env is None:
+                        continue
+                    grants[(mapped_env, str(row["tenant_id"]))] = int(row["cnt"])
                 if control_env in allowed_env_ids:
-                    for row in _safe_query(
-                        conn,
-                        "consumer_knowledge_grants",
-                        """
-                        SELECT tenant_id, COUNT(*) AS cnt
-                          FROM consumer_knowledge_grants
-                         WHERE environment = ? AND revoked_at IS NULL
-                         GROUP BY tenant_id
-                        """,
-                        (control_exec_env,),
-                    ):
-                        grants[str(row["tenant_id"])] = int(row["cnt"])
                     for row in _safe_query(
                         conn,
                         "execution_node_capabilities",
@@ -300,7 +341,6 @@ def _find_latest(
             continue
         res = item.get("result")
         if confirmed_only:
-            # 仅采信已确认落成的回执（排除 blocked/cancelled/queued/running/reconcile 及预分配幽灵编号）。
             if item.get("state") not in {"observed", "expired"}:
                 continue
             if not isinstance(res, dict) or res.get("state") not in {None, "observed"}:
@@ -350,7 +390,7 @@ def _build_control_nodes(
 
 
 def _build_remote_node_receipts(env_id: str, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """汇总远端受管任务点时回执；严格隔离主机验证、安装与预检，绝不把过期/受阻升级为已观察。"""
+    """汇总远端受管任务点时回执；版本按最新有效观察选取，不与旧安装版本错配时间戳。"""
     host_task = _find_latest(tasks, {"host-verify"})
     install_task = _find_latest(tasks, {"candidate-install", "site-install"})
     preflight_task = _find_latest(tasks, {"site-preflight"})
@@ -369,16 +409,19 @@ def _build_remote_node_receipts(env_id: str, tasks: list[dict[str, Any]]) -> lis
         bool(evidence["service_user_present"]) if "service_user_present" in evidence else None
     )
 
+    # 按时间倒序选最新含版本号的观察/安装回执，避免新 preflight 时间戳配旧 install 版本号。
     version = ""
-    for candidate in (install_task, preflight_task):
-        if candidate is None or not isinstance(candidate.get("result"), dict):
-            continue
-        raw_ver = candidate["result"].get("version")
-        if isinstance(raw_ver, str) and raw_ver:
-            version = raw_ver
+    version_candidates = sorted(
+        (t for t in (install_task, preflight_task) if t is not None),
+        key=lambda t: float(t.get("updated_at") or 0.0),
+        reverse=True,
+    )
+    for candidate in version_candidates:
+        res = candidate.get("result")
+        if isinstance(res, dict) and isinstance(res.get("version"), str) and res["version"]:
+            version = res["version"]
             break
 
-    # 安装状态仅从安装类任务确认回执提取，避免被后续 site-preflight 或排队 stub 覆盖。
     installation = ""
     confirmed_install = _find_latest(
         tasks,
@@ -401,7 +444,7 @@ def _build_remote_node_receipts(env_id: str, tasks: list[dict[str, Any]]) -> lis
         status = "blocked"
     elif "reconcile" in states:
         status = "reconcile"
-    elif "observed" in states and not (states & {"expired"}):
+    elif "observed" in states and "expired" not in states:
         status = "observed"
     elif "expired" in states:
         status = "expired"
@@ -429,47 +472,51 @@ def _build_remote_node_receipts(env_id: str, tasks: list[dict[str, Any]]) -> lis
 def _build_tenant_capabilities(
     env_tasks: list[dict[str, Any]], tenant_id: str, now: float
 ) -> dict[str, dict[str, Any]]:
-    latest = _find_latest(env_tasks, {"candidate-validate"}, tenant_id=tenant_id)
+    """逐项独立选取最新业务验证回执，单能力复测不会掩盖同计划其余仍有效的能力结果。"""
     base = {
         cap: {"state": "unverified", "error_code": "", "observed_at": None, "task_id": ""}
         for cap in _CAPABILITY_KEYS
     }
-    if latest is None:
-        return base
-    task_state = str(latest["state"])
-    task_id = str(latest["id"])
-    raw_updated = latest.get("updated_at")
-    updated_at = (
-        float(raw_updated) if isinstance(raw_updated, (int, float)) and math.isfinite(raw_updated) else 0.0
-    )
-    result = latest.get("result") if isinstance(latest.get("result"), dict) else {}
-    raw_expires = result.get("expires_at")
-    result_expired = not (
-        isinstance(raw_expires, (int, float)) and math.isfinite(raw_expires) and raw_expires > now
-    )
-    checks = result.get("checks") if isinstance(result.get("checks"), list) else []
-    by_cap = {
-        str(c.get("capability")): c
-        for c in checks
-        if isinstance(c, dict) and str(c.get("capability") or "") in _CAPABILITY_KEYS
-    }
-    for cap in _CAPABILITY_KEYS:
-        entry = by_cap.get(cap)
-        if entry is None:
+    remaining = set(_CAPABILITY_KEYS)
+    for task in env_tasks:
+        if not remaining:
+            break
+        if task.get("action") != "candidate-validate" or task.get("tenant_id") != tenant_id:
             continue
-        if task_state == "expired" or result_expired:
-            mapped = "expired"
-        elif task_state == "cancelled":
-            mapped = "unverified"
-        else:
-            raw = str(entry.get("state") or "pending")
-            mapped = raw if raw in {"passed", "blocked", "pending"} else "pending"
-        base[cap] = {
-            "state": mapped,
-            "error_code": str(entry.get("error_code") or ""),
-            "observed_at": updated_at,
-            "task_id": task_id,
-        }
+        task_state = str(task["state"])
+        task_id = str(task["id"])
+        raw_updated = task.get("updated_at")
+        updated_at = (
+            float(raw_updated)
+            if isinstance(raw_updated, (int, float)) and math.isfinite(raw_updated)
+            else 0.0
+        )
+        result = task.get("result") if isinstance(task.get("result"), dict) else {}
+        raw_expires = result.get("expires_at")
+        result_expired = not (
+            isinstance(raw_expires, (int, float)) and math.isfinite(raw_expires) and raw_expires > now
+        )
+        checks = result.get("checks") if isinstance(result.get("checks"), list) else []
+        for entry in checks:
+            if not isinstance(entry, dict):
+                continue
+            cap = str(entry.get("capability") or "")
+            if cap not in remaining:
+                continue
+            if task_state == "expired" or result_expired:
+                mapped = "expired"
+            elif task_state == "cancelled":
+                mapped = "unverified"
+            else:
+                raw = str(entry.get("state") or "pending")
+                mapped = raw if raw in {"passed", "blocked", "pending"} else "pending"
+            base[cap] = {
+                "state": mapped,
+                "error_code": str(entry.get("error_code") or ""),
+                "observed_at": updated_at,
+                "task_id": task_id,
+            }
+            remaining.remove(cap)
     return base
 
 
@@ -485,7 +532,7 @@ def _build_tenant_overview(
     now: float,
     workspaces: dict[tuple[str, str], dict[str, str]],
     control_routes: dict[tuple[str, str], dict[str, Any]],
-    control_grants: dict[str, int],
+    all_grants: dict[tuple[str, str], int],
     env_tasks: list[dict[str, Any]],
 ) -> dict[str, Any]:
     if effective_tenant is not None:
@@ -533,16 +580,19 @@ def _build_tenant_overview(
     )
     kb_id = str(kb_task["result"]["knowledge_base_id"]) if kb_task else ""
     conn_id = str(conn_task["result"]["connection_id"]) if conn_task else ""
-    active_grants = control_grants.get(tenant_id, 0) if is_control else 0
+    active_grants = all_grants.get((env_id, tenant_id), 0)
     kb_state = (
         "ready" if (active_grants > 0 or (kb_id and conn_id)) else "prepared" if kb_id else "unprepared"
     )
 
     def _app_entry(entry_key: str, task_action: str) -> dict[str, Any]:
         if is_control:
-            # 控制环境以实时运行路由表为唯一活跃真相；撤回后绝不回退任务回执伪报运行中。
+            # 控制环境以实时运行路由表为准，同时受目录准入开关约束：停用租户/环境绝不标运行中。
             if (tenant_id, entry_key) in control_routes:
-                return dict(control_routes[(tenant_id, entry_key)])
+                entry = dict(control_routes[(tenant_id, entry_key)])
+                if not effective_enabled:
+                    entry["state"] = "disabled"
+                return entry
         else:
             pub_task = _find_latest(env_tasks, {"environment-publish"}, tenant_id=tenant_id)
             if (
@@ -610,6 +660,27 @@ def _build_tenant_overview(
     }
 
 
+def _encoded_size(payload: Any) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _bound_overview_size(overview: dict[str, Any], max_bytes: int) -> dict[str, Any]:
+    """当超大租户目录接近桥 1 MiB 限额时按预算裁剪明细并显式标记 tenants_truncated。"""
+    if _encoded_size(overview) <= max_bytes:
+        return overview
+    envs = overview["environments"]
+    # 优先保留启用/已准备租户，其余按顺序收敛至安全上限。
+    for limit in (200, 50, 10, 0):
+        for env in envs:
+            tenants = env["tenants"]
+            if len(tenants) > limit:
+                env["tenants"] = tenants[:limit]
+                env["tenants_truncated"] = True
+        if _encoded_size(overview) <= max_bytes:
+            return overview
+    return overview
+
+
 def _assemble_overview(
     context: Any,
     body: dict[str, Any],
@@ -641,13 +712,13 @@ def _assemble_overview(
             ordered_ids.append(env_id)
 
     try:
-        workspaces, control_routes, control_grants, node_rows, active_route_count = _load_runtime_tables(
+        workspaces, control_routes, all_grants, node_rows, active_route_count = _load_runtime_tables(
             database_file, route_bindings_file, candidate_ids, control_env, control_exec_env
         )
     except (OSError, sqlite3.Error, ValueError, TypeError):
         if not tolerate_runtime_errors:
             raise
-        workspaces, control_routes, control_grants, node_rows, active_route_count = {}, {}, {}, [], 0
+        workspaces, control_routes, all_grants, node_rows, active_route_count = {}, {}, {}, [], 0
 
     tools_digest, tool_names = _operator_tools_metadata()
     gateway_version = _control_version()
@@ -704,7 +775,7 @@ def _assemble_overview(
                 now=now,
                 workspaces=workspaces,
                 control_routes=control_routes,
-                control_grants=control_grants,
+                all_grants=all_grants,
                 env_tasks=env_tasks,
             )
             for tid in tenant_ids
@@ -726,6 +797,7 @@ def _assemble_overview(
                 "registry_changed": registry_changed,
                 "tenant_count": len(tenants),
                 "enabled_tenant_count": sum(1 for t in tenants if t["effective_enabled"]),
+                "tenants_truncated": False,
                 "active_route_count": active_route_count if is_control else 0,
                 "nodes": nodes,
                 "tenants": tenants,
@@ -733,42 +805,47 @@ def _assemble_overview(
             }
         )
 
-    return {
-        "schema": OVERVIEW_SCHEMA,
-        "control_environment": control_env if control_visible else "",
-        "control_execution_environment": control_exec_env if control_visible else "",
-        "control_version": gateway_version if control_visible else "",
-        "generated_at": now,
-        "registry_revision": int(body["revision"]),
-        "environments": environments,
-    }
+    return _bound_overview_size(
+        {
+            "schema": OVERVIEW_SCHEMA,
+            "control_environment": control_env if control_visible else "",
+            "control_execution_environment": control_exec_env if control_visible else "",
+            "control_version": gateway_version if control_visible else "",
+            "generated_at": now,
+            "registry_revision": int(body["revision"]),
+            "environments": environments,
+        },
+        _MAX_OVERVIEW_BYTES,
+    )
 
 
 def build_overview_locked(context: Any, registry_path: str, identity: tuple[str, str, str]) -> dict[str, Any]:
-    """在同一目录锁下重新校验授权并读取一致的目录/草稿/任务快照生成只读总览。"""
+    """短时持锁读取目录/草稿/任务快照，锁外记忆化校验漂移并输出受预算保护的只读总览。"""
     reference = getattr(context.settings, "environment_onboarding_file", "")
     with drafts._locked(registry_path):
         body = registry.load(registry_path)
         if body["schema"] != registry.MANAGED_SCHEMA:
             raise registry.RegistryError("ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED")
         allowed = drafts.access(body, identity)
-        draft_only_ids, draft_map, task_map = _load_locked_drafts_and_tasks(registry_path, allowed, reference)
+        _, draft_only_ids, draft_map, raw_task_rows = _read_locked_snapshot(registry_path, allowed)
+    task_map = _normalize_tasks(raw_task_rows, registry_path, reference)
     return _assemble_overview(context, body, allowed, draft_only_ids, draft_map, task_map)
 
 
 def catalogue_with_overview(
     context: Any, registry_path: str, identity: tuple[str, str, str]
 ) -> dict[str, Any]:
-    """在同一目录锁内原子产出 drafts 目录与同快照总览，并隔离运行库瞬时故障不影响草稿编辑。"""
+    """在同一目录锁快照内产出 drafts 与受体积保护的总览，超限时自动省略内嵌总览以免锁死编辑。"""
     reference = getattr(context.settings, "environment_onboarding_file", "")
     with drafts._locked(registry_path):
         body = registry.load(registry_path)
         if body["schema"] != registry.MANAGED_SCHEMA:
             raise registry.RegistryError("ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED")
         allowed = drafts.access(body, identity)
-        raw_rows = drafts._rows(drafts._database(registry_path))
-        draft_only_ids, draft_map, task_map = _load_locked_drafts_and_tasks(registry_path, allowed, reference)
-    catalogue_result = {
+        raw_draft_rows, draft_only_ids, draft_map, raw_task_rows = _read_locked_snapshot(
+            registry_path, allowed
+        )
+    catalogue_result: dict[str, Any] = {
         "registry_revision": body["revision"],
         "can_create": "*" in allowed,
         "effective": [
@@ -784,20 +861,28 @@ def catalogue_with_overview(
                 "acceptance": "unverified",
                 "registry_changed": r["registry_revision"] != body["revision"],
             }
-            for r in raw_rows
+            for r in raw_draft_rows
             if "*" in allowed or r["environment"] in allowed
         ],
     }
     try:
-        catalogue_result["overview"] = _assemble_overview(
-            context,
-            body,
-            allowed,
-            draft_only_ids,
-            draft_map,
-            task_map,
-            tolerate_runtime_errors=True,
-        )
+        base_size = _encoded_size(catalogue_result)
+        remaining_budget = _MAX_EMBEDDED_CATALOGUE_BYTES - base_size
+        if remaining_budget < 8192:
+            catalogue_result["overview"] = None
+        else:
+            task_map = _normalize_tasks(raw_task_rows, registry_path, reference)
+            overview = _assemble_overview(
+                context,
+                body,
+                allowed,
+                draft_only_ids,
+                draft_map,
+                task_map,
+                tolerate_runtime_errors=True,
+            )
+            overview = _bound_overview_size(overview, remaining_budget)
+            catalogue_result["overview"] = overview if _encoded_size(overview) <= remaining_budget else None
     except (OSError, ValueError, RuntimeError, sqlite3.Error, TypeError, KeyError, AttributeError):
         catalogue_result["overview"] = None
     return catalogue_result

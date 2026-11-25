@@ -583,6 +583,7 @@ def test_overview_honest_states_drift_detection_and_zero_secret_leakage(
         assert env95["nodes"][0]["status"] == "observed"
         assert env95["nodes"][0]["remote_hostname"] == "ecs-95"
         assert env95["nodes"][0]["installation"] == "installed"
+        assert env95["nodes"][0]["version"] == "1.40.4"
 
         t95_a = next(t for t in env95["tenants"] if t["id"] == "t95-a")
         assert t95_a["apps"]["operator"]["state"] == "candidate"
@@ -682,6 +683,252 @@ def test_overview_handles_disabled_control_env_and_corrupted_runtime_db_graceful
     drafts_resp = management.drafts(context, "live-session")
     assert drafts_resp["effective"][0]["id"] == "41"
     assert drafts_resp["overview"]["environments"][0]["id"] == "41"
+
+
+def test_overview_devin_review_regressions_bounds_grants_memoization_partial_val_and_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """覆盖 Devin Review 6 项回归：1600 租户 1MiB 预算、停用控制路由、
+    远端授权、记忆化漂移校验、部分验证保留与最新版本号。"""
+    reg_path, gw_db, cfg_41 = _seed_overview_fixture(tmp_path)
+    now = time.time()
+
+    # 1) 控制环境停用租户 t41-b 保留 active 路由，必须报 disabled 而非 active
+    # 2) 远端环境 96 与 95 均存在同名租户授权，仅统计对应环境未撤销授权
+    with gateway_db.connection(gw_db, write=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO chat_route_bindings(
+                environment,tenant_id,entry,scenario,engine,agent_id,agent_version_no,
+                app_id,workflow_id,workflow_key_ref,revision,state,node_config_file,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "production-41",
+                "t41-b",
+                "operator",
+                "operator_order_diagnosis",
+                "node",
+                "agt_op_disabled",
+                12,
+                "77777777-7777-7777-7777-777777777777",
+                "",
+                "",
+                2,
+                "active",
+                "",
+                "2026-11-25T00:00:00Z",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO consumer_knowledge_grants("
+            "tenant_id,environment,knowledge_base_id,granted_by,granted_at,revoked_at"
+            ") VALUES(?,?,?,?,?,?)",
+            ("t96-live", "96", "kb-remote-live", "op", now, None),
+        )
+        conn.execute(
+            "INSERT INTO consumer_knowledge_grants("
+            "tenant_id,environment,knowledge_base_id,granted_by,granted_at,revoked_at"
+            ") VALUES(?,?,?,?,?,?)",
+            ("t96-live", "96", "kb-remote-revoked", "op", now - 10, now - 2),
+        )
+
+    # 3) 95 旧 install=1.40.2 + 新 preflight=1.40.4；
+    # 96 先全三项通过再单测 offline 阻塞（须保留 consumer/order 通过）
+    draft_db = drafts._database(reg_path)
+    shared_plan = {
+        "id": "plan_" + "f" * 32,
+        "expires_at": now + 600,
+        "environment": "96",
+        "draft_revision": 1,
+        "registry_revision": 1,
+        "digest": "fresh-digest",
+    }
+    with gateway_db.connection(draft_db, write=True) as conn:
+        conn.execute(
+            "UPDATE environment_tasks SET result=?, updated_at=? WHERE id=?",
+            (
+                json.dumps({"expires_at": now + 600, "installation": "installed", "version": "1.40.2"}),
+                now - 45,
+                "task_" + "2" * 32,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,result,error,updated_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (
+                "task_" + "f" * 32,
+                "96",
+                json.dumps(
+                    {
+                        "identity": ["41", "platform", "root-admin"],
+                        "action": "candidate-validate",
+                        "tenant_id": "t96-live",
+                        "plan": shared_plan,
+                    }
+                ),
+                "observed",
+                json.dumps(
+                    {
+                        "expires_at": now + 600,
+                        "checks": [
+                            {"capability": "consumer", "state": "passed"},
+                            {"capability": "order", "state": "passed"},
+                            {"capability": "offline", "state": "passed"},
+                        ],
+                    }
+                ),
+                "",
+                now - 20,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,result,error,updated_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (
+                "task_" + "1" * 31 + "a",
+                "96",
+                json.dumps(
+                    {
+                        "identity": ["41", "platform", "root-admin"],
+                        "action": "candidate-validate",
+                        "tenant_id": "t96-live",
+                        "plan": shared_plan,
+                    }
+                ),
+                "blocked",
+                json.dumps(
+                    {
+                        "expires_at": now + 600,
+                        "checks": [
+                            {"capability": "offline", "state": "blocked", "error_code": "OFFLINE_TIMEOUT"}
+                        ],
+                    }
+                ),
+                "OFFLINE_TIMEOUT",
+                now - 10,
+            ),
+        )
+        # 再插 4 条同计划任务检验 _current 记忆化：同冻结计划只验一次
+        for i in range(4):
+            conn.execute(
+                "INSERT INTO environment_tasks(id,environment,request,state,result,error,updated_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (
+                    f"task_99{i:030d}",
+                    "96",
+                    json.dumps(
+                        {
+                            "identity": ["41", "platform", "root-admin"],
+                            "action": "workspace-prepare",
+                            "tenant_id": "t96-live",
+                            "plan": shared_plan,
+                        }
+                    ),
+                    "observed",
+                    json.dumps({"expires_at": now + 600, "workspace_id": "ws-96"}),
+                    "",
+                    now - 15 - i,
+                ),
+            )
+
+    current_calls: list[tuple[str, str]] = []
+
+    def counting_current(path, req, ref, *, reconciling=False):
+        plan_obj = req.get("plan") or {}
+        plan_id = str(plan_obj.get("id") or "")
+        digest = str(plan_obj.get("digest") or "")
+        current_calls.append((plan_id, digest))
+        if digest != "fresh-digest":
+            raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
+
+    monkeypatch.setattr(environment_tasks, "_current", counting_current)
+
+    context = SimpleNamespace(
+        settings=SimpleNamespace(
+            environment="41",
+            execution_environment="production-41",
+            database_file=gw_db,
+            environment_management_registry_file=str(reg_path),
+        ),
+        operator_cpms=SimpleNamespace(
+            console_identity=lambda session: {"token": "t", "user_id": "root-admin", "tenant_id": "platform"}
+        ),
+    )
+    monkeypatch.setattr(
+        auth,
+        "identity",
+        lambda *a, **k: auth.ManagerIdentity("root-admin", "platform", True, "token"),
+    )
+
+    ov = management.overview(context, "live-session")
+    env41 = next(e for e in ov["environments"] if e["id"] == "41")
+    t41_b = next(t for t in env41["tenants"] if t["id"] == "t41-b")
+    assert t41_b["apps"]["operator"] == {
+        "app_id": "77777777-7777-7777-7777-777777777777",
+        "version_no": 12,
+        "state": "disabled",
+        "source": "runtime",
+    }
+
+    # 95 最新 preflight 版本 1.40.4 覆盖旧 install 的 1.40.2
+    env95 = next(e for e in ov["environments"] if e["id"] == "95")
+    assert env95["nodes"][0]["version"] == "1.40.4"
+    assert env95["nodes"][0]["installation"] == "installed"
+
+    # 96 远端授权计数=1，且单测 offline 后 consumer/order 仍保留 passed
+    env96 = next(e for e in ov["environments"] if e["id"] == "96")
+    t96_live = next(t for t in env96["tenants"] if t["id"] == "t96-live")
+    assert t96_live["knowledge"]["active_grants"] == 1
+    assert t96_live["capabilities"]["consumer"]["state"] == "passed"
+    assert t96_live["capabilities"]["order"]["state"] == "passed"
+    assert t96_live["capabilities"]["offline"]["state"] == "blocked"
+    assert t96_live["capabilities"]["offline"]["error_code"] == "OFFLINE_TIMEOUT"
+
+    # 6 条共享 shared_plan（含 identity）的任务，_current 仅校验 1 次（非 6 次重复调用）
+    assert sum(1 for pid, _ in current_calls if pid == shared_plan["id"]) == 1
+
+    # 4) 1600 租户大目录：drafts 与 overview 均严守桥 1 MiB 上限，不锁死草稿编辑！
+    big_reg = tmp_path / "big" / "directory.json"
+    big_reg.parent.mkdir(mode=0o700)
+    registry.apply(
+        big_reg,
+        [
+            {
+                "id": "41",
+                "name": "大目录环境",
+                "enabled": True,
+                "gateway_url": "https://big.example.test",
+                "cpms_base_url": "https://big.example.test/cpms",
+                "company_gateway_url": "https://big.example.test",
+                "config_ref": str(cfg_41),
+                "tenants": [{"id": f"t-{i}", "name": f"Company {i}", "enabled": True} for i in range(1600)],
+            }
+        ],
+        expected_revision=0,
+        actor="operator",
+        managers=[
+            {"environment": "41", "tenant_id": "platform", "user_id": "root-admin", "environments": ["*"]}
+        ],
+    )
+    big_ctx = SimpleNamespace(
+        settings=SimpleNamespace(
+            environment="41",
+            execution_environment="41",
+            database_file=gw_db,
+            environment_management_registry_file=str(big_reg),
+        )
+    )
+    drafts_big = management.drafts(big_ctx, "live-session")
+    assert len(drafts_big["effective"][0]["tenants"]) == 1600
+    assert (
+        len(json.dumps(drafts_big, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) < 1024 * 1024
+    )
+
+    ov_big = management.overview(big_ctx, "live-session")
+    assert len(json.dumps(ov_big, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) < 1024 * 1024
+    assert ov_big["environments"][0]["tenant_count"] == 1600
+    assert ov_big["environments"][0]["tenants_truncated"] is True
 
 
 def test_console_bridge_forwards_environment_overview_and_rejects_extra_fields(
