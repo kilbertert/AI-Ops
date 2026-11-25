@@ -77,6 +77,7 @@ export const messages: Record<string, string> = {
   ENVIRONMENT_REFERENCE_INVALID: '部署目标与凭据须使用已登记的逻辑引用',
   ENVIRONMENT_TIMEZONE_INVALID: '时区无效，请使用 Asia/Shanghai 等 IANA 时区名称',
   ENVIRONMENT_DRAFT_UNAVAILABLE: '草稿服务暂时不可用，请稍后刷新核对',
+  ENVIRONMENT_OVERVIEW_UNAVAILABLE: '环境运行总览暂时不可用，请稍后刷新核对',
   ENVIRONMENT_DRAFT_LIMIT: '草稿数量已达上限，请联系平台运维',
   ENVIRONMENT_DRAFT_TOO_LARGE: '草稿内容过大，请减少本次登记的租户数量',
   ENVIRONMENT_REGISTRY_MIGRATION_REQUIRED: '环境目录尚未升级，请联系平台运维迁移',

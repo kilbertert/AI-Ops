@@ -13,6 +13,7 @@ from aiops_diagnostics.common.http_auth import validate_internal_token
 from aiops_diagnostics.gateway import environment_drafts, environment_plans, environment_tasks, gateway_db
 from aiops_diagnostics.gateway import environment_registry as registry
 
+from . import environment_overview
 from . import self_service_identity as auth
 from .self_service_store import SetupConflict
 
@@ -59,7 +60,9 @@ def drafts(context, session, payload=None):
     caller, _, _ = _access(context, session)
     try:
         if payload is None:
-            return environment_drafts.catalogue(_path(context), _identity(context, caller))
+            return environment_overview.catalogue_with_overview(
+                context, _path(context), _identity(context, caller)
+            )
         if set(payload) != {"draft", "revision", "registry_revision"}:
             raise registry.RegistryError("ENVIRONMENT_DRAFT_INVALID")
         return environment_drafts.save(
@@ -75,6 +78,16 @@ def drafts(context, session, payload=None):
         raise auth.SetupRefused(str(exc)) from exc
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         raise auth.SetupRefused("ENVIRONMENT_DRAFT_UNAVAILABLE") from exc
+
+
+def overview(context, session):
+    caller, _, _ = _access(context, session)
+    try:
+        return environment_overview.build_overview_locked(context, _path(context), _identity(context, caller))
+    except registry.RegistryError as exc:
+        raise auth.SetupRefused(str(exc)) from exc
+    except (OSError, ValueError, RuntimeError, sqlite3.Error, TypeError, KeyError, AttributeError) as exc:
+        raise auth.SetupRefused("ENVIRONMENT_OVERVIEW_UNAVAILABLE") from exc
 
 
 def plan(context, session, payload):
@@ -571,6 +584,11 @@ def register(app, context, session_dependency):
     def check_plan(payload: dict, response: Response, session=Depends(session_dependency)):  # noqa: B008
         response.headers["Cache-Control"] = "no-store"
         return plan(context, session, payload)
+
+    @app.get("/v1/dify/management/environment-overview")
+    def read_overview(response: Response, session=Depends(session_dependency)):  # noqa: B008
+        response.headers["Cache-Control"] = "no-store"
+        return overview(context, session)
 
     @app.get("/v1/dify/management/environment-drafts")
     def read_drafts(response: Response, session=Depends(session_dependency)):  # noqa: B008
