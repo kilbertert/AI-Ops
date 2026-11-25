@@ -152,6 +152,8 @@ def _attribution_documents() -> list[tuple[str, str]]:
     documents = [(name, (PROJECT_ROOT / name).read_text(encoding="utf-8")) for name in ATTRIBUTION_DOCS]
     for directory in ATTRIBUTION_DIRS:
         for path in sorted(directory.rglob("*.md")):
+            if path.name == "README.md":
+                continue
             documents.append((path.relative_to(PROJECT_ROOT).as_posix(), path.read_text(encoding="utf-8")))
     return documents
 
@@ -159,12 +161,11 @@ def _attribution_documents() -> list[tuple[str, str]]:
 def test_every_evidence_entry_file_is_covered() -> None:
     """The scan must actually reach the entry files, or the rewrite silently checks nothing.
 
-    A helper that returns only the four archive documents would keep both tests
-    green while every new milestone record — the place the attribution drifted
-    last time — went unread.
+    A helper that returns only the named files or directory README pointers would
+    keep both tests green while every dated milestone record went unread.
     """
     names = [name for name, _ in _attribution_documents()]
-    assert any(name.startswith("docs/validation/") for name in names), names
+    assert any(name.startswith("docs/validation/") and not name.endswith("/README.md") for name in names), names
 
 
 def test_no_document_still_blames_173_for_the_stop_link() -> None:

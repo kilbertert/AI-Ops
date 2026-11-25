@@ -99,4 +99,4 @@ uv build
 - **总索引与上手**：[文档导航](docs/README.md)、[Gateway 运维](docs/gateway.md)、[快速上手](docs/快速上手.md)、[配置参考](docs/agents/config-reference.md)、[流水线索引](docs/agents/environment-pipeline-map.md)
 - **业务端手册**：[C 端 WF01](docs/agents/consumer-wf01/README.md)、[管家 CPMS](docs/agents/operator-cpms/README.md)、[自助开通](docs/agents/operator-cpms/self-service.md)、[环境接入手册](docs/agents/environment-registry.md)
 - **交付与运维**：[当前交付索引](docs/agents/current-delivery-state.md)、[Actions 交付手册](docs/agents/actions-delivery.md)、[部署索引](deploy/README.md)、[运维说明](ops/README.md)
-- **决策与证据**：[ADR 目录](docs/adr/)、[现役验收回执](docs/validation/README.md)、[历史进度归档说明](docs/开发进度/README.md)
+- **决策与证据**：[ADR 目录](docs/adr/)、[现役验收回执目录](docs/validation/)（[归档说明](docs/validation/README.md)）、[历史进度归档说明](docs/开发进度/README.md)
