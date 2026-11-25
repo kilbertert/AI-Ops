@@ -9,7 +9,7 @@ from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 from execution.test_app_runtime_node_entry import ORDER_A
 
 from aiops_diagnostics.consumer.billing import (
-    _amount,
+    _strict_decimal_amount,
     billing_answer,
     is_billing_question,
     read_billing_record,
@@ -93,7 +93,7 @@ def test_billing_record_is_not_a_payment_confirmation_and_null_is_not_zero(backe
 @pytest.mark.parametrize("value", [True, "NaN", "Infinity", "-1", "abc", [], "1e-999999", "100000000000000"])
 def test_invalid_money_is_rejected(value):
     with pytest.raises(ChargingStatusError):
-        _amount(value)
+        _strict_decimal_amount(value)
 
 
 def test_guidance_is_not_treated_as_a_billing_query():

@@ -148,6 +148,6 @@ switch (item.jump_path) {
 
 ## 7. 相关文档
 
-- 完整接口契约：`docs/agents/frontend-api-brief.md` 场景 D（D.1 列表字段、D.2a 跳转动作、D.4 响应类型速查）。
+- 现行公共契约：[public-openapi.md](./public-openapi.md)（历史联调总览已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md` 场景 D）。
 - 后端设计与取舍理由：`docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
-- 真实验收证据：`docs/validation.md`「快捷动作跳转路径：41 部署与公网真实验收（2026-09-16）」。
+- 真实验收证据：`AI-Ops-history-archive:docs/validation.md`（已归档）「快捷动作跳转路径：41 部署与公网真实验收（2026-09-16）」。

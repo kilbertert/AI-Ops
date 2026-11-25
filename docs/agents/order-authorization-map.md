@@ -6,7 +6,7 @@
 > 文中所有数字都是 41 上跑出来的，不是估算；**未验证的推断都标了「未验证」**。
 >
 > **怎么读**：§1 是全貌；§3 是本次事故的核心；§9 是留给评审的五个问题。
-> 相关文档：`frontend-api-brief.md` §11（选择器）、ADR-0065（工单订单归属）、
+> 相关文档：`public-openapi.md`（现行公共契约；原 `frontend-api-brief.md` §11 已归档至 `AI-Ops-history-archive`）、ADR-0065（工单订单归属）、
 > `operator-frontend-chain.md`（管家端前端接入）。
 
 ---
@@ -462,7 +462,7 @@ sequenceDiagram
 公司那条 mapper 只按 `ch_order_info.user_id` 过滤，**也不会认 `consumer_id`**——所以本轮修的
 347 单在那个列表里依然查不到。
 
-**唯一判据**（已写入 `frontend-api-brief.md` §11）：
+**唯一判据**（历史联调说明已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md` §11）：
 > 选择器里出现的订单号，提交后必须能被服务端接受。
 
 ---

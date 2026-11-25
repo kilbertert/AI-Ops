@@ -13,12 +13,9 @@ import pytest
 from aiops_diagnostics.common.i18n import (
     NON_CHINESE_LANGUAGES,
     SUPPORTED_LANGUAGES,
-    ZERO_ORDER_REMINDER_MESSAGES,
     chinese_leak,
     clarification_message,
     diagnosis_error_message,
-    diagnosis_failure_message,
-    zero_order_reminder,
 )
 from aiops_diagnostics.health.health_report_copy import (
     HEALTH_CURVE_NAMES,
@@ -61,19 +58,14 @@ def test_no_system_copy_is_chinese_for_the_added_languages(language: str) -> Non
     from aiops_diagnostics.common.i18n import (
         CLARIFICATION_MESSAGES,
         DIAGNOSIS_ERROR_MESSAGES,
-        DIAGNOSIS_FAILURE_MESSAGES,
         QA_FALLBACK_MESSAGES,
     )
 
-    samples = [zero_order_reminder(language)]
-    samples += [QA_FALLBACK_MESSAGES[language][k] for k in QA_FALLBACK_MESSAGES["zh"]]
+    samples = [QA_FALLBACK_MESSAGES[language][k] for k in QA_FALLBACK_MESSAGES["zh"]]
     samples += [CLARIFICATION_MESSAGES[language][k] for k in CLARIFICATION_MESSAGES["zh"]]
-    samples += [DIAGNOSIS_FAILURE_MESSAGES[language][k] for k in DIAGNOSIS_FAILURE_MESSAGES["zh"]]
     samples += [DIAGNOSIS_ERROR_MESSAGES[language][k] for k in DIAGNOSIS_ERROR_MESSAGES["zh"]]
 
     # And the render-time lookups really resolve to those strings.
-    for key in DIAGNOSIS_FAILURE_MESSAGES["zh"]:
-        samples.append(diagnosis_failure_message(language, key))
     for key in DIAGNOSIS_ERROR_MESSAGES["zh"]:
         samples.append(diagnosis_error_message(language, key))
     for key in CLARIFICATION_MESSAGES["zh"]:
@@ -105,15 +97,6 @@ def test_every_health_copy_table_has_the_same_keys_in_every_language() -> None:
         keys = set(table["zh"])
         for language in SUPPORTED_LANGUAGES:
             assert set(table[language]) == keys, f"{name}[{language}] 键集合不一致"
-
-
-def test_the_zero_order_reminder_covers_every_language() -> None:
-    """A flat table (tag -> string), so it gets its own check rather than the
-    key-set comparison the nested tables use."""
-    missing = [lang for lang in SUPPORTED_LANGUAGES if lang not in ZERO_ORDER_REMINDER_MESSAGES]
-    assert not missing, f"提醒语缺 {missing}"
-    for language in _ADDED:
-        assert chinese_leak(zero_order_reminder(language)) == ""
 
 
 def test_every_shortcut_seed_field_covers_every_language() -> None:

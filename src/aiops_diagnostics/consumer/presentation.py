@@ -204,7 +204,7 @@ def refund_text(language: str, refund_status: object, pack: dict[str, str] | Non
     return table[REFUND_CODES.get(str(refund_status), "refund_unknown")]
 
 
-def _amount(value: object) -> str | None:
+def _raw_amount_text(value: object) -> str | None:
     """只在**上游真的给了数**时返回值。None 与空串都算没给，`"0"` 是给了。"""
     if value is None:
         return None
@@ -260,9 +260,9 @@ def status_text(
 def billing_text(language: str, snapshot: dict[str, Any], pack: dict[str, str] | None = None) -> str:
     table = words(language, pack)
     refund = refund_text(language, snapshot["refund_status"], pack)
-    amount = _amount(snapshot["order_amount"])
-    paid = _amount(snapshot["recorded_payment_amount"])
-    refunded = _amount(snapshot["recorded_refund_amount"])
+    amount = _raw_amount_text(snapshot["order_amount"])
+    paid = _raw_amount_text(snapshot["recorded_payment_amount"])
+    refunded = _raw_amount_text(snapshot["recorded_refund_amount"])
 
     parts = []
     if amount is not None:

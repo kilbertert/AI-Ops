@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation
 
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
@@ -258,16 +257,6 @@ def check_status_prose(text: str) -> None:
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")
         if _ASSERTION.search(clause):
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "status belongs in the evidence segment")
-
-
-def _amount(raw: object) -> str | None:
-    if raw is None or str(raw).strip() == "":
-        return None
-    try:
-        value = Decimal(str(raw))
-    except InvalidOperation:
-        return None
-    return format(value, "f") if value.is_finite() else None
 
 
 def _readable_time(raw: object) -> str:

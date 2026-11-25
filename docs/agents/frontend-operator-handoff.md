@@ -268,8 +268,8 @@ POST /v1/assistant/questions
 ## 4. 与客户端共用的部分（不要重复实现）
 
 - **返回体形状、轮询、取消、会话**：与客户端**完全一致**。见
-  [frontend-api-brief.md](frontend-api-brief.md) 与
-  [assistant-cancel-handoff.md](assistant-cancel-handoff.md)。
+  [public-openapi.md](public-openapi.md) 与
+  [assistant-cancel-handoff.md](assistant-cancel-handoff.md)（旧联调总览已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md`）。
 - **会话（`conversation_id`）按入口隔离**：同一用户从 `operator` 与 `consumer`
   进来的会话是**两个**，`GET/DELETE /v1/conversations/{id}` 跨入口会得到 `404`。
   这是有意的，前端不要复用同一个 `conversation_id`。

@@ -142,8 +142,6 @@ def _check_language_map(mapping: dict, where: str, cc, stale: list[str]) -> None
 FLAT_TABLES = (
     ("aiops_diagnostics.common.i18n", "QA_FALLBACK_MESSAGES"),
     ("aiops_diagnostics.common.i18n", "CLARIFICATION_MESSAGES"),
-    ("aiops_diagnostics.common.i18n", "ZERO_ORDER_REMINDER_MESSAGES"),
-    ("aiops_diagnostics.common.i18n", "DIAGNOSIS_FAILURE_MESSAGES"),
     ("aiops_diagnostics.common.i18n", "DIAGNOSIS_ERROR_MESSAGES"),
     ("aiops_diagnostics.common.i18n", "FREE_TEXT_UNAVAILABLE_MESSAGES"),
     ("aiops_diagnostics.health.health_report_copy", "HEALTH_SUMMARY_MESSAGES"),

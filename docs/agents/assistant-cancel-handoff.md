@@ -23,7 +23,7 @@
 
 ## 0. BFF 必须先做的两件事（漏任一条，这份契约静默失效）
 
-前端**不直连** AI-Ops 网关，链路是 前端 → Java BFF → AI-Ops。`frontend-api-brief.md` 里「建议
+前端**不直连** AI-Ops 网关，链路是 前端 → Java BFF → AI-Ops。早期联调文档里「建议
 BFF 保留 `/v1/*` 原样透传」只是**建议，不是保证**，所以以下两条必须由 BFF 侧确认落地：
 
 1. **放行新路径** `POST /v1/assistant/questions/{qa_id}/cancel`。没放行的表现是稳定的 `404`／
@@ -368,7 +368,7 @@ PRD #346 与本文。
 
 ## 9. 相关文档
 
-- 统一助手入口完整契约（FAQ / QA / 诊断 / 澄清 / 快捷动作）：[frontend-api-brief.md](./frontend-api-brief.md) §2.3（状态值）与 §10.8（调用示例）。
+- 统一助手入口现行契约（FAQ / QA / 澄清 / 快捷动作）：[public-openapi.md](./public-openapi.md)（早期联调稿已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md` §2.3 与 §10.8）。
 - 跳转类动作不锁输入框的交接：[frontend-jump-path-handoff.md](./frontend-jump-path-handoff.md)。
 - 后端实现取舍：PRD #346；取消端点在 #357，`cancelled` 终态在 #354，重启收敛在 #356。
 - 验证记录与已知缺口：[现役验收回执目录](../validation/README.md)（历史单体归档已按 ADR-0345 迁出至 `kilbertert/AI-Ops-history-archive`）。

@@ -18,7 +18,7 @@
 ## 约束（决定了解法）
 
 **前端按 `blocks[]` 分派渲染，不解析 Markdown。** 这在
-[前端 API 简报](../agents/frontend-api-brief.md) 里写死了两处：块渲染规则
+[前端 API 简报（已归档）](https://github.com/kilbertert/AI-Ops-history-archive/blob/759e45e85b9731a4b44ac85c5d1a491d829f498e/docs/agents/frontend-api-brief.md) 里写死了两处：块渲染规则
 （`text` 块"按顺序渲染段落"）与"不要解析 Markdown、不要从文本里提取 URL"。
 
 所以提高可读性**不能**靠 `**加粗**`、`# 标题`、`- 列表` —— 那些符号会在页面上原样
