@@ -3,6 +3,11 @@
 状态：已采纳；只收窄 `SelfServiceStore.register_runtime` 的 `SETUP_ROUTE_CONFLICT`
 谓词口径，不改冲突检查的位置、时机与其余任何判据。
 
+> **后续更正（ADR-0331）**：下文「同租户异应用=占用」子句的前提——operator app_id
+> 是确定性派生、再登记必然重提同一值——已被 env95 生产证伪（重准备必然重铸
+> app_id），该子句由 **ADR-0331** 移除。本 ADR 的其余收窄（retracted 墓碑不计、
+> 异租户占用仍冲突）继续现役。
+
 `register_runtime` 的登记路由冲突检查对 `chat_route_bindings` 按
 `environment+tenant` 计**任意状态**行、对 `dify_app_registry` 按
 `tenant_id=? OR app_id IN (候选)` 计行。而这两张表**只由发布路径写**：
