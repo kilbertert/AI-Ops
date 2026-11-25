@@ -173,7 +173,7 @@ def resolve_query_scope(
         if data_scope.shop_ids and mapper is not None:
             sites.update(_sites_from_shops(mapper, data_scope.shop_ids, tenant_id))
 
-    if context.delegated and context.subject.c_user_id:
+    if context.delegated:
         raise ScopeError(
             "代查目标站点范围解析已退役，拒绝扩大查询范围",
             code=SCOPE_ERROR_EMPTY_SCOPE,

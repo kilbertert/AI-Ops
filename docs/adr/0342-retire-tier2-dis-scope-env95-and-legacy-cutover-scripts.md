@@ -14,9 +14,9 @@
 ## 决定
 
 1. 移除 `common/config.py` 中的 `DisSettings` / `Settings.dis`、`.env.example` 中的 `AIOPS_DIS_*`（并在 `tests/test_env_example.py` 纳入退役前缀守卫）、`identity/query_scope.py` 中的 `DisDirectory` / `DisHttpDirectory` / `site_ids_by_points` 与 `data/sources.py` 中的 `site_ids_by_points()`。
-   - **安全不变量保持**：`resolve_query_scope()` 对非 `self` 范围的 `context.delegated and context.subject.c_user_id` 仍显式以 `ScopeError(..., code=SCOPE_ERROR_EMPTY_SCOPE)` fail closed，绝不静默扩大查询范围。
-2. 删除已撤回的 `ops/environments/env95/` 全目录及其专属单测 `tests/tooling/test_env95_{node_runtime,upgrade}.py`，同步清理 `llmdoc/deployment/delivery-and-hosts.mdx` 中的失效文件列表（撤回决策与历史事实保留在 Git 历史与 ADR-0260/0263）。
-3. 删除 `deploy/d4-cutover.py` 与 `tests/dify/test_dify_entry_cutover.py`，同步更新 `tests/test_repository_layout.py` 与 `deploy/README.md`（不触碰并行分支占用的 `tests/test_cd_deploy_scripts.py` 与 `deploy/routing-window.sh`）。
+   - **安全不变量保持**：`resolve_query_scope()` 对任意非 `self` 范围的 `context.delegated`（无论是否绑定 C 端用户 ID）一律显式以 `ScopeError(..., code=SCOPE_ERROR_EMPTY_SCOPE)` fail closed，绝不静默扩大查询范围。
+2. 删除已撤回的 `ops/environments/env95/` 全目录及其专属单测 `tests/tooling/test_env95_{node_runtime,upgrade}.py`，同步更新 `llmdoc/deployment/delivery-and-hosts.mdx` 与 `docs/agents/env-95-facts.md` 指向 Git 历史 `a4cf295e:ops/environments/env95/README.md` 与现役受管安装手册 `ops/environments/gateway/README.md`（撤回决策保留在 ADR-0260/0263）。
+3. 删除 `deploy/d4-cutover.py` 与 `tests/dify/test_dify_entry_cutover.py`，同步更新 `tests/test_repository_layout.py` 与 `deploy/README.md`（注明历史脚本见 Git `a4cf295e:deploy/d4-cutover.py`；不触碰并行工作树 `fix/release-by-dispatch` 占用的 `tests/test_cd_deploy_scripts.py`、`deploy/routing-window.sh` 与 `docs/agents/env-41-runbook.md`，待该分支释放后同步清理）。
 4. 删除 `GatewayStore.list_standard_diagnoses()` 与 `count_standard_diagnoses()`，清理 3 个测试文件中的冗余桩调用。
 
 ## 备选方案

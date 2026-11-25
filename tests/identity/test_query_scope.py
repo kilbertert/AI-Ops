@@ -166,7 +166,7 @@ def test_query_scope_empty_site_scope_is_marked_for_short_circuit() -> None:
 
 
 def test_query_scope_fails_closed_when_delegation_is_requested() -> None:
-    """历史 Dis 点位代查已退役（ADR-0342）：非 self 代查一律 fail closed，不扩大范围。"""
+    """历史 Dis 点位代查已退役（ADR-0342）：无论目标是否绑定 C 端 ID，非 self 代查一律 fail closed。"""
     context = _context(
         target_b_user_id="B-TARGET-2",
         delegated_permissions=True,
@@ -176,6 +176,20 @@ def test_query_scope_fails_closed_when_delegation_is_requested() -> None:
         resolve_query_scope(context)
 
     assert excinfo.value.code == SCOPE_ERROR_EMPTY_SCOPE
+
+    without_c_user = ScopeContext(
+        caller=context.caller,
+        subject=SubjectRecord(b_user_id="B-TARGET-3", c_user_id=None, username="b.only", tenant_id=TENANT),
+        delegated=True,
+        effective_tenant_id=TENANT,
+        data_scope=context.data_scope,
+        roles=context.roles,
+        permissions=context.permissions,
+    )
+    with pytest.raises(ScopeError) as excinfo_no_c:
+        resolve_query_scope(without_c_user)
+
+    assert excinfo_no_c.value.code == SCOPE_ERROR_EMPTY_SCOPE
 
 
 def test_query_scope_intercept_keeps_the_immutable_contract() -> None:
