@@ -151,10 +151,7 @@ def test_consumer_order_shortcut_uses_its_workflow(tmp_path, monkeypatch):
         assert result["status"] == "completed", result
         assert Client.calls and env["upstream"].calls == 1
         with sqlite3.connect(env["db"]) as connection:
-            assert (
-                connection.execute("SELECT count(*) FROM standard_diagnoses WHERE kind='order'").fetchone()[0]
-                == 0
-            )
+            assert connection.execute("SELECT count(*) FROM async_jobs WHERE kind='order'").fetchone()[0] == 0
 
 
 def test_unconfigured_business_route_does_not_create_a_python_job(tmp_path, monkeypatch):

@@ -7,7 +7,7 @@ code:
 ---
 # job-lifecycle
 
-四张表（`health_report_jobs` / `standard_diagnoses` / `assistant_questions` / `runs`）实现同一条
+四张表（`health_report_jobs` / `async_jobs`（原 `standard_diagnoses`，ADR-0340 v4 更名） / `assistant_questions` / `runs`）实现同一条
 异步作业生命周期规则，此前给出的是**三个半**答案：五份手写的同一句过期语句、同一条 claim guard
 的两种极性拼写、两套常量族（问题表借用诊断表那套），以及一个仓库自己已经记录为错误的启动清扫
 （构造一个 store 竟然终结了在途工作）。

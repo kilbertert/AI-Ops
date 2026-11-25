@@ -82,7 +82,7 @@ python /tmp/probe.py --accept-live-app --languages zh,en,zh-Hant,vi,mn,th,km
 ssh aiops-41 '/opt/aiops-41/.venv/bin/python -c "
 import sqlite3
 c = sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\", uri=True)
-for t in (\"standard_diagnoses\",\"assistant_questions\",\"health_report_jobs\"):
+for t in (\"async_jobs\",\"assistant_questions\",\"health_report_jobs\"):
     print(t, dict(c.execute(f\"select status,count(*) from {t} where status in (\x27queued\x27,\x27running\x27) group by status\").fetchall()))"'
 ```
 

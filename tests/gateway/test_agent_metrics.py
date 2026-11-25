@@ -432,8 +432,7 @@ def test_the_summary_endpoint_reports_this_tenants_expired_jobs(tmp_path: Path) 
         )
         with store._connection(write=True) as connection:  # noqa: SLF001
             connection.execute(
-                "UPDATE standard_diagnoses SET status='running', deadline_at=?, expires_at=? "
-                "WHERE diagnosis_id = ?",
+                "UPDATE async_jobs SET status='running', deadline_at=?, expires_at=? WHERE diagnosis_id = ?",
                 ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00", job["diagnosis_id"]),
             )
             store._expire_diagnoses(connection, datetime.now(UTC))  # noqa: SLF001

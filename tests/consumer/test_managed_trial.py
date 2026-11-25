@@ -272,14 +272,10 @@ def test_preview_readback_refuses_revoked_knowledge(managed_trial, monkeypatch):
         import json
 
         result = json.loads(
-            db.execute("SELECT result_json FROM standard_diagnoses WHERE diagnosis_id=?", (tid,)).fetchone()[
-                0
-            ]
+            db.execute("SELECT result_json FROM async_jobs WHERE diagnosis_id=?", (tid,)).fetchone()[0]
         )
         result["report"].update(callback_version=3, knowledge_base_ids=["revoked-library"])
-        db.execute(
-            "UPDATE standard_diagnoses SET result_json=? WHERE diagnosis_id=?", (json.dumps(result), tid)
-        )
+        db.execute("UPDATE async_jobs SET result_json=? WHERE diagnosis_id=?", (json.dumps(result), tid))
     monkeypatch.setattr(
         api.consumer_knowledge,
         "owned_libraries",

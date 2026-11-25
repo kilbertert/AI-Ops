@@ -72,7 +72,7 @@ def test_historical_dify_migration_rolls_back_schema_and_rows(tmp_path, monkeypa
 @pytest.mark.parametrize(
     ("store", "action", "target"),
     [
-        (GatewayStore, sqlite3.SQLITE_CREATE_TABLE, "standard_diagnoses"),
+        (GatewayStore, sqlite3.SQLITE_CREATE_TABLE, "async_jobs"),
         (MetricsStore, sqlite3.SQLITE_CREATE_INDEX, "idx_agent_metrics_agent"),
         (KnowledgeGrants, sqlite3.SQLITE_CREATE_TABLE, "consumer_knowledge_grants"),
         (ChatRouteBindingStore, sqlite3.SQLITE_CREATE_TABLE, "chat_route_bindings"),
