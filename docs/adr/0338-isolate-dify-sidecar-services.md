@@ -1,7 +1,7 @@
 # ADR-0338: 将 Dify 控制台发布桥与登录代理从 Gateway 包剥离为独立旁路服务
 
-- 状态：Accepted
-- 日期：2026-11-25
+Status: Accepted
+Date: 2026-11-25
 
 ## 背景
 
@@ -33,6 +33,11 @@
 4. **平滑升级打包与部署脚本**：
    - `ops/dify-console-bridge/build-bundle.sh` 打包 `dify_console_bridge/` 与最小标准库原语子集 `aiops_diagnostics/`（不再包含 `aiops_diagnostics/dify/`）。
    - `ops/dify-console-bridge/deploy.sh` 兼容将旧 `ExecStart`（`-m aiops_diagnostics.dify_console_publish` 或 `-m aiops_diagnostics.dify.dify_console_publish`）原子升级为 `-m dify_console_bridge`，并同时备份/恢复 `aiops_diagnostics` 与 `dify_console_bridge` 目录。
+
+## 备选方案（被否）
+
+- **继续留在 `src/aiops_diagnostics/dify/` 并在旧路径保留转发壳**：被否。仓库开发共识明确禁止旧路径转发壳，且保留在 Gateway 包内无法从目录边界区分“Gateway 进程内代码”与“36 主机仅标准库独立运行进程”，仍需维护常量复制和部署测试排除清单。
+- **将两个旁路拆分为完全独立的外部仓库**：被否。发布桥和登录代理与 Gateway 共享 `common/http_auth.py`、`common/bounded_http.py`、`common/platform_constants.py` 及同一套集成回归测试，留在同仓 `services/` 下既明确运行边界，又保留单一 CI 回归门禁。
 
 ## 后果
 
