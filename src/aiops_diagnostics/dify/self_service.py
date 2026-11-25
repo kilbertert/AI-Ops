@@ -982,6 +982,14 @@ class SelfService:
                 ).snapshot
                 if snapshot.get("app_id") != app_id or snapshot.get("workspace_id") != row["workspace_id"]:
                     raise auth.SetupRefused("SETUP_VERSION_MISMATCH")
+                if current.entry == "consumer":
+                    frozen = snapshot.get("consumer_service")
+                    content = frozen.get("content") if isinstance(frozen, dict) else None
+                    if isinstance(content, dict) and content.get("environment") not in (
+                        None,
+                        current.environment,
+                    ):
+                        raise auth.SetupRefused("SETUP_VERSION_ENVIRONMENT_MISMATCH")
                 outcome = SyncOutcome(
                     row["tenant_id"],
                     current.entry,

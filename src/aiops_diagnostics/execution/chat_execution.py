@@ -349,6 +349,41 @@ def key_file_for_app(key_dir: str | Path, app_id: str) -> str:
     return str(Path(str(key_dir)).expanduser().absolute() / f"{app_id}.key")
 
 
+def validate_consumer_snapshot(
+    snapshot: Any,
+    *,
+    app_id: str,
+    workflow_id: str,
+    tenant_id: str,
+    environment: str,
+) -> dict[str, Any]:
+    """校验消费者发布快照的冻结内容是否完整且归属当前执行环境。"""
+    if not isinstance(snapshot, dict):
+        raise ChatBindingError("consumer publication has no frozen content")
+    frozen = snapshot.get("consumer_service")
+    if (
+        snapshot.get("app_id") != app_id
+        or snapshot.get("workflow_id") != workflow_id
+        or not isinstance(frozen, dict)
+        or not isinstance(frozen.get("content"), dict)
+        or not isinstance(frozen.get("knowledge_base_ids"), list)
+        or any(
+            not isinstance(k, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", k)
+            for k in frozen.get("knowledge_base_ids", [])
+        )
+        or frozen["content"].get("tenant_id") != tenant_id
+        or frozen["content"].get("environment") != environment
+        or frozen["content"].get("state") != "published"
+        or type(frozen.get("live_order_status")) is not bool
+        or type(frozen.get("live_billing_record")) is not bool
+        or type(frozen.get("callback_version", 1)) is not int
+        or frozen.get("callback_version", 1) not in {1, 2, 3, 4, 5, 6}
+        or type(frozen.get("photo_enabled", False)) is not bool
+    ):
+        raise ChatBindingError("consumer publication has no frozen content")
+    return frozen
+
+
 def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBinding, ...]:
     """把管理表里 `active` 的行读成绑定。`retracted` 的**不出现**在这里。
 
@@ -390,26 +425,13 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
                 )
             except AgentError as exc:
                 raise ChatBindingError("consumer publication version unavailable") from exc
-            frozen = snapshot.get("consumer_service")
-            if (
-                snapshot.get("app_id") != row.app_id
-                or snapshot.get("workflow_id") != row.workflow_id
-                or not isinstance(frozen, dict)
-                or not isinstance(frozen.get("content"), dict)
-                or not isinstance(frozen.get("knowledge_base_ids"), list)
-                or any(
-                    not isinstance(k, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", k)
-                    for k in frozen.get("knowledge_base_ids", [])
-                )
-                or frozen["content"].get("tenant_id") != row.tenant_id
-                or frozen["content"].get("environment") != row.environment
-                or frozen["content"].get("state") != "published"
-                or type(frozen.get("live_order_status")) is not bool
-                or type(frozen.get("live_billing_record")) is not bool
-                or type(frozen.get("callback_version", 1)) is not int
-                or frozen.get("callback_version", 1) not in {1, 2, 3, 4, 5, 6}
-            ):
-                raise ChatBindingError("consumer publication has no frozen content")
+            frozen = validate_consumer_snapshot(
+                snapshot,
+                app_id=row.app_id,
+                workflow_id=row.workflow_id,
+                tenant_id=row.tenant_id,
+                environment=row.environment,
+            )
             binding = replace(
                 binding,
                 callback_version=frozen.get("callback_version", 1),

@@ -821,6 +821,27 @@ def _advance_route_binding(
             "CHAT_ROUTE_BINDING_COLLIDES_WITH_FILE",
             "this route is still declared in the bindings file",
         )
+    if scenario == chat_execution.SCENARIO_CONSUMER_SERVICE and getattr(context, "agent_manager", None):
+        from aiops_diagnostics.publication.agent_lifecycle import AgentError
+
+        try:
+            snapshot = context.agent_manager.store.version(
+                outcome.agent_id, binding.tenant_id, version_no
+            ).snapshot
+        except AgentError as exc:
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT,
+                "CONSUMER_VERSION_UNAVAILABLE",
+                "selected consumer version is unavailable",
+            ) from exc
+        frozen = snapshot.get("consumer_service") if isinstance(snapshot, dict) else None
+        content = frozen.get("content") if isinstance(frozen, dict) else None
+        if isinstance(content, dict) and content.get("environment") not in (None, environment):
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT,
+                "CONSUMER_VERSION_ENVIRONMENT_MISMATCH",
+                "selected version belongs to another execution environment",
+            )
 
     store = ChatRouteBindingStore(Path(database).expanduser().absolute())
     existing = store.get(environment, binding.tenant_id, entry, scenario)
@@ -1119,6 +1140,28 @@ def _publish_allowlist(configured: tuple[str, ...], settings: Any) -> tuple[str,
     return tuple(dict.fromkeys([*configured, *approved_model_names(settings)]))
 
 
+def _inject_runtime_hook(runtime: Any, method_name: str, dependency: Any) -> None:
+    """显式向真实 GatewayRuntime 或声明了同名 setter 的测试替身注入依赖。
+
+    通过检查类属性与实例 ``__dict__`` 识别注入点，既避免 ``hasattr`` 触发测试替身的
+    ``__getattr__``，也不再用 ``contextlib.suppress(Exception)`` 静默吞掉真实装配异常。
+    """
+    if isinstance(runtime, GatewayRuntime):
+        getattr(runtime, method_name)(dependency)
+        return
+    cls_attr = getattr(type(runtime), method_name, None)
+    if callable(cls_attr):
+        getattr(runtime, method_name)(dependency)
+        return
+    try:
+        inst_dict = object.__getattribute__(runtime, "__dict__")
+    except AttributeError:
+        return
+    hook = inst_dict.get(method_name)
+    if callable(hook):
+        hook(dependency)
+
+
 def create_gateway_app(
     *,
     settings: GatewayServerSettings | None = None,
@@ -1165,18 +1208,13 @@ def create_gateway_app(
     # end live work; that mistake is what #492 fixed.
     selected_store.recover_interrupted_jobs()
     selected_runtime = runtime or GatewayRuntime.from_settings(selected_store, selected_settings)
-    # #782：把试运行要用的运营商站点范围解析器注入运行时。构造它需要 Settings 与内部凭据，
-    # 正是装配层已经持有的东西；放在这里而不是运行时里 import（那会形成
-    # gateway_api → gateway_runtime → gateway_api 的环）。注入失败 ⇒ 不设 ⇒ 试运行的
-    # 运营商范围落到空集合（fail-closed），不是租户级。
-    # **整块**都在 suppress 里，`hasattr` 也不例外：一个 `__getattr__` 会抛的替身
-    # （测试用的直白替身就是这样）在 `hasattr` 那一刻就会炸。这里的语义是"能配就配上，
-    # 配不上就让试运行的运营商范围落到空集合（fail-closed）"，所以任何失败都不该逸出。
+    # 试运行运营商站点范围解析器：未配置或配置不可读时为 None（fail closed，落空集合）。
     trial_scope: Any = None
-    with contextlib.suppress(Exception):
+    try:
         trial_scope = _operator_site_scope(Settings.from_config(selected_settings.server_config_file))
-        if hasattr(selected_runtime, "set_trial_operator_scope"):
-            selected_runtime.set_trial_operator_scope(trial_scope)
+    except (ValueError, OSError):
+        trial_scope = None
+    _inject_runtime_hook(selected_runtime, "set_trial_operator_scope", trial_scope)
     selected_resolver = caller_resolver or _caller_resolver(selected_settings)
     if selected_settings.environment_registry_file:
         from aiops_diagnostics.gateway.environment_registry import for_settings
@@ -1187,9 +1225,6 @@ def create_gateway_app(
         selected_resolver = RegisteredCallerResolver(selected_resolver, registry)
     diagnostic_settings = getattr(selected_runtime, "diagnostic_settings", None)
     selected_authorizer = order_authorizer or (
-        # ``shop_directory`` 让「快照说不可见」时能向公司权威端点确认一次
-        # （见 ``ScopedOrderAuthorizer`` 的 docstring）。未配置时为 ``None``，
-        # 此时行为与之前逐字一致：只有快照，判不可见即拒绝。
         ScopedOrderAuthorizer(
             diagnostic_settings,
             shop_directory=(
@@ -1201,15 +1236,8 @@ def create_gateway_app(
         if diagnostic_settings is not None
         else DisabledOrderAuthorizer()
     )
-    # 聊天 worker 在写结果之前要用**同一个**授权器再判一次本人归属（APP-RUNTIME-01 续办
-    # 必修 3）。注入而不是反向 import：`gateway_api` 已经 import 运行时，反向会成环。
-    #
-    # 整块都在 `suppress` 里，而且**不靠 `hasattr` 判断**：一个"任何属性都返回可调用对象"
-    # 的替身（测试里的直白替身就是这样）会让 `hasattr` 恒为 True，随后调用就抛。
-    # 与上面 `set_trial_operator_scope` 同一条理由：这里的语义是"能配就配上"，
-    # 配不上就让 worker fail closed（判不出归属 ⇒ 落 failed），而不是让装配炸掉。
-    with contextlib.suppress(Exception):
-        selected_runtime.set_order_authorizer(selected_authorizer)
+    # 聊天 worker 写终态前复用同一授权器；仅在真实运行时或显式声明该方法的替身上注入。
+    _inject_runtime_hook(selected_runtime, "set_order_authorizer", selected_authorizer)
     if platform_resolver is not None:
         selected_platform_resolver = platform_resolver
     else:
