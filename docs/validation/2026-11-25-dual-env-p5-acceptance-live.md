@@ -2,7 +2,7 @@
 
 - **适用版本**：
   - 41 控制面 Gateway：`1.40.4+6054bc880093`（本轮依次合入并生效 PR #1724 `3aead1b4`、PR #1727 `a9889801`、PR #1728 `2a7ac4d4`、PR #1733 `7150e0ce`；41 切后消费端复验基线 `1.40.4+46c200d43ebb`；`/health` 返回 `business_mutations: disabled`）。
-  - 95 目标面 Gateway：通过页面驱动的一键开通受管安装器，由 `1.40.4+fc9594a9a50b`（`gateway.db` `PRAGMA user_version=2`）无中断前向迁移升级至 **`1.40.4+a98898014689`**（`PRAGMA user_version=4`，含 `async_jobs` 表迁移与演练备份；`/health` 返回 `business_mutations: disabled`），节点 `node-95`。
+  - 95 目标面 Gateway：通过页面驱动的一键开通受管安装器，由 `1.40.4+fc9594a9a50b`（`gateway.db` `PRAGMA user_version=2`）经停服前隔离演练与受控短停服单事务前向迁移升级至 **`1.40.4+a98898014689`**（`PRAGMA user_version=4`，含 `async_jobs` 表迁移与 `0600` 校验备份；`/health` 返回 `business_mutations: disabled`），节点 `node-95`。
   - 36 共享控制台：`d871c40c` 配套（`kb-service --scoped-account`、`aiops-dify-login-proxy` 多环境 `ADR-0276` 启用、`aiops-dify-console-bridge`、`deploy-web-1`）。
 - **适用范围**：41 唯一目录切换后双租户消费端实网复验、36 多环境登录切流核验、95 跨 schema 原地升级，以及升级后 95 双真实租户（平高 `2019588094906601472`、小趋充电 `1783022023241633792`）经 `/aiops/environments` 页面一键开通/验证/正式发布/正式 HTTPS 三业务 + 双端同会话追问 + 双向跨租户互查 + 双环境同窗并存 + 受管恢复停用闭环。
 - **未触碰边界**：零公司仓库改动、零公司服务/业务库写操作、`124` 保持 `draft_only` 未动；验证完毕后 95 已按受管流程恢复至双租户停用安全态（`95` 本地 `environment.json revision: 14`，`enabled=false`，双租户 `false`，`active_routes=0`；41 中央 `registry.json revision: 13`，`41` 两现役租户 `true`，`95` 双租户 `false`）。
@@ -23,7 +23,7 @@
 | 编号 / PR | 现场暴露现象 | 修复与真机复验结果 |
 |---|---|---|
 | **PR #1724**（`3aead1b4`，ADR-0320） | 95 平高首次激活窗口内，正式 HTTPS 管家入口返回 `403 OPERATOR_SITE_SCOPE_REQUIRED`（公司 UPMS `/user/ds` 返回系统错误后降级推导遗漏了租户顶层账号 `type ∈ {-1, 1}` 归一为 `SCOPE_TYPE_ALL`） | 对齐 `EntryCallerResolver._normalize_operator_scope` 与既有 `data_scope_rule.py` 规则；升级 95 后平高与小趋正式 HTTPS 管家 `order`/`offline` 及追问均 `200 completed` |
-| **PR #1727**（`a9889801`，ADR-0272） | 95 从 `fc9594a9`（schema `v2`）升级至 `v3/v4` 时，受管安装器 `runtime_check` 严格拦截并触发自动回滚（顺带实证 P3 升级失败自动回退与原服务零损坏） | 安装器补齐停服前隔离副本演练、停服后 `0600` 校验备份、单事务前向迁移与失败原库恢复；95 实机一次无中断完成 `gateway.db user_version 2 → 4` 迁移 |
+| **PR #1727**（`a9889801`，ADR-0272） | 95 从 `fc9594a9`（schema `v2`）升级至 `v3/v4` 时，受管安装器 `runtime_check` 严格拦截并触发自动回滚（顺带实证 P3 升级失败自动回退与原服务零损坏） | 安装器补齐停服前隔离副本演练、停服后 `0600` 校验备份、单事务前向迁移与失败原库恢复；95 实机经受控短停服一次完成 `gateway.db user_version 2 → 4` 迁移并拉起新版本 |
 | **PR #1728**（`2a7ac4d4`，ADR-0329） | 离线应用包增至 24.9 MB 后跨太平洋链路单轮上传触顶 300s 且 `reconcile` 重复重下重传 | 前置 `guard_staged_archive` 按 root/`0600`/同 SHA-256 跳过重传并调优传输预算至 `180s/480s/600s`；95 升级及后续小趋一键开通均稳定通过 |
 | **PR #1733**（`7150e0ce`） | `/aiops/environments` 5 秒轮询 `tasks.inspect()` 在独占锁内重复解压 24.9 MB 归档耗时 ~7.4s，导致客服验证回调撞穿 30s 超时 | `tasks.inspect()` 锁内去重 + 按实时校验摘要缓存清单解析；41 实测 20 任务 `inspect()` 从 **7.4s 降至 12–15ms**（提速约 600 倍），随后平高与小趋三能力验证均一次通过 |
 | **待后续跟进观察** | 多次 `publish → restore` 反复切回同一源配置摘要时，`source_configuration(restore=True)` 的 `O_EXCL` 备份会撞上历史同名 `references.json.<sha>.bak`；同时 `publication.py` 终态判定将 `phase=="restored"` 排在 `state=="reconcile"` 之前，令平高首次恢复在 95 已停用后提前标 `cancelled` 而跳过中央目录同步 | 归档冲突 `.bak` 并重跑受管恢复后 41 中央目录干净推进至 `rev 11`；小趋恢复前提前归档冲突 `.bak`，首次恢复即无报错收敛（`error_code=None`）。后续可单开修复 PR 调整终态判定顺序并避免同名备份冲突 |
@@ -80,7 +80,10 @@
 
 1. **业务语义准确率未人工验收**：本回执证明了跨环境架构、唯一目录、页面一键开通、升级迁移、正式 HTTPS 链路、工具/对象/窗口落库、双向跨租户隔离与受管恢复停用的技术闭环，**不宣称业务准确率已获工程师或业务方签收**。
 2. **原生 Android 客户端外部阻塞**：`#1353`（连续会话）与 `#1422`（Markdown 呈现）仍待公司发包，H5 / 正式 HTTPS API 证据不替代原生 APK 验收。
-3. **同租户跨用户隔离**：尚缺第二真实用户授权材料，未创建或冒充公司用户。
+3. **跨环境与同租户剩余隔离缺口**：
+   - 同租户跨用户隔离尚缺第二真实用户授权材料，未创建或冒充公司用户；
+   - 跨环境（41 ↔ 95）完整会话正文与知识读取隔离仍无新增实测证据（前序仅覆盖跨环境消费者登录解析绑定与 95 内知识库归属四腿），本次跨租户互查集中在 95 内平高 ↔ 小趋；
+   - 同环境双租户同时激活后再单独停用其一、并验证另一租户持续可用尚未实测（本轮两次窗口分别激活单租户，已证明单租户启用期间同环境未启用租户双端被拒 `403 INSUFFICIENT_SCOPE`，以及恢复后整环境回归停用 `enabled=false` / `active_routes=0`）。
 4. **95 历史误回显测试 operator 令牌撤销回执**：此前 95 现场实证公司 UPMS 不依赖 JWT `exp` 自然失效，后端精确撤销回执仍未取得；本轮受控验收窗口经用户明确放行用于验证并已在结束后完整恢复至 95 双租户停用安全态（`enabled=false`、`active_routes=0`）。
 5. **管理页视觉与交互体验改造**：`/aiops/environments` 当前已覆盖四区总览与一键开通功能闭环，其界面美观与交互流畅度重构已列为下一阶段优先需求，不在本回执宣称范围内。
 
