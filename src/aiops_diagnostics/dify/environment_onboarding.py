@@ -22,7 +22,14 @@ from . import environment_validation as validation
 ACTION = "tenant-onboard"
 BASE_STAGES = ("candidate-prepare", "candidate-install", "candidate-register")
 ALL_STAGES = (*BASE_STAGES, "candidate-validate")
-_RENEW_MIN_REMAINING_SECONDS = 300.0
+# 阶段级续签余量：安装含 staging + 400s 传输上限 + 60s 授权保留 + 认领开销，必须保证充裕窗口。
+_STAGE_MIN_REMAINING: dict[str, float] = {
+    "candidate-install": 720.0,
+    "candidate-register": 600.0,
+    "candidate-validate": 600.0,
+}
+_INSTALL_PRE_DISPATCH_FLOOR = 600.0
+_FRESH_SITE_MIN_REMAINING = 899.0
 
 
 def _stage_sequence(request: dict[str, Any]) -> tuple[str, ...]:
@@ -30,9 +37,15 @@ def _stage_sequence(request: dict[str, Any]) -> tuple[str, ...]:
 
 
 def _renew_same_digest_plan(
-    path: str, identity: tuple[str, str, str], original_plan: dict[str, Any], reference: str
+    path: str,
+    identity: tuple[str, str, str],
+    original_plan: dict[str, Any],
+    reference: str,
+    *,
+    min_remaining_seconds: float = 600.0,
+    force_new: bool = False,
 ) -> dict[str, Any]:
-    """仅当草稿、目录、制品引用与授权完全未漂移时续签同摘要计划窗，防止慢链误超时。"""
+    """仅当草稿、目录、制品引用与授权完全未漂移时续签同摘要计划窗，防止慢链与大包上传误超时。"""
     tasks._authorize(path, identity, original_plan["environment"])
     fresh = plans.preflight(
         path,
@@ -41,7 +54,8 @@ def _renew_same_digest_plan(
         original_plan["draft_revision"],
         original_plan["registry_revision"],
         reference,
-        min_remaining_seconds=_RENEW_MIN_REMAINING_SECONDS,
+        min_remaining_seconds=min_remaining_seconds,
+        force_new=force_new,
     )
     if fresh["digest"] != original_plan["digest"] or fresh["state"] == "expired":
         raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
@@ -52,6 +66,27 @@ def _renew_same_digest_plan(
     ):
         raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_BLOCKED")
     return fresh
+
+
+def _site_baseline_status(
+    conn, environment: str, site_row: dict[str, Any], *, exclude_id: str | None = None
+) -> str:
+    """检查目标主机在 site_row 之后是否有新的安装变更（含在飞安装）。"""
+    rows = conn.execute(
+        "SELECT id, state, updated_at, request FROM environment_tasks WHERE environment=? "
+        "AND json_extract(request,'$.action') IN ('site-install','candidate-install')",
+        (environment,),
+    ).fetchall()
+    site_time = float(site_row["updated_at"])
+    for item in rows:
+        if exclude_id and item["id"] == exclude_id:
+            continue
+        req = json.loads(item["request"])
+        if item["state"] in ("executing", "checking"):
+            return "busy"
+        if (item["state"] == "observed" or req.get("dispatched")) and float(item["updated_at"]) >= site_time:
+            return "stale"
+    return "fresh"
 
 
 def _validate_validation_inputs(payload: dict[str, Any]) -> tuple[str, list[str]]:
@@ -145,7 +180,8 @@ def submit(context: Any, identity: tuple[str, str, str], payload: dict[str, Any]
         )[:32]
     )
 
-    # 先校验是否已存在相同幂等任务或同租户并发在飞一键开通任务。
+    # 先校验是否已存在相同幂等任务、并发在飞任务，以及同计划下是否已有过期主机基线（如前一租户已安装）。
+    need_fresh_site = False
     with drafts._locked(path), gateway_db.initialize(drafts._database(path)) as conn:
         drafts.initialize_tasks(conn)
         existing = conn.execute("SELECT * FROM environment_tasks WHERE id=?", (identifier,)).fetchone()
@@ -158,65 +194,75 @@ def submit(context: Any, identity: tuple[str, str, str], payload: dict[str, Any]
             (environment, identifier, ACTION, tenant_id),
         ).fetchone():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
+        if not initial:
+            existing_site = conn.execute(
+                "SELECT * FROM environment_tasks WHERE environment=? "
+                "AND COALESCE(json_extract(request,'$.action'),'site-preflight')='site-preflight' "
+                "AND json_extract(request,'$.plan.id')=? ORDER BY updated_at DESC LIMIT 1",
+                (environment, plan["id"]),
+            ).fetchone()
+            if existing_site is not None and (
+                existing_site["cancel"]
+                or existing_site["state"] == "cancelled"
+                or _site_baseline_status(conn, environment, dict(existing_site)) != "fresh"
+            ):
+                need_fresh_site = True
 
+    active_plan = (
+        _renew_same_digest_plan(
+            path,
+            identity,
+            plan,
+            reference,
+            min_remaining_seconds=_FRESH_SITE_MIN_REMAINING,
+            force_new=True,
+        )
+        if need_fresh_site
+        else plan
+    )
     prep_payload: dict[str, Any] = {
-        "candidate_plan": plan["id"],
+        "candidate_plan": active_plan["id"],
         "tenant_id": tenant_id,
         "source_app_id": payload["source_app_id"],
         "source_version": payload["source_version"],
     }
     if initial:
         prep_payload["initial_installation"] = True
-    prep_task = preparation.submit(context, identity, prep_payload, source, onboard_parent=identifier)
-
     request: dict[str, Any] = {
         "identity": list(identity),
         "action": ACTION,
         "tenant_id": tenant_id,
-        "plan": plan,
+        "plan": active_plan,
         "target_id": target_id,
         "consumer_source": source,
         "bindings": bindings,
         "node_binding": node_binding,
         "attempted": True,
-        "children": {"candidate-prepare": prep_task["id"]},
+        "children": {},
         **({"initial_installation": True} if initial else {}),
         **({"case_ref": case_ref, "capabilities": capabilities} if case_ref else {}),
     }
     initial_result: dict[str, Any] = {
         "scope": "tenant-one-click-onboarding",
         "executable": False,
-        "expires_at": plan["expires_at"],
-        "stages": [
-            {
-                "action": "candidate-prepare",
-                "id": prep_task["id"],
-                "state": prep_task["state"],
-                "error_code": prep_task["error_code"],
-            }
-        ],
+        "expires_at": active_plan["expires_at"],
+        "stages": [],
         "ready_to_publish": False,
         "activation": "not_executed",
         "business_accuracy": "unconfirmed",
         "validation_task_id": "",
         "registration_task_id": "",
         "installation_task_id": "",
-        "preparation_task_id": prep_task["id"],
+        "preparation_task_id": "",
     }
-    with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
-        if conn.execute(
-            "SELECT 1 FROM environment_tasks WHERE environment=? "
-            "AND state IN ('waiting','checking') AND id!=? "
-            "AND json_extract(request,'$.action')=? AND json_extract(request,'$.tenant_id')=? LIMIT 1",
-            (environment, identifier, ACTION, tenant_id),
-        ).fetchone():
-            raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
-        conn.execute(
-            "INSERT OR IGNORE INTO environment_tasks(id,environment,request,state,result,updated_at) "
-            "VALUES(?,?,?,'waiting',?,?)",
-            (identifier, environment, json.dumps(request), json.dumps(initial_result), time.time()),
-        )
-        return tasks._public(tasks._row(conn, identifier))
+    return preparation.submit(
+        context,
+        identity,
+        prep_payload,
+        source,
+        onboard_parent=identifier,
+        onboard_record=(request, initial_result),
+    )
 
 
 def advance(context: Any) -> dict[str, int]:
@@ -321,6 +367,9 @@ def _advance_one(context: Any, path: str, reference: str, identifier: str) -> No
             state, error = "waiting", ""
             last_expires = float(request["plan"]["expires_at"])
             next_stage: str | None = None
+            refresh_install_id: str | None = None
+            need_site_refresh = False
+            site_preflight_override: str | None = None
 
             for stage in sequence:
                 child_id = request["children"].get(stage)
@@ -328,6 +377,7 @@ def _advance_one(context: Any, path: str, reference: str, identifier: str) -> No
                     next_stage = stage
                     break
                 child_row = tasks._row(conn, child_id)
+                child_req = json.loads(child_row["request"])
                 child_pub = tasks._public(child_row)
                 child_res = child_pub.get("result") if isinstance(child_pub.get("result"), dict) else {}
                 if isinstance(child_res.get("expires_at"), (int, float)):
@@ -346,15 +396,63 @@ def _advance_one(context: Any, path: str, reference: str, identifier: str) -> No
                 # 原始落库 state == "observed" 且已通过上方同摘要无漂移校验即可推进下一阶段
                 if child_row["state"] == "observed":
                     continue
+                # 排队中的 candidate-install 在未派发前若上传余量不足 600s，续签同摘要计划窗，不改已派发任务。
+                if (
+                    stage == "candidate-install"
+                    and child_row["state"] == "waiting"
+                    and not child_row["cancel"]
+                    and not child_req.get("attempted")
+                    and not child_req.get("dispatched")
+                    and float(child_row["lease_until"]) <= time.time()
+                    and float(child_req["plan"]["expires_at"]) - time.time() < _INSTALL_PRE_DISPATCH_FLOOR
+                ):
+                    refresh_install_id = child_id
+                    break
                 if child_pub["state"] == "expired":
                     state, error = "blocked", "ENVIRONMENT_TASK_PLAN_EXPIRED"
                     break
                 # 仍在队列/运行/核对中：等待下轮 worker 唤醒
                 break
 
+            if state == "waiting" and next_stage == "candidate-install":
+                prep_row = tasks._row(conn, request["children"]["candidate-prepare"])
+                prep_req = json.loads(prep_row["request"])
+                refresh_site_id = request["children"].get("site-preflight-refresh")
+                latest_site_id = refresh_site_id or prep_req["children"]["site-preflight"]
+                latest_site = tasks._row(conn, latest_site_id)
+                latest_site_pub = tasks._public(latest_site)
+                if refresh_site_id:
+                    if latest_site["cancel"] or latest_site_pub["state"] == "cancelled":
+                        state, error = "cancelled", "ENVIRONMENT_TASK_CANCELLED"
+                        next_stage = None
+                    elif latest_site["state"] == "blocked" or latest_site_pub["state"] == "blocked":
+                        state, error = (
+                            "blocked",
+                            latest_site_pub["error_code"] or "ENVIRONMENT_TASK_OBSERVATION_REQUIRED",
+                        )
+                        next_stage = None
+                    elif latest_site["state"] != "observed":
+                        next_stage = None
+                    else:
+                        site_preflight_override = refresh_site_id
+                if state == "waiting" and next_stage == "candidate-install":
+                    baseline = _site_baseline_status(
+                        conn,
+                        row["environment"],
+                        latest_site,
+                        exclude_id=prep_req["children"].get("site-install"),
+                    )
+                    if baseline == "busy":
+                        next_stage = None
+                    elif baseline == "stale":
+                        need_site_refresh = True
+                        next_stage = None
+
             all_done = (
                 state == "waiting"
                 and next_stage is None
+                and not need_site_refresh
+                and refresh_install_id is None
                 and len(stages) == len(sequence)
                 and all(tasks._row(conn, request["children"][s])["state"] == "observed" for s in sequence)
             )
@@ -377,11 +475,80 @@ def _advance_one(context: Any, path: str, reference: str, identifier: str) -> No
             )
             should_spawn = state == "waiting" and next_stage is not None
 
+        if refresh_install_id is not None:
+            fresh_plan = _renew_same_digest_plan(
+                path,
+                identity,
+                request["plan"],
+                reference,
+                min_remaining_seconds=_STAGE_MIN_REMAINING["candidate-install"],
+            )
+            with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
+                parent_now = tasks._row(conn, identifier)
+                child_now = tasks._row(conn, refresh_install_id)
+                child_req_now = json.loads(child_now["request"])
+                child_res_now = json.loads(child_now["result"])
+                if (
+                    parent_now["state"] == "waiting"
+                    and not parent_now["cancel"]
+                    and child_now["state"] == "waiting"
+                    and not child_now["cancel"]
+                    and not child_req_now.get("attempted")
+                    and not child_req_now.get("dispatched")
+                    and float(child_now["lease_until"]) <= time.time()
+                ):
+                    child_req_now["plan"] = fresh_plan
+                    child_res_now["expires_at"] = fresh_plan["expires_at"]
+                    conn.execute(
+                        "UPDATE environment_tasks SET request=?,result=?,updated_at=? WHERE id=?",
+                        (
+                            json.dumps(child_req_now),
+                            json.dumps(child_res_now),
+                            time.time(),
+                            refresh_install_id,
+                        ),
+                    )
+                    parent_req_now = json.loads(parent_now["request"])
+                    parent_req_now["plan"] = fresh_plan
+                    conn.execute(
+                        "UPDATE environment_tasks SET request=?,updated_at=? WHERE id=?",
+                        (json.dumps(parent_req_now), time.time(), identifier),
+                    )
+            return
+
+        if need_site_refresh:
+            fresh_plan = _renew_same_digest_plan(
+                path,
+                identity,
+                request["plan"],
+                reference,
+                min_remaining_seconds=_FRESH_SITE_MIN_REMAINING,
+                force_new=True,
+            )
+            site_task = tasks.submit(path, identity, fresh_plan["id"], reference)
+            with drafts._locked(path), gateway_db.connection(drafts._database(path), write=True) as conn:
+                parent_now = tasks._row(conn, identifier)
+                stored = json.loads(parent_now["request"])
+                if parent_now["state"] == "waiting" and not parent_now["cancel"]:
+                    stored["children"]["site-preflight-refresh"] = site_task["id"]
+                    stored["plan"] = fresh_plan
+                    conn.execute(
+                        "UPDATE environment_tasks SET request=?,updated_at=? WHERE id=?",
+                        (json.dumps(stored), time.time(), identifier),
+                    )
+            return
+
         if not should_spawn or next_stage is None:
             return
 
-        # 释放 DB 写事务后，按同摘要续签计划并在子任务写锁内原子核验父未取消后绑定子任务。
-        fresh_plan = _renew_same_digest_plan(path, identity, request["plan"], reference)
+        # 释放 DB 写事务后，按阶段余量续签同摘要计划并在子任务写锁内原子核验父未取消后绑定子任务。
+        fresh_plan = _renew_same_digest_plan(
+            path,
+            identity,
+            request["plan"],
+            reference,
+            min_remaining_seconds=_STAGE_MIN_REMAINING.get(next_stage, 600.0),
+        )
         if next_stage == "candidate-install":
             child = installation.submit(
                 context,
@@ -389,6 +556,7 @@ def _advance_one(context: Any, path: str, reference: str, identifier: str) -> No
                 request["children"]["candidate-prepare"],
                 plan_id=fresh_plan["id"],
                 onboard_parent=identifier,
+                site_preflight_id=site_preflight_override,
             )
         elif next_stage == "candidate-register":
             child = registration.submit(

@@ -243,18 +243,68 @@ def test_one_click_onboarding_chains_all_four_stages_across_plan_renewal(
     validate_id = request_of(state, onboard_id)["children"]["candidate-validate"]
 
     # 4) candidate-validate 全三项通过 → 父任务 observed + ready_to_publish=True，绝不自动 publish！
+    now_ts = time.time()
     _mark_observed(
         state,
         validate_id,
         {
             "scope": "installed-business-validation-only",
-            "expires_at": time.time() + 600,
+            "expires_at": now_ts + 600,
             "activated": False,
             "business_accuracy": "unconfirmed",
             "checks": [
-                {"capability": "consumer", "state": "passed"},
-                {"capability": "offline", "state": "passed"},
-                {"capability": "order", "state": "passed"},
+                {
+                    "capability": "consumer",
+                    "state": "passed",
+                    "business_accuracy": "unconfirmed",
+                    "case_sha256": "1" * 64,
+                    "observed_at": now_ts,
+                    "evidence": {
+                        "trial_id": "trial-c",
+                        "run_id": "run-c",
+                        "tools": ["knowledge", "status"],
+                        "objects": ["kb-1", "ord-1"],
+                        "scope_fingerprint": "fp-c",
+                        "workflow_id": "wf-1",
+                        "app_id": "app-1",
+                    },
+                },
+                {
+                    "capability": "offline",
+                    "state": "passed",
+                    "business_accuracy": "unconfirmed",
+                    "case_sha256": "2" * 64,
+                    "observed_at": now_ts,
+                    "evidence": {
+                        "trial_id": "trial-f",
+                        "run_id": "run-f",
+                        "tools": ["cpms_device_offline"],
+                        "objects": ["dev-1"],
+                        "scope_fingerprint": "fp-f",
+                        "node": "node-a",
+                        "gateway_version": "1.40.4",
+                    },
+                },
+                {
+                    "capability": "order",
+                    "state": "passed",
+                    "business_accuracy": "unconfirmed",
+                    "case_sha256": "3" * 64,
+                    "observed_at": now_ts,
+                    "evidence": {
+                        "trial_id": "trial-o",
+                        "run_id": "run-o",
+                        "tools": [
+                            "cpms_charging_samples",
+                            "cpms_order_detail",
+                            "cpms_order_process_stats",
+                        ],
+                        "objects": ["ord-2"],
+                        "scope_fingerprint": "fp-o",
+                        "node": "node-a",
+                        "gateway_version": "1.40.4",
+                    },
+                },
             ],
         },
     )
@@ -267,6 +317,21 @@ def test_one_click_onboarding_chains_all_four_stages_across_plan_renewal(
     assert final["result"]["validation_task_id"] == validate_id
     assert [s["action"] for s in final["result"]["stages"]] == list(onboarding.ALL_STAGES)
     assert not any(json.loads(r["request"]).get("action") == "environment-publish" for r in rows(state))
+
+    # 5) 实测从续签后的 tenant-onboard plan_id 直接提交真实 environment-publish 入口（非 mock）
+    publish_resp = state[0][2].post(
+        "/v1/dify/management/environment-tasks",
+        json={
+            "validation_task": final["result"]["validation_task_id"],
+            "publication_plan": final["plan_id"],
+            "confirm_readonly": True,
+            "confirm_customer_knowledge": True,
+            "acceptance_ref": "readonly-diagnosis",
+        },
+    )
+    assert publish_resp.status_code == 200, publish_resp.text
+    assert publish_resp.json()["action"] == "environment-publish"
+    assert publish_resp.json()["state"] == "queued"
 
 
 def test_one_click_onboarding_three_stage_without_case_stops_after_register(
@@ -553,6 +618,216 @@ def test_one_click_onboarding_cancel_ownership_inflight_reconcile_and_renewal_re
         rev_row = tasks._row(conn, onboard_rev["id"])
     assert rev_row["state"] == "blocked"
     assert rev_row["error"] == "ENVIRONMENT_MANAGEMENT_FORBIDDEN"
+
+
+def test_one_click_onboarding_devin_review_regressions_fresh_baseline_budget_and_case_retry(
+    candidate_chain,  # noqa: F811
+    tmp_path: Path,
+) -> None:
+    """覆盖 Devin Review 4 项发现：顺序双租户新基线、301s 预算续签、原子父子、改案例重试。"""
+    state = candidate_chain
+    _wire_installation_config(state, tmp_path)
+    plan_id = state[2]["candidate_plan"]
+    db = drafts._database(state[0][0])
+
+    # 1) 改案例不继承已取消准备（BUG_0004）+ 原子父子提交防竞争（BUG_0003）
+    case_a = (
+        state[0][2]
+        .post(
+            "/v1/dify/management/environment-tasks",
+            json={
+                "onboard_plan": plan_id,
+                "tenant_id": "same",
+                "source_app_id": "source-app",
+                "source_version": 7,
+                "case_ref": "case-a",
+                "capabilities": ["consumer", "order", "offline"],
+            },
+        )
+        .json()
+    )
+    prep_a_id = request_of(state, case_a["id"])["children"]["candidate-prepare"]
+    assert request_of(state, prep_a_id)["onboard_parent"] == case_a["id"]
+    # 竞争提交 case-b 在 case-a 未取消前被原子拒绝且不遗留孤儿 preparation
+    rows_before_busy = len(rows(state))
+    competing = state[0][2].post(
+        "/v1/dify/management/environment-tasks",
+        json={
+            "onboard_plan": plan_id,
+            "tenant_id": "same",
+            "source_app_id": "source-app",
+            "source_version": 7,
+            "case_ref": "case-b",
+            "capabilities": ["consumer", "order", "offline"],
+        },
+    )
+    assert competing.status_code == 403
+    assert competing.json()["error"]["code"] == "ENVIRONMENT_TASK_BUSY"
+    assert len(rows(state)) == rows_before_busy
+
+    # 取消 case-a（连带取消自有 prep_a），再提交 case-b：必须分配新 preparation，绝不继承已取消行
+    assert (
+        state[0][2]
+        .post("/v1/dify/management/environment-tasks", json={"id": case_a["id"], "cancel": True})
+        .json()["state"]
+        == "cancelled"
+    )
+    assert next(r for r in rows(state) if r["id"] == prep_a_id)["state"] == "cancelled"
+
+    case_b = (
+        state[0][2]
+        .post(
+            "/v1/dify/management/environment-tasks",
+            json={
+                "onboard_plan": plan_id,
+                "tenant_id": "same",
+                "source_app_id": "source-app",
+                "source_version": 7,
+                "case_ref": "case-b",
+                "capabilities": ["consumer", "order", "offline"],
+            },
+        )
+        .json()
+    )
+    prep_b_id = request_of(state, case_b["id"])["children"]["candidate-prepare"]
+    assert prep_b_id != prep_a_id
+    assert next(r for r in rows(state) if r["id"] == prep_b_id)["state"] == "waiting"
+
+    # 2) 安装阶段预算 >=720s：仅剩 301s 时必须续签新计划（不能复用短窗砍断 250s 上传，BUG_0002）
+    _complete_prepare_chain(state, prep_b_id, advance_onboard=False)
+    with gateway_db.connection(db, write=True) as conn:
+        conn.execute("UPDATE environment_plans SET expires_at=? WHERE id=?", (time.time() + 301, plan_id))
+    assert advance(state).status_code == 200
+    inst_b_id = request_of(state, case_b["id"])["children"]["candidate-install"]
+    inst_b_plan = request_of(state, inst_b_id)["plan"]
+    assert inst_b_plan["id"] != plan_id
+    assert inst_b_plan["expires_at"] - time.time() > 720
+
+    # 若排队的 candidate-install 未派发前剩余窗口跌破 600s，advance 自动刷新其同摘要计划窗
+    with gateway_db.connection(db, write=True) as conn:
+        ireq = json.loads(tasks._row(conn, inst_b_id)["request"])
+        ireq["plan"]["expires_at"] = time.time() + 320
+        conn.execute(
+            "UPDATE environment_tasks SET request=? WHERE id=?",
+            (json.dumps(ireq), inst_b_id),
+        )
+        conn.execute(
+            "UPDATE environment_plans SET expires_at=? WHERE id=?",
+            (time.time() + 320, inst_b_plan["id"]),
+        )
+    assert advance(state).status_code == 200
+    refreshed_plan = request_of(state, inst_b_id)["plan"]
+    assert refreshed_plan["id"] != inst_b_plan["id"]
+    assert refreshed_plan["expires_at"] - time.time() > 720
+
+    # 完成 tenant A 的安装（此时目标主机 runtime_sha256 由 absent 变为 "e"*64）
+    _mark_observed(
+        state,
+        inst_b_id,
+        {
+            "scope": "candidate-installation-only",
+            "expires_at": time.time() + 600,
+            "installation": "installed",
+            "version": "1.40.4",
+            "source_revision": "a" * 40,
+            "artifact_sha256": "b" * 64,
+            "config_sha256": "c" * 64,
+            "registry_sha256": "d" * 64,
+            "runtime_sha256": "e" * 64,
+        },
+    )
+    assert advance(state).status_code == 200
+    reg_b_id = request_of(state, case_b["id"])["children"]["candidate-register"]
+    _mark_observed(
+        state,
+        reg_b_id,
+        {
+            "scope": "inactive-runtime-registration-only",
+            "result": "registered",
+            "expires_at": time.time() + 600,
+            "activated": False,
+            "business_acceptance": False,
+        },
+    )
+
+    # 3) BUG_0001：同计划顺序推进且目标主机变更时，必须采集新 site-preflight 并携带最新 runtime_sha256
+    # 模拟第二个同计划租户（或在 tenant A 安装后仍持旧 site-preflight 的任务）等待安装
+    with gateway_db.connection(db, write=True) as conn:
+        # 让原 plan_id 仍然有效，验证在同 plan_id 下再提交会检测旧基线并申请新现场观测
+        conn.execute("UPDATE environment_plans SET expires_at=? WHERE id=?", (time.time() + 800, plan_id))
+        # 先取消 case_b 释放同租户互斥，再以新 case-c 走同一仍有效 plan_id
+        conn.execute("UPDATE environment_tasks SET state='cancelled',cancel=1 WHERE id=?", (case_b["id"],))
+    old_site_id = request_of(state, prep_b_id)["children"]["site-preflight"]
+    case_c = (
+        state[0][2]
+        .post(
+            "/v1/dify/management/environment-tasks",
+            json={
+                "onboard_plan": plan_id,
+                "tenant_id": "same",
+                "source_app_id": "source-app",
+                "source_version": 7,
+                "case_ref": "case-c",
+                "capabilities": ["consumer", "order", "offline"],
+            },
+        )
+        .json()
+    )
+    prep_c_id = request_of(state, case_c["id"])["children"]["candidate-prepare"]
+    site_c_id = request_of(state, prep_c_id)["children"]["site-preflight"]
+    assert site_c_id != old_site_id
+
+    # 完成 case_c 的新 site-preflight（回报 runtime_sha256="e"*64）并让 prep_c 完成准备
+    owner = "d" * 32
+    claimed = tasks.worker(state[0][0], state[0][1], {"id": site_c_id, "owner": owner})
+    assert claimed["claimed"]
+    obs = {**receipt("a"), "runtime_sha256": "e" * 64}
+    assert (
+        tasks.worker(state[0][0], state[0][1], {"id": site_c_id, "owner": owner, "result": obs})["state"]
+        == "observed"
+    )
+    prep_b_children = request_of(state, prep_b_id)["children"]
+    with gateway_db.connection(db, write=True) as conn:
+        prep_c_row = tasks._row(conn, prep_c_id)
+        prep_c_req = json.loads(prep_c_row["request"])
+        prep_c_req["children"] = {**prep_b_children, "site-preflight": site_c_id}
+        conn.execute(
+            "UPDATE environment_tasks SET request=?,state='observed',updated_at=? WHERE id=?",
+            (json.dumps(prep_c_req), time.time(), prep_c_id),
+        )
+
+    # 模拟另一租户在 case_c 等待安装期间刚完成安装（更新时间晚于 site_c_id）
+    with gateway_db.connection(db, write=True) as conn:
+        conn.execute(
+            "UPDATE environment_tasks SET updated_at=? WHERE id=?",
+            (time.time() + 1.0, inst_b_id),
+        )
+    assert advance(state).status_code == 200
+    # 尚未建 candidate-install，而是自动发起 site-preflight-refresh 重新观测目标主机！
+    case_c_req = request_of(state, case_c["id"])
+    assert "candidate-install" not in case_c_req["children"]
+    refresh_site_id = case_c_req["children"]["site-preflight-refresh"]
+    assert refresh_site_id != site_c_id
+
+    # 完成 refresh_site_id（回报最新 runtime_sha256="f"*64），确保时间戳晚于 inst_b_id
+    owner = "e" * 32
+    claimed = tasks.worker(state[0][0], state[0][1], {"id": refresh_site_id, "owner": owner})
+    assert claimed["claimed"]
+    obs_latest = {**receipt("a"), "runtime_sha256": "f" * 64}
+    assert (
+        tasks.worker(state[0][0], state[0][1], {"id": refresh_site_id, "owner": owner, "result": obs_latest})[
+            "state"
+        ]
+        == "observed"
+    )
+    with gateway_db.connection(db, write=True) as conn:
+        conn.execute(
+            "UPDATE environment_tasks SET updated_at=? WHERE id=?",
+            (time.time() + 2.0, refresh_site_id),
+        )
+    assert advance(state).status_code == 200
+    inst_c_id = request_of(state, case_c["id"])["children"]["candidate-install"]
+    assert request_of(state, inst_c_id)["expected"]["runtime_sha256"] == "f" * 64
 
 
 def test_console_bridge_validates_onboard_plan_payload(monkeypatch: pytest.MonkeyPatch) -> None:

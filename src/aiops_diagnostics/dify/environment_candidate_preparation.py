@@ -44,7 +44,7 @@ def _bindings(settings, source):
     }
 
 
-def submit(context, identity, payload, source, *, onboard_parent=None):
+def submit(context, identity, payload, source, *, onboard_parent=None, onboard_record=None):
     settings = context.settings
     if not isinstance(payload["tenant_id"], str) or not drafts.REFERENCE_PATTERN.fullmatch(
         payload["tenant_id"]
@@ -114,29 +114,39 @@ def submit(context, identity, payload, source, *, onboard_parent=None):
         tenants = json.loads(draft["body"])["tenants"]
         if not any(t["id"] == payload["tenant_id"] for t in tenants):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_TENANT_INVALID")
-        identifier = (
-            "task_"
-            + plans._digest(
-                {
-                    "action": ACTION,
-                    "plan": plan["id"],
-                    "tenant": payload["tenant_id"],
-                    "source": source,
-                    "bindings": bindings,
-                    **({"initial_installation": True} if initial else {}),
-                }
-            )[:32]
-        )
-        if (
-            onboard_parent is not None
-            and conn.execute(
+        if onboard_parent is not None:
+            if onboard_record is not None:
+                existing_parent = conn.execute(
+                    "SELECT * FROM environment_tasks WHERE id=?", (onboard_parent,)
+                ).fetchone()
+                if existing_parent is not None:
+                    return tasks._public(dict(existing_parent))
+            if conn.execute(
                 "SELECT 1 FROM environment_tasks WHERE environment=? AND state IN ('waiting','checking') "
                 "AND id!=? AND json_extract(request,'$.action')='tenant-onboard' "
                 "AND json_extract(request,'$.tenant_id')=? LIMIT 1",
                 (environment, onboard_parent, payload["tenant_id"]),
+            ).fetchone():
+                raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
+        base_digest_input = {
+            "action": ACTION,
+            "plan": plan["id"],
+            "tenant": payload["tenant_id"],
+            "source": source,
+            "bindings": bindings,
+            **({"initial_installation": True} if initial else {}),
+        }
+        identifier = "task_" + plans._digest(base_digest_input)[:32]
+        if onboard_parent is not None:
+            existing_prep = conn.execute(
+                "SELECT state, cancel FROM environment_tasks WHERE id=?", (identifier,)
             ).fetchone()
-        ):
-            raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
+            if existing_prep is not None and (
+                existing_prep["state"] in ("cancelled", "blocked") or existing_prep["cancel"]
+            ):
+                identifier = (
+                    "task_" + plans._digest({**base_digest_input, "onboard_parent": onboard_parent})[:32]
+                )
         if conn.execute(
             "SELECT 1 FROM environment_tasks WHERE environment=? AND state='waiting' AND id!=? "
             "AND json_extract(request,'$.action')=? AND json_extract(request,'$.tenant_id')=? "
@@ -183,7 +193,35 @@ def submit(context, identity, payload, source, *, onboard_parent=None):
                 time.time(),
             ),
         )
-        return tasks._public(tasks._row(conn, identifier))
+        prep_public = tasks._public(tasks._row(conn, identifier))
+        if onboard_parent is not None and onboard_record is not None:
+            parent_req, parent_res = onboard_record
+            parent_req = {**parent_req, "children": {"candidate-prepare": prep_public["id"]}}
+            parent_res = {
+                **parent_res,
+                "preparation_task_id": prep_public["id"],
+                "stages": [
+                    {
+                        "action": "candidate-prepare",
+                        "id": prep_public["id"],
+                        "state": prep_public["state"],
+                        "error_code": prep_public["error_code"],
+                    }
+                ],
+            }
+            conn.execute(
+                "INSERT OR IGNORE INTO environment_tasks(id,environment,request,state,result,updated_at) "
+                "VALUES(?,?,?,'waiting',?,?)",
+                (
+                    onboard_parent,
+                    environment,
+                    json.dumps(parent_req),
+                    json.dumps(parent_res),
+                    time.time(),
+                ),
+            )
+            return tasks._public(tasks._row(conn, onboard_parent))
+        return prep_public
 
 
 def authorize_parent(conn, path, reference, identifier, settings):

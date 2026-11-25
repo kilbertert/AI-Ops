@@ -160,7 +160,7 @@ def current_cold(context, conn, identifier, *, fresh=False):
     return row, request
 
 
-def submit(context, identity, identifier, *, plan_id=None, onboard_parent=None):
+def submit(context, identity, identifier, *, plan_id=None, onboard_parent=None, site_preflight_id=None):
     settings, path = context.settings, management._path(context)
     if not settings.environment_installation_file:
         raise tasks.TaskRefused("ENVIRONMENT_INSTALLATION_CONFIG_REQUIRED")
@@ -194,9 +194,18 @@ def submit(context, identity, identifier, *, plan_id=None, onboard_parent=None):
             ):
                 raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
         node_file, node_binding = binding(settings, request["target"]["id"])
-        site = tasks._row(conn, request["children"]["site-preflight"])
+        site_id = site_preflight_id or request["children"]["site-preflight"]
+        site = tasks._row(conn, site_id)
+        site_req = json.loads(site["request"])
         observed = json.loads(site["result"])
-        if site["state"] != "observed" or observed["state"] != "observed":
+        if (
+            site["environment"] != parent["environment"]
+            or site["cancel"]
+            or site_req.get("action", "site-preflight") != "site-preflight"
+            or site_req["plan"]["digest"] != request["plan"]["digest"]
+            or site["state"] != "observed"
+            or observed["state"] != "observed"
+        ):
             raise tasks.TaskRefused("ENVIRONMENT_TASK_OBSERVATION_REQUIRED")
         expected = {k: observed[k] for k in ("artifact_sha256", "config_sha256", "registry_sha256")}
         # 旧现场回执没有运行摘要；只允许显式新回执，不猜现场是否已有运行工件。

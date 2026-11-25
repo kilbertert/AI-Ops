@@ -515,6 +515,7 @@ def preflight(
     reference_file,
     *,
     min_remaining_seconds=0,
+    force_new=False,
 ):
     min_remaining = float(min_remaining_seconds)
     if not math.isfinite(min_remaining) or min_remaining < 0.0 or min_remaining >= 900.0:
@@ -526,13 +527,17 @@ def preflight(
         now = time.time()
         with gateway_db.initialize(db) as conn:
             drafts.initialize_plans(conn)
-            found = conn.execute(
-                "SELECT * FROM environment_plans WHERE digest=? AND expires_at>? "
-                "ORDER BY created_at DESC LIMIT 1",
-                (digest, now + min_remaining),
-            ).fetchone()
+            found = (
+                None
+                if force_new
+                else conn.execute(
+                    "SELECT * FROM environment_plans WHERE digest=? AND expires_at>? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (digest, now + min_remaining),
+                ).fetchone()
+            )
             if found is None:
-                salt = f"{now}:{time.monotonic_ns()}" if min_remaining > 0.0 else str(now)
+                salt = f"{now}:{time.monotonic_ns()}" if (force_new or min_remaining > 0.0) else str(now)
                 identifier = "plan_" + hashlib.sha256((digest + salt).encode()).hexdigest()[:32]
                 conn.execute(
                     "INSERT OR IGNORE INTO environment_plans VALUES(?,?,?,?,?,?)",
