@@ -170,14 +170,41 @@ def test_readonly_observe_does_not_replace_consumed_row(candidate):
     assert rows(candidate) == before
 
 
-def test_registration_rejects_formal_binding(candidate):
+def test_superseded_same_tenant_registry_row_is_own_lineage_not_conflict(candidate):
+    # dify_app_registry 的唯一写方是本租户自己的发布激活。发布+恢复后重铸候选
+    # （app_id 按 (workspace, job) 派生必然全新）再登记时，注册表里的上一任
+    # 同租户行是谱系证据而非占用：env95 小趋实证该行使登记观察永不可判。
+    # 下一次发布激活会 upsert 成新候选，登记路径不改写它。
     from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
 
-    DifyAppRegistry(candidate[0].path).put(DifyAppBinding("same", "operator", "operator-existing", "old"))
-    before = rows(candidate)
-    with pytest.raises(SetupConflict):
-        register(candidate)
-    assert rows(candidate) == before
+    store, registration, consumer = candidate
+    DifyAppRegistry(store.path).put(DifyAppBinding("same", "operator", "operator-superseded", "old"))
+    assert register(candidate) is True
+    apps = {r["entry"]: r for r in rows(candidate)["operator_apps"]}
+    assert apps["operator"]["app_id"] == "operator-target"
+    # 注册表留行原样保留：登记不写它，upsert 留给发布激活。
+    assert rows(candidate)["dify_app_registry"][0]["app_id"] == "operator-superseded"
+
+
+def test_consumed_and_published_candidate_reregisters_with_fully_reminted_apps(candidate):
+    # 生产死锁的完整形状（env95 小趋 2026-11-25）：候选经发布消费、绑定已撤回、
+    # 注册表留行指上一任 app，准备重铸双端全新 app_id——登记必须原位替换通过。
+    from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding, DifyAppRegistry
+
+    store, registration, consumer = candidate
+    assert register(candidate) is True
+    _bind(candidate, "retracted")
+    DifyAppRegistry(store.path).put(
+        DifyAppBinding("same", "operator", registration["operator_app_id"], "old")
+    )
+    registration["operator_app_id"] = "operator-reminted"
+    registration["consumer_app_id"] = "consumer-reminted"
+    assert register(candidate) is True
+    apps = {r["entry"]: r for r in rows(candidate)["operator_apps"]}
+    assert apps["operator"]["app_id"] == "operator-reminted"
+    assert apps["consumer"]["app_id"] == "consumer-reminted"
+    assert register(candidate) is False
+    assert store.register_runtime(registration, consumer, verify=lambda: None, observe_only=True) is False
 
 
 def _bind(candidate, state):

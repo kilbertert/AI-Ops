@@ -366,15 +366,14 @@ class SelfServiceStore:
                     "AND state != 'retracted'",
                     (environment, tenant),
                 ).fetchone()
-                # 本租户已正式绑定其它应用、或本候选应用被外租户占用才是冲突；
-                # 同租户同应用（发布血统自留行）不算冲突。
+                # dify_app_registry 的唯一写方是本租户自己的发布激活（upsert）；
+                # 同租户行无论 app_id 新旧都是本血统留行，恢复后只是谱系证据，
+                # 下一次发布激活会 upsert 成新候选。候选 app_id 被外租户正式
+                # 绑定才是占用。重铸候选的 app_id 按 (workspace, job) 派生，
+                # 必然与上一任不同——同租户异应用不是外血统证据。
                 or db.execute(
-                    "SELECT 1 FROM dify_app_registry WHERE "
-                    "(tenant_id=? AND app_id NOT IN (?,?)) OR (tenant_id!=? AND app_id IN (?,?))",
+                    "SELECT 1 FROM dify_app_registry WHERE tenant_id!=? AND app_id IN (?,?)",
                     (
-                        tenant,
-                        registration["operator_app_id"],
-                        registration["consumer_app_id"],
                         tenant,
                         registration["operator_app_id"],
                         registration["consumer_app_id"],
