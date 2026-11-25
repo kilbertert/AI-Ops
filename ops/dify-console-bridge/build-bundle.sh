@@ -10,7 +10,7 @@ out=$(realpath -m -- "$2")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git -C "$repo" archive "$revision" \
-  services/dify-console-bridge/dify_console_bridge/{__init__,__main__,bridge,self_service_bridge,environments}.py \
+  services/dify-console-bridge/dify_console_bridge/{__init__,__main__,bridge,config,client,workflows,self_service_bridge,environments}.py \
   src/aiops_diagnostics/__init__.py \
   src/aiops_diagnostics/common/{__init__,async_job_lifecycle,bounded_http,http_auth,order_reference,platform_constants,private_files,endpoint_policy}.py \
   src/aiops_diagnostics/gateway/{__init__,deployment_environment}.py \

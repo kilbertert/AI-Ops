@@ -23,11 +23,6 @@ from aiops_diagnostics.execution.run_deliverability import deliverable
 _LOGGER = logging.getLogger("aiops.consumer.legacy_callbacks")
 
 
-def is_pre_picker_binding(binding: Any) -> bool:
-    """``callback_version < 3`` 发布时尚无节点选库，跳过知识库目录复核。"""
-    return binding.callback_version < 3
-
-
 def is_pre_documents_binding(binding: Any) -> bool:
     """``callback_version < 4`` 仍使用旧 FAQ 条目匹配而非动态文档块。"""
     return binding.callback_version < 4

@@ -337,12 +337,6 @@ def require_result(runtime, caller, qa):
     legacy_callbacks.require_legacy_result(runtime, caller, binding, run, qa, copy_pack_fn=copy_pack)
 
 
-def _live_answer_differs(runtime, caller, context, run, live, stored):
-    return legacy_callbacks.live_answer_differs(
-        runtime, caller, context, run, live, stored, copy_pack_fn=copy_pack
-    )
-
-
 def copy_pack(runtime, caller, context, language):
     """本轮该用哪一版文案。
 

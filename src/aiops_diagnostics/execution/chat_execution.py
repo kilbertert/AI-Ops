@@ -461,16 +461,6 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
     return tuple(bindings)
 
 
-def route_row(path: str | Path, environment: str, app_id: str):
-    """这条 app 在路由表里的那一行（含 retracted）。没有就是 None。"""
-    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
-
-    for row in ChatRouteBindingStore(Path(str(path)).expanduser().absolute()).all():
-        if row.environment == environment and row.app_id == app_id:
-            return row
-    return None
-
-
 def binding_for_version(path: str | Path, row, version_no: int, key_dir: str = "") -> ChatBinding:
     """按**签发时那一版**重建绑定：内容、workflow_id、知识库都来自不可变快照。
 
