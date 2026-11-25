@@ -110,7 +110,10 @@ OPERATIONS_REVIEW_CODE = "operations_review"
 SHORTCUT_STATUSES = frozenset({"draft", "published", "disabled"})
 PLATFORM_SCOPE = "platform"
 TENANT_SCOPE = "tenant"
-PLATFORM_TENANT_ID = "__platform__"
+#: 快捷动作表里平台默认记录的哨兵 tenant_id；与 Dify 工作区的 `DIFY_PLATFORM_WORKSPACE_ID` 无关。
+SHORTCUT_PLATFORM_SCOPE = "__platform__"
+#: 过渡兼容别名：保留旧导出以兼容现有运维手册脚本，待并行手册分支合入后移除。
+PLATFORM_TENANT_ID = SHORTCUT_PLATFORM_SCOPE
 SHORTCUT_SCOPES = frozenset({PLATFORM_SCOPE, TENANT_SCOPE})
 PLATFORM_ROLES = frozenset({"ROLE_PLATFORM_ADMIN"})
 # Stable codes the frontend may hard-wire behavior to (order picker etc.).
@@ -813,7 +816,7 @@ class ShortcutStore:
                 WHERE business_entry = ? AND status = 'published' AND tenant_id != ?
                 ORDER BY business_entry, code, created_at, tenant_id
                 """,
-                (business_entry, PLATFORM_TENANT_ID),
+                (business_entry, SHORTCUT_PLATFORM_SCOPE),
             ).fetchall()
         return [_shortcut_from_row(row) for row in rows]
 
@@ -833,11 +836,11 @@ class ShortcutStore:
         through the merge, where a tenant override could otherwise change a
         row's surface.
         """
-        if tenant_id == PLATFORM_TENANT_ID:
+        if tenant_id == SHORTCUT_PLATFORM_SCOPE:
             raise ShortcutValidationError("tenant id is reserved")
         if kind is not None and kind not in SHORTCUT_KINDS:
             raise ShortcutValidationError("kind is invalid")
-        platform_rows = self.list_published(PLATFORM_TENANT_ID, business_entry)
+        platform_rows = self.list_published(SHORTCUT_PLATFORM_SCOPE, business_entry)
         tenant_rows = self.list_all(tenant_id, business_entry)
         effective = {row.code: row for row in platform_rows}
         for row in tenant_rows:
@@ -1167,7 +1170,7 @@ class ShortcutManager:
             if existing.status != "published":
                 raise ShortcutConflict("shortcut override is not published")
             return self.store.disable(existing.shortcut_id, tenant_id, existing.revision)
-        platform = self.store.find_by_code(PLATFORM_TENANT_ID, entry, stable_code)
+        platform = self.store.find_by_code(SHORTCUT_PLATFORM_SCOPE, entry, stable_code)
         if platform is None or platform.status != "published":
             raise ShortcutNotFound("platform shortcut not found")
         created = self.store.create(
@@ -1267,9 +1270,9 @@ class ShortcutManager:
             ShortcutManager._require(context, roles | PLATFORM_ROLES)
             if not frozenset(getattr(context, "roles", ())).intersection(PLATFORM_ROLES):
                 raise ShortcutForbidden("platform shortcut access is not permitted")
-            return PLATFORM_TENANT_ID
+            return SHORTCUT_PLATFORM_SCOPE
         ShortcutManager._require(context, roles)
-        if getattr(context, "effective_tenant_id", "") == PLATFORM_TENANT_ID:
+        if getattr(context, "effective_tenant_id", "") == SHORTCUT_PLATFORM_SCOPE:
             raise ShortcutValidationError("tenant id is reserved")
         return context.effective_tenant_id
 
@@ -1366,7 +1369,7 @@ def _shortcut_from_row(row: sqlite3.Row) -> Shortcut:
         created_by=str(row["created_by"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
-        scope=PLATFORM_SCOPE if str(row["tenant_id"]) == PLATFORM_TENANT_ID else TENANT_SCOPE,
+        scope=PLATFORM_SCOPE if str(row["tenant_id"]) == SHORTCUT_PLATFORM_SCOPE else TENANT_SCOPE,
     )
 
 

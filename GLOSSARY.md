@@ -220,8 +220,8 @@ _Avoid_: 直接等同JWT claim、服务器IP、已验证的CPMS地址
 **租户工作区（tenant workspace）**：一个公司租户在某个环境里**独占**的 Dify workspace。租户自己的智能体、数据集、成员都在这里；另一个租户的成员进不来、看不到。它的标识是 Dify 的 `tenants.id`（一个 UUID），由 `(tenant_id, environment)` 决定。
 _Avoid_: 与「公司租户」混称（租户是公司体系里的实体，工作区是 Dify 里的容器）、与「Dify 租户」混称（Dify 文档里 tenant 即 workspace，但两个词在讨论里指不同层）
 
-**平台工作区**：平台账号（`sys_user.type = -1`）自己的那个 workspace。平台账号**不**获得别的租户的工作区访问权——它的"看全部"体现在试运行的订单范围与发布审计上，不体现在能进别人的编辑面。
-_Avoid_: 把「平台能看全部订单」推成「平台能改所有租户的智能体」
+**平台工作区**：平台账号（`sys_user.type = -1`）自己的那个 workspace。平台账号**不**获得别的租户的工作区访问权——它的"看全部"体现在试运行的订单范围与发布审计上，不体现在能进别人的编辑面。权威常量为 `DIFY_PLATFORM_WORKSPACE_ID = "platform"`（定义在 `dify/dify_workspaces.py`，过渡兼容别名 `PLATFORM_TENANT_ID`）；注意它与快捷动作表的平台命名空间哨兵 `SHORTCUT_PLATFORM_SCOPE = "__platform__"`（`publication/shortcut_lifecycle.py`）分属不同领域，绝不可混用。
+_Avoid_: 把「平台能看全部订单」推成「平台能改所有租户的智能体」、混淆 `DIFY_PLATFORM_WORKSPACE_ID` 与 `SHORTCUT_PLATFORM_SCOPE`
 
 **接入候选（candidate）**：环境接入流程中已按草稿准备、尚未激活为现役的对象——可以是候选应用、候选运行时或候选环境本身。代码前缀 `candidate_*` 与 `environment_candidate_*`（如 `dify/environment_candidate_preparation.py`、`consumer/candidate_trial.py`）。它与「试运行」分属两件事：试运行是用一份草稿跑一次，候选是被准备出来的实体；候选经发布与准入复验后才启用（顺序见[环境接入手册](docs/agents/environment-registry.md)）。
 _Avoid_: 已发布版本、现役环境、把「candidate」当成试验性代码（trial 才是试验动作）

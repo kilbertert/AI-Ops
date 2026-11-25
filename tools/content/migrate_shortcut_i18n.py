@@ -64,7 +64,7 @@ from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES  # noqa: E402
 from aiops_diagnostics.publication.shortcut_lifecycle import (  # noqa: E402
     _BUNDLED_SHORTCUTS,  # noqa: PLC2701 — the seed IS the source for missing languages
     PLATFORM_SCOPE,
-    PLATFORM_TENANT_ID,
+    SHORTCUT_PLATFORM_SCOPE,
     ShortcutConflict,
     ShortcutManager,
     ShortcutStore,
@@ -107,7 +107,7 @@ def seed_for(business_entry: str, code: str) -> dict[str, Any] | None:
 
 
 def _context_for(tenant_id: str, actor: str) -> tuple[_Context, str]:
-    if tenant_id == PLATFORM_TENANT_ID:
+    if tenant_id == SHORTCUT_PLATFORM_SCOPE:
         return _Context(tenant_id, PLATFORM_CONTEXT_ROLES, actor), PLATFORM_SCOPE
     return _Context(tenant_id, TENANT_CONTEXT_ROLES, actor), "tenant"
 

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from aiops_diagnostics.common.bounded_http import RequestSpec, open_response
 from aiops_diagnostics.common.http_auth import build_internal_token_headers
+from aiops_diagnostics.gateway import environment_remote_scripts as remote_scripts
 from aiops_diagnostics.gateway.environment_artifacts import installer_manifest
 from aiops_diagnostics.gateway.environment_drafts import REFERENCE_PATTERN
 from aiops_diagnostics.gateway.environment_tasks import validate_receipt, validate_verify
@@ -71,16 +72,7 @@ def execute(root, claim):
             "python3 -",
         ]
         # 先拒绝既有链接/未知所有者，避免scp覆盖非本任务文件。
-        guard = "\n".join(
-            [
-                "from pathlib import Path",
-                "import hashlib",
-                "p=Path(" + repr(remote + ".tar.gz") + ")",
-                "if p.exists() or p.is_symlink():",
-                " assert not p.is_symlink() and p.is_file() and p.stat().st_uid==0 and p.stat().st_nlink==1",
-                " assert hashlib.sha256(p.read_bytes()).hexdigest()==" + repr(expected),
-            ]
-        )
+        guard = remote_scripts.guard_remote_archive(remote + ".tar.gz", expected)
         subprocess.run(command, cwd=root, input=guard, text=True, check=True, capture_output=True, timeout=50)
         subprocess.run(
             [
@@ -98,32 +90,7 @@ def execute(root, claim):
             capture_output=True,
             timeout=35,
         )
-        script = "\n".join(
-            [
-                "import hashlib,os,tarfile",
-                "from pathlib import Path",
-                "p=Path(" + repr(remote + ".tar.gz") + ")",
-                "assert p.is_file() and not p.is_symlink() and p.stat().st_uid==0",
-                "assert hashlib.sha256(p.read_bytes()).hexdigest()==" + repr(expected),
-                "d=Path(" + repr(remote) + ")",
-                "os.umask(0o077)",
-                "d.mkdir(mode=0o700,exist_ok=True)",
-                "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0",
-                "with tarfile.open(p) as t:",
-                " for m in t:",
-                "  if m.name=='.' and m.isdir(): continue",
-                "  name=m.name[2:] if m.name.startswith('./') else m.name",
-                "  allowed={'REVISION','SHA256SUMS','install.py','runtime_check.py',"
-                "'probe.py','artifact_checks.py','task.py','publication.py'}",
-                "  assert m.isfile() and name in allowed",
-                "  q=d/name",
-                "  body=t.extractfile(m).read()",
-                "  if q.exists():",
-                "   assert not q.is_symlink() and q.stat().st_uid==0 and q.read_bytes()==body",
-                "  else:",
-                "   with q.open('xb') as f: f.write(body)",
-            ]
-        )
+        script = remote_scripts.extract_preflight_installer(remote, expected)
         subprocess.run(
             command, cwd=root, input=script, text=True, check=True, capture_output=True, timeout=50
         )
@@ -140,18 +107,7 @@ def execute(root, claim):
         # 固定包自举受管解释器：目标的/usr/bin默认可能是平台Python3.6；
         # 旧固定包probe无managed_python时沿用原worker合同PATH的python3；
         # 执行面只走system_python核验后的解析目标。
-        script = "\n".join(
-            [
-                "import subprocess,sys",
-                f"sys.path.insert(0,{remote!r})",
-                "import probe",
-                "py=probe.system_python(probe.managed_python())[0]"
-                " if hasattr(probe,'managed_python') else 'python3'",
-                f"r=subprocess.run([py]+{args!r},stdout=subprocess.PIPE,stderr=subprocess.PIPE,"
-                "universal_newlines=True)",
-                "sys.stdout.write(r.stdout);sys.exit(r.returncode)",
-            ]
-        )
+        script = remote_scripts.run_preflight_driver(remote, args)
         output = subprocess.check_output(
             [
                 "dev-host",
@@ -205,20 +161,7 @@ def verify(root, claim):
     facts = {}
     if resolved:
         # 实际访问由dev-host断言；机器标识只在目标侧取摘要，不回传原始值。
-        script = "\n".join(
-            [
-                "import hashlib,json,pwd,socket",
-                "out={'hostname':socket.gethostname()}",
-                "for p in ('/etc/machine-id','/var/lib/dbus/machine-id'):",
-                " try:",
-                "  body=open(p,'rb').read().strip()",
-                "  if body:out['machine_id_sha256']=hashlib.sha256(body).hexdigest();break",
-                " except OSError:pass",
-                f"try:pwd.getpwnam({target['user']!r});out['service_user_present']=True",
-                "except KeyError:out['service_user_present']=False",
-                "print(json.dumps(out))",
-            ]
-        )
+        script = remote_scripts.probe_host_identity(target["user"])
         output = subprocess.check_output(
             [
                 "dev-host",
@@ -437,20 +380,7 @@ def registration_intent_absent(root, host, environment, identifier):
     """
     lockpath = "/run/lock/aiops-access-" + environment + ".lock"
     marker = "/opt/aiops-access-" + environment + "/registration-tasks/" + identifier + ".json"
-    script = "\n".join(
-        [
-            "import fcntl,os,sys",
-            "from pathlib import Path",
-            f"fd=os.open({lockpath!r},os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW,0o600)",
-            "lock=os.fdopen(fd,'w')",
-            "st=os.fstat(lock.fileno())",
-            "if st.st_uid!=0 or st.st_mode&0o077 or st.st_nlink!=1:sys.exit(9)",
-            "try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)",
-            "except BlockingIOError:sys.exit(9)",
-            f"sys.exit(0 if Path({marker!r}).is_file() else 7)",
-            "",
-        ]
-    )
+    script = remote_scripts.probe_registration_intent(lockpath, marker)
     try:
         probe = subprocess.run(
             ["dev-host", "exec", host, "--allow-service-exec", "--", "python3", "-B", "-"],
@@ -478,26 +408,7 @@ def registration_assets_present(root, host, environment, tenant):
         return None
     lockpath = "/run/lock/aiops-access-" + environment + ".lock"
     database = "/var/lib/aiops-access-" + environment + "/gateway/gateway.db"
-    script = "\n".join(
-        [
-            "import fcntl,os,sqlite3,sys",
-            "from pathlib import Path",
-            f"fd=os.open({lockpath!r},os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW,0o600)",
-            "lock=os.fdopen(fd,'w')",
-            "st=os.fstat(lock.fileno())",
-            "if st.st_uid!=0 or st.st_mode&0o077 or st.st_nlink!=1:sys.exit(9)",
-            "try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)",
-            "except BlockingIOError:sys.exit(9)",
-            f"p=Path({database!r})",
-            "if not p.is_file():sys.exit(7)",
-            "con=sqlite3.connect('file:'+str(p)+'?mode=ro',uri=True)",
-            "q=('SELECT count(*) FROM dify_workspaces WHERE tenant_id=? AND environment=? '",
-            "   'UNION ALL SELECT count(*) FROM operator_apps WHERE tenant_id=? AND environment=?')",
-            f"n=sum(r[0] for r in con.execute(q,({tenant!r},{environment!r},{tenant!r},{environment!r})))",
-            "sys.exit(0 if n else 7)",
-            "",
-        ]
-    )
+    script = remote_scripts.probe_registration_assets(lockpath, database, tenant, environment)
     try:
         probe = subprocess.run(
             ["dev-host", "exec", host, "--allow-service-exec", "--", "python3", "-B", "-"],
@@ -618,18 +529,7 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                     )
                 else:
                     # 仅受管服务身份读task目录中已冻结归档；原路径不通过shell拼接。
-                    script = "\n".join(
-                        [
-                            "import sys,hashlib",
-                            "from pathlib import Path",
-                            f"p=Path({source['path']!r})",
-                            "assert p.is_file() and not p.is_symlink() and p.stat().st_mode&0o077==0",
-                            "",
-                            "actual=hashlib.file_digest(p.open('rb'),'sha256').hexdigest()",
-                            f"assert actual=={source['sha256']!r}",
-                            "sys.stdout.buffer.write(p.read_bytes())",
-                        ]
-                    )
+                    script = remote_scripts.read_central_archive(source["path"], source["sha256"])
                     with local.open("wb") as stream:
                         subprocess.run(
                             [
@@ -652,16 +552,7 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                 actual = hashlib.sha256(local.read_bytes()).hexdigest()
                 if actual != source["sha256"]:
                     raise ValueError("installation artifact mismatch")
-                guard = (
-                    "from pathlib import Path\nimport hashlib,os\n"
-                    f"d=Path({remote!r});d.mkdir(mode=0o700,exist_ok=True)\n"
-                    "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0\n"
-                    f"p=d/{local.name!r}\n"
-                    "if p.exists() or p.is_symlink():\n"
-                    " assert p.is_file() and not p.is_symlink() and p.stat().st_uid==0\n"
-                    " assert p.stat().st_nlink==1\n"
-                    f" assert hashlib.sha256(p.read_bytes()).hexdigest()=={actual!r}\n"
-                )
+                guard = remote_scripts.guard_staged_archive(remote, local.name, actual)
                 subprocess.run(
                     command,
                     cwd=root,
@@ -724,38 +615,12 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
             ) != {"authorized": True}:
                 raise ValueError("installation authorization changed")
             # 核固定包身份后执行task.py；observe严格不再次apply，不向目标传共享凭据。
-            script = "\n".join(
-                [
-                    "import hashlib,json,subprocess,tarfile,sys",
-                    "from pathlib import Path",
-                    f"archive=Path({(remote + '/installer.tar.gz')!r})",
-                    "actual=hashlib.sha256(archive.read_bytes()).hexdigest()",
-                    f"assert actual=={staged['installer']['sha256']!r}",
-                    f"d=Path({(remote + '/installer')!r});d.mkdir(mode=0o700,exist_ok=True)",
-                    "assert not d.is_symlink() and d.stat().st_uid==0 and d.stat().st_mode&0o077==0",
-                    "",
-                    "with tarfile.open(archive) as t:",
-                    " for m in t:",
-                    "  if m.name=='.' and m.isdir():continue",
-                    "  n=m.name[2:] if m.name.startswith('./') else m.name",
-                    "  assert m.isfile() and n in {'REVISION','SHA256SUMS','install.py','runtime_check.py',"
-                    "'probe.py','artifact_checks.py','task.py','publication.py'}",
-                    "  q=d/n;body=t.extractfile(m).read()",
-                    "  if q.exists() or q.is_symlink():",
-                    "   assert q.is_file() and not q.is_symlink() and q.stat().st_uid==0",
-                    "   assert q.read_bytes()==body",
-                    "  else:",
-                    "   with q.open('xb') as f:f.write(body)",
-                    f"assert (d/'REVISION').read_text().strip()=={staged['installer']['revision']!r}",
-                    "assert (d/'task.py').is_file()",
-                    "sys.path.insert(0,str(d))",
-                    "import probe",
-                    "py=probe.system_python(probe.managed_python())[0]"
-                    " if hasattr(probe,'managed_python') else '/usr/bin/python3'",
-                    f"r=subprocess.run([py]+{arguments!r},input={json.dumps(spec)!r},"
-                    "stdout=subprocess.PIPE,stderr=subprocess.PIPE,universal_newlines=True)",
-                    "sys.stdout.write(r.stdout);sys.exit(r.returncode)",
-                ]
+            script = remote_scripts.run_installer_task(
+                remote,
+                staged["installer"]["sha256"],
+                staged["installer"]["revision"],
+                arguments,
+                spec,
             )
             action_seconds = min(800, deadline - time.monotonic() - report_seconds)
             if action_seconds <= 0:

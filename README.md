@@ -50,8 +50,12 @@ flowchart LR
 
 ## 三、系统模块与依赖关系
 
-以下是迁移后的现有文件职责。导入检查覆盖子包、延迟导入与包级导入；既有节点装配四模块循环按具体边冻结，`test_readme_architecture.py`
-核对职责入口与引用并拒绝新增循环；业务执行不得依赖已删除的 Python 运行器。
+以下是迁移后的现有文件职责。导入检查覆盖子包、延迟导入与包级导入；全包已彻底消除导入循环，
+`test_readme_architecture.py` 核对职责入口与引用并拒绝新增任何循环；业务执行不得依赖已删除的 Python 运行器。
+
+网关 HTTP 路由按领域拆分在 `gateway/routers/`（共享鉴权依赖与异常处理见 `gateway/dependencies.py`，
+请求模型见 `gateway/schemas.py`，主装配入口仍为 `gateway/gateway_api.py`）；运维分析、健康报告与签名媒体
+执行体分别收敛在 `operator/ops_analysis_runner.py`、`health/health_job_runner.py` 与 `knowledge/media_service.py`。
 
 模块按职责查找，单个实现文件由源码树或 `node .sandcastle/repo-map.mjs --stdout` 按需枚举。
 新增同职责模块无需重写README；新职责目录必须补入口与目录规则。

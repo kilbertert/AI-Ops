@@ -7,7 +7,7 @@ from typing import Any
 
 from aiops_diagnostics.publication.shortcut_lifecycle import (
     PLATFORM_SCOPE,
-    PLATFORM_TENANT_ID,
+    SHORTCUT_PLATFORM_SCOPE,
     Shortcut,
     ShortcutManager,
 )
@@ -41,7 +41,7 @@ def migrate_shortcuts(
         for row in store.list_published_for_entry(entry):
             grouped.setdefault(row.code, []).append(row)
         for code, rows in sorted(grouped.items()):
-            existing = store.find_by_code(PLATFORM_TENANT_ID, entry, code)
+            existing = store.find_by_code(SHORTCUT_PLATFORM_SCOPE, entry, code)
             if existing is not None:
                 reports.append(
                     ShortcutMigrationReport(

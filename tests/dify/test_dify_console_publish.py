@@ -1851,17 +1851,16 @@ def test_the_inlined_platform_constants_match_their_sources() -> None:
     没跟上，立刻红。
     """
     from aiops_diagnostics.dify import dify_login_service, dify_workspaces
-    from aiops_diagnostics.dify.dify_console_publish import PLATFORM_TENANT_ID as BRIDGE_TENANT
+    from aiops_diagnostics.dify.dify_console_publish import PLATFORM_TENANT_ID as BRIDGE_WORKSPACE
     from aiops_diagnostics.dify.dify_console_publish import PLATFORM_USER_TYPE as BRIDGE_TYPE
 
     assert BRIDGE_TYPE == dify_login_service.PLATFORM_USER_TYPE, (
         "桥里的 PLATFORM_USER_TYPE 与 dify_login_service 不一致"
     )
-    assert BRIDGE_TENANT == dify_workspaces.PLATFORM_TENANT_ID, (
-        "桥里的 PLATFORM_TENANT_ID 与 dify_workspaces 不一致"
+    assert BRIDGE_WORKSPACE == dify_workspaces.DIFY_PLATFORM_WORKSPACE_ID, (
+        "桥里的平台工作区哨兵与 dify_workspaces.DIFY_PLATFORM_WORKSPACE_ID 不一致"
     )
-    # 同名的另一个常量属于不同命名空间，值本就不同；钉住这一点，
-    # 免得有人"统一"它们（ADR-0008 的「同名不同物」）。
+    # 快捷动作的平台命名空间属于不同领域，值本就不同；钉住这一点避免混用。
     from aiops_diagnostics.publication import shortcut_lifecycle
 
-    assert shortcut_lifecycle.PLATFORM_TENANT_ID != BRIDGE_TENANT
+    assert shortcut_lifecycle.SHORTCUT_PLATFORM_SCOPE != BRIDGE_WORKSPACE
