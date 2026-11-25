@@ -46,7 +46,11 @@ def _import_edges() -> dict[str, set[str]]:
                     base_parts = pkg_parts[: len(pkg_parts) - up] if up else list(pkg_parts)
                     base = ".".join(base_parts + ([node.module] if node.module else []))
                     if base:
-                        candidates.append(prefix + base)
+                        # `from . import sibling` inside a package `__init__.py` resolves `base` to the
+                        # package itself; only add `base` when an explicit module name was given or it
+                        # points outside the current package `__init__`.
+                        if node.module or not is_pkg or base != source:
+                            candidates.append(prefix + base)
                         candidates.extend(prefix + base + "." + alias.name for alias in node.names)
                     else:
                         candidates.extend(prefix + alias.name for alias in node.names)
@@ -58,7 +62,7 @@ def _import_edges() -> dict[str, set[str]]:
             for target in candidates:
                 if target.startswith(prefix):
                     target_mod = target[len(prefix) :]
-                    if target_mod in modules and target_mod != source:
+                    if target_mod in modules:
                         edges[source].add(target_mod)
     return edges
 
@@ -200,5 +204,18 @@ def test_import_scan_catches_relative_import_cycles(tmp_path, monkeypatch):
     edges = _import_edges()
     assert "area.two" in edges["area.one"]
     assert "area.one" in edges["area.two"]
+    with pytest.raises(AssertionError, match="新增包内循环边"):
+        test_package_import_graph_has_no_new_cycles()
+
+
+def test_import_scan_catches_explicit_self_imports(tmp_path, monkeypatch):
+    package = tmp_path / "sample"
+    (package / "area").mkdir(parents=True)
+    (package / "area/__init__.py").write_text("from . import one\n")
+    (package / "area/one.py").write_text("import aiops_diagnostics.area.one\n")
+    monkeypatch.setitem(globals(), "PACKAGE", package)
+    edges = _import_edges()
+    assert "area" not in edges["area"]
+    assert "area.one" in edges["area.one"]
     with pytest.raises(AssertionError, match="新增包内循环边"):
         test_package_import_graph_has_no_new_cycles()
