@@ -10,8 +10,8 @@ from pathlib import Path
 import httpx
 import pytest
 from dify.test_dify_ensure_workspace import upstream as workspace_upstream  # noqa: F401
+from dify_console_bridge import bridge
 
-from aiops_diagnostics.dify import dify_console_publish as bridge
 from aiops_diagnostics.dify import environment_candidate_preparation as prep
 from aiops_diagnostics.dify import environment_installation as installation
 from aiops_diagnostics.dify import environment_onboarding as onboarding

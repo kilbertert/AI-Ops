@@ -83,6 +83,7 @@ packages = ["src/aiops_diagnostics"]
 #
 # Ask for serial with `-n 0`, or `./tools/test.sh -n 0`.
 addopts = "-q -n 4"
+pythonpath = ["services/dify-console-bridge", "services/dify-login-proxy"]
 testpaths = ["tests"]
 
 [tool.ruff]

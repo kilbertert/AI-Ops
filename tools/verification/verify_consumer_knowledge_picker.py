@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "content"))
 from aiops_diagnostics.consumer.knowledge_access import PROVIDER, catalogue_token
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "services/dify-console-bridge"))
+
 
 def install_signed_plugin(root, base, headers, workspace, check):
     import verify_dify_chat_entry as stack
@@ -341,7 +343,7 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
         import subprocess
         import threading
 
-        from aiops_diagnostics.dify.dify_console_publish import BridgeSettings, make_server
+        from dify_console_bridge.bridge import BridgeSettings, make_server
 
         namespace = env["DIFY_TEST_NAMESPACE"]
         origin = "http://" + subprocess.check_output(["docker", "port", namespace, "3000"], text=True).strip()

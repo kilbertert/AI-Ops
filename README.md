@@ -85,6 +85,8 @@ flowchart LR
 | `src/aiops_diagnostics/consumer/`、`tests/consumer/` | C端工作流、知识与本人订单业务及对应测试 |
 | `services/execution-node/` | 现役 Java 节点源码、资源与 Maven 构建入口 |
 | `services/model-proxy/` | 现役固定目标模型代理 |
+| `services/dify-console-bridge/` | 现役 Dify 控制台发布/管理旁路桥（独立部署、仅标准库依赖） |
+| `services/dify-login-proxy/` | 现役 Dify 控制台公司登录代理（独立部署、`mappings.db`） |
 | `tools/verification/m2_live/` | 隔离栈探针与回环中继 |
 | `src/aiops_diagnostics/knowledge/`、`tests/knowledge/` | 知识检索、开户、绑定、同步守卫与对应测试 |
 | `src/aiops_diagnostics/identity/`、`tests/identity/` | 调用者身份、公司权限、能力来源档（`identity.capability`）、订单范围和共享安全规则 |
@@ -105,7 +107,7 @@ flowchart LR
 
 开通依赖从所选来源发布图与系统工具声明取得，每次重试核对实际状态；不再维护独立全局知识插件版本。
 Dify自助开通：`dify.self_service`组织双端业务流程，`dify.self_service_api`提供固定管理端点，
-`dify.self_service_bridge`校验同源会话，`dify.self_service_identity`读取公司管理权限，
+`dify_console_bridge.self_service_bridge`（位于 `services/dify-console-bridge/`）校验同源会话，`dify.self_service_identity`读取公司管理权限，
 `dify.self_service_config`解析平台连接，`dify.self_service_prepare`准备依赖与应用，
 `dify.self_service_store`保存幂等任务与受管应用目录，`dify.dual_entry`定义端/场景与渠道口径，
 `dify.service_keys`申请、对账并落盘每应用的 Service 凭据；`dify.knowledge_connection`管理各工作区的知识连接。

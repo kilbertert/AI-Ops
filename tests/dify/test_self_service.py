@@ -511,9 +511,8 @@ def test_bridge_real_http_preserves_identity_and_rejects_cross_origin(monkeypatc
     import threading
 
     import httpx
-
-    from aiops_diagnostics.dify import dify_console_publish as bridge
-    from aiops_diagnostics.dify.dify_console_publish import BridgeSettings, make_server
+    from dify_console_bridge import bridge
+    from dify_console_bridge.bridge import BridgeSettings, make_server
 
     seen = []
 
@@ -704,10 +703,14 @@ def test_bridge_module_entry_rejects_without_disconnect(tmp_path):
             "AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID": "fixture",
         }
     )
+    from pathlib import Path
+
+    bridge_src = str(Path(__file__).resolve().parents[2] / "services/dify-console-bridge")
+    env["PYTHONPATH"] = bridge_src + os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else bridge_src
     log = tmp_path / "bridge.log"
     with log.open("w") as output:
         process = subprocess.Popen(
-            [sys.executable, "-m", "aiops_diagnostics.dify.dify_console_publish"],
+            [sys.executable, "-m", "dify_console_bridge"],
             env=env,
             stdout=output,
             stderr=output,
@@ -799,17 +802,18 @@ def test_workspace_access_requires_own_tenant_or_platform_directory(managed):
 
 def test_platform_member_join_rejects_another_dify_account(managed, monkeypatch):
     f, _, caller, _, _ = managed
-    from aiops_diagnostics.dify import dify_console_publish, dify_tenant_access
+    from aiops_diagnostics.common import bounded_http
+    from aiops_diagnostics.dify import dify_tenant_access
 
     f["settings"].dify_publish_api_key = "management-key"
     monkeypatch.setattr(f["ctx"].self_service, "workspace", lambda *_: "TENANT-B")
     monkeypatch.setattr(
-        dify_console_publish,
-        "_request",
-        lambda *_, **__: (
-            200,
-            {"company_user_id": caller.user_id, "dify_account_id": "aaaaaaaa-bbbb-cccc-dddd-aaaaaaaaaaaa"},
-        ),
+        bounded_http,
+        "request_json",
+        lambda *_, **__: {
+            "company_user_id": caller.user_id,
+            "dify_account_id": "aaaaaaaa-bbbb-cccc-dddd-aaaaaaaaaaaa",
+        },
     )
     joined = []
     monkeypatch.setattr(dify_tenant_access, "grant_tenant_access", lambda **kw: joined.append(kw))
@@ -827,6 +831,50 @@ def test_platform_member_join_rejects_another_dify_account(managed, monkeypatch)
         == 200
     )
     assert joined[0]["tenant_id"] == "TENANT-B" and joined[0]["account_id"] == payload["account_id"]
+
+
+def test_platform_member_join_fails_closed_when_login_proxy_errors(managed, monkeypatch):
+    """登录代理连接失败或返回非 JSON / 5xx 时，member 端点应通过真实 HTTP 客户端 fail-closed 返回 403。"""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from aiops_diagnostics.dify import dify_tenant_access
+
+    f, _, _, _, _ = managed
+    f["settings"].dify_publish_api_key = "management-key"
+    monkeypatch.setattr(f["ctx"].self_service, "workspace", lambda *_: "TENANT-B")
+    joined = []
+    monkeypatch.setattr(dify_tenant_access, "grant_tenant_access", lambda **kw: joined.append(kw))
+
+    class _BrokenProxy(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            body = b"not-json"
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _BrokenProxy)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        f["settings"].operator_trial_login_url = f"http://127.0.0.1:{server.server_port}"
+        payload = {
+            "workspace_id": APP,
+            "account_id": "aaaaaaaa-bbbb-cccc-dddd-aaaaaaaaaaaa",
+            "email": "fixture@example.invalid",
+        }
+        headers = {"Authorization": "Bearer management-key", "X-AIOps-Console-Session": "normal-session"}
+        result = f["client"].post("/v1/dify/management/workspace/member", json=payload, headers=headers)
+        assert result.status_code == 403
+        assert result.json()["error"]["code"] == "SETUP_IDENTITY_MISMATCH"
+        assert not joined
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_knowledge_step_creates_verified_tenant_with_persistent_credential(managed, monkeypatch):
@@ -867,8 +915,7 @@ def test_workspace_bridge_uses_current_profile_and_switches_only_after_authoriza
     import threading
 
     import httpx
-
-    from aiops_diagnostics.dify import dify_console_publish as bridge
+    from dify_console_bridge import bridge
 
     seen = []
 

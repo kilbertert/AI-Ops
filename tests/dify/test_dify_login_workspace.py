@@ -19,15 +19,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from aiops_diagnostics.dify.dify_login_company import CompanyAuthSettings, CompanyIdentity
-from aiops_diagnostics.dify.dify_login_provision import DifyConsoleSettings
-from aiops_diagnostics.dify.dify_login_server import LoginProxySettings
-from aiops_diagnostics.dify.dify_login_service import (
+from dify_login_proxy.company import CompanyAuthSettings, CompanyIdentity
+from dify_login_proxy.provision import DifyConsoleSettings
+from dify_login_proxy.server import LoginProxySettings
+from dify_login_proxy.service import (
     LoginPolicy,
     LoginService,
     MappingStore,
 )
+
 from aiops_diagnostics.dify.dify_workspace_directory import (
     GatewayWorkspaceClient,
     WorkspaceUnavailable,
@@ -171,7 +171,7 @@ def _patch_company(
     permissions: tuple[str, ...] = ("aiops:agent:edit",),
     user_type: str = "tenant",
 ) -> None:
-    from aiops_diagnostics.dify import dify_login_service as module
+    from dify_login_proxy import service as module
 
     identity = CompanyIdentity(user_id="u-1", username="zhang", tenant_id=TENANT, token="t")
     monkeypatch.setattr(module, "company_login", lambda *a, **k: identity)
@@ -207,7 +207,7 @@ def test_login_refuses_with_an_actionable_reason_when_there_is_no_workspace(
     tmp_path: Path, monkeypatch
 ) -> None:
     """缺行 ⇒ 拒绝，且文案里**有那条命令**。空工作区会让运营以为"进去了、只是没内容"。"""
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from dify_login_proxy.core import PermissionDenied
 
     _patch_company(monkeypatch)
     refusal = WorkspaceUnavailable("DIFY_WORKSPACE_UNRESOLVED", "租户没有 workspace", http_status=404)
@@ -224,7 +224,7 @@ def test_login_refuses_with_an_actionable_reason_when_there_is_no_workspace(
 
 
 def test_creating_is_reported_as_retry_later(tmp_path: Path, monkeypatch) -> None:
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from dify_login_proxy.core import PermissionDenied
 
     _patch_company(monkeypatch)
     service = _service(
@@ -239,7 +239,7 @@ def test_creating_is_reported_as_retry_later(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_a_failed_join_refuses_empty_workspace_and_keeps_retry_mapping(tmp_path: Path, monkeypatch) -> None:
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from dify_login_proxy.core import PermissionDenied
 
     """不签发空工作区会话；重试仍复用已建账号。"""
     _patch_company(monkeypatch)
@@ -344,7 +344,7 @@ def test_a_platform_account_without_its_workspace_gets_an_actionable_refusal(
     这一步是 #882 的验收之一：错误要说清"该给谁开户"，否则运维会去给一个不存在的租户
     执行 `ensure-workspace`。
     """
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from dify_login_proxy.core import PermissionDenied
 
     _patch_company(monkeypatch, user_type="-1")
     service = _service(
@@ -389,7 +389,7 @@ def test_a_tenant_account_without_its_workspace_is_still_refused(tmp_path: Path,
     反向判据：如果把 `may_enter` 改成「不校验 workspace 是否真的解析出来」，这条会变成
     登录成功 —— 而那条路通向"登录成功、进去什么也没有"。
     """
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from dify_login_proxy.core import PermissionDenied
 
     _patch_company(monkeypatch, permissions=(), user_type="1")
     service = _service(
@@ -411,7 +411,7 @@ def test_the_platform_workspace_still_requires_the_global_code(tmp_path: Path, m
     平台 workspace 是所有平台账号共处一室、互相可见全部 app，所以那道门必须还在；
     ADR-0139 放开的是"租户自己那个 workspace"，不是这一间。
     """
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from dify_login_proxy.core import PermissionDenied
 
     _patch_company(monkeypatch, permissions=(), user_type="-1")
     service = _service(tmp_path, _Directory("ws-platform"), _Inner())
@@ -428,7 +428,7 @@ def test_a_single_workspace_deployment_keeps_the_global_gate(tmp_path: Path, mon
     那里解析不出 workspace，隔离根本不存在。若判据看的是"他有个租户"，一次配置缺省
     就把整个门拿掉了 —— 这条就是钉住那个方向的。
     """
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from dify_login_proxy.core import PermissionDenied
 
     _patch_company(monkeypatch, permissions=(), user_type="1")
     service = _service(tmp_path, None, None)  # 没有 workspace_directory
@@ -525,7 +525,7 @@ def test_successful_logins_above_128_keep_their_operator_grants(tmp_path, monkey
 
 
 def test_logout_then_same_second_login_does_not_reauthorize_old_session(tmp_path, monkeypatch):
-    monkeypatch.setattr("aiops_diagnostics.dify.dify_login_proxy.time.time", lambda: 1800000000)
+    monkeypatch.setattr("dify_login_proxy.core.time.time", lambda: 1800000000)
     _patch_company(monkeypatch, user_type="5")
     service = _service(tmp_path, _Directory(WORKSPACE), _Inner())
     service.retain_operator_token = True
@@ -540,7 +540,7 @@ def test_logout_then_same_second_login_does_not_reauthorize_old_session(tmp_path
 def test_active_login_binding_expires_without_changing_mapping(tmp_path, monkeypatch, retained):
     import time
 
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied, mint_console_session
+    from dify_login_proxy.core import PermissionDenied, mint_console_session
 
     clock = [time.time()]
     monkeypatch.setattr(time, "time", lambda: clock[0])
@@ -566,7 +566,7 @@ def test_active_login_binding_expires_without_changing_mapping(tmp_path, monkeyp
 def test_mapping_tenant_change_invalidates_bound_session(tmp_path, monkeypatch):
     import sqlite3
 
-    from aiops_diagnostics.dify.dify_login_proxy import PermissionDenied
+    from dify_login_proxy.core import PermissionDenied
 
     _patch_company(monkeypatch, user_type="5")
     service = _service(tmp_path, _Directory(WORKSPACE), _Inner())

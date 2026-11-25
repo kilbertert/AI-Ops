@@ -244,20 +244,34 @@ def register(app, context):
         caller = auth.identity(context, session)
         tenant = service.workspace(caller, payload.workspace_id)
         auth.require_target(context, caller, tenant)
-        from .dify_console_publish import _request
+        from aiops_diagnostics.common.bounded_http import ErrorMapping, RequestSpec, json_body, request_json
+
         from .dify_inner_api import DifyInnerApi, InnerApiSettings
         from .dify_tenant_access import grant_tenant_access
 
-        code, identity = _request(
-            context.settings.operator_trial_login_url.rstrip("/") + "/__aiops/publish/check",
-            method="POST",
-            headers={"Content-Type": "application/json"},
-            body={"session": session},
-            timeout=5,
+        def _refuse(_failure):
+            return auth.SetupRefused("SETUP_IDENTITY_MISMATCH")
+
+        identity = request_json(
+            RequestSpec(
+                url=context.settings.operator_trial_login_url.rstrip("/") + "/__aiops/publish/check",
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                body=json_body({"session": session}),
+                timeout=5,
+                max_read_bytes=1024 * 1024,
+                follow_redirects=False,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=_refuse,
+                http_error=_refuse,
+                unavailable=_refuse,
+                invalid_body=_refuse,
+                invalid_envelope=_refuse,
+            ),
         )
         if (
-            code != 200
-            or not isinstance(identity, dict)
+            not isinstance(identity, dict)
             or identity.get("dify_account_id") != payload.account_id
             or identity.get("company_user_id") != caller.user_id
         ):

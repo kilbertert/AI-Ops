@@ -6,7 +6,7 @@
 **这是什么**：在 Dify 控制台的编排页注入一颗按钮，运营点它就把**当前改好的内容**
 冻结成一个已发布的线上版本。**不用 SSH、不用敲命令。**
 
-决定的论证在 **ADR-0021**；后端桥在 `src/aiops_diagnostics/dify/dify_console_publish.py`。
+决定的论证在 **ADR-0021** 与 **ADR-0338**；后端桥独立位于 `services/dify-console-bridge/dify_console_bridge/`。
 本目录只是**部署资产**。
 
 管家原生预览由同包的 `operator-native-preview.js` 接线，打包时拼入原注入脚本，无需改 Dify
@@ -34,14 +34,17 @@ bash <暂存目录>/deploy.sh <暂存目录> <新的私有备份目录>
 超时或安装失败自动恢复原包、JS、snippet 并重启桥。
 成功后还须用登录运营账号做发布/试用/撤回/恢复验收；无会话 403 只证明路由和拒绝门。
 
-成功部署后若要人工恢复，使用本次备份（不恢复配置或数据库）：
+成功部署后若要人工恢复，使用本次备份（与 `deploy.sh` 自动恢复步骤一致，同步还原两个代码目录与 `bridge.service` 单元，不恢复配置或数据库）：
 
 ```bash
 systemctl stop aiops-dify-console-bridge.service
-rm -rf /opt/aiops-console-bridge/aiops_diagnostics
+rm -rf /opt/aiops-console-bridge/aiops_diagnostics /opt/aiops-console-bridge/dify_console_bridge
 cp -a <备份>/aiops_diagnostics /opt/aiops-console-bridge/aiops_diagnostics
+if [ -e <备份>/dify_console_bridge ]; then cp -a <备份>/dify_console_bridge /opt/aiops-console-bridge/dify_console_bridge; fi
 cp -a <备份>/dify-publish-button.js /srv/aiops-console-assets/dify-publish-button.js
 cp -a <备份>/dify-console-publish.conf /www/server/panel/vhost/nginx/snippets/dify-console-publish.conf
+cp -a <备份>/bridge.service /etc/systemd/system/aiops-dify-console-bridge.service
+systemctl daemon-reload
 /www/server/nginx/sbin/nginx -t && /www/server/nginx/sbin/nginx -s reload
 systemctl start aiops-dify-console-bridge.service
 ```
@@ -169,9 +172,9 @@ Referer 只是请求上下文，用户能自行构造，不能代替授权。机
 
 ## 包路径迁移
 
-桥构建制品包含`aiops_diagnostics/dify/`初始化与桥模块。包内deploy.sh将现役ExecStart的模块段
-从`aiops_diagnostics.dify_console_publish`改为`aiops_diagnostics.dify.dify_console_publish`，
-不覆盖User/Group和环境设置；代码与单元一起备份，失败一起恢复并daemon-reload。
+桥构建制品包含独立服务包 `dify_console_bridge/` 与最小标准库原语子集 `aiops_diagnostics/`。包内 `deploy.sh` 将现役 `ExecStart` 的模块段
+从 `aiops_diagnostics.dify_console_publish` 或 `aiops_diagnostics.dify.dify_console_publish` 统一改为 `dify_console_bridge`，
+不覆盖 User/Group 和环境设置；代码与单元一起备份，失败一起恢复并 daemon-reload。
 未升级的旧桥包与旧单元继续配套运行，Gateway CD不替它切换。
 
 共享多环境模式的凭据形状、成套启用与恢复步骤见[登录代理手册](../../docs/agents/dify-login-proxy-36-runbook.md#共享入口选择环境adr0276)。仅配置 `AIOPS_CONSOLE_BRIDGE_ENVIRONMENT_CREDENTIALS_FILE` 并不能开通环境；它还依赖同版本活动登录响应与目标真实工作区。

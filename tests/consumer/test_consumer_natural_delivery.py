@@ -34,7 +34,7 @@ def test_pending_tools_and_unverified_links_still_refuse_delivery():
 
 
 def test_preview_keeps_complete_natural_answer():
-    from aiops_diagnostics.dify.dify_console_publish import _trial_report_text
+    from dify_console_bridge.bridge import _trial_report_text
 
     text = "来源记录说明\n" * 500 + "订单费用记录4.62，支付金额记录4.71。"
     assert (

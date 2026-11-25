@@ -137,8 +137,7 @@ def test_bridge_real_http_environment_contract(monkeypatch):
     import threading
 
     import httpx
-
-    from aiops_diagnostics.dify import dify_console_publish as bridge
+    from dify_console_bridge import bridge
 
     forwarded = []
 
@@ -375,8 +374,7 @@ def test_plan_bridge_forwards_only_fixed_request(monkeypatch):
     import threading
 
     import httpx
-
-    from aiops_diagnostics.dify import dify_console_publish as bridge
+    from dify_console_bridge import bridge
 
     calls = []
 

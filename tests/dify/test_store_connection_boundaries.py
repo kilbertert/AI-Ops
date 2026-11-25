@@ -4,8 +4,8 @@ import sqlite3
 from contextlib import closing
 
 import pytest
+from dify_login_proxy.service import MappingStore
 
-from aiops_diagnostics.dify.dify_login_service import MappingStore
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.gateway import gateway_db

@@ -14,6 +14,7 @@ import yaml
 from pytest import MonkeyPatch
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "services/dify-console-bridge"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 
@@ -68,11 +69,11 @@ class Model(BaseHTTPRequestHandler):
 
 def verify_operator(root, base, env, setup, check):
     import verify_dify_chat_entry as stack
+    from dify_console_bridge.bridge import BridgeSettings, make_server
     from operations.test_operator_cpms import environment
 
     from aiops_diagnostics.dify.dify_app_registry import DifyAppBinding
     from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
-    from aiops_diagnostics.dify.dify_console_publish import BridgeSettings, make_server
     from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
     from aiops_diagnostics.execution import node_publication
