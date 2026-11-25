@@ -108,7 +108,7 @@ def test_notice_cannot_assert_anything(text):
 
 def test_legacy_contract_delivers_a_prompt_written_notice():
     """旧两字段契约：`clarify` 的正文由提示词写，系统仍追加受控客服入口。"""
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     content = {"support": {"zh": {"label": "客服", "url": "https://support.example/zh"}}}
     answer = final_answer(
@@ -134,7 +134,7 @@ def test_a_trailing_brace_on_a_notice_does_not_turn_a_system_fallback_into_a_fai
     已经接受了带尾巴的原文，归一化若再严格一次就会抛 `JSONDecodeError`，
     把一条本可交付的系统答复变成整轮失败。
     """
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     content = {"support": {"zh": {"label": "客服", "url": "https://support.example/zh"}}}
     context = {"status": "limited", "candidates": [], "mode": "documents"}
@@ -146,7 +146,7 @@ def test_a_trailing_brace_on_a_notice_does_not_turn_a_system_fallback_into_a_fai
 
 def test_legacy_contract_keeps_system_text_on_service_failure():
     """服务故障时以系统文案为准：模型没有故障信息，让它描述故障只会多一个错处。"""
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     answer = final_answer(
         json.dumps({"kind": "unavailable", "faq_id": "", "reply": "服务出了点小问题"}),
@@ -160,7 +160,7 @@ def test_legacy_contract_keeps_system_text_on_service_failure():
 
 def test_safety_and_photo_outputs_never_depend_on_the_model():
     """紧急安全提示与图片不可读：提示词写了什么都不影响这条出口。"""
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     for status in ("safety", "photo_unreadable"):
         answer = final_answer(
@@ -178,7 +178,7 @@ def test_a_trailing_brace_does_not_cost_the_user_the_answer_text():
     Devin 在 #1294 上指出前一条只查了 `retrieval_status`，证明不了正文没丢。
     这里用 `no_result`（模型正文合法的主路径）断言交付出去的文本本身。
     """
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     content = {"support": {"zh": {"label": "客服", "url": "https://support.example/zh"}}}
     context = {"status": "no_result", "candidates": [], "mode": "documents"}

@@ -273,7 +273,7 @@ def test_every_reader_of_the_model_output_tolerates_the_same_tail():
     或"正文退回固定文案" —— 同一个成因换个位置失败。2026-11-01 就是这样漏的：
     先只想着解析，`store_reply_source` 与 `_has_reply` 都还在严格解析。
     """
-    from aiops_diagnostics.consumer.consumer_knowledge import _has_reply
+    from aiops_diagnostics.consumer.legacy_callbacks import _has_reply
 
     tail_only = (
         '{"kind":"realtime","answer":"","reference_ids":[],'

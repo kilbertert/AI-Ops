@@ -9,7 +9,7 @@ import pytest
 from execution.test_app_runtime_dify_entry import dify_chat
 
 from aiops_diagnostics.consumer.consumer_documents import SCHEMA
-from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 from consumer.test_consumer_chat_service import Client, done

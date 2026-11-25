@@ -5,7 +5,7 @@ import json
 import pytest
 from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
-from aiops_diagnostics.consumer import consumer_knowledge
+from aiops_diagnostics.consumer import legacy_callbacks
 from aiops_diagnostics.dify.dify_chatflow import ChatflowReply
 from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
@@ -217,7 +217,7 @@ def test_unretrieved_faq_and_extra_model_claims_are_rejected():
         {"kind": "stop_session", "faq_id": ""},
     ]:
         with pytest.raises(ChatRunUnavailable):
-            consumer_knowledge.final_answer(json.dumps(raw), context, "zh", {})
+            legacy_callbacks.final_answer(json.dumps(raw), context, "zh", {})
 
 
 def test_other_grant_kind_cannot_read_knowledge_and_no_grant_is_rejected(tmp_path, monkeypatch):

@@ -58,7 +58,7 @@ def test_live_prompt_names_languages_and_repeats_preference_after_context():
     ],
 )
 def test_translated_answer_keeps_original_chinese_reference_name(language, text):
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
     context = {
         "mode": "documents",
@@ -83,7 +83,7 @@ def test_translated_answer_keeps_original_chinese_reference_name(language, text)
 
 
 def test_only_cited_resource_name_is_exempt_inside_translated_prose():
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+    from aiops_diagnostics.consumer.legacy_callbacks import final_answer
     from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
     context = {

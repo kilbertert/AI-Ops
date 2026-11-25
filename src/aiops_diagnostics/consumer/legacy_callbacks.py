@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -18,6 +19,8 @@ from aiops_diagnostics.consumer.presentation import COMPOSED_LANGUAGES
 from aiops_diagnostics.dify.dify_run_store import still_valid
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.run_deliverability import deliverable
+
+_LOGGER = logging.getLogger("aiops.consumer.legacy_callbacks")
 
 
 def is_pre_picker_binding(binding: Any) -> bool:
@@ -385,6 +388,140 @@ def verify_legacy_trial_pre_commit(
         require_available(runtime, scope, binding)
 
 
+def _has_reply(raw: Any) -> bool:
+    from aiops_diagnostics.consumer.consumer_documents import load_selection
+
+    try:
+        body = load_selection(raw)
+    except chat_execution.ChatRunUnavailable:
+        return False
+    return isinstance(body, dict) and bool(body.get("reply"))
+
+
+def final_answer(
+    raw: Any, context: Any, language: str, content: Any, *, copy_pack: Any = None
+) -> dict[str, Any]:
+    """``callback_version`` 1–5 结构化答复解析器（现役 v6 使用 ``consumer_agent.final_answer``）。"""
+    from aiops_diagnostics.consumer.consumer_knowledge import (
+        NOTICE_KINDS,
+        fallback,
+        live_answer,
+        notice,
+    )
+
+    if (context or {}).get("status") == "safety":
+        return fallback("safety", language, content)
+    if (context or {}).get("status") == "photo_unreadable":
+        return fallback("photo_unreadable", language, content)
+    if (context or {}).get("followup", {}).get("unresolved_count") == 1:
+        return fallback("followup", language, content)
+    if (context or {}).get("mode") == "documents":
+        from aiops_diagnostics.consumer.consumer_documents import answer_selection, load_selection
+
+        kind, answer = answer_selection(
+            raw, context, language=language, contract=(context or {}).get("fact_contract", "legacy")
+        )
+        if answer is not None:
+            if kind in NOTICE_KINDS:
+                return notice(kind, answer["blocks"][0]["text"], language, content)
+            from aiops_diagnostics.common.answer_language import (
+                AnswerSurface,
+                answer_chinese_leak,
+                looks_like_asset_name,
+            )
+
+            titles = [b["title"] for b in answer["blocks"] if b["kind"] == "reference"]
+            prose = answer["blocks"][0]["text"]
+            for title in sorted(set(titles), key=len, reverse=True):
+                if looks_like_asset_name(title):
+                    prose = prose.replace(title, "")
+            surface = AnswerSurface.from_public_blocks(
+                [{"kind": "text", "text": prose}, *answer["blocks"][1:]], retrieved_titles=titles
+            )
+            if not any(char.isalpha() for char in prose) or answer_chinese_leak(surface, language):
+                raise chat_execution.ChatRunUnavailable(
+                    "CHATFLOW_ANSWER_LANGUAGE_INVALID", "answer language differs"
+                )
+            return answer
+        body = load_selection(raw) if _has_reply(raw) else {}
+        raw = json.dumps(
+            {
+                "kind": kind,
+                "faq_id": "",
+                **({"reply": body.get("reply")} if body.get("reply") else {}),
+            }
+        )
+    try:
+        selected = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_ANSWER_INVALID", "invalid structured answer"
+        ) from exc
+    if not isinstance(selected, dict) or not {"kind", "faq_id"} <= set(selected) <= {
+        "kind",
+        "faq_id",
+        "reply",
+    }:
+        raise chat_execution.ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid answer fields")
+    kind = selected["kind"]
+    if (context or {}).get("live_snapshot"):
+        if kind != "realtime" or selected["faq_id"]:
+            raise chat_execution.ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "live answer kind differs")
+        if selected.get("reply"):
+            from aiops_diagnostics.consumer.consumer_facts import model_reply
+
+            return model_reply(
+                selected["reply"],
+                context["live_snapshot"],
+                language=language,
+                contract=(context or {}).get("fact_contract", "legacy"),
+            )
+        return live_answer(
+            context["live_snapshot"],
+            language,
+            localized=context.get("answer_language_version") == 2,
+            pack=copy_pack,
+        )
+    if selected.get("reply"):
+        if kind not in NOTICE_KINDS and kind != "unavailable":
+            raise chat_execution.ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply without live data")
+        if kind == "unavailable" or (context or {}).get("status") in {"unavailable", "limited"}:
+            _LOGGER.info("consumer notice ignored: the service, not the model, describes the failure")
+        else:
+            return notice(kind, selected["reply"], language, content)
+    if kind == "knowledge":
+        row = next(
+            (r for r in (context or {}).get("candidates", []) if r["faq_id"] == selected["faq_id"]), None
+        )
+        if row is None:
+            raise chat_execution.ChatRunUnavailable(
+                "CHATFLOW_REFERENCE_INVALID", "answer was not retrieved this turn"
+            )
+        return {
+            "blocks": [
+                {"kind": "text", "text": row["answer"]},
+                {"kind": "reference", "reference_id": row["reference_id"], "title": row["title"]},
+                *[
+                    {"kind": media["kind"], "media": media, "title": media["title"]}
+                    for media in row.get("media", [])
+                ],
+            ],
+            "retrieval_status": "found",
+        }
+    if selected["faq_id"] != "" or kind not in {"human", "clarify", "realtime", "not_found", "unavailable"}:
+        raise chat_execution.ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "unsupported answer kind")
+    if kind in {"not_found", "unavailable"}:
+        if context is None:
+            raise chat_execution.ChatRunUnavailable(
+                "CHATFLOW_EVIDENCE_UNAVAILABLE", "knowledge call was not made"
+            )
+        kind = "unavailable" if context["status"] in {"unavailable", "limited"} else "not_found"
+    answer = fallback(kind, language, content)
+    if kind == "unavailable":
+        answer["retrieval_status"] = "unavailable"
+    return answer
+
+
 def finish_legacy_trial(
     *,
     live: bool,
@@ -396,8 +533,6 @@ def finish_legacy_trial(
     content: dict[str, Any],
 ) -> dict[str, Any]:
     """``callback_version`` 1–5 试运行核对实时快照并生成最终 blocks 答复。"""
-    from aiops_diagnostics.consumer.consumer_knowledge import final_answer
-
     if live:
         snapshot = (context or {}).get("live_snapshot", {})
         expected_source = "cpms.orderDetail" if kind == "billing" else "cpms.chargingInfo"
@@ -556,7 +691,7 @@ def build_legacy_answer(
     if not (binding.content_file or binding.content_snapshot is not None):
         return {"blocks": [{"kind": "text", "text": reply_answer}], "retrieval_status": "unavailable"}
 
-    from aiops_diagnostics.consumer.consumer_knowledge import binding_content, final_answer
+    from aiops_diagnostics.consumer.consumer_knowledge import binding_content
 
     content = binding_content(binding, caller)
     context = store.context(run_id) or {}

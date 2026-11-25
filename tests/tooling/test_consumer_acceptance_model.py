@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_knowledge import final_answer
+from aiops_diagnostics.consumer.legacy_callbacks import final_answer
 
 
 @pytest.mark.parametrize("source", ["cpms.chargingInfo", "cpms.orderDetail"])
