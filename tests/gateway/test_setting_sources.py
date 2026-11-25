@@ -311,3 +311,50 @@ def test_the_admin_config_merge_refuses_a_missing_named_file(
 
     with pytest.raises(PrivatePathError, match="typo.env"):
         _settings_with_config_file(ctx)  # type: ignore[arg-type]
+
+
+def test_config_groups_partition_every_gateway_setting_exactly_once(tmp_path: Path) -> None:
+    """五组强类型子配置必须无遗漏、无重复地覆盖 GatewayServerSettings 全部公开字段。"""
+    from aiops_diagnostics.gateway.gateway_config_groups import CONFIG_GROUP_TYPES
+
+    declared = {f.name for f in fields(GatewayServerSettings) if not f.name.startswith("_")}
+    seen: list[str] = []
+    for group_cls in CONFIG_GROUP_TYPES.values():
+        seen.extend(f.name for f in fields(group_cls))
+
+    assert len(seen) == len(set(seen)), f"重复归属字段: {[n for n in seen if seen.count(n) > 1]}"
+    assert set(seen) == declared, (
+        f"分组与 GatewayServerSettings 不一致: missing={sorted(declared - set(seen))}, "
+        f"extra={sorted(set(seen) - declared)}"
+    )
+
+    config = tmp_path / "production.env"
+    write_private_text(config, "AIOPS_MYSQL_HOST=grouped-mysql\n")
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=config,
+        port=9090,
+        kb_search_max_results=12,
+    )
+    assert settings.http.port == 9090
+    assert settings.knowledge.kb_search_max_results == 12
+    assert settings.load_data_sources().mysql.host == "grouped-mysql"
+
+
+def test_invalid_dify_chat_url_fails_before_creating_missing_route_bindings_db(tmp_path: Path) -> None:
+    """非法的 Dify chat 地址必须在打开/创建缺失的 chat_route_bindings 数据库之前拒绝启动。"""
+    config = tmp_path / "production.env"
+    write_private_text(config, "# empty\n")
+    routes_db = tmp_path / "missing-routes.db"
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=config,
+        dify_chat_base_url="http://dify.example:5001",
+        chat_route_bindings_file=str(routes_db),
+    )
+
+    with pytest.raises(ValueError):
+        settings.validate()
+    assert not routes_db.exists()
