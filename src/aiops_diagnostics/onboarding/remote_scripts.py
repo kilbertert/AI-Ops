@@ -205,7 +205,11 @@ def read_central_archive(source_path: str, expected_sha256: str) -> str:
 
 
 def guard_staged_archive(remote_dir: str, filename: str, expected_sha256: str) -> str:
-    """准备 ``0700`` root 暂存目录并核验目标归档位置无符号链接或冲突内容。"""
+    """准备 ``0700`` root 暂存目录并核验目标归档位置无符号链接或冲突内容。
+
+    若目标位置已存在属主为 root、仅属主私有权限（``mode & 0o077 == 0``）且
+    SHA-256 精确匹配的常规文件，输出 ``present`` 供调用方跳过重复传输；不存在则输出 ``absent``。
+    """
     return textwrap.dedent(
         f"""\
         import hashlib
@@ -218,8 +222,11 @@ def guard_staged_archive(remote_dir: str, filename: str, expected_sha256: str) -
         p = d / {filename!r}
         if p.exists() or p.is_symlink():
             assert p.is_file() and not p.is_symlink() and p.stat().st_uid == 0
-            assert p.stat().st_nlink == 1
+            assert p.stat().st_nlink == 1 and p.stat().st_mode & 0o077 == 0
             assert hashlib.sha256(p.read_bytes()).hexdigest() == {expected_sha256!r}
+            print("present")
+        else:
+            print("absent")
         """
     )
 

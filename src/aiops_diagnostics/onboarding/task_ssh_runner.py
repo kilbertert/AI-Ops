@@ -499,7 +499,7 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
         }
     try:
         # 慢链路共享有限传输预算；为派发前复核留时，观察回收不续签原计划。
-        seconds = 400 if staged["observe_only"] else min(400, staged["expires_at"] - time.time() - 60)
+        seconds = 600 if staged["observe_only"] else min(600, staged["expires_at"] - time.time() - 60)
         transfer_deadline = time.monotonic() + seconds
 
         def transfer_timeout(maximum):
@@ -514,46 +514,9 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
             spec_archives = {}
             for name, source in artifacts.items():
                 local = directory / (name + ".tar.gz")
-                if name == "installer":
-                    subprocess.run(
-                        [
-                            "bash",
-                            "ops/environments/gateway/build-installer.sh",
-                            source["revision"],
-                            str(local),
-                        ],
-                        cwd=root,
-                        check=True,
-                        capture_output=True,
-                        timeout=transfer_timeout(65),
-                    )
-                else:
-                    # 仅受管服务身份读task目录中已冻结归档；原路径不通过shell拼接。
-                    script = remote_scripts.read_central_archive(source["path"], source["sha256"])
-                    with local.open("wb") as stream:
-                        subprocess.run(
-                            [
-                                "dev-host",
-                                "exec",
-                                "41",
-                                "--allow-service-exec",
-                                "--timeout",
-                                "60",
-                                "--",
-                                "runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -",
-                            ],
-                            cwd=root,
-                            input=script.encode(),
-                            stdout=stream,
-                            stderr=subprocess.PIPE,
-                            check=True,
-                            timeout=transfer_timeout(65),
-                        )
-                actual = hashlib.sha256(local.read_bytes()).hexdigest()
-                if actual != source["sha256"]:
-                    raise ValueError("installation artifact mismatch")
-                guard = remote_scripts.guard_staged_archive(remote, local.name, actual)
-                subprocess.run(
+                expected = source["sha256"]
+                guard = remote_scripts.guard_staged_archive(remote, local.name, expected)
+                guard_proc = subprocess.run(
                     command,
                     cwd=root,
                     input=guard,
@@ -562,22 +525,62 @@ def installation_run(root, request, identifier, owner, *, registration=False, co
                     capture_output=True,
                     timeout=transfer_timeout(65),
                 )
-                subprocess.run(
-                    [
-                        "dev-host",
-                        "cp",
-                        host,
-                        str(local),
-                        "--dest",
-                        remote + "/" + local.name,
-                        "--artifact-sha256",
-                        actual,
-                    ],
-                    cwd=root,
-                    check=True,
-                    capture_output=True,
-                    timeout=transfer_timeout(300),
-                )
+                already_staged = (guard_proc.stdout or "").strip() == "present"
+                if not already_staged:
+                    if name == "installer":
+                        subprocess.run(
+                            [
+                                "bash",
+                                "ops/environments/gateway/build-installer.sh",
+                                source["revision"],
+                                str(local),
+                            ],
+                            cwd=root,
+                            check=True,
+                            capture_output=True,
+                            timeout=transfer_timeout(65),
+                        )
+                    else:
+                        # 仅受管服务身份读task目录中已冻结归档；原路径不通过shell拼接。
+                        script = remote_scripts.read_central_archive(source["path"], expected)
+                        with local.open("wb") as stream:
+                            subprocess.run(
+                                [
+                                    "dev-host",
+                                    "exec",
+                                    "41",
+                                    "--allow-service-exec",
+                                    "--timeout",
+                                    "180",
+                                    "--",
+                                    "runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -",
+                                ],
+                                cwd=root,
+                                input=script.encode(),
+                                stdout=stream,
+                                stderr=subprocess.PIPE,
+                                check=True,
+                                timeout=transfer_timeout(190),
+                            )
+                    actual = hashlib.sha256(local.read_bytes()).hexdigest()
+                    if actual != expected:
+                        raise ValueError("installation artifact mismatch")
+                    subprocess.run(
+                        [
+                            "dev-host",
+                            "cp",
+                            host,
+                            str(local),
+                            "--dest",
+                            remote + "/" + local.name,
+                            "--artifact-sha256",
+                            actual,
+                        ],
+                        cwd=root,
+                        check=True,
+                        capture_output=True,
+                        timeout=transfer_timeout(480),
+                    )
                 if name != "installer":
                     spec_archives[name] = {**source, "path": remote + "/" + local.name}
             spec = {
