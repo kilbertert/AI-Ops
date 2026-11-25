@@ -13,18 +13,15 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlencode
 
 from aiops_diagnostics.common.async_job_lifecycle import QUESTION
 from aiops_diagnostics.common.bounded_http import (
     ErrorMapping,
     RequestSpec,
-    json_body,
-    parse_code_data_envelope,
     request_json,
 )
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
-from aiops_diagnostics.data.sources import GUN_COLUMN_NAMES, SourceError
+from aiops_diagnostics.data.sources import SourceError
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import (
     AgentRunConfig,
@@ -33,355 +30,81 @@ from aiops_diagnostics.execution.agent_runs import (
 )
 from aiops_diagnostics.execution.run_deliverability import deliverable, expired
 from aiops_diagnostics.identity.order_identity import is_order_identifier
-from aiops_diagnostics.identity.query_scope import resolve_query_scope
-from aiops_diagnostics.identity.scope_context import is_tenant_level_account
 from aiops_diagnostics.operator import (
     communication,
+    cpms_sites,
     operator_agent,
     operator_answer_review,
     operator_conversation,
     operator_tools,
     order_pricing,
 )
+from aiops_diagnostics.operator.cpms_evidence import (
+    _TIMELINE_DEVICE,
+    DERIVED_EVIDENCE_FIELDS,  # noqa: F401
+    DETAIL_FIELDS,  # noqa: F401
+    FEEDBACK_REFUSALS,
+    NODE_FAILURE_CODES,
+    OBJECT_CONTRACT,
+    PREFIX,
+    SAMPLE_FIELDS,  # noqa: F401
+    SCENARIO,
+    SITE_TOOL,
+    TIMELINE_FIELDS,
+    TIMELINE_LIMIT,
+    TIMELINE_TOOL,
+    TOOL_CONTRACT,
+    TOOL_CONTRACT_HEADER,  # noqa: F401
+    TOOL_NAMES,
+    TOOL_REFUSED_PREFIX,
+    TOOL_SUMMARY_FIELDS,
+    _answer_refused,
+    _arg_summary,
+    _declared,
+    _failure_code,
+    _failure_reason,
+    _provenance,
+    _proxy_tool,
+    _timeline_time,
+    allowed_in,
+    cpms_get,
+    diagnoses_an_order,
+    minimized_response,
+    operator_scope,
+    project_evidence,
+    run_values,
+    still_authorized,
+    tool_inputs,
+    tool_request,
+    tsdata_query,
+    validate_body,
+    validate_tool_arguments,
+)
+from aiops_diagnostics.operator.cpms_sites import (
+    SITE_MAX_PAGES,  # noqa: F401
+    SITE_MAX_SHOWN,  # noqa: F401
+    SITE_PAGE_SIZE,  # noqa: F401
+    SITE_PATH,  # noqa: F401
+    SiteKeywords,
+    SiteScope,  # noqa: F401
+    query_sites,
+    read_site_pages,  # noqa: F401
+    read_site_tool,
+    site_keywords,  # noqa: F401
+    site_page,  # noqa: F401
+    site_scope,
+    site_tool_result,  # noqa: F401
+    tool_site_keywords,  # noqa: F401
+)
 from aiops_diagnostics.operator.operator_conversation import OperatorRefused
-
-SCENARIO = "operator_order_diagnosis"
-PREFIX = "operator-cpms-node:"
-#: 工具名、路径、输入与证据字段全部来自 `operator_tools.json` —— 仓内唯一声明。
-TOOL_NAMES = operator_tools.names()
 
 # 同一run最多一次有界重派，复用其已经读取的证据。
 MAX_RESAMPLES = 1
 
-NODE_FAILURE_CODES = {
-    "model_quota_exhausted": "OPERATOR_MODEL_QUOTA_EXHAUSTED",
-    "model_failed": "OPERATOR_DEPENDENCY_UNAVAILABLE",
-    "node_failed": "OPERATOR_DEPENDENCY_UNAVAILABLE",
-    "model_stream_incomplete": "OPERATOR_MODEL_OUTPUT_UNSTABLE",
-}
 
-#: 节点上报的工具拒绝 reason 前缀（原始拒绝码跟在冒号后）。
-TOOL_REFUSED_PREFIX = "tool_refused:"
-
-#: **可以回喂模型的业务拒绝**——模型拿到结果后能自己修正参数、先补依赖，
-#: 或如实向用户说明「查无此单/没有权限/缺少条件」。这类拒绝在响应体里带
-#: `feedback` 标记与一段提示，新节点把它当工具结果交给模型而不是终结整轮。
-#:
-#: 不在这张表里的拒绝保持原样：授权/发布/节点完整性、并发抢占、运行已终结——
-#: 那些不是「换个参数再来一次」能解决的，回喂只会让模型在死局上空转。
-#: 提示语写给模型看，措辞必须导向用户可理解的结局，不得带出内部实现。
-FEEDBACK_REFUSALS = {
-    "OPERATOR_OFFLINE_UNAVAILABLE": (
-        "离线资料暂不可用或范围过大，请缩小范围或联系管理员；不能据此判断没有离线。"
-    ),
-    "OPERATOR_ORDER_REQUIRED": "缺少订单号；请向用户确认要查询的订单后再调用。",
-    "OPERATOR_ORDER_NOT_REFERENCED": "只能查询用户本句提到或已选定的订单；请向用户确认订单号。",
-    "OPERATOR_ORDER_CONFLICT": "每轮只能查询一笔订单；与当前订单不同请向用户说明不能同时查询。",
-    "OPERATOR_TOOL_ARGUMENTS_INVALID": "参数未通过校验；参数值必须来自用户原话，不能猜测。",
-    "OPERATOR_TOOL_ARGUMENTS_CHANGED": "同一工具本轮只能使用同一组参数；请沿用之前的参数。",
-    "OPERATOR_ANALYSIS_INVALID": "该工具不接受参数；需先取得订单证据后再调用。",
-    "OPERATOR_DETAIL_REQUIRED": "需先调用 cpms_order_detail 读取订单详情。",
-    "OPERATOR_TARIFF_REQUIRED": "需先调用 cpms_order_tariff 读取计费模板。",
-    "OPERATOR_EVIDENCE_MISSING": "需先取得该工具依赖的订单证据再调用。",
-    "OPERATOR_SITE_SCOPE_REQUIRED": "当前账号没有可见站点；请如实告知用户。",
-    "CPMS_INVALID_RESPONSE": "上游返回的数据无法识别；如实告知暂时无法查询，不要编造。",
-    "CPMS_SCOPE_MISMATCH": "该订单不在当前账号可见范围或不存在；如实告知查无此单或无权查看。",
-}
-
-#: 站点查询的三个上限：一页条数、最多页数、最多展示条数。
-#:
-#: 合起来是**「列举不能变成导出」**这条边界。改任何一个都要重新论证，不能当调参。
-SITE_PAGE_SIZE = 50
-SITE_MAX_PAGES = 4
-#: 展示上限的唯一定义在渲染模块（它被本模块导入，反向导入会成环），这里只是别名。
-SITE_MAX_SHOWN = operator_conversation.SITE_MAX_SHOWN
-
-#: 站点列表的 CPMS 路径。查询参数由 :class:`SiteKeywords` 组装，不由调用方拼接。
-SITE_PATH = "/chSite/page"
-
-#: 运行日志行级摘要的每工具显示字段（ADR-0251 白名单）：左是证据 ``data`` 字段名，
-#: 右是展示键。值形状由 store 的有界写入兜底；这里只决定「展示哪些」——
-#: 新增工具不加表就只少一段摘要，不会越界泄漏。
-TOOL_SUMMARY_FIELDS = {
-    "cpms_order_detail": [
-        ("status", "状态"),
-        ("totalAmount", "应付"),
-        ("payAmount", "实付"),
-        ("refundAmount", "退款"),
-        ("electricity", "电量"),
-        ("stationName", "站点"),
-    ],
-    "cpms_order_tariff": [("feeTemplate", "费率模板"), ("periodFeeDetail", "分时"), ("missing", "缺项")],
-    "cpms_order_billing": [
-        ("serviceFee", "服务费"),
-        ("electricityFee", "电费"),
-        ("totalAmount", "合计"),
-        ("payAmount", "实付"),
-        ("vatFee", "税费"),
-    ],
-    "cpms_charging_samples": [("total", "样本数"), ("count", "样本数")],
-    "cpms_site_search": [
-        ("total", "站点数"),
-        ("count", "站点数"),
-        ("shown_sites", "展示"),
-        ("limited", "超限"),
-    ],
-    "cpms_station_plan": [("name", "计划"), ("energy", "电量"), ("power", "功率"), ("date", "日期")],
-    "cpms_order_amount_check": [("conclusion", "结论"), ("checks", "检查"), ("limitations", "限制")],
-    "cpms_order_process_stats": [
-        ("sample_count", "样本数"),
-        ("average_power_kw", "平均功率"),
-        ("complete_timeline", "时序完整"),
-    ],
-    "cpms_charging_timeline": [("total", "记录数"), ("samples_returned", "返回"), ("truncated", "截断")],
-    "cpms_device_offline": [("summary", "摘要"), ("window", "窗口")],
-    "cpms_order_communications": [("association", "关联"), ("sources", "来源"), ("window_truncated", "截断")],
-}
-
-
-def _arg_summary(task, tool):
-    """工具调用入参的一行展示摘要：``k=v`` 拼接、标量截断、列表取前三个、字典跳过。"""
-    args = task.arguments.get(tool)
-    if not isinstance(args, dict) or not args:
-        return None
-    parts = []
-    for key, value in list(args.items())[:6]:
-        if value is None or isinstance(value, dict):
-            continue
-        if isinstance(value, list):
-            value = ",".join(str(v)[:12] for v in value[:3])
-        parts.append(f"{key}={str(value)[:24]}")
-    return "、".join(parts)[:48] or None
-
-
-#: 工具授权的**契约版本**。节点必须逐字声明它，否则在领取授权那一步就被拒。
-#:
-#: 这不是版本号装饰：授权载荷从「订单号」换成「这一次要发的请求」是破坏性变更，
-#: 而两端的证据字段集合是**精确相等**比对的，混跑不会「碰巧还能用」，只会在某一次
-#: 完成回调里以缺字段的形状炸开。把拒绝移到授权那一步，混跑就有一个稳定的错误码。
-TOOL_CONTRACT = "request-target/1"
-OBJECT_CONTRACT = "request-target/2"
-TOOL_CONTRACT_HEADER = "X-AI-Ops-Tool-Contract"
-
-#: 证据 ``data`` 里的派生形状字段：网关投影时一处算定，节点回报时只能**重算同一公式**——
-#: 两份实现一旦口径漂移（上游 total / 过滤后行数 / 展示上限哪个是分母），每一次真实运行都
-#: 以 ``OPERATOR_EVIDENCE_MISMATCH`` 失败。逐字比对只认出处（上游原值与行内容）；派生字段
-#: 由网关自己的投影兜底——快照存的本来就是 ``task.evidence`` 里网关那份，不是节点回报值。
-DERIVED_EVIDENCE_FIELDS = frozenset(
-    {
-        "absence",
-        "complete_timeline",
-        "current",
-        "ordering_guaranteed",
-        "sample_limit",
-        "samples_returned",
-        "size",
-        "truncated",
-    }
-)
-
-
-def _provenance(data):
-    """证据 ``data`` 的出处投影：剥掉派生形状字段，只剩可逐字核验的上游原值。"""
-    if not isinstance(data, dict):
-        return data
-    return {key: value for key, value in data.items() if key not in DERIVED_EVIDENCE_FIELDS}
-
-
-#: 每个工具这一次要发的请求。**路径在这里物化**，节点只执行拿到的那个请求 ——
-#: 这正是「新增一条只读路径不必改 Java」的那一步。
-def _declared(tool: str):
-    """取声明；未声明的工具名仍然被拒绝，只是判据从常量变成了数据。"""
-    try:
-        return operator_tools.tool(tool)
-    except operator_tools.ToolDeclarationError as exc:
-        raise OperatorRefused("OPERATOR_TOOL_DISABLED") from exc
-
-
-def tool_request(tool: str, values: dict[str, str | list[str]]) -> dict[str, str]:
-    """按工具名把这一次的请求目标物化出来。**这里是路径与查询串物化的唯一位置。**"""
-    return _declared(tool).request(values)
-
-
-def tool_inputs(tool: str, values: dict[str, str | list[str]]) -> dict[str, str]:
-    """这一次运行的输入。订单号是**输入**，不再是授权载荷的中心。"""
-    return _declared(tool).declared_inputs(values)
-
-
-def run_values(
-    tool: str, order_no: str, arguments: dict[str, str | list[str]] | None = None
-) -> dict[str, str | list[str]]:
-    """把「运行绑定的输入」与「模型提议的参数」合成一次取值。
-
-    订单诊断的输入来自运行本身（订单号），站点查询的输入来自模型 —— 两者在这里汇合，
-    于是下游（物化、证据比对、代理白名单）只有一种形状可处理。
-    """
-    values = dict(arguments or {})
-    if "order_no" in _declared(tool).inputs:
-        values["order_no"] = order_no
-    return values
-
-
-def allowed_in(tool: str, run) -> bool:
-    """这个工具能不能出现在这一类运行里。
-
-    无订单回合可以带工具，但**不是任何工具**：订单诊断工具没有订单就没有取证对象。
-    """
-    if operator_agent.is_agent(run):
-        return tool in TOOL_NAMES
-    context = "order" if diagnoses_an_order(run) else "conversation"
-    return context in _declared(tool).applies_to or (
-        context == "conversation" and "operator_conversation" in _declared(tool).applies_to
-    )
-
-
-#: 工具参数的字符纪律（ADR-0176）。与对话协议的搜索词同源：
-#: 长度 1–80、不含 `%_\` 与换行。**另一半**——「必须是提问原文的子串」——只对模型提议的
-#: 参数成立，因此在 :func:`validate_tool_arguments` 里单独判。
-_ARGUMENT_FORBIDDEN = ("%", "_", "\\", "\r", "\n")
-
-
-def validate_tool_arguments(tool: str, arguments, question: str) -> dict[str, str | list[str]]:
-    """放行模型提议的工具参数。**模型可以提议，能不能用由这里决定。**
-
-    两条判据缺一不可：
-
-    1. 键必须是声明里列过的那几个 —— 模型不能给工具加参数。
-    2. 每个值必须能在用户提问原文里找到（只忽略空白与大小写，仍为连续子串）——
-       编一个地址，或把上一个用户的地址搬过来，都在这里被判掉。
-    """
-    declared = _declared(tool)
-    if arguments is None:
-        arguments = {}
-    if not isinstance(arguments, dict) or set(arguments) - set(declared.inputs):
-        raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-    cleaned: dict[str, str | list[str]] = {}
-    for key, value in arguments.items():
-        if tool == SITE_TOOL and key == "address_terms":
-            if not isinstance(value, list) or len(value) > 4:
-                raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-            terms = []
-            for term in value:
-                if (
-                    not isinstance(term, str)
-                    or not term.strip()
-                    or len(term) > 80
-                    or any(char in term for char in _ARGUMENT_FORBIDDEN)
-                ):
-                    raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-                original = operator_conversation.question_span(term, question)
-                if not original:
-                    raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-                if original not in terms:
-                    terms.append(original)
-            if sum(map(len, terms)) > 80:
-                raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-            cleaned[key] = terms
-            continue
-        if not isinstance(value, str):
-            raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-        forbidden = tuple(
-            c
-            for c in _ARGUMENT_FORBIDDEN
-            if not (tool == "cpms_station_plan" and key == "timezone" and c == "_")
-        )
-        if len(value) > 80 or any(char in value for char in forbidden):
-            raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-        stripped = value.strip()
-        if not stripped:
-            continue
-        original = operator_conversation.question_span(stripped, question)
-        if not original:
-            raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-        if tool == "cpms_station_plan" and key in {"energy", "power"}:
-            units = r"(?:kwh|千瓦时|度)" if key == "energy" else r"(?:kw(?!h)|千瓦(?!时))"
-            if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", original) or not re.search(
-                r"(?<![0-9.])" + re.escape(original) + r"\s*" + units, question, re.I
-            ):
-                raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-        cleaned[key] = original
-    if tool == SITE_TOOL and cleaned.get("address") and "address_terms" in cleaned:
-        raise OperatorRefused("OPERATOR_TOOL_ARGUMENTS_INVALID")
-    return cleaned
-
-
-#: 站点查询工具的名字。这里是**唯一**按名字认它的地方：判断「这一轮是否已经用工具
-#: 取过站点」是运行级的事实，不是工具自身的属性。
-SITE_TOOL = "cpms_site_search"
-TIMELINE_TOOL = "cpms_charging_timeline"
-#: 节点 object 投影的数组上限（`CpmsReadTool.project` 拒收 >64）。窗口内按 _ts 升序
-#: 取前 N 行，装不下的部分由 ``truncated``/``total`` 如实标出 —— 不翻页。
-TIMELINE_LIMIT = 64
-#: 发给 tsdata `QueryRequest.fields` 的列清单：SOP §2.2 那一份，`GUN_COLUMN_NAMES`
-#: 是仓内唯一权威（诊断直查与只读代理白名单也由它派生），前面补上 `_ts`。
-#: 实测例外（41 生产回放，2026-11-05）：tsdata 门面的 `charging-gun_property`
-#: 没有 `batteryMinTemperature` 列（充电生产 TDengine 的同名表有），整表原样
-#: 发会被门面按列名拒（TDengine error: Invalid column name）。该列在行投影里
-#: 本来就可缺席（picked 跳过缺键、节点 project 跳过缺键），剔除不退化证据。
-TIMELINE_FIELDS = ("_ts", *(name for name in GUN_COLUMN_NAMES if name != "batteryMinTemperature"))
-_TIMELINE_DEVICE = re.compile(r"[A-Za-z0-9_-]{1,64}")
-_TIMELINE_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?")
-
-
-def _proxy_tool(task, run, method, path, query):
-    """白名单命中的工具名；查无对应授权目标时返回 ``None``（即 PATH_REJECTED 的前置事实）。"""
-    return next(
-        (
-            name
-            for name in TOOL_NAMES
-            if name in task.arguments
-            and allowed_in(name, run)
-            and tool_request(name, run_values(name, run.order_no, task.arguments.get(name)))
-            == {"method": method, "path": path, "query": query}
-        ),
-        None,
-    )
-
-
-def still_authorized(binding, run, *, trial=False) -> bool:
-    """冻结运行的模型/工具必须仍被当前应用授权，提示词可单独换版。"""
-    if binding is None or binding.entry != "operator" or binding.route_revision < run.route_revision:
-        return False
-    if not run.publication_app_id:
-        return binding.route_revision == run.route_revision
-    if binding.app_id != run.publication_app_id:
-        return False
-    if trial or str(run.chat_binding).startswith("operator-trial:"):
-        return binding.route_revision == run.route_revision
-    try:
-        frozen = execution_manifest.from_text(run.execution_manifest)
-        current_text = binding.manifest_text
-        if not operator_agent.is_agent(run) and not diagnoses_an_order(run):
-            return binding.route_revision == run.route_revision
-        current = execution_manifest.from_text(current_text)
-        old_tools = {t["name"]: t["input_schema"] for t in json.loads(run.execution_manifest)["tools"]}
-        new_tools = {t["name"]: t["input_schema"] for t in json.loads(current_text)["tools"]}
-    except (ValueError, TypeError, KeyError):
-        return False
-    return (
-        frozen.identity == run.expected_agent_version
-        and all(
-            getattr(frozen, key) == getattr(current, key)
-            for key in ("provider_key", "adapter_key", "model_key", "endpoint", "history_policy")
-        )
-        and all(new_tools.get(name) == schema for name, schema in old_tools.items())
-    )
-
-
-def diagnoses_an_order(run) -> bool:
-    """统一循环取证后才绑定对象；旧运行按原类型回读。"""
-    return bool(run.order_no) if operator_agent.is_agent(run) else run.operation == SCENARIO
-
-
-def operator_scope(caller, *, allow_empty=False):
-    if not caller.subject.b_user_id or caller.delegated or caller.data_scope.type not in {"all", "organ"}:
-        raise OperatorRefused("OPERATOR_SITE_SCOPE_REQUIRED")
-    scope = resolve_query_scope(caller)
-    if (scope.site_ids == () and not allow_empty) or (
-        scope.site_ids is None and not is_tenant_level_account(caller.subject.user_type)
-    ):
-        raise OperatorRefused("OPERATOR_SITE_SCOPE_REQUIRED")
-    return scope
+def cpms_site_reader(base: str, bearer: str):
+    """直连 CPMS 的站点页读取函数（经模块内 `cpms_get` 转发，保留测试替身入口）。"""
+    return cpms_sites.cpms_site_reader(base, bearer, getter=cpms_get)
 
 
 @dataclass(repr=False)
@@ -541,7 +264,7 @@ class OperatorCpms:
         def unavailable(_):
             return OperatorRefused("OPERATOR_TRIAL_LOGIN_REQUIRED")
 
-        from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
+        from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
 
         result = request_json(
             RequestSpec(
@@ -710,7 +433,7 @@ class OperatorCpms:
         current = authorize()
         if current.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-        from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
+        from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
 
         base, proxy = canonical_gateway_url(base), canonical_gateway_url(proxy)
         manifest_text = trial_manifest if trial_manifest is not None else binding.manifest_text
@@ -2103,501 +1826,3 @@ class OperatorCpms:
             run = self.context.agent_run_store.get(run_id)
             if run and run.chat_binding == route.key and run.route_revision <= route.revision:
                 self.context.runtime.cancel_assistant_qa(task.caller, run.qa_id)
-
-
-#: 订单详情的取证字段。**这张表就是模型能回答什么**：少一个金额，问电费的答案就只剩
-#: 「接口未提供」。41 实测（2026-10-29，订单 2113549588485718017）`getOrderInfoDetail`
-#: 返回 `electricityFee=13.68`、`serviceFee=13.68`、`totalAmount=27.36`、`payAmount=0.00`，
-#: 而当时这里一个都没有 —— 于是两笔不同的问题得到同一份「缺证」报告。
-#:
-#: `time` 与 `gunPower` 一起才构成可核对的一对：只有「4.5598 kWh / 229 秒 ≈ 71.7 kW」而没有
-#: 额定 23 kW，模型无法判断这算不算异常；把两者都给出来，异常才成为可陈述的事实。
-#:
-#: 纯电价（tip/peak/flat/valley*Fee）在 41 全为 NULL，故不在这里重复列出；计费模板的
-#: 分时段明细（`periodFeeDetail`）在外层响应里，本层不取 —— 本次只补平铺金额。
-DETAIL_FIELDS = list(operator_tools.tool("cpms_order_detail").evidence_fields)
-SAMPLE_FIELDS = list(operator_tools.tool("cpms_charging_samples").evidence_fields)
-
-
-def read_site_tool(scope, tool, arguments, read, reauthorize, *, outside_scope="reject"):
-    keywords = tool_site_keywords(arguments)
-    rows, total, _ = read_site_pages(
-        scope,
-        keywords,
-        read,
-        reauthorize,
-        outside_scope=outside_scope,
-        max_pages=1,
-    )
-    body = {
-        "code": 0,
-        "data": {
-            "records": [dict(row, tenantId=scope.tenant_id) for row in rows[:SITE_PAGE_SIZE]],
-            "total": total,
-            "current": 1,
-            "size": SITE_PAGE_SIZE,
-        },
-    }
-    return site_tool_result(scope, body, tool, arguments, outside_scope=outside_scope)
-
-
-def tool_site_keywords(arguments):
-    terms = arguments.get("address_terms")
-    if terms is None:
-        terms = [arguments["address"]] if arguments.get("address") else []
-    return SiteKeywords(arguments.get("name", ""), tuple(terms))
-
-
-def site_tool_result(scope, body, tool, arguments, *, outside_scope="reject"):
-    """证据只含声明字段；节点取数仍需分页回显和已核对的租户身份。"""
-    rows, total = site_page(scope, body, 1, outside_scope=outside_scope)
-    keywords = tool_site_keywords(arguments)
-    rows = [row for row in rows if keywords.matches(row)]
-    declared = operator_tools.tool(tool)
-    data = {
-        "records": [{key: row[key] for key in declared.evidence_fields} for row in rows],
-        "total": total,
-        "sample_limit": declared.page_size,
-        # ``truncated`` 是**证据**字段：页面没有覆盖上游的全部行。它与「展示只列 10 条」
-        # 是两件事，不能合并 —— Java 节点按 ``total > rows.size()`` 逐字重算这一项并与
-        # 网关比对，改口径会让每一次真实运行都以 OPERATOR_EVIDENCE_MISMATCH 失败。
-        # 展示上限在工具投影中收口，不是模型意图分类。
-        "truncated": total > len(rows),
-        "ordering_guaranteed": declared.flags["ordering_guaranteed"],
-        "complete_timeline": declared.flags["complete_timeline"],
-        "samples_returned": len(rows),
-        "absence": declared.flags["absence_when_empty"] if not rows else None,
-    }
-    response = {
-        "code": 0,
-        "data": {
-            "records": [dict(row, tenantId=scope.tenant_id) for row in data["records"]],
-            "total": total,
-            "current": 1,
-            "size": declared.page_size,
-        },
-    }
-    return data, response
-
-
-def minimized_response(body, tool):
-    data = body["data"]
-    fields = {"tenantId", *(DETAIL_FIELDS if tool == TOOL_NAMES[0] else SAMPLE_FIELDS)}
-    if tool == TOOL_NAMES[0]:
-        selected = {
-            "orderNo": data["orderNo"],
-            "siteId": data["siteId"],
-            "chOrderInfoModel": {k: v for k, v in data["chOrderInfoModel"].items() if k in fields},
-        }
-    else:
-        selected = {k: data[k] for k in ("total", "current", "size")}
-        selected["records"] = [{k: v for k, v in row.items() if k in fields} for row in data["records"]]
-        # 与 `project_evidence` 同口径：响应被裁剪后仍要能分辨「一条都没有」。
-        selected["samples_returned"] = len(data["records"])
-        selected["absence"] = "no_samples" if not data["records"] else None
-    return {"code": 0, "data": selected}
-
-
-def validate_body(body, caller, order, tool):
-    if (
-        not isinstance(body, dict)
-        or type(body.get("code")) is not int
-        or body["code"] != 0
-        or not isinstance(body.get("data"), dict)
-    ):
-        raise OperatorRefused("CPMS_INVALID_RESPONSE")
-    data = body["data"]
-    scope = operator_scope(caller)
-    rows = [data.get("chOrderInfoModel")] if tool == TOOL_NAMES[0] else data.get("records")
-    if not isinstance(rows, list) or len(rows) > 50:
-        raise OperatorRefused("CPMS_INVALID_RESPONSE")
-    for row in rows:
-        if (
-            not isinstance(row, dict)
-            or row.get("orderNo") != order
-            or row.get("tenantId") != caller.effective_tenant_id
-            or not isinstance(row.get("siteId"), str)
-            or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", row["siteId"])
-            or (scope.site_ids is not None and row["siteId"] not in scope.site_ids)
-        ):
-            raise OperatorRefused("CPMS_SCOPE_MISMATCH")
-    if tool == TOOL_NAMES[0]:
-        if data.get("orderNo") != order or data.get("siteId") != rows[0].get("siteId"):
-            raise OperatorRefused("CPMS_SCOPE_MISMATCH")
-    elif (
-        type(data.get("total")) is not int
-        or data["total"] < len(rows)
-        or type(data.get("current")) is not int
-        or data["current"] != 1
-        or type(data.get("size")) is not int
-        or data["size"] != 50
-    ):
-        raise OperatorRefused("CPMS_INVALID_PAGE")
-
-
-def project_evidence(body, order, tool):
-    data = body["data"]
-
-    def pick(row, fields):
-        result = {key: row[key] for key in fields if key in row}
-        if any(
-            isinstance(v, (dict, list)) or (isinstance(v, str) and len(v) > 1000) for v in result.values()
-        ):
-            raise OperatorRefused("CPMS_INVALID_FIELD")
-        return result
-
-    selected = (
-        pick(data["chOrderInfoModel"], DETAIL_FIELDS)
-        if tool == TOOL_NAMES[0]
-        else {
-            "records": [pick(row, SAMPLE_FIELDS) for row in data["records"]],
-            "total": data["total"],
-            "sample_limit": 50,
-            "truncated": data["total"] > len(data["records"]),
-            "ordering_guaranteed": False,
-            "complete_timeline": False,
-            # `samples_returned` 与 `truncated` 是**两件事**，以前只有后者：`total=0`
-            # 让 truncated=False，于是一个从没上报过样本的枪和一个取全了的订单在
-            # 证据里长得一样。41 实测（订单 2113549588485718017）该枪样本 0 条，
-            # 而报告只能说「样本不是完整时间线」—— 读的人分不清是缺证还是没数据。
-            # 现在这条事实直接摆进证据，模型不必也不该自行推断。
-            "samples_returned": len(data["records"]),
-            "absence": "no_samples" if not data["records"] else None,
-        }
-    )
-    return {
-        "tool": tool,
-        "order_no": order,
-        "source": "cpms.orderDetail" if tool == TOOL_NAMES[0] else "cpms.chargingMonitor",
-        "observed_at": format_stored_time(now_utc()),
-        "data": selected,
-    }
-
-
-def _timeline_time(value) -> str | None:
-    """CPMS 时间（``yyyy-MM-dd HH:mm:ss`` 或 ISO）归一成 tsdata 接受的本地时间串。"""
-    if not isinstance(value, str) or not _TIMELINE_TIME.fullmatch(value.strip()):
-        return None
-    return value.strip().replace("T", " ")
-
-
-def _failure_code(exc: BaseException) -> str:
-    """这次失败对**用户**报哪个码。
-
-    此前一律 `OPERATOR_DIAGNOSIS_FAILED`，而那个码同时覆盖「模型不吐 JSON」「上游没钱」
-    「答案不合格」「节点掉线」—— 值班的人分不出该找谁。这里只把**已经能区分**的几类
-    分开，其余保持原码：宁可不分，不能猜错。
-    """
-    if isinstance(exc, OperatorRefused):
-        code = str(exc)
-        if code in NODE_FAILURE_CODES.values() or code == "OPERATOR_HISTORY_LIMIT":
-            return code
-        # 这些原因说明**上游/环境**有问题，不是这次回答不合格 —— 分开报。
-        if code in {
-            "OPERATOR_NODE_REJECTED",
-            "OPERATOR_NODE_CHANGED",
-            "OPERATOR_TARGET_MISSING",
-            "CPMS_UNAVAILABLE",
-            "TSDATA_UNAVAILABLE",
-            "OPERATOR_SCOPE_UNAVAILABLE",
-            "OPERATOR_SCOPE_CHANGED",
-        }:
-            return "OPERATOR_DEPENDENCY_UNAVAILABLE"
-        if code in {"OPERATOR_RESULT_UNSTABLE", "OPERATOR_ANSWER_NOT_GROUNDED"}:
-            return "OPERATOR_MODEL_OUTPUT_UNSTABLE"
-    return "OPERATOR_DIAGNOSIS_FAILED"
-
-
-def _failure_reason(exc: BaseException) -> str:
-    """失败原因的一句话摘要，**只用于日志归因**，不进用户可见文本。
-
-    不记异常正文里可能带的凭据或上游原文：`AgentRunDispatchError` 的文案本来就是
-    「平台不可用」这种不含细节的句子，这里只额外带上类型与错误码。
-    """
-    if isinstance(exc, OperatorRefused):
-        return str(exc)
-    return type(exc).__name__
-
-
-def _answer_refused(reason, detail=""):
-    """拒绝一次回答，并尽量记下**哪条规则**被触发。
-
-    只记 `reason=unsupported_fact` 时，下一跳只能靠猜：这条码同时覆盖「事实段外写了金额」
-    「写了状态」「写了支付结果」，成因完全不同。失败的 run 又**不保存模型的原始输出**
-    （`snapshot_json.answer` 恒为 `None`，实测），所以拒绝那一刻是唯一的取证点。
-
-    `detail` 由调用点给：命中规则名 + 行号 + 该行长度。**不记原文、不记金额** ——
-    日志没有脱敏层，而这行正是最容易带出金额的地方。
-    """
-    logging.getLogger("aiops.operator").warning(
-        "operator_answer_rejected reason=%s%s", reason, f" {detail}" if detail else ""
-    )
-    raise OperatorRefused("OPERATOR_INVALID_ANSWER")
-
-
-def cpms_get(url, bearer, tenant, *, timeout=10):
-    def unavailable(_):
-        return OperatorRefused("CPMS_UNAVAILABLE")
-
-    return request_json(
-        RequestSpec(
-            url=url,
-            headers={
-                "Authorization": "Bearer " + bearer,
-                "tenant-id": tenant,
-                "client-type": "admin",
-                "Accept": "application/json",
-            },
-            timeout=timeout,
-            max_read_bytes=262144,
-            follow_redirects=False,
-        ),
-        mapping=ErrorMapping(
-            auth_rejected=unavailable,
-            http_error=unavailable,
-            unavailable=unavailable,
-            invalid_body=unavailable,
-            invalid_envelope=unavailable,
-        ),
-    )
-
-
-def tsdata_query(url, payload, *, timeout=10):
-    """POST tsdata ``QueryRequest``；一切失败形状都归一成依赖不可用，不落成空页。"""
-
-    def unavailable(_):
-        return OperatorRefused("TSDATA_UNAVAILABLE")
-
-    return request_json(
-        RequestSpec(
-            url=url,
-            method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            body=json_body(payload),
-            timeout=timeout,
-            max_read_bytes=262144,
-            follow_redirects=False,
-        ),
-        mapping=ErrorMapping(
-            auth_rejected=unavailable,
-            http_error=unavailable,
-            unavailable=unavailable,
-            invalid_body=unavailable,
-            invalid_envelope=unavailable,
-        ),
-        envelope=parse_code_data_envelope,
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class SiteScope:
-    """一次站点查询的可见范围。
-
-    ``site_ids`` 有三种含义，**不能互相顶替**：
-
-    * ``()`` —— 空范围。不查 CPMS，直接报"尚未分配"。
-    * ``None`` —— 未按站点集合收窄（顶层账号的租户口径）。
-    * 非空元组 —— 员工账号能看到的那些站点。
-
-    ``fingerprint`` 不参与过滤，只用于逐页复核范围在这期间没变过。
-    """
-
-    tenant_id: str
-    site_ids: tuple[str, ...] | None
-    fingerprint: str
-
-
-@dataclass(frozen=True, slots=True)
-class SiteKeywords:
-    """一次站点查询的关键词。四个字段全空表示**列举**，不是搜索（ADR-0172）。
-
-    地址词在取证前确定，最多4条。CPMS每次只收一个子串，查询器逐词读取再去重。
-    旧address字符串作为一条字面关键词，不在这里猜测地理边界。
-    """
-
-    name: str = ""
-    address_terms: tuple[str, ...] = ()
-
-    @property
-    def listing(self) -> bool:
-        return not self.name and not self.address_terms
-
-    @property
-    def address(self) -> str:
-        """答复可把同一地址拆成多个关键词；仅用于对齐已执行的工具参数。"""
-        return "".join(self.address_terms)
-
-    def params(self, page: int, address: str | None = None) -> dict[str, object]:
-        """这一页的 CPMS 查询参数。
-
-        ``address`` 由调用方逐词给（见 :meth:`address_queries`）：上游的 ``address``
-        是**子串匹配**，把「广州天河」整串传过去一条都匹配不到 —— 没有任何一条地址
-        同时包含这两个相连的字。
-        """
-        params: dict[str, object] = {"current": page, "size": SITE_PAGE_SIZE, "type": 0}
-        if self.name:
-            params["name"] = self.name
-        chosen = self.address if address is None else address
-        if chosen:
-            params["address"] = chosen
-        return params
-
-    def address_queries(self) -> tuple[str, ...]:
-        """这一次要**分别**发给上游的地址词。空元组表示不按地址过滤。
-
-        2026-11-04 实测（41 生产）：
-
-        * ``address=广州天河`` → ``total: 0``（上游子串匹配，整串无人命中）
-        * ``address=天河`` → 命中 ``HuaJing Station``
-
-        用户说「广州天河」指的是**上下级地名叠在一起**，不是一个字面串。所以按词
-        分别查询再合并 —— 这正是用户脑子里"这一带"的意思。
-        """
-        return tuple(term for term in self.address_terms if term.strip())
-
-    def matches(self, site: dict[str, str]) -> bool:
-        """这一行是不是在用户说的那个地点。
-
-        地址词之间是 ``any`` 而不是 ``all``（2026-11-04 修正）。用户说「广州天河」指的是
-        **广州市天河区这一带**，不是「同时出现『广州』与『天河』两个字面串」。用 ``all``
-        的实际后果是：HuaJing Station 的地址写作
-        ``… 天河公园 Tian He Qu, Guang Zhou Shi …`` ——「天河」命中、「广州」命不中
-        （地址里是拼音 ``Guang Zhou``），于是 ``all`` 一票否决，**一条真实存在的站点被
-        自己的过滤器丢掉了**，上游返回的总数却是对的。
-
-        站名仍然要求**全部命中**（它通常只有一个词，``all``/``any`` 等价；真给了多个词时
-        「都要出现」才是对的）。地点词放宽成 ``any`` 与「扩大范围」的产品直觉一致：
-        多给一个地名只会查得更宽，不会把一个真实结果筛掉。
-        """
-        haystack = (site["name"] + " " + site["address"]).casefold()
-        if self.name.casefold() not in site["name"].casefold():
-            return False
-        if not self.address_terms:
-            return True
-        return any(term.casefold() in haystack for term in self.address_terms)
-
-
-def site_scope(caller, *, allow_empty: bool = True) -> SiteScope:
-    """把调用者的数据范围翻译成站点查询的可见范围。
-
-    账号层面的判据（要有 B 端主体、不接受代查、范围类型必须是 all/organ）仍在
-    :func:`operator_scope` 里，本函数不复制它 —— 换一个入口要换的是那套判据，
-    不是「站点怎么查」。
-    """
-    scope = operator_scope(caller, allow_empty=allow_empty)
-    return SiteScope(caller.effective_tenant_id, scope.site_ids, caller.scope_fingerprint)
-
-
-def site_keywords(answer) -> SiteKeywords:
-    """对话协议的四个字段 → 关键词。空关键词是列举，不是错误。"""
-    return SiteKeywords(answer["name"], tuple(answer["address_terms"]))
-
-
-def cpms_site_reader(base: str, bearer: str):
-    """直连 CPMS 的读取函数。
-
-    :func:`query_sites` 只要求「给路径和租户、回 JSON 信封」这一个形状，所以节点代理
-    那条路（节点持令牌、网关只放行）可以换一个读取函数，而不用改查询本身。
-    """
-
-    def read(path: str, tenant: str):
-        return cpms_get(base + path, bearer, tenant, timeout=3)
-
-    return read
-
-
-def site_page(scope: SiteScope, body, page: int, *, outside_scope="reject"):
-    """校验站点接口的**一页**并抽出可用的行。
-
-    与 :func:`query_sites` 是同一份判据：信封、分页回显、逐行租户与站点集合、字段形状。
-    抽出来的理由是 C 端工具只要一页（它按声明的固定分页取），而它必须与整份查询用
-    同一条核对 —— 否则「同一个接口两套事实」只是时间问题。
-    """
-    data = body.get("data") if isinstance(body, dict) else None
-    if (
-        not isinstance(body, dict)
-        or type(body.get("code")) is not int
-        or body["code"] != 0
-        or not isinstance(data, dict)
-        or not isinstance(data.get("records"), list)
-        or len(data["records"]) > SITE_PAGE_SIZE
-        or type(data.get("total")) is not int
-        or data["total"] < 0
-        or data.get("current") != page
-        or type(data.get("current")) is not int
-        or data.get("size") != SITE_PAGE_SIZE
-    ):
-        raise OperatorRefused("CPMS_INVALID_RESPONSE")
-    rows: list[dict[str, str]] = []
-    for item in data["records"]:
-        if (
-            not isinstance(item, dict)
-            or not isinstance(item.get("id"), str)
-            or not item["id"]
-            or str(item.get("tenantId") or "") != scope.tenant_id
-        ):
-            raise OperatorRefused("CPMS_SCOPE_MISMATCH")
-        if scope.site_ids is not None and str(item["id"]) not in scope.site_ids:
-            if outside_scope == "skip":
-                continue
-            raise OperatorRefused("CPMS_SCOPE_MISMATCH")
-        selected = {key: str(item.get(key) or "") for key in ("id", "name", "address")}
-        if (
-            not isinstance(item.get("name"), str)
-            or not isinstance(item.get("address"), (str, type(None)))
-            or not selected["name"]
-            or any(len(v) > 1000 for v in selected.values())
-        ):
-            raise OperatorRefused("CPMS_INVALID_RESPONSE")
-        rows.append(selected)
-    return rows, data["total"]
-
-
-def read_site_pages(scope, keywords, read, reauthorize, *, outside_scope="reject", max_pages=SITE_MAX_PAGES):
-    """所有入口共用取数与逐页授权；节点保持每词一页，直接查询最多每词四页。"""
-    rows = []
-    seen = set()
-    totals = []
-    limited = False
-    terms = keywords.address_queries() or (None,)
-    if len(terms) > 4:
-        raise OperatorRefused("OPERATOR_INVALID_SEARCH")
-    if scope.site_ids != ():
-        for term in terms:
-            total = 0
-            for page in range(1, max_pages + 1):
-                if reauthorize() != scope.fingerprint:
-                    raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-                body = read(SITE_PATH + "?" + urlencode(keywords.params(page, address=term)), scope.tenant_id)
-                page_rows, total = site_page(scope, body, page, outside_scope=outside_scope)
-                for row in page_rows:
-                    if row["id"] not in seen and keywords.matches(row):
-                        seen.add(row["id"])
-                        rows.append(row)
-                more = page * SITE_PAGE_SIZE < total
-                if not more or not body["data"]["records"]:
-                    limited = limited or more
-                    break
-                if page == max_pages:
-                    limited = True
-            totals.append(total)
-    if reauthorize() != scope.fingerprint:
-        raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
-    # 多查询计数只在全读完时等于去重结果；否则保留上界并标记未穷尽。
-    total = sum(totals) if limited else len(rows)
-    if len(terms) == 1:
-        total = max(totals, default=0)
-    return rows, total, limited
-
-
-def query_sites(scope: SiteScope, keywords: SiteKeywords, read, reauthorize, *, outside_scope="reject"):
-    rows, total, limited = read_site_pages(scope, keywords, read, reauthorize, outside_scope=outside_scope)
-    return {
-        "source": "cpms.sitePage",
-        "observed_at": format_stored_time(now_utc()),
-        "sites": rows[:SITE_MAX_SHOWN],
-        "limited": limited or len(rows) > SITE_MAX_SHOWN,
-        "empty_scope": scope.site_ids == (),
-        "total": total,
-        "scope_limited": scope.site_ids is not None,
-    }

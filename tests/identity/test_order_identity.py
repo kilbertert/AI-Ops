@@ -205,12 +205,12 @@ _ALLOWED_ALPHABET_LITERALS = {
     "dify/dify_workspaces.py": 1,  # 应用 id
     "dify/operator_run_logs_api.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
     "dify/self_service_api.py": 1,  # knowledge_base_id
-    "dify/self_service_bridge.py": 4,  # kb_id/run_id/主体编号/verify_task引用名，非订单
+    "dify/self_service_bridge.py": 3,  # kb_id/run_id/主体编号(共用)，非订单
     "dify/self_service_identity.py": 1,
     "dify/environment_management.py": 2,  # 环境与公司租户编号，无订单匹配
     "execution/chat_execution.py": 3,  # 智能体 id / libraries 键 ×2
-    "gateway/gateway_api.py": 11,  # 拒绝码 / conv_ / code / app_id / knowledge / tenant /
-    #                              kb_ids / agt_ 版本 ×2 / code —— 订单字段已收口
+    "gateway/schemas.py": 11,  # 拒绝码 / conv_ / code / app_id / knowledge / tenant /
+    #                          kb_ids / agt_ 版本 ×2 / code —— 订单字段已收口
     "gateway/environment_registry.py": 3,  # 租户、管理员主体编号及审计操作人，非订单
     "gateway/environment_business.py": 4,  # case_ref/设备id/run证据id/节点id；订单字段调用is_order_identifier
     "gateway/environment_drafts.py": 1,  # 部署目标/凭据逻辑引用，不是订单号
@@ -222,8 +222,9 @@ _ALLOWED_ALPHABET_LITERALS = {
     "identity/query_scope.py": 1,  # 路径段
     "identity/scope_context.py": 1,  # 路径段
     "operator/communication.py": 2,  # deviceCode/childDeviceCode设备码、event/functionId事件名；非订单
+    "operator/cpms_evidence.py": 2,  # 回调 siteId / 时序遥测 device
     "operator/offline_tool.py": 1,  # 离线工具设备/站点查询参数，不是订单语法
-    "operator/operator_cpms.py": 3,  # 失败原因码 / 回调 siteId / 时序遥测 device
+    "operator/operator_cpms.py": 1,  # 节点上报的 tool_refused 拒绝码
     "operator/operator_tools.py": 1,  # 工具参数名
     "operator/station_tariff.py": 1,  # 站点 id
     "publication/agent_lifecycle.py": 1,  # 智能体 id

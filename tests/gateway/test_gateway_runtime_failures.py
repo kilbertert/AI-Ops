@@ -138,21 +138,21 @@ def _client(tmp_path: Path) -> TestClient:
     )
 
 
-def _api_tree() -> ast.Module:
-    return ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+def _api_trees() -> list[tuple[str, ast.Module]]:
+    gateway_dir = SOURCE_ROOT / "gateway"
+    paths = [gateway_dir / "gateway_api.py", *sorted((gateway_dir / "routers").glob("*.py"))]
+    return [
+        (str(path.relative_to(SOURCE_ROOT)), ast.parse(path.read_text(encoding="utf-8"))) for path in paths
+    ]
 
 
 def _runtime_guards(tree: ast.Module | None = None) -> list[ast.ExceptHandler]:
-    """Every `except (ValueError, RuntimeError)` block in the gateway.
-
-    Takes the tree so a caller can resolve a guard's enclosing function: nodes
-    from two separate parses of the same file are not the same objects, and the
-    lookup would silently report every guard as module-level.
-    """
-    tree = tree if tree is not None else _api_tree()
+    """Every `except (ValueError, RuntimeError)` block in the gateway."""
+    trees = [tree] if tree is not None else [t for _, t in _api_trees()]
     return [
         node
-        for node in ast.walk(tree)
+        for current in trees
+        for node in ast.walk(current)
         if isinstance(node, ast.ExceptHandler)
         and node.type is not None
         and "ValueError" in ast.unparse(node.type)
@@ -283,26 +283,26 @@ def test_every_runtime_guard_goes_through_the_one_renderer() -> None:
     something, and a _new_ guard cannot be added without either calling it or
     being listed with a reason.
     """
-    tree = _api_tree()
+    trees = _api_trees()
     offenders: list[str] = []
-    for handler in _runtime_guards(tree):
-        owner = _enclosing_function(tree, handler)
-        calls = {
-            getattr(node.func, "id", "") or getattr(node.func, "attr", "")
-            for node in ast.walk(handler)
-            if isinstance(node, ast.Call)
-        }
-        if RENDERER in calls:
-            continue
-        if owner not in NON_503_GUARDS:
-            offenders.append(
-                f"{API_FILE}:{handler.lineno} {owner} guards a runtime failure"
-                f" without going through {RENDERER} (and is not an allowed exception)"
-            )
+    present: set[str] = set()
+    for rel, tree in trees:
+        present.update(node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))
+        for handler in _runtime_guards(tree):
+            owner = _enclosing_function(tree, handler)
+            calls = {
+                getattr(node.func, "id", "") or getattr(node.func, "attr", "")
+                for node in ast.walk(handler)
+                if isinstance(node, ast.Call)
+            }
+            if RENDERER in calls:
+                continue
+            if owner not in NON_503_GUARDS:
+                offenders.append(
+                    f"{rel}:{handler.lineno} {owner} guards a runtime failure"
+                    f" without going through {RENDERER} (and is not an allowed exception)"
+                )
     assert offenders == [], "; ".join(offenders)
-    # A listed exception that no longer exists hides a guard that should be
-    # checked; the list is part of the guard, so it is checked too.
-    present = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
     stale = sorted(set(NON_503_GUARDS) - present)
     assert stale == [], f"these allowlisted guards are gone: {stale}"
 

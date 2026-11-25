@@ -145,7 +145,11 @@ def test_readme_toc_anchors_resolve() -> None:
 
 
 def test_package_import_graph_has_no_new_cycles() -> None:
-    """已知装配循环按具体边冻结，不能用新增循环扩大旧边界。"""
+    """包内绝对导入图（含函数内延迟绝对导入）必须保持无环；原有 4 模块 6 边冻结环已消除。
+
+    注：`_import_edges()` 沿用既有口径仅解析 `aiops_diagnostics.*` 绝对导入；
+    既有 `environment_*` / `self_service*` 之间的相对导入环待后续 `onboarding/` 收敛阶段治理。
+    """
     edges = _import_edges()
 
     def reachable(start):
@@ -159,15 +163,7 @@ def test_package_import_graph_has_no_new_cycles() -> None:
         return found
 
     cyclic = {(a, b) for a, targets in edges.items() for b in targets if a in reachable(b)}
-    existing = {
-        ("execution.agent_runs", "gateway.gateway_config"),
-        ("gateway.gateway_config", "execution.chat_execution"),
-        ("execution.chat_execution", "execution.agent_runs"),
-        ("execution.chat_execution", "dify.dify_chat_workflow"),
-        ("execution.chat_execution", "gateway.gateway_config"),
-        ("dify.dify_chat_workflow", "gateway.gateway_config"),
-    }
-    assert not cyclic - existing, "新增包内循环边: " + repr(sorted(cyclic - existing))
+    assert not cyclic, "新增包内循环边: " + repr(sorted(cyclic))
 
 
 def test_import_scan_includes_nested_modules_and_package_imports(tmp_path, monkeypatch):

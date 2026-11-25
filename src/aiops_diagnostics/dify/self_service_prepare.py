@@ -441,7 +441,7 @@ def consumer_endpoint(context, tenant_id: str) -> str:
         if business_environments.is_ambiguous(entries):
             raise SetupRefused("SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS")
         raise SetupRefused("SETUP_BUSINESS_CONNECTION_REQUIRED")
-    from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
+    from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
 
     base = canonical_gateway_url(base)
     ConsumerEndpoints(settings.database_file).register(

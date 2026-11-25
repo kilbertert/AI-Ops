@@ -314,7 +314,7 @@ def validate_runtime(path, row):
         )
     ):
         raise ValueError("runtime profile scope mismatch")
-    from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
+    from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
 
     canonical_gateway_url(target["proxy_base_url"])
     consumers = declared_rows(

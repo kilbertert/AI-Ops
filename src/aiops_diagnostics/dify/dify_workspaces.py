@@ -439,13 +439,12 @@ class DifyWorkspaces:
             )
 
 
-#: 平台租户的**哨兵** tenant_id（#882）。公司 `sys_user.type == -1` 的账号不属于任何
-#: `sys_organ`，所以它没有真实的租户 id；用这个值在 `dify_workspaces` 里占一行。
-#:
-#: 为什么不用空串：空串在解析路径上会被 `_identifier` 当成非法值（那是刻意的 —— 空
-#: workspace/空租户从来不是"没有"的表达）。而平台账号**确实**需要一个自己的 workspace，
-#: 所以它有一个**明确的**、不会被真实 `sys_organ.id` 命中的哨兵值。
-PLATFORM_TENANT_ID = "platform"
+#: 平台账号在 Dify workspace 目录里的哨兵租户键（#882）。公司 `sys_user.type == -1`
+#: 的账号不属于任何 `sys_organ`，用该值在 `dify_workspaces` 表里占一行。
+#: 注意与快捷动作平台命名空间 `SHORTCUT_PLATFORM_SCOPE = "__platform__"` 严格区分。
+DIFY_PLATFORM_WORKSPACE_ID = "platform"
+#: 过渡兼容别名：待并行的登录代理/发布桥分支合入后统一收敛至 `DIFY_PLATFORM_WORKSPACE_ID`。
+PLATFORM_TENANT_ID = DIFY_PLATFORM_WORKSPACE_ID
 
 
 def workspace_name(environment: str, tenant_id: str, *, company: str = "") -> str:

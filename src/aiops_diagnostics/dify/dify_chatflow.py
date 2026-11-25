@@ -17,6 +17,7 @@ from aiops_diagnostics.common.bounded_http import (
     quote_segment,
     request_json,
 )
+from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
 from aiops_diagnostics.dify.dify_chat_workflow import (
     WORKFLOW_ID_PATTERN,
     DifyWorkflowError,
@@ -24,7 +25,6 @@ from aiops_diagnostics.dify.dify_chat_workflow import (
     _failure,
     _mapping,
 )
-from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
 
 @dataclass(frozen=True)

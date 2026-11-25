@@ -32,6 +32,11 @@ INLINE_QA_SHAPE_MARKER = '"type": "qa"'
 OWNED_BY_THE_STORE = {"queued", "running"}
 
 
+def _api_paths() -> list[Path]:
+    routers = sorted((SOURCE_ROOT / "gateway" / "routers").glob("*.py"))
+    return [SOURCE_ROOT / API_FILE, *routers]
+
+
 def _api_tree() -> ast.Module:
     return ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
 
@@ -43,7 +48,7 @@ def _function(tree: ast.Module, name: str) -> ast.FunctionDef:
     raise AssertionError(f"{name} is gone: this guard points at nothing")
 
 
-def _dict_literals(tree: ast.Module, function: ast.FunctionDef) -> list[ast.Dict]:
+def _dict_literals(function: ast.AST) -> list[ast.Dict]:
     return [node for node in ast.walk(function) if isinstance(node, ast.Dict)]
 
 
@@ -52,18 +57,21 @@ def test_the_202_body_is_built_through_the_one_helper() -> None:
 
     Counted, not "is the helper called somewhere": the helper IS called — the
     two inline branches sit beside callers that go through it, which is exactly
-    how a copy survives review.
+    how a copy survives review. Scans both `gateway_api.py` and `gateway/routers/*.py`.
     """
-    tree = _api_tree()
-    app = _function(tree, "create_gateway_app")
     offenders: list[str] = []
-    for node in ast.walk(app):
-        if not isinstance(node, ast.FunctionDef) or node is app:
-            continue
-        for body in _dict_literals(tree, node):
-            keys = {key.value for key in body.keys if isinstance(key, ast.Constant)}
-            if '"type": "qa"' in ast.unparse(body) and "qa_id" in keys:
-                offenders.append(f"{API_FILE}:{body.lineno} {node.name} hand-builds a qa body")
+    for path in _api_paths():
+        rel = path.relative_to(SOURCE_ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name in {SHAPE_HELPER, "create_gateway_app", "register"}:
+                continue
+            for body in _dict_literals(node):
+                keys = {key.value for key in body.keys if isinstance(key, ast.Constant)}
+                if '"type": "qa"' in ast.unparse(body) and "qa_id" in keys:
+                    offenders.append(f"{rel}:{body.lineno} {node.name} hand-builds a qa body")
     assert offenders == [], "; ".join(offenders)
 
 
@@ -73,9 +81,9 @@ def test_the_helper_is_the_only_place_that_names_the_qa_kind() -> None:
     The string is the wire contract's discriminator; a second literal is how a
     branch starts growing its own idea of what the body is.
     """
-    source = (SOURCE_ROOT / API_FILE).read_text(encoding="utf-8")
-    assert source.count(INLINE_QA_SHAPE_MARKER) == 1, (
-        f"{INLINE_QA_SHAPE_MARKER} appears {source.count(INLINE_QA_SHAPE_MARKER)} times;"
+    count = sum(path.read_text(encoding="utf-8").count(INLINE_QA_SHAPE_MARKER) for path in _api_paths())
+    assert count == 1, (
+        f"{INLINE_QA_SHAPE_MARKER} appears {count} times across gateway API and routers;"
         " the qa body is being written out by hand again"
     )
 
@@ -87,22 +95,25 @@ def test_the_status_words_come_from_the_store() -> None:
     about: it drifts the moment the store gains a status, and the response then
     lies about whether the client should keep polling.
     """
-    tree = _api_tree()
     offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if node.name == "create_gateway_app":
-            continue
-        for inner in ast.walk(node):
-            if not isinstance(inner, ast.Set):
+    for path in _api_paths():
+        rel = path.relative_to(SOURCE_ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            words = {element.value for element in inner.elts if isinstance(element, ast.Constant)}
-            if words and words <= OWNED_BY_THE_STORE and len(words) > 1:
-                offenders.append(f"{API_FILE}:{inner.lineno} {node.name} writes the status set out by hand")
+            if node.name in {"create_gateway_app", "register"}:
+                continue
+            for inner in ast.walk(node):
+                if not isinstance(inner, ast.Set):
+                    continue
+                words = {element.value for element in inner.elts if isinstance(element, ast.Constant)}
+                if words and words <= OWNED_BY_THE_STORE and len(words) > 1:
+                    offenders.append(f"{rel}:{inner.lineno} {node.name} writes the status set out by hand")
     assert offenders == [], "; ".join(offenders)
     # And the response really does ask the store, so deleting the import instead
     # of the literal is not a way to satisfy the check above.
+    tree = _api_tree()
     helper = _function(tree, "_health_job_response")
     called = {getattr(inner.func, "id", "") for inner in ast.walk(helper) if isinstance(inner, ast.Call)} | {
         getattr(inner, "id", "") for inner in ast.walk(helper) if isinstance(inner, ast.Name)

@@ -7,12 +7,14 @@ import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
 from aiops_diagnostics.common.config import selected_config_file
-from aiops_diagnostics.common.endpoint_policy import is_loopback_host, require_secure_endpoint
+from aiops_diagnostics.common.endpoint_policy import (
+    canonical_gateway_url,
+    require_secure_endpoint,
+)
 from aiops_diagnostics.common.platform_paths import config_root, data_root
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
 from aiops_diagnostics.gateway.deployment_environment import canonical_environment
@@ -475,6 +477,18 @@ class GatewayServerSettings:
         )
 
     def validate(self) -> None:
+        """启动前全量配置自检：按子系统分段校验，拒绝半配置与跨权限复用。"""
+        self._validate_schema()
+        self._validate_environment_and_catalogues()
+        self._validate_execution_and_bindings()
+        self._validate_server_and_company_auth()
+        self._validate_dify_surfaces()
+        if not 1 <= self.introspection_timeout_seconds <= 30:
+            raise ValueError("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS must be between 1 and 30")
+        if self.server_config_file is None or not self.server_config_file.is_file():
+            raise ValueError("gateway server production.env does not exist")
+
+    def _validate_schema(self) -> None:
         from aiops_diagnostics.gateway import gateway_schema
 
         # 必须早于内部路由 store 构造；同版本漂移也拒绝启动。
@@ -482,19 +496,14 @@ class GatewayServerSettings:
             if database and Path(database).is_file():
                 gateway_schema.startup(Path(database))
 
+    def _validate_environment_and_catalogues(self) -> None:
         if bool(self.operator_trial_login_url) != bool(self.operator_trial_key):
             raise ValueError("operator trial login URL and key must be configured together")
         if self.operator_trial_key:
             if len(self.operator_trial_key) < 32:
                 raise ValueError("operator trial key must contain at least 32 characters")
             canonical_gateway_url(self.operator_trial_login_url)
-        # 部署身份在**启动时**校验（#879）：一个格式不对的环境标识如果活到请求路径上，
-        # 它的表现是"某个租户的工作区有时找得到、有时找不到"，而不是"配置写错了"。
-        #
-        # 判据本身只有一处（`canonical_environment`），登录代理用的是同一份。
-        # **必备性**不在这里判：`from_env()` 是读部署身份的那一处，缺值在那里就是启动
-        # 失败；而一个直接构造出来的 settings 不是一次部署（测试就是这么构造的）。
-        # 空值在这里只意味着"这个进程没有部署身份"，用到它的那个端点因此不启用。
+        # 部署身份在启动时归一化校验（#879）；空值表示该进程未声明部署身份。
         if self.environment:
             self.environment = canonical_environment(self.environment)
         if not 1 <= self.internal_token_expire_seconds <= 3600:
@@ -543,8 +552,6 @@ class GatewayServerSettings:
             if self.execution_environment and self.execution_environment != self.environment:
                 raise ValueError("execution environment does not match business environment")
         if self.business_environments_file:
-            # 启动时整份校验：坏文件、重复 id、两个默认、非法 URL 都不许活到第一次开通 ——
-            # 那些在开通时才暴露时，页面显示的是"这一端失败"，指向一个看不出是配置错的原因。
             from aiops_diagnostics.consumer import business_environments
 
             try:
@@ -555,18 +562,11 @@ class GatewayServerSettings:
         if self.consumer_order_chat_enabled and not self.charging_status_base_url:
             raise ValueError("consumer order chat requires its charging status endpoint")
 
-            if not self.environment:
-                raise ValueError("ops tools require a deployment environment")
-        # 委派入口要求业务接口与逻辑环境都已配置：这两项是领取时「再用记录里的身份
-        # 做一次授权读取」的前提，缺一项就不是 fail closed 而是「配了一半就开门」。
+    def _validate_execution_and_bindings(self) -> None:
         if self.agent_run_config_file and not (self.charging_status_base_url and self.execution_environment):
             raise ValueError("agent run delegation requires charging status settings")
-        # 执行配置清单只在**已启用委派**时有意义：没有委派就没有 run 可固定身份。
         if self.execution_manifest_file and not self.agent_run_config_file:
             raise ValueError("execution manifest requires agent run delegation")
-        # APP-RUNTIME-01：聊天入口的节点绑定是**一份按租户登记的表**。
-        # 启动时整表校验一次（坏文件、坏清单、半配都不许活到第一次签发），
-        # 且每条登记必须在**本环境**里成立 —— 跨环境的登记是配置错误，不是默认值。
         if self.consumer_chatflow_enabled and not (self.dify_chat_base_url and self.execution_environment):
             raise ValueError("consumer chatflow requires Dify and execution environment")
         if self.dify_chat_base_url:
@@ -580,20 +580,14 @@ class GatewayServerSettings:
                 bindings = chat_execution.load_bindings(self.chat_execution_bindings_file)
             except chat_execution.ChatBindingError as exc:
                 raise ValueError(f"chat execution bindings are unusable: {exc}") from exc
-            # APP-RUNTIME-02：有 Dify 登记就必须有它的服务地址。反过来说，
-            # 只配地址不登记任何 Dify 路线是**无害**的 —— 它不会凭空开一条路线。
             if (
                 any(item.engine == chat_execution.ENGINE_DIFY for item in bindings)
                 and not self.dify_chat_base_url
             ):
                 raise ValueError("dify chat execution requires a dify base url")
-        # 管理绑定表（发布/撤回推进的正式指针）。启动时做两件事：
-        #   1. 整表规约校验（引擎取值、Dify 行必须配齐身份与凭据引用）；
-        #   2. **同一 key 不许同时被文件与表声明** —— 那是"这次到底谁在跑"没有
-        #      唯一答案，与文件内部重复登记同一条纪律。
         if self.chat_route_bindings_file:
             from aiops_diagnostics.execution import chat_execution
-            from aiops_diagnostics.execution.chat_route_bindings import (  # noqa: PLC0415
+            from aiops_diagnostics.execution.chat_route_bindings import (
                 ChatRouteBindingStore,
                 RouteBindingError,
             )
@@ -601,24 +595,19 @@ class GatewayServerSettings:
             try:
                 chat_execution.assert_no_binding_collision(self)
                 managed = chat_execution._bindings_from_store(self.chat_route_bindings_file)
-            except chat_execution.ChatBindingError as exc:
-                raise ValueError(f"chat route bindings are unusable: {exc}") from exc
-            except RouteBindingError as exc:
+            except (chat_execution.ChatBindingError, RouteBindingError) as exc:
                 raise ValueError(f"chat route bindings are unusable: {exc}") from exc
             if (
                 any(item.engine == chat_execution.ENGINE_DIFY for item in managed)
                 and not self.dify_chat_base_url
             ):
                 raise ValueError("dify chat execution requires a dify base url")
-            # 表要真的可读可写：路径指向一个不存在目录时，发布那一刻才发现就太晚了。
             try:
                 ChatRouteBindingStore(Path(self.chat_route_bindings_file).expanduser().absolute())
             except (OSError, sqlite3.Error) as exc:  # pragma: no cover - 权限/磁盘问题
                 raise ValueError(f"chat route bindings are unusable: {type(exc).__name__}") from exc
         if self.execution_manifest_file:
-            # 启动时就完整校验一次：坏清单必须在起监听之前失败，而不是等第一次签发
-            # 才变成运行期不可用（那就是「配一半就开门」）。
-            from aiops_diagnostics.execution.execution_manifest import (  # noqa: PLC0415 - 避免循环导入
+            from aiops_diagnostics.execution.execution_manifest import (
                 ExecutionManifestError,
             )
             from aiops_diagnostics.execution.execution_manifest import (
@@ -629,10 +618,10 @@ class GatewayServerSettings:
                 load_execution_manifest(self.execution_manifest_file)
             except ExecutionManifestError as exc:
                 raise ValueError(f"execution manifest is invalid: {exc}") from exc
+
+    def _validate_server_and_company_auth(self) -> None:
         if not self.bind_host or any(character.isspace() for character in self.bind_host):
             raise ValueError("AIOPS_GATEWAY_BIND is invalid")
-        # 解析在这里做（结果丢弃）：级别名不对就该在起监听之前失败，而不是让服务起不来
-        # 日志却声称"已经打开了"。取用是 `serve()` 的事 —— 这里只负责判它与拒不拒。
         parse_log_level(self.log_level)
         if not 1 <= self.port <= 65535:
             raise ValueError("AIOPS_GATEWAY_PORT must be between 1 and 65535")
@@ -644,8 +633,6 @@ class GatewayServerSettings:
         ):
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} must be between 0 and 1")
-        # 半配置是启动错误而不是静默禁用：URL 有值说明运维确实想启用这条路径，而此时凭据缺失
-        # 若只落回「不构造」，结果是一个看起来正常、实际一直 401 的部署。交给启动失败。
         if self.company_check_token_url and not (
             self.company_token_client_id and self.company_token_client_secret
         ):
@@ -653,17 +640,11 @@ class GatewayServerSettings:
                 "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID and _CLIENT_SECRET are required "
                 "when a company check_token URL is set"
             )
-        # 两条校验通道**互斥**（A2 / #448）：「谁来断言这条令牌」只能有一个答案。两个都配时
-        # 若只落回其中一条，运维看到的是「配置对了」，实际跑的是另一条 —— 因此交给启动失败。
         if self.company_jwt_key and self.company_check_token_url:
             raise ValueError(
                 "AIOPS_GATEWAY_COMPANY_JWT_KEY and AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL are "
                 "mutually exclusive: token validity must have exactly one authority"
             )
-        # #444：来源密钥与校验入口是**同一条路径的两半**，半配置同样是启动失败。只配密钥会让
-        # 运维以为「门装好了、新链路在跑」，而实际上没有可路由的目标 —— 每一条带密钥的请求都会
-        # 静默落回既有链（对管家端令牌就是 401），与「没配密钥」在现象上不可区分。
-        # 本地校验模式与远端 check_token 互斥；两者都不配时来源密钥无意义。
         if self.company_source_key and not (self.company_check_token_url or self.company_jwt_key):
             raise ValueError(
                 "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL or AIOPS_GATEWAY_COMPANY_JWT_KEY is required "
@@ -673,8 +654,8 @@ class GatewayServerSettings:
             raise ValueError(
                 f"AIOPS_GATEWAY_COMPANY_SOURCE_KEY must be at least {MIN_SOURCE_KEY_LENGTH} characters"
             )
-        # #581：登记表与凭据是**同一个面**的两半，半配置同样是启动错误。只配登记表会让运维
-        # 以为「面已经暴露了」，实际每一条请求都因缺凭据 401 —— 与「没配」在现象上不可区分。
+
+    def _validate_dify_surfaces(self) -> None:
         if self.dify_knowledge_bindings and not self.dify_knowledge_api_key:
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY is required when Dify knowledge bindings are set"
@@ -685,8 +666,6 @@ class GatewayServerSettings:
             )
         if not 1 <= self.kb_search_max_results <= 20:
             raise ValueError("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS must be between 1 and 20")
-        # #625：控制台凭据的两半 —— 半配置同样是启动错误。只给地址会让运维以为
-        # 「发布动作配好了」，而拉取会在第一次运行时因缺凭据失败 —— 与「没配」不可区分。
         if self.dify_console_base_url and not self.dify_console_api_key:
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY is required when a Dify console base URL is set"
@@ -697,16 +676,11 @@ class GatewayServerSettings:
             )
         if self.dify_console_base_url:
             require_secure_endpoint(self.dify_console_base_url, what="AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL")
-        # 发布路由要用**服务端**的控制台凭据去拉 Dify。只给发布密钥而不给控制台凭据，
-        # 会得到一个"门开着、但每次调用都 502"的部署 —— 那正是 #586 那条「半配置是启动
-        # 错误」的同一种形状：看起来装好了，实际整体不可用。
         if self.dify_publish_api_key and not (self.dify_console_base_url and self.dify_console_api_key):
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL/API_KEY are required when the Dify publish "
                 "route is enabled (the route pulls from that console)"
             )
-        # 三把钥匙必须互不相同。同值等于把两件事绑成一个权限 —— #586 对调试凭据已经立过
-        # 这条，这里的每一对都有各自的理由（见字段注释）。
         for other_name, other in (
             ("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY", self.dify_knowledge_api_key),
             ("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY", self.dify_debug_api_key),
@@ -720,29 +694,21 @@ class GatewayServerSettings:
                     f"AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY must differ from {other_name} "
                     "(one key must not authorise both reading knowledge and publishing)"
                 )
-        # #586：调试身份的两半 —— 凭据与固定租户 —— 必须成对。只给凭据会让运维以为
-        # 「调试身份建好了」，而实际它连自己是哪个租户都不知道，于是要么整体无效（静默），
-        # 要么退化成「用调试凭据拿到了生产范围」（危险）。交给启动失败。
         if self.dify_debug_api_key and not self.dify_debug_tenant:
             raise ValueError("AIOPS_GATEWAY_DIFY_DEBUG_TENANT is required when a Dify debug API key is set")
         if self.dify_debug_tenant and not self.dify_debug_api_key:
             raise ValueError("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY is required when a Dify debug tenant is set")
-        # 调试凭据不得与生产凭据同值：同值等于没有分离，而"分离"正是这个身份存在的理由。
         if self.dify_debug_api_key and secrets.compare_digest(
             self.dify_debug_api_key, self.dify_knowledge_api_key
         ):
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_DEBUG_API_KEY must differ from AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"
             )
-        # 生产面未启用时调试身份无从谈起（它只在同一条路由上生效）。
         if self.dify_debug_api_key and not self.dify_knowledge_api_key:
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY is required when a Dify debug identity is set "
                 "(the debug identity narrows that route; it does not create it)"
             )
-        # #781：试运行的两半 —— 凭据与固定调试租户 —— 必须成对。只给凭据会让运维以为
-        # 「试运行建好了」，而它连该在哪个租户上跑都不知道；那会退化成"按请求给的租户跑"，
-        # 正是 #782 才要接管的按人范围。交给启动失败。
         if self.dify_trial_api_key and not self.dify_trial_debug_tenant:
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT is required when the Dify trial route is enabled"
@@ -751,8 +717,6 @@ class GatewayServerSettings:
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_TRIAL_API_KEY is required when a Dify trial debug tenant is set"
             )
-        # 试运行触发一次**真实模型执行**，所以它的钥匙必须与其余每一把都不同 ——
-        # 同值等于把"能读知识库 / 能发布 / 能列目录"悄悄绑成"能在真数据上跑一次诊断"。
         for other_name, other in (
             ("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY", self.dify_knowledge_api_key),
             ("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY", self.dify_debug_api_key),
@@ -764,13 +728,7 @@ class GatewayServerSettings:
                     f"AIOPS_GATEWAY_DIFY_TRIAL_API_KEY must differ from {other_name} "
                     "(one key must not authorise both running a trial and another Dify surface)"
                 )
-        # 登记表在这里解析一次：解析失败是**启动错误**，而不是第一个请求到达时才发现 ——
-        # 后者会把一个配置错误伪装成一次运行时故障。
         parse_dify_knowledge_bindings(self.dify_knowledge_bindings)
-        if not 1 <= self.introspection_timeout_seconds <= 30:
-            raise ValueError("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS must be between 1 and 30")
-        if self.server_config_file is None or not self.server_config_file.is_file():
-            raise ValueError("gateway server production.env does not exist")
 
 
 @dataclass(frozen=True, slots=True)
@@ -870,24 +828,6 @@ def charging_endpoint(value: str, tenant_id: str, *, require_registration: bool 
     if not endpoint:
         raise ValueError("TENANT_ENDPOINT_UNRESOLVED")
     return endpoint
-
-
-def canonical_gateway_url(value: str) -> str:
-    candidate = value.strip()
-    try:
-        parsed = urlsplit(candidate)
-        _ = parsed.port
-    except ValueError as exc:
-        raise ValueError("gateway URL is invalid") from exc
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("gateway URL must be a complete HTTP or HTTPS URL")
-    if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
-        raise ValueError("remote gateway URL must use HTTPS")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("gateway URL must not contain credentials")
-    if parsed.query or parsed.fragment:
-        raise ValueError("gateway URL must not contain query or fragment")
-    return candidate.rstrip("/")
 
 
 def _env(name: str, default: str = "") -> str:

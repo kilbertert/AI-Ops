@@ -207,7 +207,7 @@ def test_no_document_claims_the_stop_link_was_already_accepted() -> None:
 
 
 #: Every route the app registers whose path promises a cancellation.
-_CANCEL_ROUTE = re.compile(r'@app\.(?:get|post|put|delete|patch)\(\s*"([^"]*cancel[^"]*)"')
+_CANCEL_ROUTE = re.compile(r'@(?:app|router)\.(?:get|post|put|delete|patch)\(\s*"([^"]*cancel[^"]*)"')
 
 #: The cancel routes that exist. Until #499 only the qa line had one and the
 #: handoff said so in prose; the diagnosis line gained its own, so this set is
@@ -227,10 +227,9 @@ def test_the_cancel_routes_match_what_the_handoff_documents() -> None:
     catches — it is what caught #499's new route against the handoff's old
     "diagnoses cannot be stopped" text.
     """
-    source = (PROJECT_ROOT / "src" / "aiops_diagnostics" / "gateway" / "gateway_api.py").read_text(
-        encoding="utf-8"
-    )
-    routes = set(_CANCEL_ROUTE.findall(source))
+    gateway_dir = PROJECT_ROOT / "src" / "aiops_diagnostics" / "gateway"
+    sources = [gateway_dir / "gateway_api.py", *sorted((gateway_dir / "routers").glob("*.py"))]
+    routes = {route for path in sources for route in _CANCEL_ROUTE.findall(path.read_text(encoding="utf-8"))}
     assert routes == _CANCEL_ROUTES, (
         f"cancel routes changed to {sorted(routes)}; update {HANDOFF.name}, "
         "which documents which paths can be cancelled"

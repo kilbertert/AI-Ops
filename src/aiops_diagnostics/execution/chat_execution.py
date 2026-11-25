@@ -51,9 +51,10 @@ from aiops_diagnostics.execution.agent_runs import (
     AgentRunDispatchError,
     SnailDispatcher,
 )
-from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.identity.scope_context import ScopeContext
 from aiops_diagnostics.operator import operator_tools
+
+GatewaySettingsLike = Any
 
 #: QA 的 ``internal_run_id`` 前缀。它**只是**给人看的标签；
 #: 「哪条 run 承载哪个 QA」由 `agent_runs.qa_id` 这一列决定，不从字符串反推。
@@ -500,7 +501,7 @@ def binding_for_version(path: str | Path, row, version_no: int, key_dir: str = "
     return binding
 
 
-def _bindings(settings: GatewayServerSettings) -> tuple[ChatBinding, ...]:
+def _bindings(settings: GatewaySettingsLike) -> tuple[ChatBinding, ...]:
     """此刻生效的绑定 = 文件登记 + 管理表，**但同一个 key 不许同时出现在两边**。
 
     管理表（`chat_route_bindings`）是发布/撤回推进的正式指针；文件登记保留给节点
@@ -519,7 +520,7 @@ def _bindings(settings: GatewayServerSettings) -> tuple[ChatBinding, ...]:
     return tuple(from_file) + tuple(from_store)
 
 
-def assert_no_binding_collision(settings: GatewayServerSettings) -> None:
+def assert_no_binding_collision(settings: GatewaySettingsLike) -> None:
     """启动期判据：同一个 key 不许同时被文件与管理表声明。违反 ⇒ 启动失败。
 
     只比 `active` 行：一条已撤回的管理行不参与路由，与文件行并存不冲突 —— 那正是
@@ -536,7 +537,7 @@ def assert_no_binding_collision(settings: GatewayServerSettings) -> None:
 
 
 def select_binding(
-    settings: GatewayServerSettings,
+    settings: GatewaySettingsLike,
     caller: ScopeContext,
     *,
     scenario: str = SCENARIO_OWN_ORDER_STATUS,
@@ -572,7 +573,7 @@ def select_binding(
 
 
 def _retracted(
-    settings: GatewayServerSettings,
+    settings: GatewaySettingsLike,
     environment: str,
     tenant_id: str,
     *,
@@ -598,7 +599,7 @@ def _retracted(
     return row is not None and not row.active
 
 
-def binding_for_key(settings: GatewayServerSettings, key: str | None) -> ChatBinding | None:
+def binding_for_key(settings: GatewaySettingsLike, key: str | None) -> ChatBinding | None:
     """按 run 上冻结的那把钥匙找回**签发时**那一条绑定。
 
     找不到 ⇒ ``None``：那条 run 的绑定已经被拿掉（停用），结果不能再交付。
@@ -643,7 +644,7 @@ def trial_binding(settings, app_id):
     )
 
 
-def callback_config(store: Any, run_id: str, settings: GatewayServerSettings) -> AgentRunConfig | None:
+def callback_config(store: Any, run_id: str, settings: GatewaySettingsLike) -> AgentRunConfig | None:
     """这条 run 的回调（领取/完成）该用**哪份配置**。
 
     判据落在**这条 run 自己**身上，而不是「哪个键非空」：
@@ -671,7 +672,7 @@ def callback_config(store: Any, run_id: str, settings: GatewayServerSettings) ->
         return None
 
 
-def _delegation_binding(settings: GatewayServerSettings) -> ChatBinding:
+def _delegation_binding(settings: GatewaySettingsLike) -> ChatBinding:
     return ChatBinding(
         environment=str(getattr(settings, "execution_environment", "") or ""),
         tenant_id="",
@@ -690,7 +691,7 @@ def _delegation_binding(settings: GatewayServerSettings) -> ChatBinding:
 def issue_for_store(
     *,
     store: Any,
-    settings: GatewayServerSettings,
+    settings: GatewaySettingsLike,
     binding: ChatBinding,
     caller: ScopeContext,
     order_no: str,
@@ -769,7 +770,7 @@ def settled_run(*, store: Any, run_id: str) -> AgentRun:
 def final_release(
     *,
     store: Any,
-    settings: GatewayServerSettings,
+    settings: GatewaySettingsLike,
     caller: ScopeContext,
     run_id: str,
 ) -> AgentRun:
@@ -822,7 +823,7 @@ def final_release(
 def _refuse_unless_consistent(
     store: Any,
     run: AgentRun,
-    settings: GatewayServerSettings,
+    settings: GatewaySettingsLike,
     caller: ScopeContext,
     config: AgentRunConfig,
 ) -> None:

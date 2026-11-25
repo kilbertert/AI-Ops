@@ -315,9 +315,9 @@ def test_a_platform_account_lands_in_the_platform_workspace(tmp_path: Path, monk
 
     service.login(username="ops", password="pw", random_str="r", code="c")
 
-    from aiops_diagnostics.dify.dify_workspaces import PLATFORM_TENANT_ID
+    from aiops_diagnostics.dify.dify_workspaces import DIFY_PLATFORM_WORKSPACE_ID
 
-    assert directory.asked == [PLATFORM_TENANT_ID], f"解析的是 {directory.asked}"
+    assert directory.asked == [DIFY_PLATFORM_WORKSPACE_ID], f"解析的是 {directory.asked}"
     assert inner.joins[0]["workspace_id"] == "ws-platform"
 
 

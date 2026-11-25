@@ -79,8 +79,8 @@ def _build_endpoints(remote: str) -> list[tuple[str, object]]:
         UpmsSettings,
         canonical_provider_base_url,
     )
+    from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
     from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource
-    from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
     from aiops_diagnostics.identity.caller_auth import IntrospectionSettings
     from aiops_diagnostics.identity.company_token_auth import CompanyTokenSettings
     from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
