@@ -6,7 +6,7 @@
 
 业务后端或 BFF 调用 AI-Ops 时使用服务 Bearer，并转发已验证的 `thirdSession`。对于可能同时存在客户端和管家端关联的 C 端用户，BFF 还必须传递可信的 `X-Business-Entry`：`consumer` 或 `operator`。这个请求头只应由服务端设置，不能让小程序直接控制。
 
-前端联调责任、旧接口迁移和页面分流见 [前端联调总览](agents/frontend-api-brief.md)。
+现行对外契约见 [公共接口契约](agents/public-openapi.md)（早期前端联调总览已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md`）。
 
 环境入口：`https://api.qumall.qushiyun.com` 为 95 环境，使用 95 自己的 Gateway、会话库和
 诊断数据源；`https://api.mall.qushiyun.com` 为 41 环境，使用 41 自己的 Gateway、会话库和

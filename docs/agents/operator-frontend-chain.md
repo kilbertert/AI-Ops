@@ -21,7 +21,7 @@
 > **我们自己的 nginx** 注入，任何能到公网入口的人带上 `X-Business-Entry: operator` 即可走进来。
 >
 > ⇒ **对内联调可以，对外不可宣称可用。** 判定方式、口径与解除条件见
-> `operator-repair-blueprint.md` §0.1 与 runbook §1.7 检查单。
+> runbook §1.7 检查单（历史蓝图已归档至 `AI-Ops-history-archive:docs/agents/operator-repair-blueprint.md` §0.1）。
 
 **能。** 下面是 41 公网入口的实测（2026-09-29，同一时刻、同一进程）：
 

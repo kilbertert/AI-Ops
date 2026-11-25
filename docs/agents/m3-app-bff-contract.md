@@ -6,7 +6,7 @@
 > 正常登录用户整轮仍未验收，登录支线按用户决定停止重试。
 >
 > 核对基线：`2032ef8c`。原始外部仓库资料、部署路径和日志留私有记录；本页只保留交接契约。
-> 相关：[用户入口验收手册](m3-user-entry-acceptance.md)、[前端联调总览](frontend-api-brief.md)、[执行配置](m3-gateway-exec-config.md)。
+> 相关：[用户入口验收手册](m3-user-entry-acceptance.md)、[公共接口契约](public-openapi.md)、[执行配置](m3-gateway-exec-config.md)（历史联调总览已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md`）。
 
 ## 1. 业务目标与已确认入口
 

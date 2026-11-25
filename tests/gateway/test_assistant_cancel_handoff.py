@@ -52,22 +52,11 @@ STOP_QUESTION = "电动车的电池保养怎么做"
 FAQ_QUESTION = "充电前支付的预授权/预充值金额，什么时候退回？"
 UNKNOWN_JOB_ID = "qa_nonexistent000000000000000000000001"
 
-#: The documents the PRD names as carrying the broken #173 attribution, plus the
-#: runbook whose merged evidence row was the proof of it. A stop/cancel link here
-#: may only be attributed to the PRD that implements it.
-#:
-#: Since 2026-10-23 each milestone writes a NEW file under ``docs/validation/`` and
-#: ``docs/开发进度/`` instead of prepending to one document — parallel agents that
-#: prepend to the same file always conflict, and GitHub does not dispatch CI at all
-#: for a pull request that conflicts. The two single files stay in the list because
-#: they are the read-only archive, and an attribution that was wrong in the archive
-#: stays wrong until someone corrects it. The directories are scanned whole, so the
-#: check does not weaken as entries accumulate: a new file is checked the moment it
-#: is committed, without anyone remembering to add its name here.
-ATTRIBUTION_DOCS = (
-    "qa-plan.md",
-    "docs/agents/p0-media-canary.md",
-)
+#: Active planning and validation documents guarded against broken #173 attribution.
+#: Historical archive monoliths and p0-media-canary.md were offloaded to
+#: kilbertert/AI-Ops-history-archive (ADR-0345 / ADR-0346). ``docs/validation/``
+#: is scanned whole (excluding README.md) so every new milestone receipt is checked.
+ATTRIBUTION_DOCS = ("qa-plan.md",)
 ATTRIBUTION_DIRS = (PROJECT_ROOT / "docs" / "validation",)
 
 #: Words that mark a line as being about the user-stop chain.

@@ -39,7 +39,7 @@ def _unavailable(_: object) -> ChargingStatusError:
     return ChargingStatusError("billing records unavailable")
 
 
-def _amount(value: Any) -> str | None:
+def _strict_decimal_amount(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)) or len(str(value)) > 32:
@@ -108,10 +108,10 @@ def read_billing_record(
         raise ChargingStatusError("invalid refund status")
     snapshot: dict[str, Any] = {
         "order_no": order_no,
-        "order_amount": _amount(row.get("totalAmount")),
-        "recorded_payment_amount": _amount(row.get("payAmount")),
+        "order_amount": _strict_decimal_amount(row.get("totalAmount")),
+        "recorded_payment_amount": _strict_decimal_amount(row.get("payAmount")),
         "refund_status": str(refund) if refund is not None else None,
-        "recorded_refund_amount": _amount(row.get("refundAmount")),
+        "recorded_refund_amount": _strict_decimal_amount(row.get("refundAmount")),
         "observed_at": format_stored_time(now_utc()),
         "source": "cpms.orderDetail",
     }
@@ -151,7 +151,9 @@ def _fields(
     for key in (*amounts, *texts):
         value = row.get(key)
         try:
-            result[key] = _source_time(value, period=period) if key in texts else _amount(value)
+            result[key] = (
+                _source_time(value, period=period) if key in texts else _strict_decimal_amount(value)
+            )
             if value is None:
                 missing.append(key)
         except ChargingStatusError:
@@ -275,9 +277,9 @@ def _dec(value: Any) -> Decimal | None:
 
 
 def _money(value: Any) -> Decimal | None:
-    """与 :func:`_amount` 同一套金额校验，返回 Decimal 供相等核对。"""
+    """与 :func:`_strict_decimal_amount` 同一套金额校验，返回 Decimal 供相等核对。"""
     try:
-        text = _amount(value)
+        text = _strict_decimal_amount(value)
     except ChargingStatusError:
         return None
     return _dec(text)
@@ -295,7 +297,7 @@ def _mall_row(row: dict[str, Any], amounts: tuple[str, ...], texts: tuple[str, .
             continue
         if key in amounts:
             try:
-                out[key] = _amount(value)
+                out[key] = _strict_decimal_amount(value)
             except ChargingStatusError:
                 out[key] = None
                 invalid.append(key)

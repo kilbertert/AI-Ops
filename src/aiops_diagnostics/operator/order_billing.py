@@ -52,7 +52,7 @@ def read_billing(body, caller, order, site):
     return result
 
 
-def _amount(row, key):
+def _non_negative_decimal(row, key):
     value = number(row.get(key))
     return value if value is not None and value >= 0 else None
 
@@ -96,7 +96,7 @@ def _verify(snapshot, detail, billing):
         or detail.get("packageType") is not None
     ):
         limitations.append("订单未结束或适用套餐，最终收费规则待核对")
-    energy = _amount(detail, "electricity")
+    energy = _non_negative_decimal(detail, "electricity")
     if energy is None or energy == 0:
         limitations.append("电量为零或缺失，启动费减免等特殊结算分支待核对")
     if billing is None:
@@ -119,26 +119,42 @@ def _verify(snapshot, detail, billing):
                 limitations.append("同轮订单与账务记录不一致，需重新取证")
                 break
         for key in ("reduceBalance", "insuranceAmount"):
-            value = _amount(billing, key)
+            value = _non_negative_decimal(billing, key)
             if value is None or value != 0:
                 limitations.append("余额抵扣或保险费用未排除，税基与付款口径待核对")
                 break
 
     checks = []
-    vat, snapshot_vat = _amount(detail, "vat"), _amount(template, "vat")
+    vat, snapshot_vat = _non_negative_decimal(detail, "vat"), _non_negative_decimal(template, "vat")
     if snapshot_vat is not None and snapshot_vat > 100:
         snapshot_vat = None
     checks.append(_check("模板税率", "订单税率 = 历史模板税率（%）", snapshot_vat, vat))
     enabled = template.get("enableLaunchFee")
-    launch = Decimal(0) if enabled is False else _amount(template, "launchFee") if enabled is True else None
+    launch = (
+        Decimal(0)
+        if enabled is False
+        else _non_negative_decimal(template, "launchFee")
+        if enabled is True
+        else None
+    )
     checks.append(
-        _check("模板启动费", "订单启动费 = 历史模板有效启动费", launch, _amount(detail, "launchFee"))
+        _check(
+            "模板启动费",
+            "订单启动费 = 历史模板有效启动费",
+            launch,
+            _non_negative_decimal(detail, "launchFee"),
+        )
     )
 
-    electric, service = _amount(detail, "electricityFee"), _amount(detail, "serviceFee")
-    loss_e, loss_s, park = (_amount(detail, k) for k in ("dsElectricFee", "dsServiceFee", "parkFee"))
+    electric, service = (
+        _non_negative_decimal(detail, "electricityFee"),
+        _non_negative_decimal(detail, "serviceFee"),
+    )
+    loss_e, loss_s, park = (
+        _non_negative_decimal(detail, k) for k in ("dsElectricFee", "dsServiceFee", "parkFee")
+    )
     discounts = (billing or {}).get("discounts")
-    rate = _amount(discounts or {}, "serviceDiscount")
+    rate = _non_negative_decimal(discounts or {}, "serviceDiscount")
     if rate is not None and rate > 10:
         rate = None
     basis = service + loss_s if service is not None and loss_s is not None else None
@@ -157,7 +173,7 @@ def _verify(snapshot, detail, billing):
             "接口未提供独立服务费折扣额，不能把总优惠当此项；本单是否有折扣以实际优惠记录为准",
         )
     )
-    components = (electric, service, _amount(detail, "launchFee"), loss_e, loss_s, park)
+    components = (electric, service, _non_negative_decimal(detail, "launchFee"), loss_e, loss_s, park)
     subtotal = Decimal(shown(sum(components))) if all(v is not None for v in components) else None
     formula = "电费 + 服务费 + 启动费（非零电损/停车费另列）"
     if subtotal is not None:
@@ -171,11 +187,14 @@ def _verify(snapshot, detail, billing):
             "规则2 充电费用",
             formula,
             subtotal,
-            _amount(detail, "totalAmount"),
+            _non_negative_decimal(detail, "totalAmount"),
             "费用分项缺失或非法，不能按零处理" if subtotal is None else "",
         )
     )
-    total, discount = _amount(detail, "totalAmount"), _amount(detail, "marketAmount")
+    total, discount = (
+        _non_negative_decimal(detail, "totalAmount"),
+        _non_negative_decimal(detail, "marketAmount"),
+    )
     tax_base = total - discount if total is not None and discount is not None and discount <= total else None
     tax = tax_base * snapshot_vat / 100 if tax_base is not None and snapshot_vat is not None else None
     formula = (
@@ -183,15 +202,15 @@ def _verify(snapshot, detail, billing):
         if tax is not None
         else "(充电费用 - 优惠减免) × 历史模板增值税比例"
     )
-    checks.append(_check("规则3 增值税费用", formula, tax, _amount(detail, "vatFee")))
-    tax_record = _amount(detail, "vatFee")
+    checks.append(_check("规则3 增值税费用", formula, tax, _non_negative_decimal(detail, "vatFee")))
+    tax_record = _non_negative_decimal(detail, "vatFee")
     paid = tax_base + tax_record if tax_base is not None and tax_record is not None else None
     formula = (
         f"{shown(total)} - {shown(discount)} + {shown(tax_record)} = {shown(paid)}"
         if paid is not None
         else "充电费用 - 优惠减免 + 增值税"
     )
-    checks.append(_check("规则4 实付款", formula, paid, _amount(detail, "payAmount")))
+    checks.append(_check("规则4 实付款", formula, paid, _non_negative_decimal(detail, "payAmount")))
     # 用重新算出的小计/税额另走整条链，避免错误中间值彼此相符而被当成全链通过。
     recomputed_base = (
         subtotal - discount
@@ -208,7 +227,7 @@ def _verify(snapshot, detail, billing):
             "独立串联复算",
             "费用分项合计 - 记录优惠 + 按历史税率重新计算的税额",
             payable,
-            _amount(detail, "payAmount"),
+            _non_negative_decimal(detail, "payAmount"),
         )
     )
     # 先计算差额供排查，但前置条件不成立时不允许把任何局部相符说成通过。

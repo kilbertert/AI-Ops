@@ -707,8 +707,9 @@ def test_the_consumer_entry_keeps_the_self_scope_for_a_company_token(
 
 # --- 8-bis. B1：入口头是「分流」，**不是身份** ---------------------------------
 #
-# 来由（`docs/agents/operator-repair-blueprint.md` §B1）：`X-Business-Entry` 目前由前端自报，
-# 任何调用方都能宣称自己落在管家端内容域。判定时刻的定案是「前端自报 + 目标态由网关注入」，
+# 来由（历史蓝图已归档至 `AI-Ops-history-archive:docs/agents/operator-repair-blueprint.md` §B1）：
+# `X-Business-Entry` 目前由前端自报，任何调用方都能宣称自己落在管家端内容域。
+# 判定时刻的定案是「前端自报 + 目标态由网关注入」，
 # 因此这一层必须钉死它的**边界**：宣称 entry=operator 换来的只有内容域与数据范围口径，
 # 换不来身份。下面两条是那条契约的可回归形式，覆盖**两个方向**：
 #   ① 凭据不成立时，入口头**打不开**任何东西（不是「带了 operator 就放行」）；

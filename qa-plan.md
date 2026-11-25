@@ -857,7 +857,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 
 ### P0-E2E-REAL 真实客服媒体闭环
 
-- 环境（2026-09-10 业务方范围决定后口径）：公网同域反代 `api.qumall.qushiyun.com/v1/*`（协议侧等价 BFF 透传）+ 接口工具（apifox/curl）+ AI-Ops Gateway + 真实 `kb-service/RAGFlow` + `aiops-canary` 租户 + 含 PNG/MP4 数据集。执行序列见 `docs/agents/p0-media-canary.md`（C1-C7）。
+- 环境（2026-09-10 业务方范围决定后口径）：公网同域反代 `api.qumall.qushiyun.com/v1/*`（协议侧等价 BFF 透传）+ 接口工具（apifox/curl）+ AI-Ops Gateway + 真实 `kb-service/RAGFlow` + `aiops-canary` 租户 + 含 PNG/MP4 数据集。历史执行序列（C1-C7）已归档至 `AI-Ops-history-archive:docs/agents/p0-media-canary.md`。
 - 前置条件：KB 栈重启与 kb-service 图片端点（人工决策点，见手册 §0）；AI-Ops 网关部署含媒体端点版本并配置 kb/媒体密钥。
 - 有序动作：发布客服智能体（真实校验拒绝原因）→ 草稿调试 → 提问 → blocks[] → 图片 200 / 视频 Range 206/416 → 多轮与忙碌 → 无命中/不可用/媒体失效降级 → 监控计数核对。
 - 预期结果：QA 返回 `blocks[]`，图片可渲染、视频可播放（Range 生效），文本/引用在媒体失败时保留，越权/TTL/失效拒绝，监控计数吻合且无原文。

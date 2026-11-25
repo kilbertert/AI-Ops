@@ -264,17 +264,13 @@ def test_clarification_and_fallback_copy_cover_every_language(language: str) -> 
     tables = {
         "QA_FALLBACK_MESSAGES": i18n.QA_FALLBACK_MESSAGES,
         "CLARIFICATION_MESSAGES": i18n.CLARIFICATION_MESSAGES,
-        "DIAGNOSIS_FAILURE_MESSAGES": i18n.DIAGNOSIS_FAILURE_MESSAGES,
         "DIAGNOSIS_ERROR_MESSAGES": i18n.DIAGNOSIS_ERROR_MESSAGES,
     }
     for name, table in tables.items():
         assert language in table, f"{name} 缺 {language}"
         assert all(value.strip() for value in table[language].values()), f"{name}[{language}] 有空值"
 
-    for name, table in (
-        ("ZERO_ORDER_REMINDER_MESSAGES", i18n.ZERO_ORDER_REMINDER_MESSAGES),
-        ("FREE_TEXT_UNAVAILABLE_MESSAGES", i18n.FREE_TEXT_UNAVAILABLE_MESSAGES),
-    ):
+    for name, table in (("FREE_TEXT_UNAVAILABLE_MESSAGES", i18n.FREE_TEXT_UNAVAILABLE_MESSAGES),):
         assert language in table, f"{name} 缺 {language}"
         assert table[language].strip(), f"{name}[{language}] 为空"
 

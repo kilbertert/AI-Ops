@@ -207,8 +207,8 @@ if (banner.jump_path) {
 
 ## 6. 相关文档
 
-- **完整接口契约**：`docs/agents/frontend-api-brief.md` **§D.2b 聊天页运营横幅**。
-- **跳转动作的坑清单**：`docs/agents/frontend-jump-path-handoff.md`（横幅共用同一套规则）。
+- **现行公共契约**：[public-openapi.md](./public-openapi.md)（历史联调总览已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md` §D.2b）。
+- **跳转动作的坑清单**：[frontend-jump-path-handoff.md](./frontend-jump-path-handoff.md)（横幅共用同一套规则）。
 - **后端设计与取舍**：`docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
-- **直连实测证据**：#590，`docs/validation.md` + `tools/verification/verify_banner_car_lookup.py`。
+- **直连实测证据**：#590，`AI-Ops-history-archive:docs/validation.md`（已归档）+ `tools/verification/verify_banner_car_lookup.py`。
 - **报告页欠账**：PRD #578 / #592（电池检查指标规格，含三个**产品还未定义**的缺口）。

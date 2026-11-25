@@ -288,4 +288,4 @@ SOH = E_actual / E_rated × 100 %
 - `src/aiops_diagnostics/health/health_report.py` —— 现行报告构造（`HEALTH_RULE_VERSION`、单指标）
 - `src/aiops_diagnostics/health/rules.py` —— `classify_stop_reason`，第 3 节停止原因的实现
 - `src/aiops_diagnostics/health/health_report_copy.py` —— `YKC_STOP_REASON_MESSAGES` 代码表
-- `docs/agents/frontend-api-brief.md` —— `/v1/health-report-jobs` 的对外契约
+- `docs/agents/public-openapi.md` —— `/v1/health-report-jobs` 的现行对外契约（早期联调稿已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md`）

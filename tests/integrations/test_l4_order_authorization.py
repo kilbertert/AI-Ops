@@ -252,10 +252,7 @@ def test_the_documents_agree_on_how_many_evidence_tests_there_are() -> None:
 
     # Any document that states a count for this set must state *this* count.
     stale = []
-    for doc in (
-        "docs/agents/operator-repair-blueprint.md",
-        "docs/agents/current-delivery-state.md",
-    ):
+    for doc in ("docs/agents/current-delivery-state.md",):
         text = (PROJECT_ROOT / doc).read_text(encoding="utf-8")
         # Match the count however it is written: `四个` / `4 个` / `4个`.
         for pattern, n in ((r"四个", 4), (r"六(?:个|\s*个)", 6), (r"\b4\s*个", 4), (r"\b6\s*个", 6)):

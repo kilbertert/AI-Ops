@@ -1,6 +1,7 @@
 """回答正文是给人读的：分段、有小标题、不把内部标识摆给用户。
 
-前端按 `blocks[]` 分派渲染、**不解析 Markdown**（`docs/agents/frontend-api-brief.md` §9），
+前端按 `blocks[]` 分派渲染、**不解析 Markdown**（现行公共契约见 `docs/agents/public-openapi.md`；
+历史联调说明已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md` §9），
 所以"好读"只能靠纯文本排版表达。这里钉住三件在 2026-10-29 反馈里坏掉的事：
 
 1. 列表要有编号/项目符号，而不是每项占一个空行；

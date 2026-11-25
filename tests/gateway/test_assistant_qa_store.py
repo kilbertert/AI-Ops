@@ -110,8 +110,9 @@ def test_a_completed_answer_survives_its_retention_window(tmp_path: Path) -> Non
     而 `sweep` 做的事是把它标成 `expired`；`expired` 在 API 层等于「没有结果」。
     于是设置保留期的唯一可见后果，是把一个正确答案变成一次失败。
 
-    `expired` 仍然属于终态集合（客户端契约见 `docs/agents/testing-api-reference.md`
-    §2.2），只是不再由「交付后过了保留期」产生 —— 那是 `claim` 的职责，只作用于
+    `expired` 仍然属于终态集合（客户端契约见 `docs/agents/public-openapi.md`；历史测试速查已归档至
+    `AI-Ops-history-archive:docs/agents/testing-api-reference.md` §2.2），
+    只是不再由「交付后过了保留期」产生 —— 那是 `claim` 的职责，只作用于
     仍在跑的作业。
     """
     store = _store(tmp_path)

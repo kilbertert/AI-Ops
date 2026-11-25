@@ -71,8 +71,8 @@ location ~* ^/(erp|qm|das|dis|...|upms|mall|mallapi|...)  {  # ← 公司服务�
 > 这是「别从『它是网关』推出『它注入身份』」那条判据的又一次实例。
 > **本节下面两段保留原文以存证，但阅读时按上面这段收窄。**
 > 对 D 批的影响：收益是「来源密钥的注入主体从我们自己的 nginx 换成网关」（A2 消掉），
-> **不是**「身份由公司校验」。D 的验收因此不得断言后者 —— 判据与顺序见
-> [operator-repair-blueprint.md](operator-repair-blueprint.md) §2。
+> **不是**「身份由公司校验」。D 的验收因此不得断言后者 —— 历史施工判据与顺序已归档至
+> `AI-Ops-history-archive:docs/agents/operator-repair-blueprint.md` §2（见 [ADR-0346](../adr/0346-retire-legacy-i18n-briefs-and-name-amount-parsers.md)）。
 
 `cloud-gateway` 的两个 `AbstractGatewayFilterFactory` **在源码里**是设计好的两条注入路径：
 
