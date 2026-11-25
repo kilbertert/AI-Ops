@@ -1255,3 +1255,34 @@ def test_host_verify_worker_malformed_output_is_unconfirmed(tmp_path, monkeypatc
         monkeypatch.setattr(worker.subprocess, "check_output", lambda *a, _o=output, **kw: _o)
         with pytest.raises(ValueError):
             worker.verify(tmp_path, claim)
+
+
+def test_inspect_deduplicates_current_checks_within_lock(prepared, monkeypatch):
+    path, ref, _, _ = prepared
+    job1, plan = create(prepared)
+    tasks.worker(path, ref, dict(id=job1["id"], owner="a" * 32))
+    tasks.worker(path, ref, dict(id=job1["id"], owner="a" * 32, result=receipt("a")))
+    job2 = tasks.submit_verify(path, ADMIN, plan["id"], "managed-host-identity", ref)
+    tasks.worker(path, ref, dict(id=job2["id"], owner="b" * 32))
+    tasks.worker(path, ref, dict(id=job2["id"], owner="b" * 32, result=verdict("a")))
+
+    calls = 0
+    real_current = tasks._current
+
+    def counting_current(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_current(*args, **kwargs)
+
+    monkeypatch.setattr(tasks, "_current", counting_current)
+    listed = tasks.inspect(path, ADMIN, environment="a", reference=ref)
+    assert len(listed["tasks"]) == 2
+    assert all(item["state"] == "observed" for item in listed["tasks"])
+    assert calls == 1
+
+    # 漂移后同批任务全部收敛为 expired，且仍只校验一次共享计划输入。
+    calls = 0
+    write_private_text(ref, "drifted")
+    expired = tasks.inspect(path, ADMIN, environment="a", reference=ref)
+    assert all(item["state"] == "expired" for item in expired["tasks"])
+    assert calls == 1

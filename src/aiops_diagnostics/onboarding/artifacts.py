@@ -4,7 +4,30 @@ import hashlib
 import json
 import re
 import tarfile
+import threading
+from collections import OrderedDict
 from pathlib import PurePosixPath
+
+_CACHE_LOCK = threading.Lock()
+_CACHE_MAX = 64
+_MANIFEST_CACHE: OrderedDict[tuple[str, str], dict] = OrderedDict()
+_INSTALLER_CACHE: OrderedDict[str, str] = OrderedDict()
+
+
+def _cache_get(cache: OrderedDict, key):
+    with _CACHE_LOCK:
+        value = cache.get(key)
+        if value is not None:
+            cache.move_to_end(key)
+        return value
+
+
+def _cache_put(cache: OrderedDict, key, value) -> None:
+    with _CACHE_LOCK:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > _CACHE_MAX:
+            cache.popitem(last=False)
 
 
 def regular(path):
@@ -17,9 +40,19 @@ def manifest(archive, digest, python_minor):
     regular(archive)
     if archive.stat().st_size > 512 * 1024 * 1024:
         raise ValueError("archive too large")
+    if (
+        not isinstance(digest, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", digest)
+        or not isinstance(python_minor, str)
+    ):
+        raise ValueError("archive digest mismatch")
     with archive.open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
             raise ValueError("archive digest mismatch")
+    cache_key = (digest, python_minor)
+    cached = _cache_get(_MANIFEST_CACHE, cache_key)
+    if cached is not None:
+        return dict(cached)
     with tarfile.open(archive) as bundle:
         members = bundle.getmembers()
         if len(members) > 101 or sum(m.size for m in members) > 512 * 1024 * 1024:
@@ -73,16 +106,22 @@ def manifest(archive, digest, python_minor):
             or sum(name.startswith("wheelhouse/aiops_diagnostics-") for name in files) != 1
         ):
             raise ValueError("incompatible artifact")
-        return body
+        _cache_put(_MANIFEST_CACHE, cache_key, dict(body))
+        return dict(body)
 
 
 def installer_manifest(archive, digest):
     regular(archive)
     if archive.stat().st_size > 8 * 1024**2:
         raise ValueError("installer too large")
+    if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
+        raise ValueError("installer digest mismatch")
     with archive.open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
             raise ValueError("installer digest mismatch")
+    cached = _cache_get(_INSTALLER_CACHE, digest)
+    if cached is not None:
+        return cached
     with tarfile.open(archive) as bundle:
         files = {}
         size = 0
@@ -127,6 +166,7 @@ def installer_manifest(archive, digest):
         revision = files["REVISION"].decode().strip()
         if not re.fullmatch(r"[a-f0-9]{40}", revision):
             raise ValueError("invalid installer revision")
+        _cache_put(_INSTALLER_CACHE, digest, revision)
         return revision
 
 

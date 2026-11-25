@@ -396,13 +396,37 @@ def inspect(path, identity, *, identifier=None, environment=None, cancel=False, 
                 return {"tasks": []}
             raise TaskRefused("ENVIRONMENT_TASK_UNAVAILABLE")
 
+        current_cache: dict[tuple, bool] = {}
+
         def current_public(row):
             result = _public(row)
             if result["state"] in {"observed", "blocked"} and result["action"] != "environment-publish":
+                request = json.loads(row["request"])
                 try:
-                    _current(path, json.loads(row["request"]), reference, reconciling=True)
-                except (ValueError, OSError, RuntimeError):
-                    result["state"] = "expired"
+                    plan = request["plan"]
+                    cache_key = (
+                        tuple(request["identity"]),
+                        plan["environment"],
+                        plan["draft_revision"],
+                        plan["registry_revision"],
+                        plan["digest"],
+                    )
+                    hash(cache_key)
+                except (KeyError, TypeError, ValueError):
+                    cache_key = None
+                if cache_key is not None and cache_key in current_cache:
+                    if not current_cache[cache_key]:
+                        result["state"] = "expired"
+                else:
+                    try:
+                        _current(path, request, reference, reconciling=True)
+                    except (ValueError, OSError, RuntimeError):
+                        if cache_key is not None:
+                            current_cache[cache_key] = False
+                        result["state"] = "expired"
+                    else:
+                        if cache_key is not None:
+                            current_cache[cache_key] = True
             return result
 
         with gateway_db.connection(database, write=cancel, readonly=not cancel) as conn:
