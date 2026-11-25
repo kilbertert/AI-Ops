@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
+from aiops_diagnostics.consumer.agent_contract import publication_settings
 from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
 
 BASE = "https://gateway.example.test"

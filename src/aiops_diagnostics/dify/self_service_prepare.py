@@ -283,7 +283,7 @@ def rebind_knowledge(document: dict, knowledge_ids, *, forbidden_ids=()) -> dict
     整段替换让"源 UUID 留在副本里"这件事在结构上不可能发生；剩下的唯一入口是调用方
     传进来，所以调用方给的 ID 必须来自目标租户自己的目录，并在这里再过一道 `forbidden_ids`。
     """
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, TOOL
+    from aiops_diagnostics.consumer.knowledge_access import PROVIDER, TOOL
 
     selected = list(dict.fromkeys(str(value) for value in knowledge_ids if str(value).strip()))
     if not selected:
@@ -302,9 +302,9 @@ def rebind_knowledge(document: dict, knowledge_ids, *, forbidden_ids=()) -> dict
         and (node.get("data") or {}).get("provider_id") == PROVIDER
         and (node.get("data") or {}).get("tool_name") == TOOL
     ]
-    from aiops_diagnostics.consumer import consumer_agent_flow
+    from aiops_diagnostics.consumer import agent_contract
 
-    if consumer_agent_flow.enabled(workflow):
+    if agent_contract.agent_enabled(workflow):
         matches = [
             tool
             for node in nodes
@@ -326,16 +326,16 @@ def rebind_knowledge(document: dict, knowledge_ids, *, forbidden_ids=()) -> dict
 
 def consumer_source_ids(document: dict) -> tuple[str, ...]:
     """来源应用自己选了哪些库 —— 只用于**排除**，从不用于复制。"""
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import selected_libraries
+    from aiops_diagnostics.consumer.knowledge_access import selected_libraries
 
     workflow = document.get("workflow") or {}
-    from aiops_diagnostics.consumer import consumer_agent_flow
+    from aiops_diagnostics.consumer import agent_contract
 
-    if consumer_agent_flow.enabled(workflow):
+    if agent_contract.agent_enabled(workflow):
         for node in workflow.get("graph", {}).get("nodes", []):
             tools = node.get("data", {}).get("agent_parameters", {}).get("tools", {}).get("value", [])
             for tool in tools:
-                if tool.get("tool_name") == consumer_agent_flow.TOOL:
+                if tool.get("tool_name") == agent_contract.TOOL:
                     return selected_libraries({"tool_configurations": tool.get("settings", {})})
     for node in (workflow.get("graph") or {}).get("nodes") or []:
         data = node.get("data") or {}
@@ -427,7 +427,7 @@ def consumer_endpoint(context, tenant_id: str) -> str:
     分界；但清单有多项却没声明默认时拒绝，不替客户挑一个。
     """
     from aiops_diagnostics.consumer import business_environments
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import (
+    from aiops_diagnostics.consumer.knowledge_access import (
         ConsumerEndpoints,
         approved_business_endpoint,
     )
@@ -456,12 +456,12 @@ def consumer_endpoint(context, tenant_id: str) -> str:
 
 def consumer_plugins(document: dict) -> list[str]:
     """执行图中的精确标识是开通依赖；不读会随部署漂移的全局默认值。"""
-    from aiops_diagnostics.consumer import consumer_agent_flow
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER
+    from aiops_diagnostics.consumer import agent_contract
+    from aiops_diagnostics.consumer.knowledge_access import PROVIDER
 
     workflow = document.get("workflow") or {}
-    agent = consumer_agent_flow.enabled(workflow)
-    plugins = [consumer_agent_flow.AGENT_PLUGIN] if agent else []
+    agent = agent_contract.agent_enabled(workflow)
+    plugins = [agent_contract.AGENT_PLUGIN] if agent else []
     knowledge = set()
     for node in (workflow.get("graph") or {}).get("nodes") or []:
         data = node.get("data") or {}
@@ -491,7 +491,7 @@ def consumer_plugins(document: dict) -> list[str]:
 
 def consumer_plugin(console, workspace_id: str, settings, catalogue_token: str, document: dict) -> str:
     """按 Dify 1.17.1 的脱敏凭据列表对账，写入后校验并启用受管凭据。"""
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER
+    from aiops_diagnostics.consumer.knowledge_access import PROVIDER
 
     console.install_plugins(workspace_id, consumer_plugins(document))
     base = f"/console/api/workspaces/current/tool-provider/builtin/{PROVIDER}"

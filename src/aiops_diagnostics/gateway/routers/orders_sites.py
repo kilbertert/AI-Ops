@@ -65,7 +65,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
     ) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
         if not selected_settings.charging_status_base_url:
-            from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
+            from aiops_diagnostics.consumer.knowledge_access import consumer_endpoint
 
             try:
                 consumer_endpoint(selected_settings, caller.effective_tenant_id)
@@ -86,7 +86,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
     ) -> dict[str, Any]:
         """C 端只读站点列表：范围只含本人订单里出现过的站点。"""
         from aiops_diagnostics.consumer import consumer_sites as consumer_sites_module
-        from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
+        from aiops_diagnostics.consumer.knowledge_access import consumer_endpoint
 
         response.headers["Cache-Control"] = "no-store"
         api._require_consumer_self(caller, business_entry)

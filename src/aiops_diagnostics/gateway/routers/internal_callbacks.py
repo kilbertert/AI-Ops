@@ -379,7 +379,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, Any]:
-        from aiops_diagnostics.consumer.consumer_knowledge_selection import catalogue_workspace
+        from aiops_diagnostics.consumer.knowledge_access import catalogue_workspace
         from aiops_diagnostics.dify import candidate_knowledge
         from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
 
@@ -405,7 +405,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             raise StandardAPIError(403, "KNOWLEDGE_CATALOGUE_FORBIDDEN", "知识目录凭据无效") from exc
         try:
             if context.settings.knowledge_delegation_file:
-                from aiops_diagnostics.consumer.consumer_knowledge_selection import workspace_libraries
+                from aiops_diagnostics.consumer.consumer_knowledge import workspace_libraries
 
                 libraries = workspace_libraries(context.runtime, tenant, workspace)
             else:
@@ -427,7 +427,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
     ) -> Any:
         from starlette.concurrency import run_in_threadpool
 
-        from aiops_diagnostics.consumer import consumer_chat_service, consumer_knowledge
+        from aiops_diagnostics.consumer import consumer_chat_service
         from aiops_diagnostics.consumer.candidate_trial import PREFIX as CANDIDATE_PREFIX
         from aiops_diagnostics.execution import chat_data_grant
 
@@ -481,8 +481,10 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                     raise ValueError("unexpected knowledge input")
                 image_text = body.get("image_text", "")
                 knowledge_base_ids = body.get("knowledge_base_ids")
+            from aiops_diagnostics.consumer import legacy_callbacks
+
             return await run_in_threadpool(
-                consumer_knowledge.callback_context,
+                legacy_callbacks.callback_context,
                 context.runtime,
                 authorization[7:],
                 require_result=consumer_chat_service.require_result,

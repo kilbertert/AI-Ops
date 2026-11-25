@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
-from aiops_diagnostics.consumer import consumer_agent_flow as flow
+from aiops_diagnostics.consumer import agent_contract as flow
 from aiops_diagnostics.consumer.consumer_publication import workflow_of
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
@@ -47,7 +47,7 @@ def sources(context, caller, app_id=None):
         ) != snapshot.get("workspace_id"):
             continue
         workflow = snapshot.get("workflow") or {}
-        if not flow.enabled(workflow):
+        if not flow.agent_enabled(workflow):
             continue
         source = {
             "app_id": route.app_id,
@@ -88,7 +88,7 @@ def document(source, library):
     for node in doc["workflow"]["graph"]["nodes"]:
         if node["data"]["type"] == "agent":
             node["data"]["agent_parameters"]["model"]["value"].pop("credential_id", None)
-    flow.publication_settings(
+    flow.agent_publication_settings(
         doc["workflow"],
         {"live_order_status": True, "live_billing_record": True},
         [{"knowledge_base_id": library, "audience": "customer"}],
@@ -162,7 +162,7 @@ def verify(console, settings, request, scope, app_id):
 
 
 def verify_credential(console, settings, scope):
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER
+    from aiops_diagnostics.consumer.knowledge_access import PROVIDER
 
     credentials = console._call(
         scope[2], "/console/api/workspaces/current/tool-provider/builtin/" + PROVIDER + "/credentials"

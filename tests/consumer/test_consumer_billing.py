@@ -8,7 +8,7 @@ import pytest
 from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 from execution.test_app_runtime_node_entry import ORDER_A
 
-from aiops_diagnostics.consumer.consumer_billing import (
+from aiops_diagnostics.consumer.billing import (
     _amount,
     billing_answer,
     is_billing_question,
@@ -315,14 +315,14 @@ def test_invalid_tax_currency_and_period_type_do_not_invent_valid_values(backend
     ],
 )
 def test_source_time_preserves_known_formats_without_inventing_timezone(value, period):
-    from aiops_diagnostics.consumer.consumer_billing import _source_time
+    from aiops_diagnostics.consumer.billing import _source_time
 
     assert _source_time(value, period=period) == value
 
 
 @pytest.mark.parametrize("value", ["2026-02-30 08:00:00", "24:01", "25:00", "08:60", "08:15:60", ""])
 def test_source_time_rejects_invalid_calendar_or_clock(value):
-    from aiops_diagnostics.consumer.consumer_billing import _source_time
+    from aiops_diagnostics.consumer.billing import _source_time
 
     with pytest.raises(ChargingStatusError):
         _source_time(value, period=True)

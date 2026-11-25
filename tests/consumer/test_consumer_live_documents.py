@@ -158,7 +158,7 @@ def test_answer_requires_current_source_and_cannot_generate_media(mutation):
 
 
 def test_live_publication_ignores_missing_reviewed_file_and_snapshot_contains_no_faq(tmp_path):
-    from aiops_diagnostics.consumer.consumer_flow_contract import publication_settings
+    from aiops_diagnostics.consumer.agent_contract import publication_settings
     from aiops_diagnostics.consumer.consumer_publication import frozen_settings
     from consumer.test_consumer_flow_contract import BASE, CEILING
     from consumer.test_consumer_knowledge_picker import picker_graph

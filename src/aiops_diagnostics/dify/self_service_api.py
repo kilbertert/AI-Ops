@@ -8,7 +8,7 @@ from fastapi import Depends, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
+from aiops_diagnostics.consumer.agent_contract import ConsumerFlowError
 from aiops_diagnostics.execution.node_publication import NodeRouteConflict
 
 from . import dual_entry
@@ -304,7 +304,7 @@ def register(app, context):
 
     @app.post("/v1/dify/management/knowledge")
     def knowledge(payload: AppRequest, session=Depends(session)):  # noqa: B008
-        from aiops_diagnostics.consumer.consumer_knowledge_selection import owned_libraries
+        from aiops_diagnostics.consumer.consumer_knowledge import owned_libraries
 
         row = service.authorize_app(auth.identity(context, session), payload.app_id)
         if row["entry"] != "consumer":
@@ -326,7 +326,7 @@ def register(app, context):
 
     @app.post("/v1/dify/management/knowledge/access")
     def knowledge_access(payload: KnowledgeAccessRequest, session=Depends(session)):  # noqa: B008
-        from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+        from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 
         libraries = knowledge(AppRequest(app_id=payload.app_id), session)
         if payload.knowledge_base_id not in {r["id"] for r in libraries["libraries"]}:
@@ -388,7 +388,7 @@ def register(app, context):
 
 def _backfill_knowledge_grants(context, service):
     """首次纳管沿用现役选库；已登记（含已撤销）的库不被重新授权。"""
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 
     settings = context.settings
     grants = KnowledgeGrants(settings.database_file)

@@ -213,12 +213,12 @@ _STORE_SPECS = [
     ("KeyOperations", "aiops_diagnostics.dify.service_keys", "KeyOperations"),
     (
         "KnowledgeGrants",
-        "aiops_diagnostics.consumer.consumer_knowledge_grants",
+        "aiops_diagnostics.consumer.knowledge_access",
         "KnowledgeGrants",
     ),
     (
         "ConsumerEndpoints",
-        "aiops_diagnostics.consumer.consumer_knowledge_grants",
+        "aiops_diagnostics.consumer.knowledge_access",
         "ConsumerEndpoints",
     ),
 ]
@@ -319,9 +319,9 @@ def test_wal_is_set_by_every_initializer_not_by_construction_order(tmp_path: Pat
 #: 别的问题，不是「存储时间文本」。新增一行要写出它校验/渲染的合同。
 _IOFORMAT_LEDGER = {
     "common/scalar_rules.py",  # 权威本体
-    "consumer/consumer_time.py",  # 展示层容错（读不出就显示原文）
+    "consumer/presentation.py",  # 展示层容错（读不出就显示原文）
     "consumer/consumer_agent.py",  # 工具中的CPMS原始日期；保留上游偏移，不能把naive业务时间冒充UTC
-    "consumer/consumer_billing.py",  # CPMS原始日期/分时时钟；保留来源偏移或naive，不是存储时间
+    "consumer/billing.py",  # CPMS原始日期/分时时钟；保留来源偏移或naive，不是存储时间
     "consumer/consumer_tool_grants.py",  # 节点请求的 expires_at 是 wire 合同
     "execution/chat_execution.py",  # 节点回调快照校验：合同要求**显式** UTC 偏移
     "health/health_report.py",  # 报告对外字段（started_at/stopped_at/data_as_of 是响应形状）
@@ -439,7 +439,7 @@ _DELEGATED_STORE_FILES = {
     "gateway/metrics_store.py",
     "dify/self_service_store.py",
     "dify/service_keys.py",
-    "consumer/consumer_knowledge_grants.py",
+    "consumer/knowledge_access.py",
     "execution/node_capabilities.py",
 }
 

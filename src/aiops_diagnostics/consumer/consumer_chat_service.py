@@ -349,9 +349,9 @@ def copy_pack(runtime, caller, context, language):
     `context` 里钉着 `copy_version`（生成时写入）；没有这个键的是历史答复 ——
     它们按内置文案渲染，和引入文案包之前逐字相同。
     """
-    from aiops_diagnostics.consumer.consumer_copy import resolve
+    from aiops_diagnostics.consumer.presentation import resolve_copy_pack
 
-    return resolve(
+    return resolve_copy_pack(
         runtime.store,
         caller.effective_tenant_id,
         version=(context or {}).get("copy_version"),

@@ -6,8 +6,8 @@ import uuid
 import pytest
 from execution.test_app_runtime_dify_entry import dify_chat
 
-from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError, publication_settings
-from aiops_diagnostics.consumer.consumer_knowledge_selection import (
+from aiops_diagnostics.consumer.agent_contract import ConsumerFlowError, publication_settings
+from aiops_diagnostics.consumer.knowledge_access import (
     PROVIDER,
     catalogue_token,
     catalogue_workspace,
@@ -76,7 +76,8 @@ def test_catalogue_credential_is_workspace_and_environment_bound():
 def test_catalogue_outage_and_malformed_node_fail_closed():
     from types import SimpleNamespace
 
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import owned_libraries, selected_libraries
+    from aiops_diagnostics.consumer.consumer_knowledge import owned_libraries
+    from aiops_diagnostics.consumer.knowledge_access import selected_libraries
 
     with pytest.raises(ValueError, match="目录暂不可用"):
         owned_libraries(SimpleNamespace(kb_search_client=None), "tenant")
@@ -145,7 +146,7 @@ def test_picker_calls_only_selected_library_and_rejects_mismatch_before_cache(tm
         doc = json.loads(env["bindings"].read_text())
         doc["bindings"][0].update(callback_version=3, knowledge_base_ids=["kb-b"])
         env["bindings"].write_text(json.dumps(doc))
-        from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+        from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 
         settings = env["app"].state.gateway.settings
         KnowledgeGrants(settings.database_file).grant(

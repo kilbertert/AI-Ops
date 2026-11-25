@@ -921,7 +921,7 @@ def answer_from_run(run: AgentRun, *, language: str | None = None) -> dict[str, 
     语言 —— 与今天旧记录的实际行为一致，不回填、不猜。
     """
     from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
-    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.presentation import status_answer
 
     if run.snapshot is None:
         raise ChatRunUnavailable("AGENT_RUN_NO_RESULT", "agent run produced no result")
@@ -938,7 +938,7 @@ def answer_matches_snapshot(result: Any, snapshot: dict[str, Any], *, language: 
     这里不再枚举一组语言去试：枚举越多越慢、也越容易误放行，而「这条 run 用的
     哪门语言」在签发时就已经知道。
     """
-    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.presentation import status_answer
 
     return result == status_answer(snapshot, language)
 

@@ -114,7 +114,7 @@ def import_versions(context, document):
             remote = for_application(context.runtime, row["tenant_id"], row["app_id"])
             if remote is None:
                 raise ValueError("release requires delegated knowledge")
-            from aiops_diagnostics.consumer.consumer_knowledge_selection import require_owned
+            from aiops_diagnostics.consumer.knowledge_access import require_owned
 
             require_owned(app["settings"]["knowledge_base_ids"], remote.list_knowledge_bases())
             outcome = frozen_consumer(
@@ -291,7 +291,7 @@ def restore(context, document, previous, expected):
             remote = for_application(context.runtime, row["tenant_id"], row["app_id"])
             if remote is None:
                 raise ValueError("restore knowledge authority missing")
-            from aiops_diagnostics.consumer.consumer_knowledge_selection import require_owned
+            from aiops_diagnostics.consumer.knowledge_access import require_owned
 
             require_owned(snapshot["consumer_service"]["knowledge_base_ids"], remote.list_knowledge_bases())
             _advance_route_binding(

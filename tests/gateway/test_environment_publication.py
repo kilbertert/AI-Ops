@@ -568,7 +568,7 @@ def test_central_publication_freezes_real_template_and_reconciles_unique_key(val
 
     import yaml
 
-    from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
     from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, environment_consumer
     from aiops_diagnostics.dify import environment_publication as publication
     from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces

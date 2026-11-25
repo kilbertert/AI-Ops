@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_reply import validate_notice, validate_reply
+from aiops_diagnostics.consumer.consumer_facts import validate_notice, validate_reply
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
 BILLING = {

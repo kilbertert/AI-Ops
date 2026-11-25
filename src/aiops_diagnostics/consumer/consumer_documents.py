@@ -218,7 +218,7 @@ def answer_selection(raw, context, *, language="", contract="legacy"):
         reply = selected.get("reply")
         if reply and selected["kind"] == "realtime" and context.get("live_snapshot"):
             # 正文由提示词写：校验后直接交付（事实由片段填，见 consumer_reply）。
-            from aiops_diagnostics.consumer.consumer_reply import model_reply
+            from aiops_diagnostics.consumer.consumer_facts import model_reply
 
             return selected["kind"], model_reply(
                 reply, context["live_snapshot"], language=language, contract=contract
@@ -230,7 +230,7 @@ def answer_selection(raw, context, *, language="", contract="legacy"):
             # 服务故障（unavailable / 取数不可用）不在此列：故障文案由系统给。
             if context.get("status") in {"unavailable", "limited"}:
                 return selected["kind"], None
-            from aiops_diagnostics.consumer.consumer_reply import validate_notice
+            from aiops_diagnostics.consumer.consumer_facts import validate_notice
 
             notice = validate_notice(reply, language=language)
             return selected["kind"], {

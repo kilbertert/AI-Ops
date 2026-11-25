@@ -14,7 +14,7 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.consumer.consumer_order_chat import is_order_status_question
+from aiops_diagnostics.consumer.presentation import is_order_status_question
 from aiops_diagnostics.conversation.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.data.sources import MySQLSource
 from aiops_diagnostics.gateway import gateway_api

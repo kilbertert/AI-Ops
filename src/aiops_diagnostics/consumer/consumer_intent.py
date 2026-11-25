@@ -90,7 +90,7 @@ def classify(question, *, provider, api_key, language, **context):
 
 def message(code, language):
     from aiops_diagnostics.common.i18n import localized_pack
-    from aiops_diagnostics.consumer.consumer_language import COPY
+    from aiops_diagnostics.consumer.presentation import COPY
 
     if language in COPY:
         return COPY[language]["intent_" + code]

@@ -8,14 +8,14 @@ from pathlib import Path
 
 import yaml
 
-from aiops_diagnostics.consumer.consumer_flow_contract import TYPES, publication_settings
+from aiops_diagnostics.consumer.agent_contract import TYPES, publication_settings
 from aiops_diagnostics.dify.dify_dsl_pull import workflow_content
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def select_knowledge(source, libraries, plugin_identifier):
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, TOOL, selected_libraries
+    from aiops_diagnostics.consumer.knowledge_access import PROVIDER, TOOL, selected_libraries
 
     if not plugin_identifier.startswith("trendpower/consumer_knowledge:"):
         raise ValueError("必须提供已验签知识检索插件的完整标识")
@@ -151,8 +151,8 @@ def upgrade(source, public_base):
 
 
 def agent_conversation(source, plugin_identifier):
-    from aiops_diagnostics.consumer import consumer_agent_flow as flow
-    from aiops_diagnostics.consumer.consumer_knowledge_selection import PROVIDER, selected_libraries
+    from aiops_diagnostics.consumer import agent_contract as flow
+    from aiops_diagnostics.consumer.knowledge_access import PROVIDER, selected_libraries
 
     candidate = copy.deepcopy(source)
     workflow = candidate["workflow"]
@@ -262,13 +262,13 @@ def agent_conversation(source, plugin_identifier):
 
 def order_composition(source):
     """现役v6保留业务文本，只将唯一已知订单规则升级并放到全文末尾。"""
-    from aiops_diagnostics.consumer import consumer_agent_flow as flow
+    from aiops_diagnostics.consumer import agent_contract as flow
 
     candidate = copy.deepcopy(source)
     workflow = candidate["workflow"]
     nodes = {n["id"]: n["data"] for n in workflow["graph"]["nodes"]}
     if (
-        not flow.enabled(workflow)
+        not flow.agent_enabled(workflow)
         or len(workflow["graph"]["nodes"]) != 3
         or set(nodes) != {"start", "answer", "end"}
         or nodes["answer"].get("type") != "agent"

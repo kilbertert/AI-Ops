@@ -25,7 +25,7 @@ ZH_FAMILY = frozenset({"zh", "zh-Hant", "en"})
 #: 收敛动作删掉一处时，台账必须跟着删，否则会掩盖「又写回来一份」。
 _ALLOWED_ENUMERATIONS = {
     # 具名权威本身的定义 —— 消费方引用 `COMPOSED_LANGUAGES`，不复制它。
-    ("consumer/consumer_copy.py", ("en", "zh")): 1,
+    ("consumer/presentation.py", ("en", "zh")): 1,
     # 请求观测的候选判定集合：这是「该入口候选哪种语言」的判定，不是文案表 —
     # 与文案回退是不同概念，收敛到 `COMPOSED_LANGUAGES` 会把两种语义压成一摊。
     ("gateway/request_observation.py", ("en", "zh", "zh-Hant")): 1,

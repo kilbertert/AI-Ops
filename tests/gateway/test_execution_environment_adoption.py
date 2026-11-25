@@ -11,7 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from aiops_diagnostics.admin_cli import admin_app
-from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 from aiops_diagnostics.conversation.conversation_store import ConversationStore
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.execution import chat_execution

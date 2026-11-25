@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_reply import MAX_REPLY_CHARS, validate_reply
+from aiops_diagnostics.consumer.consumer_facts import MAX_REPLY_CHARS, validate_reply
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
 SNAPSHOT = {
@@ -256,7 +256,7 @@ def test_observation_time_cannot_authorize_an_invented_amount(observed):
 
 
 def test_exact_observation_timestamp_can_be_quoted_without_authorizing_its_digits():
-    from aiops_diagnostics.consumer.consumer_time import readable_time
+    from aiops_diagnostics.consumer.presentation import readable_time
 
     text = GOOD + " 查询时间 " + readable_time(SNAPSHOT["observed_at"])
     assert validate_reply(text, SNAPSHOT, language="zh") == text

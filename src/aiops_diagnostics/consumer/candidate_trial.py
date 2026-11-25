@@ -228,7 +228,7 @@ class CandidateLeases:
 
                     result = read_charging_status(base, order, **args)
                 else:
-                    from aiops_diagnostics.consumer.consumer_billing import read_billing_record
+                    from aiops_diagnostics.consumer.billing import read_billing_record
 
                     result = read_billing_record(base, order, include_composition=True, **args)
                 self.check(lease)

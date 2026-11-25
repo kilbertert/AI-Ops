@@ -2,9 +2,13 @@
 
 import pytest
 
-from aiops_diagnostics.consumer.consumer_facts import check_status_prose, facts_for
-from aiops_diagnostics.consumer.consumer_language import COPY
-from aiops_diagnostics.consumer.consumer_reply import model_reply, validate_reply
+from aiops_diagnostics.consumer.consumer_facts import (
+    check_status_prose,
+    facts_for,
+    model_reply,
+    validate_reply,
+)
+from aiops_diagnostics.consumer.presentation import COPY
 from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
 SNAPSHOT = {

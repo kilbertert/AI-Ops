@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from operations.test_operator_cpms import operator  # noqa: F401
 
-from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 from aiops_diagnostics.dify import self_service_api, service_keys
 from aiops_diagnostics.dify import self_service_prepare as prepare
 from dify.test_dual_entry import TARGET, Dsl, dual, request, run  # noqa: F401

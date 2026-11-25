@@ -680,7 +680,7 @@ class SelfService:
         else:
             service_keys.storage_ready(self.settings.chat_dify_key_dir)
         state["business_endpoint"] = prepare.consumer_endpoint(self.context, request["tenant_id"])
-        from aiops_diagnostics.consumer.consumer_knowledge_selection import catalogue_token
+        from aiops_diagnostics.consumer.knowledge_access import catalogue_token
 
         token = catalogue_token(
             self.settings.internal_token_secret,
@@ -700,7 +700,7 @@ class SelfService:
                 prepare.customer_knowledge_base(self.context, request["tenant_id"], state, save)
             ]
             # 显式登记这一次新建的库"允许对客"。没有这一行，发布契约与检索都会把它当内部库。
-            from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+            from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 
             grants = KnowledgeGrants(self.settings.database_file)
             for knowledge_base_id in state["knowledge_base_ids"]:
@@ -774,7 +774,7 @@ class SelfService:
         with self.lock:
             row = self.authorize_app(caller, app_id)
             if row["entry"] == "consumer":
-                from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError
+                from aiops_diagnostics.consumer.agent_contract import ConsumerFlowError
 
                 try:
                     return self._publish_consumer(caller, row, revision, expected_draft)
@@ -889,7 +889,7 @@ class SelfService:
             database=self.settings.database_file,
         )
         settings = consumer_publication.frozen_settings(target, documents=True)
-        from aiops_diagnostics.consumer.consumer_knowledge_selection import owned_libraries
+        from aiops_diagnostics.consumer.consumer_knowledge import owned_libraries
 
         bootstrap = consumer_publication.bootstrap_config(settings["knowledge_base_ids"], targets)
         outcome = sync_workflow_from_dify(

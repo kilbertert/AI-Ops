@@ -3,7 +3,7 @@
 from dify.test_dual_entry import dual, request, run  # noqa: F401
 from operations.test_operator_cpms import operator  # noqa: F401
 
-from aiops_diagnostics.consumer.consumer_knowledge_grants import KnowledgeGrants
+from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
 from aiops_diagnostics.dify import self_service_identity as auth
 
 

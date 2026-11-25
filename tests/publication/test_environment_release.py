@@ -10,7 +10,7 @@ from dify.test_dual_entry import dual  # noqa: F401
 from operations.test_operator_cpms import operator  # noqa: F401
 
 from aiops_diagnostics.common.private_files import write_private_text
-from aiops_diagnostics.consumer.consumer_agent_flow import publication_settings
+from aiops_diagnostics.consumer.agent_contract import agent_publication_settings as publication_settings
 from aiops_diagnostics.consumer.consumer_publication import frozen_settings
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore

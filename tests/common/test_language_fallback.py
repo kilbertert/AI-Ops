@@ -21,8 +21,7 @@ from aiops_diagnostics.common.i18n import (
     rendering_language,
 )
 from aiops_diagnostics.consumer.consumer_knowledge import MESSAGES
-from aiops_diagnostics.consumer.consumer_language import COPY, status_word
-from aiops_diagnostics.consumer.consumer_plain import WORDS
+from aiops_diagnostics.consumer.presentation import COPY, WORDS, status_word
 from aiops_diagnostics.operator.operator_agent import _SOURCE_LABELS, render
 
 STATUS = {
@@ -135,8 +134,8 @@ def test_copy_lookup_is_contract_scoped() -> None:
 def test_the_composed_surface_speaks_one_language_per_answer() -> None:
     """非中文语种在组合面上读不到一个中文字符 —— 语言矩阵，不是抽样。"""
     from aiops_diagnostics.common.i18n import chinese_leak
-    from aiops_diagnostics.consumer.consumer_billing import billing_answer
-    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.billing import billing_answer
+    from aiops_diagnostics.consumer.presentation import status_answer
 
     for language in SUPPORTED_LANGUAGES:
         if language_spec(language).is_chinese:
@@ -151,8 +150,8 @@ def test_the_composed_surface_speaks_one_language_per_answer() -> None:
 def test_a_language_the_surface_cannot_render_reads_the_fallback_verbatim() -> None:
     """de 在组合词表里没有行：整句按声明的 fallback 读英文，德语状态词不再
     嵌进英文句壳 —— 混排与「中文字符」是同一个缺陷的两半。"""
-    from aiops_diagnostics.consumer.consumer_billing import billing_answer
-    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.billing import billing_answer
+    from aiops_diagnostics.consumer.presentation import status_answer
 
     assert status_answer(dict(STATUS), "de", localized=False) == status_answer(
         dict(STATUS), "en", localized=False
@@ -166,7 +165,7 @@ def test_a_language_the_surface_cannot_render_reads_the_fallback_verbatim() -> N
 
 def test_traditional_billing_reads_the_traditional_words_table() -> None:
     """组合面的词表本就覆盖 zh-Hant：不本地化不再把繁体请求折成简体。"""
-    from aiops_diagnostics.consumer.consumer_billing import billing_answer
+    from aiops_diagnostics.consumer.billing import billing_answer
 
     text = billing_answer(dict(BILLING), "zh-Hant", localized=False)["blocks"][0]["text"]
     assert "這筆訂單" in text
@@ -175,8 +174,8 @@ def test_traditional_billing_reads_the_traditional_words_table() -> None:
 def test_the_orchestrator_no_longer_folds_what_the_surface_resolves() -> None:
     """入口折叠与各面自解析必须给出同一份正文，否则折叠仍是一份私有语法。"""
     from aiops_diagnostics.consumer import consumer_knowledge
-    from aiops_diagnostics.consumer.consumer_billing import billing_answer
-    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.billing import billing_answer
+    from aiops_diagnostics.consumer.presentation import status_answer
 
     assert consumer_knowledge.live_answer(dict(STATUS), "de", localized=False) == status_answer(
         dict(STATUS), "de", localized=False

@@ -207,7 +207,7 @@ class LocalConsumer:
         return context_from_chunks(result)
 
     def read(self, resource, order):
-        from aiops_diagnostics.consumer.consumer_billing import read_billing_record
+        from aiops_diagnostics.consumer.billing import read_billing_record
         from aiops_diagnostics.data.charging_status import read_charging_status
 
         self.require_order(order)

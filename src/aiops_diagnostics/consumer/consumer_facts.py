@@ -129,7 +129,7 @@ def _negates_state(clause: str, terms: tuple[str, ...]) -> bool:
 
 
 def _state_terms() -> tuple[str, ...]:
-    from aiops_diagnostics.consumer.consumer_language import COPY
+    from aiops_diagnostics.consumer.presentation import COPY
     from aiops_diagnostics.health.rules import ORDER_STATUS
 
     terms = set(_STATE_SYNONYMS)
@@ -143,8 +143,8 @@ def _state_terms() -> tuple[str, ...]:
 
 
 def _state_labels() -> tuple[str, ...]:
-    """现役多语言文案里的状态词（`consumer_language.COPY`）。这是产品资源，不是同义词表。"""
-    from aiops_diagnostics.consumer.consumer_language import COPY
+    """现役多语言文案里的状态词（`presentation.COPY`）。这是产品资源，不是同义词表。"""
+    from aiops_diagnostics.consumer.presentation import COPY
 
     labels = set()
     for table in COPY.values():
@@ -279,15 +279,15 @@ def _amount(raw: object) -> str | None:
 
 
 def _readable_time(raw: object) -> str:
-    from aiops_diagnostics.consumer.consumer_time import readable_time
+    from aiops_diagnostics.consumer.presentation import readable_time
 
     return readable_time(raw)
 
 
 def facts_for(snapshot: dict, language: str) -> dict[str, str]:
     """事实段复用现有本语种正文，包含订单、来源、时间及业务限制。"""
-    from aiops_diagnostics.consumer.consumer_billing import billing_answer
-    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.billing import billing_answer
+    from aiops_diagnostics.consumer.presentation import status_answer
 
     facts = {}
     if snapshot.get("order_no"):
@@ -356,3 +356,110 @@ def check_notice(text: str) -> None:
                 raise ChatRunUnavailable(
                     "CHATFLOW_FACT_PROMISE", "notice claims an action the system did not take"
                 )
+
+
+# ---------------------------------------------------------------------------
+# 模型回复与通知正文契约校验（原 consumer_reply）
+# ---------------------------------------------------------------------------
+
+#: 正文上限。答复是几句话，不是文档；放宽会让一次跑飞的模型把整屏刷满。
+MAX_REPLY_CHARS = 2000
+
+#: 澄清／无结果／转人工的上限。它们是一句话的通知。
+MAX_NOTICE_CHARS = 600
+
+#: 不许出现在用户正文里的内部标识。
+FORBIDDEN = ("cpms.", "status_code=", "status_role=")
+
+#: 快照里读者要能核对的金额字段。空值不要求出现 —— 没给的值不能凭空写。
+AMOUNT_FIELDS = ("order_amount", "recorded_payment_amount", "recorded_refund_amount")
+
+_REPLY_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _numbers(text: str) -> set[float]:
+    found: set[float] = set()
+    for token in _REPLY_NUMBER.findall(text):
+        try:
+            found.add(float(token))
+        except ValueError:  # pragma: no cover - 正则保证可解析
+            continue
+    return found
+
+
+def validate_reply(reply: object, snapshot: dict, *, language: str, contract: str = "legacy") -> str:
+    """校验模型写的正文，返回可直接交付的文本。不合格就整轮失败。"""
+    if not isinstance(reply, str) or not reply.strip():
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply is empty")
+    text = reply.strip()
+    if len(text) > MAX_REPLY_CHARS:
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply is too long")
+    if contract == "slots":
+        return render_segments(text, snapshot, language)
+    if contract != "legacy":
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "unknown answer contract")
+    for token in FORBIDDEN:
+        if token in text:
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply exposes internal identifiers")
+    order_no = str(snapshot.get("order_no") or "")
+    if order_no and order_no not in text:
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "reply omits the order number")
+    numeric_text = text
+    for literal in (
+        order_no,
+        str(snapshot.get("observed_at") or ""),
+        _readable_time(snapshot.get("observed_at")),
+    ):
+        if literal and literal != "None":
+            numeric_text = numeric_text.replace(literal, " ")
+    present = _numbers(numeric_text)
+    for field in AMOUNT_FIELDS:
+        value = snapshot.get(field)
+        if value is None or str(value).strip() == "":
+            continue
+        try:
+            expected = float(str(value))
+        except ValueError:
+            continue
+        if expected not in present:
+            if expected == 0 and ZERO_SAID["recorded_refund_amount"].search(text):
+                continue
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", f"reply does not carry the recorded {field}")
+    allowed = _evidence_numbers(snapshot, language)
+    invented = sorted(present - allowed)
+    if invented:
+        raise ChatRunUnavailable(
+            "CHATFLOW_ANSWER_INVALID", "reply contains numbers that are not in the evidence"
+        )
+    return text
+
+
+def _evidence_numbers(snapshot: dict, language: str) -> set[float]:
+    """业务数值不能借取证时间、状态码或身份标识获得授权。"""
+    import json
+
+    excluded = {"order_no", "observed_at", "source", "status_code", "status_role"}
+    business = {key: value for key, value in snapshot.items() if key not in excluded}
+    allowed = _numbers(json.dumps(business, ensure_ascii=False, default=str))
+    allowed.update(float(n) for n in range(0, 11))
+    return allowed
+
+
+def model_reply(reply: object, snapshot: dict, *, language: str, contract: str = "legacy") -> dict:
+    """把模型写的正文包成 blocks-v1。前端只认 ``blocks[]``，形状必须与既有答复一致。"""
+    text = validate_reply(reply, snapshot, language=language, contract=contract)
+    return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}
+
+
+def validate_notice(reply: object, *, language: str) -> str:
+    """校验提示词为澄清／无结果／转人工写的正文（不得包含数字、链接或执行承诺）。"""
+    if not isinstance(reply, str) or not reply.strip():
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "notice is empty")
+    text = reply.strip()
+    if len(text) > MAX_NOTICE_CHARS:
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "notice is too long")
+    for token in FORBIDDEN:
+        if token in text:
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "notice exposes internal identifiers")
+    check_notice(text)
+    return text

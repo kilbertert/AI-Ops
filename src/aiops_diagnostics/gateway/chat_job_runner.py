@@ -256,7 +256,7 @@ def release_dify_answer(
     outputs: dict[str, Any],
 ) -> dict[str, Any]:
     """把 Dify 的输出适配成原 blocks 形状，并对本轮快照做完整性校验。"""
-    from aiops_diagnostics.consumer.consumer_order_chat import status_answer
+    from aiops_diagnostics.consumer.presentation import status_answer
     from aiops_diagnostics.dify.dify_run_store import DifyRunStore
     from aiops_diagnostics.execution import chat_data_grant
     from aiops_diagnostics.execution import chat_execution as _chat

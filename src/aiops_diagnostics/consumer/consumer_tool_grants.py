@@ -109,7 +109,7 @@ class ConsumerToolGrants:
         受管行由开通时写入（来源是已批准的环境连接）。两者都没有就拒绝 —— 不回退到
         "某个全局 URL"，那会把一个客户的业务连接发给所有客户。
         """
-        from aiops_diagnostics.consumer.consumer_knowledge_grants import consumer_endpoint
+        from aiops_diagnostics.consumer.knowledge_access import consumer_endpoint
 
         try:
             return consumer_endpoint(self.settings, tenant_id)

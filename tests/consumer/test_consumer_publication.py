@@ -207,7 +207,7 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
         monkeypatch.setattr("aiops_diagnostics.consumer.consumer_trial.DifyDslClient", Console)
         monkeypatch.setattr("aiops_diagnostics.consumer.consumer_trial.DifyChatflowClient", Workflow)
         if disabled == "delete-library":
-            from aiops_diagnostics.consumer.consumer_knowledge_selection import require_available
+            from aiops_diagnostics.consumer.consumer_knowledge import require_available
 
             libraries = [{"knowledge_base_id": "kb-own"}]
             checked = []
@@ -222,7 +222,7 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
                 return require_available(runtime, scope, replace(binding, callback_version=3))
 
             monkeypatch.setattr(
-                "aiops_diagnostics.consumer.consumer_knowledge_selection.require_available", check_selected
+                "aiops_diagnostics.consumer.consumer_knowledge.require_available", check_selected
             )
         if retract_during_trial:
             Workflow.after = lambda: env["client"].post(
