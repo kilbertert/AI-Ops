@@ -1,24 +1,24 @@
 """One definition of an asynchronous job's lifecycle (#430).
 
-Four tables implement this rule today (`health_report_jobs`,
-`async_jobs`, `assistant_questions`, `runs`) and give three and a half
-answers: five hand-written copies of the same expire statement, two polarity
-spellings of the same claim guard, two constant families with the question table
-borrowing the diagnosis one, and a startup sweep that the repository itself
-already documented as wrong (constructing a store ended in-flight work).
+Three job tables implement this rule today (`health_report_jobs`,
+`async_jobs`, `assistant_questions`) after the legacy `runs` table was
+retired in #1125. Previously they gave three and a half answers: five
+hand-written copies of the same expire statement, two polarity spellings of
+the same claim guard, two constant families with the question table borrowing
+the diagnosis one, and a startup sweep that the repository itself already
+documented as wrong (constructing a store ended in-flight work).
 
-This module is the single definition. Nothing calls it yet — it is landed first
-so the four call sites can converge on one vocabulary instead of each inventing
-its own, which is the shape this repository has repeatedly had to collapse.
+This module is the single definition so all call sites converge on one
+vocabulary instead of each inventing its own, which is the shape this
+repository has repeatedly had to collapse.
 
 Three rules the shape is built to keep:
 
-* **Named profiles, not shared constants.** The four tables genuinely differ
-  (`health_report_jobs` has no `cancelled`, `runs` speaks a different vocabulary
-  entirely). Those differences become explicit parameters rather than four
-  frozensets that never mention each other.
+* **Named profiles, not shared constants.** The job tables genuinely differ
+  (`health_report_jobs` has no `cancelled`). Those differences become explicit
+  parameters rather than separate frozensets that never mention each other.
 * **One polarity.** The claim guard is `status IN (...)`; the inverted spelling
-  that `health_report_jobs` uses today is not offered.
+  that `health_report_jobs` used is not offered.
 * **The numbers do not move.** Every value here is the one the store already
   uses; this module changes where they are written down, not what they are.
 """
@@ -65,8 +65,7 @@ class JobProfile:
     #: Finished because it failed or the user stopped it.
     interrupted: frozenset[str]
     #: Finished because it outran its deadline, or `None` for a table that has
-    #: no expiry at all. `runs` is that table: no deadline column, no sweep, no
-    #: convergence rule. Making this optional is what keeps "we did not give it
+    #: no expiry at all. Making this optional is what keeps "we did not give it
     #: one" different from "we gave it one and forgot to use it".
     expired: str | None
     deadline: timedelta

@@ -127,24 +127,9 @@ ssh yidong-36 'cd /opt/dify/deploy && ./check.sh | tail -5 && \
 在开发机上也能跑，且 CI 里的 `tests/dify/test_dify36_deploy_assets.py` 覆盖同一组断言 ——
 **两层都要有**：check.sh 是宿主上的最后一道，CI 是合并前的第一道。
 
-## 7. 跑迁移（先 dry-run）
+## 7. 历史一次性迁移说明（已完成并退役）
 
-```bash
-ssh yidong-36 'docker cp /opt/dify/deploy/migrate_20261020.py deploy-api-1:/tmp/ \
-  && docker exec -u root deploy-api-1 chmod 644 /tmp/migrate_20261020.py \
-  && docker exec -w /app/api deploy-api-1 python /tmp/migrate_20261020.py'
-```
-
-`docker cp` 的默认属主是 root、模式 600 —— 容器里的 api 以 uid 1001 跑，直接跑会
-`Permission denied`（实测踩过），所以有那条 `chmod`。
-
-**顺序是硬约束**：迁移必须在**打完补丁的容器已经起来之后**跑。反过来的话，
-库里是密文而运行中的旧代码把它当明文发出去 —— 外部检索会在下一次调用时开始 401，
-而且报错看起来像"供应商拒绝了凭据"，与本次改动毫无关联的样子。
-`§5 打补丁 → §6 起栈 → §7 迁移` 这个顺序不是建议。
-
-**判据**：报告里"孤儿绑定 6 条"、"明文 api_key 2 条"。与 `qa-plan.md` 的 BIND-02 / SEC-02
-比对后再 `--apply`。迁移脚本本身**不换密钥值**；轮换是另一件两侧同步的动作。
+> 2026-10-20 的一次性孤儿绑定清理与凭据补密脚本 `deploy/dify-36/migrate_20261020.py` 已在 36 执行完毕并随 ADR-0341 退役（见 `docs/validation.md` 的 BIND-02 / SEC-02 验收记录）。新部署的 36 补丁栈无需再执行该一次性脚本。
 
 ## 8. 重跑索引（VEC-02）
 

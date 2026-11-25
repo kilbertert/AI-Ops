@@ -12,7 +12,7 @@ from aiops_diagnostics.common.config import selected_config_file
 from aiops_diagnostics.common.endpoint_policy import (
     canonical_gateway_url,
 )
-from aiops_diagnostics.common.platform_paths import config_root, data_root
+from aiops_diagnostics.common.platform_paths import data_root
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
 from aiops_diagnostics.gateway.gateway_config_groups import (
     CONFIG_GROUP_TYPES,  # noqa: F401
@@ -66,7 +66,6 @@ class SettingSource:
 SETTING_SOURCES: dict[str, SettingSource] = {
     "bind_host": SettingSource("AIOPS_GATEWAY_BIND", file=False, default="127.0.0.1"),
     "port": SettingSource("AIOPS_GATEWAY_PORT", file=False, kind="int", default=8787),
-    "allow_fixtures": SettingSource("AIOPS_GATEWAY_ALLOW_FIXTURES", file=False, kind="bool", default=False),
     "max_workers": SettingSource("AIOPS_GATEWAY_MAX_WORKERS", file=False, kind="int", default=2),
     "introspection_url": SettingSource("AIOPS_GATEWAY_INTROSPECTION_URL", file=False),
     "introspection_client_id": SettingSource("AIOPS_GATEWAY_INTROSPECTION_CLIENT_ID", file=False),
@@ -142,7 +141,6 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     "dify_trial_debug_tenant": SettingSource("AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT"),
     "dify_console_base_url": SettingSource("AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL"),
     "dify_console_api_key": SettingSource("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY"),
-    "dify_console_workspace_id": SettingSource("AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID"),
     "dify_external_knowledge_api_id": SettingSource("AIOPS_GATEWAY_DIFY_EXTERNAL_KNOWLEDGE_API_ID"),
     "dify_publish_api_key": SettingSource("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
     "environment": SettingSource("AIOPS_GATEWAY_ENVIRONMENT"),
@@ -172,15 +170,6 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     "knowledge_hop_ttl_seconds": SettingSource(
         "AIOPS_GATEWAY_KNOWLEDGE_HOP_TTL_SECONDS", file=False, kind="float", default=60.0
     ),
-    "routing_risk_at_least": SettingSource(
-        "AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", file=False, kind="float", default=0.5
-    ),
-    "routing_confidence_at_least": SettingSource(
-        "AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", file=False, kind="float", default=0.8
-    ),
-    "routing_risk_always_asks": SettingSource(
-        "AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS", file=False, kind="bool", default=True
-    ),
     "download_center_upms_base_url": SettingSource("AIOPS_GATEWAY_DOWNLOAD_CENTER_UPMS_BASE_URL"),
     "download_center_mall_base_url": SettingSource("AIOPS_GATEWAY_DOWNLOAD_CENTER_MALL_BASE_URL"),
     "download_center_upload_export_type": SettingSource(
@@ -208,7 +197,6 @@ class GatewayServerSettings:
     bind_host: str = "127.0.0.1"
     port: int = 8787
     server_config_file: Path | None = None
-    allow_fixtures: bool = False
     max_workers: int = 2
     introspection_url: str = ""
     introspection_client_id: str = ""
@@ -295,13 +283,6 @@ class GatewayServerSettings:
     trust_company_payload: bool = True
     kb_service_base_url: str = ""
     knowledge_delegation_file: str = ""
-    #: Routing decision source (#392). Empty base URL or key leaves routing on
-    #: the previous behaviour; the dependency is optional by configuration.
-    routing_risk_at_least: float = 0.5
-    routing_confidence_at_least: float = 0.8
-    #: High risk asks for context regardless of confidence (#401). False restores
-    #: the "high risk AND unsure" form, which real traffic showed never fires.
-    routing_risk_always_asks: bool = True
     kb_service_timeout_seconds: float = 10.0
     #: 每回合向知识库请求的 chunk 数上限 —— **两条检索路径共用的同一个口径**
     #: （客户问答的 ``KnowledgeSearchGuard.max_results``，以及 Dify 适配路由
@@ -372,8 +353,6 @@ class GatewayServerSettings:
     #: 留空 ⇒ 这个动作整体不可用（不半配置：地址有值而凭据为空时是启动错误）。
     dify_console_base_url: str = ""
     dify_console_api_key: str = field(repr=False, default="")
-    #: 导出请求要带的 workspace（Dify 的 admin-key 路径从它解析租户 owner）。留空 ⇒ 不带该头。
-    dify_console_workspace_id: str = ""
     #: 该 workspace 的「外部知识库 API 模板」id（#1056）。
     #:
     #: 建一条 external dataset 时必须指名它 —— 它决定了 Dify 拿哪套端点与凭据去检索。
@@ -603,37 +582,6 @@ def parse_dify_knowledge_bindings(value: str) -> dict[str, DifyKnowledgeBinding]
             knowledge_id=knowledge_id, tenant_id=tenant_id, knowledge_base_ids=kbs
         )
     return bindings
-
-
-@dataclass(frozen=True, slots=True)
-class GatewayClientProfile:
-    name: str
-    base_url: str
-    device_id: str
-    workspace_id: str
-
-    @property
-    def file_path(self) -> Path:
-        return gateway_profile_path(self.name)
-
-
-def gateway_profile_dir() -> Path:
-    return config_root() / "gateway-profiles"
-
-
-def gateway_profile_path(profile_name: str) -> Path:
-    return gateway_profile_dir() / f"{validate_profile_name(profile_name)}.json"
-
-
-def gateway_token_file(profile_name: str) -> Path:
-    return config_root() / "gateway-tokens" / f"{validate_profile_name(profile_name)}.token"
-
-
-def validate_profile_name(profile_name: str) -> str:
-    candidate = profile_name.strip()
-    if not SAFE_PROFILE_NAME.fullmatch(candidate):
-        raise ValueError("profile name contains unsupported characters")
-    return candidate
 
 
 def parse_charging_endpoints(value: str) -> tuple[str, dict[str, str]]:

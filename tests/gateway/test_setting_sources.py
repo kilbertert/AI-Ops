@@ -52,7 +52,6 @@ _PROCESS_ENV_ONLY = frozenset(
     {
         "bind_host",
         "port",
-        "allow_fixtures",
         "max_workers",
         "introspection_url",
         "introspection_client_id",
@@ -65,9 +64,6 @@ _PROCESS_ENV_ONLY = frozenset(
         "ragflow_tenant_domain",
         "ragflow_embedding_model",
         "knowledge_hop_ttl_seconds",
-        "routing_risk_at_least",
-        "routing_confidence_at_least",
-        "routing_risk_always_asks",
         "log_level",
     }
 )
@@ -358,3 +354,73 @@ def test_invalid_dify_chat_url_fails_before_creating_missing_route_bindings_db(t
     with pytest.raises(ValueError):
         settings.validate()
     assert not routes_db.exists()
+
+
+def test_every_setting_source_has_a_runtime_consumer() -> None:
+    """每个 SETTING_SOURCES 字段必须在配置定义文件之外存在至少一处 AST 代码引用
+    （属性读取、关键字参数或字符串反射），避免注释掩盖僵尸配置（ADR-0341）。"""
+    repo_root = Path(__file__).resolve().parents[2]
+    excluded = {
+        (repo_root / "src/aiops_diagnostics/gateway/gateway_config.py").resolve(),
+        (repo_root / "src/aiops_diagnostics/gateway/gateway_config_groups.py").resolve(),
+    }
+    referenced: set[str] = set()
+    for folder in ("src", "services", "ops"):
+        base = repo_root / folder
+        if not base.exists():
+            continue
+        for path in base.rglob("*.py"):
+            if path.resolve() in excluded:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute):
+                    referenced.add(node.attr)
+                elif isinstance(node, ast.keyword) and node.arg is not None:
+                    referenced.add(node.arg)
+                elif (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and node.value in SETTING_SOURCES
+                ):
+                    referenced.add(node.value)
+
+    orphaned = [name for name in sorted(SETTING_SOURCES) if name not in referenced]
+    assert orphaned == [], f"SETTING_SOURCES 存在零生产引用的僵尸字段: {orphaned}"
+
+
+def test_admin_console_settings_keys_match_gateway_server_settings_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_console_settings_from`` 返回的每个字段必须属于 ``GatewayServerSettings``，
+    且 ``--config`` 含已退役旧键 ``AIOPS_GATEWAY_OPS_BINDINGS_FILE`` 时不得导致
+    ``dataclasses.replace`` 抛 TypeError（ADR-0341）。"""
+    import dataclasses
+
+    from aiops_diagnostics.admin.common import _console_settings_from
+
+    declared = {f.name for f in fields(GatewayServerSettings)}
+    config = tmp_path / "gateway.env"
+    write_private_text(
+        config,
+        "AIOPS_GATEWAY_ENVIRONMENT=41\n"
+        "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL=https://dify.example\n"
+        "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY=console-key\n"
+        "AIOPS_GATEWAY_DIFY_TOOL_BINDINGS=legacy:tool\n"
+        "AIOPS_GATEWAY_OPS_BINDINGS_FILE=/etc/aiops-41/legacy-ops-bindings.json\n",
+    )
+    monkeypatch.delenv("AIOPS_GATEWAY_DIFY_TOOL_BINDINGS", raising=False)
+    monkeypatch.delenv("AIOPS_GATEWAY_OPS_BINDINGS_FILE", raising=False)
+
+    parsed = _console_settings_from(config)
+    unknown = set(parsed) - declared
+    assert unknown == set(), f"_console_settings_from 包含不存在的 GatewayServerSettings 字段: {unknown}"
+
+    base = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=config,
+    )
+    merged = dataclasses.replace(base, **{k: v for k, v in parsed.items() if v})
+    assert merged.environment == "41"
+    assert merged.dify_console_base_url == "https://dify.example"
