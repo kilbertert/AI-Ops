@@ -50,8 +50,8 @@ flowchart LR
 
 ## 三、系统模块与依赖关系
 
-以下是迁移后的现有文件职责。导入检查覆盖子包、延迟导入与包级导入；全包已彻底消除导入循环，
-`test_readme_architecture.py` 核对职责入口与引用并拒绝新增任何循环；业务执行不得依赖已删除的 Python 运行器。
+以下是迁移后的现有文件职责。导入检查覆盖子包、延迟导入与包级绝对导入；原有节点装配四模块 6 边冻结循环已消除，
+`test_readme_architecture.py` 核对职责入口与引用并拒绝任何绝对导入循环（既有 `environment_*` 间相对导入环留待后续环境接入收敛阶段治理）；业务执行不得依赖已删除的 Python 运行器。
 
 网关 HTTP 路由按领域拆分在 `gateway/routers/`（共享鉴权依赖与异常处理见 `gateway/dependencies.py`，
 请求模型见 `gateway/schemas.py`，主装配入口仍为 `gateway/gateway_api.py`）；运维分析、健康报告与签名媒体

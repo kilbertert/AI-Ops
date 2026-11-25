@@ -145,7 +145,11 @@ def test_readme_toc_anchors_resolve() -> None:
 
 
 def test_package_import_graph_has_no_new_cycles() -> None:
-    """包内静态与延迟导入图必须保持无环（原有 4 模块 6 边循环已彻底消除）。"""
+    """包内绝对导入图（含函数内延迟绝对导入）必须保持无环；原有 4 模块 6 边冻结环已消除。
+
+    注：`_import_edges()` 沿用既有口径仅解析 `aiops_diagnostics.*` 绝对导入；
+    既有 `environment_*` / `self_service*` 之间的相对导入环待后续 `onboarding/` 收敛阶段治理。
+    """
     edges = _import_edges()
 
     def reachable(start):

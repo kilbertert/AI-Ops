@@ -15,7 +15,7 @@
 
 在既有目录规范与公开契约零变化的前提下，一次性落地以下六个内聚结构收敛：
 
-1. **全包零导入循环**：将 `canonical_gateway_url` 下沉至 `common/endpoint_policy.py`（`gateway_config.py` 保留兼容导入），移除 `chat_execution.py` 对 `gateway_config` 的 AST 依赖，清空 `test_readme_architecture.py` 的 6 条冻结循环边，强制全包静态与延迟导入图 0 循环；同步将 `GatewayServerSettings.validate()` 拆分为 5 个职责校验方法并清理死代码。
+1. **清零包内绝对导入循环**：将 `canonical_gateway_url` 下沉至 `common/endpoint_policy.py`（`gateway_config.py` 保留兼容导入），移除 `chat_execution.py` 对 `gateway_config` 的 AST 依赖，清空 `test_readme_architecture.py` 的 6 条冻结循环边，强制包内绝对导入图（含延迟导入）0 循环（注：`_import_edges()` 沿用既有口径未解析相对导入，`gateway/environment_*` 与 `dify/environment_*` 间既有 34 条相对导入环留待后续 `onboarding/` 收敛阶段治理）；同步将 `GatewayServerSettings.validate()` 拆分为 5 个职责校验方法并清理死代码。
 2. **网关 HTTP 路由按域拆解**：将 `gateway_api.py` 拆为 `gateway/errors.py`、`gateway/schemas.py`、`gateway/dependencies.py` 与 `gateway/routers/` 下 9 个领域模块，每模块暴露 `register(app, context, deps, api)` 直接向 `FastAPI` 注册扁平 `APIRoute`（兼容既有 OpenAPI/鉴权映射扫描与测试替身入口），同时将 `assistant_questions` 拆为 4 个线性策略函数并更新文档。
 3. **领域执行体归位**：从 `GatewayRuntime` 拆出 `operator/ops_analysis_runner.py`、`health/health_job_runner.py`、`knowledge/media_service.py`（保留薄委托与 monkeypatch 钩子）；从 `OperatorCpms` 拆出 `operator/cpms_evidence.py` 与 `operator/cpms_sites.py`；将 `consumer_chat_service.py` 中 `callback_version < 6` 历史兼容路径收口至 `consumer/legacy_callbacks.py`。
 4. **发布桥声明式重构与打包自包含守卫**：将 `self_service_bridge.handle()` 重构为声明式动作路由表与独立校验器，并在 `tests/test_console_bridge_deployment.py` 新增 AST 守卫 `test_console_bridge_bundle_imports_are_self_contained`，拦截发布桥子集包新增未打包的包内导入。

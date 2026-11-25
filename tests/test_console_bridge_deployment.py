@@ -50,8 +50,29 @@ def _iter_bundle_checked_nodes(module: str, tree: ast.Module):
         yield from ast.walk(stmt)
 
 
+def _is_package_member(qualified: str) -> bool:
+    """判断全限定模块名是否指向 src/ 下的真实模块文件或子包目录。"""
+    base = ROOT / "src" / qualified.replace(".", "/")
+    return base.with_suffix(".py").is_file() or (base / "__init__.py").is_file()
+
+
+def _resolve_import_from(module: str, is_package: bool, node: ast.ImportFrom) -> str | None:
+    """解析绝对与相对 `from ... import ...` 的目标包/模块全限定名。"""
+    if node.level > 0:
+        parts = module.split(".")
+        pkg_parts = parts if is_package else parts[:-1]
+        up = node.level - 1
+        if up > len(pkg_parts):
+            return None
+        base_parts = pkg_parts[: len(pkg_parts) - up] if up else list(pkg_parts)
+        if node.module:
+            base_parts.extend(node.module.split("."))
+        return ".".join(base_parts) if base_parts else None
+    return node.module
+
+
 def test_console_bridge_bundle_imports_are_self_contained() -> None:
-    """拦截桥模块新增未打包的包内导入（含延迟导入），避免本地全绿、线上 ModuleNotFoundError。"""
+    """拦截桥模块新增未打包的包内导入（含延迟、相对与子包导入），防线上 ModuleNotFoundError。"""
     bundled = _bundled_bridge_modules()
     assert "aiops_diagnostics.dify.dify_console_publish" in bundled
     assert "aiops_diagnostics.dify.self_service_bridge" in bundled
@@ -64,19 +85,27 @@ def test_console_bridge_bundle_imports_are_self_contained() -> None:
         else:
             candidate = ROOT / "src/aiops_diagnostics" / (rel.replace(".", "/") + ".py")
             path = candidate if candidate.is_file() else candidate.with_suffix("") / "__init__.py"
+        is_package = path.name == "__init__.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in _iter_bundle_checked_nodes(module, tree):
             targets: list[str] = []
-            if isinstance(node, ast.ImportFrom) and node.module:
-                if node.module.startswith("aiops_diagnostics"):
-                    targets.append(node.module)
+            if isinstance(node, ast.ImportFrom):
+                resolved = _resolve_import_from(module, is_package, node)
+                if resolved and (
+                    resolved == "aiops_diagnostics" or resolved.startswith("aiops_diagnostics.")
+                ):
+                    targets.append(resolved)
                     for alias in node.names:
-                        candidate_sub = f"{node.module}.{alias.name}"
-                        if (ROOT / "src" / (candidate_sub.replace(".", "/") + ".py")).is_file():
+                        if alias.name == "*":
+                            continue
+                        candidate_sub = f"{resolved}.{alias.name}"
+                        if _is_package_member(candidate_sub):
                             targets.append(candidate_sub)
             elif isinstance(node, ast.Import):
                 targets.extend(
-                    alias.name for alias in node.names if alias.name.startswith("aiops_diagnostics")
+                    alias.name
+                    for alias in node.names
+                    if alias.name == "aiops_diagnostics" or alias.name.startswith("aiops_diagnostics.")
                 )
             for target in targets:
                 if target not in bundled:
