@@ -29,9 +29,9 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.common.bounded_http import ErrorMapping, HttpFailure, RequestSpec, request_json
+from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc, parse_stored_time
 from aiops_diagnostics.gateway import gateway_db, gateway_schema
-from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 from aiops_diagnostics.identity.capability import CAPABILITY_UNASSERTED
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 

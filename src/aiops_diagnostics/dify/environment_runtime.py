@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 
+from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
 from aiops_diagnostics.common.private_files import validate_private_directory, validate_private_file
 from aiops_diagnostics.execution import execution_manifest
 from aiops_diagnostics.execution.agent_runs import AgentRunConfig
@@ -16,7 +17,6 @@ from aiops_diagnostics.gateway import environment_plans as plans
 from aiops_diagnostics.gateway import environment_registry as registry
 from aiops_diagnostics.gateway import environment_tasks as tasks
 from aiops_diagnostics.gateway import gateway_db
-from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 from aiops_diagnostics.operator import operator_agent, operator_tools
 from aiops_diagnostics.operator.ops_provider import ensure_node_provider
 

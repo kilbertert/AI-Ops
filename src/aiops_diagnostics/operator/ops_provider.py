@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
+from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
 
 PROVIDER_PATH = "/console/api/workspaces/current/tool-provider/api"
 

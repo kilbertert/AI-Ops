@@ -12,9 +12,9 @@ from aiops_diagnostics.common.bounded_http import (
     parse_code_data_envelope,
     request_json,
 )
+from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.data.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
-from aiops_diagnostics.gateway.gateway_config import canonical_gateway_url
 
 
 class ChargingStatusError(RuntimeError):

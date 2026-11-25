@@ -59,3 +59,22 @@ def require_secure_endpoint(url: str, *, what: str) -> str:
     if parsed.query or parsed.fragment:
         raise ValueError(f"{what}: must not contain query or fragment")
     return url.strip().rstrip("/")
+
+
+def canonical_gateway_url(value: str) -> str:
+    """规范化并校验 Gateway/内部服务出站 URL（复用唯一安全规则，保持既有错误文案）。"""
+    candidate = value.strip()
+    try:
+        parsed = urlsplit(candidate)
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("gateway URL is invalid") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("gateway URL must be a complete HTTP or HTTPS URL")
+    if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
+        raise ValueError("remote gateway URL must use HTTPS")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("gateway URL must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("gateway URL must not contain query or fragment")
+    return candidate.rstrip("/")
