@@ -3,7 +3,12 @@
 import time
 
 from aiops_diagnostics.gateway import environment_tasks as tasks
-from aiops_diagnostics.knowledge.kb_onboarding import derive_email
+from aiops_diagnostics.knowledge.kb_onboarding import (
+    KbAdminClient,
+    OnboardError,
+    derive_email,
+    verify_migrated_owner,
+)
 from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient, KnowledgeSearchUnavailable
 from aiops_diagnostics.knowledge.tenant_scope import knowledge_tenant
 
@@ -64,6 +69,16 @@ def run(context, path, reference, payload):
         )
         if len(rows) != 1:
             raise SetupRefused("SETUP_WORKSPACE_PENDING")
+        stored = context.store.get_ragflow_tenant(tenant, environment)
+        expected = derive_email(knowledge_tenant(tenant, environment), domain=settings.ragflow_tenant_domain)
+        if (
+            stored
+            and stored["ragflow_email"] != expected
+            and not resources.get("knowledge_base_id")
+            and not resources.get("knowledge_create", {}).get("attempted")
+        ):
+            # 旧owner的库须由受控迁移明确登记，不能以新空库替代旧业务资料。
+            raise SetupRefused("SETUP_KNOWLEDGE_SCOPE_MISMATCH")
         pending = resources.get("knowledge_create", {})
         # 已发出的建库只对账，不因取消/证据到期重新注册、修模型或发POST。
         if not pending.get("attempted"):
@@ -77,8 +92,18 @@ def run(context, path, reference, payload):
             expected = derive_email(
                 knowledge_tenant(tenant, environment), domain=settings.ragflow_tenant_domain
             )
-            if not stored or stored["ragflow_email"] != expected:
+            if not stored:
                 raise SetupRefused("SETUP_KNOWLEDGE_SCOPE_MISMATCH")
+            if stored["ragflow_email"] != expected:
+                try:
+                    verify_migrated_owner(
+                        KbAdminClient(settings.kb_service_base_url, environment=environment),
+                        tenant,
+                        stored,
+                        settings.ragflow_credential_key,
+                    )
+                except OnboardError as exc:
+                    raise SetupRefused("SETUP_KNOWLEDGE_SCOPE_MISMATCH") from exc
         known_id = resources.get("knowledge_base_id", "")
         knowledge_id = known_id or prepare.customer_knowledge_base(
             context, tenant, resources, save, environment=environment

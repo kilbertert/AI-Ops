@@ -90,3 +90,43 @@ Knowledgebase 和其 Document 行 `select().for_update()`；断言文档集合�
 
 原 H5 复验复用 `docs/agents/consumer-wf01/live-release.md` 的正常登录会话与私有隧道。
 若提示 `access token validation failed`，记录未通过；不从 Redis 扫描另一个身份替代。
+
+## 旧owner迁入环境命名空间
+
+先以已合并修订和目标当前`app.py`构建加法补丁：
+
+```bash
+python deploy/kb-service/build.py <当前基线目录> <新产物目录> --scoped-account
+```
+
+该入口使用`scoped-account-manifest.json`验证本次基线和产物，只新增受控网络内的
+`GET /kb/tenants/current`。返回精确请求命名空间的owner登录名，不返回API token，
+不调用注册、模型或密码修改；缺映射404、映射库不可读503。旧默认模型补丁的构建用法不变。
+部署仍沿上文备份、合并制品和适配层恢复路径；部署与迁移是两个独立动作。
+
+旧账号迁移只改变kb-service自有`tenants.biz_tenant_id`，保留实际RAGFlow owner、邮箱、
+密码、API token和全部知识库ID。`migrate_tenant_namespace.py`默认只读；
+`--target`须等于`knowledge_tenant(公司租户ID, 环境ID)`的规范值，不能按显示名猜账号。
+
+```bash
+python deploy/kb-service/migrate_tenant_namespace.py \
+  --database <私有tenancy.db> --source <公司租户ID> \
+  --target <规范环境命名空间> --expected-email <已核原owner>
+# 获得本次迁移授权后，增加 --backup <0700目录中尚不存在的备份.json> 才执行
+# 恢复使用相同参数、同一备份并增加 --restore
+```
+
+写入前在同一SQLite事务内比较源归属及目标缺席，独占持久备份后只重键；
+已有目标/备份拒绝覆盖。中断后先读回两侧，不盲重试。恢复要求整个迁移后映射与备份一致；
+密码对应token变化等漂移时停止，不把旧凭据恢复有效。输出只有ready/migrated/restored和changed，
+备份含凭据，须0600且不入Git。
+
+**不能单独在生产重键。** 旧运行仍发裸租户头，须在成套迁移窗口暂停受影响业务，
+配合Gateway目录/执行身份/发布快照与会话接续；重新开通只有精确命名空间和原凭据均确认才可接纳旧owner。
+不用新建owner、复制知识库、运行时别名或双读回落规避归属验证；原账户登录名保持不变。
+
+重键前还须观察公司知识控制台是否直接向共享KB发送裸租户头；若仍在使用，
+该入口也属于切换范围。不能只改AI-Ops让公司控制台失去原库，也不能擅改公司仓库。
+未取得覆盖全部现役调用方的切换方案前，迁移工件仅预演，不执行重键。
+迁移后的首次准备必须明确登记原库ID；缺该ID时拒绝，不用新空库冒充已有业务资料。
+本片尚无登记入口，已迁移旧owner的准备保持阻塞；登记入口随成套切换另行批准。

@@ -247,6 +247,28 @@ class KbAdminClient:
             )
         return payload_out
 
+    def require_account(self, tenant_id: str, email: str) -> None:
+        """显式迁移可保留原登录名，但精确环境命名空间必须已归属该账号。"""
+        if not email:
+            raise OnboardError("RAGFLOW_EMAIL_MISMATCH", "tenant account missing", step="ragflow-tenant")
+        payload = request_json(
+            RequestSpec(
+                url=join_url(self.base_url, "/kb/tenants/current"),
+                method="GET",
+                headers=self._headers(tenant_id),
+                timeout=self.timeout,
+            ),
+            mapping=self._error_mapping("account-scope"),
+        )
+        row = payload.get("data") if isinstance(payload, Mapping) else None
+        if not isinstance(row, Mapping) or (row.get("biz_tenant_id"), row.get("ragflow_email")) != (
+            knowledge_tenant(tenant_id, self.environment),
+            email,
+        ):
+            raise OnboardError(
+                "RAGFLOW_EMAIL_MISMATCH", "tenant account scope differs", step="ragflow-tenant"
+            )
+
     def register_tenant(self, *, tenant_id: str, email: str, password: str) -> None:
         self._post(
             "/kb/tenants",
@@ -368,6 +390,25 @@ def verify_embedding(*, base_url: str, api_key: str, model: str = "text-embeddin
 # ── 编排 ────────────────────────────────────────────────────────────────
 
 
+def verify_migrated_owner(kb, tenant_id, stored, credential_key):
+    """迁移后的旧owner只读核对；不复用旧验证时间或裸租户映射。"""
+    email = str(stored.get("ragflow_email") or "")
+    try:
+        kb.require_account(tenant_id, email)
+    except OnboardError as exc:
+        raise OnboardError(
+            "RAGFLOW_EMAIL_MISMATCH", "existing tenant scope unconfirmed", step="ragflow-tenant"
+        ) from exc
+    try:
+        password = decrypt_credential(str(stored.get("credential_ciphertext") or ""), credential_key)
+    except Exception as exc:
+        raise OnboardError(
+            "RAGFLOW_CREDENTIAL_UNREADABLE", "stored credential cannot be decrypted", step="ragflow-tenant"
+        ) from exc
+    kb.verify_login(tenant_id=tenant_id, password=password)
+    return email
+
+
 def onboard_tenant(
     *,
     tenant_id: str,
@@ -403,8 +444,12 @@ def onboard_tenant(
         )
 
     existing = store.get_ragflow_tenant(tenant_id, environment)
-    if getattr(kb, "environment", "") and existing and existing.get("ragflow_email") != email:
-        raise OnboardError("RAGFLOW_EMAIL_MISMATCH", "existing tenant login differs", step="ragflow-tenant")
+    migrated_owner = bool(
+        getattr(kb, "environment", "") and existing and existing.get("ragflow_email") != email
+    )
+    if migrated_owner:
+        boundary()
+        email = verify_migrated_owner(kb, tenant_id, existing, credential_key)
     already_checked = bool(existing and str(existing.get("model_checked_at") or ""))
 
     # 1) Dify workspace（空壳；内容属于别的票）
@@ -453,7 +498,8 @@ def onboard_tenant(
             tenant_id, environment, ragflow_email=email, credential_ciphertext=ciphertext, model_checked=False
         )
     boundary()
-    kb.register_tenant(tenant_id=tenant_id, email=email, password=password)
+    if not migrated_owner:
+        kb.register_tenant(tenant_id=tenant_id, email=email, password=password)
     kb.verify_login(tenant_id=tenant_id, password=password)
     say(f"ragflow tenant: registration confirmed {email}")
 
