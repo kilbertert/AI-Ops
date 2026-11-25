@@ -554,3 +554,50 @@ def test_upms_operator_scope_uses_ds_and_shop_mapping(tmp_path, monkeypatch):
     # /user/ds 断言的两个来源都不能丢：siteIds 原样 + shopIds 经归属映射换算。
     assert query_scope.site_ids == ("SITE-DS-1", "SITE-SHOP-1")
     assert query_scope.user_id is None and query_scope.tenant_id == "same-tenant"
+
+
+def test_require_enabled_and_is_manager_enforce_scope_schema_and_drift(tmp_path):
+    """ADR-0332：平台准入只看本环境启用，目录管理员仅认 schema2 本环境显式主体且漂移必拒。"""
+    path = tmp_path / "registry" / "directory.json"
+    v1_rows = rows(tmp_path)
+    apply(path, v1_rows, expected_revision=0, actor="operator")
+    reg_v1 = EnvironmentRegistry(path, "env-a")
+    assert reg_v1.require_enabled()["id"] == "env-a"
+    assert reg_v1.enabled_tenant_ids() == frozenset({"same-tenant"})
+    assert reg_v1.is_manager("-1", "admin") is False
+
+    managed_path = tmp_path / "registry" / "managed.json"
+    managed_rows = [
+        {**r, "name": r["id"], "company_gateway_url": "https://company.example.test"}
+        for r in copy.deepcopy(v1_rows)
+    ]
+    for r in managed_rows:
+        for t in r["tenants"]:
+            t["name"] = t["id"]
+    managed_rows[0]["enabled"] = False
+    managers = [
+        {"environment": "env-a", "tenant_id": "-1", "user_id": "admin-a", "environments": ["*"]},
+        {"environment": "env-b", "tenant_id": "-1", "user_id": "admin-b", "environments": ["*"]},
+    ]
+    apply(managed_path, managed_rows, expected_revision=0, actor="operator", managers=managers)
+    reg = EnvironmentRegistry(managed_path, "env-a")
+    with pytest.raises(RegistryError, match="TENANT_ENVIRONMENT_NOT_ENABLED"):
+        reg.require_enabled()
+    assert reg.is_manager("-1", "admin-a") is True
+    # 他环境的目录管理员不得跨环境生效。
+    assert reg.is_manager("-1", "admin-b") is False
+    assert reg.is_manager("", "admin-a") is False
+    assert reg.is_manager("-1", "") is False
+
+    # 撤回目录管理员即刻生效；任一连接配置（含 company_gateway_url）漂移时即使仍在 managers 也必须失败关闭。
+    apply(managed_path, managed_rows, expected_revision=1, actor="operator", managers=[managers[1]])
+    assert reg.is_manager("-1", "admin-a") is False
+    drifted_company = copy.deepcopy(managed_rows)
+    drifted_company[0]["company_gateway_url"] = "https://changed-company.example.test"
+    apply(managed_path, drifted_company, expected_revision=2, actor="operator", managers=managers)
+    with pytest.raises(RegistryError, match="CONFIGURATION_CHANGED"):
+        reg.is_manager("-1", "admin-a")
+    managed_rows[0]["cpms_base_url"] = "https://changed.example.test/cpms"
+    apply(managed_path, managed_rows, expected_revision=3, actor="operator", managers=managers)
+    with pytest.raises(RegistryError, match="CONFIGURATION_CHANGED"):
+        reg.is_manager("-1", "admin-a")

@@ -67,6 +67,8 @@ class _FakeCompany(BaseHTTPRequestHandler):
 
     calls: list[str] = []
     permissions: list[str] = [EDIT_PERMISSION]
+    tenant_id: str = "T-1"
+    user_type: str | None = None
     fail_login: str = ""  # "" | "password"
     #: "" | "empty" | "stale" | "wrong" —— 验证码过滤器的三种拒绝，真网关都回 428。
     captcha_fail: str = ""
@@ -100,12 +102,15 @@ class _FakeCompany(BaseHTTPRequestHandler):
         if self.path.startswith("/upms/user/info"):
             type(self).seen_client_type = self.headers.get("client-type", "")
             type(self).seen_token_header = self.headers.get("Authorization", "")
+            sys_user: dict[str, Any] = {"id": COMPANY_USER_ID, "username": "zhang"}
+            if type(self).user_type is not None:
+                sys_user["type"] = type(self).user_type
             body = json.dumps(
                 {
                     "code": 0,
                     "msg": "ok",
                     "data": {
-                        "sysUser": {"id": COMPANY_USER_ID, "username": "zhang"},
+                        "sysUser": sys_user,
                         "permissions": type(self).permissions,
                     },
                 }
@@ -165,7 +170,8 @@ class _FakeCompany(BaseHTTPRequestHandler):
             else:
                 # 成功：扁平 map（不是 {code,data}）
                 token = sign_console_jwt(
-                    {"id": COMPANY_USER_ID, "username": "zhang", "tenant_id": "T-1"}, "company-key"
+                    {"id": COMPANY_USER_ID, "username": "zhang", "tenant_id": type(self).tenant_id},
+                    "company-key",
                 )
                 payload = {
                     "access_token": token,
@@ -173,7 +179,7 @@ class _FakeCompany(BaseHTTPRequestHandler):
                     "expires_in": 960 * 60 * 1000,
                     "id": COMPANY_USER_ID,
                     "username": "zhang",
-                    "tenant_id": "T-1",
+                    "tenant_id": type(self).tenant_id,
                 }
             body = json.dumps(payload).encode()
             self.send_response(200)
@@ -1800,3 +1806,183 @@ def test_logged_out_multi_session_cannot_use_legacy_trial_fallback(environments)
     status, _, _ = _call(s["bridge_url"], "/__aiops/trial", {"order_no": "HACK-LOCAL-001"}, headers=headers)
     assert status == 401
     assert all(not gateway.calls for gateway in s["gateways"].values())
+
+
+def test_platform_admin_registry_admission_and_spoof_refusal(tmp_path):
+    """ADR-0332：单环境登录代理下平台账号按环境启用准入，伪造哨兵/业务租户拒绝，目录管理员停用仍可登录。"""
+    company_cls = type(
+        "PlatformCompany",
+        (_FakeCompany,),
+        {
+            "calls": [],
+            "permissions": [EDIT_PERMISSION, PUBLISH_PERMISSION],
+            "tenant_id": "-1",
+            "user_type": "-1",
+            "fail_login": "",
+            "captcha_fail": "",
+            "gateway_reject": "",
+        },
+    )
+    dify_cls = type("PlatformDify", (_FakeDify,), {"calls": [], "invite_returns_url": True})
+    company_srv = ThreadingHTTPServer(("127.0.0.1", 0), company_cls)
+    dify_srv = ThreadingHTTPServer(("127.0.0.1", 0), dify_cls)
+    for srv in (company_srv, dify_srv):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    company_url = f"http://127.0.0.1:{company_srv.server_port}"
+    dify_url = f"http://127.0.0.1:{dify_srv.server_port}"
+    registry = tmp_path / "registry" / "directory.json"
+    rows = [
+        {
+            "id": ENVIRONMENT,
+            "name": "41",
+            "enabled": True,
+            "gateway_url": "http://127.0.0.1:1",
+            "cpms_base_url": "https://cpms.example.test",
+            "company_gateway_url": "https://company.example.test",
+            "config_ref": str(tmp_path / "env-test.env"),
+            "tenants": [{"id": "T-1", "name": "业务租户", "enabled": False}],
+        }
+    ]
+    apply(registry, rows, expected_revision=0, actor="fixture", managers=[])
+    login_srv = None
+    try:
+        settings = LoginProxySettings(
+            listen_host="127.0.0.1",
+            listen_port=0,
+            public_origin="https://console.example",
+            data_dir=str(tmp_path / "data"),
+            company=CompanyAuthSettings(base_url=company_url, encode_key=AES_KEY),
+            dify=DifyConsoleSettings(base_url=dify_url, secret_key=SECRET_KEY, environment=ENVIRONMENT),
+            owner_user_id=OWNER_ACCOUNT_ID,
+            edit_permission=EDIT_PERMISSION,
+            publish_permission=PUBLISH_PERMISSION,
+            gateway_url="http://127.0.0.1:1",
+            gateway_internal_token="g" * 32,
+            inner_api_base_url=dify_url,
+            inner_api_key="i" * 32,
+            operator_trial_key="k" * 32,
+            environment_registry_file=str(registry),
+            backoff_threshold=50,
+        )
+        # 无独立 Gateway 监听，去掉 workspace_directory 以聚焦准入门；同时验证构造期 gateway_url 对齐。
+        login_srv = make_server(settings)
+        login_srv.RequestHandlerClass.service.workspace_directory = None
+        threading.Thread(target=login_srv.serve_forever, daemon=True).start()
+        login_url = f"http://127.0.0.1:{login_srv.server_port}"
+
+        # 1) 真实平台管理员（type=-1 且 tenant_id=-1）在启用环境可登录、publish-check 放行。
+        status, body, headers = _login(login_url)
+        assert status == 200, body
+        session = SimpleCookie(headers["set-cookie-all"])["__Host-access_token"].value
+        verdict = _check_publish(login_url, session)
+        assert verdict["allowed"] is True and verdict["business_admitted"] is True
+        assert verdict["company_tenant_id"] == "-1" and verdict["company_user_type"] == "-1"
+
+        # 2) 非平台类型伪造 tenant_id=-1 必须被拒。
+        company_cls.user_type = "1"
+        assert _login(login_url)[0] == 403
+
+        # 3) 平台类型配停用业务租户必须被拒（不得按 platform 豁免业务租户）。
+        company_cls.tenant_id = "T-1"
+        company_cls.user_type = "-1"
+        assert _login(login_url)[0] == 403
+
+        # 4) 环境停用且非目录管理员：平台管理员被拒，且原会话立即失效。
+        company_cls.tenant_id = "-1"
+        rows[0]["enabled"] = False
+        apply(registry, rows, expected_revision=1, actor="fixture", managers=[])
+        assert _login(login_url)[0] == 403
+        assert _check_publish(login_url, session)["allowed"] is False
+
+        # 5) 显式登记为目录管理员后：停用环境仍拒绝新登录（不签发新 Dify 编辑会话），
+        #    但停用前已持有的原活动会话可继续换取令牌供目录恢复，且 publish/business_admitted 为假。
+        apply(
+            registry,
+            rows,
+            expected_revision=2,
+            actor="fixture",
+            managers=[
+                {
+                    "environment": ENVIRONMENT,
+                    "tenant_id": "-1",
+                    "user_id": COMPANY_USER_ID,
+                    "environments": ["*"],
+                }
+            ],
+        )
+        assert _login(login_url)[0] == 403
+        verdict = _check_publish(login_url, session)
+        assert verdict["company_user_id"] == COMPANY_USER_ID
+        assert verdict["allowed"] is False
+        assert verdict["reason"] == "TENANT_ENVIRONMENT_NOT_ENABLED"
+        assert verdict["business_admitted"] is False
+        assert (
+            _call(
+                login_url,
+                "/__aiops/internal/operator-token",
+                {"session": session},
+                headers={"Authorization": "Bearer " + "k" * 32},
+            )[0]
+            == 200
+        )
+    finally:
+        for srv in (login_srv, dify_srv, company_srv):
+            if srv is not None:
+                srv.shutdown()
+                srv.server_close()
+
+
+def test_directory_manager_survives_disabled_env_without_business_access(environments):
+    """ADR-0332：多环境桥下目录管理员在停用环境后仍可调用目录管理，但发布/试运行/知识入口全部拒绝。"""
+    s = environments
+    s["companies"]["env-a"].tenant_id = "-1"
+    s["companies"]["env-a"].user_type = "-1"
+    s["companies"]["env-a"].permissions = [EDIT_PERMISSION, PUBLISH_PERMISSION]
+    managers = [
+        {"environment": "env-a", "tenant_id": "-1", "user_id": COMPANY_USER_ID, "environments": ["env-a"]}
+    ]
+    apply(s["registry"], s["rows"], expected_revision=1, actor="fixture", managers=managers)
+    headers, token = login(s, "env-a", "mgrnonce1")
+    for g in s["gateways"].values():
+        g.calls.clear()
+
+    # 停用 env-a：目录管理员活动会话仍可通过 /__aiops/manage 恢复目录，但业务桥路由一律 403。
+    s["rows"][0]["enabled"] = False
+    apply(s["registry"], s["rows"], expected_revision=2, actor="fixture", managers=managers)
+    verdict = _call(s["login_url"], PUBLISH_CHECK_ROUTE, {"session": token})[1]
+    assert verdict["company_user_id"] == COMPANY_USER_ID
+    assert verdict["allowed"] is False and verdict["business_admitted"] is False
+    status, body, _ = _call(s["bridge_url"], "/__aiops/manage", {"action": "environments"}, headers=headers)
+    assert status == 200 and body["environment"] == "env-a"
+    assert len(s["gateways"]["env-a"].calls) == 1
+
+    app_headers = {
+        **headers,
+        "Referer": "https://console.example/app/12345678-1234-1234-1234-123456789012/workflow",
+    }
+    assert _call(s["bridge_url"], "/__aiops/trial", {"order_no": "ORD-1"}, headers=app_headers)[0] == 403
+    assert _call(s["bridge_url"], "/__aiops/publish", {}, headers=app_headers)[0] == 403
+    assert (
+        _call(
+            s["bridge_url"],
+            "/__aiops/knowledge-sync?workspace=12345678-1234-1234-1234-123456789012",
+            headers=headers,
+        )[0]
+        == 403
+    )
+    conn = http.client.HTTPConnection(s["bridge_url"].removeprefix("http://"))
+    conn.request(
+        "GET",
+        "/__aiops/knowledge-open?workspace=12345678-1234-1234-1234-123456789012",
+        headers={"Cookie": headers["Cookie"]},
+    )
+    assert conn.getresponse().status == 403
+    conn.close()
+    assert len(s["gateways"]["env-a"].calls) == 1
+
+    # 移除目录管理员或 company_gateway_url 漂移均立即拒绝（401）。
+    apply(s["registry"], s["rows"], expected_revision=3, actor="fixture", managers=[])
+    assert _call(s["bridge_url"], "/__aiops/manage", {"action": "environments"}, headers=headers)[0] == 401
+    s["rows"][0]["company_gateway_url"] = "https://drifted.example.test"
+    apply(s["registry"], s["rows"], expected_revision=4, actor="fixture", managers=managers)
+    assert _call(s["bridge_url"], "/__aiops/manage", {"action": "environments"}, headers=headers)[0] == 401

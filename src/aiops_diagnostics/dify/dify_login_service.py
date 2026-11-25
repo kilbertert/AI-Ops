@@ -413,12 +413,24 @@ class LoginService:
             return float(self._operator_token_override)
         return float(self.dify.access_expire_minutes * 60)
 
-    def require_registered_tenant(self, tenant_id: str) -> None:
+    def require_registered_tenant(
+        self,
+        tenant_id: str,
+        *,
+        user_type: str = "",
+        user_id: str = "",
+        allow_manager: bool = True,
+    ) -> None:
         if self.environment_registry is None:
             return
         from aiops_diagnostics.gateway.environment_registry import RegistryError
 
         try:
+            if allow_manager and user_id and self.environment_registry.is_manager(tenant_id, user_id):
+                return
+            if user_type == PLATFORM_USER_TYPE and tenant_id == PLATFORM_USER_TYPE:
+                self.environment_registry.require_enabled()
+                return
             self.environment_registry.require(tenant_id)
         except RegistryError as exc:
             raise PermissionDenied("TENANT_ENVIRONMENT_NOT_ENABLED", "当前环境未开通此租户或已停用") from exc
@@ -472,9 +484,18 @@ class LoginService:
             # 公司登录**失败**（密码错、账号停用/不存在）**绝不改变映射状态** —— 失败可能
             # 只是密码打错，据此封禁会把一次手误变成一次锁定（#779 的明确要求）。
             raise
-        self.require_registered_tenant(identity.tenant_id)
+        user_type: str | None = None
+        if self.environment_registry is not None and identity.tenant_id == PLATFORM_USER_TYPE:
+            user_type = read_user_type(self.company, identity)
+        self.require_registered_tenant(
+            identity.tenant_id,
+            user_type=user_type or "",
+            user_id=identity.user_id,
+            allow_manager=False,
+        )
         permissions = read_permissions(self.company, identity)
-        user_type = read_user_type(self.company, identity)
+        if user_type is None:
+            user_type = read_user_type(self.company, identity)
 
         existing = self.store.get(identity.user_id)
 
@@ -700,7 +721,11 @@ class LoginService:
             raise PermissionDenied("NO_MAPPING", "请重新登录")
         if row.get("status") != STATUS_ACTIVE:
             raise PermissionDenied("MAPPING_DISABLED", "请重新登录")
-        self.require_registered_tenant(row["tenant_id"])
+        self.require_registered_tenant(
+            row["tenant_id"],
+            user_type=str(row.get("user_type") or ""),
+            user_id=str(row.get("company_user_id") or ""),
+        )
         key = hashlib.sha256(session.encode()).hexdigest()
         with self._operator_token_lock:
             now = time.time()
