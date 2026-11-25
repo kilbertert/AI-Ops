@@ -357,15 +357,14 @@ def test_invalid_dify_chat_url_fails_before_creating_missing_route_bindings_db(t
 
 
 def test_every_setting_source_has_a_runtime_consumer() -> None:
-    """每个 SETTING_SOURCES 字段必须在配置定义文件之外存在至少一处生产引用，防僵尸配置回潮（ADR-0341）。"""
-    import re
-
+    """每个 SETTING_SOURCES 字段必须在配置定义文件之外存在至少一处 AST 代码引用
+    （属性读取、关键字参数或字符串反射），避免注释掩盖僵尸配置（ADR-0341）。"""
     repo_root = Path(__file__).resolve().parents[2]
     excluded = {
         (repo_root / "src/aiops_diagnostics/gateway/gateway_config.py").resolve(),
         (repo_root / "src/aiops_diagnostics/gateway/gateway_config_groups.py").resolve(),
     }
-    corpus_parts: list[str] = []
+    referenced: set[str] = set()
     for folder in ("src", "services", "ops"):
         base = repo_root / folder
         if not base.exists():
@@ -373,10 +372,20 @@ def test_every_setting_source_has_a_runtime_consumer() -> None:
         for path in base.rglob("*.py"):
             if path.resolve() in excluded:
                 continue
-            corpus_parts.append(path.read_text(encoding="utf-8"))
-    corpus = "\n".join(corpus_parts)
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute):
+                    referenced.add(node.attr)
+                elif isinstance(node, ast.keyword) and node.arg is not None:
+                    referenced.add(node.arg)
+                elif (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and node.value in SETTING_SOURCES
+                ):
+                    referenced.add(node.value)
 
-    orphaned = [name for name in sorted(SETTING_SOURCES) if not re.search(rf"\b{re.escape(name)}\b", corpus)]
+    orphaned = [name for name in sorted(SETTING_SOURCES) if name not in referenced]
     assert orphaned == [], f"SETTING_SOURCES 存在零生产引用的僵尸字段: {orphaned}"
 
 

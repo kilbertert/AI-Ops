@@ -39,8 +39,8 @@
   `GatewayRuntime.from_settings` 按 `server_config_file` 加载——`create_gateway_app`
   的 `runtime` 参数接收的是运行时对象而非 `Settings`，两者不要互替。
 - 环境注入的运行模式（不产生 `--help` 可见开关）：`M2LIVE_ISOLATION_ROOT` 等
-  `M2LIVE_*`（`gateway/isolation_guard.py`）、`AIOPS_GATEWAY_ALLOW_FIXTURES`、
-  `AIOPS_GATEWAY_DIFY_DEBUG_*`（`dify/dify_debug_identity.py`）。
+  `M2LIVE_*`（`gateway/isolation_guard.py`）、`AIOPS_GATEWAY_DIFY_DEBUG_*`
+  （`dify/dify_debug_identity.py`）。
 
 本表按 2026-11-23 源码快照整理；再生成：`grep -rn 'class \w*Settings' src/` 与
 `grep -oh '"AIOPS_[A-Z_]*"' src/aiops_diagnostics/<file>`。

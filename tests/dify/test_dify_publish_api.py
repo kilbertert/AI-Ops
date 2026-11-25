@@ -633,7 +633,6 @@ def test_publish_exports_from_the_bound_tenants_workspace(tmp_path, monkeypatch)
         tmp_path,
         runtime,
         dify_publish_api_key=PUBLISH_KEY,
-        dify_console_workspace_id="ws-CONSTANT",
         environment="41",
     )
     _seed_workspace(tmp_path / "gateway.db", "T-884", "ws-tenant-884")
@@ -654,7 +653,6 @@ def test_publish_refuses_when_the_binding_tenant_has_no_workspace(tmp_path, monk
         tmp_path,
         runtime,
         dify_publish_api_key=PUBLISH_KEY,
-        dify_console_workspace_id="ws-CONSTANT",
         environment="41",
     )
 
@@ -674,7 +672,6 @@ def test_publish_refuses_a_workspace_that_is_still_being_created(tmp_path, monke
         tmp_path,
         runtime,
         dify_publish_api_key=PUBLISH_KEY,
-        dify_console_workspace_id="ws-CONSTANT",
         environment="41",
     )
     _seed_workspace(tmp_path / "gateway.db", "T-884", "", state="creating")

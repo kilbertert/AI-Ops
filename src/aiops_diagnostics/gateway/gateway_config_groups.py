@@ -129,7 +129,6 @@ class DifyIntegrationConfig:
     dify_chat_base_url: str = ""
     dify_console_base_url: str = ""
     dify_console_api_key: str = field(repr=False, default="")
-    dify_console_workspace_id: str = ""
     dify_external_knowledge_api_id: str = ""
     dify_publish_api_key: str = field(repr=False, default="")
     dify_knowledge_api_key: str = field(repr=False, default="")

@@ -56,7 +56,6 @@ def _console_settings_from(path: Path) -> dict[str, str]:
     keys = (
         "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL",
         "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY",
-        "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID",
         "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS",
         # 部署身份（#886）**也在这里**：workspace 按 (租户, 环境) 解析，而 41 上的
         # `--config` 就是 `/etc/aiops-41/production.env`。只从进程 env 读它会让

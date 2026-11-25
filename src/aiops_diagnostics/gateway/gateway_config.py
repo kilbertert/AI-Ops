@@ -141,7 +141,6 @@ SETTING_SOURCES: dict[str, SettingSource] = {
     "dify_trial_debug_tenant": SettingSource("AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT"),
     "dify_console_base_url": SettingSource("AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL"),
     "dify_console_api_key": SettingSource("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY"),
-    "dify_console_workspace_id": SettingSource("AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID"),
     "dify_external_knowledge_api_id": SettingSource("AIOPS_GATEWAY_DIFY_EXTERNAL_KNOWLEDGE_API_ID"),
     "dify_publish_api_key": SettingSource("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
     "environment": SettingSource("AIOPS_GATEWAY_ENVIRONMENT"),
@@ -354,8 +353,6 @@ class GatewayServerSettings:
     #: 留空 ⇒ 这个动作整体不可用（不半配置：地址有值而凭据为空时是启动错误）。
     dify_console_base_url: str = ""
     dify_console_api_key: str = field(repr=False, default="")
-    #: 导出请求要带的 workspace（Dify 的 admin-key 路径从它解析租户 owner）。留空 ⇒ 不带该头。
-    dify_console_workspace_id: str = ""
     #: 该 workspace 的「外部知识库 API 模板」id（#1056）。
     #:
     #: 建一条 external dataset 时必须指名它 —— 它决定了 Dify 拿哪套端点与凭据去检索。
