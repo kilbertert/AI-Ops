@@ -1,264 +1,43 @@
 """固定管理动作的同源桥；只转发服务端验证过的浏览器会话。"""
 
+from __future__ import annotations
+
 import re
 
 from aiops_diagnostics.identity.order_identity import is_order_identifier
 
+_SCOPES = frozenset({"both", "consumer", "operator"})
+_ENTRIES = frozenset({"consumer", "operator"})
+_CAPABILITIES = frozenset({"consumer", "order", "offline"})
+_ALLOWED_ROLES = frozenset({"owner", "admin", "editor"})
 
-def handle(handler, bridge):
-    # 支持 python -m 入口，拒绝异常必须属于运行中的同一个模块。
-    CONSOLE_CSRF_HEADER = bridge.CONSOLE_CSRF_HEADER
-    _origin_and_path = bridge._origin_and_path
-    _Rejected = bridge._Rejected
-    _request = bridge._request
-    console_session_from_headers = bridge.console_session_from_headers
-    normalize_origin = bridge.normalize_origin
-    tenant_reference = r"[A-Za-z0-9_-]{1,64}"
+_APP_ID = re.compile(r"[a-f0-9-]{36}")
+_TASK_ID = re.compile(r"task_[0-9a-f]{32}")
+_PLAN_ID = re.compile(r"plan_[0-9a-f]{32}")
+_TRIAL_ID = re.compile(r"tr_[a-f0-9]{32}")
+_ENV_ID = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?")
+_ENV_PLAN_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]|[a-z0-9]")
+_TENANT_REF = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_RUN_ID = re.compile(r"run_[A-Za-z0-9_-]{43}")
+_KB_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 
-    origin = normalize_origin(handler._single_header("Origin"))
-    referer = handler._single_header("Referer") or ""
-    if (
-        origin != handler.settings.console_origin
-        or (_origin_and_path(referer) or (None, None))[0] != handler.settings.console_origin
-    ):
-        raise _Rejected(403, "请从Dify控制台操作")
-    if handler._single_header("Sec-Fetch-Site") not in (None, "same-origin"):
-        raise _Rejected(403, "请从Dify控制台操作")
-    session = console_session_from_headers(
-        handler._single_header("Cookie"), handler._single_header(CONSOLE_CSRF_HEADER)
-    )
-    if session is None:
-        raise _Rejected(401, "请重新登录Dify")
-    content_type = handler._single_header("Content-Type") or ""
-    if content_type.split(";", 1)[0].lower() != "application/json":
-        raise _Rejected(415, "请求必须是application/json")
-    http_status, summary = _request(
-        handler.settings.dify_base_url + "/console/api/workspaces/current/summary",
-        headers=session.dify_headers(),
-        timeout=15,
-    )
-    if (
-        http_status != 200
-        or not isinstance(summary, dict)
-        or summary.get("role") not in {"owner", "admin", "editor"}
-    ):
-        raise _Rejected(403, "当前账号没有智能体管理权限")
-    payload = handler._read_bounded_json(
-        65536,
-        frozenset(
-            {
-                "action",
-                "environment",
-                "enabled",
-                "app_id",
-                "source_app_id",
-                "source_version",
-                "tenant_id",
-                "name",
-                "request_key",
-                "id",
-                "revision",
-                "registry_revision",
-                "plan_id",
-                "candidate_plan",
-                "candidate_task",
-                "initial_installation",
-                "verify_task",
-                "installation",
-                "installation_task",
-                "registration_plan",
-                "registration_task",
-                "validation_plan",
-                "validation_task",
-                "publication_plan",
-                "confirm_readonly",
-                "confirm_customer_knowledge",
-                "acceptance_ref",
-                "restore_publication",
-                "capabilities",
-                "case_ref",
-                "site_task",
-                "workspace_task",
-                "knowledge_task",
-                "connection_task",
-                "consumer_sources",
-                "cancel",
-                "draft",
-                "version_no",
-                "workspace_id",
-                # 双端开通：范围与每端来源。桥是**固定动作契约**，所以这两个字段不是
-                # "放行任意结构"，而是在下面逐字段校验形状 —— 桥放行、后端再校验，
-                # 等于让一个手写请求绕过第一道门。
-                "scope",
-                "sources",
-                "question",
-                "order_no",
-                "trial_id",
-                "knowledge_base_id",
-                "allowed",
-                "page",
-                "limit",
-                "run_id",
-            }
-        ),
-    )
-    action = payload.pop("action", "")
-    paths = {
-        "catalogue": ("GET", "/catalogue"),
-        "environments": ("GET", "/environments"),
-        "environment-update": ("POST", "/environments"),
-        "environment-drafts": ("GET", "/environment-drafts"),
-        "environment-plan": ("POST", "/environment-plans"),
-        "environment-task": ("POST", "/environment-tasks"),
-        "environment-draft-save": ("POST", "/environment-drafts"),
-        "status": ("POST", "/status"),
-        "readiness": ("POST", "/readiness"),
-        "create": ("POST", "/operations"),
-        "publish": ("POST", "/publish"),
-        "versions": ("POST", "/versions"),
-        "version": ("POST", "/version"),
-        "workspace": ("POST", "/workspace"),
-        "trial": ("POST", "/trial"),
-        "trial-result": ("POST", "/trial/result"),
-        "trial-cancel": ("POST", "/trial/cancel"),
-        "knowledge": ("POST", "/knowledge"),
-        "knowledge-access": ("POST", "/knowledge/access"),
-        "run-logs": ("POST", "/run-logs"),
-        "run-log": ("POST", "/run-logs/detail"),
+_DRAFT_FIELDS = frozenset(
+    {
+        "id",
+        "name",
+        "enabled",
+        "gateway_url",
+        "cpms_base_url",
+        "company_gateway_url",
+        "deployment_target",
+        "credential_ref",
+        "timezone",
+        "tenants",
     }
-    if action in {"operation", "retry"}:
-        job = payload.pop("id", "")
-        if not re.fullmatch(r"[a-f0-9-]{36}", job):
-            raise _Rejected(400, "无效操作")
-        method, path = (
-            ("GET", "/operations/" + job)
-            if action == "operation"
-            else ("POST", "/operations/" + job + "/retry")
-        )
-    elif action in paths:
-        method, path = paths[action]
-    else:
-        raise _Rejected(400, "无效管理动作")
-    if (method == "GET" or action == "retry") and payload:
-        raise _Rejected(400, "无效参数")
-    if action == "environment-task":
-        if set(payload) == {"restore_publication"}:
-            valid = isinstance(payload["restore_publication"], str) and re.fullmatch(
-                r"task_[0-9a-f]{32}", payload["restore_publication"]
-            )
-        elif set(payload) == {
-            "validation_task",
-            "publication_plan",
-            "confirm_readonly",
-            "confirm_customer_knowledge",
-            "acceptance_ref",
-        }:
-            valid = (
-                isinstance(payload["validation_task"], str)
-                and re.fullmatch(r"task_[0-9a-f]{32}", payload["validation_task"])
-                and isinstance(payload["publication_plan"], str)
-                and re.fullmatch(r"plan_[0-9a-f]{32}", payload["publication_plan"])
-                and payload["confirm_readonly"] is True
-                and payload["confirm_customer_knowledge"] is True
-                and payload["acceptance_ref"] == "readonly-diagnosis"
-            )
-        elif set(payload) == {"registration_task", "validation_plan", "capabilities", "case_ref"}:
-            valid = (
-                isinstance(payload["registration_task"], str)
-                and re.fullmatch(r"task_[0-9a-f]{32}", payload["registration_task"])
-                and isinstance(payload["validation_plan"], str)
-                and re.fullmatch(r"plan_[0-9a-f]{32}", payload["validation_plan"])
-                and isinstance(payload["case_ref"], str)
-                and re.fullmatch(tenant_reference, payload["case_ref"])
-                and isinstance(payload["capabilities"], list)
-                and 1 <= len(payload["capabilities"]) <= 3
-                and all(
-                    isinstance(c, str) and c in {"consumer", "order", "offline"}
-                    for c in payload["capabilities"]
-                )
-                and len(set(payload["capabilities"])) == len(payload["capabilities"])
-            )
-        elif set(payload) == {"installation_task", "registration_plan"}:
-            valid = (
-                isinstance(payload["installation_task"], str)
-                and re.fullmatch(r"task_[0-9a-f]{32}", payload["installation_task"])
-                and isinstance(payload["registration_plan"], str)
-                and re.fullmatch(r"plan_[0-9a-f]{32}", payload["registration_plan"])
-            )
-        elif set(payload) == {"candidate_task", "installation"}:
-            valid = (
-                payload["installation"] is True
-                and isinstance(payload["candidate_task"], str)
-                and re.fullmatch(r"task_[0-9a-f]{32}", payload["candidate_task"])
-            )
-        elif set(payload) in (
-            {"candidate_plan", "tenant_id", "source_app_id", "source_version"},
-            {"candidate_plan", "tenant_id", "source_app_id", "source_version", "initial_installation"},
-        ):
-            # 「包含初装」桥与后端同判据：只允许显式true，缺省按不带该键处理。
-            valid = (
-                isinstance(payload["candidate_plan"], str)
-                and re.fullmatch(r"plan_[0-9a-f]{32}", payload["candidate_plan"])
-                and isinstance(payload["tenant_id"], str)
-                and re.fullmatch(tenant_reference, payload["tenant_id"])
-                and isinstance(payload["source_app_id"], str)
-                and re.fullmatch(r"[a-f0-9-]{36}", payload["source_app_id"])
-                and type(payload["source_version"]) is int
-                and payload["source_version"] >= 1
-                and payload.get("initial_installation", True) is True
-            )
-        elif set(payload) == {"consumer_sources"}:
-            valid = payload["consumer_sources"] is True
-        elif set(payload) == {"verify_task", "plan_id"}:
-            valid = (
-                isinstance(payload["verify_task"], str)
-                and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", payload["verify_task"])
-                and isinstance(payload["plan_id"], str)
-                and re.fullmatch(r"plan_[0-9a-f]{32}", payload["plan_id"])
-            )
-        elif set(payload) == {"plan_id"}:
-            valid = isinstance(payload["plan_id"], str) and re.fullmatch(
-                r"plan_[0-9a-f]{32}", payload["plan_id"]
-            )
-        elif set(payload) in (
-            {"site_task", "tenant_id"},
-            {"workspace_task", "tenant_id"},
-            {"knowledge_task", "tenant_id"},
-            {"connection_task", "tenant_id"},
-            {"connection_task", "tenant_id", "source_app_id", "source_version"},
-        ):
-            parent = next(
-                payload[k]
-                for k in ("site_task", "workspace_task", "knowledge_task", "connection_task")
-                if k in payload
-            )
-            valid = (
-                isinstance(parent, str)
-                and re.fullmatch(r"task_[0-9a-f]{32}", parent)
-                and isinstance(payload["tenant_id"], str)
-                and re.fullmatch(tenant_reference, payload["tenant_id"])
-                and (
-                    "source_app_id" not in payload
-                    or isinstance(payload["source_app_id"], str)
-                    and re.fullmatch(r"[a-f0-9-]{36}", payload["source_app_id"])
-                    and type(payload.get("source_version")) is int
-                    and payload["source_version"] >= 1
-                )
-            )
-        elif set(payload) == {"environment"}:
-            valid = isinstance(payload["environment"], str) and re.fullmatch(
-                r"[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?", payload["environment"]
-            )
-        else:
-            valid = (
-                set(payload) in ({"id"}, {"id", "cancel"})
-                and isinstance(payload.get("id"), str)
-                and re.fullmatch(r"task_[0-9a-f]{32}", payload["id"])
-                and payload.get("cancel", True) is True
-            )
-        if not valid:
-            raise _Rejected(400, "无效环境任务")
-    elif set(payload) & {
+)
+
+_ENV_TASK_ONLY_KEYS = frozenset(
+    {
         "candidate_task",
         "installation",
         "installation_task",
@@ -281,125 +60,70 @@ def handle(handler, bridge):
         "knowledge_task",
         "connection_task",
         "cancel",
-    }:
-        raise _Rejected(400, "无效参数")
-    if action == "environment-plan":
-        if set(payload) == {"id"}:
-            if not isinstance(payload["id"], str) or not re.fullmatch(r"plan_[0-9a-f]{32}", payload["id"]):
-                raise _Rejected(400, "无效开通计划")
-        elif set(payload) != {"environment", "revision", "registry_revision"} or (
-            not isinstance(payload["environment"], str)
-            or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]|[a-z0-9]", payload["environment"])
-            or any(type(payload[k]) is not int or payload[k] < 1 for k in ("revision", "registry_revision"))
-        ):
-            raise _Rejected(400, "无效开通计划")
-    if action == "environment-draft-save":
-        if (
-            set(payload) != {"draft", "revision", "registry_revision"}
-            or not isinstance(payload["draft"], dict)
-            or type(payload["revision"]) is not int
-            or payload["revision"] < 0
-            or type(payload["registry_revision"]) is not int
-            or payload["registry_revision"] < 1
-        ):
-            raise _Rejected(400, "无效目录草稿参数")
-        candidate = payload["draft"]
-        fields = {
-            "id",
-            "name",
+    }
+)
+
+_ALLOWED_PAYLOAD_KEYS = (
+    frozenset(
+        {
+            "action",
+            "environment",
             "enabled",
-            "gateway_url",
-            "cpms_base_url",
-            "company_gateway_url",
-            "deployment_target",
-            "credential_ref",
-            "timezone",
-            "tenants",
+            "app_id",
+            "source_app_id",
+            "source_version",
+            "tenant_id",
+            "name",
+            "request_key",
+            "id",
+            "revision",
+            "registry_revision",
+            "initial_installation",
+            "consumer_sources",
+            "draft",
+            "version_no",
+            "workspace_id",
+            "scope",
+            "sources",
+            "question",
+            "order_no",
+            "trial_id",
+            "knowledge_base_id",
+            "allowed",
+            "page",
+            "limit",
+            "run_id",
         }
-        if set(candidate) != fields:
-            raise _Rejected(400, "无效目录草稿字段")
-        tenants = candidate["tenants"]
-        if (
-            type(candidate["enabled"]) is not bool
-            or not isinstance(tenants, list)
-            or len(tenants) > 10000
-            or any(
-                not isinstance(t, dict)
-                or set(t) != {"id", "name", "enabled"}
-                or type(t["enabled"]) is not bool
-                or not isinstance(t["id"], str)
-                or not isinstance(t["name"], str)
-                for t in tenants
-            )
-            or any(
-                not isinstance(candidate[k], str) or len(candidate[k]) > 2048
-                for k in fields - {"enabled", "tenants"}
-            )
-        ):
-            raise _Rejected(400, "无效目录草稿字段")
-    elif action != "environment-plan" and "registry_revision" in payload:
-        raise _Rejected(400, "无效参数")
-    if action == "environment-update":
-        required = {"environment", "revision", "name", "enabled"}
-        if (
-            not required.issubset(payload)
-            or set(payload) - (required | {"tenant_id"})
-            or type(payload["enabled"]) is not bool
-            or type(payload["revision"]) is not int
-            or payload["revision"] < 1
-            or not isinstance(payload["name"], str)
-            or not 1 <= len(payload["name"]) <= 128
-            or any(
-                not isinstance(payload.get(key), str) or not re.fullmatch(tenant_reference, payload[key])
-                for key in ("environment", "tenant_id")
-                if key in payload
-            )
-        ):
-            raise _Rejected(400, "无效环境管理参数")
-    elif action not in {"environment-plan", "environment-task"} and set(payload) & {"environment", "enabled"}:
-        raise _Rejected(400, "无效参数")
-    _validate_scope_and_sources(action, payload, _Rejected)
-    if action in {"run-logs", "run-log"}:
-        expected = {"app_id", "page", "limit"} if action == "run-logs" else {"app_id", "run_id"}
-        if set(payload) - expected:
-            raise _Rejected(400, "无效日志参数")
-        if action == "run-logs":
-            for key, default, maximum in (("page", 1, 1000), ("limit", 20, 50)):
-                value = payload.get(key, default)
-                if type(value) is not int or not 1 <= value <= maximum:
-                    raise _Rejected(400, "无效日志分页")
-        elif not isinstance(payload.get("run_id"), str) or not re.fullmatch(
-            r"run_[A-Za-z0-9_-]{43}", payload["run_id"]
-        ):
-            raise _Rejected(400, "无效运行编号")
-    elif set(payload) & {"page", "limit", "run_id"}:
-        raise _Rejected(400, "无效参数")
-    if action.startswith("trial"):
-        expected = {"app_id", "question", "order_no"} if action == "trial" else {"app_id", "trial_id"}
-        if set(payload) - expected or not handler.settings.trial_key:
-            raise _Rejected(400, "无效预览参数")
-        if action == "trial":
-            if not isinstance(payload.get("question"), str) or not 0 < len(payload["question"]) <= 4000:
-                raise _Rejected(400, "请填写预览问题")
-            raw_order = payload.get("order_no", "")
-            if not isinstance(raw_order, str) or (raw_order and not is_order_identifier(raw_order)):
-                raise _Rejected(400, "无效订单号")
-        elif not isinstance(payload.get("trial_id"), str) or not re.fullmatch(
-            r"tr_[a-f0-9]{32}", payload["trial_id"]
-        ):
-            raise _Rejected(400, "无效预览")
-    elif action == "knowledge-access":
-        if (
-            set(payload) != {"app_id", "knowledge_base_id", "allowed"}
-            or type(payload["allowed"]) is not bool
-            or not isinstance(payload["knowledge_base_id"], str)
-            or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", payload["knowledge_base_id"])
-        ):
-            raise _Rejected(400, "无效知识授权参数")
-    elif set(payload) & {"question", "order_no", "trial_id", "knowledge_base_id", "allowed"}:
-        raise _Rejected(400, "无效参数")
-    # 应用状态/发布必须能由当前Dify工作区读到；平台跨租户开通另由公司目录和来源登记裁定。
-    if action in {
+    )
+    | _ENV_TASK_ONLY_KEYS
+)
+
+_ACTION_ROUTES: dict[str, tuple[str, str]] = {
+    "catalogue": ("GET", "/catalogue"),
+    "environments": ("GET", "/environments"),
+    "environment-update": ("POST", "/environments"),
+    "environment-drafts": ("GET", "/environment-drafts"),
+    "environment-plan": ("POST", "/environment-plans"),
+    "environment-task": ("POST", "/environment-tasks"),
+    "environment-draft-save": ("POST", "/environment-drafts"),
+    "status": ("POST", "/status"),
+    "readiness": ("POST", "/readiness"),
+    "create": ("POST", "/operations"),
+    "publish": ("POST", "/publish"),
+    "versions": ("POST", "/versions"),
+    "version": ("POST", "/version"),
+    "workspace": ("POST", "/workspace"),
+    "trial": ("POST", "/trial"),
+    "trial-result": ("POST", "/trial/result"),
+    "trial-cancel": ("POST", "/trial/cancel"),
+    "knowledge": ("POST", "/knowledge"),
+    "knowledge-access": ("POST", "/knowledge/access"),
+    "run-logs": ("POST", "/run-logs"),
+    "run-log": ("POST", "/run-logs/detail"),
+}
+
+_APP_SCOPED_ACTIONS = frozenset(
+    {
         "status",
         "readiness",
         "publish",
@@ -412,23 +136,358 @@ def handle(handler, bridge):
         "knowledge-access",
         "run-logs",
         "run-log",
-    }:
-        app_id = payload.get("app_id", "")
-        if not isinstance(app_id, str) or not re.fullmatch(r"[a-f0-9-]{36}", app_id):
-            raise _Rejected(400, "无效应用")
-        code, app = _request(
-            handler.settings.dify_base_url + "/console/api/apps/" + app_id,
-            headers=session.dify_headers(),
-            timeout=15,
+    }
+)
+
+_PARENT_TASK_KEYS = ("site_task", "workspace_task", "knowledge_task", "connection_task")
+
+
+def _matches(pattern: re.Pattern[str], value: object) -> bool:
+    return isinstance(value, str) and bool(pattern.fullmatch(value))
+
+
+def _pos_int(value: object) -> bool:
+    return type(value) is int and value >= 1
+
+
+def _verify_browser_session(handler, bridge):
+    """核验浏览器同源头、JSON 内容类型、Dify 控制台会话及管理角色。"""
+    rejected = bridge._Rejected
+    origin = bridge.normalize_origin(handler._single_header("Origin"))
+    referer = handler._single_header("Referer") or ""
+    if (
+        origin != handler.settings.console_origin
+        or (bridge._origin_and_path(referer) or (None, None))[0] != handler.settings.console_origin
+    ):
+        raise rejected(403, "请从Dify控制台操作")
+    if handler._single_header("Sec-Fetch-Site") not in (None, "same-origin"):
+        raise rejected(403, "请从Dify控制台操作")
+    session = bridge.console_session_from_headers(
+        handler._single_header("Cookie"), handler._single_header(bridge.CONSOLE_CSRF_HEADER)
+    )
+    if session is None:
+        raise rejected(401, "请重新登录Dify")
+    content_type = handler._single_header("Content-Type") or ""
+    if content_type.split(";", 1)[0].lower() != "application/json":
+        raise rejected(415, "请求必须是application/json")
+    http_status, summary = bridge._request(
+        handler.settings.dify_base_url + "/console/api/workspaces/current/summary",
+        headers=session.dify_headers(),
+        timeout=15,
+    )
+    if http_status != 200 or not isinstance(summary, dict) or summary.get("role") not in _ALLOWED_ROLES:
+        raise rejected(403, "当前账号没有智能体管理权限")
+    return session
+
+
+def _resolve_action_route(action: str, payload: dict, rejected) -> tuple[str, str]:
+    if action in {"operation", "retry"}:
+        job = payload.pop("id", "")
+        if not _matches(_APP_ID, job):
+            raise rejected(400, "无效操作")
+        method, path = (
+            ("GET", "/operations/" + job)
+            if action == "operation"
+            else ("POST", "/operations/" + job + "/retry")
         )
-        if code != 200 or not isinstance(app, dict) or app.get("id") != app_id:
-            raise _Rejected(403, "无权管理此应用")
-    code, result = _request(
+    elif action in _ACTION_ROUTES:
+        method, path = _ACTION_ROUTES[action]
+    else:
+        raise rejected(400, "无效管理动作")
+    if (method == "GET" or action == "retry") and payload:
+        raise rejected(400, "无效参数")
+    return method, path
+
+
+def _is_valid_environment_task(payload: dict) -> bool:
+    keys = set(payload)
+    if keys == {"restore_publication"}:
+        return _matches(_TASK_ID, payload["restore_publication"])
+    if keys == {
+        "validation_task",
+        "publication_plan",
+        "confirm_readonly",
+        "confirm_customer_knowledge",
+        "acceptance_ref",
+    }:
+        return (
+            _matches(_TASK_ID, payload["validation_task"])
+            and _matches(_PLAN_ID, payload["publication_plan"])
+            and payload["confirm_readonly"] is True
+            and payload["confirm_customer_knowledge"] is True
+            and payload["acceptance_ref"] == "readonly-diagnosis"
+        )
+    if keys == {"registration_task", "validation_plan", "capabilities", "case_ref"}:
+        caps = payload["capabilities"]
+        return (
+            _matches(_TASK_ID, payload["registration_task"])
+            and _matches(_PLAN_ID, payload["validation_plan"])
+            and _matches(_TENANT_REF, payload["case_ref"])
+            and isinstance(caps, list)
+            and 1 <= len(caps) <= 3
+            and all(isinstance(c, str) and c in _CAPABILITIES for c in caps)
+            and len(set(caps)) == len(caps)
+        )
+    if keys == {"installation_task", "registration_plan"}:
+        return _matches(_TASK_ID, payload["installation_task"]) and _matches(
+            _PLAN_ID, payload["registration_plan"]
+        )
+    if keys == {"candidate_task", "installation"}:
+        return payload["installation"] is True and _matches(_TASK_ID, payload["candidate_task"])
+    if keys in (
+        {"candidate_plan", "tenant_id", "source_app_id", "source_version"},
+        {"candidate_plan", "tenant_id", "source_app_id", "source_version", "initial_installation"},
+    ):
+        return (
+            _matches(_PLAN_ID, payload["candidate_plan"])
+            and _matches(_TENANT_REF, payload["tenant_id"])
+            and _matches(_APP_ID, payload["source_app_id"])
+            and _pos_int(payload["source_version"])
+            and payload.get("initial_installation", True) is True
+        )
+    if keys == {"consumer_sources"}:
+        return payload["consumer_sources"] is True
+    if keys == {"verify_task", "plan_id"}:
+        return _matches(_TENANT_REF, payload["verify_task"]) and _matches(_PLAN_ID, payload["plan_id"])
+    if keys == {"plan_id"}:
+        return _matches(_PLAN_ID, payload["plan_id"])
+    if keys in (
+        {"site_task", "tenant_id"},
+        {"workspace_task", "tenant_id"},
+        {"knowledge_task", "tenant_id"},
+        {"connection_task", "tenant_id"},
+        {"connection_task", "tenant_id", "source_app_id", "source_version"},
+    ):
+        parent = next(payload[k] for k in _PARENT_TASK_KEYS if k in payload)
+        return (
+            _matches(_TASK_ID, parent)
+            and _matches(_TENANT_REF, payload["tenant_id"])
+            and (
+                "source_app_id" not in payload
+                or (_matches(_APP_ID, payload["source_app_id"]) and _pos_int(payload.get("source_version")))
+            )
+        )
+    if keys == {"environment"}:
+        return _matches(_ENV_ID, payload["environment"])
+    return (
+        keys in ({"id"}, {"id", "cancel"})
+        and _matches(_TASK_ID, payload.get("id"))
+        and payload.get("cancel", True) is True
+    )
+
+
+def _validate_environment_plan(payload: dict, rejected) -> None:
+    keys = set(payload)
+    if keys == {"id"}:
+        if not _matches(_PLAN_ID, payload["id"]):
+            raise rejected(400, "无效开通计划")
+        return
+    if keys != {"environment", "revision", "registry_revision"} or (
+        not _matches(_ENV_PLAN_ID, payload["environment"])
+        or not _pos_int(payload["revision"])
+        or not _pos_int(payload["registry_revision"])
+    ):
+        raise rejected(400, "无效开通计划")
+
+
+def _validate_environment_draft(payload: dict, rejected) -> None:
+    if (
+        set(payload) != {"draft", "revision", "registry_revision"}
+        or not isinstance(payload["draft"], dict)
+        or type(payload["revision"]) is not int
+        or payload["revision"] < 0
+        or not _pos_int(payload["registry_revision"])
+    ):
+        raise rejected(400, "无效目录草稿参数")
+    candidate = payload["draft"]
+    if set(candidate) != _DRAFT_FIELDS:
+        raise rejected(400, "无效目录草稿字段")
+    tenants = candidate["tenants"]
+    if (
+        type(candidate["enabled"]) is not bool
+        or not isinstance(tenants, list)
+        or len(tenants) > 10000
+        or any(
+            not isinstance(t, dict)
+            or set(t) != {"id", "name", "enabled"}
+            or type(t["enabled"]) is not bool
+            or not isinstance(t["id"], str)
+            or not isinstance(t["name"], str)
+            for t in tenants
+        )
+        or any(
+            not isinstance(candidate[k], str) or len(candidate[k]) > 2048
+            for k in _DRAFT_FIELDS - {"enabled", "tenants"}
+        )
+    ):
+        raise rejected(400, "无效目录草稿字段")
+
+
+def _validate_environment_update(payload: dict, rejected) -> None:
+    required = {"environment", "revision", "name", "enabled"}
+    if (
+        not required.issubset(payload)
+        or set(payload) - (required | {"tenant_id"})
+        or type(payload["enabled"]) is not bool
+        or not _pos_int(payload["revision"])
+        or not isinstance(payload["name"], str)
+        or not 1 <= len(payload["name"]) <= 128
+        or any(
+            not _matches(_TENANT_REF, payload.get(k)) for k in ("environment", "tenant_id") if k in payload
+        )
+    ):
+        raise rejected(400, "无效环境管理参数")
+
+
+def _validate_run_logs(action: str, payload: dict, rejected) -> None:
+    expected = {"app_id", "page", "limit"} if action == "run-logs" else {"app_id", "run_id"}
+    if set(payload) - expected:
+        raise rejected(400, "无效日志参数")
+    if action == "run-logs":
+        for key, default, maximum in (("page", 1, 1000), ("limit", 20, 50)):
+            value = payload.get(key, default)
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise rejected(400, "无效日志分页")
+    elif not _matches(_RUN_ID, payload.get("run_id")):
+        raise rejected(400, "无效运行编号")
+
+
+def _validate_trial(action: str, payload: dict, settings, rejected) -> None:
+    expected = {"app_id", "question", "order_no"} if action == "trial" else {"app_id", "trial_id"}
+    if set(payload) - expected or not settings.trial_key:
+        raise rejected(400, "无效预览参数")
+    if action == "trial":
+        if not isinstance(payload.get("question"), str) or not 0 < len(payload["question"]) <= 4000:
+            raise rejected(400, "请填写预览问题")
+        raw_order = payload.get("order_no", "")
+        if not isinstance(raw_order, str) or (raw_order and not is_order_identifier(raw_order)):
+            raise rejected(400, "无效订单号")
+    elif not _matches(_TRIAL_ID, payload.get("trial_id")):
+        raise rejected(400, "无效预览")
+
+
+def _validate_payload(action: str, payload: dict, settings, rejected) -> None:
+    """按固定动作契约逐字段校验形状，并拦截不属于本动作的跨动作字段。"""
+    if action == "environment-task":
+        if not _is_valid_environment_task(payload):
+            raise rejected(400, "无效环境任务")
+    elif set(payload) & _ENV_TASK_ONLY_KEYS:
+        raise rejected(400, "无效参数")
+
+    if action == "environment-plan":
+        _validate_environment_plan(payload, rejected)
+    elif action == "environment-draft-save":
+        _validate_environment_draft(payload, rejected)
+    elif "registry_revision" in payload:
+        raise rejected(400, "无效参数")
+
+    if action == "environment-update":
+        _validate_environment_update(payload, rejected)
+    elif action not in {"environment-plan", "environment-task"} and set(payload) & {"environment", "enabled"}:
+        raise rejected(400, "无效参数")
+
+    _validate_scope_and_sources(action, payload, rejected)
+
+    if action in {"run-logs", "run-log"}:
+        _validate_run_logs(action, payload, rejected)
+    elif set(payload) & {"page", "limit", "run_id"}:
+        raise rejected(400, "无效参数")
+
+    if action.startswith("trial"):
+        _validate_trial(action, payload, settings, rejected)
+    elif action == "knowledge-access":
+        if (
+            set(payload) != {"app_id", "knowledge_base_id", "allowed"}
+            or type(payload["allowed"]) is not bool
+            or not _matches(_KB_ID, payload["knowledge_base_id"])
+        ):
+            raise rejected(400, "无效知识授权参数")
+    elif set(payload) & {"question", "order_no", "trial_id", "knowledge_base_id", "allowed"}:
+        raise rejected(400, "无效参数")
+
+
+def _verify_app_access(handler, bridge, session, app_id: object) -> None:
+    """确认当前 Dify 工作区能读取目标 app（防止跨工作区越权管理）。"""
+    rejected = bridge._Rejected
+    if not _matches(_APP_ID, app_id):
+        raise rejected(400, "无效应用")
+    code, app = bridge._request(
+        handler.settings.dify_base_url + "/console/api/apps/" + app_id,
+        headers=session.dify_headers(),
+        timeout=15,
+    )
+    if code != 200 or not isinstance(app, dict) or app.get("id") != app_id:
+        raise rejected(403, "无权管理此应用")
+
+
+def _switch_workspace(handler, bridge, session, result: dict) -> None:
+    """切换浏览器当前 Dify 工作区；平台账号未加入目标空间时先走网关受控加成员。"""
+    rejected = bridge._Rejected
+    workspace_id = result.get("workspace_id", "")
+    http_status, profile = bridge._request(
+        handler.settings.dify_base_url + "/console/api/account/profile",
+        headers=session.dify_headers(),
+        timeout=15,
+    )
+    if (
+        http_status != 200
+        or not isinstance(profile, dict)
+        or not profile.get("id")
+        or not profile.get("email")
+    ):
+        raise rejected(403, "无法核对当前Dify账号")
+    http_status, response = bridge._request(
+        handler.settings.dify_base_url + "/console/api/workspaces",
+        headers=session.dify_headers(),
+        timeout=15,
+    )
+    workspaces = response.get("workspaces", []) if isinstance(response, dict) else []
+    if http_status != 200:
+        raise rejected(502, "无法读取工作区")
+    if not any(w.get("id") == workspace_id for w in workspaces):
+        if not result.get("platform"):
+            raise rejected(403, "当前账号没有此工作区访问权")
+        http_status, response = bridge._request(
+            handler.settings.gateway_base_url + "/v1/dify/management/workspace/member",
+            method="POST",
+            headers={
+                "Authorization": "Bearer " + handler.settings.publish_key,
+                "X-AIOps-Console-Session": session.access_token,
+                "Content-Type": "application/json",
+            },
+            body={"workspace_id": workspace_id, "account_id": profile["id"], "email": profile["email"]},
+            timeout=30,
+        )
+        if http_status != 200:
+            raise rejected(502, "暂时无法进入客户工作区，请重试")
+    http_status, response = bridge._request(
+        handler.settings.dify_base_url + "/console/api/workspaces/switch",
+        method="POST",
+        headers={**session.dify_headers(), "Content-Type": "application/json"},
+        body={"tenant_id": workspace_id},
+        timeout=15,
+    )
+    if http_status != 200 or not isinstance(response, dict) or response.get("result") != "success":
+        raise rejected(502, "工作区切换失败，请重试")
+
+
+def handle(handler, bridge):
+    """固定管理动作入口：验会话 → 解析路由 → 校验载荷 → 转发网关 → 可选切工作区。"""
+    session = _verify_browser_session(handler, bridge)
+    payload = handler._read_bounded_json(65536, _ALLOWED_PAYLOAD_KEYS)
+    action = payload.pop("action", "")
+    method, path = _resolve_action_route(action, payload, bridge._Rejected)
+    _validate_payload(action, payload, handler.settings, bridge._Rejected)
+
+    if action in _APP_SCOPED_ACTIONS:
+        _verify_app_access(handler, bridge, session, payload.get("app_id", ""))
+
+    key = handler.settings.trial_key if action.startswith("trial") else handler.settings.publish_key
+    code, result = bridge._request(
         handler.settings.gateway_base_url + "/v1/dify/management" + path,
         method=method,
         headers={
-            "Authorization": "Bearer "
-            + (handler.settings.trial_key if action.startswith("trial") else handler.settings.publish_key),
+            "Authorization": "Bearer " + key,
             "X-AIOps-Console-Session": session.access_token,
             "Content-Type": "application/json",
         },
@@ -443,52 +502,7 @@ def handle(handler, bridge):
         handler._json(200, {"managed": False})
         return
     if action == "workspace" and code == 200 and isinstance(result, dict):
-        workspace_id = result.get("workspace_id", "")
-        http_status, profile = _request(
-            handler.settings.dify_base_url + "/console/api/account/profile",
-            headers=session.dify_headers(),
-            timeout=15,
-        )
-        if (
-            http_status != 200
-            or not isinstance(profile, dict)
-            or not profile.get("id")
-            or not profile.get("email")
-        ):
-            raise _Rejected(403, "无法核对当前Dify账号")
-        http_status, response = _request(
-            handler.settings.dify_base_url + "/console/api/workspaces",
-            headers=session.dify_headers(),
-            timeout=15,
-        )
-        workspaces = response.get("workspaces", []) if isinstance(response, dict) else []
-        if http_status != 200:
-            raise _Rejected(502, "无法读取工作区")
-        if not any(w.get("id") == workspace_id for w in workspaces):
-            if not result.get("platform"):
-                raise _Rejected(403, "当前账号没有此工作区访问权")
-            http_status, response = _request(
-                handler.settings.gateway_base_url + "/v1/dify/management/workspace/member",
-                method="POST",
-                headers={
-                    "Authorization": "Bearer " + handler.settings.publish_key,
-                    "X-AIOps-Console-Session": session.access_token,
-                    "Content-Type": "application/json",
-                },
-                body={"workspace_id": workspace_id, "account_id": profile["id"], "email": profile["email"]},
-                timeout=30,
-            )
-            if http_status != 200:
-                raise _Rejected(502, "暂时无法进入客户工作区，请重试")
-        http_status, response = _request(
-            handler.settings.dify_base_url + "/console/api/workspaces/switch",
-            method="POST",
-            headers={**session.dify_headers(), "Content-Type": "application/json"},
-            body={"tenant_id": workspace_id},
-            timeout=15,
-        )
-        if http_status != 200 or not isinstance(response, dict) or response.get("result") != "success":
-            raise _Rejected(502, "工作区切换失败，请重试")
+        _switch_workspace(handler, bridge, session, result)
     handler._json(code, result if isinstance(result, dict) else {"error": {"code": "SETUP_UNAVAILABLE"}})
 
 
@@ -508,18 +522,8 @@ def authorize_workspace(handler, bridge, session, workspace_id):
         raise bridge._Rejected(403, "当前账号无权访问此客户知识库，请重新登录或联系平台管理员")
 
 
-_SCOPES = {"both", "consumer", "operator"}
-_ENTRIES = {"consumer", "operator"}
-_APP_ID = re.compile(r"[a-f0-9-]{36}")
-
-
 def _validate_scope_and_sources(action, payload, rejected):
-    """`scope`/`sources` 只属于 `create`，且形状固定。
-
-    桥这一层的职责是"浏览器只能提交固定动作的固定形状"。把新字段加进白名单却不校验形状，
-    等于把"未知字段拒绝"降级成"未知字段也转发"，而下游的 Pydantic 校验发生在**网关**上 ——
-    中间那一段（桥到网关）就变成谁都能塞东西的通道。
-    """
+    """`scope`/`sources` 只属于 `create`，且形状固定。"""
     if "scope" not in payload and "sources" not in payload:
         return
     if action != "create":
@@ -529,7 +533,6 @@ def _validate_scope_and_sources(action, payload, rejected):
         raise rejected(400, "无效开通范围")
     sources = payload.get("sources")
     if sources is None:
-        # 旧的单来源形状：由后端按管家处理，桥不额外解释。
         return
     if not isinstance(sources, dict) or not sources or set(sources) - _ENTRIES:
         raise rejected(400, "无效来源")
@@ -539,7 +542,7 @@ def _validate_scope_and_sources(action, payload, rejected):
     for spec in sources.values():
         if not isinstance(spec, dict) or set(spec) != {"app_id", "version_no"}:
             raise rejected(400, "无效来源")
-        if not isinstance(spec["app_id"], str) or not _APP_ID.fullmatch(spec["app_id"]):
+        if not _matches(_APP_ID, spec["app_id"]):
             raise rejected(400, "无效来源应用")
-        if type(spec["version_no"]) is not int or spec["version_no"] < 1:
+        if not _pos_int(spec["version_no"]):
             raise rejected(400, "无效来源版本")

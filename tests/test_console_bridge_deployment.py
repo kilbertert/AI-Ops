@@ -1,7 +1,9 @@
 """实际文件替换与失败恢复；systemd/nginx 为本地命令替身，不接触服务宿主。"""
 
+import ast
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -9,6 +11,77 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _bundled_bridge_modules() -> set[str]:
+    """解析 build-bundle.sh 实际打包进发布桥的 aiops_diagnostics 模块集合。"""
+    script = (ROOT / "ops/dify-console-bridge/build-bundle.sh").read_text(encoding="utf-8")
+    modules: set[str] = set()
+    for line in script.splitlines():
+        token = line.strip().rstrip("\\").strip()
+        if not token.startswith("src/aiops_diagnostics/"):
+            continue
+        rel = token.removeprefix("src/aiops_diagnostics/")
+        match = re.fullmatch(r"(.*/)?\{([^}]+)\}\.py", rel)
+        if match:
+            prefix = (match.group(1) or "").replace("/", ".")
+            for item in match.group(2).split(","):
+                name = item.strip()
+                modules.add(prefix.rstrip(".") if name == "__init__" else prefix + name)
+        elif rel.endswith(".py"):
+            stem = rel.removesuffix(".py").replace("/", ".")
+            modules.add("" if stem == "__init__" else stem)
+    return {f"aiops_diagnostics.{m}" if m else "aiops_diagnostics" for m in modules}
+
+
+_LOGIN_PROXY_ONLY_DEFS: dict[str, set[str]] = {
+    # console_environments.py 与 dify-login-proxy 共用；发布桥只调用顶层 credentials()，
+    # LoginEnvironments / refused 仅在完整 wheel 的登录代理进程内运行。
+    "aiops_diagnostics.dify.console_environments": {"LoginEnvironments", "refused"},
+}
+
+
+def _iter_bundle_checked_nodes(module: str, tree: ast.Module):
+    """遍历发布桥实际会执行的 AST 节点（排除共用模块里仅供登录代理使用的定义）。"""
+    skip = _LOGIN_PROXY_ONLY_DEFS.get(module, set())
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and stmt.name in skip:
+            continue
+        yield from ast.walk(stmt)
+
+
+def test_console_bridge_bundle_imports_are_self_contained() -> None:
+    """拦截桥模块新增未打包的包内导入（含延迟导入），避免本地全绿、线上 ModuleNotFoundError。"""
+    bundled = _bundled_bridge_modules()
+    assert "aiops_diagnostics.dify.dify_console_publish" in bundled
+    assert "aiops_diagnostics.dify.self_service_bridge" in bundled
+
+    offenders: list[str] = []
+    for module in sorted(bundled):
+        rel = module.removeprefix("aiops_diagnostics").lstrip(".")
+        if not rel:
+            path = ROOT / "src/aiops_diagnostics/__init__.py"
+        else:
+            candidate = ROOT / "src/aiops_diagnostics" / (rel.replace(".", "/") + ".py")
+            path = candidate if candidate.is_file() else candidate.with_suffix("") / "__init__.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in _iter_bundle_checked_nodes(module, tree):
+            targets: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.startswith("aiops_diagnostics"):
+                    targets.append(node.module)
+                    for alias in node.names:
+                        candidate_sub = f"{node.module}.{alias.name}"
+                        if (ROOT / "src" / (candidate_sub.replace(".", "/") + ".py")).is_file():
+                            targets.append(candidate_sub)
+            elif isinstance(node, ast.Import):
+                targets.extend(
+                    alias.name for alias in node.names if alias.name.startswith("aiops_diagnostics")
+                )
+            for target in targets:
+                if target not in bundled:
+                    offenders.append(f"{path.relative_to(ROOT)}:{node.lineno} imports unbundled {target}")
+    assert offenders == [], "发布桥子集包存在未随包交付的包内导入：\n" + "\n".join(offenders)
 
 
 @pytest.mark.parametrize("failure", ["none", "reload", "transient_route", "permanent_route"])
