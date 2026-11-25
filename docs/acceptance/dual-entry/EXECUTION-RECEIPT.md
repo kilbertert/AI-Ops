@@ -12,7 +12,7 @@ Gateway 已部署 `1.0.0+b0d0bd3f392c` 并在生产库核对到"新授权判据�
 
 | 内容 | 位置 |
 | --- | --- |
-| 原规划 / 任务书 | `docs/agents/dual-entry-onboarding-plan.md`、`dual-entry-claude-task.md` |
+| 原规划 / 任务书（历史） | Git `57c1d788:docs/agents/dual-entry-onboarding-plan.md`、`dual-entry-claude-task.md`（已由本目录实施规格与 ADR-0189 承接） |
 | 独立验收（退回） | [INDEPENDENT-REVIEW.md](INDEPENDENT-REVIEW.md) |
 | 返工任务书 | [CLAUDE-REWORK.md](CLAUDE-REWORK.md) |
 | 实施规格 / 验收合同 / 子任务 | [implementation-spec.md](implementation-spec.md)、[acceptance.feature](acceptance.feature)、[tasks.md](tasks.md) |
