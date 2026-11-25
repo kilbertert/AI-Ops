@@ -1478,6 +1478,17 @@ def _seed_legacy_v2_database(db_path: Path) -> None:
         )
         for table in ("assistant_files", "assistant_qa_events", "assistant_feedback"):
             conn.execute(f'DROP TABLE "{table}"')
+        for new_idx in gateway_schema.LEGACY_INDEX_RENAMES.values():
+            conn.execute(f'DROP INDEX IF EXISTS "{new_idx}"')
+        for old_name, new_name in gateway_schema.LEGACY_TABLE_RENAMES.items():
+            conn.execute(f'ALTER TABLE "{new_name}" RENAME TO "{old_name}"')
+        for old_idx, new_idx in gateway_schema.LEGACY_INDEX_RENAMES.items():
+            logical_table, fields = gateway_schema.INDEXES[new_idx]
+            phys_table = next(
+                (old for old, new in gateway_schema.LEGACY_TABLE_RENAMES.items() if new == logical_table),
+                logical_table,
+            )
+            conn.execute(f'CREATE INDEX "{old_idx}" ON "{phys_table}" ({fields})')
         conn.execute("PRAGMA user_version = 2")
 
 
@@ -1498,6 +1509,20 @@ def test_runtime_check_rehearses_backups_and_migrates_forward_schema(tmp_path):
 
     report = ns["check"](cfg, tmp_path, "test", existing=True, allow_schema_upgrade=True)
     assert report["version"] == 2 and report["current_version"] == gateway_schema.VERSION
+
+    # Inflight row in renamed legacy table (standard_diagnoses) must still block upgrade
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO standard_diagnoses "
+            "(diagnosis_id, scope_fingerprint, order_no, question, "
+            "status, created_at, updated_at, deadline_at) "
+            "VALUES ('d1', 'fp_1', 'ord1', 'q', 'running', 't', 't', 't')"
+        )
+    with pytest.raises(ValueError, match="inflight"):
+        ns["check"](cfg, tmp_path, "test", existing=True, allow_schema_upgrade=True)
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM standard_diagnoses WHERE diagnosis_id = 'd1'")
+    before = db.read_bytes()
 
     rehearsal_backup = tmp_path / "trial/rehearsal.db"
     rehearsal_backup.parent.mkdir(mode=0o700)

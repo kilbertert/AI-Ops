@@ -61,6 +61,12 @@ def check(
             raise ValueError("schema migration requires separate delivery")
         gateway_schema.integrity(database)
         with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as db:
+            existing_tables = {
+                row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            legacy_names = {
+                new: old for old, new in getattr(gateway_schema, "LEGACY_TABLE_RENAMES", {}).items()
+            }
             rows = [(t, "status", ("queued", "running")) for t in JOB_TABLES]
             rows += [
                 ("agent_runs", "state", ("issued", "running")),
@@ -68,7 +74,16 @@ def check(
                 ("operator_setup_jobs", "state", ("pending", "running")),
             ]
             for table, column, active in rows:
-                if db.execute(f"SELECT 1 FROM {table} WHERE {column} IN (?, ?) LIMIT 1", active).fetchone():
+                physical = table
+                if allow_schema_upgrade and physical not in existing_tables:
+                    legacy = legacy_names.get(table)
+                    if legacy and legacy in existing_tables:
+                        physical = legacy
+                    elif report["version"] < report["current_version"]:
+                        continue
+                if db.execute(
+                    f'SELECT 1 FROM "{physical}" WHERE {column} IN (?, ?) LIMIT 1', active
+                ).fetchone():
                     raise ValueError("inflight work prevents upgrade")
         return report
     # 调用者给全新状态目录；不对现役库调用validate（它可能迁移或初始化）。
