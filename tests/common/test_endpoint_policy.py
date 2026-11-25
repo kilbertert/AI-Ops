@@ -73,9 +73,8 @@ LOOPBACK_PLAINTEXT = "http://127.0.0.1:8799"
 
 
 def _build_endpoints(remote: str) -> list[tuple[str, object]]:
-    """十个端点各自的「构造/校验」入口，全部是今天生产代码里的真实调用点。"""
+    """现役出站端点各自的「构造/校验」入口，全部是今天生产代码里的真实调用点。"""
     from aiops_diagnostics.common.config import (
-        DisSettings,
         UpmsSettings,
         canonical_provider_base_url,
     )
@@ -100,7 +99,6 @@ def _build_endpoints(remote: str) -> list[tuple[str, object]]:
         ),
         ("gateway client", lambda: canonical_gateway_url(remote)),
         ("upms", lambda: UpmsSettings(base_url=remote)),
-        ("dis", lambda: DisSettings(base_url=remote)),
         ("kb-service", lambda: KbServiceClient(remote, tenant_id="t", service_token="svc")),
         ("kb-service (publish)", lambda: KbServiceKnowledgeClient(remote, tenant_id="t")),
         ("dify console", lambda: DifyDslClient(DifyDslSource(base_url=remote, app_id="app-1", api_key="k"))),
@@ -115,7 +113,6 @@ def _build_endpoints(remote: str) -> list[tuple[str, object]]:
         "company check_token",
         "gateway client",
         "upms",
-        "dis",
         "kb-service",
         "kb-service (publish)",
         "dify console",
@@ -135,7 +132,6 @@ def test_every_endpoint_rejects_the_same_remote_plaintext_url(name: str) -> None
         "company check_token",
         "gateway client",
         "upms",
-        "dis",
         "kb-service",
         "kb-service (publish)",
         "dify console",

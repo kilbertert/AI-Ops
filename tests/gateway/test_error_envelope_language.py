@@ -160,9 +160,6 @@ class _Runtime:
     def get_assistant_qa(self, context: ScopeContext, qa_id: str) -> None:
         return None
 
-    def list_standard_diagnoses(self, context: ScopeContext, *, limit: int) -> list[dict]:
-        return []
-
 
 def _client(tmp_path: Path) -> TestClient:
     settings = GatewayServerSettings(

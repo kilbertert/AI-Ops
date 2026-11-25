@@ -174,35 +174,6 @@ class UpmsSettings:
 
 
 @dataclass(slots=True)
-class DisSettings:
-    """平台 Dis 点位归属服务边界；代查目标的站点范围解析使用。
-
-    ``token`` 是充电桩 Java ``DisFeignInterceptor`` 同款服务侧静态令牌
-    （``dis.token``），不是用户凭证；纳入脱敏输出。
-    """
-
-    base_url: str | None = None
-    token: str | None = None
-    timeout_seconds: int = 8
-
-    def __post_init__(self) -> None:
-        if self.base_url is not None:
-            parsed = urlsplit(self.base_url)
-            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-                raise ValueError("Dis base_url 必须是完整的 http 或 https 地址")
-            # 这个端点随请求发出服务侧凭据（UPMS 的 inside_token / Dis 的静态令牌），
-            # 因此与模型 provider 同一条规则：https 哪里都行，http 只给回环。
-            if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
-                raise ValueError("Dis base_url 指向远端时必须使用 https")
-            if parsed.username is not None or parsed.password is not None:
-                raise ValueError("Dis base_url 不得包含认证信息")
-            if parsed.query or parsed.fragment:
-                raise ValueError("Dis base_url 不得包含 query 或 fragment")
-        if not 1 <= self.timeout_seconds <= 60:
-            raise ValueError("Dis 超时必须在 1-60 秒之间")
-
-
-@dataclass(slots=True)
 class SSHSettings:
     enabled: bool = False
     ssh_bin: str = field(default_factory=lambda: shutil.which("ssh") or "ssh")
@@ -322,7 +293,6 @@ class Settings:
     tdengine: TDengineSettings = field(default_factory=TDengineSettings)
     redis: RedisSettings = field(default_factory=RedisSettings)
     upms: UpmsSettings = field(default_factory=UpmsSettings)
-    dis: DisSettings = field(default_factory=DisSettings)
     ssh: SSHSettings = field(default_factory=SSHSettings)
     safety: SafetySettings = field(default_factory=SafetySettings)
     agent: AgentSettings = field(default_factory=AgentSettings)
@@ -394,11 +364,6 @@ class Settings:
                 inside_token=env("AIOPS_UPMS_INSIDE_TOKEN") or None,
                 timeout_seconds=env_int("AIOPS_UPMS_TIMEOUT_SECONDS", 8),
             ),
-            dis=DisSettings(
-                base_url=env("AIOPS_DIS_BASE_URL") or None,
-                token=env("AIOPS_DIS_TOKEN") or None,
-                timeout_seconds=env_int("AIOPS_DIS_TIMEOUT_SECONDS", 8),
-            ),
             ssh=SSHSettings(
                 enabled=env_bool("AIOPS_SSH_ENABLED"),
                 ssh_bin=env("AIOPS_SSH_BIN") or shutil.which("ssh") or "ssh",
@@ -438,7 +403,6 @@ class Settings:
         data["tdengine"]["password"] = "REDACTED" if self.tdengine.password else ""
         data["redis"]["password"] = "REDACTED" if self.redis.password else ""
         data["upms"]["inside_token"] = "REDACTED" if self.upms.inside_token else ""
-        data["dis"]["token"] = "REDACTED" if self.dis.token else ""
         return data
 
 

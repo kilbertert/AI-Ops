@@ -13,13 +13,9 @@
 
 - UPMS 数据范围的 ``siteIds`` 直接进入站点集合；
 - ``shopIds`` 通过充电库 ``ch_site.shop_id`` 归属解析为站点；
-- 代查目标主体时，Dis 点位归属（``/dis/admin/device/point/{uid}/device/points``
-  → ``ch_site.dis_point_id``）解析目标用户的站点，并与调用者自身的站点范围取
-  交集；交集为空时返回空范围，不扩大查询范围；
-- 仅有 ``organIds`` 而无法解析出任何店铺/站点时，最终站点集合为空（空证据）。
-
-Dis 不可用、代查缺少 Dis 配置或范围 ID 超过上限时以带错误码的 ``ScopeError``
-fail closed，且不会触发任何 MySQL 查询（解析先于数据源查询完成）。
+- 仅有 ``organIds`` 而无法解析出任何店铺/站点时，最终站点集合为空（空证据）；
+- 历史 Era 1 的 Dis 点位代查链路已随 ADR-0342 退役；若调用方仍传入非 self 的
+  ``delegated`` 上下文，一律以 ``ScopeError`` fail closed，绝不扩大查询范围。
 
 运营商范围解析（``resolve_operator_site_scope``）是同一层里的另一条入链：后端权威
 授权所用的同一个 UPMS 端点给出 B 端主体的店铺集合，经充电库既有站点归属映射得到
@@ -30,19 +26,10 @@ fail closed，且不会触发任何 MySQL 查询（解析先于数据源查询�
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from aiops_diagnostics.common.bounded_http import (
-    JSON_CONTENT_TYPE,
-    ErrorMapping,
-    RequestSpec,
-    join_url,
-    parse_raw_envelope,
-    request_json,
-)
-from aiops_diagnostics.common.config import DisSettings, UpmsSettings
+from aiops_diagnostics.common.config import UpmsSettings
 from aiops_diagnostics.identity.scope_context import (
     SCOPE_ERROR_EMPTY_SCOPE,
     SCOPE_TYPE_ALL,
@@ -54,9 +41,6 @@ from aiops_diagnostics.identity.scope_context import (
 
 _LOGGER = logging.getLogger(__name__)
 
-SCOPE_ERROR_DIS_CONFIG_MISSING = "scope.dis_config_missing"
-SCOPE_ERROR_DIS_UNAVAILABLE = "scope.dis_unavailable"
-SCOPE_ERROR_DIS_AUTH_FAILED = "scope.dis_auth_failed"
 SCOPE_ERROR_SCOPE_TOO_LARGE = "scope.too_large"
 
 #: 运营商站点范围解析不出可见站点时的可区分原因（只写日志，不含任何身份标识）。
@@ -65,19 +49,15 @@ SCOPE_ERROR_SCOPE_TOO_LARGE = "scope.too_large"
 OPERATOR_SCOPE_NO_SHOP_BINDING = "no_shop_binding"
 OPERATOR_SCOPE_SHOP_WITHOUT_SITE = "shop_without_site"
 
-#: 单个范围的站点/店铺/点位 ID 数量上限；超过说明数据范围异常，fail closed。
+#: 单个范围的站点/店铺 ID 数量上限；超过说明数据范围异常，fail closed。
 MAX_SCOPE_IDS = 1000
-
-DIS_POINT_BY_USER_PATH = "/dis/admin/device/point/{user_id}/device/points"
-
-_SAFE_PATH_SEGMENT = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
 @dataclass(frozen=True, slots=True)
 class QueryScope:
     """一次诊断运行内冻结的数据库查询范围。
 
-    ``site_ids`` 为 ``None`` 表示租户内不限站点（all 范围且无代查收窄）；
+    ``site_ids`` 为 ``None`` 表示租户内不限站点（all 范围）；
     ``()`` 表示可见站点为空，所有范围查询短路返回空结果，不发起 SQL。
     """
 
@@ -103,84 +83,6 @@ class QueryScope:
             "user_id": self.user_id,
             "site_scope_empty": self.empty_site_scope,
         }
-
-
-class DisDirectory(Protocol):
-    """Dis 点位归属解析接缝：C 端用户 → 授权点位 ID 集合。"""
-
-    def point_ids_for_user(self, c_user_id: str, tenant_id: str) -> tuple[str, ...]: ...
-
-
-class DisHttpDirectory:
-    """``DisDirectory`` 的 Dis HTTP 实现。
-
-    复用充电桩 Java ``DisFeignClient`` 的既有契约：``Authorization`` 使用服务侧
-    配置的 Dis 令牌（不是用户凭证），并携带 ``tenantId``/``site``/``saasType``
-    头。令牌只存在于服务端配置，绝不进入 ``QueryScope``、审计摘要或错误消息。
-    """
-
-    def __init__(self, settings: DisSettings) -> None:
-        self.settings = settings
-
-    def point_ids_for_user(self, c_user_id: str, tenant_id: str) -> tuple[str, ...]:
-        base_url = self.settings.base_url
-        token = self.settings.token
-        if not base_url or not token:
-            raise ScopeError("Dis 服务未配置", code=SCOPE_ERROR_DIS_CONFIG_MISSING)
-        path = DIS_POINT_BY_USER_PATH.format(user_id=_safe_path_segment(c_user_id))
-        # The Dis service token is a service-side credential, treated like every
-        # other declared auth scheme; it never enters QueryScope, audit
-        # summaries or error messages. The envelope is parsed here (raw), not by
-        # the skeleton, because this client inspects ``code`` and ``data``
-        # itself.
-        payload = request_json(
-            RequestSpec(
-                url=join_url(base_url, path),
-                method="GET",
-                headers={
-                    "Authorization": token,
-                    "tenantId": _clean_header(tenant_id),
-                    "site": _clean_header(tenant_id),
-                    "saasType": "STANDARD",
-                    "Accept": JSON_CONTENT_TYPE,
-                },
-                timeout=self.settings.timeout_seconds,
-            ),
-            mapping=ErrorMapping(
-                auth_rejected=lambda _f: ScopeError("Dis 拒绝服务令牌", code=SCOPE_ERROR_DIS_AUTH_FAILED),
-                http_error=lambda f: ScopeError(
-                    f"Dis 请求失败: HTTP {f.status}", code=SCOPE_ERROR_DIS_UNAVAILABLE
-                ),
-                unavailable=lambda f: ScopeError(
-                    f"Dis 请求失败: {f.detail}", code=SCOPE_ERROR_DIS_UNAVAILABLE
-                ),
-                invalid_body=lambda f: ScopeError(
-                    f"Dis 请求失败: {f.detail}", code=SCOPE_ERROR_DIS_UNAVAILABLE
-                ),
-                invalid_envelope=lambda _f: ScopeError(
-                    "Dis 请求失败: invalid response", code=SCOPE_ERROR_DIS_UNAVAILABLE
-                ),
-            ),
-            envelope=parse_raw_envelope,
-        )
-        if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
-            detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
-            raise ScopeError(f"Dis 拒绝查询: {detail}", code=SCOPE_ERROR_DIS_UNAVAILABLE)
-        data = payload.get("data")
-        if data is None:
-            return ()
-        if not isinstance(data, list):
-            raise ScopeError("Dis 点位响应无效", code=SCOPE_ERROR_DIS_UNAVAILABLE)
-        point_ids: list[str] = []
-        for item in data:
-            if not isinstance(item, dict):
-                raise ScopeError("Dis 点位响应无效", code=SCOPE_ERROR_DIS_UNAVAILABLE)
-            text = str(item.get("pointId") or "").strip()
-            if text:
-                point_ids.append(text)
-        if len(point_ids) > MAX_SCOPE_IDS:
-            raise ScopeError(f"Dis 返回点位数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
-        return tuple(point_ids)
 
 
 class ShopDirectory(Protocol):
@@ -218,15 +120,12 @@ class SiteScopeMapper(Protocol):
 
     def site_ids_by_shops(self, shop_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]: ...
 
-    def site_ids_by_points(self, point_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]: ...
-
 
 @dataclass(frozen=True, slots=True)
 class _StaticMapper:
     """离线/测试用站点归属映射。"""
 
     sites_by_shop: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    sites_by_point: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def site_ids_by_shops(self, shop_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
         result: list[str] = []
@@ -234,35 +133,23 @@ class _StaticMapper:
             result.extend(self.sites_by_shop.get(shop_id, ()))
         return tuple(dict.fromkeys(result))
 
-    def site_ids_by_points(self, point_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
-        result: list[str] = []
-        for point_id in point_ids:
-            result.extend(self.sites_by_point.get(point_id, ()))
-        return tuple(dict.fromkeys(result))
-
 
 def static_site_mapper(
     *,
     sites_by_shop: dict[str, tuple[str, ...]] | None = None,
-    sites_by_point: dict[str, tuple[str, ...]] | None = None,
 ) -> SiteScopeMapper:
     """构造内存站点归属映射，供离线 fixture 与测试使用。"""
-    return _StaticMapper(
-        sites_by_shop=dict(sites_by_shop or {}),
-        sites_by_point=dict(sites_by_point or {}),
-    )
+    return _StaticMapper(sites_by_shop=dict(sites_by_shop or {}))
 
 
 def resolve_query_scope(
     context: ScopeContext,
     *,
-    dis: DisDirectory | None = None,
     mapper: SiteScopeMapper | None = None,
 ) -> QueryScope:
     """把 ``ScopeContext`` 解析为冻结的 ``QueryScope``。
 
-    解析顺序：先调用者数据范围（UPMS），再代查目标的 Dis 点位归属，最后合并为
-    交集。任一依赖失败或配置缺失时 fail closed，不会触发 MySQL 查询。
+    依赖失败或配置缺失时 fail closed，不会触发 MySQL 查询。
     """
     tenant_id = context.effective_tenant_id
     data_scope = context.data_scope
@@ -271,7 +158,7 @@ def resolve_query_scope(
         raise ScopeError(f"数据范围 ID 数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
 
     if data_scope.type == SCOPE_TYPE_SELF:
-        # self 范围 = 仅本人记录，按主体 C 端用户过滤；站点过滤无意义且不发起 Dis。
+        # self 范围 = 仅本人记录，按主体 C 端用户过滤。
         user_id = context.subject.c_user_id
         if not user_id:
             raise ScopeError(
@@ -287,16 +174,10 @@ def resolve_query_scope(
             sites.update(_sites_from_shops(mapper, data_scope.shop_ids, tenant_id))
 
     if context.delegated and context.subject.c_user_id:
-        if dis is None or mapper is None:
-            raise ScopeError(
-                "代查目标需要 Dis 与站点归属解析，但目录未配置",
-                code=SCOPE_ERROR_DIS_CONFIG_MISSING,
-            )
-        point_ids = dis.point_ids_for_user(context.subject.c_user_id, tenant_id)
-        _require_bounded(len(point_ids), "Dis 点位")
-        target_sites = set(mapper.site_ids_by_points(point_ids, tenant_id))
-        _require_bounded(len(target_sites), "目标站点")
-        sites = target_sites if sites is None else sites & target_sites
+        raise ScopeError(
+            "代查目标站点范围解析已退役，拒绝扩大查询范围",
+            code=SCOPE_ERROR_EMPTY_SCOPE,
+        )
 
     return QueryScope(
         tenant_id=tenant_id,
@@ -388,19 +269,3 @@ def _sites_from_shops(mapper: SiteScopeMapper, shop_ids: tuple[str, ...], tenant
 def _require_bounded(count: int, label: str) -> None:
     if count > MAX_SCOPE_IDS:
         raise ScopeError(f"{label}数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
-
-
-def _safe_path_segment(value: str) -> str:
-    """Whitelist user identifiers before they are interpolated into URL paths."""
-    text = (value or "").strip()
-    if not _SAFE_PATH_SEGMENT.fullmatch(text) or not text.strip("."):
-        raise ValueError("用户 ID 包含不允许的字符")
-    return text
-
-
-def _clean_header(value: str) -> str:
-    """Strip characters that could fold or inject additional HTTP headers."""
-    text = (value or "").strip()
-    if not text or any(char in text for char in ("\r", "\n", ":")):
-        raise ValueError("租户标识包含不允许的字符")
-    return text
