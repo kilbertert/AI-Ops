@@ -1,6 +1,6 @@
 # 运维分析与试运行：读哪个入口、scope 怎么隔离
 
-**一句话**：`standard_diagnoses` 一张表装三种作业（`kind = order / analysis / trial`），
+**一句话**：`async_jobs`（原 `standard_diagnoses`，ADR-0340 Schema v4 更名）一张表装三种作业（`kind = order / analysis / trial`），
 它们**按 `scope_fingerprint` 隔离**，指纹不同就是 404，和"这个 id 不存在"完全一样。
 所以「订正了状态却还读不到」通常不是数据问题，是**入口与身份口径**问题。
 
@@ -62,10 +62,10 @@ if str(decision.platform) != PLATFORM_OPERATOR:
 
 ```bash
 # 1. 它是哪种 kind，决定端点和凭据
-sqlite3 gateway.db "select kind from standard_diagnoses where diagnosis_id='<id>'"
+sqlite3 gateway.db "select kind from async_jobs where diagnosis_id='<id>'"
 
 # 2. 它的 scope_fingerprint 是什么
-sqlite3 gateway.db "select scope_fingerprint, tenant_id from standard_diagnoses where diagnosis_id='<id>'"
+sqlite3 gateway.db "select scope_fingerprint, tenant_id from async_jobs where diagnosis_id='<id>'"
 
 # 3. 用**代码路径**算出目标入口此刻的指纹，与第 2 步逐字比对：
 #    order    -> 当前会话的 ScopeContext.scope_fingerprint

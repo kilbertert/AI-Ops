@@ -111,7 +111,7 @@ Gateway解析公司个人Bearer与当前站点范围，冻结已发布SOP、模�
 | 知识工作区 | 公司租户/环境映射Dify与RAGFlow空间。选库随发布冻结，库内正文在解析索引后实时生效；知识文本是数据，不是越权指令 |
 | 会话与问答 | `conversations`/`conversation_turns`保存归属与回合，`assistant_questions`保存QA状态/最终结果；同会话串行与历史再授权由Gateway执行 |
 | 运行与授权 | `agent_runs`记录节点运行，`chat_dify_runs`记录Dify运行，短期grant绑定本轮权限；内部运行ID、QA ID、会话ID与上游Dify ID不能混用 |
-| 发布与审计 | `agent_versions`保存版本，`chat_route_bindings`选择正式路线，`publish_audit_ledger`记录发布尝试；`standard_diagnoses`保留承载试用等内部记录，不意味着旧HTTP端点仍开放 |
+| 发布与审计 | `agent_versions`保存版本，`chat_route_bindings`选择正式路线，`publish_audit_ledger`记录发布尝试；`async_jobs`（原 `standard_diagnoses`，ADR-0340 Schema v4 更名）承载分析与试用等内部异步记录，不意味着旧HTTP端点仍开放 |
 
 以上应用账本集中于Gateway的SQLite存储；连接事务由 `gateway.gateway_db` 的具名profile统一。
 1.7.0的28张表结构由 `gateway.gateway_schema` 单点声明，构造只读版本，启动完整检查。
