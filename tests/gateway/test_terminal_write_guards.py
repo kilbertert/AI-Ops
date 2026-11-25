@@ -130,6 +130,7 @@ def test_every_job_write_in_the_two_workers_is_answered() -> None:
                 "execute_health_report",
                 "_execute_health_report",
                 "_execute_standard_diagnosis",
+                "execute_trial",
             }:
                 continue
             answered = _answered_writes(tree, node)
@@ -190,27 +191,46 @@ def test_a_refused_health_write_is_logged(tmp_path, monkeypatch, caplog) -> None
     ]
 
 
-def _submitted_workers(tree: ast.Module) -> set[str]:
+def _submitted_workers(trees: list[tuple[str, ast.Module]]) -> set[str]:
     """Every worker this runtime hands to the thread pool, discovered from the code.
 
     **Discovered, not listed.** A fixed list is the wrong shape for this pin: a
     sixth worker added later would simply not appear in it, and the check would
     keep passing while covering five of six — the same "guard that finds no call
     site passes vacuously" failure this file exists to catch (raised in the
-    #730 review). Reading the `self._executor.submit(...)` call sites makes a new
-    worker enter the check by construction.
+    #730 review). Reading every `_executor.submit(...)` call site across
+    `gateway_runtime.py` and its delegated runners (including local variables
+    bound to `*_execute_*` within the same function) makes a new worker enter
+    the check by construction.
     """
     found: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not (isinstance(func, ast.Attribute) and func.attr == "submit"):
-            continue
-        for arg in node.args:
-            name = getattr(arg, "attr", None)
-            if isinstance(arg, ast.Attribute) and name and name.startswith("_execute_"):
-                found.add(name)
+    for _, tree in trees:
+        for func_def in ast.walk(tree):
+            if not isinstance(func_def, ast.FunctionDef):
+                continue
+            bound_workers: dict[str, set[str]] = {}
+            for stmt in ast.walk(func_def):
+                if isinstance(stmt, ast.Assign):
+                    targets = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+                    worker_names = {
+                        inner.attr
+                        for inner in ast.walk(stmt.value)
+                        if isinstance(inner, ast.Attribute) and inner.attr.startswith("_execute_")
+                    }
+                    if worker_names:
+                        for target in targets:
+                            bound_workers.setdefault(target, set()).update(worker_names)
+            for node in ast.walk(func_def):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if not (isinstance(func, ast.Attribute) and func.attr == "submit"):
+                    continue
+                for arg in node.args:
+                    if isinstance(arg, ast.Attribute) and arg.attr.startswith("_execute_"):
+                        found.add(arg.attr)
+                    elif isinstance(arg, ast.Name) and arg.id in bound_workers:
+                        found.update(bound_workers[arg.id])
     return found
 
 
@@ -236,11 +256,12 @@ def test_every_async_worker_converges_on_any_exception() -> None:
     `Exception` — and the assertion is written over all five workers at once so
     that a sixth cannot be added the old way.
     """
-    tree = _runtime_tree()
-    workers = _submitted_workers(tree)
+    worker_trees = _worker_trees()
+    tree = worker_trees[0][1]
+    workers = _submitted_workers(worker_trees)
     assert workers, "found no submitted workers — the discovery rule is broken, not the code"
     runner_defs: dict[str, ast.FunctionDef] = {}
-    for _, mod_tree in _worker_trees()[1:]:
+    for _, mod_tree in worker_trees[1:]:
         for node in ast.walk(mod_tree):
             if isinstance(node, ast.FunctionDef):
                 runner_defs[node.name] = node
@@ -281,6 +302,7 @@ def test_every_async_worker_converges_on_any_exception() -> None:
     # Every discovered worker must be a real function in this module: discovery
     # that matches a name with no definition would silently cover nothing.
     assert set(seen) == workers, f"submitted but not defined here: {sorted(workers - set(seen))}"
+    assert {"_execute_chat_dify_qa", "_execute_chat_order_qa", "_execute_trial"} <= set(seen)
     offenders = {
         name: caught
         for name, caught in seen.items()
@@ -290,3 +312,31 @@ def test_every_async_worker_converges_on_any_exception() -> None:
         "an escaping exception means no terminal row, and a list of classes always "
         f"leaves the next one outside; workers without `except Exception`: {offenders}"
     )
+
+
+def test_chat_workers_answer_every_assistant_question_write() -> None:
+    """聊天异步执行体对 `assistant_questions` 的认领与成功终态写必须检查返回值。"""
+    tree = ast.parse((SOURCE_ROOT / CHAT_RUNNER).read_text(encoding="utf-8"))
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in {
+            "execute_chat_dify_qa",
+            "execute_chat_order_qa",
+        }:
+            continue
+        calls = [
+            call
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call) and getattr(call.func, "attr", "") == "update_assistant_question"
+        ]
+        for call in calls:
+            status = _status_argument(call)
+            if status not in {"running", "completed"}:
+                continue
+            checked = any(
+                isinstance(if_node, ast.If) and any(inner is call for inner in ast.walk(if_node.test))
+                for if_node in ast.walk(node)
+            )
+            if not checked:
+                offenders.append(f"{CHAT_RUNNER}:{call.lineno} {node.name} ignores status={status!r}")
+    assert offenders == [], "; ".join(offenders)

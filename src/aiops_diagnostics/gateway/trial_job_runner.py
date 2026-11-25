@@ -133,15 +133,15 @@ def execute_trial(runtime: Any, trial_id: str) -> None:
             if isinstance(exc, ChatRunUnavailable) and exc.code in TRIAL_MESSAGES
             else "TRIAL_FAILED"
         )
-        runtime.store.update_standard_diagnosis(
+        if runtime.store.update_standard_diagnosis(
             trial_id,
             status="failed",
             error_code=code,
             error_message=f"{type(exc).__name__}: {exc}",
-        )
-        record_trial_metric(runtime, run_context, "failed", started_ms)
+        ):
+            record_trial_metric(runtime, run_context, "failed", started_ms)
         return
-    runtime.store.update_standard_diagnosis(
+    if runtime.store.update_standard_diagnosis(
         trial_id,
         status="completed",
         result={
@@ -152,8 +152,8 @@ def execute_trial(runtime: Any, trial_id: str) -> None:
             "failed_sources": list(result.failed_sources),
             "language": result.language,
         },
-    )
-    record_trial_metric(runtime, run_context, "completed", started_ms)
+    ):
+        record_trial_metric(runtime, run_context, "completed", started_ms)
 
 
 def record_trial_metric(
