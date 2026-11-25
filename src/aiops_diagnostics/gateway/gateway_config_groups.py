@@ -295,6 +295,7 @@ class OnboardingConfig:
         safe_profile_name: Any,
         parse_charging_endpoints: Any,
         other_keys: tuple[str, ...],
+        include_route_bindings_store: bool = True,
     ) -> str:
         """校验环境接入与执行绑定，返回归一化后的部署环境标识。"""
         normalized_env = canonical_environment(self.environment) if self.environment else ""
@@ -361,27 +362,8 @@ class OnboardingConfig:
                 and not settings.dify_chat_base_url
             ):
                 raise ValueError("dify chat execution requires a dify base url")
-        if self.chat_route_bindings_file:
-            from aiops_diagnostics.execution import chat_execution
-            from aiops_diagnostics.execution.chat_route_bindings import (
-                ChatRouteBindingStore,
-                RouteBindingError,
-            )
-
-            try:
-                chat_execution.assert_no_binding_collision(settings)
-                managed = chat_execution._bindings_from_store(self.chat_route_bindings_file)
-            except (chat_execution.ChatBindingError, RouteBindingError) as exc:
-                raise ValueError(f"chat route bindings are unusable: {exc}") from exc
-            if (
-                any(item.engine == chat_execution.ENGINE_DIFY for item in managed)
-                and not settings.dify_chat_base_url
-            ):
-                raise ValueError("dify chat execution requires a dify base url")
-            try:
-                ChatRouteBindingStore(Path(self.chat_route_bindings_file).expanduser().absolute())
-            except (OSError, sqlite3.Error) as exc:  # pragma: no cover - 权限/磁盘问题
-                raise ValueError(f"chat route bindings are unusable: {type(exc).__name__}") from exc
+        if include_route_bindings_store:
+            self.validate_route_bindings_store(settings=settings)
         if self.execution_manifest_file:
             from aiops_diagnostics.execution.execution_manifest import (
                 ExecutionManifestError,
@@ -395,6 +377,31 @@ class OnboardingConfig:
             except ExecutionManifestError as exc:
                 raise ValueError(f"execution manifest is invalid: {exc}") from exc
         return normalized_env
+
+    def validate_route_bindings_store(self, *, settings: Any) -> None:
+        """校验并按需初始化 ``chat_route_bindings_file`` 路由表（须在纯字段/URL 校验通过后执行）。"""
+        if not self.chat_route_bindings_file:
+            return
+        from aiops_diagnostics.execution import chat_execution
+        from aiops_diagnostics.execution.chat_route_bindings import (
+            ChatRouteBindingStore,
+            RouteBindingError,
+        )
+
+        try:
+            chat_execution.assert_no_binding_collision(settings)
+            managed = chat_execution._bindings_from_store(self.chat_route_bindings_file)
+        except (chat_execution.ChatBindingError, RouteBindingError) as exc:
+            raise ValueError(f"chat route bindings are unusable: {exc}") from exc
+        if (
+            any(item.engine == chat_execution.ENGINE_DIFY for item in managed)
+            and not settings.dify_chat_base_url
+        ):
+            raise ValueError("dify chat execution requires a dify base url")
+        try:
+            ChatRouteBindingStore(Path(self.chat_route_bindings_file).expanduser().absolute())
+        except (OSError, sqlite3.Error) as exc:  # pragma: no cover - 权限/磁盘问题
+            raise ValueError(f"chat route bindings are unusable: {type(exc).__name__}") from exc
 
 
 CONFIG_GROUP_TYPES: dict[str, type[Any]] = {

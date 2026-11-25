@@ -512,12 +512,10 @@ class GatewayServerSettings:
         return DataSourcesConfig.from_config(self.server_config_file)
 
     def validate(self) -> None:
-        """启动前全量配置自检：先完成无副作用的纯字段与 URL/凭据校验，再核验外部目录与路由库。"""
+        """启动前全量配置自检：先完成无副作用的纯字段与 URL/凭据校验，再初始化外部路由库。"""
         self._validate_schema()
         self.http.validate(require_server_config_file=False)
         self.knowledge.validate()
-        self.caller_auth.validate(min_source_key_length=MIN_SOURCE_KEY_LENGTH)
-        self.dify.validate(parse_knowledge_bindings=parse_dify_knowledge_bindings)
         self.environment = self.onboarding.validate(
             settings=self,
             safe_profile_name=SAFE_PROFILE_NAME,
@@ -530,7 +528,11 @@ class GatewayServerSettings:
                 self.dify_debug_api_key,
                 self.operator_trial_key,
             ),
+            include_route_bindings_store=False,
         )
+        self.caller_auth.validate(min_source_key_length=MIN_SOURCE_KEY_LENGTH)
+        self.dify.validate(parse_knowledge_bindings=parse_dify_knowledge_bindings)
+        self.onboarding.validate_route_bindings_store(settings=self)
         if self.server_config_file is None or not self.server_config_file.is_file():
             raise ValueError("gateway server production.env does not exist")
 
