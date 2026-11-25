@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import secrets
-import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,12 +11,20 @@ from dotenv import dotenv_values
 from aiops_diagnostics.common.config import selected_config_file
 from aiops_diagnostics.common.endpoint_policy import (
     canonical_gateway_url,
-    require_secure_endpoint,
 )
 from aiops_diagnostics.common.platform_paths import config_root, data_root
 from aiops_diagnostics.common.private_files import PrivatePathError, validate_private_file
-from aiops_diagnostics.gateway.deployment_environment import canonical_environment
-from aiops_diagnostics.gateway.gateway_logging import DEFAULT_LOG_LEVEL, parse_log_level
+from aiops_diagnostics.gateway.gateway_config_groups import (
+    CONFIG_GROUP_TYPES,  # noqa: F401
+    CallerAuthConfig,
+    DataSourcesConfig,
+    DifyIntegrationConfig,
+    HttpServerConfig,
+    KnowledgeConfig,
+    OnboardingConfig,
+    build_group,
+)
+from aiops_diagnostics.gateway.gateway_logging import DEFAULT_LOG_LEVEL
 
 SAFE_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
@@ -476,15 +482,55 @@ class GatewayServerSettings:
             **resolved,
         )
 
+    @property
+    def http(self) -> HttpServerConfig:
+        """网关基础运行参数、监听地址、路由阈值与内部令牌子配置视图。"""
+        return build_group(HttpServerConfig, self)
+
+    @property
+    def caller_auth(self) -> CallerAuthConfig:
+        """调用方鉴权子配置视图（OAuth2 内省、3rd_session 与公司令牌）。"""
+        return build_group(CallerAuthConfig, self)
+
+    @property
+    def dify(self) -> DifyIntegrationConfig:
+        """Dify 控制台、发布/检索/调试/试用及内网工作区子配置视图。"""
+        return build_group(DifyIntegrationConfig, self)
+
+    @property
+    def knowledge(self) -> KnowledgeConfig:
+        """知识库、受限委派、签名媒体与 RAGFlow 控制台子配置视图。"""
+        return build_group(KnowledgeConfig, self)
+
+    @property
+    def onboarding(self) -> OnboardingConfig:
+        """环境标识、多环境目录、业务连接与执行/路由绑定子配置视图。"""
+        return build_group(OnboardingConfig, self)
+
+    def load_data_sources(self) -> DataSourcesConfig:
+        """在同一配置树下加载只读数据源与模型配置（`common.config.Settings`）。"""
+        return DataSourcesConfig.from_config(self.server_config_file)
+
     def validate(self) -> None:
-        """启动前全量配置自检：按子系统分段校验，拒绝半配置与跨权限复用。"""
+        """启动前全量配置自检：委托五组强类型子配置逐段校验，拒绝半配置与跨权限复用。"""
         self._validate_schema()
-        self._validate_environment_and_catalogues()
-        self._validate_execution_and_bindings()
-        self._validate_server_and_company_auth()
-        self._validate_dify_surfaces()
-        if not 1 <= self.introspection_timeout_seconds <= 30:
-            raise ValueError("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS must be between 1 and 30")
+        self.environment = self.onboarding.validate(
+            settings=self,
+            safe_profile_name=SAFE_PROFILE_NAME,
+            parse_charging_endpoints=parse_charging_endpoints,
+            other_keys=(
+                self.internal_token_secret,
+                self.dify_publish_api_key,
+                self.dify_trial_api_key,
+                self.dify_knowledge_api_key,
+                self.dify_debug_api_key,
+                self.operator_trial_key,
+            ),
+        )
+        self.knowledge.validate()
+        self.http.validate(require_server_config_file=False)
+        self.caller_auth.validate(min_source_key_length=MIN_SOURCE_KEY_LENGTH)
+        self.dify.validate(parse_knowledge_bindings=parse_dify_knowledge_bindings)
         if self.server_config_file is None or not self.server_config_file.is_file():
             raise ValueError("gateway server production.env does not exist")
 
@@ -495,240 +541,6 @@ class GatewayServerSettings:
         for database in (self.database_file, self.chat_route_bindings_file):
             if database and Path(database).is_file():
                 gateway_schema.startup(Path(database))
-
-    def _validate_environment_and_catalogues(self) -> None:
-        if bool(self.operator_trial_login_url) != bool(self.operator_trial_key):
-            raise ValueError("operator trial login URL and key must be configured together")
-        if self.operator_trial_key:
-            if len(self.operator_trial_key) < 32:
-                raise ValueError("operator trial key must contain at least 32 characters")
-            canonical_gateway_url(self.operator_trial_login_url)
-        # 部署身份在启动时归一化校验（#879）；空值表示该进程未声明部署身份。
-        if self.environment:
-            self.environment = canonical_environment(self.environment)
-        if not 1 <= self.internal_token_expire_seconds <= 3600:
-            raise ValueError("AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS must be between 1 and 3600")
-        if self.environment_task_key and (
-            len(self.environment_task_key) < 32
-            or any(
-                value and secrets.compare_digest(self.environment_task_key, value)
-                for value in (
-                    self.internal_token_secret,
-                    self.dify_publish_api_key,
-                    self.dify_trial_api_key,
-                    self.dify_knowledge_api_key,
-                    self.dify_debug_api_key,
-                    self.operator_trial_key,
-                )
-            )
-        ):
-            raise ValueError("environment task key must be independent and at least 32 characters")
-        if self.knowledge_delegation_file and self.kb_service_base_url:
-            raise ValueError("delegated knowledge cannot also expose shared kb-service")
-        if self.charging_status_base_url:
-            parse_charging_endpoints(self.charging_status_base_url)
-            if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
-                raise ValueError("charging status requires a logical execution environment")
-        if self.environment_management_registry_file:
-            from aiops_diagnostics.gateway.environment_registry import MANAGED_SCHEMA, load
-
-            body = load(self.environment_management_registry_file)
-            if body["schema"] != MANAGED_SCHEMA:
-                raise ValueError("environment management requires managed registry")
-            if (
-                self.environment_registry_file
-                and Path(self.environment_registry_file).resolve()
-                != Path(self.environment_management_registry_file).resolve()
-            ):
-                raise ValueError("management and runtime must share the same environment registry")
-        if self.environment_registry_file:
-            if self.business_environments_file:
-                raise ValueError("runtime environment registry cannot use a separate business catalogue")
-            from aiops_diagnostics.gateway.environment_registry import for_settings
-
-            row = for_settings(self).entry()
-            if Path(row["config_ref"]).resolve() != Path(self.server_config_file).resolve():
-                raise ValueError("environment registry configuration does not match this Gateway")
-            if self.execution_environment and self.execution_environment != self.environment:
-                raise ValueError("execution environment does not match business environment")
-        if self.business_environments_file:
-            from aiops_diagnostics.consumer import business_environments
-
-            try:
-                for entry in business_environments.load(self.business_environments_file):
-                    canonical_gateway_url(entry["base_url"])
-            except (business_environments.BusinessCatalogueError, ValueError) as exc:
-                raise ValueError(f"business environment catalogue is unusable: {exc}") from exc
-        if self.consumer_order_chat_enabled and not self.charging_status_base_url:
-            raise ValueError("consumer order chat requires its charging status endpoint")
-
-    def _validate_execution_and_bindings(self) -> None:
-        if self.agent_run_config_file and not (self.charging_status_base_url and self.execution_environment):
-            raise ValueError("agent run delegation requires charging status settings")
-        if self.execution_manifest_file and not self.agent_run_config_file:
-            raise ValueError("execution manifest requires agent run delegation")
-        if self.consumer_chatflow_enabled and not (self.dify_chat_base_url and self.execution_environment):
-            raise ValueError("consumer chatflow requires Dify and execution environment")
-        if self.dify_chat_base_url:
-            canonical_gateway_url(self.dify_chat_base_url)
-        if self.chat_execution_bindings_file:
-            from aiops_diagnostics.execution import chat_execution
-
-            if not (self.charging_status_base_url and self.execution_environment):
-                raise ValueError("chat execution requires charging status settings")
-            try:
-                bindings = chat_execution.load_bindings(self.chat_execution_bindings_file)
-            except chat_execution.ChatBindingError as exc:
-                raise ValueError(f"chat execution bindings are unusable: {exc}") from exc
-            if (
-                any(item.engine == chat_execution.ENGINE_DIFY for item in bindings)
-                and not self.dify_chat_base_url
-            ):
-                raise ValueError("dify chat execution requires a dify base url")
-        if self.chat_route_bindings_file:
-            from aiops_diagnostics.execution import chat_execution
-            from aiops_diagnostics.execution.chat_route_bindings import (
-                ChatRouteBindingStore,
-                RouteBindingError,
-            )
-
-            try:
-                chat_execution.assert_no_binding_collision(self)
-                managed = chat_execution._bindings_from_store(self.chat_route_bindings_file)
-            except (chat_execution.ChatBindingError, RouteBindingError) as exc:
-                raise ValueError(f"chat route bindings are unusable: {exc}") from exc
-            if (
-                any(item.engine == chat_execution.ENGINE_DIFY for item in managed)
-                and not self.dify_chat_base_url
-            ):
-                raise ValueError("dify chat execution requires a dify base url")
-            try:
-                ChatRouteBindingStore(Path(self.chat_route_bindings_file).expanduser().absolute())
-            except (OSError, sqlite3.Error) as exc:  # pragma: no cover - 权限/磁盘问题
-                raise ValueError(f"chat route bindings are unusable: {type(exc).__name__}") from exc
-        if self.execution_manifest_file:
-            from aiops_diagnostics.execution.execution_manifest import (
-                ExecutionManifestError,
-            )
-            from aiops_diagnostics.execution.execution_manifest import (
-                load as load_execution_manifest,
-            )
-
-            try:
-                load_execution_manifest(self.execution_manifest_file)
-            except ExecutionManifestError as exc:
-                raise ValueError(f"execution manifest is invalid: {exc}") from exc
-
-    def _validate_server_and_company_auth(self) -> None:
-        if not self.bind_host or any(character.isspace() for character in self.bind_host):
-            raise ValueError("AIOPS_GATEWAY_BIND is invalid")
-        parse_log_level(self.log_level)
-        if not 1 <= self.port <= 65535:
-            raise ValueError("AIOPS_GATEWAY_PORT must be between 1 and 65535")
-        if not 1 <= self.max_workers <= 16:
-            raise ValueError("AIOPS_GATEWAY_MAX_WORKERS must be between 1 and 16")
-        for name, value in (
-            ("AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", self.routing_risk_at_least),
-            ("AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", self.routing_confidence_at_least),
-        ):
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(f"{name} must be between 0 and 1")
-        if self.company_check_token_url and not (
-            self.company_token_client_id and self.company_token_client_secret
-        ):
-            raise ValueError(
-                "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID and _CLIENT_SECRET are required "
-                "when a company check_token URL is set"
-            )
-        if self.company_jwt_key and self.company_check_token_url:
-            raise ValueError(
-                "AIOPS_GATEWAY_COMPANY_JWT_KEY and AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL are "
-                "mutually exclusive: token validity must have exactly one authority"
-            )
-        if self.company_source_key and not (self.company_check_token_url or self.company_jwt_key):
-            raise ValueError(
-                "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL or AIOPS_GATEWAY_COMPANY_JWT_KEY is required "
-                "when a source key is set"
-            )
-        if self.company_source_key and len(self.company_source_key) < MIN_SOURCE_KEY_LENGTH:
-            raise ValueError(
-                f"AIOPS_GATEWAY_COMPANY_SOURCE_KEY must be at least {MIN_SOURCE_KEY_LENGTH} characters"
-            )
-
-    def _validate_dify_surfaces(self) -> None:
-        if self.dify_knowledge_bindings and not self.dify_knowledge_api_key:
-            raise ValueError(
-                "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY is required when Dify knowledge bindings are set"
-            )
-        if self.dify_knowledge_api_key and not self.dify_knowledge_bindings:
-            raise ValueError(
-                "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS is required when a Dify knowledge API key is set"
-            )
-        if not 1 <= self.kb_search_max_results <= 20:
-            raise ValueError("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS must be between 1 and 20")
-        if self.dify_console_base_url and not self.dify_console_api_key:
-            raise ValueError(
-                "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY is required when a Dify console base URL is set"
-            )
-        if self.dify_console_api_key and not self.dify_console_base_url:
-            raise ValueError(
-                "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL is required when a Dify console API key is set"
-            )
-        if self.dify_console_base_url:
-            require_secure_endpoint(self.dify_console_base_url, what="AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL")
-        if self.dify_publish_api_key and not (self.dify_console_base_url and self.dify_console_api_key):
-            raise ValueError(
-                "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL/API_KEY are required when the Dify publish "
-                "route is enabled (the route pulls from that console)"
-            )
-        for other_name, other in (
-            ("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY", self.dify_knowledge_api_key),
-            ("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY", self.dify_debug_api_key),
-        ):
-            if (
-                self.dify_publish_api_key
-                and other
-                and secrets.compare_digest(self.dify_publish_api_key, other)
-            ):
-                raise ValueError(
-                    f"AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY must differ from {other_name} "
-                    "(one key must not authorise both reading knowledge and publishing)"
-                )
-        if self.dify_debug_api_key and not self.dify_debug_tenant:
-            raise ValueError("AIOPS_GATEWAY_DIFY_DEBUG_TENANT is required when a Dify debug API key is set")
-        if self.dify_debug_tenant and not self.dify_debug_api_key:
-            raise ValueError("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY is required when a Dify debug tenant is set")
-        if self.dify_debug_api_key and secrets.compare_digest(
-            self.dify_debug_api_key, self.dify_knowledge_api_key
-        ):
-            raise ValueError(
-                "AIOPS_GATEWAY_DIFY_DEBUG_API_KEY must differ from AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"
-            )
-        if self.dify_debug_api_key and not self.dify_knowledge_api_key:
-            raise ValueError(
-                "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY is required when a Dify debug identity is set "
-                "(the debug identity narrows that route; it does not create it)"
-            )
-        if self.dify_trial_api_key and not self.dify_trial_debug_tenant:
-            raise ValueError(
-                "AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT is required when the Dify trial route is enabled"
-            )
-        if self.dify_trial_debug_tenant and not self.dify_trial_api_key:
-            raise ValueError(
-                "AIOPS_GATEWAY_DIFY_TRIAL_API_KEY is required when a Dify trial debug tenant is set"
-            )
-        for other_name, other in (
-            ("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY", self.dify_knowledge_api_key),
-            ("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY", self.dify_debug_api_key),
-            ("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY", self.dify_publish_api_key),
-            ("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY", self.dify_console_api_key),
-        ):
-            if self.dify_trial_api_key and other and secrets.compare_digest(self.dify_trial_api_key, other):
-                raise ValueError(
-                    f"AIOPS_GATEWAY_DIFY_TRIAL_API_KEY must differ from {other_name} "
-                    "(one key must not authorise both running a trial and another Dify surface)"
-                )
-        parse_dify_knowledge_bindings(self.dify_knowledge_bindings)
 
 
 @dataclass(frozen=True, slots=True)

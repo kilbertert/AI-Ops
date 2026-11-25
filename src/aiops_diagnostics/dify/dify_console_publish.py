@@ -1328,13 +1328,26 @@ class BridgeSettings:
             raise ValueError(
                 "AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN must be an http(s) origin (scheme://host[:port])"
             )
+        publish_key = (
+            os.environ.get("AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY", "").strip()
+            or os.environ.get("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY", "").strip()
+        )
+        if not publish_key:
+            raise ValueError(
+                "AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY "
+                "(or legacy AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY) is required"
+            )
+        trial_key = (
+            os.environ.get("AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY", "").strip()
+            or os.environ.get("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY", "").strip()
+        )
         return cls(
             listen_host=os.environ.get("AIOPS_CONSOLE_BRIDGE_HOST", "127.0.0.1"),
             listen_port=int(os.environ.get("AIOPS_CONSOLE_BRIDGE_PORT", "10118")),
             dify_base_url=required("AIOPS_CONSOLE_BRIDGE_DIFY_URL").rstrip("/"),
             gateway_base_url=required("AIOPS_CONSOLE_BRIDGE_GATEWAY_URL").rstrip("/"),
-            publish_key=required("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
-            trial_key=os.environ.get("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY", "").strip(),
+            publish_key=publish_key,
+            trial_key=trial_key,
             console_origin=origin,
             workspace_id=required("AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID"),
             gateway_internal_token=os.environ.get("AIOPS_CONSOLE_BRIDGE_GATEWAY_INTERNAL_TOKEN", "").strip(),

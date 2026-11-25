@@ -311,3 +311,67 @@ def test_the_admin_config_merge_refuses_a_missing_named_file(
 
     with pytest.raises(PrivatePathError, match="typo.env"):
         _settings_with_config_file(ctx)  # type: ignore[arg-type]
+
+
+def test_config_groups_partition_every_gateway_setting_exactly_once(tmp_path: Path) -> None:
+    """五组强类型子配置必须无遗漏、无重复地覆盖 GatewayServerSettings 全部公开字段。"""
+    from aiops_diagnostics.gateway.gateway_config_groups import CONFIG_GROUP_TYPES
+
+    declared = {f.name for f in fields(GatewayServerSettings) if not f.name.startswith("_")}
+    seen: list[str] = []
+    for group_cls in CONFIG_GROUP_TYPES.values():
+        seen.extend(f.name for f in fields(group_cls))
+
+    assert len(seen) == len(set(seen)), f"重复归属字段: {[n for n in seen if seen.count(n) > 1]}"
+    assert set(seen) == declared, (
+        f"分组与 GatewayServerSettings 不一致: missing={sorted(declared - set(seen))}, "
+        f"extra={sorted(set(seen) - declared)}"
+    )
+
+    config = tmp_path / "production.env"
+    write_private_text(config, "AIOPS_MYSQL_HOST=grouped-mysql\n")
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=config,
+        port=9090,
+        kb_search_max_results=12,
+    )
+    assert settings.http.port == 9090
+    assert settings.knowledge.kb_search_max_results == 12
+    assert settings.load_data_sources().mysql.host == "grouped-mysql"
+
+
+def test_console_bridge_prefers_own_prefix_and_keeps_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """控制台桥优先读 AIOPS_CONSOLE_BRIDGE_* 专有键，并兼容旧部署的 AIOPS_GATEWAY_* 键。"""
+    from aiops_diagnostics.dify.dify_console_publish import BridgeSettings
+
+    base_env = {
+        "AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN": "https://console.example",
+        "AIOPS_CONSOLE_BRIDGE_DIFY_URL": "http://127.0.0.1:5001",
+        "AIOPS_CONSOLE_BRIDGE_GATEWAY_URL": "https://gateway.example",
+        "AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID": "ws-1",
+    }
+    for key in (
+        "AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY",
+        "AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY",
+        "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY",
+        "AIOPS_GATEWAY_DIFY_TRIAL_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in base_env.items():
+        monkeypatch.setenv(key, value)
+
+    monkeypatch.setenv("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY", "legacy-pub-key")
+    monkeypatch.setenv("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY", "legacy-trial-key")
+    legacy = BridgeSettings.from_env()
+    assert legacy.publish_key == "legacy-pub-key"
+    assert legacy.trial_key == "legacy-trial-key"
+
+    monkeypatch.setenv("AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY", "bridge-pub-key")
+    monkeypatch.setenv("AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY", "bridge-trial-key")
+    scoped = BridgeSettings.from_env()
+    assert scoped.publish_key == "bridge-pub-key"
+    assert scoped.trial_key == "bridge-trial-key"
