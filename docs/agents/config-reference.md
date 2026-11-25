@@ -8,11 +8,11 @@
 
 | 进程/入口 | 主配置类（文件） | 变量前缀 | 说明 |
 |---|---|---|---|
-| `aiops-gateway serve`（FastAPI 网关） | `GatewayServerSettings`（`gateway/gateway_config.py`） | `AIOPS_GATEWAY_*` | 网关全部对外与内部路由；字段同时驱动下方多个嵌套客户端 Settings |
+| `aiops-gateway serve`（FastAPI 网关） | `GatewayServerSettings`（`gateway/gateway_config.py` + 分组视图 `gateway/gateway_config_groups.py`） | `AIOPS_GATEWAY_*` | 网关全部对外与内部路由；按 `http` / `caller_auth` / `dify` / `knowledge` / `onboarding` 五组强类型子配置分段校验，并通过 `load_data_sources()` 衔接 `DataSourcesConfig`（`common/config.py::Settings`） |
 | `aiops-tdengine-proxy` | `ProxySettings`（`tdengine_proxy.py`） | `AIOPS_TD_PROXY_*` | 独立 `ThreadingHTTPServer` 只读 TDengine 代理；该进程键**不在 `.env.example`**，按其 systemd 单元与本表管理 |
 | 登录代理（`dify/dify_login_server.py`，经 `ops/dify-login-proxy` 部署） | `LoginProxySettings`（同文件） | `AIOPS_LOGIN_PROXY_*` | 公司账号进 Dify 控制台的唯一入口；另读 `AIOPS_LOGIN_PROXY_ENVIRONMENT*` |
-| 控制台桥（`dify/dify_console_publish.py`，经 `ops/dify-console-bridge` 部署） | `BridgeSettings`（同文件） | `AIOPS_CONSOLE_BRIDGE_*` + 共享的 `AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`/`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY` | `__aiops/*` 浏览器回调，转发网关。**前缀不能唯一定位进程**：它与网关同读这两个 GATEWAY 键 |
-| `aiops-admin` 及诊断/数据路径 | `Settings`（`common/config.py`，组合 `MySQLSettings`/`TDengineSettings`/`RedisSettings`/`UpmsSettings`/`DisSettings`/`SSHSettings`/`SafetySettings`/`AgentSettings`） | `AIOPS_*`（无前缀层） | `AIOPS_CONFIG_FILE`/`AIOPS_CONFIG_HOME`/`AIOPS_HOME` 定位配置与数据根 |
+| 控制台桥（`dify/dify_console_publish.py`，经 `ops/dify-console-bridge` 部署） | `BridgeSettings`（同文件） | `AIOPS_CONSOLE_BRIDGE_*`（优先读 `AIOPS_CONSOLE_BRIDGE_PUBLISH_API_KEY`/`AIOPS_CONSOLE_BRIDGE_TRIAL_API_KEY`，兼容旧部署的 `AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`/`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`） | `__aiops/*` 浏览器回调，转发网关；新部署统一使用 `AIOPS_CONSOLE_BRIDGE_*` 前缀，过渡/回滚窗口内须在 `bridge.env` 保留旧 `AIOPS_GATEWAY_DIFY_*` 键直至不再回退旧版桥制品 |
+| `aiops-admin` 及诊断/数据路径 | `Settings` / `DataSourcesConfig`（`common/config.py`，组合 `MySQLSettings`/`TDengineSettings`/`RedisSettings`/`UpmsSettings`/`DisSettings`/`SSHSettings`/`SafetySettings`/`AgentSettings`） | `AIOPS_*`（无前缀层） | `AIOPS_CONFIG_FILE`/`AIOPS_CONFIG_HOME`/`AIOPS_HOME` 定位配置与数据根；网关内可通过 `GatewayServerSettings.load_data_sources()` 读取 |
 
 ## 嵌套 Settings：不直接读环境变量
 
