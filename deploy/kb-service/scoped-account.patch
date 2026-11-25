@@ -1,9 +1,6 @@
 --- a/app.py
 +++ b/app.py
-@@ -257,6 +257,28 @@
-     return {"data": {"biz_tenant_id": t["biz_tenant_id"], "ragflow_email": t["ragflow_email"]}}
- 
- 
+@@ -259,0 +260,22 @@
 +
 +
 +@router.get("/tenants/current", tags=["tenant"])
@@ -26,6 +23,3 @@
 +    return {"data": {"biz_tenant_id": row[0], "ragflow_email": row[1]}}
 +
 +
- @router.post("/tenants/verify-password", tags=["tenant"])
- def verify_tenant_password(body: TenantVerifyPassword, tenant_id: str = Header(..., alias=TENANT_HEADER)):
-     """这个租户的密码是这一把吗？**只读**：不改密码、不生成 token。
