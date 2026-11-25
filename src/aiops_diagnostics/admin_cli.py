@@ -125,6 +125,59 @@ def environment_registry_command(
     )
 
 
+@admin_app.command("environment-adopt-execution")
+def environment_adopt_execution_command(
+    database: Annotated[Path, typer.Option("--database", help="Gateway SQLite 数据库路径（0600）")],
+    source: Annotated[str, typer.Option("--from", help="源执行环境编号（如 production-41）")],
+    target: Annotated[str, typer.Option("--to", help="目标执行环境编号（如 41）")],
+    backup: Annotated[
+        Path | None, typer.Option("--backup", help="独占私有备份清单路径；省略则为只读预演")
+    ] = None,
+    restore: Annotated[bool, typer.Option("--restore", help="按本次备份清单执行逐项 CAS 恢复")] = False,
+    actor: Annotated[str, typer.Option("--by", help="审计操作人")] = "aiops-admin",
+    config_ref: Annotated[
+        list[Path] | None, typer.Option("--config-ref", help="可选只读检查的环境配置文件路径（可重复）")
+    ] = None,
+    verify_bindings: Annotated[
+        bool, typer.Option("--verify-bindings", help="迁移/恢复前用真实运行时加载器核验全部活跃路由")
+    ] = False,
+    bindings_file: Annotated[
+        Path | None,
+        typer.Option("--bindings-file", help="可选静态路由绑定文件，配合 --verify-bindings 核对无重名冲突"),
+    ] = None,
+) -> None:
+    """一次性受控执行环境迁移：默认只读预演，带 --backup 执行单事务迁移或 --restore CAS 恢复。"""
+    from aiops_diagnostics.gateway import execution_environment_adoption as adoption
+
+    try:
+        result = adoption.adopt(
+            database,
+            source,
+            target,
+            actor=actor,
+            backup=backup,
+            restore=restore,
+            config_files=tuple(config_ref or ()),
+            verify_bindings=verify_bindings,
+            bindings_file=bindings_file,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "error": "ENVIRONMENT_ADOPTION_REFUSED",
+                    "reason": str(exc)
+                    if isinstance(exc, adoption.AdoptionError)
+                    else "ADOPTION_IO_FAILED"
+                    if isinstance(exc, OSError)
+                    else "INVALID_INPUT",
+                }
+            )
+        )
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
 @admin_app.command("environment-draft")
 def environment_draft_command(
     registry: Annotated[Path, typer.Option("--registry", help="私有生效目录JSON")],
