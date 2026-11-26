@@ -1023,7 +1023,7 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
     )
     out = wizard_provision.prepare_control_plane_bundle(
         SimpleNamespace(settings=settings),
-        reg_path,
+        str(reg_path),
         {
             "environment": "jiejia",
             "api_domain": "api.juxichongdian.cn",
@@ -1165,3 +1165,46 @@ def test_consumer_knowledge_catalogue_accepts_delegated_kdx_token(tmp_path: Path
     r = client.get("/v1/internal/consumer-knowledge/catalogue", headers={"Authorization": f"Bearer {tok}"})
     assert r.status_code == 200
     assert r.json() == {"libraries": [{"knowledge_base_id": "kb-con-1", "name": "捷佳试跑 FAQ"}]}
+
+
+def test_activate_environment_registry_accepts_str_path_and_returns_int_revision(tmp_path: Path) -> None:
+    data_root = tmp_path / "var-lib"
+    reg_dir = data_root / "environment-registry"
+    reg_dir.mkdir(parents=True, mode=0o700)
+    reg_path = reg_dir / "registry.json"
+    registry.apply(
+        reg_path,
+        [
+            {
+                "id": "41",
+                "name": "核心环境41",
+                "enabled": True,
+                "gateway_url": "https://gw41.example",
+                "cpms_base_url": "https://cpms41.example",
+                "company_gateway_url": "https://api41.example",
+                "config_ref": str(tmp_path / "env-41.env"),
+                "tenants": [],
+            }
+        ],
+        expected_revision=0,
+        actor="test",
+        managers=[],
+    )
+    out = wizard_provision.activate_environment_registry(
+        SimpleNamespace(settings=SimpleNamespace()),
+        str(reg_path),
+        {
+            "environment": "jiejia",
+            "tenant_id": "1990990768688599040",
+            "tenant_name": "捷佳",
+            "customer_name": "捷佳四轮国内充电",
+            "gateway_url": "https://api.juxichongdian.cn",
+            "actor": "admin user!",
+        },
+    )
+    assert out["ok"] is True
+    assert out["registry_revision"] == 2
+    loaded = registry.load(reg_path)
+    jiejia_row = next(r for r in loaded["environments"] if r["id"] == "jiejia")
+    assert jiejia_row["enabled"] is True
+    assert jiejia_row["tenants"] == [{"id": "1990990768688599040", "name": "捷佳", "enabled": True}]

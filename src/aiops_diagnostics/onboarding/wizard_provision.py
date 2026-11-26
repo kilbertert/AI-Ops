@@ -309,7 +309,7 @@ def _upsert_control_registry(
     config_ref: str,
     enabled: bool,
     actor: str,
-) -> dict[str, Any]:
+) -> int:
     current = registry.load(registry_path)
     rev = int(current.get("revision") or 0)
     managers = list(current.get("managers") or [])
@@ -343,11 +343,12 @@ def _upsert_control_registry(
                 "tenants": [new_tenant],
             }
         )
+    safe_actor = actor if registry.ACTOR_PATTERN.fullmatch(actor or "") else "wizard-worker"
     return registry.apply(
-        registry_path,
+        Path(registry_path),
         envs,
         expected_revision=rev,
-        actor=actor or "wizard-worker",
+        actor=safe_actor,
         managers=managers,
     )
 
@@ -1014,7 +1015,7 @@ def activate_environment_registry(
         "ok": True,
         "environment": env,
         "tenant_id": tenant_id,
-        "registry_revision": int(updated.get("revision") or 0),
+        "registry_revision": int(updated),
         "environment_json_path": str(active_env_file),
         "environment_json_sha256": hashlib.sha256(active_env_file.read_bytes()).hexdigest(),
     }
