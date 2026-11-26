@@ -218,3 +218,19 @@ def initialize_bootstrap_tokens(conn):
         "public_key TEXT NOT NULL, actor TEXT NOT NULL, created_at REAL NOT NULL, "
         "expires_at REAL NOT NULL, consumed_at REAL)"
     )
+
+
+def initialize_wizard_jobs(conn):
+    """V2.1 向导异步基建与正式发布任务表（ADR-0358），归口同一独立草稿库维护。"""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS environment_wizard_jobs ("
+        "id TEXT PRIMARY KEY, environment TEXT NOT NULL, action TEXT NOT NULL, "
+        "state TEXT NOT NULL, request TEXT NOT NULL, progress TEXT NOT NULL, "
+        "result TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', "
+        "created_at REAL NOT NULL, updated_at REAL NOT NULL, "
+        "lease_expires_at REAL NOT NULL DEFAULT 0)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_environment_wizard_jobs_env_action "
+        "ON environment_wizard_jobs(environment, action, updated_at)"
+    )
