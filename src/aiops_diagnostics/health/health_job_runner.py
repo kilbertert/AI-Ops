@@ -20,8 +20,8 @@ from aiops_diagnostics.health.health_report import HealthReportError, build_mini
 from aiops_diagnostics.health.ykc_frames import (
     YkcProtocolEvidence,
     extract_gun_no,
-    extract_order_tx_serial,
     parse_ykc_comm_frames,
+    read_tx_serial_no,
 )
 from aiops_diagnostics.identity.scope_context import ScopeContext
 
@@ -119,7 +119,7 @@ def execute_health_report(
                     protocol = parse_ykc_comm_frames(
                         raw_frames,
                         gun_no=extract_gun_no(pile_device, str(order.get("child_device_code") or "")),
-                        tx_serial_no=extract_order_tx_serial(order),
+                        tx_serial_no=read_tx_serial_no(order),
                     )
                     report["source_summary"]["protocol"] = "available" if protocol.has_data else "unavailable"
 

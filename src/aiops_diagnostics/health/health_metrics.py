@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, NON_CHINESE_LANGUAGES
 from aiops_diagnostics.common.scalar_rules import as_datetime
 from aiops_diagnostics.health.health_report_copy import health_advice, health_conclusion_headline
 from aiops_diagnostics.health.ykc_frames import (
@@ -612,7 +612,7 @@ def _build_conclusion(
         advice_codes.append("shallow_charge")
 
     parts = [headline, *(health_advice(language, key) for key in advice_codes)]
-    joiner = "" if language in {"zh", "zh-Hant"} else " "
+    joiner = " " if language in NON_CHINESE_LANGUAGES else ""
     return {
         "level": level,
         "code": code,

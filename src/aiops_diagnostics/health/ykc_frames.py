@@ -91,8 +91,8 @@ def extract_gun_no(device_code: str | None, child_device_code: str | None) -> in
     return None
 
 
-def extract_order_tx_serial(order: Mapping[str, Any]) -> str | None:
-    """从订单 ``tx_data.txSerialNo`` 或 ``transaction_id`` 提取数字交易流水号。"""
+def read_tx_serial_no(order: Mapping[str, Any]) -> str | None:
+    """从订单 ``tx_data.txSerialNo`` 或 ``transaction_id`` 读取数字交易流水号。"""
     tx_data = order.get("tx_data")
     if isinstance(tx_data, str) and tx_data.strip():
         try:
