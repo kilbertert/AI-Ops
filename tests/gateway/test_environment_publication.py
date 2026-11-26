@@ -1687,16 +1687,19 @@ def test_restore_failure_after_target_restored_stays_reconcile_and_completes_on_
     assert first["state"] == "reconcile", first
     assert first["result"]["phase"] == "restoring"
     assert first["result"]["activated"] is False
+    assert "directory" not in first["result"]
     assert first["result"]["error_code"] == "ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED"
     assert registry.load(path)["environments"][0]["tenants"][0]["enabled"] is True
 
-    # 下一轮自动重领应完成中央收尾，状态收敛为 cancelled/restored 且清空旧 error_code。
+    # 下一轮自动重领应完成中央收尾，状态收敛为 cancelled/restored 且清空旧 error_code 与 directory。
     owner2 = "c" * 32
     assert request({"installation_claim": True, "owner": owner2})["id"] == identifier
     second = worker.execute(tmp_path, request, identifier, owner2)
     assert second["state"] == "cancelled", second
+    assert second["result"]["state"] == "cancelled"
     assert second["result"]["phase"] == "restored"
     assert second["result"]["activated"] is False
+    assert "directory" not in second["result"]
     assert not second["result"].get("error_code")
     assert registry.load(path)["environments"][0]["tenants"][0]["enabled"] is False
 
@@ -1735,4 +1738,80 @@ def test_complete_reconcile_precedes_restored_phase_even_from_older_worker(valid
     body = completed.json()
     assert body["state"] == "reconcile"
     assert body["result"]["phase"] == "restoring"
+    assert "directory" not in body["result"]
     assert body["result"]["error_code"] == "ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED"
+
+
+def test_non_cancelled_task_never_becomes_cancelled_on_restored_phase(validated):
+    """未取消任务即使携带 phase=restored 也绝不误落 cancelled，必须收口为 blocked。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "e" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+
+    blocked = internal(
+        state,
+        {
+            "publication": "complete",
+            "id": identifier,
+            "owner": owner,
+            "result": {
+                "state": "expired",
+                "phase": "restored",
+                "activated": False,
+                "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED",
+            },
+        },
+    )
+    assert blocked.status_code == 200, blocked.text
+    assert blocked.json()["state"] == "blocked"
+
+
+def test_direct_restore_cleans_stale_directory_and_state(validated):
+    """已激活任务一次性直接恢复成功（未经过 reconcile 失败）时，cancelled 终态须清理旧 directory/state。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "f" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    assert (
+        internal(
+            state, {"publication": "intent", "id": identifier, "owner": owner, "step": "readiness"}
+        ).json()["execute"]
+        is True
+    )
+    activated = internal(
+        state,
+        {
+            "publication": "complete",
+            "id": identifier,
+            "owner": owner,
+            "result": {
+                "state": "observed",
+                "phase": "activated",
+                "activated": True,
+                "directory": "synchronized",
+            },
+        },
+    )
+    assert activated.status_code == 200 and activated.json()["state"] == "observed"
+    restored_req = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"restore_publication": identifier}
+    )
+    assert restored_req.status_code == 200, restored_req.text
+    owner2 = "1" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner2}).json()["id"] == identifier
+    direct_cancelled = internal(
+        state,
+        {
+            "publication": "complete",
+            "id": identifier,
+            "owner": owner2,
+            "result": {"phase": "restored", "activated": False},
+        },
+    )
+    assert direct_cancelled.status_code == 200, direct_cancelled.text
+    body = direct_cancelled.json()
+    assert body["state"] == "cancelled"
+    assert body["result"]["state"] == "cancelled"
+    assert body["result"]["activated"] is False
+    assert "directory" not in body["result"]

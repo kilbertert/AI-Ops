@@ -325,6 +325,7 @@ def execute(root, request, identifier, owner):
                 # 在场或探测失败都不能排除副作用，仍走原受管恢复。
                 result.update(state="cancelled", phase="restored")
             elif bundle and "target" in steps:
+                result["phase"] = "restoring"
                 target_result = target_task(root, staged, bundle, "restore")
                 if target_result.get("phase") != "restored":
                     raise ValueError("target restoration unconfirmed")

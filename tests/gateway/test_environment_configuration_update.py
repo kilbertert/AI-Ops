@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -262,8 +263,11 @@ def test_repeated_publish_restore_cycle_reuses_verified_backup_and_preserves_on_
     third_restore = plans.update_artifact_references(reference, **restore_req)
     assert third_restore["references_sha256"] == canonical_sha
 
-    # 越权权限、内容篡改或符号链接的同名 .bak 仍必须 fail-closed 拒绝
+    # 越权权限、不可读、内容篡改、硬链接或符号链接的同名 .bak 仍必须 fail-closed 拒绝
     backup_canonical.chmod(0o644)
+    with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
+        plans.update_artifact_references(reference, **forward_req)
+    backup_canonical.chmod(0o200)
     with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
         plans.update_artifact_references(reference, **forward_req)
     backup_canonical.chmod(0o600)
@@ -271,6 +275,10 @@ def test_repeated_publish_restore_cycle_reuses_verified_backup_and_preserves_on_
     with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
         plans.update_artifact_references(reference, **forward_req)
     other = write_private_text(tmp_path / "other.bak", canonical_bytes.decode())
+    backup_canonical.unlink()
+    os.link(other, backup_canonical)
+    with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
+        plans.update_artifact_references(reference, **forward_req)
     backup_canonical.unlink()
     backup_canonical.symlink_to(other)
     with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):

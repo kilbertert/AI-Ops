@@ -8,6 +8,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import tarfile
 import tempfile
 import time
@@ -31,6 +32,36 @@ from aiops_diagnostics.onboarding.artifacts import (
 
 class PlanRefused(ValueError):
     pass
+
+
+def _verify_reusable_backup(backup: Path, original_bytes: bytes) -> None:
+    """按 O_NOFOLLOW + fstat 同 fd 校验既有 .bak：须为同属主、私有权限、单链接常规文件且字节一致。"""
+    try:
+        fd = os.open(backup, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS") from exc
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077 != 0
+            or info.st_nlink != 1
+            or info.st_size != len(original_bytes)
+        ):
+            raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS")
+        with os.fdopen(fd, "rb") as reader:
+            fd = -1
+            data = reader.read(len(original_bytes) + 1)
+        if data != original_bytes:
+            raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS")
+    except PlanRefused:
+        raise
+    except (ValueError, PrivatePathError, OSError) as exc:
+        raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def update_artifact_references(
@@ -105,14 +136,9 @@ def _update_artifact_references_locked(
     backup = path.with_name(f"{path.name}.{expected_sha256}.bak")
     backup_reused = False
     if backup.exists() or backup.is_symlink():
-        # 按内容摘要命名的历史回滚副本若是已验证的私有同字节副本，可幂等复用（支持
-        # publish → restore → publish 反复回到同一源引用摘要）；符号链接、越权或内容不一致仍拒绝。
-        try:
-            _private(backup)
-        except (ValueError, PrivatePathError) as exc:
-            raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS") from exc
-        if backup.read_bytes() != original_bytes:
-            raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS")
+        # 按内容摘要命名的历史回滚副本若是已验证的私有同字节单链接常规文件，可幂等复用（支持
+        # publish → restore → publish 反复回到同一源引用摘要）；符号/硬链接、越权或内容不符仍拒绝。
+        _verify_reusable_backup(backup, original_bytes)
         backup_reused = True
     if configuration is None and (
         not isinstance(application, dict)
@@ -226,12 +252,7 @@ def _update_artifact_references_locked(
         temporary.chmod(0o600)
         # Keep the rollback copy private and complete before the atomic replacement.
         if backup_reused:
-            try:
-                _private(backup)
-            except (ValueError, PrivatePathError) as exc:
-                raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS") from exc
-            if backup.read_bytes() != original:
-                raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS")
+            _verify_reusable_backup(backup, original)
         else:
             try:
                 descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

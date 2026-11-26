@@ -312,17 +312,19 @@ def dispatch(context, payload):
             and result.get("activated") is True
             and result.get("directory") == "synchronized"
             else "cancelled"
-            if result.get("phase") == "restored"
+            if row["cancel"] and result.get("phase") == "restored"
             else "blocked"
         )
         if state == "checking" and row["cancel"]:
-            if result.get("phase") == "restored":
+            if result.get("phase") in {"activated", "restored"}:
                 result["phase"] = "restoring"
             result.pop("directory", None)
         if state in {"observed", "cancelled"}:
             if state == "cancelled":
                 result["activated"] = False
-            if result.get("state") == "reconcile":
+                result["state"] = "cancelled"
+                result.pop("directory", None)
+            elif result.get("state") == "reconcile":
                 result["state"] = state
             if not incoming.get("error_code"):
                 result.pop("error_code", None)
