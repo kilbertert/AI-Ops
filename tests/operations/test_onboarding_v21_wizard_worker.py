@@ -554,7 +554,9 @@ def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags
                     ]
                 }
             if path.endswith("/apps/con-app-1"):
-                return {"workflow": {"id": "wf-con-1"}}
+                return {"workflow": {"id": "wf-con-1"}, "enable_api": True}
+            if path.endswith("/apps/op-app-1"):
+                return {"enable_api": True}
             return {"data": []}
 
     plugin_calls: list[tuple[str, str]] = []
@@ -589,16 +591,16 @@ def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags
         lambda *_a, **_k: {"model": {"credential_file": str(con_cred)}},
     )
 
-    def _fake_issue_key(_c, _w, app_id, d):
+    def _fake_ensure_key(_c, key_dir, _ws, app_id, *, database=None):
+        _ = database
+        d = Path(key_dir)
+        d.mkdir(parents=True, exist_ok=True)
         p = d / f"{app_id}.key"
-        p.write_text("k\n")
-        return p
+        p.write_text("k\n", encoding="utf-8")
+        p.chmod(0o600)
+        return str(p)
 
-    monkeypatch.setattr(
-        wizard_provision,
-        "service_keys",
-        SimpleNamespace(issue_key=_fake_issue_key),
-    )
+    monkeypatch.setattr(wizard_provision.service_keys, "ensure", _fake_ensure_key)
 
     from aiops_diagnostics.consumer import consumer_publication
 
@@ -929,18 +931,21 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
 
     class _FakeConsole:
         def __init__(self, *_a, **_k) -> None:
-            pass
+            self.api_enabled_calls: list[str] = []
 
         def install_plugins(self, *_a, **_k) -> None:
             return None
 
-        def _call(self, _ws, path, **_kw):
+        def _call(self, _ws, path, **kw):
             if "tool-providers" in path:
                 return [{"id": "prov-1", "name": "cpms-node"}]
             if "/apps?" in path:
                 return {"data": []}
+            if path.endswith("/api-enable") and kw.get("method") == "POST":
+                self.api_enabled_calls.append(path)
+                return {"enable_api": True}
             if "/apps/" in path and not path.endswith("/draft"):
-                return {"workflow": {"id": "wf-con-1"}}
+                return {"workflow": {"id": "wf-con-1"}, "enable_api": False}
             return {"data": []}
 
     seen_job_ids: list[str] = []
@@ -953,11 +958,16 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
         seen_job_ids.append(job_id)
         return "con-created"
 
-    def _fake_issue_key(_c, _w, app_id, d):
+    def _fake_ensure_key(_c, key_dir, _ws, app_id, *, database=None):
+        _ = database
+        d = Path(key_dir)
+        d.mkdir(parents=True, exist_ok=True)
         p = d / f"{app_id}.key"
-        p.write_text("k\n")
-        return p
+        p.write_text("app-secret-token\n", encoding="utf-8")
+        p.chmod(0o600)
+        return str(p)
 
+    fake_console = _FakeConsole()
     monkeypatch.setattr(wizard_provision, "NODE_RUNTIME_ENV_ROOT", node_root)
     monkeypatch.setattr(wizard_provision, "_ensure_kb_pair", lambda *_a, **_k: ("kb-c-1", "kb-o-1"))
     monkeypatch.setattr(
@@ -965,7 +975,7 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
         "ensure_workspace",
         lambda **_k: SimpleNamespace(workspace_id="ws-jiejia"),
     )
-    monkeypatch.setattr(wizard_provision, "DifyConsoleAdmin", _FakeConsole)
+    monkeypatch.setattr(wizard_provision, "DifyConsoleAdmin", lambda *_a, **_k: fake_console)
     monkeypatch.setattr(wizard_provision.knowledge_connection, "ensure", lambda *_a, **_k: None)
     monkeypatch.setattr(wizard_provision.operator_prep, "model", lambda _s: {"credential_file": str(cred)})
     monkeypatch.setattr(wizard_provision.self_service_prepare, "model_credentials", lambda *_a, **_k: None)
@@ -988,7 +998,7 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
         "profile",
         lambda *_a, **_k: {"model": {"credential_file": str(cred)}},
     )
-    monkeypatch.setattr(wizard_provision, "service_keys", SimpleNamespace(issue_key=_fake_issue_key))
+    monkeypatch.setattr(wizard_provision.service_keys, "ensure", _fake_ensure_key)
     monkeypatch.setattr(
         consumer_publication,
         "flags_of",
@@ -1024,6 +1034,43 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
     assert out["ok"] is True
     assert len(seen_job_ids) == 2
     assert all(re.fullmatch(r"[a-f0-9-]{36}", jid) for jid in seen_job_ids)
+    assert len(fake_console.api_enabled_calls) == 2
+
+    import tarfile
+
+    from dotenv import dotenv_values
+
+    tpl_vals = dotenv_values(out["config_path"], interpolate=False)
+    boot_vals = dotenv_values(out["bootstrap_config_path"], interpolate=False)
+    for forbidden in (
+        "AIOPS_GATEWAY_ENVIRONMENT",
+        "AIOPS_GATEWAY_DATABASE_FILE",
+        "AIOPS_GATEWAY_SERVER_CONFIG_FILE",
+        "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE",
+        "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR",
+    ):
+        assert forbidden not in tpl_vals
+        assert forbidden not in boot_vals
+    for ptr in (
+        "AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE",
+        "AIOPS_GATEWAY_OPERATOR_PROFILES_FILE",
+        "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE",
+        "AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE",
+    ):
+        assert ptr in tpl_vals
+        assert ptr not in boot_vals
+    assert tpl_vals["AIOPS_UPMS_BASE_URL"] == "https://api.juxichongdian.cn/upms"
+    assert tpl_vals["AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"] == "https://api.juxichongdian.cn/charging-pile"
+
+    with tarfile.open(out["runtime_bundle_path"], "r") as tf:
+        op_manifest = json.loads(tf.extractfile("runtime/operator-manifest.json").read().decode("utf-8"))
+        seed_doc = json.loads(tf.extractfile("runtime/gateway-seed.json").read().decode("utf-8"))
+    assert op_manifest["schema"] == "operator-exec-config/1"
+    assert len(op_manifest["tools"]) == 11
+    agent_manifest = json.loads(seed_doc["operator_manifest_text"])
+    assert agent_manifest["schema"] == "operator-agent/1"
+    assert len(agent_manifest["tools"]) == 11
+    assert seed_doc["key_dir"] == "/var/lib/aiops-access-jiejia/keys"
 
 
 def test_seed_target_gateway_db_populates_workspace_and_apps(tmp_path: Path) -> None:
