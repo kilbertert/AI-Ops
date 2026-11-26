@@ -113,9 +113,15 @@ def parse_ykc_comm_frames(
     gun_no: int | None = None,
     tx_serial_no: str | None = None,
 ) -> YkcProtocolEvidence:
-    """解码并过滤订单窗口内的 YKC 1.6 协议帧。"""
+    """解码并过滤订单窗口内的 YKC 1.6 协议帧。
+
+    安全边界（fail-closed）：双枪桩共用 ``charging-pile_comm.device``，若订单既无
+    可识别枪号又无有效流水号，拒绝混读整桩帧，避免暴露同桩其他车辆数据。
+    """
     evidence = YkcProtocolEvidence()
     expected_tx = _normalize_tx(tx_serial_no)
+    if gun_no is None and expected_tx is None:
+        return evidence
 
     for row in rows:
         raw_hex = str(row.get("raw") or "").strip()
@@ -129,11 +135,12 @@ def parse_ykc_comm_frames(
             continue
 
         frame_gun = _decode_bcd_byte(frame[29])
-        if gun_no is not None and frame_gun is not None and frame_gun != gun_no:
+        if gun_no is not None and (frame_gun is None or frame_gun != gun_no):
             continue
 
         frame_tx = frame[6:22].hex()
-        if expected_tx and not _tx_matches(frame_tx, expected_tx):
+        # 无枪号兜底时必须严格命中非零流水号，不允许全零流水号帧穿透
+        if expected_tx and not _tx_matches(frame_tx, expected_tx, allow_zero_tx=gun_no is not None):
             continue
 
         cmd = f"{frame[5]:02x}"
@@ -292,11 +299,11 @@ def _normalize_tx(value: str | None) -> str | None:
     return text.lstrip("0") or None
 
 
-def _tx_matches(frame_tx_hex: str, expected_tx: str) -> bool:
+def _tx_matches(frame_tx_hex: str, expected_tx: str, *, allow_zero_tx: bool = True) -> bool:
     stripped = frame_tx_hex.strip("0")
     if not stripped:
-        # 握手或早期帧可能尚未填充交易流水号，此时退回枪号过滤
-        return True
+        # 仅在已通过枪号隔离时才放行握手早期全零流水号帧
+        return allow_zero_tx
     return expected_tx in frame_tx_hex or stripped == expected_tx.rstrip("0")
 
 

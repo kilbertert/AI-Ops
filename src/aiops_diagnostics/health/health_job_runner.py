@@ -13,7 +13,7 @@ from typing import Any
 
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.common.scalar_rules import as_datetime
-from aiops_diagnostics.data.sources import SourceError
+from aiops_diagnostics.data.sources import COMM_STREAM_CODES, COMM_SUMMARY_CODES, SourceError
 from aiops_diagnostics.health.health_curves import build_curves
 from aiops_diagnostics.health.health_metrics import enrich_report
 from aiops_diagnostics.health.health_report import HealthReportError, build_minimal_health_report
@@ -56,8 +56,8 @@ def normalize_tdengine_gun_samples(samples: list[Mapping[str, Any]]) -> list[dic
         if voltage is not None and current is not None and voltage > 0 and current >= 0:
             item["power"] = round(voltage * current / 1000.0, 3)
         elif power is not None:
-            # 无 V/I 时按 W -> kW 折算（单桩实时功率不会 > 2000 kW，> 1000 必为 W）
-            item["power"] = round(power / 1000.0, 3) if power > 1000.0 else round(power, 3)
+            # TDengine charging-gun_property.power 单位恒为 W，无 V/I 时同样统一折算为 kW
+            item["power"] = round(power / 1000.0, 3)
         normalized.append(item)
     return normalized
 
@@ -112,7 +112,15 @@ def execute_health_report(
                 and hasattr(sources, "get_pile_comm_frames")
             ):
                 try:
-                    raw_frames = sources.get_pile_comm_frames(pile_device, created_at, stopped_at)
+                    # 拆分低频关键帧（0x15/17/19）与高频周期帧（0x23/25），防止长充电会话
+                    # 周期报文占满 LIMIT 2000 导致末段 0x19 结算帧丢失。
+                    summary_frames = sources.get_pile_comm_frames(
+                        pile_device, created_at, stopped_at, codes=COMM_SUMMARY_CODES
+                    )
+                    stream_frames = sources.get_pile_comm_frames(
+                        pile_device, created_at, stopped_at, codes=COMM_STREAM_CODES
+                    )
+                    raw_frames = [*summary_frames, *stream_frames]
                 except SourceError:
                     report["source_summary"]["protocol"] = "unavailable"
                 else:

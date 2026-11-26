@@ -93,7 +93,7 @@
       "stopped_at": "2026-11-26T06:31:22+00:00"
     },
     "summary": "本次充电体检各项已采集指标均处于正常范围。",
-    "overall_health_score": 89.2,
+    "overall_health_score": 89.3,
     "overall_health_source": "soh",
     "overview": {
       "start_soc": 18.0,
@@ -102,7 +102,7 @@
       "energy_charged_kwh": 45.4,
       "duration_seconds": 4339,
       "battery_type": "lfp",
-      "overall_health_score": 89.2,
+      "overall_health_score": 89.3,
       "overall_health_source": "soh",
       "soh_status": "normal",
       "is_shallow_charge": false
@@ -191,7 +191,7 @@
     "radar": [
       { "code": "temperature_balance", "score": 94.0, "status": "normal", "reason_code": null },
       { "code": "max_temperature", "score": 100.0, "status": "normal", "reason_code": null },
-      { "code": "capacity", "score": 92.3, "status": "normal", "reason_code": null },
+      { "code": "capacity", "score": 92.4, "status": "normal", "reason_code": null },
       { "code": "voltage_balance", "score": 92.8, "status": "normal", "reason_code": null },
       { "code": "soc_balance", "score": 100.0, "status": "normal", "reason_code": null }
     ],
@@ -237,7 +237,7 @@
       "energy_charged_kwh": 45.4,
       "nominal_capacity_kwh": 59.0,
       "nominal_capacity_source": "ykc_0x17",
-      "soh": 89.2,
+      "soh": 89.3,
       "soh_shallow_estimate": null,
       "soh_status": "normal",
       "is_shallow_charge": false,
@@ -410,6 +410,7 @@ async function loadBatteryReport(orderNo) {
 - `series[].points` 每项为 `[unix_timestamp_seconds, numeric_value]`，最多 300 点（已保首尾与极值），X 轴按用户本地时区格式化为 `HH:mm`。
 - `series[].name` 已随作业语言本地化，可直接用作图例；`power` 单位已统一为 `kW`。
 - 某分组 `series.length === 0` 时展示「本次充电暂无曲线数据」空态，不渲染示例折线。
+- 规格中可选的「单体平均电压偏差」曲线依赖车型电芯串联数 `N`，41 现网车辆规格表暂无 `N` 数据，本版暂不下发该序列（后端已预留字段，前端按 `series` 列表动态渲染即可）。
 
 ---
 

@@ -388,3 +388,128 @@ def test_tdengine_power_normalization_and_iso_curve_sentinels() -> None:
     temp_pts = curves["temperature"]["series"][0]["points"]
     assert len(temp_pts) == 1
     assert temp_pts[0][1] == 32.0
+
+    # 无 V/I 时，<= 1000 W 的低功率也必须按 W -> kW 换算，不得原样当 800 kW
+    low_power = normalize_tdengine_gun_samples([{"_ts": 0, "power": 800.0}])
+    assert low_power[0]["power"] == 0.8
+
+
+def test_ykc_decoder_fails_closed_without_isolation_keys() -> None:
+    """无 gun_no 与 tx_serial_no 时 fail closed，防止双枪串单（SEC_0001）。"""
+    row_valid_tx = {
+        "_ts": "2026-11-26T06:00:03Z",
+        "code": "17",
+        "raw": _ykc_raw("17", "6e0184034e02c40e6a1a02110d1027d0072e049001"),
+    }
+    row_zero_tx = {
+        "_ts": "2026-11-26T06:00:03Z",
+        "code": "17",
+        "raw": _ykc_raw(
+            "17",
+            "6e0184034e02c40e6a1a02110d1027d0072e049001",
+            tx_hex="00000000000000000000000000000000",
+        ),
+    }
+
+    # 既无 gun_no 又无 tx_serial_no -> 拒绝解码
+    ev_none = parse_ykc_comm_frames([row_valid_tx], gun_no=None, tx_serial_no=None)
+    assert not ev_none.has_data
+    assert ev_none.nominal_energy_kwh is None
+
+    # 仅有 tx_serial_no、无 gun_no 时：全零占位 tx 帧不得通过，匹配的非零 tx 帧才通过
+    ev_tx_only = parse_ykc_comm_frames([row_zero_tx], gun_no=None, tx_serial_no="2125844025358872576")
+    assert not ev_tx_only.has_data
+    ev_tx_match = parse_ykc_comm_frames([row_valid_tx], gun_no=None, tx_serial_no="2125844025358872576")
+    assert ev_tx_match.nominal_energy_kwh == 59.0
+
+
+def test_sporadic_0x25_does_not_mask_gun_overheat_in_metrics_or_curves() -> None:
+    """偶发 0x25 帧不得掩盖后续枪侧 >55℃ 高温与快温升（BUG_0001）。"""
+    proto = parse_ykc_comm_frames(
+        [
+            {
+                "_ts": 0,
+                "code": "25",
+                "raw": _ykc_raw("25", "4752004e0c00000000000000000000000001000000"),  # 32℃ / 28℃
+            }
+        ],
+        gun_no=1,
+    )
+    samples = [
+        {"_ts": 0, "batteryMaxTemperature": 32, "soc": 20, "chargingElectricityQuantity": 0.0},
+        {"_ts": 300, "batteryMaxTemperature": 45, "soc": 40, "chargingElectricityQuantity": 10.0},
+        {"_ts": 600, "batteryMaxTemperature": 58, "soc": 60, "chargingElectricityQuantity": 20.0},
+    ]
+    report = enrich_report(
+        {"indicators": [], "source_summary": {}},
+        samples,
+        {"nominal_capacity_kwh": 50.0},
+        protocol=proto,
+    )
+    ind = {item["code"]: item for item in report["indicators"]}
+    assert report["health_metrics"]["max_temperature"] == 58.0
+    assert ind["battery_max_temp"]["status"] == "abnormal"
+    assert ind["temp_rise_rate"]["status"] == "abnormal"
+
+    curves = build_curves(samples, "zh", protocol=proto)
+    max_series = next(s for s in curves["temperature"]["series"] if s["field"] == "batteryMaxTemperature")
+    assert max(pt[1] for pt in max_series["points"]) == 58.0
+
+
+def test_pre_handshake_zero_energy_and_genuine_zero_soc_and_consecutive_jumps() -> None:
+    """验证握手前零电量跳过（BUG_0002）、真实 0% 起充保留（BUG_0003）及连续 SOC 跳变计数（BUG_0004）。"""
+    # BUG_0002: 握手前 (I=0, soc=0, E=0) 不应把 E=0 计入 energy_delta 起点
+    samples_pre = [
+        {"_ts": 0, "outputCurrent": 0, "soc": 0, "chargingElectricityQuantity": 0.0},
+        {"_ts": 20, "outputCurrent": 100, "soc": 50, "chargingElectricityQuantity": 0.1},
+        {"_ts": 620, "outputCurrent": 100, "soc": 90, "chargingElectricityQuantity": 14.6},
+    ]
+    rep_pre = enrich_report(
+        {"indicators": [], "source_summary": {}},
+        samples_pre,
+        {"nominal_capacity_kwh": 35.0},
+    )
+    assert rep_pre["health_metrics"]["energy_charged_kwh"] == 14.5
+
+    # BUG_0003: 真实 0% -> 30% 起充（带有效电流），不得裁掉 0% 点误判浅充
+    samples_zero_start = [
+        {"_ts": 0, "outputCurrent": 80.0, "soc": 0, "chargingElectricityQuantity": 0.0},
+        {"_ts": 60, "outputCurrent": 80.0, "soc": 1, "chargingElectricityQuantity": 0.5},
+        {"_ts": 900, "outputCurrent": 80.0, "soc": 30, "chargingElectricityQuantity": 15.0},
+    ]
+    rep_zero = enrich_report(
+        {"indicators": [], "source_summary": {}},
+        samples_zero_start,
+        {"nominal_capacity_kwh": 50.0, "start_soc": 0},
+    )
+    assert rep_zero["overview"]["start_soc"] == 0.0
+    assert rep_zero["health_metrics"]["soc_delta"] == 30.0
+    assert rep_zero["health_metrics"]["is_shallow_charge"] is False
+    assert rep_zero["health_metrics"]["soh"] is not None
+
+    # BUG_0004: 连续两次 10s 内跳变（40 -> 44 -> 48）应记为 2 次；单次跳变后平稳（40 -> 44 -> 44）仅记 1 次
+    samples_two_jumps = [
+        {"_ts": 0, "outputCurrent": 50.0, "soc": 40, "chargingElectricityQuantity": 0.0},
+        {"_ts": 10, "outputCurrent": 50.0, "soc": 44, "chargingElectricityQuantity": 0.2},
+        {"_ts": 20, "outputCurrent": 50.0, "soc": 48, "chargingElectricityQuantity": 0.4},
+        {"_ts": 600, "outputCurrent": 50.0, "soc": 75, "chargingElectricityQuantity": 15.0},
+    ]
+    rep_two = enrich_report(
+        {"indicators": [], "source_summary": {}},
+        samples_two_jumps,
+        {"nominal_capacity_kwh": 50.0},
+    )
+    assert rep_two["health_metrics"]["soc_jumps_15s"] == 2
+
+    samples_one_jump = [
+        {"_ts": 0, "outputCurrent": 50.0, "soc": 40, "chargingElectricityQuantity": 0.0},
+        {"_ts": 10, "outputCurrent": 50.0, "soc": 44, "chargingElectricityQuantity": 0.2},
+        {"_ts": 12, "outputCurrent": 50.0, "soc": 44, "chargingElectricityQuantity": 0.25},
+        {"_ts": 600, "outputCurrent": 50.0, "soc": 75, "chargingElectricityQuantity": 15.0},
+    ]
+    rep_one = enrich_report(
+        {"indicators": [], "source_summary": {}},
+        samples_one_jump,
+        {"nominal_capacity_kwh": 50.0},
+    )
+    assert rep_one["health_metrics"]["soc_jumps_15s"] == 1

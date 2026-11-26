@@ -197,7 +197,7 @@ def enrich_report(
     )
 
     # 2. SOC 系列、起止 SOC、变化率与 15s 跳变
-    soc_series = _extract_soc_series(ordered_samples, proto)
+    soc_series = _extract_soc_series(ordered_samples, proto, order)
     soc_change_rate = _sliding_window_max_rise_rate(
         soc_series,
         window_seconds=SOC_RATE_WINDOW_SECONDS,
@@ -639,47 +639,65 @@ def _extract_temperature_series(
     samples: list[tuple[float | None, Mapping[str, Any]]],
     proto: YkcProtocolEvidence,
 ) -> tuple[list[tuple[float | None, float]], list[float]]:
-    if proto.temp_points:
-        max_series = [(pt.ts_seconds, pt.max_temp_c) for pt in proto.temp_points if pt.max_temp_c is not None]
-        deltas = [
-            pt.max_temp_c - pt.min_temp_c
-            for pt in proto.temp_points
-            if pt.max_temp_c is not None and pt.min_temp_c is not None and pt.max_temp_c >= pt.min_temp_c
-        ]
-        if max_series:
-            return max_series, deltas
-
-    max_series = []
-    deltas = []
+    sample_max: list[tuple[float | None, float]] = []
+    sample_deltas: list[float] = []
     for ts, row in samples:
         if _is_pre_handshake_zero_row(row):
             continue
         t_max = _valid_temp(row.get("batteryMaxTemperature"))
         t_min = _valid_temp(row.get("batteryMinTemperature"))
         if t_max is not None:
-            max_series.append((ts, t_max))
+            sample_max.append((ts, t_max))
         if t_max is not None and t_min is not None and t_max >= t_min:
-            deltas.append(t_max - t_min)
-    return max_series, deltas
+            sample_deltas.append(t_max - t_min)
+
+    proto_max = [(pt.ts_seconds, pt.max_temp_c) for pt in proto.temp_points if pt.max_temp_c is not None]
+    proto_deltas = [
+        pt.max_temp_c - pt.min_temp_c
+        for pt in proto.temp_points
+        if pt.max_temp_c is not None and pt.min_temp_c is not None and pt.max_temp_c >= pt.min_temp_c
+    ]
+
+    if proto_max:
+        # 协议 0x25 帧偶发稀疏时，补入未被 0x25 时间窗（±10s）覆盖的枪侧最高温，避免漏报高温或快温升
+        proto_ts = [ts for ts, _ in proto_max if ts is not None]
+        merged_max = list(proto_max)
+        for ts, val in sample_max:
+            if ts is not None and not any(abs(ts - pts) <= 10.0 for pts in proto_ts):
+                merged_max.append((ts, val))
+        merged_max.sort(key=lambda item: (item[0] is None, item[0] or 0.0))
+        return merged_max, (proto_deltas if proto_deltas else sample_deltas)
+
+    return sample_max, (proto_deltas if proto_deltas else sample_deltas)
 
 
 def _extract_soc_series(
     samples: list[tuple[float | None, Mapping[str, Any]]],
     proto: YkcProtocolEvidence,
+    order: Mapping[str, Any] | None = None,
 ) -> list[tuple[float | None, float]]:
-    sample_soc: list[tuple[float | None, float]] = []
+    order_start_soc = _number(order.get("start_soc")) if order else None
+    sample_soc: list[tuple[float | None, float, bool]] = []
     for ts, row in samples:
-        if _is_pre_handshake_zero_row(row):
-            continue
         val = _number(row.get("soc"))
-        if val is not None and 0.0 <= val <= 100.0:
-            sample_soc.append((ts, val))
-    # 剔除握手前/停充后偶发的 soc=0 边界点（仅当存在有效正 SOC 时）
-    sample_soc = _trim_boundary_zero_soc(sample_soc)
-    if sample_soc and any(v > 0 for _, v in sample_soc):
-        return sample_soc
+        if val is None or not (0.0 <= val <= 100.0):
+            continue
+        current = _number(row.get("outputCurrent"))
+        energy = _number(row.get("chargingElectricityQuantity"))
+        is_genuine_zero = val == 0.0 and (
+            (current is not None and current > 0)
+            or (energy is not None and energy > 0)
+            or (order_start_soc == 0.0 and (current is None or current > 0))
+        )
+        if _is_pre_handshake_zero_row(row) and not is_genuine_zero:
+            continue
+        sample_soc.append((ts, val, is_genuine_zero))
+    # 剔除握手前/停充后偶发的 soc=0 边界点，但保留真实 0% 起充点
+    trimmed_samples = _trim_boundary_zero_soc(sample_soc)
+    if trimmed_samples and any(v > 0 for _, v in trimmed_samples):
+        return trimmed_samples
     proto_soc = _trim_boundary_zero_soc(
-        [(pt.ts_seconds, pt.soc) for pt in proto.voltage_points if pt.soc is not None]
+        [(pt.ts_seconds, pt.soc, order_start_soc == 0.0) for pt in proto.voltage_points if pt.soc is not None]
     )
     if proto_soc and any(v > 0 for _, v in proto_soc):
         return proto_soc
@@ -687,17 +705,17 @@ def _extract_soc_series(
 
 
 def _trim_boundary_zero_soc(
-    series: list[tuple[float | None, float]],
+    series: list[tuple[float | None, float, bool]],
 ) -> list[tuple[float | None, float]]:
-    if not series or not any(v > 0 for _, v in series):
-        return series
+    if not series or not any(v > 0 for _, v, _ in series):
+        return [(ts, val) for ts, val, _ in series]
     start = 0
-    while start < len(series) and series[start][1] == 0.0:
+    while start < len(series) and series[start][1] == 0.0 and not series[start][2]:
         start += 1
     end = len(series)
     while end > start and series[end - 1][1] == 0.0:
         end -= 1
-    return series[start:end]
+    return [(ts, val) for ts, val, _ in series[start:end]]
 
 
 def _sliding_window_max_rise_rate(
@@ -742,18 +760,19 @@ def _count_soc_jumps(series: list[tuple[float | None, float]]) -> int | None:
         return None
     timed.sort(key=lambda item: item[0])
     jumps = 0
-    last_jump_ts: float | None = None
+    min_left = 0
     left = 0
     for right in range(1, len(timed)):
         t_right, v_right = timed[right]
+        if left < min_left:
+            left = min_left
         while left < right and (t_right - timed[left][0]) > SOC_JUMP_WINDOW_SECONDS:
             left += 1
         for idx in range(left, right):
             dt = t_right - timed[idx][0]
             if 0.0 < dt <= SOC_JUMP_WINDOW_SECONDS and abs(v_right - timed[idx][1]) >= SOC_JUMP_THRESHOLD_PCT:
-                if last_jump_ts is None or (t_right - last_jump_ts) > SOC_JUMP_WINDOW_SECONDS:
-                    jumps += 1
-                    last_jump_ts = t_right
+                jumps += 1
+                min_left = right
                 break
     return jumps
 
@@ -787,7 +806,9 @@ def _resolve_energy_delta(
     energies = [
         val
         for _, row in samples
-        if (val := _number(row.get("chargingElectricityQuantity"))) is not None and val >= 0
+        if not _is_pre_handshake_zero_row(row)
+        and (val := _number(row.get("chargingElectricityQuantity"))) is not None
+        and val >= 0
     ]
     if len(energies) >= 2:
         delta = energies[-1] - energies[0]

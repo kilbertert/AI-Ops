@@ -79,14 +79,28 @@ def _build_temperature_group(
     original_points = len(parsed_rows)
 
     if protocol and protocol.temp_points:
-        original_points = max(original_points, len(protocol.temp_points))
-        max_pts = [(pt.ts_seconds, pt.max_temp_c) for pt in protocol.temp_points if pt.max_temp_c is not None]
+        proto_max_pts = [
+            (pt.ts_seconds, pt.max_temp_c) for pt in protocol.temp_points if pt.max_temp_c is not None
+        ]
         min_pts = [(pt.ts_seconds, pt.min_temp_c) for pt in protocol.temp_points if pt.min_temp_c is not None]
         delta_pts = [
             (pt.ts_seconds, round(pt.max_temp_c - pt.min_temp_c, 2))
             for pt in protocol.temp_points
             if pt.max_temp_c is not None and pt.min_temp_c is not None and pt.max_temp_c >= pt.min_temp_c
         ]
+        sample_max_pts = [
+            (ts, val)
+            for ts, row in parsed_rows
+            if (val := _valid_temp(row.get("batteryMaxTemperature"))) is not None
+        ]
+        if proto_max_pts and sample_max_pts:
+            p_start = min(ts for ts, _ in proto_max_pts)
+            p_end = max(ts for ts, _ in proto_max_pts)
+            uncovered = [(ts, val) for ts, val in sample_max_pts if ts < p_start - 15.0 or ts > p_end + 15.0]
+            max_pts = sorted([*proto_max_pts, *uncovered], key=lambda item: item[0])
+        else:
+            max_pts = proto_max_pts or sample_max_pts
+        original_points = max(original_points, len(protocol.temp_points), len(max_pts))
         _append_series(
             group,
             field="batteryMaxTemperature",

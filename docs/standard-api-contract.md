@@ -192,7 +192,7 @@ Authorization: Bearer <access_token>
       "stopped_at": "2026-11-26T06:31:22+00:00"
     },
     "summary": "本次充电体检各项已采集指标均处于正常范围。",
-    "overall_health_score": 89.2,
+    "overall_health_score": 89.3,
     "overall_health_source": "soh",
     "overview": {
       "start_soc": 18.0,
@@ -201,7 +201,7 @@ Authorization: Bearer <access_token>
       "energy_charged_kwh": 45.4,
       "duration_seconds": 4339,
       "battery_type": "lfp",
-      "overall_health_score": 89.2,
+      "overall_health_score": 89.3,
       "overall_health_source": "soh",
       "soh_status": "normal",
       "is_shallow_charge": false
@@ -295,7 +295,7 @@ Authorization: Bearer <access_token>
     "radar": [
       { "code": "temperature_balance", "score": 94.0, "status": "normal", "reason_code": null },
       { "code": "max_temperature", "score": 100.0, "status": "normal", "reason_code": null },
-      { "code": "capacity", "score": 92.3, "status": "normal", "reason_code": null },
+      { "code": "capacity", "score": 92.4, "status": "normal", "reason_code": null },
       { "code": "voltage_balance", "score": 92.8, "status": "normal", "reason_code": null },
       { "code": "soc_balance", "score": 100.0, "status": "normal", "reason_code": null }
     ],
@@ -315,7 +315,7 @@ Authorization: Bearer <access_token>
       "energy_charged_kwh": 45.4,
       "nominal_capacity_kwh": 59.0,
       "nominal_capacity_source": "ykc_0x17",
-      "soh": 89.2,
+      "soh": 89.3,
       "soh_shallow_estimate": null,
       "soh_status": "normal",
       "is_shallow_charge": false,
