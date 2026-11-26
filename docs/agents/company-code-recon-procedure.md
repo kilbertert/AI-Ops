@@ -268,19 +268,9 @@ $ deploy/company-gitlab-api.sh projects --search cloud-charging-pile | wc -l
 **令牌不进 argv**：`projects` 跑起来时读 `/proc/<pid>/cmdline`，**看不到令牌**
 （令牌经 `curl --config /dev/stdin` 传入）。放进 `-H` 则任何本机进程都能读到。
 
-### 本节的claim有守卫，不是靠自觉
+### 本节命令清单与历史校验说明
 
-上面那句「每行都可逐字复制」和「全部/前 N 行」的标注，由
-`tests/integrations/test_recon_procedure_evidence.py` 核对：
-
-- **结构半边**（CI 里就跑）：行末不许出现会被 shell 当参数的标注；
-  覆盖表与代码块里的命令必须**逐字一致**（缺一条、多一条都红）。
-- **live 半边**（设了 `AIOPS_GL_CA` 才跑）：代码块里的每条命令**真的执行**；
-  标「全部」的命令其输出与块里**逐行相同**；标「前 N 行（共 M 行）」的，M 必须是真实行数。
-
-已经用变异核对过（去掉守卫能变红）：行末标注加回去 → 结构测试红；
-把 `blobs=46` 改成 `blobs=99` → 复现测试红；把「共 12 行」改成「共 99 行」→ 总数测试红。
-**live 半边需要锚点所以 CI 不跑** —— 这是它的已知覆盖空缺，不是它通过了的证据。
+上面那套静态表格与示例命令在 2026-10-01 探查期间曾配有 6 个独立过程取证测试（`#475–#480`，含 `tests/integrations/test_recon_procedure_evidence.py` 等）：它们不校验 `src/` 业务代码，而是校对早期 Markdown 报告排版，并在无 `AIOPS_GL_CA` 凭据的常规 CI 环境下长期占用 8/10 个允许的 `skipped` 名额。相关历史过程测试已依据 [ADR-0356](../adr/0356-retire-historical-recon-evidence-tests.md) 随探查阶段完结整体退役；现役取数工具 `deploy/company-gitlab-api.sh` 与本手册继续保留。
 
 ---
 
