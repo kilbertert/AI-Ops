@@ -14,7 +14,11 @@ import time
 import zlib
 from pathlib import Path
 
-from aiops_diagnostics.common.private_files import validate_private_directory, validate_private_file
+from aiops_diagnostics.common.private_files import (
+    PrivatePathError,
+    validate_private_directory,
+    validate_private_file,
+)
 from aiops_diagnostics.gateway import gateway_db
 from aiops_diagnostics.onboarding import drafts, projection, registry
 from aiops_diagnostics.onboarding.artifacts import (
@@ -95,11 +99,21 @@ def _update_artifact_references_locked(
         raise PlanRefused("ENVIRONMENT_REFERENCES_INVALID")
     validate_private_directory(path.parent)
     _private(path)
-    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
+    original_bytes = path.read_bytes()
+    if hashlib.sha256(original_bytes).hexdigest() != expected_sha256:
         raise PlanRefused("ENVIRONMENT_REFERENCES_CHANGED")
     backup = path.with_name(f"{path.name}.{expected_sha256}.bak")
+    backup_reused = False
     if backup.exists() or backup.is_symlink():
-        raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS")
+        # 按内容摘要命名的历史回滚副本若是已验证的私有同字节副本，可幂等复用（支持
+        # publish → restore → publish 反复回到同一源引用摘要）；符号链接、越权或内容不一致仍拒绝。
+        try:
+            _private(backup)
+        except (ValueError, PrivatePathError) as exc:
+            raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS") from exc
+        if backup.read_bytes() != original_bytes:
+            raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS")
+        backup_reused = True
     if configuration is None and (
         not isinstance(application, dict)
         or not isinstance(installer, dict)
@@ -211,13 +225,24 @@ def _update_artifact_references_locked(
             os.fsync(stream.fileno())
         temporary.chmod(0o600)
         # Keep the rollback copy private and complete before the atomic replacement.
-        descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        backup_created = True
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(original)
-            stream.flush()
-            os.fsync(stream.fileno())
-        _private(backup)
+        if backup_reused:
+            try:
+                _private(backup)
+            except (ValueError, PrivatePathError) as exc:
+                raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS") from exc
+            if backup.read_bytes() != original:
+                raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS")
+        else:
+            try:
+                descriptor = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError as exc:
+                raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS") from exc
+            backup_created = True
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(original)
+                stream.flush()
+                os.fsync(stream.fileno())
+            _private(backup)
         if path.read_bytes() != original:
             raise PlanRefused("ENVIRONMENT_REFERENCES_CHANGED")
         temporary.replace(path)
@@ -248,7 +273,8 @@ def _update_artifact_references_locked(
                     os.fsync(directory)
                 finally:
                     os.close(directory)
-                backup.unlink(missing_ok=True)
+                if backup_created:
+                    backup.unlink(missing_ok=True)
             finally:
                 restore.unlink(missing_ok=True)
         raise

@@ -197,3 +197,81 @@ def test_configuration_reference_failure_keeps_original_and_private_version_reus
     assert not reference.with_name(reference.name + "." + request["expected_sha256"] + ".bak").exists()
     plans.update_artifact_references(reference, **request)
     assert reference.read_bytes() != before
+
+
+def test_repeated_publish_restore_cycle_reuses_verified_backup_and_preserves_on_fault(
+    configuration, tmp_path, monkeypatch
+):
+    """多次 publish → restore 回到同摘要时幂等复用已验私有 .bak；异常样本仍拒绝且故障不删既有副本。"""
+    reference, before, _, request, _ = configuration
+    before_sha = request["expected_sha256"]
+    before_cfg = json.loads(before)["targets"][0]["configurations"][0]
+    # 第 1 轮 A → B
+    first = plans.update_artifact_references(reference, **request)
+    after_bytes = reference.read_bytes()
+    after_sha = first["references_sha256"]
+    after_cfg = json.loads(after_bytes)["targets"][0]["configurations"][0]
+    backup_a = reference.with_name(f"{reference.name}.{before_sha}.bak")
+    assert backup_a.read_bytes() == before
+
+    # 第 1 轮恢复 B → A_canonical（路径规范化进 onboarding-assets/configuration-<sha>/template.env）
+    restore_req = {
+        "registry_path": request["registry_path"],
+        "identity": request["identity"],
+        "environment": request["environment"],
+        "expected_sha256": after_sha,
+        "configuration": {
+            "id": before_cfg["id"],
+            "path": before_cfg["path"],
+            "sha256": before_cfg["sha256"],
+            "expected_sha256": after_cfg["sha256"],
+        },
+    }
+    restored = plans.update_artifact_references(reference, **restore_req)
+    canonical_bytes = reference.read_bytes()
+    canonical_sha = restored["references_sha256"]
+    backup_b = reference.with_name(f"{reference.name}.{after_sha}.bak")
+    assert backup_b.read_bytes() == after_bytes
+
+    # 第 2 轮 A_canonical → B（生成 canonical_sha.bak）→ A_canonical（复用已有 backup_b！）
+    forward_req = {**request, "expected_sha256": canonical_sha}
+    second = plans.update_artifact_references(reference, **forward_req)
+    assert second["references_sha256"] == after_sha
+    backup_canonical = reference.with_name(f"{reference.name}.{canonical_sha}.bak")
+    assert backup_canonical.read_bytes() == canonical_bytes
+    second_restore = plans.update_artifact_references(reference, **restore_req)
+    assert second_restore["references_sha256"] == canonical_sha
+
+    # 故障在复用既有 .bak 时发生：不得删除原本已有的历史回滚副本
+    original_replace = Path.replace
+
+    def fail_replace(self, target):
+        if target == reference:
+            raise OSError("synthetic replace fault")
+        return original_replace(self, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "replace", fail_replace)
+        with pytest.raises(OSError):
+            plans.update_artifact_references(reference, **forward_req)
+    assert backup_canonical.exists() and backup_canonical.read_bytes() == canonical_bytes
+
+    # 第 3 轮 A_canonical → B → A_canonical（双向均复用已验私有 .bak）全部成功
+    third = plans.update_artifact_references(reference, **forward_req)
+    assert third["references_sha256"] == after_sha
+    third_restore = plans.update_artifact_references(reference, **restore_req)
+    assert third_restore["references_sha256"] == canonical_sha
+
+    # 越权权限、内容篡改或符号链接的同名 .bak 仍必须 fail-closed 拒绝
+    backup_canonical.chmod(0o644)
+    with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
+        plans.update_artifact_references(reference, **forward_req)
+    backup_canonical.chmod(0o600)
+    backup_canonical.write_bytes(b"tampered")
+    with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
+        plans.update_artifact_references(reference, **forward_req)
+    other = write_private_text(tmp_path / "other.bak", canonical_bytes.decode())
+    backup_canonical.unlink()
+    backup_canonical.symlink_to(other)
+    with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
+        plans.update_artifact_references(reference, **forward_req)
