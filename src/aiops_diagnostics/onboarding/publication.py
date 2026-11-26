@@ -378,6 +378,14 @@ def restore_task(context, identity, identifier):
         tasks._authorize(path, identity, row["environment"])
         if row["state"] == "executing" and row["lease_until"] > time.time():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
+        if conn.execute(
+            "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
+            "AND state IN ('waiting','executing','checking') AND json_extract(request,'$.action') "
+            "IN ('site-install','candidate-install','candidate-register',"
+            "'candidate-validate','environment-publish')",
+            (row["environment"], identifier),
+        ).fetchone():
+            raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
         request["identity"] = identity
         request["restore_requested"] = True
         conn.execute(
@@ -721,9 +729,11 @@ def activate_directory(context, request, result):
             row["tenants"].append(selected)
         if selected["enabled"] is not restore:
             return {"revision": current["revision"]}
+        selected["enabled"] = not restore
         if not restore:
             row["enabled"] = True
-        selected["enabled"] = not restore
+        elif not any(t["enabled"] for t in row["tenants"]):
+            row["enabled"] = False
     revision = registry.apply(
         Path(path),
         current["environments"],
@@ -734,6 +744,43 @@ def activate_directory(context, request, result):
     return {"revision": revision}
 
 
+def _has_other_delegated_publication(path, environment, tenant_id, identifier):
+    from aiops_diagnostics.onboarding import registry
+
+    current_registry = registry.load(path)
+    env_row = next((r for r in current_registry["environments"] if r["id"] == environment), None)
+    if env_row is not None and any(t["enabled"] for t in env_row["tenants"] if t["id"] != tenant_id):
+        return True
+    with gateway_db.connection(drafts._database(path), readonly=True) as conn:
+        rows = conn.execute(
+            "SELECT id, state, request, result, updated_at FROM environment_tasks "
+            "WHERE environment=? AND id!=? AND json_extract(request,'$.action')=? "
+            "ORDER BY updated_at DESC",
+            (environment, identifier, ACTION),
+        ).fetchall()
+    seen_tenants = set()
+    for row in rows:
+        if row["state"] in {"waiting", "executing", "checking"}:
+            return True
+        req = json.loads(row["request"] or "{}")
+        other_tenant = req.get("tenant_id")
+        if not other_tenant or other_tenant == tenant_id or other_tenant in seen_tenants:
+            continue
+        seen_tenants.add(other_tenant)
+        if row["state"] == "cancelled":
+            continue
+        res = json.loads(row["result"] or "{}")
+        if res.get("phase") == "restored":
+            continue
+        active_phases = {"staged", "activating", "activated", "restoring"}
+        target_phase = (res.get("steps") or {}).get("target", {}).get("phase") or (
+            (req.get("steps") or {}).get("target", {}).get("phase")
+        )
+        if res.get("phase") in active_phases or target_phase in active_phases:
+            return True
+    return False
+
+
 def source_configuration(context, request, identifier, *, restore=False):
     """源引用和目标事务分别CAS；原不可变模板留存，失败只核对本次转换。"""
     from dotenv import dotenv_values
@@ -742,7 +789,8 @@ def source_configuration(context, request, identifier, *, restore=False):
 
     path = management._path(context)
     refs = Path(context.settings.environment_onboarding_file)
-    directory = Path(context.settings.data_home) / "publication-bundles" / identifier
+    bundles_root = Path(context.settings.data_home) / "publication-bundles"
+    directory = bundles_root / identifier
     transaction = directory / "source-operation.json"
     draft = json.loads(
         next(
@@ -751,14 +799,20 @@ def source_configuration(context, request, identifier, *, restore=False):
             if r["environment"] == request["plan"]["environment"]
         )["body"]
     )
+    baseline_file = bundles_root / f"delegation-baseline-{draft['id']}.json"
+    if baseline_file.is_symlink():
+        raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
     entries = plans._references(refs)
     target = next(t for t in entries if t["id"] == draft["deployment_target"])
     source = next(c for c in target["configurations"] if c["id"] == draft["credential_ref"])
-    if transaction.exists():
-        state, _ = _private_json(transaction)
-    elif restore:
+    if restore and _has_other_delegated_publication(path, draft["id"], request["tenant_id"], identifier):
+        # 同环境仍有其他已启用租户或已 staged/在飞的委派发布，停用单租户时不得回退源配置引用。
         return {"state": "unchanged"}
-    else:
+    has_transaction = transaction.exists()
+    state = None
+    if has_transaction:
+        state, _ = _private_json(transaction)
+    elif not restore:
         if hashlib.sha256(refs.read_bytes()).hexdigest() != request["references_sha256"]:
             raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
         current = plans._private(source["path"])
@@ -786,7 +840,45 @@ def source_configuration(context, request, identifier, *, restore=False):
             "reference_document": json.loads(refs.read_text()),
         }
         write_private_text(transaction, json.dumps(state))
-    desired, previous = (state["before"], state["after"]) if restore else (state["after"], state["before"])
+        has_transaction = True
+    if (
+        not restore
+        and state is not None
+        and state["before"]["sha256"] != state["after"]["sha256"]
+        and not baseline_file.exists()
+    ):
+        # 无论首次执行还是崩溃后重领，均在写 references.json 前确保环境级基线存在（BUG_0003）。
+        write_private_text(
+            baseline_file,
+            json.dumps(
+                {
+                    "environment": draft["id"],
+                    "before": state["before"],
+                    "after": state["after"],
+                }
+            ),
+        )
+    if restore:
+        own_switched = state is not None and state["before"]["sha256"] != state["after"]["sha256"]
+        if own_switched:
+            desired, previous = state["before"], state["after"]
+        elif baseline_file.exists():
+            # 非 LIFO 恢复末租户（含在 staged/verify 阶段取消、尚未写 source-operation.json 的场景，NEW-H2）：
+            # 借环境级基线将 references.json 对称回退到 T0；已处于 T0 时幂等返回 unchanged（NEW-H1）。
+            baseline, _ = _private_json(baseline_file)
+            if baseline.get("environment") != draft["id"]:
+                raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
+            if source["sha256"] == baseline["before"]["sha256"]:
+                return {"state": "unchanged"}
+            desired, previous = baseline["before"], baseline["after"]
+        else:
+            # 基线缺失时 fail-closed 检查当前源模板是否仍残留委派文件路径（NEW-M1）
+            live_values = dict(dotenv_values(plans._private(source["path"]), interpolate=False))
+            if live_values.get("AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE"):
+                raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
+            return {"state": "unchanged"}
+    else:
+        desired, previous = state["after"], state["before"]
     if source["sha256"] == desired["sha256"]:
         if not restore and not state.get("references_after"):
             state["references_after"] = hashlib.sha256(refs.read_bytes()).hexdigest()
@@ -794,7 +886,9 @@ def source_configuration(context, request, identifier, *, restore=False):
         return {"state": "unchanged"}
     if source["sha256"] != previous["sha256"]:
         raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
-    expected = state.get("references_after") if restore else state["references_before"]
+    # 恢复时按当前共享 references.json 摘要 + 本环境配置项 expected_sha256 双重 CAS，
+    # 避免其他无关环境的引用更新阻塞本环境末租户收口（BUG_0002）。
+    expected = hashlib.sha256(refs.read_bytes()).hexdigest() if restore else state["references_before"]
     if expected is None:
         raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
     updated = plans.update_artifact_references(
@@ -805,6 +899,7 @@ def source_configuration(context, request, identifier, *, restore=False):
         expected_sha256=expected,
         configuration={**desired, "expected_sha256": previous["sha256"]},
     )
-    state["references_restored" if restore else "references_after"] = updated["references_sha256"]
-    write_private_text(transaction, json.dumps(state))
+    if has_transaction and state is not None:
+        state["references_restored" if restore else "references_after"] = updated["references_sha256"]
+        write_private_text(transaction, json.dumps(state))
     return {"state": "updated", "references_sha256": updated["references_sha256"]}
