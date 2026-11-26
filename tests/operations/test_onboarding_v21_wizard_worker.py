@@ -414,3 +414,223 @@ def test_wizard_worker_runs_substeps_and_halts_on_failure(tmp_path: Path, monkey
     assert complete_calls[0]["passed"] is False
     assert complete_calls[0]["failed_step"] == "customer_nginx"
     assert complete_calls[0]["error_code"] == "NGINX_SYNTAX_ERROR"
+
+
+def test_ephemeral_pty_runner_attaches_controlling_tty(monkeypatch) -> None:
+    import fcntl
+    import os
+    import select
+    import subprocess
+    import termios
+
+    from aiops_diagnostics.onboarding import host_enrollment
+
+    popen_kwargs: dict[str, object] = {}
+    ioctl_calls: list[tuple[int, int, int]] = []
+    setsid_calls: list[bool] = []
+    reads = [b"root@8.148.223.139's password: ", b"AIOPS_BOOTSTRAP_JSON:{}\r\n", b""]
+    writes: list[tuple[int, bytes]] = []
+
+    monkeypatch.setattr(host_enrollment.pty, "openpty", lambda: (101, 102))
+    monkeypatch.setattr(os, "close", lambda _fd: None)
+    monkeypatch.setattr(select, "select", lambda r, *_a: (r, [], []))
+    monkeypatch.setattr(os, "read", lambda _fd, _n: reads.pop(0) if reads else b"")
+    monkeypatch.setattr(os, "write", lambda fd, data: writes.append((fd, data)) or len(data))
+    monkeypatch.setattr(os, "setsid", lambda: setsid_calls.append(True))
+    monkeypatch.setattr(fcntl, "ioctl", lambda fd, req, arg=0: ioctl_calls.append((fd, req, arg)))
+
+    class _FakeProc:
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+        def kill(self) -> None:
+            pass
+
+    def _fake_popen(_cmd, **kwargs):
+        popen_kwargs.update(kwargs)
+        kwargs["preexec_fn"]()
+        return _FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen)
+    rc, out = host_enrollment._run_ssh_with_ephemeral_pty_password(["ssh", "root@example"], "temp-pw")
+    assert rc == 0
+    assert "AIOPS_BOOTSTRAP_JSON" in out
+    assert "start_new_session" not in popen_kwargs
+    assert callable(popen_kwargs["preexec_fn"])
+    assert setsid_calls == [True]
+    assert ioctl_calls == [(102, termios.TIOCSCTTY, 0)]
+    assert writes == [(101, b"temp-pw\n")]
+
+
+def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from dotenv import dotenv_values
+
+    data_root = tmp_path / "var-lib"
+    reg_dir = data_root / "environment-registry"
+    reg_dir.mkdir(parents=True, mode=0o700)
+    reg_path = reg_dir / "registry.json"
+    registry.apply(
+        reg_path,
+        [
+            {
+                "id": "41",
+                "name": "核心环境41",
+                "enabled": True,
+                "gateway_url": "https://gw41.example",
+                "cpms_base_url": "https://cpms41.example",
+                "company_gateway_url": "https://api41.example",
+                "config_ref": str(tmp_path / "env-41.env"),
+                "tenants": [],
+            }
+        ],
+        expected_revision=0,
+        actor="test",
+        managers=[],
+    )
+    tpl_dir = reg_dir / "wizard-templates"
+    tpl_dir.mkdir(mode=0o700)
+    (tpl_dir / "jiejia.env").write_text(
+        'AIOPS_MYSQL_HOST="10.0.0.32"\nAIOPS_MYSQL_PASSWORD="ro-pw"\nAIOPS_REDIS_PASSWORD="red-pw"\n',
+        encoding="utf-8",
+    )
+
+    node_root = tmp_path / "node-env"
+    node_jiejia = node_root / "jiejia"
+    node_jiejia.mkdir(parents=True)
+    (node_jiejia / "agent-runs.json").write_text(
+        json.dumps({"environment": "jiejia", "nodes": []}), encoding="utf-8"
+    )
+    (node_jiejia / "exec-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "m3-exec-config/1",
+                "name": "aiops-environment-jiejia",
+                "history_policy": "none",
+                "model": {
+                    "provider_key": "openai",
+                    "adapter_key": "openai-compatible",
+                    "model_key": "deepseek-v4-1-flash-261017",
+                    "endpoint": "https://model-proxy:9101",
+                },
+                "model_options": {"max_tokens": 100, "temperature": 0.1, "stop_sequences": []},
+                "system_messages": ["hi"],
+                "tools": [
+                    {
+                        "name": "mysql_readonly",
+                        "description": "query db",
+                        "input_schema": "{}",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    op_cred = tmp_path / "op-cred.json"
+    op_cred.write_text('{"api_key":"k"}', encoding="utf-8")
+    con_cred = tmp_path / "con-cred.json"
+    con_cred.write_text('{"api_key":"k"}', encoding="utf-8")
+    dify_db = tmp_path / "gateway.db"
+
+    class _FakeConsole:
+        def __init__(self, *_a, **_k) -> None:
+            pass
+
+        def _call(self, _ws, path, **_kw):
+            if "tool-providers" in path:
+                return [{"id": "prov-1", "name": "cpms-node"}]
+            if "/apps?" in path:
+                return {
+                    "data": [
+                        {"id": "op-app-1", "name": "aiops-operator-jiejia", "mode": "agent-chat"},
+                        {"id": "con-app-1", "name": "aiops-consumer-jiejia", "mode": "advanced-chat"},
+                    ]
+                }
+            if path.endswith("/apps/con-app-1"):
+                return {"workflow": {"id": "wf-con-1"}}
+            return {"data": []}
+
+    monkeypatch.setattr(wizard_provision, "NODE_RUNTIME_ENV_ROOT", node_root)
+    monkeypatch.setattr(wizard_provision, "_ensure_kb_pair", lambda *_a, **_k: ("kb-c-1", "kb-o-1"))
+    monkeypatch.setattr(
+        wizard_provision.dify_ensure_workspace,
+        "ensure_workspace",
+        lambda **_k: SimpleNamespace(workspace_id="ws-jiejia"),
+    )
+    monkeypatch.setattr(wizard_provision, "DifyConsoleAdmin", _FakeConsole)
+    monkeypatch.setattr(wizard_provision.knowledge_connection, "ensure", lambda *_a, **_k: None)
+    monkeypatch.setattr(wizard_provision.operator_prep, "model", lambda _s: {"credential_file": str(op_cred)})
+    monkeypatch.setattr(wizard_provision.self_service_prepare, "model_credentials", lambda *_a, **_k: None)
+    monkeypatch.setattr(wizard_provision, "ensure_node_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        wizard_provision,
+        "_select_consumer_source",
+        lambda *_a, **_k: {"workflow": {"graph": {"nodes": []}}},
+    )
+    monkeypatch.setattr(wizard_provision.consumer_prep, "document", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        wizard_provision.consumer_prep,
+        "profile",
+        lambda *_a, **_k: {"model": {"credential_file": str(con_cred)}},
+    )
+    monkeypatch.setattr(wizard_provision.consumer_prep, "dependencies", lambda *_a, **_k: None)
+
+    def _fake_issue_key(_c, _w, app_id, d):
+        p = d / f"{app_id}.key"
+        p.write_text("k\n")
+        return p
+
+    monkeypatch.setattr(
+        wizard_provision,
+        "service_keys",
+        SimpleNamespace(issue_key=_fake_issue_key),
+    )
+
+    from aiops_diagnostics.consumer import consumer_publication
+
+    monkeypatch.setattr(
+        consumer_publication,
+        "flags_of",
+        lambda _wf: {"live_order_status": True, "live_billing_record": True, "photo_enabled": False},
+    )
+
+    settings = SimpleNamespace(
+        environment_task_key="k" * 48,
+        internal_token_secret="i" * 48,
+        dify_chat_base_url="http://127.0.0.1:15001",
+        kb_service_base_url="http://127.0.0.1:29380",
+        company_jwt_key="jwt-key-test",
+        third_session_key_prefix="app:3rd_session:",
+        database_file=str(dify_db),
+        dify_inner_api_base_url="http://127.0.0.1:15001",
+        dify_inner_api_key="inner-k",
+        dify_console_base_url="http://127.0.0.1:15001",
+        dify_console_api_key="console-k",
+        public_base_url="https://api.mall.qushiyun.com",
+        chat_dify_key_dir=str(tmp_path / "ctrl-keys"),
+        execution_environment="41",
+    )
+    ctx = SimpleNamespace(settings=settings)
+    out = wizard_provision.prepare_control_plane_bundle(
+        ctx,
+        reg_path,
+        {
+            "environment": "jiejia",
+            "api_domain": "api.juxichongdian.cn",
+            "tenant_id": "1990990768688599040",
+            "tenant_name": "捷佳",
+        },
+    )
+    rendered = dotenv_values(out["config_path"])
+    assert rendered["AIOPS_GATEWAY_DIFY_CHAT_BASE_URL"] == "https://dify.ranlei.work:10443"
+    assert "AIOPS_GATEWAY_KB_SERVICE_BASE_URL" not in rendered
+    assert "AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE" not in rendered
+    assert rendered["AIOPS_GATEWAY_COMPANY_JWT_KEY"] == "jwt-key-test"
+    assert rendered["AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED"] == "true"
+    assert rendered["AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED"] == "true"
+    assert rendered["AIOPS_MYSQL_DATABASE"] == "cloud_charging_pile"
+    assert rendered["AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX"] == "app:3rd_session:"

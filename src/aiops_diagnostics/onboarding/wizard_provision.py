@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import secrets
 import shutil
 import tarfile
@@ -69,6 +70,9 @@ class WizardProvisionError(RuntimeError):
     """控制面一键装配或正式目录启用失败的稳定错误码异常。"""
 
 
+NODE_RUNTIME_ENV_ROOT = Path("/etc/aiops-node-runtime/environments")
+
+
 def _wizard_dir(registry_path: str | Path, environment: str) -> Path:
     assets_root = Path(registry_path).resolve().parent.parent / "onboarding-assets"
     ensure_private_directory(assets_root)
@@ -80,6 +84,11 @@ def _wizard_dir(registry_path: str | Path, environment: str) -> Path:
 def _quote_env(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "")
     return f'"{escaped}"'
+
+
+def _is_loopback_url(url: str) -> bool:
+    host = urlsplit(url.strip()).hostname or ""
+    return host in {"127.0.0.1", "localhost", "::1"}
 
 
 def _read_existing_env_secret(path: Path, key: str) -> str:
@@ -379,6 +388,20 @@ def prepare_control_plane_bundle(
     db_file_target = f"/var/lib/aiops-access-{env}/gateway/gateway.db"
     registry_target = f"/etc/aiops-access-{env}/registry/environment.json"
 
+    raw_dify_chat_tpl = tpl_vals.get("AIOPS_GATEWAY_DIFY_CHAT_BASE_URL", "").strip()
+    raw_dify_chat_settings = str(getattr(settings, "dify_chat_base_url", "") or "").strip()
+    if raw_dify_chat_tpl and not _is_loopback_url(raw_dify_chat_tpl):
+        remote_dify_chat_url = raw_dify_chat_tpl
+    elif raw_dify_chat_settings and not _is_loopback_url(raw_dify_chat_settings):
+        remote_dify_chat_url = raw_dify_chat_settings
+    else:
+        remote_dify_chat_url = (
+            os.environ.get("AIOPS_WIZARD_PUBLIC_DIFY_CHAT_BASE_URL", "").strip()
+            or "https://dify.ranlei.work:10443"
+        )
+    raw_kb_url = str(getattr(settings, "kb_service_base_url", "") or "").strip()
+    remote_kb_url = "" if (not raw_kb_url or _is_loopback_url(raw_kb_url)) else raw_kb_url
+
     env_lines: dict[str, str] = {
         **tpl_vals,
         "AIOPS_GATEWAY_ENVIRONMENT": env,
@@ -386,14 +409,19 @@ def prepare_control_plane_bundle(
         "AIOPS_GATEWAY_BIND": "127.0.0.1",
         "AIOPS_GATEWAY_PORT": str(local_port),
         "AIOPS_GATEWAY_PUBLIC_BASE_URL": f"https://{api_domain}",
-        "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL": str(getattr(settings, "dify_chat_base_url", "") or ""),
-        "AIOPS_GATEWAY_KB_SERVICE_BASE_URL": str(getattr(settings, "kb_service_base_url", "") or ""),
+        "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL": remote_dify_chat_url,
+        "AIOPS_GATEWAY_KB_SERVICE_BASE_URL": remote_kb_url,
         "AIOPS_GATEWAY_ENVIRONMENT_TASK_KEY": env_task_key,
         "AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET": internal_secret,
         "AIOPS_GATEWAY_MEDIA_SIGNING_SECRET": media_secret,
+        "AIOPS_GATEWAY_COMPANY_JWT_KEY": str(getattr(settings, "company_jwt_key", "") or "").strip(),
         "AIOPS_GATEWAY_COMPANY_SOURCE_KEY": company_source_key,
-        "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX": str(
-            getattr(settings, "third_session_key_prefix", "") or "third_session:"
+        "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED": "true",
+        "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED": "true",
+        "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX": (
+            tpl_vals.get("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX")
+            or str(getattr(settings, "third_session_key_prefix", "") or "")
+            or "app:3rd_session:"
         ),
         "AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN": service_token,
         "AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE": registry_target,
@@ -403,7 +431,10 @@ def prepare_control_plane_bundle(
         "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE": f"{runtime_dir_target}/consumer-targets.json",
         "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE": db_file_target,
         "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR": key_dir_target,
-        "AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE": f"{runtime_dir_target}/knowledge-delegation.json",
+        "AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE": (
+            f"{runtime_dir_target}/knowledge-delegation.json" if remote_kb_url else ""
+        ),
+        "AIOPS_MYSQL_DATABASE": tpl_vals.get("AIOPS_MYSQL_DATABASE") or "cloud_charging_pile",
         "AIOPS_MAX_ORDER_WINDOW_HOURS": tpl_vals.get("AIOPS_MAX_ORDER_WINDOW_HOURS", "168"),
         "AIOPS_QUERY_TIMEOUT_SECONDS": tpl_vals.get("AIOPS_QUERY_TIMEOUT_SECONDS", "15"),
         "AIOPS_SSH_ENABLED": "false",
@@ -433,10 +464,11 @@ def prepare_control_plane_bundle(
     dify_db = str(getattr(settings, "database_file", "") or "")
     if not dify_db:
         raise WizardProvisionError("ENVIRONMENT_WIZARD_DIFY_DB_REQUIRED")
+    dify_db_path = Path(dify_db)
     ws_outcome = dify_ensure_workspace.ensure_workspace(
         tenant_id=tenant_id,
         environment=env,
-        workspaces=DifyWorkspaces(dify_db),
+        workspaces=DifyWorkspaces(dify_db_path),
         inner=dify_inner_api.DifyInnerApi(
             dify_inner_api.InnerApiSettings(settings.dify_inner_api_base_url, settings.dify_inner_api_key)
         ),
@@ -552,7 +584,7 @@ def prepare_control_plane_bundle(
         "knowledge_base_ids": [consumer_kb_id],
         **con_flags,
     }
-    KnowledgeGrants(dify_db).grant(tenant_id, env, consumer_kb_id, actor)
+    KnowledgeGrants(dify_db_path).grant(tenant_id, env, consumer_kb_id, actor)
     ctrl_reg = {
         "environment": env,
         "gateway_url": f"https://{api_domain}",
@@ -562,7 +594,7 @@ def prepare_control_plane_bundle(
         "consumer_app_id": con_app_id,
     }
     with suppress(Exception):
-        SelfServiceStore(dify_db).register_runtime(ctrl_reg, consumer_target_entry, verify=lambda: None)
+        SelfServiceStore(dify_db_path).register_runtime(ctrl_reg, consumer_target_entry, verify=lambda: None)
     with suppress(Exception):
         delegated = knowledge_delegation.issue(settings, env, tenant_id, con_app_id, consumer_kb_id)
         self_service_prepare.consumer_plugin(
@@ -587,7 +619,7 @@ def prepare_control_plane_bundle(
     (staging_keys / f"{con_app_id}.key").chmod(0o600)
 
     # 4. 读取 41 节点 agent-runs.json 与 exec-manifest.json，并合成客户机 runtime-bundle.tar
-    node_dir = Path(f"/etc/aiops-node-runtime/environments/{env}")
+    node_dir = NODE_RUNTIME_ENV_ROOT / env
     agent_runs_file = node_dir / "agent-runs.json"
     manifest_file = node_dir / "exec-manifest.json"
     if not agent_runs_file.is_file() or not manifest_file.is_file():

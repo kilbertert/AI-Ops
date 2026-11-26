@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -30,6 +31,7 @@ import socket
 import sqlite3
 import subprocess
 import tempfile
+import termios
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -278,12 +280,17 @@ def _run_ssh_with_ephemeral_pty_password(
     chunks: list[bytes] = []
     sent_count = 0
     try:
+
+        def _attach_ctty() -> None:
+            os.setsid()
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+
         proc = subprocess.Popen(
             ssh_cmd,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
-            start_new_session=True,
+            preexec_fn=_attach_ctty,
             close_fds=True,
         )
         os.close(slave_fd)

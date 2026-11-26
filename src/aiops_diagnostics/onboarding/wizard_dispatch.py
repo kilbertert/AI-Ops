@@ -703,7 +703,9 @@ def dispatch_wizard(
         if action == "artifact_pool_status":
             if set(wp) != {"environment"}:
                 raise artifact_pool.ArtifactPoolRefused("ENVIRONMENT_WIZARD_INVALID")
-            return artifact_pool.list_pool_status(Path(path).parent / "artifact-pool.json")
+            assets_pool = Path(path).resolve().parent.parent / "onboarding-assets" / "artifact-pool.json"
+            pool_path = assets_pool if assets_pool.is_file() else (Path(path).parent / "artifact-pool.json")
+            return artifact_pool.list_pool_status(pool_path)
         if action in {"infra_provision", "infra_status"}:
             return _dispatch_infra(action, wp, path, identity, hooks)
         if action in {"kb_upload", "kb_install_starter_faq"}:

@@ -636,3 +636,28 @@ def test_mode_b_bootstrap_http_routes_single_use_and_replay_410(tmp_path: Path, 
     )
     assert r_bad_types.status_code == 400
     assert r_bad_types.json()["error"]["code"] == "ENVIRONMENT_WIZARD_INVALID"
+
+
+def test_artifact_pool_status_prefers_onboarding_assets_sibling(tmp_path: Path, monkeypatch) -> None:
+    client, reg_path = _build_wizard_app(tmp_path, monkeypatch=monkeypatch)
+    pool_file = reg_path.parent.parent / "onboarding-assets" / "artifact-pool.json"
+    app_tar = tmp_path / "app.tar.gz"
+    inst_tar = tmp_path / "inst.tar.gz"
+    app_tar.write_bytes(b"app")
+    inst_tar.write_bytes(b"inst")
+    app_tar.chmod(0o600)
+    inst_tar.chmod(0o600)
+    artifact_pool.register_pool_entry(
+        pool_file,
+        revision="a" * 40,
+        python_minor="3.12",
+        app_archive=app_tar,
+        installer_archive=inst_tar,
+    )
+    res = client.post(
+        "/v1/dify/management/environment-wizard",
+        headers=_admin_headers(),
+        json={"wizard_action": "artifact_pool_status", "wizard_payload": {"environment": "jiejia"}},
+    )
+    assert res.status_code == 200
+    assert res.json()["count"] == 1
