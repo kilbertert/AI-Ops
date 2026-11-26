@@ -168,7 +168,7 @@ def exchange_ephemeral_consumer_session(
     http_code, text = caller(
         "POST",
         f"{base}/mallapi/userinfo/phone/login",
-        {"Content-Type": "application/json", "tenant-id": clean_tid},
+        {"Content-Type": "application/json", "tenant-id": clean_tid, "client-type": "H5"},
         {"phone": clean_phone, "code": clean_code},
     )
     if http_code != 200:

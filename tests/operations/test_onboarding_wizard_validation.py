@@ -77,6 +77,8 @@ def test_zero_json_self_validation_exchanges_session_revokes_token_and_leaks_zer
     def fake_http(method: str, url: str, headers: dict[str, str], body):
         http_log.append((method, url))
         if method == "POST" and url.endswith("/mallapi/userinfo/phone/login"):
+            assert headers.get("client-type") == "H5"
+            assert headers.get("tenant-id") == "1990990768688599040"
             return 200, json.dumps({"code": 0, "data": {"thirdSession": "EPHEMERAL_SESS_999"}})
         if method == "DELETE" and url.endswith("/auth/token/logout"):
             assert headers["Authorization"] == "Bearer EPHEMERAL_OP_TOK_777"
