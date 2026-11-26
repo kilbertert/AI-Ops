@@ -29,6 +29,8 @@ sys.path.insert(0, str(REPO / "services/model-proxy"))
 
 import model_proxy  # noqa: E402
 
+pytestmark = pytest.mark.deploy_tooling
+
 PAYLOAD = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
 
 

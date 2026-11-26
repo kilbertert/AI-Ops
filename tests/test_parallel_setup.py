@@ -176,3 +176,40 @@ def test_clear_fastapi_callable_caches_respects_threshold() -> None:
     assert conftest._clear_fastapi_callable_caches(threshold=100_000) is False
     assert conftest._clear_fastapi_callable_caches(threshold=1) is True
     assert fastapi_models._is_coroutine_callable_cached.cache_info().currsize == 0
+
+
+def test_local_default_markers_only_filter_untargeted_local_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    import conftest
+
+    root = Path(__file__).resolve().parents[1]
+
+    def _cfg(args: list[str], *, markexpr: str = "", keyword: str = "") -> SimpleNamespace:
+        return SimpleNamespace(
+            args=args,
+            rootpath=root,
+            option=SimpleNamespace(markexpr=markexpr, keyword=keyword),
+        )
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv(conftest.ALL_TESTS_ENV, raising=False)
+    assert conftest._should_apply_local_default_markers(_cfg([])) is True  # type: ignore[arg-type]
+    assert conftest._should_apply_local_default_markers(_cfg(["tests"])) is True  # type: ignore[arg-type]
+    assert conftest._should_apply_local_default_markers(_cfg(["tests/"])) is True  # type: ignore[arg-type]
+
+    assert (
+        conftest._should_apply_local_default_markers(
+            _cfg(["tests/dify/test_dify_idempotent_import.py"])  # type: ignore[arg-type]
+        )
+        is False
+    )
+    assert conftest._should_apply_local_default_markers(_cfg([], markexpr="docker")) is False  # type: ignore[arg-type]
+    assert conftest._should_apply_local_default_markers(_cfg([], keyword="dify")) is False  # type: ignore[arg-type]
+
+    monkeypatch.setenv(conftest.ALL_TESTS_ENV, "1")
+    assert conftest._should_apply_local_default_markers(_cfg([])) is False  # type: ignore[arg-type]
+
+    monkeypatch.delenv(conftest.ALL_TESTS_ENV, raising=False)
+    monkeypatch.setenv("CI", "1")
+    assert conftest._should_apply_local_default_markers(_cfg([])) is False  # type: ignore[arg-type]

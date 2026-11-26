@@ -36,12 +36,14 @@ def _tier_script() -> str:
     return script
 
 
-def _decide(tmp_path: Path, changed: list[str], *, base: str = "aaa", head: str = "bbb") -> str:
-    """跑 workflow 里那段脚本，返回它写出的 tier（或 `""` 表示没跑判定）。"""
+def _decide_outputs(
+    tmp_path: Path, changed: list[str], *, base: str = "aaa", head: str = "bbb"
+) -> dict[str, str]:
+    """跑 workflow 里那段脚本，返回它写出的全部 outputs。"""
     script = _tier_script()
     # 脚本用 `git diff --name-only` 取改动；用一个假 git 顶替，输出就是喂进去的清单。
     fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin.mkdir(parents=True)
     payload = tmp_path / "changed.txt"
     payload.write_text("\n".join(changed) + ("\n" if changed else ""), encoding="utf-8")
     fake_git = fake_bin / "git"
@@ -61,8 +63,17 @@ def _decide(tmp_path: Path, changed: list[str], *, base: str = "aaa", head: str 
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    match = re.search(r"^tier=(\w+)$", output.read_text(encoding="utf-8"), re.MULTILINE)
-    return match.group(1) if match else ""
+    parsed: dict[str, str] = {}
+    for line in output.read_text(encoding="utf-8").splitlines():
+        if "=" in line:
+            key, val = line.split("=", 1)
+            parsed[key.strip()] = val.strip()
+    return parsed
+
+
+def _decide(tmp_path: Path, changed: list[str], *, base: str = "aaa", head: str = "bbb") -> str:
+    """跑 workflow 里那段脚本，返回它写出的 tier（或 `""` 表示没跑判定）。"""
+    return _decide_outputs(tmp_path, changed, base=base, head=head).get("tier", "")
 
 
 @pytest.mark.parametrize(
@@ -137,3 +148,29 @@ def test_the_docs_tier_selects_every_test_that_reads_docs() -> None:
         if not re.search(pattern, path.read_text(encoding="utf-8"))
     ]
     assert not missed, f"文档档没选中这些读 docs 的测试，改文档时它们不会跑：{missed}"
+
+
+def test_heavy_marker_routing_follows_changed_paths(tmp_path: Path) -> None:
+    """只有命中对应域或基础配置的改动才在 PR 全量档激活 docker / browser。"""
+    gateway_only = _decide_outputs(tmp_path / "gw", ["src/aiops_diagnostics/gateway/gateway_api.py"])
+    assert gateway_only == {"tier": "full", "run_docker": "false", "run_browser": "false"}
+
+    dify_change = _decide_outputs(tmp_path / "dify", ["src/aiops_diagnostics/dify/dify_trial.py"])
+    assert dify_change == {"tier": "full", "run_docker": "true", "run_browser": "false"}
+
+    consumer_change = _decide_outputs(
+        tmp_path / "consumer", ["tools/verification/consumer-status/replay_drive.py"]
+    )
+    assert consumer_change == {"tier": "full", "run_docker": "false", "run_browser": "true"}
+
+    infra_change = _decide_outputs(tmp_path / "ci", [".github/workflows/ci.yml"])
+    assert infra_change == {"tier": "full", "run_docker": "true", "run_browser": "true"}
+
+    docs_only = _decide_outputs(
+        tmp_path / "docs",
+        ["docs/adr/0355-tier-pytest-markers-and-ci-heavy-paths.md"],
+    )
+    assert docs_only == {"tier": "docs", "run_docker": "false", "run_browser": "false"}
+
+    missing_base = _decide_outputs(tmp_path / "nobase", ["docs/a.md"], base="", head="")
+    assert missing_base == {"tier": "full", "run_docker": "true", "run_browser": "true"}

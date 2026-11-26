@@ -324,11 +324,38 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
     return 1
 
 
+ALL_TESTS_ENV = "AIOPS_PYTEST_ALL"
+LOCAL_DEFAULT_MARKEXPR = "not docker and not browser"
+_TESTS_ROOT = pathlib.Path(__file__).resolve().parent
+
+
+def _should_apply_local_default_markers(config: pytest.Config) -> bool:
+    """Exclude heavy `docker`/`browser` markers on bare local full runs only."""
+    if os.environ.get("CI") or os.environ.get(ALL_TESTS_ENV) == "1":
+        return False
+    if getattr(config.option, "markexpr", "") or getattr(config.option, "keyword", ""):
+        return False
+    raw_args = [str(arg) for arg in (getattr(config, "args", None) or ()) if str(arg)]
+    if not raw_args:
+        return True
+    rootpath = pathlib.Path(str(getattr(config, "rootpath", _TESTS_ROOT.parent))).resolve()
+    tests_root = _TESTS_ROOT.resolve()
+    for arg in raw_args:
+        candidate = pathlib.Path(arg)
+        resolved = (candidate if candidate.is_absolute() else rootpath / candidate).resolve()
+        if resolved != tests_root:
+            return False
+    return True
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Take this checkout's lock and a host slot for the duration of the run."""
     import fcntl
     import hashlib
     import time
+
+    if _should_apply_local_default_markers(config):
+        config.option.markexpr = LOCAL_DEFAULT_MARKEXPR
 
     # ⚠️ Only the CONTROLLER process takes the lock. xdist workers run their own
     # `pytest_configure` and would each try to acquire the same file — the first

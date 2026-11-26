@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.deploy_tooling
+
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY = REPO / "deploy/m2-live-03"
 BASE_REFS = ("mysql:8.0", "eclipse-temurin:21-jdk")

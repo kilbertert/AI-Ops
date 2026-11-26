@@ -15,6 +15,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.deploy_tooling
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("managed_probe", ROOT / "ops/environments/gateway/probe.py")
 probe = importlib.util.module_from_spec(SPEC)

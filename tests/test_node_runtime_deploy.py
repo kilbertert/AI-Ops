@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = pytest.mark.nginx
+
 DEPLOY = Path(__file__).resolve().parents[1] / "deploy/node-runtime"
 
 

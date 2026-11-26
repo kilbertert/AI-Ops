@@ -78,6 +78,13 @@ packages = ["src/aiops_diagnostics"]
 #
 # Ask for serial with `-n 0`, or `./tools/test.sh -n 0`.
 addopts = "-q -n auto"
+markers = [
+  "docker: tests that start or inspect local Docker containers",
+  "browser: tests that drive a headless browser (Playwright/Chromium)",
+  "nginx: tests that validate Nginx ingress/egress/TLS deployment configs",
+  "deploy_tooling: deployment, installation, and milestone tooling verification tests",
+  "slow: tests with wall-clock runtime >= 3s",
+]
 pythonpath = ["services/dify-console-bridge", "services/dify-login-proxy"]
 testpaths = ["tests"]
 

@@ -18,7 +18,10 @@ import pytest
 DEPLOY = Path(__file__).resolve().parents[2] / "deploy/m2-live-03"
 
 
-pytestmark = pytest.mark.skipif(shutil.which("openssl") is None, reason="需要 openssl")
+pytestmark = [
+    pytest.mark.deploy_tooling,
+    pytest.mark.skipif(shutil.which("openssl") is None, reason="需要 openssl"),
+]
 
 
 @pytest.fixture(autouse=True)

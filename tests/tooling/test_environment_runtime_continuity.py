@@ -15,6 +15,8 @@ from aiops_diagnostics.onboarding.projection import validate_candidate
 from tooling.test_gateway_install import host, install  # noqa: F401
 from tooling.test_gateway_install_task import task, task_state  # noqa: F401
 
+pytestmark = pytest.mark.deploy_tooling
+
 
 def archive(path, files):
     with tarfile.open(path, "w") as output:

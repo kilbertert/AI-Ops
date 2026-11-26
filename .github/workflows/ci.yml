@@ -61,11 +61,19 @@ jobs:
           head="$PR_HEAD"
           if [ -z "$base" ] || [ -z "$head" ]; then
             echo "tier=full" >> "$GITHUB_OUTPUT"
+            echo "run_docker=true" >> "$GITHUB_OUTPUT"
+            echo "run_browser=true" >> "$GITHUB_OUTPUT"
             echo "没有 PR base/head —— 跑全量"
             exit 0
           fi
           changed=$(git diff --name-only "$base" "$head")
-          [ -n "$changed" ] || { echo "tier=full" >> "$GITHUB_OUTPUT"; echo "diff 为空 —— 跑全量"; exit 0; }
+          if [ -z "$changed" ]; then
+            echo "tier=full" >> "$GITHUB_OUTPUT"
+            echo "run_docker=true" >> "$GITHUB_OUTPUT"
+            echo "run_browser=true" >> "$GITHUB_OUTPUT"
+            echo "diff 为空 —— 跑全量"
+            exit 0
+          fi
           echo "本次改动的文件："
           printf '%s\n' "$changed" | sed 's/^/  /'
           off_docs=$(printf '%s\n' "$changed" | grep -vE '^docs/.*\.md$|^[^/]+\.md$' || true)
@@ -73,8 +81,20 @@ jobs:
             echo "tier=full" >> "$GITHUB_OUTPUT"
             echo "白名单之外有改动 ⇒ 全量："
             printf '%s\n' "$off_docs" | sed 's/^/  /'
+            if printf '%s\n' "$changed" | grep -qE '^(deploy/dify|ops/dify|src/aiops_diagnostics/dify/|tests/dify/|\.github/workflows/ci\.yml|pyproject\.toml|uv\.lock|tests/conftest\.py)'; then
+              echo "run_docker=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run_docker=false" >> "$GITHUB_OUTPUT"
+            fi
+            if printf '%s\n' "$changed" | grep -qE '^(src/aiops_diagnostics/consumer/|tools/verification/consumer-status/|tests/consumer/|static/|\.github/workflows/ci\.yml|pyproject\.toml|uv\.lock|tests/conftest\.py)'; then
+              echo "run_browser=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run_browser=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "tier=docs" >> "$GITHUB_OUTPUT"
+            echo "run_docker=false" >> "$GITHUB_OUTPUT"
+            echo "run_browser=false" >> "$GITHUB_OUTPUT"
             echo "改动全在文档 —— 只跑读文档的那批"
           fi
 
@@ -82,9 +102,13 @@ jobs:
         id: tests
         env:
           TEST_TIER: ${{ steps.tier.outputs.tier }}
+          RUN_DOCKER: ${{ steps.tier.outputs.run_docker }}
+          RUN_BROWSER: ${{ steps.tier.outputs.run_browser }}
+          MALLOC_ARENA_MAX: "2"
         run: |
           set -eo pipefail
           tier="$TEST_TIER"
+          marker_args=()
           if [ "$tier" = "docs" ]; then
             targets=$(grep -rlE 'docs/|"docs" */|README\.md|qa-plan\.md|acceptance\.feature|SOP\.md|GLOSSARY\.md' \
               tests --include='*.py' | grep -E '(^|/)test_.*\.py$' | sort | tr '\n' ' ' || true)
@@ -98,13 +122,20 @@ jobs:
           else
             targets=""
             floor=4000
+            if [ "${RUN_DOCKER:-true}" = "false" ] && [ "${RUN_BROWSER:-true}" = "false" ]; then
+              marker_args=(-m "not docker and not browser")
+            elif [ "${RUN_DOCKER:-true}" = "false" ]; then
+              marker_args=(-m "not docker")
+            elif [ "${RUN_BROWSER:-true}" = "false" ]; then
+              marker_args=(-m "not browser")
+            fi
           fi
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
           mkdir -p "$RUNNER_TEMP/ci-results"
           # pytest 的失败退出码由 pipefail 保留；XML 只负责结果计数与摘要。
           # targets 是仓库测试路径列表，有意按空格分词。
           # shellcheck disable=SC2086
-          uv run pytest -rs --junitxml="$RUNNER_TEMP/ci-results/pytest.xml" $targets | tee "$RUNNER_TEMP/ci-results/pytest.log"
+          uv run pytest -rs -n 4 "${marker_args[@]}" --junitxml="$RUNNER_TEMP/ci-results/pytest.xml" $targets | tee "$RUNNER_TEMP/ci-results/pytest.log"
           uv run python tools/verification/ci_results.py "$RUNNER_TEMP/ci-results/pytest.xml" --floor "$floor" --tier "$tier"
 
       - name: Check imports and dependencies
@@ -130,10 +161,12 @@ jobs:
           RESULT: ${{ job.status }}
           TEST_RESULT: ${{ steps.tests.outcome }}
           TEST_TIER: ${{ steps.tests.outputs.tier || steps.tier.outputs.tier }}
+          RUN_DOCKER: ${{ steps.tier.outputs.run_docker }}
+          RUN_BROWSER: ${{ steps.tier.outputs.run_browser }}
         run: |
           {
             echo '### 代码检查（verify）'
-            echo "- 结果：$RESULT；测试：$TEST_RESULT；分档：${TEST_TIER:-未判定}"
+            echo "- 结果：$RESULT；测试：$TEST_RESULT；分档：${TEST_TIER:-未判定}（docker=${RUN_DOCKER:-true}, browser=${RUN_BROWSER:-true}）"
             echo "- 被验证的合并提交：$GITHUB_SHA"
             echo '- 失败时先看首个失败步骤；测试日志/XML 见 ci-results 制品。'
             echo '- 本检查不代表已部署或已完成业务验收。'

@@ -86,6 +86,7 @@ def test_vector_store_is_configured_not_merely_installed():
     assert "\nWEAVIATE_API_KEY=\n" in env
 
 
+@pytest.mark.docker
 def test_weaviate_publishes_no_host_port_and_is_healthy_gated(compose):
     assert "weaviate" in compose["services"]
     assert not compose["services"]["weaviate"].get("ports"), "向量库不得发布宿主端口"
@@ -101,6 +102,7 @@ def _patched_paths_from_patches() -> set[str]:
     return paths
 
 
+@pytest.mark.docker
 def test_every_patch_is_mounted_read_only_on_both_processes(compose):
     """补丁文件与挂载必须一一对应：漏挂 = 静默回旧行为，多挂 = 挂了没人读。"""
     patched = _patched_paths_from_patches()
@@ -138,12 +140,14 @@ def test_patch_files_are_unified_diffs_with_fuzz_zero_context():
                 assert re.fullmatch(r"@@ -\d+(,\d+)? \+\d+(,\d+)? @@.*", line), (patch.name, line)
 
 
+@pytest.mark.docker
 def test_web_image_override_defaults_to_upstream(tmp_path):
     """不打补丁的部署必须能原样跑起来 —— 否则升级时是 compose 先坏，而不是界面没变。"""
     web = _resolved_compose(tmp_path)["services"]["web"]["image"]
     assert web == "docker.1panel.live/langgenius/dify-web:1.17.1"
 
 
+@pytest.mark.docker
 def test_web_image_override_points_at_the_patched_build(tmp_path):
     """`DIFY_WEB_IMAGE` 是 web 侧唯一的上线开关（api 侧的对应物是只读挂载）。"""
     web = _resolved_compose(tmp_path, "DIFY_WEB_IMAGE=aiops/dify-web-patched:1.17.1\n")["services"]["web"][

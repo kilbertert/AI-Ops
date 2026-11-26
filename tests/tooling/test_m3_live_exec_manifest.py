@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.deploy_tooling
+
 REPO = Path(__file__).resolve().parents[2]
 WRITER = REPO / "tools/experiments/m2_close/m3live/write_exec_manifest.py"
 

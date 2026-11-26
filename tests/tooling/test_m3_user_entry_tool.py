@@ -22,6 +22,8 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.deploy_tooling
+
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / "tools/experiments/m2_close/m3live/user_entry.py"
 

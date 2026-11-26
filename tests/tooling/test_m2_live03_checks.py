@@ -20,6 +20,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.deploy_tooling
+
 CHECKS = Path(__file__).resolve().parents[2] / "deploy/m2-live-03/checks.sh"
 DEPLOY_DIR = CHECKS.parent
 

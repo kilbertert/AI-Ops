@@ -15,6 +15,8 @@ from aiops_diagnostics.common.config import UpmsSettings
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "verification"))
 from m2_live import upms_probe
 
+pytestmark = pytest.mark.deploy_tooling
+
 
 @pytest.mark.parametrize("fault", ["none", "auth", "html", "timeout"])
 def test_identity_probe_rejects_failed_dependencies(fault, capsys):

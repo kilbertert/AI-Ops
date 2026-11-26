@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.nginx
+
 
 def test_tls_source_scope_routes_and_streaming(tmp_path):
     nginx = shutil.which("nginx")
