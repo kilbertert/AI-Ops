@@ -52,7 +52,7 @@
 获批行为唯一正文在[环境目录Feature](../acceptance/environment-directory.feature)，
 [QA](../acceptance/environment-directory-qa-plan.md)给出场景步骤，[手册](environment-registry.md)讲操作。
 未来能力与依赖见[规划](../architecture/2026-11-16-manual-environment-onboarding.md)和主任务#1535/P0～P5原生子任务。
-截至2026-11-26（完成 95 受管升级至 `1.40.4+9c1b35a57d84`、ADR-0347 双租户同时激活/非 LIFO 独立停用实机演练与双向 `41 ↔ 95` 跨环境隔离核验后复核），41 Gateway 当前现役版本为 `1.40.4+9c1b35a57d84`（`release-9c1b35a57d84`，含 #1737 恢复终态/备份修复与 #1740 ADR-0347 同环境多租户独立停用；唯一运行目录 `execution_environment=41`、`41 reg rev 17`、`Ulink`/`优链充`启用、`95` `enabled=false`、`node-41` 实时心跳在线）；
+截至2026-11-26（完成 95 受管升级至 `1.40.4+9c1b35a57d84`、ADR-0347 双租户同时激活/非 LIFO 独立停用实机演练与双向 `41 ↔ 95` 跨环境隔离核验时点），该次环境目录演练对应的 41 Gateway 时点版本为 `1.40.4+9c1b35a57d84`（`release-9c1b35a57d84`，含 #1737 恢复终态/备份修复与 #1740 ADR-0347 同环境多租户独立停用；唯一运行目录 `execution_environment=41`、`41 reg rev 17`、`Ulink`/`优链充`启用、`95` `enabled=false`、`node-41` 实时心跳在线）；同日 41 Gateway 已随电池检查报告发布批次升级至现役版本 `1.41.0+688e751e93f6`（见下表电池检查报告行，环境目录演练未在 `1.41.0` 上重复复验）；
 36 配套 `kb-service --scoped-account`（两 41 租户 `tenancy.db` 已重键为规范作用域命名空间，4 主体 16/16 跨环境检索隔离实网通过）、`aiops-dify-login-proxy`（多环境 `ADR-0276` 已启用并实登通过）、`aiops-dify-console-bridge` 与 `deploy-web-1`（`aiops/dify-web-patched:onboarding-6dac04a1`，含 #1738/#1739 视觉与 3 主 Tab 极简化）已上线运行；
 95 已通过受管安装器升级至 `1.40.4+9c1b35a57d84`（`gateway.db user_version=4`），演练完毕回归双租户停用安全态（`95 reg rev 18`、`enabled: false`、路由 0）；124 保持 `draft_only` 未动，原回执保留。
 95普通用户精确HTTPS入口已沿#1680合并工件安装：匿名问答401、管理404、原公司路径200；
