@@ -505,6 +505,48 @@ def environment_release_command(
     typer.echo(json.dumps(result))
 
 
+def environment_data_preflight_command(
+    config: Annotated[Path, typer.Option("--config", help="目标环境 0600 配置文件路径")],
+    company_gateway_url: Annotated[
+        str, typer.Option("--company-gateway-url", help="可选公司网关地址，用于自动发现租户列表")
+    ] = "",
+    discover_samples: Annotated[
+        bool, typer.Option("--discover-samples", help="只读采样脱敏验收候选订单与离线设备")
+    ] = False,
+    tsdata_fallback_url: Annotated[
+        list[str] | None,
+        typer.Option("--tsdata-fallback-url", help="可选本机回环时序服务候选地址（可重复）"),
+    ] = None,
+) -> None:
+    """执行目标环境数据面全量只读预检，输出零秘密的结构化体检单与白名单修复建议。"""
+    from aiops_diagnostics.onboarding.data_preflight import (
+        DEFAULT_TSDATA_LOOPBACK_CANDIDATES,
+        run_data_preflight_from_file,
+    )
+
+    try:
+        fallbacks = tuple(tsdata_fallback_url) if tsdata_fallback_url else DEFAULT_TSDATA_LOOPBACK_CANDIDATES
+        report = run_data_preflight_from_file(
+            config,
+            company_gateway_url=company_gateway_url,
+            tsdata_fallback_urls=fallbacks,
+            discover_samples=discover_samples,
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "error": "ENVIRONMENT_DATA_PREFLIGHT_REFUSED",
+                    "reason": type(exc).__name__,
+                }
+            )
+        )
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(report, ensure_ascii=False))
+    if not report.get("ready"):
+        raise typer.Exit(1)
+
+
 def register(app: typer.Typer) -> None:
     app.command("environment-registry")(environment_registry_command)
     app.command("environment-adopt-execution")(environment_adopt_execution_command)
@@ -517,3 +559,4 @@ def register(app: typer.Typer) -> None:
     app.command("environment-task-dispatch")(environment_task_dispatch)
     app.command("environment-trial-dispatch")(environment_trial_dispatch)
     app.command("environment-release")(environment_release_command)
+    app.command("environment-data-preflight")(environment_data_preflight_command)
