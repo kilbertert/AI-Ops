@@ -2,7 +2,7 @@
 
 > **用途**：前端组将报告页（`/aiPackage/pages/batteryReport/batteryReport`）从静态示例数据改接 AI-Ops 后端接口的完整联调文档。
 > **关联任务**：Issue #602（承接 [frontend-banner-handoff.md](frontend-banner-handoff.md) §0 报告页欠账）、ADR-0353。
-> **上线前提**：请先确认目标环境 Gateway 已升级至含 `health-v3` 的版本（`POST /v1/health-report-jobs` 返回 `"rule_version": "health-v3"`）。若当前环境仍返回 `health-v2`，说明后端尚未发布。
+> **后端状态**：41 环境（`https://api.mall.qushiyun.com`）已于 2026-11-26 发布至 `1.41.0+688e751e93f6`（`health-v3`）并完成公网 HTTPS 端到端验收（见[验收回执](../validation/2026-11-26-battery-health-report-v3-live.md)），前端可直接联调。
 
 ---
 
