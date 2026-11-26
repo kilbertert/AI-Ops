@@ -13,6 +13,8 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+pytestmark = pytest.mark.nginx
+
 ROOT = Path(__file__).parents[2]
 spec = importlib.util.spec_from_file_location("operator_h5_deploy", ROOT / "deploy/operator-h5.py")
 deploy = importlib.util.module_from_spec(spec)

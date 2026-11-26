@@ -2,7 +2,7 @@
 
 本目录按content（内容生成）、verification（验证探针）、experiments（隔离实验）和inventory（源码索引）归类。
 正式 Java 节点源码位于 `services/execution-node/`，模型代理位于 `services/model-proxy/`；
-不能按“工具/旧里程碑”整体删除。归位方案见[目录迁移清单](../docs/architecture/repository-layout.md)。
+不能按“工具/旧里程碑”整体删除。归位方案见[目录迁移清单](../docs/architecture/repository-layout.md)，对应 `tests/tooling/` 脚本测试在 CI 中通过 `run_deploy_tooling` 按路径按需触发（[ADR-0357](../docs/adr/0357-converge-p2-test-markers-ci-gating-and-hotspots.md)）。
 
 ## 目录内容
 

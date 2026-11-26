@@ -12,6 +12,8 @@ import pytest
 
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 
+pytestmark = pytest.mark.nginx
+
 
 @pytest.mark.parametrize("managed", [False, True])
 def test_remote_http_dify_is_refused_before_serving(tmp_path, managed):

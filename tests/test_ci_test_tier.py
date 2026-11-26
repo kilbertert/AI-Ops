@@ -151,26 +151,64 @@ def test_the_docs_tier_selects_every_test_that_reads_docs() -> None:
 
 
 def test_heavy_marker_routing_follows_changed_paths(tmp_path: Path) -> None:
-    """只有命中对应域或基础配置的改动才在 PR 全量档激活 docker / browser。"""
+    """只有命中对应域或基础配置的改动才在 PR 全量档激活 docker / browser / deploy_tooling。"""
     gateway_only = _decide_outputs(tmp_path / "gw", ["src/aiops_diagnostics/gateway/gateway_api.py"])
-    assert gateway_only == {"tier": "full", "run_docker": "false", "run_browser": "false"}
+    assert gateway_only == {
+        "tier": "full",
+        "run_docker": "false",
+        "run_browser": "false",
+        "run_deploy_tooling": "false",
+    }
 
     dify_change = _decide_outputs(tmp_path / "dify", ["src/aiops_diagnostics/dify/dify_trial.py"])
-    assert dify_change == {"tier": "full", "run_docker": "true", "run_browser": "false"}
+    assert dify_change == {
+        "tier": "full",
+        "run_docker": "true",
+        "run_browser": "false",
+        "run_deploy_tooling": "false",
+    }
 
     consumer_change = _decide_outputs(
         tmp_path / "consumer", ["tools/verification/consumer-status/replay_drive.py"]
     )
-    assert consumer_change == {"tier": "full", "run_docker": "false", "run_browser": "true"}
+    assert consumer_change == {
+        "tier": "full",
+        "run_docker": "false",
+        "run_browser": "true",
+        "run_deploy_tooling": "true",
+    }
+
+    tooling_change = _decide_outputs(tmp_path / "tooling", ["deploy/m2-live-03/checks.sh"])
+    assert tooling_change == {
+        "tier": "full",
+        "run_docker": "false",
+        "run_browser": "false",
+        "run_deploy_tooling": "true",
+    }
 
     infra_change = _decide_outputs(tmp_path / "ci", [".github/workflows/ci.yml"])
-    assert infra_change == {"tier": "full", "run_docker": "true", "run_browser": "true"}
+    assert infra_change == {
+        "tier": "full",
+        "run_docker": "true",
+        "run_browser": "true",
+        "run_deploy_tooling": "true",
+    }
 
     docs_only = _decide_outputs(
         tmp_path / "docs",
         ["docs/adr/0355-tier-pytest-markers-and-ci-heavy-paths.md"],
     )
-    assert docs_only == {"tier": "docs", "run_docker": "false", "run_browser": "false"}
+    assert docs_only == {
+        "tier": "docs",
+        "run_docker": "false",
+        "run_browser": "false",
+        "run_deploy_tooling": "false",
+    }
 
     missing_base = _decide_outputs(tmp_path / "nobase", ["docs/a.md"], base="", head="")
-    assert missing_base == {"tier": "full", "run_docker": "true", "run_browser": "true"}
+    assert missing_base == {
+        "tier": "full",
+        "run_docker": "true",
+        "run_browser": "true",
+        "run_deploy_tooling": "true",
+    }

@@ -63,6 +63,7 @@ jobs:
             echo "tier=full" >> "$GITHUB_OUTPUT"
             echo "run_docker=true" >> "$GITHUB_OUTPUT"
             echo "run_browser=true" >> "$GITHUB_OUTPUT"
+            echo "run_deploy_tooling=true" >> "$GITHUB_OUTPUT"
             echo "没有 PR base/head —— 跑全量"
             exit 0
           fi
@@ -71,6 +72,7 @@ jobs:
             echo "tier=full" >> "$GITHUB_OUTPUT"
             echo "run_docker=true" >> "$GITHUB_OUTPUT"
             echo "run_browser=true" >> "$GITHUB_OUTPUT"
+            echo "run_deploy_tooling=true" >> "$GITHUB_OUTPUT"
             echo "diff 为空 —— 跑全量"
             exit 0
           fi
@@ -91,10 +93,16 @@ jobs:
             else
               echo "run_browser=false" >> "$GITHUB_OUTPUT"
             fi
+            if printf '%s\n' "$changed" | grep -qE '^(deploy/|ops/|services/|tools/|tests/tooling/|\.github/workflows/ci\.yml|pyproject\.toml|uv\.lock|tests/conftest\.py)'; then
+              echo "run_deploy_tooling=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run_deploy_tooling=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "tier=docs" >> "$GITHUB_OUTPUT"
             echo "run_docker=false" >> "$GITHUB_OUTPUT"
             echo "run_browser=false" >> "$GITHUB_OUTPUT"
+            echo "run_deploy_tooling=false" >> "$GITHUB_OUTPUT"
             echo "改动全在文档 —— 只跑读文档的那批"
           fi
 
@@ -104,6 +112,7 @@ jobs:
           TEST_TIER: ${{ steps.tier.outputs.tier }}
           RUN_DOCKER: ${{ steps.tier.outputs.run_docker }}
           RUN_BROWSER: ${{ steps.tier.outputs.run_browser }}
+          RUN_DEPLOY_TOOLING: ${{ steps.tier.outputs.run_deploy_tooling }}
           MALLOC_ARENA_MAX: "2"
         run: |
           set -eo pipefail
@@ -122,12 +131,16 @@ jobs:
           else
             targets=""
             floor=4000
-            if [ "${RUN_DOCKER:-true}" = "false" ] && [ "${RUN_BROWSER:-true}" = "false" ]; then
-              marker_args=(-m "not docker and not browser")
-            elif [ "${RUN_DOCKER:-true}" = "false" ]; then
-              marker_args=(-m "not docker")
-            elif [ "${RUN_BROWSER:-true}" = "false" ]; then
-              marker_args=(-m "not browser")
+            mark_parts=()
+            [ "${RUN_DOCKER:-true}" = "false" ] && mark_parts+=("not docker")
+            [ "${RUN_BROWSER:-true}" = "false" ] && mark_parts+=("not browser")
+            [ "${RUN_DEPLOY_TOOLING:-true}" = "false" ] && mark_parts+=("not deploy_tooling")
+            if [ "${#mark_parts[@]}" -gt 0 ]; then
+              expr="${mark_parts[0]}"
+              for part in "${mark_parts[@]:1}"; do
+                expr="$expr and $part"
+              done
+              marker_args=(-m "$expr")
             fi
           fi
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
@@ -163,10 +176,11 @@ jobs:
           TEST_TIER: ${{ steps.tests.outputs.tier || steps.tier.outputs.tier }}
           RUN_DOCKER: ${{ steps.tier.outputs.run_docker }}
           RUN_BROWSER: ${{ steps.tier.outputs.run_browser }}
+          RUN_DEPLOY_TOOLING: ${{ steps.tier.outputs.run_deploy_tooling }}
         run: |
           {
             echo '### 代码检查（verify）'
-            echo "- 结果：$RESULT；测试：$TEST_RESULT；分档：${TEST_TIER:-未判定}（docker=${RUN_DOCKER:-true}, browser=${RUN_BROWSER:-true}）"
+            echo "- 结果：$RESULT；测试：$TEST_RESULT；分档：${TEST_TIER:-未判定}（docker=${RUN_DOCKER:-true}, browser=${RUN_BROWSER:-true}, deploy_tooling=${RUN_DEPLOY_TOOLING:-true}）"
             echo "- 被验证的合并提交：$GITHUB_SHA"
             echo '- 失败时先看首个失败步骤；测试日志/XML 见 ci-results 制品。'
             echo '- 本检查不代表已部署或已完成业务验收。'
