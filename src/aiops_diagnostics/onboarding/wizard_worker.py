@@ -433,7 +433,7 @@ def _step_execution_node(
         )
 
     remote_script = f"""
-import hashlib, json, os, pwd, secrets, shutil, ssl, subprocess, tarfile
+import hashlib, json, os, pwd, secrets, shutil, ssl, subprocess, tarfile, time
 from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -462,13 +462,19 @@ def mkdir_priv(p: Path, uid=None, gid=None, mode=0o700):
 dist_base = Path(f'/opt/aiops-node-runtime/environments/{{ENV}}')
 rel_dir = dist_base / 'releases' / REV
 (dist_base / 'releases').mkdir(parents=True, exist_ok=True)
-if not (rel_dir / 'node' / JAR_SRC.name).is_file():
+target_jar = rel_dir / 'node' / 'aiops-execution-node.jar'
+if not target_jar.is_file():
     rel_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(f'/tmp/wizard-node-stage-{{ENV}}.tar.gz', 'r:gz') as tf:
         tf.extractall(rel_dir)
     (rel_dir / 'node').mkdir(exist_ok=True)
-    shutil.copyfile(JAR_SRC, rel_dir / 'node' / JAR_SRC.name)
+    shutil.copyfile(JAR_SRC, target_jar)
     (rel_dir / 'REVISION').write_text(REV + '\\n', encoding='utf-8')
+for _p in [rel_dir, *rel_dir.rglob('*')]:
+    if _p.is_symlink():
+        continue
+    os.chown(_p, 0, 0)
+    _p.chmod(0o755 if _p.is_dir() else 0o644)
 Path(f'/tmp/wizard-node-stage-{{ENV}}.tar.gz').unlink(missing_ok=True)
 cur_link = dist_base / 'current'
 tmp_link = dist_base / '.current.tmp'
@@ -701,6 +707,19 @@ own_private(inst_file)
 subprocess.run(['systemctl', 'daemon-reload'], check=True)
 subprocess.run(['systemctl', 'enable', f'aiops-environment-node@{{ENV}}.service'], check=True)
 subprocess.run(['systemctl', 'restart', f'aiops-environment-node@{{ENV}}.service'], check=True)
+cname = f'aiops-environment-{{ENV}}-environment-node-1'
+status_out = ''
+for _attempt in range(6):
+    time.sleep(2)
+    chk = subprocess.run(
+        ['docker', 'inspect', '-f', '{{{{.State.Status}}}}', cname],
+        capture_output=True,
+        text=True,
+    )
+    status_out = chk.stdout.strip()
+    if status_out == 'running':
+        break
+assert status_out == 'running', f'node container {{cname}} not running: {{status_out}}'
 """
     res = exec_fn(central_target, "sudo -n python3 -", input_text=remote_script, timeout_sec=180, cwd=root)
     if res.returncode != 0:

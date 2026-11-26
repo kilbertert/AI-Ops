@@ -31,6 +31,7 @@ from dotenv import dotenv_values
 from aiops_diagnostics.common.private_files import ensure_private_directory, write_private_text
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.consumer import agent_contract as flow
+from aiops_diagnostics.consumer import consumer_documents
 from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants, catalogue_token
 from aiops_diagnostics.dify import (
     dify_ensure_workspace,
@@ -917,6 +918,25 @@ def seed_target_gateway_db(db_path: str | Path, seed_doc: dict[str, Any]) -> dic
         )
 
     # 2. C 端（Dify Chatflow 执行引擎）
+    expected_content = {
+        "schema": consumer_documents.SCHEMA,
+        "tenant_id": tenant_id,
+        "environment": env,
+        "state": "published",
+        "mode": "documents",
+    }
+    consumer_snapshot = {
+        "app_id": con_app_id,
+        "workflow_id": con_workflow_id,
+        "consumer_service": {
+            "callback_version": 6,
+            "photo_enabled": bool(con_flags.get("photo_enabled", False)),
+            "content": expected_content,
+            "knowledge_base_ids": [consumer_kb_id],
+            "live_order_status": bool(con_flags.get("live_order_status", True)),
+            "live_billing_record": bool(con_flags.get("live_billing_record", True)),
+        },
+    }
     con_existing = bindings.get(env, tenant_id, "consumer", "consumer_service")
     if con_existing is None:
         con_agt = agent_store.create(
@@ -936,23 +956,7 @@ def seed_target_gateway_db(db_path: str | Path, seed_doc: dict[str, Any]) -> dic
             con_agt.agent_id,
             tenant_id,
             1,
-            {
-                "app_id": con_app_id,
-                "workflow_id": con_workflow_id,
-                "consumer_service": {
-                    "callback_version": 6,
-                    "photo_enabled": bool(con_flags.get("photo_enabled", False)),
-                    "content": {
-                        "tenant_id": tenant_id,
-                        "environment": env,
-                        "state": "published",
-                        "mode": "documents",
-                    },
-                    "knowledge_base_ids": [consumer_kb_id],
-                    "live_order_status": bool(con_flags.get("live_order_status", True)),
-                    "live_billing_record": bool(con_flags.get("live_billing_record", True)),
-                },
-            },
+            consumer_snapshot,
             "wizard-worker",
         )
         bindings.publish(
@@ -969,6 +973,40 @@ def seed_target_gateway_db(db_path: str | Path, seed_doc: dict[str, Any]) -> dic
             expected_revision=0,
             updated_by="wizard-worker",
         )
+    else:
+        existing_snap = agent_store.version(
+            con_existing.agent_id, tenant_id, con_existing.agent_version_no
+        ).snapshot
+        existing_content = (
+            (existing_snap.get("consumer_service") or {}).get("content")
+            if isinstance(existing_snap, dict)
+            else None
+        )
+        if existing_content != expected_content:
+            con_agt = agent_store.get(con_existing.agent_id, tenant_id)
+            if con_agt.status == "published":
+                con_agt = agent_store.fork_draft(con_agt.agent_id, tenant_id, con_agt.revision)
+            con_ver = agent_store.publish(
+                con_agt.agent_id,
+                tenant_id,
+                con_agt.revision,
+                consumer_snapshot,
+                "wizard-worker",
+            )
+            bindings.publish(
+                environment=env,
+                tenant_id=tenant_id,
+                entry="consumer",
+                scenario="consumer_service",
+                engine=ENGINE_DIFY,
+                agent_id=con_agt.agent_id,
+                agent_version_no=con_ver.version_no,
+                app_id=con_app_id,
+                workflow_id=con_workflow_id,
+                workflow_key_ref=f"{key_dir}/{con_app_id}.key",
+                expected_revision=con_existing.revision,
+                updated_by="wizard-worker",
+            )
 
     return {"ok": True, "environment": env, "tenant_id": tenant_id}
 

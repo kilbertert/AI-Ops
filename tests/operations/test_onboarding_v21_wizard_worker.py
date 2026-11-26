@@ -333,6 +333,11 @@ def test_seed_target_gateway_db_and_env_directory_roundtrip(tmp_path: Path) -> N
     assert con_binding is not None
     assert con_binding.app_id == con_app_id
     assert con_binding.knowledge_base_ids == ("kb-con-1",)
+    from aiops_diagnostics.consumer import consumer_knowledge
+
+    validated_content = consumer_knowledge.binding_content(con_binding, caller)
+    assert validated_content["schema"] == "aiops-consumer-live/1"
+    assert validated_content["tenant_id"] == tenant_id
 
     op_binding = chat_execution.select_binding(
         mock_settings, caller, scenario="operator_order_diagnosis", entry="operator"
@@ -1120,6 +1125,165 @@ def test_seed_target_gateway_db_populates_workspace_and_apps(tmp_path: Path) -> 
     assert DifyWorkspaces(db).tenant_for_workspace("ws-jiejia", "jiejia") == "1990990768688599040"
     con_apps = SelfServiceStore(db).apps(entry="consumer")
     assert [a["app_id"] for a in con_apps] == ["con-app-1"]
+
+
+def test_seed_target_gateway_db_upgrades_legacy_consumer_snapshot_without_schema(tmp_path: Path) -> None:
+    from aiops_diagnostics.consumer import consumer_knowledge
+    from aiops_diagnostics.execution.chat_route_bindings import ENGINE_DIFY, ChatRouteBindingStore
+    from aiops_diagnostics.onboarding import wizard_provision
+    from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentStore
+
+    env = "jiejia"
+    tenant_id = "1990990768688599040"
+    db = tmp_path / "target-gateway.db"
+    key_dir = tmp_path / "dify-keys"
+    key_dir.mkdir(mode=0o700)
+    (key_dir / "con-app-1.key").write_text("app-secret-key\n", encoding="utf-8")
+    (key_dir / "con-app-1.key").chmod(0o600)
+    agent_runs_file = tmp_path / "agent-runs.json"
+    agent_runs_file.write_text(
+        json.dumps(
+            {
+                "environment": env,
+                "snail_base_url": "https://api.mall.qushiyun.com",
+                "snail_app_id": "aiops-environment-jiejia",
+                "snail_app_token": "SAI_test",
+                "snail_agent_id": 1,
+                "snail_open_id": "open1234",
+                "expected_node_id": f"node-{env}",
+                "nodes": [{"node_id": f"node-{env}", "environment": env, "token_sha256": "a" * 64}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent_runs_file.chmod(0o600)
+
+    wf_id = "8d57d206-1f35-41fc-9c56-d76218eed413"
+    agent_store = AgentStore(db)
+    bindings = ChatRouteBindingStore(db)
+    legacy_agt = agent_store.create(
+        tenant_id,
+        f"consumer-{env}",
+        "legacy",
+        AgentConfig(
+            agent_type="customer",
+            prompt="",
+            knowledge_base_ids=("kb-con-1",),
+            model="deepseek-v4-1-flash-261017",
+            output_contract="blocks-v1",
+        ),
+        "wizard-worker",
+    )
+    legacy_ver = agent_store.publish(
+        legacy_agt.agent_id,
+        tenant_id,
+        1,
+        {
+            "app_id": "con-app-1",
+            "workflow_id": wf_id,
+            "consumer_service": {
+                "callback_version": 6,
+                "photo_enabled": False,
+                "content": {
+                    "tenant_id": tenant_id,
+                    "environment": env,
+                    "state": "published",
+                    "mode": "documents",
+                },
+                "knowledge_base_ids": ["kb-con-1"],
+                "live_order_status": True,
+                "live_billing_record": True,
+            },
+        },
+        "wizard-worker",
+    )
+    bindings.publish(
+        environment=env,
+        tenant_id=tenant_id,
+        entry="consumer",
+        scenario="consumer_service",
+        engine=ENGINE_DIFY,
+        agent_id=legacy_agt.agent_id,
+        agent_version_no=legacy_ver.version_no,
+        app_id="con-app-1",
+        workflow_id=wf_id,
+        workflow_key_ref=str(key_dir / "con-app-1.key"),
+        expected_revision=0,
+        updated_by="wizard-worker",
+    )
+
+    seed = {
+        "environment": env,
+        "tenant_id": tenant_id,
+        "workspace_id": "ws-jiejia",
+        "operator_app_id": "op-app-1",
+        "consumer_app_id": "con-app-1",
+        "consumer_workflow_id": wf_id,
+        "consumer_kb_id": "kb-con-1",
+        "consumer_flags": {"live_order_status": True, "live_billing_record": True, "photo_enabled": False},
+        "operator_manifest_text": json.dumps(
+            {
+                "schema": "m3-exec-config/1",
+                "name": "aiops-environment-jiejia",
+                "history_policy": "none",
+                "model": {
+                    "provider_key": "openai",
+                    "adapter_key": "openai-compatible",
+                    "model_key": "deepseek-v4-1-flash-261017",
+                    "endpoint": "https://model-proxy:9101",
+                },
+                "model_options": {},
+                "system_messages": ["hi"],
+                "tools": [{"name": "mysql_readonly", "description": "query", "input_schema": "{}"}],
+            }
+        ),
+        "agent_runs_path": str(agent_runs_file),
+        "key_dir": str(key_dir),
+    }
+    res = wizard_provision.seed_target_gateway_db(db, seed)
+    assert res["ok"] is True
+
+    caller = SimpleNamespace(effective_tenant_id=tenant_id)
+    mock_settings = SimpleNamespace(
+        execution_environment=env,
+        chat_execution_bindings_file="",
+        chat_route_bindings_file=str(db),
+        chat_dify_key_dir=str(key_dir),
+    )
+    con_binding = chat_execution.select_binding(
+        mock_settings, caller, scenario="consumer_service", entry="consumer"
+    )
+    assert con_binding is not None
+    assert con_binding.agent_version_no == 2
+    content = consumer_knowledge.binding_content(con_binding, caller)
+    assert content["schema"] == "aiops-consumer-live/1"
+
+
+def test_step_execution_node_normalizes_jar_filename_perms_and_checks_running(monkeypatch) -> None:
+    from aiops_diagnostics.onboarding import wizard_worker
+
+    repo_root = Path(__file__).resolve().parents[2]
+    captured_scripts: list[str] = []
+    monkeypatch.setattr(wizard_worker, "_dev_host_cp", lambda *_a, **_k: None)
+
+    def fake_exec(_target: str, _cmd: str, *, input_text: str = "", **_kwargs):
+        captured_scripts.append(input_text)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    res = wizard_worker._step_execution_node(
+        repo_root,
+        "41",
+        environment="jiejia",
+        api_domain="api.juxichongdian.cn",
+        exec_fn=fake_exec,
+    )
+    assert res == {"ok": True}
+    assert len(captured_scripts) == 1
+    script = captured_scripts[0]
+    assert "rel_dir / 'node' / 'aiops-execution-node.jar'" in script
+    assert "os.chown(_p, 0, 0)" in script
+    assert "_p.chmod(0o755 if _p.is_dir() else 0o644)" in script
+    assert "State.Status" in script
 
 
 def test_consumer_knowledge_catalogue_accepts_delegated_kdx_token(tmp_path: Path, monkeypatch) -> None:
