@@ -531,9 +531,11 @@ else:
 _, chats = snail_call('/ai-model/by-type/CHAT', None, token, 'GET')
 chat_models = chats.get('data') or []
 model_cfg_id = chat_models[0]['id'] if chat_models else 3
+model_key = str(chat_models[0].get('modelKey') or 'deepseek-v4-flash') if chat_models else 'deepseek-v4-flash'
 for cm in chat_models:
     if 'deepseek' in str(cm.get('modelKey') or '').lower():
         model_cfg_id = cm['id']
+        model_key = str(cm.get('modelKey') or 'deepseek-v4-flash')
         break
 
 # 查询或创建 Agent
@@ -585,10 +587,10 @@ manifest_obj = {{
     'model': {{
         'provider_key': 'openai',
         'adapter_key': 'openai-compatible',
-        'model_key': 'deepseek-v4-1-flash-261017',
+        'model_key': model_key,
         'endpoint': 'https://model-proxy:9101',
     }},
-    'model_options': {{'max_tokens': 4096, 'temperature': 0.3, 'stop_sequences': []}},
+    'model_options': {{}},
     'system_messages': ['用 charging_status_snapshot 工具取一次快照，并原样作答。'],
     'tools': [{{'name': 'charging_status_snapshot', 'description': tool_desc, 'input_schema': empty_schema}}],
 }}
@@ -656,7 +658,8 @@ inst_file.write_text(json.dumps(inst_body, ensure_ascii=False, indent=2) + '\\n'
 own_private(inst_file)
 
 subprocess.run(['systemctl', 'daemon-reload'], check=True)
-subprocess.run(['systemctl', 'enable', '--now', f'aiops-environment-node@{{ENV}}.service'], check=True)
+subprocess.run(['systemctl', 'enable', f'aiops-environment-node@{{ENV}}.service'], check=True)
+subprocess.run(['systemctl', 'restart', f'aiops-environment-node@{{ENV}}.service'], check=True)
 """
     res = exec_fn(central_target, "sudo -n python3 -", input_text=remote_script, timeout_sec=180, cwd=root)
     if res.returncode != 0:
@@ -810,12 +813,16 @@ def _step_cold_install_and_onboard(
     if not isinstance(bundle, dict) or not bundle.get("ok"):
         raise WizardWorkerError("CONTROL_PLANE_PREPARE_BUNDLE_FAILED")
 
+    bootstrap_remote = str(bundle.get("bootstrap_config_path") or bundle["config_path"])
+    bootstrap_sha = str(bundle.get("bootstrap_config_sha256") or bundle["config_sha256"])
+
     with tempfile.TemporaryDirectory(prefix="aiops-cold-scp-") as tmpdir:
         tmp = Path(tmpdir)
         tmp.chmod(0o700)
         for name, remote_path in (
             ("application.tar.gz", pool_info["app_remote"]),
             ("installer.tar.gz", pool_info["inst_remote"]),
+            ("bootstrap.env", bootstrap_remote),
             ("template.env", str(bundle["config_path"])),
             ("runtime-bundle.tar", str(bundle["runtime_bundle_path"])),
             ("nginx-user-ingress-auth.conf", str(bundle["nginx_auth_path"])),
@@ -830,6 +837,7 @@ def _step_cold_install_and_onboard(
         for fname in (
             "application.tar.gz",
             "installer.tar.gz",
+            "bootstrap.env",
             "template.env",
             "runtime-bundle.tar",
             "nginx-user-ingress-auth.conf",
@@ -846,37 +854,37 @@ def _step_cold_install_and_onboard(
             + f"json.loads(open('{cfg_root}/runtime/gateway-seed.json').read()))"
         )
         health_url = f"http://127.0.0.1:{local_port}/health"
+        install_bin_cmd = " ".join(
+            [
+                f"python3 {stage_remote}/inst/install.py install --ensure-prerequisites",
+                f"--environment {shlex.quote(env)}",
+                f"--user {shlex.quote(svc_user)}",
+                f"--port {local_port}",
+                f"--archive {stage_remote}/application.tar.gz",
+                f"--sha256 {shlex.quote(pool_info['app_sha256'])}",
+                f"--config {stage_remote}/bootstrap.env",
+                f"--config-sha256 {shlex.quote(bootstrap_sha)}",
+            ]
+        )
         install_cmds = [
             "set -euo pipefail",
             f"mkdir -p {stage_remote}/inst && chmod 700 {stage_remote}/inst",
             f"tar -xzf {stage_remote}/installer.tar.gz -C {stage_remote}/inst",
             f"chmod 600 {stage_remote}/*.*",
-            f"id -u {shlex.quote(svc_user)} >/dev/null 2>&1 || useradd --system --no-create-home "
-            f"--home-dir {shlex.quote(var_root)} --shell /usr/sbin/nologin "
-            f"--user-group {shlex.quote(svc_user)}",
-            f"mkdir -p {cfg_root}/runtime {cfg_root}/registry {var_root}/dify-keys {var_root}/gateway",
+            f"if [ ! -f /opt/aiops-access-{env}/installed.json ]; then {install_bin_cmd}; fi",
+            f"mkdir -p {cfg_root}/runtime {cfg_root}/registry {var_root}/keys {var_root}/gateway",
             f"chmod 755 {cfg_root}",
             f"tar -xf {stage_remote}/runtime-bundle.tar -C {cfg_root}",
-            f"mv -f {cfg_root}/dify-keys/* {var_root}/dify-keys/ 2>/dev/null || true",
+            f"mv -f {cfg_root}/dify-keys/* {var_root}/keys/ 2>/dev/null || true",
             f"rmdir {cfg_root}/dify-keys 2>/dev/null || true",
             f"cp -f {stage_remote}/nginx-user-ingress-auth.conf {cfg_root}/nginx-user-ingress-auth.conf",
-            f"chmod 700 {cfg_root}/runtime {cfg_root}/registry {var_root} "
-            f"{var_root}/dify-keys {var_root}/gateway",
-            f"chmod 600 {cfg_root}/runtime/* {cfg_root}/registry/* {var_root}/dify-keys/* "
-            f"{cfg_root}/nginx-user-ingress-auth.conf",
-            f"chown -R {svc_user}:{svc_user} {cfg_root}/runtime {cfg_root}/registry {var_root}",
-            " ".join(
-                [
-                    f"python3 {stage_remote}/inst/install.py install --ensure-prerequisites",
-                    f"--environment {shlex.quote(env)}",
-                    f"--user {shlex.quote(svc_user)}",
-                    f"--port {local_port}",
-                    f"--archive {stage_remote}/application.tar.gz",
-                    f"--sha256 {shlex.quote(pool_info['app_sha256'])}",
-                    f"--config {stage_remote}/template.env",
-                    f"--config-sha256 {shlex.quote(str(bundle['config_sha256']))}",
-                ]
-            ),
+            f"cp -f {stage_remote}/template.env {cfg_root}/production.env",
+            f"chmod 700 {cfg_root}/runtime {cfg_root}/registry {var_root} {var_root}/keys {var_root}/gateway",
+            f"chmod 600 {cfg_root}/production.env {cfg_root}/runtime/* {cfg_root}/registry/* "
+            f"{var_root}/keys/* {cfg_root}/nginx-user-ingress-auth.conf",
+            f"chown {svc_user}:{svc_user} {cfg_root}/production.env",
+            f"chown -R {svc_user}:{svc_user} {cfg_root}/runtime {cfg_root}/registry "
+            f"{var_root}/keys {var_root}/gateway",
             f"/opt/aiops-access-{env}/current/venv/bin/python -c {shlex.quote(seed_py)}",
             f"chown -R {svc_user}:{svc_user} {var_root}/gateway",
             f"systemctl restart aiops-access-{env}.service",

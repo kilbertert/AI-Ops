@@ -370,7 +370,7 @@ def prepare_control_plane_bundle(
         raise WizardProvisionError("ENVIRONMENT_WIZARD_TEMPLATE_MISSING")
     tpl_vals = {k: str(v) for k, v in dotenv_values(tpl_src).items() if v is not None}
 
-    upms_url = tpl_vals.get("AIOPS_UPMS_BASE_URL") or f"https://{api_domain}"
+    upms_url = f"https://{api_domain}"
     tenant_id, tenant_name = _resolve_tenant(
         registry_path,
         env,
@@ -396,8 +396,7 @@ def prepare_control_plane_bundle(
     ) or secrets.token_hex(24)
 
     runtime_dir_target = f"/etc/aiops-access-{env}/runtime"
-    key_dir_target = f"/var/lib/aiops-access-{env}/dify-keys"
-    db_file_target = f"/var/lib/aiops-access-{env}/gateway/gateway.db"
+    key_dir_target = f"/var/lib/aiops-access-{env}/keys"
     registry_target = f"/etc/aiops-access-{env}/registry/environment.json"
 
     raw_dify_chat_tpl = tpl_vals.get("AIOPS_GATEWAY_DIFY_CHAT_BASE_URL", "").strip()
@@ -416,11 +415,12 @@ def prepare_control_plane_bundle(
 
     env_lines: dict[str, str] = {
         **tpl_vals,
-        "AIOPS_GATEWAY_ENVIRONMENT": env,
         "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": env,
         "AIOPS_GATEWAY_BIND": "127.0.0.1",
         "AIOPS_GATEWAY_PORT": str(local_port),
         "AIOPS_GATEWAY_PUBLIC_BASE_URL": f"https://{api_domain}",
+        "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": f"https://{api_domain}/charging-pile",
+        "AIOPS_UPMS_BASE_URL": f"https://{api_domain}/upms",
         "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL": remote_dify_chat_url,
         "AIOPS_GATEWAY_KB_SERVICE_BASE_URL": remote_kb_url,
         "AIOPS_GATEWAY_ENVIRONMENT_TASK_KEY": env_task_key,
@@ -437,12 +437,8 @@ def prepare_control_plane_bundle(
         ),
         "AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN": service_token,
         "AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE": registry_target,
-        "AIOPS_GATEWAY_DATABASE_FILE": db_file_target,
-        "AIOPS_GATEWAY_SERVER_CONFIG_FILE": f"/etc/aiops-access-{env}/production.env",
         "AIOPS_GATEWAY_OPERATOR_PROFILES_FILE": f"{runtime_dir_target}/operator-profiles.json",
         "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE": f"{runtime_dir_target}/consumer-targets.json",
-        "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE": db_file_target,
-        "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR": key_dir_target,
         "AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE": (
             "" if remote_kb_url else f"{runtime_dir_target}/knowledge-delegation.json"
         ),
@@ -451,9 +447,31 @@ def prepare_control_plane_bundle(
         "AIOPS_QUERY_TIMEOUT_SECONDS": tpl_vals.get("AIOPS_QUERY_TIMEOUT_SECONDS", "15"),
         "AIOPS_SSH_ENABLED": "false",
     }
+    for installer_owned in (
+        "AIOPS_GATEWAY_ENVIRONMENT",
+        "AIOPS_GATEWAY_DATABASE_FILE",
+        "AIOPS_GATEWAY_SERVER_CONFIG_FILE",
+        "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE",
+        "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR",
+    ):
+        env_lines.pop(installer_owned, None)
     tpl_text = "\n".join(f"{k}={_quote_env(v)}" for k, v in sorted(env_lines.items()) if v != "") + "\n"
     write_private_text(prev_tpl, tpl_text)
     config_sha = hashlib.sha256(prev_tpl.read_bytes()).hexdigest()
+
+    runtime_ptr_keys = {
+        "AIOPS_GATEWAY_ENVIRONMENT_REGISTRY_FILE",
+        "AIOPS_GATEWAY_OPERATOR_PROFILES_FILE",
+        "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE",
+        "AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE",
+    }
+    bootstrap_lines = {k: v for k, v in env_lines.items() if k not in runtime_ptr_keys}
+    bootstrap_text = (
+        "\n".join(f"{k}={_quote_env(v)}" for k, v in sorted(bootstrap_lines.items()) if v != "") + "\n"
+    )
+    bootstrap_file = wdir / "bootstrap.env"
+    write_private_text(bootstrap_file, bootstrap_text)
+    bootstrap_sha = hashlib.sha256(bootstrap_file.read_bytes()).hexdigest()
 
     assets_root = Path(registry_path).resolve().parent.parent / "onboarding-assets"
     cfg_dir = assets_root / f"configuration-{config_sha}"
@@ -609,6 +627,15 @@ def prepare_control_plane_bundle(
         console._call(
             workspace_id, f"/console/api/apps/{con_app_id}/workflows/publish", method="POST", body={}
         )
+    for app_id in (op_app_id, con_app_id):
+        app_info = console._call(workspace_id, f"/console/api/apps/{app_id}")
+        if isinstance(app_info, dict) and app_info.get("enable_api") is not True:
+            console._call(
+                workspace_id,
+                f"/console/api/apps/{app_id}/api-enable",
+                method="POST",
+                body={"enable_api": True},
+            )
     con_app_detail = console._call(workspace_id, f"/console/api/apps/{con_app_id}")
     con_workflow_id = str((con_app_detail.get("workflow") or {}).get("id") or "")
     if not con_workflow_id:
@@ -621,12 +648,17 @@ def prepare_control_plane_bundle(
     ctrl_key_dir = Path(str(getattr(settings, "chat_dify_key_dir", "") or staging_keys))
     ensure_private_directory(ctrl_key_dir)
 
-    op_key_file = service_keys.issue_key(console, workspace_id, op_app_id, ctrl_key_dir)
-    con_key_file = service_keys.issue_key(console, workspace_id, con_app_id, ctrl_key_dir)
-    shutil.copyfile(op_key_file, staging_keys / f"{op_app_id}.key")
-    shutil.copyfile(con_key_file, staging_keys / f"{con_app_id}.key")
-    (staging_keys / f"{op_app_id}.key").chmod(0o600)
-    (staging_keys / f"{con_app_id}.key").chmod(0o600)
+    op_key_file = Path(
+        service_keys.ensure(console, ctrl_key_dir, workspace_id, op_app_id, database=dify_db_path)
+    )
+    con_key_file = Path(
+        service_keys.ensure(console, ctrl_key_dir, workspace_id, con_app_id, database=dify_db_path)
+    )
+    for app_id, src_key in ((op_app_id, op_key_file), (con_app_id, con_key_file)):
+        dst_key = staging_keys / f"{app_id}.key"
+        if src_key.resolve() != dst_key.resolve():
+            shutil.copyfile(src_key, dst_key)
+        dst_key.chmod(0o600)
 
     # 4. 读取 41 节点 agent-runs.json 与 exec-manifest.json，并合成客户机 runtime-bundle.tar
     node_dir = NODE_RUNTIME_ENV_ROOT / env
@@ -637,6 +669,35 @@ def prepare_control_plane_bundle(
     agent_runs_data = json.loads(agent_runs_file.read_text(encoding="utf-8"))
     manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
     execution_manifest.from_text(json.dumps(manifest_data))
+
+    node_model = dict(manifest_data["model"])
+    node_model_options = dict(manifest_data.get("model_options") or {})
+    op_tool_defs = [
+        {"name": t.name, "description": t.description, "input_schema": t.input_schema()}
+        for t in operator_tools.tools()
+    ]
+    operator_profile_manifest = {
+        "schema": execution_manifest.OPERATOR_SCHEMA,
+        "name": "operator-cpms-readonly",
+        "history_policy": execution_manifest.FIXED_HISTORY_POLICY,
+        "model": node_model,
+        "model_options": node_model_options,
+        "system_messages": [operator_agent.sop()],
+        "tools": op_tool_defs,
+    }
+    operator_agent_manifest = {
+        "schema": execution_manifest.AGENT_SCHEMA,
+        "name": "operator-cpms-readonly",
+        "history_policy": execution_manifest.AGENT_HISTORY,
+        "model": node_model,
+        "model_options": node_model_options,
+        "system_messages": [operator_agent.sop() + "\n" + operator_agent.INSTRUCTIONS],
+        "tools": op_tool_defs,
+    }
+    operator_manifest_text = json.dumps(
+        operator_agent_manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    execution_manifest.from_text(operator_manifest_text)
 
     op_cred = json.loads(Path(op_model["credential_file"]).read_text(encoding="utf-8"))
     con_cred = json.loads(Path(con_model["credential_file"]).read_text(encoding="utf-8"))
@@ -701,7 +762,7 @@ def prepare_control_plane_bundle(
         "consumer_kb_id": consumer_kb_id,
         "operator_kb_id": operator_kb_id,
         "consumer_flags": con_flags,
-        "operator_manifest_text": json.dumps(manifest_data, sort_keys=True),
+        "operator_manifest_text": operator_manifest_text,
         "agent_runs_path": f"{runtime_dir_target}/agent-runs.json",
         "key_dir": key_dir_target,
         "registrations": registrations_doc,
@@ -711,7 +772,9 @@ def prepare_control_plane_bundle(
     runtime_tar = wdir / "runtime-bundle.tar"
     files_to_pack: dict[str, bytes] = {
         "runtime/agent-runs.json": (json.dumps(agent_runs_data, sort_keys=True).encode() + b"\n"),
-        "runtime/operator-manifest.json": (json.dumps(manifest_data, sort_keys=True).encode() + b"\n"),
+        "runtime/operator-manifest.json": (
+            json.dumps(operator_profile_manifest, ensure_ascii=False, sort_keys=True).encode() + b"\n"
+        ),
         "runtime/operator-profiles.json": (json.dumps(op_profile_doc, sort_keys=True).encode() + b"\n"),
         "runtime/consumer-targets.json": (json.dumps(consumer_targets_doc, sort_keys=True).encode() + b"\n"),
         "runtime/registrations.json": (json.dumps(registrations_doc, sort_keys=True).encode() + b"\n"),
@@ -757,6 +820,8 @@ def prepare_control_plane_bundle(
         "operator_app_id": op_app_id,
         "config_path": str(cfg_file),
         "config_sha256": config_sha,
+        "bootstrap_config_path": str(bootstrap_file),
+        "bootstrap_config_sha256": bootstrap_sha,
         "runtime_bundle_path": str(runtime_tar),
         "runtime_bundle_sha256": runtime_tar_sha,
         "nginx_auth_path": str(auth_conf),
