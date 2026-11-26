@@ -666,7 +666,7 @@ own_private(cfg_dir / 'agent-runs.json')
 own_private(cfg_dir / 'node.json')
 
 node_env_path.write_text(
-    f'AIOPS_EXEC_MANIFEST={{cfg_dir}}/exec-manifest.json\\n'
+    'AIOPS_EXEC_MANIFEST=/etc/m2live/exec-manifest.json\\n'
     f'SNAIL_AI_APP_ID={{app_id}}\\n'
     f'SNAIL_AI_TOKEN={{app_token}}\\n'
     f'AIOPS_NODE_TOKEN={{node_token}}\\n',
@@ -708,18 +708,17 @@ subprocess.run(['systemctl', 'daemon-reload'], check=True)
 subprocess.run(['systemctl', 'enable', f'aiops-environment-node@{{ENV}}.service'], check=True)
 subprocess.run(['systemctl', 'restart', f'aiops-environment-node@{{ENV}}.service'], check=True)
 cname = f'aiops-environment-{{ENV}}-environment-node-1'
-status_out = ''
-for _attempt in range(6):
-    time.sleep(2)
-    chk = subprocess.run(
-        ['docker', 'inspect', '-f', '{{{{.State.Status}}}}', cname],
-        capture_output=True,
-        text=True,
-    )
-    status_out = chk.stdout.strip()
-    if status_out == 'running':
-        break
-assert status_out == 'running', f'node container {{cname}} not running: {{status_out}}'
+time.sleep(10)
+chk = subprocess.run(
+    ['docker', 'inspect', '-f', '{{{{.State.Status}}}} {{{{.RestartCount}}}}', cname],
+    capture_output=True,
+    text=True,
+)
+state_parts = chk.stdout.strip().split()
+if len(state_parts) != 2 or state_parts[0] != 'running' or state_parts[1] != '0':
+    logs = subprocess.run(['docker', 'logs', '--tail', '20', cname], capture_output=True, text=True)
+    tail = (logs.stderr or logs.stdout)[-400:]
+    raise AssertionError(f'node container {{cname}} unhealthy: {{chk.stdout.strip()}}\\n{{tail}}')
 """
     res = exec_fn(central_target, "sudo -n python3 -", input_text=remote_script, timeout_sec=180, cwd=root)
     if res.returncode != 0:
