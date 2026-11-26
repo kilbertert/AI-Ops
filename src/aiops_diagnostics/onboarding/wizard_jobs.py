@@ -34,7 +34,6 @@ PUBLISH_STEPS = (
 )
 _FORBIDDEN_SECRET_PARTS = frozenset({"password", "passwd", "secret", "private_key", "token", "third_session"})
 _TERMINAL_STATES = frozenset({"completed", "failed"})
-_ACTIVE_STATES = frozenset({"queued", "running"})
 
 
 class WizardJobError(ValueError):

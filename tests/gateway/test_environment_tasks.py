@@ -824,6 +824,8 @@ def test_automatic_worker_respects_task_selected_by_central(prepared, tmp_path, 
             if payload == {"advance_candidates": True}
             else {"claimed": False, "task": None}
             if payload.get("installation_claim") is True
+            else {"claimed": False, "job": None}
+            if payload.get("wizard_job") == "claim"
             else tasks.worker(path, ref, payload)
         ),
     )
