@@ -49,6 +49,8 @@ from aiops_diagnostics.gateway.schemas import (
     OperatorToolAuthorizationRequest,
 )
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
+from aiops_diagnostics.knowledge import knowledge_delegation
+from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
 from aiops_diagnostics.onboarding import candidate_knowledge, candidate_trial
 
 _OPERATOR_OPERATIONS = frozenset({"operator_order_diagnosis", "operator_conversation", "operator_agent"})
@@ -417,6 +419,19 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 raise StandardAPIError(403, "KNOWLEDGE_CATALOGUE_FORBIDDEN", "知识目录凭据无效") from exc
             return {
                 "libraries": [{"knowledge_base_id": scope[3], "name": result["knowledge_items"][0]["name"]}]
+            }
+        if presented.startswith(knowledge_delegation.PREFIX):
+            try:
+                scope = knowledge_delegation.authorize(context.settings, presented)
+                result = knowledge_delegation.catalogue(context, scope)
+            except (
+                ValueError,
+                knowledge_delegation.DelegationRefused,
+                KnowledgeSearchUnavailable,
+            ) as exc:
+                raise StandardAPIError(403, "KNOWLEDGE_CATALOGUE_FORBIDDEN", "知识目录凭据无效") from exc
+            return {
+                "libraries": [{"knowledge_base_id": scope[4], "name": result["knowledge_items"][0]["name"]}]
             }
         try:
             workspace = catalogue_workspace(

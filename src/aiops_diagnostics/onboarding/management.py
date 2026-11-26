@@ -701,6 +701,8 @@ def register(app, context, session_dependency):
                     )
                 if job_op == "prepare_bundle":
                     return wizard_provision.prepare_control_plane_bundle(context, reg_path, payload)
+                if job_op == "connect_consumer_plugin":
+                    return wizard_provision.connect_consumer_plugin(context, reg_path, payload)
                 if job_op == "activate_registry":
                     return wizard_provision.activate_environment_registry(context, reg_path, payload)
                 raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
