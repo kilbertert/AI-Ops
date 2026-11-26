@@ -19,6 +19,7 @@ import os
 import secrets
 import shutil
 import tarfile
+import uuid
 from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
@@ -519,7 +520,7 @@ def prepare_control_plane_bundle(
         None,
     )
     if op_app is None:
-        op_req_id = f"wiz-op-{env}-{tenant_id}"
+        op_req_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wiz-op:{env}:{tenant_id}"))
         op_app_id = self_service_prepare.create_app(
             console,
             workspace_id,
@@ -551,7 +552,7 @@ def prepare_control_plane_bundle(
         None,
     )
     if con_app is None:
-        con_req_id = f"wiz-con-{env}-{tenant_id}"
+        con_req_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wiz-con:{env}:{tenant_id}"))
         con_app_id = self_service_prepare.copy_consumer_app(
             console,
             consumer_source,
