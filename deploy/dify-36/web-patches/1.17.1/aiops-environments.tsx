@@ -237,6 +237,17 @@ const preparationSteps: Record<string, string> = {
   'consumer-prepare': '客服候选',
 }
 
+const taskActionLabels: Record<string, string> = {
+  ...preparationSteps,
+  'tenant-onboard': '一键开通',
+  'environment-publish': '正式开通',
+  'candidate-prepare': '候选准备',
+  'candidate-install': '停用候选安装',
+  'candidate-register': '候选运行登记',
+  'candidate-validate': '业务技术验证',
+  'host-verify': '主机身份验收',
+}
+
 const onboardingStageLabels: Record<string, string> = {
   'candidate-prepare': '资源准备',
   'candidate-install': '停用安装',
@@ -483,22 +494,27 @@ function StatusPill({
 function CopyableChip({ label, value }: { label?: string; value: string }) {
   const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
   const timerRef = useRef<number | null>(null)
+  const mountedRef = useRef(true)
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       if (timerRef.current !== null) window.clearTimeout(timerRef.current)
     }
   }, [])
 
   const scheduleReset = () => {
+    if (!mountedRef.current) return
     if (timerRef.current !== null) window.clearTimeout(timerRef.current)
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null
-      setStatus('idle')
+      if (mountedRef.current) setStatus('idle')
     }, 1500)
   }
 
   const copyFallback = (text: string): boolean => {
+    const previousFocus = document.activeElement
     try {
       const textarea = document.createElement('textarea')
       textarea.value = text
@@ -509,8 +525,10 @@ function CopyableChip({ label, value }: { label?: string; value: string }) {
       textarea.select()
       const ok = document.execCommand('copy')
       document.body.removeChild(textarea)
+      if (previousFocus instanceof HTMLElement) previousFocus.focus()
       return ok
     } catch {
+      if (previousFocus instanceof HTMLElement) previousFocus.focus()
       return false
     }
   }
@@ -520,10 +538,12 @@ function CopyableChip({ label, value }: { label?: string; value: string }) {
       void navigator.clipboard
         .writeText(value)
         .then(() => {
+          if (!mountedRef.current) return
           setStatus('copied')
           scheduleReset()
         })
         .catch(() => {
+          if (!mountedRef.current) return
           setStatus(copyFallback(value) ? 'copied' : 'failed')
           scheduleReset()
         })
@@ -569,13 +589,13 @@ function CompactProgressSteps({
     {
       num: '3',
       label: '一键开通',
-      done: hasReadyOnboard || hasActivated,
+      done: draftReady && (hasReadyOnboard || hasActivated),
       active: draftReady && hasValidPlan && !hasReadyOnboard && !hasActivated,
     },
     {
       num: '4',
       label: '确认发布',
-      done: hasActivated,
+      done: draftReady && hasActivated,
       active: draftReady && hasReadyOnboard && !hasActivated,
     },
   ]
@@ -586,7 +606,7 @@ function CompactProgressSteps({
           <span
             className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
               step.done
-                ? 'bg-state-success-solid text-text-primary-on-surface'
+                ? 'border border-state-success-active bg-components-badge-bg-green-soft text-text-success'
                 : step.active
                   ? 'bg-state-accent-solid text-text-primary-on-surface'
                   : 'bg-components-badge-bg-gray-soft text-text-tertiary'
@@ -646,6 +666,7 @@ export default function EnvironmentManagement() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('onboard')
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('all')
   const [expandedTenants, setExpandedTenants] = useState<Record<string, boolean>>({})
+  const [lastSubmittedTaskId, setLastSubmittedTaskId] = useState('')
 
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
@@ -666,6 +687,7 @@ export default function EnvironmentManagement() {
     setTaskError('')
     setTaskFilter('all')
     setExpandedTenants({})
+    setLastSubmittedTaskId('')
     taskViewRef.current += 1
     setTaskGeneration((v) => v + 1)
     setSelected(id)
@@ -700,8 +722,15 @@ export default function EnvironmentManagement() {
       if (!next && catalogue.can_create) setActiveTab('config')
     } catch (e) {
       if (view !== overviewViewRef.current) return
+      taskViewRef.current += 1
+      setSelected('')
       setPlan(null)
       setTasks([])
+      setTaskError('')
+      setConsumerSources([])
+      setConsumerSource('')
+      setExpandedTenants({})
+      setLastSubmittedTaskId('')
       setData(null)
       setOverview(null)
       setOverviewError('')
@@ -833,8 +862,13 @@ export default function EnvironmentManagement() {
       const result = await manage('environment-task', payload)
       if (view !== taskViewRef.current) return
       if ('tasks' in result) setTasks(result.tasks)
-      else if ('sources' in result) setConsumerSources(result.sources)
-      else {
+      else if ('sources' in result) {
+        setConsumerSources(result.sources)
+        setConsumerSource((current) =>
+          result.sources.some((s: { app_id: string }) => s.app_id === current) ? current : '',
+        )
+      } else {
+        setLastSubmittedTaskId(result.id)
         const isLifecycleTask = ['tenant-onboard', 'environment-publish'].includes(
           result.action || '',
         )
@@ -913,18 +947,6 @@ export default function EnvironmentManagement() {
     )
     return ['consumer', 'order', 'offline'].every((cap) => passed.has(cap))
   }
-  const isReadyToPublishTask = (item: SiteTask) =>
-    (item.action === 'tenant-onboard' &&
-      item.state === 'observed' &&
-      Boolean(item.result.ready_to_publish)) ||
-    isFullValidationReady(item)
-  const isActionableTask = (item: SiteTask) =>
-    ['queued', 'running', 'reconcile'].includes(item.state) ||
-    (item.action === 'tenant-onboard' &&
-      item.state === 'observed' &&
-      Boolean(item.result.ready_to_publish))
-
-  const hasReadyOnboard = tasks.some(isReadyToPublishTask)
   const enabledTenantIds = new Set(
     selectedOverview
       ? selectedOverview.enabled
@@ -936,32 +958,60 @@ export default function EnvironmentManagement() {
         ? live.tenants.filter((tenant) => tenant.enabled).map((tenant) => tenant.id)
         : [],
   )
-  const publishedTenantIds = new Set(
-    tasks
-      .filter(
-        (item) =>
-          item.action === 'environment-publish' &&
-          item.state === 'observed' &&
-          Boolean(item.result.activated) &&
-          item.tenant_id,
-      )
-      .map((item) => item.tenant_id as string),
-  )
-  const readyToPublishOnboard = tasks.find(
-    (item) =>
+
+  // 按时间倒序（最新在前）逐租户判别待发布状态：
+  // - 若该租户最新核心记录已是 activated 的 environment-publish，则视为已发布，不再计入待发布；
+  // - 否则仅取最新一条 ready_to_publish 的 tenant-onboard 或三能力全通的 candidate-validate，避免历史重复按钮。
+  const pendingPublishOnboardIds = new Set<string>()
+  const pendingPublishValidateIds = new Set<string>()
+  const settledTenants = new Set<string>()
+  for (const item of tasks) {
+    const key = item.tenant_id || '__default__'
+    if (settledTenants.has(key)) continue
+    if (
+      item.action === 'environment-publish' &&
+      item.state === 'observed' &&
+      Boolean(item.result.activated)
+    ) {
+      settledTenants.add(key)
+      continue
+    }
+    if (
       item.action === 'tenant-onboard' &&
       item.state === 'observed' &&
       Boolean(item.result.ready_to_publish) &&
-      Boolean(item.result.validation_task_id) &&
-      (!item.tenant_id ||
-        (!enabledTenantIds.has(item.tenant_id) && !publishedTenantIds.has(item.tenant_id))),
-  )
-  const hasPendingPublish = tasks.some(
-    (item) =>
-      isReadyToPublishTask(item) &&
-      (!item.tenant_id ||
-        (!enabledTenantIds.has(item.tenant_id) && !publishedTenantIds.has(item.tenant_id))),
-  )
+      Boolean(item.result.validation_task_id)
+    ) {
+      pendingPublishOnboardIds.add(item.id)
+      settledTenants.add(key)
+      continue
+    }
+    if (isFullValidationReady(item)) {
+      pendingPublishValidateIds.add(item.id)
+      settledTenants.add(key)
+    }
+  }
+
+  const readyToPublishOnboard = tasks.find((item) => pendingPublishOnboardIds.has(item.id))
+  const readyToPublishValidate = tasks.find((item) => pendingPublishValidateIds.has(item.id))
+  const hasPendingPublish = pendingPublishOnboardIds.size > 0 || pendingPublishValidateIds.size > 0
+  const hasReadyOnboard =
+    hasPendingPublish ||
+    tasks.some(
+      (item) =>
+        (item.action === 'tenant-onboard' &&
+          item.state === 'observed' &&
+          Boolean(item.result.ready_to_publish)) ||
+        isFullValidationReady(item),
+    )
+  const isActionableTask = (item: SiteTask) =>
+    ['queued', 'running', 'reconcile'].includes(item.state) ||
+    pendingPublishOnboardIds.has(item.id) ||
+    (item.action === 'tenant-onboard' &&
+      item.state === 'observed' &&
+      Boolean(item.result.ready_to_publish) &&
+      !item.result.validation_task_id)
+
   const hasActivated =
     !hasPendingPublish &&
     (tasks.some(
@@ -980,17 +1030,23 @@ export default function EnvironmentManagement() {
   ).length
   const singleTasksCount = tasks.length - lifecycleTasksCount
 
-  // 首屏「开通与租户」只展示进行中任务 + 最近 2 条核心开通/发布记录，其余全部归入「运行与排查」
+  // 首屏「开通与租户」保留全部进行中、全部待发布、刚刚手动提交的任务 + 最近 2 条核心开通/发布记录
   const focusedLifecycleTasks = (() => {
-    const active = tasks.filter((item) => ['queued', 'running', 'reconcile'].includes(item.state))
+    const priority = tasks.filter(
+      (item) =>
+        ['queued', 'running', 'reconcile'].includes(item.state) ||
+        pendingPublishOnboardIds.has(item.id) ||
+        item.id === lastSubmittedTaskId,
+    )
+    const priorityIds = new Set(priority.map((item) => item.id))
     const recent = tasks
       .filter(
         (item) =>
           ['tenant-onboard', 'environment-publish'].includes(item.action || '') &&
-          !active.some((a) => a.id === item.id),
+          !priorityIds.has(item.id),
       )
       .slice(0, 2)
-    return [...active, ...recent]
+    return [...priority, ...recent]
   })()
 
   const visibleOpsTasks = tasks.filter((item) => {
@@ -1010,7 +1066,8 @@ export default function EnvironmentManagement() {
       !item.result.validation_task_id
     )
       return null
-    const publishPlanId = item.plan_id || (plan && plan.state !== 'expired' ? plan.id : '')
+    // 若当前已重新预检拿到有效新计划，优先使用新计划 ID；刷新恢复后（plan 为空）回退使用任务携带的续签 plan_id
+    const publishPlanId = (plan && plan.state !== 'expired' ? plan.id : '') || item.plan_id
     const publishExpired = plan !== null && plan.id === publishPlanId && plan.state === 'expired'
     return (
       <Button
@@ -1238,7 +1295,11 @@ export default function EnvironmentManagement() {
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="system-xl-semibold text-text-primary">
-                        {selected ? `${draft.name || selected}（${selected}）` : '新建业务环境'}
+                        {selected
+                          ? `${draft.name || selected}（${selected}）`
+                          : data.can_create
+                            ? '新建业务环境'
+                            : '暂无已分配环境'}
                       </h2>
                       {selectedOverview && (
                         <StatusPill tone={envTone(selectedOverview.status)}>
@@ -1312,15 +1373,29 @@ export default function EnvironmentManagement() {
                       ['config', '连接配置', '', dirty || Boolean(saved?.registry_changed)],
                       ['ops', '运行与排查', tasks.length > 0 ? String(tasks.length) : '', false],
                     ] as const
-                  ).map(([tab, label, badge, warnDot]) => {
+                  ).map(([tab, label, badge, warnDot], idx, list) => {
                     const isCurrent = activeTab === tab
                     return (
                       <button
                         key={tab}
+                        id={`aiops-tab-${tab}`}
                         type="button"
                         role="tab"
                         aria-selected={isCurrent}
+                        aria-controls={`aiops-panel-${tab}`}
+                        tabIndex={isCurrent ? 0 : -1}
                         onClick={() => setActiveTab(tab)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowRight') {
+                            event.preventDefault()
+                            const next = list[(idx + 1) % list.length]?.[0]
+                            if (next) setActiveTab(next)
+                          } else if (event.key === 'ArrowLeft') {
+                            event.preventDefault()
+                            const prev = list[(idx - 1 + list.length) % list.length]?.[0]
+                            if (prev) setActiveTab(prev)
+                          }
+                        }}
                         className={`relative inline-flex cursor-pointer items-center gap-2 border-b-2 py-3 system-sm-medium transition-colors ${
                           isCurrent
                             ? 'border-state-accent-solid text-text-accent'
@@ -1350,13 +1425,18 @@ export default function EnvironmentManagement() {
               {/* TAB 1: 开通与租户（默认首屏 —— 极简、单焦点、一眼知道怎么下手）      */}
               {/* ================================================================= */}
               {activeTab === 'onboard' && (
-                <div className="space-y-5">
+                <div
+                  id="aiops-panel-onboard"
+                  role="tabpanel"
+                  aria-labelledby="aiops-tab-onboard"
+                  className="space-y-5"
+                >
                   {/* 1. 单一明确「下一步行动卡」 */}
                   {!plan || dirty ? (
                     <section
                       aria-label="下一步操作"
                       className={`rounded-2xl border p-6 shadow-xs ${
-                        readyToPublishOnboard && draftReady
+                        (readyToPublishOnboard || readyToPublishValidate) && draftReady
                           ? 'border-state-success-active bg-state-success-hover/35'
                           : 'border-components-panel-border bg-components-panel-bg'
                       }`}
@@ -1370,7 +1450,16 @@ export default function EnvironmentManagement() {
                         />
                       </div>
 
-                      {readyToPublishOnboard && draftReady ? (
+                      {!selected && !data.can_create ? (
+                        <div className="space-y-1">
+                          <h3 className="system-md-semibold text-text-primary">
+                            当前账号暂无已分配的业务环境
+                          </h3>
+                          <p className="system-xs-regular text-text-secondary">
+                            请联系平台目录管理员为当前账号分配环境授权后刷新页面。
+                          </p>
+                        </div>
+                      ) : readyToPublishOnboard && draftReady ? (
                         <div className="flex flex-wrap items-center justify-between gap-4">
                           <div className="space-y-1">
                             <div className="flex items-center gap-2">
@@ -1392,6 +1481,37 @@ export default function EnvironmentManagement() {
                               onClick={() => void preflight()}
                             >
                               配置与制品预检
+                            </Button>
+                          </div>
+                        </div>
+                      ) : readyToPublishValidate && draftReady ? (
+                        <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <StatusPill tone="success">三项能力验证就绪</StatusPill>
+                              <h3 className="system-md-semibold text-text-primary">
+                                待人工确认发布：{tenantNameOf(readyToPublishValidate.tenant_id)}
+                              </h3>
+                            </div>
+                            <p className="system-xs-regular text-text-secondary">
+                              单步业务技术验证已全部通过，预检计划后可在「运行与排查」发起发布。
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="primary"
+                              disabled={busy}
+                              onClick={() => void preflight()}
+                            >
+                              配置与制品预检
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              onClick={() => setActiveTab('ops')}
+                            >
+                              前往运行与排查
                             </Button>
                           </div>
                         </div>
@@ -1683,12 +1803,17 @@ export default function EnvironmentManagement() {
                           </summary>
                           <div className="mt-3 space-y-3 border-t border-divider-subtle pt-3">
                             <div className="flex flex-wrap gap-2">
-                              <CopyableChip label="计划" value={plan.id} />
+                              <CopyableChip key={plan.id} label="计划" value={plan.id} />
                               {plan.config_sha256 && (
-                                <CopyableChip label="配置摘要" value={plan.config_sha256} />
+                                <CopyableChip
+                                  key={plan.config_sha256}
+                                  label="配置摘要"
+                                  value={plan.config_sha256}
+                                />
                               )}
                               {plan.projection_sha256 && (
                                 <CopyableChip
+                                  key={plan.projection_sha256}
                                   label="停用候选投影摘要"
                                   value={plan.projection_sha256}
                                 />
@@ -2022,7 +2147,7 @@ export default function EnvironmentManagement() {
                                                   String(item.result?.phase || '')
                                                 ] || String(item.result?.phase || '')
                                               } · 准入 ${item.result?.activated ? '已启用' : '未启用'}）`
-                                            : `${preparationSteps[item.action || ''] || item.action || '环境任务'}${item.tenant_id ? ` · ${tenantNameOf(item.tenant_id)}` : ''}`}
+                                            : `${taskActionLabels[item.action || ''] || '环境任务'}${item.tenant_id ? ` · ${tenantNameOf(item.tenant_id)}` : ''}`}
                                       </span>
                                       <StatusPill tone={taskTone(item.state)}>
                                         {item.action === 'environment-publish' && item.result?.phase
@@ -2041,7 +2166,9 @@ export default function EnvironmentManagement() {
                                     </div>
 
                                     <div className="flex flex-wrap items-center gap-2">
-                                      {!highlightedInHero && renderPublishConfirmButton(item)}
+                                      {!highlightedInHero &&
+                                        pendingPublishOnboardIds.has(item.id) &&
+                                        renderPublishConfirmButton(item)}
 
                                       {item.action === 'environment-publish' &&
                                         ['observed', 'reconcile', 'blocked'].includes(item.state) &&
@@ -2145,6 +2272,9 @@ export default function EnvironmentManagement() {
               {/* ================================================================= */}
               {activeTab === 'config' && (
                 <form
+                  id="aiops-panel-config"
+                  role="tabpanel"
+                  aria-labelledby="aiops-tab-config"
                   onSubmit={(event) => {
                     event.preventDefault()
                     void save()
@@ -2345,7 +2475,34 @@ export default function EnvironmentManagement() {
               {/* TAB 3: 运行与排查（节点工具、全环境对比、全量任务历史与单步排障）      */}
               {/* ================================================================= */}
               {activeTab === 'ops' && (
-                <div className="space-y-5">
+                <div
+                  id="aiops-panel-ops"
+                  role="tabpanel"
+                  aria-labelledby="aiops-tab-ops"
+                  className="space-y-5"
+                >
+                  {!selected && (
+                    <section
+                      aria-label="运行排查状态"
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-divider-regular bg-components-panel-bg px-6 py-6"
+                    >
+                      <p className="system-sm-regular text-text-secondary">
+                        {data.can_create
+                          ? '当前处于新建环境草稿模式，保存环境后即可查看节点与任务记录。'
+                          : '当前暂无已分配环境，请联系管理员授权后刷新目录。'}
+                      </p>
+                      {data.can_create && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="small"
+                          onClick={() => setActiveTab('config')}
+                        >
+                          前往连接配置
+                        </Button>
+                      )}
+                    </section>
+                  )}
                   {/* 1. 运行节点与工具 */}
                   {selected && (
                     <section
@@ -2544,6 +2701,23 @@ export default function EnvironmentManagement() {
                           刷新任务
                         </Button>
                       </div>
+
+                      {draftReady && (!plan || plan.state === 'expired') && tasks.length > 0 && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-background-section-burn/70 px-4 py-2.5">
+                          <span className="system-xs-regular text-text-secondary">
+                            执行单步登记、业务验证或正式发布前需持有有效预检计划。
+                          </span>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="small"
+                            disabled={busy}
+                            onClick={() => void preflight()}
+                          >
+                            配置与制品预检
+                          </Button>
+                        </div>
+                      )}
 
                       {tasks.length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
@@ -2993,7 +3167,13 @@ export default function EnvironmentManagement() {
                                       type="button"
                                       variant="primary"
                                       size="small"
-                                      disabled={busy || dirty || !plan || plan.state === 'expired'}
+                                      disabled={
+                                        busy ||
+                                        dirty ||
+                                        saved?.registry_changed ||
+                                        !plan ||
+                                        plan.state === 'expired'
+                                      }
                                       onClick={() => {
                                         if (
                                           plan &&

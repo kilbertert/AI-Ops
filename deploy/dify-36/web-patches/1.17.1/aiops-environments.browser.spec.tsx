@@ -1638,7 +1638,151 @@ it('guards enter-key submit in case input, expired plan re-preflight, view trans
   await screen.getByRole('button', { name: `复制 ${taskId}`, exact: true }).click()
   expect(writeTextMock).toHaveBeenCalledWith(taskId)
 
-  // 5. 任意 Tab 点击「新增环境」自动切入「连接配置」表单
+  // 5. 任意 Tab 点击「新增环境」自动切入「连接配置」表单；再切到「运行与排查」不白屏
   await screen.getByRole('button', { name: '新增环境', exact: true }).click()
   await expect.element(screen.getByRole('heading', { name: '连接配置' })).toBeVisible()
+  await screen.getByRole('tab', { name: /运行与排查/ }).click()
+  await expect.element(screen.getByRole('region', { name: '运行排查状态' })).toBeVisible()
+})
+
+it('deduplicates hero publish CTA across repeated ready onboards, uses fresh plan id, and guards overview row click when dirty', async () => {
+  const calls: Array<{ action: string; body: Record<string, unknown> }> = []
+  vi.stubGlobal(
+    'confirm',
+    vi.fn(() => true),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      const action = String(body.action || '')
+      calls.push({ action, body })
+      if (action === 'environment-drafts') {
+        return Response.json({
+          ...data,
+          overview: {
+            schema: 'aiops-environment-overview/1',
+            control_environment: 'a',
+            control_execution_environment: 'a',
+            control_version: '1.40.4',
+            generated_at: 1795597500,
+            registry_revision: 4,
+            environments: [
+              {
+                id: 'a',
+                name: '环境甲',
+                is_control: false,
+                status: 'disabled',
+                enabled: false,
+                draft_revision: 2,
+                registry_changed: false,
+                tenant_count: 1,
+                enabled_tenant_count: 0,
+                active_route_count: 0,
+                nodes: [],
+                tenants: [],
+                latest_task: null,
+              },
+              {
+                id: 'b',
+                name: '环境乙',
+                is_control: false,
+                status: 'disabled',
+                enabled: false,
+                draft_revision: null,
+                registry_changed: false,
+                tenant_count: 1,
+                enabled_tenant_count: 0,
+                active_route_count: 0,
+                nodes: [],
+                tenants: [],
+                latest_task: null,
+              },
+            ],
+          },
+        })
+      }
+      if (action === 'environment-plan') {
+        return Response.json({
+          id: `plan_${'n'.repeat(32)}`,
+          draft_revision: 2,
+          registry_revision: 4,
+          state: 'blocked',
+          executable: false,
+          checks: [],
+        })
+      }
+      if (action === 'environment-task') {
+        if (body.validation_task) {
+          return Response.json({
+            id: `task_${'p'.repeat(32)}`,
+            action: 'environment-publish',
+            tenant_id: 'same',
+            state: 'observed',
+            cancel_requested: false,
+            error_code: '',
+            result: { phase: 'activated', activated: true, directory: 'synchronized' },
+          })
+        }
+        return Response.json({
+          tasks: [
+            {
+              id: `task_${'2'.repeat(32)}`,
+              action: 'tenant-onboard',
+              tenant_id: 'same',
+              plan_id: `plan_${'o'.repeat(32)}`,
+              state: 'observed',
+              cancel_requested: false,
+              error_code: '',
+              result: {
+                scope: 'tenant-one-click-onboarding',
+                ready_to_publish: true,
+                validation_task_id: `task_${'v'.repeat(32)}`,
+                stages: [],
+              },
+            },
+            {
+              id: `task_${'1'.repeat(32)}`,
+              action: 'tenant-onboard',
+              tenant_id: 'same',
+              plan_id: `plan_${'x'.repeat(32)}`,
+              state: 'observed',
+              cancel_requested: false,
+              error_code: '',
+              result: {
+                scope: 'tenant-one-click-onboarding',
+                ready_to_publish: true,
+                validation_task_id: `task_${'w'.repeat(32)}`,
+                stages: [],
+              },
+            },
+          ],
+        })
+      }
+      return Response.json({})
+    }),
+  )
+
+  const screen = await render(<EnvironmentManagement />)
+  // 同一租户有 2 条历史 ready_to_publish，首屏 Hero 只渲染 1 个主发布按钮，无重复按钮
+  await expect.element(screen.getByText(/待人工确认发布：甲租户（same）/)).toBeVisible()
+  expect(
+    screen.getByRole('button', { name: '确认发布并开通：same', exact: true }).elements(),
+  ).toHaveLength(1)
+
+  // 重新预检拿到新计划后，点击发布应优先提交新计划 plan_n... 而非旧 plan_o...
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '确认发布并开通：same', exact: true }).click()
+  expect(calls.find((c) => c.body.validation_task)?.body).toMatchObject({
+    validation_task: `task_${'v'.repeat(32)}`,
+    publication_plan: `plan_${'n'.repeat(32)}`,
+  })
+
+  // 脏表单下在「运行与排查」点击「环境总览」行同样触发未保存确认弹窗
+  await screen.getByRole('tab', { name: /连接配置/ }).click()
+  await screen.getByRole('textbox', { name: '环境名称', exact: true }).fill('脏配置')
+  await screen.getByRole('tab', { name: /运行与排查/ }).click()
+  await screen.getByRole('region', { name: '环境总览' }).getByText('环境乙（b）').click()
+  await expect.element(screen.getByRole('alertdialog')).toBeVisible()
+  await screen.getByRole('button', { name: '继续编辑', exact: true }).click()
 })
