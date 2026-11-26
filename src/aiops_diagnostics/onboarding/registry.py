@@ -219,7 +219,7 @@ def _write(path, rows, *, expected_revision, actor, managers):
         raise RegistryError("登记预期版本必须是非负整数")
     if not isinstance(actor, str) or not ACTOR_PATTERN.fullmatch(actor):
         raise RegistryError("操作人标识无效")
-    path = path.absolute()
+    path = Path(path).absolute()
     # 专用私有目录，锁覆盖读取、比较版本和原子替换，避免并发丢失更新。
     if any(parent.is_symlink() for parent in path.parents):
         raise RegistryError("登记路径包含符号链接目录")
