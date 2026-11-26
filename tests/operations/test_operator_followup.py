@@ -1,5 +1,7 @@
 """从原HTTP入口验证连续问答，不以拼入一句文本代替会话闭环。"""
 
+import time
+
 import pytest
 
 from aiops_diagnostics.conversation.conversation_store import ConversationError
@@ -113,6 +115,46 @@ def test_revoked_order_is_not_replayed_and_new_topic_does_not_inherit(tmp_path, 
         assert refused.status_code == 202
         assert terminal(f, refused.json()["qa_id"]).json()["status"] == "failed"
         assert calls == ["", ""]
+        assert not f["ctx"].conversation_store.get(
+            first["conversation_id"], f["resolver"].current.scope_fingerprint
+        )["is_generating"]
+
+
+def test_failed_followup_releases_the_slot_before_terminal_status_is_visible(tmp_path, monkeypatch):
+    """终态可见时槽位必须已释放：轮询到 failed 后立刻续问的客户端不得再撞 CONVERSATION_BUSY。
+
+    把槽位释放人为放慢 0.2 秒。若顺序是「先发布终态、后释放槽位」，
+    terminal() 必定在释放提交之前看到 failed，下面断言必挂；
+    正确顺序（先释放、后发布）下这个延迟只拖慢终态本身的可见时间，测试恒稳。
+    """
+    with environment(tmp_path, monkeypatch) as f:
+
+        def dispatch(self, config, run_id):
+            return node(f, run_id)
+
+        monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+        first = (
+            f["client"]
+            .post("/v1/assistant/questions", headers=HEADERS, json={"question": "电费", "order_no": ORDER})
+            .json()
+        )
+        assert terminal(f, first["qa_id"]).json()["status"] == "completed"
+        runtime = f["ctx"].runtime
+        original_release = runtime._release_conversation_turn
+
+        def slowed_release(conversation_turn, **kwargs):
+            time.sleep(0.2)
+            return original_release(conversation_turn, **kwargs)
+
+        monkeypatch.setattr(runtime, "_release_conversation_turn", slowed_release)
+        f["state"]["site"] = "OTHER-SITE"
+        refused = f["client"].post(
+            "/v1/assistant/questions",
+            headers=HEADERS,
+            json={"question": "那电压呢", "conversation_id": first["conversation_id"]},
+        )
+        assert refused.status_code == 202
+        assert terminal(f, refused.json()["qa_id"]).json()["status"] == "failed"
         assert not f["ctx"].conversation_store.get(
             first["conversation_id"], f["resolver"].current.scope_fingerprint
         )["is_generating"]

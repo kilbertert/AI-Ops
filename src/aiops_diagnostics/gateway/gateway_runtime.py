@@ -881,7 +881,11 @@ class GatewayRuntime:
         if conversation_turn is None:
             return
         conversation_id, scope_fingerprint, turn_no = conversation_turn
-        with contextlib.suppress(ConversationError):
+        # 终态发布（failed/cancelled 落库）必须先调用本函数再发布：
+        # 轮询到终态的客户端会立刻续问，槽位未释放就会被 CONVERSATION_BUSY 误拒。
+        # 尽力而为的释放绝不向调用方抛出：它常排在终态发布之前，
+        # 释放失败顶多让槽位等到过期扫尾，不能反过来吞掉终态。
+        try:
             self.conversation_store.release_turn(
                 conversation_id,
                 scope_fingerprint,
@@ -889,6 +893,10 @@ class GatewayRuntime:
                 preserve_completed=preserve_completed,
                 claim_id=claim_id,
             )
+        except ConversationError:
+            pass
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("release conversation turn failed", exc_info=True)
 
     def _complete_conversation_turn(
         self,

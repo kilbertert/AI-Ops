@@ -304,8 +304,8 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             code,
             str(exc).strip()[:200] if isinstance(exc, chat_execution.ChatRunUnavailable) else None,
         )
-        runtime.store.update_assistant_question(qa["qa_id"], status="failed", error_code=code)
         runtime._release_conversation_turn(registration.conversation_turn)
+        runtime.store.update_assistant_question(qa["qa_id"], status="failed", error_code=code)
     finally:
         _revoke_grant(runtime, qa, token)
 
