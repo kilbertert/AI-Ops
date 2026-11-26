@@ -8,26 +8,43 @@ import sys
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any, Protocol, runtime_checkable
 
 from aiops_diagnostics.common.config import Settings
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
+from aiops_diagnostics.common.model_request import resolve_provider_api_key
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
-from aiops_diagnostics.conversation.conversation_store import BUSY_LOCK_SECONDS
+from aiops_diagnostics.consumer import consumer_chat_service, consumer_intent
+from aiops_diagnostics.consumer.consumer_photo import PhotoStore
+from aiops_diagnostics.conversation.conversation_store import (
+    BUSY_LOCK_SECONDS,
+    ConversationError,
+    ConversationStore,
+    TurnCompletionMetadata,
+    reject_mixed_completion_kwargs,
+)
+from aiops_diagnostics.data import offline_source
+from aiops_diagnostics.data import sources as data_sources
 from aiops_diagnostics.data.sources import (
     scoped_live_sources,  # noqa: F401 - 由领域 runner 经 runtime_mod 读取，保留测试 monkeypatch 入口
 )
+from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
+from aiops_diagnostics.dify.dify_run_store import DifyRunStore
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+from aiops_diagnostics.execution import chat_data_grant, chat_execution
 from aiops_diagnostics.execution.agent_runs import AgentRunStore
-from aiops_diagnostics.gateway import chat_job_runner, trial_job_runner
+from aiops_diagnostics.gateway import chat_job_runner, gateway_schema, trial_job_runner
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
+from aiops_diagnostics.gateway.metrics_store import MetricsStore
 from aiops_diagnostics.health import health_job_runner
 from aiops_diagnostics.health.health_report import HEALTH_RULE_VERSION
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import ScopeContext
 from aiops_diagnostics.knowledge import media_service
+from aiops_diagnostics.knowledge.knowledge_dataset_sync_guard import KnowledgeDatasetSyncGuard
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchClient,
@@ -35,6 +52,7 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import (
     MediaResourceSigner,
     MediaResponse,
 )
+from aiops_diagnostics.knowledge.tenant_scope import namespace_for
 from aiops_diagnostics.operator import ops_analysis_runner
 from aiops_diagnostics.operator.ops_analysis import (
     OPERATIONS_CARD_FAILURE_RATE,
@@ -43,6 +61,7 @@ from aiops_diagnostics.operator.ops_analysis import (
 from aiops_diagnostics.operator.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
+from aiops_diagnostics.publication.agent_lifecycle import VIEW_ROLES, AgentStore
 
 _LOGGER = logging.getLogger("aiops.gateway_runtime")
 
@@ -109,13 +128,6 @@ class GatewayRuntime:
         trial_operator_scope: OperatorSiteScopeResolver | None = None,
         order_authorizer: OrderAuthorizer | None = None,
     ) -> None:
-        from aiops_diagnostics.consumer.consumer_photo import PhotoStore
-        from aiops_diagnostics.conversation.conversation_store import ConversationStore
-        from aiops_diagnostics.dify.dify_app_registry import DifyAppRegistry
-        from aiops_diagnostics.dify.dify_run_store import DifyRunStore
-        from aiops_diagnostics.gateway import gateway_schema
-        from aiops_diagnostics.gateway.metrics_store import MetricsStore
-
         gateway_schema.startup(store.path)
         self.store = store
         self.gateway_settings = gateway_settings
@@ -156,17 +168,11 @@ class GatewayRuntime:
         trial_operator_scope: OperatorSiteScopeResolver | None = None,
         order_authorizer: OrderAuthorizer | None = None,
     ) -> GatewayRuntime:
-        from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
-        from aiops_diagnostics.knowledge.knowledge_dataset_sync_guard import KnowledgeDatasetSyncGuard
-        from aiops_diagnostics.publication.agent_lifecycle import AgentStore
-
         diagnostic_settings = gateway_settings.load_data_sources()
         diagnostic_settings.agent.validate()
         diagnostic_settings.ssh.validate()
         kb_client = None
         if gateway_settings.kb_service_base_url:
-            from aiops_diagnostics.knowledge.tenant_scope import namespace_for
-
             kb_client = KbServiceClient(
                 gateway_settings.kb_service_base_url,
                 tenant_id="aiops",
@@ -291,10 +297,9 @@ class GatewayRuntime:
     def get_operations_analysis(self, context: ScopeContext, analysis_id: str) -> dict[str, Any] | None:
         job = self.store.get_standard_diagnosis(analysis_id, context.scope_fingerprint)
         if job and (job.get("result") or {}).get("_offline_references"):
-            from aiops_diagnostics.data import offline_source
-            from aiops_diagnostics.data.sources import scoped_mysql_source
-
-            with scoped_mysql_source(self.diagnostic_settings, resolve_query_scope(context)) as source:
+            with data_sources.scoped_mysql_source(
+                self.diagnostic_settings, resolve_query_scope(context)
+            ) as source:
                 offline_source.require_references(source, job["result"]["_offline_references"])
             job["result"] = {k: v for k, v in job["result"].items() if k != "_offline_references"}
         return job
@@ -524,8 +529,6 @@ class GatewayRuntime:
         agent_id: str | None = None,
         window_hours: int = 720,
     ) -> dict[str, Any]:
-        from aiops_diagnostics.publication.agent_lifecycle import VIEW_ROLES
-
         effective_roles = frozenset(getattr(context, "roles", ()))
         if not effective_roles.intersection(VIEW_ROLES):
             raise RuntimeError("agent access is not permitted")
@@ -551,8 +554,6 @@ class GatewayRuntime:
         route_type: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        from aiops_diagnostics.publication.agent_lifecycle import VIEW_ROLES
-
         effective_roles = frozenset(getattr(context, "roles", ()))
         if not effective_roles.intersection(VIEW_ROLES):
             raise RuntimeError("agent access is not permitted")
@@ -582,9 +583,7 @@ class GatewayRuntime:
         uses_context=True,
         expected_previous_qa_id=None,
     ):
-        from aiops_diagnostics.consumer.consumer_chat_service import start
-
-        return start(
+        return consumer_chat_service.start(
             self,
             context,
             question,
@@ -660,8 +659,6 @@ class GatewayRuntime:
         conversation: dict[str, Any] | None = None,
         conversation_turn_no: int | None = None,
     ) -> dict[str, Any]:
-        from aiops_diagnostics.execution import chat_execution
-
         qa = self.store.create_assistant_question(
             context.scope_fingerprint,
             question,
@@ -754,8 +751,6 @@ class GatewayRuntime:
 
     @staticmethod
     def _chat_unavailable(code: str, message: str):
-        from aiops_diagnostics.execution import chat_execution
-
         return chat_execution.ChatRunUnavailable(code, message)
 
     def _require_chat_order_visible(self, context: ScopeContext, order_no: str) -> None:
@@ -786,12 +781,9 @@ class GatewayRuntime:
     def classify_consumer(
         self, question, *, language, previous_question="", previous_order=False, selected_order=False
     ):
-        from aiops_diagnostics.common.model_request import resolve_provider_api_key
-        from aiops_diagnostics.consumer.consumer_intent import classify
-
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         provider = settings.agent.select_provider(None)
-        return classify(
+        return consumer_intent.classify(
             question,
             provider=provider,
             api_key=resolve_provider_api_key(settings.agent, provider=provider),
@@ -832,8 +824,6 @@ class GatewayRuntime:
                     with contextlib.suppress(Exception):
                         self.agent_run_store.revoke(linked.run_id, "cancelled_by_caller")
             if accepted and self.dify_run_store is not None:
-                from aiops_diagnostics.execution import chat_data_grant
-
                 linked_dify = self.dify_run_store.by_qa(qa_id)
                 if linked_dify is not None:
                     with contextlib.suppress(Exception):
@@ -890,8 +880,6 @@ class GatewayRuntime:
     ) -> None:
         if conversation_turn is None:
             return
-        from aiops_diagnostics.conversation.conversation_store import ConversationError
-
         conversation_id, scope_fingerprint, turn_no = conversation_turn
         with contextlib.suppress(ConversationError):
             self.conversation_store.release_turn(
@@ -911,6 +899,7 @@ class GatewayRuntime:
         cancelled: bool = False,
         guarded: bool = False,
         stop_renewer: threading.Event | None = None,
+        metadata: TurnCompletionMetadata | None = None,
         status_qa_id: str | None = None,
         active_order_no: str | None = None,
         attempt_no: int | None = None,
@@ -923,34 +912,54 @@ class GatewayRuntime:
         preserve_completed: bool = False,
         claim_id: str | None = None,
     ) -> None:
+        reject_mixed_completion_kwargs(
+            metadata,
+            preserve_completed=preserve_completed,
+            legacy_values=(
+                status_qa_id,
+                active_order_no,
+                attempt_no,
+                parent_qa_id,
+                attachment_ids,
+                citations,
+                steps,
+                elapsed_ms,
+                delivery_mode,
+                claim_id,
+            ),
+        )
         if guarded:
             cancelled = True
         if stop_renewer is not None:
             stop_renewer.set()
         if conversation_turn is None:
             return
-        from aiops_diagnostics.conversation.conversation_store import ConversationError
-
         conversation_id, scope_fingerprint, turn_no = conversation_turn
+        estimated_tokens = _estimate_turn_tokens(question, answer)
+        resolved_meta = metadata or TurnCompletionMetadata(
+            token_count=estimated_tokens,
+            status_qa_id=status_qa_id,
+            active_order_no=active_order_no,
+            attempt_no=attempt_no,
+            parent_qa_id=parent_qa_id,
+            attachment_ids=attachment_ids,
+            citations=citations,
+            steps=steps,
+            elapsed_ms=elapsed_ms,
+            delivery_mode=delivery_mode,
+            preserve_completed=preserve_completed,
+            claim_id=claim_id,
+        )
+        if resolved_meta.token_count == 0 and estimated_tokens:
+            resolved_meta = replace(resolved_meta, token_count=estimated_tokens)
         with contextlib.suppress(ConversationError):
             self.conversation_store.complete_turn(
                 conversation_id,
                 scope_fingerprint,
                 turn_no,
                 answer=answer,
-                token_count=_estimate_turn_tokens(question, answer),
                 cancelled=cancelled or answer is None,
-                status_qa_id=status_qa_id,
-                active_order_no=active_order_no,
-                attempt_no=attempt_no,
-                parent_qa_id=parent_qa_id,
-                attachment_ids=attachment_ids,
-                citations=citations,
-                steps=steps,
-                elapsed_ms=elapsed_ms,
-                delivery_mode=delivery_mode,
-                preserve_completed=preserve_completed,
-                claim_id=claim_id,
+                metadata=resolved_meta,
             )
 
     def _registered_agent(self, tenant_id: str, business_entry: str) -> tuple[str | None, bool]:

@@ -13,6 +13,8 @@ import secrets
 import threading
 from typing import Any
 
+from aiops_diagnostics.conversation.conversation_store import TurnCompletionMetadata
+from aiops_diagnostics.dify.dify_run_store import DifyRunSpec
 from aiops_diagnostics.execution.agent_runs import scope_to_json
 from aiops_diagnostics.identity.scope_context import ScopeContext
 
@@ -59,20 +61,22 @@ def execute_chat_dify_qa(
             workflow_id=binding.workflow_id,
         )
         run_id = "dify_" + secrets.token_urlsafe(16)
-        dify_store.issue(
-            run_id=run_id,
-            qa_id=qa_id,
-            scope_fingerprint=context.scope_fingerprint,
-            scope_json=scope_to_json(context),
-            binding_key=binding.key,
-            order_no=order_no,
-            environment=str(runtime.gateway_settings.execution_environment or ""),
-            tenant_id=context.effective_tenant_id,
-            app_id=getattr(binding, "app_id", ""),
-            workflow_id=binding.workflow_id,
-            grant_id=grant.grant_id,
-            agent_version_no=int(getattr(binding, "agent_version_no", 0) or 0),
-            route_revision=int(getattr(binding, "route_revision", 0) or 0),
+        dify_store.issue_spec(
+            DifyRunSpec(
+                run_id=run_id,
+                qa_id=qa_id,
+                scope_fingerprint=context.scope_fingerprint,
+                scope_json=scope_to_json(context),
+                binding_key=binding.key,
+                order_no=order_no,
+                environment=str(runtime.gateway_settings.execution_environment or ""),
+                tenant_id=context.effective_tenant_id,
+                app_id=getattr(binding, "app_id", ""),
+                workflow_id=binding.workflow_id,
+                grant_id=grant.grant_id,
+                agent_version_no=int(getattr(binding, "agent_version_no", 0) or 0),
+                route_revision=int(getattr(binding, "route_revision", 0) or 0),
+            )
         )
         if registration.cancelled:
             runtime._settle_dify_cancelled(dify_store, grant_store, run_id, qa_id)
@@ -150,7 +154,10 @@ def execute_chat_dify_qa(
         return
     with contextlib.suppress(Exception):
         runtime._complete_conversation_turn(
-            registration.conversation_turn, question, answer, status_qa_id=qa_id
+            registration.conversation_turn,
+            question,
+            answer,
+            metadata=TurnCompletionMetadata(status_qa_id=qa_id),
         )
 
 
@@ -404,5 +411,8 @@ def execute_chat_order_qa(
         return
     with contextlib.suppress(Exception):
         runtime._complete_conversation_turn(
-            registration.conversation_turn, question, answer, status_qa_id=qa_id
+            registration.conversation_turn,
+            question,
+            answer,
+            metadata=TurnCompletionMetadata(status_qa_id=qa_id),
         )

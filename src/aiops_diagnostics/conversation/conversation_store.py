@@ -17,8 +17,9 @@ import json
 import re
 import sqlite3
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,38 @@ class ConversationBusy(ConversationError):
 
 class RegenerateNotAllowed(ConversationError):
     """Only the latest completed turn of a conversation can be regenerated."""
+
+
+@dataclass(frozen=True, slots=True)
+class TurnCompletionMetadata:
+    """单轮问答落库与释放生成槽位时的附加元数据。"""
+
+    token_count: int = 0
+    status_qa_id: str | None = None
+    active_order_no: str | None = None
+    attempt_no: int | None = None
+    parent_qa_id: str | None = None
+    attachment_ids: Iterable[str] | None = None
+    citations: Iterable[dict[str, Any]] | None = None
+    steps: Iterable[dict[str, Any]] | None = None
+    elapsed_ms: int | None = None
+    delivery_mode: str | None = None
+    preserve_completed: bool = False
+    claim_id: str | None = None
+
+
+def reject_mixed_completion_kwargs(
+    metadata: TurnCompletionMetadata | None,
+    *,
+    token_count: int = 0,
+    preserve_completed: bool = False,
+    legacy_values: tuple[Any, ...] = (),
+) -> None:
+    """拒绝在同一调用中混传 ``metadata`` 与旧式拆散字段，避免静默覆盖。"""
+    if metadata is not None and (
+        token_count != 0 or preserve_completed or any(value is not None for value in legacy_values)
+    ):
+        raise ValueError("cannot combine metadata with legacy completion keyword arguments")
 
 
 class ConversationStore:
@@ -488,6 +521,7 @@ class ConversationStore:
         turn_no: int,
         *,
         answer: dict[str, Any] | None,
+        metadata: TurnCompletionMetadata | None = None,
         token_count: int = 0,
         cancelled: bool = False,
         status_qa_id: str | None = None,
@@ -511,14 +545,47 @@ class ConversationStore:
         regeneration (which reuses ``turn_no``), ``claim_id`` uniquely identifies
         each generation attempt so a stale worker finishing late can neither
         overwrite a newer attempt's answer nor unlock a newer attempt's slot.
+
+        Pass either ``metadata`` or legacy per-field keywords, never both.
         """
+        reject_mixed_completion_kwargs(
+            metadata,
+            token_count=token_count,
+            preserve_completed=preserve_completed,
+            legacy_values=(
+                status_qa_id,
+                active_order_no,
+                attempt_no,
+                parent_qa_id,
+                attachment_ids,
+                citations,
+                steps,
+                elapsed_ms,
+                delivery_mode,
+                claim_id,
+            ),
+        )
+        meta = metadata or TurnCompletionMetadata(
+            token_count=token_count,
+            status_qa_id=status_qa_id,
+            active_order_no=active_order_no,
+            attempt_no=attempt_no,
+            parent_qa_id=parent_qa_id,
+            attachment_ids=attachment_ids,
+            citations=citations,
+            steps=steps,
+            elapsed_ms=elapsed_ms,
+            delivery_mode=delivery_mode,
+            preserve_completed=preserve_completed,
+            claim_id=claim_id,
+        )
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
-        if status_qa_id is not None and not re.fullmatch(r"qa_[a-f0-9]{32}", status_qa_id):
+        if meta.status_qa_id is not None and not re.fullmatch(r"qa_[a-f0-9]{32}", meta.status_qa_id):
             raise ConversationError("status question id is invalid")
-        if parent_qa_id is not None and not re.fullmatch(r"qa_[a-f0-9]{32}", parent_qa_id):
+        if meta.parent_qa_id is not None and not re.fullmatch(r"qa_[a-f0-9]{32}", meta.parent_qa_id):
             raise ConversationError("parent question id is invalid")
-        if active_order_no is not None and not is_order_identifier(active_order_no):
+        if meta.active_order_no is not None and not is_order_identifier(meta.active_order_no):
             raise ConversationError("order number is invalid")
         now = now_utc()
         with self._connection(write=True) as connection:
@@ -529,7 +596,7 @@ class ConversationStore:
             ).fetchone()
             if row is None:
                 raise ConversationNotFound("turn not found")
-            if claim_id is not None:
+            if meta.claim_id is not None:
                 holder = connection.execute(
                     """
                     SELECT generating_turn_no, generating_claim_id FROM conversations
@@ -540,12 +607,12 @@ class ConversationStore:
                 holds_slot = (
                     holder is not None
                     and holder["generating_turn_no"] == turn_no
-                    and holder["generating_claim_id"] == claim_id
+                    and holder["generating_claim_id"] == meta.claim_id
                 )
-                if not holds_slot and (preserve_completed or cancelled):
+                if not holds_slot and (meta.preserve_completed or cancelled):
                     return
             if cancelled:
-                if preserve_completed:
+                if meta.preserve_completed:
                     # 原地重生成失败/取消时保留原已完成答复，仅释放槽位。
                     connection.execute(
                         "DELETE FROM conversation_turns WHERE conversation_id = ? AND turn_no = ? "
@@ -576,29 +643,31 @@ class ConversationStore:
                     """,
                     (
                         json.dumps(answer, ensure_ascii=False) if answer else None,
-                        max(0, int(token_count)),
+                        max(0, int(meta.token_count)),
                         format_stored_time(now),
-                        status_qa_id,
-                        int(attempt_no) if attempt_no is not None else None,
-                        parent_qa_id,
-                        json.dumps(list(attachment_ids), ensure_ascii=False)
-                        if attachment_ids is not None
+                        meta.status_qa_id,
+                        int(meta.attempt_no) if meta.attempt_no is not None else None,
+                        meta.parent_qa_id,
+                        json.dumps(list(meta.attachment_ids), ensure_ascii=False)
+                        if meta.attachment_ids is not None
                         else None,
-                        json.dumps(list(citations), ensure_ascii=False) if citations is not None else None,
-                        json.dumps(list(steps), ensure_ascii=False) if steps is not None else None,
-                        max(0, int(elapsed_ms)) if elapsed_ms is not None else None,
-                        delivery_mode,
+                        json.dumps(list(meta.citations), ensure_ascii=False)
+                        if meta.citations is not None
+                        else None,
+                        json.dumps(list(meta.steps), ensure_ascii=False) if meta.steps is not None else None,
+                        max(0, int(meta.elapsed_ms)) if meta.elapsed_ms is not None else None,
+                        meta.delivery_mode,
                         conversation_id,
                         turn_no,
                     ),
                 )
-            claim_clause = " AND generating_claim_id = ?" if claim_id is not None else ""
-            claim_args: tuple[Any, ...] = (claim_id,) if claim_id is not None else ()
-            if active_order_no is not None and not cancelled:
+            claim_clause = " AND generating_claim_id = ?" if meta.claim_id is not None else ""
+            claim_args: tuple[Any, ...] = (meta.claim_id,) if meta.claim_id is not None else ()
+            if meta.active_order_no is not None and not cancelled:
                 connection.execute(
                     "UPDATE conversations SET active_order_no=? WHERE conversation_id=? "
                     f"AND scope_fingerprint=? AND generating_turn_no=?{claim_clause}",
-                    (active_order_no, conversation_id, scope, turn_no, *claim_args),
+                    (meta.active_order_no, conversation_id, scope, turn_no, *claim_args),
                 )
             connection.execute(
                 f"""
@@ -702,8 +771,7 @@ class ConversationStore:
             turn_no,
             answer=None,
             cancelled=True,
-            preserve_completed=preserve_completed,
-            claim_id=claim_id,
+            metadata=TurnCompletionMetadata(preserve_completed=preserve_completed, claim_id=claim_id),
         )
 
     # ------------------------------------------------------------------

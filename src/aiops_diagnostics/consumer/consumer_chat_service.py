@@ -8,9 +8,10 @@ from typing import Any
 
 from aiops_diagnostics.consumer import legacy_callbacks
 from aiops_diagnostics.consumer.consumer_binding import deliverable_binding, require_pinned
+from aiops_diagnostics.conversation.conversation_store import TurnCompletionMetadata
 from aiops_diagnostics.dify.dify_chat_workflow import DifyWorkflowError, load_workflow_key
 from aiops_diagnostics.dify.dify_chatflow import DifyChatflowClient
-from aiops_diagnostics.dify.dify_run_store import still_valid
+from aiops_diagnostics.dify.dify_run_store import DifyRunSpec, still_valid
 from aiops_diagnostics.execution import chat_execution
 from aiops_diagnostics.execution.agent_runs import scope_to_json
 from aiops_diagnostics.execution.run_deliverability import deliverable
@@ -113,26 +114,28 @@ def start(
                 qa_id=qa["qa_id"],
                 workflow_id=binding.workflow_id,
             )
-        runtime.dify_run_store.issue(
-            run_id=run_id,
-            qa_id=qa["qa_id"],
-            scope_fingerprint=caller.scope_fingerprint,
-            scope_json=scope_to_json(caller),
-            binding_key=binding.key,
-            order_no=order_no,
-            environment=binding.environment,
-            tenant_id=caller.effective_tenant_id,
-            app_id=binding.app_id,
-            workflow_id=binding.workflow_id,
-            grant_id=grant.grant_id if token else "",
-            agent_version_no=binding.agent_version_no,
-            kind="service",
-            route_revision=binding.route_revision,
-            conversation_id=conversation["conversation_id"],
-            binding_digest=fingerprint(binding),
-            language=language,
-            data_kind=data_kind,
-            has_photo=bool(image),
+        runtime.dify_run_store.issue_spec(
+            DifyRunSpec(
+                run_id=run_id,
+                qa_id=qa["qa_id"],
+                scope_fingerprint=caller.scope_fingerprint,
+                scope_json=scope_to_json(caller),
+                binding_key=binding.key,
+                order_no=order_no,
+                environment=binding.environment,
+                tenant_id=caller.effective_tenant_id,
+                app_id=binding.app_id,
+                workflow_id=binding.workflow_id,
+                grant_id=grant.grant_id if token else "",
+                agent_version_no=binding.agent_version_no,
+                kind="service",
+                route_revision=binding.route_revision,
+                conversation_id=conversation["conversation_id"],
+                binding_digest=fingerprint(binding),
+                language=language,
+                data_kind=data_kind,
+                has_photo=bool(image),
+            )
         )
         if agent_context is not None:
             consumer_agent.initialize(runtime, run_id, agent_context)
@@ -282,7 +285,11 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
         _revoke_grant(runtime, qa, token)
         stored = runtime.store.update_assistant_question(qa["qa_id"], status="completed", result=answer)
         runtime._complete_conversation_turn(
-            registration.conversation_turn, question, answer, guarded=not stored, status_qa_id=qa["qa_id"]
+            registration.conversation_turn,
+            question,
+            answer,
+            guarded=not stored,
+            metadata=TurnCompletionMetadata(status_qa_id=qa["qa_id"]),
         )
     except Exception as exc:
         code = (
