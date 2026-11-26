@@ -17,6 +17,7 @@ import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from '@/next/navigation'
 import { manage } from '@/service/aiops-management'
+import OnboardingWizard from './aiops-onboarding-wizard'
 
 type Tenant = { id: string; name: string; enabled: boolean }
 type Draft = {
@@ -703,6 +704,7 @@ export default function EnvironmentManagement() {
   const [expandedTenants, setExpandedTenants] = useState<Record<string, boolean>>({})
   const [lastSubmittedTaskId, setLastSubmittedTaskId] = useState('')
   const [expiredPlanIds, setExpiredPlanIds] = useState<string[]>([])
+  const [showWizard, setShowWizard] = useState(false)
 
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
@@ -1346,12 +1348,22 @@ export default function EnvironmentManagement() {
                     </p>
                   </div>
 
-                  {preparing && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-components-badge-bg-blue-light-soft px-3 py-1 system-xs-medium text-text-accent">
-                      <span className="size-2 animate-pulse rounded-full bg-state-accent-solid" />
-                      后台执行中 · 自动同步
-                    </span>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {preparing && (
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-components-badge-bg-blue-light-soft px-3 py-1 system-xs-medium text-text-accent">
+                        <span className="size-2 animate-pulse rounded-full bg-state-accent-solid" />
+                        后台执行中 · 自动同步
+                      </span>
+                    )}
+                    <Button
+                      type="button"
+                      variant={showWizard ? 'secondary' : 'primary'}
+                      size="small"
+                      onClick={() => setShowWizard((v) => !v)}
+                    >
+                      {showWizard ? '关闭自助向导' : '5 步自助开通向导'}
+                    </Button>
+                  </div>
                 </div>
 
                 {saved?.registry_changed && (
@@ -1438,10 +1450,31 @@ export default function EnvironmentManagement() {
                 </div>
               </div>
 
+              {showWizard && (
+                <OnboardingWizard
+                  initialEnvironment={draft?.id || selected || ''}
+                  initialName={draft?.name || ''}
+                  initialApiDomain={
+                    draft?.company_gateway_url
+                      ? draft.company_gateway_url.replace(/^https?:\/\//, '')
+                      : ''
+                  }
+                  onClose={() => setShowWizard(false)}
+                  onOpenAdvancedConfig={() => {
+                    setShowWizard(false)
+                    setActiveTab('config')
+                  }}
+                  onOpenLegacyOnboard={() => {
+                    setShowWizard(false)
+                    setActiveTab('onboard')
+                  }}
+                />
+              )}
+
               {/* ================================================================= */}
               {/* TAB 1: 开通与租户（默认首屏 —— 极简、单焦点、一眼知道怎么下手）      */}
               {/* ================================================================= */}
-              {activeTab === 'onboard' && (
+              {!showWizard && activeTab === 'onboard' && (
                 <div
                   id="aiops-panel-onboard"
                   role="tabpanel"
@@ -2272,7 +2305,7 @@ export default function EnvironmentManagement() {
               {/* ================================================================= */}
               {/* TAB 2: 连接配置（专注表单编辑，仅此处包裹 <form onSubmit>）          */}
               {/* ================================================================= */}
-              {activeTab === 'config' && (
+              {!showWizard && activeTab === 'config' && (
                 <form
                   id="aiops-panel-config"
                   role="tabpanel"
@@ -2486,7 +2519,7 @@ export default function EnvironmentManagement() {
               {/* ================================================================= */}
               {/* TAB 3: 运行与排查（节点工具、全环境对比、全量任务历史与单步排障）      */}
               {/* ================================================================= */}
-              {activeTab === 'ops' && (
+              {!showWizard && activeTab === 'ops' && (
                 <div
                   id="aiops-panel-ops"
                   role="tabpanel"
