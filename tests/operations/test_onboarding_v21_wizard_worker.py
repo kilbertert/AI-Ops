@@ -1245,3 +1245,76 @@ def test_dev_host_download_file_streams_large_binary_and_verifies_sha256(tmp_pat
             "41", "/var/lib/aiops-41/pool/application-3.12.tar.gz", bad_dest, expected_sha256=expected_sha
         )
     assert not bad_dest.exists()
+
+
+def test_cold_install_and_onboard_runs_db_seed_as_service_user(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+    import subprocess
+
+    from aiops_diagnostics.onboarding import wizard_worker
+
+    files_bytes: dict[str, bytes] = {
+        "/pool/app.tar.gz": b"app-bytes",
+        "/pool/inst.tar.gz": b"inst-bytes",
+        "/bundle/bootstrap.env": b"AIOPS_BIND=127.0.0.1\n",
+        "/bundle/template.env": b"AIOPS_BIND=127.0.0.1\n",
+        "/bundle/runtime-bundle.tar": b"tar-bytes",
+        "/bundle/nginx-user-ingress-auth.conf": b"set $x 1;\n",
+    }
+    hashes = {k: hashlib.sha256(v).hexdigest() for k, v in files_bytes.items()}
+
+    monkeypatch.setattr(subprocess, "check_output", lambda *_a, **_k: "a" * 40 + "\n")
+    monkeypatch.setattr(
+        wizard_worker,
+        "_ensure_pool_artifacts",
+        lambda *_a, **_k: {
+            "app_remote": "/pool/app.tar.gz",
+            "app_sha256": hashes["/pool/app.tar.gz"],
+            "inst_remote": "/pool/inst.tar.gz",
+            "inst_sha256": hashes["/pool/inst.tar.gz"],
+        },
+    )
+    monkeypatch.setattr(
+        wizard_worker,
+        "_dev_host_download_file",
+        lambda _t, rpath, dest, **_k: dest.write_bytes(files_bytes[rpath]) or dest.chmod(0o600),
+    )
+    monkeypatch.setattr(wizard_worker, "_dev_host_read", lambda _t, rpath, **_k: files_bytes[rpath])
+
+    cmds: list[str] = []
+
+    class _Pin:
+        def copy_file(self, *_a, **_k) -> None:
+            return None
+
+        def run_cmd(self, cmd: str, **_k):
+            cmds.append(cmd)
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+    out = wizard_worker._step_cold_install_and_onboard(
+        tmp_path,
+        "41",
+        lambda _p: {
+            "ok": True,
+            "bootstrap_config_path": "/bundle/bootstrap.env",
+            "bootstrap_config_sha256": hashes["/bundle/bootstrap.env"],
+            "config_path": "/bundle/template.env",
+            "config_sha256": hashes["/bundle/template.env"],
+            "runtime_bundle_path": "/bundle/runtime-bundle.tar",
+            "runtime_bundle_sha256": hashes["/bundle/runtime-bundle.tar"],
+            "nginx_auth_path": "/bundle/nginx-user-ingress-auth.conf",
+            "nginx_auth_sha256": hashes["/bundle/nginx-user-ingress-auth.conf"],
+        },
+        {"environment": "jiejia", "api_domain": "api.juxichongdian.cn", "local_port": 8788},
+        pinned_host=_Pin(),
+    )
+    assert out["ok"] is True
+    install_sh = cmds[-1]
+    assert "systemctl stop aiops-access-jiejia.service" in install_sh
+    assert "chown -R aiops-access-jiejia:aiops-access-jiejia" in install_sh
+    assert (
+        "runuser -u aiops-access-jiejia -- /opt/aiops-access-jiejia/current/venv/bin/python -c" in install_sh
+    )
+    assert install_sh.index("chown -R aiops-access-jiejia:aiops-access-jiejia") < install_sh.index(
+        "runuser -u aiops-access-jiejia --"
+    )
