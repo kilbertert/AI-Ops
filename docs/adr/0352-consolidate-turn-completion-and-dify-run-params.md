@@ -33,4 +33,5 @@
 
 - 全包保持严格零循环依赖（`tests/test_readme_architecture.py`）；
 - 对外 HTTP 路由、鉴权逻辑、OpenAPI schema、SQLite 表结构及只读业务边界零变化；
-- 通过全量 `ruff`、`pytest`、`compileall`、`uv build`、`adr.check.mjs` 与真实 `aiops-gateway serve` 进程探针（`verify-aiops-gateway`）验证。
+- 通过全量 `ruff`、`pytest`、`compileall`、`uv build`、`adr.check.mjs` 与临时数据根上的真实 `aiops-gateway serve` 进程探针（`verify-aiops-gateway`）验证。
+- 探针与测试边界声明：本地 `verify-aiops-gateway` 仅证明 Gateway API 契约、鉴权模型与退役路由状态码，**不能**证明远端模型驱动诊断运行、KB 活性或 Dify 真实链路；此外依据 ADR-0348，合入 `main` 仅完成集成验证，生产部署到 41 主机仍须后续显式触发版本发布批次。

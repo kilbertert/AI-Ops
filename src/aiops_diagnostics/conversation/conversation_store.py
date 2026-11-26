@@ -85,6 +85,20 @@ class TurnCompletionMetadata:
     claim_id: str | None = None
 
 
+def reject_mixed_completion_kwargs(
+    metadata: TurnCompletionMetadata | None,
+    *,
+    token_count: int = 0,
+    preserve_completed: bool = False,
+    legacy_values: tuple[Any, ...] = (),
+) -> None:
+    """拒绝在同一调用中混传 ``metadata`` 与旧式拆散字段，避免静默覆盖。"""
+    if metadata is not None and (
+        token_count != 0 or preserve_completed or any(value is not None for value in legacy_values)
+    ):
+        raise ValueError("cannot combine metadata with legacy completion keyword arguments")
+
+
 class ConversationStore:
     """SQLite persistence for conversations and their bounded turn history.
 
@@ -531,7 +545,26 @@ class ConversationStore:
         regeneration (which reuses ``turn_no``), ``claim_id`` uniquely identifies
         each generation attempt so a stale worker finishing late can neither
         overwrite a newer attempt's answer nor unlock a newer attempt's slot.
+
+        Pass either ``metadata`` or legacy per-field keywords, never both.
         """
+        reject_mixed_completion_kwargs(
+            metadata,
+            token_count=token_count,
+            preserve_completed=preserve_completed,
+            legacy_values=(
+                status_qa_id,
+                active_order_no,
+                attempt_no,
+                parent_qa_id,
+                attachment_ids,
+                citations,
+                steps,
+                elapsed_ms,
+                delivery_mode,
+                claim_id,
+            ),
+        )
         meta = metadata or TurnCompletionMetadata(
             token_count=token_count,
             status_qa_id=status_qa_id,

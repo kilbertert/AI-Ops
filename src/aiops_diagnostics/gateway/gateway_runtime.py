@@ -23,6 +23,7 @@ from aiops_diagnostics.conversation.conversation_store import (
     ConversationError,
     ConversationStore,
     TurnCompletionMetadata,
+    reject_mixed_completion_kwargs,
 )
 from aiops_diagnostics.data import offline_source
 from aiops_diagnostics.data import sources as data_sources
@@ -911,6 +912,22 @@ class GatewayRuntime:
         preserve_completed: bool = False,
         claim_id: str | None = None,
     ) -> None:
+        reject_mixed_completion_kwargs(
+            metadata,
+            preserve_completed=preserve_completed,
+            legacy_values=(
+                status_qa_id,
+                active_order_no,
+                attempt_no,
+                parent_qa_id,
+                attachment_ids,
+                citations,
+                steps,
+                elapsed_ms,
+                delivery_mode,
+                claim_id,
+            ),
+        )
         if guarded:
             cancelled = True
         if stop_renewer is not None:
