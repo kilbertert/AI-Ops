@@ -3,10 +3,25 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 from pathlib import Path
 
 import pytest
+
+_PRUNED_DIRS = frozenset(
+    {
+        ".venv",
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        "dist",
+        "build",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 README = PROJECT_ROOT / "README.md"
@@ -99,7 +114,12 @@ def test_readme_module_references_point_at_real_files() -> None:
     (`test_readme_architecture.py`) and non-source artifacts without this guard
     mistaking a legitimate reference for a rotted one.
     """
-    known = {path.stem for path in PROJECT_ROOT.rglob("*.py") if ".venv" not in path.parts}
+    known: set[str] = set()
+    for _dirpath, dirnames, filenames in os.walk(PROJECT_ROOT):
+        dirnames[:] = [name for name in dirnames if name not in _PRUNED_DIRS]
+        for filename in filenames:
+            if filename.endswith(".py"):
+                known.add(filename[:-3])
     referenced = {match.group(1) for match in re.finditer(r"`([a-z_][a-z0-9_]*)\.py(?::\d+)?`", _readme())}
     unknown = sorted(name for name in referenced if name not in known)
     assert unknown == [], "README.md 引用了仓库中不存在的 .py 文件: " + ", ".join(unknown)

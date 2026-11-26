@@ -37,6 +37,7 @@ from aiops_diagnostics.common.scalar_rules import (
     parse_stored_time,
 )
 from aiops_diagnostics.gateway import gateway_db
+from common.source_ast_cache import iter_python_files, parse_source_ast, read_source_text
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 
@@ -377,9 +378,9 @@ def _ioformat_sites(tree: ast.AST) -> list[int]:
 
 def test_no_private_time_or_scalar_grammar_exists() -> None:
     offenders = []
-    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+    for path in iter_python_files(SOURCE_ROOT):
         rel = str(path.relative_to(SOURCE_ROOT))
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_source_ast(path)
         lines = _ioformat_sites(tree)
         if lines and rel not in _IOFORMAT_LEDGER:
             offenders.extend(f"{rel}:{n}" for n in lines)
@@ -391,9 +392,9 @@ def test_no_private_time_or_scalar_grammar_exists() -> None:
 
 def test_no_private_scalar_parser_function_names() -> None:
     offenders = []
-    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+    for path in iter_python_files(SOURCE_ROOT):
         rel = str(path.relative_to(SOURCE_ROOT))
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             if (
                 isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -406,11 +407,11 @@ def test_no_private_scalar_parser_function_names() -> None:
 
 def test_no_raw_sqlite_connect_on_the_shared_file() -> None:
     offenders = []
-    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+    for path in iter_python_files(SOURCE_ROOT):
         rel = str(path.relative_to(SOURCE_ROOT))
         if rel in _CONNECT_LEDGER:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Call)
@@ -446,15 +447,15 @@ _DELEGATED_STORE_FILES = {
 def test_every_same_file_store_delegates_to_gateway_db() -> None:
     missing = []
     for rel in sorted(_DELEGATED_STORE_FILES):
-        source = (SOURCE_ROOT / rel).read_text(encoding="utf-8")
+        source = read_source_text(SOURCE_ROOT / rel)
         if "gateway_db.connection(" not in source:
             missing.append(rel)
     assert missing == [], f"同库 store 未委托 gateway_db.connection：{missing}"
     # SINGLE_STATEMENT 是具名选择：只允许在 metrics_store 与权威本体里出现。
     holders = []
-    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+    for path in iter_python_files(SOURCE_ROOT):
         rel = str(path.relative_to(SOURCE_ROOT))
-        if "SINGLE_STATEMENT" in path.read_text(encoding="utf-8"):
+        if "SINGLE_STATEMENT" in read_source_text(path):
             holders.append(rel)
     assert set(holders) == {"gateway/metrics_store.py", "gateway/gateway_db.py"}, holders
 
@@ -462,7 +463,7 @@ def test_every_same_file_store_delegates_to_gateway_db() -> None:
 def test_gateway_ddl_has_one_authority() -> None:
     """持久结构只在 schema 模块声明；Mapping 是独立文件的具名例外。"""
     offenders = []
-    for path in SOURCE_ROOT.rglob("*.py"):
+    for path in iter_python_files(SOURCE_ROOT):
         rel = str(path.relative_to(SOURCE_ROOT))
         if rel in {
             "gateway/gateway_schema.py",
@@ -470,7 +471,7 @@ def test_gateway_ddl_has_one_authority() -> None:
             "onboarding/drafts.py",  # ADR0267：目录旁独立草稿库，不写gateway.db
         }:
             continue
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(parse_source_ast(path)):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 if node.func.attr == "executescript":
                     offenders.append(f"{rel}:{node.lineno}")

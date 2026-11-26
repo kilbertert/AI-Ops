@@ -32,6 +32,7 @@ from aiops_diagnostics.common.async_job_lifecycle import (
     converged,
     expires_at,
 )
+from common.source_ast_cache import iter_python_files, parse_source_ast, read_source_text
 
 
 def test_the_numbers_are_the_ones_the_store_uses() -> None:
@@ -179,10 +180,8 @@ def test_the_numbers_are_written_down_only_in_this_module() -> None:
         re.compile(r"timedelta\(minutes=5\)"),
     ]
     offenders: list[str] = []
-    for path in sorted(package.rglob("*.py")):
-        if path.name == "async_job_lifecycle.py":
-            continue
-        text = path.read_text(encoding="utf-8")
+    for path in iter_python_files(package, exclude_names=frozenset({"async_job_lifecycle.py"})):
+        text = read_source_text(path)
         for pattern in patterns:
             if pattern.search(text):
                 offenders.append(f"{path.name}: {pattern.pattern}")
@@ -219,12 +218,10 @@ def test_the_status_sets_are_written_down_only_in_this_module() -> None:
     #: vocabulary (same words, different meaning). `gateway_client` polls a REMOTE
     #: gateway and cannot import the definition — its copy is named
     #: `_TERMINAL_RUN_STATUSES` there and commented as a boundary.
-    owners = {"async_job_lifecycle.py", "metrics_store.py"}
+    owners = frozenset({"async_job_lifecycle.py", "metrics_store.py"})
     offenders: list[str] = []
-    for path in sorted(package.rglob("*.py")):
-        if path.name in owners:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for path in iter_python_files(package, exclude_names=owners):
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             for literal in _set_literals(node):
                 words = {
@@ -407,10 +404,8 @@ def test_the_sweep_sql_is_written_down_only_in_this_module() -> None:
 
     package = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
     offenders: list[str] = []
-    for path in sorted(package.rglob("*.py")):
-        if path.name == "async_job_lifecycle.py":
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for path in iter_python_files(package, exclude_names=frozenset({"async_job_lifecycle.py"})):
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
                 continue

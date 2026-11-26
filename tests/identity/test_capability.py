@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from common.source_ast_cache import iter_python_files, parse_source_ast
 from operator_support import (
     B_USER_ID,
     C_USER_ID,
@@ -322,8 +323,7 @@ _CHAIN_TIERS = {
 
 def _trees() -> dict[str, ast.Module]:
     return {
-        str(path.relative_to(SOURCE_ROOT)): ast.parse(path.read_text(encoding="utf-8"))
-        for path in SOURCE_ROOT.rglob("*.py")
+        str(path.relative_to(SOURCE_ROOT)): parse_source_ast(path) for path in iter_python_files(SOURCE_ROOT)
     }
 
 
@@ -356,8 +356,8 @@ def test_test_doubles_declare_the_tier_they_impersonate() -> None:
     ``ScopeContext.build`` 调用必须同时带 ``capability_source=`` —— 否则
     替身冒充的是「问什么有什么」的旧回声。"""
     offenders: list[str] = []
-    for path in sorted(TEST_ROOT.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    for path in iter_python_files(TEST_ROOT):
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue

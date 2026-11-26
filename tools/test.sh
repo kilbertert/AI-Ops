@@ -50,4 +50,6 @@ if ! .venv/bin/python -c 'import xdist' >/dev/null 2>&1; then
   echo "  because a missing declared dependency means the venv is out of date." >&2
 fi
 
+export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
+
 exec env PYTHONPATH="$PWD/src" .venv/bin/python -m pytest tests -p no:warnings "$@"

@@ -121,3 +121,58 @@ def test_the_parallel_scheduler_can_be_imported() -> None:
                 "说明并行调度器与 runner 不是从同一个环境来的。"
             ) from None
         pytest.skip("未装 xdist：本次是串行运行，不需要它（见本函数 docstring）")
+
+
+def test_conftest_bounds_malloc_arenas_and_enables_temp_sqlite_sync_off() -> None:
+    import conftest
+
+    from aiops_diagnostics.gateway import gateway_db
+
+    assert os.environ.get("MALLOC_ARENA_MAX") == "2"
+    assert gateway_db._TEST_SYNC_OFF_ROOT is not None
+    assert hasattr(conftest, "_available_memory_mb")
+
+
+def test_host_slot_file_permissions_are_world_rw(tmp_path: Path) -> None:
+    import conftest
+
+    slot = tmp_path / "host-test-slot-0.lock"
+    old_umask = os.umask(0o027)
+    try:
+        handle = conftest._open_slot(slot)
+        handle.close()
+    finally:
+        os.umask(old_umask)
+    assert (slot.stat().st_mode & 0o777) == 0o666
+
+
+def test_auto_worker_budget_respects_ci_env_and_low_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    import conftest
+
+    monkeypatch.setenv("CI", "1")
+    monkeypatch.delenv(conftest.WORKERS_ENV, raising=False)
+    assert conftest.pytest_xdist_auto_num_workers(None) == 4  # type: ignore[arg-type]
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(conftest, "_available_memory_mb", lambda: 8192)
+    assert conftest.pytest_xdist_auto_num_workers(None) == 2  # type: ignore[arg-type]
+
+    monkeypatch.setattr(conftest, "_available_memory_mb", lambda: 2048)
+    assert conftest.pytest_xdist_auto_num_workers(None) == 1  # type: ignore[arg-type]
+
+    monkeypatch.setenv(conftest.WORKERS_ENV, "3")
+    assert conftest.pytest_xdist_auto_num_workers(None) == 3  # type: ignore[arg-type]
+
+
+def test_clear_fastapi_callable_caches_respects_threshold() -> None:
+    import conftest
+    from fastapi.dependencies import models as fastapi_models
+
+    def _sample_endpoint() -> None:
+        return None
+
+    fastapi_models._is_coroutine_callable_cached(fastapi_models._CallIdentity(_sample_endpoint))
+    assert fastapi_models._is_coroutine_callable_cached.cache_info().currsize >= 1
+    assert conftest._clear_fastapi_callable_caches(threshold=100_000) is False
+    assert conftest._clear_fastapi_callable_caches(threshold=1) is True
+    assert fastapi_models._is_coroutine_callable_cached.cache_info().currsize == 0

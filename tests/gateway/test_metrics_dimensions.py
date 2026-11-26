@@ -24,6 +24,7 @@ import re
 from pathlib import Path
 
 import pytest
+from common.source_ast_cache import iter_python_files, read_source_text
 
 from aiops_diagnostics.gateway.metrics_store import (
     OUTCOME_TYPES,
@@ -85,8 +86,8 @@ def test_the_dimension_checks_are_not_duplicated():
     pattern = re.compile(r"(route_type|outcome|retrieval_status)\s+not\s+in\s+\w+")
     offenders = [
         f"{path.relative_to(SRC)}:{number}"
-        for path in SRC.rglob("*.py")
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        for path in iter_python_files(SRC)
+        for number, line in enumerate(read_source_text(path).splitlines(), 1)
         if pattern.search(line)
     ]
     # `check_dimension` 内部用的是 `value not in allowed`，不会被这个模式命中。
@@ -117,10 +118,8 @@ def _produced_literals(dimension: str) -> set[str]:
         for name in dir(dims)
         if name.startswith(("ROUTE_", "OUTCOME_")) and isinstance(getattr(dims, name), str)
     }
-    for path in SRC.rglob("*.py"):
-        if path.name == "metrics_store.py":
-            continue
-        text = path.read_text(encoding="utf-8")
+    for path in iter_python_files(SRC, exclude_names=frozenset({"metrics_store.py"})):
+        text = read_source_text(path)
         found.update(keyword.findall(text))
         for name in named.findall(text):
             if name in constants:
@@ -253,11 +252,9 @@ def test_producers_reference_the_named_constants():
     引用常量之后，`ROUTE_TYPES` 与常量表就是同一处。这条测试钉住**不再增加新的一处**。
     """
     offenders = []
-    for path in SRC.rglob("*.py"):
-        if path.name == "metrics_store.py":
-            continue
+    for path in iter_python_files(SRC, exclude_names=frozenset({"metrics_store.py"})):
         rel = path.relative_to(SRC).as_posix()
-        for value in re.findall(r'\broute_type\s*=\s*"([a-z0-9_]+)"', path.read_text(encoding="utf-8")):
+        for value in re.findall(r'\broute_type\s*=\s*"([a-z0-9_]+)"', read_source_text(path)):
             if (rel, value) not in BARE_LITERAL_ALLOWED:
                 offenders.append(f"{rel}: route_type={value!r}")
     assert offenders == [], "这些生产点写了裸字面量，应改为引用 metrics_store 的常量：\n  " + "\n  ".join(
