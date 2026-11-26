@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from common.source_ast_cache import iter_python_files, parse_source_ast
+
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 #: Dotted path, as `ast` reads it: the module that owns the shared entry point.
 GUARD_MODULE = "aiops_diagnostics.common.answer_language"
@@ -206,12 +208,12 @@ def _binding_before(name: str, scope: ast.AST | None, call: ast.Call) -> ast.exp
     return in_effect[1] if in_effect is not None else None
 
 
-def _sources() -> list[Path]:
-    return sorted(path for path in SOURCE_ROOT.rglob("*.py"))
+def _sources() -> tuple[Path, ...]:
+    return iter_python_files(SOURCE_ROOT)
 
 
 def _trees() -> list[tuple[Path, ast.Module]]:
-    return [(path, ast.parse(path.read_text(encoding="utf-8"), filename=path.name)) for path in _sources()]
+    return [(path, parse_source_ast(path)) for path in _sources()]
 
 
 def test_every_finalisation_point_hands_the_guard_the_contract_payload() -> None:

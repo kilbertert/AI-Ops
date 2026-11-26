@@ -11,6 +11,8 @@
 import ast
 from pathlib import Path
 
+from common.source_ast_cache import iter_python_files, parse_source_ast
+
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src" / "aiops_diagnostics"
 #: 谓词的定义处：判据只允许出现在这里。
 DEFINITION_MODULE = "run_deliverability.py"
@@ -19,7 +21,7 @@ PREDICATE_NAMES = frozenset({"deliverable", "expired", "still_valid"})
 
 
 def _python_sources():
-    return sorted(path for path in SOURCE_ROOT.rglob("*.py") if path.name != DEFINITION_MODULE)
+    return iter_python_files(SOURCE_ROOT, exclude_names=frozenset({DEFINITION_MODULE}))
 
 
 def _scoped_nodes(function):
@@ -75,7 +77,7 @@ def test_no_hand_written_state_and_window_combination():
     """``state == "succeeded"`` 与 ``expires_at`` 不得在同一个布尔表达式里手写组合。"""
     offenders = []
     for path in _python_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             if not isinstance(node, ast.BoolOp):
                 continue
@@ -92,7 +94,7 @@ def test_by_qa_call_sites_do_not_decide_delivery_from_state_alone():
     """``by_qa()`` 之后仅凭 ``state`` 决定交付、又不引用窗口判据的调用点，一律不许存在。"""
     offenders = []
     for path in _python_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue

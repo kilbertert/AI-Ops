@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 
 import pytest
+from common.source_ast_cache import iter_python_files, parse_source_ast
 from pydantic import ValidationError
 
 from aiops_diagnostics.gateway.gateway_api import (
@@ -243,8 +244,8 @@ def _identifier_alphabet_literals(tree: ast.AST) -> list[int]:
 
 def test_no_second_order_grammar_literal_exists() -> None:
     found: dict[str, int] = {}
-    for path in sorted(SOURCE_ROOT.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    for path in iter_python_files(SOURCE_ROOT):
+        tree = parse_source_ast(path)
         count = len(_identifier_alphabet_literals(tree))
         if count:
             found[str(path.relative_to(SOURCE_ROOT))] = count
@@ -277,11 +278,11 @@ def test_no_identifier_grammar_inside_order_named_code() -> None:
     `order_candidate`（operator_agent）与 `start`（operator_cpms）里那份
     `[A-Za-z0-9_-]{1,80}` 就是被这条规则抓到的。"""
     offenders = []
-    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+    for path in iter_python_files(SOURCE_ROOT):
         rel = str(path.relative_to(SOURCE_ROOT))
         if rel in _ORDER_GRAMMAR_FILES:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_source_ast(path)
         if "order" in path.name:
             for lineno in _identifier_alphabet_literals(tree):
                 offenders.append(f"{rel}:{lineno} (order 命名文件)")
@@ -304,9 +305,9 @@ _EXTRACTOR_OWNERS = {
 
 def test_no_second_order_extractor_exists() -> None:
     offenders = []
-    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+    for path in iter_python_files(SOURCE_ROOT):
         rel = str(path.relative_to(SOURCE_ROOT))
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             if (
                 isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))

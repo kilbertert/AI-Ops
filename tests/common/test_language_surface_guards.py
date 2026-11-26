@@ -18,6 +18,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from common.source_ast_cache import iter_python_files, parse_source_ast
+
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 ZH_FAMILY = frozenset({"zh", "zh-Hant", "en"})
 
@@ -61,14 +63,14 @@ def _zh_startswith_calls(tree: ast.AST) -> list[int]:
     return lines
 
 
-def _source_files() -> list[Path]:
-    return sorted(SOURCE_ROOT.rglob("*.py"))
+def _source_files() -> tuple[Path, ...]:
+    return iter_python_files(SOURCE_ROOT)
 
 
 def test_no_zh_family_fold_remains() -> None:
     offenders = []
     for path in _source_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_source_ast(path)
         for lineno in _zh_startswith_calls(tree):
             offenders.append(f"{path.relative_to(SOURCE_ROOT)}:{lineno}")
     assert offenders == [], f"新的 zh 家族折叠应读 `is_chinese`/`fallback` 声明：{offenders}"
@@ -77,7 +79,7 @@ def test_no_zh_family_fold_remains() -> None:
 def test_language_enumerations_match_the_ledger() -> None:
     found: dict[tuple[str, tuple[str, ...]], int] = {}
     for path in _source_files():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_source_ast(path)
         rel = str(path.relative_to(SOURCE_ROOT))
         for _, members in _zh_family_literal_members(tree):
             key = (rel, members)

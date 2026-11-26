@@ -46,6 +46,9 @@ LEASE = "lease"
 #: 「恰好单语句」，块内多写一条就各自提交、互不相干。
 SINGLE_STATEMENT = "single_statement"
 
+#: 仅供测试环境按 tempdir 根目录豁免磁盘 fsync，不影响任何生产调用。
+_TEST_SYNC_OFF_ROOT: Path | None = None
+
 
 @contextmanager
 def connection(
@@ -66,6 +69,12 @@ def connection(
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
+        if (
+            _TEST_SYNC_OFF_ROOT is not None
+            and not readonly
+            and Path(path).expanduser().resolve().is_relative_to(_TEST_SYNC_OFF_ROOT)
+        ):
+            conn.execute("PRAGMA synchronous=OFF")
         if write and profile not in {LEASE, SINGLE_STATEMENT}:
             # 拼错的 profile 不能静默退回自动提交。
             raise ValueError(f"unknown write profile: {profile!r}")
