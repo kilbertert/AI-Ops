@@ -1283,7 +1283,10 @@ def test_step_execution_node_normalizes_jar_filename_perms_and_checks_running(mo
     assert "rel_dir / 'node' / 'aiops-execution-node.jar'" in script
     assert "os.chown(_p, 0, 0)" in script
     assert "_p.chmod(0o755 if _p.is_dir() else 0o644)" in script
+    assert "AIOPS_EXEC_MANIFEST=/etc/m2live/exec-manifest.json" in script
+    assert "AIOPS_EXEC_MANIFEST={cfg_dir}" not in script
     assert "State.Status" in script
+    assert "RestartCount" in script
 
 
 def test_consumer_knowledge_catalogue_accepts_delegated_kdx_token(tmp_path: Path, monkeypatch) -> None:
