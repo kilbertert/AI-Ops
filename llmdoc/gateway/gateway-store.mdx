@@ -1,5 +1,5 @@
 ---
-description: "gateway.db SQLite 纪律：gateway_db LEASE/SINGLE_STATEMENT/readonly profile、initialize WAL 有界重试后单事务、gateway_schema 唯一结构权威（ADR-0244、user_version 记版）、recover_interrupted_jobs 只在 boot path、async_job_lifecycle 三终态、retention 永不撤销已交付结果、两本运行账词汇"
+description: "gateway.db SQLite 纪律：gateway_db LEASE/SINGLE_STATEMENT/readonly profile、initialize WAL 有界重试后单事务、gateway_schema 唯一结构权威（ADR-0244、user_version 记版、LEGACY_TABLE_RENAMES 事务内改名、v4 库不可被旧二进制回读）、recover_interrupted_jobs 只在 boot path、async_job_lifecycle 三终态、retention 永不撤销已交付结果、两本运行账词汇"
 kind: architecture
 relations:
   related:
@@ -12,6 +12,9 @@ code:
     - src/aiops_diagnostics/gateway/gateway_schema.py
     - src/aiops_diagnostics/gateway/gateway_store.py
     - src/aiops_diagnostics/common/async_job_lifecycle.py
+    - tests/gateway/test_gateway_schema.py
+    - tests/gateway/test_database_initialization.py
+    - tests/common/test_async_job_lifecycle.py
 ---
 
 # Gateway 存储纪律
@@ -27,7 +30,8 @@ code:
 
 ## 迁移与恢复
 
-- `gateway_schema.py`（ADR-0244）是 28 张表的唯一结构权威：`TABLES`/`INDEXES`/`LEGACY_COLUMNS` 一份声明同时驱动 CREATE、白名单 `ADD COLUMN` 与结构校验，`PRAGMA user_version` 记版——`_version()` 接受 `0 <= v <= VERSION`：0 = 版本化之前的历史库，`1..VERSION-1` = 已知历史发布（缺的列须由 `LEGACY_COLUMNS` 白名单放行才过 legacy 校验）；只有更新版本写出的库/非法值（`>VERSION`、负数）才 `SchemaError`——旧代码开新库 fail closed；`check()` 的 legacy 判据是 `version < VERSION`（旧版返回可迁移报告而不是报错）。`ensure()` 在**一次 `gateway_db.initialize` 写事务**内升级：锁内重读版本防多进程重复升级，校验失败整体回滚；已知旧版在同一事务内补列+抬 user_version，补列全做完才建索引——「索引必须排在 ALTER 之后」的顺序陷阱改由内序结构性保证，不再靠注释钉住。**ALTER 绝不回填**。VERSION 现为 2（ADR-0251 新增 `agent_runs.tool_summaries_json`，已入 `LEGACY_COLUMNS`）：v1→v2 是首个真实版本化迁移，已在 41 生产库由 `ensure()` 自动完成——评审曾把「只认 0/VERSION」的旧逻辑判为部署即启动阻断（钉 v0 的 `historical()` 覆盖不到 v1）；教训：bump VERSION 时旧版本=现网库。目录内省只用 `sqlite_master` 兼容名（ADR-0258）：`sqlite_schema` 是 3.33+ 新名，部署地板是 95 宿主的 SQLite 3.26，交付代码写新名直接起不来。
+- `gateway_schema.py`（ADR-0244）是全部表的唯一结构权威：`TABLES`/`INDEXES`/`LEGACY_COLUMNS` 一份声明同时驱动 CREATE、白名单 `ADD COLUMN` 与结构校验，`PRAGMA user_version` 记版——`_version()` 接受 `0 <= v <= VERSION`：0 = 版本化之前的历史库，`1..VERSION-1` = 已知历史发布（缺的列须由 `LEGACY_COLUMNS` 白名单放行才过 legacy 校验）；只有更新版本写出的库/非法值（`>VERSION`、负数）才 `SchemaError`——旧代码开新库 fail closed；`check()` 的 legacy 判据是 `version < VERSION`（旧版返回可迁移报告而不是报错）。`ensure()` 在**一次 `gateway_db.initialize` 写事务**内升级：锁内重读版本防多进程重复升级，校验失败整体回滚；已知旧版在同一事务内补列+抬 user_version，补列全做完才建索引——「索引必须排在 ALTER 之后」的顺序陷阱改由内序结构性保证，不再靠注释钉住。**ALTER 绝不回填**。目录内省只用 `sqlite_master` 兼容名（ADR-0258）：`sqlite_schema` 是 3.33+ 新名，部署地板是 95 宿主的 SQLite 3.26，交付代码写新名直接起不来。
+- VERSION 现为 4，v1→v2 之后的两次迁移各有新机制。v3（ADR-0337 管家抽屉）：新增 `assistant_files`/`assistant_qa_events`/`assistant_feedback` 并扩 `assistant_questions` 列白名单——常规补列路径。v4（ADR-0340）：`standard_diagnoses` 原子改名 `async_jobs`（该表真实职责是 ops-analysis 四卡作业与受管试运行，不是已退役的标准诊断）——改名不走补列：**`LEGACY_TABLE_RENAMES`/`LEGACY_INDEX_RENAMES` 声明制，在同一写事务内先于补列执行**，旧索引改名后即弃；旧表新表并存 = `SchemaError("ambiguous legacy table rename")` fail-closed；任何失败整体回滚、零数据损失；只读 `check()` 能对旧名库按新名结构透明校验。**v4 库不能被 v3 及更早二进制回读**（旧代码找的 `standard_diagnoses` 已不存在）——升级前先 `aiops-admin schema rehearse` 演练，服务主机侧安装器另有独立演练闸（见 [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)）。v1→v2 的教训随版本节奏加快而一般化：bump VERSION 时旧版本=现网库，任何版本都要作为一等迁移源对待。
 - `gateway_store.py` (_initialize)：只剩 `gateway_schema.ensure(self.path)` + 私文件保护；共用 gateway.db 的各 store 同样委托，per-store `_migrate_*` 已删净——结构变更唯一通道是改 `TABLES`/`LEGACY_COLUMNS` 并抬 `VERSION`。
 - `recover_interrupted_jobs`：把 queued/running 收敛到 `failed` + `*_INTERRUPTED_BY_RESTART`，**只走 boot path**（见 [gateway-runtime](gateway-runtime.mdx)）。每次写入仍走该表自己的更新路径，claim-guard 与 retention 照常生效；同时释放会话生成槽位（`ConversationStore.recover_interrupted_turns`）。
 
@@ -44,6 +48,6 @@ code:
 ## Canonical anchors
 
 - `src/aiops_diagnostics/gateway/gateway_db.py`（模块 docstring 即合同）
-- `src/aiops_diagnostics/gateway/gateway_schema.py`（ensure/startup/check、TABLES/LEGACY_COLUMNS）
+- `src/aiops_diagnostics/gateway/gateway_schema.py`（ensure/startup/check、TABLES/LEGACY_COLUMNS/LEGACY_TABLE_RENAMES）
 - `src/aiops_diagnostics/gateway/gateway_store.py` (_initialize, recover_interrupted_jobs)
 - `src/aiops_diagnostics/common/async_job_lifecycle.py` (JobProfile, expire_statements, converged)

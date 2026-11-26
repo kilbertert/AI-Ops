@@ -30,6 +30,10 @@ code:
     - tests/dify/test_dual_entry.py
     - tests/dify/test_self_service.py
     - tests/dify/test_runtime_registration.py
+    - tests/dify/test_consumer_dependencies.py
+    - tests/dify/test_dify_publish_api.py
+    - tests/dify/test_state_safety.py
+    - tests/dify/test_store_connection_boundaries.py
 ---
 
 # 自助开通面（受管应用目录）
@@ -56,9 +60,9 @@ snapshot-先 → create → reconcile：Dify 只在创建时返回完整 token�
 - `self_service_bridge` 同源闸：Origin==console_origin **且** Referer 同源 **且** `Sec-Fetch-Site∈{∅,same-origin}` **且**有效 Dify 会话 **且**`角色∈{owner,admin,editor}` **且** `application/json`——之后只转发服务端验证过的浏览器会话；浏览器永远见不到内部令牌或平台 key。
   环境任务白名单已扩到约一打固定形状（`environment-update`/`environment-draft-save`/`environment-plan`/candidate_task+installation/installation_task+registration_plan/registration_task+validation_plan+capabilities/validation_task+publication_plan/verify_task/site、workspace、knowledge、connection 各 `*_task`/`id+cancel` 等），全部正则钉字段，仍不接受工作区ID、任意URL或执行参数；准备串联须Gateway与桥配套，旧单步骤保持。
   D37安装只接`candidate_task/installation=true`确认，部署材料由控制端冻结、运维搬运；原平台/目录权限不变，浏览器不能提交制品路径或执行参数。
-- `self_service_identity`：管理身份只经真 Dify 登录交换读，浏览器不提供任何身份声明。`identity()`/`require_target()` 在配 `environment_registry_file` 时先过 `for_settings(settings).require(tenant)` 登记准入——未开通/停用租户 → `SetupRefused("TENANT_ENVIRONMENT_NOT_ENABLED")`（非 `SETUP_` 前缀的共享拒码，ADR-0256）；准入/平台权限两闸均可按调用点关断（`require_admission=`/`require_platform_permissions=`），环境管理面就绕开它们（其授权走显式目录授权而非登记准入）。`self_service_config` = 平台维护的 profiles（JSON 0600）被应用引用；不接受浏览器给的路径/凭据/端点。
-- `self_service_api` 会话分两层：`session()` 保 `SETUP_DISABLED` 闸+operator-profiles 委派；`management_session` 只要发布 key Bearer、**不吃 operator-profiles 闸**——`environment_management.register` 把环境目录管理面挂在其下，所以无 operator profiles 的安装仍可做环境管理。
-- 草稿完整性：发布比对当前草稿指纹与创建时冻结值；并发发布或源版本变化 → `SETUP_DRAFT_CHANGED`/`SETUP_SOURCE_CHANGED`/`SETUP_ACTOR_CHANGED`——让运营刷新，不是系统猜。
+- `self_service_identity`：管理身份只经真 Dify 登录交换读，浏览器不提供任何身份声明。`identity()`/`require_target()` 在配 `environment_registry_file` 时先过登记准入：平台哨兵（`type=-1` ∧ `tenant_id=-1`）只查登记本身 enabled（`require_enabled()`），普通租户按行 `require(tenant)`——未开通/停用 → `SetupRefused("TENANT_ENVIRONMENT_NOT_ENABLED")`（非 `SETUP_` 前缀的共享拒码，ADR-0256/0332）；准入/平台权限两闸均可按调用点关断（`require_admission=`/`require_platform_permissions=`），环境管理面就绕开它们（其授权走显式目录授权而非登记准入）。`self_service_config` = 平台维护的 profiles（JSON 0600）被应用引用；不接受浏览器给的路径/凭据/端点。
+- `self_service_api` 会话分两层：`session()` 保 `SETUP_DISABLED` 闸+operator-profiles 委派；`management_session` 只要发布 key Bearer、**不吃 operator-profiles 闸**——`onboarding/management.py`（本地别名 `environment_management`）的 `register` 把环境目录管理面挂在其下，所以无 operator profiles 的安装仍可做环境管理。配登记文件时 catalogue 的租户选项/工作区/来源再与 `enabled_tenant_ids()` 求交（ADR-0332）——停用租户从自助目录里消失，不只是被准入闸拒。
+- 草稿完整性：发布比对当前草稿指纹与创建时冻结值；并发发布或源版本变化 → `SETUP_DRAFT_CHANGED`/`SETUP_SOURCE_CHANGED`/`SETUP_ACTOR_CHANGED`——让运营刷新，不是系统猜。consumer 的 `change_version` 另有 `SETUP_VERSION_ENVIRONMENT_MISMATCH` 写路径闸（ADR-0333，语义归 [execution-delegation](../execution/execution-delegation.mdx)）——钉着别的执行环境的冻结快照不能被重指上路由。
 - consumer 选库与草稿接管（ADR-0255）：detail 的 `knowledge_base_ids` 从**当前草稿导出的 workflow** 经 `consumer_source_ids` 投影（非开通时 targets 快照），并附 `live_app_id`/`live_version_no`——抽屉看/改的是应用真草稿的选库。拉 DSL 同步**先验证选库再建本地草稿**（坏选库不留半成品 Agent）；失败首次接管只认 `self_service_store.recoverable_consumer_draft` 身份（`entry=consumer`、`consumer-<app_id>` 名、`created_by=aiops-admin`、status=draft、revision=1、`published_version IS NULL`、无 agent_versions 行）——配置/提示词相等不再证明归属，不符 → refused `existing draft is not the one this operation created`；快照顶层 `knowledge_base_ids`（有 bootstrap 时连 `prompt`/`model`）由同一份冻结 workflow 投影，绝不继承上一版。
 - `dify/operator_run_logs_api.py`（本包的 FastAPI 管理面）：Java run 元数据只读视图——`POST /v1/dify/management/run-logs` 列表 + `.../detail` 按 run_id 单条（缺则 `OPERATOR_RUN_NOT_FOUND`），逐请求重验公司身份+app 归属+租户；过期业务结果不恢复，但问题全文/订单号属输入标识仍投影（ADR-0249），ADR-0251 起行级摘要（入参+白名单结果字段的 `tool_summaries`）也过同一 `qa_id + scope_fingerprint` 闸进 detail 响应，不投影面不变；`no-store`。与 `execution/operator_run_logs.py`（账本投影白名单，列表与详情同一 `metadata()`）同名不同层，别混。
 - `knowledge_connection.py`：`ExternalKnowledgeApis.tenant_id` 是**工作区级**的；只有平台端点/key 可作创建模板。`ensure()` 的 `pending`/`save`/`name` 参数：名字 ≤40 字符（Dify 上限）；pending-attempt 跟踪让重试抛 `DIFY_KNOWLEDGE_CONNECTION_UNCONFIRMED` 而非重发 POST；对账时重读行并 `hmac.compare_digest` 核对 `api_key`（不符 = `knowledge connection credential mismatch`）——未知结果不只对账，还重验凭据。
@@ -76,7 +80,7 @@ snapshot-先 → create → reconcile：Dify 只在创建时返回完整 token�
 environment-runtime以有效计划/双端观察与明确专属节点导出私有运行工件，Console只读，不写准入/路由。
 同环境/工作区/单库、模板和取消边界重核，秘密仅在私有工件；导出不等于安装或真实业务验证。
 
-约 68 个稳定 `SETUP_*` 码——**每个码命名失败的步骤和下一步动作**（`SETUP_KEY_DIRECTORY_UNWRITABLE` → 修 systemd 保护目录；`SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS` → 标 `default:true`；`SETUP_APP_FORBIDDEN`/`SETUP_TENANT_FORBIDDEN`/`SETUP_IDENTITY_MISMATCH` → 授权问题不是配置）。`TENANT_ENVIRONMENT_NOT_ENABLED` 是唯一非 `SETUP_` 前缀成员——它来自登记准入闸，不是装配步骤。拒绝 ≠ 冲突 ≠ 流程非法——三条不同的异常路径（`self_service_api.py`）。
+稳定 `SETUP_*` 码族——**每个码命名失败的步骤和下一步动作**（`SETUP_KEY_DIRECTORY_UNWRITABLE` → 修 systemd 保护目录；`SETUP_BUSINESS_ENVIRONMENT_AMBIGUOUS` → 标 `default:true`；`SETUP_APP_FORBIDDEN`/`SETUP_TENANT_FORBIDDEN`/`SETUP_IDENTITY_MISMATCH` → 授权问题不是配置）。`TENANT_ENVIRONMENT_NOT_ENABLED` 是唯一非 `SETUP_` 前缀成员——它来自登记准入闸，不是装配步骤。拒绝 ≠ 冲突 ≠ 流程非法——三条不同的异常路径（`self_service_api.py`）。
 
 ## Canonical anchors
 
@@ -85,6 +89,10 @@ environment-runtime以有效计划/双端观察与明确专属节点导出私有
 候选重装**原位替换**旧的 `created_by="environment-runtime"` 行（新 app_id；旧行须同 tenant+environment+entry、
 revision 1、同 workspace、`agent_name==entry-app_id`、同 profile/scenario——不符 `SETUP_APP_CONFLICT`，ADR-0313）；
 任一作业表存在在飞工作 → `SETUP_INFLIGHT_WORK`，workspace/路由/登记冲突与部分双入口态各有专码。
+路由占用判定按**真实占用**收窄（ADR-0327/0331）：`retracted` 绑定留行不算占用（否则撤回一次就永久堵死重登记——撤回留行是设计不是占用），
+但同租户同环境现役（非 retracted）`chat_route_bindings` 行**就是占用**——重登记撞上自己还活着的绑定同样冲突，须先撤回（第一条闸）；
+同租户 `dify_app_registry` 行无论 app_id 新旧都是**本血统**留行从不冲突（重铸候选的 app_id 按 (workspace,job) 派生必然换新的，
+同租户异应用是谱系证据不是外血统）；候选 app_id 被**外租户**正式绑定是第二条独立闸——两条查询任一命中即 `SETUP_ROUTE_CONFLICT`。
 正式路由/密钥/准入不变，目标不取得共享Console管理凭据。依据`docs/adr/0290-inactive-runtime-registration.md`。
 
 - `src/aiops_diagnostics/dify/dual_entry.py`（entry/scenario/channel 词表+channel 语义）

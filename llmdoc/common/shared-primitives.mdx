@@ -20,10 +20,15 @@ code:
     - src/aiops_diagnostics/common/platform_paths.py
     - src/aiops_diagnostics/data/sources.py
     - tools/content/derive_zh_hant.py
-    - tools/content/migrate_shortcut_i18n.py
     - tests/common/test_i18n.py
     - tests/common/test_i18n_acceptance_11_languages.py
     - tests/common/test_scalar_rules.py
+    - tests/common/test_config.py
+    - tests/common/test_endpoint_policy.py
+    - tests/common/test_language_fallback.py
+    - tests/common/test_language_surface_guards.py
+    - tests/common/test_new_language_system_copy.py
+    - tests/common/test_answer_caller_shapes.py
 ---
 
 # 共享原语速查
@@ -33,8 +38,8 @@ code:
 ## HTTP 与端点
 
 - `bounded_http.py`：urllib-only 骨架。`RequestSpec`/`ErrorMapping`/`HttpFailure`/`request_json`/`RetryPolicy`（仅 GET）/`classify_failure`；三种信封解析（raw、data_key、code_data）。`HttpFailure.cause is None` ⇔ 信封拒绝（有响应但业务拒绝），`cause` 非空 = 传输失败。`TRANSPORT_FAILURES` 是捕获集合；`AUTH_REJECTED_STATUSES={401,403}`；`_NoRedirectHandler` 拒绝一切重定向。
-- `endpoint_policy.py`：`is_loopback_host` = `{localhost, localhost.}` ∪ `ipaddress.is_loopback`——**唯一的回环规则**（ipaddress 单独看不出 `localhost`）；`require_secure_endpoint` = https 或回环 http，禁 userinfo/query/fragment。
-- `http_auth.py`：内部令牌 `hex(HMAC-SHA256(secret, "{ts}:{expire}"))`，走 `X-Internal-Token`+`X-Request-Timestamp`；支持多 secret 轮换；fail closed。
+- `endpoint_policy.py`：`is_loopback_host` = `{localhost, localhost.}` ∪ `ipaddress.is_loopback`——**唯一的回环规则**（ipaddress 单独看不出 `localhost`）；`require_secure_endpoint` = https 或回环 http，禁 userinfo/query/fragment。`canonical_gateway_url` 是出站网关/内部服务 URL 归一化的唯一入口（ADR-0334 起多个消费方统一委托，不再各自拼）。
+- `http_auth.py`：内部令牌 `hex(HMAC-SHA256(secret, "{ts}:{expire}"))`，走 `X-Internal-Token`+`X-Request-Timestamp`；支持多 secret 轮换；fail closed。第二面：`ConsoleSession`/`console_session_from_headers`/`is_console_token` 是 Dify console 双提交凭据解析的**唯一**实现，dify-console-bridge 与 dify-login-proxy 两个旁路服务共用（ADR-0338：两个服务不得各自漂移一份解析器）。
 
 `request_json`/`decode_json`的可选`parse_float`默认仍为float。消费者账务显式使用安全Decimal包装器，
 将构造异常映射为领域不可用，投影成金额字符串后再进入JSON响应；其他调用不变。
@@ -42,7 +47,7 @@ code:
 
 ## 文件与配置
 
-- `private_files.py`：`validate_private_directory`/`validate_private_file`（0700/0600、属主、禁 symlink）；`write_private_text`/`append_private_text`（mkstemp+降权原子写）；`PrivatePathError`。含 Windows ACL 助手。
+- `private_files.py`：`validate_private_directory`/`validate_private_file`（0700/0600、属主、禁 symlink）；`write_private_text`（mkstemp+降权原子写）；`PrivatePathError`。含 Windows ACL 助手。
 - `platform_paths.py`：`AIOPS_HOME`/`AIOPS_CONFIG_HOME`/`AIOPS_DATA_HOME` 覆盖；默认配置文件 = production.env。
 - `config.py`：`Settings.from_env/from_config`、providers registry（`_parse_providers`，含旧单 provider 回落）、`redacted()`（配置值的脱敏投影）、`selected_config_file`。`MySQLSettings.mall_database`（`AIOPS_MYSQL_MALL_DATABASE`，默认 `qumall_mall`，空值=本环境无 mall 侧证据）：mall 是同实例独立 schema，`MySQLSource.mall_billing_records` 经它做租户+认领人绑定的跨库只读联查（联查合同归 [bounded-read-surfaces](../analytics/bounded-read-surfaces.mdx)）。
 - `data/sources.py` 含进程管理语义：`scoped_*_source` 上下文在 `settings.ssh.enabled` 时起 `ssh -N -L` 端口转发子进程并把 Settings **副本**的 host 改回环；直连模式不起子进程不改写——数据源模块不只是读层。
@@ -58,6 +63,7 @@ code:
 
 - `i18n.py`：`LANGUAGES` 元组是语言清单的唯一权威；`LanguageSpec(tag,name,is_chinese,fallback)`——`is_chinese` 是语言的属性而非"是否默认"（zh-Hant 会打破这个等式）；`fallback` 是每语言唯一声明的回退方向（zh-Hant 与 en 都回 zh，其余非中文语言回 en——链根是 zh 不是 en）。语言永远不扩大权限/路由/manifest。
 - `answer_language.py`：输出侧泄漏闸——能证"没漏中文"，证不了翻译正确；标题豁免按来源真相不看形状：传入 `retrieved_titles` 时，资产类标题要既像资源名又在集内、其他块标题在集内即豁免；仅当未传 provenance 才退回旧形状规则（空集=不豁免任何标题）；输入合同是 `AnswerSurface` 或 `str`，其他类型 `TypeError`（形状错误不能静默换判定规则）。
+- `tools/content/derive_zh_hant.py`：zh-Hant 是 zh 权威的**确定性转换**不是翻译——永不手写，且只在开发期转换（运行时服务不转换）；`opencc` 刻意不进 pyproject（deploy-41 把 pyproject 漂移当部署闸，构建期工具不该触发它），故 `--check` 只能在开发机跑，CI 只持有存在性覆盖。
 
 ## Canonical anchors
 

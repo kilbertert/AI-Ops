@@ -24,9 +24,18 @@ code:
     - src/aiops_diagnostics/consumer/legacy_callbacks.py
     - src/aiops_diagnostics/consumer/consumer_publication.py
     - src/aiops_diagnostics/consumer/consumer_trial.py
+    - src/aiops_diagnostics/consumer/consumer_tool_grants.py
+    - src/aiops_diagnostics/consumer/consumer_facts.py
+    - src/aiops_diagnostics/consumer/consumer_intent.py
+    - src/aiops_diagnostics/consumer/consumer_photo.py
+    - src/aiops_diagnostics/consumer/presentation.json
+    - src/aiops_diagnostics/gateway/consumer_chat_dispatch.py
     - src/aiops_diagnostics/dify/dify_chatflow.py
     - src/aiops_diagnostics/dify/dify_run_store.py
     - tests/gateway/test_assistant_api.py
+    - tests/consumer/test_consumer_agent_flow.py
+    - tools/verification/verify_consumer_agent.py
+    - tools/verification/verify_consumer_knowledge_picker.py
 ---
 
 # 消费者客服链（callback_version=6）
@@ -40,18 +49,18 @@ code:
 
 ## 工具面与预算
 
-- 固定 5 类资源 `{"knowledge","orders","status","billing","support"}`；每次调用消耗原子预算 **8**（`dify_run_store.py` 同一事务扣减）。
+- 固定 5 类资源 `{"knowledge","orders","status","billing","support"}`；每轮运行上限 **8** 次工具调用——每次预留在 `dify_run_store.py` 同一事务原子追加扣减，超顶拒 `CONSUMER_TOOL_BUDGET`。
 - `status`/`billing` 还要求按绑定的 `live_order_status`/`live_billing_record` 开关。
 - grant = 能力令牌绑六元组 `(grant_id, scope_fingerprint, order_no, tenant_id, environment, workflow_id)`；`callback()` 重匹配全部六个，并在上游查询**前和后**各跑 `valid()`（180s TTL）——两趟都先跑 `require_registered` 登记准入（仅 `environment_registry_file` 配置时生效，ADR-0256），**但候选试用除外**：`trial.candidate` 非空时跳过登记闸（候选租户本身是停用态，过闸必 403），授权改由 `candidate.authorize()` 承担。登记环境/租户被禁 → `TENANT_ENVIRONMENT_NOT_ENABLED` 403，登记器缺失 → `ENVIRONMENT_REGISTRY_UNAVAILABLE`。`kind=service` 另要求 `CONSUMER_SCOPE_REQUIRED`——consumer 范围只有 self。
 - 试用/预览（`service_trial`）只许查明确选中的订单，orders 列表整体拒绝。`ConsumerTrial` 现有三种形态：草稿/临时 app（原路径）、`candidate`（停用候选：app_id 在创建前由 `uuid5(IMPORT_NAMESPACE, workspace_id:request_id)` 确定性选好——丢响应仍能定点回收；导入后 `site-enable` 保持 disabled；`finally` 无条件 `candidate.close()`）、`published`（复用已发布的 `(app_id, workflow_id, key)` 三元组——不建临时 app 不做删除）。`ect_` 目标租约只在 `POST /v1/internal/consumer-data/{capability}` 放通且 capability 必须 `agent`（否则 `GRANT_CAPABILITY_MISMATCH`）；候选路径 `read`/`knowledge` 仍过同一 `live_*` 开关（`CHATFLOW_LIVE_DISABLED`），并要求 `context.calls` 证据或 `CHATFLOW_EVIDENCE_UNAVAILABLE`。`ect_` 租约的铸造/吊销机制归 [environment-onboarding](../gateway/environment-onboarding.mdx)。
-- C 端 CPMS 授权（`agent_contract.py`）：只带 `tenant-id`+`user-id` 头、无 token；范围=本人订单站点；越界是**跳过**不是拒绝。登记器启用时 `_current` 对 grant 冻结 `base_url` 复核当前 `cpms_base(tenant)`，漂移 → `ConsumerToolRefused("CONSUMER_TARGET_CHANGED")`；`record` 写证据前重跑 `_current`（后台取数撤权校验）；`gateway_api` 把 `ConsumerToolRefused` 统一映射 403 `{code, "consumer tool request refused", retryable:false}` + `no-store`——与"越界跳过"不同轴（冻结目标变了而非范围越界）。
+- C 端 CPMS 授权（`consumer_tool_grants.py`）：只带 `tenant-id`+`user-id` 头、无 token；范围=本人订单站点；越界是**跳过**不是拒绝。登记器启用时 `_current` 对 grant 冻结 `base_url` 复核当前 `cpms_base(tenant)`，漂移 → `ConsumerToolRefused("CONSUMER_TARGET_CHANGED")`；`record` 写证据前重跑 `_current`（后台取数撤权校验）；`gateway/dependencies.py` 的 `install_exception_handlers` 把 `ConsumerToolRefused` 统一映射 403 `{code, "consumer tool request refused", retryable:false}` + `no-store`——与"越界跳过"不同轴（冻结目标变了而非范围越界）。
 - 本人站点面（`consumer_sites.py`）：`MAX_ORDER_PAGES=4`、页 50、`MAX_OWN_SITES=200`、恒发 `user-id`、展示上限 `SITE_MAX_SHOWN=10`。
 - 知识授权（`knowledge_access.py`）：显式 `(tenant, env, library)` 行在发布和检索两处检查，吊销即时生效；`generation()` 让授权代数单调（`granted_at=MAX(excluded, granted_at+0.000001)`）——吊销→重授不能让钉在旧代上的凭据复活，委派层复核此代数。端点解析登记器优先——`consumer_endpoint`/`approved_business_endpoint` 在 `environment_registry_file` 配置时经 `require(tenant)` 取登记行 `cpms_base_url`（连带校验 enabled），未配才回落 `business_environments_file` manifest（两个文件不是同一件东西）。
 
 ## SSE 与最终回答（规则不是启发式）
 
 - 身份四元组 `(workflow_run_id, task_id, conversation_id, message_id)` 在 `workflow_started` 绑死后每个事件必须匹配；`workflow_id` 必须等于请求的；`message_end` 与 `workflow_finished` 都要到齐（`dify_chatflow.py`）。任一漂移 → `DIFY_WORKFLOW_*`/`DIFY_CHATFLOW_INVALID`，半截正文绝不交付。
-- 最终回答抽取：最后一个 `node_id=="answer"` 且 `parent_id is None`、`status=="success"`、`tool_responses==[]`、`llm_response` 非空的 `agent_log` 事件；`node_id=="start"` 会重置候选。答案 ≤32,000 字符。
+- 最终回答抽取：最后一个 `agent_final_node` 参数指定节点（v6 恒传 `"answer"`）且 `parent_id is None`、`status=="success"`、`tool_responses==[]`、`llm_response` 非空的 `agent_log` 事件；同节点 `status=="start"` 的 `agent_log` 会重置候选。答案 ≤32,000 字符。
 - consumer `final_answer` 交付 Agent 自然正文+程序附加来源/媒体（ADR-0250，回 ADR-0232 形态）：任一工具记录未完成 → `CHATFLOW_EVIDENCE_UNAVAILABLE`；`SAFETY` 正则（作用于 question）仍回落 `fallback("safety")`；`raw` 非 str/空/>8,000 → `CHATFLOW_ANSWER_INVALID`；`retrieval_status`：有来源=`found`、任一知识调用 `unavailable/limited/refused`=`unavailable`、否则 `not_found`。
 - 块=脱敏正文+每来源 `reference` 块+媒体块（按 url 去重 ≤4，仅 `status=="found"` 调用、按 `retrieved_reference_id` 去重的来源）+support 文本行（`final_answer` 追加）。`render_sources_answer`（`consumer_documents.py`）：正文经 `redact_text(preserve=订单号)`；URL 闸——正文每个 http(s)/www. 链接必须逐字见于所引来源 content 或 `support_urls`、仅 https、无 userinfo，紧邻配对括号剥外层，否则 `CHATFLOW_ANSWER_INVALID`。
 - Dify `user` = `sha256(scope_fingerprint:binding.key:workflow_id)`；`bind_workflow`/`bind_message` 拒绝身份漂移。多轮续聊用 **Gateway 自己的 `conversation_id`**，不是 Dify 的（旧链才用 `upstream_conversation_id`+绑定指纹相等）。
@@ -69,16 +78,20 @@ code:
 `billing`复用同次订单详情GET：保留总额/支付/退款，并在v6增加摘要、费用构成、分时记录与缺项说明；
 旧callback1–5经`include_composition=False`保持七键投影。取数前后授权与8次预算不变。
 `mall_payment`是独立第二来源：`sources.MySQLSource.mall_billing_records`一致快照读商城父/子/明细/支付，
-`gateway_api._consumer_mall_payment`任何失败降级为`read_failed`证据而非打断账务；`billing.py`
+`consumer_chat_dispatch.py` 的 `_consumer_mall_payment` 任何失败降级为`read_failed`证据而非打断账务；`billing.py`
 只做同名读数相等判定（match/mismatch/unknown），不计算差额。
 金额经账务专用Decimal解码后转字符串，非法时间只标无效，巨指数受控不可用；分时最多24行并报遗漏数。
 `decode_billing_number`仅是账务JSON的`parse_float`异常映射回调。原始日期/分时时钟在scalar台账中单独登记，
 保留来源偏移或naive，不能用会补UTC的`parse_stored_time`替代；格式与日历校验仍由`_source_time`执行。
 币种缺失/冲突不猜；创建时间不是计费开始，分时电量可能费用反推，feeRate不保证每kWh，不能据此判断计费正确。
-现役块标记`aiops-order-composition:6`；`upgrade_consumer_flow.py --order-composition`只接受现役v6三节点图，
-剥除恰好一个已知V1–V6块（未知/重复即拒绝），并精确替换两条旧句——“只报告工具原值及可核对的算术差额”
-改为同名字段原值并列不计算差额，“安抚用户”句改为证据不足不得承诺正常——再将V6追加到全文末尾
-（≤16,000字符、幂等）；V1–V5常量仅作为迁移输入留在`agent_contract.py`。
+`upgrade_consumer_flow.py --order-composition`只接受现役v6三节点图，
+剥除**至多一个**已知V1–V6块（零块可迁——迁移正是为无块提示词追加一块而存在；重复块或剥后残留`aiops-order-composition:`标记即拒绝），
+并精确替换两条旧句——“只报告工具原值及可核对的算术差额”
+改为同名字段原值并列不计算差额，“安抚用户”句改为证据不足不得承诺正常——再把`ORDER_COMPOSITION_INSTRUCTION`追加到全文末尾
+（≤16,000字符、幂等）。`ORDER_COMPOSITION_INSTRUCTION`现役别名指向**V5**（`agent_contract.py`，4b9f65ec 起），
+迁移输出以`:5`标记收尾（`tests/consumer/test_consumer_agent_flow.py` 字节级钉死）；V1–V4 与 V6 常量仅作剥除输入，
+V5 既被剥除也被追加。注意两轴不能混：回调协议版本是 6（硬闸），构成块标记是 5——生产环境提示词实际带哪个标记
+超出本仓可证范围，能钉的只有迁移工具输出。
 事实约束优先于安抚：缺币种时开头说明且全文金额无币种单位，null不称未收费，
 只列来源记录，不自主合计/税基/差额归因或作未核验“无异常”结论；迁移测试不证明自然回答语义。
 开头只概括已取得的分项并点出缺项；有null、非空missing/invalid、币种缺失或截断时不保证齐全或“放心核对”。
@@ -86,7 +99,7 @@ code:
 v4起要求各语言逐字段核对金额和缺项：0/0.00是已提供零收费，不能因occupyFee缺失把parkFee零值合并为缺失。
 金额reader只列同名字段原值，禁止差额、合计和近似舍入；totalAmount是订单费用记录，payAmount是支付金额记录。
 状态完成只表示当前订单状态，未取得过程证据不等于无异常或后台没保存日志；模型回放不证明确定性语义保证。
-交付自ADR-0250恢复自然正文——`consumer_order_evidence`程序呈现器已删，来源/媒体由程序附加；V6构成块仍是现役取数形状标记，模型职责回到工具调用与正文表达。
+交付自ADR-0250恢复自然正文——`consumer_order_evidence`程序呈现器已删，来源/媒体由程序附加，模型职责回到工具调用与正文表达。
 manage桥不转发Accept-Language，英文预览用既有Gateway受管trial入口，方法见订单构成QA，凭据只在受控进程运行时读取。
 未知/重复块拒绝，不能只部署Gateway却保留旧图提示。依据与细节见`docs/adr/0246-consumer-order-composition.md`、
 `docs/adr/0247-consumer-order-facts-rendered.md`（呈现取舍由ADR-0250更新）、`docs/adr/0250-natural-replies-and-nonblocking-currency.md`及`docs/agents/consumer-wf01/order-composition-qa.md`。
@@ -100,5 +113,7 @@ manage桥不转发Accept-Language，英文预览用既有Gateway受管trial入�
 - `src/aiops_diagnostics/consumer/consumer_binding.py`（require_pinned 交付闸 + 登记准入）
 - `src/aiops_diagnostics/dify/dify_chatflow.py`（SSE 身份四元组 + agent_final_node 抽取）
 - `src/aiops_diagnostics/dify/dify_run_store.py`（运行账、180s、原子预算）
-- `src/aiops_diagnostics/consumer/agent_contract.py`（v6 编排图契约与 C 端授权形状）
+- `src/aiops_diagnostics/consumer/agent_contract.py`（v6 编排图契约与构成块常量）
+- `src/aiops_diagnostics/consumer/consumer_tool_grants.py`（C 端 CPMS 授权、冻结 base_url 漂移复核、证据写前重验）
+- `src/aiops_diagnostics/gateway/consumer_chat_dispatch.py`（C 端分发与回读守卫、`_consumer_mall_payment` 降级快照读）
 - `src/aiops_diagnostics/consumer/legacy_callbacks.py`（callback_version 1–5 历史隔离区）
