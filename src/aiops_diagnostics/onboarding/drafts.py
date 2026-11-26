@@ -207,3 +207,14 @@ def initialize_tasks(conn):
         "CREATE TABLE IF NOT EXISTS environment_task_turn (only_row INTEGER PRIMARY KEY CHECK(only_row=1), "
         "next TEXT NOT NULL)"
     )
+
+
+def initialize_bootstrap_tokens(conn):
+    """客户侧一次性引导令牌表（ADR-0358 P1-1），归口同一独立草稿库维护。"""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS environment_bootstrap_tokens ("
+        "token_hash TEXT PRIMARY KEY, environment TEXT NOT NULL, address TEXT NOT NULL, "
+        "ssh_port INTEGER NOT NULL, ssh_user TEXT NOT NULL, key_id TEXT NOT NULL, "
+        "public_key TEXT NOT NULL, actor TEXT NOT NULL, created_at REAL NOT NULL, "
+        "expires_at REAL NOT NULL, consumed_at REAL)"
+    )
