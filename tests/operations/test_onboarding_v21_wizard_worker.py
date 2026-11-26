@@ -825,3 +825,166 @@ def test_execute_infra_provision_job_completes_failed_when_allowlist_raises(
     assert complete_evt["passed"] is False
     assert complete_evt["failed_step"] == "allowlist"
     assert complete_evt["error_code"] == "ALLOWLIST_EXECUTION_ERROR"
+
+
+def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import re
+    import types
+
+    from aiops_diagnostics.consumer import consumer_publication
+    from aiops_diagnostics.onboarding import registry, wizard_provision
+
+    data_root = tmp_path / "var-lib"
+    reg_dir = data_root / "environment-registry"
+    reg_dir.mkdir(parents=True, mode=0o700)
+    reg_path = reg_dir / "registry.json"
+    registry.apply(
+        reg_path,
+        [
+            {
+                "id": "41",
+                "name": "核心环境41",
+                "enabled": True,
+                "gateway_url": "https://gw41.example",
+                "cpms_base_url": "https://cpms41.example",
+                "company_gateway_url": "https://api41.example",
+                "config_ref": str(tmp_path / "env-41.env"),
+                "tenants": [],
+            }
+        ],
+        expected_revision=0,
+        actor="test",
+        managers=[],
+    )
+    tpl_dir = reg_dir / "wizard-templates"
+    tpl_dir.mkdir(mode=0o700)
+    (tpl_dir / "jiejia.env").write_text(
+        'AIOPS_MYSQL_HOST="10.0.0.32"\nAIOPS_MYSQL_PASSWORD="ro-pw"\nAIOPS_REDIS_PASSWORD="red-pw"\n',
+        encoding="utf-8",
+    )
+    node_root = tmp_path / "node-env"
+    node_jiejia = node_root / "jiejia"
+    node_jiejia.mkdir(parents=True)
+    (node_jiejia / "agent-runs.json").write_text(
+        json.dumps({"environment": "jiejia", "nodes": []}), encoding="utf-8"
+    )
+    (node_jiejia / "exec-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "m3-exec-config/1",
+                "name": "aiops-environment-jiejia",
+                "history_policy": "none",
+                "model": {
+                    "provider_key": "openai",
+                    "adapter_key": "openai-compatible",
+                    "model_key": "deepseek-v4-1-flash-261017",
+                    "endpoint": "https://model-proxy:9101",
+                },
+                "model_options": {"max_tokens": 100, "temperature": 0.1, "stop_sequences": []},
+                "system_messages": ["hi"],
+                "tools": [
+                    {
+                        "name": "mysql_readonly",
+                        "description": "query db",
+                        "input_schema": "{}",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cred = tmp_path / "cred.json"
+    cred.write_text('{"api_key":"k"}', encoding="utf-8")
+
+    class _FakeConsole:
+        def __init__(self, *_a, **_k) -> None:
+            pass
+
+        def _call(self, _ws, path, **_kw):
+            if "tool-providers" in path:
+                return [{"id": "prov-1", "name": "cpms-node"}]
+            if "/apps?" in path:
+                return {"data": []}
+            if path.endswith("/apps/con-created"):
+                return {"workflow": {"id": "wf-con-1"}}
+            return {"data": []}
+
+    seen_job_ids: list[str] = []
+
+    def _fake_create_app(_c, _w, job_id, *_a, **_k):
+        seen_job_ids.append(job_id)
+        return "op-created"
+
+    def _fake_copy_consumer(_c, _s, _w, job_id, *_a, **_k):
+        seen_job_ids.append(job_id)
+        return "con-created"
+
+    def _fake_issue_key(_c, _w, app_id, d):
+        p = d / f"{app_id}.key"
+        p.write_text("k\n")
+        return p
+
+    monkeypatch.setattr(wizard_provision, "NODE_RUNTIME_ENV_ROOT", node_root)
+    monkeypatch.setattr(wizard_provision, "_ensure_kb_pair", lambda *_a, **_k: ("kb-c-1", "kb-o-1"))
+    monkeypatch.setattr(
+        wizard_provision.dify_ensure_workspace,
+        "ensure_workspace",
+        lambda **_k: SimpleNamespace(workspace_id="ws-jiejia"),
+    )
+    monkeypatch.setattr(wizard_provision, "DifyConsoleAdmin", _FakeConsole)
+    monkeypatch.setattr(wizard_provision.knowledge_connection, "ensure", lambda *_a, **_k: None)
+    monkeypatch.setattr(wizard_provision.operator_prep, "model", lambda _s: {"credential_file": str(cred)})
+    monkeypatch.setattr(wizard_provision.self_service_prepare, "model_credentials", lambda *_a, **_k: None)
+    monkeypatch.setattr(wizard_provision.self_service_prepare, "create_app", _fake_create_app)
+    monkeypatch.setattr(wizard_provision.self_service_prepare, "copy_consumer_app", _fake_copy_consumer)
+    monkeypatch.setattr(wizard_provision, "ensure_node_provider", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        wizard_provision,
+        "_select_consumer_source",
+        lambda *_a, **_k: {"workflow": {"graph": {"nodes": []}}},
+    )
+    monkeypatch.setattr(wizard_provision.consumer_prep, "document", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        wizard_provision.consumer_prep,
+        "profile",
+        lambda *_a, **_k: {"model": {"credential_file": str(cred)}},
+    )
+    monkeypatch.setattr(wizard_provision.consumer_prep, "dependencies", lambda *_a, **_k: None)
+    monkeypatch.setattr(wizard_provision, "service_keys", SimpleNamespace(issue_key=_fake_issue_key))
+    monkeypatch.setattr(
+        consumer_publication,
+        "flags_of",
+        lambda _wf: {"live_order_status": True, "live_billing_record": True, "photo_enabled": False},
+    )
+
+    settings = types.SimpleNamespace(
+        environment_task_key="k" * 48,
+        internal_token_secret="i" * 48,
+        dify_chat_base_url="http://127.0.0.1:15001",
+        kb_service_base_url="http://127.0.0.1:29380",
+        company_jwt_key="jwt-key-test",
+        third_session_key_prefix="app:3rd_session:",
+        database_file=str(tmp_path / "gateway.db"),
+        dify_inner_api_base_url="http://127.0.0.1:15001",
+        dify_inner_api_key="inner-k",
+        dify_console_base_url="http://127.0.0.1:15001",
+        dify_console_api_key="console-k",
+        public_base_url="https://api.mall.qushiyun.com",
+        chat_dify_key_dir=str(tmp_path / "ctrl-keys"),
+        execution_environment="41",
+    )
+    out = wizard_provision.prepare_control_plane_bundle(
+        SimpleNamespace(settings=settings),
+        reg_path,
+        {
+            "environment": "jiejia",
+            "api_domain": "api.juxichongdian.cn",
+            "tenant_id": "1990990768688599040",
+            "tenant_name": "捷佳",
+        },
+    )
+    assert out["ok"] is True
+    assert len(seen_job_ids) == 2
+    assert all(re.fullmatch(r"[a-f0-9-]{36}", jid) for jid in seen_job_ids)
