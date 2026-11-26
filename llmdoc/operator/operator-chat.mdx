@@ -1,5 +1,5 @@
 ---
-description: "管家链 operator-agent/1：Java 节点跑模型循环、订单候选校验、回调两级闸 authenticate/authorize_execution、FEEDBACK_REFUSALS 回喂 vs tool_refused: 首写获胜、证据记录 provenance、complete() 顺序+answer_review 降为观察（ADR-0252）/evidence_only 交付+程序核验、operator_tools.json 唯一声明、Java 侧 12 次 MODEL_BUDGET"
+description: "管家链 operator-agent/1 与 AI 抽屉面（ADR-0337）：Java 节点跑模型循环、订单候选校验、回调两级闸 authenticate/authorize_execution、FEEDBACK_REFUSALS 回喂 vs tool_refused: 首写获胜、证据记录 provenance、complete() 顺序+answer_review 降为观察（ADR-0252）/evidence_only 交付、operator_tools.json 唯一声明、过程统计时序兜底不跨流水合并（ADR-0322）、附件有界解析+untrusted_user_attachments 反注入隔离、SSE 事件流+stream-chunks 回调+message_replace、citations/导出/反馈/末轮原地重生成、nginx 显式白名单、闸实现已拆入 cpms_task_store/cpms_proxy/cpms_evidence/cpms_sites"
 kind: architecture
 relations:
   requires:
@@ -9,10 +9,15 @@ relations:
     - execution-model.mdx
     - execution/execution-node-contract.mdx
     - conversation/conversation-store.mdx
+    - gateway/gateway-store.mdx
 code:
   paths:
     - src/aiops_diagnostics/operator/operator_agent.py
     - src/aiops_diagnostics/operator/operator_cpms.py
+    - src/aiops_diagnostics/operator/cpms_task_store.py
+    - src/aiops_diagnostics/operator/cpms_proxy.py
+    - src/aiops_diagnostics/operator/cpms_evidence.py
+    - src/aiops_diagnostics/operator/cpms_sites.py
     - src/aiops_diagnostics/operator/operator_tools.py
     - src/aiops_diagnostics/operator/operator_tools.json
     - src/aiops_diagnostics/operator/operator_answer_review.py
@@ -23,8 +28,27 @@ code:
     - src/aiops_diagnostics/operator/order_analysis.py
     - src/aiops_diagnostics/operator/ops_provider.py
     - src/aiops_diagnostics/operator/operator_sop.md
+    - src/aiops_diagnostics/operator/attachments.py
+    - src/aiops_diagnostics/operator/download_center.py
+    - src/aiops_diagnostics/operator/qa_events.py
+    - src/aiops_diagnostics/operator/feedback.py
+    - src/aiops_diagnostics/operator/report_export.py
+    - ops/nginx/operator-h5-assistant.conf
+    - ops/nginx/operator-h5-proxy.inc
+    - tools/verification/verify_operator_prompt_stack.py
     - tests/operations/test_operator_entry_actions.py
     - tests/operations/test_operator_negative_acceptance.py
+    - tests/operations/test_operator_agent.py
+    - tests/operations/test_operator_cpms.py
+    - tests/operations/test_operator_entry_dispatch.py
+    - tests/operations/test_operator_failure.py
+    - tests/operations/test_operator_attachment_context.py
+    - tests/operations/test_operator_attachments_download_center.py
+    - tests/operations/test_operator_citations_and_export.py
+    - tests/operations/test_operator_drawer_agents_starters.py
+    - tests/operations/test_operator_feedback_and_regenerate.py
+    - tests/operations/test_operator_sse_events.py
+    - tests/operations/test_operator_native_preview.py
     - tests/operator_support.py
 ---
 
@@ -49,7 +73,7 @@ code:
 
 ## 拒绝分流（ADR-0221/0222）
 
-- `FEEDBACK_REFUSALS`：12 个可纠正业务码带中文模型提示，作为**工具结果回喂**；其余拒绝终止运行。
+- `FEEDBACK_REFUSALS`（`cpms_evidence.py`）：可纠正业务码（订单/参数/证据前置缺失、范围与合同不符类）带中文模型提示，作为**工具结果回喂**让模型修正参数或如实告知；集合外的拒绝终止运行。
 - `_stamp_gate_refusal` 在抛出点给 `run.reason` 盖 `tool_refused:<code>`（跳过 `TOOL_DISABLED` 和 feedback 码）；`fail()` 从 `issued|running` 首写获胜——先写的人赢，后到的不覆盖。
 
 ## 证据与完成
@@ -59,19 +83,40 @@ code:
 - 失败/迟到上报经协议闸收存，执行与成功交付仍过完整授权闸（ADR-0223）。
 - `_worker` `MAX_RESAMPLES=1`；`ActiveTask` 上限 20 → `OPERATOR_BUSY`；`_raise_node_failure` 映射 `NODE_FAILURE_CODES` 与 `tool_refused` → `OPERATOR_DEPENDENCY_UNAVAILABLE`；复核 verdict 不再拦交付（ADR-0252）；`_complete` 终局闸拒记 `task.completion_refusal` 原码——同 run 重派必撞同一道闸，派发异常分支与未推进分支都直抛 `OperatorRefused(原码)` 归码不重采样。失败 run 的 `reason` 由 `_failure_code(exc)` 分类：上游/环境类（`OPERATOR_NODE_REJECTED`/`NODE_CHANGED`/`TARGET_MISSING`/`CPMS_UNAVAILABLE`/`TSDATA_UNAVAILABLE`/`SCOPE_UNAVAILABLE`/`SCOPE_CHANGED`）→ `OPERATOR_DEPENDENCY_UNAVAILABLE`；`OPERATOR_RESULT_UNSTABLE`/`OPERATOR_ANSWER_NOT_GROUNDED` → `OPERATOR_MODEL_OUTPUT_UNSTABLE`；`NODE_FAILURE_CODES`/`OPERATOR_HISTORY_LIMIT` 透传；其余 `OPERATOR_DIAGNOSIS_FAILED`。
 - `_worker` 行级摘要与派发 trace（ADR-0251）：派发 trace 发 `detail=tools=N`（execution_manifest 工具数；为 0 时 detail 为 None，不落 tools=0）；复核 trace 的 status 只在 verdict=unavailable 时记 refused（reject/uncertain 是已评估，算 succeeded）、reason 落 detail；`_summarize_tool(run_id, task, tool, refusal=None)` 在 `proxy()` 成功（tool trace 之后）与 `OperatorRefused` 两路写行级摘要——`TOOL_SUMMARY_FIELDS` 每工具白名单取 `evidence[tool].data` 字段 + `_arg_summary` 入参（k=v、≤6 键、值 ≤24、总长 ≤48），吞错面 `(sqlite3.Error, ValueError, TypeError)` → `operator_tool_summary_unavailable`，不阻断业务。
-- `_messages`：`completed_context` 历史逐回合 `_authorize_snapshot` 再授权，`question[:4000]`、`answer≤10000`、总 ≤48,000、`history_runs` ≤60；末条 user 消息带 `question`+`page_selected_order`+`conversation_order`+`language`+`current_time`+`business_timezone`+`history_is_previous_observation`。
+- `_messages`：`completed_context` 历史逐回合 `_authorize_snapshot` 再授权，`question[:4000]`、`answer≤10000`、总 ≤48,000、`history_runs` ≤60；末条 user 消息带 `question`+`page_selected_order`+`conversation_order`+`language`+`current_time`+`business_timezone`+`history_is_previous_observation`，有附件时另带 `untrusted_user_attachments` 受控字段（隔离合同见抽屉节）。
 
 ## 答案复核与确定性计算
 
 - `operator_answer_review.py`：模型只判**凭空断言**；`station_names[]` 由程序对照 `known_facts()` 核验——模型的 allow 不能覆盖程序检查（ADR-0225/0219）；`currencies[]` 仅摘录观察，币种名称/符号/单位本身不作 reject/uncertain 依据（ADR-0250 更新 0219 币种部分），金额变造、换汇推算、字段冒充仍按凭空断言 reject。verdict 之外带 `reason` 机器码：`allowed`/`unsupported_station`/`unsupported_claim`/`review_uncertain`/`review_unavailable`/`review_quota_exhausted`/`review_auth_rejected`（节点模型失败路径补 `model_failed`/`model_quota_exhausted`/`model_stream_incomplete`；`unsupported_currency` 不再产生，历史行仍可在 run-log 白名单投影）；verdict 只作观察不再扣答复（ADR-0252），`review()` 吞错面含 `AttributeError`——settings/provider 缺属性收敛 `unavailable` 不穿出。SYSTEM 把 status 码表限定在订单详情（不适用遥测 status），且"订单结束/NoError/空样本不能证明正常，肯定正常须独立过程依据否则 reject"。`REVIEW_VERSION=sha256(SYSTEM)`，1024 tokens，`reasoning_effort="none"`。站点说明复核按 run 判——同一问题不同 run 得不同结论合法。独立 `site_note_review.py` 已删（#1372），职责并入本层。
 - `analysis()` 只对已取证据计算；`order_billing/order_pricing/order_analysis` 用 `Decimal` 按历史费率核金额——`cpms_order_amount_check`/`cpms_order_process_stats` 的 `model_inputs=[]`，模型不能提交金额当核验事实。局部算术相符推不出优惠资格、原始计量、支付到账或整单无多收。
+- 过程统计与时序兜底（ADR-0322，SOP §2.2）：`cpms_charging_samples` 监测表只覆盖运营商启动单且保留约 7 天——远程/普通启动单与汽车桩 0 行是**结构性结果**，不证明设备正常也不证明时序库无数据。监测表无行时统计改消费同一授权订单+设备+窗口的 `cpms_charging_timeline` 证据（设备与窗口只从已交付订单详情裁出，`cpms_proxy.charging_timeline`）；取证前置是 detail + samples/timeline **至少其一**，两源均无行拒绝，不落零样本统计对象。行级 `txSerialNo` 多于一个 = 窗口混入相邻交易，**统计不跨流水号合并**——metrics 留空、limitations 说明，跨流水平均出的功率不归属任何一单。验收侧另核验时序 `window_end` 逐字等于详情 stopTime——终止态订单缺 stopTime 即拒，不按运行中语义放行 now 窗口。
 - Java 侧预算：`GuardedChatModel` `modelCalls >= 12` → `MODEL_BUDGET`（见 [execution-node-contract](../execution/execution-node-contract.mdx)）。
+
+## AI 抽屉面（ADR-0337）
+
+充电桩后台 AI 抽屉沿用同一 operator 入口与链——不是第二条链，是同一链的会话式外壳。抽屉行按 scope 指纹隔离（`assistant_files`/`assistant_feedback` 以 `scope_fingerprint` 键控，files 路由另强制 `business_entry="operator"`）；nginx 层注入 `X-Business-Entry: operator` 并剥来源密钥（`operator-h5-proxy.inc`）。会话/回合/锁/重生成的存储合同归 [conversation-store](../conversation/conversation-store.mdx)，本节只写 operator 面一侧。
+
+- **附件有界解析**（`attachments.py`，纯 Python——拒绝 LibreOffice/系统二进制是 ADR 明示被否方案）：图片 jpg/png/webp ≤10MB、≤12M 像素、去 EXIF 出缩略图+规范化 JPEG；PDF ≤20MB/100 页/10s/2 万字符；DOCX zip-bomb 防御（解压 ≤50MB、压缩比 ≤100:1）+XXE 预检；旧版 DOC 走 olefile FIB+Clx piece table 纯 Python 解析；损坏/加密 fail-closed 400 `ATTACHMENT_INVALID`。`FILE_RETENTION_DAYS=30`；每轮 ≤5 文件、合计 ≤50MB；上传限 20 次/60s/scope、并发 4。
+- **反注入隔离**：附件文本只在受控 user 消息 JSON 的 `untrusted_user_attachments` 字段进模型，伴只读反注入策略声明；附件文本里的订单候选仍过正常 CPMS 订单/站点授权——附件永不扩大数据可见性。
+- **下载中心零改码适配**（`download_center.py`）：上传 `POST <upms>/file/upload` 固定 `fileType=doc` 绕开公司租户图片水印，响应是无信封 JSON `{"link": ...}`；台账 `saveImportRecord`/`updateImportRecord`——附件 exportType=3101（不在公司 `EXPORT_TYPES` ⇒ 恒落导入中心 direction=1），下载/导出复用 exportType=10086（在内 ⇒ direction=-1）；JSON 序列化固定 `exportType` 在 `direction` 前（Jackson 字段顺序敏感）；沿用公司拼写 `sussessCount`；上游失败 fail-closed 502 `DOWNLOAD_CENTER_UNAVAILABLE` / 400|413 `UPSTREAM_FILE_POLICY_REJECTED`；网关永不暴露原始 OSS `storage_url`。
+- **SSE 事件流**（`qa_events.py`）：`assistant_qa_events` 表，`EVENT_RETENTION_DAYS=7` 在**读写两侧**都执行；心跳 15s；终态类型 `{message_done, run_cancelled, run_failed}`；`Last-Event-ID`/`after_seq` 续传；节点路径投影走白名单脱敏+本地化步骤标题（zh/zh-Hant/en）；流中权限复核 `verify_live_stream_access` 对运行/失败/取消态流重验当前账号范围与已触及订单/站点权限——流开着不代表授权还活着；`GET /v1/assistant/questions/{qa_id}` 同步扩 `progress.steps[]` 作降级轮询。
+- **stream-chunks 回调**：Java 节点 `StreamDeltaPusher` 把最终答案流批式 POST `/v1/internal/operator-runs/{run_id}/stream-chunks`；404/超时/5xx 静默降级**不阻塞 reportCompleted**；answer_review 改写答案或降 evidence_only 时 SSE 收 `message_replace` 全量替换事件——增量流与最终交付可以不一致，替换事件才是权威。
+- **citations 与导出**：`build_citations` 按本轮真实取证工具+已绑附件出结构化 citations[]（与旧来源尾注并存）；`report_export.py` 纯 Python 生成 .docx/.md 单轮报告，URL 脱敏 `[URL_REDACTED]`+只读声明；导出走下载中心 exportType=10086。
+- **反馈**（`feedback.py`）：`assistant_feedback` 按 `(qa_id, scope_fingerprint)` 幂等 upsert，rating=None 即撤销；reasons/comment 有界且入库脱敏。
+- **末轮重生成**：`POST /v1/assistant/questions/{qa_id}/regenerate` 只许最后一个已完成回合，原地不新增回合（存储侧 `attempt_no` 递增合同见 conversation-store）；旧答案经 `completed_context(before=turn_no)` 自然排除不进上下文；失败/取消的重生成释放锁但**从不删除已完成的旧回合**；`generating_claim_id` 按轮/次发放，过期取消的 worker 不能覆盖更新的重生成。
+- **声明与会话面**：`GET /v1/assistant/agents`+`/starters` 出抽屉声明；`PATCH /v1/conversations/{id}` 改名+自动标题+回合卡。
+- **nginx 显式白名单**（`ops/nginx/operator-h5-assistant.conf`）：regex+方法双重白名单就是抽屉的暴露合同——SSE 路径独享 `proxy_read_timeout 300s`+`Last-Event-ID` 透传，上传路径独享 `client_max_body_size 25m`，conversations 限 GET/PATCH/DELETE；管理与内部回调接口一律不代理。
+- 三张抽屉表（`assistant_files`/`assistant_qa_events`/`assistant_feedback`）随 schema v3 进库，HEAD 为 VERSION=4；版本迁移与回滚约束归 [gateway-store](../gateway/gateway-store.mdx)。
 
 ## Canonical anchors
 
-- `src/aiops_diagnostics/operator/operator_cpms.py`（_grant/_record/_complete/_worker/_messages 全部闸所在）
-- `src/aiops_diagnostics/operator/operator_agent.py`（SCHEMA/INSTRUCTIONS/order_candidate/analysis/render）
+- `src/aiops_diagnostics/operator/operator_cpms.py`（编排壳：start/proxy/grant/record/complete/stream_chunk 委托入口）
+- `src/aiops_diagnostics/operator/cpms_task_store.py`（authenticate/authorize_execution/refresh_scope/build_messages/verify_live_stream_access/stamp_gate_refusal——两级闸与消息装配的实际所在）
+- `src/aiops_diagnostics/operator/cpms_proxy.py` + `cpms_evidence.py` + `cpms_sites.py`（工具代理与时序构造/FEEDBACK_REFUSALS 与合同校验/站点搜索）
+- `src/aiops_diagnostics/operator/operator_agent.py`（SCHEMA/INSTRUCTIONS/order_candidate/analysis/render/build_citations）
 - `src/aiops_diagnostics/operator/operator_tools.json` + `operator_tools.py`（唯一声明）
 - `src/aiops_diagnostics/operator/operator_answer_review.py`（verdict+reason + 程序核验）
 - `src/aiops_diagnostics/operator/operator_evidence.py`（evidence_only 只读渲染）
+- `src/aiops_diagnostics/operator/attachments.py` + `download_center.py` + `qa_events.py` + `feedback.py` + `report_export.py`（抽屉面五件）
+- `ops/nginx/operator-h5-assistant.conf`（暴露白名单）
 - `services/execution-node/.../GuardedChatModel.java`（12 次预算）

@@ -23,6 +23,7 @@ code:
     - .sandcastle/linked-issues.mjs
     - .sandcastle/linked-issues.check.ts
     - .sandcastle/planner.ts
+    - .sandcastle/conflict-surface.mjs
     - .sandcastle/implement-pr/implement-pr.ts
     - .sandcastle/review/review.ts
     - .sandcastle/merge-prompt.md
@@ -70,7 +71,7 @@ GitHub-hosted 跑 CI/policy/探针/watch；原 agent runner 跑模型工作（�
 ## ADR 与里程碑纪律
 
 - `docs/agents/architecture-decisions.md`：行为、架构、跨文件合同、流程/工具、测试策略、持久化/网络/配置格式变化都欠一条记录；记录形态 = 读者可分支的状态 + 考虑过的备选 + 实际权衡。`No-ADR:` 在 commit body 是显式逃逸门——沉默永远不行。`adr.check.mjs` 对触及的记录查结构、`--base` 查覆盖；它**刻意不读**约定文档，测试的是 `feat:`/`fix:` 主题+路径形状+`No-ADR:` 行。**编号在并行分支上撞**：取号看 origin/main 最大号，多分支工作要预留。
-- 文档维护以 `docs/README.md#变更前与交付时` 为正文（ADR-0269）：原Issue记录进度，必要验收事件单份回执；按领域/组件/环境选证据。新文件须说明不同的读者、用途或生命周期，仅为链接回执不另建进度。旧日志冻结保留，当前索引替换对应结论，不追加历史。llmdoc是检索投影，不能授权行为；源变化只触发复核。
+- 文档维护以 `docs/README.md#变更前与交付时` 为正文（ADR-0269）：原Issue记录进度，必要验收事件单份回执；按领域/组件/环境选证据。新文件须说明不同的读者、用途或生命周期，仅为链接回执不另建进度。旧单体日志与历史回执已迁出仓外（ADR-0345：`docs/validation.md`、`docs/开发进度.md` 及历史进度/回执整体 offload 到私有归档仓库，SHA-256 manifest 核对，仓内冻结闸测试随之删除）——仓内规则是现役回执只读保留 + 原始材料只存私有归档，不再有仓内冻结副本。llmdoc是检索投影，不能授权行为；源变化只触发复核。
 - `spec-tree.yml`（ADR-0032）：`.spec/` 是意图真相；lint 仅建议（不是必需检查）——主干检查保留正是为了暴露已合并的漂移。
 - `consensus-contract.json`：不可例外不变量 = account-boundary、default-branch-protection、pull-request-delivery、deterministic-ci、secret-isolation、runner-isolation；`.afk-exceptions.json` 条目需 invariant+reason+scope+compensating_control+owner+approved_at+expires_at，拒未知/不可例外/过期项。
 - `sync-open-prs.yml`：默认只报；手动 `gh workflow run -f pr_number=` 处理单个 PR；严格资格（OPEN、base=main、非 draft、同仓 owner-author、无 assignee、无 agent 标签、BEHIND）；update-branch API 带 `expected_head_sha`；DIRTY → 作者修，不派付费修复 agent；`allow_auto_merge=false` 刻意。

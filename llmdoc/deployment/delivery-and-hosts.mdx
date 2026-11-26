@@ -34,18 +34,6 @@ code:
     - deploy/dify-36/patches/1.17.1/09-idempotent-app-import.patch
     - deploy/dify-36/patches/1.17.1/10-candidate-app-disabled.patch
     - deploy/dify-36/web-patches/build-web-image.sh
-    - deploy/dify-36/web-patches/1.17.1/09-vitest-browser-base-ui-deps.patch
-    - deploy/dify-36/web-patches/1.17.1/17-environment-directory-tab.patch
-    - deploy/dify-36/web-patches/1.17.1/aiops-environments.tsx
-    - deploy/dify-36/web-patches/1.17.1/aiops-environments.browser.spec.tsx
-    - deploy/dify-36/web-patches/1.17.1/aiops-operator-run-logs.tsx
-    - deploy/dify-36/web-patches/1.17.1/aiops-operator-run-logs.browser.spec.tsx
-    - deploy/dify-36/web-patches/1.17.1/16-managed-knowledge-selection.patch
-    - deploy/dify-36/web-patches/1.17.1/aiops-management.ts
-    - deploy/dify-36/web-patches/1.17.1/aiops-management.tsx
-    - deploy/dify-36/web-patches/1.17.1/aiops-management.browser.spec.tsx
-    - deploy/dify-36/web-patches/1.17.1/aiops-workflow-managed.tsx
-    - deploy/dify-36/web-patches/1.17.1/aiops-workflow-managed.browser.spec.tsx
     - ops/README.md
     - ops/dify-exposure-registry.md
     - ops/nginx/business-environment-ingress.md
@@ -64,6 +52,19 @@ code:
     - ops/environments/env-95.toml
     - tools/content/render_business_ingress.py
     - deploy/m2-live-03/bootstrap_platform.py
+    - deploy/m2-live-03/images.lock.json
+    - deploy/m2-live-03/gateway-requirements.txt
+    - deploy/kb-service/README.md
+    - deploy/kb-service/build.py
+    - deploy/kb-service/migrate_tenant_namespace.py
+    - deploy/kb-service/scoped-account-manifest.json
+    - deploy/kb-service/scoped-account.patch
+    - deploy/dify-36/env.example
+    - ops/nginx/environment-user-ingress.conf
+    - ops/nginx/environment-user-ingress-proxy.inc
+    - ops/nginx/environment-user-ingress-routes.txt
+    - ops/nginx/operator-h5-assistant.conf
+    - ops/nginx/operator-h5-proxy.inc
     - .dev-host.toml
     - docs/agents/actions-delivery.md
     - docs/agents/env-41-runbook.md
@@ -96,11 +97,11 @@ code:
 | kb-service 补丁 | 36 | `deploy/kb-service/build.py`+`verify_defaults.py`；dev-host cp+原子替换+只重启适配器 |
 | 宿主机 nginx 片段 | 41/36 vhosts | `ops/nginx/*.conf` 作已识别制品安装（`--artifact-sha256`+`nginx -t`+reload）；**在 CD 之外**，记 `deploy/manual-deploys.md` |
 | 最小Gateway候选预演 | 已登记目标服务宿主 | `ops/environments/gateway/build.sh`按目标Python生成合并离线制品，`probe.py`在独立根启动临时受限双实例并清理；不改旧服务或准入，健康负载不等于业务容量 |
-| 最小Gateway独立安装 | 已登记目标服务宿主 | `build-installer.sh`携同修订artifact_checks.py，与应用包分别固定摘要；管理计划/P3共用只读成员校验，冷安装不依赖预装AI-Ops；`install.py`只管理`aiops-access-<环境>`，同计划不重启，同配置/同schema/零在飞升级，pending要求先恢复；支持固定停用候选的env/私有目录成套切换与递增恢复；preflight持久回读仅核已装实例就绪；中央任务由独立运维worker经dev-host到本机内部HMAC领取，用户timer自动选择只读任务，只读失联先核对，网络/业务独立未验；不切旧入口或启用租户 |
+| 最小Gateway独立安装 | 已登记目标服务宿主 | `build-installer.sh`携同修订`onboarding.artifacts`校验模块（旧修订回退 legacy 路径），与应用包分别固定摘要；管理计划/P3共用只读成员校验，冷安装不依赖预装AI-Ops；`install.py`只管理`aiops-access-<环境>`，同计划不重启；升级要求同 Python 小版本+零在飞+默认相同配置摘要——**前向 schema 升级已支持**（ADR-0272 扩展）：先在候选目录对 `.backup()` 副本演练，停服后落地 root 持有的校验备份并记进 `pending.json`，再以服务身份单事务迁移；降级与未知漂移一律拒绝，升级失败仅在零新增写入且摘要一致时恢复停服快照；pending要求先恢复；支持固定停用候选的env/私有目录成套切换与递增恢复；preflight持久回读仅核已装实例就绪；中央任务由独立运维worker经dev-host到本机内部HMAC领取，用户timer自动选择只读任务，只读失联先核对，网络/业务独立未验；不切旧入口或启用租户 |
 | 环境工具HTTPS扩展 | 既有TLS虚拟主机 | `build-ingress.sh`从合并修订共享节点路由/客服片段，生成固定回环上游和实际连接来源限制；每路径校验TLS/来源，Gateway保留运行授权；安装需独立批准，不等于目标已开通 |
 | 环境执行入口 | 目标TLS虚拟主机 | `build-execution-ingress.sh`+`execution-ingress.md`（ADR-0274）：经 `tools/content/render_execution_ingress.py` 生成 `aiops-execution-ingress.conf`——**反方向**入口：目标→共享平台 HTTPS dispatch；上游限 RFC1918/回环 IPv4、64KiB body 上限、server 层 `Snail-Ai-Token` 头隔离 |
+| 环境用户助手精确入口 | 目标TLS虚拟主机 | `build-user-ingress.sh`（ADR-0319）：固定合并修订 git archive `ops/nginx/environment-user-ingress{.conf,-proxy.inc,-routes.txt}` 并做 `__ENV__` 替换——**环境号是部署参数、凭据永不入制品**（0600 root 持有片段现场生成，缺失即 `nginx -t` 失败 fail-closed），确定性 tar+SHA256SUMS；精确路径白名单唯一声明在 routes.txt，`tests/operations/test_environment_user_ingress.py` 用真实 nginx 双向钉住 |
 | 环境节点栈 | 目标 `/opt/aiops-node-runtime/environments/<env>/current` | `build-environment-node.sh`（ADR-0275）打包锁定 node JAR + `deploy/node-runtime/environment.*` 资产（environment-node + gateway-egress 容器、`Internal=true` 外部网络、`aiops-environment-node@<env>.service` 模板），构建时 jar sha256 必对 `deploy/m2-live-03/images.lock.json` 的 node 条目 |
-| Gateway+节点栈离线包（env95，已撤回的历史） | 95 `/opt/aiops-95` | `ops/environments/env95/`：dev-host 上 `build.sh`/`build-node.sh` 产 wheel+py313 wheelhouse+SHA256SUMS → `dev-host cp --artifact-sha256` → `install.sh`（临时候选 `/health` 版本==制品修订才切 :8788）/`upgrade.sh`（限同 schema+零在途）/`retire.sh`（move-only 可续跑）；**文件拷贝类——无 CD、95 上无 .git**；机制异于 41：venv+wheel、候选先健康后切换，不是 src rsync 原位替换 |
 | GitLab 镜像 | 公司 GitLab ai-products/ai-ops | `gitlab-mirror.yml` 镜像每个 push 的 ref。**镜像不是运行源**——镜像成功≠CI/合并/部署；其独立失败≠部署失败 |
 
 ## dev-host 传输合同
@@ -110,7 +111,7 @@ code:
 本页只持有制品侧事实：`aiops-admin environment-artifacts` 的产物保留在 41 私有 `onboarding_assets`
 （经核验的完整修订制品），目标只在标准部署/受管安装器步骤升级。
 
-统一主机访问：`dev-host show` 断言 role=service-host+status=active 否则停；`dev-host cp --artifact-sha256` 在上传时强制制品身份（不符 exit 77——策略闸不是自我声明）；`dev-host exec --allow-service-exec` 门控服务主机写。仓库 `.dev-host.toml` 声明本项目可达目标的逻辑名与路径键，现五个：`41`（现役）、`36`（Dify 栈，`service_api_config`/`service_api_nginx` 路径）、`95`（`qy-gw-120`，ADR-0308 冷安装的 `access*` 根——已不只是恢复资料）、`124`（`singapore-server`，第二个业务环境候选+已批准空验收实例 `aiops-access-p3-acceptance`）、`management-relay`（`node`，Windows 设备，仅 95 管理 SSH 中继，无 AI-Ops 业务）。CD 用派生注册表视图，只换 `ssh_alias→aiops-41-cd`，与权威 `~/.config/dev-host/hosts.toml` 逐字段核对。
+统一主机访问：`dev-host show` 断言 role=service-host+status=active 否则停；`dev-host cp --artifact-sha256` 在上传时强制制品身份（不符 exit 77——策略闸不是自我声明）；`dev-host exec --allow-service-exec` 门控服务主机写。仓库 `.dev-host.toml` 声明本项目可达目标的逻辑名与路径键，现六个：`41`（现役）、`36`（Dify 栈，`service_api_config`/`service_api_nginx` 路径）、`95`（`qy-gw-120`，ADR-0308 冷安装的 `access*` 根——已不只是恢复资料）、`124`（`singapore-server`，第二个业务环境候选+已批准空验收实例 `aiops-access-p3-acceptance`）、`management-relay`（`node`，Windows 设备，仅 95 管理 SSH 中继，无 AI-Ops 业务）、`jiejia`（`jiejia-gw`，捷佳四轮国内充电业务环境，仅部署自有接入模块的 `access*` 根）。CD 用派生注册表视图，只换 `ssh_alias→aiops-41-cd`，与权威 `~/.config/dev-host/hosts.toml` 逐字段核对。
 
 ## deploy-41.sh 各闸
 
@@ -128,12 +129,12 @@ code:
 ## 暴露纪律与拓扑
 
 - `ops/dify-exposure-registry.md` 是 Dify 可达面的唯一声明；列序是合同（CI 按单元格位置解析）；`tests/dify/test_dify_exposure_registry.py` 断言声明==路由；表外必须不可达——**从 Dify 容器的 netns 验**（宿主机视角会撒谎）。新公网暴露从**观测流量**决定，不从监听端口。
-- `ops/nginx` 片段用方法分流 location 而非路径正则（一个 `location ~` 曾把 `POST /v1/shortcuts` 管理面打开）；`limit_except` 不够。
+- `ops/nginx` 片段的不变量是**逐 location 显式方法白名单 + 管理面/内部面不进转发面**（一个 `location ~` 曾把 `POST /v1/shortcuts` 管理面打开；`limit_except` 不够）。`environment-user-ingress.conf` 的 refined 写法：`=` 精确匹配 + `^~` 长前缀优先于正则——正则 location 会被宿主可能存在的 `location ^~` 遮蔽，前两者不依赖宿主原有写法；同一路径多方法共用一条 location（nginx 不接受重复 location），方法白名单由 location 内 `if` 收口，未声明方法一律 405。
 - 41/36按各自现役组件制品交付；95旧完整栈与专属业务隧道已撤回，不再作为新环境模板。候选目标按项目声明和私有清单解析，先通过`ops/environments/gateway/`预演，不自动切流量。**CD只部署41，其他组件须独立配套**。
 - **环境登记表**（`environment_registry_file`，ADR-0256）：机群级「环境×租户」准入声明——`tools/content/render_business_ingress.py --registry` 以它为地址权威（catalogue 只存 id+凭据，gateway_url 取自登记行；未登记/停用环境拒产 upstream），登录代理启动也把 `gateway_url` 钉到登记行。准入语义（`require`/`TENANT_ENVIRONMENT_NOT_ENABLED`/`RegisteredCallerResolver`）归 [identity-scope](../identity/identity-scope.mdx)。
 - 手工部署台账 `deploy/manual-deploys.md`：任何绕 CD 上生产的动作必须**当日**经 `deploy/record-manual-deploy.sh` 追加——六次连续 CD 失败曾因手工 rsync 保持生产更新而无人察觉（#407）。台账 append-only，永不重写。
 - CD Watch（`.sandcastle/cd-watch.mjs`+`cd-watch.yml`）：每 5min 跑在 **GitHub-hosted** runner（看守者与被看守机器同死就没意义）；经 `pending_deployments` 判 deploy-41 结果（等待与没跑看起来一样）+最近完成 runs；开 `cd:needs-attention` issue 而非报错红——未关的 issue 本身就是警报。
-- **main合并不部署、显式SHA批次发布、注释SemVer标签与该版本Release**（2026-09-30 明确决定）："能合并 main 的人"=="能改生产的人"；Ruleset（PR+必需检查+会话解决）是剩余闸门。回滚方法=给 `production-41` 环境重加 required_reviewers。
+- **main合并不部署、显式SHA批次发布、注释SemVer标签与该版本Release**（ADR-0348，2026-11-26）；**CD 审批闸已永久移除**（2026-09-30 明确决定）："能合并 main 的人"=="能改生产的人"；Ruleset（PR+必需检查+会话解决）是剩余闸门。回滚方法=给 `production-41` 环境重加 required_reviewers。
 
 ## 失败语义速查
 

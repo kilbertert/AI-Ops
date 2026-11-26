@@ -1,5 +1,5 @@
 ---
-description: "身份解析与数据范围：resolver 装配与 source-key 闸顺序、四条凭据链、能力三档 ASSERTED/DERIVED/UNASSERTED、scope_fingerprint 计入与排除字段、entry_data_scope 四步失败关闭、QueryScope 语义、shop≠site、订单可见性两渲染、订单号语法、RegisteredCallerResolver 环境登记准入（ADR-0256）"
+description: "身份解析与数据范围：resolver 装配与 source-key 闸顺序、EntryCallerResolver 入口分派与 UPMS 范围规范化、四条凭据链、能力三档 ASSERTED/DERIVED/UNASSERTED、scope_fingerprint 计入与排除字段、entry_data_scope 四步失败关闭、QueryScope 语义、shop≠site、订单可见性两渲染、订单号语法、RegisteredCallerResolver 环境登记准入（ADR-0256/0320/0332）"
 kind: architecture
 relations:
   related:
@@ -20,23 +20,29 @@ code:
     - src/aiops_diagnostics/identity/order_identity.py
     - src/aiops_diagnostics/onboarding/registry.py
     - src/aiops_diagnostics/gateway/gateway_api.py
+    - src/aiops_diagnostics/gateway/caller_auth_wiring.py
     - src/aiops_diagnostics/identity/gateway_admission.py
     - tests/gateway/test_environment_registry.py
     - tests/identity/test_gateway_admission.py
     - tests/identity/test_company_token_auth.py
     - tests/identity/test_order_identity.py
+    - tests/identity/test_caller_auth_mapping.py
+    - tests/identity/test_data_scope_rule.py
+    - tests/identity/test_operator_site_scope.py
+    - tests/identity/test_query_scope.py
 ---
 
 # 身份与数据范围
 
-## Resolver 装配（gateway_api.py）
+## Resolver 装配（caller_auth_wiring.py）
 
 - source-key 闸在会话级**之前**（`_caller_resolver`）：会话级命中会 early return，闸放后面会让公司令牌链在有 `third_session_service_token` 的部署上整条不可达（41 实测）。未配置 `company_source_key` → 整条新链不构造，不是放行。
 - `_company_token_resolver` 配置读取失败返回 None → 回落到旧链 → 带 key 的请求得到 401 而非放行。
-- `_fallback_caller_resolver` 逐字选择：`third_session_service_token` → RedisThirdSessionResolver；无 `introspection_url` → UpmsCallerResolver；否则 IntrospectionCallerResolver；配置错 → DisabledCallerResolver。
+- `_fallback_caller_resolver` 逐字选择：`third_session_service_token` → RedisThirdSessionResolver；无 `introspection_url` → UpmsCallerResolver；否则 IntrospectionCallerResolver；配置错 → DisabledCallerResolver。选定后还有条件包装（ADR-0320）：`environment_registry_file` 已配 **且** 本环境 UPMS 可达时，会话链外包 `EntryCallerResolver`；不满足时原样返回既有链——未配登记表的部署（旧 41 形状）行为逐字不变。
+- `EntryCallerResolver`（`caller_auth.py`，ADR-0320）按申报入口在两条本环境链间分派：`is_operator_entry` 命中 → `UpmsCallerResolver`，其余入口（consumer/缺失/非法值）原样落既有链。**分派只决定谁来解析，两条链各自全量验证**；三条不变量：(1) **UPMS 拒绝永不落回会话链**——同一份凭据换条链再猜是不可预期的错投；(2) `third_session` 不越过入口——一个请求不能同时是两种凭据；(3) operator 范围在**首鉴即规范化**：`/user/ds` 断言的 organ/shop 混合范围经实时店铺→站点映射换成纯站点集合，与 `refresh_scope` 复核同一权威口径，初鉴/复核/回读三段指纹因此比较同一形状（不规范化会把同一组站点误判成「权限已变」）；`/user/ds` 的 `siteIds` 直授**不并入**——本条链站点权威只有实时映射一份，并集等于拿登录快照自我授权；租户顶层主账号（`type∈{-1,1}` 非代查）归一到 `SCOPE_TYPE_ALL`，否则 UPMS 降级应答会误报 `OPERATOR_SITE_SCOPE_REQUIRED`（2026-11-25 95 实证），租户边界仍由 `effective_tenant_id`+`RegisteredCallerResolver` 收口。行为证线在 `tests/operations/test_operator_entry_dispatch.py`。
 - `_authenticate_caller` 是 CallerAuthError → 出口错误的**唯一**映射点（之前有三个漂移副本）；`platform_entry`/`source_key` 无条件传给每个 resolver，请求不能靠加头改变语义；`CONFIG_MISSING` → 503 `ACCESS_TOKEN_VALIDATION_UNAVAILABLE`（在此决定，不在抛出点）。
 - 登记准入包装（ADR-0256）：`environment_registry_file` 配置时 `create_gateway_app` 给选定 resolver 套 `RegisteredCallerResolver`——先正常认证再 `registry.require(effective_tenant_id)`；RegistryError 分两档：登记器不可读 → `CALLER_AUTH_UNAVAILABLE`（retryable），准入拒绝 → `CALLER_AUTH_FORBIDDEN`。
-- `environment_registry.py` 准入合同：`EnvironmentRegistry.require` = 环境 enabled + 租户 enabled，否则 `TENANT_ENVIRONMENT_NOT_ENABLED`（consumer/operator/self-service/login 共用的拒绝码）；`for_settings` 一 settings 一绑定；构造即冻结 `(gateway_url, cpms_base_url, config_ref)`，登记行中途变更 → `ENVIRONMENT_CONFIGURATION_CHANGED`——`require_registered` 让受控工具/后台交付复用同一冻结连接，不能重新选址。登记文件的发布/校验机制属 [gateway-runtime](../gateway/gateway-runtime.mdx)；`environment_registry_file`（平台环境+租户准入）与 `business_environments_file`（每租户 CPMS 端点 manifest）不是同一件东西。
+- `onboarding/registry.py` 准入合同：`EnvironmentRegistry.require` = 环境 enabled + 租户 enabled，否则 `TENANT_ENVIRONMENT_NOT_ENABLED`（consumer/operator/self-service/login 共用的拒绝码）；`for_settings` 一 settings 一绑定；构造即冻结 `(gateway_url, cpms_base_url, config_ref, company_gateway_url)` 四元组（ADR-0332），登记行中途变更 → `ENVIRONMENT_CONFIGURATION_CHANGED`——`require_registered` 让受控工具/后台交付复用同一冻结连接，不能重新选址。ADR-0332 新增准入面：`require_enabled()`（只查环境 enabled——**平台哨兵**（type=-1 且 tenant_id=-1）不是租户，准入走它而非 `require`）、`enabled_tenant_ids()`（自助台 catalogue 与之求交）、`is_manager()`（显式登记的 directory manager 在环境 disabled 时保留有限的 manage 恢复入口）。登记文件的发布/校验机制属 [gateway-runtime](../gateway/gateway-runtime.mdx)；`environment_registry_file`（平台环境+租户准入）与 `business_environments_file`（每租户 CPMS 端点 manifest）不是同一件东西。
 
 ## 四条凭据链与能力三档（ADR-0231）
 
@@ -63,7 +69,7 @@ code:
 ## 数据范围与可见性
 
 - `entry_data_scope`（`data_scope_rule.py`）四步是"入口+主体→数据范围"的唯一序列：(1) 仅 operator 入口否则 self；(2) 租户级账号 `type∈{-1,1}` → all；(3) `subject_unavailable` → self；(4) caller 供 site_ids → organ。任何不可用 → `organ` + `site_ids=()`——失败关闭到空集，**绝不**回落全租户或 self（两者对同一订单答案相反）。
-- `QueryScope`：tenant 恒定；`site_ids=None` = 租户内全部，`()` = 空集短路不打 SQL；`MAX_SCOPE_IDS=1000`。目录/配置任何失败在碰 MySQL 前抛 ScopeError。同一条下推已跨到第二个库——`_consumer_mall_payment` 对商城库复用 `resolve_query_scope(caller)`，但把 ScopeError 在内的全部异常渲染为 `read_failed` 缺证标注而非拒绝请求：「碰库前失败关闭」是不变量，拒绝请求只是出口形态之一（证据合同见 [consumer-chat](../consumer/consumer-chat.mdx)）。
+- `QueryScope`：tenant 恒定；`site_ids=None` = 租户内全部，`()` = 空集短路不打 SQL；`MAX_SCOPE_IDS=1000`。目录/配置任何失败在碰 MySQL 前抛 ScopeError。DIS 点位代查链退役后（ADR-0342），任何非 self 的 `delegated` 上下文一律 ScopeError fail closed、绝不扩大——`delegated` 仍是指纹输入。同一条下推已跨到第二个库——`_consumer_mall_payment` 对商城库复用 `resolve_query_scope(caller)`，但把 ScopeError 在内的全部异常渲染为 `read_failed` 缺证标注而非拒绝请求：「碰库前失败关闭」是不变量，拒绝请求只是出口形态之一（证据合同见 [consumer-chat](../consumer/consumer-chat.mdx)）。
 - **shop ≠ site**：`resolve_operator_site_scope` 必须经 `ch_site.shop_id` 映射（953/954 行相等仅一个例外）；两种空集原因分开记日志：`no_shop_binding`（登记缺口）vs `shop_without_site`（数据缺口）。
 - `order_visibility.py`：一条租户可见性规则两种渲染——`visible_orders`（行内判定）、`scope_where_sql`（参数绑定 SQL 下推）；`TenantVisibility` 收窄为必填 `allowed`（空集=什么都不见，无"不受限"档）；`resolve_device_tenant`/DEVICE profile 已随设备入口 2026-10-29 退役删除；UNKNOWN_TENANT fail closed 保留。
 - `order_identity.py`：`ORDER_ID_ATOM` 是订单号语法的唯一权威；自由文本候选要求含数字且纯数字段 ≥15 字符（曾把 "Please" 当订单号）。
@@ -80,6 +86,7 @@ code:
 - `src/aiops_diagnostics/identity/scope_context.py`（docstring、ScopeContext、_scope_fingerprint、is_operator_entry）
 - `src/aiops_diagnostics/identity/data_scope_rule.py` (entry_data_scope)
 - `src/aiops_diagnostics/identity/query_scope.py` (resolve_query_scope, operator_site_scope_from_shops)
-- `src/aiops_diagnostics/identity/caller_auth.py` (SourceKeyCallerResolver, ScopedOrderAuthorizer)
+- `src/aiops_diagnostics/identity/caller_auth.py` (SourceKeyCallerResolver, EntryCallerResolver, ScopedOrderAuthorizer)
 - `src/aiops_diagnostics/onboarding/registry.py`（EnvironmentRegistry.require/require_registered/for_settings 登记准入合同）
-- `src/aiops_diagnostics/gateway/gateway_api.py` (_caller_resolver, _authenticate_caller, RegisteredCallerResolver 装配)
+- `src/aiops_diagnostics/gateway/caller_auth_wiring.py` (_caller_resolver, _authenticate_caller)
+- `src/aiops_diagnostics/gateway/gateway_api.py` (RegisteredCallerResolver 装配)

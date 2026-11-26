@@ -1,5 +1,5 @@
 ---
-description: "会话持久化与归属：conversations/turns 按 scope_fingerprint 门控读、120s 生成锁与恢复、turn_no 永不复用、两个历史窗口（context_turns vs 每次再授权的 completed_context）、clarify 码、assistant_questions 生命周期"
+description: "会话持久化与归属：conversations/turns 按 scope_fingerprint 门控读、120s 生成锁+claim_id 与恢复、新轮 turn_no 不复用（原地重生成刻意例外 attempt_no 递增）、自动标题与改名、两个历史窗口（context_turns vs 每次再授权的 completed_context）、clarify 码、assistant_questions 生命周期"
 kind: architecture
 relations:
   requires:
@@ -15,7 +15,10 @@ code:
     - src/aiops_diagnostics/conversation/clarification.py
     - src/aiops_diagnostics/common/async_job_lifecycle.py
     - src/aiops_diagnostics/gateway/gateway_schema.py
+    - src/aiops_diagnostics/gateway/routers/conversations.py
     - tests/conversation/test_conversation_api.py
+    - tests/conversation/test_conversation_title_and_cards.py
+    - tests/conversation/test_conversation_turn_shapes.py
 ---
 
 # 会话存储与归属
@@ -23,16 +26,19 @@ code:
 ## 归属门控
 
 - `conversations` PK `conv_`+uuid；**每次查读都按 `scope_fingerprint` 过滤**——跨范围的会话与"不存在"无法区分（不泄漏存在性）。`business_entry ∈ {consumer,operator}`；`agent_version_key` = `agt_hex#vN`。
+- `list()` 额外排除 `operator_binding LIKE '%:preview'` 的预览行——预览会话不进列表；`agent_id` 列（默认 `operator_main`）支持按 agent 过滤列表。
 - DDL 单一权威是 `gateway_schema.ensure(self.path)`：`conversations`/`conversation_turns` 建表与加列清单（含 `status_qa_id`）在 `gateway_schema.py`，本模块不再内联迁移（PR #1466/ADR-0244；`dify_run_store`、`knowledge_access` 同样委托）。
 - `active_order_no` 被持久化但 `set_active_order` **不查归属**——调用方负责先验证订单可见再绑定（规则见 [identity-scope](../identity/identity-scope.mdx)）。
 
 ## 生成锁
 
-- `generating_since`+`generating_turn_no`，`BUSY_LOCK_SECONDS=120`：崩溃 worker 的生成标记自行过期；窗口内 `begin_turn` 抛 `ConversationBusy`；`renew_turn_claim` 续期；`recover_interrupted_turns` 在 boot path 清扫（位置理由见 [gateway/gateway-store](../gateway/gateway-store.mdx)）。
+- `generating_since`+`generating_turn_no`+`generating_claim_id` 三个字段一把锁，`BUSY_LOCK_SECONDS=120`：崩溃 worker 的生成标记自行过期；窗口内 `begin_turn` 抛 `ConversationBusy`；`renew_turn_claim` 续期；`recover_interrupted_turns` 在 boot path 清扫（位置理由见 [gateway/gateway-store](../gateway/gateway-store.mdx)）。`generating_claim_id` 区分每一次生成尝试：过期 worker 既不能覆盖更新一轮尝试写出的答案，也不能释放已经不属于自己的槽位（完成/释放都按 claim_id 核对）。
+- **原地重生成**（`begin_regenerate_turn`，ADR-0337）：只允许最后一个已完成回合（答案在、`status_qa_id` 等于调用方给的 `expected_qa_id`），否则 `RegenerateNotAllowed`；重生成不新增回合——**刻意复用同一 `(conversation_id, turn_no)`**，`attempt_no` 递增；失败/取消时 `preserve_completed` 保留旧答案。HTTP 面只放 operator 入口（`business_entry != "operator"` → 409 `REGENERATE_NOT_ALLOWED`）。
 
 ## 回合与历史
 
-- `conversation_turns` UNIQUE `(conversation_id, turn_no)`；`turn_no` 取 `max(last_turn_no+1, max_row+1)` **永不复用**；`kind ∈ {qa,diagnosis,faq}`；question ≤4,000 字符且入库即脱敏；`status_qa_id` 链回作业行。
+- `conversation_turns` UNIQUE `(conversation_id, turn_no)`；新回合的 `turn_no` 取 `max(last_turn_no+1, max_row+1)` **不复用**——唯一例外是上文的原地重生成，它按设计复用同一 `(conversation_id, turn_no)` 而让 `attempt_no` 递增，两者不矛盾；`kind ∈ {qa,diagnosis,faq}`；question ≤4,000 字符且入库即脱敏；`status_qa_id` 链回作业行。
+- 标题合同：首轮 `begin_turn` 时若会话无标题，由首问自动生成——先脱敏、压空白，`AUTO_TITLE_MAX_CHARS=40` 省略号截断；创建/改名（PATCH）上限 `TITLE_MAX_CHARS=80`，改名重新脱敏且拒绝空/超长。完成回合携带回读卡片负载（附件、引用、步骤、耗时、`delivery_mode`、`parent_qa_id` 各列）——列清单本身查 schema 即可，要点是这些列是回合交付形状的组成部分，不是装饰。
 - **两个历史窗口刻意不同**：
   - `context_turns`：最多 8 回合 / 8,000 tokens，最新必留，排除未答与 `status_qa_id` 回合。已知缺口写明："recent 不是权限检查"——已离开范围的订单仍在窗口内。
   - `completed_context(before, limit=6)`：JOIN `conversations` 复核同一 `scope_fingerprint`；订单级再授权由消费链逐回合执行（"业务对象权限由使用方再核对"）——**两条聊天链实际消费的是这个**（consumer 见 [consumer-chat](../consumer/consumer-chat.mdx)，operator 见 [operator-chat](../operator/operator-chat.mdx)）。历史回合是"再授权后的解释材料"，不能冒充当前事实。
@@ -40,7 +46,7 @@ code:
 
 ## QA 作业账
 
-- `assistant_questions`（`qa_` id）：`queued/running/completed/failed/cancelled/expired`；profile `QUESTION`（deadline 15min、completed_retention 15min、interrupted 5min），`HEALTH_JOB` deadline 30s——profile/终态规则与清扫纪律统一在 `common/async_job_lifecycle.py`（见 [gateway-store](../gateway/gateway-store.mdx)）。
+- `assistant_questions`（`qa_` id）：`queued/running/completed/inconclusive/failed/cancelled/expired`——QUESTION profile 的完成集是 `{completed, inconclusive}` 两个终态；profile `QUESTION`（deadline 15min、completed_retention 15min、interrupted 5min），`HEALTH_JOB` deadline 30s——profile/终态规则与清扫纪律统一在 `common/async_job_lifecycle.py`（见 [gateway-store](../gateway/gateway-store.mdx)）。
 - 读按 scope_fingerprint 门控；`GET /v1/assistant/questions/{qa_id}` 返回冻结结果。
 - 运行交付判定唯一权威是 `run_deliverability.deliverable()`（180s）——任何其他 TTL 算术都是错的。
 - 运行账词汇（`issued/running/succeeded/failed/revoked/expired`、`fail()` 首写获胜、`refuse()` succeeded→failed、`absorb()` 收存不交付）由 [execution/execution-delegation](../execution/execution-delegation.mdx) 持有；撤回绑定的 410 `CHAT_ROUTE_RETRACTED` 语义见同页（撤回留行，直读回落仅当从未有绑定）。

@@ -1,5 +1,5 @@
 ---
-description: "Dify 控制台准入：登录代理用 SECRET_KEY 自签 HS256 会话（Dify 无改密 API）、公司登录交换是唯一身份源、environment_registry_file 钉 gateway_url+登录后准入闸、invite→activate 开通、逐请求 TLS 闸、bridge BFF 人机分离+LOGIN_PROXY_URL 三态、workspace 生命周期 claim→create→ready、resolve 码绝不返回空串、inner-api 转发器、按工作区准入"
+description: "Dify 控制台准入：登录代理用 SECRET_KEY 自签 HS256 会话（Dify 无改密 API）、公司登录交换是唯一身份源、environment_registry_file 钉 gateway_url+登录后准入闸（平台哨兵/目录管理员恢复/business_admitted）、invite→activate 开通、逐请求 TLS 闸、bridge BFF 人机分离+LOGIN_PROXY_URL 三态、workspace 生命周期 claim→create→ready、resolve 码绝不返回空串、inner-api 转发器、按工作区准入"
 kind: architecture
 relations:
   related:
@@ -15,7 +15,15 @@ code:
     - services/dify-login-proxy/dify_login_proxy/provision.py
     - services/dify-login-proxy/dify_login_proxy/environments.py
     - services/dify-console-bridge/dify_console_bridge/bridge.py
+    - services/dify-console-bridge/dify_console_bridge/config.py
+    - services/dify-console-bridge/dify_console_bridge/client.py
+    - services/dify-console-bridge/dify_console_bridge/workflows.py
+    - services/dify-console-bridge/dify_console_bridge/__main__.py
     - services/dify-console-bridge/dify_console_bridge/environments.py
+    - services/dify-login-proxy/dify_login_proxy/__main__.py
+    - ops/dify-console-bridge/aiops-dify-console-bridge.service
+    - ops/dify-console-bridge/deploy.sh
+    - ops/dify-login-proxy/aiops-dify-login-proxy.service
     - src/aiops_diagnostics/common/platform_constants.py
     - src/aiops_diagnostics/common/http_auth.py
     - src/aiops_diagnostics/dify/dify_console_admin.py
@@ -40,6 +48,11 @@ code:
     - ops/dify-inner-api/build-bundle.sh
     - ops/dify-inner-api/deploy.sh
     - tests/dify/test_dify_login_page.py
+    - tests/dify/test_dify_console_publish.py
+    - tests/dify/test_dify_login_proxy.py
+    - tests/dify/test_dify_login_workspace.py
+    - tests/dify/test_dify_workspaces.py
+    - tests/dify/test_dify_workspace_ready.py
     - tests/test_inner_api_forwarder.py
     - tests/tooling/test_dify_forward_install.py
     - tests/tooling/test_dify_service_api_install.py
@@ -54,7 +67,7 @@ code:
 
 - 代理用 Dify `SECRET_KEY` **自签** HS256 会话 JWT `{user_id,exp,iss,sub}`——Dify 只验签名+查 user_id，不验密码不存会话。原因：Dify 1.17.1 **没有给既有账号设密码的 API**（ADR-0023）。接受的代价：持有 SECRET_KEY = 能给任何账号铸会话 + 保护全部存储凭据 → 代理只听回环、不落盘不落日志任何密码/令牌。
 - **公司登录交换是唯一身份源**：代理自己做真 `/upms/token/login`（密码 AES 表单；失败是 HTTP 200+`code:-1000` 只靠中文 msg 区分），再按固定 `client-type` 头读 `/upms/user/info`（未知 client-type → 空角色集=静默"无权限"）。浏览器带来的公司令牌从不被信任。
-- **环境登记准入**（ADR-0256）：配 `AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE` 时 `LoginProxySettings.__post_init__` 把 `gateway_url` 钉到登记行（不符 = 启动 ValueError）——代理不许指向登记外网关。`LoginService.require_registered_tenant` 在公司登录交换成功后、权限读取前跑（停用租户 `PermissionDenied("TENANT_ENVIRONMENT_NOT_ENABLED")`）；operator-token 会话交换同闸（停用 → 会话 resolve 为 None）；身份查询处理器在 STATUS_ACTIVE 检查后回 `{"allowed": false, "reason": "TENANT_ENVIRONMENT_NOT_ENABLED"}`（HTTP 200 信封，与 MAPPING_DISABLED 同形）。登记闸在身份交换**之后**——裁准入不裁身份；不配文件整条 no-op，旧 41 行为逐位不变。
+- **环境登记准入**（ADR-0256/0332）：配 `AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE` 时 `LoginProxySettings.__post_init__` 把 `gateway_url` 钉到登记行（不符 = 启动 ValueError）——代理不许指向登记外网关。`LoginService.require_registered_tenant` 在公司登录交换成功后、权限读取前跑：平台哨兵（`user_type=-1` ∧ `tenant_id=-1`）查登记本身 enabled（`require_enabled()`，不按租户行查），普通租户按行 `require()`；停用 → `PermissionDenied("TENANT_ENVIRONMENT_NOT_ENABLED")`。新鲜 `login()` 一律 `allow_manager=False`——停用环境谁都登不进；但 schema-2 显式目录管理员（`is_manager`）的**既有会话仍 resolve**（`active_session`/`operator_token` 用默认 `allow_manager=True`）——这是停用环境的恢复通道，不是准入漏洞。身份查询处理器在 STATUS_ACTIVE 检查后回 `{"allowed": false, "reason": "TENANT_ENVIRONMENT_NOT_ENABLED"}`（HTTP 200 信封，与 MAPPING_DISABLED 同形），并叠加 `business_admitted` 布尔——管理员会话能 resolve 但业务面凭它拒止。登记闸在身份交换**之后**——裁准入不裁身份；不配文件整条 no-op，旧 41 行为逐位不变。
 - **共享多环境模式**（`dify_login_proxy/environments.py` 与 `dify_console_bridge/environments.py`）：配 `AIOPS_LOGIN_PROXY_ENVIRONMENT_CREDENTIALS_FILE`（登记文件给地址、私有投影给凭据，schema `aiops-console-environments/1`、≤64 凭据行、`validate_private_file`）即激活 `LoginEnvironments`——钉 gateway_url 只在登记文件存在**且**凭据文件缺席时发生。登录页提供环境 `<select>` + 每环境验证码；会话仍按环境隔离（不广播）。新入口 `/__aiops/login/environments`（目录，无地址无凭据）与 `=/console/api/logout` 拦截（先吊销 AI-Ops 绑定再转发 Dify 原生 logout，转发未确认=`native logout unconfirmed`）。桥侧对应 `AIOPS_CONSOLE_BRIDGE_ENVIRONMENT_CREDENTIALS_FILE`（ADR-0276 共享入口按环境选择）。
 - 开通 = invite→activate→lookup，全走官方端点、无邮件（邀请 token 在响应里带回）；账号邮箱 = 确定性 `{environment}-{company_user_id}@aiops-login.invalid`——environment 是必填部署身份无默认（默认值会把 ADR-0061 修掉的跨环境账号碰撞悄悄引回来）。
 - TLS 是**逐请求**闸（`X-Forwarded-Proto==https`，缺=拒）不是配置串检查——明文 :10008 入口与 TLS 共用同一份 nginx conf，配置证明不了任何事（ADR-0055）。`X-Real-IP` 退避。
@@ -73,20 +86,23 @@ code:
 - 创建 = 先认领后创建 + 租约 + 名字对账（0=安全、1=收养、>1=`AMBIGUOUS` 交人）；`ensure-workspace`（建壳）vs `ensure-ready`（插件+每工作区凭据+模板 DSL+**激活**它写的凭据——读回 `current_credential_name`，"凭据存在"≠"凭据激活"，ADR-0078 真事故）。模板 DSL 刻意不带 `model_config.model` 与 `dataset_configs`（每工作区的值还不存在）。
 - `inner_api`（`POST /inner/api/enterprise/workspace`+成员端点）是**唯一**建工作区路径——console API 没有；经逐连接 `docker inspect` 的回环转发器+SSH 隧道到达；隧道不是授权（`X-Inner-Api-Key` 仍必须）。`failed`（错误响应/拒连）与 `unknown`（超时/短读/200 无 id）按 `HttpFailure.cause` 类型分——重试 unknown 会造永久孤儿。转发器面已扩到 Console+Service API、32 路并行中继（串行中继曾把流式回答与工具回调互锁死锁）；交付走 `build-bundle.sh`（合并修订制品+SHA256SUMS）+`deploy.sh install|restore`（flock、在飞连接在时不重启、健康=匿名 401 检查）。
 - `dify_console_admin.py`：`ADMIN_API_KEY + X-WORKSPACE-ID` 以该工作区 owner 身份操作；插件安装是异步任务要轮询到 success；凭据由 Dify 实验（假 key → 400）；每工作区凭据（每租户 RSA key）必须分开。
-- 表结构权威在 `gateway_schema.py`（ADR-0244）：构造任一网关 store 调 `gateway_schema.ensure(path)` 一次物化全部 28 张表（`TABLES`/`INDEXES`/`LEGACY_COLUMNS`，`user_version` 记版），不再有 per-store 建表；`startup()` 同版本也全量校验、漂移即拒 boot。运维面 `aiops-admin schema check|migrate` 与 `rehearse()`；`MappingStore`（登录代理自己的库）例外。
+- 表结构权威在 `gateway_schema.py`（ADR-0244）：构造任一网关 store 调 `gateway_schema.ensure(path)` 一次物化全部表（`TABLES`/`INDEXES`/`LEGACY_COLUMNS`，`user_version` 记版），不再有 per-store 建表；`startup()` 同版本也全量校验、漂移即拒 boot。运维面 `aiops-admin schema check|migrate` 与 `rehearse()`；`MappingStore`（登录代理自己的库）例外。
 
 ## Bridge（BFF 人机分离）
 
-- `dify_console_bridge/bridge.py`：先验人（Dify 会话 cookie+CSRF+工作区角色），再以机器身份用共享发布 key 调网关。Origin/Sec-Fetch/Referer 是请求上下文（反 CSRF），**从不是授权**；`app_id` 从 Referer 路径取；上游重定向不跟；上游错误 `code` 重建进 `{"error":{code}}` 信封而不是按 HTTP status 猜（ADR-0064）。
+- `dify_console_bridge` 包：先验人（Dify 会话 cookie+CSRF+工作区角色），再以机器身份用共享发布 key 调网关。Origin/Sec-Fetch/Referer 是请求上下文（反 CSRF），**从不是授权**；`app_id` 从 Referer 路径取；上游重定向不跟；上游错误 `code` 重建进 `{"error":{code}}` 信封而不是按 HTTP status 猜（ADR-0064）。ADR-0344 把实现拆成 `config.py`（设置/路由常量）+`client.py`（出站 HTTP 与身份核验）+`workflows.py`（发布/试用编排）+薄 HTTP 层 `bridge.py`（兼容再导出）——找实质逻辑别再只盯 bridge.py。
+- **services/ 隔离边界**（ADR-0338）：bridge 与 login-proxy 是独立部署单元（`python -m dify_console_bridge`/`python -m dify_login_proxy`），源树里**不留转发壳**；`src/aiops_diagnostics/` 对两个服务包零反向依赖，反向（服务→src）只带 build-bundle 白名单内的 stdlib 兼容子集——桥跑系统 python 无 pydantic，进这个子集的 src 共享代码不许引第三方依赖。36 侧升级要求同修订制品 + systemd `ExecStart` 模块段迁移；Gateway CD 不覆盖 36 sidecar。
+- 停用环境的业务拒止在桥侧落地：`/publish/check` 回 `business_admitted=false` 时除 `/__aiops/manage`（环境目录管理恢复面）外**全部桥路由 403**（"仅允许环境目录管理"）——目录管理员能进控制台做环境管理，但做不了业务发布/试用。
 - `AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL` 一键驱动三件事：发布授权、试用订单范围、审计发起者——设计上无半开状态（ADR-0028 §2）。配了但不可达：**共享 HTTP 入口统一拒绝**（ADR-0276——无法确认环境时绝不可回落默认 Gateway）；只有独立 `submit_trial` 调用保留 ADR-0028 的调试租户回落。桥另新增 `dify.raneli.work:10443` 受限 service-api 入口（`dify-service-api-TLS.conf`：来源 allowlist + 固定路径白名单 → `127.0.0.1:10018`，其余一律 404，`error_log /dev/null` 防查询串进日志）。
 - 控制台准入按工作区：租户账号进**自己**工作区不需全局权限码（隔离本身是闸）；平台共享工作区仍要全局 `aiops:agent:edit`/`aiops:agent:publish` 码（ADR-0139）。权限码是公司 UPMS 的两条 `sys_menu`+两个空角色（menu→role→user 模型）；`POST /menu` 自动授给 role_id=1，平台账号 system/huqq 因此持有发布——已接受、已审计（ADR-0029）。
 - 登录失败对用户只有一句中文，绝不回显密码/令牌/上游响应体；八种原因只在结构化 result-code 日志里区分（ADR-0053）。
+- 控制台 UI 注入有**两个互不知情的面**：编译期 React 补丁烤进 web 镜像（`deploy/dify-36/web-patches/`，webpack 重建纪律见 [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)）vs 运行期 nginx 在 10008 层注入脚本（`dify-publish-button.js`/`operator-native-preview.js`，随 build-bundle 部署、不重建镜像）。改控制台界面先判定属于哪个面——两个面的受管标记各自实现，守卫要认并集（真事故）；选错面 = 白等一次镜像重建或改动根本到不了用户。
 
 ## Canonical anchors
 
 - `services/dify-login-proxy/dify_login_proxy/{core,company,server,service}.py`（自签会话+唯一身份源）
 - `src/aiops_diagnostics/dify/dify_workspaces.py` (resolve 码非空串)
 - `src/aiops_diagnostics/dify/dify_ensure_workspace.py` + `dify_workspace_ready.py`（claim→create→ready/激活）
-- `services/dify-console-bridge/dify_console_bridge/bridge.py`（BFF 人机分离、LOGIN_PROXY_URL 三态）
+- `services/dify-console-bridge/dify_console_bridge/{bridge,client,workflows,config}.py`（BFF 人机分离、LOGIN_PROXY_URL 三态；bridge.py 只是薄 HTTP 层+兼容再导出）
 - `src/aiops_diagnostics/dify/dify_inner_api.py`（failed≠unknown）
 - `ops/dify-console-bridge/README.md`、`ops/dify-login-proxy/README.md`、`ops/dify-inner-api/README.md`（部署资产与坑清单）

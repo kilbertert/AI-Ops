@@ -17,6 +17,7 @@ code:
     - tests/test_cd_deploy_scripts.py
     - .github/workflows/ci.yml
     - .claude/skills/verify-aiops-gateway/SKILL.md
+    - .claude/skills/verify-aiops-client-e2e/SKILL.md
     - tools/verification/ci_results.py
     - tools/verification/dify_registry_route_proof.py
     - tools/README.md
@@ -53,7 +54,7 @@ code:
 ## 强制测试三件套
 
 - `test_repository_layout.py`：白名单根文件+每层一级目录（签入与未忽略未跟踪都算；构建缓存排除）；新一级目录要同 PR 理由+清单同步。规则文档：`docs/architecture/repository-layout.md`。
-- `test_readme_architecture.py`：README职责入口、链接解析、不许**新**import 环（现有 node-assembly 环冻结在具体边）。
+- `test_readme_architecture.py`：README职责入口、链接解析、包内 import 图**严格无环**（ADR-0339 已清零全部 18 个环，测试覆盖绝对/相对/函数内延迟导入且无任何冻结例外）。
 - `test_runtime_retirement.py`：已退役模块/import/路由保持缺席；`test_opening_old_database_preserves_retired_data` 先铺 `LEGACY_DIFY` 基线再 `GatewayStore(path)`——store 构造即跑 `gateway_schema.ensure`，退役表断言走真实迁移路径。
 - 三个都在必需检查 `verify` 内跑——不靠人工纪律。
 - `test_cd_deploy_scripts.py` 在真 SQLite 上执行 deploy-41.sh 的 schema 预检+迁移闸片段（非替身）：错文件/备份冲突/迁移/完整性失败在替换源文件前拒绝且不覆盖原库，迁移后失败不自动回滚；备份目录 0710、schema 子目录 0700 不依赖 umask（027/077 均成立）。
@@ -67,6 +68,8 @@ code:
 
 **能**证：启动、auth 模型、public OpenAPI、退役路由 404——在清空 `AIOPS_*`、动态回环端口的**一次性数据根**上起真 `aiops-gateway serve`。
 **不能**证：`/diag/*` 真实诊断、模型驱动 run、KB 活性、远端 Dify/Java、生产部署。AGENTS.md 合同要求改动落在这些面时**明说**该边界。绝不对真 `AIOPS_DATA_HOME` 跑；证据里绝不出现设备 token。
+
+姊妹技能 `verify-aiops-client-e2e`（同目录）回答一次性数据根**结构性够不到**的问题——回答面路由全部拒设备令牌（401），所以它的分工相反：用**生产配置**+一个真实会话驱动真实 ASGI 面（默认零写入），读生产访问日志把「客户端根本没调」与「调了但失败」分开（两者在用户那里长得一模一样）。UNVERIFIED 永远不是 PASS。两技能边界互补：验服务面用一次性数据根那个，验真实用户/客户端用生产配置这个，不互换。
 
 ## 探针与验证分工
 

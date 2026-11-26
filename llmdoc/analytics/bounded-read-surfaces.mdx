@@ -1,5 +1,5 @@
 ---
-description: "聊天以外的有界只读面共同形状「确定性范围读→有界结果→标注缺失」：健康报告 30s 作业+health-v2 词表、data/sources 行数界、运维分析四卡+两字符串叙述、device_offline、通讯候选 60 行/24h/4s 共享预算、FAQ 平台隔离"
+description: "聊天以外的有界只读面共同形状「确定性范围读→有界结果→标注缺失」：健康报告 30s 作业+health-v3 词表、data/sources 行数界、运维分析四卡+两字符串叙述、device_offline、通讯候选 60 行/24h/4s 共享预算、FAQ 平台隔离"
 kind: architecture
 relations:
   related:
@@ -9,6 +9,11 @@ code:
   paths:
     - src/aiops_diagnostics/health/health_report.py
     - src/aiops_diagnostics/health/rules.py
+    - src/aiops_diagnostics/health/health_job_runner.py
+    - src/aiops_diagnostics/health/health_metrics.py
+    - src/aiops_diagnostics/health/health_report_copy.py
+    - src/aiops_diagnostics/health/ykc_frames.py
+    - src/aiops_diagnostics/health/health_curves.py
     - src/aiops_diagnostics/gateway/gateway_runtime.py
     - src/aiops_diagnostics/data/sources.py
     - src/aiops_diagnostics/data/order_status.py
@@ -16,11 +21,15 @@ code:
     - src/aiops_diagnostics/data/charging_status.py
     - src/aiops_diagnostics/operator/ops_analysis.py
     - src/aiops_diagnostics/operator/ops_analysis_narrative.py
+    - src/aiops_diagnostics/operator/ops_analysis_runner.py
     - src/aiops_diagnostics/operator/device_offline.py
     - src/aiops_diagnostics/operator/offline_tool.py
     - src/aiops_diagnostics/operator/communication.py
     - src/aiops_diagnostics/conversation/faq.py
     - src/aiops_diagnostics/conversation/faq_catalog.json
+    - tests/operations/test_ops_analysis_api.py
+    - tests/operations/test_ops_analysis_runtime.py
+    - tests/data/test_mysql_scope.py
 ---
 
 # 有界只读面（聊天以外的现役功能）
@@ -29,7 +38,8 @@ code:
 
 ## 健康报告（health/）
 
-- 异步 `health_report_jobs`（30s deadline）；`RULE_VERSION="health-v2"` 是规则版本唯一句柄——改规则搜常量，不是搜文档。
+- 异步 `health_report_jobs`（30s deadline）；`RULE_VERSION="health-v3"`（常量住 `health_metrics.py`，`health_report.py` 转引）是规则版本唯一句柄——改规则搜常量，不是搜文档。
+- health-v3 表面核心（ADR-0353）：`health_metrics.py` 七项电池指标+五维评分+确定性结论，`ykc_frames.py` YKC 1.6 BMS 帧纯函数解码，`health_report_copy.py` 11 语文案+YKC stop-reason 表（上游自报原因是数据、逐字透传不翻译），`health_curves.py` 曲线抽稀——规则版本句柄覆盖这一整面，指标/阈值/分段/结论分类变更都递增它。
 - `ORDER_STATUS` 词表 `{0充电中,1充电结束,2不可控异常,3异常已人工处理,5可控异常结束}`（`rules.py`）；`StatusRole`（`data/order_status.py`）是状态角色的唯一权威（曾收敛 5 份副本）。
 - 遥测 `SourceError` → `telemetry=unavailable`，**不是作业失败**；30s → `REPORT_TIMEOUT`；订单歧义 → `ORDER_NOT_FOUND`/`ORDER_AMBIGUOUS`；`MAX_CURVE_POINTS=300`。
 
@@ -52,13 +62,13 @@ code:
 
 ## 边界
 
-这些接口复用身份、范围与作业存储，但**不能因为聊天链通过就视为都完成验收**。`RULE_VERSION` 字符串（`health-v2`、`ops-analysis-v1`）是规则变更的版本句柄。超时是 profile 常量（30s 健康、15min QA/诊断），不是逐调用猜测。
+这些接口复用身份、范围与作业存储，但**不能因为聊天链通过就视为都完成验收**。`RULE_VERSION` 字符串（`health-v3`、`ops-analysis-v1`）是规则变更的版本句柄。超时是 profile 常量（30s 健康、15min QA/诊断），不是逐调用猜测。
 
 ## Canonical anchors
 
-- `src/aiops_diagnostics/health/health_report.py` + `rules.py`（装配+词表+health-v2）
+- `src/aiops_diagnostics/health/health_report.py` + `rules.py`（装配+词表）+ `health_metrics.py`（指标/评分/结论+`RULE_VERSION`）+ `health_report_copy.py`（11 语文案）+ `ykc_frames.py`（YKC 帧解码）+ `health_curves.py`（曲线抽稀）——health-v3
 - `src/aiops_diagnostics/gateway/gateway_runtime.py` (_execute_health_report 生命周期)
 - `src/aiops_diagnostics/data/sources.py`、`offline_source.py`、`charging_status.py`
-- `src/aiops_diagnostics/operator/ops_analysis.py` + `ops_analysis_narrative.py`（4 卡+2 字符串）
+- `src/aiops_diagnostics/operator/ops_analysis.py` + `ops_analysis_narrative.py` + `ops_analysis_runner.py`（4 卡+2 字符串+作业执行器——执行已从 gateway_runtime 拆出，runtime 只剩委托入口）
 - `src/aiops_diagnostics/operator/communication.py`（24h/60 行/4s 共享预算+require_current）
 - `src/aiops_diagnostics/conversation/faq.py` + `faq_catalog.json`

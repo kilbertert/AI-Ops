@@ -19,6 +19,7 @@ code:
     - src/aiops_diagnostics/execution/run_deliverability.py
     - src/aiops_diagnostics/execution/operator_run_logs.py
     - src/aiops_diagnostics/gateway/gateway_api.py
+    - src/aiops_diagnostics/gateway/routers/internal_callbacks.py
     - src/aiops_diagnostics/gateway/gateway_schema.py
 ---
 
@@ -57,14 +58,15 @@ code:
 - `execution_manifest.py`：manifest 身份 = **原始字节 sha256**（重序列化会制造漂移）；接受的 schemas = `m3-exec-config/1|operator-exec-config/1|operator-conversation/1|operator-agent/1`（Python/Java 两侧同一集合）；`gateway-conversation/1` **不是 schema**，是 `schema==operator-agent/1` 时 `history_policy` 的必填值（其余 schema 必须 `none`）——schema/策略错配拒整份清单。已配置但非法 → 启动失败；拒 symlink/非常规文件/组可读；manifest 不含凭据。
 - `node_capabilities.require_compatible`：注册+active+心跳 ≤120s+schema+tool_contract+`tools_sha256`（对 operator_tools.json）→ `SETUP_EXECUTOR_UNAVAILABLE/INCOMPATIBLE`。后台检查**不自动撤**现役路由。
 - `node_publication.advance`：route CAS + retracted guard + revision guard；冲突类是刻意的"保持当前已发布状态"，不是错误。
+- **写路径环境闸**（ADR-0333）：`chat_execution.validate_consumer_snapshot` 是公开校验器，`self_service.change_version` 与采用/推进路径拒绝把冻结快照 `consumer_service.content.environment` 与目标环境不符的版本写上 route 指针（`SETUP_VERSION_ENVIRONMENT_MISMATCH`）——环境迁移期的错指针在写入侧挡，不靠读路径兜底。
 
 ## 数据 grant（ADR-0124/0175）
 
 `chat_data_grant.py`：`cdg_`+32B 随机，只存 sha256，绑定 scope_fingerprint/订单/environment/tenant/qa/workflow，`GRANT_TTL_SECONDS=180`。`consume` 只认首次读（后续回放快照）；所有终态都 `revoke_for_qa`。grant 承载**整个请求**（method/path/query）+ inputs——节点不组 CPMS 路径；只有 run_id/qa_id 取不到数据。模块边界：grant 答的是"这个取数凭据是否有效"，调用方读完前仍要重跑订单授权。consumer 链的 6 元组复核见 [consumer/consumer-chat](../consumer/consumer-chat.mdx)。
 
-## 内部面（gateway_api.py）
+## 内部面（routers/internal_callbacks.py）
 
-`/v1/internal/*`：capabilities 上报、delegated/claim charging-status（同一授权+同一读取）、release_candidate/deny_release、node_execution_config（发 manifest 前重验节点+env+可见性+授权后重读+身份匹配）、`operator_tool_authorization`（按 run 自己的 `operation` 分流 operator/consumer 授权，ADR-0185——节点分不清在取谁的数据）、`consumer_tool_proxy`/`operator_cpms_proxy`（节点拿网关签发的 grant 回调，公司令牌永不出网关，白名单=所授请求目标）、`consumer_knowledge_context`、`dify_chat_read`（回放缓存前先查 binding 仍有效——回放也是交数据）。`NO_STORE_PATH_PREFIXES`：按人授权的结果不可缓存，错误响应也一样（否则 403 体会被按订单号 URL 缓存）。`dify_workspace_credential` 走内部令牌闸，未配 secret 整路由 404，跨环境请求 400。
+ADR-0344 起 `/v1/internal/*` 回调面集中在 `gateway/routers/internal_callbacks.py`；`gateway_api.py` 只留应用装配与共享助手。capabilities 上报、delegated/claim charging-status（同一授权+同一读取）、release_candidate/deny_release、node_execution_config（发 manifest 前重验节点+env+可见性+授权后重读+身份匹配）、`operator_tool_authorization`（按 run 自己的 `operation` 分流 operator/consumer 授权，ADR-0185——节点分不清在取谁的数据）、`consumer_tool_proxy`/`operator_cpms_proxy`（节点拿网关签发的 grant 回调，公司令牌永不出网关，白名单=所授请求目标）、`consumer_knowledge_context`、`dify_chat_read`（回放缓存前先查 binding 仍有效——回放也是交数据）、`stream-chunks`（ADR-0337：节点推送的增量**展示流**，不是交付——最终交付仍只走 completions；对端任何错误都静默降级，绝不影响主流程与终局上报）。`NO_STORE_PATH_PREFIXES`：按人授权的结果不可缓存，错误响应也一样（否则 403 体会被按订单号 URL 缓存）。`dify_workspace_credential` 走内部令牌闸，未配 secret 整路由 404，跨环境请求 400。
 
 `execution/operator_run_logs.py` 是**账本投影**：授权过滤不变（publication_app_id+scope_fingerprint+operation+caller.b_user_id+effective_tenant_id），ADR-0249 起 receipt/snapshot 的**白名单字段**参与投影——`environment`、双 node_id、`agent_version_observed`/`gap`、claim/complete/expires 时间、`result_sha256`（对账用，不还原结果）、`delivery_mode`、`answer_review.reason`（集合外回退 `review_not_accepted`）、`history_run_count`、`trial`（权威判据 = chat_binding 的 `operator-trial:` 前缀，绑定串本身不投影）、`evidence_tools`（只投声明集内工具名 ≤16——死 run 吸收路径的键名来自节点回调，非本进程校验常量）、`reason` ≤128 只机器码、`order_no`、`language`；`question` 用同一只读连接按 qa_id+scope_fingerprint join 同库 `assistant_questions`（不走 `get_assistant_question`——它顺带过期收敛，是写）。ADR-0251 起投影再加 `tool_summaries`（`agent_runs.tool_summaries_json`，`{tool:{显示键:值}}`）：写入口 `record_tool_summary` 有界兜底——每工具 ≤8 字段、键 ≤12 字符、标量 `str()[:32]`、列表 `N项`、字典压缩 JSON `[:32]` 且 `default=str` 降格、全 run ≤16 工具、同名后写覆盖、缺 run 静默；读出经 `_tool_summaries`——坏 JSON/非对象形状一律 `{}`，不炸读路径；发射在 `operator_cpms.proxy()`——成功路按 `TOOL_SUMMARY_FIELDS`（代码内 11 工具白名单）摘要 `task.evidence[tool].data`，拒绝路写入参+拒绝码，入参经 `_arg_summary`（k=v、≤6 键、值 ≤24、总长 ≤48）；trace detail 仍 ≤64 机器码，新增 `tools=N`（dispatch 携带数，manifest 非对象形状不再逃逸）与 `allowed`（复核通过）；摘要按工具名覆盖存，**内容属于该工具最近一次调用**——前端只挂到该工具最后一个完成事件下（先拒后成时历史行不背后来结果）；`_summarize_tool` 吞 `(sqlite3.Error, ValueError, TypeError)` 不阻断业务。业务结果内容（答案、快照、证据 data 原文、完整工具参数、凭据、scope 指纹、自由文本失败原文）仍不投影。同名的 `dify/operator_run_logs_api.py` 是管理面 FastAPI 入口，两层别混。
 
@@ -75,4 +77,4 @@ code:
 - `src/aiops_diagnostics/execution/chat_data_grant.py`（模块 docstring 即合同）
 - `src/aiops_diagnostics/execution/chat_route_bindings.py`（模块 docstring 记三条决定）
 - `src/aiops_diagnostics/execution/run_deliverability.py`（唯一交付判定）
-- `src/aiops_diagnostics/gateway/gateway_api.py` (`/v1/internal/*` 回调面)
+- `src/aiops_diagnostics/gateway/routers/internal_callbacks.py`（`/v1/internal/*` 回调面；`gateway_api.py` 只留装配与共享助手）

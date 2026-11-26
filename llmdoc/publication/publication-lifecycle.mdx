@@ -1,5 +1,5 @@
 ---
-description: "发布生命周期：agent_versions 只增不改、live_version 唯一服役判定、chat_route_bindings CAS 发布/撤回/恢复（撤回留行）、publish_audit_ledger 追加且永不抛错、发布顺序 Dify→route→audit、快捷动作 jump≠prompt、qa_rag 开场选择、agent_debug 预检"
+description: "发布生命周期：agent_versions 只增不改、live_version 唯一服役判定、chat_route_bindings CAS 发布/撤回/恢复（撤回留行）、publish_audit_ledger 追加且永不抛错、发布顺序 Dify→route→audit、快捷动作 jump≠prompt、qa_rag 开场选择、agent_content 多语言开场制品（zh 出 Dify 快照/非 zh 出制品）、agent_debug 预检"
 kind: architecture
 relations:
   related:
@@ -12,12 +12,19 @@ code:
     - src/aiops_diagnostics/publication/agent_serviceability.py
     - src/aiops_diagnostics/publication/qa_rag.py
     - src/aiops_diagnostics/publication/shortcut_lifecycle.py
+    - src/aiops_diagnostics/publication/shortcut_models.py
+    - src/aiops_diagnostics/publication/shortcut_store.py
     - src/aiops_diagnostics/publication/agent_debug.py
     - src/aiops_diagnostics/publication/agent_manifest.py
+    - src/aiops_diagnostics/publication/agent_content.py
+    - src/aiops_diagnostics/publication/route_advancement.py
+    - src/aiops_diagnostics/publication/shortcut_migration.py
     - src/aiops_diagnostics/execution/chat_route_bindings.py
     - src/aiops_diagnostics/execution/node_publication.py
     - src/aiops_diagnostics/gateway/gateway_store.py
     - src/aiops_diagnostics/gateway/gateway_schema.py
+    - src/aiops_diagnostics/gateway/dify_publish_ops.py
+    - tools/content/migrate_shortcut_i18n.py
     - tests/gateway/test_banner_api.py
     - tests/gateway/test_banner_row.py
     - tests/publication/test_migrate_shortcut_i18n_tool.py
@@ -41,17 +48,18 @@ code:
 
 ## 发布顺序与审计
 
-- 顺序（`gateway_api.py` publish 路由）：**Dify 发布 → 路由 CAS 推进 → 审计**；`_advance_route_binding` 分写 `app_id`/`workflow_id`/`version` 三列身份，且只在 `outcome.workflow_id` 存在时推进——chat 应用无已发布 workflow，发布只冻结版本（bindings 文件/execution_environment 未配时整个 no-op）。Node 路由走 `node_publication.advance`（route CAS + retracted guard + revision guard；冲突类刻意"保持当前已发布"）。
+- 顺序（编排已抽出到 `gateway/dify_publish_ops.py`，ADR-0344）：**Dify 发布 → 路由 CAS 推进 → 审计**；`_advance_route_binding`（原语在 `publication/route_advancement.py`，ADR-0339）分写 `app_id`/`workflow_id`/`version` 三列身份，且只在 `outcome.workflow_id` 存在时推进——chat 应用无已发布 workflow，发布只冻结版本（bindings 文件/execution_environment 未配时整个 no-op）。Node 路由走 `node_publication.advance`（route CAS + retracted guard + revision guard；冲突类刻意"保持当前已发布"）。
 - `dify_app_registry` 在发布时 upsert `(tenant, entry)→(app_id, agent_name)`。
 - `publish_audit_ledger`（追加/读在 `gateway_store.py`，DDL 已并入 `gateway_schema.py`）**append-only 且永不向发布路径抛错**；记的是**尝试**不止成功——`refused`（带 `reason_code`：CONSUMER_FLOW_INVALID/Dify 码/`PUBLISH_GATE_*`）与 `unchanged` 同样入账；记录发起者身份（审计不是授权）。ADR-0188 的节点制品闸在工具合同变化时先挡 Gateway 部署（见 [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)）。
 
 ## 开场与快捷动作
 
 - `qa_rag.select_customer_agent`：**只服务开场消息/快捷动作路径**；只取 published（经 `live_version`）；被任何已发布快捷动作钉为目标的"推广"agent 被排除在普通 QA 之外——promo 路由已随 #1125 退役，但 `_pinned_promo_agents` 排除刻意保留（ADR-0259 dormant-but-armed：pin 住的 agent 仍是客服槽的错误答案，且管理面仍可发布 promo-intent 行）。`agent_name` 来自注册表把选择变成查表，`None` 保留注册表前的"最新发布"回落；store 失败 → None → 零阶路径。
+- `agent_content.py` 是开场白/预设问题的**版本化内容制品**（Dify 一个字段一个值，没有逐语言变体，多语言权威不能放它那里）：开场白 zh 取运营在 Dify 写的已发布快照、**非 zh 取本制品**（载荷带 `opening_source` dify/artifact 让"哪几门语言还停在制品上"可观测）；`suggested_questions` **只**取本制品。每门语言都是写下来的文案不是机翻，加语言 = 加表行、不改 Dify 配置；`SUPPORTED_LANGUAGES` 覆盖是闸——`starter_gaps` 报缺行，缺行不是"还没补完"而是**用户会看到中文**。这与 shortcut 的语言覆盖门是同一条。
 - `shortcut_lifecycle.py`：`(tenant, business_entry, code)` 身份；同 draft→published→disabled 生命周期；`BANNER_KIND="banner"` vs 动作类；**`jump_path` 跳转动作永远到不了助手入口**；prompt 动作才提交问题；`requires_order` → `CLARIFY_ORDER_REQUIRED`，入口错 → `CLARIFY_WRONG_ENTRY`；内部平台与租户范围分开；文案缺口是确定性 CI 闸。
 - 快捷动作退役语义（ADR-0254/0259）：种子清单现为 consumer `{smart_diagnosis, report_fault, battery_report}`（battery_report=横幅）、operator `{smart_diagnosis, operations_review}`——`case_exploration` 两入口都不播种；`SHORTCUT_INTENTS`/`STABLE_CODES` 与 `target_agent_version` 白名单仍收 `case_exploration`/`solution_discovery` 作行有效性闸——生命周期能力刻意不退役，管理 API 仍接受 promo-intent 行；陈旧 `shortcut_code` 提交经 `find_effective_by_code` 找不到有效行（disabled 不可见）→ shortcut=None → 落普通问题路径，不 404 不出卡；数据侧退役只用 `disable`（disabled 租户行同时是 `list_effective` 里压制平台默认的机制），从不物理删行。
 - `agent_debug.py`：发布前检查（知识绑定/解析/可用性）；`agent_manifest.py` `EnvironmentManifest` 装载+对账。
-- 表结构权威在 `gateway_schema.py`（ADR-0244）：本页全部表（agents/versions/shortcuts/bindings/audit）的 DDL 只在那里声明一次；构造任一 store 调 `ensure(path)` 物化全部 28 张表（`user_version` 记版，v0 库单事务原子升级），`startup()` 同版本也全检、漂移拒 boot。运维面 `aiops-admin schema check|migrate`、`rehearse()`；`MappingStore` 例外。
+- 表结构权威在 `gateway_schema.py`（ADR-0244）：本页全部表（agents/versions/shortcuts/bindings/audit）的 DDL 只在那里声明一次；构造任一 store 调 `ensure(path)` 物化全部表（`user_version` 记版，v0 库单事务原子升级），`startup()` 同版本也全检、漂移拒 boot。运维面 `aiops-admin schema check|migrate`、`rehearse()`；`MappingStore` 例外。
 
 ## Canonical anchors
 
@@ -60,4 +68,4 @@ code:
 - `src/aiops_diagnostics/execution/chat_route_bindings.py`（路由 CAS）
 - `src/aiops_diagnostics/gateway/gateway_store.py` (publish_audit_ledger)
 - `src/aiops_diagnostics/publication/qa_rag.py`（开场选择是查表不是搜索）
-- `src/aiops_diagnostics/gateway/gateway_api.py`（发布编排顺序）
+- `src/aiops_diagnostics/gateway/dify_publish_ops.py` + `src/aiops_diagnostics/publication/route_advancement.py`（发布编排顺序与推进原语）

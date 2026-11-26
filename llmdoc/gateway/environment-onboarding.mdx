@@ -1,5 +1,5 @@
 ---
-description: "环境开通流水线：草稿→计划→任务账本→受管安装→登记→验证→发布的阶段合同、候选停用不变量、dev-host oneshot worker 与目标 dispatch 分工、task-key HMAC 目标管理入口、CAS 制品身份、发布与安装分离"
+description: "环境开通流水线：草稿→计划→任务账本→受管安装→登记→验证→发布→用户入口激活的阶段合同、候选≠现役不变量、单 worker 命令面与交替认领游标、tenant-onboard 编排绝不自动发布、多租户独立停用恢复、task-key HMAC 目标管理入口、CAS 制品身份"
 kind: architecture
 relations:
   requires:
@@ -12,53 +12,35 @@ relations:
     - knowledge/knowledge-plane.mdx
 code:
   paths:
-    - src/aiops_diagnostics/onboarding/drafts.py
-    - src/aiops_diagnostics/onboarding/plans.py
-    - src/aiops_diagnostics/onboarding/tasks.py
-    - src/aiops_diagnostics/onboarding/projection.py
-    - src/aiops_diagnostics/onboarding/artifacts.py
-    - src/aiops_diagnostics/onboarding/task_ssh_runner.py
-    - src/aiops_diagnostics/onboarding/validation_ssh_runner.py
-    - src/aiops_diagnostics/onboarding/publication_ssh_runner.py
-    - src/aiops_diagnostics/onboarding/business.py
-    - src/aiops_diagnostics/onboarding/capacity.py
-    - src/aiops_diagnostics/onboarding/readiness.py
-    - src/aiops_diagnostics/onboarding/trial.py
-    - src/aiops_diagnostics/onboarding/release_trial.py
-    - src/aiops_diagnostics/onboarding/candidate_preparation.py
-    - src/aiops_diagnostics/onboarding/installation.py
-    - src/aiops_diagnostics/onboarding/management.py
-    - src/aiops_diagnostics/onboarding/registration.py
-    - src/aiops_diagnostics/onboarding/validation.py
-    - src/aiops_diagnostics/onboarding/publication.py
-    - src/aiops_diagnostics/onboarding/consumer_trial.py
-    - src/aiops_diagnostics/onboarding/knowledge.py
-    - src/aiops_diagnostics/onboarding/release.py
-    - src/aiops_diagnostics/onboarding/candidate_trial.py
+    - src/aiops_diagnostics/onboarding/*.py
     - src/aiops_diagnostics/admin_cli.py
+    - src/aiops_diagnostics/admin/onboarding.py
     - docs/agents/environment-registry.md
     - docs/acceptance/environment-directory.feature
     - docs/acceptance/environment-directory-qa-plan.md
+    - ops/nginx/environment-user-ingress.conf
+    - ops/nginx/environment-user-ingress-routes.txt
+    - ops/nginx/environment-user-ingress-proxy.inc
     - tools/verification/business-environments/network_preflight.py
-    - tests/gateway/test_environment_plans.py
-    - tests/gateway/test_environment_trial.py
-    - tests/gateway/test_environment_tasks.py
-    - tests/gateway/test_environment_installation.py
-    - tests/gateway/test_environment_candidate_preparation.py
-    - tests/gateway/test_environment_publication.py
+    - tests/gateway/test_environment_*.py
+    - tests/gateway/test_execution_environment_adoption.py
+    - tests/gateway/test_consumer_candidate_trial.py
     - tests/dify/test_environment_management.py
+    - tests/dify/test_environment_overview.py
     - tests/publication/test_environment_release.py
     - tests/publication/test_environment_release_trial.py
     - tests/consumer/test_candidate_trial.py
-    - tests/gateway/test_consumer_candidate_trial.py
     - tests/tooling/test_environment_network_preflight.py
+    - tests/operations/test_environment_user_ingress.py
 ---
 
 # 环境开通流水线
 
 问题：一个新业务环境如何从「登记草稿」走到「正式服务客户」。控制端是 41 上的中央 Gateway
 （任务账本 + admin `environment-*` 命令族 + `/v1/dify/management/environment*` 管理面），
-目标端是受管主机上的独立最小安装（`aiops-access-<环境>`）。阶段合同分散在
+目标端是受管主机上的独立最小安装（`aiops-access-<环境>`）。ADR-0339 起环境域全部收敛在
+`src/aiops_diagnostics/onboarding/` 包（严格无环分层）——原 gateway/、dify/、publication/、
+consumer/ 下的 `environment_*` 模块均已改名迁入，旧路径不再存在。阶段合同分散在
 `docs/agents/environment-registry.md`（D 编号阶段）与 `ops/environments/gateway/install.md`
 （安装侧 D30→D43），本页只记跨阶段不变量与各域分工——逐字段输入形状以源码与手册为准。
 
@@ -67,23 +49,27 @@ code:
 - **候选 ≠ 现役**。候选安装/登记/验证全程停用在独立根，正式目录的准入、路由、凭据一个不动；
   「安装过」不证明「可服务」。发布（D43）是把已验证冻结内容推成现役的独立决定，
   与安装、登记、验证各步分开，绝不在同一动作里暗合。
-- **执行端在 dev-host，不在目标**。`environment_task_worker`/`environment_validation_worker`/
-  `environment_publication_worker` 是发起主机上的 oneshot 执行器（dev-host 用户 timer
-  `aiops-site-preflight` 定期拉起），经 `dev-host exec`（SSH）发出；`environment-task-dispatch`
-  是中央半边、固定在 41 以 `aiops41` 身份跑，目标主机上的任务执行体是安装包内的
-  `installer/task.py`；`environment-trial-dispatch` 跑在目标机（control 形态在 41）。
-  没有远程常驻 daemon。
+- **执行端在 dev-host，不在目标**。命令面只有一个 `environment-task-worker` oneshot
+  （dev-host 用户 timer `aiops-site-preflight` 定期拉起），内部按任务动作分派到
+  `task_ssh_runner`/`validation_ssh_runner`/`publication_ssh_runner` 三个模块，经
+  `dev-host exec`（SSH）发出；站点⇄安装两条认领面按持久游标**严格交替**（ADR-0326）——
+  固定优先级任一侧先手都会饿死另一侧（checking 登记与 reconcile 都跳过计划窗、永不自终态）。
+  `environment-task-dispatch` 是中央半边、固定在 41 以 `aiops41` 身份跑，目标主机上的任务
+  执行体是安装包内的 `installer/task.py`；`environment-trial-dispatch` 跑在目标机
+  （control 形态在 41）。没有远程常驻 daemon。
 - **执行端重核安装器身份**：worker 先查任务修订是 `origin/main` 祖先（merge-base），再用
   `ops/environments/gateway/build-installer.sh` 重建安装器、sha256 比对一致才搬运
-  （`dev-host cp`）；tar 成员白名单 `{REVISION,SHA256SUMS,install.py,runtime_check.py,
-  probe.py,artifact_checks.py,task.py,publication.py}`——包外文件不执行。
+  （`dev-host cp`）；tar 成员白名单制——包外文件不执行。
 - **任务账本是唯一状态真值**：waiting→queued→executing/running(lease)→checking→
-  observed/blocked/expired/reconcile；安装专用 waiting/executing/checking 不被旧 worker 领取。
-  失联只 observe 不重复 apply；取消等安全结果。
-- **计划墙钟只约束启动，不约束在飞链路**（发布任务，ADR-0315）：首个 intent 消费后
-  `attempted` 即 committed——计划过期不再拒在飞前向调用（草稿 revision /
-  references sha / 取消行复核保留），发行物期限按签发时刻铸 `now+3600` 覆盖
-  链尾，queued 卡面对 attempted 豁免 expired 降格；未 attempted 的 queued 照常降格。
+  observed/blocked/expired/reconcile；终态集含 cancelled；安装专用 waiting/executing/checking
+  不被旧 worker 领取；队列动作含 `tenant-onboard` 编排父任务（见下）。失联只 observe
+  不重复 apply；取消等安全结果。
+- **计划墙钟只约束启动，不约束在飞链路**（ADR-0315）：首个 intent 消费后 `attempted` 即
+  committed——计划过期不再拒在飞前向调用（草稿 revision / references sha / 取消行复核保留），
+  发行物期限按签发时刻铸 `now+3600` 覆盖链尾，queued 卡面对 attempted 豁免 expired 降格；
+  未 attempted 的 queued 照常降格。发布步的 `{"state":"started"}` 是**可续跑授权**而非已消费
+  （ADR-0316）：只有记录了结果才把 intent 消费成 `{"execute":False}`；intent 在场时
+  capacity 900s 鲜度闸不按墙钟重核（形状检查保留）。
 - **目标管理入口走 task-key HMAC**：`POST /v1/internal/environment-tasks` 与
   `/v1/internal/environment-trial` 仅回环、`AIOPS_GATEWAY_ENVIRONMENT_TASK_KEY` HMAC 门控，
   未配 task-key/登记文件 → 404 `ENVIRONMENT_TRIAL_DISABLED`。
@@ -91,66 +77,104 @@ code:
   当前文件摘要做 CAS 更新（identity 三元组 + environment + expected_sha256，
   ≤65536，`validate_private_file`）；只改原配置引用、先备份再原子替换，不安装不激活。
   计划预检（P4）的归档成员摘要/Python/内部修订校验 Gateway 与 P3 安装器共用；
-  文件通过不证明 Git 来源、全部配置可启动或现场可用。
+  文件通过不证明 Git 来源、全部配置可启动或现场可用。安装器自身支持彩排-备份-可回滚的
+  前向 schema 迁移（ADR-0272，含 v2 `standard_diagnoses`→v4 `async_jobs` 的在飞任务检查）。
 
 ## 阶段分工（谁拥有哪一段）
 
-- **目录草稿与计划**（gateway 侧）：`environment_drafts` 草稿账本（保存 ≠ 发布）、
-  `environment_plans`/`environment_projection` 计划与投影、`environment_tasks` 任务账本；
-  `environment_registry` 的准入语义归 [identity-scope](../identity/identity-scope.mdx)。
-- **管理面**（dify 侧）：`environment_management.register` 挂在 `self_service_api` 的
-  `management_session`（仅发布 key Bearer，不吃 operator-profiles 闸）之下，外加
-  `/v1/internal/environment-tasks`（task-key HMAC）；「正常公司会话 + 显式目录授权」
-  才动目录，连接草稿不改变生效目录。`environment_registration`（已安装候选接入登记：
-  未知结果只读观察不重造）、`environment_validation`（已登记候选三业务验证）、
-  `environment_publication`（正式发布协调，沿原任务账本）同层。
-- **候选试运行**：控制端 `dify/environment_consumer_trial` 构造 `ConsumerTrial(draft,
-  candidate=adapter)`；目标端 `onboarding/candidate_trial.py` 发 `ect_` 租约——300s、≤20 并发、
-  open→claimed→closed、`installed()` 每次调用重核安装血统（环境行/租户停用态/构建版本/
-  production.env+environment.json+两 manifest 的 sha256 快照），公司会话只存目标进程内存，
-  `close` 不依赖正向授权。`ect_` 只在 `POST /v1/internal/consumer-data/agent` 放通
-  （capability 必须 `agent`），消费侧规则见 [consumer-chat](../consumer/consumer-chat.mdx)。
-  停用客服候选试运行（D35）复用 `/v1/internal/environment-trial`：目标 task-key HMAC +
-  受管目标正常登录交接，≤20 个 5 分钟授权、重启失效，不放开普通目录准入、不写正式
-  route/grant。已发布应用的沿原试跑由 `environment_release_trial`（只消费已发布 app 级
-  key，`ConsumerTrial.published` 三元组，不建临时 app）承担。
-- **目标侧验收**：`environment_readiness` 发布前目标事实检查（不接表单 passed）、
-  `environment_business` 目标本机业务验证（案例只留本环境）、`environment_capacity`
-  三能力运行期采样；`tools/verification/business-environments/network_preflight.py`
-  是调用方侧正式网络预检。
-- **发布**：`onboarding/release.py` 目标消费已核冻结内容——原 Agent 版本与
-  route CAS 仍是唯一发布真值（路由 CAS 合同见
-  [publication-lifecycle](../publication/publication-lifecycle.mdx)）。
-- **逐入口资源准备**（每入口 workspace/knowledge/app 草稿）在受管目录的自助面实现，
-  归 [dify-self-service](../dify/dify-self-service.mdx)；候选知识连接（ckx）归
+下列模块名都在 `onboarding/` 包内。
+
+- **目录草稿与计划**：`drafts` 草稿账本（保存 ≠ 发布）、`plans`/`projection` 计划与投影、
+  `tasks` 任务账本；`registry` 的准入语义归 [identity-scope](../identity/identity-scope.mdx)。
+- **管理面**：`management.register` 挂在 `self_service_api` 的 `management_session`（仅发布
+  key Bearer，不吃 operator-profiles 闸）之下，外加 `/v1/internal/environment-tasks`
+  （task-key HMAC）；「正常公司会话 + 显式目录授权」才动目录，连接草稿不改变生效目录。
+  `registration`（已安装候选接入登记：未知结果只读观察不重造）、`validation`（已登记候选
+  三业务验证）、`publication`（正式发布协调，沿原任务账本）同层。`overview` 是只读聚合
+  （`GET /v1/dify/management/environment-overview`，ADR-0335）：节点事实区分 `heartbeat`
+  （实时，120s）与 `task_receipt`（受管任务时点回执）两个来源；`accuracy_confirmed` 恒
+  false——技术验证通过绝不意味着业务准确性已被接受。
+- **候选试运行**：控制端 `consumer_trial` 构造 `ConsumerTrial(draft, candidate=adapter)`；
+  目标端 `candidate_trial` 发 `ect_` 租约——300s、≤20 并发、open→claimed→closed、
+  `installed()` 每次调用重核安装血统（环境行/租户停用态/构建版本/production.env+
+  environment.json+两 manifest 的 sha256 快照），公司会话只存目标进程内存，`close` 不依赖
+  正向授权。`ect_` 只在 `POST /v1/internal/consumer-data/agent` 放通（capability 必须
+  `agent`），消费侧规则见 [consumer-chat](../consumer/consumer-chat.mdx)。停用客服候选试运行
+  （D35）复用 `/v1/internal/environment-trial`：目标 task-key HMAC + 受管目标正常登录交接，
+  ≤20 个 5 分钟授权、重启失效，不放开普通目录准入、不写正式 route/grant。已发布应用的沿原
+  试跑由 `release_trial`（只消费已发布 app 级 key，`ConsumerTrial.published` 三元组，不建
+  临时 app）承担。
+- **目标侧验收**：`readiness` 发布前目标事实检查（不接表单 passed）、`business` 目标本机
+  业务验证（案例只留本环境）、`capacity` 三能力运行期采样；
+  `tools/verification/business-environments/network_preflight.py` 是调用方侧正式网络预检。
+- **发布**：`release` 目标消费已核冻结内容——原 Agent 版本与 route CAS 仍是唯一发布真值
+  （路由 CAS 合同见 [publication-lifecycle](../publication/publication-lifecycle.mdx)）。
+- **逐入口资源准备**（每入口 workspace/knowledge/app 草稿）在受管目录的自助面实现，归
+  [dify-self-service](../dify/dify-self-service.mdx)；候选知识连接（ckx）归
   [knowledge-plane](../knowledge/knowledge-plane.mdx)；安装器资产与制品交付归
   [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)。
 
+## 编排、采用、恢复与用户入口
+
+- **tenant-onboard 编排**（ADR-0336，`orchestration`）：持久父任务沿既有 `advance_candidates`
+  唤醒串联 candidate-prepare→install→register→[validate]，不新增 daemon。同摘要续签只在
+  草稿+目录+制品引用+授权**逐位未漂移**时发生（各阶段有剩余窗口下限），否则
+  `ENVIRONMENT_TASK_PLAN_EXPIRED`/`ENVIRONMENT_MANAGEMENT_FORBIDDEN`；**绝不自动发布**——
+  链成只置 `ready_to_publish` + `business_accuracy="unconfirmed"`，发布仍是人工二次确认；
+  取消在安全边界级联、已观察资源保留；同租户在飞 → `ENVIRONMENT_TASK_BUSY`，子阶段遇 BUSY
+  退回 waiting。
+- **执行环境采用**（ADR-0333，`execution_adoption`）：`environment-adopt-execution` 一次性
+  迁移默认只读 dry-run；执行为单事务 + 排他备份；consumer 路由**克隆出新版本**（历史不可变，
+  旧会话 409 `CHATFLOW_NEW_CONVERSATION_REQUIRED`），旧环境路由单调撤回绝不删行；对同一目标
+  重复采用按设计拒绝；`--restore` 逐项 CAS、清单严格校验。
+- **多租户独立停用/恢复**（ADR-0347，`onboarding/publication` 与安装侧
+  `ops/environments/gateway/publication.py` 共持）：同环境多租户可按任意顺序独立停用恢复，
+  单租户历史任务行为不变。环境级委派基线 `publication-delegation-baseline.json` 记录委派前
+  事实；**只有最后一个租户离开委派**才回滚 production.env、移除 knowledge-delegation、双侧
+  CAS references——缺任一步会在重启或候选安装时死锁；非 LIFO 恢复（其他租户仍在役）保持
+  环境启用、不动 production.env（零重启），只剥该租户自己的 revision/路由/密钥/
+  consumer.app_id。能力聚合按相位优先 `activated > activating/restoring > staged >
+  configuring`（不是任务 id 字典序）；稳态下 production.env/environment.json/
+  knowledge-delegation 对 installed.json 的摘要绑定失败即拒（fail-closed）；reconcile 优先于
+  「已恢复」相位、迟到取消转入 reconcile；同环境 restore 互斥（`ENVIRONMENT_TASK_BUSY`）。
+- **用户入口激活**（ADR-0319，`ops/nginx/environment-user-ingress*`）：发布之外的最后一步。
+  精确路径白名单（FAQ、`POST /v1/assistant/questions`、QA 详情/取消、`/v1/media/{signed_id}`、
+  `/v1/conversations` 读写删；管理面与 `/v1/internal/*` 排除）；`X-Business-Entry` **缺失按
+  consumer 处理**——41 公网实测合同、最窄兼容位——`operator` 透传 Bearer 并注入环境源钥，
+  其他非空值 403；凭据片段在目标机现场生成 root 0600，缺席时 `nginx -t` 失败（无 fail-open
+  窗口）；客户端自报的 `X-Third-Session`/`X-AIOps-Source-Key` 一律剥除。
+
 ## admin `environment-*` 命令族
 
-`admin_cli.py` 的环境命令族是本流水线的操作面：`environment-registry check|apply|migrate`
-（check 摘要、apply 按 expected_revision CAS 发布登记册——新版输入须 `{environments,
-managers}` 结构、migrate 升级管理目录，ADR-0256）、`environment-draft`/`environment-plan`/
-`environment-artifacts`/`environment-runtime`/`environment-runtime-register`/
-`environment-task-worker`/`environment-task-dispatch`/`environment-trial-dispatch`/
-`environment-release`。`--central-target` 模式不携带 key/URL（身份由 dev-host 记录承担）。
-迁移类命令构造合成 ASSERTED ScopeContext，不走请求身份；其余特权命令面见
-[gateway-runtime](gateway-runtime.mdx)。
+命令实现在 `src/aiops_diagnostics/admin/onboarding.py`（`admin_cli.py` 只是 Typer 根装配壳，
+ADR-0339 拆分）：`environment-registry check|apply|migrate`（check 摘要、apply 按
+expected_revision CAS 发布登记册、migrate 升级管理目录，ADR-0256）、`environment-adopt-execution`、
+`environment-draft`/`environment-plan`/`environment-artifacts`/`environment-runtime`/
+`environment-runtime-register`/`environment-task-worker`/`environment-task-dispatch`/
+`environment-trial-dispatch`/`environment-release prepare|publish|observe|restore`。
+`--central-target` 模式不携带 key/URL（身份由 dev-host 记录承担）。迁移类命令构造合成
+ASSERTED ScopeContext，不走请求身份；其余特权命令面见 [gateway-runtime](gateway-runtime.mdx)。
 
 ## 失败语义速查
 
 - 登记/验证的「未知」结果只回读观察，绝不重建资源（重试会造孤儿）。
 - 安装任务失联：只 observe 同操作与 installed，不重复 apply；恢复经原锁重入。
+- 未派发的安装任务取消/过期直接终态出环（cancelled/blocked）并释放 BUSY；已派发保留冻结
+  reconcile 豁免——观察边界在 dispatched 不在 attempted（ADR-0321）。登记取消按远端资产
+  只读探证（present/absent/unknown）落定，按时间自动终态被明确拒绝（ADR-0328）。
+- `observed_at` 是全部检查通过的最后一刻墙钟，只能由真实再验证刷新；complete 是再证明
+  不是交付（ADR-0318）。
 - 候选凭据不能放大到控制默认库或正式路由——准备串联须 Gateway 与桥配套，旧单步骤保持。
 - 安装通过仍不注册、不跑模型、不激活租户；真实业务验证是独立后继。
 
 ## Canonical anchors
 
 - `src/aiops_diagnostics/onboarding/tasks.py`（任务账本状态机）
-- `src/aiops_diagnostics/onboarding/task_ssh_runner.py`（dev-host 执行端：merge-base + sha256 + tar 白名单 + dev-host cp）
+- `src/aiops_diagnostics/onboarding/task_ssh_runner.py`（dev-host 执行端：merge-base + sha256 + tar 白名单 + 交替认领游标）
+- `src/aiops_diagnostics/onboarding/orchestration.py`（tenant-onboard 编排：同摘要续签、绝不自动发布）
 - `src/aiops_diagnostics/onboarding/management.py`（`/v1/dify/management/environment*` + `/v1/internal/environment-tasks` 挂载）
 - `src/aiops_diagnostics/onboarding/{registration,validation,publication}.py`（登记/验证/发布协调）
 - `src/aiops_diagnostics/onboarding/candidate_trial.py`（`ect_` 目标租约）
 - `src/aiops_diagnostics/onboarding/release.py`（发布真值 = 原 Agent 版本 + route CAS）
-- `src/aiops_diagnostics/admin_cli.py`（`environment-*` 命令族）
+- `src/aiops_diagnostics/admin/onboarding.py`（`environment-*` 命令族实现；`admin_cli.py` 只是装配壳）
 - `ops/environments/gateway/install.md`（安装侧阶段手册，D30→D43）、`docs/agents/environment-registry.md`（D 阶段合同）
