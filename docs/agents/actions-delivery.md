@@ -86,7 +86,8 @@ flowchart LR
 | Sandbox image | 沙箱输入变更或手动 | AFK 的运行镜像，不是 Gateway 生产镜像 |
 
 GitLab mirror按push、delete及手动触发同步分支和标签；独立连接失败不代表Gateway部署失败。
-镜像同步成功不能替代上述 CI、合并或部署结果。
+镜像同步成功不能替代上述 CI、合并或部署结果。GITHUB_TOKEN新建标签不会触发push工作流；
+发布标签镜像等待下次正常push，需即时同步时单独执行`gh workflow run gitlab-mirror.yml --ref main`。
 
 ## 版本发布
 
@@ -97,7 +98,8 @@ GitLab mirror按push、delete及手动触发同步分支和标签；独立连接
 3. CD在串行锁中核SHA、SemVer和注释标签，固定同SHA的`vMAJOR.MINOR.PATCH`后检出该提交执行部署。
    同版本异SHA、轻量标签与异SHA竞争在生产写入前拒绝；部署失败保留标签，可重跑同一SHA。
    标签存在只表示候选已固定，不证明部署成功；代码修复经PR后准备新版本。
-4. 部署成功后发布同tag的GitHub Release，只取该版本CHANGELOG章节。`CHANGELOG.md`仍gitignore，
+4. 部署成功后发布同tag的GitHub Release，只取该版本CHANGELOG章节；分节仅使用已发布Release的SemVer标签
+   和当前目标，尚未发布的失败候选标签不截断下一批内容。查询Release失败则停止，不用不完整历史生成说明。`CHANGELOG.md`仍gitignore，
    不提交、不回推main；人工升级/兼容说明仍放`RELEASE-NOTES.md`。旧Release和标签不移动。
 5. `gh run rerun <RUN> --failed`只补失败作业。Gateway部署成功、Release失败时，只补说明，不回滚/重启服务；
    CD Watch保留workflow结果和部署job结果，仍监控连续失败、卡住和取数异常，空闲runner不产生告警。

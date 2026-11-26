@@ -88,7 +88,7 @@ code:
 | 组件 | 目标 | 机制 |
 |---|---|---|
 | Gateway `src/` | 41 `/opt/aiops-41` | 负责人在main显式dispatch `target_sha`；CD核main完整SHA/SemVer，在部署锁中固定同SHA的注释版本标签，再检出该SHA运行`deploy-41.sh --commit`。main普通合并不部署。文件拷贝部署，41无.git；操作见`docs/agents/actions-delivery.md#版本发布` |
-| Gateway release notes | GitHub Releases | 部署成功后从同SHA按SemVer生成单版本章节，发布同tag的Release，不再生成逐提交release-SHA记录；说明失败单独重跑，不回滚服务。CD Watch保留workflow和部署job两个结果（ADR0348） |
+| Gateway release notes | GitHub Releases | 部署成功后从同SHA按SemVer生成单版本章节，发布同tag的Release，分节只认已发布Release和目标标签，失败候选不截断变化；不再生成逐提交release-SHA记录；说明失败单独重跑，不回滚服务。CD Watch保留workflow和部署job两个结果（ADR0348） |
 | Java 节点 jar+声明+回调 | 41 node-runtime | 手工三件套（见 [execution-node-contract](../execution/execution-node-contract.mdx)）：git archive→离线 mvn→`dev-host cp --artifact-sha256`→原子 `current`→定向重建→就绪轮询 |
 | model-proxy | 41 | 随 Gateway 镜像走；Compose+镜像成对切换（见 [execution-node-contract](../execution/execution-node-contract.mdx)） |
 | Dify 栈+console bridge+web 镜像 | 36 `/opt/dify` | 独立版本化：上游 1.17.1+`patches/`（sha256 校验 apply，拒陈旧补丁）+`web-patches/` 重建镜像（**只认 webpack**，Turbopack 零产物）；`DIFY_WEB_IMAGE` 切换必须 `--force-recreate`；36 侧组装支持原始三 COPY 与 `docker cp` 成品树单 COPY 两种等价形式 |

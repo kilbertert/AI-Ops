@@ -221,7 +221,9 @@ else:
         assert _git(["rev-parse", "refs/tags/v1.2.3^{commit}"], remote, env) == target
 
 
-@pytest.mark.parametrize("case", ["create", "edit", "missing_section", "mismatch", "unrelated_tag"])
+@pytest.mark.parametrize(
+    "case", ["create", "edit", "missing_section", "mismatch", "unrelated_tag", "failed_candidate"]
+)
 def test_release_notes_publish_only_selected_version_section(tmp_path: Path, case: str) -> None:
     repo, remote = tmp_path / "repo", tmp_path / "remote.git"
     repo.mkdir()
@@ -230,7 +232,10 @@ def test_release_notes_publish_only_selected_version_section(tmp_path: Path, cas
     subprocess.run(["git", "init", "--initial-branch=main", str(repo)], check=True, capture_output=True)
     (repo / "VERSION").write_text("1.2.3\n")
     _git(["add", "VERSION"], repo, env)
-    _git(["commit", "-m", "feat(example): selected release batch"], repo, env)
+    if case == "failed_candidate":
+        _git(["commit", "-m", "feat(example): feature in failed candidate"], repo, env)
+        _git(["tag", "-a", "v1.2.1", "-m", "reserved but not released"], repo, env)
+    _git(["commit", "--allow-empty", "-m", "feat(example): selected release batch"], repo, env)
     target = _git(["rev-parse", "HEAD"], repo, env)
     _git(["tag", "-a", "v1.2.3", "-m", "selected release"], repo, env)
     _git(["remote", "add", "origin", str(remote)], repo, env)
@@ -244,7 +249,8 @@ def test_release_notes_publish_only_selected_version_section(tmp_path: Path, cas
     dev_changelog = tmp_path / "dev-changelog"
     heading = "9.9.9" if case == "missing_section" else "1.2.3"
     dev_changelog.write_text(
-        "#!/bin/sh\ncat > \"$1/CHANGELOG.md\" <<'EOF'\n"
+        '#!/bin/sh\nprintf \'%s\' "$GIT_CLIFF_TAG_PATTERN" > "$TEST_TAG_PATTERN"\n'
+        "cat > \"$1/CHANGELOG.md\" <<'EOF'\n"
         f"# Changelog\n\n## [Unreleased]\n\n## [{heading}] - 2026-11-26\n\n### Added\n"
         "- Ship the selected batch\n\n"
         "## [1.2.2] - 2026-10-01\n\n### Fixed\n- Older content\nEOF\n"
@@ -254,6 +260,7 @@ def test_release_notes_publish_only_selected_version_section(tmp_path: Path, cas
     gh = tmp_path / "gh"
     gh.write_text(
         "#!/bin/sh\n"
+        'if [ "$1" = api ]; then printf \'%s\\n\' \'[[{"tag_name":"v1.2.2","draft":false}]]\'; exit 0; fi\n'
         'if [ "$2" = view ]; then exit "$TEST_RELEASE_EXISTS"; fi\n'
         'printf \'%s\\n\' "$*" > "$TEST_CALL"\n'
         'while [ $# -gt 0 ]; do if [ "$1" = --notes-file ]; then cat "$2" >> "$TEST_CALL"; fi; shift; done\n'
@@ -272,6 +279,8 @@ def test_release_notes_publish_only_selected_version_section(tmp_path: Path, cas
             "VERSION_TAG": "v1.2.3",
             "TEST_RELEASE_EXISTS": "0" if case == "edit" else "1",
             "TEST_CALL": str(call),
+            "GITHUB_REPOSITORY": "example/repo",
+            "TEST_TAG_PATTERN": str(tmp_path / "pattern"),
         },
     )
     if case in {"missing_section", "mismatch"}:
@@ -284,3 +293,7 @@ def test_release_notes_publish_only_selected_version_section(tmp_path: Path, cas
         assert ("--verify-tag" in command) if case != "edit" else ("--prerelease=false" in command)
         assert "Ship the selected batch" in command
         assert "Unreleased" not in command and "Older content" not in command
+        pattern = (tmp_path / "pattern").read_text()
+        assert re.fullmatch(pattern, "v1.2.2") and re.fullmatch(pattern, "v1.2.3")
+        assert not re.fullmatch(pattern, "v1.2.4")
+        assert not re.fullmatch(pattern, "v1.2.1")

@@ -200,6 +200,19 @@ jobs:
 
           notes=$(mktemp)
           trap 'rm -f "$notes"' EXIT
+          # Reserved-but-failed candidate tags are not published release boundaries.
+          published=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")
+          GIT_CLIFF_TAG_PATTERN=$(printf '%s' "$published" | python3 -c '
+          import json, os, re, sys
+          tags = {os.environ["VERSION_TAG"]}
+          for page in json.load(sys.stdin):
+              for release in page:
+                  tag = release["tag_name"]
+                  if not release["draft"] and re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag):
+                      tags.add(tag)
+          print("^(?:" + "|".join(re.escape(tag) for tag in sorted(tags)) + ")$")
+          ')
+          export GIT_CLIFF_TAG_PATTERN
           dev-changelog "$repo_root"
           if [ ! -s "$repo_root/CHANGELOG.md" ]; then
             echo "::error::dev-changelog produced no $repo_root/CHANGELOG.md" >&2

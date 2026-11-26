@@ -193,6 +193,13 @@ const many = assess({
 cases.push(["连续 3 次失败 ⇒ 报警", many.ok, false]);
 cases.push(["告警种类正确", many.alarms.map((a) => a.kind).join(","), "straight-failures"]);
 
+cases.push([
+  "版本发布失败时保留Gateway部署成功的分诊依据",
+  assess({ runs: [{ status: "completed", conclusion: "failure", deploymentConclusion: "success" }],
+    unfinishedRuns: [], fetchedOk: true }).latest.deploymentConclusion,
+  "success",
+]);
+
 // 7b. 🔴 **未完成集合取不到 ⇒ 未知**（不能用最近列表代替：那个窗口不完整，
 //     而「jobs=0 ⇒ 死锁」这条判据恰恰依赖完整性）。
 cases.push([

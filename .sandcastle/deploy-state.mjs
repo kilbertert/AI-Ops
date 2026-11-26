@@ -278,7 +278,10 @@ export function assess(input) {
     ok: alarms.length === 0,
     alarms,
     notes: [],
-    latest: classifyRun(newest, { now: input.now, stuckMinutes: input.stuckMinutes }),
+    latest: {
+      ...classifyRun(newest, { now: input.now, stuckMinutes: input.stuckMinutes }),
+      deploymentConclusion: newest.deploymentConclusion ?? null,
+    },
     straight,
   };
 }

@@ -348,6 +348,9 @@ function main() {
       `最近一次：\`${result.latest.kind}\`（${result.latest.reason}）` +
         `，最近**已完成**的 CD 里开头连续 ${result.straight} 次不是 success。`,
     );
+    if (result.latest.deploymentConclusion === "success" && result.latest.kind === "failed") {
+      lines.push("Gateway部署已成功；版本发布未完成。只补发布说明，不据此回滚或重启服务。");
+    }
   }
   lines.push(
     "",

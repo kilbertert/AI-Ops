@@ -13,6 +13,8 @@ CD先验证SHA的完整性、main祖先关系与SemVer；在现有部署锁内�
 标签保留发布候选的归属，不证明已经部署：失败后可重跑相同SHA，代码修复需新版本。
 仅在部署成功后生成CHANGELOG中该版本的章节并发布同tag的GitHub Release；说明失败只重跑说明作业。
 CHANGELOG仍是gitignored生成物，不回写main；旧release-<sha>记录与既有标签保留。
+生成时只把已发布Release的SemVer标签及目标标签交给git-cliff分节，失败候选标签不成为发布边界，
+因此修复后的版本仍包含失败候选中首次上线的变化；Release列表必须完整分页且取数成功。
 
 CD Watch保留workflow结果与deploy-41结果：发布说明失败不再冒充完整成功，也不被解释为需要回滚服务。
 无发布任务时不检查空闲runner；取数失败、已启动任务卡住与连续失败仍按既有阈值告警。
