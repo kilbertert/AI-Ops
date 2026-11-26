@@ -453,6 +453,41 @@ function confirmAction(message: string): boolean {
   return window.confirm(message)
 }
 
+function isLifecycleTask(item: SiteTask): boolean {
+  return ['tenant-onboard', 'environment-publish'].includes(item.action || '')
+}
+
+function isPublishReadyOnboard(item: SiteTask): boolean {
+  return (
+    item.action === 'tenant-onboard' &&
+    item.state === 'observed' &&
+    Boolean(item.result.ready_to_publish)
+  )
+}
+
+// 与服务端发布闸门同口径（onboarding/publication.py 的 submit）：观察通过、未取消、
+// 三项能力全部 passed。验证任务 checks 只按 capability 生成（onboarding/validation.py），
+// 故三项 capability 均 passed 即等价于验证范围完整且全部检查通过。
+function isFullValidationReady(item: SiteTask): boolean {
+  if (item.action !== 'candidate-validate' || item.state !== 'observed' || item.cancel_requested)
+    return false
+  const passed = new Set(
+    (item.result.checks || [])
+      .filter((check) => check.state === 'passed' && check.capability)
+      .map((check) => check.capability),
+  )
+  return ['consumer', 'order', 'offline'].every((cap) => passed.has(cap))
+}
+
+function checkDisplay(check: { id?: string; capability?: string; state: string }) {
+  const tone: BadgeTone =
+    check.state === 'passed' ? 'success' : check.state === 'blocked' ? 'error' : 'neutral'
+  const label = checkLabels[check.id || ''] || capabilityLabels[check.capability || ''] || check.id
+  const stateText =
+    check.state === 'passed' ? '通过' : check.state === 'blocked' ? '阻塞' : '未验证'
+  return { tone, label, stateText }
+}
+
 function summarizeNodeCell(env: OverviewEnvironment): string {
   const primary =
     env.nodes.find((node) => node.source === 'heartbeat' && node.status === 'online') ??
@@ -875,18 +910,15 @@ export default function EnvironmentManagement() {
         )
       } else {
         setLastSubmittedTaskId(result.id)
-        const isLifecycleTask = ['tenant-onboard', 'environment-publish'].includes(
-          result.action || '',
-        )
+        const lifecycleResult = isLifecycleTask(result)
         const isActionableResult =
           ['queued', 'running', 'reconcile'].includes(result.state) ||
-          (result.action === 'tenant-onboard' &&
-            result.state === 'observed' &&
-            Boolean(result.result.ready_to_publish))
+          isPublishReadyOnboard(result) ||
+          isFullValidationReady(result)
         setTaskFilter((current) => {
           if (current === 'active' && !isActionableResult) return 'all'
-          if (current === 'lifecycle' && !isLifecycleTask) return 'all'
-          if (current === 'single' && isLifecycleTask) return 'all'
+          if (current === 'lifecycle' && !lifecycleResult) return 'all'
+          if (current === 'single' && lifecycleResult) return 'all'
           return current
         })
         setTasks((current) => [result, ...current.filter((item) => item.id !== result.id)])
@@ -944,15 +976,6 @@ export default function EnvironmentManagement() {
   }
 
   const hasValidPlan = Boolean(plan && !dirty && plan.state !== 'expired')
-  const isFullValidationReady = (item: SiteTask) => {
-    if (item.action !== 'candidate-validate' || item.state !== 'observed') return false
-    const passed = new Set(
-      (item.result.checks || [])
-        .filter((check) => check.state === 'passed' && check.capability)
-        .map((check) => check.capability),
-    )
-    return ['consumer', 'order', 'offline'].every((cap) => passed.has(cap))
-  }
   const enabledTenantIds = new Set(
     selectedOverview
       ? selectedOverview.enabled
@@ -982,12 +1005,7 @@ export default function EnvironmentManagement() {
       settledTenants.add(key)
       continue
     }
-    if (
-      item.action === 'tenant-onboard' &&
-      item.state === 'observed' &&
-      Boolean(item.result.ready_to_publish) &&
-      Boolean(item.result.validation_task_id)
-    ) {
+    if (isPublishReadyOnboard(item) && Boolean(item.result.validation_task_id)) {
       pendingPublishOnboardIds.add(item.id)
       settledTenants.add(key)
       continue
@@ -1003,20 +1021,12 @@ export default function EnvironmentManagement() {
   const hasPendingPublish = pendingPublishOnboardIds.size > 0 || pendingPublishValidateIds.size > 0
   const hasReadyOnboard =
     hasPendingPublish ||
-    tasks.some(
-      (item) =>
-        (item.action === 'tenant-onboard' &&
-          item.state === 'observed' &&
-          Boolean(item.result.ready_to_publish)) ||
-        isFullValidationReady(item),
-    )
+    tasks.some((item) => isPublishReadyOnboard(item) || isFullValidationReady(item))
   const isActionableTask = (item: SiteTask) =>
     ['queued', 'running', 'reconcile'].includes(item.state) ||
     pendingPublishOnboardIds.has(item.id) ||
-    (item.action === 'tenant-onboard' &&
-      item.state === 'observed' &&
-      Boolean(item.result.ready_to_publish) &&
-      !item.result.validation_task_id)
+    pendingPublishValidateIds.has(item.id) ||
+    (isPublishReadyOnboard(item) && !item.result.validation_task_id)
 
   const hasActivated =
     !hasPendingPublish &&
@@ -1031,9 +1041,7 @@ export default function EnvironmentManagement() {
   const onboardCaseInvalid = Boolean(onboardCaseRef) && !/^[\w-]{1,64}$/.test(onboardCaseRef)
 
   const activeTasksCount = tasks.filter(isActionableTask).length
-  const lifecycleTasksCount = tasks.filter((item) =>
-    ['tenant-onboard', 'environment-publish'].includes(item.action || ''),
-  ).length
+  const lifecycleTasksCount = tasks.filter((item) => isLifecycleTask(item)).length
   const singleTasksCount = tasks.length - lifecycleTasksCount
 
   // 首屏「开通与租户」保留全部进行中、全部待发布、刚刚手动提交的任务 + 最近 2 条核心开通/发布记录
@@ -1046,21 +1054,15 @@ export default function EnvironmentManagement() {
     )
     const priorityIds = new Set(priority.map((item) => item.id))
     const recent = tasks
-      .filter(
-        (item) =>
-          ['tenant-onboard', 'environment-publish'].includes(item.action || '') &&
-          !priorityIds.has(item.id),
-      )
+      .filter((item) => isLifecycleTask(item) && !priorityIds.has(item.id))
       .slice(0, 2)
     return [...priority, ...recent]
   })()
 
   const visibleOpsTasks = tasks.filter((item) => {
     if (taskFilter === 'active') return isActionableTask(item)
-    if (taskFilter === 'lifecycle')
-      return ['tenant-onboard', 'environment-publish'].includes(item.action || '')
-    if (taskFilter === 'single')
-      return !['tenant-onboard', 'environment-publish'].includes(item.action || '')
+    if (taskFilter === 'lifecycle') return isLifecycleTask(item)
+    if (taskFilter === 'single') return !isLifecycleTask(item)
     return true
   })
 
@@ -1628,22 +1630,7 @@ export default function EnvironmentManagement() {
                       {plan.checks.length > 0 && (
                         <ul className="flex flex-wrap gap-2">
                           {plan.checks.map((check) => {
-                            const tone: BadgeTone =
-                              check.state === 'passed'
-                                ? 'success'
-                                : check.state === 'blocked'
-                                  ? 'error'
-                                  : 'neutral'
-                            const label =
-                              checkLabels[check.id || ''] ||
-                              capabilityLabels[check.capability || ''] ||
-                              check.id
-                            const stateText =
-                              check.state === 'passed'
-                                ? '通过'
-                                : check.state === 'blocked'
-                                  ? '阻塞'
-                                  : '未验证'
+                            const { tone, label, stateText } = checkDisplay(check)
                             return (
                               <li
                                 key={check.id}
@@ -3184,7 +3171,7 @@ export default function EnvironmentManagement() {
                                     {taskLabels[item.state] || item.state}
                                     ；业务准确性待确认，正式入口未启用
                                   </p>
-                                  {item.state === 'observed' && (
+                                  {pendingPublishValidateIds.has(item.id) && (
                                     <Button
                                       type="button"
                                       variant="primary"
@@ -3324,22 +3311,7 @@ export default function EnvironmentManagement() {
                               {item.result.checks && item.result.checks.length > 0 && (
                                 <div className="flex flex-wrap gap-1.5">
                                   {item.result.checks.map((check) => {
-                                    const tone: BadgeTone =
-                                      check.state === 'passed'
-                                        ? 'success'
-                                        : check.state === 'blocked'
-                                          ? 'error'
-                                          : 'neutral'
-                                    const label =
-                                      checkLabels[check.id || ''] ||
-                                      capabilityLabels[check.capability || ''] ||
-                                      check.id
-                                    const stateText =
-                                      check.state === 'passed'
-                                        ? '通过'
-                                        : check.state === 'blocked'
-                                          ? '阻塞'
-                                          : '未验证'
+                                    const { tone, label, stateText } = checkDisplay(check)
                                     return (
                                       <p
                                         key={check.id || check.capability}
