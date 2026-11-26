@@ -199,7 +199,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "conversation/faq.py": 1,  # faq 标识符
     "data/sources.py": 4,  # 传输层白名单 ×2 + SQL 标识符 + MySQL 账户形状
     "dify/dify_app_registry.py": 1,  # 应用 id
-    "dify/dify_dsl_pull.py": 1,  # 应用 id
+    "dify/dify_dsl_client.py": 1,  # 应用 id
     "dify/dify_workspaces.py": 1,  # 应用 id
     "dify/operator_run_logs_api.py": 1,  # run_id；app_id 沿用十六进制 UUID 形状，不匹配本字母表
     "dify/self_service_api.py": 1,  # knowledge_base_id
@@ -226,7 +226,7 @@ _ALLOWED_ALPHABET_LITERALS = {
     "operator/operator_tools.py": 1,  # 工具参数名
     "operator/station_tariff.py": 1,  # 站点 id
     "publication/agent_lifecycle.py": 1,  # 智能体 id
-    "publication/shortcut_lifecycle.py": 1,  # 智能体版本
+    "publication/shortcut_models.py": 1,  # 智能体版本
     "tdengine_proxy.py": 2,  # 传输层白名单 / SQL 标识符
 }
 

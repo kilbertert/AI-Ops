@@ -427,7 +427,7 @@ def test_no_raw_sqlite_connect_on_the_shared_file() -> None:
 _DELEGATED_STORE_FILES = {
     "gateway/gateway_store.py",
     "publication/agent_lifecycle.py",
-    "publication/shortcut_lifecycle.py",
+    "publication/shortcut_store.py",
     "conversation/conversation_store.py",
     "dify/dify_run_store.py",
     "execution/agent_runs.py",
