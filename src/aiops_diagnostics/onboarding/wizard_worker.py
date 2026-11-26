@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import shlex
@@ -42,6 +43,7 @@ SNAIL_CA_CERT_ON_41 = "/etc/aiops-node-runtime/tls/ca.crt"
 SNAIL_CA_KEY_ON_41 = "/etc/aiops-node-runtime/tls/ca.key"
 SNAIL_TRUSTSTORE_ON_41 = "/etc/aiops-node-runtime/tls/public/truststore.p12"
 NODE_JAVA_IMAGE = "sha256:23cc5734ff46e776f51ce66eb9ee08444fd47caabec0a95b7eb6e94be2d3696d"
+CENTRAL_EGRESS_SOURCES = ("36.156.159.175", "47.97.160.153")
 
 
 class WizardWorkerError(RuntimeError):
@@ -1016,6 +1018,27 @@ def _step_cold_install_and_onboard(
     }
 
 
+def _resolve_customer_tool_sources(job_req: dict[str, Any]) -> list[str]:
+    """合并中控 36/41 出口 IP 与调用方附加 allow_sources（去重、限 8 个有效 IPv4）。"""
+    sources: list[str] = list(CENTRAL_EGRESS_SOURCES)
+    extra = job_req.get("allow_sources") or []
+    if isinstance(extra, (str, bytes)) or not isinstance(extra, list):
+        raise WizardWorkerError("INVALID_ALLOW_SOURCES: allow_sources 必须是 IPv4 字符串列表")
+    for raw in extra:
+        candidate = str(raw).strip()
+        if not candidate:
+            continue
+        try:
+            normalized = str(ipaddress.IPv4Address(candidate))
+        except ipaddress.AddressValueError as exc:
+            raise WizardWorkerError(f"INVALID_ALLOW_SOURCES: 非法 IPv4 地址 {candidate}") from exc
+        if normalized not in sources:
+            sources.append(normalized)
+        if len(sources) >= 8:
+            break
+    return sources
+
+
 def _step_customer_nginx(
     root: Path,
     job_req: dict[str, Any],
@@ -1026,12 +1049,12 @@ def _step_customer_nginx(
     env = str(job_req["environment"])
     api_domain = str(job_req["api_domain"])
     local_port = int(job_req.get("local_port") or 8788)
+    sources = _resolve_customer_tool_sources(job_req)
     tool_conf = "\n".join(
         [
             f"# AI-Ops managed tool ingress for {env} ({api_domain})",
             "location ^~ /_aiops_internal/ {",
-            "    allow 120.55.45.59;",
-            "    allow 124.243.178.156;",
+            *[f"    allow {src};" for src in sources],
             "    allow 127.0.0.1;",
             "    deny all;",
             "    if ($request_method !~ ^(GET|POST)$) { return 405; }",
@@ -1055,20 +1078,18 @@ def _step_customer_nginx(
         tmp = Path(tmpdir)
         if render_script.is_file():
             tool_conf_file = tmp / "aiops-tool-ingress.conf"
+            cmd = [
+                sys.executable,
+                str(render_script),
+                "--ingress",
+                "--gateway",
+                f"http://127.0.0.1:{local_port}",
+            ]
+            for src in sources:
+                cmd.extend(["--allow-source", src])
+            cmd.extend(["--out", str(tool_conf_file)])
             subprocess.run(
-                [
-                    sys.executable,
-                    str(render_script),
-                    "--ingress",
-                    "--gateway",
-                    f"http://127.0.0.1:{local_port}",
-                    "--allow-source",
-                    "120.55.45.59",
-                    "--allow-source",
-                    "124.243.178.156",
-                    "--out",
-                    str(tool_conf_file),
-                ],
+                cmd,
                 cwd=str(root),
                 env={**os.environ, "PYTHONPATH": str(root / "src")},
                 check=True,

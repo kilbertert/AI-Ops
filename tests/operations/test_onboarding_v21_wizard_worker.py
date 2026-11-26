@@ -777,15 +777,23 @@ def test_step_customer_nginx_renders_canonical_tool_ingress_and_resolves_nginx_b
 
     res = wizard_worker._step_customer_nginx(
         repo_root,
-        {"environment": "jiejia", "api_domain": "api.juxichongdian.cn", "local_port": 8788},
+        {
+            "environment": "jiejia",
+            "api_domain": "api.juxichongdian.cn",
+            "local_port": 8788,
+            "allow_sources": ["10.0.0.9", "36.156.159.175"],
+        },
         pinned_host=_FakePinnedHost(),
     )
     assert res == {"ok": True}
     tool_conf = copied["/tmp/wizard-jiejia-aiops-tool-ingress.conf"]
     assert "location = /v1/internal/consumer-knowledge" in tool_conf
     assert "/v1/internal/operator-runs/" in tool_conf
-    assert "120[.]55[.]45[.]59" in tool_conf
-    assert "124[.]243[.]178[.]156" in tool_conf
+    assert "36[.]156[.]159[.]175" in tool_conf
+    assert "47[.]97[.]160[.]153" in tool_conf
+    assert "10[.]0[.]0[.]9" in tool_conf
+    assert "120[.]55[.]45[.]59" not in tool_conf
+    assert "124[.]243[.]178[.]156" not in tool_conf
     assert commands and "NGINX_BIN=" in commands[0] and "/www/server/nginx/sbin/nginx" in commands[0]
 
 
