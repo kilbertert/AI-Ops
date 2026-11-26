@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.nginx
+
 
 def test_exchange_ingress_uses_tcp_peer_not_forwarded_headers(tmp_path):
     nginx = shutil.which("nginx")

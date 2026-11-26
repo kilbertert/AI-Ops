@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.deploy_tooling
-
 NODE_TOKEN = "node-token-alpha-0123456789"
 
 

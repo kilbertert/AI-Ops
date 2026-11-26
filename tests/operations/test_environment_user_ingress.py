@@ -39,6 +39,8 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import MediaProxy, MediaRes
 from aiops_diagnostics.onboarding.registry import apply as registry_apply
 from aiops_diagnostics.onboarding.registry import load as registry_load
 
+pytestmark = pytest.mark.nginx
+
 ROOT = Path(__file__).parents[2]
 CONF = ROOT / "ops" / "nginx" / "environment-user-ingress.conf"
 INC = ROOT / "ops" / "nginx" / "environment-user-ingress-proxy.inc"
