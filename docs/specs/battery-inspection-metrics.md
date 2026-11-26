@@ -10,13 +10,12 @@
 > 另外 `docs/*.docx` 已被 `.gitignore` 忽略（见 §「不做的事」），
 > 原件在**任何 clone 与 CI 里都不存在** —— 这也是必须落一份的理由。
 >
-> **状态：本规格还不是可实现的契约。** 见第 6 节「三个产品缺口」：
-> 总健康分怎么合成、体检单结论文案与分类、规则版本 —— 三项文档里都没有定义，
-> 填上之前本文件只能作为**指标口径**引用，不能作为**验收依据**。
+> **状态：已升级为可执行契约（规则版本 `health-v3`，2026-11-26 业务拍板闭合第 6 节三项缺口）。**
+> 见第 6 节「已确认的决策与 41 现网数据源盘点」及第 8 节「规则版本与修订记录」。
 >
-> **与现行实现的关系**：今天 `health_report.py` 只算**一个**指标（`stop_reason`，
-> `HEALTH_RULE_VERSION = "health-v1"`），本规格里的其余指标、五维评分与 SOH 模型
-> **均未实现**。本文件不改变任何现有行为。
+> **与现行实现的关系**：`health-v3` 在既有 `POST/GET /v1/health-report-jobs` 契约上完整实现
+> 7 项充电体检指标、五维雷达图评分、SOH 浅充判定与总健康分（取有效 SOH）、确定性分档多语结论
+> 及温度/电压/功率曲线；数据缺失时严格返回 `status="unavailable"` + `reason_code`，不编造数值。
 
 ---
 
@@ -225,67 +224,81 @@ SOH = E_actual / E_rated × 100 %
 
 ---
 
-## 6. 三个产品缺口（**文档没定义，不是待实现**）
+## 6. 业务决策收口与 41 现网数据源盘点（2026-11-26 拍板）
 
-以下三项在本规格里**找不到定义**。它们不是「还没做」，是**没写**。
-填上之前，第 3、4 节只能作为指标口径，不能作为验收依据。
+原第 6 节列出的三项产品缺口已由项目负责人于 **2026-11-26** 确认落地口径，同时完成 41 生产环境只读数据源盘点，作为 `health-v3` 服务端实现与前端联调的唯一权威依据。
 
-### 缺口 1：总健康分怎么合成
+### 决策 1：总健康分（原型 `电池健康 89.0`）取有效 SOH
 
-**事实**：截图报告页显示 `电池健康 89.0`；本文档第 4 节给了**五个维度分**，
-但**五个维度分之间没有任何聚合公式** —— 全文没有「总分」「综合评分」「权重」「加权」
-这些字样（各 0 次）。`89.0` 与五维分的关系**未知**。
+- **结论（暂定选项 A）**：`report.overall_health_score`（与 `report.overview.overall_health_score`）**直接取有效 `SOH`**（第 2.2 节），`overall_health_source = "soh"`，与五维雷达图并列展示，不对五维分做自创加权聚合。
+- **边界**：
+  - 仅当 `ΔSOC ≥ 30%` 且具备标称总能量 `E_rated`（优先订单/车型标称容量，次选 YKC `0x17` 帧序号 6）且 `0 < SOH ≤ 200` 时，`soh_status = "normal"`，`overall_health_score = round(soh, 1)`。
+  - 当 `0 < ΔSOC < 30%` 时判**浅充**：`soh_status = "shallow_charge"`、`is_shallow_charge = true`、`soh = null`、`overall_health_score = null`、`radar[capacity].status = "unavailable"`（`reason_code = "SHALLOW_CHARGE"`）；若 `E_rated` 可用则将参考估算值另存于 `health_metrics.soh_shallow_estimate`，不作有效健康度判定。
+  - 当缺少 `E_rated` 或电量/SOC 数据不足时，`soh_status = "unavailable"`、`overall_health_score = null`、`radar[capacity].reason_code = "NOMINAL_CAPACITY_MISSING"` 或 `"SOC_DELTA_MISSING"`。
 
-**需要产品回答**：`89.0` 是 **SOH 本身**（第 2.2 节），还是**五个维度分的聚合**？
-若是聚合，公式与权重是什么？若就是 SOH，那五维雷达图与这个数字是什么关系
-（并列展示？还是雷达图另有总分）？
+### 决策 2：体检单结论文案与分类采用确定性分档模板
 
-### 缺口 2：体检单结论文案与分类
+- **结论**：由服务端按全部 7 项体检指标的 `status` 确定性归档，生成 `report.conclusion`（结构化对象）并同步写入 `report.summary`（兼容既有字段），覆盖全部 11 门支持语言，非中文报告零汉字残留：
+  - `abnormal`（`code = "ABNORMAL_DETECTED"`）：任一指标为 `abnormal`；
+  - `attention`（`code = "ATTENTION_REQUIRED"`）：无 `abnormal`，至少一项为 `attention`；
+  - `normal`（`code = "ALL_NORMAL"`）：无 `abnormal` / `attention`，至少一项为 `normal`（若存在 `unavailable` 项，正文附局部数据缺失提示）；
+  - `insufficient`（`code = "INSUFFICIENT_DATA"`）：7 项指标全部为 `unavailable`。
+- **分维度建议拼接**：按触发 `abnormal` / `attention` 的指标归属（热管理 `thermal`、电压一致性/过压 `voltage`、SOC 跳变 `soc`、异常停机 `stop_reason`）以及浅充提示（`shallow_charge`）确定性拼接本地化建议句；前端按 `conclusion.level` / `conclusion.code` 控制样式，直接展示 `conclusion.text`（或 `summary`），无需自行解析文案。
 
-**事实**：文档里**只有一段示例文字**，且那段文字**在 docx 正文里不存在**
-（`结论` 出现 0 次）—— 它只出现在原型 `docs/原型/智能检测界面.html`：
+### 决策 3：规则版本升级为 `health-v3` 并统一治理
 
-> 结论：模拟充电体检大体正常，热管理表现一般，大电流充电温度会更容易抬升。
-> 建议尽量避免长时间大功率快充，充电时保证车辆通风散热条件。
+- **结论**：`health_metrics.RULE_VERSION`（作业行与报告体唯一来源）升至 **`health-v3`**。
+- **变更策略**：凡涉及体检指标增删、阈值/滑窗口径调整、五维分段公式变更、SOH 浅充判据或结论分类规则变更，必须递增 `health-vN` 并在本文件第 8 节登记变更记录；仅修补文案错别字或非口径 bug 不递增版本号。作业复用键含 `(scope, order_no, rule_version, language)`，升级版本号天然隔离旧版缓存报告。
 
-**没有可枚举的结论集**（正常 / 关注 / 异常 各对应什么文案、什么触发条件）。
+### 工程细化口径（消除文档歧义与传感器量化误报）
 
-**需要产品回答**：结论是**固定枚举**还是**模板拼装**？枚举有哪几档、每档的判据是什么？
-文案由谁定（不能由实现自行发明）？
+1. **温升速率滑窗（`temp_rise_rate`）**：实测 `0x25` 与 `charging-gun_property` 温度分辨率均为 `1 ℃` 整数；若直接取相邻 15s 帧差值，`1 ℃ / 15 s = 4.0 ℃/min` 必然触发 `> 0.3 ℃/min` 假异常。实现采用 **5 分钟（300 s）滑动窗口**（总时长 `< 60 s` 判 `TEMP_SERIES_INSUFFICIENT`；`60 s ≤ span < 300 s` 取整段 `[t_first, t_last]`；`span ≥ 300 s` 对每个时刻 `t_j` 与最近满足 `t_j - t_i ≥ 300 s` 的历史点求非负温升速率最大值）。
+2. **SOC 变化率滑窗与 15s 跳变（`soc_change_rate`）**：采用 **60 s 滑动窗口**求最大速率（`span < 15 s` 判 `SOC_SERIES_INSUFFICIENT`；`15 s ≤ span < 60 s` 取整段），同时扫描任意 `0 < Δt ≤ 15 s` 且 `|ΔSOC| ≥ 3%` 的跳变事件；速率 `> 5 %/min` 或跳变次数 `≥ 1` 判 `abnormal`。
+3. **单体电压极差与 `0x19` / `0x23` 口径关系**：
+   - 体检项 `cell_voltage_delta` 优先取 `0x19` 充电结束帧结算值 `(V_cell_max - V_cell_min) × 1000` mV（过滤 `0x0000` 哨兵），缺 `0x19` 且已知电芯串数 `N` 时回退 `0x23` 过程值 `max(2 × (V_cell_max - V_total / N) × 1000)`，≤ 150 mV 判 `normal`（优质参考 ≤ 60 mV）、> 150 mV 判 `abnormal`。
+   - 雷达图 `voltage_balance` 优先取 `0x23` 过程极差（需电芯串数 `N`），当 `N` 不可得时显式回退至 `0x19` 结算极差，并在 `health_metrics.voltage_balance_basis` 标明 `"process"` / `"settlement_0x19"` / `"sample_range"` / `null`，不混淆两类口径。
+4. **单体最高压（`cell_max_voltage`）按化学类型判阈**：优先取 `0x23` 低 12 位最大值（兜底 `0x19`），探针号取 `0x25` 序号 4（GB/T 27930 BSM 偏移 `+1`，范围 `1~256`）存于 `health_metrics.max_cell_voltage_probe_no` 与指标 `probe_no`。`0x15` 给出 `03H`（LFP）时 ≤ 3.65 V 正常 / (3.65, 3.70] 关注 / > 3.70 V 异常；`06H`（NCM）时 ≤ 4.20 V 正常 / (4.20, 4.25] 关注 / > 4.25 V 异常；化学类型未知时 `≤ 3.65 V` 判正常、`> 4.25 V` 判异常、`(3.65, 4.25]` 诚实标记 `status = "unavailable"` + `reason_code = "BATTERY_TYPE_UNKNOWN"`。
+5. **停止原因代码表**：`0x3B` / `ch_order_info.stopped_reason_code` 统一沿用仓库内 YKC 33 码表（`health_report_copy.YKC_STOP_REASON_MESSAGES`）与 `rules.classify_stop_reason`（64~73 正常，≥ 74 / `0x4A` 非正常），保持 #599 `value` / `reported_value` 拆分。
+6. **传感器哨兵与单位校准（41 实测发现）**：
+   - `charging-gun_property.power` 在 41 实测单位为 **W**（`V × I ≈ power`，比值 `1.000`），进入功率曲线前换算为 **kW**（与第 5 节公式 `V × I / 1000` 一致）。
+   - `batteryMaxTemperature` / `temperature` 的 `-50` 为原始字节 `0x00 − 50` 缺探针哨兵，`0x19` 单体电压的 `0x0000` 为缺值哨兵，握手前全零遥测行（`I = 0`、`soc = 0`、`E = 0`）亦在计算指标前剔除，避免出现 0→51% 假跳变或 SOH 折半。
+   - 双枪桩共用 `charging-pile_comm.device`（桩编码），解析必须按枪号字节（`child_device_code` 尾号匹配帧字节 29）与 `txSerialNo`（去除前导/尾部零填充比对帧字节 6..21）过滤，防止同桩双枪并发串单。
 
-### 缺口 3：规则版本
+### 41 生产环境只读数据源盘点（2026-11-26 实测）
 
-**事实**：报告契约需要 `rule_version`（现行实现写死 `HEALTH_RULE_VERSION = "health-v1"`），
-但**本文档里 `版本` 出现 0 次** —— 没有规则版本、没有阈值表的版本、没有修订记录。
-
-**需要产品回答**：阈值与公式改动时，怎么标记一版规则？版本号由谁维护、
-与报告里已发出的 `rule_version` 如何对应？
-
-### 附：文档自身的两处不完整（同一节记，便于一次找齐）
-
-- **「附录停止代码表」不存在**（第 1.7 节引用，全文无附录）。
-  实际可用的是仓库既有 YKC 表（`health_report_copy.YKC_STOP_REASON_MESSAGES`，
-  33 个码、范围 64~144）。**⚠️ 两套口径需要对齐**：文档说「停止原因码 ≥ `0x4A`」
-  （`0x4A` = 十进制 **74**）判非正常结束，而现行 `rules.py` 里 **74~102 判 `start_failure`**、
-  **64~73 判 `normal_stop`** —— 分界点一致，但文档没有给出代码表本身，
-  因此**不能据此断言两者逐码相同**。
-- **第 3 节「单体蓄电池电压极差」用的是 `0x19` 结算值**，第 4.5 节的评分用的是
-  **全程极差**（`0x23` 过程值）。文档没说明这两个量的关系，实现时不要当成同一个数。
+| 数据源 / 字段 | 41 现网实测事实 | 对指标与雷达图的影响 |
+|---|---|---|
+| TDengine `charging-gun_property` | 47 列；**无 `batteryMinTemperature` 列**（导致旧 `GUN_COLUMN_NAMES` 在 41 查询 100% 报 `Invalid column name`）；移除该列后近 7 天 30/30 订单均有遥测行；`power` 单位为 W | 修复查询后 100% 可得功率/电压/电流/SOC/最高温曲线与 `soc_change_rate`、`battery_max_temp`、`temp_rise_rate` |
+| TDengine `charging-pile_comm` | 464,499 行（近 14 天活数据），存原始 YKC 报文；近 7 天 30 笔已完成单覆盖：`0x15` 21/30、`0x17` 21/30、`0x19` 23/30、`0x23` 21/30、`0x25` 14/30 | 真实驱动 `0x15` 电池类型、`0x17` 标称容量 `E_rated`（SOH）、`0x19` 单体电压极差、`0x23` 单体最高压与 BMS 实测电压、`0x25` 电池温差/探针号/SOC 告警 |
+| MySQL `ch_order_info` | 32,968 笔已结束单：`start_soc` 57.5%、`end_soc` 66.8%、`ΔSOC ≥ 30%` 38.3%、`electricity > 0` 89.0%、`tx_data` 95.3% | 提供 `stop_reason`、订单窗口、起止 SOC/电量兜底及 `txSerialNo` |
+| MySQL `ch_car_spec` / `ch_my_car` | `ch_car_spec` 当前 **0 行**；`ch_my_car` 3,666 行中 `battery_capacity > 0` 为 **0 行** | MySQL 车型库目前无标称容量与电芯串数 `N`；SOH 依赖 `0x17`，过程压差公式依赖的 `N` 在现网恒缺（已由 `0x19` 结算极差兜底） |
+| 非 YKC 协议订单（OCPP 1.6-J / 2.0-J 等） | `charging-pile_comm` 无 `0x15/17/19/23/25` 帧 | 自动按可用遥测降级，缺 BMS 字段的指标诚实返回 `status="unavailable"` + `reason_code` |
 
 ---
 
 ## 7. 不做的事（边界）
 
-- **不提交 docx 原件**：`docs/*.docx` 在 `.gitignore` 第 73 行。本文件是它的摘录，
-  不是替代品 —— 原件仍是「谁说了什么」的最终依据，只是不进仓库。
+- **不提交 docx 原件**：`docs/*.docx` 在 `.gitignore` 第 73 行。本文件是它的摘录与工程化补充，
+  原件仍是「业务原始提法」的追溯依据，只是不进仓库。
 - **不提交两份原始 CSV**：`docs/新能源汽车全量品牌及车标数据.csv`、
   `docs/autohome_cleaned_data_2026-08-26-2.csv` 在 `.gitignore` 第 72 行（`docs/*.csv`）。
-  它们是车图数据的来源，与本规格无直接关系。
-- **不改任何现有实现**：本文件只落规格。`health_report.py` 今天仍只算 `stop_reason`。
+- **不替客户端改写车牌/车型/车图来源**：报告接口只输出与订单电池检查相关的确定性指标、评分、结论与曲线；车辆展示信息沿用 `frontend-banner-handoff.md` 的公司既有端点。
 
-### 落地这条线时要顺着看的地方
+## 8. 规则版本与修订记录
 
-- `src/aiops_diagnostics/health/health_report.py` —— 现行报告构造（`HEALTH_RULE_VERSION`、单指标）
-- `src/aiops_diagnostics/health/rules.py` —— `classify_stop_reason`，第 3 节停止原因的实现
-- `src/aiops_diagnostics/health/health_report_copy.py` —— `YKC_STOP_REASON_MESSAGES` 代码表
-- `docs/agents/public-openapi.md` —— `/v1/health-report-jobs` 的现行对外契约（早期联调稿已归档至 `AI-Ops-history-archive:docs/agents/frontend-api-brief.md`）
+| `rule_version` | 日期 | 变更摘要 | 对应 PR / ADR |
+|---|---|---|---|
+| `health-v1` | 2026-09 | 最小报告：单指标 `stop_reason`，作业行固定 `health-v1` | 早期基线 |
+| `health-v2` | 2026-10 | 补齐 11 语文案、`stop_reason` 拆出 `reported_value`，统一作业行与报告体版本号 | PR #555、PR #604 |
+| `health-v3` | 2026-11-26 | 补齐 7 项充电体检指标、修正五维雷达图全部四段公式与实时温差口径、`ΔSOC < 30%` 浅充判定与 Option A 总健康分（= 有效 SOH）、确定性 11 语分档结论、接入 `charging-pile_comm` YKC 协议帧并修复 41 `batteryMinTemperature` 缺列故障 | Issue #602、ADR-0350 |
+
+### 关联源码与现行契约
+
+- `src/aiops_diagnostics/health/health_report.py` —— 最小报告骨架与 `stop_reason` 构造
+- `src/aiops_diagnostics/health/health_metrics.py` —— `RULE_VERSION = "health-v3"`、7 项指标、五维评分、SOH 浅充判定与确定性结论
+- `src/aiops_diagnostics/health/ykc_frames.py` —— YKC `0x15/17/19/23/25` 报文纯函数解码与双枪防串单过滤
+- `src/aiops_diagnostics/health/health_curves.py` —— 功率/电压/温度/温差时序曲线（300 点保极值抽样）
+- `src/aiops_diagnostics/health/health_job_runner.py` —— 异步作业编排（MySQL 订单 + TDengine 遥测与协议帧）
+- `src/aiops_diagnostics/health/health_report_copy.py` —— 11 语结论/建议/曲线名/YKC 停机码文案表
+- `docs/standard-api-contract.md` §4 —— `/v1/health-report-jobs` 现行对外契约
+- `docs/agents/frontend-battery-report-handoff.md` —— 前端报告页联调与渲染交接手册

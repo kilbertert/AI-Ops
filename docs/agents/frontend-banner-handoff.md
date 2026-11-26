@@ -8,16 +8,14 @@
 
 ---
 
-## 0. ⚠️ 本期已知欠账 —— 先读这一节
+## 0. ⚠️ 报告页接线进展与边界 —— 先读这一节
 
-**点过去大概率看不到截图那张报告。** 报告页**还没有**接 AI-Ops 的健康报告接口
-（build 21 里 `createHealthReportJob`/`getHealthReportJob` 存在但**零调用**，是死代码；
-页面现在走的是 `getReportList`/`getReport` 那条 mall 路由）。
+AI-Ops 服务端健康报告接口已升级至 **`health-v3`**（7 项体检指标、五维雷达、SOH 浅充判定与 11 语确定性结论，见 [frontend-battery-report-handoff.md](frontend-battery-report-handoff.md)）。
+在客户端 `qumall-app` 尚未完成 `batteryReport.vue` 改接 `/v1/health-report-jobs` 之前（原 build 21 里 `createHealthReportJob`/`getHealthReportJob` 仍未调用，页面仍展示静态示例数据），点横幅仍看不到真实报告：
 
-- 这**不是**横幅的缺陷，**是欠账** —— 报告页指标对齐与前端接线共同欠的账，另立票。
 - **导航本身是通的**：`/aiPackage/pages/batteryReport/batteryReport` 在客户端
   `pages.json`/`__definePage` 里**已注册**（build 21 实测），`uni.navigateTo` 能打开这个页面。
-- 所以你们联调时：**"页面打开了"能验，"页面里是那张报告"现在验不了**。
+- **报告页联调请直接读**：[智能电池检查报告页前端联调交接手册](frontend-battery-report-handoff.md)。
 
 其余三条边界，同样请当已交付事实接受，不要按直觉改：
 
@@ -211,4 +209,4 @@ if (banner.jump_path) {
 - **跳转动作的坑清单**：[frontend-jump-path-handoff.md](./frontend-jump-path-handoff.md)（横幅共用同一套规则）。
 - **后端设计与取舍**：`docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
 - **直连实测证据**：#590，`AI-Ops-history-archive:docs/validation.md`（已归档）+ `tools/verification/verify_banner_car_lookup.py`。
-- **报告页欠账**：PRD #578 / #592（电池检查指标规格，含三个**产品还未定义**的缺口）。
+- **报告页联调手册**：[frontend-battery-report-handoff.md](./frontend-battery-report-handoff.md)（对应 Issue #602 / ADR-0350，`health-v3` 服务端与前端字段映射）。
