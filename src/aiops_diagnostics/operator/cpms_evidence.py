@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping
 
 from aiops_diagnostics.common.bounded_http import (
+    ENVELOPE_SUCCESS_CODES,
     ErrorMapping,
     RequestSpec,
     json_body,
@@ -469,6 +471,20 @@ def cpms_get(url, bearer, tenant, *, timeout=10):
     )
 
 
+class TsdataInvalidColumn(OperatorRefused):
+    """TDengine 门面因租户表缺少可选列拒绝本次 `fields` 列表，仅允许无 `fields` 单次回退。"""
+
+
+def _parse_tsdata_envelope(payload, mapping):
+    if isinstance(payload, Mapping):
+        code = payload.get("code")
+        if code not in ENVELOPE_SUCCESS_CODES:
+            detail = payload.get("msg") if payload.get("msg") is not None else payload.get("message")
+            if "Invalid column name" in str(detail or ""):
+                raise TsdataInvalidColumn("TSDATA_UNAVAILABLE")
+    return parse_code_data_envelope(payload, mapping)
+
+
 def tsdata_query(url, payload, *, timeout=10):
     """POST tsdata ``QueryRequest``；一切失败形状均归一为 ``TSDATA_UNAVAILABLE``。"""
 
@@ -492,5 +508,5 @@ def tsdata_query(url, payload, *, timeout=10):
             invalid_body=unavailable,
             invalid_envelope=unavailable,
         ),
-        envelope=parse_code_data_envelope,
+        envelope=_parse_tsdata_envelope,
     )

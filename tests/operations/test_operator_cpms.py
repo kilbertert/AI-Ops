@@ -184,23 +184,32 @@ def environment(tmp_path, monkeypatch):
 
         def do_POST(self):  # noqa: N802
             status = 200
+            envelope = None
             if self.path == "/tdadmin/data/query" and not state.get("tsdata_error"):
                 length = int(self.headers.get("Content-Length") or 0)
                 request = json.loads(self.rfile.read(length) or b"{}")
                 state["tsdata_calls"].append(request)
-                rows = state.get("tsdata_rows", [])
-                data = {
-                    "count": state.get("tsdata_count", len(rows)),
-                    "current": 1,
-                    "size": request.get("pageSize", 64),
-                    "pages": 1,
-                    "records": rows,
-                }
+                missing = set(state.get("tsdata_missing_columns", ()))
+                bad = next((col for col in (request.get("fields") or ()) if col in missing), None)
+                if bad is not None:
+                    envelope = {"code": 500, "message": f"TDengine error: Invalid column name: {bad}"}
+                elif state.get("tsdata_envelope_error"):
+                    envelope = {"code": 500, "message": state["tsdata_envelope_error"]}
+                else:
+                    rows = state.get("tsdata_rows", [])
+                    data = {
+                        "count": state.get("tsdata_count", len(rows)),
+                        "current": 1,
+                        "size": request.get("pageSize", 64),
+                        "pages": 1,
+                        "records": rows,
+                    }
+                    envelope = {"code": 0, "data": data}
             elif self.path == "/tdadmin/data/query":
-                status, data = 500, None
+                status = 500
             else:
-                status, data = 404, None
-            body = json.dumps({"code": 0, "data": data}).encode() if status == 200 else b"{}"
+                status = 404
+            body = json.dumps(envelope).encode() if status == 200 else b"{}"
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -1624,3 +1633,56 @@ def test_charging_timeline_tsdata_failure_is_a_refusal_not_an_empty_page(operato
         operator_cpms._failure_code(operator_cpms.OperatorRefused("TSDATA_UNAVAILABLE"))
         == "OPERATOR_DEPENDENCY_UNAVAILABLE"
     )
+
+
+def test_charging_timeline_retries_without_fields_on_invalid_column_name(operator, monkeypatch):
+    """客户 TDengine 缺少可选列（如 errorCode）时单次回退无 fields 全列查询，仍严格白名单投影。"""
+    f = operator
+    partial_row = {k: v for k, v in TIMELINE_ROW.items() if k not in {"errorCode", "errorReason", "meterNow"}}
+    f["state"]["tsdata_missing_columns"] = ("errorCode", "errorReason", "meterNow")
+    f["state"]["tsdata_rows"] = [partial_row]
+
+    def dispatch(_, cfg, run_id):
+        return node(f, run_id, tools=("cpms_order_detail", "cpms_charging_timeline"))
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+
+    calls = f["state"]["tsdata_calls"]
+    assert len(calls) == 2
+    assert calls[0]["fields"] == list(operator_cpms.TIMELINE_FIELDS)
+    assert "fields" not in calls[1]
+    assert calls[1]["table"] == "charging-gun_property" and calls[1]["deviceId"] == "PILE-1-1"
+
+    evidence = (
+        f["ctx"]
+        .agent_run_store.by_qa(submitted.json()["qa_id"])
+        .snapshot["evidence"]["cpms_charging_timeline"]
+    )
+    row = evidence["data"]["records"][0]
+    assert row["outputVoltage"] == TIMELINE_ROW["outputVoltage"]
+    assert "errorCode" not in row and "extra" not in row
+
+
+def test_charging_timeline_does_not_retry_non_column_tsdata_envelope_error(operator, monkeypatch):
+    """非缺列 TDengine 业务错误不回退重试，直接拒绝为 TSDATA_UNAVAILABLE。"""
+    f = operator
+    f["state"]["tsdata_envelope_error"] = "TDengine error: syntax error"
+    observed = {}
+
+    def dispatch(_, cfg, run_id):
+        head = _deliver_detail(f, run_id)
+        _, grant = _timeline_grant(f, run_id, head)
+        observed["code"] = _refusal(_timeline_get(f, grant))
+        return node(f, run_id)
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.json()["status"] == "completed", final.text
+    assert observed["code"] == "TSDATA_UNAVAILABLE"
+    assert len(f["state"]["tsdata_calls"]) == 1
