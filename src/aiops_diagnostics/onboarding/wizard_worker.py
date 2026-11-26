@@ -528,11 +528,13 @@ mkdir_priv(state_dir, uid=999, gid=987, mode=0o700)
 
 # 3. 调 Snail 平台管理接口幂等创建 App / Node / Agent / OpenId / Subscription
 ssl_ctx = ssl.create_default_context(cafile=str(CA_CRT))
-def snail_call(path, body=None, token='', method=None):
+def snail_call(path, body=None, token='', method=None, extra_headers=None):
     data = json.dumps(body).encode('utf-8') if body is not None else None
     headers = {{'Content-Type': 'application/json'}}
     if token:
         headers['Snail-Ai-Auth'] = token
+    if extra_headers:
+        headers.update(extra_headers)
     eff_method = method or ('POST' if body is not None else 'GET')
     req = Request(SNAIL_BASE + path, data=data, headers=headers, method=eff_method)
     try:
@@ -547,32 +549,37 @@ token = login_res['data']['token']
 
 app_name = f'aiops-environment-{{ENV}}'
 node_id = f'node-{{ENV}}'
-app_token = f'SAI_{{secrets.token_hex(16)}}'
 node_token = f'aiops_node_{{secrets.token_hex(16)}}'
 
 agent_runs_path = cfg_dir / 'agent-runs.json'
 node_env_path = cfg_dir / 'node.env'
+app_id = app_name
 if agent_runs_path.is_file():
     existing_runs = json.loads(agent_runs_path.read_text(encoding='utf-8'))
     app_id = existing_runs.get('snail_app_id') or app_name
-    app_token = existing_runs.get('snail_app_token') or app_token
-else:
-    app_id = app_name
 
 def _records(payload):
     d = payload.get('data')
     return d.get('records') if isinstance(d, dict) and 'records' in d else (d if isinstance(d, list) else [])
 
-# 查询或创建应用
-_, apps_list = snail_call('/app/page?current=1&size=100', None, token, 'GET')
+# 查询或创建应用（Snail /app/page 返回键名为 token）
+_, apps_list = snail_call('/app/page?page=1&size=100', None, token, 'GET')
 rows = _records(apps_list)
 app_row = next((r for r in rows if r.get('appId') == app_id or r.get('appName') == app_name), None)
 if app_row is None:
-    app_body = {{'appName': app_name, 'appId': app_id, 'appToken': app_token, 'description': f'env {{ENV}}'}}
-    snail_call('/app', app_body, token, 'POST')
+    app_body = {{
+        'appId': app_id,
+        'appName': app_name,
+        'description': f'AI-Ops environment {{ENV}}',
+        'routeStrategy': 'LEAST_LOAD',
+    }}
+    st_app, app_res = snail_call('/app', app_body, token, 'POST')
+    assert st_app == 200 and app_res.get('status') == 1, f'create snail app failed: {{st_app}}'
+    app_token = str(app_res['data']['token'])
 else:
-    app_id = app_row['appId']
-    app_token = app_row.get('appToken') or app_token
+    app_id = str(app_row['appId'])
+    app_token = str(app_row.get('token') or app_row.get('appToken') or '')
+assert app_token, 'missing snail app token'
 
 # 查询或创建模型配置
 _, chats = snail_call('/ai-model/by-type/CHAT', None, token, 'GET')
@@ -594,26 +601,39 @@ if ag_row is None:
     ag_body = {{
         'name': agent_name,
         'appId': app_id,
-        'modelId': model_cfg_id,
+        'chatModelId': model_cfg_id,
         'instruction': '用 charging_status_snapshot 工具取一次快照，并原样作答。',
+        'mcpEnabled': False,
+        'skillEnabled': False,
+        'memoryEnabled': False,
+        'webSearchEnabled': False,
+        'ragEnabled': False,
     }}
-    _, ag_created = snail_call('/agent', ag_body, token, 'POST')
-    agent_id = int(ag_created.get('data') or 0)
+    st_ag, ag_created = snail_call('/agent', ag_body, token, 'POST')
+    assert st_ag == 200 and ag_created.get('status') == 1, f'create snail agent failed: {{st_ag}}'
+    ag_data = ag_created.get('data')
+    agent_id = int(ag_data['id'] if isinstance(ag_data, dict) else ag_data)
 else:
     agent_id = int(ag_row['id'])
 
-# OpenApiUser 与订阅
-_, u_list = snail_call('/openapi/user/page?current=1&size=100', None, token, 'GET')
-u_rows = _records(u_list)
-u_row = next((r for r in u_rows if r.get('username') == app_name or r.get('openId') == app_name), None)
-if u_row is None:
-    open_id = secrets.token_hex(16)
-    u_body = {{'username': app_name, 'openId': open_id, 'nickname': app_name}}
-    snail_call('/openapi/user', u_body, token, 'POST')
-else:
-    open_id = str(u_row['openId'])
-
-snail_call('/openapi/subscription', {{'appId': app_id, 'openId': open_id}}, token, 'POST')
+# OpenApiUser 与订阅（按 Snail OpenAPI v1 规范传 Snail-Ai-App-Id + Snail-Ai-Token）
+open_headers = {{'Snail-Ai-App-Id': app_id, 'Snail-Ai-Token': app_token}}
+st_reg, reg_res = snail_call(
+    '/openapi/v1/user/register',
+    {{'externalId': app_id, 'nickname': f'env-{{ENV}}'}},
+    method='POST',
+    extra_headers=open_headers,
+)
+assert st_reg == 200 and reg_res.get('status') == 1, f'register openapi user failed: {{st_reg}}'
+open_id = str(reg_res['data']['openId'])
+assert open_id, 'missing snail openId'
+st_sub, _ = snail_call(
+    '/openapi/v1/user/agent',
+    {{'openId': open_id, 'agentId': agent_id}},
+    method='POST',
+    extra_headers=open_headers,
+)
+assert st_sub == 200, f'subscribe agent failed: {{st_sub}}'
 
 # 读取既有的 node_token 避免重复建错
 if node_env_path.is_file():
@@ -708,17 +728,29 @@ subprocess.run(['systemctl', 'daemon-reload'], check=True)
 subprocess.run(['systemctl', 'enable', f'aiops-environment-node@{{ENV}}.service'], check=True)
 subprocess.run(['systemctl', 'restart', f'aiops-environment-node@{{ENV}}.service'], check=True)
 cname = f'aiops-environment-{{ENV}}-environment-node-1'
-time.sleep(10)
-chk = subprocess.run(
-    ['docker', 'inspect', '-f', '{{{{.State.Status}}}} {{{{.RestartCount}}}}', cname],
-    capture_output=True,
-    text=True,
-)
-state_parts = chk.stdout.strip().split()
-if len(state_parts) != 2 or state_parts[0] != 'running' or state_parts[1] != '0':
-    logs = subprocess.run(['docker', 'logs', '--tail', '20', cname], capture_output=True, text=True)
-    tail = (logs.stderr or logs.stdout)[-400:]
-    raise AssertionError(f'node container {{cname}} unhealthy: {{chk.stdout.strip()}}\\n{{tail}}')
+started_ok = False
+for _attempt in range(13):
+    time.sleep(5)
+    chk = subprocess.run(
+        ['docker', 'inspect', '-f', '{{{{.State.Status}}}} {{{{.RestartCount}}}}', cname],
+        capture_output=True,
+        text=True,
+    )
+    state_parts = chk.stdout.strip().split()
+    if len(state_parts) != 2 or state_parts[0] != 'running' or state_parts[1] != '0':
+        logs = subprocess.run(['docker', 'logs', '--tail', '20', cname], capture_output=True, text=True)
+        tail = (logs.stderr or logs.stdout)[-400:]
+        raise AssertionError(f'node container {{cname}} unhealthy: {{chk.stdout.strip()}}\\n{{tail}}')
+    logs = subprocess.run(['docker', 'logs', '--tail', '40', cname], capture_output=True, text=True)
+    log_text = (logs.stdout or '') + '\\n' + (logs.stderr or '')
+    if 'Started ExecutionNodeApplication' in log_text:
+        started_ok = True
+        break
+assert started_ok, f'node container {{cname}} did not finish startup within 65s'
+time.sleep(6)
+hb_logs = subprocess.run(['docker', 'logs', '--tail', '30', cname], capture_output=True, text=True)
+hb_text = (hb_logs.stdout or '') + '\\n' + (hb_logs.stderr or '')
+assert 'Heartbeat rejected' not in hb_text, f'node container {{cname}} heartbeat rejected'
 """
     res = exec_fn(central_target, "sudo -n python3 -", input_text=remote_script, timeout_sec=180, cwd=root)
     if res.returncode != 0:

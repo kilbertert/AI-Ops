@@ -1287,6 +1287,13 @@ def test_step_execution_node_normalizes_jar_filename_perms_and_checks_running(mo
     assert "AIOPS_EXEC_MANIFEST={cfg_dir}" not in script
     assert "State.Status" in script
     assert "RestartCount" in script
+    assert "app_row.get('token')" in script
+    assert "/openapi/v1/user/register" in script
+    assert "/openapi/v1/user/agent" in script
+    assert "Snail-Ai-App-Id" in script
+    assert "Snail-Ai-Token" in script
+    assert "chatModelId" in script
+    assert "Heartbeat rejected" in script
 
 
 def test_consumer_knowledge_catalogue_accepts_delegated_kdx_token(tmp_path: Path, monkeypatch) -> None:
