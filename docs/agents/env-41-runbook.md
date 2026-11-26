@@ -805,75 +805,38 @@ EOF
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。
 
-> **常规部署走 CD，不按本文手敲。** 合并到 `main` 且改动含 `src/**` 时，
-> `.github/workflows/cd.yml` 会自动准备好一次部署，经 `production-41` 环境的
-> 执行 `deploy/deploy-41.sh`（2026-09-30 起**不再有人工审批**，见下方决定记录）。
-> **自动化路径与手工路径共用同一个脚本**，
-> 所以两者不会各自漂移 —— 本节保留手工步骤是为了：审阅这个脚本、以及自动化挂掉时
-> 的应急路径。
+> **生产部署按版本批次人工发起，不跟随每个 main 合并。**
+> 先用正常 PR 把版本准备变更（`VERSION`、包元数据）合入 `main`，通过 CI 后在 Actions → CD
+> 选择 workflow ref `main` 和该版本的完整 SHA。CD 核验 SHA 属于 `origin/main`、SemVer 与版本标签，
+> 在部署前保留或核对指向该 SHA 的 `vMAJOR.MINOR.PATCH` 注释标签；部署成功后发布该版本的
+> GitHub Release / `CHANGELOG.md`。一个 SemVer 版本只对应一个不可变 SHA；修复版本须递增 VERSION，
+> 不移动旧标签。部署失败可对同一 SHA 安全重跑；标签不会因此移动。
+> 发布使用 `production-41` 环境和现有串行部署锁。普通功能 PR 合并不会部署生产。
 >
-> **什么时候仍需手工**：CD 不可用（runner 掉线、GitHub 故障）。手工执行即
-> `deploy/deploy-41.sh --commit <sha>`（或 `--rollback-to <sha>`），用人工密钥
-> 别名 `aiops-41`；自动化用的是 CD 专用别名 `aiops-41-cd`。
->
-> 🔴 **手工部署必须留痕**（#407，`deploy/record-manual-deploy.sh`）。这不是流程洁癖：
-> 一次 CD 连续 6 次没成功部署而无人察觉，正是因为**同期的确有人在手工 rsync**
-> —— 生产确实更新了，于是没有任何理由去看 CD。**不可见的人工动作会连带隐藏本应被
-> 发现的异常。** 部署后当天追加一行：
-> `deploy/record-manual-deploy.sh <commit> "<为什么走手工>"`，
-> 记录落在 [`deploy/manual-deploys.md`](../../deploy/manual-deploys.md)（并同步到 41 的
-> 运维记录）。**先部署后补记也行，但不能不记。**
->
-> 🛑 **谁负责批准 CD —— 2026-09-30 起：没有人，门已去掉。**
-> 仓库所有者的明确决定（原文：「我授权你可以自动的进行 CD 审批部署，不需要我认为的点击」，
-> 经追问确认取**永久去掉批准门**）：`production-41` 环境的 `required_reviewers` 已移除，
-> **且 `cd.yml` 里没有任何"自动批准"的代码**（见下：那样写做不到）。
->
-> **含义**：**任何合并到 main 且命中 `cd.yml` 的 `paths` 的提交，都会自动部署到生产。**
-> 「什么人能改生产」因此等于「**什么人能合并到 main**」—— 那道门仍在（Ruleset 要求 PR、
-> 必需检查、会话解决），去掉的只是"合并后再点一次"。
->
-> ⚠️ **回滚**：在 GitHub 的 `production-41` 环境上重新加回 required reviewer 即可，
-> **不需要动 `cd.yml`**（那里做不出自动批准，所以也不存在"假门"这个风险）。
->
-> 📝 **部署之后还有一步：发布版本备注（2026-10-23 起）。** `cd.yml` 的最后一个步骤
-> 运行 `dev-changelog`，把本次 commit 范围渲染成 GitHub Release（tag
-> `release-<sha12>`，标注 prerelease）。
->
-> **它与部署是两件事，失败含义不同 —— 分诊时先看是哪一步红的：**
->
-> | 失败的步骤 | 生产状态 | 处置 |
-> |---|---|---|
-> | `Deploy` | **没有**更新 | 按本节回滚或修因重跑；`gh run view` 看 `classify-remote-result.sh` 的分类 |
-> | `Publish release notes` | **已经**更新 | **不要回滚。** 生产是好的，缺的只是一份备注 |
->
-> 发布步骤失败的最常见原因是 runner 的 PATH 里没有 `dev-changelog` 或 `git-cliff`
-> （两者随服务端 release unit 安装）。确认后重跑 `gh workflow run cd.yml`，
-> 或直接 `gh release create release-<sha12> --target <sha> --notes-file <渲染结果> --prerelease` 补上。
->
-> **`CHANGELOG.md` 不在仓库里**（已 gitignore）。它是上面这个步骤的产物；
-> 任何 PR 都不该写它，遇到「CHANGELOG.md 不见了」不是问题。人工发布说明在
-> `RELEASE-NOTES.md`，那是另一个文件。
->
-> **版本标签与部署备注分开**：版本标签固定一次发布，部署备注 `release-<sha12>` 记录具体部署。
-> CD部署成功后先在已部署提交上创建新的注释语义版本标签，再生成变更记录与Release。
-> 使用GitHub官方Git Tags API先建注释对象、再建引用（[官方说明](https://docs.github.com/en/rest/git/tags)）；
-> 单独创建引用只能产生轻量标签，不能替代注释对象。
-> 若发布负责人已创建标签，CD保留其指向；并发创建时核验同一提交与注释类型，不强推。
-> 部署结束在规范checkout运行
-> `dev-changelog` 与 `dev-changelog --check`，使本地生成物和发布边界一致；不提交生成物。
-> 旧轻量标签保持原样；不能为修正标签类型强推已有版本。决策与取舍见 `docs/adr/0101`。
->
-> ⚠️ **仍然不要因为等待就手工部署**：现在根本没有"等待"这个状态了。若 CD 没跑，
-> 那是路径没命中或 workflow 出错，查 `gh run list --workflow=cd.yml`，不要绕过去手敲。
-> 卡住/连续失败会由 `CD Watch` 开 `cd:needs-attention` 票（#407）。
+> 自动发布与[手工部署应急路径](#手工部署应急路径)共用 `deploy/deploy-41.sh`，由脚本完成备份、
+> 制品传输、版本/依赖闸门、健康校验与失败恢复。
+
+### 手工部署应急路径
+
+仅当 GitHub Actions 无法使用且当前任务明确授权生产操作时，用人工别名 `aiops-41`
+执行 `deploy/deploy-41.sh`；自动发布工作流使用 `aiops-41-cd`。手工部署须留痕：
+`deploy/record-manual-deploy.sh <commit> "<为什么走手工>"`，记录写入
+[`deploy/manual-deploys.md`](../../deploy/manual-deploys.md)并同步到41私有运维记录。
+部署后当天补记。`--rollback-to <sha>` 只用于显式回滚。
+
+> **没有待处理版本发布是正常状态。** 一次只发起一个发布，并等整个workflow结束后再发下一个；
+> Actions 的并发组不是FIFO队列。已启动的发布失败或卡住时查
+> `gh run list --workflow=cd.yml`，修因后只重跑失败作业。版本说明失败发生在部署成功之后，
+> 只修复并重跑说明作业，不回滚服务。版本Release用 `vMAJOR.MINOR.PATCH`，不会再为每个部署SHA
+> 建独立的 `release-<sha>` Release。
+
+发布操作以[Actions版本发布](actions-delivery.md#版本发布)为准；CHANGELOG仍是gitignored生成物，
+人工兼容说明在`RELEASE-NOTES.md`，旧逐提交Release保留为历史。
 
 ### 2.1 CD 显示 pending/卡住时怎么判（2026-10-30 实测）
 
-只有一个自托管 runner 打 `AI-Ops` 标签，**它一次只跑一个 job**。所以 CD 停在
-`pending` 的常见原因不是死锁，也不是路径没命中，而是**队列前面有别的 job 在用**，
-其中包括与本仓部署无关的 AFK/Agent 工作流（实测有占住 runner 超过一小时的
-`Agent Update Branch`，它自己还要跑模型）。三步分开看：
+当前CD使用专用`aiops-deploy` runner；一个runner一次只执行一个job。`pending`可能在等并发锁、
+匹配runner或环境保护。2026-10-30共享runner被Agent占用的案例是历史，不据此改回共享标签。三步分开看：
 
 ```bash
 gh run list --workflow cd.yml --limit 3 --json databaseId,status,conclusion,headSha
@@ -889,15 +852,10 @@ gh run list --status in_progress --limit 3 --json name,headBranch,createdAt   # 
 - 想让某个具体 job 先跑，**没有**优先级开关；可以做的只有等，或者（经该 job 的
   归属会话同意后）取消它的 run。取消别人会话的自动化 run 不是部署手段，不得当成快捷键。
 
-🔴 **`conclusion: cancelled` 不等于「那个 commit 没部署」。** job 级 concurrency 组
-是 `cd-41-deploy`、`cancel-in-progress: false`，但当**同一组里更新的 pending job
-建立时，旧的 pending job 会被取消**（实测：`041a1eb0` 的 CD 被后来那次合并的 CD
-取消，而 `041a1eb0` 的内容已在后来的工件里上线）。每次 CD 部署的是**它自己的
-`GITHUB_SHA`**（见 `cd.yml` 的 `Resolve the commit to deploy`），所以：
+`conclusion: cancelled`不说明生产内容：当前发布取输入的`target_sha`，旧push流程才使用`GITHUB_SHA`。
+当前整轮发布由`aiops-production-release`串行，部署job还沿用`cd-41-deploy`，避免切换时与旧run并行。
+并发组不是FIFO，不能连点多个批次；判断现役修订须核对`/health`的`<SemVer>+<12位提交>`与部署回执。
 
-- 判断生产到底跑什么，只看 `/health` 的 `version`（`1.0.0+<12 位提交>`），不看 run 的结论；
-- 内容被后来的提交覆盖时，`cancelled` 是正常收敛，不需要补跑。
->
 > 🔴 **反向：若你把 D-2 的暴露回滚了（服务绑回 `127.0.0.1`），必须同时把
 > `deploy-41.sh` 的健康检查改回回环**（`AIOPS_HEALTH_HOST=127.0.0.1` 或直接改默认值）——
 > 否则它会拿网桥地址去查一个只监听回环的服务，**每次部署都自检失败并回滚**，
@@ -905,7 +863,7 @@ gh run list --status in_progress --limit 3 --json name,headBranch,createdAt   # 
 > 「绑定 + nginx 上游必须一起改」是同一个道理的第三面：**地址这件事牵动服务、nginx、
 > 部署脚本三处。**
 >
-> **依赖不在本流程范围。** `src/` 与运行时参考资料由 CD 同步；依赖清单
+> **依赖不在本流程范围。** `src/` 由 CD 同步；依赖清单
 > （`pyproject.toml` / `uv.lock`）不一致时 CD 会**拒绝部署**。更新 41 的依赖环境走
 > [依赖环境更新流程](env-41-dependency-update.md) —— 那是一次人工的、要留记录的
 > 环境变更，不做成自动化。
@@ -1983,7 +1941,7 @@ curl -s -H "third-session: <会话>" -H "tenant-id: <会话租户>" \
 
 ### 5.4 CD 一直 queued：先看 self-hosted runner 被谁占着（2026-10-30 新增）
 
-**症状**：合并后 CD 长时间 `queued`，`/health` 的 `version` 不动，看起来像"CD 坏了"。
+**症状**：已手动发起 CD 长时间 `queued`，`/health` 的 `version` 不动，看起来像"CD 坏了"。
 
 **先查这三条，别先怀疑 CD**：
 

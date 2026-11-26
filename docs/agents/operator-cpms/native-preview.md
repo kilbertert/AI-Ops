@@ -31,7 +31,7 @@ Gateway QA/run；界面 SSE 的空 thought 只是兼容旧 Agent 面板的显示
 
 ## 部署顺序
 
-1. 正常 PR/CI 合并后，Gateway 由既有 CD 部署；核 health 与源码 SHA。
+1. 正常 PR/CI 合并后，等待显式版本发布；Gateway 发布后核 health 与源码 SHA。
 2. 从同一合并修订运行 `ops/dify-console-bridge/build-bundle.sh REV OUT`。打包脚本将原生
    预览 JS 拼入已有 publish-button.js，携带更新后的 Python 桥和 nginx snippet；不重建 Dify。
 3. 按 [桥部署手册](../../../ops/dify-console-bridge/README.md) 用 dev-host 传摘要制品，运行

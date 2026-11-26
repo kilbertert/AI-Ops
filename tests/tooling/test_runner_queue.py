@@ -5,6 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -284,13 +285,18 @@ assert.equal(runnerSummary([{...runner,labels:[...runner.labels,{name:'self-host
     )
 
 
-def test_missing_runner_credential_never_closes_monitor_alarm(tmp_path):
+@pytest.mark.parametrize("pending", [True, False])
+def test_missing_runner_credential_only_blocks_pending_release(tmp_path, pending):
     cli = tmp_path / "gh"
     cli.write_text("""#!/usr/bin/env python3
-import json,sys
+import json,os,sys
 args=sys.argv[1:]
 if args[0]=='run':
-    print('[]' if '--status' in args else '[{"databaseId":1,"status":"completed","conclusion":"success"}]')
+    active = os.environ['TEST_PENDING'] == 'true'
+    runs = [{'databaseId':1,'status':'in_progress' if active else 'completed',
+             'conclusion':None if active else 'success'}]
+    include = '--status' not in args or active and args[args.index('--status')+1]=='in_progress'
+    print(json.dumps(runs if include else []))
 elif args[0]=='issue': print('[{"number":99}]')
 elif args[1].endswith('/jobs'):
     print('{"total_count":1,"jobs":[{"name":"deploy-41","status":"completed","conclusion":"success"}]}')
@@ -300,6 +306,7 @@ else: print('[]')
     cli.chmod(0o700)
     env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
     env.pop("RUNNER_READ_TOKEN", None)
+    env["TEST_PENDING"] = str(pending).lower()
     result = subprocess.run(
         ["node", ".sandcastle/cd-watch.mjs", "--dry-run"],
         cwd=ROOT,
@@ -309,6 +316,10 @@ else: print('[]')
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
-    assert "runner-unknown" in result.stdout
-    assert "Administration:read" in result.stdout
-    assert "CD 告警条件不再成立" not in result.stdout
+    if pending:
+        assert "runner-unknown" in result.stdout
+        assert "Administration:read" in result.stdout
+        assert "CD 告警条件不再成立" not in result.stdout
+    else:
+        assert "runner-unknown" not in result.stdout
+        assert "CD 告警条件不再成立" in result.stdout
