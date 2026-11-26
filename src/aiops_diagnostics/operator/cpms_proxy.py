@@ -27,6 +27,7 @@ from aiops_diagnostics.operator.cpms_evidence import (
     TIMELINE_LIMIT,
     TIMELINE_TOOL,
     TOOL_NAMES,
+    TsdataInvalidColumn,
     _declared,
     _proxy_tool,
     _timeline_time,
@@ -153,20 +154,24 @@ def charging_timeline(
         raise OperatorRefused("OPERATOR_EVIDENCE_MISSING")
     if end is None:
         end = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
-    data = tsdata_query_fn(
-        base + "/tdadmin/data/query",
-        {
-            "table": "charging-gun_property",
-            "deviceId": device,
-            "start": start,
-            "end": end,
-            "fields": list(TIMELINE_FIELDS),
-            "orderBy": "_ts",
-            "order": "ASC",
-            "page": 1,
-            "pageSize": TIMELINE_LIMIT,
-        },
-    )
+    query = {
+        "table": "charging-gun_property",
+        "deviceId": device,
+        "start": start,
+        "end": end,
+        "fields": list(TIMELINE_FIELDS),
+        "orderBy": "_ts",
+        "order": "ASC",
+        "page": 1,
+        "pageSize": TIMELINE_LIMIT,
+    }
+    try:
+        data = tsdata_query_fn(base + "/tdadmin/data/query", query)
+    except TsdataInvalidColumn:
+        # 不同客户环境的 charging-gun_property 列集合有差异（如缺 errorCode/errorReason/meterNow）；
+        # 仅在门面明确报缺列时单次回退全列查询，仍由下方 shape_keys 白名单严格投影。
+        fallback = {key: value for key, value in query.items() if key != "fields"}
+        data = tsdata_query_fn(base + "/tdadmin/data/query", fallback)
     records = data.get("records") if isinstance(data, dict) else None
     if (
         not isinstance(data, dict)
