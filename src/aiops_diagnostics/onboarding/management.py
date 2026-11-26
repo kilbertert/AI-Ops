@@ -13,12 +13,27 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aiops_diagnostics.common.http_auth import validate_internal_token
 from aiops_diagnostics.dify import self_service_identity as auth
+from aiops_diagnostics.dify.dify_ensure_workspace import EnsureError, ensure_workspace, reconcile_by_name
+from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiSettings
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
 from aiops_diagnostics.dify.self_service_store import SetupConflict
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.onboarding import candidate_preparation as environment_candidate_preparation
+from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
 from aiops_diagnostics.onboarding import drafts as environment_drafts
+from aiops_diagnostics.onboarding import (
+    installation,
+    knowledge,
+    knowledge_connection,
+    operator_prep,
+    publication,
+    registration,
+    registry,
+    validation,
+)
+from aiops_diagnostics.onboarding import orchestration as environment_onboarding
 from aiops_diagnostics.onboarding import overview as environment_overview
 from aiops_diagnostics.onboarding import plans as environment_plans
-from aiops_diagnostics.onboarding import registry
 from aiops_diagnostics.onboarding import tasks as environment_tasks
 from aiops_diagnostics.onboarding.context import (
     COLD_ACTION,
@@ -187,11 +202,9 @@ def task(context, session, payload):
         if len(json.dumps(payload)) > 65536:
             raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_INVALID")
         if set(payload) == {"restore_publication"}:
-            from aiops_diagnostics.onboarding.publication import restore_task
-
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
-            return restore_task(context, identity, payload["restore_publication"])
+            return publication.restore_task(context, identity, payload["restore_publication"])
         if set(payload) == {
             "validation_task",
             "publication_plan",
@@ -199,33 +212,24 @@ def task(context, session, payload):
             "confirm_customer_knowledge",
             "acceptance_ref",
         }:
-            from aiops_diagnostics.onboarding.publication import submit
-
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
-            return submit(context, identity, payload)
+            return publication.submit(context, identity, payload)
         if set(payload) == {"registration_task", "validation_plan", "capabilities", "case_ref"}:
-            from aiops_diagnostics.onboarding.validation import submit
-
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
-            return submit(context, identity, payload)
+            return validation.submit(context, identity, payload)
         if set(payload) == {"installation_task", "registration_plan"}:
-            from aiops_diagnostics.onboarding.registration import submit
-
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
-            return submit(context, identity, payload["installation_task"], payload["registration_plan"])
+            return registration.submit(
+                context, identity, payload["installation_task"], payload["registration_plan"]
+            )
         if set(payload) == {"candidate_task", "installation"} and payload["installation"] is True:
-            from aiops_diagnostics.onboarding.installation import submit
-
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
-            return submit(context, identity, payload["candidate_task"])
+            return installation.submit(context, identity, payload["candidate_task"])
         if "onboard_plan" in payload:
-            from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
-            from aiops_diagnostics.onboarding import orchestration as environment_onboarding
-
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
             allowed_keys = {
@@ -254,11 +258,6 @@ def task(context, session, payload):
             {"candidate_plan", "tenant_id", "source_app_id", "source_version"},
             {"candidate_plan", "tenant_id", "source_app_id", "source_version", "initial_installation"},
         ):
-            from aiops_diagnostics.onboarding import (
-                candidate_preparation as environment_candidate_preparation,
-            )
-            from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
-
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
             # 「包含初装」只接受显式true确认；否则载荷里不得出现该键。
@@ -276,8 +275,6 @@ def task(context, session, payload):
             {"consumer_sources"},
             {"connection_task", "tenant_id", "source_app_id", "source_version"},
         ):
-            from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
-
             if not caller.platform:
                 raise auth.SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
             if set(payload) == {"consumer_sources"}:
@@ -355,8 +352,6 @@ def task(context, session, payload):
                 path, identity, environment=payload["environment"], reference=reference
             )
         if set(payload) == {"knowledge_task", "tenant_id"}:
-            from aiops_diagnostics.onboarding.knowledge_connection import binding
-
             if not all(
                 getattr(context.settings, key, "")
                 for key in (
@@ -376,11 +371,9 @@ def task(context, session, payload):
                 payload["tenant_id"],
                 reference,
                 connect=True,
-                binding=binding(context.settings),
+                binding=knowledge_connection.binding(context.settings),
             )
         if set(payload) == {"connection_task", "tenant_id"}:
-            from aiops_diagnostics.onboarding.operator_prep import binding
-
             if not getattr(context.settings, "operator_profiles_file", ""):
                 raise auth.SetupRefused("SETUP_MODEL_CONFLICT")
             return environment_tasks.submit_workspace(
@@ -390,7 +383,7 @@ def task(context, session, payload):
                 payload["tenant_id"],
                 reference,
                 application=True,
-                binding=binding(context.settings),
+                binding=operator_prep.binding(context.settings),
             )
         if set(payload) in ({"id"}, {"id", "cancel"}) and payload.get("cancel", True) is True:
             return environment_tasks.inspect(
@@ -408,8 +401,6 @@ def task(context, session, payload):
 
 
 def dispatch_installation_claim(context, payload):
-    from aiops_diagnostics.onboarding import installation, publication, registration, validation
-
     path = _path(context)
     if payload.get("installation_claim") is not True or set(payload) != {"installation_claim", "owner"}:
         raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
@@ -476,23 +467,18 @@ def dispatch_installation_claim(context, payload):
 
 
 def prepare_workspace(context, payload):
-    import time
-
-    from aiops_diagnostics.dify.dify_ensure_workspace import EnsureError, ensure_workspace, reconcile_by_name
-    from aiops_diagnostics.dify.dify_inner_api import DifyInnerApi, InnerApiSettings
-    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
-
     if set(payload) != {"id", "owner", "prepare"} or payload["prepare"] != "workspace":
         raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
     path, reference = _path(context), context.settings.environment_onboarding_file
     request = environment_tasks.workspace_request(path, reference, payload["id"], payload["owner"])
     settings = context.settings
     if request.get("candidate_parent"):
-        from aiops_diagnostics.onboarding.candidate_preparation import _bindings
-
         with gateway_db.connection(environment_drafts._database(path), readonly=True) as conn:
             parent = json.loads(environment_tasks._row(conn, request["candidate_parent"])["request"])
-        if parent["bindings"]["workspace"] != _bindings(settings, parent["consumer_source"])["workspace"]:
+        if (
+            parent["bindings"]["workspace"]
+            != environment_candidate_preparation._bindings(settings, parent["consumer_source"])["workspace"]
+        ):
             raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
     workspaces = DifyWorkspaces(settings.database_file)
     environment, tenant = request["plan"]["environment"], request["tenant_id"]
@@ -614,29 +600,16 @@ def register(app, context, session_dependency):
             if len(json.dumps(payload)) > 65536:
                 raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
             if "publication" in payload:
-                from aiops_diagnostics.onboarding.publication import dispatch
-
-                return dispatch(context, payload)
+                return publication.dispatch(context, payload)
             if "validation" in payload:
-                from aiops_diagnostics.onboarding.validation import dispatch
-
-                return dispatch(context, payload)
+                return validation.dispatch(context, payload)
             if "registration" in payload:
-                from aiops_diagnostics.onboarding.registration import dispatch
-
-                return dispatch(context, payload)
+                return registration.dispatch(context, payload)
             if "installation_claim" in payload:
                 return dispatch_installation_claim(context, payload)
             if "installation" in payload:
-                from aiops_diagnostics.onboarding.installation import dispatch
-
-                return dispatch(context, payload)
+                return installation.dispatch(context, payload)
             if "advance_candidates" in payload:
-                from aiops_diagnostics.onboarding import (
-                    candidate_preparation as environment_candidate_preparation,
-                )
-                from aiops_diagnostics.onboarding import orchestration as environment_onboarding
-
                 prep_res = environment_candidate_preparation.advance(context, payload)
                 onboard_res = environment_onboarding.advance(context)
                 return {
@@ -645,17 +618,17 @@ def register(app, context, session_dependency):
                 }
             if "prepare" in payload:
                 if payload["prepare"] in {"operator", "consumer"}:
-                    from aiops_diagnostics.onboarding.operator_prep import run
-
-                    return run(context, _path(context), context.settings.environment_onboarding_file, payload)
+                    return operator_prep.run(
+                        context, _path(context), context.settings.environment_onboarding_file, payload
+                    )
                 if payload["prepare"] == "connection":
-                    from aiops_diagnostics.onboarding.knowledge_connection import run
-
-                    return run(context, _path(context), context.settings.environment_onboarding_file, payload)
+                    return knowledge_connection.run(
+                        context, _path(context), context.settings.environment_onboarding_file, payload
+                    )
                 if payload["prepare"] == "knowledge":
-                    from aiops_diagnostics.onboarding.knowledge import run
-
-                    return run(context, _path(context), context.settings.environment_onboarding_file, payload)
+                    return knowledge.run(
+                        context, _path(context), context.settings.environment_onboarding_file, payload
+                    )
                 return prepare_workspace(context, payload)
             return environment_tasks.worker(
                 _path(context), getattr(context.settings, "environment_onboarding_file", ""), payload
