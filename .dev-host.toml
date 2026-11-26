@@ -90,3 +90,14 @@ acceptance_staging = "/var/backups/aiops-p3-acceptance-staging"
 name = "management-relay"
 host = "node"
 description = "已登记Windows设备：95管理链只读预检及获准转发；非业务部署目标"
+
+# 捷佳四轮国内充电客户环境（2026-11-26 获批纳入编队用于自有模块一键开通）
+[[targets]]
+name = "jiejia"
+host = "jiejia-gw"
+description = "捷佳四轮国内充电业务环境，仅部署 AI-Ops 自有接入模块"
+[targets.paths]
+access = "/opt/aiops-access-jiejia"
+access_config = "/etc/aiops-access-jiejia"
+access_state = "/var/lib/aiops-access-jiejia"
+access_backups = "/var/backups/aiops-access-jiejia"
