@@ -1,7 +1,7 @@
 # 智能电池检查报告：前端接口与联调文档（`health-v3`，可直接转发前端）
 
 > **用途**：前端组将报告页（`/aiPackage/pages/batteryReport/batteryReport`）从静态示例数据改接 AI-Ops 后端接口的完整联调文档。
-> **关联任务**：Issue #602（承接 [frontend-banner-handoff.md](frontend-banner-handoff.md) §0 报告页欠账）、ADR-0350。
+> **关联任务**：Issue #602（承接 [frontend-banner-handoff.md](frontend-banner-handoff.md) §0 报告页欠账）、ADR-0352。
 > **上线前提**：请先确认目标环境 Gateway 已升级至含 `health-v3` 的版本（`POST /v1/health-report-jobs` 返回 `"rule_version": "health-v3"`）。若当前环境仍返回 `health-v2`，说明后端尚未发布。
 
 ---

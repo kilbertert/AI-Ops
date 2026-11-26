@@ -290,7 +290,7 @@ SOH = E_actual / E_rated × 100 %
 |---|---|---|---|
 | `health-v1` | 2026-09 | 最小报告：单指标 `stop_reason`，作业行固定 `health-v1` | 早期基线 |
 | `health-v2` | 2026-10 | 补齐 11 语文案、`stop_reason` 拆出 `reported_value`，统一作业行与报告体版本号 | PR #555、PR #604 |
-| `health-v3` | 2026-11-26 | 补齐 7 项充电体检指标、修正五维雷达图全部四段公式与实时温差口径、`ΔSOC < 30%` 浅充判定与 Option A 总健康分（= 有效 SOH）、确定性 11 语分档结论、接入 `charging-pile_comm` YKC 协议帧并修复 41 `batteryMinTemperature` 缺列故障 | Issue #602、ADR-0350 |
+| `health-v3` | 2026-11-26 | 补齐 7 项充电体检指标、修正五维雷达图全部四段公式与实时温差口径、`ΔSOC < 30%` 浅充判定与 Option A 总健康分（= 有效 SOH）、确定性 11 语分档结论、接入 `charging-pile_comm` YKC 协议帧并修复 41 `batteryMinTemperature` 缺列故障 | Issue #602、ADR-0352 |
 
 ### 关联源码与现行契约
 

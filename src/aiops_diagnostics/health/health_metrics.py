@@ -1,4 +1,4 @@
-"""电池充电健康评估指标、五维评分、SOH 浅充判定与确定性结论（health-v3 / ADR-0350）。"""
+"""电池充电健康评估指标、五维评分、SOH 浅充判定与确定性结论（health-v3 / ADR-0352）。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from aiops_diagnostics.health.ykc_frames import (
     YkcProtocolEvidence,
 )
 
-#: 作业行与报告体共享的唯一规则版本（ADR-0350）。
+#: 作业行与报告体共享的唯一规则版本（ADR-0352）。
 #: 凡涉及指标增删、阈值/滑窗口径、五维分段公式、SOH 浅充判据或结论分类变化均递增此版本。
 RULE_VERSION = "health-v3"
 

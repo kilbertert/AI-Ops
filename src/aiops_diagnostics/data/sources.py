@@ -787,7 +787,7 @@ class MySQLSource:
 # TDengineSource.get_gun_samples 的 SELECT、
 # tdengine_proxy 只读白名单全部从这里派生，防止三处各自维护漂移。
 # 注意：41 生产库 charging-gun_property 无 batteryMinTemperature 列（ADR-0090 /
-# ADR-0350 2026-11-26 实测），电池最低温由 charging-pile_comm 0x25 帧提供。
+# ADR-0352 2026-11-26 实测），电池最低温由 charging-pile_comm 0x25 帧提供。
 GUN_COLUMN_NAMES: tuple[str, ...] = (
     "txSerialNo",
     "status",
@@ -806,7 +806,7 @@ GUN_COLUMN_NAMES: tuple[str, ...] = (
     "meterNow",
 )
 
-#: charging-pile_comm 只读协议帧白名单（ADR-0350）：
+#: charging-pile_comm 只读协议帧白名单（ADR-0352）：
 #: 仅允许电池健康报告所需的五类 YKC 报文（0x15 握手、0x17 参数、0x19 结束、
 #: 0x23 需求、0x25 BMS 信息），TDengineSource 与 tdengine_proxy 共用本定义。
 COMM_FRAME_CODES: tuple[str, ...] = ("15", "17", "19", "23", "25")

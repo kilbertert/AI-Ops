@@ -209,4 +209,4 @@ if (banner.jump_path) {
 - **跳转动作的坑清单**：[frontend-jump-path-handoff.md](./frontend-jump-path-handoff.md)（横幅共用同一套规则）。
 - **后端设计与取舍**：`docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
 - **直连实测证据**：#590，`AI-Ops-history-archive:docs/validation.md`（已归档）+ `tools/verification/verify_banner_car_lookup.py`。
-- **报告页联调手册**：[frontend-battery-report-handoff.md](./frontend-battery-report-handoff.md)（对应 Issue #602 / ADR-0350，`health-v3` 服务端与前端字段映射）。
+- **报告页联调手册**：[frontend-battery-report-handoff.md](./frontend-battery-report-handoff.md)（对应 Issue #602 / ADR-0352，`health-v3` 服务端与前端字段映射）。
