@@ -101,89 +101,427 @@ HEALTH_CURVE_NAMES: dict[str, dict[str, str]] = {
         "power": "实际功率",
         "outputCurrent": "输出电流",
         "outputVoltage": "输出电压",
+        "bmsMeasuredVoltage": "BMS 充电电压",
+        "maxCellVoltage": "单体最高压",
         "temperature": "电池温度",
         "batteryMaxTemperature": "最高温度",
         "batteryMinTemperature": "最低温度",
+        "batteryTempDelta": "实时温差",
     },
     "zh-Hant": {
         "power": "實際功率",
         "outputCurrent": "輸出電流",
         "outputVoltage": "輸出電壓",
+        "bmsMeasuredVoltage": "BMS 充電電壓",
+        "maxCellVoltage": "單體最高壓",
         "temperature": "電池溫度",
         "batteryMaxTemperature": "最高溫度",
         "batteryMinTemperature": "最低溫度",
+        "batteryTempDelta": "即時溫差",
     },
     "en": {
         "power": "Actual power",
         "outputCurrent": "Output current",
         "outputVoltage": "Output voltage",
+        "bmsMeasuredVoltage": "BMS measured voltage",
+        "maxCellVoltage": "Max cell voltage",
         "temperature": "Battery temperature",
         "batteryMaxTemperature": "Maximum temperature",
         "batteryMinTemperature": "Minimum temperature",
+        "batteryTempDelta": "Temperature delta",
     },
     "de": {
         "power": "Ist-Leistung",
         "outputCurrent": "Ausgangsstrom",
         "outputVoltage": "Ausgangsspannung",
+        "bmsMeasuredVoltage": "BMS-Messspannung",
+        "maxCellVoltage": "Max. Zellspannung",
         "temperature": "Batterietemperatur",
         "batteryMaxTemperature": "Höchsttemperatur",
         "batteryMinTemperature": "Mindesttemperatur",
+        "batteryTempDelta": "Temperaturdifferenz",
     },
     "fr": {
         "power": "Puissance réelle",
         "outputCurrent": "Courant de sortie",
         "outputVoltage": "Tension de sortie",
+        "bmsMeasuredVoltage": "Tension mesurée BMS",
+        "maxCellVoltage": "Tension cellule max",
         "temperature": "Température de la batterie",
         "batteryMaxTemperature": "Température maximale",
         "batteryMinTemperature": "Température minimale",
+        "batteryTempDelta": "Écart de température",
     },
     "es": {
         "power": "Potencia real",
         "outputCurrent": "Corriente de salida",
         "outputVoltage": "Tensión de salida",
+        "bmsMeasuredVoltage": "Tensión medida BMS",
+        "maxCellVoltage": "Tensión máx. de celda",
         "temperature": "Temperatura de la batería",
         "batteryMaxTemperature": "Temperatura máxima",
         "batteryMinTemperature": "Temperatura mínima",
+        "batteryTempDelta": "Diferencia térmica",
     },
     "pt": {
         "power": "Potência real",
         "outputCurrent": "Corrente de saída",
         "outputVoltage": "Tensão de saída",
+        "bmsMeasuredVoltage": "Tensão medida BMS",
+        "maxCellVoltage": "Tensão máx. da célula",
         "temperature": "Temperatura da bateria",
         "batteryMaxTemperature": "Temperatura máxima",
         "batteryMinTemperature": "Temperatura mínima",
+        "batteryTempDelta": "Diferença térmica",
     },
     "vi": {
         "power": "Công suất thực",
         "outputCurrent": "Dòng ra",
         "outputVoltage": "Điện áp ra",
+        "bmsMeasuredVoltage": "Điện áp đo BMS",
+        "maxCellVoltage": "Điện áp cell cao nhất",
         "temperature": "Nhiệt độ pin",
         "batteryMaxTemperature": "Nhiệt độ cao nhất",
         "batteryMinTemperature": "Nhiệt độ thấp nhất",
+        "batteryTempDelta": "Chênh lệch nhiệt độ",
     },
     "mn": {
         "power": "Бодит чадал",
         "outputCurrent": "Гаралтын гүйдэл",
         "outputVoltage": "Гаралтын хүчдэл",
+        "bmsMeasuredVoltage": "BMS хэмжсэн хүчдэл",
+        "maxCellVoltage": "Эсийн дээд хүчдэл",
         "temperature": "Батерейны температур",
         "batteryMaxTemperature": "Хамгийн өндөр температур",
         "batteryMinTemperature": "Хамгийн бага температур",
+        "batteryTempDelta": "Температурын зөрүү",
     },
     "th": {
         "power": "กำลังไฟจริง",
         "outputCurrent": "กระแสขาออก",
         "outputVoltage": "แรงดันขาออก",
+        "bmsMeasuredVoltage": "แรงดันวัดโดย BMS",
+        "maxCellVoltage": "แรงดันเซลล์สูงสุด",
         "temperature": "อุณหภูมิแบตเตอรี่",
         "batteryMaxTemperature": "อุณหภูมิสูงสุด",
         "batteryMinTemperature": "อุณหภูมิต่ำสุด",
+        "batteryTempDelta": "ผลต่างอุณหภูมิ",
     },
     "km": {
         "power": "ថាមពលជាក់ស្តែង",
         "outputCurrent": "ចរន្តចេញ",
         "outputVoltage": "តង់ស្យុងចេញ",
+        "bmsMeasuredVoltage": "តង់ស្យុងវាស់ដោយ BMS",
+        "maxCellVoltage": "តង់ស្យុងកោសិកាខ្ពស់បំផុត",
         "temperature": "សីតុណ្ហភាពថ្ម",
         "batteryMaxTemperature": "សីតុណ្ហភាពខ្ពស់បំផុត",
         "batteryMinTemperature": "សីតុណ្ហភាពទាបបំផុត",
+        "batteryTempDelta": "គម្លាតសីតុណ្ហភាព",
+    },
+}
+
+#: Deterministic multi-tier conclusion headlines across all 11 supported languages (health-v3 / ADR-0353).
+HEALTH_CONCLUSION_MESSAGES: dict[str, dict[str, str]] = {
+    "zh": {
+        "normal": "本次充电体检各项已采集指标均处于正常范围。",
+        "normal_partial": (
+            "本次充电体检已采集的 {assessed} 项指标正常，另有 {unavailable} 项因数据缺失未参与评估。"
+        ),
+        "attention": "本次充电体检大体正常，但有 {attention} 项指标需关注。",
+        "abnormal": "本次充电体检检测到 {abnormal} 项指标异常，建议结合下方提示核查。",
+        "insufficient": "本次充电缺乏足够电池检测数据，暂无法完成有效评估。",
+    },
+    "zh-Hant": {
+        "normal": "本次充電體檢各項已採集指標均處於正常範圍。",
+        "normal_partial": (
+            "本次充電體檢已採集的 {assessed} 項指標正常，另有 {unavailable} 項因資料缺失未參與評估。"
+        ),
+        "attention": "本次充電體檢大體正常，但有 {attention} 項指標需關注。",
+        "abnormal": "本次充電體檢偵測到 {abnormal} 項指標異常，建議結合下方提示核查。",
+        "insufficient": "本次充電缺乏足夠電池檢測資料，暫無法完成有效評估。",
+    },
+    "en": {
+        "normal": "All collected charging inspection indicators are within the normal range.",
+        "normal_partial": (
+            "{assessed} collected indicator(s) are normal; "
+            "{unavailable} could not be assessed due to missing data."
+        ),
+        "attention": (
+            "This charging inspection is mostly normal, with {attention} indicator(s) needing attention."
+        ),
+        "abnormal": (
+            "This charging inspection detected {abnormal} abnormal indicator(s). Review the guidance below."
+        ),
+        "insufficient": "Insufficient battery telemetry was available to assess this charging session.",
+    },
+    "de": {
+        "normal": "Alle erfassten Ladeprüfwerte liegen im Normalbereich.",
+        "normal_partial": (
+            "{assessed} erfasste Indikatoren sind normal; "
+            "{unavailable} konnten mangels Daten nicht bewertet werden."
+        ),
+        "attention": (
+            "Die Ladeprüfung ist weitgehend normal, "
+            "jedoch erfordern {attention} Indikator(en) Aufmerksamkeit."
+        ),
+        "abnormal": (
+            "Die Ladeprüfung hat {abnormal} auffällige(n) Indikator(en) erkannt. "
+            "Bitte prüfen Sie die Hinweise unten."
+        ),
+        "insufficient": "Es liegen nicht genügend Batteriedaten für eine aussagekräftige Bewertung vor.",
+    },
+    "fr": {
+        "normal": "Tous les indicateurs collectés lors de cette charge sont dans la plage normale.",
+        "normal_partial": (
+            "{assessed} indicateur(s) collecté(s) sont normaux ; "
+            "{unavailable} n'ont pas pu être évalués faute de données."
+        ),
+        "attention": (
+            "Le bilan de charge est globalement normal, mais {attention} indicateur(s) nécessitent attention."
+        ),
+        "abnormal": (
+            "Le bilan de charge a détecté {abnormal} indicateur(s) anormal(aux). "
+            "Consultez les conseils ci-dessous."
+        ),
+        "insufficient": "Données de batterie insuffisantes pour réaliser une évaluation fiable.",
+    },
+    "es": {
+        "normal": "Todos los indicadores recopilados en esta carga están dentro del rango normal.",
+        "normal_partial": (
+            "{assessed} indicador(es) recopilado(s) son normales; "
+            "{unavailable} no pudieron evaluarse por falta de datos."
+        ),
+        "attention": (
+            "La revisión de carga es en general normal, pero {attention} indicador(es) requieren atención."
+        ),
+        "abnormal": (
+            "La revisión de carga detectó {abnormal} indicador(es) anómalo(s). "
+            "Revise las recomendaciones siguientes."
+        ),
+        "insufficient": "No hay suficientes datos de batería para realizar una evaluación válida.",
+    },
+    "pt": {
+        "normal": "Todos os indicadores recolhidos neste carregamento estão dentro do intervalo normal.",
+        "normal_partial": (
+            "{assessed} indicador(es) recolhido(s) estão normais; "
+            "{unavailable} não puderam ser avaliados por falta de dados."
+        ),
+        "attention": (
+            "A inspeção de carregamento está globalmente normal, "
+            "mas {attention} indicador(es) requerem atenção."
+        ),
+        "abnormal": (
+            "A inspeção de carregamento detetou {abnormal} indicador(es) anómalo(s). "
+            "Consulte as recomendações abaixo."
+        ),
+        "insufficient": "Dados de bateria insuficientes para concluir uma avaliação válida.",
+    },
+    "vi": {
+        "normal": "Tất cả chỉ số kiểm tra sạc đã thu thập đều nằm trong ngưỡng bình thường.",
+        "normal_partial": (
+            "{assessed} chỉ số đã thu thập ở mức bình thường; "
+            "{unavailable} chỉ số không thể đánh giá do thiếu dữ liệu."
+        ),
+        "attention": "Kiểm tra sạc nhìn chung bình thường nhưng có {attention} chỉ số cần lưu ý.",
+        "abnormal": "Kiểm tra sạc phát hiện {abnormal} chỉ số bất thường. Vui lòng xem khuyến nghị bên dưới.",
+        "insufficient": "Không đủ dữ liệu pin để đánh giá phiên sạc này.",
+    },
+    "mn": {
+        "normal": "Цэнэглэлтийн шалгалтын цуглуулсан бүх үзүүлэлт хэвийн хязгаарт байна.",
+        "normal_partial": (
+            "Цуглуулсан {assessed} үзүүлэлт хэвийн; {unavailable} үзүүлэлт мэдээлэл дутуугаас үнэлэгдсэнгүй."
+        ),
+        "attention": "Цэнэглэлтийн шалгалт ерөнхийдөө хэвийн боловч анхаарах {attention} үзүүлэлт байна.",
+        "abnormal": (
+            "Цэнэглэлтийн шалгалтаар {abnormal} хэвийн бус үзүүлэлт илэрлээ. Доорх зөвлөмжийг шалгана уу."
+        ),
+        "insufficient": "Үр дүнтэй үнэлгээ хийхэд батерейны өгөгдөл хүрэлцэхгүй байна.",
+    },
+    "th": {
+        "normal": "ตัวชี้วัดการตรวจสอบการชาร์จที่เก็บได้ทั้งหมดอยู่ในเกณฑ์ปกติ",
+        "normal_partial": (
+            "ตัวชี้วัดที่เก็บได้ {assessed} รายการอยู่ในเกณฑ์ปกติ และอีก {unavailable} รายการประเมินไม่ได้เนื่องจากข้อมูลไม่พอ"
+        ),
+        "attention": "การตรวจสอบการชาร์จโดยรวมปกติ แต่มี {attention} รายการที่ควรเฝ้าระวัง",
+        "abnormal": "การตรวจสอบการชาร์จพบความผิดปกติ {abnormal} รายการ โปรดตรวจสอบคำแนะนำด้านล่าง",
+        "insufficient": "ข้อมูลแบตเตอรี่ไม่เพียงพอสำหรับการประเมินการชาร์จครั้งนี้",
+    },
+    "km": {
+        "normal": "សូចនាករត្រួតពិនិត្យការសាកដែលប្រមូលបានទាំងអស់ស្ថិតក្នុងកម្រិតធម្មតា។",
+        "normal_partial": (
+            "សូចនាករដែលប្រមូលបាន {assessed} មានភាពធម្មតា និង {unavailable} មិនអាចវាយតម្លៃបានព្រោះខ្វះទិន្នន័យ។"
+        ),
+        "attention": "ការត្រួតពិនិត្យការសាកភាគច្រើនធម្មតា ប៉ុន្តែមានសូចនាករ {attention} ត្រូវយកចិត្តទុកដាក់។",
+        "abnormal": ("ការត្រួតពិនិត្យការសាកបានរកឃើញសូចនាករមិនប្រក្រតី {abnormal}។ សូមពិនិត្យការណែនាំខាងក្រោម។"),
+        "insufficient": "ទិន្នន័យថ្មមិនគ្រប់គ្រាន់សម្រាប់ការវាយតម្លៃវគ្គសាកនេះទេ។",
+    },
+}
+
+#: Deterministic advice snippets appended by triggered category across all 11 languages.
+HEALTH_ADVICE_MESSAGES: dict[str, dict[str, str]] = {
+    "zh": {
+        "thermal": "热管理指标偏高，建议尽量避免长时间大功率快充，充电时保持良好通风散热。",
+        "voltage": "电芯电压一致性或最高压存在异常，建议安排慢充均衡并关注电池健康。",
+        "soc": "充电过程存在 SOC 变化过快或跳变，建议完成一次较完整充电以校准电量估算。",
+        "stop_reason": "本次充电非正常结束，如频繁发生建议更换充电桩复测或联系运维排查。",
+        "shallow_charge": "本次充电 SOC 增幅不足 30%，属浅充，暂不作有效电池健康度（SOH）判定。",
+    },
+    "zh-Hant": {
+        "thermal": "熱管理指標偏高，建議儘量避免長時間大功率快充，充電時保持良好通風散熱。",
+        "voltage": "電芯電壓一致性或最高壓存在異常，建議安排慢充均衡並關注電池健康。",
+        "soc": "充電過程存在 SOC 變化過快或跳變，建議完成一次較完整充電以校準電量估算。",
+        "stop_reason": "本次充電非正常結束，如頻繁發生建議更換充電樁複測或聯繫維運排查。",
+        "shallow_charge": "本次充電 SOC 增幅不足 30%，屬淺充，暫不作有效電池健康度（SOH）判定。",
+    },
+    "en": {
+        "thermal": (
+            "Thermal metrics are elevated; avoid prolonged high-power fast charging "
+            "and ensure good ventilation."
+        ),
+        "voltage": (
+            "Cell voltage balance or peak voltage is out of range; "
+            "consider a slow balancing charge and monitor battery health."
+        ),
+        "soc": (
+            "Rapid SOC change or jumps were observed; "
+            "a fuller charging cycle is recommended to calibrate SOC estimation."
+        ),
+        "stop_reason": "This session ended abnormally; if it recurs, try another charger or contact support.",
+        "shallow_charge": (
+            "SOC increased by less than 30% (shallow charge), "
+            "so SOH is not evaluated as a valid health score."
+        ),
+    },
+    "de": {
+        "thermal": (
+            "Die Temperaturwerte sind erhöht; vermeiden Sie längeres Schnellladen mit hoher Leistung "
+            "und achten Sie auf gute Belüftung."
+        ),
+        "voltage": (
+            "Zellspannungsabweichung oder Höchstspannung ist auffällig; "
+            "ein langsames Ausgleichsladen wird empfohlen."
+        ),
+        "soc": (
+            "Schnelle SOC-Änderungen oder Sprünge wurden erkannt; "
+            "ein vollständigerer Ladezyklus hilft bei der Kalibrierung."
+        ),
+        "stop_reason": (
+            "Der Ladevorgang wurde nicht normal beendet; testen Sie bei Wiederholung eine andere Ladestation."
+        ),
+        "shallow_charge": (
+            "Der SOC-Anstieg lag unter 30 % (Teilladung); daher wird kein gültiger SOH-Wert ausgewiesen."
+        ),
+    },
+    "fr": {
+        "thermal": (
+            "Les indicateurs thermiques sont élevés ; évitez les charges rapides prolongées "
+            "et assurez une bonne ventilation."
+        ),
+        "voltage": (
+            "Un écart ou un pic de tension cellulaire a été détecté ; "
+            "une charge lente d'équilibrage est recommandée."
+        ),
+        "soc": (
+            "Une variation rapide ou un saut de SOC a été observé ; "
+            "une charge plus complète est conseillée pour calibrer le BMS."
+        ),
+        "stop_reason": (
+            "La charge s'est terminée de façon anormale ; en cas de répétition, essayez une autre borne."
+        ),
+        "shallow_charge": (
+            "La hausse du SOC est inférieure à 30 % (charge partielle) ; le SOH n'est donc pas validé."
+        ),
+    },
+    "es": {
+        "thermal": (
+            "Los valores térmicos son elevados; evite cargas rápidas prolongadas de alta potencia "
+            "y mantenga buena ventilación."
+        ),
+        "voltage": (
+            "Se detectó anomalía en la diferencia o pico de tensión de celdas; "
+            "se recomienda una carga lenta de equilibrado."
+        ),
+        "soc": (
+            "Se observaron cambios rápidos o saltos de SOC; "
+            "se recomienda un ciclo de carga más completo para calibrar el BMS."
+        ),
+        "stop_reason": (
+            "La sesión finalizó de forma anómala; si se repite, pruebe otro cargador o contacte a soporte."
+        ),
+        "shallow_charge": (
+            "El incremento de SOC fue inferior al 30 % (carga superficial), "
+            "por lo que el SOH no se considera válido."
+        ),
+    },
+    "pt": {
+        "thermal": (
+            "Os valores térmicos estão elevados; evite carregamento rápido prolongado de alta potência "
+            "e garanta boa ventilação."
+        ),
+        "voltage": (
+            "Foi detetada anomalia no equilíbrio ou pico de tensão das células; "
+            "recomenda-se uma carga lenta de balanceamento."
+        ),
+        "soc": (
+            "Foram observadas variações rápidas ou saltos de SOC; "
+            "recomenda-se um ciclo de carga mais completo para calibrar o BMS."
+        ),
+        "stop_reason": (
+            "O carregamento terminou de forma anómala; se voltar a ocorrer, experimente outro carregador."
+        ),
+        "shallow_charge": (
+            "O aumento de SOC foi inferior a 30 % (carga superficial), "
+            "pelo que o SOH não é considerado válido."
+        ),
+    },
+    "vi": {
+        "thermal": (
+            "Chỉ số nhiệt độ tăng cao; nên hạn chế sạc nhanh công suất lớn kéo dài "
+            "và đảm bảo thông thoáng khi sạc."
+        ),
+        "voltage": (
+            "Độ lệch hoặc điện áp cell cao nhất bất thường; nên sạc chậm để cân bằng cell và theo dõi pin."
+        ),
+        "soc": (
+            "Phát hiện SOC thay đổi nhanh hoặc nhảy bước; nên sạc đầy hơn trong lần tới để hiệu chuẩn BMS."
+        ),
+        "stop_reason": "Phiên sạc kết thúc bất thường; nếu lặp lại hãy thử trụ sạc khác hoặc liên hệ hỗ trợ.",
+        "shallow_charge": "Mức tăng SOC dưới 30% (sạc nông) nên chưa dùng làm đánh giá SOH hợp lệ.",
+    },
+    "mn": {
+        "thermal": (
+            "Дулааны үзүүлэлт өндөр байна; удаан хугацааны өндөр чадлын хурдан цэнэглэлтээс "
+            "зайлсхийж агааржуулалтыг хангана уу."
+        ),
+        "voltage": (
+            "Эсийн хүчдлийн зөрүү эсвэл дээд хүчдэл хэвийн бус байна; "
+            "удаан тэнцвэржүүлэх цэнэглэлт хийхийг зөвлөж байна."
+        ),
+        "soc": (
+            "SOC хурдан өөрчлөгдсөн эсвэл үсрэлт илэрлээ; "
+            "BMS тохируулгын тулд бүрэн цэнэглэлт хийхийг зөвлөж байна."
+        ),
+        "stop_reason": (
+            "Энэ цэнэглэлт хэвийн бусаар дууссан; "
+            "давтагдвал өөр цэнэглэгч турших эсвэл дэмжлэгтэй холбогдоно уу."
+        ),
+        "shallow_charge": (
+            "SOC-ийн өсөлт 30%-аас бага (богино цэнэглэлт) тул SOH-ийг хүчинтэй үнэлгээнд тооцохгүй."
+        ),
+    },
+    "th": {
+        "thermal": ("ค่าความร้อนสูงกว่าปกติ แนะนำให้หลีกเลี่ยงการชาร์จเร็วกำลังสูงต่อเนื่องเป็นเวลานานและดูแลการระบายอากาศ"),
+        "voltage": ("ความต่างแรงดันหรือแรงดันเซลล์สูงสุดผิดปกติ แนะนำให้ชาร์จช้าเพื่อปรับสมดุลเซลล์และติดตามสุขภาพแบตเตอรี่"),
+        "soc": ("พบการเปลี่ยนแปลงหรือการกระโดดของ SOC เร็วผิดปกติ แนะนำให้ชาร์จให้ครบช่วงมากขึ้นเพื่อปรับเทียบ BMS"),
+        "stop_reason": "การชาร์จสิ้นสุดผิดปกติ หากเกิดซ้ำแนะนำให้ลองตู้ชาร์จอื่นหรือติดต่อฝ่ายสนับสนุน",
+        "shallow_charge": ("ระดับ SOC เพิ่มขึ้นน้อยกว่า 30% (การชาร์จตื้น) จึงยังไม่ใช้ประเมินค่า SOH อย่างเป็นทางการ"),
+    },
+    "km": {
+        "thermal": ("សូចនាករកំដៅខ្ពស់ជាងធម្មតា សូមជៀសវាងការសាកលឿនកម្លាំងខ្ពស់រយៈពេលយូរ និងរក្សាការបញ្ចេញខ្យល់ឱ្យបានល្អ។"),
+        "voltage": ("គម្លាតតង់ស្យុង ឬតង់ស្យុងកោសិកាខ្ពស់បំផុតមានភាពមិនប្រក្រតី សូមសាកយឺតដើម្បីធ្វើឱ្យកោសិកាមានតុល្យភាព។"),
+        "soc": "បានរកឃើញការផ្លាស់ប្តូរ ឬការលោត SOC លឿន សូមសាកពេញលេញជាងនេះដើម្បីក្រិត BMS។",
+        "stop_reason": ("ការសាកបានបញ្ចប់មិនប្រក្រតី ប្រសិនបើកើតឡើងម្តងទៀត សូមសាកល្បងស្ថានីយ៍ផ្សេង ឬទាក់ទងជំនួយ។"),
+        "shallow_charge": ("ការកើនឡើង SOC តិចជាង 30% (សាករាក់) ដូច្នេះមិនប្រើជាការវាយតម្លៃ SOH ត្រឹមត្រូវទេ។"),
     },
 }
 
@@ -759,6 +1097,19 @@ def health_summary(language: str, key: str) -> str:
     """The report's summary sentence for one status branch."""
     pack = _pack(HEALTH_SUMMARY_MESSAGES, language)
     return pack.get(key) or HEALTH_SUMMARY_MESSAGES[DEFAULT_LANGUAGE]["insufficient"]
+
+
+def health_conclusion_headline(language: str, key: str, **params: int) -> str:
+    """Localized headline for a deterministic multi-indicator conclusion tier."""
+    pack = _pack(HEALTH_CONCLUSION_MESSAGES, language)
+    template = pack.get(key) or HEALTH_CONCLUSION_MESSAGES[DEFAULT_LANGUAGE]["insufficient"]
+    return template.format(**params)
+
+
+def health_advice(language: str, key: str) -> str:
+    """Localized deterministic advice sentence for one triggered category."""
+    pack = _pack(HEALTH_ADVICE_MESSAGES, language)
+    return pack.get(key) or HEALTH_ADVICE_MESSAGES[DEFAULT_LANGUAGE][key]
 
 
 def curve_name(language: str, field: str) -> str:

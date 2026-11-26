@@ -8,14 +8,21 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.common.scalar_rules import as_datetime
-from aiops_diagnostics.data.sources import SourceError
+from aiops_diagnostics.data.sources import COMM_STREAM_CODES, COMM_SUMMARY_CODES, SourceError
 from aiops_diagnostics.health.health_curves import build_curves
 from aiops_diagnostics.health.health_metrics import enrich_report
 from aiops_diagnostics.health.health_report import HealthReportError, build_minimal_health_report
+from aiops_diagnostics.health.ykc_frames import (
+    YkcProtocolEvidence,
+    extract_gun_no,
+    parse_ykc_comm_frames,
+    read_tx_serial_no,
+)
 from aiops_diagnostics.identity.scope_context import ScopeContext
 
 _LOGGER = logging.getLogger("aiops.gateway_runtime")
@@ -33,6 +40,28 @@ def finish_health_job(runtime: Any, job_id: str, **fields: Any) -> bool:
     return True
 
 
+def normalize_tdengine_gun_samples(samples: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """将 TDengine ``charging-gun_property`` 行归一化为健康报告口径。
+
+    41 生产库实测 ``power`` 单位为 W（``outputVoltage * outputCurrent ≈ power``），
+    规格 §5 定义功率曲线单位为 kW（``V × I / 1000``），因此在此统一换算为 kW，
+    避免把 50,000 W 原样标成 50,000 kW。
+    """
+    normalized: list[dict[str, Any]] = []
+    for row in samples:
+        item = dict(row)
+        voltage = _number(item.get("outputVoltage"))
+        current = _number(item.get("outputCurrent"))
+        power = _number(item.get("power"))
+        if voltage is not None and current is not None and voltage > 0 and current >= 0:
+            item["power"] = round(voltage * current / 1000.0, 3)
+        elif power is not None:
+            # TDengine charging-gun_property.power 单位恒为 W，无 V/I 时同样统一折算为 kW
+            item["power"] = round(power / 1000.0, 3)
+        normalized.append(item)
+    return normalized
+
+
 def execute_health_report(
     runtime: Any,
     job_id: str,
@@ -41,7 +70,7 @@ def execute_health_report(
     *,
     runtime_mod: Any,
 ) -> None:
-    """执行健康报告作业：取订单与枪采样 → 建曲线/指标 → 经 ``finish_health_job`` 收敛终态。"""
+    """执行健康报告作业：取订单、枪遥测与 YKC 协议帧 → 建曲线/指标 → 收敛终态。"""
     if not runtime.store.update_health_job(job_id, status="running"):
         return
     started = time.monotonic()
@@ -59,20 +88,57 @@ def execute_health_report(
                 language=job_language,
             )
             order = sources.get_orders(order_no)[0]
-            device = str(order.get("child_device_code") or order.get("device_code"))
+            gun_device = str(order.get("child_device_code") or order.get("device_code"))
+            pile_device = str(order.get("device_code") or "").strip()
+            created_at = as_datetime(order.get("created_time"))
+            stopped_at = as_datetime(order.get("stop_time"))
+
             try:
-                created_at = as_datetime(order.get("created_time"))
-                stopped_at = as_datetime(order.get("stop_time"))
                 if created_at is None or stopped_at is None:
                     raise SourceError("order timestamps unavailable")
-                samples = sources.get_gun_samples(device, created_at, stopped_at, None)
+                raw_samples = sources.get_gun_samples(gun_device, created_at, stopped_at, None)
             except SourceError:
-                samples = []
+                samples: list[dict[str, Any]] = []
                 report["source_summary"]["telemetry"] = "unavailable"
             else:
+                samples = normalize_tdengine_gun_samples(raw_samples)
                 report["source_summary"]["telemetry"] = "available" if samples else "unavailable"
-            report["curves"] = build_curves(samples, job_language)
-            report = enrich_report(report, samples, order)
+
+            protocol = YkcProtocolEvidence()
+            if (
+                pile_device
+                and created_at is not None
+                and stopped_at is not None
+                and hasattr(sources, "get_pile_comm_frames")
+            ):
+                try:
+                    # 拆分低频关键帧（0x15/17/19）与高频周期帧（0x23/25），防止长充电会话
+                    # 周期报文占满 LIMIT 2000 导致末段 0x19 结算帧丢失。
+                    summary_frames = sources.get_pile_comm_frames(
+                        pile_device, created_at, stopped_at, codes=COMM_SUMMARY_CODES
+                    )
+                    stream_frames = sources.get_pile_comm_frames(
+                        pile_device, created_at, stopped_at, codes=COMM_STREAM_CODES
+                    )
+                    raw_frames = [*summary_frames, *stream_frames]
+                except SourceError:
+                    report["source_summary"]["protocol"] = "unavailable"
+                else:
+                    protocol = parse_ykc_comm_frames(
+                        raw_frames,
+                        gun_no=extract_gun_no(pile_device, str(order.get("child_device_code") or "")),
+                        tx_serial_no=read_tx_serial_no(order),
+                    )
+                    report["source_summary"]["protocol"] = "available" if protocol.has_data else "unavailable"
+
+            report["curves"] = build_curves(samples, job_language, protocol=protocol)
+            report = enrich_report(
+                report,
+                samples,
+                order,
+                protocol=protocol,
+                language=job_language,
+            )
         if time.monotonic() - started > 30:
             finish_health_job(
                 runtime,
@@ -103,3 +169,10 @@ def execute_health_report(
                 else exc.__class__.__name__
             ),
         )
+
+
+def _number(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
