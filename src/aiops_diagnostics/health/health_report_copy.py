@@ -220,7 +220,7 @@ HEALTH_CURVE_NAMES: dict[str, dict[str, str]] = {
     },
 }
 
-#: Deterministic multi-tier conclusion headlines across all 11 supported languages (health-v3 / ADR-0352).
+#: Deterministic multi-tier conclusion headlines across all 11 supported languages (health-v3 / ADR-0353).
 HEALTH_CONCLUSION_MESSAGES: dict[str, dict[str, str]] = {
     "zh": {
         "normal": "本次充电体检各项已采集指标均处于正常范围。",

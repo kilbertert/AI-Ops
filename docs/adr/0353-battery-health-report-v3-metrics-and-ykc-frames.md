@@ -1,4 +1,4 @@
-# ADR-0352: 电池健康报告 `health-v3` 指标口径、确定性结论与 YKC 协议帧接入
+# ADR-0353: 电池健康报告 `health-v3` 指标口径、确定性结论与 YKC 协议帧接入
 
 Status: Accepted
 Date: 2026-11-26

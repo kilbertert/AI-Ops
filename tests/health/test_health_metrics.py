@@ -64,7 +64,7 @@ def test_score_boundaries_and_shallow_charge_threshold() -> None:
 
 
 def test_enrich_report_same_frame_temp_delta_and_shallow_charge() -> None:
-    """同帧温差 max(T_max - T_min) 与 ΔSOC=20% 浅充标记（ADR-0352）。"""
+    """同帧温差 max(T_max - T_min) 与 ΔSOC=20% 浅充标记（ADR-0353）。"""
     report = {
         "rule_version": RULE_VERSION,
         "indicators": [
