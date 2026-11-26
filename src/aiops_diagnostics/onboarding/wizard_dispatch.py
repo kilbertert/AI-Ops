@@ -37,6 +37,7 @@ from aiops_diagnostics.onboarding import (
     infra_orchestrator,
     public_smoke,
     registry,
+    wizard_runtime,
     wizard_validation,
 )
 
@@ -225,7 +226,17 @@ def _dispatch_discover(
     identity: tuple[str, str, str],
     hooks: WizardRuntimeHooks,
 ) -> dict[str, Any]:
-    allowed_keys = {"environment", "api_domain", "internal_gateway_addr"}
+    optional_keys = {
+        "internal_gateway_addr",
+        "mysql_host",
+        "mysql_port",
+        "mysql_user",
+        "mysql_password",
+        "redis_host",
+        "redis_port",
+        "redis_password",
+    }
+    allowed_keys = {"environment", "api_domain"} | optional_keys
     if not {"environment", "api_domain"}.issubset(wp) or set(wp) - allowed_keys:
         raise discovery.DiscoveryRefused("ENVIRONMENT_WIZARD_INVALID")
     env = wp["environment"]
@@ -233,6 +244,19 @@ def _dispatch_discover(
     internal_gw = wp.get("internal_gateway_addr", "")
     if not isinstance(api_domain, str) or not isinstance(internal_gw, str):
         raise discovery.DiscoveryRefused("ENVIRONMENT_WIZARD_INVALID")
+    for str_key in ("mysql_host", "mysql_user", "mysql_password", "redis_host", "redis_password"):
+        if wp.get(str_key) is not None and not isinstance(wp[str_key], str):
+            raise discovery.DiscoveryRefused("ENVIRONMENT_WIZARD_INVALID")
+    mysql_port = wp.get("mysql_port", 3306)
+    redis_port = wp.get("redis_port", 6379)
+    if (
+        type(mysql_port) is not int
+        or not (1 <= mysql_port <= 65535)
+        or type(redis_port) is not int
+        or not (1 <= redis_port <= 65535)
+    ):
+        raise discovery.DiscoveryRefused("ENVIRONMENT_WIZARD_INVALID")
+
     # 校验输入域名格式并在执行前断言目标主机已完成指纹钉扎引导
     discovery.build_remote_discovery_probe_script(
         environment=env,
@@ -240,13 +264,25 @@ def _dispatch_discover(
         internal_gateway_addr=internal_gw,
     )
     enrolled_host = _require_enrolled_host(path, identity, env)
-    if hooks.discovery_runner is None:
-        raise discovery.DiscoveryRefused("ENVIRONMENT_DISCOVERY_RUNNER_UNCONFIGURED")
-    host_facts, data_preflight_report = hooks.discovery_runner(enrolled_host, api_domain, internal_gw)
-    return discovery.parse_and_enrich_discovery_report(
+    if hooks.discovery_runner is not None:
+        host_facts, data_preflight_report = hooks.discovery_runner(enrolled_host, api_domain, internal_gw)
+        return discovery.parse_and_enrich_discovery_report(
+            environment=env,
+            host_facts=host_facts,
+            data_preflight_report=data_preflight_report,
+        )
+    return wizard_runtime.run_live_discovery(
+        path,
         environment=env,
-        host_facts=host_facts,
-        data_preflight_report=data_preflight_report,
+        api_domain=api_domain,
+        internal_gateway_addr=internal_gw,
+        mysql_host=wp.get("mysql_host") or "",
+        mysql_port=mysql_port,
+        mysql_user=wp.get("mysql_user") or "aiops_ro",
+        mysql_password=wp.get("mysql_password") or "",
+        redis_host=wp.get("redis_host") or "",
+        redis_port=redis_port,
+        redis_password=wp.get("redis_password") or "",
     )
 
 
@@ -263,7 +299,17 @@ def _dispatch_db_remediate(
         "confirmed_by_operator",
         "confirmation_digest",
     }
-    if set(wp) != required_keys:
+    optional_keys = {
+        "admin_mysql_host",
+        "admin_mysql_port",
+        "admin_mysql_user",
+        "admin_mysql_password",
+        "mysql_host",
+        "mysql_port",
+        "mysql_user",
+        "mysql_password",
+    }
+    if not required_keys.issubset(wp) or set(wp) - (required_keys | optional_keys):
         raise db_remediation.RemediationRefused("ENVIRONMENT_WIZARD_INVALID")
     if (
         not isinstance(wp["remediation_ids"], list)
@@ -272,22 +318,58 @@ def _dispatch_db_remediate(
         or not isinstance(wp["confirmation_digest"], str)
     ):
         raise db_remediation.RemediationRefused("ENVIRONMENT_WIZARD_INVALID")
+    for str_key in (
+        "admin_mysql_host",
+        "admin_mysql_user",
+        "admin_mysql_password",
+        "mysql_host",
+        "mysql_user",
+        "mysql_password",
+    ):
+        if wp.get(str_key) is not None and not isinstance(wp[str_key], str):
+            raise db_remediation.RemediationRefused("ENVIRONMENT_WIZARD_INVALID")
+    admin_port = wp.get("admin_mysql_port", 0)
+    ro_port = wp.get("mysql_port", 3306)
+    if (
+        type(admin_port) is not int
+        or not (0 <= admin_port <= 65535)
+        or type(ro_port) is not int
+        or not (1 <= ro_port <= 65535)
+    ):
+        raise db_remediation.RemediationRefused("ENVIRONMENT_WIZARD_INVALID")
+
     env = wp["environment"]
     _require_enrolled_host(path, identity, env)
-    if hooks.db_executor is None or hooks.db_reverify_runner is None:
-        raise db_remediation.RemediationRefused("ENVIRONMENT_DB_REMEDIATION_EXECUTOR_UNCONFIGURED")
     actor = ":".join(identity)
     audit_path = Path(path).parent / "db-remediation-audit.jsonl"
-    return db_remediation.execute_confirmed_db_remediation(
+    if hooks.db_executor is not None and hooks.db_reverify_runner is not None:
+        return db_remediation.execute_confirmed_db_remediation(
+            environment=env,
+            actor=actor,
+            remediation_ids=wp["remediation_ids"],
+            sql_statements=wp["sql_statements"],
+            confirmed_by_operator=wp["confirmed_by_operator"],
+            confirmation_digest=wp["confirmation_digest"],
+            executor=lambda stmts: hooks.db_executor(env, stmts),
+            reverify_runner=lambda: hooks.db_reverify_runner(env),
+            audit_log_path=audit_path,
+        )
+    return wizard_runtime.run_live_db_remediation(
+        path,
         environment=env,
         actor=actor,
         remediation_ids=wp["remediation_ids"],
         sql_statements=wp["sql_statements"],
         confirmed_by_operator=wp["confirmed_by_operator"],
         confirmation_digest=wp["confirmation_digest"],
-        executor=lambda stmts: hooks.db_executor(env, stmts),
-        reverify_runner=lambda: hooks.db_reverify_runner(env),
-        audit_log_path=audit_path,
+        admin_mysql_host=wp.get("admin_mysql_host") or "",
+        admin_mysql_port=admin_port,
+        admin_mysql_user=wp.get("admin_mysql_user") or "",
+        admin_mysql_password=wp.get("admin_mysql_password") or "",
+        mysql_host=wp.get("mysql_host") or "",
+        mysql_port=ro_port,
+        mysql_user=wp.get("mysql_user") or "aiops_ro",
+        mysql_password=wp.get("mysql_password") or "",
     )
 
 
@@ -351,18 +433,38 @@ def _dispatch_infra(
 def _dispatch_kb(
     action: str,
     wp: dict[str, Any],
+    context: Any,
+    path: str | Path,
     hooks: WizardRuntimeHooks,
 ) -> dict[str, Any]:
-    if hooks.kb_uploader is None:
-        raise wizard_validation.WizardValidationRefused("ENVIRONMENT_KB_UPLOADER_UNCONFIGURED")
+    tenant_id = str(wp.get("tenant_id") or "").strip()
+    if wp.get("tenant_id") is not None and not isinstance(wp["tenant_id"], str):
+        raise wizard_validation.WizardValidationRefused("ENVIRONMENT_WIZARD_INVALID")
+    uploader = hooks.kb_uploader
+    if uploader is None:
+        settings = getattr(context, "settings", None)
+
+        def uploader(role: str, target_kb_id: str, fname: str, raw: bytes) -> dict[str, Any]:
+            return wizard_runtime.upload_to_kb_service(
+                settings,
+                path,
+                environment=wp["environment"],
+                tenant_id=tenant_id,
+                target_role=role,
+                kb_id=target_kb_id,
+                filename=fname,
+                content_bytes=raw,
+            )
+
     if action == "kb_install_starter_faq":
-        if set(wp) != {"environment", "kb_id"}:
+        if not {"environment", "kb_id"}.issubset(wp) or set(wp) - {"environment", "kb_id", "tenant_id"}:
             raise wizard_validation.WizardValidationRefused("ENVIRONMENT_WIZARD_INVALID")
         return wizard_validation.install_consumer_starter_faq(
             kb_id=wp["kb_id"],
-            uploader=hooks.kb_uploader,
+            uploader=uploader,
         )
-    if set(wp) != {"environment", "target_role", "kb_id", "filename", "content_base64"}:
+    req_upload = {"environment", "target_role", "kb_id", "filename", "content_base64"}
+    if not req_upload.issubset(wp) or set(wp) - (req_upload | {"tenant_id"}):
         raise wizard_validation.WizardValidationRefused("ENVIRONMENT_WIZARD_INVALID")
     content_bytes = _decode_kb_base64(wp["content_base64"])
     return wizard_validation.upload_wizard_knowledge_doc(
@@ -370,7 +472,7 @@ def _dispatch_kb(
         kb_id=wp["kb_id"],
         filename=wp["filename"],
         content_bytes=content_bytes,
-        uploader=hooks.kb_uploader,
+        uploader=uploader,
     )
 
 
@@ -395,8 +497,17 @@ def _dispatch_self_validate(wp: dict[str, Any], hooks: WizardRuntimeHooks) -> di
     for opt_key in optional_keys:
         if wp.get(opt_key) is not None and not isinstance(wp[opt_key], str):
             raise wizard_validation.WizardValidationRefused("ENVIRONMENT_WIZARD_INVALID")
-    if hooks.validator_runner is None:
-        raise wizard_validation.WizardValidationRefused("ENVIRONMENT_VALIDATION_RUNNER_UNCONFIGURED")
+    runner = hooks.validator_runner
+    if runner is None:
+        base_gw = wp["company_gateway_url"]
+
+        def runner(cases_payload: dict[str, Any]) -> dict[str, Any]:
+            enriched = {**cases_payload, "company_gateway_url": base_gw}
+            return wizard_runtime.run_live_self_validation(
+                enriched,
+                http_caller=hooks.http_caller,
+            )
+
     return wizard_validation.run_zero_json_self_validation(
         environment=wp["environment"],
         tenant_id=wp["tenant_id"],
@@ -407,7 +518,7 @@ def _dispatch_self_validate(wp: dict[str, Any], hooks: WizardRuntimeHooks) -> di
         offline_end=wp["offline_end"],
         consumer_order_no=wp["consumer_order_no"],
         consumer_reference_id=wp["consumer_reference_id"],
-        validator_runner=hooks.validator_runner,
+        validator_runner=runner,
         consumer_session=wp.get("consumer_session"),
         consumer_phone=wp.get("consumer_phone"),
         consumer_code=wp.get("consumer_code"),
@@ -495,7 +606,7 @@ def dispatch_wizard(
         if action in {"infra_provision", "infra_status"}:
             return _dispatch_infra(action, wp, path, identity, hooks)
         if action in {"kb_upload", "kb_install_starter_faq"}:
-            return _dispatch_kb(action, wp, hooks)
+            return _dispatch_kb(action, wp, context, path, hooks)
         if action == "self_validate":
             return _dispatch_self_validate(wp, hooks)
         if action == "post_publish_smoke":
@@ -510,6 +621,7 @@ def dispatch_wizard(
         artifact_pool.ArtifactPoolRefused,
         infra_orchestrator.InfraProvisionRefused,
         wizard_validation.WizardValidationRefused,
+        wizard_runtime.WizardRuntimeError,
     ) as exc:
         raise auth.SetupRefused(str(exc)) from exc
     except auth.SetupRefused:
