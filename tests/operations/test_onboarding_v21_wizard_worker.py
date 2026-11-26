@@ -756,3 +756,72 @@ def test_step_customer_nginx_renders_canonical_tool_ingress_and_resolves_nginx_b
     assert "120[.]55[.]45[.]59" in tool_conf
     assert "124[.]243[.]178[.]156" in tool_conf
     assert commands and "NGINX_BIN=" in commands[0] and "/www/server/nginx/sbin/nginx" in commands[0]
+
+
+def test_step_allowlist_renders_execution_ingress_with_out_and_preserves_modes(monkeypatch) -> None:
+    from aiops_diagnostics.onboarding import wizard_worker
+
+    repo_root = Path(__file__).resolve().parents[2]
+    copied: dict[str, str] = {}
+    exec_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        wizard_worker,
+        "_dev_host_read",
+        lambda *_a, **_k: b'if ($realip_remote_addr !~ "^(124[.]243[.]178[.]156)$") { return 403; }\n',
+    )
+
+    def _fake_cp(_target: str, local_file: Path, remote_dest: str, **_kwargs) -> None:
+        copied[remote_dest] = local_file.read_text(encoding="utf-8")
+
+    def _fake_exec(target: str, _cmd: str, *, input_text: str | None = None, **_kwargs):
+        exec_calls.append((target, input_text or ""))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(wizard_worker, "_dev_host_cp", _fake_cp)
+    res = wizard_worker._step_allowlist(repo_root, "41", "8.148.223.139", exec_fn=_fake_exec)
+    assert res == {"ok": True}
+    rendered = copied["/tmp/wizard-aiops-execution-ingress.conf"]
+    assert "124[.]243[.]178[.]156|8[.]148[.]223[.]139" in rendered
+    assert any(target == "36" and "chmod(0o644)" in script for target, script in exec_calls)
+    assert any(target == "41" and "chmod(0o600)" in script for target, script in exec_calls)
+
+
+def test_execute_infra_provision_job_completes_failed_when_allowlist_raises(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from aiops_diagnostics.onboarding import wizard_worker
+
+    events: list[dict[str, object]] = []
+
+    def _fake_request(payload: dict[str, object]) -> dict[str, object]:
+        events.append(payload)
+        return {"ok": True}
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(wizard_worker, "_step_allowlist", _boom)
+    job = {
+        "job_id": "wizjob_0123456789abcdef01234567",
+        "environment": "jiejia",
+        "request": {
+            "environment": "jiejia",
+            "egress_ip": "8.148.223.139",
+            "api_domain": "api.juxichongdian.cn",
+            "gateway_url": "https://api.juxichongdian.cn",
+        },
+    }
+    res = wizard_worker.execute_infra_provision_job(
+        tmp_path,
+        "41",
+        job,
+        request=_fake_request,
+        pinned_factory=lambda *_a, **_k: SimpleNamespace(),
+    )
+    assert res == {"ok": True}
+    complete_evt = events[-1]
+    assert complete_evt["wizard_job"] == "complete"
+    assert complete_evt["passed"] is False
+    assert complete_evt["failed_step"] == "allowlist"
+    assert complete_evt["error_code"] == "ALLOWLIST_EXECUTION_ERROR"

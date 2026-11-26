@@ -241,10 +241,13 @@ def _step_allowlist(
             "    bak.write_text(orig, encoding='utf-8')",
             "    lines.append(entry)",
             "    p.write_text('\\n'.join(lines) + '\\n', encoding='utf-8')",
+            "    p.chmod(0o644)",
             "    t = subprocess.run(['nginx', '-t'], capture_output=True, text=True)",
             "    if t.returncode != 0:",
             "        p.write_text(orig, encoding='utf-8')",
+            "        p.chmod(0o644)",
             "        raise SystemExit(2)",
+            "p.chmod(0o644)",
             "subprocess.run(['nginx', '-s', 'reload'], check=True)",
         ]
     )
@@ -265,21 +268,22 @@ def _step_allowlist(
     if egress_ip not in sources:
         sources.append(egress_ip)
 
-    render_cmd = [
-        "python3",
-        str(root / "tools/content/render_execution_ingress.py"),
-        "--upstream",
-        "https://172.30.41.3:8900",
-        "--server-name",
-        "platform",
-        "--ca-file",
-        "/etc/aiops-node-runtime/tls/public/ca.crt",
-        *[arg for src in sources for arg in ("--allow-source", src)],
-    ]
-    rendered = subprocess.run(render_cmd, cwd=str(root), capture_output=True, text=True, check=True).stdout
     with tempfile.TemporaryDirectory(prefix="aiops-exec-ing-") as tmpdir:
         stage_file = Path(tmpdir) / "aiops-execution-ingress.conf"
-        stage_file.write_text(rendered, encoding="utf-8")
+        render_cmd = [
+            sys.executable,
+            str(root / "tools/content/render_execution_ingress.py"),
+            "--upstream",
+            "https://172.30.41.3:8900",
+            "--server-name",
+            "platform",
+            "--ca-file",
+            "/etc/aiops-node-runtime/tls/public/ca.crt",
+            *[arg for src in sources for arg in ("--allow-source", src)],
+            "--out",
+            str(stage_file),
+        ]
+        subprocess.run(render_cmd, cwd=str(root), capture_output=True, text=True, check=True)
         stage_sha = hashlib.sha256(stage_file.read_bytes()).hexdigest()
         _dev_host_cp(
             central_target,
@@ -296,6 +300,7 @@ def _step_allowlist(
             "src = Path('/tmp/wizard-aiops-execution-ingress.conf')",
             "orig = dst.read_text(encoding='utf-8') if dst.exists() else ''",
             "shutil.copyfile(src, dst)",
+            "dst.chmod(0o600)",
             "src.unlink(missing_ok=True)",
             "t = subprocess.run(['nginx', '-t'], capture_output=True, text=True)",
             "if t.returncode != 0:",
@@ -322,13 +327,14 @@ def _step_execution_node(
     revision = subprocess.check_output(["git", "rev-parse", "origin/main"], cwd=str(root), text=True).strip()
     callback_conf = subprocess.run(
         [
-            "python3",
+            sys.executable,
             str(root / "tools/content/render_node_callback.py"),
             "--environment-egress",
             "--gateway",
             f"https://{api_domain}",
         ],
         cwd=str(root),
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
         capture_output=True,
         text=True,
         check=True,
@@ -1052,60 +1058,58 @@ def execute_infra_provision_job(
             }
         )
 
-    pinned_host = (pinned_factory or PinnedCustomerHost.from_central)(central_target, env, cwd=root)
-    result_summary: dict[str, Any] = {}
-
-    _update(0, "running")
-    r0 = _step_allowlist(root, central_target, str(req["egress_ip"]))
-    if not r0.get("ok"):
-        _update(0, "failed", str(r0.get("reason") or ""))
-        return request(
-            {
-                "wizard_job": "complete",
-                "job_id": job_id,
-                "passed": False,
-                "error_code": str(r0.get("reason") or "ALLOWLIST_FAILED"),
-                "failed_step": "allowlist",
-                "steps": steps,
-                "result": result_summary,
-            }
-        )
-    _update(0, "passed")
-
-    _update(1, "running")
-    r1 = _step_execution_node(root, central_target, environment=env, api_domain=str(req["api_domain"]))
-    if not r1.get("ok"):
-        _update(1, "failed", str(r1.get("reason") or ""))
-        return request(
-            {
-                "wizard_job": "complete",
-                "job_id": job_id,
-                "passed": False,
-                "error_code": str(r1.get("reason") or "EXECUTION_NODE_FAILED"),
-                "failed_step": "execution_node",
-                "steps": steps,
-                "result": result_summary,
-            }
-        )
-    _update(1, "passed")
-
-    _update(2, "running")
-    try:
-        r2 = _step_cold_install_and_onboard(root, central_target, request, req, pinned_host=pinned_host)
-    except Exception as exc:
-        reason = str(exc) or "COLD_INSTALL_FAILED"
-        _update(2, "failed", reason)
+    def _fail_step(
+        idx: int,
+        reason: str,
+        *,
+        result: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _update(idx, "failed", reason, extra)
         return request(
             {
                 "wizard_job": "complete",
                 "job_id": job_id,
                 "passed": False,
                 "error_code": reason,
-                "failed_step": "cold_install_and_onboard",
+                "failed_step": steps[idx]["step"],
                 "steps": steps,
-                "result": result_summary,
+                "result": result_summary if result is None else result,
             }
         )
+
+    def _err_code(exc: Exception, default: str) -> str:
+        return (str(exc).strip()[:120] or default) if isinstance(exc, WizardWorkerError) else default
+
+    result_summary: dict[str, Any] = {}
+    try:
+        pinned_host = (pinned_factory or PinnedCustomerHost.from_central)(central_target, env, cwd=root)
+    except Exception as exc:
+        return _fail_step(0, _err_code(exc, "ENVIRONMENT_HOST_LOAD_FAILED"))
+
+    _update(0, "running")
+    try:
+        r0 = _step_allowlist(root, central_target, str(req["egress_ip"]))
+    except Exception as exc:
+        return _fail_step(0, _err_code(exc, "ALLOWLIST_EXECUTION_ERROR"))
+    if not r0.get("ok"):
+        return _fail_step(0, str(r0.get("reason") or "ALLOWLIST_FAILED"))
+    _update(0, "passed")
+
+    _update(1, "running")
+    try:
+        r1 = _step_execution_node(root, central_target, environment=env, api_domain=str(req["api_domain"]))
+    except Exception as exc:
+        return _fail_step(1, _err_code(exc, "EXECUTION_NODE_ERROR"))
+    if not r1.get("ok"):
+        return _fail_step(1, str(r1.get("reason") or "EXECUTION_NODE_FAILED"))
+    _update(1, "passed")
+
+    _update(2, "running")
+    try:
+        r2 = _step_cold_install_and_onboard(root, central_target, request, req, pinned_host=pinned_host)
+    except Exception as exc:
+        return _fail_step(2, str(exc) or "COLD_INSTALL_FAILED")
     for k in (
         "consumer_kb_id",
         "operator_kb_id",
@@ -1120,40 +1124,29 @@ def execute_infra_provision_job(
     _update(2, "passed", extra=result_summary)
 
     _update(3, "running")
-    r3 = _step_customer_nginx(root, req, pinned_host=pinned_host)
+    try:
+        r3 = _step_customer_nginx(root, req, pinned_host=pinned_host)
+    except Exception as exc:
+        return _fail_step(3, _err_code(exc, "CUSTOMER_NGINX_ERROR"))
     if not r3.get("ok"):
-        _update(3, "failed", str(r3.get("reason") or ""))
-        return request(
-            {
-                "wizard_job": "complete",
-                "job_id": job_id,
-                "passed": False,
-                "error_code": str(r3.get("reason") or "CUSTOMER_NGINX_FAILED"),
-                "failed_step": "customer_nginx",
-                "steps": steps,
-                "result": result_summary,
-            }
-        )
+        return _fail_step(3, str(r3.get("reason") or "CUSTOMER_NGINX_FAILED"))
     _update(3, "passed")
 
     _update(4, "running")
-    probe = (live_probe_fn or _step_live_probe)(str(req["gateway_url"]))
+    try:
+        probe = (live_probe_fn or _step_live_probe)(str(req["gateway_url"]))
+    except Exception as exc:
+        return _fail_step(4, _err_code(exc, "LIVE_PROBE_ERROR"))
     probe_meta = {
         "anon_assistant_status": probe.get("anon_assistant_status"),
         "upms_tenant_list_status": probe.get("upms_tenant_list_status"),
     }
     if not probe.get("ok"):
-        _update(4, "failed", str(probe.get("reason") or "LIVE_PROBE_FAILED"), probe_meta)
-        return request(
-            {
-                "wizard_job": "complete",
-                "job_id": job_id,
-                "passed": False,
-                "error_code": str(probe.get("reason") or "LIVE_PROBE_FAILED"),
-                "failed_step": "live_probe",
-                "steps": steps,
-                "result": {**result_summary, **probe_meta},
-            }
+        return _fail_step(
+            4,
+            str(probe.get("reason") or "LIVE_PROBE_FAILED"),
+            result={**result_summary, **probe_meta},
+            extra=probe_meta,
         )
     _update(4, "passed", extra=probe_meta)
     return request(
@@ -1198,77 +1191,73 @@ def execute_publish_environment_job(
             }
         )
 
-    _update(0, "running")
-    activated = request({"wizard_job": "activate_registry", **req})
-    if not isinstance(activated, dict) or not activated.get("ok"):
-        _update(0, "failed", "ACTIVATE_REGISTRY_FAILED")
+    def _fail_publish(idx: int, reason: str) -> dict[str, Any]:
+        _update(idx, "failed", reason)
         return request(
             {
                 "wizard_job": "complete",
                 "job_id": job_id,
                 "passed": False,
-                "error_code": "ACTIVATE_REGISTRY_FAILED",
-                "failed_step": "enable_registry",
+                "error_code": reason,
+                "failed_step": steps[idx]["step"],
                 "steps": steps,
             }
         )
+
+    def _pub_err(exc: Exception, default: str) -> str:
+        return (str(exc).strip()[:120] or default) if isinstance(exc, WizardWorkerError) else default
+
+    _update(0, "running")
+    try:
+        activated = request({"wizard_job": "activate_registry", **req})
+    except Exception as exc:
+        return _fail_publish(0, _pub_err(exc, "ACTIVATE_REGISTRY_ERROR"))
+    if not isinstance(activated, dict) or not activated.get("ok"):
+        return _fail_publish(0, "ACTIVATE_REGISTRY_FAILED")
     _update(0, "passed")
 
     _update(1, "running")
-    pinned_host = (pinned_factory or PinnedCustomerHost.from_central)(central_target, env, cwd=root)
-    with tempfile.TemporaryDirectory(prefix="aiops-pub-sync-") as tmpdir:
-        tmp = Path(tmpdir)
-        env_json = tmp / "environment.json"
-        env_json.write_bytes(
-            _dev_host_read(central_target, str(activated["environment_json_path"]), cwd=root)
-        )
-        env_json.chmod(0o600)
-        pinned_host.copy_file(env_json, f"/tmp/wizard-{env}-active-environment.json")
-    local_port = int(req.get("local_port") or 8788)
-    target_env_json = f"/etc/aiops-access-{env}/registry/environment.json"
-    sync_cmds = [
-        "set -euo pipefail",
-        f"mv -f /tmp/wizard-{env}-active-environment.json {target_env_json}",
-        f"chown aiops-access-{env}:aiops-access-{env} {target_env_json}",
-        f"chmod 600 {target_env_json}",
-        f"systemctl restart aiops-access-{env}.service",
-        f"for _i in $(seq 1 20); do curl -fsS http://127.0.0.1:{local_port}/health && break; sleep 1; done",
-        f"curl -fsS http://127.0.0.1:{local_port}/health",
-    ]
-    sync_res = pinned_host.run_cmd("; ".join(sync_cmds), timeout_sec=120)
+    try:
+        pinned_host = (pinned_factory or PinnedCustomerHost.from_central)(central_target, env, cwd=root)
+        with tempfile.TemporaryDirectory(prefix="aiops-pub-sync-") as tmpdir:
+            tmp = Path(tmpdir)
+            env_json = tmp / "environment.json"
+            env_json.write_bytes(
+                _dev_host_read(central_target, str(activated["environment_json_path"]), cwd=root)
+            )
+            env_json.chmod(0o600)
+            pinned_host.copy_file(env_json, f"/tmp/wizard-{env}-active-environment.json")
+        local_port = int(req.get("local_port") or 8788)
+        target_env_json = f"/etc/aiops-access-{env}/registry/environment.json"
+        sync_cmds = [
+            "set -euo pipefail",
+            f"mv -f /tmp/wizard-{env}-active-environment.json {target_env_json}",
+            f"chown aiops-access-{env}:aiops-access-{env} {target_env_json}",
+            f"chmod 600 {target_env_json}",
+            f"systemctl restart aiops-access-{env}.service",
+            f"for _i in $(seq 1 20); do curl -fsS http://127.0.0.1:{local_port}/health "
+            "&& break; sleep 1; done",
+            f"curl -fsS http://127.0.0.1:{local_port}/health",
+        ]
+        sync_res = pinned_host.run_cmd("; ".join(sync_cmds), timeout_sec=120)
+    except Exception as exc:
+        return _fail_publish(1, _pub_err(exc, "TARGET_SYNC_ERROR"))
     if sync_res.returncode != 0:
-        _update(1, "failed", "TARGET_SYNC_FAILED")
-        return request(
-            {
-                "wizard_job": "complete",
-                "job_id": job_id,
-                "passed": False,
-                "error_code": "TARGET_SYNC_FAILED",
-                "failed_step": "sync_target_runtime",
-                "steps": steps,
-            }
-        )
+        return _fail_publish(1, "TARGET_SYNC_FAILED")
     _update(1, "passed")
 
     _update(2, "running")
-    node_chk = _dev_host_exec(
-        central_target,
-        f"systemctl is-active --quiet aiops-environment-node@{env}.service",
-        timeout_sec=30,
-        cwd=root,
-    )
-    if node_chk.returncode != 0:
-        _update(2, "failed", "NODE_NOT_ACTIVE")
-        return request(
-            {
-                "wizard_job": "complete",
-                "job_id": job_id,
-                "passed": False,
-                "error_code": "NODE_NOT_ACTIVE",
-                "failed_step": "activate_node_route",
-                "steps": steps,
-            }
+    try:
+        node_chk = _dev_host_exec(
+            central_target,
+            f"systemctl is-active --quiet aiops-environment-node@{env}.service",
+            timeout_sec=30,
+            cwd=root,
         )
+    except Exception as exc:
+        return _fail_publish(2, _pub_err(exc, "NODE_CHECK_ERROR"))
+    if node_chk.returncode != 0:
+        return _fail_publish(2, "NODE_NOT_ACTIVE")
     _update(2, "passed")
     return request(
         {
