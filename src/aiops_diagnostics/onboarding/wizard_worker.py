@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shlex
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -120,21 +122,28 @@ class PinnedCustomerHost:
             central_target, "/var/lib/aiops-41/environment-registry/customer-hosts.json", cwd=cwd
         )
         hosts_doc = json.loads(raw_hosts.decode("utf-8"))
-        rec = (hosts_doc.get("environments") or {}).get(environment)
-        if not isinstance(rec, dict) or not rec.get("public_ip") or not rec.get("host_public_key_line"):
+        hosts_map = hosts_doc.get("hosts") or hosts_doc.get("environments") or {}
+        rec = hosts_map.get(environment)
+        host_ip = str(rec.get("address") or rec.get("public_ip") or "") if isinstance(rec, dict) else ""
+        if not isinstance(rec, dict) or not host_ip or not rec.get("host_public_key_line"):
             raise WizardWorkerError("ENVIRONMENT_HOST_NOT_ENROLLED")
-        key_ref = str(
-            rec.get("key_ref")
-            or f"/var/lib/aiops-41/environment-registry/customer-host-keys/{environment}.ed25519"
+        key_id = str(rec.get("key_id") or "").strip()
+        default_key_ref = (
+            f"/var/lib/aiops-41/environment-registry/customer-host-keys/id_{key_id}"
+            if key_id
+            else f"/var/lib/aiops-41/environment-registry/customer-host-keys/{environment}.ed25519"
         )
+        key_ref = str(rec.get("key_ref") or default_key_ref)
         key_pem = _dev_host_read(central_target, key_ref, cwd=cwd).decode("utf-8")
         return cls(
-            host_ip=str(rec["public_ip"]),
+            host_ip=host_ip,
             ssh_port=int(rec.get("ssh_port") or 22),
             ssh_user=str(rec.get("ssh_user") or "root"),
             key_pem=key_pem,
             host_public_key_line=str(rec["host_public_key_line"]),
-            expected_fingerprint=str(rec.get("host_key_fingerprint") or ""),
+            expected_fingerprint=str(
+                rec.get("host_fingerprint_sha256") or rec.get("host_key_fingerprint") or ""
+            ),
         )
 
     def _prepare_ssh_dir(self, tmp: Path) -> tuple[Path, Path]:
@@ -912,10 +921,36 @@ def _step_customer_nginx(
     proxy_inc = inc_tpl.replace("http://127.0.0.1:8788", f"http://127.0.0.1:{local_port}")
 
     ext_dir = f"/www/server/panel/vhost/nginx/extension/{api_domain}"
+    render_script = root / "tools/content/render_node_callback.py"
     with tempfile.TemporaryDirectory(prefix="aiops-cust-ngx-") as tmpdir:
         tmp = Path(tmpdir)
+        if render_script.is_file():
+            tool_conf_file = tmp / "aiops-tool-ingress.conf"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(render_script),
+                    "--ingress",
+                    "--gateway",
+                    f"http://127.0.0.1:{local_port}",
+                    "--allow-source",
+                    "120.55.45.59",
+                    "--allow-source",
+                    "124.243.178.156",
+                    "--out",
+                    str(tool_conf_file),
+                ],
+                cwd=str(root),
+                env={**os.environ, "PYTHONPATH": str(root / "src")},
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            rendered_tool_conf = tool_conf_file.read_text(encoding="utf-8")
+        else:
+            rendered_tool_conf = tool_conf
         for name, content in (
-            ("aiops-tool-ingress.conf", tool_conf),
+            ("aiops-tool-ingress.conf", rendered_tool_conf),
             ("aiops-user-ingress.conf", user_conf),
             ("environment-user-ingress-proxy.inc", proxy_inc),
         ):
@@ -925,6 +960,7 @@ def _step_customer_nginx(
 
     apply_cmd = f"""
 set -euo pipefail
+NGINX_BIN="$(command -v nginx || echo /www/server/nginx/sbin/nginx)"
 mkdir -p {shlex.quote(ext_dir)} /etc/aiops-access-{env}
 bak_dir=$(mktemp -d)
 trap 'rm -rf "$bak_dir"' EXIT
@@ -941,13 +977,13 @@ chmod 644 "{ext_dir}/aiops-tool-ingress.conf" \\
 rm -f "/tmp/wizard-{env}-aiops-tool-ingress.conf" \\
     "/tmp/wizard-{env}-aiops-user-ingress.conf" \\
     "/tmp/wizard-{env}-environment-user-ingress-proxy.inc"
-if ! nginx -t >/dev/null 2>&1; then
+if ! "$NGINX_BIN" -t >/dev/null 2>&1; then
     for f in aiops-tool-ingress.conf aiops-user-ingress.conf; do
         if [ -f "$bak_dir/$f" ]; then cp -f "$bak_dir/$f" "{ext_dir}/$f"; else rm -f "{ext_dir}/$f"; fi
     done
     exit 2
 fi
-nginx -s reload
+"$NGINX_BIN" -s reload
 """
     res = pinned_host.run_cmd(apply_cmd, timeout_sec=60)
     if res.returncode != 0:
