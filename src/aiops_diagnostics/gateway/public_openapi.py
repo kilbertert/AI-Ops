@@ -243,10 +243,28 @@ def _schemas() -> dict[str, Any]:
         ),
         "Analysis": analysis,
         "Health": _object(
-            **{k: v for k, v in job.items() if k != "result"},
+            **{k: v for k, v in job.items() if k not in {"result", "rule_version", "language"}},
             job_id=string,
             order_no=string,
-            report=nullable_object,
+            rule_version={
+                "type": "string",
+                "description": "规则版本（现行 health-v3），与 report.rule_version 严格一致",
+            },
+            language={"type": "string", "description": "创建作业时解析的报告正文语言"},
+            report={
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "description": (
+                            "完成态返回 health-v3 报告正文，含 overview、overall_health_score、"
+                            "conclusion、7 项 indicators、5 维 radar、curves、health_metrics、"
+                            "completeness 与 source_summary"
+                        ),
+                        "additionalProperties": True,
+                    },
+                    {"type": "null"},
+                ]
+            },
         ),
         "Clarification": _object(
             type={"type": "string", "const": "clarification"},

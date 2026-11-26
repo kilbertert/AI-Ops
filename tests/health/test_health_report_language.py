@@ -18,8 +18,11 @@ import pytest
 from aiops_diagnostics.common.config import SafetySettings
 from aiops_diagnostics.common.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.health.health_curves import build_curves
+from aiops_diagnostics.health.health_metrics import enrich_report
 from aiops_diagnostics.health.health_report import build_minimal_health_report
 from aiops_diagnostics.health.health_report_copy import (
+    HEALTH_ADVICE_MESSAGES,
+    HEALTH_CONCLUSION_MESSAGES,
     HEALTH_CURVE_NAMES,
     HEALTH_STOP_FALLBACK_MESSAGES,
     HEALTH_SUMMARY_MESSAGES,
@@ -38,6 +41,8 @@ def test_every_copy_table_covers_every_supported_language() -> None:
     """
     for name, table in (
         ("HEALTH_SUMMARY_MESSAGES", HEALTH_SUMMARY_MESSAGES),
+        ("HEALTH_CONCLUSION_MESSAGES", HEALTH_CONCLUSION_MESSAGES),
+        ("HEALTH_ADVICE_MESSAGES", HEALTH_ADVICE_MESSAGES),
         ("HEALTH_CURVE_NAMES", HEALTH_CURVE_NAMES),
         ("HEALTH_STOP_FALLBACK_MESSAGES", HEALTH_STOP_FALLBACK_MESSAGES),
         ("YKC_STOP_REASON_MESSAGES", YKC_STOP_REASON_MESSAGES),
@@ -62,7 +67,29 @@ def test_the_assembled_report_has_no_chinese_for_other_languages(language: str) 
     from aiops_diagnostics.common.i18n import chinese_leak
 
     report = build_minimal_health_report(_Sources([_order()]), "O-1", SafetySettings(), language)
+    report = enrich_report(
+        report,
+        [
+            {
+                "_ts": 0,
+                "batteryMaxTemperature": 50,
+                "batteryMinTemperature": 42,
+                "soc": 20,
+                "chargingElectricityQuantity": 1.0,
+            },
+            {
+                "_ts": 10,
+                "batteryMaxTemperature": 56,
+                "batteryMinTemperature": 46,
+                "soc": 30,
+                "chargingElectricityQuantity": 6.0,
+            },
+        ],
+        _order(),
+        language=language,
+    )
     assert chinese_leak(report["summary"]) == "", report["summary"]
+    assert chinese_leak(report["conclusion"]["text"]) == "", report["conclusion"]["text"]
     # EVERY string we author, `stop_reason.value` included. This used to skip
     # `stop_reason` on the grounds that it "may carry the upstream's own text" —
     # and that carve-out is exactly how 66.3%-of-orders' worth of Chinese

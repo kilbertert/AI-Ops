@@ -29,7 +29,7 @@ from aiops_diagnostics.common.endpoint_policy import is_loopback_host
 # 代理授权的 gun SELECT 列串与 sources.get_gun_samples 生成的 SQL 逐字节同源：
 # 同一函数派生、由 pin 测试兜底。代理是独立部署的 root 服务，SQL 形状漂移
 # 会在滚动窗口内被生产代理拒绝，因此这里必须与 sources 严格共享而非复制。
-from aiops_diagnostics.data.sources import GUN_COLUMNS_SQL
+from aiops_diagnostics.data.sources import COMM_CODES_SQL, COMM_COLUMNS_SQL, GUN_COLUMNS_SQL
 
 GUN_COLUMNS = GUN_COLUMNS_SQL
 #: 查询请求的传输层白名单，不是订单标识语法 —— 后者只有
@@ -42,6 +42,12 @@ GUN_QUERY = re.compile(
     rf"WHERE device='(?P<device>{SAFE_VALUE})' AND _ts>='(?P<start>{TIME_VALUE})' "
     rf"AND _ts<='(?P<end>{TIME_VALUE})'"
     rf"(?: AND `txSerialNo`='(?P<tx>{SAFE_VALUE})')? ORDER BY _ts ASC LIMIT (?P<limit>\d+)$"
+)
+COMM_QUERY = re.compile(
+    rf"^SELECT {re.escape(COMM_COLUMNS_SQL)} FROM `charging-pile_comm` "
+    rf"WHERE device='(?P<device>{SAFE_VALUE})' AND _ts>='(?P<start>{TIME_VALUE})' "
+    rf"AND _ts<='(?P<end>{TIME_VALUE})' AND `code` IN \({re.escape(COMM_CODES_SQL)}\) "
+    rf"ORDER BY _ts ASC LIMIT (?P<limit>\d+)$"
 )
 SAFE_DATABASE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -139,7 +145,7 @@ def is_allowed_sql(sql: str, settings: ProxySettings) -> bool:
     normalized = " ".join(sql.strip().split())
     if normalized == "SHOW STABLES":
         return True
-    match = GUN_QUERY.fullmatch(normalized)
+    match = GUN_QUERY.fullmatch(normalized) or COMM_QUERY.fullmatch(normalized)
     if not match or int(match.group("limit")) > settings.max_rows:
         return False
     try:

@@ -54,10 +54,17 @@ def test_runtime_queries_match_proxy_allowlist() -> None:
         datetime.fromisoformat("2026-07-31 10:30:00"),
         "TX-01",
     )
+    source.get_pile_comm_frames(
+        "PILE-01",
+        datetime.fromisoformat("2026-07-31 10:00:00"),
+        datetime.fromisoformat("2026-07-31 10:30:00"),
+    )
 
     proxy = _settings()
     assert is_allowed_sql("SHOW STABLES", proxy)
+    assert len(queries) == 2
     assert all(is_allowed_sql(query, proxy) for query in queries)
+    assert not is_allowed_sql(queries[1].replace("'15'", "'99'"), proxy)
 
 
 def test_gun_query_quotes_case_sensitive_tdengine_columns() -> None:

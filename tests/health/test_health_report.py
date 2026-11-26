@@ -44,7 +44,7 @@ def test_minimal_health_report_is_deterministic() -> None:
     report = build_minimal_health_report(_Sources([_order()]), "O-1", SafetySettings())
 
     assert report["order_no"] == "O-1"
-    assert report["rule_version"] == "health-v2"  # one notion; see health_metrics.RULE_VERSION
+    assert report["rule_version"] == "health-v3"  # one notion; see health_metrics.RULE_VERSION
     assert report["summary"] == "本次充电健康报告包含 1 项正常指标"
     assert report["completeness"] == 1.0
     assert report["indicators"] == [

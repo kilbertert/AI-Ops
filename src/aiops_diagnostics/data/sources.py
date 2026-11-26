@@ -786,6 +786,8 @@ class MySQLSource:
 # charging-gun_property 查询列的唯一权威清单：
 # TDengineSource.get_gun_samples 的 SELECT、
 # tdengine_proxy 只读白名单全部从这里派生，防止三处各自维护漂移。
+# 注意：41 生产库 charging-gun_property 无 batteryMinTemperature 列（ADR-0090 /
+# ADR-0350 2026-11-26 实测），电池最低温由 charging-pile_comm 0x25 帧提供。
 GUN_COLUMN_NAMES: tuple[str, ...] = (
     "txSerialNo",
     "status",
@@ -799,11 +801,17 @@ GUN_COLUMN_NAMES: tuple[str, ...] = (
     "soc",
     "temperature",
     "batteryMaxTemperature",
-    "batteryMinTemperature",
     "errorCode",
     "errorReason",
     "meterNow",
 )
+
+#: charging-pile_comm 只读协议帧白名单（ADR-0350）：
+#: 仅允许电池健康报告所需的五类 YKC 报文（0x15 握手、0x17 参数、0x19 结束、
+#: 0x23 需求、0x25 BMS 信息），TDengineSource 与 tdengine_proxy 共用本定义。
+COMM_FRAME_CODES: tuple[str, ...] = ("15", "17", "19", "23", "25")
+COMM_COLUMNS_SQL = "_ts, `code`, `direction`, `raw`"
+COMM_CODES_SQL = ", ".join(f"'{code}'" for code in COMM_FRAME_CODES)
 
 
 def _gun_columns_sql() -> str:
@@ -903,6 +911,25 @@ class TDengineSource:
         )
         return self._query(sql)
 
+    def get_pile_comm_frames(
+        self,
+        device: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, Any]]:
+        """按桩编码与订单时间窗只读拉取五类 YKC BMS 协议帧（受 DeviceGate 约束）。"""
+        self._check_device_allowed(device)
+        device_literal = _safe_literal(device)
+        limit = int(self.settings.safety.tdengine_max_rows)
+        sql = (
+            f"SELECT {COMM_COLUMNS_SQL} "
+            "FROM `charging-pile_comm` "
+            f"WHERE device='{device_literal}' AND _ts>='{_format_time(start_time)}' "
+            f"AND _ts<='{_format_time(end_time)}' AND `code` IN ({COMM_CODES_SQL}) "
+            f"ORDER BY _ts ASC LIMIT {limit}"
+        )
+        return self._query(sql)
+
 
 class DeviceGate:
     """收集订单设备集合，供 TDengine 查询按权限范围校验。
@@ -971,6 +998,14 @@ class ScopedSources:
     ) -> list[dict[str, Any]]:
         return self.tdengine.get_gun_samples(device, start_time, end_time, tx_serial_no)
 
+    def get_pile_comm_frames(
+        self,
+        device: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, Any]]:
+        return self.tdengine.get_pile_comm_frames(device, start_time, end_time)
+
 
 class FixtureSources:
     def __init__(self, path: Path) -> None:
@@ -1011,6 +1046,14 @@ class FixtureSources:
         tx_serial_no: str | None,
     ) -> list[dict[str, Any]]:
         return copy.deepcopy(self.payload.get("gun_samples", []))
+
+    def get_pile_comm_frames(
+        self,
+        device: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, Any]]:
+        return copy.deepcopy(self.payload.get("pile_comm_frames", []))
 
 
 @contextlib.contextmanager
