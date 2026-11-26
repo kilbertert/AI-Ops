@@ -82,8 +82,9 @@ id 相同的**两个不同的人**会映射到**同一个 Dify 账号**，于是
    `__Host-access_token` 时 `GET /` 与 `GET /apps` 都是 200）。所以会话到期后落到的是**我们的**
    登录页 —— 这正是要的行为。**会话寿命因此是硬上界**：`AIOPS_LOGIN_PROXY_ACCESS_MINUTES`。
 2. **`__Host-` 前缀在 https 下是确定的**（#776 起控制台就是 https，且本部署未设
-   `COOKIE_DOMAIN`）。共三处要带前缀：下发、登出清理、以及 `dify_login_provision` 里
-   开户时那个写死的 csrf cookie 名 —— 第三处漏了会让**新账号开不出来**而老账号没事。
+   `COOKIE_DOMAIN`）。前缀出现在三处：下发、登出清理、以及开通时的 csrf cookie
+   （`dify_login_proxy/provision.py` 用 `session.cookie_prefix` 拼接，只有基名
+   `csrf_token` 是字面量 —— Dify 固定该名）。开通处漏带前缀 = **新账号开不出来**而老账号没事。
 
 ## 密钥与后果（ADR-0023 的代价）
 
