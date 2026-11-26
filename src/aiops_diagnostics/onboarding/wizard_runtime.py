@@ -243,6 +243,7 @@ def run_live_discovery(
                 "AIOPS_GATEWAY_PUBLIC_BASE_URL": company_gw_url,
                 "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": company_gw_url,
                 "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX": "app:3rd_session:",
+                "AIOPS_MYSQL_DATABASE": existing_tpl.get("AIOPS_MYSQL_DATABASE") or "cloud_charging_pile",
                 "AIOPS_MYSQL_TIMEZONE": str(host_facts.get("timezone") or "Asia/Shanghai"),
             }
             if internal_gateway_addr.strip():
