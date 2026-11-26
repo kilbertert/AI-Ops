@@ -1,34 +1,39 @@
 name: CD
 
-# 仅部署受保护 main 的 Gateway 提交；部署锁不可取消。其他组件按各自手册交付。
+# 仅部署受保护 main 上人工选定的 Gateway 提交；合入 main 不自动部署。
+# 版本提交（VERSION及包元数据）合入main后，选择完整SHA手动发布为一个批次。
+# 部署锁不可取消；其他组件按各自手册交付。
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "deploy/deploy-41.sh"
-      - "deploy/classify-remote-result.sh"
-      - ".github/workflows/cd.yml"
-      - "pyproject.toml"
-      - "uv.lock"
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "已合入 main 的完整提交 SHA；按该提交的 VERSION 发布一个批次"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: aiops-production-release
+  cancel-in-progress: false
+
 jobs:
   deploy-41:
-    if: github.ref == 'refs/heads/main'
-    outputs:
-      sha: ${{ steps.target.outputs.sha }}
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     concurrency:
       group: cd-41-deploy
       cancel-in-progress: false
+    permissions:
+      contents: write
+    environment: production-41
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+      version: ${{ steps.target.outputs.version }}
+      tag: ${{ steps.version-tag.outputs.tag }}
     runs-on: aiops-deploy
     timeout-minutes: 20
-
-    environment: production-41
 
     steps:
       - name: Check out the repository
@@ -39,10 +44,64 @@ jobs:
 
       - name: Resolve the commit to deploy
         id: target
+        env:
+          TARGET_INPUT: ${{ inputs.target_sha }}
         run: |
           set -euo pipefail
-          git cat-file -e "${GITHUB_SHA}^{commit}"
-          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          git fetch --prune origin main
+          object_format=$(git rev-parse --show-object-format)
+          case "$object_format" in
+            sha1) [[ "$TARGET_INPUT" =~ ^[0-9a-f]{40}$ ]] || { echo "target_sha 必须是完整 SHA-1" >&2; exit 1; } ;;
+            sha256) [[ "$TARGET_INPUT" =~ ^[0-9a-f]{64}$ ]] || { echo "target_sha 必须是完整 SHA-256" >&2; exit 1; } ;;
+            *) echo "不支持的 Git object format: $object_format" >&2; exit 1 ;;
+          esac
+          full_sha=$(git rev-parse --verify "${TARGET_INPUT}^{commit}")
+          git merge-base --is-ancestor "$full_sha" origin/main || {
+            echo "目标提交不在 origin/main 历史中，拒绝发布" >&2
+            exit 1
+          }
+          version=$(git show "$full_sha:VERSION" | tr -d '[:space:]')
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "选定提交中的 VERSION 不是 SemVer: $version" >&2
+            exit 1
+          }
+          echo "sha=$full_sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "选择发布批次：$version ($full_sha)"
+
+      - name: Reserve or verify the immutable version tag
+        id: version-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          VERSION: ${{ steps.target.outputs.version }}
+        run: |
+          set -eu
+          vtag="v${VERSION}"
+          remote_tag=$(git ls-remote origin "refs/tags/$vtag")
+          if [ -z "$remote_tag" ]; then
+            tag_object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags" \
+              -f tag="$vtag" -f message="AI-Ops $VERSION" \
+              -f object="$TARGET_SHA" -f type=commit --jq .sha)
+            if ! gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$vtag" -f sha="$tag_object" >/dev/null; then
+              echo "创建标签引用失败；仅在并发者创建了同SHA注释标签时继续" >&2
+            fi
+          fi
+          git fetch origin "refs/tags/$vtag:refs/tags/$vtag"
+          [ "$(git cat-file -t "$vtag")" = tag ] || { echo "$vtag 不是注释标签" >&2; exit 1; }
+          [ "$(git rev-parse "$vtag^{commit}")" = "$TARGET_SHA" ] || {
+            echo "$vtag 已属于其他提交；递增VERSION后发布" >&2; exit 1;
+          }
+          echo "tag=$vtag" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the selected deployment commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Install the CD deploy key
         id: cdkey
@@ -88,12 +147,14 @@ jobs:
         if: always()
         env:
           DEPLOY_RESULT: ${{ steps.deploy.outcome }}
+          TAG_RESULT: ${{ steps.version-tag.outcome }}
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
           {
             echo '### Gateway 部署结果'
-            echo "- 提交：${TARGET_SHA:-未解析}"
+            echo "- 发布提交：${TARGET_SHA:-未解析}"
             echo "- 部署步骤：$DEPLOY_RESULT"
+            echo "- 版本标签：${TAG_RESULT:-未执行}"
             echo '- 失败时查看首个失败步骤，按部署手册核对现役版本与回滚记录。'
             echo '- Java 节点、Dify、H5 与知识服务不由这个 workflow 一并部署。'
             echo '- 业务验收单独记录；操作入口见 docs/agents/actions-delivery.md。'
@@ -105,85 +166,75 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
-    concurrency:
-      group: cd-release-notes
-      cancel-in-progress: false
     steps:
-      - name: Check out the deployed commit
+      - name: Check out the selected release commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ needs.deploy-41.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Publish release notes
-        id: release
+      - name: Generate and publish release notes
+        id: publish
         env:
           PATH: /home/claude/miniconda3/bin:/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_SHA: ${{ needs.deploy-41.outputs.sha }}
+          VERSION: ${{ needs.deploy-41.outputs.version }}
+          VERSION_TAG: ${{ needs.deploy-41.outputs.tag }}
         run: |
           set -eu
           if ! command -v dev-changelog >/dev/null 2>&1; then
-            echo "::error::dev-changelog is not on the self-hosted runner's PATH; it ships with the server release unit" >&2
+            echo "::error::dev-changelog is not on the self-hosted runner's PATH" >&2
             exit 1
           fi
-
+          [ "$(git rev-parse HEAD)" = "$TARGET_SHA" ] || { echo "发布checkout与目标SHA不符" >&2; exit 1; }
+          git fetch origin "refs/tags/$VERSION_TAG:refs/tags/$VERSION_TAG"
+          [ "$(git cat-file -t "$VERSION_TAG")" = tag ] || { echo "版本标签不是注释标签" >&2; exit 1; }
+          [ "$(git rev-parse "$VERSION_TAG^{commit}")" = "$TARGET_SHA" ] || {
+            echo "版本标签与部署SHA不符，拒绝发布说明" >&2; exit 1;
+          }
           repo_root=$(git rev-parse --show-toplevel)
-
           git config --local serverPolicy.publishesVersions true
           git config --local serverPolicy.changelogAtRelease true
 
-          version=$(tr -d '[:space:]' < "$repo_root/VERSION")
-          if [ -z "$version" ]; then
-            echo "::error::VERSION is empty — refusing to publish a release with no version" >&2
-            exit 1
-          fi
-
-          vtag="v${version}"
-          if ! git ls-remote --exit-code origin "refs/tags/$vtag" >/dev/null 2>&1; then
-            tag_object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags" \
-              -f tag="$vtag" -f message="AI-Ops $version" \
-              -f object="$TARGET_SHA" -f type=commit --jq .sha)
-            if ! gh api "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="refs/tags/$vtag" -f sha="$tag_object" >/dev/null; then
-              git fetch origin "refs/tags/$vtag:refs/tags/$vtag"
-              [ "$(git rev-parse "$vtag^{commit}")" = "$TARGET_SHA" ] || exit 1
-              [ "$(git cat-file -t "$vtag")" = tag ] || exit 1
-            fi
-          fi
-          git fetch origin "refs/tags/$vtag:refs/tags/$vtag"
-          tagged_commit=$(git rev-parse "$vtag^{commit}")
-          if [ "$tagged_commit" != "$TARGET_SHA" ]; then
-            echo "tag $vtag already points at ${tagged_commit:0:12}; leaving it there."
-          fi
-
           notes=$(mktemp)
           trap 'rm -f "$notes"' EXIT
+          # Reserved-but-failed candidate tags are not published release boundaries.
+          published=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100")
+          GIT_CLIFF_TAG_PATTERN=$(printf '%s' "$published" | python3 -c '
+          import json, os, re, sys
+          tags = {os.environ["VERSION_TAG"]}
+          for page in json.load(sys.stdin):
+              for release in page:
+                  tag = release["tag_name"]
+                  if not release["draft"] and re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag):
+                      tags.add(tag)
+          print("^(?:" + "|".join(re.escape(tag) for tag in sorted(tags)) + ")$")
+          ')
+          export GIT_CLIFF_TAG_PATTERN
           dev-changelog "$repo_root"
           if [ ! -s "$repo_root/CHANGELOG.md" ]; then
-            echo "::error::dev-changelog exited 0 but produced no $repo_root/CHANGELOG.md" >&2
-            echo "::error::usual cause: serverPolicy.publishesVersions is not declared in this checkout (it is local git config, never committed)" >&2
+            echo "::error::dev-changelog produced no $repo_root/CHANGELOG.md" >&2
             exit 1
           fi
-          cp "$repo_root/CHANGELOG.md" "$notes"
+          prefix="## [$VERSION] - "
+          awk -v prefix="$prefix" '
+            !found && index($0, prefix) == 1 { found = 1 }
+            found && /^## \[/ && index($0, prefix) != 1 { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' "$repo_root/CHANGELOG.md" > "$notes" || {
+            echo "::error::dev-changelog emitted no $VERSION section" >&2
+            exit 1
+          }
+          [ -s "$notes" ] || { echo "::error::empty release notes for $VERSION" >&2; exit 1; }
 
-          tag="release-${TARGET_SHA:0:12}"
-          title="AI-Ops ${version} — deployed ${TARGET_SHA:0:12}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "release $tag already exists; updating its notes."
-            gh release edit "$tag" --title "$title" --notes-file "$notes"
+          title="AI-Ops v${VERSION}"
+          if gh release view "$VERSION_TAG" >/dev/null 2>&1; then
+            gh release edit "$VERSION_TAG" --title "$title" --notes-file "$notes" --prerelease=false
           else
-            gh release create "$tag" \
-              --target "$TARGET_SHA" \
-              --title "$title" \
-              --notes-file "$notes" \
-              --prerelease
-          fi
-
-          if [ "$tagged_commit" = "$TARGET_SHA" ] && ! gh release view "$vtag" >/dev/null 2>&1; then
-            gh release create "$vtag" --verify-tag \
-              --title "AI-Ops ${version}" --notes-file "$notes" --prerelease
+            gh release create "$VERSION_TAG" --verify-tag --title "$title" --notes-file "$notes"
           fi
 
       - name: Report failure
@@ -194,8 +245,8 @@ jobs:
         run: |
           {
             echo '### 发布说明结果'
-            echo "- 已部署提交：$TARGET_SHA"
-            echo "- 发布说明作业：$RELEASE_RESULT"
-            echo '- Gateway 部署已成功；此作业失败只重跑失败作业，不据此回滚或重启服务。'
+            echo "- 已选定并部署提交：$TARGET_SHA"
+            echo "- 版本发布作业：$RELEASE_RESULT"
+            echo '- Gateway 部署已成功；只重跑说明生成；不据此回滚或重启已部署服务。'
             echo '- 业务验收单独记录；操作入口见 docs/agents/actions-delivery.md。'
           } >> "$GITHUB_STEP_SUMMARY"

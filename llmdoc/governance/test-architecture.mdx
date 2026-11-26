@@ -57,6 +57,7 @@ code:
 - `test_runtime_retirement.py`：已退役模块/import/路由保持缺席；`test_opening_old_database_preserves_retired_data` 先铺 `LEGACY_DIFY` 基线再 `GatewayStore(path)`——store 构造即跑 `gateway_schema.ensure`，退役表断言走真实迁移路径。
 - 三个都在必需检查 `verify` 内跑——不靠人工纪律。
 - `test_cd_deploy_scripts.py` 在真 SQLite 上执行 deploy-41.sh 的 schema 预检+迁移闸片段（非替身）：错文件/备份冲突/迁移/完整性失败在替换源文件前拒绝且不覆盖原库，迁移后失败不自动回滚；备份目录 0710、schema 子目录 0700 不依赖 umask（027/077 均成立）。
+- 显式版本发布复用`test_release_version.py`的临时Git远端验证完整main SHA、SemVer、不可移动注释标签、竞争冲突与单版本Release；旧push.paths测试随触发合同退役，部署脚本其余覆盖保留。`test_actions_delivery.py`及`test_runner_queue.py`验证workflow/部署结果分离、无任务不检查runner与真实异常仍告警。
 
 ## Bitter doubles（ADR-0030）
 

@@ -102,7 +102,7 @@ R1-1 的教训是放行路径各有一次机会，只覆盖其中一条会让另
 ## 6. 部署与回滚
 
 - **默认关闭 ≠ 生产库无变化**：无论清单是否启用，`AgentRunStore` 初始化都会用
-  `PRAGMA table_info` + `ALTER TABLE` 幂等补三列。合并即触发该迁移。
+  `PRAGMA table_info` + `ALTER TABLE` 幂等补三列。Gateway实际部署并启动时触发该迁移，合并不触发生产部署。
 - 旧行三列保持 `NULL`，**不回填、不猜**；历史列逐字不变。
 - **回滚**：清空 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` ⇒ 走未启用分支；代码回滚后三列
   成了旧代码可忽略的附加列。已用**升级前的 `agent_runs.py`** 对升级后的库实测可读。

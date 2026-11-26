@@ -1,9 +1,8 @@
 name: CD Watch
 
-# #407：让「CD 未按预期发生」可见，**不改批准门本身**。
+# #407：让显式发起的生产发布未按预期完成时可见。
 #
-# 起因：连续 6 次 src 合并都没成功部署而无人察觉 —— 那段时间有人在手工 rsync，生产确实
-# 更新了，于是没有任何理由去看 CD。手工动作把「CD 坏了」这条本应被发现的信号一起抹掉了。
+# 无发布计划是正常状态；每次发布仍需监控部署卡住、runner 离线及连续失败。
 #
 # 两条判据（实现见 .sandcastle/deploy-state.mjs）：
 #   1. **卡住**：`waiting` 与「根本没在跑」在 API 上长得一样，靠 `pending_deployments`
@@ -26,7 +25,7 @@ name: CD Watch
 
 on:
   schedule:
-    # 每5分钟检查；GitHub计划任务可能延迟，不是实时SLA。
+    # 每5分钟检查已发起的版本发布；没有部署run是无发布计划，不是告警。GitHub计划可能延迟。
     - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
   workflow_dispatch:
 
@@ -88,6 +87,6 @@ jobs:
             echo
             echo "判定逻辑见 \`.sandcastle/deploy-state.mjs\`；阈值：排队 5 分钟（2 分钟输出诊断）、连续失败 3 次。"
             echo
-            echo "**批准门已于 2026-09-30 移除**（所有者决定）：合并即自动部署，不再有人工批准。"
+            echo "没有待处理的版本发布属于正常待发布状态；只有已启动的run超时、失败或取数异常才触发告警。"
             echo "卡住时检查部署 runner、并发锁与访问链路，见 \`docs/agents/env-41-runbook.md\` 的 CD 一节。"
           } >> "$GITHUB_STEP_SUMMARY"

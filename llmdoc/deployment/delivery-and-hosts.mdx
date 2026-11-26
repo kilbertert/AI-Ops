@@ -1,5 +1,5 @@
 ---
-description: "交付面与主机拓扑：按组件制品表（Gateway src/ 是唯一 CD 制品、文件拷贝无 .git）、dev-host 角色断言+artifact-sha256、deploy-41.sh 各闸（陈旧审批/节点制品/依赖漂移/schema/健康+自动回滚）、images.lock 合同、暴露登记纪律、41/36/95 分工（95旧试验已撤回，新环境独立模块安装与流量切换分开）、环境登记表作入口地址权威、手工部署台账、GitLab 镜像非运行源、CD 审批闸已永久移除"
+description: "交付面与主机拓扑：按组件制品表（Gateway src/ 是唯一 CD 制品、文件拷贝无 .git）、dev-host 角色断言+artifact-sha256、deploy-41.sh 各闸（陈旧审批/节点制品/依赖漂移/schema/健康+自动回滚）、images.lock 合同、暴露登记纪律、41/36/95 分工（95旧试验已撤回，新环境独立模块安装与流量切换分开）、环境登记表作入口地址权威、手工部署台账、GitLab 镜像非运行源、main合并不部署、显式SHA批次发布、注释SemVer标签与该版本Release"
 kind: architecture
 relations:
   related:
@@ -87,8 +87,8 @@ code:
 
 | 组件 | 目标 | 机制 |
 |---|---|---|
-| Gateway `src/` | 41 `/opt/aiops-41` | `cd.yml` push to main（限 `src/**`、`deploy/deploy-41.sh`、`deploy/classify-remote-result.sh`、`cd.yml`、`pyproject.toml`、`uv.lock`——deploy/ 里约15个文件只有这2个触发，改 node-runtime/dify-36/manual-deploy 等资产**不会**派发 CD）→ `deploy-41.sh --commit $SHA`。**文件拷贝部署，41 上没有 .git** |
-| Gateway release notes | GitHub Releases | deploy-41 之后独立 job，可单独重跑；其失败绝不意味部署失败（ADR-0233） |
+| Gateway `src/` | 41 `/opt/aiops-41` | 负责人在main显式dispatch `target_sha`；CD核main完整SHA/SemVer，在部署锁中固定同SHA的注释版本标签，再检出该SHA运行`deploy-41.sh --commit`。main普通合并不部署。文件拷贝部署，41无.git；操作见`docs/agents/actions-delivery.md#版本发布` |
+| Gateway release notes | GitHub Releases | 部署成功后从同SHA按SemVer生成单版本章节，发布同tag的Release，分节只认已发布Release和目标标签，失败候选不截断变化；不再生成逐提交release-SHA记录；说明失败单独重跑，不回滚服务。CD Watch保留workflow和部署job两个结果（ADR0348） |
 | Java 节点 jar+声明+回调 | 41 node-runtime | 手工三件套（见 [execution-node-contract](../execution/execution-node-contract.mdx)）：git archive→离线 mvn→`dev-host cp --artifact-sha256`→原子 `current`→定向重建→就绪轮询 |
 | model-proxy | 41 | 随 Gateway 镜像走；Compose+镜像成对切换（见 [execution-node-contract](../execution/execution-node-contract.mdx)） |
 | Dify 栈+console bridge+web 镜像 | 36 `/opt/dify` | 独立版本化：上游 1.17.1+`patches/`（sha256 校验 apply，拒陈旧补丁）+`web-patches/` 重建镜像（**只认 webpack**，Turbopack 零产物）；`DIFY_WEB_IMAGE` 切换必须 `--force-recreate`；36 侧组装支持原始三 COPY 与 `docker cp` 成品树单 COPY 两种等价形式 |
@@ -133,7 +133,7 @@ code:
 - **环境登记表**（`environment_registry_file`，ADR-0256）：机群级「环境×租户」准入声明——`tools/content/render_business_ingress.py --registry` 以它为地址权威（catalogue 只存 id+凭据，gateway_url 取自登记行；未登记/停用环境拒产 upstream），登录代理启动也把 `gateway_url` 钉到登记行。准入语义（`require`/`TENANT_ENVIRONMENT_NOT_ENABLED`/`RegisteredCallerResolver`）归 [identity-scope](../identity/identity-scope.mdx)。
 - 手工部署台账 `deploy/manual-deploys.md`：任何绕 CD 上生产的动作必须**当日**经 `deploy/record-manual-deploy.sh` 追加——六次连续 CD 失败曾因手工 rsync 保持生产更新而无人察觉（#407）。台账 append-only，永不重写。
 - CD Watch（`.sandcastle/cd-watch.mjs`+`cd-watch.yml`）：每 5min 跑在 **GitHub-hosted** runner（看守者与被看守机器同死就没意义）；经 `pending_deployments` 判 deploy-41 结果（等待与没跑看起来一样）+最近完成 runs；开 `cd:needs-attention` issue 而非报错红——未关的 issue 本身就是警报。
-- **CD 审批闸已永久移除**（2026-09-30 明确决定）："能合并 main 的人"=="能改生产的人"；Ruleset（PR+必需检查+会话解决）是剩余闸门。回滚方法=给 `production-41` 环境重加 required_reviewers。
+- **main合并不部署、显式SHA批次发布、注释SemVer标签与该版本Release**（2026-09-30 明确决定）："能合并 main 的人"=="能改生产的人"；Ruleset（PR+必需检查+会话解决）是剩余闸门。回滚方法=给 `production-41` 环境重加 required_reviewers。
 
 ## 失败语义速查
 

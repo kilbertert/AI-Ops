@@ -6,7 +6,7 @@
 
 ## 交付
 
-代码通过同一PR的确定性CI后合并，现有CD调用 `deploy/deploy-41.sh` 交付Gateway。
+代码通过同一PR的确定性CI后合并；发布负责人显式选择版本SHA发起CD后，才调用 `deploy/deploy-41.sh` 交付Gateway。
 本轮已只读确认API域名的现有`/v1/`代理可承接，无需新增Nginx配置或开放端口。
 不把H5同源代理的路径白名单扩大成整个API面；测试工具使用API基址。
 部署失败沿用CD和[41手册](env-41-runbook.md)的恢复流程，不直接修改运行代码。

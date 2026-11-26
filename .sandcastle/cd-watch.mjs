@@ -6,7 +6,7 @@
  *
  * ## 为什么用「开票」而不是「失败」
  *
- * 判据是**状态**（有没有待批准的部署、最近几次成功没有），不是**动作**。定时任务失败
+ * 判据是**状态**（有没有待处理的发布、最近几次成功没有），不是**动作**。定时任务失败
  * 只会让红色出现在一个没人天天看的页面上 —— 那正是本票要修的病（静默失效）。
  * 开票会出现在 issue 列表里，且**一张未关的票就是未处理的告警**。
  *
@@ -29,7 +29,7 @@ import {
 } from "./deploy-state.mjs";
 
 export const ALARM_LABEL = "cd:needs-attention";
-const ALARM_TITLE = "CD 状态：有部署尚未发生或连续未成功";
+const ALARM_TITLE = "CD 状态：已发起的发布卡住或连续未成功";
 
 function gh(args) {
   return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -60,14 +60,8 @@ function enrich(runs) {
     } catch {
       // 取不到就是 null（未知），判定侧按「不知道」处理，不按「没有」处理。
     }
-    // 发布说明单独失败不等于生产部署失败；旧 run 同样从部署 job 读取。
-    return {
-      ...run,
-      totalCount,
-      pendingCount,
-      ...(deploymentStatus ? { status: deploymentStatus } : {}),
-      ...(deploymentConclusion ? { status: "completed", conclusion: deploymentConclusion } : {}),
-    };
+    // workflow 的结果包含发布说明；部署结果单独保留，避免把说明失败解释为需要回滚。
+    return { ...run, totalCount, pendingCount, deploymentStatus, deploymentConclusion };
   });
 }
 
@@ -272,9 +266,6 @@ function main() {
   // 「有没有谁卡住」吃**全部未完成**的 run；「连续多少次没成功」吃**最近 N 次**。
   // 两份数据不能互换 —— 用窗口去找卡住的 run 等于用一个随时间收窄的窗口去找一个
   // 随时间更该被看见的东西。
-  const runner = fetchRunnerSummary();
-  delete process.env.RUNNER_READ_TOKEN;
-  console.log(runner.message);
   const result = assess({
     runs: recent.runs,
     // `null` = 这份取数失败（**不是**「没有未完成的 run」）—— 空数组与 null 含义不同。
@@ -284,15 +275,24 @@ function main() {
     straightFailures: DEFAULT_STRAIGHT_FAILURES,
   });
 
-  if (['unknown', 'missing', 'shared', 'offline'].includes(runner.kind)) {
-    result.alarms.push({ kind: `runner-${runner.kind}`, reason: runner.message });
-    result.ok = false;
-  }
-  for (const run of unfinished.runs) {
-    const queued = (Date.now() - Date.parse(run.approvedAt ?? '')) / 60000;
-    if (run.status !== 'completed' && run.status !== 'in_progress' && queued >= 2) {
-      console.log(`CD ${run.databaseId}: 已等待${Math.round(queued)}分钟；${runner.message}；继续核对并发锁`);
+  const releasePending = unfinished.fetchedOk && unfinished.runs.length > 0;
+  if (releasePending) {
+    const runner = fetchRunnerSummary();
+    delete process.env.RUNNER_READ_TOKEN;
+    console.log(runner.message);
+
+    if (["unknown", "missing", "shared", "offline"].includes(runner.kind)) {
+      result.alarms.push({ kind: `runner-${runner.kind}`, reason: runner.message });
+      result.ok = false;
     }
+    for (const run of unfinished.runs) {
+      const queued = (Date.now() - Date.parse(run.approvedAt ?? "")) / 60000;
+      if (run.status !== "completed" && run.status !== "in_progress" && queued >= 2) {
+        console.log(`CD ${run.databaseId}: 已等待${Math.round(queued)}分钟；${runner.message}；继续核对并发锁`);
+      }
+    }
+  } else if (result.notes.some((note) => note.kind === "no-releases")) {
+    console.log("尚无待处理版本发布；main 合并不会部署生产");
   }
   if (result.ok) {
     // Healthy — but `ok` on its own leaves no trace. Close whatever alarm is
@@ -348,10 +348,13 @@ function main() {
       `最近一次：\`${result.latest.kind}\`（${result.latest.reason}）` +
         `，最近**已完成**的 CD 里开头连续 ${result.straight} 次不是 success。`,
     );
+    if (result.latest.deploymentConclusion === "success" && result.latest.kind === "failed") {
+      lines.push("Gateway部署已成功；版本发布未完成。只补发布说明，不据此回滚或重启服务。");
+    }
   }
   lines.push(
     "",
-    "**批准门已于 2026-09-30 移除**（所有者决定）—— 因此「等批准」不该再出现；",
+    "CD 由发布负责人显式发起；本告警检查已启动任务的卡住、失败与取数状态。",
     "卡住时检查部署 runner、并发锁与访问链路，见 `docs/agents/env-41-runbook.md` 的 CD 一节。",
   );
   const body = lines.join("\n");

@@ -118,8 +118,28 @@ cases.push([
 // 6. 取数失败 ⇒ 不报正常
 cases.push(["取数失败 ⇒ ok=false", assess({ runs: [], fetchedOk: false }).ok, false]);
 
-// 6b. **空列表**也 ⇒ 不报正常。「一次都没触发过」与「一直正常」在告警面上是同一种安静。
-cases.push(["取不到任何 run ⇒ ok=false", assess({ runs: [], fetchedOk: true }).ok, false]);
+// 6b. 空发布历史是正常状态：版本发布由人显式发起，main 合并不会产生run。
+cases.push(["没有计划发布 ⇒ ok=true", assess({ runs: [], unfinishedRuns: [], fetchedOk: true }).ok, true]);
+cases.push([
+  "无发布历史说明",
+  assess({ runs: [], unfinishedRuns: [], fetchedOk: true }).notes[0]?.kind,
+  "no-releases",
+]);
+cases.push([
+  "发布历史取数失败仍报警",
+  assess({ runs: [], fetchedOk: false }).alarms[0]?.kind,
+  "unavailable",
+]);
+cases.push([
+  "最近列表为空但未完成集合取数失败 ⇒ 报警",
+  assess({ runs: [], unfinishedRuns: null, fetchedOk: true }).alarms[0]?.kind,
+  "unavailable",
+]);
+cases.push([
+  "最近列表为空但仍有未完成发布 ⇒ 不当作空闲",
+  assess({ runs: [], unfinishedRuns: [{ status: "waiting" }], fetchedOk: true }).alarms[0]?.kind,
+  "unavailable",
+]);
 
 // 6c. 🔴 **卡住的旧 run 被新 run 挤出视野 ⇒ 故障"自愈"**（上线当天实测撞到：
 //     一个等了 84 分钟的在等批准，而 assess 说「正常」，因为 runs[0] 是那个刚 push 的）。
@@ -172,6 +192,13 @@ const many = assess({
 });
 cases.push(["连续 3 次失败 ⇒ 报警", many.ok, false]);
 cases.push(["告警种类正确", many.alarms.map((a) => a.kind).join(","), "straight-failures"]);
+
+cases.push([
+  "版本发布失败时保留Gateway部署成功的分诊依据",
+  assess({ runs: [{ status: "completed", conclusion: "failure", deploymentConclusion: "success" }],
+    unfinishedRuns: [], fetchedOk: true }).latest.deploymentConclusion,
+  "success",
+]);
 
 // 7b. 🔴 **未完成集合取不到 ⇒ 未知**（不能用最近列表代替：那个窗口不完整，
 //     而「jobs=0 ⇒ 死锁」这条判据恰恰依赖完整性）。

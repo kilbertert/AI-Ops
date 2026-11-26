@@ -33,7 +33,7 @@
 
 ## 发布与回归
 
-1. 代码按正常PR/CI/合并/CD交付；本地测试不代表线上版本。
+1. 代码按正常PR/CI合并；Gateway显式发布后再做线上版本验收。本地测试不代表线上版本。
 2. 客服自然正文恢复按[ADR0250](../../adr/0250-natural-replies-and-nonblocking-currency.md)执行，
    商城证据读取不回退，提示词要求原值；恢复方法见[操作手册](../response-policy-restore.md)。
    读取当前已发布客服图，通过`tools/content/upgrade_consumer_flow.py --order-composition`

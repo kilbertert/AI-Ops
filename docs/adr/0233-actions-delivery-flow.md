@@ -2,6 +2,8 @@
 
 Status: Accepted
 
+发布触发与监控结果语义由[ADR0348](0348-release-on-main-sha-dispatch.md)更新；本记录保留当时决定。
+
 ## 背景与决定
 
 密集并行开发时，每次 main 更新都 rebase 开放 PR，会产生额外 synchronize、重复 CI，

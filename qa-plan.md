@@ -1277,6 +1277,18 @@ ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样�
 
 ## 持续部署 QA（CD-41，PR #387）
 
+现行触发合同按ADR0348改为显式版本发布；下表CD-41是历史执行证据，push.paths、审批门及旧触发器
+测试的当时结论不作为现行命令。RELEASE-BATCH复用已有测试，不运行生产或创建真实版本。
+
+| ID | 环境/前置 | 操作 | 可观察判据与清理 |
+|---|---|---|---|
+| RELEASE-BATCH-01 | 本地，仓库workflow及临时Git远端 | pytest tests/test_release_version.py | 只有dispatch；完整main SHA读取所选版本；短SHA/非main/非法版本拒绝，tmp_path自动清理 |
+| RELEASE-BATCH-02 | 同上，临时注释/轻量/冲突标签与CLI替身 | 同上标签参数化用例 | 新标签与同SHA重试成功；轻量/异SHA及竞争冲突失败，旧标签不移动 |
+| RELEASE-BATCH-03 | 本地，临时changelog与发布CLI替身 | 同上发布说明用例 | 只发布所选版本章节；未发布失败候选不截断变化；缺章节或标签指向不符不发Release；既有版本可幂等补备注 |
+| RELEASE-BATCH-04 | 本地，GitHub API替身 | pytest tests/tooling/test_actions_delivery.py；Node cd-watch.test.mjs与deploy-state.mjs | 未发布不报警；失败/未知不伪装成功；部署结果与workflow结果独立；恢复告警闭环保留 |
+| RELEASE-BATCH-05 | 本地，既有dev-host替身 | pytest tests/test_cd_deploy_scripts.py；actionlint cd.yml和cd-watch.yml | 部署与恢复脚本原有行为继续通过；workflow有效，不调用真实dev-host |
+
+
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
 | CD-41-01 | 本机模拟 | `dev-host` 在 PATH；`miniconda3/bin` 已前置；仓库含目标 commit | `deploy/deploy-41.sh --commit HEAD --dry-run` | PASS：打包成功、首层断言 `aiops_diagnostics/`、`__version__ → 0.1.0+<short-sha>`、文件数 61、产物 sha 打印、远端命令打印；**未连接 41** | dry-run 输出；无残留（trap 清理暂存） |

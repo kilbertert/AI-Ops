@@ -1450,34 +1450,41 @@ Feature: FAQ 关键词短路的歧义门
 
 Feature: 持续部署到服务主机
 
-  Rule: 部署只在合并到 main 且改动影响运行时时发生
+  Rule: 集成与版本发布分离
 
-    Scenario: 纯文档合并不触发部署
-      Given 一个只改 docs/ 的提交合并到 main
-      When CD workflow 评估触发条件
-      Then 不产生部署运行
+    Scenario: 普通合并不发布生产
+      Given 文档、运行时或部署脚本通过PR与CI合入main
+      When 合并完成而负责人尚未发起版本发布
+      Then 不产生CD部署运行
+      And 不因本次合并重启生产或生成Release
 
-    Scenario: 改动与部署无关的取数脚本不触发部署
-      Given 一个只改 deploy/company-gitlab-api.sh 的提交合并到 main
-      When CD workflow 评估触发条件
-      Then 不产生部署运行
-      And 41 上的网关进程启动时刻不变
+    Scenario: 只接受已合入main的完整版本SHA
+      Given 发布负责人以main为workflow ref发起CD
+      When 输入完整target_sha并通过main祖先关系与SemVer检查
+      Then 部署制品和部署脚本均来自该SHA
+      And 短SHA、未合入提交和非法版本在部署前拒绝
+      And 仍使用production-41环境及串行且不可取消的部署锁
 
-    Scenario: 改动部署自身的脚本触发一次部署
-      Given 一个改 deploy/deploy-41.sh 或 deploy/classify-remote-result.sh 的提交合并到 main
-      When CD workflow 评估触发条件
-      Then 产生一次部署运行
+    Scenario: 同一版本不能指向两个提交
+      Given 一个SemVer标签已存在或被并发创建
+      When CD保留该版本标签
+      Then 仅接受同一SHA的带注释标签
+      And 轻量标签或异SHA冲突拒绝部署且不移动旧标签
+      And 部署失败后同一SHA可以重试，代码修复须准备新版本
 
-    Scenario: 新增一个被部署脚本执行的 deploy 文件时触发集合必须同步
-      Given deploy-41.sh 开始执行一个新的 deploy/ 文件
-      When 确定性检查运行
-      Then 存在一条断言要求该文件出现在 cd.yml 的 push.paths 中
+    Scenario: 一次发布仅说明该批次变化
+      Given 选定SHA已成功部署并固定注释版本标签
+      When 生成该版本GitHub Release
+      Then 备注只含该版本章节，不混入Unreleased或旧版本条目
+      And 不再生成逐提交release-SHA的Release
+      And 说明生成或发布失败只重跑说明作业，不回滚已部署服务
 
-    Scenario: 影响运行时的合并触发一次受门控的部署
-      Given 一个改动 src/ 的提交合并到 main
-      When CD workflow 运行
-      Then 该运行绑定到 production-41 环境
-      And 在有人批准该环境之前不写入 41
+    Scenario: 监控区分未发布与异常
+      Given 发布历史及未完成列表查询均成功
+      When 两份列表均为空
+      Then 无发布计划不报警且不检查空闲runner
+      But 取数失败、未完成列表未知及连续发布失败仍报警
+      And 部署成功而Release失败仍是发布失败，不是部署失败
 
   Rule: 部署可自证跑了哪个 commit
 

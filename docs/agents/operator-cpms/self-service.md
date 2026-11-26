@@ -10,7 +10,7 @@
 
 ## 平台首次准备
 
-代码经PR/CI合并，Gateway由现有CD部署。Dify API导入补丁、前端镜像和同源桥应同版安装。
+代码经PR/CI合并；Gateway通过显式版本CD发布。Dify API导入补丁、前端镜像和同源桥应按各自版本配套安装。
 平台运行配置通过 `AIOPS_GATEWAY_OPERATOR_PROFILES_FILE` 指向0600文件，格式为：
 
 ```json
@@ -102,7 +102,7 @@ max_tokens_to_sample、function_calling_type=tool_call、stream_function_calling
 `dev-host cp <target> <本地制品> --dest <远端路径> --artifact-sha256 <摘要>`。
 源自合并提交的制品才能安装；不要在服务宿主编译或编辑业务代码。
 
-1. Gateway由CD部署，回读`http://172.18.0.1:8788/health`版本；按节点路由表导出部署前快照。
+1. Gateway由显式版本CD部署，回读`http://172.18.0.1:8788/health`版本；按节点路由表导出部署前快照。
 2. 在开发机运行`bash ops/dify-console-bridge/build-bundle.sh <合并SHA> <新归档>`。
    36解压到独立目录后执行`bash <目录>/deploy.sh <目录> <新备份目录>`，脚本校验、安装并验证匿名403。
 3. 从同一合并SHA的`src/aiops_diagnostics`打完整包，按[登录代理手册](../dify-login-proxy-36-runbook.md)
