@@ -88,8 +88,8 @@ code:
 
 | 组件 | 目标 | 机制 |
 |---|---|---|
-| Gateway `src/` | 41 `/opt/aiops-41` | 负责人在main显式dispatch `target_sha`；CD核main完整SHA/SemVer，在部署锁中固定同SHA的注释版本标签，再检出该SHA运行`deploy-41.sh --commit`。main普通合并不部署。文件拷贝部署，41无.git；操作见`docs/agents/actions-delivery.md#版本发布` |
-| Gateway release notes | GitHub Releases | 部署成功后从同SHA按SemVer生成单版本章节，发布同tag的Release，分节只认已发布Release和目标标签，失败候选不截断变化；不再生成逐提交release-SHA记录；说明失败单独重跑，不回滚服务。CD Watch保留workflow和部署job两个结果（ADR0348） |
+| Gateway `src/` | 41 `/opt/aiops-41` | 负责人在 main 显式 dispatch `target_sha`——main 普通合并不部署；CD 固定同 SHA 注释版本标签后跑 `deploy-41.sh --commit`。文件拷贝部署，41 无 .git；批次机制见 `docs/agents/actions-delivery.md#版本发布` |
+| Gateway release notes | GitHub Releases | 部署成功后发布同 tag 的单版本 Release；说明失败单独重跑，不回滚服务；分节与重跑细则见 `docs/agents/actions-delivery.md#版本发布` |
 | Java 节点 jar+声明+回调 | 41 node-runtime | 手工三件套（见 [execution-node-contract](../execution/execution-node-contract.mdx)）：git archive→离线 mvn→`dev-host cp --artifact-sha256`→原子 `current`→定向重建→就绪轮询 |
 | model-proxy | 41 | 随 Gateway 镜像走；Compose+镜像成对切换（见 [execution-node-contract](../execution/execution-node-contract.mdx)） |
 | Dify 栈+console bridge+web 镜像 | 36 `/opt/dify` | 独立版本化：上游 1.17.1+`patches/`（sha256 校验 apply，拒陈旧补丁）+`web-patches/` 重建镜像（**只认 webpack**，Turbopack 零产物）；`DIFY_WEB_IMAGE` 切换必须 `--force-recreate`；36 侧组装支持原始三 COPY 与 `docker cp` 成品树单 COPY 两种等价形式 |
@@ -111,7 +111,7 @@ code:
 本页只持有制品侧事实：`aiops-admin environment-artifacts` 的产物保留在 41 私有 `onboarding_assets`
 （经核验的完整修订制品），目标只在标准部署/受管安装器步骤升级。
 
-统一主机访问：`dev-host show` 断言 role=service-host+status=active 否则停；`dev-host cp --artifact-sha256` 在上传时强制制品身份（不符 exit 77——策略闸不是自我声明）；`dev-host exec --allow-service-exec` 门控服务主机写。仓库 `.dev-host.toml` 声明本项目可达目标的逻辑名与路径键，现六个：`41`（现役）、`36`（Dify 栈，`service_api_config`/`service_api_nginx` 路径）、`95`（`qy-gw-120`，ADR-0308 冷安装的 `access*` 根——已不只是恢复资料）、`124`（`singapore-server`，第二个业务环境候选+已批准空验收实例 `aiops-access-p3-acceptance`）、`management-relay`（`node`，Windows 设备，仅 95 管理 SSH 中继，无 AI-Ops 业务）、`jiejia`（`jiejia-gw`，捷佳四轮国内充电业务环境，仅部署自有接入模块的 `access*` 根）。CD 用派生注册表视图，只换 `ssh_alias→aiops-41-cd`，与权威 `~/.config/dev-host/hosts.toml` 逐字段核对。
+统一主机访问：`dev-host show` 断言 role=service-host+status=active 否则停；`dev-host cp --artifact-sha256` 在上传时强制制品身份（不符 exit 77——策略闸不是自我声明）；`dev-host exec --allow-service-exec` 门控服务主机写。仓库 `.dev-host.toml` 是本项目可达目标逻辑名与路径键的声明权威（逐目标用途注释随声明自带）。CD 用派生注册表视图，只换 `ssh_alias→aiops-41-cd`，与权威 `~/.config/dev-host/hosts.toml` 逐字段核对。
 
 ## deploy-41.sh 各闸
 
@@ -141,8 +141,6 @@ code:
 deploy-41 失败 → 生产未更新（远端自检回滚）；release-notes 失败 → 生产已更新，重跑 job 即可；deploy 排队/pending → 查 runner 在线/忙碌+并发锁，别假设"等审批"；**PR 冲突 → pull_request 工作流根本不派发**（先按 sha 查 total_count 证明"没跑"，再谈"慢"）。
 
 ## Canonical anchors
-
-安装手册阶段已延伸到 D39（register-runtime）/D40（业务验证）/D42（同环境追加租户，`runtime/2` 安装件）/D43（`publication.py` 正式发布，`environment-publications/` 私有目录+`current/capacity.json`+`knowledge-delegation.json`）；dev-host 侧由 `aiops-site-preflight.{service,timer}` 用户级 oneshot timer 定期拉起 `environment-task-worker`：无任务参数时先推进候选队列、再 claim 已授权的安装/注册/验证/发布任务（执行端模型与阶段合同见 [environment-onboarding](../gateway/environment-onboarding.mdx)）。
 
 - `deploy/README.md`（部署索引：尾号=主机逻辑名、`mN-*`=里程碑试验码非主机）
 - `deploy/deploy-41.sh`（各闸）+ `deploy/classify-remote-result.sh`（失败分类法）

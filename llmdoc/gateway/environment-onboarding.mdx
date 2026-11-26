@@ -138,20 +138,16 @@ consumer/ 下的 `environment_*` 模块均已改名迁入，旧路径不再存�
   knowledge-delegation 对 installed.json 的摘要绑定失败即拒（fail-closed）；reconcile 优先于
   「已恢复」相位、迟到取消转入 reconcile；同环境 restore 互斥（`ENVIRONMENT_TASK_BUSY`）。
 - **用户入口激活**（ADR-0319，`ops/nginx/environment-user-ingress*`）：发布之外的最后一步。
-  精确路径白名单（FAQ、`POST /v1/assistant/questions`、QA 详情/取消、`/v1/media/{signed_id}`、
-  `/v1/conversations` 读写删；管理面与 `/v1/internal/*` 排除）；`X-Business-Entry` **缺失按
+  精确路径白名单（唯一声明在 `environment-user-ingress-routes.txt`；管理面与 `/v1/internal/*` 排除）；`X-Business-Entry` **缺失按
   consumer 处理**——41 公网实测合同、最窄兼容位——`operator` 透传 Bearer 并注入环境源钥，
-  其他非空值 403；凭据片段在目标机现场生成 root 0600，缺席时 `nginx -t` 失败（无 fail-open
-  窗口）；客户端自报的 `X-Third-Session`/`X-AIOps-Source-Key` 一律剥除。
+  其他非空值 403；凭据片段在目标机现场生成、缺席 fail-closed（制品侧合同见
+  [delivery-and-hosts](../deployment/delivery-and-hosts.mdx)）；客户端自报的 `X-Third-Session`/`X-AIOps-Source-Key` 一律剥除。
 
 ## admin `environment-*` 命令族
 
 命令实现在 `src/aiops_diagnostics/admin/onboarding.py`（`admin_cli.py` 只是 Typer 根装配壳，
 ADR-0339 拆分）：`environment-registry check|apply|migrate`（check 摘要、apply 按
-expected_revision CAS 发布登记册、migrate 升级管理目录，ADR-0256）、`environment-adopt-execution`、
-`environment-draft`/`environment-plan`/`environment-artifacts`/`environment-runtime`/
-`environment-runtime-register`/`environment-task-worker`/`environment-task-dispatch`/
-`environment-trial-dispatch`/`environment-release prepare|publish|observe|restore`。
+expected_revision CAS 发布登记册、migrate 升级管理目录，ADR-0256）。
 `--central-target` 模式不携带 key/URL（身份由 dev-host 记录承担）。迁移类命令构造合成
 ASSERTED ScopeContext，不走请求身份；其余特权命令面见 [gateway-runtime](gateway-runtime.mdx)。
 

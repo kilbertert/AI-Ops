@@ -51,11 +51,8 @@ code:
 
 ## 来源优先级与 dataset 生命周期
 
-候选环境准备复用同一API，但`ckx_`凭据和knowledge_id命名环境、租户、工作区及单库。
-准入由最新knowledge-connect任务、当前管理授权/冻结目录及工作区唯一映射共同决定，
-每次列表/检索和素材取回前后复核。证据TTL不自动撤销长期连接；取消或输入漂移则拒绝。
-任务先记创建意图再POST，未知结果只对账；这里只准备API连接，不创建external dataset或绑定应用。
-旧production/debug来源规则保持；候选不能扩展到默认空间。操作合同见`docs/agents/environment-registry.md` 的候选知识连接准备节。
+候选知识连接（`ckx_` 复合范围凭据）的操作合同见 `docs/agents/environment-registry.md` 的候选知识连接准备节；
+旧 production/debug 来源规则保持，候选不能扩展到默认空间。
 
 - 优先级一处持有（`knowledge_sources.py`）：**手动 DB 行（`dify_knowledge_bindings`）> env 行 > 自动派生 1:1:1**——手动赢因为它是最新的人类决定；auto 只补缺；每次检索都读表（取消勾选下一问生效，无缓存）。
 - Dify dataset 两步（ADR-0096）：create 载荷没有 `permission` 字段（默认 `only_me`——这是"知识库未找到"的真因），必须建后 PATCH，且 PATCH 要两个 external 字段一起给否则 500。幂等键 `(workspace, external_knowledge_id)`——名字无唯一约束；名字上限 40 不是 100（create 宽 PATCH 严会产生看不见的孤儿行）。
@@ -98,7 +95,7 @@ code:
 - 欠费：provider 403 带配额消息直接是失败终态——failover 已退役（现役仅 baoyun 单上游）；`AIOPS_PROVIDERS` 是**注册表**不是优先级链，用哪个由 `AIOPS_DEFAULT_PROVIDER` 点名（ADR-0046）。
 - **`api_key_header_prefix` 坑**：Dify 工具提供方默认 `basic` → 把 key 拼成 `Basic Bearer <key>` → 注册看着成功、调用时才 401。判法：401=prefix 错，403=key 值错。
 - kb-service 租户是另一份 SQLite 映射（`ragflow_tenants`）——那里的 "tenant id" 既不是 RAGFlow 用户名也不是 UPMS tenant（ADR-0063）。
-- **kb-service 身份按业务环境命名空间化**（ADR-0261，`knowledge/tenant_scope.py`）：`knowledge_tenant(tenant, env)` = `env_`+base64url(JSON `[env, tenant]`，无 padding；空 env 原样返回 tenant_id）。配 `environment_registry_file` 时**每个** kb-service `tenant_id` 头、租户创建 `biz_tenant_id`、`derive_email` 全打该串；本地台账 `record_ragflow_tenant` 与公司 API 仍记原 tenant_id，存量不迁移。`namespace_for` 只在登记文件配置时回 canonical env（registry 开而 env 空 = 拒装配）；runtime kb_client、发布期 KbBindingResolver、admin_cli 全部七条 knowledge 命令都穿它——"不能仅改 HTTP 入口"；未登记实例行为逐位不变。
+- **kb-service 身份按业务环境命名空间化**（ADR-0261，`knowledge/tenant_scope.py`）：`knowledge_tenant(tenant, env)` = `env_`+base64url(JSON `[env, tenant]`，无 padding；空 env 原样返回 tenant_id）。配 `environment_registry_file` 时**每个** kb-service `tenant_id` 头、租户创建 `biz_tenant_id`、`derive_email` 全打该串；本地台账 `record_ragflow_tenant` 与公司 API 仍记原 tenant_id，存量不迁移。`namespace_for` 只在登记文件配置时回 canonical env（registry 开而 env 空 = 拒装配）；runtime kb_client、发布期 KbBindingResolver、admin_cli knowledge 命令族都穿它——"不能仅改 HTTP 入口"；未登记实例行为逐位不变。
 
 ## Canonical anchors
 
@@ -111,6 +108,3 @@ code:
 - `deploy/kb-service/migrate_tenant_namespace.py`（ADR-0330 重键工件）
 - `plugins/consumer_knowledge/`（受控插件+凭据分离）
 - `ops/dify-exposure-registry.md`（知识跳的暴露登记）
-
-候选知识准备按明确环境与租户复用原开户和空库接口；未知创建进度在环境任务账本保留，新计划先核原资源。
-现行合同见`docs/agents/environment-registry.md` 的候选知识资源准备节；旧默认知识空间不被新准备路径收养。

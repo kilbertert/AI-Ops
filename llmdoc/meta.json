@@ -15,7 +15,7 @@
       "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "identity/identity-scope.mdx": {
-      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
+      "validatedRevision": "021d36ccced0e45b2090eb14a8ffa7f3cc92dd88"
     },
     "execution/execution-delegation.mdx": {
       "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
@@ -27,10 +27,10 @@
       "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "consumer/consumer-chat.mdx": {
-      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
+      "validatedRevision": "021d36ccced0e45b2090eb14a8ffa7f3cc92dd88"
     },
     "operator/operator-chat.mdx": {
-      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
+      "validatedRevision": "021d36ccced0e45b2090eb14a8ffa7f3cc92dd88"
     },
     "conversation/conversation-store.mdx": {
       "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
@@ -42,19 +42,19 @@
       "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "dify/dify-execution-publishing.mdx": {
-      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
+      "validatedRevision": "021d36ccced0e45b2090eb14a8ffa7f3cc92dd88"
     },
     "dify/dify-console-access.mdx": {
-      "validatedRevision": "3d804b90e66c7eaa5cbc7ab994341197db559182"
+      "validatedRevision": "021d36ccced0e45b2090eb14a8ffa7f3cc92dd88"
     },
     "dify/dify-self-service.mdx": {
-      "validatedRevision": "3d804b90e66c7eaa5cbc7ab994341197db559182"
+      "validatedRevision": "021d36ccced0e45b2090eb14a8ffa7f3cc92dd88"
     },
     "knowledge/knowledge-plane.mdx": {
-      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
+      "validatedRevision": "021d36ccced0e45b2090eb14a8ffa7f3cc92dd88"
     },
     "deployment/delivery-and-hosts.mdx": {
-      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
+      "validatedRevision": "021d36ccced0e45b2090eb14a8ffa7f3cc92dd88"
     },
     "governance/governance-afk.mdx": {
       "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
@@ -63,7 +63,7 @@
       "validatedRevision": "3d804b90e66c7eaa5cbc7ab994341197db559182"
     },
     "gateway/environment-onboarding.mdx": {
-      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
+      "validatedRevision": "021d36ccced0e45b2090eb14a8ffa7f3cc92dd88"
     }
   },
   "convergence": {
