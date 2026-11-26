@@ -1467,8 +1467,8 @@ it('supports view-mode switching, clickable overview navigation with dirty guard
   await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
   await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
 
-  // 任务筛选胶囊：进行中只保留 activeOnboard，单步与核验只保留 oldPreflight
-  await screen.getByRole('button', { name: '进行中 (1)', exact: true }).click()
+  // 任务筛选胶囊：进行中/待发布只保留 activeOnboard，单步与核验只保留 oldPreflight
+  await screen.getByRole('button', { name: '进行中/待发布 (1)', exact: true }).click()
   await expect.element(screen.getByText(activeOnboard.id, { exact: true })).toBeVisible()
   expect(screen.getByText(oldPreflight.id, { exact: true }).elements()).toHaveLength(0)
   await screen.getByRole('button', { name: '单步与核验 (1)', exact: true }).click()
@@ -1605,11 +1605,13 @@ it('guards enter-key submit in case input, expired plan re-preflight, view trans
     )
     .toBeVisible()
 
-  // 4. 任务筛选为空时提供一键切回全部按钮；点击复制按钮在 clipboard reject 时不抛未捕获异常
-  await screen.getByRole('button', { name: '进行中 (0)', exact: true }).click()
+  // 4. 待发布一键开通在「进行中/待发布」筛选中保留可见；空筛选提供一键切回全部；复制在 clipboard reject 时不抛未捕获异常
+  const taskId = `task_${'9'.repeat(32)}`
+  await screen.getByRole('button', { name: '进行中/待发布 (1)', exact: true }).click()
+  await expect.element(screen.getByText(taskId, { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '单步与核验 (0)', exact: true }).click()
   await expect.element(screen.getByText('当前筛选下无任务记录')).toBeVisible()
   await screen.getByRole('button', { name: '查看全部任务（1）', exact: true }).click()
-  const taskId = `task_${'9'.repeat(32)}`
   await expect.element(screen.getByText(taskId, { exact: true })).toBeVisible()
   await screen.getByRole('button', { name: `复制 ${taskId}`, exact: true }).click()
   expect(writeTextMock).toHaveBeenCalledWith(taskId)

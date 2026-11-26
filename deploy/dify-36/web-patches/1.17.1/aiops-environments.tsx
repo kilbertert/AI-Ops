@@ -860,9 +860,13 @@ export default function EnvironmentManagement() {
         const isLifecycleTask = ['tenant-onboard', 'environment-publish'].includes(
           result.action || '',
         )
-        const isActiveTask = ['queued', 'running', 'reconcile'].includes(result.state)
+        const isActionableResult =
+          ['queued', 'running', 'reconcile'].includes(result.state) ||
+          (result.action === 'tenant-onboard' &&
+            result.state === 'observed' &&
+            Boolean(result.result.ready_to_publish))
         setTaskFilter((current) => {
-          if (current === 'active' && !isActiveTask) return 'all'
+          if (current === 'active' && !isActionableResult) return 'all'
           if (current === 'lifecycle' && !isLifecycleTask) return 'all'
           if (current === 'single' && isLifecycleTask) return 'all'
           return current
@@ -915,26 +919,74 @@ export default function EnvironmentManagement() {
     overview?.environments.reduce((sum, e) => sum + e.enabled_tenant_count, 0) ?? 0
 
   const hasValidPlan = Boolean(plan && !dirty && plan.state !== 'expired')
-  const hasReadyOnboard = tasks.some(
-    (item) =>
-      (item.action === 'tenant-onboard' &&
-        item.state === 'observed' &&
-        Boolean(item.result.ready_to_publish)) ||
-      (item.action === 'candidate-validate' && item.state === 'observed'),
+  const isFullValidationReady = (item: SiteTask) => {
+    if (item.action !== 'candidate-validate' || item.state !== 'observed') return false
+    const passed = new Set(
+      (item.result.checks || [])
+        .filter((check) => check.state === 'passed' && check.capability)
+        .map((check) => check.capability),
+    )
+    return ['consumer', 'order', 'offline'].every((cap) => passed.has(cap))
+  }
+  const isReadyToPublishTask = (item: SiteTask) =>
+    (item.action === 'tenant-onboard' &&
+      item.state === 'observed' &&
+      Boolean(item.result.ready_to_publish)) ||
+    isFullValidationReady(item)
+  const isActionableTask = (item: SiteTask) =>
+    ['queued', 'running', 'reconcile'].includes(item.state) ||
+    (item.action === 'tenant-onboard' &&
+      item.state === 'observed' &&
+      Boolean(item.result.ready_to_publish))
+
+  const hasReadyOnboard = tasks.some(isReadyToPublishTask)
+  const enabledTenantIds = new Set(
+    selectedOverview
+      ? selectedOverview.enabled
+        ? selectedOverview.tenants
+            .filter((tenant) => tenant.effective_enabled)
+            .map((tenant) => tenant.id)
+        : []
+      : live?.enabled
+        ? live.tenants.filter((tenant) => tenant.enabled).map((tenant) => tenant.id)
+        : [],
   )
-  const hasActivated = Boolean(live?.enabled && live.tenants.some((t) => t.enabled))
+  const publishedTenantIds = new Set(
+    tasks
+      .filter(
+        (item) =>
+          item.action === 'environment-publish' &&
+          item.state === 'observed' &&
+          Boolean(item.result.activated) &&
+          item.tenant_id,
+      )
+      .map((item) => item.tenant_id as string),
+  )
+  const hasPendingPublish = tasks.some(
+    (item) =>
+      isReadyToPublishTask(item) &&
+      (!item.tenant_id ||
+        (!enabledTenantIds.has(item.tenant_id) && !publishedTenantIds.has(item.tenant_id))),
+  )
+  const hasActivated =
+    !hasPendingPublish &&
+    (tasks.some(
+      (item) =>
+        item.action === 'environment-publish' &&
+        item.state === 'observed' &&
+        Boolean(item.result.activated),
+    ) ||
+      enabledTenantIds.size > 0)
   const onboardCaseInvalid = Boolean(onboardCaseRef) && !/^[\w-]{1,64}$/.test(onboardCaseRef)
 
-  const activeTasksCount = tasks.filter((item) =>
-    ['queued', 'running', 'reconcile'].includes(item.state),
-  ).length
+  const activeTasksCount = tasks.filter(isActionableTask).length
   const lifecycleTasksCount = tasks.filter((item) =>
     ['tenant-onboard', 'environment-publish'].includes(item.action || ''),
   ).length
   const singleTasksCount = tasks.length - lifecycleTasksCount
 
   const visibleTasks = tasks.filter((item) => {
-    if (taskFilter === 'active') return ['queued', 'running', 'reconcile'].includes(item.state)
+    if (taskFilter === 'active') return isActionableTask(item)
     if (taskFilter === 'lifecycle')
       return ['tenant-onboard', 'environment-publish'].includes(item.action || '')
     if (taskFilter === 'single')
@@ -2275,7 +2327,7 @@ export default function EnvironmentManagement() {
                       {(
                         [
                           ['all', `全部 (${tasks.length})`],
-                          ['active', `进行中 (${activeTasksCount})`],
+                          ['active', `进行中/待发布 (${activeTasksCount})`],
                           ['lifecycle', `一键开通与发布 (${lifecycleTasksCount})`],
                           ['single', `单步与核验 (${singleTasksCount})`],
                         ] as const
