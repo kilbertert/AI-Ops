@@ -63,9 +63,14 @@ type DiscoveryReport = {
 }
 
 type InfraResult = {
+  job_id?: string
+  state?: string
   environment: string
   passed: boolean
   failed_step: string
+  consumer_kb_id?: string
+  operator_kb_id?: string
+  tenant_id?: string
   steps: Array<{
     step: string
     state: string
@@ -73,6 +78,38 @@ type InfraResult = {
     anon_assistant_status?: number
     upms_tenant_list_status?: number
   }>
+}
+
+type PublishResult = {
+  job_id?: string
+  state?: string
+  environment?: string
+  tenant_id?: string
+  passed?: boolean
+  published?: boolean
+  failed_step?: string
+  steps?: Array<{ step: string; state: string; reason?: string }>
+}
+
+function arrayBufferToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf)
+  const chunks: string[] = []
+  const chunkSize = 0x2000
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(i, i + chunkSize)))
+  }
+  return btoa(chunks.join(''))
+}
+
+function buildRecentOfflineWindow(days = 7): { start: string; end: string } {
+  const fmt = (ms: number) => {
+    const offsetMs = 8 * 3600 * 1000
+    const d = new Date(ms + offsetMs)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}+08:00`
+  }
+  const now = Date.now()
+  return { start: fmt(now - days * 86400 * 1000), end: fmt(now) }
 }
 
 type SelfValidationResult = {
@@ -140,15 +177,25 @@ export default function OnboardingWizard({
   const [sshUser, setSshUser] = useState('root')
   const [enrollMode, setEnrollMode] = useState<HostEnrollMode>('ephemeral_password')
   const [rootPassword, setRootPassword] = useState('')
-  const [callbackBaseUrl, setCallbackBaseUrl] = useState(
-    typeof window !== 'undefined' ? window.location.origin : 'https://dify.ranlei.work',
-  )
+  const [callbackBaseUrl, setCallbackBaseUrl] = useState('https://api.mall.qushiyun.com')
   const [bootstrapOneLiner, setBootstrapOneLiner] = useState('')
   const [enrolledHost, setEnrolledHost] = useState<HostView | null>(null)
 
-  // Step 2: 自动探测与受限库修复
+  // Step 2: 自动探测与受限库修复（所有数据库/Redis 口令仅内存瞬时传递，用完即清空）
   const [discovery, setDiscovery] = useState<DiscoveryReport | null>(null)
   const [selectedTenantId, setSelectedTenantId] = useState('')
+  const [selectedTenantName, setSelectedTenantName] = useState('')
+  const [mysqlHost, setMysqlHost] = useState('')
+  const [mysqlPort, setMysqlPort] = useState('3306')
+  const [mysqlUser, setMysqlUser] = useState('aiops_ro')
+  const [mysqlPassword, setMysqlPassword] = useState('')
+  const [redisHost, setRedisHost] = useState('')
+  const [redisPort, setRedisPort] = useState('6379')
+  const [redisPassword, setRedisPassword] = useState('')
+  const [adminMysqlHost, setAdminMysqlHost] = useState('')
+  const [adminMysqlPort, setAdminMysqlPort] = useState('3306')
+  const [adminMysqlUser, setAdminMysqlUser] = useState('')
+  const [adminMysqlPassword, setAdminMysqlPassword] = useState('')
   const [confirmDbFix, setConfirmDbFix] = useState(false)
   const [dbFixed, setDbFixed] = useState(false)
 
@@ -170,7 +217,8 @@ export default function OnboardingWizard({
   const [ephemeralOpToken, setEphemeralOpToken] = useState('')
   const [selfValidation, setSelfValidation] = useState<SelfValidationResult | null>(null)
 
-  // Step 5: 公网 HTTPS 4 项冒烟与交付回执
+  // Step 5: 正式发布与公网 HTTPS 4 项冒烟
+  const [publishResult, setPublishResult] = useState<PublishResult | null>(null)
   const [smokeResult, setSmokeResult] = useState<SmokeResult | null>(null)
 
   const cleanEnv = envId.trim().toLowerCase()
@@ -253,15 +301,31 @@ export default function OnboardingWizard({
       setError('请先确认环境代号与客户 API 域名')
       return
     }
-    const res = (await callWizard('discover', {
+    const mPwd = mysqlPassword
+    const rPwd = redisPassword
+    setMysqlPassword('')
+    setRedisPassword('')
+    const discoverPayload: Record<string, unknown> = {
       environment: cleanEnv,
       api_domain: apiDomain.trim().replace(/^https?:\/\//, ''),
       internal_gateway_addr: internalGateway.trim(),
-    })) as DiscoveryReport | null
+    }
+    if (mysqlHost.trim()) discoverPayload.mysql_host = mysqlHost.trim()
+    if (mysqlPort.trim()) discoverPayload.mysql_port = Number(mysqlPort) || 3306
+    if (mysqlUser.trim()) discoverPayload.mysql_user = mysqlUser.trim()
+    if (mPwd) discoverPayload.mysql_password = mPwd
+    if (redisHost.trim()) discoverPayload.redis_host = redisHost.trim()
+    if (redisPort.trim()) discoverPayload.redis_port = Number(redisPort) || 6379
+    if (rPwd) discoverPayload.redis_password = rPwd
+
+    const res = (await callWizard('discover', discoverPayload)) as DiscoveryReport | null
     if (res) {
       setDiscovery(res)
-      const firstTenant = res.discovered?.tenants?.[0]?.id
-      if (firstTenant && !selectedTenantId) setSelectedTenantId(firstTenant)
+      const firstTenant = res.discovered?.tenants?.[0]
+      if (firstTenant?.id && !selectedTenantId) {
+        setSelectedTenantId(firstTenant.id)
+        if (!selectedTenantName && firstTenant.name) setSelectedTenantName(firstTenant.name)
+      }
       const firstOrder = res.discovered?.sample_candidates?.orders?.[0]?.order_no
       if (firstOrder && !orderNo) setOrderNo(firstOrder)
       const firstDev = res.discovered?.sample_candidates?.offline_devices?.[0]?.device_id
@@ -283,13 +347,21 @@ export default function OnboardingWizard({
       return
     }
     const plan = discovery.db_remediation_plan
-    const res = await callWizard('db_remediate', {
+    const aPwd = adminMysqlPassword
+    setAdminMysqlPassword('')
+    const remPayload: Record<string, unknown> = {
       environment: cleanEnv,
       remediation_ids: plan.remediation_ids,
       sql_statements: plan.sql_statements,
       confirmed_by_operator: true,
       confirmation_digest: plan.confirmation_digest,
-    })
+    }
+    if (adminMysqlHost.trim()) remPayload.admin_mysql_host = adminMysqlHost.trim()
+    if (adminMysqlPort.trim()) remPayload.admin_mysql_port = Number(adminMysqlPort) || 3306
+    if (adminMysqlUser.trim()) remPayload.admin_mysql_user = adminMysqlUser.trim()
+    if (aPwd) remPayload.admin_mysql_password = aPwd
+
+    const res = await callWizard('db_remediate', remPayload)
     if (res?.executed) {
       setDbFixed(true)
       setNotice(
@@ -308,6 +380,41 @@ export default function OnboardingWizard({
     }
   }
 
+  async function pollWizardJob<T extends { state?: string; passed?: boolean; failed_step?: string }>(
+    action: 'infra_provision' | 'publish_environment',
+    initial: T,
+    onTick: (latest: T) => void,
+  ): Promise<T | null> {
+    let latest: T = initial
+    onTick(latest)
+    if (latest.state !== 'queued' && latest.state !== 'running') {
+      return latest
+    }
+    for (let i = 0; i < 120; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 3000))
+      try {
+        const polled = (await manage('environment-wizard', {
+          wizard_action: 'infra_status',
+          wizard_payload: {
+            environment: cleanEnv,
+            action,
+            ...(latest.job_id ? { job_id: latest.job_id } : {}),
+          },
+        })) as T
+        latest = polled
+        onTick(latest)
+        if (latest.state !== 'queued' && latest.state !== 'running') {
+          return latest
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '轮询任务状态失败，请稍后重试')
+        return null
+      }
+    }
+    setError('异步任务执行超时，请点击状态刷新确认结果')
+    return latest
+  }
+
   async function handleProvisionInfra() {
     if (!cleanEnv || !serverIp.trim() || !gatewayHttpsUrl) {
       setError('请确认环境代号、服务器 IP 与 HTTPS API 域名已填写')
@@ -315,29 +422,52 @@ export default function OnboardingWizard({
     }
     const pool = await callWizard('artifact_pool_status', { environment: cleanEnv })
     if (typeof pool?.count === 'number') setPoolCount(pool.count)
-    const res = (await callWizard('infra_provision', {
-      environment: cleanEnv,
-      egress_ip: serverIp.trim(),
-      api_domain: apiDomain.trim().replace(/^https?:\/\//, ''),
-      gateway_url: gatewayHttpsUrl,
-    })) as InfraResult | null
-    if (res) {
-      setInfraResult(res)
-      if (res.passed) {
-        setNotice('白名单、专属执行节点、客户机双 Nginx 扩展与即刻探活已全部通过！')
-      } else {
-        setError(`基建编排在步骤 ${res.failed_step} 阻断，请查看明细修复后重试`)
+    setError('')
+    setNotice('')
+    setBusy(true)
+    try {
+      const initial = (await manage('environment-wizard', {
+        wizard_action: 'infra_provision',
+        wizard_payload: {
+          environment: cleanEnv,
+          egress_ip: serverIp.trim(),
+          api_domain: apiDomain.trim().replace(/^https?:\/\//, ''),
+          gateway_url: gatewayHttpsUrl,
+          tenant_id: selectedTenantId.trim(),
+          tenant_name: selectedTenantName.trim(),
+          customer_name: customerName.trim() || cleanEnv,
+          python_minor: enrolledHost?.python_minor || discovery?.host?.python_minor || '3.12',
+          gateway_internal_addr: internalGateway.trim(),
+        },
+      })) as InfraResult
+      const finalRes = await pollWizardJob('infra_provision', initial, setInfraResult)
+      if (finalRes) {
+        setInfraResult(finalRes)
+        if (finalRes.consumer_kb_id) setConsumerKbId(finalRes.consumer_kb_id)
+        if (finalRes.operator_kb_id) setOperatorKbId(finalRes.operator_kb_id)
+        if (finalRes.tenant_id && !selectedTenantId) setSelectedTenantId(finalRes.tenant_id)
+        if (finalRes.passed) {
+          setNotice('白名单、专属执行节点、客户机冷装、双 Nginx 扩展与即刻探活已全部通过！')
+        } else {
+          setError(`基建编排在步骤 ${finalRes.failed_step || '未知'} 阻断，请查看明细修复后重试`)
+        }
       }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '基建编排启动失败，请稍后重试')
+    } finally {
+      setBusy(false)
     }
   }
 
   async function handleInstallStarterFaq() {
     const res = await callWizard('kb_install_starter_faq', {
       environment: cleanEnv,
+      tenant_id: selectedTenantId.trim(),
       kb_id: consumerKbId.trim() || `kb-consumer-${cleanEnv}`,
     })
     if (res?.document_id) {
       setStarterInstalled(true)
+      if (res.kb_id) setConsumerKbId(String(res.kb_id))
       setConsumerDocStatus(`已装入默认试跑模板（${res.filename} · ${res.chunk_count} 切片）`)
       setNotice('对客试跑 FAQ 模板已就绪，正式对外服务后建议替换为客户官方 FAQ 文档')
     }
@@ -345,19 +475,24 @@ export default function OnboardingWizard({
 
   async function handleUploadDoc(role: 'consumer' | 'operator', file: File | null) {
     if (!file) return
-    const text = await file.text()
+    const buf = await file.arrayBuffer()
     const kbId =
       role === 'consumer'
         ? consumerKbId.trim() || `kb-consumer-${cleanEnv}`
         : operatorKbId.trim() || `kb-operator-${cleanEnv}`
     const res = await callWizard('kb_upload', {
       environment: cleanEnv,
+      tenant_id: selectedTenantId.trim(),
       target_role: role,
       kb_id: kbId,
       filename: file.name,
-      content_base64: btoa(unescape(encodeURIComponent(text))),
+      content_base64: arrayBufferToBase64(buf),
     })
     if (res?.document_id) {
+      if (res.kb_id) {
+        if (role === 'consumer') setConsumerKbId(String(res.kb_id))
+        else setOperatorKbId(String(res.kb_id))
+      }
       const summary = `已上传 ${res.filename}（${res.chunk_count} 切片）`
       if (role === 'consumer') setConsumerDocStatus(summary)
       else setOperatorDocStatus(summary)
@@ -375,14 +510,15 @@ export default function OnboardingWizard({
     const code = consumerCode
     setEphemeralOpToken('')
     setConsumerPhone('')
+    const win = buildRecentOfflineWindow(7)
     const res = (await callWizard('self_validate', {
       environment: cleanEnv,
       tenant_id: selectedTenantId,
       company_gateway_url: gatewayHttpsUrl,
       order_no: orderNo.trim(),
       device_id: deviceId.trim(),
-      offline_start: '2026-11-20T00:00:00+08:00',
-      offline_end: '2026-11-26T23:59:59+08:00',
+      offline_start: win.start,
+      offline_end: win.end,
       consumer_order_no: consumerOrderNo.trim(),
       consumer_reference_id: starterInstalled ? 'starter-faq' : 'uploaded-faq',
       consumer_phone: phone.trim(),
@@ -395,6 +531,41 @@ export default function OnboardingWizard({
         setNotice('三能力自验全绿，临时管家会话已自动吊销！可进入第 5 步正式发布与公网终验')
         setStep(5)
       }
+    }
+  }
+
+  async function handlePublishEnvironment() {
+    if (!cleanEnv || !selectedTenantId || !gatewayHttpsUrl) {
+      setError('请先确认环境代号、租户编号与 HTTPS API 域名')
+      return
+    }
+    setError('')
+    setNotice('')
+    setBusy(true)
+    try {
+      const initial = (await manage('environment-wizard', {
+        wizard_action: 'publish_environment',
+        wizard_payload: {
+          environment: cleanEnv,
+          tenant_id: selectedTenantId.trim(),
+          tenant_name: selectedTenantName.trim() || selectedTenantId.trim(),
+          customer_name: customerName.trim() || cleanEnv,
+          gateway_url: gatewayHttpsUrl,
+        },
+      })) as PublishResult
+      const finalPub = await pollWizardJob('publish_environment', initial, setPublishResult)
+      if (finalPub) {
+        setPublishResult(finalPub)
+        if (finalPub.passed || finalPub.published) {
+          setNotice('客户环境与租户已正式启用并同步活跃路由，请执行公网终验！')
+        } else {
+          setError(`正式发布在步骤 ${finalPub.failed_step || '未知'} 阻断，请核对后重试`)
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '正式发布未完成，请稍后重试')
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -640,11 +811,45 @@ export default function OnboardingWizard({
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="system-xs-regular text-text-secondary">
-              自动探测客户租户、MySQL 最小只读权限（含 <code>qumall_upms</code> 三张平台表）、必选无锁索引与本机直连时序服务端口。
+              自动探测客户租户、MySQL 最小只读权限（含 <code>qumall_upms</code> 三张平台表）、必选无锁索引与本机直连时序服务端口（可选传入瞬时只读与管理员 DB 凭据，仅用于当前隧道体检与二次确认修复，用完即焚）。
             </p>
             <Button type="button" variant="primary" disabled={busy} onClick={handleRunDiscovery}>
               {busy ? '正在探测体检…' : '运行自动环境探测与体检'}
             </Button>
+          </div>
+
+          <div className="grid gap-3 rounded-xl border border-divider-subtle p-4 sm:grid-cols-3">
+            <label className="space-y-1">
+              <span className="system-xs-medium text-text-secondary">目标租户 ID（可由体检自动识别）</span>
+              <Input aria-label="目标租户 ID" placeholder="如 1990990768688599040" value={selectedTenantId} onChange={(e) => setSelectedTenantId(e.target.value)} />
+            </label>
+            <label className="space-y-1">
+              <span className="system-xs-medium text-text-secondary">目标租户名称</span>
+              <Input aria-label="目标租户名称" placeholder="如 捷佳" value={selectedTenantName} onChange={(e) => setSelectedTenantName(e.target.value)} />
+            </label>
+            <label className="space-y-1">
+              <span className="system-xs-medium text-text-secondary">MySQL 主机（可选）</span>
+              <Input aria-label="MySQL 主机" placeholder="如 127.0.0.1 或内网 DB IP" value={mysqlHost} onChange={(e) => setMysqlHost(e.target.value)} />
+            </label>
+            <label className="space-y-1">
+              <span className="system-xs-medium text-text-secondary">MySQL 端口 / 只读账号</span>
+              <div className="flex gap-2">
+                <Input aria-label="MySQL 端口" value={mysqlPort} onChange={(e) => setMysqlPort(e.target.value)} />
+                <Input aria-label="MySQL 只读账号" value={mysqlUser} onChange={(e) => setMysqlUser(e.target.value)} />
+              </div>
+            </label>
+            <label className="space-y-1">
+              <span className="system-xs-medium text-text-secondary">MySQL 只读口令（仅服务端 0600 模板）</span>
+              <Input aria-label="MySQL 只读口令" type="password" value={mysqlPassword} onChange={(e) => setMysqlPassword(e.target.value)} />
+            </label>
+            <label className="space-y-1">
+              <span className="system-xs-medium text-text-secondary">Redis 主机 / 端口 / 口令（可选）</span>
+              <div className="flex gap-1.5">
+                <Input aria-label="Redis 主机" placeholder="127.0.0.1" value={redisHost} onChange={(e) => setRedisHost(e.target.value)} />
+                <Input aria-label="Redis 端口" value={redisPort} onChange={(e) => setRedisPort(e.target.value)} />
+                <Input aria-label="Redis 口令" type="password" placeholder="口令" value={redisPassword} onChange={(e) => setRedisPassword(e.target.value)} />
+              </div>
+            </label>
           </div>
 
           {discovery && (
@@ -695,6 +900,12 @@ export default function OnboardingWizard({
                   <pre className="overflow-x-auto rounded-lg bg-components-panel-bg p-3 text-xs text-text-primary">
                     {discovery.db_remediation_plan.sql_statements.join('\n')}
                   </pre>
+                  <div className="grid gap-3 sm:grid-cols-4">
+                    <Input aria-label="管理员 DB 主机" placeholder="管理员 DB 主机（同上可留空）" value={adminMysqlHost} onChange={(e) => setAdminMysqlHost(e.target.value)} />
+                    <Input aria-label="管理员 DB 端口" placeholder="3306" value={adminMysqlPort} onChange={(e) => setAdminMysqlPort(e.target.value)} />
+                    <Input aria-label="管理员 DB 用户" placeholder="如 root" value={adminMysqlUser} onChange={(e) => setAdminMysqlUser(e.target.value)} />
+                    <Input aria-label="管理员 DB 密码（用后即焚）" type="password" placeholder="管理员 DB 密码" value={adminMysqlPassword} onChange={(e) => setAdminMysqlPassword(e.target.value)} />
+                  </div>
                   <label className="flex cursor-pointer items-center gap-2 system-xs-medium text-text-primary">
                     <input
                       type="checkbox"
@@ -873,12 +1084,29 @@ export default function OnboardingWizard({
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="system-xs-regular text-text-secondary">
-              正式发布后自动向公网域名 <code>{gatewayHttpsUrl || 'https://<api_domain>'}</code> 发起 4 项正式 HTTPS 终验冒烟。
+              先点击正式发布启用 41 主目录及客户机活跃路由，再自动向公网域名 <code>{gatewayHttpsUrl || 'https://<api_domain>'}</code> 发起 4 项正式 HTTPS 终验冒烟。
             </p>
-            <Button type="button" variant="primary" disabled={busy} onClick={handlePostPublishSmoke}>
-              {busy ? '正在执行公网 4 项冒烟…' : '执行公网正式 HTTPS 4 项终验'}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="primary" disabled={busy} onClick={handlePublishEnvironment}>
+                {busy ? '正在正式发布…' : '一键正式发布并启用租户'}
+              </Button>
+              <Button type="button" variant="secondary" disabled={busy} onClick={handlePostPublishSmoke}>
+                {busy ? '正在执行公网 4 项冒烟…' : '执行公网正式 HTTPS 4 项终验'}
+              </Button>
+            </div>
           </div>
+
+          {publishResult && (
+            <div className="rounded-xl border border-divider-subtle p-4 text-xs text-text-secondary">
+              发布状态：{publishResult.passed || publishResult.published ? '已正式启用' : publishResult.state || '处理中'}
+              {publishResult.steps?.map((s) => (
+                <div key={s.step} className="mt-1 flex justify-between">
+                  <span>{s.step}</span>
+                  <span>{s.state}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {smokeResult && (
             <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section p-4">
