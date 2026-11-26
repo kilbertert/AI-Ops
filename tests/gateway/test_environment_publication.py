@@ -1852,3 +1852,354 @@ def test_late_cancel_after_activation_enters_reconcile_instead_of_blocked(valida
     assert body["state"] == "reconcile"
     assert body["result"]["phase"] == "restoring"
     assert "directory" not in body["result"]
+
+
+def test_source_configuration_restore_preserves_references_while_peer_tenant_enabled(validated):
+    """同环境存在其他已启用租户时，恢复本租户不得回退源配置引用；最后租户停用后恢复原引用。"""
+    import hashlib
+    from pathlib import Path
+
+    from aiops_diagnostics.onboarding import registry
+
+    state = validated[0][0]
+    reg_path, _, _, settings = state[0]
+    reg_path = Path(reg_path)
+    refs_path = Path(settings.environment_onboarding_file)
+    source_before = json.loads(refs_path.read_text())["targets"][0]["configurations"][0]
+    refs_before = hashlib.sha256(refs_path.read_bytes()).hexdigest()
+
+    identifier = publish(validated).json()["id"]
+    owner = "3" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    assert (
+        internal(
+            state, {"publication": "intent", "id": identifier, "owner": owner, "step": "source"}
+        ).status_code
+        == 200
+    )
+    updated = internal(state, {"publication": "source-configuration", "id": identifier, "owner": owner})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["state"] == "updated"
+    refs_after = hashlib.sha256(refs_path.read_bytes()).hexdigest()
+    assert refs_after != refs_before
+
+    # 中央目录同步激活本租户，再启用同环境对端租户 peer
+    activated = internal(
+        state,
+        {
+            "publication": "directory",
+            "id": identifier,
+            "owner": owner,
+            "result": {"phase": "activated", "activated": True},
+        },
+    )
+    assert activated.status_code == 200, activated.text
+    current = registry.load(reg_path)
+    env_row = current["environments"][0]
+    env_row["tenants"].append({"id": "peer", "name": "Peer", "enabled": True})
+    registry.apply(
+        reg_path,
+        current["environments"],
+        expected_revision=current["revision"],
+        actor="test-peer-enable",
+        managers=current["managers"],
+    )
+
+    # 恢复本租户时同环境 peer 仍启用：源配置引用必须保持 refs_after（unchanged）
+    keep = internal(
+        state,
+        {"publication": "source-configuration", "id": identifier, "owner": owner, "restore": True},
+    )
+    assert keep.status_code == 200, keep.text
+    assert keep.json()["state"] == "unchanged"
+    assert hashlib.sha256(refs_path.read_bytes()).hexdigest() == refs_after
+
+    # 停用对端租户 peer 后再次恢复：源配置引用按原 CAS 回到 refs_before，且中央目录整环境收敛为 false（M2）
+    current2 = registry.load(reg_path)
+    env_row2 = current2["environments"][0]
+    next(t for t in env_row2["tenants"] if t["id"] == "peer")["enabled"] = False
+    registry.apply(
+        reg_path,
+        current2["environments"],
+        expected_revision=current2["revision"],
+        actor="test-peer-disable",
+        managers=current2["managers"],
+    )
+    reverted = internal(
+        state,
+        {"publication": "source-configuration", "id": identifier, "owner": owner, "restore": True},
+    )
+    assert reverted.status_code == 200, reverted.text
+    assert reverted.json()["state"] == "updated"
+    source_restored = json.loads(refs_path.read_text())["targets"][0]["configurations"][0]
+    assert source_restored["sha256"] == source_before["sha256"]
+    assert Path(source_restored["path"]).read_bytes() == Path(source_before["path"]).read_bytes()
+    dir_restored = internal(
+        state,
+        {
+            "publication": "directory",
+            "id": identifier,
+            "owner": owner,
+            "restore": True,
+            "result": {"phase": "restored", "activated": False},
+        },
+    )
+    assert dir_restored.status_code == 200, dir_restored.text
+    final_env = registry.load(reg_path)["environments"][0]
+    assert final_env["enabled"] is False
+    assert all(not t["enabled"] for t in final_env["tenants"])
+
+
+def test_non_lifo_last_tenant_restore_reverts_source_via_baseline_and_restore_mutex(validated):
+    """覆盖控制面 S1（非 LIFO 末租户借基线退回 T0）、H2（存在 staged 同级时不提前退回）与 H3 互斥。"""
+    from pathlib import Path
+
+    from aiops_diagnostics.gateway import gateway_db
+    from aiops_diagnostics.onboarding import drafts, publication
+
+    state = validated[0][0]
+    reg_path, _, client, settings = state[0]
+    reg_path = Path(reg_path)
+    refs_path = Path(settings.environment_onboarding_file)
+    source_t0 = json.loads(refs_path.read_text())["targets"][0]["configurations"][0]
+
+    # 1. 租户 A 发布更新 references T0 -> T1，并落盘环境级 delegation-baseline
+    id_a = publish(validated).json()["id"]
+    owner_a = "4" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner_a}).json()["id"] == id_a
+    assert (
+        internal(state, {"publication": "intent", "id": id_a, "owner": owner_a, "step": "source"}).status_code
+        == 200
+    )
+    assert (
+        internal(state, {"publication": "source-configuration", "id": id_a, "owner": owner_a}).json()["state"]
+        == "updated"
+    )
+    source_t1 = json.loads(refs_path.read_text())["targets"][0]["configurations"][0]
+    assert source_t1["sha256"] != source_t0["sha256"]
+    assert (
+        internal(
+            state,
+            {
+                "publication": "directory",
+                "id": id_a,
+                "owner": owner_a,
+                "result": {"phase": "activated", "activated": True},
+            },
+        ).status_code
+        == 200
+    )
+    assert (
+        internal(
+            state,
+            {
+                "publication": "complete",
+                "id": id_a,
+                "owner": owner_a,
+                "result": {
+                    "state": "observed",
+                    "phase": "activated",
+                    "activated": True,
+                    "directory": "synchronized",
+                },
+            },
+        ).status_code
+        == 200
+    )
+
+    # 2. 同环境插入已 staged 的租户 B 发布任务（H2）：B 尚未启用，恢复 A 时 source-configuration 仍保持 T1
+    from aiops_diagnostics.onboarding import plans as environment_plans
+    from aiops_diagnostics.onboarding import registry
+
+    id_b = "task_" + "b" * 32
+    with gateway_db.connection(drafts._database(reg_path), readonly=True) as conn:
+        row_a = conn.execute(
+            "SELECT environment, request FROM environment_tasks WHERE id=?", (id_a,)
+        ).fetchone()
+    base_req = json.loads(row_a["request"])
+    reg_now = registry.load(reg_path)
+    draft_row = next(
+        r for r in drafts._rows(drafts._database(reg_path)) if r["environment"] == row_a["environment"]
+    )
+    saved = drafts.save(
+        reg_path,
+        tuple(base_req["identity"]),
+        json.loads(draft_row["body"]),
+        expected_revision=draft_row["revision"],
+        registry_revision=reg_now["revision"],
+    )
+    plan_b = environment_plans.preflight(
+        reg_path,
+        tuple(base_req["identity"]),
+        row_a["environment"],
+        saved["revision"],
+        reg_now["revision"],
+        str(refs_path),
+    )
+    req_b = {
+        **base_req,
+        "tenant_id": "peer",
+        "attempted": True,
+        "plan": plan_b,
+        "references_sha256": __import__("hashlib").sha256(refs_path.read_bytes()).hexdigest(),
+    }
+    with gateway_db.connection(drafts._database(reg_path), write=True) as conn:
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,owner,lease_until,result,updated_at) "
+            "VALUES(?,?,?,'executing',?,?,?,?)",
+            (
+                id_b,
+                row_a["environment"],
+                json.dumps(req_b),
+                "6" * 32,
+                time.time() + 300,
+                json.dumps({"scope": "environment-publication", "phase": "staged", "activated": False}),
+                time.time(),
+            ),
+        )
+    # 租户 B 在委派态执行前向 source-configuration（before==after==T1），随后停在 observed/staged（未启用）
+    fwd_b = internal(state, {"publication": "source-configuration", "id": id_b, "owner": "6" * 32})
+    assert fwd_b.status_code == 200 and fwd_b.json()["state"] == "unchanged", fwd_b.text
+    with gateway_db.connection(drafts._database(reg_path), write=True) as conn:
+        conn.execute(
+            "UPDATE environment_tasks SET state='observed',owner='',lease_until=0 WHERE id=?", (id_b,)
+        )
+    assert (
+        client.post("/v1/dify/management/environment-tasks", json={"restore_publication": id_a}).status_code
+        == 200
+    )
+    # H3：A 已进入 checking 恢复中，此时并发对 B 触发 restore_publication 必须被 ENVIRONMENT_TASK_BUSY 拒绝
+    busy = client.post("/v1/dify/management/environment-tasks", json={"restore_publication": id_b})
+    assert busy.status_code == 403 and busy.json()["error"]["code"] == "ENVIRONMENT_TASK_BUSY"
+
+    owner_r1 = "5" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner_r1}).json()["id"] == id_a
+    keep_while_b_staged = internal(
+        state, {"publication": "source-configuration", "id": id_a, "owner": owner_r1, "restore": True}
+    )
+    assert keep_while_b_staged.status_code == 200 and keep_while_b_staged.json()["state"] == "unchanged"
+    assert (
+        json.loads(refs_path.read_text())["targets"][0]["configurations"][0]["sha256"] == source_t1["sha256"]
+    )
+    assert (
+        internal(
+            state,
+            {
+                "publication": "directory",
+                "id": id_a,
+                "owner": owner_r1,
+                "restore": True,
+                "result": {"phase": "restored", "activated": False},
+            },
+        ).status_code
+        == 200
+    )
+    assert (
+        internal(
+            state,
+            {
+                "publication": "complete",
+                "id": id_a,
+                "owner": owner_r1,
+                "result": {"state": "cancelled", "phase": "restored", "activated": False},
+            },
+        ).status_code
+        == 200
+    )
+
+    # 3. S1：作为最后离开委派的租户 B 恢复，须借环境级 delegation-baseline 将 references.json 退回 T0
+    with gateway_db.connection(drafts._database(reg_path), write=True) as conn:
+        conn.execute(
+            "UPDATE environment_tasks SET state='executing',owner=?,lease_until=? WHERE id=?",
+            ("7" * 32, time.time() + 300, id_b),
+        )
+    reverted_b = internal(
+        state, {"publication": "source-configuration", "id": id_b, "owner": "7" * 32, "restore": True}
+    )
+    assert reverted_b.status_code == 200 and reverted_b.json()["state"] == "updated", reverted_b.text
+    source_final = json.loads(refs_path.read_text())["targets"][0]["configurations"][0]
+    assert source_final["sha256"] == source_t0["sha256"]
+    assert Path(source_final["path"]).read_bytes() == Path(source_t0["path"]).read_bytes()
+    # NEW-H1：末租户借基线退回 T0 后下游失败重试，再次 restore=True 必须幂等返回 unchanged 而非死锁
+    retry_b = internal(
+        state, {"publication": "source-configuration", "id": id_b, "owner": "7" * 32, "restore": True}
+    )
+    assert retry_b.status_code == 200 and retry_b.json()["state"] == "unchanged", retry_b.text
+    assert publication.ACTION == "environment-publish"
+
+
+def test_staged_cancel_without_source_transaction_and_same_tenant_blocked_staged_restore(validated):
+    """覆盖 NEW-H2（B 未写 source-operation.json 在 staged 取消也能借基线退回 T0）与 NEW-M2。"""
+    from pathlib import Path
+
+    from aiops_diagnostics.gateway import gateway_db
+    from aiops_diagnostics.onboarding import drafts
+
+    state = validated[0][0]
+    reg_path, _, _, settings = state[0]
+    reg_path = Path(reg_path)
+    refs_path = Path(settings.environment_onboarding_file)
+    source_t0 = json.loads(refs_path.read_text())["targets"][0]["configurations"][0]
+
+    # 1. 租户 A 更新 references T0 -> T1，同时插入同租户 A 的一条历史 blocked/staged 残留任务（NEW-M2）
+    id_a = publish(validated).json()["id"]
+    owner_a = "8" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner_a}).json()["id"] == id_a
+    assert (
+        internal(state, {"publication": "intent", "id": id_a, "owner": owner_a, "step": "source"}).status_code
+        == 200
+    )
+    assert (
+        internal(state, {"publication": "source-configuration", "id": id_a, "owner": owner_a}).json()["state"]
+        == "updated"
+    )
+    with gateway_db.connection(drafts._database(reg_path), write=True) as conn:
+        row_a = conn.execute(
+            "SELECT environment, request FROM environment_tasks WHERE id=?", (id_a,)
+        ).fetchone()
+        base_req = json.loads(row_a["request"])
+        # 同租户历史 blocked/staged 任务早于后续已恢复的 id_a，不得阻塞末次恢复（NEW-M2）
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,result,updated_at) "
+            "VALUES(?,?,?,'blocked',?,?)",
+            (
+                "task_" + "0" * 32,
+                row_a["environment"],
+                json.dumps(base_req),
+                json.dumps({"scope": "environment-publication", "phase": "staged", "activated": False}),
+                time.time() - 60,
+            ),
+        )
+        # 另一租户 B 未执行过 source-configuration（无 source-operation.json），在 staged 取消恢复（NEW-H2）
+        id_b = "task_" + "c" * 32
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,owner,lease_until,result,updated_at) "
+            "VALUES(?,?,?,'executing',?,?,?,?)",
+            (
+                id_b,
+                row_a["environment"],
+                json.dumps({**base_req, "tenant_id": "peer"}),
+                "9" * 32,
+                time.time() + 300,
+                json.dumps({"scope": "environment-publication", "phase": "staged", "activated": False}),
+                time.time(),
+            ),
+        )
+        # 将 A 标记为已恢复取消（updated_at 更新于旧 blocked 任务），使 B 成为最后离开委派的租户
+        conn.execute(
+            "UPDATE environment_tasks SET state='cancelled',result=?,updated_at=? WHERE id=?",
+            (
+                json.dumps({"scope": "environment-publication", "phase": "restored", "activated": False}),
+                time.time() + 1,
+                id_a,
+            ),
+        )
+
+    # B 从未写过 source-operation.json，恢复时仍须借基线将 references.json 从 T1 退回 T0（NEW-H2）
+    reverted = internal(
+        state, {"publication": "source-configuration", "id": id_b, "owner": "9" * 32, "restore": True}
+    )
+    assert reverted.status_code == 200 and reverted.json()["state"] == "updated", reverted.text
+    assert (
+        json.loads(refs_path.read_text())["targets"][0]["configurations"][0]["sha256"] == source_t0["sha256"]
+    )
