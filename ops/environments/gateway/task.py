@@ -431,7 +431,11 @@ def main():
         install.digest(bundle / name) != digest for name, digest in checks.items()
     ):
         raise ValueError("installer bundle mismatch")
+    if args.action == "cold-run":
+        install.ensure_service_identity(args.environment, args.user)
     inst = install.Installer(args.environment, args.user, args.port)
+    if args.action == "cold-run":
+        inst.ensure_prerequisites = True
     inst.revision = revision
     for parent in (
         inst.root.parent,

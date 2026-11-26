@@ -302,8 +302,10 @@ def _installation_once(root, request, owner):
 def run(root, gateway, key, identifier=None, *, central_target=None):
     if identifier is not None and not re.fullmatch(r"task_[0-9a-f]{32}", identifier):
         raise ValueError("invalid task identifier")
-    # 操作者从规范checkout运行；已有本地未提交工作或非合并修订不能作为运维代码源。
-    if subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip():
+    # 操作者从规范checkout运行；受追踪代码树必须干净且已合并，避免未跟踪文档文件阻塞全站任务调度。
+    if subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=no"], cwd=root, text=True
+    ).strip():
         raise ValueError("clean merged checkout required")
     subprocess.run(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=root, check=True)
     owner = uuid.uuid4().hex
