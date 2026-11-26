@@ -1770,16 +1770,23 @@ it('deduplicates hero publish CTA across repeated ready onboards, uses fresh pla
     screen.getByRole('button', { name: '确认发布并开通：same', exact: true }).elements(),
   ).toHaveLength(1)
 
-  // 重新预检拿到新计划后，点击发布应优先提交新计划 plan_n... 而非旧 plan_o...
+  // 未被判过期的后台续签计划 plan_o... 不会被旧页面态 plan 覆盖
   await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
   await screen.getByRole('button', { name: '确认发布并开通：same', exact: true }).click()
   expect(calls.find((c) => c.body.validation_task)?.body).toMatchObject({
     validation_task: `task_${'v'.repeat(32)}`,
-    publication_plan: `plan_${'n'.repeat(32)}`,
+    publication_plan: `plan_${'o'.repeat(32)}`,
   })
 
-  // 脏表单下在「运行与排查」点击「环境总览」行同样触发未保存确认弹窗
+  // 连接配置中已有租户编号锁定不可改且不可移除；公司网关地址允许留空
   await screen.getByRole('tab', { name: /连接配置/ }).click()
+  await expect.element(screen.getByRole('textbox', { name: '租户 1 编号' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: '移除', exact: true }).elements()).toHaveLength(0)
+  await expect
+    .element(screen.getByRole('textbox', { name: '公司网关地址', exact: true }))
+    .not.toBeRequired()
+
+  // 脏表单下在「运行与排查」点击「环境总览」行同样触发未保存确认弹窗
   await screen.getByRole('textbox', { name: '环境名称', exact: true }).fill('脏配置')
   await screen.getByRole('tab', { name: /运行与排查/ }).click()
   await screen.getByRole('region', { name: '环境总览' }).getByText('环境乙（b）').click()

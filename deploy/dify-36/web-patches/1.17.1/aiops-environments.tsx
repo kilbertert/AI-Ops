@@ -667,6 +667,7 @@ export default function EnvironmentManagement() {
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('all')
   const [expandedTenants, setExpandedTenants] = useState<Record<string, boolean>>({})
   const [lastSubmittedTaskId, setLastSubmittedTaskId] = useState('')
+  const [expiredPlanIds, setExpiredPlanIds] = useState<string[]>([])
 
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
@@ -688,6 +689,7 @@ export default function EnvironmentManagement() {
     setTaskFilter('all')
     setExpandedTenants({})
     setLastSubmittedTaskId('')
+    setExpiredPlanIds([])
     taskViewRef.current += 1
     setTaskGeneration((v) => v + 1)
     setSelected(id)
@@ -731,6 +733,7 @@ export default function EnvironmentManagement() {
       setConsumerSource('')
       setExpandedTenants({})
       setLastSubmittedTaskId('')
+      setExpiredPlanIds([])
       setData(null)
       setOverview(null)
       setOverviewError('')
@@ -846,6 +849,9 @@ export default function EnvironmentManagement() {
             },
       )
       setPlan(result)
+      if (result.state === 'expired') {
+        setExpiredPlanIds((prev) => (prev.includes(result.id) ? prev : [...prev, result.id]))
+      }
       if (!readback && activeTab === 'config') setActiveTab('onboard')
     } catch (e) {
       setPlan(null)
@@ -1066,9 +1072,15 @@ export default function EnvironmentManagement() {
       !item.result.validation_task_id
     )
       return null
-    // 若当前已重新预检拿到有效新计划，优先使用新计划 ID；刷新恢复后（plan 为空）回退使用任务携带的续签 plan_id
-    const publishPlanId = (plan && plan.state !== 'expired' ? plan.id : '') || item.plan_id
-    const publishExpired = plan !== null && plan.id === publishPlanId && plan.state === 'expired'
+    // 优先使用任务自身最新的续签计划 ID（防止旧页面态 plan 覆盖后台续签计划）；
+    // 仅当任务原计划 ID 已被确认过期时，改用重新预检得到的有效新计划 ID。
+    const itemPlanExpired = Boolean(item.plan_id) && expiredPlanIds.includes(item.plan_id)
+    const publishPlanId =
+      (item.plan_id && !itemPlanExpired ? item.plan_id : '') ||
+      (plan && plan.state !== 'expired' ? plan.id : '')
+    const publishExpired =
+      (plan !== null && plan.id === publishPlanId && plan.state === 'expired') ||
+      (Boolean(publishPlanId) && expiredPlanIds.includes(publishPlanId))
     return (
       <Button
         type="button"
@@ -2309,7 +2321,7 @@ export default function EnvironmentManagement() {
                               </span>
                               <Input
                                 aria-label={label}
-                                required
+                                required={key !== 'company_gateway_url'}
                                 maxLength={maxLength}
                                 placeholder={placeholder}
                                 disabled={key === 'id' && Boolean(selected)}
@@ -2369,82 +2381,92 @@ export default function EnvironmentManagement() {
                         </p>
                       ) : (
                         <div className="space-y-2.5">
-                          {draft.tenants.map((tenant, index) => (
-                            <div
-                              // oxlint-disable-next-line react/no-array-index-key -- Tenant IDs are user-editable before saving.
-                              key={index}
-                              className="grid items-end gap-3 rounded-xl bg-background-section-burn/50 p-3.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]"
-                            >
-                              <label className="block space-y-1">
-                                <span className="block system-xs-medium text-text-secondary">
-                                  租户 {index + 1} 编号
-                                </span>
-                                <Input
-                                  aria-label={`租户 ${index + 1} 编号`}
-                                  required
-                                  maxLength={64}
-                                  placeholder="稳定租户 ID"
-                                  value={tenant.id}
-                                  onChange={(event) =>
-                                    setDraft({
-                                      ...draft,
-                                      tenants: draft.tenants.map((item, i) =>
-                                        i === index ? { ...item, id: event.target.value } : item,
-                                      ),
-                                    })
-                                  }
-                                />
-                              </label>
-                              <label className="block space-y-1">
-                                <span className="block system-xs-medium text-text-secondary">
-                                  租户 {index + 1} 名称
-                                </span>
-                                <Input
-                                  aria-label={`租户 ${index + 1} 名称`}
-                                  required
-                                  maxLength={128}
-                                  placeholder="公司或运营商名称"
-                                  value={tenant.name}
-                                  onChange={(event) =>
-                                    setDraft({
-                                      ...draft,
-                                      tenants: draft.tenants.map((item, i) =>
-                                        i === index ? { ...item, name: event.target.value } : item,
-                                      ),
-                                    })
-                                  }
-                                />
-                              </label>
-                              <label className="flex h-9 cursor-pointer items-center gap-2 system-xs-medium text-text-secondary">
-                                <Checkbox
-                                  aria-label={`租户 ${index + 1} 准入`}
-                                  checked={tenant.enabled}
-                                  onCheckedChange={(value) =>
-                                    setDraft({
-                                      ...draft,
-                                      tenants: draft.tenants.map((item, i) =>
-                                        i === index ? { ...item, enabled: value === true } : item,
-                                      ),
-                                    })
-                                  }
-                                />
-                                预期准入
-                              </label>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="small"
-                                onClick={() =>
-                                  setDraft({
-                                    ...draft,
-                                    tenants: draft.tenants.filter((_, i) => i !== index),
-                                  })
-                                }
+                          {draft.tenants.map((tenant, index) => {
+                            const persisted = Boolean(
+                              (saved?.draft.tenants ?? live?.tenants)?.[index],
+                            )
+                            return (
+                              <div
+                                // oxlint-disable-next-line react/no-array-index-key -- Tenant IDs are user-editable before saving.
+                                key={index}
+                                className="grid items-end gap-3 rounded-xl bg-background-section-burn/50 p-3.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]"
                               >
-                                移除
-                              </Button>
-                            </div>
-                          ))}
+                                <label className="block space-y-1">
+                                  <span className="block system-xs-medium text-text-secondary">
+                                    租户 {index + 1} 编号
+                                  </span>
+                                  <Input
+                                    aria-label={`租户 ${index + 1} 编号`}
+                                    required
+                                    maxLength={64}
+                                    placeholder="稳定租户 ID"
+                                    disabled={persisted}
+                                    value={tenant.id}
+                                    onChange={(event) =>
+                                      setDraft({
+                                        ...draft,
+                                        tenants: draft.tenants.map((item, i) =>
+                                          i === index ? { ...item, id: event.target.value } : item,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <label className="block space-y-1">
+                                  <span className="block system-xs-medium text-text-secondary">
+                                    租户 {index + 1} 名称
+                                  </span>
+                                  <Input
+                                    aria-label={`租户 ${index + 1} 名称`}
+                                    required
+                                    maxLength={128}
+                                    placeholder="公司或运营商名称"
+                                    value={tenant.name}
+                                    onChange={(event) =>
+                                      setDraft({
+                                        ...draft,
+                                        tenants: draft.tenants.map((item, i) =>
+                                          i === index
+                                            ? { ...item, name: event.target.value }
+                                            : item,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <label className="flex h-9 cursor-pointer items-center gap-2 system-xs-medium text-text-secondary">
+                                  <Checkbox
+                                    aria-label={`租户 ${index + 1} 准入`}
+                                    checked={tenant.enabled}
+                                    onCheckedChange={(value) =>
+                                      setDraft({
+                                        ...draft,
+                                        tenants: draft.tenants.map((item, i) =>
+                                          i === index ? { ...item, enabled: value === true } : item,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                  预期准入
+                                </label>
+                                {!persisted && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="small"
+                                    onClick={() =>
+                                      setDraft({
+                                        ...draft,
+                                        tenants: draft.tenants.filter((_, i) => i !== index),
+                                      })
+                                    }
+                                  >
+                                    移除
+                                  </Button>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
                       )}
                     </section>
