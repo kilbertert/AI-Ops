@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vite-plus/test'
 import { render } from 'vitest-browser-react'
-import { page } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 import EnvironmentManagement from './aiops-environments'
 
 const push = vi.hoisted(() => vi.fn())
@@ -619,9 +619,7 @@ it('submits cold initial installation only after explicit confirm and reads back
   await refresh()
   const region = '空机初装进度：same'
   await expect.element(page.getByRole('region', { name: region })).toBeVisible()
-  await expect
-    .element(screen.getByText('空机初装 · same：待安装', { exact: true }))
-    .toBeVisible()
+  await expect.element(screen.getByText('空机初装 · same：待安装', { exact: true })).toBeVisible()
   // 初装结果未回写前父任务按真实queued摘要显示基础初装未执行。
   await expect
     .element(
@@ -632,9 +630,7 @@ it('submits cold initial installation only after explicit confirm and reads back
     .toBeVisible()
   cold.state = 'running'
   await refresh()
-  await expect
-    .element(screen.getByText('空机初装 · same：正在取证', { exact: true }))
-    .toBeVisible()
+  await expect.element(screen.getByText('空机初装 · same：正在取证', { exact: true })).toBeVisible()
   cold.state = 'reconcile'
   await refresh()
   await expect
@@ -642,15 +638,11 @@ it('submits cold initial installation only after explicit confirm and reads back
     .toBeVisible()
   cold.state = 'cancelled'
   await refresh()
-  await expect
-    .element(screen.getByText('空机初装 · same：已取消', { exact: true }))
-    .toBeVisible()
+  await expect.element(screen.getByText('空机初装 · same：已取消', { exact: true })).toBeVisible()
   cold.state = 'observed'
   cold.result = { ...cold.result, installation: 'installed', version: '1.40.0' }
   await refresh()
-  await expect
-    .element(screen.getByText('空机初装 · same：已装', { exact: true }))
-    .toBeVisible()
+  await expect.element(screen.getByText('空机初装 · same：已装', { exact: true })).toBeVisible()
   await expect.element(screen.getByText('实际版本：1.40.0', { exact: true })).toBeVisible()
   cold.result = { ...cold.result, installation: 'already_installed' }
   await refresh()
@@ -1041,7 +1033,12 @@ it('renders environment overview, tenant capability matrix, live vs receipt node
             },
             capabilities: {
               consumer: { state: 'passed', error_code: '', observed_at: 1795597400, task_id: 't1' },
-              order: { state: 'blocked', error_code: 'ORDER_MISSING', observed_at: 1795597400, task_id: 't1' },
+              order: {
+                state: 'blocked',
+                error_code: 'ORDER_MISSING',
+                observed_at: 1795597400,
+                task_id: 't1',
+              },
               offline: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
             },
             accuracy_confirmed: false,
@@ -1090,11 +1087,21 @@ it('renders environment overview, tenant capability matrix, live vs receipt node
               state: 'ready',
             },
             apps: {
-              operator: { app_id: '33333333-3333-3333-3333-333333333333', version_no: null, state: 'candidate', source: 'task_receipt' },
+              operator: {
+                app_id: '33333333-3333-3333-3333-333333333333',
+                version_no: null,
+                state: 'candidate',
+                source: 'task_receipt',
+              },
               consumer: { app_id: '', version_no: null, state: 'unprepared', source: 'none' },
             },
             capabilities: {
-              consumer: { state: 'expired', error_code: '', observed_at: 1795590000, task_id: 't2' },
+              consumer: {
+                state: 'expired',
+                error_code: '',
+                observed_at: 1795590000,
+                task_id: 't2',
+              },
               order: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
               offline: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
             },
@@ -1116,7 +1123,10 @@ it('renders environment overview, tenant capability matrix, live vs receipt node
       if (body.action === 'environment-drafts') return Response.json({ ...data, overview })
       if (body.action === 'environment-overview') {
         if (overviewRevoked) {
-          return Response.json({ error: { code: 'ENVIRONMENT_MANAGEMENT_FORBIDDEN' } }, { status: 403 })
+          return Response.json(
+            { error: { code: 'ENVIRONMENT_MANAGEMENT_FORBIDDEN' } },
+            { status: 403 },
+          )
         }
         return Response.json(overview)
       }
@@ -1136,7 +1146,9 @@ it('renders environment overview, tenant capability matrix, live vs receipt node
   await expect.element(screen.getByText(/业务准确性：待人工确认/)).toBeVisible()
 
   await screen.getByRole('button', { name: '环境乙（b）' }).click()
-  await expect.element(screen.getByText(/远端节点 ecs-95 · 已观察（受管任务点时回执，非实时心跳）/)).toBeVisible()
+  await expect
+    .element(screen.getByText(/远端节点 ecs-95 · 已观察（受管任务点时回执，非实时心跳）/))
+    .toBeVisible()
   await expect.element(screen.getByText(/最近安装回执：已装/)).toBeVisible()
   await expect.element(screen.getByText(/智能客服：回执过期/)).toBeVisible()
 
@@ -1233,7 +1245,9 @@ it('submits one-click tenant onboarding with validation and keeps explicit human
     capabilities: ['consumer', 'order', 'offline'],
   })
   await expect.element(screen.getByRole('region', { name: '一键开通进度：same' })).toBeVisible()
-  await expect.element(screen.getByRole('button', { name: '取消一键开通', exact: true })).toBeVisible()
+  await expect
+    .element(screen.getByRole('button', { name: '取消一键开通', exact: true }))
+    .toBeVisible()
 
   const renewedPlanId = `plan_${'f'.repeat(32)}`
   onboardTask.plan_id = renewedPlanId
@@ -1243,9 +1257,25 @@ it('submits one-click tenant onboarding with validation and keeps explicit human
     ready_to_publish: true,
     validation_task_id: validationId,
     stages: [
-      { id: `task_${'1'.repeat(32)}`, action: 'candidate-prepare', state: 'observed', error_code: '' },
-      { id: `task_${'2'.repeat(32)}`, action: 'candidate-install', state: 'observed', error_code: '', version: '1.40.4' },
-      { id: `task_${'3'.repeat(32)}`, action: 'candidate-register', state: 'observed', error_code: '' },
+      {
+        id: `task_${'1'.repeat(32)}`,
+        action: 'candidate-prepare',
+        state: 'observed',
+        error_code: '',
+      },
+      {
+        id: `task_${'2'.repeat(32)}`,
+        action: 'candidate-install',
+        state: 'observed',
+        error_code: '',
+        version: '1.40.4',
+      },
+      {
+        id: `task_${'3'.repeat(32)}`,
+        action: 'candidate-register',
+        state: 'observed',
+        error_code: '',
+      },
       { id: validationId, action: 'candidate-validate', state: 'observed', error_code: '' },
     ],
   }
@@ -1271,7 +1301,323 @@ it('submits one-click tenant onboarding with validation and keeps explicit human
   await expect
     .element(screen.getByRole('textbox', { name: '一键开通验收案例', exact: true }))
     .toHaveValue('')
+  await expect.element(screen.getByRole('checkbox', { name: /包含空机初装/ })).not.toBeChecked()
+})
+
+it('supports view-mode switching, clickable overview navigation with dirty guard, and task filtering', async () => {
+  const overview = {
+    schema: 'aiops-environment-overview/1',
+    control_environment: 'a',
+    control_execution_environment: 'a',
+    control_version: '1.40.4',
+    generated_at: 1795597500,
+    registry_revision: 4,
+    environments: [
+      {
+        id: 'a',
+        name: '环境甲',
+        is_control: true,
+        status: 'active',
+        enabled: true,
+        draft_revision: 2,
+        registry_changed: false,
+        tenant_count: 1,
+        enabled_tenant_count: 1,
+        active_route_count: 2,
+        nodes: [
+          {
+            source: 'heartbeat',
+            node_id: 'node-41',
+            status: 'online',
+            observed_at: 1795597490,
+            age_seconds: 10,
+            version: '1.40.4',
+            tool_contract: 'request-target/2',
+            schemas: ['operator-agent/1'],
+            tools_compatible: true,
+            available_tools: ['cpms_order_detail', 'cpms_device_offline'],
+          },
+        ],
+        tenants: [
+          {
+            id: 'same',
+            name: '甲租户',
+            admission: 'enabled',
+            effective_enabled: true,
+            draft_enabled: true,
+            workspace: { id: 'ws-a-1', state: 'ready', source: 'runtime' },
+            knowledge: {
+              knowledge_base_id: '',
+              connection_id: '',
+              active_grants: 4,
+              state: 'ready',
+            },
+            apps: {
+              operator: {
+                app_id: '11111111-1111-1111-1111-111111111111',
+                version_no: 36,
+                state: 'active',
+                source: 'runtime',
+              },
+              consumer: {
+                app_id: '22222222-2222-2222-2222-222222222222',
+                version_no: 35,
+                state: 'active',
+                source: 'runtime',
+              },
+            },
+            capabilities: {
+              consumer: { state: 'passed', error_code: '', observed_at: 1795597400, task_id: 't1' },
+              order: { state: 'passed', error_code: '', observed_at: 1795597400, task_id: 't1' },
+              offline: { state: 'unverified', error_code: '', observed_at: null, task_id: '' },
+            },
+            accuracy_confirmed: false,
+            latest_task: null,
+          },
+        ],
+        latest_task: null,
+      },
+      {
+        id: 'b',
+        name: '环境乙',
+        is_control: false,
+        status: 'disabled',
+        enabled: false,
+        draft_revision: 5,
+        registry_changed: false,
+        tenant_count: 1,
+        enabled_tenant_count: 0,
+        active_route_count: 0,
+        nodes: [],
+        tenants: [],
+        latest_task: null,
+      },
+    ],
+  }
+  const activeOnboard = {
+    id: `task_${'1'.repeat(32)}`,
+    action: 'tenant-onboard',
+    tenant_id: 'same',
+    plan_id: `plan_${'a'.repeat(32)}`,
+    state: 'running',
+    cancel_requested: false,
+    error_code: '',
+    result: {
+      scope: 'tenant-one-click-onboarding',
+      ready_to_publish: false,
+      stages: [
+        {
+          id: `task_${'2'.repeat(32)}`,
+          action: 'candidate-prepare',
+          state: 'observed',
+          error_code: '',
+        },
+        {
+          id: `task_${'3'.repeat(32)}`,
+          action: 'candidate-install',
+          state: 'running',
+          error_code: '',
+        },
+      ],
+    },
+  }
+  const oldPreflight = {
+    id: `task_${'4'.repeat(32)}`,
+    action: 'site-preflight',
+    plan_id: `plan_${'a'.repeat(32)}`,
+    state: 'observed',
+    cancel_requested: false,
+    error_code: '',
+    result: { checks: [{ id: 'host-identity', state: 'passed' }] },
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      if (body.action === 'environment-drafts') return Response.json({ ...data, overview })
+      if (body.action === 'environment-plan')
+        return Response.json({
+          id: `plan_${'a'.repeat(32)}`,
+          state: 'blocked',
+          executable: false,
+          draft_revision: 2,
+          registry_revision: 4,
+          checks: [
+            { id: 'references', state: 'passed' },
+            { id: 'application', state: 'passed' },
+            { id: 'network', state: 'pending' },
+          ],
+        })
+      if (body.consumer_sources)
+        return Response.json({
+          sources: [{ app_id: 'source-a', name: '正式客服模板', version_no: 7 }],
+        })
+      return Response.json({ tasks: [activeOnboard, oldPreflight] })
+    }),
+  )
+  await page.viewport(1440, 960)
+  const screen = await render(<EnvironmentManagement />)
+  await expect.element(screen.getByRole('region', { name: '环境总览' })).toBeVisible()
+  // 收起/展开顶部环境总览
+  await screen.getByRole('button', { name: '收起总览', exact: true }).click()
+  await expect.element(screen.getByRole('button', { name: '展开总览', exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '展开总览', exact: true }).click()
+
+  // 打开预检计划 + 模板以渲染完整重构界面
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
+
+  // 任务筛选胶囊：进行中/待发布只保留 activeOnboard，单步与核验只保留 oldPreflight
+  await screen.getByRole('button', { name: '进行中/待发布 (1)', exact: true }).click()
+  await expect.element(screen.getByText(activeOnboard.id, { exact: true })).toBeVisible()
+  expect(screen.getByText(oldPreflight.id, { exact: true }).elements()).toHaveLength(0)
+  await screen.getByRole('button', { name: '单步与核验 (1)', exact: true }).click()
+  await expect.element(screen.getByText(oldPreflight.id, { exact: true })).toBeVisible()
+  expect(screen.getByText(activeOnboard.id, { exact: true }).elements()).toHaveLength(0)
+  await screen.getByRole('button', { name: '全部 (2)', exact: true }).click()
+
+  // 视图切换：切到「节点与租户总览」后隐藏连接配置表单，切回「全部视图」恢复
+  await screen.getByRole('button', { name: '节点与租户总览', exact: true }).click()
+  expect(screen.getByRole('textbox', { name: '环境名称', exact: true }).elements()).toHaveLength(0)
+  await expect.element(screen.getByRole('region', { name: '租户与能力总览' })).toBeVisible()
+  await screen.getByRole('button', { name: '全部视图', exact: true }).click()
+
+  // 脏表单点击总览行切换环境同样触发未保存确认弹窗，不静默丢输入
+  await screen.getByRole('textbox', { name: '环境名称', exact: true }).fill('脏编辑不丢失')
+  await screen.getByText('环境乙（b）', { exact: true }).first().click()
+  await expect.element(screen.getByRole('alertdialog')).toBeVisible()
+  await screen.getByRole('button', { name: '继续编辑', exact: true }).click()
   await expect
-    .element(screen.getByRole('checkbox', { name: /包含空机初装/ }))
-    .not.toBeChecked()
+    .element(screen.getByRole('textbox', { name: '环境名称', exact: true }))
+    .toHaveValue('脏编辑不丢失')
+})
+
+it('guards enter-key submit in case input, expired plan re-preflight, view transitions and clipboard failure', async () => {
+  const calls: Array<{ action: string; body: Record<string, unknown> }> = []
+  let planCall = 0
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      const action = String(body.action || '')
+      calls.push({ action, body })
+      if (action === 'environment-drafts') return Response.json(data)
+      if (action === 'environment-overview') {
+        return Response.json({
+          registry_revision: 4,
+          control_version: '1.40.4',
+          environments: [
+            {
+              id: 'a',
+              name: '环境甲',
+              status: 'disabled',
+              is_control: false,
+              enabled_tenant_count: 0,
+              tenant_count: 1,
+              draft_revision: 2,
+              registry_changed: false,
+              active_route_count: 0,
+              nodes: [],
+              tenants: [],
+              latest_task: null,
+            },
+          ],
+        })
+      }
+      if (action === 'environment-task') {
+        if (body.consumer_sources) {
+          return Response.json({
+            sources: [{ app_id: 'source-a', name: '正式客服模板', version_no: 7 }],
+          })
+        }
+        return Response.json({
+          tasks: [
+            {
+              id: `task_${'9'.repeat(32)}`,
+              action: 'tenant-onboard',
+              tenant_id: 'same',
+              plan_id: `plan_${'a'.repeat(32)}`,
+              state: 'observed',
+              cancel_requested: false,
+              error_code: '',
+              result: {
+                scope: 'tenant-one-click-onboarding',
+                ready_to_publish: true,
+                stages: [],
+              },
+            },
+          ],
+        })
+      }
+      if (action === 'environment-plan') {
+        planCall += 1
+        if (body.id) {
+          return Response.json({
+            id: `plan_${'a'.repeat(32)}`,
+            draft_revision: 2,
+            registry_revision: 4,
+            state: 'expired',
+            executable: false,
+            checks: [],
+          })
+        }
+        return Response.json({
+          id: `plan_${String(planCall).padStart(32, 'a')}`,
+          draft_revision: 2,
+          registry_revision: 4,
+          state: 'ready',
+          executable: true,
+          checks: [],
+        })
+      }
+      return Response.json({})
+    }),
+  )
+
+  const writeTextMock = vi.fn().mockRejectedValue(new Error('clipboard blocked'))
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: writeTextMock },
+  })
+
+  const screen = await render(<EnvironmentManagement />)
+  await expect.element(screen.getByRole('heading', { name: '环境与租户' })).toBeVisible()
+
+  // 1. config 视图下点击预检自动切到一键开通视图并展示计划
+  await screen.getByRole('button', { name: '连接与租户配置', exact: true }).click()
+  await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
+  await expect.element(screen.getByRole('region', { name: '开通计划' })).toBeVisible()
+
+  // 2. 在一键开通验收案例输入并按 Enter 绝不误触发 environment-draft-save
+  await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
+  const caseInput = screen.getByRole('textbox', { name: '一键开通验收案例', exact: true })
+  await caseInput.fill('case-enter-guard')
+  await userEvent.keyboard('{Enter}')
+  expect(calls.some((c) => c.action === 'environment-draft-save')).toBe(false)
+
+  // 3. onboard 视图下计划过期后，直接展示并可点击「重新预检」恢复为有效计划
+  await screen.getByRole('button', { name: '重新核对计划', exact: true }).click()
+  await expect.element(screen.getByText('输入或有效期已变化，请重新预检。')).toBeVisible()
+  await screen.getByRole('button', { name: '重新预检', exact: true }).click()
+  await expect
+    .element(
+      screen.getByRole('region', { name: '开通计划' }).getByText('计划已冻结', { exact: true }),
+    )
+    .toBeVisible()
+
+  // 4. 待发布一键开通在「进行中/待发布」筛选中保留可见；空筛选提供一键切回全部；复制在 clipboard reject 时不抛未捕获异常
+  const taskId = `task_${'9'.repeat(32)}`
+  await screen.getByRole('button', { name: '进行中/待发布 (1)', exact: true }).click()
+  await expect.element(screen.getByText(taskId, { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: '单步与核验 (0)', exact: true }).click()
+  await expect.element(screen.getByText('当前筛选下无任务记录')).toBeVisible()
+  await screen.getByRole('button', { name: '查看全部任务（1）', exact: true }).click()
+  await expect.element(screen.getByText(taskId, { exact: true })).toBeVisible()
+  await screen.getByRole('button', { name: `复制 ${taskId}`, exact: true }).click()
+  expect(writeTextMock).toHaveBeenCalledWith(taskId)
+
+  // 5. observe 视图下点击「新增环境」自动切出观测态并展示新建配置表单
+  await screen.getByRole('button', { name: '节点与租户总览', exact: true }).click()
+  await screen.getByRole('button', { name: '新增环境', exact: true }).click()
+  await expect.element(screen.getByRole('heading', { name: '连接配置' })).toBeVisible()
 })
