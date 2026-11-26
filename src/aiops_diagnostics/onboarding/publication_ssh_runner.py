@@ -325,11 +325,15 @@ def execute(root, request, identifier, owner):
                 # 在场或探测失败都不能排除副作用，仍走原受管恢复。
                 result.update(state="cancelled", phase="restored")
             elif bundle and "target" in steps:
-                result = target_task(root, staged, bundle, "restore")
-                if result.get("phase") != "restored":
+                result["phase"] = "restoring"
+                target_result = target_task(root, staged, bundle, "restore")
+                if target_result.get("phase") != "restored":
                     raise ValueError("target restoration unconfirmed")
+                # 目标恢复后中央 source-configuration 与 directory 仍待收尾；全部确认前不报告 phase=restored。
+                result = {**target_result, "phase": "restoring", "activated": False}
                 call("source-configuration", restore=True)
-                call("directory", result=result, restore=True)
+                call("directory", result=target_result, restore=True)
+                result.update(state="cancelled", phase="restored", activated=False)
             elif "central" in steps and not bundle:
                 # intent.json 是中央步首个落盘点；工件标记皆无证明未越过比对、无共享副作用，
                 # 可与未启动同案恢复；标记在场或键缺失（旧网关不支持）都不能排除副作用，维持核查。

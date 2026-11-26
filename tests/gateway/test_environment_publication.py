@@ -1586,3 +1586,269 @@ def test_foreign_consumer_in_workspace_still_blocks_publish(validated, monkeypat
         # 上例外来行不留给下例：每例须单独被自己的占用判拒，残留会掩盖误放行。
         with sqlite3.connect(settings.database_file) as db:
             db.execute("DELETE FROM operator_apps WHERE app_id=?", (f"foreign-{index}",))
+
+
+@pytest.mark.parametrize("failing_step", ["source-configuration", "directory"])
+def test_restore_failure_after_target_restored_stays_reconcile_and_completes_on_retry(
+    validated, tmp_path, monkeypatch, failing_step
+):
+    """目标恢复后中央 source-configuration 或 directory 失败必须保留 reconcile，重领收口。"""
+    from aiops_diagnostics.onboarding import capacity as environment_capacity
+    from aiops_diagnostics.onboarding import publication, registry
+    from aiops_diagnostics.onboarding import publication_ssh_runner as worker
+
+    state = validated[0][0]
+    path = state[0][0]
+    identifier = publish(validated).json()["id"]
+    bundle = {"path": "/private/release.json", "sha256": "a" * 64}
+    monkeypatch.setattr(publication, "central_bundle", lambda *a, **kw: bundle)
+    monkeypatch.setattr(publication, "connect", lambda *a: {"connected": True})
+    monkeypatch.setattr(
+        environment_capacity,
+        "run",
+        lambda *a: {"state": "passed", "observed_at": time.time(), "runs": ["c", "o", "f"]},
+    )
+    monkeypatch.setattr(
+        worker,
+        "local_trial",
+        lambda *a, **kw: (
+            {
+                "state": "passed",
+                "operation": identifier,
+                "operator_runs": ["o", "f"],
+                "run_id": "r1",
+                "observed_at": time.time(),
+                "trials": a[3]["trials"],
+            }
+            if a[3].get("action") == "publication-trial-complete"
+            else {}
+        ),
+    )
+    monkeypatch.setattr(
+        worker,
+        "verify",
+        lambda *a: {
+            "state": "passed",
+            "operation": identifier,
+            "operator_runs": ["o", "f"],
+            "observed_at": time.time(),
+            "trials": {"order": "t1", "offline": "t2"},
+        },
+    )
+    monkeypatch.setattr(
+        worker,
+        "target_task",
+        lambda *a, **kw: {
+            "state": "observed",
+            "phase": {"stage": "staged", "activate": "activated", "restore": "restored"}[a[3]],
+            "activated": a[3] == "activate",
+        },
+    )
+    original_dispatch = publication.dispatch
+    monkeypatch.setattr(
+        publication,
+        "dispatch",
+        lambda context, payload: (
+            {"shared": []}
+            if payload.get("publication") == "capacity-reference"
+            else original_dispatch(context, payload)
+        ),
+    )
+
+    def request(payload):
+        response = internal(state, payload)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    for index in range(4):
+        owner = f"{index + 1:032x}"
+        assert request({"installation_claim": True, "owner": owner})["id"] == identifier
+        activated = worker.execute(tmp_path, request, identifier, owner)
+    assert activated["state"] == "observed" and activated["result"]["activated"] is True
+    assert registry.load(path)["environments"][0]["tenants"][0]["enabled"] is True
+
+    restored_req = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"restore_publication": identifier}
+    )
+    assert restored_req.status_code == 200, restored_req.text
+
+    failed_once = []
+
+    def fail_central_restore(payload):
+        if payload.get("publication") == failing_step and payload.get("restore") and not failed_once:
+            failed_once.append(failing_step)
+            raise RuntimeError(f"transient {failing_step} failure")
+        return request(payload)
+
+    owner = "b" * 32
+    assert request({"installation_claim": True, "owner": owner})["id"] == identifier
+    first = worker.execute(tmp_path, fail_central_restore, identifier, owner)
+    assert failed_once == [failing_step]
+    assert first["state"] == "reconcile", first
+    assert first["result"]["phase"] == "restoring"
+    assert first["result"]["activated"] is False
+    assert "directory" not in first["result"]
+    assert first["result"]["error_code"] == "ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED"
+    assert registry.load(path)["environments"][0]["tenants"][0]["enabled"] is True
+
+    # 下一轮自动重领应完成中央收尾，状态收敛为 cancelled/restored 且清空旧 error_code 与 directory。
+    owner2 = "c" * 32
+    assert request({"installation_claim": True, "owner": owner2})["id"] == identifier
+    second = worker.execute(tmp_path, request, identifier, owner2)
+    assert second["state"] == "cancelled", second
+    assert second["result"]["state"] == "cancelled"
+    assert second["result"]["phase"] == "restored"
+    assert second["result"]["activated"] is False
+    assert "directory" not in second["result"]
+    assert not second["result"].get("error_code")
+    assert registry.load(path)["environments"][0]["tenants"][0]["enabled"] is False
+
+
+def test_complete_reconcile_precedes_restored_phase_even_from_older_worker(validated):
+    """即便旧版 worker 同时上报 state=reconcile 与 phase=restored，服务端仍须保留 reconcile。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "d" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    assert (
+        internal(
+            state, {"publication": "intent", "id": identifier, "owner": owner, "step": "readiness"}
+        ).json()["execute"]
+        is True
+    )
+    cancelled = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True}
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    completed = internal(
+        state,
+        {
+            "publication": "complete",
+            "id": identifier,
+            "owner": owner,
+            "result": {
+                "state": "reconcile",
+                "phase": "restored",
+                "activated": False,
+                "error_code": "ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED",
+            },
+        },
+    )
+    assert completed.status_code == 200, completed.text
+    body = completed.json()
+    assert body["state"] == "reconcile"
+    assert body["result"]["phase"] == "restoring"
+    assert "directory" not in body["result"]
+    assert body["result"]["error_code"] == "ENVIRONMENT_PUBLICATION_RECONCILIATION_REQUIRED"
+
+
+def test_non_cancelled_task_never_becomes_cancelled_on_restored_phase(validated):
+    """未取消任务即使携带 phase=restored 也绝不误落 cancelled，必须收口为 blocked。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "e" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+
+    blocked = internal(
+        state,
+        {
+            "publication": "complete",
+            "id": identifier,
+            "owner": owner,
+            "result": {
+                "state": "expired",
+                "phase": "restored",
+                "activated": False,
+                "error_code": "ENVIRONMENT_PUBLICATION_VERIFICATION_EXPIRED",
+            },
+        },
+    )
+    assert blocked.status_code == 200, blocked.text
+    assert blocked.json()["state"] == "blocked"
+
+
+def test_direct_restore_cleans_stale_directory_and_state(validated):
+    """已激活任务一次性直接恢复成功（未经过 reconcile 失败）时，cancelled 终态须清理旧 directory/state。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "f" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    assert (
+        internal(
+            state, {"publication": "intent", "id": identifier, "owner": owner, "step": "readiness"}
+        ).json()["execute"]
+        is True
+    )
+    activated = internal(
+        state,
+        {
+            "publication": "complete",
+            "id": identifier,
+            "owner": owner,
+            "result": {
+                "state": "observed",
+                "phase": "activated",
+                "activated": True,
+                "directory": "synchronized",
+            },
+        },
+    )
+    assert activated.status_code == 200 and activated.json()["state"] == "observed"
+    restored_req = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"restore_publication": identifier}
+    )
+    assert restored_req.status_code == 200, restored_req.text
+    owner2 = "1" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner2}).json()["id"] == identifier
+    direct_cancelled = internal(
+        state,
+        {
+            "publication": "complete",
+            "id": identifier,
+            "owner": owner2,
+            "result": {"phase": "restored", "activated": False},
+        },
+    )
+    assert direct_cancelled.status_code == 200, direct_cancelled.text
+    body = direct_cancelled.json()
+    assert body["state"] == "cancelled"
+    assert body["result"]["state"] == "cancelled"
+    assert body["result"]["activated"] is False
+    assert "directory" not in body["result"]
+
+
+def test_late_cancel_after_activation_enters_reconcile_instead_of_blocked(validated):
+    """激活已同步目录后收到迟到取消请求时，必须转入 reconcile 自动恢复而非困在 blocked。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "2" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    assert (
+        internal(
+            state, {"publication": "intent", "id": identifier, "owner": owner, "step": "readiness"}
+        ).json()["execute"]
+        is True
+    )
+    cancelled = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True}
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    late_complete = internal(
+        state,
+        {
+            "publication": "complete",
+            "id": identifier,
+            "owner": owner,
+            "result": {
+                "state": "observed",
+                "phase": "activated",
+                "activated": True,
+                "directory": "synchronized",
+            },
+        },
+    )
+    assert late_complete.status_code == 200, late_complete.text
+    body = late_complete.json()
+    assert body["state"] == "reconcile"
+    assert body["result"]["phase"] == "restoring"
+    assert "directory" not in body["result"]

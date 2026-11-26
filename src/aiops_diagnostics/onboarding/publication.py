@@ -299,16 +299,38 @@ def dispatch(context, payload):
                 (json.dumps(request), json.dumps(public), time.time(), row["id"]),
             )
             return {"recorded": True}
-        result = {**json.loads(row["result"]), **public_step(result)}
+        incoming = public_step(result)
+        result = {**json.loads(row["result"]), **incoming}
+        # reconcile 必须优先于 phase=="restored"：若目标已恢复但后续 source-configuration 或
+        # directory 同步失败，任务必须留在 checking（reconcile）继续自动对账，不能提前标成
+        # cancelled 丢弃中央收尾；取消/恢复链路也不能因沿用旧 activated 字段回到 observed。
         state = (
-            "observed"
-            if result.get("activated") is True and result.get("directory") == "synchronized"
+            "checking"
+            if incoming.get("state") == "reconcile"
+            else "observed"
+            if not row["cancel"]
+            and result.get("activated") is True
+            and result.get("directory") == "synchronized"
             else "cancelled"
-            if result.get("phase") == "restored"
+            if row["cancel"] and result.get("phase") == "restored"
             else "checking"
-            if result.get("state") == "reconcile"
+            if row["cancel"]
+            and (result.get("activated") is True or result.get("directory") == "synchronized")
             else "blocked"
         )
+        if state == "checking" and row["cancel"]:
+            if result.get("phase") in {"activated", "restored"}:
+                result["phase"] = "restoring"
+            result.pop("directory", None)
+        if state in {"observed", "cancelled"}:
+            if state == "cancelled":
+                result["activated"] = False
+                result["state"] = "cancelled"
+                result.pop("directory", None)
+            elif result.get("state") == "reconcile":
+                result["state"] = state
+            if not incoming.get("error_code"):
+                result.pop("error_code", None)
         conn.execute(
             "UPDATE environment_tasks SET state=?,result=?,owner='',lease_until=0,updated_at=? WHERE id=?",
             (
