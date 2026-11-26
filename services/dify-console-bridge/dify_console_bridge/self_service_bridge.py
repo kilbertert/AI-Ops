@@ -96,9 +96,29 @@ _ALLOWED_PAYLOAD_KEYS = (
             "page",
             "limit",
             "run_id",
+            "wizard_action",
+            "wizard_payload",
         }
     )
     | _ENV_TASK_ONLY_KEYS
+)
+
+_WIZARD_ACTIONS = frozenset(
+    {
+        "host_status",
+        "host_enroll_password",
+        "host_create_bootstrap_script",
+        "host_revoke",
+        "discover",
+        "db_remediate",
+        "artifact_pool_status",
+        "infra_provision",
+        "infra_status",
+        "kb_upload",
+        "kb_install_starter_faq",
+        "self_validate",
+        "post_publish_smoke",
+    }
 )
 
 _ACTION_ROUTES: dict[str, tuple[str, str]] = {
@@ -109,6 +129,7 @@ _ACTION_ROUTES: dict[str, tuple[str, str]] = {
     "environment-overview": ("GET", "/environment-overview"),
     "environment-plan": ("POST", "/environment-plans"),
     "environment-task": ("POST", "/environment-tasks"),
+    "environment-wizard": ("POST", "/environment-wizard"),
     "environment-draft-save": ("POST", "/environment-drafts"),
     "status": ("POST", "/status"),
     "readiness": ("POST", "/readiness"),
@@ -401,6 +422,16 @@ def _validate_payload(action: str, payload: dict, settings, rejected) -> None:
         if not _is_valid_environment_task(payload):
             raise rejected(400, "无效环境任务")
     elif set(payload) & _ENV_TASK_ONLY_KEYS:
+        raise rejected(400, "无效参数")
+
+    if action == "environment-wizard":
+        if (
+            set(payload) != {"wizard_action", "wizard_payload"}
+            or payload.get("wizard_action") not in _WIZARD_ACTIONS
+            or not isinstance(payload.get("wizard_payload"), dict)
+        ):
+            raise rejected(400, "无效向导参数")
+    elif set(payload) & {"wizard_action", "wizard_payload"}:
         raise rejected(400, "无效参数")
 
     if action == "environment-plan":

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from fastapi import Depends, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aiops_diagnostics.common.http_auth import validate_internal_token
@@ -22,6 +22,7 @@ from aiops_diagnostics.onboarding import candidate_preparation as environment_ca
 from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
 from aiops_diagnostics.onboarding import drafts as environment_drafts
 from aiops_diagnostics.onboarding import (
+    host_enrollment,
     installation,
     knowledge,
     knowledge_connection,
@@ -576,7 +577,120 @@ def prepare_workspace(context, payload):
     return environment_tasks.finish_workspace(path, reference, payload["id"], payload["owner"], result)
 
 
+def wizard(context, session, payload):
+    """V2 自助开通向导统一入口（ADR-0357）：严守显式目录授权与零明文持久化边界。"""
+    caller, _, _ = _access(context, session)
+    if not isinstance(payload, dict) or set(payload) - {"wizard_action", "wizard_payload"}:
+        raise auth.SetupRefused("ENVIRONMENT_WIZARD_INVALID")
+    action = payload.get("wizard_action")
+    wp = payload.get("wizard_payload")
+    if not isinstance(action, str) or not isinstance(wp, dict):
+        raise auth.SetupRefused("ENVIRONMENT_WIZARD_INVALID")
+    path = _path(context)
+    identity = _identity(context, caller)
+    try:
+        if action == "host_status":
+            if set(wp) != {"environment"}:
+                raise host_enrollment.EnrollmentRefused("ENVIRONMENT_WIZARD_INVALID")
+            return host_enrollment.get_host_status(path, identity, wp["environment"])
+        if action == "host_revoke":
+            if set(wp) != {"environment"}:
+                raise host_enrollment.EnrollmentRefused("ENVIRONMENT_WIZARD_INVALID")
+            return host_enrollment.revoke_host(path, identity, wp["environment"])
+        if action == "host_enroll_password":
+            allowed_keys = {"environment", "address", "password", "ssh_port", "ssh_user"}
+            if not {"environment", "address", "password"}.issubset(wp) or set(wp) - allowed_keys:
+                raise host_enrollment.EnrollmentRefused("ENVIRONMENT_WIZARD_INVALID")
+            return host_enrollment.enroll_via_ephemeral_password(
+                path,
+                identity,
+                environment=wp["environment"],
+                address=wp["address"],
+                password=wp["password"],
+                ssh_port=wp.get("ssh_port", host_enrollment.DEFAULT_SSH_PORT),
+                ssh_user=wp.get("ssh_user", host_enrollment.DEFAULT_SSH_USER),
+            )
+        if action == "host_create_bootstrap_script":
+            allowed_keys = {
+                "environment",
+                "address",
+                "callback_base_url",
+                "ssh_port",
+                "ssh_user",
+                "ttl_seconds",
+            }
+            if not {"environment", "address", "callback_base_url"}.issubset(wp) or set(wp) - allowed_keys:
+                raise host_enrollment.EnrollmentRefused("ENVIRONMENT_WIZARD_INVALID")
+            return host_enrollment.create_bootstrap_script_session(
+                path,
+                identity,
+                environment=wp["environment"],
+                address=wp["address"],
+                callback_base_url=wp["callback_base_url"],
+                ssh_port=wp.get("ssh_port", host_enrollment.DEFAULT_SSH_PORT),
+                ssh_user=wp.get("ssh_user", host_enrollment.DEFAULT_SSH_USER),
+                ttl_seconds=wp.get("ttl_seconds", host_enrollment.BOOTSTRAP_TOKEN_TTL_SECONDS),
+            )
+    except host_enrollment.EnrollmentRefused as exc:
+        if str(exc) == "ENVIRONMENT_HOST_FINGERPRINT_MISMATCH":
+            raise SetupConflict(str(exc)) from exc
+        raise auth.SetupRefused(str(exc)) from exc
+    except (registry.RegistryError, OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise auth.SetupRefused("ENVIRONMENT_WIZARD_UNAVAILABLE") from exc
+    raise auth.SetupRefused("ENVIRONMENT_WIZARD_ACTION_UNSUPPORTED")
+
+
 def register(app, context, session_dependency):
+    @app.post("/v1/dify/management/environment-wizard")
+    def manage_wizard(payload: dict, response: Response, session=Depends(session_dependency)):  # noqa: B008
+        response.headers["Cache-Control"] = "no-store"
+        return wizard(context, session, payload)
+
+    @app.get("/v1/internal/environment-bootstrap/script/{token}")
+    def bootstrap_script(token: str, request: Request, response: Response):
+        path = _path(context)
+        if not path:
+            return JSONResponse(
+                status_code=404, content={"error": {"code": "ENVIRONMENT_BOOTSTRAP_UNAVAILABLE"}}
+            )
+        callback_base = str(request.base_url).rstrip("/")
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower()
+        if forwarded_proto == "https" and callback_base.startswith("http://"):
+            callback_base = "https://" + callback_base[len("http://") :]
+        try:
+            script = host_enrollment.render_bootstrap_script_for_token(path, token, callback_base)
+        except host_enrollment.EnrollmentRefused as exc:
+            code = str(exc)
+            st = 410 if code == "ENVIRONMENT_BOOTSTRAP_TOKEN_EXPIRED_OR_USED" else 400
+            return JSONResponse(status_code=st, content={"error": {"code": code}})
+        return PlainTextResponse(
+            content=script,
+            media_type="text/x-shellscript",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/v1/internal/environment-bootstrap/callback")
+    def bootstrap_callback(payload: dict, request: Request, response: Response):
+        path = _path(context)
+        if not path:
+            return JSONResponse(
+                status_code=404, content={"error": {"code": "ENVIRONMENT_BOOTSTRAP_UNAVAILABLE"}}
+            )
+        response.headers["Cache-Control"] = "no-store"
+        token = request.headers.get("X-Bootstrap-Token", "").strip()
+        try:
+            return host_enrollment.complete_bootstrap_callback(path, token, payload)
+        except host_enrollment.EnrollmentRefused as exc:
+            code = str(exc)
+            st = (
+                409
+                if code == "ENVIRONMENT_HOST_FINGERPRINT_MISMATCH"
+                else 410
+                if code == "ENVIRONMENT_BOOTSTRAP_TOKEN_EXPIRED_OR_USED"
+                else 400
+            )
+            return JSONResponse(status_code=st, content={"error": {"code": code}})
+
     @app.post("/v1/dify/management/environment-tasks")
     def manage_task(payload: dict, response: Response, session=Depends(session_dependency)):  # noqa: B008
         response.headers["Cache-Control"] = "no-store"
