@@ -337,6 +337,14 @@ def run(root, gateway, key, identifier=None, *, central_target=None):
     if not isinstance(claim, dict) or type(claim.get("claimed")) is not bool:
         raise ValueError("central claim unavailable")
     if not claim["claimed"]:
+        if central_target:
+            from aiops_diagnostics.onboarding import wizard_worker
+
+            wizard_worker.run_pending_wizard_jobs(
+                root,
+                central_target,
+                request=request,
+            )
         return claim["task"]
     identifier = claim["id"] if identifier is None else identifier
     if claim.get("action", "site-preflight") == "workspace-prepare":

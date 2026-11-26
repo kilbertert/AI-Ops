@@ -37,11 +37,12 @@ from aiops_diagnostics.onboarding import (
     infra_orchestrator,
     public_smoke,
     registry,
+    wizard_jobs,
     wizard_runtime,
     wizard_validation,
 )
 
-#: 必须与控制台桥 ``_WIZARD_ACTIONS`` 保持严格一致的 13 项动作白名单。
+#: 必须与控制台桥 ``_WIZARD_ACTIONS`` 保持严格一致的 14 项动作白名单。
 SUPPORTED_WIZARD_ACTIONS = frozenset(
     {
         "host_status",
@@ -56,6 +57,7 @@ SUPPORTED_WIZARD_ACTIONS = frozenset(
         "kb_upload",
         "kb_install_starter_faq",
         "self_validate",
+        "publish_environment",
         "post_publish_smoke",
     }
 )
@@ -82,6 +84,7 @@ class WizardRuntimeHooks:
     live_probe: Callable[[str], dict[str, Any]] | None = None
     kb_uploader: Callable[[str, str, str, bytes], dict[str, Any]] | None = None
     validator_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    publish_runner: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     http_caller: Callable[[str, str, dict[str, str], dict[str, Any] | None], tuple[int, str]] | None = None
 
 
@@ -381,9 +384,24 @@ def _dispatch_infra(
     hooks: WizardRuntimeHooks,
 ) -> dict[str, Any]:
     if action == "infra_status":
-        if set(wp) != {"environment"}:
+        allowed_status_keys = {"environment", "action", "job_id"}
+        if "environment" not in wp or set(wp) - allowed_status_keys:
             raise infra_orchestrator.InfraProvisionRefused("ENVIRONMENT_WIZARD_INVALID")
         env = wp["environment"]
+        job_id = wp.get("job_id")
+        target_action = str(wp.get("action") or "infra_provision")
+        if target_action not in {"infra_provision", "publish_environment"}:
+            raise infra_orchestrator.InfraProvisionRefused("ENVIRONMENT_WIZARD_INVALID")
+        if job_id is not None:
+            if not isinstance(job_id, str):
+                raise infra_orchestrator.InfraProvisionRefused("ENVIRONMENT_WIZARD_INVALID")
+            job = wizard_jobs.get_job(path, job_id)
+            if job is None or job["environment"] != env:
+                raise wizard_jobs.WizardJobError("ENVIRONMENT_WIZARD_JOB_NOT_FOUND")
+            return job
+        latest_job = wizard_jobs.get_latest_job(path, environment=env, action=target_action)
+        if latest_job is not None:
+            return latest_job
         store = _load_infra_status_store(path)
         entry = store["environments"].get(env)
         if not isinstance(entry, dict):
@@ -405,7 +423,19 @@ def _dispatch_infra(
             "updated_at": entry.get("updated_at"),
         }
 
-    allowed_keys = {"environment", "egress_ip", "api_domain", "gateway_url", "local_port", "allow_sources"}
+    allowed_keys = {
+        "environment",
+        "egress_ip",
+        "api_domain",
+        "gateway_url",
+        "local_port",
+        "allow_sources",
+        "tenant_id",
+        "tenant_name",
+        "customer_name",
+        "python_minor",
+        "gateway_internal_addr",
+    }
     required_keys = {"environment", "egress_ip", "api_domain", "gateway_url"}
     if not required_keys.issubset(wp) or set(wp) - allowed_keys:
         raise infra_orchestrator.InfraProvisionRefused("ENVIRONMENT_WIZARD_INVALID")
@@ -413,21 +443,54 @@ def _dispatch_infra(
     if not isinstance(allow_sources, list) or not all(isinstance(x, str) for x in allow_sources):
         raise infra_orchestrator.InfraProvisionRefused("ENVIRONMENT_WIZARD_INVALID")
     env = wp["environment"]
-    _require_enrolled_host(path, identity, env)
-    result = infra_orchestrator.provision_environment_infra(
+    enrolled = _require_enrolled_host(path, identity, env)
+
+    # 先行做完整输入契约校验；非法 IP / 域名 / 非 HTTPS 地址立即 400 拒绝，绝不入队。
+    allow_plan = infra_orchestrator.plan_egress_allowlist(env, wp["egress_ip"])
+    node_plan = infra_orchestrator.plan_execution_node(env, gateway_url=wp["gateway_url"])
+    nginx_plan = infra_orchestrator.render_customer_nginx_extensions(
         env,
-        egress_ip=wp["egress_ip"],
         api_domain=wp["api_domain"],
-        gateway_url=wp["gateway_url"],
         local_port=wp.get("local_port", 8788),
         allow_sources=allow_sources,
-        allowlist_runner=hooks.allowlist_runner,
-        node_runner=hooks.node_runner,
-        nginx_runner=hooks.nginx_runner,
-        live_probe=hooks.live_probe,
     )
-    _save_infra_status(path, env, result)
-    return result
+
+    if any(
+        runner is not None
+        for runner in (hooks.allowlist_runner, hooks.node_runner, hooks.nginx_runner, hooks.live_probe)
+    ):
+        result = infra_orchestrator.provision_environment_infra(
+            env,
+            egress_ip=wp["egress_ip"],
+            api_domain=wp["api_domain"],
+            gateway_url=wp["gateway_url"],
+            local_port=wp.get("local_port", 8788),
+            allow_sources=allow_sources,
+            allowlist_runner=hooks.allowlist_runner,
+            node_runner=hooks.node_runner,
+            nginx_runner=hooks.nginx_runner,
+            live_probe=hooks.live_probe,
+        )
+        _save_infra_status(path, env, result)
+        return result
+
+    job_req = {
+        "environment": env,
+        "egress_ip": allow_plan["egress_ip"],
+        "api_domain": nginx_plan["api_domain"],
+        "gateway_url": node_plan["gateway_url"],
+        "local_port": nginx_plan["local_port"],
+        "allow_sources": allow_sources,
+        "tenant_id": str(wp.get("tenant_id") or "").strip(),
+        "tenant_name": str(wp.get("tenant_name") or "").strip(),
+        "customer_name": str(wp.get("customer_name") or enrolled.get("customer_name") or env).strip(),
+        "python_minor": str(wp.get("python_minor") or "3.12").strip() or "3.12",
+        "gateway_internal_addr": str(
+            wp.get("gateway_internal_addr") or enrolled.get("gateway_internal_addr") or ""
+        ).strip(),
+        "actor": identity[2],
+    }
+    return wizard_jobs.enqueue_job(path, environment=env, action="infra_provision", request=job_req)
 
 
 def _dispatch_kb(
@@ -527,6 +590,44 @@ def _dispatch_self_validate(wp: dict[str, Any], hooks: WizardRuntimeHooks) -> di
     )
 
 
+def _dispatch_publish_environment(
+    wp: dict[str, Any],
+    path: str | Path,
+    identity: tuple[str, str, str],
+    hooks: WizardRuntimeHooks,
+) -> dict[str, Any]:
+    allowed_keys = {"environment", "tenant_id", "tenant_name", "gateway_url", "customer_name", "job_id"}
+    if "environment" not in wp or set(wp) - allowed_keys:
+        raise auth.SetupRefused("ENVIRONMENT_WIZARD_INVALID")
+    env = str(wp["environment"])
+    if isinstance(wp.get("job_id"), str) and wp["job_id"].strip():
+        job = wizard_jobs.get_job(path, wp["job_id"].strip())
+        if job is None or job["environment"] != env:
+            raise wizard_jobs.WizardJobError("ENVIRONMENT_WIZARD_JOB_NOT_FOUND")
+        return job
+
+    tenant_id = str(wp.get("tenant_id") or "").strip()
+    if not tenant_id:
+        raise auth.SetupRefused("ENVIRONMENT_WIZARD_INVALID")
+    enrolled = _require_enrolled_host(path, identity, env)
+    gateway_url = str(wp.get("gateway_url") or "").strip()
+    if gateway_url:
+        infra_orchestrator._validate_https_url(gateway_url)
+    elif enrolled.get("api_domain"):
+        gateway_url = f"https://{enrolled['api_domain']}"
+    req_payload = {
+        "environment": env,
+        "tenant_id": tenant_id,
+        "tenant_name": str(wp.get("tenant_name") or tenant_id).strip(),
+        "customer_name": str(wp.get("customer_name") or enrolled.get("customer_name") or env).strip(),
+        "gateway_url": gateway_url,
+        "actor": identity[2],
+    }
+    if hooks.publish_runner is not None:
+        return hooks.publish_runner(req_payload)
+    return wizard_jobs.enqueue_job(path, environment=env, action="publish_environment", request=req_payload)
+
+
 def _dispatch_post_publish_smoke(wp: dict[str, Any], hooks: WizardRuntimeHooks) -> dict[str, Any]:
     required_keys = {"environment", "gateway_url", "tenant_id"}
     optional_keys = {
@@ -609,11 +710,15 @@ def dispatch_wizard(
             return _dispatch_kb(action, wp, context, path, hooks)
         if action == "self_validate":
             return _dispatch_self_validate(wp, hooks)
+        if action == "publish_environment":
+            return _dispatch_publish_environment(wp, path, identity, hooks)
         if action == "post_publish_smoke":
             return _dispatch_post_publish_smoke(wp, hooks)
     except host_enrollment.EnrollmentRefused as exc:
         if str(exc) == "ENVIRONMENT_HOST_FINGERPRINT_MISMATCH":
             raise SetupConflict(str(exc)) from exc
+        raise auth.SetupRefused(str(exc)) from exc
+    except wizard_jobs.WizardJobError as exc:
         raise auth.SetupRefused(str(exc)) from exc
     except (
         discovery.DiscoveryRefused,

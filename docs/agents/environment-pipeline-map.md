@@ -7,15 +7,15 @@
 | 阶段 | 核心模块（均位于 `src/aiops_diagnostics/onboarding/`，注明包名者除外） |
 |---|---|
 | 共享叶子上下文 | `context.py`（路径解析、身份元组、知识绑定摘要、`COLD_ACTION`、`submit_cold`）、`registry.py`（环境/租户登记）、`artifacts.py`（应用包与安装器只读成员校验）、`artifact_pool.py`（按 `(revision, python_minor)` 索引的控制面离线制品池，ADR-0358）、`data_preflight.py`（数据面只读权限/索引/时序通路全量预检与白名单修复规划，ADR-0358）、`discovery.py`（只读客户机探测脚本、脱敏体检单与二次确认摘要，ADR-0358）、`db_remediation.py`（二次确认受限数据库白名单修复与 0600 审计留痕，ADR-0358）、`infra_orchestrator.py`（白名单/执行节点/双 Nginx 扩展/即刻探活幂等基建编排，ADR-0358）、`wizard_validation.py`（内置隔离知识库上传、默认试跑 FAQ 模板与免 JSON 瞬时三能力自验，ADR-0358）、`public_smoke.py`（标准化三能力问句模板与发布后公网 HTTPS 4 项冒烟，ADR-0358）、`remote_scripts.py`（受控远端脚本）、`business_environments.py`（业务环境端点清单）、`execution_adoption.py` + `execution_adoption_restore.py`（执行环境迁移预演与冻结备份 CAS 恢复） |
-| 主机接入与目录草稿 | `drafts.py`（草稿账本与单次引导令牌表 DDL 唯一真源，保存≠发布）、`host_enrollment.py`（动态 0600 客户主机清单与双模式一次性安全引导，ADR-0358）、`plans.py`（草稿版本+受控引用构成冻结计划） |
-| 现场预检与任务账本 | `tasks.py`（任务持久化/授权/租约）、`task_ssh_runner.py`（SSH 单次远程执行器，原 `environment_task_worker.py`） |
+| 主机接入与目录草稿 | `drafts.py`（草稿账本、单次引导令牌与向导异步任务表 DDL 唯一真源，保存≠发布）、`host_enrollment.py`（动态 0600 客户主机清单与双模式一次性安全引导，ADR-0358）、`wizard_jobs.py`（基建与正式发布长耗时零密钥 SQLite 异步任务队列，ADR-0358）、`plans.py`（草稿版本+受控引用构成冻结计划） |
+| 现场预检与任务账本 | `tasks.py`（任务持久化/授权/租约）、`task_ssh_runner.py`（SSH 单次远程执行器，原 `environment_task_worker.py`）、`wizard_worker.py`（dev-host 异步基建与发布真机执行器，驱动 41/36/钉扎客户机，ADR-0358） |
 | 候选投影与运行时 | `projection.py`（草稿+模板生成停用候选；投影不安装）、`runtime.py`（已准备资源的私有运行工件） |
 | 候选准备 | `candidate_preparation.py`（停用候选准备）、`operator_prep.py`（管家候选应用）、`consumer_prep.py`（消费者候选模板）、`knowledge.py`+`knowledge_connection.py`（候选知识准备与连接）、`candidate_knowledge.py`（候选知识凭据与 `connection_binding`） |
 | 安装与登记 | `installation.py`（停用候选的持久安装协调）、`registration.py`（已安装候选接入登记事务） |
 | 业务验证与试运行 | `validation.py`（已登记候选三业务验证）、`validation_ssh_runner.py`（验证 SSH 执行器，原 `environment_validation_worker.py`）、`business.py`（目标本机业务验证）、`capacity.py`（运行采样）、`readiness.py`（发布前事实检查）、`trial_runtime.py`（受管管家试运行叶子原语）、`trial.py`（`/v1/internal/environment-trial` 内部路由）、`release_trial.py`（启用前试跑）、`consumer_trial.py`（控制端消费试运行）、`candidate_trial.py`（候选回调 `ect_` 令牌）；注：控制台草稿试跑另在 `consumer/consumer_trial.py` 与 `dify/dify_{workflow_,}trial.py` |
 | 正式发布 | `publication.py`（发布协调）、`publication_ssh_runner.py`（发布 SSH 执行器，原 `environment_publication_worker.py`）、`release.py`（发布记录，真值在 Agent 版本与 route CAS；复用 `publication/route_advancement.py`、`consumer/consumer_publication.py` 与 `execution/node_publication.py`） |
 | 一键编排与总览 | `orchestration.py`（一键租户开通编排，串联准备→安装→登记→验证）、`overview.py`（只读运行总览） |
-| 管理面路由与 CLI | `management.py`（`/v1/dify/management/environment-*`、`/v1/internal/environment-tasks`、`/v1/internal/environment-bootstrap/*` 及跨阶段 `installation_claim` 派发，经 `dify/self_service_api.py` 挂载）、`wizard_dispatch.py`（V2 自助开通向导 13 项白名单动作统一派发与授权守卫，ADR-0358）、`admin/onboarding.py`（`aiops-admin environment-*` 子命令） |
+| 管理面路由与 CLI | `management.py`（`/v1/dify/management/environment-*`、`/v1/internal/environment-tasks`、`/v1/internal/environment-bootstrap/*` 及跨阶段 `installation_claim` 派发，经 `dify/self_service_api.py` 挂载）、`wizard_runtime.py`（Step 1~5 控制面真机隧道发现/修库/kb-service/自验运行时，ADR-0358）、`wizard_provision.py`（控制面租户工作区/双端知识与运行制品包装配及目录启用，ADR-0358）、`wizard_dispatch.py`（V2/V2.1 自助开通向导 14 项白名单动作统一派发与授权守卫，ADR-0358）、`admin/onboarding.py`（`aiops-admin environment-*` 子命令） |
 
 ## 读法
 
