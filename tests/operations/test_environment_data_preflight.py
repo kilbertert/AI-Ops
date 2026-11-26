@@ -1,4 +1,4 @@
-"""数据面全量只读预检与白名单修复规划测试（ADR-0357 P0-1）。
+"""数据面全量只读预检与白名单修复规划测试（ADR-0358 P0-1）。
 
 拦截的具体错误：
 1. aiops_ro 缺 qumall_upms.{sys_user,sys_user_role,sys_role} SELECT 在预检期漏放，公网报 503；

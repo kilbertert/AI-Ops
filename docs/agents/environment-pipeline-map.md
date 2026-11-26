@@ -6,7 +6,7 @@
 
 | 阶段 | 核心模块（均位于 `src/aiops_diagnostics/onboarding/`，注明包名者除外） |
 |---|---|
-| 共享叶子上下文 | `context.py`（路径解析、身份元组、知识绑定摘要、`COLD_ACTION`、`submit_cold`）、`registry.py`（环境/租户登记）、`artifacts.py`（应用包与安装器只读成员校验）、`data_preflight.py`（数据面只读权限/索引/时序通路全量预检与白名单修复规划，ADR-0357）、`remote_scripts.py`（受控远端脚本）、`business_environments.py`（业务环境端点清单）、`execution_adoption.py` + `execution_adoption_restore.py`（执行环境迁移预演与冻结备份 CAS 恢复） |
+| 共享叶子上下文 | `context.py`（路径解析、身份元组、知识绑定摘要、`COLD_ACTION`、`submit_cold`）、`registry.py`（环境/租户登记）、`artifacts.py`（应用包与安装器只读成员校验）、`data_preflight.py`（数据面只读权限/索引/时序通路全量预检与白名单修复规划，ADR-0358）、`remote_scripts.py`（受控远端脚本）、`business_environments.py`（业务环境端点清单）、`execution_adoption.py` + `execution_adoption_restore.py`（执行环境迁移预演与冻结备份 CAS 恢复） |
 | 目录草稿与冻结计划 | `drafts.py`（草稿账本，保存≠发布）、`plans.py`（草稿版本+受控引用构成冻结计划） |
 | 现场预检与任务账本 | `tasks.py`（任务持久化/授权/租约）、`task_ssh_runner.py`（SSH 单次远程执行器，原 `environment_task_worker.py`） |
 | 候选投影与运行时 | `projection.py`（草稿+模板生成停用候选；投影不安装）、`runtime.py`（已准备资源的私有运行工件） |
