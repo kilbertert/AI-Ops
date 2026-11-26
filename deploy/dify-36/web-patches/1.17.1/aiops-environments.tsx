@@ -481,14 +481,59 @@ function StatusPill({
 }
 
 function CopyableChip({ label, value }: { label?: string; value: string }) {
-  const [copied, setCopied] = useState(false)
-  const copy = () => {
-    if (!navigator.clipboard?.writeText) return
-    void navigator.clipboard.writeText(value).then(() => {
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1500)
-    })
+  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const timerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    }
+  }, [])
+
+  const scheduleReset = () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null
+      setStatus('idle')
+    }, 1500)
   }
+
+  const copyFallback = (text: string): boolean => {
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      return ok
+    } catch {
+      return false
+    }
+  }
+
+  const copy = () => {
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard
+        .writeText(value)
+        .then(() => {
+          setStatus('copied')
+          scheduleReset()
+        })
+        .catch(() => {
+          setStatus(copyFallback(value) ? 'copied' : 'failed')
+          scheduleReset()
+        })
+      return
+    }
+    setStatus(copyFallback(value) ? 'copied' : 'failed')
+    scheduleReset()
+  }
+
+  const text = status === 'copied' ? '已复制' : status === 'failed' ? '复制失败' : '复制'
   return (
     <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-divider-subtle bg-background-section-burn px-2 py-0.5 font-mono text-[11px] text-text-secondary">
       {label && <span className="font-sans text-text-tertiary">{label}</span>}
@@ -496,10 +541,11 @@ function CopyableChip({ label, value }: { label?: string; value: string }) {
       <button
         type="button"
         onClick={copy}
-        title={copied ? '已复制' : `复制 ${value}`}
+        aria-label={`复制 ${value}`}
+        title={status === 'idle' ? `复制 ${value}` : text}
         className="ml-0.5 shrink-0 cursor-pointer rounded px-1 font-sans text-[10px] text-text-tertiary transition-colors hover:bg-components-button-ghost-bg-hover hover:text-text-primary"
       >
-        {copied ? '已复制' : '复制'}
+        {text}
       </button>
     </span>
   )
@@ -508,44 +554,54 @@ function CopyableChip({ label, value }: { label?: string; value: string }) {
 function WorkflowStepper({
   hasSaved,
   dirty,
+  registryChanged,
   hasValidPlan,
   hasReadyOnboard,
   hasActivated,
 }: {
   hasSaved: boolean
   dirty: boolean
+  registryChanged: boolean
   hasValidPlan: boolean
   hasReadyOnboard: boolean
   hasActivated: boolean
 }) {
+  const draftReady = hasSaved && !dirty && !registryChanged
+  const planDone = hasValidPlan || hasReadyOnboard || hasActivated
   const steps = [
     {
       num: '1',
       title: '保存配置草稿',
-      hint: dirty ? '待保存修改' : hasSaved ? '草稿已就绪' : '填写环境与租户',
-      done: hasSaved && !dirty,
-      active: !hasSaved || dirty,
+      hint: dirty
+        ? '待保存修改'
+        : registryChanged
+          ? '目录已变，请重存'
+          : hasSaved
+            ? '草稿已就绪'
+            : '填写环境与租户',
+      done: draftReady,
+      active: !draftReady,
     },
     {
       num: '2',
       title: '配置与制品预检',
-      hint: hasValidPlan ? '计划已冻结' : '冻结校验计划',
-      done: hasValidPlan,
-      active: hasSaved && !dirty && !hasValidPlan,
+      hint: hasValidPlan ? '计划已冻结' : planDone ? '已完成校验' : '冻结校验计划',
+      done: draftReady && planDone,
+      active: draftReady && !planDone,
     },
     {
       num: '3',
       title: '一键开通与验证',
       hint: hasReadyOnboard ? '技术验证就绪' : '准备→安装→登记→验证',
       done: hasReadyOnboard || hasActivated,
-      active: hasValidPlan && !hasReadyOnboard && !hasActivated,
+      active: draftReady && hasValidPlan && !hasReadyOnboard && !hasActivated,
     },
     {
       num: '4',
       title: '人工确认发布',
       hint: hasActivated ? '准入已启用' : '复核后显式启用',
       done: hasActivated,
-      active: hasReadyOnboard && !hasActivated,
+      active: draftReady && hasReadyOnboard && !hasActivated,
     },
   ]
 
@@ -565,9 +621,9 @@ function WorkflowStepper({
           <span
             className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
               step.done
-                ? 'bg-state-success-solid text-text-inverted'
+                ? 'bg-state-success-solid text-text-primary-on-surface'
                 : step.active
-                  ? 'bg-state-accent-solid text-text-inverted'
+                  ? 'bg-state-accent-solid text-text-primary-on-surface'
                   : 'bg-components-badge-bg-gray-soft text-text-tertiary'
             }`}
           >
@@ -627,7 +683,10 @@ export default function EnvironmentManagement() {
     setConsumerSource('')
     setOnboardInitial(false)
     setOnboardCaseRef('')
+    setCaseRef('')
+    setCapabilities(['consumer', 'order', 'offline'])
     setTasks([])
+    setTaskError('')
     setTaskFilter('all')
     taskViewRef.current += 1
     setTaskGeneration((v) => v + 1)
@@ -767,6 +826,7 @@ export default function EnvironmentManagement() {
     if (!data || !saved || busy || dirty) return
     setBusy(true)
     setError('')
+    setNotice('')
     try {
       const result: Plan = await manage(
         'environment-plan',
@@ -779,6 +839,7 @@ export default function EnvironmentManagement() {
             },
       )
       setPlan(result)
+      if (!readback && viewMode === 'config') setViewMode('onboard')
     } catch (e) {
       setPlan(null)
       setError(e instanceof Error ? e.message : '计划核对未完成')
@@ -795,7 +856,19 @@ export default function EnvironmentManagement() {
       if (view !== taskViewRef.current) return
       if ('tasks' in result) setTasks(result.tasks)
       else if ('sources' in result) setConsumerSources(result.sources)
-      else setTasks((current) => [result, ...current.filter((item) => item.id !== result.id)])
+      else {
+        const isLifecycleTask = ['tenant-onboard', 'environment-publish'].includes(
+          result.action || '',
+        )
+        const isActiveTask = ['queued', 'running', 'reconcile'].includes(result.state)
+        setTaskFilter((current) => {
+          if (current === 'active' && !isActiveTask) return 'all'
+          if (current === 'lifecycle' && !isLifecycleTask) return 'all'
+          if (current === 'single' && isLifecycleTask) return 'all'
+          return current
+        })
+        setTasks((current) => [result, ...current.filter((item) => item.id !== result.id)])
+      }
     } catch (e) {
       if (view !== taskViewRef.current) return
       const isListLoad = 'environment' in payload && Object.keys(payload).length === 1
@@ -967,7 +1040,12 @@ export default function EnvironmentManagement() {
                   variant="primary"
                   disabled={busy}
                   onClick={() => {
-                    navigate(() => select(data, ''))
+                    navigate(() => {
+                      select(data, '')
+                      setViewMode((current) =>
+                        current === 'observe' || current === 'onboard' ? 'config' : current,
+                      )
+                    })
                   }}
                 >
                   新增环境
@@ -1040,6 +1118,7 @@ export default function EnvironmentManagement() {
                   type="button"
                   variant="ghost"
                   size="small"
+                  aria-expanded={!overviewCollapsed}
                   onClick={() => setOverviewCollapsed((v) => !v)}
                 >
                   {overviewCollapsed ? '展开总览' : '收起总览'}
@@ -1070,15 +1149,25 @@ export default function EnvironmentManagement() {
                   <tbody className="divide-y divide-divider-subtle">
                     {overview.environments.map((env) => {
                       const isCurrent = selected === env.id
+                      const activateEnv = () => {
+                        if (env.id === selected || busy) return
+                        navigate(() => {
+                          if (rows.some((r) => r.id === env.id)) select(data, env.id)
+                          else void load(env.id)
+                        })
+                      }
                       return (
                         <tr
                           key={env.id}
-                          onClick={() => {
-                            if (env.id !== selected && !busy) {
-                              navigate(() => select(data, env.id))
+                          tabIndex={0}
+                          onClick={activateEnv}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              activateEnv()
                             }
                           }}
-                          className={`cursor-pointer transition-colors ${
+                          className={`cursor-pointer transition-colors focus-visible:outline-2 focus-visible:outline-state-accent-solid ${
                             isCurrent
                               ? 'bg-state-accent-hover/70'
                               : 'hover:bg-components-panel-on-panel-item-bg-hover'
@@ -1188,19 +1277,13 @@ export default function EnvironmentManagement() {
             </aside>
 
             {/* 右侧环境工作台 */}
-            <form
-              className="min-w-0 space-y-5"
-              onSubmit={(event) => {
-                event.preventDefault()
-                void save()
-              }}
-            >
+            <div className="min-w-0 space-y-5">
               {/* 环境摘要 Hero 卡 + 4步引导条 + 视图切换 */}
               <div className="space-y-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="space-y-1.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="system-lg-semibold text-text-primary">
+                      <h2 className="system-xl-semibold text-text-primary">
                         {selected ? `${draft.name || selected}（${selected}）` : '新建业务环境草稿'}
                       </h2>
                       {selectedOverview && (
@@ -1248,6 +1331,7 @@ export default function EnvironmentManagement() {
                 <WorkflowStepper
                   hasSaved={Boolean(saved)}
                   dirty={dirty}
+                  registryChanged={Boolean(saved?.registry_changed)}
                   hasValidPlan={hasValidPlan}
                   hasReadyOnboard={hasReadyOnboard}
                   hasActivated={hasActivated}
@@ -1274,6 +1358,7 @@ export default function EnvironmentManagement() {
                       <button
                         key={mode}
                         type="button"
+                        aria-pressed={viewMode === mode}
                         onClick={() => setViewMode(mode)}
                         className={`cursor-pointer rounded-lg px-3 py-1.5 system-xs-medium transition-all ${
                           viewMode === mode
@@ -1352,15 +1437,28 @@ export default function EnvironmentManagement() {
                         {plan.id} · 草稿V{plan.draft_revision} / 目录R{plan.registry_revision}
                       </p>
                     </div>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="small"
-                      disabled={busy}
-                      onClick={() => void preflight(true)}
-                    >
-                      重新核对计划
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {plan.state === 'expired' && (
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="small"
+                          disabled={busy || !saved || dirty || saved.registry_changed}
+                          onClick={() => void preflight(false)}
+                        >
+                          重新预检
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="small"
+                        disabled={busy}
+                        onClick={() => void preflight(true)}
+                      >
+                        重新核对计划
+                      </Button>
+                    </div>
                   </div>
 
                   <p
@@ -1676,6 +1774,38 @@ export default function EnvironmentManagement() {
               )}
 
               {/* 观测驾驶舱：租户与能力总览 + 运行节点与工具 */}
+              {viewMode === 'observe' && (!selected || !selectedOverview) && (
+                <section
+                  aria-label="运行观测状态"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-divider-regular bg-components-panel-bg px-5 py-6"
+                >
+                  <p className="system-sm-regular text-text-secondary">
+                    {!selected
+                      ? '请先保存新环境草稿后再查看节点与租户运行状态。'
+                      : '当前环境暂无运行总览数据，可点击重试读取。'}
+                  </p>
+                  {!selected ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="small"
+                      onClick={() => setViewMode('config')}
+                    >
+                      前往填写环境配置
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="small"
+                      disabled={busy || overviewBusy}
+                      onClick={() => void refreshOverview()}
+                    >
+                      刷新运行状态
+                    </Button>
+                  )}
+                </section>
+              )}
               {selected && selectedOverview && showObserveSection && (
                 <div className="space-y-5">
                   <section
@@ -1918,186 +2048,197 @@ export default function EnvironmentManagement() {
 
               {/* 连接配置与租户草稿编辑器 */}
               {showConfigSection && (
-                <fieldset
-                  disabled={busy || (!selected && !data.can_create)}
-                  className="space-y-5 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs"
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void save()
+                  }}
                 >
-                  <legend className="sr-only">连接配置</legend>
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle pb-3">
-                    <div>
-                      <h2 className="system-md-semibold text-text-primary">连接配置</h2>
-                      <p className="mt-0.5 system-xs-regular text-text-tertiary">
-                        地址使用
-                        HTTPS；凭据填写已登记引用，不填写口令或令牌。时区示例：Asia/Shanghai、Asia/Singapore。
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    {fieldGroups.map((group) => (
-                      <div
-                        key={group.title}
-                        className="space-y-3 rounded-xl border border-divider-subtle bg-components-card-bg p-4"
-                      >
-                        <div>
-                          <div className="system-xs-semibold text-text-primary">{group.title}</div>
-                          <div className="text-[11px] text-text-tertiary">{group.description}</div>
-                        </div>
-                        <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-                          {group.items.map(([key, label, maxLength, placeholder]) => (
-                            <label
-                              key={key}
-                              className="flex min-w-0 flex-col gap-1.5 system-xs-medium text-text-secondary"
-                            >
-                              <span>{label}</span>
-                              <Input
-                                aria-label={label}
-                                value={draft[key]}
-                                placeholder={placeholder}
-                                required={key !== 'company_gateway_url'}
-                                maxLength={maxLength}
-                                disabled={key === 'id' && Boolean(selected)}
-                                onChange={(event) =>
-                                  setDraft({ ...draft, [key]: event.target.value })
-                                }
-                              />
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-divider-subtle bg-components-card-bg px-4 py-3 system-sm-regular text-text-primary">
-                    <Checkbox
-                      aria-label="草稿环境准入"
-                      checked={draft.enabled}
-                      onCheckedChange={(value) => setDraft({ ...draft, enabled: value === true })}
-                    />
-                    <span>预期允许环境准入（保存后仍不生效）</span>
-                  </label>
-
-                  <section
-                    aria-label="租户草稿"
-                    className="space-y-3 border-t border-divider-subtle pt-4"
+                  <fieldset
+                    disabled={busy || (!selected && !data.can_create)}
+                    className="space-y-5 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
+                    <legend className="sr-only">连接配置</legend>
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle pb-3">
                       <div>
-                        <h3 className="system-md-semibold text-text-primary">
-                          租户（{draft.tenants.length}）
-                        </h3>
+                        <h2 className="system-md-semibold text-text-primary">连接配置</h2>
                         <p className="mt-0.5 system-xs-regular text-text-tertiary">
-                          租户编号按公司系统填写；登记不表示已核实租户或已开通能力。
+                          地址使用
+                          HTTPS；凭据填写已登记引用，不填写口令或令牌。时区示例：Asia/Shanghai、Asia/Singapore。
                         </p>
                       </div>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="small"
-                        onClick={() =>
-                          setDraft({
-                            ...draft,
-                            tenants: [...draft.tenants, { id: '', name: '', enabled: false }],
-                          })
-                        }
-                      >
-                        新增租户
-                      </Button>
                     </div>
 
-                    {/* 顺序固定且只允许追加，不能以正在编辑的编号为key重挂输入。 */}
-                    <div className="space-y-2.5">
-                      {draft.tenants.map((tenant, index) => (
+                    <div className="space-y-4">
+                      {fieldGroups.map((group) => (
                         <div
-                          // oxlint-disable-next-line react/no-array-index-key -- Rows only append; editable ids must not remount inputs.
-                          key={index}
-                          className="grid items-end gap-3 rounded-xl border border-divider-subtle bg-components-card-bg p-3.5 sm:grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_auto]"
+                          key={group.title}
+                          className="space-y-3 rounded-xl border border-divider-subtle bg-components-card-bg p-4"
                         >
-                          <span className="flex size-7 items-center justify-center rounded-lg bg-background-section-burn font-mono text-xs text-text-tertiary">
-                            {index + 1}
-                          </span>
-                          <label
-                            htmlFor={`tenant-id-${index}`}
-                            className="flex min-w-0 flex-col gap-1 system-xs-medium text-text-secondary"
-                          >
-                            公司租户编号
-                            <Input
-                              id={`tenant-id-${index}`}
-                              aria-label={`租户 ${index + 1} 编号`}
-                              required
-                              maxLength={64}
-                              value={tenant.id}
-                              disabled={Boolean((saved?.draft.tenants ?? live?.tenants)?.[index])}
-                              onChange={(event) =>
-                                setDraft({
-                                  ...draft,
-                                  tenants: draft.tenants.map((item, i) =>
-                                    i === index ? { ...item, id: event.target.value } : item,
-                                  ),
-                                })
-                              }
-                            />
-                          </label>
-                          <label
-                            htmlFor={`tenant-name-${index}`}
-                            className="flex min-w-0 flex-col gap-1 system-xs-medium text-text-secondary"
-                          >
-                            租户名称
-                            <Input
-                              id={`tenant-name-${index}`}
-                              aria-label={`租户 ${index + 1} 名称`}
-                              required
-                              maxLength={128}
-                              value={tenant.name}
-                              onChange={(event) =>
-                                setDraft({
-                                  ...draft,
-                                  tenants: draft.tenants.map((item, i) =>
-                                    i === index ? { ...item, name: event.target.value } : item,
-                                  ),
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="flex h-8 cursor-pointer items-center gap-2 rounded-lg px-2 system-xs-medium text-text-secondary">
-                            <Checkbox
-                              aria-label={`租户 ${index + 1} 准入`}
-                              checked={tenant.enabled}
-                              onCheckedChange={(value) =>
-                                setDraft({
-                                  ...draft,
-                                  tenants: draft.tenants.map((item, i) =>
-                                    i === index ? { ...item, enabled: value === true } : item,
-                                  ),
-                                })
-                              }
-                            />
-                            预期准入
-                          </label>
+                          <div>
+                            <div className="system-xs-semibold text-text-primary">
+                              {group.title}
+                            </div>
+                            <div className="text-[11px] text-text-tertiary">
+                              {group.description}
+                            </div>
+                          </div>
+                          <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+                            {group.items.map(([key, label, maxLength, placeholder]) => (
+                              <label
+                                key={key}
+                                className="flex min-w-0 flex-col gap-1.5 system-xs-medium text-text-secondary"
+                              >
+                                <span>{label}</span>
+                                <Input
+                                  aria-label={label}
+                                  value={draft[key]}
+                                  placeholder={placeholder}
+                                  required={key !== 'company_gateway_url'}
+                                  maxLength={maxLength}
+                                  disabled={key === 'id' && Boolean(selected)}
+                                  onChange={(event) =>
+                                    setDraft({ ...draft, [key]: event.target.value })
+                                  }
+                                />
+                              </label>
+                            ))}
+                          </div>
                         </div>
                       ))}
                     </div>
-                  </section>
 
-                  <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-divider-subtle pt-4">
-                    <p className="max-w-xl system-xs-regular text-text-tertiary">
-                      保存只更新草稿；执行对应计划并通过各项核验后，才会改变资源和准入。
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="secondary-accent"
-                        disabled={!saved || dirty || saved.registry_changed}
-                        onClick={() => void preflight()}
-                      >
-                        配置与制品预检
-                      </Button>
-                      <Button type="submit" variant="primary">
-                        保存草稿
-                      </Button>
-                    </div>
-                  </footer>
-                </fieldset>
+                    <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-divider-subtle bg-components-card-bg px-4 py-3 system-sm-regular text-text-primary">
+                      <Checkbox
+                        aria-label="草稿环境准入"
+                        checked={draft.enabled}
+                        onCheckedChange={(value) => setDraft({ ...draft, enabled: value === true })}
+                      />
+                      <span>预期允许环境准入（保存后仍不生效）</span>
+                    </label>
+
+                    <section
+                      aria-label="租户草稿"
+                      className="space-y-3 border-t border-divider-subtle pt-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h3 className="system-md-semibold text-text-primary">
+                            租户（{draft.tenants.length}）
+                          </h3>
+                          <p className="mt-0.5 system-xs-regular text-text-tertiary">
+                            租户编号按公司系统填写；登记不表示已核实租户或已开通能力。
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="small"
+                          onClick={() =>
+                            setDraft({
+                              ...draft,
+                              tenants: [...draft.tenants, { id: '', name: '', enabled: false }],
+                            })
+                          }
+                        >
+                          新增租户
+                        </Button>
+                      </div>
+
+                      {/* 顺序固定且只允许追加，不能以正在编辑的编号为key重挂输入。 */}
+                      <div className="space-y-2.5">
+                        {draft.tenants.map((tenant, index) => (
+                          <div
+                            // oxlint-disable-next-line react/no-array-index-key -- Rows only append; editable ids must not remount inputs.
+                            key={index}
+                            className="grid items-end gap-3 rounded-xl border border-divider-subtle bg-components-card-bg p-3.5 sm:grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_auto]"
+                          >
+                            <span className="flex size-7 items-center justify-center rounded-lg bg-background-section-burn font-mono text-xs text-text-tertiary">
+                              {index + 1}
+                            </span>
+                            <label
+                              htmlFor={`tenant-id-${index}`}
+                              className="flex min-w-0 flex-col gap-1 system-xs-medium text-text-secondary"
+                            >
+                              公司租户编号
+                              <Input
+                                id={`tenant-id-${index}`}
+                                aria-label={`租户 ${index + 1} 编号`}
+                                required
+                                maxLength={64}
+                                value={tenant.id}
+                                disabled={Boolean((saved?.draft.tenants ?? live?.tenants)?.[index])}
+                                onChange={(event) =>
+                                  setDraft({
+                                    ...draft,
+                                    tenants: draft.tenants.map((item, i) =>
+                                      i === index ? { ...item, id: event.target.value } : item,
+                                    ),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label
+                              htmlFor={`tenant-name-${index}`}
+                              className="flex min-w-0 flex-col gap-1 system-xs-medium text-text-secondary"
+                            >
+                              租户名称
+                              <Input
+                                id={`tenant-name-${index}`}
+                                aria-label={`租户 ${index + 1} 名称`}
+                                required
+                                maxLength={128}
+                                value={tenant.name}
+                                onChange={(event) =>
+                                  setDraft({
+                                    ...draft,
+                                    tenants: draft.tenants.map((item, i) =>
+                                      i === index ? { ...item, name: event.target.value } : item,
+                                    ),
+                                  })
+                                }
+                              />
+                            </label>
+                            <label className="flex h-8 cursor-pointer items-center gap-2 rounded-lg px-2 system-xs-medium text-text-secondary">
+                              <Checkbox
+                                aria-label={`租户 ${index + 1} 准入`}
+                                checked={tenant.enabled}
+                                onCheckedChange={(value) =>
+                                  setDraft({
+                                    ...draft,
+                                    tenants: draft.tenants.map((item, i) =>
+                                      i === index ? { ...item, enabled: value === true } : item,
+                                    ),
+                                  })
+                                }
+                              />
+                              预期准入
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+
+                    <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-divider-subtle pt-4">
+                      <p className="max-w-xl system-xs-regular text-text-tertiary">
+                        保存只更新草稿；执行对应计划并通过各项核验后，才会改变资源和准入。
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="secondary-accent"
+                          disabled={!saved || dirty || saved.registry_changed}
+                          onClick={() => void preflight()}
+                        >
+                          配置与制品预检
+                        </Button>
+                        <Button type="submit" variant="primary">
+                          保存草稿
+                        </Button>
+                      </div>
+                    </footer>
+                  </fieldset>
+                </form>
               )}
 
               {/* 开通记录与任务进度中心 */}
@@ -2142,6 +2283,7 @@ export default function EnvironmentManagement() {
                         <button
                           key={key}
                           type="button"
+                          aria-pressed={taskFilter === key}
                           onClick={() => setTaskFilter(key)}
                           className={`cursor-pointer rounded-full border px-3 py-1 system-xs-medium transition-colors ${
                             taskFilter === key
@@ -2164,11 +2306,23 @@ export default function EnvironmentManagement() {
                   )}
 
                   {visibleTasks.length === 0 && (
-                    <p className="rounded-xl border border-dashed border-divider-regular py-6 text-center system-sm-regular text-text-secondary">
-                      {tasks.length === 0
-                        ? '当前环境暂无开通与准备任务记录'
-                        : '当前筛选下无任务记录'}
-                    </p>
+                    <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-divider-regular py-6 text-center">
+                      <p className="system-sm-regular text-text-secondary">
+                        {tasks.length === 0
+                          ? '当前环境暂无开通与准备任务记录'
+                          : '当前筛选下无任务记录'}
+                      </p>
+                      {tasks.length > 0 && taskFilter !== 'all' && (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="small"
+                          onClick={() => setTaskFilter('all')}
+                        >
+                          查看全部任务（{tasks.length}）
+                        </Button>
+                      )}
+                    </div>
                   )}
 
                   <div className="space-y-3">
@@ -2939,7 +3093,7 @@ export default function EnvironmentManagement() {
                   </div>
                 </section>
               )}
-            </form>
+            </div>
           </div>
         )}
       </div>
