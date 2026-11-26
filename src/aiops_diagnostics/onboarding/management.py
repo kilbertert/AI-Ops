@@ -31,6 +31,7 @@ from aiops_diagnostics.onboarding import (
     registration,
     registry,
     validation,
+    wizard_dispatch,
 )
 from aiops_diagnostics.onboarding import orchestration as environment_onboarding
 from aiops_diagnostics.onboarding import overview as environment_overview
@@ -578,66 +579,15 @@ def prepare_workspace(context, payload):
 
 
 def wizard(context, session, payload):
-    """V2 自助开通向导统一入口（ADR-0357）：严守显式目录授权与零明文持久化边界。"""
-    caller, _, _ = _access(context, session)
-    if not isinstance(payload, dict) or set(payload) - {"wizard_action", "wizard_payload"}:
-        raise auth.SetupRefused("ENVIRONMENT_WIZARD_INVALID")
-    action = payload.get("wizard_action")
-    wp = payload.get("wizard_payload")
-    if not isinstance(action, str) or not isinstance(wp, dict):
-        raise auth.SetupRefused("ENVIRONMENT_WIZARD_INVALID")
-    path = _path(context)
-    identity = _identity(context, caller)
-    try:
-        if action == "host_status":
-            if set(wp) != {"environment"}:
-                raise host_enrollment.EnrollmentRefused("ENVIRONMENT_WIZARD_INVALID")
-            return host_enrollment.get_host_status(path, identity, wp["environment"])
-        if action == "host_revoke":
-            if set(wp) != {"environment"}:
-                raise host_enrollment.EnrollmentRefused("ENVIRONMENT_WIZARD_INVALID")
-            return host_enrollment.revoke_host(path, identity, wp["environment"])
-        if action == "host_enroll_password":
-            allowed_keys = {"environment", "address", "password", "ssh_port", "ssh_user"}
-            if not {"environment", "address", "password"}.issubset(wp) or set(wp) - allowed_keys:
-                raise host_enrollment.EnrollmentRefused("ENVIRONMENT_WIZARD_INVALID")
-            return host_enrollment.enroll_via_ephemeral_password(
-                path,
-                identity,
-                environment=wp["environment"],
-                address=wp["address"],
-                password=wp["password"],
-                ssh_port=wp.get("ssh_port", host_enrollment.DEFAULT_SSH_PORT),
-                ssh_user=wp.get("ssh_user", host_enrollment.DEFAULT_SSH_USER),
-            )
-        if action == "host_create_bootstrap_script":
-            allowed_keys = {
-                "environment",
-                "address",
-                "callback_base_url",
-                "ssh_port",
-                "ssh_user",
-                "ttl_seconds",
-            }
-            if not {"environment", "address", "callback_base_url"}.issubset(wp) or set(wp) - allowed_keys:
-                raise host_enrollment.EnrollmentRefused("ENVIRONMENT_WIZARD_INVALID")
-            return host_enrollment.create_bootstrap_script_session(
-                path,
-                identity,
-                environment=wp["environment"],
-                address=wp["address"],
-                callback_base_url=wp["callback_base_url"],
-                ssh_port=wp.get("ssh_port", host_enrollment.DEFAULT_SSH_PORT),
-                ssh_user=wp.get("ssh_user", host_enrollment.DEFAULT_SSH_USER),
-                ttl_seconds=wp.get("ttl_seconds", host_enrollment.BOOTSTRAP_TOKEN_TTL_SECONDS),
-            )
-    except host_enrollment.EnrollmentRefused as exc:
-        if str(exc) == "ENVIRONMENT_HOST_FINGERPRINT_MISMATCH":
-            raise SetupConflict(str(exc)) from exc
-        raise auth.SetupRefused(str(exc)) from exc
-    except (registry.RegistryError, OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
-        raise auth.SetupRefused("ENVIRONMENT_WIZARD_UNAVAILABLE") from exc
-    raise auth.SetupRefused("ENVIRONMENT_WIZARD_ACTION_UNSUPPORTED")
+    """V2 自助开通向导统一入口（ADR-0358）：覆盖全部 13 项白名单动作并严守零明文持久化边界。"""
+    return wizard_dispatch.dispatch_wizard(
+        context,
+        session,
+        payload,
+        access_fn=_access,
+        path_fn=_path,
+        identity_fn=_identity,
+    )
 
 
 def register(app, context, session_dependency):
