@@ -90,8 +90,9 @@ environment-runtime以有效计划/双端观察与明确专属节点导出私有
 revision 1、同 workspace、`agent_name==entry-app_id`、同 profile/scenario——不符 `SETUP_APP_CONFLICT`，ADR-0313）；
 任一作业表存在在飞工作 → `SETUP_INFLIGHT_WORK`，workspace/路由/登记冲突与部分双入口态各有专码。
 路由占用判定按**真实占用**收窄（ADR-0327/0331）：`retracted` 绑定留行不算占用（否则撤回一次就永久堵死重登记——撤回留行是设计不是占用），
+但同租户同环境现役（非 retracted）`chat_route_bindings` 行**就是占用**——重登记撞上自己还活着的绑定同样冲突，须先撤回（第一条闸）；
 同租户 `dify_app_registry` 行无论 app_id 新旧都是**本血统**留行从不冲突（重铸候选的 app_id 按 (workspace,job) 派生必然换新的，
-同租户异应用是谱系证据不是外血统）；只有候选 app_id 被**外租户**正式绑定才算 `SETUP_ROUTE_CONFLICT`。
+同租户异应用是谱系证据不是外血统）；候选 app_id 被**外租户**正式绑定是第二条独立闸——两条查询任一命中即 `SETUP_ROUTE_CONFLICT`。
 正式路由/密钥/准入不变，目标不取得共享Console管理凭据。依据`docs/adr/0290-inactive-runtime-registration.md`。
 
 - `src/aiops_diagnostics/dify/dual_entry.py`（entry/scenario/channel 词表+channel 语义）
