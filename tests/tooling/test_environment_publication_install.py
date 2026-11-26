@@ -11,6 +11,8 @@ import pytest
 from tooling.test_gateway_install import ROOT, host  # noqa: F401
 from tooling.test_gateway_install_task import task_state  # noqa: F401
 
+pytestmark = pytest.mark.deploy_tooling
+
 SPEC = importlib.util.spec_from_file_location(
     "publication_install", ROOT / "ops/environments/gateway/publication.py"
 )

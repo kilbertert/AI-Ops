@@ -10,6 +10,8 @@ from execution.test_m3_gateway_exec_config import _identity, _write_manifest
 
 from aiops_diagnostics.execution import agent_runs
 
+pytestmark = pytest.mark.deploy_tooling
+
 
 @contextmanager
 def fixture(tmp_path, monkeypatch, *, m3=False, after=None):

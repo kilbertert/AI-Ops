@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.deploy_tooling
+
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / "tools/experiments/m2_close/m3live/live_replay.py"
 TOKEN = "handshake-token-3f9a"

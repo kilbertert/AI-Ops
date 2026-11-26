@@ -362,6 +362,7 @@ def test_default_adapter_respects_the_database_ordering_rule(
 # ---------------------------------------------------------------- 浏览器驱动回放
 
 
+@pytest.mark.browser
 def test_offline_drive_replay_passes_all_three_scenarios() -> None:
     """用**实际 `_drive()`** 跑离线回放：正常/逐步渲染/错误 QA 三种。
 

@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.nginx
+
 ROOT = Path(__file__).resolve().parents[2]
 render = runpy.run_path(str(ROOT / "tools/content/render_node_callback.py"))["render_ingress"]
 

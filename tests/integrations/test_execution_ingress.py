@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.nginx
+
 ROOT = Path(__file__).resolve().parents[2]
 module = runpy.run_path(str(ROOT / "tools/content/render_execution_ingress.py"))
 render, DISPATCH = module["render"], module["DISPATCH"]

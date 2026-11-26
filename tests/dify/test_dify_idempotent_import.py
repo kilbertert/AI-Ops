@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.docker
+
 ROOT = Path(__file__).parents[2]
 IMAGE = "langgenius/dify-api@sha256:ceede5b903afaa20348f7ad80ebf847379dc56d886a99b9ec6a08913dacd7732"
 TARGET = "/app/api/controllers/console/app/app_import.py"

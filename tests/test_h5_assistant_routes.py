@@ -31,6 +31,8 @@ from aiops_diagnostics.gateway.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway.gateway_store import GatewayStore
 
+pytestmark = pytest.mark.nginx
+
 ROOT = Path(__file__).parents[1]
 SNIPPET = ROOT / "ops" / "nginx" / "ulink-h5-assistant.conf"
 DECLARED = ROOT / "ops" / "nginx" / "h5-assistant-routes.txt"

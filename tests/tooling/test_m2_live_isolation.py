@@ -24,6 +24,8 @@ from aiops_diagnostics.gateway.isolation_guard import (  # noqa: E402
     isolation_report,
 )
 
+pytestmark = pytest.mark.deploy_tooling
+
 REPO = Path(__file__).resolve().parents[2]
 
 

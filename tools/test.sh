@@ -52,4 +52,48 @@ fi
 
 export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
 
-exec env PYTHONPATH="$PWD/src" .venv/bin/python -m pytest tests -p no:warnings "$@"
+fast_mode=0
+all_mode=0
+forwarded=()
+while (($# > 0)); do
+  case "$1" in
+    --fast)
+      fast_mode=1
+      shift
+      ;;
+    --all)
+      all_mode=1
+      shift
+      ;;
+    --)
+      shift
+      forwarded+=("$@")
+      break
+      ;;
+    *)
+      forwarded+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if ((all_mode)); then
+  export AIOPS_PYTEST_ALL=1
+fi
+
+has_path=0
+for arg in "${forwarded[@]}"; do
+  case "$arg" in
+    -*) ;;
+    *) has_path=1; break ;;
+  esac
+done
+
+extra_args=()
+if ((fast_mode)) && ! ((all_mode)); then
+  extra_args+=(-m "not docker and not browser and not deploy_tooling and not nginx")
+fi
+if ((has_path)); then
+  exec env PYTHONPATH="$PWD/src" .venv/bin/python -m pytest -p no:warnings "${extra_args[@]}" "${forwarded[@]}"
+fi
+exec env PYTHONPATH="$PWD/src" .venv/bin/python -m pytest tests -p no:warnings "${extra_args[@]}" "${forwarded[@]}"

@@ -15,6 +15,8 @@ import pytest
 
 from tooling.test_gateway_install import apply_runtime, candidate_config, host, runtime_bundle  # noqa: F401
 
+pytestmark = pytest.mark.deploy_tooling
+
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("fixed_task", ROOT / "ops/environments/gateway/task.py")
 task = importlib.util.module_from_spec(spec)

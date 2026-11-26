@@ -9,6 +9,10 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.deploy_tooling
+
 MODULE = Path(__file__).resolve().parents[2] / "deploy/m2-live-03/sync-keystore-password.py"
 
 

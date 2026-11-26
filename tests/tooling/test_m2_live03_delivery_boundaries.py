@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = pytest.mark.deploy_tooling
+
 DEPLOY = Path(__file__).resolve().parents[2] / "deploy/m2-live-03"
 
 
