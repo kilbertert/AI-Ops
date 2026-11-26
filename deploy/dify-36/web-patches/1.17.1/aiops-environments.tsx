@@ -199,7 +199,7 @@ type SiteTask = {
   }
 }
 
-type ViewMode = 'all' | 'onboard' | 'config' | 'observe'
+type WorkspaceTab = 'onboard' | 'config' | 'ops'
 type TaskFilter = 'all' | 'active' | 'lifecycle' | 'single'
 type BadgeTone = 'success' | 'warning' | 'error' | 'info' | 'neutral'
 
@@ -218,11 +218,11 @@ const publicationPhases: Record<string, string> = {
 }
 
 const taskLabels: Record<string, string> = {
-  queued: '等待执行端',
-  running: '正在取证',
-  reconcile: '结果待核对',
-  observed: '本地观察通过',
-  blocked: '现场检查阻塞',
+  queued: '等待执行',
+  running: '执行中',
+  reconcile: '待核对',
+  observed: '已完成',
+  blocked: '检查受阻',
   cancelled: '已取消',
   expired: '已过期',
 }
@@ -237,11 +237,22 @@ const preparationSteps: Record<string, string> = {
   'consumer-prepare': '客服候选',
 }
 
+const taskActionLabels: Record<string, string> = {
+  ...preparationSteps,
+  'tenant-onboard': '一键开通',
+  'environment-publish': '正式开通',
+  'candidate-prepare': '候选准备',
+  'candidate-install': '停用候选安装',
+  'candidate-register': '候选运行登记',
+  'candidate-validate': '业务技术验证',
+  'host-verify': '主机身份验收',
+}
+
 const onboardingStageLabels: Record<string, string> = {
   'candidate-prepare': '资源准备',
   'candidate-install': '停用安装',
   'candidate-register': '运行登记',
-  'candidate-validate': '业务技术验证',
+  'candidate-validate': '技术验证',
 }
 
 const initialInstallationLabels: Record<string, string> = {
@@ -303,7 +314,7 @@ const empty = (): Draft => ({
 const fieldGroups = [
   {
     title: '基础标识',
-    description: '环境唯一编号、展示名称与默认业务时区（例：Asia/Shanghai、Asia/Singapore）',
+    description: '环境唯一编号、名称与默认时区（例：Asia/Shanghai）',
     items: [
       ['id', '环境编号', 32, '如 95、41'],
       ['name', '环境名称', 128, '如 平高测试环境'],
@@ -312,7 +323,7 @@ const fieldGroups = [
   },
   {
     title: 'HTTPS 服务端点',
-    description: '全部外部地址须使用 HTTPS，地址变更后须重新保存并预检',
+    description: '全部外部地址须使用 HTTPS',
     items: [
       ['company_gateway_url', '公司网关地址', 2048, 'https://api.example.com'],
       ['gateway_url', 'AI-Ops 入口地址', 2048, 'https://gateway.example.com'],
@@ -321,7 +332,7 @@ const fieldGroups = [
   },
   {
     title: '受管部署引用',
-    description: '仅填写已登记的逻辑引用名，禁止填写明文口令或令牌',
+    description: '填写已登记的引用名称，禁止填写明文口令或令牌',
     items: [
       ['deployment_target', '部署目标引用', 64, '如 host-95'],
       ['credential_ref', '凭据引用', 64, '如 config-95'],
@@ -336,7 +347,7 @@ const environmentStatusLabels: Record<string, string> = {
 }
 const tenantAdmissionLabels: Record<string, string> = {
   enabled: '已启用',
-  disabled: '已停用',
+  disabled: '未启用',
   draft_only: '仅草稿',
 }
 const workspaceStateLabels: Record<string, string> = {
@@ -350,15 +361,15 @@ const workspaceStateLabels: Record<string, string> = {
 }
 const appStateLabels: Record<string, string> = {
   active: '运行中',
-  disabled: '已停用（路由保留）',
+  disabled: '已停用',
   candidate: '候选停用',
   unprepared: '未准备',
 }
 const capabilityStateLabels: Record<string, string> = {
-  passed: '技术通过',
+  passed: '通过',
   blocked: '阻塞',
   pending: '待验证',
-  expired: '回执过期',
+  expired: '过期',
   unverified: '未验证',
 }
 const nodeStatusLabels: Record<string, string> = {
@@ -373,7 +384,7 @@ const nodeStatusLabels: Record<string, string> = {
 
 const badgeToneStyles: Record<BadgeTone, { wrap: string; dot: StatusDotStatus }> = {
   success: {
-    wrap: 'bg-components-badge-bg-green-soft text-text-success border-state-success-active',
+    wrap: 'bg-components-badge-bg-green-soft text-text-success border-state-success-active/60',
     dot: 'success',
   },
   warning: {
@@ -446,7 +457,7 @@ function summarizeNodeCell(env: OverviewEnvironment): string {
   const primary =
     env.nodes.find((node) => node.source === 'heartbeat' && node.status === 'online') ??
     env.nodes[0]
-  if (!primary) return env.is_control ? '无在线心跳' : '待受管观察'
+  if (!primary) return env.is_control ? '无在线心跳' : '待观察'
   if (primary.source === 'heartbeat') {
     const state = nodeStatusLabels[primary.status] || primary.status
     const compat = primary.tools_compatible
@@ -455,7 +466,7 @@ function summarizeNodeCell(env: OverviewEnvironment): string {
     return `${primary.node_id}（${state}${compat}）`
   }
   const state = nodeStatusLabels[primary.status] || primary.status
-  return primary.version ? `v${primary.version} · ${state}（回执）` : `${state}（回执）`
+  return primary.version ? `v${primary.version} · ${state}` : state
 }
 
 function StatusPill({
@@ -483,22 +494,27 @@ function StatusPill({
 function CopyableChip({ label, value }: { label?: string; value: string }) {
   const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
   const timerRef = useRef<number | null>(null)
+  const mountedRef = useRef(true)
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
+      mountedRef.current = false
       if (timerRef.current !== null) window.clearTimeout(timerRef.current)
     }
   }, [])
 
   const scheduleReset = () => {
+    if (!mountedRef.current) return
     if (timerRef.current !== null) window.clearTimeout(timerRef.current)
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null
-      setStatus('idle')
+      if (mountedRef.current) setStatus('idle')
     }, 1500)
   }
 
   const copyFallback = (text: string): boolean => {
+    const previousFocus = document.activeElement
     try {
       const textarea = document.createElement('textarea')
       textarea.value = text
@@ -509,8 +525,10 @@ function CopyableChip({ label, value }: { label?: string; value: string }) {
       textarea.select()
       const ok = document.execCommand('copy')
       document.body.removeChild(textarea)
+      if (previousFocus instanceof HTMLElement) previousFocus.focus()
       return ok
     } catch {
+      if (previousFocus instanceof HTMLElement) previousFocus.focus()
       return false
     }
   }
@@ -520,10 +538,12 @@ function CopyableChip({ label, value }: { label?: string; value: string }) {
       void navigator.clipboard
         .writeText(value)
         .then(() => {
+          if (!mountedRef.current) return
           setStatus('copied')
           scheduleReset()
         })
         .catch(() => {
+          if (!mountedRef.current) return
           setStatus(copyFallback(value) ? 'copied' : 'failed')
           scheduleReset()
         })
@@ -533,9 +553,9 @@ function CopyableChip({ label, value }: { label?: string; value: string }) {
     scheduleReset()
   }
 
-  const text = status === 'copied' ? '已复制' : status === 'failed' ? '复制失败' : '复制'
+  const text = status === 'copied' ? '已复制' : status === 'failed' ? '失败' : '复制'
   return (
-    <span className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-divider-subtle bg-background-section-burn px-2 py-0.5 font-mono text-[11px] text-text-secondary">
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] text-text-secondary">
       {label && <span className="font-sans text-text-tertiary">{label}</span>}
       <span className="break-all">{value}</span>
       <button
@@ -551,77 +571,42 @@ function CopyableChip({ label, value }: { label?: string; value: string }) {
   )
 }
 
-function WorkflowStepper({
-  hasSaved,
-  dirty,
-  registryChanged,
+function CompactProgressSteps({
+  draftReady,
   hasValidPlan,
   hasReadyOnboard,
   hasActivated,
 }: {
-  hasSaved: boolean
-  dirty: boolean
-  registryChanged: boolean
+  draftReady: boolean
   hasValidPlan: boolean
   hasReadyOnboard: boolean
   hasActivated: boolean
 }) {
-  const draftReady = hasSaved && !dirty && !registryChanged
   const planDone = hasValidPlan || hasReadyOnboard || hasActivated
   const steps = [
-    {
-      num: '1',
-      title: '保存配置草稿',
-      hint: dirty
-        ? '待保存修改'
-        : registryChanged
-          ? '目录已变，请重存'
-          : hasSaved
-            ? '草稿已就绪'
-            : '填写环境与租户',
-      done: draftReady,
-      active: !draftReady,
-    },
-    {
-      num: '2',
-      title: '配置与制品预检',
-      hint: hasValidPlan ? '计划已冻结' : planDone ? '已完成校验' : '冻结校验计划',
-      done: draftReady && planDone,
-      active: draftReady && !planDone,
-    },
+    { num: '1', label: '配置草稿', done: draftReady, active: !draftReady },
+    { num: '2', label: '预检计划', done: draftReady && planDone, active: draftReady && !planDone },
     {
       num: '3',
-      title: '一键开通与验证',
-      hint: hasReadyOnboard ? '技术验证就绪' : '准备→安装→登记→验证',
-      done: hasReadyOnboard || hasActivated,
+      label: '一键开通',
+      done: draftReady && (hasReadyOnboard || hasActivated),
       active: draftReady && hasValidPlan && !hasReadyOnboard && !hasActivated,
     },
     {
       num: '4',
-      title: '人工确认发布',
-      hint: hasActivated ? '准入已启用' : '复核后显式启用',
-      done: hasActivated,
+      label: '确认发布',
+      done: draftReady && hasActivated,
       active: draftReady && hasReadyOnboard && !hasActivated,
     },
   ]
-
   return (
-    <ol aria-label="开通流程指引" className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-      {steps.map((step) => (
-        <li
-          key={step.num}
-          className={`flex items-center gap-2.5 rounded-xl border px-3 py-2 transition-colors ${
-            step.active
-              ? 'border-state-accent-solid bg-state-accent-hover'
-              : step.done
-                ? 'border-state-success-active bg-state-success-hover/60'
-                : 'border-divider-subtle bg-components-card-bg'
-          }`}
-        >
+    <ol aria-label="开通流程指引" className="flex flex-wrap items-center gap-x-5 gap-y-2">
+      {steps.map((step, index) => (
+        <li key={step.num} className="flex items-center gap-2">
           <span
-            className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+            className={`flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
               step.done
-                ? 'bg-state-success-solid text-text-primary-on-surface'
+                ? 'border border-state-success-active bg-components-badge-bg-green-soft text-text-success'
                 : step.active
                   ? 'bg-state-accent-solid text-text-primary-on-surface'
                   : 'bg-components-badge-bg-gray-soft text-text-tertiary'
@@ -629,10 +614,22 @@ function WorkflowStepper({
           >
             {step.done ? '✓' : step.num}
           </span>
-          <div className="min-w-0">
-            <div className="truncate system-xs-semibold text-text-primary">{step.title}</div>
-            <div className="truncate text-[11px] text-text-tertiary">{step.hint}</div>
-          </div>
+          <span
+            className={`system-xs-medium ${
+              step.active
+                ? 'text-text-accent'
+                : step.done
+                  ? 'text-text-primary'
+                  : 'text-text-tertiary'
+            }`}
+          >
+            {step.label}
+          </span>
+          {index < steps.length - 1 && (
+            <span aria-hidden="true" className="ml-2 hidden text-divider-regular sm:inline">
+              →
+            </span>
+          )}
         </li>
       ))}
     </ol>
@@ -645,7 +642,6 @@ export default function EnvironmentManagement() {
   const [overview, setOverview] = useState<EnvironmentOverview | null>(null)
   const [overviewBusy, setOverviewBusy] = useState(false)
   const [overviewError, setOverviewError] = useState('')
-  const [overviewCollapsed, setOverviewCollapsed] = useState(false)
   const overviewViewRef = useRef(0)
   const [selected, setSelected] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -667,8 +663,11 @@ export default function EnvironmentManagement() {
   const taskViewRef = useRef(0)
   const [taskGeneration, setTaskGeneration] = useState(0)
   const [pending, setPending] = useState<(() => void) | null>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>('all')
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('onboard')
   const [taskFilter, setTaskFilter] = useState<TaskFilter>('all')
+  const [expandedTenants, setExpandedTenants] = useState<Record<string, boolean>>({})
+  const [lastSubmittedTaskId, setLastSubmittedTaskId] = useState('')
+  const [expiredPlanIds, setExpiredPlanIds] = useState<string[]>([])
 
   const saved = data?.drafts.find((item) => item.environment === selected)
   const live = data?.effective.find((item) => item.id === selected)
@@ -688,6 +687,9 @@ export default function EnvironmentManagement() {
     setTasks([])
     setTaskError('')
     setTaskFilter('all')
+    setExpandedTenants({})
+    setLastSubmittedTaskId('')
+    setExpiredPlanIds([])
     taskViewRef.current += 1
     setTaskGeneration((v) => v + 1)
     setSelected(id)
@@ -708,21 +710,30 @@ export default function EnvironmentManagement() {
     setError('')
     const view = ++overviewViewRef.current
     try {
-      const catalogue: Catalogue = await manage('environment-drafts')
+      const catalogue: Catalogue = await manage('environment-drafts', {})
       if (view !== overviewViewRef.current) return
-      const ids = [
-        ...catalogue.effective.map((item) => item.id),
-        ...catalogue.drafts.map((item) => item.environment),
-      ]
       setData(catalogue)
       setOverview(catalogue.overview ?? null)
       setOverviewError('')
-      select(catalogue, ids.includes(preferred) ? preferred : ids[0] || '')
+      const ids = new Set([
+        ...catalogue.effective.map((item) => item.id),
+        ...catalogue.drafts.map((item) => item.environment),
+      ])
+      const next = ids.has(preferred) ? preferred : (ids.values().next().value ?? '')
+      select(catalogue, next)
+      if (!next && catalogue.can_create) setActiveTab('config')
     } catch (e) {
       if (view !== overviewViewRef.current) return
-      setPlan(null)
       taskViewRef.current += 1
+      setSelected('')
+      setPlan(null)
       setTasks([])
+      setTaskError('')
+      setConsumerSources([])
+      setConsumerSource('')
+      setExpandedTenants({})
+      setLastSubmittedTaskId('')
+      setExpiredPlanIds([])
       setData(null)
       setOverview(null)
       setOverviewError('')
@@ -731,23 +742,22 @@ export default function EnvironmentManagement() {
       setNotice('')
       setError(e instanceof Error ? e.message : '读取环境目录失败')
     } finally {
-      setBusy(false)
+      if (view === overviewViewRef.current) setBusy(false)
     }
   }
 
   async function refreshOverview() {
-    if (overviewBusy) return
     setOverviewBusy(true)
     setOverviewError('')
     const view = ++overviewViewRef.current
     try {
-      const result: EnvironmentOverview = await manage('environment-overview')
+      const result: EnvironmentOverview = await manage('environment-overview', {})
       if (view !== overviewViewRef.current) return
       setOverview(result)
     } catch (e) {
       if (view !== overviewViewRef.current) return
       setOverview(null)
-      setOverviewError(e instanceof Error ? e.message : '读取运行状态失败，请稍后重试')
+      setOverviewError(e instanceof Error ? e.message : '读取运行总览失败')
     } finally {
       if (view === overviewViewRef.current) setOverviewBusy(false)
     }
@@ -759,31 +769,31 @@ export default function EnvironmentManagement() {
 
   useEffect(() => {
     if (!dirty) return
-    const warn = (event: BeforeUnloadEvent) => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault()
-      event.returnValue = ''
     }
-    const leave = (event: MouseEvent) => {
-      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
+    const onLinkClick = (event: MouseEvent) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0)
         return
-      const link = event.target instanceof Element ? event.target.closest('a[href]') : null
+      const target = event.target instanceof Element ? event.target.closest('a[href]') : null
+      if (!(target instanceof HTMLAnchorElement) || target.target === '_blank') return
+      const next = new URL(target.href, window.location.href)
+      if (next.origin !== window.location.origin) return
       if (
-        !(link instanceof HTMLAnchorElement) ||
-        link.target === '_blank' ||
-        link.hasAttribute('download')
+        next.pathname === window.location.pathname &&
+        next.search === window.location.search &&
+        next.hash === window.location.hash
       )
         return
-      const target = new URL(link.href)
-      if (target.origin !== location.origin || target.pathname === location.pathname) return
       event.preventDefault()
       event.stopPropagation()
-      setPending(() => () => router.push(target.pathname + target.search + target.hash))
+      setPending(() => () => router.push(`${next.pathname}${next.search}${next.hash}`))
     }
-    window.addEventListener('beforeunload', warn)
-    document.addEventListener('click', leave, true)
+    window.addEventListener('beforeunload', beforeUnload)
+    document.addEventListener('click', onLinkClick, true)
     return () => {
-      window.removeEventListener('beforeunload', warn)
-      document.removeEventListener('click', leave, true)
+      window.removeEventListener('beforeunload', beforeUnload)
+      document.removeEventListener('click', onLinkClick, true)
     }
   }, [dirty, router])
 
@@ -839,7 +849,10 @@ export default function EnvironmentManagement() {
             },
       )
       setPlan(result)
-      if (!readback && viewMode === 'config') setViewMode('onboard')
+      if (result.state === 'expired') {
+        setExpiredPlanIds((prev) => (prev.includes(result.id) ? prev : [...prev, result.id]))
+      }
+      if (!readback && activeTab === 'config') setActiveTab('onboard')
     } catch (e) {
       setPlan(null)
       setError(e instanceof Error ? e.message : '计划核对未完成')
@@ -855,8 +868,13 @@ export default function EnvironmentManagement() {
       const result = await manage('environment-task', payload)
       if (view !== taskViewRef.current) return
       if ('tasks' in result) setTasks(result.tasks)
-      else if ('sources' in result) setConsumerSources(result.sources)
-      else {
+      else if ('sources' in result) {
+        setConsumerSources(result.sources)
+        setConsumerSource((current) =>
+          result.sources.some((s: { app_id: string }) => s.app_id === current) ? current : '',
+        )
+      } else {
+        setLastSubmittedTaskId(result.id)
         const isLifecycleTask = ['tenant-onboard', 'environment-publish'].includes(
           result.action || '',
         )
@@ -913,10 +931,17 @@ export default function EnvironmentManagement() {
       ]
     : []
   const selectedOverview = overview?.environments.find((item) => item.id === selected) ?? null
-  const activeEnvsCount = overview?.environments.filter((e) => e.status === 'active').length ?? 0
   const totalTenantsCount = overview?.environments.reduce((sum, e) => sum + e.tenant_count, 0) ?? 0
   const enabledTenantsCount =
     overview?.environments.reduce((sum, e) => sum + e.enabled_tenant_count, 0) ?? 0
+
+  const tenantNameOf = (tenantId?: string) => {
+    if (!tenantId) return ''
+    const found =
+      selectedOverview?.tenants.find((t) => t.id === tenantId)?.name ||
+      draft?.tenants.find((t) => t.id === tenantId)?.name
+    return found ? `${found}（${tenantId}）` : tenantId
+  }
 
   const hasValidPlan = Boolean(plan && !dirty && plan.state !== 'expired')
   const isFullValidationReady = (item: SiteTask) => {
@@ -928,18 +953,6 @@ export default function EnvironmentManagement() {
     )
     return ['consumer', 'order', 'offline'].every((cap) => passed.has(cap))
   }
-  const isReadyToPublishTask = (item: SiteTask) =>
-    (item.action === 'tenant-onboard' &&
-      item.state === 'observed' &&
-      Boolean(item.result.ready_to_publish)) ||
-    isFullValidationReady(item)
-  const isActionableTask = (item: SiteTask) =>
-    ['queued', 'running', 'reconcile'].includes(item.state) ||
-    (item.action === 'tenant-onboard' &&
-      item.state === 'observed' &&
-      Boolean(item.result.ready_to_publish))
-
-  const hasReadyOnboard = tasks.some(isReadyToPublishTask)
   const enabledTenantIds = new Set(
     selectedOverview
       ? selectedOverview.enabled
@@ -951,23 +964,60 @@ export default function EnvironmentManagement() {
         ? live.tenants.filter((tenant) => tenant.enabled).map((tenant) => tenant.id)
         : [],
   )
-  const publishedTenantIds = new Set(
-    tasks
-      .filter(
-        (item) =>
-          item.action === 'environment-publish' &&
+
+  // 按时间倒序（最新在前）逐租户判别待发布状态：
+  // - 若该租户最新核心记录已是 activated 的 environment-publish，则视为已发布，不再计入待发布；
+  // - 否则仅取最新一条 ready_to_publish 的 tenant-onboard 或三能力全通的 candidate-validate，避免历史重复按钮。
+  const pendingPublishOnboardIds = new Set<string>()
+  const pendingPublishValidateIds = new Set<string>()
+  const settledTenants = new Set<string>()
+  for (const item of tasks) {
+    const key = item.tenant_id || '__default__'
+    if (settledTenants.has(key)) continue
+    if (
+      item.action === 'environment-publish' &&
+      item.state === 'observed' &&
+      Boolean(item.result.activated)
+    ) {
+      settledTenants.add(key)
+      continue
+    }
+    if (
+      item.action === 'tenant-onboard' &&
+      item.state === 'observed' &&
+      Boolean(item.result.ready_to_publish) &&
+      Boolean(item.result.validation_task_id)
+    ) {
+      pendingPublishOnboardIds.add(item.id)
+      settledTenants.add(key)
+      continue
+    }
+    if (isFullValidationReady(item)) {
+      pendingPublishValidateIds.add(item.id)
+      settledTenants.add(key)
+    }
+  }
+
+  const readyToPublishOnboard = tasks.find((item) => pendingPublishOnboardIds.has(item.id))
+  const readyToPublishValidate = tasks.find((item) => pendingPublishValidateIds.has(item.id))
+  const hasPendingPublish = pendingPublishOnboardIds.size > 0 || pendingPublishValidateIds.size > 0
+  const hasReadyOnboard =
+    hasPendingPublish ||
+    tasks.some(
+      (item) =>
+        (item.action === 'tenant-onboard' &&
           item.state === 'observed' &&
-          Boolean(item.result.activated) &&
-          item.tenant_id,
-      )
-      .map((item) => item.tenant_id as string),
-  )
-  const hasPendingPublish = tasks.some(
-    (item) =>
-      isReadyToPublishTask(item) &&
-      (!item.tenant_id ||
-        (!enabledTenantIds.has(item.tenant_id) && !publishedTenantIds.has(item.tenant_id))),
-  )
+          Boolean(item.result.ready_to_publish)) ||
+        isFullValidationReady(item),
+    )
+  const isActionableTask = (item: SiteTask) =>
+    ['queued', 'running', 'reconcile'].includes(item.state) ||
+    pendingPublishOnboardIds.has(item.id) ||
+    (item.action === 'tenant-onboard' &&
+      item.state === 'observed' &&
+      Boolean(item.result.ready_to_publish) &&
+      !item.result.validation_task_id)
+
   const hasActivated =
     !hasPendingPublish &&
     (tasks.some(
@@ -977,6 +1027,7 @@ export default function EnvironmentManagement() {
         Boolean(item.result.activated),
     ) ||
       enabledTenantIds.size > 0)
+  const draftReady = Boolean(saved) && !dirty && !saved?.registry_changed
   const onboardCaseInvalid = Boolean(onboardCaseRef) && !/^[\w-]{1,64}$/.test(onboardCaseRef)
 
   const activeTasksCount = tasks.filter(isActionableTask).length
@@ -985,7 +1036,26 @@ export default function EnvironmentManagement() {
   ).length
   const singleTasksCount = tasks.length - lifecycleTasksCount
 
-  const visibleTasks = tasks.filter((item) => {
+  // 首屏「开通与租户」保留全部进行中、全部待发布、刚刚手动提交的任务 + 最近 2 条核心开通/发布记录
+  const focusedLifecycleTasks = (() => {
+    const priority = tasks.filter(
+      (item) =>
+        ['queued', 'running', 'reconcile'].includes(item.state) ||
+        pendingPublishOnboardIds.has(item.id) ||
+        item.id === lastSubmittedTaskId,
+    )
+    const priorityIds = new Set(priority.map((item) => item.id))
+    const recent = tasks
+      .filter(
+        (item) =>
+          ['tenant-onboard', 'environment-publish'].includes(item.action || '') &&
+          !priorityIds.has(item.id),
+      )
+      .slice(0, 2)
+    return [...priority, ...recent]
+  })()
+
+  const visibleOpsTasks = tasks.filter((item) => {
     if (taskFilter === 'active') return isActionableTask(item)
     if (taskFilter === 'lifecycle')
       return ['tenant-onboard', 'environment-publish'].includes(item.action || '')
@@ -994,10 +1064,48 @@ export default function EnvironmentManagement() {
     return true
   })
 
-  const showPlanSection = viewMode === 'all' || viewMode === 'onboard'
-  const showConfigSection = viewMode === 'all' || viewMode === 'config'
-  const showObserveSection = viewMode === 'all' || viewMode === 'observe'
-  const showTasksSection = viewMode === 'all' || viewMode === 'onboard'
+  const renderPublishConfirmButton = (item: SiteTask) => {
+    if (
+      item.action !== 'tenant-onboard' ||
+      item.state !== 'observed' ||
+      !item.result.ready_to_publish ||
+      !item.result.validation_task_id
+    )
+      return null
+    // 优先使用任务自身最新的续签计划 ID（防止旧页面态 plan 覆盖后台续签计划）；
+    // 仅当任务原计划 ID 已被确认过期时，改用重新预检得到的有效新计划 ID。
+    const itemPlanExpired = Boolean(item.plan_id) && expiredPlanIds.includes(item.plan_id)
+    const publishPlanId =
+      (item.plan_id && !itemPlanExpired ? item.plan_id : '') ||
+      (plan && plan.state !== 'expired' ? plan.id : '')
+    const publishExpired =
+      (plan !== null && plan.id === publishPlanId && plan.state === 'expired') ||
+      (Boolean(publishPlanId) && expiredPlanIds.includes(publishPlanId))
+    return (
+      <Button
+        type="button"
+        variant="primary"
+        disabled={busy || dirty || saved?.registry_changed || !publishPlanId || publishExpired}
+        onClick={() => {
+          if (
+            publishPlanId &&
+            confirmAction(
+              '按只读诊断范围发布并开通，并授权本应用所选知识库对客使用？系统会重新核验三项业务、权限、网络和容量；缺项不会启用，业务准确性仍待人工确认。',
+            )
+          )
+            void siteTasks({
+              validation_task: item.result.validation_task_id,
+              publication_plan: publishPlanId,
+              confirm_readonly: true,
+              confirm_customer_knowledge: true,
+              acceptance_ref: 'readonly-diagnosis',
+            })
+        }}
+      >
+        确认发布并开通：{item.tenant_id}
+      </Button>
+    )
+  }
 
   return (
     <section aria-label="环境与租户管理" className="h-full overflow-y-auto bg-background-body">
@@ -1028,86 +1136,62 @@ export default function EnvironmentManagement() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <div className="mx-auto max-w-[1440px] space-y-5 px-6 py-5">
-        {/* 顶部页面头栏 */}
-        <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-components-panel-border bg-components-panel-bg px-6 py-4 shadow-xs">
-          <div className="flex items-center gap-3.5">
+      <div className="mx-auto max-w-[1320px] space-y-5 px-6 py-5">
+        {/* 极简页面顶栏：标题 + 一行核心统计 + 两个动作 */}
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-divider-subtle pb-4">
+          <div className="flex flex-wrap items-center gap-3">
             <div
               aria-hidden="true"
-              className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-state-accent-hover text-text-accent"
+              className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-state-accent-hover text-text-accent"
             >
               <span className="i-ri-server-line size-5" />
             </div>
             <div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2.5">
                 <h1 className="system-xl-semibold text-text-primary">环境与租户</h1>
                 {overview && (
-                  <StatusPill tone="info" dot={false}>
-                    目录 R{overview.registry_revision}
-                  </StatusPill>
-                )}
-                {overview?.control_version && (
-                  <span className="rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] text-text-tertiary">
-                    v{overview.control_version}
+                  <span className="rounded-full bg-background-section-burn px-2.5 py-0.5 system-xs-medium text-text-secondary">
+                    {overview.environments.length} 个环境 · {enabledTenantsCount}/
+                    {totalTenantsCount} 租户已启用 · 目录 R{overview.registry_revision}
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 system-sm-regular text-text-secondary">
-                维护业务环境连接与公司租户映射，集中观测运行节点并驱动一键开通
+              <p className="mt-0.5 system-xs-regular text-text-tertiary">
+                选择左侧环境，按引导预检并一键开通业务租户
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            {overview && (
-              <div className="hidden items-center gap-4 border-r border-divider-subtle pr-4 md:flex">
-                <div className="text-right">
-                  <div className="text-[11px] text-text-tertiary">活跃环境</div>
-                  <div className="system-sm-semibold text-text-primary">
-                    {activeEnvsCount} / {overview.environments.length}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-[11px] text-text-tertiary">启用租户</div>
-                  <div className="system-sm-semibold text-text-primary">
-                    {enabledTenantsCount} / {totalTenantsCount}
-                  </div>
-                </div>
-              </div>
-            )}
-            <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => {
+                navigate(() => {
+                  void load(selected)
+                })
+              }}
+            >
+              刷新目录
+            </Button>
+            {data?.can_create && (
               <Button
-                variant="secondary"
+                variant="primary"
                 disabled={busy}
                 onClick={() => {
                   navigate(() => {
-                    void load(selected)
+                    select(data, '')
+                    setActiveTab('config')
                   })
                 }}
               >
-                刷新目录
+                新增环境
               </Button>
-              {data?.can_create && (
-                <Button
-                  variant="primary"
-                  disabled={busy}
-                  onClick={() => {
-                    navigate(() => {
-                      select(data, '')
-                      setViewMode((current) =>
-                        current === 'observe' || current === 'onboard' ? 'config' : current,
-                      )
-                    })
-                  }}
-                >
-                  新增环境
-                </Button>
-              )}
-            </div>
+            )}
           </div>
         </header>
 
-        {/* 全局提示条 */}
+        {/* 全局反馈条 */}
         {error && (
           <div className="flex items-center gap-2.5 rounded-xl border border-state-destructive-border bg-state-destructive-hover px-4 py-3">
             <StatusDot status="error" size="medium" />
@@ -1151,136 +1235,17 @@ export default function EnvironmentManagement() {
           </div>
         )}
 
-        {/* 顶部全局环境总览卡片 */}
-        {data && overview && overview.environments.length > 0 && (
-          <section
-            aria-label="环境总览"
-            className="overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle px-5 py-3.5">
-              <div className="flex flex-wrap items-center gap-2.5">
-                <h2 className="system-md-semibold text-text-primary">环境总览</h2>
-                <span className="system-xs-regular text-text-tertiary">
-                  唯一生效目录 R{overview.registry_revision}
-                  {overview.control_version ? ` · 控制端版本 ${overview.control_version}` : ''}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="small"
-                  aria-expanded={!overviewCollapsed}
-                  onClick={() => setOverviewCollapsed((v) => !v)}
-                >
-                  {overviewCollapsed ? '展开总览' : '收起总览'}
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="small"
-                  disabled={busy || overviewBusy}
-                  onClick={() => void refreshOverview()}
-                >
-                  刷新运行状态
-                </Button>
-              </div>
-            </div>
-            {!overviewCollapsed && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left system-xs-regular">
-                  <thead>
-                    <tr className="border-b border-divider-subtle bg-background-section-burn/70 text-text-tertiary">
-                      <th className="px-5 py-2.5 font-medium">环境</th>
-                      <th className="px-3 py-2.5 font-medium">准入状态</th>
-                      <th className="px-3 py-2.5 font-medium">租户（启用/总数）</th>
-                      <th className="px-3 py-2.5 font-medium">节点与版本</th>
-                      <th className="px-5 py-2.5 font-medium">草稿版本</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-divider-subtle">
-                    {overview.environments.map((env) => {
-                      const isCurrent = selected === env.id
-                      const activateEnv = () => {
-                        if (env.id === selected || busy) return
-                        navigate(() => {
-                          if (rows.some((r) => r.id === env.id)) select(data, env.id)
-                          else void load(env.id)
-                        })
-                      }
-                      return (
-                        <tr
-                          key={env.id}
-                          tabIndex={0}
-                          onClick={activateEnv}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault()
-                              activateEnv()
-                            }
-                          }}
-                          className={`cursor-pointer transition-colors focus-visible:outline-2 focus-visible:outline-state-accent-solid ${
-                            isCurrent
-                              ? 'bg-state-accent-hover/70'
-                              : 'hover:bg-components-panel-on-panel-item-bg-hover'
-                          }`}
-                        >
-                          <td className="px-5 py-3 font-medium text-text-primary">
-                            <span className="inline-flex items-center gap-2">
-                              <span>
-                                {env.name}（{env.id}）{env.is_control ? ' · 控制环境' : ''}
-                              </span>
-                            </span>
-                          </td>
-                          <td className="px-3 py-3">
-                            <StatusPill tone={envTone(env.status)}>
-                              {environmentStatusLabels[env.status] || env.status}
-                            </StatusPill>
-                          </td>
-                          <td className="px-3 py-3 font-medium text-text-primary">
-                            {env.enabled_tenant_count}/{env.tenant_count}
-                          </td>
-                          <td className="px-3 py-3 text-text-secondary">
-                            {summarizeNodeCell(env)}
-                          </td>
-                          <td className="px-5 py-3">
-                            <span className="inline-flex items-center gap-1.5 text-text-secondary">
-                              <span>
-                                {env.draft_revision != null ? `V${env.draft_revision}` : '无草稿'}
-                              </span>
-                              {env.registry_changed && (
-                                <StatusPill tone="warning" dot={false}>
-                                  （目录已变更）
-                                </StatusPill>
-                              )}
-                            </span>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* 主体双栏布局：左侧环境列表 + 右侧工作台 */}
+        {/* 主体双栏：极简左侧环境栏 + 干净单焦点右侧工作台 */}
         {data && draft && (
-          <div className="grid items-start gap-5 lg:grid-cols-[16rem_minmax(0,1fr)]">
-            {/* 左侧业务环境列表 */}
-            <aside className="rounded-2xl border border-components-panel-border bg-components-panel-bg p-3.5 shadow-xs lg:sticky lg:top-4">
-              <div className="mb-3 flex items-center justify-between px-1">
+          <div className="grid items-start gap-6 lg:grid-cols-[14.5rem_minmax(0,1fr)]">
+            {/* 左侧业务环境列表（无套娃卡片） */}
+            <aside className="space-y-2 lg:sticky lg:top-4">
+              <div className="flex items-center justify-between px-2">
                 <span className="system-xs-semibold text-text-tertiary">
                   业务环境（{rows.length}）
                 </span>
-                {selected && (
-                  <span className="rounded bg-background-section-burn px-1.5 py-0.5 font-mono text-[11px] text-text-tertiary">
-                    #{selected}
-                  </span>
-                )}
               </div>
-              <nav aria-label="业务环境列表" className="space-y-2">
+              <nav aria-label="业务环境列表" className="space-y-1">
                 {rows.map((row) => {
                   const envSummary = overview?.environments.find((item) => item.id === row.id)
                   const active = selected === row.id
@@ -1288,55 +1253,65 @@ export default function EnvironmentManagement() {
                   return (
                     <div
                       key={row.id}
-                      className={`rounded-xl border p-2 transition-all ${
+                      className={`rounded-xl border transition-colors ${
                         active
-                          ? 'border-state-accent-solid bg-state-accent-hover shadow-xs'
-                          : 'border-divider-subtle bg-components-card-bg hover:border-divider-regular'
+                          ? 'border-state-accent-solid/50 bg-state-accent-hover/80'
+                          : 'border-transparent hover:bg-components-panel-bg'
                       }`}
                     >
-                      <Button
-                        variant={active ? 'secondary-accent' : 'ghost'}
-                        size="medium"
-                        className="w-full justify-start px-2.5 text-left font-medium"
+                      <button
+                        type="button"
                         disabled={busy}
+                        aria-label={`${row.name}（${row.id}）`}
                         aria-current={active ? 'true' : undefined}
                         onClick={() => {
                           navigate(() => select(data, row.id))
                         }}
+                        className="w-full cursor-pointer px-3 py-2.5 text-left disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {row.name}（{row.id}）
-                      </Button>
-                      {envSummary && (
-                        <div className="mt-1.5 flex items-center justify-between px-2 system-xs-regular text-text-tertiary">
-                          <span className="inline-flex items-center gap-1.5">
-                            <StatusDot status={badgeToneStyles[envTone(status)].dot} size="small" />
-                            <span>
-                              {environmentStatusLabels[envSummary.status] || envSummary.status} ·{' '}
-                              {envSummary.enabled_tenant_count}/{envSummary.tenant_count} 租户
-                            </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`truncate system-sm-semibold ${
+                              active ? 'text-text-accent' : 'text-text-primary'
+                            }`}
+                          >
+                            {row.name}（{row.id}）
                           </span>
                         </div>
-                      )}
+                        <div className="mt-1 flex items-center gap-1.5 system-xs-regular text-text-tertiary">
+                          <StatusDot status={badgeToneStyles[envTone(status)].dot} size="small" />
+                          <span>
+                            {environmentStatusLabels[status] || status}
+                            {envSummary
+                              ? ` · ${envSummary.enabled_tenant_count}/${envSummary.tenant_count} 租户`
+                              : ''}
+                          </span>
+                        </div>
+                      </button>
                     </div>
                   )
                 })}
                 {!rows.length && (
-                  <p className="px-2 py-4 text-center system-sm-regular text-text-secondary">
+                  <p className="px-3 py-6 text-center system-xs-regular text-text-tertiary">
                     尚未登记环境
                   </p>
                 )}
               </nav>
             </aside>
 
-            {/* 右侧环境工作台 */}
+            {/* 右侧主工作台 */}
             <div className="min-w-0 space-y-5">
-              {/* 环境摘要 Hero 卡 + 4步引导条 + 视图切换 */}
-              <div className="space-y-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="space-y-1.5">
+              {/* 工作区顶栏 + 3 个极简主 Tab */}
+              <div className="rounded-2xl border border-components-panel-border bg-components-panel-bg px-6 pt-5 shadow-xs">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
+                  <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="system-xl-semibold text-text-primary">
-                        {selected ? `${draft.name || selected}（${selected}）` : '新建业务环境草稿'}
+                        {selected
+                          ? `${draft.name || selected}（${selected}）`
+                          : data.can_create
+                            ? '新建业务环境'
+                            : '暂无已分配环境'}
                       </h2>
                       {selectedOverview && (
                         <StatusPill tone={envTone(selectedOverview.status)}>
@@ -1351,339 +1326,439 @@ export default function EnvironmentManagement() {
                       )}
                       {dirty && <StatusPill tone="warning">未保存修改</StatusPill>}
                     </div>
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 system-xs-regular text-text-secondary">
-                      <p>
-                        当前生效目录：
-                        {live
-                          ? `R${data.registry_revision} · ${live.enabled ? '允许准入' : '已停用'} · ${live.tenants.length} 个租户`
-                          : '此环境尚未生效'}
-                      </p>
-                      <p>
-                        配置草稿：{saved ? `V${saved.revision}` : '未保存'} ·{' '}
-                        {plan && !dirty
-                          ? plan.state === 'expired'
-                            ? '计划已过期'
-                            : '已有预检计划'
-                          : '未预检'}
-                        {dirty ? ' · 有未保存修改' : ''}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {saved?.registry_changed && (
-                  <div className="flex items-center gap-2 rounded-xl border border-divider-regular bg-components-badge-bg-orange-soft px-3.5 py-2.5">
-                    <StatusDot status="warning" size="small" />
-                    <p className="system-xs-medium text-text-warning">
-                      生效目录在草稿保存后已变化，请核对连接和租户后重新保存。
+                    <p className="system-xs-regular text-text-tertiary">
+                      当前生效目录：
+                      {live
+                        ? `R${data.registry_revision} · ${live.enabled ? '允许准入' : '已停用'} · ${live.tenants.length} 个租户`
+                        : '此环境尚未生效'}
+                      {' · '}
+                      配置草稿：{saved ? `V${saved.revision}` : '未保存'} ·{' '}
+                      {plan && !dirty
+                        ? plan.state === 'expired'
+                          ? '计划已过期'
+                          : '已有预检计划'
+                        : '未预检'}
                     </p>
                   </div>
-                )}
 
-                <WorkflowStepper
-                  hasSaved={Boolean(saved)}
-                  dirty={dirty}
-                  registryChanged={Boolean(saved?.registry_changed)}
-                  hasValidPlan={hasValidPlan}
-                  hasReadyOnboard={hasReadyOnboard}
-                  hasActivated={hasActivated}
-                />
-
-                {/* 视图切换胶囊条 */}
-                <div
-                  role="group"
-                  aria-label="工作区视图切换"
-                  className="flex flex-wrap items-center justify-between gap-2 border-t border-divider-subtle pt-3"
-                >
-                  <div className="inline-flex flex-wrap gap-1 rounded-xl bg-background-section-burn p-1">
-                    {(
-                      [
-                        ['all', '全部视图'],
-                        [
-                          'onboard',
-                          `一键开通与任务${activeTasksCount ? ` (${activeTasksCount})` : ''}`,
-                        ],
-                        ['observe', '节点与租户总览'],
-                        ['config', '连接与租户配置'],
-                      ] as const
-                    ).map(([mode, label]) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        aria-pressed={viewMode === mode}
-                        onClick={() => setViewMode(mode)}
-                        className={`cursor-pointer rounded-lg px-3 py-1.5 system-xs-medium transition-all ${
-                          viewMode === mode
-                            ? 'bg-components-panel-bg text-text-primary shadow-xs'
-                            : 'text-text-tertiary hover:text-text-primary'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
                   {preparing && (
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-components-badge-bg-blue-light-soft px-2.5 py-1 system-xs-medium text-text-accent">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-components-badge-bg-blue-light-soft px-3 py-1 system-xs-medium text-text-accent">
                       <span className="size-2 animate-pulse rounded-full bg-state-accent-solid" />
-                      后台执行中 · 每 5 秒自动同步
+                      后台执行中 · 自动同步
                     </span>
                   )}
                 </div>
-              </div>
 
-              {/* 一键开通专享视图下未预检时的快捷引导条（仅在配置表单隐藏时出现，避免重复按钮） */}
-              {viewMode === 'onboard' && (!plan || dirty) && (
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-divider-accent bg-state-accent-hover/50 px-5 py-4">
-                  <div className="space-y-0.5">
-                    <div className="system-sm-semibold text-text-primary">
-                      {dirty
-                        ? '当前有未保存的配置修改'
-                        : !saved
-                          ? '请先保存环境配置草稿'
-                          : saved.registry_changed
-                            ? '生效目录已变更，请先核对并重新保存草稿'
-                            : '点击预检冻结计划后即可发起一键开通'}
-                    </div>
-                    <div className="system-xs-regular text-text-secondary">
-                      预检会核对部署目标、制品摘要与配置投影，不修改目标环境运行状态
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {dirty || !saved || saved.registry_changed ? (
+                {saved?.registry_changed && (
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-components-badge-bg-orange-soft px-3.5 py-2.5">
+                    <span className="flex items-center gap-2 system-xs-medium text-text-warning">
+                      <StatusDot status="warning" size="small" />
+                      生效目录已变化，请前往「连接配置」核对并重新保存草稿。
+                    </span>
+                    {activeTab !== 'config' && (
                       <Button
                         type="button"
-                        variant="secondary"
-                        onClick={() => setViewMode('config')}
+                        variant="ghost"
+                        size="small"
+                        onClick={() => setActiveTab('config')}
                       >
-                        前往核对与保存配置
-                      </Button>
-                    ) : (
-                      <Button
-                        type="button"
-                        variant="primary"
-                        disabled={busy}
-                        onClick={() => void preflight()}
-                      >
-                        配置与制品预检
+                        去核对
                       </Button>
                     )}
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* 开通计划与一键开通向导（预检后直接浮在最前，操作零滚动！） */}
-              {plan && !dirty && showPlanSection && (
-                <section
-                  aria-label="开通计划"
-                  className="space-y-4 rounded-2xl border-2 border-state-accent-solid/35 bg-components-panel-bg p-5 shadow-xs"
+                {/* 3 个极简主 Tab */}
+                <div
+                  role="tablist"
+                  aria-label="工作区视图切换"
+                  className="-mb-px flex flex-wrap gap-6 border-t border-divider-subtle pt-1"
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-divider-subtle pb-3.5">
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="system-md-semibold text-text-primary">开通计划</h2>
-                        <StatusPill tone={plan.state === 'expired' ? 'error' : 'info'}>
-                          {plan.state === 'expired' ? '计划已过期' : '计划已冻结'}
-                        </StatusPill>
-                      </div>
-                      <p className="system-xs-regular break-all text-text-tertiary">
-                        {plan.id} · 草稿V{plan.draft_revision} / 目录R{plan.registry_revision}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {plan.state === 'expired' && (
-                        <Button
-                          type="button"
-                          variant="primary"
-                          size="small"
-                          disabled={busy || !saved || dirty || saved.registry_changed}
-                          onClick={() => void preflight(false)}
-                        >
-                          重新预检
-                        </Button>
-                      )}
-                      <Button
+                  {(
+                    [
+                      [
+                        'onboard',
+                        '开通与租户',
+                        activeTasksCount > 0 ? String(activeTasksCount) : '',
+                        false,
+                      ],
+                      ['config', '连接配置', '', dirty || Boolean(saved?.registry_changed)],
+                      ['ops', '运行与排查', tasks.length > 0 ? String(tasks.length) : '', false],
+                    ] as const
+                  ).map(([tab, label, badge, warnDot], idx, list) => {
+                    const isCurrent = activeTab === tab
+                    return (
+                      <button
+                        key={tab}
+                        id={`aiops-tab-${tab}`}
                         type="button"
-                        variant="secondary"
-                        size="small"
-                        disabled={busy}
-                        onClick={() => void preflight(true)}
+                        role="tab"
+                        aria-selected={isCurrent}
+                        aria-controls={`aiops-panel-${tab}`}
+                        tabIndex={isCurrent ? 0 : -1}
+                        onClick={() => setActiveTab(tab)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowRight') {
+                            event.preventDefault()
+                            const next = list[(idx + 1) % list.length]?.[0]
+                            if (next) setActiveTab(next)
+                          } else if (event.key === 'ArrowLeft') {
+                            event.preventDefault()
+                            const prev = list[(idx - 1 + list.length) % list.length]?.[0]
+                            if (prev) setActiveTab(prev)
+                          }
+                        }}
+                        className={`relative inline-flex cursor-pointer items-center gap-2 border-b-2 py-3 system-sm-medium transition-colors ${
+                          isCurrent
+                            ? 'border-state-accent-solid text-text-accent'
+                            : 'border-transparent text-text-tertiary hover:text-text-primary'
+                        }`}
                       >
-                        重新核对计划
-                      </Button>
-                    </div>
-                  </div>
-
-                  <p
-                    role="status"
-                    className={`rounded-xl border px-3.5 py-2.5 system-xs-medium ${
-                      plan.state === 'expired'
-                        ? 'border-state-destructive-border bg-state-destructive-hover text-text-destructive'
-                        : 'border-divider-accent bg-state-accent-hover/60 text-text-secondary'
-                    }`}
-                  >
-                    {plan.state === 'expired'
-                      ? '输入或有效期已变化，请重新预检。'
-                      : '计划已冻结；执行前将核对各项条件，以对应任务结果为准。'}
-                  </p>
-
-                  {plan.checks.length > 0 && (
-                    <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                      {plan.checks.map((check) => {
-                        const tone: BadgeTone =
-                          check.state === 'passed'
-                            ? 'success'
-                            : check.state === 'blocked'
-                              ? 'error'
-                              : 'neutral'
-                        const label =
-                          checkLabels[check.id || ''] ||
-                          capabilityLabels[check.capability || ''] ||
-                          check.id
-                        const stateText =
-                          check.state === 'passed'
-                            ? '通过'
-                            : check.state === 'blocked'
-                              ? '阻塞'
-                              : '未验证'
-                        return (
-                          <li
-                            key={check.id}
-                            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 system-xs-regular ${badgeToneStyles[tone].wrap}`}
+                        <span>{label}</span>
+                        {badge && (
+                          <span
+                            className={`rounded-full px-1.5 py-0.5 text-[11px] font-medium ${
+                              isCurrent
+                                ? 'bg-state-accent-hover text-text-accent'
+                                : 'bg-background-section-burn text-text-tertiary'
+                            }`}
                           >
-                            <StatusDot status={badgeToneStyles[tone].dot} size="small" />
-                            <span>
-                              {label}：{stateText}
-                            </span>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  )}
+                            {badge}
+                          </span>
+                        )}
+                        {warnDot && <StatusDot status="warning" size="small" />}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
 
-                  {(plan.config_sha256 || plan.projection_sha256) && (
-                    <div className="flex flex-wrap gap-2">
-                      {plan.config_sha256 && (
-                        <p className="rounded-lg bg-background-section-burn px-2.5 py-1 font-mono text-[11px] break-all text-text-tertiary">
-                          配置摘要：{plan.config_sha256}
-                        </p>
-                      )}
-                      {plan.projection_sha256 && (
-                        <p className="rounded-lg bg-background-section-burn px-2.5 py-1 font-mono text-[11px] break-all text-text-tertiary">
-                          停用候选投影摘要：{plan.projection_sha256}
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  {/* 主推：一次准备与一键开通卡片 */}
-                  <section
-                    aria-label="一次准备候选"
-                    className="space-y-4 rounded-xl border border-divider-regular bg-components-card-bg p-4"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h3 className="system-sm-semibold text-text-primary">一次准备候选</h3>
-                        <p className="mt-0.5 system-xs-regular text-text-tertiary">
-                          自动串联现场预检、工作区、知识连接与双端应用；「准备候选」仅准备资源，
-                          「空机初装并准备」会在空机上安装停用模块；均不启用正式入口。
-                        </p>
+              {/* ================================================================= */}
+              {/* TAB 1: 开通与租户（默认首屏 —— 极简、单焦点、一眼知道怎么下手）      */}
+              {/* ================================================================= */}
+              {activeTab === 'onboard' && (
+                <div
+                  id="aiops-panel-onboard"
+                  role="tabpanel"
+                  aria-labelledby="aiops-tab-onboard"
+                  className="space-y-5"
+                >
+                  {/* 1. 单一明确「下一步行动卡」 */}
+                  {!plan || dirty ? (
+                    <section
+                      aria-label="下一步操作"
+                      className={`rounded-2xl border p-6 shadow-xs ${
+                        (readyToPublishOnboard || readyToPublishValidate) && draftReady
+                          ? 'border-state-success-active bg-state-success-hover/35'
+                          : 'border-components-panel-border bg-components-panel-bg'
+                      }`}
+                    >
+                      <div className="mb-4 border-b border-divider-subtle pb-3.5">
+                        <CompactProgressSteps
+                          draftReady={draftReady}
+                          hasValidPlan={hasValidPlan}
+                          hasReadyOnboard={hasReadyOnboard}
+                          hasActivated={hasActivated}
+                        />
                       </div>
-                      <Button
-                        type="button"
-                        variant="secondary-accent"
-                        size="small"
-                        disabled={busy || plan.state === 'expired'}
-                        onClick={() => void siteTasks({ consumer_sources: true })}
-                      >
-                        选择准备模板
-                      </Button>
-                    </div>
 
-                    {consumerSources.length > 0 && (
-                      <div className="space-y-4">
-                        <label className="block space-y-1.5 system-xs-medium text-text-secondary">
-                          <span>候选客服来源版本</span>
-                          <select
-                            aria-label="候选客服来源版本"
-                            className="block h-9 w-full rounded-lg border border-divider-regular bg-components-panel-bg px-3 system-sm-regular text-text-primary focus:border-state-accent-solid focus:outline-hidden"
-                            value={consumerSource}
-                            onChange={(event) => setConsumerSource(event.target.value)}
-                          >
-                            <option value="">请选择已发布模板</option>
-                            {consumerSources.map((source) => (
-                              <option key={source.app_id} value={source.app_id}>
-                                {source.name} · v{source.version_no}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-
-                        {/* 核心推荐：一键开通主区 */}
-                        <div className="space-y-3.5 rounded-xl border border-state-accent-solid/40 bg-state-accent-hover/35 p-4">
-                          <div>
-                            <h4 className="system-sm-semibold text-text-primary">
-                              一键开通（准备 → 安装 → 登记 → 可选技术验证）
-                            </h4>
-                            <p className="mt-0.5 system-xs-regular text-text-secondary">
-                              由受管执行链自动串起准备、停用安装、运行登记与可选业务验证，并在输入未变时自动续签同摘要计划窗；正式启用仍需人工复核验收结果后显式确认。
+                      {!selected && !data.can_create ? (
+                        <div className="space-y-1">
+                          <h3 className="system-md-semibold text-text-primary">
+                            当前账号暂无已分配的业务环境
+                          </h3>
+                          <p className="system-xs-regular text-text-secondary">
+                            请联系平台目录管理员为当前账号分配环境授权后刷新页面。
+                          </p>
+                        </div>
+                      ) : readyToPublishOnboard && draftReady ? (
+                        <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <StatusPill tone="success">技术验收就绪</StatusPill>
+                              <h3 className="system-md-semibold text-text-primary">
+                                待人工确认发布：{tenantNameOf(readyToPublishOnboard.tenant_id)}
+                              </h3>
+                            </div>
+                            <p className="system-xs-regular text-text-secondary">
+                              四阶段技术验证已通过，复核无误后点击正式开通（业务准确性仍待人工确认）。
                             </p>
                           </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {renderPublishConfirmButton(readyToPublishOnboard)}
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              disabled={busy}
+                              onClick={() => void preflight()}
+                            >
+                              配置与制品预检
+                            </Button>
+                          </div>
+                        </div>
+                      ) : readyToPublishValidate && draftReady ? (
+                        <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <StatusPill tone="success">三项能力验证就绪</StatusPill>
+                              <h3 className="system-md-semibold text-text-primary">
+                                待人工确认发布：{tenantNameOf(readyToPublishValidate.tenant_id)}
+                              </h3>
+                            </div>
+                            <p className="system-xs-regular text-text-secondary">
+                              单步业务技术验证已全部通过，预检计划后可在「运行与排查」发起发布。
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="primary"
+                              disabled={busy}
+                              onClick={() => void preflight()}
+                            >
+                              配置与制品预检
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              onClick={() => setActiveTab('ops')}
+                            >
+                              前往运行与排查
+                            </Button>
+                          </div>
+                        </div>
+                      ) : !draftReady ? (
+                        <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div className="space-y-1">
+                            <h3 className="system-md-semibold text-text-primary">
+                              {dirty
+                                ? '先保存未提交的配置修改'
+                                : !saved
+                                  ? '先保存环境配置草稿'
+                                  : '生效目录已变更，请先核对配置'}
+                            </h3>
+                            <p className="system-xs-regular text-text-secondary">
+                              保存配置草稿后，即可预检并一键开通业务租户。
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="primary"
+                            onClick={() => setActiveTab('config')}
+                          >
+                            前往连接配置
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div className="space-y-1">
+                            <h3 className="system-md-semibold text-text-primary">
+                              {hasActivated
+                                ? '环境已开通，可继续扩展租户'
+                                : '第一步：预检并准备开通'}
+                            </h3>
+                            <p className="system-xs-regular text-text-secondary">
+                              只读核对部署目标与制品摘要，不修改目标环境运行状态。
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="primary"
+                            disabled={busy}
+                            onClick={() => void preflight()}
+                          >
+                            配置与制品预检
+                          </Button>
+                        </div>
+                      )}
+                    </section>
+                  ) : (
+                    /* 预检完成：直接呈现干净的「开通计划与一键开通」操作卡 */
+                    <section
+                      aria-label="开通计划"
+                      className="space-y-5 rounded-2xl border-2 border-state-accent-solid/35 bg-components-panel-bg p-6 shadow-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-divider-subtle pb-4">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <h3 className="system-md-semibold text-text-primary">开通计划</h3>
+                          <StatusPill tone={plan.state === 'expired' ? 'error' : 'info'}>
+                            {plan.state === 'expired' ? '计划已过期' : '计划已冻结'}
+                          </StatusPill>
+                          <span className="system-xs-regular text-text-tertiary">
+                            草稿 V{plan.draft_revision} / 目录 R{plan.registry_revision}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {plan.state === 'expired' && (
+                            <Button
+                              type="button"
+                              variant="primary"
+                              size="small"
+                              disabled={busy || !saved || dirty || saved.registry_changed}
+                              onClick={() => void preflight(false)}
+                            >
+                              重新预检
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="small"
+                            disabled={busy}
+                            onClick={() => void preflight(true)}
+                          >
+                            重新核对计划
+                          </Button>
+                        </div>
+                      </div>
 
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <label className="block space-y-1 system-xs-medium text-text-secondary">
-                              <span>一键开通验收案例（选填，填写后自动串联三业务技术验证）</span>
-                              <Input
-                                aria-label="一键开通验收案例"
-                                value={onboardCaseRef}
-                                onChange={(event) => setOnboardCaseRef(event.target.value)}
-                                placeholder="选填已登记受控案例编号（如 case-20261125-xq）"
-                              />
-                              {onboardCaseInvalid && (
-                                <span className="block text-[11px] text-text-destructive">
-                                  案例编号仅支持字母、数字、下划线或短横线（1–64 字符）
+                      <p
+                        role="status"
+                        className={`rounded-xl px-3.5 py-2.5 system-xs-medium ${
+                          plan.state === 'expired'
+                            ? 'bg-state-destructive-hover text-text-destructive'
+                            : 'bg-background-section-burn text-text-secondary'
+                        }`}
+                      >
+                        {plan.state === 'expired'
+                          ? '输入或有效期已变化，请重新预检。'
+                          : '计划已冻结；可选择模板直接一键开通，正式启用仍需人工确认。'}
+                      </p>
+
+                      {plan.checks.length > 0 && (
+                        <ul className="flex flex-wrap gap-2">
+                          {plan.checks.map((check) => {
+                            const tone: BadgeTone =
+                              check.state === 'passed'
+                                ? 'success'
+                                : check.state === 'blocked'
+                                  ? 'error'
+                                  : 'neutral'
+                            const label =
+                              checkLabels[check.id || ''] ||
+                              capabilityLabels[check.capability || ''] ||
+                              check.id
+                            const stateText =
+                              check.state === 'passed'
+                                ? '通过'
+                                : check.state === 'blocked'
+                                  ? '阻塞'
+                                  : '未验证'
+                            return (
+                              <li
+                                key={check.id}
+                                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 system-xs-regular ${badgeToneStyles[tone].wrap}`}
+                              >
+                                <StatusDot status={badgeToneStyles[tone].dot} size="small" />
+                                <span>
+                                  {label}：{stateText}
                                 </span>
-                              )}
-                            </label>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      )}
 
-                            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-divider-subtle bg-components-panel-bg px-3.5 py-2.5 system-xs-regular text-text-secondary">
+                      {/* 主操作：一键开通 */}
+                      <section aria-label="一次准备候选" className="space-y-4 pt-1">
+                        {consumerSources.length === 0 ? (
+                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-state-accent-hover/40 px-4 py-3.5">
+                            <div className="space-y-0.5">
+                              <div className="system-sm-semibold text-text-primary">
+                                下一步：选择客服来源模板，发起一键开通
+                              </div>
+                              <div className="system-xs-regular text-text-secondary">
+                                自动串联准备、停用安装、运行登记与可选技术验证，不自动启用入口。
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="primary"
+                              disabled={busy || plan.state === 'expired'}
+                              onClick={() => void siteTasks({ consumer_sources: true })}
+                            >
+                              选择准备模板
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="space-y-4 rounded-xl bg-background-section-burn/60 p-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <h4 className="system-sm-semibold text-text-primary">一键开通配置</h4>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="small"
+                                disabled={busy || plan.state === 'expired'}
+                                onClick={() => void siteTasks({ consumer_sources: true })}
+                              >
+                                刷新模板
+                              </Button>
+                            </div>
+
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <label className="block space-y-1 system-xs-medium text-text-secondary">
+                                <span>候选客服来源版本</span>
+                                <select
+                                  aria-label="候选客服来源版本"
+                                  className="block h-9 w-full rounded-lg border border-divider-regular bg-components-panel-bg px-3 system-sm-regular text-text-primary focus:border-state-accent-solid focus:outline-hidden"
+                                  value={consumerSource}
+                                  onChange={(event) => setConsumerSource(event.target.value)}
+                                >
+                                  <option value="">请选择已发布模板</option>
+                                  {consumerSources.map((source) => (
+                                    <option key={source.app_id} value={source.app_id}>
+                                      {source.name} · v{source.version_no}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+
+                              <label className="block space-y-1 system-xs-medium text-text-secondary">
+                                <span>一键开通验收案例（选填，填写后自动三业务验证）</span>
+                                <Input
+                                  aria-label="一键开通验收案例"
+                                  value={onboardCaseRef}
+                                  onChange={(event) => setOnboardCaseRef(event.target.value)}
+                                  placeholder="选填案例编号（如 case-20261125-xq）"
+                                />
+                                {onboardCaseInvalid && (
+                                  <span className="block text-[11px] text-text-destructive">
+                                    仅支持字母、数字、下划线或短横线（1–64 字符）
+                                  </span>
+                                )}
+                              </label>
+                            </div>
+
+                            <label className="inline-flex cursor-pointer items-center gap-2 system-xs-regular text-text-secondary">
                               <input
                                 type="checkbox"
                                 aria-label="一键开通包含空机初装"
-                                className="mt-0.5 size-4 rounded border-divider-regular"
+                                className="size-4 rounded border-divider-regular"
                                 checked={onboardInitial}
                                 onChange={(event) => setOnboardInitial(event.target.checked)}
                               />
-                              <span>
-                                <span className="block font-medium text-text-primary">
-                                  包含空机初装（仅首次空白目标主机勾选）
-                                </span>
-                                <span className="text-[11px] text-text-tertiary">
-                                  已安装目标环境请保持不勾选，将直接复用并升级既有模块
-                                </span>
-                              </span>
+                              <span>包含空机初装（仅首次空白目标主机勾选）</span>
                             </label>
-                          </div>
 
-                          {!consumerSource && (
-                            <p className="flex items-center gap-1.5 rounded-lg bg-components-badge-bg-orange-soft px-3 py-1.5 system-xs-medium text-text-warning">
-                              <StatusDot status="warning" size="small" />
-                              请先在上方选择「候选客服来源版本」，再点击下方租户的「一键开通」
-                            </p>
-                          )}
+                            {!consumerSource && (
+                              <p className="flex items-center gap-1.5 rounded-lg bg-components-badge-bg-orange-soft px-3 py-1.5 system-xs-medium text-text-warning">
+                                <StatusDot status="warning" size="small" />
+                                请先选择上方「候选客服来源版本」，再点击租户「一键开通」
+                              </p>
+                            )}
 
-                          <div className="grid gap-2.5 sm:grid-cols-2">
-                            {draft.tenants.map((tenant) => {
-                              const tenantOverview = selectedOverview?.tenants.find(
-                                (t) => t.id === tenant.id,
-                              )
-                              return (
-                                <div
-                                  key={`onboard-${tenant.id}`}
-                                  className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-divider-subtle bg-components-panel-bg px-3.5 py-3"
-                                >
-                                  <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      <span className="truncate system-sm-semibold text-text-primary">
+                            <div className="divide-y divide-divider-subtle rounded-xl border border-divider-subtle bg-components-panel-bg">
+                              {draft.tenants.map((tenant) => {
+                                const tenantOverview = selectedOverview?.tenants.find(
+                                  (t) => t.id === tenant.id,
+                                )
+                                return (
+                                  <div
+                                    key={`onboard-${tenant.id}`}
+                                    className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                                  >
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span className="system-sm-semibold text-text-primary">
                                         {tenant.name || tenant.id}
                                       </span>
                                       {tenantOverview && (
@@ -1693,414 +1768,525 @@ export default function EnvironmentManagement() {
                                         </StatusPill>
                                       )}
                                     </div>
-                                    <div className="mt-0.5 font-mono text-[11px] text-text-tertiary">
-                                      {tenant.id}
+                                    <Button
+                                      type="button"
+                                      variant="primary"
+                                      size="medium"
+                                      disabled={
+                                        busy ||
+                                        plan.state === 'expired' ||
+                                        !consumerSource ||
+                                        onboardCaseInvalid
+                                      }
+                                      onClick={() => {
+                                        const msg = onboardInitial
+                                          ? '将自动执行空机初装、资源准备、停用安装与运行登记（填写案例时同步执行只读业务技术验证）。不会自动启用正式入口，确认启动一键开通？'
+                                          : '将自动执行资源准备、停用安装与运行登记（填写案例时同步执行只读业务技术验证）。不会自动启用正式入口，确认启动一键开通？'
+                                        if (!confirmAction(msg)) return
+                                        const payload: Record<string, unknown> = {
+                                          onboard_plan: plan.id,
+                                          tenant_id: tenant.id,
+                                          source_app_id: consumerSource,
+                                          source_version: consumerSources.find(
+                                            (source) => source.app_id === consumerSource,
+                                          )?.version_no,
+                                        }
+                                        if (onboardInitial) payload.initial_installation = true
+                                        if (onboardCaseRef) {
+                                          payload.case_ref = onboardCaseRef
+                                          payload.capabilities = ['consumer', 'order', 'offline']
+                                        }
+                                        void siteTasks(payload)
+                                      }}
+                                    >
+                                      一键开通：{tenant.name}（{tenant.id}）
+                                    </Button>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 折叠收纳：计划摘要与高级分步运维工具 */}
+                        <details className="rounded-xl bg-background-section-burn/50 px-4 py-2.5">
+                          <summary className="cursor-pointer system-xs-medium text-text-tertiary select-none hover:text-text-primary">
+                            高级操作与计划校验摘要（分步准备 / 主机核验 / SHA）
+                          </summary>
+                          <div className="mt-3 space-y-3 border-t border-divider-subtle pt-3">
+                            <div className="flex flex-wrap gap-2">
+                              <CopyableChip key={plan.id} label="计划" value={plan.id} />
+                              {plan.config_sha256 && (
+                                <CopyableChip
+                                  key={plan.config_sha256}
+                                  label="配置摘要"
+                                  value={plan.config_sha256}
+                                />
+                              )}
+                              {plan.projection_sha256 && (
+                                <CopyableChip
+                                  key={plan.projection_sha256}
+                                  label="停用候选投影摘要"
+                                  value={plan.projection_sha256}
+                                />
+                              )}
+                            </div>
+
+                            {consumerSources.length > 0 && (
+                              <div className="space-y-1.5">
+                                <div className="system-xs-medium text-text-tertiary">
+                                  分步准备（排障用）
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  {draft.tenants.map((tenant) => (
+                                    <div key={tenant.id} className="flex flex-wrap gap-2">
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="small"
+                                        disabled={
+                                          busy || plan.state === 'expired' || !consumerSource
+                                        }
+                                        onClick={() =>
+                                          void siteTasks({
+                                            candidate_plan: plan.id,
+                                            tenant_id: tenant.id,
+                                            source_app_id: consumerSource,
+                                            source_version: consumerSources.find(
+                                              (source) => source.app_id === consumerSource,
+                                            )?.version_no,
+                                          })
+                                        }
+                                      >
+                                        准备候选：{tenant.name}（{tenant.id}）
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="small"
+                                        disabled={
+                                          busy || plan.state === 'expired' || !consumerSource
+                                        }
+                                        onClick={() => {
+                                          if (
+                                            confirmAction(
+                                              '仅当目标主机为空时使用：将在固定路径完成首次安装（停用目录），占用、半安装或旧单位会被拒绝对账，不会启用正式入口。确认包含初装？',
+                                            )
+                                          )
+                                            void siteTasks({
+                                              candidate_plan: plan.id,
+                                              tenant_id: tenant.id,
+                                              source_app_id: consumerSource,
+                                              source_version: consumerSources.find(
+                                                (source) => source.app_id === consumerSource,
+                                              )?.version_no,
+                                              initial_installation: true,
+                                            })
+                                        }}
+                                      >
+                                        空机初装并准备：{tenant.name}（{tenant.id}）
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="small"
+                                disabled={busy || plan.state === 'expired'}
+                                onClick={() => void siteTasks({ plan_id: plan.id })}
+                              >
+                                请求现场预检
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="small"
+                                disabled={busy || plan.state === 'expired'}
+                                onClick={() =>
+                                  void siteTasks({
+                                    verify_task: 'managed-host-identity',
+                                    plan_id: plan.id,
+                                  })
+                                }
+                              >
+                                主机身份验收
+                              </Button>
+                            </div>
+                          </div>
+                        </details>
+                      </section>
+                    </section>
+                  )}
+
+                  {/* 2. 极简「租户状态」列表（默认隐藏 UUID，一键展开详情） */}
+                  {selected && (
+                    <section
+                      aria-label="租户与能力总览"
+                      className="rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          <h3 className="system-md-semibold text-text-primary">租户状态</h3>
+                          <span className="system-xs-regular text-text-tertiary">
+                            {selectedOverview
+                              ? `${selectedOverview.enabled_tenant_count}/${selectedOverview.tenant_count} 已启用`
+                              : `${draft.tenants.length} 个草稿租户`}
+                          </span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="small"
+                          disabled={busy || overviewBusy}
+                          onClick={() => void refreshOverview()}
+                        >
+                          刷新状态
+                        </Button>
+                      </div>
+
+                      {selectedOverview && selectedOverview.tenants.length > 0 ? (
+                        <ul className="divide-y divide-divider-subtle">
+                          {selectedOverview.tenants.map((tenant) => {
+                            const expanded = Boolean(expandedTenants[tenant.id])
+                            return (
+                              <li key={tenant.id} className="px-6 py-3.5">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div className="flex flex-wrap items-center gap-2.5">
+                                    <span className="system-sm-semibold text-text-primary">
+                                      {tenant.name}
+                                    </span>
+                                    <StatusPill tone={envTone(tenant.admission)}>
+                                      {tenantAdmissionLabels[tenant.admission] || tenant.admission}
+                                    </StatusPill>
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-4">
+                                    <div className="flex flex-wrap items-center gap-3 system-xs-regular text-text-secondary">
+                                      {(
+                                        [
+                                          ['智能客服', tenant.capabilities.consumer],
+                                          ['异常订单', tenant.capabilities.order],
+                                          ['离线分析', tenant.capabilities.offline],
+                                        ] as const
+                                      ).map(([label, cap]) => (
+                                        <span
+                                          key={label}
+                                          className="inline-flex items-center gap-1.5"
+                                        >
+                                          <StatusDot
+                                            status={badgeToneStyles[capabilityTone(cap.state)].dot}
+                                            size="small"
+                                          />
+                                          <span>
+                                            {label}：{capabilityStateLabels[cap.state] || cap.state}
+                                            {cap.error_code ? `（${cap.error_code}）` : ''}
+                                          </span>
+                                        </span>
+                                      ))}
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      aria-expanded={expanded}
+                                      onClick={() =>
+                                        setExpandedTenants((prev) => ({
+                                          ...prev,
+                                          [tenant.id]: !prev[tenant.id],
+                                        }))
+                                      }
+                                      className="cursor-pointer rounded-lg px-2 py-1 system-xs-medium text-text-tertiary transition-colors hover:bg-background-section-burn hover:text-text-primary"
+                                    >
+                                      {expanded ? '收起详情' : '查看详情'}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {expanded && (
+                                  <div className="mt-3 grid gap-2.5 rounded-xl bg-background-section-burn/60 p-3.5 system-xs-regular sm:grid-cols-2 lg:grid-cols-4">
+                                    <div className="space-y-1">
+                                      <div className="text-text-tertiary">租户编号</div>
+                                      <CopyableChip value={tenant.id} />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <div className="text-text-tertiary">
+                                        工作区（
+                                        {workspaceStateLabels[tenant.workspace.state] ||
+                                          tenant.workspace.state}
+                                        ）
+                                      </div>
+                                      {tenant.workspace.id ? (
+                                        <CopyableChip value={tenant.workspace.id} />
+                                      ) : (
+                                        <span className="text-text-tertiary">未创建</span>
+                                      )}
+                                    </div>
+                                    <div className="space-y-1">
+                                      <div className="text-text-tertiary">双端应用</div>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        <StatusPill tone={appTone(tenant.apps.operator.state)}>
+                                          管家：
+                                          {appStateLabels[tenant.apps.operator.state] ||
+                                            tenant.apps.operator.state}
+                                        </StatusPill>
+                                        <StatusPill tone={appTone(tenant.apps.consumer.state)}>
+                                          客服：
+                                          {appStateLabels[tenant.apps.consumer.state] ||
+                                            tenant.apps.consumer.state}
+                                        </StatusPill>
+                                      </div>
+                                    </div>
+                                    <div className="space-y-1">
+                                      <div className="text-text-tertiary">知识空间与业务验收</div>
+                                      <div className="text-text-secondary">
+                                        {tenant.knowledge.knowledge_base_id
+                                          ? `已连接（${tenant.knowledge.active_grants} 项授权）`
+                                          : '未准备'}
+                                        {' · 业务准确性：待人工确认'}
+                                      </div>
                                     </div>
                                   </div>
-                                  <Button
-                                    type="button"
-                                    variant="primary"
-                                    size="medium"
-                                    disabled={
-                                      busy ||
-                                      plan.state === 'expired' ||
-                                      !consumerSource ||
-                                      onboardCaseInvalid
-                                    }
-                                    onClick={() => {
-                                      const msg = onboardInitial
-                                        ? '将自动执行空机初装、资源准备、停用安装与运行登记（填写案例时同步执行只读业务技术验证）。不会自动启用正式入口，确认启动一键开通？'
-                                        : '将自动执行资源准备、停用安装与运行登记（填写案例时同步执行只读业务技术验证）。不会自动启用正式入口，确认启动一键开通？'
-                                      if (!confirmAction(msg)) return
-                                      const payload: Record<string, unknown> = {
-                                        onboard_plan: plan.id,
-                                        tenant_id: tenant.id,
-                                        source_app_id: consumerSource,
-                                        source_version: consumerSources.find(
-                                          (source) => source.app_id === consumerSource,
-                                        )?.version_no,
-                                      }
-                                      if (onboardInitial) payload.initial_installation = true
-                                      if (onboardCaseRef) {
-                                        payload.case_ref = onboardCaseRef
-                                        payload.capabilities = ['consumer', 'order', 'offline']
-                                      }
-                                      void siteTasks(payload)
-                                    }}
-                                  >
-                                    一键开通：{tenant.name}（{tenant.id}）
-                                  </Button>
-                                </div>
-                              )
-                            })}
-                          </div>
+                                )}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      ) : (
+                        <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-5 system-sm-regular text-text-secondary">
+                          <span>
+                            {draft.tenants.length === 0
+                              ? '当前环境尚未配置租户'
+                              : `已配置 ${draft.tenants.length} 个草稿租户，尚未读取到运行态总览`}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="small"
+                            onClick={() => setActiveTab('config')}
+                          >
+                            管理租户配置
+                          </Button>
                         </div>
+                      )}
+                    </section>
+                  )}
 
-                        {/* 低干扰高级单步准备区 */}
-                        <div className="space-y-2 rounded-xl border border-dashed border-divider-regular bg-background-section-burn/50 p-3">
-                          <div className="system-xs-medium text-text-tertiary">
-                            分步准备（高级运维排障用，常规开通请直接使用上方「一键开通」）
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            {draft.tenants.map((tenant) => (
-                              <div key={tenant.id} className="flex flex-wrap gap-2">
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="small"
-                                  disabled={busy || plan.state === 'expired' || !consumerSource}
-                                  onClick={() =>
-                                    void siteTasks({
-                                      candidate_plan: plan.id,
-                                      tenant_id: tenant.id,
-                                      source_app_id: consumerSource,
-                                      source_version: consumerSources.find(
-                                        (source) => source.app_id === consumerSource,
-                                      )?.version_no,
-                                    })
-                                  }
-                                >
-                                  准备候选：{tenant.name}（{tenant.id}）
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="small"
-                                  disabled={busy || plan.state === 'expired' || !consumerSource}
-                                  onClick={() => {
-                                    if (
-                                      confirmAction(
-                                        '仅当目标主机为空时使用：将在固定路径完成首次安装（停用目录），占用、半安装或旧单位会被拒绝对账，不会启用正式入口。确认包含初装？',
-                                      )
-                                    )
-                                      void siteTasks({
-                                        candidate_plan: plan.id,
-                                        tenant_id: tenant.id,
-                                        source_app_id: consumerSource,
-                                        source_version: consumerSources.find(
-                                          (source) => source.app_id === consumerSource,
-                                        )?.version_no,
-                                        initial_installation: true,
-                                      })
-                                  }}
-                                >
-                                  空机初装并准备：{tenant.name}（{tenant.id}）
-                                </Button>
-                              </div>
-                            ))}
-                          </div>
+                  {/* 3. 精简「近期开通与发布」动态（默认仅展示进行中 + 最近 2 条核心记录） */}
+                  {selected && (
+                    <section
+                      aria-label="近期开通与发布"
+                      className="rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          <h3 className="system-md-semibold text-text-primary">近期开通与发布</h3>
+                          {tasks.length > 0 && (
+                            <span className="system-xs-regular text-text-tertiary">
+                              仅展示近期核心动态
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="small"
+                            onClick={() => void siteTasks()}
+                          >
+                            刷新
+                          </Button>
+                          {tasks.length > 0 && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="small"
+                              onClick={() => setActiveTab('ops')}
+                            >
+                              全部历史与排障（{tasks.length}）→
+                            </Button>
+                          )}
                         </div>
                       </div>
-                    )}
-                  </section>
 
-                  {/* 独立受管核验快捷条 */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-divider-subtle pt-3">
-                    <span className="system-xs-regular text-text-tertiary">
-                      独立只读核验（不改目标配置）
-                    </span>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="small"
-                        disabled={busy || plan.state === 'expired'}
-                        onClick={() => void siteTasks({ plan_id: plan.id })}
-                      >
-                        请求现场预检
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="small"
-                        disabled={busy || plan.state === 'expired'}
-                        onClick={() =>
-                          void siteTasks({ verify_task: 'managed-host-identity', plan_id: plan.id })
-                        }
-                      >
-                        主机身份验收
-                      </Button>
-                    </div>
-                  </div>
-                </section>
-              )}
+                      {taskError && (
+                        <div className="mx-6 mt-4 rounded-xl border border-state-destructive-border bg-state-destructive-hover px-3.5 py-2.5">
+                          <p role="alert" className="system-xs-medium text-text-destructive">
+                            {taskError}
+                          </p>
+                        </div>
+                      )}
 
-              {/* 观测驾驶舱：租户与能力总览 + 运行节点与工具 */}
-              {viewMode === 'observe' && (!selected || !selectedOverview) && (
-                <section
-                  aria-label="运行观测状态"
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-divider-regular bg-components-panel-bg px-5 py-6"
-                >
-                  <p className="system-sm-regular text-text-secondary">
-                    {!selected
-                      ? '请先保存新环境草稿后再查看节点与租户运行状态。'
-                      : '当前环境暂无运行总览数据，可点击重试读取。'}
-                  </p>
-                  {!selected ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="small"
-                      onClick={() => setViewMode('config')}
-                    >
-                      前往填写环境配置
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="small"
-                      disabled={busy || overviewBusy}
-                      onClick={() => void refreshOverview()}
-                    >
-                      刷新运行状态
-                    </Button>
-                  )}
-                </section>
-              )}
-              {selected && selectedOverview && showObserveSection && (
-                <div className="space-y-5">
-                  <section
-                    aria-label="租户与能力总览"
-                    className="overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
-                  >
-                    <div className="border-b border-divider-subtle px-5 py-3.5">
-                      <h2 className="system-md-semibold text-text-primary">租户与能力总览</h2>
-                      <p className="mt-0.5 system-xs-regular text-text-tertiary">
-                        展示已登记租户的工作区、双端应用、知识空间与三项能力技术验证结果；技术通过不等于业务准确性人工确认。
-                      </p>
-                    </div>
-                    {selectedOverview.tenants.length === 0 ? (
-                      <p className="px-5 py-6 text-center system-sm-regular text-text-secondary">
-                        该环境尚未登记租户
-                      </p>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left system-xs-regular">
-                          <thead>
-                            <tr className="border-b border-divider-subtle bg-background-section-burn/70 text-text-tertiary">
-                              <th className="px-5 py-2.5 font-medium">租户</th>
-                              <th className="px-3 py-2.5 font-medium">准入</th>
-                              <th className="px-3 py-2.5 font-medium">工作区</th>
-                              <th className="px-3 py-2.5 font-medium">管家 / 客服应用</th>
-                              <th className="px-3 py-2.5 font-medium">知识空间</th>
-                              <th className="px-5 py-2.5 font-medium">三项能力技术验证</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-divider-subtle">
-                            {selectedOverview.tenants.map((tenant) => (
-                              <tr key={tenant.id} className="align-top">
-                                <td className="px-5 py-3.5">
-                                  <div className="system-sm-semibold text-text-primary">
-                                    {tenant.name}
-                                  </div>
-                                  <div className="mt-0.5 font-mono text-[11px] text-text-tertiary">
-                                    {tenant.id}
-                                  </div>
-                                </td>
-                                <td className="px-3 py-3.5">
-                                  <StatusPill tone={envTone(tenant.admission)}>
-                                    {tenantAdmissionLabels[tenant.admission] || tenant.admission}
-                                  </StatusPill>
-                                </td>
-                                <td className="px-3 py-3.5">
-                                  <div className="font-medium text-text-primary">
-                                    {workspaceStateLabels[tenant.workspace.state] ||
-                                      tenant.workspace.state}
-                                  </div>
-                                  {tenant.workspace.id && (
-                                    <div className="mt-1">
-                                      <CopyableChip value={tenant.workspace.id} />
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="space-y-1.5 px-3 py-3.5">
-                                  <div className="flex items-center gap-1.5">
-                                    <StatusDot
-                                      status={
-                                        badgeToneStyles[appTone(tenant.apps.operator.state)].dot
-                                      }
-                                      size="small"
-                                    />
-                                    <span className="text-text-secondary">
-                                      管家：
-                                      {appStateLabels[tenant.apps.operator.state] ||
-                                        tenant.apps.operator.state}
-                                      {tenant.apps.operator.version_no != null
-                                        ? ` · v${tenant.apps.operator.version_no}`
-                                        : ''}
-                                      {tenant.apps.operator.app_id
-                                        ? `（${tenant.apps.operator.app_id.slice(0, 8)}）`
-                                        : ''}
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-1.5">
-                                    <StatusDot
-                                      status={
-                                        badgeToneStyles[appTone(tenant.apps.consumer.state)].dot
-                                      }
-                                      size="small"
-                                    />
-                                    <span className="text-text-secondary">
-                                      客服：
-                                      {appStateLabels[tenant.apps.consumer.state] ||
-                                        tenant.apps.consumer.state}
-                                      {tenant.apps.consumer.version_no != null
-                                        ? ` · v${tenant.apps.consumer.version_no}`
-                                        : ''}
-                                      {tenant.apps.consumer.app_id
-                                        ? `（${tenant.apps.consumer.app_id.slice(0, 8)}）`
-                                        : ''}
-                                    </span>
-                                  </div>
-                                </td>
-                                <td className="px-3 py-3.5">
-                                  {tenant.knowledge.active_grants > 0 ? (
-                                    <StatusPill tone="success" dot={false}>
-                                      活跃授权 {tenant.knowledge.active_grants}
-                                    </StatusPill>
-                                  ) : tenant.knowledge.knowledge_base_id ? (
-                                    <StatusPill tone="info" dot={false}>
-                                      候选库 {tenant.knowledge.knowledge_base_id.slice(0, 8)}
-                                    </StatusPill>
-                                  ) : (
-                                    <span className="text-text-tertiary">未准备</span>
-                                  )}
-                                </td>
-                                <td className="space-y-1.5 px-5 py-3.5">
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {(
-                                      [
-                                        ['智能客服', tenant.capabilities.consumer],
-                                        ['异常订单', tenant.capabilities.order],
-                                        ['离线分析', tenant.capabilities.offline],
-                                      ] as const
-                                    ).map(([label, cap]) => (
-                                      <StatusPill key={label} tone={capabilityTone(cap.state)}>
-                                        {label}：{capabilityStateLabels[cap.state] || cap.state}
-                                        {cap.error_code ? `（${cap.error_code}）` : ''}
+                      {focusedLifecycleTasks.length === 0 ? (
+                        <p className="px-6 py-6 text-center system-xs-regular text-text-tertiary">
+                          {tasks.length === 0
+                            ? '暂无开通记录，完成上方预检后即可一键开通。'
+                            : '当前无进行中或近期一键开通记录，历史单步记录请前往「运行与排查」查看。'}
+                        </p>
+                      ) : (
+                        <div className="divide-y divide-divider-subtle">
+                          {focusedLifecycleTasks.map((item) => {
+                            const highlightedInHero =
+                              (!plan || dirty) &&
+                              draftReady &&
+                              readyToPublishOnboard?.id === item.id
+                            return (
+                              <article key={item.id} className="space-y-3 px-6 py-4">
+                                <section
+                                  aria-label={
+                                    item.action === 'tenant-onboard'
+                                      ? `一键开通进度：${item.tenant_id}`
+                                      : undefined
+                                  }
+                                  className="space-y-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <div className="flex flex-wrap items-center gap-2.5">
+                                      <span className="system-sm-semibold text-text-primary">
+                                        {item.action === 'tenant-onboard'
+                                          ? `一键开通 · ${tenantNameOf(item.tenant_id)}${
+                                              item.state === 'observed' &&
+                                              item.result.ready_to_publish
+                                                ? '（技术验收已就绪，待人工确认发布）'
+                                                : ''
+                                            }`
+                                          : item.action === 'environment-publish'
+                                            ? `正式开通 · ${tenantNameOf(item.tenant_id)}（${
+                                                publicationPhases[
+                                                  String(item.result?.phase || '')
+                                                ] || String(item.result?.phase || '')
+                                              } · 准入 ${item.result?.activated ? '已启用' : '未启用'}）`
+                                            : `${taskActionLabels[item.action || ''] || '环境任务'}${item.tenant_id ? ` · ${tenantNameOf(item.tenant_id)}` : ''}`}
+                                      </span>
+                                      <StatusPill tone={taskTone(item.state)}>
+                                        {item.action === 'environment-publish' && item.result?.phase
+                                          ? publicationPhases[String(item.result.phase)] ||
+                                            String(item.result.phase)
+                                          : taskLabels[item.state] || item.state}
+                                        {item.cancel_requested && item.state === 'running'
+                                          ? ' · 取消中'
+                                          : ''}
                                       </StatusPill>
+                                      {item.error_code && (
+                                        <StatusPill tone="error" dot={false}>
+                                          {item.error_code}
+                                        </StatusPill>
+                                      )}
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      {!highlightedInHero &&
+                                        pendingPublishOnboardIds.has(item.id) &&
+                                        renderPublishConfirmButton(item)}
+
+                                      {item.action === 'environment-publish' &&
+                                        ['observed', 'reconcile', 'blocked'].includes(item.state) &&
+                                        item.result?.phase !== 'restored' && (
+                                          <Button
+                                            type="button"
+                                            variant="secondary"
+                                            tone="destructive"
+                                            size="small"
+                                            disabled={busy}
+                                            onClick={() => {
+                                              if (
+                                                confirmAction(
+                                                  '关闭本次租户准入，按原记录恢复路由和配置？其他租户保持，恢复推进新修订，不删除运行历史。',
+                                                )
+                                              )
+                                                void siteTasks({ restore_publication: item.id })
+                                            }}
+                                          >
+                                            恢复本次开通
+                                          </Button>
+                                        )}
+
+                                      {['queued', 'running', 'reconcile'].includes(item.state) && (
+                                        <Button
+                                          type="button"
+                                          variant="secondary"
+                                          size="small"
+                                          onClick={() =>
+                                            void siteTasks({ id: item.id, cancel: true })
+                                          }
+                                        >
+                                          {item.action === 'tenant-onboard'
+                                            ? '取消一键开通'
+                                            : item.action === 'environment-publish'
+                                              ? '停止开通并恢复'
+                                              : '取消任务'}
+                                        </Button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* 干净的四阶段中文进度条（隐藏子任务 UUID） */}
+                                  {item.action === 'tenant-onboard' &&
+                                    (item.result.stages || []).length > 0 && (
+                                      <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                                        {(item.result.stages || []).map((stage) => (
+                                          <li
+                                            key={stage.action}
+                                            className="flex items-center justify-between gap-2 rounded-lg bg-background-section-burn/70 px-3 py-2 system-xs-regular"
+                                          >
+                                            <span className="flex items-center gap-1.5 font-medium text-text-primary">
+                                              <StatusDot
+                                                status={badgeToneStyles[taskTone(stage.state)].dot}
+                                                size="small"
+                                              />
+                                              <span>
+                                                {onboardingStageLabels[stage.action] ||
+                                                  stage.action}
+                                              </span>
+                                            </span>
+                                            <span className="text-text-tertiary">
+                                              {taskLabels[stage.state] || stage.state}
+                                            </span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                </section>
+
+                                <details className="text-text-tertiary">
+                                  <summary className="cursor-pointer text-[11px] select-none hover:text-text-primary">
+                                    查看任务编号与技术详情
+                                  </summary>
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    <CopyableChip label="任务" value={item.id} />
+                                    {item.plan_id && (
+                                      <CopyableChip label="计划" value={item.plan_id} />
+                                    )}
+                                    {(item.result.stages || []).map((stage) => (
+                                      <CopyableChip
+                                        key={stage.id}
+                                        label={onboardingStageLabels[stage.action] || stage.action}
+                                        value={stage.id}
+                                      />
                                     ))}
                                   </div>
-                                  <div className="text-[11px] text-text-tertiary">
-                                    业务准确性：待人工确认
-                                  </div>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </section>
-
-                  <section
-                    aria-label="运行节点与工具"
-                    className="rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs"
-                  >
-                    <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <h2 className="system-md-semibold text-text-primary">运行节点与工具</h2>
-                        <p className="mt-0.5 system-xs-regular text-text-tertiary">
-                          {selectedOverview.is_control
-                            ? '控制环境展示执行节点实时心跳与工具目录兼容状态。'
-                            : '远端环境展示受管任务点时回执（非实时心跳），以受控安装与观察证据为准。'}
-                        </p>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="small"
-                        disabled={busy || overviewBusy}
-                        onClick={() => void refreshOverview()}
-                      >
-                        刷新节点状态
-                      </Button>
-                    </div>
-                    {selectedOverview.nodes.length === 0 ? (
-                      <p className="rounded-xl border border-dashed border-divider-regular py-5 text-center system-sm-regular text-text-secondary">
-                        {selectedOverview.is_control
-                          ? '暂无在线节点心跳记录'
-                          : '暂无受管任务节点回执，请先执行主机身份验收或现场预检'}
-                      </p>
-                    ) : (
-                      <div className="grid gap-3 md:grid-cols-2">
-                        {selectedOverview.nodes.map((node) => (
-                          <div
-                            key={`${node.source}-${node.node_id}`}
-                            className="space-y-2.5 rounded-xl border border-divider-subtle bg-components-card-bg p-4 system-xs-regular"
-                          >
-                            {node.source === 'heartbeat' ? (
-                              <>
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <p className="system-sm-semibold text-text-primary">
-                                    节点 {node.node_id} ·{' '}
-                                    {nodeStatusLabels[node.status] || node.status}
-                                    （实时心跳）
-                                  </p>
-                                  <StatusPill tone={nodeTone(node.status)}>
-                                    {nodeStatusLabels[node.status] || node.status}
-                                  </StatusPill>
-                                </div>
-                                <p className="text-text-secondary">
-                                  网关版本：{node.version || '未知'} · 最近心跳：
-                                  {formatTimestamp(node.observed_at)} · 工具协议：
-                                  {node.tool_contract || '未上报'}
-                                </p>
-                                <p className="text-text-secondary">
-                                  工具目录：
-                                  {node.tools_compatible
-                                    ? `与网关一致（可用工具 ${node.available_tools.length} 项）`
-                                    : '与网关版本不兼容（暂不列出可用工具）'}
-                                </p>
-                                {node.available_tools.length > 0 && (
-                                  <p className="rounded-lg bg-background-section-burn px-3 py-2 font-mono text-[11px] leading-relaxed break-all text-text-tertiary">
-                                    可用工具：{node.available_tools.join('、')}
-                                  </p>
-                                )}
-                              </>
-                            ) : (
-                              <>
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <p className="system-sm-semibold text-text-primary">
-                                    远端节点 {node.node_id} ·{' '}
-                                    {nodeStatusLabels[node.status] || node.status}
-                                    （受管任务点时回执，非实时心跳）
-                                  </p>
-                                  <StatusPill tone={nodeTone(node.status)}>
-                                    {nodeStatusLabels[node.status] || node.status}
-                                  </StatusPill>
-                                </div>
-                                <p className="text-text-secondary">
-                                  观测版本：{node.version || '未上报'} · 最近观测：
-                                  {formatTimestamp(node.observed_at)} · 主机名：
-                                  {node.remote_hostname || '未采集'} · 服务身份：
-                                  {node.service_user_present === true
-                                    ? '已确认'
-                                    : node.service_user_present === false
-                                      ? '缺失'
-                                      : '未采集'}
-                                </p>
-                                {node.installation && (
-                                  <p className="text-text-tertiary">
-                                    最近安装回执：
-                                    {initialInstallationLabels[node.installation] ||
-                                      node.installation}
-                                  </p>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </section>
+                                </details>
+                              </article>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </section>
+                  )}
                 </div>
               )}
 
-              {/* 连接配置与租户草稿编辑器 */}
-              {showConfigSection && (
+              {/* ================================================================= */}
+              {/* TAB 2: 连接配置（专注表单编辑，仅此处包裹 <form onSubmit>）          */}
+              {/* ================================================================= */}
+              {activeTab === 'config' && (
                 <form
+                  id="aiops-panel-config"
+                  role="tabpanel"
+                  aria-labelledby="aiops-tab-config"
                   onSubmit={(event) => {
                     event.preventDefault()
                     void save()
@@ -2108,78 +2294,70 @@ export default function EnvironmentManagement() {
                 >
                   <fieldset
                     disabled={busy || (!selected && !data.can_create)}
-                    className="space-y-5 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs"
+                    className="divide-y divide-divider-subtle rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
                   >
                     <legend className="sr-only">连接配置</legend>
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle pb-3">
-                      <div>
-                        <h2 className="system-md-semibold text-text-primary">连接配置</h2>
-                        <p className="mt-0.5 system-xs-regular text-text-tertiary">
-                          地址使用
-                          HTTPS；凭据填写已登记引用，不填写口令或令牌。时区示例：Asia/Shanghai、Asia/Singapore。
-                        </p>
-                      </div>
+
+                    <div className="px-6 py-4">
+                      <h3 className="system-md-semibold text-text-primary">连接配置</h3>
+                      <p className="mt-0.5 system-xs-regular text-text-tertiary">
+                        维护环境端点、受管引用与租户清单；保存仅更新草稿，不影响现役运行状态。
+                      </p>
                     </div>
 
-                    <div className="space-y-4">
-                      {fieldGroups.map((group) => (
-                        <div
-                          key={group.title}
-                          className="space-y-3 rounded-xl border border-divider-subtle bg-components-card-bg p-4"
-                        >
-                          <div>
-                            <div className="system-xs-semibold text-text-primary">
-                              {group.title}
-                            </div>
-                            <div className="text-[11px] text-text-tertiary">
-                              {group.description}
-                            </div>
-                          </div>
-                          <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-                            {group.items.map(([key, label, maxLength, placeholder]) => (
-                              <label
-                                key={key}
-                                className="flex min-w-0 flex-col gap-1.5 system-xs-medium text-text-secondary"
-                              >
-                                <span>{label}</span>
-                                <Input
-                                  aria-label={label}
-                                  value={draft[key]}
-                                  placeholder={placeholder}
-                                  required={key !== 'company_gateway_url'}
-                                  maxLength={maxLength}
-                                  disabled={key === 'id' && Boolean(selected)}
-                                  onChange={(event) =>
-                                    setDraft({ ...draft, [key]: event.target.value })
-                                  }
-                                />
-                              </label>
-                            ))}
+                    {fieldGroups.map((group) => (
+                      <div key={group.title} className="space-y-3.5 px-6 py-5">
+                        <div>
+                          <div className="system-sm-semibold text-text-primary">{group.title}</div>
+                          <div className="system-xs-regular text-text-tertiary">
+                            {group.description}
                           </div>
                         </div>
-                      ))}
+                        <div className="grid gap-3.5 md:grid-cols-2 xl:grid-cols-3">
+                          {group.items.map(([key, label, maxLength, placeholder]) => (
+                            <label key={key} className="block space-y-1.5">
+                              <span className="block system-xs-medium text-text-secondary">
+                                {label}
+                              </span>
+                              <Input
+                                aria-label={label}
+                                required={key !== 'company_gateway_url'}
+                                maxLength={maxLength}
+                                placeholder={placeholder}
+                                disabled={key === 'id' && Boolean(selected)}
+                                value={draft[key]}
+                                onChange={(event) =>
+                                  setDraft({ ...draft, [key]: event.target.value })
+                                }
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+
+                    <div className="px-6 py-4">
+                      <label className="inline-flex cursor-pointer items-center gap-2.5 system-sm-medium text-text-primary">
+                        <Checkbox
+                          aria-label="环境预期准入"
+                          checked={draft.enabled}
+                          onCheckedChange={(value) =>
+                            setDraft({ ...draft, enabled: value === true })
+                          }
+                        />
+                        <span>预期允许该环境准入（仅记录期望状态，需完成发布流程后生效）</span>
+                      </label>
                     </div>
 
-                    <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-divider-subtle bg-components-card-bg px-4 py-3 system-sm-regular text-text-primary">
-                      <Checkbox
-                        aria-label="草稿环境准入"
-                        checked={draft.enabled}
-                        onCheckedChange={(value) => setDraft({ ...draft, enabled: value === true })}
-                      />
-                      <span>预期允许环境准入（保存后仍不生效）</span>
-                    </label>
-
-                    <section
-                      aria-label="租户草稿"
-                      className="space-y-3 border-t border-divider-subtle pt-4"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
+                    {/* 租户草稿清单 */}
+                    <section aria-label="租户草稿" className="space-y-3.5 px-6 py-5">
+                      <div className="flex items-center justify-between gap-3">
                         <div>
-                          <h3 className="system-md-semibold text-text-primary">
-                            租户（{draft.tenants.length}）
+                          <h3 className="system-sm-semibold text-text-primary">
+                            租户清单（{draft.tenants.length}）
                           </h3>
-                          <p className="mt-0.5 system-xs-regular text-text-tertiary">
-                            租户编号按公司系统填写；登记不表示已核实租户或已开通能力。
+                          <p className="system-xs-regular text-text-tertiary">
+                            新增租户默认不勾选准入
                           </p>
                         </div>
                         <Button
@@ -2197,84 +2375,106 @@ export default function EnvironmentManagement() {
                         </Button>
                       </div>
 
-                      {/* 顺序固定且只允许追加，不能以正在编辑的编号为key重挂输入。 */}
-                      <div className="space-y-2.5">
-                        {draft.tenants.map((tenant, index) => (
-                          <div
-                            // oxlint-disable-next-line react/no-array-index-key -- Rows only append; editable ids must not remount inputs.
-                            key={index}
-                            className="grid items-end gap-3 rounded-xl border border-divider-subtle bg-components-card-bg p-3.5 sm:grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_auto]"
-                          >
-                            <span className="flex size-7 items-center justify-center rounded-lg bg-background-section-burn font-mono text-xs text-text-tertiary">
-                              {index + 1}
-                            </span>
-                            <label
-                              htmlFor={`tenant-id-${index}`}
-                              className="flex min-w-0 flex-col gap-1 system-xs-medium text-text-secondary"
-                            >
-                              公司租户编号
-                              <Input
-                                id={`tenant-id-${index}`}
-                                aria-label={`租户 ${index + 1} 编号`}
-                                required
-                                maxLength={64}
-                                value={tenant.id}
-                                disabled={Boolean((saved?.draft.tenants ?? live?.tenants)?.[index])}
-                                onChange={(event) =>
-                                  setDraft({
-                                    ...draft,
-                                    tenants: draft.tenants.map((item, i) =>
-                                      i === index ? { ...item, id: event.target.value } : item,
-                                    ),
-                                  })
-                                }
-                              />
-                            </label>
-                            <label
-                              htmlFor={`tenant-name-${index}`}
-                              className="flex min-w-0 flex-col gap-1 system-xs-medium text-text-secondary"
-                            >
-                              租户名称
-                              <Input
-                                id={`tenant-name-${index}`}
-                                aria-label={`租户 ${index + 1} 名称`}
-                                required
-                                maxLength={128}
-                                value={tenant.name}
-                                onChange={(event) =>
-                                  setDraft({
-                                    ...draft,
-                                    tenants: draft.tenants.map((item, i) =>
-                                      i === index ? { ...item, name: event.target.value } : item,
-                                    ),
-                                  })
-                                }
-                              />
-                            </label>
-                            <label className="flex h-8 cursor-pointer items-center gap-2 rounded-lg px-2 system-xs-medium text-text-secondary">
-                              <Checkbox
-                                aria-label={`租户 ${index + 1} 准入`}
-                                checked={tenant.enabled}
-                                onCheckedChange={(value) =>
-                                  setDraft({
-                                    ...draft,
-                                    tenants: draft.tenants.map((item, i) =>
-                                      i === index ? { ...item, enabled: value === true } : item,
-                                    ),
-                                  })
-                                }
-                              />
-                              预期准入
-                            </label>
-                          </div>
-                        ))}
-                      </div>
+                      {draft.tenants.length === 0 ? (
+                        <p className="rounded-xl bg-background-section-burn/60 py-5 text-center system-xs-regular text-text-tertiary">
+                          暂无租户，点击「新增租户」添加
+                        </p>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {draft.tenants.map((tenant, index) => {
+                            const persisted = Boolean(
+                              (saved?.draft.tenants ?? live?.tenants)?.[index],
+                            )
+                            return (
+                              <div
+                                // oxlint-disable-next-line react/no-array-index-key -- Tenant IDs are user-editable before saving.
+                                key={index}
+                                className="grid items-end gap-3 rounded-xl bg-background-section-burn/50 p-3.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]"
+                              >
+                                <label className="block space-y-1">
+                                  <span className="block system-xs-medium text-text-secondary">
+                                    租户 {index + 1} 编号
+                                  </span>
+                                  <Input
+                                    aria-label={`租户 ${index + 1} 编号`}
+                                    required
+                                    maxLength={64}
+                                    placeholder="稳定租户 ID"
+                                    disabled={persisted}
+                                    value={tenant.id}
+                                    onChange={(event) =>
+                                      setDraft({
+                                        ...draft,
+                                        tenants: draft.tenants.map((item, i) =>
+                                          i === index ? { ...item, id: event.target.value } : item,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <label className="block space-y-1">
+                                  <span className="block system-xs-medium text-text-secondary">
+                                    租户 {index + 1} 名称
+                                  </span>
+                                  <Input
+                                    aria-label={`租户 ${index + 1} 名称`}
+                                    required
+                                    maxLength={128}
+                                    placeholder="公司或运营商名称"
+                                    value={tenant.name}
+                                    onChange={(event) =>
+                                      setDraft({
+                                        ...draft,
+                                        tenants: draft.tenants.map((item, i) =>
+                                          i === index
+                                            ? { ...item, name: event.target.value }
+                                            : item,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                </label>
+                                <label className="flex h-9 cursor-pointer items-center gap-2 system-xs-medium text-text-secondary">
+                                  <Checkbox
+                                    aria-label={`租户 ${index + 1} 准入`}
+                                    checked={tenant.enabled}
+                                    onCheckedChange={(value) =>
+                                      setDraft({
+                                        ...draft,
+                                        tenants: draft.tenants.map((item, i) =>
+                                          i === index ? { ...item, enabled: value === true } : item,
+                                        ),
+                                      })
+                                    }
+                                  />
+                                  预期准入
+                                </label>
+                                {!persisted && (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="small"
+                                    onClick={() =>
+                                      setDraft({
+                                        ...draft,
+                                        tenants: draft.tenants.filter((_, i) => i !== index),
+                                      })
+                                    }
+                                  >
+                                    移除
+                                  </Button>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
                     </section>
 
-                    <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-divider-subtle pt-4">
-                      <p className="max-w-xl system-xs-regular text-text-tertiary">
-                        保存只更新草稿；执行对应计划并通过各项核验后，才会改变资源和准入。
-                      </p>
+                    <footer className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+                      <span className="system-xs-regular text-text-tertiary">
+                        保存后点「配置与制品预检」即可进入一键开通
+                      </span>
                       <div className="flex flex-wrap gap-2">
                         <Button
                           type="button"
@@ -2293,857 +2493,1020 @@ export default function EnvironmentManagement() {
                 </form>
               )}
 
-              {/* 开通记录与任务进度中心 */}
-              {selected && showTasksSection && (
-                <section
-                  aria-label="现场预检任务"
-                  className="space-y-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-5 shadow-xs"
+              {/* ================================================================= */}
+              {/* TAB 3: 运行与排查（节点工具、全环境对比、全量任务历史与单步排障）      */}
+              {/* ================================================================= */}
+              {activeTab === 'ops' && (
+                <div
+                  id="aiops-panel-ops"
+                  role="tabpanel"
+                  aria-labelledby="aiops-tab-ops"
+                  className="space-y-5"
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-divider-subtle pb-3.5">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="system-md-semibold text-text-primary">环境准备任务</h2>
-                        <span className="rounded-full bg-background-section-burn px-2 py-0.5 system-xs-medium text-text-tertiary">
-                          共 {tasks.length} 条
-                        </span>
-                      </div>
-                      <p className="mt-0.5 system-xs-regular text-text-tertiary">
-                        后台自动预检并准备所选租户的候选工作区。结果未知时先核对，不重复创建；准备完成不表示已开通业务。
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="small"
-                      onClick={() => void siteTasks()}
+                  {!selected && (
+                    <section
+                      aria-label="运行排查状态"
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-divider-regular bg-components-panel-bg px-6 py-6"
                     >
-                      刷新任务
-                    </Button>
-                  </div>
-
-                  {/* 任务筛选胶囊 */}
-                  {tasks.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {(
-                        [
-                          ['all', `全部 (${tasks.length})`],
-                          ['active', `进行中/待发布 (${activeTasksCount})`],
-                          ['lifecycle', `一键开通与发布 (${lifecycleTasksCount})`],
-                          ['single', `单步与核验 (${singleTasksCount})`],
-                        ] as const
-                      ).map(([key, label]) => (
-                        <button
-                          key={key}
-                          type="button"
-                          aria-pressed={taskFilter === key}
-                          onClick={() => setTaskFilter(key)}
-                          className={`cursor-pointer rounded-full border px-3 py-1 system-xs-medium transition-colors ${
-                            taskFilter === key
-                              ? 'border-state-accent-solid bg-state-accent-hover text-text-accent'
-                              : 'border-divider-subtle bg-components-card-bg text-text-secondary hover:bg-components-panel-on-panel-item-bg-hover'
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {taskError && (
-                    <div className="rounded-xl border border-state-destructive-border bg-state-destructive-hover px-3.5 py-2.5">
-                      <p role="alert" className="system-xs-medium text-text-destructive">
-                        {taskError}
-                      </p>
-                    </div>
-                  )}
-
-                  {visibleTasks.length === 0 && (
-                    <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-divider-regular py-6 text-center">
                       <p className="system-sm-regular text-text-secondary">
-                        {tasks.length === 0
-                          ? '当前环境暂无开通与准备任务记录'
-                          : '当前筛选下无任务记录'}
+                        {data.can_create
+                          ? '当前处于新建环境草稿模式，保存环境后即可查看节点与任务记录。'
+                          : '当前暂无已分配环境，请联系管理员授权后刷新目录。'}
                       </p>
-                      {tasks.length > 0 && taskFilter !== 'all' && (
+                      {data.can_create && (
                         <Button
                           type="button"
                           variant="secondary"
                           size="small"
-                          onClick={() => setTaskFilter('all')}
+                          onClick={() => setActiveTab('config')}
                         >
-                          查看全部任务（{tasks.length}）
+                          前往连接配置
                         </Button>
                       )}
-                    </div>
+                    </section>
                   )}
-
-                  <div className="space-y-3">
-                    {visibleTasks.map((item) => {
-                      const isLifecycle =
-                        item.action === 'tenant-onboard' || item.action === 'environment-publish'
-                      const simpleStatusText =
-                        item.action === 'workspace-prepare' && item.state === 'observed'
-                          ? '候选工作区已准备'
-                          : item.action === 'knowledge-prepare' && item.state === 'observed'
-                            ? '候选知识资源已准备'
-                            : item.action === 'knowledge-connect' && item.state === 'observed'
-                              ? '候选知识连接已准备'
-                              : item.action === 'operator-prepare' && item.state === 'observed'
-                                ? '候选管家应用已准备（入口停用）'
-                                : item.action === 'consumer-prepare' && item.state === 'observed'
-                                  ? '候选消费者应用已准备（入口停用）'
-                                  : taskLabels[item.state] || item.state
-
-                      return (
-                        <article
-                          key={item.id}
-                          className={`space-y-3 rounded-xl border p-4 transition-colors ${
-                            item.action === 'tenant-onboard' && item.result.ready_to_publish
-                              ? 'border-state-success-active bg-state-success-hover/25'
-                              : item.action === 'environment-publish' && item.result.activated
-                                ? 'border-state-success-active bg-components-card-bg'
-                                : isLifecycle
-                                  ? 'border-divider-accent bg-components-card-bg'
-                                  : 'border-divider-subtle bg-components-card-bg'
-                          }`}
+                  {/* 1. 运行节点与工具 */}
+                  {selected && (
+                    <section
+                      aria-label="运行节点与工具"
+                      className="rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs"
+                    >
+                      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h3 className="system-md-semibold text-text-primary">运行节点与工具</h3>
+                          <p className="mt-0.5 system-xs-regular text-text-tertiary">
+                            {selectedOverview?.is_control
+                              ? '实时执行节点心跳与工具兼容性'
+                              : '远端环境受管任务点时回执（非实时心跳）'}
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="small"
+                          disabled={busy || overviewBusy}
+                          onClick={() => void refreshOverview()}
                         >
-                          {/* 任务卡顶栏：任务ID + 状态胶囊 + 取消动作 */}
-                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle pb-2.5">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <CopyableChip value={item.id} />
-                              <StatusPill tone={taskTone(item.state)}>
-                                {simpleStatusText}
-                                {item.cancel_requested && item.state === 'running'
-                                  ? ' · 等待安全取消'
-                                  : ''}
-                              </StatusPill>
-                              {item.error_code && (
-                                <StatusPill tone="error" dot={false}>
-                                  {item.error_code}
-                                </StatusPill>
-                              )}
-                            </div>
+                          刷新运行状态
+                        </Button>
+                      </div>
 
-                            {['queued', 'running', 'reconcile'].includes(item.state) && (
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                size="small"
-                                onClick={() => void siteTasks({ id: item.id, cancel: true })}
-                              >
-                                {item.action === 'tenant-onboard'
-                                  ? '取消一键开通'
-                                  : item.action === 'environment-publish'
-                                    ? '停止开通并恢复'
-                                    : item.action === 'candidate-validate'
-                                      ? '取消业务验证（等待本轮结束）'
-                                      : item.action === 'candidate-register'
-                                        ? '取消运行登记（等待安全结果）'
-                                        : item.action === 'candidate-install'
-                                          ? '取消候选安装（等待安全结果）'
-                                          : item.action === 'consumer-prepare'
-                                            ? '取消消费者准备'
-                                            : item.action === 'operator-prepare'
-                                              ? '取消管家准备'
-                                              : item.action === 'knowledge-connect'
-                                                ? '取消知识连接准备'
-                                                : item.action === 'knowledge-prepare'
-                                                  ? '取消知识准备'
-                                                  : item.action === 'workspace-prepare'
-                                                    ? '取消工作区准备'
-                                                    : '取消现场预检'}
-                              </Button>
-                            )}
-                          </div>
-
-                          {/* 一键开通 4 阶段可视化卡片 */}
-                          {item.action === 'tenant-onboard' && (
-                            <section
-                              aria-label={`一键开通进度：${item.tenant_id}`}
-                              className="space-y-3"
+                      {!selectedOverview || selectedOverview.nodes.length === 0 ? (
+                        <p className="rounded-xl bg-background-section-burn/60 py-5 text-center system-xs-regular text-text-tertiary">
+                          {selectedOverview?.is_control
+                            ? '暂无在线节点心跳记录'
+                            : '暂无受管任务节点回执'}
+                        </p>
+                      ) : (
+                        <div className="grid gap-3 md:grid-cols-2">
+                          {selectedOverview.nodes.map((node) => (
+                            <div
+                              key={`${node.source}-${node.node_id}`}
+                              className="space-y-2 rounded-xl bg-background-section-burn/60 p-4 system-xs-regular"
                             >
                               <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="system-sm-semibold text-text-primary">
-                                  一键开通 · {item.tenant_id}：
-                                  {item.state === 'observed'
-                                    ? item.result.ready_to_publish
-                                      ? '技术验收已就绪，待人工确认发布'
-                                      : '运行登记已完成，尚未启用正式入口'
-                                    : taskLabels[item.state] || item.state}
-                                </p>
-                                <p className="text-[11px] text-text-tertiary">
-                                  正式入口未启用 · 业务准确性待人工确认
-                                </p>
+                                <span className="font-mono system-sm-semibold text-text-primary">
+                                  {node.node_id}
+                                </span>
+                                <StatusPill tone={nodeTone(node.status)}>
+                                  {nodeStatusLabels[node.status] || node.status}
+                                </StatusPill>
                               </div>
-
-                              {(item.result.stages || []).length > 0 && (
-                                <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                                  {(item.result.stages || []).map((stage) => (
-                                    <li
-                                      key={stage.action}
-                                      className="space-y-1 rounded-lg border border-divider-subtle bg-components-panel-bg p-2.5 system-xs-regular"
+                              <div className="flex flex-wrap gap-x-4 gap-y-1 text-text-secondary">
+                                <span>版本：{node.version || '—'}</span>
+                                <span>观测：{formatTimestamp(node.observed_at)}</span>
+                              </div>
+                              {node.source === 'heartbeat' ? (
+                                <div className="space-y-1.5">
+                                  <div className="flex items-center gap-2">
+                                    <StatusPill
+                                      tone={node.tools_compatible ? 'success' : 'warning'}
+                                      dot={false}
                                     >
-                                      <div className="flex items-center gap-1.5 font-medium text-text-primary">
-                                        <StatusDot
-                                          status={badgeToneStyles[taskTone(stage.state)].dot}
-                                          size="small"
-                                        />
-                                        <span>
-                                          {onboardingStageLabels[stage.action] || stage.action}：
-                                          {taskLabels[stage.state] || stage.state}
-                                          {stage.version ? ` · v${stage.version}` : ''}
-                                        </span>
+                                      {node.tools_compatible
+                                        ? `${node.available_tools.length} 个工具兼容`
+                                        : '工具目录待升级'}
+                                    </StatusPill>
+                                  </div>
+                                  {node.available_tools.length > 0 && (
+                                    <details>
+                                      <summary className="cursor-pointer text-[11px] text-text-tertiary select-none hover:text-text-primary">
+                                        展开工具清单（{node.available_tools.length}）
+                                      </summary>
+                                      <div className="mt-1.5 flex flex-wrap gap-1">
+                                        {node.available_tools.map((tool) => (
+                                          <span
+                                            key={tool}
+                                            className="rounded bg-components-panel-bg px-1.5 py-0.5 font-mono text-[11px] text-text-secondary"
+                                          >
+                                            {tool}
+                                          </span>
+                                        ))}
                                       </div>
-                                      <span className="block font-mono text-[11px] break-all text-text-tertiary">
-                                        {stage.id}
-                                      </span>
-                                      {stage.error_code && (
-                                        <span
-                                          role="alert"
-                                          className="block text-[11px] text-text-destructive"
-                                        >
-                                          {stage.error_code}
-                                        </span>
-                                      )}
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-
-                              {item.state === 'observed' &&
-                                item.result.ready_to_publish &&
-                                item.result.validation_task_id &&
-                                (() => {
-                                  const publishPlanId =
-                                    item.plan_id ||
-                                    (plan && plan.state !== 'expired' ? plan.id : '')
-                                  const publishExpired =
-                                    plan !== null &&
-                                    plan.id === publishPlanId &&
-                                    plan.state === 'expired'
-                                  return (
-                                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-state-success-active bg-state-success-hover px-4 py-3">
-                                      <span className="system-xs-medium text-text-success">
-                                        四阶段技术验证已全部通过，可由人工确认后正式发布开通
-                                      </span>
-                                      <Button
-                                        type="button"
-                                        variant="primary"
-                                        disabled={
-                                          busy ||
-                                          dirty ||
-                                          saved?.registry_changed ||
-                                          !publishPlanId ||
-                                          publishExpired
-                                        }
-                                        onClick={() => {
-                                          if (
-                                            publishPlanId &&
-                                            confirmAction(
-                                              '按只读诊断范围发布并开通，并授权本应用所选知识库对客使用？系统会重新核验三项业务、权限、网络和容量；缺项不会启用，业务准确性仍待人工确认。',
-                                            )
-                                          )
-                                            void siteTasks({
-                                              validation_task: item.result.validation_task_id,
-                                              publication_plan: publishPlanId,
-                                              confirm_readonly: true,
-                                              confirm_customer_knowledge: true,
-                                              acceptance_ref: 'readonly-diagnosis',
-                                            })
-                                        }}
-                                      >
-                                        确认发布并开通：{item.tenant_id}
-                                      </Button>
-                                    </div>
-                                  )
-                                })()}
-                            </section>
-                          )}
-
-                          {/* 正式发布与恢复卡片 */}
-                          {item.action === 'environment-publish' && (
-                            <section className="flex flex-wrap items-center justify-between gap-3">
-                              <div className="space-y-1">
-                                <p className="system-sm-semibold text-text-primary">
-                                  正式开通 · {item.tenant_id}：
-                                  {taskLabels[item.state] || item.state}
-                                  ；阶段{' '}
-                                  {publicationPhases[String(item.result?.phase || '')] ||
-                                    String(item.result?.phase || '')}
-                                  ，准入 {item.result?.activated ? '已启用' : '未启用'}
-                                  ，业务准确性待人工确认
-                                </p>
-                              </div>
-                              {['observed', 'reconcile', 'blocked'].includes(item.state) &&
-                                item.result?.phase !== 'restored' && (
-                                  <Button
-                                    type="button"
-                                    variant="secondary"
-                                    tone="destructive"
-                                    disabled={busy}
-                                    onClick={() => {
-                                      if (
-                                        confirmAction(
-                                          '关闭本次租户准入，按原记录恢复路由和配置？其他租户保持，恢复推进新修订，不删除运行历史。',
-                                        )
-                                      )
-                                        void siteTasks({ restore_publication: item.id })
-                                    }}
-                                  >
-                                    恢复本次开通
-                                  </Button>
-                                )}
-                            </section>
-                          )}
-
-                          {/* 单步任务标题区 */}
-                          {item.action === 'workspace-prepare' && (
-                            <p className="system-sm-semibold text-text-primary">
-                              候选工作区 · {item.tenant_id}
-                            </p>
-                          )}
-                          {item.action === 'knowledge-prepare' && (
-                            <p className="system-sm-semibold text-text-primary">
-                              候选知识资源 · {item.tenant_id}
-                            </p>
-                          )}
-                          {item.action === 'knowledge-connect' && (
-                            <p className="system-sm-semibold text-text-primary">
-                              候选知识连接 · {item.tenant_id}
-                            </p>
-                          )}
-                          {item.action === 'operator-prepare' && (
-                            <p className="system-sm-semibold text-text-primary">
-                              候选管家应用 · {item.tenant_id}
-                            </p>
-                          )}
-                          {item.action === 'consumer-prepare' && (
-                            <p className="system-sm-semibold text-text-primary">
-                              候选消费者应用 · {item.tenant_id}
-                            </p>
-                          )}
-
-                          {item.action === 'host-verify' && (
-                            <section
-                              aria-label={`主机身份验收：${item.environment}`}
-                              className="space-y-1.5"
-                            >
-                              <p className="system-sm-semibold text-text-primary">
-                                主机身份验收 · {item.environment}：
-                                {taskLabels[item.state] || item.state}
-                              </p>
-                              {item.result.evidence && (
-                                <div className="flex flex-wrap gap-3 system-xs-regular text-text-secondary">
-                                  <p className="break-all">
-                                    现场主机：{item.result.evidence.remote_hostname || '未采集'}
-                                  </p>
-                                  <p>
-                                    服务身份：
-                                    {item.result.evidence.service_user_present ? '存在' : '缺失'}
-                                  </p>
+                                    </details>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="text-text-tertiary">
+                                  主机：{node.remote_hostname || '—'}
+                                  {node.installation
+                                    ? ` · 安装：${initialInstallationLabels[node.installation] || node.installation}`
+                                    : ''}
                                 </div>
                               )}
-                              <p className="system-xs-regular text-text-tertiary">
-                                仅证明任务落在已登记主机，不代替正式网络、容量与业务验收
-                              </p>
-                            </section>
-                          )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  )}
 
-                          {item.action === 'site-install' && (
-                            <section
-                              aria-label={`空机初装进度：${item.tenant_id}`}
-                              className="space-y-1"
-                            >
-                              <p className="system-sm-semibold text-text-primary">
-                                空机初装 · {item.tenant_id}：
-                                {item.state === 'observed'
-                                  ? item.result.installation === 'already_installed'
-                                    ? '已装（原安装保留）'
-                                    : '已装'
-                                  : item.state === 'queued'
-                                    ? '待安装'
-                                    : taskLabels[item.state] || item.state}
-                              </p>
-                              {item.result.version && (
-                                <p className="system-xs-regular text-text-secondary">
-                                  实际版本：{item.result.version}
-                                </p>
-                              )}
-                              <p className="system-xs-regular text-text-tertiary">
-                                仅停用目录与公司连接 · 业务未验收 · 正式入口未启用
-                              </p>
-                            </section>
-                          )}
+                  {/* 2. 全环境运行对比表（收纳于此，不再占首屏） */}
+                  {overview && overview.environments.length > 0 && (
+                    <section
+                      aria-label="环境总览"
+                      className="overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg shadow-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle px-6 py-4">
+                        <div className="flex items-center gap-2">
+                          <h3 className="system-md-semibold text-text-primary">环境总览</h3>
+                          <span className="system-xs-regular text-text-tertiary">
+                            目录 R{overview.registry_revision}
+                            {overview.control_version ? ` · v${overview.control_version}` : ''}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left system-xs-regular">
+                          <thead>
+                            <tr className="border-b border-divider-subtle bg-background-section-burn/50 text-text-tertiary">
+                              <th className="px-6 py-2.5 font-medium">环境</th>
+                              <th className="px-3 py-2.5 font-medium">准入状态</th>
+                              <th className="px-3 py-2.5 font-medium">租户</th>
+                              <th className="px-3 py-2.5 font-medium">节点与版本</th>
+                              <th className="px-6 py-2.5 font-medium">草稿</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-divider-subtle">
+                            {overview.environments.map((env) => {
+                              const isCurrent = selected === env.id
+                              const activateEnv = () => {
+                                if (env.id === selected || busy) return
+                                navigate(() => {
+                                  if (rows.some((r) => r.id === env.id)) select(data, env.id)
+                                  else void load(env.id)
+                                })
+                              }
+                              return (
+                                <tr
+                                  key={env.id}
+                                  tabIndex={0}
+                                  onClick={activateEnv}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter' || event.key === ' ') {
+                                      event.preventDefault()
+                                      activateEnv()
+                                    }
+                                  }}
+                                  className={`cursor-pointer transition-colors focus-visible:outline-2 focus-visible:outline-state-accent-solid ${
+                                    isCurrent
+                                      ? 'bg-state-accent-hover/60'
+                                      : 'hover:bg-components-panel-on-panel-item-bg-hover'
+                                  }`}
+                                >
+                                  <td className="px-6 py-3 font-medium text-text-primary">
+                                    {env.name}（{env.id}）{env.is_control ? ' · 控制环境' : ''}
+                                  </td>
+                                  <td className="px-3 py-3">
+                                    <StatusPill tone={envTone(env.status)}>
+                                      {environmentStatusLabels[env.status] || env.status}
+                                    </StatusPill>
+                                  </td>
+                                  <td className="px-3 py-3 text-text-primary">
+                                    {env.enabled_tenant_count}/{env.tenant_count}
+                                  </td>
+                                  <td className="px-3 py-3 text-text-secondary">
+                                    {summarizeNodeCell(env)}
+                                  </td>
+                                  <td className="px-6 py-3 text-text-secondary">
+                                    {env.draft_revision != null ? `V${env.draft_revision}` : '无'}
+                                    {env.registry_changed ? '（目录已变更）' : ''}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  )}
 
-                          {item.action === 'candidate-install' && (
-                            <section
-                              aria-label={`候选安装进度：${item.tenant_id}`}
-                              className="flex flex-wrap items-center justify-between gap-3"
+                  {/* 3. 全量任务历史与单步排障操作 */}
+                  {selected && (
+                    <section
+                      aria-label="现场预检任务"
+                      className="space-y-4 rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-divider-subtle pb-4">
+                        <div className="flex items-center gap-2">
+                          <h3 className="system-md-semibold text-text-primary">环境准备任务</h3>
+                          <span className="rounded-full bg-background-section-burn px-2 py-0.5 system-xs-medium text-text-tertiary">
+                            共 {tasks.length} 条
+                          </span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="small"
+                          onClick={() => void siteTasks()}
+                        >
+                          刷新任务
+                        </Button>
+                      </div>
+
+                      {draftReady && (!plan || plan.state === 'expired') && tasks.length > 0 && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-background-section-burn/70 px-4 py-2.5">
+                          <span className="system-xs-regular text-text-secondary">
+                            执行单步登记、业务验证或正式发布前需持有有效预检计划。
+                          </span>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="small"
+                            disabled={busy}
+                            onClick={() => void preflight()}
+                          >
+                            配置与制品预检
+                          </Button>
+                        </div>
+                      )}
+
+                      {tasks.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {(
+                            [
+                              ['all', `全部 (${tasks.length})`],
+                              ['active', `进行中/待发布 (${activeTasksCount})`],
+                              ['lifecycle', `一键开通与发布 (${lifecycleTasksCount})`],
+                              ['single', `单步与核验 (${singleTasksCount})`],
+                            ] as const
+                          ).map(([key, label]) => (
+                            <button
+                              key={key}
+                              type="button"
+                              aria-pressed={taskFilter === key}
+                              onClick={() => setTaskFilter(key)}
+                              className={`cursor-pointer rounded-full border px-3 py-1 system-xs-medium transition-colors ${
+                                taskFilter === key
+                                  ? 'border-state-accent-solid bg-state-accent-hover text-text-accent'
+                                  : 'border-divider-subtle bg-components-card-bg text-text-secondary hover:bg-components-panel-on-panel-item-bg-hover'
+                              }`}
                             >
-                              <div className="space-y-1">
-                                <p className="system-sm-semibold text-text-primary">
-                                  停用候选安装 · {item.tenant_id}：
-                                  {taskLabels[item.state] || item.state}
-                                </p>
-                                {item.result.version && (
-                                  <p className="system-xs-regular text-text-secondary">
-                                    实际版本：{item.result.version}
-                                  </p>
-                                )}
-                                <p className="system-xs-regular text-text-tertiary">
-                                  安装回执不含运行登记 · 业务未验收 · 正式入口未启用
-                                </p>
-                              </div>
-                              {['installed', 'unchanged'].includes(
-                                item.result.installation || '',
-                              ) &&
-                                !item.cancel_requested && (
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {taskError && (
+                        <div className="rounded-xl border border-state-destructive-border bg-state-destructive-hover px-3.5 py-2.5">
+                          <p role="alert" className="system-xs-medium text-text-destructive">
+                            {taskError}
+                          </p>
+                        </div>
+                      )}
+
+                      {visibleOpsTasks.length === 0 && (
+                        <div className="flex flex-col items-center justify-center gap-2 rounded-xl bg-background-section-burn/50 py-6 text-center">
+                          <p className="system-sm-regular text-text-secondary">
+                            {tasks.length === 0 ? '当前环境暂无任务记录' : '当前筛选下无任务记录'}
+                          </p>
+                          {tasks.length > 0 && taskFilter !== 'all' && (
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="small"
+                              onClick={() => setTaskFilter('all')}
+                            >
+                              查看全部任务（{tasks.length}）
+                            </Button>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="divide-y divide-divider-subtle">
+                        {visibleOpsTasks.map((item) => {
+                          const simpleStatusText =
+                            item.action === 'workspace-prepare' && item.state === 'observed'
+                              ? '候选工作区已准备'
+                              : item.action === 'knowledge-prepare' && item.state === 'observed'
+                                ? '候选知识资源已准备'
+                                : item.action === 'knowledge-connect' && item.state === 'observed'
+                                  ? '候选知识连接已准备'
+                                  : item.action === 'operator-prepare' && item.state === 'observed'
+                                    ? '候选管家应用已准备（入口停用）'
+                                    : item.action === 'consumer-prepare' &&
+                                        item.state === 'observed'
+                                      ? '候选消费者应用已准备（入口停用）'
+                                      : taskLabels[item.state] || item.state
+
+                          return (
+                            <article key={item.id} className="space-y-3 py-4 first:pt-1 last:pb-0">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <CopyableChip value={item.id} />
+                                  <StatusPill tone={taskTone(item.state)}>
+                                    {simpleStatusText}
+                                    {item.cancel_requested && item.state === 'running'
+                                      ? ' · 等待安全取消'
+                                      : ''}
+                                  </StatusPill>
+                                  {item.error_code && (
+                                    <StatusPill tone="error" dot={false}>
+                                      {item.error_code}
+                                    </StatusPill>
+                                  )}
+                                </div>
+
+                                {['queued', 'running', 'reconcile'].includes(item.state) && (
                                   <Button
                                     type="button"
                                     variant="secondary"
                                     size="small"
-                                    disabled={
-                                      busy ||
-                                      dirty ||
-                                      saved?.registry_changed ||
-                                      !plan ||
-                                      plan.state === 'expired'
-                                    }
-                                    onClick={() => {
-                                      if (
-                                        plan &&
-                                        confirmAction(
-                                          '登记该已安装候选的工作区与双端应用？不重启、不启用正式入口；失联后只核对。',
-                                        )
-                                      )
-                                        void siteTasks({
-                                          installation_task: item.id,
-                                          registration_plan: plan.id,
-                                        })
-                                    }}
+                                    onClick={() => void siteTasks({ id: item.id, cancel: true })}
                                   >
-                                    登记已安装候选：{item.tenant_id}
+                                    {item.action === 'tenant-onboard'
+                                      ? '取消一键开通'
+                                      : item.action === 'environment-publish'
+                                        ? '停止开通并恢复'
+                                        : item.action === 'candidate-validate'
+                                          ? '取消业务验证（等待本轮结束）'
+                                          : item.action === 'candidate-register'
+                                            ? '取消运行登记（等待安全结果）'
+                                            : item.action === 'candidate-install'
+                                              ? '取消候选安装（等待安全结果）'
+                                              : item.action === 'consumer-prepare'
+                                                ? '取消消费者准备'
+                                                : item.action === 'operator-prepare'
+                                                  ? '取消管家准备'
+                                                  : item.action === 'knowledge-connect'
+                                                    ? '取消知识连接准备'
+                                                    : item.action === 'knowledge-prepare'
+                                                      ? '取消知识准备'
+                                                      : item.action === 'workspace-prepare'
+                                                        ? '取消工作区准备'
+                                                        : '取消现场预检'}
                                   </Button>
                                 )}
-                            </section>
-                          )}
+                              </div>
 
-                          {item.action === 'candidate-register' && (
-                            <div className="space-y-3">
-                              <section
-                                aria-label={`候选登记进度：${item.tenant_id}`}
-                                className="space-y-1"
-                              >
-                                <p className="system-sm-semibold text-text-primary">
-                                  候选运行登记 · {item.tenant_id}：
-                                  {taskLabels[item.state] || item.state}
-                                </p>
-                                <p className="system-xs-regular text-text-tertiary">
-                                  {['registered', 'unchanged'].includes(item.result.result || '')
-                                    ? '运行资源已登记'
-                                    : '运行登记尚未确认'}{' '}
-                                  · 业务未验收 · 正式入口未启用
-                                </p>
-                              </section>
-                              {['registered', 'unchanged'].includes(item.result.result || '') && (
+                              {/* 一键开通 */}
+                              {item.action === 'tenant-onboard' && (
                                 <section
-                                  aria-label={`业务验证选择：${item.tenant_id}`}
-                                  className="space-y-3 rounded-xl border border-divider-subtle bg-components-panel-bg p-3.5"
+                                  aria-label={`一键开通进度：${item.tenant_id}`}
+                                  className="space-y-2.5"
                                 >
-                                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-                                    <div className="space-y-1">
-                                      <label
-                                        htmlFor={`case-${item.id}`}
-                                        className="block system-xs-medium text-text-secondary"
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="system-sm-semibold text-text-primary">
+                                      一键开通 · {item.tenant_id}：
+                                      {item.state === 'observed'
+                                        ? item.result.ready_to_publish
+                                          ? '技术验收已就绪，待人工确认发布'
+                                          : '运行登记已完成，尚未启用正式入口'
+                                        : taskLabels[item.state] || item.state}
+                                    </p>
+                                    {renderPublishConfirmButton(item)}
+                                  </div>
+                                  {(item.result.stages || []).length > 0 && (
+                                    <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                                      {(item.result.stages || []).map((stage) => (
+                                        <li
+                                          key={stage.action}
+                                          className="space-y-1 rounded-lg bg-background-section-burn/70 p-2.5 system-xs-regular"
+                                        >
+                                          <div className="flex items-center gap-1.5 font-medium text-text-primary">
+                                            <StatusDot
+                                              status={badgeToneStyles[taskTone(stage.state)].dot}
+                                              size="small"
+                                            />
+                                            <span>
+                                              {onboardingStageLabels[stage.action] || stage.action}
+                                              ：{taskLabels[stage.state] || stage.state}
+                                              {stage.version ? ` · v${stage.version}` : ''}
+                                            </span>
+                                          </div>
+                                          <span className="block font-mono text-[11px] break-all text-text-tertiary">
+                                            {stage.id}
+                                          </span>
+                                          {stage.error_code && (
+                                            <span
+                                              role="alert"
+                                              className="block text-[11px] text-text-destructive"
+                                            >
+                                              {stage.error_code}
+                                            </span>
+                                          )}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </section>
+                              )}
+
+                              {/* 正式发布 */}
+                              {item.action === 'environment-publish' && (
+                                <section className="flex flex-wrap items-center justify-between gap-3">
+                                  <p className="system-sm-semibold text-text-primary">
+                                    正式开通 · {item.tenant_id}：
+                                    {publicationPhases[String(item.result?.phase || '')] ||
+                                      String(item.result?.phase || '')}
+                                    ，准入 {item.result?.activated ? '已启用' : '未启用'}
+                                    ，业务准确性待人工确认
+                                  </p>
+                                  {['observed', 'reconcile', 'blocked'].includes(item.state) &&
+                                    item.result?.phase !== 'restored' && (
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        tone="destructive"
+                                        size="small"
+                                        disabled={busy}
+                                        onClick={() => {
+                                          if (
+                                            confirmAction(
+                                              '关闭本次租户准入，按原记录恢复路由和配置？其他租户保持，恢复推进新修订，不删除运行历史。',
+                                            )
+                                          )
+                                            void siteTasks({ restore_publication: item.id })
+                                        }}
                                       >
-                                        受控验收案例
-                                      </label>
-                                      <Input
-                                        id={`case-${item.id}`}
-                                        value={caseRef}
-                                        onChange={(e) => setCaseRef(e.target.value)}
-                                        placeholder="填写已登记案例编号"
-                                      />
+                                        恢复本次开通
+                                      </Button>
+                                    )}
+                                </section>
+                              )}
+
+                              {item.action === 'workspace-prepare' && (
+                                <p className="system-sm-semibold text-text-primary">
+                                  候选工作区 · {item.tenant_id}
+                                </p>
+                              )}
+                              {item.action === 'knowledge-prepare' && (
+                                <p className="system-sm-semibold text-text-primary">
+                                  候选知识资源 · {item.tenant_id}
+                                </p>
+                              )}
+                              {item.action === 'knowledge-connect' && (
+                                <p className="system-sm-semibold text-text-primary">
+                                  候选知识连接 · {item.tenant_id}
+                                </p>
+                              )}
+                              {item.action === 'operator-prepare' && (
+                                <p className="system-sm-semibold text-text-primary">
+                                  候选管家应用 · {item.tenant_id}
+                                </p>
+                              )}
+                              {item.action === 'consumer-prepare' && (
+                                <p className="system-sm-semibold text-text-primary">
+                                  候选消费者应用 · {item.tenant_id}
+                                </p>
+                              )}
+
+                              {item.action === 'host-verify' && (
+                                <section
+                                  aria-label={`主机身份验收：${item.environment}`}
+                                  className="space-y-1"
+                                >
+                                  <p className="system-sm-semibold text-text-primary">
+                                    主机身份验收 · {item.environment}：
+                                    {taskLabels[item.state] || item.state}
+                                  </p>
+                                  {item.result.evidence && (
+                                    <div className="flex flex-wrap gap-3 system-xs-regular text-text-secondary">
+                                      <span>
+                                        现场主机：{item.result.evidence.remote_hostname || '未采集'}
+                                      </span>
+                                      <span>
+                                        服务身份：
+                                        {item.result.evidence.service_user_present
+                                          ? '存在'
+                                          : '缺失'}
+                                      </span>
                                     </div>
+                                  )}
+                                  <p className="system-xs-regular text-text-tertiary">
+                                    仅证明任务落在已登记主机，不代替正式网络、容量与业务验收
+                                  </p>
+                                </section>
+                              )}
+
+                              {item.action === 'site-install' && (
+                                <section
+                                  aria-label={`空机初装进度：${item.tenant_id}`}
+                                  className="space-y-1"
+                                >
+                                  <p className="system-sm-semibold text-text-primary">
+                                    空机初装 · {item.tenant_id}：
+                                    {item.state === 'observed'
+                                      ? item.result.installation === 'already_installed'
+                                        ? '已装（原安装保留）'
+                                        : '已装'
+                                      : item.state === 'queued'
+                                        ? '待安装'
+                                        : taskLabels[item.state] || item.state}
+                                  </p>
+                                  {item.result.version && (
+                                    <p className="system-xs-regular text-text-secondary">
+                                      实际版本：{item.result.version}
+                                    </p>
+                                  )}
+                                </section>
+                              )}
+
+                              {item.action === 'candidate-install' && (
+                                <section
+                                  aria-label={`候选安装进度：${item.tenant_id}`}
+                                  className="flex flex-wrap items-center justify-between gap-3"
+                                >
+                                  <div className="space-y-0.5">
+                                    <p className="system-sm-semibold text-text-primary">
+                                      停用候选安装 · {item.tenant_id}：
+                                      {taskLabels[item.state] || item.state}
+                                    </p>
+                                    {item.result.version && (
+                                      <p className="system-xs-regular text-text-secondary">
+                                        实际版本：{item.result.version}
+                                      </p>
+                                    )}
+                                    <p className="system-xs-regular text-text-tertiary">
+                                      安装回执不含运行登记 · 业务未验收 · 正式入口未启用
+                                    </p>
+                                  </div>
+                                  {['installed', 'unchanged'].includes(
+                                    item.result.installation || '',
+                                  ) &&
+                                    !item.cancel_requested && (
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="small"
+                                        disabled={
+                                          busy ||
+                                          dirty ||
+                                          saved?.registry_changed ||
+                                          !plan ||
+                                          plan.state === 'expired'
+                                        }
+                                        onClick={() => {
+                                          if (
+                                            plan &&
+                                            confirmAction(
+                                              '登记该已安装候选的工作区与双端应用？不重启、不启用正式入口；失联后只核对。',
+                                            )
+                                          )
+                                            void siteTasks({
+                                              installation_task: item.id,
+                                              registration_plan: plan.id,
+                                            })
+                                        }}
+                                      >
+                                        登记已安装候选：{item.tenant_id}
+                                      </Button>
+                                    )}
+                                </section>
+                              )}
+
+                              {item.action === 'candidate-register' && (
+                                <div className="space-y-3">
+                                  <section aria-label={`候选登记进度：${item.tenant_id}`}>
+                                    <p className="system-sm-semibold text-text-primary">
+                                      候选运行登记 · {item.tenant_id}：
+                                      {taskLabels[item.state] || item.state}
+                                    </p>
+                                    <p className="system-xs-regular text-text-tertiary">
+                                      {['registered', 'unchanged'].includes(
+                                        item.result.result || '',
+                                      )
+                                        ? '运行资源已登记'
+                                        : '运行登记尚未确认'}{' '}
+                                      · 业务未验收 · 正式入口未启用
+                                    </p>
+                                  </section>
+                                  {['registered', 'unchanged'].includes(
+                                    item.result.result || '',
+                                  ) && (
+                                    <section
+                                      aria-label={`业务验证选择：${item.tenant_id}`}
+                                      className="space-y-3 rounded-xl bg-background-section-burn/60 p-3.5"
+                                    >
+                                      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                                        <div className="space-y-1">
+                                          <label
+                                            htmlFor={`case-${item.id}`}
+                                            className="block system-xs-medium text-text-secondary"
+                                          >
+                                            受控验收案例
+                                          </label>
+                                          <Input
+                                            id={`case-${item.id}`}
+                                            value={caseRef}
+                                            onChange={(e) => setCaseRef(e.target.value)}
+                                            placeholder="填写已登记案例编号"
+                                          />
+                                        </div>
+                                        <Button
+                                          type="button"
+                                          variant="secondary-accent"
+                                          disabled={
+                                            busy ||
+                                            dirty ||
+                                            saved?.registry_changed ||
+                                            !plan ||
+                                            plan.state === 'expired' ||
+                                            !/^[\w-]{1,64}$/.test(caseRef) ||
+                                            !capabilities.length
+                                          }
+                                          onClick={() => {
+                                            if (
+                                              plan &&
+                                              confirmAction(
+                                                '使用受控测试身份运行所选业务验证？不修改业务数据，不启用正式入口。',
+                                              )
+                                            )
+                                              void siteTasks({
+                                                registration_task: item.id,
+                                                validation_plan: plan.id,
+                                                capabilities,
+                                                case_ref: caseRef,
+                                              })
+                                          }}
+                                        >
+                                          验证已登记业务：{item.tenant_id}
+                                        </Button>
+                                      </div>
+                                      <fieldset className="flex flex-wrap items-center gap-4">
+                                        <legend className="mb-1 system-xs-medium text-text-tertiary">
+                                          本次验证范围
+                                        </legend>
+                                        {Object.entries({
+                                          consumer: '智能客服（知识与本人订单）',
+                                          order: '异常订单分析',
+                                          offline: '离线分析',
+                                        }).map(([key, label]) => (
+                                          <label
+                                            key={key}
+                                            className="flex cursor-pointer items-center gap-1.5 system-xs-regular text-text-secondary"
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={capabilities.includes(key)}
+                                              onChange={(e) =>
+                                                setCapabilities((values) =>
+                                                  e.target.checked
+                                                    ? [...values, key]
+                                                    : values.filter((value) => value !== key),
+                                                )
+                                              }
+                                            />
+                                            <span>{label}</span>
+                                          </label>
+                                        ))}
+                                      </fieldset>
+                                    </section>
+                                  )}
+                                </div>
+                              )}
+
+                              {item.action === 'candidate-validate' && (
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <p className="system-sm-semibold text-text-primary">
+                                    业务技术验证 · {item.tenant_id}：
+                                    {taskLabels[item.state] || item.state}
+                                    ；业务准确性待确认，正式入口未启用
+                                  </p>
+                                  {item.state === 'observed' && (
                                     <Button
                                       type="button"
-                                      variant="secondary-accent"
+                                      variant="primary"
+                                      size="small"
                                       disabled={
                                         busy ||
                                         dirty ||
                                         saved?.registry_changed ||
                                         !plan ||
-                                        plan.state === 'expired' ||
-                                        !/^[\w-]{1,64}$/.test(caseRef) ||
-                                        !capabilities.length
+                                        plan.state === 'expired'
                                       }
                                       onClick={() => {
                                         if (
                                           plan &&
                                           confirmAction(
-                                            '使用受控测试身份运行所选业务验证？不修改业务数据，不启用正式入口。',
+                                            '按只读诊断范围发布并开通，并授权本应用所选知识库对客使用？系统会重新核验三项业务、权限、网络和容量；缺项不会启用，业务准确性仍待人工确认。',
                                           )
                                         )
                                           void siteTasks({
-                                            registration_task: item.id,
-                                            validation_plan: plan.id,
-                                            capabilities,
-                                            case_ref: caseRef,
+                                            validation_task: item.id,
+                                            publication_plan: plan.id,
+                                            confirm_readonly: true,
+                                            confirm_customer_knowledge: true,
+                                            acceptance_ref: 'readonly-diagnosis',
                                           })
                                       }}
                                     >
-                                      验证已登记业务：{item.tenant_id}
+                                      发布并开通：{item.tenant_id}
                                     </Button>
-                                  </div>
-                                  <fieldset className="flex flex-wrap items-center gap-4">
-                                    <legend className="mb-1.5 system-xs-medium text-text-tertiary">
-                                      本次验证范围
-                                    </legend>
-                                    {Object.entries({
-                                      consumer: '智能客服（知识与本人订单）',
-                                      order: '异常订单分析',
-                                      offline: '离线分析',
-                                    }).map(([key, label]) => (
-                                      <label
-                                        key={key}
-                                        className="flex cursor-pointer items-center gap-1.5 system-xs-regular text-text-secondary"
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={capabilities.includes(key)}
-                                          onChange={(e) =>
-                                            setCapabilities((values) =>
-                                              e.target.checked
-                                                ? [...values, key]
-                                                : values.filter((value) => value !== key),
+                                  )}
+                                </div>
+                              )}
+
+                              {item.action === 'candidate-prepare' && (
+                                <section
+                                  aria-label={`候选准备进度：${item.tenant_id}`}
+                                  className="space-y-2.5"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="system-sm-semibold text-text-primary">
+                                      候选准备 · {item.tenant_id}：
+                                      {item.state === 'observed'
+                                        ? '资源已准备，尚未开通'
+                                        : taskLabels[item.state] || item.state}
+                                    </p>
+                                    {item.state === 'observed' && (
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="small"
+                                        disabled={busy || dirty || saved?.registry_changed}
+                                        onClick={() => {
+                                          if (
+                                            confirmAction(
+                                              '安装该停用候选的配置与运行接线？不会启用正式入口；在飞取消会等待安全结果。',
                                             )
-                                          }
-                                        />
-                                        <span>{label}</span>
-                                      </label>
-                                    ))}
-                                  </fieldset>
+                                          )
+                                            void siteTasks({
+                                              candidate_task: item.id,
+                                              installation: true,
+                                            })
+                                        }}
+                                      >
+                                        安装停用候选：{item.tenant_id}
+                                      </Button>
+                                    )}
+                                  </div>
+                                  {(item.result.steps || []).length > 0 && (
+                                    <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                      {(item.result.steps || []).map((step) => (
+                                        <li
+                                          key={step.action}
+                                          className="rounded-lg bg-background-section-burn/70 p-2 system-xs-regular"
+                                        >
+                                          <div className="flex items-center gap-1.5 font-medium text-text-primary">
+                                            <StatusDot
+                                              status={badgeToneStyles[taskTone(step.state)].dot}
+                                              size="small"
+                                            />
+                                            <span>
+                                              {preparationSteps[step.action] || step.action}：
+                                              {taskLabels[step.state] || step.state}
+                                            </span>
+                                          </div>
+                                          <span className="block font-mono text-[11px] break-all text-text-tertiary">
+                                            {step.id}
+                                          </span>
+                                          {step.error_code && (
+                                            <span role="alert" className="text-text-destructive">
+                                              {step.error_code}
+                                            </span>
+                                          )}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                  <p className="system-xs-regular text-text-tertiary">
+                                    {item.result.initial_installation != null
+                                      ? `基础初装：${
+                                          initialInstallationLabels[
+                                            item.result.initial_installation
+                                          ] || item.result.initial_installation
+                                        } · 运行安装未执行 · 业务未验收 · 正式入口未启用`
+                                      : '安装未执行 · 业务未验收 · 正式入口未启用'}
+                                  </p>
                                 </section>
                               )}
-                            </div>
-                          )}
 
-                          {item.action === 'candidate-validate' && (
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <p className="system-sm-semibold text-text-primary">
-                                业务技术验证 · {item.tenant_id}：
-                                {taskLabels[item.state] || item.state}
-                                ；业务准确性待确认，正式入口未启用
-                              </p>
-                              {item.state === 'observed' && (
-                                <Button
-                                  type="button"
-                                  variant="primary"
-                                  size="small"
-                                  disabled={busy || dirty || !plan || plan.state === 'expired'}
-                                  onClick={() => {
-                                    if (
-                                      plan &&
-                                      confirmAction(
-                                        '按只读诊断范围发布并开通，并授权本应用所选知识库对客使用？系统会重新核验三项业务、权限、网络和容量；缺项不会启用，业务准确性仍待人工确认。',
-                                      )
-                                    )
-                                      void siteTasks({
-                                        validation_task: item.id,
-                                        publication_plan: plan.id,
-                                        confirm_readonly: true,
-                                        confirm_customer_knowledge: true,
-                                        acceptance_ref: 'readonly-diagnosis',
-                                      })
-                                  }}
-                                >
-                                  发布并开通：{item.tenant_id}
-                                </Button>
+                              {(item.result.workspace_id ||
+                                item.result.knowledge_base_id ||
+                                item.result.connection_id ||
+                                item.result.app_id) && (
+                                <div className="flex flex-wrap gap-2">
+                                  {item.result.workspace_id && (
+                                    <p className="rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] break-all text-text-secondary">
+                                      工作区编号：{item.result.workspace_id}
+                                    </p>
+                                  )}
+                                  {item.result.knowledge_base_id && (
+                                    <p className="rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] break-all text-text-secondary">
+                                      知识库编号：{item.result.knowledge_base_id}
+                                    </p>
+                                  )}
+                                  {item.result.connection_id && (
+                                    <p className="rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] break-all text-text-secondary">
+                                      连接编号：{item.result.connection_id}
+                                    </p>
+                                  )}
+                                  {item.result.app_id && (
+                                    <p className="rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] break-all text-text-secondary">
+                                      应用编号：{item.result.app_id}
+                                    </p>
+                                  )}
+                                </div>
                               )}
-                            </div>
-                          )}
 
-                          {item.action === 'candidate-prepare' && (
-                            <section
-                              aria-label={`候选准备进度：${item.tenant_id}`}
-                              className="space-y-2.5"
-                            >
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="system-sm-semibold text-text-primary">
-                                  候选准备 · {item.tenant_id}：
-                                  {item.state === 'observed'
-                                    ? '资源已准备，尚未开通'
-                                    : taskLabels[item.state] || item.state}
-                                </p>
-                                {item.state === 'observed' && (
-                                  <Button
-                                    type="button"
-                                    variant="secondary"
-                                    size="small"
-                                    disabled={busy || dirty || saved?.registry_changed}
-                                    onClick={() => {
-                                      if (
-                                        confirmAction(
-                                          '安装该停用候选的配置与运行接线？不会启用正式入口；在飞取消会等待安全结果。',
-                                        )
-                                      )
-                                        void siteTasks({
-                                          candidate_task: item.id,
-                                          installation: true,
-                                        })
-                                    }}
-                                  >
-                                    安装停用候选：{item.tenant_id}
-                                  </Button>
-                                )}
-                              </div>
-                              {(item.result.steps || []).length > 0 && (
-                                <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                                  {(item.result.steps || []).map((step) => (
-                                    <li
-                                      key={step.action}
-                                      className="rounded-lg border border-divider-subtle bg-components-panel-bg p-2 system-xs-regular"
-                                    >
-                                      <div className="flex items-center gap-1.5 font-medium text-text-primary">
+                              {item.result.checks && item.result.checks.length > 0 && (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {item.result.checks.map((check) => {
+                                    const tone: BadgeTone =
+                                      check.state === 'passed'
+                                        ? 'success'
+                                        : check.state === 'blocked'
+                                          ? 'error'
+                                          : 'neutral'
+                                    const label =
+                                      checkLabels[check.id || ''] ||
+                                      capabilityLabels[check.capability || ''] ||
+                                      check.id
+                                    const stateText =
+                                      check.state === 'passed'
+                                        ? '通过'
+                                        : check.state === 'blocked'
+                                          ? '阻塞'
+                                          : '未验证'
+                                    return (
+                                      <p
+                                        key={check.id || check.capability}
+                                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 system-xs-regular ${badgeToneStyles[tone].wrap}`}
+                                      >
                                         <StatusDot
-                                          status={badgeToneStyles[taskTone(step.state)].dot}
+                                          status={badgeToneStyles[tone].dot}
                                           size="small"
                                         />
                                         <span>
-                                          {preparationSteps[step.action] || step.action}：
-                                          {taskLabels[step.state] || step.state}
+                                          {label}：{stateText}
+                                          {check.error_code ? ` ${check.error_code}` : ''}
                                         </span>
-                                      </div>
-                                      <span className="block font-mono text-[11px] break-all text-text-tertiary">
-                                        {step.id}
-                                      </span>
-                                      {step.error_code && (
-                                        <span role="alert" className="text-text-destructive">
-                                          {step.error_code}
-                                        </span>
-                                      )}
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                              <p className="system-xs-regular text-text-tertiary">
-                                {item.result.initial_installation != null
-                                  ? `基础初装：${
-                                      initialInstallationLabels[item.result.initial_installation] ||
-                                      item.result.initial_installation
-                                    } · 运行安装未执行 · 业务未验收 · 正式入口未启用`
-                                  : '安装未执行 · 业务未验收 · 正式入口未启用'}
-                              </p>
-                            </section>
-                          )}
-
-                          {/* 产出的资源标识胶囊 */}
-                          {(item.result.workspace_id ||
-                            item.result.knowledge_base_id ||
-                            item.result.connection_id ||
-                            item.result.app_id) && (
-                            <div className="flex flex-wrap gap-2">
-                              {item.result.workspace_id && (
-                                <p className="rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] break-all text-text-secondary">
-                                  工作区编号：{item.result.workspace_id}
-                                </p>
-                              )}
-                              {item.result.knowledge_base_id && (
-                                <p className="rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] break-all text-text-secondary">
-                                  知识库编号：{item.result.knowledge_base_id}
-                                </p>
-                              )}
-                              {item.result.connection_id && (
-                                <p className="rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] break-all text-text-secondary">
-                                  连接编号：{item.result.connection_id}
-                                </p>
-                              )}
-                              {item.result.app_id && (
-                                <p className="rounded-md bg-background-section-burn px-2 py-0.5 font-mono text-[11px] break-all text-text-secondary">
-                                  应用编号：{item.result.app_id}
-                                </p>
-                              )}
-                            </div>
-                          )}
-
-                          {/* 逐项核验结果胶囊网格 */}
-                          {item.result.checks && item.result.checks.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5">
-                              {item.result.checks.map((check) => {
-                                const tone: BadgeTone =
-                                  check.state === 'passed'
-                                    ? 'success'
-                                    : check.state === 'blocked'
-                                      ? 'error'
-                                      : 'neutral'
-                                const label =
-                                  checkLabels[check.id || ''] ||
-                                  capabilityLabels[check.capability || ''] ||
-                                  check.id
-                                const stateText =
-                                  check.state === 'passed'
-                                    ? '通过'
-                                    : check.state === 'blocked'
-                                      ? '阻塞'
-                                      : '未验证'
-                                return (
-                                  <p
-                                    key={check.id || check.capability}
-                                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 system-xs-regular ${badgeToneStyles[tone].wrap}`}
-                                  >
-                                    <StatusDot status={badgeToneStyles[tone].dot} size="small" />
-                                    <span>
-                                      {label}：{stateText}
-                                      {check.error_code ? ` ${check.error_code}` : ''}
-                                    </span>
-                                  </p>
-                                )
-                              })}
-                            </div>
-                          )}
-
-                          {/* 单步任务下游接续操作按钮 */}
-                          {item.action === 'knowledge-connect' &&
-                            item.state === 'observed' &&
-                            !dirty &&
-                            !saved?.registry_changed && (
-                              <div className="space-y-2.5 rounded-xl border border-divider-subtle bg-components-panel-bg p-3">
-                                <div className="flex flex-wrap gap-2">
-                                  <Button
-                                    type="button"
-                                    variant="secondary"
-                                    size="small"
-                                    disabled={busy}
-                                    onClick={() =>
-                                      void siteTasks({
-                                        connection_task: item.id,
-                                        tenant_id: item.tenant_id,
-                                      })
-                                    }
-                                  >
-                                    准备候选管家应用：{item.tenant_id}
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="secondary"
-                                    size="small"
-                                    onClick={() => void siteTasks({ consumer_sources: true })}
-                                  >
-                                    读取正式消费者模板
-                                  </Button>
+                                      </p>
+                                    )
+                                  })}
                                 </div>
-                                {consumerSources.length > 0 && (
-                                  <div className="flex flex-wrap items-end gap-2">
-                                    <label className="min-w-52 flex-1 space-y-1 system-xs-medium text-text-secondary">
-                                      <span>消费者来源模板：{item.tenant_id}</span>
-                                      <select
-                                        className="block h-8 w-full rounded-lg border border-divider-regular bg-components-card-bg px-2.5 system-xs-regular text-text-primary"
-                                        aria-label={`消费者来源模板：${item.tenant_id}`}
-                                        value={consumerSource}
-                                        onChange={(event) => setConsumerSource(event.target.value)}
+                              )}
+
+                              {item.action === 'knowledge-connect' &&
+                                item.state === 'observed' &&
+                                !dirty &&
+                                !saved?.registry_changed && (
+                                  <div className="space-y-2.5 rounded-xl bg-background-section-burn/60 p-3">
+                                    <div className="flex flex-wrap gap-2">
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="small"
+                                        disabled={busy}
+                                        onClick={() =>
+                                          void siteTasks({
+                                            connection_task: item.id,
+                                            tenant_id: item.tenant_id,
+                                          })
+                                        }
                                       >
-                                        <option value="">请选择已发布模板</option>
-                                        {consumerSources.map((source) => (
-                                          <option key={source.app_id} value={source.app_id}>
-                                            {source.name} · v{source.version_no}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </label>
+                                        准备候选管家应用：{item.tenant_id}
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="small"
+                                        onClick={() => void siteTasks({ consumer_sources: true })}
+                                      >
+                                        读取正式消费者模板
+                                      </Button>
+                                    </div>
+                                    {consumerSources.length > 0 && (
+                                      <div className="flex flex-wrap items-end gap-2">
+                                        <label className="min-w-52 flex-1 space-y-1 system-xs-medium text-text-secondary">
+                                          <span>消费者来源模板：{item.tenant_id}</span>
+                                          <select
+                                            className="block h-8 w-full rounded-lg border border-divider-regular bg-components-panel-bg px-2.5 system-xs-regular text-text-primary"
+                                            aria-label={`消费者来源模板：${item.tenant_id}`}
+                                            value={consumerSource}
+                                            onChange={(event) =>
+                                              setConsumerSource(event.target.value)
+                                            }
+                                          >
+                                            <option value="">请选择已发布模板</option>
+                                            {consumerSources.map((source) => (
+                                              <option key={source.app_id} value={source.app_id}>
+                                                {source.name} · v{source.version_no}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </label>
+                                        <Button
+                                          type="button"
+                                          variant="secondary"
+                                          size="small"
+                                          disabled={busy || !consumerSource}
+                                          onClick={() =>
+                                            void siteTasks({
+                                              connection_task: item.id,
+                                              tenant_id: item.tenant_id,
+                                              source_app_id: consumerSource,
+                                              source_version: consumerSources.find(
+                                                (source) => source.app_id === consumerSource,
+                                              )?.version_no,
+                                            })
+                                          }
+                                        >
+                                          准备候选消费者应用：{item.tenant_id}
+                                        </Button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                              {item.action === 'knowledge-prepare' &&
+                                item.state === 'observed' &&
+                                !dirty &&
+                                !saved?.registry_changed && (
+                                  <div>
                                     <Button
                                       type="button"
                                       variant="secondary"
                                       size="small"
-                                      disabled={busy || !consumerSource}
+                                      disabled={busy}
                                       onClick={() =>
                                         void siteTasks({
-                                          connection_task: item.id,
+                                          knowledge_task: item.id,
                                           tenant_id: item.tenant_id,
-                                          source_app_id: consumerSource,
-                                          source_version: consumerSources.find(
-                                            (source) => source.app_id === consumerSource,
-                                          )?.version_no,
                                         })
                                       }
                                     >
-                                      准备候选消费者应用：{item.tenant_id}
+                                      准备候选知识连接：{item.tenant_id}
                                     </Button>
                                   </div>
                                 )}
-                              </div>
-                            )}
 
-                          {item.action === 'knowledge-prepare' &&
-                            item.state === 'observed' &&
-                            !dirty &&
-                            !saved?.registry_changed && (
-                              <div>
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="small"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    void siteTasks({
-                                      knowledge_task: item.id,
-                                      tenant_id: item.tenant_id,
-                                    })
-                                  }
-                                >
-                                  准备候选知识连接：{item.tenant_id}
-                                </Button>
-                              </div>
-                            )}
+                              {item.action === 'workspace-prepare' &&
+                                item.state === 'observed' &&
+                                !dirty &&
+                                !saved?.registry_changed && (
+                                  <div>
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      size="small"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        void siteTasks({
+                                          workspace_task: item.id,
+                                          tenant_id: item.tenant_id,
+                                        })
+                                      }
+                                    >
+                                      准备候选知识资源：{item.tenant_id}
+                                    </Button>
+                                  </div>
+                                )}
 
-                          {item.action === 'workspace-prepare' &&
-                            item.state === 'observed' &&
-                            !dirty &&
-                            !saved?.registry_changed && (
-                              <div>
-                                <Button
-                                  type="button"
-                                  variant="secondary"
-                                  size="small"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    void siteTasks({
-                                      workspace_task: item.id,
-                                      tenant_id: item.tenant_id,
-                                    })
-                                  }
-                                >
-                                  准备候选知识资源：{item.tenant_id}
-                                </Button>
-                              </div>
-                            )}
-
-                          {item.state === 'observed' &&
-                            (!item.action || item.action === 'site-preflight') &&
-                            saved &&
-                            !dirty &&
-                            !saved.registry_changed && (
-                              <div className="flex flex-wrap gap-2">
-                                {saved.draft.tenants.map((tenant) => (
-                                  <Button
-                                    key={tenant.id}
-                                    type="button"
-                                    variant="secondary"
-                                    size="small"
-                                    disabled={busy}
-                                    onClick={() =>
-                                      void siteTasks({ site_task: item.id, tenant_id: tenant.id })
-                                    }
-                                  >
-                                    准备候选工作区：{tenant.name}（{tenant.id}）
-                                  </Button>
-                                ))}
-                              </div>
-                            )}
-                        </article>
-                      )
-                    })}
-                  </div>
-                </section>
+                              {item.state === 'observed' &&
+                                (!item.action || item.action === 'site-preflight') &&
+                                saved &&
+                                !dirty &&
+                                !saved.registry_changed && (
+                                  <div className="flex flex-wrap gap-2">
+                                    {saved.draft.tenants.map((tenant) => (
+                                      <Button
+                                        key={tenant.id}
+                                        type="button"
+                                        variant="secondary"
+                                        size="small"
+                                        disabled={busy}
+                                        onClick={() =>
+                                          void siteTasks({
+                                            site_task: item.id,
+                                            tenant_id: tenant.id,
+                                          })
+                                        }
+                                      >
+                                        准备候选工作区：{tenant.name}（{tenant.id}）
+                                      </Button>
+                                    ))}
+                                  </div>
+                                )}
+                            </article>
+                          )
+                        })}
+                      </div>
+                    </section>
+                  )}
+                </div>
               )}
             </div>
           </div>
