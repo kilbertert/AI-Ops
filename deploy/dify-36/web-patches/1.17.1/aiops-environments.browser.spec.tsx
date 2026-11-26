@@ -1978,14 +1978,34 @@ test('5 步自助开通向导：双模式主机引导、二次确认受限库修
         }
         if (body.wizard_action === 'infra_provision') {
           return Response.json({
+            job_id: 'wizjob_0123456789abcdef01234567',
+            state: 'completed',
             environment: 'jiejia',
             passed: true,
             failed_step: '',
+            consumer_kb_id: 'kb-con-jiejia',
+            operator_kb_id: 'kb-op-jiejia',
             steps: [
               { step: 'allowlist', state: 'passed' },
               { step: 'execution_node', state: 'passed' },
+              { step: 'cold_install_and_onboard', state: 'passed' },
               { step: 'customer_nginx', state: 'passed' },
               { step: 'live_probe', state: 'passed', anon_assistant_status: 401, upms_tenant_list_status: 200 },
+            ],
+          })
+        }
+        if (body.wizard_action === 'publish_environment') {
+          return Response.json({
+            job_id: 'wizjob_fedcba9876543210fedcba98',
+            state: 'completed',
+            environment: 'jiejia',
+            tenant_id: '1990990768688599040',
+            passed: true,
+            published: true,
+            steps: [
+              { step: 'enable_registry', state: 'passed' },
+              { step: 'sync_target_runtime', state: 'passed' },
+              { step: 'activate_node_route', state: 'passed' },
             ],
           })
         }
@@ -2069,7 +2089,9 @@ test('5 步自助开通向导：双模式主机引导、二次确认受限库修
   await screen.getByLabelText('临时管家令牌').fill('TEMP_OP_TOKEN')
   await screen.getByRole('button', { name: '一键执行三能力自验（免写 JSON）' }).click()
 
-  // Step 5: 公网 4 项终验与交付回执卡
+  // Step 5: 一键正式发布并执行公网 4 项终验与交付回执卡
+  await screen.getByRole('button', { name: '一键正式发布并启用租户' }).click()
+  await expect.element(screen.getByText('客户环境与租户已正式启用并同步活跃路由，请执行公网终验！')).toBeVisible()
   await screen.getByRole('button', { name: '执行公网正式 HTTPS 4 项终验' }).click()
   await expect.element(screen.getByText(/交付回执卡片 · 捷佳四轮国内充电（公网终验通过）/)).toBeVisible()
   await expect.element(screen.getByText(/unconfirmed/)).toBeVisible()
@@ -2085,6 +2107,7 @@ test('5 步自助开通向导：双模式主机引导、二次确认受限库修
     'infra_provision',
     'kb_install_starter_faq',
     'self_validate',
+    'publish_environment',
     'post_publish_smoke',
   ])
 })
