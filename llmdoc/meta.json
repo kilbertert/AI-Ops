@@ -1,69 +1,69 @@
 {
   "schema": "llmdoc.meta/v3",
   "baseline": {
-    "revision": "1e87a7ec3e2e03c395573f416f26827c7482d77f",
-    "verifiedAt": "2026-11-23T09:35:15.042Z"
+    "revision": "296d958ac006acddd8bde112713b6d4d039118dd",
+    "verifiedAt": "2026-11-26T09:42:15.610Z"
   },
   "documents": {
     "execution-model.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "gateway/gateway-runtime.mdx": {
-      "validatedRevision": "61c7a7afb2b29d4041e4e1385f0d47b0e116f8b5"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "gateway/gateway-store.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "identity/identity-scope.mdx": {
-      "validatedRevision": "6ea8566b6749282ed7b89eefa37622769141a182"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "execution/execution-delegation.mdx": {
-      "validatedRevision": "6ea8566b6749282ed7b89eefa37622769141a182"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "execution/execution-node-contract.mdx": {
-      "validatedRevision": "6ea8566b6749282ed7b89eefa37622769141a182"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "common/shared-primitives.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "consumer/consumer-chat.mdx": {
-      "validatedRevision": "6ea8566b6749282ed7b89eefa37622769141a182"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "operator/operator-chat.mdx": {
-      "validatedRevision": "6ea8566b6749282ed7b89eefa37622769141a182"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "conversation/conversation-store.mdx": {
-      "validatedRevision": "6ea8566b6749282ed7b89eefa37622769141a182"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "analytics/bounded-read-surfaces.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "publication/publication-lifecycle.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "dify/dify-execution-publishing.mdx": {
-      "validatedRevision": "6ea8566b6749282ed7b89eefa37622769141a182"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "dify/dify-console-access.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "dify/dify-self-service.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "knowledge/knowledge-plane.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "deployment/delivery-and-hosts.mdx": {
-      "validatedRevision": "61c7a7afb2b29d4041e4e1385f0d47b0e116f8b5"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "governance/governance-afk.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "governance/test-architecture.mdx": {
-      "validatedRevision": "1e87a7ec3e2e03c395573f416f26827c7482d77f"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     },
     "gateway/environment-onboarding.mdx": {
-      "validatedRevision": "6ea8566b6749282ed7b89eefa37622769141a182"
+      "validatedRevision": "296d958ac006acddd8bde112713b6d4d039118dd"
     }
   },
   "convergence": {
