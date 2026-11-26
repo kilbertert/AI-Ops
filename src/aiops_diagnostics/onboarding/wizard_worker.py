@@ -851,6 +851,20 @@ def _step_cold_install_and_onboard(
             f"mkdir -p {stage_remote}/inst && chmod 700 {stage_remote}/inst",
             f"tar -xzf {stage_remote}/installer.tar.gz -C {stage_remote}/inst",
             f"chmod 600 {stage_remote}/*.*",
+            f"id -u {shlex.quote(svc_user)} >/dev/null 2>&1 || useradd --system --no-create-home "
+            f"--home-dir {shlex.quote(var_root)} --shell /usr/sbin/nologin "
+            f"--user-group {shlex.quote(svc_user)}",
+            f"mkdir -p {cfg_root}/runtime {cfg_root}/registry {var_root}/dify-keys {var_root}/gateway",
+            f"chmod 755 {cfg_root}",
+            f"tar -xf {stage_remote}/runtime-bundle.tar -C {cfg_root}",
+            f"mv -f {cfg_root}/dify-keys/* {var_root}/dify-keys/ 2>/dev/null || true",
+            f"rmdir {cfg_root}/dify-keys 2>/dev/null || true",
+            f"cp -f {stage_remote}/nginx-user-ingress-auth.conf {cfg_root}/nginx-user-ingress-auth.conf",
+            f"chmod 700 {cfg_root}/runtime {cfg_root}/registry {var_root} "
+            f"{var_root}/dify-keys {var_root}/gateway",
+            f"chmod 600 {cfg_root}/runtime/* {cfg_root}/registry/* {var_root}/dify-keys/* "
+            f"{cfg_root}/nginx-user-ingress-auth.conf",
+            f"chown -R {svc_user}:{svc_user} {cfg_root}/runtime {cfg_root}/registry {var_root}",
             " ".join(
                 [
                     f"python3 {stage_remote}/inst/install.py install --ensure-prerequisites",
@@ -863,14 +877,8 @@ def _step_cold_install_and_onboard(
                     f"--config-sha256 {shlex.quote(str(bundle['config_sha256']))}",
                 ]
             ),
-            f"mkdir -p {cfg_root}/runtime {cfg_root}/registry {var_root}/dify-keys {var_root}/gateway",
-            f"tar -xf {stage_remote}/runtime-bundle.tar -C {cfg_root}",
-            f"mv -f {cfg_root}/dify-keys/* {var_root}/dify-keys/ 2>/dev/null || true",
-            f"rmdir {cfg_root}/dify-keys 2>/dev/null || true",
-            f"cp -f {stage_remote}/nginx-user-ingress-auth.conf {cfg_root}/nginx-user-ingress-auth.conf",
             f"/opt/aiops-access-{env}/current/venv/bin/python -c {shlex.quote(seed_py)}",
-            f"chown -R {svc_user}:{svc_user} {cfg_root}/runtime {cfg_root}/registry {var_root}",
-            f"chmod 600 {cfg_root}/nginx-user-ingress-auth.conf",
+            f"chown -R {svc_user}:{svc_user} {var_root}/gateway",
             f"systemctl restart aiops-access-{env}.service",
             f"for _i in $(seq 1 20); do curl -fsS {health_url} && break; sleep 1; done",
             f"curl -fsS {health_url}",
@@ -1130,6 +1138,22 @@ def execute_infra_provision_job(
         return _fail_step(3, _err_code(exc, "CUSTOMER_NGINX_ERROR"))
     if not r3.get("ok"):
         return _fail_step(3, str(r3.get("reason") or "CUSTOMER_NGINX_FAILED"))
+    if result_summary.get("workspace_id") and result_summary.get("consumer_kb_id"):
+        try:
+            conn_res = request(
+                {
+                    "wizard_job": "connect_consumer_plugin",
+                    "environment": env,
+                    "api_domain": str(req["api_domain"]),
+                    "tenant_id": str(result_summary.get("tenant_id") or req.get("tenant_id") or ""),
+                    "workspace_id": str(result_summary["workspace_id"]),
+                    "consumer_kb_id": str(result_summary["consumer_kb_id"]),
+                }
+            )
+        except Exception as exc:
+            return _fail_step(3, _err_code(exc, "CONSUMER_PLUGIN_CONNECT_FAILED"))
+        if not isinstance(conn_res, dict) or not conn_res.get("ok"):
+            return _fail_step(3, "CONSUMER_PLUGIN_CONNECT_FAILED")
     _update(3, "passed")
 
     _update(4, "running")

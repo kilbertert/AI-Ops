@@ -228,7 +228,7 @@ def call(gateway, key, payload, *, trial=False):
         if payload.get("prepare") == "knowledge"
         or payload.get("installation") == "stage"
         or payload.get("publication") in {"central", "connect"}
-        or payload.get("wizard_job") in {"prepare_bundle", "activate_registry"}
+        or payload.get("wizard_job") in {"prepare_bundle", "connect_consumer_plugin", "activate_registry"}
         else 30,
         follow_redirects=False,
     )
@@ -258,7 +258,7 @@ def central_call(root, target, payload):
             payload.get("prepare") == "knowledge"
             or payload.get("installation") == "stage"
             or payload.get("publication") in {"central", "connect"}
-            or payload.get("wizard_job") in {"prepare_bundle", "activate_registry"}
+            or payload.get("wizard_job") in {"prepare_bundle", "connect_consumer_plugin", "activate_registry"}
         )
         else 45
     )

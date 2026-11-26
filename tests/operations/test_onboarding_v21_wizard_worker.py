@@ -540,6 +540,9 @@ def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags
         def __init__(self, *_a, **_k) -> None:
             pass
 
+        def install_plugins(self, *_a, **_k) -> None:
+            return None
+
         def _call(self, _ws, path, **_kw):
             if "tool-providers" in path:
                 return [{"id": "prov-1", "name": "cpms-node"}]
@@ -554,6 +557,7 @@ def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags
                 return {"workflow": {"id": "wf-con-1"}}
             return {"data": []}
 
+    plugin_calls: list[tuple[str, str]] = []
     monkeypatch.setattr(wizard_provision, "NODE_RUNTIME_ENV_ROOT", node_root)
     monkeypatch.setattr(wizard_provision, "_ensure_kb_pair", lambda *_a, **_k: ("kb-c-1", "kb-o-1"))
     monkeypatch.setattr(
@@ -565,6 +569,13 @@ def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags
     monkeypatch.setattr(wizard_provision.knowledge_connection, "ensure", lambda *_a, **_k: None)
     monkeypatch.setattr(wizard_provision.operator_prep, "model", lambda _s: {"credential_file": str(op_cred)})
     monkeypatch.setattr(wizard_provision.self_service_prepare, "model_credentials", lambda *_a, **_k: None)
+    monkeypatch.setattr(wizard_provision.self_service_prepare, "consumer_models", lambda *_a, **_k: [])
+    monkeypatch.setattr(wizard_provision.self_service_prepare, "consumer_plugins", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        wizard_provision.self_service_prepare,
+        "consumer_plugin",
+        lambda _c, _w, s, tok, _doc: plugin_calls.append((s.public_base_url, tok)) or "consumer_knowledge",
+    )
     monkeypatch.setattr(wizard_provision, "ensure_node_provider", lambda *_a, **_k: None)
     monkeypatch.setattr(
         wizard_provision,
@@ -577,7 +588,6 @@ def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags
         "profile",
         lambda *_a, **_k: {"model": {"credential_file": str(con_cred)}},
     )
-    monkeypatch.setattr(wizard_provision.consumer_prep, "dependencies", lambda *_a, **_k: None)
 
     def _fake_issue_key(_c, _w, app_id, d):
         p = d / f"{app_id}.key"
@@ -605,7 +615,7 @@ def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags
         kb_service_base_url="http://127.0.0.1:29380",
         company_jwt_key="jwt-key-test",
         third_session_key_prefix="app:3rd_session:",
-        database_file=str(dify_db),
+        database_file=dify_db,
         dify_inner_api_base_url="http://127.0.0.1:15001",
         dify_inner_api_key="inner-k",
         dify_console_base_url="http://127.0.0.1:15001",
@@ -628,12 +638,31 @@ def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags
     rendered = dotenv_values(out["config_path"])
     assert rendered["AIOPS_GATEWAY_DIFY_CHAT_BASE_URL"] == "https://dify.ranlei.work:10443"
     assert "AIOPS_GATEWAY_KB_SERVICE_BASE_URL" not in rendered
-    assert "AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE" not in rendered
+    assert (
+        rendered["AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE"]
+        == "/etc/aiops-access-jiejia/runtime/knowledge-delegation.json"
+    )
     assert rendered["AIOPS_GATEWAY_COMPANY_JWT_KEY"] == "jwt-key-test"
     assert rendered["AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED"] == "true"
     assert rendered["AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED"] == "true"
     assert rendered["AIOPS_MYSQL_DATABASE"] == "cloud_charging_pile"
     assert rendered["AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX"] == "app:3rd_session:"
+    assert plugin_calls and plugin_calls[0][1].startswith("kdx_")
+
+    import tarfile
+
+    from aiops_diagnostics.knowledge import delegated_knowledge_client
+
+    extract_dir = tmp_path / "extracted-runtime"
+    extract_dir.mkdir(mode=0o700)
+    with tarfile.open(out["runtime_bundle_path"], "r") as tf:
+        deleg_raw = tf.extractfile("runtime/knowledge-delegation.json").read()
+    deleg_path = extract_dir / "knowledge-delegation.json"
+    deleg_path.write_bytes(deleg_raw)
+    deleg_path.chmod(0o600)
+    base_url, caps = delegated_knowledge_client.load(deleg_path, "jiejia")
+    assert base_url == "https://api.mall.qushiyun.com"
+    assert ("1990990768688599040", "con-app-1") in caps
 
 
 def test_ephemeral_password_runner_remote_cmd_executes_under_bash_without_quote_breakout(
@@ -902,12 +931,15 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
         def __init__(self, *_a, **_k) -> None:
             pass
 
+        def install_plugins(self, *_a, **_k) -> None:
+            return None
+
         def _call(self, _ws, path, **_kw):
             if "tool-providers" in path:
                 return [{"id": "prov-1", "name": "cpms-node"}]
             if "/apps?" in path:
                 return {"data": []}
-            if path.endswith("/apps/con-created"):
+            if "/apps/" in path and not path.endswith("/draft"):
                 return {"workflow": {"id": "wf-con-1"}}
             return {"data": []}
 
@@ -937,6 +969,11 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
     monkeypatch.setattr(wizard_provision.knowledge_connection, "ensure", lambda *_a, **_k: None)
     monkeypatch.setattr(wizard_provision.operator_prep, "model", lambda _s: {"credential_file": str(cred)})
     monkeypatch.setattr(wizard_provision.self_service_prepare, "model_credentials", lambda *_a, **_k: None)
+    monkeypatch.setattr(wizard_provision.self_service_prepare, "consumer_models", lambda *_a, **_k: [])
+    monkeypatch.setattr(wizard_provision.self_service_prepare, "consumer_plugins", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        wizard_provision.self_service_prepare, "consumer_plugin", lambda *_a, **_k: "consumer_knowledge"
+    )
     monkeypatch.setattr(wizard_provision.self_service_prepare, "create_app", _fake_create_app)
     monkeypatch.setattr(wizard_provision.self_service_prepare, "copy_consumer_app", _fake_copy_consumer)
     monkeypatch.setattr(wizard_provision, "ensure_node_provider", lambda *_a, **_k: None)
@@ -951,7 +988,6 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
         "profile",
         lambda *_a, **_k: {"model": {"credential_file": str(cred)}},
     )
-    monkeypatch.setattr(wizard_provision.consumer_prep, "dependencies", lambda *_a, **_k: None)
     monkeypatch.setattr(wizard_provision, "service_keys", SimpleNamespace(issue_key=_fake_issue_key))
     monkeypatch.setattr(
         consumer_publication,
@@ -966,7 +1002,7 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
         kb_service_base_url="http://127.0.0.1:29380",
         company_jwt_key="jwt-key-test",
         third_session_key_prefix="app:3rd_session:",
-        database_file=str(tmp_path / "gateway.db"),
+        database_file=tmp_path / "gateway.db",
         dify_inner_api_base_url="http://127.0.0.1:15001",
         dify_inner_api_key="inner-k",
         dify_console_base_url="http://127.0.0.1:15001",
@@ -988,3 +1024,97 @@ def test_prepare_control_plane_bundle_passes_uuid_request_ids_when_creating_apps
     assert out["ok"] is True
     assert len(seen_job_ids) == 2
     assert all(re.fullmatch(r"[a-f0-9-]{36}", jid) for jid in seen_job_ids)
+
+
+def test_seed_target_gateway_db_populates_workspace_and_apps(tmp_path: Path) -> None:
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+    from aiops_diagnostics.onboarding import wizard_provision
+
+    db = tmp_path / "target-gateway.db"
+    seed = {
+        "environment": "jiejia",
+        "tenant_id": "1990990768688599040",
+        "workspace_id": "ws-jiejia",
+        "operator_app_id": "op-app-1",
+        "consumer_app_id": "con-app-1",
+        "consumer_workflow_id": "wf-con-1",
+        "consumer_kb_id": "kb-con-1",
+        "consumer_flags": {"live_order_status": True, "live_billing_record": True, "photo_enabled": False},
+        "operator_manifest_text": json.dumps(
+            {
+                "schema": "m3-exec-config/1",
+                "name": "aiops-environment-jiejia",
+                "history_policy": "none",
+                "model": {
+                    "provider_key": "openai",
+                    "adapter_key": "openai-compatible",
+                    "model_key": "deepseek-v4-1-flash-261017",
+                    "endpoint": "https://model-proxy:9101",
+                },
+                "model_options": {"max_tokens": 100, "temperature": 0.1, "stop_sequences": []},
+                "system_messages": ["hi"],
+                "tools": [{"name": "mysql_readonly", "description": "query", "input_schema": "{}"}],
+            }
+        ),
+        "agent_runs_path": "/etc/aiops-access-jiejia/runtime/agent-runs.json",
+        "key_dir": "/var/lib/aiops-access-jiejia/dify-keys",
+    }
+    res = wizard_provision.seed_target_gateway_db(db, seed)
+    assert res["ok"] is True
+    assert DifyWorkspaces(db).tenant_for_workspace("ws-jiejia", "jiejia") == "1990990768688599040"
+    con_apps = SelfServiceStore(db).apps(entry="consumer")
+    assert [a["app_id"] for a in con_apps] == ["con-app-1"]
+
+
+def test_consumer_knowledge_catalogue_accepts_delegated_kdx_token(tmp_path: Path, monkeypatch) -> None:
+    from fastapi import FastAPI
+
+    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+    from aiops_diagnostics.gateway import gateway_schema
+    from aiops_diagnostics.gateway.routers import internal_callbacks
+    from aiops_diagnostics.knowledge import knowledge_delegation
+
+    db = tmp_path / "gateway.db"
+    gateway_schema.ensure(db)
+    ws = DifyWorkspaces(db)
+    ws.claim("1990990768688599040", "jiejia", owner="test", lease_seconds=60)
+    ws.mark_created("1990990768688599040", "jiejia", "ws-jiejia")
+    KnowledgeGrants(db).grant("1990990768688599040", "jiejia", "kb-con-1", "test")
+    SelfServiceStore(db).register(
+        app_id="con-app-1",
+        tenant_id="1990990768688599040",
+        workspace_id="ws-jiejia",
+        agent_name="consumer-con-app-1",
+        profile_id="",
+        actor="test",
+        entry="consumer",
+        environment="jiejia",
+        targets={"knowledge_base_ids": ["kb-con-1"]},
+    )
+    settings = SimpleNamespace(
+        database_file=db,
+        internal_token_secret="s" * 48,
+        kb_service_base_url="http://127.0.0.1:29380",
+        kb_service_timeout_seconds=10.0,
+        environment="41",
+        execution_environment="41",
+    )
+    tok = knowledge_delegation.issue(settings, "jiejia", "1990990768688599040", "con-app-1", "kb-con-1")[
+        "token"
+    ]
+
+    class _FakeKb:
+        def list_knowledge_bases(self):
+            return [{"knowledge_base_id": "kb-con-1", "name": "捷佳试跑 FAQ"}]
+
+    monkeypatch.setattr(knowledge_delegation, "_client", lambda *_a, **_k: _FakeKb())
+    app = FastAPI()
+    ctx = SimpleNamespace(settings=settings, dify_workspaces=ws, runtime=SimpleNamespace())
+    internal_callbacks.register(app, ctx, None, SimpleNamespace())
+    client = TestClient(app)
+    r = client.get("/v1/internal/consumer-knowledge/catalogue", headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200
+    assert r.json() == {"libraries": [{"knowledge_base_id": "kb-con-1", "name": "捷佳试跑 FAQ"}]}

@@ -31,7 +31,7 @@ from dotenv import dotenv_values
 from aiops_diagnostics.common.private_files import ensure_private_directory, write_private_text
 from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
 from aiops_diagnostics.consumer import agent_contract as flow
-from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
+from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants, catalogue_token
 from aiops_diagnostics.dify import (
     dify_ensure_workspace,
     dify_inner_api,
@@ -40,7 +40,7 @@ from aiops_diagnostics.dify import (
     service_keys,
 )
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiError, ConsoleApiSettings, DifyConsoleAdmin
-from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
 from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.execution import execution_manifest
 from aiops_diagnostics.execution.chat_route_bindings import ENGINE_DIFY, ENGINE_NODE, ChatRouteBindingStore
@@ -69,6 +69,17 @@ from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentStor
 
 class WizardProvisionError(RuntimeError):
     """控制面一键装配或正式目录启用失败的稳定错误码异常。"""
+
+
+def _ensure_workspace_record(db_path: Path, tenant_id: str, env: str, workspace_id: str, owner: str) -> None:
+    """在指定 gateway.db 内幂等写入已创建的 Dify workspace 归属记录。"""
+    ws_store = DifyWorkspaces(db_path)
+    existing_ws = ""
+    with suppress(DifyWorkspaceError):
+        existing_ws = ws_store.resolve(tenant_id, env)
+    if existing_ws != workspace_id:
+        ws_store.claim(tenant_id, env, owner=owner, lease_seconds=60)
+        ws_store.mark_created(tenant_id, env, workspace_id)
 
 
 NODE_RUNTIME_ENV_ROOT = Path("/etc/aiops-node-runtime/environments")
@@ -433,7 +444,7 @@ def prepare_control_plane_bundle(
         "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE": db_file_target,
         "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR": key_dir_target,
         "AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE": (
-            f"{runtime_dir_target}/knowledge-delegation.json" if remote_kb_url else ""
+            "" if remote_kb_url else f"{runtime_dir_target}/knowledge-delegation.json"
         ),
         "AIOPS_MYSQL_DATABASE": tpl_vals.get("AIOPS_MYSQL_DATABASE") or "cloud_charging_pile",
         "AIOPS_MAX_ORDER_WINDOW_HOURS": tpl_vals.get("AIOPS_MAX_ORDER_WINDOW_HOURS", "168"),
@@ -537,22 +548,54 @@ def prepare_control_plane_bundle(
     else:
         op_app_id = str(op_app["id"])
 
+    from aiops_diagnostics.consumer.consumer_publication import flags_of
+
     consumer_source = _select_consumer_source(settings, context)
     con_doc = consumer_prep.document(consumer_source, consumer_kb_id)
     con_model = consumer_prep.profile(settings, consumer_source)["model"]
-    consumer_prep.dependencies(
-        console,
-        settings,
-        {"consumer_source": consumer_source},
-        scope_con,
-    )
+    con_flags = flags_of(consumer_source["workflow"])
     con_app_name = f"aiops-consumer-{env}"
     con_app = next(
         (a for a in existing_apps if a.get("name") == con_app_name and a.get("mode") == "advanced-chat"),
         None,
     )
+    con_req_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wiz-con:{env}:{tenant_id}"))
+    con_app_id = (
+        str(con_app["id"])
+        if con_app is not None
+        else self_service_prepare.consumer_app_id(workspace_id, con_req_id)
+    )
+    consumer_target_entry = {
+        "environment": env,
+        "tenant_id": tenant_id,
+        "app_id": con_app_id,
+        "knowledge_base_ids": [consumer_kb_id],
+        **con_flags,
+    }
+    _ensure_workspace_record(dify_db_path, tenant_id, env, workspace_id, actor)
+    KnowledgeGrants(dify_db_path).grant(tenant_id, env, consumer_kb_id, actor)
+    SelfServiceStore(dify_db_path).register(
+        app_id=con_app_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent_name=f"consumer-{con_app_id}",
+        profile_id="",
+        actor=actor,
+        entry="consumer",
+        environment=env,
+        targets={"knowledge_base_ids": [consumer_kb_id], **con_flags},
+    )
+    delegated = knowledge_delegation.issue(settings, env, tenant_id, con_app_id, consumer_kb_id)
+    self_service_prepare.consumer_models(console, workspace_id, con_doc, {"model": con_model})
+    console.install_plugins(workspace_id, self_service_prepare.consumer_plugins(con_doc))
+    self_service_prepare.consumer_plugin(
+        console,
+        workspace_id,
+        SimpleNamespace(public_base_url=settings.public_base_url),
+        delegated["token"],
+        con_doc,
+    )
     if con_app is None:
-        con_req_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wiz-con:{env}:{tenant_id}"))
         con_app_id = self_service_prepare.copy_consumer_app(
             console,
             consumer_source,
@@ -562,8 +605,6 @@ def prepare_control_plane_bundle(
             con_doc,
             candidate=False,
         )
-    else:
-        con_app_id = str(con_app["id"])
     with suppress(ConsoleApiError):
         console._call(
             workspace_id, f"/console/api/apps/{con_app_id}/workflows/publish", method="POST", body={}
@@ -573,38 +614,6 @@ def prepare_control_plane_bundle(
     if not con_workflow_id:
         draft_wf = console._call(workspace_id, f"/console/api/apps/{con_app_id}/workflows/draft")
         con_workflow_id = str((draft_wf or {}).get("id") or "")
-
-    # 2b. 在控制面写入正式知识授权及应用登记，使 Dify consumer_knowledge 插件持有有效 kdx_ 正式令牌
-    from aiops_diagnostics.consumer.consumer_publication import flags_of
-
-    con_flags = flags_of(consumer_source["workflow"])
-    consumer_target_entry = {
-        "environment": env,
-        "tenant_id": tenant_id,
-        "app_id": con_app_id,
-        "knowledge_base_ids": [consumer_kb_id],
-        **con_flags,
-    }
-    KnowledgeGrants(dify_db_path).grant(tenant_id, env, consumer_kb_id, actor)
-    ctrl_reg = {
-        "environment": env,
-        "gateway_url": f"https://{api_domain}",
-        "tenant_id": tenant_id,
-        "workspace_id": workspace_id,
-        "operator_app_id": op_app_id,
-        "consumer_app_id": con_app_id,
-    }
-    with suppress(Exception):
-        SelfServiceStore(dify_db_path).register_runtime(ctrl_reg, consumer_target_entry, verify=lambda: None)
-    with suppress(Exception):
-        delegated = knowledge_delegation.issue(settings, env, tenant_id, con_app_id, consumer_kb_id)
-        self_service_prepare.consumer_plugin(
-            console,
-            workspace_id,
-            settings,
-            delegated["token"],
-            con_doc,
-        )
 
     # 3. Dify Service API Keys 落盘（控制面密钥目录 + 本次打包 staging 目录）
     staging_keys = wdir / "dify-keys"
@@ -632,14 +641,15 @@ def prepare_control_plane_bundle(
     op_cred = json.loads(Path(op_model["credential_file"]).read_text(encoding="utf-8"))
     con_cred = json.loads(Path(con_model["credential_file"]).read_text(encoding="utf-8"))
 
-    from aiops_diagnostics.consumer.consumer_publication import flags_of
-
-    consumer_target_entry = {
-        "environment": env,
-        "tenant_id": tenant_id,
-        "app_id": con_app_id,
-        "knowledge_base_ids": [consumer_kb_id],
-        **flags_of(consumer_source["workflow"]),
+    delegation_doc = {
+        "schema": "aiops-knowledge-delegation/1",
+        "base_url": str(settings.public_base_url).rstrip("/"),
+        "capabilities": [
+            {
+                "knowledge_id": delegated["knowledge_id"],
+                "token": delegated["token"],
+            }
+        ],
     }
     op_profile_doc = {
         "schema": "operator-profiles/1",
@@ -707,7 +717,7 @@ def prepare_control_plane_bundle(
         "runtime/registrations.json": (json.dumps(registrations_doc, sort_keys=True).encode() + b"\n"),
         "runtime/operator-model.json": (json.dumps(op_cred, sort_keys=True).encode() + b"\n"),
         "runtime/consumer-model.json": (json.dumps(con_cred, sort_keys=True).encode() + b"\n"),
-        "runtime/knowledge-delegation.json": (json.dumps({"grants": []}, sort_keys=True).encode() + b"\n"),
+        "runtime/knowledge-delegation.json": (json.dumps(delegation_doc, sort_keys=True).encode() + b"\n"),
         "runtime/gateway-seed.json": (json.dumps(seed_doc, sort_keys=True).encode() + b"\n"),
         "registry/environment.json": (json.dumps(env_registry_doc, sort_keys=True).encode() + b"\n"),
         f"dify-keys/{op_app_id}.key": (staging_keys / f"{op_app_id}.key").read_bytes(),
@@ -771,19 +781,30 @@ def seed_target_gateway_db(db_path: str | Path, seed_doc: dict[str, Any]) -> dic
     agent_runs_path = str(seed_doc["agent_runs_path"])
     key_dir = str(seed_doc["key_dir"])
 
+    _ensure_workspace_record(db, tenant_id, env, workspace_id, "wizard-worker")
     KnowledgeGrants(db).grant(tenant_id, env, consumer_kb_id, "wizard-worker")
     store = SelfServiceStore(db)
-    registrations = {
-        "environment": env,
-        "gateway_url": str((seed_doc.get("registrations") or {}).get("gateway_url") or ""),
-        "tenant_id": tenant_id,
-        "workspace_id": workspace_id,
-        "operator_app_id": op_app_id,
-        "consumer_app_id": con_app_id,
-    }
-    consumer_target = dict(seed_doc.get("consumer_target") or {})
-    with suppress(Exception):
-        store.register_runtime(registrations, consumer_target, verify=lambda: None)
+    store.register(
+        app_id=op_app_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent_name=f"operator-{env}",
+        profile_id=f"operator-{env}",
+        actor="wizard-worker",
+        entry="operator",
+        environment=env,
+    )
+    store.register(
+        app_id=con_app_id,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        agent_name=f"consumer-{con_app_id}",
+        profile_id="",
+        actor="wizard-worker",
+        entry="consumer",
+        environment=env,
+        targets={"knowledge_base_ids": [consumer_kb_id], **con_flags},
+    )
 
     agent_store = AgentStore(db)
     bindings = ChatRouteBindingStore(db)
@@ -932,3 +953,39 @@ def activate_environment_registry(
         "environment_json_path": str(active_env_file),
         "environment_json_sha256": hashlib.sha256(active_env_file.read_bytes()).hexdigest(),
     }
+
+
+def connect_consumer_plugin(
+    context: Any,
+    registry_path: str | Path,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """客户机 Nginx 入口就绪后，将 Dify consumer_knowledge 插件切回客户机公网域名 + ckc_ 凭据。"""
+    _ = registry_path
+    settings = context.settings
+    env = infra_orchestrator._validate_environment(str(payload.get("environment") or ""))
+    api_domain = infra_orchestrator._validate_domain(str(payload.get("api_domain") or ""))
+    tenant_id = str(payload.get("tenant_id") or "").strip()
+    workspace_id = str(payload.get("workspace_id") or "").strip()
+    consumer_kb_id = str(payload.get("consumer_kb_id") or "").strip()
+    if not tenant_id or not workspace_id or not consumer_kb_id:
+        raise WizardProvisionError("ENVIRONMENT_WIZARD_INVALID")
+    internal_secret = str(getattr(settings, "internal_token_secret", "") or "").strip()
+    if not internal_secret:
+        raise WizardProvisionError("ENVIRONMENT_WIZARD_SECRET_REQUIRED")
+
+    console = DifyConsoleAdmin(
+        ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
+    )
+    consumer_source = _select_consumer_source(settings, context)
+    con_doc = consumer_prep.document(consumer_source, consumer_kb_id)
+    target_gateway = f"https://{api_domain}"
+    token = catalogue_token(internal_secret, env, workspace_id)
+    self_service_prepare.consumer_plugin(
+        console,
+        workspace_id,
+        SimpleNamespace(public_base_url=target_gateway),
+        token,
+        con_doc,
+    )
+    return {"ok": True, "connected": True, "gateway_url": target_gateway}
