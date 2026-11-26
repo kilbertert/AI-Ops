@@ -105,9 +105,10 @@ def upload_wizard_knowledge_doc(
         raise WizardValidationRefused("ENVIRONMENT_KB_FILE_TOO_LARGE")
 
     res = uploader(target_role, clean_kb_id, clean_name, bytes(content_bytes))
+    resolved_kb_id = str(res.get("kb_id") or clean_kb_id)
     return {
         "target_role": target_role,
-        "kb_id": clean_kb_id,
+        "kb_id": resolved_kb_id,
         "filename": clean_name,
         "document_id": str(res.get("document_id") or ""),
         "chunk_count": int(res.get("chunk_count") or 0),
