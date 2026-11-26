@@ -1,3 +1,5 @@
+"""充电订单状态映射与 YKC 停止原因码确定性分类规则。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

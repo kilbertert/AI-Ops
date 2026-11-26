@@ -140,7 +140,13 @@ def _client(tmp_path: Path) -> TestClient:
 
 def _api_trees() -> list[tuple[str, ast.Module]]:
     gateway_dir = SOURCE_ROOT / "gateway"
-    paths = [gateway_dir / "gateway_api.py", *sorted((gateway_dir / "routers").glob("*.py"))]
+    paths = [
+        gateway_dir / "gateway_api.py",
+        gateway_dir / "caller_auth_wiring.py",
+        gateway_dir / "response_views.py",
+        gateway_dir / "conversation_helpers.py",
+        *sorted((gateway_dir / "routers").glob("*.py")),
+    ]
     return [
         (str(path.relative_to(SOURCE_ROOT)), ast.parse(path.read_text(encoding="utf-8"))) for path in paths
     ]

@@ -1,3 +1,5 @@
+"""小程序 ``thirdSession`` Redis 校验、C/B 主体映射与管家站点范围解析。"""
+
 from __future__ import annotations
 
 import json

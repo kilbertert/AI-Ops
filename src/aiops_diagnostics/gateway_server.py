@@ -1,3 +1,5 @@
+"""``aiops-gateway`` 服务命令行入口：执行隔离校验、日志初始化并启动 Uvicorn。"""
+
 from __future__ import annotations
 
 from typing import Annotated

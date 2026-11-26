@@ -1,44 +1,38 @@
-"""健康检查、固定 FAQ、统一助手问答（C 端/管家端分派）、图片输入与签名媒体路由。"""
+"""统一助手问答主路由：提问分派（C 端/管家端）、轮询、取消与列表。
+
+扩展能力（健康检查/FAQ、图片与媒体代理、SSE 流/导出/反馈/重新生成）已拆分至
+``routers/health_faq.py``、``routers/media.py`` 与 ``routers/assistant_actions.py``。
+"""
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
-import platform
 import sqlite3
 import uuid
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, Query, Request, Response, status
-from fastapi.responses import JSONResponse, StreamingResponse
-from starlette.concurrency import run_in_threadpool
+from fastapi import Depends, FastAPI, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 
-from aiops_diagnostics import __version__
 from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.common.model_request import ModelRequestError
 from aiops_diagnostics.common.private_files import PrivatePathError
+from aiops_diagnostics.consumer import consumer_chat_service, consumer_intent, consumer_knowledge
 from aiops_diagnostics.consumer.presentation import is_order_status_question
 from aiops_diagnostics.conversation.clarification import (
     CLARIFY_ORDER_REQUIRED,
     CLARIFY_WRONG_ENTRY,
 )
-from aiops_diagnostics.conversation.faq import FAQ_NOT_FOUND, FAQError
 from aiops_diagnostics.data.sources import SourceError
-from aiops_diagnostics.execution import chat_execution
+from aiops_diagnostics.execution import chat_execution, node_publication
 from aiops_diagnostics.gateway import request_observation
 from aiops_diagnostics.gateway.dependencies import (
     STANDARD_DIAGNOSIS_SCOPE,
     GatewayDeps,
-    localized_copy_language,
     request_language,
 )
 from aiops_diagnostics.gateway.errors import StandardAPIError
-from aiops_diagnostics.gateway.schemas import (
-    AssistantQuestionExportRequest,
-    AssistantQuestionFeedbackRequest,
-    AssistantQuestionRegenerateRequest,
-    AssistantQuestionRequest,
-    FAQAnswerRequest,
-)
+from aiops_diagnostics.gateway.schemas import AssistantQuestionRequest
 from aiops_diagnostics.identity.caller_auth import SOURCE_KEY_HEADER
 from aiops_diagnostics.identity.order_identity import (
     extract_order_identifier,
@@ -46,6 +40,9 @@ from aiops_diagnostics.identity.order_identity import (
 )
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import ScopeContext, ScopeError
+from aiops_diagnostics.operator import attachments as attachments_module
+from aiops_diagnostics.operator import operator_cpms
+from aiops_diagnostics.publication import agent_content
 from aiops_diagnostics.publication.shortcut_lifecycle import (
     OPERATIONS_REVIEW_CODE,
     ShortcutError,
@@ -108,10 +105,6 @@ def _try_operator_cpms_route(
     attachments: list[dict[str, Any]] | None = None,
 ) -> JSONResponse | None:
     """管家端受控工具循环分派（Java 执行节点）；未命中绑定时返回 None。"""
-    from aiops_diagnostics.execution.node_publication import all_targets
-    from aiops_diagnostics.operator import operator_cpms
-    from aiops_diagnostics.operator.operator_cpms import OperatorRefused
-
     try:
         binding = chat_execution.select_binding(
             context.settings, caller, scenario=operator_cpms.SCENARIO, entry="operator"
@@ -122,14 +115,9 @@ def _try_operator_cpms_route(
         return None
 
     api._require_operator_company_token(request)
-    from aiops_diagnostics.publication.agent_content import (
-        UnknownAssistantAgentError,
-        resolve_operator_agent_id,
-    )
-
     try:
-        resolved_agent_id = resolve_operator_agent_id(payload.agent_id)
-    except UnknownAssistantAgentError as exc:
+        resolved_agent_id = agent_content.resolve_operator_agent_id(payload.agent_id)
+    except agent_content.UnknownAssistantAgentError as exc:
         raise StandardAPIError(
             status.HTTP_404_NOT_FOUND, "AGENT_NOT_FOUND", "assistant agent not found"
         ) from exc
@@ -140,7 +128,7 @@ def _try_operator_cpms_route(
     target = next(
         (
             r
-            for r in all_targets(context.settings)
+            for r in node_publication.all_targets(context.settings)
             if r.entry == "operator"
             and r.app_id == binding.app_id
             and api._tenant_in_scope(r.tenant_id, caller.effective_tenant_id)
@@ -149,7 +137,7 @@ def _try_operator_cpms_route(
         None,
     )
     if target is None:
-        raise OperatorRefused("OPERATOR_TARGET_MISSING")
+        raise operator_cpms.OperatorRefused("OPERATOR_TARGET_MISSING")
     authorization = request.headers.get("Authorization")
     source = request.headers.get(SOURCE_KEY_HEADER)
 
@@ -198,14 +186,13 @@ def _try_operator_cpms_route(
     except Exception:
         api._release_conversation_turn(context, conversation, turn_no, claim_id=claim_id)
         raise
-    from aiops_diagnostics.operator.attachments import public_file_dict
 
     return JSONResponse(
         status_code=202,
         headers={"Cache-Control": "no-store"},
         content={
             **api._assistant_question_response(qa, language),
-            "attachments": [public_file_dict(item) for item in resolved_attachments],
+            "attachments": [attachments_module.public_file_dict(item) for item in resolved_attachments],
             **(
                 {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
                 if conversation
@@ -229,8 +216,6 @@ def _resolve_legacy_consumer_chatflow(
 
     返回 ``(early_response, live_order, data_kind, uses_context, previous)``。
     """
-    from aiops_diagnostics.consumer import consumer_chat_service, consumer_intent, consumer_knowledge
-
     prompt_notices = service_binding.callback_version >= 5
     notice_kind = ""
     if service_binding.content_file or service_binding.content_snapshot is not None:
@@ -301,8 +286,6 @@ def _resolve_legacy_consumer_chatflow(
                 )
             )
         except (ValueError, RuntimeError, OSError) as exc:
-            from aiops_diagnostics.common.model_request import ModelRequestError
-
             raise api._runtime_unavailable(
                 "CONSUMER_MODEL_QUOTA_EXHAUSTED"
                 if isinstance(exc, ModelRequestError) and exc.reason == "quota_exhausted"
@@ -402,8 +385,6 @@ def _try_consumer_chatflow_route(
     request: Request,
 ) -> JSONResponse | None:
     """C 端 WF01（callback_version=6 走官方 Agent，1–5 走历史兼容分支）。"""
-    from aiops_diagnostics.consumer import consumer_chat_service, consumer_intent
-
     try:
         service_binding = chat_execution.select_binding(
             context.settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
@@ -473,118 +454,8 @@ def _try_consumer_chatflow_route(
 
 
 def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
+    """挂载 ``/v1/assistant/questions`` 核心创建、轮询、取消与列表路由。"""
     selected_settings = context.settings
-
-    @app.get("/health")
-    def health() -> dict[str, Any]:
-        return {
-            "ok": True,
-            "service": "aiops-gateway",
-            "version": __version__,
-            "api_version": "v1",
-            "platform": platform.system().lower(),
-            "business_mutations": "disabled",
-        }
-
-    @app.get("/v1/faq/recommendations")
-    def faq_recommendations(
-        identity: tuple[ScopeContext, Any] = Depends(deps.faq_identity),  # noqa: B008
-        language: str = Depends(localized_copy_language),  # noqa: B008
-    ) -> dict[str, Any]:
-        _, decision = identity
-        return {
-            **decision.public(),
-            "language": context.faq_catalog.served_language(decision.platform, language),
-            "faq_version": context.faq_catalog.version,
-            "recommendations": context.faq_catalog.recommendations(decision.platform, language),
-        }
-
-    @app.get("/v1/faq/catalog")
-    def faq_catalog(
-        identity: tuple[ScopeContext, Any] = Depends(deps.faq_identity),  # noqa: B008
-        language: str = Depends(localized_copy_language),  # noqa: B008
-    ) -> dict[str, Any]:
-        _, decision = identity
-        return {
-            **decision.public(),
-            "language": context.faq_catalog.served_language(decision.platform, language),
-            "faq_version": context.faq_catalog.version,
-            "entries": context.faq_catalog.catalog(decision.platform, language),
-        }
-
-    @app.post("/v1/faq/answer")
-    def faq_answer(
-        payload: FAQAnswerRequest,
-        identity: tuple[ScopeContext, Any] = Depends(deps.faq_identity),  # noqa: B008
-        language: str = Depends(localized_copy_language),  # noqa: B008
-    ) -> dict[str, Any]:
-        _, decision = identity
-        try:
-            answer = context.faq_catalog.answer(decision.platform, payload.question_id, language)
-        except FAQError as exc:
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND, FAQ_NOT_FOUND, "FAQ question was not found"
-            ) from exc
-        return {
-            **decision.public(),
-            "language": context.faq_catalog.entry_served_language(
-                decision.platform, payload.question_id, language
-            ),
-            "faq_version": context.faq_catalog.version,
-            "question_id": answer["question_id"],
-            "question": answer["question"],
-            "answer": answer["answer"],
-            "format": answer["format"],
-        }
-
-    @app.post("/v1/assistant/photos", status_code=201)
-    async def upload_consumer_photo(
-        request: Request,
-        identity: tuple[ScopeContext, Any] = Depends(deps.assistant_identity),  # noqa: B008
-    ) -> JSONResponse:
-        from starlette.concurrency import run_in_threadpool
-
-        from aiops_diagnostics.consumer.consumer_chat_service import current, fingerprint
-        from aiops_diagnostics.consumer.consumer_photo import MAX_UPLOAD, normalize_photo
-
-        caller, decision = identity
-        if not context.settings.consumer_chatflow_enabled or str(decision.platform) != "consumer":
-            raise StandardAPIError(404, "PHOTO_UNAVAILABLE", "photo input unavailable")
-        api._require_consumer_self_order(caller, "consumer", "pending")
-        photo = ""
-        completed = False
-        try:
-            binding = chat_execution.select_binding(context.settings, caller, scenario="consumer_service")
-            if binding is None or not binding.photo_enabled:
-                raise StandardAPIError(404, "PHOTO_UNAVAILABLE", "photo input unavailable")
-            photo = context.runtime.consumer_photos.put(caller.scope_fingerprint, fingerprint(binding), b"")
-            body = bytearray()
-            try:
-                async with asyncio.timeout(20):
-                    async for chunk in request.stream():
-                        body.extend(chunk)
-                        if len(body) > MAX_UPLOAD:
-                            raise StandardAPIError(413, "PHOTO_TOO_LARGE", "photo too large")
-            except TimeoutError as exc:
-                raise StandardAPIError(408, "PHOTO_UPLOAD_TIMEOUT", "photo upload timed out") from exc
-            image = await run_in_threadpool(
-                normalize_photo, bytes(body), request.headers.get("Content-Type", "").split(";")[0]
-            )
-            current(context.runtime, caller, binding)
-            context.runtime.consumer_photos.complete_upload(photo, image)
-            completed = True
-            return JSONResponse(
-                status_code=201,
-                headers={"Cache-Control": "no-store"},
-                content={"photo_id": photo, "expires_in_seconds": 300},
-            )
-        except ValueError as exc:
-            raise StandardAPIError(400, "PHOTO_INVALID", "invalid photo") from exc
-        except chat_execution.ChatRunUnavailable as exc:
-            raise StandardAPIError(exc.http_status, exc.code, str(exc)) from exc
-        finally:
-            if photo and not completed:
-                context.runtime.consumer_photos.discard(photo)
 
     @app.post("/v1/assistant/questions")
     def assistant_questions(
@@ -604,14 +475,9 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         """
         caller, decision = identity
         if str(decision.platform) == "operator":
-            from aiops_diagnostics.publication.agent_content import (
-                UnknownAssistantAgentError,
-                resolve_operator_agent_id,
-            )
-
             try:
-                resolve_operator_agent_id(payload.agent_id)
-            except UnknownAssistantAgentError as exc:
+                agent_content.resolve_operator_agent_id(payload.agent_id)
+            except agent_content.UnknownAssistantAgentError as exc:
                 raise StandardAPIError(
                     status.HTTP_404_NOT_FOUND,
                     "AGENT_NOT_FOUND",
@@ -653,16 +519,14 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                     "PLATFORM_FORBIDDEN",
                     "attachments are only supported on operator entry",
                 )
-            from aiops_diagnostics.operator.attachments import AttachmentError, resolve_turn_attachments
-
             try:
-                resolved_attachments = resolve_turn_attachments(
+                resolved_attachments = attachments_module.resolve_turn_attachments(
                     context.assistant_files,
                     payload.attachment_ids,
                     caller.scope_fingerprint,
                     business_entry="operator",
                 )
-            except AttachmentError as exc:
+            except attachments_module.AttachmentError as exc:
                 raise StandardAPIError(
                     exc.http_status, exc.code, exc.message, retryable=exc.retryable
                 ) from exc
@@ -727,12 +591,10 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         api._require_current_chat_order(context, caller, qa, request)
         response.headers["Cache-Control"] = "no-store"
         progress = context.operator_cpms.progress(caller, qa_id, qa)
-        from aiops_diagnostics.operator.attachments import public_file_dict
-
         qa_attachment_ids = list(qa.get("attachment_ids") or [])
         qa_attachments = (
             [
-                public_file_dict(row)
+                attachments_module.public_file_dict(row)
                 for row in context.assistant_files.get_many(
                     qa_attachment_ids, caller.scope_fingerprint, business_entry="operator"
                 )
@@ -746,170 +608,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             "feedback": context.assistant_feedback.get(qa_id, caller.scope_fingerprint),
             "progress": progress,
         }
-
-    @app.get("/v1/assistant/questions/{qa_id}/events")
-    async def stream_assistant_question_events(
-        qa_id: str,
-        request: Request,
-        identity: tuple[ScopeContext, Any] = Depends(deps.assistant_identity),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
-        after_seq: Annotated[int | None, Query(ge=0)] = None,
-        last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
-    ) -> StreamingResponse:
-        """订阅问答 SSE 实时事件流：节点路径 + 正文打字机增量 + 引用 + 复核替换 + 断线续传。"""
-        from aiops_diagnostics.common.async_job_lifecycle import QUESTION
-        from aiops_diagnostics.common.scalar_rules import format_stored_time, now_utc
-        from aiops_diagnostics.operator.qa_events import (
-            SSE_HEARTBEAT_SECONDS,
-            TERMINAL_EVENT_TYPES,
-            format_sse_frame,
-        )
-
-        caller, _ = identity
-        cursor = int(after_seq or 0)
-        if last_event_id is not None and last_event_id.strip():
-            try:
-                parsed_id = int(last_event_id.strip())
-                if parsed_id < 0:
-                    raise ValueError("negative")
-                cursor = max(cursor, parsed_id)
-            except ValueError as exc:
-                raise StandardAPIError(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    "INVALID_REQUEST",
-                    "Last-Event-ID must be a non-negative integer",
-                ) from exc
-
-        def _authorize_stream_access(target_qa: dict[str, Any]) -> None:
-            from aiops_diagnostics.operator import operator_cpms
-
-            api._require_current_chat_order(context, caller, target_qa, request)
-            if (
-                str(target_qa.get("internal_run_id") or "").startswith(operator_cpms.PREFIX)
-                and target_qa.get("status") != "completed"
-            ):
-                api._require_operator_company_token(request)
-                context.operator_cpms.verify_live_stream_access(
-                    caller,
-                    target_qa["qa_id"],
-                    request.headers.get("Authorization", "").removeprefix("Bearer "),
-                )
-
-        qa = await run_in_threadpool(context.runtime.get_assistant_qa, caller, qa_id)
-        if qa is None:
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND,
-                "QA_NOT_FOUND",
-                "assistant question not found",
-            )
-        await run_in_threadpool(_authorize_stream_access, qa)
-        heartbeat = float(getattr(context, "sse_heartbeat_seconds", SSE_HEARTBEAT_SECONDS))
-
-        def _synthesize_terminal(current_qa: dict[str, Any], seq_num: int) -> str:
-            status_val = str(current_qa["status"])
-            shaped = api._assistant_question_response(current_qa, language)
-            if status_val == QUESTION.cancelled:
-                return format_sse_frame(
-                    "run_cancelled",
-                    {"seq": seq_num, "status": "cancelled", "elapsed_ms": 0},
-                    event_id=seq_num,
-                )
-            if status_val in {QUESTION.failed, QUESTION.expired}:
-                return format_sse_frame(
-                    "run_failed",
-                    {
-                        "seq": seq_num,
-                        "status": status_val,
-                        "elapsed_ms": 0,
-                        "error": shaped["error"],
-                    },
-                    event_id=seq_num,
-                )
-            result = current_qa.get("result") or {}
-            citations = list(result.get("citations") or [])
-            return format_sse_frame(
-                "message_done",
-                {
-                    "seq": seq_num,
-                    "status": "completed",
-                    "elapsed_ms": 0,
-                    "delivery_mode": current_qa.get("delivery_mode") or "diagnosis",
-                    "reasoning_duration_ms": 0,
-                    "step_count": 0,
-                    "citation_count": len(citations),
-                    "result": result,
-                },
-                event_id=seq_num,
-            )
-
-        async def _event_stream():
-            nonlocal cursor
-            saw_terminal = False
-            first_iteration = True
-            while True:
-                if not first_iteration:
-                    current_qa = await run_in_threadpool(context.runtime.get_assistant_qa, caller, qa_id)
-                    if current_qa is None:
-                        return
-                    try:
-                        await run_in_threadpool(_authorize_stream_access, current_qa)
-                    except Exception:  # noqa: BLE001 - 权限撤回立即终止流，绝不继续吐草稿
-                        return
-                else:
-                    current_qa = qa
-                    first_iteration = False
-                batch = await run_in_threadpool(context.qa_events.list_after, qa_id, after_seq=cursor)
-                for item in batch:
-                    cursor = item["seq"]
-                    yield format_sse_frame(item["event"], item["data"], event_id=item["seq"])
-                    if item["event"] in TERMINAL_EVENT_TYPES:
-                        saw_terminal = True
-                if saw_terminal:
-                    return
-                current_qa = await run_in_threadpool(context.runtime.get_assistant_qa, caller, qa_id)
-                if current_qa is None:
-                    return
-                try:
-                    await run_in_threadpool(_authorize_stream_access, current_qa)
-                except Exception:  # noqa: BLE001 - 权限撤回立即终止流
-                    return
-                if str(current_qa["status"]) not in QUESTION.active:
-                    # 补发最新落库事件；若已有事件流，短暂等待终局复核帧原子落库
-                    tail = await run_in_threadpool(context.qa_events.list_after, qa_id, after_seq=cursor)
-                    for item in tail:
-                        cursor = item["seq"]
-                        yield format_sse_frame(item["event"], item["data"], event_id=item["seq"])
-                        if item["event"] in TERMINAL_EVENT_TYPES:
-                            return
-                    if await run_in_threadpool(context.qa_events.has_any_events, qa_id):
-                        await context.qa_events.wait_for_update(qa_id, timeout=1.0)
-                        tail_after_wait = await run_in_threadpool(
-                            context.qa_events.list_after, qa_id, after_seq=cursor
-                        )
-                        for item in tail_after_wait:
-                            cursor = item["seq"]
-                            yield format_sse_frame(item["event"], item["data"], event_id=item["seq"])
-                            if item["event"] in TERMINAL_EVENT_TYPES:
-                                return
-                    yield _synthesize_terminal(current_qa, cursor + 1)
-                    return
-                if await request.is_disconnected():
-                    return
-                woke = await context.qa_events.wait_for_update(qa_id, timeout=heartbeat)
-                if not woke:
-                    if await request.is_disconnected():
-                        return
-                    yield format_sse_frame("ping", {"ts": format_stored_time(now_utc())})
-
-        return StreamingResponse(
-            _event_stream(),
-            media_type="text/event-stream; charset=utf-8",
-            headers={
-                "Cache-Control": "no-store",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            },
-        )
 
     @app.post("/v1/assistant/questions/{qa_id}/cancel")
     def cancel_assistant_question(
@@ -943,281 +641,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             )
         return api._assistant_question_response(qa, language)
 
-    @app.post("/v1/assistant/questions/{qa_id}/export")
-    def export_assistant_question_report(
-        qa_id: str,
-        payload: AssistantQuestionExportRequest,
-        response: Response,
-        request: Request,
-        identity: tuple[ScopeContext, Any] = Depends(deps.assistant_identity),  # noqa: B008
-    ) -> dict[str, Any]:
-        """将已完成的后台排查结果导出为 .docx / .md 报告并投递至公司下载中心导出列表。"""
-        from aiops_diagnostics.operator.download_center import DownloadCenterError
-        from aiops_diagnostics.operator.report_export import render_diagnosis_report
-
-        caller, decision = identity
-        if str(decision.platform) != "operator":
-            raise StandardAPIError(
-                status.HTTP_403_FORBIDDEN,
-                "PLATFORM_FORBIDDEN",
-                "operator entry is required",
-            )
-        try:
-            qa = context.runtime.get_assistant_qa(caller, qa_id)
-        except (ValueError, RuntimeError) as exc:
-            raise api._runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
-        if qa is None:
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND,
-                "QA_NOT_FOUND",
-                "assistant question not found",
-            )
-        api._require_current_chat_order(context, caller, qa, request)
-        if str(qa.get("status")) != "completed" or not qa.get("result"):
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT,
-                "REPORT_NOT_READY",
-                "diagnosis answer is not completed and cannot be exported",
-            )
-        progress = context.operator_cpms.progress(caller, qa_id, qa)
-        steps = list((progress or {}).get("steps") or [])
-        citations = list((qa.get("result") or {}).get("citations") or [])
-        file_name, content_type, report_bytes = render_diagnosis_report(
-            qa=qa,
-            fmt=payload.format,
-            steps=steps,
-            citations=citations,
-        )
-        user_id = str(getattr(caller.subject, "b_user_id", "") or "")
-        username = user_id or "operator"
-        try:
-            _, record_id = context.download_center.upload_and_register_export(
-                tenant_id=caller.effective_tenant_id,
-                user_id=user_id,
-                username=username,
-                file_name=file_name,
-                file_bytes=report_bytes,
-                content_type=content_type,
-            )
-        except DownloadCenterError as exc:
-            raise StandardAPIError(exc.http_status, exc.code, exc.message, retryable=exc.retryable) from exc
-        response.headers["Cache-Control"] = "no-store"
-        return {
-            "download_center_record_id": record_id,
-            "direction": -1,
-            "status": "ready",
-            "file_name": file_name,
-            "format": payload.format,
-            "notify_file_center": True,
-        }
-
-    @app.post("/v1/assistant/questions/{qa_id}/feedback")
-    def submit_assistant_question_feedback(
-        qa_id: str,
-        payload: AssistantQuestionFeedbackRequest,
-        response: Response,
-        request: Request,
-        identity: tuple[ScopeContext, Any] = Depends(deps.assistant_identity),  # noqa: B008
-    ) -> dict[str, Any]:
-        """提交或撤销回答点赞/点踩反馈（幂等 upsert）。"""
-        caller, _ = identity
-        try:
-            qa = context.runtime.get_assistant_qa(caller, qa_id)
-        except (ValueError, RuntimeError) as exc:
-            raise api._runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
-        if qa is None:
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND,
-                "QA_NOT_FOUND",
-                "assistant question not found",
-            )
-        api._require_current_chat_order(context, caller, qa, request)
-        if str(qa.get("status")) != "completed":
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT,
-                "FEEDBACK_NOT_ALLOWED",
-                "feedback is only allowed on completed answers",
-            )
-        saved = context.assistant_feedback.upsert(
-            qa_id,
-            caller.scope_fingerprint,
-            rating=payload.rating,
-            reasons=payload.reasons,
-            comment=payload.comment,
-        )
-        response.headers["Cache-Control"] = "no-store"
-        return saved
-
-    @app.post("/v1/assistant/questions/{qa_id}/regenerate")
-    def regenerate_assistant_question(
-        qa_id: str,
-        request: Request,
-        payload: AssistantQuestionRegenerateRequest | None = None,
-        identity: tuple[ScopeContext, Any] = Depends(deps.assistant_identity),  # noqa: B008
-        language: str = Depends(request_language),  # noqa: B008
-    ) -> JSONResponse:
-        """仅允许对会话最后一轮已完成问答原地重新生成（复用原问题与原附件，排除旧回答上下文）。"""
-        del payload
-        from aiops_diagnostics.conversation.conversation_store import (
-            ConversationBusy,
-            ConversationNotFound,
-            RegenerateNotAllowed,
-        )
-        from aiops_diagnostics.execution.node_publication import all_targets
-        from aiops_diagnostics.operator import operator_cpms
-        from aiops_diagnostics.operator.attachments import (
-            AttachmentError,
-            public_file_dict,
-            resolve_turn_attachments,
-        )
-        from aiops_diagnostics.operator.operator_cpms import OperatorRefused
-
-        caller, decision = identity
-        if str(decision.platform) != "operator":
-            raise StandardAPIError(
-                status.HTTP_403_FORBIDDEN,
-                "PLATFORM_FORBIDDEN",
-                "operator entry is required",
-            )
-        try:
-            qa = context.runtime.get_assistant_qa(caller, qa_id)
-        except (ValueError, RuntimeError) as exc:
-            raise api._runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
-        if qa is None:
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND,
-                "QA_NOT_FOUND",
-                "assistant question not found",
-            )
-        api._require_current_chat_order(context, caller, qa, request)
-        turn = context.conversation_store.find_turn_by_qa_id(qa_id, caller.scope_fingerprint)
-        if turn is None or turn.get("business_entry") != "operator":
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT,
-                "REGENERATE_NOT_ALLOWED",
-                "only the latest completed operator turn can be regenerated",
-            )
-
-        try:
-            binding = chat_execution.select_binding(
-                context.settings, caller, scenario=operator_cpms.SCENARIO, entry="operator"
-            )
-        except chat_execution.ChatRunUnavailable as exc:
-            raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-        if binding is None:
-            raise StandardAPIError(
-                409, "CHAT_ROUTE_UNAVAILABLE", "business execution route is not configured"
-            )
-        api._require_operator_company_token(request)
-        target = next(
-            (
-                r
-                for r in all_targets(context.settings)
-                if r.entry == "operator"
-                and r.app_id == binding.app_id
-                and api._tenant_in_scope(r.tenant_id, caller.effective_tenant_id)
-                and r.environment == binding.environment
-            ),
-            None,
-        )
-        if target is None:
-            raise OperatorRefused("OPERATOR_TARGET_MISSING")
-
-        conversation_id = str(turn["conversation_id"])
-        try:
-            regen = context.conversation_store.begin_regenerate_turn(
-                conversation_id, caller.scope_fingerprint, expected_qa_id=qa_id
-            )
-        except ConversationBusy as exc:
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT,
-                "CONVERSATION_BUSY",
-                "conversation already has a generating turn",
-            ) from exc
-        except (RegenerateNotAllowed, ConversationNotFound) as exc:
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT,
-                "REGENERATE_NOT_ALLOWED",
-                "only the latest completed turn in a conversation can be regenerated",
-            ) from exc
-
-        turn_no = int(regen["turn_no"])
-        claim_id = str(regen["claim_id"])
-        conv_ref = {"conversation_id": conversation_id, "scope_fingerprint": caller.scope_fingerprint}
-        try:
-            attachment_ids = list(regen.get("attachment_ids") or [])
-            resolved_attachments = (
-                resolve_turn_attachments(
-                    context.assistant_files,
-                    attachment_ids,
-                    caller.scope_fingerprint,
-                    business_entry="operator",
-                )
-                if attachment_ids
-                else []
-            )
-        except AttachmentError as exc:
-            api._release_conversation_turn(
-                context, conv_ref, turn_no, preserve_completed=True, claim_id=claim_id
-            )
-            raise StandardAPIError(exc.http_status, exc.code, exc.message, retryable=exc.retryable) from exc
-
-        internal_run_id = str(qa.get("internal_run_id") or "")
-        order = (
-            internal_run_id.removeprefix(operator_cpms.PREFIX)
-            if internal_run_id.startswith(operator_cpms.PREFIX)
-            else ""
-        )
-        authorization = request.headers.get("Authorization")
-        source = request.headers.get(SOURCE_KEY_HEADER)
-
-        def authenticated_operator_task():
-            authenticated = api._authenticate_caller(
-                context.caller_resolver,
-                authorization,
-                None,
-                required_scope=STANDARD_DIAGNOSIS_SCOPE,
-                platform_entry="operator",
-                source_key=source,
-            )
-            return context.operator_cpms.refresh_scope(authenticated, allow_empty=not order)
-
-        try:
-            new_qa = context.runtime.start_operator_cpms(
-                context.operator_cpms,
-                caller,
-                binding,
-                order,
-                str(regen["question"]),
-                bearer=(authorization or "").removeprefix("Bearer "),
-                authorize=authenticated_operator_task,
-                base=target.cpms_base_url,
-                proxy=target.proxy_base_url,
-                language=language,
-                agent_id=str(regen["agent_id"]),
-                attachments=resolved_attachments,
-                conversation_turn=(conversation_id, caller.scope_fingerprint, turn_no),
-                attempt_no=int(regen["next_attempt_no"]),
-                parent_qa_id=qa_id,
-                claim_id=claim_id,
-            )
-        except Exception:
-            api._release_conversation_turn(
-                context, conv_ref, turn_no, preserve_completed=True, claim_id=claim_id
-            )
-            raise
-
-        return JSONResponse(
-            status_code=202,
-            headers={"Cache-Control": "no-store"},
-            content={
-                **api._assistant_question_response(new_qa, language),
-                "attachments": [public_file_dict(item) for item in resolved_attachments],
-                "conversation_id": conversation_id,
-                "turn_no": turn_no,
-            },
-        )
-
     @app.get("/v1/assistant/questions")
     def list_assistant_questions(
         response: Response,
@@ -1231,13 +654,11 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             questions = context.runtime.list_assistant_qa(caller, limit=limit)
         except (ValueError, RuntimeError) as exc:
             raise api._runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
-        from aiops_diagnostics.operator.operator_cpms import PREFIX, OperatorRefused
-
         for qa in questions:
-            if str(qa.get("internal_run_id") or "").startswith(PREFIX):
+            if str(qa.get("internal_run_id") or "").startswith(operator_cpms.PREFIX):
                 try:
                     api._require_current_chat_order(context, caller, qa, request)
-                except (OperatorRefused, chat_execution.ChatRunUnavailable):
+                except (operator_cpms.OperatorRefused, chat_execution.ChatRunUnavailable):
                     qa["result"] = None
         response.headers["Cache-Control"] = "no-store"
         return {
@@ -1246,22 +667,3 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             "count": len(questions),
             "questions": questions,
         }
-
-    @app.get("/v1/media/{signed_id}")
-    def get_media(
-        signed_id: str,
-        range_header: Annotated[str | None, Header(alias="Range")] = None,
-    ) -> Response:
-        """提供带短期 HMAC 签名的知识库媒体资源，越权与不存在统一 404。"""
-        media_response = context.runtime.serve_media(signed_id, range_header=range_header)
-        if media_response is None:
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND,
-                "MEDIA_NOT_FOUND",
-                "media resource not found",
-            )
-        return Response(
-            status_code=media_response.status_code,
-            headers=media_response.headers,
-            content=media_response.body,
-        )

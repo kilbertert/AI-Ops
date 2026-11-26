@@ -1,3 +1,5 @@
+"""Gateway 入站调用者鉴权协议、多路径解析器组合及本人订单范围授权器。"""
+
 from __future__ import annotations
 
 import hashlib

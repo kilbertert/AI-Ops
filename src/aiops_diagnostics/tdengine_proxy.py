@@ -1,3 +1,5 @@
+"""仅监听回环、按 SQL 与参数白名单校验的 TDengine 只读 HTTP 代理。"""
+
 from __future__ import annotations
 
 import base64

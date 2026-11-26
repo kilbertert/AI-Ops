@@ -75,6 +75,9 @@ def test_normalize_tenant_matches_parse_request_stripping() -> None:
 VISIBILITY_MODULES = (
     "data/sources.py",
     "gateway/gateway_api.py",
+    "gateway/caller_auth_wiring.py",
+    "gateway/response_views.py",
+    "gateway/conversation_helpers.py",
     "gateway/gateway_runtime.py",
 )
 
