@@ -124,7 +124,7 @@ code:
 
 ## images.lock.json 合同
 
-平台 jar（snail-ai 钉 gitee 提交+sha+bytes）、node `{jar sha256, source_commit, source_sha256}`（`source_digest.py` 字节级含注释）、`base_images.refs` 按主机（41 走镜像前缀 ref；preflight 只认锁定 ref+image_id，不认 tag 名或 image-override 参数）、`gateway_image` = 仅 base digest——产出属于随制品走的 `gateway-image/identity.json`（ADR-0208；`M2LIVE_GATEWAY_IDENTITY_SHA256` 必须来自构建侧记录，绝不在服务主机重算）。`--update-lock` 被拒；普通 src PR 不碰它。
+平台 jar（snail-ai 钉 gitee 提交+sha+bytes）、node `{jar sha256, source_commit, source_sha256}`（`source_digest.py` 字节级含注释）、`base_images.refs` 按主机（41 走镜像前缀 ref；preflight 只认锁定 ref+image_id，不认 tag 名或 image-override 参数）、`gateway_image` = 仅 base digest——产出属于随制品走的 `gateway-image/identity.json`（ADR-0208；`M2LIVE_GATEWAY_IDENTITY_SHA256` 必须来自构建侧记录，绝不在服务主机重算）。`--update-lock` 已退役（传入即带说明 exit 2；构建身份只随 `identity.json` 制品走）；普通 src PR 不碰它。
 
 ## 暴露纪律与拓扑
 
