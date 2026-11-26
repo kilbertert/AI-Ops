@@ -916,14 +916,22 @@ it('starts explicit business validation from registration without accepting a ve
 })
 
 it('publishes from verified business and restores the same operation with visible admission', async () => {
+  // 与服务端发布闸门同形状：三项能力全部 passed 的验证才可发布（publication.py submit 拒收其他形状）。
   const validation = {
     id: `task_${'a'.repeat(32)}`,
     action: 'candidate-validate',
     tenant_id: 'same',
+    plan_id: `plan_${'b'.repeat(32)}`,
     state: 'observed',
     cancel_requested: false,
     error_code: '',
-    result: {},
+    result: {
+      checks: [
+        { capability: 'consumer', state: 'passed' },
+        { capability: 'offline', state: 'passed' },
+        { capability: 'order', state: 'passed' },
+      ],
+    },
   }
   const plan = {
     id: `plan_${'b'.repeat(32)}`,
@@ -987,6 +995,68 @@ it('publishes from verified business and restores the same operation with visibl
     restore_publication: `task_${'c'.repeat(32)}`,
   })
   await expect.element(screen.getByText(/正式开通.*已恢复.*准入 未启用/)).toBeVisible()
+})
+
+it('offers validation publish only when all three capabilities passed, and keeps it in the active filter', async () => {
+  // 判据来源：publication.py 的 submit 硬闸门——验证范围不等于三项能力时发布必遭拒收，
+  // 页面按自身契约不提供该动作；凡就绪验证均保留发布动作（服务端按所选验证的证据链发布，
+  // 同租户多条就绪验证互不等价）。「进行中/待发布」筛选按租户取最新就绪代表，
+  // 已具备的验证须在其中保持可见，否则操作者找不到发布入口。
+  // 负例形状：validation.py 在任一检查未过时把任务终态置为 blocked 而非 observed，
+  // 故 observed 而不可发布的真实形状是范围缩窄的验证（checks 只覆盖部分能力且全部 passed）。
+  const fullValidation = {
+    id: `task_${'5'.repeat(32)}`,
+    action: 'candidate-validate',
+    tenant_id: 'same',
+    plan_id: `plan_${'b'.repeat(32)}`,
+    state: 'observed',
+    cancel_requested: false,
+    error_code: '',
+    result: {
+      checks: [
+        { capability: 'consumer', state: 'passed' },
+        { capability: 'offline', state: 'passed' },
+        { capability: 'order', state: 'passed' },
+      ],
+    },
+  }
+  const fullValidationOlder = {
+    ...fullValidation,
+    id: `task_${'7'.repeat(32)}`,
+  }
+  const scopedValidation = {
+    ...fullValidation,
+    id: `task_${'6'.repeat(32)}`,
+    tenant_id: 'other',
+    result: {
+      checks: [
+        { capability: 'consumer', state: 'passed' },
+        { capability: 'order', state: 'passed' },
+      ],
+    },
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body))
+      if (body.action === 'environment-drafts') return Response.json(data)
+      return Response.json({ tasks: [scopedValidation, fullValidation, fullValidationOlder] })
+    }),
+  )
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('tab', { name: /运行与排查/ }).click()
+  // 同租户两条就绪验证各自保留发布动作（证据链不等价，服务端按所选验证发布）
+  expect(
+    screen.getByRole('button', { name: '发布并开通：same', exact: true }).elements(),
+  ).toHaveLength(2)
+  expect(
+    screen.getByRole('button', { name: '发布并开通：other', exact: true }).elements(),
+  ).toHaveLength(0)
+  await screen.getByRole('button', { name: '进行中/待发布 (1)', exact: true }).click()
+  // 筛选按租户只留最新就绪代表，既不丢发布入口也不堆历史重复项
+  await expect.element(screen.getByText(fullValidation.id, { exact: true })).toBeVisible()
+  expect(screen.getByText(fullValidationOlder.id, { exact: true }).elements()).toHaveLength(0)
+  expect(screen.getByText(scopedValidation.id, { exact: true }).elements()).toHaveLength(0)
 })
 
 it('renders environment overview, tenant capability matrix, live vs receipt nodes, and clears on revoked overview refresh', async () => {
@@ -1582,12 +1652,13 @@ it('guards enter-key submit in case input, expired plan re-preflight, view trans
             checks: [],
           })
         }
+        // 服务端计划状态只有 blocked（冻结有效）与 expired 两种（plans.py 的 _public）。
         return Response.json({
           id: `plan_${String(planCall).padStart(32, 'a')}`,
           draft_revision: 2,
           registry_revision: 4,
-          state: 'ready',
-          executable: true,
+          state: 'blocked',
+          executable: false,
           checks: [],
         })
       }
