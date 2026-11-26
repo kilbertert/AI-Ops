@@ -388,7 +388,10 @@ def _default_ephemeral_password_runner(
         write_private_text(kh, key_line + "\n")
         remote_bootstrap = _build_remote_python_bootstrap(environment, public_key)
         b64_script = base64.b64encode(remote_bootstrap.encode("utf-8")).decode("ascii")
-        remote_cmd = f"python3 -c 'import base64; exec(base64.b64decode({b64_script!r}).decode())'"
+        remote_cmd = (
+            "python3 -c 'import base64, sys; exec(base64.b64decode(sys.argv[1]).decode())' "
+            f"{shlex.quote(b64_script)}"
+        )
         ssh_cmd = [
             "ssh",
             "-o",

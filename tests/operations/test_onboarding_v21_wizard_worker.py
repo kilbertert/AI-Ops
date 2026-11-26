@@ -634,3 +634,125 @@ def test_prepare_control_plane_bundle_avoids_loopback_and_enables_customer_flags
     assert rendered["AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED"] == "true"
     assert rendered["AIOPS_MYSQL_DATABASE"] == "cloud_charging_pile"
     assert rendered["AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX"] == "app:3rd_session:"
+
+
+def test_ephemeral_password_runner_remote_cmd_executes_under_bash_without_quote_breakout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import subprocess
+
+    from aiops_diagnostics.onboarding import host_enrollment
+
+    real_run = subprocess.run
+    captured_cmds: list[str] = []
+
+    def _fake_subproc_run(cmd, **_kwargs):
+        if cmd[0] == "ssh-keyscan":
+            return SimpleNamespace(
+                returncode=0, stdout="8.148.223.139 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA\n"
+            )
+        if cmd[0] == "ssh-keygen":
+            return SimpleNamespace(
+                returncode=0,
+                stdout="256 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA root (ED25519)\n",
+            )
+        if cmd[0] == "ssh":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected subprocess cmd: {cmd}")
+
+    def _fake_pty_runner(ssh_cmd: list[str], _password: str, *, timeout: float = 120.0) -> tuple[int, str]:
+        _ = timeout
+        remote_cmd = ssh_cmd[-1]
+        captured_cmds.append(remote_cmd)
+        proc = real_run(["bash", "-c", remote_cmd], capture_output=True, text=True, check=False)
+        return proc.returncode, proc.stdout + proc.stderr
+
+    monkeypatch.setattr(host_enrollment.subprocess, "run", _fake_subproc_run)
+    monkeypatch.setattr(host_enrollment, "_run_ssh_with_ephemeral_pty_password", _fake_pty_runner)
+    monkeypatch.setattr(
+        host_enrollment,
+        "_build_remote_python_bootstrap",
+        lambda _env, _pub: (
+            'import json; print("AIOPS_BOOTSTRAP_JSON:" + '
+            'json.dumps({"hostname": "jiejia-ok", "venv_ready": True}))'
+        ),
+    )
+
+    priv_key = tmp_path / "id_ed25519-jiejia"
+    priv_key.write_text("KEY\n", encoding="utf-8")
+    facts = host_enrollment._default_ephemeral_password_runner(
+        address="8.148.223.139",
+        ssh_port=22,
+        ssh_user="root",
+        password="secret",
+        public_key="ssh-ed25519 AAAAC3 test",
+        private_key_path=priv_key,
+        environment="jiejia",
+    )
+    assert facts["hostname"] == "jiejia-ok"
+    assert facts["venv_ready"] is True
+    assert captured_cmds and "sys.argv[1]" in captured_cmds[0]
+
+
+def test_pinned_customer_host_from_central_supports_canonical_hosts_schema(monkeypatch) -> None:
+    from aiops_diagnostics.onboarding import wizard_worker
+
+    read_paths: list[str] = []
+
+    def _fake_read(_target: str, path: str, *, cwd: Path | None = None) -> bytes:
+        _ = cwd
+        read_paths.append(path)
+        if path.endswith("customer-hosts.json"):
+            return json.dumps(
+                {
+                    "schema": "aiops-customer-hosts/1",
+                    "hosts": {
+                        "jiejia": {
+                            "address": "8.148.223.139",
+                            "ssh_port": 22,
+                            "ssh_user": "root",
+                            "key_id": "ed25519-jiejia",
+                            "host_fingerprint_sha256": "SHA256:AAAA",
+                            "host_public_key_line": "8.148.223.139 ssh-ed25519 AAAA",
+                        }
+                    },
+                }
+            ).encode("utf-8")
+        if path.endswith("customer-host-keys/id_ed25519-jiejia"):
+            return b"-----BEGIN OPENSSH PRIVATE KEY-----\nTEST\n-----END OPENSSH PRIVATE KEY-----\n"
+        raise AssertionError(f"unexpected path: {path}")
+
+    monkeypatch.setattr(wizard_worker, "_dev_host_read", _fake_read)
+    pinned = wizard_worker.PinnedCustomerHost.from_central("41", "jiejia")
+    assert pinned.host_ip == "8.148.223.139"
+    assert pinned.expected_fingerprint == "SHA256:AAAA"
+    assert any(p.endswith("/id_ed25519-jiejia") for p in read_paths)
+
+
+def test_step_customer_nginx_renders_canonical_tool_ingress_and_resolves_nginx_bin() -> None:
+    from aiops_diagnostics.onboarding import wizard_worker
+
+    repo_root = Path(__file__).resolve().parents[2]
+    copied: dict[str, str] = {}
+    commands: list[str] = []
+
+    class _FakePinnedHost:
+        def copy_file(self, src: Path, dst: str) -> None:
+            copied[dst] = src.read_text(encoding="utf-8")
+
+        def run_cmd(self, cmd: str, **_kwargs):
+            commands.append(cmd)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    res = wizard_worker._step_customer_nginx(
+        repo_root,
+        {"environment": "jiejia", "api_domain": "api.juxichongdian.cn", "local_port": 8788},
+        pinned_host=_FakePinnedHost(),
+    )
+    assert res == {"ok": True}
+    tool_conf = copied["/tmp/wizard-jiejia-aiops-tool-ingress.conf"]
+    assert "location = /v1/internal/consumer-knowledge" in tool_conf
+    assert "/v1/internal/operator-runs/" in tool_conf
+    assert "120[.]55[.]45[.]59" in tool_conf
+    assert "124[.]243[.]178[.]156" in tool_conf
+    assert commands and "NGINX_BIN=" in commands[0] and "/www/server/nginx/sbin/nginx" in commands[0]
