@@ -55,7 +55,7 @@ code:
 - `dify_chat_workflow.py`/`dify_chatflow.py`：Service-API 执行 + SSE 身份连续性——每个事件的 `workflow_run_id/task_id/conversation_id/message_id` 必须匹配 `workflow_started`；`message_end`+`workflow_finished` 都要到；上游响应体**永不转发**（`DIFY_UNAVAILABLE`）——可能含内部地址/凭据片段。service key 从 0600 文件读；取消按 `task_id`。
 - **成功 = 三个事实同时成立**：跑的 workflow==注册 id、同轮取数快照存在、输出适配且 order_no 匹配——"Dify 返回 200"不是成功（ADR-0124 §3）。
 - `scope_fingerprint` 门控读：提交与回读必须用同一 scope 构造器，否则试用 id 永久不可读（真 bug，现有测试钉住异指纹上下文）。
-- 表结构权威在 `gateway_schema.py`（ADR-0244）：本页全部表（registry/runs/bindings/grants）的 DDL 只在那里声明一次；构造任一 store 调 `ensure(path)` 物化全部表并查漂移，`startup()` 同版本也全检、漂移拒 boot。运维面 `aiops-admin schema check|migrate`、`rehearse()`。
+- 表结构权威在 `gateway_schema.py`（ADR-0244，合同归 [gateway-store](../gateway/gateway-store.mdx)）：本页全部表（registry/runs/bindings/grants）的 DDL 只在那里声明一次。
 
 ## 发布与路由
 

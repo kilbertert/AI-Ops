@@ -54,7 +54,6 @@ code:
 - grant = 能力令牌绑六元组 `(grant_id, scope_fingerprint, order_no, tenant_id, environment, workflow_id)`；`callback()` 重匹配全部六个，并在上游查询**前和后**各跑 `valid()`（180s TTL）——两趟都先跑 `require_registered` 登记准入（仅 `environment_registry_file` 配置时生效，ADR-0256），**但候选试用除外**：`trial.candidate` 非空时跳过登记闸（候选租户本身是停用态，过闸必 403），授权改由 `candidate.authorize()` 承担。登记环境/租户被禁 → `TENANT_ENVIRONMENT_NOT_ENABLED` 403，登记器缺失 → `ENVIRONMENT_REGISTRY_UNAVAILABLE`。`kind=service` 另要求 `CONSUMER_SCOPE_REQUIRED`——consumer 范围只有 self。
 - 试用/预览（`service_trial`）只许查明确选中的订单，orders 列表整体拒绝。`ConsumerTrial` 现有三种形态：草稿/临时 app（原路径）、`candidate`（停用候选：app_id 在创建前由 `uuid5(IMPORT_NAMESPACE, workspace_id:request_id)` 确定性选好——丢响应仍能定点回收；导入后 `site-enable` 保持 disabled；`finally` 无条件 `candidate.close()`）、`published`（复用已发布的 `(app_id, workflow_id, key)` 三元组——不建临时 app 不做删除）。`ect_` 目标租约只在 `POST /v1/internal/consumer-data/{capability}` 放通且 capability 必须 `agent`（否则 `GRANT_CAPABILITY_MISMATCH`）；候选路径 `read`/`knowledge` 仍过同一 `live_*` 开关（`CHATFLOW_LIVE_DISABLED`），并要求 `context.calls` 证据或 `CHATFLOW_EVIDENCE_UNAVAILABLE`。`ect_` 租约的铸造/吊销机制归 [environment-onboarding](../gateway/environment-onboarding.mdx)。
 - C 端 CPMS 授权（`consumer_tool_grants.py`）：只带 `tenant-id`+`user-id` 头、无 token；范围=本人订单站点；越界是**跳过**不是拒绝。登记器启用时 `_current` 对 grant 冻结 `base_url` 复核当前 `cpms_base(tenant)`，漂移 → `ConsumerToolRefused("CONSUMER_TARGET_CHANGED")`；`record` 写证据前重跑 `_current`（后台取数撤权校验）；`gateway/dependencies.py` 的 `install_exception_handlers` 把 `ConsumerToolRefused` 统一映射 403 `{code, "consumer tool request refused", retryable:false}` + `no-store`——与"越界跳过"不同轴（冻结目标变了而非范围越界）。
-- 本人站点面（`consumer_sites.py`）：`MAX_ORDER_PAGES=4`、页 50、`MAX_OWN_SITES=200`、恒发 `user-id`、展示上限 `SITE_MAX_SHOWN=10`。
 - 知识授权（`knowledge_access.py`）：显式 `(tenant, env, library)` 行在发布和检索两处检查，吊销即时生效；`generation()` 让授权代数单调（`granted_at=MAX(excluded, granted_at+0.000001)`）——吊销→重授不能让钉在旧代上的凭据复活，委派层复核此代数。端点解析登记器优先——`consumer_endpoint`/`approved_business_endpoint` 在 `environment_registry_file` 配置时经 `require(tenant)` 取登记行 `cpms_base_url`（连带校验 enabled），未配才回落 `business_environments_file` manifest（两个文件不是同一件东西）。
 
 ## SSE 与最终回答（规则不是启发式）
@@ -86,11 +85,9 @@ code:
 币种缺失/冲突不猜；创建时间不是计费开始，分时电量可能费用反推，feeRate不保证每kWh，不能据此判断计费正确。
 `upgrade_consumer_flow.py --order-composition`只接受现役v6三节点图，
 剥除**至多一个**已知V1–V6块（零块可迁——迁移正是为无块提示词追加一块而存在；重复块或剥后残留`aiops-order-composition:`标记即拒绝），
-并精确替换两条旧句——“只报告工具原值及可核对的算术差额”
-改为同名字段原值并列不计算差额，“安抚用户”句改为证据不足不得承诺正常——再把`ORDER_COMPOSITION_INSTRUCTION`追加到全文末尾
-（≤16,000字符、幂等）。`ORDER_COMPOSITION_INSTRUCTION`现役别名指向**V5**（`agent_contract.py`，4b9f65ec 起），
-迁移输出以`:5`标记收尾（`tests/consumer/test_consumer_agent_flow.py` 字节级钉死）；V1–V4 与 V6 常量仅作剥除输入，
-V5 既被剥除也被追加。注意两轴不能混：回调协议版本是 6（硬闸），构成块标记是 5——生产环境提示词实际带哪个标记
+替换两条已撤销旧句后把`ORDER_COMPOSITION_INSTRUCTION`追加到全文末尾（≤16,000字符、幂等；逐字文案以工具源码为准）。
+现役别名指向**V5**——V5 既被剥除也被追加，V1–V4 与 V6 常量仅作剥除输入。
+注意两轴不能混：回调协议版本是 6（硬闸），构成块标记是 5——生产环境提示词实际带哪个标记
 超出本仓可证范围，能钉的只有迁移工具输出。
 事实约束优先于安抚：缺币种时开头说明且全文金额无币种单位，null不称未收费，
 只列来源记录，不自主合计/税基/差额归因或作未核验“无异常”结论；迁移测试不证明自然回答语义。

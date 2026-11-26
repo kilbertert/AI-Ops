@@ -68,7 +68,7 @@ code:
 
 - 代理用 Dify `SECRET_KEY` **自签** HS256 会话 JWT `{user_id,exp,iss,sub}`——Dify 只验签名+查 user_id，不验密码不存会话。原因：Dify 1.17.1 **没有给既有账号设密码的 API**（ADR-0023）。接受的代价：持有 SECRET_KEY = 能给任何账号铸会话 + 保护全部存储凭据 → 代理只听回环、不落盘不落日志任何密码/令牌。
 - **公司登录交换是唯一身份源**：代理自己做真 `/upms/token/login`（密码 AES 表单；失败是 HTTP 200+`code:-1000` 只靠中文 msg 区分），再按固定 `client-type` 头读 `/upms/user/info`（未知 client-type → 空角色集=静默"无权限"）。浏览器带来的公司令牌从不被信任。
-- **环境登记准入**（ADR-0256/0332）：配 `AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE` 时 `LoginProxySettings.__post_init__` 把 `gateway_url` 钉到登记行（不符 = 启动 ValueError）——代理不许指向登记外网关。`LoginService.require_registered_tenant` 在公司登录交换成功后、权限读取前跑：平台哨兵（`user_type=-1` ∧ `tenant_id=-1`）查登记本身 enabled（`require_enabled()`，不按租户行查），普通租户按行 `require()`；停用 → `PermissionDenied("TENANT_ENVIRONMENT_NOT_ENABLED")`。新鲜 `login()` 一律 `allow_manager=False`——停用环境谁都登不进；但 schema-2 显式目录管理员（`is_manager`）的**既有会话仍 resolve**（`active_session`/`operator_token` 用默认 `allow_manager=True`）——这是停用环境的恢复通道，不是准入漏洞。身份查询处理器在 STATUS_ACTIVE 检查后回 `{"allowed": false, "reason": "TENANT_ENVIRONMENT_NOT_ENABLED"}`（HTTP 200 信封，与 MAPPING_DISABLED 同形），并叠加 `business_admitted` 布尔——管理员会话能 resolve 但业务面凭它拒止。登记闸在身份交换**之后**——裁准入不裁身份；不配文件整条 no-op，旧 41 行为逐位不变。
+- **环境登记准入**（ADR-0256/0332）：配 `AIOPS_LOGIN_PROXY_ENVIRONMENT_REGISTRY_FILE` 时 `LoginProxySettings.__post_init__` 把 `gateway_url` 钉到登记行（不符 = 启动 ValueError）——代理不许指向登记外网关。`LoginService.require_registered_tenant` 在公司登录交换成功后、权限读取前跑（平台哨兵/租户行两路准入与 `require_enabled()` 语义归 [identity-scope](../identity/identity-scope.mdx)）；停用 → `PermissionDenied("TENANT_ENVIRONMENT_NOT_ENABLED")`。新鲜 `login()` 一律 `allow_manager=False`——停用环境谁都登不进；但 schema-2 显式目录管理员（`is_manager`）的**既有会话仍 resolve**（`active_session`/`operator_token` 用默认 `allow_manager=True`）——这是停用环境的恢复通道，不是准入漏洞。身份查询处理器在 STATUS_ACTIVE 检查后回 `{"allowed": false, "reason": "TENANT_ENVIRONMENT_NOT_ENABLED"}`（HTTP 200 信封，与 MAPPING_DISABLED 同形），并叠加 `business_admitted` 布尔——管理员会话能 resolve 但业务面凭它拒止。登记闸在身份交换**之后**——裁准入不裁身份；不配文件整条 no-op，旧 41 行为逐位不变。
 - **共享多环境模式**（`dify_login_proxy/environments.py` 与 `dify_console_bridge/environments.py`）：配 `AIOPS_LOGIN_PROXY_ENVIRONMENT_CREDENTIALS_FILE`（登记文件给地址、私有投影给凭据，schema `aiops-console-environments/1`、≤64 凭据行、`validate_private_file`）即激活 `LoginEnvironments`——钉 gateway_url 只在登记文件存在**且**凭据文件缺席时发生。登录页提供环境 `<select>` + 每环境验证码；会话仍按环境隔离（不广播）。新入口 `/__aiops/login/environments`（目录，无地址无凭据）与 `=/console/api/logout` 拦截（先吊销 AI-Ops 绑定再转发 Dify 原生 logout，转发未确认=`native logout unconfirmed`）。桥侧对应 `AIOPS_CONSOLE_BRIDGE_ENVIRONMENT_CREDENTIALS_FILE`（ADR-0276 共享入口按环境选择）。
 - 开通 = invite→activate→lookup，全走官方端点、无邮件（邀请 token 在响应里带回）；账号邮箱 = 确定性 `{environment}-{company_user_id}@aiops-login.invalid`——environment 是必填部署身份无默认（默认值会把 ADR-0061 修掉的跨环境账号碰撞悄悄引回来）。
 - TLS 是**逐请求**闸（`X-Forwarded-Proto==https`，缺=拒）不是配置串检查——明文 :10008 入口与 TLS 共用同一份 nginx conf，配置证明不了任何事（ADR-0055）。`X-Real-IP` 退避。
@@ -76,18 +76,16 @@ code:
 
 ## 工作区生命周期
 
-新环境候选准备复用此映射与创建接口，规则见`docs/agents/environment-registry.md` 的候选准备手册：
-完整环境/租户名字在创建前保存，未知结果零命中也不重建；原客户开通默认恢复策略保持。
-候选就绪不发布或激活，应用/知识/业务仍pending，中央亲自回读，不采信浏览器或执行宿主资源编号。
+新环境候选准备复用此映射与创建接口，规则见 `docs/agents/environment-registry.md` 的候选准备手册；原客户开通默认恢复策略保持。
 环境准入管理面在 stock 控制台内（web patch `17-environment-directory-tab` → `/v1/dify/management/environment*`）；
 该面是开通流水线的控制台半区，账本与阶段合同归 [environment-onboarding](../gateway/environment-onboarding.mdx)。
 
 - 模型：`dify_workspaces(tenant_id, environment) → workspace_id + setup_state`——`(tenant,environment)` 二元组，因为两个 UPMS 能发出碰撞的 tenant_id（`environment` **不在**公司 JWT 里）。
 - `DifyWorkspaces.resolve` 返回 id 或**带码异常**（`UNRESOLVED`/`CREATING`/`FAILED`/`UNKNOWN`）——**绝不返回 `""`**：空 workspace_id = Dify 平台根 = 别人的工作区（ADR-0067）。码带下一步：UNRESOLVED→ensure-workspace；CREATING→重试；FAILED→重建；UNKNOWN→先对账别重建（Dify 没有删 workspace 的 API，重试会造永久孤儿，ADR-0068）。这四码是 `resolve` 的清单；第五码 `DIFY_WORKSPACE_AMBIGUOUS` 只在反向解析 `tenant_for_workspace` 多行命中与创建时名字对账抛出。
 - 创建 = 先认领后创建 + 租约 + 名字对账（0=安全、1=收养、>1=`AMBIGUOUS` 交人）；`ensure-workspace`（建壳）vs `ensure-ready`（插件+每工作区凭据+模板 DSL+**激活**它写的凭据——读回 `current_credential_name`，"凭据存在"≠"凭据激活"，ADR-0078 真事故）。模板 DSL 刻意不带 `model_config.model` 与 `dataset_configs`（每工作区的值还不存在）。
-- `inner_api`（`POST /inner/api/enterprise/workspace`+成员端点）是**唯一**建工作区路径——console API 没有；经逐连接 `docker inspect` 的回环转发器+SSH 隧道到达；隧道不是授权（`X-Inner-Api-Key` 仍必须）。`failed`（错误响应/拒连）与 `unknown`（超时/短读/200 无 id）按 `HttpFailure.cause` 类型分——重试 unknown 会造永久孤儿。转发器面已扩到 Console+Service API、32 路并行中继（串行中继曾把流式回答与工具回调互锁死锁）；交付走 `build-bundle.sh`（合并修订制品+SHA256SUMS）+`deploy.sh install|restore`（flock、在飞连接在时不重启、健康=匿名 401 检查）。
+- `inner_api`（`POST /inner/api/enterprise/workspace`+成员端点）是**唯一**建工作区路径——console API 没有；经回环转发器+SSH 隧道到达；隧道不是授权（`X-Inner-Api-Key` 仍必须）。`failed`（错误响应/拒连）与 `unknown`（超时/短读/200 无 id）按 `HttpFailure.cause` 类型分——重试 unknown 会造永久孤儿。转发器机制（逐连接 `docker inspect`、并行中继与串行死锁教训）与交付形状见 `ops/dify-inner-api/README.md`。
 - `dify_console_admin.py`：`ADMIN_API_KEY + X-WORKSPACE-ID` 以该工作区 owner 身份操作；插件安装是异步任务要轮询到 success；凭据由 Dify 实验（假 key → 400）；每工作区凭据（每租户 RSA key）必须分开。
-- 表结构权威在 `gateway_schema.py`（ADR-0244）：构造任一网关 store 调 `gateway_schema.ensure(path)` 一次物化全部表（`TABLES`/`INDEXES`/`LEGACY_COLUMNS`，`user_version` 记版），不再有 per-store 建表；`startup()` 同版本也全量校验、漂移即拒 boot。运维面 `aiops-admin schema check|migrate` 与 `rehearse()`；`MappingStore`（登录代理自己的库）例外。
+- 表结构权威在 `gateway_schema.py`（ADR-0244），合同归 [gateway-store](../gateway/gateway-store.mdx)；`MappingStore`（登录代理自己的库）是唯一例外。
 
 ## Bridge（BFF 人机分离）
 
