@@ -10,7 +10,10 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, Request, status
 
+from aiops_diagnostics.consumer import consumer_intent, consumer_publication, consumer_trial
+from aiops_diagnostics.dify import self_service_config, self_service_identity
 from aiops_diagnostics.dify.dify_debug_identity import DifyIdentity
+from aiops_diagnostics.dify.dify_dsl_pull import DifyDslSource
 from aiops_diagnostics.dify.dify_knowledge_api import (
     DIFY_KNOWLEDGE_LIST_PATH,
     DIFY_RETRIEVAL_PATH,
@@ -20,7 +23,8 @@ from aiops_diagnostics.dify.dify_knowledge_api import (
 )
 from aiops_diagnostics.dify.dify_trial import TrialInitiator, TrialRefused
 from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
-from aiops_diagnostics.execution import chat_execution
+from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+from aiops_diagnostics.execution import chat_execution, chat_route_bindings, node_publication
 from aiops_diagnostics.gateway.dependencies import GatewayDeps, request_language
 from aiops_diagnostics.gateway.errors import StandardAPIError
 from aiops_diagnostics.gateway.schemas import (
@@ -34,10 +38,13 @@ from aiops_diagnostics.gateway.schemas import (
     OperatorTrialCancelRequest,
 )
 from aiops_diagnostics.identity.scope_context import ScopeContext, is_operator_entry
+from aiops_diagnostics.knowledge import knowledge_delegation
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
     normalize_search_response,
 )
+from aiops_diagnostics.onboarding import candidate_knowledge
+from aiops_diagnostics.operator import operator_cpms
 
 
 def _start_operator_preview_trial(
@@ -49,12 +56,6 @@ def _start_operator_preview_trial(
     language: str,
 ) -> dict[str, Any]:
     """启动受管管家草稿试运行（由 Dify 控制台原生预览发起）。"""
-    from aiops_diagnostics.dify.dify_dsl_pull import DifyDslSource
-    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
-    from aiops_diagnostics.execution.node_publication import candidate
-    from aiops_diagnostics.operator import operator_cpms
-    from aiops_diagnostics.operator.operator_cpms import OperatorRefused
-
     session = request.headers.get("X-AIOps-Console-Session", "")
 
     def console_operator_identity():
@@ -68,14 +69,14 @@ def _start_operator_preview_trial(
     )
     if managed:
         if not api._tenant_in_scope(managed["tenant_id"], caller.effective_tenant_id):
-            raise OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
+            raise operator_cpms.OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
         binding = chat_execution.trial_binding(context.settings, payload.app_id)
     else:
         binding = chat_execution.select_binding(
             context.settings, caller, scenario=operator_cpms.SCENARIO, entry="operator"
         )
     if binding is None or binding.app_id != payload.app_id:
-        raise OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
+        raise operator_cpms.OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
     workspace = api._workspace_for_tenant(context, caller.effective_tenant_id)
     source = DifyDslSource(
         context.settings.dify_console_base_url,
@@ -84,7 +85,7 @@ def _start_operator_preview_trial(
         workspace,
     )
     try:
-        manifest = candidate(
+        manifest = node_publication.candidate(
             source,
             target,
             **(
@@ -99,7 +100,7 @@ def _start_operator_preview_trial(
     def current_console_scope():
         current, token = console_operator_identity()
         if token != bearer:
-            raise OperatorRefused("OPERATOR_TRIAL_LOGIN_CHANGED")
+            raise operator_cpms.OperatorRefused("OPERATOR_TRIAL_LOGIN_CHANGED")
         return current
 
     previous = (
@@ -143,10 +144,8 @@ def _start_operator_preview_trial(
 def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
 
     def managed_trial_caller(request: Request, app_id: str) -> ScopeContext:
-        from aiops_diagnostics.dify import self_service_identity as auth
-
         session = request.headers.get("X-AIOps-Console-Session", "")
-        row = context.self_service.authorize_app(auth.identity(context, session), app_id)
+        row = context.self_service.authorize_app(self_service_identity.identity(context, session), app_id)
         caller, _ = api.authenticated_operator_console(context, session)
         if (
             row["entry"] != "consumer"
@@ -176,8 +175,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         except DifyRequestError as exc:
             raise StandardAPIError(status.HTTP_400_BAD_REQUEST, exc.code, exc.message) from exc
         if identity.delegated_scope:
-            from aiops_diagnostics.knowledge import knowledge_delegation
-
             try:
                 return knowledge_delegation.retrieve(context, identity.delegated_scope, request)
             except ValueError as exc:
@@ -187,11 +184,9 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                     502, "DIFY_KNOWLEDGE_UNAVAILABLE", "knowledge unavailable", retryable=True
                 ) from exc
         if identity.candidate_scope:
-            from aiops_diagnostics.onboarding.candidate_knowledge import CandidateKnowledgeError, retrieve
-
             try:
-                return retrieve(context, identity.candidate_scope, request)
-            except CandidateKnowledgeError as exc:
+                return candidate_knowledge.retrieve(context, identity.candidate_scope, request)
+            except candidate_knowledge.CandidateKnowledgeError as exc:
                 raise StandardAPIError(exc.status, exc.code, str(exc)) from exc
 
         sources = deps.knowledge_sources(context.settings, context.store)
@@ -246,8 +241,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
     ) -> dict[str, Any]:
         """列出当前凭据可访问的已登记外部知识源。"""
         if identity.delegated_scope:
-            from aiops_diagnostics.knowledge import knowledge_delegation
-
             try:
                 return knowledge_delegation.catalogue(context, identity.delegated_scope)
             except ValueError as exc:
@@ -257,11 +250,9 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                     502, "DIFY_KNOWLEDGE_UNAVAILABLE", "knowledge unavailable", retryable=True
                 ) from exc
         if identity.candidate_scope:
-            from aiops_diagnostics.onboarding.candidate_knowledge import CandidateKnowledgeError, catalogue
-
             try:
-                return catalogue(context, identity.candidate_scope)
-            except CandidateKnowledgeError as exc:
+                return candidate_knowledge.catalogue(context, identity.candidate_scope)
+            except candidate_knowledge.CandidateKnowledgeError as exc:
                 raise StandardAPIError(exc.status, exc.code, str(exc)) from exc
         sources = deps.knowledge_sources(context.settings, context.store)
         bindings = sources.visible(
@@ -325,15 +316,9 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 "CHAT_ROUTE_BINDINGS_DISABLED",
                 "route bindings are not managed on this server",
             )
-        from aiops_diagnostics.consumer.consumer_publication import route_scenario
-        from aiops_diagnostics.execution.chat_route_bindings import (
-            ChatRouteBindingStore,
-            RouteBindingError,
-        )
-
-        store = ChatRouteBindingStore(Path(database).expanduser().absolute())
+        store = chat_route_bindings.ChatRouteBindingStore(Path(database).expanduser().absolute())
         entry = str(getattr(binding, "business_entry", "") or "consumer")
-        scenario = route_scenario(context.settings, binding)
+        scenario = consumer_publication.route_scenario(context.settings, binding)
         current = store.get(environment, binding.tenant_id, entry, scenario)
         if current is None:
             raise StandardAPIError(
@@ -352,7 +337,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 expected_revision=current.revision,
                 updated_by=initiator[0] or initiator[1] or "",
             )
-        except RouteBindingError as exc:
+        except chat_route_bindings.RouteBindingError as exc:
             raise StandardAPIError(status.HTTP_409_CONFLICT, exc.code, "route was not retracted") from exc
         settled: dict[str, Any] = {"settled_runs": []}
         with contextlib.suppress(Exception):
@@ -477,9 +462,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         if payload.order_no:
             api._require_visible_order(context, caller, payload.order_no)
         draft = api._workflow_trial_draft(context, payload.app_id, caller, payload.question, payload.order_no)
-        from aiops_diagnostics.consumer.consumer_trial import ConsumerTrial
-
-        if not isinstance(draft, ConsumerTrial):
+        if not isinstance(draft, consumer_trial.ConsumerTrial):
             raise StandardAPIError(409, "TRIAL_TARGET_INVALID", "当前应用不是客户端客服编排")
 
         def authorize():
@@ -502,8 +485,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         _: None = Depends(deps.dify_trial_credential),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
-        from aiops_diagnostics.consumer.consumer_intent import trial_message
-
         caller, trial = managed_trial_result(payload, request)
         if trial.get("result"):
             api._require_workflow_trial_result(context, caller, trial)
@@ -512,7 +493,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             "status": trial["status"],
             "result": trial.get("result"),
             "error_code": trial.get("error_code"),
-            "error_message": trial_message(trial["error_code"], language)
+            "error_message": consumer_intent.trial_message(trial["error_code"], language)
             if trial.get("error_code")
             else None,
         }
@@ -540,11 +521,8 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
     ) -> dict[str, Any]:
         """在受控范围内试运行草稿，不产生正式版本、不修改生产路由。"""
         if payload.app_id:
-            from aiops_diagnostics.dify.self_service_config import app_binding
-            from aiops_diagnostics.execution.node_publication import target_for
-
-            bound = app_binding(context.settings, payload.app_id)
-            target = target_for(context.settings, bound) if bound is not None else None
+            bound = self_service_config.app_binding(context.settings, payload.app_id)
+            target = node_publication.target_for(context.settings, bound) if bound is not None else None
             if target is not None and target.entry == "operator":
                 return _start_operator_preview_trial(context, api, payload, request, target, language)
         if payload.operator_preview is not None or payload.conversation_id is not None:
@@ -623,8 +601,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
     ) -> dict[str, Any]:
         """读取试运行状态与结果（支持管家 qa_ 试运行与工作流 tr_ 试运行）。"""
         if trial_id.startswith("qa_"):
-            from aiops_diagnostics.operator import operator_cpms
-
             caller, bearer = api.authenticated_operator_console(
                 context, request.headers.get("X-AIOps-Console-Session", "")
             )
@@ -663,8 +639,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             api._require_workflow_trial_result(context, caller, trial)
             body["result"] = result
         if trial.get("error_code"):
-            from aiops_diagnostics.consumer.consumer_intent import trial_message
-
             body["error_code"] = trial["error_code"]
-            body["error_message"] = trial_message(trial["error_code"], language)
+            body["error_message"] = consumer_intent.trial_message(trial["error_code"], language)
         return body

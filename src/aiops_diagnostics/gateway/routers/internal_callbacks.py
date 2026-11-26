@@ -8,10 +8,26 @@ from typing import Annotated, Any
 
 from fastapi import FastAPI, Header, Request, Response, status
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from aiops_diagnostics.common.config import Settings
+from aiops_diagnostics.consumer import (
+    consumer_agent,
+    consumer_chat_service,
+    consumer_knowledge,
+    legacy_callbacks,
+)
+from aiops_diagnostics.consumer.knowledge_access import catalogue_workspace
 from aiops_diagnostics.data.charging_status import ChargingStatusError
-from aiops_diagnostics.execution import chat_execution, execution_manifest
+from aiops_diagnostics.dify import dify_run_store
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
+from aiops_diagnostics.execution import (
+    chat_data_grant,
+    chat_execution,
+    execution_manifest,
+    node_capabilities,
+    node_publication,
+)
 from aiops_diagnostics.execution.agent_runs import (
     EXPIRED,
     FAILED,
@@ -33,6 +49,7 @@ from aiops_diagnostics.gateway.schemas import (
     OperatorToolAuthorizationRequest,
 )
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
+from aiops_diagnostics.onboarding import candidate_knowledge, candidate_trial
 
 _OPERATOR_OPERATIONS = frozenset({"operator_order_diagnosis", "operator_conversation", "operator_agent"})
 
@@ -57,15 +74,12 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         payload: NodeCapabilitiesRequest,
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, bool]:
-        from aiops_diagnostics.execution.node_capabilities import record
-        from aiops_diagnostics.execution.node_publication import all_targets
-
         token = (authorization or "").removeprefix("Bearer ")
-        for path in {t.config_file for t in all_targets(selected_settings)}:
+        for path in {t.config_file for t in node_publication.all_targets(selected_settings)}:
             config = AgentRunConfig.load(Path(path))
             node = config.authenticate_node(token)
             if node and node.active and node.environment == selected_settings.execution_environment:
-                record(selected_settings.database_file, config, node, payload.model_dump())
+                node_capabilities.record(selected_settings.database_file, config, node, payload.model_dump())
                 return {"accepted": True}
         raise StandardAPIError(403, "NODE_NOT_AUTHORIZED", "node not authorized")
 
@@ -323,8 +337,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
 
     @app.post("/v1/internal/operator-runs/{run_id}/tools/{tool}/evidence")
     async def operator_tool_evidence(run_id: str, tool: str, request: Request) -> JSONResponse:
-        from starlette.concurrency import run_in_threadpool
-
         body = await api._operator_json(request)
         recorder = (
             context.consumer_tool_grants.record
@@ -380,8 +392,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
 
     @app.post("/v1/internal/operator-runs/{run_id}/completions")
     async def operator_completion(run_id: str, request: Request) -> JSONResponse:
-        from starlette.concurrency import run_in_threadpool
-
         body = await api._operator_json(request)
         result = await run_in_threadpool(
             context.operator_cpms.complete,
@@ -397,10 +407,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, Any]:
-        from aiops_diagnostics.consumer.knowledge_access import catalogue_workspace
-        from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
-        from aiops_diagnostics.onboarding import candidate_knowledge
-
         response.headers["Cache-Control"] = "no-store"
         presented = (authorization or "").removeprefix("Bearer ")
         if presented.startswith(candidate_knowledge.PREFIX):
@@ -423,9 +429,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             raise StandardAPIError(403, "KNOWLEDGE_CATALOGUE_FORBIDDEN", "知识目录凭据无效") from exc
         try:
             if context.settings.knowledge_delegation_file:
-                from aiops_diagnostics.consumer.consumer_knowledge import workspace_libraries
-
-                libraries = workspace_libraries(context.runtime, tenant, workspace)
+                libraries = consumer_knowledge.workspace_libraries(context.runtime, tenant, workspace)
             else:
                 libraries = context.runtime.kb_search_client.for_tenant(tenant).list_knowledge_bases()
         except (ValueError, RuntimeError, AttributeError) as exc:
@@ -443,24 +447,16 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
     ) -> Any:
-        from starlette.concurrency import run_in_threadpool
-
-        from aiops_diagnostics.consumer import consumer_chat_service
-        from aiops_diagnostics.execution import chat_data_grant
-        from aiops_diagnostics.onboarding.candidate_trial import PREFIX as CANDIDATE_PREFIX
-
         response.headers["Cache-Control"] = "no-store"
         capability = request.path_params.get("capability")
         if capability is not None and capability not in {"knowledge", "status", "billing", "agent"}:
             raise StandardAPIError(404, "CONSUMER_CAPABILITY_UNKNOWN", "未知取数能力")
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(401, "GRANT_REQUIRED", "knowledge grant required")
-        if authorization[7:].startswith(CANDIDATE_PREFIX):
+        if authorization[7:].startswith(candidate_trial.PREFIX):
             if capability != "agent":
                 raise StandardAPIError(403, "GRANT_CAPABILITY_MISMATCH", "candidate callback refused")
-            from aiops_diagnostics.onboarding.candidate_trial import callback
-
-            return await callback(context, request, authorization[7:])
+            return await candidate_trial.callback(context, request, authorization[7:])
         try:
             raw = bytearray()
             async for part in request.stream():
@@ -469,7 +465,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                     raise StandardAPIError(413, "PHOTO_CONTEXT_INVALID", "image context too large")
             image_text = raw.decode("utf-8")
             if capability == "agent":
-                from aiops_diagnostics.consumer import consumer_agent
 
                 def own_orders(scope):
                     with api.scoped_mysql_source(
@@ -499,8 +494,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                     raise ValueError("unexpected knowledge input")
                 image_text = body.get("image_text", "")
                 knowledge_base_ids = body.get("knowledge_base_ids")
-            from aiops_diagnostics.consumer import legacy_callbacks
-
             return await run_in_threadpool(
                 legacy_callbacks.callback_context,
                 context.runtime,
@@ -526,9 +519,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, Any]:
         """Dify Workflow 一次性取数授权回调端点。"""
-        from aiops_diagnostics.dify import dify_run_store
-        from aiops_diagnostics.execution import chat_data_grant
-
         response.headers["Cache-Control"] = "no-store"
         token = (authorization or "").removeprefix("Bearer ").strip()
         grants = chat_data_grant.DataGrantStore(context.store.path)

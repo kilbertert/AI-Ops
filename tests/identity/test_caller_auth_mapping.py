@@ -41,7 +41,8 @@ from aiops_diagnostics.identity.caller_auth import (
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
-API_FILE = "gateway/gateway_api.py"
+API_FILE = "gateway/caller_auth_wiring.py"
+API_FACADE_FILE = "gateway/gateway_api.py"
 DEPS_FILE = "gateway/dependencies.py"
 #: The shared entry point. One definition, and every dependency delegates to it.
 SHARED = "_authenticate_caller"
@@ -278,10 +279,11 @@ def test_the_mapping_exists_in_exactly_one_place() -> None:
     this can. It also fails if a caller dependency stops delegating, which would
     silently create a second implementation of the same decision.
     """
-    source = (SOURCE_ROOT / API_FILE).read_text(encoding="utf-8")
-    tree = ast.parse(source)
     copies = [
-        node.lineno for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == SHARED
+        f"{path}:{node.lineno}"
+        for path in (API_FILE, API_FACADE_FILE)
+        for node in ast.walk(ast.parse((SOURCE_ROOT / path).read_text(encoding="utf-8")))
+        if isinstance(node, ast.FunctionDef) and node.name == SHARED
     ]
     assert len(copies) == 1, f"{SHARED} is defined {len(copies)} times: {copies}"
     tree = _deps_tree()

@@ -1,3 +1,5 @@
+"""基础运维配置模型（``Settings``，覆盖 MySQL/Redis/TDengine/UPMS 共享连接设置）。"""
+
 from __future__ import annotations
 
 import os

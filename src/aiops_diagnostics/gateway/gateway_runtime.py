@@ -1,3 +1,5 @@
+"""Gateway 业务任务线程池、在线取消登记与执行器统一调度容器。"""
+
 from __future__ import annotations
 
 import contextlib

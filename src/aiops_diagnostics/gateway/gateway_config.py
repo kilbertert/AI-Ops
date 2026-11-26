@@ -1,3 +1,5 @@
+"""Gateway 服务端运行配置（``GatewayServerSettings``）、环境加载与启动期 Fail-Closed 校验。"""
+
 from __future__ import annotations
 
 import os

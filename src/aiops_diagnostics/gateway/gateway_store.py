@@ -1,3 +1,5 @@
+"""Gateway SQLite 持久化存储：作业表（health/analysis/trial）、助手问答、票据、审计与知识源绑定。"""
+
 from __future__ import annotations
 
 import json

@@ -9,11 +9,15 @@ from typing import Any
 from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from aiops_diagnostics.dify import dify_knowledge_datasets, knowledge_connection
+from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
 from aiops_diagnostics.gateway.dependencies import GatewayDeps
 from aiops_diagnostics.gateway.errors import StandardAPIError
 from aiops_diagnostics.gateway.schemas import KnowledgeSourceRequest
 from aiops_diagnostics.identity.order_visibility import tenant_matches
 from aiops_diagnostics.identity.scope_context import ScopeContext
+from aiops_diagnostics.knowledge import ragflow_console
 
 _LOGGER = logging.getLogger("aiops.gateway")
 
@@ -37,13 +41,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         caller: ScopeContext = Depends(deps.authenticated_agent_caller),  # noqa: B008
     ) -> Response:
         """为本租户运营签发 RAGFlow 控制台会话（HTML 顶层导航 303，脚本 fetch 返回 200 JSON）。"""
-        from aiops_diagnostics.knowledge.ragflow_console import (
-            RAGFlowLoginClient,
-            RAGFlowLoginError,
-            open_console,
-            record,
-        )
-
         settings = context.settings
         tenant_id = str(caller.effective_tenant_id)
         if (
@@ -54,9 +51,9 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND, "KNOWLEDGE_CONSOLE_DISABLED", "console access is not enabled"
             )
-        client = RAGFlowLoginClient(settings.ragflow_console_base_url)
+        client = ragflow_console.RAGFlowLoginClient(settings.ragflow_console_base_url)
         try:
-            target, session = open_console(
+            target, session = ragflow_console.open_console(
                 store=context.store,
                 environment=settings.environment,
                 caller=caller,
@@ -65,8 +62,8 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 public_base_url=settings.ragflow_console_public_url or settings.ragflow_console_base_url,
                 public_pem_path=settings.ragflow_console_public_pem,
             )
-        except RAGFlowLoginError as exc:
-            record(
+        except ragflow_console.RAGFlowLoginError as exc:
+            ragflow_console.record(
                 context.store,
                 tenant_id=tenant_id,
                 environment=settings.environment,
@@ -82,7 +79,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 else status.HTTP_409_CONFLICT
             )
             raise StandardAPIError(http_status, exc.code, exc.message) from exc
-        record(
+        ragflow_console.record(
             context.store,
             tenant_id=tenant_id,
             environment=settings.environment,
@@ -148,10 +145,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SYNC_DISABLED", "knowledge sync is not available"
             )
 
-        from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
-        from aiops_diagnostics.dify.dify_knowledge_datasets import libraries_for, run
-        from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
-
         try:
             tenant_id = workspaces.tenant_for_workspace(workspace.strip(), settings.environment)
         except DifyWorkspaceError as exc:
@@ -161,16 +154,14 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
         except Exception:  # noqa: BLE001 - upstream unavailable degrades cleanly
             return {"created": 0, "tenant_id": tenant_id, "unavailable": True}
 
-        libraries = libraries_for(tenant_id, owned)
+        libraries = dify_knowledge_datasets.libraries_for(tenant_id, owned)
         console = DifyConsoleAdmin(
             ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
         )
 
         def converge() -> Any:
-            from aiops_diagnostics.dify.knowledge_connection import ensure
-
-            workspace_api_id = ensure(console, workspace.strip(), settings)
-            return run(
+            workspace_api_id = knowledge_connection.ensure(console, workspace.strip(), settings)
+            return dify_knowledge_datasets.run(
                 workspace_id=workspace.strip(),
                 libraries=libraries,
                 console=console,
@@ -223,15 +214,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 "KNOWLEDGE_OPEN_WORKSPACE_REQUIRED",
                 "workspace is required",
             )
-        from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaceError
-        from aiops_diagnostics.knowledge.ragflow_console import (
-            DeclaredTenant,
-            RAGFlowLoginClient,
-            RAGFlowLoginError,
-            open_console,
-            record,
-        )
-
         settings = context.settings
         if (
             not settings.ragflow_console_base_url
@@ -250,19 +232,19 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 status.HTTP_400_BAD_REQUEST, "KNOWLEDGE_OPEN_WORKSPACE_INVALID", str(exc)
             ) from exc
 
-        client = RAGFlowLoginClient(settings.ragflow_console_base_url)
+        client = ragflow_console.RAGFlowLoginClient(settings.ragflow_console_base_url)
         try:
-            _target, session = open_console(
+            _target, session = ragflow_console.open_console(
                 store=context.store,
                 environment=settings.environment,
-                caller=DeclaredTenant(effective_tenant_id=tenant_id),
+                caller=ragflow_console.DeclaredTenant(effective_tenant_id=tenant_id),
                 credential_key=settings.ragflow_credential_key,
                 client=client,
                 public_base_url=settings.ragflow_console_public_url or settings.ragflow_console_base_url,
                 public_pem_path=settings.ragflow_console_public_pem,
             )
-        except RAGFlowLoginError as exc:
-            record(
+        except ragflow_console.RAGFlowLoginError as exc:
+            ragflow_console.record(
                 context.store,
                 tenant_id=tenant_id,
                 environment=settings.environment,
@@ -275,7 +257,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 else status.HTTP_424_FAILED_DEPENDENCY
             )
             raise StandardAPIError(http_status, exc.code, exc.message) from exc
-        record(
+        ragflow_console.record(
             context.store,
             tenant_id=tenant_id,
             environment=settings.environment,
@@ -302,14 +284,6 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
     @app.get("/v1/internal/knowledge/hop", include_in_schema=False)
     def knowledge_hop(ticket: str = "") -> Response:
         """兑换一次性知识库跳转票据，在同域种植 RAGFlow 会话 cookie 并 303 重定向。"""
-        from aiops_diagnostics.knowledge.ragflow_console import (
-            DeclaredTenant,
-            RAGFlowLoginClient,
-            RAGFlowLoginError,
-            open_console,
-            record,
-        )
-
         settings = context.settings
         if (
             not settings.ragflow_console_base_url
@@ -327,19 +301,19 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 "this link has expired; go back to Dify and click the button again",
             )
         tenant_id = consumed["tenant_id"]
-        client = RAGFlowLoginClient(settings.ragflow_console_base_url)
+        client = ragflow_console.RAGFlowLoginClient(settings.ragflow_console_base_url)
         try:
-            target, session = open_console(
+            target, session = ragflow_console.open_console(
                 store=context.store,
                 environment=settings.environment,
-                caller=DeclaredTenant(effective_tenant_id=tenant_id),
+                caller=ragflow_console.DeclaredTenant(effective_tenant_id=tenant_id),
                 credential_key=settings.ragflow_credential_key,
                 client=client,
                 public_base_url=settings.ragflow_console_public_url or settings.ragflow_console_base_url,
                 public_pem_path=settings.ragflow_console_public_pem,
             )
-        except RAGFlowLoginError as exc:
-            record(
+        except ragflow_console.RAGFlowLoginError as exc:
+            ragflow_console.record(
                 context.store,
                 tenant_id=tenant_id,
                 environment=settings.environment,
@@ -347,7 +321,7 @@ def register(app: FastAPI, context: Any, deps: GatewayDeps, api: Any) -> None:
                 reason_code=exc.code,
             )
             raise StandardAPIError(status.HTTP_424_FAILED_DEPENDENCY, exc.code, exc.message) from exc
-        record(
+        ragflow_console.record(
             context.store,
             tenant_id=tenant_id,
             environment=settings.environment,

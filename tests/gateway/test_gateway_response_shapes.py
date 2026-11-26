@@ -24,6 +24,7 @@ from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 API_FILE = "gateway/gateway_api.py"
+VIEWS_FILE = "gateway/response_views.py"
 #: The module that owns the assistant-question body.
 SHAPE_HELPER = "_assistant_question_response"
 #: A 202 body that is written out by hand instead of through the helper.
@@ -34,11 +35,11 @@ OWNED_BY_THE_STORE = {"queued", "running"}
 
 def _api_paths() -> list[Path]:
     routers = sorted((SOURCE_ROOT / "gateway" / "routers").glob("*.py"))
-    return [SOURCE_ROOT / API_FILE, *routers]
+    return [SOURCE_ROOT / API_FILE, SOURCE_ROOT / VIEWS_FILE, *routers]
 
 
 def _api_tree() -> ast.Module:
-    return ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+    return ast.parse((SOURCE_ROOT / VIEWS_FILE).read_text(encoding="utf-8"))
 
 
 def _function(tree: ast.Module, name: str) -> ast.FunctionDef:

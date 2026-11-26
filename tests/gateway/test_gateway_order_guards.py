@@ -33,7 +33,8 @@ from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_UNAVAILABLE, Call
 from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
-API_FILE = "gateway/gateway_api.py"
+API_FILE = "gateway/conversation_helpers.py"
+API_FACADE_FILE = "gateway/gateway_api.py"
 #: The one guard. No call site may reach `can_access` directly any more.
 GUARD = "_order_authorization"
 LOGGER_NAME = "aiops.gateway"
@@ -194,23 +195,27 @@ def test_no_call_site_reaches_the_authorizer_directly() -> None:
     the guard and nowhere else, which is also what keeps a future call site from
     re-inventing the `bool`.
     """
-    tree = ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
     offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or getattr(node.func, "attr", "") != "can_access":
-            continue
-        # Its own function is the guard.
-        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-        cur: ast.AST | None = node
-        owner = "<module>"
-        while cur is not None and cur in parents:
-            cur = parents[cur]
-            if isinstance(cur, ast.FunctionDef):
-                owner = cur.name
-                break
-        if owner != GUARD:
-            offenders.append(f"{API_FILE}:{node.lineno} {owner} calls can_access directly")
+    called: set[str] = set()
+    for rel in (API_FILE, API_FACADE_FILE):
+        tree = ast.parse((SOURCE_ROOT / rel).read_text(encoding="utf-8"))
+        called.update(
+            getattr(inner.func, "id", "") for inner in ast.walk(tree) if isinstance(inner, ast.Call)
+        )
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or getattr(node.func, "attr", "") != "can_access":
+                continue
+            # Its own function is the guard.
+            parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+            cur: ast.AST | None = node
+            owner = "<module>"
+            while cur is not None and cur in parents:
+                cur = parents[cur]
+                if isinstance(cur, ast.FunctionDef):
+                    owner = cur.name
+                    break
+            if owner != GUARD:
+                offenders.append(f"{rel}:{node.lineno} {owner} calls can_access directly")
     assert offenders == [], "; ".join(offenders)
     # A guard that nothing calls would satisfy the check above.
-    called = {getattr(inner.func, "id", "") for inner in ast.walk(tree) if isinstance(inner, ast.Call)}
     assert GUARD in called, f"nothing calls {GUARD}"
