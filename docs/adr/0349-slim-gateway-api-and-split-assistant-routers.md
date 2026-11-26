@@ -1,4 +1,4 @@
-# ADR-0348：瘦身 gateway_api、拆分 assistant 路由、提升延迟导入并补齐模块职责头
+# ADR-0349：瘦身 gateway_api、拆分 assistant 路由、提升延迟导入并补齐模块职责头
 
 日期：2026-11-26
 状态：已采纳
