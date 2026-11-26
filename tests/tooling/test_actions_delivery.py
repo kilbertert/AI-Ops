@@ -134,18 +134,24 @@ def test_sync_does_not_hide_a_rejected_update(tmp_path):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("deploy,release", [("success", "failure"), ("failure", "skipped"), (None, None)])
-def test_cd_watch_reads_deployment_not_release_result(tmp_path, deploy, release):
+@pytest.mark.parametrize(
+    "deploy,release",
+    [("success", "failure"), ("failure", "skipped"), ("success", "success"), (None, None)],
+)
+def test_cd_watch_preserves_workflow_and_deployment_results(tmp_path, deploy, release):
     cli = tmp_path / "gh"
     cli.write_text(
         "#!/usr/bin/env python3\n"
         "import json, sys\n"
         f"deploy, release = {deploy!r}, {release!r}\n"
+        "conclusion = 'success' if deploy == release == 'success' else 'failure' if release else None\n"
         "if sys.argv[1] == 'run':\n"
-        "    print(json.dumps([{'databaseId': 1, 'status': 'in_progress', 'conclusion': ''}]))\n"
+        "    print(json.dumps([{'databaseId': 1, 'status': 'completed' if release else 'in_progress', "
+        "'conclusion': conclusion}]))\n"
         "elif sys.argv[2].endswith('/jobs'):\n"
         "    print(json.dumps({'total_count': 2, 'jobs': [\n"
-        "        {'name': 'deploy-41', 'conclusion': deploy},\n"
+        "        {'name': 'deploy-41', 'status': 'completed' if deploy else 'in_progress', "
+        "'conclusion': deploy},\n"
         "        {'name': 'release-notes', 'conclusion': release}]}))\n"
         "else: print('0')\n"
     )
@@ -154,14 +160,20 @@ def test_cd_watch_reads_deployment_not_release_result(tmp_path, deploy, release)
         f"import {{fetchRuns}} from {json.dumps((ROOT / '.sandcastle/cd-watch.mjs').as_uri())};"
         "console.log(JSON.stringify(fetchRuns().runs[0]));"
     )
-    output = subprocess.check_output(
+    result = subprocess.run(
         ["node", "--input-type=module", "-e", script],
         env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        capture_output=True,
         text=True,
+        timeout=20,
     )
-    run = json.loads(output)
-    assert run["conclusion"] == (deploy or "")
-    assert run["status"] == ("completed" if deploy else "in_progress")
+    assert result.returncode == 0, result.stderr
+    run = json.loads(result.stdout)
+    assert run["conclusion"] == (
+        "success" if deploy == release == "success" else "failure" if release else None
+    )
+    assert run["status"] == ("completed" if release else "in_progress")
+    assert run["deploymentConclusion"] == deploy
 
 
 def test_release_job_is_bound_to_successful_deployment():
@@ -170,7 +182,11 @@ def test_release_job_is_bound_to_successful_deployment():
     assert release["needs"] == "deploy-41"
     assert "if" not in release  # 默认 success()，失败部署不能发布
     assert "environment" not in release  # 发布作业不产生虚假的生产部署账本
-    assert release["steps"][0]["with"]["ref"] == "${{ needs.deploy-41.outputs.sha }}"
+    checkout = next(s for s in release["steps"] if s.get("name") == "Check out the selected release commit")
+    assert checkout["with"]["ref"] == "${{ needs.deploy-41.outputs.sha }}"
+    workflow = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())
+    assert workflow["concurrency"]["group"] == "aiops-production-release"
+    assert workflow["concurrency"]["cancel-in-progress"] is False
     assert jobs["deploy-41"]["concurrency"]["cancel-in-progress"] is False
 
 

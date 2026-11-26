@@ -1,7 +1,7 @@
 # 101. CHANGELOG 在发布时生成，Pull Request 不再触碰它
 
 日期：2026-10-23
-状态：已采纳
+状态：已采纳；发布触发与版本范围由[ADR0348](0348-release-on-main-sha-dispatch.md)更新。
 影响版本：`.gitignore`、`CHANGELOG.md`（移出版本控制）、`.github/workflows/cd.yml`
 （新增发布步骤、`contents: write`）、`.sandcastle/conflict-surface.mjs`、
 `serverPolicy.changelogAtRelease=true`（本机声明）

@@ -1,7 +1,7 @@
 # 112. 版本号由 `VERSION` 文件显式决定，CD 只读它
 
 日期：2026-10-23
-状态：已采纳
+状态：已采纳；发布触发时机与标签创建顺序由 [ADR 0348](0348-release-on-main-sha-dispatch.md) 更新。
 影响版本：`VERSION`（新增）、`.github/workflows/cd.yml`、`deploy/deploy-41.sh`、
 `tests/test_release_version.py`（新增）
 

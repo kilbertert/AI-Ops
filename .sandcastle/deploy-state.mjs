@@ -1,9 +1,7 @@
 /**
  * CD 的真实状态：#407。把「部署到底发生没有」变成一个可回答的问题。
  *
- * 起因是一次**连续 6 次 src 合并都没成功部署、而无人察觉**（记录见
- * `docs/validation.md`）：那段时间有人在手工 rsync，生产确实更新了，于是没有任何
- * 理由去看 CD —— 手工动作把「CD 坏了」这条本应被发现的信号一起抹掉了。
+ * 它监控已显式发起的生产发布：未计划发布是正常待发布状态，正在执行的发布则必须可观测。
  *
  * 两条判据各自独立，对应两种不同的失败形态：
  *
@@ -206,10 +204,9 @@ export function overdueUnfinished(runs, { now, stuckMinutes } = {}) {
 /**
  * 汇总一份判决。**取数不成立时一律不报「正常」** —— 不知道就说不知道（fail honest）。
  *
- * 三种「不成立」都要报警，而不是静默：
+ * 以下「不成立」都要报警，而不是静默：
  *  - `fetchedOk === false`：任一份取数失败；
- *  - 最近列表为空：`cd.yml` 从未被触发过，或取数被静默截断 —— 两种都值得看一眼，
- *    因为「一次都没有」与「一直正常」在告警面上是同一种安静；
+ *  - 最近列表为空，但未完成列表非空或不可读：两份数据相互矛盾或状态未知；
  *  - 任一条待判定的 run 是 `indeterminate`（详情取不到、或状态不认识）：**未知不是正常**。
  *
  * ⚠️ **两条判据吃两份数据，不要混用**：
@@ -234,11 +231,19 @@ export function assess(input) {
     alarms.push({ kind: "unavailable", reason: "取数失败：本状态**未知**，不是正常" });
     return { ok: false, alarms, notes: [], latest: null, straight: 0 };
   }
-  // 空列表有多种成因（从未触发 / 取数被截断 / workflow 被改名），
-  // 判据只有一句：**「一次都没有」不构成「一切正常」**。
+  // 显式发布之间没有活动 run 是正常状态；必须两份查询都成功且确认没有未完成 run。
   if (runs.length === 0) {
-    alarms.push({ kind: "no-runs", reason: "取不到任何 CD run —— 要么从未触发过，要么取数不完整" });
-    return { ok: false, alarms, notes: [], latest: null, straight: 0 };
+    if (unfinishedRuns === null || unfinishedRuns.length > 0) {
+      alarms.push({ kind: "unavailable", reason: "最近发布列表为空，但未完成 run 未知或仍存在" });
+      return { ok: false, alarms, notes: [], latest: null, straight: 0 };
+    }
+    return {
+      ok: true,
+      alarms,
+      notes: [{ kind: "no-releases", reason: "当前没有待处理的显式版本发布；main 合并不自动部署" }],
+      latest: null,
+      straight: 0,
+    };
   }
   // 未完成集合取不到 ⇒ 未知。它**不能**退化用最近列表代替：那个窗口不完整，
   // 而 `jobs=0` ⇒ 死锁这条判据恰恰依赖完整性。
@@ -273,7 +278,10 @@ export function assess(input) {
     ok: alarms.length === 0,
     alarms,
     notes: [],
-    latest: classifyRun(newest, { now: input.now, stuckMinutes: input.stuckMinutes }),
+    latest: {
+      ...classifyRun(newest, { now: input.now, stuckMinutes: input.stuckMinutes }),
+      deploymentConclusion: newest.deploymentConclusion ?? null,
+    },
     straight,
   };
 }
@@ -315,7 +323,14 @@ function demo() {
     assess({ runs: [{ ...base, totalCount: null, pendingCount: null }], fetchedOk: true }).ok === false,
     "indeterminate 不得报正常",
   );
-  check(assess({ runs: [], fetchedOk: true }).ok === false, "空列表不得报正常");
+  check(
+    assess({ runs: [], unfinishedRuns: [], fetchedOk: true }).ok === true,
+    "没有计划发布时不得报警",
+  );
+  check(
+    assess({ runs: [], fetchedOk: false }).alarms[0]?.kind === "unavailable",
+    "发布历史取数失败仍须报警",
+  );
 
   // 正常：刚创建 5 分钟
   const fresh = classifyRun(

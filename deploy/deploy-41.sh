@@ -6,7 +6,7 @@
 #   deploy/deploy-41.sh --commit <sha> [--dry-run]
 #   deploy/deploy-41.sh --rollback-to <sha> [--dry-run]
 #
-#   --commit <sha>       部署该 commit 的 src/（通常由 cd.yml 传 $GITHUB_SHA）
+#   --commit <sha>       部署该 commit 的 src/（由 cd.yml 传显式选定的完整 SHA）
 #   --rollback-to <sha>  用同一套流程重部署一个已知良好的 commit
 #   --dry-run            打包并打印将要执行的远端命令；**不碰 41**
 #
@@ -390,8 +390,7 @@ REMOTE_TARBALL="/tmp/aiops-sync-${SHORT_SHA}.tar.gz"
 # 装依赖属于「改运行环境」，不是「传一次源码」，需要独立决定与独立验证（见本 PR 说明的
 # 「依赖漂移」一节）。宁可停止部署并说清楚，也不把生产交给一个可能起不来的进程。
 #
-# pyproject/uv.lock 就在 cd.yml 的触发路径里（paths: pyproject.toml、uv.lock），
-# 所以它们一变就会走到这里 —— 下面的检查会拦下不一致，而不是让部署"成功"后服务挂掉。
+# 版本发布按显式选择的目标提交读取 pyproject/uv.lock；下面检查其运行依赖与 41 保持兼容。
 step "依赖漂移检查"
 # **读的是 TARGET_COMMIT 的 manifest，不是当前 checkout。** 回滚场景下两者可能不同：
 # 若拿当前 checkout 去比，只能证明「操作者的工作区与主机一致」，证明不了「要部署的那个

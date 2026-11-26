@@ -1,7 +1,6 @@
 # Actions 交付手册
 
-代码检查通过、代码合并、组件部署和业务验收是四个结果。本手册描述本次调整后的行为；
-生效条件是对应 PR 经评审合并。设计依据见 [ADR](../adr/0233-actions-delivery-flow.md)。
+代码检查通过、代码合并、组件部署和业务验收是四个结果。当前发布节奏见[ADR0348](../adr/0348-release-on-main-sha-dispatch.md)，其余交付分工见[ADR0233](../adr/0233-actions-delivery-flow.md)。
 
 ## 阶段合入条件
 
@@ -26,7 +25,12 @@
 `ready-for-agent`，避免合并后待验任务重新派发。PR撤回且需要继续实现时，由负责人重新授权；
 标签移除失败按交付失败处理并补齐，不靠关掉待验任务恢复。
 
-本仓Gateway命中CD路径即部署，而Web、登录代理、Java节点等分别交付。涉及它们时验证实际支持的
+生产发布与代码合入分开；任务分支可在同一需求内多次提交、推送，同一PR持续更新。
+可独立部署的增量通过评审再合入main，不以每次对话、每个commit或固定天数强制拆PR、升版本。
+合并后的worktree退休属于交付收尾，不触发业务发布，也不清理仍在开发或有人持有的工作树。
+完整版本批次操作见下方[版本发布](#版本发布)；选择性延迟发布不会从制品中移除已合入代码。
+
+本仓Gateway只在显式发布运行中部署；Web、登录代理、Java节点等仍分别交付。涉及它们时验证实际支持的
 混合版本；不能假设同一Git提交会原子更新所有服务。优先追加兼容接口/格式，再迁移调用方，最后
 在恢复窗口结束后删旧路径。SQL迁移、会话失效与后台行为不因开关关闭而自动撤销。
 变更会要求用户重登或改变操作路径时，在原任务说明影响及恢复步骤，并覆盖该用户路径。
@@ -40,7 +44,7 @@
 
 新增能力默认复用既有配置隔离。确需临时发布开关时，在原Issue标负责人、默认值、启用验收与
 删除条件；启用/取消时复核，恢复窗口结束后清理旧分支与测试。永久产品配置和权限检查不随之删除。
-开关启用仍需相应授权；暂缓自动部署只改变时间，不会从制品排除A。
+开关启用仍需相应授权；暂缓发布只改变部署时间，不会从制品排除A。
 
 分支仍是短任务分支→main。确实无法兼容拆分时，另行评审临时需求集成分支的负责人、期限、
 PR/CI、同步和最终验收；当前工具基线和生产制品来源规则不因此改变。
@@ -58,9 +62,10 @@ flowchart LR
     D --> F
     E --> F
     F --> G[GitHub 合并 main]
-    G --> H[命中运行时路径：Gateway CD]
-    H --> I[发布说明：可单独重跑]
-    H --> J[按组件完成部署后业务验收]
+    G --> H[发布负责人选择 main 上的版本 SHA]
+    H --> I[部署 Gateway]
+    I --> J[部署成功后发布该版本说明]
+    I --> K[按组件完成业务验收]
 ```
 
 普通本地 commit 不触发 Actions；push 已关联 PR 的分支触发 synchronize。
@@ -74,14 +79,34 @@ flowchart LR
 | AFK Policy / Workflow policy | Ready PR：AFK 隔离、自检、ADR | 必需；失败先看具体步骤，不按名称猜成模型审查 |
 | Spec Tree | Ready PR、main、手动：规格 lint | 辅助；main 检查保留以暴露已合并规格漂移 |
 | Sync Open PRs | main 更新、每日只报告；手动指定一个 PR | 只更新明确指定、同仓库所有者的 PR |
-| CD | main 命中 src、部署入口、依赖声明等路径；手动只允许 main | 仅 Gateway；deploy-41 与 release-notes 分别报告 |
-| CD Watch | 每5分钟、手动（平台可能延迟） | 依据部署 job 结果报警；发布说明红灯不冒充部署失败 |
+| CD / 版本发布 | 仅手动在main选择已合入完整SHA；先保留/核验不可移动的版本标签，再部署和生成Release | 同一提交含版本/依赖声明；main合并不部署；部署失败可重跑同一SHA |
+| CD Watch | 每5分钟、手动（平台可能延迟） | 无待处理run表示未计划发布；真实取数失败及已启动run异常才报警 |
 | Agent Implement / PRD / PR、Promote Queued | issue/PR 标签或手动授权 | 开发执行与依赖推进，不是普通提交必须等待的检查 |
 | Agent Review、Update Branch、Architecture Review | 既有显式标签 | 按需 agent 工作；本轮不增加本地 reviewer 或必需模型检查 |
 | Sandbox image | 沙箱输入变更或手动 | AFK 的运行镜像，不是 Gateway 生产镜像 |
 
 GitLab mirror按push、delete及手动触发同步分支和标签；独立连接失败不代表Gateway部署失败。
-镜像同步成功不能替代上述 CI、合并或部署结果。
+镜像同步成功不能替代上述 CI、合并或部署结果。GITHUB_TOKEN新建标签不会触发push工作流；
+发布标签镜像等待下次正常push，需即时同步时单独执行`gh workflow run gitlab-mirror.yml --ref main`。
+
+## 版本发布
+
+1. 日常功能PR只交付行为，不例行升版本。批次准备好后，版本准备PR同步`VERSION`、`pyproject.toml`、
+   `src/aiops_diagnostics/__init__.py`和`uv.lock`的本项目版本；确定性CI通过并合入main。
+2. 发布负责人获得该批次上线授权后，以`main`为workflow ref，给CD输入已合入的完整SHA：
+   `gh workflow run cd.yml --ref main -f target_sha=<完整SHA>`。SHA属于main不等于已获业务发布授权。
+3. CD在串行锁中核SHA、SemVer和注释标签，固定同SHA的`vMAJOR.MINOR.PATCH`后检出该提交执行部署。
+   同版本异SHA、轻量标签与异SHA竞争在生产写入前拒绝；部署失败保留标签，可重跑同一SHA。
+   标签存在只表示候选已固定，不证明部署成功；代码修复经PR后准备新版本。
+4. 部署成功后发布同tag的GitHub Release，只取该版本CHANGELOG章节；分节仅使用已发布Release的SemVer标签
+   和当前目标，尚未发布的失败候选标签不截断下一批内容。查询Release失败则停止，不用不完整历史生成说明。`CHANGELOG.md`仍gitignore，
+   不提交、不回推main；人工升级/兼容说明仍放`RELEASE-NOTES.md`。旧Release和标签不移动。
+5. `gh run rerun <RUN> --failed`只补失败作业。Gateway部署成功、Release失败时，只补说明，不回滚/重启服务；
+   CD Watch保留workflow结果和部署job结果，仍监控连续失败、卡住和取数异常，空闲runner不产生告警。
+
+一次只发起一个版本，等整个workflow结束再发下一个；Actions默认单pending不是FIFO队列。
+Web、桥、登录代理、Java节点仍按各自入口配套交付。生产落后main时，紧急恢复沿服务器制品回滚/维护线规则，
+不能借hotfix顺带上线所有待发布变更。依据见[ADR0348](../adr/0348-release-on-main-sha-dispatch.md)。
 
 ## 同步分支：自动报告，明确指定才更新
 
@@ -114,7 +139,7 @@ DIRTY 由原作者解决冲突，不自动加标签启动付费修复 agent。
   下载制品排查失败，不在证据中放真实设备令牌或生产数据。
 - wheel/sdist 每次构建；全量档复用 `build-image.sh` 验证固定基础镜像、构建身份及镜像内导入，
   不上传镜像、不运行生产。Java 节点及多服务真实验收仍按各自手册执行。
-- CI 与 Workflow policy 按 PR/ref 取消过期运行；CD 的部署锁不取消运行中的部署。
+- CI 与 Workflow policy 按 PR/ref 取消过期运行；CD 的整轮发布锁不取消运行中的发布。
   GitHub concurrency 默认只保留一个 pending，不能理解为每个合并提交都会顺序部署。
 
 ## 先定位失败阶段
@@ -137,9 +162,10 @@ node .sandcastle/cd-watch.mjs --dry-run
 | cancelled | 核对是否已被同一 PR 的更新提交替代，只等待最新 SHA |
 | Workflow policy / ADR 红灯 | 检查缺失记录、No-ADR 说明或编号冲突；新记录取当前下一编号，不放宽检查 |
 | verify 红灯 | 首个失败步骤 → XML/日志；基础镜像拉取失败与代码导入失败分别处理 |
-| CD queued/pending | 看 jobs、runner online/busy 与并发锁，不能推断为“待人工批准” |
+| 没有CD run | 只有合并而未发起版本发布是正常状态；预期上线时核对手动run和所选SHA |
+| CD queued/pending | 看 jobs、runner online/busy 与并发锁 |
 | deploy-41 失败 | 看网络、身份、节点/依赖闸门；按[环境手册](env-41-runbook.md)核对并恢复 |
-| deploy-41 成功、release-notes 失败 | 服务部署已完成，只补发布说明，不因此回滚服务 |
+| deploy-41 成功、版本说明失败 | 服务已部署；只修复并重跑说明作业，不因此回滚服务 |
 
 经本轮交付授权后，发布失败可用 `gh run rerun <RUN> --failed` 只重跑失败作业。
 Gateway 部署重试必须先确认原因为何已消除；访问链路故障不能通过取消部署锁解决。

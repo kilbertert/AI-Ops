@@ -32,8 +32,8 @@
 | 制品是否含已验收实现 | 是：`a49be60`（#997 查询实现）是 `26bc23a` 的祖先 |
 | 现状自查 | `curl http://172.18.0.1:8788/health` ⇒ 同上版本；`gateway.env` sha256 `0fb25006…` |
 
-**上线前必须重取一次**：本片之后 `main` 若再有 `src/**` 合并，CD 会自动部署并重启，
-制品身份要按那时的 `/health` 重新记录，不能用本文的值。
+**执行前必须重取一次**：普通合并不会部署生产；但其他已授权的显式发布可能改变运行版本。
+制品身份要按执行时的 `/health` 重新记录，不能沿用本文的历史值。
 
 **观察能力随制品走**：`assistant_question_result` 行只有部署了含 `request_observation.py`
 的制品之后才会出现。上线前先用本文第九节的观察命令在 41 上确认能看到该行，
@@ -238,8 +238,7 @@ assert charging_endpoint(s.charging_status_base_url, "<target-tenant>", require_
 1. `curl /health` 记录版本；`sha256sum /etc/aiops-41/gateway.env /etc/aiops-41/production.env`；
 2. 进程环境里三项**不出现**（`tr '\0' '\n' < /proc/<MainPID>/environ | grep -c …` 应为 0）；
 3. `in_flight_qa` / `in_flight_dx` 均为 0；`agent_runs`、`conversation_turns` 计数记录；
-4. 确认没有正在跑的 CD：`gh run list --workflow CD` 最近一条已 `completed`，
-   且**没有排队中的 `src/**` 合并**（窗口期 CD 会重启网关）；
+4. 确认没有正在进行或排队的 Gateway 发布：`gh run list --workflow cd.yml` 中目标 run 已 `completed`；
 5. 备份 `gateway.env` 到库外私有目录（`0600`），算 sha256；
 6. 按第三节做候选配置 + `validate()`。
 
