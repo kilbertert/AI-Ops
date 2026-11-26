@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from aiops_diagnostics.common.endpoint_policy import canonical_gateway_url
+from aiops_diagnostics.conversation.conversation_store import TurnCompletionMetadata
 from aiops_diagnostics.data.sources import SourceError
 from aiops_diagnostics.execution import chat_execution, execution_manifest
 from aiops_diagnostics.execution.agent_runs import (
@@ -945,19 +946,21 @@ class OperatorCpms:
                     task.conversation_turn,
                     task.question,
                     result,
-                    status_qa_id=qa_id,
-                    active_order_no=active_order_no,
-                    attempt_no=task.attempt_no,
-                    parent_qa_id=task.parent_qa_id,
-                    attachment_ids=[str(item["file_id"]) for item in task.attachments]
-                    if task.attachments
-                    else None,
-                    citations=citations,
-                    steps=steps,
-                    elapsed_ms=elapsed_ms,
-                    delivery_mode=delivery_mode,
-                    preserve_completed=task.attempt_no > 1,
-                    claim_id=task.claim_id,
+                    metadata=TurnCompletionMetadata(
+                        status_qa_id=qa_id,
+                        active_order_no=active_order_no,
+                        attempt_no=task.attempt_no,
+                        parent_qa_id=task.parent_qa_id,
+                        attachment_ids=[str(item["file_id"]) for item in task.attachments]
+                        if task.attachments
+                        else None,
+                        citations=citations,
+                        steps=steps,
+                        elapsed_ms=elapsed_ms,
+                        delivery_mode=delivery_mode,
+                        preserve_completed=task.attempt_no > 1,
+                        claim_id=task.claim_id,
+                    ),
                 )
         except Exception as exc:  # noqa: BLE001 - 后台失败必须收敛，凭据及上游正文不进日志。
             failure_code = _failure_code(exc)
