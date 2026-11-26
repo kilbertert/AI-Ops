@@ -1,0 +1,755 @@
+"""快捷方式（Shortcut）与横幅（Banner）领域模型、常量、内置种子与字段校验。
+
+本模块是 ``publication/shortcut_*`` 三层无环依赖链的最底层：仅依赖标准库、``common``
+与 ``agent_lifecycle.SAFE_ID``，不依赖数据库存储或生命周期管理。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any, NamedTuple
+
+from aiops_diagnostics.common.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
+from aiops_diagnostics.publication.agent_lifecycle import SAFE_ID
+
+# 与历史运行时日志及测试 caplog 通道保持一致
+logger = logging.getLogger("aiops_diagnostics.publication.shortcut_lifecycle")
+
+
+class ShortcutCopyGap(NamedTuple):
+    """One field of one shortcut that lacks a supported language."""
+
+    tenant_id: str
+    code: str
+    field: str
+    language: str
+
+
+def shortcut_copy_gaps(shortcuts: Iterable[Any]) -> list[ShortcutCopyGap]:
+    """Return every supported-language gap across ``shortcuts``.
+
+    The deterministic gate behind the CI coverage check: a shortcut shipping
+    with three of six languages is a defect that must fail a check rather than
+    reach a user whose buttons are in a language they did not ask for. Kept
+    separate from the warning path so the gate and the log agree on what
+    counts as a gap.
+    """
+    gaps: list[ShortcutCopyGap] = []
+    for shortcut in shortcuts:
+        for language in SUPPORTED_LANGUAGES:
+            for field, _fallback in shortcut.missing_translations(language):
+                gaps.append(
+                    ShortcutCopyGap(
+                        tenant_id=shortcut.tenant_id,
+                        code=shortcut.code,
+                        field=field,
+                        language=language,
+                    )
+                )
+    return gaps
+
+
+def _warn_missing_translation(shortcut: Any, language: str, field: str, fallback: str) -> None:
+    """Record a shortcut copy fallback (never silently, never the copy itself).
+
+    Logs identifiers and the fact of the gap. The fallback text is not logged:
+    it is not secret, but the log is for finding the gap, not for reading the
+    product's copy in a place nobody curates.
+    """
+    logger.warning(
+        "shortcut copy missing translation: code=%s tenant=%s entry=%s field=%s language=%s",
+        shortcut.code,
+        shortcut.tenant_id,
+        shortcut.business_entry,
+        field,
+        language,
+        extra={
+            "event": "shortcut_translation_missing",
+            "code": shortcut.code,
+            "tenant_id": shortcut.tenant_id,
+            "business_entry": shortcut.business_entry,
+            "field": field,
+            "language": language,
+            "has_zh_fallback": bool(fallback),
+        },
+    )
+
+
+# Promotional Agent/version reference — same shape as ConversationCreateRequest's
+# agent_version_key ("agt_<hex>#vN"), so a shortcut target always resolves to
+# one immutable published agent version.
+_AGENT_VERSION = re.compile(r"^agt_[A-Za-z0-9]{8,64}#v\d{1,6}$")
+
+SHORTCUT_MANAGE_SCOPE = "aiops:shortcuts:manage"
+SHORTCUT_INTENTS = frozenset(
+    {"knowledge", "casual", "order_issue", "report_fault", "case_exploration", "solution_discovery"}
+)
+
+#: The operator entry's operations-review action (#721). Its `intent` is
+#: ``knowledge`` **on purpose**: a shortcut's intent is what the *classifier*
+#: may also produce from free text, and this action is a click-only surface —
+#: giving it its own intent would invite a sentence to route here. The code is
+#: what the client hard-wires behaviour to, which is why it is also listed in
+#: ``STABLE_CODES``.
+OPERATIONS_REVIEW_CODE = "operations_review"
+SHORTCUT_STATUSES = frozenset({"draft", "published", "disabled"})
+PLATFORM_SCOPE = "platform"
+TENANT_SCOPE = "tenant"
+#: 快捷动作表里平台默认记录的哨兵 tenant_id；与 Dify 工作区的 `DIFY_PLATFORM_WORKSPACE_ID` 无关。
+SHORTCUT_PLATFORM_SCOPE = "__platform__"
+#: 兼容 41 环境应急手册（`docs/agents/env-41-runbook.md`）中的主机旁路脚本导入；
+#: 新代码一律使用 `SHORTCUT_PLATFORM_SCOPE`。
+PLATFORM_TENANT_ID = SHORTCUT_PLATFORM_SCOPE
+SHORTCUT_SCOPES = frozenset({PLATFORM_SCOPE, TENANT_SCOPE})
+PLATFORM_ROLES = frozenset({"ROLE_PLATFORM_ADMIN"})
+# Stable codes the frontend may hard-wire behavior to (order picker etc.).
+STABLE_CODES = frozenset({"case_exploration", "smart_diagnosis", "report_fault", OPERATIONS_REVIEW_CODE})
+
+# Product default for the fault-reporting jump action. The path is an
+# in-app route, so it is not localized: one path per action, not per language.
+REPORT_FAULT_JUMP_PATH = "/charge/pages/faultReport/faultReportList"
+
+# The battery report the chat-page banner navigates to. Same rule as the fault
+# report: an in-app route, one path for every language (ADR-0006).
+BATTERY_REPORT_JUMP_PATH = "/aiPackage/pages/batteryReport/batteryReport"
+
+# Resource kind — the EXPLICIT discriminator between a chat-page banner and an
+# ordinary shortcut button. It is a column, not a `fields_json` convention and
+# not "image_url is set", because the serving query has to select a surface
+# without parsing JSON, and because deriving the surface from `image_url` would
+# make "which endpoint read this row" an implicit input to the shared
+# projection. Exactly two kinds; the value is what the row IS, so it is never
+# edited after creation.
+BUTTON_KIND = "button"
+BANNER_KIND = "banner"
+SHORTCUT_KINDS = frozenset({BUTTON_KIND, BANNER_KIND})
+
+VIEW_ROLES = frozenset(
+    {"ROLE_AGENT_VIEWER", "ROLE_AGENT_ADMIN", "ROLE_AGENT_PUBLISHER", "ROLE_PLATFORM_ADMIN"}
+)
+EDIT_ROLES = frozenset({"ROLE_AGENT_ADMIN", "ROLE_PLATFORM_ADMIN"})
+PUBLISH_ROLES = frozenset({"ROLE_AGENT_PUBLISHER", "ROLE_AGENT_ADMIN", "ROLE_PLATFORM_ADMIN"})
+
+
+class ShortcutError(RuntimeError):
+    """Base class for shortcut lifecycle failures."""
+
+    code = "SHORTCUT_ERROR"
+
+
+# The initial product-entry shortcuts (#230 initial codes). Copy lives here
+# only as the seed default; after creation the rows are ordinary managed
+# resources — operators edit/publish/disable them through the API.
+#
+# Copy covers ALL of SUPPORTED_LANGUAGES. There is no separate label/description
+# table to match — i18n.py holds the language INVENTORY and the message catalogs,
+# while these seeds ARE the shortcut copy, keyed by the inventory's tags and
+# gated by the same coverage checks. The earlier comment pointed at i18n.py for
+# tables that do not live there, so replaying it reconstructed a premise that was
+# never true.
+#
+# A two-language seed is not harmless: resolve_language accepts every declared
+# language and public() falls back to zh, so a user of any other language
+# silently gets Chinese buttons while the response still echoes their language
+# (41 live, 2026-09-18).
+#
+# The operator entry (#427) reuses the SAME codes as consumer: both actions run
+# on the published execution paths, so an operator-entry button behaves exactly
+# like its consumer twin and needs no second implementation. Only two: the
+# fault-report jump action is not the assistant entry's business, so it stays on
+# the consumer side. Publishing per tenant+entry remains an operator act — these
+# rows seed as drafts like the consumer ones.
+#
+# The fields that are byte-identical on both entries are therefore shared
+# constants rather than two copies: `intent` / `requires_order` / `sort_order` /
+# `question_templates` must match the consumer twin, and a second copy drifts
+# invisibly (only the button copy differs between entries).
+#
+# `case_exploration`（「客户案例」）is seeded on NEITHER entry: the product
+# retired the button on both surfaces (2026-11-14, ADR-0254). Its `intent`
+# stays in SHORTCUT_INTENTS/STABLE_CODES as the row-validity gate and the
+# `target_agent_version` allow-list — the promotional ROUTE itself was
+# already removed with the Python harness in #1125, so a free-text case cue
+# or a stale submitted code now takes the ordinary question path like any
+# other question (the "只摘按钮" scope the user set in ADR-0031 and
+# reconfirmed here). Existing published rows keep serving until an operator
+# disables them; the live-side steps are in env-41-runbook §3.1-sexies.
+_SHARED_ACTION_FIELDS: dict[str, dict[str, Any]] = {
+    "smart_diagnosis": {
+        "intent": "order_issue",
+        "requires_order": True,
+        "sort_order": 20,
+        "question_templates": {
+            "zh": "帮我检测这个订单的充电异常",
+            "zh-Hant": "幫我檢測這個訂單的充電異常",
+            "vi": "Hãy kiểm tra bất thường sạc của đơn hàng này",
+            "mn": "Энэ захиалгын цэнэглэлтийн алдааг шалгаж өгнө үү",
+            "th": "ช่วยตรวจสอบความผิดปกติในการชาร์จของคำสั่งซื้อนี้",
+            "km": "សូមពិនិត្យភាពមិនប្រក្រតីនៃការសាករបស់ការបញ្ជាទិញនេះ",
+            "en": "Diagnose the charging issue of this order",
+            "de": "Diagnostizieren Sie den Ladefehler dieses Auftrags",
+            "fr": "Diagnostiquez l'anomalie de charge de cette commande",
+            "es": "Diagnostique la anomalía de carga de este pedido",
+            "pt": "Diagnostique a anomalia de carregamento deste pedido",
+        },
+    },
+}
+_BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
+    (
+        "consumer",
+        {
+            "smart_diagnosis": {
+                **_SHARED_ACTION_FIELDS["smart_diagnosis"],
+                "labels": {
+                    "zh": "智能检测",
+                    "zh-Hant": "智慧檢測",
+                    "vi": "Kiểm tra thông minh",
+                    "mn": "Ухаалаг шалгалт",
+                    "th": "ตรวจสอบอัจฉริยะ",
+                    "km": "ការពិនិត្យឆ្លាតវៃ",
+                    "en": "Smart Diagnosis",
+                    "de": "Intelligente Diagnose",
+                    "fr": "Diagnostic intelligent",
+                    "es": "Diagnóstico inteligente",
+                    "pt": "Diagnóstico inteligente",
+                },
+                "descriptions": {
+                    "zh": "选择订单后自动诊断充电异常",
+                    "zh-Hant": "選擇訂單後自動診斷充電異常",
+                    "vi": "Chọn đơn hàng để tự động chẩn đoán bất thường sạc",
+                    "mn": "Захиалга сонгосны дараа цэнэглэлтийн алдааг автоматаар оношилно",
+                    "th": "เลือกคำสั่งซื้อแล้วระบบจะวินิจฉัยความผิดปกติในการชาร์จอัตโนมัติ",
+                    "km": "ជ្រើសរើសការបញ្ជាទិញ រួចវិនិច្ឆ័យភាពមិនប្រក្រតីនៃការសាកដោយស្វ័យប្រវត្តិ",
+                    "en": "Pick an order, then diagnose the charging issue automatically",
+                    "de": "Auftrag wählen, Ladeabbrüche werden automatisch diagnostiziert",
+                    "fr": "Sélectionnez une commande pour diagnostiquer l'anomalie de charge",
+                    "es": "Seleccione un pedido para diagnosticar la anomalía de carga",
+                    "pt": "Selecione um pedido para diagnosticar a anomalia de carregamento",
+                },
+            },
+            "report_fault": {
+                "intent": "report_fault",
+                "requires_order": False,
+                "sort_order": 30,
+                "labels": {
+                    "zh": "故障上报",
+                    "zh-Hant": "故障上報",
+                    "vi": "Báo lỗi",
+                    "mn": "Гэмтэл мэдэгдэх",
+                    "th": "แจ้งเหตุขัดข้อง",
+                    "km": "រាយការណ៍ការខូច",
+                    "en": "Report a Fault",
+                    "de": "Störung melden",
+                    "fr": "Signaler une panne",
+                    "es": "Notificar una avería",
+                    "pt": "Comunicar uma avaria",
+                },
+                "descriptions": {
+                    "zh": "描述故障现象，由平台跟进处理",
+                    "zh-Hant": "描述故障現象，由平臺跟進處理",
+                    "vi": "Mô tả hiện tượng lỗi, nền tảng sẽ theo dõi xử lý",
+                    "mn": "Гэмтлийн шинж тэмдгийг тайлбарлана уу, платформ үргэлжлүүлэн шийдвэрлэнэ",
+                    "th": "อธิบายอาการขัดข้อง แพลตฟอร์มจะติดตามจัดการให้",
+                    "km": "ពិពណ៌នាអំពីអាការៈខូច វេទិកានឹងតាមដានដោះស្រាយ",
+                    "en": "Describe the fault and the platform will follow up",
+                    "de": "Beschreiben Sie die Störung, die Plattform kümmert sich darum",
+                    "fr": "Décrivez la panne, la plateforme prend le relais",
+                    "es": "Describa la avería y la plataforma se encargará",
+                    "pt": "Descreva a avaria e a plataforma dará seguimento",
+                },
+                "question_templates": {
+                    "zh": "我要上报一个故障",
+                    "zh-Hant": "我要上報一個故障",
+                    "vi": "Tôi muốn báo một lỗi",
+                    "mn": "Би гэмтэл мэдэгдэхийг хүсэж байна",
+                    "th": "ฉันต้องการแจ้งเหตุขัดข้อง",
+                    "km": "ខ្ញុំចង់រាយការណ៍ការខូច",
+                    "en": "I want to report a fault",
+                    "de": "Ich möchte eine Störung melden",
+                    "fr": "Je souhaite signaler une panne",
+                    "es": "Quiero notificar una avería",
+                    "pt": "Quero comunicar uma avaria",
+                },
+                # The product's default fault-reporting entry is the in-app
+                # form, not a preset prompt. Kept here as the versioned
+                # definition so the path is a repo asset, not a magic string
+                # in an ad-hoc migration command.
+                "jump_path": REPORT_FAULT_JUMP_PATH,
+            },
+            # The chat-page banner (#578). Same table, same lifecycle, same
+            # copy coverage — but a card, on its own surface, reached through
+            # the banner endpoint. `kind` is what puts it there; the button
+            # listing never sees it.
+            #
+            # No `question_templates`: a jump action never reaches the unified
+            # assistant entry, so a preset prompt would be dead copy that the
+            # coverage gate would then demand in eleven languages.
+            #
+            # The copy is the product's own, taken from the shipped client
+            # bundle (build 21 / 1.2.12) where this banner is already live in
+            # all eleven languages — it is NOT invented here.
+            #
+            # ONE caveat, and it is a wording question rather than a copy bug:
+            # GLOSSARY objects to 「待生成」 because it implies a queued,
+            # unpersisted report (see 可生成报告订单). Product owns the wording,
+            # so it is kept as shipped rather than rewritten here. That applies
+            # to the zh authority and its zh-Hant derivation alike — the
+            # Traditional copy is the DERIVATION of this string, never a second
+            # hand-written one, which is what keeps the two scripts from
+            # drifting apart. See tools/content/derive_zh_hant.py.
+            "battery_report": {
+                "intent": "knowledge",  # inert for a jump action; see the brief
+                "requires_order": False,
+                "sort_order": 10,
+                "labels": {
+                    "zh": "你有一份待生成智能电池检查报告",
+                    "zh-Hant": "你有一份待生成智慧電池檢查報告",
+                    "vi": "Bạn có một báo cáo kiểm tra pin thông minh đang chờ tạo",
+                    "mn": "Танд бэлтгэгдэх ухаалаг батерей шалгалтын тайлан байна",
+                    "th": "คุณมีรายงานการตรวจสภาพแบตเตอรี่อัจฉริยะรอสร้างอยู่",
+                    "km": "អ្នកមានរបាយការណ៍ត្រួតពិនិត្យអាគុយឆ្លាតវៃរង់ចាំការបង្កើត",
+                    "en": "You have a smart battery health report ready to generate",
+                    "de": "Ein smarter Batterieprüfbericht steht zur Erstellung bereit",
+                    "fr": "Vous avez un rapport d'état de batterie prêt à être généré",
+                    "es": "Tienes un informe inteligente de salud de batería listo para generar",
+                    "pt": "Você tem um relatório inteligente de saúde da bateria pronto para gerar",
+                },
+                "descriptions": {
+                    "zh": "想知道你的电池容量衰减多少？",
+                    "zh-Hant": "想知道你的電池容量衰減多少？",
+                    "vi": "Bạn muốn biết dung lượng pin đã suy giảm bao nhiêu?",
+                    "mn": "Батерейны багтаамж хэр буурсныг мэдэхийг хүсч байна уу?",
+                    "th": "ต้องการทราบว่าความจุแบตเตอรี่ของคุณลดลงเท่าไรหรือไม่?",
+                    "km": "ចង់ដឹងថាទំហំផ្ទុកអាគុយរបស់អ្នកថយចុះប៉ុន្មានដែរឬទេ?",
+                    "en": "Want to check your battery degradation and capacity?",
+                    "de": "Möchten Sie wissen, wie viel Kapazität Ihr Akku verloren hat?",
+                    "fr": "Vous voulez savoir comment votre batterie s'est dégradée ?",
+                    "es": "¿Quieres saber cuánta capacidad ha perdido tu batería?",
+                    "pt": "Quer saber quanto a sua bateria degradou?",
+                },
+                "jump_path": BATTERY_REPORT_JUMP_PATH,
+                "kind": BANNER_KIND,
+                # The operator's fallback image. Left unset in the seed: the
+                # personalized photo comes from the client's own car lookup, and
+                # the repo has no business hot-linking a third-party CDN from a
+                # seed. Ops sets this when they want a fallback.
+                "image_url": None,
+            },
+        },
+    ),
+    (
+        "operator",
+        {
+            # `case_exploration`（「客户案例」）removed here AND from the consumer
+            # entry on 2026-11-14 — the product retired the command entirely.
+            # History: added with #427, removed 2026-10-16 (#803/ADR-0031),
+            # restored 2026-10-19 (ADR-0050), retired again now. The seed
+            # header above carries why only the button goes, not the intent.
+            #
+            # 运维巡检（#721）：点一下拿一张跨订单的运维卡（当前是失败率）。
+            # `requires_order=False` —— 它问的是「这一组站点这一段区间整体如何」，
+            # 不是某一张单；这也是它与 `smart_diagnosis` 的根本区别。
+            # 种成 **draft**：发布是运营动作，与本入口其余动作同一条规矩。
+            "operations_review": {
+                "intent": "knowledge",
+                "requires_order": False,
+                "sort_order": 30,
+                "question_templates": {
+                    "zh": "帮我看一下最近的运维巡检",
+                    "zh-Hant": "幫我看一下最近的運維巡檢",
+                    "vi": "Hãy xem bản kiểm tra vận hành gần đây giúp tôi",
+                    "mn": "Сүүлийн үйл ажиллагааны шалгалтыг харж өгнө үү",
+                    "th": "ช่วยดูผลตรวจสอบการดำเนินงานล่าสุดให้หน่อย",
+                    "km": "សូមមើលការត្រួតពិនិត្យប្រតិបត្តិការថ្មីៗ",
+                    "en": "Show me the recent operations review",
+                    "de": "Zeigen Sie mir die letzte Betriebsprüfung",
+                    "fr": "Montrez-moi la dernière revue d'exploitation",
+                    "es": "Muéstrame la revisión de operaciones reciente",
+                    "pt": "Mostre-me a revisão de operações recente",
+                },
+                "labels": {
+                    "zh": "运维巡检",
+                    "zh-Hant": "運維巡檢",
+                    "vi": "Kiểm tra vận hành",
+                    "mn": "Үйл ажиллагааны шалгалт",
+                    "th": "ตรวจสอบการดำเนินงาน",
+                    "km": "ត្រួតពិនិត្យប្រតិបត្តិការ",
+                    "en": "Operations Review",
+                    "de": "Betriebsprüfung",
+                    "fr": "Revue d'exploitation",
+                    "es": "Revisión de operaciones",
+                    "pt": "Revisão de operações",
+                },
+                "descriptions": {
+                    "zh": "查看本运营商站点最近的整体运行情况",
+                    "zh-Hant": "檢視本運營商站點最近的整體運行情況",
+                    "vi": "Xem tình hình vận hành tổng thể gần đây của các trạm thuộc đơn vị bạn",
+                    "mn": "Өөрийн станцуудын сүүлийн ерөнхий ажиллагааг харах",
+                    "th": "ดูภาพรวมการดำเนินงานล่าสุดของสถานีในสังกัดคุณ",
+                    "km": "មើលស្ថានភាពប្រតិបត្តិការរួមថ្មីៗនៃស្ថានីយរបស់អ្នក",
+                    "en": "See how your stations have been running recently",
+                    "de": "Wie Ihre Ladestationen zuletzt gelaufen sind",
+                    "fr": "Voir le fonctionnement récent de vos stations",
+                    "es": "Consulte el funcionamiento reciente de sus estaciones",
+                    "pt": "Veja o funcionamento recente das suas estações",
+                },
+            },
+            "smart_diagnosis": {
+                **_SHARED_ACTION_FIELDS["smart_diagnosis"],
+                "labels": {
+                    "zh": "订单检测",
+                    "zh-Hant": "訂單檢測",
+                    "vi": "Kiểm tra đơn hàng",
+                    "mn": "Захиалга шалгах",
+                    "th": "ตรวจสอบคำสั่งซื้อ",
+                    "km": "ពិនិត្យការបញ្ជាទិញ",
+                    "en": "Order Diagnosis",
+                    "de": "Auftragsdiagnose",
+                    "fr": "Diagnostic de commande",
+                    "es": "Diagnóstico de pedido",
+                    "pt": "Diagnóstico de pedido",
+                },
+                "descriptions": {
+                    "zh": "选择订单，检测该订单的充电异常",
+                    "zh-Hant": "選擇訂單，檢測該訂單的充電異常",
+                    "vi": "Chọn đơn hàng và kiểm tra bất thường sạc của đơn đó",
+                    "mn": "Захиалга сонгоод тухайн захиалгын цэнэглэлтийн алдааг шалгах",
+                    "th": "เลือกคำสั่งซื้อและตรวจสอบความผิดปกติในการชาร์จของคำสั่งซื้อนั้น",
+                    "km": "ជ្រើសរើសការបញ្ជាទិញ រួចពិនិត្យភាពមិនប្រក្រតីនៃការសាករបស់វា",
+                    "en": "Pick an order and its charging issues are detected",
+                    "de": "Auftrag wählen, Ladefehler werden automatisch erkannt",
+                    "fr": "Sélectionnez une commande, ses anomalies de charge sont détectées",
+                    "es": "Seleccione un pedido y se detectarán sus anomalías de carga",
+                    "pt": "Selecione um pedido e as anomalias de carregamento serão detectadas",
+                },
+            },
+        },
+    ),
+)
+
+
+class ShortcutNotFound(ShortcutError):
+    code = "SHORTCUT_NOT_FOUND"
+
+
+class ShortcutForbidden(ShortcutError):
+    code = "SHORTCUT_FORBIDDEN"
+
+
+class ShortcutConflict(ShortcutError):
+    code = "SHORTCUT_REVISION_CONFLICT"
+
+
+class ShortcutValidationError(ShortcutError):
+    code = "SHORTCUT_VALIDATION_FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class Shortcut:
+    shortcut_id: str
+    tenant_id: str
+    business_entry: str
+    code: str
+    intent: str
+    requires_order: bool
+    sort_order: int
+    status: str
+    revision: int
+    labels: dict[str, str]  # language -> label
+    descriptions: dict[str, str]
+    question_templates: dict[str, str]
+    target_agent_version: str | None  # "agt_xxx#vN" for promotional targets
+    # In-app route the client navigates to on click. A non-empty path IS the
+    # discriminator: it makes this a jump action, which never reaches the
+    # unified assistant entry. None keeps the prompt action behavior.
+    jump_path: str | None
+    # Which surface this row belongs to. A column rather than a `fields_json`
+    # key because the serving query selects a surface, and because deriving it
+    # from `image_url` would make the reader an implicit input. Immutable after
+    # creation: a row does not become a different kind of resource.
+    kind: str
+    # Optional fallback image for a banner row (`None` for buttons). Frozen
+    # into the publish snapshot like every other served field; the client uses
+    # its own car lookup first and falls back here.
+    image_url: str | None
+    published_version: int | None
+    created_by: str
+    created_at: str
+    updated_at: str
+    scope: str = TENANT_SCOPE
+
+    def served_language(self, language: str) -> str:
+        """The language this row's copy can actually be served in.
+
+        A row published before a language existed has no copy for it, and
+        `_localized_field` falls back to zh. The listing echoes a language, so
+        it must echo the one the TEXT is in — reporting the requested tag while
+        sending Chinese is the defect this whole workstream exists to remove,
+        and it survives in every already-published row unless the listing
+        reports the fallback instead of hiding it.
+        """
+        if language == DEFAULT_LANGUAGE:
+            return DEFAULT_LANGUAGE
+        # EVERY field that carries copy must have this language, not just one of
+        # them: a row with an English label and a Chinese description is not an
+        # English row, and reporting `en` would claim the description too. A
+        # field that is empty in every language (a jump action has no
+        # question_template) does not participate.
+        participating = [
+            values for values in (self.labels, self.descriptions, self.question_templates) if values
+        ]
+        if participating and all(values.get(language) for values in participating):
+            return language
+        return DEFAULT_LANGUAGE
+
+    def public(self, language: str) -> dict[str, Any]:
+        """Public listing shape: stable code + localized text for ONE language.
+
+        Falls back to zh for a missing language (repo i18n rule: the catalog
+        never returns empty copy). Status is always ``published`` here — the
+        listing endpoint only serves published rows (#230 acceptance).
+
+        A missing translation is ALWAYS recorded before the fallback is used.
+        The fallback itself is deliberate — returning empty copy would blank a
+        user's buttons — but doing it silently is what let a shortcut language
+        gap survive a whole release cycle: the request returned 200, the
+        ``language`` echoed exactly what was asked for, and only the text was
+        wrong. See :meth:`missing_translations`.
+
+        This is the BUTTON surface's shape, and it is byte-for-byte what it
+        always was (#588 acceptance: adding a banner must not change the
+        button listing). It therefore gained no `kind` and no `image_url`: a
+        banner never reaches it, and a button can never carry an image (see
+        `_validated_fields`). The banner has its own projection; see
+        :meth:`banner`.
+        """
+        for field, value in self.missing_translations(language):
+            _warn_missing_translation(self, language, field, value)
+        return {
+            "code": self.code,
+            # The language THIS row's copy is in — the requested one when the
+            # row has it, the authority language when it does not. Per-row and
+            # not only per-list: rows are published independently, so one
+            # listing can carry a translated row beside an untranslated one.
+            "language": self.served_language(language),
+            "intent": self.intent,
+            "requires_order": self.requires_order,
+            "sort_order": self.sort_order,
+            "label": self._localized_field(self.labels, language),
+            "description": self._localized_field(self.descriptions, language),
+            "question_template": self._localized_field(self.question_templates, language),
+            "target_agent_version": self.target_agent_version,
+            "jump_path": self.jump_path,
+        }
+
+    def banner(self, language: str) -> dict[str, Any]:
+        """The banner surface's shape for ONE language.
+
+        Deliberately narrower than :meth:`public`: a banner is a jump action,
+        so it has no `question_template` (it never reaches the unified
+        assistant entry) and no `target_agent_version`. Sending them would
+        invite a client to use a field that is meaningless for the card, and
+        `question_template` is a product rule, not a trimming convenience.
+
+        `image_url` is the operator's fallback only. The personalized car photo
+        is the client's own business — AI-Ops reads no business table and
+        returns no order- or vehicle-derived value here.
+        """
+        return {
+            "code": self.code,
+            "language": self.served_language(language),
+            "label": self._localized_field(self.labels, language),
+            "description": self._localized_field(self.descriptions, language),
+            "jump_path": self.jump_path,
+            "image_url": self.image_url,
+        }
+
+    @staticmethod
+    def _localized_field(values: dict[str, str], language: str) -> str:
+        return values.get(language) or values.get("zh", "")
+
+    def missing_translations(self, language: str) -> list[tuple[str, str]]:
+        """Return ``(field, fallback_value)`` for copy this language lacks.
+
+        Empty when the language is fully covered, or when it is the default
+        (zh is the authority, so its presence is not a gap). Also used by the
+        coverage check, so the warning and the gate agree on what counts.
+
+        A field that is empty in EVERY language does not participate — the same
+        rule :meth:`served_language` applies. The case that made this
+        necessary: a banner is a jump action, so it carries no
+        `question_templates` at all, and counting that as a gap in eleven
+        languages would be eleven warnings per request and a CI failure for
+        copy that is deliberately absent rather than untranslated.
+        """
+        if language == DEFAULT_LANGUAGE:
+            return []
+        missing: list[tuple[str, str]] = []
+        for field, values in (
+            ("label", self.labels),
+            ("description", self.descriptions),
+            ("question_template", self.question_templates),
+        ):
+            if not values:
+                continue
+            if not values.get(language):
+                missing.append((field, values.get(DEFAULT_LANGUAGE, "")))
+        return missing
+
+    def to_dict(self) -> dict[str, Any]:
+        """Full management shape (admin surface only)."""
+        return {
+            "shortcut_id": self.shortcut_id,
+            "code": self.code,
+            "business_entry": self.business_entry,
+            "intent": self.intent,
+            "requires_order": self.requires_order,
+            "sort_order": self.sort_order,
+            "status": self.status,
+            "revision": self.revision,
+            "labels": dict(self.labels),
+            "descriptions": dict(self.descriptions),
+            "question_templates": dict(self.question_templates),
+            "target_agent_version": self.target_agent_version,
+            "jump_path": self.jump_path,
+            "kind": self.kind,
+            "image_url": self.image_url,
+            "published_version": self.published_version,
+            "created_by": self.created_by,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "scope": self.scope,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ShortcutVersion:
+    shortcut_id: str
+    tenant_id: str
+    version_no: int
+    snapshot: dict[str, Any]
+    published_by: str
+    published_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "shortcut_id": self.shortcut_id,
+            "version_no": self.version_no,
+            "snapshot": json.loads(json.dumps(self.snapshot, ensure_ascii=False)),
+            "published_by": self.published_by,
+            "published_at": self.published_at,
+        }
+
+
+_JUMP_PATH_MAX = 512
+
+
+def _jump_path(value: Any) -> str | None:
+    """Validate the optional in-app route for a jump action.
+
+    Only the format the product states is enforced (must start with ``/``).
+    There is deliberately NO route allowlist: the repository holds no
+    authoritative H5 route convention, so a whitelist here would copy the
+    client's router into the backend and need a backend release per new page.
+    Whether the page exists is the client's acceptance scope.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ShortcutValidationError("jump_path is invalid")
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if candidate.startswith("//") or not candidate.startswith("/") or len(candidate) > _JUMP_PATH_MAX:
+        # See the HTTP request model for why "//" is rejected: RFC 3986 §4.2
+        # makes a leading "//" a network-path reference (an authority, i.e. a
+        # host), not a route, so a client navigator could treat it as a jump
+        # to another origin. Duplicated here because this validator is also
+        # called directly by the operator runbook, which does not go through
+        # the HTTP layer.
+        raise ShortcutValidationError(
+            f"jump_path must be a '/'-prefixed path (not '//') of at most {_JUMP_PATH_MAX} characters"
+        )
+    return candidate
+
+
+_IMAGE_URL_MAX = 512
+
+
+def _image_url(value: Any) -> str | None:
+    """Validate the optional banner fallback image.
+
+    Only ``http(s)`` is accepted. What that rules out is the part that
+    matters: a ``data:`` payload is an unbounded blob smuggled through config,
+    and ``javascript:`` / ``file:`` are the shapes a client navigator or image
+    loader turns into an execution or local-read primitive. This is a config
+    field an operator fills in, but it is still an external string reaching a
+    client, so it is validated at the boundary rather than trusted.
+
+    A third-party CDN URL is explicitly allowed: the car photos already are
+    those, and the availability / licensing consequences are recorded in the
+    frontend handoff rather than enforced here.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ShortcutValidationError("image_url is invalid")
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if len(candidate) > _IMAGE_URL_MAX or not candidate.lower().startswith(("http://", "https://")):
+        raise ShortcutValidationError(
+            f"image_url must be an http(s) URL of at most {_IMAGE_URL_MAX} characters"
+        )
+    return candidate
+
+
+def _localized(value: Any, name: str, *, require_zh: bool) -> dict[str, str]:
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ShortcutValidationError(f"{name} is invalid")
+    result: dict[str, str] = {}
+    for language, text in value.items():
+        if language not in SUPPORTED_LANGUAGES:
+            raise ShortcutValidationError(f"{name} uses an unsupported language")
+        if not isinstance(text, str) or not text.strip() or len(text) > 500:
+            raise ShortcutValidationError(f"{name} text is invalid")
+        result[str(language)] = text
+    if require_zh and not result.get("zh", "").strip():
+        raise ShortcutValidationError(f"{name} must include zh copy")
+    return result
+
+
+def _entry(value: Any) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate not in {"consumer", "operator"}:
+        raise ShortcutValidationError("business_entry is invalid")
+    return candidate
+
+
+def _code(value: Any) -> str:
+    candidate = str(value or "").strip()
+    if not SAFE_ID.fullmatch(candidate) or len(candidate) > 64:
+        raise ShortcutValidationError("code is invalid")
+    return candidate
+
+
+def _id(value: str) -> str:
+    candidate = (value or "").strip()
+    if not SAFE_ID.fullmatch(candidate):
+        raise ShortcutValidationError("shortcut_id is invalid")
+    return candidate
+
+
+def _actor(context: Any) -> str:
+    caller = getattr(context, "caller", None)
+    return str(getattr(caller, "b_user_id", "shortcut-admin"))[:128]
+
+
+def _json(value: dict[str, Any]) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
