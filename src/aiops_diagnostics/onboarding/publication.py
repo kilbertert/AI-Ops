@@ -313,6 +313,9 @@ def dispatch(context, payload):
             and result.get("directory") == "synchronized"
             else "cancelled"
             if row["cancel"] and result.get("phase") == "restored"
+            else "checking"
+            if row["cancel"]
+            and (result.get("activated") is True or result.get("directory") == "synchronized")
             else "blocked"
         )
         if state == "checking" and row["cancel"]:

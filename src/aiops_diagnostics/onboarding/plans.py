@@ -37,7 +37,7 @@ class PlanRefused(ValueError):
 def _verify_reusable_backup(backup: Path, original_bytes: bytes) -> None:
     """按 O_NOFOLLOW + fstat 同 fd 校验既有 .bak：须为同属主、私有权限、单链接常规文件且字节一致。"""
     try:
-        fd = os.open(backup, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(backup, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as exc:
         raise PlanRefused("ENVIRONMENT_REFERENCES_BACKUP_EXISTS") from exc
     try:

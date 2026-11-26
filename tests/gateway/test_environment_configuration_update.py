@@ -280,6 +280,10 @@ def test_repeated_publish_restore_cycle_reuses_verified_backup_and_preserves_on_
     with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
         plans.update_artifact_references(reference, **forward_req)
     backup_canonical.unlink()
+    os.mkfifo(backup_canonical, 0o600)
+    with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
+        plans.update_artifact_references(reference, **forward_req)
+    backup_canonical.unlink()
     backup_canonical.symlink_to(other)
     with pytest.raises(plans.PlanRefused, match="ENVIRONMENT_REFERENCES_BACKUP_EXISTS"):
         plans.update_artifact_references(reference, **forward_req)

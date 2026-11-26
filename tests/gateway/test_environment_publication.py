@@ -1815,3 +1815,40 @@ def test_direct_restore_cleans_stale_directory_and_state(validated):
     assert body["result"]["state"] == "cancelled"
     assert body["result"]["activated"] is False
     assert "directory" not in body["result"]
+
+
+def test_late_cancel_after_activation_enters_reconcile_instead_of_blocked(validated):
+    """激活已同步目录后收到迟到取消请求时，必须转入 reconcile 自动恢复而非困在 blocked。"""
+    state = validated[0][0]
+    identifier = publish(validated).json()["id"]
+    owner = "2" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner}).json()["id"] == identifier
+    assert (
+        internal(
+            state, {"publication": "intent", "id": identifier, "owner": owner, "step": "readiness"}
+        ).json()["execute"]
+        is True
+    )
+    cancelled = state[0][2].post(
+        "/v1/dify/management/environment-tasks", json={"id": identifier, "cancel": True}
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    late_complete = internal(
+        state,
+        {
+            "publication": "complete",
+            "id": identifier,
+            "owner": owner,
+            "result": {
+                "state": "observed",
+                "phase": "activated",
+                "activated": True,
+                "directory": "synchronized",
+            },
+        },
+    )
+    assert late_complete.status_code == 200, late_complete.text
+    body = late_complete.json()
+    assert body["state"] == "reconcile"
+    assert body["result"]["phase"] == "restoring"
+    assert "directory" not in body["result"]
