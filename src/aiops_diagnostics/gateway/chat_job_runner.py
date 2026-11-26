@@ -175,10 +175,10 @@ def settle_dify_failed(
             dify_store.fail(run_id, code.lower(), detail=detail[:200] if detail else None)
     with contextlib.suppress(Exception):
         grant_store.revoke_for_qa(qa_id)
-    runtime.store.update_assistant_question(qa_id, status="failed", error_code=code)
     registration = runtime._qa_registrations.get(qa_id)
     if registration is not None:
         runtime._release_conversation_turn(registration.conversation_turn)
+    runtime.store.update_assistant_question(qa_id, status="failed", error_code=code)
 
 
 def settle_dify_cancelled(
@@ -220,9 +220,9 @@ def settle_retracted_runs(runtime: Any, *, route: Any) -> dict[str, Any]:
         if run.kind in {"trial", "service_trial"}:
             runtime.store.update_standard_diagnosis(run.qa_id, status="cancelled")
         else:
-            runtime.store.update_assistant_question(run.qa_id, status="cancelled")
             if registration is not None:
                 runtime._release_conversation_turn(registration.conversation_turn)
+            runtime.store.update_assistant_question(run.qa_id, status="cancelled")
         if registration is not None and registration.interrupt is not None:
             runtime._interrupt_registered_turn(registration)
         elif run.task_id and run.kind == "chat" and run.app_id == route.app_id:
@@ -397,14 +397,14 @@ def execute_chat_order_qa(
         if run_id is not None:
             store.fail(run_id, exc.code.lower())
         _LOGGER.warning("chat node route rejected: %s: %s", exc.code, exc)
-        runtime.store.update_assistant_question(qa_id, status="failed", error_code=exc.code)
         runtime._release_conversation_turn(registration.conversation_turn)
+        runtime.store.update_assistant_question(qa_id, status="failed", error_code=exc.code)
         return
     except Exception as exc:  # noqa: BLE001 — 未预期失败也必须是失败，不是"再试直读"
         if run_id is not None:
             store.fail(run_id, "unexpected_error")
-        runtime.store.update_assistant_question(qa_id, status="failed", error_code="QA_FAILED")
         runtime._release_conversation_turn(registration.conversation_turn)
+        runtime.store.update_assistant_question(qa_id, status="failed", error_code="QA_FAILED")
         _LOGGER.warning("chat node route failed: %s: %s", type(exc).__name__, exc)
         return
     if not runtime.store.update_assistant_question(qa_id, status="completed", result=answer):

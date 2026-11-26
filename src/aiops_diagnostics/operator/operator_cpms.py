@@ -971,9 +971,17 @@ class OperatorCpms:
             reason = _failure_reason(exc)
             if not self.context.agent_run_store.fail(run_id, failure_code):
                 self.context.agent_run_store.refuse(run_id, failure_code)
+            task = self.tasks.get(run_id)
+            if task is not None:
+                # 槽位释放必须先于终态发布：轮询到 failed 的客户端会立刻续问，
+                # 反序会让已终结的会话仍以 CONVERSATION_BUSY 拒答。
+                self.context.runtime._release_conversation_turn(
+                    task.conversation_turn,
+                    preserve_completed=task.attempt_no > 1,
+                    claim_id=task.claim_id,
+                )
             store.update_assistant_question(qa_id, status="failed", error_code=_failure_code(exc))
             qa_events = getattr(self.context, "qa_events", None)
-            task = self.tasks.get(run_id)
             if qa_events is not None and not qa_events.has_terminal_event(qa_id):
                 elapsed_ms = (
                     max(0, int((time.monotonic() - task.started_at) * 1000)) if task is not None else 0
@@ -994,12 +1002,6 @@ class OperatorCpms:
             logging.getLogger("aiops.operator").warning(
                 "operator_run_failed reason=%s code=%s", reason, _failure_code(exc)
             )
-            if task is not None:
-                self.context.runtime._release_conversation_turn(
-                    task.conversation_turn,
-                    preserve_completed=task.attempt_no > 1,
-                    claim_id=task.claim_id,
-                )
         finally:
             with self.lock:
                 self.tasks.pop(run_id, None)
