@@ -669,6 +669,41 @@ def register(app, context, session_dependency):
                 return validation.dispatch(context, payload)
             if "registration" in payload:
                 return registration.dispatch(context, payload)
+            if "wizard_job" in payload:
+                from aiops_diagnostics.onboarding import wizard_jobs, wizard_provision
+
+                job_op = str(payload.get("wizard_job") or "")
+                reg_path = _path(context)
+                if job_op == "claim":
+                    return {
+                        "job": wizard_jobs.claim_next_job(
+                            reg_path, lease_seconds=float(payload.get("lease_seconds") or 600.0)
+                        )
+                    }
+                if job_op == "progress":
+                    return wizard_jobs.update_job_progress(
+                        reg_path,
+                        str(payload.get("job_id") or ""),
+                        step=str(payload.get("step") or ""),
+                        step_state=str(payload.get("step_state") or "running"),
+                        steps_payload=payload.get("steps"),
+                        result_patch=payload.get("result_patch"),
+                    )
+                if job_op == "complete":
+                    return wizard_jobs.complete_job(
+                        reg_path,
+                        str(payload.get("job_id") or ""),
+                        passed=bool(payload.get("passed")),
+                        result=dict(payload.get("result") or {}),
+                        error_code=str(payload.get("error_code") or ""),
+                        failed_step=str(payload.get("failed_step") or ""),
+                        steps_payload=payload.get("steps"),
+                    )
+                if job_op == "prepare_bundle":
+                    return wizard_provision.prepare_control_plane_bundle(context, reg_path, payload)
+                if job_op == "activate_registry":
+                    return wizard_provision.activate_environment_registry(context, reg_path, payload)
+                raise environment_tasks.TaskRefused("ENVIRONMENT_TASK_WORKER_INVALID")
             if "installation_claim" in payload:
                 return dispatch_installation_claim(context, payload)
             if "installation" in payload:

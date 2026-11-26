@@ -117,6 +117,7 @@ _WIZARD_ACTIONS = frozenset(
         "kb_upload",
         "kb_install_starter_faq",
         "self_validate",
+        "publish_environment",
         "post_publish_smoke",
     }
 )
@@ -543,6 +544,7 @@ def handle(handler):
         _verify_app_access(handler, session, payload.get("app_id", ""))
 
     key = handler.settings.trial_key if action.startswith("trial") else handler.settings.publish_key
+    req_timeout = 180 if path == "/environment-wizard" else 30
     code, result = bridge._request(
         handler.settings.gateway_base_url + "/v1/dify/management" + path,
         method=method,
@@ -552,7 +554,7 @@ def handle(handler):
             "Content-Type": "application/json",
         },
         body=payload if method == "POST" else None,
-        timeout=30,
+        timeout=req_timeout,
     )
     if (
         action == "status"
