@@ -15,18 +15,23 @@
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import hashlib
 import ipaddress
 import json
 import os
+import pty
 import re
 import secrets
+import select
 import shlex
+import socket
 import sqlite3
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -258,6 +263,83 @@ def revoke_host(
         return {"environment": env, "enrolled": False, "host": _public_host_view(entry)}
 
 
+_BOOTSTRAP_JSON_MARKER = "AIOPS_BOOTSTRAP_JSON:"
+
+
+def _run_ssh_with_ephemeral_pty_password(
+    ssh_cmd: list[str],
+    password: str,
+    *,
+    timeout: float = 120.0,
+) -> tuple[int, str]:
+    """仅用 Python 标准库 pty 在内存中向 ssh 递交一次性口令（零 sshpass 依赖、零磁盘残留）。"""
+    master_fd, slave_fd = pty.openpty()
+    proc: subprocess.Popen[bytes] | None = None
+    chunks: list[bytes] = []
+    sent_count = 0
+    try:
+        proc = subprocess.Popen(
+            ssh_cmd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            start_new_session=True,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+        slave_fd = -1
+        deadline = time.monotonic() + timeout
+        tail_buf = ""
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                raise EnrollmentRefused("ENVIRONMENT_HOST_BOOTSTRAP_TIMEOUT")
+            ready, _, _ = select.select([master_fd], [], [], min(0.5, remaining))
+            if ready:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                chunks.append(data)
+                text_part = data.decode("utf-8", errors="replace")
+                tail_buf = (tail_buf + text_part)[-512:]
+                lowered = tail_buf.lower()
+                if sent_count == 0 and ("password:" in lowered or "passphrase" in lowered):
+                    os.write(master_fd, (password + "\n").encode("utf-8"))
+                    sent_count += 1
+                    tail_buf = ""
+            elif proc.poll() is not None:
+                break
+        rc = proc.wait(timeout=5)
+    finally:
+        password = ""
+        if slave_fd >= 0:
+            with contextlib.suppress(OSError):
+                os.close(slave_fd)
+        with contextlib.suppress(OSError):
+            os.close(master_fd)
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=3)
+    return int(rc), b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def _extract_bootstrap_facts(raw_output: str) -> dict[str, Any]:
+    for line in reversed(raw_output.splitlines()):
+        cleaned = line.strip()
+        idx = cleaned.find(_BOOTSTRAP_JSON_MARKER)
+        if idx >= 0:
+            payload_text = cleaned[idx + len(_BOOTSTRAP_JSON_MARKER) :].strip()
+            parsed = json.loads(payload_text)
+            if isinstance(parsed, dict):
+                return parsed
+    raise EnrollmentRefused("ENVIRONMENT_HOST_PASSWORD_AUTH_OR_BOOTSTRAP_FAILED")
+
+
 def _default_ephemeral_password_runner(
     *,
     address: str,
@@ -268,7 +350,7 @@ def _default_ephemeral_password_runner(
     private_key_path: Path,
     environment: str,
 ) -> dict[str, Any]:
-    """使用瞬时内存口令完成指纹钉扎、公钥下发、aiops/venv 自举及纯密钥复验。"""
+    """使用瞬时内存口令（stdlib pty）完成指纹钉扎、公钥下发、aiops/venv 自举及纯密钥复验。"""
     # 1. 获取并计算主机 SSH ed25519 指纹（失败即停，绝不盲信）
     scan = subprocess.run(
         ["ssh-keyscan", "-p", str(ssh_port), "-t", "ed25519", "-T", "8", address],
@@ -292,50 +374,36 @@ def _default_ephemeral_password_runner(
     if not _FINGERPRINT_PATTERN.fullmatch(fingerprint):
         raise EnrollmentRefused("ENVIRONMENT_HOST_FINGERPRINT_INVALID")
 
-    # 2. 通过一次性临时 known_hosts + 仅在子进程管道传递口令的 sshpass -d 完成远端引导
+    # 2. 通过一次性临时 known_hosts + 标准库 pty 内存递交口令完成远端引导（无 sshpass 外部依赖）
     with tempfile.TemporaryDirectory(prefix="aiops-enroll-") as tmp:
         os.chmod(tmp, 0o700)
         kh = Path(tmp) / "known_hosts"
         write_private_text(kh, key_line + "\n")
         remote_bootstrap = _build_remote_python_bootstrap(environment, public_key)
-        read_fd, write_fd = os.pipe()
-        try:
-            os.write(write_fd, (password + "\n").encode("utf-8"))
-        finally:
-            os.close(write_fd)
-        try:
-            proc = subprocess.run(
-                [
-                    "sshpass",
-                    "-d",
-                    str(read_fd),
-                    "ssh",
-                    "-o",
-                    "StrictHostKeyChecking=yes",
-                    "-o",
-                    f"UserKnownHostsFile={kh}",
-                    "-o",
-                    "PreferredAuthentications=password,keyboard-interactive",
-                    "-o",
-                    "PubkeyAuthentication=no",
-                    "-o",
-                    "ConnectTimeout=10",
-                    "-p",
-                    str(ssh_port),
-                    f"{ssh_user}@{address}",
-                    "python3",
-                    "-",
-                ],
-                input=remote_bootstrap,
-                pass_fds=(read_fd,),
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-        finally:
-            os.close(read_fd)
-        if proc.returncode != 0:
+        b64_script = base64.b64encode(remote_bootstrap.encode("utf-8")).decode("ascii")
+        remote_cmd = f"python3 -c 'import base64; exec(base64.b64decode({b64_script!r}).decode())'"
+        ssh_cmd = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            f"UserKnownHostsFile={kh}",
+            "-o",
+            "PreferredAuthentications=password,keyboard-interactive",
+            "-o",
+            "PubkeyAuthentication=no",
+            "-o",
+            "NumberOfPasswordPrompts=1",
+            "-o",
+            "ConnectTimeout=10",
+            "-p",
+            str(ssh_port),
+            f"{ssh_user}@{address}",
+            remote_cmd,
+        ]
+        rc, pty_out = _run_ssh_with_ephemeral_pty_password(ssh_cmd, password, timeout=120.0)
+        password = ""
+        if rc != 0:
             raise EnrollmentRefused("ENVIRONMENT_HOST_PASSWORD_AUTH_OR_BOOTSTRAP_FAILED")
         # 3. 立即用纯 Ed25519 私钥复验免密通道（BatchMode=yes + 钉扎 known_hosts）
         verify = subprocess.run(
@@ -345,6 +413,8 @@ def _default_ephemeral_password_runner(
                 str(private_key_path),
                 "-o",
                 "BatchMode=yes",
+                "-o",
+                "IdentitiesOnly=yes",
                 "-o",
                 "StrictHostKeyChecking=yes",
                 "-o",
@@ -364,10 +434,193 @@ def _default_ephemeral_password_runner(
         if verify.returncode != 0:
             raise EnrollmentRefused("ENVIRONMENT_HOST_KEY_VERIFY_FAILED")
 
-    facts = json.loads(proc.stdout.strip().splitlines()[-1])
+    facts = _extract_bootstrap_facts(pty_out)
     facts["host_fingerprint_sha256"] = fingerprint
     facts["host_public_key_line"] = key_line
     return facts
+
+
+def load_enrolled_host_connection(
+    registry_path: str | Path,
+    environment: str,
+) -> dict[str, Any]:
+    """读取服务端受控的已钉扎客户主机连接信息（含私钥路径与公钥行，严禁直接返回前端）。"""
+    env = _validate_environment(environment)
+    with drafts._locked(registry_path):
+        body = _load_hosts_unlocked(registry_path)
+        entry = body["hosts"].get(env)
+    if not isinstance(entry, dict) or entry.get("status") not in {"enrolled", "verified"}:
+        raise EnrollmentRefused("ENVIRONMENT_HOST_NOT_ENROLLED")
+    key_id = str(entry.get("key_id") or f"ed25519-{env}")
+    priv_path = _keys_dir(registry_path) / f"id_{key_id}"
+    if not priv_path.is_file():
+        raise EnrollmentRefused("ENVIRONMENT_HOST_KEY_MISSING")
+    validate_private_file(priv_path)
+    return {
+        "environment": env,
+        "address": str(entry["address"]),
+        "ssh_port": int(entry.get("ssh_port") or DEFAULT_SSH_PORT),
+        "ssh_user": str(entry.get("ssh_user") or DEFAULT_SSH_USER),
+        "host_fingerprint_sha256": str(entry.get("host_fingerprint_sha256") or ""),
+        "host_public_key_line": str(entry.get("host_public_key_line") or ""),
+        "private_key_path": str(priv_path),
+    }
+
+
+def _resolve_pinned_known_hosts_line(conn_info: dict[str, Any]) -> str:
+    """校验并产出与已钉扎 SHA-256 指纹精确匹配的 known_hosts 公钥行，防中间人漂移。"""
+    expected_fp = str(conn_info.get("host_fingerprint_sha256") or "")
+    if not _FINGERPRINT_PATTERN.fullmatch(expected_fp):
+        raise EnrollmentRefused("ENVIRONMENT_HOST_FINGERPRINT_INVALID")
+    cached_line = str(conn_info.get("host_public_key_line") or "").strip()
+    candidate_line = cached_line
+    if not candidate_line:
+        scan = subprocess.run(
+            [
+                "ssh-keyscan",
+                "-p",
+                str(conn_info["ssh_port"]),
+                "-t",
+                "ed25519",
+                "-T",
+                "8",
+                str(conn_info["address"]),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        lines = [ln.strip() for ln in scan.stdout.splitlines() if ln.strip() and not ln.startswith("#")]
+        if scan.returncode != 0 or not lines:
+            raise EnrollmentRefused("ENVIRONMENT_HOST_UNREACHABLE")
+        candidate_line = lines[0]
+    fp_proc = subprocess.run(
+        ["ssh-keygen", "-lf", "-"],
+        input=candidate_line + "\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    parts = fp_proc.stdout.strip().split()
+    actual_fp = next((p for p in parts if p.startswith("SHA256:")), "")
+    if actual_fp != expected_fp:
+        raise EnrollmentRefused("ENVIRONMENT_HOST_FINGERPRINT_MISMATCH")
+    return candidate_line
+
+
+def run_pinned_ssh(
+    conn_info: dict[str, Any],
+    remote_args: list[str],
+    *,
+    stdin_text: str = "",
+    timeout: float = 45.0,
+) -> subprocess.CompletedProcess[str]:
+    """以 StrictHostKeyChecking=yes + 专属 Ed25519 私钥在已钉扎客户主机执行受控命令。"""
+    key_line = _resolve_pinned_known_hosts_line(conn_info)
+    with tempfile.TemporaryDirectory(prefix="aiops-ssh-") as tmp:
+        os.chmod(tmp, 0o700)
+        kh = Path(tmp) / "known_hosts"
+        write_private_text(kh, key_line + "\n")
+        cmd = [
+            "ssh",
+            "-i",
+            str(conn_info["private_key_path"]),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            f"UserKnownHostsFile={kh}",
+            "-o",
+            "ConnectTimeout=10",
+            "-p",
+            str(conn_info["ssh_port"]),
+            f"{conn_info['ssh_user']}@{conn_info['address']}",
+            *remote_args,
+        ]
+        return subprocess.run(
+            cmd,
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+
+
+def _alloc_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+@contextlib.contextmanager
+def open_pinned_ssh_tunnel(
+    conn_info: dict[str, Any],
+    targets: dict[str, tuple[str, int]],
+    *,
+    startup_timeout: float = 12.0,
+) -> Iterator[dict[str, int]]:
+    """建立短生命周期纯密钥钉扎本地端口转发隧道（用于控制面无依赖直检客户 MySQL/Redis/tsdata）。"""
+    key_line = _resolve_pinned_known_hosts_line(conn_info)
+    local_ports = {name: _alloc_loopback_port() for name in targets}
+    with tempfile.TemporaryDirectory(prefix="aiops-tun-") as tmp:
+        os.chmod(tmp, 0o700)
+        kh = Path(tmp) / "known_hosts"
+        write_private_text(kh, key_line + "\n")
+        cmd = [
+            "ssh",
+            "-N",
+            "-i",
+            str(conn_info["private_key_path"]),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            f"UserKnownHostsFile={kh}",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-p",
+            str(conn_info["ssh_port"]),
+        ]
+        for name, (rhost, rport) in targets.items():
+            cmd.extend(["-L", f"127.0.0.1:{local_ports[name]}:{rhost}:{int(rport)}"])
+        cmd.append(f"{conn_info['ssh_user']}@{conn_info['address']}")
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + startup_timeout
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    raise EnrollmentRefused("ENVIRONMENT_HOST_TUNNEL_FAILED")
+                all_ready = True
+                for lport in local_ports.values():
+                    try:
+                        with socket.create_connection(("127.0.0.1", lport), timeout=0.3):
+                            pass
+                    except OSError:
+                        all_ready = False
+                        break
+                if all_ready:
+                    break
+                time.sleep(0.15)
+            else:
+                raise EnrollmentRefused("ENVIRONMENT_HOST_TUNNEL_TIMEOUT")
+            yield local_ports
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=2)
 
 
 def _build_remote_python_bootstrap(environment: str, public_key: str) -> str:
@@ -422,7 +675,7 @@ nginx_flavor = (
     else "standard" if Path("/etc/nginx").is_dir()
     else "none"
 )
-print(json.dumps({{
+print("AIOPS_BOOTSTRAP_JSON:" + json.dumps({{
     "hostname": socket.gethostname(),
     "machine_id_sha256": mid,
     "python_minor": ver,
@@ -499,6 +752,7 @@ def enroll_via_ephemeral_password(
             "key_id": key_id,
             "public_key": pub_key,
             "host_fingerprint_sha256": fp,
+            "host_public_key_line": str(facts.get("host_public_key_line") or "").strip()[:512],
             "enrollment_mode": "ephemeral_password",
             "status": "verified",
             "hostname": str(facts.get("hostname") or "")[:128],
