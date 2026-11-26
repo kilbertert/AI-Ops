@@ -990,7 +990,10 @@ export default function EnvironmentManagement() {
 
   // 按时间倒序（最新在前）逐租户判别待发布状态：
   // - 若该租户最新核心记录已是 activated 的 environment-publish，则视为已发布，不再计入待发布；
-  // - 否则仅取最新一条 ready_to_publish 的 tenant-onboard 或三能力全通的 candidate-validate，避免历史重复按钮。
+  // - 否则仅取最新一条 ready_to_publish 的 tenant-onboard 或三能力全通的 candidate-validate，
+  //   作为租户级待发布代表：hero 单一引导、「进行中/待发布」筛选与开通卡便捷按钮按租户去重、
+  //   发布后自动退出筛选。验证任务卡自身的发布按钮不按此去重——服务端按所选验证的
+  //   证据链（case_ref/验证任务号）发布，旧验证与新验证不等价，凡就绪验证均保留发布动作。
   const pendingPublishOnboardIds = new Set<string>()
   const pendingPublishValidateIds = new Set<string>()
   const settledTenants = new Set<string>()
@@ -3171,7 +3174,7 @@ export default function EnvironmentManagement() {
                                     {taskLabels[item.state] || item.state}
                                     ；业务准确性待确认，正式入口未启用
                                   </p>
-                                  {pendingPublishValidateIds.has(item.id) && (
+                                  {isFullValidationReady(item) && (
                                     <Button
                                       type="button"
                                       variant="primary"
