@@ -977,6 +977,7 @@ def _step_cold_install_and_onboard(
             f"tar -xzf {stage_remote}/installer.tar.gz -C {stage_remote}/inst",
             f"chmod 600 {stage_remote}/*.*",
             f"if [ ! -f /opt/aiops-access-{env}/installed.json ]; then {install_bin_cmd}; fi",
+            f"systemctl stop aiops-access-{env}.service >/dev/null 2>&1 || true",
             f"mkdir -p {cfg_root}/runtime {cfg_root}/registry {var_root}/keys {var_root}/gateway",
             f"chmod 755 {cfg_root}",
             f"tar -xf {stage_remote}/runtime-bundle.tar -C {cfg_root}",
@@ -990,6 +991,7 @@ def _step_cold_install_and_onboard(
             f"chown {svc_user}:{svc_user} {cfg_root}/production.env",
             f"chown -R {svc_user}:{svc_user} {cfg_root}/runtime {cfg_root}/registry "
             f"{var_root}/keys {var_root}/gateway",
+            f"runuser -u {shlex.quote(svc_user)} -- "
             f"/opt/aiops-access-{env}/current/venv/bin/python -c {shlex.quote(seed_py)}",
             f"chown -R {svc_user}:{svc_user} {var_root}/gateway",
             f"systemctl restart aiops-access-{env}.service",
