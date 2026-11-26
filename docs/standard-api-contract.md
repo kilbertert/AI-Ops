@@ -141,7 +141,7 @@ Content-Type: application/json
 {
   "job_id": "hrj_opaque_id",
   "order_no": "2094370061724549120",
-  "rule_version": "health-v2",
+  "rule_version": "health-v3",
   "status": "queued",
   "language": "zh",
   "retry_after_ms": 1000,
@@ -181,50 +181,192 @@ Authorization: Bearer <access_token>
 {
   "job_id": "hrj_opaque_id",
   "order_no": "2094370061724549120",
-  "rule_version": "health-v2",
+  "rule_version": "health-v3",
   "status": "completed",
+  "language": "zh",
   "retry_after_ms": null,
   "report": {
-    "summary": "本次充电健康报告有 1 项指标需关注",
+    "order_no": "2094370061724549120",
+    "order_window": {
+      "started_at": "2026-11-26T05:19:03+00:00",
+      "stopped_at": "2026-11-26T06:31:22+00:00"
+    },
+    "summary": "本次充电体检各项已采集指标均处于正常范围。",
+    "overall_health_score": 89.3,
+    "overall_health_source": "soh",
+    "overview": {
+      "start_soc": 18.0,
+      "end_soc": 99.0,
+      "soc_delta": 81.0,
+      "energy_charged_kwh": 45.4,
+      "duration_seconds": 4339,
+      "battery_type": "lfp",
+      "overall_health_score": 89.3,
+      "overall_health_source": "soh",
+      "soh_status": "normal",
+      "is_shallow_charge": false
+    },
+    "conclusion": {
+      "level": "normal",
+      "code": "ALL_NORMAL",
+      "text": "本次充电体检各项已采集指标均处于正常范围。",
+      "counts": {
+        "normal": 7,
+        "attention": 0,
+        "abnormal": 0,
+        "unavailable": 0
+      },
+      "triggered_codes": [],
+      "advice_codes": []
+    },
     "indicators": [
       {
         "code": "stop_reason",
         "status": "normal",
-        "value": "用户主动停止",
+        "value": "车端正常主动停止",
+        "reported_value": "车端正常主动停止",
+        "reported_language": null,
         "unit": null,
         "reference": null,
         "reason_code": null
+      },
+      {
+        "code": "battery_temp_delta",
+        "status": "normal",
+        "value": 3.0,
+        "reported_value": null,
+        "reported_language": null,
+        "unit": "°C",
+        "reference": "<= 5",
+        "reason_code": null
+      },
+      {
+        "code": "temp_rise_rate",
+        "status": "normal",
+        "value": 0.2,
+        "reported_value": null,
+        "reported_language": null,
+        "unit": "°C/min",
+        "reference": "<= 0.3",
+        "reason_code": null
+      },
+      {
+        "code": "battery_max_temp",
+        "status": "normal",
+        "value": 35.0,
+        "reported_value": null,
+        "reported_language": null,
+        "unit": "°C",
+        "reference": "<= 45 (safe <= 55)",
+        "reason_code": null
+      },
+      {
+        "code": "soc_change_rate",
+        "status": "normal",
+        "value": 1.2,
+        "reported_value": null,
+        "reported_language": null,
+        "unit": "%/min",
+        "reference": "<= 5 (15s jump < 3%)",
+        "reason_code": null
+      },
+      {
+        "code": "cell_voltage_delta",
+        "status": "normal",
+        "value": 50.0,
+        "reported_value": null,
+        "reported_language": null,
+        "unit": "mV",
+        "reference": "<= 60 (pass <= 150)",
+        "reason_code": null
+      },
+      {
+        "code": "cell_max_voltage",
+        "status": "normal",
+        "value": 3.47,
+        "reported_value": null,
+        "reported_language": null,
+        "unit": "V",
+        "reference": "<= 3.65",
+        "reason_code": null,
+        "probe_no": 72
       }
     ],
-    "radar": [],
-    "curves": {},
-    "health_metrics": {},
+    "radar": [
+      { "code": "temperature_balance", "score": 94.0, "status": "normal", "reason_code": null },
+      { "code": "max_temperature", "score": 100.0, "status": "normal", "reason_code": null },
+      { "code": "capacity", "score": 92.4, "status": "normal", "reason_code": null },
+      { "code": "voltage_balance", "score": 92.8, "status": "normal", "reason_code": null },
+      { "code": "soc_balance", "score": 100.0, "status": "normal", "reason_code": null }
+    ],
+    "curves": {
+      "power": { "series": [], "sample_range": null, "original_points": 0, "output_points": 0 },
+      "voltage": { "series": [], "sample_range": null, "original_points": 0, "output_points": 0 },
+      "temperature": { "series": [], "sample_range": null, "original_points": 0, "output_points": 0 }
+    },
+    "health_metrics": {
+      "temperature_delta": 3.0,
+      "max_temperature": 35.0,
+      "temp_rise_rate_c_per_min": 0.2,
+      "soc_delta": 81.0,
+      "soc_change_rate_pct_per_min": 1.2,
+      "soc_jumps_15s": 0,
+      "soc_alarm_count": 0,
+      "energy_charged_kwh": 45.4,
+      "nominal_capacity_kwh": 59.0,
+      "nominal_capacity_source": "ykc_0x17",
+      "soh": 89.3,
+      "soh_shallow_estimate": null,
+      "soh_status": "normal",
+      "is_shallow_charge": false,
+      "battery_type": "lfp",
+      "cell_voltage_delta_end_mv": 50.0,
+      "cell_voltage_delta_process_mv": null,
+      "voltage_balance_basis": "settlement_0x19",
+      "max_cell_voltage_v": 3.47,
+      "max_cell_voltage_probe_no": 72
+    },
     "completeness": 1.0,
+    "rule_version": "health-v3",
     "source_summary": {
       "order_snapshot": "available",
       "telemetry": "available",
-      "protocol": "not_requested",
-      "vehicle_capacity": "unavailable"
+      "protocol": "available",
+      "vehicle_capacity": "available"
     },
-    "data_as_of": "2026-09-02T05:00:02+00:00"
+    "data_as_of": "2026-11-26T06:32:00+00:00"
   },
   "error": null
 }
 ```
 
-### 4.3 健康报告字段
+### 4.3 健康报告字段（`health-v3`）
 
-健康报告是确定性结果：
+健康报告是确定性结果（完整公式与阈值见[电池检查指标规格](specs/battery-inspection-metrics.md)）：
 
-- `summary`：后端固定模板生成的摘要，不是模型建议。
-- `indicators`：单项健康指标。
-- `radar`：五维评分；缺少必要输入时该维度 `score=null`、`status=unavailable`。
-- `curves`：功率、电压、温度等曲线；每条 series 最多 300 个点，保留首点、末点和极值。
-- `health_metrics`：经单位确认的中间计算值，例如 `soc_delta`、`energy_charged_kwh`、`soh`。
-- `completeness`：数据完整度，范围 `0..1`。
-- `source_summary`：订单、遥测、协议、车辆容量等来源的可用状态。
+- `summary`：后端确定性分档模板生成的本地化摘要（与 `conclusion.text` 一致），不是模型建议。
+- `overall_health_score` / `overall_health_source`：总健康分（`health-v3` 固定取有效 `SOH`，`overall_health_source = "soh"`）；浅充（`ΔSOC < 30%`）或缺少标称容量时为 `null`。
+- `overview`：顶部卡片概览（`start_soc`、`end_soc`、`soc_delta`、`energy_charged_kwh`、`duration_seconds`、`battery_type`、`overall_health_score`、`soh_status`、`is_shallow_charge`）。
+- `conclusion`：结构化确定性结论，含 `level`（`normal | attention | abnormal | insufficient`）、`code`（`ALL_NORMAL | ATTENTION_REQUIRED | ABNORMAL_DETECTED | INSUFFICIENT_DATA`）、`text`（11 语本地化结论与分维度建议）、`counts`、`triggered_codes`、`advice_codes`。
+- `indicators`：固定 7 项单项健康指标，按 `code` 依次为：
+
+| `code` | 指标 | `unit` | `reference` | `value` 语义 | 常见缺失 `reason_code` |
+|---|---|---|---|---|---|
+| `stop_reason` | 停止充电原因 | `null` | `null` | **本地化文案**（11 语，非中文不含汉字）；上游原文保留在 `reported_value`（语言不保证，`reported_language` 现为 `null`） | `SOURCE_DATA_MISSING` |
+| `battery_temp_delta` | 电池温差 | `°C` | `<= 5` | 数值（同帧 `max(T_max - T_min)`） | `TEMP_MIN_DATA_MISSING` / `TELEMETRY_DATA_MISSING` |
+| `temp_rise_rate` | 温升速率 | `°C/min` | `<= 0.3` | 数值（5 分钟滑窗最大温升速率） | `TEMP_SERIES_INSUFFICIENT` |
+| `battery_max_temp` | 电池最高温 | `°C` | `<= 45 (safe <= 55)` | 数值（全程最高电池温度） | `TEMP_DATA_MISSING` |
+| `soc_change_rate` | SOC 变化率 | `%/min` | `<= 5 (15s jump < 3%)` | 数值（1 分钟滑窗最大速率；若 15s 跳变 ≥ 3% 亦判 `abnormal`） | `SOC_SERIES_INSUFFICIENT` |
+| `cell_voltage_delta` | 单体蓄电池电压极差 | `mV` | `<= 60 (pass <= 150)` | 数值（优先 `0x19` 结算极差） | `CELL_VOLTAGE_DATA_MISSING` |
+| `cell_max_voltage` | 单体蓄电池最高压 | `V` | `<= 3.65`（LFP）/ `<= 4.20`（NCM） | 数值；可选附 `probe_no`（1~256 探针编号） | `CELL_VOLTAGE_DATA_MISSING` / `BATTERY_TYPE_UNKNOWN` |
+
+- `radar`：五维评分（`temperature_balance`、`max_temperature`、`capacity`、`voltage_balance`、`soc_balance`，均 `0..100`）；缺少必要输入或浅充时该维度 `score = null`、`status = "unavailable"` 且给出 `reason_code`。
+- `curves`：功率（`power` kW、`outputCurrent` A）、电压（`outputVoltage`、`bmsMeasuredVoltage`、`maxCellVoltage` V）、温度（`temperature`、`batteryMaxTemperature`、`batteryMinTemperature`、`batteryTempDelta` degC）三组曲线；每条 series 最多 300 个点，保留首点、末点和极值；`name` 按作业语言本地化。
+- `health_metrics`：经单位确认的中间计算值（含 `soh`、`soh_shallow_estimate`、`soh_status`、`is_shallow_charge`、`nominal_capacity_kwh`、`nominal_capacity_source`、`voltage_balance_basis`、`max_cell_voltage_probe_no` 等）。
+- `completeness`：7 项体检指标中已采集项的占比，范围 `0..1`。
+- `source_summary`：`order_snapshot`、`telemetry`、`protocol`、`vehicle_capacity` 四类数据源的可用状态（`available | unavailable | not_requested`）。
 - `data_as_of`：本次计算实际使用数据的时间。
-- `rule_version`：确定性公式版本。
+- `rule_version`：确定性公式版本（现行 `health-v3`，与外层作业行 `rule_version` 严格相等）。
 
 指标状态只有：
 
@@ -232,7 +374,7 @@ Authorization: Bearer <access_token>
 normal | attention | abnormal | unavailable
 ```
 
-前端或其他调用方只根据状态渲染，不解析中文阈值，也不自行重算。
+前端或其他调用方只根据 `status`、`conclusion.level` 和数值字段渲染，不解析中文阈值，也不自行重算；前端联调步骤与页面字段映射见[报告页前端联调交接手册](agents/frontend-battery-report-handoff.md)。
 
 ## 5. 单问诊断接口（历史，现役返回404）
 

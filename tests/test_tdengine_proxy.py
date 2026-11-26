@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from aiops_diagnostics.common.config import Settings
-from aiops_diagnostics.data.sources import TDengineSource
+from aiops_diagnostics.data.sources import COMM_STREAM_CODES, COMM_SUMMARY_CODES, TDengineSource
 from aiops_diagnostics.tdengine_proxy import (
     ProxyConfigError,
     ProxySettings,
@@ -54,10 +54,37 @@ def test_runtime_queries_match_proxy_allowlist() -> None:
         datetime.fromisoformat("2026-07-31 10:30:00"),
         "TX-01",
     )
+    source.get_pile_comm_frames(
+        "PILE-01",
+        datetime.fromisoformat("2026-07-31 10:00:00"),
+        datetime.fromisoformat("2026-07-31 10:30:00"),
+    )
+    source.get_pile_comm_frames(
+        "PILE-01",
+        datetime.fromisoformat("2026-07-31 10:00:00"),
+        datetime.fromisoformat("2026-07-31 10:30:00"),
+        codes=COMM_SUMMARY_CODES,
+    )
+    source.get_pile_comm_frames(
+        "PILE-01",
+        datetime.fromisoformat("2026-07-31 10:00:00"),
+        datetime.fromisoformat("2026-07-31 10:30:00"),
+        codes=COMM_STREAM_CODES,
+    )
 
     proxy = _settings()
     assert is_allowed_sql("SHOW STABLES", proxy)
+    assert len(queries) == 4
     assert all(is_allowed_sql(query, proxy) for query in queries)
+    assert not is_allowed_sql(queries[1].replace("'15'", "'99'"), proxy)
+
+    with pytest.raises(ValueError, match="协议帧类型"):
+        source.get_pile_comm_frames(
+            "PILE-01",
+            datetime.fromisoformat("2026-07-31 10:00:00"),
+            datetime.fromisoformat("2026-07-31 10:30:00"),
+            codes=("99",),
+        )
 
 
 def test_gun_query_quotes_case_sensitive_tdengine_columns() -> None:
@@ -92,22 +119,32 @@ def test_proxy_rejects_non_allowlisted_sql(sql: str) -> None:
 
 
 def test_proxy_rejects_large_or_reversed_windows() -> None:
-    sql = (
-        "SELECT _ts, direction, code, decoded FROM `charging-pile_comm` "
-        "WHERE device='GUN-01' AND _ts>='2026-07-31 11:00:00.000' "
-        "AND _ts<='2026-07-31 10:00:00.000' ORDER BY _ts ASC LIMIT 2000"
+    valid_comm = (
+        "SELECT _ts, `code`, `direction`, `raw` FROM `charging-pile_comm` "
+        "WHERE device='PILE-01' AND _ts>='2026-07-31 09:00:00.000' "
+        "AND _ts<='2026-07-31 10:00:00.000' AND `code` IN ('15', '17', '19') "
+        "ORDER BY _ts ASC LIMIT 2000"
     )
-    assert not is_allowed_sql(sql, _settings())
+    assert is_allowed_sql(valid_comm, _settings())
 
-    oversized = sql.replace("LIMIT 2000", "LIMIT 2001").replace(
-        "2026-07-31 11:00:00.000", "2026-07-31 09:00:00.000"
-    )
+    reversed_window = valid_comm.replace("09:00:00.000", "11:00:00.000")
+    assert not is_allowed_sql(reversed_window, _settings())
+
+    oversized = valid_comm.replace("LIMIT 2000", "LIMIT 2001")
     assert not is_allowed_sql(oversized, _settings())
 
-    too_wide = sql.replace("2026-07-31 11:00:00.000", "2026-07-24 00:00:00.000").replace(
+    too_wide = valid_comm.replace("2026-07-31 09:00:00.000", "2026-07-24 00:00:00.000").replace(
         "2026-07-31 10:00:00.000", "2026-07-31 01:00:00.000"
     )
     assert not is_allowed_sql(too_wide, _settings())
+
+    # 缺少 code IN 白名单的旧形式也必须被拒绝
+    missing_code = (
+        "SELECT _ts, direction, code, decoded FROM `charging-pile_comm` "
+        "WHERE device='GUN-01' AND _ts>='2026-07-31 09:00:00.000' "
+        "AND _ts<='2026-07-31 10:00:00.000' ORDER BY _ts ASC LIMIT 2000"
+    )
+    assert not is_allowed_sql(missing_code, _settings())
 
 
 def test_proxy_requires_loopback_endpoints() -> None:

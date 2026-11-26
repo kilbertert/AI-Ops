@@ -16,7 +16,7 @@
 | 运行版本、启用状态和证据 | [当前交付状态](agents/current-delivery-state.md)；按证据区分已合并、已部署和已验收 |
 | C端：知识上传、选库、多语言、实时查询 | [WF01手册](agents/consumer-wf01/README.md) |
 | 管家：公司身份、SOP、受控CPMS工具与节点 | [管家手册](agents/operator-cpms/README.md) |
-| 前端：C端和管家接线 | [C端交接](agents/consumer-wf01/app-handoff.md)、[管家交接](agents/frontend-operator-handoff.md) |
+| 前端：C端、报告页和管家接线 | [C端交接](agents/consumer-wf01/app-handoff.md)、[横幅交接](agents/frontend-banner-handoff.md)、[电池报告页交接](agents/frontend-battery-report-handoff.md)、[管家交接](agents/frontend-operator-handoff.md) |
 | 部署、升级、回退 | [Gateway](gateway.md)、[节点](../deploy/node-runtime/README.md)、[Dify](../deploy/dify-36/README.md)、[WF01迁移](agents/consumer-wf01/live-knowledge-deploy.md) |
 | 本地服务与退役边界 | [快速上手](快速上手.md)、[旧执行器退役](runtime-retirement.md) |
 | 设计理由、术语、自动开发流程 | [ADR](adr/)、[词汇表](../GLOSSARY.md)、[AFK](afk-workflow.md) |
