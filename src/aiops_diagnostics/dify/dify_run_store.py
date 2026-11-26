@@ -86,6 +86,31 @@ class DifyRun:
     has_photo: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class DifyRunSpec:
+    """Dify 执行记录签发参数规范，收敛 ``DifyRunStore.issue*`` 的长参数团。"""
+
+    run_id: str
+    qa_id: str
+    scope_fingerprint: str
+    scope_json: str
+    binding_key: str
+    order_no: str
+    environment: str
+    tenant_id: str
+    app_id: str
+    workflow_id: str
+    grant_id: str
+    agent_version_no: int = 0
+    kind: str = "chat"
+    route_revision: int = 0
+    conversation_id: str = ""
+    binding_digest: str = ""
+    language: str = "zh"
+    data_kind: str = "status"
+    has_photo: bool = False
+
+
 def still_valid(run: DifyRun, *, now: datetime | None = None) -> bool:
     """这条记录**此刻**还在 180 秒窗口里吗（窗口是否关闭的**否定**）。
 
@@ -117,29 +142,27 @@ class DifyRunStore:
         with gateway_db.connection(self.path, write=write) as connection:
             yield connection
 
-    def issue(
-        self,
-        *,
-        run_id: str,
-        qa_id: str,
-        scope_fingerprint: str,
-        scope_json: str,
-        binding_key: str,
-        order_no: str,
-        environment: str,
-        tenant_id: str,
-        app_id: str,
-        workflow_id: str,
-        grant_id: str,
-        agent_version_no: int = 0,
-        kind: str = "chat",
-        route_revision: int = 0,
-        conversation_id: str = "",
-        binding_digest: str = "",
-        language: str = "zh",
-        data_kind: str = "status",
-        has_photo: bool = False,
-    ) -> DifyRun:
+    def issue_spec(self, spec: DifyRunSpec) -> DifyRun:
+        """按 ``DifyRunSpec`` 签发并持久化一条新的 Dify 执行记录。"""
+        run_id = spec.run_id
+        qa_id = spec.qa_id
+        scope_fingerprint = spec.scope_fingerprint
+        scope_json = spec.scope_json
+        binding_key = spec.binding_key
+        order_no = spec.order_no
+        environment = spec.environment
+        tenant_id = spec.tenant_id
+        app_id = spec.app_id
+        workflow_id = spec.workflow_id
+        grant_id = spec.grant_id
+        agent_version_no = spec.agent_version_no
+        kind = spec.kind
+        route_revision = spec.route_revision
+        conversation_id = spec.conversation_id
+        binding_digest = spec.binding_digest
+        language = spec.language
+        data_kind = spec.data_kind
+        has_photo = spec.has_photo
         # `knowledge` 是**真实存在的取数类型**：试用路径会把知识问题一路送到 Dify，
         # 只是在旧代码里记录被写成 `status`，与请求不一致（2026-10-31 实测：
         # 知识预览在库/日志里读起来像订单状态，排查指向错的路径）。
@@ -185,6 +208,53 @@ class DifyRunStore:
         record = self.get(run_id)
         assert record is not None
         return record
+
+    def issue(
+        self,
+        *,
+        run_id: str,
+        qa_id: str,
+        scope_fingerprint: str,
+        scope_json: str,
+        binding_key: str,
+        order_no: str,
+        environment: str,
+        tenant_id: str,
+        app_id: str,
+        workflow_id: str,
+        grant_id: str,
+        agent_version_no: int = 0,
+        kind: str = "chat",
+        route_revision: int = 0,
+        conversation_id: str = "",
+        binding_digest: str = "",
+        language: str = "zh",
+        data_kind: str = "status",
+        has_photo: bool = False,
+    ) -> DifyRun:
+        return self.issue_spec(
+            DifyRunSpec(
+                run_id=run_id,
+                qa_id=qa_id,
+                scope_fingerprint=scope_fingerprint,
+                scope_json=scope_json,
+                binding_key=binding_key,
+                order_no=order_no,
+                environment=environment,
+                tenant_id=tenant_id,
+                app_id=app_id,
+                workflow_id=workflow_id,
+                grant_id=grant_id,
+                agent_version_no=agent_version_no,
+                kind=kind,
+                route_revision=route_revision,
+                conversation_id=conversation_id,
+                binding_digest=binding_digest,
+                language=language,
+                data_kind=data_kind,
+                has_photo=has_photo,
+            )
+        )
 
     def bind_workflow(self, run_id: str, *, workflow_run_id: str, task_id: str) -> bool:
         """把 Dify 自己给的两个 id 落库。**只写一次**：重写会让取消找错对象。"""

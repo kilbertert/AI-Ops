@@ -16,7 +16,7 @@ from aiops_diagnostics.consumer.consumer_knowledge import _binding_identity
 from aiops_diagnostics.dify.dify_chatflow import DifyChatflowClient
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, workflow_content
-from aiops_diagnostics.dify.dify_run_store import still_valid
+from aiops_diagnostics.dify.dify_run_store import DifyRunSpec, still_valid
 from aiops_diagnostics.dify.dify_trial import TrialResult
 from aiops_diagnostics.execution.agent_runs import scope_to_json
 from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
@@ -175,23 +175,25 @@ class ConsumerTrial:
                 qa_id=trial_id,
                 workflow_id=workflow_id,
             )
-            runs.issue(
-                run_id=run_id,
-                qa_id=trial_id,
-                scope_fingerprint=scope.scope_fingerprint,
-                scope_json=scope_to_json(scope),
-                binding_key=self.route.key,
-                order_no=order if live else "",
-                environment=self.route.environment,
-                tenant_id=scope.effective_tenant_id,
-                app_id=app_id,
-                workflow_id=workflow_id,
-                grant_id=grant.grant_id,
-                kind="service_trial",
-                route_revision=self.route.revision,
-                binding_digest=_binding_identity(self.binding),
-                language=language,
-                data_kind=kind,
+            runs.issue_spec(
+                DifyRunSpec(
+                    run_id=run_id,
+                    qa_id=trial_id,
+                    scope_fingerprint=scope.scope_fingerprint,
+                    scope_json=scope_to_json(scope),
+                    binding_key=self.route.key,
+                    order_no=order if live else "",
+                    environment=self.route.environment,
+                    tenant_id=scope.effective_tenant_id,
+                    app_id=app_id,
+                    workflow_id=workflow_id,
+                    grant_id=grant.grant_id,
+                    kind="service_trial",
+                    route_revision=self.route.revision,
+                    binding_digest=_binding_identity(self.binding),
+                    language=language,
+                    data_kind=kind,
+                )
             )
             if is_agent_v6:
                 from aiops_diagnostics.consumer import consumer_agent

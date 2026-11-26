@@ -11,7 +11,7 @@ from typing import Any
 from aiops_diagnostics.dify.dify_chat_workflow import DifyWorkflowClient
 from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource, workflow_content
-from aiops_diagnostics.dify.dify_run_store import DifyRunStore
+from aiops_diagnostics.dify.dify_run_store import DifyRunSpec, DifyRunStore
 from aiops_diagnostics.dify.dify_trial import TrialResult
 from aiops_diagnostics.execution import chat_data_grant
 from aiops_diagnostics.execution.agent_runs import scope_to_json
@@ -63,20 +63,22 @@ class WorkflowTrial:
                 qa_id=trial_id,
                 workflow_id=workflow_id,
             )
-            runs.issue(
-                run_id=run_id,
-                qa_id=trial_id,
-                scope_fingerprint=scope.scope_fingerprint,
-                scope_json=scope_to_json(scope),
-                binding_key=self.route.key,
-                order_no=order,
-                environment=self.route.environment,
-                tenant_id=scope.effective_tenant_id,
-                app_id=app_id,
-                workflow_id=workflow_id,
-                grant_id=grant.grant_id,
-                kind="trial",
-                route_revision=self.route.revision,
+            runs.issue_spec(
+                DifyRunSpec(
+                    run_id=run_id,
+                    qa_id=trial_id,
+                    scope_fingerprint=scope.scope_fingerprint,
+                    scope_json=scope_to_json(scope),
+                    binding_key=self.route.key,
+                    order_no=order,
+                    environment=self.route.environment,
+                    tenant_id=scope.effective_tenant_id,
+                    app_id=app_id,
+                    workflow_id=workflow_id,
+                    grant_id=grant.grant_id,
+                    kind="trial",
+                    route_revision=self.route.revision,
+                )
             )
             registration = JobRegistration(route_type="trial")
             runtime._qa_registrations[trial_id] = registration
