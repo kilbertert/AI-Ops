@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from common.source_ast_cache import iter_python_files, parse_source_ast
 
 from aiops_diagnostics.common.private_files import PrivatePathError, write_private_text
 from aiops_diagnostics.gateway.gateway_config import (
@@ -128,53 +129,52 @@ def test_from_env_has_no_per_field_reads_left() -> None:
     assert literals == _DERIVED_ENVS
 
 
-@pytest.mark.parametrize("field_name", sorted(SETTING_SOURCES))
-def test_every_field_reads_only_its_declared_sources(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field_name: str
-) -> None:
+def test_every_field_reads_only_its_declared_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """整表扫描：``file=True`` 的字段必须读到文件值；``file=False`` 的字段把
     同一行写进文件必须**不生效**（落回默认）—— 后者就是「写进 production.env
     静默不生效」那条陷阱的机械判据。"""
-    source = SETTING_SOURCES[field_name]
-    _server_config(tmp_path, monkeypatch, f"{source.env}={_FILE_SENTINEL[source.kind]}\n")
-    monkeypatch.delenv(source.env, raising=False)
+    for field_name in sorted(SETTING_SOURCES):
+        source = SETTING_SOURCES[field_name]
+        with monkeypatch.context() as scoped:
+            _server_config(tmp_path, scoped, f"{source.env}={_FILE_SENTINEL[source.kind]}\n")
+            scoped.delenv(source.env, raising=False)
 
-    actual = getattr(GatewayServerSettings.from_env(), field_name)
+            actual = getattr(GatewayServerSettings.from_env(), field_name)
+            expected = (
+                _parse_source_value(source, _FILE_SENTINEL[source.kind]) if source.file else source.default
+            )
+            assert actual == expected, field_name
 
-    if source.file:
-        assert actual == _parse_source_value(source, _FILE_SENTINEL[source.kind])
-    else:
-        assert actual == source.default
 
-
-@pytest.mark.parametrize("field_name", sorted(SETTING_SOURCES))
 def test_a_present_env_wins_over_the_file_on_every_field(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field_name: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = SETTING_SOURCES[field_name]
-    _server_config(tmp_path, monkeypatch, f"{source.env}={_FILE_SENTINEL[source.kind]}\n")
-    monkeypatch.setenv(source.env, _ENV_SENTINEL[source.kind])
+    for field_name in sorted(SETTING_SOURCES):
+        source = SETTING_SOURCES[field_name]
+        with monkeypatch.context() as scoped:
+            _server_config(tmp_path, scoped, f"{source.env}={_FILE_SENTINEL[source.kind]}\n")
+            scoped.setenv(source.env, _ENV_SENTINEL[source.kind])
 
-    actual = getattr(GatewayServerSettings.from_env(), field_name)
+            actual = getattr(GatewayServerSettings.from_env(), field_name)
+            assert actual == _parse_source_value(source, _ENV_SENTINEL[source.kind]), field_name
 
-    assert actual == _parse_source_value(source, _ENV_SENTINEL[source.kind])
 
-
-@pytest.mark.parametrize("field_name", sorted(name for name, s in SETTING_SOURCES.items() if s.file))
 def test_a_present_but_empty_env_is_the_value_not_a_fallthrough(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field_name: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """「缺失才回退」的另一半：``KEY=`` 的空串是**值**，不是「没配」。
     str 字段取到 ``""``；非 str 字段空串没有可辩护的含义，等于默认值 ——
     两种结果都**不是**文件里的那行。"""
-    source = SETTING_SOURCES[field_name]
-    _server_config(tmp_path, monkeypatch, f"{source.env}={_FILE_SENTINEL[source.kind]}\n")
-    monkeypatch.setenv(source.env, "")
+    for field_name, source in sorted(SETTING_SOURCES.items()):
+        if not source.file:
+            continue
+        with monkeypatch.context() as scoped:
+            _server_config(tmp_path, scoped, f"{source.env}={_FILE_SENTINEL[source.kind]}\n")
+            scoped.setenv(source.env, "")
 
-    actual = getattr(GatewayServerSettings.from_env(), field_name)
-
-    expected = "" if source.kind == "str" else source.default
-    assert actual == expected
+            actual = getattr(GatewayServerSettings.from_env(), field_name)
+            expected = "" if source.kind == "str" else source.default
+            assert actual == expected, field_name
 
 
 def test_missing_everywhere_lands_on_the_declared_default(
@@ -369,10 +369,10 @@ def test_every_setting_source_has_a_runtime_consumer() -> None:
         base = repo_root / folder
         if not base.exists():
             continue
-        for path in base.rglob("*.py"):
+        for path in iter_python_files(base):
             if path.resolve() in excluded:
                 continue
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = parse_source_ast(path)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute):
                     referenced.add(node.attr)

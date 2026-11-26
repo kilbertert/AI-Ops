@@ -9,12 +9,15 @@
 
 from __future__ import annotations
 
+import atexit
+import functools
 import json
 import shutil
 import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -110,9 +113,12 @@ def upstream_port():
     server.shutdown()
 
 
-def _certs(tmp_path: Path) -> tuple[Path, Path]:
-    cert = tmp_path / "proxy.crt"
-    key = tmp_path / "proxy.key"
+@functools.lru_cache(maxsize=1)
+def _shared_tls_certs() -> tuple[Path, Path]:
+    cert_dir = Path(tempfile.mkdtemp(prefix="aiops-model-proxy-tls-"))
+    atexit.register(shutil.rmtree, cert_dir, ignore_errors=True)
+    cert = cert_dir / "proxy.crt"
+    key = cert_dir / "proxy.key"
     subprocess.run(
         [
             "openssl",
@@ -135,9 +141,23 @@ def _certs(tmp_path: Path) -> tuple[Path, Path]:
         check=True,
         capture_output=True,
     )
-    (tmp_path / "upstream_key").write_text("vendor-key")
-    (tmp_path / "proxy_token").write_text("proxy-token")
     return cert, key
+
+
+def _certs(tmp_path: Path) -> tuple[Path, Path]:
+    del tmp_path
+    return _shared_tls_certs()
+
+
+def _wait_port(host: str, port: int, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                return
+        except OSError:
+            time.sleep(0.01)
+    raise TimeoutError(f"proxy failed to listen on {host}:{port} within {timeout}s")
 
 
 def _start(tmp_path: Path, upstream: str, *, base_path: str = "") -> int:
@@ -151,7 +171,7 @@ def _start(tmp_path: Path, upstream: str, *, base_path: str = "") -> int:
         kwargs={"upstream_base_path": base_path, "synthetic": True},
         daemon=True,
     ).start()
-    time.sleep(0.5)
+    _wait_port("127.0.0.1", port)
     return port
 
 
