@@ -37,8 +37,6 @@
   lowers total complexity; otherwise write the minimum custom code.
 - Prefer deletion and the fewest cohesive files. Add no configuration layer,
   interface, factory, or extension point for a variation that does not exist.
-- 实现、Hack、修复与交付先执行 [验证分工](../docs/agents/verification-workflow.md)。
-  必要的风险检查保留；新增长期检查说明具体错误、独立判据与已有检查的缺口。
 - No dead code, no commented-out blocks, no `console.log` debug leftovers.
 
 ## Compatibility & delivery

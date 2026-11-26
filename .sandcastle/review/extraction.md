@@ -34,7 +34,7 @@ Emit a single `<output>` block as the **last thing** in your response. The block
 
 <output>
 {
-  "summary": "在候选版本上按授权规则重放过期令牌反例，原 API 拒绝请求；未发现该范围缺陷。原界面与远端上游未验，不能据此声明全业务可用。Hacker 身份、执行命令与证据位置见本轮回执。",
+  "summary": "Reviewed the diff against the linked issue and coding standards; verified the expiry guard on the affected endpoint and found no defects in scope. Unverified upstream paths are noted above.",
   "inlineComments": [],
   "replies": []
 }
@@ -53,5 +53,5 @@ Emit a single `<output>` block as the **last thing** in your response. The block
 | `replies[].commentId`   | string  | **yes**  | Must be a `commentId` from a `review_thread` you were shown. Do not invent IDs.                                                                                                                                                                    |
 | `replies[].body`        | string  | **yes**  | Markdown reply posted in-thread.                                                                                                                                                                                                                   |
 
-按 `docs/agents/verification-workflow.md` 汇总已存在的证据，不能补造执行结果或把待复现假设写成已确认缺陷。
+Only summarize verified evidence from this review; do not fabricate execution results or present unverified hypotheses as confirmed findings.
 Do **not** add fields that aren't listed above (no `verdict`, no `file`, no `lineRange`, no `comment`). The JSON is machine-parsed; extra or renamed fields cause a validation failure.
