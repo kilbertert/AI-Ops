@@ -1208,3 +1208,40 @@ def test_activate_environment_registry_accepts_str_path_and_returns_int_revision
     jiejia_row = next(r for r in loaded["environments"] if r["id"] == "jiejia")
     assert jiejia_row["enabled"] is True
     assert jiejia_row["tenants"] == [{"id": "1990990768688599040", "name": "捷佳", "enabled": True}]
+
+
+def test_dev_host_download_file_streams_large_binary_and_verifies_sha256(tmp_path: Path, monkeypatch) -> None:
+    import hashlib
+    import subprocess
+
+    from aiops_diagnostics.onboarding import wizard_worker
+
+    payload = b"AIOPS_BINARY_CHUNK_" * (80 * 1024)  # ~1.52 MiB (> 1 MiB read truncation boundary)
+    expected_sha = hashlib.sha256(payload).hexdigest()
+
+    def _fake_run(cmd, *, stdout=None, **_kwargs):
+        assert cmd[:5] == ["dev-host", "exec", "41", "--allow-service-exec", "--timeout"]
+        assert stdout is not None
+        stdout.write(payload)
+        return SimpleNamespace(returncode=0, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    good_dest = tmp_path / "application.tar.gz"
+    wizard_worker._dev_host_download_file(
+        "41", "/var/lib/aiops-41/pool/application-3.12.tar.gz", good_dest, expected_sha256=expected_sha
+    )
+    assert good_dest.read_bytes() == payload
+    assert (good_dest.stat().st_mode & 0o777) == 0o600
+
+    # Truncated download must raise and remove corrupted file
+    def _truncated_run(_cmd, *, stdout=None, **_kwargs):
+        stdout.write(payload[:1048576])
+        return SimpleNamespace(returncode=0, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", _truncated_run)
+    bad_dest = tmp_path / "truncated.tar.gz"
+    with pytest.raises(wizard_worker.WizardWorkerError, match="DEV_HOST_DOWNLOAD_SHA_MISMATCH"):
+        wizard_worker._dev_host_download_file(
+            "41", "/var/lib/aiops-41/pool/application-3.12.tar.gz", bad_dest, expected_sha256=expected_sha
+        )
+    assert not bad_dest.exists()

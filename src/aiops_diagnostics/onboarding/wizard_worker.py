@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,44 @@ def _dev_host_read(central_target: str, remote_path: str, *, cwd: Path | None = 
     if proc.returncode != 0:
         raise WizardWorkerError(f"DEV_HOST_READ_FAILED:{remote_path}")
     return proc.stdout
+
+
+def _dev_host_download_file(
+    central_target: str,
+    remote_path: str,
+    local_dest: Path,
+    *,
+    expected_sha256: str = "",
+    timeout_sec: int = 180,
+    cwd: Path | None = None,
+) -> None:
+    """经 ``dev-host exec ... cat`` 流式下载大文件并校验 SHA-256（规避 read 1 MiB 截断）。"""
+    with local_dest.open("wb") as out_fh:
+        proc = subprocess.run(
+            [
+                "dev-host",
+                "exec",
+                central_target,
+                "--allow-service-exec",
+                "--timeout",
+                str(timeout_sec),
+                "--",
+                f"cat {shlex.quote(remote_path)}",
+            ],
+            cwd=str(cwd) if cwd else None,
+            stdout=out_fh,
+            stderr=subprocess.PIPE,
+            timeout=timeout_sec + 15,
+        )
+    if proc.returncode != 0:
+        local_dest.unlink(missing_ok=True)
+        raise WizardWorkerError(f"DEV_HOST_DOWNLOAD_FAILED:{remote_path}")
+    local_dest.chmod(0o600)
+    if expected_sha256:
+        actual = hashlib.sha256(local_dest.read_bytes()).hexdigest()
+        if actual != expected_sha256:
+            local_dest.unlink(missing_ok=True)
+            raise WizardWorkerError(f"DEV_HOST_DOWNLOAD_SHA_MISMATCH:{remote_path}")
 
 
 def _dev_host_exec(
@@ -667,6 +706,11 @@ subprocess.run(['systemctl', 'restart', f'aiops-environment-node@{{ENV}}.service
     return {"ok": True}
 
 
+def _local_pool_cache_paths(revision: str, python_minor: str) -> tuple[Path, Path, Path]:
+    cache_dir = Path.home() / ".cache" / "aiops-wizard-pool" / f"pool-{revision[:12]}-py{python_minor}"
+    return cache_dir, cache_dir / f"application-{python_minor}.tar.gz", cache_dir / "installer.tar.gz"
+
+
 def _ensure_pool_artifacts(
     root: Path,
     central_target: str,
@@ -687,15 +731,31 @@ def _ensure_pool_artifacts(
     if proc.returncode == 0 and proc.stdout.strip():
         pool_data = json.loads(proc.stdout.decode("utf-8"))
 
+    cache_dir, app_cache, inst_cache = _local_pool_cache_paths(revision, python_minor)
     for entry in pool_data.get("entries") or []:
         if entry.get("revision") == revision and entry.get("python_minor") == python_minor:
+            app_sha_hit = str(entry["application"]["sha256"])
+            inst_sha_hit = str(entry["installer"]["sha256"])
+            app_local_hit = (
+                str(app_cache)
+                if app_cache.is_file() and hashlib.sha256(app_cache.read_bytes()).hexdigest() == app_sha_hit
+                else ""
+            )
+            inst_local_hit = (
+                str(inst_cache)
+                if inst_cache.is_file()
+                and hashlib.sha256(inst_cache.read_bytes()).hexdigest() == inst_sha_hit
+                else ""
+            )
             return {
                 "revision": revision,
                 "python_minor": python_minor,
                 "app_remote": str(entry["application"]["path"]),
-                "app_sha256": str(entry["application"]["sha256"]),
+                "app_sha256": app_sha_hit,
+                "app_local": app_local_hit,
                 "inst_remote": str(entry["installer"]["path"]),
-                "inst_sha256": str(entry["installer"]["sha256"]),
+                "inst_sha256": inst_sha_hit,
+                "inst_local": inst_local_hit,
             }
 
     with tempfile.TemporaryDirectory(prefix="aiops-pool-build-") as tmpdir:
@@ -729,6 +789,12 @@ def _ensure_pool_artifacts(
             sha256_hex=inst_sha,
             cwd=root,
         )
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir.chmod(0o700)
+        shutil.copyfile(app_local, app_cache)
+        shutil.copyfile(inst_local, inst_cache)
+        app_cache.chmod(0o600)
+        inst_cache.chmod(0o600)
 
         reg_script = "\n".join(
             [
@@ -776,8 +842,10 @@ def _ensure_pool_artifacts(
         "python_minor": python_minor,
         "app_remote": app_remote,
         "app_sha256": app_sha,
+        "app_local": str(app_cache),
         "inst_remote": inst_remote,
         "inst_sha256": inst_sha,
+        "inst_local": str(inst_cache),
     }
 
 
@@ -819,16 +887,53 @@ def _step_cold_install_and_onboard(
     with tempfile.TemporaryDirectory(prefix="aiops-cold-scp-") as tmpdir:
         tmp = Path(tmpdir)
         tmp.chmod(0o700)
-        for name, remote_path in (
-            ("application.tar.gz", pool_info["app_remote"]),
-            ("installer.tar.gz", pool_info["inst_remote"]),
-            ("bootstrap.env", bootstrap_remote),
-            ("template.env", str(bundle["config_path"])),
-            ("runtime-bundle.tar", str(bundle["runtime_bundle_path"])),
-            ("nginx-user-ingress-auth.conf", str(bundle["nginx_auth_path"])),
+        for name, remote_path, local_cached, expected_sha in (
+            (
+                "application.tar.gz",
+                pool_info["app_remote"],
+                pool_info.get("app_local", ""),
+                pool_info["app_sha256"],
+            ),
+            (
+                "installer.tar.gz",
+                pool_info["inst_remote"],
+                pool_info.get("inst_local", ""),
+                pool_info["inst_sha256"],
+            ),
         ):
             out = tmp / name
-            out.write_bytes(_dev_host_read(central_target, remote_path, cwd=root))
+            cached_path = Path(local_cached) if local_cached else None
+            if (
+                cached_path is not None
+                and cached_path.is_file()
+                and hashlib.sha256(cached_path.read_bytes()).hexdigest() == expected_sha
+            ):
+                shutil.copyfile(cached_path, out)
+                out.chmod(0o600)
+            else:
+                _dev_host_download_file(
+                    central_target, remote_path, out, expected_sha256=expected_sha, cwd=root
+                )
+
+        for name, remote_path, expected_sha in (
+            ("bootstrap.env", bootstrap_remote, bootstrap_sha),
+            ("template.env", str(bundle["config_path"]), str(bundle.get("config_sha256") or "")),
+            (
+                "runtime-bundle.tar",
+                str(bundle["runtime_bundle_path"]),
+                str(bundle.get("runtime_bundle_sha256") or ""),
+            ),
+            (
+                "nginx-user-ingress-auth.conf",
+                str(bundle["nginx_auth_path"]),
+                str(bundle.get("nginx_auth_sha256") or ""),
+            ),
+        ):
+            out = tmp / name
+            raw_bytes = _dev_host_read(central_target, remote_path, cwd=root)
+            if expected_sha and hashlib.sha256(raw_bytes).hexdigest() != expected_sha:
+                raise WizardWorkerError(f"BUNDLE_FILE_SHA_MISMATCH:{name}")
+            out.write_bytes(raw_bytes)
             out.chmod(0o600)
 
         stage_remote = f"/var/backups/aiops-wizard-stage-{env}"
