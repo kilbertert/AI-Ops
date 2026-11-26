@@ -109,4 +109,4 @@ Gateway交付脚本留在deploy根作为唯一CD入口，ops保留环境清单�
 这些位置有真实启动/交付调用者，不新增一层转发；移动仓库源码不等于重写现役宿主目录。
 最终独立验证与剩余业务边界见[收尾记录](../validation/2026-10-30-z20-layout-final-acceptance.md)。
 
-> 注：退役范围扩大前的 2026-10-28 早期目录调查已按 [ADR-0343](../adr/0343-prune-redundant-drafts-and-obsolete-archives.md) 移出本文件正文，历史原文可在 Git 提交 `57c1d788:docs/architecture/repository-layout.md` 查阅。
+> 注：退役范围扩大前的 2026-10-28 早期目录调查已按 [ADR-0343](../adr/0343-prune-redundant-drafts-and-obsolete-archives.md) 移出本文件正文，历史原文可在 Git 提交 `57c1d788:docs/architecture/repository-layout.md` 查阅；2026-10-01 公司侧源码探查阶段留下的 6 个历史过程文档取证测试（`#475–#480`）已按 [ADR-0356](../adr/0356-retire-historical-recon-evidence-tests.md) 退役，现役 `deploy/company-gitlab-api.sh` 与探查规程保留。
