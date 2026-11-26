@@ -2203,3 +2203,82 @@ def test_staged_cancel_without_source_transaction_and_same_tenant_blocked_staged
     assert (
         json.loads(refs_path.read_text())["targets"][0]["configurations"][0]["sha256"] == source_t0["sha256"]
     )
+
+
+def test_devin_review_unrelated_refs_update_baseline_resume_and_expired_verify_staged_peer(validated):
+    """覆盖 Devin Review BUG_0002（共享 references 他环境变更不阻塞恢复）、BUG_0003 与 ANALYSIS_0001。"""
+    from pathlib import Path
+
+    from aiops_diagnostics.gateway import gateway_db
+    from aiops_diagnostics.onboarding import drafts
+
+    state = validated[0][0]
+    reg_path, _, _, settings = state[0]
+    reg_path = Path(reg_path)
+    refs_path = Path(settings.environment_onboarding_file)
+    source_t0 = json.loads(refs_path.read_text())["targets"][0]["configurations"][0]
+
+    # 1. BUG_0003：模拟 source-operation.json 落盘后、baseline 落盘前崩溃，重领前向必须补齐基线
+    id_a = publish(validated).json()["id"]
+    owner_a = "a" * 32
+    assert internal(state, {"installation_claim": True, "owner": owner_a}).json()["id"] == id_a
+    assert (
+        internal(state, {"publication": "intent", "id": id_a, "owner": owner_a, "step": "source"}).status_code
+        == 200
+    )
+    assert (
+        internal(state, {"publication": "source-configuration", "id": id_a, "owner": owner_a}).json()["state"]
+        == "updated"
+    )
+    bundles_root = Path(settings.data_home) / "publication-bundles"
+    baseline_file = bundles_root / "delegation-baseline-a.json"
+    assert baseline_file.exists()
+    baseline_file.unlink()
+    resumed = internal(state, {"publication": "source-configuration", "id": id_a, "owner": owner_a})
+    assert resumed.status_code == 200 and resumed.json()["state"] == "unchanged", resumed.text
+    assert baseline_file.exists()
+
+    # 2. ANALYSIS_0001：对端 B 停在 verify 过期（phase="verify" 但 steps.target.phase="staged"），
+    # 恢复 A 时不得提前回退 references.json
+    id_b = "task_" + "d" * 32
+    with gateway_db.connection(drafts._database(reg_path), write=True) as conn:
+        row_a = conn.execute(
+            "SELECT environment, request FROM environment_tasks WHERE id=?", (id_a,)
+        ).fetchone()
+        base_req = json.loads(row_a["request"])
+        conn.execute(
+            "INSERT INTO environment_tasks(id,environment,request,state,result,updated_at) "
+            "VALUES(?,?,?,'blocked',?,?)",
+            (
+                id_b,
+                row_a["environment"],
+                json.dumps({**base_req, "tenant_id": "peer"}),
+                json.dumps(
+                    {
+                        "scope": "environment-publication",
+                        "phase": "verify",
+                        "activated": False,
+                        "steps": {"target": {"phase": "staged", "activated": False}},
+                    }
+                ),
+                time.time() + 1,
+            ),
+        )
+    keep = internal(
+        state, {"publication": "source-configuration", "id": id_a, "owner": owner_a, "restore": True}
+    )
+    assert keep.status_code == 200 and keep.json()["state"] == "unchanged", keep.text
+
+    # 3. BUG_0002：清掉对端 B 后，另一无关环境改动共享 references.json 外层摘要，A 作为末租户恢复仍须退回 T0
+    with gateway_db.connection(drafts._database(reg_path), write=True) as conn:
+        conn.execute("UPDATE environment_tasks SET state='cancelled' WHERE id=?", (id_b,))
+    refs_doc = json.loads(refs_path.read_text())
+    refs_doc["targets"].append({**refs_doc["targets"][0], "id": "other-target", "host": "other-host"})
+    refs_path.write_text(json.dumps(refs_doc, sort_keys=True) + "\n")
+    reverted = internal(
+        state, {"publication": "source-configuration", "id": id_a, "owner": owner_a, "restore": True}
+    )
+    assert reverted.status_code == 200 and reverted.json()["state"] == "updated", reverted.text
+    assert (
+        json.loads(refs_path.read_text())["targets"][0]["configurations"][0]["sha256"] == source_t0["sha256"]
+    )

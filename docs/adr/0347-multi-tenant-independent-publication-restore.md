@@ -15,8 +15,8 @@
 ## 决定
 
 1. **环境级去委派基线（消除非 LIFO 最后租户恢复后的悬空委派引用）**：
-   - 目标侧首次将 `production.env` 从直连基线 `P0` 切换为委派配置 `P1` 时，落盘 root 私有 `0600` 文件 `publication-tasks/delegation-baseline.json`；控制面首次将 `references.json` 源配置从 `T0` 切换为 `T1` 时，同步落盘 `0600` `publication-bundles/delegation-baseline-<env>.json`。
-   - 无论以 LIFO、非 LIFO 或三租户任意顺序停用至**最后一个离开委派的租户**，目标侧与控制面均基于该环境级基线成套回退 `production.env (P1 → P0)`、清理 `knowledge-delegation.json` 并同步回退 `references.json (T1 → T0)`，杜绝悬空 `AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE` 引发的重启崩溃与 `candidate-install` 死锁。
+   - 目标侧首次将 `production.env` 从直连基线 `P0` 切换为委派配置 `P1` 时，落盘 root 私有 `0600` 文件 `publication-delegation-baseline.json`（位于 `publication-tasks/` 之外、与 `installed.json` 同级，避免原子写入中断遗留临时文件阻塞任务目录扫描）；控制面首次或重领前向 `source_configuration` 将 `references.json` 源配置从 `T0` 切换为 `T1` 前，同步确保 `0600` `publication-bundles/delegation-baseline-<env>.json` 落盘。
+   - 无论以 LIFO、非 LIFO 或三租户任意顺序停用至**最后一个离开委派的租户**，目标侧与控制面均基于该环境级基线成套回退 `production.env (P1 → P0)`、清理 `knowledge-delegation.json` 并按当前 `references.json` 文档摘要 + 本环境配置项 `expected_sha256` 双重 CAS 同步回退 `references.json (T1 → T0)`（不受其他无关环境更新共享 `references.json` 阻塞），杜绝悬空 `AIOPS_GATEWAY_KNOWLEDGE_DELEGATION_FILE` 引发的重启崩溃与 `candidate-install` 死锁。
 2. **严格 fail-closed 摘要绑定与受信任同级核验**：
    - `publication-tasks/` 及所有子目录、`operation.json`、`delegation-baseline.json` 强制校验非符号链接、root 属主、`0700/0600`、`st_nlink == 1` 与目录名同任务编号，拒绝任何未知条目。
    - 非 `pending.json` 稳态下，`check_files()` 与 `setup()` 强制核验磁盘 `production.env`、`environment.json`、`knowledge-delegation.json` 分别与当前受信任 `installed.json` 的 `config_sha256`、`registry_sha256`、`knowledge_sha256` 精确一致，拒绝空 `capabilities: []` 与任一活跃对端能力缺失，阻断第三方历史快照回滚或删改能力被洗白入账本；同时允许受管 `install.py` 在两次发布间推进 `installed.json`（保留 `knowledge_sha256`）而不阻塞既有租户恢复。
@@ -33,4 +33,4 @@
 ## 后果与恢复
 
 - 仅涉及目标受管安装器 `ops/environments/gateway/publication.py` 与控制面 `src/aiops_diagnostics/onboarding/publication.py`，不改变数据库 schema、公开 API 或单租户恢复契约；
-- 需随同修订受管安装器与控制面 Gateway 一并部署生效；旧修订单租户任务完全向后兼容，可按既有安装器回退。
+- 需随同修订受管安装器与控制面 Gateway 一并部署生效；多租户非 LIFO 独立停用适用于基于本修订及之后安装器创建的发布任务（受管 worker 保持按任务冻结安装器摘要校验，不弱化安装器固定边界；历史单租户旧任务仍向后兼容，可按既有安装器回退）。

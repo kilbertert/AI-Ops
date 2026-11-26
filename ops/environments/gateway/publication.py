@@ -164,7 +164,9 @@ def _capability_app_id(row):
 
 
 def _baseline_path(inst):
-    return inst.root / "publication-tasks" / "delegation-baseline.json"
+    # 独立置于 publication-tasks/ 之外（与 installed.json 同级），避免原子写入中途被杀遗留的临时文件
+    # 污染任务目录扫描（Devin Review BUG_0004）。
+    return inst.root / "publication-delegation-baseline.json"
 
 
 def _read_baseline(inst):
@@ -216,11 +218,6 @@ def _trusted_sibling_operations(inst, exclude_id):
     install.trusted(root, private=True)
     siblings = []
     for entry in sorted(root.iterdir()):
-        if entry.name == "delegation-baseline.json":
-            if entry.is_symlink() or not entry.is_file() or entry.stat().st_nlink != 1:
-                raise ValueError("untrusted publication task entry")
-            install.trusted(entry, private=True)
-            continue
         if not re.fullmatch(r"task_[a-f0-9]{32}", entry.name) or entry.is_symlink() or not entry.is_dir():
             raise ValueError("untrusted publication task entry")
         if entry.name == exclude_id:

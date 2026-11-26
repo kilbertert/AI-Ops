@@ -770,7 +770,13 @@ def _has_other_delegated_publication(path, environment, tenant_id, identifier):
         if row["state"] == "cancelled":
             continue
         res = json.loads(row["result"] or "{}")
-        if res.get("phase") in {"staged", "activating", "activated", "restoring"}:
+        if res.get("phase") == "restored":
+            continue
+        active_phases = {"staged", "activating", "activated", "restoring"}
+        target_phase = (res.get("steps") or {}).get("target", {}).get("phase") or (
+            (req.get("steps") or {}).get("target", {}).get("phase")
+        )
+        if res.get("phase") in active_phases or target_phase in active_phases:
             return True
     return False
 
@@ -835,18 +841,23 @@ def source_configuration(context, request, identifier, *, restore=False):
         }
         write_private_text(transaction, json.dumps(state))
         has_transaction = True
-        if state["before"]["sha256"] != state["after"]["sha256"]:
-            write_private_text(
-                baseline_file,
-                json.dumps(
-                    {
-                        "environment": draft["id"],
-                        "before": state["before"],
-                        "after": state["after"],
-                    }
-                ),
-            )
-    used_baseline = False
+    if (
+        not restore
+        and state is not None
+        and state["before"]["sha256"] != state["after"]["sha256"]
+        and not baseline_file.exists()
+    ):
+        # 无论首次执行还是崩溃后重领，均在写 references.json 前确保环境级基线存在（BUG_0003）。
+        write_private_text(
+            baseline_file,
+            json.dumps(
+                {
+                    "environment": draft["id"],
+                    "before": state["before"],
+                    "after": state["after"],
+                }
+            ),
+        )
     if restore:
         own_switched = state is not None and state["before"]["sha256"] != state["after"]["sha256"]
         if own_switched:
@@ -860,7 +871,6 @@ def source_configuration(context, request, identifier, *, restore=False):
             if source["sha256"] == baseline["before"]["sha256"]:
                 return {"state": "unchanged"}
             desired, previous = baseline["before"], baseline["after"]
-            used_baseline = True
         else:
             # 基线缺失时 fail-closed 检查当前源模板是否仍残留委派文件路径（NEW-M1）
             live_values = dict(dotenv_values(plans._private(source["path"]), interpolate=False))
@@ -876,10 +886,9 @@ def source_configuration(context, request, identifier, *, restore=False):
         return {"state": "unchanged"}
     if source["sha256"] != previous["sha256"]:
         raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
-    if used_baseline:
-        expected = hashlib.sha256(refs.read_bytes()).hexdigest()
-    else:
-        expected = state.get("references_after") if restore else state["references_before"]
+    # 恢复时按当前共享 references.json 摘要 + 本环境配置项 expected_sha256 双重 CAS，
+    # 避免其他无关环境的引用更新阻塞本环境末租户收口（BUG_0002）。
+    expected = hashlib.sha256(refs.read_bytes()).hexdigest() if restore else state["references_before"]
     if expected is None:
         raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
     updated = plans.update_artifact_references(

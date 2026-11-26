@@ -568,9 +568,9 @@ def test_round2_activate_crash_after_peer_restore_and_missing_baseline_guards(st
     assert (inst.root / "pending.json").exists()
     assert publication.stage(inst, doc_b, observe_only=True)["state"] == "reconcile"
 
-    # NEW-M1：即使 delegation-baseline.json 丢失，仍能从受信任 sibling 反查 P0 并完整恢复；
-    # 若连 sibling 也不存在且 production.env 仍含委派文件路径则 fail-closed 拒绝
-    baseline = inst.root / "publication-tasks" / "delegation-baseline.json"
+    # NEW-M1 + BUG_0004：基线置于 publication-tasks/ 之外，即使缺失也能从受信任 sibling 反查 P0 并完整恢复
+    baseline = inst.root / "publication-delegation-baseline.json"
+    assert baseline.exists()
     baseline.unlink()
     recovered_b = publication.recover(inst, doc_b["id"])
     assert recovered_b["phase"] == "restored"
