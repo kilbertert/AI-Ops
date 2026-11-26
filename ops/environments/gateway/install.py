@@ -53,13 +53,91 @@ def write(path, body):
         os.close(descriptor)
 
 
+def ensure_service_identity(environment, user):
+    """冷装前置自举：缺失服务身份时创建锁定非登录系统账号，绝不修改既有登录账号。"""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]|[a-z0-9]", environment):
+        raise ValueError("invalid environment")
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
+        raise ValueError("invalid service identity")
+    try:
+        return pwd.getpwnam(user)
+    except KeyError:
+        pass
+    nologin = "/usr/sbin/nologin" if Path("/usr/sbin/nologin").exists() else "/sbin/nologin"
+    home_dir = f"/var/lib/aiops-access-{environment}"
+    probe.command(
+        "useradd",
+        "--system",
+        "--no-create-home",
+        "--home-dir",
+        home_dir,
+        "--shell",
+        nologin,
+        "--user-group",
+        user,
+    )
+    probe.command("passwd", "-l", user)
+    return pwd.getpwnam(user)
+
+
+def ensure_python_venv(python):
+    """冷装前置自举：探测 ensurepip/venv 可用性，Debian/Ubuntu 缺失时自动补装 pythonX.Y-venv。"""
+    check = subprocess.run(
+        ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", python, "-I", "-c", "import ensurepip, venv"],
+        capture_output=True,
+        text=True,
+    )
+    if check.returncode == 0:
+        return
+    if not shutil.which("apt-get"):
+        raise ValueError("python ensurepip/venv module required")
+    ver = probe.command(
+        "/usr/bin/env",
+        "-i",
+        "PATH=/usr/bin:/bin",
+        python,
+        "-I",
+        "-c",
+        "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+    ).strip()
+    if not re.fullmatch(r"3\.\d{1,2}", ver):
+        raise ValueError("unsupported python version for venv bootstrap")
+    pkg = f"python{ver}-venv"
+    probe.command(
+        "/usr/bin/env",
+        "-i",
+        "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+        "DEBIAN_FRONTEND=noninteractive",
+        "apt-get",
+        "update",
+    )
+    probe.command(
+        "/usr/bin/env",
+        "-i",
+        "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+        "DEBIAN_FRONTEND=noninteractive",
+        "apt-get",
+        "install",
+        "-y",
+        "--no-install-recommends",
+        pkg,
+    )
+    recheck = subprocess.run(
+        ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", python, "-I", "-c", "import ensurepip, venv"],
+        capture_output=True,
+        text=True,
+    )
+    if recheck.returncode != 0:
+        raise ValueError("python ensurepip/venv module required after bootstrap")
+
+
 class Installer:
-    def __init__(self, environment, user, port):
+    def __init__(self, environment, user, port, *, ensure_prerequisites=False):
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]|[a-z0-9]", environment):
             raise ValueError("invalid environment")
         if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user) or not 1024 <= port <= 65535:
             raise ValueError("invalid service identity or port")
-        account = pwd.getpwnam(user)
+        account = ensure_service_identity(environment, user) if ensure_prerequisites else pwd.getpwnam(user)
         if account.pw_uid == 0 or account.pw_shell not in (
             "/usr/sbin/nologin",
             "/sbin/nologin",
@@ -67,6 +145,7 @@ class Installer:
         ):
             raise ValueError("existing non-login identity required")
         self.environment, self.user, self.port, self.account = environment, user, port, account
+        self.ensure_prerequisites = bool(ensure_prerequisites)
         self.name = "aiops-access-" + environment
         self.root = Path("/opt") / self.name
         self.state = Path("/var/lib") / self.name
@@ -1246,6 +1325,8 @@ WantedBy=multi-user.target
                 )
         shutil.copyfile(Path(__file__).with_name("runtime_check.py"), release / "runtime_check.py")
         (release / "runtime_check.py").chmod(0o644)
+        if getattr(self, "ensure_prerequisites", False):
+            ensure_python_venv(python)
         self.command(
             "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", python, "-I", "-m", "venv", str(release / "venv")
         )
@@ -1483,13 +1564,22 @@ def main():
     parser.add_argument("--expected-runtime-sha256", help="运行工件变化匹配当前摘要，首次引入为absent")
     parser.add_argument("--python", default="/usr/bin/python3")
     parser.add_argument("--receipt", help="preflight回读持久现场回执；不安装或恢复")
+    parser.add_argument(
+        "--ensure-prerequisites",
+        action="store_true",
+        help="冷装前置自举：缺失时自动创建锁定非登录服务账号并补齐 pythonX.Y-venv",
+    )
     args = parser.parse_args()
     os.umask(0o022)  # 代码与venv可穿越；配置/状态/账本另用0600/0700。
     signal.signal(signal.SIGTERM, probe.interrupted)
     try:
         if os.geteuid() != 0 or platform.system() != "Linux" or platform.machine() != "x86_64":
             raise ValueError("Linux x86_64 host maintenance identity required")
+        if args.ensure_prerequisites and args.action == "install":
+            ensure_service_identity(args.environment, args.user)
         inst = Installer(args.environment, args.user, args.port)
+        if args.ensure_prerequisites and args.action == "install":
+            inst.ensure_prerequisites = True
         if args.action in ("install", "recover", "preflight", "register-runtime"):
             revision = Path(__file__).with_name("REVISION").read_text().strip()
             sums = Path(__file__).with_name("SHA256SUMS").read_text().splitlines()

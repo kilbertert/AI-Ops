@@ -165,29 +165,39 @@ def submit(context: Any, identity: tuple[str, str, str], payload: dict[str, Any]
     _, node_binding = installation.binding(settings, target_id)
 
     bindings = preparation._bindings(settings, source)
-    identifier = (
-        "task_"
-        + plans._digest(
-            {
-                "action": ACTION,
-                "plan": plan["id"],
-                "tenant": tenant_id,
-                "source": source,
-                "bindings": bindings,
-                "node_binding": node_binding,
-                **({"initial_installation": True} if initial else {}),
-                **({"case_ref": case_ref, "capabilities": capabilities} if case_ref else {}),
-            }
-        )[:32]
-    )
+
+    def _task_id_for(plan_id: str) -> str:
+        return (
+            "task_"
+            + plans._digest(
+                {
+                    "action": ACTION,
+                    "plan": plan_id,
+                    "tenant": tenant_id,
+                    "source": source,
+                    "bindings": bindings,
+                    "node_binding": node_binding,
+                    **({"initial_installation": True} if initial else {}),
+                    **({"case_ref": case_ref, "capabilities": capabilities} if case_ref else {}),
+                }
+            )[:32]
+        )
+
+    identifier = _task_id_for(plan["id"])
 
     # 先校验是否已存在相同幂等任务、并发在飞任务，以及同计划下是否已有过期主机基线（如前一租户已安装）。
     need_fresh_site = False
+    retrying_cancelled = False
     with drafts._locked(path), gateway_db.initialize(drafts._database(path)) as conn:
         drafts.initialize_tasks(conn)
         existing = conn.execute("SELECT * FROM environment_tasks WHERE id=?", (identifier,)).fetchone()
         if existing is not None:
-            return tasks._public(dict(existing))
+            if existing["state"] == "cancelled":
+                # 已终态取消的一键开通任务不再把重跑卡死在 15 分钟计划窗内，自动同摘要续签新计划重试。
+                need_fresh_site = True
+                retrying_cancelled = True
+            else:
+                return tasks._public(dict(existing))
         if conn.execute(
             "SELECT 1 FROM environment_tasks WHERE environment=? "
             "AND state IN ('waiting','checking') AND id!=? "
@@ -195,7 +205,7 @@ def submit(context: Any, identity: tuple[str, str, str], payload: dict[str, Any]
             (environment, identifier, ACTION, tenant_id),
         ).fetchone():
             raise tasks.TaskRefused("ENVIRONMENT_TASK_BUSY")
-        if not initial:
+        if not initial and not retrying_cancelled:
             existing_site = conn.execute(
                 "SELECT * FROM environment_tasks WHERE environment=? "
                 "AND COALESCE(json_extract(request,'$.action'),'site-preflight')='site-preflight' "
@@ -221,6 +231,8 @@ def submit(context: Any, identity: tuple[str, str, str], payload: dict[str, Any]
         if need_fresh_site
         else plan
     )
+    if retrying_cancelled:
+        identifier = _task_id_for(active_plan["id"])
     prep_payload: dict[str, Any] = {
         "candidate_plan": active_plan["id"],
         "tenant_id": tenant_id,
