@@ -7,6 +7,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from common.source_ast_cache import iter_python_files, parse_source_ast
 from consumer.test_consumer_chat_service import Client, configure, done
 from consumer.test_consumer_live_context import wire
 from consumer.test_consumer_semantic_routing import semantic
@@ -55,8 +56,8 @@ def test_current_code_does_not_import_retired_modules():
     root = Path(__file__).resolve().parents[1]
     offenders = []
     for folder in ("src", "tools", "tests"):
-        for path in (root / folder).rglob("*.py"):
-            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        for path in iter_python_files(root / folder):
+            for node in ast.walk(parse_source_ast(path)):
                 if isinstance(node, ast.Import):
                     names = [alias.name for alias in node.names]
                 elif isinstance(node, ast.ImportFrom):

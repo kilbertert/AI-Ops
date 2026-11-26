@@ -12,12 +12,14 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from common.source_ast_cache import iter_python_files, parse_source_ast
+
 SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
 SKELETON = "bounded_http.py"
 
 
-def _python_sources() -> list[Path]:
-    return sorted(path for path in SOURCE_ROOT.rglob("*.py") if path.name != SKELETON)
+def _python_sources() -> tuple[Path, ...]:
+    return iter_python_files(SOURCE_ROOT, exclude_names=frozenset({SKELETON}))
 
 
 def test_only_the_skeleton_constructs_a_urllib_request() -> None:
@@ -29,7 +31,7 @@ def test_only_the_skeleton_constructs_a_urllib_request() -> None:
     """
     offenders: list[str] = []
     for path in _python_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Attribute) or node.attr != "Request":
                 continue
@@ -57,7 +59,7 @@ def test_only_the_skeleton_computes_a_retry_delay() -> None:
     """
     offenders: list[str] = []
     for path in _python_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        tree = parse_source_ast(path)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue

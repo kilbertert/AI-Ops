@@ -7,12 +7,27 @@ file in this suite.
 from __future__ import annotations
 
 import contextlib
+import ctypes
+import gc
 import os
 import pathlib
 import socketserver
+import sys
 import tempfile
+import weakref
+from typing import Any
 
 import pytest
+
+# Must be set in the parent process BEFORE pytest-xdist spawns workers so every
+# worker initializes glibc with bounded malloc arenas (~35-40% lower RSS).
+os.environ.setdefault("MALLOC_ARENA_MAX", "2")
+
+_TEMP_ROOT = pathlib.Path(tempfile.gettempdir()).resolve()
+if os.environ.get("AIOPS_TEST_REAL_FSYNC") != "1":
+    from aiops_diagnostics.gateway import gateway_db
+
+    gateway_db._TEST_SYNC_OFF_ROOT = _TEMP_ROOT
 
 # `socketserver.BaseServer.serve_forever` defaults to `poll_interval=0.5`: the
 # loop wakes every half second to look for a shutdown flag, and `shutdown()`
@@ -102,6 +117,13 @@ WAIT_SECONDS = 1800
 #: acquire time, not import time, so the environment is the caller's.
 SLOT_ENV = "AIOPS_PYTEST_SLOTS"
 
+#: Override local xdist worker count when set; otherwise memory-aware (2/1).
+WORKERS_ENV = "AIOPS_PYTEST_WORKERS"
+
+#: Minimum free MemAvailable (MiB) required before a local multi-worker run starts.
+MIN_FREE_MB_ENV = "AIOPS_PYTEST_MIN_FREE_MB"
+DEFAULT_MIN_FREE_MB = 1536
+
 #: Slots are taken per RUN, not per worker — see pytest_configure.
 
 
@@ -181,17 +203,47 @@ def _acquire(path: pathlib.Path, fcntl, time, what: str) -> object:
             time.sleep(0.5)
 
 
+def _available_memory_mb() -> int | None:
+    """Read Linux `/proc/meminfo` `MemAvailable` in MiB; return None if unavailable."""
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    kb = int(line.split()[1])
+                    return kb // 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _acquire_memory_budget(time_mod: Any, min_free_mb: int) -> None:
+    """Pause local multi-worker runs until `/proc/meminfo` reports enough headroom."""
+    if min_free_mb <= 0:
+        return
+    deadline = time_mod.monotonic() + WAIT_SECONDS
+    while True:
+        avail = _available_memory_mb()
+        if avail is None or avail >= min_free_mb:
+            return
+        if time_mod.monotonic() >= deadline:
+            raise pytest.UsageError(
+                f"available memory {avail} MiB stayed below {min_free_mb} MiB for {WAIT_SECONDS}s; "
+                f"refusing to risk OOM. Lower {MIN_FREE_MB_ENV} or run `-n 0`."
+            )
+        time_mod.sleep(0.5)
+
+
 def _acquire_host_slot(fcntl, time, slots: int) -> object:
     """Lowest free host-wide slot, or a bounded wait.
 
     `flock` has no queue, so "wait for slot 0" would leave a run blocked behind
     slot 0 while slot 1 sits idle; probing every slot is what makes N the actual
-    concurrency.
+    concurrency. Uses `_open_slot` so mode is always 0o666 across host & container UIDs.
     """
     deadline = time.monotonic() + WAIT_SECONDS
     while True:
         for index in range(slots):
-            handle = open(_host_lock_path(index), "w")  # noqa: SIM115
+            handle = _open_slot(_host_lock_path(index))
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -206,11 +258,76 @@ def _acquire_host_slot(fcntl, time, slots: int) -> object:
         time.sleep(0.5)
 
 
+_RESOURCE_BUCKETS: list[list[weakref.ref[Any]]] = []
+_CALL_BUCKETS: dict[int, list[weakref.ref[Any]]] = {}
+_RESOURCES_HOOKED = False
+_TEARDOWN_COUNT = 0
+try:
+    _LIBC = ctypes.CDLL("libc.so.6")
+except OSError:
+    _LIBC = None
+
+
+def _record_resource(instance: Any) -> None:
+    if _RESOURCE_BUCKETS:
+        _RESOURCE_BUCKETS[-1].append(weakref.ref(instance))
+
+
+def _close_bucket(bucket: list[weakref.ref[Any]]) -> None:
+    # Close in reverse creation order (e.g. TestClient before its GatewayRuntime).
+    for ref in reversed(bucket):
+        obj = ref()
+        if obj is None:
+            continue
+        close_fn = getattr(obj, "close", None) or getattr(obj, "shutdown", None)
+        if callable(close_fn):
+            with contextlib.suppress(Exception):
+                close_fn()
+    bucket.clear()
+
+
+def _install_resource_tracking() -> None:
+    global _RESOURCES_HOOKED
+    if _RESOURCES_HOOKED:
+        return
+    _RESOURCES_HOOKED = True
+
+    from starlette.testclient import TestClient
+
+    from aiops_diagnostics.gateway.gateway_runtime import GatewayRuntime
+
+    orig_tc_init = TestClient.__init__
+    orig_rt_init = GatewayRuntime.__init__
+
+    def tracked_tc_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        orig_tc_init(self, *args, **kwargs)
+        _record_resource(self)
+
+    def tracked_rt_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        orig_rt_init(self, *args, **kwargs)
+        _record_resource(self)
+
+    TestClient.__init__ = tracked_tc_init  # type: ignore[method-assign]
+    GatewayRuntime.__init__ = tracked_rt_init  # type: ignore[method-assign]
+
+
+def pytest_xdist_auto_num_workers(config: pytest.Config) -> int:
+    """Cap `-n auto` to 4 in CI and memory-aware 2/1 locally."""
+    del config
+    if os.environ.get("CI"):
+        return 4
+    if raw := os.environ.get(WORKERS_ENV):
+        return max(1, int(raw))
+    avail = _available_memory_mb()
+    if avail is None or avail >= 4096:
+        return 2
+    return 1
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Take this checkout's lock and a host slot for the duration of the run."""
     import fcntl
     import hashlib
-    import os
     import time
 
     # ⚠️ Only the CONTROLLER process takes the lock. xdist workers run their own
@@ -219,39 +336,15 @@ def pytest_configure(config: pytest.Config) -> None:
     # a single run exited 0 having executed nothing). The worker marker is what
     # distinguishes them; it is set by xdist before the worker's config is built.
     if os.environ.get("PYTEST_XDIST_WORKER"):
+        _install_resource_tracking()
         return
-    # ⚠️ `-n 0` is detected properly here — `int`, not the string "0", because xdist
-    # converts the option: verified, `-n 0` yields `numprocesses == 0`. Getting this
-    # wrong made the documented fast path take the lock: measured, two `-n 0` runs
-    # were serialised 5 s / 10 s.
-    #
-    # ⚠️ But `-n 0` still takes the HOST SLOT, and that is a change from the first
-    # version, which returned here and took neither. The reasoning it was written
-    # with — "a single-worker run is cheap, do not make it queue" — looked at the
-    # wrong cost. The incident was CPU-seconds, and a serial run burns a core just
-    # as surely as a parallel one: seven serial sessions would have driven the same
-    # load, they just divide their work differently. When the other two repositories
-    # got this gate (health-flow #260, genesis-evidence #340) they had no xdist at
-    # all, so EVERY run there is serial — keying on `-n` would have made the gate
-    # inert, verified by positive control: slots occupied externally, pytest still
-    # finished in 4 s. Keeping the two behaviours different across three copies of
-    # one rule is the kind of drift this file's header warns about.
-    #
-    # What `-n 0` still skips is the CHECKOUT lock, which is what the fast path
-    # actually needs: two runs in one checkout would otherwise serialise a 3 s file
-    # run behind a 76 s full run. The host slot costs a file lock and only waits
-    # when two runs are genuinely in flight.
     single_worker = (config.option.numprocesses or 0) == 0
+    if single_worker:
+        _install_resource_tracking()
 
     checkout = pathlib.Path(__file__).resolve().parents[1]
     key = hashlib.sha256(str(checkout).encode()).hexdigest()[:16]
 
-    # ⚠️ Order is checkout first, host slot second, and it matters. A run queued
-    # behind another in the SAME checkout must not squat a host slot while it waits
-    # — measured on the reversed order: two runs in one checkout left the second
-    # holding a slot it was not using, so a third checkout was throttled while only
-    # one run was actually working. Deadlock is not a risk either way (a checkout
-    # lock has exactly one holder and every path takes them in this order).
     held = []
     if not single_worker:
         held.append(
@@ -263,8 +356,88 @@ def pytest_configure(config: pytest.Config) -> None:
             )
         )
     held.append(_acquire_host_slot(fcntl, time, int(os.environ.get(SLOT_ENV) or MAX_CONCURRENT_RUNS)))
+    if not os.environ.get("CI") and not single_worker:
+        min_free = int(os.environ.get(MIN_FREE_MB_ENV) or DEFAULT_MIN_FREE_MB)
+        _acquire_memory_budget(time, min_free)
 
     # Keep the handles alive on the config so they are not garbage-collected (which
     # would release the locks mid-run). pytest tears the config down at exit, and
     # the OS releases them when the process dies even if it does not.
     config._aiops_lock_handles = held
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Release checkout and host-slot locks on clean exit (safe for in-process callers)."""
+    handles = getattr(config, "_aiops_lock_handles", ())
+    for handle in handles:
+        with contextlib.suppress(Exception):
+            handle.close()
+    config._aiops_lock_handles = ()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_fixture_setup(fixturedef: pytest.FixtureDef[Any], request: pytest.FixtureRequest):
+    bucket: list[weakref.ref[Any]] = []
+    _RESOURCE_BUCKETS.append(bucket)
+    try:
+        yield
+    finally:
+        _RESOURCE_BUCKETS.pop()
+        if bucket:
+            request.addfinalizer(lambda b=bucket: _close_bucket(b))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item: pytest.Item):
+    bucket: list[weakref.ref[Any]] = []
+    _CALL_BUCKETS[id(item)] = bucket
+    _RESOURCE_BUCKETS.append(bucket)
+    try:
+        yield
+    finally:
+        _RESOURCE_BUCKETS.pop()
+
+
+_FASTAPI_CALLABLE_CACHES = (
+    "_is_gen_callable_cached",
+    "_is_async_gen_callable_cached",
+    "_is_coroutine_callable_cached",
+)
+
+
+def _clear_fastapi_callable_caches(threshold: int = 256) -> bool:
+    """Clear FastAPI dependency inspection LRU caches when they accumulate endpoint closures.
+
+    FastAPI keys `_CallIdentity(endpoint_func)` strongly; each `create_gateway_app()`
+    mounts ~100 route closures capturing the FastAPI app and `GatewayRuntime`, which
+    would otherwise pin dozens of full app graphs and thousands of Pydantic validators.
+    """
+    models = sys.modules.get("fastapi.dependencies.models")
+    if models is None:
+        return False
+    cleared = False
+    for name in _FASTAPI_CALLABLE_CACHES:
+        fn = getattr(models, name, None)
+        cache_info = getattr(fn, "cache_info", None)
+        cache_clear = getattr(fn, "cache_clear", None)
+        if not callable(cache_info) or not callable(cache_clear):
+            continue
+        if cache_info().currsize >= threshold:
+            cache_clear()
+            cleared = True
+    return cleared
+
+
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
+    del nextitem
+    bucket = _CALL_BUCKETS.pop(id(item), None)
+    if bucket:
+        _close_bucket(bucket)
+    cleared = _clear_fastapi_callable_caches()
+    global _TEARDOWN_COUNT
+    _TEARDOWN_COUNT += 1
+    if cleared or _TEARDOWN_COUNT % 50 == 0:
+        gc.collect()
+        if _LIBC is not None and hasattr(_LIBC, "malloc_trim"):
+            with contextlib.suppress(Exception):
+                _LIBC.malloc_trim(0)
