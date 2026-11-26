@@ -1864,3 +1864,227 @@ it('deduplicates hero publish CTA across repeated ready onboards, uses fresh pla
   await expect.element(screen.getByRole('alertdialog')).toBeVisible()
   await screen.getByRole('button', { name: '继续编辑', exact: true }).click()
 })
+
+test('5 步自助开通向导：双模式主机引导、二次确认受限库修复、基建编排、免 JSON 自验与公网终验', async () => {
+  const wizardCalls: Array<{ action: string; payload: Record<string, unknown> }> = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_input: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body || '{}')
+      if (body.action === 'environment-drafts') {
+        return Response.json({
+          registry_revision: 18,
+          can_create: true,
+          effective: [],
+          drafts: [],
+          overview: {
+            schema: 'aiops-environment-overview/1',
+            registry_revision: 18,
+            summary: { environments: 0, enabled_environments: 0, tenants: 0, enabled_tenants: 0 },
+            environments: [],
+          },
+        })
+      }
+      if (body.action === 'environment-wizard') {
+        wizardCalls.push({ action: body.wizard_action, payload: body.wizard_payload })
+        if (body.wizard_action === 'host_create_bootstrap_script') {
+          return Response.json({
+            environment: 'jiejia',
+            mode: 'bootstrap_script',
+            one_liner: 'curl -fsSL https://dify.ranlei.work/v1/internal/environment-bootstrap/script/bs_mock | sudo bash',
+            single_use: true,
+            host: {
+              environment: 'jiejia',
+              host_alias: 'aiops-cust-jiejia',
+              address: '8.148.223.139',
+              ssh_port: 22,
+              ssh_user: 'root',
+              host_fingerprint_sha256: '',
+              enrollment_mode: 'bootstrap_script',
+              status: 'pending_script',
+              hostname: '',
+              python_minor: '',
+              service_user_present: false,
+              venv_ready: false,
+              nginx_flavor: '',
+              rotate_root_password_recommended: false,
+            },
+          })
+        }
+        if (body.wizard_action === 'host_enroll_password') {
+          return Response.json({
+            environment: 'jiejia',
+            enrolled: true,
+            mode: 'ephemeral_password',
+            password_persisted: false,
+            host: {
+              environment: 'jiejia',
+              host_alias: 'aiops-cust-jiejia',
+              address: '8.148.223.139',
+              ssh_port: 22,
+              ssh_user: 'root',
+              host_fingerprint_sha256: 'SHA256:MOCKFP1234567890',
+              enrollment_mode: 'ephemeral_password',
+              status: 'verified',
+              hostname: 'jiejia-gw',
+              python_minor: '3.12',
+              service_user_present: true,
+              venv_ready: true,
+              nginx_flavor: 'baota',
+              rotate_root_password_recommended: true,
+            },
+          })
+        }
+        if (body.wizard_action === 'discover') {
+          return Response.json({
+            environment: 'jiejia',
+            ready: false,
+            state: 'blocked',
+            host: {
+              hostname: 'jiejia-gw',
+              python_minor: '3.12',
+              timezone: 'Asia/Shanghai',
+              nginx_flavor: 'baota',
+              nginx_extension_dir: '/www/server/panel/vhost/nginx/extension/api.juxichongdian.cn',
+            },
+            checks: [
+              { id: 'mysql-grants-upms', category: 'mysql', state: 'blocked', summary: 'UPMS 平台身份库缺少只读表权限：sys_user, sys_user_role, sys_role。' },
+              { id: 'tsdata-connectivity', category: 'tsdata', state: 'passed', summary: '时序服务直连 30888 可达。' },
+            ],
+            db_remediation_plan: {
+              has_auto_fixable_db_gaps: true,
+              remediation_ids: ['mysql_upms_select_grants'],
+              sql_statements: [
+                "GRANT SELECT ON `qumall_upms`.`sys_user` TO 'aiops_ro'@'10.0.0.31';",
+              ],
+              confirmation_digest: 'a'.repeat(64),
+            },
+            discovered: {
+              tenants: [{ id: '1990990768688599040', name: '捷佳' }],
+              healthy_tsdata_url: 'http://127.0.0.1:30888',
+              sample_candidates: {
+                orders: [{ order_no: '2125879212020924417' }],
+                offline_devices: [{ device_id: '2121870666501521409' }],
+                consumer_orders: [{ order_no: '2092158656121733121' }],
+              },
+            },
+          })
+        }
+        if (body.wizard_action === 'db_remediate') {
+          return Response.json({ executed: true, verified_after_fix: true })
+        }
+        if (body.wizard_action === 'artifact_pool_status') {
+          return Response.json({ count: 2, entries: [] })
+        }
+        if (body.wizard_action === 'infra_provision') {
+          return Response.json({
+            environment: 'jiejia',
+            passed: true,
+            failed_step: '',
+            steps: [
+              { step: 'allowlist', state: 'passed' },
+              { step: 'execution_node', state: 'passed' },
+              { step: 'customer_nginx', state: 'passed' },
+              { step: 'live_probe', state: 'passed', anon_assistant_status: 401, upms_tenant_list_status: 200 },
+            ],
+          })
+        }
+        if (body.wizard_action === 'kb_install_starter_faq') {
+          return Response.json({
+            document_id: 'doc_starter_1',
+            filename: 'aiops-consumer-starter-faq.md',
+            chunk_count: 3,
+          })
+        }
+        if (body.wizard_action === 'self_validate') {
+          return Response.json({
+            environment: 'jiejia',
+            tenant_id: '1990990768688599040',
+            passed: true,
+            capabilities: {
+              consumer: { state: 'passed' },
+              order: { state: 'passed' },
+              offline: { state: 'passed' },
+            },
+            credentials_persisted: false,
+            operator_session_revoked: true,
+            business_accuracy: 'unconfirmed',
+          })
+        }
+        if (body.wizard_action === 'post_publish_smoke') {
+          return Response.json({
+            gateway_url: 'https://api.juxichongdian.cn',
+            tenant_id: '1990990768688599040',
+            passed: true,
+            checks: [
+              { id: 'public-https-anon-rejected', passed: true, actual_http: 401 },
+              { id: 'public-https-customer-route-intact', passed: true, actual_http: 200 },
+              { id: 'public-https-consumer-qa', passed: true, actual_http: 200 },
+              { id: 'public-https-operator-qa', passed: true, actual_http: 200 },
+            ],
+            business_accuracy: 'unconfirmed',
+          })
+        }
+      }
+      return Response.json({})
+    }),
+  )
+
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '5 步自助开通向导' }).click()
+  await expect.element(screen.getByText('新客户自助开通向导（5 步零命令行）')).toBeVisible()
+
+  // Step 1: 填写 5 行基础信息，先测模式 B 生成引导脚本，再测模式 A 一次性口令内存引导
+  await screen.getByRole('textbox', { name: '客户名称' }).fill('捷佳四轮国内充电')
+  await screen.getByRole('textbox', { name: '环境代号' }).fill('jiejia')
+  await screen.getByRole('textbox', { name: '服务器公网 IP' }).fill('8.148.223.139')
+  await screen.getByRole('textbox', { name: '客户 API 域名' }).fill('api.juxichongdian.cn')
+  await screen.getByRole('textbox', { name: '网关内网地址' }).fill('10.0.0.31:30899')
+
+  await screen.getByRole('button', { name: /模式 B/ }).click()
+  await screen.getByRole('button', { name: '生成单次引导命令' }).click()
+  await expect.element(screen.getByText(/curl -fsSL/)).toBeVisible()
+
+  await screen.getByRole('button', { name: /模式 A/ }).click()
+  await screen.getByLabelText('一次性 SSH 口令').fill('EPHEMERAL_TEST_PW')
+  await screen.getByRole('button', { name: '立即安全引导并进入下一步' }).click()
+
+  // Step 2: 自动探测并二次确认受限库修复
+  await screen.getByRole('button', { name: '运行自动环境探测与体检' }).click()
+  await expect.element(screen.getByText(/GRANT SELECT ON `qumall_upms`.`sys_user`/)).toBeVisible()
+  await expect.element(screen.getByRole('button', { name: '二次确认：自动代执行并复验' })).toBeDisabled()
+  await screen.getByText(/我已核对以上受限白名单 SQL/).click()
+  await screen.getByRole('button', { name: '二次确认：自动代执行并复验' }).click()
+  await screen.getByRole('button', { name: /进入第 3 步/ }).click()
+
+  // Step 3: 基建自动编排
+  await screen.getByRole('button', { name: '一键配套周边基建并探活' }).click()
+  await expect.element(screen.getByText(/匿名=401, 原路由=200/)).toBeVisible()
+  await screen.getByRole('button', { name: /进入第 4 步/ }).click()
+
+  // Step 4: 默认试跑 FAQ 模板 + 免 JSON 三能力自验
+  await screen.getByRole('button', { name: '一键装入默认充电试跑 FAQ 模板' }).click()
+  await expect.element(screen.getByText(/aiops-consumer-starter-faq.md/)).toBeVisible()
+  await screen.getByRole('textbox', { name: 'C 端测试手机号' }).fill('13900001111')
+  await screen.getByLabelText('临时管家令牌').fill('TEMP_OP_TOKEN')
+  await screen.getByRole('button', { name: '一键执行三能力自验（免写 JSON）' }).click()
+
+  // Step 5: 公网 4 项终验与交付回执卡
+  await screen.getByRole('button', { name: '执行公网正式 HTTPS 4 项终验' }).click()
+  await expect.element(screen.getByText(/交付回执卡片 · 捷佳四轮国内充电（公网终验通过）/)).toBeVisible()
+  await expect.element(screen.getByText(/unconfirmed/)).toBeVisible()
+  await expect.element(screen.getByText(/建议客户运维轮换服务器 root 密码/)).toBeVisible()
+  await expect.element(screen.getByText(/建议上线后替换为客户官方客服文档/)).toBeVisible()
+
+  expect(wizardCalls.map((c) => c.action)).toEqual([
+    'host_create_bootstrap_script',
+    'host_enroll_password',
+    'discover',
+    'db_remediate',
+    'artifact_pool_status',
+    'infra_provision',
+    'kb_install_starter_faq',
+    'self_validate',
+    'post_publish_smoke',
+  ])
+})
