@@ -4,11 +4,32 @@ import hashlib
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
-from aiops_diagnostics.common.private_files import write_private_text
+import yaml
+from dotenv import dotenv_values
+
+from aiops_diagnostics.common.private_files import validate_private_directory, write_private_text
+from aiops_diagnostics.consumer.agent_contract import agent_publication_settings as publication_settings
+from aiops_diagnostics.consumer.consumer_publication import flags_of, frozen_settings
+from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
+from aiops_diagnostics.dify import dify_console_admin, dify_dsl_pull, service_keys
+from aiops_diagnostics.dify.self_service_prepare import consumer_plugin
+from aiops_diagnostics.dify.self_service_store import SelfServiceStore
 from aiops_diagnostics.gateway import gateway_db
+from aiops_diagnostics.knowledge import knowledge_delegation
+from aiops_diagnostics.onboarding import (
+    business,
+    consumer_trial,
+    drafts,
+    plans,
+    registry,
+    runtime,
+    tasks,
+    validation,
+)
+from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
 from aiops_diagnostics.onboarding import context as management
-from aiops_diagnostics.onboarding import drafts, plans, tasks, validation
 
 ACTION = "environment-publish"
 
@@ -58,9 +79,7 @@ def submit(context, identity, payload):
         ):
             raise tasks.TaskRefused("ENVIRONMENT_PUBLICATION_VALIDATION_REQUIRED")
         for check in result["checks"]:
-            from aiops_diagnostics.onboarding.business import validate_result
-
-            validate_result(check, check["capability"])
+            business.validate_result(check, check["capability"])
         identifier = "task_" + plans._digest([ACTION, source["id"], plan["id"], reference])[:32]
         if conn.execute(
             "SELECT 1 FROM environment_tasks WHERE environment=? AND id!=? "
@@ -129,9 +148,7 @@ def current(context, conn, identifier, *, fresh=False):
             )
             if proposal["revision"] != request["plan"]["draft_revision"]:
                 raise tasks.TaskRefused("ENVIRONMENT_TASK_PLAN_EXPIRED")
-            from aiops_diagnostics.onboarding.runtime import _private_json
-
-            change, _ = _private_json(
+            change, _ = runtime._private_json(
                 Path(context.settings.data_home) / "publication-bundles" / row["id"] / "source-operation.json"
             )
             if hashlib.sha256(
@@ -204,9 +221,7 @@ def dispatch(context, payload):
         if payload["publication"] == "source-configuration":
             return source_configuration(context, request, row["id"], restore=payload.get("restore", False))
         if payload["publication"] == "capacity-reference":
-            from aiops_diagnostics.onboarding.runtime import _private_json
-
-            references, _ = _private_json(context.settings.environment_installation_file)
+            references, _ = runtime._private_json(context.settings.environment_installation_file)
             target = next(r for r in references["targets"] if r["id"] == request["target"]["id"])
             if not target.get("capacity"):
                 raise tasks.TaskRefused("ENVIRONMENT_PUBLICATION_CAPACITY_CONFIG_REQUIRED")
@@ -398,19 +413,6 @@ def restore_task(context, identity, identifier):
 
 def central_bundle(context, request, spec, readiness, identifier, *, observe_only=False):
     """中央只冻结共享应用；私有包不出管理面，不触目标准入。"""
-    import yaml
-
-    from aiops_diagnostics.consumer.agent_contract import agent_publication_settings as publication_settings
-    from aiops_diagnostics.consumer.consumer_publication import flags_of, frozen_settings
-    from aiops_diagnostics.consumer.knowledge_access import KnowledgeGrants
-    from aiops_diagnostics.dify import service_keys
-    from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
-    from aiops_diagnostics.dify.dify_dsl_pull import DifyDslClient, DifyDslSource, workflow_content
-    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
-    from aiops_diagnostics.knowledge import knowledge_delegation
-    from aiops_diagnostics.onboarding import consumer_prep as environment_consumer
-    from aiops_diagnostics.onboarding.consumer_trial import candidate_workflow_sha
-
     settings = context.settings
 
     def authorize():
@@ -428,35 +430,33 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
     ):
         raise tasks.TaskRefused("ENVIRONMENT_PUBLICATION_CAPACITY_REQUIRED")
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    from aiops_diagnostics.common.private_files import validate_private_directory
-
     validate_private_directory(directory)
     intent = directory / "intent.json"
     secret = directory / "release.json"
     if secret.exists():
-        from aiops_diagnostics.onboarding.runtime import _private_json
-
-        existing, _ = _private_json(secret)
+        existing, _ = runtime._private_json(secret)
         if any(existing[k] != spec[k] for k in ("id", "environment", "tenant_id", "case_ref", "installed")):
             raise ValueError("publication artifact scope changed")
         knowledge_delegation.active(
             settings, knowledge_delegation.parse_id(existing["knowledge"]["capabilities"][0]["knowledge_id"])
         )
-        console = DifyConsoleAdmin(
-            ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
+        console = dify_console_admin.DifyConsoleAdmin(
+            dify_console_admin.ConsoleApiSettings(
+                settings.dify_console_base_url, settings.dify_console_api_key
+            )
         )
         app = existing["apps"]["consumer"]
-        client = DifyDslClient(
-            DifyDslSource(
+        client = dify_dsl_pull.DifyDslClient(
+            dify_dsl_pull.DifyDslSource(
                 settings.dify_console_base_url,
                 app["app_id"],
                 settings.dify_console_api_key,
                 existing["workspace_id"],
             )
         )
-        if workflow_content(client.export_dsl(workflow_id=app["workflow_id"])) != app["workflow"] or app[
-            "key"
-        ] not in service_keys.list_keys(console, existing["workspace_id"], app["app_id"]):
+        if dify_dsl_pull.workflow_content(client.export_dsl(workflow_id=app["workflow_id"])) != app[
+            "workflow"
+        ] or app["key"] not in service_keys.list_keys(console, existing["workspace_id"], app["app_id"]):
             raise ValueError("published content or credential changed")
         return {"path": str(secret), "sha256": hashlib.sha256(secret.read_bytes()).hexdigest()}
     if observe_only and not intent.exists():
@@ -466,18 +466,20 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
         consumer = json.loads(tasks._row(conn, request["children"]["consumer-prepare"])["request"])
     workspace, tenant, env = spec["consumer"]["workspace_id"], spec["tenant_id"], spec["environment"]
     library = spec["consumer"]["knowledge_base_id"]
-    console = DifyConsoleAdmin(
-        ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
+    console = dify_console_admin.DifyConsoleAdmin(
+        dify_console_admin.ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
     )
     document = environment_consumer.document(consumer["consumer_source"], library)
-    source = DifyDslSource(
+    source = dify_dsl_pull.DifyDslSource(
         settings.dify_console_base_url, spec["consumer"]["app_id"], settings.dify_console_api_key, workspace
     )
-    client = DifyDslClient(source)
+    client = dify_dsl_pull.DifyDslClient(source)
     exported = client.export_dsl()
-    workflow = workflow_content(exported)
+    workflow = dify_dsl_pull.workflow_content(exported)
     # Dify导出补回变量自身selector；比对沿用候选摘要的规范化口径，冻结体仍按导出原样保存。
-    if candidate_workflow_sha(exported) != candidate_workflow_sha(yaml.safe_dump(document)):
+    if consumer_trial.candidate_workflow_sha(exported) != consumer_trial.candidate_workflow_sha(
+        yaml.safe_dump(document)
+    ):
         raise ValueError("publication draft differs from validated source")
     snapshot = {
         "environment": env,
@@ -536,7 +538,7 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
     )
     detail = console._call(workspace, "/console/api/apps/" + source.app_id)
     published = (detail.get("workflow") or {}).get("id")
-    if published and workflow_content(client.export_dsl(workflow_id=published)) == workflow:
+    if published and dify_dsl_pull.workflow_content(client.export_dsl(workflow_id=published)) == workflow:
         workflow_id = published
     elif observe_only:
         raise ValueError("Dify publication not confirmed")
@@ -546,7 +548,7 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
         if not client.publish_workflow():
             raise ValueError("Dify publication unconfirmed")
         workflow_id = client.published_workflow_id()
-        if workflow_content(client.export_dsl(workflow_id=workflow_id)) != workflow:
+        if dify_dsl_pull.workflow_content(client.export_dsl(workflow_id=workflow_id)) != workflow:
             raise ValueError("Dify publication changed")
     detail = console._call(workspace, "/console/api/apps/" + source.app_id)
     if detail.get("enable_site") is not False:
@@ -619,17 +621,13 @@ def central_bundle(context, request, spec, readiness, identifier, *, observe_onl
 
 def connect(context, bundle):
     """目标受限知识已安装后再切候选插件回调，不能先验证尚未就绪的目标。"""
-    from types import SimpleNamespace
-
-    from aiops_diagnostics.dify.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
-    from aiops_diagnostics.dify.self_service_prepare import consumer_plugin
-    from aiops_diagnostics.onboarding.runtime import _private_json
-
-    doc, digest = _private_json(bundle["path"])
+    doc, digest = runtime._private_json(bundle["path"])
     if digest != bundle["sha256"]:
         raise ValueError("release bundle changed")
-    console = DifyConsoleAdmin(
-        ConsoleApiSettings(context.settings.dify_console_base_url, context.settings.dify_console_api_key)
+    console = dify_console_admin.DifyConsoleAdmin(
+        dify_console_admin.ConsoleApiSettings(
+            context.settings.dify_console_base_url, context.settings.dify_console_api_key
+        )
     )
     consumer_plugin(
         console,
@@ -642,11 +640,6 @@ def connect(context, bundle):
 
 
 def describe(context, request, identifier):
-    import yaml
-
-    from aiops_diagnostics.onboarding.consumer_prep import document
-    from aiops_diagnostics.onboarding.consumer_trial import candidate_workflow_sha
-
     path = management._path(context)
     with gateway_db.connection(drafts._database(path), readonly=True) as conn:
         operator = tasks._row(conn, request["children"]["operator-prepare"])
@@ -659,8 +652,8 @@ def describe(context, request, identifier):
         task_id=consumer["id"],
         plan_id=request["plan"]["id"],
         order_no="",
-        workflow_sha256=candidate_workflow_sha(
-            yaml.safe_dump(document(cr["consumer_source"], scope["knowledge_base_id"]))
+        workflow_sha256=consumer_trial.candidate_workflow_sha(
+            yaml.safe_dump(environment_consumer.document(cr["consumer_source"], scope["knowledge_base_id"]))
         ),
     )
     directory = Path(context.settings.data_home) / "publication-bundles" / identifier
@@ -690,8 +683,6 @@ def describe(context, request, identifier):
 
 
 def activate_directory(context, request, result):
-    from aiops_diagnostics.onboarding import registry
-
     restore = result.get("phase") == "restored"
     if not restore and (result.get("activated") is not True or result.get("phase") != "activated"):
         raise ValueError("target admission not confirmed")
@@ -745,8 +736,6 @@ def activate_directory(context, request, result):
 
 
 def _has_other_delegated_publication(path, environment, tenant_id, identifier):
-    from aiops_diagnostics.onboarding import registry
-
     current_registry = registry.load(path)
     env_row = next((r for r in current_registry["environments"] if r["id"] == environment), None)
     if env_row is not None and any(t["enabled"] for t in env_row["tenants"] if t["id"] != tenant_id):
@@ -783,10 +772,6 @@ def _has_other_delegated_publication(path, environment, tenant_id, identifier):
 
 def source_configuration(context, request, identifier, *, restore=False):
     """源引用和目标事务分别CAS；原不可变模板留存，失败只核对本次转换。"""
-    from dotenv import dotenv_values
-
-    from aiops_diagnostics.onboarding.runtime import _private_json
-
     path = management._path(context)
     refs = Path(context.settings.environment_onboarding_file)
     bundles_root = Path(context.settings.data_home) / "publication-bundles"
@@ -811,7 +796,7 @@ def source_configuration(context, request, identifier, *, restore=False):
     has_transaction = transaction.exists()
     state = None
     if has_transaction:
-        state, _ = _private_json(transaction)
+        state, _ = runtime._private_json(transaction)
     elif not restore:
         if hashlib.sha256(refs.read_bytes()).hexdigest() != request["references_sha256"]:
             raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
@@ -865,7 +850,7 @@ def source_configuration(context, request, identifier, *, restore=False):
         elif baseline_file.exists():
             # 非 LIFO 恢复末租户（含在 staged/verify 阶段取消、尚未写 source-operation.json 的场景，NEW-H2）：
             # 借环境级基线将 references.json 对称回退到 T0；已处于 T0 时幂等返回 unchanged（NEW-H1）。
-            baseline, _ = _private_json(baseline_file)
+            baseline, _ = runtime._private_json(baseline_file)
             if baseline.get("environment") != draft["id"]:
                 raise tasks.TaskRefused("ENVIRONMENT_REFERENCES_CHANGED")
             if source["sha256"] == baseline["before"]["sha256"]:
