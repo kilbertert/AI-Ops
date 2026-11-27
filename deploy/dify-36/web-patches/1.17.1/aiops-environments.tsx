@@ -17,6 +17,7 @@ import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from '@/next/navigation'
 import { manage } from '@/service/aiops-management'
+import EnvironmentReleasesPanel from './aiops-environment-releases'
 import OnboardingWizard from './aiops-onboarding-wizard'
 
 type Tenant = { id: string; name: string; enabled: boolean }
@@ -200,7 +201,7 @@ type SiteTask = {
   }
 }
 
-type WorkspaceTab = 'onboard' | 'config' | 'ops'
+type WorkspaceTab = 'onboard' | 'releases' | 'config' | 'ops'
 type TaskFilter = 'all' | 'active' | 'lifecycle' | 'single'
 type BadgeTone = 'success' | 'warning' | 'error' | 'info' | 'neutral'
 
@@ -1399,6 +1400,7 @@ export default function EnvironmentManagement() {
                         activeTasksCount > 0 ? String(activeTasksCount) : '',
                         false,
                       ],
+                      ['releases', '版本与发版', '', false],
                       ['config', '连接配置', '', dirty || Boolean(saved?.registry_changed)],
                       ['ops', '运行与排查', tasks.length > 0 ? String(tasks.length) : '', false],
                     ] as const
@@ -2300,6 +2302,18 @@ export default function EnvironmentManagement() {
                     </section>
                   )}
                 </div>
+              )}
+
+              {/* ================================================================= */}
+              {/* TAB: 版本与发版（Day-2 已上线客户机无损升级、入口同步与安全回滚）   */}
+              {/* ================================================================= */}
+              {!showWizard && activeTab === 'releases' && selected && (
+                <EnvironmentReleasesPanel
+                  environment={selected}
+                  environmentName={draft?.name || selected}
+                  isControl={Boolean(selectedOverview?.is_control || selected === '41')}
+                  onOpenWizard={() => setShowWizard(true)}
+                />
               )}
 
               {/* ================================================================= */}

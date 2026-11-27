@@ -117,6 +117,7 @@ done
 echo "ok: 补丁已落进源（两个标记都在）"
 
 cp "$VERSION_DIR/aiops-environments.tsx" "$WORK/web/app/components/aiops-environments.tsx"
+cp "$VERSION_DIR/aiops-environment-releases.tsx" "$WORK/web/app/components/aiops-environment-releases.tsx"
 cp "$VERSION_DIR/aiops-onboarding-wizard.tsx" "$WORK/web/app/components/aiops-onboarding-wizard.tsx"
 cp "$VERSION_DIR/aiops-management.tsx" "$WORK/web/app/components/aiops-management.tsx"
 cp "$VERSION_DIR/aiops-management.ts" "$WORK/web/service/aiops-management.ts"

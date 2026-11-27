@@ -67,8 +67,14 @@ def _fake_keygen(priv_path: Path, comment: str) -> tuple[str, str]:
 
 def test_bridge_and_dispatch_wizard_action_parity() -> None:
     assert BRIDGE_WIZARD_ACTIONS == wizard_dispatch.SUPPORTED_WIZARD_ACTIONS
-    assert len(BRIDGE_WIZARD_ACTIONS) == 14
-    assert "publish_environment" in BRIDGE_WIZARD_ACTIONS
+    assert len(BRIDGE_WIZARD_ACTIONS) == 18
+    assert {
+        "publish_environment",
+        "release_overview",
+        "release_probe",
+        "environment_upgrade",
+        "environment_rollback",
+    }.issubset(BRIDGE_WIZARD_ACTIONS)
 
 
 def test_wizard_jobs_lifecycle_and_secret_rejection(tmp_path: Path) -> None:
