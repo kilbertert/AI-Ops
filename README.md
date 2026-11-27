@@ -8,7 +8,7 @@
 
 1. **系统架构与术语**：先读 [系统架构](docs/system-architecture.md) 与 [词汇表](GLOSSARY.md)。重点区分 `environment` 四义（部署环境 / 执行环境 / 业务环境 / 接入候选）。
 2. **交付现状与主机名册**：查 [当前交付索引](docs/agents/current-delivery-state.md) 与 [.dev-host.toml](.dev-host.toml)（`41` 网关、`36` Dify 与旁路、`95` 第二环境）；CD 仅覆盖 `deploy/deploy-41.sh`，其余组件手工交付见 [部署索引](deploy/README.md) 与 [手工部署台账](deploy/manual-deploys.md)。
-3. **变更与验证规范**：读 [AGENTS.md](AGENTS.md)、[目录规范](docs/architecture/repository-layout.md#现行目录规则) 与 [验证分工](docs/agents/verification-workflow.md)。
+3. **变更与验证规范**：读 [AGENTS.md](AGENTS.md) 与 [目录规范](docs/architecture/repository-layout.md#现行目录规则)。
 4. **快速定位代码与配置**：环境接入全流程查 [流水线索引](docs/agents/environment-pipeline-map.md)，环境变量与进程归属查 [配置参考](docs/agents/config-reference.md)。
 
 ## 一、系统与入口

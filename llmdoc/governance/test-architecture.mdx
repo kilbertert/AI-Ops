@@ -22,7 +22,6 @@ code:
     - tools/verification/dify_registry_route_proof.py
     - tools/README.md
     - docs/architecture/repository-layout.md
-    - docs/agents/verification-workflow.md
 ---
 
 # 测试架构速查
@@ -71,12 +70,11 @@ code:
 
 姊妹技能 `verify-aiops-client-e2e`（同目录）回答一次性数据根**结构性够不到**的问题——回答面路由全部拒设备令牌（401），所以它的分工相反：用**生产配置**+一个真实会话驱动真实 ASGI 面（默认零写入=默认连 app 都不构造：构造即跑 `recover_interrupted_jobs` 把生产库全部在飞作业标失败，真驱动 ASGI 须先确认零在飞作业再显式 `--accept-live-app`），读生产访问日志把「客户端根本没调」与「调了但失败」分开（两者在用户那里长得一模一样）。UNVERIFIED 永远不是 PASS。两技能边界互补：验服务面用一次性数据根那个，验真实用户/客户端用生产配置这个，不互换。
 
-## 探针与验证分工
+## 探针与验证边界
 
 - 探针退出纪律：0 通过 / 1 有发现 / **2 未收集**（plan-only 不算过）——`tools/README.md`。
 - `tools/experiments/m2_close/`：隔离栈驱动（`run_ic.py`、`m3node/` 真 Java 链路 35 条 LINK 判据、`manifest_parity.py` 跨语言 manifest 检查）——证明装配/协议，**永不**证明业务验收。**这一类永远不能整体删**：它是唯一的真 Java 验证线束（tools/README.md）。
 - 验收判据陷阱：只查输出形状不查路由的判据会假 PASS——路由证明先于形状判定。
-- 分工（`docs/agents/verification-workflow.md`，ADR-0220/0034）：实现者从已确认需求写 oracle（绝不从自己的产出推）；迭代期跑最小证伪检查，收口时完整闸只跑一次；新长期检查需一句话"查什么错、oracle 哪来的、现有检查为何漏"。独立 Hacker=不同会话，自设计攻击输入，"没发现"要附试过的路径与输入才算数；改过候选就成其作者要重新交接。长期套件禁：凑覆盖用例、断言实现自身输出的测试、私有调用顺序锁、同形状冗余叠加。
 
 ## Canonical anchors
 
@@ -85,4 +83,3 @@ code:
 - `tests/test_repository_layout.py`、`test_readme_architecture.py`、`test_runtime_retirement.py`（强制三件套）
 - `.claude/skills/verify-aiops-gateway/SKILL.md`（技能边界）
 - `tools/verification/ci_results.py`（下限执行）
-- `docs/agents/verification-workflow.md`（分工）

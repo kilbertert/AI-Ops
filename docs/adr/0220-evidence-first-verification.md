@@ -1,6 +1,8 @@
 # 220. 实现聚焦功能，独立 Hack 提供反例，长期检查按价值保留
 
-Status: Accepted
+Status: Deprecated
+
+> 2026-11-26 退役说明：独立 Hacker 验证分工在实际使用中净收益为负，现行规则（`docs/agents/verification-workflow.md`）及各入口/提示词中的独立 Hacker 要求已移除；ADR-0229 的容器与凭据隔离安全边界保留。
 
 日期：2026-11-05。用户已确认采用；适用 AI-Ops 的交互式与 AFK 开发。
 
