@@ -1,6 +1,7 @@
 'use client'
 
 import { Button } from '@langgenius/dify-ui/button'
+import { Checkbox } from '@langgenius/dify-ui/checkbox'
 import { Input } from '@langgenius/dify-ui/input'
 import { StatusDot } from '@langgenius/dify-ui/status-dot'
 import { useEffect, useState } from 'react'
@@ -986,7 +987,7 @@ export default function OnboardingWizard({
       </div>
 
       {/* 5 步进度条 */}
-      <nav aria-label="开通步骤" className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-5">
+      <nav aria-label="开通步骤" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
         {STEP_LABELS.map((item) => {
           const active = step === item.id
           const done = step > item.id
@@ -1023,7 +1024,7 @@ export default function OnboardingWizard({
                 >
                   {item.title}
                 </div>
-                <div className="mt-0.5 text-[11px] leading-tight text-text-tertiary">
+                <div className="mt-0.5 text-[10.5px] leading-snug text-text-tertiary">
                   {item.subtitle}
                 </div>
               </div>
@@ -1485,12 +1486,11 @@ export default function OnboardingWizard({
                       onChange={(e) => setAdminMysqlPassword(e.target.value)}
                     />
                   </div>
-                  <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-components-panel-bg/80 px-3 py-2 system-xs-medium text-text-primary">
-                    <input
-                      type="checkbox"
+                  <label className="flex cursor-pointer items-center gap-2.5 rounded-lg bg-components-panel-bg/85 px-3 py-2.5 system-xs-medium text-text-primary">
+                    <Checkbox
                       aria-label="二次确认受限白名单 SQL"
                       checked={confirmDbFix}
-                      onChange={(e) => setConfirmDbFix(e.target.checked)}
+                      onCheckedChange={(value) => setConfirmDbFix(value === true)}
                     />
                     <span>我已核对以上受限白名单 SQL，二次确认授权在引导期自动代执行并复验</span>
                   </label>
@@ -1615,13 +1615,13 @@ export default function OnboardingWizard({
                 >
                   一键装入默认充电试跑 FAQ 模板
                 </Button>
-                <div className="flex items-center gap-2 text-xs text-text-tertiary">
+                <div className="flex items-center gap-2.5 text-xs text-text-tertiary">
                   <span aria-hidden="true" className="i-ri-upload-cloud-2-line size-4 shrink-0" />
                   <input
                     aria-label="上传对客知识库文档"
                     type="file"
                     accept=".md,.txt,.docx,.pdf"
-                    className="w-full text-xs"
+                    className="block w-full cursor-pointer text-xs text-text-secondary file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-divider-regular file:bg-components-button-secondary-bg file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-text-secondary file:transition-colors hover:file:bg-components-button-secondary-bg-hover"
                     onChange={(e) => handleUploadDoc('consumer', e.target.files?.[0] || null)}
                   />
                 </div>
@@ -1641,13 +1641,13 @@ export default function OnboardingWizard({
                 value={operatorKbId}
                 onChange={(e) => setOperatorKbId(e.target.value)}
               />
-              <div className="flex items-center gap-2 rounded-lg border border-dashed border-divider-regular bg-components-panel-bg/80 p-3 text-xs text-text-tertiary">
+              <div className="flex items-center gap-2.5 rounded-lg border border-dashed border-divider-regular bg-components-panel-bg/80 p-3 text-xs text-text-tertiary">
                 <span aria-hidden="true" className="i-ri-upload-cloud-2-line size-4 shrink-0" />
                 <input
                   aria-label="上传管家运维知识库文档"
                   type="file"
                   accept=".md,.txt,.docx,.pdf"
-                  className="w-full text-xs"
+                  className="block w-full cursor-pointer text-xs text-text-secondary file:mr-3 file:cursor-pointer file:rounded-lg file:border file:border-divider-regular file:bg-components-button-secondary-bg file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-text-secondary file:transition-colors hover:file:bg-components-button-secondary-bg-hover"
                   onChange={(e) => handleUploadDoc('operator', e.target.files?.[0] || null)}
                 />
               </div>

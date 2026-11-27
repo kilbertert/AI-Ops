@@ -210,7 +210,8 @@ it('prepares knowledge and its scoped connection from verified task cards', asyn
   })
   await expect.element(screen.getByText('候选知识连接已准备', { exact: true })).toBeVisible()
   await screen.getByRole('button', { name: '读取正式消费者模板' }).click()
-  await screen.getByRole('combobox', { name: '消费者来源模板：same' }).selectOptions('source-a')
+  await screen.getByRole('combobox', { name: '消费者来源模板：same' }).click()
+  await screen.getByRole('option', { name: '正式客服 · v7' }).click()
   await screen.getByRole('button', { name: '准备候选消费者应用：same' }).click()
   expect(calls.at(-1)).toEqual({
     action: 'environment-task',
@@ -517,9 +518,8 @@ it('submits one candidate preparation and restores durable child progress', asyn
   const screen = await render(<EnvironmentManagement />)
   await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
   await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
-  await screen
-    .getByRole('combobox', { name: '候选客服来源版本', exact: true })
-    .selectOptions('source-a')
+  await screen.getByRole('combobox', { name: '候选客服来源版本', exact: true }).click()
+  await screen.getByRole('option', { name: '正式客服 · v7' }).click()
   await screen.getByText(/高级操作与计划校验摘要/).click()
   await screen.getByRole('button', { name: '准备候选：甲租户（same）', exact: true }).click()
   expect(calls.find((body) => body.candidate_plan)).toEqual({
@@ -606,9 +606,8 @@ it('submits cold initial installation only after explicit confirm and reads back
   const screen = await render(<EnvironmentManagement />)
   await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
   await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
-  await screen
-    .getByRole('combobox', { name: '候选客服来源版本', exact: true })
-    .selectOptions('source-a')
+  await screen.getByRole('combobox', { name: '候选客服来源版本', exact: true }).click()
+  await screen.getByRole('option', { name: '正式客服 · v7' }).click()
   await screen.getByText(/高级操作与计划校验摘要/).click()
   const button = screen.getByRole('button', {
     name: '空机初装并准备：甲租户（same）',
@@ -776,9 +775,7 @@ it('requests managed-host verification and shows the collected evidence', async 
     plan_id: plan.id,
   })
   await screen.getByRole('tab', { name: /运行与排查/ }).click()
-  await expect
-    .element(screen.getByText('主机身份验收 · a：已完成', { exact: true }))
-    .toBeVisible()
+  await expect.element(screen.getByText('主机身份验收 · a：已完成', { exact: true })).toBeVisible()
   await expect.element(screen.getByText('现场主机：ecs-2c54', { exact: true })).toBeVisible()
   await expect.element(screen.getByText('服务身份：存在', { exact: true })).toBeVisible()
   await expect
@@ -787,9 +784,7 @@ it('requests managed-host verification and shows the collected evidence', async 
     )
     .toBeVisible()
   await screen.getByRole('button', { name: '刷新目录', exact: true }).click()
-  await expect
-    .element(screen.getByText('主机身份验收 · a：已完成', { exact: true }))
-    .toBeVisible()
+  await expect.element(screen.getByText('主机身份验收 · a：已完成', { exact: true })).toBeVisible()
 })
 
 it('registers an installed candidate with a fresh plan without enabling the tenant', async () => {
@@ -1327,9 +1322,8 @@ it('submits one-click tenant onboarding with validation and keeps explicit human
   const screen = await render(<EnvironmentManagement />)
   await screen.getByRole('button', { name: '配置与制品预检', exact: true }).click()
   await screen.getByRole('button', { name: '选择准备模板', exact: true }).click()
-  await screen
-    .getByRole('combobox', { name: '候选客服来源版本', exact: true })
-    .selectOptions('source-a')
+  await screen.getByRole('combobox', { name: '候选客服来源版本', exact: true }).click()
+  await screen.getByRole('option', { name: '正式客服 · v7' }).click()
   await screen.getByRole('textbox', { name: '一键开通验收案例', exact: true }).fill('case-01')
   await screen.getByRole('button', { name: '一键开通：甲租户（same）', exact: true }).click()
   expect(calls.find((body) => body.onboard_plan)).toEqual({
@@ -1866,7 +1860,7 @@ it('deduplicates hero publish CTA across repeated ready onboards, uses fresh pla
   await screen.getByRole('button', { name: '继续编辑', exact: true }).click()
 })
 
-test('5 步自助开通向导：双模式主机引导、二次确认受限库修复、基建编排、免 JSON 自验与公网终验', async () => {
+it('5 步自助开通向导：双模式主机引导、二次确认受限库修复、基建编排、免 JSON 自验与公网终验', async () => {
   const wizardCalls: Array<{ action: string; payload: Record<string, unknown> }> = []
   vi.stubGlobal(
     'fetch',
@@ -1892,7 +1886,8 @@ test('5 步自助开通向导：双模式主机引导、二次确认受限库修
           return Response.json({
             environment: 'jiejia',
             mode: 'bootstrap_script',
-            one_liner: 'curl -fsSL https://dify.ranlei.work/v1/internal/environment-bootstrap/script/bs_mock | sudo bash',
+            one_liner:
+              'curl -fsSL https://dify.ranlei.work/v1/internal/environment-bootstrap/script/bs_mock | sudo bash',
             single_use: true,
             host: {
               environment: 'jiejia',
@@ -1949,8 +1944,18 @@ test('5 步自助开通向导：双模式主机引导、二次确认受限库修
               nginx_extension_dir: '/www/server/panel/vhost/nginx/extension/api.juxichongdian.cn',
             },
             checks: [
-              { id: 'mysql-grants-upms', category: 'mysql', state: 'blocked', summary: 'UPMS 平台身份库缺少只读表权限：sys_user, sys_user_role, sys_role。' },
-              { id: 'tsdata-connectivity', category: 'tsdata', state: 'passed', summary: '时序服务直连 30888 可达。' },
+              {
+                id: 'mysql-grants-upms',
+                category: 'mysql',
+                state: 'blocked',
+                summary: 'UPMS 平台身份库缺少只读表权限：sys_user, sys_user_role, sys_role。',
+              },
+              {
+                id: 'tsdata-connectivity',
+                category: 'tsdata',
+                state: 'passed',
+                summary: '时序服务直连 30888 可达。',
+              },
             ],
             db_remediation_plan: {
               has_auto_fixable_db_gaps: true,
@@ -1991,7 +1996,12 @@ test('5 步自助开通向导：双模式主机引导、二次确认受限库修
               { step: 'execution_node', state: 'passed' },
               { step: 'cold_install_and_onboard', state: 'passed' },
               { step: 'customer_nginx', state: 'passed' },
-              { step: 'live_probe', state: 'passed', anon_assistant_status: 401, upms_tenant_list_status: 200 },
+              {
+                step: 'live_probe',
+                state: 'passed',
+                anon_assistant_status: 401,
+                upms_tenant_list_status: 200,
+              },
             ],
           })
         }
@@ -2073,7 +2083,9 @@ test('5 步自助开通向导：双模式主机引导、二次确认受限库修
   // Step 2: 自动探测并二次确认受限库修复
   await screen.getByRole('button', { name: '运行自动环境探测与体检' }).click()
   await expect.element(screen.getByText(/GRANT SELECT ON `qumall_upms`.`sys_user`/)).toBeVisible()
-  await expect.element(screen.getByRole('button', { name: '二次确认：自动代执行并复验' })).toBeDisabled()
+  await expect
+    .element(screen.getByRole('button', { name: '二次确认：自动代执行并复验' }))
+    .toBeDisabled()
   await screen.getByText(/我已核对以上受限白名单 SQL/).click()
   await screen.getByRole('button', { name: '二次确认：自动代执行并复验' }).click()
   await screen.getByRole('button', { name: /进入第 3 步/ }).click()
@@ -2092,9 +2104,13 @@ test('5 步自助开通向导：双模式主机引导、二次确认受限库修
 
   // Step 5: 一键正式发布并执行公网 4 项终验与交付回执卡
   await screen.getByRole('button', { name: '一键正式发布并启用租户' }).click()
-  await expect.element(screen.getByText('客户环境与租户已正式启用并同步活跃路由，请执行公网终验！')).toBeVisible()
+  await expect
+    .element(screen.getByText('客户环境与租户已正式启用并同步活跃路由，请执行公网终验！'))
+    .toBeVisible()
   await screen.getByRole('button', { name: '执行公网正式 HTTPS 4 项终验' }).click()
-  await expect.element(screen.getByText(/交付回执卡片 · 捷佳四轮国内充电（公网终验通过）/)).toBeVisible()
+  await expect
+    .element(screen.getByText(/交付回执卡片 · 捷佳四轮国内充电（公网终验通过）/))
+    .toBeVisible()
   await expect.element(screen.getByText(/unconfirmed/)).toBeVisible()
   await expect.element(screen.getByText(/建议客户运维轮换服务器 root 密码/)).toBeVisible()
   await expect.element(screen.getByText(/建议上线后替换为客户官方客服文档/)).toBeVisible()
@@ -2135,9 +2151,20 @@ it('脱敏示例占位符与 Step 4 前置拦截 system(-1)/跨租户 JWT', asyn
             environment: 'acme',
             ready: true,
             state: 'passed',
-            host: { hostname: 'acme-gw', python_minor: '3.12', timezone: 'Asia/Shanghai', nginx_flavor: 'baota', nginx_extension_dir: '/tmp/ext' },
+            host: {
+              hostname: 'acme-gw',
+              python_minor: '3.12',
+              timezone: 'Asia/Shanghai',
+              nginx_flavor: 'baota',
+              nginx_extension_dir: '/tmp/ext',
+            },
             checks: [{ id: 'ok', category: 'mysql', state: 'passed', summary: '全部通过' }],
-            db_remediation_plan: { has_auto_fixable_db_gaps: false, remediation_ids: [], sql_statements: [], confirmation_digest: '' },
+            db_remediation_plan: {
+              has_auto_fixable_db_gaps: false,
+              remediation_ids: [],
+              sql_statements: [],
+              confirmation_digest: '',
+            },
             discovered: {
               tenants: [{ id: '1000000000000000001', name: '示例租户' }],
               healthy_tsdata_url: 'http://127.0.0.1:30888',
@@ -2167,11 +2194,15 @@ it('脱敏示例占位符与 Step 4 前置拦截 system(-1)/跨租户 JWT', asyn
   await screen.getByRole('button', { name: '运行自动环境探测与体检' }).click()
   await screen.getByRole('button', { name: /4\. 知识与自验/ }).click()
 
-  await screen.getByLabelText('临时管家令牌').fill(makeUnsignedJwt({ username: 'system', tenant_id: '-1' }))
+  await screen
+    .getByLabelText('临时管家令牌')
+    .fill(makeUnsignedJwt({ username: 'system', tenant_id: '-1' }))
   await screen.getByRole('button', { name: '一键执行三能力自验（免写 JSON）' }).click()
   await expect.element(screen.getByRole('alert')).toHaveTextContent(/tenant_id=-1/)
 
-  await screen.getByLabelText('临时管家令牌').fill(makeUnsignedJwt({ username: 'other', tenant_id: '999999' }))
+  await screen
+    .getByLabelText('临时管家令牌')
+    .fill(makeUnsignedJwt({ username: 'other', tenant_id: '999999' }))
   await screen.getByRole('button', { name: '一键执行三能力自验（免写 JSON）' }).click()
   await expect.element(screen.getByRole('alert')).toHaveTextContent(/所属租户为 999999/)
 
@@ -2211,7 +2242,10 @@ it('刷新后按环境代号自动恢复服务端进度，并在 Step 5 支持�
             },
           })
         }
-        if (body.wizard_action === 'infra_status' && body.wizard_payload.action === 'infra_provision') {
+        if (
+          body.wizard_action === 'infra_status' &&
+          body.wizard_payload.action === 'infra_provision'
+        ) {
           return Response.json({
             job_id: 'wizjob_0123456789abcdef01234567',
             state: 'completed',
@@ -2228,13 +2262,21 @@ it('刷新后按环境代号自动恢复服务端进度，并在 Step 5 支持�
             steps: [],
           })
         }
-        if (body.wizard_action === 'infra_status' && body.wizard_payload.action === 'publish_environment') {
+        if (
+          body.wizard_action === 'infra_status' &&
+          body.wizard_payload.action === 'publish_environment'
+        ) {
           return Response.json({
             job_id: 'wizjob_fedcba9876543210fedcba98',
             state: 'completed',
             passed: true,
             published: true,
-            result: { published: true, tenant_id: '1000000000000000001', gateway_url: 'https://api.customer.example.com', registry_revision: 29 },
+            result: {
+              published: true,
+              tenant_id: '1000000000000000001',
+              gateway_url: 'https://api.customer.example.com',
+              registry_revision: 29,
+            },
             steps: [{ step: 'enable_registry', state: 'passed' }],
           })
         }
@@ -2261,15 +2303,24 @@ it('刷新后按环境代号自动恢复服务端进度，并在 Step 5 支持�
   // 模拟浏览器刷新前的非敏感草稿（绝无口令/令牌）
   window.sessionStorage.setItem(
     'aiops-onboarding-wizard-draft:v1',
-    JSON.stringify({ step: 2, envId: 'acme', customerName: '示例客户', apiDomain: 'api.customer.example.com' }),
+    JSON.stringify({
+      step: 2,
+      envId: 'acme',
+      customerName: '示例客户',
+      apiDomain: 'api.customer.example.com',
+    }),
   )
 
   const screen = await render(<EnvironmentManagement />)
   await screen.getByRole('button', { name: '5 步自助开通向导' }).click()
-  await expect.element(screen.getByText(/已从服务端恢复环境 acme 的当前开通进度（第 5 步）/)).toBeVisible()
+  await expect
+    .element(screen.getByText(/已从服务端恢复环境 acme 的当前开通进度（第 5 步）/))
+    .toBeVisible()
 
   await screen.getByRole('textbox', { name: '发布后 C 端测试手机号' }).fill('13900009999')
-  await screen.getByLabelText('发布后临时管家令牌').fill(makeUnsignedJwt({ username: 'op1', tenant_id: '1000000000000000001' }))
+  await screen
+    .getByLabelText('发布后临时管家令牌')
+    .fill(makeUnsignedJwt({ username: 'op1', tenant_id: '1000000000000000001' }))
   await screen.getByRole('button', { name: '执行公网正式 HTTPS 4 项终验' }).click()
 
   await expect.element(screen.getByText('全量 4 项通过')).toBeVisible()
@@ -2341,7 +2392,10 @@ it('点击恢复服务端进度时覆盖默认选中环境的旧预填字段', a
             },
           })
         }
-        if (body.wizard_action === 'infra_status' && body.wizard_payload.action === 'infra_provision') {
+        if (
+          body.wizard_action === 'infra_status' &&
+          body.wizard_payload.action === 'infra_provision'
+        ) {
           return Response.json({
             job_id: 'wizjob_0123456789abcdef01234567',
             state: 'completed',
@@ -2358,7 +2412,10 @@ it('点击恢复服务端进度时覆盖默认选中环境的旧预填字段', a
             steps: [],
           })
         }
-        if (body.wizard_action === 'infra_status' && body.wizard_payload.action === 'publish_environment') {
+        if (
+          body.wizard_action === 'infra_status' &&
+          body.wizard_payload.action === 'publish_environment'
+        ) {
           return Response.json({
             job_id: 'wizjob_fedcba9876543210fedcba98',
             state: 'completed',
@@ -2382,10 +2439,14 @@ it('点击恢复服务端进度时覆盖默认选中环境的旧预填字段', a
   await screen.getByRole('button', { name: '5 步自助开通向导' }).click()
   await screen.getByRole('textbox', { name: '环境代号' }).fill('acme')
   await screen.getByRole('button', { name: '恢复服务端进度' }).click()
-  await expect.element(screen.getByText(/已从服务端恢复环境 acme 的当前开通进度（第 5 步）/)).toBeVisible()
+  await expect
+    .element(screen.getByText(/已从服务端恢复环境 acme 的当前开通进度（第 5 步）/))
+    .toBeVisible()
   await expect.element(screen.getByText(/https:\/\/api\.customer\.example\.com/)).toBeVisible()
 
-  const draft = JSON.parse(window.sessionStorage.getItem('aiops-onboarding-wizard-draft:v1') || '{}')
+  const draft = JSON.parse(
+    window.sessionStorage.getItem('aiops-onboarding-wizard-draft:v1') || '{}',
+  )
   expect(draft.envId).toBe('acme')
   expect(draft.customerName).toBe('示例客户')
   expect(draft.apiDomain).toBe('api.customer.example.com')
@@ -2515,7 +2576,8 @@ it('版本与发版页：支持控制面 41 守卫、Nginx 入口差异预览、
                 ingress_routes: ['GET /v1/faq/catalog', 'POST /v1/health-report-jobs'],
                 ingress_diff: {
                   changed: curVer !== '1.43.20+bbbbbbbbbbbb',
-                  added_routes: curVer === '1.43.20+bbbbbbbbbbbb' ? [] : ['POST /v1/health-report-jobs'],
+                  added_routes:
+                    curVer === '1.43.20+bbbbbbbbbbbb' ? [] : ['POST /v1/health-report-jobs'],
                   removed_routes: [],
                 },
                 pool_python_minors: ['3.12'],
@@ -2532,7 +2594,8 @@ it('版本与发版页：支持控制面 41 守卫、Nginx 入口差异预览、
               ingress_routes: ['GET /v1/faq/catalog', 'POST /v1/health-report-jobs'],
               ingress_diff: {
                 changed: curVer !== '1.43.20+bbbbbbbbbbbb',
-                added_routes: curVer === '1.43.20+bbbbbbbbbbbb' ? [] : ['POST /v1/health-report-jobs'],
+                added_routes:
+                  curVer === '1.43.20+bbbbbbbbbbbb' ? [] : ['POST /v1/health-report-jobs'],
                 removed_routes: [],
               },
               pool_python_minors: ['3.12'],
@@ -2616,19 +2679,26 @@ it('版本与发版页：支持控制面 41 守卫、Nginx 入口差异预览、
   await expect.element(screen.getByText('控制面 41 发布说明')).toBeVisible()
   expect(screen.getByRole('button', { name: '一键无损滚动升级' }).query()).toBeNull()
 
-  // 切换捷佳客户 -> 预览 Nginx 路由变更 -> 一键升级 -> 一键回滚
+  // 切换捷佳客户 -> 打开受控版本选择器 -> 预览 Nginx 路由变更 -> 一键升级 -> 一键回滚
   await screen.getByRole('button', { name: '捷佳客户（jiejia）' }).click()
   await expect.element(screen.getByText(/1\.43\.19\+3ad573eca3eb/)).toBeVisible()
+  await screen.getByRole('combobox', { name: '目标官方正式版本' }).click()
+  await expect.element(screen.getByRole('listbox', { name: '官方正式版本列表' })).toBeVisible()
+  await screen.getByRole('option', { name: /v1\.43\.20/ }).click()
   await expect.element(screen.getByText(/POST \/v1\/health-report-jobs/)).toBeVisible()
 
   await screen.getByRole('button', { name: '一键无损滚动升级' }).click()
   await screen.getByRole('button', { name: '确认执行升级' }).click()
-  await expect.element(screen.getByText(/升级完成：1\.43\.20\+bbbbbbbbbbbb 已就绪且公网冒烟通过/)).toBeVisible()
+  await expect
+    .element(screen.getByText(/升级完成：1\.43\.20\+bbbbbbbbbbbb 已就绪且公网冒烟通过/))
+    .toBeVisible()
   await expect.element(screen.getByText(/配置与数据零触碰核验：通过（SHA-256 一致）/)).toBeVisible()
 
   await screen.getByRole('button', { name: '一键回滚至上一版本' }).click()
   await screen.getByRole('button', { name: '确认执行回滚' }).click()
-  await expect.element(screen.getByText(/已安全回滚至上一版本 1\.43\.19\+3ad573eca3eb/)).toBeVisible()
+  await expect
+    .element(screen.getByText(/已安全回滚至上一版本 1\.43\.19\+3ad573eca3eb/))
+    .toBeVisible()
   expect(releaseCalls.map((c) => c.action)).toContain('environment_upgrade')
   expect(releaseCalls.map((c) => c.action)).toContain('environment_rollback')
 })
