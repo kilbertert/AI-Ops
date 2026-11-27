@@ -1,0 +1,69 @@
+name: Cleanup Closed PR Branch
+
+# PR 未合入而关闭时（如被新 PR 替代），安全删除同仓任务分支；合入分支由仓库设置 delete_branch_on_merge 自动删除。
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: cleanup-closed-pr-branch-${{ github.event.pull_request.head.ref }}
+  cancel-in-progress: false
+
+jobs:
+  delete-branch:
+    if: >-
+      github.event.pull_request.merged == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Safely delete unmerged closed PR head branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HEAD_REF" ] || [ "$HEAD_REF" = "$DEFAULT_BRANCH" ]; then
+            echo "Refusing to delete empty or default branch: ${HEAD_REF:-<empty>}"
+            exit 0
+          fi
+          case "$HEAD_REF" in
+            main|master|release/*|standby/*)
+              echo "Refusing to delete protected branch: $HEAD_REF"
+              exit 0
+              ;;
+          esac
+
+          encoded_head=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${OWNER}:${HEAD_REF}")
+          encoded_ref=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="/"))' "$HEAD_REF")
+
+          open_count=$(gh api "repos/${REPO}/pulls?state=open&head=${encoded_head}" --jq 'length')
+          if [ "$open_count" != "0" ]; then
+            echo "Branch still has open PR(s) (${open_count}); skipping delete: $HEAD_REF"
+            exit 0
+          fi
+
+          if ! current_sha=$(gh api "repos/${REPO}/git/ref/heads/${encoded_ref}" --jq '.object.sha' 2>"/tmp/gh-ref-err.txt"); then
+            if grep -qE 'HTTP 404|Not Found' /tmp/gh-ref-err.txt; then
+              echo "Branch already absent on origin: $HEAD_REF"
+              exit 0
+            fi
+            cat /tmp/gh-ref-err.txt >&2
+            exit 1
+          fi
+
+          if [ "$current_sha" != "$HEAD_SHA" ]; then
+            echo "Branch tip moved (${current_sha} != ${HEAD_SHA}); skipping delete: $HEAD_REF"
+            exit 0
+          fi
+
+          gh api -X DELETE "repos/${REPO}/git/refs/heads/${encoded_ref}"
+          echo "Deleted closed unmerged PR branch: $HEAD_REF"
