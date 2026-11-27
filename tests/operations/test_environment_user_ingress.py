@@ -55,6 +55,7 @@ _spec.loader.exec_module(_h5)
 _IDS = {
     "{qa_id}": "qa_0123456789abcdef0123456789abcdef",
     "{conversation_id}": "conv_0123456789abcdef0123456789abcdef",
+    "{job_id}": "hrj_0123456789abcdef0123456789abcdef",
     "{signed_id}": "media_Abcdefghijklmnopqrstuvwxyz012_-9.0123456789abcdef01234567",
 }
 
@@ -335,11 +336,14 @@ def test_piece_paths_never_reach_access_log_but_company_paths_do(ingress) -> Non
     ingress("GET", MEDIA)
     ingress("GET", "/v1/faq/catalog", CONSUMER)
     ingress("POST", "/v1/assistant/questions", OPERATOR)
+    ingress("POST", "/v1/health-report-jobs", CONSUMER)
+    ingress("GET", "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef", CONSUMER)
     ingress("GET", "/company-legacy-path")  # catch-all —— 公司路径替身
     time.sleep(0.2)  # access_log 在请求结束时落盘
     log = ingress.access_log.read_text("utf-8")
     assert "media_" not in log, f"签名 ID 进了 access_log：{log!r}"
     assert "faq" not in log and "assistant" not in log, "本片路径进了 access_log"
+    assert "health-report-jobs" not in log and "hrj_" not in log, "健康报告路径进了 access_log"
     assert "/company-legacy-path" in log, "公司路径应照常记录（片内关日志只关本片）"
 
 
@@ -357,6 +361,10 @@ def test_piece_paths_never_reach_access_log_but_company_paths_do(ingress) -> Non
         ("DELETE", "/v1/conversations"),
         ("PUT", "/v1/conversations/conv_0123456789abcdef0123456789abcdef"),
         ("POST", "/v1/conversations/conv_0123456789abcdef0123456789abcdef"),
+        ("GET", "/v1/health-report-jobs"),
+        ("DELETE", "/v1/health-report-jobs"),
+        ("POST", "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef"),
+        ("DELETE", "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef"),
     ],
 )
 def test_undeclared_method_on_exposed_path_is_405_or_404(ingress, method: str, path: str) -> None:
@@ -376,7 +384,6 @@ def test_management_and_internal_paths_never_forwarded(ingress) -> None:
         ("GET", "/v1/assistant/starters"),
         ("GET", "/v1/shortcuts"),
         ("POST", "/v1/conversations/conv_0123456789abcdef0123456789abcdef/active-order"),
-        ("GET", "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef"),
     ]:
         status, body = ingress(method, path, CONSUMER)
         assert status in (404, 405), f"{method} {path} 泄漏到上游：{status}"
@@ -399,6 +406,11 @@ def test_id_prefix_shape_guard_rejects_malformed_and_suffixed(ingress) -> None:
         "/v1/conversations/",
         "/v1/conversations/conv_0123456789abcdef0123456789abcde",
         "/v1/conversations/conv_0123456789abcdef0123456789abcdef/",
+        "/v1/health-report-jobs/",
+        "/v1/health-report-jobs/hrj_0123",
+        "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef/",
+        "/v1/health-report-jobs/hrj_0123456789abcdef0123456789abcdef/cancel",
+        "/v1/health-report-jobs/nothrj_0123456789abcdef0123456789abcdef",
     ]:
         status, body = ingress("GET", path, CONSUMER)
         assert status == 404, f"{path} 应被形状闸 404，得到 {status}"

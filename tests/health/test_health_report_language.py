@@ -351,3 +351,17 @@ def test_no_upstream_content_means_no_reported_value() -> None:
     report = build_minimal_health_report(_Sources([order]), "O-1", SafetySettings(), "en")
     indicator = next(i for i in report["indicators"] if i["code"] == "stop_reason")
     assert indicator["reported_value"] is None
+
+
+@pytest.mark.parametrize("language", _LANGS)
+def test_gun_temperature_curve_label_is_localized_without_cjk_leak(language: str) -> None:
+    """`temperature` 回退曲线为充电枪温度（11 语完整且非中文无汉字泄漏）。"""
+    from aiops_diagnostics.common.i18n import NON_CHINESE_LANGUAGES, chinese_leak
+    from aiops_diagnostics.health.health_report_copy import curve_name
+
+    label = curve_name(language, "temperature")
+    assert label
+    if language in NON_CHINESE_LANGUAGES:
+        assert chinese_leak(label) == "", label
+    assert HEALTH_CURVE_NAMES["zh"]["temperature"] == "充电枪温度"
+    assert HEALTH_CURVE_NAMES["en"]["temperature"] == "Charger gun temperature"
