@@ -21,6 +21,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -662,54 +663,48 @@ def run_live_self_validation(
     cases = cases_payload.get("cases") or {}
     caller = http_caller or public_smoke._default_http_caller
 
-    c_res = public_smoke._poll_formal_qa(
-        caller,
-        base,
-        {"third-session": consumer_session, "tenant-id": tid},
-        str((cases.get("consumer") or {}).get("question") or ""),
-        timeout_seconds=90.0,
-        poll_interval_seconds=2.0,
-        sleep_fn=sleep_fn,
-    )
     op_headers = {
         "Authorization": f"Bearer {operator_token}",
         "X-Business-Entry": "operator",
         "tenant-id": tid,
     }
-    o_res = public_smoke._poll_formal_qa(
-        caller,
-        base,
-        op_headers,
-        str((cases.get("order") or {}).get("question") or ""),
-        timeout_seconds=90.0,
-        poll_interval_seconds=2.0,
-        sleep_fn=sleep_fn,
-    )
-    d_res = public_smoke._poll_formal_qa(
-        caller,
-        base,
-        op_headers,
-        str((cases.get("offline") or {}).get("question") or ""),
-        timeout_seconds=90.0,
-        poll_interval_seconds=2.0,
-        sleep_fn=sleep_fn,
-    )
+    probes = {
+        "consumer": (
+            {"third-session": consumer_session, "tenant-id": tid},
+            str((cases.get("consumer") or {}).get("question") or ""),
+        ),
+        "order": (
+            op_headers,
+            str((cases.get("order") or {}).get("question") or ""),
+        ),
+        "offline": (
+            op_headers,
+            str((cases.get("offline") or {}).get("question") or ""),
+        ),
+    }
+
+    def _run_probe(hdrs: dict[str, str], question: str) -> dict[str, Any]:
+        return public_smoke._poll_formal_qa(
+            caller,
+            base,
+            hdrs,
+            question,
+            timeout_seconds=90.0,
+            poll_interval_seconds=2.0,
+            sleep_fn=sleep_fn,
+        )
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {key: pool.submit(_run_probe, hdrs, q) for key, (hdrs, q) in probes.items()}
+        results = {key: futures[key].result() for key in ("consumer", "order", "offline")}
+
     return {
         "capabilities": {
-            "consumer": {
-                "state": "passed" if c_res.get("passed") else "failed",
-                "run_id": str(c_res.get("qa_id") or ""),
-                "reason": str(c_res.get("reason") or ""),
-            },
-            "order": {
-                "state": "passed" if o_res.get("passed") else "failed",
-                "run_id": str(o_res.get("qa_id") or ""),
-                "reason": str(o_res.get("reason") or ""),
-            },
-            "offline": {
-                "state": "passed" if d_res.get("passed") else "failed",
-                "run_id": str(d_res.get("qa_id") or ""),
-                "reason": str(d_res.get("reason") or ""),
-            },
+            key: {
+                "state": "passed" if results[key].get("passed") else "failed",
+                "run_id": str(results[key].get("qa_id") or ""),
+                "reason": str(results[key].get("reason") or ""),
+            }
+            for key in ("consumer", "order", "offline")
         }
     }
