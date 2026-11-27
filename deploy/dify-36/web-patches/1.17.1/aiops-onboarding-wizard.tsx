@@ -3,11 +3,13 @@
 import { Button } from '@langgenius/dify-ui/button'
 import { Input } from '@langgenius/dify-ui/input'
 import { StatusDot } from '@langgenius/dify-ui/status-dot'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { manage } from '@/service/aiops-management'
 
 type WizardStep = 1 | 2 | 3 | 4 | 5
 type HostEnrollMode = 'ephemeral_password' | 'bootstrap_script'
+
+export const WIZARD_DRAFT_STORAGE_KEY = 'aiops-onboarding-wizard-draft:v1'
 
 type HostView = {
   environment: string
@@ -71,6 +73,16 @@ type InfraResult = {
   consumer_kb_id?: string
   operator_kb_id?: string
   tenant_id?: string
+  gateway_url?: string
+  request?: {
+    egress_ip?: string
+    api_domain?: string
+    gateway_url?: string
+    tenant_id?: string
+    tenant_name?: string
+    customer_name?: string
+    gateway_internal_addr?: string
+  }
   steps: Array<{
     step: string
     state: string
@@ -85,10 +97,83 @@ type PublishResult = {
   state?: string
   environment?: string
   tenant_id?: string
+  gateway_url?: string
   passed?: boolean
   published?: boolean
   failed_step?: string
+  request?: {
+    tenant_id?: string
+    tenant_name?: string
+    customer_name?: string
+    gateway_url?: string
+  }
+  result?: {
+    published?: boolean
+    tenant_id?: string
+    gateway_url?: string
+    registry_revision?: number
+  }
   steps?: Array<{ step: string; state: string; reason?: string }>
+}
+
+type WizardNonSecretDraft = {
+  step: WizardStep
+  customerName: string
+  envId: string
+  serverIp: string
+  apiDomain: string
+  adminDomain: string
+  internalGateway: string
+  sshPort: string
+  sshUser: string
+  enrollMode: HostEnrollMode
+  selectedTenantId: string
+  selectedTenantName: string
+  consumerKbId: string
+  operatorKbId: string
+  starterInstalled: boolean
+  orderNo: string
+  deviceId: string
+  consumerOrderNo: string
+}
+
+export function checkOperatorTokenTenant(rawToken: string, expectedTenantId: string): string {
+  const cleaned = rawToken.trim().replace(/^Bearer\s+/i, '').trim()
+  if (!cleaned) return ''
+  const parts = cleaned.split('.')
+  if (parts.length !== 3 || !parts[1]) return ''
+  try {
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padLen = (4 - (b64.length % 4)) % 4
+    const decoded = atob(b64 + '='.repeat(padLen))
+    const claims = JSON.parse(decoded) as Record<string, unknown>
+    if (!claims || typeof claims !== 'object') return ''
+    const rawTid = claims.tenant_id ?? claims.tenantId
+    if (rawTid === undefined || rawTid === null || String(rawTid).trim() === '') return ''
+    const tokenTid = String(rawTid).trim()
+    if (tokenTid === '-1') {
+      return '当前令牌属于系统超级管理员（tenant_id=-1），将被客户侧网关拦截；请改用目标业务租户下的管家账号登录客户后台后再提取令牌。'
+    }
+    const targetTid = expectedTenantId.trim()
+    if (targetTid && tokenTid !== targetTid) {
+      return `当前令牌所属租户为 ${tokenTid}，与选定目标租户 ${targetTid} 不一致；请切换为目标租户账号后再提取令牌。`
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
+function readSavedDraft(): Partial<WizardNonSecretDraft> | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(WIZARD_DRAFT_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? (parsed as Partial<WizardNonSecretDraft>) : null
+  } catch {
+    return null
+  }
 }
 
 function arrayBufferToBase64(buf: ArrayBuffer): string {
@@ -126,6 +211,7 @@ type SmokeResult = {
   gateway_url: string
   tenant_id: string
   passed: boolean
+  operator_session_revoked?: boolean
   checks: Array<{
     id: string
     passed: boolean
@@ -150,7 +236,7 @@ const STEP_LABELS: Array<{ id: WizardStep; title: string; subtitle: string }> = 
   { id: 2, title: '2. 体检与修复', subtitle: '自动发现 · 二次确认修库' },
   { id: 3, title: '3. 基建与部署', subtitle: '制品池 · 白名单 · Nginx' },
   { id: 4, title: '4. 知识与自验', subtitle: '传文档 · 免 JSON 三验证' },
-  { id: 5, title: '5. 发布与终验', subtitle: '公网 4 项冒烟 · 交付回执' },
+  { id: 5, title: '5. 发布与终验', subtitle: '公网冒烟 · 交付回执' },
 ]
 
 export default function OnboardingWizard({
@@ -161,21 +247,27 @@ export default function OnboardingWizard({
   onOpenAdvancedConfig,
   onOpenLegacyOnboard,
 }: OnboardingWizardProps) {
-  const [step, setStep] = useState<WizardStep>(1)
+  const [savedDraft] = useState<Partial<WizardNonSecretDraft> | null>(() => readSavedDraft())
+
+  const [step, setStep] = useState<WizardStep>(
+    savedDraft?.step && [1, 2, 3, 4, 5].includes(savedDraft.step) ? savedDraft.step : 1,
+  )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
-  // Step 1: 运维手里真实的 5 行输入
-  const [customerName, setCustomerName] = useState(initialName)
-  const [envId, setEnvId] = useState(initialEnvironment)
-  const [serverIp, setServerIp] = useState('')
-  const [apiDomain, setApiDomain] = useState(initialApiDomain)
-  const [adminDomain, setAdminDomain] = useState('')
-  const [internalGateway, setInternalGateway] = useState('')
-  const [sshPort, setSshPort] = useState('22')
-  const [sshUser, setSshUser] = useState('root')
-  const [enrollMode, setEnrollMode] = useState<HostEnrollMode>('ephemeral_password')
+  // Step 1: 运维手里真实的 5 行输入（只保存非敏感字段到 sessionStorage 以支持刷新恢复）
+  const [customerName, setCustomerName] = useState(savedDraft?.customerName || initialName)
+  const [envId, setEnvId] = useState(savedDraft?.envId || initialEnvironment)
+  const [serverIp, setServerIp] = useState(savedDraft?.serverIp || '')
+  const [apiDomain, setApiDomain] = useState(savedDraft?.apiDomain || initialApiDomain)
+  const [adminDomain, setAdminDomain] = useState(savedDraft?.adminDomain || '')
+  const [internalGateway, setInternalGateway] = useState(savedDraft?.internalGateway || '')
+  const [sshPort, setSshPort] = useState(savedDraft?.sshPort || '22')
+  const [sshUser, setSshUser] = useState(savedDraft?.sshUser || 'root')
+  const [enrollMode, setEnrollMode] = useState<HostEnrollMode>(
+    savedDraft?.enrollMode === 'bootstrap_script' ? 'bootstrap_script' : 'ephemeral_password',
+  )
   const [rootPassword, setRootPassword] = useState('')
   const [callbackBaseUrl, setCallbackBaseUrl] = useState('https://api.mall.qushiyun.com')
   const [bootstrapOneLiner, setBootstrapOneLiner] = useState('')
@@ -183,8 +275,8 @@ export default function OnboardingWizard({
 
   // Step 2: 自动探测与受限库修复（所有数据库/Redis 口令仅内存瞬时传递，用完即清空）
   const [discovery, setDiscovery] = useState<DiscoveryReport | null>(null)
-  const [selectedTenantId, setSelectedTenantId] = useState('')
-  const [selectedTenantName, setSelectedTenantName] = useState('')
+  const [selectedTenantId, setSelectedTenantId] = useState(savedDraft?.selectedTenantId || '')
+  const [selectedTenantName, setSelectedTenantName] = useState(savedDraft?.selectedTenantName || '')
   const [mysqlHost, setMysqlHost] = useState('')
   const [mysqlPort, setMysqlPort] = useState('3306')
   const [mysqlUser, setMysqlUser] = useState('aiops_ro')
@@ -204,22 +296,25 @@ export default function OnboardingWizard({
   const [infraResult, setInfraResult] = useState<InfraResult | null>(null)
 
   // Step 4: 内置知识库上传与免 JSON 自验
-  const [consumerKbId, setConsumerKbId] = useState('')
-  const [operatorKbId, setOperatorKbId] = useState('')
-  const [starterInstalled, setStarterInstalled] = useState(false)
+  const [consumerKbId, setConsumerKbId] = useState(savedDraft?.consumerKbId || '')
+  const [operatorKbId, setOperatorKbId] = useState(savedDraft?.operatorKbId || '')
+  const [starterInstalled, setStarterInstalled] = useState(Boolean(savedDraft?.starterInstalled))
   const [consumerDocStatus, setConsumerDocStatus] = useState('')
   const [operatorDocStatus, setOperatorDocStatus] = useState('')
-  const [orderNo, setOrderNo] = useState('')
-  const [deviceId, setDeviceId] = useState('')
-  const [consumerOrderNo, setConsumerOrderNo] = useState('')
+  const [orderNo, setOrderNo] = useState(savedDraft?.orderNo || '')
+  const [deviceId, setDeviceId] = useState(savedDraft?.deviceId || '')
+  const [consumerOrderNo, setConsumerOrderNo] = useState(savedDraft?.consumerOrderNo || '')
   const [consumerPhone, setConsumerPhone] = useState('')
   const [consumerCode, setConsumerCode] = useState('8888')
   const [ephemeralOpToken, setEphemeralOpToken] = useState('')
   const [selfValidation, setSelfValidation] = useState<SelfValidationResult | null>(null)
 
-  // Step 5: 正式发布与公网 HTTPS 4 项冒烟
+  // Step 5: 正式发布与公网 HTTPS 终验（可选填入临时凭据跑满 4 项）
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null)
   const [smokeResult, setSmokeResult] = useState<SmokeResult | null>(null)
+  const [smokeConsumerPhone, setSmokeConsumerPhone] = useState('')
+  const [smokeConsumerCode, setSmokeConsumerCode] = useState('8888')
+  const [smokeOperatorToken, setSmokeOperatorToken] = useState('')
 
   const cleanEnv = envId.trim().toLowerCase()
   const gatewayHttpsUrl = apiDomain.trim()
@@ -227,6 +322,190 @@ export default function OnboardingWizard({
       ? apiDomain.trim()
       : `https://${apiDomain.trim()}`
     : ''
+
+  // 非敏感进度草稿同步到 sessionStorage（严禁写入任何口令、手机号、验证码或令牌）
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const hasAnyInput = Boolean(
+        cleanEnv || customerName.trim() || serverIp.trim() || apiDomain.trim() || selectedTenantId.trim(),
+      )
+      if (!hasAnyInput) {
+        window.sessionStorage.removeItem(WIZARD_DRAFT_STORAGE_KEY)
+        return
+      }
+      const draftDoc: WizardNonSecretDraft = {
+        step,
+        customerName,
+        envId,
+        serverIp,
+        apiDomain,
+        adminDomain,
+        internalGateway,
+        sshPort,
+        sshUser,
+        enrollMode,
+        selectedTenantId,
+        selectedTenantName,
+        consumerKbId,
+        operatorKbId,
+        starterInstalled,
+        orderNo,
+        deviceId,
+        consumerOrderNo,
+      }
+      window.sessionStorage.setItem(WIZARD_DRAFT_STORAGE_KEY, JSON.stringify(draftDoc))
+    } catch {
+      // sessionStorage 不可用时静默降级
+    }
+  }, [
+    step,
+    customerName,
+    envId,
+    serverIp,
+    apiDomain,
+    adminDomain,
+    internalGateway,
+    sshPort,
+    sshUser,
+    enrollMode,
+    selectedTenantId,
+    selectedTenantName,
+    consumerKbId,
+    operatorKbId,
+    starterInstalled,
+    orderNo,
+    deviceId,
+    consumerOrderNo,
+    cleanEnv,
+  ])
+
+  async function hydrateFromServer(targetEnvRaw: string, options?: { silent?: boolean }) {
+    const target = targetEnvRaw.trim().toLowerCase()
+    if (!target) {
+      if (!options?.silent) setError('请先填写环境代号后再恢复服务端进度')
+      return
+    }
+    if (!options?.silent) {
+      setError('')
+      setNotice('')
+      setBusy(true)
+    }
+    try {
+      const hostRes = (await manage('environment-wizard', {
+        wizard_action: 'host_status',
+        wizard_payload: { environment: target },
+      })) as { enrolled?: boolean; host?: HostView | null }
+
+      let targetStep: WizardStep = 1
+      if (hostRes?.host) {
+        setEnrolledHost(hostRes.host)
+        if (hostRes.host.address) setServerIp((prev) => prev || hostRes.host!.address)
+        if (hostRes.host.ssh_port) setSshPort(String(hostRes.host.ssh_port))
+        if (hostRes.host.ssh_user) setSshUser(hostRes.host.ssh_user)
+        if (hostRes.enrolled) targetStep = 2
+      }
+
+      const infraRes = (await manage('environment-wizard', {
+        wizard_action: 'infra_status',
+        wizard_payload: { environment: target, action: 'infra_provision' },
+      })) as InfraResult
+      if (infraRes && (infraRes.job_id || infraRes.provisioned || (infraRes.steps?.length ?? 0) > 0)) {
+        setInfraResult(infraRes)
+        if (infraRes.consumer_kb_id) setConsumerKbId(infraRes.consumer_kb_id)
+        if (infraRes.operator_kb_id) setOperatorKbId(infraRes.operator_kb_id)
+        const req = infraRes.request || {}
+        const tid = infraRes.tenant_id || req.tenant_id || ''
+        if (tid) setSelectedTenantId((prev) => prev || tid)
+        if (req.tenant_name) setSelectedTenantName((prev) => prev || req.tenant_name || '')
+        if (req.customer_name) setCustomerName((prev) => prev || req.customer_name || '')
+        if (req.api_domain) setApiDomain((prev) => prev || req.api_domain || '')
+        if (req.gateway_internal_addr) setInternalGateway((prev) => prev || req.gateway_internal_addr || '')
+        if (infraRes.passed) targetStep = Math.max(targetStep, 4) as WizardStep
+        else targetStep = Math.max(targetStep, 3) as WizardStep
+      }
+
+      const pubRes = (await manage('environment-wizard', {
+        wizard_action: 'infra_status',
+        wizard_payload: { environment: target, action: 'publish_environment' },
+      })) as PublishResult
+      if (pubRes && (pubRes.job_id || pubRes.published || pubRes.result?.published)) {
+        setPublishResult(pubRes)
+        const pubReq = pubRes.request || {}
+        const pubTid = pubRes.tenant_id || pubRes.result?.tenant_id || pubReq.tenant_id || ''
+        if (pubTid) setSelectedTenantId((prev) => prev || pubTid)
+        if (pubReq.tenant_name) setSelectedTenantName((prev) => prev || pubReq.tenant_name || '')
+        if (pubReq.customer_name) setCustomerName((prev) => prev || pubReq.customer_name || '')
+        const gwUrl = pubRes.gateway_url || pubRes.result?.gateway_url || pubReq.gateway_url || ''
+        if (gwUrl) setApiDomain((prev) => prev || gwUrl.replace(/^https?:\/\//, ''))
+        if (pubRes.passed || pubRes.published || pubRes.result?.published) {
+          targetStep = 5
+        }
+      }
+
+      setStep(targetStep)
+      if (!options?.silent || targetStep > 1) {
+        setNotice(`已从服务端恢复环境 ${target} 的当前开通进度（第 ${targetStep} 步）`)
+      }
+    } catch (e) {
+      if (!options?.silent) {
+        setError(e instanceof Error ? e.message : '恢复服务端进度失败，请稍后重试')
+      }
+    } finally {
+      if (!options?.silent) setBusy(false)
+    }
+  }
+
+  // 若页面刷新前正在填写某一环境（sessionStorage 含 envId），挂载时自动向服务端回读真实进度
+  useEffect(() => {
+    const draftEnv = (savedDraft?.envId || '').trim()
+    if (!draftEnv) return
+    void hydrateFromServer(draftEnv, { silent: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function handleResetWizard() {
+    if (typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.removeItem(WIZARD_DRAFT_STORAGE_KEY)
+      } catch {
+        // 忽略存储异常
+      }
+    }
+    setStep(1)
+    setError('')
+    setNotice('已清空向导本地草稿，可录入新客户环境')
+    setCustomerName('')
+    setEnvId('')
+    setServerIp('')
+    setApiDomain('')
+    setAdminDomain('')
+    setInternalGateway('')
+    setSshPort('22')
+    setSshUser('root')
+    setRootPassword('')
+    setBootstrapOneLiner('')
+    setEnrolledHost(null)
+    setDiscovery(null)
+    setSelectedTenantId('')
+    setSelectedTenantName('')
+    setConsumerKbId('')
+    setOperatorKbId('')
+    setStarterInstalled(false)
+    setConsumerDocStatus('')
+    setOperatorDocStatus('')
+    setOrderNo('')
+    setDeviceId('')
+    setConsumerOrderNo('')
+    setConsumerPhone('')
+    setEphemeralOpToken('')
+    setSelfValidation(null)
+    setInfraResult(null)
+    setPublishResult(null)
+    setSmokeResult(null)
+    setSmokeConsumerPhone('')
+    setSmokeOperatorToken('')
+  }
 
   async function callWizard(wizard_action: string, wizard_payload: Record<string, unknown>) {
     setError('')
@@ -505,6 +784,11 @@ export default function OnboardingWizard({
       setError('请先确认租户与自动推荐的验收样本（订单号/离线设备号/C端订单号）')
       return
     }
+    const tokenWarning = checkOperatorTokenTenant(ephemeralOpToken, selectedTenantId)
+    if (tokenWarning) {
+      setError(tokenWarning)
+      return
+    }
     const opTok = ephemeralOpToken
     const phone = consumerPhone
     const code = consumerCode
@@ -574,11 +858,31 @@ export default function OnboardingWizard({
       setError('请先确认 HTTPS API 域名与目标租户 ID')
       return
     }
-    const res = (await callWizard('post_publish_smoke', {
+    if (smokeOperatorToken.trim()) {
+      const tokenWarning = checkOperatorTokenTenant(smokeOperatorToken, selectedTenantId)
+      if (tokenWarning) {
+        setError(tokenWarning)
+        return
+      }
+    }
+    const phone = smokeConsumerPhone.trim()
+    const code = smokeConsumerCode.trim()
+    const opTok = smokeOperatorToken.trim()
+    setSmokeConsumerPhone('')
+    setSmokeOperatorToken('')
+    const smokePayload: Record<string, unknown> = {
       environment: cleanEnv,
       gateway_url: gatewayHttpsUrl,
       tenant_id: selectedTenantId,
-    })) as SmokeResult | null
+    }
+    if (phone && code) {
+      smokePayload.consumer_phone = phone
+      smokePayload.consumer_code = code
+    }
+    if (opTok) {
+      smokePayload.operator_token = opTok
+    }
+    const res = (await callWizard('post_publish_smoke', smokePayload)) as SmokeResult | null
     if (res) {
       setSmokeResult(res)
       setNotice(
@@ -602,7 +906,19 @@ export default function OnboardingWizard({
             只需录入 5 项客户基础信息即可完成安全引导、数据面体检、基建配套、三能力自验与公网终验；底层参数折叠于高级工程视图。
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="small"
+            disabled={busy || !cleanEnv}
+            onClick={() => void hydrateFromServer(cleanEnv)}
+          >
+            恢复服务端进度
+          </Button>
+          <Button type="button" variant="ghost" size="small" disabled={busy} onClick={handleResetWizard}>
+            重置表单
+          </Button>
           {onOpenAdvancedConfig && (
             <Button type="button" variant="ghost" size="small" onClick={onOpenAdvancedConfig}>
               高级工程视图
@@ -663,7 +979,7 @@ export default function OnboardingWizard({
               <span className="system-xs-medium text-text-secondary">客户名称</span>
               <Input
                 aria-label="客户名称"
-                placeholder="如：捷佳四轮国内充电"
+                placeholder="如：示例充电运营客户"
                 value={customerName}
                 onChange={(e) => setCustomerName(e.target.value)}
               />
@@ -672,7 +988,7 @@ export default function OnboardingWizard({
               <span className="system-xs-medium text-text-secondary">环境代号（小写字母/数字）</span>
               <Input
                 aria-label="环境代号"
-                placeholder="如：jiejia"
+                placeholder="如：acme"
                 value={envId}
                 onChange={(e) => setEnvId(e.target.value)}
               />
@@ -681,7 +997,7 @@ export default function OnboardingWizard({
               <span className="system-xs-medium text-text-secondary">服务器公网 IP</span>
               <Input
                 aria-label="服务器公网 IP"
-                placeholder="如：8.148.223.139"
+                placeholder="如：203.0.113.10"
                 value={serverIp}
                 onChange={(e) => setServerIp(e.target.value)}
               />
@@ -690,7 +1006,7 @@ export default function OnboardingWizard({
               <span className="system-xs-medium text-text-secondary">客户 API 域名</span>
               <Input
                 aria-label="客户 API 域名"
-                placeholder="如：api.juxichongdian.cn"
+                placeholder="如：api.customer.example.com"
                 value={apiDomain}
                 onChange={(e) => setApiDomain(e.target.value)}
               />
@@ -699,7 +1015,7 @@ export default function OnboardingWizard({
               <span className="system-xs-medium text-text-secondary">客户管理后台域名（可选）</span>
               <Input
                 aria-label="客户管理后台域名"
-                placeholder="如：admin.juxichongdian.cn"
+                placeholder="如：admin.customer.example.com"
                 value={adminDomain}
                 onChange={(e) => setAdminDomain(e.target.value)}
               />
@@ -708,7 +1024,7 @@ export default function OnboardingWizard({
               <span className="system-xs-medium text-text-secondary">网关内网地址</span>
               <Input
                 aria-label="网关内网地址"
-                placeholder="如：10.0.0.31:30899"
+                placeholder="如：10.0.0.10:30899"
                 value={internalGateway}
                 onChange={(e) => setInternalGateway(e.target.value)}
               />
@@ -821,11 +1137,11 @@ export default function OnboardingWizard({
           <div className="grid gap-3 rounded-xl border border-divider-subtle p-4 sm:grid-cols-3">
             <label className="space-y-1">
               <span className="system-xs-medium text-text-secondary">目标租户 ID（可由体检自动识别）</span>
-              <Input aria-label="目标租户 ID" placeholder="如 1990990768688599040" value={selectedTenantId} onChange={(e) => setSelectedTenantId(e.target.value)} />
+              <Input aria-label="目标租户 ID" placeholder="如 1000000000000000001" value={selectedTenantId} onChange={(e) => setSelectedTenantId(e.target.value)} />
             </label>
             <label className="space-y-1">
               <span className="system-xs-medium text-text-secondary">目标租户名称</span>
-              <Input aria-label="目标租户名称" placeholder="如 捷佳" value={selectedTenantName} onChange={(e) => setSelectedTenantName(e.target.value)} />
+              <Input aria-label="目标租户名称" placeholder="如 示例租户" value={selectedTenantName} onChange={(e) => setSelectedTenantName(e.target.value)} />
             </label>
             <label className="space-y-1">
               <span className="system-xs-medium text-text-secondary">MySQL 主机（可选）</span>
@@ -1026,6 +1342,9 @@ export default function OnboardingWizard({
 
           <div className="space-y-3 rounded-xl border border-divider-subtle p-4">
             <div className="system-xs-semibold text-text-primary">免 JSON 瞬时三能力自验（凭证用完即自动吊销销毁）</div>
+            <p className="text-[11px] text-text-tertiary">
+              临时管家令牌须在客户后台用<strong>目标业务租户账号</strong>（勿用超管 <code>system</code>，其 JWT <code>tenant_id=-1</code>）完成验证码登录后提取。
+            </p>
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="space-y-1">
                 <span className="system-xs-medium text-text-secondary">验收订单号（含过程统计）</span>
@@ -1082,17 +1401,49 @@ export default function OnboardingWizard({
       {/* STEP 5 */}
       {step === 5 && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="system-xs-regular text-text-secondary">
-              先点击正式发布启用 41 主目录及客户机活跃路由，再自动向公网域名 <code>{gatewayHttpsUrl || 'https://<api_domain>'}</code> 发起 4 项正式 HTTPS 终验冒烟。
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="primary" disabled={busy} onClick={handlePublishEnvironment}>
-                {busy ? '正在正式发布…' : '一键正式发布并启用租户'}
-              </Button>
-              <Button type="button" variant="secondary" disabled={busy} onClick={handlePostPublishSmoke}>
-                {busy ? '正在执行公网 4 项冒烟…' : '执行公网正式 HTTPS 4 项终验'}
-              </Button>
+          <div className="space-y-3 rounded-xl border border-divider-subtle p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="system-xs-regular text-text-secondary">
+                先点击正式发布启用 41 主目录及客户机活跃路由，再向公网域名 <code>{gatewayHttpsUrl || 'https://<api_domain>'}</code> 发起公网终验冒烟（默认执行匿名 401 + 原路由 200 基础 2 项；可选填入下方瞬时测试凭证跑满发布后 4 项真问答，用完立即清零吊销）。
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="primary" disabled={busy} onClick={handlePublishEnvironment}>
+                  {busy ? '正在正式发布…' : '一键正式发布并启用租户'}
+                </Button>
+                <Button type="button" variant="secondary" disabled={busy} onClick={handlePostPublishSmoke}>
+                  {busy ? '正在执行公网冒烟…' : '执行公网正式 HTTPS 4 项终验'}
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-3 border-t border-divider-subtle pt-3 sm:grid-cols-3">
+              <label className="space-y-1">
+                <span className="system-xs-medium text-text-secondary">发布后 C 端测试手机号（可选）</span>
+                <Input
+                  aria-label="发布后 C 端测试手机号"
+                  placeholder="留空仅跑基础 2 项"
+                  value={smokeConsumerPhone}
+                  onChange={(e) => setSmokeConsumerPhone(e.target.value)}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="system-xs-medium text-text-secondary">发布后验证码（可选）</span>
+                <Input
+                  aria-label="发布后验证码"
+                  value={smokeConsumerCode}
+                  onChange={(e) => setSmokeConsumerCode(e.target.value)}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="system-xs-medium text-text-secondary">发布后临时管家令牌（可选，自动吊销）</span>
+                <Input
+                  aria-label="发布后临时管家令牌"
+                  type="password"
+                  placeholder="留空跳过管家真问答"
+                  value={smokeOperatorToken}
+                  onChange={(e) => setSmokeOperatorToken(e.target.value)}
+                />
+              </label>
             </div>
           </div>
 
@@ -1110,8 +1461,15 @@ export default function OnboardingWizard({
 
           {smokeResult && (
             <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section p-4">
-              <div className="system-sm-semibold text-text-primary">
-                交付回执卡片 · {customerName || cleanEnv}（{smokeResult.passed ? '公网终验通过' : '待排查'}）
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="system-sm-semibold text-text-primary">
+                  交付回执卡片 · {customerName || cleanEnv}（{smokeResult.passed ? '公网终验通过' : '待排查'}）
+                </div>
+                <span className="rounded-full bg-components-badge-bg-green-soft px-2.5 py-0.5 text-[11px] text-text-success">
+                  {smokeResult.checks.length >= 4
+                    ? `全量 ${smokeResult.checks.length} 项通过`
+                    : `基础 ${smokeResult.checks.length} 项已测（未填测试会话，真实问答见第 4 步）`}
+                </span>
               </div>
               <div className="space-y-1.5">
                 {smokeResult.checks.map((c) => (
@@ -1127,6 +1485,11 @@ export default function OnboardingWizard({
                 <li>
                   诚实边界：业务语义准确率当前为 <strong>{smokeResult.business_accuracy}</strong>（待工程师/业务方结合真实故障人工签收）。
                 </li>
+                {typeof smokeResult.operator_session_revoked === 'boolean' && (
+                  <li>
+                    临时管家令牌自动吊销：{smokeResult.operator_session_revoked ? '已吊销' : '未确认'} · 零落盘
+                  </li>
+                )}
                 {enrolledHost?.rotate_root_password_recommended && (
                   <li>安全提醒：本次使用了模式 A 一次性口令引导，建议客户运维轮换服务器 root 密码。</li>
                 )}

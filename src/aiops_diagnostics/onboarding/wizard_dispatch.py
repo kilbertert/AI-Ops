@@ -632,6 +632,8 @@ def _dispatch_post_publish_smoke(wp: dict[str, Any], hooks: WizardRuntimeHooks) 
     required_keys = {"environment", "gateway_url", "tenant_id"}
     optional_keys = {
         "consumer_session",
+        "consumer_phone",
+        "consumer_code",
         "operator_token",
         "consumer_question",
         "operator_question",
@@ -644,23 +646,61 @@ def _dispatch_post_publish_smoke(wp: dict[str, Any], hooks: WizardRuntimeHooks) 
     for opt_key in optional_keys:
         if wp.get(opt_key) is not None and not isinstance(wp[opt_key], str):
             raise auth.SetupRefused("ENVIRONMENT_WIZARD_INVALID")
+
+    gateway_url = wp["gateway_url"]
+    tenant_id = wp["tenant_id"]
+    ephemeral_consumer = str(wp.get("consumer_session") or "").strip()
+    c_phone = str(wp.get("consumer_phone") or "").strip()
+    c_code = str(wp.get("consumer_code") or "").strip()
+    op_tok = str(wp.get("operator_token") or "").strip()
+    revoked: bool | None = None
+
     try:
+        if not ephemeral_consumer and c_phone and c_code:
+            ephemeral_consumer = wizard_validation.exchange_ephemeral_consumer_session(
+                company_gateway_url=gateway_url,
+                phone=c_phone,
+                code=c_code,
+                tenant_id=tenant_id,
+                http_caller=hooks.http_caller,
+            )
         kwargs: dict[str, Any] = {
-            "consumer_session": wp.get("consumer_session"),
-            "operator_token": wp.get("operator_token"),
+            "consumer_session": ephemeral_consumer or None,
+            "operator_token": op_tok or None,
             "http_caller": hooks.http_caller,
         }
         if isinstance(wp.get("consumer_question"), str) and wp["consumer_question"].strip():
             kwargs["consumer_question"] = wp["consumer_question"]
         if isinstance(wp.get("operator_question"), str) and wp["operator_question"].strip():
             kwargs["operator_question"] = wp["operator_question"]
-        return public_smoke.run_post_publish_https_smoke(
-            wp["gateway_url"],
-            wp["tenant_id"],
-            **kwargs,
-        )
+        try:
+            res = public_smoke.run_post_publish_https_smoke(
+                gateway_url,
+                tenant_id,
+                **kwargs,
+            )
+        finally:
+            if op_tok:
+                try:
+                    revoked = wizard_validation.revoke_ephemeral_operator_token(
+                        company_gateway_url=gateway_url,
+                        operator_token=op_tok,
+                        http_caller=hooks.http_caller,
+                    )
+                except Exception:
+                    revoked = False
+        if revoked is not None:
+            res["operator_session_revoked"] = revoked
+        return res
+    except wizard_validation.WizardValidationRefused:
+        raise
     except ValueError as exc:
         raise auth.SetupRefused("ENVIRONMENT_SMOKE_INVALID") from exc
+    finally:
+        ephemeral_consumer = ""
+        c_phone = ""
+        c_code = ""
+        op_tok = ""
 
 
 def dispatch_wizard(

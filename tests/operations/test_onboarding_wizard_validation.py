@@ -151,3 +151,79 @@ def test_zero_json_self_validation_exchanges_session_revokes_token_and_leaks_zer
             http_caller=err_http,
         )
     assert revoked_on_err["called"] is True
+
+
+def test_post_publish_smoke_exchanges_consumer_phone_revokes_operator_token_zero_leaks(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.onboarding import registry, wizard_dispatch
+
+    reg_path = tmp_path / "registry.json"
+    registry.apply(
+        reg_path,
+        [
+            {
+                "id": "custnew",
+                "name": "示例环境",
+                "enabled": True,
+                "gateway_url": "https://api.customer.example.com",
+                "cpms_base_url": "https://cpms.customer.example.com",
+                "company_gateway_url": "https://api.customer.example.com",
+                "config_ref": str(tmp_path / "custnew.env"),
+                "tenants": [{"id": "1000000000000000001", "name": "示例租户", "enabled": True}],
+            }
+        ],
+        expected_revision=0,
+        actor="test",
+        managers=[{"environment": "custnew", "tenant_id": "t", "user_id": "u", "environments": ["*"]}],
+    )
+
+    logout_calls: list[str] = []
+
+    def fake_http(method: str, url: str, headers: dict[str, str], body):
+        if method == "POST" and url.endswith("/mallapi/userinfo/phone/login"):
+            assert headers.get("client-type") == "H5"
+            return 200, json.dumps({"code": 0, "data": {"thirdSession": "TS_SMOKE_999"}})
+        if method == "GET" and url.endswith("/upms/tenant/list"):
+            return 200, '{"code":0}'
+        if method == "POST" and url.endswith("/v1/assistant/questions"):
+            if "Authorization" not in headers and "third-session" not in headers:
+                return 401, '{"error":"unauthorized"}'
+            return 202, json.dumps({"qa_id": f"qa_smoke_{len(headers)}", "status": "queued"})
+        if method == "GET" and "/v1/assistant/questions/" in url:
+            return 200, json.dumps({"qa_id": url.rsplit("/", 1)[1], "status": "completed"})
+        if method == "DELETE" and url.endswith("/auth/token/logout"):
+            logout_calls.append(headers.get("Authorization", ""))
+            return 200, '{"code":0}'
+        raise AssertionError(f"unexpected {method} {url}")
+
+    ctx = SimpleNamespace(
+        settings=SimpleNamespace(),
+        wizard_hooks=wizard_dispatch.WizardRuntimeHooks(http_caller=fake_http),
+    )
+    res = wizard_dispatch.dispatch_wizard(
+        ctx,
+        {},
+        {
+            "wizard_action": "post_publish_smoke",
+            "wizard_payload": {
+                "environment": "custnew",
+                "gateway_url": "https://api.customer.example.com",
+                "tenant_id": "1000000000000000001",
+                "consumer_phone": "13900009999",
+                "consumer_code": "8888",
+                "operator_token": "Bearer EPHEMERAL_SMOKE_OP_888",
+            },
+        },
+        access_fn=lambda _c, _s: (None, {}, {"*"}),
+        path_fn=lambda _c: str(reg_path),
+        identity_fn=lambda _c, _s: ("41", "t", "u"),
+    )
+    assert res["passed"] is True
+    assert res["operator_session_revoked"] is True
+    assert len(res["checks"]) == 4
+    assert logout_calls == ["Bearer EPHEMERAL_SMOKE_OP_888"]
+    dumped = json.dumps(res)
+    assert "TS_SMOKE_999" not in dumped
+    assert "EPHEMERAL_SMOKE_OP_888" not in dumped
+    assert "13900009999" not in dumped
