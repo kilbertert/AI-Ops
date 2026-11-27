@@ -14,6 +14,8 @@ name: Mirror to company GitLab
 on:
   push:
   delete:
+  schedule:
+    - cron: "15 3 * * 0"
   workflow_dispatch:
 
 concurrency:
