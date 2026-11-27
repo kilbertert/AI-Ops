@@ -400,10 +400,12 @@ export default function OnboardingWizard({
       let targetStep: WizardStep = 1
       if (hostRes?.host) {
         setEnrolledHost(hostRes.host)
-        if (hostRes.host.address) setServerIp((prev) => prev || hostRes.host!.address)
+        if (hostRes.host.address) setServerIp(hostRes.host.address)
         if (hostRes.host.ssh_port) setSshPort(String(hostRes.host.ssh_port))
         if (hostRes.host.ssh_user) setSshUser(hostRes.host.ssh_user)
         if (hostRes.enrolled) targetStep = 2
+      } else {
+        setEnrolledHost(null)
       }
 
       const infraRes = (await manage('environment-wizard', {
@@ -416,13 +418,15 @@ export default function OnboardingWizard({
         if (infraRes.operator_kb_id) setOperatorKbId(infraRes.operator_kb_id)
         const req = infraRes.request || {}
         const tid = infraRes.tenant_id || req.tenant_id || ''
-        if (tid) setSelectedTenantId((prev) => prev || tid)
-        if (req.tenant_name) setSelectedTenantName((prev) => prev || req.tenant_name || '')
-        if (req.customer_name) setCustomerName((prev) => prev || req.customer_name || '')
-        if (req.api_domain) setApiDomain((prev) => prev || req.api_domain || '')
-        if (req.gateway_internal_addr) setInternalGateway((prev) => prev || req.gateway_internal_addr || '')
+        if (tid) setSelectedTenantId(tid)
+        if (req.tenant_name) setSelectedTenantName(req.tenant_name)
+        if (req.customer_name) setCustomerName(req.customer_name)
+        if (req.api_domain) setApiDomain(req.api_domain)
+        if (req.gateway_internal_addr) setInternalGateway(req.gateway_internal_addr)
         if (infraRes.passed) targetStep = Math.max(targetStep, 4) as WizardStep
         else targetStep = Math.max(targetStep, 3) as WizardStep
+      } else {
+        setInfraResult(null)
       }
 
       const pubRes = (await manage('environment-wizard', {
@@ -433,14 +437,16 @@ export default function OnboardingWizard({
         setPublishResult(pubRes)
         const pubReq = pubRes.request || {}
         const pubTid = pubRes.tenant_id || pubRes.result?.tenant_id || pubReq.tenant_id || ''
-        if (pubTid) setSelectedTenantId((prev) => prev || pubTid)
-        if (pubReq.tenant_name) setSelectedTenantName((prev) => prev || pubReq.tenant_name || '')
-        if (pubReq.customer_name) setCustomerName((prev) => prev || pubReq.customer_name || '')
+        if (pubTid) setSelectedTenantId(pubTid)
+        if (pubReq.tenant_name) setSelectedTenantName(pubReq.tenant_name)
+        if (pubReq.customer_name) setCustomerName(pubReq.customer_name)
         const gwUrl = pubRes.gateway_url || pubRes.result?.gateway_url || pubReq.gateway_url || ''
-        if (gwUrl) setApiDomain((prev) => prev || gwUrl.replace(/^https?:\/\//, ''))
+        if (gwUrl) setApiDomain(gwUrl.replace(/^https?:\/\//, ''))
         if (pubRes.passed || pubRes.published || pubRes.result?.published) {
           targetStep = 5
         }
+      } else {
+        setPublishResult(null)
       }
 
       setStep(targetStep)
@@ -780,13 +786,15 @@ export default function OnboardingWizard({
   }
 
   async function handleSelfValidate() {
+    if (ephemeralOpToken.trim()) {
+      const tokenWarning = checkOperatorTokenTenant(ephemeralOpToken, selectedTenantId)
+      if (tokenWarning) {
+        setError(tokenWarning)
+        return
+      }
+    }
     if (!selectedTenantId || !orderNo || !deviceId || !consumerOrderNo) {
       setError('请先确认租户与自动推荐的验收样本（订单号/离线设备号/C端订单号）')
-      return
-    }
-    const tokenWarning = checkOperatorTokenTenant(ephemeralOpToken, selectedTenantId)
-    if (tokenWarning) {
-      setError(tokenWarning)
       return
     }
     const opTok = ephemeralOpToken

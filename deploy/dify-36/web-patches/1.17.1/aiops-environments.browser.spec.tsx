@@ -2281,3 +2281,112 @@ it('刷新后按环境代号自动恢复服务端进度，并在 Step 5 支持�
   expect(storedDraft).not.toContain('13900009999')
   expect(storedDraft).not.toContain('tenant_id')
 })
+
+it('点击恢复服务端进度时覆盖默认选中环境的旧预填字段', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_input: unknown, init?: { body?: string }) => {
+      const body = JSON.parse(init?.body || '{}')
+      if (body.action === 'environment-drafts') {
+        const staleDraft = {
+          id: '41',
+          name: '41生产环境',
+          enabled: true,
+          gateway_url: 'https://api.mall.qushiyun.com',
+          cpms_base_url: 'https://api.mall.qushiyun.com/cpms',
+          company_gateway_url: 'https://api.mall.qushiyun.com',
+          deployment_target: 'host-41',
+          credential_ref: 'credential-41',
+          timezone: 'Asia/Shanghai',
+          tenants: [],
+        }
+        return Response.json({
+          registry_revision: 29,
+          can_create: true,
+          effective: [staleDraft],
+          drafts: [{ environment: '41', revision: 29, draft: staleDraft, registry_changed: false }],
+        })
+      }
+      if (body.action === 'environment-task') return Response.json({ tasks: [] })
+      if (body.action === 'environment-overview') return Response.json({ environments: [] })
+      if (body.action === 'environment-plan') {
+        return Response.json({
+          id: 'plan_stale_1',
+          state: 'blocked',
+          executable: false,
+          draft_revision: 29,
+          registry_revision: 29,
+          checks: [],
+        })
+      }
+      if (body.action === 'environment-wizard') {
+        if (body.wizard_action === 'host_status') {
+          return Response.json({
+            environment: 'acme',
+            enrolled: true,
+            host: {
+              environment: 'acme',
+              host_alias: 'aiops-cust-acme',
+              address: '203.0.113.10',
+              ssh_port: 22,
+              ssh_user: 'root',
+              host_fingerprint_sha256: 'SHA256:MOCKFP',
+              enrollment_mode: 'ephemeral_password',
+              status: 'verified',
+              hostname: 'acme-gw',
+              python_minor: '3.12',
+              service_user_present: true,
+              venv_ready: true,
+              nginx_flavor: 'baota',
+            },
+          })
+        }
+        if (body.wizard_action === 'infra_status' && body.wizard_payload.action === 'infra_provision') {
+          return Response.json({
+            job_id: 'wizjob_0123456789abcdef01234567',
+            state: 'completed',
+            provisioned: true,
+            passed: true,
+            consumer_kb_id: 'kb-con-acme',
+            operator_kb_id: 'kb-op-acme',
+            request: {
+              customer_name: '示例客户',
+              api_domain: 'api.customer.example.com',
+              tenant_id: '1000000000000000001',
+              tenant_name: '示例租户',
+            },
+            steps: [],
+          })
+        }
+        if (body.wizard_action === 'infra_status' && body.wizard_payload.action === 'publish_environment') {
+          return Response.json({
+            job_id: 'wizjob_fedcba9876543210fedcba98',
+            state: 'completed',
+            passed: true,
+            published: true,
+            result: {
+              published: true,
+              tenant_id: '1000000000000000001',
+              gateway_url: 'https://api.customer.example.com',
+              registry_revision: 29,
+            },
+            steps: [],
+          })
+        }
+      }
+      return Response.json({})
+    }),
+  )
+
+  const screen = await render(<EnvironmentManagement />)
+  await screen.getByRole('button', { name: '5 步自助开通向导' }).click()
+  await screen.getByRole('textbox', { name: '环境代号' }).fill('acme')
+  await screen.getByRole('button', { name: '恢复服务端进度' }).click()
+  await expect.element(screen.getByText(/已从服务端恢复环境 acme 的当前开通进度（第 5 步）/)).toBeVisible()
+  await expect.element(screen.getByText(/https:\/\/api\.customer\.example\.com/)).toBeVisible()
+
+  const draft = JSON.parse(window.sessionStorage.getItem('aiops-onboarding-wizard-draft:v1') || '{}')
+  expect(draft.envId).toBe('acme')
+  expect(draft.customerName).toBe('示例客户')
+  expect(draft.apiDomain).toBe('api.customer.example.com')
+})
