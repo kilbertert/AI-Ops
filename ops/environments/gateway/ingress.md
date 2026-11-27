@@ -65,11 +65,10 @@ uv run pytest tests/integrations/test_environment_tool_ingress.py tests/test_nod
 
 ### 开放面与凭据分流
 
-转发面唯一声明处是 `ops/nginx/environment-user-ingress-routes.txt`：FAQ 三件套、
-`POST /v1/assistant/questions`、问答详情与取消、`/v1/media/{signed_id}` 签名媒体读取、
-`/v1/conversations` 的读取/新建/删除。
-管理面（`/v1/dify/*`、`/v1/agents`、`/v1/operator-*`）、`/v1/internal/*` 不进本片，
+转发面唯一真源为 `src/aiops_diagnostics/gateway/public_openapi.py`（`OPERATIONS`）与显式保留的兼容路由 `COMPAT_USER_INGRESS_OPERATIONS`（`POST /v1/conversations`），经 `src/aiops_diagnostics/gateway/user_ingress_manifest.py` 确定性生成声明清单 `ops/nginx/environment-user-ingress-routes.txt` 与 Nginx 配置片段 `ops/nginx/environment-user-ingress.conf`，并通过 CI 断言公开用户/管家入口 100% 同步。
+管理面（`/v1/dify/*`、`/v1/agents`、`/v1/operator-*`、`POST /v1/shortcuts` 等）、`/v1/internal/*` 与非公开运维诊断路由（如 `/v1/orders/{order_no}/charging-status*`、`/v1/conversations/{id}/active-order`）不进本片，
 客户端也拿不到任意 URL——上游固定本机 `127.0.0.1:8788`（本环境登记端口）。
+仅 `POST /v1/assistant/files` 单独配置 `client_max_body_size 25m`（覆盖 20 MiB 附件上限），仅 SSE 事件流 `GET /v1/assistant/questions/{qa_id}/events` 单独配置 `proxy_read_timeout 300s`、`chunked_transfer_encoding on` 与 `Last-Event-ID` 透传，其余路由维持 `64k` 与 `120s`。
 
 入口分流在 server 上下文 `set`/`if` 完成（不新增 `map`，location 内 `if` 只有
 `return`，无写语句），依据是客户端 `X-Business-Entry`——它只决定用哪套凭据

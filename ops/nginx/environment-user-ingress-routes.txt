@@ -1,24 +1,39 @@
-# 环境用户助手入口实际转发的网关路径 —— 唯一声明处。
+# 环境用户助手入口实际转发的网关路径 —— 由公开 OpenAPI 契约单一真源生成（ADR-0362）。
 #
-# 每条都是现有正常客户端会发出的调用（端点清单见 docs/testing-api-guide.md §3；
-# 管理面、发布面、Dify 运维面、/v1/internal/* 不在此列）。nginx 只转这一组，
-# `tests/operations/test_environment_user_ingress.py` 断言：
-#   1) 这里每一条都被转发到本环境 Gateway；
-#   2) 网关 /v1/ 下**其余**路由一条都不进。
-# 新增一行而不同步 nginx 片段、或放进来不属于用户面的路径，CI 都会红。
-#
-# 形状：<方法> <路径模板>；{qa_id}/{conversation_id} 是 32 位十六进制。
+# 真源：`src/aiops_diagnostics/gateway/public_openapi.py`（OPERATIONS）+ 显式兼容路由。
+# 请勿手工增删本文件；改动公开接口后运行：
+#   uv run python -m aiops_diagnostics.gateway.user_ingress_manifest --write
+# `tests/operations/test_environment_user_ingress.py` 断言本清单 == 公开契约 == 实际 nginx 转发面。
+# 管理面（/v1/dify/*、/v1/agents、POST /v1/shortcuts）、/v1/internal/* 严禁进入本清单。
 
-GET    /v1/faq/recommendations
-GET    /v1/faq/catalog
-POST   /v1/faq/answer
 POST   /v1/assistant/questions
 GET    /v1/assistant/questions/{qa_id}
+GET    /v1/assistant/questions/{qa_id}/events
 POST   /v1/assistant/questions/{qa_id}/cancel
-GET    /v1/media/{signed_id}
+POST   /v1/assistant/questions/{qa_id}/regenerate
+POST   /v1/assistant/questions/{qa_id}/feedback
+POST   /v1/assistant/questions/{qa_id}/export
+GET    /v1/assistant/questions
+GET    /v1/assistant/agents
+POST   /v1/assistant/files
+GET    /v1/assistant/files/{file_id}
+GET    /v1/assistant/files/{file_id}/preview
+POST   /v1/assistant/files/{file_id}/download-task
 GET    /v1/conversations
-POST   /v1/conversations
 GET    /v1/conversations/{conversation_id}
+PATCH  /v1/conversations/{conversation_id}
 DELETE /v1/conversations/{conversation_id}
+GET    /v1/faq/catalog
+GET    /v1/faq/recommendations
+POST   /v1/faq/answer
+GET    /v1/shortcuts
+GET    /v1/assistant/starters
+GET    /v1/banner
+GET    /v1/media/{signed_id}
+GET    /v1/orders/{order_no}/access
+GET    /v1/sites
 POST   /v1/health-report-jobs
 GET    /v1/health-report-jobs/{job_id}
+POST   /v1/standard/analyses
+GET    /v1/standard/analyses/{analysis_id}
+POST   /v1/conversations
