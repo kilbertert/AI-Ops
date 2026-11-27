@@ -67,6 +67,7 @@ type DiscoveryReport = {
 type InfraResult = {
   job_id?: string
   state?: string
+  provisioned?: boolean
   environment: string
   passed: boolean
   failed_step: string
@@ -138,7 +139,10 @@ type WizardNonSecretDraft = {
 }
 
 export function checkOperatorTokenTenant(rawToken: string, expectedTenantId: string): string {
-  const cleaned = rawToken.trim().replace(/^Bearer\s+/i, '').trim()
+  const cleaned = rawToken
+    .trim()
+    .replace(/^Bearer\s+/i, '')
+    .trim()
   if (!cleaned) return ''
   const parts = cleaned.split('.')
   if (parts.length !== 3 || !parts[1]) return ''
@@ -315,6 +319,20 @@ export default function OnboardingWizard({
   const [smokeConsumerPhone, setSmokeConsumerPhone] = useState('')
   const [smokeConsumerCode, setSmokeConsumerCode] = useState('8888')
   const [smokeOperatorToken, setSmokeOperatorToken] = useState('')
+  const [copiedKey, setCopiedKey] = useState('')
+
+  function copySnippet(key: string, text: string) {
+    if (!text) return
+    const done = () => {
+      setCopiedKey(key)
+      window.setTimeout(() => setCopiedKey((cur) => (cur === key ? '' : cur)), 1500)
+    }
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(text).then(done).catch(done)
+      return
+    }
+    done()
+  }
 
   const cleanEnv = envId.trim().toLowerCase()
   const gatewayHttpsUrl = apiDomain.trim()
@@ -328,7 +346,11 @@ export default function OnboardingWizard({
     if (typeof window === 'undefined') return
     try {
       const hasAnyInput = Boolean(
-        cleanEnv || customerName.trim() || serverIp.trim() || apiDomain.trim() || selectedTenantId.trim(),
+        cleanEnv ||
+        customerName.trim() ||
+        serverIp.trim() ||
+        apiDomain.trim() ||
+        selectedTenantId.trim(),
       )
       if (!hasAnyInput) {
         window.sessionStorage.removeItem(WIZARD_DRAFT_STORAGE_KEY)
@@ -412,7 +434,10 @@ export default function OnboardingWizard({
         wizard_action: 'infra_status',
         wizard_payload: { environment: target, action: 'infra_provision' },
       })) as InfraResult
-      if (infraRes && (infraRes.job_id || infraRes.provisioned || (infraRes.steps?.length ?? 0) > 0)) {
+      if (
+        infraRes &&
+        (infraRes.job_id || infraRes.provisioned || (infraRes.steps?.length ?? 0) > 0)
+      ) {
         setInfraResult(infraRes)
         if (infraRes.consumer_kb_id) setConsumerKbId(infraRes.consumer_kb_id)
         if (infraRes.operator_kb_id) setOperatorKbId(infraRes.operator_kb_id)
@@ -665,7 +690,9 @@ export default function OnboardingWizard({
     }
   }
 
-  async function pollWizardJob<T extends { state?: string; passed?: boolean; failed_step?: string }>(
+  async function pollWizardJob<
+    T extends { job_id?: string; state?: string; passed?: boolean; failed_step?: string },
+  >(
     action: 'infra_provision' | 'publish_environment',
     initial: T,
     onTick: (latest: T) => void,
@@ -904,17 +931,28 @@ export default function OnboardingWizard({
   return (
     <section
       aria-label="新客户 5 步自助开通向导"
-      className="space-y-5 rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs"
+      className="space-y-5 overflow-hidden rounded-2xl border border-components-panel-border bg-components-panel-bg p-6 shadow-xs"
     >
       {/* 顶栏 */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-divider-subtle pb-4">
-        <div>
-          <h3 className="system-lg-semibold text-text-primary">新客户自助开通向导（5 步零命令行）</h3>
-          <p className="mt-0.5 system-xs-regular text-text-tertiary">
-            只需录入 5 项客户基础信息即可完成安全引导、数据面体检、基建配套、三能力自验与公网终验；底层参数折叠于高级工程视图。
-          </p>
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-divider-subtle pb-4">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span
+            aria-hidden="true"
+            className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-divider-accent/40 bg-components-icon-bg-blue-soft text-text-accent"
+          >
+            <span className="i-ri-magic-line size-5" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="system-lg-semibold text-text-primary">
+              新客户自助开通向导（5 步零命令行）
+            </h3>
+            <p className="mt-0.5 system-xs-regular text-text-tertiary">
+              只需录入 5
+              项客户基础信息即可完成安全引导、数据面体检、基建配套、三能力自验与公网终验；底层参数折叠于高级工程视图。
+            </p>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
           <Button
             type="button"
             variant="ghost"
@@ -922,9 +960,16 @@ export default function OnboardingWizard({
             disabled={busy || !cleanEnv}
             onClick={() => void hydrateFromServer(cleanEnv)}
           >
+            <span aria-hidden="true" className="mr-1 i-ri-restart-line size-3.5" />
             恢复服务端进度
           </Button>
-          <Button type="button" variant="ghost" size="small" disabled={busy} onClick={handleResetWizard}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="small"
+            disabled={busy}
+            onClick={handleResetWizard}
+          >
             重置表单
           </Button>
           {onOpenAdvancedConfig && (
@@ -941,7 +986,7 @@ export default function OnboardingWizard({
       </div>
 
       {/* 5 步进度条 */}
-      <nav aria-label="开通步骤" className="grid gap-2 sm:grid-cols-5">
+      <nav aria-label="开通步骤" className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-5">
         {STEP_LABELS.map((item) => {
           const active = step === item.id
           const done = step > item.id
@@ -950,16 +995,38 @@ export default function OnboardingWizard({
               key={item.id}
               type="button"
               onClick={() => setStep(item.id)}
-              className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+              className={`group flex cursor-pointer items-start gap-2 rounded-xl border px-2.5 py-2.5 text-left transition-all ${
                 active
-                  ? 'border-state-accent-solid bg-components-badge-bg-blue-light-soft'
+                  ? 'border-state-accent-solid bg-components-badge-bg-blue-light-soft shadow-2xs'
                   : done
-                    ? 'border-divider-subtle bg-components-badge-bg-green-soft'
-                    : 'border-divider-subtle bg-background-section'
+                    ? 'border-state-success-active/45 bg-components-badge-bg-green-soft/65 hover:bg-components-badge-bg-green-soft'
+                    : 'border-divider-subtle bg-background-section-burn/50 hover:border-divider-regular hover:bg-background-section-burn'
               }`}
             >
-              <div className="system-xs-semibold text-text-primary">{item.title}</div>
-              <div className="mt-0.5 text-[11px] text-text-tertiary">{item.subtitle}</div>
+              <span
+                aria-hidden="true"
+                className={`mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                  active
+                    ? 'bg-state-accent-solid text-text-primary-on-surface ring-2 ring-state-accent-hover'
+                    : done
+                      ? 'bg-state-success-solid text-text-primary-on-surface'
+                      : 'bg-components-badge-bg-gray-soft text-text-tertiary'
+                }`}
+              >
+                {done ? <span className="i-ri-check-line size-3" /> : item.id}
+              </span>
+              <div className="min-w-0">
+                <div
+                  className={`system-xs-semibold ${
+                    active ? 'text-text-accent' : 'text-text-primary'
+                  }`}
+                >
+                  {item.title}
+                </div>
+                <div className="mt-0.5 text-[11px] leading-tight text-text-tertiary">
+                  {item.subtitle}
+                </div>
+              </div>
             </button>
           )
         })}
@@ -968,102 +1035,123 @@ export default function OnboardingWizard({
       {error && (
         <div
           role="alert"
-          className="rounded-xl bg-components-badge-bg-red-soft px-4 py-2.5 system-xs-medium text-text-destructive"
+          className="flex items-center gap-2.5 rounded-xl border border-state-destructive-border bg-state-destructive-hover px-4 py-3 system-xs-medium text-text-destructive"
         >
-          {error}
+          <span aria-hidden="true" className="i-ri-error-warning-fill size-4 shrink-0" />
+          <span>{error}</span>
         </div>
       )}
       {notice && (
-        <div className="rounded-xl bg-components-badge-bg-green-soft px-4 py-2.5 system-xs-medium text-text-success">
-          {notice}
+        <div className="flex items-center gap-2.5 rounded-xl border border-state-success-active/60 bg-state-success-hover px-4 py-3 system-xs-medium text-text-success">
+          <span aria-hidden="true" className="i-ri-checkbox-circle-fill size-4 shrink-0" />
+          <span>{notice}</span>
         </div>
       )}
 
       {/* STEP 1 */}
       {step === 1 && (
         <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1">
-              <span className="system-xs-medium text-text-secondary">客户名称</span>
-              <Input
-                aria-label="客户名称"
-                placeholder="如：示例充电运营客户"
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-              />
-            </label>
-            <label className="space-y-1">
-              <span className="system-xs-medium text-text-secondary">环境代号（小写字母/数字）</span>
-              <Input
-                aria-label="环境代号"
-                placeholder="如：acme"
-                value={envId}
-                onChange={(e) => setEnvId(e.target.value)}
-              />
-            </label>
-            <label className="space-y-1">
-              <span className="system-xs-medium text-text-secondary">服务器公网 IP</span>
-              <Input
-                aria-label="服务器公网 IP"
-                placeholder="如：203.0.113.10"
-                value={serverIp}
-                onChange={(e) => setServerIp(e.target.value)}
-              />
-            </label>
-            <label className="space-y-1">
-              <span className="system-xs-medium text-text-secondary">客户 API 域名</span>
-              <Input
-                aria-label="客户 API 域名"
-                placeholder="如：api.customer.example.com"
-                value={apiDomain}
-                onChange={(e) => setApiDomain(e.target.value)}
-              />
-            </label>
-            <label className="space-y-1">
-              <span className="system-xs-medium text-text-secondary">客户管理后台域名（可选）</span>
-              <Input
-                aria-label="客户管理后台域名"
-                placeholder="如：admin.customer.example.com"
-                value={adminDomain}
-                onChange={(e) => setAdminDomain(e.target.value)}
-              />
-            </label>
-            <label className="space-y-1">
-              <span className="system-xs-medium text-text-secondary">网关内网地址</span>
-              <Input
-                aria-label="网关内网地址"
-                placeholder="如：10.0.0.10:30899"
-                value={internalGateway}
-                onChange={(e) => setInternalGateway(e.target.value)}
-              />
-            </label>
+          <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section-burn/35 p-4">
+            <div className="flex items-center gap-2 system-xs-semibold text-text-primary">
+              <span aria-hidden="true" className="i-ri-information-line size-4 text-text-accent" />
+              <span>客户环境基础信息</span>
+            </div>
+            <div className="grid gap-3.5 sm:grid-cols-2">
+              <label className="space-y-1.5">
+                <span className="system-xs-medium text-text-secondary">客户名称</span>
+                <Input
+                  aria-label="客户名称"
+                  placeholder="如：示例充电运营客户"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="system-xs-medium text-text-secondary">
+                  环境代号（小写字母/数字）
+                </span>
+                <Input
+                  aria-label="环境代号"
+                  placeholder="如：acme"
+                  value={envId}
+                  onChange={(e) => setEnvId(e.target.value)}
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="system-xs-medium text-text-secondary">服务器公网 IP</span>
+                <Input
+                  aria-label="服务器公网 IP"
+                  placeholder="如：203.0.113.10"
+                  value={serverIp}
+                  onChange={(e) => setServerIp(e.target.value)}
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="system-xs-medium text-text-secondary">客户 API 域名</span>
+                <Input
+                  aria-label="客户 API 域名"
+                  placeholder="如：api.customer.example.com"
+                  value={apiDomain}
+                  onChange={(e) => setApiDomain(e.target.value)}
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="system-xs-medium text-text-secondary">
+                  客户管理后台域名（可选）
+                </span>
+                <Input
+                  aria-label="客户管理后台域名"
+                  placeholder="如：admin.customer.example.com"
+                  value={adminDomain}
+                  onChange={(e) => setAdminDomain(e.target.value)}
+                />
+              </label>
+              <label className="space-y-1.5">
+                <span className="system-xs-medium text-text-secondary">网关内网地址</span>
+                <Input
+                  aria-label="网关内网地址"
+                  placeholder="如：10.0.0.10:30899"
+                  value={internalGateway}
+                  onChange={(e) => setInternalGateway(e.target.value)}
+                />
+              </label>
+            </div>
           </div>
 
-          <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="system-xs-semibold text-text-primary">主机安全引导模式：</span>
-              <Button
-                type="button"
-                size="small"
-                variant={enrollMode === 'ephemeral_password' ? 'primary' : 'secondary'}
-                onClick={() => setEnrollMode('ephemeral_password')}
-              >
-                模式 A：一次性 root 密码（内存即用即毁）
-              </Button>
-              <Button
-                type="button"
-                size="small"
-                variant={enrollMode === 'bootstrap_script' ? 'primary' : 'secondary'}
-                onClick={() => setEnrollMode('bootstrap_script')}
-              >
-                模式 B：客户侧单行引导脚本（零密码）
-              </Button>
+          <div className="space-y-3.5 rounded-xl border border-divider-subtle bg-background-section-burn/50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 system-xs-semibold text-text-primary">
+                <span
+                  aria-hidden="true"
+                  className="i-ri-shield-keyhole-line size-4 text-text-accent"
+                />
+                <span>主机安全引导模式</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="small"
+                  variant={enrollMode === 'ephemeral_password' ? 'primary' : 'secondary'}
+                  onClick={() => setEnrollMode('ephemeral_password')}
+                >
+                  模式 A：一次性 root 密码（内存即用即毁）
+                </Button>
+                <Button
+                  type="button"
+                  size="small"
+                  variant={enrollMode === 'bootstrap_script' ? 'primary' : 'secondary'}
+                  onClick={() => setEnrollMode('bootstrap_script')}
+                >
+                  模式 B：客户侧单行引导脚本（零密码）
+                </Button>
+              </div>
             </div>
 
             {enrollMode === 'ephemeral_password' ? (
-              <div className="space-y-3">
+              <div className="space-y-3 rounded-xl bg-components-panel-bg/85 p-4">
                 <p className="system-xs-regular text-text-tertiary">
-                  口令仅在服务端内存瞬时用于钉扎主机指纹、下发专属 Ed25519 公钥及补齐 aiops/venv，随即清空丢弃，绝不落盘或入库。
+                  口令仅在服务端内存瞬时用于钉扎主机指纹、下发专属 Ed25519 公钥及补齐
+                  aiops/venv，随即清空丢弃，绝不落盘或入库。
                 </p>
                 <div className="grid gap-3 sm:grid-cols-3">
                   <label className="space-y-1">
@@ -1086,17 +1174,25 @@ export default function OnboardingWizard({
                     />
                   </label>
                 </div>
-                <Button type="button" variant="primary" disabled={busy} onClick={handleEnrollPassword}>
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={busy}
+                  onClick={handleEnrollPassword}
+                >
                   {busy ? '正在引导并钉扎指纹…' : '立即安全引导并进入下一步'}
                 </Button>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-3 rounded-xl bg-components-panel-bg/85 p-4">
                 <p className="system-xs-regular text-text-tertiary">
-                  面向高安全客户：无需提供 root 密码。生成 15 分钟单次消费引导命令交客户运维本机执行。
+                  面向高安全客户：无需提供 root 密码。生成 15
+                  分钟单次消费引导命令交客户运维本机执行。
                 </p>
                 <label className="block space-y-1">
-                  <span className="system-xs-medium text-text-secondary">控制面回调 HTTPS 基地址</span>
+                  <span className="system-xs-medium text-text-secondary">
+                    控制面回调 HTTPS 基地址
+                  </span>
                   <Input
                     aria-label="控制面回调 HTTPS 基地址"
                     value={callbackBaseUrl}
@@ -1104,27 +1200,66 @@ export default function OnboardingWizard({
                   />
                 </label>
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="primary" disabled={busy} onClick={handleGenerateScript}>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={busy}
+                    onClick={handleGenerateScript}
+                  >
                     生成单次引导命令
                   </Button>
-                  <Button type="button" variant="secondary" disabled={busy} onClick={handleRefreshHostStatus}>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={handleRefreshHostStatus}
+                  >
                     刷新接入状态
                   </Button>
                 </div>
                 {bootstrapOneLiner && (
-                  <pre className="overflow-x-auto rounded-lg bg-components-input-bg-normal p-3 text-xs text-text-primary">
-                    {bootstrapOneLiner}
-                  </pre>
+                  <div className="overflow-hidden rounded-xl border border-divider-subtle bg-background-section-burn">
+                    <div className="flex items-center justify-between border-b border-divider-subtle px-3 py-1.5 text-[11px] text-text-tertiary">
+                      <span className="flex items-center gap-1.5">
+                        <span aria-hidden="true" className="i-ri-terminal-box-line size-3.5" />
+                        <span>单次引导命令（15 分钟有效）</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => copySnippet('bootstrap', bootstrapOneLiner)}
+                        className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-text-accent hover:bg-components-panel-bg"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`size-3 ${copiedKey === 'bootstrap' ? 'i-ri-check-line' : 'i-ri-file-copy-line'}`}
+                        />
+                        <span>{copiedKey === 'bootstrap' ? '已复制' : '复制命令'}</span>
+                      </button>
+                    </div>
+                    <pre className="overflow-x-auto p-3 font-mono text-xs text-text-primary">
+                      {bootstrapOneLiner}
+                    </pre>
+                  </div>
                 )}
               </div>
             )}
           </div>
 
           {enrolledHost && (
-            <div className="rounded-xl border border-divider-subtle p-3.5 system-xs-regular text-text-secondary">
-              已登记主机：<strong>{enrolledHost.host_alias}</strong>（状态：{enrolledHost.status}，指纹：
-              <code>{enrolledHost.host_fingerprint_sha256 || '待回调'}</code>，Python{' '}
-              {enrolledHost.python_minor || '待探测'}，Nginx：{enrolledHost.nginx_flavor || '待探测'}）
+            <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-state-success-active/40 bg-components-badge-bg-green-soft/45 px-4 py-3 system-xs-regular text-text-secondary">
+              <span
+                aria-hidden="true"
+                className="i-ri-shield-check-line size-4 shrink-0 text-text-success"
+              />
+              <span>
+                已登记主机：<strong className="text-text-primary">{enrolledHost.host_alias}</strong>
+                （状态：{enrolledHost.status}，指纹：
+                <code className="font-mono">
+                  {enrolledHost.host_fingerprint_sha256 || '待回调'}
+                </code>
+                ，Python {enrolledHost.python_minor || '待探测'}，Nginx：
+                {enrolledHost.nginx_flavor || '待探测'}）
+              </span>
             </div>
           )}
         </div>
@@ -1133,45 +1268,98 @@ export default function OnboardingWizard({
       {/* STEP 2 */}
       {step === 2 && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="system-xs-regular text-text-secondary">
-              自动探测客户租户、MySQL 最小只读权限（含 <code>qumall_upms</code> 三张平台表）、必选无锁索引与本机直连时序服务端口（可选传入瞬时只读与管理员 DB 凭据，仅用于当前隧道体检与二次确认修复，用完即焚）。
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-divider-subtle bg-background-section-burn/40 p-4">
+            <p className="max-w-3xl system-xs-regular text-text-secondary">
+              自动探测客户租户、MySQL 最小只读权限（含{' '}
+              <code className="font-mono">qumall_upms</code>{' '}
+              三张平台表）、必选无锁索引与本机直连时序服务端口（可选传入瞬时只读与管理员 DB
+              凭据，仅用于当前隧道体检与二次确认修复，用完即焚）。
             </p>
             <Button type="button" variant="primary" disabled={busy} onClick={handleRunDiscovery}>
+              <span aria-hidden="true" className="mr-1.5 i-ri-pulse-line size-4" />
               {busy ? '正在探测体检…' : '运行自动环境探测与体检'}
             </Button>
           </div>
 
-          <div className="grid gap-3 rounded-xl border border-divider-subtle p-4 sm:grid-cols-3">
+          <div className="grid gap-3.5 rounded-xl border border-divider-subtle bg-background-section-burn/30 p-4 sm:grid-cols-3">
             <label className="space-y-1">
-              <span className="system-xs-medium text-text-secondary">目标租户 ID（可由体检自动识别）</span>
-              <Input aria-label="目标租户 ID" placeholder="如 1000000000000000001" value={selectedTenantId} onChange={(e) => setSelectedTenantId(e.target.value)} />
+              <span className="system-xs-medium text-text-secondary">
+                目标租户 ID（可由体检自动识别）
+              </span>
+              <Input
+                aria-label="目标租户 ID"
+                placeholder="如 1000000000000000001"
+                value={selectedTenantId}
+                onChange={(e) => setSelectedTenantId(e.target.value)}
+              />
             </label>
             <label className="space-y-1">
               <span className="system-xs-medium text-text-secondary">目标租户名称</span>
-              <Input aria-label="目标租户名称" placeholder="如 示例租户" value={selectedTenantName} onChange={(e) => setSelectedTenantName(e.target.value)} />
+              <Input
+                aria-label="目标租户名称"
+                placeholder="如 示例租户"
+                value={selectedTenantName}
+                onChange={(e) => setSelectedTenantName(e.target.value)}
+              />
             </label>
             <label className="space-y-1">
               <span className="system-xs-medium text-text-secondary">MySQL 主机（可选）</span>
-              <Input aria-label="MySQL 主机" placeholder="如 127.0.0.1 或内网 DB IP" value={mysqlHost} onChange={(e) => setMysqlHost(e.target.value)} />
+              <Input
+                aria-label="MySQL 主机"
+                placeholder="如 127.0.0.1 或内网 DB IP"
+                value={mysqlHost}
+                onChange={(e) => setMysqlHost(e.target.value)}
+              />
             </label>
             <label className="space-y-1">
               <span className="system-xs-medium text-text-secondary">MySQL 端口 / 只读账号</span>
               <div className="flex gap-2">
-                <Input aria-label="MySQL 端口" value={mysqlPort} onChange={(e) => setMysqlPort(e.target.value)} />
-                <Input aria-label="MySQL 只读账号" value={mysqlUser} onChange={(e) => setMysqlUser(e.target.value)} />
+                <Input
+                  aria-label="MySQL 端口"
+                  value={mysqlPort}
+                  onChange={(e) => setMysqlPort(e.target.value)}
+                />
+                <Input
+                  aria-label="MySQL 只读账号"
+                  value={mysqlUser}
+                  onChange={(e) => setMysqlUser(e.target.value)}
+                />
               </div>
             </label>
             <label className="space-y-1">
-              <span className="system-xs-medium text-text-secondary">MySQL 只读口令（仅服务端 0600 模板）</span>
-              <Input aria-label="MySQL 只读口令" type="password" value={mysqlPassword} onChange={(e) => setMysqlPassword(e.target.value)} />
+              <span className="system-xs-medium text-text-secondary">
+                MySQL 只读口令（仅服务端 0600 模板）
+              </span>
+              <Input
+                aria-label="MySQL 只读口令"
+                type="password"
+                value={mysqlPassword}
+                onChange={(e) => setMysqlPassword(e.target.value)}
+              />
             </label>
             <label className="space-y-1">
-              <span className="system-xs-medium text-text-secondary">Redis 主机 / 端口 / 口令（可选）</span>
+              <span className="system-xs-medium text-text-secondary">
+                Redis 主机 / 端口 / 口令（可选）
+              </span>
               <div className="flex gap-1.5">
-                <Input aria-label="Redis 主机" placeholder="127.0.0.1" value={redisHost} onChange={(e) => setRedisHost(e.target.value)} />
-                <Input aria-label="Redis 端口" value={redisPort} onChange={(e) => setRedisPort(e.target.value)} />
-                <Input aria-label="Redis 口令" type="password" placeholder="口令" value={redisPassword} onChange={(e) => setRedisPassword(e.target.value)} />
+                <Input
+                  aria-label="Redis 主机"
+                  placeholder="127.0.0.1"
+                  value={redisHost}
+                  onChange={(e) => setRedisHost(e.target.value)}
+                />
+                <Input
+                  aria-label="Redis 端口"
+                  value={redisPort}
+                  onChange={(e) => setRedisPort(e.target.value)}
+                />
+                <Input
+                  aria-label="Redis 口令"
+                  type="password"
+                  placeholder="口令"
+                  value={redisPassword}
+                  onChange={(e) => setRedisPassword(e.target.value)}
+                />
               </div>
             </label>
           </div>
@@ -1179,58 +1367,125 @@ export default function OnboardingWizard({
           {discovery && (
             <div className="space-y-4">
               {discovery.discovered.tenants.length > 0 && (
-                <div className="rounded-xl border border-divider-subtle p-4">
-                  <div className="mb-2 system-xs-semibold text-text-primary">自动发现的客户租户</div>
+                <div className="rounded-xl border border-divider-subtle bg-background-section-burn/35 p-4">
+                  <div className="mb-2.5 system-xs-semibold text-text-primary">
+                    自动发现的客户租户
+                  </div>
                   <div className="flex flex-wrap gap-2">
-                    {discovery.discovered.tenants.map((t) => (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => setSelectedTenantId(t.id)}
-                        className={`rounded-lg border px-3 py-1.5 system-xs-medium ${
-                          selectedTenantId === t.id
-                            ? 'border-state-accent-solid bg-components-badge-bg-blue-light-soft text-text-accent'
-                            : 'border-divider-subtle text-text-secondary'
-                        }`}
-                      >
-                        {t.name}（{t.id}）
-                      </button>
-                    ))}
+                    {discovery.discovered.tenants.map((t) => {
+                      const picked = selectedTenantId === t.id
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => setSelectedTenantId(t.id)}
+                          className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 system-xs-medium transition-colors ${
+                            picked
+                              ? 'border-state-accent-solid bg-components-badge-bg-blue-light-soft text-text-accent'
+                              : 'border-divider-subtle bg-components-panel-bg text-text-secondary hover:border-divider-regular'
+                          }`}
+                        >
+                          {picked && (
+                            <span aria-hidden="true" className="i-ri-check-line size-3.5" />
+                          )}
+                          <span>
+                            {t.name}（{t.id}）
+                          </span>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
               )}
 
               <div className="space-y-2 rounded-xl border border-divider-subtle p-4">
-                <div className="system-xs-semibold text-text-primary">数据面与基础设施体检单</div>
+                <div className="mb-2 system-xs-semibold text-text-primary">
+                  数据面与基础设施体检单
+                </div>
                 {discovery.checks.map((c) => (
-                  <div key={c.id} className="flex items-center justify-between gap-2 text-xs">
+                  <div
+                    key={c.id}
+                    className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${
+                      c.state === 'passed'
+                        ? 'border-state-success-active/35 bg-components-badge-bg-green-soft/45'
+                        : c.state === 'blocked'
+                          ? 'border-state-destructive-border bg-components-badge-bg-red-soft/50'
+                          : 'border-state-warning-active/35 bg-components-badge-bg-orange-soft/50'
+                    }`}
+                  >
                     <span className="flex items-center gap-2 text-text-primary">
                       <StatusDot
-                        status={c.state === 'passed' ? 'success' : c.state === 'blocked' ? 'error' : 'warning'}
+                        status={
+                          c.state === 'passed'
+                            ? 'success'
+                            : c.state === 'blocked'
+                              ? 'error'
+                              : 'warning'
+                        }
                         size="small"
                       />
-                      {c.summary}
+                      <span>{c.summary}</span>
                     </span>
-                    <span className="text-text-tertiary">{c.state}</span>
+                    <span className="font-mono text-[11px] text-text-tertiary">{c.state}</span>
                   </div>
                 ))}
               </div>
 
               {discovery.db_remediation_plan.has_auto_fixable_db_gaps && (
-                <div className="space-y-3 rounded-xl border border-divider-subtle bg-components-badge-bg-orange-soft p-4">
-                  <div className="system-xs-semibold text-text-warning">
-                    引导期受限白名单修复预览（仅最小 SELECT 授权与 ALGORITHM=INPLACE, LOCK=NONE 无锁索引）
+                <div className="space-y-3.5 rounded-xl border border-state-warning-active/50 bg-components-badge-bg-orange-soft p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 system-xs-semibold text-text-warning">
+                      <span aria-hidden="true" className="i-ri-error-warning-line size-4" />
+                      <span>
+                        引导期受限白名单修复预览（仅最小 SELECT 授权与 ALGORITHM=INPLACE, LOCK=NONE
+                        无锁索引）
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        copySnippet('sql', discovery.db_remediation_plan.sql_statements.join('\n'))
+                      }
+                      className="inline-flex cursor-pointer items-center gap-1 rounded-md bg-components-panel-bg/80 px-2 py-1 text-[11px] font-medium text-text-primary hover:bg-components-panel-bg"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`size-3 ${copiedKey === 'sql' ? 'i-ri-check-line text-text-success' : 'i-ri-file-copy-line'}`}
+                      />
+                      <span>{copiedKey === 'sql' ? '已复制' : '复制 SQL'}</span>
+                    </button>
                   </div>
-                  <pre className="overflow-x-auto rounded-lg bg-components-panel-bg p-3 text-xs text-text-primary">
+                  <pre className="overflow-x-auto rounded-lg border border-divider-subtle bg-components-panel-bg p-3 font-mono text-xs text-text-primary">
                     {discovery.db_remediation_plan.sql_statements.join('\n')}
                   </pre>
                   <div className="grid gap-3 sm:grid-cols-4">
-                    <Input aria-label="管理员 DB 主机" placeholder="管理员 DB 主机（同上可留空）" value={adminMysqlHost} onChange={(e) => setAdminMysqlHost(e.target.value)} />
-                    <Input aria-label="管理员 DB 端口" placeholder="3306" value={adminMysqlPort} onChange={(e) => setAdminMysqlPort(e.target.value)} />
-                    <Input aria-label="管理员 DB 用户" placeholder="如 root" value={adminMysqlUser} onChange={(e) => setAdminMysqlUser(e.target.value)} />
-                    <Input aria-label="管理员 DB 密码（用后即焚）" type="password" placeholder="管理员 DB 密码" value={adminMysqlPassword} onChange={(e) => setAdminMysqlPassword(e.target.value)} />
+                    <Input
+                      aria-label="管理员 DB 主机"
+                      placeholder="管理员 DB 主机（同上可留空）"
+                      value={adminMysqlHost}
+                      onChange={(e) => setAdminMysqlHost(e.target.value)}
+                    />
+                    <Input
+                      aria-label="管理员 DB 端口"
+                      placeholder="3306"
+                      value={adminMysqlPort}
+                      onChange={(e) => setAdminMysqlPort(e.target.value)}
+                    />
+                    <Input
+                      aria-label="管理员 DB 用户"
+                      placeholder="如 root"
+                      value={adminMysqlUser}
+                      onChange={(e) => setAdminMysqlUser(e.target.value)}
+                    />
+                    <Input
+                      aria-label="管理员 DB 密码（用后即焚）"
+                      type="password"
+                      placeholder="管理员 DB 密码"
+                      value={adminMysqlPassword}
+                      onChange={(e) => setAdminMysqlPassword(e.target.value)}
+                    />
                   </div>
-                  <label className="flex cursor-pointer items-center gap-2 system-xs-medium text-text-primary">
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg bg-components-panel-bg/80 px-3 py-2 system-xs-medium text-text-primary">
                     <input
                       type="checkbox"
                       aria-label="二次确认受限白名单 SQL"
@@ -1263,32 +1518,64 @@ export default function OnboardingWizard({
       {/* STEP 3 */}
       {step === 3 && (
         <div className="space-y-4">
-          <p className="system-xs-regular text-text-secondary">
-            自动从控制面离线制品池匹配对应 Python 小版本制品，并顺序完成：36/41 白名单放行 → 41 专属执行节点 → 客户机双 Nginx 扩展（含 nginx -t 回滚门）→ 公网即刻探活。
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="primary" disabled={busy} onClick={handleProvisionInfra}>
-              {busy ? '正在编排周边基建…' : '一键配套周边基建并探活'}
-            </Button>
-            {onOpenLegacyOnboard && (
-              <Button type="button" variant="secondary" onClick={onOpenLegacyOnboard}>
-                查看 11 阶段冷装/一键开通任务明细
+          <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section-burn/40 p-4">
+            <p className="system-xs-regular text-text-secondary">
+              自动从控制面离线制品池匹配对应 Python 小版本制品，并顺序完成：36/41 白名单放行 → 41
+              专属执行节点 → 客户机双 Nginx 扩展（含 nginx -t 回滚门）→ 公网即刻探活。
+            </p>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <Button
+                type="button"
+                variant="primary"
+                disabled={busy}
+                onClick={handleProvisionInfra}
+              >
+                <span aria-hidden="true" className="mr-1.5 i-ri-rocket-2-line size-4" />
+                {busy ? '正在编排周边基建…' : '一键配套周边基建并探活'}
               </Button>
-            )}
-          </div>
-          {poolCount !== null && (
-            <div className="system-xs-regular text-text-tertiary">
-              控制面离线制品池已就绪条目数：{poolCount}
+              {onOpenLegacyOnboard && (
+                <Button type="button" variant="secondary" onClick={onOpenLegacyOnboard}>
+                  查看 11 阶段冷装/一键开通任务明细
+                </Button>
+              )}
+              {poolCount !== null && (
+                <span className="rounded-full bg-components-panel-bg px-3 py-1 system-xs-regular text-text-tertiary">
+                  控制面离线制品池已就绪条目数：{poolCount}
+                </span>
+              )}
             </div>
-          )}
+          </div>
           {infraResult && (
-            <div className="space-y-2 rounded-xl border border-divider-subtle p-4">
+            <div className="space-y-2.5 rounded-xl border border-divider-subtle p-4">
               {infraResult.steps.map((s) => (
-                <div key={s.step} className="flex items-center justify-between text-xs">
-                  <span className="font-medium text-text-primary">{s.step}</span>
+                <div
+                  key={s.step}
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 text-xs ${
+                    s.state === 'passed'
+                      ? 'border-state-success-active/35 bg-components-badge-bg-green-soft/45'
+                      : s.state === 'failed'
+                        ? 'border-state-destructive-border bg-components-badge-bg-red-soft/50'
+                        : 'border-divider-subtle bg-background-section-burn/50'
+                  }`}
+                >
+                  <span className="flex items-center gap-2 font-medium text-text-primary">
+                    <span
+                      aria-hidden="true"
+                      className={`size-3.5 ${
+                        s.state === 'passed'
+                          ? 'i-ri-checkbox-circle-fill text-text-success'
+                          : s.state === 'failed'
+                            ? 'i-ri-close-circle-fill text-text-destructive'
+                            : 'i-ri-time-line text-text-tertiary'
+                      }`}
+                    />
+                    <span>{s.step}</span>
+                  </span>
                   <span className="text-text-secondary">
                     {s.state}
-                    {s.anon_assistant_status ? ` (匿名=${s.anon_assistant_status}, 原路由=${s.upms_tenant_list_status})` : ''}
+                    {s.anon_assistant_status
+                      ? ` (匿名=${s.anon_assistant_status}, 原路由=${s.upms_tenant_list_status})`
+                      : ''}
                   </span>
                 </div>
               ))}
@@ -1308,59 +1595,96 @@ export default function OnboardingWizard({
       {step === 4 && (
         <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2 rounded-xl border border-divider-subtle p-4">
-              <div className="system-xs-semibold text-text-primary">对客知识库（隔离）</div>
+            <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section-burn/35 p-4">
+              <div className="flex items-center gap-2 system-xs-semibold text-text-primary">
+                <span aria-hidden="true" className="i-ri-book-open-line size-4 text-text-accent" />
+                <span>对客知识库（隔离）</span>
+              </div>
               <Input
                 placeholder="对客知识库 ID（默认自动匹配）"
                 value={consumerKbId}
                 onChange={(e) => setConsumerKbId(e.target.value)}
               />
-              <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" size="small" variant="secondary" disabled={busy} onClick={handleInstallStarterFaq}>
+              <div className="space-y-2.5 rounded-lg border border-dashed border-divider-regular bg-components-panel-bg/80 p-3">
+                <Button
+                  type="button"
+                  size="small"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={handleInstallStarterFaq}
+                >
                   一键装入默认充电试跑 FAQ 模板
                 </Button>
-                <input
-                  aria-label="上传对客知识库文档"
-                  type="file"
-                  accept=".md,.txt,.docx,.pdf"
-                  className="text-xs"
-                  onChange={(e) => handleUploadDoc('consumer', e.target.files?.[0] || null)}
-                />
+                <div className="flex items-center gap-2 text-xs text-text-tertiary">
+                  <span aria-hidden="true" className="i-ri-upload-cloud-2-line size-4 shrink-0" />
+                  <input
+                    aria-label="上传对客知识库文档"
+                    type="file"
+                    accept=".md,.txt,.docx,.pdf"
+                    className="w-full text-xs"
+                    onChange={(e) => handleUploadDoc('consumer', e.target.files?.[0] || null)}
+                  />
+                </div>
               </div>
-              {consumerDocStatus && <div className="text-xs text-text-success">{consumerDocStatus}</div>}
+              {consumerDocStatus && (
+                <div className="text-xs font-medium text-text-success">{consumerDocStatus}</div>
+              )}
             </div>
 
-            <div className="space-y-2 rounded-xl border border-divider-subtle p-4">
-              <div className="system-xs-semibold text-text-primary">管家运维知识库（隔离）</div>
+            <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section-burn/35 p-4">
+              <div className="flex items-center gap-2 system-xs-semibold text-text-primary">
+                <span aria-hidden="true" className="i-ri-settings-4-line size-4 text-text-accent" />
+                <span>管家运维知识库（隔离）</span>
+              </div>
               <Input
                 placeholder="管家知识库 ID（默认自动匹配）"
                 value={operatorKbId}
                 onChange={(e) => setOperatorKbId(e.target.value)}
               />
-              <input
-                aria-label="上传管家运维知识库文档"
-                type="file"
-                accept=".md,.txt,.docx,.pdf"
-                className="text-xs"
-                onChange={(e) => handleUploadDoc('operator', e.target.files?.[0] || null)}
-              />
-              {operatorDocStatus && <div className="text-xs text-text-success">{operatorDocStatus}</div>}
+              <div className="flex items-center gap-2 rounded-lg border border-dashed border-divider-regular bg-components-panel-bg/80 p-3 text-xs text-text-tertiary">
+                <span aria-hidden="true" className="i-ri-upload-cloud-2-line size-4 shrink-0" />
+                <input
+                  aria-label="上传管家运维知识库文档"
+                  type="file"
+                  accept=".md,.txt,.docx,.pdf"
+                  className="w-full text-xs"
+                  onChange={(e) => handleUploadDoc('operator', e.target.files?.[0] || null)}
+                />
+              </div>
+              {operatorDocStatus && (
+                <div className="text-xs font-medium text-text-success">{operatorDocStatus}</div>
+              )}
             </div>
           </div>
 
-          <div className="space-y-3 rounded-xl border border-divider-subtle p-4">
-            <div className="system-xs-semibold text-text-primary">免 JSON 瞬时三能力自验（凭证用完即自动吊销销毁）</div>
-            <p className="text-[11px] text-text-tertiary">
-              临时管家令牌须在客户后台用<strong>目标业务租户账号</strong>（勿用超管 <code>system</code>，其 JWT <code>tenant_id=-1</code>）完成验证码登录后提取。
+          <div className="space-y-3.5 rounded-xl border border-divider-subtle bg-background-section-burn/35 p-4">
+            <div className="flex items-center gap-2 system-xs-semibold text-text-primary">
+              <span aria-hidden="true" className="i-ri-shield-check-line size-4 text-text-accent" />
+              <span>免 JSON 瞬时三能力自验（凭证用完即自动吊销销毁）</span>
+            </div>
+            <p className="rounded-lg bg-components-panel-bg/80 px-3 py-2 text-[11px] text-text-tertiary">
+              临时管家令牌须在客户后台用<strong>目标业务租户账号</strong>（勿用超管{' '}
+              <code className="font-mono">system</code>，其 JWT{' '}
+              <code className="font-mono">tenant_id=-1</code>）完成验证码登录后提取。
             </p>
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="space-y-1">
-                <span className="system-xs-medium text-text-secondary">验收订单号（含过程统计）</span>
-                <Input aria-label="验收订单号" value={orderNo} onChange={(e) => setOrderNo(e.target.value)} />
+                <span className="system-xs-medium text-text-secondary">
+                  验收订单号（含过程统计）
+                </span>
+                <Input
+                  aria-label="验收订单号"
+                  value={orderNo}
+                  onChange={(e) => setOrderNo(e.target.value)}
+                />
               </label>
               <label className="space-y-1">
                 <span className="system-xs-medium text-text-secondary">离线设备号</span>
-                <Input aria-label="离线设备号" value={deviceId} onChange={(e) => setDeviceId(e.target.value)} />
+                <Input
+                  aria-label="离线设备号"
+                  value={deviceId}
+                  onChange={(e) => setDeviceId(e.target.value)}
+                />
               </label>
               <label className="space-y-1">
                 <span className="system-xs-medium text-text-secondary">C 端验收订单号</span>
@@ -1371,7 +1695,9 @@ export default function OnboardingWizard({
                 />
               </label>
               <label className="space-y-1">
-                <span className="system-xs-medium text-text-secondary">C 端测试手机号（仅内存换会话）</span>
+                <span className="system-xs-medium text-text-secondary">
+                  C 端测试手机号（仅内存换会话）
+                </span>
                 <Input
                   aria-label="C 端测试手机号"
                   value={consumerPhone}
@@ -1380,10 +1706,16 @@ export default function OnboardingWizard({
               </label>
               <label className="space-y-1">
                 <span className="system-xs-medium text-text-secondary">验证码</span>
-                <Input aria-label="验证码" value={consumerCode} onChange={(e) => setConsumerCode(e.target.value)} />
+                <Input
+                  aria-label="验证码"
+                  value={consumerCode}
+                  onChange={(e) => setConsumerCode(e.target.value)}
+                />
               </label>
               <label className="space-y-1">
-                <span className="system-xs-medium text-text-secondary">临时管家令牌（验完自动吊销）</span>
+                <span className="system-xs-medium text-text-secondary">
+                  临时管家令牌（验完自动吊销）
+                </span>
                 <Input
                   aria-label="临时管家令牌"
                   type="password"
@@ -1396,8 +1728,9 @@ export default function OnboardingWizard({
               {busy ? '正在执行三能力自验…' : '一键执行三能力自验（免写 JSON）'}
             </Button>
             {selfValidation && (
-              <div className="text-xs text-text-secondary">
-                自验结论：{selfValidation.passed ? '三能力全绿通过' : '存在未通过项'} · 临时管家会话已吊销：
+              <div className="rounded-lg border border-divider-subtle bg-components-panel-bg px-3.5 py-2.5 text-xs text-text-secondary">
+                自验结论：{selfValidation.passed ? '三能力全绿通过' : '存在未通过项'} ·
+                临时管家会话已吊销：
                 {selfValidation.operator_session_revoked ? '是' : '否'} · 凭据落盘：
                 {selfValidation.credentials_persisted ? '是' : '零落盘'}
               </div>
@@ -1409,16 +1742,29 @@ export default function OnboardingWizard({
       {/* STEP 5 */}
       {step === 5 && (
         <div className="space-y-4">
-          <div className="space-y-3 rounded-xl border border-divider-subtle p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="system-xs-regular text-text-secondary">
-                先点击正式发布启用 41 主目录及客户机活跃路由，再向公网域名 <code>{gatewayHttpsUrl || 'https://<api_domain>'}</code> 发起公网终验冒烟（默认执行匿名 401 + 原路由 200 基础 2 项；可选填入下方瞬时测试凭证跑满发布后 4 项真问答，用完立即清零吊销）。
+          <div className="space-y-3.5 rounded-xl border border-divider-subtle bg-background-section-burn/35 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="max-w-3xl system-xs-regular text-text-secondary">
+                先点击正式发布启用 41 主目录及客户机活跃路由，再向公网域名{' '}
+                <code className="font-mono">{gatewayHttpsUrl || 'https://<api_domain>'}</code>{' '}
+                发起公网终验冒烟（默认执行匿名 401 + 原路由 200 基础 2
+                项；可选填入下方瞬时测试凭证跑满发布后 4 项真问答，用完立即清零吊销）。
               </p>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="primary" disabled={busy} onClick={handlePublishEnvironment}>
+                <Button
+                  type="button"
+                  variant="primary"
+                  disabled={busy}
+                  onClick={handlePublishEnvironment}
+                >
                   {busy ? '正在正式发布…' : '一键正式发布并启用租户'}
                 </Button>
-                <Button type="button" variant="secondary" disabled={busy} onClick={handlePostPublishSmoke}>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={handlePostPublishSmoke}
+                >
                   {busy ? '正在执行公网冒烟…' : '执行公网正式 HTTPS 4 项终验'}
                 </Button>
               </div>
@@ -1426,7 +1772,9 @@ export default function OnboardingWizard({
 
             <div className="grid gap-3 border-t border-divider-subtle pt-3 sm:grid-cols-3">
               <label className="space-y-1">
-                <span className="system-xs-medium text-text-secondary">发布后 C 端测试手机号（可选）</span>
+                <span className="system-xs-medium text-text-secondary">
+                  发布后 C 端测试手机号（可选）
+                </span>
                 <Input
                   aria-label="发布后 C 端测试手机号"
                   placeholder="留空仅跑基础 2 项"
@@ -1443,7 +1791,9 @@ export default function OnboardingWizard({
                 />
               </label>
               <label className="space-y-1">
-                <span className="system-xs-medium text-text-secondary">发布后临时管家令牌（可选，自动吊销）</span>
+                <span className="system-xs-medium text-text-secondary">
+                  发布后临时管家令牌（可选，自动吊销）
+                </span>
                 <Input
                   aria-label="发布后临时管家令牌"
                   type="password"
@@ -1456,10 +1806,18 @@ export default function OnboardingWizard({
           </div>
 
           {publishResult && (
-            <div className="rounded-xl border border-divider-subtle p-4 text-xs text-text-secondary">
-              发布状态：{publishResult.passed || publishResult.published ? '已正式启用' : publishResult.state || '处理中'}
+            <div className="space-y-2 rounded-xl border border-divider-subtle bg-components-panel-bg p-4 text-xs text-text-secondary">
+              <div className="font-medium text-text-primary">
+                发布状态：
+                {publishResult.passed || publishResult.published
+                  ? '已正式启用'
+                  : publishResult.state || '处理中'}
+              </div>
               {publishResult.steps?.map((s) => (
-                <div key={s.step} className="mt-1 flex justify-between">
+                <div
+                  key={s.step}
+                  className="flex justify-between rounded bg-background-section-burn/60 px-2.5 py-1"
+                >
                   <span>{s.step}</span>
                   <span>{s.state}</span>
                 </div>
@@ -1468,12 +1826,19 @@ export default function OnboardingWizard({
           )}
 
           {smokeResult && (
-            <div className="space-y-3 rounded-xl border border-divider-subtle bg-background-section p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="system-sm-semibold text-text-primary">
-                  交付回执卡片 · {customerName || cleanEnv}（{smokeResult.passed ? '公网终验通过' : '待排查'}）
+            <div className="space-y-3.5 overflow-hidden rounded-2xl border border-state-success-active/45 bg-background-section-burn/45 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-divider-subtle pb-3">
+                <div className="flex items-center gap-2 system-sm-semibold text-text-primary">
+                  <span
+                    aria-hidden="true"
+                    className={`size-5 ${smokeResult.passed ? 'i-ri-checkbox-circle-fill text-text-success' : 'i-ri-error-warning-fill text-text-warning'}`}
+                  />
+                  <span>
+                    交付回执卡片 · {customerName || cleanEnv}（
+                    {smokeResult.passed ? '公网终验通过' : '待排查'}）
+                  </span>
                 </div>
-                <span className="rounded-full bg-components-badge-bg-green-soft px-2.5 py-0.5 text-[11px] text-text-success">
+                <span className="rounded-full bg-components-badge-bg-green-soft px-3 py-0.5 text-[11px] font-medium text-text-success">
                   {smokeResult.checks.length >= 4
                     ? `全量 ${smokeResult.checks.length} 项通过`
                     : `基础 ${smokeResult.checks.length} 项已测（未填测试会话，真实问答见第 4 步）`}
@@ -1481,28 +1846,43 @@ export default function OnboardingWizard({
               </div>
               <div className="space-y-1.5">
                 {smokeResult.checks.map((c) => (
-                  <div key={c.id} className="flex items-center justify-between text-xs">
-                    <span className="text-text-primary">{c.id}</span>
-                    <span className={c.passed ? 'text-text-success' : 'text-text-destructive'}>
+                  <div
+                    key={c.id}
+                    className="flex items-center justify-between rounded-lg border border-divider-subtle bg-components-panel-bg px-3 py-2 text-xs"
+                  >
+                    <span className="font-mono text-text-primary">{c.id}</span>
+                    <span
+                      className={
+                        c.passed
+                          ? 'font-medium text-text-success'
+                          : 'font-medium text-text-destructive'
+                      }
+                    >
                       {c.passed ? '通过' : '失败'} {c.actual_http ? `(HTTP ${c.actual_http})` : ''}
                     </span>
                   </div>
                 ))}
               </div>
-              <ul className="list-disc space-y-1 pl-5 text-xs text-text-tertiary">
+              <ul className="list-disc space-y-1 rounded-xl border border-divider-subtle bg-components-panel-bg/85 py-3 pr-4 pl-8 text-xs text-text-tertiary">
                 <li>
-                  诚实边界：业务语义准确率当前为 <strong>{smokeResult.business_accuracy}</strong>（待工程师/业务方结合真实故障人工签收）。
+                  诚实边界：业务语义准确率当前为 <strong>{smokeResult.business_accuracy}</strong>
+                  （待工程师/业务方结合真实故障人工签收）。
                 </li>
                 {typeof smokeResult.operator_session_revoked === 'boolean' && (
                   <li>
-                    临时管家令牌自动吊销：{smokeResult.operator_session_revoked ? '已吊销' : '未确认'} · 零落盘
+                    临时管家令牌自动吊销：
+                    {smokeResult.operator_session_revoked ? '已吊销' : '未确认'} · 零落盘
                   </li>
                 )}
                 {enrolledHost?.rotate_root_password_recommended && (
-                  <li>安全提醒：本次使用了模式 A 一次性口令引导，建议客户运维轮换服务器 root 密码。</li>
+                  <li>
+                    安全提醒：本次使用了模式 A 一次性口令引导，建议客户运维轮换服务器 root 密码。
+                  </li>
                 )}
                 {starterInstalled && (
-                  <li>知识库提醒：对客库当前含临时试跑 FAQ 模板，建议上线后替换为客户官方客服文档。</li>
+                  <li>
+                    知识库提醒：对客库当前含临时试跑 FAQ 模板，建议上线后替换为客户官方客服文档。
+                  </li>
                 )}
               </ul>
             </div>
