@@ -1023,6 +1023,41 @@ def _step_cold_install_and_onboard(
                 f"--config-sha256 {shlex.quote(bootstrap_sha)}",
             ]
         )
+        upgrade_py = "; ".join(
+            [
+                "import json, os, subprocess, tarfile",
+                "from pathlib import Path",
+                "os.umask(0o022)",
+                f"inst_f = Path('/opt/aiops-access-{env}/installed.json')",
+                f"app_sha = {pool_info['app_sha256']!r}",
+                "rec = json.loads(inst_f.read_text(encoding='utf-8'))",
+                "exec_up = rec.get('artifact_sha256') != app_sha",
+                f"up = Path('{stage_remote}/app_up')",
+                "(up.mkdir(parents=True, exist_ok=True) if exec_up else None)",
+                (
+                    f"(tarfile.open('{stage_remote}/application.tar.gz', 'r:gz').extractall(up) "
+                    "if exec_up else None)"
+                ),
+                "meta = json.loads((up / 'manifest.json').read_text(encoding='utf-8')) if exec_up else {}",
+                "whl = str(next((up / 'wheelhouse').glob('aiops_diagnostics-*.whl'))) if exec_up else ''",
+                f"pip_bin = '/opt/aiops-access-{env}/current/venv/bin/pip'",
+                "pip_env = {'PATH': '/usr/bin:/bin', 'PIP_CONFIG_FILE': '/dev/null'}",
+                (
+                    "(subprocess.run([pip_bin, 'install', '--no-index', '--find-links', "
+                    "str(up / 'wheelhouse'), '--upgrade', '--upgrade-strategy', "
+                    "'only-if-needed', whl], env=pip_env, check=True) if exec_up else None)"
+                ),
+                (
+                    "(subprocess.run([pip_bin, 'install', '--no-index', '--no-deps', "
+                    "'--force-reinstall', whl], env=pip_env, check=True) if exec_up else None)"
+                ),
+                (
+                    "(rec.update({'revision': meta['revision'], 'version': meta['version'], "
+                    "'artifact_sha256': app_sha}) if exec_up else None)"
+                ),
+                "(inst_f.write_text(json.dumps(rec) + '\\n', encoding='utf-8') if exec_up else None)",
+            ]
+        )
         install_cmds = [
             "set -euo pipefail",
             f"mkdir -p {stage_remote}/inst && chmod 700 {stage_remote}/inst",
@@ -1030,6 +1065,7 @@ def _step_cold_install_and_onboard(
             f"chmod 600 {stage_remote}/*.*",
             f"if [ ! -f /opt/aiops-access-{env}/installed.json ]; then {install_bin_cmd}; fi",
             f"systemctl stop aiops-access-{env}.service >/dev/null 2>&1 || true",
+            f"python3 -c {shlex.quote(upgrade_py)}",
             f"mkdir -p {cfg_root}/runtime {cfg_root}/registry {var_root}/keys {var_root}/gateway",
             f"chmod 755 {cfg_root}",
             f"tar -xf {stage_remote}/runtime-bundle.tar -C {cfg_root}",
